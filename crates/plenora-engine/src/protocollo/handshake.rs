@@ -111,6 +111,12 @@ pub struct DescrizioneLocale {
 }
 
 /// Cio' che il supervisore pretende dall'altro lato.
+// Lato supervisore: lo raggiungono i casi e il percorso di qualificazione, che
+// si compila sotto `internals` ed e' l'unico a guidare un worker reale. Il
+// supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
+// non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
+// in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtteseSupervisore {
     /// Cio' che il worker deve rispecchiare identico.
@@ -344,6 +350,12 @@ fn confronta_ambiente(atteso: &AmbienteCanonico, ricevuto: &AmbienteCanonico) ->
 /// Entrambi gli elenchi arrivano **gia' ordinati**, quindi l'appartenenza si
 /// decide con una scansione parallela invece che costruendo un insieme:
 /// l'insieme sarebbe una terza copia dei nomi, e i nomi vengono dal filo.
+// Lato supervisore: lo raggiungono i casi e il percorso di qualificazione, che
+// si compila sotto `internals` ed e' l'unico a guidare un worker reale. Il
+// supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
+// non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
+// in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
 fn confronta_capability(richieste: &[String], offerte: &[String]) -> Result<()> {
     let mut scorre = offerte.iter();
     let mut corrente = scorre.next();
@@ -448,6 +460,12 @@ fn verifica_direzione(frame: &Frame, attesa: super::messaggi::Direzione) -> Resu
 ///
 /// Non ha `Clone`, e ogni transizione consuma `self`: uno stato concluso non
 /// e' riusabile perche' non esiste piu'.
+// Lato supervisore: lo raggiungono i casi e il percorso di qualificazione, che
+// si compila sotto `internals` ed e' l'unico a guidare un worker reale. Il
+// supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
+// non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
+// in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
 #[derive(Debug)]
 pub struct SupervisoreInAttesa {
     /// Gia' ridotta: il confronto con la `Risposta` non deve rifare nulla.
@@ -458,6 +476,7 @@ pub struct SupervisoreInAttesa {
     saluto: Saluto,
 }
 
+#[cfg(any(test, feature = "internals"))]
 impl SupervisoreInAttesa {
     /// Costruisce il `Saluto` e si mette in attesa.
     ///
@@ -570,11 +589,17 @@ impl SupervisoreInAttesa {
 /// Esiste **solo** come risultato di una verifica riuscita: non c'e' un
 /// costruttore che lo produca altrimenti, quindi non si puo' avere in mano
 /// senza aver fatto l'handshake.
+// Lato supervisore, e nominato dalla macchina del supervisore — che si compila
+// sotto `internals`: il `cfg` e' percio' quello, non `test`. Il chiamante di
+// produzione arriva con `PR-12`. La regola sta in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
 #[derive(Debug)]
 pub struct HandshakeAccettato {
     commit_token: CommitToken,
 }
 
+#[cfg(any(test, feature = "internals"))]
 impl HandshakeAccettato {
     /// Il token su cui i due lati si sono accordati.
     #[must_use]
@@ -682,11 +707,24 @@ impl WorkerInAttesa {
 /// Il worker dopo l'accordo: da qui, e solo da qui, puo' ricevere l'`Incarico`.
 #[derive(Debug)]
 pub struct WorkerAccordato {
+    /// Lo legge [`WorkerAccordato::ricevi_incarico`], che lo consegna a chi
+    /// esegue: e' l'unica strada, e per questo il token non puo' arrivare
+    /// all'artefatto senza passare dall'incarico.
     commit_token: CommitToken,
 }
 
 impl WorkerAccordato {
     /// Il token accettato nel `Saluto`.
+    ///
+    /// # Perche' solo sotto `test`
+    ///
+    /// Perche' chi esegue il token non lo prende da qui: glielo consegna
+    /// [`Self::ricevi_incarico`], insieme all'incarico e nello stesso momento.
+    /// Questa e' una **seconda porta** sullo stesso valore, e serve ai casi che
+    /// confrontano i due lati dell'accordo prima che un incarico esista. Farla
+    /// incondizionata la lascerebbe nel binario come superficie che nessuno
+    /// attraversa.
+    #[cfg(test)]
     #[must_use]
     pub const fn commit_token(&self) -> &CommitToken {
         &self.commit_token

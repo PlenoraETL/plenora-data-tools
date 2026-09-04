@@ -30,8 +30,8 @@ use crate::protocollo::lettore::leggi_frame;
 use crate::protocollo::messaggi::{Corpo, Progresso};
 
 use super::coda::{Bocchetta, Esaurita};
-use crate::isolamento::sorgente::{Freno, Interruttore, SorgenteTerminabile};
 use super::Fatto;
+use crate::isolamento::sorgente::{Freno, Interruttore, SorgenteTerminabile};
 
 /// Cio' che un produttore rende quando finisce.
 ///

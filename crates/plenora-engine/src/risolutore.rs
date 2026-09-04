@@ -52,11 +52,6 @@ use plenora_core::crs::{CrsError, ResolvedCrs};
 /// possono avere la stessa libreria PROJ e due versioni diverse di questo
 /// programma, e sono due programmi diversi. La versione della libreria, se un
 /// giorno servira', e' un campo suo — non questo.
-// Il selettore tipizzato ha per ora un chiamante solo — `protocollo::descrizione`
-// — che si compila sotto `test` e `internals`: il `cfg` dice quella condizione,
-// e cade quando la descrizione diventa produzione. `risolvi`, sotto, non lo
-// porta: `planner` e `geo_transport::publish` la chiamano gia' da produzione.
-#[cfg(any(test, feature = "internals"))]
 pub const VERSIONE: &str = env!("CARGO_PKG_VERSION");
 
 /// Chi risolve i CRS in questa build.
@@ -68,11 +63,6 @@ pub const VERSIONE: &str = env!("CARGO_PKG_VERSION");
 /// costringerebbe a inventare una convenzione, mentre qui si aggiunge una
 /// variante e il compilatore indica ogni posto che deve decidere che farne.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Il selettore tipizzato ha per ora un chiamante solo — `protocollo::descrizione`
-// — che si compila sotto `test` e `internals`: il `cfg` dice quella condizione,
-// e cade quando la descrizione diventa produzione. `risolvi`, sotto, non lo
-// porta: `planner` e `geo_transport::publish` la chiamano gia' da produzione.
-#[cfg(any(test, feature = "internals"))]
 pub enum Risolutore {
     /// Nessun backend: la risoluzione dichiara di non essere disponibile.
     ///
@@ -99,11 +89,6 @@ pub enum Risolutore {
     Proj,
 }
 
-// Il selettore tipizzato ha per ora un chiamante solo — `protocollo::descrizione`
-// — che si compila sotto `test` e `internals`: il `cfg` dice quella condizione,
-// e cade quando la descrizione diventa produzione. `risolvi`, sotto, non lo
-// porta: `planner` e `geo_transport::publish` la chiamano gia' da produzione.
-#[cfg(any(test, feature = "internals"))]
 impl Risolutore {
     /// Quello di questa build.
     ///

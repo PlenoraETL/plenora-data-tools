@@ -1,6 +1,6 @@
 //! Il figlio appena avviato, finche' non e' stato consegnato o raccolto.
 //!
-//! # Perche' una guardia, e perche' con tre uscite e non due
+//! # Perche' una guardia, e perche' con piu' di un'uscita
 //!
 //! Perche' fra lo `spawn` e la consegna al chiamante ci sono cammini che
 //! falliscono, e su quei cammini **un processo esiste gia'**. Chiudere i
@@ -8,15 +8,25 @@
 //! supervisore esce, e uno terminato ma non raccolto resta zombie finche' il
 //! supervisore vive.
 //!
-//! Le uscite volute sono tre:
+//! Le uscite volute si chiamano per cio' che fanno, non per un numero d'ordine:
+//! un'uscita nuova rinumererebbe le altre, e la prosa direbbe il falso mentre il
+//! codice regge.
 //!
-//! - [`FiglioVivo::consegna`], che passa il processo a chi lo ha chiesto;
-//! - [`FiglioVivo::termina_e_raccogli`], che lo chiude e dice com'e' andata —
-//!   e che **restituisce la guardia** quando non ci riesce, perche' un processo
-//!   che non si lascia raccogliere esiste ancora e qualcuno deve restarne
-//!   responsabile;
-//! - [`FiglioVivo::arrenditi`], che ferma tutto **dicendo perche'**: si usa
-//!   quando sopra non c'e' nessuno che possa riprovare.
+//! - **la consegna** — [`FiglioVivo::consegna`] — passa il processo a chi lo ha
+//!   chiesto;
+//! - **l'attesa** — [`FiglioVivo::attendi_la_fine`] — lo lascia finire da se',
+//!   senza segnalargli niente, e restituisce la guardia a chi non fa in tempo;
+//! - **la chiusura** — [`FiglioVivo::termina_e_raccogli`] — lo termina e dice
+//!   com'e' andata, e **restituisce la guardia** quando non ci riesce, perche'
+//!   un processo che non si lascia raccogliere esiste ancora e qualcuno deve
+//!   restarne responsabile;
+//! - **l'arresto** — [`FiglioVivo::arrenditi`] — ferma tutto **dicendo
+//!   perche'**: si usa quando sopra non c'e' nessuno che possa riprovare.
+//!
+//! Le prime tre non sono alternative fra loro nello stesso momento: chi ha
+//! fretta di chiudere passa dalla chiusura, chi ha motivo di credere che il
+//! figlio stia gia' finendo passa prima dall'attesa — e allora la chiusura
+//! diventa il secondo tempo, non il primo.
 //!
 //! # Perche' non esiste una porta che «rinuncia e prosegue»
 //!
@@ -269,21 +279,89 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
         self.processo.as_ref().map(ProcessoFiglio::pid)
     }
 
-    /// La prima porta: il processo passa a chi lo ha chiesto.
+    /// La porta della **consegna**: il processo passa a chi lo ha chiesto.
     ///
     /// Da qui in poi la responsabilita' di terminarlo e raccoglierlo e' del
     /// chiamante, e questa guardia non ha piu' niente da custodire.
     ///
     /// Rende `None` solo se la guardia e' gia' vuota, che per costruzione non
-    /// puo' accadere — entrambe le porte prendono `self` per valore. Il tipo lo
+    /// puo' accadere — ogni porta prende `self` per valore. Il tipo lo
     /// dice comunque invece di affermarlo con una primitiva di panico, che in
     /// questo progetto non si usa.
     pub(super) fn consegna(mut self) -> Option<P> {
         self.processo.take()
     }
 
-    /// La seconda porta: si chiude il figlio, e si dice se qualcosa e' andato
-    /// storto.
+    /// La porta dell'**attesa**: si lascia finire da se', senza segnalargli
+    /// niente.
+    ///
+    /// # Perche' esiste, accanto a `termina_e_raccogli`
+    ///
+    /// Perche' su un cammino riuscito il figlio sta gia' uscendo, e fra «ha
+    /// chiuso il canale» e «il kernel ha registrato la sua uscita» c'e' una
+    /// finestra che non e' un guasto: e' il tempo che ci mette a finire.
+    /// `termina_e_raccogli` in quella finestra **manda un segnale**, perche' il
+    /// suo primo sguardo lo trova ancora vivo — e un worker ucciso per aver
+    /// tardato un millisecondo e' un worker ucciso senza motivo.
+    ///
+    /// Qui invece non si segnala mai: si guarda, si aspetta un poco, si
+    /// riguarda, finche' il tempo dato non e' finito. Chi non fa in tempo torna
+    /// **dentro la guardia**, e il chiamante decide se concedergli altro tempo o
+    /// passare alla porta della chiusura.
+    ///
+    /// # Che cosa rende
+    ///
+    /// [`Chiusura::Raccolto`] con l'uscita, se ha finito; altrimenti
+    /// [`Chiusura::NonRaccolto`] con la guardia intatta. I difetti sono quelli
+    /// dell'interrogazione: qui non c'e' nessuna terminazione che possa
+    /// fallire.
+    #[cfg(any(test, feature = "internals"))]
+    pub(super) fn attendi_la_fine(
+        mut self,
+        limite: Duration,
+        orologio: &impl Orologio,
+    ) -> Chiusura<P> {
+        let mut difetti = Vec::new();
+        let Some(processo) = self.processo.as_mut() else {
+            return Chiusura::Raccolto {
+                uscita: None,
+                difetti,
+            };
+        };
+
+        loop {
+            match processo.prova_a_raccogliere() {
+                Ok(Some(uscita)) => {
+                    self.processo = None;
+                    return Chiusura::Raccolto {
+                        uscita: Some(uscita),
+                        difetti,
+                    };
+                }
+                Ok(None) => {}
+                Err(errore) => {
+                    // Non si sa in che stato sia. Non lo si abbandona e non lo
+                    // si uccide qui: torna al chiamante, che ha la porta della
+                    // chiusura per farlo.
+                    difetti.push(format!("non si riesce a interrogare il figlio: {errore}"));
+                    return Chiusura::NonRaccolto {
+                        guardia: self,
+                        difetti,
+                    };
+                }
+            }
+            if orologio.trascorso() >= limite {
+                return Chiusura::NonRaccolto {
+                    guardia: self,
+                    difetti,
+                };
+            }
+            orologio.attendi_un_poco();
+        }
+    }
+
+    /// La porta della **chiusura**: si termina il figlio, e si dice se qualcosa
+    /// e' andato storto.
     ///
     /// # L'ordine, e la corsa che sta in mezzo
     ///
@@ -406,7 +484,7 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
         }
     }
 
-    /// Ferma tutto, **dicendo perche'**.
+    /// La porta dell'**arresto**: ferma tutto, dicendo perche'.
     ///
     /// # Quando si usa
     ///
@@ -477,8 +555,9 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
 impl<P: ProcessoFiglio> Drop for FiglioVivo<P> {
     /// La sentinella: se qui c'e' ancora un processo, e' sfuggito.
     ///
-    /// Non e' la pulizia ordinaria — quella passa da `termina_e_raccogli`, che
-    /// puo' dire com'e' andata perche' raccoglie. Questa e' l'ultima riga: tenta
+    /// Non e' la pulizia ordinaria — quella passa dalle porte che raccolgono,
+    /// l'attesa e la chiusura, e che possono dire com'e' andata proprio perche'
+    /// raccolgono. Questa e' l'ultima riga: tenta
     /// la terminazione perche' un figlio a cui e' arrivato un segnale e' meglio
     /// di uno a cui non e' arrivato niente, **riporta che cosa si e' potuto
     /// fare**, e ferma il processo.

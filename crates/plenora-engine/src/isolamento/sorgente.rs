@@ -199,6 +199,15 @@ pub(super) struct SorgenteTerminabile<R: Read> {
 
 impl<R: Read> SorgenteTerminabile<R> {
     /// La sorgente, e il freno per fermarla.
+    ///
+    /// # Perche' porta un `cfg` e [`Self::con_interruttore`] no
+    ///
+    /// Perche' questa forma crea il freno **insieme** alla sorgente, e chi la
+    /// usa e' il supervisore, che si compila sotto `test` e `internals`. Il
+    /// worker ha bisogno del contrario — il freno prima, perche' il thread che
+    /// legge nasce dopo — e passa da `con_interruttore`, che infatti e'
+    /// incondizionata.
+    #[cfg(any(test, feature = "internals"))]
     pub(super) fn nuova(sorgente: R) -> (Self, Freno) {
         Self::con_passo(sorgente, PASSO_DI_ATTESA)
     }
@@ -209,6 +218,7 @@ impl<R: Read> SorgenteTerminabile<R> {
     /// durerebbe quanto il passo per ogni giro, e un caso lento non lo esegue
     /// nessuno. Cio' che un chiamante di prova puo' variare e' **quanto** si
     /// aspetta fra un giro e l'altro, mai che cosa si decide.
+    #[cfg(any(test, feature = "internals"))]
     pub(super) fn con_passo(sorgente: R, passo: Duration) -> (Self, Freno) {
         let (interruttore, freno) = interruttore();
         (
@@ -238,7 +248,11 @@ impl<R: Read> SorgenteTerminabile<R> {
     }
 
     /// Se qualcuno ha chiesto l'arresto.
-    fn fermato(&self) -> bool {
+    ///
+    /// Lo chiede anche chi legge **dopo** un errore: la sorgente rende un
+    /// errore di I/O ordinario quando la si ferma, e distinguere l'arresto dal
+    /// testo del messaggio vorrebbe dire confrontare stringhe.
+    pub(super) fn fermato(&self) -> bool {
         self.interruttore.fermato()
     }
 }

@@ -158,17 +158,44 @@ mod isolamento;
 ///
 /// # Che cosa rende
 ///
-/// `None` se `argv[1]` non e' la versione della richiesta: il processo non e'
-/// uno spawner e il chiamante prosegue normalmente.
+/// [`DalConfine::AltroComando`] se `argv[1]` non e' la versione della
+/// richiesta: il processo non e' uno spawner e il chiamante prosegue
+/// normalmente.
 ///
-/// `Some(errore)` se lo e' ma la sequenza non regge. Nel caso riuscito non
-/// rende niente, perche' la `exec` ha sostituito l'immagine.
+/// [`DalConfine::Fallita`] se lo e' ma la sequenza non regge.
+/// [`DalConfine::Conclusa`] non lo rende mai: la riuscita dello spawner e' una
+/// `exec`, e dopo quella questo processo non esiste piu'.
 #[cfg(target_os = "linux")]
 #[must_use]
-pub fn spawner_dal_confine(
-    argomenti: &[std::ffi::OsString],
-) -> Option<plenora_core::error::PlenoraError> {
+pub fn spawner_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
     isolamento::dal_confine_se_spawner(argomenti)
+}
+/// Se questo processo e' un **worker**, lo porta fin dove il worker arriva.
+///
+/// # Dove va chiamata
+///
+/// Subito dopo [`spawner_dal_confine`], e come quella **prima di tutto il
+/// resto**: sono due modalita' dello stesso eseguibile, scelte dal primo
+/// argomento, e una riga del namespace riservato che arrivasse al parser della
+/// CLI si sentirebbe rispondere «comando sconosciuto» invece della diagnosi
+/// vera.
+///
+/// # Che cosa rende
+///
+/// [`DalConfine::AltroComando`] se `argv[1]` non e' del namespace del worker:
+/// il processo non e' un worker e il chiamante prosegue normalmente.
+///
+/// [`DalConfine::Conclusa`] quando il worker ha percorso la sequenza fino
+/// all'esito dichiarato — che **non** significa che l'esecuzione isolata sia
+/// riuscita: significa che il worker ha detto com'e' andata, e chi giudica e'
+/// il supervisore.
+///
+/// [`DalConfine::Fallita`] quando non c'e' stato modo di dirlo: il canale non
+/// regge, oppure un canale non c'e' ancora.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn worker_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
+    isolamento::dal_confine_se_worker(argomenti)
 }
 // Il perimetro di qualificazione, che esiste solo quando `rustc` riceve
 // `--cfg qualificazione_isolamento`.
@@ -188,6 +215,8 @@ pub fn spawner_dal_confine(
 // deve poter essere raggiunta da codice che non sia quel gate.
 #[cfg(all(target_os = "linux", qualificazione_isolamento, feature = "internals"))]
 pub use isolamento::qualificazione;
+#[cfg(target_os = "linux")]
+pub use isolamento::DalConfine;
 pub mod parallelism;
 pub mod plan;
 pub mod planner;
@@ -198,23 +227,19 @@ pub mod prepare;
 // crate passa da [`interni`], che espone un verdetto e una costante, non i
 // tipi.
 //
-// Il `cfg` dice una cosa vera e non la zittisce: il protocollo non ha ancora
-// un chiamante **fuori da se stesso**. Finche' non ce l'ha, il modulo si
-// compila dove qualcuno lo usa davvero — i test e la facciata. Cosi' non serve
-// nessun `allow(dead_code)`: l'assenza di chiamante e' dichiarata, non
-// nascosta.
+// Il `cfg` di perimetro non c'e' piu', e la condizione che lo regge e'
+// scritta: chiede un chiamante **esterno** al modulo, e l'handshake che vive
+// dentro non lo e'. Quel chiamante e' il worker, che si descrive, legge il
+// saluto, giudica l'accordo e risponde — da codice di produzione, raggiunto dal
+// dispatch della riga di comando.
 //
-// L'handshake sta **dentro** `protocollo`: consuma i suoi messaggi ma non e'
-// un chiamante del modulo, quindi non soddisfa la condizione. Toglierlo prima
-// che un chiamante esterno esista rimetterebbe in piedi le decine di
-// `dead_code` che il `cfg` evita — cioe' l'esatta situazione per cui esiste.
-//
-// Regola, perimetro e condizione di rientro sono registrati in
-// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
+// Cio' che dentro il modulo resta senza chiamante lo dichiara sui singoli
+// elementi: un `cfg` sul modulo intero direbbe che nessuno lo usa, e non e'
+// vero. Nessun `allow(dead_code)` in nessuno dei due casi — l'assenza di
+// chiamante si dichiara, non si nasconde.
 mod protocollo;
-// Quale implementazione risolve i CRS in questa build, detto in un posto
-// solo. Privato: e' una decisione interna, e la superficie pubblica non deve
+// Quale implementazione risolve i CRS in questa build, detto in un posto solo.
+// Privato: e' una decisione interna, e la superficie pubblica non deve
 // dipendere da quale backend c'e' sotto.
 mod risolutore;
 pub mod table_engine;
