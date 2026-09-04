@@ -217,6 +217,10 @@ pub fn worker_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
 pub use isolamento::qualificazione;
 #[cfg(target_os = "linux")]
 pub use isolamento::DalConfine;
+// Il percorso di qualificazione end-to-end: un worker reale, un canale reale,
+// e un referto che dice **quale immagine** ha percorso la sequenza.
+#[cfg(all(target_os = "linux", any(test, feature = "internals")))]
+pub use isolamento::prova;
 pub mod parallelism;
 pub mod plan;
 pub mod planner;

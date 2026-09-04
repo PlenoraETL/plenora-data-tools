@@ -61,6 +61,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::dominio::Gerarchia;
+use super::figlio::FiglioVivo;
 use super::spawner::{avvia, avvia_con_giunture, dal_confine, DaEseguire};
 use super::{
     non_disponibile, prepara_dominio, Controllo, EvidenzaPreflight, IdentitaWorker,
@@ -89,9 +90,187 @@ pub fn principale() -> ExitCode {
     }
     match primo.to_str() {
         Some("supervisore") => modo_supervisore(&argomenti),
+        Some("sotto-limite") => modo_sotto_limite(&argomenti),
         Some("ostile") => modo_ostile(&argomenti),
         Some("finestra") => modo_finestra(&argomenti),
-        _ => lamenta("modo sconosciuto: attesi spawner, supervisore, ostile o finestra"),
+        _ => lamenta(
+            "modo sconosciuto: attesi spawner, supervisore, sotto-limite, ostile o finestra",
+        ),
+    }
+}
+
+/// Il modo **sotto limite**: il worker reale esegue dentro il dominio.
+///
+/// # Che cosa aggiunge al modo supervisore
+///
+/// Il **dialogo**. Il modo supervisore prepara il dominio, avvia lo spawner e
+/// aspetta che il figlio esca: misura la nascita e il contenimento, e va bene
+/// per il gate ostile, dove il worker e' un programma qualunque. Qui invece il
+/// worker e' l'immagine di produzione in modalita' worker, e cio' che si vuole
+/// sapere e' che **esegua**: handshake, incarico, progresso, esito, artefatto
+/// riverificato, EOF — tutto sotto `memory.max`, con i quattro controlli scritti
+/// dal preflight.
+///
+/// # Perche' il dialogo non e' scritto qui
+///
+/// Perche' e' lo stesso di `prova::sul_canale`, che gia' lo fa fra due pipe
+/// nude. Riscriverlo darebbe due conversazioni che possono divergere, e a
+/// divergere sarebbe proprio quella che qualifica.
+///
+/// # Che cosa questo prova, e che cosa il modo supervisore non prova
+///
+/// Che il worker riceva i propri descrittori **dallo spawner** — la variabile
+/// del canale la scrive lui, dalla coppia che ha rivalidato — e che l'esecuzione
+/// stia dentro il tetto. Fra due pipe nude non c'e' ne' spawner ne' dominio: si
+/// prova il cablaggio, non il limite.
+///
+/// # Il digest arriva da fuori
+///
+/// L'ultimo argomento e' il digest che **chi lancia** ha misurato sull'immagine
+/// prima di consegnarla. Questo processo ne fa una misura propria, sul binario
+/// che sta per eseguire, e l'oracolo confronta le due. Misurare e confrontare
+/// col proprio valore sarebbe un confronto sempre vero: direbbe «e' il binario
+/// atteso» anche eseguendone un altro, che e' precisamente il caso per cui il
+/// controllo esiste.
+#[cfg(target_os = "linux")]
+fn modo_sotto_limite(argomenti: &[OsString]) -> ExitCode {
+    dichiara("modo_sotto_limite", "avviato");
+    let Some(taglio) = argomenti.iter().position(|pezzo| pezzo == "--") else {
+        return lamenta("manca il separatore -- fra il supervisore e il worker");
+    };
+    let (testa, coda) = argomenti.split_at(taglio);
+    // La grammatica e' **esatta**, e non finisce con `..`: un argomento in piu'
+    // che venisse ignorato sarebbe un percorso che qualifica qualcosa di diverso
+    // da quello che chi lo lancia crede di aver chiesto — un tetto scritto due
+    // volte, un uid rimasto da una riga precedente.
+    let [_, _, dominio, radice, tetto, uid, gid, ingresso, temporaneo, dichiarato] = testa else {
+        return lamenta(
+            "sotto-limite vuole esattamente: dominio radice tetto uid gid ingresso artefatto digest",
+        );
+    };
+    // Il digest **dichiarato da chi lancia**, non quello che questo processo
+    // misurera' fra poco: sono due misure indipendenti della stessa immagine, e
+    // il confronto ha senso solo perche' vengono da due parti diverse. Chiuderlo
+    // qui dentro — misurare e poi confrontare col proprio valore — direbbe
+    // sempre di si', qualunque binario si stia eseguendo.
+    let Some(dichiarato) = dichiarato.to_str() else {
+        return lamenta("il digest dichiarato non e' testo");
+    };
+    let [_, eseguibile, argomenti_worker @ ..] = coda else {
+        return lamenta("dopo -- manca l'eseguibile del worker");
+    };
+    let (Some(tetto), Some(uid), Some(gid)) = (numero(tetto), numero(uid), numero(gid)) else {
+        return lamenta("tetto, uid e gid vogliono essere numeri");
+    };
+    let (Ok(uid), Ok(gid)) = (u32::try_from(uid), u32::try_from(gid)) else {
+        return lamenta("uid e gid non entrano in u32");
+    };
+
+    let mut gerarchia = match Gerarchia::nuova(Path::new(dominio), Path::new(radice)) {
+        Ok(gerarchia) => gerarchia,
+        Err(difetto) => return lamenta(&format!("gerarchia: {difetto}")),
+    };
+    let preparato = match prepara_dominio(&mut gerarchia, tetto, IdentitaWorker { uid, gid }) {
+        Ok(preparato) => preparato,
+        Err(errore) => return lamenta(&format!("preflight: {errore}")),
+    };
+    dichiara("preflight", "riuscito");
+    dichiara("tetto_byte", &tetto.to_string());
+
+    let digest = match super::prova::digest_dell_immagine(Path::new(eseguibile)) {
+        Ok(digest) => digest,
+        Err(errore) => return lamenta(&format!("digest dell'immagine: {errore}")),
+    };
+    // Si riportano **entrambi**: chi legge il referto vede la misura fatta qui e
+    // quella dichiarata da chi ha lanciato, e puo' giudicare il confronto invece
+    // di fidarsi del suo esito.
+    dichiara("digest_immagine", &digest);
+    dichiara("digest_dichiarato", dichiarato);
+
+    let da_eseguire = DaEseguire {
+        eseguibile: Path::new(eseguibile),
+        argomenti: argomenti_worker,
+    };
+    let mut riuscita = match avvia_con_giunture(preparato, &da_eseguire, || Ok(()), || Ok(())) {
+        Ok(riuscita) => riuscita,
+        Err(fallita) => {
+            riporta_evidenza(&fallita.evidenza);
+            return lamenta(&format!("avvio: {}", fallita.causa));
+        }
+    };
+    riporta_evidenza(&riuscita.evidenza);
+    dichiara("avvio", "riuscito");
+
+    // Il figlio entra **subito** nella guardia lineare: lo spawner lo consegna
+    // nudo, e da qui in poi ogni cammino — compreso quello di un dialogo che
+    // fallisce a meta' — passa dalla stessa porta. Un `wait` diretto aspetterebbe
+    // senza tetto, e un worker che non finisce appenderebbe la qualificazione.
+    let guardia = FiglioVivo::nuovo(riuscita.figlio);
+
+    // Gli estremi del worker sono gia' caduti dentro `avvia`: qui restano i due
+    // del supervisore, ed e' su quelli che si parla.
+    let osservato = super::prova::sul_canale(
+        &digest,
+        Path::new(ingresso),
+        Path::new(temporaneo),
+        riuscita.supervisore_legge,
+        &mut riuscita.supervisore_scrive,
+        Some((uid, gid)),
+    );
+    // L'estremo di scrittura cade **prima** della chiusura del figlio. Un worker
+    // fermo ad aspettare non vedrebbe mai arrivare niente, e senza EOF
+    // aspetterebbe per sempre: un errore del supervisore si trasformerebbe in un
+    // blocco, che e' il modo peggiore di riportarlo.
+    drop(riuscita.supervisore_scrive);
+    let (uscita, difetti) = super::prova::chiudi(guardia, osservato.as_ref().err());
+
+    let visto = match osservato {
+        Ok(visto) => visto,
+        Err(causa) => {
+            // I difetti di pulizia non spariscono dietro la causa del dialogo:
+            // sono due fatti, e chi legge il rosso deve trovarli entrambi.
+            dichiara("difetti_di_pulizia", &format!("{difetti:?}"));
+            dichiara("figlio_uscita", &format!("{uscita:?}"));
+            return lamenta(&format!("dialogo: {causa}"));
+        }
+    };
+
+    let referto = super::prova::referto_del_dominio(
+        digest,
+        visto,
+        uscita.map(super::prova::FineDelProcesso::da),
+        difetti,
+    );
+    dichiara("immagine", referto.immagine);
+    dichiara("accordo", &referto.accordo.to_string());
+    dichiara("progressi", &referto.progressi.to_string());
+    dichiara("esito", &format!("{:?}", referto.esito));
+    dichiara("artefatto", &format!("{:?}", referto.artefatto));
+    dichiara("fine_del_canale", &referto.fine_del_canale.to_string());
+    dichiara("figlio_uscita", &format!("{:?}", referto.uscita));
+    dichiara(
+        "difetti_di_pulizia",
+        &format!("{:?}", referto.difetti_di_pulizia),
+    );
+
+    // Il giudizio e' quello di `prova::giudica`, lo stesso che usa il percorso
+    // fra due pipe: un oracolo per strada sarebbe due oracoli, e a divergere
+    // sarebbe proprio quello che qualifica.
+    //
+    // L'atteso e' il digest **dichiarato sulla riga di comando**, e il referto
+    // porta quello **misurato qui** sull'immagine che si e' davvero eseguita. Il
+    // confronto lega quindi due misure indipendenti; passare qui il valore del
+    // referto lo renderebbe un confronto di un valore con se stesso — sempre
+    // vero, e muto proprio nel caso che deve prendere.
+    let manca = super::prova::giudica(&referto, "dominio", Some(dichiarato));
+    if manca.is_empty() {
+        dichiara("giudizio", "vinto");
+        ExitCode::SUCCESS
+    } else {
+        for difetto in &manca {
+            dichiara("perso", difetto);
+        }
+        lamenta("il percorso sotto limite non regge il proprio oracolo")
     }
 }
 

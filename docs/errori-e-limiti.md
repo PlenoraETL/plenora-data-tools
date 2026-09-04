@@ -944,8 +944,10 @@ l'elenco l'ha prodotto `-D dead-code` su Linux, non una lettura a mano:
 
 - il lato supervisore dell'handshake, sotto `any(test, internals)`:
   `AtteseSupervisore`, `SupervisoreInAttesa` con i suoi metodi,
-  `confronta_capability` e `HandshakeAccettato`. Il `cfg` non è il solo `test`
-  perché li raggiunge anche la facciata `internals`. `HandshakeAccettato` lo
+  `confronta_capability` e `HandshakeAccettato`. Non li raggiungono soltanto i
+  casi: li guida anche il percorso di qualificazione end-to-end
+  (`isolamento::prova`), che sotto `internals` conduce un worker reale — ed è la
+  ragione per cui il `cfg` non è il solo `test`. `HandshakeAccettato` lo
   **nomina** inoltre `isolamento::macchina::produttori`.
 
   Di produzione non diventano con questo: il supervisore che `PR-8` costruisce
@@ -960,7 +962,7 @@ l'elenco l'ha prodotto `-D dead-code` su Linux, non una lettura a mano:
   token, che chi esegue riceve invece da `ricevi_incarico`, insieme
   all'incarico e nello stesso momento.
 
-Fuori dal protocollo, la stessa regola tiene due elementi dell'isolamento:
+Fuori dal protocollo, la stessa regola tiene tre elementi dell'isolamento:
 
 - `SorgenteTerminabile::nuova` e `SorgenteTerminabile::con_passo`, sotto
   `any(test, internals)`. Creano il freno **insieme** alla sorgente, ed è la
@@ -970,7 +972,11 @@ Fuori dal protocollo, la stessa regola tiene due elementi dell'isolamento:
 - `FiglioVivo::attendi_la_fine`, sotto `any(test, internals)`. È la porta che
   **aspetta senza segnalare**, e la usa il percorso di qualificazione: la
   produzione, oggi, non ha un cammino in cui concedere cortesia a un figlio —
-  quando ne avrà uno, con `PR-12`, il `cfg` cadrà da sé sotto il gate.
+  quando ne avrà uno, con `PR-12`, il `cfg` cadrà da sé sotto il gate;
+- `isolamento::prova`, il percorso end-to-end per intero, sotto
+  `all(target_os = "linux", any(test, internals))`. Non è un pezzo del
+  programma: è il modo in cui si prova che i pezzi si parlino, e guida il lato
+  supervisore dell'handshake, che di produzione non è ancora.
 
 Un elemento del filo che avesse un chiamante solo di prova senza dirlo
 lascerebbe l'avviso a qualcun altro: è la ragione per cui l'elenco si aggiorna

@@ -19,6 +19,20 @@ geos-backend = ["plenora-kernels-geo/geos-backend"]
 proj-backend = ["plenora-kernels-geo/proj-backend"]
 full-backends = ["geos-backend", "proj-backend"]
 
+# Il percorso di qualificazione end-to-end: un processo suo, e non un caso.
+#
+# Non puo' essere un `#[test]`, e la ragione e' strutturale: libtest esegue ogni
+# caso in un thread proprio, mentre l'harness fa esattamente cio' che fa il
+# supervisore — toglie `CLOEXEC` a due descrittori e subito dopo avvia un
+# processo. Quella finestra e' sicura solo in un processo con un thread solo, e
+# `accerta_monothread` lo pretende. Un binario ce l'ha; un binario di test no.
+#
+# `required-features` lo lega a `internals`: senza, non viene nemmeno compilato.
+[[bin]]
+name = "plenora-qualifica-worker"
+path = "src/bin/qualifica_worker.rs"
+required-features = ["internals"]
+
 [dependencies]
 plenora-core.workspace = true
 plenora-kernels-table.workspace = true

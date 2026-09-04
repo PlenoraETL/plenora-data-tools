@@ -149,7 +149,13 @@ import sys
 import time
 
 #: La radice dell'albero da mutare, e la copia di riferimento accanto.
-RADICE = os.environ.get('MUTAZIONI_RADICE', os.path.expanduser('~/pr8'))
+#: L'albero da mutare. Per difetto e' **quello in cui questo script vive**, che
+#: e' l'unica risposta corretta in ogni worktree; un percorso scritto a mano
+#: nomina la copia di chi lo ha scritto, e su un'altra macchina muta un albero
+#: che non c'entra o non parte affatto.
+RADICE = os.environ.get(
+    'MUTAZIONI_RADICE', os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 BASELINE = RADICE + '-baseline'
 USCITA = os.path.join(os.path.dirname(BASELINE), 'mutante-uscita.txt')
 
@@ -157,13 +163,23 @@ USCITA = os.path.join(os.path.dirname(BASELINE), 'mutante-uscita.txt')
 #: [`esegui`] perche' i casi di `test_mutazioni_isolamento.py` la sostituiscono
 #: con un comando che lascia un nipote vivo: la regola sui superstiti si prova
 #: cosi', in un secondo, invece che sperando in un mutante che si comporti male.
-COMANDO_BASE = ['cargo', 'test', '-p', 'plenora-engine', '--lib', '--locked']
+COMANDO_BASE = ['cargo', 'test', '-p', 'plenora-engine', '--lib', '--locked',
+                '--features', 'internals']
 
-#: Il filtro dei casi. Il perimetro dei mutanti e' il supervisore, e far girare
-#: l'intera batteria per ognuno moltiplicherebbe il tempo senza aggiungere
-#: discriminazione: cio' che vive fuori da `isolamento` non tocca queste
-#: decisioni.
-FILTRO = 'isolamento'
+#: I filtri dei casi, in **or**: un caso gira se il suo nome contiene uno di
+#: questi. Far girare l'intera batteria per ogni mutante moltiplicherebbe il
+#: tempo, ma un filtro piu' stretto del perimetro dei mutanti e' peggio: i casi
+#: che giudicano un mutante non girerebbero, e quel mutante sopravvivrebbe senza
+#: che nulla di sbagliato sia successo nel codice.
+#:
+#: Il perimetro non e' piu' il solo `isolamento`: il worker scrive l'artefatto
+#: passando da `executor::output`, e le decisioni di quel confine — quali generi
+#: d'errore sono dell'incarico — sono decisioni sue quanto le altre.
+#:
+#: **La regola**: aggiungere un mutante in un modulo nuovo vuol dire aggiungere
+#: qui il suo perimetro. Un mutante il cui giudice non gira e' un superstite che
+#: non dice niente.
+FILTRI = ['isolamento', 'executor::output']
 
 #: Oltre questo, un mutante non e' lento: e' appeso. Il valore e' largo apposta
 #: — una ricompilazione onesta ci sta comodamente dentro — perche' un tetto
@@ -180,6 +196,12 @@ MACC = f'{I}/macchina.rs'
 CODA = f'{I}/macchina/coda.rs'
 PROD = f'{I}/macchina/produttori.rs'
 FIGL = f'{I}/figlio.rs'
+WORK = f'{I}/worker.rs'
+ASCO = f'{I}/worker/ascolto.rs'
+PROV = f'{I}/prova.rs'
+ASSI = 'crates/plenora-engine/src/protocollo/assi.rs'
+USCI = 'crates/plenora-engine/src/executor/output.rs'
+ISOL = 'crates/plenora-engine/src/isolamento.rs'
 
 #: L'elenco **canonico**. La tabella qui sotto deve corrispondervi: e' cio' che
 #: impedisce a un mutante di sparire senza rumore.
@@ -195,6 +217,9 @@ IDENTIFICATORI = [
     'mut-09', 'mut-10', 'mut-11', 'mut-12', 'mut-13', 'mut-14', 'mut-15', 'mut-16',
     'mut-17', 'mut-18', 'mut-19', 'mut-20', 'mut-21', 'mut-22', 'mut-23', 'mut-24',
     'mut-25', 'mut-26', 'mut-27', 'mut-28', 'mut-29', 'mut-30', 'mut-31', 'mut-32',
+    'mut-33', 'mut-34', 'mut-35', 'mut-36', 'mut-37', 'mut-38', 'mut-39', 'mut-40',
+    'mut-41', 'mut-42', 'mut-43', 'mut-44', 'mut-45', 'mut-46', 'mut-47',
+    'mut-48',
 ]
 
 #: (identificativo, nome, file, sano, malato). Ogni `sano` deve comparire
@@ -265,9 +290,27 @@ MUTANTI = [
     ('mut-17', 'figlio: la guardia non risale (rinuncia)', COND,
      '            difetti.raccolta = riunisci(&quali);\n            difetti.figlio_non_raccolto = Some(guardia);\n        }',
      '            difetti.raccolta = riunisci(&quali);\n            guardia.smonta();\n        }'),
+    # L'ancora comprende il passo che segue perche' la porta dell'attesa ha lo
+    # stesso preambolo: senza, il frammento combacerebbe in due punti e il
+    # mutante direbbe il falso su quale dei due ha rotto. La preflight lo
+    # verifica a ogni giro, ed e' cosi' che questa ambiguita' e' venuta fuori.
     ('mut-18', 'figlio: il processo esce dalla guardia prima della raccolta', FIGL,
-     '        let Some(processo) = self.processo.as_mut() else {',
-     '        let Some(mut processo_estratto) = self.processo.take() else {'),
+     """        let Some(processo) = self.processo.as_mut() else {
+            return Chiusura::Raccolto {
+                uscita: None,
+                difetti,
+            };
+        };
+
+        // 1. Gia' uscito?""",
+     """        let Some(mut processo_estratto) = self.processo.take() else {
+            return Chiusura::Raccolto {
+                uscita: None,
+                difetti,
+            };
+        };
+
+        // 1. Gia' uscito?"""),
     ('mut-19', "figlio: la terminazione rifiutata non e' un difetto", FIGL,
      '            Err(errore) => difetti.push(format!("non si riesce a terminare il figlio: {errore}")),',
      '            Err(_errore) => (),'),
@@ -321,6 +364,58 @@ MUTANTI = [
     ('mut-32', "coda: i fatti fermi non si possono piu' raccogliere", CODA,
      '    pub(super) fn raccogli_i_fermi(&self) -> Vec<Fatto> {',
      '    #[allow(dead_code)]\n    pub(super) fn raccogli_i_fermi_inutile(&self) -> Vec<Fatto> {'),
+    # --- il worker, l'ascolto e il percorso di qualificazione ---------------
+    ('mut-33', 'quota del progresso: la quota non ferma piu', WORK,
+     '        if self.emessi >= self.quota {\n            return Ok(());\n        }',
+     '        if false {\n            return Ok(());\n        }'),
+    ('mut-34', 'quota del progresso: l errore di chi invia viene ingoiato', WORK,
+     '        self.emessi += 1;\n        invia(quanto)',
+     '        self.emessi += 1;\n        let _ = invia(quanto);\n        Ok(())'),
+    ('mut-35', 'due fatti: il secondo sparisce quando l esito non parte', WORK,
+     '        (Err(invio), Some(secondo)) => Err(non_disponibile(',
+     '        (Err(invio), Some(_secondo)) => Err(non_disponibile('),
+    ('mut-36', 'due fatti: il guasto dell ascolto non entra nel messaggio', WORK,
+     '        errore.messaggio = format!("{}; mentre si ascoltava: {secondo}", errore.messaggio);',
+     '        let _ = secondo;'),
+    ('mut-37', 'annullamento: la leva non viene tirata', ASCO,
+     '                annullamento.cancel();',
+     '                let _ = annullamento;'),
+    ('mut-38', 'annullamento: qualunque messaggio vale come annulla', ASCO,
+     '            if matches!(frame.corpo(), Corpo::Annulla(_)) {',
+     '            if true {'),
+    ('mut-39', 'annullamento: l arresto diventa un guasto del canale', ASCO,
+     '            if sorgente.fermato() {',
+     '            if false {'),
+    ('mut-40', 'cortesia: si segnala senza aspettare', PROV,
+     'guardia.attendi_la_fine(CORTESIA_PRIMA_DEL_SEGNALE, &cortesia)',
+     'guardia.attendi_la_fine(Duration::ZERO, &cortesia)'),
+    ('mut-41', 'pulizia: i difetti non entrano nella causa', PROV,
+     '        Err(causa) if difetti.is_empty() => Err(causa),',
+     '        Err(causa) if true => Err(causa),'),
+    ('mut-42', 'guardiano: la perdita passa per non scaduto', PROV,
+     '    if *stato == StatoDelGuardiano::Perduto {',
+     '    if false {'),
+    ('mut-43', 'canale: il separatore della variabile cambia', ISOL,
+     '            worker::SEPARATORE,',
+     "            ';',"),
+    # --- l'oracolo del qualificatore ----------------------------------------
+    ('mut-44', "oracolo: il giudizio non guarda piu' niente", PROV,
+     '    let mut pretendi = |vero: bool, che: String| {\n        if !vero {\n            manca.push(che);\n        }\n    };',
+     '    let mut pretendi = |vero: bool, che: String| {\n        if !vero && false {\n            manca.push(che);\n        }\n    };'),
+    ('mut-45', "oracolo: un'uscita diversa da zero passa", PROV,
+     '    pretendi(\n        referto.uscita == Some(FineDelProcesso::Codice(0)),\n        format!("fine del processo {:?} invece del codice 0", referto.uscita),\n    );',
+     '    pretendi(\n        true,\n        format!("fine del processo {:?} invece del codice 0", referto.uscita),\n    );'),
+    ('mut-46', 'oracolo: i difetti di pulizia non contano', PROV,
+     '    pretendi(\n        referto.difetti_di_pulizia.is_empty(),',
+     '    pretendi(\n        true || referto.difetti_di_pulizia.is_empty(),'),
+    # --- gli assi sul filo ---------------------------------------------------
+    ('mut-47', 'assi: il ritardo torna a saturare invece di rifiutare', ASSI,
+     'u64::try_from(millisecondi).map_err(|_| {',
+     'Ok::<u64, PlenoraError>(u64::MAX).map_err(|_| {'),
+    # --- la scrittura dell'artefatto ------------------------------------------
+    ('mut-48', "uscita: un difetto dell'incarico ricade nell'ambiente", USCI,
+     '        std::io::ErrorKind::InvalidInput,',
+     '        std::io::ErrorKind::Unsupported,'),
 ]
 
 
@@ -693,7 +788,11 @@ def esegui(argomenti):
     """
     with open(USCITA, 'wb') as dove:
         figlio = subprocess.Popen(
-            COMANDO_BASE + [FILTRO] + argomenti,
+            # I filtri vanno **dopo `--`**, e non e' cosmetica: `cargo test`
+            # accetta un solo filtro posizionale, e il secondo lo rifiuta come
+            # argomento sconosciuto. Dopo `--` li riceve libtest, che li tratta
+            # in or.
+            COMANDO_BASE + argomenti + ['--'] + FILTRI,
             cwd=RADICE, stdout=dove, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, start_new_session=True,
         )
@@ -817,6 +916,32 @@ def giro(primo, ultimo):
         print()
         print(f'CONTEGGIO INATTESO: il blocco copre {attesi} mutanti e ne ha resi {ottenuti}.')
         return 1
+    return verdetto(sopravvissuti, scaduti)
+
+
+def verdetto(sopravvissuti, scaduti):
+    """Il codice d'uscita della campagna, da cio' che si e' osservato.
+
+    # Perche' una funzione a se'
+
+    Perche' e' la regola, e una regola dentro un giro lungo non si prova: la si
+    puo' solo far girare tutta. Qui la si interroga con gli elenchi che si
+    vuole, e la difesa che la copre non deve costruire un albero finto ne'
+    aspettare un mutante lento.
+
+    # La regola, e perche' non ammette eccezioni
+
+    Un sopravvissuto fa fallire. Uno **scaduto** anche, e non e' severita': uno
+    scaduto e' un mutante di cui non si sa niente — puo' essere un blocco che la
+    mutazione causa, oppure una macchina in ginocchio — e le due cose si
+    distinguono guardando, non decidendo a priori.
+
+    Una lista di scaduti «attesi» non c'e', ed e' una scelta: dichiarare atteso
+    un blocco vuol dire dimostrarlo dal codice, e un blocco osservato su una
+    macchina in difficolta' non lo dimostra. Su una macchina sana lo stesso
+    mutante puo' essere ucciso in tempo — e allora la dichiarazione avrebbe reso
+    verde una campagna che quel mutante non l'ha misurato.
+    """
     return 3 if (sopravvissuti or scaduti) else 0
 
 

@@ -109,6 +109,12 @@ mod macchina;
 #[cfg(all(target_os = "linux", qualificazione_isolamento))]
 pub mod qualificazione;
 mod sorgente;
+// Il percorso che fa percorrere a un worker **reale** la sequenza intera. Vive
+// sotto `internals` perche' guida il lato supervisore dell'handshake, che di
+// produzione non e' ancora: non e' un pezzo del programma, e' il modo in cui si
+// prova che i pezzi si parlino.
+#[cfg(all(target_os = "linux", any(test, feature = "internals")))]
+pub mod prova;
 #[cfg(target_os = "linux")]
 mod spawner;
 mod worker;

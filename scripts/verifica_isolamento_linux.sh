@@ -97,12 +97,61 @@ FALLIMENTI=0
 # I segnali hanno un gestore proprio che esce con `128 + n`. Senza, un `INT`
 # arriverebbe al gestore `EXIT` con lo stato dell'ultimo comando riuscito —
 # cioe' zero — e un gate interrotto a meta' si leggerebbe come un gate passato.
+
+# Se il cgroup e' ancora abitato, secondo la fonte che lo dichiara.
+#
+# `cgroup.events` porta una riga `populated 0|1`: e' esattamente la domanda, e
+# la risposta la da' il kernel invece di dedurla dalla dimensione di un file che
+# dimensione non ha.
+#
+# Rende **tre** stati:
+#
+#   0  abitato
+#   1  vuoto
+#   2  l'osservazione non si e' potuta fare, o non si e' potuta credere
+#
+# Due soli codici confonderebbero «vuoto» con «non l'ho potuto guardare», e
+# quella confusione e' fail-open: con l'osservazione fallita e `rmdir` riuscito
+# il gate concluderebbe verde senza aver mai visto il cgroup svuotarsi.
+#
+# Si pretende esattamente **una** riga `populated`, con valore `0` oppure `1`:
+# nessuna riga, due righe, o un valore diverso sono un file che non si sa
+# leggere, e non lo si interpreta a maggioranza.
+_abitato() {
+  local _eventi="$1/cgroup.events"
+  [ -r "$_eventi" ] || return 2
+  # Si guarda anche `NF`: una riga «populated 0 spazzatura» ha il secondo campo
+  # giusto e non e' la riga che il kernel scrive.
+  awk '
+    $1 == "populated" { _righe++; _valore = (NF == 2 ? $2 : "") }
+    END {
+      if (_righe != 1) { exit 2 }
+      if (_valore == "1") { exit 0 }
+      if (_valore == "0") { exit 1 }
+      exit 2
+    }' "$_eventi"
+}
+
 pulisci() {
   set +e
   if [ -n "$DOMINIO" ] && [ -d "$DOMINIO" ]; then
     [ -e "$DOMINIO/cgroup.kill" ] && echo 1 >"$DOMINIO/cgroup.kill" 2>/dev/null
+    # La condizione la da' `cgroup.events`, non `-s cgroup.procs`: i file di
+    # `cgroup2` sono virtuali e dichiarano dimensione zero anche quando hanno
+    # contenuto, quindi `-s` e' **sempre falso** e questo ciclo non girerebbe
+    # mai. Il difetto non si vede — `rmdir` di solito riesce lo stesso perche'
+    # `cgroup.kill` ha gia' fatto il suo — e si vedrebbe soltanto il giorno in
+    # cui qualcosa resta dentro: la pulizia direbbe di aver insistito senza
+    # averlo fatto.
     local _giro=0
-    while [ -s "$DOMINIO/cgroup.procs" ] && [ "$_giro" -lt 50 ]; do
+    local _stato=0
+    while :; do
+      _stato=0
+      _abitato "$DOMINIO" || _stato=$?
+      # Si insiste solo finche' e' **abitato**: vuoto o non osservabile, decide
+      # il blocco qui sotto.
+      [ "$_stato" -eq 0 ] || break
+      [ "$_giro" -lt 50 ] || break
       local _pid
       while read -r _pid; do
         [ -n "$_pid" ] && kill -9 "$_pid" 2>/dev/null
@@ -110,8 +159,20 @@ pulisci() {
       _giro=$((_giro + 1))
       sleep 0.1
     done
-    rmdir "$DOMINIO" 2>/dev/null
-    [ -d "$DOMINIO" ] && fallisce "pulizia: $DOMINIO non si rimuove"
+    if [ "$_stato" -eq 1 ]; then
+      rmdir "$DOMINIO" 2>/dev/null
+      [ -d "$DOMINIO" ] && fallisce "pulizia: $DOMINIO non si rimuove"
+    elif [ "$_stato" -eq 0 ]; then
+      fallisce "pulizia: $DOMINIO e' ancora abitato dopo il tetto"
+    else
+      # Prima la prova, poi la bonifica. Il braccio rosso si dichiara qui e non
+      # torna indietro: la quiescenza non e' stata osservata, e una rimozione
+      # riuscita dopo non puo' diventarne la dimostrazione. Il `rmdir` che segue
+      # serve solo a non lasciare un cgroup sulla macchina, e il suo esito non si
+      # guarda proprio perche' non e' evidenza.
+      fallisce "pulizia: la quiescenza di $DOMINIO non e' osservabile"
+      rmdir "$DOMINIO" 2>/dev/null
+    fi
   fi
   if [ -n "$VICINO" ] && [ -d "$VICINO" ]; then
     [ -e "$VICINO/cgroup.kill" ] && echo 1 >"$VICINO/cgroup.kill" 2>/dev/null
