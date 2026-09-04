@@ -49,12 +49,28 @@ export MSYS_NO_PATHCONV
 
 RADICE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Percorso RELATIVO dalla radice, e nessun argomento: su Git Bash per Windows
-# `$RADICE` e' un percorso MSYS (`/c/...`) che il `python.exe` nativo non sa
-# risolvere — lo interpreta come `C:\c\...` e non trova il file. Senza
-# argomenti lo script ricava la radice da `__file__`, in forma nativa.
+# La pulizia finale gira **dentro il container**, e non sull'host.
+#
+# PERCHE'
+#
+#   Il container gira senza `--user`, quindi cargo-llvm-cov scrive i profili
+#   come **root**. Una pulizia sull'host — dove l'utente e' quello che ha
+#   lanciato lo script — trova quei file e non li puo' togliere: `Permission
+#   denied`, campagna rossa, e i profili restano proprio dove la campagna
+#   successiva li riuserebbe. Un gate che finisce cosi' e' irriproducibile fuori
+#   dalla CI, che questo script non lo invoca affatto.
+#
+#   Chi ha scritto i file e' l'unico che li puo' togliere senza privilegi presi
+#   altrove: la pulizia va dove sta lo scrittore. Non si aggiunge `--user` al
+#   container per la ragione opposta — cambierebbe l'utente sotto cui la misura
+#   avviene, cioe' proprio cio' che deve restare identico alla CI.
+#
+#   Si rifa' anche il `chown`? No: cambiare proprietario ai file di una misura
+#   in corso e' un'altra scrittura che nessuno ha chiesto, e lascerebbe l'albero
+#   in uno stato che dipende da chi ha lanciato lo script.
 pulisci_profili() {
-  ( cd "$RADICE" && python scripts/pulisci_coverage.py --solo-profili )
+  docker run --rm -v "$RADICE:/work" -w /work "$IMAGE" \
+    python3 scripts/pulisci_coverage.py --solo-profili
 }
 
 # La pulizia PRIMA della misura non e' qui: gira dentro il container, subito
