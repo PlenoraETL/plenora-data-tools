@@ -168,46 +168,121 @@ fn cio_che_non_e_nella_tabella_resta_dell_ambiente() {
     }
 }
 
-/// **I generi della forma del percorso si raggiungono davvero.**
+/// Il rifiuto vero di un'apertura esclusiva su quel percorso.
+///
+/// Gli stessi flag del percorso di scrittura — `create_new`, cioe'
+/// `O_CREAT|O_EXCL` — perche' un'apertura con flag diversi risponderebbe a una
+/// domanda diversa.
+fn rifiuto_vero(percorso: &std::path::Path) -> std::io::Error {
+    std::fs::File::options()
+        .write(true)
+        .create_new(true)
+        .open(percorso)
+        .expect_err("un percorso di questa forma non si apre")
+}
+
+/// **Due forme di percorso arrivano come difetto dell'incarico, su ogni
+/// piattaforma.**
 ///
 /// # Che cosa esclude
 ///
 /// Che la tabella classifichi generi che nessuna apertura puo' produrre. Una
-/// riga che non si raggiunge non e' una difesa: e' una dichiarazione, e il caso
-/// che la guarda con un `ErrorKind` costruito a mano resterebbe verde qualunque
-/// cosa faccia il sistema vero.
+/// riga irraggiungibile non e' una difesa: e' una dichiarazione, e il caso che
+/// la guarda con un `ErrorKind` costruito a mano resterebbe verde qualunque cosa
+/// faccia il sistema vero.
 ///
-/// Qui l'apertura e' quella vera, con gli stessi flag del percorso di scrittura
-/// — `create_new`, cioe' `O_CREAT|O_EXCL` — e si guarda che l'errore finisca fra
-/// i difetti dell'incarico. **Quale** genere arrivi lo decide il kernel e non lo
-/// si pretende: si pretende la classificazione, che e' la decisione nostra.
+/// # Perche' si pretende anche il genere, e non la sola categoria
+///
+/// Perche' la categoria e' la **nostra** decisione e il genere e' quello del
+/// sistema: guardare solo la prima nasconde un cambio del secondo finche' i due
+/// generi restano entrambi in tabella. Qui succede davvero: un componente
+/// intermedio che e' un file da' `NotADirectory` su Unix e `NotFound` su
+/// Windows, e con la sola categoria quella divergenza resta invisibile, perche'
+/// la classificazione combacia.
 #[test]
-fn i_percorsi_malformati_arrivano_classificati_come_incarico() {
+fn due_forme_di_percorso_sono_difetti_dell_incarico_ovunque() {
     let stanza = tempfile::tempdir().expect("una directory temporanea");
     let un_file = stanza.path().join("questo-e-un-file");
     std::fs::write(&un_file, b"x").expect("si scrive il file");
 
     // Un componente intermedio che e' un file, non una directory.
-    let sotto_un_file = un_file.join("artefatto.arrow");
-    // Il percorso nomina una directory dove serve un file.
-    let una_directory = stanza.path().to_path_buf();
+    #[cfg(unix)]
+    let genere_sotto_un_file = std::io::ErrorKind::NotADirectory;
+    #[cfg(windows)]
+    let genere_sotto_un_file = std::io::ErrorKind::NotFound;
+
     // Un percorso che il sistema non accetta: un byte NUL non puo' stare in un
     // nome, e nessun tetto sulla lunghezza lo esclude.
-    let con_nul = stanza.path().join("artefatto\0.arrow");
+    let forme = [
+        (un_file.join("artefatto.arrow"), genere_sotto_un_file),
+        (
+            stanza.path().join("artefatto\0.arrow"),
+            std::io::ErrorKind::InvalidInput,
+        ),
+    ];
 
-    for percorso in [sotto_un_file, una_directory, con_nul] {
-        let causa = std::fs::File::options()
-            .write(true)
-            .create_new(true)
-            .open(&percorso)
-            .expect_err("un percorso di questa forma non si apre");
-        let classificato = non_apribile(&percorso, &causa);
+    for (percorso, genere_atteso) in forme {
+        let causa = rifiuto_vero(&percorso);
         assert_eq!(
-            classificato.category(),
-            ErrorCategory::InvalidPlan,
-            "«{}» e' un difetto dell'incarico: il sistema ha detto {:?}",
-            percorso.display(),
-            causa.kind()
+            causa.kind(),
+            genere_atteso,
+            "il sistema ha cambiato risposta su «{}»: serve una decisione nuova, \
+             non un caso allargato",
+            percorso.display()
         );
+        let classificato = non_apribile(&percorso, &causa);
+        assert_eq!(classificato.category(), ErrorCategory::InvalidPlan);
+        assert_eq!(classificato.phase(), ErrorPhase::Probe);
     }
+}
+
+/// **Una directory esistente e' ambigua, e le due piattaforme non concordano.**
+///
+/// # Che cosa dice questo caso
+///
+/// Che su Unix un percorso che nomina una directory arriva come
+/// `AlreadyExists` — un difetto dell'incarico, fase `Commit` — mentre su Windows
+/// arriva come `PermissionDenied`, che e' **indistinguibile** da un vero difetto
+/// di permessi e resta percio' `Io`, fase `Write`.
+///
+/// # Perche' la tabella non si allarga
+///
+/// Perche' aggiungerci `PermissionDenied` direbbe «incarico da correggere» anche
+/// quando il permesso manca davvero, e manderebbe chi legge a cambiare un
+/// percorso che e' giusto. Fra i due errori si sceglie quello **conservativo**:
+/// una diagnosi meno precisa e mai falsa. La deviazione e' registrata in
+/// errori-e-limiti.md#lapertura-dellartefatto-temporaneo-quali-generi-sono-dellincarico.
+///
+/// # Perche' il caso resta, invece di togliere la directory
+///
+/// Perche' e' la prova dell'ambiguita': se una piattaforma cambiasse risposta,
+/// questo caso diventerebbe rosso e chiederebbe una decisione nuova, invece di
+/// lasciare che il comportamento cambi in silenzio.
+#[test]
+fn una_directory_esistente_e_ambigua_fra_le_piattaforme() {
+    let stanza = tempfile::tempdir().expect("una directory temporanea");
+    let causa = rifiuto_vero(stanza.path());
+
+    #[cfg(unix)]
+    let (genere_atteso, categoria_attesa, fase_attesa) = (
+        std::io::ErrorKind::AlreadyExists,
+        ErrorCategory::InvalidPlan,
+        ErrorPhase::Commit,
+    );
+    #[cfg(windows)]
+    let (genere_atteso, categoria_attesa, fase_attesa) = (
+        std::io::ErrorKind::PermissionDenied,
+        ErrorCategory::Io,
+        ErrorPhase::Write,
+    );
+
+    assert_eq!(
+        causa.kind(),
+        genere_atteso,
+        "questa piattaforma ha cambiato risposta su una directory esistente: \
+         la classificazione va ridecisa, non adattata"
+    );
+    let classificato = non_apribile(stanza.path(), &causa);
+    assert_eq!(classificato.category(), categoria_attesa);
+    assert_eq!(classificato.phase(), fase_attesa);
 }

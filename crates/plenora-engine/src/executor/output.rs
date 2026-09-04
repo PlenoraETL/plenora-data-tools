@@ -283,13 +283,25 @@ impl Output {
 /// riguardano la forma del percorso: uno che il sistema non accetta — un byte
 /// NUL, per dire —, un componente intermedio che e' un **file** invece di una
 /// directory, e un percorso che nomina una **directory** dove serve un file. Il
-/// protocollo limita la lunghezza del percorso, non la sua forma: tutte e tre
+/// protocollo limita la lunghezza del percorso, non la sua forma: quelle forme
 /// arrivano fin qui.
 ///
-/// Fra `IsADirectory` e `AlreadyExists` decide il kernel — con `create_new`, una
-/// directory esistente diventa di solito il secondo — e la tabella li tiene
-/// entrambi perche' la scelta non e' nostra: dicono comunque la stessa cosa,
-/// cioe' che li' un file non si crea.
+/// # Quale genere arrivi lo decide il sistema, e i sistemi non concordano
+///
+/// La tabella dice come si **classifica** un genere, non quale genere una data
+/// forma produca: quello lo decide il kernel, e non e' lo stesso ovunque. Un
+/// componente intermedio che e' un file da' `NotADirectory` su Unix e `NotFound`
+/// su Windows — entrambi qui dentro, quindi la classificazione non cambia.
+///
+/// Una directory esistente no: su Unix e' `AlreadyExists`, su Windows
+/// `PermissionDenied`, che in questa tabella **non c'e'** e resta percio' `Io`.
+/// E' una deviazione dichiarata, non una dimenticanza: `PermissionDenied` e'
+/// indistinguibile da un permesso che manca davvero, e ammetterlo qui direbbe
+/// «correggi l'incarico» a chi invece ha un problema di permessi. Fra due
+/// diagnosi imprecise si tiene quella **conservativa**. Sta scritto in
+/// errori-e-limiti.md#lapertura-dellartefatto-temporaneo-quali-generi-sono-dellincarico,
+/// e due casi pretendono il genere reale su ciascuna piattaforma: se una
+/// cambiasse risposta, diventerebbero rossi invece di adattarsi.
 ///
 /// # Le fasi
 ///

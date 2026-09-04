@@ -1169,9 +1169,54 @@ falso ma si scopre subito, perché l'incarico che si va a controllare risulta
 corretto. Il mutante `mut-48` toglie `InvalidInput` dalla tabella e viene ucciso
 dal caso che la scorre.
 
-Fra `IsADirectory` e `AlreadyExists` decide il kernel: con `create_new` una
-directory esistente diventa di solito il secondo. La tabella li tiene entrambi
-perché quella scelta non è nostra, e dicono comunque la stessa cosa.
+**La tabella dice come si classifica un genere, non quale genere una forma
+produca.** Quello lo decide il sistema, e i sistemi non concordano. Misurato con
+gli stessi flag del percorso di scrittura:
+
+| forma del percorso | Linux | Windows |
+|---|---|---|
+| un componente intermedio è un file | `NotADirectory` | `NotFound` |
+| il percorso nomina una directory | `AlreadyExists` | `PermissionDenied` |
+| il percorso contiene un NUL | `InvalidInput` | `InvalidInput` |
+
+Le prime e le terze righe non cambiano niente: i due generi sono entrambi in
+tabella, e la classificazione resta `InvalidPlan`.
+
+### Deviazione: su Windows una directory esistente è diagnosticata come ambiente
+
+**Ambito.** Solo Windows, e solo l'apertura esclusiva dell'artefatto temporaneo.
+
+**Il fatto.** Un percorso che nomina una directory esistente arriva come
+`PermissionDenied`, che **non è** fra i generi dell'incarico: viene quindi
+classificato `Io`, fase `Write`, come un qualunque rifiuto dell'ambiente. Su
+Linux lo stesso percorso arriva come `AlreadyExists` ed è `InvalidPlan`, fase
+`Commit`.
+
+**Perché la tabella non si allarga.** Perché `PermissionDenied` su Windows è
+indistinguibile da un permesso che manca davvero. Ammetterlo fra i generi
+dell'incarico direbbe «correggi il percorso» anche a chi ha un problema di
+permessi, e quello è il verso in cui l'errore non si vede: chi legge va a
+cambiare un percorso che è giusto. Fra due diagnosi imprecise si tiene la
+**conservativa** — meno precisa, mai falsa.
+
+**Il rischio che resta.** Su Windows, un incarico che indica una directory come
+percorso temporaneo riceve una diagnosi che parla di permessi. È corretta come
+categoria — l'apertura è stata negata — ma non indica il rimedio vero. È il
+prezzo dichiarato della scelta conservativa.
+
+**Nessun controllo preventivo.** Non si aggiunge un `is_dir()` prima
+dell'apertura: separare la domanda dall'atto aprirebbe una finestra fra i due —
+il percorso può cambiare in mezzo — e trasformerebbe una diagnosi imprecisa in
+una decisione sbagliata presa su uno stato che non c'è più. Il `create_new` è
+atomico e resta l'unico punto in cui si guarda.
+
+**Condizione di rientro.** Una distinzione **atomica** che separi «è una
+directory» da «non hai il permesso» senza una seconda interrogazione del
+filesystem — per esempio un codice d'errore nativo più fine, letto dallo stesso
+tentativo. Fino ad allora la deviazione resta, ed è provata: due casi
+pretendono il **genere reale** su ciascuna piattaforma, così che una piattaforma
+che cambiasse risposta faccia diventare rossi i casi invece di adattarsi in
+silenzio.
 
 ### Il ritardo di ritentativo può non entrare sul filo, e allora si rifiuta
 
