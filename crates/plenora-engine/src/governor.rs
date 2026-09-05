@@ -17,11 +17,11 @@
 //! tee condividono il lease senza mai duplicare il conteggio.
 //!
 //! Protocollo di reservation a tre vie ([`ReservationResult`], architettura.md#memoria):
-//! in questa milestone l'esecuzione e' seriale e il governor emette solo
+//! l'esecuzione fra i nodi e' seriale e il governor emette solo
 //! `Granted` — vedi [`MemoryGovernor::try_reserve`] per la regola v1 e il
 //! perche' gli altri due esiti non sono attuabili in seriale.
 //!
-//! Spill (Fase 2B): `sort`/`distinct`/`aggregate` hanno una variante
+//! Spill: `sort`/`distinct`/`aggregate` hanno una variante
 //! spilled cablata nell'executor, ma l'attivazione e' **PREVENTIVA** ai punti
 //! di dispatch (soglia stimata "byte input > `max_governed_memory_bytes`", architettura.md#memoria
 //! "attivazione prima dell'esaurimento"), NON guidata da una reservation
@@ -53,7 +53,7 @@ pub enum ReservationResult {
     RetryAfterProgress,
     /// Il richiedente ha una strategia di spill e deve attivarla (preferita
     /// a nuova quota, architettura.md#memoria). Resta MAI emesso in v1: lo spill selettivo
-    /// esiste (Fase 2B: sort/distinct/aggregate spilled) ma la sua
+    /// esiste (sort/distinct/aggregate spilled) ma la sua
     /// attivazione e' PREVENTIVA ai punti di dispatch, su soglia stimata —
     /// non su reservation fallita. Emetterlo richiede il planner che
     /// riprova il nodo con una strategia diversa (re-scheduling, M3).
@@ -153,7 +153,7 @@ impl MemoryLease {
 /// Sotto un lock unico ogni acquisizione, ogni rilascio e ogni snapshot sono
 /// **linearizzabili**: chi legge vede uno stato che e' realmente esistito. Il
 /// costo e' un mutex per lease — cioe' per batch, mai per riga — e il
-/// percorso lo prendeva gia' per registrare la nascita del lease.
+/// percorso lo prende comunque, per registrare la nascita del lease.
 #[derive(Debug)]
 struct Contabilita {
     reserved: u64,
@@ -383,7 +383,7 @@ impl MemoryGovernor {
     ///
     /// Il permesso va **tenuto**: scartarlo lo rilascia immediatamente e la
     /// quota torna disponibile, che e' quasi sempre il contrario di quello
-    /// che chi lo ha chiesto voleva. Da qui `#[must_use]`.
+    /// che chi lo ha chiesto vuole. Da qui `#[must_use]`.
     ///
     /// # Errors
     ///
@@ -447,7 +447,7 @@ impl MemoryGovernor {
             stato.next_id = next_id;
             stato.births.insert(id, created);
             // Biiezione `live == births.len()` verificata SEMPRE e in modo
-            // fallibile. Un `debug_assert_eq!` qui era una primitiva di
+            // fallibile. Un `debug_assert_eq!` qui sarebbe una primitiva di
             // panico nel codice di produzione (errori-e-limiti.md#panic-policy)
             // nel punto peggiore: il panico partirebbe con il mutex tenuto e
             // a mutazioni gia' scritte, lasciando la contabilita' avvelenata
@@ -492,8 +492,8 @@ impl MemoryGovernor {
             // Ramo DIFENSIVO: la v1 non emette mai questi esiti (vedi
             // `try_reserve`). Se ci arrivasse, sarebbe un'invariante nostra
             // rotta — non un piano sbagliato e non un budget esaurito.
-            // `Internal` lo dice; `InvalidPlan` mandava chi legge a cercare
-            // un errore nel proprio piano.
+            // `Internal` lo dice; `InvalidPlan` manderebbe chi legge a
+            // cercare un errore nel proprio piano.
             ReservationResult::RetryAfterProgress | ReservationResult::MustSpill => {
                 Err(PlenoraError::Internal(format!(
                     "max_governed_memory_bytes: esito di reservation non attuabile in v1 per `{owner}`"
@@ -622,7 +622,7 @@ impl MemoryPermit {
     /// e non condizioni del piano:
     ///
     /// - `bytes` **eccede il permesso**. Significa che il maggiorante con cui
-    ///   il chiamante ha prenotato era sbagliato. Non esiste un ripiego
+    ///   il chiamante ha prenotato e' sbagliato. Non esiste un ripiego
     ///   corretto: rilasciare e riprenotare riaprirebbe esattamente la
     ///   finestra che il permesso esiste per chiudere, quindi si fallisce;
     /// - la **contabilita' e' gia' corrotta**. Nessuna trasformazione di un
@@ -806,7 +806,7 @@ mod tests {
         let error = governor
             .reserve(60, "nodo_b")
             .expect_err("budget esaurito: fail-fast");
-        // Nono giro: il budget esaurito e' un limite di RISORSA, non un piano
+        // Il budget esaurito e' un limite di RISORSA, non un piano
         // sbagliato. Il piano dichiara un tetto e i dati non ci stanno; la
         // decisione del chiamante e' «rilancia con piu' budget», che e'
         // esattamente cio' che `resource_limit` significa.
@@ -1399,10 +1399,10 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[test]
-    fn il_vecchio_fallback_del_ritaglio_non_esiste_piu() {
-        // Prima, un ritaglio impossibile ripiegava su una nuova `reserve`:
-        // rilascio e riprenotazione, cioe' proprio la finestra che il permesso
-        // esiste per chiudere. Ora fallisce, e il messaggio dice perche'.
+    fn un_ritaglio_impossibile_fallisce_invece_di_riprenotare() {
+        // Un ritaglio impossibile non ripiega su una nuova `reserve`:
+        // rilascio e riprenotazione riaprirebbero proprio la finestra che il
+        // permesso esiste per chiudere. Fallisce, e il messaggio dice perche'.
         let governor = MemoryGovernor::new(1_000_000);
         let permesso = concesso(&governor, 100, "maggiorante sbagliato").expect("permesso");
         let errore = permesso

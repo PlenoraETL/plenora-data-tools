@@ -22,7 +22,8 @@ proprietà e cleanup. Dettaglio in [`isolamento.md`](isolamento.md).
 Il core è una release candidate credibile: i formati DAG sono **due** — il
 piano v5 e il piano v6, che aggiunge `max_domain_memory_bytes` e ha un dominio
 d'identità proprio — la CLI è l'eseguibile distribuito, le 146 operazioni del
-catalogo sono documentate, e la CI verifica Linux e Windows con quindici job.
+catalogo sono documentate, e la CI verifica Linux e Windows con sedici job —
+il conteggio lo dichiara [`release.md`](release.md), che è l'autorità sui gate.
 
 Il v4 continua a funzionare, migrato nel canonico v5, di cui condivide il
 `plan_hash`; il confine d'identità è fra v5 e v6, e lì soltanto.
@@ -87,7 +88,7 @@ linearizzabile. Servono al secondo livello, non al primo.
 
 Il costo dichiarato di questa scelta: è un lavoro più grande di un preflight,
 e la ragione per farlo comunque è che il preflight non risolverebbe il
-problema. I meccanismi sono stati **prototipati in due cicli** — nascita
+problema. I meccanismi sono stati **prototipati in quattro cicli** — nascita
 vincolata e contenimento sono dimostrati, l'attribuzione solo sotto le
 condizioni dette più sotto — e su **macOS** il profilo isolato resta non
 supportato finché un prototipo non dimostri copertura *e* attribuzione.
@@ -109,16 +110,28 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 | 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
 | 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
 | 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | due cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto approvato, implementazione **in corso** per PR ([`isolamento.md`](isolamento.md)) |
-| 5 | il legacy ridotto a un confine di migrazione | sì | |
-| 6 | superficie pubblica e commenti | no | |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | quattro cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto approvato, implementazione **in corso** per PR ([`isolamento.md`](isolamento.md)) |
+| 5 | il legacy ridotto a un confine di migrazione | sì | **aperta**: 0 criteri completati |
+| 6 | superficie pubblica e commenti | no | **aperta**: 2 criteri su 3 completati |
 
-**Criteri di uscita delle fasi 5 e 6**, perché finora mancavano:
+**Criteri di uscita delle fasi 5 e 6**, perché finora mancavano. Lo stato di
+ciascuno è verificabile, e nessuna delle due fasi si dichiara chiusa finché
+tutte le righe che la riguardano non lo sono:
 
-| fase | è chiusa quando |
-|---|---|
-| 5 | esiste **un solo executor** per tutti i piani semanticamente traducibili; i piani non traducibili sono in un modulo isolato con la matrice di ciò che li rende tali; la rimozione è pianificata per una major dichiarata |
-| 6 | nessun modulo fuori dall'API è pubblico; i `lib.rs` espongono facciate ristrette; nessun commento di produzione dichiara uno stato di avanzamento («fase», «in corso», «milestone»), mentre restano le condizioni di rientro e le ragioni `D*`/`R*`; un gate lo tiene, con la distinzione fra cronologia e hazard scritta nella sua doc |
+| fase | è chiusa quando | oggi |
+|---|---|---|
+| 5 | esiste **un solo executor** per tutti i piani semanticamente traducibili | **no**: `plenora-cli` dispatcha ancora i piani `schema_version <= 3` sul percorso di `cli::commands::legacy`, che è un secondo executor |
+| 5 | i piani non traducibili sono in un modulo isolato con la matrice di ciò che li rende tali | **parziale**: modulo isolato sì, matrice no |
+| 5 | la rimozione è pianificata per una major dichiarata | **no** |
+| 6 | nessun modulo fuori dall'API è pubblico, e i `lib.rs` espongono facciate ristrette | **no**: il solo `plenora-engine` dichiara dodici `pub mod` |
+| 6 | nessun commento di produzione dichiara uno stato di avanzamento («fase», «in corso», «milestone»), mentre restano le condizioni di rientro e le ragioni `D*`/`R*` | **sì**, per il perimetro che il gate copre |
+| 6 | un gate lo tiene, con la distinzione fra cronologia e hazard scritta nella sua doc | **sì**: `scripts/verifica_commenti.py`, job `gate-commenti` della CI |
+
+Che un criterio di uscita sia soddisfatto non anticipa la chiusura della fase:
+la fase 6 resta aperta finché la superficie pubblica non è ristretta, ed è
+l'unico dei suoi tre criteri ancora da fare. Il gate sui commenti è entrato
+prima del resto perché presidia una regressione — un commento che racconta il
+passato — non perché l'ordine delle fasi sia cambiato.
 
 ### Baseline pre-fase-4 — freeze strutturale
 
@@ -214,22 +227,31 @@ il formato piano v6 con `max_domain_memory_bytes` (`PR-2`); la classificazione
 deterministica degli esiti e la matrice §10 (`PR-3`); la forma sul filo del
 protocollo (`PR-4`) con i conteggi obbligatori dell'`Esito` (`PR-4b`); il
 `commit_token` tipizzato, il lettore limitato di frame, l'handshake come
-macchina a stati e la scrittura del token nel footer (`PR-5`). Più il
-rafforzamento dei custom metadata IPC nel confine ostile (`PR-0`).
+macchina a stati e la scrittura del token nel footer (`PR-5`); il
+**verificatore dell'artefatto in streaming**, con i passi da 3 a 8-bis, il
+passo 5-bis dell'integrità e il tetto cumulativo sui dizionari trattenuti
+(`PR-6`). Più il rafforzamento dei custom metadata IPC nel confine ostile
+(`PR-0`).
 
 **Non esiste ancora nel codice** ciò che richiede due processi: worker,
 supervisore, spawn, pipe e limiti di processo restano **progettati** in
-[`isolamento.md`](isolamento.md) e non implementati. Anche la verifica
-dell'artefatto (`PR-6`) e la sequenza di publish (`PR-10`) sono progetto.
+[`isolamento.md`](isolamento.md) e non implementati. Resta progetto anche la
+sequenza di publish (`PR-10`), di cui `PR-6` ha portato la sola verifica: il
+passo 9 non c'è.
 
-Una conseguenza pratica, dichiarata perché non si deduca il contrario: il
-protocollo si compila solo sotto `test` e sotto la feature `internals`, perché
-non ha ancora un chiamante fuori da sé. Il perimetro e la condizione di
-rientro stanno in
+Due conseguenze pratiche, dichiarate perché non si deduca il contrario. Il
+protocollo **e il verificatore** si compilano solo sotto `test` e sotto la
+feature `internals`, perché non hanno ancora un chiamante di produzione — che
+per entrambi arriva con `PR-10`. E il tetto sui dizionari vive in
+`IpcLimits::max_retained_dictionary_body_bytes`, con un default del confine; i
+costruttori dei limiti lo restringono secondo il budget disponibile.
+`verifica_artefatto` riceve l'intero `&IpcLimits`, non un parametro o una
+policy separati. Perimetro e condizioni di rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
 
-I prototipi hanno avuto **due cicli**, e sono **evidenza esplorativa**: le
-misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md).
+I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le
+misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md), che è
+l'autorità sul loro numero e sul loro esito.
 
 Nascita vincolata e contenimento sono dimostrati. L'**attribuzione no**:
 
@@ -556,10 +578,70 @@ diversi che non si distinguono con una sostituzione meccanica.
 Alla chiusura del punto 2, non prima: una campagna cambia significato se il
 codice sotto è ancora in movimento.
 
-Non è l'unica campagna: la cadenza ordinaria — smoke dei target coinvolti
-prima di ogni merge, campagna completa dopo, campagne lunghe alle scadenze
-fissate — sta in [`release.md`](release.md). Questa è quella **finale**, che
-precede il rilascio e non sostituisce le altre.
+Non è l'unica campagna: la cadenza ordinaria — gate deterministici e suite
+completa prima di ogni commit, smoke dei target coinvolti prima del merge,
+campagna da 30 minuti dopo — sta in [`release.md`](release.md).
+
+Questa è però l'**unica scadenza lunga** del ciclo di rilascio, e le due cose
+coincidono: la campagna finale di cui parla questo punto **è** quella che
+`release.md` colloca dopo `PR-12`. Non ce n'è una seconda alle tappe
+intermedie, perché una campagna lunga misura l'albero su cui gira e quegli
+alberi sono destinati a cambiare. Vale sul candidato congelato, su VM
+qualificata e con watchdog esterno al processo — e ogni modifica al candidato
+la invalida, perché l'albero misurato non è più quello che si rilascia.
+
+### Criterio aperto: il watchdog non è ancora nel repository
+
+`release.md` rende il watchdog esterno **obbligatorio** per la campagna
+lunga. Oggi quel guardiano esiste come script fuori dal repository, provato a
+mano: la procedura è quindi **descritta ma non riproducibile**, e una
+qualificazione che dipende da uno strumento non versionato non è verificabile
+da nessun altro.
+
+**Prima della campagna finale**, e non dopo, va colmato:
+
+| | |
+|---|---|
+| **che cosa entra** | lo script del watchdog in `scripts/`, con i suoi test, come qualunque altro gate del progetto |
+| **conseguenza se non entra** | la campagna finale non è qualificante, perché il suo esito dipenderebbe da uno strumento che il repository non contiene e che nessuno può rieseguire |
+
+**Che cosa devono coprire i test.** Ognuno corrisponde a un modo in cui la
+procedura è già fallita a mano, o a una distinzione che sbagliata falserebbe
+l'esito:
+
+| il test | perché |
+|---|---|
+| l'arresto avviene al **muro di tempo** | è l'unica condizione di arresto ammessa |
+| il silenzio del log **non** provoca arresto | fermare al silenzio ucciderebbe run sani e li archivierebbe come blocchi |
+| corpus e artefatti sono **recuperati prima** dell'arresto | vivono nel `tmpfs` del container e muoiono con lui: è già successo |
+| gli artefatti sono contati sulla **directory giusta** | un conteggio su una directory inesistente rende `0` e sembra un successo |
+| i file salvati portano il **nome del bersaglio** | una variabile sovrascritta li ha già battezzati con un TID |
+| un target che scrive **un artefatto ed esce non-zero** è classificato **`rilievo`** | è la distinzione che protegge il risultato: senza, un crash verrebbe archiviato come `incompleta` e il difetto andrebbe perso |
+| un **artefatto preesistente** non viene attribuito al run nuovo | una directory che conserva l'artefatto di ieri produrrebbe un rilievo che nessuno ha trovato oggi, e bloccherebbe la release su un difetto già chiuso |
+
+**L'attribuzione degli artefatti.** Un artefatto vale come rilievo solo se
+l'ha prodotto **questo** run. Le directory di `fuzz/artifacts/` sono
+persistenti e accumulano, quindi contarne il contenuto non basta. Lo strumento
+deve garantire una delle due:
+
+| | |
+|---|---|
+| **directory isolata** | artefatti in una directory propria del run, **vuota all'inizio**: tutto ciò che c'è dentro alla fine è di questo run |
+| **confronto prima/dopo** | inventario all'avvio e alla chiusura, e conta solo la differenza — affidabile, cioè per contenuto e non per numero, perché un artefatto rimosso e uno aggiunto lascerebbero il conteggio invariato |
+
+**Il preflight della VM.** «Non ha già mostrato wedge» è necessario e non
+sufficiente: qualificherebbe a vuoto una macchina mai usata. Lo strumento
+versionato deve **registrare e verificare**, e allegare all'esito:
+
+| | |
+|---|---|
+| **kernel** | versione e linea, perché l'esclusione di un host è per ora l'unica difesa contro un blocco non attribuito |
+| **risorse** | CPU, memoria e `shm` assegnate al container, e quelle della macchina |
+| **configurazione** | immagine e versione di `cargo-fuzz`, con i pin di `release.md` |
+| **esclusività** | che durante la campagna non giri nient'altro di significativo sulla macchina: una campagna in contesa misura anche il vicino |
+
+Finché il criterio è aperto, ogni campagna eseguita con lo strumento fuori
+repository vale come **evidenza**, non come qualificazione.
 
 Va sciolta la posizione di `arrow_transform`, oggi in quarantena per una
 ragione dichiarata: `libfuzzer` aborta prima dell'unwinding, quindi il target
@@ -652,22 +734,48 @@ diagnosticarlo sposta il problema, non lo risolve.
 
 ---
 
-## `PR-13` — le implementazioni nuove che vengono da `memory-lab`
+## `PR-13` — il confronto shadow, condizionato a un prototipo
 
-**Esiste come voce di piano, e non come lavoro iniziato.** È dichiarata qui
-perché non venga confusa con `PR-12`: sono due PR distinte, con contenuti
-distinti, e `PR-13` **segue**.
+**`PR-13` è condizionata all'esito di `PT-shadow`: senza un provider
+filesystem approvato, `PR-13a` non è implementabile e nessun profilo shadow
+viene offerto.**
 
-`memory-lab` **esiste**, fuori da questo repository. Ciò che non esiste è la
-sua **integrazione qui**: nessun codice, nessun documento normativo, nessuna
-dipendenza — e la distinzione conta, perché «non implementato» direbbe una cosa
-falsa su un lavoro che è stato fatto altrove.
+È la prima voce di questo documento che non è né fatta né semplicemente da
+fare: è **subordinata a un prototipo che non è stato eseguito**, e potrebbe non
+essere mai realizzabile. Va letta così e non come lavoro pianificato.
 
-Nessuna PR di questa fase lo anticipa, e nessuna delle correzioni in corso lo
-presuppone. Questa voce dice quindi due cose: che il numero è occupato, e che
-l'integrazione non è cominciata. Che cosa esattamente `PR-13` porti dentro va
-scritto in [`isolamento.md`](isolamento.md) insieme alle altre PR della
-sequenza, prima che qualcuno lo implementi.
+**Che cosa è, e che cosa non è più.** `PR-13` è l'**infrastruttura di confronto
+shadow** fra un kernel candidato e il backend autorevole. Non è
+«l'integrazione di `memory-lab`»: quel nome descriveva un contenitore, non un
+lavoro, e progettarla ha diviso quel contenitore in tre parti con destini
+diversi.
+
+| che cosa | destino |
+|---|---|
+| i tre kernel Geo Rust — `polygonize`, `split`, `make_valid` | i **primi clienti** dell'infrastruttura, uno per PR, con GEOS sempre autorevole |
+| i ventiquattro fast path table e Geo | **rinviati**, uno per PR ciascuno, ognuno col proprio oracolo differenziale |
+| il **catalogo empirico della memoria** | **fuori dal perimetro**: le misure sono Windows-only e il profilo isolato è Linux, quindi non esiste una grandezza comune da consumare. Rientra solo dopo una campagna Linux con una metrica coerente col dominio |
+
+`memory-lab` **esiste**, fuori da questo repository, e nulla di esso è stato
+importato: nessun codice, nessun dato, nessuna dipendenza. Il repository del
+prodotto **non ha** una dipendenza di percorso verso di esso, e non deve
+averla; la provenienza si **cita** — commit immutabile e hash degli artefatti —
+non si copia, perché un artefatto di provenienza copiato descriverebbe misure
+che non importiamo e sarebbe vecchio alla campagna successiva.
+
+**La sequenza**, e nessun passo salta il precedente:
+
+| | |
+|---|---|
+| `PT-shadow` | prototipo bloccante: provider di contenimento filesystem e impossibilità del candidato |
+| `PR-13a` | infrastruttura con candidato sintetico |
+| `PR-13b` … `PR-13d` | `polygonize`, `split`, `make_valid` |
+
+`PR-13` **segue `PR-12`**, e questo non è cambiato. Il progetto — prerequisito,
+architettura, policy, garanzie, privacy e criteri di uscita — è in
+[`isolamento.md`](isolamento.md), nella sezione dedicata al confronto shadow. I
+meccanismi non vi sono fissati: li decide la progettazione di `PR-13a`, dopo che
+il prototipo avrà dato un provider reale e i suoi vincoli.
 
 ## Debito dichiarato, senza data
 

@@ -1,13 +1,16 @@
 //! Struttura interna della CLI.
 //!
-//! `main.rs` era un file unico da oltre cinquemila righe in cui convivevano
-//! parsing, dispatch, scoperta dei contratti, rendering, i comandi ereditati
-//! dai due binari di origine e il processo. Questo modulo lo scompone, un
-//! pezzo per volta e **senza cambiare comportamento**: il criterio e' che
-//! `tests/oracolo_superficie_cli.snap` non cambi di un byte.
+//! Parsing, dispatch, scoperta dei contratti, rendering, comandi a
+//! compatibilita' congelata e gestione del processo stanno ciascuno nel
+//! proprio modulo, e non in `main.rs`.
 //!
-//! Chi legge un diff di questa fase deve poterlo verificare guardando che
-//! il codice sia lo stesso, non ragionando su che cosa faccia.
+//! Spostare codice fra questi moduli non deve cambiare cio' che l'utente
+//! vede. Per le invocazioni **deterministiche e senza stato** — help,
+//! versione, capability, catalogo, errori di invocazione — quel criterio e'
+//! verificato byte per byte da `tests/oracolo_superficie_cli.rs`: se quel
+//! confronto cambia, e' cambiata la CLI. Tutto cio' che dipende da file,
+//! tempi o percorsi assoluti resta fuori da quella matrice, ed e' coperto
+//! dagli oracoli che sanno normalizzarlo.
 
 pub mod args;
 pub mod commands;

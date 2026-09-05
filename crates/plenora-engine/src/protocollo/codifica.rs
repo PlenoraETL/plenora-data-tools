@@ -16,7 +16,7 @@
 //! In scrittura non si costruisce un buffer illimitato per poi misurarlo:
 //! [`ScrittoreLimitato`] fallisce al primo byte oltre il tetto. La differenza
 //! conta quando il frame e' grande — misurare dopo significa aver gia'
-//! allocato cio' che si voleva rifiutare.
+//! allocato cio' che si vuole rifiutare.
 
 use std::io::{self, Write};
 

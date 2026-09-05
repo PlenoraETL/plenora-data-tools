@@ -1,5 +1,5 @@
 //! Benchmark autonomo per il kernel `table.aggregate`
-//! (filone ottimizzazioni kernel, secondo batch dopo filter/sort).
+//! del motore tabellare.
 //!
 //! Fixture deterministica (seed logico 42): `g100` utf8 (100 gruppi),
 //! `g1m` int64 (`1_000_000` gruppi), `num` float64 (0..9999), `val` int64.

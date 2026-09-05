@@ -1,8 +1,7 @@
 //! plenora-kernels-geo — kernel geografici su `geo::Geometry<f64>` e adapter
 //! Arrow per il canone GeoArrow-WKB (architettura.md#geometrie).
 //!
-//! Port Fase 1 ("coesistenza") da plenora-geo-tools-arrow: validatore WKB
-//! strutturale, kernel puri (`operations`, `analysis`, `topology`,
+//! Contiene il validatore WKB strutturale, i kernel puri (`operations`, `analysis`, `topology`,
 //! `predicates`, `construction`, `equality`, `extended`,
 //! `extended_algorithms`, `advanced`, `spatial_join`, `extensions`,
 //! `extensions2`, `extensions3`, `cluster`),
@@ -15,10 +14,10 @@
 //!
 //! - [`arrow_adapter`](crate::arrow_adapter) per la rappresentazione
 //!   GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti
-//!   (`analyze_contract` del catalogo, Fase 2A-2b).
+//!   (`analyze_contract` del catalogo).
 //! - [`memory_estimate`](crate::memory_estimate) per la STIMA dichiarata
-//!   della memoria nativa delle geometrie decodificate (architettura.md#memoria, Fase
-//!   2B-M2b): mai un conteggio preciso.
+//!   della memoria nativa delle geometrie decodificate
+//!   (architettura.md#memoria): mai un conteggio preciso.
 //! - [`geometry_contract`](crate::geometry_contract) per il contratto sulle
 //!   geometrie decodificate (architettura.md#geometrie): dimensione esatta del WKB ISO XY e
 //!   validazione strutturale su `Geometry`.
@@ -103,7 +102,7 @@ fn unsupported_wkb_dimension() -> PlenoraError {
     )
 }
 
-/// Errore dedicato di coerenza (B1.2): il type code dichiara una
+/// Errore dedicato di coerenza: il type code dichiara una
 /// dimensionalita' diversa da quella attesa dal contratto. Mai un
 /// passthrough silenzioso: la divergenza e' sempre un errore esplicito.
 fn wkb_dimension_mismatch() -> PlenoraError {
@@ -273,7 +272,7 @@ pub(crate) fn checked_count(
 }
 
 /// Interpreta il type code WKB e ne deriva tipo base e stride coordinata,
-/// verificando la coerenza con la dimensionalita' attesa (milestone B1.2).
+/// verificando la coerenza con la dimensionalita' attesa.
 ///
 /// Forme ammesse:
 /// - ISO: `tipo + 1000 * dimensione` con dimensione 0..=3 (XY, Z, M, ZM);
@@ -282,11 +281,11 @@ pub(crate) fn checked_count(
 ///
 /// Il flag SRID EWKB e' sempre rifiutato, per qualunque dimensionalita'
 /// attesa: lo SRID non e' preservabile. I codici dimensione ISO oltre 3
-/// mantengono l'errore storico pre-B1.2 ([`unsupported_wkb_dimension`]),
-/// cosi' i chiamanti esistenti non osservano alcun cambio di variante
-/// d'errore su input malformati.
+/// mantengono l'errore storico ([`unsupported_wkb_dimension`]), cosi' i
+/// chiamanti non osservano un cambio di variante d'errore su input
+/// malformati.
 ///
-/// Nota B1.4 (comportamento dichiarato): un payload EWKB SENZA flag Z/M e
+/// Comportamento dichiarato: un payload EWKB SENZA flag Z/M e
 /// senza SRID ha type code byte-identici a WKB ISO — le due forme sono
 /// indistinguibili sul filo e un input dichiarato `encoding: ewkb` puro-XY
 /// passa i gate come `xy`. L'encoding dichiarato nei metadati non cambia la
@@ -294,8 +293,8 @@ pub(crate) fn checked_count(
 /// `encoding` del metadato `geo`.
 ///
 /// Coerenza con la dimensionalita' attesa:
-/// - `Xy`: ogni marcatore dimensionale resta rifiutato con l'errore storico
-///   (comportamento pre-B1.2 invariato);
+/// - `Xy`: ogni marcatore dimensionale e' rifiutato con l'errore storico,
+///   come fa il validatore a sola XY;
 /// - `Unknown` (R3.4: byte preservati, dimensionalita' dal type code):
 ///   qualunque forma valida e' accettata e lo stride e' derivato dal type
 ///   code stesso, geometria per geometria;
@@ -348,9 +347,9 @@ pub(crate) fn parse_wkb_type_code(
     Ok((geometry_type, stride))
 }
 
-/// Wrapper pre-B1.2: valida una geometria con dimensionalita' attesa `Xy`
-/// (comportamento identico al validatore storico: serie ISO 1000+ e flag
-/// EWKB Z/M/SRID rifiutati). Usato dal percorso pubblico storico; la
+/// Wrapper a dimensionalita' attesa `Xy`: serie ISO 1000+ e flag EWKB
+/// Z/M/SRID rifiutati, come il validatore storico. Usato dal percorso
+/// pubblico storico; la
 /// variante stride-aware e' [`validate_wkb_geometry_with_dimensions`].
 fn validate_wkb_geometry(
     cursor: &mut WkbCursor<'_>,
@@ -398,14 +397,14 @@ fn type_code_without_embedded_srid(
     Ok(raw_type & !EWKB_SRID_FLAG)
 }
 
-/// Validatore strutturale stride-aware (B1.2): annidamento, conteggi, bound
+/// Validatore strutturale stride-aware: annidamento, conteggi, bound
 /// sui byte e finitezza di X/Y sono verificati con lo stride della
 /// dimensionalita' attesa (o derivato dal type code, se `Unknown`).
 ///
 /// Le ordinate extra (Z/M) sono saltate via stride: mai lette, mai
 /// reinterpretate, mai validate. In particolare la finitezza di Z/M NON e'
-/// controllata — scelta deliberata: B1.2 preserva i byte senza elaborare le
-/// ordinate extra, quindi un NaN in Z/M non e' un dato elaborato dal kernel
+/// controllata — scelta deliberata: i byte sono preservati senza elaborare
+/// le ordinate extra, quindi un NaN in Z/M non e' un dato elaborato dal kernel
 /// — e la chiusura degli anelli e' valutata sulle sole X/Y.
 fn validate_wkb_geometry_with_dimensions(
     cursor: &mut WkbCursor<'_>,
@@ -513,10 +512,9 @@ fn validate_wkb_geometry_with_dimensions(
 ///
 /// # Perche' sui byte e non su `&str`
 ///
-/// Le due implementazioni precedenti — una qui nei kernel geo, una
-/// nell'engine — affettavano la stringa per indici di byte
-/// (`&hex[index..index + 2]`) dopo aver controllato che la LUNGHEZZA IN BYTE
-/// fosse pari. Le due cose non si implicano: `"a\u{e9}b"` e' lungo quattro
+/// Affettare la stringa per indici di byte (`&hex[index..index + 2]`) dopo
+/// aver controllato che la LUNGHEZZA IN BYTE sia pari non basta: le due
+/// cose non si implicano. `"a\u{e9}b"` e' lungo quattro
 /// byte — pari — ma l'indice 2 cade in mezzo alla codifica UTF-8 di
 /// `\u{e9}`, e affettare fuori da un confine di carattere e' un **panic**,
 /// non un errore. L'input arriva dalla configurazione di un piano, quindi da
@@ -524,8 +522,8 @@ fn validate_wkb_geometry_with_dimensions(
 ///
 /// Trovato dalla campagna fuzz notturna (`analyze_geo`, artefatto
 /// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`). Il lint anti-panic R6
-/// non lo copriva: non c'e' nessun `unwrap`/`expect`/`panic!` — il panic e'
-/// dentro l'indicizzazione.
+/// non copre questa classe: non c'e' nessun `unwrap`/`expect`/`panic!` — il
+/// panic e' dentro l'indicizzazione.
 ///
 /// Un esadecimale valido e' per definizione ASCII, quindi ogni byte fuori da
 /// quell'insieme e' gia' un input non valido, non un carattere da
@@ -608,7 +606,7 @@ pub fn validate_wkb_contract_with_depth(
     Ok(())
 }
 
-/// Variante stride-aware (B1.2) con dimensionalita' attesa esplicita.
+/// Variante stride-aware, con dimensionalita' attesa esplicita.
 ///
 /// La validazione strutturale usa lo stride della dimensionalita'
 /// dichiarata e rifiuta ogni type code incoerente con essa
@@ -618,9 +616,8 @@ pub fn validate_wkb_contract_with_depth(
 /// ordinate extra (Z/M) non sono lette: vedi
 /// [`validate_wkb_geometry_with_dimensions`].
 ///
-/// Il cablaggio della dimensionalita' dal contratto di colonna ai chiamanti
-/// e' milestone B1.3: i chiamanti attuali continuano a usare
-/// [`validate_wkb_contract`] (dimensionalita' `Xy`).
+/// Nessun chiamante passa ancora la dimensionalita' del contratto di
+/// colonna: usano tutti [`validate_wkb_contract`], cioe' `Xy`.
 ///
 /// # Errors
 ///
@@ -875,8 +872,8 @@ mod tests {
     /// Il crash della campagna fuzz notturna (`analyze_geo`, artefatto
     /// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`).
     ///
-    /// La decodifica affettava la stringa per indici di byte dopo aver
-    /// controllato la sola PARITA' della lunghezza in byte: `"a\u{e9}b"` e'
+    /// Affettare la stringa per indici di byte controllando la sola
+    /// PARITA' della lunghezza non basta: `"a\u{e9}b"` e'
     /// lungo quattro byte — pari — ma l'indice 2 cade in mezzo alla codifica
     /// UTF-8 di `\u{e9}`, e affettare fuori da un confine di carattere e' un
     /// panic. L'input viene dalla configurazione di un piano.
@@ -1179,7 +1176,7 @@ mod tests {
         assert!(validate_wkb_contract(&payload).is_ok());
     }
 
-    // ---- Fixture e test stride-aware (milestone B1.2) ----
+    // ---- Fixture e test stride-aware ----
 
     /// Header little-endian di una geometria con il type code dato.
     fn push_header(payload: &mut Vec<u8>, raw_type: u32) {
@@ -1472,7 +1469,7 @@ mod tests {
                 if message == "WKB contiene coordinate NaN o infinite"
         ));
         // NaN nell'ordinata Z: accettato, perche' Z non e' mai letta ne'
-        // reinterpretata (B1.2 preserva i byte senza elaborare le ordinate
+        // reinterpretata: i byte sono preservati senza elaborare le ordinate
         // extra; vedi il doc-comment di validate_wkb_geometry_with_dimensions).
         let mut payload = Vec::new();
         push_header(&mut payload, 1001);
@@ -1541,7 +1538,7 @@ mod tests {
     #[test]
     fn ring_closure_is_checked_on_xy_only() {
         // Anello chiuso in X/Y con Z diverse agli estremi: accettato, perche'
-        // Z non e' letta (B1.2 non elabora le ordinate extra).
+        // Z non e' letta: le ordinate extra non sono elaborate.
         let mut polygon = Vec::new();
         push_header(&mut polygon, 1003);
         polygon.extend_from_slice(&1_u32.to_le_bytes());
@@ -1569,7 +1566,7 @@ mod tests {
 
     #[test]
     fn xy_wrapper_still_rejects_ewkb_flags_like_before() {
-        // Il wrapper storico (Xy) rifiuta i flag EWKB con l'errore pre-B1.2.
+        // Il wrapper a sola XY rifiuta i flag EWKB con l'errore storico.
         for raw_type in [0x8000_0001_u32, 0x4000_0001, 0xC000_0001, 0x2000_0001] {
             let mut payload = Vec::new();
             push_header(&mut payload, raw_type);

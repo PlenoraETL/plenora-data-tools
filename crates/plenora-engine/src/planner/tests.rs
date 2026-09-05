@@ -1,4 +1,4 @@
-//! Test del planner (fase 1 `validate`,
+//! Test del planner (`validate`,
 //! architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint).
 
 use std::sync::Arc;
@@ -346,7 +346,7 @@ fn row_diagnostics_keep_observable_provenance_through_schema_only_nodes() {
 
 #[test]
 fn contract_canonical_serializes_dimensions_as_icd_strings() {
-    // B1.1: il fingerprint dei contratti Xy non cambia — "dimensions" resta
+    // Il fingerprint dei contratti Xy non cambia — "dimensions" resta
     // la stringa "xy" prodotta anche dalla serializzazione precedente.
     let canonical = contract_canonical(&geo_contract(0));
     assert_eq!(canonical["geometries"][0]["dimensions"], json!("xy"));
@@ -368,7 +368,7 @@ fn contract_canonical_serializes_dimensions_as_icd_strings() {
 
 #[test]
 fn contract_canonical_omits_encoding_unless_declared() {
-    // B1.3: un contratto Xy senza encoding produce ESATTAMENTE lo stesso
+    // Un contratto Xy senza encoding produce ESATTAMENTE lo stesso
     // JSON di prima (chiave assente, non null) — fingerprint invariato.
     let without = contract_canonical(&geo_contract(0));
     let geometry = &without["geometries"][0];
@@ -1265,7 +1265,7 @@ fn catalog_fingerprint_mismatch_is_rejected() {
 
 #[test]
 fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
-    // piano-v5.md#identita-e-fingerprint (delta row-diagnostics 2026-08-03): i bump di versione devono
+    // piano-v5.md#identita-e-fingerprint: i bump di versione devono
     // invalidare i grafi validati contro la baseline af812aa. Per ogni op
     // rappresentativa: si valida un piano che la usa col catalogo corrente e
     // si verifica che un catalogo riportato ALLE VERSIONI DI BASELINE
@@ -1301,7 +1301,8 @@ fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
             }
         };
 
-    // table.formula: baseline semantic 1 / kernel 2 (nuovo reject_rows).
+    // table.formula: baseline semantic 1 / kernel 2; descrittore corrente
+    // semantic 2 / kernel 3.
     let formula_plan = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1318,8 +1319,8 @@ fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
         descriptor.kernel_version = 2;
     });
 
-    // table.expression: baseline semantic 2 / kernel 3 (bump preesistente
-    // expression-v2; il delta row-diagnostics alza semantic 3 / kernel 4).
+    // table.expression: baseline semantic 2 / kernel 3; descrittore corrente
+    // semantic 3 / kernel 4.
     let expression_plan = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1339,9 +1340,9 @@ fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
         descriptor.kernel_version = 3;
     });
 
-    // table.type_cast: solo kernel_version bumpata (2 -> 3, nuova
-    // implementazione diagnostica) — il fingerprint deve vedere ANCHE il
-    // bump kernel-only.
+    // table.type_cast: baseline kernel 2, descrittore corrente kernel 3, e
+    // semantic invariata a 2. Il fingerprint deve vedere ANCHE un bump del
+    // solo kernel.
     let cast_plan = json!({
         "schema_version": 5,
         "inputs": ["main"],
@@ -1357,8 +1358,9 @@ fn row_diagnostics_version_bumps_move_the_plan_fingerprint() {
         descriptor.kernel_version = 2;
     });
 
-    // geo.buffer (diag-transport): baseline semantic 1 — l'errore row-scoped
-    // ora porta il payload di diagnostica (bump semantico, kernel invariato).
+    // geo.buffer: baseline semantic 1, kernel invariato. Il payload di
+    // diagnostica sull'errore row-scoped e' comportamento osservabile, quindi
+    // il bump e' semantico.
     let graph = validate_mixed();
     assert_baseline_mismatch(&graph, "geo.buffer", &|descriptor| {
         descriptor.semantic_version = 1;
@@ -1406,7 +1408,7 @@ fn input_contract_mismatch_is_rejected() {
 fn identity_accessors_are_consistent() {
     let graph = validate_mixed();
     let repeat = validate(&mixed_plan_json(), &input(geo_contract(7))).expect("stessa pipeline");
-    // Stessa validazione, stessa identita' (determinismo della fase 1).
+    // Stessa validazione, stessa identita': la validazione e' deterministica.
     assert_eq!(graph.plan_hash(), repeat.plan_hash());
     assert_eq!(graph.catalog_fingerprint(), repeat.catalog_fingerprint());
     assert_eq!(
@@ -1426,7 +1428,7 @@ fn identity_accessors_are_consistent() {
 }
 
 // ---------------------------------------------------------------------------
-// Regressioni review engine (planner)
+// Identita', limiti e compatibilita' del grafo validato
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1573,7 +1575,7 @@ fn catalog_matches_committed_snapshot() {
         )
     });
     // Il confronto e' insensibile agli a-capo: su Windows il checkout puo'
-    // produrre CRLF (nessun .gitattributes imponeva LF fino al 2026-07-27).
+    // produrre CRLF.
     let expected = expected.replace("\r\n", "\n");
     assert!(
         actual == expected,
@@ -1662,9 +1664,9 @@ fn il_plan_hash_e_separato_per_dominio_e_invalida_gli_hash_di_prima() {
     .expect("piano valido");
     let canonico = serde_json::to_vec(&graph.plan().canonical_json()).expect("canonico");
 
-    // La vecchia regola era SHA256(canonical_json), senza dominio. Se il
-    // plan_hash coincidesse ancora con quella, un consumatore che ha in cache
-    // un hash prodotto prima della v5 potrebbe ritrovarselo valido.
+    // Senza dominio la regola sarebbe SHA256(canonical_json). Se il
+    // `plan_hash` coincidesse con quella, un consumatore che ha in cache un
+    // hash prodotto prima della v5 potrebbe ritrovarselo valido.
     let senza_dominio = esadecimale(Sha256::digest(&canonico).into());
     assert_ne!(graph.plan_hash().to_hex(), senza_dominio);
 
@@ -1742,9 +1744,9 @@ fn il_dominio_del_plan_hash_nomina_la_versione_canonica() {
 
 #[test]
 fn una_versione_di_formato_piano_diversa_rifiuta_il_grafo() {
-    // `plan_format_version` era registrato in `ValidatedGraph` e non veniva
-    // confrontato con nulla: un grafo validato sotto un altro formato
-    // sarebbe stato dichiarato compatibile, e ogni passo successivo lo
+    // `plan_format_version` e' registrato in `ValidatedGraph` E confrontato:
+    // senza il confronto un grafo validato sotto un altro formato
+    // sarebbe dichiarato compatibile, e ogni passo successivo lo
     // avrebbe interpretato con regole che non sono le sue. Un'identita'
     // scritta e mai letta e' una garanzia solo apparente.
     let mut graph = validate_mixed();

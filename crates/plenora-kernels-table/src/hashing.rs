@@ -1,8 +1,8 @@
 //! Hasher deterministico condiviso delle chiavi.
 //!
-//! La stessa implementazione era ricopiata in quattro moduli — `joins`,
-//! `governance`, `reshape`, `aggregation::grouping` — byte per byte, commenti
-//! compresi. Quattro copie di una funzione di hash sono quattro occasioni di
+//! Lo stesso hasher serve a quattro moduli — `joins`, `governance`,
+//! `reshape`, `aggregation::grouping` — e vive qui in un posto solo.
+//! Quattro copie di una funzione di hash sarebbero quattro occasioni di
 //! divergere: basta che una sola cambi il finalizer o la costante per avere
 //! due kernel che raggruppano le stesse chiavi in modo diverso, con un difetto
 //! che si manifesta solo su certi dati e solo in certi percorsi. Vive qui, in

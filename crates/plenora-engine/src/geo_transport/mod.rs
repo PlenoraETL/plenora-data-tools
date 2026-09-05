@@ -1,4 +1,4 @@
-//! Trasporto geo (port Fase 1 "coesistenza" da plenora-geo-tools-arrow).
+//! Trasporto geo: il percorso a compatibilita' congelata delle geometrie.
 //!
 //! - [`framing`]: header e chiusura, le sole parti che i tre stream
 //!   checksummati hanno davvero in comune;
@@ -8,7 +8,7 @@
 //! - [`transport`]: trasporto Arrow v3 (envelope `PLNGEO3`, payload Arrow
 //!   IPC, geometrie GeoArrow-WKB) con le operazioni batch del kernel;
 //! - [`publish`]: verifica semantica del CRS e pubblicazione atomica
-//!   dell'output (livello comandi del sorgente).
+//!   dell'output.
 
 pub(crate) mod envelope;
 pub(crate) mod error;

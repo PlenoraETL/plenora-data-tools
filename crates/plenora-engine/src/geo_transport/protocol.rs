@@ -12,7 +12,15 @@ pub const TRAILER_MAGIC: &[u8; 8] = b"GEOEND2\0";
 pub const NULL_FRAME_LENGTH: u32 = u32::MAX;
 pub const MAX_GEOMETRY_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_STREAM_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
 pub const MAX_ROWS: u64 = 100_000_000;
+/// Buffer di lettura dei frame: **fisso, piccolo e riusato**.
+///
+/// Dimensiona una `read`, non un risultato: e' la ragione per cui non ha
+/// niente a che vedere con `MAX_GEOMETRY_BYTES`, che dice quanto un frame puo'
+/// dichiarare. Sedici KiB e' il piu' grande che il progetto ammetta sullo
+/// stack, e la lettura non migliora oltre.
+const BUFFER_LETTURA_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -138,9 +146,70 @@ impl<R: Read> FrameReader<R> {
         if self.total_bytes > MAX_STREAM_BYTES {
             return Err(ProtocolError::StreamTooLarge);
         }
-        let mut payload = vec![0_u8; length as usize];
-        self.inner.read_exact(&mut payload)?;
-        self.hasher.update(&payload);
+        // La memoria cresce con i byte letti, non con quelli dichiarati.
+        //
+        // `length` viene dallo stream, e `MAX_GEOMETRY_BYTES` governa quanto
+        // lo stream puo' **dichiarare** — 64 MiB — non quanto si alloca prima
+        // di sapere se quei byte esistano. Un `vec![0; length]` li allocherebbe
+        // e azzererebbe tutti su un frame che puo' finire dopo quattro byte,
+        // e su una sorgente ostile ripetuta e' un'amplificazione di ordini di
+        // grandezza fra ingresso e memoria toccata.
+        //
+        // Il buffer e' fisso e riusato; il frame si accoda con cio' che una
+        // `read` ha davvero reso.
+        let mut payload = Vec::new();
+        let mut buffer = [0_u8; BUFFER_LETTURA_BYTES];
+        let mut remaining = length;
+        while remaining > 0 {
+            // La finestra e' il minimo fra cio' che manca e il buffer, e sta
+            // in `usize` per costruzione: se `remaining` non entra in `usize`
+            // allora e' maggiore di `usize::MAX`, che a sua volta non e' mai
+            // minore di 16 KiB, quindi il minimo e' il buffer. Il ramo di
+            // ripiego non e' un ripiego — rende **lo stesso valore** del ramo
+            // riuscito — e per questo non c'e' un errore da classificare: una
+            // conversione che non puo' sbagliare non ha un esito da nominare.
+            let vuole = usize::try_from(remaining).map_or(BUFFER_LETTURA_BYTES, |manca| {
+                manca.min(BUFFER_LETTURA_BYTES)
+            });
+            let letti = match self.inner.read(&mut buffer[..vuole]) {
+                Ok(letti) => letti,
+                // Un'interruzione non e' una fine: si riprova.
+                Err(errore) if errore.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(errore) => return Err(ProtocolError::Io(errore)),
+            };
+            if letti == 0 {
+                // `Ok(0)` prima dei byte dichiarati e' la condizione che
+                // `UnexpectedEof` nomina.
+                return Err(ProtocolError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "frame WKB piu' corto di quanto dichiarato",
+                )));
+            }
+            if letti > vuole {
+                // `Read::read` promette di non rendere piu' byte della fetta
+                // che ha ricevuto. La promessa e' del `Read`, non del tipo, e
+                // un implementatore rotto la viola.
+                //
+                // Non si tronca e non si prosegue: accodare la fetta intera
+                // farebbe entrare nel frame — e nel digest — byte che nessuno
+                // ha scritto, cioe' un risultato sbagliato al posto di un
+                // errore. La colpa e' della sorgente, quindi `Io`; il
+                // messaggio e' costante e non porta ne' taglie ne' contenuti.
+                return Err(ProtocolError::Io(std::io::Error::other(
+                    "il lettore ha reso piu' byte della finestra richiesta",
+                )));
+            }
+            self.hasher.update(&buffer[..letti]);
+            payload.extend_from_slice(&buffer[..letti]);
+            // Dopo il controllo qui sopra `letti` non supera `vuole`, che a
+            // sua volta non supera 16384: la conversione non puo' perdere
+            // niente. Rende comunque un errore invece di ripiegare su un
+            // numero: un ripiego silenzioso qui sottrarrebbe la quantita'
+            // sbagliata e il ciclo finirebbe con un frame incompleto.
+            remaining -= u32::try_from(letti).map_err(|_| {
+                ProtocolError::Io(std::io::Error::other("quantita' letta non rappresentabile"))
+            })?;
+        }
         Ok(Some(Frame::Wkb(payload)))
     }
 
@@ -340,6 +409,67 @@ mod tests {
         ));
     }
 
+    /// Le invarianti che il target fuzz `geo_frame_stream` pretende, applicate
+    /// qui dalla suite ordinaria.
+    ///
+    /// Non sono riscritte: chiamano `interni::verifica_lettore_frame_geo`, la
+    /// stessa funzione che invoca il target. Riscriverle creerebbe due
+    /// definizioni della stessa promessa, e la copia nei test resterebbe verde
+    /// mentre quella del fuzzer sbaglia.
+    ///
+    /// La sentinella e' il caso `dichiara_molto_consegna_poco`: un frame che
+    /// dichiara sedici mebibyte davanti a sei byte di sorgente. E' esattamente
+    /// la forma che un lettore dimensionato sul dichiarato tratterebbe come
+    /// richiesta di memoria, e qui deve solo rendere un errore.
+    #[test]
+    fn le_invarianti_del_target_fuzz_reggono() {
+        // Mille volte il buffer fisso: la distanza fra i due numeri e' cio'
+        // che rende discriminante la sentinella qui sotto.
+        const DICHIARATI: u32 = 16 * 1024 * 1024;
+
+        let accettati = [
+            valid_stream(&[Some(b"abc"), None, Some(b"xyz")]),
+            valid_stream(&[]),
+            valid_stream(&[None, None]),
+        ];
+        for (indice, stream) in accettati.iter().enumerate() {
+            let righe = u64::from_le_bytes(stream[8..16].try_into().expect("contatore"));
+            crate::interni::verifica_lettore_frame_geo(stream, righe)
+                .unwrap_or_else(|motivo| panic!("invariante rotta sul caso {indice}: {motivo}"));
+        }
+
+        let mut dichiara_molto_consegna_poco = Vec::new();
+        dichiara_molto_consegna_poco.extend_from_slice(&header_bytes(1));
+        dichiara_molto_consegna_poco.extend_from_slice(&DICHIARATI.to_le_bytes());
+        dichiara_molto_consegna_poco.extend_from_slice(b"sei by");
+        crate::interni::verifica_lettore_frame_geo(&dichiara_molto_consegna_poco, 1)
+            .expect("una lunghezza dichiarata e non consegnata e' un errore, non un guasto");
+
+        // E l'oracolo non passa perche' non guarda: la fetta piu' grande che
+        // il lettore ha chiesto e' il buffer fisso, mille volte piu' piccola
+        // della lunghezza dichiarata. Un lettore che dimensionasse sul
+        // dichiarato la porterebbe a DICHIARATI, e l'oracolo lo rifiuterebbe
+        // **anche se poi fallisce**: la richiesta precede l'EOF che la delude.
+        let osservata =
+            crate::interni::massima_richiesta_di_lettura(&dichiara_molto_consegna_poco, 1);
+        assert_eq!(
+            osservata, BUFFER_LETTURA_BYTES,
+            "il lettore deve chiedere il buffer fisso, non i {DICHIARATI} byte dichiarati"
+        );
+
+        // E su byte che non sono uno stream il verdetto e' `Ok`: non esserlo
+        // non e' un guasto, ed e' la gran parte di cio' che produce un fuzzer.
+        for spazzatura in [
+            b"".as_slice(),
+            &[0x00],
+            &[0xFF; 16],
+            b"non uno stream geometrico",
+        ] {
+            crate::interni::verifica_lettore_frame_geo(spazzatura, 0)
+                .expect("byte che non sono uno stream non sono un guasto");
+        }
+    }
+
     /// La chiusura di `PLNGEO2`, un difetto per volta e con la variante attesa.
     ///
     /// Senza la variante, una traduzione scambiata — trailer letto come
@@ -532,6 +662,188 @@ mod tests {
                 }
             }
             prop_assert!(reader.next_frame().expect("trailer").is_none());
+        }
+    }
+}
+
+/// Le taglie che il lettore dei frame chiede a `read`.
+///
+/// **Che cosa misurano, e che cosa no.** Osservano la lunghezza delle slice
+/// passate a `Read::read`, non l'heap. Sono validi contro la regressione
+/// specifica — un buffer dimensionato sul `length` dichiarato dal frame —
+/// perche' quella si manifesta per intero nella taglia richiesta.
+#[cfg(test)]
+mod taglie_delle_letture_richieste {
+    use std::io::{Error, ErrorKind, Read};
+
+    use super::{
+        framing, Frame, FrameReader, ProtocolError, BUFFER_LETTURA_BYTES, MAX_GEOMETRY_BYTES,
+        PROTOCOL_MAGIC,
+    };
+
+    /// Sorgente che dichiara molto, consegna poco e registra ogni richiesta.
+    struct SorgenteTroncata<'a> {
+        byte: &'a [u8],
+        letto: usize,
+        richieste: Vec<usize>,
+        interrompi_una_volta: bool,
+    }
+
+    impl Read for SorgenteTroncata<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if self.interrompi_una_volta {
+                self.interrompi_una_volta = false;
+                return Err(Error::new(ErrorKind::Interrupted, "interrotta"));
+            }
+            self.richieste.push(out.len());
+            let resto = self.byte.len().saturating_sub(self.letto);
+            let quanti = resto.min(out.len());
+            out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
+            self.letto += quanti;
+            Ok(quanti)
+        }
+    }
+
+    /// Stream con una riga il cui frame dichiara `length` byte e ne porta
+    /// `presenti`.
+    fn stream(length: u32, presenti: usize) -> Vec<u8> {
+        let mut byte = framing::header(*PROTOCOL_MAGIC, 1).to_vec();
+        byte.extend_from_slice(&length.to_le_bytes());
+        byte.extend(std::iter::repeat_n(0x41_u8, presenti));
+        byte
+    }
+
+    /// Un frame che dichiara 64 MiB — il massimo ammesso — con quattro byte
+    /// veri non fa chiedere a `read` piu' del buffer fisso.
+    ///
+    /// E' la stessa classe di `envelope.rs`, con un'amplificazione otto volte
+    /// maggiore: `MAX_GEOMETRY_BYTES` vale 64 MiB, e un buffer dimensionato
+    /// sul dichiarato li toccherebbe tutti.
+    #[test]
+    fn un_frame_dichiarato_al_massimo_non_dimensiona_le_letture() {
+        let byte = stream(MAX_GEOMETRY_BYTES, 4);
+        let mut sorgente = SorgenteTroncata {
+            byte: &byte,
+            letto: 0,
+            richieste: Vec::new(),
+            interrompi_una_volta: false,
+        };
+        let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
+        let esito = lettore.next_frame();
+
+        assert!(
+            matches!(esito, Err(ProtocolError::Io(_))),
+            "un frame troncato deve fallire: {esito:?}"
+        );
+        let massima = sorgente.richieste.iter().copied().max().unwrap_or(0);
+        assert!(
+            massima <= BUFFER_LETTURA_BYTES,
+            "una lettura ha chiesto {massima} byte, oltre il buffer fisso di {BUFFER_LETTURA_BYTES}"
+        );
+    }
+
+    /// Un `Ok(0)` prima dei byte dichiarati e' `UnexpectedEof`, non un frame
+    /// corto accettato.
+    #[test]
+    fn la_sorgente_che_finisce_prima_e_un_errore() {
+        let byte = stream(1024, 8);
+        let mut sorgente = SorgenteTroncata {
+            byte: &byte,
+            letto: 0,
+            richieste: Vec::new(),
+            interrompi_una_volta: false,
+        };
+        let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
+        match lettore.next_frame() {
+            Err(ProtocolError::Io(errore)) => {
+                assert_eq!(errore.kind(), ErrorKind::UnexpectedEof, "{errore}");
+            }
+            altro => panic!("atteso UnexpectedEof, ottenuto {altro:?}"),
+        }
+    }
+
+    /// Un'interruzione non perde byte: il frame arriva intero.
+    #[test]
+    fn un_interruzione_non_perde_byte() {
+        let contenuto: Vec<u8> = (0..3000_u32).map(|i| (i % 251) as u8).collect();
+        let mut byte = Vec::new();
+        {
+            let mut scrittore = super::FrameWriter::new(&mut byte, 1).expect("writer");
+            scrittore.write_frame(Some(&contenuto)).expect("frame");
+            scrittore.finish().expect("finish");
+        }
+        let mut sorgente = SorgenteTroncata {
+            byte: &byte,
+            letto: 0,
+            richieste: Vec::new(),
+            interrompi_una_volta: true,
+        };
+        let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
+        match lettore.next_frame().expect("frame valido") {
+            Some(Frame::Wkb(letto)) => assert_eq!(letto, contenuto),
+            altro => panic!("atteso un frame WKB, ottenuto {altro:?}"),
+        }
+    }
+}
+
+/// Un `Read` che viola il proprio contratto non produce frame validi.
+///
+/// Stessa regola del lettore dell'envelope, stesso motivo: accodare una fetta
+/// che la sorgente dichiara riempita senza averla riempita metterebbe nel
+/// frame — e nel digest — byte che nessuno ha scritto. La colpa e' della
+/// sorgente, quindi l'errore e' `Io`, e il messaggio e' costante.
+#[cfg(test)]
+mod un_read_scorretto_non_passa_per_valido {
+    use std::io::Read;
+
+    use super::{framing, FrameReader, ProtocolError, PROTOCOL_MAGIC};
+
+    /// Serve header e prefisso di lunghezza per intero, poi mente.
+    struct SorgenteBugiarda<'a> {
+        byte: &'a [u8],
+        letto: usize,
+    }
+
+    impl Read for SorgenteBugiarda<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let resto = self.byte.len().saturating_sub(self.letto);
+            let quanti = resto.min(out.len());
+            out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
+            self.letto += quanti;
+            // Header (16 byte) e prefisso di lunghezza (4) passano da
+            // `read_exact`: la bugia arriva alla prima fetta del payload.
+            if self.letto <= 20 {
+                return Ok(quanti);
+            }
+            Ok(out.len() + 1)
+        }
+    }
+
+    #[test]
+    fn il_lettore_dei_frame_si_ferma_invece_di_accodare_byte_mai_scritti() {
+        let contenuto: Vec<u8> = (0..3000_u32).map(|i| (i % 251) as u8).collect();
+        let mut byte = framing::header(*PROTOCOL_MAGIC, 1).to_vec();
+        byte.extend_from_slice(
+            &u32::try_from(contenuto.len())
+                .expect("lunghezza")
+                .to_le_bytes(),
+        );
+        byte.extend_from_slice(&contenuto);
+
+        let mut sorgente = SorgenteBugiarda {
+            byte: &byte,
+            letto: 0,
+        };
+        let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
+        match lettore.next_frame() {
+            Err(ProtocolError::Io(errore)) => {
+                assert_eq!(
+                    errore.to_string(),
+                    "il lettore ha reso piu' byte della finestra richiesta"
+                );
+            }
+            Ok(_) => panic!("un `Read` scorretto non deve produrre un frame valido"),
+            Err(altro) => panic!("atteso un errore di I/O, ottenuto {altro:?}"),
         }
     }
 }

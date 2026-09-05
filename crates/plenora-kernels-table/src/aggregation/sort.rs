@@ -28,7 +28,7 @@ pub(in crate::aggregation) const fn default_true() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Comparatori tipizzati di `table.sort` (ottimizzazione kernel, Fase post-2A).
+// Comparatori tipizzati di `table.sort`.
 //
 // Per i tipi Arrow principali (Int64, UInt64, Float64, Utf8, Boolean) il
 // confronto avviene sui valori nativi, senza conversione scalare ad ogni
@@ -115,10 +115,10 @@ fn compare_nullable<A: Array>(
 /// Percorre le colonne nell'ordine dichiarato dal piano: il primo errore e'
 /// quindi sempre lo stesso, a prescindere da come il sort verra' eseguito.
 ///
-/// Senza questa passata l'errore nasceva DENTRO il comparatore, e in
-/// `par_sort_by` quale confronto fallisse per primo dipende da come Rayon
+/// Senza questa passata l'errore nascerebbe DENTRO il comparatore, e in
+/// `par_sort_by` quale confronto fallisca per primo dipende da come Rayon
 /// spezza il lavoro fra i thread: con piu' celle non valide, identita' e
-/// messaggio dell'errore cambiavano fra esecuzioni sullo stesso input —
+/// messaggio dell'errore cambierebbero fra esecuzioni sullo stesso input —
 /// violazione di architettura.md#determinismo, che impone errori deterministici.
 fn prevalidate_sort_columns(batch: &RecordBatch, indices: &[usize]) -> Result<()> {
     for index in indices {
@@ -327,9 +327,10 @@ pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
     };
     // Una sola passata sulle righe: chiave con gli stessi byte di `row_key`
     // (formattatori tipizzati di `KeyColumn`) scritta in un buffer riusato,
-    // hash FxHash+splitmix64 (`KeyHasher`) al posto di SipHash. L'originale
-    // materializzava una `String` per riga piu' tre mappe SipHash; qui una
-    // sola mappa chiave -> statistiche (prima/ultima occorrenza, conteggio).
+    // hash FxHash+splitmix64 (`KeyHasher`) al posto di SipHash. Il percorso
+    // generico materializzerebbe una `String` per riga piu' tre mappe
+    // SipHash; qui c'e' una sola mappa chiave -> statistiche (prima/ultima
+    // occorrenza, conteggio).
     // Le righe in uscita restano in ordine crescente di indice per ogni
     // variante di `keep`, esattamente come il filtro sull'indice originale.
     let key_columns = indices

@@ -8,11 +8,11 @@ una.
 
 1. I profili grezzi `*.profraw`. Il pid nel nome viene riciclato, LLVM trova
    il file gia' occupato e scrive su stderr; i golden di canale falliscono.
-   E' la classe chiusa il 2026-08-21 da `scripts/pulisci_profili_coverage.py`,
-   che resta il gestore di quella classe e non e' cambiato.
+   Il gestore di questa classe e' `scripts/pulisci_profili_coverage.py`, che
+   questo script importa invece di duplicarne la logica.
 
 2. I **binari strumentati e le mappe di copertura** delle build precedenti.
-   E' la classe che questo script aggiunge. `cargo llvm-cov` unisce i dati di
+   E' la classe di cui si occupa questo script. `cargo llvm-cov` unisce i dati di
    profilo con le mappe di copertura trovate negli artefatti del target
    directory: un binario compilato da un albero sorgente piu' vecchio porta
    con se' la mappa di quel codice, e le sue righe entrano nel
@@ -30,8 +30,8 @@ comando del tool per questo scopo. Nessuna cancellazione decisa da noi sul
 filesystem: che cosa sia "artefatto del workspace" lo sa cargo, non questo
 script.
 
-Misura del 2026-08-22 su `target-cov` (12 521 file accumulati), inventario
-confrontato prima e dopo il comando:
+Inventario di `target-cov` (12 521 file accumulati) confrontato prima e dopo
+il comando:
 
 - rimossi 11 254 file: `debug/incremental/` (10 992), `debug/.fingerprint/`
   dei **soli cinque membri del workspace** (168), `debug/deps/` con i binari
@@ -46,7 +46,7 @@ delle dipendenze continua a pagare.
 
 Il peso, misurato in locale a valle di una singola campagna: `target-cov`
 passa da 5 748 file / 7,49 GiB a 1 267 file / 0,71 GiB, cioe' 4 481 file e
-6,78 GiB — il 90% dei byte — che erano artefatti del workspace. In CI la
+6,78 GiB — il 90% dei byte — che sono artefatti del workspace. In CI la
 fetta e' piu' piccola, perche' `CARGO_INCREMENTAL: 0` toglie di mezzo
 `debug/incremental/`; la classe e' la stessa.
 

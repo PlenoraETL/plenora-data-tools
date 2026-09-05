@@ -44,8 +44,8 @@ pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordB
         fields,
         batch.schema().metadata().clone(),
     ));
-    // Dichiarava gia' la cardinalita', ma duplicava il costruttore
-    // condiviso: una seconda copia della stessa cura e' una copia che puo'
+    // La cardinalita' e' dichiarata dal costruttore condiviso: rifarla qui
+    // sarebbe una seconda copia della stessa cura, e una copia puo'
     // divergere.
     crate::batch_with_rows(schema, columns, batch.num_rows())
 }

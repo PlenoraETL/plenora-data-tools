@@ -64,7 +64,7 @@ pub(in crate::analyze) fn analyze_coverage_rows(
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
         crs: geometry.crs.clone(),
-        // Kernel elaborante (B1.3): l'input e' gated a `Xy` in analisi
+        // Kernel elaborante: l'input e' gated a `Xy` in analisi
         // (`require_xy_dimensions`) e l'output e' ricodificato XY — dichiara
         // Xy, mai la dimensionalita' dell'input copiata silenziosamente.
         dimensions: GeometryDimensions::Xy,

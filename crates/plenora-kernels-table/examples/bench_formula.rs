@@ -1,5 +1,5 @@
 //! Benchmark autonomo per i kernel `table.formula` e `table.expression`
-//! (filone ottimizzazioni kernel, ultimo batch: interpreti AST).
+//! (interpreti AST).
 //!
 //! Fixture deterministica (seed logico 42, LCG): `num`/`other` float64,
 //! `val` int64, `name`/`code` utf8.

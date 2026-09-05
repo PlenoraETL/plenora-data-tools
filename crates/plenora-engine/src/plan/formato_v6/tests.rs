@@ -26,10 +26,10 @@ fn piano(versione: u16, limiti: &serde_json::Value) -> String {
 
 #[test]
 fn un_piano_v6_e_accettato() {
-    // La prima stesura non poteva accettarne nessuno: la validazione
-    // strutturale pretendeva `schema_version == 5`, e la suite restava
-    // verde perche' nessun test provava a costruirne uno. Verde senza
-    // copertura non e' una verifica.
+    // Il caso positivo va esercitato: una validazione strutturale che
+    // pretendesse `schema_version == 5` non accetterebbe nessun v6, e senza
+    // un test che ne costruisca uno la suite resterebbe verde lo stesso.
+    // Verde senza copertura non e' una verifica.
     let validato = PlanV6::parse_default(&piano(
         PLAN_SCHEMA_VERSION_V6,
         &json!({"max_domain_memory_bytes": 1_073_741_824}),
@@ -40,10 +40,10 @@ fn un_piano_v6_e_accettato() {
 
 #[test]
 fn il_parser_della_v6_pretende_la_v6() {
-    // Il controllo di versione dentro `PlanV6::parse` non aveva una
-    // regressione DIRETTA: tutti gli altri test gli passano documenti che
-    // dichiarano 6, e chi entra dal dispatch e' gia' stato smistato. Toglierlo
-    // sarebbe rimasto invisibile.
+    // Il controllo di versione dentro `PlanV6::parse` non ha altra
+    // copertura: tutti gli altri test gli passano documenti che dichiarano 6,
+    // e chi entra dal dispatch e' gia' stato smistato. Toglierlo resterebbe
+    // invisibile senza questo caso.
     //
     // E' l'invariante che regge se qualcuno chiama il parser della v6 senza
     // passare dal dispatch — un chiamante della libreria, un fuzzer, un test.
@@ -236,14 +236,14 @@ fn un_tetto_oltre_u64_e_rifiutato() {
         plenora_core::ErrorCategory::DataMapping,
         "un numero che non entra nel tipo e' un difetto di mapping, non un piano invalido: {errore}"
     );
-    // La fase e' `Write`, non `Validate`, e non e' un difetto di questa PR:
-    // e' l'approssimazione dichiarata per un `DataMapping` NON taggato — il
+    // La fase e' `Write`, non `Validate`, e non e' una svista: e'
+    // l'approssimazione dichiarata per un `DataMapping` NON taggato — il
     // lato con possibile effetto, scelto conservativamente quando la variante
     // non distingue il momento. Il parse del piano non tagga la fase ai
     // confini, quindi qui la derivazione resta quella.
     //
     // Il test la fissa per non lasciarla cambiare in silenzio; raffinarla
-    // sarebbe un tagging al confine del parser, fuori dal perimetro della v6.
+    // richiederebbe un tagging al confine del parser, che non c'e'.
     assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     // Che il valore non sia stato saturato lo dimostra gia' l'`expect_err`:
     // saturare significherebbe ACCETTARE il documento con un tetto diverso da
@@ -313,7 +313,7 @@ fn il_documento_v6_fa_il_giro_completo() {
         "il campo della v6 sopravvive al giro"
     );
     // Un limite assente non compare, come nella v5: altrimenti il
-    // documento riscritto dichiarerebbe `null` dove l'originale taceva.
+    // documento riscritto dichiarerebbe `null` dove l'originale tace.
     let scarno: PlanV6 =
         serde_json::from_str(&piano(PLAN_SCHEMA_VERSION_V6, &json!({}))).expect("v6");
     let emesso = serde_json::to_value(&scarno).expect("valore");

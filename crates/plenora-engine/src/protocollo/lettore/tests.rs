@@ -298,11 +298,11 @@ fn una_interruzione_non_fa_fallire_la_lettura() {
 
 /// Il frame riassemblato e' identico a quello scritto, anche a morsi minuscoli.
 ///
-/// Il nome dice cio' che il test **osserva**, e nient'altro. La stesura
-/// precedente si chiamava «in un solo buffer» e si attribuiva la prova del
-/// numero di allocazioni: dall'esterno quel numero non e' osservabile, e un
-/// nome che promette piu' di quanto misura e' peggio di un test assente —
-/// chi legge l'elenco crede che quella proprieta' sia coperta.
+/// Il nome dice cio' che il test **osserva**, e nient'altro. «In un solo
+/// buffer» si attribuirebbe la prova del numero di allocazioni: dall'esterno
+/// quel numero non e' osservabile, e un nome che promette piu' di quanto
+/// misura e' peggio di un test assente — chi legge l'elenco crede che quella
+/// proprieta' sia coperta.
 ///
 /// Cio' che qui si prova e' il riassemblaggio: prefisso e payload tornano un
 /// frame uguale all'originale anche quando la sorgente li consegna tre byte
@@ -334,10 +334,10 @@ fn il_frame_riassemblato_e_identico_a_quello_scritto() {
 /// sarebbe scoprirlo tardi.
 #[test]
 fn la_somma_col_prefisso_e_controllata() {
-    // La funzione di produzione, chiamata. La stesura precedente asseriva
-    // `MAX_PROTOCOL_FRAME_BYTES.checked_add(4).is_some()`: rifaceva il calcolo
-    // dentro il test, quindi provava il proprio `checked_add` e sarebbe
-    // rimasta verde anche cancellando quello del lettore.
+    // La funzione di produzione, chiamata. Asserire
+    // `MAX_PROTOCOL_FRAME_BYTES.checked_add(4).is_some()` rifarebbe il calcolo
+    // dentro il test: proverebbe il proprio `checked_add` e resterebbe verde
+    // anche cancellando quello del lettore.
     let al_tetto = super::totale_frame(MAX_PROTOCOL_FRAME_BYTES).expect("il tetto sta dentro");
     assert_eq!(
         al_tetto,

@@ -1,5 +1,5 @@
-//! Stima della memoria nativa delle geometrie decodificate (architettura.md#memoria, Fase
-//! 2B-M2b).
+//! Stima della memoria nativa delle geometrie decodificate
+//! (architettura.md#memoria).
 //!
 //! architettura.md#memoria ("Resource accounting e reservation protocol") prescrive che la
 //! memoria nativa delle geometrie decodificate (oggi `geo::Geometry<f64>`,

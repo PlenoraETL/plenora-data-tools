@@ -11,15 +11,16 @@
 //!
 //! L'asimmetria e' voluta: leggere e scrivere sono due responsabilita'
 //! diverse, e imporre la simmetria significherebbe o normalizzare in lettura
-//! (perdendo cio' che la sorgente dichiarava) o accettare l'ambiguita' in
+//! (perdendo cio' che la sorgente dichiara) o accettare l'ambiguita' in
 //! scrittura.
 //!
 //! # Perche' l'autorita' e' qui
 //!
-//! Prima la direzione Arrow -> contratto viveva nella CLI e la direzione
-//! contratto -> Arrow nell'executor: due componenti che decidevano
-//! separatamente come interpretare ed emettere uno schema. Con l'esecuzione
-//! isolata in un processo worker questo diventa un protocollo — supervisore e
+//! Le due direzioni — Arrow -> contratto e contratto -> Arrow — servono a
+//! componenti diversi, la CLI in ingresso e l'executor in uscita. Ospitate
+//! ciascuna presso il proprio chiamante, deciderebbero separatamente come
+//! interpretare ed emettere uno schema. Con l'esecuzione isolata in un
+//! processo worker questo e' un protocollo — supervisore e
 //! worker devono leggere lo stesso schema allo stesso modo, o la verifica
 //! della pubblicazione confronta due interpretazioni invece di due risultati.
 //!
@@ -68,12 +69,11 @@ pub type CrsResolver = fn(&str, &'static str) -> Result<ResolvedCrs, crate::crs:
 
 /// Errore di contratto: schema e metadati non dicono cio' che devono dire.
 ///
-/// `InvalidPlan` e non `Schema`, e non e' una svista: la variante e' quella
-/// che questo percorso produceva prima dello spostamento. Cambiarla sarebbe
-/// una modifica di semantica — l'exit code della CLI e' una proiezione della
-/// categoria, quindi 2 invece di 3 — dentro un refactor che dichiara di non
-/// cambiare comportamento. Se un giorno `Schema` fosse la categoria giusta,
-/// va cambiata come rottura dichiarata, non di straforo.
+/// `InvalidPlan` e non `Schema`, e non e' una svista: e' la variante che
+/// questo percorso dichiara, e chi la osserva la osserva da fuori. Cambiarla
+/// sarebbe una modifica di semantica — l'exit code della CLI e' una
+/// proiezione della categoria, quindi 2 invece di 3. Se `Schema` fosse la
+/// categoria giusta, va cambiata come rottura dichiarata, non di straforo.
 fn errore_di_contratto(messaggio: impl Into<String>) -> PlenoraError {
     PlenoraError::InvalidPlan(messaggio.into())
 }
@@ -196,10 +196,9 @@ pub fn contract_from_arrow_schema(
 ///
 /// 1. `crs_resolution = declared_unresolved` con almeno una
 ///    rappresentazione: il produttore dichiara l'incoerenza — preservata
-///    cosi' com'e', NESSUNA risoluzione tentata (cambio di comportamento
-///    dichiarato: prima una definizione risolvibile era risolta ed emessa
-///    come `resolved`; nessuna chiamata al backend, quindi nessun
-///    `BackendUnavailable`). Le rappresentazioni contano per precedenza
+///    cosi' com'e', NESSUNA risoluzione tentata — nemmeno di una definizione
+///    che sarebbe risolvibile: nessuna chiamata al backend, quindi nessun
+///    `BackendUnavailable`. Le rappresentazioni contano per precedenza
 ///    R4.3.1: definizione, identificatore, poi SRID numerico — un
 ///    `declared_unresolved` con SOLO `srid` (il produttore conosce il
 ///    codice dal catalogo ma non puo' inventare l'autorita', R4.4) e'
@@ -210,16 +209,15 @@ pub fn contract_from_arrow_schema(
 ///    (`crs_resolution` assente — il caso per cui la regola e' nata, la
 ///    doppia rappresentazione `GeoArrow` legacy), `crs_id` e
 ///    `crs_definition` co-presenti (l'accordo non e' decidibile
-///    testualmente — R2.7: mai arbitrato sul dato; prima vinceva
-///    `crs_definition`, scelta silenziosa); (2b) SEMPRE, anche con
-///    `crs_resolution = resolved`, `crs_id` nella forma `authority:code` con
-///    codice numerico discordante da `srid` (R4.3.1; prima lo `srid` era
-///    ignorato e l'identificatore risolto — conciliazione silenziosa). Lo
-///    stato diventa `DeclaredUnresolved` con le dichiarazioni. Prima
-///    dell'emendamento la sola (2a) scattava anche con `crs_resolution`
-///    esplicitamente dichiarato, rovesciando la dichiarazione del produttore
-///    (bug del caso owner: shapefile EPSG:3003 con WKT coerente degradato a
-///    `declared_unresolved`);
+///    testualmente — R2.7: mai arbitrato sul dato, quindi non se ne elegge
+///    una); (2b) SEMPRE, anche con `crs_resolution = resolved`, `crs_id`
+///    nella forma `authority:code` con codice numerico discordante da `srid`
+///    (R4.3.1: lo `srid` non si ignora per risolvere l'identificatore, che
+///    sarebbe una conciliazione silenziosa). Lo stato diventa
+///    `DeclaredUnresolved` con le dichiarazioni. Il limite della (2a) agli
+///    input NON dichiarati e' quel che impedisce di rovesciare la
+///    dichiarazione del produttore — uno shapefile EPSG:3003 con WKT
+///    coerente resta `resolved`, non degrada a `declared_unresolved`;
 /// 3. una rappresentazione (canonica o legacy `geo.crs`), o `resolved`
 ///    dichiarato: risoluzione contro il backend PROJ, come sempre — un
 ///    fallimento di risoluzione resta un errore `Crs`, NON diventa
@@ -230,12 +228,11 @@ pub fn contract_from_arrow_schema(
 ///    riuscita segue la verifica di coerenza decidibile
 ///    ([`verify_declared_coherence`]): coerenza → `Resolved`; mismatch o
 ///    confronto non decidibile → `DeclaredUnresolved` con le dichiarazioni
-///    originali (mai un rovesciamento silenzioso). Effetto collaterale
-///    DICHIARATO: senza `proj-backend`, un input `resolved` con doppia
-///    rappresentazione prima passava come `DeclaredUnresolved` (la (2a)
-///    scattava senza backend), ora fallisce con errore `Crs` (risoluzione
-///    impossibile) — coerente col comportamento per `resolved` a
-///    rappresentazione singola di questa regola: era la (2a) l'anomalia;
+///    originali (mai un rovesciamento silenzioso). Conseguenza DICHIARATA:
+///    senza `proj-backend` un input `resolved` con doppia rappresentazione
+///    non degrada a `DeclaredUnresolved`, ma fallisce con errore `Crs`
+///    (risoluzione impossibile) — lo stesso che questa regola fa a un
+///    `resolved` a rappresentazione singola;
 /// 4. nessuna rappresentazione: [`ContractCrs::Missing`] (R4.4: mai un CRS
 ///    inventato), salvo la contraddizione R4.1 — `resolved`/
 ///    `declared_unresolved` senza alcuna rappresentazione — che resta
@@ -245,7 +242,7 @@ pub fn contract_from_arrow_schema(
 ///
 /// [`PlenoraError::InvalidPlan`] se la dichiarazione e' contraddittoria:
 /// `crs_resolution` valorizzata senza alcuna rappresentazione, oppure una
-/// definizione che non si risolve dove il produttore la dichiarava risolta.
+/// definizione che non si risolve dove il produttore la dichiara risolta.
 pub fn contract_crs_from_keys(
     field_name: &str,
     geo_metadata: Option<&String>,
@@ -395,9 +392,9 @@ pub fn authority_code(crs_id: &str) -> Option<u32> {
 
 /// Il contratto di una colonna geometria, dalle chiavi gia' lette.
 ///
-/// Lettura di contratto completata
-/// (milestone C: [`read_geometry_contract_keys`] come sorgente primaria —
-/// fail-closed R2.6 e completamento R2.7 gia' applicati dal reader).
+/// Lettura di contratto completata: la sorgente primaria e'
+/// [`read_geometry_contract_keys`], che ha gia' applicato il fail-closed
+/// R2.6 e il completamento R2.7.
 ///
 /// Dimensionalita' ed encoding arrivano dalle chiavi completate: assenti ->
 /// `Unknown` / `None` (R3.4: MAI un default silenzioso `Xy`). `types`: la
@@ -439,7 +436,7 @@ pub fn geometry_contract_from_field(
 // si emette la forma canonica e una divergenza preesistente e' un errore.
 //
 // L'asimmetria e' voluta. Renderle speculari costringerebbe a scegliere: o
-// normalizzare in lettura, perdendo cio' che la sorgente diceva, o accettare
+// normalizzare in lettura, perdendo cio' che la sorgente dice, o accettare
 // l'ambiguita' in scrittura, pubblicando uno schema che non dice quale delle
 // due versioni vale.
 // ---------------------------------------------------------------------------
@@ -448,10 +445,11 @@ pub fn geometry_contract_from_field(
 ///
 /// Lo schema del contratto arricchito del blocco
 /// canonico R2.2 per ogni colonna geometrica e della versione di protocollo
-/// R2.5 nei metadati dello schema (milestone C — post-processo CENTRALE: i
-/// campi continuano a essere costruiti dagli `analyze_contract` con le sole
-/// chiavi `GeoArrow` legacy, che RESTANO — R2.6 ammette la coesistenza se
-/// coerente; il cablaggio dei singoli analyze e' milestone successiva).
+/// R2.5 nei metadati dello schema. E' un post-processo CENTRALE: i campi
+/// sono costruiti dagli `analyze_contract` con le sole chiavi `GeoArrow`
+/// legacy, che RESTANO (R2.6 ammette la coesistenza se coerente), e il
+/// blocco canonico si aggiunge qui, in un punto solo, invece che in ciascun
+/// analyze.
 ///
 /// Regole:
 ///
@@ -485,9 +483,9 @@ pub fn geometry_contract_from_field(
 ///   per completamento dell'assente (R2.7, mai arbitrato) — una chiave
 ///   di lineage PRESENTE vince sempre, qualunque sia il valore emesso dal
 ///   contratto (anche un valore dedotto dall'autorita': la deduzione non
-///   deve mai trasformarsi in conflitto R2.6 su un passthrough; prima
-///   dell'emendamento 2026-07-31 lo skip copriva solo `axis_order =
-///   unknown`, l'unico valore emesso possibile allora);
+///   deve mai trasformarsi in conflitto R2.6 su un passthrough, e per questo
+///   lo skip copre qualunque valore emesso, non il solo `axis_order =
+///   unknown`);
 ///   `crs_resolution = resolved` preesistente e' corretta in
 ///   `declared_unresolved` quando il contratto porta un'incoerenza rilevata
 ///   (R4.6.4: mai silenziarla propagando la dichiarazione `resolved` che
@@ -543,9 +541,9 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
                     // (piano-v5.md#contratti-di-input, emendamento 2026-07-31): la deduzione riempie
                     // solo le chiavi assenti e non deve mai trasformarsi in
                     // un falso conflitto R2.6 su un passthrough (R2.4: la
-                    // dichiarazione del produttore resta). Prima
-                    // dell'emendamento lo skip copriva solo
-                    // `axis_order = unknown`, allora unico valore possibile.
+                    // dichiarazione del produttore resta). Lo skip vale per
+                    // QUALUNQUE valore emesso, non per il solo
+                    // `axis_order = unknown`.
                     if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY || key == PLENORA_GEOMETRY_SRID_KEY {
                         continue;
                     }

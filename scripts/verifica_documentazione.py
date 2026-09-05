@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """Gate: la superficie documentale resta quella decisa, e non si sfilaccia.
 
-Il 2026-08-21 il repository e' stato ripulito: sessantasei documenti Markdown
-sono diventati nove, e la storia e' rimasta in Git invece che nel worktree.
-Una pulizia del genere si disfa nel modo piu' banale — qualcuno aggiunge un
-`NOTE.md`, qualcun altro un `docs/vecchio/`, e in sei mesi ci sono due fonti
-di verita' che nessuno tiene allineate.
+La superficie documentale pubblica e' un elenco esatto di documenti Markdown,
+e la storia sta in Git invece che nel worktree. Una superficie del genere si
+sfilaccia nel modo piu' banale — qualcuno aggiunge un `NOTE.md`, qualcun
+altro un `docs/vecchio/`, e in sei mesi ci sono due fonti di verita' che
+nessuno tiene allineate.
 
 Questo script lo impedisce. Verifica sette cose:
 
@@ -16,7 +16,7 @@ Questo script lo impedisce. Verifica sette cose:
    link che non porta da nessuna parte e' peggio di nessun link, perche'
    promette;
 3. **nessun riferimento a un documento eliminato**, in tutto il repository:
-   ADR, deroghe, review, checkpoint, verbali e i loro nomi di file;
+   ADR, deroghe, verbali, checkpoint e i loro nomi di file;
 4. **ogni puntatore interno ha una definizione corrente**, e ogni
    definizione e' citata. Vale per tutte le famiglie — `D`, `M`, `V`, `E`,
    `I`, `P`, `G` — con l'identificatore intero, anche multilivello. Un
@@ -57,9 +57,9 @@ PUBBLICI = [
     'docs/errori-e-limiti.md',
     'docs/stato-e-roadmap.md',
     'docs/release.md',
-    # Progetto tecnico della fase 4 (esecuzione isolata). Aggiunto il
-    # 2026-08-24: e' una decisione, non un effetto collaterale — il
-    # disegno non stava in stato-e-roadmap.md senza soffocarlo.
+    # Progetto tecnico dell'esecuzione isolata: sta in un documento proprio
+    # perche' il disegno non entra in stato-e-roadmap.md senza soffocarlo.
+    # Ampliare questo elenco e' una decisione, non un effetto collaterale.
     'docs/isolamento.md',
     'docs/prototipi-isolamento.md',
 ]
@@ -113,17 +113,16 @@ ESENTI_DAI_MORTI = re.compile(r'^(release/|\.git/)')
 # se', e che nessuno degli altri controlli vede perche' non sono link rotti:
 # il file c'e', l'ancora c'e', e' cio' che sta INTORNO a essere sbagliato.
 #
-#   1. il frammento di sezione orfano. «ADR 15 §3» nominava la terza sezione
+#   1. il frammento di sezione orfano. «ADR 15 §3» nomina la terza sezione
 #      di quella ADR; diventato «errori-e-limiti.md#memoria-governata §3»,
 #      quel «§3» manda a cercare una numerazione che nei documenti nuovi non
-#      esiste. Il 2026-08-22: sette siti con «§» — fra cui due «§em.», la
-#      sezione degli emendamenti di una ADR cancellata — e cinque con «par.»;
-#   2. il riferimento incollato dalla barra. «ADR 6/ADR 5» separava due sigle
+#      esiste. Le forme che si incontrano sono «§», «§em.» — la sezione degli
+#      emendamenti di una ADR cancellata — e «par.»;
+#   2. il riferimento incollato dalla barra. «ADR 6/ADR 5» separa due sigle
 #      brevi; diventato «errori-e-limiti.md/architettura.md#planner-ed-executor»
-#      si legge come un percorso di filesystem che non esiste. Undici siti:
-#      tre trovati a mano, gli altri otto da questo controllo — cercandoli a
-#      mano si guarda un `.md` anche a destra della barra, e «/5» o «/R12»
-#      non lo e'.
+#      si legge come un percorso di filesystem che non esiste. A mano se ne
+#      perde la maggior parte: si guarda un `.md` anche a destra della barra,
+#      e «/5» o «/R12» non lo e'.
 #
 # Un «§» resta legittimo quando dice DI CHE COSA e' la sezione: l'ICD e i
 # contratti trasversali hanno sezioni numerate, e citarle e' giusto. Il
@@ -185,10 +184,9 @@ DEFINIZIONE = re.compile(
     % (FAMIGLIE, FAMIGLIE), re.M)
 
 # Dove ogni famiglia si definisce. Un puntatore vive dove la cosa che
-# nomina e' descritta, non in un registro unico: `M3` e' una milestone
-# della roadmap. L'esempio eseguibile non ha piu' un
-# identificatore: nessuno lo citava come `E1`, e un puntatore che
-# nessuno usa e' un archivio di una voce sola.
+# nomina e' descritta, non in un registro unico: `M3` sta nella roadmap.
+# L'esempio eseguibile non ha un identificatore: un puntatore che nessuno
+# cita e' un archivio di una voce sola.
 DOVE_SI_DEFINISCE = [
     'docs/architettura.md',
     'docs/stato-e-roadmap.md',
@@ -221,8 +219,8 @@ def ancora(titolo):
 # Un id HTML esplicito: `<a id="..."></a>` prima di un titolo. Serve quando
 # l'ancora generata dal titolo non e' scrivibile comodamente altrove — il
 # titolo «Identità e fingerprint» genera `identità-e-fingerprint`, con
-# l'accento, e i 79 riferimenti nei commenti Rust lo scrivevano senza,
-# puntando a un'ancora che non esisteva. Un id esplicito e' ASCII, stabile, e
+# l'accento, e i riferimenti nei commenti Rust lo scrivono senza, puntando
+# a un'ancora che non esiste. Un id esplicito e' ASCII, stabile, e
 # non cambia se un giorno il titolo viene riformulato.
 ID_ESPLICITO = re.compile(r'<a\s+id="([\w-]+)"\s*>\s*</a>')
 
@@ -244,8 +242,8 @@ def _doppie(contenuto):
     `<a id="alias-legacy"></a>` seguito da `## Alias legacy` — genera lo
     stesso nome due volte, ma indica un solo punto: e' il modo idiomatico di
     dare a una sezione un'ancora ASCII stabile, e segnalarlo sarebbe rumore
-    sulla forma che abbiamo appena adottato (l'ha scoperto la prova negativa
-    di `prova_di_mutazione_ancore`, che senza questa distinzione falliva).
+    sulla forma idiomatica adottata qui: senza questa distinzione la prova
+    negativa di `prova_di_mutazione_ancore` fallirebbe.
 
     Il difetto vero e' un'ancora che porta in due posti: allora chi la cita
     finisce nel primo, che non e' detto sia quello giusto. Ogni definizione
@@ -364,8 +362,8 @@ def puntatori_malformati(riga):
     puntatori interni. La ragione e' opposta: li' un backtick dice «questo e'
     un tipo Rust, non un puntatore»; qui la forma con i backtick —
     `docs/errori-e-limiti.md` — e' il modo NORMALE di citare un documento, e
-    ignorarla renderebbe il controllo cieco proprio sui siti piu' comuni.
-    Tre riferimenti a un file cancellato erano sopravvissuti cosi'.
+    ignorarla renderebbe il controllo cieco proprio sui siti piu' comuni:
+    e' cosi' che un riferimento a un file cancellato sopravvive.
     """
     pulita = riga
     trovati = []
@@ -466,7 +464,7 @@ def ancore_note(file_tracciati):
     `piano-v5.md#...`, non `docs/piano-v5.md#...`. Due documenti con lo stesso
     nome (c'e' un `README.md` anche sotto `examples/`) mettono in comune le
     proprie ancore: e' la lettura piu' generosa, e in cambio non serve
-    indovinare quale dei due intendesse chi scriveva.
+    indovinare quale dei due intenda chi scrive.
     """
     fuori = {}
     for percorso in file_tracciati:

@@ -108,8 +108,8 @@ fn catena(config: &str, quanti: usize, op: &str) -> String {
 
 /// DAG **ramificato e ricongiunto**, vicino a `max_plan_nodes`.
 ///
-/// Correzione di un'affermazione sbagliata della prima stesura: `max_plan_depth`
-/// limita una **catena**, non il numero totale di nodi. Con `rami` catene
+/// `max_plan_depth` limita una **catena**, non il numero totale di nodi:
+/// con `rami` catene
 /// parallele da `main` — al piu' `max_fan_out` — e un `table.concat` finale
 /// che le ricongiunge, si arriva vicino a 1 024 nodi restando entro
 /// profondita' e fan-out.
@@ -302,9 +302,9 @@ fn calibra() -> Result<(), String> {
 
 /// La parte che stampa, separata da quella che misura.
 ///
-/// Non e' cosmesi: `calibra` faceva due lavori e superava le cento righe, e
-/// una funzione che misura *e* riporta e' anche una funzione dove un errore
-/// di stampa puo' nascondere un errore di misura.
+/// Non e' cosmesi: una funzione che misura *e* riporta supera le cento
+/// righe, ed e' anche una funzione dove un errore di stampa puo' nascondere
+/// un errore di misura.
 #[allow(clippy::too_many_arguments)]
 fn riporta(
     _misure: &[(&'static str, usize, usize)],

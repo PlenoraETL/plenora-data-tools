@@ -338,7 +338,8 @@ fn piano_legacy_continua_a_funzionare_invariato() {
         &[table_batch(&[1, 2], &["a", "b"])],
     );
 
-    // validate legacy: riepilogo di Fase 1, senza i campi del DAG v4.
+    // validate legacy: il riepilogo del percorso lineare, senza i campi
+    // del DAG v4.
     let validate = cli_validate(&plan, &input);
     assert!(
         validate.status.success(),
@@ -633,7 +634,7 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
 #[test]
 fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
     let directory = tempfile::tempdir().expect("tempdir");
-    // Dimensionalita' dichiarata `xy` (il gate B1.3 sulle dimensioni e'
+    // Dimensionalita' dichiarata `xy` (il gate sulle dimensioni e'
     // valutato prima del requisito CRS): qui sotto test e' SOLO il gate CRS.
     let (_, input) =
         write_geometry_without_crs_fixture(directory.path(), Some(r#"{"dimensions":"xy"}"#));
@@ -775,8 +776,8 @@ fn dag_v4_filter_propagates_declared_unresolved_unchanged() {
     // Il caso `crs_unresolved` del corpus (attesa preserve): il filtro
     // tabellare non richiede alcun CRS — validate e run passano SENZA
     // backend di risoluzione e le dichiarazioni arrivano al bordo di
-    // scrittura invariate (R4.6.4). Cambio dichiarato: prima la discovery
-    // risolveva una definizione risolvibile ed emetteva `resolved`.
+    // scrittura invariate (R4.6.4): la discovery non risolve qui, e una
+    // definizione risolvibile resta `declared_unresolved`.
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = canonical_crs_fixture(
@@ -902,12 +903,12 @@ fn mysql_srid_only_unresolved_pairs() -> Vec<(&'static str, &'static str)> {
 fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
     // Reproducer della catena MySQL TLS: IPC con `srid=4326` +
     // `declared_unresolved`, senza crs_id/definition/legacy geo, piano
-    // identity `table.filter`. Prima del fix la discovery falliva con
-    // «declared_unresolved ma nessun CRS e' dichiarato in alcuna
-    // rappresentazione accettata»: lo SRID non contava come
-    // rappresentazione. Ora validate e run passano SENZA backend e lo SRID
-    // attraversa invariato via lineage (R2.4), senza che il centro
-    // sintetizzi crs_id, definizione o axis_order (R4.4).
+    // identity `table.filter`. Lo SRID conta come rappresentazione
+    // accettata: validate e run passano SENZA backend e lo SRID attraversa
+    // invariato via lineage (R2.4), senza che il centro sintetizzi crs_id,
+    // definizione o axis_order (R4.4) e senza che la discovery lo respinga
+    // con «declared_unresolved ma nessun CRS e' dichiarato in alcuna
+    // rappresentazione accettata».
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = canonical_crs_fixture(
@@ -1017,12 +1018,12 @@ fn monte_mario_resolved_pairs() -> Vec<(&'static str, &'static str)> {
 fn dag_v4_filter_preserves_resolved_wkt_double_representation() {
     // REPRODUCER del caso owner (shapefile catastale EPSG:3003): input
     // `resolved` con doppia rappresentazione WKT coerente + `table.filter`
-    // su colonna numerica. Prima dell'emendamento 2026-07-31 (classe A) la
-    // discovery rovesciava il `resolved` in `declared_unresolved` (regola
-    // (2a) non condizionata) e R4.6.3 bloccava la riproiezione a valle;
-    // ora la risoluzione + la verifica di coerenza confermano il `resolved`
-    // e l'output ri-emette la definizione WKT col suo formato (classe B:
-    // passthrough, mai WKT in `crs_id`).
+    // su colonna numerica. Senza l'emendamento 2026-07-31 (classe A) la
+    // discovery rovescerebbe il `resolved` in `declared_unresolved` (regola
+    // (2a) non condizionata) e R4.6.3 bloccherebbe la riproiezione a valle;
+    // con la risoluzione e la verifica di coerenza il `resolved` e'
+    // confermato e l'output ri-emette la definizione WKT col suo formato
+    // (classe B: passthrough, mai WKT in `crs_id`).
     use plenora_kernels_geo::arrow_adapter as adapter;
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = canonical_crs_fixture(
@@ -1766,8 +1767,8 @@ fn run_plan(
 }
 
 /// Reperto 2, end-to-end: `geo.reproject` con chiavi canoniche della sorgente
-/// sul campo — il contratto dice il target e l'esecuzione arriva in fondo
-/// (prima il guard R2.6 rifiutava l'output).
+/// sul campo — il contratto dice il target e l'esecuzione arriva in fondo,
+/// senza che il guard R2.6 rifiuti l'output.
 #[cfg(feature = "proj-backend")]
 #[test]
 fn dag_v4_reproject_replaces_canonical_crs_keys() {
@@ -1869,7 +1870,7 @@ fn dag_v4_canonical_only_geometry_executes_and_emits_output_types() {
 
 /// Piano v4 con DUE input: left join su `id`. E' asimmetrico, quindi
 /// scambiare i due lati cambia il risultato — ed e' esattamente cio' che la
-/// forma posizionale non poteva intercettare.
+/// forma posizionale non intercetta.
 fn plan_due_input() -> serde_json::Value {
     json!({
         "schema_version": 5,
@@ -1987,7 +1988,7 @@ fn due_input_invertiti_non_raggiungono_mai_l_esecuzione() {
 
     // 4. La forma nominale esegue, e il binding conta davvero: con i nomi
     //    scambiati il risultato e' DIVERSO. E' la dimostrazione che la forma
-    //    posizionale, prima, poteva pubblicare in silenzio l'output sbagliato.
+    //    posizionale puo' pubblicare in silenzio l'output sbagliato.
     let corretto = directory.path().join("corretto.arrow");
     let esito = cli()
         .arg("run")
@@ -2045,16 +2046,16 @@ fn un_solo_input_resta_compatibile_con_la_forma_posizionale() {
 }
 
 // ---------------------------------------------------------------------------
-// Ottavo giro, finding 2 — `ResourceLimit` instradato senza perdite
+// `ResourceLimit` instradato senza perdite
 // ---------------------------------------------------------------------------
 
 #[test]
 fn un_limite_alzato_dentro_un_kernel_arriva_intatto_all_envelope() {
-    // Il difetto: un limite di risorsa alzato DENTRO un passo veniva
-    // riavvolto da `step_error` in un `Replayed` la cui categoria non era
-    // piu' `resource_limit`. L'errore restava, ma cambiava natura: exit code
-    // e categoria dicevano «piano invalido» per un piano corretto i cui dati
-    // non entravano nel budget.
+    // Un limite di risorsa alzato DENTRO un passo non deve perdere la
+    // categoria quando `step_error` lo riavvolge in un `Replayed`:
+    // l'errore resterebbe, ma cambierebbe natura — exit code e categoria
+    // direbbero «piano invalido» per un piano corretto i cui dati non
+    // entrano nel budget.
     //
     // Il join e' il posto giusto per verificarlo: il limite non lo alza
     // l'executor ma il kernel, quindi l'errore attraversa `step_error` prima
@@ -2382,9 +2383,9 @@ fn write_v6_fixture(directory: &std::path::Path) -> (std::path::PathBuf, std::pa
 
 #[test]
 fn validate_v6_dichiara_la_versione_sei() {
-    // La versione negli output era **fissata** a 5. Un piano v6 sarebbe stato
-    // descritto come un v5, con accanto un `plan_hash` di un altro dominio:
-    // la coppia che rende irriconoscibile un'identita' conservata.
+    // Una versione **fissata** a 5 negli output descriverebbe un piano v6
+    // come un v5, con accanto un `plan_hash` di un altro dominio: la coppia
+    // che rende irriconoscibile un'identita' conservata.
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, input) = write_v6_fixture(directory.path());
 

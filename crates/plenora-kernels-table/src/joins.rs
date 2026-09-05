@@ -234,9 +234,9 @@ fn coalesce(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 /// `true` se `coalesce` sa fondere questo tipo di chiave.
 ///
 /// `coalesce` serve solo a `right`/`outer`, dove la chiave di output e' la
-/// fusione dei due lati. L'analisi a secco verificava la sola UGUAGLIANZA dei
-/// tipi delle chiavi: un `right join` su una chiave `UInt64` passava
-/// validazione e `prepare`, e falliva a meta' esecuzione. Questo predicato e'
+/// fusione dei due lati. Verificando la sola UGUAGLIANZA dei tipi delle
+/// chiavi, un `right join` su una chiave `UInt64` passerebbe validazione e
+/// `prepare`, e fallirebbe a meta' esecuzione. Questo predicato e'
 /// la stessa lista che `coalesce` implementa, letta dallo schema.
 #[must_use]
 pub const fn coalesce_supported(data_type: &DataType) -> bool {
@@ -358,11 +358,10 @@ type JoinRowPairs = (Vec<Option<usize>>, Vec<Option<usize>>);
 /// Coppie di righe del percorso generico (chiavi stringa di `key`), in DUE
 /// FASI come il fast path.
 ///
-/// La versione precedente inseriva tutte le corrispondenze di una riga nei
-/// vettori e controllava `max_rows` solo dopo: una sola chiave ad alta
-/// molteplicita' materializzava milioni di coppie anche con un limite
-/// bassissimo, e le righe destre non abbinate si aggiungevano dopo ancora. Il
-/// conteggio preventivo copriva soltanto il fast path.
+/// Inserendo tutte le corrispondenze di una riga nei vettori e controllando
+/// `max_rows` solo dopo, una sola chiave ad alta molteplicita'
+/// materializzerebbe milioni di coppie anche con un limite bassissimo — e
+/// le righe destre non abbinate si aggiungerebbero dopo ancora.
 fn join_rows_generic(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -380,8 +379,8 @@ fn join_rows_generic(
     }
     let serve_destra = matches!(config.how, JoinHow::Right | JoinHow::Outer);
 
-    // Fase 1: conteggio, nessuna coppia materializzata. Le chiavi sinistre si
-    // calcolano una volta sola e si riusano nella fase 2.
+    // Primo passo: conteggio, nessuna coppia materializzata. Le chiavi
+    // sinistre si calcolano una volta sola e si riusano nel secondo.
     let left_keys_by_row: Vec<Option<String>> = (0..left.num_rows())
         .map(|row| key(left, left_keys, row))
         .collect::<Result<_>>()?;
@@ -420,7 +419,7 @@ fn join_rows_generic(
         return Err(supera());
     }
 
-    // Fase 2: allocazione unica ed esatta.
+    // Secondo passo: allocazione unica ed esatta.
     let mut left_rows: Vec<Option<usize>> = Vec::with_capacity(total);
     let mut right_rows: Vec<Option<usize>> = Vec::with_capacity(total);
     for (left_row, key_value) in left_keys_by_row.iter().enumerate() {
@@ -479,18 +478,17 @@ fn join_rows_fast(
 
 /// Probe del fast path in DUE FASI: prima si conta, poi si riempie.
 ///
-/// La versione precedente faceva del probe parallelo un solo passo: ogni
-/// chunk accumulava le proprie coppie in vettori locali e verificava
-/// `max_rows` sul PROPRIO conteggio. Molti chunk singolarmente sotto soglia
-/// producevano pero' un totale enormemente sopra, e il controllo globale
-/// arrivava solo dopo la concatenazione — quando tutte le coppie erano gia'
-/// materializzate. Il limite non limitava nulla: era una verifica a valle
-/// dell'allocazione che doveva impedire.
+/// In un solo passo ogni chunk accumulerebbe le proprie coppie in vettori
+/// locali e verificherebbe `max_rows` sul PROPRIO conteggio: molti chunk
+/// singolarmente sotto soglia danno pero' un totale enormemente sopra, e il
+/// controllo globale arriverebbe solo dopo la concatenazione — a coppie
+/// gia' materializzate. Sarebbe una verifica a valle dell'allocazione che
+/// deve impedire.
 ///
-/// Ora la fase di conteggio non materializza niente, il totale si somma in
-/// aritmetica controllata e `max_rows` si applica PRIMA di allocare. La fase
-/// di riempimento scrive poi in un'unica allocazione esatta, per offset di
-/// prefisso, senza vettori intermedi ne' concatenazione finale.
+/// La fase di conteggio non materializza niente, il totale si somma in
+/// aritmetica controllata e `max_rows` si applica PRIMA di allocare. La
+/// fase di riempimento scrive poi in un'unica allocazione esatta, per
+/// offset di prefisso, senza vettori intermedi ne' concatenazione finale.
 ///
 /// L'ordine dell'output resta quello sequenziale: i chunk coprono intervalli
 /// contigui di righe sinistre e ciascuno scrive nel proprio segmento.
@@ -515,9 +513,8 @@ fn join_rows_fast_inner<'a>(
         .collect();
 
     // Con `right`/`outer` servono anche le righe destre SENZA match, e vanno
-    // contate nella fase 1: aggiungerle dopo l'allocazione — come faceva la
-    // versione precedente — rimetteva il controllo del limite a valle di cio'
-    // che deve limitare. La mappa dei match si riempie durante il conteggio,
+    // contate nel primo passo: aggiungerle dopo l'allocazione rimetterebbe il
+    // controllo del limite a valle di cio' che deve limitare. La mappa dei match si riempie durante il conteggio,
     // in scritture idempotenti (solo `true`), quindi l'ordine fra i thread e'
     // irrilevante.
     let serve_destra = matches!(config.how, JoinHow::Right | JoinHow::Outer);
@@ -530,7 +527,7 @@ fn join_rows_fast_inner<'a>(
     };
     let matched = serve_destra.then_some(matched_right.as_slice());
 
-    // Fase 1: conteggio, nessuna coppia materializzata.
+    // Primo passo: conteggio, nessuna coppia materializzata.
     let counts: Vec<Result<usize>> = if parallelo {
         ranges
             .par_iter()
@@ -559,7 +556,7 @@ fn join_rows_fast_inner<'a>(
         return Err(supera());
     }
 
-    // Fase 2: una sola allocazione, esatta, riempita per offset.
+    // Secondo passo: una sola allocazione, esatta, riempita per offset.
     let mut left_rows: Vec<Option<usize>> = vec![None; total];
     let mut right_rows: Vec<Option<usize>> = vec![None; total];
     let (probe_left, tail_left) = left_rows.split_at_mut(probe_total);
@@ -648,7 +645,8 @@ impl<'a> RightMap<'a> {
     }
 }
 
-/// Fase 1 del probe: quante coppie produce un intervallo di righe sinistre,
+/// Primo passo del probe: quante coppie produce un intervallo di righe
+/// sinistre,
 /// senza materializzarne nessuna.
 ///
 /// Deve restare l'esatto specchio di [`fill_range`]: stessa condizione di
@@ -662,8 +660,8 @@ impl<'a> RightMap<'a> {
 /// # Errors
 ///
 /// `ResourceLimit` se la somma delle coppie esce da `usize`: un `saturating_add`
-/// trasformerebbe l'overflow in un conteggio apparentemente valido, e la fase
-/// di riempimento allocherebbe meno di quanto poi scrive.
+/// trasformerebbe l'overflow in un conteggio apparentemente valido, e il
+/// riempimento allocherebbe meno di quanto poi scrive.
 fn count_range(
     config: &Join,
     left_keys: &FastKeys<'_>,
@@ -695,7 +693,8 @@ fn count_range(
     Ok(count)
 }
 
-/// Fase 2 del probe: scrive le coppie di un intervallo nel proprio segmento
+/// Secondo passo del probe: scrive le coppie di un intervallo nel proprio
+/// segmento
 /// dei buffer finali, nello stesso ordine del percorso generico.
 fn fill_range(
     config: &Join,
@@ -1137,7 +1136,7 @@ pub fn concat_by_name(
     // Lo schema unione si calcola sui soli SCHEMI: nessuna allocazione
     // proporzionale alle righe. Va quindi prima del tetto sulle colonne e
     // prima della stima dei byte, che senza il conteggio reale delle colonne
-    // ignorava proprio le colonne aggiunte dagli input con schemi disgiunti.
+    // ignorerebbe proprio quelle aggiunte dagli input con schemi disgiunti.
     let fields = union_schema_by_name(inputs, config.strict)?;
     if fields.len() > limits.max_columns {
         return Err(PlenoraError::ResourceLimit(format!(
@@ -1155,9 +1154,9 @@ pub fn concat_by_name(
     // lo hanno, e il pavimento del tipo per quelli che non lo hanno o che non
     // hanno righe da misurare.
     //
-    // La prima versione misurava solo gli input e prendeva il massimo fra le
-    // loro larghezze TOTALI: un input vuoto che porta venti colonne nello
-    // schema di uscita pesava zero, ed era proprio il caso peggiore.
+    // Misurare i soli input e prendere il massimo fra le loro larghezze
+    // TOTALI darebbe zero a un input vuoto che porta venti colonne nello
+    // schema di uscita — cioe' proprio nel caso peggiore.
     let byte_per_riga = fields
         .iter()
         .map(|field| {
@@ -1243,9 +1242,9 @@ pub fn cross_join(
     // constatarla.
     //
     // MODELLO della riga di output. Ogni riga del prodotto cartesiano
-    // affianca una riga sinistra E una destra: i byte si SOMMANO. La prima
-    // versione prendeva il massimo fra i due lati, che e' il modello di un
-    // impilamento e sottostima di quasi meta' un affiancamento.
+    // affianca una riga sinistra E una destra: i byte si SOMMANO. Prendere
+    // il massimo fra i due lati e' il modello di un impilamento, e
+    // sottostima di quasi meta' un affiancamento.
     //
     // Ai buffer del risultato vanno aggiunti i due vettori di indici che
     // questa funzione costruisce PRIMA di chiamare `combine_horizontal`: sono
@@ -1498,7 +1497,7 @@ pub struct AsOfJoin {
 /// errore `Schema` (mai arrotondato), null in ingresso -> null in uscita.
 ///
 /// La verifica e' `exact_f64_from_i64`, non `to_f64()`: quest'ultimo non
-/// fallisce mai e arrotondava silenziosamente. Su una chiave `on` di
+/// fallisce mai e arrotonda in silenzio. Su una chiave `on` di
 /// `asof_join` l'arrotondamento e' particolarmente dannoso — due istanti
 /// distinti diventano lo stesso valore, i gruppi collassano e la ricerca del
 /// candidato piu' vicino sceglie la riga sbagliata.
@@ -1787,9 +1786,9 @@ pub fn asof_join(
 }
 
 // ---------------------------------------------------------------------------
-// Test-oracolo del fast path di join/semi_join/anti_join (terzo batch
-// ottimizzazioni kernel): l'output del fast path (`join_impl`/`membership_impl`
-// con `fast = true`) deve essere byte-identico a quello del percorso generico
+// Test-oracolo del fast path di join/semi_join/anti_join: l'output del fast
+// path (`join_impl`/`membership_impl` con `fast = true`) dev'essere
+// byte-identico a quello del percorso generico
 // (`fast = false`): stesse righe nello stesso ordine, stessi tipi e nomi,
 // stesse null mask, stessi valori (Float64 confrontato sui bit).
 // ---------------------------------------------------------------------------

@@ -19,13 +19,12 @@ pub const EXIT_INTERNO: i32 = 70;
 
 /// Envelope di errore §9 su **stdout**, con `stderr` lasciato vuoto.
 ///
-/// **Inversione dichiarata rispetto alla scelta precedente**, che teneva
-/// l'envelope su stderr come «contratto pubblico storico».
-/// Quella decisione precede l'esistenza di `plenora-database-tools`, che
-/// emette gli errori su stdout e lascia stderr vuoto: due componenti della
-/// stessa famiglia, orchestrati dallo stesso codice, non possono avere due
-/// convenzioni opposte su dove cercare un errore. La rottura per chi oggi
-/// parsa stderr e' registrata in `docs/release.md`.
+/// **Inversione dichiarata** rispetto alla convenzione di tenere gli errori
+/// su stderr: `plenora-database-tools` li emette su stdout e lascia stderr
+/// vuoto, e due componenti della stessa famiglia, orchestrati dallo stesso
+/// codice, non possono avere due convenzioni opposte su dove cercare un
+/// errore. La rottura per chi parsa stderr e' registrata in
+/// `docs/release.md`.
 pub fn emit_error_envelope(
     mut stdout: impl Write,
     envelope: &serde_json::Value,
@@ -68,22 +67,25 @@ pub fn error_exit_code(envelope: &serde_json::Value) -> i32 {
 ///
 /// # Perche' un `match` su un tipo e non su una stringa
 ///
-/// La versione precedente confrontava il nome canonico e mandava tutto il
-/// resto su `EXIT_INTERNO`. Funzionava, e nascondeva due cose:
+/// Con un `match` esaustivo su [`ErrorCategory`] la decisione e'
+/// **obbligatoria e anticipata alla compilazione**: una categoria nuova non
+/// compila finche' qualcuno non ne sceglie l'exit code. Confrontare il nome
+/// canonico e mandare tutto il resto su `EXIT_INTERNO` la renderebbe
+/// facoltativa, e una categoria nuova finirebbe in silenzio su 70 — cioe'
+/// dichiarerebbe un difetto interno di una condizione che non lo e'.
 ///
-/// - una categoria **nuova** non fermava nulla. Finiva in silenzio su 70,
-///   cioe' dichiarava un difetto interno di una condizione che non lo era, e
-///   nessun test poteva accorgersene perche' l'elenco atteso era anch'esso
-///   scritto a mano;
-/// - la tabella di [`cli.md`](../../../../docs/cli.md) poteva divergere dal
-///   codice, e lo aveva fatto: `protocol` era mappato su 5 dal 2026 e non
-///   compariva nella riga del 5.
+/// Non e' un sostituto del test: `ogni_categoria_ha_l_exit_code_dichiarato`
+/// itera `ErrorCategory::ALL` e pretende che la tabella scritta a mano nomini
+/// ogni categoria, quindi una variante nuova lo fa fallire. I due presidi
+/// dicono la stessa cosa in due momenti diversi.
 ///
-/// Con un `match` esaustivo su [`ErrorCategory`] una categoria nuova **non
-/// compila** finche' qualcuno non ne decide l'exit code. Il ripiego su 70
-/// resta dove serve davvero: in [`error_exit_code`], per un envelope che
-/// porta una stringa che non e' una categoria — un JSON di un'altra versione,
-/// o corrotto.
+/// **Che cosa non e' sorvegliato da nessuno dei due**: la tabella di
+/// [`cli.md`](../../../../docs/cli.md). E' scritta a mano e il `match`
+/// tipizzato non la vede, quindi va riletta quando si tocca questo `match`.
+///
+/// Il ripiego su 70 resta dove serve davvero: in [`error_exit_code`], per un
+/// envelope che porta una stringa che non e' una categoria — un JSON di
+/// un'altra versione, o corrotto.
 ///
 /// # Gli exit code non si moltiplicano
 ///
@@ -165,11 +167,11 @@ pub fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_j
                 )
             });
     // Gli assi restano TIPIZZATI fino all'ultimo passo, anche sul ramo di
-    // ripiego. Prima i quattro casi non-`PlenoraError` scrivevano i nomi
-    // canonici a mano — `"invalid_plan"`, `"io"`, `"data_mapping"`,
-    // `"internal"` — e una rinomina di categoria li avrebbe lasciati
-    // indietro senza che nulla se ne accorgesse: sono la stessa classe di
-    // difetto della proiezione su exit code che confrontava stringhe.
+    // ripiego. Scrivendo qui i nomi canonici a mano — `"invalid_plan"`,
+    // `"io"`, `"data_mapping"`, `"internal"` — per i quattro casi
+    // non-`PlenoraError`, una rinomina di categoria li lascerebbe indietro
+    // senza che nulla se ne accorga: e' la stessa classe di difetto di una
+    // proiezione su exit code che confronta stringhe.
     let (category, phase, remote_effect, disposition) = plenora_error.map_or_else(
         || {
             if public_transport_parameter_error {

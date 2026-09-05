@@ -584,10 +584,10 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
     );
 }
 
-// formula ed expression erano omesse dal gate
-// legacy pur essendo row-diagnostics per planner/executor: un piano
-// sort -> formula/expression bypassava il gate e `execute_complete_batch`
-// pubblicava indici post-sort come `source_row_zero_based` Complete.
+// formula ed expression sono row-diagnostics per planner/executor e devono
+// quindi stare nel gate legacy: fuori dal gate, un piano
+// sort -> formula/expression lo bypassa e `execute_complete_batch`
+// pubblica indici post-sort come `source_row_zero_based` Complete.
 // Il rifiuto deve avvenire al gate, PRIMA dell'esecuzione: fixture con
 // divisore zero — se l'esecuzione partisse, stderr porterebbe un report
 // row_diagnostics con indici post-sort inventati.

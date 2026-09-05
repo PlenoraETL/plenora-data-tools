@@ -9,7 +9,7 @@
 //! percorso include il framing dei `RecordBatch` tra un nodo e l'altro,
 //! quindi il delta atteso e' minore del kernel-level ma deve restare
 //! significativo. Con la feature `proj-backend` e' attivo anche lo scenario
-//! `chain_reproject` (M3): `geo.reproject` (EPSG:32632 -> EPSG:3857) ->
+//! `chain_reproject`: `geo.reproject` (EPSG:32632 -> EPSG:3857) ->
 //! `geo.translate` -> `geo.rotate` — la riproiezione domina il costo del
 //! gruppo, quindi il delta atteso e' minore che negli altri scenari.
 //!
@@ -85,7 +85,7 @@ fn chain_plan_with_area() -> serde_json::Value {
     })
 }
 
-/// Piano v4 (M3, richiede `proj-backend`): reproject EPSG:32632 ->
+/// Piano v4 (richiede `proj-backend`): reproject EPSG:32632 ->
 /// EPSG:3857, poi translate e rotate in metri — tre kernel fondibili
 /// consecutivi, il primo backend-gated e `NonInterruptible`. (Il target
 /// dev'essere proiettato: i transform a valle richiedono

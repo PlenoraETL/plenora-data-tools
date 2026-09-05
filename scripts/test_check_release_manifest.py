@@ -533,7 +533,7 @@ class CatenaStoricaTests(CloneRealeMixin, unittest.TestCase):
 class DirectoryCanonicaTests(CloneRealeMixin, unittest.TestCase):
     """Il manifesto verificato deve stare in `repo/release/`.
 
-    Senza questo vincolo una copia esterna chiamata `1.0.3.json` veniva
+    Senza questo vincolo una copia esterna chiamata `1.0.3.json` verrebbe
     validata sul solo basename — e il basename decide catena e criteri.
     """
 

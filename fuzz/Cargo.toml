@@ -123,8 +123,7 @@ doc = false
 bench = false
 
 # ---------------------------------------------------------------------------
-# Nuovi target (Fase 2A: plan v4, analyze_contract, differenziale fast path,
-# executor DAG).
+# Piano v4, analyze_contract, differenziale fast path, executor DAG.
 # ---------------------------------------------------------------------------
 
 [[bin]]
@@ -163,12 +162,34 @@ doc = false
 bench = false
 
 # ---------------------------------------------------------------------------
-# Fase 4: protocollo supervisore/worker.
+# Protocollo supervisore/worker.
 # ---------------------------------------------------------------------------
 
 [[bin]]
 name = "protocollo_frame"
 path = "fuzz_targets/protocollo_frame.rs"
+test = false
+doc = false
+bench = false
+
+# ---------------------------------------------------------------------------
+# Verificatore dell'artefatto.
+# ---------------------------------------------------------------------------
+
+[[bin]]
+name = "verifica_artefatto"
+path = "fuzz_targets/verifica_artefatto.rs"
+test = false
+doc = false
+bench = false
+
+# ---------------------------------------------------------------------------
+# Stream geometrico PLNGEO2: il secondo confine che legge da fuori.
+# ---------------------------------------------------------------------------
+
+[[bin]]
+name = "geo_frame_stream"
+path = "fuzz_targets/geo_frame_stream.rs"
 test = false
 doc = false
 bench = false

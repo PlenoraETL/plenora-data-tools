@@ -5,7 +5,7 @@
 //! segnali. Per i dati e' una tolleranza ragionevole; per il JSON di
 //! CONTROLLO — piani, config dei nodi, metadati contrattuali — non lo e':
 //!
-//! - la chiave scartata puo' essere quella che l'autore intendeva, e il piano
+//! - la chiave scartata puo' essere quella che l'autore intende, e il piano
 //!   eseguito non e' quello scritto;
 //! - la risoluzione avviene PRIMA della validazione e prima del `plan_hash`,
 //!   quindi due testi diversi producono lo stesso piano canonico e lo stesso

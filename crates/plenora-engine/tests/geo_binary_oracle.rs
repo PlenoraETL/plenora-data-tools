@@ -1021,8 +1021,8 @@ fn assert_v4_decode_error(
 ) -> ErrorSignature {
     let signature = error_signature(error);
     assert_eq!(
-        // Ottavo giro: la propagazione non sostituisce piu' la categoria con
-        // `Execution`. Una geometria non conforme al contratto resta un
+        // La propagazione non sostituisce la categoria con `Execution`.
+        // Una geometria non conforme al contratto resta un
         // errore di CONTRATTO, e il contesto del passo si aggiunge tramite
         // `Replayed` invece di rimpiazzarlo.
         signature.variant,
@@ -1444,8 +1444,8 @@ fn f_expansion_beyond_constraint() {
     let v4_error = run_err_v4(&plan, left.clone(), right.clone());
     let signature = error_signature(&v4_error);
     // Il vincolo errori-e-limiti.md e' un limite di RISORSA: il piano e' corretto, sono i
-    // dati a non entrarci. Categoria `resource_limit` (settimo giro, finding
-    // 7), non `invalid_plan`; resta grezzo, non `Execution`.
+    // dati a non entrarci. Categoria `resource_limit`, non `invalid_plan`;
+    // resta grezzo, non `Execution`.
     assert_eq!(
         signature.variant, "ResourceLimit",
         "{case} v4: vincolo errori-e-limiti.md grezzo, non Execution (vedi header, punto 1)"
@@ -1457,7 +1457,7 @@ fn f_expansion_beyond_constraint() {
         "{case} v4: categoria"
     );
     // Fase derivata dalla variante: `ResourceLimit` nasce eseguendo, non
-    // validando — il piano era valido, sono i dati a non entrare nel budget.
+    // validando — il piano e' valido, sono i dati a non entrare nel budget.
     // `Write` e' la fase runtime di questo codebase (stessa di `Execution`,
     // `DataMapping`, `Io`).
     assert_eq!(
@@ -1524,8 +1524,8 @@ fn f_expansion_beyond_constraint() {
 /// VIVI e nel budget — il rifiuto deve scattare dopo, alla reservation
 /// decodificata left, quindi serve `arrow_right < decodificata_left` (con
 /// due lati piccoli e simmetrici il budget che fallisce la decodificata
-/// fallirebbe prima il drenaggio del ramo right, owner `right_in` — prima
-/// versione di questo test, corretta dopo l'osservazione). I lease di input
+/// fallirebbe prima il drenaggio del ramo right, owner `right_in`, e il
+/// test misurerebbe un altro rifiuto). I lease di input
 /// sono rilasciati prima delle reservation del nodo (drop in
 /// `run_geo_binary_blocking`): al momento del rifiuto e' vivo solo il lease
 /// Arrow left, quindi il testo riporta esattamente `left_arrow` riservati.
@@ -1577,7 +1577,7 @@ fn g_governor_rejects_decoded_reservation() {
     let v4_error = run_err_v4(&plan, left.clone(), right.clone());
     let signature = error_signature(&v4_error);
     assert_eq!(
-        // Nono giro: il budget di memoria esaurito e' `ResourceLimit`.
+        // Il budget di memoria esaurito e' `ResourceLimit`.
         signature.variant,
         "ResourceLimit",
         "{case}: reservation rifiutata grezza dal governor (vedi header, punto 1)"
@@ -1590,7 +1590,7 @@ fn g_governor_rejects_decoded_reservation() {
     );
     assert_eq!(
         signature.phase,
-        // Nono giro: la variante e' `ResourceLimit`, che deriva `Write` — la
+        // La variante e' `ResourceLimit`, che deriva `Write` — la
         // reservation fallisce mentre il nodo PRODUCE, non mentre si valida.
         // I tetti del confine d'INGRESSO dichiarano invece `Read` con un tag
         // esplicito (piano-v5.md#contratti-di-input, emendamento 2026-08-17).

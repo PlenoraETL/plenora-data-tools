@@ -1,6 +1,6 @@
 #![no_main]
 
-//! `analyze_contract` dei kernel tabellari (Fase 2A-2): config arbitrarie su
+//! `analyze_contract` dei kernel tabellari: config arbitrarie su
 //! contratti di input sintetici. La config base valida di ogni operazione
 //! viene fusa con un oggetto JSON derivato dal payload (chiavi arbitrarie con
 //! valori arbitrari): l'inferenza deve sempre terminare con `Ok` o un errore

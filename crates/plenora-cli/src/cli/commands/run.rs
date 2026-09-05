@@ -52,7 +52,7 @@ pub fn run_dag(
     // `max_parallelism` si applica QUI, prima di aprire gli input e prima di
     // qualunque uso di Rayon: dimensiona il pool del processo, che e' l'unica
     // leva che vincola davvero tutti i percorsi paralleli dei kernel. Senza
-    // questo passo il limite era una promessa di risorsa, non un tetto.
+    // questo passo il limite sarebbe una promessa di risorsa, non un tetto.
     parallelism::configure(graph.effective_limits().max_parallelism)?;
     let token = CancellationToken::new();
     install_ctrlc_handler(&token)?;
@@ -201,8 +201,8 @@ pub fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), Plenora
     // Autorita' UNICA: `OperationDescriptor::emits_row_diagnostics`
     // (catalogo plenora-core), la stessa del gate provenance del planner e
     // del machinery di segmento dell'executor — nessuna lista locale
-    // duplicata (formula/expression erano omesse qui; hmac_sha256
-    // non emette, md5/sha256 solo con null_policy=error). La scansione
+    // duplicata, che qui ometterebbe formula/expression (hmac_sha256 non
+    // emette, md5/sha256 solo con null_policy=error). La scansione
     // precede la validazione legacy: un'op diagnostica richiede DAG
     // anche se il resto del piano sarebbe invalido — mai eseguire per poi
     // scoprire indici inventati.

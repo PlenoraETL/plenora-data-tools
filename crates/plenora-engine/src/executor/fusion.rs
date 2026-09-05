@@ -268,7 +268,7 @@ pub(super) fn try_run_fused_group(
     let prepared = state
         .one_to_one_prepared(&kernels[0], &batch.schema(), params[0])
         .map_err(|error| state.with_diagnostics(error, batch_detail))?;
-    // architettura.md#geometrie M3: lo schema di output del gruppo e' quello dell'ULTIMA
+    // architettura.md#geometrie D12.5: lo schema di output del gruppo e' quello dell'ULTIMA
     // trasformazione — con `reproject` nel gruppo il CRS del campo geometria
     // cambia a meta' catena. La ricostruzione canonica del campo dipende
     // solo da (nome, CRS di output) e gli altri campi passano invariati,

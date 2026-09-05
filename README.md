@@ -114,8 +114,10 @@ dati.
 | [`docs/cli.md`](docs/cli.md) | comandi, binding degli input, formati, canali, exit code |
 | [`docs/operazioni.md`](docs/operazioni.md) | riferimento completo delle 146 operazioni, generato dal codice |
 | [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) | tassonomia, privacy, cancellazione, panic policy, **e i limiti non coperti** |
-| [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) | che cosa manca, in ordine |
+| [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) | che cosa manca, in ordine — **autorità unica sullo stato di avanzamento** |
 | [`docs/release.md`](docs/release.md) | gate, piattaforme, packaging, procedura |
+| [`docs/isolamento.md`](docs/isolamento.md) | progetto tecnico della fase 4: garanzie, protocollo, verifica, suddivisione in PR |
+| [`docs/prototipi-isolamento.md`](docs/prototipi-isolamento.md) | misure ed esito dei prototipi di isolamento |
 | [`AGENTS.md`](AGENTS.md) | regole di lavoro sul repository |
 
 Se legge un solo documento oltre a questo, legga

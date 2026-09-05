@@ -34,7 +34,7 @@ WORKFLOW = os.path.join(RADICE, '.github', 'workflows')
 
 # Una voce di mapping YAML in stile blocco: `chiave: valore`, con la chiave
 # eventualmente quotata e uno spazio facoltativo prima dei due punti — tutte
-# forme valide che una regex sulla sola `uses:` non quotata non vedeva.
+# forme valide che una regex sulla sola `uses:` non quotata non vede.
 VOCE = re.compile(
     r'^\s*(?:-\s+)?(?P<chiave>"[^"]*"|\'[^\']*\'|[^:\s#][^:#]*?)\s*:'
     r'(?:\s+(?P<valore>.*))?$')
@@ -65,8 +65,8 @@ CHIAVE_ESPLICITA = re.compile(r'^\s*(?:-\s+)?\?(?:\s|$)')
 #
 # Il nome dell'anchor NON e' un identificatore in stile linguaggio di
 # programmazione: YAML ammette `&1`, `&-x` e in generale qualunque sequenza
-# senza spazi. Restringere il dominio a lettere e underscore lasciava passare
-# `&1`, che e' YAML validissimo.
+# senza spazi. Restringere il dominio a lettere e underscore lascerebbe
+# passare `&1`, che e' YAML validissimo.
 #
 # Conta invece la POSIZIONE: un anchor sta all'inizio di un nodo — a capo,
 # dopo un trattino di sequenza, dopo i due punti di una chiave, o dopo
@@ -156,15 +156,17 @@ def voci_uses(testo):
             # trattino di sequenza. In `- name: |` la chiave `name` sta due
             # colonne piu' a destra del trattino, e le chiavi sorelle della
             # stessa voce — `uses` compresa — stanno alla sua colonna.
-            # Misurando dal trattino, una `uses:` sorella risultava piu'
-            # indentata del blocco e veniva scambiata per il suo contenuto:
-            # un riferimento mobile passava senza essere guardato.
+            # Misurando dal trattino, una `uses:` sorella risulterebbe piu'
+            # indentata del blocco e verrebbe scambiata per il suo
+            # contenuto: un riferimento mobile passerebbe senza essere
+            # guardato.
             trattino = apertura.group('trattino') or ''
             indent_blocco = len(apertura.group('indent')) + len(trattino)
             # I rifiuti strutturali valgono anche per la chiave che APRE il
             # blocco: `- "uses": >-` e' YAML valido, risolve alla
             # chiave `uses`, e finire nel ramo del blocco prima di
-            # controllarla significava saltare la riga e tutto il contenuto.
+            # controllarla significherebbe saltare la riga e tutto il
+            # contenuto.
             struttura_apertura = neutralizza_stringhe(
                 ESPRESSIONE_ACTIONS.sub('.', senza_commento(riga)[0]))
             if (ANCHOR_O_ALIAS.search(struttura_apertura)
@@ -176,7 +178,8 @@ def voci_uses(testo):
             # riferimento sta nel contenuto e questo gate non lo risolve:
             # `uses: >-` seguito da `actions/checkout@v4` e' uno scalare
             # valido che vale esattamente quel riferimento. Saltare la riga
-            # perche' apre un blocco significava non guardare mai la chiave.
+            # perche' apre un blocco significherebbe non guardare mai la
+            # chiave.
             corpo = senza_commento(riga)[0]
             chiave = corpo.split(':', 1)[0].strip()
             if chiave.startswith('- '):
@@ -195,8 +198,8 @@ def voci_uses(testo):
         struttura = neutralizza_stringhe(senza_espressioni)
         # La parola si cerca sul testo CON le stringhe: in `{ "uses": ... }`
         # la chiave e' essa stessa quotata, e cercarla sulla struttura
-        # neutralizzata la faceva sparire — la riga risultava una flow
-        # mapping che non nomina `uses`, e non veniva esaminata da nessuno
+        # neutralizzata la farebbe sparire — la riga risulterebbe una flow
+        # mapping che non nomina `uses`, e non verrebbe esaminata da nessuno
         # dei due rami.
         if FLOW_APERTA.search(struttura) and PAROLA_USES.search(senza_espressioni):
             trovate.append((numero, None, None))
@@ -277,7 +280,7 @@ def sorgenti_da_esaminare():
     `uses: ./.github/actions/x` e' esente qui — sta nel repository, alla
     revisione verificata — ma il suo `action.yml` puo' a sua volta contenere
     `uses: owner/action@v4`, e quello e' mobile. Leggere solo i workflow
-    lasciava quel riferimento fuori dal perimetro del gate.
+    lascerebbe quel riferimento fuori dal perimetro del gate.
     """
     trovati = []
     if os.path.isdir(WORKFLOW):
@@ -287,10 +290,10 @@ def sorgenti_da_esaminare():
     # Composite action: ogni `action.yml`/`action.yaml` TRACCIATO.
     #
     # L'elenco viene da `git ls-files`, non da una passeggiata con potatura
-    # per nome: potare le directory che cominciano per `target` escludeva
+    # per nome: potare le directory che cominciano per `target` escluderebbe
     # anche `.github/target-action/action.yml`, che e' un manifesto
     # legittimo e tracciato — un workflow puo' usarlo come action locale, e
-    # il suo `uses` interno sarebbe restato invisibile. Cio' che e' tracciato
+    # il suo `uses` interno resterebbe invisibile. Cio' che e' tracciato
     # fa parte della revisione verificata, ed e' esattamente il perimetro
     # giusto.
     import subprocess
@@ -326,7 +329,7 @@ def autoverifica():
         # SHA completa ma senza dire a quale versione corrisponde.
         '        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
         # Chiave quotata, apici singoli, spazio prima dei due punti: forme
-        # YAML valide che una regex sulla sola `uses:` non vedeva.
+        # YAML valide che una regex sulla sola `uses:` non vede.
         '      - "uses": actions/checkout@v4',
         "      - 'uses': actions/checkout@v4",
         '        uses : actions/checkout@v4',
@@ -347,8 +350,8 @@ def autoverifica():
         # Chiave con escape YAML: e' la stessa chiave scritta in un'altra
         # forma, e non la si decodifica — la si rifiuta.
         '        "u\\u0073es": actions/checkout@v4',
-        # Collezione ANNIDATA prima della chiave: la vecchia regex si
-        # fermava alla prima graffa chiusa e non arrivava a `uses`.
+        # Collezione ANNIDATA prima della chiave: una regex che si ferma
+        # alla prima graffa chiusa non arriva a `uses`.
         '      - { env: { X: y }, uses: actions/checkout@v4 }',
         '      - [ { uses: actions/checkout@v4 } ]',
         # Chiave esplicita YAML: forma valida che questo gate non analizza.
@@ -380,12 +383,12 @@ def autoverifica():
         '      - uses: |\n          actions/checkout@v4\n',
         '        "uses": >-\n          actions/checkout@v4\n',
         # Chiave con ESCAPE che apre un blocco: risolve a `uses`, e il ramo
-        # del blocco la saltava insieme a tutto il contenuto.
+        # del blocco la salterebbe insieme a tutto il contenuto.
         '      - "u\\u0073es": >-\n          actions/checkout@v4\n',
         '      - "u\\u0073es": actions/checkout@v4',
         # Scalare a blocco aperto su una VOCE DI SEQUENZA: le chiavi sorelle
         # stanno alla colonna della chiave, non a quella del trattino, e
-        # misurando dal trattino la `uses` sorella spariva dentro il blocco.
+        # misurando dal trattino la `uses` sorella sparisce dentro il blocco.
         'steps:\n  - name: |\n      checkout\n    uses: actions/checkout@v4\n',
     ]
     for riga in rifiutare:

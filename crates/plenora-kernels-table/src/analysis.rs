@@ -164,10 +164,10 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
         })
         .collect::<Result<Vec<_>>>()?;
     // pandas.cut uses right-closed intervals and expands only the open side.
-    // Come sopra: forma non fusa (niente mul_add/FMA). Il lint e' nuovo con
-    // la 1.98 e colpisce un sito che prima non vedeva, ma la ragione non
-    // cambia — la fusione altera l'arrotondamento IEEE e romperebbe il
-    // determinismo bit-esatto.
+    // Come sopra: forma non fusa (niente mul_add/FMA). Il lint della 1.98
+    // copre anche questo sito, e la ragione e' la stessa — la fusione
+    // altera l'arrotondamento IEEE e romperebbe il determinismo
+    // bit-esatto.
     #[allow(clippy::suboptimal_flops)]
     {
         edges[0] -= (max - min) * 0.001;
@@ -847,9 +847,9 @@ fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
 /// richiesto da min/max/quantili) e momenti (somma, media, varianza) in
 /// singola passata.
 ///
-/// Replica bit per bit la semantica dell'implementazione originale, che
-/// ricalcolava sort e momenti per ogni coppia (riga, statistica): stesse
-/// operazioni f64 nello stesso ordine (somme con `Iterator::sum`, varianza
+/// Replica bit per bit la semantica del percorso generico, che ricalcola
+/// sort e momenti per ogni coppia (riga, statistica): stesse operazioni f64
+/// nello stesso ordine (somme con `Iterator::sum`, varianza
 /// su `mean`, quantili su copia ordinata con `f64::total_cmp`).
 fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
     let count = values.len().to_f64();
@@ -928,10 +928,10 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
         .as_deref()
         .map(|name| column_index(batch, name))
         .transpose()?;
-    // Passata unica con interning delle chiavi: l'originale ricalcolava la
-    // chiave (con allocazione) di ogni riga per ciascuna statistica e
-    // rieseguiva sort + momenti per ogni coppia (riga, statistica); qui
-    // ogni gruppo e' aggregato una sola volta.
+    // Passata unica con interning delle chiavi: il percorso generico
+    // ricalcola la chiave (con allocazione) di ogni riga per ciascuna
+    // statistica e riesegue sort + momenti per ogni coppia (riga,
+    // statistica); qui ogni gruppo e' aggregato una sola volta.
     let mut groups: Vec<Vec<f64>> = Vec::new();
     let mut row_group: Vec<usize> = Vec::with_capacity(batch.num_rows());
     if let Some(group_index) = group_index {
@@ -1111,7 +1111,7 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------------------
-    // Oracoli: implementazioni pre-ottimizzazione, copiate verbatim per i
+    // Oracoli: implementazioni di riferimento indipendenti per i
     // test di equivalenza byte-identica (schema, valori, null, bit f64,
     // ordine righe, errori).
     // ------------------------------------------------------------------
@@ -1339,8 +1339,9 @@ mod tests {
         let fast = flatten_json(batch, config, limits);
         if let Err(error) = &fast {
             if let Some(report) = error.row_diagnostics() {
-                // L'oracolo storico trasformava documenti invalidi in mappe
-                // vuote. Verifichiamo indipendentemente che il rifiuto coincida
+                // Un oracolo che trasformasse i documenti invalidi in mappe
+                // vuote non direbbe nulla su quali righe siano rifiutate.
+                // Si verifica indipendentemente che il rifiuto coincida
                 // esattamente con le righe non-object/non-JSON; sui soli input
                 // conformi resta valido l'oracolo byte-identico sottostante.
                 let index = column_index(batch, &config.column).expect("colonna fixture");

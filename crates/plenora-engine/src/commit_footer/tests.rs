@@ -241,10 +241,10 @@ fn un_token_diverso_cambia_i_byte_ma_non_lo_schema() {
     //
     // Lo schema uguale **non implica** il contratto uguale: il contratto si
     // ricava dallo schema piu' i metadati canonici, e un token che ne
-    // toccasse uno cambierebbe il fingerprint senza cambiare i campi. Sarebbe
-    // il difetto peggiore di questa PR — due esecuzioni identiche dello stesso
-    // piano diventerebbero incompatibili solo per il tentativo che le ha
-    // prodotte.
+    // toccasse uno cambierebbe il fingerprint senza cambiare i campi, ed e'
+    // il danno peggiore che il `commit_token` possa fare: due esecuzioni
+    // identiche dello stesso piano diventerebbero incompatibili solo per il
+    // tentativo che le ha prodotte.
     //
     // Va detto che cosa sorveglia davvero, perche' oggi **nessuna mutazione
     // del codice di produzione lo fa fallire**: il token finisce nel footer,
@@ -314,10 +314,10 @@ fn risolvi_crs(
 
 /// Il `plan_hash` non dipende dal `commit_token`, e il legame e' **causale**.
 ///
-/// La stesura precedente validava due volte lo stesso piano con lo stesso
-/// contratto, costruito da uno schema di comodo: due `plan_hash` uguali erano
-/// garantiti dal determinismo di `validate`, non dal fatto che il token non
-/// conti. Provava il determinismo e lo spacciava per indipendenza.
+/// Validare due volte lo stesso piano con lo stesso contratto, costruito da
+/// uno schema di comodo, non proverebbe nulla: due `plan_hash` uguali
+/// sarebbero garantiti dal determinismo di `validate`, non dal fatto che il
+/// token non conti. Sarebbe il determinismo spacciato per indipendenza.
 ///
 /// Qui la catena e' completa e ogni anello parte dall'artefatto vero:
 ///

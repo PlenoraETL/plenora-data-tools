@@ -20,7 +20,7 @@ use plenora_core::arrow::schema::{DataType, TimeUnit};
 use plenora_core::{PlenoraError, Result};
 
 // ---------------------------------------------------------------------------
-// Fast path compilato (ottimizzazione kernel `table.expression`, ultimo batch).
+// Fast path compilato di `table.expression`.
 //
 // L'AST viene compilato UNA VOLTA in un albero di `FastNode`: indici di
 // colonna risolti e downcast degli array fatti in compilazione, letterali
@@ -208,8 +208,8 @@ impl<'a> FastColumn<'a> {
                     // Arrotondamento dichiarato (errori-e-limiti.md#limiti-dichiarati): `expression`
                     // produce `Float64` per contratto, e un decimal
                     // frazionario non ha un double esatto. Verificare il solo
-                    // `unscaled` — come faceva la versione precedente —
-                    // dichiarava un'esattezza che la divisione non ha.
+                    // `unscaled` dichiarerebbe un'esattezza che la
+                    // divisione non ha.
                     finite_number(decimal_rounded(values.value(row), *factor))
                 }
             }

@@ -1,24 +1,21 @@
 //! Adapter Arrow per il canone GeoArrow-WKB (rappresentazione).
 //!
-//! Port Fase 1 da `arrow_transport.rs` di plenora-geo-tools-arrow, limitato
-//! alle parti di rappresentazione: metadati di estensione `GeoArrow`
-//! (`ARROW:extension:name` = `geoarrow.wkb`), metadato `geo` JSON con le
-//! chiavi `crs`, (dalla milestone B1.1, ICD §3.3) `dimensions` e (dalla
-//! milestone B1.4) `encoding` — scritta solo quando il contratto la
-//! dichiara, mai come default — decode/encode delle celle WKB con limiti
-//! per cella e helper
-//! sui `RecordBatch`. L'envelope `PLNGEO3`, i checksum, la CLI e gli schemi
-//! `TransformArrowSchema`/`PairArrowSchema` non fanno parte di questo modulo
-//! (andranno in `plenora-engine`).
+//! Contiene le sole parti di rappresentazione: metadati di estensione
+//! `GeoArrow` (`ARROW:extension:name` = `geoarrow.wkb`), metadato `geo` JSON
+//! con le chiavi `crs`, `dimensions` (ICD §3.3) ed `encoding` — quest'ultima
+//! scritta solo quando il contratto la dichiara, mai come default —
+//! decode/encode delle celle WKB con limiti per cella e helper sui
+//! `RecordBatch`. L'envelope `PLNGEO3`, i checksum, la CLI e gli schemi
+//! `TransformArrowSchema`/`PairArrowSchema` vivono in `plenora-engine`.
 //!
-//! Unificazione B1.1: questo modulo e' la casa unica dei metadati `GeoArrow`;
+//! Questo modulo e' la casa unica dei metadati `GeoArrow`:
 //! il trasporto Arrow v3 di `plenora-engine::geo_transport` delega qui
 //! (stesso JSON in uscita byte-per-byte).
 //!
 //! Le geometrie viaggiano in una colonna `Binary`; ogni cella non-null e'
 //! validata dal validatore WKB del kernel e i null sono preservati.
 //!
-//! Milestone B (contratti trasversali v2.0-rc10 §2, proposta in attesa di
+//! Protocollo delle chiavi canoniche (contratti trasversali v2.0-rc10 §2, proposta in attesa di
 //! ratifica; emissione con deroga registrata §15.4/DER-ICD-002 — vedi
 //! `docs/errori-e-limiti.md` errori-e-limiti.md#limiti-dichiarati): protocollo delle chiavi canoniche
 //! `plenora.geometry.*` e `plenora.contract.version` (R2.1/R2.2: namespace
@@ -34,7 +31,7 @@
 //! corretto), coerenza fra chiavi canoniche e metadato legacy `geo` (R2.6:
 //! divergenza → il componente fallisce, non sceglie) e completamento per
 //! precedenza canonica > legacy > standard esterno (R2.7: completamento, mai
-//! arbitrato). Il wiring nei siti di produzione e' la milestone successiva.
+//! arbitrato). Il cablaggio nei siti di produzione avviene altrove.
 //!
 //! Errori: le condizioni `ArrowTransportError` del sorgente sono mappate su
 //! [`PlenoraError`] preservando i messaggi (colonne/schema → `Schema`, CRS →
@@ -149,10 +146,10 @@ pub fn map_nullable<T: Send>(
     // RIGA e' selezionato dal collect sequenziale: stesso input, stesso
     // errore, sempre. L'identita' dell'errore e' output.
     //
-    // La parallelizzazione e' sugli INDICI: la versione precedente
-    // materializzava prima un `Vec<Option<&[u8]>>` di tutte le celle solo per
-    // avere un iteratore indicizzato: un'allocazione da una riga per elemento
-    // su ogni colonna geometrica, in un percorso che gia' scorre l'array.
+    // La parallelizzazione e' sugli INDICI. Materializzare prima un
+    // `Vec<Option<&[u8]>>` di tutte le celle, solo per avere un iteratore
+    // indicizzato, costerebbe un'allocazione da una riga per elemento su ogni
+    // colonna geometrica, in un percorso che gia' scorre l'array.
     let results: Vec<Result<Option<T>, PlenoraError>> = (0..cells.len())
         .into_par_iter()
         .map(|row| {
@@ -170,7 +167,7 @@ pub fn map_nullable<T: Send>(
 }
 
 /// STIMA dei byte nativi delle geometrie decodificate di una colonna
-/// geometria (architettura.md#memoria, Fase 2B-M2b).
+/// geometria (architettura.md#memoria).
 ///
 /// Decodifica ogni cella non-null e somma le stime per cella. Il valore e'
 /// una STIMA dichiarata (formula in [`crate::memory_estimate`]), da riportare
@@ -298,8 +295,9 @@ mod tests {
             geo.get("crs").and_then(serde_json::Value::as_str),
             Some(CRS)
         );
-        // B1.1: la scrittura dichiara sempre la dimensionalita' (Xy dai
-        // costruttori attuali; la propagazione reale e' B1.3).
+        // La scrittura dichiara sempre la dimensionalita': `Xy`, perche' e'
+        // quello che i costruttori producono — mai la dimensionalita' letta
+        // dai dati, che nessun percorso propaga.
         assert_eq!(
             geo.get("dimensions").and_then(serde_json::Value::as_str),
             Some("xy")
@@ -335,7 +333,7 @@ mod tests {
 
     #[test]
     fn geo_metadata_with_encoding_writes_the_key_only_when_declared() {
-        // B1.4: `Some` -> chiave `encoding` in forma ICD; `None` -> chiave
+        // `Some` -> chiave `encoding` in forma ICD; `None` -> chiave
         // omessa e JSON identico byte-per-byte alla forma senza encoding
         // (fingerprint e retrocompatibilita' invariati).
         for encoding in [GeometryEncoding::Wkb, GeometryEncoding::Ewkb] {
@@ -356,7 +354,7 @@ mod tests {
         assert_eq!(
             without,
             geo_metadata_json_with_dimensions(CRS, GeometryDimensions::Xyz).expect("dimensions"),
-            "None: byte-per-byte identico alla forma pre-B1.4"
+            "None: byte-per-byte identico alla forma senza chiave `encoding`"
         );
         let parsed: serde_json::Value = serde_json::from_str(&without).unwrap();
         assert!(parsed.get("encoding").is_none(), "chiave omessa con None");
@@ -393,7 +391,7 @@ mod tests {
         );
         assert_eq!(geometry_encoding_from_metadata(&bare), None);
 
-        // Metadato `geo` con la sola chiave `crs` (formato pre-B1.1):
+        // Metadato `geo` con la sola chiave `crs`, la forma storica:
         // dimensionalita' non risolta -> Unknown.
         let mut metadata = HashMap::new();
         metadata.insert(GEO_METADATA_KEY.to_owned(), geo_metadata_json(CRS).unwrap());
@@ -439,7 +437,7 @@ mod tests {
 
     #[test]
     fn strict_encoding_reader_rejects_unrepresentable_framing() {
-        // Discovery (B1.3): encoding fuori dall'enum chiuso -> errore
+        // Discovery: encoding fuori dall'enum chiuso -> errore
         // esplicito (R3.5), mai mappato o ignorato.
         for raw in [
             r#"{"crs":"EPSG:3857","encoding":"gpkg"}"#,
@@ -586,8 +584,8 @@ mod tests {
         let cells = BinaryArray::from_iter([Some(oversized.as_slice())]);
         assert!(matches!(
             map_nullable(&cells, |payload| decode_geometry_cell(payload).map(Some)),
-            // Decimo giro: una cella oltre il tetto e' un limite di RISORSA
-            // (il volume del dato), non un piano sbagliato.
+            // Una cella oltre il tetto e' un limite di RISORSA (il volume
+            // del dato), non un piano sbagliato.
             Err(PlenoraError::ResourceLimit(_))
         ));
         assert!(matches!(
@@ -669,7 +667,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Milestone B — protocollo delle chiavi canoniche (R2.x, R3.4.1, R5.x)
+    // Protocollo delle chiavi canoniche (R2.x, R3.4.1, R5.x)
     // ------------------------------------------------------------------
 
     fn resolved_crs(definition: &str) -> ResolvedCrs {
@@ -1552,15 +1550,16 @@ mod tests {
         );
 
         // Metadato legacy ILLEGGIBILE: errore, non rango legacy assente
-        // (R5.1/piano-v5.md#contratti-di-input). Prima il JSON malformato era indistinguibile
-        // dall'assenza, e la risoluzione completava per precedenza dalle sole
-        // chiavi canoniche scavalcando in silenzio un legacy che non era
+        // (R5.1/piano-v5.md#contratti-di-input). Trattandolo come assente, il
+        // JSON malformato sarebbe indistinguibile da una chiave che non
+        // c'e', e la risoluzione completerebbe per precedenza dalle sole
+        // chiavi canoniche, scavalcando in silenzio un legacy che non e'
         // riuscita a leggere.
         let broken = field_with_pairs(&[(GEO_METADATA_KEY, "non json")]);
         assert!(read_geometry_contract_keys(&broken).is_err());
 
         // Vale anche in presenza di chiavi canoniche valide: sono proprio i
-        // casi in cui il legacy rotto veniva ignorato.
+        // casi in cui un legacy rotto verrebbe altrimenti ignorato.
         let broken_with_canonical = field_with_pairs(&[
             (GEO_METADATA_KEY, "non json"),
             (PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),

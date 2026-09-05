@@ -14,7 +14,7 @@ use crate::hashing::FastHasher;
 use crate::scalar_as_string;
 
 // ---------------------------------------------------------------------------
-// Fast path di `table.aggregate` (ottimizzazione kernel, secondo batch).
+// Fast path di `table.aggregate`.
 //
 // Tre interventi, semantica byte-identica al percorso generico:
 // 1. chiavi di gruppo scritte da formattatori tipizzati (stessi byte di
@@ -32,7 +32,7 @@ use crate::scalar_as_string;
 /// Colonna di group-by con formattatore tipizzato: produce gli stessi byte
 /// di `row_key` (`{tipo}\u{1e}{1|0}{len}:{value}\u{1f}`).
 ///
-/// `pub(crate)` per il modulo `spill` (Fase 2B): il partizionamento hash e la
+/// `pub(crate)` per il modulo `spill`: il partizionamento hash e la
 /// ricostruzione dell'ordine canonico dei gruppi riusano gli stessi byte di
 /// chiave, cosi' i percorsi spilled hanno identita' di gruppo identica.
 pub enum KeyColumn {
@@ -56,7 +56,8 @@ pub enum KeyColumn {
         prefix: String,
         values: BooleanArray,
     },
-    /// Qualunque altro tipo: chiave via `scalar_as_string`, come prima.
+    /// Qualunque altro tipo: chiave via `scalar_as_string`, il percorso
+    /// generico.
     Generic {
         prefix: String,
         array: ArrayRef,
@@ -407,14 +408,13 @@ where
 /// partizione e indici di riga della partizione.
 type KeyPartitions<'a> = Vec<(Option<Cow<'a, str>>, Vec<usize>)>;
 
-/// Partizioni di `window_function`/`rolling_window` (ottimizzazione kernel,
-/// batch 4).
+/// Partizioni di `window_function`/`rolling_window`.
 ///
 /// Righe raggruppate per la chiave testuale della colonna di partizione
 /// (`TextSource`: Utf8 preso in prestito, nessuna `String` per riga;
 /// `scalar_as_string` per gli altri tipi), hash FxHash+splitmix64
-/// (`KeyHasher`) al posto del `BTreeMap` `SipHash`. Le partizioni sono
-/// restituite nello STESSO ordine di iterazione del `BTreeMap` originale
+/// (`KeyHasher`) invece di un `BTreeMap` `SipHash`. Le partizioni sono
+/// restituite nello STESSO ordine in cui le renderebbe un `BTreeMap`
 /// (chiave `Option<String>` crescente): gli errori per partizione emergono
 /// nello stesso ordine e il comportamento resta deterministico.
 pub(in crate::aggregation) fn build_partitions(

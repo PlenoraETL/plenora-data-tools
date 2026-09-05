@@ -78,7 +78,7 @@ pub struct ExecutionMetrics {
     /// della lettura delle metriche — lease vivi, byte trattenuti attuali e
     /// di picco, eta' del lease piu' vecchio.
     pub memory: MemoryMetrics,
-    /// Metriche di spill aggregate sull'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato):
+    /// Metriche di spill aggregate sull'esecuzione (architettura.md#memoria, spill generalizzato):
     /// byte scritti/letti sui file temporanei e numero di file
     /// materializzati dai percorsi `*_spilled` di sort/distinct/aggregate.
     /// Tutte zero se nessun nodo ha spillato.
@@ -112,7 +112,7 @@ pub struct ExecutionMetrics {
     ///
     /// I limiti di riga sono configurabili fino a `u64::MAX`, quindi la somma
     /// e' rappresentabile solo finche' i conteggi restano piccoli rispetto a
-    /// quel fondo scala. Le tre uscite possibili erano: avvolgere (un
+    /// quel fondo scala. Le uscite possibili sono tre: avvolgere (un
     /// contatore che riparte da zero e mente), andare in panico
     /// (`overflow-checks` e' attivo anche in release: una metrica che abbatte
     /// l'esecuzione) o saturare. Si satura, ma senza tacerlo: questo flag e'

@@ -1,12 +1,11 @@
 //! Livello comandi del trasporto geo: verifica semantica del CRS e
 //! pubblicazione atomica dell'output.
 //!
-//! Port Fase 1 ("coesistenza") da `main.rs` di plenora-geo-tools-arrow:
-//! stessa logica, stessi messaggi; gli errori `Box<dyn Error>` del sorgente
-//! sono mappati su [`PlenoraError`] (`InvalidPlan` per le violazioni di
-//! contratto, `Crs` per gli errori CRS, `Io` per gli errori I/O).
+//! Superficie compatibile: i messaggi sono quelli che chi invoca questi
+//! comandi si aspetta. Gli errori sono [`PlenoraError`] — `InvalidPlan` per
+//! le violazioni di contratto, `Crs` per gli errori CRS, `Io` per l'I/O.
 //!
-//! Sequenza attesa dal chiamante (come nel sorgente): parse dello schema
+//! Sequenza attesa dal chiamante: parse dello schema
 //! JSON → controllo `schema_version` → `validate_parameters` →
 //! `validate_transform_arrow_crs`/`validate_pair_arrow_crs` → esecuzione
 //! (`transform_arrow`/`pair_arrow`) → `publish_atomic`.
@@ -35,15 +34,15 @@ use plenora_kernels_geo::crs::resolve_crs;
 
 use super::transport::{ArrowOperation, PairArrowSchema, TransformArrowSchema};
 
-/// Verifica semantica del CRS per `transform_arrow` (righe 249-265 del
-/// `main.rs` sorgente). Deve essere chiamata DOPO
+/// Verifica semantica del CRS per `transform_arrow`. Deve essere chiamata
+/// DOPO
 /// [`TransformArrowSchema::validate_parameters`] e prima di toccare i dati.
 ///
 /// Il requisito CRS dell'operazione e' risolto dal catalogo core tramite il
 /// `catalog_name` legacy (gli alias `geo_*` -> `geo.*` sono gia' nel
 /// catalogo). Un requisito `None` e' trattato come `CrsRequirement::Known`:
-/// nel catalogo core tutte le operazioni geo hanno `Some(_)`, quindi il ramo
-/// e' irraggiungibile e il comportamento resta identico al sorgente.
+/// nel catalogo tutte le operazioni geo hanno `Some(_)`, quindi il ramo e'
+/// irraggiungibile.
 ///
 /// # Errors
 /// Restituisce `PlenoraError::Crs` se il CRS manca, e' invalido, non e'
@@ -70,8 +69,7 @@ pub fn validate_transform_arrow_crs(schema: &TransformArrowSchema) -> Result<(),
     Ok(())
 }
 
-/// Verifica semantica del CRS per `pair_arrow` (righe 300-313 del `main.rs`
-/// sorgente). Deve essere chiamata DOPO
+/// Verifica semantica del CRS per `pair_arrow`. Deve essere chiamata DOPO
 /// [`PairArrowSchema::validate_parameters`] e prima di toccare i dati.
 ///
 /// # Errors
@@ -147,7 +145,7 @@ pub enum PublishOutcome {
 
 impl PublishOutcome {
     /// Effetto dell'esito sull'asse canonico «effetto remoto» (R9.6,
-    /// contratti trasversali v2.0-rc10 §9, milestone D): collegamento
+    /// contratti trasversali v2.0-rc10 §9): collegamento
     /// esplicito tra errori-e-limiti.md#publish-e-cleanup e il modello a quattro assi (R9.1), SENZA
     /// duplicare l'esito in una variante d'errore — l'esito ignoto non e'
     /// una categoria d'errore (R9.3).
@@ -267,8 +265,8 @@ fn classify_filesystem(magic: u64) -> FilesystemClass {
 /// Riconoscimento fail-closed del filesystem (errori-e-limiti.md#publish-e-cleanup) su Linux: `statfs`
 /// della directory di destinazione e whitelist dei magic locali. Fase
 /// [`ErrorPhase::Probe`] (BLOCK-03): ispezione preliminare della
-/// destinazione — la fase che la variante dedicata aveva prima della
-/// fusione §9 in `Unsupported`.
+/// destinazione — la fase in cui la si scopre, non quella derivata dalla
+/// variante `Unsupported` in cui e' confluita.
 #[cfg(target_os = "linux")]
 fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
     let stat = rustix::fs::statfs(parent)
@@ -411,9 +409,9 @@ pub fn publish_with_profile<T>(
         ))
         .with_phase(ErrorPhase::Probe));
     }
-    // Destinazione non supportata: era la fase `Probe` della variante
-    // dedicata prima della fusione §9 in `Unsupported` — il tag (dentro
-    // `ensure_supported_publish_target`) la ripristina.
+    // Destinazione non supportata: la fase e' `Probe`, quella in cui la si
+    // scopre, e il tag dentro `ensure_supported_publish_target` la impone
+    // sulla derivazione per variante.
     ensure_supported_publish_target(parent)?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".plenora-geo-")
@@ -472,7 +470,7 @@ pub fn publish_with_profile<T>(
     Ok((result, outcome))
 }
 
-/// Pubblicazione atomica dell'output (righe 315-349 del `main.rs` sorgente).
+/// Pubblicazione atomica dell'output.
 ///
 /// Wrapper di compatibilita' su [`publish_with_profile`] con profilo
 /// [`PublishProfile::Atomic`]: comportamento identico al publish storico,
@@ -617,7 +615,7 @@ mod tests {
 
     #[test]
     fn publish_outcome_maps_on_the_remote_effect_axis() {
-        // R9.1/R9.6 (milestone D): l'esito tipizzato di errori-e-limiti.md#publish-e-cleanup vive
+        // R9.1/R9.6: l'esito tipizzato di errori-e-limiti.md#publish-e-cleanup vive
         // sull'asse effetto, non in una variante d'errore (R9.3). Committed
         // in entrambi i casi: l'output e' completo e visibile; in
         // `PublishedButDurabilityUnconfirmed` e' la durabilita' a non
@@ -780,8 +778,8 @@ mod tests {
     #[test]
     fn unc_target_is_a_probe_phase_error() {
         // Windows: il riconoscimento fail-closed rifiuta i percorsi UNC —
-        // la destinazione non supportata torna Probe, la fase che aveva
-        // come variante dedicata prima della fusione §9 in `Unsupported`.
+        // la destinazione non supportata cade su Probe, la fase in cui la si
+        // scopre.
         let error = ensure_supported_publish_target(Path::new("//server/share"))
             .expect_err("UNC rifiutato");
         assert_eq!(error.phase(), ErrorPhase::Probe);

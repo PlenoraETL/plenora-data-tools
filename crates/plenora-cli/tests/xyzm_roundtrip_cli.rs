@@ -1,4 +1,4 @@
-//! Test end-to-end CLI del round-trip XYZM (milestone B1.4): un input IPC
+//! Test end-to-end CLI del round-trip XYZM: un input IPC
 //! con colonna geometria Point Z (`geo.dimensions = "xyz"`) attraversa un
 //! piano tabellare (passthrough) preservando celle byte-per-byte e metadato
 //! dimensionale; un'op geo elaborante sullo stesso input e' rifiutata a
@@ -114,7 +114,7 @@ fn output_dimensions(output_path: &std::path::Path) -> GeometryDimensions {
 
 #[test]
 fn xyz_input_round_trips_byte_per_byte_through_a_table_filter() {
-    // Round-trip B1.4: Point Z (metadato geo.dimensions = "xyz") -> filtro
+    // Round-trip: Point Z (metadato geo.dimensions = "xyz") -> filtro
     // tabellare (passthrough) -> publish -> output IPC riletto: celle
     // byte-identiche e metadato `xyz` preservato (mai un xy silenzioso).
     let directory = tempfile::tempdir().expect("tempdir");
@@ -176,7 +176,7 @@ fn xyz_input_round_trips_byte_per_byte_through_a_table_filter() {
 
 #[test]
 fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
-    // B1.4: op geo elaborante (`geo.buffer`) su input XYZ -> rifiuto a
+    // Op geo elaborante (`geo.buffer`) su input XYZ -> rifiuto a
     // compile-plan con messaggio che cita op e dimensionalita'; publish
     // atomico: nessun file di output.
     let directory = tempfile::tempdir().expect("tempdir");
@@ -217,7 +217,7 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
 
 #[test]
 fn xyz_metadata_with_xy_cells_fails_at_the_gate_never_silent_passthrough() {
-    // Adversarial B1.4: metadato `dimensions = "xyz"` ma celle XY (type code
+    // Adversarial: metadato `dimensions = "xyz"` ma celle XY (type code
     // 1) -> errore dedicato di mismatch al gate di lettura (percorso CLI),
     // mai un passthrough silenzioso; nessun output pubblicato.
     let directory = tempfile::tempdir().expect("tempdir");

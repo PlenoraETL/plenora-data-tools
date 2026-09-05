@@ -1,33 +1,44 @@
-//! plenora-data-tools CLI — Fase 1 "coesistenza" (architettura.md).
+//! Interfaccia a riga di comando di plenora-data-tools (architettura.md).
 //!
-//! Fusione meccanica dei due binari di origine, senza modifiche di
-//! comportamento sui comandi legacy:
+//! Un solo eseguibile serve tre gruppi di comandi che non condividono il
+//! percorso di esecuzione:
 //!
-//! - da `plenora-nogeo-tools/src/main.rs`: `run --plan --input [--right]
-//!   --output` (lettura Arrow IPC file format, streaming batch-per-batch se
-//!   nessuno step e' blocking, limiti righe globali, publish atomico con
-//!   `persist_noclobber`), `self-test` (integrita' del catalogo);
-//! - da `plenora-geo-tools-arrow/src/main.rs`: `capabilities`, `transform`
-//!   (framing WKB v2 `PLNGEO2`), `spatial-join` (v2), `transform-arrow`
-//!   (envelope v3 `PLNGEO3`), `pair-arrow` (v3), `self-test --output`;
-//! - nuovi di Fase 1: `catalog [--family table|geo]` (catalogo unificato di
-//!   `plenora-core`, 146 operazioni) e `validate --plan --inputs ...`;
-//! - Fase 2A: collegamento al DAG. `validate` e `run` usano il
-//!   planner/executor del DAG (`plenora_engine::planner::validate` +
-//!   `plenora_engine::execute`) per tre versioni del formato, che NON
-//!   collassano l'una nell'altra:
-//!   `schema_version: 5`; `4`, migrato al canonico v5 prima di ogni altra
-//!   cosa (piano-v5.md, migrazione), con cui condivide l'identita'; e `6`,
-//!   che ha un parser proprio, puo' dichiarare `max_domain_memory_bytes` e
-//!   sta nel **proprio** dominio di `plan_hash`. I piani legacy
-//!   (`schema_version` <= 3) restano sul `table_engine`, comportamento
-//!   invariato. Dettagli nella sezione "DAG (Fase 2A)" piu' sotto.
+//! - tabellari: `run --plan --input [--right] --output` (lettura Arrow IPC
+//!   file format, streaming batch-per-batch se nessuno step e' blocking,
+//!   limiti righe globali, publish atomico con `persist_noclobber`),
+//!   `self-test` (integrita' del catalogo);
+//! - geospaziali: `capabilities`, `transform` (framing WKB v2 `PLNGEO2`),
+//!   `spatial-join` (v2), `transform-arrow` (envelope v3 `PLNGEO3`),
+//!   `pair-arrow` (v3), `self-test --output`;
+//! - sul catalogo unificato di `plenora-core`: `catalog [--family
+//!   table|geo]` e `validate --plan --inputs ...`.
 //!
-//! Fail-closed come nei sorgenti: nessun output parziale, publish atomico su
-//! tempfile + `persist_noclobber`, exit code 2 su qualunque errore, messaggi
-//! senza dati sensibili. Fase 2B, cancellazione cooperativa
-//! (errori-e-limiti.md#cancellazione): `run` installa un handler
-//! Ctrl-C che cancella cooperativamente l'esecuzione DAG tramite
+//! **Superficie a compatibilita' congelata**: i comandi geospaziali e il solo
+//! `run` sui piani `schema_version <= 3`. Li' formato sul filo, messaggi ed
+//! exit code sono quelli che chi gia' invoca l'eseguibile si aspetta, e
+//! cambiarli e' una rottura (vedi il modulo `cli::commands::legacy`). Il
+//! `run` sui piani DAG non e' in quel perimetro.
+//!
+//! # Le tre versioni del piano non collassano l'una nell'altra
+//!
+//! `validate` e `run` instradano sul planner/executor del DAG
+//! (`plenora_engine::planner::validate` + `plenora_engine::execute`):
+//! `schema_version: 5`; `4`, migrato al canonico v5 prima di ogni altra cosa
+//! (piano-v5.md, migrazione), con cui condivide l'identita'; e `6`, che ha un
+//! parser proprio, puo' dichiarare `max_domain_memory_bytes` e sta nel
+//! **proprio** dominio di `plan_hash`. I piani con `schema_version` <= 3
+//! restano sul `table_engine`. Dettagli nella sezione "DAG" piu' sotto.
+//!
+//! # Fail-closed
+//!
+//! Nessun output parziale, publish atomico su tempfile +
+//! `persist_noclobber`, messaggi senza dati sensibili, e mai un'uscita a zero
+//! dopo un errore. L'exit code dipende dalla **categoria** dell'errore: la
+//! tabella sta in `docs/cli.md` e la decisione per ciascuna categoria in
+//! [`cli::error_envelope::exit_code_di`] — qui non si duplica.
+//!
+//! Cancellazione cooperativa (errori-e-limiti.md#cancellazione): `run`
+//! installa un handler Ctrl-C che cancella l'esecuzione DAG tramite
 //! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
 //! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
 //! l'uscita immediata.
@@ -124,12 +135,12 @@ pub(crate) fn contract(message: impl Into<String>) -> PlenoraError {
 /// Costruttore esplicito dei limiti di RISORSA della CLI.
 ///
 /// Esiste per la stessa ragione per cui esiste `contract`: rendere la
-/// categoria visibile nel punto d'uso. Prima i tetti e i traboccamenti della
-/// CLI passavano da `contract`, cioe' uscivano come `invalid_plan` — e il
-/// censimento della classe, che cercava le occorrenze di
-/// `PlenoraError::InvalidPlan`, non li vedeva nemmeno: erano nascosti dietro
-/// un helper. Due costruttori distinti rendono la scelta leggibile a chi
-/// scrive e cercabile a chi verifica.
+/// categoria visibile nel punto d'uso. Facendo passare tetti e traboccamenti
+/// da `contract` uscirebbero come `invalid_plan`, e un censimento della
+/// classe — che cerca le occorrenze di `PlenoraError::ResourceLimit` — non li
+/// troverebbe, perche' sarebbero nascosti dietro un helper. Due costruttori
+/// distinti rendono la scelta leggibile a chi scrive e cercabile a chi
+/// verifica.
 pub(crate) fn limite_risorsa(message: impl Into<String>) -> PlenoraError {
     PlenoraError::ResourceLimit(message.into())
 }
@@ -262,11 +273,11 @@ pub(crate) fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), Ple
 /// Esito tipizzato del publish (errori-e-limiti.md#publish-e-cleanup) in forma verificabile, **senza
 /// scrivere su stderr**.
 ///
-/// Era un avviso su stderr: invisibile a un consumatore automatico e insieme
-/// una crepa nel contratto «stderr vuoto»
-/// (errori-e-limiti.md#envelope-e-canali). Ora il chiamante lo
-/// riporta nel proprio documento di uscita, dove chi legge le metriche lo
-/// trova senza intercettare un canale che per contratto non porta nulla.
+/// Un avviso su stderr sarebbe invisibile a un consumatore automatico e
+/// insieme una crepa nel contratto «stderr vuoto»
+/// (errori-e-limiti.md#envelope-e-canali). Il chiamante lo riporta invece nel
+/// proprio documento di uscita, dove chi legge le metriche lo trova senza
+/// intercettare un canale che per contratto non porta nulla.
 ///
 /// Con il profilo `Atomic` l'esito e' sempre `Published`; il ramo non
 /// confermato serve ai chiamanti che useranno `DurableAtomic`.
@@ -328,11 +339,8 @@ pub(crate) fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, 
     }
 }
 
-// Catalogo unificato e validate (nuovi comandi di Fase 1)
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// DAG (Fase 2A): scoperta dei contratti, validate e run
+// DAG: scoperta dei contratti, validate e run
 // ---------------------------------------------------------------------------
 //
 // Un piano con `schema_version: 4` segue il percorso del DAG:
@@ -356,7 +364,8 @@ pub(crate) fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, 
 // - **accoppiamento input**: i percorsi di `--input`/`--inputs` sono legati
 //   agli input dichiarati dal piano **in ordine di dichiarazione**
 //   (posizionale, deterministico); un conteggio diverso e' un errore;
-// - **validate**: `planner::validate` (fase 1,
+// - **validate**: `planner::validate` (la validazione statica, quella su
+//   header e metadati — D8;
 //   piano-v5.md#identita-e-fingerprint,
 //   architettura.md#planner-ed-executor) e poi `explain` con
 //   il `RuntimeContext` di default per il riepilogo della strategia fisica —
@@ -417,9 +426,8 @@ pub(crate) fn testo_piano_dag(plan_text: &str) -> Result<Option<Cow<'_, str>>, P
     // La v6 non si migra e non si tocca: e' gia' il testo che il suo parser
     // legge, e riscriverlo qui — anche solo per rinormalizzarlo — cambierebbe
     // un documento che porta la propria identita'. Passarlo da
-    // `testo_canonico_v5` lo avrebbe fatto **rifiutare**, perche' quella
-    // funzione conosce solo la v4 e la v5: con il risultato che nessun piano
-    // v6 arrivava al planner.
+    // `testo_canonico_v5` lo farebbe **rifiutare**, perche' quella funzione
+    // conosce solo la v4 e la v5: nessun piano v6 arriverebbe al planner.
     if versione == u32::from(PLAN_SCHEMA_VERSION_V6) {
         return Ok(Some(Cow::Borrowed(plan_text)));
     }
@@ -436,11 +444,11 @@ const MAX_CONTROL_JSON_BYTES: u64 = 16 * 1024 * 1024;
 /// Legge un documento JSON di CONTROLLO da file: limitato nei byte e
 /// rifiutato se contiene chiavi duplicate.
 ///
-/// E' l'unico lettore dei documenti di controllo della CLI. Prima ogni sito
-/// chiamava `serde_json::from_reader` per conto proprio: nessun tetto sui
-/// byte, e chiavi duplicate risolte con «vince l'ultima» — la stessa
-/// ambiguita' che il piano DAG rifiuta, lasciata aperta sui piani legacy,
-/// sugli schemi di comando e sulle sonde di instradamento.
+/// E' l'**unico** lettore dei documenti di controllo della CLI. Un sito che
+/// chiami `serde_json::from_reader` per conto proprio non ha tetto sui byte e
+/// risolve le chiavi duplicate con «vince l'ultima» — la stessa ambiguita'
+/// che il piano DAG rifiuta, lasciata aperta sui piani legacy, sugli schemi
+/// di comando e sulle sonde di instradamento.
 ///
 /// Confine di lettura (BLOCK-03): gli errori nascono leggendo la sorgente.
 fn read_control_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, PlenoraError> {
@@ -561,9 +569,9 @@ pub(crate) fn graph_summary_json(
         .collect();
     Ok(serde_json::json!({
         "status": "ok",
-        // La versione la dice il PIANO, non questa riga. Era fissata a 5, e
-        // un piano v6 sarebbe stato descritto come un v5 — con accanto un
-        // `plan_hash` di un altro dominio.
+        // La versione la dice il PIANO, non questa riga. Fissarla a 5
+        // descriverebbe un piano v6 come un v5 — con accanto un `plan_hash`
+        // di un altro dominio.
         "schema_version": plan.schema_version(),
         "plan_hash": graph.plan_hash().to_hex(),
         "engine_version": graph.engine_version().to_string(),
@@ -628,10 +636,10 @@ pub(crate) fn metrics_json(
         .collect();
     serde_json::json!({
         "status": "ok",
-        // Come in `explain`: la versione la dice il piano. Era fissata a 5, e
-        // un riepilogo di `run` su un piano v6 avrebbe dichiarato 5 accanto a
-        // un `plan_hash` di un altro dominio — cioe' proprio la coppia che
-        // rende irriconoscibile un'identita' conservata.
+        // Come in `explain`: la versione la dice il piano. Fissandola a 5, un
+        // riepilogo di `run` su un piano v6 dichiarerebbe 5 accanto a un
+        // `plan_hash` di un altro dominio — cioe' proprio la coppia che rende
+        // irriconoscibile un'identita' conservata.
         "schema_version": graph.plan_format_version(),
         "plan_hash": graph.plan_hash().to_hex(),
         "output_rows": metrics.output_rows,
@@ -665,15 +673,15 @@ pub(crate) fn has_flag(args: &[String], flag: &str) -> bool {
 }
 
 // Dispatch unico dei sottocomandi: la lunghezza e' data dalla sequenza
-// lineare dei casi, non da complessita' logica; uno spezzone artificiale
-// peggiorerebbe solo la leggibilita' (fase di pulizia: niente refactor
-// strutturali).
+// lineare dei casi, non da complessita' logica, e spezzarla in funzioni
+// artificiali peggiorerebbe solo la leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
-    // La validazione precede QUALUNQUE uscita anticipata, help compreso:
-    // `run --help junk` stampava l'aiuto e usciva con successo, ignorando
-    // `junk`. Un parser che risponde «va bene» a un'invocazione che non ha
-    // capito e' fail-open anche quando non pubblica nulla.
+    // La validazione precede QUALUNQUE uscita anticipata, help compreso.
+    // Trattando `--help` per primo, `run --help junk` stamperebbe l'aiuto e
+    // uscirebbe con successo ignorando `junk`: un parser che risponde «va
+    // bene» a un'invocazione che non ha capito e' fail-open anche quando non
+    // pubblica nulla.
     if let Some(comando) = args.first() {
         reject_unknown_flags(comando, args)?;
     }
@@ -808,12 +816,11 @@ fn main() {
     // recuperata qui, dove ha un canale e un exit code.
     //
     // La politica vive in `plenora_core::panic_policy` perche' non riguarda
-    // solo la CLI: un embedder — il futuro binding PyO3 compreso — ha lo
-    // stesso problema su uno stderr che non e' nemmeno suo, e installa
-    // `Sanitized`.
+    // solo la CLI: un embedder — un binding PyO3, per esempio — ha lo stesso
+    // problema su uno stderr che non e' nemmeno suo, e installa `Sanitized`.
     //
     // L'ESITO va guardato, non ignorato. `install` risponde `false` se un
-    // hook era gia' stato installato passando da quella API. Qui siamo il
+    // hook e' gia' stato installato passando da quella API. Qui siamo il
     // processo e siamo la prima istruzione di `main`, quindi `false`
     // significa che qualcosa e' arrivato prima del nostro ingresso — e
     // allora il contratto «stderr vuoto» non e' piu' garantito, perche'
@@ -886,9 +893,9 @@ mod tests {
     /// resta senza codice in silenzio.
     #[test]
     fn un_errore_interno_di_passo_esce_come_interno_non_come_esecuzione() {
-        // Settimo giro, finding 3. I due propagatori aggiungono il contesto
-        // del passo avvolgendo l'errore in `Replayed`, che porta con se' la
-        // categoria. Questo test chiude l'ULTIMO anello della catena: che una
+        // I due propagatori aggiungono il contesto del passo avvolgendo
+        // l'errore in `Replayed`, che porta con se' la categoria. Questo test
+        // copre l'ULTIMO anello della catena: che una
         // categoria `Internal` arrivata fin qui dentro un `Replayed` diventi
         // `internal`/exit 70 e non `execution`/exit 6.
         //
@@ -935,12 +942,12 @@ mod tests {
         // fosse derivata da `exit_code_di` verificherebbe che il codice e'
         // uguale a se stesso.
         //
-        // Il difetto della versione precedente non era la tabella ma il
-        // giro: si iterava la tabella, quindi una categoria nuova non
-        // appariva da nessuna parte e restava semplicemente non coperta, in
-        // silenzio. Ora si itera `ErrorCategory::ALL` e si PRETENDE che la
-        // tabella la nomini — chi aggiunge una categoria deve passare di
-        // qui, come deve passare da `exit_code_di`.
+        // Il verso del giro conta quanto la tabella: si itera
+        // `ErrorCategory::ALL` e si PRETENDE che la tabella nomini ogni
+        // categoria. Iterando la tabella, una categoria nuova non sarebbe
+        // nominata da nessuno e resterebbe non coperta in silenzio; cosi'
+        // invece chi ne aggiunge una deve passare di qui, come deve passare
+        // da `exit_code_di`.
         let atteso: [(&str, i32); 20] = [
             ("invalid_plan", 2),
             ("invalid_configuration", 2),
@@ -1128,8 +1135,9 @@ mod tests {
                 }
             }
         }
-        // Lock espliciti del perimetro (formula ed expression erano il bypass;
-        // md5/sha256 con null_policy=error; type_cast fallibile).
+        // Lock espliciti del perimetro: `formula` ed `expression` sono le due
+        // che una lista locale tende a dimenticare, `md5`/`sha256` valgono
+        // solo con null_policy=error, `type_cast` e' fallibile.
         for expected in [
             "table.formula",
             "table.expression",
@@ -1518,7 +1526,7 @@ mod tests {
                 .expect("field");
         let contract = contract_from_field(&written).expect("discovery");
         assert_eq!(contract.dimensions, GeometryDimensions::Xy);
-        // Milestone C (R2.7): il nome di estensione `geoarrow.wkb` dichiara
+        // R2.7: il nome di estensione `geoarrow.wkb` dichiara
         // la famiglia WKB e completa l'encoding assente altrove (ultimo
         // rango della precedenza): non piu' `None`.
         assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
@@ -1537,9 +1545,9 @@ mod tests {
 
     #[test]
     fn discovery_rejects_unreadable_dimensions_never_ignores_them() {
-        // Milestone C (reader strict, R5.1): valore `dimensions` non canonico
-        // o non testuale -> errore esplicito, mai ignorato ne' mappato a
-        // Unknown. Comportamento piu' stretto della lettura lenient pre-C.
+        // Reader strict (R5.1): un valore `dimensions` non canonico o non
+        // testuale e' un errore esplicito, mai ignorato ne' mappato a
+        // `Unknown` — «illeggibile» non e' «assente».
         for geo_json in [
             r#"{"crs":"EPSG:32632","dimensions":"2d"}"#,
             r#"{"crs":"EPSG:32632","dimensions":42}"#,
@@ -1756,7 +1764,8 @@ mod tests {
     #[test]
     fn discovery_rejects_malformed_geo_metadata_never_treats_it_as_missing() {
         // R5.1: un metadato `geo` illeggibile non diventa «CRS assente» —
-        // «illeggibile» non e' «assente»: errore, come prima di R4.6.3.
+        // «illeggibile» non e' «assente»: e' un errore, e R4.6.3 non lo
+        // trasforma in un CRS mancante.
         let schema = std::sync::Arc::new(Schema::new(vec![geometry_field(Some("not json"))]));
         let result = discover_input_contract_from_schema(schema, resolve_crs);
         assert!(result.is_err(), "metadato geo malformato -> errore");
@@ -1869,13 +1878,13 @@ mod tests {
     #[test]
     fn discovery_crs_id_and_definition_copresent_become_declared_unresolved() {
         // Due rappresentazioni risolvibili co-presenti: l'accordo non e'
-        // decidibile testualmente (R2.7: mai arbitrato sul dato) — prima
-        // vinceva `crs_definition` (scelta silenziosa), ora lo stato e'
-        // DeclaredUnresolved con ENTRAMBE le dichiarazioni.
+        // decidibile testualmente (R2.7: mai arbitrato sul dato), quindi lo
+        // stato e' `DeclaredUnresolved` con ENTRAMBE le dichiarazioni.
+        // Farne vincere una sarebbe una scelta silenziosa sul dato.
         // Emendamento 2026-07-31 (classe A): la regola (2a) vale SOLO per
-        // input NON dichiarati — la fixture non porta `crs_resolution`
-        // (prima la portava `resolved`: il rovesciamento della
-        // dichiarazione esplicita era il bug del caso owner).
+        // input NON dichiarati, ed e' per questo che la fixture non porta
+        // `crs_resolution`. Aggiungendolo come `resolved`, la dichiarazione
+        // esplicita vincerebbe e questo non sarebbe piu' il caso (2a).
         let field = canonical_crs_field(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (
@@ -2021,12 +2030,12 @@ mod tests {
     #[cfg(not(feature = "proj-backend"))]
     #[test]
     fn discovery_resolved_with_double_representation_needs_the_backend() {
-        // Effetto collaterale DICHIARATO dell'emendamento 2026-07-31
-        // (classe A): senza `proj-backend` un input `resolved` con doppia
-        // rappresentazione prima passava come `DeclaredUnresolved` (la (2a)
-        // scattava senza backend); ora la dichiarazione si onora con la
-        // regola (3) e la risoluzione impossibile fallisce con errore
-        // `Crs` — coerente col `resolved` a rappresentazione singola.
+        // Conseguenza DICHIARATA dell'emendamento 2026-07-31 (classe A):
+        // senza `proj-backend` un input `resolved` con doppia
+        // rappresentazione non degrada a `DeclaredUnresolved`. La
+        // dichiarazione si onora con la regola (3), quindi la risoluzione
+        // impossibile fallisce con errore `Crs` — coerente con quel che fa un
+        // `resolved` a rappresentazione singola.
         let pairs = monte_mario_resolved_pairs("EPSG:3003");
         let pairs_ref: Vec<(&str, &str)> = pairs
             .iter()
@@ -2372,9 +2381,9 @@ mod tests {
     #[test]
     fn contract_crs_from_keys_co_presence_is_declared_unresolved_not_a_choice() {
         // `crs_id` + `crs_definition` co-presenti: l'accordo non e'
-        // decidibile testualmente (R2.7: mai arbitrato) — nessuna
-        // precedenza silenziosa (prima vinceva `crs_definition`): lo stato
-        // e' `DeclaredUnresolved` con entrambe le dichiarazioni.
+        // decidibile testualmente (R2.7: mai arbitrato), quindi nessuna
+        // precedenza silenziosa fra i due. Lo stato e' `DeclaredUnresolved`
+        // con entrambe le dichiarazioni.
         let keys = CanonicalGeometryKeys {
             crs_definition: Some(r#"{"type":"ProjectedCRS"}"#.to_owned()),
             crs_id: Some("EPSG:32632".to_owned()),

@@ -631,9 +631,9 @@ fn un_campo_sconosciuto_e_un_errore_a_ogni_livello() {
 /// I conteggi del `Successo` sono **obbligatori**, e ogni loro campo lo e'.
 ///
 /// E' il termine di paragone del passo 8 della verifica: senza, quel passo
-/// confronterebbe cio' che osserva con niente. Renderli facoltativi avrebbe
-/// reso facoltativo il passo, ed e' il difetto che la prima stesura del
-/// protocollo aveva — la sequenza normativa citava un dato che non viaggiava.
+/// confronterebbe cio' che osserva con niente. Renderli facoltativi renderebbe
+/// facoltativo il passo, e lascerebbe la sequenza normativa a citare un dato
+/// che non viaggia.
 #[test]
 fn i_conteggi_del_successo_sono_obbligatori() {
     let digest = r#""digest_artefatto":{"algoritmo":"sha256","valore":"f"}"#;
@@ -976,11 +976,11 @@ fn ripeti(n: usize) -> String {
 /// Il carattere che JSON **deve** espandere: `U+0001`, un byte decodificato,
 /// sei byte codificati.
 ///
-/// Serve alle fixture massime. Con `"a"` il frame massimo restava a un sesto
-/// della taglia che il tetto gli concede, quindi la prova dei massimi non
-/// toccava mai `ESPANSIONE_ESCAPE`: una mutazione a `1` l'avrebbe lasciata
+/// Serve alle fixture massime. Con `"a"` il frame massimo resterebbe a un
+/// sesto della taglia che il tetto gli concede, quindi la prova dei massimi
+/// non toccherebbe mai `ESPANSIONE_ESCAPE`: una mutazione a `1` la lascerebbe
 /// verde pur rendendo non codificabile un frame **strutturalmente ammesso**
-/// che portasse caratteri di controllo. E in `PR-4` quei campi ammettono
+/// che portasse caratteri di controllo — e i campi del protocollo ammettono
 /// qualunque stringa.
 const ESPANDIBILE: &str = "\u{1}";
 
@@ -1399,10 +1399,10 @@ fn diagnostica_con(applica: impl FnOnce(&mut DiagnosticaSulFilo)) -> Frame {
 ///
 /// **Ogni** campo limitato, provato sul proprio confine.
 ///
-/// Senza questo, i tetti erano applicati ma quasi mai esercitati: una
+/// Senza questo, i tetti sarebbero applicati ma quasi mai esercitati: una
 /// costante sbagliata in uno dei `limita` — il tetto del percorso su un
-/// identificatore, per dire — sarebbe passata inosservata, perché nessun test
-/// arrivava mai a quel confine.
+/// identificatore, per dire — passerebbe inosservata, perché nessun test
+/// arriverebbe a quel confine.
 ///
 /// Il caso a `tetto + 1` fa anche da controllo sulla tabella stessa: se un
 /// costruttore non modificasse davvero il campo che dichiara, il frame
@@ -1633,9 +1633,9 @@ fn i_sei_massimi_stanno_sotto_il_tetto_e_l_incarico_e_il_maggiore() {
 /// ordinaria.
 ///
 /// Non sono riscritte: chiamano `interni::verifica_giro_del_frame`, la stessa
-/// funzione che invoca il target. Riscriverle avrebbe creato due definizioni
-/// della stessa promessa, e la copia nei test sarebbe rimasta verde mentre
-/// quella del fuzzer sbagliava.
+/// funzione che invoca il target. Riscriverle creerebbe due definizioni della
+/// stessa promessa, e la copia nei test resterebbe verde mentre quella del
+/// fuzzer sbaglia.
 ///
 /// I casi sono **non canonici** di proposito — chiavi in ordine diverso,
 /// spazi, un piano grezzo con la sua formattazione — perche' e' li' che
@@ -1796,8 +1796,8 @@ fn nessun_nome_di_tipo_supera_i_nove_caratteri() {
 
 /// Il tipo non puo' contraddire il corpo, perche' non e' un campo.
 ///
-/// Prima lo era, e il codificatore poteva emettere `tipo: "saluto"` con dentro
-/// un `Annulla` — un frame che il decoder rifiuta. Non c'e' piu' uno stato in
+/// Come campo, il codificatore potrebbe emettere `tipo: "saluto"` con dentro
+/// un `Annulla` — un frame che il decoder rifiuta. Non esiste uno stato in
 /// cui i due divergano: il tipo e' una funzione del corpo.
 #[test]
 fn il_tipo_e_sempre_quello_del_corpo() {
@@ -1831,11 +1831,10 @@ fn nome_sul_filo<T: serde::Serialize>(valore: &T) -> String {
 
 /// Le due proprieta' del vocabolario che la macro **non** garantisce.
 ///
-/// L'esaustivita' non si prova piu' qui, ed e' il punto: `TUTTE` nasce dalla
+/// L'esaustivita' non si prova qui, ed e' il punto: `TUTTE` nasce dalla
 /// stessa lista che genera le varianti, quindi una variante nuova ci entra da
-/// sola. La versione precedente teneva una tabella a mano nel test —
-/// enumerava se stessa, e una variante aggiunta all'enum la lasciava
-/// invariata e il test verde.
+/// sola. Una tabella scritta a mano nel test enumererebbe se stessa: una
+/// variante aggiunta all'enum la lascerebbe invariata, e il test verde.
 ///
 /// Restano due cose che la macro non puo' garantire, ed entrambe sono difetti
 /// veri:
@@ -1921,9 +1920,9 @@ fn il_vocabolario_sul_filo_e_biunivoco() {
 
 /// I tetti della sequenza, e la relazione fra loro.
 ///
-/// `PR-4` non li usa — il contatore e' del supervisore, che e' di `PR-5` — ma
-/// il budget e' dichiarato qui, e la relazione fra i due numeri e' cio' che si
-/// puo' sbagliare senza accorgersene.
+/// Il protocollo non li usa — il contatore e' del supervisore — ma il budget
+/// e' dichiarato qui, e la relazione fra i due numeri e' cio' che si puo'
+/// sbagliare senza accorgersene.
 #[test]
 fn i_tetti_della_sequenza_sono_coerenti() {
     use super::limiti::{MAX_MESSAGGI_VERSO_SUPERVISORE, MAX_MESSAGGI_VERSO_WORKER, MAX_PROGRESSO};
@@ -1963,12 +1962,12 @@ fn ogni_tipo_ha_una_sola_direzione() {
 
 /// Nessun errore del decoder riporta cio' che ha letto.
 ///
-/// E' l'asse che il rifiuto per forma lasciava aperto: `serde` costruisce i
+/// E' l'asse che il rifiuto per forma lascia aperto: `serde` costruisce i
 /// propri messaggi **dal valore incontrato** — «invalid type: string "…"»,
 /// «unknown field `…`» — e su questo canale quel valore lo sceglie l'altro
-/// capo. Un frame malformato ad arte diventava un modo di far scrivere testo
+/// capo. Un frame malformato ad arte sarebbe un modo di far scrivere testo
 /// arbitrario nel log di chi indaga; e poiche' il `Saluto` porta il
-/// `commit_token`, il testo arbitrario poteva essere il token.
+/// `commit_token`, il testo arbitrario potrebbe essere il token.
 ///
 /// Cio' che resta e' dove, non che cosa: categoria, riga e colonna. Chi indaga
 /// ha il frame in mano.
@@ -1978,7 +1977,7 @@ fn nessun_errore_del_decoder_riporta_cio_che_ha_letto() {
     const NUMERICA: &str = "8675309124816324";
 
     let casi = [
-        // Valore di tipo sbagliato: il valore finiva in `Unexpected::Str`.
+        // Valore di tipo sbagliato: il valore finirebbe in `Unexpected::Str`.
         format!(
             r#"{{"protocol_version":"{SENTINELLA}","tipo":"annulla","corpo":{{"motivo":"x"}}}}"#
         ),

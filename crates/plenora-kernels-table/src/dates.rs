@@ -26,7 +26,7 @@ fn parse(value: &str, format: &str) -> Option<NaiveDateTime> {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path (ottimizzazione kernel data, secondo batch filone kernel).
+// Fast path dei kernel data.
 //
 // Il costo dominante dei kernel data e' doppio: la conversione scalare per
 // riga (`scalar_as_string`, con allocazione `String` per ogni valore) e il
@@ -357,9 +357,9 @@ pub struct DateDiff {
 /// qualche mese, che e' l'uso normale dell'operazione.
 ///
 /// «Fuori scala» riguarda percio' i soli nanosecondi oltre `i64`
-/// (`num_nanoseconds` restituisce `None`): circa 292 anni. La versione
-/// precedente affiancava un `to_f64()` che non fallisce mai, dichiarando un
-/// controllo di rappresentabilita' inesistente.
+/// (`num_nanoseconds` restituisce `None`): circa 292 anni. Affiancarvi un
+/// `to_f64()`, che non fallisce mai, dichiarerebbe un controllo di
+/// rappresentabilita' inesistente.
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: l'output e' Float64 per contratto.
 fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usize) -> Result<f64> {
     end.signed_duration_since(start)
@@ -641,8 +641,8 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // Percorsi generici pre-ottimizzazione: riferimento per l'equivalenza
-    // semantica (oracolo) dei fast path.
+    // Percorsi generici, indipendenti dai fast path: sono l'oracolo della
+    // loro equivalenza semantica.
     // -----------------------------------------------------------------------
 
     fn generic_date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {

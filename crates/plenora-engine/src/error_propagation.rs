@@ -2,27 +2,25 @@
 //! contesto del passo.
 //!
 //! Quando un passo fallisce, chi propaga l'errore vi aggiunge nodo e
-//! operazione. Il modo storico era avvolgere tutto in
-//! [`PlenoraError::Execution`], che pero' **sostituisce** la categoria: ogni
-//! errore diventava `execution`, exit 6, retry `Never`.
+//! operazione. Avvolgere tutto in [`PlenoraError::Execution`] e' il modo
+//! ovvio, e **sostituisce** la categoria: ogni errore diventerebbe
+//! `execution`, exit 6, retry `Never`.
 //!
-//! ## Perche' una lista non poteva funzionare
+//! ## Perche' una lista di eccezioni non puo' funzionare
 //!
-//! La prima versione di questo modulo aveva un elenco di categorie
-//! «preservate»: tre su diciotto. Era la forma sbagliata del problema, per
-//! due ragioni.
+//! Un elenco di categorie «preservate» e' la forma sbagliata del problema,
+//! per due ragioni.
 //!
-//! **Cancellava decisioni.** [`ErrorCategory::Io`] ha disposizione di
+//! **Cancella decisioni.** [`ErrorCategory::Io`] ha disposizione di
 //! ritentativo `Safe`: un errore di I/O durante lo spill e' ritentabile, e
-//! trasformarlo in `execution` lo rendeva `Never` — cioe' diceva al
-//! chiamante di non riprovare una cosa che si poteva riprovare. Lo stesso
-//! vale per `Timeout`, `Transient`, `Authentication`, `Authorization`,
+//! trasformarlo in `execution` lo renderebbe `Never` — cioe' direbbe al
+//! chiamante di non riprovare una cosa che si puo' riprovare. Lo stesso vale
+//! per `Timeout`, `Transient`, `Authentication`, `Authorization`,
 //! `NotFound`, `Conflict`: sono tutte categorie su cui un chiamante fa
-//! qualcosa di specifico, e la lista le buttava via.
+//! qualcosa di specifico, e una lista corta le butta via.
 //!
-//! **Era destinata a restare indietro.** Una lista di eccezioni va aggiornata
-//! ogni volta che si aggiunge una categoria, e nessuno se ne ricorda: quella
-//! di tre elementi ne aveva gia' dimenticate quindici.
+//! **E' destinata a restare indietro.** Una lista di eccezioni va aggiornata
+//! ogni volta che si aggiunge una categoria, e nessuno se ne ricorda.
 //!
 //! ## La regola
 //!
@@ -32,7 +30,7 @@
 //! `Execution` viene costruito solo per un fallimento che classificazione
 //! propria non ne ha — cioe' per un errore che e' gia' `Execution`.
 //!
-//! Cosi' non c'e' piu' una lista da tenere allineata: la regola vale per
+//! Cosi' non c'e' nessuna lista da tenere allineata: la regola vale per
 //! costruzione anche per le categorie che verranno.
 
 use plenora_core::ErrorCategory;
@@ -57,15 +55,14 @@ mod tests {
     fn l_elenco_delle_categorie_viene_da_una_fonte_sola() {
         // Nessuna copia locale: l'elenco e' `ErrorCategory::ALL`, e la sua
         // completezza e' presidiata in `plenora-core` dalla coppia
-        // `ALL` + `index` (match esaustivo). La versione precedente di
-        // questo test aveva un array scritto a mano e verificava
-        // `len() == 18` sul PROPRIO array: una condizione che sarebbe
-        // rimasta vera aggiungendo una diciannovesima variante all'enum.
-        // Prometteva un controllo che non faceva.
+        // `ALL` + `index` (match esaustivo). Un array scritto a mano qui,
+        // verificato con `len() == 18`, resterebbe vero aggiungendo una
+        // diciannovesima variante all'enum: prometterebbe un controllo che
+        // non fa.
         //
         // «Canonica» sarebbe la parola sbagliata per la fonte: diciotto
-        // categorie vengono dal canone congelato, due sono estensioni locali
-        // della Fase 4. Cio' che conta qui e' che la fonte sia UNA.
+        // categorie vengono dal canone congelato, due sono estensioni locali.
+        // Cio' che conta qui e' che la fonte sia UNA.
         assert!(
             !ErrorCategory::ALL.is_empty(),
             "l'elenco delle categorie supportate non e' vuoto"
@@ -87,9 +84,9 @@ mod tests {
 
     #[test]
     fn le_categorie_ritentabili_non_diventano_definitive() {
-        // La conseguenza piu' concreta della regola vecchia: un errore
-        // ritentabile che diventa `execution` diventa anche `Never`. Il test
-        // nomina le categorie per cui questo era un danno diretto.
+        // La conseguenza piu' concreta della sostituzione: un errore
+        // ritentabile che diventasse `execution` diventerebbe anche `Never`.
+        // Il test nomina le categorie per cui il danno sarebbe diretto.
         for categoria in [
             ErrorCategory::Io,
             ErrorCategory::Timeout,

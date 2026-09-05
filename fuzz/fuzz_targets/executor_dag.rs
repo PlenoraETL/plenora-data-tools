@@ -1,6 +1,6 @@
 #![no_main]
 
-//! Executor DAG (Fase 2A-4): piani v4 arbitrari ma validi (catene unarie,
+//! Executor DAG: piani v4 arbitrari ma validi (catene unarie,
 //! un nodo binario, catena geo buffer->area) su piccoli input generati dal
 //! payload. Pipeline completa `planner::validate` -> `execute` -> drenaggio
 //! dello stream. Invarianti: mai panic; batch internamente coerenti (ogni

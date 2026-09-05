@@ -5,12 +5,12 @@ I target sono elencati in **quattro** posti — il manifesto `fuzz/Cargo.toml`,
 la matrice notturna, lo smoke locale e la campagna lunga — e tre di quegli
 elenchi sono copie a mano. Una copia a mano diverge, e diverge in silenzio:
 
-- il 2026-08-20 `plan_v4_parse` e' diventato `plan_v5_parse`. La matrice
-  notturna e' stata aggiornata, i due script locali no. La campagna lunga si
-  fermava sul target inesistente, e lo smoke registrava l'errore nel riepilogo
-  **uscendo 0**, quindi passava per riuscito;
-- l'effetto non era «un nome sbagliato»: era che la copertura nuova non veniva
-  mai esercitata in locale, mentre il riepilogo diceva il contrario.
+- una rinomina (`plan_v4_parse` in `plan_v5_parse`) puo' aggiornare la matrice
+  notturna e non i due script locali. La campagna lunga si ferma allora sul
+  target inesistente, e lo smoke registra l'errore nel riepilogo **uscendo
+  0**, quindi passa per riuscito;
+- l'effetto non e' «un nome sbagliato»: e' che la copertura nuova non viene
+  mai esercitata in locale, mentre il riepilogo dice il contrario.
 
 Questo gate confronta i tre elenchi col manifesto, che e' l'unico verificato
 dal compilatore.
@@ -141,12 +141,11 @@ SORGENTI_SINTETICHE = {
 def prova_di_mutazione():
     """Il gate deve vedere le forme in cui un elenco puo' divergere.
 
-    Le sorgenti sono **sintetiche**, non quelle del repository. Una prima
-    stesura mutava i file veri, e aveva un difetto che si e' visto subito: col
-    difetto gia' presente la mutazione non si applicava, e il gate abortiva
-    con «mutazione non applicata» invece di segnalare il difetto che aveva
-    davanti. Una prova che dipende dallo stato che deve giudicare non e' una
-    prova.
+    Le sorgenti sono **sintetiche**, non quelle del repository: mutare i file
+    veri renderebbe la prova dipendente dallo stato che deve giudicare. Col
+    difetto gia' presente la mutazione non si applica, e il gate abortisce
+    con «mutazione non applicata» invece di segnalare il difetto che ha
+    davanti.
     """
     if controlla(SORGENTI_SINTETICHE):
         raise SystemExit('le sorgenti sintetiche di controllo non sono coerenti')

@@ -6,13 +6,14 @@
 //!
 //! # Perche' e' in `plenora-core`
 //!
-//! Il codec stava in `plenora-kernels-geo::arrow_adapter`, insieme alle
-//! operazioni sulle celle WKB. Due componenti diversi lo usavano per decidere
-//! come interpretare ed emettere uno schema — la CLI in ingresso, l'executor
-//! in uscita — e ciascuno ne ricavava le proprie conclusioni.
+//! Due componenti diversi decidono con questo codec come interpretare ed
+//! emettere uno schema: la CLI in ingresso, l'executor in uscita. Se il codec
+//! vivesse in `plenora-kernels-geo`, insieme alle operazioni sulle celle WKB,
+//! nessuno dei due lo avrebbe sotto di se' e ciascuno ne ricaverebbe le
+//! proprie conclusioni.
 //!
-//! Con l'esecuzione isolata in un processo worker quel confine smette di
-//! essere una questione di ordine e diventa un protocollo: supervisore e
+//! Con l'esecuzione isolata in un processo worker quel confine non e' una
+//! questione di ordine ma un protocollo: supervisore e
 //! worker devono leggere lo stesso schema allo stesso modo, altrimenti la
 //! verifica della pubblicazione confronta due interpretazioni invece di due
 //! risultati. L'autorita' deve quindi stare sotto entrambi, e `plenora-core`
@@ -35,8 +36,8 @@ use crate::crs::{
 use crate::PlenoraError;
 
 // Le cinque chiavi che il contratto dichiara gia' sono ri-esportate da qui:
-// chi legge o scrive metadati ha un solo posto dove cercarle, e i chiamanti
-// che le raggiungevano attraverso l'adapter geo continuano a funzionare.
+// chi legge o scrive metadati ha un solo posto dove cercarle, e chi le
+// raggiunge attraverso l'adapter geo continua a trovarle.
 pub use crate::contract::{
     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_DIMENSIONS_KEY,
     PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
@@ -108,7 +109,7 @@ const MAX_CRS_ID_BYTES: usize = 1_024;
 /// Coordinate massime per cella: una cella da 64 MiB contiene al piu' 16 byte
 /// per coordinata XY.
 ///
-/// Scelta B1.3 (documentata): il bound NON e' reso stride-aware. Con Z/M lo
+/// Scelta dichiarata: il bound NON e' reso stride-aware. Con Z/M lo
 /// stride reale e' 24/32 byte e il conteggio massimo reale scende, quindi il
 /// bound su 16 byte resta permissivo ma sempre sicuro (mai sotto il reale);
 /// irrigidirlo richiederebbe la dimensionalita' risolta, che per `Unknown`
@@ -178,7 +179,7 @@ pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, Pleno
 /// Metadato `GeoArrow` `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
 ///
-/// Casa unica del formato (unificazione B1.1): anche il trasporto Arrow v3 di
+/// Casa unica del formato: anche il trasporto Arrow v3 di
 /// `plenora-engine` delega qui, quindi il JSON in uscita e' identico
 /// byte-per-byte nei due percorsi.
 ///
@@ -195,8 +196,9 @@ pub fn geo_metadata_json(crs: &str) -> Result<String, PlenoraError> {
 /// Come [`geo_metadata_json`], con in piu' la chiave `dimensions` in forma
 /// ICD ([`GeometryDimensions::as_str`]).
 ///
-/// La propagazione reale della dimensionalita' e' milestone B1.3: qui la
-/// scriviamo solo per dichiararla.
+/// La dimensionalita' qui viene solo DICHIARATA nei metadati: nessun
+/// percorso la propaga dai dati, e il valore e' quello che il chiamante
+/// passa.
 ///
 /// # Errors
 ///
@@ -213,8 +215,8 @@ pub fn geo_metadata_json_with_dimensions(
 /// la dichiara (`Some`).
 ///
 /// Con `None` la chiave e' omessa e il JSON e' identico byte-per-byte a
-/// [`geo_metadata_json_with_dimensions`] (fingerprint e retrocompatibilita'
-/// invariati — B1.4).
+/// [`geo_metadata_json_with_dimensions`]: fingerprint e retrocompatibilita'
+/// restano invariati per chi non dichiara l'encoding.
 ///
 /// # Errors
 ///
@@ -265,9 +267,9 @@ fn geo_metadata_map(crs: &str) -> Result<serde_json::Map<String, serde_json::Val
 /// Campo `Binary` di output con metadati `geoarrow.wkb` e `geo.crs` +
 /// `geo.dimensions`.
 ///
-/// B1.1: la dimensionalita' scritta e' sempre `Xy` (i costruttori attuali
-/// producono WKB 2D); la propagazione della dimensionalita' reale e'
-/// milestone B1.3.
+/// La dimensionalita' scritta e' sempre `Xy`, perche' i costruttori che
+/// passano di qui producono WKB 2D. Non e' la dimensionalita' letta dai
+/// dati: nessun percorso la propaga.
 ///
 /// # Errors
 ///
@@ -276,8 +278,8 @@ pub fn geometry_output_field(name: &str, crs: &str) -> Result<Field, PlenoraErro
     geometry_output_field_with_dimensions(name, crs, GeometryDimensions::Xy)
 }
 
-/// Come [`geometry_output_field`], con la dimensionalita' dichiarata
-/// esplicitamente (pronto per la propagazione di B1.3).
+/// Come [`geometry_output_field`], con la dimensionalita' dichiarata dal
+/// chiamante invece che fissata a `Xy`.
 ///
 /// # Errors
 ///
@@ -293,7 +295,7 @@ pub fn geometry_output_field_with_dimensions(
 /// Come [`geometry_output_field_with_dimensions`], con in piu' la chiave
 /// `geo.encoding` quando il contratto la dichiara (`Some`).
 ///
-/// B1.4: un contratto con encoding dichiarato che attraversa un kernel che
+/// Un contratto con encoding dichiarato che attraversa un kernel che
 /// riscrive il campo (es. `reproject`) conserva la chiave nel metadato
 /// riscritto, coerente col contratto. Con `None` la chiave e' omessa e il
 /// metadato e' identico byte-per-byte alla forma senza encoding (fingerprint
@@ -323,10 +325,10 @@ pub fn geometry_output_field_with_encoding(
 
 /// Dimensionalita' dichiarata nel metadato `geo` di un campo geometria.
 ///
-/// Lettura opzionale pronta per B1.3: chiave assente, JSON non valido o
-/// valore non riconosciuto → [`GeometryDimensions::Unknown`] (R3.4: MAI un
-/// default silenzioso `Xy`). La discovery di B1.3 potra' rendere il valore
-/// non riconosciuto un errore esplicito; questa lettura non decide.
+/// Lettura opzionale e lenient di proposito: chiave assente, JSON non valido
+/// o valore non riconosciuto → [`GeometryDimensions::Unknown`] (R3.4: MAI un
+/// default silenzioso `Xy`). Se un valore non riconosciuto sia un errore lo
+/// decide la discovery, non questa lettura.
 #[must_use]
 pub fn geometry_dimensions_from_metadata(field: &Field) -> GeometryDimensions {
     geo_metadata_value_lenient(field)
@@ -342,8 +344,8 @@ pub fn geometry_dimensions_from_metadata(field: &Field) -> GeometryDimensions {
 
 /// Encoding dichiarato nel metadato `geo` di un campo geometria.
 ///
-/// Lettura opzionale pronta per B1.3: chiave assente, JSON non valido o
-/// valore non riconosciuto → `None` (R3.4/R3.5: MAI un default silenzioso;
+/// Lettura opzionale e lenient di proposito: chiave assente, JSON non valido
+/// o valore non riconosciuto → `None` (R3.4/R3.5: MAI un default silenzioso;
 /// R3.5: valori fuori dall'enum chiuso non sono rappresentabili).
 #[must_use]
 pub fn geometry_encoding_from_metadata(field: &Field) -> Option<GeometryEncoding> {
@@ -355,8 +357,7 @@ pub fn geometry_encoding_from_metadata(field: &Field) -> Option<GeometryEncoding
     })
 }
 
-/// Variante STRICT di [`geometry_encoding_from_metadata`] per la discovery
-/// (B1.3).
+/// Variante STRICT di [`geometry_encoding_from_metadata`], per la discovery.
 ///
 /// La chiave `encoding` presente ma fuori dall'enum chiuso (R3.5: header
 /// `GeoPackage`, TWKB, valori non testuali) e' un framing non rappresentabile
@@ -397,12 +398,12 @@ pub fn geometry_encoding_from_metadata_strict(
 /// `Ok(None)` = chiave ASSENTE. JSON malformato = `Err`.
 ///
 /// La distinzione e' il punto: piano-v5.md#contratti-di-input (R5.1) impone che «illeggibile» non
-/// equivalga ad «assente». Con il `.ok()` che questa funzione usava prima, un
-/// metadato `geo` malformato diventava indistinguibile da uno mancante, e la
-/// risoluzione del contratto proseguiva completando le nozioni dalle sole
-/// chiavi canoniche — ignorando in silenzio un legacy coesistente che non era
-/// riuscita a leggere. Un input corrotto veniva cosi' accettato come se
-/// dichiarasse solo cio' che si era capito di lui.
+/// equivalga ad «assente». Ridurre l'errore con un `.ok()` renderebbe un
+/// metadato `geo` malformato indistinguibile da uno mancante, e la
+/// risoluzione del contratto proseguirebbe completando le nozioni dalle sole
+/// chiavi canoniche — ignorando in silenzio un legacy coesistente che non e'
+/// riuscita a leggere. Un input corrotto sarebbe cosi' accettato come se
+/// dichiarasse solo cio' che si e' capito di lui.
 ///
 /// # Errors
 ///
@@ -443,7 +444,7 @@ fn geo_metadata_value_lenient(field: &Field) -> Option<serde_json::Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Milestone B — protocollo delle chiavi canoniche (contratti trasversali
+// Protocollo delle chiavi canoniche (contratti trasversali
 // v2.0-rc10 §2, proposta in attesa di ratifica): emissione da
 // `GeometryColumnContract`, lettura fail-closed per chiave (R5.1), coerenza
 // canonica-vs-legacy (R2.6) e completamento per precedenza (R2.7).
@@ -534,7 +535,7 @@ pub struct GeometryMetadataDetails {
 /// Le chiavi `GeoArrow` (`ARROW:extension:name`, `geo`) RESTANO emesse dai
 /// costruttori esistenti (R2.6 ammette la coesistenza se coerente): questa
 /// funzione produce solo il blocco canonico; la fusione nei campi di output
-/// e' responsabilita' del chiamante (milestone di wiring), cosi' come
+/// e' responsabilita' del chiamante, cosi' come
 /// l'aggiunta di `plenora.contract.version` nei metadati dello schema
 /// ([`canonical_schema_version_metadata`]).
 #[must_use]
@@ -581,7 +582,7 @@ pub fn canonical_geometry_metadata(
             definition_format,
         } => {
             // R4.6.4: le dichiarazioni originali sono ri-emesse invariate —
-            // l'incoerenza arriva al bordo di scrittura com'era, mai persa
+            // l'incoerenza arriva al bordo di scrittura com'e', mai persa
             // e mai conciliata. `axis_order` e' emesso come per `resolved`
             // (obbligatorio per la tabella R2.2 quando `crs_id` o
             // `crs_definition` e' presente): qui NON c'e' un `ResolvedCrs`
@@ -658,10 +659,10 @@ pub fn canonical_geometry_metadata(
 /// forma → `crs_id`. E' la stessa distinzione che [`geo_metadata_json`]
 /// applica al metadato legacy `geo.crs` (oggetto JSON incorporato vs
 /// stringa authority:code), cosi' le due rappresentazioni restano coerenti
-/// per costruzione (R2.6); prima dell'emendamento ogni testo non-JSON
-/// finiva in `crs_id` — sbagliato per WKT, che avrebbe rotto il
-/// passthrough R2.6 contro una lineage `crs_definition = wkt`. Limite
-/// preesistente invariato: una proj-string non ha formato nella tabella §2
+/// per costruzione (R2.6). Mandare ogni testo non-JSON in `crs_id` sarebbe
+/// sbagliato per il WKT: romperebbe il passthrough R2.6 contro una lineage
+/// `crs_definition = wkt`. Limite dichiarato: una proj-string non ha formato
+/// nella tabella §2
 /// e resta in `crs_id` ([`DefinitionForm::Other`]).
 ///
 /// `axis_order` e' sempre emesso (obbligatorio quando un CRS e' presente)
@@ -728,8 +729,8 @@ fn insert_resolved_crs_keys(
 /// Blocco canonico R2.2 da una definizione CRS gia' risolta al bordo del
 /// produttore, senza un [`ResolvedCrs`].
 ///
-/// BLOCK-06 (decisione owner 2026-07-30 — parita' del percorso legacy col
-/// v4, errori-e-limiti.md#limiti-dichiarati estesa): il trasporto legacy `geo_transport` valida il CRS
+/// BLOCK-06 (parita' del percorso legacy col v4,
+/// errori-e-limiti.md#limiti-dichiarati estesa): il trasporto legacy `geo_transport` valida il CRS
 /// al livello comandi (risoluzione PROJ obbligatoria in `publish.rs`) e
 /// trasporta la sola definizione; un `ResolvedCrs` richiederebbe una
 /// risoluzione che il trasporto non esegue.

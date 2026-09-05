@@ -1,5 +1,5 @@
 //! Executor tabellare: validazione delle config per singolo passo ed
-//! esecuzione della catena (port da `plenora-nogeo-tools/src/engine.rs`).
+//! esecuzione della catena.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -976,8 +976,8 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
         }
     }
     // Le colonne derivano dall'input: con un batch a zero colonne e i
-    // metadata `pandas` da rimuovere, `try_new` RIFIUTAVA di costruire il
-    // batch: un'operazione legittima falliva.
+    // metadata `pandas` da rimuovere, `try_new` RIFIUTEREBBE di costruire il
+    // batch, e un'operazione legittima fallirebbe.
     plenora_core::batch_with_rows(
         Arc::new(Schema::new_with_metadata(fields, metadata)),
         columns,
@@ -1389,7 +1389,7 @@ fn execute_step(
 }
 
 // ---------------------------------------------------------------------------
-// Selezione dello spill unario (architettura.md#memoria, Fase 2B)
+// Selezione dello spill unario (architettura.md#memoria)
 // ---------------------------------------------------------------------------
 
 /// Il piano unario e' spill-capable: un solo passo `sort`/`distinct`/
@@ -1501,7 +1501,7 @@ pub fn execute_complete_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Resul
 }
 
 /// Come [`execute_batch`], ma con la directory di spill decisa dal
-/// chiamante (architettura.md#memoria, Fase 2B, spill generalizzato).
+/// chiamante (architettura.md#memoria, spill generalizzato).
 ///
 /// `Some(dir)` instrada i file di spill di
 /// `sort`/`distinct`/`aggregate` nella directory condivisa dell'esecuzione
@@ -1543,10 +1543,10 @@ pub(crate) fn execute_batch_with_spill_row_diagnostics(
 /// L'equivalente DAG e' `executor::step_error`. Qui vale la stessa regola: un
 /// errore che porta una CATEGORIA da preservare non viene avvolto in
 /// `Execution`, perche' l'involucro la sostituirebbe con `execution` e
-/// l'exit code 6. Prima l'avvolgimento era incondizionato, quindi un limite
-/// di risorsa alzato da un kernel usciva dal percorso legacy come
-/// `execution` anche dopo che il percorso DAG era stato corretto: la stessa
-/// esecuzione dava due categorie diverse a seconda della versione del piano.
+/// l'exit code 6. Con un avvolgimento incondizionato un limite di risorsa
+/// alzato da un kernel uscirebbe dal percorso legacy come `execution` mentre
+/// il percorso DAG lo conserva: la stessa esecuzione darebbe due categorie
+/// diverse a seconda della versione del piano.
 ///
 /// Le categorie preservate sono quelle su cui il chiamante DECIDE in modo
 /// diverso da «il passo e' fallito»: `ResourceLimit` (rilancia con piu'
@@ -1647,7 +1647,7 @@ pub fn execute_binary(
         PreparedStep::UnionDistinct(_) | PreparedStep::Intersect(_) | PreparedStep::Except(_)
     ) && spill::should_spill(&left, &right, plan.limits())
     {
-        // NOTA (Fase 2B, spill generalizzato): il set-op spilled usa ancora una tempdir
+        // NOTA (spill generalizzato): il set-op spilled usa ancora una tempdir
         // posseduta interna a `execute_set_operation` — kernels-table non
         // espone una variante `*_in` con workspace del chiamante per i
         // set-op, quindi questo percorso NON transita dalla directory

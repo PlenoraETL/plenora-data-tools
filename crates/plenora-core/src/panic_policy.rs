@@ -13,10 +13,10 @@
 //! di essi: la barriera `catch_unwind` di [`crate`] converte il panico in
 //! errore, non impedisce all'hook di averlo gia' pubblicato.
 //!
-//! Finora l'hook veniva silenziato solo nel `main` della CLI. Per un
-//! consumatore che ci carica come libreria — in particolare per il futuro
-//! binding `PyO3`, dove lo stderr del processo e' quello dell'interprete Python
-//! dell'utente — la garanzia non esisteva.
+//! Silenziare l'hook nel solo `main` della CLI non basta: un consumatore che
+//! ci carica come libreria — un binding `PyO3`, dove lo stderr del processo
+//! e' quello dell'interprete Python dell'utente — resterebbe senza la
+//! garanzia. La politica sta quindi qui, dove entrambi la raggiungono.
 //!
 //! ## La politica
 //!
@@ -60,7 +60,7 @@
 //!
 //! ## Che cosa deve fare il chiamante con l'esito
 //!
-//! [`install`] restituisce `false` quando qualcun altro era arrivato prima.
+//! [`install`] restituisce `false` quando qualcun altro e' arrivato prima.
 //! Le regole del progetto:
 //!
 //! - **CLI**: e' il processo, ed e' la prima istruzione di `main`. Un `false`
@@ -208,9 +208,9 @@ mod tests {
     fn l_installazione_e_idempotente_fra_le_chiamate_a_questa_api() {
         // Il primo che passa DI QUI vince. E' tutto cio' che `Once` puo'
         // fare: `std::panic::set_hook` resta pubblico e chiunque puo'
-        // chiamarlo dopo di noi. Il nome del test dice l'ambito reale della
-        // proprieta', perche' prima diceva «non rientrante» e si leggeva come
-        // una garanzia sull'intero processo.
+        // chiamarlo dopo di noi. Il nome del test dice quell'ambito e non di
+        // piu': «non rientrante» si leggerebbe come una garanzia sull'intero
+        // processo, che questo test non puo' dare.
         let primo = install(PanicPolicy::Silent);
         let secondo = install(PanicPolicy::Sanitized);
         let terzo = install(PanicPolicy::Silent);

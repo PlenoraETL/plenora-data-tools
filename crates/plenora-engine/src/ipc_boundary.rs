@@ -16,12 +16,13 @@
 //!    tetto proprio. `catch_unwind` non protegge da un OOM: l'unica difesa e'
 //!    pre-validare il framing e i limiti PRIMA che arrow veda i byte.
 //!
-//! Il trasporto geo aveva gia' entrambe le difese sul proprio payload in
-//! memoria ([`crate::geo_transport::ipc::decode_ipc`]), ma le normali API di
-//! ingresso — `Input::read_ipc_file` / `read_ipc_stream` dell'executor e la
-//! discovery dello schema della CLI — aprivano `FileReader` e `StreamReader`
-//! direttamente, scavalcando la barriera. Questo modulo e' l'unico lettore di
-//! confine: tutti gli ingressi file/stream/CLI passano di qui.
+//! Il trasporto geo ha entrambe le difese sul proprio payload in memoria
+//! ([`crate::geo_transport::ipc::decode_ipc`]), ma non basta: aprendo
+//! `FileReader` e `StreamReader` direttamente — come farebbero
+//! `Input::read_ipc_file` / `read_ipc_stream` dell'executor e la discovery
+//! dello schema della CLI — la barriera sarebbe scavalcata. Questo modulo e'
+//! l'unico lettore di confine: tutti gli ingressi file/stream/CLI passano di
+//! qui.
 //!
 //! # Cosa NON copre
 //!
@@ -35,8 +36,8 @@
 //! time-of-use: fra i due c'e' una finestra. Il confine la restringe usando
 //! un solo handle aperto una volta ([`validated_handle`] restituisce il file
 //! riavvolto, mai il percorso), il che esclude la sostituzione del path —
-//! rename, symlink swap, ricreazione — ma non uno scrittore concorrente che
-//! riscriva lo stesso inode. In quel caso resta attiva la barriera
+//! rename, symlink swap, ricreazione — ma non uno scrittore concorrente sullo
+//! stesso inode. In quel caso resta attiva la barriera
 //! anti-panico e decade il tetto sulle allocazioni, che vale solo sui byte
 //! effettivamente controllati. La condizione e' dichiarata in errori-e-limiti.md#limiti-dichiarati
 //! (`docs/errori-e-limiti.md`) con il requisito operativo corrispondente.
@@ -73,25 +74,25 @@ pub enum IpcFormat {
 /// record batch, complessita' dello schema, dimensione dello stream — sono
 /// limiti, non dati malformati: escono come [`PlenoraError::ResourceLimit`],
 /// che e' la categoria su cui il chiamante decide di rilanciare con piu'
-/// budget. Uscivano tutti come `data_mapping`, indistinguibili da un file
-/// corrotto. Il framing malformato resta `data_mapping`: li' il file e'
-/// davvero rotto.
+/// budget. Farli uscire tutti come `data_mapping` li renderebbe
+/// indistinguibili da un file corrotto. Il framing malformato resta
+/// `data_mapping`: li' il file e' davvero rotto.
 ///
 /// La fase resta `Read` per entrambi: il tag del confine vince sulla
 /// derivazione per variante, e questi errori nascono leggendo.
-fn read_error(error: ArrowTransportError) -> PlenoraError {
+pub(crate) fn read_error(error: ArrowTransportError) -> PlenoraError {
     // Il tag di fase si applica **una volta sola**, qui.
     //
-    // La stesura precedente lo applicava dentro la traduzione, e il ramo
-    // ricorsivo della diagnostica ne produceva due annidati:
+    // Applicandolo dentro la traduzione, il ramo ricorsivo della
+    // diagnostica ne produrrebbe due annidati:
     //
     //     Tagged(Read) -> RowDiagnostics -> Tagged(Read) -> ResourceLimit
     //
     // `with_phase` evita di riavvolgere un errore gia' `Tagged`, ma dopo
-    // `with_row_diagnostics` l'esterno non e' piu' `Tagged`, quindi la
-    // difesa non scattava. Categoria, fase e payload restavano corretti —
-    // ed e' la ragione per cui i test passavano — ma la proprieta' che
-    // `with_phase` dichiara, niente tag annidati, era violata.
+    // `with_row_diagnostics` l'esterno non e' piu' `Tagged`, quindi quella
+    // difesa non scatterebbe. Categoria, fase e payload resterebbero
+    // corretti — nessun test se ne accorgerebbe — ma la proprieta' che
+    // `with_phase` dichiara, niente tag annidati, sarebbe violata.
     traduci_errore_di_lettura(error).with_phase(ErrorPhase::Read)
 }
 
@@ -111,12 +112,12 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
     match error {
         // --- I/O: la causa si conserva, non si stampa ----------------------
         //
-        // La versione precedente lo classificava `DataMapping`, cioe' «il file
-        // e' rotto», e ne teneva solo il testo. Un disco che non risponde
-        // durante `read_at` o `rewind` diventava cosi' un file corrotto, e
-        // mandava chi legge a cercare un difetto nei dati. Consumare l'errore
-        // invece di prenderlo a prestito e' cio' che permette di preservare
-        // lo `std::io::Error` originale.
+        // Classificarlo `DataMapping` direbbe «il file e' rotto» e ne
+        // terrebbe solo il testo: un disco che non risponde durante `read_at`
+        // o `rewind` diventerebbe un file corrotto, e manderebbe chi legge a
+        // cercare un difetto nei dati. Consumare l'errore invece di prenderlo
+        // a prestito e' cio' che permette di preservare lo `std::io::Error`
+        // originale.
         E::Io(io) => PlenoraError::Io(io),
 
         // --- Limiti: il file c'e' ed e' piu' grande di quanto ammettiamo ---
@@ -127,6 +128,7 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
         | E::CellTooLarge(_)
         | E::IpcMetadataTooLarge(_, _)
         | E::IpcBodyTooLarge { .. }
+        | E::IpcRetainedDictionariesTooLarge { .. }
         | E::IpcTooManyMessages(_, _)
         | E::IpcSchemaTooComplex(_)
         | E::IpcTooManyRecordBatches(_, _)
@@ -173,12 +175,11 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
         // Parametri di operazione, kernel, join, backend: nascono ESEGUENDO, e
         // questa funzione traduce solo gli errori del lettore di confine.
         //
-        // La stesura precedente le lasciava in `DataMapping` «per non cambiare
-        // comportamento su un percorso che non dovrebbe esistere». Era la
-        // stessa classe del difetto su `Io`, appena corretto: una causa
-        // interna attribuita ai dati. Conservare il vecchio fallback non e'
-        // compatibilita' — e' conservare una diagnosi falsa proprio dove il
-        // codice dichiara che non puo' succedere.
+        // Lasciarle in `DataMapping` «per non cambiare comportamento su un
+        // percorso che non dovrebbe esistere» sarebbe la stessa classe di
+        // difetto che si evita su `Io`: una causa interna attribuita ai dati.
+        // Non e' compatibilita' — e' una diagnosi falsa conservata proprio
+        // dove il codice dichiara che non puo' succedere.
         //
         // Il testo e' **statico**: non porta nulla dell'errore originale,
         // perche' `Internal` dice «difetto nostro» e il messaggio nomina il
@@ -207,10 +208,10 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
 
         // --- Diagnostica di riga: si classifica la causa e si RIATTACCA ----
         //
-        // La categoria appartiene alla causa, non all'involucro. Ma la
-        // stesura precedente ricorreva **scartando** `diagnostics`: la
-        // categoria sopravviveva e il payload no, cioe' si perdeva
-        // silenziosamente l'informazione piu' specifica che l'errore avesse.
+        // La categoria appartiene alla causa, non all'involucro — ma
+        // ricorrere **scartando** `diagnostics` salverebbe la categoria e non
+        // il payload, cioe' perderebbe in silenzio l'informazione piu'
+        // specifica che l'errore porta.
         //
         // Riattaccarla costa una riga ed e' corretto comunque, che questo ramo
         // sia raggiungibile o no dal confine — e non obbliga a decidere una
@@ -395,6 +396,134 @@ pub fn open_with_format(
     })
 }
 
+/// Un artefatto Arrow IPC **file format** il cui framing e' stato convalidato,
+/// ancora aperto sullo stesso handle.
+///
+/// # Che cosa il tipo garantisce
+///
+/// Che non esista un modo di averne uno **senza essere passati dalla
+/// convalida**: il campo e' privato, non c'e' costruttore, e l'unica funzione
+/// che ne rende uno e' [`convalida_artefatto`], che il framing lo verifica.
+/// Non e' un wrapper nominalmente «validato» — quello sarebbe una promessa
+/// scritta nella doc e non nel tipo — e' l'uscita della verifica.
+///
+/// Ne segue che il resto del percorso non puo' sbagliare handle: digest e
+/// consegna ad arrow prendono **questo**, e riferiscono per costruzione allo
+/// stesso file che e' stato convalidato.
+///
+/// Resta la non-garanzia dichiarata altrove: un handle aperto difende dalla
+/// **sostituzione** del percorso, non dalla **mutazione in place** dei byte.
+// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
+// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
+// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
+// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
+// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
+// tracciata a meta'.
+//
+// Regola, perimetro e condizione di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
+pub(crate) struct ArtefattoConvalidato {
+    sorgente: crate::geo_transport::ipc::SeekSource<File>,
+    byte_totali: u64,
+}
+
+#[cfg(any(test, feature = "internals"))]
+impl ArtefattoConvalidato {
+    /// I byte del file, misurati all'apertura.
+    pub(crate) const fn byte_totali(&self) -> u64 {
+        self.byte_totali
+    }
+
+    /// Legge una finestra per offset, senza spostare cio' che arrow leggera'.
+    ///
+    /// # Errors
+    ///
+    /// `PlenoraError::Io` taggato [`ErrorPhase::Read`].
+    pub(crate) fn leggi_a(&mut self, offset: u64, len: usize, out: &mut Vec<u8>) -> Result<()> {
+        use crate::geo_transport::ipc::IpcSource as _;
+        self.sorgente.read_at(offset, len, out).map_err(read_error)
+    }
+
+    /// Riavvolge e consegna i batch ad arrow, dentro la barriera anti-panico.
+    ///
+    /// Il riavvolgimento avviene qui e non a carico del chiamante: dimenticarlo
+    /// darebbe ad arrow un handle a meta' file, e non e' un errore che si
+    /// debba poter fare.
+    ///
+    /// # Errors
+    ///
+    /// Come [`open_with_format`], meno gli errori di apertura.
+    pub(crate) fn in_batches(self) -> Result<(SchemaRef, BoundaryBatches)> {
+        let file = self.sorgente.rewind().map_err(read_error)?;
+        guarded(move || {
+            let reader = FileReader::try_new(file, None)
+                .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Read))?;
+            let schema = reader.schema();
+            Ok((
+                schema,
+                BoundaryBatches {
+                    reader: BoundaryReader::File(Box::new(reader)),
+                    poisoned: false,
+                },
+            ))
+        })
+    }
+}
+
+/// Apre un artefatto, ne convalida il framing e ne estrae la chiave richiesta
+/// dai custom metadata del footer, **in una traversata sola**.
+///
+/// E' l'unico costruttore di [`ArtefattoConvalidato`], ed e' cio' che rende
+/// quel tipo una prova invece di un'etichetta.
+///
+/// # Perche' non basta [`open`]
+///
+/// Quella riapre per percorso a ogni passo. Il verificatore deve riferire
+/// framing, estrazione del token, digest e consegna ad arrow **allo stesso
+/// handle**: fra due aperture, il percorso puo' puntare altrove.
+///
+/// Resta **`pub(crate)`**: la superficie pubblica del confine non cambia.
+///
+/// # Errors
+///
+/// Gli errori del confine, taggati [`ErrorPhase::Read`]: `Io` sull'apertura,
+/// `ResourceLimit` sui tetti — compreso quello cumulativo sui dizionari —
+/// `DataMapping` sul framing malformato.
+// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
+// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
+// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
+// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
+// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
+// tracciata a meta'.
+//
+// Regola, perimetro e condizione di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+#[cfg(any(test, feature = "internals"))]
+pub(crate) fn convalida_artefatto(
+    percorso: &Path,
+    limits: &IpcLimits,
+    chiave: &str,
+) -> Result<(Option<String>, ArtefattoConvalidato)> {
+    use crate::geo_transport::ipc::{valida_file_ed_estrai, SeekSource};
+
+    let file = File::open(percorso)
+        .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?;
+    let byte_totali = file
+        .metadata()
+        .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?
+        .len();
+    let mut sorgente = SeekSource::new(file, byte_totali);
+    let trovato = valida_file_ed_estrai(&mut sorgente, limits, Some(chiave)).map_err(read_error)?;
+    Ok((
+        trovato,
+        ArtefattoConvalidato {
+            sorgente,
+            byte_totali,
+        },
+    ))
+}
+
 /// Apre un ingresso IPC riconoscendone il formato dal magic.
 ///
 /// # Errors
@@ -421,11 +550,10 @@ pub fn header_schema(path: &Path, limits: &IpcLimits) -> Result<SchemaRef> {
 /// Il tetto sul body e' il PIU' STRETTO fra i limiti che il batch dovra'
 /// rispettare comunque: `max_batch_bytes` (con cui l'executor misura il batch
 /// risultante), `max_governed_memory_bytes` (il budget del governor) e
-/// `max_payload_bytes`. Derivarlo dal solo `max_batch_bytes` lasciava arrow
-/// allocare fino al tetto di default del body (64 MiB) anche con un budget di
-/// memoria di 1 MiB, e il
-/// governor interveniva solo dopo la materializzazione — cioe' dopo
-/// l'allocazione che il tetto deve impedire.
+/// `max_payload_bytes`. Derivarlo dal solo `max_batch_bytes` lascerebbe
+/// arrow allocare fino al tetto di default del body (64 MiB) anche con un
+/// budget di memoria di 1 MiB, e il governor interverrebbe solo dopo la
+/// materializzazione — cioe' dopo l'allocazione che il tetto deve impedire.
 ///
 /// `max_batches` e' il limite semantico dei RECORD BATCH, non dei messaggi:
 /// lo schema e i `DictionaryBatch` hanno il proprio tetto, altrimenti un
@@ -442,9 +570,9 @@ pub fn limits_from_plan(
         .min(limits.max_payload_bytes);
     IpcLimits {
         // Anche i METADATI sono un'allocazione, e arrow li alloca prima di
-        // qualunque batch: lasciarli al default significava permettere 16 MiB
-        // di metadati sotto un budget di memoria di 1 MiB — cioe' sforare il
-        // budget prima ancora di leggere una riga. Il tetto e' il piu'
+        // qualunque batch: lasciarli al default significherebbe permettere
+        // 16 MiB di metadati sotto un budget di memoria di 1 MiB — cioe'
+        // sforare il budget prima ancora di leggere una riga. Il tetto e' il piu'
         // stretto fra il default e il budget effettivo.
         max_metadata_bytes: usize::try_from(
             u64::try_from(default.max_metadata_bytes)
@@ -455,16 +583,21 @@ pub fn limits_from_plan(
         max_body_bytes: tetto,
         max_record_batches: usize::try_from(limits.max_batches).unwrap_or(usize::MAX),
         max_messages: default.max_messages,
+        // Anche i dizionari sono un'allocazione dentro il budget, e a
+        // differenza dei batch restano vivi tutti insieme: lasciarli al
+        // massimale ammetterebbe 64 MiB di dizionari sotto un budget di 1 MiB.
+        max_retained_dictionary_body_bytes: default.max_retained_dictionary_body_bytes.min(tetto),
+        ..IpcLimits::default()
     }
 }
 
 /// Limiti del confine per i percorsi che hanno un solo budget di memoria e
 /// nessun piano DAG alle spalle (piani legacy, `schema_version <= 3`).
 ///
-/// Il percorso legacy usava `IpcLimits::default()`: 64 MiB di body e 16 MiB di
-/// metadati indipendentemente da `max_governed_memory_bytes`, cioe' un confine che non
-/// vincolava il budget dichiarato dal piano. Qui il budget e' l'unico dato
-/// disponibile e diventa il tetto di entrambe le allocazioni.
+/// Con `IpcLimits::default()` il confine ammetterebbe 64 MiB di body e 16
+/// MiB di metadati indipendentemente da `max_governed_memory_bytes`, cioe'
+/// non vincolerebbe il budget dichiarato dal piano. Qui il budget e' l'unico
+/// dato disponibile e diventa il tetto di entrambe le allocazioni.
 #[must_use]
 pub fn limits_from_memory_budget(max_governed_memory_bytes: usize) -> IpcLimits {
     let default = IpcLimits::default();
@@ -479,6 +612,8 @@ pub fn limits_from_memory_budget(max_governed_memory_bytes: usize) -> IpcLimits 
         max_body_bytes: default.max_body_bytes.min(tetto),
         max_record_batches: default.max_record_batches,
         max_messages: default.max_messages,
+        max_retained_dictionary_body_bytes: default.max_retained_dictionary_body_bytes.min(tetto),
+        ..IpcLimits::default()
     }
 }
 

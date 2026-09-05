@@ -1,4 +1,4 @@
-//! Misura A/B dei binari geo (architettura.md#geometrie M3, D14.10 — chiusura del cantiere):
+//! Misura A/B dei binari geo (architettura.md#geometrie D14.10):
 //! CLI standalone (trasporto v3 `pair_arrow`, la stessa camminata del
 //! comando `pair-arrow` senza processo) contro piano v4 (`geo.sjoin`,
 //! `geo.within`), piu' il controllo di non regressione dei `table.*` binari

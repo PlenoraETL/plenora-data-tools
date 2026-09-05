@@ -67,7 +67,7 @@ pub fn open_input(path: &Path, limits: &IpcLimits) -> Result<Input, PlenoraError
 /// su metadati incoerenti. Il `FieldId` e' provvisorio: il planner lo rimappa
 /// nel namespace globale del grafo (D16).
 ///
-/// Milestone C (protocollo chiavi canoniche, contratti trasversali §2):
+/// Protocollo delle chiavi canoniche (contratti trasversali §2):
 ///
 /// - gate R2.5 all'ingresso: [`read_contract_version`] — una versione
 ///   successiva a quella nota, una chiave di versione malformata o chiavi
@@ -117,9 +117,9 @@ pub fn at_input(name: &str, path: &Path, error: PlenoraError) -> PlenoraError {
 /// La forma POSIZIONALE e' ammessa **solo con un input dichiarato**. Con due o
 /// piu' input non e' verificabile: due file scambiati con lo stesso schema
 /// producono un risultato sbagliato invece di un errore — il piano gira, i
-/// contratti combaciano, e nessuno se ne accorge. Era l'unico posto della CLI
-/// in cui uno scambio dell'utente non era intercettabile dal componente; ora
-/// quella forma non arriva all'esecuzione.
+/// contratti combaciano, e nessuno se ne accorge. E' l'unico punto della CLI
+/// in cui uno scambio dell'utente non sarebbe intercettabile dal componente,
+/// e per questo quella forma non arriva all'esecuzione.
 ///
 /// # Errors
 ///

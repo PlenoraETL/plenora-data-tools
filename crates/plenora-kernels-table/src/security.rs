@@ -418,8 +418,8 @@ fn fingerprint_rows<D: Digest>(
 ) -> Result<StringArray> {
     // Framing costante per colonna (`framed(nome)` || `framed(tipo Arrow)`)
     // e accesso tipizzato ai valori: precomputati UNA volta per batch invece
-    // che a ogni cella (`data_type().to_string()` allocava una String per
-    // cella). Il messaggio di ogni riga e' accumulato in un buffer riusato e
+    // che a ogni cella: `data_type().to_string()` alloca una String per
+    // cella. Il messaggio di ogni riga e' accumulato in un buffer riusato e
     // assorbito con un solo `update`; l'hex e' scritto in un buffer riusato
     // e l'output costruito con StringBuilder presized (niente una String
     // heap per riga). Il byte stream per riga resta quello dell'encoding
@@ -877,7 +877,7 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
         };
         validate_output_name(&output)?;
         let column = result.column(index).clone();
-        // Fast path Utf8 (batch 4 ottimizzazioni kernel): valori presi in
+        // Fast path Utf8: valori presi in
         // prestito dallo StringArray senza `scalar_as_string` per riga e
         // output costruito con StringBuilder. Stessi byte, stessi null,
         // stessi errori per riga; gli altri tipi ricadono sul percorso
@@ -912,10 +912,9 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
 #[cfg(test)]
 mod tests {
     // -------------------------------------------------------------------
-    // Test-oracolo di `mask_data` (batch 4 ottimizzazioni kernel): le
-    // implementazioni pre-ottimizzazione di `mask_middle`/`mask`/
-    // `mask_data` sono copiate verbatim qui sotto come riferimento
-    // indipendente.
+    // Test-oracolo di `mask_data`: le
+    // implementazioni di riferimento di `mask_middle`/`mask`/`mask_data`
+    // stanno qui sotto, indipendenti dal percorso ottimizzato.
     // -------------------------------------------------------------------
 
     use super::*;
@@ -1076,7 +1075,7 @@ mod tests {
         );
     }
 
-    /// Copia verbatim di `mask_middle` pre-ottimizzazione.
+    /// Oracolo indipendente di `mask_middle`.
     fn mask_middle_reference(value: &str, start: usize, end: usize, mask: char) -> String {
         let chars: Vec<char> = value.chars().collect();
         if chars.len() <= start.saturating_add(end) {
@@ -1088,8 +1087,8 @@ mod tests {
         out
     }
 
-    /// Copia verbatim di `mask` pre-ottimizzazione (richiama
-    /// `mask_middle_reference`).
+    /// Oracolo indipendente di `mask`: compone `mask_middle_reference`, mai
+    /// il percorso di produzione.
     fn mask_reference(value: &str, config: &Masking) -> Result<String> {
         Ok(match config.mask_type {
             MaskType::Cf => mask_middle_reference(value, 3, 3, '*'),
@@ -1135,7 +1134,7 @@ mod tests {
         })
     }
 
-    /// Copia verbatim di `mask_data` pre-ottimizzazione.
+    /// Oracolo indipendente di `mask_data`.
     fn mask_data_reference(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
         if config.maskings.is_empty() {
             return Err(PlenoraError::InvalidPlan(
@@ -1733,15 +1732,15 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Test-oracolo di `stable_fingerprint` e `hmac_sha256` (ottimizzazione
-    // sweep2): le implementazioni pre-ottimizzazione sono copiate verbatim
-    // qui sotto come riferimento indipendente, e i digest sono confrontati
+    // Test-oracolo di `stable_fingerprint` e `hmac_sha256`: le
+    // implementazioni di riferimento stanno qui sotto, indipendenti dal
+    // percorso ottimizzato, e i digest sono confrontati
     // riga per riga su una fixture con null, NaN, -0.0, unicode, tipi su
     // percorso tipizzato e su percorso scalare, tutte le colonne e subset,
     // entrambi gli algoritmi e tutte le null policy.
     // -------------------------------------------------------------------
 
-    /// Copia verbatim di `framed_digest` pre-ottimizzazione.
+    /// Oracolo indipendente di `framed_digest`.
     fn framed_digest_reference<D: Digest>(digest: &mut D, value: &[u8]) -> Result<()> {
         let length = u64::try_from(value.len()).map_err(|_| {
             PlenoraError::InvalidPlan("stable_fingerprint: valore troppo grande".into())
@@ -1751,7 +1750,7 @@ mod tests {
         Ok(())
     }
 
-    /// Copia verbatim di `fingerprint_rows` pre-ottimizzazione.
+    /// Oracolo indipendente di `fingerprint_rows`.
     fn fingerprint_rows_reference<D: Digest>(
         batch: &RecordBatch,
         names: &[String],
@@ -1785,7 +1784,7 @@ mod tests {
             .collect()
     }
 
-    /// Copia verbatim di `stable_fingerprint` pre-ottimizzazione.
+    /// Oracolo indipendente di `stable_fingerprint`.
     fn stable_fingerprint_reference(
         batch: &RecordBatch,
         config: &StableFingerprint,
@@ -1835,7 +1834,7 @@ mod tests {
         )
     }
 
-    /// Copia verbatim di `hmac_sha256_digest` pre-ottimizzazione.
+    /// Oracolo indipendente di `hmac_sha256_digest`.
     fn hmac_sha256_digest_reference(key: &[u8], message: &[u8]) -> [u8; 32] {
         const BLOCK: usize = 64;
         let mut block = [0_u8; BLOCK];
@@ -1862,7 +1861,7 @@ mod tests {
         output
     }
 
-    /// Copia verbatim di `hmac_sha256` pre-ottimizzazione.
+    /// Oracolo indipendente di `hmac_sha256`.
     fn hmac_sha256_reference(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
         validate_output_name(&config.output_column)?;
         if config.key_env.trim().is_empty() {
@@ -2073,7 +2072,7 @@ mod tests {
                     null_policy,
                 };
                 // Politiche null storiche — nessun rifiuto; il percorso
-                // veloce deve coincidere con la copia verbatim pre-ottimizzazione.
+                // veloce deve coincidere con l'oracolo indipendente.
                 let fast = output_strings(&hmac_sha256(&batch, &config).expect("fast"), "hmac");
                 let reference = output_strings(
                     &hmac_sha256_reference(&batch, &config).expect("ref"),

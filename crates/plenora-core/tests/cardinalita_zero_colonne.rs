@@ -13,11 +13,10 @@
 //! caso vuoto e lascia decidere alle colonne quando ci sono.
 //!
 //! Questo controllo e' sul SORGENTE e non sul comportamento, per una ragione
-//! precisa: il difetto e' stato trovato in tre giri di review consecutivi, e
-//! ogni volta in un punto nuovo — prima i kernel tabellari, poi l'engine. Un
-//! test per sito non impedisce al prossimo sito di nascere sbagliato; un
-//! controllo sulla forma del codice si', perche' fallisce quando qualcuno lo
-//! scrive.
+//! precisa: la classe ricompare ogni volta in un punto nuovo — i kernel
+//! tabellari, l'engine — e un test per sito non impedisce al prossimo sito
+//! di nascere sbagliato. Un controllo sulla forma del codice si', perche'
+//! fallisce quando qualcuno lo scrive.
 //!
 //! # Che cosa questo presidio NON e'
 //!
@@ -191,8 +190,8 @@ fn il_costruttore_condiviso_conserva_le_righe_senza_colonne() {
 
     // PREMESSA VERIFICATA, non assunta. Arrow non restituisce zero righe in
     // silenzio: senza colonne e senza una cardinalita' dichiarata RIFIUTA di
-    // costruire il batch. Il difetto era quindi un'operazione legittima che
-    // FALLIVA, non un numero sbagliato restituito senza errore.
+    // costruire il batch. La classe di difetto e' quindi un'operazione
+    // legittima che FALLISCE, non un numero sbagliato reso senza errore.
     let errore = RecordBatch::try_new_with_options(
         Arc::new(Schema::empty()),
         Vec::new(),

@@ -153,7 +153,7 @@ pub(super) fn compact_staged_batch(batch: &RecordBatch) -> Result<RecordBatch> {
     plenora_core::batch_with_rows(batch.schema(), columns, batch.num_rows())
 }
 
-/// Validazione atomica dell'input geometrico (D8/B1.3) con memoria BOUNDED:
+/// Validazione atomica dell'input geometrico (D8) con memoria BOUNDED:
 /// i batch accettati sono staged su IPC entro la quota `max_temp_bytes`
 /// dichiarata dal piano e il lease governor e' rilasciato subito; solo a
 /// validazione completata senza rifiuti i batch sono riletti uno alla
@@ -207,8 +207,8 @@ pub(super) enum StagingOutcome {
 /// dimensione REALE del batch gia' prelevato e `max_batch_bytes` e' il tetto
 /// duro del piano (tetto in byte per batch). Ogni batch di output attraversa il wrapper d'uscita,
 /// che applica lo stesso tetto: `output_k > max_batch_bytes` fa fallire il
-/// piano **in entrambe le modalita'**. Per un piano che prima riusciva vale
-/// quindi `output_k <= max_batch_bytes`, e il picco in memoria non supera il
+/// piano **in entrambe le modalita'**. Per un piano eseguibile vale quindi
+/// `output_k <= max_batch_bytes`, e il picco in memoria non supera il
 /// budget.
 ///
 /// La soglia e' **derivata dai limiti del piano e dai lease effettivamente

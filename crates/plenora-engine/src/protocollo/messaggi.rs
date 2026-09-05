@@ -33,11 +33,11 @@
 //!
 //! # Che cosa NON e' qui
 //!
-//! La **semantica**. `PR-4` sa dire «questo non e' un `Saluto` ben formato»;
-//! non sa dire «questo `Saluto` viene dal binario sbagliato». Che il digest
-//! sia quello giusto, che il resolver sia compatibile, che le capability
-//! bastino, che il `commit_token` sia quello che finira' nel footer —
-//! appartengono a `PR-5`.
+//! La **semantica**. Questo modulo sa dire «questo non e' un `Saluto` ben
+//! formato»; non sa dire «questo `Saluto` viene dal binario sbagliato». Che
+//! il digest sia quello giusto, che il resolver sia compatibile, che le
+//! capability bastino, che il `commit_token` sia quello che finira' nel
+//! footer — appartengono al supervisore.
 //!
 //! # Il worker non conclude per il supervisore
 //!
@@ -460,9 +460,9 @@ enum_sul_filo! {
 ///
 /// In un enum con tag interno, `deny_unknown_fields` **non ha effetto sulle
 /// varianti unitarie**: `serde` le riconosce dal tag e ignora il resto
-/// dell'oggetto. Scritto `Never`, questo tipo accettava
-/// `{"kind":"never","delay_ms":10}` e buttava via `delay_ms` in silenzio —
-/// cioe' esattamente la cosa che il campo esiste per impedire.
+/// dell'oggetto. Scritto `Never`, questo tipo accetterebbe
+/// `{"kind":"never","delay_ms":10}` e butterebbe via `delay_ms` in silenzio —
+/// cioe' esattamente la cosa che `deny_unknown_fields` esiste per impedire.
 ///
 /// La forma `Never {}` e' una variante di struttura con zero campi: sul filo
 /// e' identica (`{"kind":"never"}`), ma la deserializzazione passa per un
@@ -542,12 +542,12 @@ enum_sul_filo! {
 ///
 /// Il passo 8 della verifica (§7 di `isolamento.md`) confronta «i conteggi
 /// dichiarati nell'`Esito`» con quelli osservati rileggendo l'artefatto. Senza
-/// questi campi quel passo non avrebbe un termine di paragone, e la prima
-/// stesura del protocollo li aveva dimenticati: il `Successo` portava il solo
-/// digest, e la sequenza normativa citava un dato che non viaggiava.
+/// questi campi quel passo non avrebbe un termine di paragone: un `Successo`
+/// che portasse il solo digest lascerebbe la sequenza normativa a citare un
+/// dato che non viaggia.
 ///
 /// Un digest uguale non li sostituisce. Dice che il file e' quel file, non che
-/// contenga cio' che il worker credeva di aver scritto: un worker che si
+/// contenga cio' che il worker crede di aver scritto: un worker che si
 /// fermasse a meta' e finalizzasse comunque produrrebbe un artefatto integro
 /// e **incompleto**, e il digest non avrebbe nulla da obiettare.
 ///
@@ -635,11 +635,11 @@ pub enum Corpo {
 /// tipo e' [derivato](Self::tipo) dal corpo: nessuno dei due e' un campo che
 /// si possa impostare.
 ///
-/// La stesura precedente li teneva come campi pubblici indipendenti, e il
-/// codificatore poteva quindi emettere un frame che il decoder rifiuta — una
-/// versione `2`, o un `tipo: "saluto"` con dentro un `Annulla`. Erano difetti
-/// veri, e nessuna verifica in `codifica` li avrebbe *eliminati*: li avrebbe
-/// solo intercettati, cioe' spostati da «impossibile» a «controllato».
+/// Tenendoli come campi pubblici indipendenti, il codificatore potrebbe
+/// emettere un frame che il decoder rifiuta — una versione `2`, o un
+/// `tipo: "saluto"` con dentro un `Annulla`. Nessuna verifica in `codifica`
+/// li *eliminerebbe*: li intercetterebbe soltanto, cioe' li sposterebbe da
+/// «impossibile» a «controllato».
 ///
 /// # Solo `Serialize`
 ///

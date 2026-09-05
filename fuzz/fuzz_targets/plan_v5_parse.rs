@@ -1,7 +1,7 @@
 #![no_main]
 
 //! Parser del piano v5 e migrazione di versione contro JSON ostili
-//! (Fase 2A, errori-e-limiti.md#memoria-governata): byte arbitrari, JSON malformati, strutture
+//! (errori-e-limiti.md#memoria-governata): byte arbitrari, JSON malformati, strutture
 //! enormi o profondamente annidate, identificatori lunghi. Invarianti: mai
 //! panic, mai hang; ogni input produce `Ok` o un errore tipizzato; i
 //! `PlanLimits` (default o ristretti dal payload) sono applicati durante il
@@ -22,9 +22,9 @@
 //!   prove di idempotenza sono specifiche della riscrittura v4 -> v5;
 //! - `PlanV5::parse`, il parser canonico, raggiunto anche direttamente.
 //!
-//! Senza il primo la v6 restava **fuori dalla campagna**: il suo parser
-//! ostile e il suo canonico non venivano mai esercitati, mentre la
-//! documentazione dichiarava il contrario.
+//! Senza il primo la v6 resterebbe **fuori dalla campagna**: il suo parser
+//! ostile e il suo canonico non verrebbero mai esercitati, mentre la
+//! documentazione dichiara il contrario.
 
 use libfuzzer_sys::fuzz_target;
 use plenora_core::limits::PlanLimits;

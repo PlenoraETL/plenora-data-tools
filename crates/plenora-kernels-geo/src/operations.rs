@@ -200,7 +200,7 @@ fn is_negative_zero(value: f64) -> bool {
 pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
 
-    // `geo` 0.33.1 (ultima release al 2026-08-06) calcola il punto interno con
+    // `geo` 0.33.1 calcola il punto interno con
     // una sweep line che ordina gli eventi per coordinata. Con `-0.0` e `0.0`
     // presenti insieme — due codifiche IEEE dello stesso valore — l'invariante
     // sugli intervalli salta:
@@ -521,8 +521,8 @@ mod tests {
         ])
     }
 
-    /// Regressione del crash trovato dal fuzz target `wkt_operations` il
-    /// 2026-08-06, rosso su `main` a ogni run schedulata dal 2026-07-27.
+    /// Regressione del crash che il fuzz target `wkt_operations` produce su
+    /// questo poligono, e che rende rossa ogni campagna finche' resta.
     ///
     /// Il poligono contiene `-0.0` accanto a `0.0`: due codifiche IEEE dello
     /// stesso valore. `geo` 0.33.1 lo dichiara valido — correttamente — ma la

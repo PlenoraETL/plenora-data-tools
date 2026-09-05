@@ -8,13 +8,13 @@
 //! numeri e da quali campi entrano nella canonicalizzazione. Nessuna di queste
 //! cose e' visibile leggendo un diff.
 //!
-//! Fino al 2026-08-24 i test verificavano che `plan_hash` fosse **lungo 64
-//! caratteri esadecimali** e che un piano v4 e il suo equivalente v5 dessero lo
-//! stesso valore. Entrambe le proprieta' sono vere anche se il valore cambia:
-//! una riorganizzazione che alterasse l'ordine delle chiavi canoniche avrebbe
-//! cambiato l'identita' di **ogni piano gia' emesso** senza far fallire nulla.
-//! Un consumatore che conserva `plan_hash` per riconoscere un piano gia' visto
-//! avrebbe smesso di riconoscerlo, in silenzio.
+//! Verificare che `plan_hash` sia **lungo 64 caratteri esadecimali**, o che un
+//! piano v4 e il suo equivalente v5 diano lo stesso valore, non basta: sono
+//! proprieta' vere anche se il valore cambia. Una riorganizzazione che
+//! alterasse l'ordine delle chiavi canoniche cambierebbe l'identita' di **ogni
+//! piano gia' emesso** senza far fallire nulla, e un consumatore che conserva
+//! `plan_hash` per riconoscere un piano gia' visto smetterebbe di
+//! riconoscerlo, in silenzio.
 //!
 //! Questo oracolo chiude quel varco: fissa i valori, non la loro forma.
 //!
@@ -71,9 +71,8 @@ fn contratto_tabellare() -> DataContract {
 /// Servono entrambe le cose: senza i metadati dell'estensione `GeoArrow`
 /// l'analyzer non riconosce la colonna, e senza un CRS proiettato le op che
 /// lo richiedono — `geo.centroid` fra queste — rifiutano il piano
-/// fail-closed. La prima stesura di questo contratto dichiarava
-/// `ContractCrs::Missing` e il piano veniva respinto, che e' il
-/// comportamento corretto.
+/// fail-closed. Con `ContractCrs::Missing` il piano verrebbe respinto, che
+/// e' il comportamento corretto ma non produce alcuna identita' da fissare.
 fn contratto_geo() -> DataContract {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),

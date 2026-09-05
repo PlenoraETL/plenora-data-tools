@@ -34,10 +34,11 @@ agente — segue queste regole. Non sono opzionali.
 
 ## Riferimenti
 
-La superficie documentale è **chiusa**: `README.md`, `AGENTS.md` e i sette
+La superficie documentale è **chiusa**: `README.md`, `AGENTS.md` e i nove
 documenti sotto `docs/`. Non se ne aggiungono altri senza aggiornare
 l'allowlist di `scripts/verifica_documentazione.py`, che li presidia insieme
-ai collegamenti interni.
+ai collegamenti interni. L'autorità del conteggio è quella allowlist, non
+questo elenco: se i due divergono, ha ragione lo script.
 
 - [`docs/architettura.md`](docs/architettura.md) — crate, flusso, determinismo,
   memoria, backend.
@@ -49,8 +50,14 @@ ai collegamenti interni.
 - [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) — tassonomia, privacy,
   e il **registro dei limiti dichiarati**: ogni limite con regola, ambito,
   hazard e condizione di rientro. È l'unico punto di raccolta.
-- [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) — solo il lavoro aperto.
+- [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) — solo il lavoro aperto,
+  ed è l'**autorità unica sullo stato di avanzamento**: nessun altro documento
+  dichiara che cosa è entrato e che cosa manca, gli altri vi rimandano.
 - [`docs/release.md`](docs/release.md) — gate, piattaforme, procedura.
+- [`docs/isolamento.md`](docs/isolamento.md) — progetto tecnico della fase 4:
+  garanzie e non-garanzie, macchine a stati, protocollo, verifica, PR.
+- [`docs/prototipi-isolamento.md`](docs/prototipi-isolamento.md) — misure ed
+  esito dei prototipi di isolamento; i grezzi stanno in `prototipi/misure/`.
 - Catalogo operazioni: snapshot test
   (`crates/plenora-engine/tests/catalog_snapshot.snap`) — ogni cambio di
   catalogo è esplicito in PR.
@@ -91,6 +98,11 @@ python scripts/verifica_assenza_assert.py
 # gate pin delle action (bloccante): ogni `uses:` dei workflow riferisce una
 # SHA completa con il commento della versione. Tag e rami sono mobili.
 python scripts/verifica_pin_workflow.py
+# gate commenti (bloccante): i commenti dicono il presente. Niente marcatori
+# anonimi, tappe, giri di review, stesure precedenti o difetti raccontati
+# all'imperfetto; la spiegazione tecnica resta, al controfattuale presente.
+# Le date passano solo dove fissano un pin o un atto normativo.
+python scripts/verifica_commenti.py
 # gate di coverage (soglie identiche alla CI: lines 90/functions 85/regions 89)
 scripts/coverage.sh
 # fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:

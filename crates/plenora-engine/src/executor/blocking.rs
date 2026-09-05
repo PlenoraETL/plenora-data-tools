@@ -6,12 +6,12 @@
 //!
 //! # Perche' il dispatch e' un `match` grande
 //!
-//! `dispatch_kernel` conosce oggi il tipo di configurazione di ogni singola
-//! operazione. E' la duplicazione che la fase 3 del refactor eliminera' con le
-//! facciate di famiglia: l'engine dovra' conoscere la classe di esecuzione, il
-//! contratto e la cancellazione, non i 146 tipi di config. Finche' quel lavoro
-//! non e' fatto, il `match` resta — ed e' bene che sia visibile in un file
-//! proprio, invece che sepolto in mezzo a cinquemila righe.
+//! `dispatch_kernel` conosce il tipo di configurazione di ogni singola
+//! operazione, ed e' una duplicazione: all'engine basterebbero la classe di
+//! esecuzione, il contratto e la cancellazione. Toglierla richiede una
+//! facciata per famiglia che oggi non esiste, e finche' non esiste il `match`
+//! resta — ed e' bene che stia in un file proprio, dove si vede quanto e'
+//! grande, invece che sepolto in mezzo ad altre cinquemila righe.
 
 use crate::geo_transport::pair::preflight_decoded_bytes;
 use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
@@ -78,7 +78,8 @@ use super::{
 /// stato condiviso mutabile attraversa il confine) e l'errore ferma lo
 /// stream, quindi un eventuale stato interno del kernel lasciato incoerente
 /// dal panic non e' mai riusato. I confini `UnwindSafe` dichiarati per il
-/// DAG parallelo restano Fase 2B.
+/// DAG parallelo valgono soltanto quando esistera' uno scheduler che li
+/// attraversi (M3).
 pub(super) fn run_kernel(
     kernel: &PreparedKernel,
     batch: RecordBatch,
@@ -97,14 +98,13 @@ pub(super) fn run_kernel(
 /// Dispatch per famiglia di un kernel su un batch.
 ///
 /// I kernel tabellari unari ricevono la directory di spill condivisa
-/// dell'esecuzione (architettura.md#memoria, Fase 2B, spill generalizzato): `sort`/`distinct`/`aggregate`
+/// dell'esecuzione (architettura.md#memoria, spill generalizzato): `sort`/`distinct`/`aggregate`
 /// sopra la soglia di spill scrivono nel `TempStore` e le loro metriche sono
 /// accumulate in [`ExecState`].
 ///
-/// Smista per FAMIGLIA, non per operazione. Le quindici forme che l'executor
-/// conosceva una per una vivono ora dentro la famiglia che le possiede:
-/// all'orchestrazione restano le tre cose che la riguardano davvero — classe
-/// di esecuzione, contratto, cancellazione.
+/// Smista per FAMIGLIA, non per operazione: le quindici forme vivono dentro
+/// la famiglia che le possiede, e all'orchestrazione restano le tre cose che
+/// la riguardano davvero — classe di esecuzione, contratto, cancellazione.
 pub(super) fn dispatch_kernel(
     kernel: &PreparedKernel,
     batch: RecordBatch,
@@ -154,9 +154,8 @@ impl PreparedGeoKernel {
     ///
     /// Il `match` e' esaustivo su QUESTA famiglia: una variante nuova non
     /// compila finche' qualcuno non decide che cosa farne. E' la garanzia
-    /// che nel dispatch unico precedente non esisteva, perche' un enum di
-    /// quindici varianti condivise fra due famiglie non dice a quale delle
-    /// due manca un caso.
+    /// che un dispatch unico non puo' dare: un enum di quindici varianti
+    /// condivise fra due famiglie non dice a quale delle due manca un caso.
     ///
     /// # Errors
     ///
@@ -428,14 +427,13 @@ pub(super) fn measure_row_diagnostics(rows: &[(u64, &'static str)]) -> RowDiagno
 // Orchestrazione dei segmenti bloccanti
 //
 // Materializzazione, reservation, smistamento per famiglia. Sono generiche:
-// stavano in `geo.rs` solo perche' il ramo geo binario e' quello con il
-// percorso dedicato, ma la decisione di dove materializzare non e' una
-// questione geometrica — ed e' proprio il confine che la fase 4 andra' a
-// toccare.
+// vivono qui e non in `geo.rs` perche' la decisione di dove materializzare
+// non e' una questione geometrica: il ramo geo binario e' solo quello con il
+// percorso dedicato.
 // ---------------------------------------------------------------------------
 
 /// Il kernel di un segmento blocking unario e' spill-capable (architettura.md#memoria,
-/// Fase 2B, spill generalizzato): `table.sort`/`distinct`/`aggregate` hanno la variante
+/// spill generalizzato): `table.sort`/`distinct`/`aggregate` hanno la variante
 /// `*_spilled` in kernels-table (cfr. `table_engine::unary_spill_capable`).
 pub(super) fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
     kernel.config.unary_spill_capable()
@@ -483,7 +481,7 @@ pub(super) fn run_blocking(
     // verificato i byte: il tetto duro in byte per batch si applica anche qui (fail-closed).
     // I byte restituiti alimentano la reservation (hot path minimale: un solo conteggio).
     let full_bytes = check_batch_bytes(state, &full, &kernel.node_id)?;
-    // architettura.md#memoria (Fase 2B, spill generalizzato): se il kernel spillera' — stessa soglia
+    // architettura.md#memoria (spill generalizzato): se il kernel spillera' — stessa soglia
     // deterministica valutata al dispatch tabellare (`should_spill_unary`
     // sui byte stimati dell'input), stessi limiti — l'intermedio
     // concatenato NON consuma quota governor: la memoria di lavoro
@@ -559,7 +557,7 @@ pub(super) fn run_binary_blocking(
     // segmento binario emette un solo batch, quindi non esiste
     // necessariamente un confine successivo dove un heartbeat fermo da
     // troppo tempo diventerebbe un errore. Senza questo controllo l'output
-    // poteva essere pubblicato con il lock ormai stantio.
+    // potrebbe essere pubblicato con il lock ormai stantio.
     state.verifica_heartbeat()?;
     let segment = &plan.segments()[segment_index];
     let kernel = segment.kernels.first().ok_or_else(|| {

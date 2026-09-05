@@ -1,11 +1,10 @@
-//! Nono giro, finding 1 — la cardinalita' dei batch senza colonne nei
-//! percorsi dell'ENGINE.
+//! La cardinalita' dei batch senza colonne nei percorsi dell'ENGINE.
 //!
-//! Il costruttore che dichiara le righe stava in `plenora-kernels-table`, e
-//! l'engine — che non poteva vederlo — era rimasto indietro in tre punti:
-//! il rivestimento dello schema in pubblicazione, la compattazione dello
-//! staging e la normalizzazione `LargeUtf8`. Un invariante del workspace non
-//! puo' abitare in una foglia; ora vive in `plenora-core`.
+//! Il costruttore che dichiara le righe vive in `plenora-core`: un
+//! invariante del workspace non puo' abitare in una foglia, perche' chi non
+//! dipende da quella foglia non lo vede. I tre punti dell'engine che lo
+//! esercitano sono il rivestimento dello schema in pubblicazione, la
+//! compattazione dello staging e la normalizzazione `LargeUtf8`.
 //!
 //! Questi test esercitano i percorsi dal loro ingresso pubblico. Il presidio
 //! strutturale che impedisce a nuovi siti di nascere sbagliati sta in
@@ -45,9 +44,9 @@ fn piano_identita() -> ValidatedPlan {
 #[test]
 fn la_normalizzazione_conserva_le_righe_senza_colonne_con_metadata_pandas() {
     // `normalize_large_utf8` ricostruisce il batch per rimuovere il metadata
-    // `pandas`. Le colonne derivano dall'input: con zero colonne la
-    // ricostruzione falliva (arrow rifiuta un batch senza colonne e senza
-    // cardinalita' dichiarata). Il metadata `pandas` e' la
+    // `pandas`. Le colonne derivano dall'input: con zero colonne una
+    // ricostruzione che non dichiari la cardinalita' fallisce, perche' arrow
+    // rifiuta un batch senza colonne e senza cardinalita'. Il metadata `pandas` e' la
     // condizione che fa scattare la ricostruzione — senza, la funzione
     // restituisce l'input inalterato e il difetto non si vede.
     let mut metadata = HashMap::new();

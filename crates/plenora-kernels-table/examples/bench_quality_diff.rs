@@ -1,6 +1,6 @@
 //! Benchmark autonomo per i kernel `table.reconcile`,
 //! `table.assert_foreign_key`, `table.table_diff` e `table.mask_data`
-//! (filone ottimizzazioni kernel, batch 4: quality/governance/diff/security).
+//! (quality, governance, diff, security).
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep` (seed logico 42,
 //! xorshift64, stesse colonne e stesse configurazioni), cosi' le misure

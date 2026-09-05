@@ -1,8 +1,8 @@
 # Esecuzione isolata — progetto tecnico della fase 4
 
-Progetto, non implementazione. Alla data di questo documento **non esiste
-codice** di worker, supervisore, protocollo o limiti di processo: qui c'è che
-cosa dovranno fare e perché.
+Questo documento descrive il progetto tecnico completo, comprese parti già
+realizzate. Lo stato di avanzamento e il lavoro residuo sono dichiarati
+esclusivamente in [`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 La scelta architetturale è presa e non si riapre: la correttezza viene
 dall'**isolamento**, non dalla previsione. Il ragionamento è in
@@ -13,9 +13,10 @@ smentito o da ciò che una rilettura ha trovato contraddittorio.
 
 Baseline strutturale: commit `922aea3`, tag `baseline-pre-fase-4`.
 
-I prototipi sono stati eseguiti in **due cicli**: le misure stanno in
-[`prototipi-isolamento.md`](prototipi-isolamento.md), e dove un paragrafo qui
-sotto riporta un numero, quel numero viene da lì.
+I prototipi sono stati eseguiti in **quattro cicli**: le misure stanno in
+[`prototipi-isolamento.md`](prototipi-isolamento.md), che è l'autorità sul
+loro numero e sul loro esito, e dove un paragrafo qui sotto riporta un numero,
+quel numero viene da lì.
 
 Nascita vincolata e contenimento sono dimostrati su entrambe le piattaforme.
 **L'attribuzione no.** Su Linux regge solo se il dominio è reso foglia dal
@@ -55,7 +56,7 @@ peggio di una che si sa di non avere.
 | **NG-6** | Su macOS **non c'è contenimento**: il profilo isolato non è supportato finché un prototipo non dimostri contenimento *e* attribuzione. |
 | **NG-7** | Non garantiamo che un worker malevolo sia contenuto. Il modello di minaccia è il **guasto**, non l'avversario: il worker è codice nostro che può sbagliare, non codice ostile. |
 | **NG-8** | `GA-3` è **validità strutturale, non correttezza dei valori**. Schema, contratto, framing, conteggi e sigillo dimostrano che l'output è completo e ben formato; **non** dimostrano che i numeri dentro siano quelli giusti. Un kernel che calcola male produce un output strutturalmente perfetto, e questa verifica lo pubblica. La correttezza dei valori resta affidata al determinismo dichiarato e alla suite, dove è sempre stata. |
-| **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero — handle già aperti passati al posto dei percorsi, oppure una sandbox del filesystem — è un rafforzamento futuro, non una garanzia odierna. |
+| **NG-9** | `GA-5` è una proprietà del **protocollo**, non del filesystem. Senza un contenimento del filesystem il worker *potrebbe* scrivere ovunque abbia permessi: semplicemente non sa dove sia la destinazione, perché nessuno gliela dice. Un contenimento vero richiede una **sandbox del filesystem**. Passare handle già aperti al posto dei percorsi **non basta**: un handle non nasconde né revoca l'autorità di chi lo riceve, che resta libero di raggiungere per altra via ciò che la propria identità gli consente — e su Linux il percorso è per giunta ricavabile dal descrittore attraverso `/proc/self/fd`. Il passaggio di handle toglie un modo di scoprire il percorso, non il diritto di usarlo. |
 | **NG-10** | **Contenere non significa terminare.** Su Linux il kernel uccide; altre piattaforme possono negare l'allocazione lasciando il processo vivo ([`prototipi-isolamento.md`](prototipi-isolamento.md)). Non garantiamo un modo unico di fermarsi: garantiamo che il tetto sia imposto e che l'evento sia leggibile. |
 | **NG-11** | Il tetto del dominio **non protegge dalle richieste**, solo dagli addebiti. Su Linux una richiesta da 64 TiB non toccata è stata accettata senza generare alcun evento. Un worker non può difendersi interrogando l'allocatore. |
 | **NG-12** | **L'attribuzione dipende dal sigillo del dominio.** Se il worker riesce a creare discendenti, l'uccisione avviene altrove e l'evidenza locale non la registra. Il sigillo è verificato nel preflight (§9-bis): senza, il profilo isolato non parte. |
@@ -133,10 +134,63 @@ confine ostile per Arrow IPC che il progetto ha già
 che arrow veda i byte: la verifica ne eredita la disciplina e vi aggiunge il
 proprio tetto sui batch trattenuti.
 
-Il tetto dev'essere **dimostrabile**, non asserito: la verifica alloca una
-quantità funzione del solo schema e del batch corrente, mai del numero di
-righe o di batch. Una verifica che debba tenere tutto in memoria per
-rispondere non è accettabile in questo disegno.
+Il tetto dev'essere **dimostrabile**, non asserito. Una stesura precedente
+diceva «una quantità funzione del solo schema e del batch corrente, mai del
+numero di righe o di batch», ed era una promessa **non mantenibile da nessuna
+implementazione**: `FileReader` decodifica tutti i dizionari all'apertura e li
+trattiene per l'intera scansione — e non è un difetto di quella libreria, è il
+formato, perché un batch dictionary-encoded non è decodificabile senza il suo
+dizionario — e tiene un indice di 24 byte per record batch.
+
+La promessa corretta è un **limite conservativo per componente**:
+
+```
+    schema limitato
+  + custom metadata limitati
+  + indice dei blocchi        limitato da max_record_batches / max_messages
+  + body dei dizionari        limitato da max_retained_dictionary_body_bytes
+  + un solo record batch corrente, limitato
+  + overhead strutturale limitato
+```
+
+Ogni componente ha un tetto **imposto prima della decodifica**; nessun record
+batch precedente resta vivo; e il picco non può superare quella formula. Il
+tetto sui dizionari è **cumulativo** e si applica alla somma controllata dei
+`bodyLength`, durante la traversata e prima che Arrow ne decodifichi uno: il
+tetto per singolo body non lo copre, perché mille dizionari da un megabyte lo
+rispettano tutti e insieme trattengono un gigabyte. Overflow della somma e
+superamento del tetto sono entrambi un rifiuto, mai una saturazione.
+
+Il tetto vive in `IpcLimits`, cioè fra i limiti del **confine**, e non come
+parametro del verificatore: gli ingressi pubblici aprono lo stesso formato con
+lo stesso lettore, e un tetto che protegge un percorso solo lascia aperta la
+classe invece di chiuderla. Si applica in due punti complementari — la
+traversata dei messaggi, che vede i dizionari incontrati percorrendo la
+regione, e i blocchi del footer, che sono quelli che `FileReader` leggerà
+davvero.
+
+**I dizionari delta sono rifiutati**, e la formula dipende da quel rifiuto. Su
+un `DictionaryBatch` con `isDelta`, Arrow non trattiene il body dichiarato:
+concatena il dizionario precedente con il nuovo in un buffer ulteriore, mentre
+entrambi gli originali sono ancora vivi. Il picco si avvicina al **doppio**
+della somma dei `bodyLength`, e la riga «body dei dizionari» qui sopra
+sarebbe falsa proprio quando il tetto dice che va tutto bene. Il rifiuto è in
+prevalidazione, comune a tutti i lettori; il nostro `FileWriter` non ne
+produce, quindi non perde nessun ingresso legittimo. Il giorno in cui
+servissero, il tetto va rifatto sul picco della concatenazione e non sulla
+somma dei body — non basta allargarlo.
+
+Nello stesso ramo il campo `data` del `DictionaryBatch` è **preteso**: Arrow lo
+legge con `unwrap()`, quindi un messaggio che non ce l'ha fa panicare la
+dipendenza invece di rendere un errore.
+
+L'ultima riga è l'unica non misurabile in byte di IPC: è l'overhead delle
+strutture di Arrow, limitato da schema, metadati e numero massimo di messaggi.
+Non si promette uguaglianza fra i `bodyLength` del footer e l'heap esatto di
+Arrow — sono due grandezze diverse.
+
+Una verifica che debba tenere tutto in memoria per rispondere non è comunque
+accettabile in questo disegno.
 
 **2. La verifica ha a sua volta un dominio.** Se la verifica in streaming
 fallisse comunque, non deve portarsi via il processo che classifica. Il suo
@@ -851,6 +905,7 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 | 3 | **presenza** | l'artefatto non esiste |
 | 4 | **sigillo** | il sigillo manca o non corrisponde: l'artefatto è troncato |
 | 5 | **framing** | il file non è un contenitore Arrow IPC leggibile dal confine ostile esistente |
+| 5-bis | **integrità dell'artefatto** | lo SHA-256 dell'intero file finalizzato, footer compreso, non coincide col digest dichiarato nell'`Esito` |
 | 6 | **schema** | `contract_from_arrow_schema` fallisce, **con il resolver negoziato** |
 | 7 | **contratto** | il contratto letto non corrisponde a quello atteso dal piano validato |
 | 8 | **completezza** | i conteggi dichiarati nell'`Esito` non corrispondono a quelli osservati |
@@ -859,6 +914,19 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 
 Solo dopo il passo 9 l'output è visibile. I passi da 1 a 8-bis non producono
 alcun effetto osservabile all'esterno.
+
+Il passo 5-bis mancava, e la sua assenza era una lacuna e non una scelta: §4.4
+assegna al verificatore dell'artefatto la coerenza del digest, ma la sequenza
+non aveva un passo in cui esercitarla. **In v1 l'algoritmo ammesso è
+esclusivamente `sha256`**, col valore in forma canonica — 64 esadecimali
+minuscoli — e la forma di `DigestArtefatto` sul filo resta invariata: è il
+verificatore a imporre la coerenza, non il messaggio a cambiarla. Ammetterne un
+secondo è una PR esplicita.
+
+Il passo costa **una passata sequenziale in più** sull'artefatto, a memoria
+costante. È un costo di I/O dichiarato: il digest copre i byte, e i byte vanno
+letti. Non sostituisce il passo 8 — un artefatto integro può essere incompleto,
+e il digest non ha nulla da obiettare.
 
 Il passo 6 è il punto in cui `F4-4` diventa concreto: la lettura usa **lo
 stesso resolver** che il worker ha usato per scrivere, perché l'handshake l'ha
@@ -1314,12 +1382,19 @@ Due cose distinte che la stesura precedente confondeva:
 | **autorità normativa** | [`errori-e-limiti.md`](errori-e-limiti.md), il registro unico imposto da [`AGENTS.md`](../AGENTS.md). Ogni limite vi **andrà** registrato con regola, perimetro, pericolo e condizione di rientro. Al momento non c'è: è un criterio d'uscita di `PR-0`, non un fatto |
 | **autorità runtime** | `IpcLimits`, la struttura che il trasporto consulta a ogni lettura. È il posto da cui il codice legge, non il registro che dichiara perché |
 
-**I tre tetti non diventano campi di `IpcLimits`.** La struttura è **pubblica
-e riesportata** da `plenora-engine`, quindi aggiungere campi romperebbe ogni
-inizializzazione letterale che un consumatore abbia scritto. Ma soprattutto:
-`IpcLimits` esiste per i limiti che un piano può **modulare** — quanti batch,
-quanto grande un body — mentre questi sono **tetti duri contro l'abuso**, e
-un tetto contro l'abuso che il chiamante può alzare non è un tetto.
+**I tre tetti non diventano campi di `IpcLimits`.** Non per la
+compatibilità — da `PR-6` la struttura è `#[non_exhaustive]`, quindi
+aggiungere un campo non rompe più nessuna inizializzazione letterale, che da
+fuori il crate non è più scrivibile. La ragione è l'altra, ed è quella che
+conta: `IpcLimits` esiste per i limiti che un piano può **modulare** — quanti
+batch, quanto grande un body — mentre questi sono **tetti duri contro
+l'abuso**, e un tetto contro l'abuso che il chiamante può alzare non è un
+tetto.
+
+Il tetto cumulativo sui dizionari, che `PR-6` aggiunge, sta dall'altra parte
+di questa linea: è un limite di risorsa che deve seguire il budget del piano,
+come `max_body_bytes`, non un'asserzione contro l'abuso. Per questo è un campo
+e questi tre no.
 
 Restano quindi costanti interne, non ampliabili e non configurabili. La
 decisione è presa qui perché altrimenti emergerebbe durante l'implementazione,
@@ -2216,13 +2291,17 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-3** | tipi dell'esito e della **classificazione**: `EsitoWorker`, la matrice §10 come `match` esaustivo, la precedenza §10.3. **Consuma** `EvidenzaDiLimite`, che `PR-1` ha già introdotto perché è superficie pubblica e va decisa una volta sola; qui vive la regola per cui solo `G` autorizza l'attribuzione al dominio | no | test di tabella sulla matrice e sulle corse |
 | **PR-4** | protocollo: codifica, tetti, versione, fail-closed. Solo serializzazione | no | vettori di byte scritti a mano per ogni messaggio, round-trip come prova secondaria, rifiuto di ogni forma malformata |
 | **PR-5** | handshake: identità artefatto, resolver, insieme content-addressed, backend dinamici, **`commit_token`**; il token nei **custom metadata del footer IPC**; e `CommitToken` come tipo chiuso | **sì** (formato dell'artefatto) | test di disaccordo su ciascun campo; i **quattro casi del token** della §7-quater — assente, canonico, non canonico, oracoli del footer |
-| **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process | no | prova che la memoria trattenuta non cresce col numero di righe né di batch |
+| **PR-6** | verificatore **in streaming** con tetti dimostrabili, ancora in-process; e il **tetto cumulativo sui dizionari** con il rifiuto dei **delta** e degli header/`data` assenti, nel confine IPC comune | **sì**, per due ragioni distinte: cambia quali input IPC sono accettati (fail-closed), e `IpcLimits` guadagna un campo e diventa `#[non_exhaustive]` | ogni componente trattenuta ha un tetto imposto **prima della decodifica**; nessun record batch precedente resta vivo; il picco non può superare la formula dei limiti dichiarati; e il tetto sui dizionari è **cumulativo** — provato con un tetto che ciascun body rispetta e la loro somma no — su **entrambi** i formati e dagli ingressi pubblici |
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
 | **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
 | **PR-10** | sequenza di verifica da 1 a 9 — 8-bis compreso — publish no-clobber con rilevazione del residuo, e **`risolvi_commit`** con l'enum delle osservazioni | **sì** (superficie pubblica) | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice; e le cinque osservazioni su destinazioni costruite a mano |
 | ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
 | **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
+| **PR-13a** | infrastruttura di confronto shadow con **candidato sintetico**. **Preceduta dal gate bloccante `PT-shadow`**: prima del suo esito non è implementabile | **qualificato**, vedi la sezione dedicata | le garanzie di quella sezione: preparazione fallita equivalente a `off`, piano incapace di abilitare o aumentare lo shadow, record conforme al contratto privacy, e i quattro guasti del candidato senza effetto canonico |
+| **PR-13b** | `polygonize` sul comparatore reale | **nessun cambiamento canonico**; cambia l'osservabilità shadow | trasparenza del prefisso derivato, per questo kernel |
+| **PR-13c** | `split` | idem | idem |
+| **PR-13d** | `make_valid` | idem | idem |
 
 ### `PR-0` non è lavoro di isolamento, ed è la ragione per cui viene prima
 
@@ -2287,3 +2366,126 @@ attivo, e ognuna può essere fermata senza lasciare il sistema a metà.
 Il criterio di uscita della fase 4 (`F4-5`) si verifica su PR-12: nessun
 percorso noto produce un'allocazione critica prima dell'autorizzazione, oppure
 il piano viene rifiutato esplicitamente.
+
+---
+
+## 12. Confronto shadow — il progetto di `PR-13`
+
+Progetto, e a un livello deliberatamente alto: nulla di ciò che segue esiste nel
+codice, e i **meccanismi non sono decisi qui**. Li decide la progettazione di
+`PR-13a`, dopo che `PT-shadow` avrà dato un provider reale e i vincoli che quel
+provider impone. Fissarli prima significherebbe scrivere la soluzione a un
+problema di cui non si conoscono ancora i confini.
+
+`PR-13` **non è «l'integrazione di `memory-lab`»**: è l'**infrastruttura di
+confronto shadow** fra un kernel candidato e il backend autorevole, di cui i
+tre kernel Rust del laboratorio sono i primi clienti. Il catalogo empirico
+della memoria **è uscito dal perimetro**: le sue misure sono Windows-only, il
+profilo isolato è Linux, e non c'è una grandezza comune da consumare.
+
+### 12.1 `PT-shadow`, il gate bloccante
+
+Un prototipo, non una PR, e **`PR-13a` non è implementabile prima del suo
+esito**. Deve dimostrare quattro proprietà; se una manca, nessun profilo shadow
+viene offerto e il disegno torna in review con la proprietà mancante
+dichiarata.
+
+| | proprietà |
+|---|---|
+| **1** | **sandbox del filesystem**: un provider reale — mount namespace, Landlock o equivalente — che confini il candidato alla propria directory privata. Identità distinta e handle già aperti **non bastano**, per la ragione scritta in `NG-9` |
+| **2** | **quota sullo spazio temporaneo**: una sandbox governa *dove* si scrive, non *quanti byte*. Senza una quota effettiva il tetto dichiarato è una nota |
+| **3** | **dominio separato**: processo e cgroup propri, con le regole del dominio del worker. Mai un thread — in cgroup v2 il controller `memory` è di dominio, l'addebito segue la `mm` condivisa fra i thread, e con `memory.oom.group = 1` un candidato co-locato porterebbe via il lavoro canonico insieme a sé |
+| **4** | **incapacità di influire sul canonico**: nessun limite, panic, timeout o esaurimento del candidato può cambiare artefatto o esito dell'esecuzione osservata |
+
+Se il provider richiede una dipendenza nuova, questa segue `AGENTS.md`:
+motivazione documentata, pin esatto, revisione, e nessun `unsafe` nel
+workspace.
+
+### 12.2 L'architettura
+
+Quattro scelte, e sono le uniche che il prototipo non può rimettere in
+discussione, perché non dipendono dal provider.
+
+**Lo snapshot precede l'esecuzione canonica.** Una copia fatta dopo
+congelerebbe uno stato del file che nessuna esecuzione ha letto. Worker
+canonico e confronto leggono gli stessi byte.
+
+**Il confronto è fuori banda, dopo il commit point.** Non esiste un arco del
+grafo di stati in cui il suo esito sia ingresso della decisione di pubblicare,
+quindi l'indipendenza è strutturale invece che affidata a una regola. Una
+preparazione fallita disabilita l'osservazione, e l'esecuzione canonica
+prosegue nel profilo `off`.
+
+**Il confronto è fra candidato e GEOS rieseguito sul prefisso.** L'output GEOS
+originale non è conservato: la ritenzione per nodo richiederebbe di rompere la
+fusione dei segmenti geo, cioè di cambiare il piano fisico canonico. Il nodo si
+identifica per `id`, e il piano derivato è **un piano diverso, con `plan_hash`
+proprio**.
+
+**GEOS resta autorevole.** Il risultato restituito è sempre il suo, per tutta
+la fase shadow.
+
+### 12.3 La policy è dell'host
+
+**Il profilo predefinito è `off`**: lo shadow non si attiva se nessuno lo
+abilita, e `off` è l'unico profilo che non cambia nulla.
+
+Il piano **non può** abilitare lo shadow né alzarne alcun limite: se potesse,
+un input deciderebbe quanto l'host spende per osservarlo. La politica appartiene
+al dispiegamento, non viaggia nel piano né nel protocollo, e se non è
+configurata il profilo non è disponibile.
+
+Governa almeno memoria del dominio, concorrenza, timeout e spazio temporaneo.
+La concorrenza è la voce che rende finita la somma a livello di host, dove i
+domini shadow **si sommano** invece di alternarsi: l'uguaglianza per invocazione
+del profilo isolato vale fra staging, worker e verificatore, che non
+coesistono, e non copre un confronto fuori banda. L'insieme completo delle voci
+si fissa con `PR-13a`.
+
+### 12.4 Garanzie e non-garanzie
+
+| | |
+|---|---|
+| **esito del tentativo osservato** | **invariato**: artefatto, exit code e sezione canonica dell'envelope coincidono con `off`. È ciò che gli oracoli di `PR-13a` devono dimostrare |
+| **envelope** | la sezione canonica è identica a `off`; l'esito shadow vive in una **sezione propria**, assente nel profilo `off`, così l'envelope preesistente resta byte-identico |
+| **latenza del tentativo osservato** | **cambia**: lo staging precede lo spawn, e il suo costo si paga anche quando poi fallisce |
+| **tentativi concorrenti** | **possibile interferenza operativa**: CPU e I/O non sono governati. Il tetto sulla concorrenza e una priorità più bassa la attenuano, non la escludono |
+| **finestra fra commit e risposta** | **si allarga**, del lavoro necessario ad accodare l'osservazione. Resta la classe di `NG-13`, con una finestra più larga |
+| **autorità sul filesystem** | promessa **solo** sotto il provider di contenimento. Senza, il candidato conserva l'autorità della propria identità |
+| **immutabilità durante la copia** | è una **precondizione esterna**, e non basta dichiararla: il canonico legge quella copia, quindi una mutazione concorrente produrrebbe uno **stato misto** che nessuno rileverebbe. Se il dispiegamento non può garantirla e il provider non offre uno snapshot point-in-time, **il profilo shadow non è disponibile**. Dopo la copia, lo snapshot è immutabile per costruzione fino alla conclusione del confronto, e chiude il TOCTOU fra esecuzione canonica e replay |
+| **trasparenza del prefisso** | il piano derivato fonde diversamente dal canonico. L'uguaglianza del valore di nodo poggia sul determinismo di livello 1, ed è una proprietà da **verificare per ogni kernel reale**, non da assumere |
+
+Sono dichiarazioni **di progetto**: finché `PR-13a` non esiste non sono limiti
+del prodotto, e non appartengono al registro dei limiti dichiarati. Vi entrano
+il giorno in cui il codice le rende vere.
+
+### 12.5 Privacy del confronto
+
+| | |
+|---|---|
+| mai in chiaro | WKB, coordinate, aree, cardinalità, valori: nessun dato dell'utente né una sua trascrizione leggibile |
+| classe della divergenza | da **enum chiuso**: dice *che tipo* di differenza, mai *quale* valore |
+| digest dei dati | **nessuno per default**: la geometria applicativa ha spazio d'ingresso prevedibile, quindi un digest permette dizionario e correlazione |
+| localizzazione | solo se il dispiegamento configura una chiave, e allora HMAC |
+| errori | **sempre privi di dati**, senza eccezione diagnostica: il confronto shadow non deroga alla regola di `AGENTS.md` |
+| telemetria | canale **separato dagli errori**, con la propria ritenzione |
+
+Il `commit_token` non compare in nomi, log, errori o metriche.
+
+### 12.6 Suddivisione e criteri di uscita
+
+| | contenuto | è chiusa quando |
+|---|---|---|
+| `PT-shadow` | prototipo, evidenza esplorativa | le quattro proprietà sono dimostrate, oppure il disegno torna in review con quella mancante dichiarata |
+| `PR-13a` | infrastruttura con **candidato sintetico** | sono dimostrate le garanzie fissate qui sopra — architettura, policy, garanzie e privacy — e in particolare: una **preparazione fallita** lascia il canonico equivalente a `off`; il **piano non può** abilitare lo shadow né aumentarne i limiti; il **record di confronto** è conforme al contratto privacy; e i **quattro guasti del candidato** — sfonda il tetto, panica, non termina, diverge — non hanno alcun effetto canonico |
+| `PR-13b` | `polygonize` | trasparenza del prefisso dimostrata per questo kernel, con GEOS autorevole |
+| `PR-13c` | `split` | idem |
+| `PR-13d` | `make_valid` | idem |
+
+`PR-13a` non contiene alcun kernel geo: un candidato che fallisce su ordine
+dimostra il meccanismo, non `polygonize`.
+
+L'uscita dalla fase shadow è un gate a sé e non appartiene a queste PR: serve un
+**corpus applicativo reale e anonimizzato** con manifest revisionato, perché
+dati sintetici non lo chiudono. Solo dopo si valutano canary, `default-rust` e
+il ritiro di GEOS, ciascuno con criteri approvati sul traffico reale.

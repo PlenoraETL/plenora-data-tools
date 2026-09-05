@@ -167,9 +167,10 @@ def _elenco_documentato(sezioni):
 def _crs(variante):
     """Il requisito CRS in forma leggibile, o `None` se l'op non ne ha.
 
-    `CRS.get(...)` restituiva `None` anche per una variante che la tabella non
-    conosce: un requisito CRS nuovo sarebbe sparito dal documento, che avrebbe
-    continuato a sembrare completo. Una variante sconosciuta e' un errore.
+    `CRS.get(...)` renderebbe `None` anche per una variante che la tabella
+    non conosce: un requisito CRS nuovo sparirebbe dal documento, che
+    continuerebbe a sembrare completo. Una variante sconosciuta e' quindi un
+    errore.
     """
     if variante is None:
         return None
@@ -259,9 +260,10 @@ def parse_fragments(sorgenti=None):
     `FRAG_DIR`. Passarla serve alle regressioni: un parser di documentazione
     va provato su input costruiti, non solo sul repository.
 
-    Un id ripetuto e' un ERRORE. Prima l'ultimo blocco sovrascriveva il
-    primo: due firme diverse per la stessa operazione, e nel documento ne
-    finiva una sola, senza che nulla dicesse quale fosse stata scartata.
+    Un id ripetuto e' un ERRORE. Senza il controllo l'ultimo blocco
+    sovrascrive il primo: due firme diverse per la stessa operazione, e nel
+    documento ne finirebbe una sola, senza che nulla dica quale sia stata
+    scartata.
     """
     if sorgenti is None:
         sorgenti = [(path.name, path.read_text(encoding="utf-8"))
@@ -453,8 +455,8 @@ UNA_RIGA = (
 )
 
 # Come rustfmt riformatta l'invocazione appena cresce: un argomento per riga,
-# e la parentesi di chiusura su una riga sua. E' questa forma che la regex
-# precedente non agganciava piu'.
+# e la parentesi di chiusura su una riga sua. E' la forma che una regex a
+# riga singola non aggancia.
 PIU_RIGHE = """    op!(
         "geo.due",
         Geo,
@@ -485,10 +487,10 @@ def autotest():
     """Regressioni del parser. Girano a ogni invocazione: costano microsecondi.
 
     Un parser di documentazione che smette di agganciare non rompe nulla di
-    visibile — il documento resta com'era e sembra aggiornato. E' cosi' che
-    questo generatore e' rimasto rotto per mesi senza che nessuno lo notasse,
-    ed e' la ragione per cui le prove stanno qui dentro invece che in una
-    suite che qualcuno deve ricordarsi di lanciare.
+    visibile: il documento resta com'e' e sembra aggiornato. E' cosi' che un
+    generatore rotto sopravvive per mesi senza che nessuno lo noti, ed e' la
+    ragione per cui le prove stanno qui dentro invece che in una suite che
+    qualcuno deve ricordarsi di lanciare.
     """
     ops = parse_catalog(_catalogo_finto(UNA_RIGA + PIU_RIGHE + ANNIDATA))
     atteso = {"table.uno", "geo.due", "table.tre"}
@@ -550,8 +552,8 @@ def autotest():
         raise ErroreCatalogo(
             "autotest: una chiave opzionale sconosciuta e' passata inosservata.")
 
-    # Una variante CRS che la tabella non conosce spariva dal documento: il
-    # requisito c'era nel catalogo e la firma non lo diceva.
+    # Una variante CRS che la tabella non conosce sparirebbe dal documento:
+    # il requisito sta nel catalogo e la firma non lo direbbe.
     crs_ignoto = (
         '    op!("geo.cinque", Geo, Extension, Unary, Streaming, Cooperative, '
         'None, Some(CrsRequirement::VarianteNuova), &[], DefinedOrder, '
@@ -569,7 +571,8 @@ def autotest():
             "autotest: una variante CrsRequirement sconosciuta e' stata "
             "omessa invece di fermare la generazione.")
 
-    # Due frammenti con lo stesso id: prima l'ultimo sovrascriveva il primo.
+    # Due frammenti con lo stesso id: senza il controllo l'ultimo sovrascrive
+    # il primo.
     doppio = [
         ("primo.md", "### table.uno\nfirma A\n"),
         ("secondo.md", "### table.uno\nfirma B\n"),
@@ -593,8 +596,8 @@ def autotest():
         raise ErroreCatalogo("autotest: frammenti distinti letti male: %r"
                              % sorted(singoli))
 
-    # Un'operazione elencata in due sezioni diverse: prima passava, compariva
-    # due volte nel documento e gonfiava i conteggi dell'intestazione.
+    # Un'operazione elencata in due sezioni diverse: senza il controllo passa,
+    # compare due volte nel documento e gonfia i conteggi dell'intestazione.
     sezioni_doppie = [
         ("filtering", ["table.filter", "table.sort"]),
         ("aggregation", ["table.sort", "table.distinct"]),
@@ -643,10 +646,10 @@ def genera():
     missing_cat = [oid for oid in documentate if oid not in catalog]
     missing_blk = [oid for oid in documentate if oid not in blocks]
     extra_blk = sorted(set(blocks) - set(documentate))
-    # Il verso che mancava fino al 2026-08-21: operazioni catalogate che
-    # nessuna sezione copre. Il documento controllava che ogni op documentata
-    # esistesse nel catalogo, mai il contrario, e diciannove operazioni sono
-    # rimaste fuori senza che nulla lo dicesse.
+    # Il verso opposto: operazioni catalogate che nessuna sezione copre.
+    # Controllare solo che ogni op documentata esista nel catalogo lascia
+    # fuori dal documento le operazioni che nessuno ha elencato, senza che
+    # nulla lo dica.
     scoperte = sorted(set(catalog) - set(documentate))
     if missing_cat or missing_blk or extra_blk:
         raise ErroreCatalogo(

@@ -6,8 +6,9 @@
 //! Quattro campi del protocollo portano l'uscita testuale di uno SHA-256 —
 //! l'identita' dell'artefatto, il digest dell'insieme delle risorse, il
 //! `plan_hash_atteso` e il fingerprint del contratto d'ingresso. Con una
-//! `String` la loro forma dipendeva da un controllo scritto altrove: quattro
-//! chiamate che qualcuno poteva dimenticare di aggiungere al quinto campo.
+//! `String` la loro forma dipenderebbe da un controllo scritto altrove:
+//! quattro chiamate che qualcuno puo' dimenticare di aggiungere al quinto
+//! campo.
 //!
 //! Qui la forma e' del tipo. Non esiste un `DigestSha256` non canonico, quindi
 //! non c'e' un controllo da ricordare: c'e' un costruttore che rifiuta.
@@ -58,7 +59,7 @@ pub enum FormaDigestNonValida {
     ///
     /// Una variante sola dove il `commit_token` ne ha due: qui la maiuscola e
     /// la spazzatura portano alla stessa azione — riscrivere il campo — mentre
-    /// per il token la distinzione dice a chi legge che il valore poteva
+    /// per il token la distinzione dice a chi legge che il valore puo'
     /// essere giusto e la grafia no.
     NonEsadecimaleMinuscolo {
         /// Posizione, in byte dall'inizio.

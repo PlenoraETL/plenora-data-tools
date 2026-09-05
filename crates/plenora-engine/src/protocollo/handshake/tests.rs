@@ -504,8 +504,8 @@ fn incarico() -> Frame {
 /// Un `Incarico` prima dell'accordo e' rifiutato **col suo nome**.
 ///
 /// Non «messaggio inatteso»: e' il caso che il perimetro nomina, e chiamarlo
-/// cosi' dice a chi legge che l'handshake non era concluso, non che il
-/// messaggio fosse malformato.
+/// cosi' dice a chi legge che l'handshake non e' concluso, non che il
+/// messaggio sia malformato.
 #[test]
 fn un_incarico_prima_dell_accordo_e_rifiutato() {
     let worker = WorkerInAttesa::nuovo(locale()).expect("coerente");
@@ -592,14 +592,13 @@ fn un_tipo_fuori_sequenza_e_rifiutato() {
 /// senza `Clone` — e il compilatore la fa rispettare a ogni chiamata del
 /// crate.
 ///
-/// **Quello che c'era prima era peggio di niente.** Un blocco
-/// ```` ```compile_fail ```` su questa doc non veniva **mai eseguito**:
-/// `rustdoc` non raccoglie i doctest dai moduli `#[cfg(test)]`, e
-/// `cargo test --doc` lo confermava con «0 tests». Se fosse stato raccolto
-/// sarebbe stato peggio ancora: `protocollo` e' un modulo privato, quindi
-/// quel codice sarebbe fallito per **privacy**, non per il valore mosso — un
-/// `compile_fail` che passa per la ragione sbagliata e' un oracolo che
-/// dichiara una proprieta' senza sorvegliarla.
+/// **Un `compile_fail` qui sarebbe peggio di niente.** Un blocco
+/// ```` ```compile_fail ```` su questa doc non verrebbe **mai eseguito**:
+/// `rustdoc` non raccoglie i doctest dai moduli `#[cfg(test)]`, e `cargo test
+/// --doc` risponde «0 tests». Raccolto sarebbe peggio ancora: `protocollo` e'
+/// un modulo privato, quindi quel codice fallirebbe per **privacy**, non per
+/// il valore mosso — un `compile_fail` che passa per la ragione sbagliata e'
+/// un oracolo che dichiara una proprieta' senza sorvegliarla.
 ///
 /// Provarla davvero richiede `trybuild` o `compiletest`, cioe' una dipendenza
 /// nuova, e una superficie da cui il tipo sia raggiungibile. Fino ad allora e'
@@ -650,7 +649,7 @@ const SENTINELLA: &str = "SEGRETO-8675309124816324";
 /// Il rifiuto e' il momento in cui qualcuno guarda, ed e' anche il momento in
 /// cui cio' che si mostra viene copiato nel log insieme al motivo per cui lo
 /// si stava guardando. Chi indaga ha il frame in mano: il messaggio deve dirgli
-/// **quale campo** non torna, non che cosa c'era scritto.
+/// **quale campo** non torna, non che cosa c'e' scritto.
 ///
 /// Ogni caso passa da un asse diverso del confronto, perche' la riservatezza
 /// non e' una proprieta' del modulo ma di ciascun percorso d'errore: basta uno
@@ -723,9 +722,9 @@ fn nessun_errore_dell_handshake_porta_cio_che_arriva_dal_filo() {
 ///
 /// L'handshake confronta per uguaglianza, e la stringa vuota e' uguale alla
 /// stringa vuota: due lati che non dichiarano nulla concludono l'accordo
-/// avendo confrontato il nulla col nulla. Il tetto non lo impediva — una
-/// stringa vuota sta sotto qualunque tetto — quindi serve una regola che dica
-/// non solo «quanto grande», ma «che ci sia».
+/// avendo confrontato il nulla col nulla. Il tetto non lo impedisce — una
+/// stringa vuota sta sotto qualunque tetto — quindi serve una regola che
+/// dica non solo «quanto grande», ma «che ci sia».
 ///
 /// Si prova su **entrambi i lati**: il rifiuto della propria descrizione
 /// arriva alla costruzione, quello della descrizione ricevuta alla verifica.
@@ -751,8 +750,8 @@ fn una_descrizione_vuota_non_si_costruisce_ne_si_accetta() {
     let errore = supervisore_riceve(risposta).expect_err("versione vuota");
     assert!(errore.to_string().contains("resolver.versione"), "{errore}");
 
-    // E il caso che il difetto rendeva possibile: due lati che dichiarano il
-    // vuoto sullo stesso asse **coinciderebbero**.
+    // E il caso che la sua assenza renderebbe possibile: due lati che
+    // dichiarano il vuoto sullo stesso asse **coinciderebbero**.
     let mut sue = attese();
     sue.comune.resolver.identita = String::new();
     let mut sua = locale();
@@ -790,12 +789,12 @@ fn due_digest_canonici_e_diversi_sono_un_disaccordo() {
 
 /// Attese che **nessuna** risposta valida potrebbe soddisfare.
 ///
-/// Le capability richieste passavano solo dalla riduzione a forma canonica —
-/// ordine e duplicati — non dalla verifica che vale per quelle offerte. Il
-/// supervisore poteva percio' chiedere un nome vuoto, che nessuna `Risposta`
-/// valida puo' portare, o piu' capability di quante una `Risposta` ne ammetta:
-/// in entrambi i casi l'accordo era impossibile per costruzione, e lo si
-/// scopriva al confronto invece che alla costruzione.
+/// Facendo passare le capability richieste dalla sola riduzione a forma
+/// canonica — ordine e duplicati — e non dalla verifica che vale per quelle
+/// offerte, il supervisore potrebbe chiedere un nome vuoto, che nessuna
+/// `Risposta` valida puo' portare, o piu' capability di quante una `Risposta`
+/// ne ammetta: in entrambi i casi l'accordo sarebbe impossibile per
+/// costruzione, e lo si scoprirebbe al confronto invece che alla costruzione.
 #[test]
 fn le_capability_richieste_passano_dalla_stessa_verifica_delle_offerte() {
     use crate::protocollo::limiti::MAX_CAPABILITY;
@@ -818,8 +817,8 @@ fn le_capability_richieste_passano_dalla_stessa_verifica_delle_offerte() {
 ///
 /// Il frame consegnato all'accordato puo' non essere passato dal decoder: nel
 /// crate si costruisce con `Frame::nuovo`. Senza una verifica qui, un incarico
-/// con un `plan_hash_atteso` che non e' un digest usciva intatto, e a
-/// rifiutarlo sarebbe stato chi lo esegue — cioe' piu' tardi, e altrove.
+/// con un `plan_hash_atteso` che non e' un digest uscirebbe intatto, e a
+/// rifiutarlo sarebbe chi lo esegue — cioe' piu' tardi, e altrove.
 #[test]
 fn un_incarico_malformato_e_rifiutato_anche_da_un_frame_diretto() {
     // I guasti sui digest non compaiono, e non per dimenticanza: dopo che i

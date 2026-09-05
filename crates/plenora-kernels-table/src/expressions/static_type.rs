@@ -5,15 +5,15 @@
 //!
 //! Il tipo della colonna prodotta e' parte del contratto, e un contratto non
 //! puo' dipendere dai valori: due batch con lo stesso schema e la stessa
-//! configurazione devono produrre lo stesso schema. Il kernel risolveva
-//! invece `output_type = auto` osservando i valori calcolati, e su un batch
-//! vuoto o tutto null non ne osservava nessuno — quindi ripiegava su `Utf8`
-//! anche dove l'analisi aveva promesso `Boolean` o `Float64`.
+//! configurazione devono produrre lo stesso schema. Risolvendo
+//! `output_type = auto` sui valori calcolati, un batch vuoto o tutto null
+//! non ne osserverebbe nessuno — e ripiegherebbe su `Utf8` anche dove
+//! l'analisi ha promesso `Boolean` o `Float64`.
 //!
 //! Questo modulo e' la sorgente UNICA della regola: lo usa l'analizzatore per
 //! dichiarare il contratto e lo usa il kernel per costruire la colonna. Due
-//! copie della stessa regola sono due copie dello stesso difetto — e' la
-//! classe che questa serie di review ha gia' trovato quattro volte.
+//! copie della stessa regola sono due copie dello stesso difetto, e la
+//! seconda diverge senza dirlo.
 
 use plenora_core::arrow::schema::{DataType, TimeUnit};
 use plenora_core::{PlenoraError, Result};
@@ -80,16 +80,16 @@ impl Kind {
 ///
 /// # Perche' un insieme e non un tipo
 ///
-/// Una versione precedente aveva un solo stato `Any` per due cose diverse: un
-/// letterale null — compatibile con qualsiasi tipo — e un sotto-albero
-/// eterogeneo, il cui tipo dipende dai dati. Trattandolo come elemento neutro
-/// dell'incontro, l'eterogeneita' spariva al passo successivo:
+/// Un solo stato `Any` terrebbe insieme due cose diverse: un letterale null
+/// — compatibile con qualsiasi tipo — e un sotto-albero eterogeneo, il cui
+/// tipo dipende dai dati. Trattato come elemento neutro dell'incontro,
+/// l'eterogeneita' sparirebbe al passo successivo:
 ///
-/// - `coalesce(numero, testo, booleano)` diventava `Any` e poi `Boolean`, cioe'
-///   un risultato che dipendeva dall'ORDINE degli argomenti;
-/// - `equal(coalesce(nullo, testo), numero)` passava, perche' il `coalesce`
-///   eterogeneo tornava `Any` e il confronto lo assorbiva come `Number` — e a
-///   runtime confrontava testo con numero.
+/// - `coalesce(numero, testo, booleano)` diventerebbe `Any` e poi
+///   `Boolean`, cioe' un risultato che dipende dall'ORDINE degli argomenti;
+/// - `equal(coalesce(nullo, testo), numero)` passerebbe, perche' il
+///   `coalesce` eterogeneo tornerebbe `Any` e il confronto lo assorbirebbe
+///   come `Number` — e a runtime confronterebbe testo con numero.
 ///
 /// Un insieme non perde niente: l'unione di `coalesce`/`case` accumula, i
 /// confronti pretendono che l'unione abbia al piu' UN tipo, e la
@@ -560,9 +560,9 @@ fn temporal_kind(
 ///
 /// Con `auto` l'insieme dev'essere un singoletto — l'eterogeneita' e' proprio
 /// il caso che il runtime rifiuterebbe, e il messaggio indica la via d'uscita.
-/// «Solo null» diventa `Text`, come faceva il kernel quando non osservava
-/// nessun valore; ma ora e' una decisione sullo SCHEMA, quindi vale anche per
-/// un batch pieno.
+/// «Solo null» diventa `Text`, come fa il kernel quando non osserva nessun
+/// valore — ma qui e' una decisione sullo SCHEMA, quindi vale anche per un
+/// batch pieno.
 ///
 /// Con un `output_type` dichiarato il kernel NON converte: applica
 /// `number()` / `boolean()` / `text()` / `scalar_date32()` /

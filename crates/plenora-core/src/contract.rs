@@ -1,9 +1,9 @@
 //! Contratti dati del grafo (architettura.md, decisioni D6, D16,
 //! D25; architettura.md#determinismo, architettura.md#planner-ed-executor).
 //!
-//! Fondamenta della Fase 2A: tipi NUOVI (non trasloco) che descrivono ciò che
-//! scorre sugli archi del DAG (`DataContract`), l'identità logica stabile delle
-//! colonne (`FieldId`), la provenienza e lo scope delle proprietà
+//! Qui vivono i tipi che descrivono ciò che scorre sugli archi del DAG
+//! (`DataContract`), l'identità logica stabile delle colonne
+//! (`FieldId`), la provenienza e lo scope delle proprietà
 //! (`PropertyConfidence`/`PropertyScope`/`ContractProperty`), le statistiche di
 //! runtime (`RuntimeStatistic`) e la sequenza logica dei batch
 //! (`BatchSequence`).
@@ -46,7 +46,7 @@ impl fmt::Display for FieldId {
     }
 }
 
-/// Dimensionalità delle geometrie di una colonna (ICD §3.3, milestone B1.1).
+/// Dimensionalità delle geometrie di una colonna (ICD §3.3).
 ///
 /// Il contratto rappresenta e propaga la dimensionalità, NON la elabora.
 /// Serializzazione ICD: `"xy"`, `"xyz"`, `"xym"`, `"xyzm"`, `"unknown"`
@@ -142,8 +142,8 @@ impl std::str::FromStr for GeometryDimensions {
 ///
 /// Solo WKB ISO ed EWKB (estensione `PostGIS` con SRID/flag Z/M) sono
 /// rappresentabili. Altri framing — header `GeoPackage`, TWKB, … — NON sono
-/// rappresentabili: la discovery (milestone B1.3) deve rifiutarli con
-/// errore esplicito, mai mapparli a un encoding noto.
+/// rappresentabili: la discovery deve rifiutarli con errore esplicito, mai
+/// mapparli a un encoding noto.
 ///
 /// Serializzazione ICD: `"wkb"`, `"ewkb"` (minuscola).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -350,7 +350,7 @@ impl std::str::FromStr for GeometryType {
 /// Stato di dichiarazione dei tipi geometrici di una colonna (ICD R3.4.1,
 /// chiave canonica `plenora.geometry.types_declaration`).
 ///
-/// Tre stati che la 1.x confondeva in `unknown`:
+/// Tre stati che nella 1.x collassano in `unknown`:
 ///
 /// - `Exact`: l'insieme dei tipi presenti e' noto ed e' quello elencato;
 /// - `Mixed`: la colonna ammette tipi diversi PER DICHIARAZIONE (es. una
@@ -994,8 +994,8 @@ pub struct GeometryColumnContract {
     pub crs: ContractCrs,
     pub dimensions: GeometryDimensions,
     /// Framing binario delle celle (ICD §3.3, regola R3.5), se dichiarato
-    /// dai metadati: `None` quando la sorgente non dichiara un `encoding`
-    /// (input pre-B1.3) — mai un default silenzioso. I framing fuori
+    /// dai metadati: `None` quando la sorgente non dichiara un `encoding` —
+    /// mai un default silenzioso. I framing fuori
     /// dall'enum chiuso non sono rappresentabili: la discovery li rifiuta
     /// con errore esplicito prima di costruire il contratto.
     pub encoding: Option<GeometryEncoding>,
@@ -1032,10 +1032,13 @@ impl GeometryColumnContract {
 
 /// Assegnatore di [`FieldId`] nel namespace globale del grafo (decisione D16).
 ///
-/// Unico allocatore condiviso dal planner e dai moduli `analyze_contract`
-/// delle famiglie di kernel (unificazione Fase 2A-3: in precedenza
-/// `plenora-kernels-table` ne definiva uno locale, doppione di questo).
-/// Il planner crea un unico allocatore per l'analisi dell'intero grafo e
+/// Il namespace degli ID è quello di **un grafo**: grafi distinti hanno
+/// legittimamente allocatori distinti. Dentro un grafo, invece, l'allocatore
+/// dev'essere uno solo, condiviso dal planner e dai moduli
+/// `analyze_contract` di tutte le famiglie di kernel — due allocatori non
+/// coordinati sullo stesso grafo assegnerebbero gli stessi ID a colonne
+/// diverse, e l'identità smetterebbe di distinguerle.
+/// Il planner crea quindi un unico allocatore per l'analisi dell'intero grafo e
 /// rimappa i `FieldId` delle geometrie di input con [`FieldAllocator::alloc`]
 /// (senza legare i nomi: due input possono avere colonne omonime);
 /// [`FieldAllocator::observe`] e' chiamato dai moduli `analyze_contract` per
@@ -1069,10 +1072,10 @@ impl FieldAllocator {
     /// # Errors
     ///
     /// `PlenoraError::InvalidPlan` quando lo spazio degli identificatori e'
-    /// esaurito. L'incremento era saturante: arrivato a `u32::MAX`
-    /// l'allocatore restituiva ripetutamente LO STESSO id, e la garanzia di
+    /// esaurito. Con un incremento saturante, arrivato a `u32::MAX`
+    /// l'allocatore renderebbe ripetutamente LO STESSO id, e la garanzia di
     /// freschezza — su cui poggia l'identita' delle colonne nel grafo (D16) —
-    /// cadeva in silenzio, con due colonne diverse che condividevano
+    /// cadrebbe in silenzio, con due colonne diverse a condividere
     /// identita'. Meglio un piano rifiutato che un grafo con identita'
     /// ambigue.
     pub fn alloc(&mut self) -> Result<FieldId> {
@@ -1221,15 +1224,15 @@ pub struct ContractProperties {
     /// Chiavi di ordinamento dichiarate/dimostrate, come `FieldId` nel
     /// namespace globale del grafo.
     pub sorted_by: Option<ContractProperty<Vec<FieldId>>>,
-    /// Cardinalità nota o stimata dell'arco (mai `Proven` in fase 1: non è
-    /// dimostrabile dagli header, architettura.md).
+    /// Cardinalità nota o stimata dell'arco: mai `Proven` nella validazione
+    /// statica, perché non è dimostrabile dagli header (D8, architettura.md).
     pub row_count: Option<ContractProperty<u64>>,
 }
 
 /// Contratto di un arco del DAG (decisioni D6, D16).
 ///
 /// Ogni arco trasporta `RecordBatch` conformi a questo contratto, inferito a
-/// secco dal planner (`analyze_contract` di ogni operazione, Fase 2A-2).
+/// secco dal planner (`analyze_contract` di ogni operazione).
 #[derive(Clone, Debug)]
 pub struct DataContract {
     pub schema: SchemaRef,
@@ -1284,8 +1287,9 @@ impl DataContract {
     /// - ogni colonna geometrica esiste nello schema con lo stesso nome, la
     ///   stessa nullability e **tipo fisico `Binary`** — il framing WKB/EWKB
     ///   e' un vettore di byte, e ogni lettore della geometria fa `downcast`
-    ///   a `BinaryArray`: un contratto che dichiara geometrica una colonna di
-    ///   tipo diverso passava il dry-run e falliva a runtime;
+    ///   a `BinaryArray`: senza questo controllo un contratto che dichiara
+    ///   geometrica una colonna di tipo diverso passerebbe il dry-run e
+    ///   fallirebbe a runtime;
     /// - se sia il contratto sia i metadati canonici della colonna dichiarano
     ///   i tipi geometrici, le due dichiarazioni devono coincidere;
     /// - `active_geometry`, se presente, riferisce una delle colonne
@@ -1383,15 +1387,15 @@ pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str = "plenora.geometry.crs_reso
 /// 1. **Validita' sintattica di ogni chiave presente.** Una chiave canonica
 ///    che c'e' dev'essere leggibile, indipendentemente da cosa dichiari il
 ///    contratto: «assente» e «presente ma malformata» sono stati diversi, e
-///    saltare il parsing quando il lato tipizzato tace lasciava passare
+///    saltare il parsing quando il lato tipizzato tace lascerebbe passare
 ///    `encoding = "twkb"` o un elenco di tipi fuori ordine.
 /// 2. **Coerenza fra le due fonti.** Qui il confronto scatta solo quando
 ///    ENTRAMBE dichiarano qualcosa: un contratto senza dichiarazione resta
 ///    legittimo (R3.4.1: «non dichiarato» e' uno stato, non un'assenza da
 ///    colmare) e cosi' pure una colonna senza chiavi canoniche. Quando
 ///    entrambe parlano e si contraddicono, il contratto e' incoerente e va
-///    rifiutato subito: e' il caso in cui il dry-run accettava un contratto
-///    che a runtime avrebbe letto altro.
+///    rifiutato subito: e' il caso in cui il dry-run accetterebbe un
+///    contratto che a runtime leggerebbe altro.
 fn validate_declared_types(
     geometry: &GeometryColumnContract,
     metadata: &HashMap<String, String>,
@@ -1399,8 +1403,8 @@ fn validate_declared_types(
     // Ogni chiave canonica PRESENTE dev'essere sintatticamente valida, anche
     // quando il lato tipizzato del contratto tace. «Assente» e «presente ma
     // malformata» sono stati diversi (R5.1): saltare il controllo quando il
-    // contratto non dichiara nulla lasciava passare `encoding = "twkb"` o
-    // `dimensions = "2d"` senza che nessuno li leggesse.
+    // contratto non dichiara nulla lascerebbe passare `encoding = "twkb"` o
+    // `dimensions = "2d"` senza che nessuno li legga.
     if let Some(declared) = metadata.get(PLENORA_GEOMETRY_DIMENSIONS_KEY) {
         let parsed: GeometryDimensions = declared.parse().map_err(|_| {
             PlenoraError::Schema(format!(

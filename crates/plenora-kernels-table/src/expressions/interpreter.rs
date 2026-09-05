@@ -461,9 +461,8 @@ pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<R
     // Il tipo della colonna prodotta si decide dallo SCHEMA, MAI dai valori
     // calcolati: e' la stessa funzione che usa l'analizzatore del contratto,
     // quindi lo schema promesso e quello prodotto non possono divergere.
-    // Risolverlo dai valori significava che un batch vuoto o tutto null
-    // ripiegava su `Utf8` anche dove il contratto diceva `Boolean` o
-    // `Float64`.
+    // Risolverlo dai valori significherebbe che un batch vuoto o tutto null
+    // ripiega su `Utf8` anche dove il contratto dice `Boolean` o `Float64`.
     let kind = static_output_kind(batch, config)?;
     // Batch vuoto: non c'e' niente da compilare, quindi si passa dal
     // generico. Le colonne sono gia' state risolte qui sopra per decidere il

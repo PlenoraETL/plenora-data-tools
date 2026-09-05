@@ -102,7 +102,7 @@ impl<'a> Float64Source<'a> {
 /// Due elenchi scritti a mano divergerebbero, e la divergenza si vedrebbe
 /// solo come un piano accettato in analisi e rifiutato in esecuzione, o —
 /// peggio — accettato da entrambi e calcolato su un ordine che nessuno dei
-/// due aveva inteso.
+/// due ha inteso.
 ///
 /// `Utf8` c'e' perche' il contratto ammette il testo **interpretato come
 /// numero**; `Boolean`, `Binary` e le dictionary non ci sono.

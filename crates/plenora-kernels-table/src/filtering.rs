@@ -163,7 +163,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
     match operator {
         // Null LOGICO: per una dictionary una chiave valida puo' puntare a
         // una entry nulla, e `is_null` risponderebbe `false` su una riga che
-        // e' nulla — `isnull` la perdeva e `notnull` la teneva.
+        // e' nulla: `isnull` la perderebbe e `notnull` la terrebbe.
         Operator::Isnull => return Ok(crate::is_logically_null(array, row)),
         Operator::Notnull => return Ok(!crate::is_logically_null(array, row)),
         _ if crate::is_logically_null(array, row) => return Ok(false),
@@ -253,7 +253,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
 }
 
 // ---------------------------------------------------------------------------
-// Fast path tipizzati (ottimizzazione kernel `table.filter`, Fase post-2A).
+// Fast path tipizzati di `table.filter`.
 //
 // Per i tipi Arrow principali (Int64, UInt64, Float64, Utf8, Boolean) il
 // confronto avviene sui valori nativi, senza conversione scalare per riga ne'
@@ -580,7 +580,8 @@ mod tests {
 
     use super::*;
 
-    /// Percorso generico pre-ottimizzazione: riferimento per l'equivalenza
+    /// Percorso generico, indipendente dai fast path: riferimento per
+    /// l'equivalenza
     /// semantica del fast path.
     fn generic_filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;

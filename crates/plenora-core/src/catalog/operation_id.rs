@@ -22,12 +22,12 @@
 //! confronta in entrambe le direzioni: nessuna variante senza descrittore,
 //! nessun descrittore senza variante.
 //!
-//! # Che cosa NON cambia
+//! # Che cosa resta fuori dall'osservabile
 //!
-//! Nulla di osservabile. `as_str` restituisce esattamente l'id del catalogo,
-//! quindi la serializzazione canonica, il `plan_hash` e il
-//! `catalog_fingerprint` restano identici. Gli alias legacy continuano a
-//! risolversi come prima, in `find_operation`.
+//! Questo enum. `as_str` restituisce esattamente l'id del catalogo, quindi
+//! la serializzazione canonica, il `plan_hash` e il `catalog_fingerprint`
+//! non dipendono da come l'identita' e' rappresentata dentro il codice.
+//! Gli alias legacy si risolvono in `find_operation`.
 
 /// Un'operazione del catalogo, per costruzione.
 ///

@@ -1,4 +1,4 @@
-//! PT-Linux — prototipo bloccante della fase 4.
+//! PT-Linux — prototipo bloccante dell'esecuzione isolata.
 //!
 //! Non e' codice di produzione e non e' coperto dai gate del workspace.
 //! Deve rispondere a domande, non fornire un'implementazione:
@@ -159,7 +159,7 @@ fn prepara_gerarchia() -> Result<PathBuf, String> {
 /// Come il dominio deve difendersi dai sottogruppi.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Foglia {
-    /// Nessuna difesa: il worker puo' creare sottogruppi (com'era il primo ciclo).
+    /// Nessuna difesa: il worker puo' creare sottogruppi.
     Aperta,
     /// `cgroup.max.depth = 0`: e' il kernel a rifiutare i discendenti.
     ProfonditaZero,
@@ -199,7 +199,7 @@ fn crea_dominio(
     Ok(dominio)
 }
 
-/// Scorciatoia per gli scenari del primo ciclo, che non sigillavano nulla.
+/// Scorciatoia per gli scenari che non sigillano nulla.
 fn crea_dominio_aperto(
     base: &Path,
     nome: &str,
@@ -293,10 +293,10 @@ fn carico(resto: &[String]) {
             std::thread::sleep(std::time::Duration::from_millis(1500));
             println!("CARICO dorme fine");
         }
-        // Serve a misurare il solo costo d'avvio. Senza questo ramo cadeva nel
-        // caso predefinito e allocava fino all'OOM: `l11` avrebbe riportato
-        // come «picco d'avvio» il tetto del dominio, cioe' un numero vero e
-        // che misura un'altra cosa.
+        // Serve a misurare il solo costo d'avvio. Senza questo ramo si cade nel
+        // caso predefinito e si alloca fino all'OOM: `l11` riporterebbe come
+        // «picco d'avvio» il tetto del dominio, cioe' un numero vero che
+        // misura un'altra cosa.
         "inerte" => println!("CARICO inerte fine"),
         "sottogruppo_vivo" => sottogruppo_vivo(),
         "riscrivi" => riscrivi_il_preflight(),
@@ -409,8 +409,8 @@ fn riscrivi_il_preflight() {
         println!("CARICO riscrivi cgroup-non-risolto");
         return;
     };
-    // `loginuid` non e' l'identita' effettiva — la prima stesura leggeva
-    // quello e stampava 4294967295, che non dice niente.
+    // `loginuid` non e' l'identita' effettiva: leggere quello stampa
+    // 4294967295, che non dice niente.
     let identita = leggi(Path::new("/proc/self/status"))
         .lines()
         .find(|r| r.starts_with("Uid:"))
@@ -772,7 +772,7 @@ fn stampa_stato(dominio: &Path, etichetta: &str) {
 
 
 // ---------------------------------------------------------------------------
-// Secondo ciclo. Le domande della review, una funzione ciascuna.
+// Secondo ciclo: una funzione per ciascuna domanda del prototipo.
 // ---------------------------------------------------------------------------
 
 /// L7 — il dominio puo' essere sigillato dal kernel come foglia?

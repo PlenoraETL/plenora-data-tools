@@ -20,9 +20,8 @@
 #   - i `.profraw` hanno nomi che contengono il pid, e il pid il sistema lo
 #     ricicla: con i profili di esecuzioni precedenti ancora sul disco un
 #     processo nuovo trova il proprio nome occupato, LLVM scrive l'errore su
-#     **stderr** e i test che pretendono stderr vuoto falliscono. Il
-#     2026-08-21, con 6 770 profili accumulati, due campagne consecutive sono
-#     fallite per questo;
+#     **stderr** e i test che pretendono stderr vuoto falliscono: bastano
+#     poche migliaia di profili accumulati perche' succeda;
 #   - i **binari strumentati** di una build precedente portano con se' la
 #     mappa di copertura del codice di allora: le loro righe entrano nel
 #     denominatore senza che nessun test le esegua, e il gate diventa non
@@ -68,10 +67,10 @@ pulisci_profili() {
 # Dopo, sempre, anche su errore o interruzione: i profili non devono
 # sopravvivere alla campagna che li ha prodotti, ne' finire nella cache.
 #
-# Se la pulizia finale fallisce e la misura era andata bene, la campagna
+# Se la pulizia finale fallisce e la misura e' andata bene, la campagna
 # FALLISCE: dichiarare successo lasciando i residui significa consegnare alla
 # prossima campagna — o alla cache della CI — esattamente il difetto che
-# questa pulizia esiste per evitare. Se la misura era gia' fallita, l'esito
+# questa pulizia esiste per evitare. Se la misura e' gia' fallita, l'esito
 # originale si conserva: e' quello che chi legge deve diagnosticare.
 pulizia_finale() {
   esito=$?

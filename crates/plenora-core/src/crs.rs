@@ -4,11 +4,10 @@
 //! a definition and, when the PROJ backend is enabled, this module resolves it
 //! against the bundled database before a spatial kernel is allowed to run.
 //!
-//! Port Fase 1 da `crs.rs` di plenora-geo-tools-arrow. `plenora-core` non ha
-//! la feature `proj-backend`: qui vive il contratto CRS backend-indipendente,
-//! mentre la risoluzione PROJ (che costruisce [`ResolvedCrs`] dal database
-//! bundled) resta in `plenora-kernels-geo` dietro la feature `proj-backend`.
-//! Senza backend [`resolve_crs`] fallisce chiuso, come nel sorgente.
+//! `plenora-core` non ha la feature `proj-backend`: qui vive il contratto CRS
+//! backend-indipendente, mentre la risoluzione PROJ (che costruisce
+//! [`ResolvedCrs`] dal database bundled) resta in `plenora-kernels-geo`
+//! dietro quella feature. Senza backend [`resolve_crs`] fallisce chiuso.
 
 use std::fmt;
 
@@ -175,8 +174,8 @@ impl ResolvedCrs {
 /// senza un [`ResolvedCrs`] (piano-v5.md#contratti-di-input, emendamento 2026-07-31). `None` per
 /// ogni altra forma (autorita' o codice vuoti, codice non numerico, oltre
 /// `u32`) — mai indovinare: lo `srid` non e' decidibile e l'identificatore
-/// resta intero alla risoluzione. Unica fonte di parsing condivisa (era
-/// duplicata in `plenora-cli`).
+/// resta intero alla risoluzione. E' l'unica fonte di questo parsing: una
+/// seconda copia deciderebbe per conto proprio quali forme sono valide.
 #[must_use]
 pub fn authority_code_srid(crs_id: &str) -> Option<u32> {
     let (authority, code) = crs_id.rsplit_once(':')?;

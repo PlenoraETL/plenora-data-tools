@@ -1,35 +1,35 @@
-//! Fase di MISURA dell'orchestrazione — nessuna ottimizzazione, nessuna
-//! modifica di comportamento.
+//! Sonda di MISURA dell'orchestrazione: non ottimizza nulla e non cambia
+//! comportamento.
 //!
 //! Stabilisce la linea di base contro cui misurare qualunque lavoro
 //! sull'orchestratore: senza numeri di partenza, «piu' veloce» e' un'opinione.
 //!
 //! # Come e' costruita la misura
 //!
-//! Ogni scelta qui sotto corregge un difetto della prima versione, che
-//! produceva numeri non utilizzabili per decidere:
+//! Ogni scelta qui sotto chiude un modo di produrre numeri non
+//! utilizzabili per decidere:
 //!
 //! - **un processo isolato per carico**. Il genitore rilancia se stesso con
 //!   `--carico <nome>` e raccoglie un JSON per figlio. Serve al picco di
 //!   memoria: `VmHWM` e' il massimo di TUTTA la vita del processo, quindi in
-//!   un processo unico il picco di un carico contaminava tutti gli altri;
+//!   un processo unico il picco di un carico contaminerebbe tutti gli altri;
 //! - **RSS per carico, con baseline sottratta**, letto nel figlio subito dopo
 //!   la fase cronometrata e prima di determinismo e prove sotto pressione;
-//! - **metriche di OGNI ripetizione**, non solo dell'ultima. La prima versione
-//!   sovrascriveva le metriche a ogni giro e poi le chiamava «cumulate su 7
-//!   ripetizioni»: erano un campione solo, e non identificato. Qui si
-//!   conservano tutte e si riportano mediana e intervallo, anche per nodo e
-//!   per il tetto di parallelizzazione;
+//! - **metriche di OGNI ripetizione**, non solo dell'ultima. Sovrascriverle
+//!   a ogni giro e chiamarle poi «cumulate su 7 ripetizioni» pubblica un
+//!   campione solo, e non identificato. Qui si conservano tutte e si
+//!   riportano mediana e intervallo, anche per nodo e per il tetto di
+//!   parallelizzazione;
 //! - **determinismo sui BYTE**: si confrontano direttamente i byte della
 //!   serializzazione IPC, non un hash. Un FNV a 64 bit puo' collidere, e due
-//!   output vuoti davano entrambi zero — cioe' «identici» senza guardarli;
+//!   output vuoti danno entrambi zero — cioe' «identici» senza guardarli;
 //! - **ripetizioni a BLOCCHI** finche' il wall cronometrato raggiunge davvero
 //!   [`SOGLIA_CUMULATIVA`], non finche' una stima fatta una volta dice che
 //!   dovrebbe bastare; il JSON dichiara `soglia_raggiunta` e `max_raggiunto`;
 //! - **timing e memoria separati**. La memoria ha un processo dedicato, UNA
 //!   sola esecuzione misurata e `VmHWM` azzerato via `/proc/self/clear_refs`
 //!   con verifica dell'azzeramento: cosi' RSS e governor descrivono lo stesso
-//!   evento. Senza, il picco includeva warm-up, decine di esecuzioni
+//!   evento. Senza, il picco comprenderebbe warm-up, decine di esecuzioni
 //!   consecutive e la retention dell'allocatore;
 //! - **tre campagne temporali indipendenti** per carico: il fattore di
 //!   parallelismo si riporta come mediana e intervallo fra processi. La
@@ -311,9 +311,9 @@ fn carichi() -> Vec<Carico> {
                     {"id": "a1", "op": "table.sort", "in": ["main"],
                      "config": {"columns": ["valore"], "ascending": true}},
                     {"id": "a2", "op": "table.distinct", "in": ["a1"], "config": {}},
-                    // Raggruppato su `id`: con 64 gruppi il join superava
-                    // `max_expansion_factor`, e un carico che non gira non
-                    // misura niente.
+                    // Raggruppato su `id`: con 64 gruppi il join
+                    // supererebbe `max_expansion_factor`, e un carico che
+                    // non gira non misura niente.
                     {"id": "b1", "op": "table.aggregate", "in": ["main"],
                      "config": {"group_by": ["id"],
                                 "aggregations": [{"column": "valore", "function": "mean"}]}},
@@ -531,9 +531,9 @@ fn fase_tempo(carico: &Carico) -> Value {
 
     // Ciclo ADATTIVO a blocchi: si continua finche' il wall CRONOMETRATO
     // raggiunge davvero la soglia, non finche' una stima fatta una volta dice
-    // che dovrebbe bastare. La versione precedente stimava le ripetizioni da
-    // una sonda e si fermava li': quattro carichi su cinque restavano sotto
-    // la soglia che il documento dichiarava.
+    // che dovrebbe bastare. Stimare le ripetizioni da una sonda e fermarsi
+    // li' lascia la maggior parte dei carichi sotto la soglia che il
+    // documento dichiara.
     let mut wall_totale = Duration::ZERO;
     let mut cpu_totale_tick: u64 = 0;
     let mut soglia_raggiunta = false;
@@ -878,10 +878,10 @@ const SOGLIA_DECOMPOSIZIONE: Duration = Duration::from_millis(700);
 ///
 /// Senza questo minimo la soglia cumulata si soddisfa anche con UNA sola
 /// ripetizione, purche' abbastanza lenta — ed e' proprio la ripetizione
-/// contaminata a essere lenta. E' successo: una cella di `streaming_lineare`
-/// e' stata misurata su un solo campione da 989 ms contro i ~20 attesi, la
-/// «mediana» era quel campione e la regressione sull'asse delle righe e'
-/// passata da R² 0,99 a 0,002. Una mediana su un campione non e' una mediana.
+/// contaminata a essere lenta. Una mediana su un campione non e' una
+/// mediana: una cella di `streaming_lineare` misurata su un solo campione
+/// da 989 ms contro i ~20 attesi porta la regressione sull'asse delle righe
+/// da R² 0,99 a 0,002.
 const RIPETIZIONI_MIN: usize = 5;
 
 /// Mediana delle parti su una campagna a soglia.
@@ -1350,7 +1350,8 @@ fn fase_decomposizione(carico: &Carico) -> Value {
 
 /// Fase CATENA: input costante, lunghezza della catena variabile.
 ///
-/// Non dipende dal carico — costruisce piani propri — quindi e' una fase a
+/// Non dipende dal carico — costruisce piani propri — quindi e' una
+/// misura a
 /// se': ripeterla per ogni carico misurerebbe cinque volte la stessa cosa.
 fn fase_catena() -> Value {
     let mut celle = Vec::new();
@@ -1549,9 +1550,9 @@ fn main() {
         // Fail-closed sul parallelismo: o tutte e PROCESSI_TEMPO le campagne
         // hanno prodotto un fattore, o il dato e' dichiarato NON DISPONIBILE.
         // Con `filter_map` una campagna che dichiara il parallelismo non
-        // misurabile (CLK_TCK illeggibile) spariva, e si pubblicava un
-        // «range su 3 processi» calcolato su uno o due: la colonna
-        // pubblicata avrebbe detto una cosa che non era vera.
+        // misurabile (CLK_TCK illeggibile) sparirebbe, e si pubblicherebbe
+        // un «range su 3 processi» calcolato su uno o due: la colonna
+        // direbbe una cosa che non e' vera.
         let fattori: Vec<Option<f64>> = campagne
             .iter()
             .map(|c| c["parallelismo"]["fattore"].as_f64())

@@ -17,8 +17,8 @@ import io
 import sys
 
 ESECUTORE = 'crates/plenora-engine/src/executor.rs'
-# La consegna dell'output vive in un modulo proprio dal 2026-08-24
-# (PR 2 del refactor strutturale): le garanzie sono le stesse, il file no.
+# La consegna dell'output vive in un modulo proprio dell'esecutore: le
+# garanzie sono quelle dell'esecutore, il file no.
 USCITA = 'crates/plenora-engine/src/executor/output.rs'
 STAGING = 'crates/plenora-engine/src/executor/staging.rs'
 DIAGNOSTICA = 'crates/plenora-engine/src/executor/diagnostics.rs'

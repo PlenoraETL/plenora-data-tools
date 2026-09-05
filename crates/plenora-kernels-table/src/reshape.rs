@@ -49,7 +49,7 @@ fn default_value() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path di `melt`/`pivot` (ultimo batch ottimizzazioni kernel).
+// Fast path di `melt`/`pivot`.
 //
 // `TextColumn` e `Float64Source` (quest'ultimo condiviso col resto del
 // crate) preparano una sola volta il downcast Arrow per colonna e iterano sui
@@ -265,12 +265,12 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     // L'ordine conta due volte:
     //
     // 1. un piano invalido deve restare `invalid_plan` QUALUNQUE sia il
-    //    budget. Prima il rifiuto delle colonne eterogenee con
-    //    `type_policy = "reject"` arrivava in fondo, dopo il tetto sulle
-    //    righe e dopo la stima: con un budget stretto usciva prima un
-    //    `resource_limit`, e chi lo leggeva andava ad alzare un budget per
-    //    un piano che non sarebbe comunque stato eseguibile;
-    // 2. rifiutare dopo aver allocato costa la memoria che il rifiuto doveva
+    //    budget. Mettendo il rifiuto delle colonne eterogenee con
+    //    `type_policy = "reject"` in fondo, dopo il tetto sulle righe e
+    //    dopo la stima, con un budget stretto uscirebbe prima un
+    //    `resource_limit`, e chi lo legge andrebbe ad alzare un budget per
+    //    un piano che non sarebbe comunque eseguibile;
+    // 2. rifiutare dopo aver allocato costa la memoria che il rifiuto deve
     //    risparmiare.
     let tipo_valore = batch.column(value_indices[0]).data_type().clone();
     let omogeneo = value_indices
@@ -284,10 +284,10 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
                 ));
             }
             HeterogeneousTypePolicy::String => {
-                // Tipo E timezone: entrambi stanno nello schema. La timezone
-                // veniva risolta a ogni riga durante la scansione, quindi una
-                // timezone non valida faceva fallire l'operazione dopo le
-                // allocazioni pur essendo nota fin da qui.
+                // Tipo E timezone: entrambi stanno nello schema. Risolvere la
+                // timezone a ogni riga durante la scansione fa fallire
+                // l'operazione dopo le allocazioni, quando la timezone non e'
+                // valida, pur essendo nota fin da qui.
                 for index in &value_indices {
                     crate::validate_text_convertible(
                         batch.column(*index).data_type(),
@@ -323,9 +323,9 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     // MODELLO: l'output ha le colonne id RIPETUTE una volta per colonna
     // valore, piu' due colonne nuove — `variable`, che ripete il NOME della
     // colonna di provenienza, e `value`, larga quanto la piu' larga delle
-    // colonne valore. La prima versione misurava la larghezza media
-    // dell'intero batch d'ingresso, che ignora entrambe: con nomi di colonna
-    // lunghi la sola `variable` puo' superare tutto il resto.
+    // colonne valore. Misurare la larghezza media dell'intero batch
+    // d'ingresso ignorerebbe entrambe: con nomi di colonna lunghi la sola
+    // `variable` puo' superare tutto il resto.
     let byte_id: usize = id_indices
         .iter()
         .map(|index| crate::column_bytes_per_row(batch.column(*index).as_ref()))
@@ -381,9 +381,8 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
         })?;
     crate::preflight_output_bytes("melt", output_rows, byte_per_riga, limits)?;
     // Fast path: indici di ripetizione materializzati una sola volta come
-    // UInt32 e `take` SOLO sulle colonne id (il percorso originale
-    // replicava via `select_rows` l'intero batch, incluse le value_columns
-    // poi scartate). Stesso controllo di overflow di `select_rows`.
+    // UInt32 e `take` SOLO sulle colonne id: replicare via `select_rows`
+    // l'intero batch includerebbe le value_columns, poi scartate. Stesso controllo di overflow di `select_rows`.
     let row_count = u32::try_from(batch.num_rows())
         .map_err(|_| PlenoraError::ResourceLimit("indice riga oltre u32".into()))?;
     let mut repeated_indices = Vec::with_capacity(output_rows);
@@ -674,14 +673,14 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         .collect::<Result<Vec<_>>>()?;
     let pivot_index = column_index(batch, &config.column)?;
     let value_index = column_index(batch, &config.value_col)?;
-    // Fast path (ultimo batch ottimizzazioni kernel): UNA passata sulle
-    // righe (il percorso originale ne faceva due, ricalcolando le chiavi
+    // Fast path: UNA passata sulle
+    // righe (il percorso generico ne fa due, ricalcolando le chiavi
     // composte riga per riga), con chiavi scritte in un buffer riusato e
     // gruppi di celle indicizzati dagli interi (chiave, pivot) invece che da
     // stringhe formattate ad ogni lookup. Ordini di output identici:
-    // chiavi e pivot ordinati lessicograficamente come nel BTreeMap
-    // originale, righe di gruppo in ordine crescente, rappresentante =
-    // prima riga incontrata per chiave.
+    // chiavi e pivot ordinati lessicograficamente come nel BTreeMap del
+    // percorso generico, righe di gruppo in ordine crescente,
+    // rappresentante = prima riga incontrata per chiave.
     let key_columns = index_indices
         .iter()
         .map(|index| PivotKeyColumn::new(batch.column(*index)))
@@ -732,8 +731,8 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
             "pivot supera i limiti di output".into(),
         ));
     }
-    // Fast path: `take` SOLO sulle colonne indice (il percorso originale
-    // replicava l'intero batch). Stesso controllo di overflow di
+    // Fast path: `take` SOLO sulle colonne indice, invece di replicare
+    // l'intero batch. Stesso controllo di overflow di
     // `select_rows`.
     let representative_indices = sorted_keys
         .iter()
@@ -1052,9 +1051,9 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
     }
     // L'indice di riga si converte in modo FALLIBILE.
     //
-    // `u32::try_from(row).ok()` produceva `None` oltre `u32::MAX`, e `None`
+    // `u32::try_from(row).ok()` renderebbe `None` oltre `u32::MAX`, e `None`
     // in un array di indici e' un indice NULLO: i figli di una struct non
-    // nulla sarebbero stati sostituiti da null senza che nulla lo segnalasse.
+    // nulla sarebbero sostituiti da null senza che nulla lo segnali.
     // I limiti di riga sono `u64` e niente vincola un batch a `u32::MAX`
     // righe, quindi il caso non e' escluso per costruzione. E' la stessa
     // classe della conversione silenziosa dei conteggi di gruppo.
@@ -1142,8 +1141,8 @@ fn encode_diff_key(
 
 type DiffKeyMap = HashMap<String, usize, FastHasher>;
 
-/// Implementazione originale (pre-ottimizzazione) della chiave composta:
-/// resta come oracolo dei test di equivalenza di `table_diff` e `pivot`.
+/// Chiave composta in forma testuale: e' l'oracolo dei test di equivalenza
+/// di `table_diff` e `pivot`, e non e' il percorso che quei due usano.
 #[cfg(test)]
 fn composite_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String> {
     let mut key = String::new();
@@ -1250,7 +1249,7 @@ pub fn table_diff(
         .iter()
         .map(|name| column_index(right, name))
         .collect::<Result<Vec<_>>>()?;
-    // Fast path (batch 4 ottimizzazioni kernel): chiavi codificate una sola
+    // Fast path: chiavi codificate una sola
     // volta per colonna (`PivotKeyColumn`, stessi byte di `composite_key`) in
     // un buffer riusato; mappe hash con hasher FxHash-style (mai iterate,
     // solo lookup/insert, quindi equivalenti alle BTreeMap originali);
@@ -1443,10 +1442,9 @@ pub fn table_diff(
 #[cfg(test)]
 mod tests {
     // -------------------------------------------------------------------
-    // Test-oracolo di `melt`/`pivot` (fast path, ultimo batch
-    // ottimizzazioni kernel): l'output deve essere byte-identico al
-    // percorso generico originale, copiato verbatim qui sotto come
-    // riferimento indipendente.
+    // Test-oracolo del fast path di `melt`/`pivot`: l'output dev'essere
+    // byte-identico a quello delle implementazioni di riferimento qui
+    // sotto, che non passano dal percorso ottimizzato.
     // -------------------------------------------------------------------
 
     use super::*;
@@ -1458,7 +1456,7 @@ mod tests {
 
     use plenora_core::arrow::array::Date32Array;
 
-    /// Copia verbatim dell'implementazione di `melt` pre-ottimizzazione.
+    /// Oracolo indipendente di `melt`: stesso contratto, percorso diverso.
     fn melt_reference(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<RecordBatch> {
         let id_indices = config
             .id_columns
@@ -1562,7 +1560,7 @@ mod tests {
         )?)
     }
 
-    /// Copia verbatim di `pivot_column` pre-ottimizzazione.
+    /// Oracolo indipendente di `pivot_column`.
     // Oracolo: dispatcher esaustivo per funzione di aggregazione, specchio del
     // percorso veloce; la lunghezza e' nei casi, non nella logica.
     #[allow(clippy::too_many_lines)]
@@ -1675,7 +1673,7 @@ mod tests {
         })
     }
 
-    /// Copia verbatim dell'implementazione di `pivot` pre-ottimizzazione.
+    /// Oracolo indipendente di `pivot`: stesso contratto, percorso diverso.
     fn pivot_reference(
         batch: &RecordBatch,
         config: &Pivot,
@@ -2508,13 +2506,13 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Test-oracolo di `table_diff` (batch 4 ottimizzazioni kernel): la
-    // implementazione pre-ottimizzazione e' copiata verbatim qui sotto come
-    // riferimento indipendente (usa `composite_key`, mantenuta come oracolo).
+    // Test-oracolo di `table_diff`: qui sotto un'implementazione di
+    // riferimento indipendente, che non passa dal percorso ottimizzato e
+    // costruisce le chiavi con `composite_key`.
     // -------------------------------------------------------------------
 
-    /// Copia verbatim della struct `DiffRow` pre-ottimizzazione (con
-    /// `status: String`) e di `diff_values`, usate da `table_diff_reference`.
+    /// La forma di riga dell'oracolo (`status: String`), usata da
+    /// `diff_values_reference` e `table_diff_reference`.
     struct DiffRowRef {
         old_row: Option<usize>,
         new_row: Option<usize>,
@@ -2523,7 +2521,9 @@ mod tests {
         old_values: Option<String>,
     }
 
-    /// Copia verbatim di `diff_values` pre-ottimizzazione.
+    /// Implementazione indipendente di riferimento dello stesso contratto di
+    /// `diff_values`. Non condivide il percorso ottimizzato, cosi' una
+    /// deviazione del prodotto resta osservabile.
     fn diff_values_reference(
         left: &ArrayRef,
         right: &ArrayRef,
@@ -2560,8 +2560,8 @@ mod tests {
         )?)
     }
 
-    /// Copia verbatim dell'implementazione di `table_diff`
-    /// pre-ottimizzazione.
+    /// Oracolo indipendente di `table_diff`: stesso contratto, percorso
+    /// diverso.
     #[allow(clippy::too_many_lines)]
     fn table_diff_reference(
         left: &RecordBatch,

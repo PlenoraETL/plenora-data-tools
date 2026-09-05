@@ -2,12 +2,13 @@
 //!
 //! # Il problema
 //!
-//! `Limits::max_parallelism` era configurabile ma non vincolava nulla: i
+//! `Limits::max_parallelism` sarebbe configurabile senza vincolare nulla: i
 //! kernel paralleli (`joins`, `aggregation::sort`, `arrow_adapter`,
 //! `spatial_join`, il trasporto geo) usano tutti il pool Rayon **globale**,
-//! che si dimensiona da solo sul numero di core logici. Il limite era quindi
-//! una promessa di risorsa, non un tetto: un piano che dichiarava
-//! `max_parallelism: 2` occupava comunque tutti i core della macchina.
+//! che si dimensiona da solo sul numero di core logici. Senza configurare
+//! quel pool il limite sarebbe una promessa di risorsa, non un tetto: un
+//! piano che dichiara `max_parallelism: 2` occuperebbe comunque tutti i core
+//! della macchina.
 //!
 //! # La scelta
 //!
@@ -64,7 +65,7 @@ static CONFIGURED: Mutex<Option<u32>> = Mutex::new(None);
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` se il pool era gia' configurato con un grado
+/// `PlenoraError::InvalidPlan` se il pool e' gia' configurato con un grado
 /// diverso, oppure se Rayon rifiuta la configurazione (pool globale gia'
 /// costruito).
 pub fn configure(max_parallelism: u32) -> Result<()> {

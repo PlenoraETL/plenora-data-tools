@@ -8,8 +8,8 @@ SECONDS_PER_TARGET="${FUZZ_SMOKE_SECONDS:-90}"
 CARGO_FUZZ="${FUZZ_CARGO_FUZZ:-/fuzzbin/cargo-fuzz}"
 # Dove sta `cargo-fuzz` sull'host, montato read-only su /fuzzbin.
 #
-# Il default e' **sotto la home**, non `C:/tmp/...`: quel percorso era la
-# macchina di chi ha scritto lo script scritta dentro lo script, e su
+# Il default e' **sotto la home**, non `C:/tmp/...`: un percorso del genere
+# e' la macchina di chi scrive lo script scritta dentro lo script, e su
 # qualunque altra non esiste. `$HOME` esiste ovunque, Git Bash compreso, e
 # Docker Desktop sa montare da li'. Chi lo tiene altrove passa `FUZZBIN_HOST`,
 # che e' lo stesso nome gia' usato da `fuzz-campaign.sh`: due script che
@@ -20,8 +20,9 @@ ALL_TARGETS=(
     plan_contract string_chain candidate_chain binary_ops
     reshape_policies extended_ops advanced_ops
     wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
+    geo_frame_stream
     plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
-    protocollo_frame
+    protocollo_frame verifica_artefatto
 )
 TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
@@ -37,10 +38,16 @@ echo "== smoke $(date -Is): ${TARGETS[*]} (${SECONDS_PER_TARGET}s)" >> "$SUMMARY
 
 # Esito accumulato. Lo smoke ESEGUE tutti i target — fermarsi al primo
 # fallimento nasconderebbe gli altri — ma deve terminare non-zero se almeno
-# uno fallisce: prima registrava l'errore nel riepilogo e usciva 0, quindi un
-# target inesistente o crashato passava per uno smoke riuscito.
+# uno fallisce: registrando l'errore nel riepilogo e uscendo 0, un target
+# inesistente o crashato passerebbe per uno smoke riuscito.
 falliti=()
 
+# `TMPDIR=/dev/shm` e non il `/tmp` del container: un target che scrive
+# file temporanei — l'harness del verificatore lo fa — li mette nel tmpfs
+# invece che su ext4 della VM, che e' la stessa disciplina della campagna.
+# `/dev/shm` esiste gia' in ogni container, quindi non serve crearlo ne'
+# avvolgere il comando in una shell: l'invocazione resta diretta e docker
+# conserva i confini degli argomenti.
 for target in "${TARGETS[@]}"; do
     mkdir -p "$PROJECT_ROOT/fuzz/artifacts/$target"
     log="$PROJECT_ROOT/fuzz/campaign-logs/smoke-$target.log"
@@ -48,6 +55,7 @@ for target in "${TARGETS[@]}"; do
         -v "$PROJECT_ROOT:/work" \
         -v "$FUZZBIN_HOST:/fuzzbin:ro" \
         -w /work/fuzz -e CARGO_TERM_COLOR=never \
+        -e TMPDIR=/dev/shm \
         "$IMAGE" \
         "$CARGO_FUZZ" fuzz run "$target" -- \
             -max_total_time="$SECONDS_PER_TARGET" \

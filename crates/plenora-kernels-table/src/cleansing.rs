@@ -107,10 +107,10 @@ const fn default_target() -> TargetType {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path tipizzati (secondo batch ottimizzazioni kernel, dopo filter/sort).
+// Fast path tipizzati.
 //
-// fill_na: i percorsi originali materializzavano `Vec<Option<T>>` con un clone
-// per riga (stringhe incluse) e ricostruivano l'array; qui si lavora sui
+// fill_na: il percorso generico materializza `Vec<Option<T>>` con un clone
+// per riga (stringhe incluse) e ricostruisce l'array; qui si lavora sui
 // valori nativi Arrow: buffer valori clonato + scrittura dei soli slot nulli
 // (method=value), una passata per ffill/bfill, e copia dell'Arc quando
 // l'operazione e' l'identita' (nessun null, o fill con `null`). Semantica
@@ -404,8 +404,8 @@ pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
     let first = batch.column(indices[0]);
     // `null_count()` conta i null FISICI: per una dictionary le righe con
     // chiave valida verso una entry nulla non sono contate, e la scorciatoia
-    // «nessun null, restituisco la prima colonna» saltava il risolutore
-    // logico restituendo celle nulle come se fossero valori. Il tipo
+    // «nessun null, restituisco la prima colonna» salterebbe il risolutore
+    // logico, rendendo celle nulle come se fossero valori. Il tipo
     // dictionary non ha comunque un ramo tipizzato qui sotto: si ricade sul
     // percorso generico, che il null logico lo conosce.
     if matches!(first.data_type(), DataType::Dictionary(_, _)) {
@@ -1529,8 +1529,8 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------------------
-    // Oracolo fill_na: implementazione pre-ottimizzazione (Vec<Option<T>>
-    // riga per riga + fill_options), mantenuta per i test di equivalenza.
+    // Oracolo indipendente di fill_na (Vec<Option<T>> riga per riga +
+    // fill_options), tenuto per i test di equivalenza.
     // ------------------------------------------------------------------
 
     fn fill_options<T: Clone>(out: &mut [Option<T>], method: &FillMethod, fixed: Option<T>) {

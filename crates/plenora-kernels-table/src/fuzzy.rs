@@ -496,11 +496,11 @@ pub fn fuzzy_join(
     let max_candidates = config.max_candidates();
     // Il blocco segnalato e' scelto deterministicamente: il piu' grande, e a
     // parita' di dimensione quello con la chiave lessicograficamente minore.
-    // Iterando `blocks.values()` il blocco incontrato per primo dipendeva
-    // dall'ordine di visita della `HashMap` — un dettaglio di implementazione
-    // dell'hasher, non una proprieta' dell'input — e con piu' blocchi
-    // sovradimensionati il conteggio nel messaggio poteva cambiare fra
-    // esecuzioni (architettura.md#determinismo: l'identita' dell'errore e' stabile).
+    // Iterando `blocks.values()` il blocco incontrato per primo dipenderebbe
+    // dall'ordine di visita della `HashMap` — un dettaglio di
+    // implementazione dell'hasher, non una proprieta' dell'input — e con
+    // piu' blocchi sovradimensionati il conteggio nel messaggio potrebbe
+    // cambiare fra esecuzioni (architettura.md#determinismo: l'identita' dell'errore e' stabile).
     let worst = blocks
         .iter()
         .max_by(|(left_key, left_rows), (right_key, right_rows)| {

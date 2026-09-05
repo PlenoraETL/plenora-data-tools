@@ -1,4 +1,4 @@
-//! PT-Windows — prototipo bloccante della fase 4.
+//! PT-Windows — prototipo bloccante dell'esecuzione isolata.
 //!
 //! Stesse cinque domande di PT-Linux, piu' quelle che solo Windows pone:
 //! residuo del loader, job annidati, processo gia' dentro un job, figli del
@@ -476,7 +476,7 @@ fn prova_job_annidato(io_stesso: HANDLE) {
 
 
 // ---------------------------------------------------------------------------
-// Secondo ciclo: gli scenari della review.
+// Secondo ciclo: gli scenari avversari.
 // ---------------------------------------------------------------------------
 
 /// Prepara un job con tetto duro e limite di notifica, e facoltativamente una
@@ -530,8 +530,8 @@ fn stampa_violazioni(etichetta: &str, job: HANDLE) -> bool {
     }
 }
 
-/// W1 — il caso che la review teme: il capofila esce 0, il figlio sfonda, e
-/// la porta non viene MAI drenata. La prova regge lo stesso?
+/// W1 — il caso peggiore: il capofila esce 0, il figlio sfonda, e la porta
+/// non viene MAI drenata. La prova regge lo stesso?
 fn w1_prova_senza_drenare(indice: usize) {
     println!("\n=== W1 — capofila a 0, porta mai drenata ===");
     let nome = format!("pt-windows-w1-{}-{indice}", std::process::id());
@@ -842,7 +842,7 @@ fn w7_prova_durevole(indice: usize) {
         ("sfonda", "tocca", true),
         ("sotto_tetto", "inerte", false),
         ("chiede_e_basta", "chiedi", false),
-        // Il caso esatto della review: sfonda un figlio, il capofila esce 0.
+        // Il caso peggiore, esatto: sfonda un figlio, il capofila esce 0.
         ("figlio_sfonda", "figlio", true),
     ] {
         let nome = format!("pt-windows-w7{etichetta}-{}-{indice}", std::process::id());

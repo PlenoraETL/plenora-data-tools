@@ -110,6 +110,19 @@ impl Esadecimale32 {
         Ok(Self { byte })
     }
 
+    /// Costruisce dai byte grezzi.
+    ///
+    /// Non valida nulla, e non ha nulla da validare: ogni sequenza di
+    /// [`BYTE`] byte ha una e una sola forma canonica, che
+    /// [`in_esadecimale`](Self::in_esadecimale) ricostruisce. Serve a chi il
+    /// valore lo **calcola** invece di riceverlo come testo — l'uscita di uno
+    /// SHA-256, per esempio — e che altrimenti dovrebbe formattarlo a mano per
+    /// poi rifarlo interpretare, con due grafie possibili al posto di una.
+    #[cfg(any(test, feature = "internals"))]
+    pub const fn dai_byte(byte: [u8; BYTE]) -> Self {
+        Self { byte }
+    }
+
     /// La forma canonica: [`CARATTERI`] caratteri esadecimali minuscoli.
     pub fn in_esadecimale(&self) -> String {
         const CIFRE: &[u8; 16] = b"0123456789abcdef";

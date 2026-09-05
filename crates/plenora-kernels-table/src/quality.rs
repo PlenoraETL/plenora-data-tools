@@ -274,9 +274,9 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         &rejections,
         "righe non conformi; consultare row_diagnostics",
     )?;
-    // Fast path (ottimizzazione kernel), in due livelli. Semantica identica al
-    // generico (conservato verbatim nei test come oracolo
-    // `assert_unique_reference`): scansione in ordine di riga, errore sul
+    // Fast path in due livelli. Semantica identica al percorso generico,
+    // che i test tengono come oracolo indipendente
+    // (`assert_unique_reference`): scansione in ordine di riga, errore sul
     // primo duplicato con lo stesso messaggio, skip `nulls_equal=false`
     // identico, output invariato in assenza di duplicati.
     //
@@ -629,7 +629,7 @@ pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
             "coalesce richiede colonne con tipi Arrow identici".into(),
         ));
     }
-    // Fast path tipizzato (secondo batch ottimizzazioni kernel): copre Int64,
+    // Fast path tipizzato: copre Int64,
     // Float64, UInt64, Boolean, Utf8 con semantica identica al generico.
     if let Some(values) = crate::cleansing::coalesce_fast(batch, &indices) {
         return replace_or_append(batch, &config.output_column, data_type, true, values);
@@ -837,13 +837,15 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test-oracolo del fast path di `assert_unique`: l'implementazione
-    // pre-ottimizzazione e' copiata verbatim qui sotto e usata come riferimento.
-    // Ogni scenario confronta esito (ok/errore) e messaggio, che deve essere
-    // byte-identico (stessa chiave duplicata, stessa riga, stesso formato).
+    // Test-oracolo del fast path di `assert_unique`: qui sotto
+    // un'implementazione di riferimento indipendente, che non passa dal
+    // percorso ottimizzato. Ogni scenario confronta esito (ok/errore) e
+    // messaggio, che dev'essere byte-identico — stessa chiave duplicata,
+    // stessa riga, stesso formato.
     // -----------------------------------------------------------------------
 
-    /// Copia verbatim dell'implementazione pre-ottimizzazione (oracolo).
+    /// Oracolo indipendente di `assert_unique`: stesso contratto, percorso
+    /// diverso.
     fn assert_unique_reference(batch: &RecordBatch, config: &AssertUnique) -> Result<RecordBatch> {
         let indices = config
             .columns
