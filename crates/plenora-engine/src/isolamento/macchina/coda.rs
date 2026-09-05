@@ -885,30 +885,35 @@ mod tests {
         drop(vivo);
     }
 
-    /// **La scadenza e' assoluta**, misurata sul drenaggio vero.
+    /// **Il drenaggio vero ha un tetto, e conserva i fatti gia' accodati.**
     ///
-    /// # Perche' questo caso guarda l'orologio, e l'altro no
+    /// # Che cosa prova, e che cosa lascia all'altro caso
     ///
-    /// Perche' provano due cose diverse. La **regola** — la scadenza si calcola
-    /// una volta e non si sposta — e' pura, e la prova
-    /// `la_regola_della_scadenza_non_dipende_dall_orologio` senza aspettare.
-    /// Questo prova invece che il drenaggio **vero** la rispetti: che fra la
-    /// regola e il giro che la usa non ci sia una distanza.
+    /// Che il drenaggio **vero** si fermi quando il produttore resta vivo, e che
+    /// nel fermarsi non butti via cio' che aveva gia' sentito: quello che si e'
+    /// raccolto prima di rinunciare e' evidenza quanto la rinuncia.
     ///
-    /// Guarda quindi il tempo reale, e ha un margine largo di proposito: su una
-    /// macchina carica un margine stretto direbbe qualcosa sulla macchina.
+    /// Che la scadenza sia **assoluta** — calcolata una volta, e non rinnovata
+    /// da cio' che arriva — lo prova
+    /// `la_regola_della_scadenza_non_dipende_dall_orologio`, che sceglie gli
+    /// istanti e non aspetta. Qui non si finge di distinguere il rinnovo
+    /// misurando durate: una misura del genere direbbe qualcosa sulla macchina.
     ///
-    /// E' la differenza fra un tetto e nessun tetto. Con una scadenza che
-    /// riparte a ogni consegna, chi manda qualcosa poco prima di ogni scadenza
-    /// terrebbe aperto il drenaggio per sempre — e il tetto esisterebbe solo
-    /// nella documentazione.
+    /// # Perche' due canali laterali e nessun `sleep`
     ///
-    /// Qui il produttore invia a un ritmo piu' fitto della scadenza e non muore
-    /// mai. Il drenaggio deve fermarsi lo stesso, **conservando i fatti gia'
-    /// raccolti** insieme al difetto: quello che si e' sentito prima di
-    /// rinunciare e' evidenza quanto la rinuncia.
+    /// Perche' un `sleep` che deve garantire che un evento **sia gia'
+    /// accaduto** e' una scommessa sullo scheduler, e su una macchina carica la
+    /// si perde: il produttore non arriva a mandare, il drenaggio scade a mani
+    /// vuote, e il caso diventa rosso senza che nulla sia rotto. E' successo.
+    ///
+    /// I due canali tolgono la scommessa. Il primo porta «il fatto e' in coda»,
+    /// e il test non comincia a drenare prima di averlo ricevuto: cosi' «gia'
+    /// accodato» e' un fatto osservato, non un'attesa sperata. Il secondo tiene
+    /// vivo il produttore — cioe' gli fa trattenere la bocchetta — finche' il
+    /// test non lo libera, che e' l'unico modo di garantire che il canale
+    /// **non** si disconnetta mentre si drena.
     #[test]
-    fn la_scadenza_del_drenaggio_e_assoluta() {
+    fn il_drenaggio_vero_ha_un_tetto_e_conserva_i_fatti() {
         let (coda, fascio) = apri();
         let mut insistente = fascio.sorvegliante;
         drop(fascio.lettore);
@@ -916,31 +921,40 @@ mod tests {
         drop(fascio.annullatore);
         drop(fascio.raccoglitore);
 
+        let (accodato, accodato_visto) = std::sync::mpsc::channel::<()>();
+        let (libera, liberato) = std::sync::mpsc::channel::<()>();
+
         let filo = std::thread::spawn(move || {
-            // Due invii, distanziati meno della scadenza: se la scadenza
-            // ripartisse a ogni consegna, il drenaggio non finirebbe.
-            for _ in 0..2 {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                let _ = insistente.manda(Fatto::DominioQuiescente);
-            }
-            // E poi resta vivo oltre la scadenza, senza mandare piu' niente.
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            insistente
+                .manda(Fatto::DominioQuiescente)
+                .expect("la coda accetta il fatto");
+            // Il segnale parte **dopo** l'invio: e' cio' che lo rende una
+            // garanzia invece di una speranza.
+            accodato.send(()).expect("il test ascolta");
+            // E qui si resta, tenendo la bocchetta: il drenaggio deve trovare
+            // un canale ancora connesso, e rinunciare per scadenza.
+            let _ = liberato.recv();
+            drop(insistente);
         });
 
-        let inizio = std::time::Instant::now();
+        accodato_visto
+            .recv()
+            .expect("il produttore accoda prima di segnalare");
+
         let (raccolti, difetto) = coda.chiudi_e_drena_entro(std::time::Duration::from_millis(80));
-        let trascorso = inizio.elapsed();
+
+        // Il produttore si libera **dopo** il drenaggio: liberarlo prima gli
+        // farebbe lasciare la bocchetta, e il drenaggio finirebbe per
+        // disconnessione invece che per scadenza — cioe' proverebbe un'altra
+        // cosa.
+        libera.send(()).expect("il produttore aspetta");
         filo.join().expect("il produttore insistente finisce");
 
-        assert!(
-            trascorso < std::time::Duration::from_millis(250),
-            "il drenaggio si e' prolungato fino a {trascorso:?}: la scadenza non e' assoluta"
-        );
         let detto = difetto.expect("il canale non si e' disconnesso, e va detto");
         assert!(detto.contains("non si e' disconnesso"), "{detto}");
         assert!(
             !raccolti.is_empty(),
-            "i fatti gia' drenati restano nel rapporto insieme al difetto"
+            "i fatti gia' accodati restano nel rapporto insieme al difetto"
         );
     }
 
