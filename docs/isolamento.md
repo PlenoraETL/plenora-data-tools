@@ -1723,6 +1723,8 @@ attuali, che sono minori e dichiarate.
 
 ---
 
+<a id="9-bis-preflight-del-dominio-scrivere-non-e-configurare"></a>
+
 ## 9-bis. Preflight del dominio: scrivere non è configurare
 
 Ogni proprietà su cui poggia l'attribuzione è una **scrittura su un file**
@@ -1776,6 +1778,159 @@ Il preflight registra perciò l'opzione senza respingerla, e la registra
 Va detto che il caso non è stato misurato — la gerarchia provata non aveva
 `memory_localevents` — quindi la conclusione è un ragionamento, non
 un'osservazione.
+
+### Il confine fra supervisore e spawner
+
+Il preflight e la sequenza dello spawner girano in **due processi**, e fra i
+due passa uno `spawn`. Il preflight rende un token opaco che non è
+trasmissibile: è un valore in memoria, e non c'è modo di spedirlo.
+
+Ciò che attraversa il confine è quindi una **richiesta versionata e limitata** —
+dominio, radice, uid, gid, tetto, e nient'altro — che dice *su che cosa*
+lavorare e non afferma nulla. Non è una prova: una prova sarebbe qualcosa che
+lo spawner accetta per buona, e uno spawner che crede a ciò che gli viene detto
+non aggiunge nessuna garanzia a quella del mittente.
+
+Lo spawner **rivaluta tutto da sé** — percorsi, montaggio, permessi, namespace
+e i quattro controlli — e ottiene un token locale che nessuno gli ha spedito.
+Due cose che *non* fa, e che non sono sviste:
+
+- **non riscrive i controlli, li rilegge.** Il tetto deve essere già in vigore
+  quando lo spawner nasce (`F4-1`, `GA-7`); scriverlo lì aprirebbe una finestra
+  fra la nascita del processo e il limite;
+- **non riceve i namespace dalla richiesta.** Li confronta con quelli del
+  proprio **padre**, letti da `/proc`: un fatto del kernel che nessun argomento
+  falsifica. È ciò che chiude una `unshare` avvenuta fra lo `spawn` e la `exec`.
+
+La versione della richiesta è esatta e non negoziabile: un supervisore e uno
+spawner di versioni diverse non sono lo stesso programma, e interpretare gli
+argomenti dell'altro significherebbe indovinare.
+
+**L'evidenza del preflight non attraversa il confine**, e sopravvive invece
+**da questa parte**, in entrambi i rami dell'avvio. Nel ramo riuscito serve al
+rapporto; in quello fallito serve alla pulizia, perché quando l'avvio fallisce
+il dominio è già configurato e chi deve smontarlo ha bisogno di sapere quale
+sia. Un errore che dicesse solo «non è partito» lascerebbe dietro di sé un
+cgroup con un tetto, un sigillo e nessuno che lo rimuova.
+
+### L'immagine dello spawner: si giudica un nome, si esegue un inode
+
+Lo spawner è **l'immagine del supervisore rieseguita**, e non un eseguibile che
+il chiamante sceglie. Un percorso che arrivasse dall'esterno renderebbe l'avvio
+uno `spawn` qualunque, capace di rendere un figlio nato **fuori** dal dominio,
+con l'identità del supervisore e senza nessuno dei sette passi — e
+indistinguibile, per chi lo ha chiamato, da una transizione riuscita.
+
+Il giudizio e l'esecuzione guardano due cose diverse, e la distinzione decide
+l'esito:
+
+| cosa | da dove | perché |
+|---|---|---|
+| il **nome** | `readlink("/proc/self/exe")` | serve a dire di che cosa si parla, e a riconoscere il suffisso ` (deleted)` |
+| l'**inode** | `stat("/proc/self/exe")` | è ciò che viene eseguito, e non dipende da nessun nome |
+| l'**esecuzione** | `Command::new("/proc/self/exe")` | il nome si può sostituire fra il giudizio e lo `spawn` — una `rename` è atomica — mentre il collegamento resta legato all'immagine di questo processo |
+
+Interrogare il nome invece dell'inode sarebbe sbagliato due volte: su
+un'immagine rimossa fallirebbe con «non esiste» prima che qualcuno guardi il
+suffisso, e su una sostituita riuscirebbe descrivendo il file **nuovo**.
+
+Le tre condizioni sono: l'immagine non è stata rimossa o sostituita; è un file
+regolare; il worker non la può riscrivere — quest'ultima con lo stesso giudizio
+conservativo che vale sui file della gerarchia, perché uno spawner che il
+worker modifica rende l'intera separazione una formalità.
+
+Il rifiuto su ` (deleted)` **non** serve a evitare di eseguire un binario
+altrui: eseguire `/proc/self/exe` darebbe comunque l'immagine giusta. Serve a
+non proseguire quando il control plane che gira e quello su disco sono due
+programmi diversi, che è uno stato che nessuno ha dichiarato.
+
+Il figlio si riconosce come spawner perché il suo `argv[1]` è la versione della
+richiesta. Da qui un obbligo per il chiamante di produzione, che vale prima di
+ogni altra cosa che faccia all'avvio — **thread compresi**, perché il primo
+passo della sequenza pretende un processo monothread.
+
+### La finestra fra il cambio d'identità e la `exec`
+
+Il settimo passo rilegge ciò che il processo **è** e solo allora esegue. Vive
+però in una finestra particolare: le credenziali sono già cambiate e l'immagine
+è ancora la stessa, e in quello stato il kernel azzera il flag *dumpable* e
+passa `/proc/<pid>` a `root`.
+
+Che cosa si perde davvero è materia di misura, non di deduzione. Sulla
+gerarchia qualificata restano leggibili `status` — è un file, e i permessi
+della directory concedono l'attraversamento a tutti — e `fd`, per un'eccezione
+esplicita del kernel a favore di chi guarda i propri descrittori. Cade `ns`,
+che quell'eccezione non ce l'ha.
+
+Il passo rilegge quindi da `status` ciò che il cambio **può** aver toccato —
+uid, gid, gruppi supplementari, le cinque maschere di capability,
+`no_new_privs` — e porta avanti dalla lettura del passo 4 ciò che il cambio non
+può aver mosso: namespace e descrittori. È lecito perché fra le due letture
+stanno solo `no_new_privs`, `setgroups` e le tre `setres*id`, e nessuna di esse
+apre un descrittore o cambia un namespace. Nessun asse di `F4-15` esce dalla
+verifica: quelli che non si rileggono sono quelli che non possono essersi
+mossi.
+
+La finestra si chiude con la `exec`, che rimette *dumpable*: il worker, dopo,
+si legge senza problemi. La misura sta nel gate, che riporta la leggibilità
+prima e dopo il cambio nello stesso processo.
+
+### Il gate ostile: che cosa prova, e i due esiti ammessi della `unshare`
+
+`scripts/verifica_isolamento_linux.sh` prova le tre cose che i casi
+deterministici non possono provare, perché non riguardano la procedura ma
+l'ambiente. Fallisce quando un prerequisito manca, invece di saltare verde.
+
+1. **la sentinella sul dispatch**: l'immagine rieseguita arriva in modalità
+   spawner con **un task solo**. È ciò che un obbligo scritto non garantisce:
+   un `main` che costruisce un pool di thread prima di guardare `argv`
+   compila, passa ogni caso deterministico, e rompe il primo passo solo a
+   runtime;
+2. **l'immagine sostituita**: il binario sostitutivo **non parte mai**. Non che
+   parta sempre quello iniziale, che sarebbe falso — una `rename` sopra il
+   pathname fa comparire ` (deleted)` e il controllo rifiuta. Gli esiti ammessi
+   sono due: sostituzione osservata prima del controllo, e l'avvio fallisce;
+   oppure dopo, e parte l'inode iniziale. Il secondo ramo si distingue solo con
+   una **barriera esplicita** fra controllo e `spawn`: una corsa temporizzata
+   non separa «è partito l'inode giusto perché il codice è giusto» da «perché
+   la sostituzione è arrivata tardi»;
+3. **la separazione di privilegio**: il worker spogliato non riscrive i quattro
+   controlli e non esce dal dominio.
+
+**La `unshare` ha due esiti, ed entrambi passano.** `no_new_privs` **non**
+impedisce `unshare(CLONE_NEWUSER)`: vieta di acquisire privilegi attraverso una
+`execve`, e non tocca `unshare`. Un processo non privilegiato che crea uno user
+namespace, dove la policy del kernel lo consente, lo crea anche con
+`no_new_privs = 1`, e dentro quel namespace ha capability piene. Il gate accetta
+quindi:
+
+- la `unshare` rifiutata dalla policy dell'host;
+- la `unshare` riuscita, namespace cambiato e capability ottenute nel figlio, ma
+  riscritture del control plane e uscita dal dominio ancora impossibili, con
+  **stato invariato**.
+
+Il secondo è quello che dice *perché* regge: non un flag, ma il fatto che i
+file della gerarchia appartengono a un UID che nel namespace nuovo non è
+mappato, e che il dominio è sigillato.
+
+**Ogni braccio ostile ha una controprova privilegiata.** «Il worker non ci
+riesce» è vero anche quando il bersaglio non esiste, è di sola lettura per
+tutti, o il gate lo ha scritto male: senza controprova, un gate rotto è
+indistinguibile da un isolamento che regge, ed è verde. Per ogni cosa che il
+worker non deve poter fare, il control plane la fa e la disfa.
+
+Un'eccezione dichiarata: il `cgroup.procs` del **padre** non è scrivibile da
+nessuno — in cgroup v2 un cgroup con figli e controllori delegati non ospita
+processi — quindi quel rifiuto parla della gerarchia e non del worker. Il
+bersaglio che discrimina è un **fratello foglia**, dove il control plane sposta
+davvero un processo e lo rilegge. Il tentativo sul padre si registra e non si
+conta.
+
+**Il verde autoritativo arriva solo da una VM Linux dedicata** con cgroup v2 e
+sottoalbero delegato. Un container privilegiato, o un kernel di una linea non
+GA, servono a iterare: condividono il kernel con l'host o non sono la
+piattaforma di riferimento, e su `F4-15` non provano niente. Il gate registra
+il kernel nell'evidenza proprio perché quel numero è parte dell'esito.
 
 ---
 

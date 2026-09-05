@@ -51,6 +51,14 @@ rustix.workspace = true
 name = "calibra_canonico"
 required-features = ["internals"]
 
+# L'immagine del gate ostile su Linux. E' un esempio e non un `bin` perche' non
+# deve finire in nessuna installazione: `cargo install` non li produce. Serve
+# **anche** `--cfg qualificazione_isolamento`, senza il quale il `main` di
+# ripiego rifiuta di girare invece di girare a meta'.
+[[example]]
+name = "qualificazione_isolamento"
+required-features = ["internals"]
+
 [dev-dependencies]
 proptest.workspace = true
 # Usato dalle property suite portate (extended_properties.rs).

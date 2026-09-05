@@ -233,11 +233,19 @@ passo 5-bis dell'integrità e il tetto cumulativo sui dizionari trattenuti
 (`PR-6`). Più il rafforzamento dei custom metadata IPC nel confine ostile
 (`PR-0`).
 
-**Non esiste ancora nel codice** ciò che richiede due processi: worker,
-supervisore, spawn, pipe e limiti di processo restano **progettati** in
-[`isolamento.md`](isolamento.md) e non implementati. Resta progetto anche la
-sequenza di publish (`PR-10`), di cui `PR-6` ha portato la sola verifica: il
-passo 9 non c'è.
+Con `PR-7` esistono anche **il dominio di isolamento su Linux e la transizione
+allo spawner**: preflight del dominio con le quattro scritture rilette e il
+giudizio sul possesso, il confine fra supervisore e spawner con richiesta
+versionata e rivalidazione, la sequenza in sette passi che si spoglia
+dell'autorità, e il gate ostile `scripts/verifica_isolamento_linux.sh` — con la
+sua qualificazione su VM dedicata.
+
+**Non esiste ancora nel codice** ciò che richiede il ciclo di vita completo a
+due processi: il supervisore di produzione che chiama quel dominio, le pipe e
+la macchina a stati che gli sta intorno restano **progettati** in
+[`isolamento.md`](isolamento.md) — arrivano con `PR-8`, che è anche il primo
+chiamante di produzione del modulo. Resta progetto anche la sequenza di publish
+(`PR-10`), di cui `PR-6` ha portato la sola verifica: il passo 9 non c'è.
 
 Due conseguenze pratiche, dichiarate perché non si deduca il contrario. Il
 protocollo **e il verificatore** si compilano solo sotto `test` e sotto la
