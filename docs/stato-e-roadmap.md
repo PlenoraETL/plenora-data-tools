@@ -249,8 +249,17 @@ chiamante di produzione del modulo. Resta progetto anche la sequenza di publish
 
 Due conseguenze pratiche, dichiarate perché non si deduca il contrario. Il
 protocollo **e il verificatore** si compilano solo sotto `test` e sotto la
-feature `internals`, perché non hanno ancora un chiamante di produzione — che
-per entrambi arriva con `PR-10`. E il tetto sui dizionari vive in
+feature `internals`, perché non hanno ancora un chiamante di produzione — ma
+non lo acquistano insieme, e attribuirli allo stesso momento direbbe una cosa
+falsa su uno dei due.
+
+Il primo chiamante **reale** del protocollo è il worker, e arriva con `PR-9`.
+Il lato supervisore che `PR-8` costruisce non lo rende di produzione: diventa
+di produzione quando viene **davvero attivato** — quando una policy lo sceglie
+e un worker reale gli parla — non quando una sua funzione diventa `pub`.
+Rendere pubblico ciò che nessuno chiama toglierebbe l'avviso di codice morto
+senza togliere il codice morto, ed è la scorciatoia che il registro vieta.
+Quello del verificatore è la sequenza di publish, e arriva con `PR-10`. E il tetto sui dizionari vive in
 `IpcLimits::max_retained_dictionary_body_bytes`, con un default del confine; i
 costruttori dei limiti lo restringono secondo il budget disponibile.
 `verifica_artefatto` riceve l'intero `&IpcLimits`, non un parametro o una

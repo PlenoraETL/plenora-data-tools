@@ -360,7 +360,7 @@ fn campo<'a>(status: &'a str, chiave: &str) -> std::result::Result<&'a str, Stri
         }
         if trovato.is_some() {
             return Err(format!(
-                "/proc/self/status ha piu' di un campo {chiave}: quale valga non lo dichiara                  nessuno, e sceglierne uno sarebbe inventare meta' del giudizio"
+                "/proc/self/status ha piu' di un campo {chiave}: quale valga non lo dichiara nessuno, e sceglierne uno sarebbe inventare meta' del giudizio"
             ));
         }
         trovato = Some(valore.trim());

@@ -70,6 +70,20 @@ pub mod cancellation;
 /// `isolamento.md`). Logica pura e **interna**: il formato sul filo
 /// appartiene al modulo `protocollo`, quindi questi tipi non escono dal
 /// crate.
+///
+/// # Perche' sotto `cfg`, e quando ne esce
+///
+/// Perche' non ha ancora un chiamante di produzione: il supervisore che la
+/// chiama esiste, ma non e' attivato da nessuna policy. Lasciarla compilata in
+/// produzione la farebbe risultare codice morto, e l'unico modo di zittire
+/// quell'avviso senza toglierla sarebbe renderla pubblica — cioe' fingere
+/// un'API che nessuno usa, che e' la scorciatoia che il registro vieta.
+///
+/// **Condizione di rientro:** il `cfg` cade quando il supervisore viene
+/// **davvero attivato**, non quando qualcosa diventa `pub`. Perimetro e regola
+/// stanno in
+/// `errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals`.
+#[cfg(any(test, feature = "internals"))]
 mod classificazione;
 // Il `commit_token` e' **privato come modulo**: esce solo il tipo, tramite
 // un `pub use` piu' sotto.
@@ -104,24 +118,58 @@ pub mod governor;
 #[doc(hidden)]
 pub mod interni;
 pub mod ipc_boundary;
-// Il dominio di isolamento ha lo stesso perimetro di `protocollo` e
-// `verifica`, e **due** condizioni di rientro invece di una: la visibilita'
-// cade quando esiste un supervisore che lo chiama in produzione; il `cfg` di
-// piattaforma resta finche' non esiste un secondo dominio supportato.
+// Il dominio di isolamento **e' compilato sempre**, perche' un pezzo di esso ha
+// un chiamante di produzione: il dispatch anticipato dello spawner, qui sotto.
+// Il binario spedito deve riconoscere la riga di comando dello spawner, o un
+// worker avviato eseguirebbe il parser degli argomenti ordinario.
 //
-// Sono indipendenti, e vanno scritte separate: se fossero una condizione
-// sola, la rimozione della prima porterebbe via anche la seconda.
+// Non tutto il modulo pero' e' raggiungibile da li'. Cio' che serve solo al
+// **supervisore** — preparazione del dominio, token, transizione, avvio —
+// resta sotto `cfg(any(test, feature = "internals"))` con la sua condizione di
+// rientro scritta sui singoli elementi: cade quando esiste un supervisore che
+// li chiama in produzione.
 //
-// L'orchestrazione e i suoi casi sono **multipiattaforma** — provano la
-// procedura, non l'ambiente — quindi il `cfg` di piattaforma sta sui soli
-// sottomoduli che toccano il kernel. Un `cfg(target_os)` sul modulo intero
-// renderebbe i casi deterministici non compilati altrove, cioe' verdi per
-// assenza.
+// Il frazionamento non e' pedanteria. Un `cfg` sul modulo intero dichiarerebbe
+// una condizione falsa in un verso o nell'altro: o «niente ha un chiamante»,
+// che il dispatch smentisce, o «tutto ce l'ha», che il preflight smentisce. E
+// un `cfg` che dichiara il falso e' peggio di nessun `cfg`, perche' chi legge
+// smette di controllare.
+//
+// Il `cfg` di piattaforma resta finche' non esiste un secondo dominio
+// supportato, ed e' indipendente dall'altro: se fossero una condizione sola, la
+// caduta della prima porterebbe via anche la seconda. L'orchestrazione e i suoi
+// casi sono **multipiattaforma** — provano la procedura, non l'ambiente —
+// quindi `cfg(target_os)` sta sui soli sottomoduli che toccano il kernel.
 //
 // Regola, perimetro e condizioni di rientro sono registrati in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
 mod isolamento;
+
+/// Se questo processo e' uno spawner, lo esegue e non torna.
+///
+/// # Dove va chiamata, e perche' proprio li'
+///
+/// **Per prima**, nel `main` del programma, prima di qualunque cosa crei un
+/// thread. Il primo passo della sequenza dello spawner pretende un processo
+/// monothread — le credenziali si cambiano per thread, e gli altri
+/// resterebbero privilegiati — quindi un pool costruito prima di questa
+/// chiamata renderebbe lo spawner impossibile. Compilando, e passando ogni
+/// caso deterministico.
+///
+/// # Che cosa rende
+///
+/// `None` se `argv[1]` non e' la versione della richiesta: il processo non e'
+/// uno spawner e il chiamante prosegue normalmente.
+///
+/// `Some(errore)` se lo e' ma la sequenza non regge. Nel caso riuscito non
+/// rende niente, perche' la `exec` ha sostituito l'immagine.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn spawner_dal_confine(
+    argomenti: &[std::ffi::OsString],
+) -> Option<plenora_core::error::PlenoraError> {
+    isolamento::dal_confine_se_spawner(argomenti)
+}
 // Il perimetro di qualificazione, che esiste solo quando `rustc` riceve
 // `--cfg qualificazione_isolamento`.
 //

@@ -90,7 +90,9 @@ use cli::contract_discovery::{
     discover_input_contract_from_schema, geometry_contract_from_field, ipc_header_schema,
     open_input, pair_v4_inputs,
 };
-#[cfg(test)]
+// Serve ai casi **e** al dispatch dello spawner, che deve tradurre il proprio
+// rifiuto in un exit code senza passare da `esegui_processo`.
+#[cfg(any(test, target_os = "linux"))]
 use cli::error_envelope::error_exit_code;
 #[cfg(test)]
 use plenora_core::arrow::array::RecordBatch;
@@ -834,6 +836,33 @@ fn main() {
     // di `panic_policy`.
     let politica_nostra =
         plenora_core::panic_policy::install(plenora_core::panic_policy::PanicPolicy::Silent);
+
+    // Il dispatch dello spawner, e sta **qui** per una ragione precisa.
+    //
+    // Questo eseguibile e' anche lo spawner del profilo isolato: e' la propria
+    // immagine, rieseguita, e si riconosce perche' `argv[1]` porta la versione
+    // della richiesta. Se non lo riconoscesse, un worker avviato finirebbe nel
+    // parser degli argomenti ordinario e si lamenterebbe di un comando
+    // sconosciuto.
+    //
+    // Prima di ogni altra cosa perche' il primo passo della sequenza pretende
+    // un processo **monothread**: le credenziali si cambiano per thread, e
+    // quelli che restassero sarebbero privilegiati. Fra l'ingresso del processo
+    // e questa riga non nasce nessun thread — l'installazione della politica
+    // anti-panico non ne crea — mentre `esegui_processo` puo' costruire il pool
+    // di rayon. Spostare il dispatch dopo renderebbe lo spawner impossibile a
+    // runtime, senza che nulla lo dica prima.
+    //
+    // Il caso riuscito non torna: la `exec` ha sostituito l'immagine.
+    #[cfg(target_os = "linux")]
+    if let Some(errore) =
+        plenora_engine::spawner_dal_confine(&std::env::args_os().collect::<Vec<_>>())
+    {
+        let envelope = error_envelope(&errore, false);
+        let _ = emit_error_envelope(std::io::stdout().lock(), &envelope);
+        std::process::exit(error_exit_code(&envelope));
+    }
+
     let esito = std::panic::catch_unwind(esegui_processo);
     let codice = match esito {
         Ok(codice) => codice,

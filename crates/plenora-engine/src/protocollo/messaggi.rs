@@ -385,6 +385,28 @@ pub struct Risposta {
 }
 
 /// Avanzamento: contatori deterministici, **mai** dati.
+///
+/// # I contatori sono **totali**, non incrementi
+///
+/// Ogni `Progresso` dichiara quanto si e' fatto **fin li'**, non quanto si e'
+/// fatto dall'ultimo rapporto. I tre assi sono quindi **non decrescenti**: un
+/// valore piu' piccolo del precedente non e' un rapporto strano, e' una
+/// violazione del protocollo.
+///
+/// # Perche' totali e non incrementi
+///
+/// Perche' gli incrementi si sommano, e una somma su `u64` puo' traboccare. Le
+/// due vie d'uscita da un traboccamento sono entrambe cattive: saturare rende
+/// `u64::MAX` indistinguibile da un conteggio esatto pari a `u64::MAX` — una
+/// perdita **silenziosa**, che e' la peggiore — e andare in panico mette il
+/// supervisore in ginocchio per un numero che il worker ha scelto.
+///
+/// Con i totali non c'e' niente da sommare: chi riceve **conserva l'ultimo**, e
+/// l'unica aritmetica e' un confronto. Un rapporto perso non falsa il conto, e
+/// un rapporto ripetuto nemmeno.
+///
+/// La dichiarazione sta qui e in `isolamento.md`, perche' un contratto non
+/// scritto lo si scopre quando due lati lo interpretano diversamente.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Progresso {
