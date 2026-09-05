@@ -380,6 +380,47 @@ release**, non una voce di arretrato. Se una campagna lunga trova qualcosa
 dopo il merge, la release aspetta quella fix: il momento in cui il difetto è
 emerso non cambia che cosa sarebbe successo in produzione.
 
+#### Rilievi aperti
+
+Qui stanno i difetti che una campagna ha trovato e che nessuno ha ancora
+chiuso. Stanno **in questo documento e non in un arretrato** perché il loro
+effetto è su di esso: finché una voce è qui, la release non parte.
+
+##### `wkt_operations` — panic dentro `geo` su un poligono degenere
+
+Trovato il **2026-09-01** dallo smoke fuzz, su Ubuntu 24.04.4 con kernel
+`6.8.0-138-generic`. Diciannove target su venti verdi.
+
+```
+panicked at geo-0.33.1/src/algorithm/simplify.rs:108:5
+assertion `left != right` failed — left: 0, right: 0
+```
+
+L'ingresso è un WKT `polyGon((2444…4444` con coordinate separate dai byte di
+ritorno a capo, avanzamento riga e tabulazione — `\r`, `\n` e `\t`. Il parser lo accetta, ne esce una geometria degenere, e `simplify` di
+`geo` ci inciampa con un'`assert_ne!`.
+
+È un **panic di una dipendenza raggiungibile da ingresso non fidato**: il
+processo muore, non restituisce un errore. Riproduzione deterministica,
+verificata rieseguendo l'artefatto sull'ingresso salvato.
+
+Il difetto **non appartiene a `PR-7`**, e va detto perché è durante la sua
+qualificazione che è emerso: il percorso è `wkt_operations` →
+`plenora-kernels-geo` → `geo 0.33.1`, e il diff di `PR-7` non tocca nessuno dei
+tre né `Cargo.lock`. Lo smoke che questo documento richiede prima del merge è
+quello **dei target coinvolti dalla modifica**, e `wkt_operations` non è fra
+quelli: è stato eseguito lo smoke completo, ed è così che il difetto si è visto.
+
+Le due strade da valutare, e nessuna è ovvia: respingere la geometria degenere
+**prima** di passarla a `geo`, oppure trattarlo come difetto della dipendenza —
+un `simplify` che va in panic su un ingresso che il proprio parser ha accettato
+non è un contratto che il chiamante può rispettare.
+
+L'artefatto e la diagnosi non stanno nel repository: `fuzz/artifacts` è in
+`.gitignore`, e un ingresso che fa cadere il processo non è un file da
+distribuire con il codice. Stanno con l'evidenza della campagna che li ha
+prodotti.
+
 ### Preparare l'ambiente locale
 
 `fuzz-smoke.sh` e `fuzz-campaign.sh` girano in un'immagine
