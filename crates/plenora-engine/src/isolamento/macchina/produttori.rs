@@ -30,8 +30,8 @@ use crate::protocollo::lettore::leggi_frame;
 use crate::protocollo::messaggi::{Corpo, Progresso};
 
 use super::coda::{Bocchetta, Esaurita};
-use super::sorgente::{Freno, Interruttore, SorgenteTerminabile};
 use super::Fatto;
+use crate::isolamento::sorgente::{Freno, Interruttore, SorgenteTerminabile};
 
 /// Cio' che un produttore rende quando finisce.
 ///
@@ -188,7 +188,7 @@ impl CanaleOperativo<std::io::PipeReader> {
         accordo: HandshakeAccettato,
     ) -> plenora_core::error::Result<Self> {
         use std::os::fd::AsFd as _;
-        super::sorgente::rendi_non_bloccante(sorgente.as_fd())?;
+        crate::isolamento::sorgente::rendi_non_bloccante(sorgente.as_fd())?;
         Ok(Self {
             sorgente,
             _accordo: accordo,
@@ -466,7 +466,7 @@ pub(super) fn avvia_orologio(
     bocchetta: Bocchetta,
     passo: Duration,
 ) -> std::io::Result<(JoinHandle<Resoconto>, Freno)> {
-    let (interruttore, freno) = super::sorgente::interruttore();
+    let (interruttore, freno) = crate::isolamento::sorgente::interruttore();
     let filo = nato("plenora-orologio", move || {
         let mut bocchetta = bocchetta;
         match attendi_o_fermati(&interruttore, tempo_di_esecuzione, passo) {
@@ -563,7 +563,7 @@ where
     // cella se la chiusura non e' mai partita.
     let cella = std::sync::Arc::new(std::sync::Mutex::new(Some(osservatore)));
     let sua = std::sync::Arc::clone(&cella);
-    let (interruttore, freno) = super::sorgente::interruttore();
+    let (interruttore, freno) = crate::isolamento::sorgente::interruttore();
     let nascita = nato("plenora-sorvegliante", move || {
         let mut bocchetta = bocchetta;
         let preso = sua

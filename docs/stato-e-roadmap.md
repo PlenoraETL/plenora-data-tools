@@ -247,19 +247,51 @@ la macchina a stati che gli sta intorno restano **progettati** in
 chiamante di produzione del modulo. Resta progetto anche la sequenza di publish
 (`PR-10`), di cui `PR-6` ha portato la sola verifica: il passo 9 non c'è.
 
-Due conseguenze pratiche, dichiarate perché non si deduca il contrario. Il
-protocollo **e il verificatore** si compilano solo sotto `test` e sotto la
-feature `internals`, perché non hanno ancora un chiamante di produzione — ma
-non lo acquistano insieme, e attribuirli allo stesso momento direbbe una cosa
-falsa su uno dei due.
+Una conseguenza pratica, dichiarata perché non si deduca il contrario. Il
+**verificatore** si compila solo sotto `test` e sotto la feature `internals`,
+perché non ha ancora un chiamante di produzione: lo acquista con la sequenza di
+publish, cioè con `PR-10`.
 
-Il primo chiamante **reale** del protocollo è il worker, e arriva con `PR-9`.
-Il lato supervisore che `PR-8` costruisce non lo rende di produzione: diventa
-di produzione quando viene **davvero attivato** — quando una policy lo sceglie
-e un worker reale gli parla — non quando una sua funzione diventa `pub`.
-Rendere pubblico ciò che nessuno chiama toglierebbe l'avviso di codice morto
-senza togliere il codice morto, ed è la scorciatoia che il registro vieta.
-Quello del verificatore è la sequenza di publish, e arriva con `PR-10`. E il tetto sui dizionari vive in
+Il protocollo non è più in quello stato. Il suo primo chiamante **reale** è il
+worker, ed è arrivato con `PR-9`: il `cfg` sul modulo è caduto, e ciò che dentro
+il modulo resta senza chiamante — il lato supervisore dell'handshake, che
+diventa di produzione con `PR-12`, e gli inventari generati dalle macro — lo
+dichiara ora elemento per elemento. Il lato supervisore che `PR-8` costruisce
+non è di produzione: lo diventa quando viene **davvero attivato**, cioè quando
+una policy lo sceglie, non quando una sua funzione diventa `pub`. Rendere
+pubblico ciò che nessuno chiama toglierebbe l'avviso di codice morto senza
+togliere il codice morto, ed è la scorciatoia che il registro vieta.
+
+Il worker reale **percorre la sequenza intera**: si descrive, conclude
+l'accordo, riceve l'incarico, ne rivalida il piano e i contratti d'ingresso, lo
+esegue, scrive l'artefatto sul solo percorso temporaneo con il `commit_token`
+nel footer, manda il progresso e dichiara l'esito. Ciò che resta fuori è ciò che
+non gli appartiene: la verifica dell'artefatto (passi 3-8-bis) e la
+pubblicazione (passo 9) sono di chi lo ha osservato, e il worker non può
+verificare se stesso.
+
+Il criterio d'uscita di `PR-9` era **l'esecuzione end-to-end sotto limite**, e
+la qualificazione che lo soddisfa è `scripts/qualifica_sotto_limite.sh`: il
+worker di produzione, raggiunto attraverso lo spawner, esegue dentro un dominio
+`cgroup2` con `memory.max` e conclude la sequenza intera. Fra due pipe nude si
+prova il cablaggio; «sotto limite» è un'altra affermazione, e la si fa su una VM
+con root, un dominio vero e le credenziali del worker distinte da quelle di chi
+lo avvia. Il verdetto lo dà l'unico oracolo, lo stesso che giudica la
+qualificazione fra due pipe. Che il qualificatore sappia diventare rosso non è
+dato per scontato: `scripts/mutazioni_del_qualificatore.sh` tocca una decisione
+per volta — la cessione della proprietà delle pipe, l'imposizione della
+variabile del canale, il confronto col digest dichiarato da fuori, la pulizia
+che dichiara un guasto, e la quiescenza che non si può osservare — e pretende
+un codice d'uscita diverso da zero **e** nessun `VINTO` nel testo. Sono
+decisioni che nessun caso di `cargo test` attraversa, ed è la ragione per cui
+hanno un giudice proprio.
+
+Il worker reale porta con sé un limite dichiarato, e va letto insieme: il
+profilo isolato descrive l'ambiente **senza** backend CRS, e con `proj-backend`
+il worker rifiuta prima dell'handshake, perché di quell'ambiente non esiste una
+radice esclusiva e inventariabile. Il rientro non è una data: è un elenco di
+cinque condizioni che un unico provider deve soddisfare, ed è registrato in
+[`errori-e-limiti.md`](errori-e-limiti.md#il-profilo-isolato-non-descrive-lambiente-proj-backend). E il tetto sui dizionari vive in
 `IpcLimits::max_retained_dictionary_body_bytes`, con un default del confine; i
 costruttori dei limiti lo restringono secondo il budget disponibile.
 `verifica_artefatto` riceve l'intero `&IpcLimits`, non un parametro o una

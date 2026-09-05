@@ -97,6 +97,12 @@ macro_rules! enum_sul_filo {
             ///
             /// Generata dalla stessa lista che genera le varianti: le due non
             /// possono divergere.
+            /// Esiste per essere **enumerata**, e la enumerano i casi che
+            /// attraversano ogni variante. La produzione converte una variante
+            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
+            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
+            /// largo dichiarerebbe un chiamante che non esiste.
+            #[cfg(test)]
             pub const TUTTE: &'static [(Self, &'static str)] = &[
                 $( (Self::$variante, $filo), )+
             ];
@@ -148,9 +154,21 @@ macro_rules! enum_con_tag_sul_filo {
 
         impl $nome {
             /// I nomi sul filo, generati con le varianti.
+            /// Esiste per essere **enumerata**, e la enumerano i casi che
+            /// attraversano ogni variante. La produzione converte una variante
+            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
+            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
+            /// largo dichiarerebbe un chiamante che non esiste.
+            #[cfg(test)]
             pub const NOMI: &'static [&'static str] = &[ $( $filo ),+ ];
 
             /// Un campione per variante, col proprio nome sul filo.
+            /// Esiste per essere **enumerata**, e la enumerano i casi che
+            /// attraversano ogni variante. La produzione converte una variante
+            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
+            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
+            /// largo dichiarerebbe un chiamante che non esiste.
+            #[cfg(test)]
             pub const TUTTE: &'static [(Self, &'static str)] = &[
                 $( (Self::$variante { $( $campo : $campione ),* }, $filo), )+
             ];
@@ -177,6 +195,12 @@ macro_rules! enum_con_tag_sul_filo {
 
         impl $nome {
             /// I nomi sul filo, generati con le varianti.
+            /// Esiste per essere **enumerata**, e la enumerano i casi che
+            /// attraversano ogni variante. La produzione converte una variante
+            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
+            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
+            /// largo dichiarerebbe un chiamante che non esiste.
+            #[cfg(test)]
             pub const NOMI: &'static [&'static str] = &[ $( $filo ),+ ];
         }
     };
@@ -472,24 +496,24 @@ enum_sul_filo! {
     }
 }
 
-/// Asse «ritentativo».
-///
-/// `delay_ms` e' ammesso **esclusivamente** con [`Self::After`]: un ritardo su
-/// una disposizione che non lo prevede direbbe al chiamante di riprovare piu'
-/// tardi senza che nulla glielo abbia concesso.
-///
-/// # Perche' le varianti senza campi sono scritte `Never {}`
-///
-/// In un enum con tag interno, `deny_unknown_fields` **non ha effetto sulle
-/// varianti unitarie**: `serde` le riconosce dal tag e ignora il resto
-/// dell'oggetto. Scritto `Never`, questo tipo accetterebbe
-/// `{"kind":"never","delay_ms":10}` e butterebbe via `delay_ms` in silenzio —
-/// cioe' esattamente la cosa che `deny_unknown_fields` esiste per impedire.
-///
-/// La forma `Never {}` e' una variante di struttura con zero campi: sul filo
-/// e' identica (`{"kind":"never"}`), ma la deserializzazione passa per un
-/// visitor di struttura, e li' `deny_unknown_fields` vale davvero.
 enum_con_tag_sul_filo! {
+    /// Asse «ritentativo».
+    ///
+    /// `delay_ms` e' ammesso **esclusivamente** con [`Self::After`]: un ritardo su
+    /// una disposizione che non lo prevede direbbe al chiamante di riprovare piu'
+    /// tardi senza che nulla glielo abbia concesso.
+    ///
+    /// # Perche' le varianti senza campi sono scritte `Never {}`
+    ///
+    /// In un enum con tag interno, `deny_unknown_fields` **non ha effetto sulle
+    /// varianti unitarie**: `serde` le riconosce dal tag e ignora il resto
+    /// dell'oggetto. Scritto `Never`, questo tipo accetterebbe
+    /// `{"kind":"never","delay_ms":10}` e butterebbe via `delay_ms` in silenzio —
+    /// cioe' esattamente la cosa che `deny_unknown_fields` esiste per impedire.
+    ///
+    /// La forma `Never {}` e' una variante di struttura con zero campi: sul filo
+    /// e' identica (`{"kind":"never"}`), ma la deserializzazione passa per un
+    /// visitor di struttura, e li' `deny_unknown_fields` vale davvero.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     RetrySulFilo, tag = "kind" {
         Never {} => "never",
@@ -602,8 +626,8 @@ pub struct DigestArtefatto {
     pub valore: String,
 }
 
-/// L'esito che il worker dichiara **di se'**.
 enum_con_tag_sul_filo! {
+    /// L'esito che il worker dichiara **di se'**.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     EsitoWorkerSulFilo, tag = "esito" {
         /// Il worker ha finito. **Non** e' il successo finale: la verifica e

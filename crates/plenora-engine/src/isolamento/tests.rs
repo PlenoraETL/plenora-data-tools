@@ -12,10 +12,20 @@ use std::path::{Path, PathBuf};
 use plenora_core::error::{ErrorCategory, ErrorPhase};
 
 use super::{
-    bersagli_del_possesso, prepara_dominio, riconosci, rivalida, spawner_ammissibile, Controllo,
-    DifettoSuperficie, IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner, Riconoscimento,
-    SuperficieDominio, PREFISSO_RISERVATO, VERSIONE_RICHIESTA,
+    bersagli_del_possesso, prepara_dominio, riconosci_modalita, rivalida, spawner_ammissibile,
+    Controllo, DifettoSuperficie, IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner,
+    Riconoscimento, SuperficieDominio, PREFISSO_RISERVATO, PREFISSO_WORKER, VERSIONE_RICHIESTA,
+    VERSIONE_WORKER,
 };
+
+/// Il riconoscimento **dello spawner**, per i casi che parlano di lui.
+///
+/// La regola e' una sola e prende il namespace come argomento; questi casi
+/// riguardano lo spawner, e ripetere le due costanti a ogni riga renderebbe
+/// illeggibile cio' che stanno provando.
+fn riconosci_dello_spawner(primo: Option<&std::ffi::OsString>) -> super::Riconoscimento {
+    riconosci_modalita(primo, PREFISSO_RISERVATO, VERSIONE_RICHIESTA)
+}
 
 /// L'identita' con cui il worker gira in questi casi.
 const WORKER: IdentitaWorker = IdentitaWorker {
@@ -1003,7 +1013,7 @@ fn primo(testo: &str) -> std::ffi::OsString {
 #[test]
 fn la_versione_supportata_entra_nello_spawner() {
     assert_eq!(
-        riconosci(Some(&primo(VERSIONE_RICHIESTA))),
+        riconosci_dello_spawner(Some(&primo(VERSIONE_RICHIESTA))),
         Riconoscimento::Supportata
     );
 }
@@ -1019,12 +1029,12 @@ fn un_comando_ordinario_non_e_uno_spawner() {
         "run", "catalog", "validate", "--help", "", "plenora", "spawner",
     ] {
         assert_eq!(
-            riconosci(Some(&primo(testo))),
-            Riconoscimento::NonSpawner,
+            riconosci_dello_spawner(Some(&primo(testo))),
+            Riconoscimento::AltroComando,
             "«{testo}» non appartiene al namespace riservato"
         );
     }
-    assert_eq!(riconosci(None), Riconoscimento::NonSpawner);
+    assert_eq!(riconosci_dello_spawner(None), Riconoscimento::AltroComando);
 }
 
 /// Ogni versione del namespace riservato che non sia quella supportata e' un
@@ -1048,7 +1058,7 @@ fn ogni_altra_versione_del_namespace_e_un_rifiuto() {
         "plenora-spawner-due",
     ] {
         assert_eq!(
-            riconosci(Some(&primo(testo))),
+            riconosci_dello_spawner(Some(&primo(testo))),
             Riconoscimento::VersioneNonSupportata,
             "«{testo}» avrebbe dovuto essere un rifiuto"
         );
@@ -1066,7 +1076,7 @@ fn una_versione_piu_vecchia_si_riconosce() {
     assert!(precedente.starts_with(PREFISSO_RISERVATO));
     assert_ne!(precedente, VERSIONE_RICHIESTA);
     assert_eq!(
-        riconosci(Some(&primo(precedente))),
+        riconosci_dello_spawner(Some(&primo(precedente))),
         Riconoscimento::VersioneNonSupportata
     );
 }
@@ -1087,12 +1097,12 @@ fn il_rifiuto_non_trattiene_l_argomento() {
     let velenoso = "plenora-spawner-\nriga finta: qualcosa di inventato";
     let innocuo = "plenora-spawner-7";
     assert_eq!(
-        riconosci(Some(&primo(velenoso))),
+        riconosci_dello_spawner(Some(&primo(velenoso))),
         Riconoscimento::VersioneNonSupportata
     );
     assert_eq!(
-        riconosci(Some(&primo(velenoso))),
-        riconosci(Some(&primo(innocuo))),
+        riconosci_dello_spawner(Some(&primo(velenoso))),
+        riconosci_dello_spawner(Some(&primo(innocuo))),
         "due argomenti diversi devono dare lo stesso esito: cio' che li distingue non sopravvive"
     );
 }
@@ -1110,7 +1120,7 @@ fn il_namespace_si_riconosce_sui_byte() {
 
     let mut byte = PREFISSO_RISERVATO.as_bytes().to_vec();
     byte.extend([0xFF, 0xFE]);
-    match riconosci(Some(&std::ffi::OsString::from_vec(byte))) {
+    match riconosci_dello_spawner(Some(&std::ffi::OsString::from_vec(byte))) {
         Riconoscimento::VersioneNonSupportata => {}
         altro => panic!("un nome di byte nel namespace riservato e' {altro:?}"),
     }
@@ -1182,4 +1192,93 @@ fn solo_la_forma_canonica_di_un_descrittore() {
 fn un_descrittore_negativo_passa_la_forma() {
     assert_eq!(super::descrittore_canonico("-1"), Ok(-1));
     assert_eq!(super::descrittore_canonico("-2147483648"), Ok(i32::MIN));
+}
+
+// --- il riconoscimento della modalita' worker --------------------------------
+
+/// Il riconoscimento **del worker**, per i casi che parlano di lui.
+fn riconosci_del_worker(primo: Option<&std::ffi::OsString>) -> super::Riconoscimento {
+    riconosci_modalita(primo, PREFISSO_WORKER, VERSIONE_WORKER)
+}
+
+/// La versione del worker sta nel proprio namespace.
+///
+/// Se non ci stesse, una versione diversa non verrebbe riconosciuta come tale e
+/// cadrebbe nel parser della CLI: il rifiuto direbbe «comando sconosciuto» a chi
+/// ha invece sbagliato versione.
+#[test]
+fn la_versione_del_worker_sta_nel_suo_namespace() {
+    assert!(
+        VERSIONE_WORKER.starts_with(PREFISSO_WORKER),
+        "«{VERSIONE_WORKER}» non comincia con «{PREFISSO_WORKER}»"
+    );
+}
+
+/// I due namespace sono **disgiunti**.
+///
+/// # Perche' non e' ovvio, e perche' va fissato
+///
+/// Perche' il riconoscimento e' una regola sola applicata due volte, e le due
+/// applicazioni sono in fila. Se un prefisso fosse prefisso dell'altro, una
+/// riga destinata a una modalita' verrebbe rivendicata dalla prima interrogata
+/// — con un rifiuto che nomina la versione sbagliata, che e' peggio di nessun
+/// rifiuto.
+#[test]
+fn i_due_namespace_non_si_sovrappongono() {
+    assert!(!PREFISSO_WORKER.starts_with(PREFISSO_RISERVATO));
+    assert!(!PREFISSO_RISERVATO.starts_with(PREFISSO_WORKER));
+    assert_ne!(VERSIONE_WORKER, VERSIONE_RICHIESTA);
+}
+
+/// La versione esatta si riconosce; il namespace con un'altra versione si
+/// **rifiuta**; tutto il resto passa.
+#[test]
+fn il_worker_si_riconosce_e_rifiuta_come_lo_spawner() {
+    assert_eq!(
+        riconosci_del_worker(Some(&primo(VERSIONE_WORKER))),
+        super::Riconoscimento::Supportata
+    );
+    for testo in [
+        "plenora-worker-0",
+        "plenora-worker-2",
+        "plenora-worker-",
+        "plenora-worker-1-e-poi",
+    ] {
+        assert_eq!(
+            riconosci_del_worker(Some(&primo(testo))),
+            super::Riconoscimento::VersioneNonSupportata,
+            "«{testo}» e' del namespace del worker, e va rifiutato per versione"
+        );
+    }
+    for testo in ["run", "verify", "plenora-spawner-2", "--help", ""] {
+        assert_eq!(
+            riconosci_del_worker(Some(&primo(testo))),
+            super::Riconoscimento::AltroComando,
+            "«{testo}» non e' del namespace del worker"
+        );
+    }
+    assert_eq!(
+        riconosci_del_worker(None),
+        super::Riconoscimento::AltroComando
+    );
+}
+
+/// **Una modalita' non rivendica l'altra.**
+///
+/// La riga dello spawner non e' un worker con la versione sbagliata, e
+/// viceversa: sono due namespace, e la distinzione deve reggere in entrambi i
+/// versi. Senza, la prima modalita' interrogata rifiuterebbe le righe della
+/// seconda nominando la propria versione attesa.
+#[test]
+fn nessuna_modalita_rivendica_le_righe_dell_altra() {
+    assert_eq!(
+        riconosci_del_worker(Some(&primo(VERSIONE_RICHIESTA))),
+        super::Riconoscimento::AltroComando,
+        "la riga dello spawner non appartiene al worker"
+    );
+    assert_eq!(
+        riconosci_dello_spawner(Some(&primo(VERSIONE_WORKER))),
+        super::Riconoscimento::AltroComando,
+        "la riga del worker non appartiene allo spawner"
+    );
 }

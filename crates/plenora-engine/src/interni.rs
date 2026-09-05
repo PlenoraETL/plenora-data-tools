@@ -311,8 +311,9 @@ pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
 
     use crate::commit_token::CommitToken;
     use crate::geo_transport::ipc::IpcLimits;
+    use crate::protocollo::digest::ALGORITMO_DIGEST;
     use crate::protocollo::messaggi::{ConteggiDichiarati, DigestArtefatto};
-    use crate::verifica::{verifica_artefatto, AtteseVerifica, ALGORITMO_DIGEST};
+    use crate::verifica::{verifica_artefatto, AtteseVerifica};
 
     // Il workspace e' **riusato**: una directory per thread, un file riscritto.
     let percorso = scrivi_nel_workspace(byte)?;

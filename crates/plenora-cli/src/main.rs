@@ -837,7 +837,10 @@ fn main() {
     let politica_nostra =
         plenora_core::panic_policy::install(plenora_core::panic_policy::PanicPolicy::Silent);
 
-    // Il dispatch dello spawner, e sta **qui** per una ragione precisa.
+    // I due dispatch delle modalita' riservate, e stanno **qui** per una ragione
+    // precisa.
+    //
+    // Il dispatch dello spawner.
     //
     // Questo eseguibile e' anche lo spawner del profilo isolato: e' la propria
     // immagine, rieseguita, e si riconosce perche' `argv[1]` porta la versione
@@ -855,12 +858,34 @@ fn main() {
     //
     // Il caso riuscito non torna: la `exec` ha sostituito l'immagine.
     #[cfg(target_os = "linux")]
-    if let Some(errore) =
-        plenora_engine::spawner_dal_confine(&std::env::args_os().collect::<Vec<_>>())
     {
-        let envelope = error_envelope(&errore, false);
-        let _ = emit_error_envelope(std::io::stdout().lock(), &envelope);
-        std::process::exit(error_exit_code(&envelope));
+        let argomenti: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        // Le due modalita' si interrogano in fila, e **prima** del parser della
+        // CLI. I namespace sono disgiunti, quindi l'ordine fra le due non
+        // sposta niente; cio' che conta e' che vengano entrambe prima, perche'
+        // una riga del namespace riservato che arrivasse al parser si
+        // sentirebbe rispondere «comando sconosciuto» invece della diagnosi
+        // vera.
+        for modalita in [
+            plenora_engine::spawner_dal_confine,
+            plenora_engine::worker_dal_confine,
+        ] {
+            match modalita(&argomenti) {
+                // Non e' questa modalita': si prova la prossima, e poi il
+                // parser.
+                plenora_engine::DalConfine::AltroComando => {}
+                // La modalita' ha finito il proprio lavoro. Si esce **qui**:
+                // proseguire porterebbe la riga riservata al parser della CLI,
+                // che risponderebbe «comando sconosciuto» dopo un'esecuzione
+                // riuscita.
+                plenora_engine::DalConfine::Conclusa => std::process::exit(0),
+                plenora_engine::DalConfine::Fallita(errore) => {
+                    let envelope = error_envelope(&errore, false);
+                    let _ = emit_error_envelope(std::io::stdout().lock(), &envelope);
+                    std::process::exit(error_exit_code(&envelope));
+                }
+            }
+        }
     }
 
     let esito = std::panic::catch_unwind(esegui_processo);

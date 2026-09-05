@@ -378,7 +378,13 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
     // proprio processo, ma quella verifica riguarda i **suoi** descrittori; qui
     // sono altri numeri in un'altra tabella, e l'unica cosa che li lega e'
     // un'affermazione del chiamante.
-    let _ = canale::accerta_coppia(richiesta.worker_legge, richiesta.worker_scrive)?;
+    // La coppia **rivalidata qui** e' cio' che il worker ricevera', e non i due
+    // numeri della richiesta: sono gli stessi valori solo finche' nessuno mente,
+    // e il senso di questo passo e' proprio non doverlo dare per scontato. Il
+    // valore non si costruisce, si **riceve** da chi lo ha verificato: non c'e'
+    // un modo di ottenerne uno senza passare di li'.
+    let canale_del_worker =
+        canale::accerta_coppia(richiesta.worker_legge, richiesta.worker_scrive)?;
     // La superficie si costruisce **dalla richiesta**, e non arriva da un
     // chiamante: e' l'unica forma in cui «lo spawner rivalida da se'» non
     // dipende da chi lo ha invocato. `Gerarchia::nuova` canonicalizza, e
@@ -388,7 +394,7 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
         .map_err(|difetto| passo("gerarchia", &difetto.to_string()))?;
     let padre = namespace_del_padre().map_err(|errore| passo("namespace del padre", &errore))?;
     let rivalidato = super::rivalida(&gerarchia, &richiesta, padre)?;
-    entra_ed_esegui(rivalidato, &da_eseguire)
+    entra_ed_esegui(rivalidato, canale_del_worker, &da_eseguire)
 }
 
 /// [`avvia`] con una barriera fra l'accertamento dell'immagine e lo `spawn`.
@@ -449,7 +455,21 @@ fn avvia_interno(
             }));
         }
     };
-    let (richiesta, evidenza) = preparato.consuma(estremi.numeri());
+    // I numeri si riguardano prima di metterli nella richiesta: `apri` li ha
+    // appena verificati, e riguardarli costa due letture — ma e' l'unico modo in
+    // cui il tipo che li porta significa «verificati» invece di «passati di
+    // qui».
+    let numeri = match estremi.numeri() {
+        Ok(numeri) => numeri,
+        Err(causa) => {
+            return Err(Box::new(TransizioneFallita {
+                causa,
+                evidenza: preparato.solo_evidenza(),
+                difetto_di_pulizia: None,
+            }));
+        }
+    };
+    let (richiesta, evidenza) = preparato.consuma(numeri);
     let tentativo = tenta(
         &richiesta,
         evidenza.worker,
@@ -600,6 +620,7 @@ pub(super) struct DaEseguire<'a> {
 /// vale meno, e' uno in cui non vale.
 fn entra_ed_esegui(
     rivalidato: DominioRivalidato,
+    canale_del_worker: super::NumeriDelCanale,
     da_eseguire: &DaEseguire<'_>,
 ) -> Result<std::convert::Infallible> {
     // Il token si **smonta** qui, e da qui in poi esistono solo i suoi pezzi.
@@ -698,6 +719,71 @@ fn entra_ed_esegui(
         ));
     }
 
+    // --- 4-bis. il canale passa al worker anche come proprieta' ------------
+    //
+    // # Perche' serve
+    //
+    // Perche' il worker **riapre** i propri estremi da `/proc/self/fd`, e quella
+    // riapertura controlla i permessi sull'inode della pipe. Le pipe le ha
+    // create il supervisore, quindi appartengono a lui: dopo il passo 6 il
+    // worker ha un'altra identita' e la riapertura gli risponde
+    // `Permission denied`. Il canale ci sarebbe — i descrittori sono ereditati e
+    // validi — e il worker non potrebbe prenderne possesso.
+    //
+    // Non lo si evita smettendo di riaprire: prendere possesso di un descrittore
+    // ereditato **per numero** richiede di costruirne un proprietario da un
+    // intero grezzo, e ogni via per farlo e' `unsafe`, che questo crate vieta.
+    // La riapertura e' la sola forma sicura, ed e' anche quella che permette di
+    // **accertare** che l'estremo sia quello dichiarato invece di crederci.
+    //
+    // # Perche' proprio qui
+    //
+    // Non prima: il passo 4 pretende che non resti nessun descrittore scrivibile
+    // verso il control plane, e un cambio di proprieta' fatto sopra sarebbe
+    // un'autorita' esercitata nel mezzo di quella verifica. Non dopo: il passo 6
+    // toglie proprio i privilegi che servono a cedere la proprieta'.
+    //
+    // # Che cosa si cede, e che cosa no
+    //
+    // I **due oggetti pipe**, che sono due e non quattro: ogni pipe ha un inode
+    // solo, e i due lati lo condividono. Cedere l'estremo del worker cede quindi
+    // anche l'inode su cui il supervisore ha il proprio estremo — e va detto,
+    // perche' e' facile leggerlo come «gli altri due restano miei».
+    //
+    // Cio' che il supervisore conserva sono i propri **handle gia' aperti**, non
+    // la proprieta' degli inode: il permesso si controlla all'apertura, e i suoi
+    // descrittori sono aperti da prima. Continua a leggere e scrivere come
+    // sempre; cio' che non potrebbe piu' fare e' **riaprirli** da
+    // `/proc/self/fd`, che e' un'operazione che non compie.
+    //
+    // Al worker questo non da' niente che non abbia gia' — i descrittori li ha
+    // ereditati — gli da' il modo di riaprirli, che e' come il protocollo
+    // pretende che li prenda.
+    //
+    // Il cambio passa dal percorso e non dal numero: `chown` su
+    // `/proc/self/fd/N` segue il collegamento fino all'inode della pipe, e non
+    // richiede di costruire un prestito da un intero — che sarebbe di nuovo
+    // `unsafe`.
+    for (numero, quale) in [
+        (canale_del_worker.legge, "lettura"),
+        (canale_del_worker.scrive, "scrittura"),
+    ] {
+        rustix::fs::chown(
+            format!("/proc/self/fd/{numero}").as_str(),
+            Some(Uid::from_raw(worker.uid)),
+            Some(Gid::from_raw(worker.gid)),
+        )
+        .map_err(|errore| {
+            passo(
+                "canale",
+                &format!(
+                    "l'estremo di {quale} ({numero}) non passa al worker {}:{}: {errore}",
+                    worker.uid, worker.gid
+                ),
+            )
+        })?;
+    }
+
     // --- 5. no_new_privs ---------------------------------------------------
     rustix::thread::set_no_new_privs(true)
         .map_err(|errore| passo("no_new_privs", &errore.to_string()))?;
@@ -725,8 +811,24 @@ fn entra_ed_esegui(
     let dopo = rileggi_credenziali(&prima).map_err(|errore| passo("rilettura", &errore))?;
     verifica_spogliato(&dopo, &namespace_del_padre, worker, dispositivo)?;
 
+    // La variabile del canale si **impone**, e non si aggiunge: `env` sostituisce
+    // qualunque valore ereditato. Un `PLENORA_CANALE` gia' presente
+    // nell'ambiente — messo da chi ha avviato il supervisore, o rimasto da un
+    // tentativo precedente — direbbe al worker due numeri che non sono i suoi, e
+    // il worker li rivaliderebbe trovandoli buoni: sarebbero descrittori veri,
+    // solo di un altro canale.
+    //
+    // La forma la decide `in_variabile`, che e' la meta' scrivente della stessa
+    // convenzione che il worker legge. E il worker **rivalida comunque**: quello
+    // che arriva di qui e' un'affermazione, come tutto il resto che attraversa
+    // una `exec`.
     let errore = std::os::unix::process::CommandExt::exec(
-        std::process::Command::new(da_eseguire.eseguibile).args(da_eseguire.argomenti),
+        std::process::Command::new(da_eseguire.eseguibile)
+            .args(da_eseguire.argomenti)
+            .env(
+                canale::VARIABILE_DEL_CANALE,
+                canale_del_worker.in_variabile(),
+            ),
     );
     Err(passo("exec", &errore.to_string()))
 }

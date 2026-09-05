@@ -1887,17 +1887,76 @@ La finestra si chiude con la `exec`, che rimette *dumpable*: il worker, dopo,
 si legge senza problemi. La misura sta nel gate, che riporta la leggibilità
 prima e dopo il cambio nello stesso processo.
 
-### Le mutazioni sul supervisore: la batteria discrimina, oppure non prova
+### Come il canale arriva al worker: proprietà e dichiarazione
 
-`scripts/mutazioni_supervisore.py` è l'altra qualificazione manuale, e risponde
+Il worker eredita due descrittori, ma ereditarli non basta: il protocollo
+pretende che li **riapra** da `/proc/self/fd`, perché è l'unica forma sicura di
+prenderli — costruire un `OwnedFd` da un intero grezzo è `unsafe`, che questo
+crate vieta, e la riapertura è anche ciò che permette di *accertare* che
+l'estremo sia quello dichiarato invece di crederci. Servono quindi due cose, e
+sono distinte: il permesso di riaprirli, e sapere **quali** siano.
+
+**Il permesso.** Lo spawner cede la proprietà con un `chown` sul percorso
+`/proc/self/fd/N`, fra il passo 4 e il passo 6: non prima, perché il passo 4
+pretende che non resti nessun descrittore scrivibile verso il control plane e un
+cambio di proprietà fatto sopra sarebbe autorità esercitata nel mezzo di quella
+verifica; non dopo, perché il passo 6 toglie proprio i privilegi che servono a
+cederla.
+
+Ciò che si cede sono i **due oggetti pipe**, che sono due e non quattro: ogni
+pipe ha un inode solo, e i due lati lo condividono, quindi cedere l'estremo del
+worker cede anche l'inode su cui il supervisore ha il proprio. Il supervisore
+non perde niente di ciò che usa: conserva i propri **handle già aperti**, e il
+permesso si controlla all'apertura. Continua a leggere e scrivere come sempre;
+ciò che non potrebbe più fare è riaprirli da `/proc/self/fd`, che è
+un'operazione che non compie.
+
+**La dichiarazione.** I due numeri arrivano al worker in `PLENORA_CANALE`, e la
+variabile si **impone**, non si aggiunge: un valore ereditato dall'ambiente del
+supervisore indicherebbe descrittori veri di un altro canale, che il worker
+rivaliderebbe trovandoli buoni. La forma canonica la decide `in_variabile`, che
+è la metà scrivente della stessa convenzione che il worker legge — una grafia
+sola, come per il resto.
+
+**Perché il tipo dice «rivalidati».** I due numeri viaggiano in
+`NumeriDelCanale`, che non ha un costruttore aperto: l'unico modo di ottenerne
+uno è `accerta_coppia`, cioè il controllo stesso. «Rivalidato» diventa così una
+proprietà del valore invece di una promessa nel commento di chi lo costruisce, e
+un percorso che saltasse il controllo non avrebbe niente da passare.
+
+Il worker rivalida comunque, all'arrivo: quello che attraversa una `exec` è
+un'affermazione, come tutto il resto.
+
+### Le mutazioni sull'isolamento: la batteria discrimina, oppure non prova
+
+`scripts/mutazioni_isolamento.py` è l'altra qualificazione manuale, e risponde
 a una domanda che il verde non risponde. Una batteria verde dice che il codice
 passa i propri casi; non dice che i casi **distinguano**. Un caso che non guarda
 la proprietà che dichiara resta verde anche quando quella proprietà sparisce.
 
-Lo script rompe una decisione per volta — trentadue, con identificativi
-canonici `M01`–`M32` — e pretende che qualcuno se ne accorga. Chi sopravvive non
+Lo script rompe una decisione per volta — quarantotto, con identificativi
+canonici da `mut-01` a `mut-48` — e pretende che qualcuno se ne accorga. Il
+perimetro sono il **supervisore** (`PR-8`, i primi trentadue) e il **worker**
+con il suo percorso di qualificazione (`PR-9`, gli ultimi sedici): stanno nello
+stesso harness perché condividono baseline, impronta e riparazione, e due
+harness avrebbero significato due nozioni di «albero sano». Chi sopravvive non
 è un difetto del codice: è un difetto della batteria, e indica esattamente quale
 proprietà nessun caso sta guardando.
+
+**Il filtro dei casi deve coprire il perimetro dei mutanti.** La batteria non
+esegue tutti i casi del crate — sarebbe mezz'ora per mutante — ma un elenco di
+filtri in *or*, oggi `isolamento` e `executor::output`. Un filtro più stretto
+del perimetro non rende la campagna più veloce: la rende **muta**, perché il
+caso che giudicherebbe un mutante non gira e quel mutante sopravvive senza che
+nulla di sbagliato sia successo nel codice. Aggiungere un mutante in un modulo
+nuovo vuol dire quindi aggiungere anche il suo perimetro, ed `executor::output`
+è entrato proprio così: il worker scrive l'artefatto passando di lì.
+
+**Un caso che legge la tabella che deve giudicare non giudica niente.** È la
+seconda cosa che un superstite ha insegnato qui, e vale in generale: un caso che
+scorre l'elenco che sta provando lo trova coerente con sé stesso qualunque cosa
+contenga, e resta verde mentre la proprietà sparisce. L'attesa va scritta a
+parte e confrontata nei due versi — niente di meno, niente di più.
 
 Non entra in CI: ogni mutante ricompila `plenora-engine`, e un gate che dura
 mezz'ora smette di essere eseguito. Si esegue su una macchina Linux dedicata,
@@ -1991,9 +2050,9 @@ modo di sbagliarla:
 - **l'impronta si riverifica dopo ogni mutante**, e alla prima differenza il
   giro si ferma.
 
-`scripts/test_mutazioni_supervisore.py` prova queste difese su un albero finto
+`scripts/test_mutazioni_isolamento.py` prova queste difese su un albero finto
 costruito dalla tabella dei mutanti stessa: dura secondi, non compila niente, e
-si esegue ovunque: **30/30 difese eseguibili su Linux, 0 saltate**, e **27/27
+si esegue ovunque: **34/34 difese eseguibili su Linux, 0 saltate**, e **31/31
 su Windows, una saltata**.
 
 Il conteggio distingue tre stati e non due. Un caso che qui non si può eseguire
@@ -2019,6 +2078,152 @@ manifesto, ricalcolandola dai suoi file invece di rileggere il valore che
 dichiara. Una baseline già presente si verifica o si rifiuta, e non si
 sovrascrive mai: quella sul disco può essere l'unica copia di riferimento di un
 giro in corso.
+
+### La qualificazione end-to-end: un worker reale, e che cosa **non** dice
+
+`scripts/qualifica_worker_reale.sh` fa percorrere a un'immagine reale la
+sequenza intera su un canale vero: riconoscimento della modalità, eredità dei
+due descrittori, handshake, incarico, rivalidazione del piano e dei contratti
+d'ingresso, esecuzione, scrittura dell'artefatto sul temporaneo, progresso,
+esito dichiarato, EOF e raccolta del processo.
+
+**Non è un caso di `cargo test`, e la ragione è strutturale.** L'harness fa ciò
+che fa il supervisore: toglie `CLOEXEC` a due descrittori e subito dopo avvia un
+processo. Quella finestra è sicura solo in un processo con un thread solo, e
+`accerta_monothread` lo pretende; libtest invece esegue ogni caso in un thread
+proprio, quindi il conteggio dei task è due prima ancora che il caso cominci.
+Rinunciare al controllo per far girare il caso avrebbe fatto divergere l'harness
+dal codice che dice di provare, proprio sulla riga più delicata. È perciò un
+binario di sola qualificazione, dietro `required-features = ["internals"]`.
+
+**I due ingressi non comunicano.** `--iterazione` usa l'immagine del target
+condiviso: nessun digest la fissa, si ricompila di continuo, e **non qualifica**.
+Senza argomenti, lo script compila l'immagine in un target separato, ne calcola
+lo SHA-256, lo passa all'harness — che confronta il binario davvero eseguito con
+quello misurato — e lo riverifica alla fine. Un'immagine mancante è **rosso**:
+non c'è ripiego sull'altra, perché un verde che parla di un binario diverso da
+quello che si crede di aver qualificato è il difetto che nessuno vedrebbe.
+
+I due target sono separati perché una compilazione con `internals` non deve
+poter **sostituire** il binario appena qualificato: il controllo finale se ne
+accorgerebbe, ma è meglio che non possa accadere.
+
+**Che cosa questo non prova.** «Sotto limite». Qui non c'è né lo spawner né un
+dominio `cgroup2`: il worker nasce dall'harness e vive con la memoria che il
+sistema gli concede. Che esegua *sotto* `memory.max` è un'altra affermazione, e
+la si fa sulla VM attraversando spawner e dominio vero.
+
+### La qualificazione **sotto limite**: lo spawner, il dominio, e il giudizio
+
+`scripts/qualifica_sotto_limite.sh` chiude proprio quell'affermazione. Il canale
+non nasce più fra due pipe dell'harness: lo apre lo spawner, che lo rivalida, ne
+cede i due estremi al worker e glieli dichiara nell'ambiente. L'esecuzione
+avviene dentro un dominio `cgroup2` creato per l'occasione, con i quattro
+controlli scritti e riletti dal preflight — `memory.max`, `memory.swap.max` a
+zero, `memory.oom.group` a uno, `cgroup.max.depth` a zero. Le immagini restano
+due e distinte: il **supervisore** è quello di qualificazione, perché è lui che
+`/proc/self/exe` rieseguirà in modalità spawner; il **worker** è l'immagine di
+produzione, compilata senza `internals` in un target proprio e fissata da uno
+SHA-256, ed è l'unica di cui questa qualificazione parli.
+
+**Le cache di compilazione dei percorsi privilegiati sono separate, e
+root-only.** `cargo` scrive gli artefatti con l'utente che lo esegue: un percorso
+che gira come root e compila nella cache ordinaria la restituisce piena di file
+di root, e il primo comando non privilegiato che la tocca fallisce con
+`Permission denied` su `.cargo-build-lock` — un sintomo che non somiglia alla
+causa. È la stessa forma del difetto chiuso in `coverage.sh`, dove la pulizia è
+andata dove sta lo scrittore; qui lo scrittore prende una cache sua.
+
+I due percorsi privilegiati — la qualificazione sotto limite e il gate ostile —
+usano perciò `target-isolamento-root-qualificazione`, **condivisa** perché
+costruiscono la stessa immagine con gli stessi flag, e la qualificazione sotto
+limite usa in più `target-isolamento-root-produzione` per l'immagine senza
+`internals`: separata, così che una build con `internals` non possa sostituire un
+artefatto all'immagine che si sta qualificando. Restano sul disco perché le
+mutazioni del qualificatore rilanciano lo script sei volte; sono ricostruibili,
+sono di root, e **nessun comando ordinario le nomina**. La controprova che la
+separazione tenga è eseguire, subito dopo un giro privilegiato, `cargo test` e
+`qualifica_worker_reale.sh` da utente normale.
+
+**Perché serve root, e che cosa non implica.** Root delega il sottoalbero
+`cgroup2` e crea il dominio, che resta **del control plane**. Il worker no: gira
+con le credenziali che gli si passano, e il preflight pretende l'opposto del
+possesso — che il dominio **non** sia scrivibile da lui, né il dominio né
+nessuno dei suoi antenati fino alla radice. Un worker che potesse scriverlo
+riscriverebbe da sé il tetto che lo governa, e l'identità distinta non servirebbe
+a niente. Dentro il dominio l'identità non privilegiata ce la colloca lo
+**spawner**, finché è ancora privilegiato. Serve perciò un utente reale e
+distinto: con root non ci sarebbe niente da misurare, perché i permessi non lo
+fermerebbero comunque. La separazione dei privilegi resta quindi la stessa che si
+dichiara altrove, non un'eccezione concessa alla qualificazione.
+
+**Il giudizio è lo stesso di `qualifica_worker`,** non una lettura del referto a
+occhio: la modalità stampa i fatti osservati e poi chiama l'unico oracolo,
+`prova::giudica`, che pretende immagine attesa, digest concorde, accordo,
+**esattamente un** progresso — la fixture ne determina uno, e «almeno uno»
+lascerebbe passare un worker che ne manda a raffica — artefatto **riverificato**,
+fine del canale, uscita `Codice(0)` e nessun difetto di pulizia. Un
+qualificatore che stampasse senza giudicare direbbe soltanto «è successo
+qualcosa», che non è una qualificazione.
+
+**Il digest atteso arriva da fuori.** Lo script misura l'immagine prima di
+consegnarla e lo **dichiara** sulla riga di comando; il supervisore ne fa una
+misura propria sul binario che esegue davvero, e l'oracolo confronta le due.
+Misurare e poi confrontare col proprio valore sarebbe un confronto sempre vero:
+direbbe «è il binario atteso» anche eseguendone un altro, cioè tacerebbe
+esattamente nel caso per cui il controllo esiste. La mutazione dedicata dichiara
+un digest diverso e pretende il rosso.
+
+**Il verdetto si pronuncia dopo la pulizia.** Non prima: fra la fine del
+percorso e la fine dello script c'è ancora lo smontaggio del dominio, e un
+«VINTO» stampato lì direbbe qualcosa che non si sa ancora. Uno script che
+uscisse rosso avendo però stampato VINTO parlerebbe a due voci — chi legge
+crederebbe al testo, chi automatizza al codice d'uscita — e nessuno dei due
+saprebbe di essere in disaccordo con l'altro. Il corpo perciò **arma** il
+verdetto; a stamparlo è la pulizia, che è l'ultima a sapere.
+
+**Perché la pulizia può trasformare un verde in rosso.** Un dominio che resta
+non è una nota a margine: il giro successivo troverebbe un cgroup con quel nome,
+o dei processi ancora dentro un tetto che nessuno governa più. La pulizia legge
+`cgroup.events` — non `cgroup.procs`, la cui dimensione dichiarata su un file
+virtuale è zero anche quando è abitato, per cui `[[ -s ]]` è sempre falso —
+attende entro un tetto, e se il dominio resiste porta l'esito a rosso. Un guasto
+della pulizia non **sostituisce** però una causa già presente: su un percorso
+già rosso resta il codice di quello, che dice di più.
+
+L'osservazione ha **tre** esiti, non due: abitato, vuoto, e *non l'ho potuto
+guardare*. Confondere gli ultimi due sarebbe fail-open — con `cgroup.events`
+illeggibile e `rmdir` riuscito, la pulizia concluderebbe verde senza aver mai
+visto il dominio svuotarsi, e quel verde direbbe «quiescente» avendo misurato
+niente. Il terzo esito porta quindi a rosso, e in quel caso il dominio **non**
+si prova nemmeno a rimuovere. L'oracolo pretende esattamente una riga
+`populated` con valore `0` o `1`: nessuna riga, due righe, o un valore diverso
+sono un file che non si sa leggere, e non lo si interpreta a maggioranza. Lo
+stesso vale nel gate ostile, dove la classe di difetto era identica.
+
+**Le decisioni che nessun `cargo test` attraversa.** La cessione della proprietà
+delle pipe e l'imposizione della variabile del canale si vedono solo quando un
+worker vero, con altre credenziali, prova a riaprire i propri estremi dentro un
+dominio vero: nell'harness delle mutazioni un mutante di quel tipo
+sopravviverebbe sempre, non perché la batteria sia debole ma perché sta
+guardando altrove. Il giudice giusto è allora il qualificatore stesso, ed è ciò
+che fa `scripts/mutazioni_del_qualificatore.sh`: tocca una decisione per volta —
+oggi cinque: la proprietà delle pipe, la variabile del canale, il confronto col
+digest dichiarato da fuori, un guasto di pulizia dichiarato, e la quiescenza che
+non si può osservare — e pretende **due** cose insieme: codice d'uscita diverso
+da zero **e** nessun `VINTO` nel testo. Il solo codice lascerebbe passare uno script che si
+contraddice fra le sue due voci; il solo testo lascerebbe passare un rosso
+arrivato per un'altra ragione.
+
+Le difese sono quelle dell'harness principale, e per le stesse ragioni: dopo
+ogni ripristino si **verifica l'impronta** dell'albero — un ripristino fallito in
+silenzio farebbe giudicare il mutante successivo su un albero che porta ancora
+il precedente, e i due difetti si coprirebbero a vicenda — e ci sono due tetti,
+uno per giro e uno sull'intera corsa, perché giri tutti appena sotto il proprio
+sommerebbero un'attesa senza fine senza superarlo mai una volta. Il segnale del
+tetto è `TERM` con trenta secondi di grazia, non `KILL`: il qualificatore ha una
+pulizia da portare a termine, ed è proprio quella che si sta mettendo alla
+prova.
 
 ### Il gate ostile: che cosa prova, e i due esiti ammessi della `unshare`
 

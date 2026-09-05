@@ -264,7 +264,7 @@ pub(super) fn accerta(numero: i32, atteso: Verso) -> Result<Estremo> {
 /// # Errors
 ///
 /// [`PlenoraError::IsolationUnavailable`].
-pub(super) fn accerta_coppia(legge: i32, scrive: i32) -> Result<(Estremo, Estremo)> {
+pub(super) fn accerta_coppia(legge: i32, scrive: i32) -> Result<super::NumeriDelCanale> {
     if legge == scrive {
         return Err(non_disponibile(
             "canale",
@@ -279,7 +279,14 @@ pub(super) fn accerta_coppia(legge: i32, scrive: i32) -> Result<(Estremo, Estrem
             "i due estremi puntano alla stessa pipe: un canale che parla con se stesso non e' un canale",
         ));
     }
-    Ok((ingresso, uscita))
+    // I numeri escono **da qui** e da nessun altro posto: e' cio' che rende
+    // «verificati» una proprieta' del tipo invece di una frase nel commento di
+    // chi lo costruisce. Sono quelli osservati, non quelli ricevuti — e su una
+    // macchina sana coincidono, ma coincidere non e' la stessa cosa che esserlo.
+    Ok(super::NumeriDelCanale {
+        legge: ingresso.numero,
+        scrive: uscita.numero,
+    })
 }
 
 /// Dove il worker legge i numeri dei suoi due estremi.
@@ -298,17 +305,13 @@ pub(super) fn accerta_coppia(legge: i32, scrive: i32) -> Result<(Estremo, Estrem
 /// e' esattamente cio' che fa [`riapri_accertato`]. Un numero sbagliato — per
 /// errore o perche' qualcuno ha riscritto l'ambiente — porta a un descrittore
 /// che non supera i controlli, non a un canale diverso accettato per buono.
-/// # Perche' sotto `cfg`, e quando ne esce
 ///
-/// Perche' il suo chiamante e' il **worker**, e il worker di questo perimetro e'
-/// fittizio: lo stadio 3 esiste ed e' provato, ma nessun processo di produzione
-/// lo attraversa ancora.
+/// # Chi la scrive e chi la legge
 ///
-/// **Condizione di rientro:** il `cfg` cade con il worker reale di `PR-9`, che
-/// e' il primo a riaprire davvero i propri estremi. Non cade rendendo pubblico
-/// qualcosa: una funzione pubblica che nessuno chiama e' codice morto con
-/// l'avviso spento.
-#[cfg(any(test, feature = "internals"))]
+/// La scrive lo **spawner**, dalla coppia che ha appena rivalidato, e la
+/// **impone**: un valore ereditato indicherebbe descrittori veri di un altro
+/// canale, e il worker li troverebbe buoni. La legge il **worker**, che e' il
+/// primo a riaprire davvero i propri estremi.
 pub(super) const VARIABILE_DEL_CANALE: &str = "PLENORA_CANALE";
 
 /// Lo stadio del worker: riguarda il descrittore ereditato, lo **riapre**, e
@@ -354,17 +357,6 @@ pub(super) const VARIABILE_DEL_CANALE: &str = "PLENORA_CANALE";
 ///
 /// [`PlenoraError::IsolationUnavailable`] se il descrittore non supera i
 /// controlli, se la riapertura non riesce, o se uno dei due confronti non torna.
-/// # Perche' sotto `cfg`, e quando ne esce
-///
-/// Perche' il suo chiamante e' il **worker**, e il worker di questo perimetro e'
-/// fittizio: lo stadio 3 esiste ed e' provato, ma nessun processo di produzione
-/// lo attraversa ancora.
-///
-/// **Condizione di rientro:** il `cfg` cade con il worker reale di `PR-9`, che
-/// e' il primo a riaprire davvero i propri estremi. Non cade rendendo pubblico
-/// qualcosa: una funzione pubblica che nessuno chiama e' codice morto con
-/// l'avviso spento.
-#[cfg(any(test, feature = "internals"))]
 pub(super) fn riapri_accertato(numero: i32, atteso: Verso) -> Result<std::fs::File> {
     riapri_accertato_con(numero, atteso, osservazione_vera)
 }
@@ -379,7 +371,6 @@ pub(super) fn riapri_accertato(numero: i32, atteso: Verso) -> Result<std::fs::Fi
 /// sana. Raccolte in un valore, il giudizio diventa una funzione pura, e le
 /// divergenze si scrivono.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg(any(test, feature = "internals"))]
 pub(super) struct Adozione {
     impronta: Impronta,
     /// La riga `flags:` del `fdinfo` del **nuovo** descrittore, non del
@@ -394,7 +385,6 @@ pub(super) struct Adozione {
 ///
 /// [`PlenoraError::IsolationUnavailable`] se il descrittore riaperto non si
 /// interroga.
-#[cfg(any(test, feature = "internals"))]
 fn osservazione_vera(riaperto: &std::fs::File) -> Result<Adozione> {
     use std::os::fd::AsRawFd as _;
     let numero = riaperto.as_raw_fd();
@@ -440,7 +430,6 @@ fn osservazione_vera(riaperto: &std::fs::File) -> Result<Adozione> {
 /// # Errors
 ///
 /// [`PlenoraError::IsolationUnavailable`], che nomina quale delle tre non torna.
-#[cfg(any(test, feature = "internals"))]
 fn accerta_adozione(numero: i32, prima: &Impronta, dopo: &Adozione, atteso: Verso) -> Result<()> {
     let dove = |motivo: &str| non_disponibile(&format!("canale, fd {numero}"), motivo);
 
@@ -479,7 +468,6 @@ fn accerta_adozione(numero: i32, prima: &Impronta, dopo: &Adozione, atteso: Vers
 ///
 /// [`PlenoraError::IsolationUnavailable`] se il descrittore non supera i
 /// controlli, se la riapertura non riesce, o se l'adozione non torna.
-#[cfg(any(test, feature = "internals"))]
 fn riapri_accertato_con(
     numero: i32,
     atteso: Verso,
@@ -537,12 +525,21 @@ pub(super) struct EstremiDelWorker {
 
 #[cfg(any(test, feature = "internals"))]
 impl EstremiDelWorker {
-    /// I due numeri, per la richiesta.
-    pub(super) fn numeri(&self) -> super::NumeriDelCanale {
-        super::NumeriDelCanale {
-            legge: self.legge.as_raw_fd(),
-            scrive: self.scrive.as_raw_fd(),
-        }
+    /// I due numeri, per la richiesta — **riguardandoli**.
+    ///
+    /// Non li si legge e basta: si passa da [`accerta_coppia`], che e' l'unica
+    /// che li rende. Costa due letture di `fdinfo` e toglie un modo di
+    /// sbagliare: senza, questo sarebbe un secondo posto in cui due interi
+    /// diventano «i numeri del canale» senza che nessuno li abbia guardati.
+    ///
+    /// # Errors
+    ///
+    /// [`PlenoraError::IsolationUnavailable`] se i due estremi non sono quelli
+    /// dichiarati. Qui non dovrebbe capitare — `apri` li ha appena creati — e
+    /// «non dovrebbe» e' precisamente cio' che questa chiamata smette di dare
+    /// per scontato.
+    pub(super) fn numeri(&self) -> Result<super::NumeriDelCanale> {
+        accerta_coppia(self.legge.as_raw_fd(), self.scrive.as_raw_fd())
     }
 }
 
@@ -579,8 +576,9 @@ pub(super) fn apri() -> Result<(std::io::PipeReader, std::io::PipeWriter, Estrem
         legge: worker_legge,
         scrive: worker_scrive,
     };
-    let numeri = estremi.numeri();
-    let (wl, ws) = accerta_coppia(numeri.legge, numeri.scrive)?;
+    let numeri = estremi.numeri()?;
+    let wl = accerta(numeri.legge, Verso::Lettura)?;
+    let ws = accerta(numeri.scrive, Verso::Scrittura)?;
 
     // E poi la **topologia**, che nessuna verifica individuale coglie: quattro
     // estremi tutti validi possono essere accoppiati male, e un canale accoppiato
@@ -763,7 +761,6 @@ pub(super) fn guasto_richiesto(qui: &str) -> Result<()> {
 /// # Errors
 ///
 /// [`PlenoraError::IsolationUnavailable`] col numero di task trovati.
-#[cfg(any(test, feature = "internals"))]
 pub(super) fn accerta_monothread() -> Result<()> {
     let voci = std::fs::read_dir("/proc/self/task")
         .map_err(|errore| non_disponibile("canale", &format!("/proc/self/task: {errore}")))?;
@@ -900,7 +897,17 @@ mod tests {
         let (worker_legge, _sup_scrive) = std::io::pipe().expect("la pipe si crea");
         let (nl, ns) = (worker_legge.as_raw_fd(), worker_scrive.as_raw_fd());
 
-        let (ingresso, uscita) = super::accerta_coppia(nl, ns).expect("i due estremi reggono");
+        let numeri = super::accerta_coppia(nl, ns).expect("i due estremi reggono");
+        assert_eq!(
+            (numeri.legge, numeri.scrive),
+            (nl, ns),
+            "i numeri resi sono quelli osservati"
+        );
+        // I versi e le impronte si riguardano da qui: `accerta_coppia` rende i
+        // numeri verificati, e cio' che ha verificato resta osservabile
+        // chiedendolo di nuovo ai singoli estremi.
+        let ingresso = super::accerta(nl, Verso::Lettura).expect("il lato di lettura regge");
+        let uscita = super::accerta(ns, Verso::Scrittura).expect("il lato di scrittura regge");
         assert_eq!(ingresso.verso, Verso::Lettura);
         assert_eq!(uscita.verso, Verso::Scrittura);
         assert_ne!(

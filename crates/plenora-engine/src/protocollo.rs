@@ -19,7 +19,6 @@
 //! possono entrare qui: passano da `crate::interni`, che rende un verdetto e
 //! una costante e **non** i tipi di questo modulo.
 
-pub mod codifica;
 /// Il digest SHA-256 sul filo.
 ///
 /// `pub` come gli altri moduli del protocollo, e non privato al protocollo: i
@@ -28,6 +27,11 @@ pub mod codifica;
 /// puo' costruire il messaggio. Fuori dal crate non esce comunque, perche'
 /// `protocollo` e' privato: la forma di un digest sul filo e' una regola del
 /// protocollo, non della superficie pubblica.
+// Come questa build descrive se stessa: il primo chiamante e' il worker, che
+// deve dire all'altro lato chi e'.
+pub mod assi;
+pub mod codifica;
+pub mod descrizione;
 pub mod digest;
 pub mod handshake;
 pub mod lettore;

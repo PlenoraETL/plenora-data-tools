@@ -15,10 +15,11 @@ use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::DataContract;
 use sha2::{Digest, Sha256};
 
-use super::{verifica_artefatto, AtteseVerifica, ALGORITMO_DIGEST};
+use super::{verifica_artefatto, AtteseVerifica};
 use crate::commit_footer::scrivi_commit_token;
 use crate::commit_token::CommitToken;
 use crate::geo_transport::ipc::IpcLimits;
+use crate::protocollo::digest::ALGORITMO_DIGEST;
 
 const UNO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const DUE: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";

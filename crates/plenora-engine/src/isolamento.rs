@@ -63,7 +63,7 @@ mod canale;
 #[cfg(target_os = "linux")]
 mod dominio;
 // La guardia sul figlio non ha niente di Linux: `std::process::Child` esiste
-// ovunque, e cio' che la guardia fissa — le due porte e la sentinella — e' una
+// ovunque, e cio' che la guardia fissa — le sue porte e la sentinella — e' una
 // regola di proprieta', non di sistema. I suoi casi su processi veri restano
 // sotto `cfg(unix)`, perche' quelli il sistema lo toccano.
 #[cfg(any(test, feature = "internals"))]
@@ -80,17 +80,44 @@ mod identita;
 // morto: e' la scorciatoia che il registro vieta, e la vieta perche' sposta il
 // problema dal compilatore a chi legge.
 //
-// Con un worker soltanto fittizio non esiste ancora un'API di produzione
-// onesta: il lato supervisore del protocollo avra' il suo primo chiamante reale
-// con il worker di `PR-9`.
+// Il worker reale di `PR-9` porta il **peer**, non il chiamante. Da quel
+// momento dall'altro capo del filo c'e' un processo vero invece di una
+// finzione — e' cio' che serve per provare la macchina end-to-end — ma il
+// supervisore continua a non essere chiamato da nessuno in produzione: chi lo
+// chiamera' e' la policy che lo sceglie, con `PR-12`. Confondere le due cose
+// farebbe cadere questo `cfg` una PR troppo presto, e l'unico modo di zittire
+// l'avviso che ne seguirebbe sarebbe rendere pubblico cio' che nessuno usa.
 #[cfg(target_os = "linux")]
 mod lettura;
+// Il worker: modalita' dell'eseguibile, e chiamante di produzione del lato
+// worker del canale.
+//
+// Niente `cfg` di perimetro: il dispatch lo raggiunge dalla riga di comando, ed
+// e' codice di produzione. E nemmeno un `cfg` di piattaforma sul modulo intero:
+// il **giudizio** su cio' che attraversa il confine e' una regola e si prova
+// ovunque, mentre cio' che tocca i descrittori e' di Linux e lo dichiara sui
+// singoli elementi. Un `cfg` sul modulo direbbe che tutto e' di Linux, e non e'
+// vero.
 #[cfg(any(test, feature = "internals"))]
 mod macchina;
+// La lettura fermabile non e' del supervisore: e' di **chiunque** debba
+// ascoltare un canale senza restare fermo dentro una `read` per sempre. Il
+// worker ha la stessa necessita' — deve poter ascoltare un `Annulla` mentre
+// lavora, e poi smettere — e tenerla dentro `macchina`, che si compila solo
+// sotto `test` e `internals`, l'avrebbe resa irraggiungibile dalla produzione:
+// la scorciatoia sarebbe stata scriverne una seconda.
 #[cfg(all(target_os = "linux", qualificazione_isolamento))]
 pub mod qualificazione;
+mod sorgente;
+// Il percorso che fa percorrere a un worker **reale** la sequenza intera. Vive
+// sotto `internals` perche' guida il lato supervisore dell'handshake, che di
+// produzione non e' ancora: non e' un pezzo del programma, e' il modo in cui si
+// prova che i pezzi si parlino.
+#[cfg(all(target_os = "linux", any(test, feature = "internals")))]
+pub mod prova;
 #[cfg(target_os = "linux")]
 mod spawner;
+mod worker;
 
 #[cfg(test)]
 mod tests;
@@ -749,7 +776,7 @@ fn descrittore_canonico(testo: &str) -> std::result::Result<i32, String> {
         .map_err(|_| format!("«{testo}» non entra in un descrittore"))
 }
 
-/// Il prefisso che marca il **namespace riservato** della riga di comando.
+/// Il prefisso che marca il **namespace riservato** dello spawner.
 ///
 /// # Perche' serve un namespace e non la sola versione
 ///
@@ -767,6 +794,24 @@ fn descrittore_canonico(testo: &str) -> std::result::Result<i32, String> {
 /// versione supportata, o e' un rifiuto che la nomina.
 const PREFISSO_RISERVATO: &str = "plenora-spawner-";
 
+/// Il prefisso che marca il **namespace riservato** del worker.
+///
+/// Vale la stessa ragione dello spawner, e non e' una ripetizione: sono due
+/// namespace distinti perche' sono due modalita' distinte dello stesso
+/// eseguibile, e un processo avviato come worker con una versione che questo
+/// binario non conosce deve sentirsi rispondere «versione non supportata», non
+/// «comando sconosciuto».
+const PREFISSO_WORKER: &str = "plenora-worker-";
+
+/// La versione della modalita' worker.
+///
+/// Cambia quando cambia cio' che il worker si aspetta di trovare al proprio
+/// avvio: gli argomenti, la variabile del canale, la forma degli estremi. Non
+/// e' la versione del **protocollo** sul filo, che vive nei messaggi e ha una
+/// vita sua: qui si dichiara come si entra in modalita' worker, li' che cosa ci
+/// si dice dopo.
+const VERSIONE_WORKER: &str = "plenora-worker-1";
+
 /// La versione della richiesta che attraversa il confine.
 ///
 /// Cambia quando cambiano i campi o il loro significato. Lo spawner rifiuta
@@ -777,11 +822,16 @@ const PREFISSO_RISERVATO: &str = "plenora-spawner-";
 /// La `2` porta i due descrittori delle pipe, che la `1` non aveva.
 const VERSIONE_RICHIESTA: &str = "plenora-spawner-2";
 
-/// Che cosa dice il primo argomento.
+/// Che cosa dice il primo argomento, per la modalita' che si sta cercando.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Riconoscimento {
-    /// Non e' del namespace riservato: il programma prosegue per la sua strada.
-    NonSpawner,
+    /// Non e' di **questo** namespace riservato: per quanto ne sa chi ha
+    /// chiesto, il programma prosegue per la sua strada.
+    ///
+    /// Non significa «non e' una modalita' riservata»: significa «non e'
+    /// questa». Chi interroga piu' modalita' le interroga in fila, e solo
+    /// l'ultima che risponde cosi' lascia davvero passare al parser della CLI.
+    AltroComando,
     /// E' la versione supportata.
     Supportata,
     /// E' del namespace riservato ma non e' la versione supportata.
@@ -803,28 +853,37 @@ enum Riconoscimento {
     VersioneNonSupportata,
 }
 
-/// Che cosa dice `argv[1]`.
+/// Che cosa dice `argv[1]` rispetto a una modalita'.
 ///
 /// E' una funzione pura e **multipiattaforma**: il riconoscimento e' una
-/// regola, non un fatto dell'ambiente, e provarla solo dove lo spawner gira
+/// regola, non un fatto dell'ambiente, e provarla solo dove le modalita' girano
 /// significherebbe non provarla dove qualcuno potrebbe cambiarla.
-fn riconosci(primo: Option<&std::ffi::OsString>) -> Riconoscimento {
+///
+/// # Perche' una funzione sola per due modalita'
+///
+/// Perche' la regola e' una: namespace riservato, versione esatta, e un rifiuto
+/// che nomina la versione attesa invece di cadere nel parser della CLI. Due
+/// copie sarebbero due occasioni di divergere, e il giorno che una cambia un
+/// processo si riconoscerebbe secondo l'una e non secondo l'altra — con la
+/// diagnosi sbagliata proprio nel caso in cui la diagnosi conta.
+fn riconosci_modalita(
+    primo: Option<&std::ffi::OsString>,
+    prefisso: &str,
+    versione: &str,
+) -> Riconoscimento {
     let Some(primo) = primo else {
-        return Riconoscimento::NonSpawner;
+        return Riconoscimento::AltroComando;
     };
-    if primo == VERSIONE_RICHIESTA {
+    if primo == versione {
         return Riconoscimento::Supportata;
     }
     // Il confronto sul prefisso e' sui **byte**: un `argv` non e' tenuto a
     // essere UTF-8, e passare per `to_str()` farebbe cadere nel parser della
     // CLI una riga che nel namespace riservato ci sta eccome.
-    if primo
-        .as_encoded_bytes()
-        .starts_with(PREFISSO_RISERVATO.as_bytes())
-    {
+    if primo.as_encoded_bytes().starts_with(prefisso.as_bytes()) {
         return Riconoscimento::VersioneNonSupportata;
     }
-    Riconoscimento::NonSpawner
+    Riconoscimento::AltroComando
 }
 
 /// Quello che attraversa il confine fra supervisore e spawner.
@@ -1013,20 +1072,51 @@ struct EvidenzaPreflight {
     eventi_locali: bool,
 }
 
-/// I numeri dei due estremi destinati al worker.
+/// I numeri dei due estremi destinati al worker, **gia' verificati**.
 ///
 /// # Perche' un tipo e non due `i32`
 ///
 /// Perche' due interi si scambiano d'ordine senza che niente protesti, e uno
 /// scambio manderebbe al worker il descrittore di lettura come se fosse quello
-/// di scrittura. Qui i due campi hanno un nome, e chi li costruisce e' uno
-/// solo: la guardia che possiede gli estremi. La produzione non ha altro modo
-/// di ottenerne uno, quindi non ha modo di inventarne i valori.
-#[cfg(any(test, feature = "internals"))]
+/// di scrittura. Qui i due campi hanno un nome.
+///
+/// # Perche' non ha un costruttore aperto
+///
+/// Perche' il nome dice una proprieta' — sono due estremi di due pipe distinte,
+/// nei versi giusti — e una struct che chiunque possa riempire con due interi
+/// direbbe quella proprieta' senza averla. L'unico modo di ottenerne uno e'
+/// [`canale::accerta_coppia`], che quella proprieta' la **guarda**.
+///
+/// Cosi' «rivalidato» non e' una parola nel commento di chi lo costruisce: e'
+/// cio' che il tipo significa, e chi lo riceve non deve chiedersi da dove venga.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NumeriDelCanale {
     legge: i32,
     scrive: i32,
+}
+
+impl NumeriDelCanale {
+    /// I due numeri nella forma che la variabile del canale porta.
+    ///
+    /// # Perche' sta qui e non dove serve
+    ///
+    /// Perche' e' la meta' che scrive di cio' che il worker legge, e le due
+    /// meta' devono conoscere **una** forma. Scriverla nel chiamante darebbe
+    /// due grafie della stessa convenzione, e la prima a cambiare romperebbe la
+    /// seconda in silenzio: il worker rifiuterebbe una variabile
+    /// sintatticamente corretta per la sua vecchia regola.
+    ///
+    /// La forma e' quella canonica che il worker pretende — decimale, senza
+    /// segno, senza zeri davanti — e la garantisce `Display` di `i32` su valori
+    /// che sono descrittori validi.
+    fn in_variabile(self) -> std::ffi::OsString {
+        std::ffi::OsString::from(format!(
+            "{}{}{}",
+            self.legge,
+            worker::SEPARATORE,
+            self.scrive
+        ))
+    }
 }
 
 #[cfg(any(test, feature = "internals"))]
@@ -1418,6 +1508,31 @@ fn rivalida<S: SuperficieDominio>(
     })
 }
 
+/// Che cosa il confine ha deciso di questo processo.
+///
+/// # Perche' tre e non due
+///
+/// Perche' un `Option<PlenoraError>` ne sa dire soltanto due — «non e' la mia
+/// modalita'» e «e' la mia, ed e' fallita» — e il worker ha un terzo esito:
+/// esegue l'incarico, dichiara com'e' andata, e ha finito. Rappresentarlo come
+/// `None` lo confonderebbe con «non e' la mia modalita'», e il processo
+/// proseguirebbe fino al parser della CLI, che gli risponderebbe «comando
+/// sconosciuto» **dopo** un'esecuzione riuscita.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub enum DalConfine {
+    /// Non e' questa modalita': si prova la prossima, e poi il parser.
+    AltroComando,
+    /// E' questa modalita', ed e' arrivata in fondo.
+    ///
+    /// Lo spawner non la produce mai, e non e' una lacuna: la sua riuscita e'
+    /// una `exec`, dopo la quale questo processo non esiste piu' e non c'e'
+    /// nessuno a cui rendere un valore.
+    Conclusa,
+    /// E' questa modalita', e non e' andata.
+    Fallita(PlenoraError),
+}
+
 /// L'ingresso dello spawner, quando la riga di comando dice che lo e'.
 ///
 /// # Perche' il riconoscimento sta qui e non nel chiamante
@@ -1432,13 +1547,13 @@ fn rivalida<S: SuperficieDominio>(
 /// `Some` col motivo se questo processo e' uno spawner e la sequenza non
 /// regge; `None` se non lo e'.
 #[cfg(target_os = "linux")]
-pub fn dal_confine_se_spawner(argomenti: &[std::ffi::OsString]) -> Option<PlenoraError> {
-    match riconosci(argomenti.get(1)) {
-        Riconoscimento::NonSpawner => None,
+pub fn dal_confine_se_spawner(argomenti: &[std::ffi::OsString]) -> DalConfine {
+    match riconosci_modalita(argomenti.get(1), PREFISSO_RISERVATO, VERSIONE_RICHIESTA) {
+        Riconoscimento::AltroComando => DalConfine::AltroComando,
         // Il messaggio e' **costante**: non riporta cio' che ha trovato, e non
         // per reticenza — la versione trovata e' `argv`, e un errore che la
         // ripetesse porterebbe nei log un ingresso arbitrario.
-        Riconoscimento::VersioneNonSupportata => Some(non_disponibile(
+        Riconoscimento::VersioneNonSupportata => DalConfine::Fallita(non_disponibile(
             "spawner",
             &format!("versione della richiesta non supportata: serve «{VERSIONE_RICHIESTA}»"),
         )),
@@ -1446,8 +1561,52 @@ pub fn dal_confine_se_spawner(argomenti: &[std::ffi::OsString]) -> Option<Plenor
             // `dal_confine` non rende mai `Ok`: se la `exec` riesce, questo
             // processo non esiste piu'.
             Ok(mai) => match mai {},
-            Err(errore) => Some(errore),
+            Err(errore) => DalConfine::Fallita(errore),
         },
+    }
+}
+
+/// Se questo processo e' un **worker**, lo porta fin dove il worker arriva.
+///
+/// # Dove va chiamata, e perche' subito dopo lo spawner
+///
+/// Nello stesso punto del dispatch dello spawner, e subito dopo: sono due
+/// modalita' dello stesso eseguibile, e il primo argomento ne sceglie una. Un
+/// processo che arriva qui e' gia' stato scartato dallo spawner, quindi
+/// l'ordine fra i due non cambia niente — ma **l'ordine rispetto al parser
+/// della CLI si'**: entrambe devono venire prima, o una riga del namespace
+/// riservato finirebbe nel parser degli argomenti e si sentirebbe rispondere
+/// «comando sconosciuto».
+///
+/// # Che cosa rende
+///
+/// `None` se `argv[1]` non e' del namespace del worker: il chiamante prosegue.
+///
+/// `Some(errore)` sempre, quando la riga e' del namespace del worker. Oggi non
+/// esiste un caso riuscito: il worker accerta i propri estremi e poi **rifiuta
+/// dichiarando** che l'accordo con il supervisore non c'e' ancora.
+///
+/// La firma resta un `Option` perche' il caso «non e' un worker» c'e' e vale
+/// `None`, e perche' quando l'accordo arrivera' il caso riuscito non tornera'
+/// affatto — il worker fara' il proprio lavoro e il processo uscira'. Fino ad
+/// allora questa nota dice cio' che accade, non cio' che accadra'.
+///
+/// # Errors
+///
+/// [`PlenoraError::IsolationUnavailable`] con la versione attesa, quando il
+/// namespace e' quello e la versione no.
+#[cfg(target_os = "linux")]
+pub fn dal_confine_se_worker(argomenti: &[std::ffi::OsString]) -> DalConfine {
+    match riconosci_modalita(argomenti.get(1), PREFISSO_WORKER, VERSIONE_WORKER) {
+        Riconoscimento::AltroComando => DalConfine::AltroComando,
+        // Il messaggio e' **costante**, per la stessa ragione dello spawner: la
+        // versione trovata e' `argv`, e un errore che la ripetesse porterebbe
+        // nei log un ingresso arbitrario.
+        Riconoscimento::VersioneNonSupportata => DalConfine::Fallita(non_disponibile(
+            "worker",
+            &format!("versione della modalita' worker non supportata: serve «{VERSIONE_WORKER}»"),
+        )),
+        Riconoscimento::Supportata => worker::dal_confine(),
     }
 }
 

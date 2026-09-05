@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Le difese di `mutazioni_supervisore.py`, provate su un albero finto.
+"""Le difese di `mutazioni_isolamento.py`, provate su un albero finto.
 
 # Perche' esiste
 
@@ -20,7 +20,7 @@ non viene mai aperto in scrittura.
 
 # Uso
 
-    python3 scripts/test_mutazioni_supervisore.py
+    python3 scripts/test_mutazioni_isolamento.py
 """
 import importlib.util
 import io
@@ -31,7 +31,7 @@ import sys
 import tempfile
 
 QUI = os.path.dirname(os.path.abspath(__file__))
-SCRIPT = os.path.join(QUI, 'mutazioni_supervisore.py')
+SCRIPT = os.path.join(QUI, 'mutazioni_isolamento.py')
 
 _specifica = importlib.util.spec_from_file_location('mutazioni', SCRIPT)
 mutazioni = importlib.util.module_from_spec(_specifica)
@@ -267,6 +267,27 @@ def prova_il_nipote_superstite(referto, radice):
         f'il pid {nipote} e\' ancora li\'')
 
 
+def prova_il_verdetto(referto):
+    """**Un sopravvissuto e uno scaduto fanno fallire la campagna, sempre.**
+
+    Uno scaduto e' un mutante di cui non si sa niente: puo' essere un blocco che
+    la mutazione causa, oppure una macchina in ginocchio. Trattarlo come un
+    successo renderebbe verde una campagna che quel mutante non l'ha misurato, e
+    la distinzione fra i due casi si fa **guardando** — rieseguendolo dove la
+    macchina e' sana — non decidendo a priori nel codice.
+
+    Si interroga la regola invece di far girare una campagna finta: cosi' il caso
+    non dipende da un albero, da una baseline, ne' da un comando che dorme.
+    """
+    uno = [('mut-02', 'un nome')]
+
+    referto.esito('senza niente da riportare la campagna passa',
+                  mutazioni.verdetto([], []) == 0)
+    referto.esito('un sopravvissuto la fa fallire', mutazioni.verdetto(uno, []) == 3)
+    referto.esito('uno scaduto la fa fallire', mutazioni.verdetto([], uno) == 3)
+    referto.esito('e i due insieme anche', mutazioni.verdetto(uno, uno) == 3)
+
+
 def prova_la_baseline(referto, radice):
     """Che si verifichi, e che resti dov'e' invece di essere rimpiazzata."""
     codice, uscita = esegui(radice, '--prepara', 'a' * 64)
@@ -320,7 +341,7 @@ def prova_la_riparazione(referto, radice):
 
 
 def prova_i_preflight(referto):
-    """Che l'elenco sia canonico, e che i trentadue alberi siano distinti.
+    """Che l'elenco sia canonico, e che i quarantotto alberi siano distinti.
 
     Si chiamano in diretta invece che dal processo, perche' cio' che si vuole
     provare qui e' la regola — e la regola la si legge meglio dal suo valore di
@@ -328,8 +349,8 @@ def prova_i_preflight(referto):
     """
     referto.esito("l'elenco della tabella e' canonico",
                   mutazioni.elenco_e_canonico())
-    referto.esito('i mutanti sono trentadue',
-                  len(mutazioni.MUTANTI) == len(mutazioni.IDENTIFICATORI) == 32,
+    referto.esito('i mutanti sono quarantotto',
+                  len(mutazioni.MUTANTI) == len(mutazioni.IDENTIFICATORI) == 48,
                   f'{len(mutazioni.MUTANTI)} nella tabella')
 
 
@@ -340,7 +361,7 @@ def prova_la_distinzione(referto, radice):
     identificativo suo, e si pretende che il preflight lo dica.
     """
     attesa = mutazioni.impronta(radice)
-    referto.esito('sull\'albero finto i trentadue alberi mutati sono distinti',
+    referto.esito('sull\'albero finto i quarantotto alberi mutati sono distinti',
                   mutazioni.tutti_i_mutanti_sono_distinti(radice, attesa))
 
     tabella = list(mutazioni.MUTANTI)
@@ -371,6 +392,7 @@ def principale():
         prova_la_distinzione(referto, radice)
         prova_il_nipote_superstite(referto, radice)
         prova_la_baseline(referto, radice)
+        prova_il_verdetto(referto)
         prova_la_riparazione(referto, radice)
     finally:
         shutil.rmtree(base, ignore_errors=True)

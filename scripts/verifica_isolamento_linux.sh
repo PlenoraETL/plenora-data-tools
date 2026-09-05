@@ -97,12 +97,61 @@ FALLIMENTI=0
 # I segnali hanno un gestore proprio che esce con `128 + n`. Senza, un `INT`
 # arriverebbe al gestore `EXIT` con lo stato dell'ultimo comando riuscito —
 # cioe' zero — e un gate interrotto a meta' si leggerebbe come un gate passato.
+
+# Se il cgroup e' ancora abitato, secondo la fonte che lo dichiara.
+#
+# `cgroup.events` porta una riga `populated 0|1`: e' esattamente la domanda, e
+# la risposta la da' il kernel invece di dedurla dalla dimensione di un file che
+# dimensione non ha.
+#
+# Rende **tre** stati:
+#
+#   0  abitato
+#   1  vuoto
+#   2  l'osservazione non si e' potuta fare, o non si e' potuta credere
+#
+# Due soli codici confonderebbero «vuoto» con «non l'ho potuto guardare», e
+# quella confusione e' fail-open: con l'osservazione fallita e `rmdir` riuscito
+# il gate concluderebbe verde senza aver mai visto il cgroup svuotarsi.
+#
+# Si pretende esattamente **una** riga `populated`, con valore `0` oppure `1`:
+# nessuna riga, due righe, o un valore diverso sono un file che non si sa
+# leggere, e non lo si interpreta a maggioranza.
+_abitato() {
+  local _eventi="$1/cgroup.events"
+  [ -r "$_eventi" ] || return 2
+  # Si guarda anche `NF`: una riga «populated 0 spazzatura» ha il secondo campo
+  # giusto e non e' la riga che il kernel scrive.
+  awk '
+    $1 == "populated" { _righe++; _valore = (NF == 2 ? $2 : "") }
+    END {
+      if (_righe != 1) { exit 2 }
+      if (_valore == "1") { exit 0 }
+      if (_valore == "0") { exit 1 }
+      exit 2
+    }' "$_eventi"
+}
+
 pulisci() {
   set +e
   if [ -n "$DOMINIO" ] && [ -d "$DOMINIO" ]; then
     [ -e "$DOMINIO/cgroup.kill" ] && echo 1 >"$DOMINIO/cgroup.kill" 2>/dev/null
+    # La condizione la da' `cgroup.events`, non `-s cgroup.procs`: i file di
+    # `cgroup2` sono virtuali e dichiarano dimensione zero anche quando hanno
+    # contenuto, quindi `-s` e' **sempre falso** e questo ciclo non girerebbe
+    # mai. Il difetto non si vede — `rmdir` di solito riesce lo stesso perche'
+    # `cgroup.kill` ha gia' fatto il suo — e si vedrebbe soltanto il giorno in
+    # cui qualcosa resta dentro: la pulizia direbbe di aver insistito senza
+    # averlo fatto.
     local _giro=0
-    while [ -s "$DOMINIO/cgroup.procs" ] && [ "$_giro" -lt 50 ]; do
+    local _stato=0
+    while :; do
+      _stato=0
+      _abitato "$DOMINIO" || _stato=$?
+      # Si insiste solo finche' e' **abitato**: vuoto o non osservabile, decide
+      # il blocco qui sotto.
+      [ "$_stato" -eq 0 ] || break
+      [ "$_giro" -lt 50 ] || break
       local _pid
       while read -r _pid; do
         [ -n "$_pid" ] && kill -9 "$_pid" 2>/dev/null
@@ -110,8 +159,20 @@ pulisci() {
       _giro=$((_giro + 1))
       sleep 0.1
     done
-    rmdir "$DOMINIO" 2>/dev/null
-    [ -d "$DOMINIO" ] && fallisce "pulizia: $DOMINIO non si rimuove"
+    if [ "$_stato" -eq 1 ]; then
+      rmdir "$DOMINIO" 2>/dev/null
+      [ -d "$DOMINIO" ] && fallisce "pulizia: $DOMINIO non si rimuove"
+    elif [ "$_stato" -eq 0 ]; then
+      fallisce "pulizia: $DOMINIO e' ancora abitato dopo il tetto"
+    else
+      # Prima la prova, poi la bonifica. Il braccio rosso si dichiara qui e non
+      # torna indietro: la quiescenza non e' stata osservata, e una rimozione
+      # riuscita dopo non puo' diventarne la dimostrazione. Il `rmdir` che segue
+      # serve solo a non lasciare un cgroup sulla macchina, e il suo esito non si
+      # guarda proprio perche' non e' evidenza.
+      fallisce "pulizia: la quiescenza di $DOMINIO non e' osservabile"
+      rmdir "$DOMINIO" 2>/dev/null
+    fi
   fi
   if [ -n "$VICINO" ] && [ -d "$VICINO" ]; then
     [ -e "$VICINO/cgroup.kill" ] && echo 1 >"$VICINO/cgroup.kill" 2>/dev/null
@@ -325,13 +386,35 @@ esac
 RUSTFLAGS_EREDITATI="${RUSTFLAGS:-}"
 RUSTFLAGS_EFFETTIVI="$RUSTFLAGS_EREDITATI --cfg qualificazione_isolamento"
 
+# La cache di questa build e' **root-only**, perche' questo gate gira come root.
+#
+# PERCHE' NON IL `target/` ordinario
+#
+#   Perche' cargo scrive gli artefatti con l'utente che lo esegue: usando la
+#   cache condivisa, il giro successivo non privilegiato la ritrova piena di file
+#   di root e non riesce nemmeno ad aprire `.cargo-build-lock`. Il sintomo —
+#   `Permission denied` su un lock — non somiglia alla causa, che e' una cache
+#   contaminata da un giro di prima.
+#
+#   La cache la condivide con `qualifica_sotto_limite.sh`, che e' l'altro
+#   percorso privilegiato e costruisce la **stessa** immagine con gli stessi
+#   flag: due cache separate ricompilerebbero due volte lo stesso artefatto.
+#   Resta separata invece da quella dell'immagine di produzione, che si compila
+#   senza `internals`.
+#
+#   Un `CARGO_TARGET_DIR` esterno vince, perche' chi orchestra piu' gate puo'
+#   volerlo scegliere: e' un override, non il default.
+CACHE_ROOT="${CARGO_TARGET_DIR:-$PWD/target-isolamento-root-qualificazione}"
+
 nota "costruisco l'immagine di qualificazione ($PROFILO)"
 RUSTFLAGS="$RUSTFLAGS_EFFETTIVI" \
+  CARGO_TARGET_DIR="$CACHE_ROOT" \
+  CARGO_INCREMENTAL=0 \
   cargo build --locked --features internals --profile "$PROFILO" \
   --example qualificazione_isolamento >/dev/null \
   || manca "l'immagine di qualificazione non si costruisce"
 
-SORGENTE_IMMAGINE="${CARGO_TARGET_DIR:-target}/$SOTTODIRECTORY/examples/qualificazione_isolamento"
+SORGENTE_IMMAGINE="$CACHE_ROOT/$SOTTODIRECTORY/examples/qualificazione_isolamento"
 [ -x "$SORGENTE_IMMAGINE" ] || manca "l'immagine costruita non si trova in $SORGENTE_IMMAGINE"
 
 # --- lo spazio di lavoro ------------------------------------------------------
@@ -521,6 +604,13 @@ calcola_identita
   printf 'worker=%s:%s\n' "$WORKER_UID" "$WORKER_GID"
   printf 'tetto=%s\n' "$TETTO_BYTE"
   printf 'profilo=%s\n' "$PROFILO"
+  # La cache di compilazione, per **percorso effettivo**: il chiamante puo'
+  # imporla con `CARGO_TARGET_DIR`, ed e' un'autorita' esplicita che il referto
+  # deve riportare. Senza, chi rilegge l'evidenza non saprebbe da quale albero
+  # di artefatti e' uscita l'immagine che il gate ha misurato.
+  printf 'cache_di_compilazione=%s\n' "$CACHE_ROOT"
+  printf 'cache_imposta_dal_chiamante=%s\n' \
+    "$(if [ -n "${CARGO_TARGET_DIR:-}" ]; then echo si; else echo no; fi)"
   printf 'subtree_control_prima=%s\n' "$SUBTREE_PRIMA"
   printf 'memory_abilitato_dal_gate=%s\n' "$MEMORY_ABILITATO_DA_NOI"
   stampa_identita

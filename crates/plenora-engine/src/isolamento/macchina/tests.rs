@@ -1246,3 +1246,66 @@ fn un_difetto_della_conduzione_ferma_la_barriera() {
         "{manca:?}"
     );
 }
+
+/// **Gli assi vanno e tornano: ogni valore del filo torna se stesso.**
+///
+/// # Che cosa tiene insieme
+///
+/// Le due direzioni della conversione stanno in due moduli, perche' hanno due
+/// chiamanti: il worker produce (`protocollo::assi`), il supervisore consuma
+/// (questo modulo). Gli `match` esaustivi impediscono che una variante nuova
+/// venga dimenticata da una delle due parti, ma **non** impediscono di
+/// mandarla nel posto sbagliato: `Timeout => Conflict` compila benissimo.
+///
+/// Questo caso e' cio' che lo impedisce. Un solo scambio in una delle due
+/// tabelle lo fa cadere, e il difetto che chiude non somiglia a un errore:
+/// somiglia a un errore del worker che arriva al supervisore con la categoria
+/// di un altro, cioe' a una diagnosi sbagliata su un guasto vero.
+///
+/// L'enumerazione parte dal filo — `TUTTE` e' generata dalla stessa lista che
+/// genera le varianti — quindi non c'e' un elenco da tenere aggiornato a mano.
+#[test]
+fn gli_assi_vanno_e_tornano_dal_filo_al_dominio() {
+    use crate::protocollo::assi::{
+        categoria_sul_filo, effetto_sul_filo, fase_sul_filo, ritentativo_sul_filo,
+    };
+    use crate::protocollo::messaggi::{
+        CategoriaSulFilo, EffettoSulFilo, FaseSulFilo, RetrySulFilo,
+    };
+
+    for (variante, nome) in CategoriaSulFilo::TUTTE {
+        assert_eq!(
+            categoria_sul_filo(super::categoria(*variante)),
+            *variante,
+            "la categoria «{nome}» non torna se stessa"
+        );
+    }
+    for (variante, nome) in FaseSulFilo::TUTTE {
+        assert_eq!(
+            fase_sul_filo(super::fase_di_errore(*variante)),
+            *variante,
+            "la fase «{nome}» non torna se stessa"
+        );
+    }
+    for (variante, nome) in EffettoSulFilo::TUTTE {
+        assert_eq!(
+            effetto_sul_filo(super::effetto(*variante)),
+            *variante,
+            "l'effetto «{nome}» non torna se stesso"
+        );
+    }
+    for (variante, nome) in RetrySulFilo::TUTTE {
+        // I rappresentanti di `TUTTE` portano ritardi piccoli: qui l'andata e
+        // ritorno deve **riuscire**, e un rifiuto sarebbe un difetto della
+        // conversione, non del caso. Il rifiuto ha casi propri, accanto alla
+        // conversione, dove si guarda il valore che lo provoca.
+        // `PlenoraError` non e' confrontabile, quindi non si confrontano due
+        // `Result`: si guarda che l'esito sia riuscito **e** che il valore sia
+        // quello. Un `is_ok()` da solo lascerebbe passare qualunque variante.
+        assert!(
+            ritentativo_sul_filo(super::ritentativo(variante))
+                .is_ok_and(|resa| resa == *variante),
+            "la disposizione «{nome}» non torna se stessa"
+        );
+    }
+}

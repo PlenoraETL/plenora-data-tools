@@ -86,15 +86,8 @@ use crate::esadecimale32::Esadecimale32;
 use crate::geo_transport::ipc::IpcLimits;
 use crate::ipc_boundary::{convalida_artefatto, ArtefattoConvalidato};
 use crate::planner::contract_fingerprint;
+use crate::protocollo::digest::ALGORITMO_DIGEST;
 use crate::protocollo::messaggi::{ConteggiDichiarati, DigestArtefatto};
-
-/// L'unico algoritmo di digest ammesso in v1.
-///
-/// Il campo `algoritmo` di [`DigestArtefatto`] resta una stringa sul filo — la
-/// forma del messaggio non cambia — ed e' **qui** che la coerenza si impone.
-/// Ammetterne un secondo richiede una PR esplicita: il valore canonico, la sua
-/// lunghezza e il tipo che lo rappresenta cambierebbero insieme.
-pub const ALGORITMO_DIGEST: &str = "sha256";
 
 /// Byte letti per volta nel calcolo del digest.
 ///
