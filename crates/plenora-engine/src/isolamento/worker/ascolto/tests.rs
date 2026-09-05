@@ -22,6 +22,37 @@ use super::{Ascoltato, Ascolto};
 /// sopra il passo d'attesa del lettore.
 const SOGLIA: Duration = Duration::from_secs(2);
 
+/// Aspetta che il filo dell'ascolto **abbia concluso**.
+///
+/// # Perche' si guarda il filo, e non l'orologio
+///
+/// Perche' «il lettore ha gia' visto quel frame» e' un fatto, e un `sleep` non
+/// lo osserva: lo presume. La presunzione regge su una macchina scarica e salta
+/// su una carica, dove il caso diventa rosso senza che ci sia niente di rotto da
+/// trovare — un rosso che non insegna nulla e che si finisce per rilanciare.
+///
+/// `is_finished` guarda invece la cosa vera: il filo si e' concluso oppure no.
+/// Ci si riprova finche' non lo e', con un passo breve.
+///
+/// La soglia resta, ed e' quello che dice di essere: non una garanzia, ma il
+/// punto oltre il quale non si chiama piu' sfortuna.
+///
+/// # Perche' qui e non dentro `ferma_e_raccogli`
+///
+/// Perche' quella porta **consuma** l'ascolto e raccoglie il filo: e' la sola, e
+/// va bene che lo sia. Chiamarla per sapere se il lavoro e' finito vorrebbe dire
+/// non poterlo piu' chiedere.
+fn concluso(ascolto: &Ascolto) {
+    let cominciato = Instant::now();
+    while !ascolto.mano.is_finished() {
+        assert!(
+            cominciato.elapsed() < SOGLIA,
+            "il lettore non ha concluso entro {SOGLIA:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 /// Il frame di un corpo, pronto da scrivere sulla pipe.
 fn byte(corpo: Corpo) -> Vec<u8> {
     codifica(&Frame::nuovo(corpo)).expect("il frame si codifica")
@@ -93,13 +124,10 @@ fn un_messaggio_fuori_sequenza_si_nomina() {
     scrittore.write_all(&progresso).expect("il frame parte");
     scrittore.flush().expect("e arriva");
 
-    // Si da' al lettore il tempo di leggere il frame che gli e' stato scritto,
-    // poi si raccoglie: `ferma_e_raccogli` consuma, quindi non si riprova.
-    // L'attesa e' due ordini di grandezza sopra il passo del lettore, e la
-    // soglia dice quando smettere di considerarla sfortuna.
-    let cominciato = Instant::now();
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(cominciato.elapsed() < SOGLIA, "il lettore non ha concluso");
+    // Si aspetta che il lettore **abbia concluso**, guardando il suo filo: e'
+    // un fatto osservabile, mentre un'attesa a tempo sarebbe una presunzione.
+    // Poi si raccoglie, perche' `ferma_e_raccogli` consuma e non si riprova.
+    concluso(&ascolto);
     let visto = ascolto.ferma_e_raccogli();
 
     let Ascoltato::FuoriSequenza(tipo) = visto else {
@@ -125,9 +153,7 @@ fn la_chiusura_del_canale_non_e_un_guasto() {
 
     drop(scrittore);
 
-    let cominciato = Instant::now();
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(cominciato.elapsed() < SOGLIA);
+    concluso(&ascolto);
     assert!(
         matches!(ascolto.ferma_e_raccogli(), Ascoltato::FineDelCanale),
         "l'EOF si dichiara come fine, non come errore"
