@@ -169,6 +169,51 @@ Un fallimento di `fsync` **dopo** il rename è una condizione dichiarata: il
 rename è già avvenuto, e l'errore riporta l'effetto reale invece di fingere
 che non sia successo nulla.
 
+### Una destinazione occupata è un `Conflict`, per entrambe le strade
+
+**La regola.** Se la destinazione esiste, la pubblicazione fallisce con
+`PlenoraError::Conflict`, fase `Commit`, e non tocca ciò che c'era. Vale sia
+per il controllo che precede la scrittura, sia per l'`AlreadyExists` che il
+commit osserva.
+
+**Perché `Conflict` e non `InvalidPlan`.** Perché la variante è documentata per
+questo caso — «destinazione già esistente o conflitto di scrittura» — e la sua
+fase è `Commit` per costruzione. Il piano, quando la destinazione è occupata,
+non ha niente di sbagliato: è il posto a essere preso. Chiamarlo piano invalido
+manda chi legge a correggere qualcosa che è già corretto, e cambia l'exit code
+da 5 — condizione operativa — a 2, che dice «sistema qualcosa a monte prima di
+riprovare».
+
+**Perché le due strade devono concordare.** Perché il controllo preliminare è
+un'anticipazione, non l'autorità: fra lui e il commit c'è la scrittura intera, e
+la destinazione può comparire nel mezzo. L'autorità è l'`AlreadyExists`
+osservato al persist, che parla dell'unico istante che conta. Se le due strade
+dessero classi diverse, la stessa condizione avrebbe due nomi a seconda di
+quanto è durata la scrittura, e chi automatizza dovrebbe conoscerli entrambi.
+
+**Che cosa cambia per chi legge.** L'exit code di una destinazione occupata
+passa da 2 a 5 e il testo da `contract violation:` a `conflict:`. È un
+cambiamento visibile, ed è la correzione di una classificazione che i documenti
+già prescrivevano e il codice non applicava.
+
+### La pulizia del temporaneo esce sempre nella stessa forma
+
+`temp_cleanup` è **sempre un oggetto**, anche quando lo stato è `removed`: chi
+consuma il documento non deve prima scoprire di che tipo sia il valore, e il
+giorno che «rimosso» acquistasse un campo la forma non cambierebbe sotto chi la
+legge. Lo stato sta sempre in `state`; gli altri campi dipendono da lui.
+
+Il percorso del residuo **non passa da `Path::display()`**, che è dichiaratamente
+lossy: sostituisce con `U+FFFD` ciò che non è testo valido, e su Unix un percorso
+è una sequenza di byte che non deve essere testo. Un'indicazione di bonifica con
+un carattere sostituito indica un file che non esiste, ed è peggio di nessuna
+indicazione — manda a cancellare il nome sbagliato, o a cercare invano.
+
+`path_encoding` è **sempre** presente e dichiara come leggere il resto: `utf8`
+col campo `path`, che è il caso ordinario e resta leggibile da un umano;
+altrimenti `unix_bytes` o `windows_utf16` col campo `path_units`. Il dettaglio,
+e come si ricostruisce, sta più avanti in questo documento.
+
 ## Memoria governata
 
 `max_governed_memory_bytes` è un **budget di ammissione** della memoria che la
@@ -1251,6 +1296,86 @@ una sorgente nascesse. Ciò che la guardia *dice* è comunque provato: la
 composizione del messaggio è una funzione a due parametri, e i casi la guardano
 direttamente. Il mutante `mut-47` rimette la saturazione e viene ucciso dal caso
 del millisecondo oltre il massimo.
+
+### La pulizia del temporaneo si osserva, e ha tre esiti
+
+**La regola.** Dopo il commit point, `publish_with_profile` **accerta** se il
+proprio temporaneo sia sopravvissuto, e lo riporta su un asse a sé:
+`PuliziaDelTemporaneo`, con tre valori — rimosso; presente, con **percorso e
+byte osservati**; non accertabile, con percorso e ragione sanitizzata.
+
+**Perché serve.** `persist_noclobber` non è una primitiva sola. Dove kernel e
+filesystem offrono `RENAME_NOREPLACE` il commit è un rename e non lascia
+niente; dove non la offrono si ripiega su `hard_link` seguito da `unlink`, e
+**l'errore dell'`unlink` è ignorato**. Il no-clobber regge lo stesso — il
+collegamento fallisce se il nome esiste — ma il temporaneo può restare senza
+che nessuno lo dica, ed è quel silenzio a contraddire la politica per cui un
+cleanup fallito è un esito riportato.
+
+**Perché tre esiti e non due.** Perché «non c'è» e «non ho potuto guardare» sono
+cose diverse, e un solo valore per entrambe le rende indistinguibili proprio
+dove la distinzione serve: chi legge concluderebbe «niente da bonificare» senza
+che nessuno abbia guardato. È fail-open, ed è la stessa ragione per cui la
+quiescenza di un dominio ha tre esiti.
+
+**Perché non porta la causa dell'`unlink`.** Perché `tempfile` non la espone.
+Riportarla vorrebbe dire inventarla: si dice ciò che si osserva, e la ragione
+riguarda l'osservazione, non il commit. La distinzione fra `ENOSYS` — che
+degrada l'intero processo — ed `EINVAL` — che vale per una chiamata sola —
+resta dov'è, dentro `tempfile`, perché il commit resta delegato a lui.
+
+**Dopo il commit nessuno dei due assi è un errore.** L'output è visibile, e
+nessun evento successivo può renderlo non riuscito: durabilità non confermata e
+temporaneo rimasto sono **avvertenze**. Dirle come fallimenti manderebbe chi
+legge a rifare una cosa già fatta, e rifarla troverebbe la destinazione
+occupata. Prima del commit, invece, un errore resta un errore.
+
+### Ogni comando che pubblica dice com'è andata la pulizia
+
+**La regola.** Nessun percorso che pubblica scarta l'esito. `run` — sia nel ramo
+DAG sia in quello legacy — `transform`, `transform-arrow`, `pair-arrow` e
+`spatial-join` emettono `durability_confirmed` e `temp_cleanup` nel proprio
+documento di successo.
+
+**Che cosa è cambiato, e perché va detto.** Il ramo legacy di `run` non stampava
+niente in caso di successo, e per un giro questa sezione ha registrato quel
+silenzio come **limite dichiarato**: l'avvertenza veniva osservata e consumata
+da una funzione dal nome esplicito, che però non la rendeva visibile a nessuno.
+Registrare un silenzio non lo toglie. Un'esecuzione che lascia un temporaneo e
+non lo dice resta un fallimento silenzioso anche se il codice dichiara di
+saperlo, e la regola del progetto è che un cleanup fallito sia un **esito
+riportato**.
+
+Il ramo legacy emette perciò ora un documento, come il ramo DAG dello stesso
+comando: il formato d'uscita è già JSON per contratto — `run` lo impone in testa
+— quindi non c'è un canale nuovo, c'è l'uso di quello che il comando dichiara di
+avere. La funzione che consumava l'avvertenza non esiste più, perché non ha più
+un sito.
+
+### Il percorso del residuo si dichiara nella codifica nativa
+
+**La regola.** `temp_cleanup` porta sempre `path_encoding`, che dice come
+leggere il resto: `utf8` col campo `path`, `unix_bytes` o `windows_utf16` col
+campo `path_units`, un vettore di interi.
+
+**Perché non `Path::display()`.** Perché è dichiaratamente lossy: sostituisce con
+`U+FFFD` ciò che non è testo valido. Un'indicazione di bonifica con un carattere
+sostituito indica un file che **non esiste**, ed è peggio di nessuna indicazione:
+manda a cancellare il nome sbagliato, o a cercare invano.
+
+**Perché non `OsStr::as_encoded_bytes`.** Perché è una forma **interna**, che la
+libreria standard dichiara non specificata: la si può ridare a `OsStr` nello
+stesso processo, e nient'altro è promesso. Chi legge il documento quel processo
+non ce l'ha, e non ha nessun contratto su come interpretare quegli ottetti.
+Riportarli sarebbe dire «esatti» di byte che nessuno sa rileggere.
+
+**Come si ricostruisce.** Con la funzione standard della propria piattaforma:
+`OsStringExt::from_vec` sugli ottetti Unix, `OsStringExt::from_wide` sulle unità
+UTF-16 di Windows. Sono le codifiche che i due sistemi usano davvero — su Unix
+un percorso è una sequenza di byte che non deve essere testo, su Windows una
+sequenza di unità UTF-16 che può contenere surrogati spaiati — e il caso che le
+verifica **ricostruisce dal documento** invece di riconfrontare col medesimo
+encoder, che direbbe soltanto che una funzione è uguale a sé stessa.
 
 ### Il filo porta un esito solo
 

@@ -38,7 +38,9 @@ use plenora_kernels_geo::arrow_adapter::{
 };
 
 use crate::commit_token::CommitToken;
-use crate::geo_transport::publish::{publish_with_profile, PublishOutcome, PublishProfile};
+use crate::geo_transport::publish::{
+    publish_with_profile, EsitoDellaPubblicazione, PublishProfile,
+};
 use crate::governor::{GovernedBatch, MemoryGovernor};
 use crate::protocollo::messaggi::ConteggiDichiarati;
 
@@ -74,7 +76,7 @@ impl Output {
     /// Schema Arrow dell'output: quello del contratto inferito in
     /// validazione arricchito del blocco canonico R2.2 e della versione
     /// R2.5 — lo stesso schema scritto nell'header IPC da
-    /// [`Output::write_ipc_file`].
+    /// [`Output::write_ipc_file_with_profile`].
     #[must_use]
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -143,47 +145,41 @@ impl Output {
     }
 
     /// Scrive l'output in Arrow IPC file format con publish atomico
-    /// (decisione D22/errori-e-limiti.md#publish-e-cleanup): tempfile nella directory di destinazione,
-    /// persist no-clobber solo a stream completato con successo — nessun
-    /// output parziale e' mai visibile. Profilo [`PublishProfile::Atomic`]:
-    /// wrapper su [`Output::write_ipc_file_with_profile`], l'esito tipizzato
-    /// (sempre `Published` a publish riuscito) e' scartato.
+    /// (decisione D22/errori-e-limiti.md#publish-e-cleanup): tempfile nella
+    /// directory di destinazione, persist no-clobber solo a stream completato
+    /// con successo — nessun output parziale e' mai visibile.
     ///
     /// L'header IPC porta lo schema di [`Output::schema`]: quello del
-    /// contratto piu' il blocco canonico R2.2 per ogni colonna geometrica e
-    /// la versione R2.5 nei metadati dello schema; le chiavi
-    /// `GeoArrow` legacy restano (coesistenza coerente, R2.6).
+    /// contratto piu' il blocco canonico R2.2 per ogni colonna geometrica e la
+    /// versione R2.5 nei metadati dello schema; le chiavi `GeoArrow` legacy
+    /// restano (coesistenza coerente, R2.6).
+    ///
+    /// # Perche' non esiste una forma che non renda l'esito
+    ///
+    /// Perche' la sua unica funzione sarebbe **scartare le avvertenze**: la
+    /// durabilita' non confermata e il temporaneo rimasto sparirebbero dentro
+    /// la firma, senza che nessuno lo dica. Un comodo che perde cio' che chi
+    /// pubblica deve sapere non e' un comodo: e' la stessa perdita silenziosa,
+    /// in un posto dove e' piu' difficile vederla. Chi l'esito non lo vuole lo
+    /// lascia cadere **a vista**, dove chi legge il codice se ne accorge.
     ///
     /// # Errors
     ///
-    /// Propaga errori di stream e di I/O; `PlenoraError::InvalidPlan` se la
-    /// destinazione esiste gia' o la directory non esiste;
-    /// `PlenoraError::Unsupported` se il filesystem di
-    /// destinazione e' di rete o non identificabile (errori-e-limiti.md#publish-e-cleanup).
-    pub fn write_ipc_file(self, path: &Path) -> Result<ExecutionMetrics> {
-        let (metrics, _outcome) = self.write_ipc_file_with_profile(path, PublishProfile::Atomic)?;
-        Ok(metrics)
-    }
-
-    /// Come [`Output::write_ipc_file`], ma con profilo di publish
-    /// selezionabile (errori-e-limiti.md#publish-e-cleanup) ed esito tipizzato restituito al chiamante:
-    /// [`PublishOutcome::PublishedButDurabilityUnconfirmed`] se il publish e'
-    /// riuscito ma la durabilita' non e' confermata (es. `fsync` di directory
-    /// non supportato dalla piattaforma).
-    ///
-    /// # Errors
-    ///
-    /// Come [`Output::write_ipc_file`].
+    /// Propaga errori di stream e di I/O; [`PlenoraError::Conflict`] se la
+    /// destinazione esiste gia'; `PlenoraError::InvalidPlan` se la directory
+    /// non esiste; `PlenoraError::Unsupported` se il filesystem di
+    /// destinazione e' di rete o non identificabile
+    /// (errori-e-limiti.md#publish-e-cleanup).
     pub fn write_ipc_file_with_profile(
         self,
         path: &Path,
         profile: PublishProfile,
-    ) -> Result<(ExecutionMetrics, PublishOutcome)> {
+    ) -> Result<(ExecutionMetrics, EsitoDellaPubblicazione)> {
         let schema = self.schema.clone();
         let governor = self.state.governor.clone();
         let stato = Rc::clone(&self.state);
         let mut stream = self.stream;
-        let (_conteggi, outcome) = publish_with_profile(path, profile, move |writer| {
+        let (_conteggi, esito) = publish_with_profile(path, profile, move |writer| {
             // Nessun token: il percorso in-process non ha un tentativo da
             // identificare. Nessun osservatore: non c'e' un supervisore che
             // aspetti il progresso, e i conteggi che il ciclo rende comunque
@@ -198,7 +194,26 @@ impl Output {
                 &stato,
             )
         })?;
-        Ok((self.state.metrics(), outcome))
+        Ok((self.state.metrics(), esito))
+    }
+
+    /// Come [`Output::write_ipc_file_with_profile`], ma **solo per i casi**:
+    /// pubblica col profilo atomico e lascia cadere le avvertenze.
+    ///
+    /// # Perche' esiste solo sotto `cfg(test)`
+    ///
+    /// Perche' in produzione un comodo cosi' non c'e': la sua unica funzione
+    /// sarebbe scartare cio' che chi pubblica deve sapere, e appartiene alla
+    /// classe dei siti che perdono un'avvertenza. Nei casi che giudicano altro
+    /// — un errore atteso, le metriche, i byte scritti — ignorarle e'
+    /// legittimo, e il nome lo dichiara invece di nasconderlo dietro una firma.
+    #[cfg(test)]
+    pub(crate) fn write_ipc_file_ignorando_le_avvertenze(
+        self,
+        path: &Path,
+    ) -> Result<ExecutionMetrics> {
+        self.write_ipc_file_with_profile(path, PublishProfile::Atomic)
+            .map(|(metriche, _avvertenze)| metriche)
     }
 
     /// Scrive l'artefatto di un'esecuzione **isolata** sul solo percorso

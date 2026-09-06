@@ -21,7 +21,7 @@ use crate::cli::contract_discovery::{
     apply_crs_decisions, discover_contracts, open_input, pair_v4_inputs,
 };
 use crate::{
-    contract, contract_error_missing, durabilita_confermata, has_flag, install_ctrlc_handler,
+    campi_della_pubblicazione, contract, contract_error_missing, has_flag, install_ctrlc_handler,
     metrics_json, optional_value_after, read_control_plan_text, run_pipeline, testo_piano_dag,
     value_after, OutputFormat, PlanInputsProbe,
 };
@@ -87,14 +87,13 @@ pub fn run_dag(
         inputs.add_with_contract(name.clone(), open_input(path, &ipc_limits)?, contract)?;
     }
     let output = execute(&graph, inputs, runtime)?;
-    let (metrics, outcome) =
+    let (metrics, esito) =
         output.write_ipc_file_with_profile(output_path, PublishProfile::Atomic)?;
     let mut documento = metrics_json(&graph, &metrics);
     if let Some(oggetto) = documento.as_object_mut() {
-        oggetto.insert(
-            "durability_confirmed".to_owned(),
-            serde_json::Value::Bool(durabilita_confermata(outcome)),
-        );
+        for (chiave, valore) in campi_della_pubblicazione(&esito) {
+            oggetto.insert(chiave, valore);
+        }
     }
     println!("{}", serde_json::to_string_pretty(&documento)?);
     Ok(())
@@ -259,10 +258,30 @@ pub fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
         );
     }
     reject_legacy_row_diagnostics_plan(&plan_text)?;
-    Ok(run_pipeline(
+    let esito = run_pipeline(
         &plan_path,
         &value_after(args, "--input")?,
         optional_value_after(args, "--right")?.as_deref(),
         &output_path,
-    )?)
+    )?;
+    // Il ramo legacy emette ora un documento di successo, come gia' fa il ramo
+    // DAG dello stesso comando. Non e' cosmesi: senza un documento l'avvertenza
+    // di pulizia non ha dove uscire, e una pubblicazione che lascia spazzatura
+    // senza dirlo e' un fallimento silenzioso. Il formato d'uscita e' gia'
+    // JSON per contratto — `OutputFormat::require_json` lo impone in testa a
+    // questo comando — quindi il documento non introduce un canale nuovo: usa
+    // quello che il comando dichiara di avere.
+    let mut documento = serde_json::Map::new();
+    documento.insert(
+        "status".to_owned(),
+        serde_json::Value::String("ok".to_owned()),
+    );
+    for (chiave, valore) in campi_della_pubblicazione(&esito) {
+        documento.insert(chiave, valore);
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::Value::Object(documento))?
+    );
+    Ok(())
 }
