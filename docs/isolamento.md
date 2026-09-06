@@ -1131,6 +1131,19 @@ commit non è avvenuto, ma anche perché la durabilità è andata persa, perché
 qualcuno l'ha rimosso, o perché il filesystem è tornato indietro. Riprovare
 può essere giusto, e la decisione è di chi conosce quel percorso — non nostra.
 
+**`CommittedMatching` percorre anche i corpi.** Il footer dice *dove* stanno i
+blocchi e con che intestazione, non che cosa contengano, e il formato Arrow file
+non ha un checksum sull'intero contenuto: fermarsi alla struttura direbbe
+«riuscito» di un output che non si lascia leggere. Si percorre **solo** quando il
+token è il nostro — un tentativo altrui e un token assente non affermano nulla
+sulla leggibilità, e pagarne la lettura sarebbe spesa senza risposta.
+
+**Ciò che `CommittedMatching` non dice** è che i byte siano quelli verificati. Il
+digest dichiarato vive nell'`Esito` del worker, e chi arriva qui l'`Esito` non ce
+l'ha: è precisamente la situazione in cui la domanda si pone. L'osservazione dice
+«di questo tentativo, e leggibile per intero», non «identico a ciò che fu
+verificato».
+
 **`CommittedMatching` richiede la verifica, non solo la chiave.** Una chiave
 uguale su un file troncato direbbe «riuscito» di un output che non lo è: il
 sigillo e la struttura vanno riletti, con lo stesso verificatore in streaming
@@ -1138,9 +1151,12 @@ della §2-ter.
 
 **`InvalidOrUnreadable` non cancella la causa.** Il nome dice che non si può
 concludere, non che non si sappia perché: l'osservazione porta una **ragione
-strutturata** — permesso negato, framing non valido, sigillo assente, sigillo
-non corrispondente, footer rifiutato dal confine ostile — perché le decisioni
-che ne seguono sono diverse. Un permesso negato si risolve con i permessi; un
+strutturata** — permesso negato, guasto di lettura, tetto superato, framing
+non valido, sigillo assente, sigillo non corrispondente, footer rifiutato dal
+confine ostile, metadati non leggibili — perché le decisioni
+che ne seguono sono diverse. Le **osservazioni** sono cinque; le ragioni sono
+otto, e le due grandezze non hanno motivo di coincidere: una sola delle cinque
+le porta tutte. Un permesso negato si risolve con i permessi; un
 sigillo che non corrisponde è un file da non toccare.
 
 La ragione è **sanitizzata** come ogni altro errore del progetto: dice di che

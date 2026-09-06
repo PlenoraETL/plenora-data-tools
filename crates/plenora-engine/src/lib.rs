@@ -245,6 +245,12 @@ mod protocollo;
 // Quale implementazione risolve i CRS in questa build, detto in un posto solo.
 // Privato: e' una decisione interna, e la superficie pubblica non deve
 // dipendere da quale backend c'e' sotto.
+// Le osservazioni su una destinazione.
+//
+// Il modulo e' pubblico per **`risolvi_commit`**: chi non riceve risposta dal
+// processo incaricato di pubblicare deve poter guardare il disco senza passare
+// da noi, e quella funzione un chiamante esterno ce l'ha per definizione.
+pub mod pubblicazione;
 mod risolutore;
 pub mod table_engine;
 pub mod temp_store;

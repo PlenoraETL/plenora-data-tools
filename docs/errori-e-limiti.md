@@ -969,6 +969,22 @@ interno.
 un'ottimizzazione: è la dichiarazione che quel codice **non ha ancora un
 chiamante di produzione**.
 
+**Che cosa ne è uscito con `risolvi_commit`.** Solo ciò che quella funzione
+chiama davvero, perché lei un chiamante di produzione ce l'ha per definizione —
+sta fuori dal processo:
+
+| elemento | perché è uscito |
+|---|---|
+| `commit_footer::interpreta_commit_token` | giudica il token trovato sulla destinazione |
+| `ipc_boundary::convalida_artefatto_con_causa` | apre **una volta sola** e conserva la causa fine, che `read_error` perderebbe |
+| `ipc_boundary::ArtefattoConvalidato` e `in_batches` | servono a percorrere i corpi |
+
+Restano dentro `ipc_boundary::convalida_artefatto` — la forma che traduce la
+causa in `PlenoraError`, che serve al solo verificatore — e i metodi
+`ArtefattoConvalidato::byte_totali` e `leggi_a`, che usa la sola sequenza di
+verifica. Un `cfg` sul modulo che lasciasse scoperto ciò che solo quel modulo usa
+non sarebbe un perimetro, ma una linea tracciata a metà.
+
 Il `cfg` sul modulo `protocollo` **è caduto con `PR-9`**, e la condizione che lo
 reggeva era scritta: serviva un chiamante esterno al modulo. Quel chiamante è il
 worker, che si descrive, legge il `Saluto`, giudica l'accordo e risponde — da

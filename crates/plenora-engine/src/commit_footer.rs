@@ -61,10 +61,9 @@ use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
 // import inutilizzato — e un warning tollerato e' un warning che smette di
 // essere letto.
 //
-// `ArrowTransportError` serve a `interpreta_commit_token` e a
-// `leggi_commit_token`, che stanno dietro `cfg` diversi: `test` e' il piu'
-// largo dei due, e la condizione dell'import e' l'unione, non l'intersezione.
-#[cfg(any(test, feature = "internals"))]
+// `ArrowTransportError` serve a `interpreta_commit_token`, che e' di
+// produzione da quando `pubblicazione::risolvi_commit` la chiama: l'import non
+// porta `cfg` perche' la sua condizione non vale piu'.
 use crate::geo_transport::error::ArrowTransportError;
 // Questi soltanto a `leggi_commit_token`.
 #[cfg(test)]
@@ -85,16 +84,13 @@ use crate::geo_transport::ipc::{valida_file_ed_estrai, IpcLimits, IpcSource};
 /// [`ArrowTransportError::IpcMetadataInvalid`] se il testo non e' canonico. Il
 /// messaggio e' un `&'static str`, quindi **non puo'** portare il valore: non
 /// e' una disciplina da ricordare, e' il tipo che non lo consente.
-// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
-// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
-// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
-// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
-// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
-// tracciata a meta'.
+// Senza `cfg`, e non per distrazione: `pubblicazione::risolvi_commit` la chiama
+// da codice di produzione, quindi la condizione del registro — nessun chiamante
+// di produzione — non vale per lei. `leggi_commit_token`, che le sta accanto,
+// resta sotto `cfg(test)`: la sua traversata non ha ancora un chiamante.
 //
-// Regola, perimetro e condizione di rientro sono registrati in
+// Il registro dei moduli che restano sotto `cfg` sta in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
 pub fn interpreta_commit_token(testo: &str) -> Result<CommitToken, ArrowTransportError> {
     CommitToken::da_esadecimale(testo).map_err(|_| {
         ArrowTransportError::IpcMetadataInvalid(

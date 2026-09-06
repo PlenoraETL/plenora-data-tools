@@ -413,28 +413,34 @@ pub fn open_with_format(
 ///
 /// Resta la non-garanzia dichiarata altrove: un handle aperto difende dalla
 /// **sostituzione** del percorso, non dalla **mutazione in place** dei byte.
-// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
-// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
-// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
-// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
-// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
-// tracciata a meta'.
+// Senza `cfg`: il chiamante di produzione e' `pubblicazione::risolvi_commit`,
+// che apre la destinazione **una volta sola** e ne percorre i corpi. Non e' il
+// verificatore — quello sta sotto `cfg` insieme al passo 9, perche' la catena
+// verifica -> publish nessun percorso di produzione la attraversa ancora.
 //
-// Regola, perimetro e condizione di rientro sono registrati in
+// I metodi che servono **solo** a quella catena portano il `cfg` uno per uno,
+// qui sotto: e' quello che tiene il perimetro intero invece di lasciarlo
+// tracciato a meta'.
+//
+// Il registro sta in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
 pub(crate) struct ArtefattoConvalidato {
+    // Un campo solo, e non anche i byte totali: quelli la sorgente li conosce
+    // gia' — glieli si passa costruendola — e tenerne una seconda copia qui
+    // vorrebbe dire due numeri che possono divergere per la stessa grandezza.
+    // Chi li vuole li chiede a lei.
     sorgente: crate::geo_transport::ipc::SeekSource<File>,
-    byte_totali: u64,
 }
 
-#[cfg(any(test, feature = "internals"))]
 impl ArtefattoConvalidato {
+    #[cfg(any(test, feature = "internals"))]
     /// I byte del file, misurati all'apertura.
-    pub(crate) const fn byte_totali(&self) -> u64 {
-        self.byte_totali
+    pub(crate) fn byte_totali(&self) -> u64 {
+        use crate::geo_transport::ipc::IpcSource as _;
+        self.sorgente.total_len()
     }
 
+    #[cfg(any(test, feature = "internals"))]
     /// Legge una finestra per offset, senza spostare cio' che arrow leggera'.
     ///
     /// # Errors
@@ -490,14 +496,12 @@ impl ArtefattoConvalidato {
 /// Gli errori del confine, taggati [`ErrorPhase::Read`]: `Io` sull'apertura,
 /// `ResourceLimit` sui tetti — compreso quello cumulativo sui dizionari —
 /// `DataMapping` sul framing malformato.
-// Stesso perimetro del verificatore, e per la stessa ragione: e' suo supporto
-// esclusivo, e non ha un chiamante di produzione finche' `PR-10` non porta la
-// sequenza di verifica. Senza il `cfg` la build ordinaria lo segnala come
-// morto, e gli avvisi che il `cfg` sul modulo chiude ricompaiono qui: un
-// perimetro che lascia fuori cio' che solo quel modulo usa e' una linea
-// tracciata a meta'.
+// Solo il verificatore la chiama: e' lui a volere un errore del progetto invece
+// della causa, e sta sotto `cfg` — quindi questa ci sta con lui. Chi osserva una
+// destinazione usa la forma con la causa, che un chiamante di produzione ce l'ha
+// e percio' non porta `cfg`.
 //
-// Regola, perimetro e condizione di rientro sono registrati in
+// Il registro sta in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(any(test, feature = "internals"))]
 pub(crate) fn convalida_artefatto(
@@ -505,23 +509,56 @@ pub(crate) fn convalida_artefatto(
     limits: &IpcLimits,
     chiave: &str,
 ) -> Result<(Option<String>, ArtefattoConvalidato)> {
+    convalida_artefatto_con_causa(percorso, limits, chiave).map_err(|causa| match causa {
+        CausaDiApertura::Io(errore) => PlenoraError::Io(errore).with_phase(ErrorPhase::Read),
+        CausaDiApertura::Confine(causa) => read_error(causa),
+    })
+}
+
+/// Perche' l'apertura convalidata non e' riuscita, **prima** che qualcuno la
+/// appiattisca in un [`PlenoraError`].
+///
+/// # Perche' esiste
+///
+/// Perche' due chiamanti vogliono cose diverse dallo stesso fallimento. Il
+/// verificatore vuole un errore del progetto, e lo ottiene da
+/// [`convalida_artefatto`]. Chi osserva una destinazione vuole invece sapere
+/// **quale** genere di rifiuto e' stato — sigillo assente, sigillo non
+/// corrispondente, tetto superato, footer rifiutato — perche' le decisioni che
+/// ne seguono sono diverse, e `read_error` quelle distinzioni le perde tutte in
+/// una categoria sola.
+///
+/// Non e' una variante d'errore nuova del progetto: e' il rifiuto **prima**
+/// della traduzione, e vive dentro questo crate.
+pub(crate) enum CausaDiApertura {
+    /// Il file non si e' aperto o non si e' lasciato misurare.
+    Io(std::io::Error),
+    /// Il confine ostile ha rifiutato il contenuto.
+    Confine(crate::geo_transport::error::ArrowTransportError),
+}
+
+/// Come [`convalida_artefatto`], ma conserva la causa invece di tradurla.
+///
+/// Una sola apertura, un solo handle: chi ne ha bisogno per leggere oltre il
+/// footer riceve l'artefatto gia' convalidato e non deve riaprire il percorso —
+/// riaprirlo darebbe due risposte su due file potenzialmente diversi.
+///
+/// # Errors
+///
+/// [`CausaDiApertura`], che il chiamante traduce come gli serve.
+pub(crate) fn convalida_artefatto_con_causa(
+    percorso: &Path,
+    limits: &IpcLimits,
+    chiave: &str,
+) -> std::result::Result<(Option<String>, ArtefattoConvalidato), CausaDiApertura> {
     use crate::geo_transport::ipc::{valida_file_ed_estrai, SeekSource};
 
-    let file = File::open(percorso)
-        .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?;
-    let byte_totali = file
-        .metadata()
-        .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?
-        .len();
+    let file = File::open(percorso).map_err(CausaDiApertura::Io)?;
+    let byte_totali = file.metadata().map_err(CausaDiApertura::Io)?.len();
     let mut sorgente = SeekSource::new(file, byte_totali);
-    let trovato = valida_file_ed_estrai(&mut sorgente, limits, Some(chiave)).map_err(read_error)?;
-    Ok((
-        trovato,
-        ArtefattoConvalidato {
-            sorgente,
-            byte_totali,
-        },
-    ))
+    let trovato = valida_file_ed_estrai(&mut sorgente, limits, Some(chiave))
+        .map_err(CausaDiApertura::Confine)?;
+    Ok((trovato, ArtefattoConvalidato { sorgente }))
 }
 
 /// Apre un ingresso IPC riconoscendone il formato dal magic.
