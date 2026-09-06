@@ -176,10 +176,17 @@ COMANDO_BASE = ['cargo', 'test', '-p', 'plenora-engine', '--lib', '--locked',
 #: passando da `executor::output`, e le decisioni di quel confine — quali generi
 #: d'errore sono dell'incarico — sono decisioni sue quanto le altre.
 #:
+#: Col passo 9 entrano anche `pubblicazione` — che cosa si osserva su una
+#: destinazione, e che cosa si pretende prima del commit — e
+#: `geo_transport::publish`, dove il residuo del temporaneo diventa un'osservazione
+#: invece di un silenzio. Il filtro e' scritto per intero, `geo_transport::publish`
+#: e non `publish`: la parola corta prenderebbe una ventina di casi che parlano
+#: d'altro, e allungherebbe ogni mutante senza giudicarne nessuno meglio.
+#:
 #: **La regola**: aggiungere un mutante in un modulo nuovo vuol dire aggiungere
 #: qui il suo perimetro. Un mutante il cui giudice non gira e' un superstite che
 #: non dice niente.
-FILTRI = ['isolamento', 'executor::output']
+FILTRI = ['isolamento', 'executor::output', 'pubblicazione', 'geo_transport::publish']
 
 #: Oltre questo, un mutante non e' lento: e' appeso. Il valore e' largo apposta
 #: — una ricompilazione onesta ci sta comodamente dentro — perche' un tetto
@@ -202,6 +209,8 @@ PROV = f'{I}/prova.rs'
 ASSI = 'crates/plenora-engine/src/protocollo/assi.rs'
 USCI = 'crates/plenora-engine/src/executor/output.rs'
 ISOL = 'crates/plenora-engine/src/isolamento.rs'
+PUBB = 'crates/plenora-engine/src/pubblicazione.rs'
+AUTO = 'crates/plenora-engine/src/geo_transport/publish.rs'
 
 #: L'elenco **canonico**. La tabella qui sotto deve corrispondervi: e' cio' che
 #: impedisce a un mutante di sparire senza rumore.
@@ -219,7 +228,8 @@ IDENTIFICATORI = [
     'mut-25', 'mut-26', 'mut-27', 'mut-28', 'mut-29', 'mut-30', 'mut-31', 'mut-32',
     'mut-33', 'mut-34', 'mut-35', 'mut-36', 'mut-37', 'mut-38', 'mut-39', 'mut-40',
     'mut-41', 'mut-42', 'mut-43', 'mut-44', 'mut-45', 'mut-46', 'mut-47',
-    'mut-48',
+    'mut-48', 'mut-49', 'mut-50', 'mut-51', 'mut-52', 'mut-53', 'mut-54',
+    'mut-55', 'mut-56', 'mut-57', 'mut-58', 'mut-59',
 ]
 
 #: (identificativo, nome, file, sano, malato). Ogni `sano` deve comparire
@@ -416,6 +426,45 @@ MUTANTI = [
     ('mut-48', "uscita: un difetto dell'incarico ricade nell'ambiente", USCI,
      '        std::io::ErrorKind::InvalidInput,',
      '        std::io::ErrorKind::Unsupported,'),
+    # --- che cosa si osserva sulla destinazione -------------------------------
+    ('mut-49', "commit: l'assenza passa per un guasto di lettura", PUBB,
+     '                ErrorKind::NotFound => OsservazioneDelCommit::Absent,',
+     '                ErrorKind::NotFound => non_leggibile(RagioneNonLeggibile::GuastoDiLettura),'),
+    ('mut-50', 'commit: il tentativo altrui passa per il nostro', PUBB,
+     '        Ok(_) => OsservazioneDelCommit::OccupiedByOtherAttempt,',
+     '        Ok(_) => OsservazioneDelCommit::CommittedMatching,'),
+    ('mut-51', "commit: senza token si dichiara comunque il nostro", PUBB,
+     '        return OsservazioneDelCommit::IdentityMissing;',
+     '        return OsservazioneDelCommit::CommittedMatching;'),
+    ('mut-52', "commit: un token illeggibile passa per token assente", PUBB,
+     '        Err(_) => non_leggibile(RagioneNonLeggibile::MetadatiNonLeggibili),',
+     '        Err(_) => OsservazioneDelCommit::IdentityMissing,'),
+    # --- che cosa si pretende prima del commit --------------------------------
+    ('mut-53', "passo 9: la misura ripresa non si confronta", PUBB,
+     '    if misurati != byte_verificati {',
+     '    if false {'),
+    ('mut-54', "passo 9: il digest ricalcolato non si confronta", PUBB,
+     '    if &ricalcolato != digest_atteso {',
+     '    if false {'),
+    # --- il residuo del temporaneo --------------------------------------------
+    ('mut-55', "pulizia: un temporaneo rimosso diventa spazzatura rimasta", AUTO,
+     '            io::ErrorKind::NotFound => PuliziaDelTemporaneo::Rimosso,',
+     '            io::ErrorKind::NotFound => PuliziaDelTemporaneo::Presente { percorso, byte: 0 },'),
+    # --- la destinazione occupata ---------------------------------------------
+    ('mut-56', 'conflitto: la destinazione occupata torna un piano invalido', AUTO,
+     '    PlenoraError::Conflict(format!("output gia\' esistente: {}", output_path.display()))',
+     '    PlenoraError::InvalidPlan(format!("output gia\' esistente: {}", output_path.display()))'),
+    ('mut-57', 'conflitto: la collisione al commit non e piu un conflitto', AUTO,
+     '        if error.kind() == ErrorKind::AlreadyExists {',
+     '        if false {'),
+    # --- che cosa il passo 9 pretende -----------------------------------------
+    ('mut-58', 'passo 9: la misura torna a essere quella della prova', PUBB,
+     '    let misurati = artefatto.misura_ora()?;',
+     '    let misurati = byte_verificati;'),
+    # --- che cosa si osserva su una destinazione ------------------------------
+    ('mut-59', 'commit: un corpo illeggibile passa per commit riuscito', PUBB,
+     '        Ok(letto) if &letto == commit_token => match percorri_i_corpi(artefatto) {',
+     '        Ok(letto) if &letto == commit_token => match Ok::<(), RagioneNonLeggibile>(()) {'),
 ]
 
 

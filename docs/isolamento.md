@@ -2038,8 +2038,8 @@ a una domanda che il verde non risponde. Una batteria verde dice che il codice
 passa i propri casi; non dice che i casi **distinguano**. Un caso che non guarda
 la proprietà che dichiara resta verde anche quando quella proprietà sparisce.
 
-Lo script rompe una decisione per volta — quarantotto, con identificativi
-canonici da `mut-01` a `mut-48` — e pretende che qualcuno se ne accorga. Il
+Lo script rompe una decisione per volta — cinquantanove, con identificativi
+canonici da `mut-01` a `mut-59` — e pretende che qualcuno se ne accorga. Il
 perimetro sono il **supervisore** (`PR-8`, i primi trentadue) e il **worker**
 con il suo percorso di qualificazione (`PR-9`, gli ultimi sedici): stanno nello
 stesso harness perché condividono baseline, impronta e riparazione, e due
