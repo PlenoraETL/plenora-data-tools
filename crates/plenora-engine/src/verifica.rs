@@ -88,6 +88,7 @@ use crate::ipc_boundary::{convalida_artefatto, ArtefattoConvalidato};
 use crate::planner::contract_fingerprint;
 use crate::protocollo::digest::ALGORITMO_DIGEST;
 use crate::protocollo::messaggi::{ConteggiDichiarati, DigestArtefatto};
+use crate::pubblicazione::ArtefattoVerificato;
 
 /// Byte letti per volta nel calcolo del digest.
 ///
@@ -134,7 +135,7 @@ pub fn verifica_artefatto(
     attese: &AtteseVerifica<'_>,
     resolver: CrsResolver,
     limiti: &IpcLimits,
-) -> Result<()> {
+) -> Result<ArtefattoVerificato> {
     // --- passi 3, 4 e 5: presenza, sigillo e framing, in una traversata ----
     //
     // Una chiamata sola apre, convalida ed estrae il token. Rileggerlo dopo, da
@@ -144,8 +145,15 @@ pub fn verifica_artefatto(
     let (token_grezzo, mut artefatto) =
         convalida_artefatto(percorso, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)?;
 
+    // Il duplicato si prende **adesso**, prima che il passo 6 consumi
+    // l'artefatto: e' lo stesso descrittore, non una seconda apertura, quindi
+    // fra la verifica e la pubblicazione non c'e' istante in cui il percorso
+    // possa risolvere a un file diverso.
+    let per_la_pubblicazione = artefatto.duplica()?;
+    let byte_verificati = artefatto.byte_totali();
+
     // --- passo 5-bis: integrita' ------------------------------------------
-    verifica_digest(&mut artefatto, attese.digest)?;
+    let digest_verificato = verifica_digest(&mut artefatto, attese.digest)?;
 
     // --- passo 6: schema ---------------------------------------------------
     let (schema, batch) = artefatto.in_batches()?;
@@ -181,7 +189,14 @@ pub fn verifica_artefatto(
     // Dopo il passo 8 e non prima: l'ordine della sequenza e' vincolante, e un
     // artefatto incompleto va respinto come incompleto anche se il token
     // combacia.
-    verifica_token(token_grezzo.as_deref(), attese.commit_token)
+    verifica_token(token_grezzo.as_deref(), attese.commit_token)?;
+
+    // La prova esiste solo qui: chi la riceve ha attraversato tutti i passi.
+    Ok(ArtefattoVerificato::accertato(
+        per_la_pubblicazione,
+        byte_verificati,
+        digest_verificato,
+    ))
 }
 
 /// Passo 5-bis: SHA-256 dell'intero file finalizzato, footer compreso.
@@ -192,7 +207,7 @@ pub fn verifica_artefatto(
 fn verifica_digest(
     artefatto: &mut ArtefattoConvalidato,
     dichiarato: &DigestArtefatto,
-) -> Result<()> {
+) -> Result<Esadecimale32> {
     if dichiarato.algoritmo != ALGORITMO_DIGEST {
         // Il nome dichiarato **non si ripete nell'errore**: arriva dall'`Esito`
         // del worker, cioe' da fuori, ed e' testo che chi lo scrive controlla.
@@ -243,7 +258,10 @@ fn verifica_digest(
         )
         .with_phase(ErrorPhase::Read));
     }
-    Ok(())
+    // Si rende il valore **accertato**, non il testo dichiarato: chi pubblica
+    // lo riusa per confrontare i byte copiati, e reinterpretare il testo una
+    // seconda volta darebbe due letture dello stesso campo.
+    Ok(calcolato)
 }
 
 /// Passo 8: righe e batch, contati mentre scorrono.
@@ -254,6 +272,12 @@ fn verifica_digest(
 /// L'aritmetica e' **controllata**. Un `wrapping` farebbe combaciare i
 /// conteggi di un artefatto che ne ha 2^64 di troppo, e un `saturating`
 /// direbbe `u64::MAX` per due artefatti diversi.
+///
+/// # Errors
+///
+/// Propaga l'errore che l'iteratore rende leggendo un batch; e
+/// [`PlenoraError::ResourceLimit`] se righe o batch non stanno in un `u64`,
+/// che e' il controllo dell'aritmetica detto qui sopra.
 pub fn conta_in_streaming(
     batch: impl Iterator<Item = Result<plenora_core::arrow::array::RecordBatch>>,
 ) -> Result<ConteggiDichiarati> {

@@ -169,6 +169,51 @@ Un fallimento di `fsync` **dopo** il rename è una condizione dichiarata: il
 rename è già avvenuto, e l'errore riporta l'effetto reale invece di fingere
 che non sia successo nulla.
 
+### Una destinazione occupata è un `Conflict`, per entrambe le strade
+
+**La regola.** Se la destinazione esiste, la pubblicazione fallisce con
+`PlenoraError::Conflict`, fase `Commit`, e non tocca ciò che c'era. Vale sia
+per il controllo che precede la scrittura, sia per l'`AlreadyExists` che il
+commit osserva.
+
+**Perché `Conflict` e non `InvalidPlan`.** Perché la variante è documentata per
+questo caso — «destinazione già esistente o conflitto di scrittura» — e la sua
+fase è `Commit` per costruzione. Il piano, quando la destinazione è occupata,
+non ha niente di sbagliato: è il posto a essere preso. Chiamarlo piano invalido
+manda chi legge a correggere qualcosa che è già corretto, e cambia l'exit code
+da 5 — condizione operativa — a 2, che dice «sistema qualcosa a monte prima di
+riprovare».
+
+**Perché le due strade devono concordare.** Perché il controllo preliminare è
+un'anticipazione, non l'autorità: fra lui e il commit c'è la scrittura intera, e
+la destinazione può comparire nel mezzo. L'autorità è l'`AlreadyExists`
+osservato al persist, che parla dell'unico istante che conta. Se le due strade
+dessero classi diverse, la stessa condizione avrebbe due nomi a seconda di
+quanto è durata la scrittura, e chi automatizza dovrebbe conoscerli entrambi.
+
+**Che cosa cambia per chi legge.** L'exit code di una destinazione occupata
+passa da 2 a 5 e il testo da `contract violation:` a `conflict:`. È un
+cambiamento visibile, ed è la correzione di una classificazione che i documenti
+già prescrivevano e il codice non applicava.
+
+### La pulizia del temporaneo esce sempre nella stessa forma
+
+`temp_cleanup` è **sempre un oggetto**, anche quando lo stato è `removed`: chi
+consuma il documento non deve prima scoprire di che tipo sia il valore, e il
+giorno che «rimosso» acquistasse un campo la forma non cambierebbe sotto chi la
+legge. Lo stato sta sempre in `state`; gli altri campi dipendono da lui.
+
+Il percorso del residuo **non passa da `Path::display()`**, che è dichiaratamente
+lossy: sostituisce con `U+FFFD` ciò che non è testo valido, e su Unix un percorso
+è una sequenza di byte che non deve essere testo. Un'indicazione di bonifica con
+un carattere sostituito indica un file che non esiste, ed è peggio di nessuna
+indicazione — manda a cancellare il nome sbagliato, o a cercare invano.
+
+`path_encoding` è **sempre** presente e dichiara come leggere il resto: `utf8`
+col campo `path`, che è il caso ordinario e resta leggibile da un umano;
+altrimenti `unix_bytes` o `windows_utf16` col campo `path_units`. Il dettaglio,
+e come si ricostruisce, sta più avanti in questo documento.
+
 ## Memoria governata
 
 `max_governed_memory_bytes` è un **budget di ammissione** della memoria che la
@@ -917,12 +962,64 @@ interno.
 
 ### Moduli compilati solo sotto `test` e `internals`
 
-**La regola.** `plenora_engine::verifica` è compilato solo con
-`#[cfg(any(test, feature = "internals"))]`;
-`plenora_engine::commit_footer::leggi_commit_token` e
-`geo_transport::ipc::parse_footer` solo con `#[cfg(test)]`. Non è
-un'ottimizzazione: è la dichiarazione che quel codice **non ha ancora un
-chiamante di produzione**.
+**La regola.** `plenora_engine::verifica` — i passi da 3 a 8-bis — insieme al
+passo 9 che ne consuma la prova, al supporto esclusivo di entrambi, a
+`commit_footer::leggi_commit_token` e a `geo_transport::ipc::parse_footer` è
+compilato solo sotto `test` o la feature `internals`. Non è un'ottimizzazione: è
+la dichiarazione che quel codice **non ha ancora un chiamante di produzione**.
+
+**Perché il passo 9 non basta a togliere il `cfg` al verificatore.** Perché
+`pubblicazione::pubblica` **non chiama** il verificatore: riceve la prova già
+fatta. La catena verifica → passo 9 è compiuta e non è percorsa da nessuno; chi
+la percorrerà è il supervisore, che osserva lo stato terminale del figlio e il
+suo `Esito` — i passi 1 e 2 — e arriva con la PR del lato supervisore.
+
+**Perché non si è scelto di renderli pubblici.** Perché sarebbe stata la
+scorciatoia che questo registro vieta, in una forma più difficile da vedere.
+`dead_code` tace davanti a una funzione pubblica **anche quando nessuno può
+chiamarla**: rendere `pub` il verificatore avrebbe tolto dieci avvisi senza
+togliere una riga di codice non usato, e per giunta avrebbe allargato la
+superficie — `DigestArtefatto` e `ConteggiDichiarati` sarebbero dovuti uscire
+con lui, perché le firme li nominano. Una superficie pubblica si decide, non si
+eredita da un avviso.
+
+**Che cosa è invece uscito dal perimetro con `PR-10`, e perché.** Solo ciò che ha
+acquistato un chiamante di produzione vero, che è `pubblicazione::risolvi_commit`:
+
+| elemento | chi lo chiama ora |
+|---|---|
+| `commit_footer::interpreta_commit_token` | `risolvi_commit`, per giudicare il token trovato |
+| `ipc_boundary::convalida_artefatto_con_causa` | `risolvi_commit`, che apre **una volta sola** e vuole la causa fine |
+| `ipc_boundary::ArtefattoConvalidato` e `in_batches` | `risolvi_commit`, per percorrere i corpi |
+
+Restano invece sotto `cfg` `convalida_artefatto` — la forma che traduce la causa
+in `PlenoraError`, che serve al solo verificatore — e i metodi
+`ArtefattoConvalidato::duplica`, `misura_ora`, `byte_totali`, `leggi_a`, più
+`geo_transport::ipc::SeekSource::lettore`: li usa la sola catena verifica → passo
+9. Un `cfg` sul modulo che lasciasse scoperto ciò che solo quel modulo usa non
+sarebbe un perimetro, ma una linea tracciata a metà.
+
+**Il conto è misurato, non asserito, e la piattaforma cambia che cosa dice.**
+
+Su **Linux** — dove tutta la catena dell'isolamento è compilata e ha i propri
+chiamanti — `RUSTFLAGS="-D dead-code" cargo check -p plenora-engine` è **pulito**:
+zero diagnostiche. Non è un confronto fra due numeri, è un'affermazione assoluta,
+e il gate è fail-closed: una sola voce morta lo fa fallire.
+
+Su **Windows** la stessa misura ne rende **177**, e non è un difetto di `PR-10`:
+il codice `cfg(target_os = "linux")` non è compilato, quindi ciò che solo lui usa
+— la matrice di classificazione, il lato supervisore del protocollo — resta senza
+consumatori. Il numero è **177 prima** di `PR-10` e **177 dopo**, confrontate una
+per una: nessuna nuova, nessuna sparita.
+
+**La misura si prende contando tutte le righe `error:`**, non quelle che
+cominciano per `function`, `struct` o `method`. Un elenco di forme lascia fuori
+`field … is never read`, ed è esattamente ciò che è successo a una stesura
+precedente di questa riga: il conto su Windows tornava mentre su Linux un campo
+diventato illeggibile faceva fallire il gate. Un conteggio che filtra per forme
+note conta ciò che ci si aspetta di trovare — ed è la ragione per cui la misura
+autoritativa è quella di Linux, che non conta niente e si limita a passare o
+fallire.
 
 Il `cfg` sul modulo `protocollo` **è caduto con `PR-9`**, e la condizione che lo
 reggeva era scritta: serviva un chiamante esterno al modulo. Quel chiamante è il
@@ -982,14 +1079,18 @@ Un elemento del filo che avesse un chiamante solo di prova senza dirlo
 lascerebbe l'avviso a qualcun altro: è la ragione per cui l'elenco si aggiorna
 insieme al gate, e non dopo.
 
-Il perimetro include anche il **supporto esclusivo del verificatore**, che ha
-lo stesso stato — nessun chiamante di produzione fino a `PR-10` — e che senza
-`cfg` sposterebbe altrove gli avvisi che il `cfg` doveva chiudere:
-`commit_footer::interpreta_commit_token`,
-`ipc_boundary::ArtefattoConvalidato` con i suoi metodi, e
-`ipc_boundary::convalida_artefatto`. Un `cfg` sul modulo che lascia scoperto
-ciò che solo quel modulo usa non è un perimetro, è una linea tracciata a
-metà.
+Il **supporto esclusivo del verificatore** è nel perimetro insieme a lui, e per
+intero: `ipc_boundary::convalida_artefatto` e i metodi
+`ArtefattoConvalidato::duplica`, `misura_ora`, `byte_totali` e `leggi_a`, più
+`geo_transport::ipc::SeekSource::lettore`. Un `cfg` sul modulo che lasciasse
+scoperto ciò che solo quel modulo usa non sarebbe un perimetro, ma una linea
+tracciata a metà.
+
+Ne sono usciti con `PR-10` i soli elementi che un chiamante di produzione l'hanno
+davvero — `commit_footer::interpreta_commit_token`,
+`ipc_boundary::convalida_artefatto_con_causa`, `ArtefattoConvalidato` col suo
+`in_batches` — e quel chiamante è `pubblicazione::risolvi_commit`, che apre la
+destinazione una volta sola e ne percorre i corpi.
 
 `Esadecimale32::dai_byte` **ne è uscita** con `PR-9`, e per la ragione scritta
 nella sua documentazione: serve a chi il valore lo *calcola* invece di
@@ -1046,19 +1147,23 @@ lato supervisore con `PR-12`, gli inventari quando la produzione avrà una
 ragione per enumerare le varianti — e finché non l'ha, non gliene si inventa
 una.
 
-Il `cfg` su `verifica` sparisce con **`PR-10`**, che è la PR della sequenza di
-verifica e publish: è lì che il verificatore acquista un chiamante di
-produzione, non con `PR-8`, che porta il ciclo di vita del supervisore e un
-worker fittizio.
+Il `cfg` su `verifica` **non** è sparito con `PR-10`, e la previsione di questo
+registro era troppo ottimista: `PR-10` porta il passo 9, ma il passo 9 riceve la
+prova, non la produce, quindi la catena resta senza chi la attraversi. Sparirà
+con la PR che porta il **lato supervisore**, cioè chi osserva lo stato terminale
+del figlio e il suo `Esito` e da lì entra nella sequenza. Non con `PR-8`, che
+porta il ciclo di vita e un worker fittizio.
 
-Il `cfg` su `leggi_commit_token` sparisce anch'esso con **`PR-10`**, e non con
-`PR-6` come questo registro prevedeva: il verificatore deve riferire framing,
-token, digest e consegna ad Arrow **a un solo handle**, mentre quella funzione
-fa una traversata propria — chiamarla significherebbe convalidare due volte,
-con una finestra in mezzo. Il verificatore estrae quindi il token durante la
-**propria** traversata, e condivide con quella funzione la sola parte che
-potrebbe divergere: l'interpretazione del testo trovato, in
-`interpreta_commit_token`.
+Di `leggi_commit_token` è uscita col medesimo giro la sola
+`interpreta_commit_token`, e non l'intera funzione. Il verificatore deve
+riferire framing, token, digest e consegna ad Arrow **a un solo handle**, mentre
+`leggi_commit_token` fa una traversata propria: chiamarla significherebbe
+convalidare due volte, con una finestra in mezzo. Il verificatore estrae quindi
+il token durante la **propria** traversata, e condivide con quella funzione la
+sola parte che potrebbe divergere — l'interpretazione del testo trovato. È
+quella ad avere un chiamante di produzione, in `pubblicazione::risolvi_commit`;
+`leggi_commit_token` resta sotto `cfg(test)` finché un percorso di produzione
+non voglia la sua traversata.
 
 Il `cfg` su `parse_footer` sparisce il giorno che un percorso di produzione
 torni a volere i soli blocchi; finché non esiste, la funzione è scaffolding dei
@@ -1251,6 +1356,86 @@ una sorgente nascesse. Ciò che la guardia *dice* è comunque provato: la
 composizione del messaggio è una funzione a due parametri, e i casi la guardano
 direttamente. Il mutante `mut-47` rimette la saturazione e viene ucciso dal caso
 del millisecondo oltre il massimo.
+
+### La pulizia del temporaneo si osserva, e ha tre esiti
+
+**La regola.** Dopo il commit point, `publish_with_profile` **accerta** se il
+proprio temporaneo sia sopravvissuto, e lo riporta su un asse a sé:
+`PuliziaDelTemporaneo`, con tre valori — rimosso; presente, con **percorso e
+byte osservati**; non accertabile, con percorso e ragione sanitizzata.
+
+**Perché serve.** `persist_noclobber` non è una primitiva sola. Dove kernel e
+filesystem offrono `RENAME_NOREPLACE` il commit è un rename e non lascia
+niente; dove non la offrono si ripiega su `hard_link` seguito da `unlink`, e
+**l'errore dell'`unlink` è ignorato**. Il no-clobber regge lo stesso — il
+collegamento fallisce se il nome esiste — ma il temporaneo può restare senza
+che nessuno lo dica, ed è quel silenzio a contraddire la politica per cui un
+cleanup fallito è un esito riportato.
+
+**Perché tre esiti e non due.** Perché «non c'è» e «non ho potuto guardare» sono
+cose diverse, e un solo valore per entrambe le rende indistinguibili proprio
+dove la distinzione serve: chi legge concluderebbe «niente da bonificare» senza
+che nessuno abbia guardato. È fail-open, ed è la stessa ragione per cui la
+quiescenza di un dominio ha tre esiti.
+
+**Perché non porta la causa dell'`unlink`.** Perché `tempfile` non la espone.
+Riportarla vorrebbe dire inventarla: si dice ciò che si osserva, e la ragione
+riguarda l'osservazione, non il commit. La distinzione fra `ENOSYS` — che
+degrada l'intero processo — ed `EINVAL` — che vale per una chiamata sola —
+resta dov'è, dentro `tempfile`, perché il commit resta delegato a lui.
+
+**Dopo il commit nessuno dei due assi è un errore.** L'output è visibile, e
+nessun evento successivo può renderlo non riuscito: durabilità non confermata e
+temporaneo rimasto sono **avvertenze**. Dirle come fallimenti manderebbe chi
+legge a rifare una cosa già fatta, e rifarla troverebbe la destinazione
+occupata. Prima del commit, invece, un errore resta un errore.
+
+### Ogni comando che pubblica dice com'è andata la pulizia
+
+**La regola.** Nessun percorso che pubblica scarta l'esito. `run` — sia nel ramo
+DAG sia in quello legacy — `transform`, `transform-arrow`, `pair-arrow` e
+`spatial-join` emettono `durability_confirmed` e `temp_cleanup` nel proprio
+documento di successo.
+
+**Che cosa è cambiato, e perché va detto.** Il ramo legacy di `run` non stampava
+niente in caso di successo, e per un giro questa sezione ha registrato quel
+silenzio come **limite dichiarato**: l'avvertenza veniva osservata e consumata
+da una funzione dal nome esplicito, che però non la rendeva visibile a nessuno.
+Registrare un silenzio non lo toglie. Un'esecuzione che lascia un temporaneo e
+non lo dice resta un fallimento silenzioso anche se il codice dichiara di
+saperlo, e la regola del progetto è che un cleanup fallito sia un **esito
+riportato**.
+
+Il ramo legacy emette perciò ora un documento, come il ramo DAG dello stesso
+comando: il formato d'uscita è già JSON per contratto — `run` lo impone in testa
+— quindi non c'è un canale nuovo, c'è l'uso di quello che il comando dichiara di
+avere. La funzione che consumava l'avvertenza non esiste più, perché non ha più
+un sito.
+
+### Il percorso del residuo si dichiara nella codifica nativa
+
+**La regola.** `temp_cleanup` porta sempre `path_encoding`, che dice come
+leggere il resto: `utf8` col campo `path`, `unix_bytes` o `windows_utf16` col
+campo `path_units`, un vettore di interi.
+
+**Perché non `Path::display()`.** Perché è dichiaratamente lossy: sostituisce con
+`U+FFFD` ciò che non è testo valido. Un'indicazione di bonifica con un carattere
+sostituito indica un file che **non esiste**, ed è peggio di nessuna indicazione:
+manda a cancellare il nome sbagliato, o a cercare invano.
+
+**Perché non `OsStr::as_encoded_bytes`.** Perché è una forma **interna**, che la
+libreria standard dichiara non specificata: la si può ridare a `OsStr` nello
+stesso processo, e nient'altro è promesso. Chi legge il documento quel processo
+non ce l'ha, e non ha nessun contratto su come interpretare quegli ottetti.
+Riportarli sarebbe dire «esatti» di byte che nessuno sa rileggere.
+
+**Come si ricostruisce.** Con la funzione standard della propria piattaforma:
+`OsStringExt::from_vec` sugli ottetti Unix, `OsStringExt::from_wide` sulle unità
+UTF-16 di Windows. Sono le codifiche che i due sistemi usano davvero — su Unix
+un percorso è una sequenza di byte che non deve essere testo, su Windows una
+sequenza di unità UTF-16 che può contenere surrogati spaiati — e il caso che le
+verifica **ricostruisce dal documento** invece di riconfrontare col medesimo
+encoder, che direbbe soltanto che una funzione è uguale a sé stessa.
 
 ### Il filo porta un esito solo
 

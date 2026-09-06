@@ -341,7 +341,7 @@ def prova_la_riparazione(referto, radice):
 
 
 def prova_i_preflight(referto):
-    """Che l'elenco sia canonico, e che i quarantotto alberi siano distinti.
+    """Che l'elenco sia canonico, e che i cinquantanove alberi siano distinti.
 
     Si chiamano in diretta invece che dal processo, perche' cio' che si vuole
     provare qui e' la regola — e la regola la si legge meglio dal suo valore di
@@ -349,8 +349,8 @@ def prova_i_preflight(referto):
     """
     referto.esito("l'elenco della tabella e' canonico",
                   mutazioni.elenco_e_canonico())
-    referto.esito('i mutanti sono quarantotto',
-                  len(mutazioni.MUTANTI) == len(mutazioni.IDENTIFICATORI) == 48,
+    referto.esito('i mutanti sono cinquantanove',
+                  len(mutazioni.MUTANTI) == len(mutazioni.IDENTIFICATORI) == 59,
                   f'{len(mutazioni.MUTANTI)} nella tabella')
 
 
@@ -361,7 +361,7 @@ def prova_la_distinzione(referto, radice):
     identificativo suo, e si pretende che il preflight lo dica.
     """
     attesa = mutazioni.impronta(radice)
-    referto.esito('sull\'albero finto i quarantotto alberi mutati sono distinti',
+    referto.esito('sull\'albero finto i cinquantanove alberi mutati sono distinti',
                   mutazioni.tutti_i_mutanti_sono_distinti(radice, attesa))
 
     tabella = list(mutazioni.MUTANTI)

@@ -189,12 +189,16 @@ fn esegui(byte: &[u8], dichiarati: &Dichiarati) -> Result<(), String> {
         max_retained_dictionary_body_bytes: dichiarati.tetto_dizionari,
         ..IpcLimits::default()
     };
+    // La prova si lascia cadere: questi casi giudicano **se** la sequenza
+    // accetti, non che cosa produca. Che cosa produca lo giudicano i casi della
+    // pubblicazione, che quella prova la consumano.
     verifica_artefatto(
         &prova.percorso,
         &attese,
         plenora_core::crs::resolve_crs,
         &limiti,
     )
+    .map(|_prova| ())
     .map_err(|errore| errore.to_string())
 }
 

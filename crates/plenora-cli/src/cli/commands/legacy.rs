@@ -48,9 +48,8 @@ use plenora_core::crs::resolve_crs;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::crs::resolve_crs;
 
-use crate::{
-    contract, durabilita_confermata, limite_risorsa, optional_value_after, read_control_json,
-};
+use crate::{contract, limite_risorsa, optional_value_after, read_control_json};
+use plenora_engine::geo_transport::publish::EsitoDellaPubblicazione;
 
 /// Materializza un input completo entro un budget di memoria RESIDUO,
 /// restituendo il consumo che resta vivo dopo la concatenazione.
@@ -198,17 +197,32 @@ fn load_complete_within(
     Ok((unito, consumo))
 }
 
-fn publish_one(output_path: &Path, output: &RecordBatch) -> Result<(), PlenoraError> {
-    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let mut writer = FileWriter::try_new(temporary.as_file_mut(), &output.schema())?;
-    writer.write(output)?;
-    writer.finish()?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist_noclobber(output_path)
-        .map_err(|error| error.error)?;
-    Ok(())
+/// Pubblica un batch, passando dall'**autorita' condivisa**.
+///
+/// # Perche' non un `persist_noclobber` proprio
+///
+/// Perche' una seconda implementazione del commit e' una seconda occasione di
+/// perdere le stesse cose: il tempfile nella directory giusta, il retry sui
+/// guasti transitori, il `sync_all` prima del rename, e soprattutto
+/// l'accertamento del temporaneo dopo il commit, che senza l'autorita' condivisa
+/// non c'e': `persist_noclobber` ignora l'errore dell'`unlink` nel proprio
+/// ripiego. Il difetto e' della classe, non del solo percorso isolato.
+fn publish_one(
+    output_path: &Path,
+    output: &RecordBatch,
+) -> Result<EsitoDellaPubblicazione, PlenoraError> {
+    let ((), esito) = publish_with_profile(output_path, PublishProfile::Atomic, |writer| {
+        let mut scrittore = FileWriter::try_new(writer, &output.schema())
+            .map_err(|errore| contract(errore.to_string()))?;
+        scrittore
+            .write(output)
+            .map_err(|errore| contract(errore.to_string()))?;
+        scrittore
+            .finish()
+            .map_err(|errore| contract(errore.to_string()))?;
+        Ok(())
+    })?;
+    Ok(esito)
 }
 
 pub fn run_pipeline(
@@ -216,7 +230,7 @@ pub fn run_pipeline(
     input_path: &Path,
     right_path: Option<&Path>,
     output_path: &Path,
-) -> Result<(), PlenoraError> {
+) -> Result<EsitoDellaPubblicazione, PlenoraError> {
     if output_path.exists() {
         return Err(contract(format!(
             "output gia' esistente, rifiuto di sovrascriverlo: {}",
@@ -281,52 +295,51 @@ pub fn run_pipeline(
         &ipc_boundary::limits_from_memory_budget(plan.limits().max_governed_memory_bytes),
     )?;
 
-    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let mut writer: Option<FileWriter<&mut File>> = None;
+    // Anche lo streaming passa dall'autorita' condivisa: il commit e' lo stesso
+    // e non ne servono due.
+    let ((), esito) = publish_with_profile(output_path, PublishProfile::Atomic, |uscita| {
+        let mut writer: Option<FileWriter<&mut dyn Write>> = None;
 
-    let mut wrote_batch = false;
-    let mut total_rows = 0_usize;
-    for input in reader {
-        let input = input?;
-        total_rows = total_rows
-            .checked_add(input.num_rows())
-            .ok_or_else(|| limite_risorsa("overflow nel conteggio complessivo delle righe"))?;
-        if total_rows > plan.limits().max_rows {
-            return Err(PlenoraError::ResourceLimit(format!(
-                "file con oltre {} righe",
-                plan.limits().max_rows
-            )));
-        }
-        let output = execute_batch(input, &plan)?;
-        if let Some(existing) = writer.as_mut() {
-            if existing.schema().as_ref() != output.schema().as_ref() {
-                return Err(PlenoraError::Schema(
-                    "la catena ha prodotto schemi diversi tra batch".into(),
-                ));
+        let mut wrote_batch = false;
+        let mut total_rows = 0_usize;
+        for input in reader {
+            let input = input?;
+            total_rows = total_rows
+                .checked_add(input.num_rows())
+                .ok_or_else(|| limite_risorsa("overflow nel conteggio complessivo delle righe"))?;
+            if total_rows > plan.limits().max_rows {
+                return Err(PlenoraError::ResourceLimit(format!(
+                    "file con oltre {} righe",
+                    plan.limits().max_rows
+                )));
             }
-            existing.write(&output)?;
-        } else {
-            let mut created = FileWriter::try_new(temporary.as_file_mut(), &output.schema())?;
+            let output = execute_batch(input, &plan)?;
+            if let Some(existing) = writer.as_mut() {
+                if existing.schema().as_ref() != output.schema().as_ref() {
+                    return Err(PlenoraError::Schema(
+                        "la catena ha prodotto schemi diversi tra batch".into(),
+                    ));
+                }
+                existing.write(&output)?;
+            } else {
+                let mut created = FileWriter::try_new(&mut *uscita, &output.schema())?;
+                created.write(&output)?;
+                writer = Some(created);
+            }
+            wrote_batch = true;
+        }
+        if !wrote_batch {
+            let output = execute_batch(RecordBatch::new_empty(input_schema), &plan)?;
+            let mut created = FileWriter::try_new(&mut *uscita, &output.schema())?;
             created.write(&output)?;
             writer = Some(created);
         }
-        wrote_batch = true;
-    }
-    if !wrote_batch {
-        let output = execute_batch(RecordBatch::new_empty(input_schema), &plan)?;
-        let mut created = FileWriter::try_new(temporary.as_file_mut(), &output.schema())?;
-        created.write(&output)?;
-        writer = Some(created);
-    }
-    if let Some(mut writer) = writer {
-        writer.finish()?;
-    }
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist_noclobber(output_path)
-        .map_err(|error| error.error)?;
-    Ok(())
+        if let Some(mut writer) = writer {
+            writer.finish()?;
+        }
+        Ok(())
+    })?;
+    Ok(esito)
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +475,7 @@ pub fn execute_transform(
     input: &str,
     schema_path: &Path,
     output: &str,
-) -> Result<TransformSummary, Box<dyn Error>> {
+) -> Result<(TransformSummary, EsitoDellaPubblicazione), Box<dyn Error>> {
     if output == "-" {
         return Err(contract(
             "output stdout disabilitato: la pubblicazione deve essere transazionale",
@@ -485,13 +498,12 @@ pub fn execute_transform(
         Box::new(BufReader::with_capacity(1024 * 1024, File::open(input)?))
     };
     let output_path = Path::new(output);
-    let (result, outcome) =
+    let (result, esito) =
         publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
             transform_stream(&mut input_reader, output_writer, &schema)
                 .map_err(|error| contract(error.to_string()))
         })?;
-    let _ = durabilita_confermata(outcome);
-    Ok(result)
+    Ok((result, esito))
 }
 
 pub fn execute_transform_arrow(
@@ -499,7 +511,7 @@ pub fn execute_transform_arrow(
     schema_path: &Path,
     output: &str,
     output_format: ArrowOutputFormat,
-) -> Result<TransformArrowSummary, Box<dyn Error>> {
+) -> Result<(TransformArrowSummary, EsitoDellaPubblicazione), Box<dyn Error>> {
     if output == "-" {
         return Err(contract(
             "output stdout disabilitato: la pubblicazione deve essere transazionale",
@@ -523,7 +535,7 @@ pub fn execute_transform_arrow(
         Box::new(BufReader::with_capacity(1024 * 1024, File::open(input)?))
     };
     let output_path = Path::new(output);
-    let (summary, outcome) =
+    let (summary, esito) =
         publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
             transform_arrow_with_format(&mut input_reader, output_writer, &schema, output_format)
                 .map_err(|error| {
@@ -544,8 +556,7 @@ pub fn execute_transform_arrow(
                     )
                 })
         })?;
-    let _ = durabilita_confermata(outcome);
-    Ok(summary)
+    Ok((summary, esito))
 }
 
 pub fn execute_pair_arrow(
@@ -554,7 +565,7 @@ pub fn execute_pair_arrow(
     schema_path: &Path,
     output_path: &Path,
     output_format: ArrowOutputFormat,
-) -> Result<PairArrowSummary, Box<dyn Error>> {
+) -> Result<(PairArrowSummary, EsitoDellaPubblicazione), Box<dyn Error>> {
     let schema: PairArrowSchema = read_control_json(schema_path)?;
     if schema.schema_version != PairArrowSchema::VERSION {
         return Err(contract(format!(
@@ -568,7 +579,7 @@ pub fn execute_pair_arrow(
 
     let mut left_reader = BufReader::with_capacity(1024 * 1024, File::open(left_path)?);
     let mut right_reader = BufReader::with_capacity(1024 * 1024, File::open(right_path)?);
-    let (summary, outcome) =
+    let (summary, esito) =
         publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
             pair_arrow_with_format(
                 &mut left_reader,
@@ -579,8 +590,7 @@ pub fn execute_pair_arrow(
             )
             .map_err(|error| contract(error.to_string()))
         })?;
-    let _ = durabilita_confermata(outcome);
-    Ok(summary)
+    Ok((summary, esito))
 }
 
 pub fn read_geometry_stream(
@@ -615,7 +625,7 @@ pub fn execute_spatial_join(
     right_path: &Path,
     schema_path: &Path,
     output_path: &Path,
-) -> Result<SpatialJoinSummary, Box<dyn Error>> {
+) -> Result<(SpatialJoinSummary, EsitoDellaPubblicazione), Box<dyn Error>> {
     const MAX_JOIN_ROWS_PER_SIDE: u64 = 2_000_000;
     const MAX_JOIN_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -659,17 +669,18 @@ pub fn execute_spatial_join(
     let pairs = spatial_join_nullable_validated(&left, &right, schema.predicate, schema.max_pairs)?;
     let pair_count =
         u64::try_from(pairs.len()).map_err(|_| contract("pair_count non rappresentabile"))?;
-    let (checksum, outcome) =
-        publish_with_profile(output_path, PublishProfile::Atomic, |writer| {
-            let (_, checksum) =
-                write_pairs(writer, &pairs).map_err(|error| contract(error.to_string()))?;
-            Ok(checksum)
-        })?;
-    let _ = durabilita_confermata(outcome);
-    Ok(SpatialJoinSummary {
-        pairs: pair_count,
-        checksum,
-    })
+    let (checksum, esito) = publish_with_profile(output_path, PublishProfile::Atomic, |writer| {
+        let (_, checksum) =
+            write_pairs(writer, &pairs).map_err(|error| contract(error.to_string()))?;
+        Ok(checksum)
+    })?;
+    Ok((
+        SpatialJoinSummary {
+            pairs: pair_count,
+            checksum,
+        },
+        esito,
+    ))
 }
 
 pub fn write_self_test(path: &Path) -> Result<(), Box<dyn Error>> {
