@@ -911,7 +911,10 @@ fn riverifica(esito: &EsitoOsservato, riferimenti: &Riferimenti<'_>) -> Artefatt
         crate::risolutore::risolvi,
         &IpcLimits::default(),
     ) {
-        Ok(()) => Artefatto::Verificato,
+        // La prova che il verificatore rende si lascia cadere: qui si giudica
+        // **se** la sequenza accetti, e chi pubblica non e' questa prova ma il
+        // supervisore. Consumarla qui la toglierebbe a lui.
+        Ok(_prova) => Artefatto::Verificato,
         Err(causa) => Artefatto::Respinto(causa.to_string()),
     }
 }

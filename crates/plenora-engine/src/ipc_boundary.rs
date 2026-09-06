@@ -434,6 +434,62 @@ pub(crate) struct ArtefattoConvalidato {
 
 impl ArtefattoConvalidato {
     #[cfg(any(test, feature = "internals"))]
+    /// Un secondo handle sullo **stesso** file gia' aperto.
+    ///
+    /// # Perche' un duplicato e non una riapertura
+    ///
+    /// Perche' riaprire per percorso apre una finestra: fra la verifica e cio'
+    /// che viene dopo qualcuno potrebbe mettere un file diverso a quel nome, e
+    /// il secondo handle guarderebbe un artefatto che nessuno ha verificato.
+    /// `try_clone` duplica il descrittore, non il nome: i due handle guardano la
+    /// stessa apertura, e non c'e' istante in cui il percorso venga risolto una
+    /// seconda volta.
+    ///
+    /// Serve perche' [`Self::in_batches`] **consuma** l'artefatto: chi deve
+    /// ancora leggerne i byte dopo i passi 6-8 prende il duplicato prima.
+    ///
+    /// # Errors
+    ///
+    /// [`PlenoraError::Io`] se il descrittore non si duplica.
+    pub(crate) fn duplica(&self) -> Result<Self> {
+        let copia = self
+            .sorgente
+            .lettore()
+            .try_clone()
+            .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?;
+        Ok(Self {
+            sorgente: crate::geo_transport::ipc::SeekSource::new(copia, self.byte_totali()),
+        })
+    }
+
+    #[cfg(any(test, feature = "internals"))]
+    /// Quanti byte ha il file **adesso**, chiesti al descrittore aperto.
+    ///
+    /// # Perche' non basta [`Self::byte_totali`]
+    ///
+    /// Perche' quello e' il valore misurato **all'apertura**, e chiunque lo
+    /// confronti con un numero derivato dalla stessa apertura confronta due
+    /// copie di una misura sola: un controllo che non puo' fallire. Un handle
+    /// aperto difende dalla **sostituzione** del percorso, non dalla
+    /// **mutazione in place** dei byte — e' la non-garanzia gia' dichiarata —
+    /// quindi fra la verifica e cio' che viene dopo la lunghezza puo' davvero
+    /// cambiare, ed e' l'unica cosa che un secondo controllo puo' scoprire.
+    ///
+    /// Si interroga il **descrittore**, non il percorso: chiedere al nome
+    /// aprirebbe la finestra che l'handle esiste per chiudere.
+    ///
+    /// # Errors
+    ///
+    /// [`PlenoraError::Io`] se il descrittore non si lascia interrogare.
+    pub(crate) fn misura_ora(&self) -> Result<u64> {
+        self.sorgente
+            .lettore()
+            .metadata()
+            .map(|metadati| metadati.len())
+            .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))
+    }
+
+    #[cfg(any(test, feature = "internals"))]
     /// I byte del file, misurati all'apertura.
     pub(crate) fn byte_totali(&self) -> u64 {
         use crate::geo_transport::ipc::IpcSource as _;

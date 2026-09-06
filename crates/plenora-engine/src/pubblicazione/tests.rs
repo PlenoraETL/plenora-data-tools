@@ -9,10 +9,16 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{RecordBatch, StringArray, UInt64Array};
 use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
+use plenora_core::contract::DataContract;
+use sha2::{Digest as _, Sha256};
 
-use super::{risolvi_commit, OsservazioneDelCommit, RagioneNonLeggibile};
+use super::{pubblica, risolvi_commit, OsservazioneDelCommit, PublishProfile, RagioneNonLeggibile};
 use crate::commit_footer::scrivi_commit_token;
 use crate::commit_token::CommitToken;
+use crate::geo_transport::publish::{PublishOutcome, PuliziaDelTemporaneo};
+use crate::protocollo::digest::ALGORITMO_DIGEST;
+use crate::protocollo::messaggi::{ConteggiDichiarati, DigestArtefatto};
+use crate::verifica::{verifica_artefatto, AtteseVerifica};
 
 const NOSTRO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ALTRUI: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
@@ -51,6 +57,19 @@ fn artefatto(tok: Option<&CommitToken>) -> Vec<u8> {
     byte
 }
 
+fn digest_di(byte: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    hasher.update(byte);
+    let esito: [u8; 32] = hasher.finalize().into();
+    let mut testo = String::with_capacity(64);
+    for grezzo in esito {
+        let _ = write!(testo, "{grezzo:02x}");
+    }
+    testo
+}
+
 /// Una stanza temporanea, con un file scritto dentro.
 struct Stanza {
     _dir: tempfile::TempDir,
@@ -75,6 +94,13 @@ impl Stanza {
             _dir: dir,
             percorso,
         }
+    }
+
+    fn accanto(&self, nome: &str) -> std::path::PathBuf {
+        self.percorso
+            .parent()
+            .expect("la stanza ha un padre")
+            .join(nome)
     }
 }
 
@@ -185,6 +211,192 @@ fn un_token_non_canonico_e_un_metadato_non_leggibile() {
 // ---------------------------------------------------------------------------
 // Il passo 9
 // ---------------------------------------------------------------------------
+
+/// La prova, ottenuta come la ottiene la produzione: facendo girare i passi.
+fn verificato(
+    percorso: &std::path::Path,
+    byte: &[u8],
+    tok: &CommitToken,
+) -> super::ArtefattoVerificato {
+    let digest = DigestArtefatto {
+        algoritmo: ALGORITMO_DIGEST.to_owned(),
+        valore: digest_di(byte),
+    };
+    let contratto = DataContract::tabular(schema());
+    let attese = AtteseVerifica {
+        contratto: &contratto,
+        digest: &digest,
+        conteggi: ConteggiDichiarati { righe: 3, batch: 1 },
+        commit_token: tok,
+    };
+    verifica_artefatto(
+        percorso,
+        &attese,
+        plenora_core::crs::resolve_crs,
+        &crate::ipc_boundary::IpcLimits::default(),
+    )
+    .expect("l'artefatto di prova supera la sequenza")
+}
+
+/// **Il passo 9 rende visibile l'artefatto, e non lascia residui.**
+///
+/// # Che cosa prova
+///
+/// Che i byte pubblicati siano **gli stessi** verificati — il confronto e' sul
+/// digest, non sulla dimensione — e che il commit atomico non lasci il proprio
+/// temporaneo in giro.
+#[test]
+fn il_passo_nove_pubblica_gli_stessi_byte_verificati() {
+    let nostro = token(NOSTRO);
+    let byte = artefatto(Some(&nostro));
+    let stanza = Stanza::con("temporaneo.arrow", &byte);
+    let destinazione = stanza.accanto("uscita.arrow");
+
+    let prova = verificato(&stanza.percorso, &byte, &nostro);
+    let esito = pubblica(prova, &destinazione, PublishProfile::Atomic).expect("pubblicazione");
+
+    assert_eq!(esito.durabilita, PublishOutcome::Published);
+    assert_eq!(
+        esito.pulizia,
+        PuliziaDelTemporaneo::Rimosso,
+        "il commit atomico non lascia il proprio temporaneo"
+    );
+    assert_eq!(
+        std::fs::read(&destinazione).expect("la destinazione c'e'"),
+        byte,
+        "i byte pubblicati sono quelli verificati"
+    );
+    // E la destinazione pubblicata si riconosce come **nostra**: e' la stessa
+    // domanda che si porrebbe chi non avesse ricevuto risposta.
+    assert_eq!(
+        risolvi_commit(&nostro, &destinazione),
+        OsservazioneDelCommit::CommittedMatching
+    );
+}
+
+/// **Una destinazione gia' occupata ferma il passo 9, e non la sostituisce.**
+///
+/// # Che cosa esclude
+///
+/// La sovrascrittura. Due esecuzioni sulla stessa destinazione non si
+/// sostituiscono: la prima che pubblica vince, e la seconda deve trovare
+/// intatto cio' che ha trovato.
+#[test]
+fn una_destinazione_occupata_non_viene_sostituita() {
+    let nostro = token(NOSTRO);
+    let byte = artefatto(Some(&nostro));
+    let stanza = Stanza::con("temporaneo.arrow", &byte);
+    let destinazione = stanza.accanto("uscita.arrow");
+    std::fs::write(&destinazione, b"cio' che c'era prima").expect("la destinazione si occupa");
+
+    let prova = verificato(&stanza.percorso, &byte, &nostro);
+    let esito = pubblica(prova, &destinazione, PublishProfile::Atomic);
+
+    assert!(esito.is_err(), "una destinazione occupata ferma il passo 9");
+    assert_eq!(
+        std::fs::read(&destinazione).expect("la destinazione c'e' ancora"),
+        b"cio' che c'era prima",
+        "cio' che c'era non e' stato toccato"
+    );
+}
+
+/// **Il profilo durabile chiede di piu', e lo dichiara.**
+#[test]
+fn il_profilo_durabile_dichiara_il_proprio_esito() {
+    let nostro = token(NOSTRO);
+    let byte = artefatto(Some(&nostro));
+    let stanza = Stanza::con("temporaneo.arrow", &byte);
+    let destinazione = stanza.accanto("uscita.arrow");
+
+    let prova = verificato(&stanza.percorso, &byte, &nostro);
+    let esito =
+        pubblica(prova, &destinazione, PublishProfile::DurableAtomic).expect("pubblicazione");
+
+    // Su una piattaforma che non sincronizza le directory l'esito e' «non
+    // confermata», e resta un successo: il caso non pretende quale delle due,
+    // pretende che sia una delle due e che l'output ci sia.
+    assert!(matches!(
+        esito.durabilita,
+        PublishOutcome::Published | PublishOutcome::PublishedButDurabilityUnconfirmed
+    ));
+    assert!(destinazione.is_file(), "l'output e' visibile in ogni caso");
+}
+
+// --- i due accertamenti della copia -----------------------------------------
+//
+// I casi qui sotto passano dalla **porta di produzione**: verificano, poi
+// alterano il file, poi chiamano il passo 9. Costruire a mano una discordanza
+// che quella porta non puo' produrre proverebbe che la riga esiste, non che
+// serva a qualcosa; e un controllo che nessun percorso reale puo' far fallire
+// non e' un controllo.
+//
+// Alterare il file dopo la verifica e' precisamente cio' che puo' succedere:
+// un handle aperto difende dalla **sostituzione** del percorso, non dalla
+// **mutazione in place** dei byte, ed e' una non-garanzia gia' dichiarata.
+
+/// **Un artefatto accorciato dopo la verifica non si pubblica.**
+///
+/// E' il caso che rende non vacua la misura ripresa dal descrittore: la prova
+/// porta il numero di byte visto alla verifica, il descrittore quello di
+/// adesso, e i due vengono da momenti diversi.
+#[test]
+fn un_artefatto_accorciato_dopo_la_verifica_non_si_pubblica() {
+    let nostro = token(NOSTRO);
+    let byte = artefatto(Some(&nostro));
+    let stanza = Stanza::con("temporaneo.arrow", &byte);
+    let destinazione = stanza.accanto("uscita.arrow");
+
+    let prova = verificato(&stanza.percorso, &byte, &nostro);
+
+    // Fra la verifica e il passo 9 il file perde un byte. Il percorso non e'
+    // stato sostituito: e' lo stesso file, piu' corto.
+    std::fs::write(&stanza.percorso, &byte[..byte.len() - 1]).expect("il file si accorcia");
+
+    let esito = pubblica(prova, &destinazione, PublishProfile::Atomic);
+
+    let errore = esito.expect_err("un artefatto cambiato non si pubblica");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::DataMapping,
+        "il file e' cambiato sotto di noi, non e' un difetto interno"
+    );
+    assert!(
+        !destinazione.exists(),
+        "e la destinazione non appare, nemmeno vuota"
+    );
+}
+
+/// **Un artefatto alterato senza cambiare lunghezza non si pubblica.**
+///
+/// Qui la misura combacia — stessi byte in numero — e a fermarlo e' il solo
+/// digest ricalcolato sui byte copiati. E' il caso che distingue i due
+/// accertamenti: se il digest non ci fosse, questo passerebbe.
+#[test]
+fn un_artefatto_alterato_a_pari_lunghezza_non_si_pubblica() {
+    let nostro = token(NOSTRO);
+    let byte = artefatto(Some(&nostro));
+    let stanza = Stanza::con("temporaneo.arrow", &byte);
+    let destinazione = stanza.accanto("uscita.arrow");
+
+    let prova = verificato(&stanza.percorso, &byte, &nostro);
+
+    // Un byte del corpo cambia; la lunghezza no. Si tocca il mezzo del file,
+    // lontano da header e footer, perche' il passo 9 non li rilegge: cio' che
+    // deve accorgersene e' il digest, non il framing.
+    let mut alterato = byte;
+    let meta = alterato.len() / 2;
+    alterato[meta] ^= 0xff;
+    std::fs::write(&stanza.percorso, &alterato).expect("il file si altera");
+
+    let esito = pubblica(prova, &destinazione, PublishProfile::Atomic);
+
+    let errore = esito.expect_err("byte alterati non si pubblicano");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::DataMapping);
+    assert!(
+        !destinazione.exists(),
+        "il commit non avviene, quindi non c'e' niente da vedere"
+    );
+}
 
 /// **Un corpo illeggibile non e' un commit riuscito, anche se l'involucro regge.**
 ///

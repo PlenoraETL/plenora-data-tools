@@ -242,28 +242,33 @@ pub mod prepare;
 // vero. Nessun `allow(dead_code)` in nessuno dei due casi — l'assenza di
 // chiamante si dichiara, non si nasconde.
 mod protocollo;
+// Le osservazioni su una destinazione, e il passo 9.
+//
+// Il modulo e' pubblico per **`risolvi_commit`** soltanto: chi non riceve
+// risposta dal processo incaricato di pubblicare deve poter guardare il disco
+// senza passare da noi, e quella funzione un chiamante esterno ce l'ha per
+// definizione. Il passo 9 e la prova che consuma stanno invece sotto lo stesso
+// `cfg` del verificatore, perche' condividono con lui la stessa condizione:
+// nessun percorso di produzione li attraversa ancora.
+pub mod pubblicazione;
 // Quale implementazione risolve i CRS in questa build, detto in un posto solo.
 // Privato: e' una decisione interna, e la superficie pubblica non deve
 // dipendere da quale backend c'e' sotto.
-// Le osservazioni su una destinazione.
-//
-// Il modulo e' pubblico per **`risolvi_commit`**: chi non riceve risposta dal
-// processo incaricato di pubblicare deve poter guardare il disco senza passare
-// da noi, e quella funzione un chiamante esterno ce l'ha per definizione.
-pub mod pubblicazione;
 mod risolutore;
 pub mod table_engine;
 pub mod temp_store;
-// Il verificatore dell'artefatto ha lo stesso perimetro del protocollo, e per
-// la stessa ragione: **non ha ancora un chiamante di produzione**. Chi lo
-// chiamera' e' la sequenza di verifica e publish, con `PR-10`; finche' non
-// esiste, il modulo si
-// compila dove qualcuno lo usa davvero — i test e la facciata `interni`, da
-// cui il fuzzer lo raggiunge.
+// I passi da 3 a 8-bis, e con loro il passo 9 che ne consuma la prova.
 //
-// Privato senza eccezioni: e' il verificatore di un percorso interno, e
-// renderlo pubblico prima che il percorso esista sarebbe la promessa di non
-// cambiarlo.
+// Sotto `cfg`, e non per abitudine: **nessun percorso di produzione li
+// attraversa ancora**. Chi li attraversera' e' il supervisore, che osserva lo
+// stato terminale del figlio e il suo `Esito` — i passi 1 e 2 — e arriva con la
+// PR che porta il lato supervisore.
+//
+// Renderli pubblici li toglierebbe da questo elenco senza dar loro un
+// chiamante: `dead_code` tace davanti a una funzione pubblica anche quando
+// nessuno puo' chiamarla, e quel silenzio non e' l'assenza del difetto. Il
+// `cfg` invece dice cio' che e' vero — codice compiuto e non ancora usato — e
+// continuera' a dirlo finche' non smettera' di esserlo.
 //
 // Regola, perimetro e condizione di rientro sono registrati in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.

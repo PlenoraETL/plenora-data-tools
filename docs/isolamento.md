@@ -927,6 +927,16 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 Solo dopo il passo 9 l'output è visibile. I passi da 1 a 8-bis non producono
 alcun effetto osservabile all'esterno.
 
+**Dove vivono i passi, oggi.** Da 3 a 9 hanno un corpo: `verifica_artefatto`
+per 3-8-bis, `pubblicazione::pubblica` per il 9. I passi 1 e 2 no, e non è una
+dimenticanza: leggono lo **stato terminale del figlio** e l'`Esito` che il
+worker dichiara, cioè due fatti che appartengono a chi possiede il ciclo di
+vita del processo. Chi li osserva oggi è la prova di qualificazione, che li
+applica prima di chiamare il verificatore; un supervisore di produzione che li
+applichi arriva con la PR che porta il lato supervisore. Prometterli qui come
+già disponibili significherebbe far cercare a chi legge una funzione che non
+esiste.
+
 Il passo 5-bis mancava, e la sua assenza era una lacuna e non una scelta: §4.4
 assegna al verificatore dell'artefatto la coerenza del digest, ma la sequenza
 non aveva un passo in cui esercitarla. **In v1 l'algoritmo ammesso è
@@ -948,6 +958,84 @@ interpretazioni invece di due risultati.
 Il passo 9 riusa la pubblicazione atomica esistente
 ([`errori-e-limiti.md`](errori-e-limiti.md)), inclusa la distinzione fra
 pubblicato e pubblicato-con-durabilità-non-confermata.
+
+**Riusarla significa copiare, non spostare.** Quell'autorità scrive attraverso
+un writer, ed è lì che stanno il tempfile nella directory di destinazione, il
+`sync_all`, i retry sui guasti transitori, il commit no-clobber e l'`fsync`
+della directory secondo il profilo. Spostare l'artefatto dov'è vorrebbe dire una
+**seconda** implementazione del commit — `renameat2(RENAME_NOREPLACE)` con
+ripiego su Unix, `MoveFileExW` su Windows — cioè codice per piattaforma e una
+dipendenza nuova, per riottenere garanzie che esistono già e sono qualificate.
+
+Il **costo è dichiarato**: una lettura e una scrittura integrali in più, e le
+due copie coesistono fino al commit. È lo stesso genere di costo già accettato
+per il passo 5-bis, e per la stessa ragione: si paga una passata per non
+fidarsi. **Condizione di rientro**: una primitiva cross-platform qualificata che
+committi direttamente un file esistente conservando il no-clobber e
+l'osservabilità della pulizia.
+
+**Che cosa il passo 9 pretende durante la copia.** Il numero esatto di byte,
+chiesto **al descrittore** subito prima di leggere. Non è il numero che la prova
+già porta: quello viene dall'apertura, e l'handle duplicato se lo porta dietro,
+quindi confrontarli sarebbe confrontare due copie di una misura sola. Una misura
+nuova invece scopre l'unica cosa che può essere successa davvero — il file
+**mutato in place** dopo la verifica — perché un handle aperto difende dalla
+sostituzione del percorso, non dalla mutazione dei byte, ed è una non-garanzia
+già dichiarata.
+
+Poi lo SHA-256 **ricalcolato sui byte effettivamente copiati**, confrontato prima
+del commit: è ciò che ferma un'alterazione che non cambia la lunghezza, e non è
+una ripetizione del passo 5-bis, perché fra i due c'è una copia ed è la copia a
+poter sbagliare. Un confronto *dopo* il ciclo fra i byte copiati e il numero che
+ha guidato il ciclo non direbbe nulla: direbbe che il ciclo ha girato.
+
+Entrambe le divergenze sono `DataMapping`, non `Internal`: un artefatto
+verificato non è immutabile, e chi lo altera sta fuori da questo processo. Dire
+«difetto interno» accuserebbe il codice di una cosa che non ha fatto.
+
+Qualunque divergenza ferma la closure, e una closure che si ferma vuol dire che
+il commit non avviene: **la destinazione non appare**, nemmeno vuota.
+
+**L'artefatto da pubblicare è lo stesso che è stato verificato, non il suo
+nome.** Il verificatore consegna un handle duplicato con `try_clone` — che
+duplica il descrittore, non il percorso — perché riaprire per nome aprirebbe fra
+la verifica e la pubblicazione una finestra in cui quel nome può risolvere a un
+altro file, e la prova varrebbe per qualcosa che non c'è più.
+
+**La prova è un tipo, non una promessa.** `ArtefattoVerificato` ha i campi
+privati, nessun costruttore aperto e nessun `Clone`: l'unico modo di averne uno
+è che il verificatore l'abbia prodotto, e il passo 9 lo **consuma**. Non porta
+`Debug`, perché stamparlo esporrebbe il digest. È la stessa forma di
+`NumeriDelCanale`: ciò che il tipo significa, invece di ciò che un commento
+dichiara.
+
+**Il passo 9 e il verificatore stanno sotto `cfg`, e `risolvi_commit` no.** La
+catena verifica → passo 9 è compiuta e nessun percorso di produzione la
+attraversa: il passo 9 riceve la prova, non la produce, quindi non è lui a dare
+un chiamante al verificatore. Chi la attraverserà è il supervisore, coi passi 1
+e 2. `risolvi_commit` invece è superficie pubblica da subito, perché il suo
+chiamante è per definizione fuori: chi ha perso il processo incaricato di
+pubblicare. Regola e condizione di rientro stanno in
+[`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
+
+### Il passo 9 rende due fatti, e nessuno dei due è un errore
+
+La pubblicazione riferisce su **due assi indipendenti**: la `durabilita`, che
+riguarda la destinazione, e la `pulizia`, che riguarda il temporaneo. Un enum
+solo costringerebbe a inventare una variante per ogni combinazione, e chi legge
+dovrebbe scomporla per sapere quale dei due lo riguarda.
+
+La pulizia ha **tre** esiti — rimosso; presente, con percorso e byte osservati;
+non accertabile, con percorso e ragione — e non due, per la stessa ragione per
+cui la quiescenza di un dominio ne ha tre: «non c'è» e «non ho potuto guardare»
+sono cose diverse, e confonderle è fail-open. Il perché l'asse esista, e perché
+non porti la causa dell'`unlink`, sta in
+[`errori-e-limiti.md`](errori-e-limiti.md).
+
+Dopo il commit point nessuno dei due assi diventa un errore: l'output è
+visibile, e una durabilità non confermata o un temporaneo rimasto sono
+**avvertenze**. Dirle come fallimenti manderebbe chi legge a rifare una cosa già
+fatta, e rifarla troverebbe la destinazione occupata.
 
 ---
 
@@ -2836,7 +2924,7 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
 | **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
-| **PR-10** | sequenza di verifica da 1 a 9 — 8-bis compreso — publish no-clobber con rilevazione del residuo, e **`risolvi_commit`** con l'enum delle osservazioni | **sì** (superficie pubblica) | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice; e le cinque osservazioni su destinazioni costruite a mano |
+| **PR-10** | passi da 3 a 9 — 8-bis compreso — con la prova opaca che il verificatore rende e il passo 9 consuma; publish no-clobber che pretende byte e digest prima del commit; rilevazione del residuo sui **due assi** dell'autorità condivisa; e **`risolvi_commit`** con l'enum delle osservazioni. I passi 1 e 2 restano dove sono — leggono lo stato terminale del figlio e l'`Esito` dichiarato, che appartengono a chi possiede il ciclo di vita — e arrivano col supervisore di produzione | **sì** (superficie pubblica) | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice; le cinque osservazioni su destinazioni costruite a mano; e i due accertamenti della copia interrogati dove possono fallire |
 | ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
 | **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
 | **PR-13a** | infrastruttura di confronto shadow con **candidato sintetico**. **Preceduta dal gate bloccante `PT-shadow`**: prima del suo esito non è implementabile | **qualificato**, vedi la sezione dedicata | le garanzie di quella sezione: preparazione fallita equivalente a `off`, piano incapace di abilitare o aumentare lo shadow, record conforme al contratto privacy, e i quattro guasti del candidato senza effetto canonico |

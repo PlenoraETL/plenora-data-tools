@@ -8,6 +8,9 @@
 //! tentativo, e le ragioni per cui una destinazione esistente puo' restare
 //! non giudicabile.
 //!
+//! I passi da 3 a 8-bis stanno in [`crate::verifica`]; il passo 9 — la
+//! pubblicazione atomica no-clobber — sta qui, in [`pubblica`].
+//!
 //! # Perche' un modulo separato da `verifica`
 //!
 //! Perche' i due hanno confini diversi. `verifica` **non tocca niente**: apre,
@@ -18,23 +21,47 @@
 //! Tenerli nello stesso modulo direbbe che sono la stessa specie di cosa, e la
 //! specie e' proprio cio' che li distingue: uno si puo' rifare, l'altro no.
 //!
-//! # Che cosa non c'e' ancora
+//! # I tre vincoli che questo modulo rispetta
 //!
-//! Il **passo 9**. `risolvi_commit` guarda una destinazione e non la tocca: e'
-//! la meta' di questo modulo che non ha bisogno di nient'altro, e ha un
-//! chiamante che sta per definizione fuori — chi non riceve risposta dal
-//! processo incaricato di pubblicare. Il passo 9 arriva insieme al verificatore
-//! che gli fornisce la prova, perche' senza quella prova sarebbe una funzione
-//! che accetta un percorso e si fida.
+//! **Il passo 9 non accetta un percorso.** Un `&Path` non porta con se' la prova
+//! di aver superato i passi da 3 a 8-bis: chiunque potrebbe costruirne uno e
+//! chiedere di pubblicare un file che nessuno ha verificato. Cio' che il passo 9
+//! consuma e' [`ArtefattoVerificato`], **opaco e prodotto soltanto dal
+//! verificatore**, con i campi privati e nessun costruttore aperto — la stessa
+//! forma di `isolamento::NumeriDelCanale`, dove «rivalidato» e' una proprieta'
+//! del tipo e non una promessa nel commento di chi lo costruisce. E lo consuma
+//! per valore: una prova che si potesse riusare direbbe che due pubblicazioni
+//! diverse hanno la stessa verifica dietro.
+//!
+//! **Il residuo dice che cosa e dove, e sa di non sapere.** Nel ripiego di
+//! `persist_noclobber` — `hard_link` seguito da `unlink`, con l'errore
+//! dell'`unlink` ignorato — il temporaneo puo' restare al suo posto. I soli byte
+//! non basterebbero: chi deve bonificare ha bisogno del percorso. E
+//! l'accertamento stesso puo' fallire, **dopo** un commit gia' riuscito: percio'
+//! `geo_transport::publish::PuliziaDelTemporaneo` sa dire «non l'ho potuto
+//! accertare», che non e' ne' «niente da bonificare» ne' un fallimento della
+//! pubblicazione. E' la stessa distinzione a tre stati della quiescenza di un
+//! dominio, e per la stessa ragione: confondere «vuoto» con «non l'ho potuto
+//! guardare» e' fail-open.
+//!
+//! **La durabilita' e il residuo restano due fatti.** Uno riguarda la
+//! destinazione, l'altro il temporaneo; comprimerli in un enum solo
+//! costringerebbe a inventare una variante per ogni combinazione. Stanno percio'
+//! sui due assi di `geo_transport::publish::EsitoDellaPubblicazione`.
 
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::Path;
 
-use plenora_core::error::{ErrorCategory, PlenoraError};
+use plenora_core::error::{ErrorCategory, ErrorPhase, PlenoraError, Result};
+use sha2::{Digest as _, Sha256};
 
 use crate::commit_footer::interpreta_commit_token;
 use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
+use crate::esadecimale32::Esadecimale32;
 use crate::geo_transport::error::ArrowTransportError;
+use crate::geo_transport::publish::{
+    publish_with_profile, EsitoDellaPubblicazione, PublishProfile,
+};
 use crate::ipc_boundary::{
     convalida_artefatto_con_causa, ArtefattoConvalidato, CausaDiApertura, IpcLimits,
 };
@@ -334,6 +361,201 @@ fn ragione_di(causa: &ArrowTransportError) -> RagioneNonLeggibile {
         _ => RagioneNonLeggibile::GuastoDiLettura,
     }
 }
+
+#[cfg(any(test, feature = "internals"))]
+/// L'artefatto che ha superato i passi da 3 a 8-bis.
+///
+/// # Perche' un tipo, e non un percorso
+///
+/// Perche' un `&Path` non porta con se' nessuna prova: chiunque potrebbe
+/// costruirne uno e chiedere di pubblicare un file che nessuno ha verificato. Un
+/// tipo con i campi privati e nessun costruttore aperto rende quella pretesa
+/// **irrappresentabile**: l'unico modo di averne uno e' che il verificatore lo
+/// abbia prodotto, e produrlo significa aver attraversato la sequenza.
+///
+/// E' la stessa forma di `isolamento::NumeriDelCanale`, dove «rivalidato» e' cio'
+/// che il tipo significa e non una promessa nel commento di chi lo costruisce.
+///
+/// # Perche' conserva l'handle, e non lo riapre
+///
+/// Perche' riaprire per percorso darebbe al passo 9 la possibilita' di trovare
+/// un file **diverso** da quello verificato: fra la verifica e la
+/// pubblicazione ci sarebbe una finestra, e la prova varrebbe per un file che
+/// non e' piu' quello. L'handle e' lo stesso che ha letto il sigillo.
+///
+/// # Perche' non e' clonabile
+///
+/// Perche' una prova che si potesse duplicare direbbe che due pubblicazioni
+/// diverse hanno la stessa verifica dietro. Il passo 9 la **consuma**.
+///
+/// # Perche' non deriva `Debug`
+///
+/// Perche' porterebbe il digest in ogni log che stampasse la prova, e il digest
+/// e' l'identita' di un artefatto. Il tipo che la custodisce non la mostra.
+pub(crate) struct ArtefattoVerificato {
+    /// L'handle gia' aperto e convalidato: la sorgente dei byte da pubblicare.
+    artefatto: ArtefattoConvalidato,
+    /// Quanti byte la verifica ha misurato.
+    byte_verificati: u64,
+    /// Il digest che quei byte devono rendere.
+    digest_atteso: Esadecimale32,
+}
+
+#[cfg(any(test, feature = "internals"))]
+impl ArtefattoVerificato {
+    /// Lo costruisce il verificatore, e nessun altro.
+    ///
+    /// `pub(crate)` e non `pub`: fuori dal crate la sola via per averne uno e'
+    /// far girare la sequenza.
+    pub(crate) const fn accertato(
+        artefatto: ArtefattoConvalidato,
+        byte_verificati: u64,
+        digest_atteso: Esadecimale32,
+    ) -> Self {
+        Self {
+            artefatto,
+            byte_verificati,
+            digest_atteso,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "internals"))]
+/// Passo 9: rende visibile l'artefatto verificato, **senza mai sostituire**.
+///
+/// # Perche' copia invece di spostare il file
+///
+/// Perche' il commit atomico no-clobber ha gia' un'autorita' qualificata in
+/// questo crate — tempfile nella directory di destinazione, `sync_all`, retry
+/// sui guasti transitori, `persist_noclobber`, `fsync` della directory secondo
+/// il profilo — e quell'autorita' scrive **attraverso un writer**. Spostare il
+/// file dov'e' vorrebbe dire una seconda implementazione del commit: su Unix
+/// `renameat2(RENAME_NOREPLACE)` con ripiego, su Windows `MoveFileExW`, cioe'
+/// codice per piattaforma e una dipendenza nuova, per riottenere garanzie che
+/// gia' esistono e sono provate.
+///
+/// **Il costo e' dichiarato**: una lettura e una scrittura integrali in piu', e
+/// le due copie coesistono fino al commit. E' lo stesso genere di costo gia'
+/// accettato per il passo 5-bis, e per la stessa ragione: si paga una passata
+/// per non fidarsi.
+///
+/// **Condizione di rientro**: una primitiva cross-platform qualificata che
+/// committi direttamente un file esistente conservando no-clobber e
+/// l'osservabilita' della pulizia.
+///
+/// # Che cosa si pretende durante la copia
+///
+/// Il **numero esatto** di byte verificati, preteso prima di leggere: la prova
+/// e l'handle portano quel numero da due momenti diversi, e se si contraddicono
+/// la prova non riguarda questo handle. Poi lo **SHA-256 ricalcolato sui byte
+/// effettivamente copiati**, confrontato prima del commit. Non e' una ripetizione
+/// del passo 5-bis: quello ha misurato i byte letti allora, questo misura i byte
+/// che finiscono nella destinazione. Fra i due c'e' una copia, ed e' proprio la
+/// copia a poter sbagliare.
+///
+/// Qualunque divergenza ferma la closure, e una closure che si ferma vuol dire
+/// che il commit non avviene: la destinazione **non appare**.
+///
+/// # Errors
+///
+/// - [`PlenoraError::InvalidPlan`] se la destinazione esiste gia': e' il
+///   no-clobber, e la prima esecuzione che pubblica vince;
+/// - [`PlenoraError::Io`] per i guasti della copia e del commit;
+/// - [`PlenoraError::DataMapping`] se l'artefatto non ha piu' i byte che la
+///   prova gli ha misurato, o se i byte copiati non rendono il digest
+///   verificato: in entrambi i casi il file e' cambiato dopo la verifica.
+pub(crate) fn pubblica(
+    verificato: ArtefattoVerificato,
+    destinazione: &Path,
+    profilo: PublishProfile,
+) -> Result<EsitoDellaPubblicazione> {
+    let ArtefattoVerificato {
+        mut artefatto,
+        byte_verificati,
+        digest_atteso,
+    } = verificato;
+
+    let ((), esito) = publish_with_profile(destinazione, profilo, |uscita| {
+        copia_accertando(&mut artefatto, byte_verificati, &digest_atteso, uscita)
+    })?;
+    Ok(esito)
+}
+
+#[cfg(any(test, feature = "internals"))]
+/// Copia i byte verificati nel writer, contandoli e ricalcolandone il digest.
+///
+/// # Perche' i due controlli stanno qui e non dopo
+///
+/// Perche' dopo non servirebbero a niente: il commit sarebbe gia' avvenuto e la
+/// destinazione gia' visibile. Fermarsi dentro la closure e' l'unico momento in
+/// cui una divergenza puo' ancora impedire che l'output appaia.
+fn copia_accertando(
+    artefatto: &mut ArtefattoConvalidato,
+    byte_verificati: u64,
+    digest_atteso: &Esadecimale32,
+    uscita: &mut dyn Write,
+) -> Result<()> {
+    // Il conteggio, chiesto al descrittore **adesso**: e' una misura nuova, non
+    // la copia di quella che la prova gia' porta. Confrontare `byte_verificati`
+    // con `artefatto.byte_totali()` sarebbe tautologico — entrambi vengono
+    // dall'apertura, e il duplicato porta con se' lo stesso valore — mentre
+    // interrogare il descrittore scopre l'unica cosa che puo' essere successa
+    // davvero: il file mutato **in place** dopo la verifica.
+    //
+    // Dopo il ciclo non ci sarebbe niente da chiedere: il ciclo legge a offset
+    // esatti e `leggi_a` **fallisce** invece di consegnare corto, quindi un
+    // confronto finale fra `copiati` e il numero che ha guidato il ciclo
+    // direbbe solo che il ciclo ha girato.
+    let misurati = artefatto.misura_ora()?;
+    if misurati != byte_verificati {
+        // Non e' un difetto interno: e' il file sotto di noi che e' cambiato.
+        // `DataMapping` e' la stessa classe del passo 5-bis, che giudica lo
+        // stesso genere di fatto sullo stesso artefatto.
+        return Err(PlenoraError::DataMapping(format!(
+            "pubblicazione: l'artefatto verificato aveva {byte_verificati} byte e ora ne ha \
+             {misurati}: e' cambiato dopo la verifica"
+        ))
+        .with_phase(ErrorPhase::Write));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut buffer = Vec::with_capacity(BLOCCO_COPIA);
+    let mut copiati = 0_u64;
+    while copiati < byte_verificati {
+        let restanti = byte_verificati.saturating_sub(copiati);
+        let blocco = usize::try_from(restanti.min(BLOCCO_COPIA as u64)).unwrap_or(BLOCCO_COPIA);
+        artefatto.leggi_a(copiati, blocco, &mut buffer)?;
+        hasher.update(&buffer);
+        uscita
+            .write_all(&buffer)
+            .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Write))?;
+        copiati = copiati.checked_add(blocco as u64).ok_or_else(|| {
+            PlenoraError::Internal(
+                "pubblicazione: il conteggio dei byte copiati e' andato oltre un u64".to_owned(),
+            )
+        })?;
+    }
+
+    // Il digest: sui byte usciti, non su quelli letti prima. Il valore non entra
+    // nel messaggio — e' l'identita' di un artefatto, e i messaggi di questo
+    // progetto non portano contenuto.
+    let ricalcolato = Esadecimale32::dai_byte(hasher.finalize().into());
+    if &ricalcolato != digest_atteso {
+        // `DataMapping` e non `Internal`: un artefatto verificato non e'
+        // immutabile, e chi lo altera sta fuori da questo processo. Dire
+        // «difetto interno» accuserebbe il codice di una cosa che non ha
+        // fatto, e manderebbe chi legge a cercarla dove non c'e'.
+        return Err(PlenoraError::DataMapping(
+            "pubblicazione: i byte copiati non rendono il digest verificato".to_owned(),
+        )
+        .with_phase(ErrorPhase::Write));
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "internals"))]
+/// Byte copiati per volta: memoria costante, come nel passo 5-bis.
+const BLOCCO_COPIA: usize = 64 * 1024;
 
 #[cfg(test)]
 mod tests;
