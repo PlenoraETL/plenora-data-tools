@@ -576,6 +576,7 @@ consumatore attuale le interpreta: il rischio è limitato a un'incompatibilità
 di **nomi**, coperta dalla migrazione se i nomi ratificati risultassero
 diversi.
 
+<a id="arrow-transform-in-quarantena"></a>
 ### `arrow_transform` in quarantena nel fuzzing
 
 Il target fuzz `arrow_transform` è **disattivato**. Non perché la barriera non
@@ -1473,6 +1474,105 @@ riceve lo stesso rifiuto.
 JSON di controllo del progetto.
 **Condizione di rientro.** Il giorno che `serde_json` smetta di riservare quel
 nome, o offra un lettore che non lo reinterpreta.
+
+### La validazione OGC sta dietro una barriera
+
+**La regola.** Nessun sito di `plenora-kernels-geo` chiama `check_validation` di
+`geo` direttamente: tutti passano da `ValidazioneProtetta::validazione_protetta`,
+che cattura il panico e lo rende un errore.
+
+**Perché.** `check_validation` può andare in **panico** invece di rendere un
+errore: la sua `relate` costruisce un grafo topologico in virgola mobile e chiama
+`panic!` quando due conclusioni sullo stesso punto si contraddicono. Un panico
+dentro una libreria che riceve byte da fuori non è una diagnosi: è la fine del
+processo.
+
+**Dove il panico esiste, esattamente.** Il panico dei reperti è un
+**`debug_assert!`** (`edge_end_bundle_star.rs:116`), quindi vive solo dove le
+asserzioni di debug sono attive: la batteria e il target del fuzz. Il profilo
+`release` di questo progetto attiva `overflow-checks` ma **non**
+`debug-assertions`, e lì `geo` conclude regolarmente — i due reperti diventano
+`ElementsOverlaps(1, 2)`, cioè un rifiuto ordinario. Misurato: gli stessi casi
+sono verdi in entrambi i profili con attese diverse, e la variabile decisiva è
+isolata (`--release` con `-C debug-assertions=on` panica di nuovo).
+
+Non ne segue che la barriera sia superflua in produzione. Nella stessa funzione,
+venti righe più sotto, `assert!(left_position.is_some(), "found single null
+side")` **non** è condizionato dalle asserzioni di debug: un secondo cammino di
+panico resta attivo in `release`, e quello la barriera lo copre davvero.
+
+**Il difetto a monte è una precondizione, non l'algoritmo.** Il guardiano di quel
+`debug_assert!` chiede se la geometria sia valida, ma `propagate_side_labels`
+riceve **un solo** operando: entrambi i reperti sono `MultiPolygon` di tre
+poligoni in cui il conflitto nasce dalla *coppia* — relazionare il poligono 1,
+valido, con il 2, invalido. Il guardiano guarda il primo, non vede il secondo, e
+asserisce. Che sia una precondizione sbagliata e non un errore di calcolo lo
+mostra l'asimmetria: la stessa coppia nell'ordine invertito **non** panica e
+rende `InvalidPolygon(SelfIntersection)`. Nulla di ciò dimostra che l'algoritmo
+numerico sia corretto — dimostra che qui non è lui a essere in causa.
+
+`geo 0.33.1` è l'ultima versione pubblicata: non c'è un aggiornamento che lo
+chiuda. Una proposta di correzione è conservata fuori dall'albero, con base e
+impronta esatte, e **non è applicata**: il prodotto consuma `geo` dal registro,
+immutato.
+
+**Il canale `log` non è governato.** `geo` pubblica coordinate dell'ingresso
+anche fuori dal panico: il ramo alternativo all'asserzione è un `warn!` con lo
+stesso messaggio, e i `debug!` alle righe 83, 154 e 210 — **non** condizionati
+dalle asserzioni di debug, quindi presenti anche in `release` — stampano l'intera
+struttura topologica. Misurato con un logger a livello `DEBUG`: 49 righe con dati
+dell'ingresso su 54, in `release`. `panic_policy` non copre questo canale, e
+nemmeno la barriera: chi ospita il crate e installa un logger deve saperlo.
+
+**Perché condivisa.** I siti sono quarantaquattro. Una barriera per sito è una
+barriera che qualcuno dimenticherà; passando tutti dallo stesso metodo la difesa
+è una sola e si sposta con lei.
+
+**Che cosa non porta l'errore.** Il contenuto del payload. Il messaggio di `geo`
+nomina le **coordinate** che hanno provocato la contraddizione, cioè dati
+dell'ingresso: si pubblica la *forma* del payload, con la stessa nozione
+condivisa delle altre barriere.
+
+**La barriera da sola non basta.** L'hook di panico installato da `std` stampa il
+payload **prima** che `catch_unwind` lo veda: catturare il panico non impedisce
+all'hook di averlo già pubblicato. Chi ospita questo crate deve installare la
+politica sanitizzata di `plenora_core::panic_policy` — è la ragione per cui
+quella politica esiste.
+
+**Che cosa la barriera non è.** Un filtro sui numeri. Delle quattro coordinate
+che i due panici nominano, **tre sono normali** e una sola è subnormale:
+rifiutare una classe di magnitudini respingerebbe geometrie valide senza chiudere
+il difetto, che nasce dalla precisione della virgola mobile su punti molto
+vicini. Una geometria valida con coordinate minuscole continua a essere accettata,
+e un caso lo fissa.
+
+**Che cosa la barriera non chiude.** Il difetto del fuzz `wkb_contract`, che
+**resta aperto**. La barriera è contenimento e sanitizzazione: vale nei processi
+che consentono l'unwinding — la produzione e la batteria ordinaria — e lì i due
+reperti rendono un errore `Internal` senza pubblicare nulla. Dentro un target
+`libfuzzer-sys` non vale, per lo stesso meccanismo già registrato in
+[`arrow_transform` in quarantena nel fuzzing](#arrow-transform-in-quarantena):
+l'hook chiama `abort()` prima dell'unwinding, deliberatamente, perché un
+`catch_unwind` nel codice sotto test nasconderebbe i difetti al fuzzer. Misurato:
+`cargo fuzz run wkb_contract` sui reperti del 4 e 5 settembre 2026 termina con
+`deadly signal`.
+
+A differenza di `arrow_transform`, il target **non** va in quarantena: quel rosso
+è un difetto noto e aperto, e sostituire l'hook per ottenere il verde
+nasconderebbe anche i panici che la campagna deve trovare. Si chiude con il
+replay riuscito nel target reale, o con una revisione esplicita del contratto del
+target che offra un oracolo altrettanto efficace.
+
+**Dove vivono i reperti.** Nei **test versionati**, con i byte in chiaro:
+`tests/barriera_validazione.rs` e `tests/barriera_privacy_processo.rs`. Le copie
+in `fuzz/corpus/wkb_contract/` sono comode in locale ma `fuzz/corpus` è ignorato
+da Git: **non garantiscono** che i reperti raggiungano la campagna remota. Le due
+cose non vanno confuse — solo la prima è una regressione.
+
+**Ambito.** `plenora-kernels-geo`, ogni validazione OGC.
+**Condizione di rientro.** Il giorno che `geo` non abbia più cammini di panico
+raggiungibili da byte esterni: sia il `debug_assert!` dal guardiano incompleto,
+sia il `found single null side`, che è attivo anche in `release`.
 
 ### Il filo porta un esito solo
 

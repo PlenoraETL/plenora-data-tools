@@ -12,7 +12,6 @@
 use std::collections::BTreeMap;
 
 use geo::algorithm::line_locate_point::LineLocatePoint;
-use geo::algorithm::validation::Validation;
 use geo::{Geometry, MultiLineString, MultiPoint, MultiPolygon, Point};
 use plenora_core::arrow::array::StringArray;
 use plenora_core::diagnostics::{
@@ -28,6 +27,7 @@ use wkt::ToWkt;
 use crate::arrow_adapter::encode_geometry;
 use crate::construction::geometry_from_wkt;
 use crate::geometry_type_name;
+use crate::ValidazioneProtetta as _;
 
 #[derive(Debug, Error)]
 pub enum ExtensionError {
@@ -40,18 +40,35 @@ pub enum ExtensionError {
     /// Invariante interna violata (R6: errore propagato, mai panic).
     #[error("internal error: {0}")]
     Internal(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionError> {
     geometry
-        .check_validation()
-        .map_err(|error| ExtensionError::InvalidInput(error.to_string()))
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| ExtensionError::InvalidInput(ragione.to_string()),
+                ExtensionError::ValidazioneNonConclusa,
+            )
+        })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionError> {
     geometry
-        .check_validation()
-        .map_err(|error| ExtensionError::InvalidOutput(error.to_string()))?;
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| ExtensionError::InvalidOutput(ragione.to_string()),
+                ExtensionError::ValidazioneNonConclusa,
+            )
+        })?;
     Ok(geometry)
 }
 

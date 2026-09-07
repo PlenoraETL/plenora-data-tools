@@ -1,7 +1,7 @@
 //! PROJ-backed CRS transformations using the bundled CRS database.
 
 use crate::crs::{resolve_crs, validate_geometry_domain, validate_requirement, CrsError};
-use geo::algorithm::validation::Validation;
+use crate::ValidazioneProtetta as _;
 use geo::{CoordsIter, Geometry, MapCoords};
 use plenora_core::catalog::CrsRequirement;
 use proj::Proj;
@@ -36,6 +36,13 @@ pub enum ProjBackendError {
     CoordinateLimit { actual: u64, limit: u64 },
     #[error("numero coordinate non rappresentabile come uint64")]
     IndexOverflow,
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 /// Reprojects all coordinates using PROJ's normalized GIS axis order.
@@ -126,8 +133,13 @@ impl Reprojector {
             ));
         }
         geometry
-            .check_validation()
-            .map_err(|error| ProjBackendError::InvalidInput(error.to_string()))?;
+            .validazione_protetta()
+            .map_err(|esito| {
+            esito.separa(
+                |ragione| ProjBackendError::InvalidInput(ragione.to_string()),
+                ProjBackendError::ValidazioneNonConclusa,
+            )
+        })?;
         validate_geometry_domain(geometry, &self.source)?;
         let actual =
             u64::try_from(geometry.coords_count()).map_err(|_| ProjBackendError::IndexOverflow)?;
@@ -151,8 +163,13 @@ impl Reprojector {
             return Err(ProjBackendError::NonFiniteOutput);
         }
         output
-            .check_validation()
-            .map_err(|error| ProjBackendError::InvalidOutput(error.to_string()))?;
+            .validazione_protetta()
+            .map_err(|esito| {
+            esito.separa(
+                |ragione| ProjBackendError::InvalidOutput(ragione.to_string()),
+                ProjBackendError::ValidazioneNonConclusa,
+            )
+        })?;
         validate_geometry_domain(&output, &self.target)?;
         Ok(output)
     }
