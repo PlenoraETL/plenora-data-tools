@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use super::config::{GeometryAccessorsConfig, LineLocatePointConfig, OutputColumnConfig};
 use super::helpers::{
+    parametro_non_decodificabile,
     ensure_name, ensure_name_free, invalid_param, output_fields, output_name, parse_config,
     rebuild, short_id, validate_wkb_hex,
 };
@@ -125,8 +126,9 @@ pub(in crate::analyze) fn analyze_line_locate_point(
 ) -> Result<DataContract> {
     let parsed: LineLocatePointConfig = parse_config(op, config)?;
     let bytes = validate_wkb_hex(op, "point_wkb", &parsed.point_wkb)?;
-    let point = crate::geometry_from_wkb(&bytes)
-        .map_err(|_| invalid_param(op, "point_wkb", "WKB non decodificabile"))?;
+    let point = crate::geometry_from_wkb(&bytes).map_err(|error| {
+        parametro_non_decodificabile(op, "point_wkb", "WKB non decodificabile", &error)
+    })?;
     if !matches!(point, geo::Geometry::Point(_)) {
         return Err(invalid_param(op, "point_wkb", "deve essere un Point"));
     }

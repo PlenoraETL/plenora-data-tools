@@ -803,7 +803,14 @@ fn map_nullable<T: Send>(
 /// trasporto, parametri): propagano senza diagnostica, fail-closed com'e'.
 /// Il vocabolario e' quello degli altri emettitori geo (gate WKB,
 /// `geo.from_wkt`, `geo.from_coords`).
-const fn cell_failure_cause(error: &ArrowTransportError) -> Option<&'static str> {
+fn cell_failure_cause(error: &ArrowTransportError) -> Option<&'static str> {
+    // Una validazione che non ha concluso non e' un fallimento della riga:
+    // contarla fra le celle rotte direbbe che quella riga e' sbagliata, che
+    // nessuno ha stabilito. `None` la fa propagare fail-closed, che e' cio'
+    // che questa funzione riserva agli errori non attribuibili alla riga.
+    if error.source_error().e_interna() {
+        return None;
+    }
     match error {
         ArrowTransportError::CellTooLarge(_) => Some("geometry.cell_too_large"),
         ArrowTransportError::WrongGeometryType { .. } => Some("geometry.wrong_type"),
@@ -3189,11 +3196,93 @@ mod tests {
         Ok(current)
     }
 
+    /// **Una validazione interrotta non e' un fallimento attribuibile alla
+    /// riga.**
+    ///
+    /// `cell_failure_cause` decide se un fallimento entri nella diagnostica
+    /// row-scoped. Un esito che non ha concluso, contato fra le celle rotte,
+    /// direbbe che quella riga e' sbagliata — e nessuno lo ha stabilito.
+    /// `None` e' cio' che questa funzione riserva agli errori non attribuibili
+    /// alla riga, e li fa propagare fail-closed.
+    #[test]
+    fn una_validazione_interrotta_non_e_attribuibile_alla_riga() {
+        use plenora_kernels_geo::operations::OperationError;
+        use plenora_kernels_geo::topology::TopologyError;
+
+        for caso in [
+            ArrowTransportError::Kernel(OperationError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Topology(TopologyError::ValidazioneNonConclusa("forma")),
+        ] {
+            assert_eq!(
+                cell_failure_cause(&caso),
+                None,
+                "non deve entrare nella diagnostica di riga: {caso}"
+            );
+        }
+
+        // E la meta' opposta: un fallimento di kernel ordinario ci entra
+        // ancora, o il caso qui sopra passerebbe anche svuotando la funzione.
+        let ordinario = ArrowTransportError::Kernel(OperationError::InvalidInput(
+            "anello con auto-intersezione".to_owned(),
+        ));
+        assert_eq!(
+            cell_failure_cause(&ordinario),
+            Some("geometry.kernel_failed"),
+            "un fallimento ordinario resta attribuibile alla riga"
+        );
+    }
+
     fn run_fused(
         group: &[&TransformArrowSchema],
         cells: &BinaryArray,
     ) -> Result<Vec<Option<Vec<u8>>>, FusedStepError> {
         Ok(transform_cells_fused(group, None, cells, &mut |_| Ok(()))?.geometry)
+    }
+
+
+    /// Il reperto del 5 settembre 2026, come nel percorso non fuso.
+    const REPERTO_VALIDAZIONE: &[u8] = &    [
+        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
+        1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
+        116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
+        0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
+        255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
+        0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    /// **Anche il percorso fuso non chiama colpa del piano una validazione
+    /// interrotta.**
+    ///
+    /// I due percorsi hanno chiamanti distinti, e una decisione duplicata
+    /// diverge: il caso non fuso da solo lascerebbe scoperto questo. Entrambi
+    /// passano ora da `errore_del_passo`, e il caso lo pretende qui.
+    #[test]
+    fn il_percorso_fuso_non_attribuisce_al_piano_una_validazione_interrotta() {
+        let centroid = fused_params(ArrowOperation::Centroid);
+        let group: Vec<&TransformArrowSchema> = [&centroid].to_vec();
+        let cells = cells_array(&[Some(REPERTO_VALIDAZIONE.to_vec())]);
+
+        let errore = run_fused(&group, &cells).expect_err("il reperto non passa");
+        let FusedStepError::Kernel { error, .. } = errore else {
+            panic!("atteso un fallimento di kernel, trovato {errore:?}");
+        };
+        let attesa = if cfg!(debug_assertions) {
+            assert!(
+                matches!(error, ArrowTransportError::Interno(_)),
+                "la validazione interrotta deve restare interna: {error:?}"
+            );
+            plenora_core::ErrorCategory::Internal
+        } else {
+            plenora_core::ErrorCategory::InvalidPlan
+        };
+        assert_eq!(
+            error.errore_del_passo().category(),
+            attesa,
+            "attribuzione inattesa per questo profilo — {error}"
+        );
     }
 
     /// Gruppo [buffer, simplify, centroid] (profili B, B, A): stesso output

@@ -1546,6 +1546,27 @@ il difetto, che nasce dalla precisione della virgola mobile su punti molto
 vicini. Una geometria valida con coordinate minuscole continua a essere accettata,
 e un caso lo fissa.
 
+**La distinzione vale fino all'errore finale, non solo all'origine.** Un tipo che
+separa i due casi non serve a nulla se un chiamante li riunisce dopo. I punti
+dove la distinzione moriva, e che ora la conservano:
+
+- il trasporto — un `PlenoraError::Internal` cadeva nel ramo generico di
+  `From<PlenoraError> for ArrowTransportError` e diventava `Arrow(String)`; ora
+  esiste `ArrowTransportError::Interno`;
+- i due passi dell'executor, **fuso e non fuso**, che riscrivevano ogni
+  fallimento come `InvalidPlan`; ora chiedono entrambi
+  `ArrowTransportError::errore_del_passo`, che decide dalla variante — una
+  decisione sola per due chiamanti, perché due copie divergono;
+- l'adapter di colonna `geo.from_wkt`, che contava la validazione interrotta fra
+  le celle invalide e rendeva `DataMapping`; ora esce con `Internal` invece di
+  accusare una riga;
+- le due porte di `analyze` e il preflight dei piani, che scartavano l'errore
+  per dire «parametro non decodificabile» o «nodo non decodificabile».
+
+La regola: **chi converte l'errore della validazione guarda la categoria di
+sotto**, e non riattribuisce a chi ha scritto l'ingresso un difetto che nessuno
+gli ha dimostrato.
+
 **Che cosa la barriera non chiude.** Il difetto del fuzz `wkb_contract`, che
 **resta aperto**. La barriera è contenimento e sanitizzazione: vale nei processi
 che consentono l'unwinding — la produzione e la batteria ordinaria — e lì i due
@@ -1573,6 +1594,40 @@ cose non vanno confuse — solo la prima è una regressione.
 **Condizione di rientro.** Il giorno che `geo` non abbia più cammini di panico
 raggiungibili da byte esterni: sia il `debug_assert!` dal guardiano incompleto,
 sia il `found single null side`, che è attivo anche in `release`.
+
+### DIFETTO APERTO: `wkt` panica su un multi con una geometria vuota
+
+**Non è un limite deliberato**, ed è per questo che non sta fra i
+[limiti dichiarati](#limiti-dichiarati): è un difetto noto, non presidiato, e
+registrato qui perché chi legge la barriera OGC non concluda che sia coperto.
+
+**Non lo è.** La barriera cattura i panici della *validazione*; questo avviene
+dopo, nella **serializzazione**.
+
+**Che cosa succede.** `wkt 0.14.0`, `src/to_wkt/geo_trait_impl.rs:242`, scarta
+con `unwrap()` l'`exterior()` del primo poligono di un `MultiPolygon`. Per un
+poligono vuoto quell'`Option` è `None`.
+
+**Raggiungibile dalla produzione, e in `release`.** Misurato su
+`plenora_kernels_geo::operations::to_wkt`, la porta dell'operazione di catalogo
+`geo.to_wkt`: la validazione OGC **accetta** le geometrie vuote — sono valide
+per OGC — quindi non ferma l'ingresso, e l'encoder panica subito dopo. L'`unwrap()`
+non è condizionato da `cfg(debug_assertions)`: vale in entrambi i profili.
+
+Non è quindi della stessa classe del panico di `geo` descritto sopra, che è un
+`debug_assert!` assente in `release`.
+
+**Ingresso minimo**, ridotto e verificato nei due versi: un `MultiPolygon` che
+contiene un poligono vuoto panica; il poligono vuoto da solo no.
+
+**Ambito.** Ogni cammino che serializzi in WKT una geometria multi che può
+contenere parti vuote. Non è stato censito quali altri cammini lo raggiungano.
+
+**Condizione di rientro.** Il giorno che `wkt` renda un errore invece di
+scartare quell'`Option`, o che la serializzazione stia dietro una barriera.
+
+Il reperto è passato a `plenora-memory-lab` con encoder, versione, punto di
+panico, ingresso minimo e misure per profilo.
 
 ### Il filo porta un esito solo
 

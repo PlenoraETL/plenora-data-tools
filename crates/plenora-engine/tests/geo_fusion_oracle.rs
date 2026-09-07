@@ -1542,3 +1542,85 @@ fn backend_ops_identical_outcome_with_fusion_on_and_off() {
         }
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// Validazione OGC interrotta: l'attribuzione attraverso l'executor vero
+// ---------------------------------------------------------------------------
+
+/// Il reperto del 5 settembre 2026 della campagna `fuzz wkb_contract`.
+const REPERTO_VALIDAZIONE: &[u8] = &[
+    1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
+    1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
+    116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
+    0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
+    255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
+    0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+fn validazione_interrotta_plan() -> Value {
+    json!({
+        "schema_version": 5,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 1.0, "y_offset": 1.0}},
+            {"id": "s", "op": "geo.simplify", "in": ["t"], "config": {"tolerance": 0.01}},
+            {"id": "e", "op": "geo.envelope", "in": ["s"], "config": {}},
+        ],
+        "output": "e",
+    })
+}
+
+fn validazione_interrotta_batches() -> Vec<RecordBatch> {
+    vec![geo_batch(&[0], &[Some(REPERTO_VALIDAZIONE.to_vec())])]
+}
+
+/// **Una validazione che non conclude non e' colpa del piano, in nessuno dei
+/// due percorsi.**
+///
+/// # Perche' attraverso l'executor e non su `errore_del_passo`
+///
+/// Perche' chiamare direttamente il classificatore prova che il
+/// classificatore funziona, non che i chiamanti lo usino. Se `blocking.rs` o
+/// `fusion.rs` tornassero a costruire `InvalidPlan(error.to_string())`, un
+/// caso che invoca `errore_del_passo` dal test resterebbe verde. Qui la
+/// pipeline e' quella vera, e i due percorsi sono esercitati entrambi.
+///
+/// L'attesa dipende dal profilo: il panico di `geo` e' un `debug_assert!`,
+/// quindi senza asserzioni di debug la geometria e' giudicata e invalida
+/// davvero. La cella diventa allora un fallimento **attribuibile alla riga**,
+/// entra nella diagnostica row-scoped, e l'errore finale e' `DataMapping` —
+/// non `InvalidPlan`: la colpa e' dei dati, non della forma del piano.
+#[test]
+fn una_validazione_interrotta_non_e_colpa_del_piano_nei_due_percorsi() {
+    let plan = validazione_interrotta_plan();
+    let signature = assert_oracle_error(
+        "validazione-interrotta",
+        &plan,
+        &validazione_interrotta_batches,
+        Some("t"),
+        // Tre nodi fondibili: con la fusione attiva il gruppo entra davvero
+        // nel runner fuso, quindi i due percorsi sono due. Con un nodo solo
+        // non si formerebbe alcun gruppo e `fusion.rs` non sarebbe esercitato.
+        Origine::RunnerFuso { gruppi: 1 },
+    );
+    let attesa = if cfg!(debug_assertions) {
+        // La validazione non conclude: non e' attribuibile alla riga, quindi
+        // propaga fail-closed senza diagnostica, come difetto nostro.
+        ErrorCategory::Internal
+    } else {
+        // `geo` conclude e giudica la cella invalida: e' un difetto della
+        // riga, entra nella diagnostica row-scoped, e l'attribuzione e' ai
+        // dati — non al piano.
+        ErrorCategory::DataMapping
+    };
+    assert_eq!(
+        signature.category, attesa,
+        "attribuzione inattesa per questo profilo — {}",
+        signature.reason
+    );
+}

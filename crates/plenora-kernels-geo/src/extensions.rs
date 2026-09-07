@@ -25,7 +25,7 @@ use thiserror::Error;
 use wkt::ToWkt;
 
 use crate::arrow_adapter::encode_geometry;
-use crate::construction::geometry_from_wkt;
+use crate::construction::{geometry_from_wkt, ConstructionError};
 use crate::geometry_type_name;
 use crate::ValidazioneProtetta as _;
 
@@ -94,11 +94,34 @@ pub enum OnWktError {
     Fail,
 }
 
+/// Perche' una cella WKT non e' diventata WKB.
+///
+/// # Perche' due casi e non un codice solo
+///
+/// Perche' «questa cella e' invalida» e «non si e' potuto stabilirlo» sono
+/// affermazioni diverse. Con un codice solo la validazione OGC interrotta
+/// finirebbe contata fra le celle invalide, e l'adapter renderebbe
+/// `DataMapping`: chi legge andrebbe a correggere una riga che nessuno ha
+/// dimostrato sbagliata.
+enum CellaNonConvertita {
+    /// Difetto della cella: entra nella diagnostica row-scoped con questo
+    /// codice.
+    Invalida(&'static str),
+    /// La validazione OGC non ha concluso. Porta la **forma** del payload,
+    /// mai il contenuto.
+    NonConclusa(&'static str),
+}
+
 /// Converte una cella WKT non-null in WKB senza percorso di remediation.
-fn wkt_cell_to_wkb(value: &str) -> Result<Vec<u8>, &'static str> {
-    geometry_from_wkt(value)
-        .map_err(|_| "geometry.invalid_wkt")
-        .and_then(|geometry| encode_geometry(&geometry).map_err(|_| "geometry.encoding_failed"))
+fn wkt_cell_to_wkb(value: &str) -> Result<Vec<u8>, CellaNonConvertita> {
+    let geometry = geometry_from_wkt(value).map_err(|errore| match errore {
+        ConstructionError::ValidazioneNonConclusa(forma) => {
+            CellaNonConvertita::NonConclusa(forma)
+        }
+        _ => CellaNonConvertita::Invalida("geometry.invalid_wkt"),
+    })?;
+    encode_geometry(&geometry)
+        .map_err(|_| CellaNonConvertita::Invalida("geometry.encoding_failed"))
 }
 
 /// Adapter di colonna per `geo.from_wkt`: celle `Utf8` -> celle WKB.
@@ -137,7 +160,7 @@ pub fn from_wkt_column_named(
     // Come `map_nullable` (architettura.md#determinismo): il primo errore IN ORDINE DI RIGA e'
     // selezionato dal collect sequenziale — la riga riportata nel messaggio
     // non puo' dipendere dallo scheduling di rayon.
-    let results: Vec<Result<Option<Vec<u8>>, &'static str>> = cells
+    let results: Vec<Result<Option<Vec<u8>>, CellaNonConvertita>> = cells
         .into_par_iter()
         .map(|cell| cell.map_or_else(|| Ok(None), |value| wkt_cell_to_wkb(value).map(Some)))
         .collect();
@@ -148,7 +171,17 @@ pub fn from_wkt_column_named(
     for (row, result) in results.into_iter().enumerate() {
         match result {
             Ok(cell) => output.push(cell),
-            Err(cause) => {
+            // Una validazione che non conclude non e' una cella invalida:
+            // esce subito come difetto interno invece di essere contata fra
+            // le righe sbagliate. Il ciclo scorre in ordine di riga, quindi
+            // quale interruzione vinca non dipende dallo scheduling.
+            Err(CellaNonConvertita::NonConclusa(forma)) => {
+                return Err(PlenoraError::Internal(format!(
+                    "validazione OGC non conclusa sulla cella WKT: {forma} \
+                     (contenuto non pubblicato)"
+                )));
+            }
+            Err(CellaNonConvertita::Invalida(cause)) => {
                 observed_total = observed_total.checked_add(1).ok_or_else(|| {
                     PlenoraError::Internal("overflow del conteggio diagnostico WKT".into())
                 })?;

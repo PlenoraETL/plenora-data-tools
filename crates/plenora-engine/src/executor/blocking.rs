@@ -227,7 +227,10 @@ pub(super) fn geo_transform_batch(
         // R9.9: il trasporto allega la diagnostica row-scoped completa dei
         // fallimenti di cella (indici batch-locali); qui si preserva e il
         // wrapper di segmento la traduce in indici assoluti.
-        let base = PlenoraError::InvalidPlan(error.to_string());
+        //
+        // L'attribuzione la decide la variante, non il chiamante: un errore
+        // gia' interno sotto non diventa una colpa del piano.
+        let base = error.errore_del_passo();
         let base = match error.row_diagnostics() {
             Some(diagnostics) => base.with_row_diagnostics(diagnostics.clone()),
             None => base,
