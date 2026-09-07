@@ -1437,6 +1437,43 @@ sequenza di unità UTF-16 che può contenere surrogati spaiati — e il caso che
 verifica **ricostruisce dal documento** invece di riconfrontare col medesimo
 encoder, che direbbe soltanto che una funzione è uguale a sé stessa.
 
+### Una chiave riservata di `serde_json` non è ammessa nel JSON di controllo
+
+**La regola.** `$serde_json::private::RawValue` è rifiutata **come chiave**, a
+ogni posizione e profondità, in ogni documento JSON di controllo. Come *valore*
+stringa è testo qualunque e passa.
+
+**Perché.** `serde_json` riserva quel nome per trasportare JSON grezzo, e quando
+è la prima chiave di un oggetto non la legge come una chiave. Con un valore non
+stringa **fallisce**; con una stringa di JSON valido è peggio: **riesce**, e
+rende un documento diverso da quello scritto.
+
+```text
+{"$serde_json::private::RawValue": "{\"a\":1,\"a\":2}"}   →   {"a": 2}
+```
+
+Il testo letterale ha una chiave; il documento effettivo ne ha due uguali, già
+risolte con «vince l'ultima». È la stessa perdita della chiave duplicata portata
+all'estremo — il piano eseguito non è quello scritto — e **aggira il controllo
+dei duplicati**, perché la passata vede una chiave sola.
+
+**È una restrizione, non una correzione a costo zero.** Un documento con quella
+chiave in seconda posizione, o annidata dove nessuna riscrittura la riordina, non
+è ambiguo per nessun lettore, e viene respinto lo stesso. Si restringe perché la
+posizione non è una proprietà stabile: la canonicalizzazione riordina le chiavi e
+`$` precede ogni lettera, quindi una chiave innocua diventa la prima del testo
+canonico — ed è esattamente il percorso su cui `fuzz plan_v5_parse` ha trovato un
+canonico che il progetto stesso non rilegge.
+
+**L'escape non è una via d'uscita**: `serde_json` decodifica `\u0024`
+prima di consegnare la chiave, quindi la forma con escape è la stessa chiave e
+riceve lo stesso rifiuto.
+
+**Ambito.** `plenora_core::json::ensure_no_duplicate_keys`, cioè ogni lettore di
+JSON di controllo del progetto.
+**Condizione di rientro.** Il giorno che `serde_json` smetta di riservare quel
+nome, o offra un lettore che non lo reinterpreta.
+
 ### Il filo porta un esito solo
 
 **La regola.** Il worker manda **un** `Esito`, e l'`Esito` ha una variante sola
