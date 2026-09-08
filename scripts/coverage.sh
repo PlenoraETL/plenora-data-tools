@@ -102,7 +102,21 @@ pulizia_finale() {
 
 trap pulizia_finale EXIT
 
-docker run --rm \
+# `--init`: questo container ESEGUE la suite, e la suite ha casi che
+# pretendono che un figlio terminato venga anche RACCOLTO — leggono
+# `/proc/<pid>/comm`, e uno zombie conserva quella voce. Serve quindi un PID 1
+# che mieta gli orfani reparentati su di se'.
+#
+# Qui il PID 1 e' `bash`, non `cargo`, e con `bash` in quel ruolo il
+# fallimento NON e' stato osservato: la misura c'e' per il comando di
+# `AGENTS.md`, dove il PID 1 e' `cargo`. `--init` sta qui perche' la
+# correttezza della suite non deve dipendere da quale processo si trovi a
+# essere PID 1, non perche' un fallimento sia stato misurato in questa
+# configurazione.
+#
+# Il container di sola pulizia (`pulisci_profili`) non lo prende: non esegue
+# test, e aggiungerlo li' sarebbe rumore.
+docker run --rm --init \
   -v "$PWD:/work" \
   -v plenora-cargo:/usr/local/cargo/registry \
   -v plenora-cargo-bin:/opt/cargo-bin \

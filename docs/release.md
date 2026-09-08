@@ -67,6 +67,22 @@ aggiornamento.
 container con la stessa toolchain; le soglie sono le stesse dei due punti e se
 cambiano vanno cambiate in entrambi.
 
+**Un container che esegue la suite vuole `--init`.** Alcuni casi di
+`isolamento::figlio` pretendono che un figlio terminato venga anche
+**raccolto**, non solo ucciso: leggono `/proc/<pid>/comm`, perché un pid
+liberato può tornare in uso, e un processo **zombie** conserva quella voce. Se
+il PID 1 del container non miete gli orfani reparentati su di sé, quei casi
+vedono ancora il figlio e falliscono.
+
+Misurato per il comando pre-commit di `AGENTS.md`, dove il PID 1 è `cargo`: due
+casi falliscono senza `--init` e passano con esso, a sorgenti identici, sia
+sull'albero corrente sia sulla base. Con `bash` come PID 1 — la forma di
+`coverage.sh` — **il fallimento non è stato osservato**, e `--init` è lì per non
+far dipendere la correttezza della suite da quale processo si trovi a essere
+PID 1.
+
+Nativamente il problema non esiste: il reaper del sistema fa il suo mestiere.
+
 ## Baseline di compilazione: analisi di impatto
 
 `rust-toolchain.toml` dichiara che ogni variazione della baseline richiede una
