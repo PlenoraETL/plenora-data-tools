@@ -1561,11 +1561,28 @@ dove la distinzione moriva, e che ora la conservano:
   le celle invalide e rendeva `DataMapping`; ora esce con `Internal` invece di
   accusare una riga;
 - le due porte di `analyze` e il preflight dei piani, che scartavano l'errore
-  per dire «parametro non decodificabile» o «nodo non decodificabile».
+  per dire «parametro non decodificabile» o «nodo non decodificabile»;
+- i due percorsi della misura terminale — `measure_cells` (fuso) e
+  `geo_measure_batch` (non fuso), per `geo.area`, `geo.length`,
+  `geo.perimeter`, `geo.vertex_count`, `geo.to_wkt` — che appiattivano ogni
+  fallimento del kernel scalare in `InvalidPlan` indipendentemente dalla
+  categoria sotto, sia alla decodifica della cella sia dentro il kernel; ora
+  condividono `causa_di_riga` ed `esito_kernel`, la stessa decisione per i
+  due percorsi.
 
 La regola: **chi converte l'errore della validazione guarda la categoria di
 sotto**, e non riattribuisce a chi ha scritto l'ingresso un difetto che nessuno
 gli ha dimostrato.
+
+**Precedenza quando un batch porta più fallimenti.** Un `Internal` prevale su
+qualunque fallimento ordinario dello stesso batch e propaga **senza
+diagnostica di riga**: mescolarlo alle celle davvero invalide misattribuirebbe
+le altre come se fossero dati sbagliati, quando nessuno lo ha dimostrato. Fra
+più `Internal` nello stesso batch resta il primo in **ordine logico di riga**,
+non quello che l'esecuzione ha calcolato per primo — il percorso fuso itera in
+parallelo, quindi l'ordine di calcolo non è l'ordine di riga. La regola è
+condivisa fra trasformazione (`collect_cell_failures`) e misura
+(`collect_measure_failures`): una decisione sola, non una per percorso.
 
 **Che cosa la barriera non chiude.** Il difetto del fuzz `wkb_contract`, che
 **resta aperto**. La barriera è contenimento e sanitizzazione: vale nei processi

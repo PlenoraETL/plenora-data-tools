@@ -1624,3 +1624,70 @@ fn una_validazione_interrotta_non_e_colpa_del_piano_nei_due_percorsi() {
         signature.reason
     );
 }
+
+fn validazione_interrotta_con_misura_terminale_plan() -> Value {
+    json!({
+        "schema_version": 5,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 1.0, "y_offset": 1.0}},
+            {"id": "w", "op": "geo.to_wkt", "in": ["t"], "config": {}},
+        ],
+        "output": "w",
+    })
+}
+
+/// **Un gruppo con misura terminale attribuisce ancora correttamente un
+/// fallimento della trasformazione iniziale, quando quella trasformazione
+/// precede la misura invece di essere l'unico contenuto del gruppo.**
+///
+/// # Che cosa dimostra e che cosa no
+///
+/// L'attribuzione (nodo "t") e la causa osservata sotto (`geometry.invalid_wkb`)
+/// mostrano che il fallimento avviene alla decodifica/validazione **del nodo
+/// di trasformazione "t"** — lo stesso meccanismo gia' provato dal caso senza
+/// misura terminale sopra (`transform_cells`/`one_to_one_batch_prepared`).
+/// Il reperto e' invalido gia' come ingresso, quindi il gruppo non arriva mai
+/// a eseguire il nodo "w": la sola cosa che questo caso aggiunge e' che la
+/// presenza di una misura terminale in coda al gruppo non cambia
+/// quell'attribuzione.
+///
+/// **Non** esercita `measure_cells`/`geo_measure_batch` in alcun modo — ne'
+/// il loro ramo di decodifica ne' quello del kernel scalare (`operations::
+/// to_wkt`'s `ensure_valid`): il nodo "w" non viene mai raggiunto con questo
+/// reperto. Quei due componenti sono provati separatamente (test diretti su
+/// `misura_riga`/`measure_cells` e sulle mutazioni di raccolta), non da
+/// questo caso.
+///
+/// Le attese sono osservate eseguendo il test in entrambi i profili, non
+/// dedotte: debug conclude `Internal`/nessuna diagnostica (stessa barriera
+/// del caso di trasformazione sopra); release conclude `DataMapping` con
+/// diagnostica di riga completa e causa `geometry.invalid_wkb`.
+#[test]
+fn una_validazione_interrotta_con_misura_terminale_non_e_colpa_del_piano() {
+    let plan = validazione_interrotta_con_misura_terminale_plan();
+    let signature = assert_oracle_error(
+        "validazione-interrotta-misura",
+        &plan,
+        &validazione_interrotta_batches,
+        Some("t"),
+        Origine::RunnerFuso { gruppi: 1 },
+    );
+    if cfg!(debug_assertions) {
+        assert_eq!(signature.category, ErrorCategory::Internal);
+        assert!(signature.diagnostics.is_none());
+    } else {
+        assert_eq!(signature.category, ErrorCategory::DataMapping);
+        let diagnostics = signature
+            .diagnostics
+            .as_ref()
+            .expect("release: errore ordinario, diagnostica di riga attesa");
+        assert_eq!(
+            diagnostics.counts.get("geometry.invalid_wkb"),
+            Some(&1),
+            "causa inattesa: {:?}",
+            diagnostics.counts
+        );
+    }
+}
