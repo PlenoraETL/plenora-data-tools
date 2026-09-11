@@ -2,7 +2,6 @@
 //! until a backend with full GEOS-compatible dimensional semantics is wired.
 
 use geo::algorithm::bool_ops::unary_union;
-use geo::algorithm::validation::Validation;
 use geo::{BooleanOps, Buffer, CoordsIter, Geometry, MultiPolygon};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -51,14 +50,27 @@ pub enum TopologyError {
     },
     #[error("indice non rappresentabile come uint64")]
     IndexOverflow,
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
 
 fn as_multi_polygon(geometry: &Geometry<f64>) -> Result<MultiPolygon<f64>, TopologyError> {
     geometry
-        .check_validation()
-        .map_err(|error| TopologyError::InvalidGeometry(error.to_string()))?;
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| TopologyError::InvalidGeometry(ragione.to_string()),
+                TopologyError::ValidazioneNonConclusa,
+            )
+        })?;
     as_multi_polygon_validated(geometry)
 }
 
@@ -78,8 +90,13 @@ fn as_multi_polygon_validated(
 
 fn checked_result(result: MultiPolygon<f64>) -> Result<Geometry<f64>, TopologyError> {
     result
-        .check_validation()
-        .map_err(|error| TopologyError::InvalidGeometry(error.to_string()))?;
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| TopologyError::InvalidGeometry(ragione.to_string()),
+                TopologyError::ValidazioneNonConclusa,
+            )
+        })?;
     Ok(Geometry::MultiPolygon(result))
 }
 

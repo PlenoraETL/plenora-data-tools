@@ -16,7 +16,8 @@
 use crate::geo_transport::pair::preflight_decoded_bytes;
 use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
 use crate::geo_transport::unary::{
-    one_to_one_batch_fused, FusedStepError, FusedTerminal, FusedTerminalMeasure,
+    causa_di_riga, collect_measure_failures, esito_kernel, one_to_one_batch_fused, FusedStepError,
+    FusedTerminal, FusedTerminalMeasure,
 };
 use crate::governor::{GovernedBatch, MemoryLease, MemoryPermit, ReservationResult};
 use crate::planner::{
@@ -34,13 +35,10 @@ use plenora_core::arrow::array::{
 };
 use plenora_core::catalog::CATALOG;
 use plenora_core::contract::{BatchSequence, DataContract};
-use plenora_core::diagnostics::{
-    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
-    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
-};
+use geo::Geometry;
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
-use plenora_kernels_geo::operations;
+use plenora_kernels_geo::operations::{self, OperationError};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -227,7 +225,10 @@ pub(super) fn geo_transform_batch(
         // R9.9: il trasporto allega la diagnostica row-scoped completa dei
         // fallimenti di cella (indici batch-locali); qui si preserva e il
         // wrapper di segmento la traduce in indici assoluti.
-        let base = PlenoraError::InvalidPlan(error.to_string());
+        //
+        // L'attribuzione la decide la variante, non il chiamante: un errore
+        // gia' interno sotto non diventa una colpa del piano.
+        let base = error.errore_del_passo();
         let base = match error.row_diagnostics() {
             Some(diagnostics) => base.with_row_diagnostics(diagnostics.clone()),
             None => base,
@@ -255,171 +256,96 @@ pub(super) fn geo_measure_batch(
         .map_or("geometry", |geometry| geometry.name.as_str());
     let cells = batch_geometry_cells(batch, geometry_index, geometry_name)
         .map_err(|error| step_error(kernel, error))?;
-    // R9.9: i fallimenti per riga (decode di un intermedio non conforme o
-    // kernel scalare) sono raccolti COMPLETI prima di chiudere — stessa
-    // semantica del ramo fuso (`measure_cells`): mai il solo primo errore.
-    let mut failures: Vec<(u64, &'static str)> = Vec::new();
-    let mut first_error: Option<PlenoraError> = None;
-    let mut record = |row: usize, cause: &'static str, error: PlenoraError| {
-        failures.push((row as u64, cause));
-        if first_error.is_none() {
-            first_error = Some(error);
-        }
+    let column: std::result::Result<ArrayRef, PlenoraError> = match measure {
+        MeasureKind::Area | MeasureKind::Length | MeasureKind::Perimeter => misura_colonna(
+            batch.num_rows(),
+            |row| cells.is_null(row),
+            |row| measure_f64_raw(cells.value(row), measure),
+        )
+        .map(|values| std::sync::Arc::new(Float64Array::from(values)) as ArrayRef),
+        MeasureKind::VertexCount => misura_colonna(
+            batch.num_rows(),
+            |row| cells.is_null(row),
+            |row| misura_riga(cells.value(row), operations::vertex_count),
+        )
+        .map(|values| std::sync::Arc::new(UInt64Array::from(values)) as ArrayRef),
+        MeasureKind::ToWkt => misura_colonna(
+            batch.num_rows(),
+            |row| cells.is_null(row),
+            |row| misura_riga(cells.value(row), operations::to_wkt),
+        )
+        .map(|values| std::sync::Arc::new(StringArray::from(values)) as ArrayRef),
     };
-    let column: ArrayRef = match measure {
-        MeasureKind::Area | MeasureKind::Length | MeasureKind::Perimeter => {
-            let mut values: Vec<Option<f64>> = Vec::with_capacity(batch.num_rows());
-            for row in 0..batch.num_rows() {
-                if cells.is_null(row) {
-                    values.push(None);
-                    continue;
-                }
-                match measure_f64_raw(cells.value(row), measure) {
-                    Ok(value) => values.push(Some(value)),
-                    Err((cause, error)) => {
-                        record(row, cause, error);
-                        values.push(None);
-                    }
-                }
-            }
-            std::sync::Arc::new(Float64Array::from(values))
-        }
-        MeasureKind::VertexCount => {
-            let mut values: Vec<Option<u64>> = Vec::with_capacity(batch.num_rows());
-            for row in 0..batch.num_rows() {
-                if cells.is_null(row) {
-                    values.push(None);
-                    continue;
-                }
-                let decoded = decode_geometry_cell(cells.value(row))
-                    .map_err(|error| ("geometry.invalid_wkb", error))
-                    .and_then(|geometry| {
-                        operations::vertex_count(&geometry).map_err(|error| {
-                            (
-                                "geometry.kernel_failed",
-                                PlenoraError::InvalidPlan(error.to_string()),
-                            )
-                        })
-                    });
-                match decoded {
-                    Ok(value) => values.push(Some(value)),
-                    Err((cause, error)) => {
-                        record(row, cause, error);
-                        values.push(None);
-                    }
-                }
-            }
-            std::sync::Arc::new(UInt64Array::from(values))
-        }
-        MeasureKind::ToWkt => {
-            let mut values: Vec<Option<String>> = Vec::with_capacity(batch.num_rows());
-            for row in 0..batch.num_rows() {
-                if cells.is_null(row) {
-                    values.push(None);
-                    continue;
-                }
-                let decoded = decode_geometry_cell(cells.value(row))
-                    .map_err(|error| ("geometry.invalid_wkb", error))
-                    .and_then(|geometry| {
-                        operations::to_wkt(&geometry).map_err(|error| {
-                            (
-                                "geometry.kernel_failed",
-                                PlenoraError::InvalidPlan(error.to_string()),
-                            )
-                        })
-                    });
-                match decoded {
-                    Ok(value) => values.push(Some(value)),
-                    Err((cause, error)) => {
-                        record(row, cause, error);
-                        values.push(None);
-                    }
-                }
-            }
-            std::sync::Arc::new(StringArray::from(values))
-        }
-    };
-    if let Some(first) = first_error {
-        return Err(step_error(
-            kernel,
-            first.with_row_diagnostics(measure_row_diagnostics(&failures)),
-        ));
-    }
+    let column = column.map_err(|error| step_error(kernel, error))?;
     // Lo schema di output e' quello del contratto (input + colonna misura),
     // un clone di Arc condiviso: nessuna ricostruzione per batch (Arrow come rappresentazione unica),
     // stesso percorso degli altri kernel add-column.
     append_output_column(kernel, batch, column)
 }
 
-/// Misura scalare su una cella (null gia' gestito dal chiamante): errore
-/// grezzo con la causa row-scoped, nella forma del ramo fuso.
-pub(super) fn measure_f64_raw(
-    payload: &[u8],
-    measure: MeasureKind,
-) -> std::result::Result<f64, (&'static str, PlenoraError)> {
-    let geometry =
-        decode_geometry_cell(payload).map_err(|error| ("geometry.invalid_wkb", error))?;
-    match measure {
-        MeasureKind::Area => operations::area(&geometry),
-        MeasureKind::Length => operations::length(&geometry),
-        MeasureKind::Perimeter => operations::perimeter(&geometry),
-        MeasureKind::VertexCount | MeasureKind::ToWkt => {
-            return Err((
-                "geometry.kernel_failed",
-                PlenoraError::Internal(
-                    "misura non f64 nel percorso scalare f64: invariante di dispatch violata"
-                        .into(),
-                ),
-            ));
+/// Applica un kernel di riga a tutte le celle del batch (le nulle passano
+/// come `None`), raccogliendo i fallimenti COMPLETI prima di chiudere —
+/// stessa semantica del ramo fuso (`measure_cells`): mai il solo primo
+/// errore. Chiude con [`collect_measure_failures`], **condivisa** col ramo
+/// fuso invece di duplicata: precedenza (un'interruzione vince su qualunque
+/// ordinario e propaga bare, senza diagnostica) e raccolta sono la stessa
+/// funzione sui due percorsi, non due copie da tenere allineate a mano.
+fn misura_colonna<T>(
+    num_rows: usize,
+    is_null: impl Fn(usize) -> bool,
+    per_row: impl Fn(usize) -> std::result::Result<T, (Option<&'static str>, PlenoraError)>,
+) -> std::result::Result<Vec<Option<T>>, PlenoraError> {
+    let mut failures = Vec::new();
+    let mut values = Vec::with_capacity(num_rows);
+    for row in 0..num_rows {
+        if is_null(row) {
+            values.push(None);
+            continue;
+        }
+        match per_row(row) {
+            Ok(value) => values.push(Some(value)),
+            Err((cause, error)) => {
+                failures.push((row as u64, cause, error));
+                values.push(None);
+            }
         }
     }
-    .map_err(|error| {
-        (
-            "geometry.kernel_failed",
-            PlenoraError::InvalidPlan(error.to_string()),
-        )
+    if failures.is_empty() {
+        return Ok(values);
+    }
+    Err(collect_measure_failures(failures))
+}
+
+/// Decodifica una cella e applica un kernel scalare, con la stessa
+/// classificazione di causa del ramo fuso (`measure_cells`): `None` per una
+/// validazione interrotta, sia alla decodifica sia dentro il kernel — mai
+/// attribuibile alla riga, indipendentemente dal sito.
+fn misura_riga<T>(
+    payload: &[u8],
+    kernel: impl FnOnce(&Geometry<f64>) -> std::result::Result<T, OperationError>,
+) -> std::result::Result<T, (Option<&'static str>, PlenoraError)> {
+    let geometry = decode_geometry_cell(payload)
+        .map_err(|error| (causa_di_riga(&error, "geometry.invalid_wkb"), error))?;
+    kernel(&geometry).map_err(|error| {
+        let error = esito_kernel(error);
+        (causa_di_riga(&error, "geometry.kernel_failed"), error)
     })
 }
 
-/// Report `plenora-row-diagnostics-v1` completo (batch-locale) per i
-/// fallimenti per riga di una misura geo: stessa forma del ramo fuso e del
-/// trasporto (scope Read, esempi bounded, nessun valore).
-pub(super) fn measure_row_diagnostics(rows: &[(u64, &'static str)]) -> RowDiagnostics {
-    const EXAMPLES_LIMIT: u64 = 10;
-    let mut by_row = std::collections::BTreeMap::new();
-    for (row, cause) in rows {
-        by_row.entry(*row).or_insert(*cause);
-    }
-    let observed_total = by_row.len() as u64;
-    let mut counts = std::collections::BTreeMap::new();
-    let mut examples = Vec::new();
-    for (row, cause) in &by_row {
-        *counts.entry((*cause).to_owned()).or_insert(0_u64) += 1;
-        if u64::try_from(examples.len()).unwrap_or(u64::MAX) < EXAMPLES_LIMIT {
-            examples.push(RowDiagnosticExample {
-                source_index: *row,
-                cause: (*cause).to_owned(),
-                column: None,
-                key: None,
-                write_state: None,
-            });
+pub(super) fn measure_f64_raw(
+    payload: &[u8],
+    measure: MeasureKind,
+) -> std::result::Result<f64, (Option<&'static str>, PlenoraError)> {
+    match measure {
+        MeasureKind::Area => misura_riga(payload, operations::area),
+        MeasureKind::Length => misura_riga(payload, operations::length),
+        MeasureKind::Perimeter => misura_riga(payload, operations::perimeter),
+        MeasureKind::VertexCount | MeasureKind::ToWkt => {
+            let error = PlenoraError::Internal(
+                "misura non f64 nel percorso scalare f64: invariante di dispatch violata".into(),
+            );
+            Err((causa_di_riga(&error, "geometry.kernel_failed"), error))
         }
-    }
-    RowDiagnostics {
-        contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
-        scope: RowDiagnosticScope::Read,
-        index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
-        completeness: RowDiagnosticsCompleteness::Complete,
-        knowledge_limits: None,
-        observed_total,
-        total: Some(observed_total),
-        input_total: None,
-        counts,
-        examples_limit: EXAMPLES_LIMIT,
-        examples_truncated: observed_total > EXAMPLES_LIMIT,
-        examples,
-        diagnostic_state_counts: None,
-        write_outcome: None,
     }
 }
 
@@ -697,4 +623,189 @@ pub(super) fn run_binary_blocking(
         Some(output_lease),
         Some(blocking_output_sequence(kernel)),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use geo::Point;
+    use geozero::{CoordDimensions, ToWkb};
+
+    fn wkb_valido() -> Vec<u8> {
+        Geometry::Point(Point::new(1.0, 2.0))
+            .to_wkb(CoordDimensions::xy())
+            .expect("fixture wkb")
+    }
+
+    /// **Prova del componente `misura_riga`**: non della raccolta
+    /// (`misura_colonna`/`collect_measure_failures`), non dell'executor —
+    /// una sola cella, un solo kernel sintetico.
+    ///
+    /// WKB ordinario e valido: la decodifica riesce, il kernel sintetico e'
+    /// l'unico a fallire. Restituisce direttamente
+    /// `OperationError::ValidazioneNonConclusa`: nessun panico qui, la
+    /// barriera e la sua conversione sono provate separatamente (prove
+    /// 1/2/3 sul contenimento, tuttora in parte da progettare).
+    #[test]
+    fn misura_riga_valida_non_conclusa_diventa_internal_senza_causa() {
+        let payload = wkb_valido();
+        let risultato =
+            misura_riga(&payload, |_g| -> std::result::Result<String, OperationError> {
+                Err(OperationError::ValidazioneNonConclusa("prova"))
+            });
+        let Err((cause, error)) = risultato else {
+            panic!("atteso un fallimento")
+        };
+        assert_eq!(
+            cause, None,
+            "una validazione interrotta non e' attribuibile alla riga"
+        );
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert_eq!(
+            error.to_string(),
+            "internal error: validazione OGC non conclusa: prova (contenuto non pubblicato)"
+        );
+    }
+
+    /// Prova del componente: un fallimento ordinario del kernel resta nella
+    /// forma di prima della correzione — categoria e testo invariati,
+    /// causa `geometry.kernel_failed`. Non e' cambiato da questa
+    /// correzione, ed e' il caso che dimostra che non lo e'.
+    #[test]
+    fn misura_riga_errore_ordinario_resta_invalidplan_con_causa_kernel() {
+        let payload = wkb_valido();
+        let risultato =
+            misura_riga(&payload, |_g| -> std::result::Result<String, OperationError> {
+                Err(OperationError::InvalidInput(
+                    "anello con auto-intersezione".to_owned(),
+                ))
+            });
+        let Err((cause, error)) = risultato else {
+            panic!("atteso un fallimento")
+        };
+        assert_eq!(cause, Some("geometry.kernel_failed"));
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(
+            error.to_string(),
+            "contract violation: geometria di input non valida: anello con auto-intersezione"
+        );
+    }
+
+    /// Prova del componente: se la decodifica fallisce, il kernel non deve
+    /// mai essere invocato — verificato per fatto osservato (un contatore),
+    /// non per assunzione sul cortocircuito di `?`.
+    #[test]
+    fn misura_riga_errore_di_decodifica_non_invoca_il_kernel() {
+        let chiamato = std::cell::Cell::new(false);
+        let risultato = misura_riga(
+            b"non e' un wkb valido",
+            |_g| -> std::result::Result<String, OperationError> {
+                chiamato.set(true);
+                Ok("non deve arrivare qui".to_owned())
+            },
+        );
+        assert!(
+            !chiamato.get(),
+            "il kernel non deve essere invocato se la decodifica fallisce"
+        );
+        let Err((cause, error)) = risultato else {
+            panic!("atteso un fallimento di decodifica")
+        };
+        assert_eq!(
+            cause,
+            Some("geometry.invalid_wkb"),
+            "un errore di decodifica ordinario resta attribuibile alla riga"
+        );
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+    }
+
+    // Prove di `misura_colonna`: la precedenza nella raccolta non fusa va
+    // sorvegliata qui, con gli stessi scenari misti gia' usati per
+    // `measure_cells` sul percorso fuso — un test su `misura_riga` non
+    // attraversa `collect_measure_failures`, e questi si'. La selezione
+    // della riga qui e' per indice esplicito (parametro di `per_row`), non
+    // per identita' di indirizzo: `misura_colonna` non manipola geometrie,
+    // solo indici di riga. La raccolta e' condivisa col percorso fuso
+    // (`collect_measure_failures`): una divergenza tra le due la vedrebbero
+    // entrambe le batterie di test, non una sola.
+
+    /// Un fallimento ordinario a riga 0, uno interrotto a riga 1: vince
+    /// comunque l'interruzione.
+    #[test]
+    fn misura_colonna_ordinario_poi_interrotta_non_vince_l_ordinario() {
+        let risultato = misura_colonna::<()>(2, |_row| false, |row| {
+            if row == 0 {
+                Err((
+                    Some("geometry.kernel_failed"),
+                    PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
+                ))
+            } else {
+                Err((None, PlenoraError::Internal("prova".to_owned())))
+            }
+        });
+        let error = risultato.expect_err("deve fallire");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert!(error.row_diagnostics().is_none());
+    }
+
+    /// Meta' simmetrica: interrotto a riga 0, ordinario a riga 1 — stesso
+    /// esito, per escludere una dipendenza dall'ordine di riga.
+    #[test]
+    fn misura_colonna_interrotta_poi_ordinario_non_vince_l_ordinario() {
+        let risultato = misura_colonna::<()>(2, |_row| false, |row| {
+            if row == 0 {
+                Err((None, PlenoraError::Internal("prova".to_owned())))
+            } else {
+                Err((
+                    Some("geometry.kernel_failed"),
+                    PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
+                ))
+            }
+        });
+        let error = risultato.expect_err("deve fallire");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert!(error.row_diagnostics().is_none());
+    }
+
+    /// Due interruzioni distinguibili: vince quella di riga minore.
+    #[test]
+    fn misura_colonna_due_interruzioni_sceglie_quella_in_ordine_logico_minore() {
+        let risultato = misura_colonna::<()>(2, |_row| false, |row| {
+            Err((
+                None,
+                PlenoraError::Internal(format!("marcatore-riga-{row}")),
+            ))
+        });
+        let error = risultato.expect_err("deve fallire");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert!(error.row_diagnostics().is_none());
+        let testo = error.to_string();
+        assert!(testo.contains("marcatore-riga-0"), "trovato: {testo}");
+        assert!(!testo.contains("marcatore-riga-1"), "trovato: {testo}");
+    }
+
+    /// Soli errori ordinari: diagnostica di riga completa e ordinata,
+    /// comportamento invariato rispetto a prima della correzione.
+    #[test]
+    fn misura_colonna_soli_errori_ordinari_mantiene_diagnostica_completa_e_ordinata() {
+        let risultato = misura_colonna::<()>(3, |row| row == 0, |_row| {
+            Err((
+                Some("geometry.kernel_failed"),
+                PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
+            ))
+        });
+        let error = risultato.expect_err("deve fallire");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        let diagnostics = error
+            .row_diagnostics()
+            .expect("errore ordinario, diagnostica di riga attesa");
+        assert_eq!(diagnostics.observed_total, 2);
+        assert_eq!(diagnostics.counts.get("geometry.kernel_failed"), Some(&2));
+        let indici: Vec<u64> = diagnostics
+            .examples
+            .iter()
+            .map(|esempio| esempio.source_index)
+            .collect();
+        assert_eq!(indici, vec![1, 2]);
+    }
 }

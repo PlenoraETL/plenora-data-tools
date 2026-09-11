@@ -1,8 +1,8 @@
 //! Pure geometry kernels shared by future transport adapters.
 
+use crate::ValidazioneProtetta as _;
 use geo::algorithm::buffer::{BufferStyle, LineCap};
 use geo::algorithm::line_measures::{Distance, Euclidean, Length};
-use geo::algorithm::validation::Validation;
 use geo::{
     Area, BoundingRect, Buffer, Coord, CoordsIter, Geometry, InteriorPoint, LineString, MapCoords,
     MultiLineString, MultiPoint, Simplify, SimplifyVwPreserve,
@@ -40,18 +40,35 @@ pub enum OperationError {
     /// Invariante interna violata (R6: errore propagato, mai panic).
     #[error("internal error: {0}")]
     Internal(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), OperationError> {
     geometry
-        .check_validation()
-        .map_err(|error| OperationError::InvalidInput(error.to_string()))
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| OperationError::InvalidInput(ragione.to_string()),
+                OperationError::ValidazioneNonConclusa,
+            )
+        })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, OperationError> {
     geometry
-        .check_validation()
-        .map_err(|error| OperationError::InvalidOutput(error.to_string()))?;
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| OperationError::InvalidOutput(ragione.to_string()),
+                OperationError::ValidazioneNonConclusa,
+            )
+        })?;
     Ok(geometry)
 }
 
@@ -619,7 +636,7 @@ mod tests {
 
         let preserved =
             simplify_with_policy(&rectangle(), 0.5, SimplifyPolicy::PreserveTopology).unwrap();
-        assert!(preserved.check_validation().is_ok());
+        assert!(preserved.validazione_protetta().is_ok());
     }
 
     #[test]
@@ -635,7 +652,7 @@ mod tests {
                 SimplifyPolicy::PreserveTopology,
             ] {
                 let output = simplify_with_policy(&line, tolerance, policy).unwrap();
-                assert!(output.check_validation().is_ok());
+                assert!(output.validazione_protetta().is_ok());
                 assert!(output
                     .coords_iter()
                     .all(|coordinate| coordinate.x.is_finite() && coordinate.y.is_finite()));
@@ -699,7 +716,7 @@ mod tests {
         ];
         for value in &values {
             assert!(length(value).unwrap().is_finite());
-            assert!(boundary(value).unwrap().check_validation().is_ok());
+            assert!(boundary(value).unwrap().validazione_protetta().is_ok());
             assert!(!explode(value).unwrap().is_empty());
             for policy in [
                 SimplifyPolicy::DouglasPeucker,
@@ -707,7 +724,7 @@ mod tests {
             ] {
                 assert!(simplify_with_policy(value, 0.01, policy)
                     .unwrap()
-                    .check_validation()
+                    .validazione_protetta()
                     .is_ok());
             }
         }

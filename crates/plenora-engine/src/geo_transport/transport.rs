@@ -300,6 +300,53 @@ mod tests {
         (schema, batches.into_iter().next().expect("batch"), index)
     }
 
+
+    /// Il reperto del 5 settembre 2026: fa panicare la validazione OGC di
+    /// `geo` dove le asserzioni di debug sono attive.
+    const REPERTO_VALIDAZIONE: &[u8] = &    [
+        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
+        1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
+        116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
+        0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
+        255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
+        0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    /// **Una validazione che non conclude non diventa colpa del piano.**
+    ///
+    /// E' il percorso non fuso, per intero: cella WKB -> trasporto -> errore.
+    /// La porta rende `Internal`, e senza la variante dedicata quell'errore
+    /// cadrebbe nel ramo generico come `Arrow`, per poi essere riscritto
+    /// `InvalidPlan` dal passo dell'executor. Il caso pretende che
+    /// l'attribuzione resti nostra.
+    ///
+    /// L'attesa dipende dal profilo perche' il panico di `geo` e' un
+    /// `debug_assert!`: senza, la geometria e' giudicata e invalida davvero.
+    #[test]
+    fn una_validazione_interrotta_non_diventa_colpa_del_piano() {
+        let (schema, batch) = fixture_batch(&[Some(REPERTO_VALIDAZIONE)]);
+        let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
+        let errore = run(&arrow_schema(1, ArrowOperation::Centroid), &input)
+            .expect_err("il reperto non attraversa il trasporto");
+        let attesa = if cfg!(debug_assertions) {
+            assert!(
+                matches!(errore, ArrowTransportError::Interno(_)),
+                "la validazione interrotta deve restare interna nel trasporto: {errore:?}"
+            );
+            plenora_core::ErrorCategory::Internal
+        } else {
+            plenora_core::ErrorCategory::InvalidPlan
+        };
+        assert_eq!(
+            errore.errore_del_passo().category(),
+            attesa,
+            "attribuzione inattesa per questo profilo — {errore}"
+        );
+    }
+
     #[test]
     fn geometry_roundtrip_preserves_nulls_attributes_and_crs_metadata() {
         let square = square_wkb(4.0);

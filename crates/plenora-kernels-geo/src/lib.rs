@@ -56,7 +56,6 @@ pub mod spatial_join;
 pub mod topology;
 pub mod wkb_decoder;
 
-use geo::algorithm::validation::Validation;
 use geo::{
     BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,
 };
@@ -138,6 +137,202 @@ fn invalid_geometry(error: impl std::fmt::Display) -> PlenoraError {
     PlenoraError::InvalidPlan(format!("geometria OGC non valida: {error}"))
 }
 
+/// Validazione OGC di una geometria, **dietro una barriera**.
+///
+/// # Errors
+///
+/// [`PlenoraError::InvalidPlan`] se la geometria non e' valida secondo OGC;
+/// [`PlenoraError::Internal`] se la validazione **non conclude**. I due casi
+/// non si confondono: nel secondo nessuno ha dimostrato che l'ingresso sia
+/// invalido, e dire «piano invalido» manderebbe chi legge a correggere un
+/// errore che non ha commesso. E' la stessa distinzione, e la stessa ragione,
+/// del panico di un kernel nell'executor.
+pub(crate) fn valida_ogc<G>(geometria: &G) -> Result<(), PlenoraError>
+where
+    G: geo::algorithm::validation::Validation,
+    G::Error: std::fmt::Display,
+{
+    match geometria.validazione_protetta() {
+        Ok(()) => Ok(()),
+        Err(EsitoValidazione::NonValida(ragione)) => Err(invalid_geometry(ragione)),
+        Err(esito @ EsitoValidazione::NonConclusa(_)) => {
+            Err(PlenoraError::Internal(esito.to_string()))
+        }
+    }
+}
+
+/// Perche' una geometria non e' utilizzabile, in **vocabolario nostro**.
+///
+/// # Perche' non si riporta il testo di `geo`
+///
+/// Perche' quei messaggi interpolano gli **indici** dell'ingresso — «geometry
+/// at index N», «polygons at indices N and M», «coordinate at index N» — che
+/// sono fatti sui dati di chi chiama. E' la stessa regola gia' applicata agli
+/// errori di arrow, GEOS e PROJ: il testo della dipendenza non attraversa il
+/// confine.
+///
+/// Il testo di `geo` si **legge** per classificare, e non si **pubblica**: ne
+/// esce sempre e solo una di queste voci. Una forma che non si riconosce cade
+/// su [`Self::NonSpecificata`], che dice quel che sa senza inventare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RagioneNonValida {
+    /// Una coordinata non finita: NaN o infinito.
+    CoordinataNonFinita,
+    /// Meno punti distinti di quanti la forma ne richieda.
+    PuntiDistintiInsufficienti,
+    /// Un anello che interseca se stesso.
+    AutoIntersezione,
+    /// Due anelli che si intersecano su una linea o su un'area.
+    AnelliIntersecanti,
+    /// Un anello interno che esce dal proprio esterno.
+    AnelloInternoFuori,
+    /// Due poligoni di una multi-geometria che si sovrappongono.
+    PoligoniSovrapposti,
+    /// Non valida, in una forma che questa classificazione non distingue.
+    NonSpecificata,
+}
+
+impl RagioneNonValida {
+    /// Classifica leggendo il testo della dipendenza, senza propagarlo.
+    fn dal_testo(testo: &str) -> Self {
+        // L'ordine conta solo dove due forme potrebbero comparire insieme;
+        // le voci sono disgiunte nel vocabolario di `geo`.
+        if testo.contains("non-finite") || testo.contains("non finite") {
+            Self::CoordinataNonFinita
+        } else if testo.contains("distinct points") {
+            Self::PuntiDistintiInsufficienti
+        } else if testo.contains("self-intersection") {
+            Self::AutoIntersezione
+        } else if testo.contains("intersect on") {
+            Self::AnelliIntersecanti
+        } else if testo.contains("not contained within") {
+            Self::AnelloInternoFuori
+        } else if testo.contains("overlap") {
+            Self::PoligoniSovrapposti
+        } else {
+            Self::NonSpecificata
+        }
+    }
+}
+
+impl std::fmt::Display for RagioneNonValida {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::CoordinataNonFinita => "coordinata non finita",
+            Self::PuntiDistintiInsufficienti => "punti distinti insufficienti",
+            Self::AutoIntersezione => "anello con auto-intersezione",
+            Self::AnelliIntersecanti => "anelli che si intersecano",
+            Self::AnelloInternoFuori => "anello interno fuori dal proprio esterno",
+            Self::PoligoniSovrapposti => "poligoni sovrapposti",
+            Self::NonSpecificata => "forma non valida non ulteriormente distinta",
+        })
+    }
+}
+
+/// Come e' andata una validazione **protetta**: due esiti che non si
+/// confondono.
+///
+/// # Perche' non basta un testo comune
+///
+/// Perche' «la geometria e' invalida» e «la validazione non ha concluso» sono
+/// affermazioni diverse, e la seconda non implica la prima: un validatore
+/// interrotto non ha dimostrato niente sull'ingresso. Un tipo solo per i due
+/// casi costringerebbe chi classifica a indovinare, e chi indovina sbaglia
+/// verso `InvalidPlan` — cioe' verso l'accusa a chi ha scritto l'ingresso.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EsitoValidazione {
+    /// La validazione ha concluso: la geometria non e' valida.
+    NonValida(RagioneNonValida),
+    /// La validazione non ha concluso, e questa e' la forma del payload.
+    NonConclusa(&'static str),
+}
+
+impl std::fmt::Display for EsitoValidazione {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonValida(ragione) => write!(f, "{ragione}"),
+            Self::NonConclusa(forma) => {
+                write!(f, "la validazione non ha potuto concludere: {forma}")
+            }
+        }
+    }
+}
+
+impl EsitoValidazione {
+    /// Separa i due casi verso l'errore del chiamante.
+    ///
+    /// # Perche' un metodo e non `to_string()`
+    ///
+    /// Perche' `to_string()` fa collassare i due casi in un testo, e il testo
+    /// finisce in qualunque variante il chiamante abbia sottomano — di solito
+    /// una che dice «ingresso non valido». Cosi' la distinzione muore *dopo*
+    /// il tipo che esiste per farla vivere. Qui i due rami sono due argomenti:
+    /// chi converte deve dire che cosa fa in entrambi, e il compilatore non
+    /// lascia dimenticarne uno.
+    pub(crate) fn separa<E>(
+        self,
+        invalida: impl FnOnce(RagioneNonValida) -> E,
+        interrotta: impl FnOnce(&'static str) -> E,
+    ) -> E {
+        match self {
+            Self::NonValida(ragione) => invalida(ragione),
+            Self::NonConclusa(forma) => interrotta(forma),
+        }
+    }
+}
+
+/// La validazione OGC, dietro la barriera, per chi ha un errore proprio.
+///
+/// # Perche' un tratto e non una funzione libera
+///
+/// Perche' i siti che validano sono decine e ognuno mappa il guasto sul
+/// **proprio** tipo d'errore — `AdvancedError`, `ClusterError`,
+/// `ExtensionError` e gli altri. Un tratto con lo stesso nome del metodo che
+/// sostituisce lascia intatta ogni mappatura: al sito cambia una parola.
+pub(crate) trait ValidazioneProtetta {
+    /// Come `check_validation`, ma **non va in panico**.
+    ///
+    /// # Errors
+    ///
+    /// [`EsitoValidazione`], che tiene distinti «non valida» e «non conclusa».
+    fn validazione_protetta(&self) -> std::result::Result<(), EsitoValidazione>;
+}
+
+impl<G> ValidazioneProtetta for G
+where
+    G: geo::algorithm::validation::Validation,
+    G::Error: std::fmt::Display,
+{
+    fn validazione_protetta(&self) -> std::result::Result<(), EsitoValidazione> {
+        // `check_validation` di `geo` puo' andare in panico invece di rendere
+        // un errore: la sua `relate` costruisce un grafo topologico in virgola
+        // mobile e chiama `panic!` quando due conclusioni sullo stesso punto si
+        // contraddicono. Il messaggio stesso dice «this can happen with invalid
+        // geometries» — cioe' proprio con l'ingresso ostile che questo crate
+        // riceve per mestiere.
+        let esito =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.check_validation()));
+        match esito {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(causa)) => Err(EsitoValidazione::NonValida(RagioneNonValida::dal_testo(
+                &causa.to_string(),
+            ))),
+            // Il payload di `geo` porta le **coordinate** che hanno provocato
+            // la contraddizione, cioe' dati dell'ingresso. Si pubblica la forma
+            // del payload, non il contenuto: e' la stessa nozione condivisa che
+            // usano le altre barriere del progetto.
+            //
+            // La barriera da sola non basta a mantenere la promessa: l'hook di
+            // panico di `std` stampa il payload PRIMA che `catch_unwind` lo
+            // veda. Chi ospita questo crate deve installare la politica
+            // sanitizzata di `plenora_core::panic_policy`.
+            Err(payload) => Err(EsitoValidazione::NonConclusa(
+                plenora_core::panic_policy::forma_payload(&*payload),
+            )),
+        }
+    }
+}
+
 pub const MAX_WKB_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_WKB_COMPONENTS: u64 = 100_000;
 /// Profondita' massima di annidamento (multi-geometrie) di default.
@@ -171,9 +366,7 @@ const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 /// dimensioni Z/M o SRID non preservabili nel protocollo 2D.
 pub fn geometry_from_wkb(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
     let geometry = wkb_decoder::decode_validated(payload)?;
-    geometry
-        .check_validation()
-        .map_err(|error| invalid_geometry(error.to_string()))?;
+    valida_ogc(&geometry)?;
     Ok(geometry)
 }
 
@@ -759,9 +952,7 @@ pub fn transform_geometry(
     operation: Operation,
     geometry: &Geometry<f64>,
 ) -> Result<Geometry<f64>, PlenoraError> {
-    geometry
-        .check_validation()
-        .map_err(|error| invalid_geometry(error.to_string()))?;
+    valida_ogc(geometry)?;
     transform_geometry_validated(operation, geometry)
 }
 
@@ -777,9 +968,7 @@ fn transform_geometry_validated(
         Operation::ConvexHull => Ok(robust_convex_hull(geometry)),
         Operation::Envelope => envelope(geometry),
     }?;
-    output
-        .check_validation()
-        .map_err(|error| invalid_geometry(error.to_string()))?;
+    valida_ogc(&output)?;
     Ok(output)
 }
 
@@ -816,9 +1005,7 @@ pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, Pl
 ///
 /// `PlenoraError::InvalidPlan` se la geometria non supera la validazione OGC.
 pub fn check_geometry_valid(geometry: &Geometry<f64>) -> Result<(), PlenoraError> {
-    geometry
-        .check_validation()
-        .map_err(|error| invalid_geometry(error.to_string()))
+    valida_ogc(geometry)
 }
 
 /// Pipeline di [`transform_wkb`] su una geometria gia' decodificata
@@ -1008,7 +1195,7 @@ mod tests {
             (-5.486_124_068_793_689e303, 7.064_166_183_585_296e-304),
         ]));
         let hull = transform_geometry(Operation::ConvexHull, &input).unwrap();
-        assert!(hull.check_validation().is_ok());
+        assert!(hull.validazione_protetta().is_ok());
         assert!(hull
             .coords_iter()
             .all(|coordinate| coordinate.x.is_finite() && coordinate.y.is_finite()));
@@ -1586,7 +1773,7 @@ mod tests {
             payload in proptest::collection::vec(any::<u8>(), 0..4096)
         ) {
             if let Ok(geometry) = geometry_from_wkb(&payload) {
-                prop_assert!(geometry.check_validation().is_ok());
+                prop_assert!(geometry.validazione_protetta().is_ok());
                 for operation in Operation::ALL {
                     if let Ok(output) = transform_wkb(operation, &payload) {
                         prop_assert!(geometry_from_wkb(&output).is_ok());
@@ -1607,7 +1794,7 @@ mod tests {
             let position = index % payload.len();
             payload[position] = replacement;
             if let Ok(geometry) = geometry_from_wkb(&payload) {
-                prop_assert!(geometry.check_validation().is_ok());
+                prop_assert!(geometry.validazione_protetta().is_ok());
                 let encoded = geometry.to_wkb(CoordDimensions::xy()).unwrap();
                 prop_assert!(validate_wkb_contract(&encoded).is_ok());
             }

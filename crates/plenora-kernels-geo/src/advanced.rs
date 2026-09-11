@@ -1,6 +1,5 @@
 //! Advanced pure-Rust kernels whose output cardinality differs from the input.
 
-use geo::algorithm::validation::Validation;
 use geo::{BoundingRect, Geometry, Intersects, MultiPoint, Point, Rect, Voronoi};
 use thiserror::Error;
 
@@ -25,9 +24,17 @@ pub enum AdvancedError {
     UnmatchedPoint(usize),
     #[error("cella Voronoi non valida: {0}")]
     InvalidOutput(String),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
 
 /// One bounded Voronoi polygon for every input point, retaining input order.
 ///
@@ -67,10 +74,15 @@ pub fn voronoi_cells(
         .enumerate()
         .map(|(index, geometry)| {
             geometry
-                .check_validation()
-                .map_err(|error| AdvancedError::InvalidPoint {
-                    index,
-                    reason: error.to_string(),
+                .validazione_protetta()
+                .map_err(|esito| {
+                    esito.separa(
+                        |ragione| AdvancedError::InvalidPoint {
+                            index,
+                            reason: ragione.to_string(),
+                        },
+                        AdvancedError::ValidazioneNonConclusa,
+                    )
                 })?;
             match geometry {
                 Geometry::Point(point) => Ok(*point),
@@ -86,8 +98,13 @@ pub fn voronoi_cells(
         .voronoi_cells()
         .map_err(|error| AdvancedError::Voronoi(error.to_string()))?;
     for cell in &cells {
-        cell.check_validation()
-            .map_err(|error| AdvancedError::InvalidOutput(error.to_string()))?;
+        cell.validazione_protetta()
+            .map_err(|esito| {
+            esito.separa(
+                |ragione| AdvancedError::InvalidOutput(ragione.to_string()),
+                AdvancedError::ValidazioneNonConclusa,
+            )
+        })?;
     }
 
     // Pre-filtro per bounding rect: il bounding rect di una cella copre per

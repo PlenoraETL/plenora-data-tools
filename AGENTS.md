@@ -27,8 +27,17 @@ agente — segue queste regole. Non sono opzionali.
 6. **Nessun `unsafe`** nel workspace (lint attivo). Nessuna dipendenza nuova
    senza motivazione documentata; pin esatti delle versioni.
 7. **Suite completa prima del commit**: `cargo test --workspace
-   --no-fail-fast` (container `rust:1.98`). CI su Linux+Windows deve restare
-   verde.
+   --no-fail-fast` (container `rust:1.98`, **con `--init`**). CI su
+   Linux+Windows deve restare verde.
+
+   `--init` non è un dettaglio: i test di `isolamento::figlio` verificano che
+   un figlio terminato non resti, e lo fanno leggendo `/proc/<pid>/comm`
+   perché un pid libero può tornare in uso. Un processo **zombie** conserva
+   quella voce, quindi il controllo lo vede ancora. Senza `--init` il PID 1
+   del container è `cargo`, che non miete gli orfani reparentati su di sé, e
+   due casi falliscono con «il figlio N è sopravvissuto». Con `--init` il
+   PID 1 è un reaper e la voce sparisce. È una dipendenza dall'ambiente, non
+   un difetto del codice: la stessa suite passa nativamente.
 8. **Errori senza dati.** Mai valori di righe/colonne nei messaggi di errore
    (regola di `plenora-core/src/error.rs`), neanche in modalità diagnostica.
 
@@ -66,7 +75,9 @@ questo elenco: se i due divergono, ha ragione lo script.
 
 ```sh
 # test completi (container, toolchain del progetto)
-docker run --rm -v $PWD:/work -w /work rust:1.98 cargo test --workspace --no-fail-fast
+# `--init`: senza, il PID 1 e' `cargo` e non miete gli orfani; i test di
+# `isolamento::figlio` leggono /proc/<pid>/comm e uno zombie li fa fallire.
+docker run --rm --init -v $PWD:/work -w /work rust:1.98 cargo test --workspace --no-fail-fast
 # gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nel
 # codice di produzione — lib di tutti i crate + bin della CLI.
 # MAI aggiungere --cap-lints=warn: cappera' anche i -D espliciti (li

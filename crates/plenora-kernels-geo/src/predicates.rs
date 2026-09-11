@@ -1,6 +1,6 @@
 //! Standalone OGC/DE-9IM predicates for filtering and validation workflows.
 
-use geo::algorithm::validation::Validation;
+use crate::ValidazioneProtetta as _;
 use geo::{CoordsIter, Geometry, Relate};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -27,6 +27,13 @@ pub enum PredicateError {
     NonFiniteCoordinate { side: &'static str },
     #[error("geometria {side} non valida: {reason}")]
     InvalidGeometry { side: &'static str, reason: String },
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), PredicateError> {
@@ -37,10 +44,15 @@ fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), Predicat
         return Err(PredicateError::NonFiniteCoordinate { side });
     }
     geometry
-        .check_validation()
-        .map_err(|error| PredicateError::InvalidGeometry {
-            side,
-            reason: error.to_string(),
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| PredicateError::InvalidGeometry {
+                    side,
+                    reason: ragione.to_string(),
+                },
+                PredicateError::ValidazioneNonConclusa,
+            )
         })
 }
 

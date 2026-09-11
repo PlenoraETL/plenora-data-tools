@@ -576,6 +576,7 @@ consumatore attuale le interpreta: il rischio è limitato a un'incompatibilità
 di **nomi**, coperta dalla migrazione se i nomi ratificati risultassero
 diversi.
 
+<a id="arrow-transform-in-quarantena"></a>
 ### `arrow_transform` in quarantena nel fuzzing
 
 Il target fuzz `arrow_transform` è **disattivato**. Non perché la barriera non
@@ -1436,6 +1437,214 @@ un percorso è una sequenza di byte che non deve essere testo, su Windows una
 sequenza di unità UTF-16 che può contenere surrogati spaiati — e il caso che le
 verifica **ricostruisce dal documento** invece di riconfrontare col medesimo
 encoder, che direbbe soltanto che una funzione è uguale a sé stessa.
+
+### Una chiave riservata di `serde_json` non è ammessa nel JSON di controllo
+
+**La regola.** `$serde_json::private::RawValue` è rifiutata **come chiave**, a
+ogni posizione e profondità, in ogni documento JSON di controllo. Come *valore*
+stringa è testo qualunque e passa.
+
+**Perché.** `serde_json` riserva quel nome per trasportare JSON grezzo, e quando
+è la prima chiave di un oggetto non la legge come una chiave. Con un valore non
+stringa **fallisce**; con una stringa di JSON valido è peggio: **riesce**, e
+rende un documento diverso da quello scritto.
+
+```text
+{"$serde_json::private::RawValue": "{\"a\":1,\"a\":2}"}   →   {"a": 2}
+```
+
+Il testo letterale ha una chiave; il documento effettivo ne ha due uguali, già
+risolte con «vince l'ultima». È la stessa perdita della chiave duplicata portata
+all'estremo — il piano eseguito non è quello scritto — e **aggira il controllo
+dei duplicati**, perché la passata vede una chiave sola.
+
+**È una restrizione, non una correzione a costo zero.** Un documento con quella
+chiave in seconda posizione, o annidata dove nessuna riscrittura la riordina, non
+è ambiguo per nessun lettore, e viene respinto lo stesso. Si restringe perché la
+posizione non è una proprietà stabile: la canonicalizzazione riordina le chiavi e
+`$` precede ogni lettera, quindi una chiave innocua diventa la prima del testo
+canonico — ed è esattamente il percorso su cui `fuzz plan_v5_parse` ha trovato un
+canonico che il progetto stesso non rilegge.
+
+**L'escape non è una via d'uscita**: `serde_json` decodifica `\u0024`
+prima di consegnare la chiave, quindi la forma con escape è la stessa chiave e
+riceve lo stesso rifiuto.
+
+**Ambito.** `plenora_core::json::ensure_no_duplicate_keys`, cioè ogni lettore di
+JSON di controllo del progetto.
+**Condizione di rientro.** Il giorno che `serde_json` smetta di riservare quel
+nome, o offra un lettore che non lo reinterpreta.
+
+### La validazione OGC sta dietro una barriera
+
+**La regola.** Nessun sito di `plenora-kernels-geo` chiama `check_validation` di
+`geo` direttamente: tutti passano da `ValidazioneProtetta::validazione_protetta`,
+che cattura il panico e lo rende un errore.
+
+**Perché.** `check_validation` può andare in **panico** invece di rendere un
+errore: la sua `relate` costruisce un grafo topologico in virgola mobile e chiama
+`panic!` quando due conclusioni sullo stesso punto si contraddicono. Un panico
+dentro una libreria che riceve byte da fuori non è una diagnosi: è la fine del
+processo.
+
+**Dove il panico esiste, esattamente.** Il panico dei reperti è un
+**`debug_assert!`** (`edge_end_bundle_star.rs:116`), quindi vive solo dove le
+asserzioni di debug sono attive: la batteria e il target del fuzz. Il profilo
+`release` di questo progetto attiva `overflow-checks` ma **non**
+`debug-assertions`, e lì `geo` conclude regolarmente — i due reperti diventano
+`ElementsOverlaps(1, 2)`, cioè un rifiuto ordinario. Misurato: gli stessi casi
+sono verdi in entrambi i profili con attese diverse, e la variabile decisiva è
+isolata (`--release` con `-C debug-assertions=on` panica di nuovo).
+
+Non ne segue che la barriera sia superflua in produzione. Nella stessa funzione,
+venti righe più sotto, `assert!(left_position.is_some(), "found single null
+side")` **non** è condizionato dalle asserzioni di debug: un secondo cammino di
+panico resta attivo in `release`, e quello la barriera lo copre davvero.
+
+**Il difetto a monte è una precondizione, non l'algoritmo.** Il guardiano di quel
+`debug_assert!` chiede se la geometria sia valida, ma `propagate_side_labels`
+riceve **un solo** operando: entrambi i reperti sono `MultiPolygon` di tre
+poligoni in cui il conflitto nasce dalla *coppia* — relazionare il poligono 1,
+valido, con il 2, invalido. Il guardiano guarda il primo, non vede il secondo, e
+asserisce. Che sia una precondizione sbagliata e non un errore di calcolo lo
+mostra l'asimmetria: la stessa coppia nell'ordine invertito **non** panica e
+rende `InvalidPolygon(SelfIntersection)`. Nulla di ciò dimostra che l'algoritmo
+numerico sia corretto — dimostra che qui non è lui a essere in causa.
+
+`geo 0.33.1` è l'ultima versione pubblicata: non c'è un aggiornamento che lo
+chiuda. Una proposta di correzione è conservata fuori dall'albero, con base e
+impronta esatte, e **non è applicata**: il prodotto consuma `geo` dal registro,
+immutato.
+
+**Il canale `log` non è governato.** `geo` pubblica coordinate dell'ingresso
+anche fuori dal panico: il ramo alternativo all'asserzione è un `warn!` con lo
+stesso messaggio, e i `debug!` alle righe 83, 154 e 210 — **non** condizionati
+dalle asserzioni di debug, quindi presenti anche in `release` — stampano l'intera
+struttura topologica. Misurato con un logger a livello `DEBUG`: 49 righe con dati
+dell'ingresso su 54, in `release`. `panic_policy` non copre questo canale, e
+nemmeno la barriera: chi ospita il crate e installa un logger deve saperlo.
+
+**Perché condivisa.** I siti sono quarantaquattro. Una barriera per sito è una
+barriera che qualcuno dimenticherà; passando tutti dallo stesso metodo la difesa
+è una sola e si sposta con lei.
+
+**Che cosa non porta l'errore.** Il contenuto del payload. Il messaggio di `geo`
+nomina le **coordinate** che hanno provocato la contraddizione, cioè dati
+dell'ingresso: si pubblica la *forma* del payload, con la stessa nozione
+condivisa delle altre barriere.
+
+**La barriera da sola non basta.** L'hook di panico installato da `std` stampa il
+payload **prima** che `catch_unwind` lo veda: catturare il panico non impedisce
+all'hook di averlo già pubblicato. Chi ospita questo crate deve installare la
+politica sanitizzata di `plenora_core::panic_policy` — è la ragione per cui
+quella politica esiste.
+
+**Che cosa la barriera non è.** Un filtro sui numeri. Delle quattro coordinate
+che i due panici nominano, **tre sono normali** e una sola è subnormale:
+rifiutare una classe di magnitudini respingerebbe geometrie valide senza chiudere
+il difetto, che nasce dalla precisione della virgola mobile su punti molto
+vicini. Una geometria valida con coordinate minuscole continua a essere accettata,
+e un caso lo fissa.
+
+**La distinzione vale fino all'errore finale, non solo all'origine.** Un tipo che
+separa i due casi non serve a nulla se un chiamante li riunisce dopo. I punti
+dove la distinzione moriva, e che ora la conservano:
+
+- il trasporto — un `PlenoraError::Internal` cadeva nel ramo generico di
+  `From<PlenoraError> for ArrowTransportError` e diventava `Arrow(String)`; ora
+  esiste `ArrowTransportError::Interno`;
+- i due passi dell'executor, **fuso e non fuso**, che riscrivevano ogni
+  fallimento come `InvalidPlan`; ora chiedono entrambi
+  `ArrowTransportError::errore_del_passo`, che decide dalla variante — una
+  decisione sola per due chiamanti, perché due copie divergono;
+- l'adapter di colonna `geo.from_wkt`, che contava la validazione interrotta fra
+  le celle invalide e rendeva `DataMapping`; ora esce con `Internal` invece di
+  accusare una riga;
+- le due porte di `analyze` e il preflight dei piani, che scartavano l'errore
+  per dire «parametro non decodificabile» o «nodo non decodificabile»;
+- i due percorsi della misura terminale — `measure_cells` (fuso) e
+  `geo_measure_batch` (non fuso), per `geo.area`, `geo.length`,
+  `geo.perimeter`, `geo.vertex_count`, `geo.to_wkt` — che appiattivano ogni
+  fallimento del kernel scalare in `InvalidPlan` indipendentemente dalla
+  categoria sotto, sia alla decodifica della cella sia dentro il kernel; ora
+  condividono `causa_di_riga` ed `esito_kernel`, la stessa decisione per i
+  due percorsi.
+
+La regola: **chi converte l'errore della validazione guarda la categoria di
+sotto**, e non riattribuisce a chi ha scritto l'ingresso un difetto che nessuno
+gli ha dimostrato.
+
+**Precedenza quando un batch porta più fallimenti.** Un `Internal` prevale su
+qualunque fallimento ordinario dello stesso batch e propaga **senza
+diagnostica di riga**: mescolarlo alle celle davvero invalide misattribuirebbe
+le altre come se fossero dati sbagliati, quando nessuno lo ha dimostrato. Fra
+più `Internal` nello stesso batch resta il primo in **ordine logico di riga**,
+non quello che l'esecuzione ha calcolato per primo — il percorso fuso itera in
+parallelo, quindi l'ordine di calcolo non è l'ordine di riga. La regola è
+condivisa fra trasformazione (`collect_cell_failures`) e misura
+(`collect_measure_failures`): una decisione sola, non una per percorso.
+
+**Che cosa la barriera non chiude.** Il difetto del fuzz `wkb_contract`, che
+**resta aperto**. La barriera è contenimento e sanitizzazione: vale nei processi
+che consentono l'unwinding — la produzione e la batteria ordinaria — e lì i due
+reperti rendono un errore `Internal` senza pubblicare nulla. Dentro un target
+`libfuzzer-sys` non vale, per lo stesso meccanismo già registrato in
+[`arrow_transform` in quarantena nel fuzzing](#arrow-transform-in-quarantena):
+l'hook chiama `abort()` prima dell'unwinding, deliberatamente, perché un
+`catch_unwind` nel codice sotto test nasconderebbe i difetti al fuzzer. Misurato:
+`cargo fuzz run wkb_contract` sui reperti del 4 e 5 settembre 2026 termina con
+`deadly signal`.
+
+A differenza di `arrow_transform`, il target **non** va in quarantena: quel rosso
+è un difetto noto e aperto, e sostituire l'hook per ottenere il verde
+nasconderebbe anche i panici che la campagna deve trovare. Si chiude con il
+replay riuscito nel target reale, o con una revisione esplicita del contratto del
+target che offra un oracolo altrettanto efficace.
+
+**Dove vivono i reperti.** Nei **test versionati**, con i byte in chiaro:
+`tests/barriera_validazione.rs` e `tests/barriera_privacy_processo.rs`. Le copie
+in `fuzz/corpus/wkb_contract/` sono comode in locale ma `fuzz/corpus` è ignorato
+da Git: **non garantiscono** che i reperti raggiungano la campagna remota. Le due
+cose non vanno confuse — solo la prima è una regressione.
+
+**Ambito.** `plenora-kernels-geo`, ogni validazione OGC.
+**Condizione di rientro.** Il giorno che `geo` non abbia più cammini di panico
+raggiungibili da byte esterni: sia il `debug_assert!` dal guardiano incompleto,
+sia il `found single null side`, che è attivo anche in `release`.
+
+### DIFETTO APERTO: `wkt` panica su un multi con una geometria vuota
+
+**Non è un limite deliberato**, ed è per questo che non sta fra i
+[limiti dichiarati](#limiti-dichiarati): è un difetto noto, non presidiato, e
+registrato qui perché chi legge la barriera OGC non concluda che sia coperto.
+
+**Non lo è.** La barriera cattura i panici della *validazione*; questo avviene
+dopo, nella **serializzazione**.
+
+**Che cosa succede.** `wkt 0.14.0`, `src/to_wkt/geo_trait_impl.rs:242`, scarta
+con `unwrap()` l'`exterior()` del primo poligono di un `MultiPolygon`. Per un
+poligono vuoto quell'`Option` è `None`.
+
+**Raggiungibile dalla produzione, e in `release`.** Misurato su
+`plenora_kernels_geo::operations::to_wkt`, la porta dell'operazione di catalogo
+`geo.to_wkt`: la validazione OGC **accetta** le geometrie vuote — sono valide
+per OGC — quindi non ferma l'ingresso, e l'encoder panica subito dopo. L'`unwrap()`
+non è condizionato da `cfg(debug_assertions)`: vale in entrambi i profili.
+
+Non è quindi della stessa classe del panico di `geo` descritto sopra, che è un
+`debug_assert!` assente in `release`.
+
+**Ingresso minimo**, ridotto e verificato nei due versi: un `MultiPolygon` che
+contiene un poligono vuoto panica; il poligono vuoto da solo no.
+
+**Ambito.** Ogni cammino che serializzi in WKT una geometria multi che può
+contenere parti vuote. Non è stato censito quali altri cammini lo raggiungano.
+
+**Condizione di rientro.** Il giorno che `wkt` renda un errore invece di
+scartare quell'`Option`, o che la serializzazione stia dietro una barriera.
+
+Il reperto è passato a `plenora-memory-lab` con encoder, versione, punto di
+panico, ingresso minimo e misure per profilo.
 
 ### Il filo porta un esito solo
 

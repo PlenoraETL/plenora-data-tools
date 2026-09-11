@@ -374,3 +374,78 @@ fn un_limite_malformato_da_la_stessa_categoria_nelle_due_versioni() {
         .expect_err("nome della v4 in un piano v5");
     assert_eq!(v4.category(), v5.category(), "v4: {v4} / v5: {v5}");
 }
+
+// --- la chiave riservata di serde_json, attraverso la porta pubblica --------
+//
+// I casi del confine provano che `ensure_no_duplicate_keys` la rifiuta. Questi
+// provano che il rifiuto **arriva a chi chiama**: la migrazione e' la porta da
+// cui un piano v4 entra, ed e' li' che il difetto si vede — senza il rifiuto,
+// un testo accettato e un canonico che nessun lettore del progetto rilegge.
+
+/// **La chiave riservata e' rifiutata dalla migrazione, non solo dal confine.**
+///
+/// Il primo caso e' il riproduttore che `fuzz plan_v5_parse` ha trovato,
+/// ridotto da 511 byte a una riga: la chiave sta in **seconda** posizione, e
+/// solo la canonicalizzazione la porterebbe in testa.
+#[test]
+fn la_chiave_riservata_non_attraversa_la_migrazione() {
+    for (nome, testo) in [
+        (
+            "riproduttore del fuzzer, chiave in seconda posizione",
+            r#"{"schema_version": 4, "$serde_json::private::RawValue": 3}"#,
+        ),
+        (
+            "chiave in prima posizione",
+            r#"{"$serde_json::private::RawValue": 3, "schema_version": 4}"#,
+        ),
+        (
+            "chiave annidata sotto un altro campo",
+            r#"{"schema_version": 4, "nodes": {"$serde_json::private::RawValue": 3}}"#,
+        ),
+        (
+            "chiave col $ in escape Unicode",
+            r#"{"schema_version": 4, "\u0024serde_json::private::RawValue": 3}"#,
+        ),
+    ] {
+        let errore = testo_canonico_v5(testo, &PlanLimits::default()).expect_err(nome);
+        assert!(errore.to_string().contains("riservata"), "{nome}: {errore}");
+    }
+}
+
+/// **Il contrabbando non attraversa la migrazione.**
+///
+/// E' il verso che non fallisce da solo: `serde_json` accetta il testo e rende
+/// il documento contenuto nella stringa, con le chiavi duplicate gia' risolte.
+/// Senza il rifiuto, la migrazione leggerebbe una `schema_version` che il testo
+/// non dichiara.
+#[test]
+fn il_contrabbando_non_attraversa_la_migrazione() {
+    let contrabbando =
+        r#"{"$serde_json::private::RawValue": "{\"schema_version\":4,\"schema_version\":5}"}"#;
+
+    // La premessa: senza rifiuto, il documento effettivo e' un altro.
+    let effettivo: serde_json::Value =
+        serde_json::from_str(contrabbando).expect("serde_json lo accetta, ed e' il problema");
+    assert_eq!(effettivo, json!({"schema_version": 5}));
+
+    let errore = testo_canonico_v5(contrabbando, &PlanLimits::default())
+        .expect_err("la migrazione non legge un documento che il testo non dichiara");
+    assert!(errore.to_string().contains("riservata"), "{errore}");
+}
+
+/// **Un piano v4 legittimo continua a migrare.**
+///
+/// La restrizione tocca una chiave sola: tutto il resto passa, e la migrazione
+/// resta idempotente — l'invariante che il target del fuzzing sorveglia.
+#[test]
+fn la_restrizione_non_tocca_i_piani_legittimi() {
+    let testo = piano(4, &json!({"max_memory_bytes": 4096}));
+    let canonico = testo_canonico_v5(&testo, &PlanLimits::default()).expect("piano v4 valido");
+    let due_volte = testo_canonico_v5(canonico.as_ref(), &PlanLimits::default())
+        .expect("la seconda passata riesce");
+    assert_eq!(
+        canonico.as_ref(),
+        due_volte.as_ref(),
+        "la migrazione resta idempotente"
+    );
+}

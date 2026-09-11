@@ -5,8 +5,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::ValidazioneProtetta as _;
 use geo::algorithm::line_measures::{Distance, Euclidean};
-use geo::algorithm::validation::Validation;
 use geo::{CoordsIter, Geometry};
 use rayon::prelude::*;
 use thiserror::Error;
@@ -42,6 +42,13 @@ pub enum AnalysisError {
         index: usize,
         reason: String,
     },
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 fn validate_geometries(
@@ -63,11 +70,16 @@ fn validate_geometries(
             });
         }
         geometry
-            .check_validation()
-            .map_err(|error| AnalysisError::InvalidGeometry {
-                side,
-                index,
-                reason: error.to_string(),
+            .validazione_protetta()
+            .map_err(|esito| {
+                esito.separa(
+                    |ragione| AnalysisError::InvalidGeometry {
+                        side,
+                        index,
+                        reason: ragione.to_string(),
+                    },
+                    AnalysisError::ValidazioneNonConclusa,
+                )
             })?;
     }
     Ok(())

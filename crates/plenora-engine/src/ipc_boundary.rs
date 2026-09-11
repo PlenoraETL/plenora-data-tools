@@ -138,6 +138,9 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
 
         // --- Difetto nostro -------------------------------------------------
         E::Internal(motivo) => PlenoraError::Internal(motivo.to_owned()),
+        // E' gia' interno sotto — per esempio una validazione OGC che non
+        // conclude — e resta tale: il testo e' nostro e gia' sanitizzato.
+        E::Interno(motivo) => PlenoraError::Internal(motivo),
 
         // --- Forma non ammessa: qui il file e' davvero rotto ---------------
         //

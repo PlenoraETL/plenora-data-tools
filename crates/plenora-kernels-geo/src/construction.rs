@@ -1,7 +1,6 @@
 //! Geometry construction kernels. Grouping and ordering columns are handled
 //! by the future Arrow adapter; these functions operate on one ordered group.
 
-use geo::algorithm::validation::Validation;
 use geo::{Geometry, LineString, Point, Polygon};
 use thiserror::Error;
 use wkt::TryFromWkt;
@@ -21,9 +20,17 @@ pub enum ConstructionError {
     InvalidWkt(String),
     #[error("WKT con SRID o dimensioni Z/M non supportato dal contratto XY")]
     UnsupportedWktDimension,
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
 
 /// Costruisce un `Point` da longitudine e latitudine.
 ///
@@ -86,8 +93,13 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
     let geometry = Geometry::<f64>::try_from_wkt_str(value)
         .map_err(|error| ConstructionError::InvalidWkt(error.to_string()))?;
     geometry
-        .check_validation()
-        .map_err(|error| ConstructionError::InvalidOutput(error.to_string()))?;
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+                ConstructionError::ValidazioneNonConclusa,
+            )
+        })?;
     Ok(geometry)
 }
 
@@ -129,8 +141,13 @@ pub fn line_from_ordered_points(
     let line = Geometry::LineString(LineString::new(
         points.into_iter().map(|point| point.0).collect(),
     ));
-    line.check_validation()
-        .map_err(|error| ConstructionError::InvalidOutput(error.to_string()))?;
+    line.validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+                ConstructionError::ValidazioneNonConclusa,
+            )
+        })?;
     Ok(Some(line))
 }
 
@@ -158,8 +175,13 @@ pub fn polygon_from_ordered_points(
         Vec::new(),
     ));
     polygon
-        .check_validation()
-        .map_err(|error| ConstructionError::InvalidOutput(error.to_string()))?;
+        .validazione_protetta()
+        .map_err(|esito| {
+            esito.separa(
+                |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+                ConstructionError::ValidazioneNonConclusa,
+            )
+        })?;
     Ok(Some(polygon))
 }
 
