@@ -21,10 +21,8 @@ fn il_ritardo_massimo_passa_intero() {
     // guarda che l'esito sia riuscito **e** che porti il valore atteso.
     let al_limite = RetryDisposition::After(Duration::from_millis(u64::MAX));
     assert!(
-        ritentativo_sul_filo(al_limite).is_ok_and(|resa| resa
-            == RetrySulFilo::After {
-                delay_ms: u64::MAX
-            }),
+        ritentativo_sul_filo(al_limite)
+            .is_ok_and(|resa| resa == RetrySulFilo::After { delay_ms: u64::MAX }),
         "il ritardo massimo rappresentabile deve passare, e passare intero"
     );
 }

@@ -50,25 +50,21 @@ pub enum ExtensionError {
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionError> {
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtensionError::InvalidInput(ragione.to_string()),
-                ExtensionError::ValidazioneNonConclusa,
-            )
-        })
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionError::InvalidInput(ragione.to_string()),
+            ExtensionError::ValidazioneNonConclusa,
+        )
+    })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionError> {
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtensionError::InvalidOutput(ragione.to_string()),
-                ExtensionError::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionError::InvalidOutput(ragione.to_string()),
+            ExtensionError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 
@@ -115,13 +111,10 @@ enum CellaNonConvertita {
 /// Converte una cella WKT non-null in WKB senza percorso di remediation.
 fn wkt_cell_to_wkb(value: &str) -> Result<Vec<u8>, CellaNonConvertita> {
     let geometry = geometry_from_wkt(value).map_err(|errore| match errore {
-        ConstructionError::ValidazioneNonConclusa(forma) => {
-            CellaNonConvertita::NonConclusa(forma)
-        }
+        ConstructionError::ValidazioneNonConclusa(forma) => CellaNonConvertita::NonConclusa(forma),
         _ => CellaNonConvertita::Invalida("geometry.invalid_wkt"),
     })?;
-    encode_geometry(&geometry)
-        .map_err(|_| CellaNonConvertita::Invalida("geometry.encoding_failed"))
+    encode_geometry(&geometry).map_err(|_| CellaNonConvertita::Invalida("geometry.encoding_failed"))
 }
 
 /// Adapter di colonna per `geo.from_wkt`: celle `Utf8` -> celle WKB.

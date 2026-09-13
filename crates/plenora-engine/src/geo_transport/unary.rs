@@ -3147,6 +3147,52 @@ mod tests {
         geometry.to_wkb(CoordDimensions::xy()).expect("fixture wkb")
     }
 
+    /// **Percorso unary, senza pubblicazione parziale**: due celle valide,
+    /// un kernel sintetico che fallisce sulla seconda con l'errore reale
+    /// della migrazione WKT (`OperationError::WktSerialization`, diff 3/4
+    /// del candidato memory-lab). Sintetico di proposito, non
+    /// `operations::to_wkt` vero: il decoder WKB di questo prodotto rifiuta
+    /// ogni poligono vuoto prima che un kernel lo veda
+    /// (`geometry_contract.rs::check_ring`, provato in
+    /// `executor::blocking::tests`), quindi non esiste un payload WKB che
+    /// faccia scattare l'errore per davvero su questo percorso — qui si
+    /// prova la garanzia della raccolta (`map_nullable`), non la
+    /// raggiungibilita' del difetto specifico.
+    ///
+    /// La prima cella calcola un valore reale (per dimostrare che VIENE
+    /// calcolato, non solo che potrebbe esserlo) ma non deve MAI comparire
+    /// nell'esito: `map_nullable` raccoglie tutte le righe prima di
+    /// decidere, e con un fallimento decide `Err`, mai un vettore con la
+    /// prima cella valorizzata e la seconda `None`.
+    #[test]
+    fn map_nullable_su_wkt_serialization_non_pubblica_la_cella_valida() {
+        let valida = wkb(&Geometry::Point(Point::new(1.0, 2.0)));
+        let cells: BinaryArray = [Some(valida.as_slice()), Some(b"non conta il contenuto")]
+            .into_iter()
+            .collect();
+
+        let esito: Result<Vec<Option<String>>, ArrowTransportError> =
+            map_nullable(&cells, |payload| {
+                if payload == b"non conta il contenuto" {
+                    return Err(ArrowTransportError::Kernel(
+                        OperationError::WktSerialization("geometria non serializzabile".to_owned()),
+                    ));
+                }
+                // La cella valida calcola davvero — non un placeholder — cosi'
+                // un bug che la lasciasse trapelare produrrebbe un valore
+                // riconoscibile, non `None` per coincidenza.
+                let geometria = geometry_from_wkb(payload)?;
+                Ok(Some(to_wkt(&geometria)?))
+            });
+
+        let errore =
+            esito.expect_err("una cella fallita deve rendere Err, mai un vettore parziale");
+        assert!(
+            errore.to_string().contains("serializzazione WKT fallita"),
+            "atteso il testo dell'errore WKT, ottenuto: {errore}"
+        );
+    }
+
     /// Fixture multi-tipo: punto, linea, poligono con buco, multipoint, null.
     fn multi_type_cells() -> Vec<Option<Vec<u8>>> {
         let point = Geometry::Point(Point::new(1.0, 2.0));
@@ -3311,6 +3357,110 @@ mod tests {
             Some("geometry.invalid_wkb"),
             "un errore ordinario resta attribuibile alla riga"
         );
+    }
+
+    /// **Percorso fuso: anche qui l'anello orfano non arriva al kernel.**
+    /// `measure_cells` prende `Geometry` gia' in memoria — niente giro per
+    /// WKB fra un passo fuso e il successivo — ma la validazione
+    /// inter-passo (`validate_geometry_structural` + `check_geometry_valid`,
+    /// righe sopra questa) applica la STESSA regola del decoder WKB
+    /// (`geometry_contract.rs::check_ring`, ≥4 coordinate per anello,
+    /// esterno compreso): rifiuta l'anello orfano prima che `operations::
+    /// to_wkt` — qui il kernel VERO, non sintetico — lo veda. Prova diretta,
+    /// non dedotta: se in futuro quella validazione cambiasse e lasciasse
+    /// passare l'orfano, questo caso lo mostrerebbe fallendo per il motivo
+    /// sbagliato (l'assert sul testo dell'errore), non tacendo.
+    #[test]
+    fn measure_cells_reale_rifiuta_anello_orfano_prima_del_kernel() {
+        let valida = Geometry::Point(Point::new(1.0, 2.0));
+        let interno = line_string![
+            (x: 1.0, y: 1.0), (x: 2.0, y: 1.0),
+            (x: 2.0, y: 2.0), (x: 1.0, y: 1.0),
+        ];
+        let orfano = Geometry::Polygon(geo::Polygon::new(
+            LineString::from(Vec::<(f64, f64)>::new()),
+            vec![interno],
+        ));
+        let geometries = vec![Some(valida), Some(orfano)];
+
+        let errore = measure_cells(&geometries, 0, to_wkt)
+            .expect_err("l'anello orfano deve far fallire measure_cells, mai un vettore parziale");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure")
+        };
+        assert!(
+            error.to_string().contains("meno di quattro coordinate"),
+            "atteso il rifiuto strutturale inter-passo (non un errore di to_wkt), ottenuto: {error}"
+        );
+    }
+
+    /// Controparte sintetica, stessa forma delle prove analoghe su unary e
+    /// blocking: SE il kernel rendesse `WktSerialization` — da una forma non
+    /// coperta dal gate strutturale sopra, non da questo ingresso — la
+    /// classificazione di `measure_cells` sarebbe quella ordinaria
+    /// (`InvalidPlan`, testo del kernel).
+    #[test]
+    fn measure_cells_wkt_serialization_sintetico_resta_invalidplan() {
+        let valida = Geometry::Point(Point::new(1.0, 2.0));
+        let geometries = vec![Some(valida)];
+        let kernel_di_prova = |_g: &Geometry<f64>| -> Result<String, OperationError> {
+            Err(OperationError::WktSerialization(
+                "geometria non serializzabile".to_owned(),
+            ))
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova).expect_err("deve fallire");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure")
+        };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert!(error.to_string().contains("serializzazione WKT fallita"));
+    }
+
+    /// **Riga valida seguita da errore, sul ciclo di raccolta REALE
+    /// (`measure_cells`), non su una sola geometria.** Riga 0 calcola un WKT
+    /// vero col kernel reale (`to_wkt`), riga 1 fallisce con
+    /// `WktSerialization` per identita' per indirizzo — stesso idioma di
+    /// `ordinario_poi_interrotta_non_vince_l_ordinario`, non per ordine di
+    /// `par_iter`. Sintetico di proposito e tenuta separata dal rifiuto
+    /// strutturale reale (`measure_cells_reale_rifiuta_anello_orfano_...`,
+    /// sopra): quella prova la raggiungibilita', questa prova la raccolta.
+    #[test]
+    fn measure_cells_riga_valida_poi_wkt_serialization_non_pubblica_nulla() {
+        let ordinaria = Geometry::Point(Point::new(1.0, 2.0));
+        let geometries = vec![Some(ordinaria.clone()), Some(ordinaria)];
+        let riga_da_far_fallire = geometries[1].as_ref().unwrap();
+        let kernel_di_prova = move |g: &Geometry<f64>| -> Result<String, OperationError> {
+            if std::ptr::eq(g, riga_da_far_fallire) {
+                Err(OperationError::WktSerialization(
+                    "geometria non serializzabile".to_owned(),
+                ))
+            } else {
+                to_wkt(g)
+            }
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova)
+            .expect_err("una sola riga fallita deve rendere Err, mai un vettore con la riga 0");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure")
+        };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(
+            error.to_string(),
+            "contract violation: serializzazione WKT fallita: geometria non serializzabile"
+        );
+        let diagnostics = error
+            .row_diagnostics()
+            .expect("errore ordinario, diagnostica di riga attesa");
+        assert_eq!(diagnostics.observed_total, 1);
+        assert_eq!(diagnostics.counts.get("geometry.kernel_failed"), Some(&1));
+        let indici: Vec<u64> = diagnostics
+            .examples
+            .iter()
+            .map(|esempio| esempio.source_index)
+            .collect();
+        assert_eq!(indici, vec![1], "solo la riga 1 e' fallita, non la 0");
     }
 
     /// **`measure_cells` non deve appiattire una validazione interrotta in
@@ -3519,28 +3669,31 @@ mod tests {
         Ok(transform_cells_fused(group, None, cells, &mut |_| Ok(()))?.geometry)
     }
 
-
     /// Il reperto del 5 settembre 2026, come nel percorso non fuso.
-    const REPERTO_VALIDAZIONE: &[u8] = &    [
-        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
-        1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
-        116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
-        0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
-        255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
-        0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const REPERTO_VALIDAZIONE: &[u8] = &[
+        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0,
+        1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4,
+        0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0,
+        6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
 
-    /// **Anche il percorso fuso non chiama colpa del piano una validazione
-    /// interrotta.**
+    /// **Anche il percorso fuso: col candidato esatto, il reperto e' un
+    /// ingresso invalido in ogni profilo — stessa correzione della
+    /// controparte non fusa (`transport.rs::il_reperto_e_un_ingresso_invalido_in_ogni_profilo`).**
     ///
     /// I due percorsi hanno chiamanti distinti, e una decisione duplicata
-    /// diverge: il caso non fuso da solo lascerebbe scoperto questo. Entrambi
-    /// passano ora da `errore_del_passo`, e il caso lo pretende qui.
+    /// diverge: il caso non fuso da solo lascerebbe scoperto questo. Senza
+    /// il diff 1 l'attesa dipende dal profilo (`debug_assert!` di `geo`);
+    /// col segno corretto di `orient2d`, `geo` conclude sempre — misurato
+    /// qui, non dedotto.
     #[test]
-    fn il_percorso_fuso_non_attribuisce_al_piano_una_validazione_interrotta() {
+    fn il_percorso_fuso_rende_il_reperto_un_ingresso_invalido_in_ogni_profilo() {
         let centroid = fused_params(ArrowOperation::Centroid);
         let group: Vec<&TransformArrowSchema> = [&centroid].to_vec();
         let cells = cells_array(&[Some(REPERTO_VALIDAZIONE.to_vec())]);
@@ -3549,19 +3702,10 @@ mod tests {
         let FusedStepError::Kernel { error, .. } = errore else {
             panic!("atteso un fallimento di kernel, trovato {errore:?}");
         };
-        let attesa = if cfg!(debug_assertions) {
-            assert!(
-                matches!(error, ArrowTransportError::Interno(_)),
-                "la validazione interrotta deve restare interna: {error:?}"
-            );
-            plenora_core::ErrorCategory::Internal
-        } else {
-            plenora_core::ErrorCategory::InvalidPlan
-        };
         assert_eq!(
             error.errore_del_passo().category(),
-            attesa,
-            "attribuzione inattesa per questo profilo — {error}"
+            plenora_core::ErrorCategory::InvalidPlan,
+            "il validatore doveva concludere in ogni profilo con l'esatto — {error}"
         );
     }
 

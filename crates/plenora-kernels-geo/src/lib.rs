@@ -1800,4 +1800,551 @@ mod tests {
             }
         }
     }
+
+    /// Che cosa esce davvero da **stderr** quando `validazione_protetta`
+    /// contiene un panico — modulo unitario, non `tests/` d'integrazione.
+    ///
+    /// # Perche' qui e non in un file a parte con una feature dedicata
+    ///
+    /// Esporre `pub fn
+    /// test_support_forza_panico_di_validazione()` dietro una feature
+    /// `test-support` lascerebbe una superficie pubblica reale (raggiungibile
+    /// da chiunque abilitasse quella feature, `panic!` fuori da
+    /// `#[cfg(test)]`), non "irraggiungibile" come l'etichetta della feature
+    /// suggerirebbe. `#[cfg(test)]` risolve lo
+    /// stesso problema senza aggiungere nulla: e' vero che non esiste quando
+    /// il crate e' una dipendenza normale di un altro bersaglio, ma qui non
+    /// serve che esista li' — il sottoprocesso rilancia QUESTO STESSO
+    /// binario di test (`cargo test -p plenora-kernels-geo --lib`), che
+    /// `#[cfg(test)]` lo compila per definizione. Nessuna feature, nessuna
+    /// funzione pubblica, nessun dev-dependency su se stessi.
+    ///
+    /// # Perche' su un processo e non in memoria
+    ///
+    /// Perche' l'hook di `std` stampa **prima** dell'unwinding: nessun
+    /// `catch_unwind` dentro lo stesso processo puo' osservare se il payload
+    /// sia stato pubblicato. L'hook e' **stato globale del processo**:
+    /// installarlo nel binario che ospita gli altri test della barriera li
+    /// legherebbe a questo — da qui il sottoprocesso.
+    mod barriera_privacy_processo {
+        use crate::ValidazioneProtetta as _;
+        use std::process::Command;
+
+        const VARIABILE: &str = "PLENORA_TEST_BARRIERA_PRIVACY";
+
+        /// Frammenti del payload sintetico che stderr non deve mai portare.
+        const FRAMMENTI: [&str; 3] = ["1.5", "-2.5", "COORD"];
+
+        struct Uscita {
+            stderr: String,
+            riuscita: bool,
+            stato: String,
+        }
+
+        fn esegui_figlio(politica: &str) -> Uscita {
+            let ese = std::env::current_exe().expect("current_exe");
+            let uscita = Command::new(ese)
+                .arg("--exact")
+                .arg("tests::barriera_privacy_processo::il_ramo_figlio_non_e_un_test_vero")
+                // Senza `--nocapture` la libreria di test intercetta lo
+                // stderr del thread, e l'hook di `std` scriverebbe nel suo
+                // buffer invece che sul canale reale.
+                .arg("--nocapture")
+                .env(VARIABILE, politica)
+                .output()
+                .expect("il figlio parte");
+            Uscita {
+                stderr: String::from_utf8_lossy(&uscita.stderr).into_owned(),
+                riuscita: uscita.status.success(),
+                stato: format!("{}", uscita.status),
+            }
+        }
+
+        impl Uscita {
+            fn stderr_di_una_corsa_riuscita(&self, quale: &str) -> &str {
+                assert!(
+                    self.riuscita,
+                    "il figlio «{quale}» non e' arrivato in fondo ({}); \
+                     qualunque cosa abbia stampato non dimostra niente:\n{}",
+                    self.stato, self.stderr
+                );
+                &self.stderr
+            }
+        }
+
+        /// La riga sanitizzata, verificata per **intero**.
+        fn pretendi_la_riga_sanitizzata(stderr: &str) {
+            let righe: Vec<&str> = stderr.lines().filter(|r| !r.trim().is_empty()).collect();
+            assert_eq!(
+                righe.len(),
+                1,
+                "atteso esattamente una riga su stderr, trovate {}:\n{stderr}",
+                righe.len()
+            );
+            let riga = righe[0];
+            let Some(resto) = riga.strip_prefix("plenora: panico interno a ") else {
+                panic!("prefisso inatteso: {riga}");
+            };
+            let Some((posizione, coda)) = resto.split_once(" (") else {
+                panic!("manca la forma del payload: {riga}");
+            };
+            assert_eq!(
+                coda,
+                "payload dinamico (contenuto non pubblicato)); \
+                 nessun contenuto del payload viene pubblicato",
+                "coda inattesa: {riga}"
+            );
+            assert!(
+                posizione.contains("plenora-kernels-geo") && posizione.contains("lib.rs:"),
+                "posizione inattesa: {posizione}"
+            );
+        }
+
+        #[test]
+        fn con_la_politica_sanitizzata_stderr_non_porta_il_payload() {
+            let uscita = esegui_figlio("sanitized");
+            let stderr = uscita.stderr_di_una_corsa_riuscita("sanitized");
+            for frammento in FRAMMENTI {
+                assert!(
+                    !stderr.contains(frammento),
+                    "stderr pubblica «{frammento}»:\n{stderr}"
+                );
+            }
+            pretendi_la_riga_sanitizzata(stderr);
+        }
+
+        #[test]
+        fn senza_politica_il_payload_esce_davvero() {
+            let uscita = esegui_figlio("default");
+            let stderr = uscita.stderr_di_una_corsa_riuscita("default");
+            assert!(
+                FRAMMENTI.iter().any(|frammento| stderr.contains(frammento)),
+                "l'hook predefinito deve pubblicare il payload, o il confronto \
+                 non dimostra niente:\n{stderr}"
+            );
+        }
+
+        /// Il ramo figlio: non e' un caso, e il nome lo dice. Gira solo
+        /// quando la variabile e' presente.
+        ///
+        /// Pretende l'**esito tipizzato** di `validazione_protetta`
+        /// (`EsitoValidazione::NonConclusa` col testo esatto), non due
+        /// sottostringhe: cosi' il caso vede anche un cambio di variante,
+        /// non solo la sparizione di due frammenti.
+        #[test]
+        fn il_ramo_figlio_non_e_un_test_vero() {
+            struct TipoDiProva;
+
+            impl geo::algorithm::validation::Validation for TipoDiProva {
+                type Error = std::convert::Infallible;
+
+                fn check_validation(&self) -> std::result::Result<(), Self::Error> {
+                    let finta_coordinata = (1.5_f64, -2.5_f64);
+                    panic!(
+                        "test-support: coordinate fittizie COORD{finta_coordinata:?}, \
+                         nessun dato reale"
+                    );
+                }
+
+                fn visit_validation<T>(
+                    &self,
+                    _visitor: Box<dyn FnMut(Self::Error) -> std::result::Result<(), T> + '_>,
+                ) -> std::result::Result<(), T> {
+                    Ok(())
+                }
+            }
+
+            let Ok(politica) = std::env::var(VARIABILE) else {
+                return;
+            };
+            if politica == "sanitized" {
+                assert!(
+                    plenora_core::panic_policy::install(
+                        plenora_core::panic_policy::PanicPolicy::Sanitized
+                    ),
+                    "la politica sanitizzata non e' stata installata: cio' che segue \
+                     uscirebbe dall'hook predefinito"
+                );
+            }
+            let esito = TipoDiProva.validazione_protetta();
+            assert_eq!(
+                esito,
+                Err(super::super::EsitoValidazione::NonConclusa(
+                    "payload dinamico (contenuto non pubblicato)"
+                )),
+                "atteso l'esito tipizzato NonConclusa esatto"
+            );
+        }
+    }
+
+    /// Il logging di `relate` (diff 2 del candidato memory-lab) resta
+    /// statico anche con un logger attivo a Trace — riuso di
+    /// `privacy_probe.rs` gia' consegnato dal laboratorio (coppia di
+    /// quadrati sovrapposti, matrice attesa `212101212`, elenco dei
+    /// messaggi ammessi), non una coppia nuova ne' `evaluate_unchecked`:
+    /// `a.relate(&b)` diretto, come nel probe.
+    ///
+    /// Sottoprocesso per lo stesso motivo di `barriera_privacy_processo`:
+    /// `log::set_logger` e' installabile una sola volta per processo, e
+    /// legherebbe questo test a qualunque altro giri nello stesso binario.
+    mod prova_logging_relate {
+        use geo::{LineString, Polygon, Relate};
+        use std::process::Command;
+        use std::sync::Mutex;
+
+        const VARIABILE: &str = "PLENORA_TEST_LOGGING_RELATE";
+
+        /// I dodici siti statici del candidato (diff 2), da
+        /// `results/geo-ogc-panic/windows/logging-wkt-01/allowed-events.json`
+        /// nel congelamento del laboratorio — copiati, non ridigitati a
+        /// memoria.
+        const MESSAGGI_AMMESSI: [&str; 12] = [
+            "geo.relate.edge_end_bundle_star.0",
+            "geo.relate.edge_end_bundle_star.1",
+            "geo.relate.edge_end_bundle_star.2",
+            "geo.relate.edge_end_bundle_star.3",
+            "geo.relate.geometry_graph.0",
+            "geo.relate.geometry_graph.1",
+            "geo.relate.geometry_graph.2",
+            "geo.relate.node.0",
+            "geo.relate.relate_operation.0",
+            "geo.relate.relate_operation.1",
+            "geo.relate.relate_operation.2",
+            "geo.relate.topology_position.0",
+        ];
+
+        struct Collector(Mutex<Vec<(String, String)>>);
+
+        impl log::Log for Collector {
+            fn enabled(&self, _: &log::Metadata) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((record.target().to_owned(), record.args().to_string()));
+            }
+            fn flush(&self) {}
+        }
+
+        static LOGGER: Collector = Collector(Mutex::new(Vec::new()));
+
+        fn esegui_figlio() -> (bool, String) {
+            let ese = std::env::current_exe().expect("current_exe");
+            let uscita = Command::new(ese)
+                .arg("--exact")
+                .arg("tests::prova_logging_relate::il_ramo_figlio_non_e_un_test_vero")
+                .arg("--nocapture")
+                .env(VARIABILE, "1")
+                .output()
+                .expect("il figlio parte");
+            (
+                uscita.status.success(),
+                String::from_utf8_lossy(&uscita.stdout).into_owned(),
+            )
+        }
+
+        /// **Controllo positivo, elenco dei messaggi ammessi, logger
+        /// davvero attivo a Trace**: le tre condizioni della consegna,
+        /// verificate insieme — nessuna delle tre da sola proverebbe che il
+        /// gate ha esercitato `relate` con la patch attiva.
+        #[test]
+        fn relate_su_quadrati_sovrapposti_non_emette_testo_non_ammesso() {
+            let (riuscito, stdout) = esegui_figlio();
+            assert!(
+                riuscito,
+                "il figlio non e' arrivato in fondo; stdout:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("logger-attivo-confermato"),
+                "il figlio non ha confermato il controllo positivo sul logger:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("record-geo-non-vuoti"),
+                "nessun record con target `geo::`: il gate non ha esercitato relate:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("tutti-i-messaggi-ammessi"),
+                "almeno un messaggio non appartiene all'elenco ammesso:\n{stdout}"
+            );
+        }
+
+        /// Il ramo figlio: gira solo quando la variabile e' presente.
+        #[test]
+        fn il_ramo_figlio_non_e_un_test_vero() {
+            if std::env::var(VARIABILE).is_err() {
+                return;
+            }
+            log::set_logger(&LOGGER).expect("nessun altro logger deve essere gia' installato qui");
+            log::set_max_level(log::LevelFilter::Trace);
+            log::info!(target: "prova_logging_relate", "logger-active");
+
+            // Stessa coppia del probe consegnato: due quadrati che si
+            // sovrappongono, Relate diretto — non `evaluate_unchecked`, non
+            // un nuovo reperto.
+            let quadrato = |x: f64, y: f64| {
+                Polygon::new(
+                    LineString::from(vec![
+                        (x, y),
+                        (x + 2., y),
+                        (x + 2., y + 2.),
+                        (x, y + 2.),
+                        (x, y),
+                    ]),
+                    vec![],
+                )
+            };
+            let a = quadrato(12_345.678_901_234_5, 87_654.321_098_765_4);
+            let b = quadrato(12_346.678_901_234_5, 87_655.321_098_765_4);
+            let matrice = a.relate(&b);
+            assert_eq!(
+                format!("{matrice:?}"),
+                "IntersectionMatrix(212101212)",
+                "matrice attesa dal probe consegnato, ottenuta diversa"
+            );
+
+            let records = LOGGER.0.lock().unwrap();
+            assert!(
+                records
+                    .iter()
+                    .any(|(t, m)| t == "prova_logging_relate" && m == "logger-active"),
+                "il controllo positivo sul logger non e' stato registrato"
+            );
+            println!("logger-attivo-confermato");
+
+            let geo_records: Vec<_> = records
+                .iter()
+                .filter(|(t, _)| t.starts_with("geo::"))
+                .collect();
+            assert!(
+                !geo_records.is_empty(),
+                "nessun record con target geo::: relate non e' stato esercitato dal logger"
+            );
+            println!("record-geo-non-vuoti={}", geo_records.len());
+
+            let non_ammessi: Vec<_> = geo_records
+                .iter()
+                .filter(|(_, messaggio)| !MESSAGGI_AMMESSI.contains(&messaggio.as_str()))
+                .collect();
+            assert!(
+                non_ammessi.is_empty(),
+                "messaggi non nell'elenco ammesso: {non_ammessi:?}"
+            );
+            println!("tutti-i-messaggi-ammessi");
+            drop(records);
+        }
+
+        // ---------------------------------------------------------------
+        // Originali e ridotti A/B: stesso gate, quattro reperti reali.
+        // ---------------------------------------------------------------
+        //
+        // Il controllo sui quadrati sopra prova che il gate FUNZIONA
+        // (controllo positivo, sintetico); questi quattro provano che
+        // REGGE sui reperti veri del laboratorio — due che il candidato
+        // esatto giudica invalidi in modo diverso, uno che il ridotto
+        // rende valido, con lo stesso elenco di messaggi ammessi e un
+        // verdetto specifico per fixture (non solo "non panica").
+        //
+        // Decodifica grezza (`geozero::wkb::Wkb(...).to_geo()`), non
+        // `geometry_from_wkb` di questo crate: il bersaglio e' `check_validation`
+        // di `geo`, non il nostro cancello strutturale — stesso perimetro
+        // di `privacy_probe.rs` consegnato.
+        //
+        // Verdetti e conteggio dei record presi dall'evidenza congelata del
+        // laboratorio (`privacy-{debug,release}-{original,reduced}-{A,B}.stdout`,
+        // identici nei due profili), non ridedotti qui.
+        const REPERTO_ORIGINALE_A: &[u8] = &[
+            1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64,
+            64, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212,
+            0, 0, 0, 4, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 0, 0, 1, 0, 0, 0, 7, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0, 0, 8, 116, 116, 116,
+            116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        const REPERTO_ORIGINALE_B: &[u8] = &[
+            0, 0, 0, 0, 6, 0, 0, 0, 3, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0,
+            0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1,
+            0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 210, 210, 210, 210, 122, 210, 210, 210, 210, 210,
+            210, 210, 1, 1, 4, 255, 1, 1, 1, 1, 1, 1, 1, 255, 254, 254, 254, 254, 254, 254, 250, 1,
+            1, 1, 1, 42, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 64,
+            1, 1, 1, 1, 1, 1, 1, 65, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+            0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+            0, 0, 0, 0, 128, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 129, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 255, 254, 254, 254, 254, 254,
+            254, 250, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 50, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 0,
+        ];
+        const REPERTO_RIDOTTO_A: &[u8] = &[
+            1, 6, 0, 0, 0, 2, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0,
+            0, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+        ];
+        const REPERTO_RIDOTTO_B: &[u8] = &[
+            0, 0, 0, 0, 6, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 4, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 64, 1,
+            1, 1, 1, 1, 1, 1, 65, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+            0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1,
+            0, 50, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        ];
+
+        const VARIABILE_REPERTO: &str = "PLENORA_TEST_LOGGING_REPERTO";
+
+        fn esegui_figlio_reperto(reperto: &str) -> (bool, String) {
+            let ese = std::env::current_exe().expect("current_exe");
+            let uscita = Command::new(ese)
+                .arg("--exact")
+                .arg("tests::prova_logging_relate::il_ramo_figlio_reperto_non_e_un_test_vero")
+                .arg("--nocapture")
+                .env(VARIABILE_REPERTO, reperto)
+                .output()
+                .expect("il figlio parte");
+            (
+                uscita.status.success(),
+                String::from_utf8_lossy(&uscita.stdout).into_owned(),
+            )
+        }
+
+        fn verifica_reperto(reperto: &str, verdetto_atteso: &str, record_geo_attesi: usize) {
+            let (riuscito, stdout) = esegui_figlio_reperto(reperto);
+            assert!(
+                riuscito,
+                "il figlio ({reperto}) non e' arrivato in fondo; stdout:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("logger-attivo-confermato"),
+                "{reperto}: controllo positivo sul logger mancante:\n{stdout}"
+            );
+            assert!(
+                stdout.contains(&format!("record-geo={record_geo_attesi}")),
+                "{reperto}: atteso record-geo={record_geo_attesi}, stdout:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("tutti-i-messaggi-ammessi"),
+                "{reperto}: almeno un messaggio non ammesso, stdout:\n{stdout}"
+            );
+            assert!(
+                stdout.contains(&format!("verdetto={verdetto_atteso}")),
+                "{reperto}: verdetto inatteso, stdout:\n{stdout}"
+            );
+        }
+
+        /// Originale A: `InvalidPolygon(GeometryIndex(2), SelfIntersection(Exterior))`
+        /// — il poligono 2 e' auto-intersecante, non il conflitto a coppia
+        /// che il diff 1 corregge. Verdetto e conteggio dall'evidenza
+        /// congelata del laboratorio.
+        #[test]
+        fn originale_a_verdetto_specifico_e_soli_messaggi_ammessi() {
+            verifica_reperto(
+                "originale_a",
+                "Err(InvalidMultiPolygon(InvalidPolygon(GeometryIndex(2), SelfIntersection(Exterior))))",
+                9,
+            );
+        }
+
+        /// Originale B: `ElementsOverlaps(1, 2)` — il conflitto a coppia
+        /// che il diff 1 risolve (senza il diff, il guardiano vede un solo
+        /// operando).
+        #[test]
+        fn originale_b_verdetto_specifico_e_soli_messaggi_ammessi() {
+            verifica_reperto(
+                "originale_b",
+                "Err(InvalidMultiPolygon(ElementsOverlaps(GeometryIndex(1), GeometryIndex(2))))",
+                9,
+            );
+        }
+
+        /// Ridotto A: **valido**. Diverso dall'originale non solo per
+        /// dimensione — il minimizzatore ha tolto il terzo poligono
+        /// invalido, lasciando una coppia che il candidato esatto giudica
+        /// corretta.
+        #[test]
+        fn ridotto_a_e_valido_e_soli_messaggi_ammessi() {
+            verifica_reperto("ridotto_a", "Ok(())", 9);
+        }
+
+        /// Ridotto B: `ElementsOverlaps(0, 1)` — invalido come l'originale,
+        /// indici diversi perche' il minimizzatore ha tolto un poligono a
+        /// monte.
+        #[test]
+        fn ridotto_b_verdetto_specifico_e_soli_messaggi_ammessi() {
+            verifica_reperto(
+                "ridotto_b",
+                "Err(InvalidMultiPolygon(ElementsOverlaps(GeometryIndex(0), GeometryIndex(1))))",
+                9,
+            );
+        }
+
+        /// Il ramo figlio per i quattro reperti: un logger fresco per
+        /// processo (necessario: `log::set_logger` e' installabile una sola
+        /// volta), decodifica grezza, `check_validation` diretto — stesso
+        /// perimetro di `privacy_probe.rs`.
+        #[test]
+        fn il_ramo_figlio_reperto_non_e_un_test_vero() {
+            use geo::algorithm::validation::Validation as _;
+            use geo::Geometry;
+            use geozero::{wkb::Wkb, ToGeo};
+
+            let Ok(reperto) = std::env::var(VARIABILE_REPERTO) else {
+                return;
+            };
+            log::set_logger(&LOGGER).expect("nessun altro logger deve essere gia' installato qui");
+            log::set_max_level(log::LevelFilter::Trace);
+            log::info!(target: "prova_logging_relate", "logger-active");
+
+            let payload: &[u8] = match reperto.as_str() {
+                "originale_a" => REPERTO_ORIGINALE_A,
+                "originale_b" => REPERTO_ORIGINALE_B,
+                "ridotto_a" => REPERTO_RIDOTTO_A,
+                "ridotto_b" => REPERTO_RIDOTTO_B,
+                altro => panic!("reperto sconosciuto: {altro}"),
+            };
+            let geometria: Geometry<f64> = Wkb(payload).to_geo().expect("decodifica grezza");
+            // `check_validation` diretto (non `validazione_protetta`): qui
+            // interessa il verdetto vero di `geo`, non la barriera — il
+            // candidato esatto non deve piu' panicare su questi reperti
+            // (provato altrove, barriera_validazione.rs), quindi non serve
+            // contenimento per raggiungere un verdetto.
+            let esito = geometria.check_validation();
+
+            let records = LOGGER.0.lock().unwrap();
+            assert!(
+                records
+                    .iter()
+                    .any(|(t, m)| t == "prova_logging_relate" && m == "logger-active"),
+                "il controllo positivo sul logger non e' stato registrato"
+            );
+            println!("logger-attivo-confermato");
+
+            let geo_records: Vec<_> = records
+                .iter()
+                .filter(|(t, _)| t.starts_with("geo::"))
+                .collect();
+            println!("record-geo={}", geo_records.len());
+
+            let non_ammessi: Vec<_> = geo_records
+                .iter()
+                .filter(|(_, messaggio)| !MESSAGGI_AMMESSI.contains(&messaggio.as_str()))
+                .collect();
+            assert!(
+                non_ammessi.is_empty(),
+                "messaggi non nell'elenco ammesso: {non_ammessi:?}"
+            );
+            println!("tutti-i-messaggi-ammessi");
+            drop(records);
+
+            println!("verdetto={esito:?}");
+        }
+    }
 }

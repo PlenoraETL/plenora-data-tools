@@ -30,12 +30,12 @@ use crate::prepare::{
 };
 use crate::table_engine;
 use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
+use geo::Geometry;
 use plenora_core::arrow::array::{
     Array, ArrayRef, BinaryArray, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::catalog::CATALOG;
 use plenora_core::contract::{BatchSequence, DataContract};
-use geo::Geometry;
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
 use plenora_kernels_geo::operations::{self, OperationError};
@@ -628,7 +628,7 @@ pub(super) fn run_binary_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::Point;
+    use geo::{LineString, Point, Polygon};
     use geozero::{CoordDimensions, ToWkb};
 
     fn wkb_valido() -> Vec<u8> {
@@ -649,10 +649,12 @@ mod tests {
     #[test]
     fn misura_riga_valida_non_conclusa_diventa_internal_senza_causa() {
         let payload = wkb_valido();
-        let risultato =
-            misura_riga(&payload, |_g| -> std::result::Result<String, OperationError> {
+        let risultato = misura_riga(
+            &payload,
+            |_g| -> std::result::Result<String, OperationError> {
                 Err(OperationError::ValidazioneNonConclusa("prova"))
-            });
+            },
+        );
         let Err((cause, error)) = risultato else {
             panic!("atteso un fallimento")
         };
@@ -674,12 +676,14 @@ mod tests {
     #[test]
     fn misura_riga_errore_ordinario_resta_invalidplan_con_causa_kernel() {
         let payload = wkb_valido();
-        let risultato =
-            misura_riga(&payload, |_g| -> std::result::Result<String, OperationError> {
+        let risultato = misura_riga(
+            &payload,
+            |_g| -> std::result::Result<String, OperationError> {
                 Err(OperationError::InvalidInput(
                     "anello con auto-intersezione".to_owned(),
                 ))
-            });
+            },
+        );
         let Err((cause, error)) = risultato else {
             panic!("atteso un fallimento")
         };
@@ -688,6 +692,62 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "contract violation: geometria di input non valida: anello con auto-intersezione"
+        );
+    }
+
+    /// Prova del componente: se `to_wkt` rende `WktSerialization` (l'anello
+    /// interno senza esterno della migrazione WKT v2, diff 3/4 del
+    /// candidato memory-lab), la classificazione resta quella ordinaria —
+    /// stessa forma della prova sopra con `InvalidInput`. Sintetico di
+    /// proposito: il decoder WKB di questo prodotto rifiuta QUALUNQUE
+    /// anello (compreso l'esterno) sotto le quattro coordinate —
+    /// `geometry_contract.rs::check_ring` — quindi un payload che arrivi da
+    /// WKB non puo' mai portare l'esterno vuoto che innesca il guardiano di
+    /// `wkt`: la prova sotto (`decode_geometry_cell_rifiuta_...`) lo
+    /// verifica. Qui si prova solo che, SE il kernel rendesse comunque
+    /// quell'errore — da un ingresso costruito altrove, non da WKB — la
+    /// classificazione sarebbe corretta.
+    #[test]
+    fn misura_riga_wkt_serialization_resta_invalidplan_con_causa_kernel() {
+        let payload = wkb_valido();
+        let risultato = misura_riga(
+            &payload,
+            |_g| -> std::result::Result<String, OperationError> {
+                Err(OperationError::WktSerialization(
+                    "geometria non serializzabile".to_owned(),
+                ))
+            },
+        );
+        let Err((cause, error)) = risultato else {
+            panic!("atteso un fallimento")
+        };
+        assert_eq!(cause, Some("geometry.kernel_failed"));
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(
+            error.to_string(),
+            "contract violation: serializzazione WKT fallita: geometria non serializzabile"
+        );
+    }
+
+    /// La ragione per cui la prova sopra e' sintetica: un poligono vuoto
+    /// (con o senza interni) non decodifica affatto in questo prodotto —
+    /// `check_polygon` pretende l'esterno sempre presente e con almeno
+    /// quattro coordinate, un vincolo piu' stretto della sola validita' OGC
+    /// (che accetterebbe il vuoto) e indipendente dalla migrazione WKT: il
+    /// reperto storico del laboratorio non attraversa il confine WKB di
+    /// QUESTO prodotto, a prescindere da `to_wkt`.
+    #[test]
+    fn decode_geometry_cell_rifiuta_poligono_vuoto_prima_che_un_kernel_lo_veda() {
+        let vuoto = Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
+        let geometria = Geometry::MultiPolygon(geo::MultiPolygon::new(vec![vuoto]));
+        let payload = geometria
+            .to_wkb(CoordDimensions::xy())
+            .expect("fixture wkb per il componente vuoto");
+
+        let errore = decode_geometry_cell(&payload).expect_err("il vuoto non decodifica");
+        assert!(
+            errore.to_string().contains("meno di quattro coordinate"),
+            "atteso il rifiuto del decoder sull'anello vuoto, ottenuto: {errore}"
         );
     }
 
@@ -733,16 +793,20 @@ mod tests {
     /// comunque l'interruzione.
     #[test]
     fn misura_colonna_ordinario_poi_interrotta_non_vince_l_ordinario() {
-        let risultato = misura_colonna::<()>(2, |_row| false, |row| {
-            if row == 0 {
-                Err((
-                    Some("geometry.kernel_failed"),
-                    PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
-                ))
-            } else {
-                Err((None, PlenoraError::Internal("prova".to_owned())))
-            }
-        });
+        let risultato = misura_colonna::<()>(
+            2,
+            |_row| false,
+            |row| {
+                if row == 0 {
+                    Err((
+                        Some("geometry.kernel_failed"),
+                        PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
+                    ))
+                } else {
+                    Err((None, PlenoraError::Internal("prova".to_owned())))
+                }
+            },
+        );
         let error = risultato.expect_err("deve fallire");
         assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
         assert!(error.row_diagnostics().is_none());
@@ -752,16 +816,20 @@ mod tests {
     /// esito, per escludere una dipendenza dall'ordine di riga.
     #[test]
     fn misura_colonna_interrotta_poi_ordinario_non_vince_l_ordinario() {
-        let risultato = misura_colonna::<()>(2, |_row| false, |row| {
-            if row == 0 {
-                Err((None, PlenoraError::Internal("prova".to_owned())))
-            } else {
-                Err((
-                    Some("geometry.kernel_failed"),
-                    PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
-                ))
-            }
-        });
+        let risultato = misura_colonna::<()>(
+            2,
+            |_row| false,
+            |row| {
+                if row == 0 {
+                    Err((None, PlenoraError::Internal("prova".to_owned())))
+                } else {
+                    Err((
+                        Some("geometry.kernel_failed"),
+                        PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
+                    ))
+                }
+            },
+        );
         let error = risultato.expect_err("deve fallire");
         assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
         assert!(error.row_diagnostics().is_none());
@@ -770,12 +838,16 @@ mod tests {
     /// Due interruzioni distinguibili: vince quella di riga minore.
     #[test]
     fn misura_colonna_due_interruzioni_sceglie_quella_in_ordine_logico_minore() {
-        let risultato = misura_colonna::<()>(2, |_row| false, |row| {
-            Err((
-                None,
-                PlenoraError::Internal(format!("marcatore-riga-{row}")),
-            ))
-        });
+        let risultato = misura_colonna::<()>(
+            2,
+            |_row| false,
+            |row| {
+                Err((
+                    None,
+                    PlenoraError::Internal(format!("marcatore-riga-{row}")),
+                ))
+            },
+        );
         let error = risultato.expect_err("deve fallire");
         assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
         assert!(error.row_diagnostics().is_none());
@@ -788,12 +860,16 @@ mod tests {
     /// comportamento invariato rispetto a prima della correzione.
     #[test]
     fn misura_colonna_soli_errori_ordinari_mantiene_diagnostica_completa_e_ordinata() {
-        let risultato = misura_colonna::<()>(3, |row| row == 0, |_row| {
-            Err((
-                Some("geometry.kernel_failed"),
-                PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
-            ))
-        });
+        let risultato = misura_colonna::<()>(
+            3,
+            |row| row == 0,
+            |_row| {
+                Err((
+                    Some("geometry.kernel_failed"),
+                    PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
+                ))
+            },
+        );
         let error = risultato.expect_err("deve fallire");
         assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
         let diagnostics = error
@@ -807,5 +883,55 @@ mod tests {
             .map(|esempio| esempio.source_index)
             .collect();
         assert_eq!(indici, vec![1, 2]);
+    }
+
+    /// **Riga valida seguita da errore, sul ciclo di raccolta REALE
+    /// (`misura_colonna`), non su una sola cella.** Riga 0 calcola un WKT
+    /// vero (non un segnaposto: una `assert_eq!` su un valore diverso da
+    /// quello reale del kernel la vedrebbe), riga 1 fallisce con
+    /// `WktSerialization`. Sintetico di proposito, come le prove gemelle su
+    /// `misura_riga`/`measure_cells`: nessun payload WKB porta l'esterno
+    /// vuoto che innesca quell'errore (vedi
+    /// `decode_geometry_cell_rifiuta_...`), tenuta separata dal rifiuto
+    /// strutturale reale — qui si prova la raccolta multi-riga, non la
+    /// raggiungibilita'.
+    #[test]
+    fn misura_colonna_riga_valida_poi_wkt_serialization_non_pubblica_nulla() {
+        let valore_riga_0 = operations::to_wkt(&Geometry::Point(Point::new(1.0, 2.0)))
+            .expect("il kernel reale calcola un WKT vero per la riga 0");
+        let risultato = misura_colonna(
+            2,
+            |_row| false,
+            |row| {
+                if row == 0 {
+                    Ok(valore_riga_0.clone())
+                } else {
+                    Err((
+                        Some("geometry.kernel_failed"),
+                        PlenoraError::InvalidPlan(
+                            "serializzazione WKT fallita: geometria non serializzabile".to_owned(),
+                        ),
+                    ))
+                }
+            },
+        );
+        let errore = risultato
+            .expect_err("una sola riga fallita deve rendere Err, mai un vettore con la riga 0");
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(
+            errore.to_string(),
+            "contract violation: serializzazione WKT fallita: geometria non serializzabile"
+        );
+        let diagnostics = errore
+            .row_diagnostics()
+            .expect("errore ordinario, diagnostica di riga attesa");
+        assert_eq!(diagnostics.observed_total, 1);
+        assert_eq!(diagnostics.counts.get("geometry.kernel_failed"), Some(&1));
+        let indici: Vec<u64> = diagnostics
+            .examples
+            .iter()
+            .map(|esempio| esempio.source_index)
+            .collect();
+        assert_eq!(indici, vec![1], "solo la riga 1 e' fallita, non la 0");
     }
 }

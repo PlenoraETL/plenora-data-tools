@@ -69,18 +69,16 @@ fn validate_geometries(
                 reason: "coordinate NaN o infinite".to_owned(),
             });
         }
-        geometry
-            .validazione_protetta()
-            .map_err(|esito| {
-                esito.separa(
-                    |ragione| AnalysisError::InvalidGeometry {
-                        side,
-                        index,
-                        reason: ragione.to_string(),
-                    },
-                    AnalysisError::ValidazioneNonConclusa,
-                )
-            })?;
+        geometry.validazione_protetta().map_err(|esito| {
+            esito.separa(
+                |ragione| AnalysisError::InvalidGeometry {
+                    side,
+                    index,
+                    reason: ragione.to_string(),
+                },
+                AnalysisError::ValidazioneNonConclusa,
+            )
+        })?;
     }
     Ok(())
 }

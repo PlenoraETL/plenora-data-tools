@@ -648,6 +648,30 @@ jobs:
         if: always()
         run: cargo audit --deny warnings --file fuzz/Cargo.lock
 
+      # BOZZA NON ADOTTATA (vedi la nota in cima a Cargo.toml): finche' questo
+      # ramo esiste, vendor/{geo,wkt,i_shape}-* e' contenuto atteso, non
+      # opzionale — nessun `if` su hashFiles: su un ramo che lo richiede,
+      # l'assenza di vendor/ e' essa stessa un guasto e i due gate devono
+      # fallire, non saltare in silenzio. Stessa famiglia di controllo
+      # dell'audit sopra, sullo stesso job perche' e' lo stesso tema (fiducia
+      # sulla catena di dipendenza), non un job nuovo.
+      - name: Provenienza vendor (pacchetto verificato + patch congelate)
+        run: python scripts/verifica_vendor_provenienza.py
+
+      # Il gate di risoluzione compila solo metadata (non l'intero
+      # workspace): niente doppio lavoro con `test`/`fuzz-build` sopra, ma
+      # prova che entrambi risolvano al vendor patchato — la trappola nota
+      # e' fuzz che ricade sul registry non patchato in silenzio.
+      - name: Risoluzione vendor nei due workspace
+        run: python scripts/verifica_risoluzione_vendor.py
+
+      # Albero sperimentale del filtro (vedi PROVENANCE-FILTRO-SPERIMENTALE.md):
+      # provenienza separata da quella del candidato congelato sopra —
+      # ricostruzione da base gia' verificata + patch registrata, non
+      # un secondo download da crates.io.
+      - name: Provenienza del filtro sperimentale (base verificata + patch)
+        run: python scripts/verifica_filtro_sperimentale.py
+
   # Compilazione dell'INTERO progetto fuzz (tutti i `[[bin]]` dei target), su
   # toolchain stabile e `--locked`: niente campagna libFuzzer, niente nightly,
   # niente sanitizer.

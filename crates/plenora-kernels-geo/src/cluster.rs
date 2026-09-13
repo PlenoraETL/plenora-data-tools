@@ -334,17 +334,15 @@ fn prepare_points(geometries: &[Option<Geometry<f64>>]) -> Result<PreparedPoints
         {
             return Err(ClusterError::NonFiniteCoordinate { index });
         }
-        geometry
-            .validazione_protetta()
-            .map_err(|esito| {
-                esito.separa(
-                    |ragione| ClusterError::InvalidGeometry {
-                        index,
-                        reason: ragione.to_string(),
-                    },
-                    ClusterError::ValidazioneNonConclusa,
-                )
-            })?;
+        geometry.validazione_protetta().map_err(|esito| {
+            esito.separa(
+                |ragione| ClusterError::InvalidGeometry {
+                    index,
+                    reason: ragione.to_string(),
+                },
+                ClusterError::ValidazioneNonConclusa,
+            )
+        })?;
         let Geometry::Point(point) = geometry else {
             return Err(ClusterError::UnsupportedGeometry {
                 index,

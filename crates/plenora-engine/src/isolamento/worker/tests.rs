@@ -539,6 +539,9 @@ fn il_secondo_fatto_entra_nel_messaggio_e_non_negli_assi() {
 
     // Senza secondo fatto il messaggio non viene toccato: e' cio' che fissa che
     // il caso misuri la composizione e non `con_anche` in generale.
-    let solo = super::con_anche(crate::protocollo::assi::errore_dichiarabile(&del_lavoro), None);
+    let solo = super::con_anche(
+        crate::protocollo::assi::errore_dichiarabile(&del_lavoro),
+        None,
+    );
     assert_eq!(solo.messaggio, nudo.messaggio);
 }

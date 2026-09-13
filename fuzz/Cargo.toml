@@ -28,6 +28,14 @@ num-traits = "=0.2.19"
 geo = "=0.33.1"
 geozero = { version = "=0.15.1", default-features = false, features = ["with-geo", "with-wkb"] }
 
+# BOZZA NON ADOTTATA — vedi il commento gemello in ../Cargo.toml: stessa
+# provenienza, stessi vendor/, duplicato qui perche' questo workspace non
+# eredita [patch] dal manifesto principale.
+[patch.crates-io]
+geo = { path = "../vendor/geo-0.33.1-exact-filtered" } # SPERIMENTALE, vedi ../Cargo.toml
+wkt = { path = "../vendor/wkt-0.14.0-v2" }
+i_shape = { path = "../vendor/i_shape-1.18.0-buffer" }
+
 # ---------------------------------------------------------------------------
 # Target portati da plenora-nogeo-tools/fuzz (adattati ai nuovi path:
 # plenora_nogeo_tools -> plenora_engine::table_engine).

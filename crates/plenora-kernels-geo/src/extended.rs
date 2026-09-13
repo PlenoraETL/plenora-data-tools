@@ -45,25 +45,21 @@ fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedError> {
             "coordinate NaN o infinite".to_owned(),
         ));
     }
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtendedError::InvalidInput(ragione.to_string()),
-                ExtendedError::ValidazioneNonConclusa,
-            )
-        })
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedError::InvalidInput(ragione.to_string()),
+            ExtendedError::ValidazioneNonConclusa,
+        )
+    })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedError> {
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtendedError::InvalidOutput(ragione.to_string()),
-                ExtendedError::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedError::InvalidOutput(ragione.to_string()),
+            ExtendedError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 

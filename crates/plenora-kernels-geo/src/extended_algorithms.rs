@@ -67,14 +67,12 @@ fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedAlgorithmError
             "coordinate NaN o infinite".to_owned(),
         ));
     }
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtendedAlgorithmError::InvalidInput(ragione.to_string()),
-                ExtendedAlgorithmError::ValidazioneNonConclusa,
-            )
-        })
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedAlgorithmError::InvalidInput(ragione.to_string()),
+            ExtendedAlgorithmError::ValidazioneNonConclusa,
+        )
+    })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedAlgorithmError> {
@@ -86,14 +84,12 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedAlg
             "coordinate NaN o infinite".to_owned(),
         ));
     }
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtendedAlgorithmError::InvalidOutput(ragione.to_string()),
-                ExtendedAlgorithmError::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedAlgorithmError::InvalidOutput(ragione.to_string()),
+            ExtendedAlgorithmError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 

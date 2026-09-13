@@ -1543,7 +1543,6 @@ fn backend_ops_identical_outcome_with_fusion_on_and_off() {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Validazione OGC interrotta: l'attribuzione attraverso l'executor vero
 // ---------------------------------------------------------------------------
@@ -1579,8 +1578,8 @@ fn validazione_interrotta_batches() -> Vec<RecordBatch> {
     vec![geo_batch(&[0], &[Some(REPERTO_VALIDAZIONE.to_vec())])]
 }
 
-/// **Una validazione che non conclude non e' colpa del piano, in nessuno dei
-/// due percorsi.**
+/// **Col candidato esatto (BOZZA NON ADOTTATA, Cargo.toml), il reperto e' un
+/// difetto della riga in ogni profilo — mai piu' colpa del piano.**
 ///
 /// # Perche' attraverso l'executor e non su `errore_del_passo`
 ///
@@ -1590,11 +1589,14 @@ fn validazione_interrotta_batches() -> Vec<RecordBatch> {
 /// caso che invoca `errore_del_passo` dal test resterebbe verde. Qui la
 /// pipeline e' quella vera, e i due percorsi sono esercitati entrambi.
 ///
-/// L'attesa dipende dal profilo: il panico di `geo` e' un `debug_assert!`,
-/// quindi senza asserzioni di debug la geometria e' giudicata e invalida
-/// davvero. La cella diventa allora un fallimento **attribuibile alla riga**,
-/// entra nella diagnostica row-scoped, e l'errore finale e' `DataMapping` —
-/// non `InvalidPlan`: la colpa e' dei dati, non della forma del piano.
+/// Senza il diff 1 (`vendor/geo-0.33.1-exact`) l'attesa dipende dal
+/// profilo: il panico e' un `debug_assert!`, quindi senza asserzioni di
+/// debug la geometria e' gia' giudicata invalida davvero. Col segno
+/// corretto di `orient2d`, `geo` conclude sempre — misurato qui in entrambi
+/// i profili, non dedotto dalla patch: la cella e' un fallimento
+/// **attribuibile alla riga**, entra nella diagnostica row-scoped, e
+/// l'errore finale e' `DataMapping` — mai `InvalidPlan`, la colpa e' dei
+/// dati, non della forma del piano.
 #[test]
 fn una_validazione_interrotta_non_e_colpa_del_piano_nei_due_percorsi() {
     let plan = validazione_interrotta_plan();
@@ -1608,19 +1610,10 @@ fn una_validazione_interrotta_non_e_colpa_del_piano_nei_due_percorsi() {
         // non si formerebbe alcun gruppo e `fusion.rs` non sarebbe esercitato.
         Origine::RunnerFuso { gruppi: 1 },
     );
-    let attesa = if cfg!(debug_assertions) {
-        // La validazione non conclude: non e' attribuibile alla riga, quindi
-        // propaga fail-closed senza diagnostica, come difetto nostro.
-        ErrorCategory::Internal
-    } else {
-        // `geo` conclude e giudica la cella invalida: e' un difetto della
-        // riga, entra nella diagnostica row-scoped, e l'attribuzione e' ai
-        // dati — non al piano.
-        ErrorCategory::DataMapping
-    };
     assert_eq!(
-        signature.category, attesa,
-        "attribuzione inattesa per questo profilo — {}",
+        signature.category,
+        ErrorCategory::DataMapping,
+        "il validatore doveva concludere in ogni profilo con l'esatto — {}",
         signature.reason
     );
 }
@@ -1660,10 +1653,11 @@ fn validazione_interrotta_con_misura_terminale_plan() -> Value {
 /// `misura_riga`/`measure_cells` e sulle mutazioni di raccolta), non da
 /// questo caso.
 ///
-/// Le attese sono osservate eseguendo il test in entrambi i profili, non
-/// dedotte: debug conclude `Internal`/nessuna diagnostica (stessa barriera
-/// del caso di trasformazione sopra); release conclude `DataMapping` con
-/// diagnostica di riga completa e causa `geometry.invalid_wkb`.
+/// Con il candidato esatto l'attesa non dipende piu' dal profilo: `geo`
+/// conclude sempre (diff 1), quindi `DataMapping` con diagnostica di riga
+/// completa e causa `geometry.invalid_wkb`, misurato in entrambi i profili —
+/// non dedotto. Senza la patch il debug conclude `Internal` senza
+/// diagnostica (stessa barriera del caso di trasformazione sopra).
 #[test]
 fn una_validazione_interrotta_con_misura_terminale_non_e_colpa_del_piano() {
     let plan = validazione_interrotta_con_misura_terminale_plan();
@@ -1674,20 +1668,15 @@ fn una_validazione_interrotta_con_misura_terminale_non_e_colpa_del_piano() {
         Some("t"),
         Origine::RunnerFuso { gruppi: 1 },
     );
-    if cfg!(debug_assertions) {
-        assert_eq!(signature.category, ErrorCategory::Internal);
-        assert!(signature.diagnostics.is_none());
-    } else {
-        assert_eq!(signature.category, ErrorCategory::DataMapping);
-        let diagnostics = signature
-            .diagnostics
-            .as_ref()
-            .expect("release: errore ordinario, diagnostica di riga attesa");
-        assert_eq!(
-            diagnostics.counts.get("geometry.invalid_wkb"),
-            Some(&1),
-            "causa inattesa: {:?}",
-            diagnostics.counts
-        );
-    }
+    assert_eq!(signature.category, ErrorCategory::DataMapping);
+    let diagnostics = signature
+        .diagnostics
+        .as_ref()
+        .expect("errore ordinario, diagnostica di riga attesa");
+    assert_eq!(
+        diagnostics.counts.get("geometry.invalid_wkb"),
+        Some(&1),
+        "causa inattesa: {:?}",
+        diagnostics.counts
+    );
 }

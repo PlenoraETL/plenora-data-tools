@@ -36,6 +36,23 @@ pub enum PredicateError {
     ValidazioneNonConclusa(&'static str),
 }
 
+/// Mappa l'esito della barriera sull'errore proprio di questo modulo,
+/// nominando il lato. Estratta a parte (non solo inline in [`validate`])
+/// perche' e' la conversione che una prova sintetica deve esercitare per
+/// intero: chiamarla con un [`crate::EsitoValidazione::NonConclusa`] fatto a
+/// mano prova che QUESTA mappatura — non una sua reimplementazione — non
+/// appiattisce la distinzione, senza bisogno di un ingresso che faccia
+/// davvero panicare `geo`.
+fn classifica_lato(esito: crate::EsitoValidazione, side: &'static str) -> PredicateError {
+    esito.separa(
+        |ragione| PredicateError::InvalidGeometry {
+            side,
+            reason: ragione.to_string(),
+        },
+        PredicateError::ValidazioneNonConclusa,
+    )
+}
+
 fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), PredicateError> {
     if geometry
         .coords_iter()
@@ -45,15 +62,7 @@ fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), Predicat
     }
     geometry
         .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| PredicateError::InvalidGeometry {
-                    side,
-                    reason: ragione.to_string(),
-                },
-                PredicateError::ValidazioneNonConclusa,
-            )
-        })
+        .map_err(|esito| classifica_lato(esito, side))
 }
 
 /// Valuta il predicato OGC/DE-9IM fra due geometrie, dopo la validazione.
@@ -125,6 +134,52 @@ fn evaluate_unchecked(
 mod tests {
     use super::*;
     use geo::{line_string, polygon, Point};
+
+    /// **Sintetico attraverso la conversione reale**: `classifica_lato` e' la
+    /// stessa funzione che `validate` chiama davvero, non una copia.
+    /// L'innesco (`EsitoValidazione::NonConclusa` costruito a mano) e'
+    /// sintetico perche' nessun reperto reale interrompe piu' `geo` col
+    /// candidato esatto (diff 1) — vedi
+    /// `tests/distinzione_attraverso_i_chiamanti.rs`. Prova che l'interruzione
+    /// resta un `ValidazioneNonConclusa` col lato di questo modulo, non
+    /// un'altra variante.
+    #[test]
+    fn classifica_lato_non_appiattisce_l_interruzione() {
+        let esito = crate::EsitoValidazione::NonConclusa("forma di prova");
+        let errore = classifica_lato(esito, "left");
+        assert!(
+            matches!(
+                errore,
+                PredicateError::ValidazioneNonConclusa("forma di prova")
+            ),
+            "atteso ValidazioneNonConclusa, ottenuto: {errore:?}"
+        );
+        assert_eq!(
+            errore.to_string(),
+            "validazione OGC non conclusa: forma di prova (contenuto non pubblicato)"
+        );
+    }
+
+    /// Controprova: lo stesso lato, con un esito **concluso** (geometria
+    /// davvero invalida), produce l'altra variante — mai la stessa. Senza
+    /// questa meta', la prova sopra non dimostrerebbe una distinzione: solo
+    /// che un input produce un'etichetta.
+    #[test]
+    fn classifica_lato_su_esito_concluso_resta_invalidgeometry() {
+        let esito = crate::EsitoValidazione::NonValida(crate::RagioneNonValida::AutoIntersezione);
+        let errore = classifica_lato(esito, "right");
+        assert!(
+            matches!(
+                errore,
+                PredicateError::InvalidGeometry { side: "right", .. }
+            ),
+            "atteso InvalidGeometry, ottenuto: {errore:?}"
+        );
+        assert_eq!(
+            errore.to_string(),
+            "geometria right non valida: anello con auto-intersezione"
+        );
+    }
 
     #[test]
     fn de9im_predicates_distinguish_boundary_and_interior() {

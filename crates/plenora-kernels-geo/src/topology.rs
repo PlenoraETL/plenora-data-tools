@@ -62,15 +62,21 @@ pub enum TopologyError {
 use crate::geometry_type_name as geometry_name;
 use crate::ValidazioneProtetta as _;
 
+/// Mappa l'esito della barriera sull'errore proprio di questo modulo.
+/// Estratta a parte perche' e' la conversione che una prova sintetica deve
+/// esercitare per intero: vedi la motivazione gemella in
+/// `predicates::classifica_lato`.
+fn classifica_geometria(esito: crate::EsitoValidazione) -> TopologyError {
+    esito.separa(
+        |ragione| TopologyError::InvalidGeometry(ragione.to_string()),
+        TopologyError::ValidazioneNonConclusa,
+    )
+}
+
 fn as_multi_polygon(geometry: &Geometry<f64>) -> Result<MultiPolygon<f64>, TopologyError> {
     geometry
         .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| TopologyError::InvalidGeometry(ragione.to_string()),
-                TopologyError::ValidazioneNonConclusa,
-            )
-        })?;
+        .map_err(classifica_geometria)?;
     as_multi_polygon_validated(geometry)
 }
 
@@ -91,12 +97,7 @@ fn as_multi_polygon_validated(
 fn checked_result(result: MultiPolygon<f64>) -> Result<Geometry<f64>, TopologyError> {
     result
         .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| TopologyError::InvalidGeometry(ragione.to_string()),
-                TopologyError::ValidazioneNonConclusa,
-            )
-        })?;
+        .map_err(classifica_geometria)?;
     Ok(Geometry::MultiPolygon(result))
 }
 
@@ -612,6 +613,44 @@ mod tests {
         Rect, Triangle,
     };
     use proptest::prelude::*;
+
+    /// Sintetico attraverso la conversione reale (stessa motivazione di
+    /// `predicates::classifica_lato_non_appiattisce_l_interruzione`): nessun
+    /// reperto reale interrompe piu' `geo` col candidato esatto, quindi
+    /// l'innesco e' un `EsitoValidazione::NonConclusa` costruito a mano, ma
+    /// la funzione chiamata e' quella vera di `dissolve`.
+    #[test]
+    fn classifica_geometria_non_appiattisce_l_interruzione() {
+        let esito = crate::EsitoValidazione::NonConclusa("forma di prova");
+        let errore = classifica_geometria(esito);
+        assert!(
+            matches!(
+                errore,
+                TopologyError::ValidazioneNonConclusa("forma di prova")
+            ),
+            "atteso ValidazioneNonConclusa, ottenuto: {errore:?}"
+        );
+        assert_eq!(
+            errore.to_string(),
+            "validazione OGC non conclusa: forma di prova (contenuto non pubblicato)"
+        );
+    }
+
+    /// Controprova: un esito concluso produce l'altra variante — mai la
+    /// stessa.
+    #[test]
+    fn classifica_geometria_su_esito_concluso_resta_invalidgeometry() {
+        let esito = crate::EsitoValidazione::NonValida(crate::RagioneNonValida::AutoIntersezione);
+        let errore = classifica_geometria(esito);
+        assert!(
+            matches!(errore, TopologyError::InvalidGeometry(_)),
+            "atteso InvalidGeometry, ottenuto: {errore:?}"
+        );
+        assert_eq!(
+            errore.to_string(),
+            "geometria topologica non valida: anello con auto-intersezione"
+        );
+    }
 
     fn square(x: f64, y: f64, size: f64) -> Geometry<f64> {
         Geometry::Polygon(polygon![
