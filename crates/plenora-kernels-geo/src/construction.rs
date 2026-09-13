@@ -92,14 +92,12 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
     }
     let geometry = Geometry::<f64>::try_from_wkt_str(value)
         .map_err(|error| ConstructionError::InvalidWkt(error.to_string()))?;
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
-                ConstructionError::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+            ConstructionError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 
@@ -141,13 +139,12 @@ pub fn line_from_ordered_points(
     let line = Geometry::LineString(LineString::new(
         points.into_iter().map(|point| point.0).collect(),
     ));
-    line.validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
-                ConstructionError::ValidazioneNonConclusa,
-            )
-        })?;
+    line.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+            ConstructionError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(Some(line))
 }
 
@@ -174,14 +171,12 @@ pub fn polygon_from_ordered_points(
         LineString::new(points.into_iter().map(|point| point.0).collect()),
         Vec::new(),
     ));
-    polygon
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
-                ConstructionError::ValidazioneNonConclusa,
-            )
-        })?;
+    polygon.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+            ConstructionError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(Some(polygon))
 }
 

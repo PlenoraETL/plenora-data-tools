@@ -79,18 +79,16 @@ fn checked_envelope(
     {
         return Err(SpatialJoinError::NonFiniteCoordinate { side, index });
     }
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| SpatialJoinError::InvalidGeometry {
-                    side,
-                    index,
-                    reason: ragione.to_string(),
-                },
-                SpatialJoinError::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| SpatialJoinError::InvalidGeometry {
+                side,
+                index,
+                reason: ragione.to_string(),
+            },
+            SpatialJoinError::ValidazioneNonConclusa,
+        )
+    })?;
     envelope_of_validated(geometry, side, index)
 }
 

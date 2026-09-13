@@ -16,19 +16,29 @@
 //! 2.47e-312 e' subnormale. Vietare una classe di magnitudini rifiuterebbe
 //! geometrie valide senza chiudere il difetto.
 //!
-//! # Dov'e' davvero il punto di rottura
+//! # Dov'e' il punto di rottura, senza il candidato esatto
 //!
 //! Entrambi i reperti sono `MultiPolygon` di tre poligoni: i primi due validi
 //! da soli, il terzo no. Il panico e' un **`debug_assert!`** di `geo`
-//! (`edge_end_bundle_star.rs:116`) il cui guardiano chiede se la geometria sia
-//! valida — ma `propagate_side_labels` riceve **un solo** operando, e il
-//! conflitto topologico nasce dalla *coppia*: relazionare il poligono 1
-//! (valido) con il 2 (invalido). Il guardiano guarda quello valido, non vede
-//! l'altro, e l'asserzione scatta. La conclusione ordinaria di `geo`, quando la
-//! raggiunge, e' infatti `ElementsOverlaps(1, 2)`.
+//! (`edge_end_bundle_star.rs:116`) il cui guardiano chiede se la geometria
+//! e' valida — ma `propagate_side_labels` riceve **un solo** operando, e
+//! il conflitto topologico nasce dalla *coppia*: relazionare il poligono 1
+//! (valido) con il 2 (invalido). Il guardiano guarda quello valido, non
+//! vede l'altro, e l'asserzione scatta solo con le asserzioni di debug
+//! attive — mai in produzione.
 //!
-//! Ne segue che il panico esiste **solo dove le asserzioni di debug sono
-//! attive**: la batteria, e il target del fuzz. Non la produzione.
+//! # Con il candidato esatto (BOZZA NON ADOTTATA, vedi Cargo.toml)
+//!
+//! Il candidato memory-lab sostituisce il segno di `orient2d` con aritmetica
+//! intera esatta (`vendor/geo-0.33.1-exact`), non il guardiano: l'asserzione
+//! resta scritta uguale. Corretto il segno, `geo` non la fa piu' scattare su
+//! questi due reperti in NESSUN profilo — conclude sempre, e la conclusione
+//! e' un ingresso invalido (non piu' `ElementsOverlaps`: un anello con
+//! auto-intersezione, misurato sotto). La distinzione profilo-dipendente che
+//! questo file verifica senza il candidato esatto non c'e' piu' per questi
+//! due reperti specifici quando il candidato e' applicato: resta la garanzia
+//! generale (contenimento se `geo` panicasse per un motivo diverso), provata
+//! separatamente e sinteticamente in `barriera_privacy_processo.rs`.
 //!
 //! # La verifica su stderr non e' qui
 //!
@@ -68,41 +78,26 @@ const REPERTO_B: &[u8] = &[
     1, 1, 1, 1, 0,
 ];
 
-/// **Una validazione che non conclude non e' un piano invalido.**
+/// **Col candidato esatto, entrambi i reperti sono un ingresso invalido — in
+/// ogni profilo.**
 ///
-/// Quando i reperti fanno panicare `geo`, la barriera li trasforma in errore, e
-/// l'errore e' `Internal`. Non `InvalidPlan`, perche' nessuno ha **dimostrato**
-/// che quell'ingresso sia invalido — il validatore si e' interrotto. Dire
-/// «piano invalido» manderebbe chi legge a correggere un errore che non ha
-/// commesso, ed e' la stessa distinzione che l'executor fa per il panico di un
-/// kernel.
-///
-/// # Perche' l'attesa dipende dal profilo
-///
-/// Perche' il panico di `geo` **e' un `debug_assert!`**: esiste solo dove le
-/// asserzioni di debug sono attive. Con `debug_assertions` spente — il profilo
-/// `release`, cioe' la produzione — `geo` non panica affatto: conclude, e
-/// rifiuta i reperti come `ElementsOverlaps`. Sono due comportamenti corretti
-/// della stessa barriera, e il caso pretende quello giusto per il profilo in cui
-/// gira invece di codificarne uno solo. Un caso che pretendesse sempre
-/// `Internal` sarebbe verde in `cargo test` e rosso in `--release` senza che il
-/// codice sia cambiato.
+/// Senza il candidato memory-lab questo caso dipende dal profilo: con
+/// `debug_assertions` attive `geo` panica (guardiano sbagliato,
+/// `ElementsOverlaps` mai raggiunto), la barriera lo contiene come
+/// `Internal`; in `release` conclude da solo. Il segno corretto di
+/// `orient2d` (diff 1, `vendor/geo-0.33.1-exact`) toglie la causa
+/// dell'asserzione, non l'asserzione: `geo` ora conclude **sempre**, in
+/// debug e in release, misurato qui su entrambi i reperti — non dedotto
+/// dalla patch. La categoria e' quella di chi ha scritto l'ingresso, perche'
+/// il validatore ha concluso e non si e' interrotto.
 #[test]
-fn una_validazione_interrotta_e_un_difetto_interno_non_un_ingresso_invalido() {
+fn i_reperti_geo_sono_un_ingresso_invalido_in_ogni_profilo() {
     for (nome, payload) in [("5 settembre", REPERTO_A), ("4 settembre", REPERTO_B)] {
         let errore = geometry_from_wkb(payload).expect_err(nome);
-        let attesa = if cfg!(debug_assertions) {
-            // `geo` panica: la barriera lo contiene e non giudica l'ingresso.
-            ErrorCategory::Internal
-        } else {
-            // `geo` conclude: i poligoni 1 e 2 si sovrappongono davvero, e
-            // giudicare l'ingresso e' corretto.
-            ErrorCategory::InvalidPlan
-        };
         assert_eq!(
             errore.category(),
-            attesa,
-            "{nome}: categoria inattesa per questo profilo — {errore}"
+            ErrorCategory::InvalidPlan,
+            "{nome}: il validatore doveva concludere in ogni profilo con l'esatto — {errore}"
         );
     }
 }
@@ -164,28 +159,25 @@ fn una_geometria_invalida_resta_un_ingresso_invalido() {
 /// la geometria invalida, la forma del payload per la validazione interrotta.
 #[test]
 fn nessun_esito_pubblica_il_testo_della_dipendenza() {
-    // 1. Il reperto. Quale dei due rami lo tratti dipende dal profilo — vedi
-    //    `una_validazione_interrotta_...` — ma l'obbligo e' lo stesso in
-    //    entrambi: il testo reso e' nostro. Il caso pretende percio' la forma
-    //    del profilo in cui gira, non una delle due a caso.
+    // 1. Il reperto. Col candidato esatto conclude in ogni profilo — vedi
+    //    `i_reperti_geo_sono_un_ingresso_invalido_in_ogni_profilo` — quindi
+    //    la ragione appartiene sempre al vocabolario controllato, non piu'
+    //    condizionata dal profilo.
     let reperto = geometry_from_wkb(REPERTO_A)
         .expect_err("rifiutato")
         .to_string();
-    if cfg!(debug_assertions) {
-        assert!(
-            reperto.contains("la validazione non ha potuto concludere")
-                && reperto.contains("contenuto non pubblicato"),
-            "forma inattesa per la validazione interrotta: {reperto}"
-        );
-    } else {
-        assert!(
-            RAGIONI_NOSTRE.iter().any(|nostra| reperto.ends_with(nostra)),
-            "la ragione non appartiene al vocabolario controllato: {reperto}"
-        );
-    }
-    // In nessuno dei due profili il testo di `geo` attraversa il confine.
+    assert!(
+        RAGIONI_NOSTRE
+            .iter()
+            .any(|nostra| reperto.ends_with(nostra)),
+        "la ragione non appartiene al vocabolario controllato: {reperto}"
+    );
+    // Il testo di `geo` non attraversa il confine.
     for parola in ["index", "ring", "intersection", "coordinate", "polygon"] {
-        assert!(!reperto.contains(parola), "testo della dipendenza: {reperto}");
+        assert!(
+            !reperto.contains(parola),
+            "testo della dipendenza: {reperto}"
+        );
     }
 
     // 2. Geometria invalida: la ragione appartiene al vocabolario nostro.

@@ -89,25 +89,21 @@ pub enum ExtensionV2Error {
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionV2Error> {
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtensionV2Error::InvalidInput(ragione.to_string()),
-                ExtensionV2Error::ValidazioneNonConclusa,
-            )
-        })
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV2Error::InvalidInput(ragione.to_string()),
+            ExtensionV2Error::ValidazioneNonConclusa,
+        )
+    })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionV2Error> {
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtensionV2Error::InvalidOutput(ragione.to_string()),
-                ExtensionV2Error::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV2Error::InvalidOutput(ragione.to_string()),
+            ExtensionV2Error::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 
@@ -615,8 +611,7 @@ fn subdivide_validated(
         }
     }
     for part in &parts {
-        part.validazione_protetta()
-            .map_err(|esito| {
+        part.validazione_protetta().map_err(|esito| {
             esito.separa(
                 |ragione| ExtensionV2Error::InvalidOutput(ragione.to_string()),
                 ExtensionV2Error::ValidazioneNonConclusa,

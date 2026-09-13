@@ -300,50 +300,43 @@ mod tests {
         (schema, batches.into_iter().next().expect("batch"), index)
     }
 
-
     /// Il reperto del 5 settembre 2026: fa panicare la validazione OGC di
     /// `geo` dove le asserzioni di debug sono attive.
-    const REPERTO_VALIDAZIONE: &[u8] = &    [
-        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
-        1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
-        116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
-        0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
-        255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
-        0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const REPERTO_VALIDAZIONE: &[u8] = &[
+        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0,
+        1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4,
+        0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0,
+        6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
 
-    /// **Una validazione che non conclude non diventa colpa del piano.**
+    /// **Con il candidato esatto (BOZZA NON ADOTTATA, Cargo.toml), il
+    /// reperto e' un ingresso invalido in ogni profilo — non piu' una
+    /// validazione interrotta.**
     ///
     /// E' il percorso non fuso, per intero: cella WKB -> trasporto -> errore.
-    /// La porta rende `Internal`, e senza la variante dedicata quell'errore
-    /// cadrebbe nel ramo generico come `Arrow`, per poi essere riscritto
-    /// `InvalidPlan` dal passo dell'executor. Il caso pretende che
-    /// l'attribuzione resti nostra.
-    ///
-    /// L'attesa dipende dal profilo perche' il panico di `geo` e' un
-    /// `debug_assert!`: senza, la geometria e' giudicata e invalida davvero.
+    /// Senza il diff 1 (`vendor/geo-0.33.1-exact`) l'attesa dipende dal
+    /// profilo, perche' il panico e' un `debug_assert!` che scatta solo
+    /// con le asserzioni di debug attive. Il segno corretto di `orient2d`
+    /// toglie la causa dell'asserzione: `geo` conclude sempre, misurato qui,
+    /// non dedotto dalla patch. Vedi
+    /// `plenora-kernels-geo/tests/barriera_validazione.rs` per lo stesso
+    /// reperto verificato al confine del decoder.
     #[test]
-    fn una_validazione_interrotta_non_diventa_colpa_del_piano() {
+    fn il_reperto_e_un_ingresso_invalido_in_ogni_profilo() {
         let (schema, batch) = fixture_batch(&[Some(REPERTO_VALIDAZIONE)]);
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
         let errore = run(&arrow_schema(1, ArrowOperation::Centroid), &input)
             .expect_err("il reperto non attraversa il trasporto");
-        let attesa = if cfg!(debug_assertions) {
-            assert!(
-                matches!(errore, ArrowTransportError::Interno(_)),
-                "la validazione interrotta deve restare interna nel trasporto: {errore:?}"
-            );
-            plenora_core::ErrorCategory::Internal
-        } else {
-            plenora_core::ErrorCategory::InvalidPlan
-        };
         assert_eq!(
             errore.errore_del_passo().category(),
-            attesa,
-            "attribuzione inattesa per questo profilo — {errore}"
+            plenora_core::ErrorCategory::InvalidPlan,
+            "il validatore doveva concludere in ogni profilo con l'esatto — {errore}"
         );
     }
 

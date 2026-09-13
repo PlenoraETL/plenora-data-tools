@@ -132,9 +132,7 @@ impl Reprojector {
                 "coordinate NaN o infinite".to_owned(),
             ));
         }
-        geometry
-            .validazione_protetta()
-            .map_err(|esito| {
+        geometry.validazione_protetta().map_err(|esito| {
             esito.separa(
                 |ragione| ProjBackendError::InvalidInput(ragione.to_string()),
                 ProjBackendError::ValidazioneNonConclusa,
@@ -162,9 +160,7 @@ impl Reprojector {
         {
             return Err(ProjBackendError::NonFiniteOutput);
         }
-        output
-            .validazione_protetta()
-            .map_err(|esito| {
+        output.validazione_protetta().map_err(|esito| {
             esito.separa(
                 |ragione| ProjBackendError::InvalidOutput(ragione.to_string()),
                 ProjBackendError::ValidazioneNonConclusa,

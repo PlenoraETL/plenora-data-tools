@@ -165,17 +165,15 @@ fn prepare_element(
     {
         return Err(ExtensionV3Error::NonFiniteCoordinate { index });
     }
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtensionV3Error::InvalidGeometry {
-                    index,
-                    reason: ragione.to_string(),
-                },
-                ExtensionV3Error::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV3Error::InvalidGeometry {
+                index,
+                reason: ragione.to_string(),
+            },
+            ExtensionV3Error::ValidazioneNonConclusa,
+        )
+    })?;
     let polygons = match geometry {
         Geometry::Polygon(polygon) => MultiPolygon::new(vec![polygon.clone()]),
         Geometry::MultiPolygon(polygons) => polygons.clone(),
@@ -285,14 +283,12 @@ fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, Ex
     } else {
         Geometry::MultiPolygon(intersection)
     };
-    geometry
-        .validazione_protetta()
-        .map_err(|esito| {
-            esito.separa(
-                |ragione| ExtensionV3Error::InvalidOutput(ragione.to_string()),
-                ExtensionV3Error::ValidazioneNonConclusa,
-            )
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV3Error::InvalidOutput(ragione.to_string()),
+            ExtensionV3Error::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 
@@ -565,9 +561,7 @@ pub fn shared_paths_nullable(
                     .collect(),
             ))
         };
-        geometry
-            .validazione_protetta()
-            .map_err(|esito| {
+        geometry.validazione_protetta().map_err(|esito| {
             esito.separa(
                 |ragione| ExtensionV3Error::InvalidOutput(ragione.to_string()),
                 ExtensionV3Error::ValidazioneNonConclusa,

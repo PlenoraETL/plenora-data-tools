@@ -1303,8 +1303,7 @@ fn gli_assi_vanno_e_tornano_dal_filo_al_dominio() {
         // `Result`: si guarda che l'esito sia riuscito **e** che il valore sia
         // quello. Un `is_ok()` da solo lascerebbe passare qualunque variante.
         assert!(
-            ritentativo_sul_filo(super::ritentativo(variante))
-                .is_ok_and(|resa| resa == *variante),
+            ritentativo_sul_filo(super::ritentativo(variante)).is_ok_and(|resa| resa == *variante),
             "la disposizione «{nome}» non torna se stessa"
         );
     }

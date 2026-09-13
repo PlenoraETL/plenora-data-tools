@@ -31,7 +31,7 @@ const REPERTO: &[u8] = &[
 /// che sono esattamente la coppia da cui nasce il difetto.
 fn coppia_del_reperto_in_wkt() -> String {
     use geo::{Geometry, MultiPolygon};
-    use geozero::{ToGeo, wkb::Wkb};
+    use geozero::{wkb::Wkb, ToGeo};
     use wkt::ToWkt;
     let Geometry::MultiPolygon(mp) = Wkb(REPERTO).to_geo().expect("decodifica grezza") else {
         panic!("il reperto e' un MultiPolygon");
@@ -41,60 +41,39 @@ fn coppia_del_reperto_in_wkt() -> String {
         .to_string()
 }
 
-/// **L'adapter WKT non conta una validazione interrotta fra le celle invalide.**
+/// **Col candidato esatto, questa coppia e' una cella invalida in ogni
+/// profilo — mai piu' una validazione interrotta.**
 ///
-/// Con le asserzioni di debug attive la cella fa panicare `geo`: l'adapter
-/// deve rendere `Internal`, non `DataMapping`. Senza, `geo` conclude e la
-/// cella e' davvero invalida: `DataMapping` e' allora la risposta giusta.
-///
-/// # Perche' non basta la categoria
-///
-/// Perche' `Internal` puo' nascere da molte cose — un overflow del conteggio
-/// diagnostico, un indice non rappresentabile — e un caso che si fermasse alla
-/// categoria resterebbe verde anche se la cella fallisse per un motivo del
-/// tutto diverso, senza mai arrivare alla validazione OGC. Si pretende percio'
-/// il **testo** che solo quel ramo produce, e nell'altro profilo la
-/// diagnostica di riga che solo il ramo della cella invalida produce.
+/// Senza il diff 1 (`vendor/geo-0.33.1-exact`), con le asserzioni di debug
+/// attive la cella fa panicare `geo` e l'adapter rende
+/// `Internal`, non `DataMapping`. Il segno corretto di `orient2d` toglie la
+/// causa dell'asserzione: `geo` conclude sempre — misurato qui in entrambi i
+/// profili, non dedotto. La distinzione fra i due esiti (provata, senza il
+/// diff 1, con un reperto reale per entrambi) non e' cambiata nell'adapter,
+/// solo il verdetto su QUESTA coppia: resta la meta' "conclusa".
 #[test]
-fn l_adapter_wkt_distingue_la_validazione_interrotta() {
+fn l_adapter_wkt_su_reperto_concluso_resta_datamapping() {
     let wkt = coppia_del_reperto_in_wkt();
     let colonna = StringArray::from(vec![Some(wkt.as_str())]);
-    let errore = from_wkt_column(&colonna, OnWktError::Fail)
-        .expect_err("il reperto non passa");
-    let testo = errore.to_string();
+    let errore = from_wkt_column(&colonna, OnWktError::Fail).expect_err("il reperto non passa");
 
-    if cfg!(debug_assertions) {
-        assert_eq!(
-            errore.category(),
-            ErrorCategory::Internal,
-            "categoria inattesa — {errore}"
-        );
-        // Il ramo raggiunto e' quello della validazione interrotta, non un
-        // altro difetto interno dell'adapter.
-        assert!(
-            testo.contains("validazione OGC non conclusa sulla cella WKT")
-                && testo.contains("contenuto non pubblicato"),
-            "l'errore non viene dalla validazione interrotta: {testo}"
-        );
-    } else {
-        assert_eq!(
-            errore.category(),
-            ErrorCategory::DataMapping,
-            "categoria inattesa — {errore}"
-        );
-        // Qui `geo` conclude: la cella e' contata fra le invalide, con il suo
-        // codice. Il codice sta nella diagnostica di riga, non nel messaggio,
-        // ed e' li' che il caso lo cerca.
-        let plenora_core::PlenoraError::RowDiagnostics { diagnostics, .. } = &errore else {
-            panic!("attesa la diagnostica di riga, trovato {errore:?}");
-        };
-        assert_eq!(
-            diagnostics.counts.get("geometry.invalid_wkt"),
-            Some(&1),
-            "attesa una cella invalida contata: {:?}",
-            diagnostics.counts
-        );
-    }
+    assert_eq!(
+        errore.category(),
+        ErrorCategory::DataMapping,
+        "col candidato esatto `geo` conclude sempre — categoria inattesa: {errore}"
+    );
+    // La cella e' contata fra le invalide, con il suo codice. Il codice sta
+    // nella diagnostica di riga, non nel messaggio, ed e' li' che il caso lo
+    // cerca.
+    let plenora_core::PlenoraError::RowDiagnostics { diagnostics, .. } = &errore else {
+        panic!("attesa la diagnostica di riga, trovato {errore:?}");
+    };
+    assert_eq!(
+        diagnostics.counts.get("geometry.invalid_wkt"),
+        Some(&1),
+        "attesa una cella invalida contata: {:?}",
+        diagnostics.counts
+    );
 }
 
 /// **Una cella WKT ordinariamente invalida resta una cella invalida.**
@@ -105,8 +84,8 @@ fn l_adapter_wkt_distingue_la_validazione_interrotta() {
 #[test]
 fn una_cella_ordinariamente_invalida_resta_tale() {
     let colonna = StringArray::from(vec![Some("NON E' WKT")]);
-    let errore = from_wkt_column(&colonna, OnWktError::Fail)
-        .expect_err("una cella non-WKT non passa");
+    let errore =
+        from_wkt_column(&colonna, OnWktError::Fail).expect_err("una cella non-WKT non passa");
     assert_eq!(
         errore.category(),
         ErrorCategory::DataMapping,

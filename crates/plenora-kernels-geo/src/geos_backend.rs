@@ -545,7 +545,7 @@ pub fn split_polygon_by_linework(
 #[cfg(test)]
 mod tests {
     use super::*;
-        use geo::{line_string, polygon, Area, Geometry};
+    use geo::{line_string, polygon, Area, Geometry};
     use geozero::{CoordDimensions, ToWkb};
 
     fn bow_tie_wkb() -> Vec<u8> {

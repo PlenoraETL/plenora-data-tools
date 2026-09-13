@@ -11,9 +11,8 @@ use serde_json::Value;
 
 use super::config::{GeometryAccessorsConfig, LineLocatePointConfig, OutputColumnConfig};
 use super::helpers::{
-    parametro_non_decodificabile,
-    ensure_name, ensure_name_free, invalid_param, output_fields, output_name, parse_config,
-    rebuild, short_id, validate_wkb_hex,
+    ensure_name, ensure_name_free, invalid_param, output_fields, output_name,
+    parametro_non_decodificabile, parse_config, rebuild, short_id, validate_wkb_hex,
 };
 use super::producers::analyze_add_column;
 use super::{ACCESSOR_COLUMNS, DIAGNOSTIC_COLUMNS, FRACTION_COLUMN};

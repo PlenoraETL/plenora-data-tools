@@ -24,10 +24,9 @@ use super::config::{
 };
 use super::dispatch::require_resolved_crs;
 use super::helpers::{
-    parametro_non_decodificabile,
     ensure_name, ensure_name_free, ensure_non_negative, geometry_field, invalid_param,
-    new_geometry_field, output_fields, parse_config, rebuild, require_normalized_axis_order,
-    resolve_definition, set_geometry_crs, validate_wkb_hex,
+    new_geometry_field, output_fields, parametro_non_decodificabile, parse_config, rebuild,
+    require_normalized_axis_order, resolve_definition, set_geometry_crs, validate_wkb_hex,
 };
 use super::{
     CELL_I_COLUMN, CELL_J_COLUMN, CENTROID_X_COLUMN, CENTROID_Y_COLUMN, DEFAULT_X_COLUMN,

@@ -2299,6 +2299,149 @@ gate anti-panic restano sulla toolchain pinnata. Un crash conta **solo se
 riproducibile sulla pinnata**: riproduzione e minimizzazione avvengono lì
 prima di aprire una correzione.
 
+### Candidato geo esatto (kernel sempre-esatto, senza filtro): il costo è misurato sul join spaziale, non una qualifica generale
+
+**La misura.** Il candidato vendorizzato `geo-0.33.1-exact` (diff 1,
+orientamento esatto — vedi `vendor/geo-0.33.1-exact/PROVENANCE.md`) è stato
+confrontato col predicato originale su un benchmark applicativo mirato: join
+spaziale reale (`spatial_join_nullable_validated`), predicati
+`Overlaps`/`Touches`/`Crosses`, caso positivo e negativo, due densità di
+candidati, `N = 4000`, un riscaldamento scartato più sette ripetizioni
+verificate. Il rapporto candidato/baseline misurato va da **3,06× a 5,94×**
+a seconda dello scenario; l'esecuzione totale del candidato è stata 1,466s
+contro 0,361s del baseline. Nei 16 scenari le coppie prodotte sono risultate
+**identiche byte per byte** fra i due rami: nessuna divergenza di
+correttezza, solo di tempo.
+
+**Il perimetro della misura — dichiarato perché non sia letto oltre.** Non
+è una qualifica prestazionale generale del candidato, né una soglia
+universale. Copre esclusivamente: il join spaziale (non le singole chiamate
+a `relate`/predicati punto-per-cella, misurate a parte nel laboratorio —
+vedi sotto), i tre predicati elencati, `N = 4000` con selettività bbox nota
+per costruzione, la macchina locale su cui è girato il benchmark. Non copre
+gli altri kernel del pacchetto (`voronoi_cells`, `dissolve`, buffer, …), gli
+altri predicati (`Intersects`, `Contains`, `Within`), altre scale di `N`, né
+l'esecuzione nella VM di CI.
+
+**Continuità con la misura di laboratorio.** Il laboratorio aveva già
+misurato il costo per-chiamata isolato di `relate` (circa 1,03–1,20
+µs/chiamata, fino a 705,5× il baseline nel microbenchmark ordinario —
+`handoff-final-20260909/CONSEGNA-DATA-TOOLS.md`, punto 2): un numero di
+throughput di libreria, non applicativo. Questa misura lo completa sul
+carico che il prodotto esegue davvero, e i due non sono la stessa grandezza:
+un rapporto di libreria enorme può tradursi in un rapporto applicativo molto
+più piccolo quando il costo per chiamata è una piccola frazione del lavoro
+totale del join (indicizzazione R-tree, allocazione delle coppie, I/O).
+
+**Dove sono i dati.** `benchmarks/join/geo_join_predicates.jsonl` (candidato)
+e l'albero gemello di confronto (baseline: stesso file, stesso schema,
+`geo-0.33.1-exact` costruito con `logging.patch` soltanto, senza
+`geo-exact-orientation.patch`) — entrambi locali, non nel repository del
+prodotto. Output precedenti conservati in `benchmarks/join/precedenti/`. Il
+generatore è `crates/plenora-kernels-geo/examples/bench_geo_join_predicates.rs`,
+un binario `example`, non incluso nel binario di produzione.
+
+**Perché è accettato.** Il predicato originale è dimostrabilmente sbagliato
+su un sottoinsieme di ingressi (auto-intersezioni all'orientamento
+sbagliato — la ragione stessa del diff 1): tornare indietro scambierebbe un
+costo misurato con un errore silenzioso.
+
+**Condizione di rientro.** Non è una deroga con una condizione di chiusura:
+è un costo accettato come compromesso per procedere verso la qualificazione
+del candidato esatto. Rivederlo — verso una misura più ampia sugli altri
+kernel — resta lavoro futuro distinto, non anticipato né sostituito da
+questa nota. Un percorso rapido con fallback esatto e limite d'errore
+dimostrato non è più assente: esiste come candidato sperimentale separato,
+vedi la sezione seguente.
+
+### Candidato filtrato sperimentale: la regressione O(n²) su buffer e validazione, e il percorso rapido proposto
+
+**Da dove nasce.** Il kernel sempre-esatto sopra chiama
+`exact_orientation::orient2d_sign_bits` (aritmetica intera a 4224 bit,
+nessun percorso rapido) su OGNI confronto di orientamento, senza eccezioni.
+Per un predicato di join il numero di chiamate è piccolo e il costo resta
+nell'ordine di 3-6× (misura sopra). Per operazioni che invocano
+l'orientamento molte volte per geometria — la validazione OGC in ingresso a
+ogni kernel, `buffer` — il conteggio delle chiamate cresce quadraticamente
+col numero di vertici, e il fattore costante si traduce in una regressione
+di ordini di grandezza. Isolata con
+`crates/plenora-kernels-geo/examples/diag_geo_scaling.rs` (`validazione_sola`,
+`buffer`, `simplify`, `centroid`), a parità di forma di crescita O(n²) su
+entrambi i rami (nessun cambio di classe di complessità, solo del fattore
+costante).
+
+**Un limite dichiarato sulla misura, non sulla diagnosi.** L'albero candidato
+usato per questa misura aveva, al momento della compilazione, un
+`Cargo.lock` con 32 pacchetti transitivi e una nuova crate (`zlib-rs`) a
+versioni diverse da quelle dell'albero di confronto — deriva accidentale di
+un comando `cargo` non vincolato eseguito durante questa integrazione,
+indipendente dal filtro, dichiarata e corretta (`Cargo.lock` riportato allo
+stato del commit di base più le sole tre sostituzioni vendorizzate del
+`[patch.crates-io]`). Fra i pacchetti derivati, `geo-types` e' raggiungibile
+dal percorso geometrico (dipendenza diretta di `geo`, verificato con
+`cargo tree`): la lettura del sorgente del kernel stabilisce la causa
+qualitativa (la chiamata incondizionata all'aritmetica esatta a 4224 bit),
+ma non isola quantitativamente il contributo delle dipendenze cambiate sul
+rapporto misurato — e gli orari dei file usati per ricostruire la sequenza
+non certificano quali versioni fossero effettivamente compilate nel binario
+che ha prodotto quel numero. Il rapporto riportato qui (ordini di
+grandezza, non una cifra unica) resta quindi la misura di quel confronto
+specifico: indicativo della causa, non certificato a `Cargo.lock` corretto
+e non ripetuto.
+
+**Il filtro.** Progettato, derivato con disuguaglianze esplicite (lemma di
+Higham, limite di errore provato `< 4,4u·S + e₀`) e qualificato nel banco
+standalone `plenora-memlab-filtro-sperimentale/`: 6788 casi contro l'oracolo
+razionale (`fractions.Fraction`), zero fallimenti in debug e in release, un
+controesempio reale trovato e corretto durante la qualifica (sottoflusso di
+prodotto trattato come zero genuino). Certifica il segno con un limite
+d'errore dimostrato quando l'ingresso lo consente, e ricade sullo stesso
+kernel sempre-esatto — invariato — in ogni altro caso: vedi
+`vendor/geo-0.33.1-exact-filtered/PROVENANCE-FILTRO-SPERIMENTALE.md` per la
+derivazione e la provenienza complete.
+
+**Stato in questo albero.** `Cargo.toml` qui risolve `geo` al vendor
+filtrato (`vendor/geo-0.33.1-exact-filtered`), non al candidato sempre-esatto
+descritto sopra: `scripts/verifica_risoluzione_vendor.py` in questo albero
+lo pretende esplicitamente, a differenza della copia dello stesso script
+nell'albero del candidato congelato. Con il filtro, il test prima
+catastrofico (`diag_geo_scaling`/la suite completa) converge: 67-71s in
+debug, 1,75-1,8s in release, misurato qui — non dedotto dalla derivazione
+numerica. Il benchmark del join spaziale sopra (3,06×-5,94×) descrive il
+kernel sempre-esatto SENZA filtro e non è stato ripetuto col filtro: il
+filtro si applica anche a quel percorso, quindi il rapporto atteso con il
+filtro attivo è minore, ma resta una previsione, non una misura.
+
+**Stato dell'adozione.** Sperimentale. Nessuna sostituzione del candidato
+congelato, commit, push o VM senza autorizzazione esplicita.
+
+### Fallimenti upstream comuni e divergenze GEOS: non risolti da questa integrazione
+
+**Fallimenti upstream comuni.** La suite di test di `geo-0.33.1-exact` non è
+interamente verde, né sulla base né sul candidato: `test_polygon_densify`,
+`test_non_standard_geoid` e il doctest `GeodesicMeasure` falliscono
+**identici in entrambi i rami**. Non sono causati dal diff 1 né dal diff 2
+(stesso esito prima e dopo la patch): sono fallimenti della libreria
+upstream indipendenti da questa integrazione. Log conservati nel laboratorio
+(`R/windows/correctness-followup-01`), non ripetuti né riportati qui.
+
+**Perché non sono stati "risolti" qui.** Correggerli richiederebbe
+modificare codice di `geo` estraneo ai diff 1/3/5 vendorizzati — fuori dal
+mandato di questa integrazione, che lascia il candidato numerico invariato.
+Restano un difetto noto della versione upstream, non della patch.
+
+**Divergenze GEOS.** Il confronto fra `geo` (candidato esatto) e GEOS su un
+insieme di reperti mostra divergenze le cui cause interne **non sono
+spiegate**. L'accordo fra il candidato e l'oracolo razionale sui reperti
+esaminati **non risolve**, e non va letto come se risolvesse, la divergenza
+generale fra le due librerie: sono osservazioni su un insieme finito di
+casi, non una prova di equivalenza. Audit conservati nel laboratorio
+(`R/windows/independent-geos-01`).
+
+**Condizione di rientro.** Nessuna, dichiarata come tale: sia i fallimenti
+upstream sia le divergenze GEOS restano aperti finché non esiste
+un'indagine dedicata — fuori dal perimetro di questa integrazione.
+
 ## Il verificatore
 
 `scripts/verifica_memoria_governata.py` verifica che i siti di allocazione e

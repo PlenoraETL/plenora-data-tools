@@ -333,8 +333,9 @@ impl ArrowTransportError {
             | Self::Analysis(An::ValidazioneNonConclusa(_))
             | Self::SpatialJoin(S::ValidazioneNonConclusa(_)) => true,
             #[cfg(feature = "proj-backend")]
-            Self::Reproject(plenora_kernels_geo::proj_backend::ProjBackendError::
-                ValidazioneNonConclusa(_)) => true,
+            Self::Reproject(
+                plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa(_),
+            ) => true,
             // Il backend GEOS non ha una variante propria: incapsula il
             // `PlenoraError` del contratto, quindi si guarda quello.
             #[cfg(feature = "geos-backend")]
@@ -453,9 +454,8 @@ mod tests {
     #[test]
     fn un_errore_interno_avvolto_resta_interno() {
         use plenora_core::diagnostics::{
-            RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics,
-            RowDiagnosticsCompleteness, ROW_DIAGNOSTICS_CONTRACT,
-            ROW_DIAGNOSTICS_INDEX_BASIS,
+            RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+            ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
         };
 
         let mut counts = std::collections::BTreeMap::new();
@@ -516,28 +516,22 @@ mod tests {
         let mut casi = vec![
             ArrowTransportError::Kernel(OperationError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Topology(TopologyError::ValidazioneNonConclusa("forma")),
-            ArrowTransportError::Construction(ConstructionError::ValidazioneNonConclusa(
-                "forma",
-            )),
+            ArrowTransportError::Construction(ConstructionError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Advanced(AdvancedError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Extended(ExtendedError::ValidazioneNonConclusa("forma")),
-            ArrowTransportError::ExtendedAlgorithm(
-                ExtendedAlgorithmError::ValidazioneNonConclusa("forma"),
-            ),
-            ArrowTransportError::Predicate(PredicateError::ValidazioneNonConclusa("forma")),
-            ArrowTransportError::Analysis(AnalysisError::ValidazioneNonConclusa("forma")),
-            ArrowTransportError::SpatialJoin(SpatialJoinError::ValidazioneNonConclusa(
+            ArrowTransportError::ExtendedAlgorithm(ExtendedAlgorithmError::ValidazioneNonConclusa(
                 "forma",
             )),
+            ArrowTransportError::Predicate(PredicateError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Analysis(AnalysisError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::SpatialJoin(SpatialJoinError::ValidazioneNonConclusa("forma")),
         ];
         // I due backend opzionali: senza la feature il ramo non e' compilato,
         // e il caso non puo' pretenderlo. Con la feature, si', ed e' li' che
         // un mapping dimenticato si vedrebbe.
         #[cfg(feature = "proj-backend")]
         casi.push(ArrowTransportError::Reproject(
-            plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa(
-                "forma",
-            ),
+            plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa("forma"),
         ));
         #[cfg(feature = "geos-backend")]
         casi.push(ArrowTransportError::MakeValid(
