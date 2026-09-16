@@ -71,19 +71,9 @@ pub mod cancellation;
 /// appartiene al modulo `protocollo`, quindi questi tipi non escono dal
 /// crate.
 ///
-/// # Perche' sotto `cfg`, e quando ne esce
-///
-/// Perche' non ha ancora un chiamante di produzione: il supervisore che la
-/// chiama esiste, ma non e' attivato da nessuna policy. Lasciarla compilata in
-/// produzione la farebbe risultare codice morto, e l'unico modo di zittire
-/// quell'avviso senza toglierla sarebbe renderla pubblica — cioe' fingere
-/// un'API che nessuno usa, che e' la scorciatoia che il registro vieta.
-///
-/// **Condizione di rientro:** il `cfg` cade quando il supervisore viene
-/// **davvero attivato**, non quando qualcosa diventa `pub`. Perimetro e regola
-/// stanno in
-/// `errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals`.
-#[cfg(any(test, feature = "internals"))]
+/// Non e' piu' sotto `cfg`: il chiamante di produzione e'
+/// `isolamento::macchina::conduci_isolato` (`PR-12`), che la usa per
+/// giudicare un tentativo reale, non solo quelli dei casi.
 mod classificazione;
 // Il `commit_token` e' **privato come modulo**: esce solo il tipo, tramite
 // un `pub use` piu' sotto.
@@ -143,7 +133,13 @@ pub mod ipc_boundary;
 //
 // Regola, perimetro e condizioni di rientro sono registrati in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-mod isolamento;
+//
+// `PR-12`: `pub` perche' `isolamento::attivazione` e
+// `isolamento::esecuzione_isolata` sono ora la superficie che il chiamante
+// di produzione (`plenora-cli`) usa da fuori crate. Cio' che resta
+// `pub(super)`/privato dentro ai sottomoduli non e' toccato da questo: la
+// granularita' e' loro, non di questa riga.
+pub mod isolamento;
 
 /// Se questo processo e' uno spawner, lo esegue e non torna.
 ///
@@ -196,6 +192,32 @@ pub fn spawner_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
 #[must_use]
 pub fn worker_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
     isolamento::dal_confine_se_worker(argomenti)
+}
+/// Se questo processo e' un **verificatore**, lo porta fin dove arriva.
+///
+/// # Dove va chiamata
+///
+/// Nello stesso punto di [`worker_dal_confine`], e con lo stesso ordine
+/// rispetto al parser della CLI: e' una terza modalita' dello stesso
+/// eseguibile, scelta dal primo argomento — non una variante del worker. Il
+/// verificatore non esegue un piano e non riceve mai la destinazione finale.
+///
+/// # Che cosa rende
+///
+/// [`DalConfine::AltroComando`] se `argv[1]` non e' del namespace del
+/// verificatore: il processo non e' un verificatore e il chiamante prosegue
+/// normalmente.
+///
+/// [`DalConfine::Conclusa`] quando il verificatore ha percorso la sequenza
+/// fino all'esito dichiarato — che **non** significa che l'artefatto sia
+/// valido: significa che il verificatore ha detto com'e' andato il
+/// confronto, e chi giudica e' il coordinatore.
+///
+/// [`DalConfine::Fallita`] quando non c'e' stato modo di dirlo.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn verificatore_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
+    isolamento::dal_confine_se_verificatore(argomenti)
 }
 // Il perimetro di qualificazione, che esiste solo quando `rustc` riceve
 // `--cfg qualificazione_isolamento`.
@@ -259,20 +281,11 @@ pub mod table_engine;
 pub mod temp_store;
 // I passi da 3 a 8-bis, e con loro il passo 9 che ne consuma la prova.
 //
-// Sotto `cfg`, e non per abitudine: **nessun percorso di produzione li
-// attraversa ancora**. Chi li attraversera' e' il supervisore, che osserva lo
-// stato terminale del figlio e il suo `Esito` — i passi 1 e 2 — e arriva con la
-// PR che porta il lato supervisore.
-//
-// Renderli pubblici li toglierebbe da questo elenco senza dar loro un
-// chiamante: `dead_code` tace davanti a una funzione pubblica anche quando
-// nessuno puo' chiamarla, e quel silenzio non e' l'assenza del difetto. Il
-// `cfg` invece dice cio' che e' vero — codice compiuto e non ancora usato — e
-// continuera' a dirlo finche' non smettera' di esserlo.
-//
-// Regola, perimetro e condizione di rientro sono registrati in
-// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
+// Non e' sotto `cfg`: il chiamante di produzione e'
+// `isolamento::esecuzione_isolata::esegui_isolato` (`PR-12`), che osserva lo
+// stato terminale del figlio e il suo `Esito` — i passi 1 e 2 — e arriva alla
+// verifica e alla pubblicazione da li'. La condizione di rientro dichiarata
+// in errori-e-limiti.md e' proprio questa.
 mod verifica;
 
 pub use cancellation::CancellationToken;
@@ -282,8 +295,8 @@ pub use governor::{GovernedBatch, MemoryGovernor, MemoryLease, MemoryMetrics, Re
 pub use ipc_boundary::{BoundaryBatches, IpcFormat, IpcLimits};
 pub use plenora_kernels_table::spill::SpillMetrics;
 pub use prepare::{
-    explain, AccessorKind, BatchTarget, ExecutionPlan, GeoRole, InputStatistics, LastConsumer,
-    MeasureKind, MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig,
+    explain, AccessorKind, BatchTarget, Confinamento, ExecutionPlan, GeoRole, InputStatistics,
+    LastConsumer, MeasureKind, MetricsConfig, ParallelismStrategy, PhysicalSegment, PreparedConfig,
     PreparedKernel, RuntimeContext, SegmentMode,
 };
 pub use table_engine::{

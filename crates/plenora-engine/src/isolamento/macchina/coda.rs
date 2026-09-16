@@ -123,6 +123,7 @@ impl Produttore {
     /// Serve a dire quali sono i produttori il cui posto non deve poter essere
     /// occupato da nessun altro, e a fissarlo in un caso invece che in un
     /// commento.
+    #[cfg(any(test, feature = "internals"))]
     pub(super) const fn terminale(self) -> bool {
         match self {
             Self::Orologio | Self::Annullatore | Self::Sorvegliante | Self::Raccoglitore => true,
@@ -303,6 +304,7 @@ impl Bocchetta {
     }
 
     /// Quanti gettoni restano.
+    #[cfg(any(test, feature = "internals"))]
     pub(super) const fn rimasti(&self) -> usize {
         self.rimasti
     }
@@ -519,6 +521,12 @@ impl Coda {
     /// # Che cosa rende
     ///
     /// I fatti raccolti, e il motivo se il canale non si e' mai disconnesso.
+    ///
+    /// Il chiamante di produzione passa invece per
+    /// [`Self::chiudi_e_drena_entro`] con [`Self::tetto_di_produzione`]: qui
+    /// resta la comodita' per i casi che vogliono il tetto vero senza
+    /// scriverlo due volte.
+    #[cfg(any(test, feature = "internals"))]
     pub(super) fn chiudi_e_drena(self) -> (Vec<Fatto>, Option<String>) {
         self.chiudi_e_drena_entro(TETTO_DEL_DRENAGGIO)
     }

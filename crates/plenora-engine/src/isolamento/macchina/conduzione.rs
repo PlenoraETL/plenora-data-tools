@@ -53,7 +53,7 @@ use super::produttori::{
     avvia_lettore, avvia_orologio, avvia_sorvegliante, Annullatore, CanaleOperativo, Difetto,
     Osservatore, Resoconto,
 };
-use super::{EsitoDelSupervisore, Fatto, Impedimento, Registro, UscitaOsservata};
+use super::{EsitoDelSupervisore, Fatto, Impedimento, Registro, Ruolo, UscitaOsservata};
 use crate::isolamento::sorgente::Freno;
 
 /// Ogni quanto il consumatore torna a guardare se e' ora di chiudere.
@@ -77,7 +77,7 @@ const PASSO_DEL_GIRO: Duration = Duration::from_millis(10);
 /// Perche' se il dominio non si svuota, non si svuotera' guardandolo piu' a
 /// lungo: c'e' qualcosa che non muore, ed e' un fatto da riportare. Il margine
 /// separa «ci ha messo un momento» da «non e' successo».
-const MARGINE_DI_CORTESIA: Duration = Duration::from_secs(2);
+pub(super) const MARGINE_DI_CORTESIA: Duration = Duration::from_secs(2);
 
 /// Quanto si aspetta che il dominio si svuoti **dopo** la forzatura.
 ///
@@ -102,7 +102,7 @@ const MARGINE_DI_CORTESIA: Duration = Duration::from_secs(2);
 /// e' una promessa che basti sempre: se non basta, il dominio resta non
 /// quiescente e **si dichiara**, che e' l'esito giusto per un'osservazione che
 /// non si e' potuta fare.
-const ATTESA_DELLA_QUIESCENZA: Duration = Duration::from_millis(500);
+pub(super) const ATTESA_DELLA_QUIESCENZA: Duration = Duration::from_millis(500);
 
 /// Chi legge l'evidenza del dominio.
 ///
@@ -142,6 +142,9 @@ where
     E: LettoreDiEvidenza,
     P: ProcessoFiglio,
 {
+    /// Chi sta dall'altro capo del dominio: decide quale corpo del protocollo
+    /// chiude il dialogo (vedi [`Ruolo`] e [`Registro::messaggio`]).
+    pub(super) ruolo: Ruolo,
     /// Guarda se il dominio si e' svuotato.
     pub(super) osservatore: O,
     /// Sa svuotarlo, quando si decide di chiudere.
@@ -573,6 +576,7 @@ fn fai_nascere_i_produttori<R, O>(
     per_il_lettore: Bocchetta,
     per_l_orologio: Bocchetta,
     per_il_sorvegliante: Bocchetta,
+    ruolo: Ruolo,
 ) -> std::result::Result<[Filo; 3], (&'static str, std::io::Error, Avviati, Option<O>)>
 where
     R: std::io::Read + Send + 'static,
@@ -580,7 +584,7 @@ where
 {
     let mut avviati: Avviati = Vec::new();
 
-    let (filo_lettore, freno_lettore) = match avvia_lettore(canale, per_il_lettore) {
+    let (filo_lettore, freno_lettore) = match avvia_lettore(canale, per_il_lettore, ruolo) {
         Ok(coppia) => coppia,
         Err(errore) => return Err(("lettore", errore, avviati, Some(osservatore))),
     };
@@ -949,6 +953,7 @@ where
     P: ProcessoFiglio,
 {
     let Dintorni {
+        ruolo,
         osservatore,
         terminatore,
         mut evidenza,
@@ -988,6 +993,7 @@ where
             fascio.lettore,
             fascio.orologio,
             fascio.sorvegliante,
+            ruolo,
         ) {
             Ok(tre) => tre,
             Err((chi, errore, avviati, indietro)) => {
@@ -1014,7 +1020,10 @@ where
         attesa_della_quiescenza,
     } = per_chiudere;
 
-    let mut registro = Registro::default();
+    // `Registro::nuovo`, non `default()`: questo e' il registro che decide
+    // se pubblicare, e il ruolo che sceglie fra `Corpo::Esito` e
+    // `Corpo::EsitoVerifica` deve essere quello vero, mai quello di comodo.
+    let mut registro = Registro::nuovo(ruolo);
 
     // --- 1. si ascolta ------------------------------------------------------
     //

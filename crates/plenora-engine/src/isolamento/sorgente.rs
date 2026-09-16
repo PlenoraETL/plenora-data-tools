@@ -200,14 +200,13 @@ pub(super) struct SorgenteTerminabile<R: Read> {
 impl<R: Read> SorgenteTerminabile<R> {
     /// La sorgente, e il freno per fermarla.
     ///
-    /// # Perche' porta un `cfg` e [`Self::con_interruttore`] no
+    /// # Perche' questa forma e [`Self::con_interruttore`] esistono entrambe
     ///
-    /// Perche' questa forma crea il freno **insieme** alla sorgente, e chi la
-    /// usa e' il supervisore, che si compila sotto `test` e `internals`. Il
-    /// worker ha bisogno del contrario — il freno prima, perche' il thread che
-    /// legge nasce dopo — e passa da `con_interruttore`, che infatti e'
-    /// incondizionata.
-    #[cfg(any(test, feature = "internals"))]
+    /// Perche' questa forma crea il freno **insieme** alla sorgente — la usa
+    /// chi ascolta per primo, come il lettore della conduzione
+    /// (`macchina::produttori::avvia_lettore`). Il worker ha bisogno del
+    /// contrario — il freno prima, perche' il thread che legge nasce dopo —
+    /// e passa da `con_interruttore`.
     pub(super) fn nuova(sorgente: R) -> (Self, Freno) {
         Self::con_passo(sorgente, PASSO_DI_ATTESA)
     }
@@ -218,7 +217,6 @@ impl<R: Read> SorgenteTerminabile<R> {
     /// durerebbe quanto il passo per ogni giro, e un caso lento non lo esegue
     /// nessuno. Cio' che un chiamante di prova puo' variare e' **quanto** si
     /// aspetta fra un giro e l'altro, mai che cosa si decide.
-    #[cfg(any(test, feature = "internals"))]
     pub(super) fn con_passo(sorgente: R, passo: Duration) -> (Self, Freno) {
         let (interruttore, freno) = interruttore();
         (
@@ -254,6 +252,23 @@ impl<R: Read> SorgenteTerminabile<R> {
     /// testo del messaggio vorrebbe dire confrontare stringhe.
     pub(super) fn fermato(&self) -> bool {
         self.interruttore.fermato()
+    }
+
+    /// La sorgente grezza, per chi deve continuare a leggerla con un
+    /// meccanismo diverso.
+    ///
+    /// # Perche' esiste
+    ///
+    /// Perche' l'handshake e il resto del dialogo hanno bisogno della stessa
+    /// attesa non bloccante ma di **due** interruttori diversi — l'handshake
+    /// ha il proprio tetto (`TETTO_DELLA_PAROLA`), il resto ne ha un altro —
+    /// e un interruttore non si puo' cambiare a meta' di un
+    /// `SorgenteTerminabile` gia' costruito. Chi guida entrambe le fasi
+    /// costruisce due `SorgenteTerminabile` in sequenza sulla stessa
+    /// sorgente grezza, e questo e' il punto in cui la prima la restituisce
+    /// alla seconda.
+    pub(super) fn dentro(self) -> R {
+        self.sorgente
     }
 }
 

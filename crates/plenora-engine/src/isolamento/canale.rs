@@ -517,13 +517,11 @@ fn riapri_accertato_con(
 /// esattamente i cammini che questo tipo esiste per chiudere. Cio' che si puo'
 /// avere sono i **numeri**, che servono alla richiesta e non tengono niente
 /// aperto.
-#[cfg(any(test, feature = "internals"))]
 pub(super) struct EstremiDelWorker {
     legge: std::io::PipeReader,
     scrive: std::io::PipeWriter,
 }
 
-#[cfg(any(test, feature = "internals"))]
 impl EstremiDelWorker {
     /// I due numeri, per la richiesta — **riguardandoli**.
     ///
@@ -555,7 +553,6 @@ impl EstremiDelWorker {
 ///
 /// [`PlenoraError::IsolationUnavailable`] se le pipe non si creano, o se uno
 /// dei quattro estremi non e' quello che dev'essere.
-#[cfg(any(test, feature = "internals"))]
 pub(super) fn apri() -> Result<(std::io::PipeReader, std::io::PipeWriter, EstremiDelWorker)> {
     fn apertura(quale: &str, errore: &std::io::Error) -> plenora_core::error::PlenoraError {
         non_disponibile("canale", &format!("{quale}: {errore}"))
@@ -607,7 +604,6 @@ pub(super) fn apri() -> Result<(std::io::PipeReader, std::io::PipeWriter, Estrem
 ///
 /// [`PlenoraError::IsolationUnavailable`], che nomina quale accoppiamento
 /// manca.
-#[cfg(any(test, feature = "internals"))]
 fn accerta_topologia(
     sup_legge: &Estremo,
     worker_scrive: &Estremo,
@@ -635,7 +631,6 @@ fn accerta_topologia(
     Ok(())
 }
 
-#[cfg(any(test, feature = "internals"))]
 impl EstremiDelWorker {
     /// Toglie `CLOEXEC` ai due estremi, e non a nient'altro.
     ///
@@ -677,6 +672,141 @@ impl EstremiDelWorker {
         togli("estremo di scrittura del worker", self.scrive.as_fd())?;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Il terzo descrittore: l'artefatto del verificatore
+// ---------------------------------------------------------------------------
+//
+// Non e' una pipe: e' un file regolare, aperto in sola lettura dal
+// coordinatore prima ancora che il verificatore nasca (`isolamento.md#2-ter`,
+// `#2-quater`). Lo schema di accertamento e' pero' lo stesso, in due tempi:
+// prima cio' che il descrittore ereditato dichiara di essere, poi — dopo la
+// riapertura da `/proc/self/fd/N` — che sia rimasto lo stesso oggetto e dal
+// verso giusto. Le sole differenze sono cio' che il tipo di oggetto rende
+// vero per costruzione: un file regolare non ha un «altro lato» con cui
+// formare un canale, quindi non c'e' una topologia da accertare; e il verso
+// e' sempre `Lettura`, perche' il coordinatore non cede mai un handle di
+// scrittura sull'artefatto (`GA-5`-simile: nessuna capability di
+// pubblicazione attraversa questo descrittore).
+
+/// Guarda il descrittore ereditato dell'artefatto e dice che cos'e', o
+/// perche' non va.
+///
+/// Le prove sono le stesse di [`accerta`] meno quella specifica alla FIFO —
+/// qui si pretende un **file regolare** — e con lo stesso rigore: il numero
+/// non e' uno dei flussi standard, il verso dai flag di `fdinfo` e' quello
+/// atteso.
+///
+/// # Errors
+///
+/// [`PlenoraError::IsolationUnavailable`], col numero e la ragione.
+pub(super) fn accerta_artefatto(numero: i32) -> Result<Estremo> {
+    let dove = |motivo: &str| non_disponibile(&format!("artefatto, fd {numero}"), motivo);
+
+    numero_ammissibile(numero).map_err(|motivo| dove(&motivo))?;
+
+    let percorso = format!("/proc/self/fd/{numero}");
+    let dati =
+        std::fs::metadata(&percorso).map_err(|errore| dove(&format!("{percorso}: {errore}")))?;
+    if !dati.is_file() {
+        return Err(dove(
+            "non e' un file regolare: l'artefatto del verificatore non e' una pipe",
+        ));
+    }
+
+    let flag = flag_di(numero).map_err(|motivo| dove(&motivo))?;
+    verso_dai_flag(&flag, Verso::Lettura).map_err(|motivo| dove(&motivo))?;
+
+    Ok(Estremo {
+        numero,
+        verso: Verso::Lettura,
+        impronta: Impronta {
+            dispositivo: dati.dev(),
+            inode: dati.ino(),
+        },
+    })
+}
+
+/// Riapre il terzo descrittore e **accerta** che sia lo stesso file, dal
+/// verso giusto.
+///
+/// # Perche' riaprire, e perche' cosi'
+///
+/// Le stesse due ragioni di [`riapri_accertato`]: un descrittore ereditato
+/// non si puo' adottare senza `unsafe`, e la riapertura da
+/// `/proc/self/fd/<n>` rende un `File` posseduto — chiuso dal suo `Drop`,
+/// nato `CLOEXEC`. Per un file regolare la riapertura crea comunque una
+/// *open file description* indipendente: l'offset non e' condiviso con
+/// quello del coordinatore, ma la correttezza di chi legge questo handle non
+/// dipende da questo — chi lo consuma (`verifica::verifica_artefatto_handle`,
+/// e a valle `pubblicazione::copia_accertando`) legge sempre per **posizione**
+/// (`SeekSource::read_at` / `ArtefattoConvalidato::leggi_a`), mai in modo
+/// sequenziale dipendente dalla posizione corrente del descrittore.
+///
+/// # Errors
+///
+/// [`PlenoraError::IsolationUnavailable`] se il descrittore non supera i
+/// controlli, se la riapertura non riesce, o se l'adozione non torna.
+pub(super) fn riapri_accertato_artefatto(numero: i32) -> Result<std::fs::File> {
+    riapri_accertato_artefatto_con(numero, osservazione_vera)
+}
+
+/// [`riapri_accertato_artefatto`] con l'osservazione in mano al chiamante.
+///
+/// Stessa ragione di [`riapri_accertato_con`]: il controllo dopo la
+/// riapertura va provato al suo posto, con un solo chiamante di produzione.
+fn riapri_accertato_artefatto_con(
+    numero: i32,
+    osserva: impl FnOnce(&std::fs::File) -> Result<Adozione>,
+) -> Result<std::fs::File> {
+    let dove = |motivo: &str| non_disponibile(&format!("artefatto, fd riaperto {numero}"), motivo);
+
+    // 1. Cio' che c'e', prima di toccarlo.
+    let prima = accerta_artefatto(numero)?;
+
+    // 2. La riapertura, sempre in lettura: e' l'unico verso che un artefatto
+    //    del verificatore puo' avere.
+    let percorso = format!("/proc/self/fd/{numero}");
+    let riaperto = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&percorso)
+        .map_err(|errore| dove(&format!("{percorso} non si riapre: {errore}")))?;
+
+    // 3. Che cosa si e' aperto davvero, e se e' cio' che si e' guardato.
+    let dopo = osserva(&riaperto)?;
+    accerta_adozione(numero, &prima.impronta, &dopo, Verso::Lettura)?;
+
+    Ok(riaperto)
+}
+
+/// Dove il verificatore legge il numero del terzo descrittore, l'artefatto.
+///
+/// Stessa disciplina di [`VARIABILE_DEL_CANALE`]: la scrive lo spawner, dalla
+/// richiesta gia' rivalidata, e la **impone** — mai un valore ereditato — e
+/// il verificatore la riguarda con [`riapri_accertato_artefatto`] invece di
+/// crederci. Assente per ogni worker ordinario: quella modalita' non ha un
+/// terzo descrittore da nominare.
+pub(super) const VARIABILE_ARTEFATTO: &str = "PLENORA_ARTEFATTO_LETTURA";
+
+/// Toglie `CLOEXEC` al descrittore dell'artefatto, e a nient'altro.
+///
+/// Stessa finestra strettissima di [`EstremiDelWorker::rendi_ereditabili`],
+/// e stessa ragione: da qui allo `spawn` il descrittore e' **ereditabile**,
+/// quindi la chiamata sta immediatamente prima e non lascia niente in mezzo
+/// che possa fallire a lungo o creare processi.
+///
+/// # Errors
+///
+/// [`PlenoraError::IsolationUnavailable`] se `fcntl` non riesce.
+pub(super) fn rendi_ereditabile_artefatto(file: &std::fs::File) -> Result<()> {
+    use std::os::fd::AsFd as _;
+    rustix::io::fcntl_setfd(file.as_fd(), rustix::io::FdFlags::empty()).map_err(|errore| {
+        non_disponibile(
+            "artefatto",
+            &format!("CLOEXEC non si toglie dal descrittore dell'artefatto: {errore}"),
+        )
+    })
 }
 
 /// I quattro punti in cui la qualificazione puo' chiedere un guasto.
@@ -1278,5 +1408,165 @@ mod tests {
         )
         .expect("l'osservazione vera regge");
         assert_ne!(riaperto.as_raw_fd(), legge.as_raw_fd());
+    }
+
+    // --- accerta_artefatto: il terzo descrittore, un file regolare ----------
+    //
+    // Stessa disciplina di `accerta` sopra, ma sull'oggetto che l'artefatto
+    // del verificatore e' per davvero — un file regolare, mai una pipe — con
+    // fd veri di questo stesso processo: nessun privilegio, nessuno spawn,
+    // nessun dominio. `numero_ammissibile`/`flag_di`/`verso_dai_flag` sono
+    // gia' provate pure sopra; qui si prova la **chiamata**, sullo stesso
+    // principio di `un_inode_divergente_ferma_la_riapertura` — una funzione
+    // corretta ma mai esercitata sul percorso vero e' una funzione che non
+    // protegge niente.
+
+    /// Un file regolare vero, con contenuto qualunque — serve solo un inode
+    /// reale su cui `/proc/self/fd/<n>` possa risolversi.
+    #[cfg(target_os = "linux")]
+    fn file_di_prova(dir: &std::path::Path, nome: &str) -> std::path::PathBuf {
+        let percorso = dir.join(nome);
+        std::fs::write(&percorso, b"artefatto di prova").expect("scrittura del file di prova");
+        percorso
+    }
+
+    /// Un numero non ammissibile si rifiuta prima ancora di guardare
+    /// `/proc/self/fd`: stesso rifiuto di [`numero_ammissibile`], ma
+    /// esercitato dalla chiamata vera.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn accerta_artefatto_rifiuta_un_numero_non_ammissibile() {
+        let motivo =
+            super::accerta_artefatto(0).expect_err("uno standard stream non e' ammissibile");
+        assert!(
+            motivo.to_string().contains("fd 0"),
+            "il rifiuto deve nominare il numero rifiutato: {motivo}"
+        );
+    }
+
+    /// Una pipe vera non e' un file regolare: e' esattamente cio' che
+    /// l'artefatto del verificatore non puo' essere.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn accerta_artefatto_rifiuta_cio_che_non_e_un_file_regolare() {
+        use std::os::fd::AsRawFd as _;
+        let (legge, _scrive) = std::io::pipe().expect("la pipe si crea");
+        let motivo = super::accerta_artefatto(legge.as_raw_fd())
+            .expect_err("una pipe non e' un file regolare");
+        assert!(
+            motivo.to_string().contains("non e' un file regolare"),
+            "il rifiuto non viene dal controllo sul tipo di oggetto: {motivo}"
+        );
+    }
+
+    /// Un file regolare vero, aperto in scrittura: il verso e' sbagliato, non
+    /// il tipo di oggetto — un controllo che confondesse i due lascerebbe
+    /// questo caso verde per la ragione sbagliata.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn accerta_artefatto_rifiuta_il_verso_sbagliato() {
+        use std::os::fd::AsRawFd as _;
+        let dir = tempfile::tempdir().expect("cartella temporanea");
+        let percorso = file_di_prova(dir.path(), "in-scrittura.bin");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&percorso)
+            .expect("apertura in scrittura");
+        let motivo = super::accerta_artefatto(file.as_raw_fd())
+            .expect_err("un file aperto in scrittura non e' l'artefatto in lettura atteso");
+        assert!(
+            motivo.to_string().contains("scrittura"),
+            "il rifiuto non nomina il verso: {motivo}"
+        );
+    }
+
+    /// Un file regolare vero, aperto in lettura: l'unico caso che deve
+    /// riuscire, con l'impronta che coincide con quella osservata per
+    /// davvero sul filesystem.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn accerta_artefatto_accetta_un_file_regolare_in_lettura() {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = tempfile::tempdir().expect("cartella temporanea");
+        let percorso = file_di_prova(dir.path(), "in-lettura.bin");
+        let file = std::fs::File::open(&percorso).expect("apertura in lettura");
+        let dati = file.metadata().expect("metadata del file vero");
+
+        let estremo = super::accerta_artefatto(file.as_raw_fd())
+            .expect("un file regolare in lettura e' esattamente l'artefatto atteso");
+        assert_eq!(estremo.verso, Verso::Lettura);
+        assert_eq!(estremo.impronta.dispositivo, dati.dev());
+        assert_eq!(estremo.impronta.inode, dati.ino());
+    }
+
+    // --- riapri_accertato_artefatto_con: la chiamata, su un file vero -------
+
+    /// Un inode divergente ferma la riapertura dell'artefatto, sullo stesso
+    /// principio di `un_inode_divergente_ferma_la_riapertura` per la pipe del
+    /// worker: la funzione pura non basta, serve la chiamata.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn un_inode_divergente_ferma_la_riapertura_dell_artefatto() {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = tempfile::tempdir().expect("cartella temporanea");
+        let percorso = file_di_prova(dir.path(), "artefatto.bin");
+        let file = std::fs::File::open(&percorso).expect("apertura in lettura");
+
+        let esito = super::riapri_accertato_artefatto_con(file.as_raw_fd(), |riaperto| {
+            let dati = riaperto.metadata().expect("metadata del riaperto");
+            Ok(super::Adozione {
+                impronta: impronta(dati.dev(), dati.ino().wrapping_add(1)),
+                flag: IN_LETTURA.to_owned(),
+            })
+        });
+        let motivo = esito.expect_err("un altro inode non e' lo stesso artefatto");
+        assert!(
+            motivo.to_string().contains("non e' piu' lo stesso oggetto"),
+            "il rifiuto non viene dal confronto sull'inode: {motivo}"
+        );
+    }
+
+    /// Un verso divergente ferma la riapertura dell'artefatto: l'impronta e'
+    /// quella vera, e diverge solo il verso che l'osservatore dichiara.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn un_verso_divergente_ferma_la_riapertura_dell_artefatto() {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = tempfile::tempdir().expect("cartella temporanea");
+        let percorso = file_di_prova(dir.path(), "artefatto.bin");
+        let file = std::fs::File::open(&percorso).expect("apertura in lettura");
+
+        let esito = super::riapri_accertato_artefatto_con(file.as_raw_fd(), |riaperto| {
+            let dati = riaperto.metadata().expect("metadata del riaperto");
+            Ok(super::Adozione {
+                impronta: impronta(dati.dev(), dati.ino()),
+                flag: IN_SCRITTURA.to_owned(),
+            })
+        });
+        let motivo = esito.expect_err("un artefatto riaperto al contrario non si adotta");
+        assert!(
+            motivo.to_string().contains("aperto in scrittura"),
+            "il rifiuto non nomina il verso: {motivo}"
+        );
+    }
+
+    /// L'osservatore vero, su un artefatto vero: chiude il giro esattamente
+    /// come [`l_osservazione_vera_regge_su_una_pipe_vera`] lo chiude per la
+    /// pipe del worker.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn l_osservazione_vera_regge_sull_artefatto_vero() {
+        use std::os::fd::AsRawFd as _;
+        let dir = tempfile::tempdir().expect("cartella temporanea");
+        let percorso = file_di_prova(dir.path(), "artefatto.bin");
+        let file = std::fs::File::open(&percorso).expect("apertura in lettura");
+
+        let riaperto =
+            super::riapri_accertato_artefatto_con(file.as_raw_fd(), super::osservazione_vera)
+                .expect("l'osservazione vera regge sull'artefatto");
+        assert_ne!(riaperto.as_raw_fd(), file.as_raw_fd());
     }
 }

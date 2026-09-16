@@ -145,7 +145,7 @@ fn ogni_modalita_rifiuta_con_la_propria_versione() {
 
     let (_, dallo_spawner) = esegui(&["plenora-spawner-9"]);
     assert!(
-        dallo_spawner.contains("plenora-spawner-2") && !dallo_spawner.contains("plenora-worker"),
+        dallo_spawner.contains("plenora-spawner-3") && !dallo_spawner.contains("plenora-worker"),
         "il rifiuto dello spawner nomina il worker: {dallo_spawner}"
     );
 }

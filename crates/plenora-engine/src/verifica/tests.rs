@@ -113,6 +113,14 @@ fn artefatto_con_metadata(coppie: &[(&str, &str)]) -> Vec<u8> {
     byte
 }
 
+/// Il fingerprint di un contratto, nella forma sul filo — quella che
+/// `AtteseVerifica::contratto_fingerprint_atteso` porta.
+fn fingerprint_atteso(contratto: &DataContract) -> crate::protocollo::digest::DigestSha256 {
+    let impronta = crate::planner::contract_fingerprint(contratto).expect("contratto riducibile");
+    crate::protocollo::digest::DigestSha256::da_esadecimale(&impronta.to_hex())
+        .expect("un'impronta esadecimale e' sempre canonica")
+}
+
 fn digest_reale(byte: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -177,7 +185,7 @@ fn esegui(byte: &[u8], dichiarati: &Dichiarati) -> Result<(), String> {
         valore: dichiarati.digest.clone(),
     };
     let attese = AtteseVerifica {
-        contratto: &dichiarati.contratto,
+        contratto_fingerprint_atteso: fingerprint_atteso(&dichiarati.contratto),
         digest: &digest,
         conteggi: crate::protocollo::messaggi::ConteggiDichiarati {
             righe: dichiarati.righe,
@@ -226,7 +234,7 @@ fn un_artefatto_che_non_esiste_e_un_errore_di_io() {
     let contratto = DataContract::tabular(schema());
     let tok = token(UNO);
     let attese = AtteseVerifica {
-        contratto: &contratto,
+        contratto_fingerprint_atteso: fingerprint_atteso(&contratto),
         digest: &digest,
         conteggi: crate::protocollo::messaggi::ConteggiDichiarati { righe: 0, batch: 0 },
         commit_token: &tok,

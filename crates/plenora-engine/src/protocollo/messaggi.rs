@@ -1,4 +1,4 @@
-//! I sei messaggi del protocollo, come **forma serializzata**.
+//! I otto messaggi del protocollo, come **forma serializzata**.
 //!
 //! `deny_unknown_fields` a ogni livello, nessun `serde_json::Value`, nessuna
 //! mappa aperta, nessun campo d'estensione. Cio' che non e' riconosciuto e'
@@ -211,10 +211,12 @@ enum_sul_filo! {
     TipoMessaggio {
         Saluto => "saluto",
         Incarico => "incarico",
+        IncaricoVerifica => "incarico_verifica",
         Annulla => "annulla",
         Risposta => "risposta",
         Progresso => "progresso",
         Esito => "esito",
+        EsitoVerifica => "esito_verifica",
     }
 }
 
@@ -223,8 +225,12 @@ impl TipoMessaggio {
     #[must_use]
     pub const fn direzione(self) -> Direzione {
         match self {
-            Self::Saluto | Self::Incarico | Self::Annulla => Direzione::VersoWorker,
-            Self::Risposta | Self::Progresso | Self::Esito => Direzione::VersoSupervisore,
+            Self::Saluto | Self::Incarico | Self::IncaricoVerifica | Self::Annulla => {
+                Direzione::VersoWorker
+            }
+            Self::Risposta | Self::Progresso | Self::Esito | Self::EsitoVerifica => {
+                Direzione::VersoSupervisore
+            }
         }
     }
 }
@@ -390,6 +396,57 @@ impl PartialEq for Incarico {
 }
 
 impl Eq for Incarico {}
+
+/// L'incarico del **verificatore**: che cosa l'artefatto deve risultare, e
+/// quanto gli e' concesso di trattenere per accertarlo.
+///
+/// # Perche' un messaggio distinto, e non un secondo `Incarico`
+///
+/// Perche' il verificatore non esegue un piano: non riceve mai
+/// `piano_canonico` ne' `ingressi`, per lo stesso principio di `GA-5` che
+/// tiene il worker all'oscuro della destinazione — qui va oltre, perche' il
+/// verificatore non deve poter dedurre nemmeno **da dove** l'artefatto viene
+/// ne' **quale piano** lo ha prodotto. Riusare `Incarico` con campi opzionali
+/// avrebbe reso rappresentabile uno stato — un `Incarico` senza piano — che
+/// non deve poter esistere, e un lettore del tipo non avrebbe potuto
+/// distinguere «il campo manca in questo messaggio» da «il campo e' stato
+/// omesso per errore».
+///
+/// # Che cosa porta, e perche' e' esattamente questo
+///
+/// I quattro elementi di cui parla `isolamento.md#2-ter`: il fingerprint del
+/// contratto atteso, il digest atteso, i conteggi attesi e il tetto di
+/// memoria da cui derivare `IpcLimits` — sempre gli stessi quattro che
+/// [`AtteseVerifica`](crate::verifica::AtteseVerifica) porta gia' in
+/// processo, qui nella loro forma sul filo. Il `commit_token` **non** c'e':
+/// e' gia' stato trasmesso e accettato nel `Saluto`, e ripeterlo qui
+/// darebbe due autorita' sulla stessa cosa (`§4.3`).
+///
+/// Il tetto di memoria viaggia come **valore singolo**
+/// (`budget_memoria_governata_bytes`), non come `IpcLimits` gia' derivato:
+/// `IpcLimits` ha piu' campi di quanti questo confronto ne usi, e il
+/// verificatore li deriva da se' con la stessa funzione pura
+/// (`ipc_boundary::limits_from_memory_budget`) che il coordinatore
+/// userebbe. Trasportare un solo numero, che i due lati riducono allo
+/// stesso modo, introduce meno stato duplicato che trasportare l'intera
+/// struttura derivata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncaricoVerifica {
+    /// Verifica come [`DescrittoreIngresso::contract_fingerprint_atteso`]:
+    /// l'uscita testuale di uno SHA-256 a 32 byte, nella stessa forma
+    /// canonica.
+    pub contract_fingerprint_atteso: DigestSha256,
+    /// Il digest che l'artefatto deve rendere (passo 5-bis).
+    pub digest_atteso: DigestArtefatto,
+    /// Righe e batch che l'artefatto deve contenere (passo 8).
+    pub conteggi_attesi: ConteggiDichiarati,
+    /// Il budget di memoria governata da cui derivare i tetti del confine
+    /// ostile Arrow IPC — la stessa quantita' che
+    /// `ipc_boundary::limits_from_memory_budget` gia' riceve nel percorso in
+    /// processo.
+    pub budget_memoria_governata_bytes: u64,
+}
 
 /// Cancellazione richiesta.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -647,6 +704,40 @@ enum_con_tag_sul_filo! {
     }
 }
 
+enum_con_tag_sul_filo! {
+    /// L'esito che il **verificatore** dichiara di se'.
+    ///
+    /// # Perche' un tipo distinto da `EsitoWorkerSulFilo`, e non un alias
+    ///
+    /// Perche' le due cose non affermano la stessa domanda, anche se hanno la
+    /// stessa forma. Un `EsitoWorkerSulFilo::Successo` dice «ho eseguito il
+    /// piano e ho scritto questo»; un `EsitoVerificaSulFilo::Successo` dice
+    /// «ho riconfermato che l'artefatto e' questo» — non ha eseguito niente,
+    /// ha riletto. Sovrapporli sullo stesso tipo di filo renderebbe quella
+    /// distinzione invisibile a chi legge il protocollo, esattamente come
+    /// `Incarico` e `IncaricoVerifica` restano due messaggi distinti pur
+    /// condividendo quasi la stessa forma (§4.3): il tipo sul filo e' parte
+    /// del significato, non solo la sua rappresentazione.
+    ///
+    /// La macchina a stati del supervisore (`isolamento::macchina`) resta
+    /// **una sola**: riconosce quale dei due corpi chiude il dialogo secondo
+    /// il ruolo di chi le parla (`macchina::Ruolo`), non confondendo mai
+    /// l'uno per l'altro.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    EsitoVerificaSulFilo, tag = "esito" {
+        /// Il verificatore ha riconfermato l'artefatto: digest e conteggi
+        /// **osservati**, non solo quelli attesi ripetuti — se il passo 5-bis
+        /// o il passo 8 fallissero questa variante non si costruirebbe.
+        Successo {
+            digest_artefatto: DigestArtefatto,
+            conteggi: ConteggiDichiarati,
+        } => "successo",
+        /// Stesso motivo del `Box` in `EsitoWorkerSulFilo::Errore`.
+        Errore { errore: Box<ErroreSulFilo>, } => "errore",
+        Panic { forma: FormaPanicSulFilo, } => "panic"
+    }
+}
+
 /// Il corpo di un frame, scelto dal tipo.
 ///
 /// # Serializza, non deserializza
@@ -667,10 +758,12 @@ enum_con_tag_sul_filo! {
 pub enum Corpo {
     Saluto(Box<Saluto>),
     Incarico(Box<Incarico>),
+    IncaricoVerifica(Box<IncaricoVerifica>),
     Annulla(Annulla),
     Risposta(Box<Risposta>),
     Progresso(Progresso),
     Esito(Box<EsitoWorkerSulFilo>),
+    EsitoVerifica(Box<EsitoVerificaSulFilo>),
 }
 
 /// L'involucro di ogni frame.
@@ -739,10 +832,12 @@ impl Frame {
         match &self.corpo {
             Corpo::Saluto(_) => TipoMessaggio::Saluto,
             Corpo::Incarico(_) => TipoMessaggio::Incarico,
+            Corpo::IncaricoVerifica(_) => TipoMessaggio::IncaricoVerifica,
             Corpo::Annulla(_) => TipoMessaggio::Annulla,
             Corpo::Risposta(_) => TipoMessaggio::Risposta,
             Corpo::Progresso(_) => TipoMessaggio::Progresso,
             Corpo::Esito(_) => TipoMessaggio::Esito,
+            Corpo::EsitoVerifica(_) => TipoMessaggio::EsitoVerifica,
         }
     }
 }

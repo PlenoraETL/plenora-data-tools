@@ -580,7 +580,7 @@ fn richiesta_di_un_preflight_riuscito() -> RichiestaSpawner {
     let mut superficie = Superficie::onesta();
     prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma(CANALE_DEI_CASI)
+        .consuma(CANALE_DEI_CASI, None)
         .0
 }
 
@@ -652,7 +652,7 @@ fn la_rivalidazione_rilegge_e_non_riscrive() {
     let mut superficie = Superficie::onesta();
     let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma(CANALE_DEI_CASI)
+        .consuma(CANALE_DEI_CASI, None)
         .0;
     superficie.registro.borrow_mut().clear();
 
@@ -701,7 +701,7 @@ fn un_controllo_riscritto_nel_frattempo_ferma_lo_spawner() {
         let mut superficie = Superficie::onesta();
         let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
             .expect("preflight")
-            .consuma(CANALE_DEI_CASI)
+            .consuma(CANALE_DEI_CASI, None)
             .0;
         superficie
             .risposte
@@ -724,7 +724,7 @@ fn un_dominio_popolato_nel_frattempo_ferma_lo_spawner() {
     let mut superficie = Superficie::onesta();
     let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma(CANALE_DEI_CASI)
+        .consuma(CANALE_DEI_CASI, None)
         .0;
     superficie.eventi = Some("populated 1\nfrozen 0\n".to_owned());
 
@@ -754,6 +754,7 @@ fn una_richiesta_che_nomina_un_altro_dominio_e_un_rifiuto() {
             tetto_byte: TETTO,
             worker_legge: 3,
             worker_scrive: 4,
+            artefatto_lettura: -1,
         };
         let errore = rivalida(&superficie, &richiesta, Vec::new()).expect_err(atteso);
         assert!(
@@ -774,7 +775,7 @@ fn lo_spawner_giudica_il_possesso_contro_l_identita_della_richiesta() {
     let mut superficie = Superficie::onesta();
     let richiesta = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma(CANALE_DEI_CASI)
+        .consuma(CANALE_DEI_CASI, None)
         .0;
     let padrone = RichiestaSpawner {
         uid: INTOCCABILE.uid,
@@ -816,7 +817,7 @@ fn l_evidenza_sopravvive_al_consumo_del_token() {
     let mut con = superficie_con_localevents();
     let (richiesta, evidenza) = prepara_dominio(&mut con, TETTO, WORKER)
         .expect("preflight")
-        .consuma(CANALE_DEI_CASI);
+        .consuma(CANALE_DEI_CASI, None);
 
     assert!(
         evidenza.eventi_locali,
@@ -941,6 +942,7 @@ fn un_percorso_non_utf8_attraversa_il_confine() {
         tetto_byte: TETTO,
         worker_legge: 3,
         worker_scrive: 4,
+        artefatto_lettura: -1,
     };
     let riletta =
         RichiestaSpawner::da_argomenti(&richiesta.in_argomenti()).expect("un nome di byte");
@@ -979,7 +981,7 @@ fn l_evidenza_sopravvive_intera_all_avvio_fallito() {
     let mut superficie = superficie_con_localevents();
     let evidenza = prepara_dominio(&mut superficie, TETTO, WORKER)
         .expect("preflight")
-        .consuma(CANALE_DEI_CASI)
+        .consuma(CANALE_DEI_CASI, None)
         .1;
     let atteso = evidenza.clone();
 
@@ -1051,11 +1053,16 @@ fn un_comando_ordinario_non_e_uno_spawner() {
 fn ogni_altra_versione_del_namespace_e_un_rifiuto() {
     for testo in [
         "plenora-spawner-1",
-        "plenora-spawner-3",
+        // La versione precedente a quella corrente: un supervisore piu'
+        // vecchio di questo spawner e' un disaccordo esplicito, non una
+        // ricaduta silenziosa su un formato che l'8-esimo argomento (assente
+        // nella `2`) renderebbe malformato.
+        "plenora-spawner-2",
+        "plenora-spawner-4",
         "plenora-spawner-99",
         "plenora-spawner-",
-        "plenora-spawner-2-bis",
-        "plenora-spawner-due",
+        "plenora-spawner-3-bis",
+        "plenora-spawner-tre",
     ] {
         assert_eq!(
             riconosci_dello_spawner(Some(&primo(testo))),

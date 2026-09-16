@@ -45,17 +45,74 @@
 //! Nessuna sostituisce le altre, e cio' che manca non diventa mai un successo:
 //! diventa un tempo che finisce.
 
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use plenora_core::error::{
     ErrorCategory, ErrorPhase, EvidenzaDiLimite, PlenoraError, RemoteEffect, ReplayedError,
     RetryDisposition,
 };
 
+use crate::cancellation::CancellationToken;
 use crate::classificazione::{classifica, EsitoClassificato, FattiDopoLaQuiescenza};
+use crate::protocollo::handshake::HandshakeAccettato;
 use crate::protocollo::messaggi::{
     CategoriaSulFilo, ConteggiDichiarati, Corpo, DiagnosticaSulFilo, DigestArtefatto,
-    EffettoSulFilo, ErroreSulFilo, EsitoWorkerSulFilo, FaseSulFilo, FormaPanicSulFilo,
-    RetrySulFilo,
+    EffettoSulFilo, ErroreSulFilo, EsitoVerificaSulFilo, EsitoWorkerSulFilo, FaseSulFilo,
+    FormaPanicSulFilo, RetrySulFilo,
 };
+
+use super::figlio::{FiglioVivo, ProcessoFiglio};
+#[cfg(target_os = "linux")]
+use super::sorgente::{interruttore, Freno, PASSO_DI_ATTESA};
+
+/// Chi sta dall'altro capo del dominio, e quale corpo del protocollo chiude
+/// il suo dialogo.
+///
+/// # Perche' esiste come tipo, e non come una stringa
+///
+/// Perche' non e' solo un'etichetta per i messaggi di log: e' la fonte di
+/// verita' su **quale** `Corpo` conta come "l'esito che chiude la
+/// conversazione" per questo dialogo — `Corpo::Esito` per il worker,
+/// `Corpo::EsitoVerifica` per il verificatore. I due corpi hanno forma quasi
+/// identica ma restano due tipi distinti sul filo (vedi
+/// [`crate::protocollo::messaggi::EsitoVerificaSulFilo`]), e un worker che
+/// mandasse un `EsitoVerifica` — o viceversa — non deve essere accettato come
+/// se fosse quello giusto solo perche' e' arrivato *un* esito qualunque:
+/// [`Registro::messaggio`] lo tratta come un messaggio fuori posto, non come
+/// l'esito che chiude il dialogo.
+///
+/// Sostituisce il parametro `soggetto: &str` che le funzioni di questo modulo
+/// portavano solo per i messaggi: [`Self::nome`] rende lo stesso testo, da
+/// un'unica fonte, cosi' il nome usato nei log e la scelta del corpo non
+/// possono divergere.
+///
+/// # Il `Default`, e perche' non e' una scorciatoia
+///
+/// Serve al solo `Registro::default()` interno al cammino di rinuncia
+/// (`conduzione::rinuncia`), che **non produce mai** un esito classificato —
+/// rinuncia sempre con `Impedimento::ProduttoreNonNato` — quindi il ruolo che
+/// usa per interpretare i fatti tardivi non decide mai se pubblicare.
+/// Ovunque il ruolo conti davvero — ogni `Dintorni` di produzione e di prova,
+/// [`conduci_isolato`] — lo si passa esplicitamente: il valore di default non
+/// sostituisce mai una scelta necessaria, copre solo un percorso in cui la
+/// scelta non ha conseguenze.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum Ruolo {
+    #[default]
+    Worker,
+    Verificatore,
+}
+
+impl Ruolo {
+    /// Il nome per i messaggi di log e di errore.
+    pub(super) const fn nome(self) -> &'static str {
+        match self {
+            Self::Worker => "worker",
+            Self::Verificatore => "verificatore",
+        }
+    }
+}
 
 /// Come il worker e' uscito, **osservato** e non interpretato.
 ///
@@ -139,6 +196,28 @@ impl EsitoDichiarato {
         }
     }
 
+    /// L'esito del **verificatore**, arrivato sul filo, senza giudizio.
+    ///
+    /// Riduce alla stessa forma interna di [`Self::dal_filo`]: da qui in poi
+    /// — classificazione, rapporto, barriera — il codice non distingue piu'
+    /// chi ha dichiarato l'esito, perche' non gli serve. La distinzione che
+    /// conta e' gia' stata fatta: [`Registro::messaggio`] ha gia' accertato
+    /// che questo `EsitoVerificaSulFilo` era davvero il corpo atteso per
+    /// questo dialogo.
+    fn dal_filo_verifica(esito: EsitoVerificaSulFilo) -> Self {
+        match esito {
+            EsitoVerificaSulFilo::Successo {
+                digest_artefatto,
+                conteggi,
+            } => Self::Successo {
+                digest: digest_artefatto,
+                conteggi,
+            },
+            EsitoVerificaSulFilo::Errore { errore } => Self::Errore(errore),
+            EsitoVerificaSulFilo::Panic { forma } => Self::Panic { forma },
+        }
+    }
+
     /// Il nome della forma, per l'evidenza.
     const fn nome(&self) -> &'static str {
         match self {
@@ -190,6 +269,11 @@ pub(super) enum Fatto {
     /// come se potesse valere altro.
     TempoScaduto,
     /// Qualcuno ha chiesto di annullare.
+    ///
+    /// Il chiamante di produzione (`isolamento::esecuzione_isolata::esegui_isolato`)
+    /// sorveglia lo stesso `CancellationToken` che il percorso in-process
+    /// osserva, e chiede l'annullamento tramite [`produttori::Annullatore`]
+    /// non appena lo vede cancellato — vedi `macchina::avvia_sorveglianza_esterna`.
     CancellazioneRichiesta,
     /// Un produttore **non e' riuscito a guardare**.
     ///
@@ -226,6 +310,9 @@ pub(super) enum Fatto {
 )]
 #[derive(Debug, Default)]
 pub(super) struct Registro {
+    /// Chi sta dall'altro capo, e quale corpo conta come l'esito che chiude
+    /// il dialogo. Vedi [`Ruolo`] per il perche' e per il `Default`.
+    ruolo: Ruolo,
     /// Gli esiti dichiarati, tutti.
     ///
     /// Il protocollo ne prevede uno: l'esito chiude la conversazione. Tenerli
@@ -250,6 +337,19 @@ pub(super) struct Registro {
 }
 
 impl Registro {
+    /// Un registro vuoto, per il ruolo dato.
+    ///
+    /// E' il costruttore che ogni dialogo di produzione e ogni caso che ne
+    /// simula uno **devono** usare: dice esplicitamente quale corpo chiude
+    /// questo dialogo, invece di lasciarlo al `Default` — che esiste solo per
+    /// il cammino di rinuncia (vedi [`Ruolo`]).
+    pub(super) fn nuovo(ruolo: Ruolo) -> Self {
+        Self {
+            ruolo,
+            ..Self::default()
+        }
+    }
+
     /// Accende cio' che il fatto dice, e niente altro.
     pub(super) fn applica(&mut self, fatto: Fatto) {
         match fatto {
@@ -267,10 +367,27 @@ impl Registro {
         }
     }
 
-    /// Un messaggio del worker.
+    /// Un messaggio dall'altro capo del dominio.
+    ///
+    /// # Perche' il ruolo decide, e non la sola forma del corpo
+    ///
+    /// Perche' `Corpo::Esito` e `Corpo::EsitoVerifica` sono due tipi
+    /// distinti (`isolamento.md`, e vedi [`Ruolo`]), e solo **uno** dei due e'
+    /// quello atteso per questo dialogo. L'altro — se mai arrivasse, che sia
+    /// un bug, una risposta fuori sequenza, o l'esito di un altro tentativo —
+    /// non deve chiudere la conversazione **come se fosse** quello giusto:
+    /// finisce in `altri_messaggi`, esattamente come un `Saluto` o un
+    /// `Incarico` arrivati qui fuori posto. La conseguenza e' fail-closed:
+    /// senza un esito del tipo atteso, `cosa_manca_alla_barriera` vede
+    /// `esiti.len() != 1` e la barriera non si chiude mai su un successo.
     fn messaggio(&mut self, corpo: Corpo) {
-        match corpo {
-            Corpo::Esito(esito) => self.esiti.push(EsitoDichiarato::dal_filo(*esito)),
+        match (self.ruolo, corpo) {
+            (Ruolo::Worker, Corpo::Esito(esito)) => {
+                self.esiti.push(EsitoDichiarato::dal_filo(*esito));
+            }
+            (Ruolo::Verificatore, Corpo::EsitoVerifica(esito)) => {
+                self.esiti.push(EsitoDichiarato::dal_filo_verifica(*esito));
+            }
             _ => self.altri_messaggi += 1,
         }
     }
@@ -327,6 +444,11 @@ impl Registro {
     ///
     /// Il canale conta come finito anche se si e' rotto: un filo troncato non
     /// portera' altro. Che sia finito bene o male lo dice un campo diverso.
+    ///
+    /// Introspezione dei casi: la conduzione vera si ferma con
+    /// [`Self::si_puo_smettere_di_ascoltare`], che non pretende l'uscita —
+    /// l'osserva `chiudi`, dopo, per un'altra ragione.
+    #[cfg(any(test, feature = "internals"))]
     pub(super) const fn concluso(&self) -> bool {
         (self.fine_pulita || !self.interruzioni.is_empty())
             && !self.uscite.is_empty()
@@ -338,6 +460,10 @@ impl Registro {
     /// E' la condizione che il successo richiede, ed e' separata da
     /// [`Self::concluso`] perche' le due domande sono diverse: «si puo' smettere
     /// di aspettare» e «e' andato tutto bene» hanno risposte indipendenti.
+    ///
+    /// Introspezione dei casi, come [`Self::concluso`]: il giudizio vero e'
+    /// [`classifica`], non un booleano.
+    #[cfg(any(test, feature = "internals"))]
     pub(super) fn quattro_fatti_positivi(&self) -> bool {
         self.esiti.len() == 1
             && self.fine_pulita
@@ -583,6 +709,15 @@ impl Registro {
         let diagnostica_di_riga = self.diagnostica_di_riga();
         let rapporto = self.evidenza_dei_fatti();
         let manca = self.cosa_manca_alla_barriera(difetti_della_conduzione);
+        // Il digest e i conteggi dichiarati non entrano in `classifica`
+        // (vedi `in_fatti`: il publish non appartiene a questo perimetro),
+        // ma chi riceve `DaVerificare` ne ha bisogno per la verifica
+        // indipendente — senza, non avrebbe nulla da confrontare col
+        // contenuto riletto dell'artefatto.
+        let esito_dichiarato = self.esiti.first().and_then(|dichiarato| match dichiarato {
+            EsitoDichiarato::Successo { digest, conteggi } => Some((digest.clone(), *conteggi)),
+            EsitoDichiarato::Errore(_) | EsitoDichiarato::Panic { .. } => None,
+        });
 
         // **La barriera precede la classificazione.** `FattiDopoLaQuiescenza` si
         // chiama cosi' perche' quello e' il momento in cui i suoi campi
@@ -625,6 +760,7 @@ impl Registro {
             classificato,
             rapporto,
             diagnostica_di_riga,
+            esito_dichiarato,
         })
     }
 
@@ -715,6 +851,351 @@ pub(super) struct EsitoDelSupervisore {
     /// tetta esempi e conteggi, quindi tenerla non apre una via a una
     /// dimensione che il chiamante sceglie.
     pub(super) diagnostica_di_riga: Option<DiagnosticaSulFilo>,
+    /// Il digest e i conteggi che il worker ha dichiarato, quando il primo
+    /// esito e' un successo — indipendentemente da come `classificato` va a
+    /// finire.
+    ///
+    /// Non e' una seconda affermazione sull'esito: e' il dato grezzo che chi
+    /// riceve `DaVerificare` deve confrontare con l'artefatto riletto,
+    /// perche' questa macchina non lo fa (`in_fatti`, sopra). Un
+    /// `classificato` diverso da `DaVerificare` — timeout, OOM attribuito,
+    /// cancellazione — dice che quel successo dichiarato non autorizza
+    /// comunque la pubblicazione: chi legge questo campo deve guardare
+    /// `classificato` prima di usarlo, non il contrario.
+    pub(super) esito_dichiarato: Option<(DigestArtefatto, ConteggiDichiarati)>,
+}
+
+/// Conduce un tentativo reale: dominio vero, worker vero, evidenza vera —
+/// non i finti di `conduzione::tests`.
+///
+/// # Che cosa fa, in ordine
+///
+/// Costruisce il [`produttori::CanaleOperativo`] dall'accordo gia' concluso
+/// (l'handshake e' compiuto da chi chiama, prima: questa macchina esiste
+/// solo dopo), gli adattatori reali del dominio
+/// ([`adattatori::SorvegliaDominio`], [`adattatori::TerminaDominio`],
+/// [`adattatori::LeggiEvidenzaDominio`]) e i [`conduzione::Dintorni`], poi
+/// chiama [`conduzione::conduci`] e traduce il suo esito.
+///
+/// # Che cosa rende
+///
+/// Il digest e i conteggi dichiarati dal worker, quando e **solo** quando la
+/// conduzione raggiunge `DaVerificare`: il permesso di procedere alla
+/// verifica indipendente, non la pubblicazione stessa (`PR-10`, che questo
+/// modulo non chiama). Ogni altro esito — timeout, OOM attribuito,
+/// cancellazione, pressione non attribuita, evidenza inutilizzabile, un
+/// errore o un panico dichiarati dal worker, una terminazione ambigua —
+/// diventa un errore classificato, mai un digest da passare alla verifica.
+///
+/// # La cancellazione esterna
+///
+/// `annullamento_esterno` e' il token che un chiamante — l'handler Ctrl-C
+/// della CLI, oggi — puo' cancellare mentre questa funzione e' ferma dentro
+/// [`conduzione::conduci`]. Il collegamento e' un filo che **sorveglia** il
+/// token e chiede l'annullamento tramite [`produttori::Annullatore`] non
+/// appena lo vede cancellato: `consegna_annullatore` e' l'unico momento in
+/// cui la conduzione consegna quell'annullatore, quindi il filo nasce li' e
+/// nessun altrove.
+///
+/// Se il filo di sorveglianza non nasce — un guasto del sistema, non
+/// un'evidenza sul dominio — la conduzione **prosegue comunque**: la
+/// cancellazione e' cooperativa e senza promessa di immediatezza
+/// (`errori-e-limiti.md#cancellazione`), e un tentativo che stesse
+/// altrimenti per riuscire non merita di fallire per un filo che nessuno ha
+/// chiesto di avviare.
+///
+/// # Il parametro `ruolo`
+///
+/// Nomina **chi** sta dall'altro capo del dominio — [`Ruolo::Worker`] o
+/// [`Ruolo::Verificatore`] — nei messaggi d'errore e di log, e sceglie quale
+/// corpo del protocollo la conduzione accetta come esito che chiude il
+/// dialogo (vedi [`Registro::messaggio`]). La macchina stessa resta
+/// **generica**: giudica un dialogo tracciato contro quiescenza, evidenza,
+/// timeout e cancellazione del dominio, e non guarda mai se chi le parla
+/// esegue un piano o rilegge un artefatto — ma un messaggio come «il worker
+/// isolato e' andato in panico» direbbe il falso se a essere andato in panico
+/// fosse il verificatore, e un `Corpo::EsitoVerifica` accettato come se fosse
+/// un `Corpo::Esito` (o viceversa) renderebbe invisibile una distinzione che
+/// il protocollo tratta come portante. Un parametro invece di due copie della
+/// funzione: due copie sarebbero due occasioni di divergere proprio nel punto
+/// — la classificazione — che questo modulo esiste per tenere unico.
+///
+/// # Errors
+///
+/// L'errore classificato, con la categoria che [`EsitoClassificato::categoria`]
+/// gia' assegna; oppure [`PlenoraError::Internal`] se i fatti stessi non si
+/// sono lasciati ridurre a un esito ([`Impedimento`]) — un difetto
+/// dell'osservazione, non del worker.
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn conduci_isolato<P: ProcessoFiglio>(
+    ruolo: Ruolo,
+    lettore: std::io::PipeReader,
+    accordo: HandshakeAccettato,
+    scrittore: std::io::PipeWriter,
+    tempo_di_esecuzione: Duration,
+    guardia: FiglioVivo<P>,
+    dominio: PathBuf,
+    radice: &Path,
+    tetto_byte: u64,
+    annullamento_esterno: CancellationToken,
+) -> std::result::Result<(DigestArtefatto, ConteggiDichiarati), PlenoraError> {
+    // Un solo nome, usato per tutti i messaggi qui sotto: tenerlo come
+    // variabile locale invece di chiamare `ruolo.nome()` a ogni riga rende
+    // visibile che e' **la stessa** fonte ovunque compaia `{soggetto}`.
+    let soggetto = ruolo.nome();
+    let canale = produttori::CanaleOperativo::dal_supervisore(lettore, accordo)?;
+    let osservatore = adattatori::SorvegliaDominio::nuova(dominio.clone());
+    let terminatore = adattatori::TerminaDominio::nuova(dominio.clone());
+    let evidenza = adattatori::LeggiEvidenzaDominio::nuova(dominio, radice, tetto_byte);
+    let dintorni = conduzione::Dintorni {
+        ruolo,
+        osservatore,
+        terminatore,
+        evidenza,
+        figlio: guardia,
+        tetto_del_drenaggio: coda::Coda::tetto_di_produzione(),
+        margine_di_cortesia: conduzione::MARGINE_DI_CORTESIA,
+        attesa_della_quiescenza: conduzione::ATTESA_DELLA_QUIESCENZA,
+    };
+    let mut sorveglianza = None;
+    let (esito, contorno) = conduzione::conduci(
+        canale,
+        scrittore,
+        tempo_di_esecuzione,
+        dintorni,
+        |annullatore| {
+            sorveglianza = avvia_sorveglianza_esterna(annullamento_esterno, annullatore);
+        },
+    );
+    if let Some((freno, filo)) = sorveglianza {
+        freno.ferma();
+        if filo.join().is_err() {
+            eprintln!("plenora: il filo di sorveglianza dell'annullamento e' andato in panico");
+        }
+    }
+    segnala_pulizia_della_conduzione(&contorno);
+
+    let supervisore = esito.map_err(|impedimento| {
+        PlenoraError::Internal(format!(
+            "la conduzione del profilo isolato non si e' lasciata ridurre a un esito: {}",
+            messaggio_di_impedimento(impedimento)
+        ))
+    })?;
+
+    for (chiave, valore) in &supervisore.rapporto {
+        eprintln!("plenora: conduzione del profilo isolato ({soggetto}), {chiave}: {valore}");
+    }
+    if let Some(diagnostica) = &supervisore.diagnostica_di_riga {
+        eprintln!("plenora: diagnostica di riga del {soggetto} isolato: {diagnostica:?}");
+    }
+    // Un solo punto che legge l'evidenza e la categoria, qualunque sia
+    // l'esito: gli accessori di `EsitoClassificato` esistono apposta perche'
+    // un chiamante non debba ripetere la stessa estrazione in ogni ramo del
+    // match sotto.
+    if !supervisore.classificato.pubblica() {
+        if let Some(prova) = supervisore.classificato.evidenza() {
+            eprintln!(
+                "plenora: evidenza del dominio isolato ({soggetto}, categoria {:?}): {prova:?}",
+                supervisore.classificato.categoria()
+            );
+        }
+    }
+
+    interpreta_classificato(
+        soggetto,
+        supervisore.classificato,
+        supervisore.esito_dichiarato,
+        tempo_di_esecuzione,
+    )
+}
+
+/// Avvia il filo che sorveglia `annullamento_esterno`, e chiede
+/// l'annullamento tramite `annullatore` appena lo vede cancellato.
+///
+/// Rende `None` se il filo non nasce: un guasto del sistema, riportato
+/// (`eprintln!`) invece che fatto fallire l'intero tentativo, per la ragione
+/// gia' detta su [`conduci_isolato`].
+#[cfg(target_os = "linux")]
+fn avvia_sorveglianza_esterna(
+    annullamento_esterno: CancellationToken,
+    annullatore: &std::sync::Arc<produttori::Annullatore>,
+) -> Option<(Freno, std::thread::JoinHandle<()>)> {
+    let (spia, freno) = interruttore();
+    let annullatore = std::sync::Arc::clone(annullatore);
+    match std::thread::Builder::new()
+        .name("plenora-sorveglianza-annullamento".to_owned())
+        .spawn(move || {
+            while !spia.fermato() {
+                if annullamento_esterno.is_cancelled() {
+                    match annullatore.annulla() {
+                        produttori::EsitoDellAnnullamento::Accodata
+                        | produttori::EsitoDellAnnullamento::GiaDeposta => {}
+                        produttori::EsitoDellAnnullamento::NonAccodata(motivo) => {
+                            eprintln!(
+                                "plenora: la richiesta di annullamento non e' entrata in coda: \
+                                 {motivo}"
+                            );
+                        }
+                    }
+                    return;
+                }
+                std::thread::sleep(PASSO_DI_ATTESA);
+            }
+        }) {
+        Ok(filo) => Some((freno, filo)),
+        Err(causa) => {
+            eprintln!(
+                "plenora: il filo di sorveglianza dell'annullamento non nasce: {causa}; questo \
+                 tentativo procede senza cancellazione esterna"
+            );
+            None
+        }
+    }
+}
+
+/// Riporta cio' che la conduzione ha lasciato da pulire — mai un secondo
+/// motivo di rifiuto, solo diagnostica accanto all'esito.
+#[cfg(target_os = "linux")]
+fn segnala_pulizia_della_conduzione<P: ProcessoFiglio>(contorno: &conduzione::Contorno<P>) {
+    for resoconto in &contorno.resoconti {
+        eprintln!("plenora: conduzione del profilo isolato: {resoconto}");
+    }
+    for motivo in [
+        &contorno.drenaggio,
+        &contorno.raccolta,
+        &contorno.terminazione,
+        &contorno.annulla,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        eprintln!("plenora: pulizia della conduzione isolata: {motivo}");
+    }
+    // Se il figlio non si e' lasciato raccogliere, `contorno` lo porta
+    // ancora sotto guardia: lasciarlo cadere qui e' il cammino previsto
+    // (la sentinella di `FiglioVivo` scatta con un abort, mai in silenzio),
+    // ma un log chiaro prima di un abort vale piu' di un abort spiegato solo
+    // dal codice che lo ha causato.
+    if contorno.figlio_non_raccolto.is_some() {
+        eprintln!(
+            "plenora: il worker isolato non si e' lasciato raccogliere: il processo abortira'"
+        );
+    }
+}
+
+/// Il motivo per cui i fatti non si sono lasciati ridurre a un esito.
+#[cfg(target_os = "linux")]
+fn messaggio_di_impedimento(impedimento: Impedimento) -> String {
+    match impedimento {
+        Impedimento::ProduttoreNonNato { chi, motivo } => {
+            format!("il produttore «{chi}» non e' nato: {motivo}")
+        }
+        Impedimento::BarrieraIncompleta(manca) => {
+            format!("la barriera prima della classificazione non e' completa: {manca:?}")
+        }
+        Impedimento::FattiContraddittori(contraddizioni) => {
+            format!("i fatti osservati si contraddicono: {contraddizioni:?}")
+        }
+    }
+}
+
+/// Traduce la classificazione della §10 nell'esito che il chiamante di
+/// produzione rende: il digest dichiarato solo per `DaVerificare`, un
+/// errore classificato per ogni altro esito.
+#[cfg(target_os = "linux")]
+fn interpreta_classificato(
+    soggetto: &str,
+    classificato: EsitoClassificato,
+    esito_dichiarato: Option<(DigestArtefatto, ConteggiDichiarati)>,
+    tempo_di_esecuzione: Duration,
+) -> std::result::Result<(DigestArtefatto, ConteggiDichiarati), PlenoraError> {
+    match classificato {
+        EsitoClassificato::DaVerificare { .. } => esito_dichiarato.ok_or_else(|| {
+            PlenoraError::Internal(format!(
+                "la conduzione concede DaVerificare ma non porta il digest dichiarato ({soggetto})"
+            ))
+        }),
+        EsitoClassificato::LimiteAttribuito(evidenza) => Err(PlenoraError::ResourceLimit(format!(
+            "il dominio isolato del {soggetto} ha raggiunto il proprio tetto: {evidenza:?}"
+        ))),
+        EsitoClassificato::Timeout { .. } => Err(PlenoraError::Timeout(format!(
+            "il {soggetto} isolato non ha concluso entro {} secondi",
+            tempo_di_esecuzione.as_secs()
+        ))),
+        // `PlenoraError::Cancelled`, non `Internal`: e' la stessa categoria
+        // e lo stesso exit code (130) del percorso non isolato per lo
+        // stesso genere di esito — non un difetto interno, una
+        // cancellazione cooperativa osservata per davvero. `node`/
+        // `operation` qui non identificano un nodo del DAG (non ce n'e' uno
+        // in questo dialogo): portano il soggetto isolato e la fase in cui
+        // la cancellazione e' stata osservata, con lo stesso significato
+        // descrittivo che gia' hanno altrove in questo file i messaggi di
+        // `ResourceLimit`/`Timeout`. Nessun `execution_id` da questo lato
+        // del confine — resta assente (stringa vuota, omessa dal contesto
+        // reso, vedi `PlenoraError::execution_location`).
+        EsitoClassificato::Cancellato { .. } => Err(PlenoraError::Cancelled {
+            node: soggetto.to_owned(),
+            operation: "dominio isolato".to_owned(),
+            execution_id: String::new(),
+            reason: format!("l'esecuzione isolata del {soggetto} e' stata cancellata"),
+        }),
+        EsitoClassificato::PressioneNonAttribuita(evidenza) => {
+            Err(PlenoraError::UnattributedMemoryPressure {
+                contesto: format!("dominio isolato del {soggetto}, dopo la quiescenza"),
+                evidenza,
+            })
+        }
+        EsitoClassificato::EvidenzaNonUtilizzabile { classe, .. } => {
+            Err(PlenoraError::Internal(format!(
+                "l'evidenza del dominio isolato del {soggetto} non e' utilizzabile: {classe:?} \
+                 (categoria {:?})",
+                classe.categoria()
+            )))
+        }
+        EsitoClassificato::ErroreDelWorker { errore, evidenza } => {
+            if let Some(prova) = evidenza {
+                eprintln!(
+                    "plenora: evidenza del dominio isolato ({soggetto}) con errore dichiarato: \
+                     {prova:?}"
+                );
+            }
+            Err(errore)
+        }
+        EsitoClassificato::PanicDelWorker { forma, evidenza } => {
+            if let Some(prova) = evidenza {
+                eprintln!(
+                    "plenora: evidenza del dominio isolato ({soggetto}) con panico dichiarato: \
+                     {prova:?}"
+                );
+            }
+            Err(PlenoraError::Internal(format!(
+                "il {soggetto} isolato e' andato in panico: {forma:?}"
+            )))
+        }
+        EsitoClassificato::TerminazioneAmbigua { evidenza } => {
+            if let Some(prova) = evidenza {
+                eprintln!(
+                    "plenora: evidenza del dominio isolato ({soggetto}) con terminazione \
+                     ambigua: {prova:?}"
+                );
+            }
+            Err(PlenoraError::Internal(format!(
+                "il {soggetto} isolato e' terminato in modo ambiguo"
+            )))
+        }
+        EsitoClassificato::Pubblicato { evidenza } => {
+            if let Some(prova) = evidenza {
+                eprintln!(
+                    "plenora: evidenza del dominio isolato ({soggetto}) su Pubblicato: {prova:?}"
+                );
+            }
+            Err(PlenoraError::Internal(format!(
+                "la conduzione ({soggetto}) ha reso Pubblicato, che questo percorso non produce \
+                 mai"
+            )))
+        }
+    }
 }
 
 /// Perche' dai fatti non esce un esito.
@@ -956,6 +1437,8 @@ fn forma_di_dominio(forma: FormaPanicSulFilo) -> crate::classificazione::FormaDe
     }
 }
 
+#[cfg(target_os = "linux")]
+mod adattatori;
 mod coda;
 mod conduzione;
 mod produttori;

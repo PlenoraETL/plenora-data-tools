@@ -114,9 +114,7 @@ use rustix::process::{Gid, Uid};
 
 use super::canale;
 use super::dominio::Gerarchia;
-#[cfg(any(test, feature = "internals"))]
 use super::figlio as figlio_guardia;
-#[cfg(any(test, feature = "internals"))]
 use super::figlio::FiglioVivo;
 use super::identita::{leggi_identita, namespace_del_padre, rileggi_credenziali, Identita};
 use super::lettura::leggi_limitato;
@@ -126,7 +124,6 @@ use super::{
 };
 // Cio' che serve al solo avvio: il supervisore non ha ancora un chiamante di
 // produzione, e l'import lo dichiara insieme a cio' che importa.
-#[cfg(any(test, feature = "internals"))]
 use super::{
     esito, spawner_ammissibile, DominioPreparato, TentativoFallito, TransizioneFallita,
     TransizioneRiuscita,
@@ -181,15 +178,15 @@ use super::{
 /// perche' porta tutto cio' che il preflight ha osservato — percorsi, montaggio,
 /// namespace — ed e' quindi molto piu' grande dell'esito riuscito: senza,
 /// **ogni** chiamata pagherebbe in pila la dimensione del ramo raro.
-#[cfg(any(test, feature = "internals"))]
 pub(super) fn avvia(
     preparato: DominioPreparato,
     da_eseguire: &DaEseguire<'_>,
+    artefatto: Option<&std::fs::File>,
 ) -> std::result::Result<TransizioneRiuscita, Box<TransizioneFallita>> {
     // Nessuna giuntura: le callback vuote sono cio' che la produzione passa, e
     // l'unica cosa che un chiamante di qualificazione puo' variare e' **se**
     // fermarsi o fallire in quei due punti, mai che cosa si controlla.
-    avvia_interno(preparato, da_eseguire, || Ok(()), || Ok(()))
+    avvia_interno(preparato, da_eseguire, artefatto, || Ok(()), || Ok(()))
 }
 
 /// Il corpo condiviso fra [`avvia`] e la sua variante con barriera.
@@ -235,13 +232,13 @@ pub(super) fn avvia(
 /// un binario solo di qualificazione, mai dietro una feature — perche' una
 /// feature l'unificazione la propaga, e ci si arriverebbe senza averlo
 /// chiesto.
-#[cfg(any(test, feature = "internals"))]
 fn tenta(
     richiesta: &RichiestaSpawner,
     worker: IdentitaWorker,
     da_eseguire: &DaEseguire<'_>,
     dopo_accertamento: impl FnOnce() -> Result<()>,
     estremi: &canale::EstremiDelWorker,
+    artefatto: Option<&std::fs::File>,
 ) -> std::result::Result<FiglioVivo<std::process::Child>, Box<TentativoFallito>> {
     accerta_immagine(worker)?;
     dopo_accertamento()?;
@@ -268,10 +265,16 @@ fn tenta(
     //    modifica: fra l'avvio e questo punto un thread puo' essere nato.
     canale::accerta_monothread()?;
 
-    // 3. `CLOEXEC` via ai due estremi del worker, e a nient'altro.
+    // 3. `CLOEXEC` via ai due estremi del worker, e a nient'altro — piu'
+    //    l'artefatto, quando questa transizione avvia un verificatore.
+    //    Stessa finestra, stessa ragione: nessun descrittore in meno di
+    //    rigore solo perche' e' opzionale.
     estremi.rendi_ereditabili()?;
+    if let Some(file) = artefatto {
+        canale::rendi_ereditabile_artefatto(file)?;
+    }
 
-    // Il braccio «spawn»: il fallimento arriva **con entrambi gli estremi
+    // Il braccio «spawn»: il fallimento arriva **con tutti i descrittori
     // ereditabili**, che e' lo stato piu' esposto della sequenza.
     #[cfg(qualificazione_isolamento)]
     canale::guasto_richiesto("spawn").map_err(Box::<TentativoFallito>::from)?;
@@ -297,7 +300,6 @@ fn tenta(
 }
 
 /// Il collegamento che il kernel tiene legato all'immagine di questo processo.
-#[cfg(any(test, feature = "internals"))]
 const IMMAGINE: &str = "/proc/self/exe";
 
 /// Che l'immagine in esecuzione sia rieseguibile.
@@ -319,7 +321,6 @@ const IMMAGINE: &str = "/proc/self/exe";
 ///
 /// [`PlenoraError::IsolationUnavailable`] se `/proc/self/exe` non si legge o
 /// non si interroga, o se una delle tre condizioni manca.
-#[cfg(any(test, feature = "internals"))]
 fn accerta_immagine(worker: IdentitaWorker) -> Result<()> {
     let percorso = Path::new(IMMAGINE);
     let bersaglio = std::fs::read_link(percorso)
@@ -385,6 +386,16 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
     // un modo di ottenerne uno senza passare di li'.
     let canale_del_worker =
         canale::accerta_coppia(richiesta.worker_legge, richiesta.worker_scrive)?;
+    // Il terzo descrittore, quando c'e': stesso principio dei due estremi del
+    // canale, riguardato e non creduto. `-1` (la forma canonica di «assente»
+    // gia' accertata da `descrittore_canonico` in `RichiestaSpawner::da_argomenti`)
+    // e' l'unico valore che salta la rivalidazione — e' l'assenza stessa, non
+    // un descrittore da controllare.
+    let artefatto_lettura = if richiesta.artefatto_lettura < 0 {
+        None
+    } else {
+        Some(canale::accerta_artefatto(richiesta.artefatto_lettura)?.numero)
+    };
     // La superficie si costruisce **dalla richiesta**, e non arriva da un
     // chiamante: e' l'unica forma in cui «lo spawner rivalida da se'» non
     // dipende da chi lo ha invocato. `Gerarchia::nuova` canonicalizza, e
@@ -394,7 +405,12 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
         .map_err(|difetto| passo("gerarchia", &difetto.to_string()))?;
     let padre = namespace_del_padre().map_err(|errore| passo("namespace del padre", &errore))?;
     let rivalidato = super::rivalida(&gerarchia, &richiesta, padre)?;
-    entra_ed_esegui(rivalidato, canale_del_worker, &da_eseguire)
+    entra_ed_esegui(
+        rivalidato,
+        canale_del_worker,
+        artefatto_lettura,
+        &da_eseguire,
+    )
 }
 
 /// [`avvia`] con una barriera fra l'accertamento dell'immagine e lo `spawn`.
@@ -430,16 +446,29 @@ pub(super) fn avvia_con_giunture(
     prima_dello_spawn: impl FnOnce() -> Result<()>,
     dopo_lo_spawn: impl FnOnce() -> Result<()>,
 ) -> std::result::Result<TransizioneRiuscita, Box<TransizioneFallita>> {
-    avvia_interno(preparato, da_eseguire, prima_dello_spawn, dopo_lo_spawn)
+    avvia_interno(
+        preparato,
+        da_eseguire,
+        None,
+        prima_dello_spawn,
+        dopo_lo_spawn,
+    )
 }
 
-#[cfg(any(test, feature = "internals"))]
 fn avvia_interno(
     preparato: DominioPreparato,
     da_eseguire: &DaEseguire<'_>,
+    artefatto: Option<&std::fs::File>,
     prima_dello_spawn: impl FnOnce() -> Result<()>,
     dopo_lo_spawn: impl FnOnce() -> Result<()>,
 ) -> std::result::Result<TransizioneRiuscita, Box<TransizioneFallita>> {
+    // Solo per `artefatto.map(...)` piu' sotto: in cima alla funzione, non
+    // dopo le prime istruzioni — un `use` a meta' corpo e' facile da
+    // scambiare per un'importazione con effetto locale, che non e'. Il nome
+    // (non `as _`) serve a riferire `AsRawFd::as_raw_fd` come funzione,
+    // senza una chiusura che lo richiami soltanto.
+    use rustix::fd::AsRawFd;
+
     // Il canale nasce **prima** della richiesta, perche' la richiesta ne porta
     // i numeri. Se non si apre, non c'e' niente da chiedere: resta l'evidenza,
     // perche' il dominio e' gia' configurato.
@@ -469,13 +498,17 @@ fn avvia_interno(
             }));
         }
     };
-    let (richiesta, evidenza) = preparato.consuma(numeri);
+    // Il numero grezzo dell'artefatto, non l'handle: e' cio' che entra nella
+    // richiesta, e lo spawner lo rivalidera' da se' con `canale::accerta_artefatto`
+    // invece di crederci — lo stesso principio dei due estremi del canale.
+    let (richiesta, evidenza) = preparato.consuma(numeri, artefatto.map(AsRawFd::as_raw_fd));
     let tentativo = tenta(
         &richiesta,
         evidenza.worker,
         da_eseguire,
         prima_dello_spawn,
         &estremi,
+        artefatto,
     );
     // Gli estremi del worker cadono **qui**, su entrambi i cammini: la guardia
     // esce di scena prima che l'esito venga costruito, quindi non c'e' ritorno
@@ -621,6 +654,7 @@ pub(super) struct DaEseguire<'a> {
 fn entra_ed_esegui(
     rivalidato: DominioRivalidato,
     canale_del_worker: super::NumeriDelCanale,
+    artefatto_lettura: Option<i32>,
     da_eseguire: &DaEseguire<'_>,
 ) -> Result<std::convert::Infallible> {
     // Il token si **smonta** qui, e da qui in poi esistono solo i suoi pezzi.
@@ -635,89 +669,7 @@ fn entra_ed_esegui(
         namespace_del_padre,
     } = rivalidato;
 
-    // --- 1. monothread -----------------------------------------------------
-    let task = conta_task().map_err(|errore| passo("thread singolo", &errore))?;
-    if task != 1 {
-        return Err(passo(
-            "thread singolo",
-            &format!(
-                "lo spawner ha {task} task: le credenziali si cambiano per thread, e gli altri \
-                 resterebbero privilegiati"
-            ),
-        ));
-    }
-
-    // --- 2. dentro il dominio, e riletto -----------------------------------
-    //
-    // Lo `0` e' il processo corrente: scriverlo evita di doversi procurare il
-    // proprio pid e di fidarsi che sia ancora valido quando la scrittura
-    // arriva.
-    scrivi(&dominio.join("cgroup.procs"), "0")
-        .map_err(|errore| passo("ingresso nel dominio", &errore))?;
-    let appartenenza = leggi_limitato(Path::new("/proc/self/cgroup"))
-        .map_err(|errore| passo("appartenenza", &errore.to_string()))?;
-    let letto = percorso_cgroup(&appartenenza).map_err(|errore| passo("appartenenza", errore))?;
-    let atteso = dentro_la_gerarchia(&dominio, &montaggio)
-        .map_err(|errore| passo("appartenenza", &errore))?;
-    if letto != atteso {
-        return Err(passo(
-            "appartenenza",
-            &format!("atteso {atteso}, letto {letto}"),
-        ));
-    }
-
-    // --- 3. uccidibilita' --------------------------------------------------
-    //
-    // A `-1000` il kernel non uccide il task **nemmeno con
-    // `memory.oom.group = 1`**: un worker che eredita quel valore da un
-    // chiamante protetto sopravvive al group kill e riproduce `F4-8`. E l'esito
-    // e' peggiore della sopravvivenza: un dominio che raggiunge il limite senza
-    // uccidere nessuno non avanza piu', e richiede un `cgroup.kill`
-    // dall'esterno.
-    //
-    // Scrivere senza verificare non e' normalizzare: e' sperare.
-    scrivi(Path::new("/proc/self/oom_score_adj"), "0")
-        .map_err(|errore| passo("oom_score_adj", &errore))?;
-    let riletto = leggi_limitato(Path::new("/proc/self/oom_score_adj"))
-        .map_err(|errore| passo("oom_score_adj", &errore.to_string()))?;
-    if riletto.trim() != "0" {
-        return Err(passo(
-            "oom_score_adj",
-            &format!("scritto 0, riletto {}", riletto.trim()),
-        ));
-    }
-
-    // --- 4. nessun descrittore scrivibile verso il control plane -----------
-    //
-    // E' una proprieta' **autonoma**, non una conseguenza dei passi 5 e 6: il
-    // cambio d'identita' non revoca l'autorita' gia' acquisita, perche' il
-    // controllo dei permessi avviene all'apertura e non a ogni scrittura. Un
-    // `fd` aperto sulla gerarchia prima della `setresuid` resta scrivibile
-    // dopo.
-    //
-    // Qui si **verifica e si rifiuta**, non si chiude. Chiudere un descrittore
-    // ereditato per numero richiede di costruirne un proprietario da un intero
-    // grezzo, e ogni via per farlo e' `unsafe`. Rifiutare e' fail-closed e non
-    // richiede niente: un ambiente che ci passa un `fd` sul control plane non
-    // e' un ambiente in cui possiamo isolare, e chiuderlo di nascosto
-    // nasconderebbe che qualcuno ce lo ha dato.
-    let dispositivo = dispositivo_di(&radice).map_err(|errore| passo("descrittori", &errore))?;
-    let prima = leggi_identita().map_err(|errore| passo("descrittori", &errore))?;
-    let aperti: Vec<&str> = prima
-        .descrittori_scrivibili
-        .iter()
-        .filter(|descrittore| descrittore.dispositivo == dispositivo)
-        .map(|descrittore| descrittore.percorso.as_str())
-        .collect();
-    if !aperti.is_empty() {
-        return Err(passo(
-            "descrittori",
-            &format!(
-                "restano descrittori scrivibili sul filesystem del control plane: {aperti:?}. \
-                 Il cambio d'identita' non li revoca"
-            ),
-        ));
-    }
+    let (dispositivo, prima) = accerta_prima_del_cambio_identita(&dominio, &radice, &montaggio)?;
 
     // --- 4-bis. il canale passa al worker anche come proprieta' ------------
     //
@@ -784,6 +736,28 @@ fn entra_ed_esegui(
         })?;
     }
 
+    // Il terzo descrittore, quando c'e': stesso passo, stesso rigore. Il
+    // verificatore lo riapre da `/proc/self/fd` esattamente come il worker
+    // riapre le sue pipe, e senza il cambio di proprieta' la riapertura
+    // risponderebbe `Permission denied` dopo il passo 6.
+    if let Some(numero) = artefatto_lettura {
+        rustix::fs::chown(
+            format!("/proc/self/fd/{numero}").as_str(),
+            Some(Uid::from_raw(worker.uid)),
+            Some(Gid::from_raw(worker.gid)),
+        )
+        .map_err(|errore| {
+            passo(
+                "artefatto",
+                &format!(
+                    "il descrittore dell'artefatto ({numero}) non passa al verificatore \
+                     {}:{}: {errore}",
+                    worker.uid, worker.gid
+                ),
+            )
+        })?;
+    }
+
     // --- 5. no_new_privs ---------------------------------------------------
     rustix::thread::set_no_new_privs(true)
         .map_err(|errore| passo("no_new_privs", &errore.to_string()))?;
@@ -822,15 +796,131 @@ fn entra_ed_esegui(
     // convenzione che il worker legge. E il worker **rivalida comunque**: quello
     // che arriva di qui e' un'affermazione, come tutto il resto che attraversa
     // una `exec`.
-    let errore = std::os::unix::process::CommandExt::exec(
-        std::process::Command::new(da_eseguire.eseguibile)
-            .args(da_eseguire.argomenti)
-            .env(
-                canale::VARIABILE_DEL_CANALE,
-                canale_del_worker.in_variabile(),
-            ),
+    //
+    // La variabile dell'artefatto segue lo stesso principio, e si aggiunge
+    // **solo** quando c'e' un numero da dire: un `PLENORA_ARTEFATTO_LETTURA`
+    // scritto per un worker ordinario affermerebbe un terzo descrittore che
+    // non esiste, e il worker — che non lo legge mai — non se ne
+    // accorgerebbe: e' il verificatore a dipenderne, e solo lui la cerca.
+    let mut comando = std::process::Command::new(da_eseguire.eseguibile);
+    comando.args(da_eseguire.argomenti).env(
+        canale::VARIABILE_DEL_CANALE,
+        canale_del_worker.in_variabile(),
     );
+    if let Some(numero) = artefatto_lettura {
+        comando.env(canale::VARIABILE_ARTEFATTO, numero.to_string());
+    }
+    let errore = std::os::unix::process::CommandExt::exec(&mut comando);
     Err(passo("exec", &errore.to_string()))
+}
+
+/// I passi 1-4 di [`entra_ed_esegui`]: quelli che accertano l'ambiente
+/// **prima** che qualunque autorita' venga ceduta o cambiata — monothread,
+/// appartenenza al dominio, uccidibilita', nessun descrittore scrivibile
+/// verso il control plane.
+///
+/// # Perche' separata
+///
+/// Perche' `entra_ed_esegui` supera altrimenti il tetto di righe per
+/// funzione (R6): non e' un taglio arbitrario, segue lo stesso confine che
+/// il commento della funzione originaria gia' tracciava fra «prima del
+/// cambio d'identita'» e il cambio stesso. Rende `dispositivo` e `prima`
+/// perche' li usa anche il passo 7, dopo il cambio — non li ricalcola.
+///
+/// # Errors
+///
+/// [`PlenoraError::IsolationUnavailable`] al primo dei quattro passi che non
+/// regge, con lo stesso nome di passo che aveva prima dell'estrazione.
+fn accerta_prima_del_cambio_identita(
+    dominio: &Path,
+    radice: &Path,
+    montaggio: &Montaggio,
+) -> Result<(u64, Identita)> {
+    // --- 1. monothread -----------------------------------------------------
+    let task = conta_task().map_err(|errore| passo("thread singolo", &errore))?;
+    if task != 1 {
+        return Err(passo(
+            "thread singolo",
+            &format!(
+                "lo spawner ha {task} task: le credenziali si cambiano per thread, e gli altri \
+                 resterebbero privilegiati"
+            ),
+        ));
+    }
+
+    // --- 2. dentro il dominio, e riletto -----------------------------------
+    //
+    // Lo `0` e' il processo corrente: scriverlo evita di doversi procurare il
+    // proprio pid e di fidarsi che sia ancora valido quando la scrittura
+    // arriva.
+    scrivi(&dominio.join("cgroup.procs"), "0")
+        .map_err(|errore| passo("ingresso nel dominio", &errore))?;
+    let appartenenza = leggi_limitato(Path::new("/proc/self/cgroup"))
+        .map_err(|errore| passo("appartenenza", &errore.to_string()))?;
+    let letto = percorso_cgroup(&appartenenza).map_err(|errore| passo("appartenenza", errore))?;
+    let atteso =
+        dentro_la_gerarchia(dominio, montaggio).map_err(|errore| passo("appartenenza", &errore))?;
+    if letto != atteso {
+        return Err(passo(
+            "appartenenza",
+            &format!("atteso {atteso}, letto {letto}"),
+        ));
+    }
+
+    // --- 3. uccidibilita' --------------------------------------------------
+    //
+    // A `-1000` il kernel non uccide il task **nemmeno con
+    // `memory.oom.group = 1`**: un worker che eredita quel valore da un
+    // chiamante protetto sopravvive al group kill e riproduce `F4-8`. E l'esito
+    // e' peggiore della sopravvivenza: un dominio che raggiunge il limite senza
+    // uccidere nessuno non avanza piu', e richiede un `cgroup.kill`
+    // dall'esterno.
+    //
+    // Scrivere senza verificare non e' normalizzare: e' sperare.
+    scrivi(Path::new("/proc/self/oom_score_adj"), "0")
+        .map_err(|errore| passo("oom_score_adj", &errore))?;
+    let riletto = leggi_limitato(Path::new("/proc/self/oom_score_adj"))
+        .map_err(|errore| passo("oom_score_adj", &errore.to_string()))?;
+    if riletto.trim() != "0" {
+        return Err(passo(
+            "oom_score_adj",
+            &format!("scritto 0, riletto {}", riletto.trim()),
+        ));
+    }
+
+    // --- 4. nessun descrittore scrivibile verso il control plane -----------
+    //
+    // E' una proprieta' **autonoma**, non una conseguenza dei passi 5 e 6: il
+    // cambio d'identita' non revoca l'autorita' gia' acquisita, perche' il
+    // controllo dei permessi avviene all'apertura e non a ogni scrittura. Un
+    // `fd` aperto sulla gerarchia prima della `setresuid` resta scrivibile
+    // dopo.
+    //
+    // Qui si **verifica e si rifiuta**, non si chiude. Chiudere un descrittore
+    // ereditato per numero richiede di costruirne un proprietario da un intero
+    // grezzo, e ogni via per farlo e' `unsafe`. Rifiutare e' fail-closed e non
+    // richiede niente: un ambiente che ci passa un `fd` sul control plane non
+    // e' un ambiente in cui possiamo isolare, e chiuderlo di nascosto
+    // nasconderebbe che qualcuno ce lo ha dato.
+    let dispositivo = dispositivo_di(radice).map_err(|errore| passo("descrittori", &errore))?;
+    let prima = leggi_identita().map_err(|errore| passo("descrittori", &errore))?;
+    let aperti: Vec<&str> = prima
+        .descrittori_scrivibili
+        .iter()
+        .filter(|descrittore| descrittore.dispositivo == dispositivo)
+        .map(|descrittore| descrittore.percorso.as_str())
+        .collect();
+    if !aperti.is_empty() {
+        return Err(passo(
+            "descrittori",
+            &format!(
+                "restano descrittori scrivibili sul filesystem del control plane: {aperti:?}. \
+                 Il cambio d'identita' non li revoca"
+            ),
+        ));
+    }
+
+    Ok((dispositivo, prima))
 }
 
 /// Quanti task ha questo processo.
@@ -978,7 +1068,7 @@ fn passo(quale: &str, motivo: &str) -> PlenoraError {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{dentro_la_gerarchia, percorso_cgroup};
+    use super::{conta_task, dentro_la_gerarchia, dispositivo_di, percorso_cgroup};
     use crate::isolamento::Montaggio;
 
     fn montaggio(punto: &str, radice: &str) -> Montaggio {
@@ -996,6 +1086,54 @@ mod tests {
     fn si_legge_la_riga_v2_non_la_prima() {
         let contenuto = "1:name=systemd:/user.slice\n0::/plenora/dominio-7\n";
         assert_eq!(percorso_cgroup(contenuto), Ok("/plenora/dominio-7"));
+    }
+
+    // --- conta_task / dispositivo_di: letture reali, nessun privilegio ------
+    //
+    // Entrambe leggono solo `/proc/self` o `stat` un percorso: nessuno
+    // spawn, nessun cambio di identita'. Il processo di test stesso e' un
+    // soggetto valido — non serve un worker vero per accertare che la
+    // lettura sia quella giusta.
+
+    /// Il processo di test, monothread per costruzione (nessun altro test
+    /// gira concorrentemente in QUESTO processo, dato che i test Rust
+    /// condividono il processo ma non lo stato di `/proc/self/task`, che
+    /// riflette i thread veri del processo, non i test logici): `conta_task`
+    /// deve trovarne almeno uno, se stesso.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn conta_task_trova_almeno_il_thread_che_chiama() {
+        let quanti = conta_task().expect("/proc/self/task deve leggersi in un ambiente Linux");
+        assert!(
+            quanti >= 1,
+            "il processo che chiama e' gia' un task: {quanti}"
+        );
+    }
+
+    /// L'identita' del filesystem letta per il percorso di prova coincide con
+    /// quella che `std::fs::metadata` osserva indipendentemente sullo stesso
+    /// percorso — la stessa `stat`, non una ricostruita.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn dispositivo_di_coincide_con_una_stat_indipendente() {
+        use std::os::unix::fs::MetadataExt as _;
+        let percorso = std::env::temp_dir();
+        let atteso = std::fs::metadata(&percorso)
+            .expect("il percorso temporaneo deve essere leggibile")
+            .dev();
+        assert_eq!(
+            dispositivo_di(&percorso).expect("il dispositivo deve leggersi"),
+            atteso
+        );
+    }
+
+    /// Un percorso che non esiste non ha un dispositivo da leggere: rifiuto
+    /// nominato, non un panico ne' un valore inventato.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn dispositivo_di_rifiuta_un_percorso_inesistente() {
+        let percorso = Path::new("/percorso/che/di-proposito/non-esiste-mai");
+        assert!(dispositivo_di(percorso).is_err());
     }
 
     /// Due righe v2 sono ambigue, e l'ambiguita' e' un rifiuto.

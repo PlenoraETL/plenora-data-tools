@@ -283,6 +283,31 @@ use input::BatchStream;
 ///   (fail-closed errori-e-limiti.md, vedi l'header del modulo).
 #[allow(clippy::needless_pass_by_value)] // Firma per valore voluta da architettura.md#planner-ed-executor.
 pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) -> Result<Output> {
+    // `PR-12`: un piano che richiede il profilo isolato non deve MAI
+    // ricadere qui, sul percorso in-process — ne' in silenzio ne' per
+    // omissione. Il chiamante di produzione che serve davvero la richiesta e'
+    // `isolamento::esecuzione_isolata::esegui_isolato`, non questa funzione:
+    // prepara il dominio, avvia il worker confinato, e SOLO ALL'INTERNO di
+    // quel dominio il worker rivalida lo stesso piano e chiama `execute` su
+    // se stesso (`runtime.gia_confinato = Some(Confinamento::interno())`,
+    // sotto — un tipo non costruibile fuori dal crate, non un `bool`). Chi
+    // arriva qui con una richiesta di isolamento non ancora servita —
+    // chiamando `execute` direttamente invece del percorso isolato, o su una
+    // piattaforma/con una politica dell'host che non la autorizzano — trova
+    // un rifiuto esplicito, PRIMA di `check_compatibility` e di ogni tocco
+    // ai dati.
+    if let Some(richiesto_byte) = graph
+        .plan()
+        .max_domain_memory_bytes()
+        .filter(|_| runtime.gia_confinato.is_none())
+    {
+        return Err(
+            crate::isolamento::attivazione::richiesta_isolamento_non_ancora_servibile(
+                richiesto_byte,
+                graph.effective_limits().max_governed_memory_bytes,
+            ),
+        );
+    }
     check_compatibility(
         graph,
         CATALOG,

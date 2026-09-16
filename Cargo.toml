@@ -70,8 +70,32 @@ uuid = { version = "=1.25.0", features = ["v4"] }
 tempfile = "=3.27.0"
 # Handler Ctrl-C della CLI (errori-e-limiti.md#cancellazione): setta il token di cancellazione
 # cooperativa. Piccola, mantenuta, nessun unsafe nel perimetro del workspace
-# (unsafe_code e' proibito solo nei crate del workspace).
+# (unsafe_code e' proibito solo nei crate del workspace). Resta il meccanismo
+# del percorso NON isolato (`run_dag`): nessuna unificazione con `signal-hook`
+# sotto, che serve solo al percorso isolato (`run_isolato`, solo Linux).
 ctrlc = "=3.5.2"
+# Handler SIGINT senza thread persistente per il solo percorso isolato
+# (PR-12, `isolamento::canale::accerta_monothread`): `ctrlc::set_handler` fa
+# nascere un thread che vive per tutta la vita del processo (verificato nel
+# suo sorgente), e quel thread fa fallire `accerta_monothread` — che accerta
+# un solo task, adesso, subito prima di rendere i descrittori ereditabili —
+# a ENTRAMBE le finestre di spawn (worker e verificatore), non solo alla
+# prima. `signal_hook::flag::register`/`register_conditional_shutdown` non
+# generano alcun thread (verificato leggendo il sorgente della crate, non
+# assunto dal nome): installano una `sigaction` reale e scrivono un
+# `Arc<AtomicBool>` — lo stesso bit che `CancellationToken::is_cancelled`
+# gia' legge. Firma sicura al sito di chiamata: l'`unsafe` che la crate
+# contiene resta dentro `signal-hook-registry` (la sua doc lo dichiara), mai
+# scritto nel workspace (`unsafe_code = "forbid"` sotto, invariato).
+# `default-features = false` esclude `iterator`/`channel` (di default
+# attive): la prima e' descritta dalla crate come potenzialmente basata su
+# thread, e nessuna delle due serve al solo modulo `flag` che uso, che non
+# richiede feature. Dipendenza limitata al target Linux (vedi
+# `crates/plenora-cli/Cargo.toml`, sezione `[target.'cfg(target_os =
+# "linux")'.dependencies]`): su altre piattaforme il percorso isolato non
+# esiste (`PLAN-0xx`, `Unsupported` prima che questo codice si compili) e
+# quindi non serve.
+signal-hook = { version = "=0.4.4", default-features = false }
 # statfs per il riconoscimento fail-closed del filesystem (errori-e-limiti.md#publish-e-cleanup, solo
 # Linux) e kill(pid, 0) per lo scavenging dei temp store (errori-e-limiti.md, feature
 # "process"): stessa versione gia' presente nel lockfile come dipendenza di

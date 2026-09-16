@@ -240,11 +240,16 @@ versionata e rivalidazione, la sequenza in sette passi che si spoglia
 dell'autorità, e il gate ostile `scripts/verifica_isolamento_linux.sh` — con la
 sua qualificazione su VM dedicata.
 
-**Non esiste ancora nel codice** ciò che richiede il ciclo di vita completo a
-due processi: il supervisore di produzione che chiama quel dominio, le pipe e
-la macchina a stati che gli sta intorno restano **progettati** in
-[`isolamento.md`](isolamento.md) — arrivano con `PR-8`, che è anche il primo
-chiamante di produzione del modulo.
+Con `PR-8`, `PR-9` e `PR-10` la macchina a stati del supervisore, il worker
+reale e la catena di verifica e pubblicazione esistono tutte nel codice — non
+sono più **progettate**, sono **costruite e provate**, ed erano allora sotto
+`cfg(any(test, feature = "internals"))`. Quello che mancava non era il
+meccanismo: era il chiamante. `PR-12` ("attivazione") lo costruisce — vedi
+sotto — e con lui cade il `cfg` da tutto quel perimetro, `isolamento::macchina`
+compreso: il chiamante di produzione conduce il dialogo con la macchina a
+stati vera, non con `isolamento::prova::dialoga`, e l'attribuzione OOM della
+§10.0-bis è raggiungibile davvero. La sola eccezione dichiarata è la
+cancellazione, per la ragione spiegata più avanti.
 
 La sequenza di publish non è più progetto: `PR-6` ne aveva portato la sola
 verifica, `PR-10` porta il passo 9. **Non diventa però superficie pubblica**, e
@@ -339,6 +344,74 @@ costruttori dei limiti lo restringono secondo il budget disponibile.
 `verifica_artefatto` riceve l'intero `&IpcLimits`, non un parametro o una
 policy separati. Perimetro e condizioni di rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
+
+`PR-12` ("attivazione") è **in corso**, non conclusa. Quattro decisioni sono
+ratificate e costruite: (1) la presenza di `max_domain_memory_bytes` in un
+piano v6 **costituisce la richiesta** del profilo isolato — non un campo
+separato, e mai un tetto implicito — e una richiesta non può ricadere
+sull'esecuzione in-process; (2) la piattaforma si verifica in validazione,
+staticamente (`isolamento::attivazione::verifica_piattaforma`, cablata in
+`planner::validate`): su Windows e macOS una richiesta è `Unsupported`, non
+ignorata; la disponibilità dinamica di Linux (privilegi, cgroup, politica
+dell'host) resta un'altra verifica, in `PreparaIsolamento`; (3) gli errori
+distinguono `Unsupported` (piattaforma), `IsolationUnavailable` (Linux non
+può prepararlo, policy dell'host compresa) e `InvalidPlan` (incoerenza del
+piano stesso); (4) una politica minima dell'host — una variabile d'ambiente
+del dispiegamento, mai il piano — ritaglia il tetto richiesto
+(`min(richiesta, politica)`) e rifiuta prima di qualunque spawn se il tetto
+ritagliato scende sotto il budget governato effettivo, senza mai modificarlo
+in silenzio (`isolamento::attivazione::autorizza_profilo_isolato`).
+
+Il chiamante di produzione **esiste ed è collegato**:
+`isolamento::esecuzione_isolata::esegui_isolato` sequenzia **due domini** su
+dati reali — non la fixture di qualificazione — riusando ogni passo già
+costruito da `PR-8`/`PR-9`/`PR-10` senza reimplementarlo. Il primo dominio
+esegue il worker; viene **distrutto**, non solo svuotato, prima che il
+secondo nasca; il secondo esegue il verificatore — spawner e protocollo
+propri, un `IncaricoVerifica` al posto dell'`Incarico`, un terzo descrittore
+ereditato per l'artefatto in sola lettura — e solo se conferma digest e
+conteggi il coordinatore pubblica: la verifica non gira più nel suo processo
+(`isolamento.md#2-quater`). `plenora-cli run` lo sceglie davvero: un piano che
+dichiara `max_domain_memory_bytes` non tocca più `executor::execute` in
+alcun caso, nemmeno su Linux con privilegi sufficienti — la guardia in
+`execute` resta come difesa in profondità per chi lo chiamasse comunque in
+modo diretto, non come percorso previsto. La configurazione del
+dispiegamento — radice del cgroup2 delegato e identità del worker,
+`PLENORA_ISOLATION_CGROUP_ROOT` e `PLENORA_ISOLATION_WORKER_UIDGID` — segue
+lo stesso principio della politica di memoria dell'host: variabili
+d'ambiente del dispiegamento, mai il piano.
+
+Di conseguenza il `cfg(any(test, feature = "internals"))` è caduto da tutto
+il perimetro d'isolamento — dominio, canale, spawner, protocollo, verifica,
+pubblicazione, e **`isolamento::macchina`** compreso, con gli adattatori
+reali (`macchina::adattatori`) che implementano `Osservatore`, `Terminatore`
+e `LettoreDiEvidenza` contro i file veri del dominio. Il chiamante di
+produzione non guida più il dialogo con `isolamento::prova::dialoga` (che
+resta per la sola negoziazione dell'handshake, e per intero nella
+qualificazione fra due pipe): dopo l'accordo passa a
+`macchina::conduci_isolato`, e la classificazione della §10 — inclusa
+l'attribuzione OOM della §10.0-bis — è quella vera, non una sua
+approssimazione conservativa.
+
+**Dimostrato su VM**, non solo collegato in codice: un'esecuzione isolata
+reale, sotto un `cgroup2` delegato con privilegi reali (worker con identità
+distinta, root per il supervisore), ha prodotto un `EvidenzaDiLimite` con i
+contatori letti per davvero dal dominio e dai suoi antenati fino alla radice
+del control plane — tutti a zero, perché il tentativo non ha premuto sul
+tetto, ma letti, non presunti. Verificati nello stesso giro: il tetto
+concesso dalla politica dell'host (non quello grezzo richiesto dal piano) è
+quello scritto in `memory.max`; l'esecuzione completa pubblica l'artefatto
+con l'`isolation` machine-readable nell'output; il dominio non lascia
+residuo a nessuna uscita.
+
+**Non ancora dimostrato**: un esito **attribuito** per davvero — il ramo
+`LimiteAttribuito` della classificazione, che richiede un tentativo
+che *superi* il tetto, non uno che resta sotto. Il meccanismo di lettura è
+verificato (l'evidenza sopra), il giudizio è lo stesso già provato da 118+
+casi di `macchina`/`classificazione` con evidenza finta; cio' che manca è la
+combinazione delle due su un OOM reale, che resta lavoro di qualificazione
+mirata (`scripts/qualifica_sotto_limite.sh` e la sua famiglia, non ancora
+estesi a esercitare il chiamante di produzione).
 
 I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le
 misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md), che è

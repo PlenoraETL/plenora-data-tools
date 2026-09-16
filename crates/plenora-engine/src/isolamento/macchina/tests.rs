@@ -210,6 +210,45 @@ fn la_cancellazione_da_sola_e_una_cancellazione() {
     );
 }
 
+/// Il collegamento esterno, non solo la regola: un `CancellationToken`
+/// cancellato fa nascere `Fatto::CancellazioneRichiesta` in coda tramite
+/// [`super::avvia_sorveglianza_esterna`], senza che nessuno lo costruisca a
+/// mano.
+///
+/// # Perche' questo caso non gira ovunque
+///
+/// A differenza del resto del file, `avvia_sorveglianza_esterna` e' di Linux
+/// — e' un aiutante di `conduci_isolato`, che lo e' — anche se non tocca
+/// niente di Linux esso stesso: la ragione e' la stessa di
+/// `segnala_pulizia_della_conduzione` e delle altre due funzioni sorelle,
+/// senza chiamante fuori da quel percorso.
+#[cfg(target_os = "linux")]
+#[test]
+fn la_sorveglianza_esterna_accoda_la_cancellazione_quando_il_token_si_cancella() {
+    let (coda, fascio) = super::coda::apri();
+    let annullatore =
+        std::sync::Arc::new(super::produttori::Annullatore::nuovo(fascio.annullatore));
+    let token = crate::cancellation::CancellationToken::new();
+
+    let Some((freno, filo)) = super::avvia_sorveglianza_esterna(token.clone(), &annullatore) else {
+        panic!("il filo di sorveglianza deve nascere in questo ambiente di prova");
+    };
+
+    token.cancel();
+    assert!(
+        filo.join().is_ok(),
+        "il filo di sorveglianza non va in panico quando accoda l'annullamento"
+    );
+    // Gia' uscito da se' vedendo il token cancellato: fermarlo ora e' solo
+    // igiene, non una condizione perche' il fatto sia arrivato.
+    freno.ferma();
+
+    match coda.prossimo(std::time::Duration::from_secs(2)) {
+        super::coda::Presa::Fatto(super::Fatto::CancellazioneRichiesta) => {}
+        altro => panic!("atteso Fatto::CancellazioneRichiesta in coda, trovato {altro:?}"),
+    }
+}
+
 /// Un panico dichiarato resta un panico, in qualunque ordine arrivi.
 #[test]
 fn il_panico_dichiarato_non_dipende_dall_ordine() {

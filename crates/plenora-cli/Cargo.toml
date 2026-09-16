@@ -29,8 +29,19 @@ rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-# Handler Ctrl-C per la cancellazione cooperativa (errori-e-limiti.md#cancellazione).
+# Handler Ctrl-C per la cancellazione cooperativa (errori-e-limiti.md#cancellazione)
+# del percorso NON isolato (`run_dag`). Il percorso isolato (`run_isolato`,
+# solo Linux) usa `signal-hook` sotto, non questa: vedi la sezione
+# `[target.'cfg(target_os = "linux")'.dependencies]`.
 ctrlc.workspace = true
+
+# Solo per il percorso isolato (PR-12): `signal-hook` non genera thread,
+# a differenza di `ctrlc`, e quindi non rompe `isolamento::canale::
+# accerta_monothread` alle finestre di spawn del worker e del verificatore.
+# Limitata a Linux perche' il percorso isolato non esiste altrove (vedi
+# `Cargo.toml` di radice per la scelta della dipendenza).
+[target.'cfg(target_os = "linux")'.dependencies]
+signal-hook.workspace = true
 
 [dev-dependencies]
 # Usato dai test di integrazione portati (WKB di fixture in geo_adversarial.rs).

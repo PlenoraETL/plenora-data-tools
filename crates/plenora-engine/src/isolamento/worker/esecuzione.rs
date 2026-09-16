@@ -94,6 +94,11 @@ pub(super) fn esegui(
         // l'executor non guarda: il lavoro proseguirebbe fino in fondo e il
         // supervisore dovrebbe forzare la terminazione.
         cancellation: annullamento.clone(),
+        // Il worker esegue QUI, dentro il dominio che il supervisore ha gia'
+        // preparato e confinato: la richiesta di isolamento che il piano
+        // porta ancora e' quella che questa stessa esecuzione sta servendo,
+        // non una nuova richiesta da respingere (`PR-12`).
+        gia_confinato: Some(crate::prepare::Confinamento::interno()),
         ..RuntimeContext::default()
     };
     // I tetti del confine derivano dai limiti **effettivi** del piano appena

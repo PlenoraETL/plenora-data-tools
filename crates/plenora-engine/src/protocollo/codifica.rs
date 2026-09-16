@@ -57,12 +57,12 @@ const fn letterale(valore: &str) -> usize {
 
 /// Byte dell'involucro JSON.
 ///
-/// `{"protocol_version":65535,"tipo":"progresso","corpo":}` e' la forma piu'
-/// lunga: `u16` a cinque cifre e il nome di tipo piu' lungo.
+/// `{"protocol_version":65535,"tipo":"incarico_verifica","corpo":}` e' la
+/// forma piu' lunga: `u16` a cinque cifre e il nome di tipo piu' lungo.
 ///
-/// «Piu' lungo» fra i **sei tipi di messaggio** — `progresso`, nove caratteri
-/// — non fra i nomi degli assi dell'errore, che sono ben piu' lunghi ma non
-/// compaiono mai qui: `tipo` non li puo' contenere.
+/// «Piu' lungo» fra gli **otto tipi di messaggio** — `incarico_verifica`,
+/// diciassette caratteri — non fra i nomi degli assi dell'errore, che sono
+/// ben piu' lunghi ma non compaiono mai qui: `tipo` non li puo' contenere.
 const INVOLUCRO_BYTES: usize = {
     // { } piu' le due virgole fra i tre campi.
     let struttura = 2 + 2;
@@ -72,7 +72,7 @@ const INVOLUCRO_BYTES: usize = {
         + chiave("protocol_version")
         + valore_versione
         + chiave("tipo")
-        + letterale("progresso")
+        + letterale("incarico_verifica")
         + chiave("corpo")
 };
 
@@ -121,7 +121,7 @@ const INCARICO_BYTES: usize = {
 ///
 /// Derivato con aritmetica `checked` dai tetti dei campi e dall'involucro
 /// contato. Non e' un numero tondo scelto: e' una somma, e i test verificano
-/// che i sei messaggi massimi ci stiano dentro e che l'`Incarico` sia
+/// che gli otto messaggi massimi ci stiano dentro e che l'`Incarico` sia
 /// davvero il piu' grande.
 pub const MAX_PROTOCOL_FRAME_BYTES: usize = match INVOLUCRO_BYTES.checked_add(INCARICO_BYTES) {
     Some(totale) => totale,
@@ -335,10 +335,16 @@ pub fn decodifica(byte: &[u8]) -> Result<Frame> {
     let corpo = match involucro.tipo {
         TipoMessaggio::Saluto => Corpo::Saluto(Box::new(corpo_di(grezzo, "saluto")?)),
         TipoMessaggio::Incarico => Corpo::Incarico(Box::new(corpo_di(grezzo, "incarico")?)),
+        TipoMessaggio::IncaricoVerifica => {
+            Corpo::IncaricoVerifica(Box::new(corpo_di(grezzo, "incarico_verifica")?))
+        }
         TipoMessaggio::Annulla => Corpo::Annulla(corpo_di(grezzo, "annulla")?),
         TipoMessaggio::Risposta => Corpo::Risposta(Box::new(corpo_di(grezzo, "risposta")?)),
         TipoMessaggio::Progresso => Corpo::Progresso(corpo_di(grezzo, "progresso")?),
         TipoMessaggio::Esito => Corpo::Esito(Box::new(corpo_di(grezzo, "esito")?)),
+        TipoMessaggio::EsitoVerifica => {
+            Corpo::EsitoVerifica(Box::new(corpo_di(grezzo, "esito_verifica")?))
+        }
     };
 
     // `Frame::nuovo` prende il solo corpo: il tipo dichiarato sul filo e'
@@ -431,6 +437,7 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
             verifica_ambiente(&saluto.ambiente)
         }
         Corpo::Incarico(incarico) => verifica_incarico(incarico),
+        Corpo::IncaricoVerifica(incarico) => verifica_incarico_verifica(incarico),
         Corpo::Annulla(annulla) => limita(&annulla.motivo, MAX_MOTIVO_BYTES, "motivo"),
         Corpo::Risposta(risposta) => {
             verifica_identita(&risposta.artefatto, &risposta.resolver)?;
@@ -440,6 +447,7 @@ fn verifica_forma(frame: &Frame) -> Result<()> {
         // Contatori: nessun tetto oltre al tipo.
         Corpo::Progresso(_) => Ok(()),
         Corpo::Esito(esito) => verifica_esito(esito),
+        Corpo::EsitoVerifica(esito) => verifica_esito_verifica(esito),
     }
 }
 
@@ -466,6 +474,30 @@ pub(super) fn verifica_incarico(incarico: &super::messaggi::Incarico) -> Result<
         incarico.piano_canonico.get(),
         MAX_PIANO_CANONICO_BYTES,
         "piano_canonico",
+    )
+}
+
+/// La forma di un `IncaricoVerifica`.
+///
+/// `contract_fingerprint_atteso` non ha un tetto da applicare qui: e' un
+/// [`super::messaggi::DigestSha256`], e la forma canonica e' del tipo, non di
+/// un controllo. `conteggi_attesi` e `budget_memoria_governata_bytes` sono
+/// interi puri, come i conteggi del `Successo` e i contatori del
+/// `Progresso`: il loro dominio e' il tipo. Resta da limitare solo
+/// `digest_atteso`, che porta un campo `algoritmo` sciolto — la stessa
+/// ragione per cui `verifica_esito` lo limita sul `Successo`.
+pub(super) fn verifica_incarico_verifica(
+    incarico: &super::messaggi::IncaricoVerifica,
+) -> Result<()> {
+    limita(
+        &incarico.digest_atteso.algoritmo,
+        MAX_IDENTIFICATORE_BYTES,
+        "digest_atteso.algoritmo",
+    )?;
+    limita(
+        &incarico.digest_atteso.valore,
+        MAX_DIGEST_BYTES,
+        "digest_atteso.valore",
     )
 }
 
@@ -525,6 +557,41 @@ pub(super) fn verifica_ambiente(ambiente: &super::messaggi::Ambiente) -> Result<
     Ok(())
 }
 
+/// I tetti su `digest_artefatto`, condivisi da [`verifica_esito`] e
+/// [`verifica_esito_verifica`]: stessa forma del campo, stesso tetto.
+fn limita_digest_artefatto(digest_artefatto: &super::messaggi::DigestArtefatto) -> Result<()> {
+    limita(
+        &digest_artefatto.algoritmo,
+        MAX_IDENTIFICATORE_BYTES,
+        "digest_artefatto.algoritmo",
+    )?;
+    limita(
+        &digest_artefatto.valore,
+        MAX_DIGEST_BYTES,
+        "digest_artefatto.valore",
+    )
+}
+
+/// I tetti su un `ErroreSulFilo`, condivisi dagli esiti del worker e del
+/// verificatore: e' lo stesso tipo di errore in entrambi i casi, e un tetto
+/// diverso a seconda di chi lo dichiara non avrebbe alcuna giustificazione.
+fn limita_errore_sul_filo(dentro: &super::messaggi::ErroreSulFilo) -> Result<()> {
+    limita(&dentro.messaggio, MAX_MESSAGGIO_BYTES, "messaggio")?;
+    for (campo, valore) in [
+        ("nodo", &dentro.nodo),
+        ("operazione", &dentro.operazione),
+        ("execution_id", &dentro.execution_id),
+    ] {
+        if let Some(valore) = valore {
+            limita(valore, MAX_IDENTIFICATORE_BYTES, campo)?;
+        }
+    }
+    dentro
+        .diagnostica
+        .as_ref()
+        .map_or(Ok(()), verifica_diagnostica)
+}
+
 fn verifica_esito(esito: &super::messaggi::EsitoWorkerSulFilo) -> Result<()> {
     match esito {
         // I `conteggi` non hanno un tetto da applicare: sono due `u64`, e il
@@ -534,37 +601,29 @@ fn verifica_esito(esito: &super::messaggi::EsitoWorkerSulFilo) -> Result<()> {
         super::messaggi::EsitoWorkerSulFilo::Successo {
             digest_artefatto,
             conteggi: _,
-        } => {
-            limita(
-                &digest_artefatto.algoritmo,
-                MAX_IDENTIFICATORE_BYTES,
-                "digest_artefatto.algoritmo",
-            )?;
-            limita(
-                &digest_artefatto.valore,
-                MAX_DIGEST_BYTES,
-                "digest_artefatto.valore",
-            )
-        }
+        } => limita_digest_artefatto(digest_artefatto),
         super::messaggi::EsitoWorkerSulFilo::Errore { errore: dentro } => {
-            limita(&dentro.messaggio, MAX_MESSAGGIO_BYTES, "messaggio")?;
-            for (campo, valore) in [
-                ("nodo", &dentro.nodo),
-                ("operazione", &dentro.operazione),
-                ("execution_id", &dentro.execution_id),
-            ] {
-                if let Some(valore) = valore {
-                    limita(valore, MAX_IDENTIFICATORE_BYTES, campo)?;
-                }
-            }
-            dentro
-                .diagnostica
-                .as_ref()
-                .map_or(Ok(()), verifica_diagnostica)
+            limita_errore_sul_filo(dentro)
         }
         // La forma del panico e' un enum chiuso: non c'e' lunghezza da
         // limitare, ed e' precisamente il punto.
         super::messaggi::EsitoWorkerSulFilo::Panic { .. } => Ok(()),
+    }
+}
+
+/// Come [`verifica_esito`], per l'esito del **verificatore**: stessa forma,
+/// stessi tetti, tipo distinto — la ragione e' la stessa di
+/// [`super::messaggi::EsitoVerificaSulFilo`].
+fn verifica_esito_verifica(esito: &super::messaggi::EsitoVerificaSulFilo) -> Result<()> {
+    match esito {
+        super::messaggi::EsitoVerificaSulFilo::Successo {
+            digest_artefatto,
+            conteggi: _,
+        } => limita_digest_artefatto(digest_artefatto),
+        super::messaggi::EsitoVerificaSulFilo::Errore { errore: dentro } => {
+            limita_errore_sul_filo(dentro)
+        }
+        super::messaggi::EsitoVerificaSulFilo::Panic { .. } => Ok(()),
     }
 }
 

@@ -275,6 +275,82 @@ pub(crate) fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), Ple
     .map_err(|error| contract(format!("handler ctrl-c non installabile: {error}")))
 }
 
+/// Gestore SIGINT del **percorso isolato** (`isolamento::esecuzione_isolata`,
+/// `PR-12`) — non installa [`install_ctrlc_handler`] sopra, e per una
+/// ragione precisa: `ctrlc::set_handler` fa nascere un thread che vive per
+/// tutta la vita del processo (verificato nel suo sorgente, nessun modo di
+/// fermarlo o unirlo), e quel thread fa fallire
+/// `isolamento::canale::accerta_monothread` — che accerta un solo task,
+/// adesso, subito prima di rendere i descrittori ereditabili — a
+/// **entrambe** le finestre di spawn (worker e verificatore), non solo alla
+/// prima.
+///
+/// # Il meccanismo, e perche' copre tutte e tre le finestre
+///
+/// `signal_hook::flag::register`/`register_conditional_shutdown` non fanno
+/// nascere nessun thread (verificato leggendo il sorgente della crate, fino
+/// a `libc::sigaction`, non assunto dal nome): installano una vera
+/// `sigaction`, **una sola volta per tutta la vita del processo** — non
+/// nascono ne' muoiono a ogni finestra. Scrivono direttamente
+/// [`CancellationToken::condividi_flag`]: lo stesso bit che il motore gia'
+/// controlla ai confini cooperativi, senza un thread intermedio che lo
+/// faccia per loro. Percio' la copertura e' identica nella fase worker,
+/// nella transizione fra le due fasi e nella fase verificatore — non c'e'
+/// un'installazione per finestra da ripetere o da perdere.
+///
+/// # L'ordine di registrazione non e' arbitrario
+///
+/// La doc di `register_conditional_shutdown` impone: "the shutdown must go
+/// first". Registrata per prima, quella chiusura legge il flag com'era
+/// **prima** di questa consegna del segnale: al primo Ctrl-C lo trova
+/// `false` (nessuna pressione precedente) e non esce; la seconda
+/// registrazione lo mette a `true` subito dopo. Al secondo Ctrl-C (in
+/// qualunque delle tre finestre: il flag e' lo stesso `Arc` per tutto il
+/// processo) la prima registrazione lo trova gia' `true` ed esce
+/// immediatamente con `signal_hook::low_level::exit`.
+///
+/// # Differenze dichiarate rispetto a [`install_ctrlc_handler`]
+/// (errori-e-limiti.md#cancellazione) — non equivalenza presunta
+///
+/// - **Nessun messaggio interattivo**: le due chiusure installate qui sono
+///   quelle fisse e gia' verificate della crate (uno `store` atomico, un
+///   confronto piu' `low_level::exit`) — non c'e' un punto per iniettare una
+///   `eprintln!` senza scrivere `unsafe` nel workspace. Il messaggio del
+///   primo Ctrl-C ("annullamento in corso...") non compare sul percorso
+///   isolato; quello del secondo non e' raggiungibile in nessun percorso,
+///   perche' l'uscita e' immediata e async-signal-safe per costruzione.
+/// - **Il secondo Ctrl-C esce con `signal_hook::low_level::exit`, non
+///   `std::process::exit`**: stesso codice ([`EXIT_CANCELLED`] = 130), ma
+///   senza eseguire `atexit`/flush — nessuna garanzia di cleanup, esplicita
+///   nella doc stessa della funzione, non solo nella nostra.
+///
+/// # Errors
+///
+/// Se la registrazione presso il kernel fallisce (rarissimo: segnale
+/// vietato o gia' in uno stato incompatibile).
+#[cfg(target_os = "linux")]
+pub(crate) fn installa_gestore_segnale_isolato(
+    token: &CancellationToken,
+) -> Result<(), PlenoraError> {
+    let bit = token.condividi_flag();
+    signal_hook::flag::register_conditional_shutdown(
+        signal_hook::consts::SIGINT,
+        EXIT_CANCELLED,
+        bit.clone(),
+    )
+    .map_err(|errore| {
+        contract(format!(
+            "gestore segnale isolato non installabile: {errore}"
+        ))
+    })?;
+    signal_hook::flag::register(signal_hook::consts::SIGINT, bit).map_err(|errore| {
+        contract(format!(
+            "gestore segnale isolato non installabile: {errore}"
+        ))
+    })?;
+    Ok(())
+}
+
 /// Esito tipizzato del publish (errori-e-limiti.md#publish-e-cleanup) in forma verificabile, **senza
 /// scrivere su stderr**.
 ///
@@ -1026,15 +1102,16 @@ fn main() {
     #[cfg(target_os = "linux")]
     {
         let argomenti: Vec<std::ffi::OsString> = std::env::args_os().collect();
-        // Le due modalita' si interrogano in fila, e **prima** del parser della
-        // CLI. I namespace sono disgiunti, quindi l'ordine fra le due non
-        // sposta niente; cio' che conta e' che vengano entrambe prima, perche'
+        // Le tre modalita' si interrogano in fila, e **prima** del parser della
+        // CLI. I namespace sono disgiunti, quindi l'ordine fra loro non
+        // sposta niente; cio' che conta e' che vengano tutte prima, perche'
         // una riga del namespace riservato che arrivasse al parser si
         // sentirebbe rispondere «comando sconosciuto» invece della diagnosi
         // vera.
         for modalita in [
             plenora_engine::spawner_dal_confine,
             plenora_engine::worker_dal_confine,
+            plenora_engine::verificatore_dal_confine,
         ] {
             match modalita(&argomenti) {
                 // Non e' questa modalita': si prova la prossima, e poi il
@@ -3302,5 +3379,29 @@ mod uscita_della_pubblicazione {
             .map(|unita| u16::try_from(*unita).expect("un'unita' UTF-16 sta in un u16"))
             .collect();
         PathBuf::from(std::ffi::OsString::from_wide(&parole))
+    }
+
+    /// `installa_gestore_segnale_isolato` non fa nascere un thread — a
+    /// differenza di `install_ctrlc_handler`, che per questo non e'
+    /// installabile in un test dello stesso processo (una sola volta per
+    /// processo, e altri test lo condividerebbero). `signal_hook::flag::
+    /// register`/`register_conditional_shutdown` accettano invece
+    /// registrazioni multiple per lo stesso segnale (e' il loro scopo:
+    /// piu' azioni indipendenti), quindi installarli qui non interferisce
+    /// con null'altro nel processo di test — e la registrazione stessa,
+    /// non solo la sua assenza di panico, e' cio' che questo test accerta.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn installa_gestore_segnale_isolato_riesce_su_un_token_nuovo() {
+        let token = plenora_engine::CancellationToken::new();
+        let esito = crate::installa_gestore_segnale_isolato(&token);
+        assert!(
+            esito.is_ok(),
+            "la registrazione presso il kernel deve riuscire in un ambiente Linux ordinario: {esito:?}"
+        );
+        assert!(
+            !token.is_cancelled(),
+            "installare il gestore non deve cancellare il token da solo"
+        );
     }
 }

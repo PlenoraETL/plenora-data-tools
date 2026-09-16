@@ -342,8 +342,14 @@ pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
     };
     let token = CommitToken::da_esadecimale(TOKEN_DI_PROVA)
         .map_err(|_| "harness: il token di prova non e' canonico".to_owned())?;
+    let contratto_fingerprint_atteso = {
+        let impronta = crate::planner::contract_fingerprint(&contratto)
+            .map_err(|causa| format!("harness: il contratto di prova non si riduce: {causa}"))?;
+        crate::protocollo::digest::DigestSha256::da_esadecimale(&impronta.to_hex())
+            .map_err(|forma| format!("harness: fingerprint in forma non canonica: {forma}"))?
+    };
     let attese = AtteseVerifica {
-        contratto: &contratto,
+        contratto_fingerprint_atteso,
         digest: &digest,
         conteggi: ConteggiDichiarati { righe: 0, batch: 0 },
         commit_token: &token,
