@@ -416,9 +416,22 @@ L'ingresso è un WKT `polyGon((2444…4444` con coordinate separate dai byte di
 ritorno a capo, avanzamento riga e tabulazione — `\r`, `\n` e `\t`. Il parser lo accetta, ne esce una geometria degenere, e `simplify` di
 `geo` ci inciampa con un'`assert_ne!`.
 
-È un **panic di una dipendenza raggiungibile da ingresso non fidato**: il
-processo muore, non restituisce un errore. Riproduzione deterministica,
-verificata rieseguendo l'artefatto sull'ingresso salvato.
+È un **panic raggiungibile da ingresso non fidato**, riprodotto in
+riproduzione deterministica rieseguendo l'artefatto sull'ingresso salvato.
+Va detto con precisione **dove** panica, perché non è ovunque: il
+`debug_assert_ne!` di `simplify.rs:108` vive solo dove le asserzioni di
+debug sono attive — la batteria e il fuzzing — la stessa condizione già
+registrata per la barriera OGC
+([`errori-e-limiti.md`](errori-e-limiti.md#la-validazione-ogc-sta-dietro-una-barriera)).
+Il profilo `release` di questo progetto attiva `overflow-checks` ma **non**
+`debug-assertions`, e lì quell'assert non compila: verificato riducendo
+l'ingresso a una geometria degenere con distanze `NaN` ed eseguendolo nei due
+profili sullo stesso codice vendorizzato. Nel binario che si rilascia il
+rischio non è quindi l'arresto del processo, ma la **geometria
+silenziosamente scorretta**: `simplify` rende l'ingresso invariato, `NaN`
+compresi, senza errore né diagnostica. Il quadro completo — causa esatta e
+riproduzione ridotta nei due profili — è in
+[`errori-e-limiti.md`](errori-e-limiti.md#difetto-aperto-simplify-di-geo-panica-su-una-geometria-degenere-con-distanze-nan).
 
 Il difetto **non appartiene a `PR-7`**, e va detto perché è durante la sua
 qualificazione che è emerso: il percorso è `wkt_operations` →

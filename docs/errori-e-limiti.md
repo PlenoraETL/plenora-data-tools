@@ -1646,6 +1646,68 @@ scartare quell'`Option`, o che la serializzazione stia dietro una barriera.
 Il reperto è passato a `plenora-memory-lab` con encoder, versione, punto di
 panico, ingresso minimo e misure per profilo.
 
+### DIFETTO APERTO: `simplify` di `geo` panica su una geometria degenere con distanze `NaN`
+
+**Non è un limite deliberato**, ed è per questo che non sta fra i
+[limiti dichiarati](#limiti-dichiarati): è un difetto noto, non presidiato,
+trovato dallo smoke fuzz del **2026-09-01** su `wkt_operations` (diciannove
+target su venti verdi) e registrato qui perché la barriera OGC
+([§](#la-validazione-ogc-sta-dietro-una-barriera)) non lo copre — la
+validazione conclude prima che `simplify` venga chiamato: la geometria
+degenere che scatena questo panico è OGC-valida.
+
+**Che cosa succede.** `geo 0.33.1`, `src/algorithm/simplify.rs:108`, calcola
+per ogni punto candidato la distanza dal segmento che chiude l'anello con un
+`fold` che parte da `(0usize, T::zero())` e aggiorna l'indice solo quando
+`distance >= farthest_distance`. Un confronto con `NaN` è sempre falso: se
+**ogni** distanza calcolata è `NaN`, l'accumulatore non si sposta mai dallo
+zero iniziale, e il `debug_assert_ne!(farthest_index, 0)` che segue assume di
+essere in quel caso impossibile.
+
+**L'ingresso.** Un WKT `polyGon(...)` con le coordinate separate da `\r`,
+`\n` e `\t` invece che da spazi: il parser lo accetta, e ne esce una
+geometria degenere che produce distanze `NaN` nel calcolo RDP di `simplify`.
+Riproduzione ridotta e verificata nei due profili: un anello i cui vertici
+intermedi sono `NaN` produce lo stesso panico, `assertion 'left != right'
+failed — left: 0, right: 0`, a `simplify.rs:108`, sul codice vendorizzato
+(`vendor/geo-0.33.1-exact-filtered`, immutato rispetto al registro su questo
+punto).
+
+**Non raggiungibile nello stesso modo in `release`.** Il panico è un
+`debug_assert_ne!`, condizionato da `cfg(debug_assertions)` — la stessa
+classe già registrata per la barriera OGC
+([§](#la-validazione-ogc-sta-dietro-una-barriera)). Il profilo `release` di
+questo progetto attiva `overflow-checks` ma **non** `debug-assertions`, e in
+quel profilo `debug_assert_ne!` non compila: verificato eseguendo l'ingresso
+ridotto sullo stesso codice vendorizzato nei due profili — panica in `dev`,
+non panica in `release`.
+
+**Questo non chiude il rischio, lo sposta.** In `release`, con
+`farthest_index` fermo a `0`, `farthest_distance` resta `T::zero()` — non
+`NaN`, perché il ramo del `fold` che l'avrebbe aggiornata non viene mai preso
+— e `0.0 > epsilon` è falso per ogni `epsilon` positivo: `compute_rdp`
+imbocca il ramo di culling come se il punto più lontano fosse a distanza
+zero. Misurato sull'ingresso ridotto: `simplify` rende la geometria
+**invariata**, coordinate `NaN` comprese — nessun errore, nessun panico, e un
+`NaN` che attraversa la pipeline senza che niente lo segnali. Il rischio per
+il binario che si rilascia non è quindi l'**arresto del processo** — quello
+vale per la batteria e per il fuzzing, dove le asserzioni di debug sono
+attive — ma la **geometria silenziosamente scorretta**.
+
+**Ambito.** `wkt_operations` → `plenora-kernels-geo` →
+`geo::algorithm::simplify`, ogni operazione di catalogo che semplifica una
+geometria. Non è stato censito quali altri cammini lo raggiungano.
+
+**Condizione di rientro.** Il giorno che `simplify` respinga esplicitamente
+una geometria degenere prima del calcolo RDP, o che `geo` renda un errore
+invece di un `debug_assert!` su quel cammino — le due strade che
+[`release.md`](release.md) registra come ancora da valutare.
+
+**Dove vive il reperto.** L'artefatto originale del fuzz e la sua diagnosi
+non stanno nel repository: `fuzz/artifacts` è in `.gitignore`. Registrato qui
+con il punto di panico, la causa (distanze `NaN` da un fold che le confronta
+con `>=`), e la verifica per profilo.
+
 ### Il filo porta un esito solo
 
 **La regola.** Il worker manda **un** `Esito`, e l'`Esito` ha una variante sola
