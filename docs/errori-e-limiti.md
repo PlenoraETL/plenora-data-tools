@@ -1875,6 +1875,101 @@ scartare quell'`Option`, o che la serializzazione stia dietro una barriera.
 Il reperto è passato a `plenora-memory-lab` con encoder, versione, punto di
 panico, ingresso minimo e misure per profilo.
 
+### DIFETTO APERTO: `simplify` di `geo` panica su una geometria degenere con distanze `NaN`
+
+**Non è un limite deliberato**, ed è per questo che non sta fra i
+[limiti dichiarati](#limiti-dichiarati): è un difetto noto, non presidiato,
+trovato dallo smoke fuzz del **2026-09-01** su `wkt_operations` (diciannove
+target su venti verdi). Tre cose distinte vanno tenute separate qui sotto:
+il reperto storico, una dimostrazione isolata che non passa dal prodotto, e
+un'ipotesi sul meccanismo che resta **non confermata**. Una stesura
+precedente le fondeva in un'unica affermazione più forte di quella
+dimostrata.
+
+**Che cosa succede, in `geo`.** `geo 0.33.1`, `src/algorithm/simplify.rs:108`,
+calcola per ogni punto candidato la distanza dal segmento che chiude l'anello
+con un `fold` che parte da `(0usize, T::zero())` e aggiorna l'indice solo
+quando `distance >= farthest_distance`. Un confronto con `NaN` è sempre
+falso: se **ogni** distanza calcolata è `NaN`, l'accumulatore non si sposta
+mai dallo zero iniziale, e il `debug_assert_ne!(farthest_index, 0)` che segue
+assume di essere in quel caso impossibile. Questo è un fatto sul codice di
+`geo`, verificabile leggendolo; non dice da solo quale ingresso reale lo
+raggiunga.
+
+**1. Il reperto storico, e che cosa ne resta.** L'ingresso originale era un
+WKT `polyGon(...)` con le coordinate separate da `\r`, `\n` e `\t` invece che
+da spazi. **L'artefatto di quel run non è disponibile per il replay**:
+cercato in `fuzz/artifacts` e `fuzz/corpus` di questo worktree (assenti per
+`wkt_operations`), nelle stesse directory del worktree `plenora-fuzz`
+(contengono solo reperti di `plan_v5_parse` e `wkb_contract`), e come
+possibile test versionato — a differenza dei reperti della barriera OGC, che
+vivono in `tests/barriera_validazione.rs` e `tests/barriera_privacy_processo.rs`,
+per `wkt_operations` non esiste un `tests/` equivalente. `fuzz/artifacts` è
+in `.gitignore` per policy del progetto: l'assenza non è un'anomalia, ma è
+una conseguenza pratica da dichiarare, non da aggirare — **non è possibile
+oggi rieseguire l'ingresso esatto** né osservarne l'output reale in
+`release`. Resta solo il messaggio del panic.
+
+**2. La dimostrazione isolata con `NaN` letterali — non prova la
+raggiungibilità dal prodotto.** Verificato, separatamente e **senza passare
+da `ensure_valid`**, che `geo::Simplify::simplify` chiamato isolato —
+direttamente sul codice vendorizzato, fuori da `plenora-kernels-geo` —
+panica con lo stesso `assertion 'left != right' failed — left: 0, right: 0`
+a `simplify.rs:108` su un anello i cui vertici intermedi sono `NaN`
+espliciti, e **non** panica se lo stesso programma è compilato in `release`
+(`overflow-checks` attivo, `debug-assertions` no — la stessa condizione già
+registrata per la barriera OGC, [§](#la-validazione-ogc-sta-dietro-una-barriera)).
+Un `NaN` esplicito in ingresso non arriverebbe però mai per la via che il
+fuzz target usa davvero: `plenora_kernels_geo::operations::simplify` invoca
+`ensure_valid` **prima** di `geo::simplify`, e `ensure_valid` rifiuta ogni
+coordinata non finita
+(`InvalidLineString::NonFiniteCoord`/`InvalidPolygon::NonFiniteCoord`). Questa
+dimostrazione isola quindi un solo fatto — che l'assert sparisce in
+`release` — su un ingresso che bypassa il kernel del prodotto, non sul
+reperto originale.
+
+**3. L'ipotesi non confermata: errore aritmetico su ingresso finito.**
+`ensure_valid` è chiamata dentro `simplify_with_policy` fin dalla sua prima
+versione (commit `7140b72`), e il target del fuzz chiama quella funzione —
+mai `geo::Simplify::simplify` direttamente — fin dalla propria introduzione,
+mai modificata da allora. Questo dimostra una **precondizione**: se il
+reperto del 2026-09-01 ha attraversato quella barriera, il suo ingresso
+aveva coordinate finite, e la geometria era OGC-valida per gli stessi
+controlli. **Non dimostra** che `simplify` produca davvero un `NaN` interno
+a partire da un ingresso finito di quel tipo: nessun poligono finito che
+riproduca l'assert è stato trovato in questa verifica, né quindi il suo
+comportamento in `release` è stato osservato — in nessuno dei due profili,
+su un ingresso reale. Il meccanismo per cui potrebbe succedere — una
+sottrazione fra coordinate vicine il cui quadrato va sotto lo zero macchina
+in virgola mobile, `dx² + dy² == 0.0` per underflow pur con `dx`/`dy` non
+nulli — resta un'ipotesi motivata dalla lettura del codice, non un fatto
+osservato.
+
+**Ambito.** `wkt_operations` → `plenora-kernels-geo` →
+`geo::algorithm::simplify`, raggiunto attraverso
+`plenora_kernels_geo::operations::simplify`/`simplify_with_policy` — quindi
+dopo `ensure_valid`, non prima — e ogni altra operazione di catalogo che
+semplifica una geometria per la stessa via. Non è stato censito quali altri
+cammini lo raggiungano, né se esistano cammini che chiamano `geo` senza
+passare da `ensure_valid`. Il comportamento in `release` sul reperto reale
+resta **non osservato**: quello che si può dire oggi è solo ciò che il
+punto 2 e il punto 3 stabiliscono separatamente, non una loro somma.
+
+**Condizione di rientro.** Il giorno che `simplify` respinga esplicitamente
+una geometria degenere prima del calcolo RDP, o che `geo` renda un errore
+invece di un `debug_assert!` su quel cammino — le due strade che
+[`release.md`](release.md) registra come ancora da valutare — oppure, prima
+ancora, il giorno in cui un ingresso finito che riproduce l'assert
+attraverso `plenora_kernels_geo::operations::simplify` viene trovato e
+verificato nei due profili: solo allora il punto 3 smette di essere
+un'ipotesi.
+
+**Dove vive il reperto.** Da nessuna parte accessibile a questa verifica: il
+punto 1 sopra ne dichiara la ricerca e l'esito. Questa voce registra il
+punto di panico, la causa nota nel codice di `geo` (distanze `NaN` da un
+fold che le confronta con `>=`), e le due verifiche separate — isolata e
+per profilo — con i rispettivi limiti.
+
 ### Il filo porta un esito solo
 
 **La regola.** Il worker manda **un** `Esito`, e l'`Esito` ha una variante sola
