@@ -416,44 +416,59 @@ L'ingresso è un WKT `polyGon((2444…4444` con coordinate separate dai byte di
 ritorno a capo, avanzamento riga e tabulazione — `\r`, `\n` e `\t`. Il parser lo accetta, ne esce una geometria degenere, e `simplify` di
 `geo` ci inciampa con un'`assert_ne!`.
 
-È un **panic raggiungibile da ingresso non fidato**, riprodotto in
-riproduzione deterministica rieseguendo l'artefatto sull'ingresso salvato.
-Va detto con precisione **dove** panica e **su quale ingresso**, perché su
-entrambi i punti una stesura precedente di questo rilievo era imprecisa.
+È un **panic raggiungibile da ingresso non fidato**. Che cosa è stato
+verificato oggi, e che cosa no, va tenuto in **tre parti separate**: una
+stesura precedente di questo rilievo le fondeva, e il risultato era
+un'affermazione più forte di quella dimostrata.
 
-**Dove.** Il `debug_assert_ne!` di `simplify.rs:108` vive solo dove le
-asserzioni di debug sono attive — la batteria e il fuzzing — la stessa
-condizione già registrata per la barriera OGC
-([`errori-e-limiti.md`](errori-e-limiti.md#la-validazione-ogc-sta-dietro-una-barriera)).
-Il profilo `release` di questo progetto attiva `overflow-checks` ma **non**
-`debug-assertions`, e lì quell'assert non compila: verificato eseguendo
-`geo::Simplify::simplify` isolato — fuori da `plenora-kernels-geo` — su una
-geometria con coordinate `NaN`, nei due profili sullo stesso codice
-vendorizzato: panica in `dev`, non panica in `release`.
+**1. Il reperto storico, e che cosa ne resta oggi.** Trovato dallo smoke
+fuzz. L'ingresso originale era un WKT `polyGon((2444…4444` con coordinate
+separate dai byte di ritorno a capo, avanzamento riga e tabulazione — `\r`,
+`\n` e `\t`. **L'artefatto di quel run non è disponibile per il replay**:
+cercato in `fuzz/artifacts` e `fuzz/corpus` di questo worktree (assenti per
+`wkt_operations`), nelle stesse directory del worktree `plenora-fuzz`
+(contengono solo reperti di `plan_v5_parse` e `wkb_contract`, non di
+`wkt_operations`), e come possibile test versionato — a differenza dei
+reperti della barriera OGC, che vivono in `tests/barriera_validazione.rs` e
+`tests/barriera_privacy_processo.rs`, per `wkt_operations` non esiste un
+`tests/` equivalente. `fuzz/artifacts` è in `.gitignore` per policy del
+progetto, quindi l'assenza non è un'anomalia — ma è una conseguenza pratica
+che va dichiarata: **non è possibile rieseguire oggi l'ingresso esatto** che
+ha prodotto il panic originale, né osservarne l'output reale in `release`.
+Restano solo il messaggio del panic e la descrizione testuale dell'ingresso
+sopra.
 
-**Su quale ingresso.** Quella verifica isolata non dimostra da sola la
-raggiungibilità dal percorso reale. `plenora_kernels_geo::operations::simplify`
-— la funzione che il target del fuzz chiama davvero — invoca `ensure_valid`
-**prima** di `geo::simplify`, e `ensure_valid` rifiuta ogni coordinata non
-finita. Il rilievo del fuzz ha attraversato quella barriera con successo (il
-target chiama `operations::simplify`, non `geo::Simplify::simplify`
-direttamente): l'ingresso aveva coordinate **finite**. Il `NaN` che fa
-scattare l'assert nasce quindi **dentro** il calcolo di `simplify`, non da un
-`NaN` già presente che il kernel avrebbe dovuto e non ha rifiutato — è `geo`
-che genera l'instabilità internamente su un ingresso finito e già validato,
-non un mancato rifiuto in ingresso. Il meccanismo esatto (probabile
-sottrazione fra coordinate vicine il cui quadrato va sotto lo zero macchina)
-resta un'ipotesi motivata dalla struttura del codice: non è stato isolato in
-questa verifica il poligono finito che la riproduce.
+**2. La dimostrazione isolata con `NaN` letterali.** Verificato,
+separatamente, che `geo::Simplify::simplify` chiamato isolato — direttamente
+sul codice vendorizzato, fuori da `plenora-kernels-geo` — panica con lo
+stesso `assertion 'left != right' failed — left: 0, right: 0` a
+`simplify.rs:108` su un anello i cui vertici intermedi sono `NaN` espliciti,
+e **non** panica se lo stesso programma è compilato in `release` (dove
+`overflow-checks` è attivo ma `debug-assertions` no — la stessa condizione
+già registrata per la barriera OGC,
+[`errori-e-limiti.md`](errori-e-limiti.md#la-validazione-ogc-sta-dietro-una-barriera)).
+**Questa dimostrazione non prova la raggiungibilità dal prodotto**: un `NaN`
+esplicito in ingresso non ci arriverebbe mai per la via che il fuzz target
+usa davvero, perché `plenora_kernels_geo::operations::simplify` invoca
+`ensure_valid` prima di `geo::simplify`, e `ensure_valid` rifiuta ogni
+coordinata non finita. Serve solo a isolare una variabile: che l'assert
+sparisca in `release` è un fatto sul codice di `geo`, dimostrato su un
+ingresso che bypassa il kernel del prodotto, non sul reperto originale.
 
-Nel binario che si rilascia il rischio non è quindi l'arresto del processo —
-l'assert non compila in `release` — ma, sullo stesso ingresso che oggi fa
-panicare la batteria, una geometria semplificata in modo silenziosamente
-scorretto: con `farthest_index` fermo a `0`, `compute_rdp` tratta il punto
-più lontano come se fosse a distanza zero e lo scarta invece di ricorrere. Il
-quadro completo — la distinzione fra dipendenza isolata e percorso validato,
-e la condizione di rientro — è in
-[`errori-e-limiti.md`](errori-e-limiti.md#difetto-aperto-simplify-di-geo-panica-su-una-geometria-degenere-con-distanze-nan).
+**3. L'ipotesi non confermata: errore aritmetico su ingresso finito.**
+`ensure_valid` è chiamata dentro `simplify_with_policy` fin dalla sua prima
+versione, e il target del fuzz chiama quella funzione (mai
+`geo::Simplify::simplify` direttamente) fin dalla propria introduzione —
+nessuna delle due è cambiata da allora. Questo dimostra una
+**precondizione**: se il reperto del 2026-09-01 ha attraversato quella
+barriera, il suo ingresso aveva coordinate finite. **Non dimostra** che
+`simplify` produca davvero un `NaN` interno a partire da un ingresso finito
+di quel tipo: nessun poligono finito che riproduca l'assert è stato trovato
+in questa verifica, né quindi il suo comportamento in `release` è stato
+osservato. Il meccanismo per cui potrebbe succedere — una sottrazione fra
+coordinate vicine il cui quadrato va sotto lo zero macchina in virgola
+mobile — resta un'ipotesi motivata dalla lettura del codice, non un fatto
+osservato, e non va letta come se lo fosse.
 
 Il difetto **non appartiene a `PR-7`**, e va detto perché è durante la sua
 qualificazione che è emerso: il percorso è `wkt_operations` →
@@ -465,12 +480,10 @@ quelli: è stato eseguito lo smoke completo, ed è così che il difetto si è vi
 Le due strade da valutare, e nessuna è ovvia: respingere la geometria degenere
 **prima** di passarla a `geo`, oppure trattarlo come difetto della dipendenza —
 un `simplify` che va in panic su un ingresso che il proprio parser ha accettato
-non è un contratto che il chiamante può rispettare.
-
-L'artefatto e la diagnosi non stanno nel repository: `fuzz/artifacts` è in
-`.gitignore`, e un ingresso che fa cadere il processo non è un file da
-distribuire con il codice. Stanno con l'evidenza della campagna che li ha
-prodotti.
+non è un contratto che il chiamante può rispettare. Nessuna delle due può
+oggi appoggiarsi a un reperto rieseguibile: la prima verifica utile, prima di
+scegliere, è ricostruire — o accettare di non poter ricostruire — un ingresso
+finito che riproduca l'assert attraverso `plenora_kernels_geo::operations::simplify`.
 
 ### Preparare l'ambiente locale
 
