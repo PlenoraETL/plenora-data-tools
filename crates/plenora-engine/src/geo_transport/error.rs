@@ -193,6 +193,18 @@ pub enum ArrowTransportError {
     /// e la differenza va resa visibile invece che appiattita.
     #[error("arrow-ipc in panico sullo schema del payload: {0}")]
     ArrowPanic(String),
+    /// Un errore che **sotto** e' gia' `Internal`, e resta tale.
+    ///
+    /// Senza questa variante un `PlenoraError::Internal` cade nel ramo
+    /// generico e diventa `Arrow(String)`, cioe' un errore della libreria
+    /// arrow; poi il passo dell'executor lo riscrive `InvalidPlan`. Un difetto
+    /// nostro diventerebbe cosi' una colpa del piano, che e' l'attribuzione
+    /// sbagliata e manda chi legge a correggere un ingresso sano.
+    ///
+    /// Il caso che la rende necessaria e' la validazione OGC che **non
+    /// conclude**: vedi `errori-e-limiti.md`.
+    #[error("errore interno propagato: {0}")]
+    Interno(String),
     #[error("geometria non valida: {0}")]
     Geometry(String),
     #[error("kernel fallito: {0}")]
@@ -256,6 +268,84 @@ pub enum ArrowTransportError {
 }
 
 impl ArrowTransportError {
+    /// L'errore di un passo del kernel, **attribuito a chi ne ha colpa**.
+    ///
+    /// # Perche' non basta `InvalidPlan`
+    ///
+    /// Perche' non ogni fallimento di un passo e' colpa del piano. Un difetto
+    /// nostro — o una validazione che non ha concluso, che non ha giudicato
+    /// nulla — chiamato `InvalidPlan` manda chi legge a correggere un ingresso
+    /// che nessuno ha dimostrato sbagliato, e ne cambia l'exit code.
+    ///
+    /// # Perche' qui e non nei due chiamanti
+    ///
+    /// Perche' i chiamanti sono due — il passo fuso e quello non fuso — e due
+    /// copie della stessa decisione divergono: e' gia' successo che un ramo
+    /// conservasse la diagnostica di riga e l'altro no.
+    pub(crate) fn errore_del_passo(&self) -> PlenoraError {
+        if self.source_error().e_interna() {
+            return PlenoraError::Internal(self.to_string());
+        }
+        PlenoraError::InvalidPlan(self.to_string())
+    }
+
+    /// **La colpa non e' di chi ha scritto il piano.**
+    ///
+    /// Due famiglie: gli errori gia' interni qui — o una libreria abortita — e
+    /// gli esiti tipizzati dei kernel che dicono «la validazione OGC non ha
+    /// concluso». I secondi non sono un giudizio sull'ingresso: nessuno lo ha
+    /// dato, e attribuirlo al piano manda chi legge a correggere una geometria
+    /// che nessuno ha dimostrato sbagliata.
+    ///
+    /// Va chiamata sulla **causa**, non sull'involucro: `RowDiagnostics`
+    /// avvolge senza cambiare cio' che e' andato storto, e classificare
+    /// l'involucro farebbe cadere nel ramo generico ogni errore interno che
+    /// porti una diagnostica di riga. La traversata e' quella di
+    /// [`Self::source_error`], che esiste gia' per lo stesso motivo.
+    // NON `const`: il ramo `geos-backend` chiama `category()`, che non lo e'.
+    // Clippy suggerisce `const fn` perche' nella configurazione predefinita
+    // quel ramo non e' compilato — e il suggerimento, preso alla lettera,
+    // rompe la build con la feature attiva. Guardare la categoria invece
+    // della variante e' cio' che permette di riconoscere un `Internal`
+    // avvolto in `Tagged` o in una diagnostica di riga, e vale piu' della
+    // constness.
+    #[allow(clippy::missing_const_for_fn)]
+    pub(crate) fn e_interna(&self) -> bool {
+        use plenora_kernels_geo::advanced::AdvancedError as A;
+        use plenora_kernels_geo::analysis::AnalysisError as An;
+        use plenora_kernels_geo::construction::ConstructionError as C;
+        use plenora_kernels_geo::extended::ExtendedError as E;
+        use plenora_kernels_geo::extended_algorithms::ExtendedAlgorithmError as Ea;
+        use plenora_kernels_geo::operations::OperationError as O;
+        use plenora_kernels_geo::predicates::PredicateError as P;
+        use plenora_kernels_geo::spatial_join::SpatialJoinError as S;
+        use plenora_kernels_geo::topology::TopologyError as T;
+
+        match self {
+            Self::Interno(_) | Self::Internal(_) | Self::ArrowPanic(_) => true,
+            Self::Kernel(O::ValidazioneNonConclusa(_))
+            | Self::Topology(T::ValidazioneNonConclusa(_))
+            | Self::Construction(C::ValidazioneNonConclusa(_))
+            | Self::Advanced(A::ValidazioneNonConclusa(_))
+            | Self::Extended(E::ValidazioneNonConclusa(_))
+            | Self::ExtendedAlgorithm(Ea::ValidazioneNonConclusa(_))
+            | Self::Predicate(P::ValidazioneNonConclusa(_))
+            | Self::Analysis(An::ValidazioneNonConclusa(_))
+            | Self::SpatialJoin(S::ValidazioneNonConclusa(_)) => true,
+            #[cfg(feature = "proj-backend")]
+            Self::Reproject(
+                plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa(_),
+            ) => true,
+            // Il backend GEOS non ha una variante propria: incapsula il
+            // `PlenoraError` del contratto, quindi si guarda quello.
+            #[cfg(feature = "geos-backend")]
+            Self::MakeValid(GeosBackendError::InputContract(errore)) => {
+                errore.category() == plenora_core::ErrorCategory::Internal
+            }
+            _ => false,
+        }
+    }
+
     /// Errore restituito da arrow-rs, **sanificato**.
     ///
     /// Il testo di arrow-rs cita regolarmente il valore che ha causato il
@@ -337,6 +427,10 @@ impl From<PlenoraError> for ArrowTransportError {
             | PlenoraError::Unsupported(message)
             | PlenoraError::Schema(message) => Self::Geometry(message),
             PlenoraError::Io(error) => Self::Io(error),
+            // Un `Internal` resta interno. Nel ramo generico diventerebbe
+            // `Arrow`, e il passo dell'executor lo riscriverebbe `InvalidPlan`:
+            // un difetto nostro finirebbe attribuito a chi ha scritto il piano.
+            PlenoraError::Internal(message) => Self::Interno(message),
             PlenoraError::Tagged { source, .. } => Self::from(*source),
             PlenoraError::RowDiagnostics {
                 source,
@@ -350,6 +444,169 @@ impl From<PlenoraError> for ArrowTransportError {
 #[cfg(test)]
 mod tests {
     use plenora_core::ErrorPhase;
+
+    /// **La causa si classifica attraverso gli involucri.**
+    ///
+    /// `RowDiagnostics` avvolge senza cambiare la causa. Classificare
+    /// l'involucro invece del contenuto farebbe cadere nel ramo generico —
+    /// cioe' su `InvalidPlan` — ogni errore interno che porti una diagnostica
+    /// di riga, e l'attribuzione tornerebbe a chi ha scritto il piano.
+    #[test]
+    fn un_errore_interno_avvolto_resta_interno() {
+        use plenora_core::diagnostics::{
+            RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+            ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
+        };
+
+        let mut counts = std::collections::BTreeMap::new();
+        counts.insert("geometry.invalid_wkb".to_owned(), 1_u64);
+        let diagnostics = RowDiagnostics {
+            contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+            scope: RowDiagnosticScope::Read,
+            index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+            completeness: RowDiagnosticsCompleteness::Complete,
+            knowledge_limits: None,
+            observed_total: 1,
+            total: Some(1),
+            input_total: None,
+            counts,
+            examples_limit: 10,
+            examples_truncated: false,
+            diagnostic_state_counts: None,
+            write_outcome: None,
+            examples: vec![RowDiagnosticExample {
+                source_index: 0,
+                cause: "geometry.invalid_wkb".to_owned(),
+                column: None,
+                key: None,
+                write_state: None,
+            }],
+        };
+
+        let avvolto = ArrowTransportError::Interno("difetto nostro".to_owned())
+            .with_row_diagnostics(diagnostics);
+        assert!(
+            matches!(avvolto, ArrowTransportError::RowDiagnostics { .. }),
+            "l'involucro deve esserci, o il caso non prova niente"
+        );
+        assert_eq!(
+            avvolto.errore_del_passo().category(),
+            plenora_core::ErrorCategory::Internal,
+            "un interno avvolto resta interno: {avvolto}"
+        );
+    }
+
+    /// **Gli esiti tipizzati dei kernel sono riconosciuti.**
+    ///
+    /// La variante `ValidazioneNonConclusa` esiste in quattordici enum, e il
+    /// classificatore deve vederla in tutti: riconoscerne uno solo lascerebbe
+    /// gli altri tredici ad attribuire al piano un difetto che non e' suo.
+    #[test]
+    fn la_validazione_non_conclusa_dei_kernel_e_interna() {
+        use plenora_kernels_geo::advanced::AdvancedError;
+        use plenora_kernels_geo::analysis::AnalysisError;
+        use plenora_kernels_geo::construction::ConstructionError;
+        use plenora_kernels_geo::extended::ExtendedError;
+        use plenora_kernels_geo::extended_algorithms::ExtendedAlgorithmError;
+        use plenora_kernels_geo::operations::OperationError;
+        use plenora_kernels_geo::predicates::PredicateError;
+        use plenora_kernels_geo::spatial_join::SpatialJoinError;
+        use plenora_kernels_geo::topology::TopologyError;
+
+        let mut casi = vec![
+            ArrowTransportError::Kernel(OperationError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Topology(TopologyError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Construction(ConstructionError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Advanced(AdvancedError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Extended(ExtendedError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::ExtendedAlgorithm(ExtendedAlgorithmError::ValidazioneNonConclusa(
+                "forma",
+            )),
+            ArrowTransportError::Predicate(PredicateError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Analysis(AnalysisError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::SpatialJoin(SpatialJoinError::ValidazioneNonConclusa("forma")),
+        ];
+        // I due backend opzionali: senza la feature il ramo non e' compilato,
+        // e il caso non puo' pretenderlo. Con la feature, si', ed e' li' che
+        // un mapping dimenticato si vedrebbe.
+        #[cfg(feature = "proj-backend")]
+        casi.push(ArrowTransportError::Reproject(
+            plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa("forma"),
+        ));
+        #[cfg(feature = "geos-backend")]
+        casi.push(ArrowTransportError::MakeValid(
+            plenora_kernels_geo::geos_backend::GeosBackendError::InputContract(
+                plenora_core::PlenoraError::Internal("difetto nostro".to_owned()),
+            ),
+        ));
+
+        for caso in &casi {
+            assert_eq!(
+                caso.errore_del_passo().category(),
+                plenora_core::ErrorCategory::Internal,
+                "esito non riconosciuto: {caso}"
+            );
+        }
+
+        // Il conteggio fissa la tabella **scritta qui**: se un caso venisse
+        // tolto, o se un `cfg` ne facesse cadere uno senza che nessuno se ne
+        // accorga, il numero non torna.
+        //
+        // Non scopre un kernel NUOVO che acquisti la variante e non venga
+        // aggiunto: in quel caso non cambierebbero ne' il vettore ne' questo
+        // numero, e il caso resterebbe verde. La completezza rispetto ai rami
+        // che `e_interna` riconosce OGGI e' stata verificata confrontando i
+        // due elenchi a mano — undici rami di kernel qui, i tre non-kernel in
+        // `i_rami_interni_non_kernel_sono_riconosciuti` — non da questa
+        // asserzione.
+        let attesi = 9
+            + usize::from(cfg!(feature = "proj-backend"))
+            + usize::from(cfg!(feature = "geos-backend"));
+        assert_eq!(
+            casi.len(),
+            attesi,
+            "la tabella e' cambiata di dimensione rispetto a quella dichiarata"
+        );
+    }
+
+    /// **Anche i tre rami interni non-kernel sono riconosciuti.**
+    ///
+    /// `e_interna` ha due famiglie: gli esiti tipizzati dei kernel, coperti dal
+    /// caso qui sopra, e questi. Verificarli separatamente e' cio' che rende
+    /// completo il confronto a mano fra la tabella e i rami della funzione.
+    #[test]
+    fn i_rami_interni_non_kernel_sono_riconosciuti() {
+        let casi = [
+            ArrowTransportError::Internal("difetto nostro"),
+            ArrowTransportError::Interno("gia' interno sotto".to_owned()),
+            ArrowTransportError::ArrowPanic("arrow abortita".to_owned()),
+        ];
+        for caso in &casi {
+            assert_eq!(
+                caso.errore_del_passo().category(),
+                plenora_core::ErrorCategory::Internal,
+                "ramo interno non riconosciuto: {caso}"
+            );
+        }
+    }
+
+    /// **Una geometria davvero invalida resta colpa del piano.**
+    ///
+    /// La meta' che rende la distinzione una distinzione: se ogni esito
+    /// diventasse `Internal`, i casi qui sopra passerebbero senza dire nulla.
+    #[test]
+    fn una_geometria_invalida_resta_colpa_del_piano() {
+        use plenora_kernels_geo::operations::OperationError;
+
+        let caso = ArrowTransportError::Kernel(OperationError::InvalidInput(
+            "anello con auto-intersezione".to_owned(),
+        ));
+        assert_eq!(
+            caso.errore_del_passo().category(),
+            plenora_core::ErrorCategory::InvalidPlan,
+            "un ingresso giudicato invalido resta attribuito al piano: {caso}"
+        );
+    }
 
     use super::*;
 

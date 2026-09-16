@@ -803,7 +803,14 @@ fn map_nullable<T: Send>(
 /// trasporto, parametri): propagano senza diagnostica, fail-closed com'e'.
 /// Il vocabolario e' quello degli altri emettitori geo (gate WKB,
 /// `geo.from_wkt`, `geo.from_coords`).
-const fn cell_failure_cause(error: &ArrowTransportError) -> Option<&'static str> {
+fn cell_failure_cause(error: &ArrowTransportError) -> Option<&'static str> {
+    // Una validazione che non ha concluso non e' un fallimento della riga:
+    // contarla fra le celle rotte direbbe che quella riga e' sbagliata, che
+    // nessuno ha stabilito. `None` la fa propagare fail-closed, che e' cio'
+    // che questa funzione riserva agli errori non attribuibili alla riga.
+    if error.source_error().e_interna() {
+        return None;
+    }
     match error {
         ArrowTransportError::CellTooLarge(_) => Some("geometry.cell_too_large"),
         ArrowTransportError::WrongGeometryType { .. } => Some("geometry.wrong_type"),
@@ -1722,24 +1729,28 @@ fn measure_cells<T: Send>(
             // l'intermedio invalido fallirebbe al decode del nodo misura
             // (strutturale, poi OGC — l'ordine di `geometry_from_wkb`) ->
             // attribuzione al nodo misura, con il `PlenoraError` grezzo del
-            // ramo non fuso.
+            // ramo non fuso: `check_geometry_valid` gia' distingue
+            // `Internal` (validazione interrotta) da `InvalidPlan`
+            // (geometria davvero invalida), quindi qui basta leggerne la
+            // categoria — mai riscrivere il testo, o il caso che confronta
+            // i due percorsi byte-per-byte diverge.
             validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
                 .and_then(|()| check_geometry_valid(geometry))
                 .map_err(|error| MeasureCellFailure {
-                    cause: "geometry.invalid_wkb",
+                    cause: causa_di_riga(&error, "geometry.invalid_wkb"),
                     error,
                 })?;
-            // Stessa chiusura del ramo non fuso: `OperationError` ->
-            // `InvalidPlan` del suo display.
-            kernel(geometry)
-                .map(Some)
-                .map_err(|error| MeasureCellFailure {
-                    cause: "geometry.kernel_failed",
-                    error: PlenoraError::InvalidPlan(error.to_string()),
-                })
+            // Stessa regola sul kernel scalare: una validazione interrotta
+            // vi puo' arrivare tanto quanto dal passo precedente, e la causa
+            // si decide sulla stessa categoria — non sulla provenienza.
+            kernel(geometry).map(Some).map_err(|error| {
+                let error = esito_kernel(error);
+                let cause = causa_di_riga(&error, "geometry.kernel_failed");
+                MeasureCellFailure { cause, error }
+            })
         })
         .collect();
-    let mut failures: Vec<(u64, &'static str, PlenoraError)> = Vec::new();
+    let mut failures: Vec<(u64, Option<&'static str>, PlenoraError)> = Vec::new();
     let mut values = Vec::with_capacity(results.len());
     for (row, result) in results.into_iter().enumerate() {
         match result {
@@ -1759,26 +1770,70 @@ fn measure_cells<T: Send>(
     })
 }
 
-/// Fallimento di una cella della misura terminale: causa gia' assegnata al
-/// sito (validazione del "decode" o kernel scalare).
+/// Causa di riga per un `PlenoraError` gia' nella sua forma finale: `None`
+/// per categoria `Internal` (validazione interrotta, mai un difetto della
+/// riga — stessa nozione di [`cell_failure_cause`]/`e_interna` sul percorso
+/// di trasformazione, qui sul `PlenoraError` invece che sull'involucro
+/// `ArrowTransportError`), altrimenti la causa ordinaria del sito.
+///
+/// `pub`: condivisa con `executor::blocking::geo_measure_batch`, la stessa
+/// decisione duplicata sul percorso non fuso — due copie divergerebbero,
+/// come gia' successo altrove in questo file. Il modulo `unary` e' gia'
+/// `pub(crate)`, quindi la visibilita' effettiva resta al crate
+/// (`redundant_pub_crate` di clippy pretende `pub`, non `pub(crate)`, qui).
+pub fn causa_di_riga(error: &PlenoraError, ordinaria: &'static str) -> Option<&'static str> {
+    if error.category() == plenora_core::ErrorCategory::Internal {
+        None
+    } else {
+        Some(ordinaria)
+    }
+}
+
+/// Converte l'esito grezzo di un kernel scalare nella sua forma finale:
+/// `Internal` per una validazione interrotta (mai un giudizio
+/// sull'ingresso), `InvalidPlan` altrimenti — condivisa fra `measure_cells`
+/// e `executor::blocking::misura_riga`: un solo `match` per la decisione,
+/// non una copia per percorso.
+pub fn esito_kernel(error: OperationError) -> PlenoraError {
+    match error {
+        OperationError::ValidazioneNonConclusa(_) => PlenoraError::Internal(error.to_string()),
+        altro => PlenoraError::InvalidPlan(altro.to_string()),
+    }
+}
+
+/// Fallimento di una cella della misura terminale: causa gia' assegnata dal
+/// sito (validazione del "decode" o kernel scalare) tramite
+/// [`causa_di_riga`]; `None` se non attribuibile alla riga (validazione
+/// interrotta).
 struct MeasureCellFailure {
-    cause: &'static str,
+    cause: Option<&'static str>,
     error: PlenoraError,
 }
 
 /// Chiude i fallimenti per riga della misura terminale: report completo
 /// allegato all'errore della prima riga difettosa (forma del percorso non
-/// fuso, `PlenoraError`).
-fn collect_measure_failures(failures: Vec<(u64, &'static str, PlenoraError)>) -> PlenoraError {
+/// fuso, `PlenoraError`) — stessa semantica short-circuit di
+/// `collect_cell_failures`: una sola validazione interrotta tra i
+/// fallimenti fa propagare quell'errore grezzo, senza diagnostica di riga,
+/// perche' mescolarla con celle davvero invalide misattribuirebbe le altre.
+///
+/// `pub`: condivisa con `executor::blocking::misura_colonna`, cosi' la
+/// precedenza fra ordinario e interrotto e' la STESSA funzione sui due
+/// percorsi — non due copie da tenere allineate a mano.
+pub fn collect_measure_failures(
+    failures: Vec<(u64, Option<&'static str>, PlenoraError)>,
+) -> PlenoraError {
     let mut rows = std::collections::BTreeMap::new();
-    let mut first = None;
-    for (row, cause, error) in failures {
-        rows.entry(row).or_insert(cause);
-        if first.is_none() {
-            first = Some(error);
-        }
+    for (row, cause, _) in &failures {
+        let Some(cause) = cause else {
+            return match failures.into_iter().find(|(_, cause, _)| cause.is_none()) {
+                Some((_, _, error)) => error,
+                None => PlenoraError::Internal("classificazione misure incoerente".to_owned()),
+            };
+        };
+        rows.entry(*row).or_insert(*cause);
     }
-    let Some(first) = first else {
+    let Some((_, _, first)) = failures.into_iter().next() else {
         return PlenoraError::Internal("raccolta misura vuota".to_owned());
     };
     first.with_row_diagnostics(cell_diagnostics_report(&rows))
@@ -3092,6 +3147,52 @@ mod tests {
         geometry.to_wkb(CoordDimensions::xy()).expect("fixture wkb")
     }
 
+    /// **Percorso unary, senza pubblicazione parziale**: due celle valide,
+    /// un kernel sintetico che fallisce sulla seconda con l'errore reale
+    /// della migrazione WKT (`OperationError::WktSerialization`, diff 3/4
+    /// del candidato memory-lab). Sintetico di proposito, non
+    /// `operations::to_wkt` vero: il decoder WKB di questo prodotto rifiuta
+    /// ogni poligono vuoto prima che un kernel lo veda
+    /// (`geometry_contract.rs::check_ring`, provato in
+    /// `executor::blocking::tests`), quindi non esiste un payload WKB che
+    /// faccia scattare l'errore per davvero su questo percorso — qui si
+    /// prova la garanzia della raccolta (`map_nullable`), non la
+    /// raggiungibilita' del difetto specifico.
+    ///
+    /// La prima cella calcola un valore reale (per dimostrare che VIENE
+    /// calcolato, non solo che potrebbe esserlo) ma non deve MAI comparire
+    /// nell'esito: `map_nullable` raccoglie tutte le righe prima di
+    /// decidere, e con un fallimento decide `Err`, mai un vettore con la
+    /// prima cella valorizzata e la seconda `None`.
+    #[test]
+    fn map_nullable_su_wkt_serialization_non_pubblica_la_cella_valida() {
+        let valida = wkb(&Geometry::Point(Point::new(1.0, 2.0)));
+        let cells: BinaryArray = [Some(valida.as_slice()), Some(b"non conta il contenuto")]
+            .into_iter()
+            .collect();
+
+        let esito: Result<Vec<Option<String>>, ArrowTransportError> =
+            map_nullable(&cells, |payload| {
+                if payload == b"non conta il contenuto" {
+                    return Err(ArrowTransportError::Kernel(
+                        OperationError::WktSerialization("geometria non serializzabile".to_owned()),
+                    ));
+                }
+                // La cella valida calcola davvero — non un placeholder — cosi'
+                // un bug che la lasciasse trapelare produrrebbe un valore
+                // riconoscibile, non `None` per coincidenza.
+                let geometria = geometry_from_wkb(payload)?;
+                Ok(Some(to_wkt(&geometria)?))
+            });
+
+        let errore =
+            esito.expect_err("una cella fallita deve rendere Err, mai un vettore parziale");
+        assert!(
+            errore.to_string().contains("serializzazione WKT fallita"),
+            "atteso il testo dell'errore WKT, ottenuto: {errore}"
+        );
+    }
+
     /// Fixture multi-tipo: punto, linea, poligono con buco, multipoint, null.
     fn multi_type_cells() -> Vec<Option<Vec<u8>>> {
         let point = Geometry::Point(Point::new(1.0, 2.0));
@@ -3189,11 +3290,423 @@ mod tests {
         Ok(current)
     }
 
+    /// **Una validazione interrotta non e' un fallimento attribuibile alla
+    /// riga.**
+    ///
+    /// `cell_failure_cause` decide se un fallimento entri nella diagnostica
+    /// row-scoped. Un esito che non ha concluso, contato fra le celle rotte,
+    /// direbbe che quella riga e' sbagliata — e nessuno lo ha stabilito.
+    /// `None` e' cio' che questa funzione riserva agli errori non attribuibili
+    /// alla riga, e li fa propagare fail-closed.
+    #[test]
+    fn una_validazione_interrotta_non_e_attribuibile_alla_riga() {
+        use plenora_kernels_geo::operations::OperationError;
+        use plenora_kernels_geo::topology::TopologyError;
+
+        for caso in [
+            ArrowTransportError::Kernel(OperationError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Topology(TopologyError::ValidazioneNonConclusa("forma")),
+        ] {
+            assert_eq!(
+                cell_failure_cause(&caso),
+                None,
+                "non deve entrare nella diagnostica di riga: {caso}"
+            );
+        }
+
+        // E la meta' opposta: un fallimento di kernel ordinario ci entra
+        // ancora, o il caso qui sopra passerebbe anche svuotando la funzione.
+        let ordinario = ArrowTransportError::Kernel(OperationError::InvalidInput(
+            "anello con auto-intersezione".to_owned(),
+        ));
+        assert_eq!(
+            cell_failure_cause(&ordinario),
+            Some("geometry.kernel_failed"),
+            "un fallimento ordinario resta attribuibile alla riga"
+        );
+    }
+
+    /// Prova del solo classificatore `causa_di_riga`: decide sulla categoria
+    /// del `PlenoraError` gia' costruito, non sul sito che l'ha prodotto —
+    /// verificato qui chiamandolo direttamente sulle due categorie, senza
+    /// passare da `geo`.
+    ///
+    /// **Non** prova il collegamento dalla validazione preliminare
+    /// (`check_geometry_valid`/`validate_geometry_structural`) a questa
+    /// funzione dentro `measure_cells`: quel collegamento e' letto nel
+    /// sorgente (`check_geometry_valid` distingue gia' `Internal` da
+    /// `InvalidPlan`), non eseguito da un test, perche' iniettare
+    /// un'interruzione reale li' richiederebbe lo stesso panico di
+    /// `check_validation` usato dalle prove 1/2/3 sul contenimento — prove
+    /// tuttora in parte da progettare, non un meccanismo gia' disponibile.
+    #[test]
+    fn causa_di_riga_riconosce_l_interruzione_dalla_categoria_non_dal_sito() {
+        assert_eq!(
+            causa_di_riga(
+                &PlenoraError::Internal("validazione OGC non conclusa: x".to_owned()),
+                "geometry.invalid_wkb"
+            ),
+            None,
+            "una categoria Internal non e' mai attribuibile alla riga"
+        );
+        assert_eq!(
+            causa_di_riga(
+                &PlenoraError::InvalidPlan("anello con auto-intersezione".to_owned()),
+                "geometry.invalid_wkb"
+            ),
+            Some("geometry.invalid_wkb"),
+            "un errore ordinario resta attribuibile alla riga"
+        );
+    }
+
+    /// **Percorso fuso: anche qui l'anello orfano non arriva al kernel.**
+    /// `measure_cells` prende `Geometry` gia' in memoria — niente giro per
+    /// WKB fra un passo fuso e il successivo — ma la validazione
+    /// inter-passo (`validate_geometry_structural` + `check_geometry_valid`,
+    /// righe sopra questa) applica la STESSA regola del decoder WKB
+    /// (`geometry_contract.rs::check_ring`, ≥4 coordinate per anello,
+    /// esterno compreso): rifiuta l'anello orfano prima che `operations::
+    /// to_wkt` — qui il kernel VERO, non sintetico — lo veda. Prova diretta,
+    /// non dedotta: se in futuro quella validazione cambiasse e lasciasse
+    /// passare l'orfano, questo caso lo mostrerebbe fallendo per il motivo
+    /// sbagliato (l'assert sul testo dell'errore), non tacendo.
+    #[test]
+    fn measure_cells_reale_rifiuta_anello_orfano_prima_del_kernel() {
+        let valida = Geometry::Point(Point::new(1.0, 2.0));
+        let interno = line_string![
+            (x: 1.0, y: 1.0), (x: 2.0, y: 1.0),
+            (x: 2.0, y: 2.0), (x: 1.0, y: 1.0),
+        ];
+        let orfano = Geometry::Polygon(geo::Polygon::new(
+            LineString::from(Vec::<(f64, f64)>::new()),
+            vec![interno],
+        ));
+        let geometries = vec![Some(valida), Some(orfano)];
+
+        let errore = measure_cells(&geometries, 0, to_wkt)
+            .expect_err("l'anello orfano deve far fallire measure_cells, mai un vettore parziale");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure")
+        };
+        assert!(
+            error.to_string().contains("meno di quattro coordinate"),
+            "atteso il rifiuto strutturale inter-passo (non un errore di to_wkt), ottenuto: {error}"
+        );
+    }
+
+    /// Controparte sintetica, stessa forma delle prove analoghe su unary e
+    /// blocking: SE il kernel rendesse `WktSerialization` — da una forma non
+    /// coperta dal gate strutturale sopra, non da questo ingresso — la
+    /// classificazione di `measure_cells` sarebbe quella ordinaria
+    /// (`InvalidPlan`, testo del kernel).
+    #[test]
+    fn measure_cells_wkt_serialization_sintetico_resta_invalidplan() {
+        let valida = Geometry::Point(Point::new(1.0, 2.0));
+        let geometries = vec![Some(valida)];
+        let kernel_di_prova = |_g: &Geometry<f64>| -> Result<String, OperationError> {
+            Err(OperationError::WktSerialization(
+                "geometria non serializzabile".to_owned(),
+            ))
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova).expect_err("deve fallire");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure")
+        };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert!(error.to_string().contains("serializzazione WKT fallita"));
+    }
+
+    /// **Riga valida seguita da errore, sul ciclo di raccolta REALE
+    /// (`measure_cells`), non su una sola geometria.** Riga 0 calcola un WKT
+    /// vero col kernel reale (`to_wkt`), riga 1 fallisce con
+    /// `WktSerialization` per identita' per indirizzo — stesso idioma di
+    /// `ordinario_poi_interrotta_non_vince_l_ordinario`, non per ordine di
+    /// `par_iter`. Sintetico di proposito e tenuta separata dal rifiuto
+    /// strutturale reale (`measure_cells_reale_rifiuta_anello_orfano_...`,
+    /// sopra): quella prova la raggiungibilita', questa prova la raccolta.
+    #[test]
+    fn measure_cells_riga_valida_poi_wkt_serialization_non_pubblica_nulla() {
+        let ordinaria = Geometry::Point(Point::new(1.0, 2.0));
+        let geometries = vec![Some(ordinaria.clone()), Some(ordinaria)];
+        let riga_da_far_fallire = geometries[1].as_ref().unwrap();
+        let kernel_di_prova = move |g: &Geometry<f64>| -> Result<String, OperationError> {
+            if std::ptr::eq(g, riga_da_far_fallire) {
+                Err(OperationError::WktSerialization(
+                    "geometria non serializzabile".to_owned(),
+                ))
+            } else {
+                to_wkt(g)
+            }
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova)
+            .expect_err("una sola riga fallita deve rendere Err, mai un vettore con la riga 0");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure")
+        };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(
+            error.to_string(),
+            "contract violation: serializzazione WKT fallita: geometria non serializzabile"
+        );
+        let diagnostics = error
+            .row_diagnostics()
+            .expect("errore ordinario, diagnostica di riga attesa");
+        assert_eq!(diagnostics.observed_total, 1);
+        assert_eq!(diagnostics.counts.get("geometry.kernel_failed"), Some(&1));
+        let indici: Vec<u64> = diagnostics
+            .examples
+            .iter()
+            .map(|esempio| esempio.source_index)
+            .collect();
+        assert_eq!(indici, vec![1], "solo la riga 1 e' fallita, non la 0");
+    }
+
+    /// **`measure_cells` non deve appiattire una validazione interrotta in
+    /// `InvalidPlan`, ne' contarla nella diagnostica di riga.**
+    ///
+    /// Regressione mirata (non passa dall'executor: prova solo questo
+    /// componente, come la sua controparte sul classificatore sopra).
+    ///
+    /// Il kernel sintetico individua la riga da far fallire per **identita'
+    /// per indirizzo** dello slot in `geometries` (`std::ptr::eq` su un
+    /// riferimento preso in prestito per tutta la chiamata — gli elementi
+    /// dello slice non si spostano), mai per ordine di chiamata —
+    /// `measure_cells` itera con `par_iter`, quindi «seconda chiamata» non
+    /// e' «riga 1» — ne' per un valore di coordinata speciale. Restituisce
+    /// direttamente `OperationError::ValidazioneNonConclusa`: nessun panico
+    /// qui, la barriera e la sua conversione sono provate separatamente.
+    #[test]
+    fn measure_cells_non_appiattisce_la_validazione_interrotta() {
+        let ordinaria = Geometry::Point(Point::new(1.0, 2.0));
+        let geometries = vec![Some(ordinaria.clone()), Some(ordinaria)];
+        let riga_da_far_fallire = geometries[1].as_ref().unwrap();
+        let kernel_di_prova = move |g: &Geometry<f64>| -> Result<String, OperationError> {
+            if std::ptr::eq(g, riga_da_far_fallire) {
+                Err(OperationError::ValidazioneNonConclusa("prova"))
+            } else {
+                Ok("ok".to_owned())
+            }
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova)
+            .expect_err("la riga sintetica deve far fallire measure_cells");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure");
+        };
+        assert_eq!(
+            error.category(),
+            plenora_core::ErrorCategory::Internal,
+            "una validazione interrotta non e' colpa del piano — categoria inattesa: {error}"
+        );
+        assert!(
+            error.row_diagnostics().is_none(),
+            "una validazione interrotta non e' un difetto attribuibile a una riga — diagnostica inattesa: {error:?}"
+        );
+    }
+
+    /// **Un fallimento ordinario prima, uno interrotto dopo: l'interrotto
+    /// vince comunque.**
+    ///
+    /// Riga 0 e' un fallimento di kernel ordinario, riga 1 e' interrotta.
+    /// Selezione per identita' per indirizzo (`std::ptr::eq`), non per
+    /// ordine di chiamata di `par_iter`.
+    #[test]
+    fn ordinario_poi_interrotta_non_vince_l_ordinario() {
+        let a = Geometry::Point(Point::new(1.0, 2.0));
+        let b = Geometry::Point(Point::new(3.0, 4.0));
+        let geometries = vec![Some(a), Some(b)];
+        let riga_ordinaria = geometries[0].as_ref().unwrap();
+        let riga_interrotta = geometries[1].as_ref().unwrap();
+        let kernel_di_prova = move |g: &Geometry<f64>| -> Result<String, OperationError> {
+            if std::ptr::eq(g, riga_ordinaria) {
+                Err(OperationError::InvalidInput(
+                    "anello con auto-intersezione".to_owned(),
+                ))
+            } else if std::ptr::eq(g, riga_interrotta) {
+                Err(OperationError::ValidazioneNonConclusa("prova"))
+            } else {
+                unreachable!("solo due righe in questa fixture")
+            }
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova).expect_err("deve fallire");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure");
+        };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert!(error.row_diagnostics().is_none());
+    }
+
+    /// **Un fallimento interrotto prima, uno ordinario dopo: stesso esito
+    /// del caso invertito.**
+    ///
+    /// Meta' simmetrica del caso precedente: se l'esito dipendesse
+    /// dall'ordine di riga invece che dalla sola presenza di
+    /// un'interruzione, uno dei due casi lo mostrerebbe da solo.
+    #[test]
+    fn interrotta_poi_ordinario_non_vince_l_ordinario() {
+        let a = Geometry::Point(Point::new(1.0, 2.0));
+        let b = Geometry::Point(Point::new(3.0, 4.0));
+        let geometries = vec![Some(a), Some(b)];
+        let riga_interrotta = geometries[0].as_ref().unwrap();
+        let riga_ordinaria = geometries[1].as_ref().unwrap();
+        let kernel_di_prova = move |g: &Geometry<f64>| -> Result<String, OperationError> {
+            if std::ptr::eq(g, riga_interrotta) {
+                Err(OperationError::ValidazioneNonConclusa("prova"))
+            } else if std::ptr::eq(g, riga_ordinaria) {
+                Err(OperationError::InvalidInput(
+                    "anello con auto-intersezione".to_owned(),
+                ))
+            } else {
+                unreachable!("solo due righe in questa fixture")
+            }
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova).expect_err("deve fallire");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure");
+        };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert!(error.row_diagnostics().is_none());
+    }
+
+    /// **Due interruzioni distinguibili: vince quella in ordine di riga
+    /// minore**, non quella che `par_iter` ha calcolato per prima.
+    #[test]
+    fn due_interruzioni_sceglie_quella_in_ordine_logico_minore() {
+        let a = Geometry::Point(Point::new(1.0, 2.0));
+        let b = Geometry::Point(Point::new(3.0, 4.0));
+        let geometries = vec![Some(a), Some(b)];
+        let riga_0 = geometries[0].as_ref().unwrap();
+        let riga_1 = geometries[1].as_ref().unwrap();
+        let kernel_di_prova = move |g: &Geometry<f64>| -> Result<String, OperationError> {
+            if std::ptr::eq(g, riga_0) {
+                Err(OperationError::ValidazioneNonConclusa("marcatore-riga-0"))
+            } else if std::ptr::eq(g, riga_1) {
+                Err(OperationError::ValidazioneNonConclusa("marcatore-riga-1"))
+            } else {
+                unreachable!("solo due righe in questa fixture")
+            }
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova).expect_err("deve fallire");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure");
+        };
+        // Categoria e assenza di diagnostica: una validazione interrotta
+        // resta tale a prescindere da quale delle due abbia vinto — senza
+        // queste due asserzioni, una mutazione che allegasse comunque una
+        // diagnostica (o cambiasse categoria) passerebbe qui inosservata
+        // finche' il testo scelto restasse quello di riga 0.
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert!(error.row_diagnostics().is_none());
+        let testo = error.to_string();
+        assert!(
+            testo.contains("marcatore-riga-0"),
+            "attesa l'interruzione di riga 0, trovato: {testo}"
+        );
+        assert!(
+            !testo.contains("marcatore-riga-1"),
+            "non deve scegliere l'interruzione di riga 1: {testo}"
+        );
+    }
+
+    /// **Soli errori ordinari: diagnostica di riga completa e ordinata.**
+    ///
+    /// Nessuna interruzione in questo caso: riga 0 valida, righe 1 e 2
+    /// entrambe attribuibili, contate ed elencate in ordine di riga
+    /// crescente.
+    #[test]
+    fn soli_errori_ordinari_mantiene_diagnostica_completa_e_ordinata() {
+        let ok = Geometry::Point(Point::new(0.0, 0.0));
+        let fallisce_1 = Geometry::Point(Point::new(1.0, 1.0));
+        let fallisce_2 = Geometry::Point(Point::new(2.0, 2.0));
+        let geometries = vec![Some(ok), Some(fallisce_1), Some(fallisce_2)];
+        let riga_1 = geometries[1].as_ref().unwrap();
+        let riga_2 = geometries[2].as_ref().unwrap();
+        let kernel_di_prova = move |g: &Geometry<f64>| -> Result<String, OperationError> {
+            if std::ptr::eq(g, riga_1) || std::ptr::eq(g, riga_2) {
+                Err(OperationError::InvalidInput(
+                    "anello con auto-intersezione".to_owned(),
+                ))
+            } else {
+                Ok("ok".to_owned())
+            }
+        };
+
+        let errore = measure_cells(&geometries, 0, kernel_di_prova).expect_err("deve fallire");
+        let FusedStepError::Measure { error, .. } = errore else {
+            panic!("attesa FusedStepError::Measure");
+        };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        let diagnostics = error
+            .row_diagnostics()
+            .expect("errore ordinario, diagnostica di riga attesa");
+        assert_eq!(diagnostics.observed_total, 2);
+        assert_eq!(
+            diagnostics.counts.get("geometry.kernel_failed"),
+            Some(&2),
+            "entrambi i fallimenti devono essere contati sotto la stessa causa"
+        );
+        let indici: Vec<u64> = diagnostics
+            .examples
+            .iter()
+            .map(|esempio| esempio.source_index)
+            .collect();
+        assert_eq!(
+            indici,
+            vec![1, 2],
+            "gli esempi devono comparire in ordine di riga crescente"
+        );
+    }
+
     fn run_fused(
         group: &[&TransformArrowSchema],
         cells: &BinaryArray,
     ) -> Result<Vec<Option<Vec<u8>>>, FusedStepError> {
         Ok(transform_cells_fused(group, None, cells, &mut |_| Ok(()))?.geometry)
+    }
+
+    /// Il reperto del 5 settembre 2026, come nel percorso non fuso.
+    const REPERTO_VALIDAZIONE: &[u8] = &[
+        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0,
+        1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4,
+        0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0,
+        6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    /// **Anche il percorso fuso: col candidato esatto, il reperto e' un
+    /// ingresso invalido in ogni profilo — stessa correzione della
+    /// controparte non fusa (`transport.rs::il_reperto_e_un_ingresso_invalido_in_ogni_profilo`).**
+    ///
+    /// I due percorsi hanno chiamanti distinti, e una decisione duplicata
+    /// diverge: il caso non fuso da solo lascerebbe scoperto questo. Senza
+    /// il diff 1 l'attesa dipende dal profilo (`debug_assert!` di `geo`);
+    /// col segno corretto di `orient2d`, `geo` conclude sempre — misurato
+    /// qui, non dedotto.
+    #[test]
+    fn il_percorso_fuso_rende_il_reperto_un_ingresso_invalido_in_ogni_profilo() {
+        let centroid = fused_params(ArrowOperation::Centroid);
+        let group: Vec<&TransformArrowSchema> = [&centroid].to_vec();
+        let cells = cells_array(&[Some(REPERTO_VALIDAZIONE.to_vec())]);
+
+        let errore = run_fused(&group, &cells).expect_err("il reperto non passa");
+        let FusedStepError::Kernel { error, .. } = errore else {
+            panic!("atteso un fallimento di kernel, trovato {errore:?}");
+        };
+        assert_eq!(
+            error.errore_del_passo().category(),
+            plenora_core::ErrorCategory::InvalidPlan,
+            "il validatore doveva concludere in ogni profilo con l'esatto — {error}"
+        );
     }
 
     /// Gruppo [buffer, simplify, centroid] (profili B, B, A): stesso output

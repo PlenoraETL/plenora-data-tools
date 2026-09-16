@@ -62,6 +62,19 @@ PUBBLICI = [
     # Ampliare questo elenco e' una decisione, non un effetto collaterale.
     'docs/isolamento.md',
     'docs/prototipi-isolamento.md',
+    # Provenienza delle sorgenti vendorizzate per [patch.crates-io] (BOZZA NON
+    # ADOTTATA, vedi Cargo.toml): documentazione nostra, non testo upstream —
+    # l'eccezione per vendor/ sotto copre il codice di terze parti, non
+    # questi tre file. Ampliare questo elenco e' una decisione, non un
+    # effetto collaterale: eccola dichiarata.
+    'vendor/geo-0.33.1-exact/PROVENANCE.md',
+    'vendor/wkt-0.14.0-v2/PROVENANCE.md',
+    'vendor/i_shape-1.18.0-buffer/PROVENANCE.md',
+    # Candidato sperimentale del filtro (diff 1 alternativo, non adottato):
+    # stesso trattamento dei tre sopra, piu' un secondo documento nostro che
+    # dichiara provenienza e qualifica del solo filtro.
+    'vendor/geo-0.33.1-exact-filtered/PROVENANCE.md',
+    'vendor/geo-0.33.1-exact-filtered/PROVENANCE-FILTRO-SPERIMENTALE.md',
 ]
 
 # Documentazione viva, eseguita dalla suite: eccezione esatta, non un glob.
@@ -720,9 +733,35 @@ def controlla_artefatti(problemi):
                 % (pattern, trovati, motivo))
 
 
+#: Nomi di base, dentro vendor/, che questo progetto scrive di suo — non
+#: codice o testo upstream. Un file PER NOME, non un pattern largo: ogni
+#: aggiunta e' una decisione dichiarata qui, come le voci di PUBBLICI sopra
+#: di cui questi stessi percorsi fanno parte.
+BASENAME_NOSTRI_IN_VENDOR = ('PROVENANCE.md', 'PROVENANCE-FILTRO-SPERIMENTALE.md')
+
+
+def _e_terza_parte(percorso):
+    """True solo per il codice/testo upstream dentro vendor/, non per i file
+    che questo progetto ci ha scritto sopra (oggi: i PROVENANCE.md e il
+    PROVENANCE-FILTRO-SPERIMENTALE.md del candidato sperimentale).
+
+    L'eccezione esiste per il testo che non abbiamo scritto — un commento di
+    `geo` che contiene «E2», un `CHANGES.md` upstream con due sezioni
+    «changed» non sono uno scostamento di QUESTA documentazione. Non deve
+    diventare un'esenzione per la documentazione nostra: questi file sono
+    gia' in PUBBLICI sopra, e restano soggetti alle stesse regole di tutto il
+    resto — puntatori, ancore, superficie."""
+    return (percorso.startswith('vendor/')
+            and os.path.basename(percorso) not in BASENAME_NOSTRI_IN_VENDOR)
+
+
 def main():
     problemi = []
-    file_tracciati = tracciati()
+    file_tracciati = [p for p in tracciati() if not _e_terza_parte(p)]
+    # `controlla_artefatti`, sotto, non usa questa lista — enumera da se' con
+    # `git ls-files`, quindi resta attivo su tutto `vendor/` invariato: un
+    # binario vendorizzato per errore continua a essere rilevato anche nel
+    # codice upstream escluso qui.
     controlla_superficie(file_tracciati, problemi)
     controlla_collegamenti(problemi)
     controlla_riferimenti_morti(file_tracciati, problemi)

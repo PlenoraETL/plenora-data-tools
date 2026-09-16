@@ -354,7 +354,9 @@ pub(super) fn try_run_fused_group(
         }
         Err(FusedStepError::Kernel { index, error }) => {
             attempt.account(index, None, finished)?;
-            let base = PlenoraError::InvalidPlan(error.to_string());
+            // Stessa attribuzione del passo non fuso, dalla stessa funzione:
+            // due copie della decisione divergerebbero.
+            let base = error.errore_del_passo();
             let base = match error.row_diagnostics() {
                 Some(diagnostics) => base.with_row_diagnostics(diagnostics.clone()),
                 None => base,

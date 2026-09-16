@@ -67,6 +67,22 @@ aggiornamento.
 container con la stessa toolchain; le soglie sono le stesse dei due punti e se
 cambiano vanno cambiate in entrambi.
 
+**Un container che esegue la suite vuole `--init`.** Alcuni casi di
+`isolamento::figlio` pretendono che un figlio terminato venga anche
+**raccolto**, non solo ucciso: leggono `/proc/<pid>/comm`, perché un pid
+liberato può tornare in uso, e un processo **zombie** conserva quella voce. Se
+il PID 1 del container non miete gli orfani reparentati su di sé, quei casi
+vedono ancora il figlio e falliscono.
+
+Misurato per il comando pre-commit di `AGENTS.md`, dove il PID 1 è `cargo`: due
+casi falliscono senza `--init` e passano con esso, a sorgenti identici, sia
+sull'albero corrente sia sulla base. Con `bash` come PID 1 — la forma di
+`coverage.sh` — **il fallimento non è stato osservato**, e `--init` è lì per non
+far dipendere la correttezza della suite da quale processo si trovi a essere
+PID 1.
+
+Nativamente il problema non esiste: il reaper del sistema fa il suo mestiere.
+
 ## Baseline di compilazione: analisi di impatto
 
 `rust-toolchain.toml` dichiara che ogni variazione della baseline richiede una
@@ -617,7 +633,15 @@ cambiata in modo incompatibile.
 | `Oa` identifica l'antenato per **distanza** | non per percorso: il percorso sarebbe di lunghezza non limitata e porterebbe fuori dal confine la disposizione del filesystem dell'host. Il tetto di otto livelli è registrato in [`errori-e-limiti.md`](errori-e-limiti.md) con regola, perimetro, pericolo e condizione di rientro |
 | proiezione categoria → exit code tipizzata | `exit_code_di` fa `match` esaustivo su `ErrorCategory` invece di confrontare stringhe: una categoria nuova senza decisione **ferma la compilazione**. Il ripiego su `70` resta solo per envelope che portano stringhe non riconosciute. Nessun exit code esistente cambia |
 | `protocol` mancava dalla tabella degli exit code | il codice lo proiettava su `5` già prima; [`cli.md`](cli.md) non lo elencava. Cambia la **documentazione**, non il comportamento: chi si era regolato sulla tabella invece che sull'osservazione trovava un `5` che non si aspettava |
+| **`publish_atomic` rimossa** | era `plenora_engine::geo_transport::publish::publish_atomic`, e **chi la chiama non compila più**. Migrazione meccanica: `publish_atomic(percorso, scrittura)` diventa `publish_with_profile(percorso, PublishProfile::Atomic, scrittura)`, che rende `(valore, EsitoDellaPubblicazione)` invece del solo valore. Chi l'esito non lo vuole scrive `.map(\|(valore, _)\| valore)`, e la perdita resta **a vista**. La funzione esisteva solo per scartare quell'esito, e con due assi — durabilità e pulizia del temporaneo — scartarlo significa perdere l'avviso che è rimasta spazzatura |
+| **`Output::write_ipc_file` rimossa** | **chi la chiama non compila più**. Migrazione meccanica: `output.write_ipc_file(percorso)` diventa `output.write_ipc_file_with_profile(percorso, PublishProfile::Atomic)`, che rende `(ExecutionMetrics, EsitoDellaPubblicazione)`. Stessa ragione della precedente, e stessa forma per chi l'esito non lo usa |
+| il documento di `run` su un piano **legacy** | quel ramo non stampava nulla in caso di successo; ora emette `{"status":"ok", …}` con `durability_confirmed` e `temp_cleanup`, come già faceva il ramo DAG dello stesso comando. Chi si aspettava stdout vuoto lo trova pieno. Senza un documento l'avvertenza di pulizia non aveva dove uscire, e una pubblicazione che lascia spazzatura senza dirlo è un fallimento silenzioso |
+| campi nuovi nei documenti di `transform`, `transform-arrow`, `pair-arrow`, `spatial-join` | `durability_confirmed` e `temp_cleanup` si aggiungono in coda. Chi confrontava il documento **per intero** non lo ritrova uguale; chi legge per chiave non cambia niente |
+| destinazione occupata: `Conflict` invece di `InvalidPlan` | il testo passa da `contract violation: output gia' esistente: …` a `conflict: …` e l'**exit code da 2 a 5**. Vale per ogni comando che pubblica, perché l'autorità del publish è una sola. Allinea il codice al contratto già scritto: il piano, quando la destinazione è presa, non ha niente di sbagliato, e la variante `Conflict` è documentata proprio come «destinazione già esistente o conflitto di scrittura» |
 | input Arrow IPC che oggi passano e domani no | i custom metadata entrano nel confine ostile: coppie oltre i tetti, chiave o valore assenti, chiave vuota, UTF-8 non valido, chiavi duplicate. Un file **Arrow valido** può essere rifiutato di proposito ([`errori-e-limiti.md`](errori-e-limiti.md)) |
+| **una variante nuova in quattordici enum di `plenora-kernels-geo`** | `ValidazioneNonConclusa` in `AdvancedError`, `AnalysisError`, `ClusterError`, `ConstructionError`, `ExtendedError`, `ExtendedAlgorithmError`, `ExtensionError`, `ExtensionV2Error`, `ExtensionV3Error`, `OperationError`, `PredicateError`, `ProjBackendError`, `SpatialJoinError`, `TopologyError`. **Nessuno di questi enum è `#[non_exhaustive]`**: chi vi fa `match` esaustivo non compila più. Distingue la validazione OGC che **non ha concluso** — il validatore di `geo` si interrompe — dalla geometria dimostrata invalida, che prima finiva nella stessa variante «ingresso non valido». Comprimerle in una sola direbbe a chi legge di correggere un ingresso che nessuno ha giudicato: la stessa ragione per cui `ArrowPanic` è distinta da `Arrow`. Vedi [`errori-e-limiti.md`](errori-e-limiti.md) |
+| `geometry_diagnostics` rende errore dove prima **panicava** | chiamava `check_validation` di `geo` senza barriera: dove le asserzioni di debug sono attive, un ingresso come i reperti del fuzz faceva terminare il processo. Ora quel caso rende `ExtendedAlgorithmError::ValidazioneNonConclusa`. Chi la invocava in un binario con `debug-assertions` riceve perciò un `Err` dove prima non riceveva nulla. Dove la validazione **conclude** — cioè in `release`, e in debug su ingressi che non fanno panicare `geo` — resta un referto con `is_valid: false`, ma **`validity_reason` cambia**: portava il testo di `geo`, ora porta una delle sette ragioni controllate. Chi confrontava quella stringa non la ritrova, ed è la stessa sanitizzazione registrata più sopra per arrow, GEOS e PROJ. La funzione continua ad accettare la topologia invalida, che è il suo mestiere; non accetta di **dichiarare** invalida una geometria che nessuno ha giudicato, e per questo non scrive quel caso in `is_valid` |
+| una validazione interrotta non è più `InvalidPlan`, né nella trasformazione né nella misura | i percorsi dell'executor — trasformazione (`geo_transform_batch`/`transform_cells_fused`) e misura terminale (`geo_measure_batch`/`measure_cells`), fusi e non fusi — riscrivevano ogni fallimento del kernel scalare in `InvalidPlan` indipendentemente dalla categoria sotto. Ora rendono `Internal` quando la validazione OGC **non ha concluso**, **senza diagnostica di riga allegata**: mescolarla alle celle davvero invalide avrebbe misattribuito le altre. L'**exit code cambia da 2 a 70** per quegli input. Fra più interruzioni nello stesso batch resta la prima in ordine logico di riga, non quella calcolata per prima dal percorso fuso (che itera in parallelo). Vedi [`errori-e-limiti.md`](errori-e-limiti.md) |
 
 L'artefatto distribuito è il binario `plenora-data-tools`. Non esiste ancora
 un pacchetto Python: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).

@@ -70,6 +70,20 @@ pub mod cancellation;
 /// `isolamento.md`). Logica pura e **interna**: il formato sul filo
 /// appartiene al modulo `protocollo`, quindi questi tipi non escono dal
 /// crate.
+///
+/// # Perche' sotto `cfg`, e quando ne esce
+///
+/// Perche' non ha ancora un chiamante di produzione: il supervisore che la
+/// chiama esiste, ma non e' attivato da nessuna policy. Lasciarla compilata in
+/// produzione la farebbe risultare codice morto, e l'unico modo di zittire
+/// quell'avviso senza toglierla sarebbe renderla pubblica — cioe' fingere
+/// un'API che nessuno usa, che e' la scorciatoia che il registro vieta.
+///
+/// **Condizione di rientro:** il `cfg` cade quando il supervisore viene
+/// **davvero attivato**, non quando qualcosa diventa `pub`. Perimetro e regola
+/// stanno in
+/// `errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals`.
+#[cfg(any(test, feature = "internals"))]
 mod classificazione;
 // Il `commit_token` e' **privato come modulo**: esce solo il tipo, tramite
 // un `pub use` piu' sotto.
@@ -104,6 +118,109 @@ pub mod governor;
 #[doc(hidden)]
 pub mod interni;
 pub mod ipc_boundary;
+// Il dominio di isolamento **e' compilato sempre**, perche' un pezzo di esso ha
+// un chiamante di produzione: il dispatch anticipato dello spawner, qui sotto.
+// Il binario spedito deve riconoscere la riga di comando dello spawner, o un
+// worker avviato eseguirebbe il parser degli argomenti ordinario.
+//
+// Non tutto il modulo pero' e' raggiungibile da li'. Cio' che serve solo al
+// **supervisore** — preparazione del dominio, token, transizione, avvio —
+// resta sotto `cfg(any(test, feature = "internals"))` con la sua condizione di
+// rientro scritta sui singoli elementi: cade quando esiste un supervisore che
+// li chiama in produzione.
+//
+// Il frazionamento non e' pedanteria. Un `cfg` sul modulo intero dichiarerebbe
+// una condizione falsa in un verso o nell'altro: o «niente ha un chiamante»,
+// che il dispatch smentisce, o «tutto ce l'ha», che il preflight smentisce. E
+// un `cfg` che dichiara il falso e' peggio di nessun `cfg`, perche' chi legge
+// smette di controllare.
+//
+// Il `cfg` di piattaforma resta finche' non esiste un secondo dominio
+// supportato, ed e' indipendente dall'altro: se fossero una condizione sola, la
+// caduta della prima porterebbe via anche la seconda. L'orchestrazione e i suoi
+// casi sono **multipiattaforma** — provano la procedura, non l'ambiente —
+// quindi `cfg(target_os)` sta sui soli sottomoduli che toccano il kernel.
+//
+// Regola, perimetro e condizioni di rientro sono registrati in
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+mod isolamento;
+
+/// Se questo processo e' uno spawner, lo esegue e non torna.
+///
+/// # Dove va chiamata, e perche' proprio li'
+///
+/// **Per prima**, nel `main` del programma, prima di qualunque cosa crei un
+/// thread. Il primo passo della sequenza dello spawner pretende un processo
+/// monothread — le credenziali si cambiano per thread, e gli altri
+/// resterebbero privilegiati — quindi un pool costruito prima di questa
+/// chiamata renderebbe lo spawner impossibile. Compilando, e passando ogni
+/// caso deterministico.
+///
+/// # Che cosa rende
+///
+/// [`DalConfine::AltroComando`] se `argv[1]` non e' la versione della
+/// richiesta: il processo non e' uno spawner e il chiamante prosegue
+/// normalmente.
+///
+/// [`DalConfine::Fallita`] se lo e' ma la sequenza non regge.
+/// [`DalConfine::Conclusa`] non lo rende mai: la riuscita dello spawner e' una
+/// `exec`, e dopo quella questo processo non esiste piu'.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn spawner_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
+    isolamento::dal_confine_se_spawner(argomenti)
+}
+/// Se questo processo e' un **worker**, lo porta fin dove il worker arriva.
+///
+/// # Dove va chiamata
+///
+/// Subito dopo [`spawner_dal_confine`], e come quella **prima di tutto il
+/// resto**: sono due modalita' dello stesso eseguibile, scelte dal primo
+/// argomento, e una riga del namespace riservato che arrivasse al parser della
+/// CLI si sentirebbe rispondere «comando sconosciuto» invece della diagnosi
+/// vera.
+///
+/// # Che cosa rende
+///
+/// [`DalConfine::AltroComando`] se `argv[1]` non e' del namespace del worker:
+/// il processo non e' un worker e il chiamante prosegue normalmente.
+///
+/// [`DalConfine::Conclusa`] quando il worker ha percorso la sequenza fino
+/// all'esito dichiarato — che **non** significa che l'esecuzione isolata sia
+/// riuscita: significa che il worker ha detto com'e' andata, e chi giudica e'
+/// il supervisore.
+///
+/// [`DalConfine::Fallita`] quando non c'e' stato modo di dirlo: il canale non
+/// regge, oppure un canale non c'e' ancora.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn worker_dal_confine(argomenti: &[std::ffi::OsString]) -> DalConfine {
+    isolamento::dal_confine_se_worker(argomenti)
+}
+// Il perimetro di qualificazione, che esiste solo quando `rustc` riceve
+// `--cfg qualificazione_isolamento`.
+//
+// Non e' una feature, e la differenza sta in come si accende: una feature la si
+// abilita dichiarandola fra le dipendenze, e l'unificazione la propaga anche a
+// chi non l'ha chiesta, quindi una build di produzione potrebbe ritrovarsela
+// addosso perche' un'altra cosa nell'albero l'ha voluta. Un `cfg` non si
+// propaga: nessun crate dipendente puo' accenderlo.
+//
+// Cio' che non garantisce: chi controlla il comando di build lo puo' mettere in
+// `RUSTFLAGS`. La garanzia e' che non ci si arrivi **per sbaglio**, non che non
+// ci si possa arrivare.
+//
+// Che cosa espone: l'immagine che il gate ostile riesegue, e la giuntura con la
+// barriera fra l'accertamento dell'immagine e lo `spawn`. Nessuna delle due
+// deve poter essere raggiunta da codice che non sia quel gate.
+#[cfg(all(target_os = "linux", qualificazione_isolamento, feature = "internals"))]
+pub use isolamento::qualificazione;
+#[cfg(target_os = "linux")]
+pub use isolamento::DalConfine;
+// Il percorso di qualificazione end-to-end: un worker reale, un canale reale,
+// e un referto che dice **quale immagine** ha percorso la sequenza.
+#[cfg(all(target_os = "linux", any(test, feature = "internals")))]
+pub use isolamento::prova;
 pub mod parallelism;
 pub mod plan;
 pub mod planner;
@@ -114,33 +231,44 @@ pub mod prepare;
 // crate passa da [`interni`], che espone un verdetto e una costante, non i
 // tipi.
 //
-// Il `cfg` dice una cosa vera e non la zittisce: il protocollo non ha ancora
-// un chiamante **fuori da se stesso**. Finche' non ce l'ha, il modulo si
-// compila dove qualcuno lo usa davvero — i test e la facciata. Cosi' non serve
-// nessun `allow(dead_code)`: l'assenza di chiamante e' dichiarata, non
-// nascosta.
+// Il `cfg` di perimetro non c'e' piu', e la condizione che lo regge e'
+// scritta: chiede un chiamante **esterno** al modulo, e l'handshake che vive
+// dentro non lo e'. Quel chiamante e' il worker, che si descrive, legge il
+// saluto, giudica l'accordo e risponde — da codice di produzione, raggiunto dal
+// dispatch della riga di comando.
 //
-// L'handshake sta **dentro** `protocollo`: consuma i suoi messaggi ma non e'
-// un chiamante del modulo, quindi non soddisfa la condizione. Toglierlo prima
-// che un chiamante esterno esista rimetterebbe in piedi le decine di
-// `dead_code` che il `cfg` evita — cioe' l'esatta situazione per cui esiste.
-//
-// Regola, perimetro e condizione di rientro sono registrati in
-// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
+// Cio' che dentro il modulo resta senza chiamante lo dichiara sui singoli
+// elementi: un `cfg` sul modulo intero direbbe che nessuno lo usa, e non e'
+// vero. Nessun `allow(dead_code)` in nessuno dei due casi — l'assenza di
+// chiamante si dichiara, non si nasconde.
 mod protocollo;
+// Le osservazioni su una destinazione, e il passo 9.
+//
+// Il modulo e' pubblico per **`risolvi_commit`** soltanto: chi non riceve
+// risposta dal processo incaricato di pubblicare deve poter guardare il disco
+// senza passare da noi, e quella funzione un chiamante esterno ce l'ha per
+// definizione. Il passo 9 e la prova che consuma stanno invece sotto lo stesso
+// `cfg` del verificatore, perche' condividono con lui la stessa condizione:
+// nessun percorso di produzione li attraversa ancora.
+pub mod pubblicazione;
+// Quale implementazione risolve i CRS in questa build, detto in un posto solo.
+// Privato: e' una decisione interna, e la superficie pubblica non deve
+// dipendere da quale backend c'e' sotto.
+mod risolutore;
 pub mod table_engine;
 pub mod temp_store;
-// Il verificatore dell'artefatto ha lo stesso perimetro del protocollo, e per
-// la stessa ragione: **non ha ancora un chiamante di produzione**. Chi lo
-// chiamera' e' la sequenza di verifica e publish, con `PR-10`; finche' non
-// esiste, il modulo si
-// compila dove qualcuno lo usa davvero — i test e la facciata `interni`, da
-// cui il fuzzer lo raggiunge.
+// I passi da 3 a 8-bis, e con loro il passo 9 che ne consuma la prova.
 //
-// Privato senza eccezioni: e' il verificatore di un percorso interno, e
-// renderlo pubblico prima che il percorso esista sarebbe la promessa di non
-// cambiarlo.
+// Sotto `cfg`, e non per abitudine: **nessun percorso di produzione li
+// attraversa ancora**. Chi li attraversera' e' il supervisore, che osserva lo
+// stato terminale del figlio e il suo `Esito` — i passi 1 e 2 — e arriva con la
+// PR che porta il lato supervisore.
+//
+// Renderli pubblici li toglierebbe da questo elenco senza dar loro un
+// chiamante: `dead_code` tace davanti a una funzione pubblica anche quando
+// nessuno puo' chiamarla, e quel silenzio non e' l'assenza del difetto. Il
+// `cfg` invece dice cio' che e' vero — codice compiuto e non ancora usato — e
+// continuera' a dirlo finche' non smettera' di esserlo.
 //
 // Regola, perimetro e condizione di rientro sono registrati in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.

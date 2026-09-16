@@ -118,7 +118,6 @@ impl Esadecimale32 {
     /// valore lo **calcola** invece di riceverlo come testo — l'uscita di uno
     /// SHA-256, per esempio — e che altrimenti dovrebbe formattarlo a mano per
     /// poi rifarlo interpretare, con due grafie possibili al posto di una.
-    #[cfg(any(test, feature = "internals"))]
     pub const fn dai_byte(byte: [u8; BYTE]) -> Self {
         Self { byte }
     }

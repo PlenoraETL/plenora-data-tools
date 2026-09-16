@@ -4,7 +4,6 @@ use geo::algorithm::line_measures::{
     Bearing, Densify, Euclidean, FrechetDistance, Geodesic, InterpolateLine, Length,
 };
 use geo::algorithm::orient::{Direction, Orient};
-use geo::algorithm::validation::Validation;
 use geo::line_intersection::{line_intersection, LineIntersection};
 use geo::{
     Coord, CoordsIter, GeodesicArea, Geometry, Line, LineString, MapCoords, MultiPolygon, Point,
@@ -46,9 +45,18 @@ pub enum ExtendedAlgorithmError {
     /// Invariante interna violata (R6: errore propagato, mai panic).
     #[error("internal error: {0}")]
     Internal(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 use crate::geometry_type_name as geometry_type;
+use crate::EsitoValidazione;
+use crate::ValidazioneProtetta as _;
 
 fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedAlgorithmError> {
     if geometry
@@ -59,9 +67,12 @@ fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedAlgorithmError
             "coordinate NaN o infinite".to_owned(),
         ));
     }
-    geometry
-        .check_validation()
-        .map_err(|error| ExtendedAlgorithmError::InvalidInput(error.to_string()))
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedAlgorithmError::InvalidInput(ragione.to_string()),
+            ExtendedAlgorithmError::ValidazioneNonConclusa,
+        )
+    })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedAlgorithmError> {
@@ -73,9 +84,12 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedAlg
             "coordinate NaN o infinite".to_owned(),
         ));
     }
-    geometry
-        .check_validation()
-        .map_err(|error| ExtendedAlgorithmError::InvalidOutput(error.to_string()))?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedAlgorithmError::InvalidOutput(ragione.to_string()),
+            ExtendedAlgorithmError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 
@@ -530,10 +544,21 @@ pub fn geometry_diagnostics(
     let is_finite = geometry
         .coords_iter()
         .all(|coordinate| coordinate.x.is_finite() && coordinate.y.is_finite());
+    // Una validazione che non conclude non produce una diagnosi: scriverla in
+    // `is_valid`/`validity_reason` significherebbe dichiarare invalida una
+    // geometria su cui nessuno ha deciso. Questa funzione accetta la topologia
+    // invalida — e' il suo mestiere — ma non un verdetto che non esiste, e in
+    // quel caso rende errore invece di un referto inventato.
     let validation = if is_finite {
-        geometry
-            .check_validation()
-            .map_err(|error| error.to_string())
+        match geometry.validazione_protetta() {
+            Ok(()) => Ok(()),
+            Err(esito) => match esito {
+                EsitoValidazione::NonValida(ragione) => Err(ragione.to_string()),
+                EsitoValidazione::NonConclusa(forma) => {
+                    return Err(ExtendedAlgorithmError::ValidazioneNonConclusa(forma));
+                }
+            },
+        }
     } else {
         Err("coordinate NaN o infinite".to_owned())
     };

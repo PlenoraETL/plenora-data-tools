@@ -708,7 +708,9 @@ fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("late-cast.arrow");
-    assert!(make_output().write_ipc_file(&destination).is_err());
+    assert!(make_output()
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .is_err());
     assert!(
         !destination.exists(),
         "nessun artefatto IPC dopo rejection tardiva"
@@ -919,7 +921,9 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
     assert!(output.next().is_none(), "solo il terminale dopo lo scan");
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    assert!(make_output().write_ipc_file(&destination).is_err());
+    assert!(make_output()
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .is_err());
     assert!(!destination.exists());
 }
 
@@ -927,7 +931,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
 fn accepted_output_staging_beyond_temp_quota_fails_closed() {
     // Fail-closed: stream VALIDO la cui staging IPC supera la quota
     // `max_temp_bytes` -> errore esplicito, zero accepted pubblicati,
-    // nessun artefatto scrivibile via write_ipc_file.
+    // nessun artefatto scrivibile via write_ipc_file_with_profile.
     let schema = Arc::new(Schema::new(vec![Field::new(
         "effective_date",
         DataType::Utf8,
@@ -985,7 +989,9 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
     assert!(output.next().is_none(), "zero accepted oltre la quota");
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    assert!(make_output().write_ipc_file(&destination).is_err());
+    assert!(make_output()
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .is_err());
     assert!(!destination.exists());
 }
 
@@ -1277,7 +1283,7 @@ fn error_mid_stream_publishes_nothing() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    let result = output.write_ipc_file(&destination);
+    let result = output.write_ipc_file_ignorando_le_avvertenze(&destination);
     assert!(result.is_err());
     assert!(
         !destination.exists(),
@@ -1346,7 +1352,9 @@ fn late_wkb_rejections_are_complete_absolute_and_publish_nothing() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("late-wkb.arrow");
-    assert!(make_output().write_ipc_file(&destination).is_err());
+    assert!(make_output()
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .is_err());
     assert!(
         !destination.exists(),
         "nessun artefatto IPC dopo rejection tardiva"
@@ -2071,7 +2079,7 @@ fn input_schema_mismatch_is_rejected_before_execution() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ipc_roundtrip_through_publish_atomic() {
+fn ipc_roundtrip_through_publish_with_profile() {
     let plan = nodeless_plan();
     let inputs = single_input(
         "main",
@@ -2081,7 +2089,9 @@ fn ipc_roundtrip_through_publish_atomic() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    let metrics = output.write_ipc_file(&destination).expect("publish");
+    let metrics = output
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .expect("publish");
     assert!(destination.exists());
     assert_eq!(metrics.output_rows, 3);
 
@@ -2575,7 +2585,9 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    output.write_ipc_file(&destination).expect("publish");
+    output
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .expect("publish");
 
     let reader =
         FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
@@ -2660,7 +2672,9 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    output.write_ipc_file(&destination).expect("publish");
+    output
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .expect("publish");
 
     let reader =
         FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
@@ -2708,7 +2722,9 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    output.write_ipc_file(&destination).expect("publish");
+    output
+        .write_ipc_file_ignorando_le_avvertenze(&destination)
+        .expect("publish");
 
     let reader =
         FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
@@ -4316,7 +4332,7 @@ fn kernel_panic_publishes_nothing() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    let result = output.write_ipc_file(&destination);
+    let result = output.write_ipc_file_ignorando_le_avvertenze(&destination);
     assert!(result.is_err());
     assert!(
         !destination.exists(),
@@ -4624,7 +4640,7 @@ fn cancelled_run_publishes_nothing_and_reports_execution_id() {
 
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("output.arrow");
-    match output.write_ipc_file(&destination) {
+    match output.write_ipc_file_ignorando_le_avvertenze(&destination) {
         Err(PlenoraError::Cancelled { .. }) => {}
         other => panic!("atteso Cancelled: {other:?}"),
     }
@@ -6946,7 +6962,9 @@ fn collect_batches_e_publish_restano_protetti() {
     let directory = tempfile::tempdir().expect("tempdir");
     let destinazione = directory.path().join("uscita.arrow");
     assert!(
-        output.write_ipc_file(&destinazione).is_err(),
+        output
+            .write_ipc_file_ignorando_le_avvertenze(&destinazione)
+            .is_err(),
         "il publish atomico deve rifiutare"
     );
     assert!(

@@ -233,16 +233,107 @@ passo 5-bis dell'integrità e il tetto cumulativo sui dizionari trattenuti
 (`PR-6`). Più il rafforzamento dei custom metadata IPC nel confine ostile
 (`PR-0`).
 
-**Non esiste ancora nel codice** ciò che richiede due processi: worker,
-supervisore, spawn, pipe e limiti di processo restano **progettati** in
-[`isolamento.md`](isolamento.md) e non implementati. Resta progetto anche la
-sequenza di publish (`PR-10`), di cui `PR-6` ha portato la sola verifica: il
-passo 9 non c'è.
+Con `PR-7` esistono anche **il dominio di isolamento su Linux e la transizione
+allo spawner**: preflight del dominio con le quattro scritture rilette e il
+giudizio sul possesso, il confine fra supervisore e spawner con richiesta
+versionata e rivalidazione, la sequenza in sette passi che si spoglia
+dell'autorità, e il gate ostile `scripts/verifica_isolamento_linux.sh` — con la
+sua qualificazione su VM dedicata.
 
-Due conseguenze pratiche, dichiarate perché non si deduca il contrario. Il
-protocollo **e il verificatore** si compilano solo sotto `test` e sotto la
-feature `internals`, perché non hanno ancora un chiamante di produzione — che
-per entrambi arriva con `PR-10`. E il tetto sui dizionari vive in
+**Non esiste ancora nel codice** ciò che richiede il ciclo di vita completo a
+due processi: il supervisore di produzione che chiama quel dominio, le pipe e
+la macchina a stati che gli sta intorno restano **progettati** in
+[`isolamento.md`](isolamento.md) — arrivano con `PR-8`, che è anche il primo
+chiamante di produzione del modulo.
+
+La sequenza di publish non è più progetto: `PR-6` ne aveva portato la sola
+verifica, `PR-10` porta il passo 9. **Non diventa però superficie pubblica**, e
+il verificatore resta sotto `cfg`: il passo 9 riceve la prova già fatta, non la
+produce, quindi non è lui a dargli un chiamante, e la catena resta compiuta e
+non percorsa. Renderla pubblica avrebbe tolto gli avvisi senza togliere il
+codice non usato — `dead_code` tace davanti a una funzione pubblica anche quando
+nessuno può chiamarla — e in più avrebbe allargato la superficie ai tipi che le
+firme nominano. Una superficie pubblica si decide, non si eredita da un avviso.
+
+Ciò che è uscito dal perimetro sotto `cfg` è **solo** ciò che
+`pubblicazione::risolvi_commit` chiama davvero:
+`commit_footer::interpreta_commit_token`,
+`ipc_boundary::convalida_artefatto_con_causa` e `ArtefattoConvalidato` col suo
+`in_batches`. Restano dentro `convalida_artefatto`, i metodi che servono alla
+sola catena verifica → passo 9, `leggi_commit_token` e
+`geo_transport::ipc::parse_footer`.
+
+Che cosa consegna `PR-10`, in tre fatti. Il verificatore non rende più `()`: rende
+una **prova opaca**, `ArtefattoVerificato`, che porta l'handle già convalidato,
+i byte misurati e il digest accertato, e che il passo 9 consuma — senza
+costruttore aperto, senza `Clone`, senza `Debug`. Il passo 9 **copia** attraverso
+l'autorità di publish già qualificata invece di implementare un secondo commit
+per piattaforma, pretendendo il numero esatto di byte e ricalcolando lo SHA-256
+prima del commit: se qualcosa diverge, la destinazione non appare. E la
+pubblicazione riferisce ora su **due assi**, la durabilità e la pulizia del
+temporaneo, dove la seconda ha tre esiti perché «non c'è» e «non ho potuto
+guardare» non sono la stessa cosa.
+
+Il residuo del temporaneo era una perdita silenziosa, e apparteneva alla
+**classe**, non a un percorso: `persist_noclobber` ignora l'errore dell'`unlink`
+nel proprio ripiego. Ogni sito che pubblicava passa ora dall'autorità condivisa,
+compresi i due che in `legacy.rs` chiamavano `persist_noclobber` per conto
+proprio.
+
+Nessun percorso che pubblica scarta più l'avvertenza: `run` — DAG e legacy —
+`transform`, `transform-arrow`, `pair-arrow` e `spatial-join` la portano nel
+proprio documento di successo. Il ramo legacy di `run` un documento non ce
+l'aveva, e per un giro il silenzio è stato registrato come limite: registrarlo
+non lo toglie, e ora quel ramo emette il documento che il suo formato d'uscita
+già prevedeva. Regola e forma stanno in
+[`errori-e-limiti.md`](errori-e-limiti.md#ogni-comando-che-pubblica-dice-comè-andata-la-pulizia).
+`risolvi_commit` entra come superficie pubblica, con le cinque osservazioni e le
+otto ragioni: le due grandezze non hanno motivo di coincidere. E una destinazione
+occupata è ora un `Conflict` su entrambe le strade che la scoprono — il controllo
+preliminare e l'`AlreadyExists` del commit — come i documenti già prescrivevano:
+l'exit code passa da 2 a 5, perché il piano non ha niente di sbagliato.
+
+Il protocollo non è più in quello stato. Il suo primo chiamante **reale** è il
+worker, ed è arrivato con `PR-9`: il `cfg` sul modulo è caduto, e ciò che dentro
+il modulo resta senza chiamante — il lato supervisore dell'handshake, che
+diventa di produzione con `PR-12`, e gli inventari generati dalle macro — lo
+dichiara ora elemento per elemento. Il lato supervisore che `PR-8` costruisce
+non è di produzione: lo diventa quando viene **davvero attivato**, cioè quando
+una policy lo sceglie, non quando una sua funzione diventa `pub`. Rendere
+pubblico ciò che nessuno chiama toglierebbe l'avviso di codice morto senza
+togliere il codice morto, ed è la scorciatoia che il registro vieta.
+
+Il worker reale **percorre la sequenza intera**: si descrive, conclude
+l'accordo, riceve l'incarico, ne rivalida il piano e i contratti d'ingresso, lo
+esegue, scrive l'artefatto sul solo percorso temporaneo con il `commit_token`
+nel footer, manda il progresso e dichiara l'esito. Ciò che resta fuori è ciò che
+non gli appartiene: la verifica dell'artefatto (passi 3-8-bis) e la
+pubblicazione (passo 9) sono di chi lo ha osservato, e il worker non può
+verificare se stesso. Quei passi esistono da `PR-10`; chi li chiama in un
+supervisore di produzione è ancora un'altra PR.
+
+Il criterio d'uscita di `PR-9` era **l'esecuzione end-to-end sotto limite**, e
+la qualificazione che lo soddisfa è `scripts/qualifica_sotto_limite.sh`: il
+worker di produzione, raggiunto attraverso lo spawner, esegue dentro un dominio
+`cgroup2` con `memory.max` e conclude la sequenza intera. Fra due pipe nude si
+prova il cablaggio; «sotto limite» è un'altra affermazione, e la si fa su una VM
+con root, un dominio vero e le credenziali del worker distinte da quelle di chi
+lo avvia. Il verdetto lo dà l'unico oracolo, lo stesso che giudica la
+qualificazione fra due pipe. Che il qualificatore sappia diventare rosso non è
+dato per scontato: `scripts/mutazioni_del_qualificatore.sh` tocca una decisione
+per volta — la cessione della proprietà delle pipe, l'imposizione della
+variabile del canale, il confronto col digest dichiarato da fuori, la pulizia
+che dichiara un guasto, e la quiescenza che non si può osservare — e pretende
+un codice d'uscita diverso da zero **e** nessun `VINTO` nel testo. Sono
+decisioni che nessun caso di `cargo test` attraversa, ed è la ragione per cui
+hanno un giudice proprio.
+
+Il worker reale porta con sé un limite dichiarato, e va letto insieme: il
+profilo isolato descrive l'ambiente **senza** backend CRS, e con `proj-backend`
+il worker rifiuta prima dell'handshake, perché di quell'ambiente non esiste una
+radice esclusiva e inventariabile. Il rientro non è una data: è un elenco di
+cinque condizioni che un unico provider deve soddisfare, ed è registrato in
+[`errori-e-limiti.md`](errori-e-limiti.md#il-profilo-isolato-non-descrive-lambiente-proj-backend). E il tetto sui dizionari vive in
 `IpcLimits::max_retained_dictionary_body_bytes`, con un default del confine; i
 costruttori dei limiti lo restringono secondo il budget disponibile.
 `verifica_artefatto` riceve l'intero `&IpcLimits`, non un parametro o una

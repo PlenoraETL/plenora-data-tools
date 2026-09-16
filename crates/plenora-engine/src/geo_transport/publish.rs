@@ -8,7 +8,7 @@
 //! Sequenza attesa dal chiamante: parse dello schema
 //! JSON → controllo `schema_version` → `validate_parameters` →
 //! `validate_transform_arrow_crs`/`validate_pair_arrow_crs` → esecuzione
-//! (`transform_arrow`/`pair_arrow`) → `publish_atomic`.
+//! (`transform_arrow`/`pair_arrow`) → `publish_with_profile`.
 //!
 //! Profili di publish (errori-e-limiti.md#publish-e-cleanup): [`PublishProfile::Atomic`] e' il comportamento
 //! storico; [`PublishProfile::DurableAtomic`] aggiunge il `fsync` della
@@ -17,7 +17,7 @@
 //! ([`PlenoraError::Unsupported`]).
 
 use std::io::{self, BufWriter, ErrorKind, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -27,10 +27,10 @@ use plenora_core::catalog::{find_operation, CrsRequirement};
 use plenora_core::crs::{required_definition, validate_requirement};
 use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect};
 
-#[cfg(not(feature = "proj-backend"))]
-use plenora_core::crs::resolve_crs;
-#[cfg(feature = "proj-backend")]
-use plenora_kernels_geo::crs::resolve_crs;
+// La scelta dell'implementazione sta in un posto solo: due copie di due
+// `cfg` sono due occasioni di divergere, e chi risolve i CRS deve essere chi
+// il programma dichiara di essere.
+use crate::risolutore::risolvi as resolve_crs;
 
 use super::transport::{ArrowOperation, PairArrowSchema, TransformArrowSchema};
 
@@ -141,6 +141,119 @@ pub enum PublishOutcome {
     /// Publish riuscito, durabilita' non confermata (`fsync` della directory
     /// non supportato dalla piattaforma o fallito dopo il rename).
     PublishedButDurabilityUnconfirmed,
+}
+
+/// Che ne e' stato del temporaneo, dopo il commit point.
+///
+/// # Perche' esiste
+///
+/// Perche' `persist_noclobber` non e' una primitiva sola. Dove kernel e
+/// filesystem offrono `RENAME_NOREPLACE` il commit e' un rename e non lascia
+/// niente. Dove non la offrono si ripiega su `hard_link` seguito da `unlink`: il
+/// commit point diventa il collegamento — che fallisce se il nome esiste, quindi
+/// il no-clobber regge lo stesso — ma **l'errore dell'`unlink` e' ignorato**, e
+/// se fallisce il temporaneo resta al suo posto senza che nessuno lo dica.
+///
+/// Il silenzio e' la cosa da chiudere: e' la stessa politica per cui un cleanup
+/// fallito e' un esito riportato, non un dettaglio.
+///
+/// # Perche' tre stati e non due
+///
+/// Perche' «non c'e'» e «non ho potuto guardare» sono cose diverse, e un solo
+/// valore per entrambe le rende indistinguibili proprio dove la distinzione
+/// serve: chi legge concluderebbe «niente da bonificare» senza che nessuno abbia
+/// guardato. E' fail-open, ed e' la stessa ragione per cui la quiescenza di un
+/// dominio ha tre esiti e non due.
+///
+/// # Perche' non porta la causa dell'`unlink`
+///
+/// Perche' `tempfile` non la espone: la ignora dentro il ripiego. Riportare una
+/// causa vorrebbe dire inventarla. Qui si dice **cio' che si osserva** — il file
+/// c'e', oppure non lo si e' potuto accertare — e la ragione riguarda
+/// l'osservazione, non il commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PuliziaDelTemporaneo {
+    /// Il temporaneo non c'e' piu': niente da bonificare.
+    Rimosso,
+    /// Il temporaneo c'e' ancora, e queste sono le sue coordinate.
+    ///
+    /// Non e' un fallimento della pubblicazione: l'output e' visibile e
+    /// completo. E' spazzatura da togliere, e chi deve toglierla ha bisogno del
+    /// percorso, non del solo peso.
+    Presente {
+        /// Dove si trova.
+        percorso: PathBuf,
+        /// Quanto occupa, al momento dell'osservazione.
+        byte: u64,
+    },
+    /// Non si e' potuto accertare se ci sia.
+    NonAccertabile {
+        /// Dove si sarebbe dovuto guardare.
+        percorso: PathBuf,
+        /// Perche' non si e' potuto.
+        ragione: RagioneNonAccertabile,
+    },
+}
+
+/// Perche' l'accertamento del temporaneo non e' riuscito.
+///
+/// Sanitizzata come ogni altra ragione del progetto: dice il **genere** del
+/// guasto, non che cosa ci fosse nel file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RagioneNonAccertabile {
+    /// Guardare quel percorso richiede un permesso che non c'e'.
+    PermessoNegato,
+    /// Un guasto di I/O che non e' un permesso.
+    GuastoDiLettura,
+}
+
+/// Com'e' andata una pubblicazione, sui **due** assi che la descrivono.
+///
+/// # Perche' due assi e non un enum solo
+///
+/// Perche' dicono cose indipendenti: la durabilita' riguarda la
+/// **destinazione**, la pulizia riguarda il **temporaneo**. Comprimerli
+/// costringerebbe a inventare una variante per ogni combinazione, e chi legge
+/// dovrebbe scomporla per sapere quale delle due lo riguarda.
+///
+/// # Perche' dopo il commit nessuno dei due diventa un errore
+///
+/// Perche' dopo il commit point l'output e' visibile, e nessun evento
+/// successivo puo' renderlo non riuscito. Una durabilita' non confermata e un
+/// temporaneo rimasto sono **avvertenze**: dirle come fallimenti manderebbe chi
+/// legge a rifare una cosa gia' fatta, e rifarla troverebbe la destinazione
+/// occupata. Prima del commit, invece, un errore resta un errore.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EsitoDellaPubblicazione {
+    /// Se le garanzie di durabilita' del profilo sono state soddisfatte.
+    pub durabilita: PublishOutcome,
+    /// Che ne e' stato del temporaneo.
+    pub pulizia: PuliziaDelTemporaneo,
+}
+
+/// Guarda se il temporaneo e' sopravvissuto al commit.
+///
+/// Si chiama **dopo** un commit riuscito, e per questo non rende mai un errore:
+/// cio' che non si riesce a sapere diventa [`PuliziaDelTemporaneo::NonAccertabile`],
+/// che e' un'osservazione e non un guasto della pubblicazione.
+fn accerta_il_temporaneo(percorso: PathBuf) -> PuliziaDelTemporaneo {
+    match std::fs::symlink_metadata(&percorso) {
+        Ok(metadati) => PuliziaDelTemporaneo::Presente {
+            percorso,
+            byte: metadati.len(),
+        },
+        Err(errore) => match errore.kind() {
+            io::ErrorKind::NotFound => PuliziaDelTemporaneo::Rimosso,
+            io::ErrorKind::PermissionDenied => PuliziaDelTemporaneo::NonAccertabile {
+                percorso,
+                ragione: RagioneNonAccertabile::PermessoNegato,
+            },
+            _ => PuliziaDelTemporaneo::NonAccertabile {
+                percorso,
+                ragione: RagioneNonAccertabile::GuastoDiLettura,
+            },
+        },
+    }
 }
 
 impl PublishOutcome {
@@ -354,6 +467,16 @@ fn io_at(phase: ErrorPhase, error: io::Error) -> PlenoraError {
     PlenoraError::Io(error).with_phase(phase)
 }
 
+/// La destinazione e' occupata: una sola forma, per le due strade che la
+/// scoprono.
+///
+/// Il testo non nomina chi l'ha scoperta, perche' a chi legge non cambia
+/// niente: la destinazione c'e', e la prima esecuzione che pubblica vince.
+fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
+    PlenoraError::Conflict(format!("output gia' esistente: {}", output_path.display()))
+        .with_phase(ErrorPhase::Commit)
+}
+
 /// Pubblicazione atomica dell'output con profilo selezionabile (errori-e-limiti.md#publish-e-cleanup).
 ///
 /// Rifiuta un output esistente, verifica il filesystem di destinazione
@@ -389,16 +512,24 @@ pub fn publish_with_profile<T>(
     output_path: &Path,
     profile: PublishProfile,
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
-) -> Result<(T, PublishOutcome), PlenoraError> {
+) -> Result<(T, EsitoDellaPubblicazione), PlenoraError> {
     if output_path.exists() {
         // Check no-clobber al confine di commit
         // (errori-e-limiti.md#publish-e-cleanup, ICD §9): e' la precondizione
         // del rename atomico, non validazione del piano.
-        return Err(PlenoraError::InvalidPlan(format!(
-            "output gia' esistente: {}",
-            output_path.display()
-        ))
-        .with_phase(ErrorPhase::Commit));
+        //
+        // `Conflict` e non `InvalidPlan`: la variante e' documentata come
+        // «destinazione gia' esistente o conflitto di scrittura», e il piano
+        // qui non ha niente di sbagliato — e' il posto a essere occupato.
+        // Chiamarlo piano invalido manderebbe chi legge a correggere qualcosa
+        // che e' gia' corretto.
+        //
+        // Questo controllo resta un'**anticipazione**, non l'autorita': fra
+        // qui e il commit la destinazione puo' comparire, e chi decide e'
+        // l'`AlreadyExists` osservato al persist. Le due strade devono percio'
+        // dire la stessa cosa, altrimenti la classe dipenderebbe da chi arriva
+        // prima.
+        return Err(conflitto_sulla_destinazione(output_path));
     }
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.is_dir() {
@@ -441,6 +572,9 @@ pub fn publish_with_profile<T>(
             "fallimento iniettato dal test prima del persist",
         )));
     }
+    // Il percorso si prende **adesso**: `persist_noclobber` consuma il
+    // `NamedTempFile`, e dopo non c'e' piu' nessuno che sappia dove fosse.
+    let percorso_temporaneo = temporary.path().to_path_buf();
     let mut temporary = Some(temporary);
     persist_with_retry(|| {
         // Il tempfile resta disponibile finche' il persist fallisce (ogni
@@ -462,29 +596,33 @@ pub fn publish_with_profile<T>(
         }
     })
     // Rename atomico: fase Commit (§9).
-    .map_err(|error| io_at(ErrorPhase::Commit, error))?;
-    let outcome = match profile {
+    //
+    // L'`AlreadyExists` osservato qui e' **l'autorita'**: dice che il nome
+    // c'e' nell'istante del commit, che e' l'unico istante che conta. Il
+    // controllo preliminare puo' mancarlo — fra i due sta la scrittura intera —
+    // e se le due strade dessero classi diverse la stessa condizione avrebbe
+    // due nomi a seconda di quanto dura la scrittura.
+    .map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            conflitto_sulla_destinazione(output_path)
+        } else {
+            io_at(ErrorPhase::Commit, error)
+        }
+    })?;
+    let durabilita = match profile {
         PublishProfile::Atomic => PublishOutcome::Published,
         PublishProfile::DurableAtomic => sync_directory_outcome(parent),
     };
-    Ok((result, outcome))
-}
-
-/// Pubblicazione atomica dell'output.
-///
-/// Wrapper di compatibilita' su [`publish_with_profile`] con profilo
-/// [`PublishProfile::Atomic`]: comportamento identico al publish storico,
-/// l'esito tipizzato (sempre [`PublishOutcome::Published`] a publish
-/// riuscito) e' scartato.
-///
-/// # Errors
-/// Come [`publish_with_profile`].
-pub fn publish_atomic<T>(
-    output_path: &Path,
-    write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
-) -> Result<T, PlenoraError> {
-    let (result, _outcome) = publish_with_profile(output_path, PublishProfile::Atomic, write)?;
-    Ok(result)
+    // Da qui in poi l'output e' visibile: cio' che si scopre sul temporaneo e'
+    // un'avvertenza, mai un fallimento.
+    let pulizia = accerta_il_temporaneo(percorso_temporaneo);
+    Ok((
+        result,
+        EsitoDellaPubblicazione {
+            durabilita,
+            pulizia,
+        },
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +633,20 @@ pub fn publish_atomic<T>(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Pubblica col profilo atomico **ignorando l'esito**.
+    ///
+    /// Esiste solo qui. In produzione un wrapper cosi' non c'e': la sua unica
+    /// funzione sarebbe scartare le avvertenze, e appartiene alla classe dei
+    /// siti che le perdono. Nei casi che giudicano altro — il valore reso, il
+    /// no-clobber, la fase di un errore — ignorarle e' legittimo, e questo nome
+    /// lo dice invece di nasconderlo.
+    fn pubblica_ignorando_l_esito<T>(
+        output_path: &Path,
+        write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
+    ) -> Result<T, PlenoraError> {
+        publish_with_profile(output_path, PublishProfile::Atomic, write).map(|(valore, _)| valore)
+    }
 
     // -- Riconoscimento fail-closed del filesystem (errori-e-limiti.md#publish-e-cleanup) ------------------
 
@@ -639,7 +791,12 @@ mod tests {
             Ok(())
         })
         .expect("publish atomico");
-        assert_eq!(outcome, PublishOutcome::Published);
+        assert_eq!(outcome.durabilita, PublishOutcome::Published);
+        assert_eq!(
+            outcome.pulizia,
+            PuliziaDelTemporaneo::Rimosso,
+            "il rename atomico non lascia niente"
+        );
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"x");
     }
 
@@ -656,17 +813,25 @@ mod tests {
         assert_eq!(value, 42);
         // Su Unix il fsync di directory e' supportato; su Windows no (errori-e-limiti.md#publish-e-cleanup).
         #[cfg(unix)]
-        assert_eq!(outcome, PublishOutcome::Published);
+        assert_eq!(outcome.durabilita, PublishOutcome::Published);
+        assert_eq!(
+            outcome.pulizia,
+            PuliziaDelTemporaneo::Rimosso,
+            "il rename atomico non lascia niente"
+        );
         #[cfg(not(unix))]
-        assert_eq!(outcome, PublishOutcome::PublishedButDurabilityUnconfirmed);
+        assert_eq!(
+            outcome.durabilita,
+            PublishOutcome::PublishedButDurabilityUnconfirmed
+        );
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"dati");
     }
 
     #[test]
-    fn publish_atomic_wrapper_keeps_legacy_behavior() {
+    fn il_valore_della_closure_torna_e_la_prima_pubblicazione_vince() {
         let directory = tempfile::tempdir().expect("tempdir");
         let destination = directory.path().join("output.bin");
-        let value = publish_atomic(&destination, |writer| {
+        let value = pubblica_ignorando_l_esito(&destination, |writer| {
             writer.write_all(b"legacy")?;
             Ok(7)
         })
@@ -674,15 +839,15 @@ mod tests {
         assert_eq!(value, 7);
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"legacy");
 
-        // No-clobber: la seconda pubblicazione sullo stesso path fallisce —
-        // variante invariata sotto il tag di fase Commit (BLOCK-03).
-        let result = publish_atomic(&destination, |writer| {
+        // No-clobber: la seconda pubblicazione sullo stesso path fallisce,
+        // e la prima resta.
+        let result = pubblica_ignorando_l_esito(&destination, |writer| {
             writer.write_all(b"altro")?;
             Ok(())
         });
         let error = result.expect_err("no-clobber");
         assert_eq!(error.phase(), ErrorPhase::Commit);
-        assert!(matches!(error.untag(), PlenoraError::InvalidPlan(_)));
+        assert!(matches!(error.untag(), PlenoraError::Conflict(_)));
         assert_eq!(std::fs::read(&destination).expect("lettura"), b"legacy");
     }
 
@@ -728,15 +893,17 @@ mod tests {
         }
     }
 
+    /// **Una destinazione occupata e' un conflitto, non un piano invalido.**
+    ///
+    /// La variante e' documentata per questo caso — «destinazione gia'
+    /// esistente o conflitto di scrittura» — e il piano non ha niente di
+    /// sbagliato: e' il posto a essere occupato.
     #[test]
-    fn existing_output_is_a_commit_phase_error_with_unchanged_text() {
-        // Check no-clobber: precondizione del rename atomico — scatta al
-        // confine di commit (errori-e-limiti.md#publish-e-cleanup, ICD §9),
-        // non in validazione del piano.
+    fn existing_output_is_a_commit_phase_conflict() {
         let directory = tempfile::tempdir().expect("tempdir");
         let destination = directory.path().join("output.bin");
         std::fs::write(&destination, b"vecchio").expect("fixture");
-        let error = publish_atomic(&destination, |writer| {
+        let error = publish_with_profile(&destination, PublishProfile::Atomic, |writer| {
             writer.write_all(b"nuovo")?;
             Ok(())
         })
@@ -745,18 +912,51 @@ mod tests {
         assert_eq!(error.phase_tag(), Some(ErrorPhase::Commit));
         assert_eq!(
             error.to_string(),
-            format!(
-                "contract violation: output gia' esistente: {}",
-                destination.display()
-            ),
-            "testo Display invariato"
+            format!("conflict: output gia' esistente: {}", destination.display())
         );
-        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Conflict);
         assert_eq!(
             error.retry_disposition(),
             plenora_core::RetryDisposition::Never
         );
-        assert!(matches!(error.untag(), PlenoraError::InvalidPlan(_)));
+        assert!(matches!(error.untag(), PlenoraError::Conflict(_)));
+        assert_eq!(
+            std::fs::read(&destination).expect("lettura"),
+            b"vecchio",
+            "e cio' che c'era non e' stato toccato"
+        );
+    }
+
+    /// **La stessa classe se la collisione si scopre al commit.**
+    ///
+    /// E' il caso che il controllo preliminare non puo' vedere: la
+    /// destinazione compare **mentre** si scrive. Se le due strade dessero
+    /// classi diverse, la stessa condizione avrebbe due nomi a seconda di
+    /// quanto e' durata la scrittura, e chi automatizza dovrebbe conoscerli
+    /// entrambi.
+    #[test]
+    fn a_destination_appearing_during_the_write_is_the_same_conflict() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("output.bin");
+        // La destinazione non c'e' quando si entra: il controllo preliminare
+        // passa. Compare dentro la closure, cioe' dopo.
+        let error = publish_with_profile(&destination, PublishProfile::Atomic, |writer| {
+            writer.write_all(b"nuovo")?;
+            std::fs::write(&destination, b"arrivato prima").map_err(PlenoraError::Io)?;
+            Ok(())
+        })
+        .expect_err("il persist trova il nome occupato");
+        assert_eq!(
+            error.category(),
+            plenora_core::ErrorCategory::Conflict,
+            "scoperta al commit, stessa classe del controllo preliminare"
+        );
+        assert_eq!(error.phase(), ErrorPhase::Commit);
+        assert_eq!(
+            std::fs::read(&destination).expect("lettura"),
+            b"arrivato prima",
+            "chi e' arrivato prima resta"
+        );
     }
 
     #[test]
@@ -764,7 +964,7 @@ mod tests {
         // Riconoscimento preliminare della destinazione: fase Probe.
         let directory = tempfile::tempdir().expect("tempdir");
         let destination = directory.path().join("assente").join("output.bin");
-        let error = publish_atomic(&destination, |writer| {
+        let error = pubblica_ignorando_l_esito(&destination, |writer| {
             writer.write_all(b"x")?;
             Ok(())
         })
@@ -805,10 +1005,11 @@ mod tests {
         // restano derivati per variante (DataMapping -> Write), senza tag.
         let directory = tempfile::tempdir().expect("tempdir");
         let destination = directory.path().join("output.bin");
-        let error = publish_atomic(&destination, |_writer| -> Result<(), PlenoraError> {
-            Err(PlenoraError::DataMapping("errore del chiamante".into()))
-        })
-        .expect_err("closure fallita");
+        let error =
+            pubblica_ignorando_l_esito(&destination, |_writer| -> Result<(), PlenoraError> {
+                Err(PlenoraError::DataMapping("errore del chiamante".into()))
+            })
+            .expect_err("closure fallita");
         assert_eq!(error.phase(), ErrorPhase::Write);
         assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
         assert_eq!(error.to_string(), "errore del chiamante");
@@ -878,7 +1079,7 @@ mod tests {
         // procfs (f_type 0x9fa0) non e' nella whitelist dei filesystem
         // locali: in dubbio, rifiutare — prima di creare qualunque tempfile.
         let destination = Path::new("/proc/plenora-publish-non-deve-esistere.bin");
-        let error = publish_atomic(destination, |writer| {
+        let error = pubblica_ignorando_l_esito(destination, |writer| {
             writer.write_all(b"x")?;
             Ok(())
         })

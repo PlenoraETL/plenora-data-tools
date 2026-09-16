@@ -169,6 +169,51 @@ Un fallimento di `fsync` **dopo** il rename è una condizione dichiarata: il
 rename è già avvenuto, e l'errore riporta l'effetto reale invece di fingere
 che non sia successo nulla.
 
+### Una destinazione occupata è un `Conflict`, per entrambe le strade
+
+**La regola.** Se la destinazione esiste, la pubblicazione fallisce con
+`PlenoraError::Conflict`, fase `Commit`, e non tocca ciò che c'era. Vale sia
+per il controllo che precede la scrittura, sia per l'`AlreadyExists` che il
+commit osserva.
+
+**Perché `Conflict` e non `InvalidPlan`.** Perché la variante è documentata per
+questo caso — «destinazione già esistente o conflitto di scrittura» — e la sua
+fase è `Commit` per costruzione. Il piano, quando la destinazione è occupata,
+non ha niente di sbagliato: è il posto a essere preso. Chiamarlo piano invalido
+manda chi legge a correggere qualcosa che è già corretto, e cambia l'exit code
+da 5 — condizione operativa — a 2, che dice «sistema qualcosa a monte prima di
+riprovare».
+
+**Perché le due strade devono concordare.** Perché il controllo preliminare è
+un'anticipazione, non l'autorità: fra lui e il commit c'è la scrittura intera, e
+la destinazione può comparire nel mezzo. L'autorità è l'`AlreadyExists`
+osservato al persist, che parla dell'unico istante che conta. Se le due strade
+dessero classi diverse, la stessa condizione avrebbe due nomi a seconda di
+quanto è durata la scrittura, e chi automatizza dovrebbe conoscerli entrambi.
+
+**Che cosa cambia per chi legge.** L'exit code di una destinazione occupata
+passa da 2 a 5 e il testo da `contract violation:` a `conflict:`. È un
+cambiamento visibile, ed è la correzione di una classificazione che i documenti
+già prescrivevano e il codice non applicava.
+
+### La pulizia del temporaneo esce sempre nella stessa forma
+
+`temp_cleanup` è **sempre un oggetto**, anche quando lo stato è `removed`: chi
+consuma il documento non deve prima scoprire di che tipo sia il valore, e il
+giorno che «rimosso» acquistasse un campo la forma non cambierebbe sotto chi la
+legge. Lo stato sta sempre in `state`; gli altri campi dipendono da lui.
+
+Il percorso del residuo **non passa da `Path::display()`**, che è dichiaratamente
+lossy: sostituisce con `U+FFFD` ciò che non è testo valido, e su Unix un percorso
+è una sequenza di byte che non deve essere testo. Un'indicazione di bonifica con
+un carattere sostituito indica un file che non esiste, ed è peggio di nessuna
+indicazione — manda a cancellare il nome sbagliato, o a cercare invano.
+
+`path_encoding` è **sempre** presente e dichiara come leggere il resto: `utf8`
+col campo `path`, che è il caso ordinario e resta leggibile da un umano;
+altrimenti `unix_bytes` o `windows_utf16` col campo `path_units`. Il dettaglio,
+e come si ricostruisce, sta più avanti in questo documento.
+
 ## Memoria governata
 
 `max_governed_memory_bytes` è un **budget di ammissione** della memoria che la
@@ -531,6 +576,7 @@ consumatore attuale le interpreta: il rischio è limitato a un'incompatibilità
 di **nomi**, coperta dalla migrazione se i nomi ratificati risultassero
 diversi.
 
+<a id="arrow-transform-in-quarantena"></a>
 ### `arrow_transform` in quarantena nel fuzzing
 
 Il target fuzz `arrow_transform` è **disattivato**. Non perché la barriera non
@@ -917,29 +963,151 @@ interno.
 
 ### Moduli compilati solo sotto `test` e `internals`
 
-**La regola.** `plenora_engine::protocollo` e `plenora_engine::verifica` sono
-compilati solo con `#[cfg(any(test, feature = "internals"))]`;
-`plenora_engine::commit_footer::leggi_commit_token` e
-`geo_transport::ipc::parse_footer` solo con `#[cfg(test)]`. Non è
-un'ottimizzazione: è la dichiarazione che quel codice **non ha ancora un
-chiamante di produzione**.
+**La regola.** `plenora_engine::verifica` — i passi da 3 a 8-bis — insieme al
+passo 9 che ne consuma la prova, al supporto esclusivo di entrambi, a
+`commit_footer::leggi_commit_token` e a `geo_transport::ipc::parse_footer` è
+compilato solo sotto `test` o la feature `internals`. Non è un'ottimizzazione: è
+la dichiarazione che quel codice **non ha ancora un chiamante di produzione**.
 
-**Il perimetro.** Il modulo `protocollo` per intero — messaggi, codifica,
-lettore limitato, handshake — il modulo `verifica`, che esegue i passi da 3 a
-8-bis della sequenza di [`isolamento.md`](isolamento.md), la sola funzione di
-lettura del token dal footer, e la forma breve di `parse_footer` (da quando la
-convalida estrae anche un custom metadata, la produzione passa tutta per
+**Perché il passo 9 non basta a togliere il `cfg` al verificatore.** Perché
+`pubblicazione::pubblica` **non chiama** il verificatore: riceve la prova già
+fatta. La catena verifica → passo 9 è compiuta e non è percorsa da nessuno; chi
+la percorrerà è il supervisore, che osserva lo stato terminale del figlio e il
+suo `Esito` — i passi 1 e 2 — e arriva con la PR del lato supervisore.
+
+**Perché non si è scelto di renderli pubblici.** Perché sarebbe stata la
+scorciatoia che questo registro vieta, in una forma più difficile da vedere.
+`dead_code` tace davanti a una funzione pubblica **anche quando nessuno può
+chiamarla**: rendere `pub` il verificatore avrebbe tolto dieci avvisi senza
+togliere una riga di codice non usato, e per giunta avrebbe allargato la
+superficie — `DigestArtefatto` e `ConteggiDichiarati` sarebbero dovuti uscire
+con lui, perché le firme li nominano. Una superficie pubblica si decide, non si
+eredita da un avviso.
+
+**Che cosa è invece uscito dal perimetro con `PR-10`, e perché.** Solo ciò che ha
+acquistato un chiamante di produzione vero, che è `pubblicazione::risolvi_commit`:
+
+| elemento | chi lo chiama ora |
+|---|---|
+| `commit_footer::interpreta_commit_token` | `risolvi_commit`, per giudicare il token trovato |
+| `ipc_boundary::convalida_artefatto_con_causa` | `risolvi_commit`, che apre **una volta sola** e vuole la causa fine |
+| `ipc_boundary::ArtefattoConvalidato` e `in_batches` | `risolvi_commit`, per percorrere i corpi |
+
+Restano invece sotto `cfg` `convalida_artefatto` — la forma che traduce la causa
+in `PlenoraError`, che serve al solo verificatore — e i metodi
+`ArtefattoConvalidato::duplica`, `misura_ora`, `byte_totali`, `leggi_a`, più
+`geo_transport::ipc::SeekSource::lettore`: li usa la sola catena verifica → passo
+9. Un `cfg` sul modulo che lasciasse scoperto ciò che solo quel modulo usa non
+sarebbe un perimetro, ma una linea tracciata a metà.
+
+**Il conto è misurato, non asserito, e la piattaforma cambia che cosa dice.**
+
+Su **Linux** — dove tutta la catena dell'isolamento è compilata e ha i propri
+chiamanti — `RUSTFLAGS="-D dead-code" cargo check -p plenora-engine` è **pulito**:
+zero diagnostiche. Non è un confronto fra due numeri, è un'affermazione assoluta,
+e il gate è fail-closed: una sola voce morta lo fa fallire.
+
+Su **Windows** la stessa misura ne rende **177**, e non è un difetto di `PR-10`:
+il codice `cfg(target_os = "linux")` non è compilato, quindi ciò che solo lui usa
+— la matrice di classificazione, il lato supervisore del protocollo — resta senza
+consumatori. Il numero è **177 prima** di `PR-10` e **177 dopo**, confrontate una
+per una: nessuna nuova, nessuna sparita.
+
+**La misura si prende contando tutte le righe `error:`**, non quelle che
+cominciano per `function`, `struct` o `method`. Un elenco di forme lascia fuori
+`field … is never read`, ed è esattamente ciò che è successo a una stesura
+precedente di questa riga: il conto su Windows tornava mentre su Linux un campo
+diventato illeggibile faceva fallire il gate. Un conteggio che filtra per forme
+note conta ciò che ci si aspetta di trovare — ed è la ragione per cui la misura
+autoritativa è quella di Linux, che non conta niente e si limita a passare o
+fallire.
+
+Il `cfg` sul modulo `protocollo` **è caduto con `PR-9`**, e la condizione che lo
+reggeva era scritta: serviva un chiamante esterno al modulo. Quel chiamante è il
+worker, che si descrive, legge il `Saluto`, giudica l'accordo e risponde — da
+codice di produzione, raggiunto dal dispatch della riga di comando. Ciò che
+dentro il modulo non ha ancora un chiamante lo dichiara ora **elemento per
+elemento**, perché un `cfg` sul modulo intero direbbe che nessuno lo usa, e non
+è più vero.
+
+**Il perimetro.** Il modulo `verifica`, che esegue i passi da 3 a 8-bis della
+sequenza di [`isolamento.md`](isolamento.md), la sola funzione di lettura del
+token dal footer, e la forma breve di `parse_footer` (da quando la convalida
+estrae anche un custom metadata, la produzione passa tutta per
 `parse_footer_estraendo`). `commit_footer::scrivi_commit_token` è invece
 incondizionato, perché il writer in-process lo chiama davvero (con `None`).
 
-Il perimetro include anche il **supporto esclusivo del verificatore**, che ha
-lo stesso stato — nessun chiamante di produzione fino a `PR-10` — e che senza
-`cfg` sposterebbe altrove gli avvisi che il `cfg` doveva chiudere:
-`commit_footer::interpreta_commit_token`, `Esadecimale32::dai_byte`,
-`ipc_boundary::ArtefattoConvalidato` con i suoi metodi, e
-`ipc_boundary::convalida_artefatto`. Un `cfg` sul modulo che lascia scoperto
-ciò che solo quel modulo usa non è un perimetro, è una linea tracciata a
-metà.
+Dentro `protocollo` il perimetro non è più il modulo ma un **elenco**, e
+l'elenco l'ha prodotto `-D dead-code` su Linux, non una lettura a mano:
+
+- il lato supervisore dell'handshake, sotto `any(test, internals)`:
+  `AtteseSupervisore`, `SupervisoreInAttesa` con i suoi metodi,
+  `confronta_capability` e `HandshakeAccettato`. Non li raggiungono soltanto i
+  casi: li guida anche il percorso di qualificazione end-to-end
+  (`isolamento::prova`), che sotto `internals` conduce un worker reale — ed è la
+  ragione per cui il `cfg` non è il solo `test`. `HandshakeAccettato` lo
+  **nomina** inoltre `isolamento::macchina::produttori`.
+
+  Di produzione non diventano con questo: il supervisore che `PR-8` costruisce
+  riceve un accordo **già concluso**, quindi non passa da lì, e il chiamante di
+  produzione arriva con `PR-12`, quando una policy sceglie l'esecuzione isolata;
+- gli **inventari generati dalle macro** dei messaggi, `TUTTE` e `NOMI`, sotto
+  `cfg(test)`. Esistono per essere enumerati dai casi che attraversano ogni
+  variante; la produzione converte una variante per volta e non ha bisogno
+  dell'elenco. Né il fuzzer né la facciata `interni` li nominano, e un `cfg` più
+  largo dichiarerebbe un chiamante che non esiste;
+- `WorkerAccordato::commit_token`, sotto `cfg(test)`: è una **seconda porta** sul
+  token, che chi esegue riceve invece da `ricevi_incarico`, insieme
+  all'incarico e nello stesso momento.
+
+Fuori dal protocollo, la stessa regola tiene tre elementi dell'isolamento:
+
+- `SorgenteTerminabile::nuova` e `SorgenteTerminabile::con_passo`, sotto
+  `any(test, internals)`. Creano il freno **insieme** alla sorgente, ed è la
+  forma che serve al supervisore; il worker ha bisogno del contrario — il freno
+  prima, perché il thread che legge nasce dopo — e passa da `con_interruttore`,
+  che infatti è incondizionata;
+- `FiglioVivo::attendi_la_fine`, sotto `any(test, internals)`. È la porta che
+  **aspetta senza segnalare**, e la usa il percorso di qualificazione: la
+  produzione, oggi, non ha un cammino in cui concedere cortesia a un figlio —
+  quando ne avrà uno, con `PR-12`, il `cfg` cadrà da sé sotto il gate;
+- `isolamento::prova`, il percorso end-to-end per intero, sotto
+  `all(target_os = "linux", any(test, internals))`. Non è un pezzo del
+  programma: è il modo in cui si prova che i pezzi si parlino, e guida il lato
+  supervisore dell'handshake, che di produzione non è ancora.
+
+Un elemento del filo che avesse un chiamante solo di prova senza dirlo
+lascerebbe l'avviso a qualcun altro: è la ragione per cui l'elenco si aggiorna
+insieme al gate, e non dopo.
+
+Il **supporto esclusivo del verificatore** è nel perimetro insieme a lui, e per
+intero: `ipc_boundary::convalida_artefatto` e i metodi
+`ArtefattoConvalidato::duplica`, `misura_ora`, `byte_totali` e `leggi_a`, più
+`geo_transport::ipc::SeekSource::lettore`. Un `cfg` sul modulo che lasciasse
+scoperto ciò che solo quel modulo usa non sarebbe un perimetro, ma una linea
+tracciata a metà.
+
+Ne sono usciti con `PR-10` i soli elementi che un chiamante di produzione l'hanno
+davvero — `commit_footer::interpreta_commit_token`,
+`ipc_boundary::convalida_artefatto_con_causa`, `ArtefattoConvalidato` col suo
+`in_batches` — e quel chiamante è `pubblicazione::risolvi_commit`, che apre la
+destinazione una volta sola e ne percorre i corpi.
+
+`Esadecimale32::dai_byte` **ne è uscita** con `PR-9`, e per la ragione scritta
+nella sua documentazione: serve a chi il valore lo *calcola* invece di
+riceverlo come testo. Il worker calcola lo SHA-256 dell'artefatto che ha
+appena scritto e lo deve dichiarare nell'`Esito`; senza quella funzione
+formatterebbe i byte a mano, e nel crate ci sarebbero due grafie esadecimali al
+posto di una.
+
+Sono uscite dal perimetro, sempre con `PR-9` e sempre perché hanno acquistato un
+chiamante di produzione, anche `canale::VARIABILE_DEL_CANALE` con
+`in_variabile`, `EstremiDelWorker` con `numeri` e `rendi_ereditabili`,
+`accerta_monothread`, `accerta_topologia` e `apri`. Non è una lettura a mano:
+sono esattamente gli avvisi che spariscono confrontando `cargo clippy
+--workspace --all-targets` sull'albero e sulla base. Il verso opposto — un
+elemento che *entra* nel perimetro — resta quello che l'elenco qui sopra
+registra elemento per elemento.
 
 **Perché due `cfg` diversi e non uno.** `protocollo` e `verifica` portano anche
 l'arm `internals` perché la facciata `interni` è il modo in cui il fuzzer li
@@ -966,30 +1134,957 @@ di produzione, quindi un errore che si manifestasse solo lì non verrebbe visto
 da `cargo build`. È coperto: `cargo test` e `cargo clippy --all-targets` lo
 compilano entrambi, e la CI li esegue tutti e due.
 
-**La condizione di rientro.** Il `cfg` su `protocollo` sparisce quando esiste
-un chiamante esterno al modulo, cioè con **`PR-8`** — il supervisore con
-worker fittizio. Non con `PR-5`: l'handshake che `PR-5` aggiunge sta *dentro*
-`protocollo`, quindi ne consuma i messaggi ma non è un chiamante del modulo, e
-toglierlo lì rimetterebbe in piedi le decine di `dead_code` che il `cfg`
-evita — verificato rimuovendolo e leggendo l'output, non dedotto.
+**La condizione di rientro.** Quella su `protocollo` è **soddisfatta**, e non
+lo era prima: non con `PR-5`, perché l'handshake che `PR-5` aggiunge sta
+*dentro* `protocollo` e ne consuma i messaggi senza esserne un chiamante; e non
+con `PR-8`, che porta il ciclo di vita del supervisore ma lo compila sotto
+`internals`, quindi non gli dà un chiamante di produzione. È `PR-9`, col worker
+reale nell'eseguibile distribuito, a soddisfarla — verificato togliendo il `cfg`
+e leggendo l'output del gate, non dedotto: i diciassette elementi rimasti
+scoperti sono stati dichiarati uno per uno o collegati.
 
-Il `cfg` su `verifica` sparisce con **`PR-10`**, che è la PR della sequenza di
-verifica e publish: è lì che il verificatore acquista un chiamante di
-produzione, non con `PR-8`, che porta il ciclo di vita del supervisore e un
-worker fittizio.
+I `cfg` per elemento cadono a loro volta quando il chiamante arriva: quelli del
+lato supervisore con `PR-12`, gli inventari quando la produzione avrà una
+ragione per enumerare le varianti — e finché non l'ha, non gliene si inventa
+una.
 
-Il `cfg` su `leggi_commit_token` sparisce anch'esso con **`PR-10`**, e non con
-`PR-6` come questo registro prevedeva: il verificatore deve riferire framing,
-token, digest e consegna ad Arrow **a un solo handle**, mentre quella funzione
-fa una traversata propria — chiamarla significherebbe convalidare due volte,
-con una finestra in mezzo. Il verificatore estrae quindi il token durante la
-**propria** traversata, e condivide con quella funzione la sola parte che
-potrebbe divergere: l'interpretazione del testo trovato, in
-`interpreta_commit_token`.
+Il `cfg` su `verifica` **non** è sparito con `PR-10`, e la previsione di questo
+registro era troppo ottimista: `PR-10` porta il passo 9, ma il passo 9 riceve la
+prova, non la produce, quindi la catena resta senza chi la attraversi. Sparirà
+con la PR che porta il **lato supervisore**, cioè chi osserva lo stato terminale
+del figlio e il suo `Esito` e da lì entra nella sequenza. Non con `PR-8`, che
+porta il ciclo di vita e un worker fittizio.
+
+Di `leggi_commit_token` è uscita col medesimo giro la sola
+`interpreta_commit_token`, e non l'intera funzione. Il verificatore deve
+riferire framing, token, digest e consegna ad Arrow **a un solo handle**, mentre
+`leggi_commit_token` fa una traversata propria: chiamarla significherebbe
+convalidare due volte, con una finestra in mezzo. Il verificatore estrae quindi
+il token durante la **propria** traversata, e condivide con quella funzione la
+sola parte che potrebbe divergere — l'interpretazione del testo trovato. È
+quella ad avere un chiamante di produzione, in `pubblicazione::risolvi_commit`;
+`leggi_commit_token` resta sotto `cfg(test)` finché un percorso di produzione
+non voglia la sua traversata.
 
 Il `cfg` su `parse_footer` sparisce il giorno che un percorso di produzione
 torni a volere i soli blocchi; finché non esiste, la funzione è scaffolding dei
 test e sta scritto che lo è.
+
+**Il dominio di isolamento ha lo stesso perimetro, e due condizioni di rientro
+invece di una.** `plenora_engine::isolamento` sta sotto
+`#[cfg(any(test, feature = "internals"))]` come `protocollo` e `verifica`, e la
+sua visibilità cade quando esiste un supervisore che lo chiama in produzione,
+cioè con **`PR-8`**. Il `cfg` di piattaforma sui sottomoduli che toccano il
+kernel resta invece finché non esiste un secondo dominio supportato. Sono
+indipendenti, e vanno scritte separate: se fossero una condizione sola, la
+rimozione della prima porterebbe via anche la seconda.
+
+L'orchestrazione e i suoi casi sono **multipiattaforma** — provano la
+procedura, non l'ambiente — quindi `cfg(target_os = "linux")` sta sui soli
+sottomoduli. Un `cfg` di piattaforma sul modulo intero renderebbe i casi
+deterministici non compilati altrove, cioè verdi per assenza.
+
+### Il profilo isolato non descrive l'ambiente `proj-backend`
+
+**La regola.** Con la feature `proj-backend` attiva, il worker **rifiuta prima
+dell'handshake**: `protocollo::descrizione::di_questa_build` rende
+`PlenoraError::InvalidConfiguration` e nessun `Saluto` viene letto. Il profilo
+isolato di `PR-9` è quello **senza** backend CRS, e l'`Ambiente` che dichiara ha
+un insieme di risorse realmente vuoto: `acquisizione_dinamica = false`,
+`risorse = []`, `backend_dinamici = []`, e il digest dell'insieme è quello
+canonico, versionato e domain-separated dell'insieme vuoto
+(`plenora:insieme-risorse:v1`).
+
+Il rifiuto è **tipizzato**, non un messaggio: la variante dice che è una
+condizione della *build* e non dell'esecuzione, perché chi la legge deve poter
+cambiare build e non riprovare.
+
+**Perché non si descrive.** Perché descrivere un ambiente vuol dire elencarne
+le risorse e digerirle, e ciò si può fare solo se la radice da cui provengono è
+esclusiva, immutabile e nota. Con PROJ non lo è: l'API che fissa i percorsi li
+**aggiunge** a quelli esistenti invece di sostituirli, e la cache delle griglie
+è attiva per default. Non c'è quindi un insieme di cui si possa dire «è tutto, e
+non cambia».
+
+**Il pericolo che copre.** Un digest ricavato dal solo searchpath sarebbe una
+**falsa garanzia**: due macchine con lo stesso searchpath e contenuti diversi lo
+condividerebbero, e l'handshake direbbe «stesso ambiente» su due ambienti
+diversi — cioè accetterebbe un worker che riproietta diversamente dal
+supervisore. È l'esito peggiore dei tre possibili, perché non somiglia a un
+errore: somiglia a un accordo.
+
+**Che cosa questo perde, e va detto.** L'esecuzione isolata non è disponibile
+per le build con PROJ, che sono quelle che riproiettano davvero. Il limite è
+quindi sul profilo utile, non su un caso marginale, e per questo il rientro è
+scritto invece di essere rinviato.
+
+**La condizione di rientro.** Il profilo PROJ rientra quando **un unico
+provider** — non cinque punti che si coordinano — soddisfa tutte e cinque le
+condizioni:
+
+1. fissa percorsi **esclusivi e in sola lettura**, sostituendoli e non
+   aggiungendoli a quelli dell'ambiente;
+2. **disabilita rete e cache**, perché entrambe possono introdurre una risorsa
+   dopo che il digest è stato calcolato;
+3. **inventaria e digerisce tutte** le risorse disponibili, non un
+   sottoinsieme scelto dal chiamante;
+4. **identifica versione e percorsi risolti**, così che due lati che
+   convengono convengano su qualcosa di verificabile;
+5. **alimenta lo stesso resolver realmente usato nell'esecuzione**, perché una
+   descrizione che riguardasse un resolver diverso da quello che risolve
+   sarebbe vera e inutile.
+
+Un provider che ne soddisfacesse quattro non basta, e la quinta è quella che si
+dimentica: è ciò che tiene insieme la descrizione e il comportamento. La scelta
+del resolver esce da un **selettore tipizzato** unico
+(`plenora_engine::risolutore::Risolutore`), che rende insieme la funzione che
+risolve e l'identità che la nomina, con un caso che pretende che le due
+concordino; senza quel selettore le cinque condizioni potrebbero essere
+soddisfatte e la descrizione riguardare comunque un'altra implementazione.
+
+### L'apertura dell'artefatto temporaneo: quali generi sono dell'incarico
+
+**La regola.** `executor::output::non_apribile` classifica il rifiuto
+dell'apertura esclusiva leggendo il **genere** dell'errore, non il suo testo, e
+l'elenco dei generi che parlano dell'incarico è una tabella —
+`GENERI_DELL_INCARICO` — non una catena di rami.
+
+| genere | fase | che cosa dice |
+|---|---|---|
+| `AlreadyExists` | `Commit` | il percorso è già occupato |
+| `NotFound` | `Probe` | la directory che lo conterrebbe non esiste |
+| `InvalidInput` | `Probe` | il percorso non è di una forma che il sistema accetti (un byte NUL, per dire) |
+| `NotADirectory` | `Probe` | un componente intermedio è un file |
+| `IsADirectory` | `Commit` | il percorso nomina una directory dove serve un file |
+
+Tutto il resto — permessi, disco pieno, filesystem in sola lettura — resta `Io`
+con fase `Write`: è l'ambiente che risponde di no, e correggere l'incarico non
+servirebbe.
+
+**Perché i tre generi di forma ci sono.** Il protocollo limita la **lunghezza**
+del percorso, non la sua forma: un percorso con un NUL, uno che passa per un
+file, uno che nomina una directory arrivano tutti all'apertura. Non è teoria —
+un caso li produce con un'apertura vera, con gli stessi flag del percorso di
+scrittura, e pretende che finiscano fra i difetti dell'incarico.
+
+**Perché la ricaduta è il verso pericoloso.** Un difetto dell'incarico
+classificato `Io` manda chi legge a cercare un permesso o dello spazio che non
+c'entrano, mentre il percorso sbagliato resta dov'è: l'errore non si vede. Il
+verso opposto — un guasto d'ambiente chiamato `InvalidPlan` — è altrettanto
+falso ma si scopre subito, perché l'incarico che si va a controllare risulta
+corretto. Il mutante `mut-48` toglie `InvalidInput` dalla tabella e viene ucciso
+dal caso che la scorre.
+
+**La tabella dice come si classifica un genere, non quale genere una forma
+produca.** Quello lo decide il sistema, e i sistemi non concordano. Misurato con
+gli stessi flag del percorso di scrittura:
+
+| forma del percorso | Linux | Windows |
+|---|---|---|
+| un componente intermedio è un file | `NotADirectory` | `NotFound` |
+| il percorso nomina una directory | `AlreadyExists` | `PermissionDenied` |
+| il percorso contiene un NUL | `InvalidInput` | `InvalidInput` |
+
+Le prime e le terze righe non cambiano niente: i due generi sono entrambi in
+tabella, e la classificazione resta `InvalidPlan`.
+
+### Deviazione: su Windows una directory esistente è diagnosticata come ambiente
+
+**Ambito.** Solo Windows, e solo l'apertura esclusiva dell'artefatto temporaneo.
+
+**Il fatto.** Un percorso che nomina una directory esistente arriva come
+`PermissionDenied`, che **non è** fra i generi dell'incarico: viene quindi
+classificato `Io`, fase `Write`, come un qualunque rifiuto dell'ambiente. Su
+Linux lo stesso percorso arriva come `AlreadyExists` ed è `InvalidPlan`, fase
+`Commit`.
+
+**Perché la tabella non si allarga.** Perché `PermissionDenied` su Windows è
+indistinguibile da un permesso che manca davvero. Ammetterlo fra i generi
+dell'incarico direbbe «correggi il percorso» anche a chi ha un problema di
+permessi, e quello è il verso in cui l'errore non si vede: chi legge va a
+cambiare un percorso che è giusto. Fra due diagnosi imprecise si tiene la
+**conservativa** — meno precisa, mai falsa.
+
+**Il rischio che resta.** Su Windows, un incarico che indica una directory come
+percorso temporaneo riceve una diagnosi che parla di permessi. È corretta come
+categoria — l'apertura è stata negata — ma non indica il rimedio vero. È il
+prezzo dichiarato della scelta conservativa.
+
+**Nessun controllo preventivo.** Non si aggiunge un `is_dir()` prima
+dell'apertura: separare la domanda dall'atto aprirebbe una finestra fra i due —
+il percorso può cambiare in mezzo — e trasformerebbe una diagnosi imprecisa in
+una decisione sbagliata presa su uno stato che non c'è più. Il `create_new` è
+atomico e resta l'unico punto in cui si guarda.
+
+**Condizione di rientro.** Una distinzione **atomica** che separi «è una
+directory» da «non hai il permesso» senza una seconda interrogazione del
+filesystem — per esempio un codice d'errore nativo più fine, letto dallo stesso
+tentativo. Fino ad allora la deviazione resta, ed è provata: due casi
+pretendono il **genere reale** su ciascuna piattaforma, così che una piattaforma
+che cambiasse risposta faccia diventare rossi i casi invece di adattarsi in
+silenzio.
+
+### Il ritardo di ritentativo può non entrare sul filo, e allora si rifiuta
+
+**La regola.** `RetryDisposition::After` porta una `Duration`, che conta i
+millisecondi in `u128`; sul filo il ritardo è un `u64`.
+`protocollo::assi::ritentativo_sul_filo` **rifiuta** il valore che non ci entra,
+riportandolo come `Internal`, invece di saturare all'estremo.
+
+**Perché non si satura.** Perché saturando `Duration::from_millis(u64::MAX)` e
+qualunque durata più lunga arriverebbero sul filo come lo **stesso** valore: due
+domini distinti, un solo messaggio, e chi legge senza modo di sapere quale sia
+passato. È una perdita che non lascia traccia — la sola specie che nessun
+controllo a valle può riprendere — ed è la ragione per cui qui la conversione è
+fallibile e non totale.
+
+Che una durata simile non nasca da nessuna politica reale non cambia la forma
+del controllo: «non può accadere» è un ragionamento, non un controllo. Vale la
+regola generale del progetto, che un'invariante interna si verifica in modo
+fallibile e si riporta come `Internal`.
+
+**Che cosa succede quando il rifiuto scatta.** Chi lo incontra sta già
+riportando un guasto e non ha un secondo canale su cui riportare il guasto del
+riporto: `protocollo::assi::errore_dichiarabile` manda allora un errore
+**proprio** — categoria `Internal`, ritentativo `Never`, messaggio che porta sia
+la ragione del rifiuto sia il testo dell'errore che si stava riportando. Fase,
+effetto e posizione restano quelli osservati: il rifiuto riguarda un asse solo.
+
+**Oggi il ramo non si raggiunge, ed è dichiarato.** Nessuna variante di
+`PlenoraError` produce `After` — `plenora-core` lo scrive, perché non ci sono
+sorgenti di backoff tipizzate — quindi la guardia esiste per il giorno in cui
+una sorgente nascesse. Ciò che la guardia *dice* è comunque provato: la
+composizione del messaggio è una funzione a due parametri, e i casi la guardano
+direttamente. Il mutante `mut-47` rimette la saturazione e viene ucciso dal caso
+del millisecondo oltre il massimo.
+
+### La pulizia del temporaneo si osserva, e ha tre esiti
+
+**La regola.** Dopo il commit point, `publish_with_profile` **accerta** se il
+proprio temporaneo sia sopravvissuto, e lo riporta su un asse a sé:
+`PuliziaDelTemporaneo`, con tre valori — rimosso; presente, con **percorso e
+byte osservati**; non accertabile, con percorso e ragione sanitizzata.
+
+**Perché serve.** `persist_noclobber` non è una primitiva sola. Dove kernel e
+filesystem offrono `RENAME_NOREPLACE` il commit è un rename e non lascia
+niente; dove non la offrono si ripiega su `hard_link` seguito da `unlink`, e
+**l'errore dell'`unlink` è ignorato**. Il no-clobber regge lo stesso — il
+collegamento fallisce se il nome esiste — ma il temporaneo può restare senza
+che nessuno lo dica, ed è quel silenzio a contraddire la politica per cui un
+cleanup fallito è un esito riportato.
+
+**Perché tre esiti e non due.** Perché «non c'è» e «non ho potuto guardare» sono
+cose diverse, e un solo valore per entrambe le rende indistinguibili proprio
+dove la distinzione serve: chi legge concluderebbe «niente da bonificare» senza
+che nessuno abbia guardato. È fail-open, ed è la stessa ragione per cui la
+quiescenza di un dominio ha tre esiti.
+
+**Perché non porta la causa dell'`unlink`.** Perché `tempfile` non la espone.
+Riportarla vorrebbe dire inventarla: si dice ciò che si osserva, e la ragione
+riguarda l'osservazione, non il commit. La distinzione fra `ENOSYS` — che
+degrada l'intero processo — ed `EINVAL` — che vale per una chiamata sola —
+resta dov'è, dentro `tempfile`, perché il commit resta delegato a lui.
+
+**Dopo il commit nessuno dei due assi è un errore.** L'output è visibile, e
+nessun evento successivo può renderlo non riuscito: durabilità non confermata e
+temporaneo rimasto sono **avvertenze**. Dirle come fallimenti manderebbe chi
+legge a rifare una cosa già fatta, e rifarla troverebbe la destinazione
+occupata. Prima del commit, invece, un errore resta un errore.
+
+### Ogni comando che pubblica dice com'è andata la pulizia
+
+**La regola.** Nessun percorso che pubblica scarta l'esito. `run` — sia nel ramo
+DAG sia in quello legacy — `transform`, `transform-arrow`, `pair-arrow` e
+`spatial-join` emettono `durability_confirmed` e `temp_cleanup` nel proprio
+documento di successo.
+
+**Che cosa è cambiato, e perché va detto.** Il ramo legacy di `run` non stampava
+niente in caso di successo, e per un giro questa sezione ha registrato quel
+silenzio come **limite dichiarato**: l'avvertenza veniva osservata e consumata
+da una funzione dal nome esplicito, che però non la rendeva visibile a nessuno.
+Registrare un silenzio non lo toglie. Un'esecuzione che lascia un temporaneo e
+non lo dice resta un fallimento silenzioso anche se il codice dichiara di
+saperlo, e la regola del progetto è che un cleanup fallito sia un **esito
+riportato**.
+
+Il ramo legacy emette perciò ora un documento, come il ramo DAG dello stesso
+comando: il formato d'uscita è già JSON per contratto — `run` lo impone in testa
+— quindi non c'è un canale nuovo, c'è l'uso di quello che il comando dichiara di
+avere. La funzione che consumava l'avvertenza non esiste più, perché non ha più
+un sito.
+
+### Il percorso del residuo si dichiara nella codifica nativa
+
+**La regola.** `temp_cleanup` porta sempre `path_encoding`, che dice come
+leggere il resto: `utf8` col campo `path`, `unix_bytes` o `windows_utf16` col
+campo `path_units`, un vettore di interi.
+
+**Perché non `Path::display()`.** Perché è dichiaratamente lossy: sostituisce con
+`U+FFFD` ciò che non è testo valido. Un'indicazione di bonifica con un carattere
+sostituito indica un file che **non esiste**, ed è peggio di nessuna indicazione:
+manda a cancellare il nome sbagliato, o a cercare invano.
+
+**Perché non `OsStr::as_encoded_bytes`.** Perché è una forma **interna**, che la
+libreria standard dichiara non specificata: la si può ridare a `OsStr` nello
+stesso processo, e nient'altro è promesso. Chi legge il documento quel processo
+non ce l'ha, e non ha nessun contratto su come interpretare quegli ottetti.
+Riportarli sarebbe dire «esatti» di byte che nessuno sa rileggere.
+
+**Come si ricostruisce.** Con la funzione standard della propria piattaforma:
+`OsStringExt::from_vec` sugli ottetti Unix, `OsStringExt::from_wide` sulle unità
+UTF-16 di Windows. Sono le codifiche che i due sistemi usano davvero — su Unix
+un percorso è una sequenza di byte che non deve essere testo, su Windows una
+sequenza di unità UTF-16 che può contenere surrogati spaiati — e il caso che le
+verifica **ricostruisce dal documento** invece di riconfrontare col medesimo
+encoder, che direbbe soltanto che una funzione è uguale a sé stessa.
+
+### Una chiave riservata di `serde_json` non è ammessa nel JSON di controllo
+
+**La regola.** `$serde_json::private::RawValue` è rifiutata **come chiave**, a
+ogni posizione e profondità, in ogni documento JSON di controllo. Come *valore*
+stringa è testo qualunque e passa.
+
+**Perché.** `serde_json` riserva quel nome per trasportare JSON grezzo, e quando
+è la prima chiave di un oggetto non la legge come una chiave. Con un valore non
+stringa **fallisce**; con una stringa di JSON valido è peggio: **riesce**, e
+rende un documento diverso da quello scritto.
+
+```text
+{"$serde_json::private::RawValue": "{\"a\":1,\"a\":2}"}   →   {"a": 2}
+```
+
+Il testo letterale ha una chiave; il documento effettivo ne ha due uguali, già
+risolte con «vince l'ultima». È la stessa perdita della chiave duplicata portata
+all'estremo — il piano eseguito non è quello scritto — e **aggira il controllo
+dei duplicati**, perché la passata vede una chiave sola.
+
+**È una restrizione, non una correzione a costo zero.** Un documento con quella
+chiave in seconda posizione, o annidata dove nessuna riscrittura la riordina, non
+è ambiguo per nessun lettore, e viene respinto lo stesso. Si restringe perché la
+posizione non è una proprietà stabile: la canonicalizzazione riordina le chiavi e
+`$` precede ogni lettera, quindi una chiave innocua diventa la prima del testo
+canonico — ed è esattamente il percorso su cui `fuzz plan_v5_parse` ha trovato un
+canonico che il progetto stesso non rilegge.
+
+**L'escape non è una via d'uscita**: `serde_json` decodifica `\u0024`
+prima di consegnare la chiave, quindi la forma con escape è la stessa chiave e
+riceve lo stesso rifiuto.
+
+**Ambito.** `plenora_core::json::ensure_no_duplicate_keys`, cioè ogni lettore di
+JSON di controllo del progetto.
+**Condizione di rientro.** Il giorno che `serde_json` smetta di riservare quel
+nome, o offra un lettore che non lo reinterpreta.
+
+### La validazione OGC sta dietro una barriera
+
+**La regola.** Nessun sito di `plenora-kernels-geo` chiama `check_validation` di
+`geo` direttamente: tutti passano da `ValidazioneProtetta::validazione_protetta`,
+che cattura il panico e lo rende un errore.
+
+**Perché.** `check_validation` può andare in **panico** invece di rendere un
+errore: la sua `relate` costruisce un grafo topologico in virgola mobile e chiama
+`panic!` quando due conclusioni sullo stesso punto si contraddicono. Un panico
+dentro una libreria che riceve byte da fuori non è una diagnosi: è la fine del
+processo.
+
+**Dove il panico esiste, esattamente.** Il panico dei reperti è un
+**`debug_assert!`** (`edge_end_bundle_star.rs:116`), quindi vive solo dove le
+asserzioni di debug sono attive: la batteria e il target del fuzz. Il profilo
+`release` di questo progetto attiva `overflow-checks` ma **non**
+`debug-assertions`, e lì `geo` conclude regolarmente — i due reperti diventano
+`ElementsOverlaps(1, 2)`, cioè un rifiuto ordinario. Misurato: gli stessi casi
+sono verdi in entrambi i profili con attese diverse, e la variabile decisiva è
+isolata (`--release` con `-C debug-assertions=on` panica di nuovo).
+
+Non ne segue che la barriera sia superflua in produzione. Nella stessa funzione,
+venti righe più sotto, `assert!(left_position.is_some(), "found single null
+side")` **non** è condizionato dalle asserzioni di debug: un secondo cammino di
+panico resta attivo in `release`, e quello la barriera lo copre davvero.
+
+**Il difetto a monte è una precondizione, non l'algoritmo.** Il guardiano di quel
+`debug_assert!` chiede se la geometria sia valida, ma `propagate_side_labels`
+riceve **un solo** operando: entrambi i reperti sono `MultiPolygon` di tre
+poligoni in cui il conflitto nasce dalla *coppia* — relazionare il poligono 1,
+valido, con il 2, invalido. Il guardiano guarda il primo, non vede il secondo, e
+asserisce. Che sia una precondizione sbagliata e non un errore di calcolo lo
+mostra l'asimmetria: la stessa coppia nell'ordine invertito **non** panica e
+rende `InvalidPolygon(SelfIntersection)`. Nulla di ciò dimostra che l'algoritmo
+numerico sia corretto — dimostra che qui non è lui a essere in causa.
+
+`geo 0.33.1` è l'ultima versione pubblicata: non c'è un aggiornamento che lo
+chiuda. Una proposta di correzione è conservata fuori dall'albero, con base e
+impronta esatte, e **non è applicata**: il prodotto consuma `geo` dal registro,
+immutato.
+
+**Il canale `log` non è governato.** `geo` pubblica coordinate dell'ingresso
+anche fuori dal panico: il ramo alternativo all'asserzione è un `warn!` con lo
+stesso messaggio, e i `debug!` alle righe 83, 154 e 210 — **non** condizionati
+dalle asserzioni di debug, quindi presenti anche in `release` — stampano l'intera
+struttura topologica. Misurato con un logger a livello `DEBUG`: 49 righe con dati
+dell'ingresso su 54, in `release`. `panic_policy` non copre questo canale, e
+nemmeno la barriera: chi ospita il crate e installa un logger deve saperlo.
+
+**Perché condivisa.** I siti sono quarantaquattro. Una barriera per sito è una
+barriera che qualcuno dimenticherà; passando tutti dallo stesso metodo la difesa
+è una sola e si sposta con lei.
+
+**Che cosa non porta l'errore.** Il contenuto del payload. Il messaggio di `geo`
+nomina le **coordinate** che hanno provocato la contraddizione, cioè dati
+dell'ingresso: si pubblica la *forma* del payload, con la stessa nozione
+condivisa delle altre barriere.
+
+**La barriera da sola non basta.** L'hook di panico installato da `std` stampa il
+payload **prima** che `catch_unwind` lo veda: catturare il panico non impedisce
+all'hook di averlo già pubblicato. Chi ospita questo crate deve installare la
+politica sanitizzata di `plenora_core::panic_policy` — è la ragione per cui
+quella politica esiste.
+
+**Che cosa la barriera non è.** Un filtro sui numeri. Delle quattro coordinate
+che i due panici nominano, **tre sono normali** e una sola è subnormale:
+rifiutare una classe di magnitudini respingerebbe geometrie valide senza chiudere
+il difetto, che nasce dalla precisione della virgola mobile su punti molto
+vicini. Una geometria valida con coordinate minuscole continua a essere accettata,
+e un caso lo fissa.
+
+**La distinzione vale fino all'errore finale, non solo all'origine.** Un tipo che
+separa i due casi non serve a nulla se un chiamante li riunisce dopo. I punti
+dove la distinzione moriva, e che ora la conservano:
+
+- il trasporto — un `PlenoraError::Internal` cadeva nel ramo generico di
+  `From<PlenoraError> for ArrowTransportError` e diventava `Arrow(String)`; ora
+  esiste `ArrowTransportError::Interno`;
+- i due passi dell'executor, **fuso e non fuso**, che riscrivevano ogni
+  fallimento come `InvalidPlan`; ora chiedono entrambi
+  `ArrowTransportError::errore_del_passo`, che decide dalla variante — una
+  decisione sola per due chiamanti, perché due copie divergono;
+- l'adapter di colonna `geo.from_wkt`, che contava la validazione interrotta fra
+  le celle invalide e rendeva `DataMapping`; ora esce con `Internal` invece di
+  accusare una riga;
+- le due porte di `analyze` e il preflight dei piani, che scartavano l'errore
+  per dire «parametro non decodificabile» o «nodo non decodificabile»;
+- i due percorsi della misura terminale — `measure_cells` (fuso) e
+  `geo_measure_batch` (non fuso), per `geo.area`, `geo.length`,
+  `geo.perimeter`, `geo.vertex_count`, `geo.to_wkt` — che appiattivano ogni
+  fallimento del kernel scalare in `InvalidPlan` indipendentemente dalla
+  categoria sotto, sia alla decodifica della cella sia dentro il kernel; ora
+  condividono `causa_di_riga` ed `esito_kernel`, la stessa decisione per i
+  due percorsi.
+
+La regola: **chi converte l'errore della validazione guarda la categoria di
+sotto**, e non riattribuisce a chi ha scritto l'ingresso un difetto che nessuno
+gli ha dimostrato.
+
+**Precedenza quando un batch porta più fallimenti.** Un `Internal` prevale su
+qualunque fallimento ordinario dello stesso batch e propaga **senza
+diagnostica di riga**: mescolarlo alle celle davvero invalide misattribuirebbe
+le altre come se fossero dati sbagliati, quando nessuno lo ha dimostrato. Fra
+più `Internal` nello stesso batch resta il primo in **ordine logico di riga**,
+non quello che l'esecuzione ha calcolato per primo — il percorso fuso itera in
+parallelo, quindi l'ordine di calcolo non è l'ordine di riga. La regola è
+condivisa fra trasformazione (`collect_cell_failures`) e misura
+(`collect_measure_failures`): una decisione sola, non una per percorso.
+
+**Che cosa la barriera non chiude.** Il difetto del fuzz `wkb_contract`, che
+**resta aperto**. La barriera è contenimento e sanitizzazione: vale nei processi
+che consentono l'unwinding — la produzione e la batteria ordinaria — e lì i due
+reperti rendono un errore `Internal` senza pubblicare nulla. Dentro un target
+`libfuzzer-sys` non vale, per lo stesso meccanismo già registrato in
+[`arrow_transform` in quarantena nel fuzzing](#arrow-transform-in-quarantena):
+l'hook chiama `abort()` prima dell'unwinding, deliberatamente, perché un
+`catch_unwind` nel codice sotto test nasconderebbe i difetti al fuzzer. Misurato:
+`cargo fuzz run wkb_contract` sui reperti del 4 e 5 settembre 2026 termina con
+`deadly signal`.
+
+A differenza di `arrow_transform`, il target **non** va in quarantena: quel rosso
+è un difetto noto e aperto, e sostituire l'hook per ottenere il verde
+nasconderebbe anche i panici che la campagna deve trovare. Si chiude con il
+replay riuscito nel target reale, o con una revisione esplicita del contratto del
+target che offra un oracolo altrettanto efficace.
+
+**Dove vivono i reperti.** Nei **test versionati**, con i byte in chiaro:
+`tests/barriera_validazione.rs` e `tests/barriera_privacy_processo.rs`. Le copie
+in `fuzz/corpus/wkb_contract/` sono comode in locale ma `fuzz/corpus` è ignorato
+da Git: **non garantiscono** che i reperti raggiungano la campagna remota. Le due
+cose non vanno confuse — solo la prima è una regressione.
+
+**Ambito.** `plenora-kernels-geo`, ogni validazione OGC.
+**Condizione di rientro.** Il giorno che `geo` non abbia più cammini di panico
+raggiungibili da byte esterni: sia il `debug_assert!` dal guardiano incompleto,
+sia il `found single null side`, che è attivo anche in `release`.
+
+### DIFETTO APERTO: `wkt` panica su un multi con una geometria vuota
+
+**Non è un limite deliberato**, ed è per questo che non sta fra i
+[limiti dichiarati](#limiti-dichiarati): è un difetto noto, non presidiato, e
+registrato qui perché chi legge la barriera OGC non concluda che sia coperto.
+
+**Non lo è.** La barriera cattura i panici della *validazione*; questo avviene
+dopo, nella **serializzazione**.
+
+**Che cosa succede.** `wkt 0.14.0`, `src/to_wkt/geo_trait_impl.rs:242`, scarta
+con `unwrap()` l'`exterior()` del primo poligono di un `MultiPolygon`. Per un
+poligono vuoto quell'`Option` è `None`.
+
+**Raggiungibile dalla produzione, e in `release`.** Misurato su
+`plenora_kernels_geo::operations::to_wkt`, la porta dell'operazione di catalogo
+`geo.to_wkt`: la validazione OGC **accetta** le geometrie vuote — sono valide
+per OGC — quindi non ferma l'ingresso, e l'encoder panica subito dopo. L'`unwrap()`
+non è condizionato da `cfg(debug_assertions)`: vale in entrambi i profili.
+
+Non è quindi della stessa classe del panico di `geo` descritto sopra, che è un
+`debug_assert!` assente in `release`.
+
+**Ingresso minimo**, ridotto e verificato nei due versi: un `MultiPolygon` che
+contiene un poligono vuoto panica; il poligono vuoto da solo no.
+
+**Ambito.** Ogni cammino che serializzi in WKT una geometria multi che può
+contenere parti vuote. Non è stato censito quali altri cammini lo raggiungano.
+
+**Condizione di rientro.** Il giorno che `wkt` renda un errore invece di
+scartare quell'`Option`, o che la serializzazione stia dietro una barriera.
+
+Il reperto è passato a `plenora-memory-lab` con encoder, versione, punto di
+panico, ingresso minimo e misure per profilo.
+
+### Il filo porta un esito solo
+
+**La regola.** Il worker manda **un** `Esito`, e l'`Esito` ha una variante sola
+per volta. Quando un cammino produce due fatti — un panico del lavoro *insieme*
+a una violazione del canale di controllo — il filo ne porta uno, e del secondo
+sopravvive **l'esistenza, non l'identità**.
+
+Va detto esattamente, perché la formulazione facile è falsa. Il worker esce con
+il secondo errore, quindi il codice d'uscita non è zero; ma il supervisore
+osserva **il codice d'uscita**, non quel valore tipizzato né il suo motivo. Chi
+legge sa che qualcosa d'altro è andato storto — un'uscita non nulla dopo un
+`Panic` dichiarato lo dice — e non sa *che cosa*. Il messaggio esiste, e finisce
+nell'involucro d'errore su `stdout` del worker, che non attraversa il confine:
+la diagnostica di riga del worker non è osservata dal supervisore
+([§](#la-diagnostica-di-riga-non-attraversa-il-confine-del-worker)).
+
+**Quale dei due va sul filo.** Il panico. È ciò che il supervisore non potrebbe
+ricostruire da fuori: un processo che muore di panico e uno ucciso si vedono
+uguali dallo stato terminale, mentre un guasto del canale il supervisore lo
+vede da sé, perché è il suo canale.
+
+**Perché non si fondono in un messaggio.** Perché `Panic` porta la sola *forma*
+del payload — è un enum chiuso di tre valori — e non ha un campo di testo in cui
+infilare un secondo motivo. Aggiungerne uno vorrebbe dire aprire una porta per
+cui il contenuto di un panico può uscire, che è esattamente ciò che quella
+variante esiste per impedire. Quando invece i due fatti sono **due errori**,
+uno dei due è il contesto dell'altro e viaggiano insieme: un `ErroreSulFilo` ha
+un messaggio che li può portare entrambi.
+
+**Il pericolo che copre.** Che il secondo fatto sparisca **del tutto**. La
+sequenza di [`isolamento.md`](isolamento.md) guarda due cose — lo stato
+terminale (passo 1) e l'esito dichiarato (passo 2) — e senza questa regola un
+panico dichiarato conviverebbe con un'uscita zero, cioè con l'affermazione che
+per il resto è andato tutto bene.
+
+**Che cosa questo perde, e va detto per intero.** L'identità del secondo fatto.
+Il supervisore sa *che* c'è stato, dal codice d'uscita, e non *quale*: un guasto
+del canale, un messaggio fuori sequenza e un lettore andato in panico si vedono
+uguali da lì. Non è «lo trova nello stato terminale»: è «lo stato terminale dice
+che ce n'è uno».
+
+**La condizione di rientro.** Il protocollo trasporta il secondo fatto: un
+`Esito` che porti un elenco invece di una variante sola, oppure un campo
+accanto al `Panic` che nomini la classe del difetto concorrente senza portarne
+il contenuto. Non è una modifica locale — cambia la forma del messaggio, quindi
+la versione del protocollo — e finché non c'è, l'affermazione che si può fare è
+soltanto quella scritta qui: dell'altro fatto sopravvive l'esistenza.
+
+### Il worker non osserva il completamento per nodo
+
+**La regola.** Il campo `nodi_completati` del `Progresso` che il worker manda
+vale **sempre zero**. Righe e batch sono reali, cumulativi ed esatti; il terzo
+campo no, e questa riga è ciò che impedisce di leggerlo come se lo fosse.
+
+**Perché.** Perché l'esecuzione è uno stream: i nodi non finiscono uno dopo
+l'altro, restano attivi finché l'ultimo batch non è passato. Le metriche per
+nodo esistono dal primo istante — `ExecState::new` le crea tutte in una volta,
+una per kernel di ogni segmento — quindi contarle direbbe **quanti nodi ha il
+piano**, non quanti ne hanno finito il lavoro.
+
+**Perché zero e non quel numero.** Perché un progresso che parte al massimo e
+non si muove è peggio di zero: sembra un'informazione. Zero dice ciò che si
+osserva, e ciò che si osserva è niente.
+
+**Il pericolo che copre.** Che il supervisore, o un domani un'interfaccia,
+costruisca una percentuale di avanzamento su un numero inventato — e la mostri
+a chi decide se aspettare o interrompere.
+
+**La condizione di rientro.** Quando l'executor osserva il completamento per
+nodo. Non è una lettura di ciò che c'è: è una contabilità nuova sul percorso
+caldo, e va misurata prima di aggiungerla — un contatore per batch su ogni
+kernel è esattamente il genere di costo che non si nota finché non è in
+produzione.
+
+### Isolamento Linux: quattro deviazioni dello spawner
+
+Sono scelte che si allontanano dalla forma ovvia, e ciascuna ha una condizione
+di rientro propria. Il contesto è la sequenza di
+[`isolamento.md`](isolamento.md#9-bis-preflight-del-dominio-scrivere-non-e-configurare).
+
+**1. Sui descrittori si verifica e si rifiuta, non si chiude.** Un descrittore
+già aperto in scrittura sul filesystem del control plane sopravvive al cambio
+d'identità: il controllo dei permessi avviene all'apertura, non a ogni
+scrittura. La risposta ovvia sarebbe chiuderlo. Chiudere un descrittore
+ereditato per numero richiede però di costruirne un proprietario da un intero
+grezzo, e ogni via per farlo è `unsafe`, che questo progetto non ammette.
+
+Rifiutare è fail-closed e non richiede niente: un ambiente che ci passa un
+descrittore sul control plane non è un ambiente in cui possiamo isolare, e
+chiuderlo di nascosto nasconderebbe che qualcuno ce lo ha dato. *Rientro:* una
+via sicura per chiudere un descrittore ereditato, o una decisione esplicita sul
+perimetro `unsafe`.
+
+**2. Lo spawner deve essere monothread, e lo accerta.**
+`rustix::thread::{set_thread_groups, set_thread_res_gid, set_thread_res_uid}`
+sono i syscall **per-thread**: cambiano le credenziali del solo thread
+chiamante, non del processo. Il wrapper di glibc le propaga a tutti i thread
+con un segnale; queste no.
+
+In un processo monothread la differenza non esiste — c'è un thread solo, e la
+`exec` conserva le credenziali del chiamante uccidendo gli altri. In un
+processo multithread è un buco: gli altri thread restano privilegiati, e uno di
+essi può fare ciò che al thread spogliato è vietato. Da qui il primo passo
+della sequenza, che conta `/proc/self/task` e rifiuta se i task non sono
+esattamente uno, e il divieto: **queste API valgono solo lì**. *Rientro:* una
+API sicura che cambi le credenziali del processo intero.
+
+**3. Il passo 7 rilegge le credenziali, non l'identità intera.** Nella finestra
+fra il cambio d'identità e la `exec` il kernel azzera *dumpable* e passa
+`/proc/<pid>` a root: `ns` non è più attraversabile dal processo stesso.
+Namespace e descrittori si portano avanti dalla lettura del passo 4, ed è
+lecito perché in mezzo stanno solo `prctl` e le `setres*id`, che non aprono
+descrittori e non cambiano namespace.
+
+Riaprire l'accesso richiederebbe di rimettere *dumpable*, che è anche ciò che
+permette a un altro processo dello stesso uid di fare `ptrace` su questo:
+guadagnare uno specchio al prezzo di una porta. *Rientro:* nessuno previsto; la
+misura sta nel modo `finestra` di `scripts/verifica_isolamento_linux.sh`, e un
+kernel che concedesse la lettura anche lì renderebbe la scelta non obbligata,
+non sbagliata.
+
+**4. I due estremi del canale si riaprono, e gli ereditati restano aperti.** Il
+worker riceve i suoi due estremi come **numeri**, e un numero non si adotta
+senza `unsafe` — `OwnedFd::from_raw_fd` e `BorrowedFd::borrow_raw` lo sono
+entrambi. Ciò che si può fare senza è aprirne di nuovi attraverso
+`/proc/self/fd/<n>`, che rende descrittori posseduti e nati `CLOEXEC`.
+
+I due ereditati restano però aperti, e **non** sono `CLOEXEC`: il supervisore
+gliel'ha tolto apposta per farglieli ereditare. È misurato, non dedotto — dopo
+che il descrittore riaperto è caduto, il numero originale nomina ancora la
+stessa pipe.
+
+**La conseguenza è una non-garanzia.** «Il worker non avvia altri processi» è
+un'**invariante operativa**, non qualcosa che il codice impedisce: se un giorno
+il worker eseguisse qualcosa, se li porterebbe dietro, e un estraneo che tenesse
+aperto l'altro capo impedirebbe per sempre l'EOF del canale. Va detto qui perché
+non si deduca dal fatto che i descrittori riaperti sono puliti che lo siano
+anche gli altri. *Rientro:* lo stesso della deviazione 1 — una via sicura per
+chiudere un descrittore ereditato, o una decisione esplicita sul perimetro
+`unsafe`.
+
+**A quale condizione questa non-garanzia è accettabile.** Non da sola: una
+pipe trattenuta da un discendente deve poter produrre *un ritardo*, mai *un
+risultato sbagliato*. La condizione sta nella macchina a stati del supervisore,
+ed è vincolante:
+
+1. **`Esito` da solo non autorizza il successo.** Un messaggio che dice «ho
+   finito» è un'affermazione del worker, e un'affermazione non è una prova. Da
+   sola, autorizzerebbe a pubblicare mentre qualcosa è ancora vivo.
+2. **Servono anche le altre tre.** La morte del worker *e la sua raccolta* —
+   che sono due cose, perché un processo raccolto male resta zombie; l'**EOF**
+   del canale, che è ciò che dice che nessuno tiene più l'altro capo; e la
+   **quiescenza del dominio**, che è ciò che dice che nel cgroup non è rimasto
+   nulla. Nessuna delle quattro sostituisce le altre.
+3. **Un discendente che trattiene la pipe porta a timeout o incompletezza, mai
+   a pubblicazione.** È il modo in cui la non-garanzia si trasforma in un esito
+   dichiarato invece che in un danno silenzioso: l'EOF non arriva, il tempo
+   finisce, e l'esito dice che non si è potuto concludere — non che si è
+   concluso bene.
+
+### La proprietà del figlio non si scarica su una riga di rapporto
+
+Fra lo `spawn` e la consegna al chiamante il figlio sta sotto una **guardia**, e
+ogni uscita voluta o lo passa a qualcuno o lo chiude: le porte si chiamano per
+ciò che fanno — consegna, attesa, chiusura, arresto — perché un elenco numerato
+mentirebbe alla prima porta aggiunta. Nessuna di esse però garantisce di
+riuscire: un processo che non si lascia raccogliere entro il limite **esiste
+ancora**, e qualcuno deve restarne responsabile.
+
+La tentazione è una porta che rinuncia e prosegue — pid nel rapporto, difetto
+accanto, avanti. Si legge come diligenza ed è una perdita: la riga
+descrive un processo vivo, e poi lo lascia vivo. Nessuno lo aspetta, nessuno lo
+raccoglie, e il supervisore intanto dichiara di aver finito. **Quella porta non
+esiste**, e non deve esistere: sarebbe quella che tutti userebbero.
+
+Le vie sono quindi due, e nessuna delle due è silenziosa:
+
+1. **la guardia risale** a chi può ancora riprovare. La conduzione la porta fuori
+   nel proprio contorno, insieme al difetto che dice perché: chi ha chiamato ha
+   in mano un processo vivo, e la scelta — riprovare, farla risalire ancora,
+   fermarsi — è sua. Se la lascia cadere senza deciderla, la sentinella `Drop` è
+   ancora armata: la proprietà non si perde mai in silenzio, si perde con un
+   abort;
+2. **ci si arrende**, quando sopra non c'è nessuno. È il caso dello spawner: ciò
+   che quella funzione rende è un errore tipizzato, e un errore non tiene un
+   processo — attraversa i confini, viene convertito, e finisce in una superficie
+   pubblica dove una guardia non ha posto. Allora si ferma il processo dicendo
+   che cosa è successo, con una riga **diversa** da quella della sentinella: la
+   sentinella dice «sfuggito» e manda a cercare un cammino che non passa da
+   nessuna porta; la resa dice «non si è lasciato raccogliere, e nessuno può
+   riprovare» e manda a guardare il figlio.
+
+**La resa manda la terminazione, e riporta che cosa ha potuto fare.** `abort`
+ferma **noi**, non il figlio: un processo lasciato cadere non muore, passa al
+reaper del sistema e sopravvive al supervisore che dichiarava di fermarsi per non
+lasciarlo vivo. La resa tenta quindi esplicitamente la terminazione prima di
+fermarsi. Lo fa anche la sentinella, per la stessa ragione.
+
+**Nessuna delle risposte dice «terminato».** Mandare la terminazione non è
+osservare l'uscita: nel cammino ordinario `termina()` è seguita da
+`prova_a_raccogliere` proprio perché la prima non basta. Un `SIGKILL` accettato
+dice che il segnale è partito, non che il processo sia finito — uno in attesa
+ininterrompibile lo riceve e resta finché la chiamata di sistema non ritorna. In
+un log l'affermazione più forte del vero è peggio del silenzio: chi legge
+smetterebbe di cercare un processo che c'è ancora. Le tre risposte sono quindi:
+
+| risposta di `termina()` | ciò che si riporta |
+|---|---|
+| `Ok(())` | segnale di terminazione inviato; uscita non osservata |
+| `InvalidInput` | processo non più terminabile; uscita non osservata |
+| altro errore | segnale non inviato (*motivo*); può restare vivo |
+
+Nemmeno `InvalidInput` autorizza «già uscito»: il contratto dice «non più
+terminabile», che è compatibile con un figlio finito ma non lo prova.
+
+Non si raccoglie, invece, e non è una dimenticanza: dopo l'`abort` non c'è più
+nessuno che possa aspettare. Un figlio non raccolto passa al reaper del sistema,
+che se ne occupa; un figlio a cui **non** è arrivato niente è l'altro esito, ed è
+quello che la riga deve nominare.
+
+*Rientro:* la seconda via scompare quando lo spawner avrà sopra di sé un
+responsabile del ciclo di vita capace di **tenere una guardia** — cioè un
+chiamante che riceva `FiglioVivo` invece di un errore tipizzato. È una condizione
+tecnica, non una data: vale quando è soddisfatta, da chiunque la soddisfi.
+
+### Chi rinuncia a una nascita parziale chiude il dominio, e ne osserva la quiescenza
+
+Quando un produttore non nasce — il sistema rifiuta un thread — il tentativo non
+è «non cominciato»: il worker **esiste già**, può avere discendenti, e il primo
+produttore può avere già accodato. Chi si ritira fa quindi tutto ciò che fa una
+conduzione completa, tranne classificare: chiude il dominio, raccoglie il figlio,
+drena, e riporta.
+
+Chiudere il dominio non è però chiederne la chiusura. `cgroup.kill` è
+**asincrono**: la scrittura torna, e i processi muoiono dopo. Una rinuncia che si
+fermasse alla chiamata riporterebbe «ho chiesto» lasciando credere «è successo»,
+e i contatori di un dominio ancora abitato non sono un'osservazione. Si guarda
+quindi, fino all'attesa della quiescenza, e si accoda ciò che si è visto: la
+quiescenza se arriva, l'impossibilità se l'osservazione non riesce, e **niente**
+se il tempo finisce — perché «non si è svuotato entro» non è un fatto sul
+dominio, è l'assenza del fatto atteso, e la barriera lo tratta come tale. Il
+motivo va accanto, fra i difetti.
+
+Perché ci sia qualcuno che guarda, l'osservatore **torna indietro** dalla nascita
+mancata del sorvegliante: `Builder::spawn` lascia cadere la chiusura con tutto
+ciò che ha catturato, quindi l'osservatore viaggia in una cella condivisa e chi
+resta fuori lo ritrova lì. *Rientro:* nessuno previsto.
+
+### I quattro tempi del supervisore
+
+Sono il margine di cortesia, l'attesa della quiescenza, il tetto del drenaggio e
+l'arresto del lettore. Tutti e quattro sono limiti **governati**: costanti
+nominate nel codice, motivate lì, e registrate qui con regola, perimetro e
+condizione di rientro.
+
+Nessuno di essi è una stima di quanto ci vuole. I primi tre sono il punto oltre
+il quale continuare ad aspettare smette di essere un'attesa; il quarto non è
+un'attesa affatto, ma il passo con cui si guarda l'interruttore.
+
+**1. Il margine di cortesia dopo la decisione di chiudere: 2 secondi**
+(`MARGINE_DI_CORTESIA`). Fra la decisione di chiudere — un tempo scaduto, una
+cancellazione — e la quiescenza del dominio c'è del lavoro vero: il segnale
+arriva, i processi muoiono, il cgroup si svuota. Chiudere a zero riporterebbe
+«non quiescente» su domini che lo diventano un istante dopo, e quella riga
+manderebbe a cercare un residuo che non c'è.
+
+Non è però un'attesa: se il dominio non si svuota, non si svuoterà guardandolo
+più a lungo — c'è qualcosa che non muore, ed è un fatto da riportare. Il margine
+separa «ci ha messo un momento» da «non è successo». *Rientro:* nessuno
+previsto.
+
+**2. L'attesa della quiescenza dopo la forzatura: 500 millisecondi**
+(`ATTESA_DELLA_QUIESCENZA`). Non è il margine di cortesia con un altro nome: il
+margine si concede **prima** di forzare, a un worker che può ancora scegliere
+come chiudere; questa è il ritardo fra `cgroup.kill` e il suo effetto, e non è
+concessa a nessuno.
+
+Serve perché l'evidenza di un dominio non ancora vuoto è la fotografia di
+qualcosa che si muove. Il prototipo lo ha misurato: al ritorno della `wait`
+l'evidenza di OOM valeva zero, e duecento millisecondi dopo valeva uno. Senza
+questa attesa la stessa esecuzione diventerebbe `Timeout` oppure
+`LimiteAttribuito` secondo quando il kernel ha consegnato l'evento — e la
+differenza non starebbe nel worker.
+
+Mezzo secondo è il doppio abbondante di ciò che il prototipo ha visto, e non è
+una promessa che basti sempre. Se non basta, il dominio resta non quiescente,
+l'evidenza **non si legge**, e la conclusione dichiara la barriera incompleta:
+per un'osservazione che non si è potuta fare, dirlo è l'esito giusto.
+*Rientro:* se un giorno il kernel offrisse una notifica di svuotamento
+attendibile invece di un contatore da rileggere, l'attesa scomparirebbe con
+essa.
+
+**3. Il drenaggio della coda dei fatti: 30 secondi** (`TETTO_DEL_DRENAGGIO`).
+Alla chiusura il supervisore lascia cadere tutte le bocchette e drena finché il
+canale non dice `Disconnected` — mai fermandosi su un istante vuoto, perché fra
+la domanda e la risposta un produttore vivo può ancora accodare, e i fatti
+dell'ultimo istante sono quelli che raccontano com'è finita.
+
+Se però una delle condizioni di chiusura non è stata rispettata — una sorgente
+bloccante non resa terminabile, una bocchetta dimenticata — quell'attesa non
+finirebbe mai, e un supervisore appeso è il peggiore degli esiti: non conclude,
+non riporta, e non si distingue da uno che sta lavorando. Il tetto trasforma
+l'attesa infinita in un **difetto detto**.
+
+La scadenza è **assoluta e monotona**: si calcola una volta e non riparte
+quando arriva un fatto. Si calcola con `checked_add` e non con `+`: la somma di
+un istante e una durata può andare in overflow, e l'operatore in quel caso va in
+panico — un panico dentro la chiusura del supervisore sarebbe il posto peggiore
+in cui scoprirlo. Con trenta secondi non accade su nessuna macchina reale, ma
+un'impossibilità va **osservata** e non presunta: se accadesse, si drena ciò che
+c'è già e lo si dichiara. Con una scadenza che si rinnova a ogni consegna, un
+produttore che invia poco prima di ogni scadenza terrebbe aperto il drenaggio
+per sempre. Allo scadere, i fatti già drenati **restano nel rapporto** insieme
+al difetto: ciò che si è sentito prima di rinunciare è evidenza quanto la
+rinuncia. *Rientro:* nessuno previsto; il tetto scompare solo se la chiusura
+diventa impossibile da sbagliare.
+
+**4. L'arresto del lettore: tre cose diverse, e vanno tenute separate.** Un
+lettore fermo dentro una `read` non si sveglia perché qualcuno altrove lascia
+cadere un mandante. Il descrittore va quindi in modalità non bloccante e la
+lettura passa da un adattatore che aspetta a piccoli passi guardando un
+interruttore. Ciò che si può dire di quel meccanismo sono tre affermazioni, e
+solo la prima è una garanzia.
+
+*Le proprietà implementative*, vere sempre, e sono due — nessuna delle quali
+dice quanto dura un giro. Primo: l'interruttore viene guardato **prima di ogni
+nuova lettura e prima di ogni attesa**, e non esiste cammino in cui la lettura
+riparta senza averlo guardato, nemmeno dopo un `Interrupted`. Secondo:
+l'adattatore **non chiede mai volontariamente** un'attesa più lunga di un passo
+(`PASSO_DI_ATTESA`, 10 ms).
+
+Entrambe le garantisce il codice, e le prova un caso che non guarda l'orologio:
+con il freno già tirato la sorgente non viene interrogata nemmeno una volta.
+Scrivere invece «ogni giro dura al più un passo» sarebbe **falso**: `sleep`
+promette che l'attesa non sia più breve di quanto si chiede, non che non sia più
+lunga, e fra la richiesta e il risveglio ci sono lo scheduler e le chiamate di
+sistema.
+
+*Il presidio contro il giro a vuoto.* Il freno dà una via d'uscita, non un
+limite al consumo: una sorgente che rende `Interrupted` senza fermarsi mai
+occuperebbe un core a non fare niente finché qualcuno non frena. Dopo sedici
+interruzioni consecutive (`INTERRUZIONI_PRIMA_DEL_RESPIRO`) l'adattatore chiede
+un passo di attesa, continuando a guardare il freno a ogni giro. Il contatore
+riparte a ogni esito diverso, così i segnali sporadici — quelli veri — non
+pagano nulla.
+
+*La non-garanzia*, che va detta perché non si deduca il contrario: **nessun
+limite di tempo reale**. Fra il momento in cui l'interruttore cambia e il
+momento in cui il processo torna sulla CPU passa quanto il kernel decide, e
+senza uno scheduler real-time nessun numero scritto nel codice lo impedisce. Chi
+ha bisogno di un tetto sull'orologio da parete deve prenderlo altrove — un
+timeout di livello più alto, o un `SIGKILL` — non da qui.
+
+*La soglia di qualificazione ambientale*: 200 ms, misurati su una macchina che
+non è in ginocchio. È un attrezzo dei casi e **non un contratto**: vive sotto
+`cfg(test)` proprio perché una costante pubblica prima o poi si legge come una
+promessa, e chi la leggesse così lo farebbe in buona fede.
+
+Il caso che la usa appartiene al perimetro di qualificazione dell'ambiente, non
+alla prova di correttezza: se fallisse, la prima ipotesi da verificare è lo
+stato della macchina. La correttezza — che il freno venga guardato — è provata
+altrove, contando i giri invece del tempo. *Rientro:* un modo
+sicuro di interrompere una lettura bloccante senza sondaggio; toglierebbe il
+passo, la soglia e questa distinzione insieme.
+
+### La diagnostica di riga non attraversa il confine del worker
+
+**La regola.** L'errore che il worker dichiara arriva al supervisore con i
+quattro assi intatti: `PlenoraError::Replayed` li porta così come sono, e
+`category`, `phase`, `remote_effect` e `retry_disposition` li rendono senza
+ricalcolarli. Non c'è approssimazione, e non serve una variante nuova.
+
+**Ciò che non entra nell'errore.** La diagnostica di riga. `DiagnosticaSulFilo`
+non è isomorfa a `RowDiagnostics`: le mancano campi, e completarli con valori di
+default direbbe di aver osservato cose che nessuno ha osservato — un dato
+inventato è indistinguibile da quello vero, ed è peggio di un dato assente.
+
+**Dove sta, allora.** Nell'esito del supervisore, che la **possiede intera** e
+nella forma in cui è arrivata, accanto alla classificazione e fuori dal
+`PlenoraError`. Non è un conteggio: un conteggio conserva l'esistenza e non il
+contenuto, e dire «ce n'era una» buttandola è un modo più educato di buttarla.
+La forma del filo è limitata per costruzione — il protocollo tetta esempi e
+conteggi — quindi tenerla non apre una via a una dimensione che il chiamante
+sceglie.
+
+Le due affermazioni vanno quindi lette insieme e nessuna copre l'altra: la
+conversione dell'errore è senza perdite **sui quattro assi**, e la diagnostica
+è conservata **intera** altrove.
+
+**La decisione aperta** è solo se debba arrivare fino a `RowDiagnostics`, e con
+quale portatore tipizzato: estendere il formato sul filo perché porti i campi
+che mancano, oppure un tipo dedicato. Non giustifica in nessun caso di
+duplicare gli assi dell'errore, che un portatore ce l'hanno già. *Rientro:* la
+decisione, presa e scritta qui.
+
+Ciò che il worker **non** deve fare è credere ai due numeri. Li riguarda: che
+siano pipe anonime e non FIFO del filesystem, che il verso sia quello giusto, e
+che dopo la riapertura l'impronta `(dispositivo, inode)` coincida **e** il verso
+regga ancora. Quest'ultimo controllo non è ridondante, ed è misurato: riaprire
+in scrittura l'estremo di lettura di una pipe riesce e rende un descrittore con
+impronta **identica**, perché sono due aperture della stessa pipe.
+
+### Il perimetro di qualificazione dell'isolamento
+
+**La regola.** Il gate ostile ha bisogno di due cose che la produzione non deve
+poter avere: l'immagine che riesegue sé stessa nei tre modi, e una barriera fra
+l'accertamento dell'immagine e lo `spawn`. Vivono entrambe sotto
+`#[cfg(qualificazione_isolamento)]`, che **non è una feature di Cargo**.
+
+**Perché non una feature.** Una feature la si abilita dichiarandola fra le
+dipendenze, e l'unificazione la propaga anche a chi non l'ha chiesta: una build
+di produzione potrebbe ritrovarsela addosso perché un'altra cosa nell'albero
+l'ha voluta. Un `cfg` non si propaga — nessun crate dipendente può accenderlo — e
+non arriva mai come effetto collaterale.
+
+**Che cosa questo non garantisce.** Chi controlla il comando di build può
+mettere `--cfg qualificazione_isolamento` in `RUSTFLAGS` e ottenere il
+perimetro di qualificazione anche in una build che chiama di produzione.
+Scrivere che «la produzione non può selezionarlo» sarebbe falso: la garanzia è
+che non ci si arrivi **per sbaglio**, non che non ci si possa arrivare. Un
+perimetro contro l'incidente, non contro l'intenzione — e nessun `cfg`, nessuna
+feature e nessun attributo fanno di più, perché chi costruisce il binario
+decide che cosa ci mette dentro.
+
+Il `cfg` è dichiarato in `[workspace.lints.rust]` con `check-cfg`, perché un
+`cfg` non dichiarato non rompe la build: spegne silenziosamente il codice.
+
+**Che cosa la barriera può e non può fare.** Non può saltare l'accertamento —
+quando corre, quello è già avvenuto — né cambiare l'inode che `/proc/self/exe`
+raggiunge. Può invece rendere obsolete le osservazioni sul nome, ed è
+esattamente ciò che il gate le chiede: rinominando il pathname invalida la
+fotografia ` (deleted)` appena scattata. Ciò che regge non è quel controllo, ma
+l'esecuzione dell'inode.
+
+**L'immagine è un esempio, non un `bin`.** `cargo install` gli esempi non li
+produce. Costruita fuori dal perimetro, il suo `main` di ripiego rifiuta di
+girare invece di girare a metà: un binario che girasse a metà darebbe al gate
+la diagnosi sbagliata — «non ho osservato niente» invece di «sono stato
+costruito male».
 
 ### Il `commit_token`: forma canonica unica, e valore mai mostrato
 
@@ -1203,6 +2298,149 @@ Il solo step `cargo fuzz run` gira su nightly, mentre build, test, clippy e
 gate anti-panic restano sulla toolchain pinnata. Un crash conta **solo se
 riproducibile sulla pinnata**: riproduzione e minimizzazione avvengono lì
 prima di aprire una correzione.
+
+### Candidato geo esatto (kernel sempre-esatto, senza filtro): il costo è misurato sul join spaziale, non una qualifica generale
+
+**La misura.** Il candidato vendorizzato `geo-0.33.1-exact` (diff 1,
+orientamento esatto — vedi `vendor/geo-0.33.1-exact/PROVENANCE.md`) è stato
+confrontato col predicato originale su un benchmark applicativo mirato: join
+spaziale reale (`spatial_join_nullable_validated`), predicati
+`Overlaps`/`Touches`/`Crosses`, caso positivo e negativo, due densità di
+candidati, `N = 4000`, un riscaldamento scartato più sette ripetizioni
+verificate. Il rapporto candidato/baseline misurato va da **3,06× a 5,94×**
+a seconda dello scenario; l'esecuzione totale del candidato è stata 1,466s
+contro 0,361s del baseline. Nei 16 scenari le coppie prodotte sono risultate
+**identiche byte per byte** fra i due rami: nessuna divergenza di
+correttezza, solo di tempo.
+
+**Il perimetro della misura — dichiarato perché non sia letto oltre.** Non
+è una qualifica prestazionale generale del candidato, né una soglia
+universale. Copre esclusivamente: il join spaziale (non le singole chiamate
+a `relate`/predicati punto-per-cella, misurate a parte nel laboratorio —
+vedi sotto), i tre predicati elencati, `N = 4000` con selettività bbox nota
+per costruzione, la macchina locale su cui è girato il benchmark. Non copre
+gli altri kernel del pacchetto (`voronoi_cells`, `dissolve`, buffer, …), gli
+altri predicati (`Intersects`, `Contains`, `Within`), altre scale di `N`, né
+l'esecuzione nella VM di CI.
+
+**Continuità con la misura di laboratorio.** Il laboratorio aveva già
+misurato il costo per-chiamata isolato di `relate` (circa 1,03–1,20
+µs/chiamata, fino a 705,5× il baseline nel microbenchmark ordinario —
+`handoff-final-20260909/CONSEGNA-DATA-TOOLS.md`, punto 2): un numero di
+throughput di libreria, non applicativo. Questa misura lo completa sul
+carico che il prodotto esegue davvero, e i due non sono la stessa grandezza:
+un rapporto di libreria enorme può tradursi in un rapporto applicativo molto
+più piccolo quando il costo per chiamata è una piccola frazione del lavoro
+totale del join (indicizzazione R-tree, allocazione delle coppie, I/O).
+
+**Dove sono i dati.** `benchmarks/join/geo_join_predicates.jsonl` (candidato)
+e l'albero gemello di confronto (baseline: stesso file, stesso schema,
+`geo-0.33.1-exact` costruito con `logging.patch` soltanto, senza
+`geo-exact-orientation.patch`) — entrambi locali, non nel repository del
+prodotto. Output precedenti conservati in `benchmarks/join/precedenti/`. Il
+generatore è `crates/plenora-kernels-geo/examples/bench_geo_join_predicates.rs`,
+un binario `example`, non incluso nel binario di produzione.
+
+**Perché è accettato.** Il predicato originale è dimostrabilmente sbagliato
+su un sottoinsieme di ingressi (auto-intersezioni all'orientamento
+sbagliato — la ragione stessa del diff 1): tornare indietro scambierebbe un
+costo misurato con un errore silenzioso.
+
+**Condizione di rientro.** Non è una deroga con una condizione di chiusura:
+è un costo accettato come compromesso per procedere verso la qualificazione
+del candidato esatto. Rivederlo — verso una misura più ampia sugli altri
+kernel — resta lavoro futuro distinto, non anticipato né sostituito da
+questa nota. Un percorso rapido con fallback esatto e limite d'errore
+dimostrato non è più assente: esiste come candidato sperimentale separato,
+vedi la sezione seguente.
+
+### Candidato filtrato sperimentale: la regressione O(n²) su buffer e validazione, e il percorso rapido proposto
+
+**Da dove nasce.** Il kernel sempre-esatto sopra chiama
+`exact_orientation::orient2d_sign_bits` (aritmetica intera a 4224 bit,
+nessun percorso rapido) su OGNI confronto di orientamento, senza eccezioni.
+Per un predicato di join il numero di chiamate è piccolo e il costo resta
+nell'ordine di 3-6× (misura sopra). Per operazioni che invocano
+l'orientamento molte volte per geometria — la validazione OGC in ingresso a
+ogni kernel, `buffer` — il conteggio delle chiamate cresce quadraticamente
+col numero di vertici, e il fattore costante si traduce in una regressione
+di ordini di grandezza. Isolata con
+`crates/plenora-kernels-geo/examples/diag_geo_scaling.rs` (`validazione_sola`,
+`buffer`, `simplify`, `centroid`), a parità di forma di crescita O(n²) su
+entrambi i rami (nessun cambio di classe di complessità, solo del fattore
+costante).
+
+**Un limite dichiarato sulla misura, non sulla diagnosi.** L'albero candidato
+usato per questa misura aveva, al momento della compilazione, un
+`Cargo.lock` con 32 pacchetti transitivi e una nuova crate (`zlib-rs`) a
+versioni diverse da quelle dell'albero di confronto — deriva accidentale di
+un comando `cargo` non vincolato eseguito durante questa integrazione,
+indipendente dal filtro, dichiarata e corretta (`Cargo.lock` riportato allo
+stato del commit di base più le sole tre sostituzioni vendorizzate del
+`[patch.crates-io]`). Fra i pacchetti derivati, `geo-types` e' raggiungibile
+dal percorso geometrico (dipendenza diretta di `geo`, verificato con
+`cargo tree`): la lettura del sorgente del kernel stabilisce la causa
+qualitativa (la chiamata incondizionata all'aritmetica esatta a 4224 bit),
+ma non isola quantitativamente il contributo delle dipendenze cambiate sul
+rapporto misurato — e gli orari dei file usati per ricostruire la sequenza
+non certificano quali versioni fossero effettivamente compilate nel binario
+che ha prodotto quel numero. Il rapporto riportato qui (ordini di
+grandezza, non una cifra unica) resta quindi la misura di quel confronto
+specifico: indicativo della causa, non certificato a `Cargo.lock` corretto
+e non ripetuto.
+
+**Il filtro.** Progettato, derivato con disuguaglianze esplicite (lemma di
+Higham, limite di errore provato `< 4,4u·S + e₀`) e qualificato nel banco
+standalone `plenora-memlab-filtro-sperimentale/`: 6788 casi contro l'oracolo
+razionale (`fractions.Fraction`), zero fallimenti in debug e in release, un
+controesempio reale trovato e corretto durante la qualifica (sottoflusso di
+prodotto trattato come zero genuino). Certifica il segno con un limite
+d'errore dimostrato quando l'ingresso lo consente, e ricade sullo stesso
+kernel sempre-esatto — invariato — in ogni altro caso: vedi
+`vendor/geo-0.33.1-exact-filtered/PROVENANCE-FILTRO-SPERIMENTALE.md` per la
+derivazione e la provenienza complete.
+
+**Stato in questo albero.** `Cargo.toml` qui risolve `geo` al vendor
+filtrato (`vendor/geo-0.33.1-exact-filtered`), non al candidato sempre-esatto
+descritto sopra: `scripts/verifica_risoluzione_vendor.py` in questo albero
+lo pretende esplicitamente, a differenza della copia dello stesso script
+nell'albero del candidato congelato. Con il filtro, il test prima
+catastrofico (`diag_geo_scaling`/la suite completa) converge: 67-71s in
+debug, 1,75-1,8s in release, misurato qui — non dedotto dalla derivazione
+numerica. Il benchmark del join spaziale sopra (3,06×-5,94×) descrive il
+kernel sempre-esatto SENZA filtro e non è stato ripetuto col filtro: il
+filtro si applica anche a quel percorso, quindi il rapporto atteso con il
+filtro attivo è minore, ma resta una previsione, non una misura.
+
+**Stato dell'adozione.** Sperimentale. Nessuna sostituzione del candidato
+congelato, commit, push o VM senza autorizzazione esplicita.
+
+### Fallimenti upstream comuni e divergenze GEOS: non risolti da questa integrazione
+
+**Fallimenti upstream comuni.** La suite di test di `geo-0.33.1-exact` non è
+interamente verde, né sulla base né sul candidato: `test_polygon_densify`,
+`test_non_standard_geoid` e il doctest `GeodesicMeasure` falliscono
+**identici in entrambi i rami**. Non sono causati dal diff 1 né dal diff 2
+(stesso esito prima e dopo la patch): sono fallimenti della libreria
+upstream indipendenti da questa integrazione. Log conservati nel laboratorio
+(`R/windows/correctness-followup-01`), non ripetuti né riportati qui.
+
+**Perché non sono stati "risolti" qui.** Correggerli richiederebbe
+modificare codice di `geo` estraneo ai diff 1/3/5 vendorizzati — fuori dal
+mandato di questa integrazione, che lascia il candidato numerico invariato.
+Restano un difetto noto della versione upstream, non della patch.
+
+**Divergenze GEOS.** Il confronto fra `geo` (candidato esatto) e GEOS su un
+insieme di reperti mostra divergenze le cui cause interne **non sono
+spiegate**. L'accordo fra il candidato e l'oracolo razionale sui reperti
+esaminati **non risolve**, e non va letto come se risolvesse, la divergenza
+generale fra le due librerie: sono osservazioni su un insieme finito di
+casi, non una prova di equivalenza. Audit conservati nel laboratorio
+(`R/windows/independent-geos-01`).
+
+**Condizione di rientro.** Nessuna, dichiarata come tale: sia i fallimenti
+upstream sia le divergenze GEOS restano aperti finché non esiste
+un'indagine dedicata — fuori dal perimetro di questa integrazione.
 
 ## Il verificatore
 

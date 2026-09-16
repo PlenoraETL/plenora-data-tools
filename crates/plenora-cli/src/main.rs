@@ -52,7 +52,9 @@ use std::path::{Path, PathBuf};
 
 use plenora_core::limits::PlanLimits;
 use plenora_core::{ErrorPhase, PlenoraError};
-use plenora_engine::geo_transport::publish::PublishOutcome;
+use plenora_engine::geo_transport::publish::{
+    EsitoDellaPubblicazione, PublishOutcome, PuliziaDelTemporaneo, RagioneNonAccertabile,
+};
 use plenora_engine::geo_transport::transport::ArrowOutputFormat;
 use plenora_engine::plan::{
     migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V5, PLAN_SCHEMA_VERSION_V6,
@@ -60,6 +62,7 @@ use plenora_engine::plan::{
 use plenora_engine::planner::ValidatedGraph;
 use plenora_engine::{CancellationToken, ExecutionMetrics, ExecutionPlan};
 use serde::Deserialize;
+use serde_json::Value;
 
 mod cli;
 
@@ -90,7 +93,9 @@ use cli::contract_discovery::{
     discover_input_contract_from_schema, geometry_contract_from_field, ipc_header_schema,
     open_input, pair_v4_inputs,
 };
-#[cfg(test)]
+// Serve ai casi **e** al dispatch dello spawner, che deve tradurre il proprio
+// rifiuto in un exit code senza passare da `esegui_processo`.
+#[cfg(any(test, target_os = "linux"))]
 use cli::error_envelope::error_exit_code;
 #[cfg(test)]
 use plenora_core::arrow::array::RecordBatch;
@@ -285,6 +290,164 @@ pub(crate) const fn durabilita_confermata(outcome: PublishOutcome) -> bool {
     !matches!(outcome, PublishOutcome::PublishedButDurabilityUnconfirmed)
 }
 
+/// L'esito di una pubblicazione, nei campi del documento di uscita.
+///
+/// # Perche' due campi e non uno
+///
+/// Perche' la durabilita' riguarda la destinazione e la pulizia il temporaneo:
+/// chi legge deve poter sapere che l'output c'e' **e** che e' rimasta
+/// spazzatura, senza dover dedurre l'una dall'altra.
+///
+/// # Perche' `temp_cleanup` e' sempre un oggetto
+///
+/// Perche' chi consuma il documento non deve prima scoprire di che **tipo** e'
+/// il valore. Una stringa per un caso e un oggetto per gli altri costringe a
+/// due rami prima ancora di leggere lo stato, e il giorno che «rimosso»
+/// acquistasse un campo la forma cambierebbe sotto chi la legge. Lo stato sta
+/// sempre in `state`; gli altri campi dipendono da lui.
+pub(crate) fn campi_della_pubblicazione(esito: &EsitoDellaPubblicazione) -> Vec<(String, Value)> {
+    let pulizia = match &esito.pulizia {
+        PuliziaDelTemporaneo::Rimosso => serde_json::json!({ "state": "removed" }),
+        PuliziaDelTemporaneo::Presente { percorso, byte } => {
+            let mut oggetto = serde_json::Map::new();
+            oggetto.insert("state".to_owned(), Value::String("present".to_owned()));
+            aggiungi_il_percorso(&mut oggetto, percorso);
+            oggetto.insert("bytes".to_owned(), Value::from(*byte));
+            Value::Object(oggetto)
+        }
+        PuliziaDelTemporaneo::NonAccertabile { percorso, ragione } => {
+            let mut oggetto = serde_json::Map::new();
+            oggetto.insert(
+                "state".to_owned(),
+                Value::String("unascertainable".to_owned()),
+            );
+            aggiungi_il_percorso(&mut oggetto, percorso);
+            oggetto.insert(
+                "reason".to_owned(),
+                Value::String(
+                    match ragione {
+                        RagioneNonAccertabile::PermessoNegato => "permission_denied",
+                        RagioneNonAccertabile::GuastoDiLettura => "read_failure",
+                    }
+                    .to_owned(),
+                ),
+            );
+            Value::Object(oggetto)
+        }
+    };
+    vec![
+        (
+            "durability_confirmed".to_owned(),
+            Value::Bool(durabilita_confermata(esito.durabilita)),
+        ),
+        ("temp_cleanup".to_owned(), pulizia),
+    ]
+}
+
+/// Scrive il percorso del residuo in una forma **ricostruibile**.
+///
+/// # Perche' non `Path::display()`
+///
+/// Perche' `display()` e' dichiaratamente lossy: sostituisce con `U+FFFD` cio'
+/// che non e' testo valido. Un'indicazione di bonifica con un carattere
+/// sostituito indica un file che non esiste, ed e' peggio di nessuna
+/// indicazione: manda a cancellare il nome sbagliato, o a cercare invano.
+///
+/// # Perche' non `OsStr::as_encoded_bytes`
+///
+/// Perche' quella e' una forma **interna**, che la libreria standard dichiara
+/// non specificata: si puo' ridare a `OsStr` nello stesso processo, e nient'altro
+/// e' promesso. Un consumatore che legge il documento non ha quel processo, e
+/// non ha nessun contratto su come interpretare quegli ottetti. Riportarli
+/// sarebbe dire «esatti» di byte che nessuno sa rileggere.
+///
+/// # La forma, e come si rilegge
+///
+/// `path_encoding` c'e' **sempre**, e dice come leggere il resto:
+///
+/// | `path_encoding` | campo | come si ricostruisce |
+/// |---|---|---|
+/// | `utf8` | `path`, stringa | e' gia' il percorso |
+/// | `unix_bytes` | `path_units`, interi 0-255 | `OsStringExt::from_vec` |
+/// | `windows_utf16` | `path_units`, interi 0-65535 | `OsStringExt::from_wide` |
+///
+/// Sono le codifiche **native** dei due sistemi: su Unix un percorso e' una
+/// sequenza di byte che non deve essere testo, su Windows una sequenza di unita'
+/// UTF-16 che puo' contenere surrogati spaiati. Chi ricostruisce usa la funzione
+/// standard della propria piattaforma, non una conversione nostra.
+///
+/// `path` resta quando il percorso e' testo valido, che e' il caso ordinario:
+/// un umano lo legge, e un programma lo usa senza decodificare niente.
+fn aggiungi_il_percorso(oggetto: &mut serde_json::Map<String, Value>, percorso: &Path) {
+    if let Some(testo) = percorso.to_str() {
+        oggetto.insert("path_encoding".to_owned(), Value::String("utf8".to_owned()));
+        oggetto.insert("path".to_owned(), Value::String(testo.to_owned()));
+        return;
+    }
+    let (codifica, unita) = unita_native(percorso);
+    oggetto.insert(
+        "path_encoding".to_owned(),
+        Value::String(codifica.to_owned()),
+    );
+    oggetto.insert("path_units".to_owned(), Value::Array(unita));
+}
+
+/// Il percorso nelle unita' che il sistema operativo usa davvero.
+#[cfg(unix)]
+fn unita_native(percorso: &Path) -> (&'static str, Vec<Value>) {
+    use std::os::unix::ffi::OsStrExt as _;
+    (
+        "unix_bytes",
+        percorso
+            .as_os_str()
+            .as_bytes()
+            .iter()
+            .map(|byte| Value::from(*byte))
+            .collect(),
+    )
+}
+
+/// Il percorso nelle unita' che il sistema operativo usa davvero.
+#[cfg(windows)]
+fn unita_native(percorso: &Path) -> (&'static str, Vec<Value>) {
+    use std::os::windows::ffi::OsStrExt as _;
+    (
+        "windows_utf16",
+        percorso
+            .as_os_str()
+            .encode_wide()
+            .map(Value::from)
+            .collect(),
+    )
+}
+
+/// Su una piattaforma che non e' ne' Unix ne' Windows non si inventa una
+/// codifica: si dichiara di non saperla dire, che e' l'unica cosa vera.
+#[cfg(not(any(unix, windows)))]
+fn unita_native(_percorso: &Path) -> (&'static str, Vec<Value>) {
+    ("unsupported", Vec::new())
+}
+
+/// L'esito della pubblicazione, come frammento di un documento scritto a mano.
+///
+/// # Perche' esiste
+///
+/// Perche' alcuni comandi costruiscono il proprio JSON con `format!` invece che
+/// con `serde_json`, e riscriverli tutti per aggiungere due campi cambierebbe
+/// ordine e formattazione di documenti che qualcuno gia' legge. Questo rende i
+/// **soli** campi nuovi, gia' virgolettati e con l'escape giusto, pronti da
+/// concatenare dopo l'ultimo campo esistente.
+///
+/// Non c'e' virgola in testa ne' in coda: la mette chi compone, che e' l'unico
+/// a sapere dove sta.
+pub(crate) fn frammento_della_pubblicazione(esito: &EsitoDellaPubblicazione) -> String {
+    campi_della_pubblicazione(esito)
+        .into_iter()
+        .map(|(chiave, valore)| format!("\"{chiave}\":{valore}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Helper stile nogeo: valore obbligatorio dopo un flag.
 pub(crate) fn value_after(args: &[String], flag: &str) -> Result<PathBuf, PlenoraError> {
     let index = args
@@ -375,7 +538,8 @@ pub(crate) fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, 
 //   strategia di parallelismo, capability richieste, fingerprint dei
 //   contratti di input e `plan_hash`;
 // - **run**: `execute` sul grafo validato con input lazy (`Input::read_ipc_*`,
-//   stesso sniffing del formato) e scrittura con `Output::write_ipc_file`
+//   stesso sniffing del formato) e scrittura con
+//   `Output::write_ipc_file_with_profile`
 //   (publish atomico no-clobber gia' dentro). Le metriche per nodo e per
 //   segmento (righe in/out, batch, wall time in ms) sono stampate in JSON su
 //   **stdout**, come gli altri riepiloghi della CLI.
@@ -722,11 +886,12 @@ pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
             let input = argument_value(args, "--input")?;
             let schema = argument_value(args, "--schema")?;
             let output = argument_value(args, "--output")?;
-            let summary = execute_transform(&input, Path::new(&schema), &output)?;
+            let (summary, esito) = execute_transform(&input, Path::new(&schema), &output)?;
             println!(
-                "{{\"status\":\"ok\",\"rows\":{},\"sha256\":\"{}\"}}",
+                "{{\"status\":\"ok\",\"rows\":{},\"sha256\":\"{}\",{}}}",
                 summary.rows,
-                hex_digest(&summary.checksum)
+                hex_digest(&summary.checksum),
+                frammento_della_pubblicazione(&esito)
             );
             Ok(())
         }
@@ -735,13 +900,14 @@ pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
             let input = argument_value(args, "--input")?;
             let schema = argument_value(args, "--schema")?;
             let output = argument_value(args, "--output")?;
-            let summary =
+            let (summary, esito) =
                 execute_transform_arrow(&input, Path::new(&schema), &output, output_format)?;
             println!(
-                "{{\"status\":\"ok\",\"rows\":{},\"output_rows\":{},\"sha256\":\"{}\"}}",
+                "{{\"status\":\"ok\",\"rows\":{},\"output_rows\":{},\"sha256\":\"{}\",{}}}",
                 summary.rows,
                 summary.output_rows,
-                hex_digest(&summary.checksum)
+                hex_digest(&summary.checksum),
+                frammento_della_pubblicazione(&esito)
             );
             Ok(())
         }
@@ -757,7 +923,7 @@ pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
                 )
                 .into());
             }
-            let summary = execute_pair_arrow(
+            let (summary, esito) = execute_pair_arrow(
                 Path::new(&left),
                 Path::new(&right),
                 Path::new(&schema),
@@ -765,11 +931,12 @@ pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
                 output_format,
             )?;
             println!(
-                "{{\"status\":\"ok\",\"left_rows\":{},\"right_rows\":{},\"output_rows\":{},\"sha256\":\"{}\"}}",
+                "{{\"status\":\"ok\",\"left_rows\":{},\"right_rows\":{},\"output_rows\":{},\"sha256\":\"{}\",{}}}",
                 summary.left_rows,
                 summary.right_rows,
                 summary.output_rows,
-                hex_digest(&summary.checksum)
+                hex_digest(&summary.checksum),
+                frammento_della_pubblicazione(&esito)
             );
             Ok(())
         }
@@ -784,16 +951,17 @@ pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
                 )
                 .into());
             }
-            let summary = execute_spatial_join(
+            let (summary, esito) = execute_spatial_join(
                 Path::new(&left),
                 Path::new(&right),
                 Path::new(&schema),
                 Path::new(&output),
             )?;
             println!(
-                "{{\"status\":\"ok\",\"pairs\":{},\"sha256\":\"{}\"}}",
+                "{{\"status\":\"ok\",\"pairs\":{},\"sha256\":\"{}\",{}}}",
                 summary.pairs,
-                hex_digest(&summary.checksum)
+                hex_digest(&summary.checksum),
+                frammento_della_pubblicazione(&esito)
             );
             Ok(())
         }
@@ -834,6 +1002,58 @@ fn main() {
     // di `panic_policy`.
     let politica_nostra =
         plenora_core::panic_policy::install(plenora_core::panic_policy::PanicPolicy::Silent);
+
+    // I due dispatch delle modalita' riservate, e stanno **qui** per una ragione
+    // precisa.
+    //
+    // Il dispatch dello spawner.
+    //
+    // Questo eseguibile e' anche lo spawner del profilo isolato: e' la propria
+    // immagine, rieseguita, e si riconosce perche' `argv[1]` porta la versione
+    // della richiesta. Se non lo riconoscesse, un worker avviato finirebbe nel
+    // parser degli argomenti ordinario e si lamenterebbe di un comando
+    // sconosciuto.
+    //
+    // Prima di ogni altra cosa perche' il primo passo della sequenza pretende
+    // un processo **monothread**: le credenziali si cambiano per thread, e
+    // quelli che restassero sarebbero privilegiati. Fra l'ingresso del processo
+    // e questa riga non nasce nessun thread — l'installazione della politica
+    // anti-panico non ne crea — mentre `esegui_processo` puo' costruire il pool
+    // di rayon. Spostare il dispatch dopo renderebbe lo spawner impossibile a
+    // runtime, senza che nulla lo dica prima.
+    //
+    // Il caso riuscito non torna: la `exec` ha sostituito l'immagine.
+    #[cfg(target_os = "linux")]
+    {
+        let argomenti: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        // Le due modalita' si interrogano in fila, e **prima** del parser della
+        // CLI. I namespace sono disgiunti, quindi l'ordine fra le due non
+        // sposta niente; cio' che conta e' che vengano entrambe prima, perche'
+        // una riga del namespace riservato che arrivasse al parser si
+        // sentirebbe rispondere «comando sconosciuto» invece della diagnosi
+        // vera.
+        for modalita in [
+            plenora_engine::spawner_dal_confine,
+            plenora_engine::worker_dal_confine,
+        ] {
+            match modalita(&argomenti) {
+                // Non e' questa modalita': si prova la prossima, e poi il
+                // parser.
+                plenora_engine::DalConfine::AltroComando => {}
+                // La modalita' ha finito il proprio lavoro. Si esce **qui**:
+                // proseguire porterebbe la riga riservata al parser della CLI,
+                // che risponderebbe «comando sconosciuto» dopo un'esecuzione
+                // riuscita.
+                plenora_engine::DalConfine::Conclusa => std::process::exit(0),
+                plenora_engine::DalConfine::Fallita(errore) => {
+                    let envelope = error_envelope(&errore, false);
+                    let _ = emit_error_envelope(std::io::stdout().lock(), &envelope);
+                    std::process::exit(error_exit_code(&envelope));
+                }
+            }
+        }
+    }
+
     let esito = std::panic::catch_unwind(esegui_processo);
     let codice = match esito {
         Ok(codice) => codice,
@@ -2907,5 +3127,180 @@ mod tests {
         let bad_path = directory.path().join("garbage.bin");
         std::fs::write(&bad_path, framed_v2(&[Some(&garbage)])).expect("fixture");
         assert!(read_geometry_stream(&bad_path, 1).is_err());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// L'esito della pubblicazione nel documento di uscita
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod uscita_della_pubblicazione {
+    use super::{campi_della_pubblicazione, EsitoDellaPubblicazione, PuliziaDelTemporaneo};
+    use plenora_engine::geo_transport::publish::{PublishOutcome, RagioneNonAccertabile};
+    use std::path::PathBuf;
+
+    fn documento(esito: &EsitoDellaPubblicazione) -> serde_json::Value {
+        serde_json::Value::Object(campi_della_pubblicazione(esito).into_iter().collect())
+    }
+
+    /// **`temp_cleanup` e' un oggetto in tutti e tre gli stati.**
+    ///
+    /// Chi consuma il documento non deve prima scoprire di che tipo sia il
+    /// valore: una stringa per un caso e un oggetto per gli altri costringe a
+    /// due rami prima ancora di leggere lo stato.
+    #[test]
+    fn la_pulizia_ha_sempre_la_stessa_forma() {
+        for pulizia in [
+            PuliziaDelTemporaneo::Rimosso,
+            PuliziaDelTemporaneo::Presente {
+                percorso: PathBuf::from("/tmp/x.partial"),
+                byte: 12,
+            },
+            PuliziaDelTemporaneo::NonAccertabile {
+                percorso: PathBuf::from("/tmp/x.partial"),
+                ragione: RagioneNonAccertabile::PermessoNegato,
+            },
+        ] {
+            let esito = EsitoDellaPubblicazione {
+                durabilita: PublishOutcome::Published,
+                pulizia,
+            };
+            let campo = documento(&esito)["temp_cleanup"].clone();
+            assert!(
+                campo.is_object(),
+                "ogni stato e' un oggetto, non solo due su tre: {campo}"
+            );
+            assert!(
+                campo["state"].is_string(),
+                "e lo stato sta sempre nella stessa chiave: {campo}"
+            );
+        }
+    }
+
+    /// **Il percorso del residuo si ricostruisce dal documento.**
+    ///
+    /// Non si confronta il campo con lo stesso encoder che l'ha prodotto — quello
+    /// direbbe soltanto che una funzione e' uguale a se' stessa. Si fa cio' che
+    /// farebbe un consumatore: si legge `path_encoding`, si prendono le unita' e
+    /// si chiama la funzione **standard** della piattaforma, poi si pretende che
+    /// il percorso ottenuto sia quello di partenza.
+    #[test]
+    fn un_percorso_non_testuale_si_ricostruisce_dal_json() {
+        let percorso = percorso_non_testuale();
+        let esito = EsitoDellaPubblicazione {
+            durabilita: PublishOutcome::Published,
+            pulizia: PuliziaDelTemporaneo::Presente {
+                percorso: percorso.clone(),
+                byte: 3,
+            },
+        };
+        let campo = documento(&esito)["temp_cleanup"].clone();
+
+        let codifica = campo["path_encoding"]
+            .as_str()
+            .expect("la codifica e' sempre dichiarata")
+            .to_owned();
+        assert_eq!(
+            codifica,
+            codifica_attesa(),
+            "la codifica dichiarata e' quella nativa della piattaforma"
+        );
+        assert!(
+            campo.get("path").is_none(),
+            "un percorso non testuale non ha il campo leggibile: {campo}"
+        );
+
+        let unita: Vec<u64> = campo["path_units"]
+            .as_array()
+            .expect("le unita' ci sono")
+            .iter()
+            .map(|valore| valore.as_u64().expect("unita' intera"))
+            .collect();
+        assert_eq!(
+            ricostruisci(&unita),
+            percorso,
+            "il consumatore ricostruisce il percorso esatto"
+        );
+    }
+
+    /// **Un percorso testuale esce leggibile, e si dichiara `utf8`.**
+    #[test]
+    fn un_percorso_testuale_resta_leggibile() {
+        let percorso = PathBuf::from("/tmp/uscita.arrow.partial");
+        let esito = EsitoDellaPubblicazione {
+            durabilita: PublishOutcome::Published,
+            pulizia: PuliziaDelTemporaneo::Presente {
+                percorso: percorso.clone(),
+                byte: 7,
+            },
+        };
+        let campo = documento(&esito)["temp_cleanup"].clone();
+
+        assert_eq!(campo["path_encoding"], "utf8");
+        assert_eq!(campo["path"], "/tmp/uscita.arrow.partial");
+        assert!(
+            campo.get("path_units").is_none(),
+            "e non porta anche le unita': una forma sola per volta"
+        );
+        assert_eq!(
+            PathBuf::from(campo["path"].as_str().expect("testo")),
+            percorso
+        );
+    }
+
+    // --- cio' che cambia fra le piattaforme, e nient'altro -------------------
+
+    /// Un percorso che il sistema accetta e che **non e'** UTF-8 valido.
+    #[cfg(unix)]
+    fn percorso_non_testuale() -> PathBuf {
+        use std::os::unix::ffi::OsStrExt as _;
+        // `0xff 0xfe` non e' una sequenza UTF-8 valida, ed e' un nome di file
+        // perfettamente legale su Unix.
+        PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/\xff\xfe.partial"))
+    }
+
+    /// Su Windows: un surrogato spaiato, che UTF-16 ammette e UTF-8 no.
+    #[cfg(windows)]
+    fn percorso_non_testuale() -> PathBuf {
+        use std::os::windows::ffi::OsStringExt as _;
+        let unita: Vec<u16> = "C:\\temp\\x"
+            .encode_utf16()
+            .chain(std::iter::once(0xd800_u16))
+            .chain(".partial".encode_utf16())
+            .collect();
+        PathBuf::from(std::ffi::OsString::from_wide(&unita))
+    }
+
+    #[cfg(unix)]
+    fn codifica_attesa() -> &'static str {
+        "unix_bytes"
+    }
+
+    #[cfg(windows)]
+    fn codifica_attesa() -> &'static str {
+        "windows_utf16"
+    }
+
+    /// Rilegge le unita' **come farebbe un consumatore**, con la funzione
+    /// standard della piattaforma.
+    #[cfg(unix)]
+    fn ricostruisci(unita: &[u64]) -> PathBuf {
+        use std::os::unix::ffi::OsStringExt as _;
+        let byte: Vec<u8> = unita
+            .iter()
+            .map(|unita| u8::try_from(*unita).expect("un ottetto sta in un byte"))
+            .collect();
+        PathBuf::from(std::ffi::OsString::from_vec(byte))
+    }
+
+    #[cfg(windows)]
+    fn ricostruisci(unita: &[u64]) -> PathBuf {
+        use std::os::windows::ffi::OsStringExt as _;
+        let parole: Vec<u16> = unita
+            .iter()
+            .map(|unita| u16::try_from(*unita).expect("un'unita' UTF-16 sta in un u16"))
+            .collect();
+        PathBuf::from(std::ffi::OsString::from_wide(&parole))
     }
 }

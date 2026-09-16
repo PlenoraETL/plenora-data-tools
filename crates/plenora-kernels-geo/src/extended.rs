@@ -1,8 +1,8 @@
 //! Operations beyond the original Manipola catalog.
 
+use crate::ValidazioneProtetta as _;
 use geo::algorithm::concave_hull::ConcaveHullOptions;
 use geo::algorithm::line_measures::{Distance, Geodesic, Haversine, Length};
-use geo::algorithm::validation::Validation;
 use geo::{
     AffineOps, AffineTransform, ConcaveHull, CoordsIter, Geometry, HausdorffDistance, Point,
 };
@@ -27,6 +27,13 @@ pub enum ExtendedError {
     InvalidGeographicCoordinate,
     #[error("indice non rappresentabile come uint64")]
     IndexOverflow,
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedError> {
@@ -38,15 +45,21 @@ fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedError> {
             "coordinate NaN o infinite".to_owned(),
         ));
     }
-    geometry
-        .check_validation()
-        .map_err(|error| ExtendedError::InvalidInput(error.to_string()))
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedError::InvalidInput(ragione.to_string()),
+            ExtendedError::ValidazioneNonConclusa,
+        )
+    })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedError> {
-    geometry
-        .check_validation()
-        .map_err(|error| ExtendedError::InvalidOutput(error.to_string()))?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtendedError::InvalidOutput(ragione.to_string()),
+            ExtendedError::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 

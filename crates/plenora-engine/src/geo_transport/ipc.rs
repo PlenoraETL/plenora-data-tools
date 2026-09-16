@@ -799,6 +799,15 @@ impl<R: Read + Seek> SeekSource<R> {
         Self { reader, total_len }
     }
 
+    #[cfg(any(test, feature = "internals"))]
+    /// Il lettore, per chi deve duplicarne il descrittore.
+    ///
+    /// Non lo consuma e non lo sposta: chi lo prende puo' solo guardarlo, e la
+    /// posizione resta di questa sorgente.
+    pub const fn lettore(&self) -> &R {
+        &self.reader
+    }
+
     /// Restituisce il lettore riportandolo all'inizio, pronto per arrow.
     ///
     /// # Errors

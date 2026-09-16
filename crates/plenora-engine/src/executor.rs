@@ -34,7 +34,7 @@
 //! `node`/`operation`/`execution_id`; nessun output e' pubblicato (publish
 //! atomico) e le metriche parziali restano osservabili iterando [`Output`]
 //! manualmente e chiamando [`Output::metrics`] dopo l'errore (i metodi di
-//! comodo `collect_batches`/`write_ipc_file*` consumano l'`Output`: con
+//! comodo `collect_batches`/`write_ipc_file_with_profile` consumano l'`Output`: con
 //! loro le metriche al punto di cancel vanno perse, limite v1 documentato).
 //!
 //! Errori arricchiti (errori-e-limiti.md): ogni `execute` genera un
@@ -120,15 +120,15 @@
 //!   `max_payload_bytes` cumulati per input, `max_geometry_depth` per
 //!   annidamento WKB, `max_batch_bytes` per batch (tetto in byte per batch, tetto duro, applicato
 //!   anche al batch concatenato dei segmenti blocking);
-//! - nessun output parziale: [`Output::write_ipc_file`] scrive via
-//!   [`crate::geo_transport::publish::publish_atomic`] (tempfile + persist
-//!   no-clobber solo a stream completato con successo);
+//! - nessun output parziale: [`Output::write_ipc_file_with_profile`] scrive via
+//!   [`crate::geo_transport::publish::publish_with_profile`] (tempfile +
+//!   persist no-clobber solo a stream completato con successo);
 //! - metriche per nodo logico e per segmento (osservabilita' per nodo), prefilled per tutti i
 //!   nodi del piano e aggiornate batch per batch.
 //!
 //! Errore a meta' stream: il batch in errore propaga `Err` nello stream di
 //! output; niente viene pubblicato (il tempfile e' eliminato da
-//! `publish_atomic`) e le metriche restano consultabili fino al punto di
+//! `publish_with_profile`) e le metriche restano consultabili fino al punto di
 //! fallimento.
 //!
 //! Panic dei kernel (errori-e-limiti.md#panic-policy): intercettati con `catch_unwind` al punto di

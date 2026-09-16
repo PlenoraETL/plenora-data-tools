@@ -15,10 +15,11 @@ use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::DataContract;
 use sha2::{Digest, Sha256};
 
-use super::{verifica_artefatto, AtteseVerifica, ALGORITMO_DIGEST};
+use super::{verifica_artefatto, AtteseVerifica};
 use crate::commit_footer::scrivi_commit_token;
 use crate::commit_token::CommitToken;
 use crate::geo_transport::ipc::IpcLimits;
+use crate::protocollo::digest::ALGORITMO_DIGEST;
 
 const UNO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const DUE: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
@@ -188,12 +189,16 @@ fn esegui(byte: &[u8], dichiarati: &Dichiarati) -> Result<(), String> {
         max_retained_dictionary_body_bytes: dichiarati.tetto_dizionari,
         ..IpcLimits::default()
     };
+    // La prova si lascia cadere: questi casi giudicano **se** la sequenza
+    // accetti, non che cosa produca. Che cosa produca lo giudicano i casi della
+    // pubblicazione, che quella prova la consumano.
     verifica_artefatto(
         &prova.percorso,
         &attese,
         plenora_core::crs::resolve_crs,
         &limiti,
     )
+    .map(|_prova| ())
     .map_err(|errore| errore.to_string())
 }
 

@@ -1542,3 +1542,141 @@ fn backend_ops_identical_outcome_with_fusion_on_and_off() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Validazione OGC interrotta: l'attribuzione attraverso l'executor vero
+// ---------------------------------------------------------------------------
+
+/// Il reperto del 5 settembre 2026 della campagna `fuzz wkb_contract`.
+const REPERTO_VALIDAZIONE: &[u8] = &[
+    1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
+    1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
+    116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
+    0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
+    255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
+    0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+fn validazione_interrotta_plan() -> Value {
+    json!({
+        "schema_version": 5,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 1.0, "y_offset": 1.0}},
+            {"id": "s", "op": "geo.simplify", "in": ["t"], "config": {"tolerance": 0.01}},
+            {"id": "e", "op": "geo.envelope", "in": ["s"], "config": {}},
+        ],
+        "output": "e",
+    })
+}
+
+fn validazione_interrotta_batches() -> Vec<RecordBatch> {
+    vec![geo_batch(&[0], &[Some(REPERTO_VALIDAZIONE.to_vec())])]
+}
+
+/// **Col candidato esatto (BOZZA NON ADOTTATA, Cargo.toml), il reperto e' un
+/// difetto della riga in ogni profilo — mai piu' colpa del piano.**
+///
+/// # Perche' attraverso l'executor e non su `errore_del_passo`
+///
+/// Perche' chiamare direttamente il classificatore prova che il
+/// classificatore funziona, non che i chiamanti lo usino. Se `blocking.rs` o
+/// `fusion.rs` tornassero a costruire `InvalidPlan(error.to_string())`, un
+/// caso che invoca `errore_del_passo` dal test resterebbe verde. Qui la
+/// pipeline e' quella vera, e i due percorsi sono esercitati entrambi.
+///
+/// Senza il diff 1 (`vendor/geo-0.33.1-exact`) l'attesa dipende dal
+/// profilo: il panico e' un `debug_assert!`, quindi senza asserzioni di
+/// debug la geometria e' gia' giudicata invalida davvero. Col segno
+/// corretto di `orient2d`, `geo` conclude sempre — misurato qui in entrambi
+/// i profili, non dedotto dalla patch: la cella e' un fallimento
+/// **attribuibile alla riga**, entra nella diagnostica row-scoped, e
+/// l'errore finale e' `DataMapping` — mai `InvalidPlan`, la colpa e' dei
+/// dati, non della forma del piano.
+#[test]
+fn una_validazione_interrotta_non_e_colpa_del_piano_nei_due_percorsi() {
+    let plan = validazione_interrotta_plan();
+    let signature = assert_oracle_error(
+        "validazione-interrotta",
+        &plan,
+        &validazione_interrotta_batches,
+        Some("t"),
+        // Tre nodi fondibili: con la fusione attiva il gruppo entra davvero
+        // nel runner fuso, quindi i due percorsi sono due. Con un nodo solo
+        // non si formerebbe alcun gruppo e `fusion.rs` non sarebbe esercitato.
+        Origine::RunnerFuso { gruppi: 1 },
+    );
+    assert_eq!(
+        signature.category,
+        ErrorCategory::DataMapping,
+        "il validatore doveva concludere in ogni profilo con l'esatto — {}",
+        signature.reason
+    );
+}
+
+fn validazione_interrotta_con_misura_terminale_plan() -> Value {
+    json!({
+        "schema_version": 5,
+        "inputs": ["main"],
+        "nodes": [
+            {"id": "t", "op": "geo.translate", "in": ["main"],
+             "config": {"x_offset": 1.0, "y_offset": 1.0}},
+            {"id": "w", "op": "geo.to_wkt", "in": ["t"], "config": {}},
+        ],
+        "output": "w",
+    })
+}
+
+/// **Un gruppo con misura terminale attribuisce ancora correttamente un
+/// fallimento della trasformazione iniziale, quando quella trasformazione
+/// precede la misura invece di essere l'unico contenuto del gruppo.**
+///
+/// # Che cosa dimostra e che cosa no
+///
+/// L'attribuzione (nodo "t") e la causa osservata sotto (`geometry.invalid_wkb`)
+/// mostrano che il fallimento avviene alla decodifica/validazione **del nodo
+/// di trasformazione "t"** — lo stesso meccanismo gia' provato dal caso senza
+/// misura terminale sopra (`transform_cells`/`one_to_one_batch_prepared`).
+/// Il reperto e' invalido gia' come ingresso, quindi il gruppo non arriva mai
+/// a eseguire il nodo "w": la sola cosa che questo caso aggiunge e' che la
+/// presenza di una misura terminale in coda al gruppo non cambia
+/// quell'attribuzione.
+///
+/// **Non** esercita `measure_cells`/`geo_measure_batch` in alcun modo — ne'
+/// il loro ramo di decodifica ne' quello del kernel scalare (`operations::
+/// to_wkt`'s `ensure_valid`): il nodo "w" non viene mai raggiunto con questo
+/// reperto. Quei due componenti sono provati separatamente (test diretti su
+/// `misura_riga`/`measure_cells` e sulle mutazioni di raccolta), non da
+/// questo caso.
+///
+/// Con il candidato esatto l'attesa non dipende piu' dal profilo: `geo`
+/// conclude sempre (diff 1), quindi `DataMapping` con diagnostica di riga
+/// completa e causa `geometry.invalid_wkb`, misurato in entrambi i profili —
+/// non dedotto. Senza la patch il debug conclude `Internal` senza
+/// diagnostica (stessa barriera del caso di trasformazione sopra).
+#[test]
+fn una_validazione_interrotta_con_misura_terminale_non_e_colpa_del_piano() {
+    let plan = validazione_interrotta_con_misura_terminale_plan();
+    let signature = assert_oracle_error(
+        "validazione-interrotta-misura",
+        &plan,
+        &validazione_interrotta_batches,
+        Some("t"),
+        Origine::RunnerFuso { gruppi: 1 },
+    );
+    assert_eq!(signature.category, ErrorCategory::DataMapping);
+    let diagnostics = signature
+        .diagnostics
+        .as_ref()
+        .expect("errore ordinario, diagnostica di riga attesa");
+    assert_eq!(
+        diagnostics.counts.get("geometry.invalid_wkb"),
+        Some(&1),
+        "causa inattesa: {:?}",
+        diagnostics.counts
+    );
+}

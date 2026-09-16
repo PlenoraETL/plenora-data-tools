@@ -25,8 +25,8 @@ use super::config::{
 use super::dispatch::require_resolved_crs;
 use super::helpers::{
     ensure_name, ensure_name_free, ensure_non_negative, geometry_field, invalid_param,
-    new_geometry_field, output_fields, parse_config, rebuild, require_normalized_axis_order,
-    resolve_definition, set_geometry_crs, validate_wkb_hex,
+    new_geometry_field, output_fields, parametro_non_decodificabile, parse_config, rebuild,
+    require_normalized_axis_order, resolve_definition, set_geometry_crs, validate_wkb_hex,
 };
 use super::{
     CELL_I_COLUMN, CELL_J_COLUMN, CENTROID_X_COLUMN, CENTROID_Y_COLUMN, DEFAULT_X_COLUMN,
@@ -543,8 +543,9 @@ pub(in crate::analyze) fn analyze_snap(
 ) -> Result<DataContract> {
     let parsed: SnapConfig = parse_config(op, config)?;
     let bytes = validate_wkb_hex(op, "reference_wkb", &parsed.reference_wkb)?;
-    crate::geometry_from_wkb(&bytes)
-        .map_err(|_| invalid_param(op, "reference_wkb", "WKB non decodificabile"))?;
+    crate::geometry_from_wkb(&bytes).map_err(|error| {
+        parametro_non_decodificabile(op, "reference_wkb", "WKB non decodificabile", &error)
+    })?;
     ensure_non_negative(op, "tolerance", parsed.tolerance)?;
     Ok(input.clone())
 }

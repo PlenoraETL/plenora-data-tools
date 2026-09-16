@@ -2062,6 +2062,12 @@ fn decode_wkb_hex(node_id: &str, name: &str, hex: &str) -> Result<Geometry<f64>>
     // sola (`wkb_hex_to_bytes`), sui byte, e qui si traduce solo l'esito.
     let bytes = plenora_kernels_geo::wkb_hex_to_bytes(hex).ok_or_else(invalid)?;
     plenora_kernels_geo::geometry_from_wkb(&bytes).map_err(|error| {
+        // La porta WKB rende `Internal` quando la validazione OGC non
+        // conclude. Riscriverlo `InvalidPlan` accuserebbe un nodo che nessuno
+        // ha dimostrato sbagliato: l'attribuzione segue la categoria di sotto.
+        if error.category() == plenora_core::ErrorCategory::Internal {
+            return PlenoraError::Internal(format!("nodo `{node_id}`: {name}: {error}"));
+        }
         PlenoraError::InvalidPlan(format!(
             "nodo `{node_id}`: {name} non decodificabile: {error}"
         ))

@@ -311,8 +311,9 @@ pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
 
     use crate::commit_token::CommitToken;
     use crate::geo_transport::ipc::IpcLimits;
+    use crate::protocollo::digest::ALGORITMO_DIGEST;
     use crate::protocollo::messaggi::{ConteggiDichiarati, DigestArtefatto};
-    use crate::verifica::{verifica_artefatto, AtteseVerifica, ALGORITMO_DIGEST};
+    use crate::verifica::{verifica_artefatto, AtteseVerifica};
 
     // Il workspace e' **riusato**: una directory per thread, un file riscritto.
     let percorso = scrivi_nel_workspace(byte)?;
@@ -354,12 +355,12 @@ pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
 
     // Accettare o rifiutare sono entrambi legittimi; l'esito si **classifica**
     // invece di appiattirlo, perche' non tutti gli errori sono rifiuti.
-    classifica_esito(verifica_artefatto(
-        &percorso,
-        &attese,
-        plenora_core::crs::resolve_crs,
-        &limiti,
-    ))
+    // La prova che il verificatore rende qui non serve: questo target chiede
+    // «accettato o rifiutato», e cio' che si pubblica non lo pubblica lui.
+    classifica_esito(
+        verifica_artefatto(&percorso, &attese, plenora_core::crs::resolve_crs, &limiti)
+            .map(|_prova| ()),
+    )
 }
 
 /// Traduce l'esito del verificatore nel verdetto del target.

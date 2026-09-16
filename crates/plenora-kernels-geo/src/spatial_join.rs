@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use geo::algorithm::validation::Validation;
+use crate::ValidazioneProtetta as _;
 use geo::{BoundingRect, Contains, CoordsIter, Geometry, Intersects, Relate};
 use rayon::prelude::*;
 use rstar::{RTree, RTreeObject, AABB};
@@ -45,6 +45,13 @@ pub enum SpatialJoinError {
     /// Invariante interna violata (R6: errore propagato, mai panic).
     #[error("internal error: {0}")]
     Internal(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -72,13 +79,16 @@ fn checked_envelope(
     {
         return Err(SpatialJoinError::NonFiniteCoordinate { side, index });
     }
-    geometry
-        .check_validation()
-        .map_err(|error| SpatialJoinError::InvalidGeometry {
-            side,
-            index,
-            reason: error.to_string(),
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| SpatialJoinError::InvalidGeometry {
+                side,
+                index,
+                reason: ragione.to_string(),
+            },
+            SpatialJoinError::ValidazioneNonConclusa,
+        )
+    })?;
     envelope_of_validated(geometry, side, index)
 }
 

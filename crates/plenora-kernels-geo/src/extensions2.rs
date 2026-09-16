@@ -37,7 +37,6 @@
 //!
 //! Errori: le condizioni dei kernel puri usano [`ExtensionV2Error`].
 
-use geo::algorithm::validation::Validation;
 use geo::{
     Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, LineString, MapCoords, MultiPoint,
     Polygon, Rect,
@@ -49,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
+use crate::ValidazioneProtetta as _;
 
 /// Numero minimo di vertici ammesso per `max_vertices` (un anello chiuso ne
 /// richiede almeno 4).
@@ -79,18 +79,31 @@ pub enum ExtensionV2Error {
     /// Invariante interna violata (R6: errore propagato, mai panic).
     #[error("internal error: {0}")]
     Internal(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionV2Error> {
-    geometry
-        .check_validation()
-        .map_err(|error| ExtensionV2Error::InvalidInput(error.to_string()))
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV2Error::InvalidInput(ragione.to_string()),
+            ExtensionV2Error::ValidazioneNonConclusa,
+        )
+    })
 }
 
 fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionV2Error> {
-    geometry
-        .check_validation()
-        .map_err(|error| ExtensionV2Error::InvalidOutput(error.to_string()))?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV2Error::InvalidOutput(ragione.to_string()),
+            ExtensionV2Error::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 
@@ -598,8 +611,12 @@ fn subdivide_validated(
         }
     }
     for part in &parts {
-        part.check_validation()
-            .map_err(|error| ExtensionV2Error::InvalidOutput(error.to_string()))?;
+        part.validazione_protetta().map_err(|esito| {
+            esito.separa(
+                |ragione| ExtensionV2Error::InvalidOutput(ragione.to_string()),
+                ExtensionV2Error::ValidazioneNonConclusa,
+            )
+        })?;
     }
     Ok(parts)
 }
@@ -824,7 +841,7 @@ mod tests {
         assert_eq!((cells[3].cell_i, cells[3].cell_j), (1, 1));
         assert_eq!((cells[3].centroid_x, cells[3].centroid_y), (7.5, 7.5));
         for cell in &cells {
-            cell.geometry.check_validation().expect("cella valida");
+            cell.geometry.validazione_protetta().expect("cella valida");
         }
     }
 
@@ -887,7 +904,7 @@ mod tests {
             let rect = cell.geometry.bounding_rect().expect("envelope");
             assert!(rect.min().x >= extent.xmin && rect.max().x <= extent.xmax);
             assert!(rect.min().y >= extent.ymin && rect.max().y <= extent.ymax);
-            cell.geometry.check_validation().expect("cella valida");
+            cell.geometry.validazione_protetta().expect("cella valida");
         }
     }
 
@@ -1028,7 +1045,7 @@ mod tests {
                 "parte con {} vertici",
                 part.coords_count()
             );
-            part.check_validation().expect("parte valida");
+            part.validazione_protetta().expect("parte valida");
             assert!(matches!(part, Geometry::Polygon(_)));
             total_area += part.unsigned_area();
         }
@@ -1064,7 +1081,7 @@ mod tests {
         let total_area: f64 = parts.iter().map(geo::Area::unsigned_area).sum();
         for part in &parts {
             assert!(part.coords_count() <= 8);
-            part.check_validation().expect("parte valida");
+            part.validazione_protetta().expect("parte valida");
         }
         assert!(
             (total_area - original_area).abs() < 1e-9 * original_area,

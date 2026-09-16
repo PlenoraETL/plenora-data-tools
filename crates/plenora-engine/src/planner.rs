@@ -91,10 +91,10 @@ use plenora_kernels_table::analyze::analyze_table_contract;
 
 // Feature-dispatch come `geo_transport::publish`: senza `proj-backend` la
 // risoluzione fallisce chiusa (`CRS_BACKEND_UNAVAILABLE`).
-#[cfg(not(feature = "proj-backend"))]
-use plenora_core::crs::resolve_crs;
-#[cfg(feature = "proj-backend")]
-use plenora_kernels_geo::crs::resolve_crs;
+// La scelta dell'implementazione sta in un posto solo: due copie di due
+// `cfg` sono due occasioni di divergere, e chi risolve i CRS deve essere chi
+// il programma dichiara di essere.
+use crate::risolutore::risolvi as resolve_crs;
 
 use crate::geo_transport::publish::PublishProfile;
 use crate::plan::{PianoValidato, PLAN_SCHEMA_VERSION_V5, PLAN_SCHEMA_VERSION_V6};

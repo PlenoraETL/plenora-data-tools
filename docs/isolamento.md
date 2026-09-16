@@ -572,7 +572,19 @@ Direzione worker → supervisore:
 | messaggio | quando | contenuto |
 |---|---|---|
 | `Risposta` | primo | identità dell'artefatto, identità del resolver, ambiente risolto, capability del backend |
-| `Progresso` | facoltativo, ripetibile | contatori deterministici (righe, batch, nodi completati); **mai** dati |
+| `Progresso` | facoltativo, ripetibile | contatori deterministici **cumulativi** (righe, batch, nodi completati); **mai** dati |
+
+I contatori del `Progresso` sono **totali osservati fin lì**, non incrementi, e
+i tre assi sono di conseguenza **non decrescenti**. Un valore più piccolo del
+precedente è una violazione del protocollo, non un rapporto strano.
+
+La ragione è che gli incrementi andrebbero sommati, e una somma su `u64` può
+traboccare. Le due uscite da un traboccamento sono entrambe cattive: saturare
+rende `u64::MAX` indistinguibile da un conteggio esatto pari a `u64::MAX` — una
+perdita silenziosa, che è la peggiore — e andare in panico metterebbe il
+supervisore in ginocchio per un numero scelto dall'altro lato. Con i totali non
+c'è niente da sommare: chi riceve conserva l'ultimo, e l'unica aritmetica è un
+confronto.
 | `Esito` | ultimo | successo col digest dell'artefatto **e i conteggi** (righe, batch), errore tipizzato con i quattro assi, oppure **forma** del panico |
 
 Il `commit_token` è **trasmesso e accettato** nel `Saluto`, e sta **solo lì**.
@@ -915,6 +927,16 @@ L'ordine è vincolante. Ogni passo può solo fermare la sequenza.
 Solo dopo il passo 9 l'output è visibile. I passi da 1 a 8-bis non producono
 alcun effetto osservabile all'esterno.
 
+**Dove vivono i passi, oggi.** Da 3 a 9 hanno un corpo: `verifica_artefatto`
+per 3-8-bis, `pubblicazione::pubblica` per il 9. I passi 1 e 2 no, e non è una
+dimenticanza: leggono lo **stato terminale del figlio** e l'`Esito` che il
+worker dichiara, cioè due fatti che appartengono a chi possiede il ciclo di
+vita del processo. Chi li osserva oggi è la prova di qualificazione, che li
+applica prima di chiamare il verificatore; un supervisore di produzione che li
+applichi arriva con la PR che porta il lato supervisore. Prometterli qui come
+già disponibili significherebbe far cercare a chi legge una funzione che non
+esiste.
+
 Il passo 5-bis mancava, e la sua assenza era una lacuna e non una scelta: §4.4
 assegna al verificatore dell'artefatto la coerenza del digest, ma la sequenza
 non aveva un passo in cui esercitarla. **In v1 l'algoritmo ammesso è
@@ -936,6 +958,84 @@ interpretazioni invece di due risultati.
 Il passo 9 riusa la pubblicazione atomica esistente
 ([`errori-e-limiti.md`](errori-e-limiti.md)), inclusa la distinzione fra
 pubblicato e pubblicato-con-durabilità-non-confermata.
+
+**Riusarla significa copiare, non spostare.** Quell'autorità scrive attraverso
+un writer, ed è lì che stanno il tempfile nella directory di destinazione, il
+`sync_all`, i retry sui guasti transitori, il commit no-clobber e l'`fsync`
+della directory secondo il profilo. Spostare l'artefatto dov'è vorrebbe dire una
+**seconda** implementazione del commit — `renameat2(RENAME_NOREPLACE)` con
+ripiego su Unix, `MoveFileExW` su Windows — cioè codice per piattaforma e una
+dipendenza nuova, per riottenere garanzie che esistono già e sono qualificate.
+
+Il **costo è dichiarato**: una lettura e una scrittura integrali in più, e le
+due copie coesistono fino al commit. È lo stesso genere di costo già accettato
+per il passo 5-bis, e per la stessa ragione: si paga una passata per non
+fidarsi. **Condizione di rientro**: una primitiva cross-platform qualificata che
+committi direttamente un file esistente conservando il no-clobber e
+l'osservabilità della pulizia.
+
+**Che cosa il passo 9 pretende durante la copia.** Il numero esatto di byte,
+chiesto **al descrittore** subito prima di leggere. Non è il numero che la prova
+già porta: quello viene dall'apertura, e l'handle duplicato se lo porta dietro,
+quindi confrontarli sarebbe confrontare due copie di una misura sola. Una misura
+nuova invece scopre l'unica cosa che può essere successa davvero — il file
+**mutato in place** dopo la verifica — perché un handle aperto difende dalla
+sostituzione del percorso, non dalla mutazione dei byte, ed è una non-garanzia
+già dichiarata.
+
+Poi lo SHA-256 **ricalcolato sui byte effettivamente copiati**, confrontato prima
+del commit: è ciò che ferma un'alterazione che non cambia la lunghezza, e non è
+una ripetizione del passo 5-bis, perché fra i due c'è una copia ed è la copia a
+poter sbagliare. Un confronto *dopo* il ciclo fra i byte copiati e il numero che
+ha guidato il ciclo non direbbe nulla: direbbe che il ciclo ha girato.
+
+Entrambe le divergenze sono `DataMapping`, non `Internal`: un artefatto
+verificato non è immutabile, e chi lo altera sta fuori da questo processo. Dire
+«difetto interno» accuserebbe il codice di una cosa che non ha fatto.
+
+Qualunque divergenza ferma la closure, e una closure che si ferma vuol dire che
+il commit non avviene: **la destinazione non appare**, nemmeno vuota.
+
+**L'artefatto da pubblicare è lo stesso che è stato verificato, non il suo
+nome.** Il verificatore consegna un handle duplicato con `try_clone` — che
+duplica il descrittore, non il percorso — perché riaprire per nome aprirebbe fra
+la verifica e la pubblicazione una finestra in cui quel nome può risolvere a un
+altro file, e la prova varrebbe per qualcosa che non c'è più.
+
+**La prova è un tipo, non una promessa.** `ArtefattoVerificato` ha i campi
+privati, nessun costruttore aperto e nessun `Clone`: l'unico modo di averne uno
+è che il verificatore l'abbia prodotto, e il passo 9 lo **consuma**. Non porta
+`Debug`, perché stamparlo esporrebbe il digest. È la stessa forma di
+`NumeriDelCanale`: ciò che il tipo significa, invece di ciò che un commento
+dichiara.
+
+**Il passo 9 e il verificatore stanno sotto `cfg`, e `risolvi_commit` no.** La
+catena verifica → passo 9 è compiuta e nessun percorso di produzione la
+attraversa: il passo 9 riceve la prova, non la produce, quindi non è lui a dare
+un chiamante al verificatore. Chi la attraverserà è il supervisore, coi passi 1
+e 2. `risolvi_commit` invece è superficie pubblica da subito, perché il suo
+chiamante è per definizione fuori: chi ha perso il processo incaricato di
+pubblicare. Regola e condizione di rientro stanno in
+[`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
+
+### Il passo 9 rende due fatti, e nessuno dei due è un errore
+
+La pubblicazione riferisce su **due assi indipendenti**: la `durabilita`, che
+riguarda la destinazione, e la `pulizia`, che riguarda il temporaneo. Un enum
+solo costringerebbe a inventare una variante per ogni combinazione, e chi legge
+dovrebbe scomporla per sapere quale dei due lo riguarda.
+
+La pulizia ha **tre** esiti — rimosso; presente, con percorso e byte osservati;
+non accertabile, con percorso e ragione — e non due, per la stessa ragione per
+cui la quiescenza di un dominio ne ha tre: «non c'è» e «non ho potuto guardare»
+sono cose diverse, e confonderle è fail-open. Il perché l'asse esista, e perché
+non porti la causa dell'`unlink`, sta in
+[`errori-e-limiti.md`](errori-e-limiti.md).
+
+Dopo il commit point nessuno dei due assi diventa un errore: l'output è
+visibile, e una durabilità non confermata o un temporaneo rimasto sono
+**avvertenze**. Dirle come fallimenti manderebbe chi legge a rifare una cosa già
+fatta, e rifarla troverebbe la destinazione occupata.
 
 ---
 
@@ -1119,6 +1219,19 @@ commit non è avvenuto, ma anche perché la durabilità è andata persa, perché
 qualcuno l'ha rimosso, o perché il filesystem è tornato indietro. Riprovare
 può essere giusto, e la decisione è di chi conosce quel percorso — non nostra.
 
+**`CommittedMatching` percorre anche i corpi.** Il footer dice *dove* stanno i
+blocchi e con che intestazione, non che cosa contengano, e il formato Arrow file
+non ha un checksum sull'intero contenuto: fermarsi alla struttura direbbe
+«riuscito» di un output che non si lascia leggere. Si percorre **solo** quando il
+token è il nostro — un tentativo altrui e un token assente non affermano nulla
+sulla leggibilità, e pagarne la lettura sarebbe spesa senza risposta.
+
+**Ciò che `CommittedMatching` non dice** è che i byte siano quelli verificati. Il
+digest dichiarato vive nell'`Esito` del worker, e chi arriva qui l'`Esito` non ce
+l'ha: è precisamente la situazione in cui la domanda si pone. L'osservazione dice
+«di questo tentativo, e leggibile per intero», non «identico a ciò che fu
+verificato».
+
 **`CommittedMatching` richiede la verifica, non solo la chiave.** Una chiave
 uguale su un file troncato direbbe «riuscito» di un output che non lo è: il
 sigillo e la struttura vanno riletti, con lo stesso verificatore in streaming
@@ -1126,9 +1239,12 @@ della §2-ter.
 
 **`InvalidOrUnreadable` non cancella la causa.** Il nome dice che non si può
 concludere, non che non si sappia perché: l'osservazione porta una **ragione
-strutturata** — permesso negato, framing non valido, sigillo assente, sigillo
-non corrispondente, footer rifiutato dal confine ostile — perché le decisioni
-che ne seguono sono diverse. Un permesso negato si risolve con i permessi; un
+strutturata** — permesso negato, guasto di lettura, tetto superato, framing
+non valido, sigillo assente, sigillo non corrispondente, footer rifiutato dal
+confine ostile, metadati non leggibili — perché le decisioni
+che ne seguono sono diverse. Le **osservazioni** sono cinque; le ragioni sono
+otto, e le due grandezze non hanno motivo di coincidere: una sola delle cinque
+le porta tutte. Un permesso negato si risolve con i permessi; un
 sigillo che non corrisponde è un file da non toccare.
 
 La ragione è **sanitizzata** come ogni altro errore del progetto: dice di che
@@ -1723,6 +1839,8 @@ attuali, che sono minori e dichiarate.
 
 ---
 
+<a id="9-bis-preflight-del-dominio-scrivere-non-e-configurare"></a>
+
 ## 9-bis. Preflight del dominio: scrivere non è configurare
 
 Ogni proprietà su cui poggia l'attribuzione è una **scrittura su un file**
@@ -1776,6 +1894,497 @@ Il preflight registra perciò l'opzione senza respingerla, e la registra
 Va detto che il caso non è stato misurato — la gerarchia provata non aveva
 `memory_localevents` — quindi la conclusione è un ragionamento, non
 un'osservazione.
+
+### Il confine fra supervisore e spawner
+
+Il preflight e la sequenza dello spawner girano in **due processi**, e fra i
+due passa uno `spawn`. Il preflight rende un token opaco che non è
+trasmissibile: è un valore in memoria, e non c'è modo di spedirlo.
+
+Ciò che attraversa il confine è quindi una **richiesta versionata e limitata** —
+dominio, radice, uid, gid, tetto, e nient'altro — che dice *su che cosa*
+lavorare e non afferma nulla. Non è una prova: una prova sarebbe qualcosa che
+lo spawner accetta per buona, e uno spawner che crede a ciò che gli viene detto
+non aggiunge nessuna garanzia a quella del mittente.
+
+Lo spawner **rivaluta tutto da sé** — percorsi, montaggio, permessi, namespace
+e i quattro controlli — e ottiene un token locale che nessuno gli ha spedito.
+Due cose che *non* fa, e che non sono sviste:
+
+- **non riscrive i controlli, li rilegge.** Il tetto deve essere già in vigore
+  quando lo spawner nasce (`F4-1`, `GA-7`); scriverlo lì aprirebbe una finestra
+  fra la nascita del processo e il limite;
+- **non riceve i namespace dalla richiesta.** Li confronta con quelli del
+  proprio **padre**, letti da `/proc`: un fatto del kernel che nessun argomento
+  falsifica. È ciò che chiude una `unshare` avvenuta fra lo `spawn` e la `exec`.
+
+La versione della richiesta è esatta e non negoziabile: un supervisore e uno
+spawner di versioni diverse non sono lo stesso programma, e interpretare gli
+argomenti dell'altro significherebbe indovinare.
+
+**L'evidenza del preflight non attraversa il confine**, e sopravvive invece
+**da questa parte**, in entrambi i rami dell'avvio. Nel ramo riuscito serve al
+rapporto; in quello fallito serve alla pulizia, perché quando l'avvio fallisce
+il dominio è già configurato e chi deve smontarlo ha bisogno di sapere quale
+sia. Un errore che dicesse solo «non è partito» lascerebbe dietro di sé un
+cgroup con un tetto, un sigillo e nessuno che lo rimuova.
+
+### L'immagine dello spawner: si giudica un nome, si esegue un inode
+
+Lo spawner è **l'immagine del supervisore rieseguita**, e non un eseguibile che
+il chiamante sceglie. Un percorso che arrivasse dall'esterno renderebbe l'avvio
+uno `spawn` qualunque, capace di rendere un figlio nato **fuori** dal dominio,
+con l'identità del supervisore e senza nessuno dei sette passi — e
+indistinguibile, per chi lo ha chiamato, da una transizione riuscita.
+
+Il giudizio e l'esecuzione guardano due cose diverse, e la distinzione decide
+l'esito:
+
+| cosa | da dove | perché |
+|---|---|---|
+| il **nome** | `readlink("/proc/self/exe")` | serve a dire di che cosa si parla, e a riconoscere il suffisso ` (deleted)` |
+| l'**inode** | `stat("/proc/self/exe")` | è ciò che viene eseguito, e non dipende da nessun nome |
+| l'**esecuzione** | `Command::new("/proc/self/exe")` | il nome si può sostituire fra il giudizio e lo `spawn` — una `rename` è atomica — mentre il collegamento resta legato all'immagine di questo processo |
+
+Interrogare il nome invece dell'inode sarebbe sbagliato due volte: su
+un'immagine rimossa fallirebbe con «non esiste» prima che qualcuno guardi il
+suffisso, e su una sostituita riuscirebbe descrivendo il file **nuovo**.
+
+Le tre condizioni sono: l'immagine non è stata rimossa o sostituita; è un file
+regolare; il worker non la può riscrivere — quest'ultima con lo stesso giudizio
+conservativo che vale sui file della gerarchia, perché uno spawner che il
+worker modifica rende l'intera separazione una formalità.
+
+Il rifiuto su ` (deleted)` **non** serve a evitare di eseguire un binario
+altrui: eseguire `/proc/self/exe` darebbe comunque l'immagine giusta. Serve a
+non proseguire quando il control plane che gira e quello su disco sono due
+programmi diversi, che è uno stato che nessuno ha dichiarato.
+
+Il figlio si riconosce come spawner perché il suo `argv[1]` è la versione della
+richiesta. Da qui un obbligo per il chiamante di produzione, che vale prima di
+ogni altra cosa che faccia all'avvio — **thread compresi**, perché il primo
+passo della sequenza pretende un processo monothread.
+
+### La finestra fra il cambio d'identità e la `exec`
+
+Il settimo passo rilegge ciò che il processo **è** e solo allora esegue. Vive
+però in una finestra particolare: le credenziali sono già cambiate e l'immagine
+è ancora la stessa, e in quello stato il kernel azzera il flag *dumpable* e
+passa `/proc/<pid>` a `root`.
+
+Che cosa si perde davvero è materia di misura, non di deduzione. Sulla
+gerarchia qualificata restano leggibili `status` — è un file, e i permessi
+della directory concedono l'attraversamento a tutti — e `fd`, per un'eccezione
+esplicita del kernel a favore di chi guarda i propri descrittori. Cade `ns`,
+che quell'eccezione non ce l'ha.
+
+Il passo rilegge quindi da `status` ciò che il cambio **può** aver toccato —
+uid, gid, gruppi supplementari, le cinque maschere di capability,
+`no_new_privs` — e porta avanti dalla lettura del passo 4 ciò che il cambio non
+può aver mosso: namespace e descrittori. È lecito perché fra le due letture
+stanno solo `no_new_privs`, `setgroups` e le tre `setres*id`, e nessuna di esse
+apre un descrittore o cambia un namespace. Nessun asse di `F4-15` esce dalla
+verifica: quelli che non si rileggono sono quelli che non possono essersi
+mossi.
+
+La finestra si chiude con la `exec`, che rimette *dumpable*: il worker, dopo,
+si legge senza problemi. La misura sta nel gate, che riporta la leggibilità
+prima e dopo il cambio nello stesso processo.
+
+### Come il canale arriva al worker: proprietà e dichiarazione
+
+Il worker eredita due descrittori, ma ereditarli non basta: il protocollo
+pretende che li **riapra** da `/proc/self/fd`, perché è l'unica forma sicura di
+prenderli — costruire un `OwnedFd` da un intero grezzo è `unsafe`, che questo
+crate vieta, e la riapertura è anche ciò che permette di *accertare* che
+l'estremo sia quello dichiarato invece di crederci. Servono quindi due cose, e
+sono distinte: il permesso di riaprirli, e sapere **quali** siano.
+
+**Il permesso.** Lo spawner cede la proprietà con un `chown` sul percorso
+`/proc/self/fd/N`, fra il passo 4 e il passo 6: non prima, perché il passo 4
+pretende che non resti nessun descrittore scrivibile verso il control plane e un
+cambio di proprietà fatto sopra sarebbe autorità esercitata nel mezzo di quella
+verifica; non dopo, perché il passo 6 toglie proprio i privilegi che servono a
+cederla.
+
+Ciò che si cede sono i **due oggetti pipe**, che sono due e non quattro: ogni
+pipe ha un inode solo, e i due lati lo condividono, quindi cedere l'estremo del
+worker cede anche l'inode su cui il supervisore ha il proprio. Il supervisore
+non perde niente di ciò che usa: conserva i propri **handle già aperti**, e il
+permesso si controlla all'apertura. Continua a leggere e scrivere come sempre;
+ciò che non potrebbe più fare è riaprirli da `/proc/self/fd`, che è
+un'operazione che non compie.
+
+**La dichiarazione.** I due numeri arrivano al worker in `PLENORA_CANALE`, e la
+variabile si **impone**, non si aggiunge: un valore ereditato dall'ambiente del
+supervisore indicherebbe descrittori veri di un altro canale, che il worker
+rivaliderebbe trovandoli buoni. La forma canonica la decide `in_variabile`, che
+è la metà scrivente della stessa convenzione che il worker legge — una grafia
+sola, come per il resto.
+
+**Perché il tipo dice «rivalidati».** I due numeri viaggiano in
+`NumeriDelCanale`, che non ha un costruttore aperto: l'unico modo di ottenerne
+uno è `accerta_coppia`, cioè il controllo stesso. «Rivalidato» diventa così una
+proprietà del valore invece di una promessa nel commento di chi lo costruisce, e
+un percorso che saltasse il controllo non avrebbe niente da passare.
+
+Il worker rivalida comunque, all'arrivo: quello che attraversa una `exec` è
+un'affermazione, come tutto il resto.
+
+### Le mutazioni sull'isolamento: la batteria discrimina, oppure non prova
+
+`scripts/mutazioni_isolamento.py` è l'altra qualificazione manuale, e risponde
+a una domanda che il verde non risponde. Una batteria verde dice che il codice
+passa i propri casi; non dice che i casi **distinguano**. Un caso che non guarda
+la proprietà che dichiara resta verde anche quando quella proprietà sparisce.
+
+Lo script rompe una decisione per volta — cinquantanove, con identificativi
+canonici da `mut-01` a `mut-59` — e pretende che qualcuno se ne accorga. Il
+perimetro sono il **supervisore** (`PR-8`, i primi trentadue) e il **worker**
+con il suo percorso di qualificazione (`PR-9`, gli ultimi sedici): stanno nello
+stesso harness perché condividono baseline, impronta e riparazione, e due
+harness avrebbero significato due nozioni di «albero sano». Chi sopravvive non
+è un difetto del codice: è un difetto della batteria, e indica esattamente quale
+proprietà nessun caso sta guardando.
+
+**Il filtro dei casi deve coprire il perimetro dei mutanti.** La batteria non
+esegue tutti i casi del crate — sarebbe mezz'ora per mutante — ma un elenco di
+filtri in *or*, oggi `isolamento` e `executor::output`. Un filtro più stretto
+del perimetro non rende la campagna più veloce: la rende **muta**, perché il
+caso che giudicherebbe un mutante non gira e quel mutante sopravvive senza che
+nulla di sbagliato sia successo nel codice. Aggiungere un mutante in un modulo
+nuovo vuol dire quindi aggiungere anche il suo perimetro, ed `executor::output`
+è entrato proprio così: il worker scrive l'artefatto passando di lì.
+
+**Un caso che legge la tabella che deve giudicare non giudica niente.** È la
+seconda cosa che un superstite ha insegnato qui, e vale in generale: un caso che
+scorre l'elenco che sta provando lo trova coerente con sé stesso qualunque cosa
+contenga, e resta verde mentre la proprietà sparisce. L'attesa va scritta a
+parte e confrontata nei due versi — niente di meno, niente di più.
+
+Non entra in CI: ogni mutante ricompila `plenora-engine`, e un gate che dura
+mezz'ora smette di essere eseguito. Si esegue su una macchina Linux dedicata,
+come il gate ostile.
+
+**Le due impronte non sono la stessa cosa.** Quella che governa lo script è
+l'**impronta dell'albero Rust**: i soli `.rs` sotto `crates/`, che sono i file
+che i mutanti toccano. L'**impronta del delta** di una PR comprende anche
+documenti, manifesti Cargo e lo script stesso, e serve a verificare un
+trasferimento. Confonderle darebbe una falsa sicurezza in tutte e due le
+direzioni: una modifica a un documento farebbe rifiutare una baseline valida, e
+una modifica a un `.rs` fuori da `crates/` passerebbe inosservata.
+
+Le regole che lo rendono una misura invece di un rituale, ognuna imparata da un
+modo di sbagliarla:
+
+- **il giudizio è sul codice di uscita, in due fasi**, mai sul testo. Prima
+  `cargo test --no-run`: se non compila, il mutante è stato rifiutato dal
+  compilatore, e si conta a parte perché una vittoria del compilatore non è una
+  vittoria della batteria. Poi l'esecuzione dei casi. Cercare `error[E`
+  nell'output sarebbe un giudizio sul testo travestito: un caso che stampasse
+  quella stringa — riportando ciò che ha osservato — si farebbe contare come
+  errore di compilazione;
+- **l'uscita di cargo va su un file, mai su una pipe.** Leggere da una pipe
+  aspetta l'EOF, non l'uscita del processo: un nipote che sopravvive alla
+  mutazione tiene aperto quel descrittore, e il tetto di tempo misura la vita
+  del nipote invece dell'esecuzione — il mutante sembra allora *appeso* invece
+  che ucciso;
+- **dopo ogni uscita di cargo si guarda il gruppo**, non solo dopo un tetto di
+  tempo scaduto. `cargo` che finisce ordinatamente non dice niente sui nipoti: un
+  caso mutato può terminare lasciando vivo un `/bin/sleep` che avrebbe dovuto
+  uccidere — è esattamente la classe di difetto che questi mutanti cercano nel
+  supervisore, e sarebbe assurdo che l'harness la lasciasse passare su di sé. Se
+  il gruppo è ancora abitato lo si ferma, prima del ripristino;
+
+- **quando lo si ferma: si ferma il gruppo, si raccoglie il figlio diretto, e si
+  pretende che il gruppo si svuoti.** La formulazione è esatta apposta: gli
+  unici processi che lo script può *raccogliere* sono i propri figli, e `cargo`
+  è l'unico; di `rustc` e dei binari di test si può soltanto chiedere la fine e
+  verificarla, perché sono nipoti e chi li aspetta è `cargo`. Scrivere
+  «raccoglie il gruppo» prometterebbe una cosa che nessun processo può fare per
+  i figli altrui.
+
+  Il gruppo si nomina con il pid del figlio, che `start_new_session` rende
+  leader: chiederlo con `getpgid` aggiungerebbe un modo di sbagliare, perché se
+  il leader se ne fosse già andato la chiamata direbbe «non esiste» e la si
+  leggerebbe come «gruppo vuoto» mentre i discendenti sono ancora lì. Il figlio
+  si raccoglie **dentro** l'attesa, perché uno zombie terrebbe vivo il gruppo e
+  il ciclo scadrebbe per la propria omissione; e un `PermissionError` significa
+  che il gruppo **esiste** e non è nostro, non che sia sparito.
+
+  Se il gruppo non si svuota, i sorgenti **non** si ripristinano e il giro si
+  ferma: rimetterli con dei superstiti vivi romperebbe proprio l'invariante che
+  la regola esiste per tenere. L'albero resta mutato, e la riparazione del giro
+  successivo lo riconosce;
+- **l'elenco è canonico**: la tabella deve corrispondere agli identificativi per
+  numero, nome e ordine. Un mutante cancellato per sbaglio farebbe altrimenti
+  scendere il denominatore, e il punteggio salirebbe *perché si misura di meno*.
+  Per la stessa ragione il blocco richiesto deve produrre **esattamente** il
+  numero di risultati che copre, e gli estremi ammessi sono solo quelli
+  canonici: un intervallo vuoto eseguirebbe zero mutanti e finirebbe con
+  successo, che è il peggiore dei verdi;
+- **la riparazione è fail-closed, e non scrive per scoprire.** Si confronta
+  l'impronta corrente con quella di tutti e trentadue gli alberi mutati
+  **virtuali**, calcolati senza toccare niente, e si ripristina solo se la
+  corrispondenza è **esattamente una**. Zero significa che c'è dell'altro oltre
+  alla mutazione; più di una, che due mutanti non si distinguono. In entrambi i
+  casi si dichiara e non si tocca: sovrascrivere un albero che non si sa cosa
+  sia cancellerebbe una modifica vera insieme a una mutazione;
+- **l'impronta identifica l'insieme dei file, non il loro numero.** Entrano nel
+  digest i percorsi effettivamente presenti e i loro contenuti: un file
+  sostituito con un altro cambia l'impronta, mentre un conteggio la lascerebbe
+  uguale — stesso numero, stessi digest, e due alberi diversi con la stessa
+  firma.
+
+  Ogni pezzo entra **preceduto dalla propria lunghezza**: concatenare senza
+  confini strutturali lascerebbe che la fine di un contenuto e l'inizio del
+  percorso successivo si spartiscano diversamente fra due alberi che darebbero
+  lo stesso digest, e un separatore che il contenuto può contenere non è un
+  confine. Una radice senza `crates/`, o senza nemmeno un sorgente, è un
+  rifiuto dichiarato: l'hash dell'insieme vuoto è un valore perfettamente
+  valido, e sarebbe il verde più facile da ottenere per sbaglio;
+
+- **i trentadue alberi mutati devono essere distinti**, e lo si accerta prima di
+  cominciare. È la precondizione perché il conteggio delle corrispondenze nella
+  riparazione significhi qualcosa: due mutanti che producessero lo stesso albero
+  lascerebbero, dopo una campagna interrotta, uno stato che la riparazione non
+  sa attribuire — e si fermerebbe su un albero che invece saprebbe rimettere a
+  posto. Un mutante che producesse la baseline è l'altro caso: non muta niente,
+  e nessun caso può accorgersene;
+- **l'impronta si riverifica dopo ogni mutante**, e alla prima differenza il
+  giro si ferma.
+
+`scripts/test_mutazioni_isolamento.py` prova queste difese su un albero finto
+costruito dalla tabella dei mutanti stessa: dura secondi, non compila niente, e
+si esegue ovunque: **34/34 difese eseguibili su Linux, 0 saltate**, e **31/31
+su Windows, una saltata**.
+
+Il conteggio distingue tre stati e non due. Un caso che qui non si può eseguire
+— i gruppi di processi sono di POSIX — non ha misurato niente, e contarlo fra i
+verdi gonfierebbe il punteggio esattamente come farebbe un mutante sparito dalla
+tabella: sta fuori dal numeratore **e** dal denominatore, e si dichiara a parte.
+
+Due meritano una nota, perché una difesa si prova contro ciò che sostituisce.
+Quella sulla codifica costruisce **due alberi diversi che la vecchia
+concatenazione rendeva identici** — uno con due file, l'altro con un file solo
+il cui contenuto porta dentro di sé il percorso del secondo, `NUL` compreso — e
+pretende che le lunghezze prefissate li distinguano. Quella sui superstiti fa
+uscire con successo un comando che lascia vivo un discendente, e pretende che
+l'harness lo trovi e lo tolga prima di dichiarare il gruppo svuotato. Serve perché una difesa non provata è una promessa, e la
+campagna vera — che le userebbe — costa mezz'ora e una macchina dedicata.
+
+**I permessi non rendono immutabile la baseline.** Toglierne la scrittura ferma
+gli incidenti, ma il proprietario può rimetterla e `root` non li guarda.
+L'autorità è il manifesto: l'impronta stabilita *prima* di `--prepara` e passata
+sulla riga di comando — una baseline che si autocertifica non certifica niente.
+A ogni avvio si verifica che la **copia** corrisponda ancora al proprio
+manifesto, ricalcolandola dai suoi file invece di rileggere il valore che
+dichiara. Una baseline già presente si verifica o si rifiuta, e non si
+sovrascrive mai: quella sul disco può essere l'unica copia di riferimento di un
+giro in corso.
+
+### La qualificazione end-to-end: un worker reale, e che cosa **non** dice
+
+`scripts/qualifica_worker_reale.sh` fa percorrere a un'immagine reale la
+sequenza intera su un canale vero: riconoscimento della modalità, eredità dei
+due descrittori, handshake, incarico, rivalidazione del piano e dei contratti
+d'ingresso, esecuzione, scrittura dell'artefatto sul temporaneo, progresso,
+esito dichiarato, EOF e raccolta del processo.
+
+**Non è un caso di `cargo test`, e la ragione è strutturale.** L'harness fa ciò
+che fa il supervisore: toglie `CLOEXEC` a due descrittori e subito dopo avvia un
+processo. Quella finestra è sicura solo in un processo con un thread solo, e
+`accerta_monothread` lo pretende; libtest invece esegue ogni caso in un thread
+proprio, quindi il conteggio dei task è due prima ancora che il caso cominci.
+Rinunciare al controllo per far girare il caso avrebbe fatto divergere l'harness
+dal codice che dice di provare, proprio sulla riga più delicata. È perciò un
+binario di sola qualificazione, dietro `required-features = ["internals"]`.
+
+**I due ingressi non comunicano.** `--iterazione` usa l'immagine del target
+condiviso: nessun digest la fissa, si ricompila di continuo, e **non qualifica**.
+Senza argomenti, lo script compila l'immagine in un target separato, ne calcola
+lo SHA-256, lo passa all'harness — che confronta il binario davvero eseguito con
+quello misurato — e lo riverifica alla fine. Un'immagine mancante è **rosso**:
+non c'è ripiego sull'altra, perché un verde che parla di un binario diverso da
+quello che si crede di aver qualificato è il difetto che nessuno vedrebbe.
+
+I due target sono separati perché una compilazione con `internals` non deve
+poter **sostituire** il binario appena qualificato: il controllo finale se ne
+accorgerebbe, ma è meglio che non possa accadere.
+
+**Che cosa questo non prova.** «Sotto limite». Qui non c'è né lo spawner né un
+dominio `cgroup2`: il worker nasce dall'harness e vive con la memoria che il
+sistema gli concede. Che esegua *sotto* `memory.max` è un'altra affermazione, e
+la si fa sulla VM attraversando spawner e dominio vero.
+
+### La qualificazione **sotto limite**: lo spawner, il dominio, e il giudizio
+
+`scripts/qualifica_sotto_limite.sh` chiude proprio quell'affermazione. Il canale
+non nasce più fra due pipe dell'harness: lo apre lo spawner, che lo rivalida, ne
+cede i due estremi al worker e glieli dichiara nell'ambiente. L'esecuzione
+avviene dentro un dominio `cgroup2` creato per l'occasione, con i quattro
+controlli scritti e riletti dal preflight — `memory.max`, `memory.swap.max` a
+zero, `memory.oom.group` a uno, `cgroup.max.depth` a zero. Le immagini restano
+due e distinte: il **supervisore** è quello di qualificazione, perché è lui che
+`/proc/self/exe` rieseguirà in modalità spawner; il **worker** è l'immagine di
+produzione, compilata senza `internals` in un target proprio e fissata da uno
+SHA-256, ed è l'unica di cui questa qualificazione parli.
+
+**Le cache di compilazione dei percorsi privilegiati sono separate, e
+root-only.** `cargo` scrive gli artefatti con l'utente che lo esegue: un percorso
+che gira come root e compila nella cache ordinaria la restituisce piena di file
+di root, e il primo comando non privilegiato che la tocca fallisce con
+`Permission denied` su `.cargo-build-lock` — un sintomo che non somiglia alla
+causa. È la stessa forma del difetto chiuso in `coverage.sh`, dove la pulizia è
+andata dove sta lo scrittore; qui lo scrittore prende una cache sua.
+
+I due percorsi privilegiati — la qualificazione sotto limite e il gate ostile —
+usano perciò `target-isolamento-root-qualificazione`, **condivisa** perché
+costruiscono la stessa immagine con gli stessi flag, e la qualificazione sotto
+limite usa in più `target-isolamento-root-produzione` per l'immagine senza
+`internals`: separata, così che una build con `internals` non possa sostituire un
+artefatto all'immagine che si sta qualificando. Restano sul disco perché le
+mutazioni del qualificatore rilanciano lo script sei volte; sono ricostruibili,
+sono di root, e **nessun comando ordinario le nomina**. La controprova che la
+separazione tenga è eseguire, subito dopo un giro privilegiato, `cargo test` e
+`qualifica_worker_reale.sh` da utente normale.
+
+**Perché serve root, e che cosa non implica.** Root delega il sottoalbero
+`cgroup2` e crea il dominio, che resta **del control plane**. Il worker no: gira
+con le credenziali che gli si passano, e il preflight pretende l'opposto del
+possesso — che il dominio **non** sia scrivibile da lui, né il dominio né
+nessuno dei suoi antenati fino alla radice. Un worker che potesse scriverlo
+riscriverebbe da sé il tetto che lo governa, e l'identità distinta non servirebbe
+a niente. Dentro il dominio l'identità non privilegiata ce la colloca lo
+**spawner**, finché è ancora privilegiato. Serve perciò un utente reale e
+distinto: con root non ci sarebbe niente da misurare, perché i permessi non lo
+fermerebbero comunque. La separazione dei privilegi resta quindi la stessa che si
+dichiara altrove, non un'eccezione concessa alla qualificazione.
+
+**Il giudizio è lo stesso di `qualifica_worker`,** non una lettura del referto a
+occhio: la modalità stampa i fatti osservati e poi chiama l'unico oracolo,
+`prova::giudica`, che pretende immagine attesa, digest concorde, accordo,
+**esattamente un** progresso — la fixture ne determina uno, e «almeno uno»
+lascerebbe passare un worker che ne manda a raffica — artefatto **riverificato**,
+fine del canale, uscita `Codice(0)` e nessun difetto di pulizia. Un
+qualificatore che stampasse senza giudicare direbbe soltanto «è successo
+qualcosa», che non è una qualificazione.
+
+**Il digest atteso arriva da fuori.** Lo script misura l'immagine prima di
+consegnarla e lo **dichiara** sulla riga di comando; il supervisore ne fa una
+misura propria sul binario che esegue davvero, e l'oracolo confronta le due.
+Misurare e poi confrontare col proprio valore sarebbe un confronto sempre vero:
+direbbe «è il binario atteso» anche eseguendone un altro, cioè tacerebbe
+esattamente nel caso per cui il controllo esiste. La mutazione dedicata dichiara
+un digest diverso e pretende il rosso.
+
+**Il verdetto si pronuncia dopo la pulizia.** Non prima: fra la fine del
+percorso e la fine dello script c'è ancora lo smontaggio del dominio, e un
+«VINTO» stampato lì direbbe qualcosa che non si sa ancora. Uno script che
+uscisse rosso avendo però stampato VINTO parlerebbe a due voci — chi legge
+crederebbe al testo, chi automatizza al codice d'uscita — e nessuno dei due
+saprebbe di essere in disaccordo con l'altro. Il corpo perciò **arma** il
+verdetto; a stamparlo è la pulizia, che è l'ultima a sapere.
+
+**Perché la pulizia può trasformare un verde in rosso.** Un dominio che resta
+non è una nota a margine: il giro successivo troverebbe un cgroup con quel nome,
+o dei processi ancora dentro un tetto che nessuno governa più. La pulizia legge
+`cgroup.events` — non `cgroup.procs`, la cui dimensione dichiarata su un file
+virtuale è zero anche quando è abitato, per cui `[[ -s ]]` è sempre falso —
+attende entro un tetto, e se il dominio resiste porta l'esito a rosso. Un guasto
+della pulizia non **sostituisce** però una causa già presente: su un percorso
+già rosso resta il codice di quello, che dice di più.
+
+L'osservazione ha **tre** esiti, non due: abitato, vuoto, e *non l'ho potuto
+guardare*. Confondere gli ultimi due sarebbe fail-open — con `cgroup.events`
+illeggibile e `rmdir` riuscito, la pulizia concluderebbe verde senza aver mai
+visto il dominio svuotarsi, e quel verde direbbe «quiescente» avendo misurato
+niente. Il terzo esito porta quindi a rosso, e in quel caso il dominio **non**
+si prova nemmeno a rimuovere. L'oracolo pretende esattamente una riga
+`populated` con valore `0` o `1`: nessuna riga, due righe, o un valore diverso
+sono un file che non si sa leggere, e non lo si interpreta a maggioranza. Lo
+stesso vale nel gate ostile, dove la classe di difetto era identica.
+
+**Le decisioni che nessun `cargo test` attraversa.** La cessione della proprietà
+delle pipe e l'imposizione della variabile del canale si vedono solo quando un
+worker vero, con altre credenziali, prova a riaprire i propri estremi dentro un
+dominio vero: nell'harness delle mutazioni un mutante di quel tipo
+sopravviverebbe sempre, non perché la batteria sia debole ma perché sta
+guardando altrove. Il giudice giusto è allora il qualificatore stesso, ed è ciò
+che fa `scripts/mutazioni_del_qualificatore.sh`: tocca una decisione per volta —
+oggi cinque: la proprietà delle pipe, la variabile del canale, il confronto col
+digest dichiarato da fuori, un guasto di pulizia dichiarato, e la quiescenza che
+non si può osservare — e pretende **due** cose insieme: codice d'uscita diverso
+da zero **e** nessun `VINTO` nel testo. Il solo codice lascerebbe passare uno script che si
+contraddice fra le sue due voci; il solo testo lascerebbe passare un rosso
+arrivato per un'altra ragione.
+
+Le difese sono quelle dell'harness principale, e per le stesse ragioni: dopo
+ogni ripristino si **verifica l'impronta** dell'albero — un ripristino fallito in
+silenzio farebbe giudicare il mutante successivo su un albero che porta ancora
+il precedente, e i due difetti si coprirebbero a vicenda — e ci sono due tetti,
+uno per giro e uno sull'intera corsa, perché giri tutti appena sotto il proprio
+sommerebbero un'attesa senza fine senza superarlo mai una volta. Il segnale del
+tetto è `TERM` con trenta secondi di grazia, non `KILL`: il qualificatore ha una
+pulizia da portare a termine, ed è proprio quella che si sta mettendo alla
+prova.
+
+### Il gate ostile: che cosa prova, e i due esiti ammessi della `unshare`
+
+`scripts/verifica_isolamento_linux.sh` prova le tre cose che i casi
+deterministici non possono provare, perché non riguardano la procedura ma
+l'ambiente. Fallisce quando un prerequisito manca, invece di saltare verde.
+
+1. **la sentinella sul dispatch**: l'immagine rieseguita arriva in modalità
+   spawner con **un task solo**. È ciò che un obbligo scritto non garantisce:
+   un `main` che costruisce un pool di thread prima di guardare `argv`
+   compila, passa ogni caso deterministico, e rompe il primo passo solo a
+   runtime;
+2. **l'immagine sostituita**: il binario sostitutivo **non parte mai**. Non che
+   parta sempre quello iniziale, che sarebbe falso — una `rename` sopra il
+   pathname fa comparire ` (deleted)` e il controllo rifiuta. Gli esiti ammessi
+   sono due: sostituzione osservata prima del controllo, e l'avvio fallisce;
+   oppure dopo, e parte l'inode iniziale. Il secondo ramo si distingue solo con
+   una **barriera esplicita** fra controllo e `spawn`: una corsa temporizzata
+   non separa «è partito l'inode giusto perché il codice è giusto» da «perché
+   la sostituzione è arrivata tardi»;
+3. **la separazione di privilegio**: il worker spogliato non riscrive i quattro
+   controlli e non esce dal dominio.
+
+**La `unshare` ha due esiti, ed entrambi passano.** `no_new_privs` **non**
+impedisce `unshare(CLONE_NEWUSER)`: vieta di acquisire privilegi attraverso una
+`execve`, e non tocca `unshare`. Un processo non privilegiato che crea uno user
+namespace, dove la policy del kernel lo consente, lo crea anche con
+`no_new_privs = 1`, e dentro quel namespace ha capability piene. Il gate accetta
+quindi:
+
+- la `unshare` rifiutata dalla policy dell'host;
+- la `unshare` riuscita, namespace cambiato e capability ottenute nel figlio, ma
+  riscritture del control plane e uscita dal dominio ancora impossibili, con
+  **stato invariato**.
+
+Il secondo è quello che dice *perché* regge: non un flag, ma il fatto che i
+file della gerarchia appartengono a un UID che nel namespace nuovo non è
+mappato, e che il dominio è sigillato.
+
+**Ogni braccio ostile ha una controprova privilegiata.** «Il worker non ci
+riesce» è vero anche quando il bersaglio non esiste, è di sola lettura per
+tutti, o il gate lo ha scritto male: senza controprova, un gate rotto è
+indistinguibile da un isolamento che regge, ed è verde. Per ogni cosa che il
+worker non deve poter fare, il control plane la fa e la disfa.
+
+Un'eccezione dichiarata: il `cgroup.procs` del **padre** non è scrivibile da
+nessuno — in cgroup v2 un cgroup con figli e controllori delegati non ospita
+processi — quindi quel rifiuto parla della gerarchia e non del worker. Il
+bersaglio che discrimina è un **fratello foglia**, dove il control plane sposta
+davvero un processo e lo rilegge. Il tentativo sul padre si registra e non si
+conta.
+
+**Il verde autoritativo arriva solo da una VM Linux dedicata** con cgroup v2 e
+sottoalbero delegato. Un container privilegiato, o un kernel di una linea non
+GA, servono a iterare: condividono il kernel con l'host o non sono la
+piattaforma di riferimento, e su `F4-15` non provano niente. Il gate registra
+il kernel nell'evidenza proprio perché quel numero è parte dell'esito.
 
 ---
 
@@ -2157,6 +2766,26 @@ punto di linearizzazione precede il commit point ed è così definito:
    regola. Fallisce: si torna all'esito congelato al punto 4, oppure alla riga
    15 se il fallimento è del publish.
 
+**La quiescenza si legge dopo aver raccolto i fatti già fermi.** Fra il punto
+2 e il punto 3 c'è una finestra che il testo dei passi non nomina, e in cui si
+perde esattamente ciò che i passi servono a non perdere.
+
+L'osservatore della quiescenza vive in un thread suo, e accoda `DominioQuiescente`
+quando lo vede. Il consumatore smette di interrogare la coda nell'istante in cui
+decide di chiudere: se la quiescenza è stata accodata **subito dopo**
+quell'istante e prima che il thread venga fermato, il fatto è in coda ma il
+consumatore non lo sa ancora. Chi decide se leggere l'evidenza guardando il
+proprio stato trova «dominio abitato» e la salta; il drain successivo applica la
+quiescenza; e la conclusione trova la barriera completa e classifica **senza
+evidenza**. La stessa esecuzione, uccisa dall'OOM, si chiama «tempo scaduto».
+
+La regola è quindi: **fermati i produttori e attesi con `join`, si raccoglie ciò
+che è già in coda, e solo allora si decide.** Non è il «guarda se è vuota»
+vietato altrove — quella sarebbe una domanda sul futuro travestita da domanda sul
+presente. Qui i produttori sono già stati aspettati, e `join` stabilisce che
+tutto ciò che hanno accodato è già visibile: non c'è un fatto in volo che una
+seconda lettura troverebbe.
+
 **Un OOM tardivo non è un'avvertenza.** La prima stesura degradava a
 diagnostica gli eventi che arrivano dopo la chiusura: era possibile solo
 perché la chiusura avveniva prima della quiescenza. Con i passi 2 e 3 al posto
@@ -2295,7 +2924,7 @@ Piccole e revisionabili. Ognuna dichiara se cambia semantica.
 | **PR-7** | dominio di isolamento su Linux, promosso da PT-Linux. Strada dello spawner, `memory.oom.group=1` obbligatorio, sigillo `cgroup.max.depth=0`, **separazione dei privilegi (`F4-15`) col provider UID/GID**, verifica in `PreparaIsolamento` con esito `IsolationUnavailable`, nessun `unsafe` | no | le sei riletture del preflight, e il worker che non riesce a riscrivere nessuna delle proprietà né a lasciare il dominio |
 | **PR-8** | supervisore: lifecycle, timeout, cancellazione, cleanup. Worker fittizio | no | matrice degli esiti su un worker che simula ogni riga |
 | **PR-9** | worker reale come modalità dell'eseguibile | no | esecuzione end-to-end sotto limite |
-| **PR-10** | sequenza di verifica da 1 a 9 — 8-bis compreso — publish no-clobber con rilevazione del residuo, e **`risolvi_commit`** con l'enum delle osservazioni | **sì** (superficie pubblica) | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice; e le cinque osservazioni su destinazioni costruite a mano |
+| **PR-10** | passi da 3 a 9 — 8-bis compreso — con la prova opaca che il verificatore rende e il passo 9 consuma; publish no-clobber che pretende byte e digest prima del commit; rilevazione del residuo sui **due assi** dell'autorità condivisa; e **`risolvi_commit`** con l'enum delle osservazioni. I passi 1 e 2 restano dove sono — leggono lo stato terminale del figlio e l'`Esito` dichiarato, che appartengono a chi possiede il ciclo di vita — e arrivano col supervisore di produzione | **sì** (superficie pubblica) | `GA-1`, `GA-3` e `GA-4` su ogni riga della matrice; le cinque osservazioni su destinazioni costruite a mano; e i due accertamenti della copia interrogati dove possono fallire |
 | ~~`PR-11`~~ | dominio di isolamento su Windows | — | **rimossa dal perimetro della fase 4**: vedi sotto |
 | **PR-12** | **attivazione**: il profilo isolato diventa selezionabile **su Linux** | **sì** | l'intera matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione, non ignorato |
 | **PR-13a** | infrastruttura di confronto shadow con **candidato sintetico**. **Preceduta dal gate bloccante `PT-shadow`**: prima del suo esito non è implementabile | **qualificato**, vedi la sezione dedicata | le garanzie di quella sezione: preparazione fallita equivalente a `off`, piano incapace di abilitare o aumentare lo shadow, record conforme al contratto privacy, e i quattro guasti del candidato senza effetto canonico |

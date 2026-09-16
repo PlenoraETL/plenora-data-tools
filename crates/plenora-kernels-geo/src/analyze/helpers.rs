@@ -30,6 +30,29 @@ pub(in crate::analyze) fn invalid_param(
     PlenoraError::InvalidPlan(format!("{op}: parametro `{name}` non valido: {reason}"))
 }
 
+/// Il parametro non e' decodificabile — **oppure** il difetto e' nostro.
+///
+/// # Perche' non basta `invalid_param`
+///
+/// Perche' la porta WKB rende `Internal` quando la validazione OGC non
+/// conclude, e scartare l'errore per dire «parametro non valido» accusa un WKB
+/// che nessuno ha dimostrato sbagliato: chi legge va a correggere un ingresso
+/// sano, e l'exit code cambia. L'errore interno passa percio' intatto.
+///
+/// La categoria si legge invece della variante, cosi' un errore avvolto —
+/// `Tagged`, diagnostica di riga — non sfugge al riconoscimento.
+pub(in crate::analyze) fn parametro_non_decodificabile(
+    op: &str,
+    name: &'static str,
+    reason: &'static str,
+    error: &PlenoraError,
+) -> PlenoraError {
+    if error.category() == plenora_core::ErrorCategory::Internal {
+        return PlenoraError::Internal(format!("{op}: parametro `{name}`: {error}"));
+    }
+    invalid_param(op, name, reason)
+}
+
 pub(in crate::analyze) fn parse_config<T: serde::de::DeserializeOwned>(
     op: &str,
     config: &Value,

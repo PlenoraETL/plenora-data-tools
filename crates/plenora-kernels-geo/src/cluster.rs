@@ -44,7 +44,6 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use geo::algorithm::validation::Validation;
 use geo::{CoordsIter, Geometry, Point};
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::PlenoraError;
@@ -70,6 +69,13 @@ pub enum ClusterError {
     IndexOverflow,
     #[error("invariante interna DBSCAN violata: {0}")]
     InternalInvariant(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 const fn invalid_parameter(name: &'static str, reason: &'static str) -> ClusterError {
@@ -94,6 +100,7 @@ const fn check_min_points(min_points: usize) -> Result<(), ClusterError> {
 }
 
 use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
 
 /// Punto indicizzato per l'R-tree: la posizione originale viaggia con
 /// l'elemento, cosi' le liste di vicini si riordinano per indice.
@@ -327,12 +334,15 @@ fn prepare_points(geometries: &[Option<Geometry<f64>>]) -> Result<PreparedPoints
         {
             return Err(ClusterError::NonFiniteCoordinate { index });
         }
-        geometry
-            .check_validation()
-            .map_err(|error| ClusterError::InvalidGeometry {
-                index,
-                reason: error.to_string(),
-            })?;
+        geometry.validazione_protetta().map_err(|esito| {
+            esito.separa(
+                |ragione| ClusterError::InvalidGeometry {
+                    index,
+                    reason: ragione.to_string(),
+                },
+                ClusterError::ValidazioneNonConclusa,
+            )
+        })?;
         let Geometry::Point(point) = geometry else {
             return Err(ClusterError::UnsupportedGeometry {
                 index,

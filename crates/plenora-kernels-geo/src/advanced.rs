@@ -1,6 +1,5 @@
 //! Advanced pure-Rust kernels whose output cardinality differs from the input.
 
-use geo::algorithm::validation::Validation;
 use geo::{BoundingRect, Geometry, Intersects, MultiPoint, Point, Rect, Voronoi};
 use thiserror::Error;
 
@@ -25,9 +24,40 @@ pub enum AdvancedError {
     UnmatchedPoint(usize),
     #[error("cella Voronoi non valida: {0}")]
     InvalidOutput(String),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
+
+/// Mappa l'esito della barriera sull'errore proprio di questo modulo, per un
+/// punto d'ingresso alla riga `index`. Estratta a parte perche' e' la
+/// conversione che una prova sintetica deve esercitare per intero: stessa
+/// motivazione di `predicates::classifica_lato`.
+fn classifica_punto(esito: crate::EsitoValidazione, index: usize) -> AdvancedError {
+    esito.separa(
+        |ragione| AdvancedError::InvalidPoint {
+            index,
+            reason: ragione.to_string(),
+        },
+        AdvancedError::ValidazioneNonConclusa,
+    )
+}
+
+/// Come [`classifica_punto`], per una cella Voronoi in uscita: nessun indice
+/// di riga da nominare, il contratto e' quello dell'output.
+fn classifica_cella(esito: crate::EsitoValidazione) -> AdvancedError {
+    esito.separa(
+        |ragione| AdvancedError::InvalidOutput(ragione.to_string()),
+        AdvancedError::ValidazioneNonConclusa,
+    )
+}
 
 /// One bounded Voronoi polygon for every input point, retaining input order.
 ///
@@ -67,11 +97,8 @@ pub fn voronoi_cells(
         .enumerate()
         .map(|(index, geometry)| {
             geometry
-                .check_validation()
-                .map_err(|error| AdvancedError::InvalidPoint {
-                    index,
-                    reason: error.to_string(),
-                })?;
+                .validazione_protetta()
+                .map_err(|esito| classifica_punto(esito, index))?;
             match geometry {
                 Geometry::Point(point) => Ok(*point),
                 value => Err(AdvancedError::ExpectedPoint {
@@ -86,8 +113,7 @@ pub fn voronoi_cells(
         .voronoi_cells()
         .map_err(|error| AdvancedError::Voronoi(error.to_string()))?;
     for cell in &cells {
-        cell.check_validation()
-            .map_err(|error| AdvancedError::InvalidOutput(error.to_string()))?;
+        cell.validazione_protetta().map_err(classifica_cella)?;
     }
 
     // Pre-filtro per bounding rect: il bounding rect di una cella copre per
@@ -126,6 +152,70 @@ pub fn voronoi_cells(
 mod tests {
     use super::*;
     use geo::{Area, Contains};
+
+    /// Sintetico attraverso la conversione reale (stessa motivazione di
+    /// `predicates::classifica_lato_non_appiattisce_l_interruzione`): nessun
+    /// reperto reale interrompe piu' `geo` col candidato esatto, quindi
+    /// l'innesco e' un `EsitoValidazione::NonConclusa` costruito a mano, ma
+    /// la funzione chiamata e' quella vera di `voronoi_cells` per un punto
+    /// d'ingresso.
+    #[test]
+    fn classifica_punto_non_appiattisce_l_interruzione() {
+        let esito = crate::EsitoValidazione::NonConclusa("forma di prova");
+        let errore = classifica_punto(esito, 3);
+        assert!(
+            matches!(
+                errore,
+                AdvancedError::ValidazioneNonConclusa("forma di prova")
+            ),
+            "atteso ValidazioneNonConclusa, ottenuto: {errore:?}"
+        );
+        assert_eq!(
+            errore.to_string(),
+            "validazione OGC non conclusa: forma di prova (contenuto non pubblicato)"
+        );
+    }
+
+    /// Controprova: un esito concluso produce l'altra variante, col suo
+    /// indice — mai la stessa variante dell'interruzione.
+    #[test]
+    fn classifica_punto_su_esito_concluso_resta_invalidpoint_con_indice() {
+        let esito = crate::EsitoValidazione::NonValida(crate::RagioneNonValida::AutoIntersezione);
+        let errore = classifica_punto(esito, 3);
+        assert!(
+            matches!(errore, AdvancedError::InvalidPoint { index: 3, .. }),
+            "atteso InvalidPoint con indice 3, ottenuto: {errore:?}"
+        );
+        assert_eq!(
+            errore.to_string(),
+            "punto non valido alla riga 3: anello con auto-intersezione"
+        );
+    }
+
+    /// Stessa coppia per la cella d'uscita: nessun indice da nominare, ma la
+    /// stessa distinzione a due vie.
+    #[test]
+    fn classifica_cella_non_appiattisce_l_interruzione() {
+        let esito = crate::EsitoValidazione::NonConclusa("forma di prova");
+        let errore = classifica_cella(esito);
+        assert!(
+            matches!(
+                errore,
+                AdvancedError::ValidazioneNonConclusa("forma di prova")
+            ),
+            "atteso ValidazioneNonConclusa, ottenuto: {errore:?}"
+        );
+    }
+
+    #[test]
+    fn classifica_cella_su_esito_concluso_resta_invalidoutput() {
+        let esito = crate::EsitoValidazione::NonValida(crate::RagioneNonValida::AutoIntersezione);
+        let errore = classifica_cella(esito);
+        assert!(
+            matches!(errore, AdvancedError::InvalidOutput(_)),
+            "atteso InvalidOutput, ottenuto: {errore:?}"
+        );
+    }
 
     #[test]
     fn voronoi_preserves_input_order_and_contains_each_site() {

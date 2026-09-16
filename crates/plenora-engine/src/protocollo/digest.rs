@@ -34,6 +34,24 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// L'unico algoritmo di digest ammesso in v1.
+///
+/// # Perche' sta col tipo e non col verificatore
+///
+/// Perche' e' cio' su cui i due lati si accordano, e i due lati sono due: chi
+/// **dichiara** l'algoritmo scrivendo l'artefatto e chi lo **pretende**
+/// rileggendolo. Tenerla dal solo lato che verifica la renderebbe irraggiungibile
+/// dall'altro — il verificatore si compila sotto `test` e `internals` — e la
+/// scorciatoia sarebbe riscriverne il valore nel worker: due stringhe uguali per
+/// coincidenza, libere di smettere di esserlo.
+///
+/// Il campo `algoritmo` di [`super::messaggi::DigestArtefatto`] resta una
+/// stringa sul filo — la forma del messaggio non cambia — ed e' qui che la
+/// coerenza si impone. Ammetterne un secondo richiede una PR esplicita: il
+/// valore canonico, la sua lunghezza e il tipo che lo rappresenta cambierebbero
+/// insieme.
+pub const ALGORITMO_DIGEST: &str = "sha256";
+
 use crate::esadecimale32::{self, DaEsadecimale32, Esadecimale32, FormaNonValida};
 
 /// Byte di un digest SHA-256: **32**, e l'autorita' e' quella della primitiva.

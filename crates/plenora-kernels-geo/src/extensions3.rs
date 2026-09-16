@@ -57,7 +57,6 @@
 //! Errori: le condizioni dei kernel puri usano [`ExtensionV3Error`].
 
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
-use geo::algorithm::validation::Validation;
 use geo::{
     Area, BooleanOps, BoundingRect, CoordsIter, Geometry, Line, LineString, MultiLineString,
     MultiPolygon,
@@ -94,6 +93,13 @@ pub enum ExtensionV3Error {
     /// Invariante interna violata (R6: errore propagato, mai panic).
     #[error("internal error: {0}")]
     Internal(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
 }
 
 const fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV3Error {
@@ -125,6 +131,7 @@ fn u64_index(index: usize) -> Result<u64, ExtensionV3Error> {
 }
 
 use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
 
 /// Elemento di copertura preparato: multipoligono validato + envelope.
 struct CoverageElement {
@@ -158,12 +165,15 @@ fn prepare_element(
     {
         return Err(ExtensionV3Error::NonFiniteCoordinate { index });
     }
-    geometry
-        .check_validation()
-        .map_err(|error| ExtensionV3Error::InvalidGeometry {
-            index,
-            reason: error.to_string(),
-        })?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV3Error::InvalidGeometry {
+                index,
+                reason: ragione.to_string(),
+            },
+            ExtensionV3Error::ValidazioneNonConclusa,
+        )
+    })?;
     let polygons = match geometry {
         Geometry::Polygon(polygon) => MultiPolygon::new(vec![polygon.clone()]),
         Geometry::MultiPolygon(polygons) => polygons.clone(),
@@ -273,9 +283,12 @@ fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, Ex
     } else {
         Geometry::MultiPolygon(intersection)
     };
-    geometry
-        .check_validation()
-        .map_err(|error| ExtensionV3Error::InvalidOutput(error.to_string()))?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ExtensionV3Error::InvalidOutput(ragione.to_string()),
+            ExtensionV3Error::ValidazioneNonConclusa,
+        )
+    })?;
     Ok(geometry)
 }
 
@@ -548,9 +561,12 @@ pub fn shared_paths_nullable(
                     .collect(),
             ))
         };
-        geometry
-            .check_validation()
-            .map_err(|error| ExtensionV3Error::InvalidOutput(error.to_string()))?;
+        geometry.validazione_protetta().map_err(|esito| {
+            esito.separa(
+                |ragione| ExtensionV3Error::InvalidOutput(ragione.to_string()),
+                ExtensionV3Error::ValidazioneNonConclusa,
+            )
+        })?;
         paths.push(SharedPath {
             index_a: u64_index(a)?,
             index_b: u64_index(b)?,

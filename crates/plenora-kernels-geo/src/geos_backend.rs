@@ -152,6 +152,7 @@ pub fn make_valid_geometry(
 }
 
 use crate::geometry_type_name as geometry_type;
+use crate::ValidazioneProtetta as _;
 
 fn ensure_linework(
     geometry: &Geometry<f64>,
@@ -544,7 +545,6 @@ pub fn split_polygon_by_linework(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::algorithm::validation::Validation;
     use geo::{line_string, polygon, Area, Geometry};
     use geozero::{CoordDimensions, ToWkb};
 
@@ -805,7 +805,7 @@ mod tests {
             let output =
                 make_valid_wkb(&degenerate, RepairMethod::Structure, keep_collapsed).unwrap();
             let repaired = geometry_from_wkb(&output).unwrap();
-            assert!(repaired.check_validation().is_ok());
+            assert!(repaired.validazione_protetta().is_ok());
         }
     }
 }
