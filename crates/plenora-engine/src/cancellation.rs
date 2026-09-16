@@ -55,6 +55,25 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::Acquire)
     }
+
+    /// Il flag atomico condiviso, per un installatore che deve scrivere
+    /// **lo stesso bit** che [`is_cancelled`](Self::is_cancelled) legge,
+    /// senza passare da [`cancel`](Self::cancel) — il caso d'uso e' un
+    /// gestore di segnale esterno (`signal_hook::flag::register`, sul
+    /// percorso isolato di `isolamento::esecuzione_isolata`) che riceve un
+    /// `Arc<AtomicBool>` da condividere con una libreria, non un
+    /// `&CancellationToken` da chiamare.
+    ///
+    /// Il clone condivide l'`Arc`: scrivere nel flag restituito e' visibile
+    /// a questo token e a tutti i suoi cloni, esattamente come
+    /// [`cancel`](Self::cancel). `signal_hook::flag::register` scrive con
+    /// `Ordering::SeqCst` — piu' forte di `Ordering::Release` che `cancel`
+    /// usa, e compatibile con l'`Ordering::Acquire` di
+    /// [`is_cancelled`](Self::is_cancelled).
+    #[must_use]
+    pub fn condividi_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.flag)
+    }
 }
 
 #[cfg(test)]
@@ -76,5 +95,34 @@ mod tests {
         assert!(clone.is_cancelled());
         clone.cancel();
         assert!(token.is_cancelled());
+    }
+
+    /// Il flag condiviso e' lo **stesso** `Arc`: scriverci direttamente
+    /// (come farebbe `signal_hook::flag::register`, senza passare da
+    /// `cancel`) e' visibile a `is_cancelled` — il caso d'uso reale di
+    /// `condividi_flag`.
+    #[test]
+    fn condividi_flag_scrive_lo_stesso_bit_che_is_cancelled_legge() {
+        let token = CancellationToken::new();
+        let bit = token.condividi_flag();
+        assert!(!token.is_cancelled());
+
+        bit.store(true, Ordering::SeqCst);
+        assert!(
+            token.is_cancelled(),
+            "una scrittura diretta sul flag condiviso deve essere visibile a is_cancelled"
+        );
+    }
+
+    /// Il flag condiviso resta lo stesso `Arc` anche attraverso un clone del
+    /// token — non una copia indipendente per ciascun clone.
+    #[test]
+    fn condividi_flag_e_lo_stesso_arc_su_ogni_clone() {
+        let token = CancellationToken::new();
+        let clone = token.clone();
+        assert!(Arc::ptr_eq(
+            &token.condividi_flag(),
+            &clone.condividi_flag()
+        ));
     }
 }

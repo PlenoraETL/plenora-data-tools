@@ -13,7 +13,7 @@ use crate::protocollo::messaggi::{
 };
 
 use super::super::coda::{apri, Coda, Produttore};
-use super::super::Fatto;
+use super::super::{Fatto, Ruolo};
 use super::{
     avvia_lettore, avvia_orologio, avvia_sorvegliante, Annullatore, CanaleOperativo, Difetto,
     EsitoDellAnnullamento, Osservatore,
@@ -118,7 +118,7 @@ fn cento_progressi_diventano_un_fatto_solo_con_l_ultimo_totale() {
     let (coda, fascio) = apri();
     let byte = filo((1..=100).map(progresso).collect());
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -153,7 +153,7 @@ fn un_contatore_che_torna_indietro_ferma_il_lettore() {
     // Cresce, cresce, e poi arretra.
     let byte = filo(vec![progresso(10), progresso(20), progresso(15)]);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -185,7 +185,7 @@ fn contatori_fermi_non_sono_una_regressione() {
     let (coda, fascio) = apri();
     let byte = filo(vec![progresso(10), progresso(10), progresso(10)]);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -203,7 +203,7 @@ fn l_esito_arriva_e_poi_la_fine() {
     let (coda, fascio) = apri();
     let byte = filo(vec![progresso(7), esito()]);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -232,7 +232,7 @@ fn un_secondo_esito_ferma_il_lettore_con_un_fatto_solo() {
     }
     let byte = filo(corpi);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -268,7 +268,7 @@ fn un_progresso_dopo_l_esito_e_fuori_sequenza() {
     let (coda, fascio) = apri();
     let byte = filo(vec![esito(), progresso(1)]);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -287,7 +287,7 @@ fn un_frame_troncato_interrompe_e_non_finisce() {
     let mut byte = filo(vec![esito()]);
     byte.truncate(byte.len() / 2);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -313,7 +313,7 @@ fn il_lettore_non_supera_mai_il_budget() {
     }
     let byte = filo(corpi);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -349,7 +349,7 @@ fn la_fine_non_sorpassa_l_esito() {
     let (coda, fascio) = apri();
     let byte = filo(vec![progresso(1), esito()]);
     let (filo_lettore, _freno) =
-        avvia_lettore(canale(byte), fascio.lettore).expect("il filo nasce");
+        avvia_lettore(canale(byte), fascio.lettore, Ruolo::Worker).expect("il filo nasce");
     assert_eq!(filo_lettore.join().expect("il lettore finisce"), None);
     drop(fascio.orologio);
     drop(fascio.annullatore);
@@ -394,7 +394,8 @@ fn su_una_pipe_vera_il_lettore_si_ferma() {
         .expect("il canale si rende non bloccante");
 
     let (coda, fascio) = apri();
-    let (filo_lettore, freno) = avvia_lettore(canale, fascio.lettore).expect("il filo nasce");
+    let (filo_lettore, freno) =
+        avvia_lettore(canale, fascio.lettore, Ruolo::Worker).expect("il filo nasce");
 
     // Nessuno scrive, e l'altro capo resta aperto: senza il freno, il lettore
     // resterebbe dentro `read` per sempre.

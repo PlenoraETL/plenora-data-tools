@@ -10,7 +10,7 @@ use crate::protocollo::messaggi::{
 };
 
 use super::super::produttori::{CanaleOperativo, Difetto, Osservatore};
-use super::super::{EsitoClassificato, Impedimento};
+use super::super::{EsitoClassificato, Impedimento, Ruolo};
 use super::{conduci, Dintorni, LettoreDiEvidenza, Terminatore};
 use crate::isolamento::figlio::{FiglioVivo, ProcessoFiglio, Uscita};
 
@@ -345,6 +345,7 @@ fn il_giro_nominale_arriva_a_da_verificare() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: Guarda::che_dice(vec![Ok(false)], true),
             terminatore: Termina::default(),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -379,6 +380,7 @@ fn sul_cammino_nominale_il_dominio_non_si_termina() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: Guarda::che_dice(vec![], true),
             terminatore,
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -414,6 +416,7 @@ fn un_tempo_scaduto_termina_il_dominio_una_volta_sola() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -452,6 +455,7 @@ fn un_dominio_che_non_si_termina_non_produce_un_esito() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -538,6 +542,7 @@ fn un_esito_tardivo_non_si_perde() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: Guarda::che_dice(vec![], true),
             terminatore: Termina::default(),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -582,6 +587,7 @@ fn tutti_i_fatti_arrivano_al_registro_finale() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: Guarda::che_dice(vec![Ok(false), Ok(false)], true),
             terminatore: Termina::default(),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -633,6 +639,7 @@ fn un_evidenza_illeggibile_impedisce_di_proseguire() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: Guarda::che_dice(vec![], true),
             terminatore: Termina::default(),
             evidenza: LeggiEvidenza::impossibile(),
@@ -696,6 +703,7 @@ fn un_guasto_nella_chiusura_non_nasconde_i_passi_successivi() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: Guarda::che_dice(vec![], true),
             terminatore: Termina::default(),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -785,6 +793,7 @@ fn un_produttore_che_muore_male_si_riporta() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: SiRompe,
             terminatore: Termina::default(),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -865,6 +874,7 @@ fn due_esiti_diventano_un_impedimento_anche_end_to_end() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: Guarda::che_dice(vec![], true),
             terminatore: Termina::default(),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -1153,6 +1163,7 @@ fn la_nascita_che_fallisce(quale: usize, chi_atteso: &str) {
         std::io::sink(),
         Duration::from_secs(30),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -1240,6 +1251,7 @@ fn un_margine_non_rappresentabile_si_osserva() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -1280,6 +1292,7 @@ fn un_attesa_della_quiescenza_non_rappresentabile_si_osserva() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -1381,6 +1394,7 @@ fn un_uscita_non_rappresentabile_e_un_osservazione_mancata() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::senza_pressione(),

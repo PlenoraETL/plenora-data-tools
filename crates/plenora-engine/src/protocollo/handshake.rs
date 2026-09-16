@@ -46,8 +46,8 @@ use super::limiti::{
     MAX_MESSAGGI_VERSO_SUPERVISORE, MAX_MESSAGGI_VERSO_WORKER, MAX_PIANO_CANONICO_BYTES,
 };
 use super::messaggi::{
-    Ambiente, Corpo, Frame, IdentitaArtefatto, IdentitaResolver, Incarico, LimitiDichiarati,
-    Risposta, Saluto, TipoMessaggio,
+    Ambiente, Corpo, Frame, IdentitaArtefatto, IdentitaResolver, Incarico, IncaricoVerifica,
+    LimitiDichiarati, Risposta, Saluto, TipoMessaggio,
 };
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,6 @@ pub struct DescrizioneLocale {
 // supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
 // non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
 // in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtteseSupervisore {
     /// Cio' che il worker deve rispecchiare identico.
@@ -355,7 +354,6 @@ fn confronta_ambiente(atteso: &AmbienteCanonico, ricevuto: &AmbienteCanonico) ->
 // supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
 // non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
 // in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
 fn confronta_capability(richieste: &[String], offerte: &[String]) -> Result<()> {
     let mut scorre = offerte.iter();
     let mut corrente = scorre.next();
@@ -460,23 +458,25 @@ fn verifica_direzione(frame: &Frame, attesa: super::messaggi::Direzione) -> Resu
 ///
 /// Non ha `Clone`, e ogni transizione consuma `self`: uno stato concluso non
 /// e' riusabile perche' non esiste piu'.
-// Lato supervisore: lo raggiungono i casi e il percorso di qualificazione, che
-// si compila sotto `internals` ed e' l'unico a guidare un worker reale. Il
-// supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
-// non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
-// in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
+// Lato supervisore: lo raggiunge ora anche il chiamante di produzione
+// (`PR-12`, `isolamento::esecuzione_isolata`), non solo i casi e il percorso
+// di qualificazione. Il `commit_token` resta sotto `internals` (sotto)
+// perche' il solo lettore di quella copia specifica e' la macchina del
+// supervisore, che non ha ancora un chiamante di produzione — vedi
+// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[derive(Debug)]
 pub struct SupervisoreInAttesa {
     /// Gia' ridotta: il confronto con la `Risposta` non deve rifare nulla.
     da_rispecchiare: DescrizioneCanonica,
     /// Gia' verificate e ordinate.
     capability_richieste: Vec<String>,
+    /// Sopravvive solo per raggiungere [`HandshakeAccettato::commit_token`]:
+    /// la copia che il protocollo usa davvero e' in `saluto`.
+    #[cfg(any(test, feature = "internals"))]
     commit_token: CommitToken,
     saluto: Saluto,
 }
 
-#[cfg(any(test, feature = "internals"))]
 impl SupervisoreInAttesa {
     /// Costruisce il `Saluto` e si mette in attesa.
     ///
@@ -517,6 +517,7 @@ impl SupervisoreInAttesa {
         Ok(Self {
             da_rispecchiare,
             capability_richieste,
+            #[cfg(any(test, feature = "internals"))]
             commit_token: attese.commit_token,
             saluto,
         })
@@ -579,6 +580,7 @@ impl SupervisoreInAttesa {
         confronta_capability(&self.capability_richieste, &offerte)?;
 
         Ok(HandshakeAccettato {
+            #[cfg(any(test, feature = "internals"))]
             commit_token: self.commit_token,
         })
     }
@@ -588,20 +590,25 @@ impl SupervisoreInAttesa {
 ///
 /// Esiste **solo** come risultato di una verifica riuscita: non c'e' un
 /// costruttore che lo produca altrimenti, quindi non si puo' avere in mano
-/// senza aver fatto l'handshake.
-// Lato supervisore, e nominato dalla macchina del supervisore — che si compila
-// sotto `internals`: il `cfg` e' percio' quello, non `test`. Il chiamante di
-// produzione arriva con `PR-12`. La regola sta in
-// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
+/// senza aver fatto l'handshake — averlo in mano e' gia' la prova che le due
+/// descrizioni concordano (`isolamento::prova::dialoga`, che scarta
+/// l'accordo stesso una volta ottenuto).
+///
+/// La struttura la produce ora anche il chiamante di produzione (`PR-12`,
+/// `isolamento::esecuzione_isolata`), non solo i casi e il percorso di
+/// qualificazione. Il campo `commit_token` resta sotto `internals`: il suo
+/// solo lettore e' la macchina del supervisore
+/// (`isolamento::macchina::produttori`), che non ha ancora un chiamante di
+/// produzione — vedi errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[derive(Debug)]
 pub struct HandshakeAccettato {
+    #[cfg(any(test, feature = "internals"))]
     commit_token: CommitToken,
 }
 
-#[cfg(any(test, feature = "internals"))]
 impl HandshakeAccettato {
     /// Il token su cui i due lati si sono accordati.
+    #[cfg(any(test, feature = "internals"))]
     #[must_use]
     pub const fn commit_token(&self) -> &CommitToken {
         &self.commit_token
@@ -716,15 +723,17 @@ pub struct WorkerAccordato {
 impl WorkerAccordato {
     /// Il token accettato nel `Saluto`.
     ///
-    /// # Perche' solo sotto `test`
+    /// # Perche' non e' l'unica via
     ///
-    /// Perche' chi esegue il token non lo prende da qui: glielo consegna
+    /// Chi esegue un piano il token non lo prende da qui: glielo consegna
     /// [`Self::ricevi_incarico`], insieme all'incarico e nello stesso momento.
-    /// Questa e' una **seconda porta** sullo stesso valore, e serve ai casi che
-    /// confrontano i due lati dell'accordo prima che un incarico esista. Farla
-    /// incondizionata la lascerebbe nel binario come superficie che nessuno
-    /// attraversa.
-    #[cfg(test)]
+    /// Questa e' una **seconda porta** sullo stesso valore, e serve a due
+    /// generi di chiamanti: i casi che confrontano i due lati dell'accordo
+    /// prima che un incarico esista, e il verificatore
+    /// (`isolamento::verificatore`), che non riceve mai un `Incarico` — la
+    /// sua fase e' [`Self::ricevi_incarico_verifica`], che porta il token
+    /// nella propria firma per lo stesso motivo per cui `ricevi_incarico` lo
+    /// fa.
     #[must_use]
     pub const fn commit_token(&self) -> &CommitToken {
         &self.commit_token
@@ -752,6 +761,27 @@ impl WorkerAccordato {
         // `plan_hash_atteso` che non e' un digest uscirebbe di qui intatto, e
         // a rifiutarlo sarebbe chi lo esegue — cioe' dopo.
         super::codifica::verifica_incarico(&incarico)?;
+        Ok((*incarico, self.commit_token))
+    }
+
+    /// Riceve l'`IncaricoVerifica`: l'equivalente di [`Self::ricevi_incarico`]
+    /// per il ruolo che rilegge invece di eseguire.
+    ///
+    /// Consuma `self`, per la stessa ragione: un secondo incarico non ha
+    /// uno stato in cui arrivare.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Self::ricevi_incarico`].
+    pub fn ricevi_incarico_verifica(self, frame: Frame) -> Result<(IncaricoVerifica, CommitToken)> {
+        verifica_direzione(&frame, super::messaggi::Direzione::VersoWorker)?;
+        let tipo = frame.tipo();
+        let Corpo::IncaricoVerifica(incarico) = frame.in_corpo() else {
+            return Err(fuori_sequenza(TipoMessaggio::IncaricoVerifica, tipo));
+        };
+        // Stessa ragione di `ricevi_incarico`: il frame puo' non essere
+        // passato dal decoder.
+        super::codifica::verifica_incarico_verifica(&incarico)?;
         Ok((*incarico, self.commit_token))
     }
 }

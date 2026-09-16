@@ -30,7 +30,7 @@ use crate::protocollo::lettore::leggi_frame;
 use crate::protocollo::messaggi::{Corpo, Progresso};
 
 use super::coda::{Bocchetta, Esaurita};
-use super::Fatto;
+use super::{Fatto, Ruolo};
 use crate::isolamento::sorgente::{Freno, Interruttore, SorgenteTerminabile};
 
 /// Cio' che un produttore rende quando finisce.
@@ -219,14 +219,20 @@ impl CanaleOperativo<std::io::PipeReader> {
 pub(super) fn avvia_lettore<R: Read + Send + 'static>(
     canale: CanaleOperativo<R>,
     bocchetta: Bocchetta,
+    ruolo: Ruolo,
 ) -> std::io::Result<(JoinHandle<Resoconto>, Freno)> {
     let (mut terminabile, freno) = SorgenteTerminabile::nuova(canale.sorgente);
     let filo = nato("plenora-lettore", move || {
         let mut bocchetta = bocchetta;
         let mut progresso = ProgressoOsservato::default();
         let mut punto = PuntoDellaConversazione::InCorso;
-        let (fatto_finale, mut rifiuto) =
-            fine_del_canale(&mut terminabile, &mut bocchetta, &mut progresso, &mut punto);
+        let (fatto_finale, mut rifiuto) = fine_del_canale(
+            &mut terminabile,
+            &mut bocchetta,
+            &mut progresso,
+            &mut punto,
+            ruolo,
+        );
 
         // Il progresso sommato si accoda **prima** della fine: cosi' chi legge
         // la coda incontra il lavoro fatto e poi la sua conclusione, che e'
@@ -375,24 +381,37 @@ pub(super) mod inciampo {
 
 /// Il giro di lettura: rende il fatto con cui il canale finisce, e l'eventuale
 /// rifiuto incontrato per strada.
+///
+/// # Perche' anche qui il ruolo decide, e non solo in `Registro::messaggio`
+///
+/// Perche' questo e' il punto in cui la conversazione passa da «in corso» a
+/// «conclusa»: se un `Corpo::EsitoVerifica` chiudesse un dialogo con un
+/// **worker** (o viceversa), la conversazione si direbbe conclusa da un
+/// messaggio che per quel ruolo non e' l'esito — e tutto cio' che arrivasse
+/// dopo verrebbe letto come «fuori sequenza» invece che come il vero
+/// protocollo violato: il corpo sbagliato. Trattandolo qui come «fuori
+/// sequenza» fin da subito, il messaggio non arriva nemmeno a
+/// `Registro::messaggio` come un possibile esito — le due difese si
+/// completano, non si sovrappongono a caso.
 fn fine_del_canale<R: Read>(
     sorgente: &mut SorgenteTerminabile<R>,
     bocchetta: &mut Bocchetta,
     progresso: &mut ProgressoOsservato,
     punto: &mut PuntoDellaConversazione,
+    ruolo: Ruolo,
 ) -> (Fatto, Resoconto) {
     loop {
         match leggi_frame(sorgente) {
             Ok(None) => return (Fatto::FineDelCanale, None),
-            Ok(Some(frame)) => match (*punto, frame.in_corpo()) {
-                (PuntoDellaConversazione::InCorso, Corpo::Progresso(quanto)) => {
+            Ok(Some(frame)) => match (*punto, ruolo, frame.in_corpo()) {
+                (PuntoDellaConversazione::InCorso, _, Corpo::Progresso(quanto)) => {
                     if let Err(motivo) = progresso.osserva(quanto) {
                         // Una regressione e' una violazione del protocollo, e si
                         // tratta come le altre: **un** fatto, e si smette.
                         return (Fatto::CanaleInterrotto(motivo), None);
                     }
                 }
-                (PuntoDellaConversazione::InCorso, Corpo::Esito(esito)) => {
+                (PuntoDellaConversazione::InCorso, Ruolo::Worker, Corpo::Esito(esito)) => {
                     *punto = PuntoDellaConversazione::Concluso;
                     if let Err(rifiuto) =
                         bocchetta.manda(Fatto::MessaggioDalWorker(Box::new(Corpo::Esito(esito))))
@@ -403,13 +422,31 @@ fn fine_del_canale<R: Read>(
                         );
                     }
                 }
-                (_, altro) => {
+                (
+                    PuntoDellaConversazione::InCorso,
+                    Ruolo::Verificatore,
+                    Corpo::EsitoVerifica(esito),
+                ) => {
+                    *punto = PuntoDellaConversazione::Concluso;
+                    if let Err(rifiuto) = bocchetta.manda(Fatto::MessaggioDalWorker(Box::new(
+                        Corpo::EsitoVerifica(esito),
+                    ))) {
+                        return (
+                            Fatto::CanaleInterrotto(
+                                "l'esito di verifica non si e' potuto accodare".to_owned(),
+                            ),
+                            Some(rifiuto),
+                        );
+                    }
+                }
+                (_, _, altro) => {
                     return (
                         Fatto::CanaleInterrotto(format!(
-                            "messaggio fuori sequenza: «{}» dopo che la conversazione e' {}",
-                            nome_del_corpo(&altro),
-                            se_conclusa(*punto)
-                        )),
+                        "messaggio fuori sequenza: «{}» dopo che la conversazione e' {} (ruolo {})",
+                        nome_del_corpo(&altro),
+                        se_conclusa(*punto),
+                        ruolo.nome(),
+                    )),
                         None,
                     )
                 }
@@ -429,10 +466,12 @@ const fn nome_del_corpo(corpo: &Corpo) -> &'static str {
     match corpo {
         Corpo::Saluto(_) => "saluto",
         Corpo::Incarico(_) => "incarico",
+        Corpo::IncaricoVerifica(_) => "incarico_verifica",
         Corpo::Annulla(_) => "annulla",
         Corpo::Risposta(_) => "risposta",
         Corpo::Progresso(_) => "progresso",
         Corpo::Esito(_) => "esito",
+        Corpo::EsitoVerifica(_) => "esito_verifica",
     }
 }
 
@@ -680,6 +719,7 @@ pub(super) trait Osservatore {
 ///
 /// Un `Option<Esaurita>` le confonde: `None` direbbe insieme «fatto», «troppo
 /// tardi» e «lucchetto avvelenato».
+///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum EsitoDellAnnullamento {
     /// La richiesta e' in coda.

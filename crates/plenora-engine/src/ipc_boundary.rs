@@ -436,7 +436,6 @@ pub(crate) struct ArtefattoConvalidato {
 }
 
 impl ArtefattoConvalidato {
-    #[cfg(any(test, feature = "internals"))]
     /// Un secondo handle sullo **stesso** file gia' aperto.
     ///
     /// # Perche' un duplicato e non una riapertura
@@ -465,7 +464,6 @@ impl ArtefattoConvalidato {
         })
     }
 
-    #[cfg(any(test, feature = "internals"))]
     /// Quanti byte ha il file **adesso**, chiesti al descrittore aperto.
     ///
     /// # Perche' non basta [`Self::byte_totali`]
@@ -492,14 +490,12 @@ impl ArtefattoConvalidato {
             .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))
     }
 
-    #[cfg(any(test, feature = "internals"))]
     /// I byte del file, misurati all'apertura.
     pub(crate) fn byte_totali(&self) -> u64 {
         use crate::geo_transport::ipc::IpcSource as _;
         self.sorgente.total_len()
     }
 
-    #[cfg(any(test, feature = "internals"))]
     /// Legge una finestra per offset, senza spostare cio' che arrow leggera'.
     ///
     /// # Errors
@@ -562,7 +558,6 @@ impl ArtefattoConvalidato {
 //
 // Il registro sta in
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-#[cfg(any(test, feature = "internals"))]
 pub(crate) fn convalida_artefatto(
     percorso: &Path,
     limits: &IpcLimits,
@@ -610,14 +605,99 @@ pub(crate) fn convalida_artefatto_con_causa(
     limits: &IpcLimits,
     chiave: &str,
 ) -> std::result::Result<(Option<String>, ArtefattoConvalidato), CausaDiApertura> {
+    let file = File::open(percorso).map_err(CausaDiApertura::Io)?;
+    convalida_handle_con_causa(file, limits, chiave)
+}
+
+/// Come [`convalida_artefatto_con_causa`], ma da un handle **gia' aperto**
+/// invece che da un percorso.
+///
+/// # Perche' esiste
+///
+/// Nella topologia a due domini (`isolamento.md#2-quater-topologia-chi-osserva-chi`) il verificatore
+/// riceve l'artefatto come descrittore gia' aperto in sola lettura dal
+/// coordinatore — mai un percorso — perche' un percorso e' proprio cio' che
+/// [`NG-9`](../../../docs/isolamento.md) dichiara insufficiente: passare un
+/// handle toglie un modo di *scoprire* la destinazione, non revoca l'autorita'
+/// di chi lo riceve, e qui la destinazione non gli viene comunque mai detta.
+///
+/// La parte comune con [`convalida_artefatto_con_causa`] e' tutto cio' che
+/// viene **dopo** l'apertura: misurare, avvolgere in una sorgente posizionale,
+/// convalidare framing ed estrarre la chiave. Fattorizzarla qui evita due
+/// copie della stessa traversata che una PR futura potrebbe far divergere.
+///
+/// # Errors
+///
+/// [`CausaDiApertura`], come [`convalida_artefatto_con_causa`] meno gli
+/// errori di apertura per percorso — qui l'handle e' gia' in mano al
+/// chiamante.
+pub(crate) fn convalida_handle_con_causa(
+    file: File,
+    limits: &IpcLimits,
+    chiave: &str,
+) -> std::result::Result<(Option<String>, ArtefattoConvalidato), CausaDiApertura> {
     use crate::geo_transport::ipc::{valida_file_ed_estrai, SeekSource};
 
-    let file = File::open(percorso).map_err(CausaDiApertura::Io)?;
     let byte_totali = file.metadata().map_err(CausaDiApertura::Io)?.len();
     let mut sorgente = SeekSource::new(file, byte_totali);
     let trovato = valida_file_ed_estrai(&mut sorgente, limits, Some(chiave))
         .map_err(CausaDiApertura::Confine)?;
     Ok((trovato, ArtefattoConvalidato { sorgente }))
+}
+
+/// Come [`convalida_artefatto`], ma da un handle gia' aperto: la forma
+/// pubblica (nel crate) di [`convalida_handle_con_causa`], con la causa gia'
+/// tradotta in [`PlenoraError`].
+///
+/// # Errors
+///
+/// Gli errori del confine, taggati [`ErrorPhase::Read`]: `Io` sulla misura
+/// dell'handle, `ResourceLimit` sui tetti, `DataMapping` sul framing
+/// malformato — esattamente come [`convalida_artefatto`].
+pub(crate) fn convalida_handle_artefatto(
+    file: File,
+    limits: &IpcLimits,
+    chiave: &str,
+) -> Result<(Option<String>, ArtefattoConvalidato)> {
+    convalida_handle_con_causa(file, limits, chiave).map_err(|causa| match causa {
+        CausaDiApertura::Io(errore) => PlenoraError::Io(errore).with_phase(ErrorPhase::Read),
+        CausaDiApertura::Confine(causa) => read_error(causa),
+    })
+}
+
+/// Avvolge un handle **gia' accertato altrove** in un [`ArtefattoConvalidato`],
+/// senza rifare la traversata del framing.
+///
+/// # Perche' esiste, e perche' non e' una scorciatoia sulla verifica
+///
+/// Nella topologia a due domini la verifica vera — passi 3-8-bis, framing,
+/// digest, contratto, conteggi, token — avviene nel dominio del
+/// **verificatore**, su un handle indipendente. Il coordinatore non deve
+/// rileggere e riparsare Arrow: e' esattamente il lavoro che la §2-ter vuole
+/// fuori dal suo processo. Questa funzione costruisce percio' un
+/// `ArtefattoConvalidato` dal **proprio** handle del coordinatore — aperto
+/// prima ancora che il verificatore nascesse — con i soli byte totali
+/// misurati all'apertura, e nessuna pretesa che questo handle sia stato
+/// esso stesso validato.
+///
+/// Non e' una porta che permette di pubblicare un file non verificato: la
+/// prova (`ArtefattoVerificato`) si costruisce **solo** dopo che il dialogo
+/// col verificatore ha raggiunto la barriera di successo
+/// (`isolamento::esecuzione_isolata`), e il passo 9
+/// (`pubblicazione::copia_accertando`) rimisura comunque il file **ora**
+/// (`ArtefattoConvalidato::misura_ora`) e ricalcola il digest **sui byte
+/// effettivamente copiati** prima del commit point — quindi una divergenza
+/// fra questo handle e l'artefatto che il verificatore ha davvero controllato
+/// (un file sostituito, troncato o esteso nel frattempo) resta rilevata li',
+/// non qui.
+///
+/// `pub(crate)`: il solo chiamante e' il chiamante di produzione a due
+/// domini; nessun'altra superficie deve poter costruire un
+/// `ArtefattoConvalidato` senza passare dal framing.
+pub(crate) const fn artefatto_gia_accertato(file: File, byte_totali: u64) -> ArtefattoConvalidato {
+    ArtefattoConvalidato {
+        sorgente: crate::geo_transport::ipc::SeekSource::new(file, byte_totali),
+    }
 }
 
 /// Apre un ingresso IPC riconoscendone il formato dal magic.

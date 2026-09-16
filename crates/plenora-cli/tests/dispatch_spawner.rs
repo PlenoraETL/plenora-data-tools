@@ -57,7 +57,7 @@ fn un_comando_ordinario_prosegue_invariato() {
 #[test]
 #[cfg(target_os = "linux")]
 fn una_richiesta_malformata_fallisce_nello_spawner() {
-    let (codice, testo) = esegui(&["plenora-spawner-2"]);
+    let (codice, testo) = esegui(&["plenora-spawner-3"]);
     assert_ne!(codice, 0, "una richiesta malformata non puo' riuscire");
     assert!(
         testo.contains("spawner"),
@@ -76,14 +76,15 @@ fn una_richiesta_malformata_fallisce_nello_spawner() {
 fn le_altre_versioni_del_namespace_sono_rifiuti_che_si_nominano() {
     for versione in [
         "plenora-spawner-1",
-        "plenora-spawner-3",
+        "plenora-spawner-2",
+        "plenora-spawner-4",
         "plenora-spawner-99",
         "plenora-spawner-",
     ] {
         let (codice, testo) = esegui(&[versione]);
         assert_ne!(codice, 0, "«{versione}» non puo' riuscire: {testo}");
         assert!(
-            testo.contains("plenora-spawner-2"),
+            testo.contains("plenora-spawner-3"),
             "«{versione}»: il rifiuto non nomina la versione attesa: {testo}"
         );
         assert!(
@@ -102,12 +103,12 @@ fn il_confine_del_namespace_e_quello_dichiarato() {
     let (dentro, testo_dentro) = esegui(&["plenora-spawner-xyz"]);
     assert_ne!(dentro, 0);
     assert!(
-        testo_dentro.contains("plenora-spawner-2"),
+        testo_dentro.contains("plenora-spawner-3"),
         "dovrebbe essere un rifiuto di versione: {testo_dentro}"
     );
 
     // Fuori: somiglia, ma il prefisso non c'e'.
-    for fuori in ["plenora-spawner", "spawner-2", "plenora_spawner-2"] {
+    for fuori in ["plenora-spawner", "spawner-3", "plenora_spawner-3"] {
         let (codice, testo) = esegui(&[fuori]);
         assert!(
             !testo.contains("versione della richiesta non supportata"),

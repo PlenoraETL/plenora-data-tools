@@ -97,7 +97,7 @@ const TOKEN: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccd
 /// macchina scarica: qui si esegue un piano di quattro righe. Non e' una misura
 /// di prestazione, e' la soglia oltre la quale «lento» e «fermo» non si
 /// distinguono piu'.
-const TETTO_DELLA_PAROLA: Duration = Duration::from_secs(30);
+pub(super) const TETTO_DELLA_PAROLA: Duration = Duration::from_secs(30);
 
 /// Quanto si aspetta che il figlio finisca **da se'**, prima di segnalargli
 /// qualcosa.
@@ -547,10 +547,10 @@ fn concedi_al_worker(ingresso: &Path, temporaneo: &Path, uid: u32, gid: u32) -> 
 }
 
 /// Cio' contro cui l'artefatto si riverifica.
-struct Riferimenti<'a> {
-    contratto: &'a DataContract,
-    temporaneo: &'a Path,
-    token: &'a CommitToken,
+pub(super) struct Riferimenti<'a> {
+    pub(super) contratto: &'a DataContract,
+    pub(super) temporaneo: &'a Path,
+    pub(super) token: &'a CommitToken,
 }
 
 /// Cio' che il dialogo ha osservato, prima che il figlio venga chiuso.
@@ -572,7 +572,7 @@ pub struct Osservato {
 /// Ogni lettura passa dal guardiano: un worker che tace fa fallire questa
 /// funzione entro [`TETTO_DELLA_PAROLA`], e il chiamante chiude comunque il
 /// figlio.
-fn dialoga(
+pub(super) fn dialoga(
     supervisore: SupervisoreInAttesa,
     da_lui: std::io::PipeReader,
     verso_lui: &mut std::io::PipeWriter,
@@ -581,7 +581,7 @@ fn dialoga(
 ) -> Result<Osservato> {
     rendi_non_bloccante(&da_lui)?;
     let (spia, freno) = interruttore();
-    let guardiano = Guardiano::comincia(freno, spia.clone())?;
+    let guardiano = Guardiano::comincia(freno, spia.clone(), TETTO_DELLA_PAROLA)?;
     let mut sorgente = SorgenteTerminabile::con_interruttore(da_lui, PASSO_DI_ATTESA, spia);
 
     let visto = (|| -> Result<Osservato> {
@@ -684,7 +684,7 @@ fn secondo_il_guardiano(visto: Result<Osservato>, stato: &StatoDelGuardiano) -> 
 /// costa un thread che dorme. Una seconda nozione di scadenza — `SO_RCVTIMEO`,
 /// o un `poll` con timeout — sarebbe un secondo modo di smettere di ascoltare, e
 /// i due potrebbero divergere su che cosa significhi «fermo».
-struct Guardiano {
+pub(super) struct Guardiano {
     freno: Freno,
     mano: std::thread::JoinHandle<bool>,
 }
@@ -698,7 +698,7 @@ struct Guardiano {
 /// garanzia che lo limita, e un `false` lo direbbe tranquillo. Con tre
 /// stati chi legge deve nominare anche il terzo.
 #[derive(Debug, PartialEq, Eq)]
-enum StatoDelGuardiano {
+pub(super) enum StatoDelGuardiano {
     /// Ha vigilato fino alla fine, e la scadenza non e' scattata.
     NonScaduto,
     /// La scadenza e' scattata: le letture sono state fermate.
@@ -708,20 +708,27 @@ enum StatoDelGuardiano {
 }
 
 impl Guardiano {
-    /// Comincia a contare.
+    /// Comincia a contare verso `tetto`.
+    ///
+    /// # Perche' il tetto e' un parametro
+    ///
+    /// Perche' non tutte le attese hanno la stessa taglia: l'handshake ha una
+    /// dimensione fissa indipendente dal piano, e il dialogo intero scala con
+    /// cio' che il piano fa eseguire. Un guardiano che portasse `TETTO_DELLA_PAROLA`
+    /// scritto dentro andrebbe bene per l'uno e male per l'altro.
     ///
     /// # Errors
     ///
     /// [`PlenoraError::IsolationUnavailable`] se il thread non nasce: senza
     /// guardiano le letture non avrebbero tetto, e cominciare comunque darebbe
     /// un percorso che puo' appendersi.
-    fn comincia(freno: Freno, spia: Interruttore) -> Result<Self> {
+    pub(super) fn comincia(freno: Freno, spia: Interruttore, tetto: Duration) -> Result<Self> {
         // La scadenza si calcola **prima** di partire, e in modo controllato: un
         // `Instant + Duration` che tracima va in panico, e un guardiano che
         // muore nascendo lascerebbe le letture senza tetto proprio mentre tutto
         // sembra a posto. Qui l'impossibilita' e' osservata, non presunta.
         let scadenza = std::time::Instant::now()
-            .checked_add(TETTO_DELLA_PAROLA)
+            .checked_add(tetto)
             .ok_or_else(|| {
                 non_disponibile(
                     "prova",
@@ -761,7 +768,7 @@ impl Guardiano {
     /// arrivato **senza** il tetto sulle letture, e un percorso che non puo'
     /// garantire il proprio tempo non qualifica niente. Il payload non si
     /// legge — non ci interessa che cosa dicesse — ma la sua assenza si.
-    fn ferma_e_raccogli(self) -> StatoDelGuardiano {
+    pub(super) fn ferma_e_raccogli(self) -> StatoDelGuardiano {
         self.freno.ferma();
         match self.mano.join() {
             Ok(true) => StatoDelGuardiano::Scaduto,
@@ -899,8 +906,24 @@ fn riverifica(esito: &EsitoOsservato, riferimenti: &Riferimenti<'_>) -> Artefatt
     let EsitoOsservato::Successo { digest, conteggi } = esito else {
         return Artefatto::NonDichiarato;
     };
+    // Il fingerprint e non il contratto: e' l'unica cosa che il passo 7 usa
+    // (vedi `verifica::AtteseVerifica::contratto_fingerprint_atteso`), nella
+    // forma sul filo — la riduzione puo' fallire solo per un contratto non
+    // serializzabile, impossibile per costruzione su quello di prova; la
+    // conversione in `DigestSha256` solo per un'impronta in forma non
+    // canonica, ugualmente impossibile: `to_hex()` rende sempre 64
+    // esadecimali minuscoli.
+    let contratto_fingerprint_atteso =
+        match crate::planner::contract_fingerprint(riferimenti.contratto)
+            .map_err(|causa| causa.to_string())
+            .and_then(|impronta| {
+                DigestSha256::da_esadecimale(&impronta.to_hex()).map_err(|forma| forma.to_string())
+            }) {
+            Ok(atteso) => atteso,
+            Err(causa) => return Artefatto::Respinto(causa),
+        };
     let attese = AtteseVerifica {
-        contratto: riferimenti.contratto,
+        contratto_fingerprint_atteso,
         digest,
         conteggi: *conteggi,
         commit_token: riferimenti.token,
@@ -920,7 +943,7 @@ fn riverifica(esito: &EsitoOsservato, riferimenti: &Riferimenti<'_>) -> Artefatt
 }
 
 /// Scrive tutti i byte e li fa partire.
-fn scrivi(dove: &mut std::io::PipeWriter, byte: &[u8]) -> Result<()> {
+pub(super) fn scrivi(dove: &mut std::io::PipeWriter, byte: &[u8]) -> Result<()> {
     dove.write_all(byte)
         .and_then(|()| dove.flush())
         .map_err(|causa| non_disponibile("prova", &format!("il frame non parte: {causa}")))
@@ -936,7 +959,7 @@ fn scrivi(dove: &mut std::io::PipeWriter, byte: &[u8]) -> Result<()> {
 ///
 /// Quelli della descrizione locale, e [`PlenoraError::InvalidConfiguration`] se
 /// le attese non sono coerenti.
-fn supervisore_per(
+pub(super) fn supervisore_per(
     digest_immagine: &str,
     commit_token: CommitToken,
 ) -> Result<SupervisoreInAttesa> {

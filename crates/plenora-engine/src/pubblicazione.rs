@@ -362,7 +362,6 @@ fn ragione_di(causa: &ArrowTransportError) -> RagioneNonLeggibile {
     }
 }
 
-#[cfg(any(test, feature = "internals"))]
 /// L'artefatto che ha superato i passi da 3 a 8-bis.
 ///
 /// # Perche' un tipo, e non un percorso
@@ -401,7 +400,6 @@ pub(crate) struct ArtefattoVerificato {
     digest_atteso: Esadecimale32,
 }
 
-#[cfg(any(test, feature = "internals"))]
 impl ArtefattoVerificato {
     /// Lo costruisce il verificatore, e nessun altro.
     ///
@@ -420,7 +418,6 @@ impl ArtefattoVerificato {
     }
 }
 
-#[cfg(any(test, feature = "internals"))]
 /// Passo 9: rende visibile l'artefatto verificato, **senza mai sostituire**.
 ///
 /// # Perche' copia invece di spostare il file
@@ -481,7 +478,6 @@ pub(crate) fn pubblica(
     Ok(esito)
 }
 
-#[cfg(any(test, feature = "internals"))]
 /// Copia i byte verificati nel writer, contandoli e ricalcolandone il digest.
 ///
 /// # Perche' i due controlli stanno qui e non dopo
@@ -553,7 +549,6 @@ fn copia_accertando(
     Ok(())
 }
 
-#[cfg(any(test, feature = "internals"))]
 /// Byte copiati per volta: memoria costante, come nel passo 5-bis.
 const BLOCCO_COPIA: usize = 64 * 1024;
 

@@ -29,9 +29,10 @@ use super::limiti::{
 use super::messaggi::{
     Ambiente, Annulla, BackendDinamico, CategoriaSulFilo, ConteggiDichiarati, Corpo,
     DescrittoreIngresso, DiagnosticaSulFilo, DigestArtefatto, EffettoSulFilo, ErroreSulFilo,
-    EsempioDiagnostica, EsitoWorkerSulFilo, FaseSulFilo, FormaPanicSulFilo, FormatoIngresso, Frame,
-    IdentitaArtefatto, IdentitaResolver, Incarico, LimitiDichiarati, Progresso, RetrySulFilo,
-    RisorsaRisolta, Risposta, Saluto, TipoMessaggio, VERSIONE_PROTOCOLLO,
+    EsempioDiagnostica, EsitoVerificaSulFilo, EsitoWorkerSulFilo, FaseSulFilo, FormaPanicSulFilo,
+    FormatoIngresso, Frame, IdentitaArtefatto, IdentitaResolver, Incarico, IncaricoVerifica,
+    LimitiDichiarati, Progresso, RetrySulFilo, RisorsaRisolta, Risposta, Saluto, TipoMessaggio,
+    VERSIONE_PROTOCOLLO,
 };
 
 // ---------------------------------------------------------------------------
@@ -293,7 +294,10 @@ fn esito_panic() -> Frame {
     })
 }
 
-/// Gli otto casi: i sei tipi, e per l'`Esito` le tre forme.
+/// Gli otto casi: sei degli ora sette tipi (`incarico_verifica` non ha un
+/// vettore scritto a mano — nessun chiamante di produzione lo attraversa
+/// ancora sul filo reale in questo modulo di prova), e per l'`Esito` le tre
+/// forme.
 fn casi() -> Vec<(&'static str, Frame, Vec<u8>)> {
     vec![
         (
@@ -1491,7 +1495,7 @@ fn piano_al_tetto() -> Box<RawValue> {
     grezzo(&piano_di(MAX_PIANO_CANONICO_BYTES))
 }
 
-/// I sei massimi **veri**, prodotti dal codificatore.
+/// Gli otto massimi **veri**, prodotti dal codificatore.
 fn massimi() -> Vec<(&'static str, Frame)> {
     let artefatto = IdentitaArtefatto {
         digest: digest_massimo(),
@@ -1535,6 +1539,21 @@ fn massimi() -> Vec<(&'static str, Frame)> {
             }))),
         ),
         (
+            "incarico_verifica",
+            Frame::nuovo(Corpo::IncaricoVerifica(Box::new(IncaricoVerifica {
+                contract_fingerprint_atteso: digest_massimo(),
+                digest_atteso: DigestArtefatto {
+                    algoritmo: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+                    valore: ripeti_espandendo(MAX_DIGEST_BYTES),
+                },
+                conteggi_attesi: ConteggiDichiarati {
+                    righe: u64::MAX,
+                    batch: u64::MAX,
+                },
+                budget_memoria_governata_bytes: u64::MAX,
+            }))),
+        ),
+        (
             "annulla",
             Frame::nuovo(Corpo::Annulla(Annulla {
                 motivo: ripeti_espandendo(MAX_MOTIVO_BYTES),
@@ -1558,50 +1577,70 @@ fn massimi() -> Vec<(&'static str, Frame)> {
             })),
         ),
         ("esito", esito_massimo()),
+        (
+            "esito_verifica",
+            Frame::nuovo(Corpo::EsitoVerifica(Box::new(esito_verifica_massimo()))),
+        ),
     ]
 }
 
 /// L'esito piu' grande: ogni campo al proprio tetto.
 fn esito_massimo() -> Frame {
     esito(EsitoWorkerSulFilo::Errore {
-        errore: Box::new(ErroreSulFilo {
-            categoria: CategoriaSulFilo::UnattributedMemoryPressure,
-            fase: FaseSulFilo::Finalize,
-            effetto: EffettoSulFilo::Unknown,
-            retry: RetrySulFilo::After { delay_ms: u64::MAX },
-            messaggio: ripeti_espandendo(MAX_MESSAGGIO_BYTES),
-            nodo: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
-            operazione: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
-            execution_id: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
-            diagnostica: Some(DiagnosticaSulFilo {
-                contract: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
-                scope: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
-                completeness: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
-                observed_total: u64::MAX,
-                conteggi: vec![
-                    (ripeti_espandendo(MAX_CHIAVE_CONTEGGIO_BYTES), u64::MAX);
-                    MAX_CONTEGGI_DIAGNOSTICA
-                ],
-                esempi: vec![
-                    EsempioDiagnostica {
-                        indice: u64::MAX,
-                        codice: ripeti_espandendo(MAX_ESEMPIO_BYTES),
-                    };
-                    MAX_ESEMPI_DIAGNOSTICA
-                ],
-                esempi_troncati: true,
-            }),
-        }),
+        errore: Box::new(errore_sul_filo_massimo()),
     })
 }
 
-/// Il tetto del frame **contiene** i sei massimi, e l'`Incarico` e' il piu'
-/// grande.
+/// L'`ErroreSulFilo` piu' grande: ogni campo al proprio tetto — condiviso
+/// da [`esito_massimo`] e [`esito_verifica_massimo`], perche' e' lo stesso
+/// tipo di errore in entrambi gli esiti.
+fn errore_sul_filo_massimo() -> ErroreSulFilo {
+    ErroreSulFilo {
+        categoria: CategoriaSulFilo::UnattributedMemoryPressure,
+        fase: FaseSulFilo::Finalize,
+        effetto: EffettoSulFilo::Unknown,
+        retry: RetrySulFilo::After { delay_ms: u64::MAX },
+        messaggio: ripeti_espandendo(MAX_MESSAGGIO_BYTES),
+        nodo: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
+        operazione: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
+        execution_id: Some(ripeti_espandendo(MAX_IDENTIFICATORE_BYTES)),
+        diagnostica: Some(DiagnosticaSulFilo {
+            contract: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+            scope: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+            completeness: ripeti_espandendo(MAX_IDENTIFICATORE_BYTES),
+            observed_total: u64::MAX,
+            conteggi: vec![
+                (ripeti_espandendo(MAX_CHIAVE_CONTEGGIO_BYTES), u64::MAX);
+                MAX_CONTEGGI_DIAGNOSTICA
+            ],
+            esempi: vec![
+                EsempioDiagnostica {
+                    indice: u64::MAX,
+                    codice: ripeti_espandendo(MAX_ESEMPIO_BYTES),
+                };
+                MAX_ESEMPI_DIAGNOSTICA
+            ],
+            esempi_troncati: true,
+        }),
+    }
+}
+
+/// L'esito di verifica piu' grande: stessa forma di [`esito_massimo`], tipo
+/// distinto.
+fn esito_verifica_massimo() -> EsitoVerificaSulFilo {
+    EsitoVerificaSulFilo::Errore {
+        errore: Box::new(errore_sul_filo_massimo()),
+    }
+}
+
+/// Il tetto del frame **contiene** gli otto massimi, e l'`Incarico` e' il
+/// piu' grande — anche con `IncaricoVerifica` ed `EsitoVerifica` nel
+/// confronto: nessuno dei due porta una lista ripetuta `MAX_INGRESSI` volte.
 ///
 /// «Il piu' grande» non e' un'intuizione da confermare: se lo fosse un altro,
 /// la derivazione del tetto starebbe misurando il messaggio sbagliato.
 #[test]
-fn i_sei_massimi_stanno_sotto_il_tetto_e_l_incarico_e_il_maggiore() {
+fn gli_otto_massimi_stanno_sotto_il_tetto_e_l_incarico_e_il_maggiore() {
     let mut misure: Vec<(&'static str, usize)> = Vec::new();
     for (nome, frame) in massimi() {
         let byte = codifica(&frame)
@@ -1770,26 +1809,27 @@ fn il_contenuto_non_entra_negli_errori_del_writer() {
 // Direzione
 // ---------------------------------------------------------------------------
 
-/// L'involucro e' derivato assumendo che il nome di tipo piu' lungo sia di
-/// nove caratteri: qui si verifica che l'assunzione regga.
+/// L'involucro e' derivato assumendo che il nome di tipo piu' lungo sia
+/// `incarico_verifica`, diciassette caratteri: qui si verifica che
+/// l'assunzione regga.
 ///
-/// E' il genere di premessa che marcisce in silenzio. Un settimo tipo con un
+/// E' il genere di premessa che marcisce in silenzio. Un tipo futuro con un
 /// nome piu' lungo non romperebbe niente di visibile — renderebbe soltanto la
 /// derivazione del tetto un po' meno vera di quanto dichiara.
 #[test]
-fn nessun_nome_di_tipo_supera_i_nove_caratteri() {
+fn nessun_nome_di_tipo_supera_i_diciassette_caratteri() {
     let mut piu_lungo = 0;
     for (_, nome) in TipoMessaggio::TUTTE {
         assert!(
-            nome.len() <= 9,
-            "`{nome}` e' lungo {} caratteri, non nove",
+            nome.len() <= 17,
+            "`{nome}` e' lungo {} caratteri, non diciassette",
             nome.len()
         );
         piu_lungo = piu_lungo.max(nome.len());
     }
     assert_eq!(
-        piu_lungo, 9,
-        "nessun tipo arriva a nove: la derivazione dell'involucro e' \
+        piu_lungo, 17,
+        "nessun tipo arriva a diciassette: la derivazione dell'involucro e' \
          piu' larga del necessario, e vale la pena saperlo"
     );
 }
@@ -1805,10 +1845,12 @@ fn il_tipo_e_sempre_quello_del_corpo() {
         let atteso = match frame.corpo() {
             Corpo::Saluto(_) => TipoMessaggio::Saluto,
             Corpo::Incarico(_) => TipoMessaggio::Incarico,
+            Corpo::IncaricoVerifica(_) => TipoMessaggio::IncaricoVerifica,
             Corpo::Annulla(_) => TipoMessaggio::Annulla,
             Corpo::Risposta(_) => TipoMessaggio::Risposta,
             Corpo::Progresso(_) => TipoMessaggio::Progresso,
             Corpo::Esito(_) => TipoMessaggio::Esito,
+            Corpo::EsitoVerifica(_) => TipoMessaggio::EsitoVerifica,
         };
         assert_eq!(frame.tipo(), atteso, "tipo dedotto male per «{nome}»");
 
@@ -1900,6 +1942,7 @@ fn il_vocabolario_sul_filo_e_biunivoco() {
     // l'unicita' si', ed e' la meta' che fa il danno.
     nomi_distinti(RetrySulFilo::NOMI, "RetrySulFilo");
     nomi_distinti(EsitoWorkerSulFilo::NOMI, "EsitoWorkerSulFilo");
+    nomi_distinti(EsitoVerificaSulFilo::NOMI, "EsitoVerificaSulFilo");
 
     // I due insiemi generati dalla stessa lista devono avere la stessa
     // taglia: se divergessero, sarebbe la macro a espandere male, e i test
@@ -1949,12 +1992,14 @@ fn ogni_tipo_ha_una_sola_direzione() {
     // sfuggire all'iterazione perche' `TUTTE` lo contiene per costruzione.
     for (tipo, nome) in TipoMessaggio::TUTTE {
         let atteso = match tipo {
-            TipoMessaggio::Saluto | TipoMessaggio::Incarico | TipoMessaggio::Annulla => {
-                Direzione::VersoWorker
-            }
-            TipoMessaggio::Risposta | TipoMessaggio::Progresso | TipoMessaggio::Esito => {
-                Direzione::VersoSupervisore
-            }
+            TipoMessaggio::Saluto
+            | TipoMessaggio::Incarico
+            | TipoMessaggio::IncaricoVerifica
+            | TipoMessaggio::Annulla => Direzione::VersoWorker,
+            TipoMessaggio::Risposta
+            | TipoMessaggio::Progresso
+            | TipoMessaggio::Esito
+            | TipoMessaggio::EsitoVerifica => Direzione::VersoSupervisore,
         };
         assert_eq!(tipo.direzione(), atteso, "direzione sbagliata per `{nome}`");
     }

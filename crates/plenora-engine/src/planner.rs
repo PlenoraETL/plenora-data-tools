@@ -508,6 +508,19 @@ pub fn validate(
     // che non passano dal preparer tabellare — dove un controllo del genere
     // correggerebbe in silenzio invece di rifiutare, e non coprirebbe loro.
     plan.effective_limits().validate()?;
+    // Passo 1-bis (`PR-12`): la piattaforma supporta AFFATTO il profilo
+    // isolato che il piano richiede? E' un fatto statico del binario e del
+    // sistema, non dell'ambiente di questa esecuzione — la disponibilita'
+    // dinamica (privilegi, cgroup, politica dell'host) resta a
+    // `PreparaIsolamento`, dopo, e non e' una proprieta' del piano. Qui si
+    // rifiuta solo cio' che nessun ambiente di questa piattaforma potrebbe
+    // mai offrire (F4-6, F4-11): Windows e macOS restano rifiutati in
+    // validazione, non ignorati ne' fatti ricadere sull'esecuzione
+    // in-process.
+    crate::isolamento::attivazione::verifica_piattaforma(
+        plan.max_domain_memory_bytes().is_some(),
+        std::env::consts::OS,
+    )?;
     let plan_ref = plan.struttura_condivisa();
     let plan_ref = plan_ref.as_ref();
 

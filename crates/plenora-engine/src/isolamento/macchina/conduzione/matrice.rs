@@ -42,6 +42,7 @@ use crate::protocollo::messaggi::{
 };
 
 use super::super::produttori::Difetto;
+use super::super::Ruolo;
 use super::tests::{
     canale, esito_di_successo, filo, nome, valore, Dominio, ForzaIlDominio, GiaUscito,
     GuardaIlDominio, LeggiEvidenza,
@@ -162,6 +163,7 @@ fn percorri(riga: &str, copione: Copione, attesa: &Attesa) {
         std::io::sink(),
         copione.tempo,
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::che_rende(copione.evidenza),
@@ -425,6 +427,7 @@ fn riga_8_cancellazione_chiesta_prima_del_giro_resta_agganciata() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::che_rende(Ok(senza_pressione())),
@@ -464,6 +467,7 @@ fn la_cancellazione_arriva_anche_a_giro_iniziato() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::che_rende(Ok(senza_pressione())),
@@ -558,6 +562,7 @@ fn la_cancellazione_arriva_sul_filo_prima_della_terminazione() {
         },
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: TerminaTracciato {
                 eventi: std::sync::Arc::clone(&eventi),
@@ -638,6 +643,7 @@ fn un_tempo_scaduto_non_manda_annulla() {
         Raccoglie(std::sync::Arc::clone(&scritti)),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::senza_pressione(),
@@ -671,6 +677,7 @@ fn la_cancellazione_termina_il_dominio() {
         std::io::sink(),
         tempo_lungo(),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: LeggiEvidenza::che_rende(Ok(senza_pressione())),
@@ -793,6 +800,7 @@ fn l_oom_tardivo_si_vede_perche_si_continua_ad_ascoltare_dopo_la_forzatura() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: EvidenzaCheSegueIlDominio {
@@ -841,6 +849,7 @@ fn su_un_dominio_abitato_l_evidenza_non_si_legge() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
             terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
             evidenza: EvidenzaCheSegueIlDominio {
@@ -936,6 +945,7 @@ fn la_quiescenza_accodata_all_ultimo_istante_si_vede() {
         std::io::sink(),
         Duration::from_millis(5),
         Dintorni {
+            ruolo: Ruolo::Worker,
             osservatore: GuardaEAnnuncia {
                 vuoto: std::sync::Arc::clone(&vuoto),
                 annuncia,

@@ -328,6 +328,14 @@ domini. Va **dichiarato**, non limitato.
 prima della creazione di quello del verificatore. Un'esecuzione che li tenesse
 vivi insieme renderebbe falsa l'uguaglianza qui sopra, e con essa la promessa.
 
+**Implementata**, non solo prescritta: il chiamante di produzione
+(`isolamento::esecuzione_isolata::esegui_isolato`) attraversa davvero i due
+domini in sequenza, con lo spawner e il protocollo di ciascuno —
+`isolamento::verificatore` per il ruolo che rilegge, `IncaricoVerifica` per
+il messaggio che lo incarica, un terzo descrittore ereditato per l'artefatto
+in sola lettura. Vedi la nota nella §2-quinquies, sotto «Il chiamante di
+produzione».
+
 ---
 
 ## 2-quinquies. Il piano chiede, la politica dell'host concede
@@ -363,7 +371,68 @@ prototipi mostrano che i due sistemi lo comunicano male — `SIGKILL` prima di
 qualunque riga su Linux, `STATUS_STACK_OVERFLOW` su Windows. Un tetto sotto il
 pavimento va respinto **in validazione**, con un errore che dice qual è il
 pavimento: un errore di configurazione non merita di manifestarsi come un
-crash.
+crash. Questo è il controllo **strutturale**: il piano dichiara un tetto
+richiesto sotto il budget governato effettivo, e non serve sapere nulla
+dell'host per vederlo (`PLAN-011`, in `PlanV6::parse`).
+
+C'è un secondo modo di finire sotto il pavimento, e non è lo stesso
+controllo: il tetto **richiesto** può stare sopra il pavimento e quello
+**concesso** dalla politica dell'host — dopo il ritaglio — no. Questo non si
+vede leggendo il piano da solo: serve la politica dell'host, che non è una
+sua proprietà. Si verifica quindi dopo, insieme al ritaglio stesso
+(`isolamento::attivazione::autorizza_profilo_isolato`, `PR-12`), e rifiuta
+allo stesso modo — prima di qualunque spawn, mai un tetto diverso da quello
+dichiarato applicato in silenzio.
+
+### `PR-12`: il meccanismo concreto della politica dell'host
+
+Una variabile d'ambiente del processo del dispiegamento
+(`PLENORA_ISOLATION_HOST_MAX_MEMORY_BYTES`), letta una sola volta, mai
+scritta né letta dal piano o dal protocollo. Assente, non numerica o zero
+sono tre rifiuti distinti — mai un default permissivo che tratti «nessuna
+politica» come «nessun limite». Il ritaglio e il confronto col pavimento
+sono una funzione pura (`autorizza_profilo_isolato`), separata dalla lettura
+dell'ambiente, sullo stesso principio delle altre osservazioni di questo
+confine (§9-bis): il giudizio si prova ovunque, la lettura è di Linux.
+
+#### Il chiamante di produzione, e le altre due variabili del dispiegamento
+
+`isolamento::esecuzione_isolata::esegui_isolato` è il chiamante che questa
+sezione presupponeva: `plenora-cli run` lo raggiunge quando il piano valida
+con `max_domain_memory_bytes` e la piattaforma è Linux, sequenziando **due
+domini** — quello del worker, distrutto prima che il secondo nasca, e quello
+del verificatore — con spawner e protocollo per ciascuno, sugli stessi passi
+che `isolamento::prova` e la qualificazione esercitano — mai un ripiego
+in-process, allo stesso modo di `PLENORA_ISOLATION_HOST_MAX_MEMORY_BYTES`
+sopra. La verifica non gira più nel processo del coordinatore: gira nel
+dominio del verificatore, su un handle che il coordinatore ha aperto prima
+che quel dominio nascesse (§2-quater), e la pubblicazione (passo 9) resta
+l'unico passo che il coordinatore compie sui byte dell'artefatto.
+
+Il dispiegamento fornisce altre tre variabili, con lo stesso principio —
+mai il piano, mai un default permissivo:
+
+- `PLENORA_ISOLATION_CGROUP_ROOT`: la directory che fa da radice al cgroup2
+  delegato, sotto cui il processo crea un sottocgroup per tentativo;
+- `PLENORA_ISOLATION_WORKER_UIDGID`: l'identità, nella forma `uid:gid`, a cui
+  il worker confinato cede i privilegi;
+- `PLENORA_ISOLATION_EXECUTION_TIMEOUT_SECONDS`: il tempo massimo concesso
+  al dialogo dopo l'handshake — non l'handshake stesso, che ha un tetto
+  fisso indipendente dal piano.
+
+Assenti o malformate sono `IsolationUnavailable`, mai un'esecuzione con un
+valore indovinato. Dopo l'handshake il chiamante di produzione passa a
+`isolamento::macchina::conduci_isolato`, con implementazioni reali di
+`Osservatore`, `Terminatore` e `LettoreDiEvidenza` contro i file veri del
+dominio (`macchina::adattatori`): l'attribuzione OOM della §10.0-bis è
+raggiungibile, e la lettura dell'evidenza — inclusa la pressione degli
+antenati fino alla radice del control plane — è verificata su VM con
+contenimento reale. La cancellazione a metà esecuzione è collegata: lo
+stesso `CancellationToken` che l'handler Ctrl-C della CLI cancella per il
+percorso in-process è sorvegliato da un filo dedicato
+(`macchina::avvia_sorveglianza_esterna`), che chiede l'annullamento tramite
+`produttori::Annullatore` non appena lo vede cancellato — nessuna promessa
+di reazione immediata, per lo stesso principio di `NG-4`.
 
 ### Le decisioni che precedono la `PR-2`
 
@@ -1803,6 +1872,17 @@ d'ambiente, con un nome proprio, distinta da un piano invalido.
 Un ambiente in cui il worker può riscrivere il proprio dominio non è un
 ambiente in cui il profilo isolato vale meno: è un ambiente in cui **non
 vale**.
+
+**Questo non contraddice il rifiuto in validazione di `PR-12` su Windows e
+macOS** (§11.2): sono due domande diverse, con risposte di natura diversa.
+«Questo binario, su questo sistema, potrebbe mai offrire l'isolamento?» è un
+fatto **statico** — dipende dal target di compilazione, non dalla singola
+esecuzione — e si verifica in validazione
+(`isolamento::attivazione::verifica_piattaforma`), perché nessun ambiente
+Windows o macOS lo cambierebbe. «Questo ambiente Linux può prepararlo, ora?»
+resta **dinamico**, e resta qui, in `PreparaIsolamento`: privilegi, cgroup
+delegati e la politica dell'host (§2-quinquies) sono proprietà
+dell'esecuzione, non del piano, esattamente come questa sezione dice.
 
 Resta il terzo elemento, che non è uno strato di difesa ma di lettura:
 `memory.events` gerarchico e degli antenati (§10.0-bis). Non sostituisce la

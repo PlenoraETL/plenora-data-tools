@@ -223,8 +223,12 @@ fn verificato(
         valore: digest_di(byte),
     };
     let contratto = DataContract::tabular(schema());
+    let impronta = crate::planner::contract_fingerprint(&contratto).expect("contratto riducibile");
     let attese = AtteseVerifica {
-        contratto: &contratto,
+        contratto_fingerprint_atteso: crate::protocollo::digest::DigestSha256::da_esadecimale(
+            &impronta.to_hex(),
+        )
+        .expect("un'impronta esadecimale e' sempre canonica"),
         digest: &digest,
         conteggi: ConteggiDichiarati { righe: 3, batch: 1 },
         commit_token: tok,

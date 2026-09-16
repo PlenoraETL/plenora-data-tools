@@ -2360,12 +2360,15 @@ fn un_piano_legacy_col_nome_della_v5_e_rifiutato() {
 // Formato v6: la versione dichiarata negli output della CLI
 // ---------------------------------------------------------------------------
 
-/// Lo stesso piano tabellare, dichiarato `schema_version: 6` col tetto del
-/// dominio.
+/// Lo stesso piano tabellare, dichiarato `schema_version: 6`, **senza**
+/// `max_domain_memory_bytes`: qui interessa l'identita' e l'esecuzione del
+/// formato v6, non la richiesta di isolamento (`PR-12`) che quel campo
+/// costituisce ora — dichiararlo farebbe di questo un test sulla
+/// piattaforma, non sulla versione, e fallirebbe fuori da Linux per una
+/// ragione estranea a cio' che il test dice di provare.
 fn table_plan_v6() -> serde_json::Value {
     let mut piano = table_plan();
     piano["schema_version"] = json!(6);
-    piano["limits"] = json!({"max_domain_memory_bytes": 1_073_741_824_u64});
     piano
 }
 
@@ -2445,4 +2448,112 @@ fn un_v5_e_il_v6_equivalente_hanno_plan_hash_diversi() {
         hash_di(&plan_v6),
         "un v5 e un v6 per il resto identici non condividono l'identita'"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `PR-12`: `max_domain_memory_bytes` come richiesta del profilo isolato.
+// ---------------------------------------------------------------------------
+
+/// Come [`table_plan_v6`], ma CON `max_domain_memory_bytes`: qui la presenza
+/// del campo e' esattamente cio' che si vuole esercitare.
+fn table_plan_v6_isolato() -> serde_json::Value {
+    let mut piano = table_plan();
+    piano["schema_version"] = json!(6);
+    piano["limits"] = json!({"max_domain_memory_bytes": 1_073_741_824_u64});
+    piano
+}
+
+/// Prova end-to-end, sul binario vero e sul sistema operativo vero su cui
+/// gira: un piano che dichiara `max_domain_memory_bytes` e' una richiesta
+/// del profilo isolato, e la piattaforma decide da sola se accoglierla — non
+/// c'e' un terzo esito «ignorato» ne' una ricaduta silenziosa sul percorso
+/// in-process. Su Linux la struttura del piano e' valida in `validate`
+/// (`schema_version: 6` riconosciuta); l'esecuzione vera e' un'altra prova,
+/// vedi [`run_con_isolamento_non_esegue_mai_in_process`].
+#[test]
+fn un_piano_che_richiede_isolamento_dipende_dalla_piattaforma_non_da_un_default() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan-v6-isolato.json");
+    let input = directory.path().join("input.arrow");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&table_plan_v6_isolato()).expect("json"),
+    )
+    .expect("plan");
+    write_ipc(
+        &input,
+        &table_schema(),
+        &[table_batch(&[0, 1, 2], &["a", "b", "c"])],
+    );
+
+    let result = cli_validate(&plan, &input);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+
+    if cfg!(target_os = "linux") {
+        assert!(result.status.success(), "stdout: {stdout}");
+        let summary: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON");
+        assert_eq!(summary["status"], "ok");
+        assert_eq!(summary["schema_version"], 6);
+    } else {
+        assert!(
+            !result.status.success(),
+            "una richiesta di isolamento fuori da linux deve essere rifiutata, non ricadere \
+             sul percorso in-process — stdout: {stdout}"
+        );
+        assert!(stdout.contains("\"category\":\"unsupported\""), "{stdout}");
+        assert!(
+            stdout.contains(std::env::consts::OS),
+            "il rifiuto deve nominare la piattaforma reale: {stdout}"
+        );
+    }
+}
+
+/// Il gemello sull'esecuzione vera: `run`, non solo `validate`. Una
+/// struttura valida in validazione non e' un'autorizzazione a eseguire —
+/// `executor::execute` respinge ANCHE quando la piattaforma e' Linux, perche'
+/// nessun chiamante di produzione collega oggi dominio, supervisore e worker
+/// (stato-e-roadmap.md#requisiti-della-fase-4). La prova che conta e'
+/// negativa: nessun file di output compare, su nessuna piattaforma.
+#[test]
+fn run_con_isolamento_non_esegue_mai_in_process() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan-v6-isolato.json");
+    let input = directory.path().join("input.arrow");
+    let output_path = directory.path().join("output-isolato.arrow");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&table_plan_v6_isolato()).expect("json"),
+    )
+    .expect("plan");
+    write_ipc(
+        &input,
+        &table_schema(),
+        &[table_batch(&[0, 1, 2], &["a", "b", "c"])],
+    );
+
+    let result = cli_run(&plan, &input, &output_path);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+
+    assert!(
+        !result.status.success(),
+        "una richiesta di isolamento non deve MAI eseguire in-process, su nessuna piattaforma \
+         — stdout: {stdout}"
+    );
+    assert!(
+        !output_path.exists(),
+        "nessun output deve comparire: l'esecuzione non e' mai cominciata"
+    );
+
+    if cfg!(target_os = "linux") {
+        // La ragione esatta dipende dall'ambiente di questa corsa — nessuna
+        // politica dell'host configurata qui la ferma prima ancora di
+        // arrivare al chiamante mancante — ma la categoria e' sempre questa:
+        // mai `ok`, mai un'esecuzione in-process silenziosa.
+        assert!(
+            stdout.contains("\"category\":\"isolation_unavailable\""),
+            "{stdout}"
+        );
+    } else {
+        assert!(stdout.contains("\"category\":\"unsupported\""), "{stdout}");
+    }
 }

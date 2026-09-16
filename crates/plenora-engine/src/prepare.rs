@@ -137,6 +137,55 @@ pub struct RuntimeContext {
     /// serve alla disattivazione operativa, all'oracolo differenziale e ai
     /// benchmark A/B.
     pub geo_fusion: bool,
+    /// `Some` solo dentro il worker isolato, che esegue il piano che gli e'
+    /// stato affidato **nel proprio dominio gia' confinato** (`PR-12`).
+    ///
+    /// Un piano che dichiara `max_domain_memory_bytes` chiede il profilo
+    /// isolato, e [`crate::executor::execute`] lo rifiuta finche' non e'
+    /// servito da qui — mai un'esecuzione in-process silenziosa (vedi
+    /// [`crate::isolamento::attivazione`]). Il worker rivalida lo STESSO
+    /// piano canonico (col campo ancora presente) prima di eseguirlo per
+    /// davvero: senza questo segnale rifiuterebbe se stesso, scambiando la
+    /// richiesta che sta gia' servendo per una richiesta non ancora servita.
+    /// Non e' una decisione fisica e non entra in `ExecutionPlan`, come
+    /// `cancellation`/`diagnostics`/`temp_root`: lo consuma direttamente
+    /// `execute`, una volta, all'ingresso.
+    ///
+    /// Il campo resta `pub` come ogni altro di questa struttura — serve a
+    /// `..RuntimeContext::default()`, che richiede ogni campo visibile al
+    /// chiamante anche quando non lo nomina — ma il suo TIPO e' [`Confinamento`],
+    /// che non ha un costruttore pubblico: un chiamante esterno al crate puo'
+    /// nominare il campo e lasciarlo `None`, ma non puo' costruire un
+    /// `Some(Confinamento(..))` da solo. E' una prova non costruibile
+    /// dall'esterno: un `bool` pubblico lascerebbe la porta aperta a
+    /// chiunque, `pub(crate)` la chiuderebbe rompendo l'aggiornamento
+    /// funzionale altrove. L'unico punto della produzione che lo produce e'
+    /// il worker isolato (`isolamento::worker::esecuzione`); nessun altro
+    /// percorso di produzione lo nomina.
+    pub gia_confinato: Option<Confinamento>,
+}
+
+/// La prova che un [`RuntimeContext`] sta eseguendo dentro il worker isolato,
+/// nel proprio dominio gia' confinato — non costruibile fuori dal crate.
+///
+/// # Perche' un tipo e non un `bool`
+///
+/// Un `bool` pubblico e' scrivibile da chiunque costruisca un
+/// `RuntimeContext`, anche solo con `..RuntimeContext::default()`. Il campo
+/// unico di questa struttura e' privato: chi e' fuori dal crate puo'
+/// nominare `Confinamento` — appare nel tipo di un campo pubblico — ma non
+/// puo' costruirne un valore, perche' non c'e' un costruttore pubblico e non
+/// c'e' un modo di scrivere il campo privato da fuori.
+#[derive(Debug, Clone, Copy)]
+pub struct Confinamento(());
+
+impl Confinamento {
+    /// Lo produce solo il worker isolato, dopo aver rivalidato lo stesso
+    /// piano che gli e' stato affidato nel proprio dominio confinato
+    /// (`isolamento::worker::esecuzione`).
+    pub(crate) const fn interno() -> Self {
+        Self(())
+    }
 }
 
 impl Default for RuntimeContext {
@@ -150,6 +199,7 @@ impl Default for RuntimeContext {
             diagnostics: false,
             temp_root: None,
             geo_fusion: true,
+            gia_confinato: None,
         }
     }
 }

@@ -315,7 +315,6 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
     /// [`Chiusura::NonRaccolto`] con la guardia intatta. I difetti sono quelli
     /// dell'interrogazione: qui non c'e' nessuna terminazione che possa
     /// fallire.
-    #[cfg(any(test, feature = "internals"))]
     pub(super) fn attendi_la_fine(
         mut self,
         limite: Duration,

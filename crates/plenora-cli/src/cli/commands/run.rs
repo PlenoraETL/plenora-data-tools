@@ -20,6 +20,8 @@ use plenora_engine::{
 use crate::cli::contract_discovery::{
     apply_crs_decisions, discover_contracts, open_input, pair_v4_inputs,
 };
+#[cfg(target_os = "linux")]
+use crate::installa_gestore_segnale_isolato;
 use crate::{
     campi_della_pubblicazione, contract, contract_error_missing, has_flag, install_ctrlc_handler,
     metrics_json, optional_value_after, read_control_plan_text, run_pipeline, testo_piano_dag,
@@ -49,6 +51,18 @@ pub fn run_dag(
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
+    // `PR-12`: un piano che dichiara `max_domain_memory_bytes` chiede il
+    // profilo isolato. `planner::validate` ha gia' respinto la richiesta
+    // fuori da Linux (`Unsupported`) prima che questo `graph` potesse
+    // esistere: se arriviamo qui con una richiesta, siamo su Linux per
+    // costruzione, e il percorso e' un altro — mai l'esecuzione in-process
+    // sotto. Su chi non e' Linux questo ramo non si compila nemmeno: non
+    // esiste un `graph.plan().max_domain_memory_bytes() == Some(_)`
+    // raggiungibile li'.
+    #[cfg(target_os = "linux")]
+    if let Some(richiesto_byte) = graph.plan().max_domain_memory_bytes() {
+        return run_isolato(&graph, &pairs, output_path, richiesto_byte);
+    }
     // `max_parallelism` si applica QUI, prima di aprire gli input e prima di
     // qualunque uso di Rayon: dimensiona il pool del processo, che e' l'unica
     // leva che vincola davvero tutti i percorsi paralleli dei kernel. Senza
@@ -96,6 +110,65 @@ pub fn run_dag(
         }
     }
     println!("{}", serde_json::to_string_pretty(&documento)?);
+    Ok(())
+}
+
+/// Il percorso isolato di `run` (`PR-12`): autorizza la politica dell'host,
+/// poi esegue per davvero — dominio, spawner, protocollo, verifica e
+/// pubblicazione — invece del percorso in-process sopra.
+///
+/// Stesso formato d'uscita del percorso in-process (`campi_della_pubblicazione`),
+/// ma senza le metriche per nodo: quelle restano nel processo worker, che le
+/// scarta dopo aver scritto l'artefatto (documentato in
+/// `isolamento::esecuzione_isolata`), non attraversano il confine.
+#[cfg(target_os = "linux")]
+fn run_isolato(
+    graph: &plenora_engine::planner::ValidatedGraph,
+    pairs: &[(String, PathBuf)],
+    output_path: &Path,
+    richiesto_byte: u64,
+) -> Result<(), Box<dyn Error>> {
+    use plenora_engine::isolamento::{attivazione, esecuzione_isolata};
+
+    let governato_effettivo_byte = graph.effective_limits().max_governed_memory_bytes;
+    let concessione = attivazione::prepara_e_autorizza(richiesto_byte, governato_effettivo_byte)?;
+    // Stesso TOKEN del percorso in-process (un Ctrl-C cancella l'esecuzione
+    // qualunque sia il percorso che il piano ha scelto), ma non lo stesso
+    // HANDLER: `install_ctrlc_handler` fa nascere un thread (`ctrlc::
+    // set_handler`) che vivrebbe per tutta la vita del processo e farebbe
+    // fallire `isolamento::canale::accerta_monothread` a ogni finestra di
+    // spawn (worker e verificatore) — `installa_gestore_segnale_isolato`
+    // (main.rs) copre lo stesso token senza far nascere alcun thread.
+    let token = CancellationToken::new();
+    installa_gestore_segnale_isolato(&token)?;
+    let esito = esecuzione_isolata::esegui_isolato(graph, pairs, output_path, concessione, token)?;
+
+    let mut documento = serde_json::Map::new();
+    documento.insert(
+        "status".to_owned(),
+        serde_json::Value::String("ok".to_owned()),
+    );
+    documento.insert(
+        "schema_version".to_owned(),
+        serde_json::Value::from(graph.plan_format_version()),
+    );
+    documento.insert(
+        "plan_hash".to_owned(),
+        serde_json::Value::String(graph.plan_hash().to_hex()),
+    );
+    // Machine-readable per costruzione (`ConcessioneDominio` deriva
+    // `Serialize` proprio per questo): il tetto richiesto dal piano e quello
+    // concesso dalla politica dell'host possono divergere (`min`), e chi
+    // legge l'esito deve poterli distinguere senza rileggere i log del
+    // preflight.
+    documento.insert("isolation".to_owned(), serde_json::to_value(concessione)?);
+    for (chiave, valore) in campi_della_pubblicazione(&esito) {
+        documento.insert(chiave, valore);
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::Value::Object(documento))?
+    );
     Ok(())
 }
 

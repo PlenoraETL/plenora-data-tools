@@ -76,7 +76,6 @@
 use std::path::Path;
 
 use plenora_core::contract::arrow_schema::{contract_from_arrow_schema, CrsResolver};
-use plenora_core::contract::DataContract;
 use plenora_core::error::{ErrorPhase, PlenoraError, Result};
 use sha2::{Digest, Sha256};
 
@@ -84,9 +83,9 @@ use crate::commit_footer::interpreta_commit_token;
 use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
 use crate::esadecimale32::Esadecimale32;
 use crate::geo_transport::ipc::IpcLimits;
-use crate::ipc_boundary::{convalida_artefatto, ArtefattoConvalidato};
+use crate::ipc_boundary::{convalida_artefatto, convalida_handle_artefatto, ArtefattoConvalidato};
 use crate::planner::contract_fingerprint;
-use crate::protocollo::digest::ALGORITMO_DIGEST;
+use crate::protocollo::digest::{DigestSha256, ALGORITMO_DIGEST};
 use crate::protocollo::messaggi::{ConteggiDichiarati, DigestArtefatto};
 use crate::pubblicazione::ArtefattoVerificato;
 
@@ -103,8 +102,37 @@ const BLOCCO_DIGEST: usize = 64 * 1024;
 /// sta verificando significherebbe confrontarlo con se stesso.
 #[derive(Debug, Clone, Copy)]
 pub struct AtteseVerifica<'a> {
-    /// Il contratto che il piano validato prevede.
-    pub contratto: &'a DataContract,
+    /// Il **fingerprint** del contratto che il piano validato prevede — non
+    /// il contratto stesso.
+    ///
+    /// # Perche' un fingerprint e non un `&DataContract`
+    ///
+    /// Perche' il passo 7 non guarda mai altro del contratto atteso: confronta
+    /// `contract_fingerprint(&letto)` con `contract_fingerprint(atteso)`, ed e'
+    /// l'unico uso che questo tipo fa del campo. Portare il contratto intero
+    /// costringerebbe ogni chiamante ad averne uno **in memoria**, e il
+    /// verificatore che gira nel proprio dominio di isolamento
+    /// (`isolamento.md#2-quater-topologia-chi-osserva-chi`) non ne riceve
+    /// uno: riceve — come per
+    /// `DescrittoreIngresso::contract_fingerprint_atteso` e
+    /// `protocollo::messaggi::IncaricoVerifica::contract_fingerprint_atteso`
+    /// — solo l'impronta, nella stessa forma canonica gia' in uso per gli
+    /// ingressi del worker.
+    ///
+    /// # Perche' `DigestSha256` e non `planner::ContractFingerprint`
+    ///
+    /// Perche' e' la forma **sul filo**, e chi la riceve attraverso il
+    /// protocollo (il verificatore isolato) la passa qui **senza
+    /// conversione**: un secondo tipo avrebbe richiesto un costruttore che
+    /// `ContractFingerprint` non ha — nasce solo da
+    /// [`crate::planner::contract_fingerprint`], mai da byte grezzi ricevuti
+    /// — e lo avrebbe fatto apposta per un confronto che le due
+    /// rappresentazioni (32 byte, o 64 esadecimali) fanno gia' identicamente.
+    /// Un chiamante che ha un `ContractFingerprint` in memoria lo riduce con
+    /// `DigestSha256::da_esadecimale(&impronta.to_hex())`, lo stesso giro che
+    /// `isolamento::esecuzione_isolata::incarico_per` gia' fa per
+    /// `DescrittoreIngresso::contract_fingerprint_atteso`.
+    pub contratto_fingerprint_atteso: DigestSha256,
     /// Il digest dichiarato dal produttore dell'artefatto.
     pub digest: &'a DigestArtefatto,
     /// Righe e batch dichiarati.
@@ -142,8 +170,50 @@ pub fn verifica_artefatto(
     // un'altra porta, sarebbe la `HashMap` di arrow — che comprime i duplicati
     // con «vince l'ultima» e non applica nessuno dei tetti — e riaprire per
     // percorso darebbe a ogni passo la possibilita' di trovare un file diverso.
-    let (token_grezzo, mut artefatto) =
-        convalida_artefatto(percorso, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)?;
+    let aperto = convalida_artefatto(percorso, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)?;
+    verifica_artefatto_aperto(aperto, attese, resolver)
+}
+
+/// Come [`verifica_artefatto`], ma da un `File` **gia' aperto** invece che da
+/// un percorso.
+///
+/// # Perche' esiste
+///
+/// Il verificatore che gira nel proprio dominio di isolamento
+/// (`isolamento.md#2-quater-topologia-chi-osserva-chi`) riceve l'artefatto
+/// come descrittore gia'
+/// aperto in sola lettura dal coordinatore — mai un percorso, per lo stesso
+/// principio di `GA-5`: un handle non da' al verificatore un modo per
+/// scoprire la destinazione finale, che non gli viene comunicata affatto, e
+/// riaprire per percorso qui dentro riaprirebbe esattamente cio' che questo
+/// entry point esiste per evitare.
+///
+/// # Errors
+///
+/// Come [`verifica_artefatto`], meno gli errori di apertura per percorso.
+pub fn verifica_artefatto_handle(
+    handle: std::fs::File,
+    attese: &AtteseVerifica<'_>,
+    resolver: CrsResolver,
+    limiti: &IpcLimits,
+) -> Result<ArtefattoVerificato> {
+    let aperto = convalida_handle_artefatto(handle, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)?;
+    verifica_artefatto_aperto(aperto, attese, resolver)
+}
+
+/// Il corpo condiviso fra [`verifica_artefatto`] e [`verifica_artefatto_handle`]:
+/// tutto cio' che viene **dopo** l'apertura, che e' l'unica cosa che le
+/// distingue.
+///
+/// # Errors
+///
+/// Come [`verifica_artefatto`].
+fn verifica_artefatto_aperto(
+    aperto: (Option<String>, ArtefattoConvalidato),
+    attese: &AtteseVerifica<'_>,
+    resolver: CrsResolver,
+) -> Result<ArtefattoVerificato> {
+    let (token_grezzo, mut artefatto) = aperto;
 
     // Il duplicato si prende **adesso**, prima che il passo 6 consumi
     // l'artefatto: e' lo stesso descrittore, non una seconda apertura, quindi
@@ -165,8 +235,15 @@ pub fn verifica_artefatto(
     // e' con quello che il planner verifica un contratto contro quello atteso
     // dal grafo validato. Confrontare i campi a mano avrebbe introdotto una
     // seconda nozione di uguaglianza fra contratti, libera di divergere dalla
-    // prima appena uno dei due elenchi cambia.
-    if contract_fingerprint(&contratto)? != contract_fingerprint(attese.contratto)? {
+    // prima appena uno dei due elenchi cambia. L'atteso arriva gia' ridotto a
+    // fingerprint, nella forma sul filo (vedi il commento su
+    // [`AtteseVerifica::contratto_fingerprint_atteso`]): qui non c'e' un
+    // secondo contratto da ridurre, solo un confronto per esadecimale — lo
+    // stesso giro che il worker fa contro `contract_fingerprint_atteso` di
+    // ogni ingresso.
+    if contract_fingerprint(&contratto)?.to_hex()
+        != attese.contratto_fingerprint_atteso.in_esadecimale()
+    {
         return Err(PlenoraError::DataMapping(
             "verifica dell'artefatto: il contratto letto non e' quello atteso dal piano".to_owned(),
         )
