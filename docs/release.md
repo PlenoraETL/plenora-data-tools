@@ -418,19 +418,41 @@ ritorno a capo, avanzamento riga e tabulazione — `\r`, `\n` e `\t`. Il parser 
 
 È un **panic raggiungibile da ingresso non fidato**, riprodotto in
 riproduzione deterministica rieseguendo l'artefatto sull'ingresso salvato.
-Va detto con precisione **dove** panica, perché non è ovunque: il
-`debug_assert_ne!` di `simplify.rs:108` vive solo dove le asserzioni di
-debug sono attive — la batteria e il fuzzing — la stessa condizione già
-registrata per la barriera OGC
+Va detto con precisione **dove** panica e **su quale ingresso**, perché su
+entrambi i punti una stesura precedente di questo rilievo era imprecisa.
+
+**Dove.** Il `debug_assert_ne!` di `simplify.rs:108` vive solo dove le
+asserzioni di debug sono attive — la batteria e il fuzzing — la stessa
+condizione già registrata per la barriera OGC
 ([`errori-e-limiti.md`](errori-e-limiti.md#la-validazione-ogc-sta-dietro-una-barriera)).
 Il profilo `release` di questo progetto attiva `overflow-checks` ma **non**
-`debug-assertions`, e lì quell'assert non compila: verificato riducendo
-l'ingresso a una geometria degenere con distanze `NaN` ed eseguendolo nei due
-profili sullo stesso codice vendorizzato. Nel binario che si rilascia il
-rischio non è quindi l'arresto del processo, ma la **geometria
-silenziosamente scorretta**: `simplify` rende l'ingresso invariato, `NaN`
-compresi, senza errore né diagnostica. Il quadro completo — causa esatta e
-riproduzione ridotta nei due profili — è in
+`debug-assertions`, e lì quell'assert non compila: verificato eseguendo
+`geo::Simplify::simplify` isolato — fuori da `plenora-kernels-geo` — su una
+geometria con coordinate `NaN`, nei due profili sullo stesso codice
+vendorizzato: panica in `dev`, non panica in `release`.
+
+**Su quale ingresso.** Quella verifica isolata non dimostra da sola la
+raggiungibilità dal percorso reale. `plenora_kernels_geo::operations::simplify`
+— la funzione che il target del fuzz chiama davvero — invoca `ensure_valid`
+**prima** di `geo::simplify`, e `ensure_valid` rifiuta ogni coordinata non
+finita. Il rilievo del fuzz ha attraversato quella barriera con successo (il
+target chiama `operations::simplify`, non `geo::Simplify::simplify`
+direttamente): l'ingresso aveva coordinate **finite**. Il `NaN` che fa
+scattare l'assert nasce quindi **dentro** il calcolo di `simplify`, non da un
+`NaN` già presente che il kernel avrebbe dovuto e non ha rifiutato — è `geo`
+che genera l'instabilità internamente su un ingresso finito e già validato,
+non un mancato rifiuto in ingresso. Il meccanismo esatto (probabile
+sottrazione fra coordinate vicine il cui quadrato va sotto lo zero macchina)
+resta un'ipotesi motivata dalla struttura del codice: non è stato isolato in
+questa verifica il poligono finito che la riproduce.
+
+Nel binario che si rilascia il rischio non è quindi l'arresto del processo —
+l'assert non compila in `release` — ma, sullo stesso ingresso che oggi fa
+panicare la batteria, una geometria semplificata in modo silenziosamente
+scorretto: con `farthest_index` fermo a `0`, `compute_rdp` tratta il punto
+più lontano come se fosse a distanza zero e lo scarta invece di ricorrere. Il
+quadro completo — la distinzione fra dipendenza isolata e percorso validato,
+e la condizione di rientro — è in
 [`errori-e-limiti.md`](errori-e-limiti.md#difetto-aperto-simplify-di-geo-panica-su-una-geometria-degenere-con-distanze-nan).
 
 Il difetto **non appartiene a `PR-7`**, e va detto perché è durante la sua

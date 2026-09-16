@@ -1664,39 +1664,69 @@ per ogni punto candidato la distanza dal segmento che chiude l'anello con un
 zero iniziale, e il `debug_assert_ne!(farthest_index, 0)` che segue assume di
 essere in quel caso impossibile.
 
-**L'ingresso.** Un WKT `polyGon(...)` con le coordinate separate da `\r`,
-`\n` e `\t` invece che da spazi: il parser lo accetta, e ne esce una
-geometria degenere che produce distanze `NaN` nel calcolo RDP di `simplify`.
-Riproduzione ridotta e verificata nei due profili: un anello i cui vertici
-intermedi sono `NaN` produce lo stesso panico, `assertion 'left != right'
-failed — left: 0, right: 0`, a `simplify.rs:108`, sul codice vendorizzato
-(`vendor/geo-0.33.1-exact-filtered`, immutato rispetto al registro su questo
-punto).
+**L'ingresso, e due dimostrazioni da non confondere.** Un WKT `polyGon(...)`
+con le coordinate separate da `\r`, `\n` e `\t` invece che da spazi: il
+parser lo accetta, e ne esce una geometria degenere che produce distanze
+`NaN` nel calcolo RDP di `simplify`. Il target del fuzz chiama
+`plenora_kernels_geo::operations::simplify`, non `geo::Simplify::simplify`
+direttamente, e quella funzione invoca `ensure_valid` — la stessa barriera
+OGC di cui sopra — **prima** di passare la geometria a `geo`.
+`ensure_valid` rifiuta ogni coordinata non finita
+(`InvalidLineString::NonFiniteCoord`/`InvalidPolygon::NonFiniteCoord`, dalla
+validazione di `geo` stessa): il reperto del fuzz l'ha attraversata con
+successo, quindi le sue coordinate erano **finite**. Il `NaN` che fa
+scattare l'assert nasce dentro il calcolo di `simplify`, non da un `NaN` già
+presente che il kernel avrebbe dovuto e non ha rifiutato — è la dipendenza
+che genera l'instabilità internamente su un ingresso finito e già validato,
+non un mancato controllo in ingresso. Il meccanismo esatto (probabile
+sottrazione fra coordinate vicine il cui quadrato va sotto lo zero macchina,
+`dx² + dy² == 0.0` per underflow pur con `dx`/`dy` non nulli) resta
+un'ipotesi motivata dalla struttura del codice: il poligono finito minimo che
+la riproduce non è stato isolato in questa verifica.
+
+Separatamente, e **senza passare da `ensure_valid`**, è stato verificato che
+`geo::Simplify::simplify` chiamato isolato — direttamente sul codice
+vendorizzato, fuori da `plenora-kernels-geo` — panica con lo stesso
+`assertion 'left != right' failed — left: 0, right: 0` a `simplify.rs:108`
+su un anello i cui vertici intermedi sono `NaN` espliciti. Questa
+dimostrazione isolata **non** prova la raggiungibilità dal percorso reale —
+un `NaN` esplicito in ingresso non ci arriverebbe mai, fermato da
+`ensure_valid` — e serve solo a isolare la seconda variabile qui sotto.
 
 **Non raggiungibile nello stesso modo in `release`.** Il panico è un
 `debug_assert_ne!`, condizionato da `cfg(debug_assertions)` — la stessa
 classe già registrata per la barriera OGC
 ([§](#la-validazione-ogc-sta-dietro-una-barriera)). Il profilo `release` di
 questo progetto attiva `overflow-checks` ma **non** `debug-assertions`, e in
-quel profilo `debug_assert_ne!` non compila: verificato eseguendo l'ingresso
-ridotto sullo stesso codice vendorizzato nei due profili — panica in `dev`,
-non panica in `release`.
+quel profilo `debug_assert_ne!` non compila: verificato eseguendo la
+dimostrazione isolata (coordinate `NaN` esplicite) sullo stesso codice
+vendorizzato nei due profili — panica in `dev`, non panica in `release`. Per
+il reperto reale (coordinate finite, `NaN` generato internamente) vale la
+stessa condizione di compilazione — l'assert è lo stesso, allo stesso punto
+del codice — ma il comportamento risultante in `release` su quello specifico
+ingresso non è stato osservato direttamente in questa verifica.
 
-**Questo non chiude il rischio, lo sposta.** In `release`, con
-`farthest_index` fermo a `0`, `farthest_distance` resta `T::zero()` — non
-`NaN`, perché il ramo del `fold` che l'avrebbe aggiornata non viene mai preso
-— e `0.0 > epsilon` è falso per ogni `epsilon` positivo: `compute_rdp`
+**Questo non chiude il rischio, lo sposta.** In `release`, quando
+`farthest_index` resta fermo a `0`, `farthest_distance` resta `T::zero()` —
+non `NaN`, perché il ramo del `fold` che l'avrebbe aggiornata non viene mai
+preso — e `0.0 > epsilon` è falso per ogni `epsilon` positivo: `compute_rdp`
 imbocca il ramo di culling come se il punto più lontano fosse a distanza
-zero. Misurato sull'ingresso ridotto: `simplify` rende la geometria
-**invariata**, coordinate `NaN` comprese — nessun errore, nessun panico, e un
-`NaN` che attraversa la pipeline senza che niente lo segnali. Il rischio per
-il binario che si rilascia non è quindi l'**arresto del processo** — quello
-vale per la batteria e per il fuzzing, dove le asserzioni di debug sono
-attive — ma la **geometria silenziosamente scorretta**.
+zero, invece di ricorrere su di esso. Misurato sulla dimostrazione isolata:
+`simplify` rende la geometria invariata, coordinate `NaN` comprese — nessun
+errore, nessun panico. Per il reperto reale, lo stesso ramo di codice implica
+lo stesso esito strutturale — una geometria semplificata in modo
+silenziosamente scorretto, non un arresto del processo — su un ingresso che
+`ensure_valid` ha già accettato come finito e valido; l'arresto del processo
+resta un rischio della sola batteria e del fuzzing, dove le asserzioni di
+debug sono attive.
 
 **Ambito.** `wkt_operations` → `plenora-kernels-geo` →
-`geo::algorithm::simplify`, ogni operazione di catalogo che semplifica una
-geometria. Non è stato censito quali altri cammini lo raggiungano.
+`geo::algorithm::simplify`, raggiunto attraverso
+`plenora_kernels_geo::operations::simplify`/`simplify_with_policy` — quindi
+dopo `ensure_valid`, non prima — e ogni altra operazione di catalogo che
+semplifica una geometria per la stessa via. Non è stato censito quali altri
+cammini lo raggiungano, né se esistano cammini che chiamano `geo` senza
+passare da `ensure_valid`.
 
 **Condizione di rientro.** Il giorno che `simplify` respinga esplicitamente
 una geometria degenere prima del calcolo RDP, o che `geo` renda un errore
