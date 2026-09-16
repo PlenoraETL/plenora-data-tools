@@ -414,7 +414,8 @@ impl Eq for Incarico {}
 ///
 /// # Che cosa porta, e perche' e' esattamente questo
 ///
-/// I quattro elementi di cui parla `isolamento.md#2-ter`: il fingerprint del
+/// I quattro elementi di cui parla
+/// `isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite`: il fingerprint del
 /// contratto atteso, il digest atteso, i conteggi attesi e il tetto di
 /// memoria da cui derivare `IpcLimits` — sempre gli stessi quattro che
 /// [`AtteseVerifica`](crate::verifica::AtteseVerifica) porta gia' in

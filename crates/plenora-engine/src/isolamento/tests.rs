@@ -1053,10 +1053,10 @@ fn un_comando_ordinario_non_e_uno_spawner() {
 fn ogni_altra_versione_del_namespace_e_un_rifiuto() {
     for testo in [
         "plenora-spawner-1",
-        // La versione precedente a quella corrente: un supervisore piu'
-        // vecchio di questo spawner e' un disaccordo esplicito, non una
-        // ricaduta silenziosa su un formato che l'8-esimo argomento (assente
-        // nella `2`) renderebbe malformato.
+        // Il numero di versione immediatamente inferiore a quello corrente:
+        // un supervisore piu' vecchio di questo spawner e' un disaccordo
+        // esplicito, non una ricaduta silenziosa su un formato che
+        // l'8-esimo argomento (assente nella `2`) renderebbe malformato.
         "plenora-spawner-2",
         "plenora-spawner-4",
         "plenora-spawner-99",

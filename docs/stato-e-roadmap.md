@@ -371,7 +371,7 @@ secondo nasca; il secondo esegue il verificatore — spawner e protocollo
 propri, un `IncaricoVerifica` al posto dell'`Incarico`, un terzo descrittore
 ereditato per l'artefatto in sola lettura — e solo se conferma digest e
 conteggi il coordinatore pubblica: la verifica non gira più nel suo processo
-(`isolamento.md#2-quater`). `plenora-cli run` lo sceglie davvero: un piano che
+(`isolamento.md#2-quater-topologia-chi-osserva-chi`). `plenora-cli run` lo sceglie davvero: un piano che
 dichiara `max_domain_memory_bytes` non tocca più `executor::execute` in
 alcun caso, nemmeno su Linux con privilegi sufficienti — la guardia in
 `execute` resta come difesa in profondità per chi lo chiamasse comunque in

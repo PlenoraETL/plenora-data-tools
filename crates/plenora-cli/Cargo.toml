@@ -35,7 +35,7 @@ tempfile.workspace = true
 # `[target.'cfg(target_os = "linux")'.dependencies]`.
 ctrlc.workspace = true
 
-# Solo per il percorso isolato (PR-12): `signal-hook` non genera thread,
+# Solo per il percorso isolato: `signal-hook` non genera thread,
 # a differenza di `ctrlc`, e quindi non rompe `isolamento::canale::
 # accerta_monothread` alle finestre di spawn del worker e del verificatore.
 # Limitata a Linux perche' il percorso isolato non esiste altrove (vedi

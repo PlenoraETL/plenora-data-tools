@@ -112,7 +112,8 @@ pub struct AtteseVerifica<'a> {
     /// l'unico uso che questo tipo fa del campo. Portare il contratto intero
     /// costringerebbe ogni chiamante ad averne uno **in memoria**, e il
     /// verificatore che gira nel proprio dominio di isolamento
-    /// (`isolamento.md#2-quater`) non ne riceve uno: riceve — come per
+    /// (`isolamento.md#2-quater-topologia-chi-osserva-chi`) non ne riceve
+    /// uno: riceve — come per
     /// `DescrittoreIngresso::contract_fingerprint_atteso` e
     /// `protocollo::messaggi::IncaricoVerifica::contract_fingerprint_atteso`
     /// — solo l'impronta, nella stessa forma canonica gia' in uso per gli
@@ -179,7 +180,8 @@ pub fn verifica_artefatto(
 /// # Perche' esiste
 ///
 /// Il verificatore che gira nel proprio dominio di isolamento
-/// (`isolamento.md#2-quater`) riceve l'artefatto come descrittore gia'
+/// (`isolamento.md#2-quater-topologia-chi-osserva-chi`) riceve l'artefatto
+/// come descrittore gia'
 /// aperto in sola lettura dal coordinatore — mai un percorso, per lo stesso
 /// principio di `GA-5`: un handle non da' al verificatore un modo per
 /// scoprire la destinazione finale, che non gli viene comunicata affatto, e

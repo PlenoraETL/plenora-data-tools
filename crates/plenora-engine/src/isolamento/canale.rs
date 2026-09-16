@@ -679,8 +679,10 @@ impl EstremiDelWorker {
 // ---------------------------------------------------------------------------
 //
 // Non e' una pipe: e' un file regolare, aperto in sola lettura dal
-// coordinatore prima ancora che il verificatore nasca (`isolamento.md#2-ter`,
-// `#2-quater`). Lo schema di accertamento e' pero' lo stesso, in due tempi:
+// coordinatore prima ancora che il verificatore nasca
+// (`isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite`,
+// `#2-quater-topologia-chi-osserva-chi`). Lo schema di accertamento e' pero'
+// lo stesso, in due tempi:
 // prima cio' che il descrittore ereditato dichiara di essere, poi — dopo la
 // riapertura da `/proc/self/fd/N` — che sia rimasto lo stesso oggetto e dal
 // verso giusto. Le sole differenze sono cio' che il tipo di oggetto rende

@@ -823,8 +823,8 @@ fn entra_ed_esegui(
 ///
 /// Perche' `entra_ed_esegui` supera altrimenti il tetto di righe per
 /// funzione (R6): non e' un taglio arbitrario, segue lo stesso confine che
-/// il commento della funzione originaria gia' tracciava fra «prima del
-/// cambio d'identita'» e il cambio stesso. Rende `dispositivo` e `prima`
+/// il commento di `entra_ed_esegui` traccia fra «prima del cambio
+/// d'identita'» e il cambio stesso. Rende `dispositivo` e `prima`
 /// perche' li usa anche il passo 7, dopo il cambio — non li ricalcola.
 ///
 /// # Errors

@@ -301,8 +301,9 @@ pub(crate) fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), Ple
 /// # L'ordine di registrazione non e' arbitrario
 ///
 /// La doc di `register_conditional_shutdown` impone: "the shutdown must go
-/// first". Registrata per prima, quella chiusura legge il flag com'era
-/// **prima** di questa consegna del segnale: al primo Ctrl-C lo trova
+/// first". Registrata per prima, quella chiusura legge il valore che il flag
+/// ha immediatamente **prima** di questa consegna del segnale: al primo
+/// Ctrl-C lo trova
 /// `false` (nessuna pressione precedente) e non esce; la seconda
 /// registrazione lo mette a `true` subito dopo. Al secondo Ctrl-C (in
 /// qualunque delle tre finestre: il flag e' lo stesso `Arc` per tutto il

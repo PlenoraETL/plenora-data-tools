@@ -75,7 +75,7 @@ tempfile = "=3.27.0"
 # sotto, che serve solo al percorso isolato (`run_isolato`, solo Linux).
 ctrlc = "=3.5.2"
 # Handler SIGINT senza thread persistente per il solo percorso isolato
-# (PR-12, `isolamento::canale::accerta_monothread`): `ctrlc::set_handler` fa
+# (`isolamento::canale::accerta_monothread`): `ctrlc::set_handler` fa
 # nascere un thread che vive per tutta la vita del processo (verificato nel
 # suo sorgente), e quel thread fa fallire `accerta_monothread` — che accerta
 # un solo task, adesso, subito prima di rendere i descrittori ereditabili —

@@ -82,10 +82,10 @@ use super::sorgente::{interruttore, Freno, PASSO_DI_ATTESA};
 /// [`Registro::messaggio`] lo tratta come un messaggio fuori posto, non come
 /// l'esito che chiude il dialogo.
 ///
-/// Sostituisce il parametro `soggetto: &str` che le funzioni di questo modulo
-/// portavano solo per i messaggi: [`Self::nome`] rende lo stesso testo, da
-/// un'unica fonte, cosi' il nome usato nei log e la scelta del corpo non
-/// possono divergere.
+/// Sostituisce il parametro `soggetto: &str` che, senza questo tipo, le
+/// funzioni di questo modulo dovrebbero passare solo per i messaggi:
+/// [`Self::nome`] rende lo stesso testo, da un'unica fonte, cosi' il nome
+/// usato nei log e la scelta del corpo non possono divergere.
 ///
 /// # Il `Default`, e perche' non e' una scorciatoia
 ///
@@ -202,7 +202,7 @@ impl EsitoDichiarato {
     /// — classificazione, rapporto, barriera — il codice non distingue piu'
     /// chi ha dichiarato l'esito, perche' non gli serve. La distinzione che
     /// conta e' gia' stata fatta: [`Registro::messaggio`] ha gia' accertato
-    /// che questo `EsitoVerificaSulFilo` era davvero il corpo atteso per
+    /// che questo `EsitoVerificaSulFilo` e' davvero il corpo atteso per
     /// questo dialogo.
     fn dal_filo_verifica(esito: EsitoVerificaSulFilo) -> Self {
         match esito {

@@ -1046,7 +1046,7 @@ interno.
 
 ### Il verificatore ha un incarico proprio: `IncaricoVerifica`, `EsitoVerificaSulFilo` e il terzo descrittore
 
-Con la topologia a due domini (`isolamento.md#2-quater`) i tipi di messaggio
+Con la topologia a due domini (`isolamento.md#2-quater-topologia-chi-osserva-chi`) i tipi di messaggio
 sono **otto**, non sei: `incarico_verifica` — diciassette caratteri,
 `INVOLUCRO_BYTES` lo usa come nome più lungo al posto di `progresso` — ed
 `esito_verifica`. `MAX_PROTOCOL_FRAME_BYTES` resta comunque dominato

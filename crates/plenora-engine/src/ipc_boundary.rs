@@ -614,7 +614,7 @@ pub(crate) fn convalida_artefatto_con_causa(
 ///
 /// # Perche' esiste
 ///
-/// Nella topologia a due domini (`isolamento.md#2-quater`) il verificatore
+/// Nella topologia a due domini (`isolamento.md#2-quater-topologia-chi-osserva-chi`) il verificatore
 /// riceve l'artefatto come descrittore gia' aperto in sola lettura dal
 /// coordinatore — mai un percorso — perche' un percorso e' proprio cio' che
 /// [`NG-9`](../../../docs/isolamento.md) dichiara insufficiente: passare un

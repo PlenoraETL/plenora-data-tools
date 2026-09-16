@@ -13,7 +13,8 @@
 //! volte** — una per dominio; il resto del dialogo — progresso, esito,
 //! quiescenza del dominio, evidenza OOM — lo guida `isolamento::macchina`,
 //! con gli adattatori reali del dominio al posto dei finti dei casi, e la
-//! **stessa** macchina per entrambi i dialoghi (`isolamento.md#2-quater`).
+//! **stessa** macchina per entrambi i dialoghi
+//! (`isolamento.md#2-quater-topologia-chi-osserva-chi`).
 //!
 //! Il worker non chiama piu' `verifica::verifica_artefatto` ne'
 //! `pubblicazione::pubblica` direttamente: la verifica avviene nel dominio del
@@ -321,7 +322,8 @@ fn percorso_in_testo(percorso: &Path) -> Result<String> {
 ///
 /// # La sequenza a due domini, e l'invariante che la governa
 ///
-/// `isolamento.md#2-quater` la vuole cosi': il dominio del worker viene
+/// `isolamento.md#2-quater-topologia-chi-osserva-chi` la vuole cosi': il
+/// dominio del worker viene
 /// **distrutto** — non solo svuotato — prima che quello del verificatore
 /// nasca, perche' l'attribuzione dell'evidenza dipende dal fatto che i due
 /// non coesistano mai (`picco(worker)` e `picco(verificatore)` non si
@@ -351,7 +353,7 @@ pub fn esegui_isolato(
         std::env::current_exe().map_err(|causa| non_disponibile("immagine", &causa.to_string()))?;
     let digest_immagine = prova::digest_dell_immagine(&immagine)?;
 
-    // --- fase 1: il dominio del worker, dalla nascita alla distruzione ------
+    // --- il dominio del worker: dalla nascita alla distruzione --------------
     let identificativo = identificativo_del_tentativo();
     let dominio_worker = radice.join(nome_del_dominio(&identificativo));
     std::fs::create_dir(&dominio_worker).map_err(|causa| {
@@ -388,23 +390,24 @@ pub fn esegui_isolato(
     let (_cartella_lavoro, temporaneo, contratto_di_uscita, token, digest, conteggi) =
         esito_worker?;
 
-    // --- fase 2: il dominio del verificatore, e la pubblicazione -----------
+    // --- il dominio del verificatore, e la pubblicazione --------------------
     //
     // Nasce solo qui: il dominio del worker sopra e' gia' stato rimosso, non
     // solo svuotato. `_cartella_lavoro` resta viva fino alla fine di questa
     // funzione — il suo `Drop` cancella la directory che contiene
     // `temporaneo` — perche' il coordinatore deve poter aprire l'artefatto
-    // per la fase 2 dopo che il worker e il suo dominio non ci sono piu'.
+    // anche dopo che il worker e il suo dominio non ci sono piu'.
     //
     // Controllo sincrono di transizione: fra la distruzione del dominio del
     // worker sopra e la nascita di quello del verificatore qui sotto non
     // gira nessun `conduci_isolato` che sorvegli `annullamento_esterno` — la
     // finestra non ha un confine cooperativo proprio. Senza questo controllo
     // esplicito una cancellazione richiesta esattamente qui non verrebbe
-    // osservata fino al primo confine cooperativo della fase 2 (dentro il
-    // dialogo del verificatore), dopo aver gia' fatto nascere un secondo
-    // dominio per un tentativo gia' cancellato. Il secondo controllo, appena
-    // prima dello spawn vero, e' in `dialoga_con_verificatore`.
+    // osservata fino al primo confine cooperativo nel dominio del
+    // verificatore (dentro il dialogo del verificatore), dopo aver gia' fatto
+    // nascere un secondo dominio per un tentativo gia' cancellato. Il
+    // secondo controllo, appena prima dello spawn vero, e' in
+    // `dialoga_con_verificatore`.
     if annullamento_esterno.is_cancelled() {
         // `Cancelled`, non `Internal`: stessa categoria e stesso exit code
         // (130) di ogni altra cancellazione isolata (vedi
@@ -459,8 +462,9 @@ pub fn esegui_isolato(
 /// distinto da quello del worker ([`nome_del_dominio`]) — un identificativo
 /// nuovo, non lo stesso del worker con un suffisso: il worker e il
 /// verificatore non hanno mai lo stesso tentativo aperto contemporaneamente
-/// (la fase 1 e' gia' chiusa quando la fase 2 comincia), ma i due nomi
-/// devono comunque poter distinguersi a colpo d'occhio in un elenco di
+/// (il dominio del worker e' gia' distrutto quando nasce quello del
+/// verificatore), ma i due nomi devono comunque poter distinguersi a colpo
+/// d'occhio in un elenco di
 /// directory residue.
 fn nome_del_dominio_verifica(identificativo: &[u8; 32]) -> String {
     let corto = identificativo
@@ -557,19 +561,19 @@ fn concludi_handshake(
     }
 }
 
-/// Fase 1: dominio del worker, esecuzione, artefatto scritto sul
+/// Il dominio del worker: esecuzione, artefatto scritto sul
 /// temporaneo — e **nient'altro**. Non verifica, non pubblica: quei passi
-/// appartengono alla fase 2, che comincia solo dopo che il chiamante ha
-/// distrutto il dominio che questa funzione ha usato.
+/// appartengono al dominio del verificatore, che comincia solo dopo che il
+/// chiamante ha distrutto il dominio che questa funzione ha usato.
 ///
 /// # Che cosa rende
 ///
-/// La `TempDir` (deve restare viva finche' la fase 2 non ha finito di
-/// leggere `temporaneo` — il suo `Drop` cancella la directory), il percorso
-/// del temporaneo, il contratto d'uscita, il `commit_token` del tentativo, e
-/// il digest e i conteggi **dichiarati** dal worker — gli stessi quattro
-/// valori che oggi alimentano `AtteseVerifica`, solo spostati al chiamante
-/// perche' qui non c'e' piu' nessuna verifica da alimentare.
+/// La `TempDir` (deve restare viva finche' il dominio del verificatore non ha
+/// finito di leggere `temporaneo` — il suo `Drop` cancella la directory), il
+/// percorso del temporaneo, il contratto d'uscita, il `commit_token` del
+/// tentativo, e il digest e i conteggi **dichiarati** dal worker — gli
+/// stessi quattro valori che oggi alimentano `AtteseVerifica`, solo spostati
+/// al chiamante perche' qui non c'e' piu' nessuna verifica da alimentare.
 ///
 /// # Errors
 ///
@@ -710,7 +714,7 @@ fn esegui_il_worker(
 /// forma sul filo.
 ///
 /// Il `commit_token` non c'e': e' gia' stato trasmesso e accettato nel
-/// `Saluto` (`isolamento.md#4.3`), e il verificatore lo riceve da
+/// `Saluto` (`isolamento.md#43-messaggi`), e il verificatore lo riceve da
 /// `WorkerAccordato::commit_token`, non da questo messaggio.
 ///
 /// # Errors
@@ -742,14 +746,15 @@ fn incarico_verifica_per(
     })
 }
 
-/// Fase 2, il dialogo vero: prepara il **secondo** dominio, avvia lo spawner
-/// in modalita' verificatore col terzo descrittore ceduto, conclude
-/// l'accordo, manda l'`IncaricoVerifica`, e conduce il resto con la stessa
-/// macchina a stati del worker.
+/// Il dominio del verificatore, il dialogo vero: prepara il **secondo**
+/// dominio, avvia lo spawner in modalita' verificatore col terzo
+/// descrittore ceduto, conclude l'accordo, manda l'`IncaricoVerifica`, e
+/// conduce il resto con la stessa macchina a stati del worker.
 ///
 /// # Perche' lo stesso `concesso_byte` del worker
 ///
-/// Perche' `isolamento.md#2-quater` lo vuole cosi': i due domini non
+/// Perche' `isolamento.md#2-quater-topologia-chi-osserva-chi` lo vuole
+/// cosi': i due domini non
 /// coesistono mai, quindi il tetto per **ciascuno** e' il tetto del totale —
 /// non una frazione. Dimezzarlo qui darebbe al verificatore meno di quanto
 /// il budget governato del piano promette di rispettare, per una ragione che
@@ -765,7 +770,8 @@ fn incarico_verifica_per(
 /// nessuna misura esiste ancora per sceglierlo senza indovinare, e
 /// introdurre una quarta variabile di dispiegamento non misurata sarebbe
 /// esattamente l'errore che questo progetto ha scelto di non fare altrove
-/// (`isolamento.md#2-quinquies`). Riusare il tetto esistente non aggiunge
+/// (`isolamento.md#2-quinquies-il-piano-chiede-la-politica-dellhost-concede`).
+/// Riusare il tetto esistente non aggiunge
 /// stato di configurazione nuovo, e resta un tetto **imposto** anche se piu'
 /// largo del necessario.
 ///
@@ -836,7 +842,7 @@ fn dialoga_con_verificatore(
     })?;
     let guardia = FiglioVivo::nuovo(riuscita.figlio);
     // Terzo controllo, il piu' importante: chiude la finestra che il
-    // secondo controllo sopra non poteva chiudere — il segnale puo' essere
+    // secondo controllo sopra non puo' chiudere — il segnale puo' essere
     // arrivato esattamente fra quel controllo e la `spawn()` che e' appena
     // avvenuta. Qui il verificatore esiste gia' per davvero: se la
     // cancellazione e' gia' richiesta, va terminato e raccolto **subito**,
@@ -1052,7 +1058,7 @@ fn verifica_poi_pubblica(
     pubblicazione::pubblica(verificato, destinazione, profilo)
 }
 
-/// Fase 2 di produzione: prepara il dominio del verificatore, conduce il
+/// Il dominio del verificatore in produzione: prepara il dominio, conduce il
 /// dialogo, e — solo attraverso [`verifica_poi_pubblica`] — pubblica.
 ///
 /// # Errors
@@ -1176,9 +1182,9 @@ mod tests {
     /// Il nome del dominio del verificatore ha il proprio prefisso — distinto
     /// da quello del worker — ed e' deterministico sullo stesso
     /// identificativo, sullo stesso principio di
-    /// [`il_nome_del_dominio_ha_il_prefisso_atteso_ed_e_deterministico`]. Non
-    /// era ancora provata direttamente: solo `nome_del_dominio` (worker) lo
-    /// era.
+    /// [`il_nome_del_dominio_ha_il_prefisso_atteso_ed_e_deterministico`], che
+    /// prova la proprieta' solo per `nome_del_dominio` (worker): questo test
+    /// la prova direttamente anche per il verificatore.
     #[test]
     fn il_nome_del_dominio_verifica_ha_il_proprio_prefisso_ed_e_deterministico() {
         let identificativo = [7_u8; 32];
@@ -1541,7 +1547,8 @@ mod tests {
     /// vista di questa barriera e' indistinguibile da qualunque altro
     /// rifiuto del dialogo — `macchina::conduci_isolato` non concede
     /// `DaVerificare` finche' quiescenza, EOF e uscita pulita non sono TUTTI
-    /// osservati (`isolamento.md#3.1`), quindi una terminazione anomala dopo
+    /// osservati (`isolamento.md#31-supervisore`), quindi una terminazione
+    /// anomala dopo
     /// un `Successo` dichiarato produce un `Err` prima ancora che questa
     /// chiusura possa restituire un digest confermato — mai pubblicato.
     #[test]
