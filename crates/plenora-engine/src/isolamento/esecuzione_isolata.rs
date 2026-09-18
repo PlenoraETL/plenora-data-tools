@@ -1328,11 +1328,39 @@ mod tests {
 
         let causa = esito.expect_err("un digest non canonico deve far rifiutare supervisore_per");
         let testo = causa.to_string();
-        assert!(
-            testo.contains("digest") && testo.contains("canonico"),
-            "l'errore deve restituire la causa leggibile di supervisore_per, non un abort ne' un \
-             errore generico: {testo}"
-        );
+        // `supervisore_per` valida l'ambiente PRIMA del digest: con
+        // `proj-backend` compilato, `descrizione::di_questa_build` rifiuta
+        // sempre sul resolver PROJ (`protocollo/descrizione.rs::ambiente`) e il
+        // digest iniettato da questa prova non viene mai raggiunto. Senza
+        // quella feature l'ambiente e' inventariabile e la causa e' quella del
+        // digest non canonico. Le due categorie sono diverse per costruzione
+        // (`PlenoraError::InvalidConfiguration` contro
+        // `PlenoraError::IsolationUnavailable`, che avvolge il rifiuto del
+        // digest tramite `non_disponibile`): nessuna delle due varianti porta
+        // una causa strutturata separata dal testo (nessun campo `#[source]`
+        // nell'enum), quindi l'asserzione sul testo esatto e' la verifica di
+        // conservazione della causa disponibile.
+        if cfg!(feature = "proj-backend") {
+            assert_eq!(
+                causa.category(),
+                plenora_core::ErrorCategory::InvalidConfiguration
+            );
+            assert!(
+                testo.contains("resolver") && testo.contains("proj"),
+                "con proj-backend l'errore deve restituire la causa leggibile del rifiuto \
+                 dell'ambiente PROJ, non un abort ne' un errore generico: {testo}"
+            );
+        } else {
+            assert_eq!(
+                causa.category(),
+                plenora_core::ErrorCategory::IsolationUnavailable
+            );
+            assert!(
+                testo.contains("digest") && testo.contains("canonico"),
+                "senza proj-backend l'errore deve restituire la causa leggibile del digest \
+                 non canonico, non un abort ne' un errore generico: {testo}"
+            );
+        }
 
         // Raccolto per davvero: il pid non esiste piu', ne' vivo ne' zombie.
         // Nessun ciclo d'attesa qui — `chiudi` dentro `supervisore_o_raccogli`
@@ -1360,11 +1388,30 @@ mod tests {
 
         let causa = esito.expect_err("un digest non canonico deve far rifiutare supervisore_per");
         let testo = causa.to_string();
-        assert!(
-            testo.contains("digest") && testo.contains("canonico"),
-            "l'errore deve restituire la causa leggibile di supervisore_per, non un abort ne' un \
-             errore generico: {testo}"
-        );
+        // Stessa distinzione del test simmetrico sopra: senza causa
+        // strutturata separata dal testo per queste varianti, l'asserzione sul
+        // testo esatto e' la verifica di conservazione della causa.
+        if cfg!(feature = "proj-backend") {
+            assert_eq!(
+                causa.category(),
+                plenora_core::ErrorCategory::InvalidConfiguration
+            );
+            assert!(
+                testo.contains("resolver") && testo.contains("proj"),
+                "con proj-backend l'errore deve restituire la causa leggibile del rifiuto \
+                 dell'ambiente PROJ, non un abort ne' un errore generico: {testo}"
+            );
+        } else {
+            assert_eq!(
+                causa.category(),
+                plenora_core::ErrorCategory::IsolationUnavailable
+            );
+            assert!(
+                testo.contains("digest") && testo.contains("canonico"),
+                "senza proj-backend l'errore deve restituire la causa leggibile del digest \
+                 non canonico, non un abort ne' un errore generico: {testo}"
+            );
+        }
         assert!(
             !pid_esiste_ancora(pid),
             "il verificatore deve essere stato raccolto (non residuo, non zombie): pid {pid}"
