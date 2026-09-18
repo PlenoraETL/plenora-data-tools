@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 use wkt::ToWkt;
 
+mod rdp;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BufferCapStyle {
     Round,
@@ -326,6 +328,8 @@ pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64
 /// - `InvalidParameter`: `tolerance` non e' finita oppure e' negativa;
 /// - `InvalidOutput`: la geometria semplificata non supera la validazione
 ///   OGC.
+/// - `Internal`: una distanza del percorso Douglas-Peucker non e'
+///   rappresentabile; nessun risultato parziale viene restituito.
 pub fn simplify_with_policy(
     geometry: &Geometry<f64>,
     tolerance: f64,
@@ -374,6 +378,9 @@ pub fn simplify_with_policy(
         tolerance
     };
 
+    if policy == SimplifyPolicy::DouglasPeucker {
+        rdp::accerta_distanze(&working, working_tolerance)?;
+    }
     let simplified = match (&working, policy) {
         (Geometry::LineString(value), SimplifyPolicy::DouglasPeucker) => {
             Geometry::LineString(value.simplify(working_tolerance))

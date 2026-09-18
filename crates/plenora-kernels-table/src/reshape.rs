@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
-    builder::StringBuilder, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray,
-    RecordBatch, StringArray, StructArray, UInt32Array, UInt64Array,
+    builder::StringBuilder, new_null_array, Array, ArrayRef, BooleanArray, Float64Array,
+    Int64Array, ListArray, RecordBatch, StringArray, StructArray, UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
@@ -14,7 +14,10 @@ use serde::Deserialize;
 use crate::float64_source::Float64Source;
 use crate::hashing::FastHasher;
 use crate::Limits;
-use crate::{column_index, replace_or_append, scalar_as_string, select_rows, validate_output_name};
+use crate::{
+    batch_with_rows, column_index, replace_or_append, scalar_as_string, select_rows,
+    validate_output_name,
+};
 use plenora_core::{PlenoraError, Result};
 
 #[derive(Debug, Deserialize)]
@@ -931,6 +934,45 @@ pub struct Explode {
     pub empty_policy: EmptyListPolicy,
 }
 
+/// Come [`select_rows`], ma la colonna a `skip_index` non viene presa: al suo
+/// posto un placeholder nullo economico, stessa lunghezza e stesso tipo.
+///
+/// Usata SOLO da [`explode`] quando la colonna sorgente sta per essere
+/// sostituita due righe piu' sotto da `replace_or_append`: un `take` su di
+/// essa con gli indici ripetuti di `explode` — poche righe, liste lunghe —
+/// copierebbe l'intera lista sorgente per OGNI riga di output (O(N^2)
+/// elementi), scartati un istante dopo. Non esportata: `select_rows` resta
+/// l'unica primitiva condivisa dagli altri kernel, che non hanno questa forma
+/// degenere (molte righe, liste corte).
+fn select_rows_except(
+    batch: &RecordBatch,
+    rows: &[usize],
+    skip_index: usize,
+) -> Result<RecordBatch> {
+    let indices: UInt32Array = rows
+        .iter()
+        .map(|row| {
+            u32::try_from(*row)
+                .map_err(|_| PlenoraError::ResourceLimit("indice riga oltre u32".into()))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into();
+    let columns = batch
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(position, column)| {
+            if position == skip_index {
+                Ok(new_null_array(column.data_type(), rows.len()))
+            } else {
+                plenora_core::arrow::select::take::take(column.as_ref(), &indices, None)
+                    .map_err(PlenoraError::from)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    batch_with_rows(batch.schema(), columns, rows.len())
+}
+
 /// Espande una colonna `List` in una riga per elemento (stile pandas
 /// explode).
 ///
@@ -987,7 +1029,20 @@ pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result
             ));
         }
     }
-    let repeated = select_rows(batch, &rows)?;
+    // Quando `output_name` e' lo stesso nome della colonna sorgente,
+    // `replace_or_append` la SOSTITUISCE due righe piu' sotto: prenderla con
+    // `select_rows` sarebbe una `take` sprecata sulla `ListArray` sorgente,
+    // O(N^2) nel caso degenere (poche righe, liste lunghe) perche' ogni
+    // indice di output ripetuto ricopia l'intera lista della riga sorgente.
+    // Quando invece `output_column` e' un nome NUOVO, la colonna sorgente
+    // resta nell'output (ripetuta per riga, non sostituita — vedi
+    // `analyze_explode`, che la mantiene con `analyze_append`): li' serve
+    // davvero, e si passa dal percorso normale.
+    let repeated = if output_name == config.column {
+        select_rows_except(batch, &rows, index)?
+    } else {
+        select_rows(batch, &rows)?
+    };
     let output = plenora_core::arrow::select::take::take(
         list.values().as_ref(),
         &UInt32Array::from(values),
@@ -3034,5 +3089,115 @@ mod tests {
             format!("{:?}", fast.expect_err("fast deve fallire")),
             format!("{:?}", reference.expect_err("ref deve fallire"))
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Regressione: `explode` su un batch a riga singola con una lista lunga
+    // non materializza la colonna sorgente in `select_rows` (O(N^2):
+    // `take_list` di arrow copierebbe l'intera lista per ogni riga di output
+    // quando gli indici ripetuti puntano tutti alla stessa riga sorgente —
+    // a N=10 000 su VM reale l'intermedio scartato e' 818 MB e causa un OOM
+    // del dominio isolato, vedi errori-e-limiti.md). A N=50 000 quel
+    // percorso richiederebbe ~2.5*10^9 elementi Int64 (~20 GB), impraticabile
+    // in un test unitario: qui completa in tempo trascurabile e produce
+    // l'output corretto, perche' `select_rows_except` sostituisce quella
+    // colonna con un placeholder nullo economico invece di materializzarla.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn explode_su_riga_singola_con_lista_lunga_non_e_quadratico() {
+        use plenora_core::arrow::array::types::Int64Type;
+
+        const N: i64 = 50_000;
+        let valori: Vec<Option<i64>> = (0..N).map(Some).collect();
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(valori)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "items",
+                list.data_type().clone(),
+                true,
+            )])),
+            vec![Arc::new(list)],
+        )
+        .expect("batch una riga");
+
+        let config = Explode {
+            column: "items".into(),
+            output_column: None,
+            empty_policy: EmptyListPolicy::Null,
+        };
+        let output = explode(&batch, &config, &Limits::default()).expect("explode");
+
+        // Correttezza, non solo completamento: N righe, valori 0..N in
+        // ordine, nessun null (la lista sorgente non ne aveva).
+        let righe_attese = usize::try_from(N)
+            .expect("N e' la costante 50_000 dichiarata sopra: sempre non negativa e rappresentabile in usize");
+        assert_eq!(output.num_rows(), righe_attese);
+        assert_eq!(output.num_columns(), 1);
+        let colonna = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("colonna items Int64");
+        assert_eq!(colonna.null_count(), 0);
+        assert_eq!(colonna.value(0), 0);
+        let ultimo_indice = usize::try_from(N - 1)
+            .expect("N - 1 = 49_999: sempre non negativo e rappresentabile in usize");
+        assert_eq!(colonna.value(ultimo_indice), N - 1);
+    }
+
+    /// Quando `output_column` e' un nome DIVERSO da quello sorgente, la
+    /// colonna sorgente resta nell'output (ripetuta per riga) — percorso che
+    /// deve continuare a usare `select_rows` normale, non l'ottimizzazione:
+    /// verifica che il fix non abbia cambiato questo caso.
+    #[test]
+    fn explode_con_output_column_distinto_mantiene_la_colonna_sorgente() {
+        use plenora_core::arrow::array::types::Int64Type;
+
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+            Some(1_i64),
+            Some(2),
+            Some(3),
+        ])]);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "items",
+                list.data_type().clone(),
+                true,
+            )])),
+            vec![Arc::new(list)],
+        )
+        .expect("batch una riga");
+
+        let config = Explode {
+            column: "items".into(),
+            output_column: Some("item".into()),
+            empty_policy: EmptyListPolicy::Null,
+        };
+        let output = explode(&batch, &config, &Limits::default()).expect("explode");
+
+        assert_eq!(output.num_rows(), 3);
+        assert_eq!(output.num_columns(), 2);
+        let sorgente = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("colonna items ancora List, ripetuta");
+        for row in 0..3 {
+            let valori = sorgente
+                .value(row)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("valori della lista sorgente Int64")
+                .values()
+                .to_vec();
+            assert_eq!(valori, vec![1, 2, 3]);
+        }
+        let nuova = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("colonna item Int64");
+        assert_eq!(nuova.values(), &[1, 2, 3]);
     }
 }

@@ -1790,13 +1790,15 @@ pub fn causa_di_riga(error: &PlenoraError, ordinaria: &'static str) -> Option<&'
 }
 
 /// Converte l'esito grezzo di un kernel scalare nella sua forma finale:
-/// `Internal` per una validazione interrotta (mai un giudizio
+/// `Internal` per un errore interno o una validazione interrotta (mai un giudizio
 /// sull'ingresso), `InvalidPlan` altrimenti — condivisa fra `measure_cells`
 /// e `executor::blocking::misura_riga`: un solo `match` per la decisione,
 /// non una copia per percorso.
 pub fn esito_kernel(error: OperationError) -> PlenoraError {
     match error {
-        OperationError::ValidazioneNonConclusa(_) => PlenoraError::Internal(error.to_string()),
+        OperationError::ValidazioneNonConclusa(_) | OperationError::Internal(_) => {
+            PlenoraError::Internal(error.to_string())
+        }
         altro => PlenoraError::InvalidPlan(altro.to_string()),
     }
 }
@@ -3102,6 +3104,38 @@ mod tests {
     use geo::{line_string, polygon, LineString, MultiPoint, Point};
 
     use super::*;
+
+    #[test]
+    fn simplify_rifiuto_numerico_non_pubblica_riga_valida_e_non_accusa_input() {
+        let valid = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)]));
+        let mixed = plenora_kernels_geo::construction::geometry_from_wkt(
+            "MULTILINESTRING((0 0,0 1e-200,1e-200 0),(1 1,2 2))",
+        )
+        .unwrap();
+        let first = encode_geometry(&valid).unwrap();
+        let second = encode_geometry(&mixed).unwrap();
+        let cells = BinaryArray::from(vec![Some(first.as_slice()), Some(second.as_slice())]);
+        let transform = ResolvedTransform::Simplify {
+            tolerance: 1e-220,
+            policy: SimplifyPolicy::DouglasPeucker,
+        };
+        let failure = map_nullable(&cells, |bytes| {
+            let geometry = geometry_from_wkb(bytes)?;
+            apply_transform_cell(&transform, &geometry)
+        })
+        .unwrap_err();
+        let error = failure.errore_del_passo();
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert!(error.row_diagnostics().is_none());
+
+        // La conversione scalare e' condivisa dalle misure fuse e blocking.
+        let error =
+            simplify_with_policy(&mixed, 1e-220, SimplifyPolicy::DouglasPeucker).unwrap_err();
+        assert_eq!(
+            esito_kernel(error).category(),
+            plenora_core::ErrorCategory::Internal
+        );
+    }
 
     /// Parametri di una trasformazione 1:1 (tutti i default, CRS fissato).
     fn fused_params(operation: ArrowOperation) -> TransformArrowSchema {

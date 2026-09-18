@@ -323,15 +323,15 @@ impl ArrowTransportError {
 
         match self {
             Self::Interno(_) | Self::Internal(_) | Self::ArrowPanic(_) => true,
-            Self::Kernel(O::ValidazioneNonConclusa(_))
+            Self::Kernel(O::ValidazioneNonConclusa(_) | O::Internal(_))
             | Self::Topology(T::ValidazioneNonConclusa(_))
             | Self::Construction(C::ValidazioneNonConclusa(_))
             | Self::Advanced(A::ValidazioneNonConclusa(_))
             | Self::Extended(E::ValidazioneNonConclusa(_))
-            | Self::ExtendedAlgorithm(Ea::ValidazioneNonConclusa(_))
+            | Self::ExtendedAlgorithm(Ea::ValidazioneNonConclusa(_) | Ea::Internal(_))
             | Self::Predicate(P::ValidazioneNonConclusa(_))
             | Self::Analysis(An::ValidazioneNonConclusa(_))
-            | Self::SpatialJoin(S::ValidazioneNonConclusa(_)) => true,
+            | Self::SpatialJoin(S::ValidazioneNonConclusa(_) | S::Internal(_)) => true,
             #[cfg(feature = "proj-backend")]
             Self::Reproject(
                 plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa(_),
@@ -571,8 +571,23 @@ mod tests {
 
     /// **Anche i tre rami interni non-kernel sono riconosciuti.**
     ///
-    /// `e_interna` ha due famiglie: gli esiti tipizzati dei kernel, coperti dal
-    /// caso qui sopra, e questi. Verificarli separatamente e' cio' che rende
+    #[test]
+    fn gli_internal_dei_kernel_non_diventano_invalidplan() {
+        let cases = [
+            ArrowTransportError::Kernel(OperationError::Internal("forma")),
+            ArrowTransportError::ExtendedAlgorithm(ExtendedAlgorithmError::Internal("forma")),
+            ArrowTransportError::SpatialJoin(SpatialJoinError::Internal("forma")),
+        ];
+        for case in cases {
+            assert!(case.e_interna());
+            let error = case.errore_del_passo();
+            assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+            assert!(error.row_diagnostics().is_none());
+        }
+    }
+
+    /// `e_interna` ha due famiglie: gli esiti tipizzati dei kernel, coperti dai
+    /// casi qui sopra, e questi. Verificarli separatamente e' cio' che rende
     /// completo il confronto a mano fra la tabella e i rami della funzione.
     #[test]
     fn i_rami_interni_non_kernel_sono_riconosciuti() {

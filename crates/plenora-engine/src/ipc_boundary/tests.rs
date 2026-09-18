@@ -518,8 +518,7 @@ fn scrivi(
 /// Il caso lo costruisce cosi': un file con un dizionario e uno con due, e il
 /// tetto piu' stretto al quale il primo si apre ancora. A quel tetto ogni
 /// singolo dizionario del secondo file sta dentro — sono della stessa taglia —
-/// e solo la somma lo supera. Se il codice guardasse il massimo invece della
-/// somma, il secondo file si aprirebbe e il test fallirebbe.
+/// e solo la somma lo supera.
 ///
 /// # Perche' il tetto si cerca invece di scriverlo
 ///
