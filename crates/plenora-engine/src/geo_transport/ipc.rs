@@ -3012,8 +3012,7 @@ mod tetto_dizionari {
     ///
     /// Ne segue che l'errore dice quale dei due controlli e' corso per primo:
     /// col tetto davanti sarebbe `IpcRetainedDictionariesTooLarge`, con la
-    /// convalida davanti e' `IpcFooterInvalid`. Invertire i due nel codice fa
-    /// fallire questo test, che e' cio' che un test sull'ordine deve fare.
+    /// convalida davanti e' `IpcFooterInvalid`.
     #[test]
     fn il_framing_invalido_vince_sul_tetto_dei_dizionari() {
         let mut byte = artefatto_con_dizionario();

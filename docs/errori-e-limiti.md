@@ -367,6 +367,98 @@ unica per quattro operazioni diverse che ne sottostimava tre.
 La formula corretta per descrivere la garanzia è **controllo di ammissione
 post-allocazione**, non budget globale duro.
 
+### CORRETTO: `table.explode` materializzava la colonna lista che stava per sostituire, con crescita quadratica
+
+**Non era un limite deliberato**: era un difetto non presidiato nel kernel,
+distinto dal fattore di sovraconteggio ×3 sull'ingresso IPC (che è
+contabilità di lettura, non un difetto del kernel) — le due cose non vanno
+confuse, e questa voce copre solo la seconda.
+
+**Che cosa succedeva.** `reshape::explode` (`crates/plenora-kernels-table/src/reshape.rs`)
+chiamava `select_rows(batch, &rows)` **prima** di sostituire la
+colonna esplosa con `replace_or_append`. `select_rows`
+(`crates/plenora-kernels-table/src/lib.rs`, riga 1623 — condivisa da molti
+altri kernel, mai toccata da questa correzione) fa `take()` su **tutte** le
+colonne del batch — inclusa la colonna lista originale, non ancora rimossa.
+
+Per un batch con una sola riga la cui lista ha N elementi, `rows` ha
+lunghezza N (un indice per elemento esploso, tutti col valore `0`, l'unica
+riga sorgente). `take()` su un `ListArray` (`arrow-select 59.2.0`,
+`src/take.rs`, funzione `take_list`, righe 648-729) calcola
+`capacity = child_data.len() / values.len() * indices.len()`: con
+`values.len() = 1` e `child_data.len() = N`, `capacity = N × N`. Il ciclo
+successivo copia (`array_data.try_extend`) l'intera lista sorgente per
+**ciascuno** dei N indici. Il risultato è un intermedio da **N² elementi**,
+scartato poche righe dopo quando `replace_or_append` sostituisce quella
+stessa colonna con l'output vero di `explode`.
+
+**Fuori da qualunque contabilità.** Questo intermedio non passava da
+`state.governor.reserve(...)`: nessun `MemoryPermit` lo copriva, nessun tetto
+di dominio lo vedeva finché non toccava pagina per pagina durante la copia. Era
+un'istanza concreta, con causa e citazione di riga, della categoria già
+descritta sopra come "copie intermedie... buffer di crescita" fuori dal
+perimetro governato — e la causa diretta dell'OOM del dominio isolato
+riprodotto durante la qualificazione (vedi [`stato-e-roadmap.md`](stato-e-roadmap.md)).
+
+**Identità del codice provato.** La prova OOM è stata eseguita contro il
+comportamento di `select_rows`/`explode` **così com'erano al commit**
+`ec02d0562ea645d0a8410005ed429768dcdd6c6d` (`reshape.rs` non aveva modifiche
+non commesse a quel momento: `git show HEAD:.../reshape.rs` ha sha256
+`db0c31a44934424375e82602b769531b0371b3f7574c4ccb2264b8159203233a`, identico
+al working tree usato per il tentativo). **Resta una prova storica di quel
+comportamento, non una proprietà del codice attuale**: dopo la correzione
+descritta sotto, `reshape.rs` ha sha256
+`7bda05882b226e96e762524557f690ac15aa080abfea0931ca2a723d3b5ba8b3` e quello
+specifico scenario (intermedio O(N²) mai governato) non si riproduce più — la
+prova OOM **non è stata ripetuta** contro il nuovo diff, di proposito: la
+correzione qui sotto è esattamente ciò che quello scenario esercitava, e
+riprovarlo non avrebbe potuto che confermare l'assenza dell'intermedio già
+dimostrata dai test di regressione e dalla revisione indipendente del fix.
+
+**Non lineare nella forma comune del carico.** Su un batch con molte righe
+e liste corte (il caso comune, es. la fixture di benchmark con 0-4 elementi
+per riga) il rapporto `child_data.len() / values.len()` è la lunghezza media
+di lista — piccolo — e la crescita restava lineare. Il quadratico si
+manifestava solo nel caso degenere di poche righe con liste molto lunghe: a
+N = 10 000 elementi in una singola riga, l'intermedio misurato in VM era
+818 139 136 byte (~780 MiB, coerente con la stima ≈763 MiB) a fronte di un
+batch d'ingresso di poche centinaia di KB.
+
+**Come è stata corretta.** `explode` non chiama più `select_rows` senza
+condizioni: una nuova funzione locale e non esportata,
+`select_rows_except(batch, rows, skip_index)`
+(`crates/plenora-kernels-table/src/reshape.rs`), replica `select_rows` ma,
+sulla sola colonna sorgente che sta per essere sostituita, mette un
+placeholder nullo economico (`new_null_array`, stessa lunghezza e tipo,
+nessuna `take()`) invece di materializzarla — usata SOLO quando
+`output_name == config.column`, cioè quando `replace_or_append` la
+sostituisce davvero due righe dopo. Quando `output_column` è un nome
+**diverso**, la colonna sorgente resta nell'output (ripetuta per riga,
+comportamento invariato — vedi `analyze_explode`/`analyze_append`) e si passa
+ancora dal normale `select_rows`, perché lì il risultato serve davvero.
+`select_rows` stesso non è stato toccato: resta condivisa e invariata per
+tutti gli altri chiamanti (`melt`/`pivot`/`transpose`/`table_diff`/`filtering`/
+`joins`/`setops`/`spill`/`analysis`).
+
+Regressione: `reshape::tests::explode_su_riga_singola_con_lista_lunga_non_e_quadratico`
+(batch a riga singola, N=50 000 elementi — con il vecchio percorso
+l'intermedio sarebbe stato ≈2,5×10⁹ elementi Int64, ~20 GB, impraticabile in
+un test unitario; col fix completa in millisecondi con output corretto) e
+`reshape::tests::explode_con_output_column_distinto_mantiene_la_colonna_sorgente`
+(verifica che il caso `output_column` diverso, che deve continuare a
+materializzare la colonna sorgente, non sia cambiato). Verificata anche
+empiricamente, separatamente dal fix, la crescita super-lineare del percorso
+non modificato di `select_rows` su questa fixture degenere (2 000→16 000
+elementi: 22 ms→825 ms, non 8× come atteso da un fattore lineare).
+
+**Ambito.** Ogni chiamata a `table.explode` la cui colonna lista sia
+concentrata su poche righe con molti elementi, quando la colonna di output
+coincide col nome della colonna sorgente. Non censito se lo stesso schema
+(`select_rows` su una colonna che l'operazione sta per sostituire) si ripeta
+in altri kernel di `reshape.rs` (es. `unnest`, che ha una sua gestione degli
+indici separata e non è stata verificata qui) — resta un'area da controllare
+separatamente, non presunta esente.
+
 ### Profilo isolato: non implementato
 
 Un tetto duro per singola esecuzione **non è realizzabile in-process**, e la
@@ -647,6 +739,21 @@ diagnostica per riga: l'attribuzione sarebbe a **insiemi** di righe (l'intera
 collezione, o coppie), fuori dallo schema single-row corrente. Su quel
 percorso una failure del kernel su input già validato dal gate è fail-closed
 senza `source_index`. Nel DAG quelle operazioni non sono dispatchate.
+
+### `with_row_diagnostics` degrada a `Internal`
+
+**La regola.** Un payload `RowDiagnostics` che non supera
+`validate_for_emission` non si scarta da solo: sostituisce l'intero errore.
+`with_row_diagnostics` non restituisce il fallimento ordinario del batch con
+la diagnostica scartata — restituisce `ArrowTransportError::Internal("row
+diagnostics interne non valide")`, senza traccia né della causa originale né
+di una diagnostica di riga.
+
+**Perché.** Propagare l'errore originale accompagnato da un payload che non
+ha superato la validazione lascerebbe aperta la possibilità che quel payload
+attraversi comunque il confine in una forma non conforme. `Internal` dichiara
+«difetto nostro» invece di lasciar credere che la riga sia stata
+diagnosticata correttamente.
 
 ### Chiavi canoniche emesse prima della ratifica
 
@@ -1471,6 +1578,37 @@ risolve e l'identità che la nomina, con un caso che pretende che le due
 concordino; senza quel selettore le cinque condizioni potrebbero essere
 soddisfatte e la descrizione riguardare comunque un'altra implementazione.
 
+### `geo.buffer` è strutturalmente inutilizzabile nel profilo isolato, con qualunque CRS
+
+**Non è una scelta di CRS, è una conseguenza del limite qui sopra.** La voce
+precedente documenta che il profilo isolato non descrive l'ambiente
+`proj-backend`. Questa ne registra una conseguenza operativa concreta,
+verificata leggendo il codice e non dedotta: `geo.buffer` richiede
+`CrsRequirement::Projected` (catalogo, `docs/operazioni.md`), cioè una
+classificazione CRS risolta. Sul percorso **senza** backend —
+l'unico compatibile col profilo isolato —
+`plenora_core::crs::resolve_crs` (`crs.rs`) fa
+`validate_definition_text(definition, name)?; Err(CrsError::BackendUnavailable)`:
+convalida solo il testo (lunghezza, non vuoto, nessun NUL) e poi fallisce
+**incondizionatamente**, per qualunque stringa di CRS, per quanto nota o
+ben formata.
+
+**Non esiste quindi un CRS che faccia funzionare `geo.buffer` nel profilo
+isolato.** Non è un problema di scegliere un CRS migliore o più comune: è
+strutturale, perché la risoluzione CRS stessa non ha un percorso di successo
+senza PROJ, e PROJ non è descrivibile nel profilo isolato per la ragione già
+registrata sopra (cache delle griglie sempre attiva, percorsi che si
+aggiungono invece di sostituirsi).
+
+**Ambito.** Vale per `geo.buffer` e per qualunque altra operazione del
+catalogo con `CRS: projected` o equivalente nella sua scheda — non solo per
+`geo.buffer`, che è il caso verificato in questo giro.
+
+**Non risolto in questo giro, e non era lo scopo.** Questa voce documenta il
+limite così com'è oggi; la condizione di rientro è la stessa già scritta
+sopra per il profilo PROJ (un unico provider che soddisfi le cinque
+condizioni). Nessuna modifica al prodotto è stata fatta o proposta qui.
+
 ### L'apertura dell'artefatto temporaneo: quali generi sono dell'incarico
 
 **La regola.** `executor::output::non_apribile` classifica il rifiuto
@@ -1875,100 +2013,69 @@ scartare quell'`Option`, o che la serializzazione stia dietro una barriera.
 Il reperto è passato a `plenora-memory-lab` con encoder, versione, punto di
 panico, ingresso minimo e misure per profilo.
 
-### DIFETTO APERTO: `simplify` di `geo` panica su una geometria degenere con distanze `NaN`
+### Semplificazione RDP e scale numeriche miste
 
-**Non è un limite deliberato**, ed è per questo che non sta fra i
-[limiti dichiarati](#limiti-dichiarati): è un difetto noto, non presidiato,
-trovato dallo smoke fuzz del **2026-09-01** su `wkt_operations` (diciannove
-target su venti verdi). Tre cose distinte vanno tenute separate qui sotto:
-il reperto storico, una dimostrazione isolata che non passa dal prodotto, e
-un'ipotesi sul meccanismo che resta **non confermata**. Una stesura
-precedente le fondeva in un'unica affermazione più forte di quella
-dimostrata.
+**Regola e ambito.** `operations::simplify_with_policy`, per la politica
+`DouglasPeucker`, controlla le distanze RDP sulla geometria di lavoro prima
+di invocare `geo`. Vale per linee, anelli esterni e interni, multi-geometrie
+e componenti delle collezioni. Il controllo ripercorre gli stessi segmenti,
+con lo stesso spareggio `>=`, senza cambiare vertici o tolleranza. Non basta
+controllare il massimo: ogni distanza deve essere finita, anche quando
+un'altra distanza finita nasconderebbe un `NaN` nel fold.
 
-**Che cosa succede, in `geo`.** `geo 0.33.1`, `src/algorithm/simplify.rs:108`,
-calcola per ogni punto candidato la distanza dal segmento che chiude l'anello
-con un `fold` che parte da `(0usize, T::zero())` e aggiorna l'indice solo
-quando `distance >= farthest_distance`. Un confronto con `NaN` è sempre
-falso: se **ogni** distanza calcolata è `NaN`, l'accumulatore non si sposta
-mai dallo zero iniziale, e il `debug_assert_ne!(farthest_index, 0)` che segue
-assume di essere in quel caso impossibile. Questo è un fatto sul codice di
-`geo`, verificabile leggendolo; non dice da solo quale ingresso reale lo
-raggiunga.
+**Hazard.** Coordinate finite e validità OGC non assicurano che
+`dx*dx + dy*dy` sia rappresentabile. La normalizzazione globale non basta
+quando componenti molto piccole convivono con componenti di scala ordinaria.
+Un segmento con estremi distinti può avere denominatore arrotondato a zero;
+una divisione `0/0` produce `NaN`. In `geo 0.33.1`, se tutte le distanze
+intermedie sono `NaN`, il massimo conserva l'indice zero e raggiunge il
+`debug_assert_ne!` in `simplify.rs:108`. In release l'asserzione manca:
+il ramo di eliminazione può scartare un vertice oltre la tolleranza richiesta.
 
-**1. Il reperto storico, e che cosa ne resta.** L'ingresso originale era un
-WKT `polyGon(...)` con le coordinate separate da `\r`, `\n` e `\t` invece che
-da spazi. **L'artefatto di quel run non è disponibile per il replay**:
-cercato in `fuzz/artifacts` e `fuzz/corpus` di questo worktree (assenti per
-`wkt_operations`), nelle stesse directory del worktree `plenora-fuzz`
-(contengono solo reperti di `plan_v5_parse` e `wkb_contract`), e come
-possibile test versionato — a differenza dei reperti della barriera OGC, che
-vivono in `tests/barriera_validazione.rs` e `tests/barriera_privacy_processo.rs`,
-per `wkt_operations` non esiste un `tests/` equivalente. `fuzz/artifacts` è
-in `.gitignore` per policy del progetto: l'assenza non è un'anomalia, ma è
-una conseguenza pratica da dichiarare, non da aggirare — **non è possibile
-oggi rieseguire l'ingresso esatto** né osservarne l'output reale in
-`release`. Resta solo il messaggio del panic.
+Il calcolo del denominatore replica i prodotti e la somma separati di
+`geo-types 0.7.19`: l'eccezione locale a `clippy::suboptimal_flops` evita che
+un `mul_add` cambi gli arrotondamenti della precondizione verificata.
 
-**2. La dimostrazione isolata con `NaN` letterali — non prova la
-raggiungibilità dal prodotto.** Verificato, separatamente e **senza passare
-da `ensure_valid`**, che `geo::Simplify::simplify` chiamato isolato —
-direttamente sul codice vendorizzato, fuori da `plenora-kernels-geo` —
-panica con lo stesso `assertion 'left != right' failed — left: 0, right: 0`
-a `simplify.rs:108` su un anello i cui vertici intermedi sono `NaN`
-espliciti, e **non** panica se lo stesso programma è compilato in `release`
-(`overflow-checks` attivo, `debug-assertions` no — la stessa condizione già
-registrata per la barriera OGC, [§](#la-validazione-ogc-sta-dietro-una-barriera)).
-Un `NaN` esplicito in ingresso non arriverebbe però mai per la via che il
-fuzz target usa davvero: `plenora_kernels_geo::operations::simplify` invoca
-`ensure_valid` **prima** di `geo::simplify`, e `ensure_valid` rifiuta ogni
-coordinata non finita
-(`InvalidLineString::NonFiniteCoord`/`InvalidPolygon::NonFiniteCoord`). Questa
-dimostrazione isola quindi un solo fatto — che l'assert sparisce in
-`release` — su un ingresso che bypassa il kernel del prodotto, non sul
-reperto originale.
+**Rifiuto esplicito.** Un denominatore nullo per estremi distinti, un
+denominatore non finito o una distanza non finita rendono
+`OperationError::Internal("semplificazione: distanza non rappresentabile")`.
+Non si attribuisce invalidità all'ingresso OGC-valido, non si pubblicano
+coordinate e non si restituiscono componenti parziali. La tolleranza zero
+conserva il percorso senza calcolo di distanze. Il vendor resta invariato:
+la protezione è al confine del prodotto, non una correzione upstream.
+Le conversioni del trasporto e delle misure fuse/blocking mantengono la
+categoria `Internal`, senza diagnostica che attribuisca il difetto alla
+riga. La stessa regola copre le varianti interne dell'algoritmo esteso e
+del join spaziale, non soltanto `OperationError`.
 
-**3. L'ipotesi non confermata: errore aritmetico su ingresso finito.**
-`ensure_valid` è chiamata dentro `simplify_with_policy` fin dalla sua prima
-versione (commit `7140b72`), e il target del fuzz chiama quella funzione —
-mai `geo::Simplify::simplify` direttamente — fin dalla propria introduzione,
-mai modificata da allora. Questo dimostra una **precondizione**: se il
-reperto del 2026-09-01 ha attraversato quella barriera, il suo ingresso
-aveva coordinate finite, e la geometria era OGC-valida per gli stessi
-controlli. **Non dimostra** che `simplify` produca davvero un `NaN` interno
-a partire da un ingresso finito di quel tipo: nessun poligono finito che
-riproduca l'assert è stato trovato in questa verifica, né quindi il suo
-comportamento in `release` è stato osservato — in nessuno dei due profili,
-su un ingresso reale. Il meccanismo per cui potrebbe succedere — una
-sottrazione fra coordinate vicine il cui quadrato va sotto lo zero macchina
-in virgola mobile, `dx² + dy² == 0.0` per underflow pur con `dx`/`dy` non
-nulli — resta un'ipotesi motivata dalla lettura del codice, non un fatto
-osservato.
+**Reperti riproducibili.** `tests/simplify_scale_miste.rs` contiene una
+`MultiLineString` finita con componente
+`[(0,0),(0,1e-200),(1e-200,0)]` e componente ordinaria
+`[(1,1),(2,2)]`, anche costruita tramite il parser WKT del prodotto.
+Con tolleranza `1e-220`, il vertice intermedio della prima componente
+deve restare: la sua distanza geometrica dal segmento è `1e-200`.
+La controprova sul vendor senza presidio panica in debug e in release
+restituisce i soli estremi. La regressione del prodotto richiede il rifiuto
+tipizzato in entrambi i profili. Un secondo reperto usa due poligoni finiti
+a scale diverse. Gli oracoli ordinari confrontano i vertici con quelli di
+`geo`, inclusi gli spareggi.
 
-**Ambito.** `wkt_operations` → `plenora-kernels-geo` →
-`geo::algorithm::simplify`, raggiunto attraverso
-`plenora_kernels_geo::operations::simplify`/`simplify_with_policy` — quindi
-dopo `ensure_valid`, non prima — e ogni altra operazione di catalogo che
-semplifica una geometria per la stessa via. Non è stato censito quali altri
-cammini lo raggiungano, né se esistano cammini che chiamano `geo` senza
-passare da `ensure_valid`. Il comportamento in `release` sul reperto reale
-resta **non osservato**: quello che si può dire oggi è solo ciò che il
-punto 2 e il punto 3 stabiliscono separatamente, non una loro somma.
+**Limite storico.** Il WKT del finding fuzz del 2026-09-01 non è disponibile.
+Questi sono nuovi reperti della stessa classe, non un replay recuperato.
+La prova isolata con NaN letterali non dimostra la raggiungibilità dal
+prodotto e non è usata per giustificare il presidio.
 
-**Condizione di rientro.** Il giorno che `simplify` respinga esplicitamente
-una geometria degenere prima del calcolo RDP, o che `geo` renda un errore
-invece di un `debug_assert!` su quel cammino — le due strade che
-[`release.md`](release.md) registra come ancora da valutare — oppure, prima
-ancora, il giorno in cui un ingresso finito che riproduce l'assert
-attraverso `plenora_kernels_geo::operations::simplify` viene trovato e
-verificato nei due profili: solo allora il punto 3 smette di essere
-un'ipotesi.
+**Costo e non-garanzie.** Il controllo aggiunge una traversata RDP, con stack
+esplicito O(n), prima di quella della dipendenza. Non è una misura di costo
+applicativo e non costituisce una prova di aritmetica esatta di RDP.
+Non modifica né qualifica `PreserveTopology`, la normalizzazione delle
+coordinate, o gli altri kernel che calcolano distanze.
 
-**Dove vive il reperto.** Da nessuna parte accessibile a questa verifica: il
-punto 1 sopra ne dichiara la ricerca e l'esito. Questa voce registra il
-punto di panico, la causa nota nel codice di `geo` (distanze `NaN` da un
-fold che le confronta con `>=`), e le due verifiche separate — isolata e
-per profilo — con i rispettivi limiti.
+**Condizione di rientro.** Sostituire la doppia traversata richiede un
+percorso fallibile che controlli ogni distanza durante il calcolo stesso,
+oppure una dipendenza corretta e riqualificata. I reperti, i rifiuti
+tipizzati e gli oracoli restano obbligatori. Lo stato della qualifica è in
+[`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 ### Il filo porta un esito solo
 
@@ -2194,6 +2301,51 @@ quello che la riga deve nominare.
 responsabile del ciclo di vita capace di **tenere una guardia** — cioè un
 chiamante che riceva `FiglioVivo` invece di un errore tipizzato. È una condizione
 tecnica, non una data: vale quando è soddisfatta, da chiunque la soddisfi.
+
+### Un rifiuto legittimo dopo lo spawn non deve far scattare la sentinella di `FiglioVivo`
+
+**Distinta dal presidio RDP**: capitata nello stesso giro di lavoro ma su un
+altro meccanismo — non va fusa con quella voce.
+
+**Il difetto.** In entrambi i domini di `esecuzione_isolata.rs` (worker e
+verificatore), subito dopo `FiglioVivo::nuovo(...)`, una chiamata fallibile
+(`prova::supervisore_per(...)?`) usava `?` prima che la guardia fosse
+consumata da `concludi_handshake`. Un fallimento qui — incluso un rifiuto
+**legittimo**, non un bug — faceva cadere `guardia` ancora viva: la
+sentinella di `Drop` (pensata apposta per un `?` che «salta le porte» e
+lascia un figlio davvero sfuggito) interveniva con
+`std::process::abort()`, sostituendo un errore leggibile con l'arresto del
+processo. Il caso concreto che lo ha esposto: build con resolver `proj`
+contro il profilo isolato — un rifiuto atteso e corretto
+(vedi la voce sul profilo isolato e `proj-backend`), non un'anomalia, che
+però abortiva invece di restituire l'errore tipizzato.
+
+**Il fix.** Una funzione condivisa, `supervisore_o_raccogli`, che segue lo
+stesso principio già usato da `prova::con_la_pulizia` (non un'idea nuova):
+se il supervisore fallisce, chiude il dominio e raccoglie il figlio *prima*
+di propagare; se la pulizia non lascia difetti, la causa originale sola; se
+ne lascia, le due cose insieme via `non_disponibile`. Un'unica
+implementazione, usata da entrambi i siti di chiamata (worker e
+verificatore) — nessuna logica duplicata.
+
+**La sentinella stessa non è stata toccata.** Resta l'ultima difesa per la
+fuga vera — non è stata indebolita né rimossa; è stato tolto solo il varco
+specifico che la faceva scattare su un rifiuto atteso.
+
+**Verificato**, non solo compilato: due nuove prove di regressione
+(`supervisore_o_raccogli_rifiuta_con_errore_leggibile_e_raccoglie_il_worker`,
+l'equivalente per il verificatore) forzano il rifiuto con un digest
+malformato, verificano che il messaggio d'errore sia leggibile, e confermano
+con `kill -0` sul pid del figlio reale che è stato davvero raccolto, non
+lasciato residuo. Suite `isolamento::esecuzione_isolata::` 22/22, `cargo fmt
+--all --check` pulito, clippy R6 a zero, suite dell'intero workspace 2275/2275
+(i 2273 precedenti più questi due). Ri-riprodotto sulla VM il caso esatto
+che abortiva: ora un JSON pulito con `category: invalid_configuration`,
+`exit=2`, nessun core dump, nessun residuo di dominio o processo.
+
+**Stato**: implementato e qualificato in questo giro (stessa VM, stesso
+perimetro delle altre qualifiche di questo giro); non ancora integrato — il
+lavoro resta nel working tree, senza commit né merge.
 
 ### Chi rinuncia a una nascita parziale chiude il dominio, e ne osserva la quiescenza
 
@@ -2572,6 +2724,16 @@ onesto — e la variante dipende da **dove** è avvenuto:
 | conteggio dei blocchi del footer | `IpcFooterInvalid`: lì il footer c'è per definizione, ed è la struttura incoerente |
 
 Nominare una struttura assente manderebbe chi legge a cercarla.
+
+**Il framing invalido vince sul tetto.** Fra le due interruzioni possibili
+sullo stesso file — footer rotto e tetto superato — resta quella che corre per
+prima nell'ordine logico della convalida: `validate_footer_blocks` **precede**
+`verifica_tetto_dizionari`. Sommare i `bodyLength` di blocchi troncati,
+disallineati o che escono dalla regione dati prima di sapere che quei blocchi
+esistono davvero classificherebbe un file strutturalmente rotto come un file
+che ha semplicemente chiesto troppo (`IpcRetainedDictionariesTooLarge` invece
+di `IpcFooterInvalid`), e manderebbe chi legge ad alzare un tetto che nessun
+tetto può salvare.
 
 **La sovrastima dichiarata.** La traversata somma **tutti** i
 `DictionaryBatch`, anche quando lo stream **sostituisce** un dizionario già

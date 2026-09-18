@@ -248,25 +248,16 @@ meccanismo: era il chiamante. `PR-12` ("attivazione") lo costruisce — vedi
 sotto — e con lui cade il `cfg` da tutto quel perimetro, `isolamento::macchina`
 compreso: il chiamante di produzione conduce il dialogo con la macchina a
 stati vera, non con `isolamento::prova::dialoga`, e l'attribuzione OOM della
-§10.0-bis è raggiungibile davvero. La sola eccezione dichiarata è la
-cancellazione, per la ragione spiegata più avanti.
+§10.0-bis è raggiungibile davvero. La cancellazione attraversa la stessa
+macchina tramite il token condiviso; sul percorso isolato Linux il gestore
+di segnale non crea thread nelle finestre di spawn.
 
-La sequenza di publish non è più progetto: `PR-6` ne aveva portato la sola
-verifica, `PR-10` porta il passo 9. **Non diventa però superficie pubblica**, e
-il verificatore resta sotto `cfg`: il passo 9 riceve la prova già fatta, non la
-produce, quindi non è lui a dargli un chiamante, e la catena resta compiuta e
-non percorsa. Renderla pubblica avrebbe tolto gli avvisi senza togliere il
-codice non usato — `dead_code` tace davanti a una funzione pubblica anche quando
-nessuno può chiamarla — e in più avrebbe allargato la superficie ai tipi che le
-firme nominano. Una superficie pubblica si decide, non si eredita da un avviso.
-
-Ciò che è uscito dal perimetro sotto `cfg` è **solo** ciò che
-`pubblicazione::risolvi_commit` chiama davvero:
-`commit_footer::interpreta_commit_token`,
-`ipc_boundary::convalida_artefatto_con_causa` e `ArtefattoConvalidato` col suo
-`in_batches`. Restano dentro `convalida_artefatto`, i metodi che servono alla
-sola catena verifica → passo 9, `leggi_commit_token` e
-`geo_transport::ipc::parse_footer`.
+La sequenza di publish ha un chiamante di produzione: il percorso isolato
+di `PR-12`. Il verificatore confinato rilegge l'artefatto; il coordinatore
+pubblica soltanto dopo il confronto con l'incarico e l'esito positivo della
+barriera. Le parti della catena necessarie a questo percorso sono compilate
+in produzione; gli strumenti di sola qualifica conservano il proprio
+perimetro. La disponibilità operativa del profilo resta Linux-only.
 
 Che cosa consegna `PR-10`, in tre fatti. Il verificatore non rende più `()`: rende
 una **prova opaca**, `ArtefattoVerificato`, che porta l'handle già convalidato,
@@ -298,15 +289,10 @@ occupata è ora un `Conflict` su entrambe le strade che la scoprono — il contr
 preliminare e l'`AlreadyExists` del commit — come i documenti già prescrivevano:
 l'exit code passa da 2 a 5, perché il piano non ha niente di sbagliato.
 
-Il protocollo non è più in quello stato. Il suo primo chiamante **reale** è il
-worker, ed è arrivato con `PR-9`: il `cfg` sul modulo è caduto, e ciò che dentro
-il modulo resta senza chiamante — il lato supervisore dell'handshake, che
-diventa di produzione con `PR-12`, e gli inventari generati dalle macro — lo
-dichiara ora elemento per elemento. Il lato supervisore che `PR-8` costruisce
-non è di produzione: lo diventa quando viene **davvero attivato**, cioè quando
-una policy lo sceglie, non quando una sua funzione diventa `pub`. Rendere
-pubblico ciò che nessuno chiama toglierebbe l'avviso di codice morto senza
-togliere il codice morto, ed è la scorciatoia che il registro vieta.
+Il protocollo ha chiamanti di produzione nel worker, nel verificatore e nel
+supervisore del percorso isolato. La policy di attivazione sceglie quel
+percorso; gli inventari e le utilità di sola prova non acquisiscono una
+superficie pubblica per eliminare avvisi di codice morto.
 
 Il worker reale **percorre la sequenza intera**: si descrive, conclude
 l'accordo, riceve l'incarico, ne rivalida il piano e i contratti d'ingresso, lo
@@ -345,7 +331,10 @@ costruttori dei limiti lo restringono secondo il budget disponibile.
 policy separati. Perimetro e condizioni di rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
 
-`PR-12` ("attivazione") è **in corso**, non conclusa. Quattro decisioni sono
+`PR-12` ("attivazione") è integrata in `main` tramite la PR GitHub #46
+(merge `8f2b602d8faed8b536faa95d579421becee723f4`). La qualificazione OOM
+mirata dichiarata sotto resta un lavoro aperto distinto: il merge non la
+trasforma in una prova eseguita. Quattro decisioni sono
 ratificate e costruite: (1) la presenza di `max_domain_memory_bytes` in un
 piano v6 **costituisce la richiesta** del profilo isolato — non un campo
 separato, e mai un tetto implicito — e una richiesta non può ricadere
@@ -404,14 +393,214 @@ quello scritto in `memory.max`; l'esecuzione completa pubblica l'artefatto
 con l'`isolation` machine-readable nell'output; il dominio non lascia
 residuo a nessuna uscita.
 
-**Non ancora dimostrato**: un esito **attribuito** per davvero — il ramo
-`LimiteAttribuito` della classificazione, che richiede un tentativo
-che *superi* il tetto, non uno che resta sotto. Il meccanismo di lettura è
-verificato (l'evidenza sopra), il giudizio è lo stesso già provato da 118+
-casi di `macchina`/`classificazione` con evidenza finta; cio' che manca è la
-combinazione delle due su un OOM reale, che resta lavoro di qualificazione
-mirata (`scripts/qualifica_sotto_limite.sh` e la sua famiglia, non ancora
-estesi a esercitare il chiamante di produzione).
+**Residui prima di PT-shadow.** Il launcher esterno della VM dedicata
+persiste `TREE` nello stato di campagna. Verificato con `crea` ed `esegui`
+in processi distinti, senza ripassare `TREE` e con un valore ambientale
+diverso: prevale l'albero salvato. Il backup senza fix fallisce la stessa
+prova. Questi test sostituiscono le operazioni privilegiate con funzioni
+inerti: provano la selezione dell'albero, non riqualificano il contenimento.
+Launcher SHA-256
+`07319d54e61c2c19d8b283ec9265bace6f70cd86fc74f13e6eabecf73686951f`,
+evidenza in `/home/marco/verifica-tree-residui.EEKbFT` sulla VM dedicata.
+
+Il presidio delle distanze RDP è **implementato** e in questo giro è stato
+**revisionato in modo indipendente**, leggendo la logica e non fidandosi del
+nome o del commento: la traversata ripercorre esattamente gli stessi
+segmenti di `geo`, con lo stesso spareggio `>=`, e il denominatore replica
+`geo-types 0.7.19` chiamando la stessa `Euclidean.distance`/`Line::new` — non
+una reimplementazione a rischio di divergenza. Non è un placebo:
+`simplify_scale_miste::controprova_vendor_non_presidiato_debug_e_release`
+dimostra, sullo stesso ingresso finito e validato, sia il panico non
+presidiato in `dev` sia il vertice scartato silenziosamente in `release`
+— la prima riproduzione concreta, con input e output osservati, di
+questa classe di difetto attraverso il prodotto (non un replay del
+reperto storico, che resta perduto). La classificazione `Internal` dei
+nuovi rifiuti, e dei siti preesistenti che non la ricevevano ancora
+(`OperationError::Internal` in un cast, gli `Internal` di algoritmo esteso e
+join spaziale), è verificata contro gli assi categoria/diagnostica di riga
+stabiliti, non solo contro la compilazione.
+
+È inoltre **qualificato** in questo giro, in locale e nel container
+`rust:1.98`/l'immagine di fuzzing (la stessa toolchain della CI, non la sola
+macchina di sviluppo): suite completa del workspace (2273 test, 0 falliti),
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets` e la
+variante anti-panico R6, `verifica_assenza_assert.py`, compilazione di
+`fuzz/`, coverage (90,60% righe / 85,13% funzioni / 90,84% regioni, sopra le
+soglie 90/85/89 — `operations/rdp.rs` al 99,02% righe), e smoke
+`wkt_operations` (`exit=0`, zero artefatti di crash, 3 172 394+ esecuzioni in
+90s). Ambito e limite restano nel registro di
+[`errori-e-limiti.md`](errori-e-limiti.md#semplificazione-rdp-e-scale-numeriche-miste).
+
+**Non è ancora integrato**: il lavoro resta nel working tree di questo
+branch (`stabilizzazione-residui-post-pr12`), senza commit né merge — la
+qualifica di questo giro non sostituisce quella decisione, che è separata.
+
+**Una correzione distinta, non la stessa cosa del presidio RDP**: nello
+stesso giro, ma su un altro meccanismo, `esecuzione_isolata.rs` aveva una
+finestra di fuga della guardia `FiglioVivo` in entrambi i domini (worker e
+verificatore): fra lo spawn e il primo uso del supervisore, un
+`prova::supervisore_per(...)?` falliva lasciando cadere `guardia` non
+raccolta, e la sentinella di `Drop` (pensata per un `?` che «salta le
+porte») interveniva con `std::process::abort()` anche su un rifiuto
+legittimo — mascherando l'errore vero dietro un arresto del processo. Fix:
+una funzione condivisa `supervisore_o_raccogli` (stesso principio già usato
+da `prova::con_la_pulizia`: la causa sola se la pulizia non lascia difetti,
+altrimenti le due cose insieme) chiude il dominio e raccoglie il figlio
+prima di propagare l'errore, in entrambi i siti di chiamata. La sentinella
+stessa **non è stata toccata** — resta con lo stesso comportamento per la
+fuga vera che era nata a coprire.
+
+Verificato: `cargo test -p plenora-engine --lib isolamento::esecuzione_isolata::`
+(22/22, incluse due nuove prove di regressione che forzano il rifiuto con un
+digest malformato e confermano con `kill -0` che il pid non esiste più dopo),
+`cargo fmt --all --check`, clippy R6, e l'intera suite del workspace
+(2275 test, 0 falliti — i 2273 di prima più i due nuovi). Ri-riprodotto sulla
+VM il caso esatto che prima abortiva (fixture geo a 3 vertici, resolver
+`proj`): ora un JSON pulito
+(`invalid_configuration: il profilo isolato non e' disponibile con il
+resolver «proj»...`), `exit=2`, nessun core dump, nessun dominio cgroup
+residuo. Fingerprint del sorgente dopo il fix (stesso perimetro
+`:!benchmarks`):
+`499d06d54e435a2946833558c5207b819a899379d53ab377e089d26d9553c75a`. Stesso
+stato del presidio RDP — **implementato** e **qualificato** su questo giro,
+**non ancora integrato** — ma è un fatto separato, con la propria prova, non
+una riga in più nella voce RDP.
+
+**Controllo positivo riuscito, rifiuto preventivo verificato, OOM reale
+ancora non dimostrato — tre cose distinte, non una.** In questo giro,
+esclusivamente sulla VM dedicata, con il launcher esterno verificato
+(`07319d54e61c2c19d8b283ec9265bace6f70cd86fc74f13e6eabecf73686951f`) e senza
+alcuna modifica al prodotto:
+
+1. *Controllo positivo* — `table.explode` (scelta come sostituto di
+   `geo.buffer`, senza requisito PROJ/CRS: vedi
+   [`errori-e-limiti.md`](errori-e-limiti.md#geobuffer-è-strutturalmente-inutilizzabile-nel-profilo-isolato-con-qualunque-crs))
+   con un tetto governato/di dominio ampio (512 MiB) **completa senza
+   intoppi**: entrambi i domini `successo`, artefatto pubblicato, pulizia
+   `removed`. Dimostra che il profilo isolato e la fixture sono corretti
+   fuori da condizioni di pressione.
+2. *Rifiuto preventivo `ResourceLimit` verificato, non un OOM* — tre
+   tentativi di pressione (tetto governato=di dominio a 100 MiB, poi 70 MiB,
+   poi 66 MiB, sempre coerenti con la regola «governato ≤ dominio»), sullo
+   stesso `table.explode` con una riga da 8 000 000 di elementi, hanno
+   prodotto **lo stesso rifiuto** in tutti e tre i casi:
+   `resource_limit: max_batch_bytes superato su 'ingresso': 195001840 byte >
+   67108864`, fase `read`, uscita del worker con codice 0 (pulita, non
+   uccisa), `oom_locali`/`uccisi_nel_dominio`/`group_kill_locale` sempre a
+   zero. Letto il codice per capire perché il tetto di dominio non spostava
+   nulla: `check_batch_bytes` (`executor.rs`) applica un tetto **fisso**
+   (`BatchTarget::default().max_batch_bytes` = 64 MiB) sul singolo batch
+   dell'**ingresso**, e lo fa **prima** che `state.governor.reserve(...)`
+   riservi qualunque memoria e prima che un nodo qualsiasi (compreso
+   `table.explode`) esegua — la CLI costruisce sempre
+   `RuntimeContext { .., ..RuntimeContext::default() }`
+   (`plenora-cli/src/cli/commands/run.rs`): **non esiste un campo nello
+   schema del piano che lo dichiari**, quindi nessuna combinazione di
+   `max_governed_memory_bytes`/`max_domain_memory_bytes` lo tocca. I tre
+   tentativi non hanno mai raggiunto il ciclo interno non presidiato di
+   `explode` (`reshape.rs`, righe 949-996): sono stati respinti prima, alla
+   lettura.
+3. *OOM reale — dimostrato, con ambito dichiarato.* I tre tentativi di
+   questo giro restano **esauriti** (3 di 3) con lo stesso rifiuto
+   preventivo: nessuna evidenza kernel attribuita al dominio in nessuno dei
+   tre. Cercata anche un'evidenza già valida di un OOM reale attribuito sul
+   percorso di produzione attuale in quel momento: nessuna trovata, oltre a
+   quanto scritto sopra — solo casi con evidenza sintetica.
+
+   Una misura locale successiva (non privilegiata, nessuna VM) ha chiuso
+   l'incognita del fattore ×3 sull'ingresso: `arrow-ipc` legge il corpo del
+   messaggio come un'unica allocazione condivisa, e `get_array_memory_size()`
+   somma la capacità di quell'allocazione **una volta per buffer che la
+   condivide** (offset, valori, validity), senza deduplicare — con validity
+   presente (null nella lista) il rapporto converge a ×3 esatto, riprodotto
+   a 672 byte dal valore osservato in VM (195 001 168 contro
+   195 001 840). È contabilità Arrow sull'ingresso, non il meccanismo che ha
+   poi prodotto l'OOM sotto.
+
+   La stessa analisi ha scoperto — leggendo `select_rows`
+   (`plenora-kernels-table/src/lib.rs:1623`) e `take_list` di
+   `arrow-select 59.2.0` — che `table.explode` materializza la colonna lista
+   **che sta per sostituire** prima della sostituzione: per un batch a una
+   riga con lista di N elementi l'intermedio è **O(N²)**, mai governato. Voce
+   propria, con ambito e condizione di rientro, in
+   [`errori-e-limiti.md`](errori-e-limiti.md#corretto-tableexplode-materializzava-la-colonna-lista-che-stava-per-sostituire-con-crescita-quadratica) —
+   **non corretto in questo giro**, perché correggerlo prima avrebbe cambiato
+   il fenomeno sotto qualifica. Corretto separatamente in un secondo momento
+   (vedi "Prossimo passo" più sotto, ora completato): dettaglio del fix e dei
+   test di regressione in quel documento.
+
+   Un **quarto tentativo**, autorizzato separatamente e a sé (non uno dei
+   tre esauriti sopra), preceduto da due controlli positivi bloccanti — una
+   fixture minima a tetto 128 MiB (esclude un fallimento di avvio del
+   motore/governatore sotto isolamento) e la stessa fixture del tentativo
+   (N=10 000, un elemento per riga, ~1% null) a tetto largo di 2 GiB (picco
+   worker misurato **818 139 136 B**, conferma diretta e non stimata
+   dell'intermedio quadratico) — ha ripetuto il carico con tetto
+   **134 217 728 B (128 MiB)** esatto sul dominio. Risultato: `status:
+   error`, `category: ResourceLimit`, `EvidenzaDiLimite{oom_locali:1,
+   uccisi_nel_dominio:2, uccisi_nella_gerarchia:2, group_kill_locale:1,
+   picco_byte:134217728 (= tetto esatto), respinte_al_tetto:21}`; applicando
+   a mano `classifica_evidenza`/`classifica` (`classificazione.rs`) a questi
+   valori: `ol`, `kl`, `kh`, `g` tutti osservati e positivi →
+   `ClasseEvidenzaMemoria::Attribuita` → `EsitoClassificato::LimiteAttribuito`
+   → categoria pubblica `ResourceLimit` — la stessa che il programma ha
+   riportato, non un'altra via che vi capita a coincidere nel nome. Tre fonti
+   indipendenti concordi: l'evidenza del programma, `dmesg`
+   (`oom-kill:constraint=CONSTRAINT_MEMCG,
+   oom_memcg=/plenora-oom-test/plenora-isolato-b650dd3a550f03fc, pid=15400,
+   uid=65534`) e un campionamento a 20 ms di `memory.current`/`memory.events`
+   sul dominio. I "due uccisi" del dominio sono **un solo processo** (pid
+   15400, tgid 15400, monothread) ucciso due volte in log — la selezione
+   diretta del memcg e il `memory.oom.group` che rispazza lo stesso task —
+   non due processi distinti: verificato sul dump "Tasks state" di `dmesg`,
+   che elenca una sola riga. Nessuna pubblicazione, nessun residuo
+   (dominio/processi) dopo la raccolta dell'evidenza. Tentativo eseguito su
+   questo stesso worktree, branch `stabilizzazione-residui-post-pr12`, HEAD
+   `ec02d0562ea645d0a8410005ed429768dcdd6c6d` (invariato prima e dopo,
+   nessun commit), impronta staged+unstaged
+   `b3697a75c15912b9ccd0c4c2637acad270ea1f11c1ac85b75958ab6c7fbaef67` — a
+   quel momento `reshape.rs` non aveva modifiche non commesse (sha256
+   `db0c31a44934424375e82602b769531b0371b3f7574c4ccb2264b8159203233a`,
+   identico al commesso su quell'HEAD). **Il codice provato è quello
+   PRECEDENTE alla correzione descritta più sotto**, non il diff attuale.
+   Evidenza grezza (piani, generatore fixture throwaway, `dmesg`, log del
+   poller, riepilogo con impronta e timestamp) conservata fuori da git in
+   `evidenza-oom-explode-quadratico/` nel worktree, non tracciata, non
+   committata.
+
+   **Attribuzione e gestione dell'OOM qualificate sul percorso worker, con
+   questo carico e QUESTA IDENTITÀ DI CODICE (`reshape.rs` sha256
+   `db0c31a4...`, prima della correzione sotto). Non significa che tutte le
+   operazioni siano qualificate, e non significa che il codice attuale
+   (dopo la correzione) sia stato sottoposto alla stessa prova.** È una
+   scoperta storica su un comportamento ora corretto, non una
+   generalizzazione né una proprietà del diff presente: un'altra operazione,
+   un'altra forma di batch, o lo stesso `table.explode` con una crescita
+   diversa da quella quadratica qui sfruttata potrebbero non produrre lo
+   stesso esito — e il codice attuale, per costruzione della correzione
+   sotto, non presenta più questo specifico intermedio da riprovare. La
+   prova OOM **non è stata ripetuta** contro il diff corretto: sarebbe stata
+   una campagna VM non richiesta e senza informazione aggiuntiva, dato che i
+   test di regressione e la revisione indipendente del fix già dimostrano
+   l'assenza dell'intermedio O(N²) per altra via (vedi
+   [`errori-e-limiti.md`](errori-e-limiti.md#corretto-tableexplode-materializzava-la-colonna-lista-che-stava-per-sostituire-con-crescita-quadratica)).
+
+   **Prossimo passo pianificato, separato da questo giro — ora completato.**
+   Il difetto quadratico è stato corretto in un intervento a sé (non in
+   `select_rows`, condivisa e invariata: una nuova `select_rows_except`
+   locale a `reshape.rs`, usata solo da `explode` e solo quando la colonna di
+   output sostituisce quella sorgente), con due test di regressione
+   (`explode_su_riga_singola_con_lista_lunga_non_e_quadratico`,
+   `explode_con_output_column_distinto_mantiene_la_colonna_sorgente`) e
+   revisione indipendente del diff (un difetto minore trovato e corretto:
+   fusione di doc-comment fra due funzioni, per mancanza di separazione —
+   nulla di funzionale). Dettaglio completo, con hash e numeri dei gate
+   rieseguiti, in [`errori-e-limiti.md`](errori-e-limiti.md#corretto-tableexplode-materializzava-la-colonna-lista-che-stava-per-sostituire-con-crescita-quadratica).
+   Verificati su questo stesso worktree: `cargo fmt --check`, clippy R6, e la
+   suite completa di `plenora-kernels-table` (402 test, 0 falliti). **Non
+   ancora commesso**: restano i gate completi sull'intero contenuto del
+   worktree (non solo su questo file) prima di autorizzare commit/push/PR —
+   passo distinto, non ancora eseguito. Non riapre l'intera PR-12.
 
 I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le
 misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md), che è
@@ -838,12 +1027,71 @@ Il lavoro non è in questo ramo e non lo anticipa: qui c'è la dichiarazione di
 che cosa manca, così che nessuno legga i numeri sparsi nel codice come se
 fossero un verdetto.
 
+## 4-bis. Essenzialità e aggiornamento delle dipendenze per la 2.0.0
+
+Prima del congelamento del candidato 2.0.0 serve una revisione dell'intero
+albero delle dipendenze, non soltanto delle copie geometriche modificate.
+L'obiettivo è eliminare ciò che non serve e qualificare gli aggiornamenti
+utili, non minimizzare il numero di crate a scapito delle garanzie né
+imporre sempre l'ultima versione. Una versione numericamente distante o
+pubblicata da tempo non dimostra, da sola, abbandono o vulnerabilità.
+
+**Sequenza:** nessuna modifica ai pin nel lavoro sui residui di PR-12.
+Gli aggiornamenti ordinari si valutano in modifiche separate; la revisione
+architetturale di GEOS
+e delle copie di `geo`, `wkt` e `i_shape` conserva il vincolo post-PR-13x
+descritto sotto. La qualifica finale di prestazioni e fuzzing riguarda
+l'albero risultante, non un candidato precedente agli aggiornamenti.
+
+La revisione deve produrre:
+
+- **Inventario riproducibile:** dipendenze dirette e transitive dei workspace
+  principale e `fuzz/`, distinte per produzione, test, build, piattaforma e
+  feature. Per i backend nativi distinguere versione della crate wrapper e
+  versione C/C++ effettivamente incorporata o collegata. Manifesti,
+  lockfile, fonti e data del confronto accompagnano l'evidenza.
+- **Necessità dimostrata:** per ogni dipendenza diretta, funzione servita e
+  chiamanti; per le transitive, catena che le introduce. Valutare rimozione
+  delle dipendenze inutilizzate, riduzione delle feature e delle versioni
+  duplicate compatibili. Non riscrivere componenti complessi soltanto per
+  ridurre il conteggio.
+- **Confronto delle versioni:** registrare versione bloccata, ultima stabile
+  pubblicata, aggiornamento compatibile con i vincoli e motivo degli
+  eventuali blocchi. Verificare changelog, manutenzione, avvisi di sicurezza,
+  versioni ritirate, licenze, toolchain minima e piattaforme supportate.
+  L'audit di sicurezza è distinto dal confronto dei numeri di versione.
+- **Priorità esplicite:** famiglia Arrow; catena geometrica
+  `geo`/`rstar`/`i_overlay`/`i_shape`/`i_float`; backend GEOS e PROJ;
+  strumenti di fuzzing e dipendenze comuni quali `log` e `uuid`. Una
+  vulnerabilità applicabile richiede una decisione tempestiva, non il
+  rinvio automatico alla revisione architetturale.
+- **Parità motivata fra workspace:** rilevare le differenze di risoluzione
+  fra prodotto e fuzz, allineando le dipendenze comuni dove applicabile o
+  motivando le differenze di feature, test e piattaforma. Non dichiarare
+  identici due alberi verificando soltanto le tre crate vendorizzate.
+- **Aggiornamenti qualificati:** niente aggiornamento indiscriminato dei
+  lockfile. Ogni gruppo coerente di modifiche conserva pin esatti e
+  provenienza, dichiara gli impatti su API, formati, determinismo, privacy,
+  memoria e prestazioni, e supera i gate pertinenti di `release.md`.
+
+**Criterio di chiusura:** inventario completo e verificabile sul candidato,
+decisione motivata di mantenere, aggiornare, rimuovere o sostituire le
+dipendenze esaminate, nessun rilievo bloccante irrisolto e gate verdi sulle
+versioni effettivamente distribuite. Le versioni mantenute per compatibilità
+devono avere un motivo e una condizione di riesame; eventuali rischi residui
+o restrizioni dei contratti vanno nel registro di
+[`errori-e-limiti.md`](errori-e-limiti.md), senza esenzioni implicite.
+
 ## 5. Release
 
 Gate, piattaforme, packaging e procedura sono in [`release.md`](release.md).
 Il bump di versione è **maggiore**: la superficie pubblica è cambiata in modo
 incompatibile (rinomina del campo dei limiti, versione canonica del piano,
 tipi rinominati, `plan_hash` in un dominio nuovo).
+
+Per la 2.0.0 la revisione di essenzialità e aggiornamento delle dipendenze
+qui sopra è un criterio di ingresso al congelamento del candidato, non
+manutenzione rinviata a dopo il rilascio.
 
 ---
 
@@ -940,6 +1188,43 @@ architettura, policy, garanzie, privacy e criteri di uscita — è in
 [`isolamento.md`](isolamento.md), nella sezione dedicata al confronto shadow. I
 meccanismi non vi sono fissati: li decide la progettazione di `PR-13a`, dopo che
 il prototipo avrà dato un provider reale e i suoi vincoli.
+
+### Dopo PR-13x — revisione delle dipendenze geometriche
+
+La valutazione della riduzione delle dipendenze geometriche segue
+`PR-13a` … `PR-13d`: non riapre l'integrazione numerica per tentare ora
+di eliminare le copie modificate di `geo`, `wkt` e `i_shape`. Le correzioni
+qualificate nel relativo ciclo restano il riferimento finché un'alternativa
+non dimostra le stesse garanzie. Questo punto pianifica la revisione delle
+copie distribuite, non ne autorizza la sostituzione.
+
+La revisione distingue due decisioni, nessuna automatica:
+
+- **Sostituzione di GEOS:** lo shadow confronta i candidati, ma GEOS resta
+  autorevole durante `PR-13x`. La promozione di ciascun kernel al percorso
+  canonico richiede una decisione separata, con correttezza, determinismo,
+  privacy, limiti e prestazioni qualificati. Prima di rimuovere GEOS va
+  censita l'intera superficie che ne dipende, non soltanto i tre kernel.
+- **Ritorno alle dipendenze ufficiali:** verificare separatamente per `geo`,
+  `wkt` e `i_shape` se una versione upstream corretta, un controllo esatto
+  al confine o una sostituzione dell'implementazione permette di rinunciare
+  alla copia modificata. Evitare i soli panici noti non basta: devono essere
+  esclusi anche risultati numerici errati, perdite di dati e fughe nei log.
+
+Ogni proposta deve coprire l'intera classe del difetto e tutti i chiamanti,
+inclusi gli ingressi diretti ai kernel e gli stati intermedi degli algoritmi.
+Non sono ammesse eliminazioni silenziose di componenti geometrici o
+restrizioni implicite degli input. Un contratto più restrittivo richiede
+approvazione esplicita e registrazione in
+[`errori-e-limiti.md`](errori-e-limiti.md), con ambito, hazard e condizione di
+rientro.
+
+L'esito atteso è una decisione motivata per ciascuna dipendenza: mantenerla,
+aggiornarla alla versione ufficiale o sostituirla, con regressioni conservate
+e provenienza e risoluzione verificate nei workspace principale e `fuzz/`.
+La rimozione non è un criterio di successo a scapito delle garanzie. Se
+`PT-shadow` blocca la sequenza, la revisione non viene anticipata
+automaticamente: occorre una nuova decisione sul perimetro.
 
 ## Debito dichiarato, senza data
 

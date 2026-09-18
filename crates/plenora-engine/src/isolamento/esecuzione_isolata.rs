@@ -655,7 +655,8 @@ fn esegui_il_worker(
         guardia.pid(),
         riuscita.evidenza
     );
-    let supervisore = prova::supervisore_per(digest_immagine, token)?;
+    let (supervisore, guardia) =
+        supervisore_o_raccogli("worker isolato", digest_immagine, token, guardia)?;
     let (lettore, mut scrittore, accordo, guardia) = concludi_handshake(
         "worker",
         supervisore,
@@ -706,6 +707,56 @@ fn esegui_il_worker(
         digest,
         conteggi,
     ))
+}
+
+/// Consegna `supervisore_per`, o raccoglie la guardia prima di restituire
+/// l'errore.
+///
+/// # Perche' esiste
+///
+/// Fra la nascita del figlio (`FiglioVivo::nuovo`) e la consegna della
+/// guardia a `concludi_handshake` c'e' una finestra: `supervisore_per`
+/// costruisce la descrizione locale del coordinatore — identita', resolver,
+/// ambiente — e puo' rifiutare (l'ambiente PROJ non e' inventariabile, per
+/// esempio: un rifiuto legittimo, non un difetto interno). Un `?` nudo in
+/// quella finestra lascerebbe la guardia non raccolta: la sentinella di
+/// `FiglioVivo::Drop` la vedrebbe sfuggita e abortirebbe il processo al
+/// posto di restituire l'errore leggibile che il chiamante deve vedere.
+/// Condivisa dal worker e dal verificatore: e' la stessa finestra in
+/// entrambi, e una correzione sola serve a entrambi i punti simmetrici.
+///
+/// # Errors
+///
+/// La causa di `supervisore_per`, sola se la raccolta del figlio non ha
+/// lasciato difetti; altrimenti un errore che porta **entrambi** i fatti —
+/// mai il solo difetto di pulizia al posto della causa vera, sullo stesso
+/// principio di `prova::con_la_pulizia`.
+#[cfg(target_os = "linux")]
+fn supervisore_o_raccogli<P: super::figlio::ProcessoFiglio>(
+    cosa: &str,
+    digest_immagine: &str,
+    token: CommitToken,
+    guardia: FiglioVivo<P>,
+) -> Result<(
+    crate::protocollo::handshake::SupervisoreInAttesa,
+    FiglioVivo<P>,
+)> {
+    match prova::supervisore_per(digest_immagine, token) {
+        Ok(supervisore) => Ok((supervisore, guardia)),
+        Err(causa) => {
+            let (_uscita, difetti_di_pulizia) = super::prova::chiudi(guardia, Some(&causa));
+            Err(if difetti_di_pulizia.is_empty() {
+                causa
+            } else {
+                non_disponibile(
+                    cosa,
+                    &format!(
+                        "{causa}; e la pulizia del figlio ha lasciato: {difetti_di_pulizia:?}"
+                    ),
+                )
+            })
+        }
+    }
 }
 
 /// L'`IncaricoVerifica`: contratto atteso (per fingerprint), digest atteso,
@@ -881,7 +932,13 @@ fn dialoga_con_verificatore(
     // Stessa identita' del worker: il `commit_token` del tentativo, non uno
     // nuovo — e' la decisione presa e non si riapre (vedi la richiesta di
     // questo lavoro): il verificatore accerta lo **stesso** tentativo.
-    let supervisore = prova::supervisore_per(digest_immagine, token)?;
+    //
+    // Stessa finestra del worker sopra, e stessa correzione: la guardia
+    // esiste gia', `supervisore_per` non dipende dal verificatore appena
+    // nato, e un `?` nudo la lascerebbe sfuggire al primo rifiuto legittimo
+    // invece di un errore leggibile.
+    let (supervisore, guardia) =
+        supervisore_o_raccogli("verificatore isolato", digest_immagine, token, guardia)?;
     let (lettore, mut scrittore, accordo, guardia) = concludi_handshake(
         "verificatore",
         supervisore,
@@ -1212,6 +1269,106 @@ mod tests {
         let a = token_del_tentativo().expect("un token deve generarsi");
         let b = token_del_tentativo().expect("un secondo token deve generarsi");
         assert_ne!(a, b, "due tentativi non condividono lo stesso commit_token");
+    }
+
+    // --- supervisore_o_raccogli: la guardia non sfugge a un rifiuto --------
+    //
+    // Il reperto: `supervisore_per` puo' rifiutare legittimamente (l'ambiente
+    // PROJ non e' inventariabile, fra i casi reali) fra la nascita del
+    // figlio e la consegna della guardia a `concludi_handshake`. Un `?` nudo
+    // in quella finestra lascerebbe la guardia non raccolta: `FiglioVivo::Drop`
+    // la troverebbe sfuggita e aborterebbe l'intero processo al posto di
+    // restituire un errore. Qui si forza lo
+    // stesso rifiuto per un'altra via — un `digest_immagine` non canonico,
+    // che `supervisore_per` rifiuta subito, senza toccare l'ambiente — su un
+    // **vero** processo figlio, cosi' la raccolta e' osservabile dall'esterno
+    // (il pid smette di esistere) e non solo dedotta dal tipo restituito.
+    //
+    // Tre proprieta', per ciascuno dei due punti simmetrici (worker e
+    // verificatore, stessa funzione condivisa, sola l'etichetta cambia):
+    //  1. l'errore e' quello leggibile di `supervisore_per` — la funzione
+    //     rende un `Result`, il processo di prova non e' mai abortito;
+    //  2. nessuna pubblicazione puo' essere seguita: il rifiuto avviene
+    //     prima di `concludi_handshake`, quindi prima che un `Incarico`
+    //     sia mai spedito o che un artefatto sia mai nominato;
+    //  3. il figlio e' raccolto per davvero, non lasciato residuo: verificato
+    //     dall'esterno con `kill -0`, non fidandosi del solo tipo di ritorno.
+    #[cfg(target_os = "linux")]
+    fn figlio_di_prova_reale() -> (std::process::Child, u32) {
+        let figlio = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn di un vero processo per la prova");
+        let pid = figlio.id();
+        (figlio, pid)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pid_esiste_ancora(pid: u32) -> bool {
+        // `kill -0` non manda nessun segnale: chiede solo al kernel se il pid
+        // esiste ancora, come processo vivo o come zombie non raccolto —
+        // esattamente cio' che questa prova deve escludere. Nessuna nuova
+        // dipendenza: e' l'utility di sistema, non una crate.
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .expect("kill -0 deve potersi eseguire")
+            .success()
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn supervisore_o_raccogli_rifiuta_con_errore_leggibile_e_raccoglie_il_worker() {
+        let (figlio, pid) = figlio_di_prova_reale();
+        let guardia = FiglioVivo::nuovo(figlio);
+        let token = token_del_tentativo().expect("token del tentativo");
+
+        let esito =
+            supervisore_o_raccogli("worker isolato", "non-e-un-digest-canonico", token, guardia);
+
+        let causa = esito.expect_err("un digest non canonico deve far rifiutare supervisore_per");
+        let testo = causa.to_string();
+        assert!(
+            testo.contains("digest") && testo.contains("canonico"),
+            "l'errore deve restituire la causa leggibile di supervisore_per, non un abort ne' un \
+             errore generico: {testo}"
+        );
+
+        // Raccolto per davvero: il pid non esiste piu', ne' vivo ne' zombie.
+        // Nessun ciclo d'attesa qui — `chiudi` dentro `supervisore_o_raccogli`
+        // e' gia' tornato quando `esito` e' pronto, quindi la raccolta e' gia'
+        // conclusa a questo punto, non in corso.
+        assert!(
+            !pid_esiste_ancora(pid),
+            "il worker deve essere stato raccolto (non residuo, non zombie): pid {pid}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn supervisore_o_raccogli_rifiuta_con_errore_leggibile_e_raccoglie_il_verificatore() {
+        let (figlio, pid) = figlio_di_prova_reale();
+        let guardia = FiglioVivo::nuovo(figlio);
+        let token = token_del_tentativo().expect("token del tentativo");
+
+        let esito = supervisore_o_raccogli(
+            "verificatore isolato",
+            "non-e-un-digest-canonico",
+            token,
+            guardia,
+        );
+
+        let causa = esito.expect_err("un digest non canonico deve far rifiutare supervisore_per");
+        let testo = causa.to_string();
+        assert!(
+            testo.contains("digest") && testo.contains("canonico"),
+            "l'errore deve restituire la causa leggibile di supervisore_per, non un abort ne' un \
+             errore generico: {testo}"
+        );
+        assert!(
+            !pid_esiste_ancora(pid),
+            "il verificatore deve essere stato raccolto (non residuo, non zombie): pid {pid}"
+        );
     }
 
     // --- percorso_in_testo: giudizio puro sulla forma del percorso ----------
