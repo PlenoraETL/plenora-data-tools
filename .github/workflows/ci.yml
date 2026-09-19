@@ -76,6 +76,29 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
 
+      # Verifica mirata, non prevista in origine: una sessione locale su
+      # Docker/WSL2 ha mostrato il canary OGC di
+      # `verifica_privacy_dipendenze.py` (crates/plenora-kernels-geo/src/lib.rs)
+      # assente da `cargo test -- --list` pur in presenza di un sorgente e
+      # un cfg-chain verificati corretti — causa non identificata, isolata a
+      # quell'ambiente. Questo step esiste per accertare la registrazione su
+      # un runner reale, non perche' fosse gia' previsto. Nessuna riga di
+      # `verifica_privacy_dipendenze.py` fa questo controllo: quel gate cerca
+      # SITI non sanificati, non se un canary specifico e' registrato.
+      - name: Registrazione canary privacy (default)
+        shell: bash
+        run: |
+          cargo test -p plenora-kernels-geo --lib -- --list \
+            | grep -F "ogc_validation_classifies_overlap_without_leaking_the_member_index" \
+            || (echo "canary non registrato in --list (default)" && exit 1)
+          cargo test -p plenora-kernels-geo --lib \
+            tests::ogc_validation_classifies_overlap_without_leaking_the_member_index \
+            -- --exact 2>&1 | tee /tmp/canary_default.txt
+          grep -E "running 1 test$" /tmp/canary_default.txt \
+            || (echo "zero test eseguiti nonostante possibile exit 0 (default)" && exit 1)
+          grep -E "test result: ok\. 1 passed" /tmp/canary_default.txt \
+            || (echo "il canary non risulta passato (default)" && exit 1)
+
       # Gate R6 (ICD): nel codice di produzione nessuna primitiva di panic e
       # nessun unsafe. Bloccante. MAI aggiungere --cap-lints=warn: cappera'
       # anche i -D espliciti declassandoli a warn: il gate smetterebbe di
@@ -299,6 +322,24 @@ jobs:
           cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli
           --locked --features full-backends
 
+      # Stessa verifica mirata del job `test`, qui sotto `--features
+      # full-backends`: e' la configurazione in cui l'anomalia locale non
+      # spiegata era stata osservata. Vedi il commento gemello nel job
+      # `test` per il contesto completo.
+      - name: Registrazione canary privacy (full-backends)
+        shell: bash
+        run: |
+          cargo test -p plenora-kernels-geo --lib --features full-backends -- --list \
+            | grep -F "ogc_validation_classifies_overlap_without_leaking_the_member_index" \
+            || (echo "canary non registrato in --list (full-backends)" && exit 1)
+          cargo test -p plenora-kernels-geo --lib --features full-backends \
+            tests::ogc_validation_classifies_overlap_without_leaking_the_member_index \
+            -- --exact 2>&1 | tee /tmp/canary_full_backends.txt
+          grep -E "running 1 test$" /tmp/canary_full_backends.txt \
+            || (echo "zero test eseguiti nonostante possibile exit 0 (full-backends)" && exit 1)
+          grep -E "test result: ok\. 1 passed" /tmp/canary_full_backends.txt \
+            || (echo "il canary non risulta passato (full-backends)" && exit 1)
+
   # Gate di coverage. Senza un job che la invochi, `scripts/coverage.sh`
   # resterebbe una misura facoltativa e non un vincolo; i due repo gemelli
   # (plenora-IO-tools, plenora-database-tools) hanno lo stesso gate con
@@ -511,6 +552,16 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_memoria_governata.py
+
+      # Presidio aggiuntivo sulla privacy dei messaggi di errore
+      # (errori-e-limiti.md#privacy-dei-messaggi): un nuovo sito
+      # `serde_json::from_*` in un modulo percorso-dati, mai esaminato ne'
+      # classificato, non deve entrare senza che nessuno se ne accorga.
+      - name: Privacy dei messaggi sui percorsi dati
+        working-directory: ${{ runner.temp }}/doc-check
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/verifica_privacy_dipendenze.py
 
       # Il controllo va fatto sulla COPIA, che e' l'unico albero che il gate
       # ha toccato: verificare il worktree originale non direbbe niente, ed e'
