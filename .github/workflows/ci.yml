@@ -323,8 +323,8 @@ jobs:
           --locked --features full-backends
 
       # Stessa verifica mirata del job `test`, qui sotto `--features
-      # full-backends`: e' la configurazione in cui l'anomalia locale non
-      # spiegata era stata osservata. Vedi il commento gemello nel job
+      # full-backends`: questa e' la seconda delle due configurazioni che
+      # l'anomalia locale non spiegata riguarda. Vedi il commento gemello nel job
       # `test` per il contesto completo.
       - name: Registrazione canary privacy (full-backends)
         shell: bash
