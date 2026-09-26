@@ -130,6 +130,17 @@ pub fn pair_v4_inputs(
     probe: &PlanInputsProbe,
     inputs: &DagInputs,
 ) -> Result<Vec<(String, PathBuf)>, PlenoraError> {
+    // Il tetto sugli input lo applica anche `planner::validate`, ma dopo la
+    // scoperta dei contratti, che apre ogni file. Qui vale lo stesso tetto,
+    // sullo stesso conteggio — gli input **dichiarati** — prima che se ne apra
+    // uno: `run` e `validate` passano entrambi di qui.
+    let tetto = probe.tetto_ingressi();
+    if probe.inputs.len() > tetto {
+        return Err(contract(format!(
+            "max_inputs superato: {} input > {tetto}",
+            probe.inputs.len()
+        )));
+    }
     let paths = match inputs {
         DagInputs::Named(named) => {
             for (name, _) in named {

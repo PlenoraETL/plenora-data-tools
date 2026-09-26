@@ -1040,3 +1040,43 @@ fn lo_schema_dello_stream_format_resta_quello_di_stream_reader() {
     let ottenuto = header_schema(&path, &IpcLimits::default()).expect("header_schema");
     assert_eq!(ottenuto, atteso);
 }
+
+/// Toglie dal footer il campo `recordBatches`, azzerandone la voce nella
+/// vtable `FlatBuffer`: il campo risulta assente, non vuoto.
+fn senza_record_batches(bytes: &mut [u8]) {
+    let inizio = usize::try_from(footer_start_of(bytes)).expect("footer_start");
+    let leggi_u32 = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().expect("u32"));
+    let tabella = inizio + usize::try_from(leggi_u32(bytes, inizio)).expect("radice");
+    let scarto = i32::from_le_bytes(bytes[tabella..tabella + 4].try_into().expect("soffset"));
+    let vtable = usize::try_from(i64::try_from(tabella).expect("tabella") - i64::from(scarto))
+        .expect("vtable");
+    // Campi del footer: version, schema, dictionaries, recordBatches (il
+    // quarto, indice 3), custom_metadata. La voce sta dopo i due u16 di testa.
+    let voce = vtable + 4 + 2 * 3;
+    assert_ne!(
+        u16::from_le_bytes(bytes[voce..voce + 2].try_into().expect("voce")),
+        0,
+        "il writer di arrow emette sempre recordBatches: senza, il test non discrimina"
+    );
+    bytes[voce..voce + 2].copy_from_slice(&0_u16.to_le_bytes());
+}
+
+/// Parita' con `FileReader`: un footer **senza** il vettore dei record batch
+/// e' rifiutato da entrambi i percorsi, non solo da quello che decodifica.
+#[test]
+fn un_footer_senza_record_batches_e_rifiutato_anche_dallo_schema() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("senza-blocchi.arrow");
+    write_file_format(&path);
+    let mut byte = fs::read(&path).expect("read");
+    senza_record_batches(&mut byte);
+    fs::write(&path, &byte).expect("write");
+
+    assert!(
+        open(&path, &IpcLimits::default()).is_err(),
+        "FileReader lo rifiuta"
+    );
+    let errore = header_schema(&path, &IpcLimits::default())
+        .expect_err("lo schema dal footer deve rifiutarlo come FileReader");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::DataMapping);
+}

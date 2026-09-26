@@ -757,8 +757,9 @@ pub fn header_schema(path: &Path, limits: &IpcLimits) -> Result<SchemaRef> {
 ///
 /// Ripete, nello stesso ordine, cio' che `FileReaderBuilder::build` di
 /// `arrow-ipc` 59.2.0 fa prima di toccare i dizionari: verifica `FlatBuffer` con
-/// le opzioni di default, schema presente, endianness del sistema. Dove arrow
-/// fa `unwrap()` sullo schema assente, qui c'e' un errore; `fb_to_schema`, che
+/// le opzioni di default, vettore dei record batch presente (anche vuoto),
+/// schema presente, endianness del sistema. Dove arrow fa `unwrap()` sullo
+/// schema assente, qui c'e' un errore; `fb_to_schema`, che
 /// puo' andare in panico, gira dentro la barriera di chi chiama.
 ///
 /// I messaggi non riportano i byte del footer ne' il testo del verificatore:
@@ -770,6 +771,11 @@ fn schema_dal_footer(footer: &[u8]) -> Result<SchemaRef> {
     };
     let footer = plenora_core::arrow::ipc::root_as_footer(footer)
         .map_err(|_| illeggibile("il FlatBuffer non supera la verifica"))?;
+    // Assente e vuoto non sono la stessa cosa: arrow rifiuta il primo e
+    // accetta il secondo, e cosi' qui.
+    if footer.recordBatches().is_none() {
+        return Err(illeggibile("il vettore dei record batch manca"));
+    }
     let schema = footer
         .schema()
         .ok_or_else(|| illeggibile("lo schema manca"))?;

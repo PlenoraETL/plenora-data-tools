@@ -634,7 +634,19 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
     // sulla coppia non ha un «in mezzo»: ogni combinazione ha il suo ramo, e
     // il compilatore pretende che ci siano tutti.
     match (header_type, header_table) {
-        (1, Some(header_table)) => fb_schema(metadata, header_table)?,
+        (1, Some(header_table)) => {
+            // Un messaggio Schema non ha corpo: il writer di arrow emette
+            // sempre `bodyLength` zero. Uno diverso da zero non descrive
+            // niente, e `StreamReader::try_new` lo alloca e lo legge prima di
+            // guardare il tipo del messaggio — fino a `max_body_bytes`, per
+            // chi vuole soltanto lo schema.
+            if body_len != 0 {
+                return Err(ArrowTransportError::IpcSchemaInvalid(
+                    "un messaggio Schema dichiara un corpo",
+                ));
+            }
+            fb_schema(metadata, header_table)?;
+        }
         (2, Some(header_table)) => {
             // DictionaryBatch: id al campo 0, data (RecordBatch) al campo
             // 1, isDelta al campo 2.
@@ -3024,6 +3036,89 @@ mod tetto_dizionari {
         }
         let soff_batch = i32::try_from(batch - vt_batch).expect("soffset");
         buf.extend_from_slice(&soff_batch.to_le_bytes());
+
+        let radice = u32::try_from(messaggio).expect("radice");
+        buf[0..4].copy_from_slice(&radice.to_le_bytes());
+        buf.resize(buf.len() + 16, 0);
+        buf
+    }
+
+    /// Un messaggio Schema con un corpo e' rifiutato prima di arrow.
+    ///
+    /// `StreamReader::try_new` alloca e legge il corpo del primo messaggio
+    /// prima di guardarne il tipo, quindi uno Schema che dichiara `bodyLength`
+    /// farebbe allocare, a chi vuole soltanto lo schema, fino a
+    /// `max_body_bytes`. Il writer di arrow emette sempre zero.
+    ///
+    /// Discrimina: lo stesso messaggio con corpo zero passa.
+    #[test]
+    fn uno_schema_con_un_corpo_e_rifiutato() {
+        let esito = validate_ipc_message_metadata(&messaggio_schema(0));
+        assert!(
+            esito.is_ok(),
+            "uno Schema senza corpo deve passare: {esito:?}"
+        );
+
+        for corpo in [8_i64, 64 * 1024 * 1024] {
+            let esito = validate_ipc_message_metadata(&messaggio_schema(corpo));
+            assert!(
+                matches!(
+                    esito,
+                    Err(ArrowTransportError::IpcSchemaInvalid(
+                        "un messaggio Schema dichiara un corpo"
+                    ))
+                ),
+                "uno Schema con corpo {corpo} va rifiutato: {esito:?}"
+            );
+        }
+    }
+
+    /// I metadati di un messaggio `Schema`, byte per byte, con il
+    /// `bodyLength` che si vuole: il writer di arrow non emette mai uno Schema
+    /// con un corpo, e senza il campo presente il caso non si esprime.
+    ///
+    /// Lo schema e' il minimo che il confine accetta: `fields` presente e
+    /// vuoto, gli altri campi assenti.
+    fn messaggio_schema(corpo: i64) -> Vec<u8> {
+        let mut buf: Vec<u8> = vec![0; 4];
+
+        // --- Message: slot 0 version, 1 header_type, 2 header, 3 bodyLength,
+        //     4 custom_metadata. Presenti l'1, il 2 e il 3.
+        let vt_messaggio = buf.len();
+        buf.extend_from_slice(&14_u16.to_le_bytes());
+        buf.extend_from_slice(&20_u16.to_le_bytes());
+        for offset in [0_u16, 4, 8, 12, 0] {
+            buf.extend_from_slice(&offset.to_le_bytes());
+        }
+        let messaggio = buf.len();
+        let soff_messaggio = i32::try_from(messaggio - vt_messaggio).expect("soffset");
+        buf.extend_from_slice(&soff_messaggio.to_le_bytes());
+        buf.push(1); // MessageHeader::Schema
+        buf.extend_from_slice(&[0_u8; 3]);
+        let slot_header = buf.len();
+        buf.extend_from_slice(&0_u32.to_le_bytes()); // riscritto sotto
+        buf.extend_from_slice(&corpo.to_le_bytes());
+
+        // --- Schema: slot 0 endianness, 1 fields. Presente il solo `fields`.
+        let vt_schema = buf.len();
+        buf.extend_from_slice(&8_u16.to_le_bytes());
+        buf.extend_from_slice(&8_u16.to_le_bytes()); // soffset + 4
+        for offset in [0_u16, 4] {
+            buf.extend_from_slice(&offset.to_le_bytes());
+        }
+        let schema = buf.len();
+        let relativo = u32::try_from(schema - slot_header).expect("offset");
+        buf[slot_header..slot_header + 4].copy_from_slice(&relativo.to_le_bytes());
+        let soff_schema = i32::try_from(schema - vt_schema).expect("soffset");
+        buf.extend_from_slice(&soff_schema.to_le_bytes());
+        let slot_fields = buf.len();
+        buf.extend_from_slice(&0_u32.to_le_bytes()); // riscritto sotto
+
+        // --- `fields`: un vettore di lunghezza zero.
+        let vettore = buf.len();
+        let relativo = u32::try_from(vettore - slot_fields).expect("offset");
+        buf[slot_fields..slot_fields + 4].copy_from_slice(&relativo.to_le_bytes());
+        buf.extend_from_slice(&0_u32.to_le_bytes());
 
         let radice = u32::try_from(messaggio).expect("radice");
         buf[0..4].copy_from_slice(&radice.to_le_bytes());
