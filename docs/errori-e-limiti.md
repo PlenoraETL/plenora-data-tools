@@ -2542,14 +2542,27 @@ worker o del verificatore) finisce su **stderr**, e l'esecuzione resta un
 successo. La directory di lavoro del worker è una `tempfile::TempDir`, e il suo
 `Drop` scarta l'errore di rimozione: un residuo lì non lo dice nessuno.
 
+Lo store dell'executor del worker (`plenora-exec-*`, con il suo `lock.json`)
+sta nella directory temporanea del sistema, di proprietà dell'identità del
+worker, e si toglie al `Drop`. Un worker terminato da fuori — OOM, timeout,
+cancellazione, `SIGKILL` — non arriva al `Drop`, e lo store resta. Lo raccoglie
+lo scavenging all'avvio di un'esecuzione successiva sulla stessa radice, quando
+il PID registrato non esiste più e l'heartbeat è fermo da oltre cinque minuti
+([scavenging temporaneo](#scavenging-temporaneo-comanda-lheartbeat-il-pid-può-solo-accelerare)).
+Nessun campo dell'envelope lo riporta: `temp_cleanup` descrive il temporaneo
+della pubblicazione, non questo.
+
 **Il pericolo.** Un chiamante automatico che legge solo stdout non vede i
-residui: cgroup vuoti che si accumulano sotto la radice delegata, e file
-dell'artefatto temporaneo sotto la directory temporanea del sistema.
+residui: cgroup vuoti che si accumulano sotto la radice delegata, file
+dell'artefatto temporaneo e store dell'executor del worker sotto la directory
+temporanea del sistema, fino allo scavenging successivo.
 
 **La condizione di rientro.** Campi propri nel documento di `run` per i
 residui dei domini e della directory di lavoro, nella forma di `temp_cleanup`
-(stato sempre presente, percorso nella codifica nativa), e la rimozione
-esplicita della directory di lavoro al posto del `Drop`.
+(stato sempre presente, percorso nella codifica nativa), la rimozione
+esplicita della directory di lavoro al posto del `Drop`, e uno store
+dell'executor del worker che il coordinatore conosce e rimuove dopo una
+terminazione da fuori.
 
 ### I quattro tempi del supervisore
 
