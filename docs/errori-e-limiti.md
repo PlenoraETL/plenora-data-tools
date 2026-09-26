@@ -1411,12 +1411,12 @@ Un elemento del filo che avesse un chiamante solo di prova senza dirlo
 lascerebbe l'avviso a qualcun altro: è la ragione per cui l'elenco si aggiorna
 insieme al gate, e non dopo.
 
-Il **supporto esclusivo del verificatore** è nel perimetro insieme a lui, e per
-intero: `ipc_boundary::convalida_artefatto` e i metodi
+Il **supporto esclusivo del verificatore** segue il verificatore, per intero:
+`ipc_boundary::convalida_artefatto` e i metodi
 `ArtefattoConvalidato::duplica`, `misura_ora`, `byte_totali` e `leggi_a`, più
-`geo_transport::ipc::SeekSource::lettore`. Un `cfg` sul modulo che lasciasse
-scoperto ciò che solo quel modulo usa non sarebbe un perimetro, ma una linea
-tracciata a metà.
+`geo_transport::ipc::SeekSource::lettore`, oggi fuori dal perimetro con lui. Un
+`cfg` sul modulo che lasciasse scoperto ciò che solo quel modulo usa non sarebbe
+un perimetro, ma una linea tracciata a metà.
 
 Ne sono usciti con `PR-10` i soli elementi che un chiamante di produzione l'hanno
 davvero — `commit_footer::interpreta_commit_token`,

@@ -418,17 +418,10 @@ pub fn open_with_format(
 ///
 /// Resta la non-garanzia dichiarata altrove: un handle aperto difende dalla
 /// **sostituzione** del percorso, non dalla **mutazione in place** dei byte.
-// Senza `cfg`: il chiamante di produzione e' `pubblicazione::risolvi_commit`,
-// che apre la destinazione **una volta sola** e ne percorre i corpi. Non e' il
-// verificatore — quello sta sotto `cfg` insieme al passo 9, perche' la catena
-// verifica -> publish nessun percorso di produzione la attraversa ancora.
-//
-// I metodi che servono **solo** a quella catena portano il `cfg` uno per uno,
-// qui sotto: e' quello che tiene il perimetro intero invece di lasciarlo
-// tracciato a meta'.
-//
-// Il registro sta in
-// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+// Senza `cfg`: i chiamanti di produzione sono `pubblicazione::risolvi_commit`,
+// che apre la destinazione **una volta sola** e ne percorre i corpi, e il
+// verificatore del profilo isolato, che ne usa anche i metodi di duplicazione e
+// misura.
 pub(crate) struct ArtefattoConvalidato {
     // Un campo solo, e non anche i byte totali: quelli la sorgente li conosce
     // gia' — glieli si passa costruendola — e tenerne una seconda copia qui
@@ -553,13 +546,8 @@ impl ArtefattoConvalidato {
 /// Gli errori del confine, taggati [`ErrorPhase::Read`]: `Io` sull'apertura,
 /// `ResourceLimit` sui tetti — compreso quello cumulativo sui dizionari —
 /// `DataMapping` sul framing malformato.
-// Solo il verificatore la chiama: e' lui a volere un errore del progetto invece
-// della causa, e sta sotto `cfg` — quindi questa ci sta con lui. Chi osserva una
-// destinazione usa la forma con la causa, che un chiamante di produzione ce l'ha
-// e percio' non porta `cfg`.
-//
-// Il registro sta in
-// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+// La chiama il verificatore, che vuole un errore del progetto invece della
+// causa. Chi osserva una destinazione usa la forma con la causa.
 pub(crate) fn convalida_artefatto(
     percorso: &Path,
     limits: &IpcLimits,
