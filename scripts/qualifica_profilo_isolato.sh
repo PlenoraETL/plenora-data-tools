@@ -16,8 +16,9 @@
 # I CASI
 #
 #   riga 1   successo verificato e pubblicato, nessun residuo
-#   riga 2   errore tipizzato del worker: un batch d'ingresso oltre il tetto
-#            fisso di `max_batch_bytes`, che il worker rifiuta da se'
+#   riga 2   errore tipizzato del worker: un `table.type_cast` con
+#            `errors: "raise"` su testo non numerico, che fallisce nel worker
+#            mentre esegue
 #   riga 5   OOM attribuito, PRIMA della conduzione: un dominio troppo piccolo
 #            perche' il worker arrivi a lavorare
 #   riga 5   OOM attribuito, DURANTE la conduzione: il worker parte e poi
@@ -67,11 +68,18 @@ RADICE="/sys/fs/cgroup/plenora-qualifica-$$"
 LAVORO="$(mktemp -d /tmp/plenora-qualifica.XXXXXX)"
 chmod 0755 "$LAVORO"
 pulisci() {
+    local codice=$?
     if [ -d "$RADICE" ]; then
         find "$RADICE" -mindepth 1 -depth -type d -exec rmdir {} + 2>/dev/null || true
         rmdir "$RADICE" 2>/dev/null || echo "qualifica: RESIDUO $RADICE" >&2
     fi
-    rm -rf "$LAVORO"
+    # Su un'uscita anomala la directory di lavoro resta: stdout e stderr dei
+    # casi sono la diagnosi.
+    if [ "$codice" = 0 ] && [ -z "${CONSERVA_LAVORO:-}" ]; then
+        rm -rf "$LAVORO"
+    else
+        echo "qualifica: uscita $codice, i log dei casi restano in $LAVORO" >&2
+    fi
 }
 trap pulisci EXIT
 mkdir "$RADICE"
@@ -83,12 +91,17 @@ echo "binario     $(sha256sum "$BINARIO" | cut -d' ' -f1)"
 echo "radice      $RADICE"
 echo "worker      $WORKER"
 
+# Il binario si installa come in un dispiegamento: di root, 0755. Il preflight
+# rifiuta uno spawner che il worker potrebbe riscrivere, e un binario lasciato
+# dove l'ha scritto la build — di un utente, scrivibile dal gruppo — cade li'.
+install -o root -g root -m 0755 "$BINARIO" "$LAVORO/plenora-data-tools"
+BINARIO="$LAVORO/plenora-data-tools"
+
 # --- gli ingressi -----------------------------------------------------------
 "$GENERATORE" "$LAVORO/piccolo.arrow" 1000 1000
-# Un solo batch oltre i 64 MiB che l'executor accetta per batch d'ingresso.
-"$GENERATORE" "$LAVORO/batch-enorme.arrow" 3000000 3000000
-# Molti batch piccoli: il lavoro cresce con le righe, non col singolo batch.
-"$GENERATORE" "$LAVORO/grande.arrow" 3000000 65536
+# Molti batch piccoli: il lavoro cresce con le righe, non col singolo batch,
+# e nessun batch si avvicina al tetto per batch dell'executor.
+"$GENERATORE" "$LAVORO/grande.arrow" "${RIGHE_GRANDE:-6000000}" 65536
 chmod 0644 "$LAVORO"/*.arrow
 
 # Un piano v6: `max_domain_memory_bytes` chiede il profilo isolato.
@@ -105,6 +118,11 @@ EOF
 }
 FILTRO='[{"id": "fine", "op": "table.filter", "in": ["righe"],
           "config": {"column": "id", "operator": ">", "value": 10}}]'
+CAST_CHE_FALLISCE='[{"id": "fine", "op": "table.type_cast", "in": ["righe"],
+          "config": {"column": "nome", "target_type": "int", "errors": "raise"}}]'
+# Lungo e in streaming: una sostituzione per regex su ogni cifra di ogni riga.
+LUNGO='[{"id": "fine", "op": "table.replace", "in": ["righe"],
+         "config": {"column": "nome", "old_value": "[0-9]", "new_value": "x", "regex": true}}]'
 ORDINA='[{"id": "fine", "op": "table.sort", "in": ["righe"],
           "config": {"columns": ["nome"], "ascending": false}}]'
 MiB=$((1024 * 1024))
@@ -182,23 +200,30 @@ echo "== casi"
 piano "$LAVORO/r1.json" $((512 * MiB)) $((256 * MiB)) "$FILTRO"
 caso_sincrono successo "1" ok "$LAVORO/r1.json" "$LAVORO/piccolo.arrow" 60 $((1024 * MiB))
 
-piano "$LAVORO/r2.json" $((1024 * MiB)) $((512 * MiB)) "$FILTRO"
-caso_sincrono batch-oltre-il-tetto "2" resource_limit "$LAVORO/r2.json" "$LAVORO/batch-enorme.arrow" 60 $((2048 * MiB))
+piano "$LAVORO/r2.json" $((512 * MiB)) $((256 * MiB)) "$CAST_CHE_FALLISCE"
+caso_sincrono errore-del-worker "2" "${CATEGORIA_RIGA_2:-data_mapping}" "$LAVORO/r2.json" "$LAVORO/piccolo.arrow" 60 $((1024 * MiB))
 
-piano "$LAVORO/r5a.json" $((4 * MiB)) $((2 * MiB)) "$FILTRO"
+piano "$LAVORO/r5a.json" "${TETTO_OOM_PRIMA:-$((1 * MiB))}" "${GOVERNATO_OOM_PRIMA:-$((512 * 1024))}" "$FILTRO"
 caso_sincrono oom-prima-della-conduzione "5" resource_limit "$LAVORO/r5a.json" "$LAVORO/piccolo.arrow" 60 $((1024 * MiB))
 
 piano "$LAVORO/r5b.json" "${TETTO_OOM_DURANTE:-$((96 * MiB))}" "${GOVERNATO_OOM_DURANTE:-$((80 * MiB))}" "$ORDINA"
 caso_sincrono oom-durante-la-conduzione "5" resource_limit "$LAVORO/r5b.json" "$LAVORO/grande.arrow" 120 $((1024 * MiB))
 
-piano "$LAVORO/r7.json" $((2048 * MiB)) $((1024 * MiB)) "$ORDINA"
+piano "$LAVORO/r7.json" $((2048 * MiB)) $((1024 * MiB)) "$LUNGO"
 caso_sincrono timeout "7" timeout "$LAVORO/r7.json" "$LAVORO/grande.arrow" 1 $((4096 * MiB))
 
+# I segnali arrivano dopo che il worker lavora: la sua morte, o
+# l'annullamento, li vede la conduzione. Un segnale durante l'handshake
+# proverebbe un'altra riga della matrice.
+ATTESA="${ATTESA_PRIMA_DEL_SEGNALE:-0.5}"
+piano "$LAVORO/r6.json" $((2048 * MiB)) $((1024 * MiB)) "$LUNGO"
+
 # riga 6a: il worker ucciso da fuori
-piano "$LAVORO/r6.json" $((2048 * MiB)) $((1024 * MiB)) "$ORDINA"
 esegui ucciso-da-fuori "$LAVORO/r6.json" "$LAVORO/grande.arrow" 120 $((4096 * MiB)) &
 pid_run=$!
-if procs="$(attendi_il_worker)"; then
+if attendi_il_worker > /dev/null; then
+    sleep "$ATTESA"
+    procs="$(find "$RADICE" -mindepth 1 -name cgroup.procs -exec cat {} + 2>/dev/null || true)"
     for p in $procs; do kill -9 "$p" 2>/dev/null || true; done
 fi
 codice=0; wait "$pid_run" || codice=$?
@@ -208,7 +233,12 @@ giudica ucciso-da-fuori "6a" internal "$LAVORO/ucciso-da-fuori.stdout" "$codice"
 esegui cancellato "$LAVORO/r6.json" "$LAVORO/grande.arrow" 120 $((4096 * MiB)) &
 pid_run=$!
 attendi_il_worker > /dev/null || true
-kill -INT "$pid_run"
+sleep "$ATTESA"
+# Il segnale va al binario, figlio della subshell in background: la subshell
+# e' un job non interattivo e ignora SIGINT, quindi non lo inoltrerebbe.
+# `run` puo' essere gia' finito: allora il caso lo dice il giudizio, non
+# il fallimento di `pkill`.
+pkill -INT -P "$pid_run" 2>/dev/null || true
 codice=0; wait "$pid_run" || codice=$?
 giudica cancellato "8" cancelled "$LAVORO/cancellato.stdout" "$codice" "$LAVORO/cancellato.out.arrow"
 
