@@ -1095,6 +1095,7 @@ where
     for fatto in coda.raccogli_i_fermi() {
         registro.applica(fatto);
     }
+    riconcilia_l_abitato(&registro, &mut difetti);
 
     // --- 5. si raccoglie il figlio, e poi si legge l'evidenza ---------------
     chiudi_il_figlio_e_leggi(
@@ -1115,6 +1116,7 @@ where
     for fatto in tardivi {
         registro.applica(fatto);
     }
+    riconcilia_l_abitato(&registro, &mut difetti);
     difetti.drenaggio = difetto_di_drenaggio;
 
     // --- 7. si conclude, una volta sola ------------------------------------
@@ -1127,6 +1129,15 @@ where
     difetti.rapporto = registro.evidenza_dei_fatti();
     let verdetto = registro.concludi(&difetti.righe());
     (verdetto, difetti)
+}
+
+/// Il dominio «abitato» lo decide il giro al momento in cui smette di
+/// aspettare, e il registro puo' ancora non aver visto la quiescenza gia'
+/// accodata. Applicati i fatti in coda, un dominio quiescente non e' abitato.
+fn riconcilia_l_abitato<P: ProcessoFiglio>(registro: &Registro, difetti: &mut Contorno<P>) {
+    if registro.dominio_quiescente() {
+        difetti.abitato = None;
+    }
 }
 
 #[cfg(test)]

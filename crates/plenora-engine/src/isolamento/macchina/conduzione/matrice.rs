@@ -982,4 +982,8 @@ fn la_quiescenza_accodata_all_ultimo_istante_si_vede() {
         "limite_attribuito",
         "saltando l'evidenza, la stessa esecuzione si chiamerebbe «timeout»"
     );
+    assert_eq!(
+        difetti.abitato, None,
+        "la quiescenza accodata vale anche per il contorno: il dominio non e' abitato"
+    );
 }
