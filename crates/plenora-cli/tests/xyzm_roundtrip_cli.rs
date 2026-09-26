@@ -210,7 +210,7 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
         "l'errore cita la dimensionalita': {stderr}"
     );
     assert!(
-        !output_path.exists(),
+        !output_path.try_exists().expect("stat"),
         "publish atomico: nessun output parziale"
     );
 }
@@ -252,7 +252,7 @@ fn xyz_metadata_with_xy_cells_fails_at_the_gate_never_silent_passthrough() {
         1
     );
     assert!(
-        !output_path.exists(),
+        !output_path.try_exists().expect("stat"),
         "publish atomico: nessun output parziale"
     );
 }

@@ -123,21 +123,46 @@ fi
 #
 #   Il nipote e' un `sleep` con una durata che nessun percorso ragionevole
 #   raggiunge: se sopravvive, lo si trova.
-# Se il processo `$1` porta ancora il marcatore `$2`.
+# Se il processo `$1` e' ancora il nostro: l'eseguibile di `sleep` e il
+# marcatore `$2` come argomento esatto.
 #
 # Un pid da solo non identifica niente: fra la morte di un processo e la riga
 # che lo guarda il kernel puo' aver dato quel numero a qualcun altro, e agire su
-# quel numero colpirebbe un estraneo. L'identita' si legge dagli **argomenti**,
-# che il marcatore rende unici.
+# quel numero colpirebbe un estraneo. L'identita' si legge dall'eseguibile e
+# dagli **argomenti**, che il marcatore rende unici.
 #
 # Rende 0 se e' ancora il nostro, 1 se non c'e' piu' o e' un altro, e 2 se non
-# si lascia leggere: un processo illeggibile non e' un processo sparito.
+# si lascia osservare: un processo illeggibile non e' un processo sparito, e
+# solo «non esiste» e' assenza.
 e_ancora_il_nostro() {
-  local pid="$1" marcatore="$2" riga="/proc/$1/cmdline" argomenti
-  [[ -e "/proc/$pid" ]] || return 1
-  argomenti="$(tr '\0' '\n' < "$riga" 2>/dev/null)" || return 2
-  [[ -e "/proc/$pid" ]] || return 1
-  grep -qxF -- "$marcatore" <<<"$argomenti"
+  local pid="$1" marcatore="$2" eseguibile argomento fd
+  esiste_il_pid "$pid" || return $?
+  if ! eseguibile="$(readlink "/proc/$pid/exe" 2>/dev/null)"; then
+    esiste_il_pid "$pid" || return $?
+    return 2
+  fi
+  [[ "$eseguibile" == "$(readlink -f "$(command -v sleep)")" ]] || return 1
+  if ! exec {fd}<"/proc/$pid/cmdline" 2>/dev/null; then
+    esiste_il_pid "$pid" || return $?
+    return 2
+  fi
+  # NUL per NUL: un argomento con un a capo dentro non passa per il marcatore.
+  while IFS= read -r -d '' -u "$fd" argomento; do
+    if [[ "$argomento" == "$marcatore" ]]; then
+      exec {fd}<&-
+      return 0
+    fi
+  done
+  exec {fd}<&-
+  return 1
+}
+
+# Se `/proc/$1` esiste: 0 si', 1 no, 2 non si sa. Solo «non esiste» e' 1.
+esiste_il_pid() {
+  local errore
+  errore="$(LC_ALL=C stat -c %i "/proc/$1" 2>&1 >/dev/null)" && return 0
+  [[ "$errore" == *"No such file or directory"* ]] && return 1
+  return 2
 }
 
 # Aspetta che `$1` sparisca, ricontrollando l'identita' a ogni giro.

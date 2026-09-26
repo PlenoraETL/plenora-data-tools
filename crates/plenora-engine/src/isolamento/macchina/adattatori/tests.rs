@@ -237,7 +237,7 @@ fn svuota_al_kill(dominio: &Path) -> std::thread::JoinHandle<()> {
     let dominio = dominio.to_path_buf();
     std::thread::spawn(move || {
         for _ in 0..400 {
-            if dominio.join("cgroup.kill").exists() {
+            if dominio.join("cgroup.kill").try_exists().expect("stat") {
                 popolato(&dominio, false);
                 return;
             }

@@ -712,7 +712,7 @@ fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
         .write_ipc_file_ignorando_le_avvertenze(&destination)
         .is_err());
     assert!(
-        !destination.exists(),
+        !destination.try_exists().expect("stat"),
         "nessun artefatto IPC dopo rejection tardiva"
     );
 }
@@ -924,7 +924,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
     assert!(make_output()
         .write_ipc_file_ignorando_le_avvertenze(&destination)
         .is_err());
-    assert!(!destination.exists());
+    assert!(!destination.try_exists().expect("stat"));
 }
 
 #[test]
@@ -992,7 +992,7 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
     assert!(make_output()
         .write_ipc_file_ignorando_le_avvertenze(&destination)
         .is_err());
-    assert!(!destination.exists());
+    assert!(!destination.try_exists().expect("stat"));
 }
 
 #[test]
@@ -1286,7 +1286,7 @@ fn error_mid_stream_publishes_nothing() {
     let result = output.write_ipc_file_ignorando_le_avvertenze(&destination);
     assert!(result.is_err());
     assert!(
-        !destination.exists(),
+        !destination.try_exists().expect("stat"),
         "nessun output parziale visibile (publish atomico)"
     );
 }
@@ -1356,7 +1356,7 @@ fn late_wkb_rejections_are_complete_absolute_and_publish_nothing() {
         .write_ipc_file_ignorando_le_avvertenze(&destination)
         .is_err());
     assert!(
-        !destination.exists(),
+        !destination.try_exists().expect("stat"),
         "nessun artefatto IPC dopo rejection tardiva"
     );
 }
@@ -2092,7 +2092,7 @@ fn ipc_roundtrip_through_publish_with_profile() {
     let metrics = output
         .write_ipc_file_ignorando_le_avvertenze(&destination)
         .expect("publish");
-    assert!(destination.exists());
+    assert!(destination.try_exists().expect("stat"));
     assert_eq!(metrics.output_rows, 3);
 
     // Rilettura: lo stesso piano pass-through sul file pubblicato.
@@ -4335,7 +4335,7 @@ fn kernel_panic_publishes_nothing() {
     let result = output.write_ipc_file_ignorando_le_avvertenze(&destination);
     assert!(result.is_err());
     assert!(
-        !destination.exists(),
+        !destination.try_exists().expect("stat"),
         "nessun publish dopo panic (errori-e-limiti.md#panic-policy): il tempfile e' eliminato"
     );
 }
@@ -4645,7 +4645,7 @@ fn cancelled_run_publishes_nothing_and_reports_execution_id() {
         other => panic!("atteso Cancelled: {other:?}"),
     }
     assert!(
-        !destination.exists(),
+        !destination.try_exists().expect("stat"),
         "nessun publish dopo la cancellazione"
     );
     assert!(
@@ -4712,7 +4712,7 @@ fn execute_creates_temp_store_and_cleans_it_up() {
     let (batches, _) = output.collect_batches().expect("stream ok");
     assert_eq!(batches.len(), 1);
     assert!(
-        !store_dir.exists(),
+        !store_dir.try_exists().expect("stat"),
         "cleanup RAII: il Drop dello stato rimuove directory e lock"
     );
 }
@@ -4752,8 +4752,14 @@ fn execute_scavenges_stale_temp_dirs_at_startup() {
         runtime,
     )
     .expect("execute");
-    assert!(!stale.exists(), "scavenging all'avvio: orfana rimossa");
-    assert!(other.exists(), "fuori pattern: mai toccata");
+    assert!(
+        !stale.try_exists().expect("stat"),
+        "scavenging all'avvio: orfana rimossa"
+    );
+    assert!(
+        other.try_exists().expect("stat"),
+        "fuori pattern: mai toccata"
+    );
     drop(output.collect_batches().expect("stream ok"));
 }
 
@@ -4937,7 +4943,7 @@ fn distinct_spills_end_to_end_into_shared_temp_store() {
     let store_dir = store_dir_of(root.path(), output.execution_id())
         .expect("store dell'esecuzione presente mentre l'Output e' vivo");
     let spill_dir = store_dir.join("spill");
-    if spill_dir.exists() {
+    if spill_dir.try_exists().expect("stat") {
         assert!(
             spill_dir
                 .read_dir()
@@ -6968,7 +6974,7 @@ fn collect_batches_e_publish_restano_protetti() {
         "il publish atomico deve rifiutare"
     );
     assert!(
-        !destinazione.exists(),
+        !destinazione.try_exists().expect("stat"),
         "nulla deve essere pubblicato: il publish e' irreversibile"
     );
 }

@@ -262,10 +262,17 @@ def prova_il_nipote_superstite(referto, radice):
 
     referto.esito('il comando finto esce con successo', codice == 0, f'codice {codice}')
     referto.esito('e il gruppo risulta comunque raccolto', raccolto)
+    # Solo «non esiste» e' assenza: un /proc che non si lascia leggere non
+    # prova che il nipote sia stato tolto.
+    try:
+        os.stat(f'/proc/{nipote}')
+        nipote_tolto = False
+    except FileNotFoundError:
+        nipote_tolto = True
     referto.esito(
         'perche\' il nipote e\' stato trovato e tolto',
-        not os.path.exists(f'/proc/{nipote}'),
-        f'il pid {nipote} e\' ancora li\'')
+        nipote_tolto,
+        f'il pid {nipote} e\' ancora li\', o non si lascia osservare')
 
     # Il leader esce, e resta **non raccolto** finche' il gruppo non e'
     # giudicato: il suo PID, che e' anche il numero del gruppo, non puo'

@@ -1759,7 +1759,7 @@ mod tests {
             "la directory di dominio non si e' ripulita dopo il fallimento: {residui:?}"
         );
         assert!(
-            !destinazione.exists(),
+            !destinazione.try_exists().expect("stat"),
             "nessun output deve comparire quando il preflight isolato fallisce"
         );
     }
@@ -1828,7 +1828,10 @@ mod tests {
             esito.is_ok(),
             "la verifica confermata deve pubblicare: {esito:?}"
         );
-        assert!(destinazione.exists(), "la destinazione deve comparire");
+        assert!(
+            destinazione.try_exists().expect("stat"),
+            "la destinazione deve comparire"
+        );
         assert_eq!(
             std::fs::read(&destinazione).expect("lettura della destinazione"),
             byte,
@@ -1868,7 +1871,10 @@ mod tests {
             esito.is_err(),
             "una terminazione anomala non deve pubblicare"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Timeout del verificatore**: nessuna pubblicazione.
@@ -1897,7 +1903,10 @@ mod tests {
             errore.category(),
             plenora_core::error::ErrorCategory::Timeout
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Cancellazione durante la verifica**: nessuna pubblicazione.
@@ -1929,7 +1938,10 @@ mod tests {
             errore.category(),
             plenora_core::error::ErrorCategory::Cancelled
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Risposta di verifica incoerente**: il verificatore conferma un
@@ -1972,7 +1984,10 @@ mod tests {
             esito.is_err(),
             "un digest confermato ma sbagliato non deve pubblicare"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Risposta positiva ma diversa da cio' che l'incarico aveva
@@ -2016,7 +2031,10 @@ mod tests {
             plenora_core::error::ErrorCategory::DataMapping,
             "il rifiuto deve venire dal confronto con l'incarico"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **L'artefatto cambia fra la fine della verifica e la copia**: la
@@ -2058,6 +2076,9 @@ mod tests {
             esito.is_err(),
             "un artefatto modificato dopo la verifica non deve pubblicare"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 }

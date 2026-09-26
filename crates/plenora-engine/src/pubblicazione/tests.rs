@@ -365,7 +365,7 @@ fn un_artefatto_accorciato_dopo_la_verifica_non_si_pubblica() {
         "il file e' cambiato sotto di noi, non e' un difetto interno"
     );
     assert!(
-        !destinazione.exists(),
+        !destinazione.try_exists().expect("stat"),
         "e la destinazione non appare, nemmeno vuota"
     );
 }
@@ -397,7 +397,7 @@ fn un_artefatto_alterato_a_pari_lunghezza_non_si_pubblica() {
     let errore = esito.expect_err("byte alterati non si pubblicano");
     assert_eq!(errore.category(), plenora_core::ErrorCategory::DataMapping);
     assert!(
-        !destinazione.exists(),
+        !destinazione.try_exists().expect("stat"),
         "il commit non avviene, quindi non c'e' niente da vedere"
     );
 }

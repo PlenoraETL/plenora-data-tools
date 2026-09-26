@@ -194,7 +194,16 @@ EOF
     if [ -n "$deve" ] && [[ "$messaggio" != *"$deve"* ]]; then verdetto="ROSSO"; perche="$perche messaggio"; fi
     if [ -n "$non_deve" ] && [[ "$messaggio" == *"$non_deve"* ]]; then verdetto="ROSSO"; perche="$perche messaggio"; fi
     if [ "$atteso" = ok ] && [ ! -s "$output" ]; then verdetto="ROSSO"; perche="$perche output-assente"; fi
-    if [ "$atteso" != ok ] && [ -e "$output" ]; then verdetto="ROSSO"; perche="$perche output-presente"; fi
+    if [ "$atteso" != ok ]; then
+        # Solo «non esiste» e' assenza: un output che non si lascia osservare
+        # non si conta come non pubblicato.
+        local osservato
+        if osservato="$(LC_ALL=C stat -c %i "$output" 2>&1 >/dev/null)"; then
+            verdetto="ROSSO"; perche="$perche output-presente"
+        elif [[ "$osservato" != *"No such file or directory"* ]]; then
+            verdetto="ROSSO"; perche="$perche output-non-osservabile"
+        fi
+    fi
     if [ "$atteso" != ok ] && [ "$codice" = 0 ]; then verdetto="ROSSO"; perche="$perche exit-zero"; fi
     if [ "$atteso" = ok ] && [ "$codice" != 0 ]; then verdetto="ROSSO"; perche="$perche exit-non-zero"; fi
     if [ "$residui" != 0 ]; then verdetto="ROSSO"; perche="$perche domini-residui"; fi

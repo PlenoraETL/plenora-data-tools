@@ -1758,7 +1758,7 @@ mod tests {
             .next()
             .is_none());
         drop(workspace);
-        assert!(directory.exists());
+        assert!(directory.try_exists().expect("stat"));
     }
 
     #[test]

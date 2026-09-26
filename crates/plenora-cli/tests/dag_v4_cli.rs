@@ -226,7 +226,10 @@ fn run_v4_senza_inputs_fallisce() {
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stdout);
     assert!(stderr.contains("input"), "stderr: {stderr}");
-    assert!(!output_path.exists(), "nessun output parziale");
+    assert!(
+        !output_path.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
 }
 
 /// Envelope §9 (R9.1/R9.2): l'uscita CLI di un errore e' JSON parsabile
@@ -300,7 +303,10 @@ fn run_v4_schema_mismatch_fallisce_in_validazione() {
         result.stderr.is_empty(),
         "l'envelope va su stdout e stderr resta vuoto"
     );
-    assert!(!output_path.exists(), "nessun output parziale");
+    assert!(
+        !output_path.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
 }
 
 #[test]
@@ -597,7 +603,10 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
         "stderr deve restare vuoto: {}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(!output.exists(), "nessun output parziale");
+    assert!(
+        !output.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
     let envelope: serde_json::Value =
         serde_json::from_slice(&result.stdout).expect("envelope JSON");
     assert_eq!(
@@ -674,7 +683,7 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
         "stderr: {stderr}"
     );
     assert!(
-        !output_path.exists(),
+        !output_path.try_exists().expect("stat"),
         "nessun output pubblicato su piano rifiutato"
     );
 }
@@ -1944,7 +1953,7 @@ fn due_input_invertiti_non_raggiungono_mai_l_esecuzione() {
         "la forma posizionale con due input deve fallire"
     );
     assert!(
-        !output_invertito.exists(),
+        !output_invertito.try_exists().expect("stat"),
         "nessun output deve essere pubblicato da un binding non verificabile"
     );
     let messaggio = String::from_utf8_lossy(&esito.stdout);
@@ -1971,7 +1980,7 @@ fn due_input_invertiti_non_raggiungono_mai_l_esecuzione() {
         .output()
         .expect("run");
     assert!(!esito.status.success());
-    assert!(!output_ordinato.exists());
+    assert!(!output_ordinato.try_exists().expect("stat"));
 
     // 3. `validate` si comporta allo stesso modo: il rifiuto non arriva
     //    all'ultimo momento, e nemmeno da un percorso diverso.
@@ -2042,7 +2051,7 @@ fn un_solo_input_resta_compatibile_con_la_forma_posizionale() {
         "un solo input deve restare compatibile: {}",
         String::from_utf8_lossy(&esito.stdout)
     );
-    assert!(output_path.exists());
+    assert!(output_path.try_exists().expect("stat"));
 }
 
 // ---------------------------------------------------------------------------
@@ -2126,7 +2135,10 @@ fn un_limite_alzato_dentro_un_kernel_arriva_intatto_all_envelope() {
         testo.contains("\"j\"") || testo.contains("table.join"),
         "nodo e operazione restano nella diagnostica: {envelope}"
     );
-    assert!(!uscita.exists(), "nessun output da un limite superato");
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output da un limite superato"
+    );
 }
 
 #[test]
@@ -2179,7 +2191,10 @@ fn un_tetto_del_trasporto_e_un_limite_di_risorsa_in_fase_di_lettura() {
         envelope["error"]["phase"], "read",
         "la fase e' quella in cui il tetto scatta: {envelope}"
     );
-    assert!(!uscita.exists(), "nessun output da un tetto superato");
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output da un tetto superato"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2540,7 +2555,7 @@ fn run_con_isolamento_non_esegue_mai_in_process() {
          — stdout: {stdout}"
     );
     assert!(
-        !output_path.exists(),
+        !output_path.try_exists().expect("stat"),
         "nessun output deve comparire: l'esecuzione non e' mai cominciata"
     );
 
@@ -2583,7 +2598,7 @@ fn il_tetto_sugli_input_precede_l_apertura_dei_file() {
     comando.args(["run", "--plan"]).arg(&percorso_piano);
     for nome in &nomi {
         let assente = directory.path().join(format!("{nome}-assente.arrow"));
-        assert!(!assente.exists());
+        assert!(!assente.try_exists().expect("stat"));
         comando
             .arg("--input")
             .arg(format!("{nome}={}", assente.display()));
@@ -2606,7 +2621,10 @@ fn il_tetto_sugli_input_precede_l_apertura_dei_file() {
         documento["error"]["category"], "invalid_plan",
         "{documento}"
     );
-    assert!(!uscita.exists(), "nessun output parziale");
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
 }
 
 /// Esegue `comando` (`run` o `validate`) su un piano con `quanti` input
