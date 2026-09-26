@@ -90,6 +90,18 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
     if srid || dimensional {
         return Err(ConstructionError::UnsupportedWktDimension);
     }
+    // Il tokenizer di `wkt` 0.14 tratta `\0` come fine dell'ingresso: cio'
+    // che segue sparirebbe senza errore.
+    if value.contains('\0') {
+        return Err(ConstructionError::InvalidWkt(
+            "carattere NUL nel testo".to_owned(),
+        ));
+    }
+    if coda_dopo_la_geometria(value) {
+        return Err(ConstructionError::InvalidWkt(
+            "testo dopo la fine della geometria".to_owned(),
+        ));
+    }
     let geometry = Geometry::<f64>::try_from_wkt_str(value)
         .map_err(|error| ConstructionError::InvalidWkt(error.to_string()))?;
     geometry.validazione_protetta().map_err(|esito| {
@@ -99,6 +111,61 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
         )
     })?;
     Ok(geometry)
+}
+
+/// Lo spazio bianco secondo il tokenizer di `wkt` 0.14: questi quattro e basta.
+const fn spazio_wkt(carattere: char) -> bool {
+    matches!(carattere, ' ' | '\n' | '\r' | '\t')
+}
+
+/// Se il testo ha qualcosa **dopo** la fine della geometria di primo livello.
+///
+/// # Perche' serve
+///
+/// Perche' il parser di `wkt` 0.14 si ferma alla fine della geometria e non
+/// guarda il resto: `POINT(1 2) garbage` e `POINT(1 2))` diventano `POINT(1 2)`
+/// senza errore. Un testo che dice di piu' di quel che viene letto e'
+/// malformato, e accettarlo vorrebbe dire scartarne una parte in silenzio.
+///
+/// # Perche' e' esatto
+///
+/// Il WKT non ha stringhe ne' commenti: le parentesi sono solo strutturali, e
+/// la geometria di primo livello finisce alla parentesi che chiude la prima
+/// aperta, oppure alla parola `EMPTY` quando questa precede ogni parentesi.
+/// Un testo senza chiusura lo rifiuta gia' il parser, e qui non si giudica.
+fn coda_dopo_la_geometria(testo: &str) -> bool {
+    let apertura = testo.find('(');
+    let prima_della_parentesi = &testo[..apertura.unwrap_or(testo.len())];
+    let parole: Vec<&str> = prima_della_parentesi
+        .split(spazio_wkt)
+        .filter(|parola| !parola.is_empty())
+        .collect();
+    if let Some(vuota) = parole
+        .iter()
+        .position(|parola| parola.eq_ignore_ascii_case("EMPTY"))
+    {
+        // `TIPO EMPTY`: dopo `EMPTY` non deve esserci nient'altro, parentesi
+        // comprese.
+        return vuota + 1 < parole.len() || apertura.is_some();
+    }
+    let Some(apertura) = apertura else {
+        return false;
+    };
+    let mut profondita = 0_usize;
+    for (posizione, carattere) in testo[apertura..].char_indices() {
+        match carattere {
+            '(' => profondita += 1,
+            ')' => {
+                profondita = profondita.saturating_sub(1);
+                if profondita == 0 {
+                    let resto = &testo[apertura + posizione + 1..];
+                    return !resto.chars().all(spazio_wkt);
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn collect_points(
