@@ -196,6 +196,8 @@ TETTO_SECONDI = 900
 #: Quanto si aspetta che il gruppo di processi si svuoti dopo averlo ucciso.
 #: `SIGKILL` non e' istantaneo: fra il segnale e l'uscita c'e' il kernel.
 ATTESA_DEL_GRUPPO = 30
+# Il margine fra SIGTERM e SIGKILL al gruppo, in secondi.
+MARGINE_DEL_TERM = 2
 
 I = 'crates/plenora-engine/src/isolamento'
 COND = f'{I}/macchina/conduzione.rs'
@@ -764,10 +766,16 @@ def gruppo_vivo(gruppo):
     """Se nel gruppo c'e' ancora qualcuno che non sia uno zombie.
 
     Si legge `/proc`, non `killpg(gruppo, 0)`: il leader resta non raccolto
-    finche' il gruppo non e' vuoto (vedi `ferma_il_gruppo`), e uno zombie fa
+    finche' il gruppo non e' giudicato (vedi `ferma_il_gruppo`), e uno zombie fa
     rispondere «vivo» a `killpg` per sempre. Il numero del gruppo e' esatto
     per costruzione: finche' il leader non e' raccolto, il suo PID — e quindi
     il PGID — non puo' passare a un altro processo.
+
+    La risposta «vuoto» vale solo dopo un `SIGKILL` al gruppo: prima, un membro
+    puo' generare un figlio e uscire fra l'elenco di `/proc` e la lettura del
+    proprio `stat`, e il figlio non compare. Dopo, il kernel non lascia uscire
+    dal gruppo nessun fork nuovo. Un processo che non si lascia leggere conta
+    come **vivo**: solo un processo che non esiste piu' e' assente.
     """
     for voce in os.listdir('/proc'):
         if not voce.isdigit():
@@ -775,8 +783,10 @@ def gruppo_vivo(gruppo):
         try:
             with open(f'/proc/{voce}/stat', encoding='utf-8', errors='replace') as stato:
                 campi = stato.read().rsplit(')', 1)[1].split()
-        except OSError:
+        except (FileNotFoundError, ProcessLookupError):
             continue
+        except OSError:
+            return True
         # Dopo il nome fra parentesi: stato, ppid, pgrp.
         if int(campi[2]) == gruppo and campi[0] != 'Z':
             return True
@@ -817,22 +827,30 @@ def ferma_il_gruppo(figlio):
     **e'** quel pid. Finche' il figlio non e' raccolto — vivo o zombie — quel
     numero non puo' passare a un altro gruppo, e i segnali restano nostri.
 
+    Prima `SIGTERM`, con un margine perche' chi puo' chiuda da se'; poi
+    **sempre** `SIGKILL`, e solo dopo si giudica: il verdetto «vuoto» di
+    `gruppo_vivo` vale soltanto a quel punto.
+
     Rende `True` se il gruppo si e' svuotato entro l'attesa.
     """
     gruppo = figlio.pid
-    for segnale in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(gruppo, segnale)
-        except ProcessLookupError:
+    try:
+        os.killpg(gruppo, signal.SIGTERM)
+        time.sleep(MARGINE_DEL_TERM)
+        os.killpg(gruppo, signal.SIGKILL)
+    except ProcessLookupError:
+        # Con il leader non raccolto il gruppo esiste sempre: non succede, e
+        # se succedesse non si potrebbe dire che e' vuoto.
+        print(f'  il gruppo {gruppo} non si trova, con il leader non raccolto')
+        return False
+    except PermissionError:
+        print(f'  il gruppo {gruppo} non e\' nostro: non lo si puo\' fermare')
+        return False
+    scadenza = time.monotonic() + ATTESA_DEL_GRUPPO
+    while time.monotonic() < scadenza:
+        if not gruppo_vivo(gruppo):
             return True
-        except PermissionError:
-            print(f'  il gruppo {gruppo} non e\' nostro: non lo si puo\' fermare')
-            return False
-        scadenza = time.monotonic() + ATTESA_DEL_GRUPPO / 2
-        while time.monotonic() < scadenza:
-            if not gruppo_vivo(gruppo):
-                return True
-            time.sleep(0.2)
+        time.sleep(0.2)
     return False
 
 
@@ -865,9 +883,9 @@ def esegui(argomenti):
         )
         try:
             codice = attendi_senza_raccogliere(figlio.pid, TETTO_SECONDI)
-            raccolto = True
-            if codice is None or gruppo_vivo(figlio.pid):
-                raccolto = ferma_il_gruppo(figlio)
+            # Sempre, anche dopo un'uscita ordinaria: chiedere prima «c'e'
+            # qualcuno?» darebbe una risposta che vale solo dopo `SIGKILL`.
+            raccolto = ferma_il_gruppo(figlio)
         finally:
             # Il gruppo e' giudicato: ora il PID puo' liberarsi. Se il gruppo
             # non si e' svuotato, i superstiti restano senza leader, e
