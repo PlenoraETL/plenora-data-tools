@@ -39,7 +39,11 @@ class SegnalaVerificato(unittest.TestCase):
     def test_l_identita_giusta_riceve_il_segnale(self):
         processo = self.figlio()
         esito = segnala_verificato.segnala(
-            processo.pid, signal.SIGTERM, os.getpid(), argomento="30"
+            processo.pid,
+            signal.SIGTERM,
+            os.getpid(),
+            eseguibile=processo_sleep(),
+            argomento="30",
         )
         self.assertEqual(esito, 0)
         self.assertEqual(processo.wait(timeout=5), -signal.SIGTERM)
@@ -47,7 +51,7 @@ class SegnalaVerificato(unittest.TestCase):
     def test_un_genitore_diverso_non_riceve_niente(self):
         processo = self.figlio()
         esito = segnala_verificato.segnala(
-            processo.pid, signal.SIGTERM, os.getpid() + 1, argomento="30"
+            processo.pid, signal.SIGTERM, os.getpid() + 1, eseguibile=processo_sleep()
         )
         self.assertEqual(esito, 1)
         self.assertIsNone(processo.poll())
@@ -93,10 +97,14 @@ class SegnalaVerificato(unittest.TestCase):
         self.assertEqual(esito, 0)
         self.assertEqual(processo.wait(timeout=5), -signal.SIGTERM)
 
-    def test_senza_eseguibile_ne_argomento_non_parte_niente(self):
+    def test_senza_eseguibile_non_parte_niente(self):
+        # L'argomento da solo non basta: lo porta anche chi segnala.
         processo = self.figlio()
         self.assertEqual(
-            segnala_verificato.segnala(processo.pid, signal.SIGTERM, os.getpid()), 1
+            segnala_verificato.segnala(
+                processo.pid, signal.SIGTERM, os.getpid(), argomento="30"
+            ),
+            1,
         )
         self.assertIsNone(processo.poll())
 
@@ -104,7 +112,10 @@ class SegnalaVerificato(unittest.TestCase):
         processo = subprocess.Popen(["true"])
         processo.wait()
         esito = segnala_verificato.segnala(
-            processo.pid, signal.SIGTERM, os.getpid(), argomento="true"
+            processo.pid,
+            signal.SIGTERM,
+            os.getpid(),
+            eseguibile=os.path.realpath(shutil.which("true")),
         )
         self.assertEqual(esito, 1)
 

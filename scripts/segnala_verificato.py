@@ -3,11 +3,11 @@
 
 Uso::
 
-    segnala_verificato.py PID SEGNALE [--genitore PPID] [--eseguibile PERCORSO]
+    segnala_verificato.py PID SEGNALE --eseguibile PERCORSO [--genitore PPID]
                           [--argomento TESTO]
 
-Almeno uno fra ``--eseguibile`` e ``--argomento``; quelli dati devono tornare
-tutti.
+L'eseguibile e' obbligatorio; genitore e argomento si aggiungono, e quelli
+dati devono tornare tutti.
 
 Un PID letto o ricordato da uno script di shell puo' tornare in uso prima del
 segnale: Bash miete i figli in modo asincrono, nel gestore di SIGCHLD, quindi
@@ -61,7 +61,7 @@ def identita_torna(pid, genitore, eseguibile, argomento):
 
 def segnala(pid, numero, genitore=None, eseguibile=None, argomento=None):
     """Rende 0 se il segnale e' partito verso il processo atteso, 1 altrimenti."""
-    if eseguibile is None and argomento is None:
+    if eseguibile is None:
         return 1
     try:
         descrittore = os.pidfd_open(pid)
@@ -84,11 +84,9 @@ def main(argomenti):
     lettore.add_argument("pid", type=int)
     lettore.add_argument("segnale", help="nome senza SIG, per esempio INT o KILL")
     lettore.add_argument("--genitore", type=int)
-    lettore.add_argument("--eseguibile")
+    lettore.add_argument("--eseguibile", required=True)
     lettore.add_argument("--argomento")
     opzioni = lettore.parse_args(argomenti)
-    if opzioni.eseguibile is None and opzioni.argomento is None:
-        lettore.error("serve almeno uno fra --eseguibile e --argomento")
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         print("segnala_verificato: questa piattaforma non ha pidfd", file=sys.stderr)
         return 2
