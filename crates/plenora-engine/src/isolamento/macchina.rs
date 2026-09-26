@@ -984,7 +984,6 @@ impl EvidenzaDaPrimaDelloSpawn {
                      conduzione: {prova:?}"
                 ))
             }
-            (_, Precedenza::DellaCancellazione) => causa,
             (Ok((ClasseEvidenzaMemoria::NonAttribuita, prova)), Precedenza::DelDialogo) => {
                 PlenoraError::UnattributedMemoryPressure {
                     contesto: format!("dominio isolato del {soggetto}, prima della conduzione"),
@@ -1003,7 +1002,9 @@ impl EvidenzaDaPrimaDelloSpawn {
                 "il dominio isolato del {soggetto} e' stato terminato con cgroup.kill dopo un \
                  fallimento precoce: esito ambiguo; causa del dialogo: {causa}"
             )),
-            (_, Precedenza::DelDialogo) => causa,
+            // Il resto lascia la causa: la cancellazione cede al solo OOM
+            // attribuito, il dialogo a un'evidenza che dica qualcosa.
+            _ => causa,
         }
     }
 }
