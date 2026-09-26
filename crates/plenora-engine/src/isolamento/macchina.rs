@@ -947,6 +947,15 @@ impl EvidenzaDaPrimaDelloSpawn {
         self.rileggi(soggetto, causa, Precedenza::DellaCancellazione)
     }
 
+    /// Come [`Self::rileggi_il_fallimento`], per il **giudizio** del
+    /// supervisore su una `Risposta` arrivata per intero: un'incompatibilita'
+    /// accertata (righe 9 e 10). L'evidenza che dice qualcosa decide come per
+    /// il dialogo; un dominio svuotato solo con `cgroup.kill` non rende invece
+    /// ambiguo un fatto gia' accertato.
+    pub(super) fn rileggi_il_giudizio(self, soggetto: &str, causa: PlenoraError) -> PlenoraError {
+        self.rileggi(soggetto, causa, Precedenza::DelGiudizio)
+    }
+
     fn rileggi(self, soggetto: &str, causa: PlenoraError, precedenza: Precedenza) -> PlenoraError {
         use crate::classificazione::{classifica_evidenza, ClasseEvidenzaMemoria};
         use conduzione::{LettoreDiEvidenza as _, Terminatore as _};
@@ -984,20 +993,23 @@ impl EvidenzaDaPrimaDelloSpawn {
                      conduzione: {prova:?}"
                 ))
             }
-            (Ok((ClasseEvidenzaMemoria::NonAttribuita, prova)), Precedenza::DelDialogo) => {
-                PlenoraError::UnattributedMemoryPressure {
-                    contesto: format!("dominio isolato del {soggetto}, prima della conduzione"),
-                    evidenza: Box::new(prova),
-                }
-            }
-            (Ok((ClasseEvidenzaMemoria::Incoerente, _)), Precedenza::DelDialogo) => {
-                PlenoraError::Internal(format!(
-                    "l'evidenza del dominio isolato del {soggetto} non e' utilizzabile: Incoerente"
-                ))
-            }
+            (
+                Ok((ClasseEvidenzaMemoria::NonAttribuita, prova)),
+                Precedenza::DelDialogo | Precedenza::DelGiudizio,
+            ) => PlenoraError::UnattributedMemoryPressure {
+                contesto: format!("dominio isolato del {soggetto}, prima della conduzione"),
+                evidenza: Box::new(prova),
+            },
+            (
+                Ok((ClasseEvidenzaMemoria::Incoerente, _)),
+                Precedenza::DelDialogo | Precedenza::DelGiudizio,
+            ) => PlenoraError::Internal(format!(
+                "l'evidenza del dominio isolato del {soggetto} non e' utilizzabile: Incoerente"
+            )),
             // Il dominio si e' svuotato solo con `cgroup.kill`, e l'evidenza
             // non attribuisce: la §10.3 chiama ambiguo questo esito, e la
-            // causa del dialogo non lo spiega da sola.
+            // causa del dialogo non lo spiega da sola. Il giudizio su una
+            // `Risposta` intera non passa di qui: e' gia' un fatto.
             (_, Precedenza::DelDialogo) if terminato => PlenoraError::Internal(format!(
                 "il dominio isolato del {soggetto} e' stato terminato con cgroup.kill dopo un \
                  fallimento precoce: esito ambiguo; causa del dialogo: {causa}"
@@ -1017,6 +1029,9 @@ enum Precedenza {
     DelDialogo,
     /// La cancellazione cede al solo OOM attribuito.
     DellaCancellazione,
+    /// Il giudizio su una `Risposta` intera cede all'evidenza come il
+    /// dialogo, ma non all'ambiguita' di `cgroup.kill`.
+    DelGiudizio,
 }
 
 /// Attende la quiescenza del dominio fino a
@@ -1170,9 +1185,19 @@ pub(super) fn conduci_isolato<P: ProcessoFiglio>(
     }
     segnala_pulizia_della_conduzione(&contorno);
 
+    // Un dominio che non si e' lasciato terminare, o che terminato non si e'
+    // svuotato, e' un fatto dell'esito, non solo del log: processi possono
+    // esservi rimasti, e l'errore lo dice.
+    let residuo = contorno
+        .terminazione
+        .as_ref()
+        .or(contorno.abitato.as_ref())
+        .map_or_else(String::new, |motivo| {
+            format!("; il dominio non si e' lasciato svuotare ({motivo}): processi possono esservi rimasti")
+        });
     let supervisore = esito.map_err(|impedimento| {
         PlenoraError::Internal(format!(
-            "la conduzione del profilo isolato non si e' lasciata ridurre a un esito: {}",
+            "la conduzione del profilo isolato non si e' lasciata ridurre a un esito: {}{residuo}",
             messaggio_di_impedimento(impedimento)
         ))
     })?;
@@ -1259,6 +1284,7 @@ fn segnala_pulizia_della_conduzione<P: ProcessoFiglio>(contorno: &conduzione::Co
         &contorno.drenaggio,
         &contorno.raccolta,
         &contorno.terminazione,
+        &contorno.abitato,
         &contorno.annulla,
     ]
     .into_iter()

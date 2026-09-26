@@ -495,9 +495,9 @@ fn nome_del_dominio_verifica(identificativo: &[u8; 32]) -> String {
 /// # Errors
 ///
 /// L'errore dell'handshake, o un timeout se il proprio guardiano scade
-/// prima. Il figlio e' gia' chiuso e i suoi difetti di pulizia gia'
-/// riportati quando questa funzione rende un errore: il chiamante non deve
-/// chiudere una seconda volta.
+/// prima, con la sua provenienza ([`FallimentoDellHandshake`]). Il figlio e'
+/// gia' chiuso e i suoi difetti di pulizia gia' riportati quando questa
+/// funzione rende un errore: il chiamante non deve chiudere una seconda volta.
 /// # Il parametro `soggetto`
 ///
 /// Come per [`macchina::conduci_isolato`]: nomina chi sta dall'altro capo —
@@ -512,12 +512,15 @@ fn concludi_handshake(
     lettore_grezzo: std::io::PipeReader,
     mut scrittore: std::io::PipeWriter,
     guardia: FiglioVivo<std::process::Child>,
-) -> Result<(
-    std::io::PipeReader,
-    std::io::PipeWriter,
-    crate::protocollo::handshake::HandshakeAccettato,
-    FiglioVivo<std::process::Child>,
-)> {
+) -> std::result::Result<
+    (
+        std::io::PipeReader,
+        std::io::PipeWriter,
+        crate::protocollo::handshake::HandshakeAccettato,
+        FiglioVivo<std::process::Child>,
+    ),
+    FallimentoDellHandshake,
+> {
     // Nessun `?` finche' `guardia` e' viva: un errore la lascerebbe cadere
     // col figlio dentro, e la sentinella di `FiglioVivo` interromperebbe il
     // processo invece di rendere l'errore.
@@ -529,49 +532,97 @@ fn concludi_handshake(
         causa
     };
     if let Err(causa) = rendi_non_bloccante(&lettore_grezzo) {
-        return Err(rinuncia(guardia, causa));
+        return Err(FallimentoDellHandshake::DelCanale(rinuncia(guardia, causa)));
     }
     let (spia, freno) = interruttore();
     let guardiano = match Guardiano::comincia(freno, spia.clone(), TETTO_DELLA_PAROLA) {
         Ok(guardiano) => guardiano,
-        Err(causa) => return Err(rinuncia(guardia, causa)),
+        Err(causa) => return Err(FallimentoDellHandshake::DelCanale(rinuncia(guardia, causa))),
     };
     let mut sorgente = SorgenteTerminabile::con_interruttore(lettore_grezzo, PASSO_DI_ATTESA, spia);
 
-    let esito = (|| -> Result<crate::protocollo::handshake::HandshakeAccettato> {
+    // Solo il giudizio su una `Risposta` arrivata per intero e' un fatto
+    // accertato; scrivere il saluto e leggere la risposta sono il canale.
+    let esito = (|| -> std::result::Result<_, FallimentoDellHandshake> {
         let saluto = Frame::nuovo(Corpo::Saluto(Box::new(supervisore.saluto().clone())));
-        prova::scrivi(&mut scrittore, &codifica(&saluto)?)?;
-        let Some(frame) = leggi_frame(&mut sorgente)? else {
-            return Err(non_disponibile(
+        codifica(&saluto)
+            .and_then(|byte| prova::scrivi(&mut scrittore, &byte))
+            .map_err(FallimentoDellHandshake::DelCanale)?;
+        let Some(frame) = leggi_frame(&mut sorgente).map_err(FallimentoDellHandshake::DelCanale)?
+        else {
+            return Err(FallimentoDellHandshake::DelCanale(non_disponibile(
                 "prova",
                 &format!("il {soggetto} ha chiuso senza rispondere al saluto"),
-            ));
+            )));
         };
-        supervisore.ricevi(frame)
+        supervisore
+            .ricevi(frame)
+            .map_err(FallimentoDellHandshake::DelGiudizio)
     })();
     let stato_guardiano = guardiano.ferma_e_raccogli();
     let lettore = sorgente.dentro();
 
     match esito {
         Ok(accordo) => Ok((lettore, scrittore, accordo, guardia)),
-        Err(causa) => {
-            let (_uscita, difetti_di_pulizia) = super::prova::chiudi(guardia, Some(&causa));
+        Err(fallimento) => {
+            let (_uscita, difetti_di_pulizia) =
+                super::prova::chiudi(guardia, Some(fallimento.causa()));
             for difetto in &difetti_di_pulizia {
                 eprintln!("plenora: pulizia del {soggetto} isolato: {difetto}");
             }
             drop(scrittore);
+            // Un guardiano scaduto dice che la parola non e' arrivata in
+            // tempo: qualunque cosa sia seguita, non e' un giudizio.
             Err(if stato_guardiano == StatoDelGuardiano::Scaduto {
-                non_disponibile(
+                FallimentoDellHandshake::DelCanale(non_disponibile(
                     "prova",
                     &format!(
                         "l'handshake col {soggetto} isolato non si e' concluso entro {} secondi: \
-                         {causa}",
-                        TETTO_DELLA_PAROLA.as_secs()
+                         {}",
+                        TETTO_DELLA_PAROLA.as_secs(),
+                        fallimento.causa()
                     ),
-                )
+                ))
             } else {
-                causa
+                fallimento
             })
+        }
+    }
+}
+
+/// Da dove viene il fallimento di un handshake, perche' la rilettura
+/// dell'evidenza lo pesa diversamente.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+enum FallimentoDellHandshake {
+    /// Il canale: il saluto non si scrive, la risposta non arriva o arriva
+    /// troncata, il guardiano scade. Un dominio che poi va terminato con
+    /// `cgroup.kill` rende l'esito ambiguo.
+    DelCanale(PlenoraError),
+    /// Il giudizio del supervisore su una `Risposta` arrivata per intero:
+    /// protocollo, artefatto, resolver, ambiente o capability incompatibili
+    /// (righe 9 e 10 della matrice). E' un fatto accertato, e una quiescenza
+    /// tardiva non lo rende ambiguo.
+    DelGiudizio(PlenoraError),
+}
+
+#[cfg(target_os = "linux")]
+impl FallimentoDellHandshake {
+    const fn causa(&self) -> &PlenoraError {
+        match self {
+            Self::DelCanale(causa) | Self::DelGiudizio(causa) => causa,
+        }
+    }
+
+    /// Rilegge la causa alla luce dell'evidenza del dominio.
+    fn rileggi(
+        self,
+        evidenza: macchina::EvidenzaDaPrimaDelloSpawn,
+        soggetto: &str,
+    ) -> PlenoraError {
+        match self {
+            Self::DelCanale(causa) => evidenza.rileggi_il_fallimento(soggetto, causa),
+            Self::DelGiudizio(causa) => evidenza.rileggi_il_giudizio(soggetto, causa),
         }
     }
 }
@@ -689,7 +740,7 @@ fn esegui_il_worker(
         guardia,
     ) {
         Ok(quattro) => quattro,
-        Err(causa) => return Err(evidenza.rileggi_il_fallimento("worker", causa)),
+        Err(fallimento) => return Err(fallimento.rileggi(evidenza, "worker")),
     };
 
     // --- l'incarico, sullo stesso canale ------------------------------------
@@ -983,7 +1034,7 @@ fn dialoga_con_verificatore(
         guardia,
     ) {
         Ok(quattro) => quattro,
-        Err(causa) => return Err(evidenza.rileggi_il_fallimento("verificatore", causa)),
+        Err(fallimento) => return Err(fallimento.rileggi(evidenza, "verificatore")),
     };
 
     // --- l'incarico di verifica, sullo stesso canale ------------------------

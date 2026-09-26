@@ -238,6 +238,9 @@ pub(super) struct Contorno<P: ProcessoFiglio> {
     pub(super) raccolta: Option<String>,
     /// Il dominio che non si e' lasciato terminare.
     pub(super) terminazione: Option<String>,
+    /// Il dominio che, terminato, non si e' svuotato entro l'attesa: processi
+    /// possono esservi rimasti anche se `cgroup.kill` si e' scritto.
+    pub(super) abitato: Option<String>,
     /// L'`Annulla` che non si e' potuto mandare.
     ///
     /// Separato dagli altri perche' dice una cosa sua: il worker **non ha
@@ -263,6 +266,7 @@ impl<P: ProcessoFiglio> Default for Contorno<P> {
             drenaggio: None,
             raccolta: None,
             terminazione: None,
+            abitato: None,
             annulla: None,
             figlio_non_raccolto: None,
         }
@@ -283,6 +287,7 @@ impl<P: ProcessoFiglio> Contorno<P> {
         tutte.extend(self.drenaggio.clone());
         tutte.extend(self.raccolta.clone());
         tutte.extend(self.terminazione.clone());
+        tutte.extend(self.abitato.clone());
         tutte.extend(self.annulla.clone());
         tutte.sort();
         tutte.dedup();
@@ -745,7 +750,7 @@ fn guarda_che_si_sia_svuotato<O: Osservatore>(
             }
         }
         if std::time::Instant::now() >= fine {
-            difetti.resoconti.push(format!(
+            difetti.abitato = Some(format!(
                 "il dominio non si e' svuotato entro {} ms dalla forzatura",
                 entro.as_millis()
             ));

@@ -1105,6 +1105,48 @@ fn rinunciare_su_un_dominio_che_non_si_svuota_lo_dichiara() {
     );
 }
 
+/// **Un `cgroup.kill` riuscito non vuol dire un dominio vuoto.** La forzatura
+/// si scrive, il dominio resta abitato oltre l'attesa: il contorno lo porta
+/// come fatto a se', perche' l'errore di chi ha chiamato lo deve dire anche
+/// senza un difetto di terminazione.
+#[test]
+fn rinunciare_col_kill_riuscito_e_il_dominio_abitato_lo_dichiara() {
+    let (coda, fascio) = super::super::coda::apri();
+    drop(fascio.lettore);
+    drop(fascio.orologio);
+    drop(fascio.sorvegliante);
+    let annullatore = super::Annullatore::nuovo(fascio.annullatore);
+    let dominio = Dominio::che_si_svuota_dopo(usize::MAX);
+
+    let (esito, difetti) = super::rinuncia(
+        "sorvegliante",
+        &std::io::Error::from(std::io::ErrorKind::OutOfMemory),
+        Vec::new(),
+        &annullatore,
+        super::PerChiudere {
+            raccoglitore: fascio.raccoglitore,
+            figlio: FiglioVivo::nuovo(GiaUscito(Uscita::Codice(0))),
+            terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
+            coda,
+            tetto_del_drenaggio: Duration::from_millis(500),
+            attesa_della_quiescenza: Duration::from_millis(30),
+        },
+        Some(GuardaIlDominio(std::sync::Arc::clone(&dominio))),
+        super::Contorno::default(),
+    );
+
+    assert!(matches!(esito, Err(Impedimento::ProduttoreNonNato { .. })));
+    assert_eq!(difetti.terminazione, None);
+    assert!(
+        difetti
+            .abitato
+            .as_deref()
+            .is_some_and(|motivo| motivo.contains("non si e' svuotato entro")),
+        "manca il dominio rimasto abitato: {:?}",
+        difetti.abitato
+    );
+}
+
 /// **Senza nessuno che possa guardare, la rinuncia lo dichiara.**
 ///
 /// L'osservatore torna in un `Option` perche' la cella condivisa potrebbe, in

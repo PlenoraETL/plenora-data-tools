@@ -335,3 +335,75 @@ fn la_cancellazione_resta_davanti_alla_pressione_non_attribuita() {
         "{errore}"
     );
 }
+
+/// Il giudizio su una `Risposta` intera resta tale anche se il dominio si
+/// svuota solo con `cgroup.kill`: nessuna quiescenza tardiva rende ambiguo un
+/// fatto (righe 9 e 10 della matrice).
+#[test]
+fn il_giudizio_dell_handshake_non_diventa_ambiguo_col_kill() {
+    for causa in [
+        plenora_core::PlenoraError::InvalidConfiguration("resolver diverso".to_owned()),
+        plenora_core::PlenoraError::Protocol("artefatto diverso".to_owned()),
+    ] {
+        let (_base, radice, padre, dominio) = gerarchia();
+        scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+        scrivi_antenato(&padre, 0);
+        scrivi_antenato(&radice, 0);
+        popolato(&dominio, true);
+        let evidenza = evidenza_su(&radice, &dominio);
+        let kernel = svuota_al_kill(&dominio);
+        let attesa = causa.category();
+
+        let errore = evidenza.rileggi_il_giudizio("worker", causa);
+        kernel.join().expect("kernel finto");
+        assert_eq!(errore.category(), attesa, "{errore}");
+    }
+}
+
+/// La stessa categoria dal **canale** — un payload troncato e' `Protocol` —
+/// non e' un giudizio: col dominio svuotato solo da `cgroup.kill` l'esito e'
+/// ambiguo. La provenienza decide, non la categoria.
+#[test]
+fn un_protocol_dal_canale_col_kill_e_ambiguo() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, true);
+    let evidenza = evidenza_su(&radice, &dominio);
+    let kernel = svuota_al_kill(&dominio);
+
+    let errore = evidenza.rileggi_il_fallimento(
+        "worker",
+        plenora_core::PlenoraError::Protocol("payload troncato".to_owned()),
+    );
+    kernel.join().expect("kernel finto");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::Internal,
+        "{errore}"
+    );
+    assert!(errore.to_string().contains("ambiguo"), "{errore}");
+}
+
+/// Il giudizio cede comunque all'evidenza che attribuisce.
+#[test]
+fn il_giudizio_cede_all_oom_attribuito() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, false);
+    let evidenza = evidenza_su(&radice, &dominio);
+    scrivi_dominio(&dominio, 1, 1, 1, 3, 4096);
+
+    let errore = evidenza.rileggi_il_giudizio(
+        "worker",
+        plenora_core::PlenoraError::Protocol("artefatto diverso".to_owned()),
+    );
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{errore}"
+    );
+}
