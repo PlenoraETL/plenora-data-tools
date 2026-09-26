@@ -54,7 +54,8 @@ use plenora_core::{ErrorPhase, PlenoraError, Result};
 
 use crate::geo_transport::error::ArrowTransportError;
 use crate::geo_transport::ipc::{
-    descrivi_panico, validate_ipc_file_framing, validate_ipc_stream_framing, SeekSource,
+    descrivi_panico, valida_file_e_rendi_footer, validate_ipc_file_framing,
+    validate_ipc_stream_framing, SeekSource,
 };
 pub use crate::geo_transport::ipc::{IpcLimits, DEFAULT_MAX_BODY_BYTES, MAX_TOTAL_IPC_MESSAGES};
 
@@ -710,15 +711,82 @@ pub fn open(path: &Path, limits: &IpcLimits) -> Result<(SchemaRef, BoundaryBatch
     open_with_format(path, format, limits)
 }
 
-/// Schema dell'header IPC di un ingresso (file o stream format): nessuna riga
-/// di dati letta, ma framing pre-validato e schema letto dentro la barriera.
+/// Schema dell'header IPC di un ingresso (file o stream format): framing
+/// pre-validato, schema letto dentro la barriera, e **nessun dato decodificato**
+/// — ne' righe ne' dizionari.
+///
+/// # Perche' il file format non passa da `FileReader`
+///
+/// Perche' `FileReader::try_new` decodifica **tutti** i dizionari prima di
+/// rendere lo schema: fino a `max_retained_dictionary_body_bytes` di valori
+/// per ingresso, allocati da chi vuole soltanto sapere che forma hanno le
+/// colonne. Sul profilo isolato chi lo chiede e' il coordinatore, che non ha
+/// un dominio: sono allocazioni che dipendono dai dati e precedono
+/// l'autorizzazione (`F4-5`).
+///
+/// Lo schema di un file sta nel footer, e il footer l'ha gia' letto la
+/// convalida: [`schema_dal_footer`] lo ricava da **quei** byte, con gli stessi
+/// controlli che fa `FileReaderBuilder::build` prima dei dizionari. Lo stream
+/// format non ha il problema: `StreamReader::try_new` legge il solo messaggio
+/// di schema, e i dizionari arrivano con i batch.
 ///
 /// # Errors
 ///
 /// Come [`open_with_format`].
 pub fn header_schema(path: &Path, limits: &IpcLimits) -> Result<SchemaRef> {
-    let (schema, _) = open(path, limits)?;
-    Ok(schema)
+    match sniff_format(path)? {
+        IpcFormat::File => {
+            let file = File::open(path)
+                .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?;
+            let total_len = file
+                .metadata()
+                .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?
+                .len();
+            let mut source = SeekSource::new(file, total_len);
+            let footer = valida_file_e_rendi_footer(&mut source, limits).map_err(read_error)?;
+            guarded(|| schema_dal_footer(&footer))
+        }
+        IpcFormat::Stream => {
+            let (schema, _) = open_with_format(path, IpcFormat::Stream, limits)?;
+            Ok(schema)
+        }
+    }
+}
+
+/// Lo schema dai byte di un footer **gia' convalidato**.
+///
+/// Ripete, nello stesso ordine, cio' che `FileReaderBuilder::build` di
+/// `arrow-ipc` 59.2.0 fa prima di toccare i dizionari: verifica `FlatBuffer` con
+/// le opzioni di default, vettore dei record batch presente (anche vuoto),
+/// schema presente, endianness del sistema. Dove arrow fa `unwrap()` sullo
+/// schema assente, qui c'e' un errore; `fb_to_schema`, che
+/// puo' andare in panico, gira dentro la barriera di chi chiama.
+///
+/// I messaggi non riportano i byte del footer ne' il testo del verificatore:
+/// sono fatti dell'ingresso, non del difetto.
+fn schema_dal_footer(footer: &[u8]) -> Result<SchemaRef> {
+    let illeggibile = |motivo: &str| {
+        PlenoraError::DataMapping(format!("footer IPC non utilizzabile: {motivo}"))
+            .with_phase(ErrorPhase::Read)
+    };
+    let footer = plenora_core::arrow::ipc::root_as_footer(footer)
+        .map_err(|_| illeggibile("il FlatBuffer non supera la verifica"))?;
+    // Assente e vuoto non sono la stessa cosa: arrow rifiuta il primo e
+    // accetta il secondo, e cosi' qui.
+    if footer.recordBatches().is_none() {
+        return Err(illeggibile("il vettore dei record batch manca"));
+    }
+    let schema = footer
+        .schema()
+        .ok_or_else(|| illeggibile("lo schema manca"))?;
+    if !schema.endianness().equals_to_target_endianness() {
+        return Err(illeggibile(
+            "l'endianness della sorgente non e' quella di questo sistema",
+        ));
+    }
+    Ok(std::sync::Arc::new(
+        plenora_core::arrow::ipc::convert::fb_to_schema(schema),
+    ))
 }
 
 /// Limiti del confine derivati dai limiti effettivi del piano.

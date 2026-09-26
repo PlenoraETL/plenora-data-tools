@@ -934,3 +934,149 @@ fn una_variante_impossibile_al_confine_e_un_errore_interno() {
         );
     }
 }
+
+/// Un file format con una colonna dictionary il cui unico valore e' `valore`.
+fn scrivi_file_con_dizionario(path: &std::path::Path, valore: &str) {
+    let array = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(vec![0, 0]),
+        Arc::new(StringArray::from(vec![valore])),
+    )
+    .expect("dictionary valido");
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "etichetta",
+        array.data_type().clone(),
+        false,
+    )]));
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).expect("batch valido");
+    let file = fs::File::create(path).expect("create");
+    let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
+    writer.write(&batch).expect("write");
+    writer.finish().expect("finish");
+}
+
+/// `header_schema` non decodifica i dizionari (`F4-5`): un dizionario i cui
+/// valori non sono UTF-8 fa fallire chi lo decodifica — `open`, cioe'
+/// `FileReader::try_new` — e lascia intatto chi legge soltanto lo schema.
+///
+/// E' l'osservabile della differenza: se `header_schema` tornasse a passare
+/// da `FileReader`, questo test fallirebbe sull'`expect` dello schema.
+#[test]
+fn lo_schema_del_file_format_non_decodifica_i_dizionari() {
+    const SEGNO: &str = "SEGNOZQXJKVWY";
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("dizionario-rotto.arrow");
+    scrivi_file_con_dizionario(&path, SEGNO);
+
+    let mut byte = fs::read(&path).expect("read");
+    let occorrenze: Vec<usize> = byte
+        .windows(SEGNO.len())
+        .enumerate()
+        .filter(|(_, finestra)| *finestra == SEGNO.as_bytes())
+        .map(|(posizione, _)| posizione)
+        .collect();
+    assert_eq!(
+        occorrenze.len(),
+        1,
+        "il valore deve comparire una volta sola"
+    );
+    for posto in &mut byte[occorrenze[0]..occorrenze[0] + SEGNO.len()] {
+        *posto = 0xFF;
+    }
+    fs::write(&path, &byte).expect("write");
+
+    assert!(
+        open(&path, &IpcLimits::default()).is_err(),
+        "la decodifica del dizionario deve fallire: senza, il test non discrimina"
+    );
+    let schema = header_schema(&path, &IpcLimits::default()).expect("schema dal footer");
+    assert_eq!(schema.fields().len(), 1);
+    assert_eq!(schema.field(0).name(), "etichetta");
+}
+
+/// Oracolo contro il percorso generico: sui file validi lo schema dal footer
+/// coincide con quello che rende `FileReader`, metadati compresi.
+#[test]
+fn lo_schema_dal_footer_coincide_con_quello_di_file_reader() {
+    let directory = tempfile::tempdir().expect("tempdir");
+
+    let semplice = directory.path().join("semplice.arrow");
+    write_file_format(&semplice);
+    let con_dizionario = directory.path().join("dizionario.arrow");
+    scrivi_file_con_dizionario(&con_dizionario, "alfa");
+    let con_metadati = directory.path().join("metadati.arrow");
+    {
+        let campo = Field::new("id", DataType::Int64, false).with_metadata(
+            std::iter::once(("chiave.campo".to_owned(), "valore".to_owned())).collect(),
+        );
+        let schema = Arc::new(Schema::new(vec![campo]).with_metadata(
+            std::iter::once(("chiave.schema".to_owned(), "valore".to_owned())).collect(),
+        ));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![7_i64]))],
+        )
+        .expect("batch valido");
+        let file = fs::File::create(&con_metadati).expect("create");
+        let mut writer = FileWriter::try_new(file, &schema).expect("writer");
+        writer.write(&batch).expect("write");
+        writer.finish().expect("finish");
+    }
+
+    for path in [&semplice, &con_dizionario, &con_metadati] {
+        let (atteso, _) = open(path, &IpcLimits::default()).expect("open");
+        let ottenuto = header_schema(path, &IpcLimits::default()).expect("header_schema");
+        assert_eq!(ottenuto, atteso, "{}", path.display());
+    }
+}
+
+/// Lo stream format resta sul percorso di `StreamReader`, che legge il solo
+/// messaggio di schema: stesso schema di `open`.
+#[test]
+fn lo_schema_dello_stream_format_resta_quello_di_stream_reader() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("stream.arrows");
+    write_stream_format(&path);
+    let (atteso, _) = open(&path, &IpcLimits::default()).expect("open");
+    let ottenuto = header_schema(&path, &IpcLimits::default()).expect("header_schema");
+    assert_eq!(ottenuto, atteso);
+}
+
+/// Toglie dal footer il campo `recordBatches`, azzerandone la voce nella
+/// vtable `FlatBuffer`: il campo risulta assente, non vuoto.
+fn senza_record_batches(bytes: &mut [u8]) {
+    let inizio = usize::try_from(footer_start_of(bytes)).expect("footer_start");
+    let leggi_u32 = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().expect("u32"));
+    let tabella = inizio + usize::try_from(leggi_u32(bytes, inizio)).expect("radice");
+    let scarto = i32::from_le_bytes(bytes[tabella..tabella + 4].try_into().expect("soffset"));
+    let vtable = usize::try_from(i64::try_from(tabella).expect("tabella") - i64::from(scarto))
+        .expect("vtable");
+    // Campi del footer: version, schema, dictionaries, recordBatches (il
+    // quarto, indice 3), custom_metadata. La voce sta dopo i due u16 di testa.
+    let voce = vtable + 4 + 2 * 3;
+    assert_ne!(
+        u16::from_le_bytes(bytes[voce..voce + 2].try_into().expect("voce")),
+        0,
+        "il writer di arrow emette sempre recordBatches: senza, il test non discrimina"
+    );
+    bytes[voce..voce + 2].copy_from_slice(&0_u16.to_le_bytes());
+}
+
+/// Parita' con `FileReader`: un footer **senza** il vettore dei record batch
+/// e' rifiutato da entrambi i percorsi, non solo da quello che decodifica.
+#[test]
+fn un_footer_senza_record_batches_e_rifiutato_anche_dallo_schema() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("senza-blocchi.arrow");
+    write_file_format(&path);
+    let mut byte = fs::read(&path).expect("read");
+    senza_record_batches(&mut byte);
+    fs::write(&path, &byte).expect("write");
+
+    assert!(
+        open(&path, &IpcLimits::default()).is_err(),
+        "FileReader lo rifiuta"
+    );
+    let errore = header_schema(&path, &IpcLimits::default())
+        .expect_err("lo schema dal footer deve rifiutarlo come FileReader");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::DataMapping);
+}

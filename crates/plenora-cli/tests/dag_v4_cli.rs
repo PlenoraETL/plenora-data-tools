@@ -2557,3 +2557,128 @@ fn run_con_isolamento_non_esegue_mai_in_process() {
         assert!(stdout.contains("\"category\":\"unsupported\""), "{stdout}");
     }
 }
+
+/// Il tetto su `max_inputs` vale **prima** della scoperta dei contratti, che
+/// apre ogni ingresso (`F4-5`): con un input in piu' del massimo e percorsi
+/// che non esistono, l'errore e' il tetto e non l'apertura di un file.
+#[test]
+fn il_tetto_sugli_input_precede_l_apertura_dei_file() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let tetto = plenora_core::limits::Limits::default().plan.max_inputs;
+    let nomi: Vec<String> = (0..=tetto).map(|indice| format!("in{indice}")).collect();
+    let piano = json!({
+        "schema_version": 5,
+        "inputs": nomi,
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["in0"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+        ],
+        "output": "f",
+    });
+    let percorso_piano = directory.path().join("plan.json");
+    std::fs::write(&percorso_piano, serde_json::to_vec(&piano).expect("json")).expect("plan");
+    let uscita = directory.path().join("output.arrow");
+
+    let mut comando = cli();
+    comando.args(["run", "--plan"]).arg(&percorso_piano);
+    for nome in &nomi {
+        let assente = directory.path().join(format!("{nome}-assente.arrow"));
+        assert!(!assente.exists());
+        comando
+            .arg("--input")
+            .arg(format!("{nome}={}", assente.display()));
+    }
+    let risultato = comando
+        .arg("--output")
+        .arg(&uscita)
+        .output()
+        .expect("il processo si avvia");
+
+    assert!(!risultato.status.success());
+    let documento: serde_json::Value =
+        serde_json::from_slice(&risultato.stdout).expect("envelope JSON su stdout");
+    let messaggio = documento["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        messaggio.contains("max_inputs superato"),
+        "atteso il tetto, non l'apertura: {documento}"
+    );
+    assert_eq!(
+        documento["error"]["category"], "invalid_plan",
+        "{documento}"
+    );
+    assert!(!uscita.exists(), "nessun output parziale");
+}
+
+/// Esegue `comando` (`run` o `validate`) su un piano con `quanti` input
+/// dichiarati, tutti verso file che non esistono, e rende l'envelope.
+fn envelope_con_ingressi_assenti(
+    comando: &str,
+    quanti: usize,
+    limiti: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let nomi: Vec<String> = (0..quanti).map(|indice| format!("in{indice}")).collect();
+    let mut piano = json!({
+        "schema_version": 5,
+        "inputs": nomi,
+        "nodes": [
+            {"id": "f", "op": "table.filter", "in": ["in0"],
+             "config": {"column": "id", "operator": ">", "value": 0}},
+        ],
+        "output": "f",
+    });
+    if let Some(limiti) = limiti {
+        piano["limits"] = limiti;
+    }
+    let percorso_piano = directory.path().join("plan.json");
+    std::fs::write(&percorso_piano, serde_json::to_vec(&piano).expect("json")).expect("plan");
+
+    let mut processo = cli();
+    processo.args([comando, "--plan"]).arg(&percorso_piano);
+    for nome in &nomi {
+        let assente = directory.path().join(format!("{nome}-assente.arrow"));
+        processo
+            .arg("--input")
+            .arg(format!("{nome}={}", assente.display()));
+    }
+    if comando == "run" {
+        processo
+            .arg("--output")
+            .arg(directory.path().join("output.arrow"));
+    }
+    let risultato = processo.output().expect("il processo si avvia");
+    assert!(!risultato.status.success());
+    serde_json::from_slice(&risultato.stdout).expect("envelope JSON su stdout")
+}
+
+/// Anche `validate` applica il tetto prima di aprire gli input: passa dallo
+/// stesso accoppiamento di `run`.
+#[test]
+fn validate_applica_il_tetto_sugli_input_prima_di_aprirli() {
+    let tetto = plenora_core::limits::Limits::default().plan.max_inputs;
+    let documento = envelope_con_ingressi_assenti("validate", tetto + 1, None);
+    let messaggio = documento["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        messaggio.contains("max_inputs superato"),
+        "atteso il tetto, non l'apertura: {documento}"
+    );
+    assert_eq!(
+        documento["error"]["category"], "invalid_plan",
+        "{documento}"
+    );
+}
+
+/// Un piano che abbassa `max_inputs` vede il **proprio** tetto, con lo stesso
+/// messaggio del planner, e nessun file viene aperto.
+#[test]
+fn il_tetto_anticipato_e_quello_abbassato_dal_piano() {
+    for comando in ["run", "validate"] {
+        let documento =
+            envelope_con_ingressi_assenti(comando, 2, Some(json!({"plan": {"max_inputs": 1}})));
+        let messaggio = documento["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            messaggio.contains("max_inputs superato: 2 input > 1"),
+            "{comando}: atteso il tetto del piano: {documento}"
+        );
+    }
+}
