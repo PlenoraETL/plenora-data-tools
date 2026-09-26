@@ -973,7 +973,9 @@ dove il PID è davvero interrogabile, **un processo locale vivo blocca anche la
 rimozione per TTL**.
 
 **Regola:** il PID non è mai da solo motivo di rimozione, e la scadenza non
-prevale su una prova positiva di vita.
+prevale su una prova positiva di vita. Un lock che esiste e non si lascia
+leggere non vale come assente: la directory si tiene sempre, e la conta
+`kept_conservative`.
 **Ambito:** `plenora_engine::temp_store::scavenge_stale_temp_dirs`; la
 verifica reale del PID esiste solo su Linux.
 
