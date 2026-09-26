@@ -627,6 +627,46 @@ allocazioni**, che vale solo sui byte effettivamente pre-validati.
 Il rientro richiede uno snapshot immutabile disponibile su tutte le
 piattaforme supportate, senza imporre una copia dei dati.
 
+### Il coordinatore del profilo isolato legge fuori dal dominio
+
+**La regola.** Nel profilo isolato il coordinatore — il processo che esegue
+`run` — non ha un dominio, e prima dell'autorizzazione legge soltanto ciò che
+serve a validare il piano, con tetti **costanti**:
+
+| che cosa | tetto |
+|---|---|
+| il testo del piano | `MAX_CONTROL_JSON_BYTES`, 16 MiB |
+| quanti ingressi apre | `max_inputs` di default, 16, verificato **prima** della prima apertura: un piano può solo abbassarlo |
+| lo schema di un ingresso file format | il footer già convalidato, entro `max_metadata_bytes` (16 MiB): lo schema si ricava da quei byte, senza `FileReader`, quindi **senza decodificare i dizionari** |
+| lo schema di un ingresso stream format | il solo messaggio di schema, entro lo stesso tetto |
+
+Nessuna riga e nessun dizionario è decodificato fuori dal dominio: i dati li
+legge il worker, dentro il proprio `memory.max`. Dopo lo spawn il coordinatore
+legge frame del protocollo entro `MAX_PROTOCOL_FRAME_BYTES`, l'evidenza entro
+1 MiB per file, e pubblica copiando a blocchi di 64 KiB.
+
+**Il perimetro.** I tetti sono del confine, non del piano né della politica
+dell'host: un host con un tetto di dominio da 64 MiB ammette comunque un
+coordinatore che legge un footer da 16 MiB. Gli ingressi si leggono **in
+sequenza**, e di ciascuno resta solo lo schema.
+
+**Il pericolo.** Due, distinti:
+
+- il rifiuto per politica dell'host assente arriva **dopo** la lettura degli
+  schemi: un host non configurato paga quelle letture per un'esecuzione che non
+  partirà;
+- sullo **stream format** resta la finestra di
+  [Finestra TOCTOU sull'ingresso IPC](#finestra-toctou-sullingresso-ipc):
+  `StreamReader` rilegge dal file la lunghezza del messaggio di schema, e un
+  file mutato sul posto dopo la convalida può dichiararne una che nessun tetto
+  ha visto. Sul file format la finestra per lo schema non c'è, perché i byte
+  sono quelli convalidati.
+
+**La condizione di rientro.** La scoperta dei contratti dentro un dominio — il
+worker la ripete già, e il coordinatore potrebbe riceverne l'esito invece di
+calcolarlo — oppure lo schema stream ricavato dai byte convalidati, come per il
+file format.
+
 ### Lo spill dimensiona un buffer su una lunghezza dichiarata
 
 **La regola.** Nei confini che leggono da una sorgente **non fidata** — il

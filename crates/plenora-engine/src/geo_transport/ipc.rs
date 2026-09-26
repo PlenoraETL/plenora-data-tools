@@ -1338,6 +1338,36 @@ pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
     limits: &IpcLimits,
     chiave: Option<&str>,
 ) -> Result<Option<String>, ArrowTransportError> {
+    valida_file(source, limits, chiave).map(|(trovato, _)| trovato)
+}
+
+/// Convalida il file **e** rende i byte del footer che la convalida ha letto.
+///
+/// # Perche' i byte e non un secondo accesso al file
+///
+/// Perche' sono gli stessi byte che la traversata rinforzata ha percorso, letti
+/// una volta sola entro `max_metadata_bytes`. Rileggerli dal file — come fa
+/// `FileReader`, che riprende la lunghezza dal trailer — riaprirebbe la
+/// finestra fra la convalida e la lettura: un file cambiato sul posto nel
+/// frattempo dichiarerebbe un footer che nessun tetto ha visto.
+///
+/// # Errors
+///
+/// Come [`validate_ipc_file_framing`].
+pub fn valida_file_e_rendi_footer<S: IpcSource + ?Sized>(
+    source: &mut S,
+    limits: &IpcLimits,
+) -> Result<Vec<u8>, ArrowTransportError> {
+    valida_file(source, limits, None).map(|(_, footer)| footer)
+}
+
+/// Il corpo comune delle due convalide pubbliche del file format: il valore
+/// della chiave richiesta, se c'e', e i byte del footer.
+fn valida_file<S: IpcSource + ?Sized>(
+    source: &mut S,
+    limits: &IpcLimits,
+    chiave: Option<&str>,
+) -> Result<(Option<String>, Vec<u8>), ArrowTransportError> {
     let total = source.total_len();
     if total < ARROW_FILE_HEADER_BYTES + ARROW_FILE_TRAILER_BYTES {
         return Err(ArrowTransportError::IpcTruncated);
@@ -1420,7 +1450,7 @@ pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
             ))?;
         verifica_tetto_dizionari(dizionari, tetto)?;
     }
-    Ok(trovato)
+    Ok((trovato, footer))
 }
 
 /// Percorre il footer: lo Schema (che `fb_to_schema` leggera') e i vettori di

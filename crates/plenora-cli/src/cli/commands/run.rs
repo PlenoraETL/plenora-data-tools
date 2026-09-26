@@ -48,6 +48,18 @@ pub fn run_dag(
     }
     let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
     let pairs = pair_v4_inputs(&probe, inputs)?;
+    // Il tetto sul numero di input si applica anche in `planner::validate`, ma
+    // dopo la scoperta dei contratti, che apre ogni file. Qui vale lo stesso
+    // tetto prima: un piano puo' solo abbassarlo, quindi il default e' gia' il
+    // massimo, e N aperture non sono un prezzo che un piano rifiutato paga.
+    let tetto_ingressi = plenora_core::limits::Limits::default().plan.max_inputs;
+    if pairs.len() > tetto_ingressi {
+        return Err(contract(format!(
+            "max_inputs superato: {} input > {tetto_ingressi}",
+            pairs.len()
+        ))
+        .into());
+    }
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
