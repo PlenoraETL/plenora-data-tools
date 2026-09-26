@@ -950,7 +950,9 @@ fn dialoga_con_verificatore(
                 "plenora: pulizia del verificatore isolato (cancellato appena nato): {difetto}"
             );
         }
-        return Err(causa);
+        // Anche qui il dominio e' nato: un OOM attribuito concorrente precede
+        // la cancellazione (§10.3), il resto no.
+        return Err(evidenza.rileggi_la_cancellazione("verificatore", causa));
     }
     eprintln!(
         "plenora: preflight del dominio del verificatore riuscito, pid {:?}: {:?}",

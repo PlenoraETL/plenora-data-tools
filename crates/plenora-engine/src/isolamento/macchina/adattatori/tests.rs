@@ -208,10 +208,10 @@ fn senza_eventi_resta_la_causa_del_dialogo() {
     );
 }
 
-/// Un dominio che non si svuota non si legge (`F4-10`): la causa resta quella
-/// del dialogo, anche se i contatori mostrerebbero un OOM.
+/// Un dominio che non si svuota nemmeno con `cgroup.kill` non si legge
+/// (`F4-10`), e l'errore lo dice: processi possono esserci rimasti.
 #[test]
-fn un_dominio_non_quiescente_non_si_legge() {
+fn un_dominio_che_non_si_svuota_nemmeno_col_kill_e_un_errore_interno() {
     let (_base, radice, padre, dominio) = gerarchia();
     scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
     scrivi_antenato(&padre, 0);
@@ -223,7 +223,115 @@ fn un_dominio_non_quiescente_non_si_legge() {
     let errore = evidenza.rileggi_il_fallimento("worker", causa_del_dialogo());
     assert_eq!(
         errore.category(),
-        plenora_core::ErrorCategory::IsolationUnavailable,
+        plenora_core::ErrorCategory::Internal,
+        "{errore}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dominio.join("cgroup.kill")).expect("cgroup.kill scritto"),
+        "1"
+    );
+}
+
+/// Il kernel finto: svuota il dominio quando compare `cgroup.kill`.
+fn svuota_al_kill(dominio: &Path) -> std::thread::JoinHandle<()> {
+    let dominio = dominio.to_path_buf();
+    std::thread::spawn(move || {
+        for _ in 0..400 {
+            if dominio.join("cgroup.kill").exists() {
+                popolato(&dominio, false);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    })
+}
+
+/// Svuotato solo da `cgroup.kill`, senza evidenza che attribuisca: la §10.3
+/// chiama ambiguo l'esito, e la causa del dialogo da sola non basta.
+#[test]
+fn terminato_col_kill_senza_evidenza_e_ambiguo() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, true);
+    let evidenza = evidenza_su(&radice, &dominio);
+    let kernel = svuota_al_kill(&dominio);
+
+    let errore = evidenza.rileggi_il_fallimento("worker", causa_del_dialogo());
+    kernel.join().expect("kernel finto");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::Internal,
+        "{errore}"
+    );
+    assert!(errore.to_string().contains("ambiguo"), "{errore}");
+}
+
+/// Terminato con `cgroup.kill`, ma l'evidenza attribuisce: resta l'OOM.
+#[test]
+fn terminato_col_kill_con_oom_attribuito_resta_resource_limit() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, true);
+    let evidenza = evidenza_su(&radice, &dominio);
+    scrivi_dominio(&dominio, 1, 1, 1, 3, 4096);
+    let kernel = svuota_al_kill(&dominio);
+
+    let errore = evidenza.rileggi_il_fallimento("worker", causa_del_dialogo());
+    kernel.join().expect("kernel finto");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{errore}"
+    );
+}
+
+fn cancellazione() -> plenora_core::PlenoraError {
+    plenora_core::PlenoraError::Cancelled {
+        node: "verificatore".to_owned(),
+        operation: "dominio isolato".to_owned(),
+        execution_id: String::new(),
+        reason: "cancellato appena nato".to_owned(),
+    }
+}
+
+/// La cancellazione cede al solo OOM attribuito (§10.3)...
+#[test]
+fn la_cancellazione_cede_all_oom_attribuito() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, false);
+    let evidenza = evidenza_su(&radice, &dominio);
+    scrivi_dominio(&dominio, 1, 1, 1, 3, 4096);
+
+    let errore = evidenza.rileggi_la_cancellazione("verificatore", cancellazione());
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{errore}"
+    );
+}
+
+/// ...e non a una pressione che non attribuisce.
+#[test]
+fn la_cancellazione_resta_davanti_alla_pressione_non_attribuita() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, false);
+    let evidenza = evidenza_su(&radice, &dominio);
+    scrivi_dominio(&dominio, 1, 0, 0, 3, 4096);
+
+    let errore = evidenza.rileggi_la_cancellazione("verificatore", cancellazione());
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::Cancelled,
         "{errore}"
     );
 }

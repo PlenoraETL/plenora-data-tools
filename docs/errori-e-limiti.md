@@ -2526,8 +2526,15 @@ nel «prima» e il delta lo cancellava.
 
 **Il perimetro.** L'evidenza si legge solo a dominio quiescente, come nella
 conduzione (`F4-10`). Se la quiescenza non arriva entro l'attesa della
-conduzione (500 ms), resta la causa del dialogo, e stderr lo dice: è la
-garanzia indebolita, perché in quel caso un OOM resterebbe senza nome.
+conduzione (500 ms), il dominio si termina con `cgroup.kill` e si riattende,
+come prescrive la §10.3 di [`isolamento.md`](isolamento.md): l'esito è allora
+ambiguo, e diventa `Internal` salvo un OOM attribuito. Una cancellazione
+osservata prima della conduzione cede al solo OOM attribuito.
+
+**Il pericolo.** Un dominio che non si svuota **nemmeno** dopo `cgroup.kill`
+non si legge: l'errore è `Internal` e dice che processi possono essere rimasti
+nel dominio, e la rimozione della directory del dominio fallisce e lo riporta
+su stderr.
 
 **La condizione di rientro.** Una conduzione che cominci allo spawn invece che
 dopo l'handshake, e sorvegli quindi l'intero intervallo con la stessa macchina.
