@@ -330,9 +330,15 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
     // Lock assente o corrotto: conservativo, cancella solo oltre
     // TTL*2 misurato sul mtime (del lock se esiste, della directory
     // altrimenti). Metadati illeggibili → mai cancellare.
-    let mtime = fs::metadata(&lock_path)
-        .or_else(|_| fs::metadata(path))
-        .and_then(|metadata| metadata.modified())
+    // Il mtime della directory sostituisce quello del lock solo se il lock
+    // **non esiste**: un lock che c'e' e non si lascia misurare non si
+    // rimpiazza con un altro orologio, e la directory si tiene.
+    let mtime = match fs::metadata(&lock_path) {
+        Ok(metadata) => Ok(metadata),
+        Err(errore) if errore.kind() == std::io::ErrorKind::NotFound => fs::metadata(path),
+        Err(errore) => Err(errore),
+    }
+    .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
     match mtime {
