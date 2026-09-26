@@ -97,3 +97,46 @@ fn vertici_ripetuti_non_sono_una_punta() {
 fn un_vertice_quasi_collineare_non_e_una_punta() {
     accettato("POLYGON((0 0,10 0,5 1e-300,0 10,0 0))");
 }
+
+/// Un `Triangle` coi vertici collineari e' degenere anche a coordinate
+/// estreme, dove il determinante di `robust::orient2d` trabocca in NaN e la
+/// validazione di `geo` lo lascia passare.
+///
+/// Passa da `predicates::evaluate`, che valida entrambi gli operandi prima di
+/// calcolare: un'operazione che trabocca per conto suo — il centroide di un
+/// triangolo cosi' grande — renderebbe un errore comunque, e nasconderebbe
+/// l'esito della validazione. Il WKT non ha `TRIANGLE`.
+#[test]
+fn un_triangolo_collineare_a_coordinate_estreme_e_rifiutato() {
+    use geo::{Coord, Geometry, Point, Triangle};
+    use plenora_kernels_geo::predicates::{evaluate, PredicateError, SpatialPredicate};
+
+    let lontano = 2_f64.powi(600);
+    let punto = Geometry::Point(Point::new(1.0, 1.0));
+    let degenere = Geometry::Triangle(Triangle::new(
+        Coord { x: 0.0, y: 0.0 },
+        Coord {
+            x: lontano,
+            y: lontano,
+        },
+        Coord {
+            x: 2.0 * lontano,
+            y: 2.0 * lontano,
+        },
+    ));
+    let esito = evaluate(&degenere, &punto, SpatialPredicate::Intersects);
+    assert!(
+        matches!(
+            esito,
+            Err(PredicateError::InvalidGeometry { side: "left", .. })
+        ),
+        "un triangolo degenere non e' valido: {esito:?}"
+    );
+
+    let vero = Geometry::Triangle(Triangle::new(
+        Coord { x: 0.0, y: 0.0 },
+        Coord { x: lontano, y: 0.0 },
+        Coord { x: 0.0, y: lontano },
+    ));
+    assert!(evaluate(&vero, &punto, SpatialPredicate::Intersects).is_ok());
+}

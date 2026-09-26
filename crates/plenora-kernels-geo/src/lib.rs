@@ -430,6 +430,26 @@ fn poligono_con_punta(poligono: &geo::Polygon<f64>) -> bool {
         .any(anello_con_punta)
 }
 
+/// Un triangolo coi tre vertici collineari, col segno **esatto**.
+///
+/// # Perche' non basta `geo`
+///
+/// Perche' la validazione di `Triangle` in `geo` 0.33.1 chiama
+/// `robust::orient2d` direttamente e ne confronta il risultato con zero: su
+/// coordinate estreme il determinante trabocca, il risultato e' NaN, e
+/// `NaN == 0` e' falso — un triangolo degenere passa. Il kernel robusto di
+/// `geo` scelto dal progetto da' invece il segno esatto su ogni `f64` finito.
+/// Le coordinate non finite restano a `geo`, con la loro ragione.
+fn triangolo_degenere(triangolo: &geo::Triangle<f64>) -> bool {
+    use geo::algorithm::kernels::{Kernel, Orientation, RobustKernel};
+
+    let vertici = [triangolo.0, triangolo.1, triangolo.2];
+    vertici
+        .iter()
+        .all(|vertice| vertice.x.is_finite() && vertice.y.is_finite())
+        && RobustKernel::orient2d(vertici[0], vertici[1], vertici[2]) == Orientation::Collinear
+}
+
 impl AnelliSemplici for geo::Polygon<f64> {
     fn ha_un_anello_con_punta(&self) -> bool {
         poligono_con_punta(self)
@@ -454,11 +474,10 @@ impl AnelliSemplici for Geometry<f64> {
             Self::Polygon(poligono) => poligono_con_punta(poligono),
             Self::MultiPolygon(poligoni) => poligoni.ha_un_anello_con_punta(),
             Self::GeometryCollection(collezione) => collezione.ha_un_anello_con_punta(),
-            // Un `Rect` o un `Triangle` degeneri hanno la propria validazione in
-            // `geo`, e l'inviluppo di un punto e' un `Rect` degenere legittimo:
-            // qui si guardano solo i poligoni, la forma in cui il difetto sta.
+            Self::Triangle(triangolo) => triangolo_degenere(triangolo),
+            // Un `Rect` degenere ha la propria validazione in `geo`, e
+            // l'inviluppo di un punto e' un `Rect` degenere legittimo.
             Self::Rect(_)
-            | Self::Triangle(_)
             | Self::Point(_)
             | Self::Line(_)
             | Self::LineString(_)
