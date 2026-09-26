@@ -8,6 +8,9 @@ use libfuzzer_sys::fuzz_target;
 use plenora_engine::{execute_batch, Limits, Plan, Step};
 use serde_json::{json, Value};
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 fn fixture(payload: &[u8]) -> RecordBatch {
     let rows = payload.chunks(4).take(128).enumerate().collect::<Vec<_>>();
     let texts = rows
@@ -122,7 +125,7 @@ fn case(selector: usize) -> (&'static str, Value) {
     cases[selector % cases.len()].clone()
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let (operation, config) = case(payload.first().copied().unwrap_or_default().into());
     let plan = Plan {
         schema_version: 1,

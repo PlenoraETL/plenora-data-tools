@@ -323,15 +323,19 @@ impl ArrowTransportError {
 
         match self {
             Self::Interno(_) | Self::Internal(_) | Self::ArrowPanic(_) => true,
-            Self::Kernel(O::ValidazioneNonConclusa(_) | O::Internal(_))
+            Self::Kernel(
+                O::ValidazioneNonConclusa(_) | O::CalcoloNonConcluso(_) | O::Internal(_),
+            )
             | Self::Topology(T::ValidazioneNonConclusa(_))
             | Self::Construction(C::ValidazioneNonConclusa(_))
             | Self::Advanced(A::ValidazioneNonConclusa(_))
             | Self::Extended(E::ValidazioneNonConclusa(_))
             | Self::ExtendedAlgorithm(Ea::ValidazioneNonConclusa(_) | Ea::Internal(_))
-            | Self::Predicate(P::ValidazioneNonConclusa(_))
+            | Self::Predicate(P::ValidazioneNonConclusa(_) | P::CalcoloNonConcluso(_))
             | Self::Analysis(An::ValidazioneNonConclusa(_))
-            | Self::SpatialJoin(S::ValidazioneNonConclusa(_) | S::Internal(_)) => true,
+            | Self::SpatialJoin(
+                S::ValidazioneNonConclusa(_) | S::CalcoloNonConcluso(_) | S::Internal(_),
+            ) => true,
             #[cfg(feature = "proj-backend")]
             Self::Reproject(
                 plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa(_),
@@ -583,6 +587,28 @@ mod tests {
             let error = case.errore_del_passo();
             assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
             assert!(error.row_diagnostics().is_none());
+        }
+    }
+
+    /// **Un calcolo di `geo` non concluso e' interno.** Le tre varianti
+    /// `CalcoloNonConcluso` nascono su geometrie che hanno superato la
+    /// validazione: attribuirle al piano accuserebbe un ingresso valido.
+    #[test]
+    fn il_calcolo_non_concluso_dei_kernel_e_interno() {
+        let cases = [
+            ArrowTransportError::Kernel(OperationError::CalcoloNonConcluso("forma")),
+            ArrowTransportError::Predicate(
+                plenora_kernels_geo::predicates::PredicateError::CalcoloNonConcluso("forma"),
+            ),
+            ArrowTransportError::SpatialJoin(SpatialJoinError::CalcoloNonConcluso("forma")),
+        ];
+        for case in cases {
+            assert!(case.e_interna(), "non riconosciuto: {case}");
+            assert_eq!(
+                case.errore_del_passo().category(),
+                plenora_core::ErrorCategory::Internal,
+                "{case}"
+            );
         }
     }
 

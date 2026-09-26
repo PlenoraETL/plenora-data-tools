@@ -8,7 +8,10 @@ use libfuzzer_sys::fuzz_target;
 use plenora_engine::{execute_batch, Limits, Plan, Step};
 use serde_json::json;
 
-fuzz_target!(|payload: &[u8]| {
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let rows: Vec<Option<String>> = payload
         .chunks(32)
         .take(256)

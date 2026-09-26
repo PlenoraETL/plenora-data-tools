@@ -477,11 +477,10 @@ conta **solo se riproducibile sulla pinnata** — riproduzione e minimizzazione
 avvengono lì, prima di aprire una correzione — e la deroga va riesaminata a
 ogni bump di toolchain.
 
-Il target `arrow_transform` è **disattivato**, con la ragione scritta accanto:
-`libfuzzer` chiama `abort()` prima dell'unwinding, quindi il target resterebbe
-rosso a barriera funzionante, e un job perennemente rosso smette di essere
-letto. Va riattivato quando `arrow-rs` renderà fallibile la conversione dello
-schema (`apache/arrow-rs#10575`).
+Tutti i target sono nella matrice notturna. Ognuno installa l'hook comune,
+che tollera soltanto i panici attesi delle dipendenze dentro una barriera
+dichiarata: vedi
+[`errori-e-limiti.md`](errori-e-limiti.md#panici-attesi-nel-fuzzing).
 
 La campagna lunga ha **una scadenza per ciclo di rilascio**, dopo `PR-12`, sul
 candidato congelato: la tabella qui sopra è l'unico posto in cui quella
@@ -623,6 +622,9 @@ cambiata in modo incompatibile.
 | tetto cumulativo sui dizionari trattenuti | un file **Arrow valido**, con dizionari singolarmente entro ogni tetto per-messaggio, è rifiutato se la **somma** dei loro `bodyLength` supera `max_retained_dictionary_body_bytes`. Un file con dizionari `isDelta` è rifiutato sempre, a prescindere dal tetto: vedi [`errori-e-limiti.md`](errori-e-limiti.md#il-tetto-cumulativo-sui-dizionari) |
 | semplificazione con distanze non rappresentabili | `DouglasPeucker` rifiuta il calcolo con errore interno statico invece di proseguire con distanze non finite. Anche gli errori `Internal` di kernel scalare, algoritmo esteso e join spaziale conservano la categoria interna nel trasporto, senza diagnostica attribuita alle righe: vedi [`errori-e-limiti.md`](errori-e-limiti.md#semplificazione-rdp-e-scale-numeriche-miste) |
 | **una variante nuova in quattordici enum di `plenora-kernels-geo`** | `ValidazioneNonConclusa` in `AdvancedError`, `AnalysisError`, `ClusterError`, `ConstructionError`, `ExtendedError`, `ExtendedAlgorithmError`, `ExtensionError`, `ExtensionV2Error`, `ExtensionV3Error`, `OperationError`, `PredicateError`, `ProjBackendError`, `SpatialJoinError`, `TopologyError`. **Nessuno di questi enum è `#[non_exhaustive]`**: chi vi fa `match` esaustivo non compila più. Distingue la validazione OGC che **non ha concluso** — il validatore di `geo` si interrompe — dalla geometria dimostrata invalida, che prima finiva nella stessa variante «ingresso non valido». Comprimerle in una sola direbbe a chi legge di correggere un ingresso che nessuno ha giudicato: la stessa ragione per cui `ArrowPanic` è distinta da `Arrow`. Vedi [`errori-e-limiti.md`](errori-e-limiti.md) |
+| poligoni con un anello a **punta** rifiutati | tre vertici consecutivi collineari col terzo dalla stessa parte del primo rendono il poligono invalido, con la ragione «anello con auto-intersezione». Prima passavano, perché `geo` 0.33.1 non guarda le coppie di segmenti adiacenti, e su di loro `relate` rendeva risultati sbagliati in silenzio. Fail-closed: vedi [`errori-e-limiti.md`](errori-e-limiti.md#la-validazione-rifiuta-gli-anelli-con-una-punta) |
+| **una variante nuova in tre enum di `plenora-kernels-geo`** | `CalcoloNonConcluso` in `OperationError`, `PredicateError` e `SpatialJoinError`: chi vi fa `match` esaustivo non compila più. `relate` di `geo` che si interrompe su geometrie **valide** — in `point_on_surface`, nei predicati, nel predicato esatto dello spatial join — diventa un errore interno invece di un panico. Per la stessa ragione `predicates::evaluate_validated`, prima infallibile di fatto, può rendere `Err` |
+| `panic_policy::barriera_di_dipendenza` | superficie pubblica nuova di `plenora-core`, con `dentro_una_barriera_di_dipendenza`: distingue il panico atteso di una dipendenza da quello di una rete di sicurezza. Serve all'hook dei target di fuzz, ed è a disposizione di chi ne ospita uno proprio |
 | `geometry_diagnostics` rende errore dove prima **panicava** | chiamava `check_validation` di `geo` senza barriera: dove le asserzioni di debug sono attive, un ingresso come i reperti del fuzz faceva terminare il processo. Ora quel caso rende `ExtendedAlgorithmError::ValidazioneNonConclusa`. Chi la invocava in un binario con `debug-assertions` riceve perciò un `Err` dove prima non riceveva nulla. Dove la validazione **conclude** — cioè in `release`, e in debug su ingressi che non fanno panicare `geo` — resta un referto con `is_valid: false`, ma **`validity_reason` cambia**: portava il testo di `geo`, ora porta una delle sette ragioni controllate. Chi confrontava quella stringa non la ritrova, ed è la stessa sanitizzazione registrata più sopra per arrow, GEOS e PROJ. La funzione continua ad accettare la topologia invalida, che è il suo mestiere; non accetta di **dichiarare** invalida una geometria che nessuno ha giudicato, e per questo non scrive quel caso in `is_valid` |
 | una validazione interrotta non è più `InvalidPlan`, né nella trasformazione né nella misura | i percorsi dell'executor — trasformazione (`geo_transform_batch`/`transform_cells_fused`) e misura terminale (`geo_measure_batch`/`measure_cells`), fusi e non fusi — riscrivevano ogni fallimento del kernel scalare in `InvalidPlan` indipendentemente dalla categoria sotto. Ora rendono `Internal` quando la validazione OGC **non ha concluso**, **senza diagnostica di riga allegata**: mescolarla alle celle davvero invalide avrebbe misattribuito le altre. L'**exit code cambia da 2 a 70** per quegli input. Fra più interruzioni nello stesso batch resta la prima in ordine logico di riga, non quella calcolata per prima dal percorso fuso (che itera in parallelo). Vedi [`errori-e-limiti.md`](errori-e-limiti.md) |
 
@@ -634,8 +636,7 @@ un pacchetto Python: vedi [`stato-e-roadmap.md`](stato-e-roadmap.md).
 1. tutti i gate verdi su `main`;
 2. lavoro aperto di [`stato-e-roadmap.md`](stato-e-roadmap.md) chiuso fino al
    punto «Release» incluso;
-3. campagna fuzz completa eseguita, con `arrow_transform` riattivato o la sua
-   quarantena riconfermata per iscritto;
+3. campagna fuzz completa eseguita su tutti i target;
 4. bump di versione in `Cargo.toml`, `Cargo.lock` aggiornato con `--locked`
    verde;
 5. manifesto del candidato in `release/<versione>.json`, con lo step di

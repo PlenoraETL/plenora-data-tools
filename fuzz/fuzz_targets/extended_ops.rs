@@ -11,6 +11,9 @@ use libfuzzer_sys::fuzz_target;
 use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
 use serde_json::{json, Value};
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 fn plan(operation: &str, config: Value) -> ValidatedPlan {
     Plan {
         schema_version: 1,
@@ -93,7 +96,7 @@ fn assert_bounded(output: &RecordBatch, plan: &ValidatedPlan) {
         .all(|column| column.len() == output.num_rows()));
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let input = fixture(payload);
     let selector = payload.first().copied().unwrap_or_default() % 14;
     let unary = match selector {

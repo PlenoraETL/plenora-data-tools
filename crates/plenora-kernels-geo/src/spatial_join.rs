@@ -52,6 +52,11 @@ pub enum SpatialJoinError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// Il predicato esatto non ha concluso su geometrie **valide**: `relate`
+    /// si e' interrotta ([`crate::calcolo_protetto`]). Non accusa l'ingresso,
+    /// e porta la *forma* del payload, mai il contenuto.
+    #[error("predicato esatto non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -113,15 +118,23 @@ fn envelope_of_validated(
     Ok(Some(AABB::from_corners([min.x, min.y], [max.x, max.y])))
 }
 
-fn exact_match(left: &Geometry<f64>, right: &Geometry<f64>, predicate: JoinPredicate) -> bool {
-    match predicate {
+/// Il predicato esatto, dietro [`crate::calcolo_protetto`]: `contains` e i
+/// predicati DE-9IM passano da `relate`, che puo' andare in panico anche su
+/// geometrie valide.
+fn exact_match(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    predicate: JoinPredicate,
+) -> Result<bool, SpatialJoinError> {
+    crate::calcolo_protetto(|| match predicate {
         JoinPredicate::Intersects => left.intersects(right),
         JoinPredicate::Contains => left.contains(right),
         JoinPredicate::Within => right.contains(left),
         JoinPredicate::Crosses => left.relate(right).is_crosses(),
         JoinPredicate::Overlaps => left.relate(right).is_overlaps(),
         JoinPredicate::Touches => left.relate(right).is_touches(),
-    }
+    })
+    .map_err(SpatialJoinError::CalcoloNonConcluso)
 }
 
 /// Returns `(left_index, right_index)` pairs in stable lexicographic order.
@@ -273,7 +286,7 @@ fn spatial_join_refs(
                 let right_geometry = right[candidate.index].ok_or(SpatialJoinError::Internal(
                     "R-tree contains only non-null right geometries",
                 ))?;
-                if exact_match(left_geometry, right_geometry, predicate) {
+                if exact_match(left_geometry, right_geometry, predicate)? {
                     pair_count
                         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                             current.checked_add(1).filter(|next| *next <= max_pairs)
@@ -316,7 +329,7 @@ mod tests {
         let mut pairs = Vec::new();
         for (left_index, left_geometry) in left.iter().enumerate() {
             for (right_index, right_geometry) in right.iter().enumerate() {
-                if exact_match(left_geometry, right_geometry, predicate) {
+                if exact_match(left_geometry, right_geometry, predicate).expect("predicato") {
                     pairs.push(JoinPair {
                         left: left_index as u64,
                         right: right_index as u64,
@@ -392,8 +405,8 @@ mod tests {
         let first = rectangle((0, 0, 2, 2));
         let touching = rectangle((2, 0, 2, 2));
         let overlapping = rectangle((1, 1, 2, 2));
-        assert!(exact_match(&first, &touching, JoinPredicate::Touches));
-        assert!(exact_match(&first, &overlapping, JoinPredicate::Overlaps));
+        assert!(exact_match(&first, &touching, JoinPredicate::Touches).expect("predicato"));
+        assert!(exact_match(&first, &overlapping, JoinPredicate::Overlaps).expect("predicato"));
 
         let horizontal = Geometry::LineString(line_string![
             (x: -1.0, y: 0.0), (x: 1.0, y: 0.0)
@@ -401,7 +414,7 @@ mod tests {
         let vertical = Geometry::LineString(line_string![
             (x: 0.0, y: -1.0), (x: 0.0, y: 1.0)
         ]);
-        assert!(exact_match(&horizontal, &vertical, JoinPredicate::Crosses));
+        assert!(exact_match(&horizontal, &vertical, JoinPredicate::Crosses).expect("predicato"));
     }
 
     #[test]

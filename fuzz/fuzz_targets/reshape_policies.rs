@@ -8,6 +8,9 @@ use libfuzzer_sys::fuzz_target;
 use plenora_engine::{execute_batch, Limits, Plan, Step};
 use serde_json::json;
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 fn fixture(payload: &[u8]) -> RecordBatch {
     let bytes = if payload.is_empty() {
         &[0_u8][..]
@@ -42,7 +45,7 @@ fn fixture(payload: &[u8]) -> RecordBatch {
     .expect("bounded reshape fixture")
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let selector = payload.first().copied().unwrap_or_default() % 4;
     let (operation, config, expected_column, expected_type) = match selector {
         0 => (

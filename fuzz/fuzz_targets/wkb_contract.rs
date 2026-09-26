@@ -5,41 +5,86 @@ use geozero::{ToGeo, wkb::Wkb};
 use libfuzzer_sys::fuzz_target;
 use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, validate_wkb_contract, Operation};
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 /// Il giudizio del riferimento su una geometria: accetta, rifiuta, o **non
 /// conclude**.
 ///
-/// # Che cosa questo `catch_unwind` NON ottiene
+/// # Che cosa giudica
 ///
-/// **Non impedisce al panico di terminare il target.** `libfuzzer-sys` 0.4.10
-/// installa un hook che chiama `abort()` *prima* dell'unwinding: quando
-/// `check_validation` panica, il processo muore dentro l'hook e questo
-/// `catch_unwind` non viene mai raggiunto. Misurato — `cargo fuzz run
-/// wkb_contract` sui due reperti del 4 e 5 settembre 2026 termina con `deadly
-/// signal`, e il difetto resta aperto.
+/// Il contratto del decoder: validita' OGC di `geo` **e** nessun anello con una
+/// punta, che `geo` 0.33.1 non cerca (salta le coppie di segmenti adiacenti) e
+/// il decoder rifiuta.
 ///
-/// Il ramo `None` regge percio' soltanto nei processi che consentono
-/// l'unwinding: la batteria ordinaria, dove i due reperti sono casi versionati.
-/// Resta scritto perche' e' il contratto corretto del riferimento, non perche'
-/// protegga questo target.
-///
-/// # Perche' `catch_unwind` qui e non la barriera di produzione
+/// # Perche' non la barriera di produzione
 ///
 /// Perche' il riferimento deve restare **indipendente** da cio' che giudica:
 /// se usasse `ValidazioneProtetta`, l'oracolo misurerebbe la stessa difesa che
 /// e' incaricato di sorvegliare, e un difetto di quella difesa passerebbe
-/// inosservato da entrambe le parti. Chiama percio' `geo` direttamente.
+/// inosservato da entrambe le parti. Chiama percio' `geo` direttamente, e cerca
+/// le punte con un'altra formulazione ([`ha_una_punta`]).
 ///
+/// La chiamata a `geo` passa da una `barriera_di_dipendenza`: il panico di
+/// `relate` e' atteso, e l'hook del target (`comune/aggancio.rs`) lo tollera.
 /// Rende `None` quando la validazione non conclude: un riferimento che non
 /// conclude non ha giudicato niente, e trattarlo come «invalida» direbbe che il
 /// decoder diverge quando invece nessuno ha deciso.
 fn riferimento_giudica(geometry: &geo::Geometry<f64>) -> Option<bool> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    if ha_una_punta(geometry) {
+        return Some(false);
+    }
+    plenora_core::panic_policy::barriera_di_dipendenza(std::panic::AssertUnwindSafe(|| {
         geometry.check_validation().is_ok()
     }))
     .ok()
 }
 
-fuzz_target!(|payload: &[u8]| {
+/// Una punta, formulata come **sovrapposizione**: due segmenti consecutivi di
+/// un anello che `line_intersection` dice collineari su un tratto di lunghezza
+/// non nulla. Il decoder la cerca invece con orientamento e verso: due strade,
+/// perche' un difetto dell'una non si nasconda nell'altra.
+fn ha_una_punta(geometry: &geo::Geometry<f64>) -> bool {
+    use geo::{Coord, Line, LineIntersection};
+
+    fn anello(anello: &geo::LineString<f64>) -> bool {
+        let mut vertici: Vec<Coord<f64>> = Vec::new();
+        for &vertice in &anello.0 {
+            if !vertice.x.is_finite() || !vertice.y.is_finite() {
+                return false;
+            }
+            if vertici.last() != Some(&vertice) {
+                vertici.push(vertice);
+            }
+        }
+        while vertici.len() > 1 && vertici.first() == vertici.last() {
+            vertici.pop();
+        }
+        let n = vertici.len();
+        if n < 3 {
+            return false;
+        }
+        (0..n).any(|i| {
+            let entrante = Line::new(vertici[(i + n - 1) % n], vertici[i]);
+            let uscente = Line::new(vertici[i], vertici[(i + 1) % n]);
+            matches!(
+                geo::line_intersection::line_intersection(entrante, uscente),
+                Some(LineIntersection::Collinear { intersection }) if intersection.start != intersection.end
+            )
+        })
+    }
+    fn poligono(p: &geo::Polygon<f64>) -> bool {
+        std::iter::once(p.exterior()).chain(p.interiors()).any(anello)
+    }
+    match geometry {
+        geo::Geometry::Polygon(p) => poligono(p),
+        geo::Geometry::MultiPolygon(m) => m.iter().any(poligono),
+        geo::Geometry::GeometryCollection(c) => c.iter().any(ha_una_punta),
+        _ => false,
+    }
+}
+
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     // Oracolo differenziale architettura.md#geometrie: il decoder validante (via
     // `geometry_from_wkb`) e il percorso precedente (validatore strutturale
     // + geozero) devono accettare/rifiutare gli stessi payload e produrre
@@ -62,10 +107,6 @@ fuzz_target!(|payload: &[u8]| {
         .and_then(|()| Wkb(payload).to_geo().ok());
     // Tre esiti del riferimento, non due: accetta, rifiuta, oppure **non
     // conclude**. Il terzo sospende il confronto invece di inventarne uno.
-    //
-    // Sui due reperti della campagna schedulata quel terzo ramo non si
-    // raggiunge: l'hook di libFuzzer aborta prima, e il target muore. Vale nei
-    // processi che consentono l'unwinding, non qui.
     let confronto = match grezzo {
         None => Some(None),
         Some(geometry) => match riferimento_giudica(&geometry) {

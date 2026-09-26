@@ -5,6 +5,9 @@ use plenora_engine::geo_transport::transport::{
     decode_ipc, encode_ipc, transform_batches, ArrowOperation, TransformArrowSchema,
 };
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 // Envelope strutturalmente valido con payload mutato: decode + transform
 // (centroid) + encode. Invarianti: mai panic; se la trasformazione riesce,
 // l'output deve ri-decodificare senza errori.
@@ -47,7 +50,7 @@ fn params() -> TransformArrowSchema {
     }
 }
 
-fuzz_target!(|data: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |data: &[u8]| {
     let Ok((schema, batches)) = decode_ipc(data) else {
         return;
     };

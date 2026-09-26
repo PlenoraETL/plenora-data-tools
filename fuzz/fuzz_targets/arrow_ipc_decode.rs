@@ -5,6 +5,9 @@ use plenora_engine::geo_transport::transport::{
     decode_ipc, transform_batches, ArrowOperation, TransformArrowSchema,
 };
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 // Byte arbitrari come payload Arrow IPC (bypass del checksum): la decodifica
 // e il contratto sulla colonna geometria non devono mai panicare; i limiti
 // (colonne, batch, righe) restano vincolanti.
@@ -47,7 +50,7 @@ fn params() -> TransformArrowSchema {
     }
 }
 
-fuzz_target!(|data: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |data: &[u8]| {
     if let Ok((schema, batches)) = decode_ipc(data) {
         let _ = transform_batches(&schema, &batches, &params());
     }

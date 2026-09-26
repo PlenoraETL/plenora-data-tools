@@ -22,6 +22,9 @@ use plenora_kernels_geo::arrow_adapter::{
 };
 use serde_json::{json, Map, Value};
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 fn projected_crs() -> ResolvedCrs {
     ResolvedCrs::from_resolved_parts(
         "EPSG:32632".to_owned(),
@@ -133,7 +136,7 @@ fn merge(base: &Value, patch: Option<Value>) -> Value {
     Value::Object(merged)
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let table = cases();
     let selector = payload.first().copied().unwrap_or_default() as usize;
     let (op, arity, tabular, base) = &table[selector % table.len()];

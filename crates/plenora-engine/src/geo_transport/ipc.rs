@@ -1722,18 +1722,15 @@ pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), Arrow
     // installa nulla resta con l'hook di `std`: residuo dichiarato in
     // docs/errori-e-limiti.md.
     //
-    // ATTENZIONE per chi legge in futuro: il fuzz target `arrow_transform` e'
-    // in quarantena e resta rosso anche con questa barriera attiva. Non e' un
-    // segno che non funzioni. `libfuzzer-sys` installa un hook che chiama
-    // `std::process::abort()` prima che l'unwinding cominci (0.4.10,
-    // src/lib.rs:92-95), apposta perche' un `catch_unwind` nel codice sotto
-    // test non possa nascondere difetti al fuzzer. La barriera e' verificata
-    // dal modulo `barriera_antipanico` in fondo a questo file, che le porta un
-    // input costruito apposta: uno stream con una colonna `List` a cui viene
-    // tolto il campo `children`.
-    let esito = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        decode_ipc_unguarded(payload)
-    }));
+    // E' una barriera di dipendenza: il fuzz target `arrow_transform` ne
+    // tollera il panico (errori-e-limiti.md#panici-attesi-nel-fuzzing) e
+    // interrompe su ogni altro. La verifica il modulo `barriera_antipanico` in
+    // fondo a questo file, con un input costruito apposta: uno stream con una
+    // colonna `List` a cui viene tolto il campo `children`.
+    let esito =
+        plenora_core::panic_policy::barriera_di_dipendenza(std::panic::AssertUnwindSafe(|| {
+            decode_ipc_unguarded(payload)
+        }));
     match esito {
         Ok(risultato) => risultato,
         Err(panico) => Err(ArrowTransportError::ArrowPanic(
