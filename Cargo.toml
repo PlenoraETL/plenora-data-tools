@@ -156,9 +156,8 @@ strip = "symbols"
 # il profilo di costo e' lo stesso.
 overflow-checks = true
 
-# BOZZA NON ADOTTATA — candidato memory-lab (handoff-final-20260909), diff 1/2/3/5.
-# Presente solo per revisione e benchmark applicativo; non e' stata committata
-# ne' proposta per merge. L'adozione resta subordinata a entrambi.
+# Copie vendorizzate dal candidato memory-lab (handoff-final-20260909),
+# diff 1/2/3/5: sono quelle che il prodotto compila.
 #
 # Sorgenti vendorizzate, non fork Git: provenienza ricostruita da pacchetto
 # .crate verificato (checksum crates-io, sotto) + patch congelate in patches/,

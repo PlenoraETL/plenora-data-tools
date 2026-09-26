@@ -459,7 +459,7 @@ in altri kernel di `reshape.rs` (es. `unnest`, che ha una sua gestione degli
 indici separata e non è stata verificata qui) — resta un'area da controllare
 separatamente, non presunta esente.
 
-### Profilo isolato: non implementato
+### Il tetto duro per esecuzione è il profilo isolato
 
 Un tetto duro per singola esecuzione **non è realizzabile in-process**, e la
 ragione non è pigrizia:
@@ -472,21 +472,16 @@ ragione non è pigrizia:
   contabilità Rust;
 - «per processo» non è «per esecuzione».
 
-Il tetto duro arriverà quindi da un **profilo isolato** — l'esecuzione in un
-processo worker con un limite imposto dal sistema operativo — che **non è
-ancora implementato**. Il nome del suo limite (`hard_process_memory_bytes`)
-non esiste nel codice, di proposito: introdurre il nome prima del meccanismo
-ripeterebbe l'errore che si è appena finito di correggere.
-
-Quando arriverà, quel profilo prometterà **contenimento e attribuzione**, non
-«mai un byte oltre N»: su Linux `memory.max` ammette superamenti temporanei,
-su Windows il limite riguarda la memoria *committed* che non coincide con
-l'RSS, e su **macOS non sarà supportato** finché un prototipo non dimostri
-copertura *e* attribuzione. Un `ResourceLimit` sarà riportato solo con
-evidenza attribuibile (`memory.events.local` su Linux, notifica del Job Object
-su Windows): un segnale o un exit code anomalo sono compatibili con un crash
-quanto con un superamento, e senza evidenza specifica l'errore resta
-`internal`.
+Il tetto duro è quindi il **profilo isolato**: un piano v6 che dichiara
+`max_domain_memory_bytes` esegue in un processo worker dentro un dominio
+`cgroup2` con `memory.max`, su **Linux** soltanto
+([`isolamento.md`](isolamento.md)). Il profilo promette **contenimento e
+attribuzione**, non «mai un byte oltre N»: `memory.max` ammette superamenti
+temporanei. Un `ResourceLimit` attribuito al dominio si riporta solo con
+evidenza attribuibile (`memory.events.local`); un segnale o un exit code
+anomalo sono compatibili con un crash quanto con un superamento, e senza
+evidenza l'errore resta `internal`. Su Windows e macOS il profilo è rifiutato
+in validazione.
 
 ## Limiti dichiarati
 
@@ -1414,14 +1409,9 @@ Fuori dal protocollo, la stessa regola tiene tre elementi dell'isolamento:
   forma che serve al supervisore; il worker ha bisogno del contrario — il freno
   prima, perché il thread che legge nasce dopo — e passa da `con_interruttore`,
   che infatti è incondizionata;
-- `FiglioVivo::attendi_la_fine`, sotto `any(test, internals)`. È la porta che
-  **aspetta senza segnalare**, e la usa il percorso di qualificazione: la
-  produzione, oggi, non ha un cammino in cui concedere cortesia a un figlio —
-  quando ne avrà uno, con `PR-12`, il `cfg` cadrà da sé sotto il gate;
-- `isolamento::prova`, il percorso end-to-end per intero, sotto
-  `all(target_os = "linux", any(test, internals))`. Non è un pezzo del
-  programma: è il modo in cui si prova che i pezzi si parlino, e guida il lato
-  supervisore dell'handshake, che di produzione non è ancora.
+- `FiglioVivo::attendi_la_fine` e `isolamento::prova` non sono più nel
+  perimetro: il chiamante di produzione del profilo isolato li usa entrambi, e
+  `prova` è compilato su Linux senza altre condizioni.
 
 Un elemento del filo che avesse un chiamante solo di prova senza dirlo
 lascerebbe l'avviso a qualcun altro: è la ragione per cui l'elenco si aggiorna
@@ -1946,7 +1936,10 @@ ha trovati tre reperti, versionati in `tests/anelli_con_punta.rs`.
 robusto di `geo`; il verso, fra punti già collineari, è un confronto di
 coordinate. Nessuna tolleranza: un vertice quasi collineare non è una punta.
 
-**Il perimetro.** `Rect` e `Triangle` restano alla validazione di `geo`:
+**Il perimetro.** Un `Triangle` coi vertici collineari è degenere, e si
+giudica con lo stesso segno esatto: la validazione di `geo` usa
+`robust::orient2d` direttamente, che a coordinate estreme trabocca in NaN e
+lascia passare il triangolo. Un `Rect` resta alla validazione di `geo`:
 l'inviluppo di un punto è un `Rect` degenere legittimo. I vertici ripetuti
 consecutivi non sono una punta.
 
@@ -1980,9 +1973,15 @@ malformato, e accettarlo scarta una parte dell'ingresso in silenzio.
 strutturali, e la fine della geometria si trova contandole. Lo spazio bianco
 ammesso è quello del tokenizer: spazio, tabulazione, `\n`, `\r`.
 
-**Che cosa cambia per chi legge.** Un testo con una coda, che prima passava, è
-rifiutato. Il perimetro è la sola funzione: è l'unico punto del prodotto che
-analizza WKT.
+**Le dimensioni.** Allo stesso modo, una Z o una M che il prefisso non mostra —
+`POINTZ(1 2 3)`, o un componente `POINT Z(1 2 3)` dentro una
+`GEOMETRYCOLLECTION` — si perdevano nella conversione in `geo`, che conserva x
+e y. La dimensione si legge ora da ogni nodo di `wkt`, prima della conversione,
+e tutto ciò che non è XY è `UnsupportedWktDimension`.
+
+**Che cosa cambia per chi legge.** Un testo con una coda o con una dimensione
+nascosta, che prima passava, è rifiutato. Il perimetro è la sola funzione: è
+l'unico punto del prodotto che analizza WKT.
 
 **La condizione di rientro.** Un parser WKT che rifiuti da sé i token dopo la
 geometria e non tronchi al NUL.
@@ -2480,10 +2479,6 @@ lasciato residuo. Suite `isolamento::esecuzione_isolata::` 22/22, `cargo fmt
 (i 2273 precedenti più questi due). Ri-riprodotto sulla VM il caso esatto
 che abortiva: ora un JSON pulito con `category: invalid_configuration`,
 `exit=2`, nessun core dump, nessun residuo di dominio o processo.
-
-**Stato**: implementato e qualificato in questo giro (stessa VM, stesso
-perimetro delle altre qualifiche di questo giro); non ancora integrato — il
-lavoro resta nel working tree, senza commit né merge.
 
 ### Chi rinuncia a una nascita parziale chiude il dominio, e ne osserva la quiescenza
 

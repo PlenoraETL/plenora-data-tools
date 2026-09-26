@@ -1489,7 +1489,7 @@ Il footer non sottrae nulla a questo punto: i suoi byte fanno parte del file,
 quindi un token diverso dà un file diverso. Ciò che il footer risolve è
 l'**altro** problema, quello del contratto.
 
-### 4. Il footer entra nel confine ostile, e oggi non c'è
+### 4. Il footer entra nel confine ostile
 
 Adottare il footer risolve il problema del contratto e **ne apre uno nuovo**:
 una parte del file che nessuno validava comincia a contare.
@@ -1497,11 +1497,11 @@ una parte del file che nessuno validava comincia a contare.
 Il confine ostile per Arrow IPC che il progetto ha
 ([`errori-e-limiti.md`](errori-e-limiti.md)) percorre il footer e ne valida i
 campi 1, 2 e 3 — lo Schema, i blocchi dei dizionari, i blocchi dei record
-batch. **Il campo 4, i custom metadata, non è percorso affatto**: finora non
-lo leggeva nessuno.
+batch — e, da quando il token vi abita, anche il campo 4, i custom metadata
+(`PR-0`). Senza quel passo nessuno leggerebbe il campo 4 prima di arrow.
 
-E il modo in cui `arrow-ipc` 59.2.0 lo legge rende la lacuna urgente, perché
-il percorso del footer non è difensivo come quello dello schema:
+E il modo in cui `arrow-ipc` 59.2.0 lo legge è la ragione per cui il passo
+serve, perché il percorso del footer non è difensivo come quello dello schema:
 
 | dove | come legge |
 |---|---|
@@ -2778,7 +2778,7 @@ Le tre righe che ne avevano bisogno:
 |---|---|---|
 | protocollo incompatibile | `Protocol` | è precisamente «violazione del protocollo». `Internal` direbbe «difetto nostro», e lo è solo a volte: due binari diversi in esecuzione sono una condizione di dispiegamento |
 | resolver incompatibile | `InvalidConfiguration` | **non `InvalidPlan`**: il piano può essere perfettamente valido, e lo sarebbe di nuovo con un ambiente coerente. È il componente a essere configurato male, non il piano a essere sbagliato |
-| timeout | `Timeout` | oggi non c'è modo di costruirlo |
+| timeout | `Timeout` | la costruisce la conduzione quando scade il tempo di esecuzione; prima di `PR-1` non c'era una variante che la dicesse |
 
 Erano **varianti nuove** di `PlenoraError`, cioè una modifica semantica di un
 tipo pubblico: sono andate in una PR propria (`PR-1`), con il proprio impatto
