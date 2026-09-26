@@ -132,14 +132,32 @@ _abitato() {
     }' "$_eventi"
 }
 
+# Osserva `$1` con `lstat`: rende 0 se c'e', 1 solo se `lstat` dice ENOENT, 2
+# se non si sa. Il 3 dell'interprete e' riservato a FileNotFoundError: un
+# Python che manca (127) o un'eccezione non prevista (1) non lo producono, e
+# nessun messaggio d'errore viene interpretato come testo.
+osserva() {
+  local stato=0
+  python3 -c 'import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(3)' "$1" 2>/dev/null || stato=$?
+  case "$stato" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
 # Se `$1` c'e': 0 si', 1 solo se non esiste. Un percorso che non si lascia
 # osservare conta come presente, e lo si dice: la pulizia ci prova, e se non ci
 # riesce lo riporta, invece di saltare un residuo che non ha visto.
 presente() {
-  local errore
-  errore="$(LC_ALL=C stat -c %F "$1" 2>&1 >/dev/null)" && return 0
-  [[ "$errore" == *"No such file or directory"* ]] && return 1
-  echo "pulizia: $1 non si lascia osservare ($errore)" >&2
+  local stato=0
+  osserva "$1" || stato=$?
+  [[ "$stato" -eq 1 ]] && return 1
+  [[ "$stato" -eq 2 ]] && echo "pulizia: $1 non si lascia osservare" >&2
   return 0
 }
 

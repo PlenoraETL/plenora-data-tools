@@ -171,12 +171,27 @@ e_ancora_il_nostro() {
   return 1
 }
 
+# Osserva `$1` con `lstat`: rende 0 se c'e', 1 solo se `lstat` dice ENOENT, 2
+# se non si sa. Il 3 dell'interprete e' riservato a FileNotFoundError: un
+# Python che manca (127) o un'eccezione non prevista (1) non lo producono, e
+# nessun messaggio d'errore viene interpretato come testo.
+osserva() {
+  local stato=0
+  python3 -c 'import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(3)' "$1" 2>/dev/null || stato=$?
+  case "$stato" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
 # Se `/proc/$1` esiste: 0 si', 1 no, 2 non si sa. Solo «non esiste» e' 1.
 esiste_il_pid() {
-  local errore
-  errore="$(LC_ALL=C stat -c %i "/proc/$1" 2>&1 >/dev/null)" && return 0
-  [[ "$errore" == *"No such file or directory"* ]] && return 1
-  return 2
+  osserva "/proc/$1"
 }
 
 # Aspetta che `$1` sparisca, ricontrollando l'identita' a ogni giro.
@@ -221,7 +236,9 @@ verifica_il_nipote() {
 
   # Il figlio genera il nipote e poi aspetta: `timeout` uccidera' il figlio, e
   # cio' che si misura e' che cosa succede al nipote.
-  timeout --signal=KILL 1 sh -c "sleep $marcatore & echo \$! >&2; sleep 600" \
+  # Il nipote e' lanciato con lo stesso eseguibile che `e_ancora_il_nostro`
+  # confronta: risolverlo di nuovo qui aprirebbe una finestra fra i due.
+  timeout --signal=KILL 1 sh -c "'$SLEEP_REALE' $marcatore & echo \$! >&2; sleep 600" \
     2>"$dove" || true
 
   local nipote
