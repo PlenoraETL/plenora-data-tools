@@ -64,6 +64,11 @@ muori() { echo "qualifica: $*" >&2; exit 2; }
 grep -qw memory /sys/fs/cgroup/cgroup.controllers || muori "manca il controller memory"
 [ -x "$BINARIO" ] || muori "binario non eseguibile: $BINARIO"
 [ -x "$GENERATORE" ] || muori "generatore non eseguibile: $GENERATORE"
+# I segnali ai processi di questo script passano da qui: un PID ricordato puo'
+# tornare in uso, e l'aiuto segnala solo se il processo e' ancora quello atteso.
+SEGNALA="$(cd "$(dirname "$0")" && pwd)/segnala_verificato.py"
+[ -r "$SEGNALA" ] || muori "manca $SEGNALA"
+python3 "$SEGNALA" --help > /dev/null || muori "python3 non esegue $SEGNALA"
 
 # La radice delegata e la directory di lavoro sono di questa esecuzione.
 RADICE="/sys/fs/cgroup/plenora-qualifica-$$"
@@ -87,7 +92,8 @@ svuota() {
 pulisci() {
     local codice=$? residuo=0 pid dominio
     for pid in "${IN_CORSO[@]:-}"; do
-        [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+        [ -n "$pid" ] && python3 "$SEGNALA" "$pid" KILL --genitore $$ \
+            --eseguibile "$BINARIO" || true
     done
     wait 2>/dev/null || true
     if [ -d "$RADICE" ]; then
@@ -240,8 +246,8 @@ worker_al_lavoro() {
     return 0
 }
 
-# Toglie un'esecuzione gia' attesa dall'elenco che la pulizia ferma: dopo
-# `wait` il suo PID puo' tornare in uso, e un segnale colpirebbe un estraneo.
+# Toglie un'esecuzione gia' attesa dall'elenco che la pulizia ferma: non c'e'
+# piu' niente da fermare.
 togli_da_in_corso() {
     local pid="$1" resto=() p
     for p in "${IN_CORSO[@]:-}"; do [ -n "$p" ] && [ "$p" != "$pid" ] && resto+=("$p"); done
@@ -289,8 +295,6 @@ if [ -z "$dominio" ]; then
 else
     # Il dominio, non i PID: un PID letto da `cgroup.procs` puo' tornare in
     # uso prima del segnale, `cgroup.kill` manda SIGKILL solo a chi e' dentro.
-    # I segnali a `$pid_run` sono sicuri per un'altra ragione: e' un figlio non
-    # ancora atteso, e il suo PID non si libera prima del `wait`.
     echo 1 > "$dominio/cgroup.kill" 2>/dev/null || invalido="segnale-non-inviato"
 fi
 codice=0; wait "$pid_run" || codice=$?
@@ -305,7 +309,7 @@ invalido=""
 dominio="$(worker_al_lavoro)"
 if [ -z "$dominio" ]; then
     invalido="worker-non-al-lavoro"
-elif ! kill -INT "$pid_run" 2>/dev/null; then
+elif ! python3 "$SEGNALA" "$pid_run" INT --genitore $$ --eseguibile "$BINARIO"; then
     invalido="segnale-non-inviato"
 fi
 codice=0; wait "$pid_run" || codice=$?

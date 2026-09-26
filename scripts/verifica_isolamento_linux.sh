@@ -317,9 +317,13 @@ uguali() {
 [ "$(id -u)" = "0" ] || manca "serve root: il control plane crea il dominio e cambia identita'"
 
 for STRUMENTO in cargo rustc mkfifo timeout stat getent awk sed grep sort uniq \
-  sha256sum cut find xargs basename; do
+  sha256sum cut find xargs basename python3; do
   command -v "$STRUMENTO" >/dev/null || manca "$STRUMENTO non c'e'"
 done
+# I segnali ai figli passano da qui: un PID ricordato puo' tornare in uso, e
+# l'aiuto segnala solo se il processo e' ancora quello atteso.
+SEGNALA="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/segnala_verificato.py"
+python3 "$SEGNALA" --help >/dev/null || manca "python3 non esegue $SEGNALA"
 
 # Gli argomenti si validano **prima** di usarli, e non e' pedanteria: il gate
 # gira come root. Un `RADICE` con una barra o un `..` porterebbe `mkdir` e
@@ -854,7 +858,7 @@ else
   printf '%s scrivibile_dal_control_plane=no\n' "$VICINO/cgroup.procs" >>"$DOVE/controprova.txt"
   fallisce "controprova: il control plane non sposta un processo in $VICINO, e senza quello il rifiuto del worker li' non dice niente"
 fi
-kill -9 "$CAVIA" 2>/dev/null || true
+python3 "$SEGNALA" "$CAVIA" KILL --genitore $$ --argomento 60 || true
 wait "$CAVIA" 2>/dev/null || true
 
 # Il `cgroup.procs` del padre si **registra** e non si conta: nessuno lo scrive,
@@ -913,7 +917,7 @@ if timeout "$ATTESA_MASSIMA" cat "$PRONTO_A" >/dev/null; then
   timeout "$ATTESA_MASSIMA" sh -c "printf 'via\n' > '$VIA_A'"
 else
   fallisce "braccio 2a: il supervisore non ha raggiunto l'attesa iniziale entro $ATTESA_MASSIMA s"
-  kill -9 "$SUPERVISORE_2A" 2>/dev/null
+  python3 "$SEGNALA" "$SUPERVISORE_2A" KILL --genitore $$ --eseguibile "$IMMAGINE_2A"
 fi
 wait "$SUPERVISORE_2A"
 USCITA_2A=$?
@@ -950,7 +954,7 @@ if timeout "$ATTESA_MASSIMA" cat "$PRONTO_B" >/dev/null; then
   timeout "$ATTESA_MASSIMA" sh -c "printf 'via\n' > '$VIA_B'"
 else
   fallisce "braccio 2b: il supervisore non ha raggiunto la barriera entro $ATTESA_MASSIMA s"
-  kill -9 "$SUPERVISORE_2B" 2>/dev/null
+  python3 "$SEGNALA" "$SUPERVISORE_2B" KILL --genitore $$ --eseguibile "$IMMAGINE_2B"
 fi
 wait "$SUPERVISORE_2B"
 USCITA_2B=$?

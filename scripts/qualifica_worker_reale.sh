@@ -58,6 +58,7 @@ set -Eeuo pipefail
 
 RADICE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$RADICE"
+SEGNALA="$RADICE/scripts/segnala_verificato.py"
 
 # Questo percorso **rifiuta** root, e il rifiuto arriva prima di ogni build.
 #
@@ -186,11 +187,11 @@ verifica_il_nipote() {
   # gruppo. Lo si chiude — prima con garbo, poi per forza — e **si guarda ogni
   # volta di nuovo**: dichiarare chiuso cio' che si e' solo segnalato e' lo
   # stesso difetto che questa sonda esiste per trovare.
-  kill -TERM "$nipote" 2>/dev/null || true
+  # Il segnale passa da un pidfd aperto prima di verificare il marcatore: fra
+  # la verifica e il segnale il PID non puo' cambiare processo.
+  python3 "$SEGNALA" "$nipote" TERM --argomento "$marcatore" || true
   if ! attendi_che_sparisca "$nipote" "$marcatore" 25; then
-    if e_ancora_il_nostro "$nipote" "$marcatore"; then
-      kill -KILL "$nipote" 2>/dev/null || true
-    fi
+    python3 "$SEGNALA" "$nipote" KILL --argomento "$marcatore" || true
     if ! attendi_che_sparisca "$nipote" "$marcatore" 25; then
       echo "PERSO: il nipote $nipote e' sopravvissuto al timeout e non si lascia chiudere: la macchina resta con un processo della sonda addosso" >&2
       return 1
