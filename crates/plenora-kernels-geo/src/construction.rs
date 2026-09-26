@@ -2,8 +2,8 @@
 //! by the future Arrow adapter; these functions operate on one ordered group.
 
 use geo::{Geometry, LineString, Point, Polygon};
+use std::str::FromStr as _;
 use thiserror::Error;
-use wkt::TryFromWkt;
 
 #[derive(Debug, Error)]
 pub enum ConstructionError {
@@ -102,7 +102,16 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
             "testo dopo la fine della geometria".to_owned(),
         ));
     }
-    let geometry = Geometry::<f64>::try_from_wkt_str(value)
+    // Prima la forma di `wkt`, poi `geo`: la conversione in `geo_types`
+    // conserva solo x e y, quindi una Z o una M che il prefisso non mostra —
+    // `POINTZ(1 2 3)`, o un componente annidato `GEOMETRYCOLLECTION(POINT Z
+    // (1 2 3))` — sparirebbe senza errore. La dimensione si legge da ogni nodo.
+    let analizzato = wkt::Wkt::<f64>::from_str(value)
+        .map_err(|error| ConstructionError::InvalidWkt(error.to_owned()))?;
+    if non_solo_xy(&analizzato) {
+        return Err(ConstructionError::UnsupportedWktDimension);
+    }
+    let geometry = Geometry::<f64>::try_from(analizzato)
         .map_err(|error| ConstructionError::InvalidWkt(error.to_string()))?;
     geometry.validazione_protetta().map_err(|esito| {
         esito.separa(
@@ -111,6 +120,20 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
         )
     })?;
     Ok(geometry)
+}
+
+/// Se un nodo della geometria dichiara una dimensione diversa da XY.
+///
+/// Ricorsivo sulle collezioni: la dimensione della collezione e' quella della
+/// sua intestazione, e un componente puo' dichiararne un'altra.
+fn non_solo_xy(geometria: &wkt::Wkt<f64>) -> bool {
+    if geometria.dimension() != wkt::types::Dimension::XY {
+        return true;
+    }
+    match geometria {
+        wkt::Wkt::GeometryCollection(collezione) => collezione.geometries().iter().any(non_solo_xy),
+        _ => false,
+    }
 }
 
 /// Lo spazio bianco secondo il tokenizer di `wkt` 0.14: questi quattro e basta.
@@ -134,9 +157,12 @@ const fn spazio_wkt(carattere: char) -> bool {
 /// aperta, oppure alla parola `EMPTY` quando questa precede ogni parentesi.
 /// Un testo senza chiusura lo rifiuta gia' il parser, e qui non si giudica.
 fn coda_dopo_la_geometria(testo: &str) -> bool {
-    let apertura = testo.find('(');
-    let prima_della_parentesi = &testo[..apertura.unwrap_or(testo.len())];
-    let parole: Vec<&str> = prima_della_parentesi
+    // Il primo segno di struttura, con gli stessi delimitatori con cui il
+    // tokenizer chiude una parola: `EMPTY)` e `EMPTY,resto` sono la parola
+    // `EMPTY` seguita da un segno, non una parola sola.
+    let primo_segno = testo.find(['(', ')', ',']);
+    let prima_del_segno = &testo[..primo_segno.unwrap_or(testo.len())];
+    let parole: Vec<&str> = prima_del_segno
         .split(spazio_wkt)
         .filter(|parola| !parola.is_empty())
         .collect();
@@ -144,11 +170,14 @@ fn coda_dopo_la_geometria(testo: &str) -> bool {
         .iter()
         .position(|parola| parola.eq_ignore_ascii_case("EMPTY"))
     {
-        // `TIPO EMPTY`: dopo `EMPTY` non deve esserci nient'altro, parentesi
-        // comprese.
-        return vuota + 1 < parole.len() || apertura.is_some();
+        // `TIPO EMPTY`: dopo `EMPTY` non deve esserci nient'altro, segni
+        // compresi.
+        return vuota + 1 < parole.len() || primo_segno.is_some();
     }
-    let Some(apertura) = apertura else {
+    // Senza `EMPTY` la geometria comincia con una parentesi aperta; un segno
+    // diverso lo rifiuta il parser, e qui non si giudica.
+    let Some(apertura) = primo_segno.filter(|&posizione| testo[posizione..].starts_with('('))
+    else {
         return false;
     };
     let mut profondita = 0_usize;

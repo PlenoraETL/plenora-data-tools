@@ -63,3 +63,35 @@ fn il_wkt_valido_resta_valido() {
     accettato("MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((5 5,6 5,6 6,5 5)))");
     accettato("POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 1))");
 }
+
+/// `EMPTY` seguito da un segno: il tokenizer chiude la parola davanti a `)` e
+/// `,`, e il resto non verrebbe letto.
+#[test]
+fn empty_seguito_da_un_segno_e_rifiutato() {
+    rifiutato("GEOMETRYCOLLECTION EMPTY)");
+    rifiutato("GEOMETRYCOLLECTION EMPTY,resto");
+    rifiutato("POINT EMPTY,");
+}
+
+/// Una Z o una M che il prefisso non mostra si perderebbe nella conversione
+/// in `geo`, che conserva x e y: sono rifiutate, attaccate al tipo o annidate.
+#[test]
+fn le_dimensioni_oltre_xy_sono_rifiutate_ovunque() {
+    for testo in [
+        "POINTZ(1 2 3)",
+        "POINTM(1 2 3)",
+        "POINTZM(1 2 3 4)",
+        "GEOMETRYCOLLECTION(POINT Z(1 2 3))",
+        "GEOMETRYCOLLECTION(POINT(1 2),LINESTRING Z(0 0 1,1 1 1))",
+    ] {
+        assert!(
+            matches!(
+                geometry_from_wkt(testo),
+                Err(ConstructionError::UnsupportedWktDimension)
+            ),
+            "{testo:?} deve essere rifiutato per dimensione: {:?}",
+            geometry_from_wkt(testo)
+        );
+    }
+    accettato("GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))");
+}
