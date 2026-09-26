@@ -287,11 +287,11 @@ dominio="$(worker_al_lavoro)"
 if [ -z "$dominio" ]; then
     invalido="worker-non-al-lavoro"
 else
-    colpiti=0
-    for p in $(cat "$dominio/cgroup.procs" 2>/dev/null); do
-        kill -9 "$p" 2>/dev/null && colpiti=$((colpiti + 1))
-    done
-    [ "$colpiti" -gt 0 ] || invalido="segnale-non-inviato"
+    # Il dominio, non i PID: un PID letto da `cgroup.procs` puo' tornare in
+    # uso prima del segnale, `cgroup.kill` manda SIGKILL solo a chi e' dentro.
+    # I segnali a `$pid_run` sono sicuri per un'altra ragione: e' un figlio non
+    # ancora atteso, e il suo PID non si libera prima del `wait`.
+    echo 1 > "$dominio/cgroup.kill" 2>/dev/null || invalido="segnale-non-inviato"
 fi
 codice=0; wait "$pid_run" || codice=$?
 togli_da_in_corso "$pid_run"

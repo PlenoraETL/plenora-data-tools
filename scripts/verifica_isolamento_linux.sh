@@ -152,10 +152,9 @@ pulisci() {
       # il blocco qui sotto.
       [ "$_stato" -eq 0 ] || break
       [ "$_giro" -lt 50 ] || break
-      local _pid
-      while read -r _pid; do
-        [ -n "$_pid" ] && kill -9 "$_pid" 2>/dev/null
-      done <"$DOMINIO/cgroup.procs"
+      # Il dominio, non i PID: un PID letto da `cgroup.procs` puo' tornare in
+      # uso prima del segnale, `cgroup.kill` colpisce solo chi e' dentro.
+      [ -e "$DOMINIO/cgroup.kill" ] && echo 1 >"$DOMINIO/cgroup.kill" 2>/dev/null
       _giro=$((_giro + 1))
       sleep 0.1
     done
