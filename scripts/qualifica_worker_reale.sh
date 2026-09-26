@@ -243,14 +243,17 @@ verifica_il_nipote() {
   # Eseguibile e marcatore entrano come argomenti posizionali, mai nel testo
   # dello script. Il PID esce sul descrittore 3, e solo dopo che il nipote si
   # e' visto con il proprio marcatore: un nipote che non parte non lascia un
-  # PID da giudicare sparito.
+  # PID da giudicare sparito. Si pretende anche l'eseguibile: prima dell'exec
+  # il figlio e' ancora lo `sh` interno, la cui riga di comando contiene gia' il
+  # marcatore come argomento.
   # shellcheck disable=SC2016 # il testo e' dello `sh` interno, apposta.
   timeout --signal=KILL 1 sh -c '
     "$1" "$2" &
     p=$!
     i=0
     while [ "$i" -lt 50 ]; do
-      if { tr "\0" "\n" < "/proc/$p/cmdline"; } 2>/dev/null | grep -qxF -- "$2"; then
+      if [ "$(readlink "/proc/$p/exe" 2>/dev/null)" = "$1" ] \
+        && { tr "\0" "\n" < "/proc/$p/cmdline"; } 2>/dev/null | grep -qxF -- "$2"; then
         echo "$p" >&3
         break
       fi
