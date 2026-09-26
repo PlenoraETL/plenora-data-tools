@@ -42,6 +42,9 @@
 use libfuzzer_sys::fuzz_target;
 use plenora_engine::interni::verifica_lettore_frame_geo;
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 /// Le invarianti stanno **dentro** il crate, in `interni`: qui si applicano e
 /// si abortisce, ma non si decide che cosa significhino.
 ///
@@ -62,7 +65,7 @@ fn controlla(byte: &[u8], righe: u64) {
 /// coperto dal primo ingresso, che li prende dai byte grezzi.
 const RIGHE_MASSIME_SINTETICHE: u64 = 8;
 
-fuzz_target!(|byte: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |byte: &[u8]| {
     // Il contatore atteso viene dall'ingresso: cosi' il fuzzer controlla anche
     // il lato del chiamante, non solo quello dello stream.
     let dai_byte = byte

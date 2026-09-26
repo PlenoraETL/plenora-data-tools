@@ -44,12 +44,13 @@
 
 use std::fs::File;
 use std::io::Read as _;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
 use plenora_core::arrow::schema::SchemaRef;
+use plenora_core::panic_policy::barriera_di_dipendenza;
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 
 use crate::geo_transport::error::ArrowTransportError;
@@ -282,7 +283,7 @@ fn validated_handle(path: &Path, format: IpcFormat, limits: &IpcLimits) -> Resul
 /// Esegue `build` dentro la barriera anti-panico, convertendo un eventuale
 /// panico di arrow in errore.
 fn guarded<T, F: FnOnce() -> Result<T>>(build: F) -> Result<T> {
-    match catch_unwind(AssertUnwindSafe(build)) {
+    match barriera_di_dipendenza(AssertUnwindSafe(build)) {
         Ok(esito) => esito,
         Err(panico) => Err(PlenoraError::DataMapping(format!(
             "arrow-ipc in panico sullo schema della sorgente: {}",
@@ -333,7 +334,7 @@ impl Iterator for BoundaryBatches {
             return None;
         }
         let reader = &mut self.reader;
-        let esito = catch_unwind(AssertUnwindSafe(|| match reader {
+        let esito = barriera_di_dipendenza(AssertUnwindSafe(|| match reader {
             BoundaryReader::File(reader) => reader.next(),
             BoundaryReader::Stream(reader) => reader.next(),
         }));

@@ -7,7 +7,10 @@ use plenora_kernels_geo::operations::{
 };
 use plenora_kernels_geo::{transform_geometry, Operation};
 
-fuzz_target!(|payload: &[u8]| {
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let Ok(text) = std::str::from_utf8(payload) else {
         return;
     };

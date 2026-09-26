@@ -149,7 +149,7 @@ fn invalid_geometry(error: impl std::fmt::Display) -> PlenoraError {
 /// del panico di un kernel nell'executor.
 pub(crate) fn valida_ogc<G>(geometria: &G) -> Result<(), PlenoraError>
 where
-    G: geo::algorithm::validation::Validation,
+    G: geo::algorithm::validation::Validation + AnelliSemplici,
     G::Error: std::fmt::Display,
 {
     match geometria.validazione_protetta() {
@@ -300,18 +300,27 @@ pub(crate) trait ValidazioneProtetta {
 
 impl<G> ValidazioneProtetta for G
 where
-    G: geo::algorithm::validation::Validation,
+    G: geo::algorithm::validation::Validation + AnelliSemplici,
     G::Error: std::fmt::Display,
 {
     fn validazione_protetta(&self) -> std::result::Result<(), EsitoValidazione> {
+        // Prima delle punte, poi `geo`: un anello collassato non deve
+        // arrivare a `relate`, che su di lui rende matrici prive di senso o va
+        // in panico (vedi [`AnelliSemplici`]).
+        if self.ha_un_anello_con_punta() {
+            return Err(EsitoValidazione::NonValida(
+                RagioneNonValida::AutoIntersezione,
+            ));
+        }
         // `check_validation` di `geo` puo' andare in panico invece di rendere
         // un errore: la sua `relate` costruisce un grafo topologico in virgola
         // mobile e chiama `panic!` quando due conclusioni sullo stesso punto si
         // contraddicono. Il messaggio stesso dice «this can happen with invalid
         // geometries» — cioe' proprio con l'ingresso ostile che questo crate
         // riceve per mestiere.
-        let esito =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.check_validation()));
+        let esito = plenora_core::panic_policy::barriera_di_dipendenza(
+            std::panic::AssertUnwindSafe(|| self.check_validation()),
+        );
         match esito {
             Ok(Ok(())) => Ok(()),
             Ok(Err(causa)) => Err(EsitoValidazione::NonValida(RagioneNonValida::dal_testo(
@@ -330,6 +339,179 @@ where
                 plenora_core::panic_policy::forma_payload(&*payload),
             )),
         }
+    }
+}
+
+/// Gli anelli di un poligono che **tornano indietro** su se stessi.
+///
+/// # Perche' un controllo nostro
+///
+/// Perche' `geo` 0.33.1 non lo fa. La sua ricerca di auto-intersezioni
+/// (`validation::utils::linestring_has_self_intersection`) salta le coppie di
+/// segmenti **adiacenti**, che condividono un vertice per costruzione, e una
+/// punta — il segmento che ripercorre all'indietro il precedente — sta
+/// proprio fra due segmenti adiacenti. In un triangolo tutte le coppie sono
+/// adiacenti: un anello di tre punti collineari, che ha area zero e non e'
+/// semplice, passa per valido.
+///
+/// Non e' un difetto di forma soltanto. Su un anello collassato `relate`
+/// rende matrici prive di senso — un triangolo degenere che «contiene» un
+/// triangolo vero — e la validazione dei buchi, che di `relate` si fida,
+/// accetta poligoni invalidi; oppure va in panico. Tutto cio' che dopo si
+/// fida della validazione calcolerebbe su una geometria invalida.
+///
+/// # Perche' e' esatto
+///
+/// La collinearita' e' il segno di `orient2d` del kernel robusto di `geo`,
+/// esatto sui `f64`. Il verso, fra punti gia' collineari, e' un confronto di
+/// coordinate. Nessuna tolleranza: un vertice quasi collineare non e' una
+/// punta, uno collineare si'.
+pub(crate) trait AnelliSemplici {
+    /// Se un anello di un poligono contenuto ha una punta.
+    fn ha_un_anello_con_punta(&self) -> bool;
+}
+
+/// Una punta nell'anello, cercata sui vertici distinti consecutivi.
+///
+/// Un anello con coordinate non finite non si giudica qui: e' `geo` a
+/// rifiutarlo con la ragione giusta, e una NaN renderebbe collineare
+/// qualunque terna.
+fn anello_con_punta(anello: &geo::LineString<f64>) -> bool {
+    use geo::algorithm::kernels::{Kernel, Orientation, RobustKernel};
+
+    let mut vertici: Vec<geo::Coord<f64>> = Vec::with_capacity(anello.0.len());
+    for &punto in &anello.0 {
+        if !punto.x.is_finite() || !punto.y.is_finite() {
+            return false;
+        }
+        if vertici.last() != Some(&punto) {
+            vertici.push(punto);
+        }
+    }
+    // L'anello chiuso ripete il primo vertice in coda: il giro lo riprende.
+    while vertici.len() > 1 && vertici.first() == vertici.last() {
+        vertici.pop();
+    }
+    let quanti = vertici.len();
+    // Meno di tre vertici distinti: lo rifiuta `geo`, con la ragione propria.
+    if quanti < 3 {
+        return false;
+    }
+    (0..quanti).any(|indice| {
+        let precedente = vertici[(indice + quanti - 1) % quanti];
+        let centro = vertici[indice];
+        let successivo = vertici[(indice + 1) % quanti];
+        RobustKernel::orient2d(precedente, centro, successivo) == Orientation::Collinear
+            && stesso_verso(precedente, centro, successivo)
+    })
+}
+
+/// Fra tre punti **collineari** e distinti dal centro, se il primo e il
+/// terzo stanno dalla stessa parte di `centro`: la punta.
+///
+/// Sulla retta la posizione si legge da una coordinata sola: la `x`, o la `y`
+/// se la retta e' verticale. Se la retta non e' verticale e il terzo ha la
+/// stessa `x` del centro, allora coincide col centro, che la deduplicazione
+/// dei vertici esclude.
+// Confronti float esatti intenzionali: si chiede se due coordinate siano la
+// stessa, non se siano vicine, perche' il controllo non ha tolleranza.
+#[allow(clippy::float_cmp)]
+fn stesso_verso(primo: geo::Coord<f64>, centro: geo::Coord<f64>, terzo: geo::Coord<f64>) -> bool {
+    if primo.x == centro.x {
+        (primo.y > centro.y) == (terzo.y > centro.y)
+    } else {
+        (primo.x > centro.x) == (terzo.x > centro.x)
+    }
+}
+
+fn poligono_con_punta(poligono: &geo::Polygon<f64>) -> bool {
+    std::iter::once(poligono.exterior())
+        .chain(poligono.interiors())
+        .any(anello_con_punta)
+}
+
+impl AnelliSemplici for geo::Polygon<f64> {
+    fn ha_un_anello_con_punta(&self) -> bool {
+        poligono_con_punta(self)
+    }
+}
+
+impl AnelliSemplici for geo::MultiPolygon<f64> {
+    fn ha_un_anello_con_punta(&self) -> bool {
+        self.iter().any(poligono_con_punta)
+    }
+}
+
+impl AnelliSemplici for geo::GeometryCollection<f64> {
+    fn ha_un_anello_con_punta(&self) -> bool {
+        self.iter().any(AnelliSemplici::ha_un_anello_con_punta)
+    }
+}
+
+impl AnelliSemplici for Geometry<f64> {
+    fn ha_un_anello_con_punta(&self) -> bool {
+        match self {
+            Self::Polygon(poligono) => poligono_con_punta(poligono),
+            Self::MultiPolygon(poligoni) => poligoni.ha_un_anello_con_punta(),
+            Self::GeometryCollection(collezione) => collezione.ha_un_anello_con_punta(),
+            // Un `Rect` o un `Triangle` degeneri hanno la propria validazione in
+            // `geo`, e l'inviluppo di un punto e' un `Rect` degenere legittimo:
+            // qui si guardano solo i poligoni, la forma in cui il difetto sta.
+            Self::Rect(_)
+            | Self::Triangle(_)
+            | Self::Point(_)
+            | Self::Line(_)
+            | Self::LineString(_)
+            | Self::MultiPoint(_)
+            | Self::MultiLineString(_) => false,
+        }
+    }
+}
+
+/// Un calcolo di `geo` che passa da `relate`, **dietro una barriera**.
+///
+/// # Perche' anche su geometrie valide
+///
+/// Perche' la validazione non basta. `relate` costruisce un grafo topologico
+/// in virgola mobile e chiama `panic!` quando due conclusioni sullo stesso
+/// punto si contraddicono (`edge_end_bundle_star.rs`, «topology position
+/// conflict»), e il fuzz target `wkt_operations` lo raggiunge con poligoni che
+/// `check_validation` accetta. `interior_point` ci passa per scegliere il
+/// punto, i predicati spaziali per definizione.
+///
+/// Il lavoro deve contenere la sola chiamata a `geo`: e' una
+/// [`barriera_di_dipendenza`](plenora_core::panic_policy::barriera_di_dipendenza).
+///
+/// # Errors
+///
+/// La forma del payload, mai il contenuto: il messaggio di `geo` porta le
+/// coordinate che hanno provocato la contraddizione.
+pub(crate) fn calcolo_protetto<T>(
+    calcolo: impl FnOnce() -> T,
+) -> std::result::Result<T, &'static str> {
+    // Unwind safety: il calcolo legge geometrie in prestito immutabile, e un
+    // risultato parziale non esce dalla barriera.
+    plenora_core::panic_policy::barriera_di_dipendenza(std::panic::AssertUnwindSafe(calcolo))
+        .map_err(|payload| plenora_core::panic_policy::forma_payload(&*payload))
+}
+
+#[cfg(test)]
+mod prove_del_calcolo_protetto {
+    use plenora_core::panic_policy::dentro_una_barriera_di_dipendenza;
+
+    /// Il panico diventa la forma del payload, mai il contenuto; e durante il
+    /// calcolo la barriera e' una barriera di dipendenza, cioe' tollerata dal
+    /// fuzz.
+    #[test]
+    fn il_panico_diventa_la_forma_e_la_barriera_e_di_dipendenza() {
+        let esito: Result<(), _> = super::calcolo_protetto(|| {
+            assert!(dentro_una_barriera_di_dipendenza());
+            std::panic::panic_any("coordinate 12 52 segrete".to_owned())
+        });
+        let forma = esito.expect_err("il panico deve diventare un errore");
+        assert!(!forma.contains("segrete"), "contenuto pubblicato: {forma}");
+        assert!(!dentro_una_barriera_di_dipendenza());
+        assert_eq!(super::calcolo_protetto(|| 7).expect("nessun panico"), 7);
     }
 }
 
@@ -1997,6 +2179,12 @@ mod tests {
         #[test]
         fn il_ramo_figlio_non_e_un_test_vero() {
             struct TipoDiProva;
+
+            impl crate::AnelliSemplici for TipoDiProva {
+                fn ha_un_anello_con_punta(&self) -> bool {
+                    false
+                }
+            }
 
             impl geo::algorithm::validation::Validation for TipoDiProva {
                 type Error = std::convert::Infallible;

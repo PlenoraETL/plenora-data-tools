@@ -24,6 +24,9 @@ use plenora_engine::{execute, Input, Inputs, RuntimeContext};
 use plenora_kernels_geo::arrow_adapter::geometry_output_field;
 use serde_json::{json, Value};
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 // ---------------------------------------------------------------------------
 // Fixture tabellari e geometriche (<= 48 righe)
 // ---------------------------------------------------------------------------
@@ -158,7 +161,7 @@ fn run(plan: &Value, inputs: Inputs, contracts: &[(String, DataContract)]) {
     );
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     if payload.len() < 8 {
         return;
     }

@@ -3,6 +3,9 @@
 use libfuzzer_sys::fuzz_target;
 use plenora_engine::interni::verifica_artefatto_ostile;
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 // Byte arbitrari come artefatto Arrow IPC **file format**: il verificatore
 // deve concludere senza panicare. Accettare e rifiutare sono entrambi esiti
 // legittimi; panicare no, e un guasto dell'harness nemmeno.
@@ -30,7 +33,7 @@ use plenora_engine::interni::verifica_artefatto_ostile;
 // Il target esistente `arrow_ipc_decode` non sostituisce questo: esercita
 // `decode_ipc`, cioe' lo stream format in memoria, e non tocca footer, tetto
 // sui dizionari, digest ne' commit token.
-fuzz_target!(|data: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |data: &[u8]| {
     if let Err(rottura) = verifica_artefatto_ostile(data) {
         panic!("guasto dell'harness del verificatore: {rottura}");
     }

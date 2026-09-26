@@ -996,13 +996,6 @@ versionato deve **registrare e verificare**, e allegare all'esito:
 Finché il criterio è aperto, ogni campagna eseguita con lo strumento fuori
 repository vale come **evidenza**, non come qualificazione.
 
-Va sciolta la posizione di `arrow_transform`, oggi in quarantena per una
-ragione dichiarata: `libfuzzer` aborta prima dell'unwinding, quindi il target
-resterebbe rosso a barriera funzionante. Due esiti ammessi, e nessuno dei due
-è il silenzio: **riattivarlo**, se `apache/arrow-rs#10575` avrà reso fallibile
-la conversione dello schema, oppure **riconfermare la quarantena per
-iscritto**, con la ragione aggiornata alla data del rilascio.
-
 ## 4. Qualifica prestazionale
 
 Oggi le prestazioni non sono qualificate: esistono una baseline di

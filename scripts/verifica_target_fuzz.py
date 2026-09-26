@@ -17,16 +17,20 @@ dal compilatore.
 
 # La quarantena e' dichiarata, non dedotta
 
-`arrow_transform` e' escluso dalla **sola** matrice notturna, e il motivo sta
-in `fuzz.yml`: `libfuzzer-sys` installa un hook di panico che chiama
-`abort()` prima dell'unwinding, quindi il target resterebbe rosso a barriera
-funzionante, e un job perennemente rosso smette di essere letto.
+Un target escluso dalla **sola** matrice notturna va DICHIARATO qui, col
+motivo. Se il gate deducesse l'esclusione dalla differenza fra gli elenchi,
+qualunque target dimenticato nella matrice diventerebbe una quarantena
+implicita, che e' il modo in cui una copertura sparisce senza che nessuno
+decida di toglierla. E vale per la matrice soltanto: nelle campagne locali il
+target c'e' comunque. Oggi nessun target e' in quarantena.
 
-Quell'esclusione va DICHIARATA qui. Se il gate la deducesse dalla differenza
-fra gli elenchi, qualunque target dimenticato nella matrice diventerebbe una
-quarantena implicita, che e' il modo in cui una copertura sparisce senza che
-nessuno decida di toglierla. E vale per la matrice soltanto: nelle campagne
-locali il target c'e' comunque.
+# Ogni target installa l'hook comune
+
+`fuzz_targets/comune/aggancio.rs` distingue il panico atteso di una
+dipendenza, dentro una `barriera_di_dipendenza`, da ogni altro panico. Un
+target che non lo installa torna all'hook di `libfuzzer-sys`, che interrompe
+anche sul primo: resterebbe rosso a barriera funzionante. Il gate pretende
+l'installazione in ogni `[[bin]]`.
 
 Come gli altri gate del progetto, si autoverifica: inietta mutazioni
 sintetiche e pretende di vederle.
@@ -45,12 +49,14 @@ SCRIPT = ('scripts/fuzz-smoke.sh', 'scripts/fuzz-campaign.sh')
 
 # Escluso dalla sola matrice notturna. Il perche' sta in `fuzz.yml`, accanto
 # alla riga commentata; qui c'e' il fatto che l'esclusione e' voluta.
-QUARANTENA_NOTTURNA = {
-    'arrow_transform':
-        "l'hook di panico di libfuzzer-sys chiama abort() prima "
-        "dell'unwinding, quindi il target resterebbe rosso a barriera "
-        "funzionante (apache/arrow-rs#10575)",
-}
+QUARANTENA_NOTTURNA = {}
+
+# La riga che ogni target deve contenere: l'hook comune nel blocco `init:`.
+INSTALLAZIONE_DELL_HOOK = 'fuzz_target!(init: aggancio::installa(),'
+
+
+def sorgente_del_target(nome):
+    return 'fuzz/fuzz_targets/%s.rs' % nome
 
 
 def testo(percorso):
@@ -96,7 +102,7 @@ def differenze(atteso, trovato, dove):
     return guasti
 
 
-def controlla(sorgenti):
+def controlla(sorgenti, quarantena):
     dichiarati = bin_del_manifesto(sorgenti[MANIFESTO])
     if not dichiarati:
         return ['%s: nessun `[[bin]]` trovato' % MANIFESTO]
@@ -105,9 +111,17 @@ def controlla(sorgenti):
         guasti += differenze(
             dichiarati, elenco_dello_script(sorgenti[percorso], percorso), percorso
         )
-    attesi = [nome for nome in dichiarati if nome not in QUARANTENA_NOTTURNA]
+    attesi = [nome for nome in dichiarati if nome not in quarantena]
     guasti += differenze(attesi, elenco_della_matrice(sorgenti[MATRICE]), MATRICE)
-    for nome in QUARANTENA_NOTTURNA:
+    for nome in dichiarati:
+        percorso = sorgente_del_target(nome)
+        if INSTALLAZIONE_DELL_HOOK not in sorgenti.get(percorso, ''):
+            guasti.append(
+                '%s: il target non installa l\'hook comune (`%s`): tornerebbe '
+                'all\'hook di libfuzzer-sys, che interrompe anche sul panico '
+                'atteso di una dipendenza' % (percorso, INSTALLAZIONE_DELL_HOOK)
+            )
+    for nome in quarantena:
         if nome not in dichiarati:
             guasti.append(
                 '%s: `%s` e\' dichiarato in quarantena da questo gate ma non '
@@ -135,7 +149,15 @@ SORGENTI_SINTETICHE = {
     SCRIPT[0]: 'ALL_TARGETS=(\n    alfa beta arrow_transform\n)\n',
     SCRIPT[1]: 'ALL_TARGETS=(\n    alfa beta arrow_transform\n)\n',
     MATRICE: '\n        target:\n          - alfa\n          - beta\n    env:\n',
+    **{
+        sorgente_del_target(nome): INSTALLAZIONE_DELL_HOOK + ' |payload: &[u8]| {});\n'
+        for nome in ('alfa', 'beta', 'arrow_transform')
+    },
 }
+
+# Nelle sorgenti sintetiche la quarantena esiste, perche' le prove sulla
+# quarantena abbiano un soggetto anche quando quella reale e' vuota.
+QUARANTENA_SINTETICA = {'arrow_transform': 'motivo sintetico'}
 
 
 def prova_di_mutazione():
@@ -147,7 +169,7 @@ def prova_di_mutazione():
     con «mutazione non applicata» invece di segnalare il difetto che ha
     davanti.
     """
-    if controlla(SORGENTI_SINTETICHE):
+    if controlla(SORGENTI_SINTETICHE, QUARANTENA_SINTETICA):
         raise SystemExit('le sorgenti sintetiche di controllo non sono coerenti')
     prove = [
         ('rinomina non propagata', SCRIPT[0],
@@ -163,6 +185,8 @@ def prova_di_mutazione():
         # E la quarantena non deve sopravvivere al proprio target.
         ('quarantena senza target', MANIFESTO,
          lambda t: t.replace('name = "arrow_transform"', 'name = "gamma"', 1)),
+        ('target senza hook comune', sorgente_del_target('beta'),
+         lambda t: t.replace(INSTALLAZIONE_DELL_HOOK, 'fuzz_target!(', 1)),
     ]
     for nome, percorso, muta in prove:
         mutate = dict(SORGENTI_SINTETICHE)
@@ -171,7 +195,7 @@ def prova_di_mutazione():
             raise SystemExit(
                 'mutazione %s non applicata: il gate non e\' provato' % nome
             )
-        if not controlla(mutate):
+        if not controlla(mutate, QUARANTENA_SINTETICA):
             raise SystemExit('mutazione %s NON vista: il gate non serve' % nome)
     return len(prove)
 
@@ -180,7 +204,11 @@ def main():
     viste = prova_di_mutazione()
     sorgenti = {percorso: testo(percorso)
                 for percorso in (MANIFESTO, MATRICE, *SCRIPT)}
-    guasti = controlla(sorgenti)
+    for nome in bin_del_manifesto(sorgenti[MANIFESTO]):
+        percorso = sorgente_del_target(nome)
+        if os.path.exists(os.path.join(RADICE, percorso)):
+            sorgenti[percorso] = testo(percorso)
+    guasti = controlla(sorgenti, QUARANTENA_NOTTURNA)
     if guasti:
         print('gli elenchi dei target fuzz non coincidono con i `[[bin]]`:\n',
               file=sys.stderr)
@@ -189,9 +217,9 @@ def main():
         return 1
     dichiarati = bin_del_manifesto(sorgenti[MANIFESTO])
     print(
-        'target fuzz coerenti: %d `[[bin]]`, tre elenchi allineati '
-        '(%d in quarantena notturna dichiarata, presente comunque nelle '
-        'campagne locali), %d mutazioni iniettate e viste'
+        'target fuzz coerenti: %d `[[bin]]`, tre elenchi allineati, hook '
+        'comune in ogni target (%d in quarantena notturna dichiarata), %d '
+        'mutazioni iniettate e viste'
         % (len(dichiarati), len(QUARANTENA_NOTTURNA), viste)
     )
     return 0

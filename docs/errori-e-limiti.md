@@ -817,19 +817,45 @@ consumatore attuale le interpreta: il rischio è limitato a un'incompatibilità
 di **nomi**, coperta dalla migrazione se i nomi ratificati risultassero
 diversi.
 
-<a id="arrow-transform-in-quarantena"></a>
-### `arrow_transform` in quarantena nel fuzzing
+<a id="panici-attesi-nel-fuzzing"></a>
+### Il fuzzing tollera solo i panici attesi delle dipendenze
 
-Il target fuzz `arrow_transform` è **disattivato**. Non perché la barriera non
-funzioni, ma per il contrario: `libfuzzer` chiama `std::process::abort()`
-prima che l'unwinding cominci, deliberatamente, perché un `catch_unwind` nel
-codice sotto test nasconderebbe i difetti al fuzzer. Il target resterebbe
-quindi **rosso a barriera funzionante**, e un job perennemente rosso smette di
-essere letto.
+**La regola.** Ogni target installa l'hook comune di
+`fuzz/fuzz_targets/comune/aggancio.rs`, e `scripts/verifica_target_fuzz.py` lo
+pretende. L'hook tace su un panico nato dentro una
+`plenora_core::panic_policy::barriera_di_dipendenza` e lascia tutti gli altri
+all'hook di `libfuzzer-sys`, che stampa e interrompe **prima**
+dell'unwinding.
 
-Va riattivato quando `arrow-rs` renderà fallibile la conversione dello schema,
-cioè quando la barriera non servirà più. Segnalato a monte:
-`apache/arrow-rs#10575`.
+**Il perché.** `libfuzzer-sys` interrompe prima dell'unwinding perché un
+`catch_unwind` nel codice sotto prova non nasconda i difetti. Ma un
+`catch_unwind` non vale l'altro. Una **barriera di dipendenza** esiste perché
+una dipendenza nominata va in panico su un ingresso che riceviamo per
+mestiere — `relate` di `geo`, `fb_to_schema` di `arrow-ipc`
+(`apache/arrow-rs#10575`) — e ne fa un esito classificato: è il comportamento
+corretto, e col solo hook di `libfuzzer-sys` teneva rossi `arrow_transform` e
+`wkt_operations` a barriera funzionante. Una **rete di sicurezza** — il
+`catch_unwind` dell'executor attorno a un kernel, quello del worker e del
+verificatore — intercetta un panico che non doveva avvenire: per il fuzz resta
+un crash, anche se in produzione diventa un errore `Internal`.
+
+**Il perimetro.** Le barriere di dipendenza sono cinque:
+`validazione_protetta` e `calcolo_protetto` in `plenora-kernels-geo`,
+`guarded` e `BoundaryBatches::next` in `ipc_boundary`, `decode_ipc` nel
+trasporto. Il loro lavoro contiene la sola chiamata alla dipendenza, più
+controlli nostri senza primitive di panico.
+
+**Il pericolo.** Un panico **nostro** dentro il lavoro di una barriera di
+dipendenza sarebbe tollerato dal fuzz come quello della dipendenza. È la
+ragione per cui il lavoro resta minimo, e per cui una barriera nuova si
+dichiara qui.
+
+**La controprova.** Un panico iniettato nel corpo di `wkt_operations`, fuori da
+ogni barriera, termina ancora il target con `deadly signal`.
+
+**La condizione di rientro.** Nessuna, per la regola: è la forma in cui il
+fuzz distingue. Le singole barriere cadono quando la dipendenza smette di
+andare in panico — per `arrow-ipc`, con `apache/arrow-rs#10575`.
 
 ### `max_total_rows_processed` non è un limite
 
@@ -1896,11 +1922,56 @@ JSON di controllo del progetto.
 **Condizione di rientro.** Il giorno che `serde_json` smetta di riservare quel
 nome, o offra un lettore che non lo reinterpreta.
 
+### La validazione rifiuta gli anelli con una punta
+
+**La regola.** Un poligono con un anello che torna indietro su se stesso — una
+**punta**: tre vertici consecutivi distinti e collineari, col terzo dalla stessa
+parte del primo rispetto al centro — non è valido, e
+`ValidazioneProtetta::validazione_protetta` lo rifiuta con la ragione
+«anello con auto-intersezione», **prima** di chiamare `geo`. Vale per i gusci e
+i buchi di ogni `Polygon`, anche dentro `MultiPolygon` e `GeometryCollection`.
+
+**Perché.** La ricerca di auto-intersezioni di `geo` 0.33.1
+(`validation::utils::linestring_has_self_intersection`) salta le coppie di
+segmenti **adiacenti**, e una punta sta esattamente lì. In un triangolo tutte
+le coppie sono adiacenti: un guscio di tre punti collineari, con area zero, per
+`geo` è valido. Su di lui `relate` rende matrici prive di senso — un triangolo
+degenere che «contiene» un buco esterno — quindi anche la validazione dei
+buchi, che di `relate` si fida, accetta poligoni invalidi. In `release`, dove
+l'asserzione di `relate` è compilata via, il risultato è sbagliato **in
+silenzio**; in debug e nel fuzz è un panico. Il fuzz target `wkt_operations` ne
+ha trovati tre reperti, versionati in `tests/anelli_con_punta.rs`.
+
+**Esattezza.** La collinearità è il segno esatto di `orient2d` del kernel
+robusto di `geo`; il verso, fra punti già collineari, è un confronto di
+coordinate. Nessuna tolleranza: un vertice quasi collineare non è una punta.
+
+**Il perimetro.** `Rect` e `Triangle` restano alla validazione di `geo`:
+l'inviluppo di un punto è un `Rect` degenere legittimo. I vertici ripetuti
+consecutivi non sono una punta.
+
+**Che cosa cambia per chi legge.** Un poligono con una punta, che prima
+passava, è rifiutato come geometria invalida. È fail-closed: la geometria non
+era valida per OGC, e il prodotto la trattava come tale solo per il difetto
+sopra.
+
+**Che cosa resta a `geo`.** Le altre forme di non semplicità — un anello che
+tocca se stesso in un vertice non adiacente — le giudica ancora
+`check_validation`, con i suoi limiti.
+
+**La condizione di rientro.** Una versione di `geo` la cui ricerca di
+auto-intersezioni veda le sovrapposizioni fra segmenti adiacenti: allora il
+controllo diventa ridondante, e i reperti restano come regressione.
+
 ### La validazione OGC sta dietro una barriera
 
 **La regola.** Nessun sito di `plenora-kernels-geo` chiama `check_validation` di
 `geo` direttamente: tutti passano da `ValidazioneProtetta::validazione_protetta`,
-che cattura il panico e lo rende un errore.
+che cattura il panico e lo rende un errore. Allo stesso modo i calcoli che
+passano da `relate` su geometrie già validate — `point_on_surface`, i predicati
+spaziali, il predicato esatto dello spatial join — girano dentro
+`calcolo_protetto`, che rende `CalcoloNonConcluso` con la forma del payload.
+Entrambe sono [barriere di dipendenza](#panici-attesi-nel-fuzzing).
 
 **Perché.** `check_validation` può andare in **panico** invece di rendere un
 errore: la sua `relate` costruisce un grafo topologico in virgola mobile e chiama
@@ -2005,22 +2076,11 @@ parallelo, quindi l'ordine di calcolo non è l'ordine di riga. La regola è
 condivisa fra trasformazione (`collect_cell_failures`) e misura
 (`collect_measure_failures`): una decisione sola, non una per percorso.
 
-**Che cosa la barriera non chiude.** Il difetto del fuzz `wkb_contract`, che
-**resta aperto**. La barriera è contenimento e sanitizzazione: vale nei processi
-che consentono l'unwinding — la produzione e la batteria ordinaria — e lì i due
-reperti rendono un errore `Internal` senza pubblicare nulla. Dentro un target
-`libfuzzer-sys` non vale, per lo stesso meccanismo già registrato in
-[`arrow_transform` in quarantena nel fuzzing](#arrow-transform-in-quarantena):
-l'hook chiama `abort()` prima dell'unwinding, deliberatamente, perché un
-`catch_unwind` nel codice sotto test nasconderebbe i difetti al fuzzer. Misurato:
-`cargo fuzz run wkb_contract` sui reperti del 4 e 5 settembre 2026 termina con
-`deadly signal`.
-
-A differenza di `arrow_transform`, il target **non** va in quarantena: quel rosso
-è un difetto noto e aperto, e sostituire l'hook per ottenere il verde
-nasconderebbe anche i panici che la campagna deve trovare. Si chiude con il
-replay riuscito nel target reale, o con una revisione esplicita del contratto del
-target che offra un oracolo altrettanto efficace.
+**Dentro il fuzz.** La barriera è una
+[barriera di dipendenza](#panici-attesi-nel-fuzzing): l'hook comune dei target
+tollera il panico di `check_validation` che vi nasce, e continua a interrompere
+su ogni altro. Il riferimento di `wkb_contract` chiama `geo` direttamente,
+dentro una barriera propria, e non la difesa che sorveglia.
 
 **Dove vivono i reperti.** Nei **test versionati**, con i byte in chiaro:
 `tests/barriera_validazione.rs` e `tests/barriera_privacy_processo.rs`. Le copie

@@ -179,9 +179,105 @@ pub fn forma_payload(payload: &(dyn std::any::Any + Send)) -> &'static str {
     }
 }
 
+std::thread_local! {
+    /// Quante barriere di dipendenza sono aperte sullo stack di questo thread.
+    static BARRIERE_APERTE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Chiude una barriera anche quando il lavoro risale in panico.
+struct BarrieraAperta;
+
+impl BarrieraAperta {
+    fn apri() -> Self {
+        BARRIERE_APERTE.with(|aperte| aperte.set(aperte.get().saturating_add(1)));
+        Self
+    }
+}
+
+impl Drop for BarrieraAperta {
+    fn drop(&mut self) {
+        BARRIERE_APERTE.with(|aperte| aperte.set(aperte.get().saturating_sub(1)));
+    }
+}
+
+/// Esegue `lavoro` dentro una **barriera di dipendenza**.
+///
+/// E' un `catch_unwind` che esiste perche' una dipendenza nominata va in
+/// panico su un ingresso che il progetto riceve per mestiere — `relate` di
+/// `geo` sulle contraddizioni topologiche, `fb_to_schema` di `arrow-ipc` sugli
+/// schemi malformati.
+///
+/// # Perche' non basta `catch_unwind`
+///
+/// Perche' agli occhi di un hook tutti i `catch_unwind` sono uguali, e non lo
+/// sono. Una barriera di dipendenza intercetta un panico **atteso** di codice
+/// altrui e lo trasforma in un esito classificato. Una rete di sicurezza — il
+/// `catch_unwind` dell'executor attorno a un kernel, quello del worker attorno
+/// al lavoro — intercetta un panico che non dovrebbe avvenire, cioe' un nostro
+/// difetto. Chi sorveglia i panici, come l'hook dei target di fuzz, deve poter
+/// tollerare il primo e fermarsi sul secondo: [`dentro_una_barriera_di_dipendenza`]
+/// e' la domanda che glielo permette.
+///
+/// # Che cosa mettere nel lavoro
+///
+/// La sola chiamata alla dipendenza. Codice nostro dentro la barriera
+/// godrebbe della stessa tolleranza, e un suo panico sparirebbe dal fuzz.
+///
+/// # Errors
+///
+/// Il payload del panico, come `catch_unwind`.
+pub fn barriera_di_dipendenza<T>(
+    lavoro: impl FnOnce() -> T + std::panic::UnwindSafe,
+) -> std::thread::Result<T> {
+    let _aperta = BarrieraAperta::apri();
+    std::panic::catch_unwind(lavoro)
+}
+
+/// Se il thread corrente sta eseguendo dentro una [`barriera_di_dipendenza`].
+///
+/// Vale anche dentro l'hook di panico, che gira **prima** dell'unwinding:
+/// la barriera si chiude solo quando `catch_unwind` ha reso.
+#[must_use]
+pub fn dentro_una_barriera_di_dipendenza() -> bool {
+    BARRIERE_APERTE.with(|aperte| aperte.get() > 0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{forma_payload, install, PanicPolicy};
+    use super::{
+        barriera_di_dipendenza, dentro_una_barriera_di_dipendenza, forma_payload, install,
+        PanicPolicy,
+    };
+
+    #[test]
+    fn la_barriera_e_visibile_durante_il_lavoro_e_si_chiude_dopo() {
+        assert!(!dentro_una_barriera_di_dipendenza());
+        let dentro =
+            barriera_di_dipendenza(dentro_una_barriera_di_dipendenza).expect("nessun panico");
+        assert!(dentro, "dentro la barriera la domanda deve rispondere si'");
+        assert!(!dentro_una_barriera_di_dipendenza());
+
+        let annidata = barriera_di_dipendenza(|| {
+            barriera_di_dipendenza(|| ()).expect("nessun panico");
+            dentro_una_barriera_di_dipendenza()
+        })
+        .expect("nessun panico");
+        assert!(
+            annidata,
+            "chiudere la barriera interna non chiude l'esterna"
+        );
+        assert!(!dentro_una_barriera_di_dipendenza());
+    }
+
+    #[test]
+    fn la_barriera_si_chiude_anche_dopo_un_panico() {
+        let esito = barriera_di_dipendenza(|| -> () { std::panic::panic_any("prova") });
+        assert!(esito.is_err());
+        assert!(
+            !dentro_una_barriera_di_dipendenza(),
+            "un panico non deve lasciare la barriera aperta"
+        );
+    }
 
     #[test]
     fn la_forma_del_payload_non_ne_pubblica_il_contenuto() {

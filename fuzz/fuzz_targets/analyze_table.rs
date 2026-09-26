@@ -17,6 +17,9 @@ use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_kernels_table::analyze::analyze_table_contract;
 use serde_json::{json, Map, Value};
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 fn contract() -> DataContract {
     DataContract::tabular(Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -97,7 +100,7 @@ fn merge(base: &Value, patch: Option<Value>) -> Value {
     Value::Object(merged)
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let table = cases();
     let selector = payload.first().copied().unwrap_or_default() as usize;
     let (op, arity, base) = &table[selector % table.len()];

@@ -30,6 +30,9 @@ use libfuzzer_sys::fuzz_target;
 use plenora_core::limits::PlanLimits;
 use plenora_engine::plan::{migrazione_v4, PlanV5};
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 fn limits_from(payload: &[u8]) -> PlanLimits {
     let mut limits = PlanLimits::default();
     // Con il primo byte dispari si restringono i limiti usando i byte
@@ -50,7 +53,7 @@ fn limits_from(payload: &[u8]) -> PlanLimits {
     limits
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let limits = limits_from(payload);
     let text = String::from_utf8_lossy(payload);
 

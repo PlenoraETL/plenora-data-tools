@@ -1489,15 +1489,12 @@ mod tests {
     /// costruito apposta: uno stream con una colonna `List` a cui viene tolto
     /// il campo `children`.
     ///
-    /// # Perche' non la verifica il fuzzing
+    /// # Perche' un caso costruito e non il solo fuzzing
     ///
-    /// Il target `arrow_transform` non puo': `libfuzzer-sys` installa un hook
-    /// di panico che chiama `std::process::abort()` prima che l'unwinding
-    /// cominci (0.4.10, src/lib.rs:92-95), proprio perche' un `catch_unwind`
-    /// nel codice sotto test nasconderebbe i difetti al fuzzer. Quel target
-    /// resta quindi in quarantena e restera' rosso anche a barriera
-    /// funzionante: non e' un difetto della mitigazione, e' lo strumento
-    /// progettato per non farsi ingannare da essa.
+    /// Perche' il fuzzing la esercita solo se trova l'ingresso: il target
+    /// `arrow_transform` tollera il panico dentro questa barriera di
+    /// dipendenza (`errori-e-limiti.md#panici-attesi-nel-fuzzing`), ma non
+    /// garantisce di raggiungerlo. Il caso costruito lo raggiunge sempre.
     #[test]
     fn ipc_decode_rifiuta_lo_schema_senza_fields_prima_di_arrow() {
         /// Offset del marcatore di fine stream dentro l'artefatto: vedi il
