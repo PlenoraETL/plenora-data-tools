@@ -150,11 +150,16 @@ pub struct AtteseVerifica<'a> {
 ///
 /// # Errors
 ///
+/// Le categorie sono quelle della matrice di `isolamento.md#10-matrice-degli-esiti`:
+///
 /// - [`PlenoraError::Io`] se l'artefatto non esiste o non si legge (passo 3);
-/// - [`PlenoraError::ResourceLimit`] se un tetto del confine o quello sui
-///   dizionari e' superato (passi 4-5);
-/// - [`PlenoraError::DataMapping`] per sigillo, framing, digest, schema,
-///   contratto, conteggi e token (passi 4, 5, 5-bis, 6, 7, 8, 8-bis).
+/// - [`PlenoraError::Internal`] per sigillo e framing (passi 4-5), anche
+///   quando e' un tetto del confine a fermarli (riga 12, vedi
+///   [`artefatto_troncato`]);
+/// - [`PlenoraError::Schema`] se il contratto letto non e' quello atteso
+///   (passo 7, riga 13);
+/// - [`PlenoraError::DataMapping`] per digest, schema, conteggi e token
+///   (passi 5-bis, 6, 8, 8-bis: riga 14, «secondo il passo»).
 ///
 /// Nessun errore porta valori dell'artefatto: i messaggi nominano il passo e
 /// le grandezze, mai il contenuto.
@@ -170,9 +175,40 @@ pub fn verifica_artefatto(
     // un'altra porta, sarebbe la `HashMap` di arrow — che comprime i duplicati
     // con «vince l'ultima» e non applica nessuno dei tetti — e riaprire per
     // percorso darebbe a ogni passo la possibilita' di trovare un file diverso.
-    let aperto = convalida_artefatto(percorso, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)?;
+    let aperto = convalida_artefatto(percorso, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)
+        .map_err(artefatto_troncato)?;
     verifica_artefatto_aperto(aperto, attese, resolver)
 }
+
+/// Un errore dei passi 4-5 — sigillo, framing, tetti del confine — nella
+/// categoria della riga 12 della matrice: `Internal`.
+///
+/// # Perche' non `DataMapping` o `ResourceLimit`
+///
+/// Perche' l'artefatto l'ha scritto il nostro worker, e un sigillo rotto o un
+/// framing che non torna dicono che qualcosa **nel sistema** non va — il
+/// worker, il canale, il disco — non che i dati di chi chiama siano sbagliati:
+/// `DataMapping` lo manderebbe a correggere un ingresso innocente. E un tetto
+/// del confine superato da un artefatto che il worker ha prodotto sotto i
+/// propri limiti e' un'incoerenza fra i due lati, non un budget da alzare:
+/// `ResourceLimit` e' riservato all'evidenza del dominio (`F4-2`).
+///
+/// L'I/O resta I/O: un disco che non risponde non e' un difetto nostro, ed e'
+/// la categoria su cui chi chiama decide di riprovare.
+fn artefatto_troncato(errore: PlenoraError) -> PlenoraError {
+    match errore.category() {
+        plenora_core::ErrorCategory::Io => errore,
+        _ => PlenoraError::Internal(format!("{PREFISSO_PASSI_4_5}: {errore}"))
+            .with_phase(ErrorPhase::Read),
+    }
+}
+
+/// L'inizio del messaggio di ogni errore di [`artefatto_troncato`].
+///
+/// Serve a chi deve distinguere questo `Internal` — un rifiuto ordinario di
+/// byte che non sono un artefatto — da un `Internal` che dice un difetto: e'
+/// testo nostro e costante, mai dell'ingresso.
+pub const PREFISSO_PASSI_4_5: &str = "verifica dell'artefatto, sigillo o framing (passi 4-5)";
 
 /// Come [`verifica_artefatto`], ma da un `File` **gia' aperto** invece che da
 /// un percorso.
@@ -197,7 +233,8 @@ pub fn verifica_artefatto_handle(
     resolver: CrsResolver,
     limiti: &IpcLimits,
 ) -> Result<ArtefattoVerificato> {
-    let aperto = convalida_handle_artefatto(handle, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)?;
+    let aperto = convalida_handle_artefatto(handle, limiti, CHIAVE_FOOTER_COMMIT_TOKEN)
+        .map_err(artefatto_troncato)?;
     verifica_artefatto_aperto(aperto, attese, resolver)
 }
 
@@ -244,7 +281,9 @@ fn verifica_artefatto_aperto(
     if contract_fingerprint(&contratto)?.to_hex()
         != attese.contratto_fingerprint_atteso.in_esadecimale()
     {
-        return Err(PlenoraError::DataMapping(
+        // `Schema`, riga 13 della matrice: l'artefatto e' integro ma dice una
+        // forma diversa da quella che il piano ha promesso.
+        return Err(PlenoraError::Schema(
             "verifica dell'artefatto: il contratto letto non e' quello atteso dal piano".to_owned(),
         )
         .with_phase(ErrorPhase::Read));

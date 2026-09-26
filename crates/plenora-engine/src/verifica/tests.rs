@@ -13,6 +13,7 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::DataContract;
+use plenora_core::ErrorCategory;
 use sha2::{Digest, Sha256};
 
 use super::{verifica_artefatto, AtteseVerifica};
@@ -179,6 +180,15 @@ impl Dichiarati {
 }
 
 fn esegui(byte: &[u8], dichiarati: &Dichiarati) -> Result<(), String> {
+    esegui_tipizzato(byte, dichiarati).map_err(|errore| errore.to_string())
+}
+
+/// Come [`esegui`], ma rende l'errore tipizzato: la categoria e' cio' che la
+/// matrice di `isolamento.md#10-matrice-degli-esiti` prescrive per ogni passo.
+fn esegui_tipizzato(
+    byte: &[u8],
+    dichiarati: &Dichiarati,
+) -> Result<(), plenora_core::error::PlenoraError> {
     let prova = Prova::nuova(byte);
     let digest = crate::protocollo::messaggi::DigestArtefatto {
         algoritmo: dichiarati.algoritmo.clone(),
@@ -207,7 +217,6 @@ fn esegui(byte: &[u8], dichiarati: &Dichiarati) -> Result<(), String> {
         &limiti,
     )
     .map(|_prova| ())
-    .map_err(|errore| errore.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -266,13 +275,53 @@ fn un_artefatto_troncato_e_respinto() {
     let mut dichiarati = Dichiarati::coerenti(troncato);
     dichiarati.righe = 3;
     dichiarati.batch = 1;
-    assert!(esegui(troncato, &dichiarati).is_err());
+    let errore = esegui_tipizzato(troncato, &dichiarati).expect_err("deve fallire");
+    // Riga 12 della matrice: un artefatto del nostro worker che non regge e'
+    // un difetto nostro.
+    assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
 }
 
 #[test]
 fn byte_arbitrari_non_sono_un_artefatto() {
     let spazzatura = vec![0x41_u8; 512];
-    assert!(esegui(&spazzatura, &Dichiarati::coerenti(&spazzatura)).is_err());
+    let errore = esegui_tipizzato(&spazzatura, &Dichiarati::coerenti(&spazzatura))
+        .expect_err("deve fallire");
+    assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
+}
+
+/// Un tetto del confine che ferma la verifica e' ancora la riga 12: non
+/// `ResourceLimit`, che spetta alla sola evidenza del dominio (`F4-2`).
+#[test]
+fn un_tetto_del_confine_nella_verifica_e_interno() {
+    let byte = artefatto(&schema(), &batch(), 1, Some(&token(UNO)));
+    let prova = Prova::nuova(&byte);
+    let dichiarati = Dichiarati::coerenti(&byte);
+    let digest = crate::protocollo::messaggi::DigestArtefatto {
+        algoritmo: dichiarati.algoritmo.clone(),
+        valore: dichiarati.digest.clone(),
+    };
+    let attese = AtteseVerifica {
+        contratto_fingerprint_atteso: fingerprint_atteso(&dichiarati.contratto),
+        digest: &digest,
+        conteggi: crate::protocollo::messaggi::ConteggiDichiarati {
+            righe: dichiarati.righe,
+            batch: dichiarati.batch,
+        },
+        commit_token: &dichiarati.token,
+    };
+    let limiti = IpcLimits {
+        max_metadata_bytes: 8,
+        ..IpcLimits::default()
+    };
+    let errore = verifica_artefatto(
+        &prova.percorso,
+        &attese,
+        plenora_core::crs::resolve_crs,
+        &limiti,
+    )
+    .map(|_prova| ())
+    .expect_err("un tetto di 8 byte sui metadati deve fermare la verifica");
+    assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
 }
 
 // ---------------------------------------------------------------------------
@@ -333,8 +382,10 @@ fn un_contratto_diverso_e_respinto() {
         DataType::Int32,
         true,
     )])));
-    let errore = esegui(&byte, &dichiarati).expect_err("deve fallire");
-    assert!(errore.contains("contratto"), "{errore}");
+    let errore = esegui_tipizzato(&byte, &dichiarati).expect_err("deve fallire");
+    assert!(errore.to_string().contains("contratto"), "{errore}");
+    // Riga 13 della matrice: integro, ma non la forma promessa.
+    assert_eq!(errore.category(), ErrorCategory::Schema, "{errore}");
 }
 
 // ---------------------------------------------------------------------------
@@ -813,11 +864,37 @@ fn i_rifiuti_ordinari_sono_verdetti_non_guasti() {
 
     for errore in [
         PlenoraError::DataMapping("artefatto rifiutato".to_owned()),
-        PlenoraError::ResourceLimit("tetto superato".to_owned()),
+        PlenoraError::Schema("contratto diverso".to_owned()),
+        PlenoraError::Internal(format!("{}: framing", crate::verifica::PREFISSO_PASSI_4_5)),
     ] {
         assert_eq!(crate::interni::classifica_esito(Err(errore)), Ok(false));
     }
     assert_eq!(crate::interni::classifica_esito(Ok(())), Ok(true));
+}
+
+/// Un `Internal` che **non** viene dai passi 4-5 e' un difetto, non un
+/// rifiuto: letto come rifiuto sparirebbe dal fuzz.
+#[test]
+fn un_internal_qualsiasi_non_e_un_rifiuto() {
+    use plenora_core::error::PlenoraError;
+
+    let esito = crate::interni::classifica_esito(Err(PlenoraError::Internal(
+        "un difetto nostro".to_owned(),
+    )));
+    let rottura = esito.expect_err("un Internal generico e' un guasto");
+    assert!(rottura.contains("internal"), "{rottura}");
+}
+
+/// `ResourceLimit` non e' piu' nel contratto del verificatore (riga 12 della
+/// matrice): se ricomparisse, e' un guasto da vedere.
+#[test]
+fn resource_limit_non_e_piu_un_rifiuto_del_verificatore() {
+    use plenora_core::error::PlenoraError;
+
+    let esito = crate::interni::classifica_esito(Err(PlenoraError::ResourceLimit(
+        "tetto superato".to_owned(),
+    )));
+    assert!(esito.is_err(), "{esito:?}");
 }
 
 /// Un errore di **I/O** e' un guasto dell'harness, non un rifiuto.

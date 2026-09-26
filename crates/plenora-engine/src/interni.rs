@@ -386,7 +386,7 @@ pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
 /// | esito | verdetto |
 /// |---|---|
 /// | `Ok(())` | `Ok(true)`: accettato |
-/// | `data_mapping`, `resource_limit` | `Ok(false)`: rifiutato, ed e' il caso ordinario |
+/// | `data_mapping`, `schema`, e `internal` dei passi 4-5 (sigillo e framing, riconosciuto dal prefisso costante) | `Ok(false)`: rifiutato, ed e' il caso ordinario |
 /// | `io` | `Err`: guasto dell'harness o dell'ambiente, non dell'ingresso |
 /// | qualunque altra | `Err`: il verificatore non la dichiara, quindi o il contratto e' cambiato o e' un difetto. In entrambi i casi tacere sarebbe peggio |
 ///
@@ -403,7 +403,16 @@ pub(crate) fn classifica_esito(esito: plenora_core::error::Result<()>) -> Result
         return Ok(true);
     };
     match errore.category() {
-        ErrorCategory::DataMapping | ErrorCategory::ResourceLimit => Ok(false),
+        ErrorCategory::DataMapping | ErrorCategory::Schema => Ok(false),
+        // `Internal` e' un rifiuto ordinario solo se viene dai passi 4-5: ogni
+        // altro `Internal` e' un difetto, e letto come rifiuto sparirebbe.
+        ErrorCategory::Internal
+            if errore
+                .to_string()
+                .contains(crate::verifica::PREFISSO_PASSI_4_5) =>
+        {
+            Ok(false)
+        }
         ErrorCategory::Io => Err("harness: errore di I/O durante la verifica".to_owned()),
         // Il nome della categoria e' una stringa stabile del nostro canone,
         // non testo dell'ingresso: puo' entrare nel messaggio.

@@ -2470,7 +2470,11 @@ il kernel nell'evidenza proprio perché quel numero è parte dell'esito.
 
 ## 10. Matrice degli esiti
 
-`ResourceLimit` compare **solo** dove c'è evidenza attribuibile (`F4-2`).
+`ResourceLimit` **attribuito al dominio** compare solo dove c'è evidenza
+attribuibile (`F4-2`): la riga 5. Un tetto **dichiarato** — `max_batch_bytes`, il
+budget governato — che il worker vede superato e rifiuta da sé è invece l'errore
+tipizzato della riga 2, e porta la categoria che il worker dichiara, anche
+`ResourceLimit`: lì nessuno deduce un OOM, il rifiuto è la misura stessa.
 
 | # | esito | evidenza | categoria | output visibile | artefatto |
 |---|---|---|---|---|---|
