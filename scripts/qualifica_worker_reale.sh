@@ -231,20 +231,38 @@ verifica_il_nipote() {
     echo "PERSO: non si crea il file della sonda" >&2
     return 1
   }
-  # Il file si toglie in ogni caso, anche se la sonda esce a meta'.
-  trap 'rm -f "$dove"' RETURN
+  # Il file si toglie in ogni caso, anche se la sonda esce a meta'. La trap
+  # si toglie da se': una trap RETURN resta attiva dopo il ritorno, e sotto
+  # `set -u` la funzione successiva inciamperebbe su `$dove` non definita.
+  trap 'rm -f "$dove"; trap - RETURN' RETURN
 
   # Il figlio genera il nipote e poi aspetta: `timeout` uccidera' il figlio, e
   # cio' che si misura e' che cosa succede al nipote.
   # Il nipote e' lanciato con lo stesso eseguibile che `e_ancora_il_nostro`
   # confronta: risolverlo di nuovo qui aprirebbe una finestra fra i due.
-  timeout --signal=KILL 1 sh -c "'$SLEEP_REALE' $marcatore & echo \$! >&2; sleep 600" \
-    2>"$dove" || true
+  # Eseguibile e marcatore entrano come argomenti posizionali, mai nel testo
+  # dello script. Il PID esce sul descrittore 3, e solo dopo che il nipote si
+  # e' visto con il proprio marcatore: un nipote che non parte non lascia un
+  # PID da giudicare sparito.
+  # shellcheck disable=SC2016 # il testo e' dello `sh` interno, apposta.
+  timeout --signal=KILL 1 sh -c '
+    "$1" "$2" &
+    p=$!
+    i=0
+    while [ "$i" -lt 50 ]; do
+      if { tr "\0" "\n" < "/proc/$p/cmdline"; } 2>/dev/null | grep -qxF -- "$2"; then
+        echo "$p" >&3
+        break
+      fi
+      i=$((i + 1))
+      sleep 0.01
+    done
+    sleep 600' sh "$SLEEP_REALE" "$marcatore" 3>"$dove" || true
 
   local nipote
-  nipote="$(tr -dc '0-9' < "$dove")"
-  if [[ -z "$nipote" ]]; then
-    echo "PERSO: la sonda non ha prodotto un pid: non si puo' dire niente" >&2
+  nipote="$(cat "$dove")"
+  if [[ ! "$nipote" =~ ^[0-9]+$ ]]; then
+    echo "PERSO: la sonda non ha visto partire il nipote: non si puo' dire niente" >&2
     return 1
   fi
 
