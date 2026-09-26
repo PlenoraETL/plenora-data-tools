@@ -1339,12 +1339,11 @@ acquistato un chiamante di produzione vero, che è `pubblicazione::risolvi_commi
 | `ipc_boundary::convalida_artefatto_con_causa` | `risolvi_commit`, che apre **una volta sola** e vuole la causa fine |
 | `ipc_boundary::ArtefattoConvalidato` e `in_batches` | `risolvi_commit`, per percorrere i corpi |
 
-Restano invece sotto `cfg` `convalida_artefatto` — la forma che traduce la causa
-in `PlenoraError`, che serve al solo verificatore — e i metodi
-`ArtefattoConvalidato::duplica`, `misura_ora`, `byte_totali`, `leggi_a`, più
-`geo_transport::ipc::SeekSource::lettore`: li usa la sola catena verifica → passo
-9. Un `cfg` sul modulo che lasciasse scoperto ciò che solo quel modulo usa non
-sarebbe un perimetro, ma una linea tracciata a metà.
+`convalida_artefatto` — la forma che traduce la causa in `PlenoraError`, che
+serve al solo verificatore — e i metodi `ArtefattoConvalidato::duplica`,
+`misura_ora`, `byte_totali`, `leggi_a`, più `geo_transport::ipc::SeekSource::lettore`
+li usa la sola catena verifica → passo 9, e sono usciti dal perimetro insieme a
+lei, quando il profilo isolato le ha dato un chiamante di produzione.
 
 **Il conto è misurato, non asserito, e la piattaforma cambia che cosa dice.**
 
