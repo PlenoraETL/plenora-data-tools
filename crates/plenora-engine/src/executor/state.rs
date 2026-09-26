@@ -227,10 +227,10 @@ impl ExecState {
         if let Some(prepared) = self.prepared_one_to_one.borrow().get(&kernel.node_id) {
             return Ok(prepared.clone());
         }
-        let prepared =
-            Rc::new(prepare_one_to_one(schema, params).map_err(|error| {
-                step_error(kernel, PlenoraError::InvalidPlan(error.to_string()))
-            })?);
+        let prepared = Rc::new(
+            prepare_one_to_one(schema, params)
+                .map_err(|error| step_error(kernel, error.errore_del_passo()))?,
+        );
         self.prepared_one_to_one
             .borrow_mut()
             .insert(kernel.node_id.clone(), prepared.clone());

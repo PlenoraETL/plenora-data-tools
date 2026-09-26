@@ -500,8 +500,13 @@ pub fn execute_transform(
     let output_path = Path::new(output);
     let (result, esito) =
         publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
-            transform_stream(&mut input_reader, output_writer, &schema)
-                .map_err(|error| contract(error.to_string()))
+            // Un `PlenoraError` dentro conserva la propria categoria — un
+            // kernel che non conclude resta `Internal`; il resto e' `contract`.
+            transform_stream(&mut input_reader, output_writer, &schema).map_err(|error| {
+                error
+                    .downcast::<PlenoraError>()
+                    .map_or_else(|altro| contract(altro.to_string()), |errore| *errore)
+            })
         })?;
     Ok((result, esito))
 }

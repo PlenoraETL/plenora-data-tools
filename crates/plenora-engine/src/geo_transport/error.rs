@@ -327,7 +327,7 @@ impl ArrowTransportError {
             Self::Kernel(
                 O::ValidazioneNonConclusa(_) | O::CalcoloNonConcluso(_) | O::Internal(_),
             )
-            | Self::Topology(T::ValidazioneNonConclusa(_))
+            | Self::Topology(T::ValidazioneNonConclusa(_) | T::CalcoloNonConcluso(_))
             | Self::Construction(C::ValidazioneNonConclusa(_))
             | Self::Advanced(A::ValidazioneNonConclusa(_))
             | Self::Extended(E::ValidazioneNonConclusa(_))
@@ -526,6 +526,7 @@ mod tests {
         let mut casi = vec![
             ArrowTransportError::Kernel(OperationError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Topology(TopologyError::ValidazioneNonConclusa("forma")),
+            ArrowTransportError::Topology(TopologyError::CalcoloNonConcluso("forma")),
             ArrowTransportError::Construction(ConstructionError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Advanced(AdvancedError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Extended(ExtendedError::ValidazioneNonConclusa("forma")),
@@ -566,10 +567,10 @@ mod tests {
         // aggiunto: in quel caso non cambierebbero ne' il vettore ne' questo
         // numero, e il caso resterebbe verde. La completezza rispetto ai rami
         // che `e_interna` riconosce OGGI e' stata verificata confrontando i
-        // due elenchi a mano — undici rami di kernel qui, i tre non-kernel in
+        // due elenchi a mano — dodici rami di kernel qui, i tre non-kernel in
         // `i_rami_interni_non_kernel_sono_riconosciuti` — non da questa
         // asserzione.
-        let attesi = 9
+        let attesi = 10
             + usize::from(cfg!(feature = "proj-backend"))
             + usize::from(cfg!(feature = "geos-backend"));
         assert_eq!(
