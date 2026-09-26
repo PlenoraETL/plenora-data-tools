@@ -11,6 +11,7 @@
 //! piano — e cercare un nome a ogni batch sarebbe lavoro ripetuto per una
 //! risposta che non cambia.
 
+use crate::geo_transport::error::ArrowTransportError;
 use crate::geo_transport::pair::{decode_geometry_batches, preflight_decoded_bytes, PairOperation};
 use crate::geo_transport::transport::TransformArrowSchema;
 use crate::governor::GovernedBatch;
@@ -607,7 +608,7 @@ pub(super) fn run_geo_binary_blocking(
                 phase: ErrorPhase::Read,
                 side: Some(GeoBinarySide::Left),
                 row_index: error.row_index,
-                source: PlenoraError::InvalidPlan(error.source.to_string()),
+                source: errore_di_coppia(error.source),
             },
         )
     })?;
@@ -633,7 +634,7 @@ pub(super) fn run_geo_binary_blocking(
                 phase: ErrorPhase::Read,
                 side: Some(GeoBinarySide::Right),
                 row_index: error.row_index,
-                source: PlenoraError::InvalidPlan(error.source.to_string()),
+                source: errore_di_coppia(error.source),
             },
         )
     })?;
@@ -770,7 +771,7 @@ pub(super) fn execute_geo_binary(
                 })?,
                 geo_plan.max_pairs,
             )
-            .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+            .map_err(errore_di_coppia)?;
             let left_indices = UInt64Array::from_iter_values(pairs.iter().map(|pair| pair.left));
             let mut columns: Vec<ArrayRef> = Vec::with_capacity(left.num_columns() + 1);
             for column in left.columns() {
@@ -793,7 +794,7 @@ pub(super) fn execute_geo_binary(
                 geo_plan.max_comparisons,
                 geo_plan.max_results,
             )
-            .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+            .map_err(errore_di_coppia)?;
             let left_indices = UInt64Array::from_iter_values(matches.iter().map(|m| m.left));
             let mut columns: Vec<ArrayRef> = Vec::with_capacity(left.num_columns() + 2);
             for column in left.columns() {
@@ -814,7 +815,7 @@ pub(super) fn execute_geo_binary(
         PairOperation::Within => {
             let indexes =
                 within_indexes_validated(left_geometries, right_geometries, geo_plan.max_pairs)
-                    .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+                    .map_err(errore_di_coppia)?;
             let matched: std::collections::HashSet<u64> = indexes.into_iter().collect();
             let flags: Vec<Option<bool>> = left_geometries
                 .iter()
@@ -837,7 +838,7 @@ pub(super) fn execute_geo_binary(
                 right_geometries,
                 geo_plan.max_pairs,
             )
-            .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))?;
+            .map_err(errore_di_coppia)?;
             let values: Vec<Option<u64>> = counts
                 .iter()
                 .enumerate()
@@ -854,5 +855,64 @@ pub(super) fn execute_geo_binary(
             "operazione binaria geo fuori dal perimetro del dispatch: invariante di prepare violata"
                 .into(),
         )),
+    }
+}
+
+/// L'errore di un kernel di coppia nella categoria giusta: `Internal` se il
+/// kernel non ha concluso — la validazione o `relate` si sono interrotte, o
+/// un'invariante e' saltata — `InvalidPlan` altrimenti.
+///
+/// # Perche' non `InvalidPlan` per tutto
+///
+/// Perche' un calcolo che non conclude su geometrie valide non e' un errore
+/// del piano: chiamarlo cosi' manda chi legge a correggere un ingresso che
+/// nessuno ha dimostrato sbagliato, e ne cambia l'exit code. La decisione e'
+/// quella di [`ArrowTransportError::errore_del_passo`], una sola per tutti i
+/// passi geo; il testo resta quello del kernel.
+fn errore_di_coppia(errore: impl Into<ArrowTransportError>) -> PlenoraError {
+    let errore: ArrowTransportError = errore.into();
+    let testo = errore.to_string();
+    if errore.source_error().e_interna() {
+        PlenoraError::Internal(testo)
+    } else {
+        PlenoraError::InvalidPlan(testo)
+    }
+}
+
+#[cfg(test)]
+mod prove_dell_errore_di_coppia {
+    use plenora_core::ErrorCategory;
+    use plenora_kernels_geo::analysis::AnalysisError;
+    use plenora_kernels_geo::spatial_join::SpatialJoinError;
+
+    use super::errore_di_coppia;
+
+    /// Un kernel di coppia che non conclude e' `Internal`, anche quando
+    /// l'errore dello spatial join arriva avvolto in quello dell'analisi.
+    #[test]
+    fn un_calcolo_non_concluso_e_interno_anche_annidato() {
+        for errore in [
+            errore_di_coppia(SpatialJoinError::CalcoloNonConcluso("forma")),
+            errore_di_coppia(SpatialJoinError::ValidazioneNonConclusa("forma")),
+            errore_di_coppia(AnalysisError::SpatialJoin(
+                SpatialJoinError::CalcoloNonConcluso("forma"),
+            )),
+            errore_di_coppia(AnalysisError::ValidazioneNonConclusa("forma")),
+        ] {
+            assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
+        }
+    }
+
+    /// Un errore vero del piano resta del piano, con il testo del kernel.
+    #[test]
+    fn un_errore_del_piano_resta_del_piano() {
+        let errore = errore_di_coppia(AnalysisError::InvalidWorkLimit);
+        assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
+        assert!(
+            errore
+                .to_string()
+                .contains(&AnalysisError::InvalidWorkLimit.to_string()),
+            "{errore}"
+        );
     }
 }

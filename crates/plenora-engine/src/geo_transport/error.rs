@@ -282,7 +282,8 @@ impl ArrowTransportError {
     /// Perche' i chiamanti sono due — il passo fuso e quello non fuso — e due
     /// copie della stessa decisione divergono: e' gia' successo che un ramo
     /// conservasse la diagnostica di riga e l'altro no.
-    pub(crate) fn errore_del_passo(&self) -> PlenoraError {
+    #[must_use]
+    pub fn errore_del_passo(&self) -> PlenoraError {
         if self.source_error().e_interna() {
             return PlenoraError::Internal(self.to_string());
         }
@@ -332,7 +333,12 @@ impl ArrowTransportError {
             | Self::Extended(E::ValidazioneNonConclusa(_))
             | Self::ExtendedAlgorithm(Ea::ValidazioneNonConclusa(_) | Ea::Internal(_))
             | Self::Predicate(P::ValidazioneNonConclusa(_) | P::CalcoloNonConcluso(_))
-            | Self::Analysis(An::ValidazioneNonConclusa(_))
+            | Self::Analysis(
+                An::ValidazioneNonConclusa(_)
+                | An::SpatialJoin(
+                    S::ValidazioneNonConclusa(_) | S::CalcoloNonConcluso(_) | S::Internal(_),
+                ),
+            )
             | Self::SpatialJoin(
                 S::ValidazioneNonConclusa(_) | S::CalcoloNonConcluso(_) | S::Internal(_),
             ) => true,

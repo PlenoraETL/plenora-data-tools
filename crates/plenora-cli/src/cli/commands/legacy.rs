@@ -546,8 +546,11 @@ pub fn execute_transform_arrow(
                     // storica `contract` (unico percorso del trasporto legacy che
                     // produce diagnostica: `transform_arrow`; `pair_arrow` e il
                     // v2 a frame WKB non ne emettono).
+                    // Un errore interno del kernel — una validazione o un
+                    // calcolo che non concludono — resta interno: la
+                    // decisione e' `ArrowTransportError::errore_del_passo`.
                     error.row_diagnostics().map_or_else(
-                        || contract(error.to_string()),
+                        || error.errore_del_passo(),
                         |diagnostics| {
                             PlenoraError::DataMapping(error.to_string())
                                 .with_phase(ErrorPhase::Read)
@@ -588,7 +591,7 @@ pub fn execute_pair_arrow(
                 &schema,
                 output_format,
             )
-            .map_err(|error| contract(error.to_string()))
+            .map_err(|error| error.errore_del_passo())
         })?;
     Ok((summary, esito))
 }

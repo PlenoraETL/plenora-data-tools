@@ -195,6 +195,31 @@ fn checked_geos_input(
     GeosGeometry::new_from_wkb(&payload).map_err(geos_error)
 }
 
+/// L'errore di `point_on_surface` dentro lo split: un calcolo che non
+/// conclude e' interno, e passa per `InputContract` perche' e' la variante che
+/// la classificazione dell'engine riconosce per categoria; un output davvero
+/// invalido resta `InvalidOutput`.
+fn errore_del_punto(errore: crate::operations::OperationError) -> GeosBackendError {
+    use crate::operations::OperationError as O;
+    match errore {
+        O::CalcoloNonConcluso(_) | O::ValidazioneNonConclusa(_) | O::Internal(_) => {
+            GeosBackendError::InputContract(PlenoraError::Internal(errore.to_string()))
+        }
+        altro => GeosBackendError::InvalidOutput(altro.to_string()),
+    }
+}
+
+/// Come [`errore_del_punto`], per il predicato che sceglie le facce.
+fn errore_del_predicato(errore: crate::predicates::PredicateError) -> GeosBackendError {
+    use crate::predicates::PredicateError as P;
+    match errore {
+        P::CalcoloNonConcluso(_) | P::ValidazioneNonConclusa(_) => {
+            GeosBackendError::InputContract(PlenoraError::Internal(errore.to_string()))
+        }
+        altro => GeosBackendError::InvalidOutput(altro.to_string()),
+    }
+}
+
 fn checked_noding_work(
     geometries: &[&Geometry<f64>],
     max_work: u64,
@@ -490,13 +515,13 @@ pub fn split_polygon_by_linework(
     let mut output = Vec::new();
     for polygon in candidates {
         let candidate = Geometry::Polygon(polygon.clone());
-        let Some(point) = crate::operations::point_on_surface(&candidate)
-            .map_err(|error| GeosBackendError::InvalidOutput(error.to_string()))?
+        let Some(point) =
+            crate::operations::point_on_surface(&candidate).map_err(errore_del_punto)?
         else {
             continue;
         };
         if crate::predicates::evaluate(source, &point, crate::predicates::SpatialPredicate::Covers)
-            .map_err(|error| GeosBackendError::InvalidOutput(error.to_string()))?
+            .map_err(errore_del_predicato)?
         {
             output.push(polygon);
         }
