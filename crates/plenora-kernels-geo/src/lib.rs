@@ -1271,6 +1271,69 @@ mod tests {
         ));
     }
 
+    /// La validazione OGC (`valida_ogc`/`RagioneNonValida::dal_testo`) legge
+    /// il testo di `geo` per classificare, senza pubblicarlo
+    /// (errori-e-limiti.md#privacy-dei-messaggi, stessa regola di arrow/GEOS/
+    /// PROJ/wkt). Canary attraverso il confine pubblico reale
+    /// (`geometry_from_wkb`, non `validazione_protetta`/`check_validation` in
+    /// isolamento).
+    ///
+    /// Il dato che `geo` interpola qui non e' una coordinata ma un **indice
+    /// posizionale**: per una `MultiPolygon` con membri che si sovrappongono,
+    /// il testo grezzo e' `"polygons at indices I e J overlap"` (verificato
+    /// nella controprova sotto, sul sorgente vendorizzato
+    /// `algorithm/validation/multi_polygon.rs:29`) — un fatto sui dati di chi
+    /// chiama (quanti poligoni, quali si toccano) tanto quanto lo sarebbe una
+    /// coordinata. La classificazione lo riduce a una delle sette stringhe
+    /// fisse di [`RagioneNonValida`], che per costruzione (il `match` in
+    /// `Display`) non puo' MAI interpolare un indice o un valore — non solo
+    /// per questo input.
+    #[test]
+    fn ogc_validation_classifies_overlap_without_leaking_the_member_index() {
+        // Due quadrati sovrapposti come membri 0 e 1 di una MultiPolygon:
+        // "indices 0 and 1" e' la coppia che il testo grezzo di `geo`
+        // interpolerebbe.
+        fn quadrato_wkb(x0: f64, y0: f64, lato: f64) -> Vec<u8> {
+            let mut wkb = vec![1_u8];
+            wkb.extend_from_slice(&3_u32.to_le_bytes()); // Polygon
+            wkb.extend_from_slice(&1_u32.to_le_bytes()); // 1 anello
+            wkb.extend_from_slice(&5_u32.to_le_bytes()); // 5 punti (chiuso)
+            for (x, y) in [
+                (x0, y0),
+                (x0 + lato, y0),
+                (x0 + lato, y0 + lato),
+                (x0, y0 + lato),
+                (x0, y0),
+            ] {
+                wkb.extend_from_slice(&x.to_le_bytes());
+                wkb.extend_from_slice(&y.to_le_bytes());
+            }
+            wkb
+        }
+        let quadrato_a = quadrato_wkb(0.0, 0.0, 2.0); // (0,0)-(2,2)
+        let quadrato_b = quadrato_wkb(1.0, 1.0, 2.0); // (1,1)-(3,3), sovrapposto ad A
+
+        let mut multipoly = vec![1_u8];
+        multipoly.extend_from_slice(&6_u32.to_le_bytes()); // MultiPolygon
+        multipoly.extend_from_slice(&2_u32.to_le_bytes()); // 2 membri
+        multipoly.extend_from_slice(&quadrato_a);
+        multipoly.extend_from_slice(&quadrato_b);
+
+        let errore = geometry_from_wkb(&multipoly)
+            .expect_err("due poligoni sovrapposti in una MultiPolygon non sono validi")
+            .to_string();
+        // Due asserzioni distinte: l'assenza del dato E la presenza della
+        // causa classificata, non una sola delle due.
+        assert!(
+            !errore.contains("indices") && !errore.contains("0 and 1") && !errore.contains("0 e 1"),
+            "l'indice del membro sovrapposto non deve attraversare il confine pubblico: {errore}"
+        );
+        assert_eq!(
+            errore,
+            "contract violation: geometria OGC non valida: poligoni sovrapposti"
+        );
+    }
+
     #[test]
     fn wkb_validator_covers_endianness_truncation_counts_and_trailing_bytes() {
         let mut big_endian_point = vec![0_u8];
