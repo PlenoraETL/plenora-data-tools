@@ -409,7 +409,14 @@ fn ascolta<T: Terminatore>(
             if gia_forzato && std::time::Instant::now() >= scadenza {
                 // Forzato, e il dominio non si e' svuotato lo stesso. Non c'e'
                 // altro da aspettare: chi non muore con `cgroup.kill` non muore
-                // guardandolo piu' a lungo.
+                // guardandolo piu' a lungo. E' un fatto dell'esito, come nella
+                // rinuncia: processi possono essere rimasti.
+                if !registro.dominio_quiescente() {
+                    difetti.abitato = Some(format!(
+                        "il dominio non si e' svuotato entro {} ms dalla forzatura",
+                        attesa_della_quiescenza.as_millis()
+                    ));
+                }
                 break;
             }
         }
