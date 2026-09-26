@@ -129,10 +129,15 @@ fi
 # che lo guarda il kernel puo' aver dato quel numero a qualcun altro, e agire su
 # quel numero colpirebbe un estraneo. L'identita' si legge dagli **argomenti**,
 # che il marcatore rende unici.
+#
+# Rende 0 se e' ancora il nostro, 1 se non c'e' piu' o e' un altro, e 2 se non
+# si lascia leggere: un processo illeggibile non e' un processo sparito.
 e_ancora_il_nostro() {
-  local pid="$1" marcatore="$2" riga="/proc/$1/cmdline"
-  [[ -r "$riga" ]] || return 1
-  tr '\0' ' ' < "$riga" 2>/dev/null | grep -qF "$marcatore"
+  local pid="$1" marcatore="$2" riga="/proc/$1/cmdline" argomenti
+  [[ -e "/proc/$pid" ]] || return 1
+  argomenti="$(tr '\0' '\n' < "$riga" 2>/dev/null)" || return 2
+  [[ -e "/proc/$pid" ]] || return 1
+  grep -qxF -- "$marcatore" <<<"$argomenti"
 }
 
 # Aspetta che `$1` sparisca, ricontrollando l'identita' a ogni giro.
@@ -142,8 +147,11 @@ e_ancora_il_nostro() {
 attendi_che_sparisca() {
   local pid="$1" marcatore="$2" giri="$3"
   local passato=0
+  local stato
   while [[ "$passato" -lt "$giri" ]]; do
-    e_ancora_il_nostro "$pid" "$marcatore" || return 0
+    stato=0
+    e_ancora_il_nostro "$pid" "$marcatore" || stato=$?
+    [[ "$stato" -eq 1 ]] && return 0
     sleep 0.2
     passato=$((passato + 1))
   done

@@ -1143,10 +1143,13 @@ mod tests {
         let mut resta = true;
         for _ in 0..200_u32 {
             match std::fs::read_to_string(&comando) {
-                Err(_) => {
+                // Solo «non esiste» e' un processo sparito: una lettura che
+                // fallisce per altro non dice niente, e il caso non la conta.
+                Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => {
                     resta = false;
                     break;
                 }
+                Err(lettura) => panic!("{comando} non si legge: {lettura}"),
                 Ok(nome) if nome.trim() != "sleep" => {
                     resta = false;
                     break;
@@ -1265,10 +1268,13 @@ mod tests {
         let mut resta = true;
         for _ in 0..200_u32 {
             match std::fs::read_to_string(&comando) {
-                Err(_) => {
+                // Solo «non esiste» e' un processo sparito: una lettura che
+                // fallisce per altro non dice niente, e il caso non la conta.
+                Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => {
                     resta = false;
                     break;
                 }
+                Err(lettura) => panic!("{comando} non si legge: {lettura}"),
                 Ok(nome) if nome.trim() != "sleep" => {
                     resta = false;
                     break;
