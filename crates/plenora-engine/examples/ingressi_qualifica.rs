@@ -47,10 +47,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     while inizio < righe {
         let limite = righe.min(inizio.saturating_add(per_batch));
         let indici = inizio..limite;
-        let id: Int64Array = indici
-            .clone()
-            .map(|indice| i64::try_from(indice).unwrap_or(i64::MAX))
-            .collect();
+        // Un indice oltre `i64` e' un rifiuto, non un id ripetuto.
+        let id = Int64Array::from(
+            indici
+                .clone()
+                .map(i64::try_from)
+                .collect::<Result<Vec<i64>, _>>()?,
+        );
         let nome: StringArray = indici
             .clone()
             .map(|indice| Some(format!("riga-{indice}")))
