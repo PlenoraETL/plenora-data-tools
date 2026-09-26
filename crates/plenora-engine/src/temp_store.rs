@@ -339,8 +339,8 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
         Err(errore) => Err(errore),
     }
     .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
+    .ok()
+    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
     match mtime {
         // `saturating_mul`: un TTL enorme non deve avvolgere la soglia e
         // trasformare «non abbastanza vecchio» in «da cancellare». Saturando,
