@@ -1,6 +1,7 @@
 """Casi di ``segnala_verificato``: su Linux, con processi veri."""
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -12,6 +13,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 import segnala_verificato  # noqa: E402
 
 HA_PIDFD = hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal")
+
+
+def processo_sleep():
+    """Il percorso reale di `sleep`, come lo vede /proc/PID/exe."""
+    return os.path.realpath(shutil.which("sleep"))
 
 
 @unittest.skipUnless(HA_PIDFD, "serve pidfd (Linux, Python 3.9+)")
@@ -52,6 +58,46 @@ class SegnalaVerificato(unittest.TestCase):
             processo.pid, signal.SIGTERM, os.getpid(), eseguibile=sys.executable
         )
         self.assertEqual(esito, 1)
+        self.assertIsNone(processo.poll())
+
+    def test_chi_segnala_non_si_riconosce_nel_bersaglio(self):
+        # Stesso genitore e stesso argomento, ma l'eseguibile e' l'interprete:
+        # l'aiuto non segnala se stesso anche se ne avesse ereditato il PID.
+        esito = segnala_verificato.segnala(
+            os.getpid(),
+            signal.SIGTERM,
+            os.getppid(),
+            eseguibile="/usr/bin/sleep",
+            argomento=sys.argv[0],
+        )
+        self.assertEqual(esito, 1)
+
+    def test_eseguibile_e_argomento_devono_tornare_entrambi(self):
+        processo = self.figlio()
+        esito = segnala_verificato.segnala(
+            processo.pid,
+            signal.SIGTERM,
+            os.getpid(),
+            eseguibile=processo_sleep(),
+            argomento="31",
+        )
+        self.assertEqual(esito, 1)
+        self.assertIsNone(processo.poll())
+        esito = segnala_verificato.segnala(
+            processo.pid,
+            signal.SIGTERM,
+            os.getpid(),
+            eseguibile=processo_sleep(),
+            argomento="30",
+        )
+        self.assertEqual(esito, 0)
+        self.assertEqual(processo.wait(timeout=5), -signal.SIGTERM)
+
+    def test_senza_eseguibile_ne_argomento_non_parte_niente(self):
+        processo = self.figlio()
+        self.assertEqual(
+            segnala_verificato.segnala(processo.pid, signal.SIGTERM, os.getpid()), 1
+        )
         self.assertIsNone(processo.poll())
 
     def test_un_processo_mietuto_non_riceve_niente(self):

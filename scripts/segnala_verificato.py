@@ -3,8 +3,11 @@
 
 Uso::
 
-    segnala_verificato.py PID SEGNALE [--genitore PPID] --eseguibile PERCORSO
-    segnala_verificato.py PID SEGNALE [--genitore PPID] --argomento TESTO
+    segnala_verificato.py PID SEGNALE [--genitore PPID] [--eseguibile PERCORSO]
+                          [--argomento TESTO]
+
+Almeno uno fra ``--eseguibile`` e ``--argomento``; quelli dati devono tornare
+tutti.
 
 Un PID letto o ricordato da uno script di shell puo' tornare in uso prima del
 segnale: Bash miete i figli in modo asincrono, nel gestore di SIGCHLD, quindi
@@ -15,10 +18,13 @@ stato riusato quando il pidfd si apre, l'identita' non torna e non parte
 niente; se il processo muore dopo l'apertura, il pidfd non puo' raggiungere il
 suo successore e il segnale non arriva a nessuno.
 
-L'identita' e' l'eseguibile (``/proc/PID/exe``) o un argomento esatto della
-riga di comando, piu' il genitore (``PPid``) quando chi chiama lo conosce: un
-processo riparentato non ha un genitore prevedibile, e allora l'argomento deve
-essere unico da solo. Sceglierli e' compito di chi chiama.
+L'identita' e' l'eseguibile (``/proc/PID/exe``), un argomento esatto della
+riga di comando, e il genitore (``PPid``) quando chi chiama lo conosce: un
+processo riparentato non ha un genitore prevedibile. Un argomento da solo non
+basta mai: questo stesso processo lo porta nei propri argomenti, e con lo
+stesso genitore potrebbe riconoscersi nel bersaglio se ne ereditasse il PID.
+L'eseguibile lo distingue, perche' qui e' l'interprete Python. Sceglierli e'
+compito di chi chiama.
 
 Uscita: 0 segnale consegnato; 1 processo assente o diverso, nessun segnale;
 2 uso sbagliato o piattaforma senza pidfd.
@@ -39,17 +45,24 @@ def identita_torna(pid, genitore, eseguibile, argomento):
             )
         if genitore is not None and ppid != str(genitore):
             return False
-        if eseguibile is not None:
-            return os.readlink(f"/proc/{pid}/exe") == os.path.realpath(eseguibile)
-        with open(f"/proc/{pid}/cmdline", "rb") as riga:
-            argomenti = riga.read().split(b"\0")
-        return argomento.encode() in argomenti
+        if eseguibile is not None and os.readlink(f"/proc/{pid}/exe") != os.path.realpath(
+            eseguibile
+        ):
+            return False
+        if argomento is not None:
+            with open(f"/proc/{pid}/cmdline", "rb") as riga:
+                argomenti = riga.read().split(b"\0")
+            if argomento.encode() not in argomenti:
+                return False
+        return True
     except OSError:
         return False
 
 
 def segnala(pid, numero, genitore=None, eseguibile=None, argomento=None):
     """Rende 0 se il segnale e' partito verso il processo atteso, 1 altrimenti."""
+    if eseguibile is None and argomento is None:
+        return 1
     try:
         descrittore = os.pidfd_open(pid)
     except ProcessLookupError:
@@ -71,10 +84,11 @@ def main(argomenti):
     lettore.add_argument("pid", type=int)
     lettore.add_argument("segnale", help="nome senza SIG, per esempio INT o KILL")
     lettore.add_argument("--genitore", type=int)
-    quale = lettore.add_mutually_exclusive_group(required=True)
-    quale.add_argument("--eseguibile")
-    quale.add_argument("--argomento")
+    lettore.add_argument("--eseguibile")
+    lettore.add_argument("--argomento")
     opzioni = lettore.parse_args(argomenti)
+    if opzioni.eseguibile is None and opzioni.argomento is None:
+        lettore.error("serve almeno uno fra --eseguibile e --argomento")
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         print("segnala_verificato: questa piattaforma non ha pidfd", file=sys.stderr)
         return 2

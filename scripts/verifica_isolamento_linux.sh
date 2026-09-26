@@ -858,7 +858,8 @@ else
   printf '%s scrivibile_dal_control_plane=no\n' "$VICINO/cgroup.procs" >>"$DOVE/controprova.txt"
   fallisce "controprova: il control plane non sposta un processo in $VICINO, e senza quello il rifiuto del worker li' non dice niente"
 fi
-python3 "$SEGNALA" "$CAVIA" KILL --genitore $$ --argomento 60 || true
+python3 "$SEGNALA" "$CAVIA" KILL --genitore $$ --eseguibile "$(command -v sleep)" \
+  --argomento 60 || true
 wait "$CAVIA" 2>/dev/null || true
 
 # Il `cgroup.procs` del padre si **registra** e non si conta: nessuno lo scrive,

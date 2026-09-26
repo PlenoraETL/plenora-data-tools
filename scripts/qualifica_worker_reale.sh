@@ -189,9 +189,11 @@ verifica_il_nipote() {
   # stesso difetto che questa sonda esiste per trovare.
   # Il segnale passa da un pidfd aperto prima di verificare il marcatore: fra
   # la verifica e il segnale il PID non puo' cambiare processo.
-  python3 "$SEGNALA" "$nipote" TERM --argomento "$marcatore" || true
+  python3 "$SEGNALA" "$nipote" TERM --eseguibile "$(command -v sleep)" \
+    --argomento "$marcatore" || true
   if ! attendi_che_sparisca "$nipote" "$marcatore" 25; then
-    python3 "$SEGNALA" "$nipote" KILL --argomento "$marcatore" || true
+    python3 "$SEGNALA" "$nipote" KILL --eseguibile "$(command -v sleep)" \
+      --argomento "$marcatore" || true
     if ! attendi_che_sparisca "$nipote" "$marcatore" 25; then
       echo "PERSO: il nipote $nipote e' sopravvissuto al timeout e non si lascia chiudere: la macchina resta con un processo della sonda addosso" >&2
       return 1
