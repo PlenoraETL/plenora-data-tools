@@ -1305,17 +1305,21 @@ abbassamento di rigore sulle altre tre prove.
 
 ### Moduli compilati solo sotto `test` e `internals`
 
-**La regola.** `plenora_engine::verifica` — i passi da 3 a 8-bis — insieme al
-passo 9 che ne consuma la prova, al supporto esclusivo di entrambi, a
-`commit_footer::leggi_commit_token` e a `geo_transport::ipc::parse_footer` è
-compilato solo sotto `test` o la feature `internals`. Non è un'ottimizzazione: è
-la dichiarazione che quel codice **non ha ancora un chiamante di produzione**.
+**La regola.** Il codice senza un chiamante di produzione è compilato solo
+sotto `test` o la feature `internals`, e il `cfg` lo dichiara elemento per
+elemento. Non è un'ottimizzazione: è la dichiarazione che quel codice **non ha
+un chiamante di produzione**. Oggi il perimetro è quello elencato sotto:
+`commit_footer::leggi_commit_token`, `geo_transport::ipc::parse_footer`, alcuni
+elementi del protocollo e l'introspezione della macchina a stati. Il
+verificatore (`plenora_engine::verifica`, i passi da 3 a 8-bis) e il passo 9
+che ne consuma la prova non ne fanno parte: li attraversa il profilo isolato,
+con i passi 1 e 2 osservati dal supervisore.
 
-**Perché il passo 9 non basta a togliere il `cfg` al verificatore.** Perché
+**Perché il passo 9 da solo non bastava a togliere il `cfg` al verificatore.**
 `pubblicazione::pubblica` **non chiama** il verificatore: riceve la prova già
-fatta. La catena verifica → passo 9 è compiuta e non è percorsa da nessuno; chi
-la percorrerà è il supervisore, che osserva lo stato terminale del figlio e il
-suo `Esito` — i passi 1 e 2 — e arriva con la PR del lato supervisore.
+fatta. Il chiamante del verificatore è il supervisore, che osserva lo stato
+terminale del figlio e il suo `Esito` — i passi 1 e 2 — e poi chiede la
+verifica.
 
 **Perché non si è scelto di renderli pubblici.** Perché sarebbe stata la
 scorciatoia che questo registro vieta, in una forma più difficile da vedere.
@@ -1382,17 +1386,12 @@ incondizionato, perché il writer in-process lo chiama davvero (con `None`).
 Dentro `protocollo` il perimetro non è più il modulo ma un **elenco**, e
 l'elenco l'ha prodotto `-D dead-code` su Linux, non una lettura a mano:
 
-- il lato supervisore dell'handshake, sotto `any(test, internals)`:
-  `AtteseSupervisore`, `SupervisoreInAttesa` con i suoi metodi,
-  `confronta_capability` e `HandshakeAccettato`. Non li raggiungono soltanto i
-  casi: li guida anche il percorso di qualificazione end-to-end
-  (`isolamento::prova`), che sotto `internals` conduce un worker reale — ed è la
-  ragione per cui il `cfg` non è il solo `test`. `HandshakeAccettato` lo
-  **nomina** inoltre `isolamento::macchina::produttori`.
-
-  Di produzione non diventano con questo: il supervisore che `PR-8` costruisce
-  riceve un accordo **già concluso**, quindi non passa da lì, e il chiamante di
-  produzione arriva con `PR-12`, quando una policy sceglie l'esecuzione isolata;
+- il lato supervisore dell'handshake **non** c'è più: `AtteseSupervisore`,
+  `SupervisoreInAttesa`, `confronta_capability` e `HandshakeAccettato` li
+  raggiunge il chiamante di produzione del profilo isolato (vedi
+  l'aggiornamento su `PR-12`, sotto). Resta sotto `any(test, internals)` il
+  solo campo `commit_token` di `HandshakeAccettato`, con la sua copia in
+  `SupervisoreInAttesa`, per la ragione scritta là;
 - gli **inventari generati dalle macro** dei messaggi, `TUTTE` e `NOMI`, sotto
   `cfg(test)`. Esistono per essere enumerati dai casi che attraversano ogni
   variante; la produzione converte una variante per volta e non ha bisogno
@@ -1402,16 +1401,11 @@ l'elenco l'ha prodotto `-D dead-code` su Linux, non una lettura a mano:
   token, che chi esegue riceve invece da `ricevi_incarico`, insieme
   all'incarico e nello stesso momento.
 
-Fuori dal protocollo, la stessa regola tiene tre elementi dell'isolamento:
-
-- `SorgenteTerminabile::nuova` e `SorgenteTerminabile::con_passo`, sotto
-  `any(test, internals)`. Creano il freno **insieme** alla sorgente, ed è la
-  forma che serve al supervisore; il worker ha bisogno del contrario — il freno
-  prima, perché il thread che legge nasce dopo — e passa da `con_interruttore`,
-  che infatti è incondizionata;
-- `FiglioVivo::attendi_la_fine` e `isolamento::prova` non sono più nel
-  perimetro: il chiamante di produzione del profilo isolato li usa entrambi, e
-  `prova` è compilato su Linux senza altre condizioni.
+Fuori dal protocollo, nell'isolamento, la regola tiene la sola introspezione
+della macchina a stati (sotto, «Che cosa resta sotto `cfg`»).
+`SorgenteTerminabile::nuova` e `con_passo`, `FiglioVivo::attendi_la_fine` e
+`isolamento::prova` non sono nel perimetro: il chiamante di produzione del
+profilo isolato li usa, e `prova` è compilato su Linux senza altre condizioni.
 
 Un elemento del filo che avesse un chiamante solo di prova senza dirlo
 lascerebbe l'avviso a qualcun altro: è la ragione per cui l'elenco si aggiorna
@@ -1528,21 +1522,18 @@ perimetro descritto sopra:
   raggiungibile in produzione, verificata su VM reale con evidenza
   osservata (non solo con i finti dei casi).
 
-**Che cosa resta sotto `cfg`, e perché.** Un solo residuo, per una ragione
-diversa dalle altre — non "nessun chiamante", ma "nessuna sorgente da
-collegare": la cancellazione. `Fatto::CancellazioneRichiesta`,
-`Annullatore::annulla`, `EsitoDellAnnullamento` e il campo `commit_token`
-di `HandshakeAccettato` (con la sua copia privata in `SupervisoreInAttesa`)
-restano sotto `cfg`: il chiamante di produzione passa a
-`macchina::conduci_isolato` un `consegna_annullatore` che non fa niente,
-perché nessun `CancellationToken` esterno — lo stesso che il percorso
-in-process osserva — è collegato all'esecuzione isolata. Non è un limite
-dell'attribuzione OOM (quella funziona senza), è una richiesta di
-annullamento a metà esecuzione che oggi non ha da dove arrivare. Restano
-sotto `cfg` anche `Registro::concluso`/`quattro_fatti_positivi` e
-`Coda::terminale`/`rimasti`/`chiudi_e_drena`: introspezione dei casi, mai
-il giudizio vero (`classifica`) o la conduzione vera
-(`si_puo_smettere_di_ascoltare`, `chiudi_e_drena_entro`).
+**Che cosa resta sotto `cfg`, e perché.** Il campo `commit_token` di
+`HandshakeAccettato`, con la sua copia privata in `SupervisoreInAttesa`: il
+chiamante di produzione tiene il token nella **propria** copia
+(`esecuzione_isolata`) e la consegna al verificatore, quindi quella seconda
+porta sul token la leggono solo i casi. Restano sotto `cfg` anche
+`Registro::concluso`/`quattro_fatti_positivi` e
+`Coda::terminale`/`rimasti`/`chiudi_e_drena`: introspezione dei casi, mai il
+giudizio vero (`classifica`) o la conduzione vera
+(`si_puo_smettere_di_ascoltare`, `chiudi_e_drena_entro`). La cancellazione
+non è nel perimetro: `conduci_isolato` sorveglia lo stesso
+`CancellationToken` che l'handler Ctrl-C della CLI cancella, e la qualifica
+del profilo isolato la prova sul binario distribuito (riga 8).
 
 **La misura autoritativa resta pulita.** `RUSTFLAGS="-D dead-code" cargo
 check -p plenora-engine` su Linux è **ancora zero diagnostiche** dopo `PR-12`
@@ -1553,8 +1544,8 @@ lettore di produzione, i campi `evidenza` di `EsitoClassificato` scartati
 dal `match`, gli accessori `EsitoClassificato::{evidenza,categoria,pubblica}`
 e `ClasseEvidenzaMemoria::categoria` mai chiamati) è stata corretta dandole
 un consumo vero — `eprintln!` diagnostici che riportano l'evidenza raccolta
-davvero, non un `allow(dead_code)` — tranne dove il consumatore vero è
-un'altra PR (cancellazione, sopra), dove il `cfg` torna a dichiararlo. Il
+davvero, non un `allow(dead_code)` — tranne il campo `commit_token` (sopra),
+il cui lettore di produzione è un'altra copia del token: lì il `cfg` lo dichiara. Il
 conteggio su Windows è cambiato di conseguenza —
 più superficie cross-platform è ora compilata anche lì — ma resta quello che
 era già prima di `PR-12`: un numero informativo, non l'oracolo. La misura
@@ -2522,9 +2513,14 @@ nel «prima» e il delta lo cancellava.
 **Il perimetro.** L'evidenza si legge solo a dominio quiescente, come nella
 conduzione (`F4-10`). Se la quiescenza non arriva entro l'attesa della
 conduzione (500 ms), il dominio si termina con `cgroup.kill` e si riattende,
-come prescrive la §10.3 di [`isolamento.md`](isolamento.md): l'esito è allora
-ambiguo, e diventa `Internal` salvo un OOM attribuito. Una cancellazione
-osservata prima della conduzione cede al solo OOM attribuito.
+come prescrive la §10.3 di [`isolamento.md`](isolamento.md). La lettura
+dell'evidenza decide per prima: un OOM attribuito è `ResourceLimit`, una
+pressione non attribuita `UnattributedMemoryPressure`, un'evidenza incoerente
+`Internal`. Altrimenti, se è servito `cgroup.kill`, l'esito è ambiguo e diventa
+`Internal` — tranne quando la causa del dialogo è già un fatto accertato
+dall'handshake (`Protocol` o `InvalidConfiguration`, righe 9 e 10), che una
+quiescenza tardiva non rende ambiguo. Una cancellazione osservata prima della
+conduzione cede al solo OOM attribuito.
 
 **Il pericolo.** Un dominio che non si svuota **nemmeno** dopo `cgroup.kill`
 non si legge: l'errore è `Internal` e dice che processi possono essere rimasti

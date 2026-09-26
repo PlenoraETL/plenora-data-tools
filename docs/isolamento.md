@@ -1000,11 +1000,9 @@ alcun effetto osservabile all'esterno.
 per 3-8-bis, `pubblicazione::pubblica` per il 9. I passi 1 e 2 no, e non è una
 dimenticanza: leggono lo **stato terminale del figlio** e l'`Esito` che il
 worker dichiara, cioè due fatti che appartengono a chi possiede il ciclo di
-vita del processo. Chi li osserva oggi è la prova di qualificazione, che li
-applica prima di chiamare il verificatore; un supervisore di produzione che li
-applichi arriva con la PR che porta il lato supervisore. Prometterli qui come
-già disponibili significherebbe far cercare a chi legge una funzione che non
-esiste.
+vita del processo. Li osserva il supervisore del profilo isolato
+(`isolamento::esecuzione_isolata`, con la macchina a stati) prima di chiamare il
+verificatore, e la prova di qualificazione fa lo stesso sul proprio canale.
 
 Il passo 5-bis mancava, e la sua assenza era una lacuna e non una scelta: §4.4
 assegna al verificatore dell'artefatto la coerenza del digest, ma la sequenza
@@ -1078,11 +1076,10 @@ privati, nessun costruttore aperto e nessun `Clone`: l'unico modo di averne uno
 `NumeriDelCanale`: ciò che il tipo significa, invece di ciò che un commento
 dichiara.
 
-**Il passo 9 e il verificatore stanno sotto `cfg`, e `risolvi_commit` no.** La
-catena verifica → passo 9 è compiuta e nessun percorso di produzione la
-attraversa: il passo 9 riceve la prova, non la produce, quindi non è lui a dare
-un chiamante al verificatore. Chi la attraverserà è il supervisore, coi passi 1
-e 2. `risolvi_commit` invece è superficie pubblica da subito, perché il suo
+**La catena verifica → passo 9 la attraversa il supervisore, e `risolvi_commit`
+è pubblica.** Il passo 9 riceve la prova, non la produce, quindi non è lui a
+dare un chiamante al verificatore: glielo dà il supervisore del profilo isolato,
+coi passi 1 e 2. `risolvi_commit` invece è superficie pubblica, perché il suo
 chiamante è per definizione fuori: chi ha perso il processo incaricato di
 pubblicare. Regola e condizione di rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).

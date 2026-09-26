@@ -322,45 +322,15 @@ struct Montaggio {
     dispositivo: String,
 }
 
-// # Perche' meta' di questo modulo porta un `cfg` e meta' no
+// # Perche' questo modulo non porta un `cfg` di perimetro
 //
-// Perche' meta' ha un chiamante di produzione e meta' no, e un `cfg` dichiara
-// **quale** delle due.
-//
-// Il dispatch anticipato dello spawner rende raggiungibile tutto cio' che sta
-// fra `dal_confine` e la `exec`: la richiesta, la rivalidazione, il possesso, i
-// namespace, la sequenza in sette passi. Quello e' codice di produzione, e non
-// porta nessun `cfg`.
-//
-// Cio' che serve **solo al supervisore** — preparare il dominio, il token, la
-// transizione, l'avvio, il giudizio sull'immagine da rieseguire — non ha ancora
-// chi lo chiami, e lo dichiara con `cfg(any(test, feature = "internals"))`.
-//
-// **La condizione di rientro e' una sola, e vale per tutti**: quei `cfg`
-// spariscono quando esiste un supervisore che li chiama in produzione. Non e'
-// una data ne' il nome di una PR: e' un fatto verificabile, e si verifica
-// togliendo i `cfg` e costruendo senza `internals` con `-D dead-code`.
-//
-// Registro: errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
-
-// # Perche' meta' di questo modulo porta un `cfg` e meta' no
-//
-// Perche' meta' ha un chiamante di produzione e meta' no, e un `cfg` dichiara
-// **quale** delle due.
-//
-// Il dispatch anticipato dello spawner rende raggiungibile tutto cio' che sta
-// fra `dal_confine` e la `exec`: la richiesta, la rivalidazione, il possesso, i
-// namespace, la sequenza in sette passi. Quello e' codice di produzione, e non
-// porta nessun `cfg`.
-//
-// Cio' che serve **solo al supervisore** — preparare il dominio, il token, la
-// transizione, l'avvio, il giudizio sull'immagine da rieseguire — non ha ancora
-// chi lo chiami, e lo dichiara con `cfg(any(test, feature = "internals"))`.
-//
-// **La condizione di rientro e' una sola, e vale per tutti**: quei `cfg`
-// spariscono quando esiste un supervisore che li chiama in produzione. Non e'
-// una data ne' il nome di una PR: e' un fatto verificabile, e si verifica
-// togliendo i `cfg` e costruendo senza `internals` con `-D dead-code`.
+// Tutto cio' che sta qui ha un chiamante di produzione: il dispatch anticipato
+// dello spawner raggiunge cio' che sta fra `dal_confine` e la `exec`, e il
+// supervisore del profilo isolato (`esecuzione_isolata`) raggiunge la
+// preparazione del dominio, il token, la transizione, l'avvio e il giudizio
+// sull'immagine da rieseguire. Cio' che resta sotto `cfg` altrove lo dichiara
+// elemento per elemento, e si verifica togliendo i `cfg` e costruendo senza
+// `internals` con `-D dead-code`.
 //
 // Registro: errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 

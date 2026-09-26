@@ -113,10 +113,10 @@ input, trasportata nel `GovernedBatch` attraverso lo stream, propagata 1:1 nei
 segmenti streaming e **riassegnata deterministicamente** nei blocking, secondo
 l'ordine di scansione.
 
-Stato reale: la sequenza è assegnata, propagata e testata, ma **non ancora
-usata per riordinare**, perché in esecuzione seriale l'ordine logico coincide
-con quello di scansione. Il consumatore che riordina l'output dei rami
-paralleli arriverà con lo scheduler.
+Nessun consumatore la usa per riordinare: in esecuzione seriale l'ordine
+logico coincide con quello di scansione. Riordinare l'output di rami paralleli
+spetta a uno scheduler parallelo, che non esiste; lo stato del lavoro sta in
+[`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 ## Memoria
 

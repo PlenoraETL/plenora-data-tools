@@ -133,11 +133,11 @@ pub fn scrivi_commit_token<W: Write>(scrittore: &mut FileWriter<W>, token: Optio
 ///
 /// # Perche' e' dietro un `cfg`
 ///
-/// Non ha ancora un chiamante di produzione, e **il verificatore non lo e'**:
+/// Non ha un chiamante di produzione, e **il verificatore non lo e'**:
 /// deve riferire framing, token, digest e consegna ad arrow **a un solo
 /// handle**, mentre questa funzione fa una traversata propria. Chiamarla
-/// significherebbe convalidare due volte, con una finestra in mezzo. Il primo
-/// lettore reale e' quindi la sequenza di verifica e publish, con `PR-10`.
+/// significherebbe convalidare due volte, con una finestra in mezzo. Il
+/// lettore reale del token e' quindi la sequenza di verifica e publish.
 ///
 /// Cio' che i due condividono e' l'unica parte che avrebbe potuto divergere —
 /// l'interpretazione del testo trovato — ed e' in
