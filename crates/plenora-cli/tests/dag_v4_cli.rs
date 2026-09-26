@@ -2682,3 +2682,21 @@ fn il_tetto_anticipato_e_quello_abbassato_dal_piano() {
         );
     }
 }
+
+/// La sonda del tetto sugli input non anticipa il giudizio sui limiti: un
+/// blocco `limits` malformato lo rifiuta il planner, col proprio messaggio.
+#[test]
+fn un_blocco_limits_malformato_lo_giudica_il_planner() {
+    for limiti in [
+        json!(null),
+        json!({"plan": false}),
+        json!({"plan": {"max_inputs": "tre"}}),
+    ] {
+        let documento = envelope_con_ingressi_assenti("validate", 1, Some(limiti.clone()));
+        let messaggio = documento["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            !messaggio.contains("Sondati") && !messaggio.contains("max_inputs superato"),
+            "{limiti}: il messaggio viene dalla sonda: {documento}"
+        );
+    }
+}

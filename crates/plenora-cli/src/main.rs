@@ -636,25 +636,12 @@ pub(crate) struct PlanInputsProbe {
     inputs: Vec<String>,
     #[serde(default)]
     crs_decisions: std::collections::BTreeMap<String, String>,
+    /// Il blocco `limits` del piano, **grezzo**: la sonda ne legge il solo
+    /// `plan.max_inputs`, e un blocco malformato a qualunque livello lo giudica
+    /// il planner, col proprio messaggio. Una struttura tipizzata qui
+    /// fallirebbe prima, con un altro.
     #[serde(default)]
-    limits: LimitiSondati,
-}
-
-/// Il solo `limits.plan.max_inputs` del piano, per il tetto che
-/// [`pair_v4_inputs`] applica prima della scoperta dei contratti.
-///
-/// Il valore resta un `Value`: un override malformato lo giudica il planner,
-/// col proprio messaggio, e la sonda non deve anticiparne un altro.
-#[derive(Debug, Default, Deserialize)]
-struct LimitiSondati {
-    #[serde(default)]
-    plan: LimitiDiPianoSondati,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct LimitiDiPianoSondati {
-    #[serde(default)]
-    max_inputs: Option<serde_json::Value>,
+    limits: Option<serde_json::Value>,
 }
 
 impl PlanInputsProbe {
@@ -664,9 +651,9 @@ impl PlanInputsProbe {
     pub(crate) fn tetto_ingressi(&self) -> usize {
         let predefinito = plenora_core::limits::Limits::default().plan.max_inputs;
         self.limits
-            .plan
-            .max_inputs
             .as_ref()
+            .and_then(|limiti| limiti.get("plan"))
+            .and_then(|piano| piano.get("max_inputs"))
             .and_then(serde_json::Value::as_u64)
             .and_then(|valore| usize::try_from(valore).ok())
             .filter(|valore| *valore <= predefinito)
@@ -2467,7 +2454,7 @@ mod tests {
                 "main".to_owned(),
                 definition.to_owned(),
             )]),
-            limits: LimitiSondati::default(),
+            limits: None,
         }
     }
 
@@ -2483,7 +2470,7 @@ mod tests {
                 "other".to_owned(),
                 "EPSG:32632".to_owned(),
             )]),
-            limits: LimitiSondati::default(),
+            limits: None,
         };
         let error = apply_crs_decisions(&probe, &mut contracts).expect_err("input ignoto");
         assert!(error.to_string().contains("crs_decisions"), "{error}");
@@ -3050,7 +3037,7 @@ mod tests {
         let probe = PlanInputsProbe {
             inputs: vec!["sinistra".to_owned(), "destra".to_owned()],
             crs_decisions: std::collections::BTreeMap::new(),
-            limits: LimitiSondati::default(),
+            limits: None,
         };
         assert_eq!(
             pair_v4_inputs(&probe, &inputs).expect("accoppiamento"),
