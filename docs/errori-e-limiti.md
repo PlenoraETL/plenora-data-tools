@@ -2370,6 +2370,28 @@ mancata del sorvegliante: `Builder::spawn` lascia cadere la chiusura con tutto
 ciò che ha catturato, quindi l'osservatore viaggia in una cella condivisa e chi
 resta fuori lo ritrova lì. *Rientro:* nessuno previsto.
 
+### La pulizia dei domini non esce su un canale machine-readable
+
+**La regola.** La riga 16 della matrice di [`isolamento.md`](isolamento.md)
+chiede che un cleanup fallito dopo un publish riuscito sia un successo **con
+avvertenza machine-readable**. Il documento di `run` la dà per il temporaneo
+della pubblicazione (`temp_cleanup`). Non la dà per le directory dei due domini
+`cgroup2` e per la directory di lavoro del worker.
+
+**Il perimetro.** Un dominio che non si rimuove (`remove_dir` sul cgroup del
+worker o del verificatore) finisce su **stderr**, e l'esecuzione resta un
+successo. La directory di lavoro del worker è una `tempfile::TempDir`, e il suo
+`Drop` scarta l'errore di rimozione: un residuo lì non lo dice nessuno.
+
+**Il pericolo.** Un chiamante automatico che legge solo stdout non vede i
+residui: cgroup vuoti che si accumulano sotto la radice delegata, e file
+dell'artefatto temporaneo sotto la directory temporanea del sistema.
+
+**La condizione di rientro.** Campi propri nel documento di `run` per i
+residui dei domini e della directory di lavoro, nella forma di `temp_cleanup`
+(stato sempre presente, percorso nella codifica nativa), e la rimozione
+esplicita della directory di lavoro al posto del `Drop`.
+
 ### I quattro tempi del supervisore
 
 Sono il margine di cortesia, l'attesa della quiescenza, il tetto del drenaggio e
