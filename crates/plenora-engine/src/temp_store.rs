@@ -106,7 +106,8 @@ pub struct ScavengeReport {
 /// Creato all'avvio dell'esecuzione, ospita tutti i file temporanei (spill
 /// e simili) sotto `plenora-<execution_id>-<random>/`. Il `Drop` rimuove
 /// ricorsivamente directory e lock; dopo un crash non intercettabile la
-/// directory resta e viene bonificata da [`scavenge_stale_temp_dirs`].
+/// directory resta, e [`scavenge_stale_temp_dirs`] la bonifica se chi lo esegue
+/// ha il permesso di rimuoverla.
 #[derive(Debug)]
 pub struct TempStore {
     directory: TempDir,
