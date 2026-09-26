@@ -276,3 +276,6 @@ impl LettoreDiEvidenza for LeggiEvidenzaDominio {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

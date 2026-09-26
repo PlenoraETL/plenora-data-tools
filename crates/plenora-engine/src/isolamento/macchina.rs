@@ -865,6 +865,39 @@ pub(super) struct EsitoDelSupervisore {
     pub(super) esito_dichiarato: Option<(DigestArtefatto, ConteggiDichiarati)>,
 }
 
+/// L'evidenza del dominio con l'istantanea «prima» gia' presa, **prima dello
+/// spawn**.
+///
+/// # Perche' un tipo e non un ordine di chiamate
+///
+/// Perche' l'evidenza e' un delta, e un delta vale quanto il suo «prima».
+/// Un'istantanea presa dopo lo spawn — dopo l'handshake e l'`Incarico`, quando
+/// il worker lavora gia' — assorbe un OOM avvenuto nel frattempo: il delta
+/// torna zero, la classe diventa `Assente` e l'esito `Internal` invece di
+/// `ResourceLimit`, senza che niente lo segnali.
+///
+/// L'unico costruttore chiede in prestito il
+/// [`DominioPreparato`](super::DominioPreparato), che lo spawner **consuma**:
+/// dopo `avvia` quel valore non esiste piu', e il compilatore non lascia
+/// prendere l'istantanea tardi.
+///
+/// Dominio, radice e tetto sono quelli del preparato — canonici, e il tetto
+/// riletto dal file — non i percorsi che il chiamante ha nominato.
+#[cfg(target_os = "linux")]
+pub(super) struct EvidenzaDaPrimaDelloSpawn(adattatori::LeggiEvidenzaDominio);
+
+#[cfg(target_os = "linux")]
+impl EvidenzaDaPrimaDelloSpawn {
+    /// Legge i contatori del dominio e dei suoi antenati adesso.
+    pub(super) fn prendi(preparato: &super::DominioPreparato) -> Self {
+        Self(adattatori::LeggiEvidenzaDominio::nuova(
+            preparato.dominio.clone(),
+            &preparato.radice,
+            preparato.tetto_byte,
+        ))
+    }
+}
+
 /// Conduce un tentativo reale: dominio vero, worker vero, evidenza vera —
 /// non i finti di `conduzione::tests`.
 ///
@@ -873,8 +906,9 @@ pub(super) struct EsitoDelSupervisore {
 /// Costruisce il [`produttori::CanaleOperativo`] dall'accordo gia' concluso
 /// (l'handshake e' compiuto da chi chiama, prima: questa macchina esiste
 /// solo dopo), gli adattatori reali del dominio
-/// ([`adattatori::SorvegliaDominio`], [`adattatori::TerminaDominio`],
-/// [`adattatori::LeggiEvidenzaDominio`]) e i [`conduzione::Dintorni`], poi
+/// ([`adattatori::SorvegliaDominio`], [`adattatori::TerminaDominio`], e
+/// [`adattatori::LeggiEvidenzaDominio`] da [`EvidenzaDaPrimaDelloSpawn`]) e i
+/// [`conduzione::Dintorni`], poi
 /// chiama [`conduzione::conduci`] e traduce il suo esito.
 ///
 /// # Che cosa rende
@@ -920,6 +954,12 @@ pub(super) struct EsitoDelSupervisore {
 /// funzione: due copie sarebbero due occasioni di divergere proprio nel punto
 /// — la classificazione — che questo modulo esiste per tenere unico.
 ///
+/// # Il parametro `evidenza`
+///
+/// Porta l'istantanea «prima» dei contatori del dominio, e la si puo' avere
+/// solo da [`EvidenzaDaPrimaDelloSpawn::prendi`], che chiede in prestito il
+/// [`DominioPreparato`](super::DominioPreparato) che lo spawner consuma.
+///
 /// # Errors
 ///
 /// L'errore classificato, con la categoria che [`EsitoClassificato::categoria`]
@@ -936,8 +976,7 @@ pub(super) fn conduci_isolato<P: ProcessoFiglio>(
     tempo_di_esecuzione: Duration,
     guardia: FiglioVivo<P>,
     dominio: PathBuf,
-    radice: &Path,
-    tetto_byte: u64,
+    evidenza: EvidenzaDaPrimaDelloSpawn,
     annullamento_esterno: CancellationToken,
 ) -> std::result::Result<(DigestArtefatto, ConteggiDichiarati), PlenoraError> {
     // Un solo nome, usato per tutti i messaggi qui sotto: tenerlo come
@@ -946,8 +985,8 @@ pub(super) fn conduci_isolato<P: ProcessoFiglio>(
     let soggetto = ruolo.nome();
     let canale = produttori::CanaleOperativo::dal_supervisore(lettore, accordo)?;
     let osservatore = adattatori::SorvegliaDominio::nuova(dominio.clone());
-    let terminatore = adattatori::TerminaDominio::nuova(dominio.clone());
-    let evidenza = adattatori::LeggiEvidenzaDominio::nuova(dominio, radice, tetto_byte);
+    let terminatore = adattatori::TerminaDominio::nuova(dominio);
+    let evidenza = evidenza.0;
     let dintorni = conduzione::Dintorni {
         ruolo,
         osservatore,

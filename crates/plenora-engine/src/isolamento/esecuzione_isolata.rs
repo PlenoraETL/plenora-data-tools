@@ -625,6 +625,9 @@ fn esegui_il_worker(
     // non quello grezzo richiesto dal piano: altrimenti il taglio della
     // politica dell'host non avrebbe alcun effetto sul dominio reale.
     let preparato = prepara_dominio(&mut gerarchia, concesso_byte, worker)?;
+    // Il «prima» dell'evidenza, adesso: `avvia` consuma `preparato`, e dopo
+    // non si potrebbe piu' prendere (`macchina::EvidenzaDaPrimaDelloSpawn`).
+    let evidenza = macchina::EvidenzaDaPrimaDelloSpawn::prendi(&preparato);
 
     let (incarico, contratto_di_uscita) = incarico_per(graph, ingressi, &temporaneo)?;
     let token = token_del_tentativo()?;
@@ -693,8 +696,7 @@ fn esegui_il_worker(
         tempo_di_esecuzione,
         guardia,
         dominio.to_path_buf(),
-        radice,
-        concesso_byte,
+        evidenza,
         annullamento_esterno,
     );
     let (digest, conteggi) = esito?;
@@ -849,6 +851,9 @@ fn dialoga_con_verificatore(
         non_disponibile(dominio.to_string_lossy().as_ref(), &difetto.to_string())
     })?;
     let preparato = prepara_dominio(&mut gerarchia, concesso_byte, worker)?;
+    // Stessa regola del worker: il «prima» dell'evidenza si prende dal
+    // preparato, prima che `avvia` lo consumi.
+    let evidenza = macchina::EvidenzaDaPrimaDelloSpawn::prendi(&preparato);
 
     let argomento_verificatore: std::ffi::OsString = super::VERSIONE_VERIFICATORE.into();
     let da_eseguire = DaEseguire {
@@ -978,8 +983,7 @@ fn dialoga_con_verificatore(
         tempo_di_verifica,
         guardia,
         dominio.to_path_buf(),
-        radice,
-        concesso_byte,
+        evidenza,
         annullamento_esterno,
     )
 }
