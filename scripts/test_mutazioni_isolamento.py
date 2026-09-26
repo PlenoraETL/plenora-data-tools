@@ -231,14 +231,15 @@ def prova_il_nipote_superstite(referto, radice):
     esce con successo lasciandolo nel proprio gruppo. Senza il controllo dopo
     ogni uscita, quel `sleep` resterebbe vivo per tutta la campagna.
 
-    Solo su POSIX: i gruppi di processi sono quelli. Altrove il caso si
+    Solo su Linux: i gruppi di processi sono di POSIX, e il giudizio sul gruppo
+    legge `/proc` e aspetta con `waitid`. Altrove il caso si
     **salta**, e il riepilogo lo dice: un caso che non si e' potuto eseguire non
     ha misurato niente, e contarlo fra i verdi sarebbe la stessa specie di
     inflazione che l'elenco canonico dei mutanti esiste per impedire.
     """
-    if os.name != 'posix':
+    if not sys.platform.startswith('linux'):
         referto.salta('il nipote superstite viene trovato e tolto',
-                      'i gruppi di processi sono di POSIX, e qui non ci sono')
+                      'serve Linux: /proc e waitid')
         return
 
     dove = os.path.join(radice, 'pid-del-nipote')
@@ -265,6 +266,19 @@ def prova_il_nipote_superstite(referto, radice):
         'perche\' il nipote e\' stato trovato e tolto',
         not os.path.exists(f'/proc/{nipote}'),
         f'il pid {nipote} e\' ancora li\'')
+
+    # Il leader esce, e resta **non raccolto** finche' il gruppo non e'
+    # giudicato: il suo PID, che e' anche il numero del gruppo, non puo'
+    # passare a nessun altro mentre lo si segnala.
+    leader = subprocess.Popen(['true'], start_new_session=True)
+    codice = mutazioni.attendi_senza_raccogliere(leader.pid, 10)
+    with io.open(f'/proc/{leader.pid}/stat', encoding='utf-8') as letto:
+        stato = letto.read().rsplit(')', 1)[1].split()[0]
+    referto.esito('il leader uscito resta zombie, non raccolto',
+                  codice == 0 and stato == 'Z', f'codice {codice}, stato {stato}')
+    referto.esito('e un gruppo di soli zombie risulta vuoto',
+                  not mutazioni.gruppo_vivo(leader.pid))
+    leader.wait()
 
 
 def prova_il_verdetto(referto):

@@ -761,42 +761,61 @@ def ripara(attesa):
 # --- l'esecuzione ------------------------------------------------------------
 
 def gruppo_vivo(gruppo):
-    """Se nel gruppo c'e' ancora qualcuno.
+    """Se nel gruppo c'e' ancora qualcuno che non sia uno zombie.
 
-    `PermissionError` significa che il gruppo **esiste** e non e' nostro, non
-    che sia sparito: trattarlo come assenza direbbe «raccolto» su processi vivi,
-    che e' il falso positivo peggiore fra i due.
+    Si legge `/proc`, non `killpg(gruppo, 0)`: il leader resta non raccolto
+    finche' il gruppo non e' vuoto (vedi `ferma_il_gruppo`), e uno zombie fa
+    rispondere «vivo» a `killpg` per sempre. Il numero del gruppo e' esatto
+    per costruzione: finche' il leader non e' raccolto, il suo PID — e quindi
+    il PGID — non puo' passare a un altro processo.
     """
-    try:
-        os.killpg(gruppo, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+    for voce in os.listdir('/proc'):
+        if not voce.isdigit():
+            continue
+        try:
+            with open(f'/proc/{voce}/stat', encoding='utf-8', errors='replace') as stato:
+                campi = stato.read().rsplit(')', 1)[1].split()
+        except OSError:
+            continue
+        # Dopo il nome fra parentesi: stato, ppid, pgrp.
+        if int(campi[2]) == gruppo and campi[0] != 'Z':
+            return True
+    return False
+
+
+def attendi_senza_raccogliere(pid, entro):
+    """Aspetta che il figlio esca **senza raccoglierlo**, e rende il codice
+    nella convenzione di `Popen` (negativo per un segnale), o `None` se il
+    tempo finisce.
+
+    Raccoglierlo libererebbe il suo PID, che e' anche il numero del gruppo: un
+    `killpg` successivo potrebbe colpire un gruppo nato dopo con lo stesso
+    numero. `WNOWAIT` lascia il figlio zombie, e il numero resta nostro.
+    """
+    scadenza = time.monotonic() + entro
+    while True:
+        esito = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if esito is not None:
+            if esito.si_code == os.CLD_EXITED:
+                return esito.si_status
+            return -esito.si_status
+        if time.monotonic() >= scadenza:
+            return None
+        time.sleep(0.2)
 
 
 def ferma_il_gruppo(figlio):
-    """Ferma il gruppo, **raccoglie il figlio diretto**, e pretende che il
-    gruppo si svuoti.
+    """Ferma il gruppo e pretende che si svuoti, **senza raccogliere il
+    figlio diretto**: lo raccoglie chi chiama, dopo.
 
-    La formulazione e' esatta apposta. Gli unici processi che si possono
-    *raccogliere* sono i propri figli, e qui il figlio e' uno: `cargo`. Di
-    `rustc` e dei binari di test si puo' soltanto chiedere la fine e
-    verificarla — sono nipoti, e chi li aspetta e' `cargo`, che intanto sta
-    morendo. Dire «raccoglie il gruppo» prometterebbe una cosa che nessun
-    processo puo' fare per i figli altrui.
+    Gli unici processi che si possono *raccogliere* sono i propri figli, e qui
+    il figlio e' uno: `cargo`. Di `rustc` e dei binari di test si puo' soltanto
+    chiedere la fine e verificarla.
 
     Il gruppo si nomina con `figlio.pid`: `start_new_session=True` rende il
     figlio leader della propria sessione e del proprio gruppo, quindi il PGID
-    **e'** quel pid. Chiederlo con `getpgid` aggiungerebbe un modo di
-    sbagliare: se il leader se ne fosse gia' andato, la chiamata direbbe «non
-    esiste» e la si leggerebbe come «gruppo vuoto» — mentre i discendenti
-    possono benissimo essere ancora li'.
-
-    Il figlio si raccoglie **dentro** l'attesa: uno zombie tiene vivo il gruppo,
-    e un ciclo che non chiamasse `poll` scadrebbe per la propria omissione
-    invece che per dei superstiti veri.
+    **e'** quel pid. Finche' il figlio non e' raccolto — vivo o zombie — quel
+    numero non puo' passare a un altro gruppo, e i segnali restano nostri.
 
     Rende `True` se il gruppo si e' svuotato entro l'attesa.
     """
@@ -805,16 +824,12 @@ def ferma_il_gruppo(figlio):
         try:
             os.killpg(gruppo, segnale)
         except ProcessLookupError:
-            # Nessuno nel gruppo: il figlio puo' essere ancora uno zombie da
-            # raccogliere, e raccoglierlo e' cio' che chiude il conto.
-            figlio.poll()
             return True
         except PermissionError:
             print(f'  il gruppo {gruppo} non e\' nostro: non lo si puo\' fermare')
             return False
         scadenza = time.monotonic() + ATTESA_DEL_GRUPPO / 2
         while time.monotonic() < scadenza:
-            figlio.poll()
             if not gruppo_vivo(gruppo):
                 return True
             time.sleep(0.2)
@@ -833,6 +848,9 @@ def esegui(argomenti):
     giudicato. E' la stessa classe di difetto che questi mutanti cercano nel
     supervisore.
 
+    `cargo` si raccoglie per ultimo, dopo il giudizio sul gruppo: vedi
+    `attendi_senza_raccogliere`.
+
     L'uscita va su un **file**: vedi la nota in testa.
     """
     with open(USCITA, 'wb') as dove:
@@ -846,12 +864,22 @@ def esegui(argomenti):
             stdin=subprocess.DEVNULL, start_new_session=True,
         )
         try:
-            codice = figlio.wait(timeout=TETTO_SECONDI)
-        except subprocess.TimeoutExpired:
-            return None, ferma_il_gruppo(figlio)
-    if gruppo_vivo(figlio.pid):
-        return codice, ferma_il_gruppo(figlio)
-    return codice, True
+            codice = attendi_senza_raccogliere(figlio.pid, TETTO_SECONDI)
+            raccolto = True
+            if codice is None or gruppo_vivo(figlio.pid):
+                raccolto = ferma_il_gruppo(figlio)
+        finally:
+            # Il gruppo e' giudicato: ora il PID puo' liberarsi. Se il gruppo
+            # non si e' svuotato, i superstiti restano senza leader, e
+            # `raccolto` lo dice.
+            if raccolto_possibile(figlio):
+                figlio.wait()
+    return codice, raccolto
+
+
+def raccolto_possibile(figlio):
+    """Se il figlio diretto e' uscito, e quindi `wait` non blocca."""
+    return os.waitid(os.P_PID, figlio.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
 def coda_dell_uscita(quante=3000):
