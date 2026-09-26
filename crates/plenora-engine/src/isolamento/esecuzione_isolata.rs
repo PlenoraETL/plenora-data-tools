@@ -518,9 +518,24 @@ fn concludi_handshake(
     crate::protocollo::handshake::HandshakeAccettato,
     FiglioVivo<std::process::Child>,
 )> {
-    rendi_non_bloccante(&lettore_grezzo)?;
+    // Nessun `?` finche' `guardia` e' viva: un errore la lascerebbe cadere
+    // col figlio dentro, e la sentinella di `FiglioVivo` interromperebbe il
+    // processo invece di rendere l'errore.
+    let rinuncia = |guardia: FiglioVivo<std::process::Child>, causa: PlenoraError| {
+        let (_uscita, difetti_di_pulizia) = super::prova::chiudi(guardia, Some(&causa));
+        for difetto in &difetti_di_pulizia {
+            eprintln!("plenora: pulizia del {soggetto} isolato: {difetto}");
+        }
+        causa
+    };
+    if let Err(causa) = rendi_non_bloccante(&lettore_grezzo) {
+        return Err(rinuncia(guardia, causa));
+    }
     let (spia, freno) = interruttore();
-    let guardiano = Guardiano::comincia(freno, spia.clone(), TETTO_DELLA_PAROLA)?;
+    let guardiano = match Guardiano::comincia(freno, spia.clone(), TETTO_DELLA_PAROLA) {
+        Ok(guardiano) => guardiano,
+        Err(causa) => return Err(rinuncia(guardia, causa)),
+    };
     let mut sorgente = SorgenteTerminabile::con_interruttore(lettore_grezzo, PASSO_DI_ATTESA, spia);
 
     let esito = (|| -> Result<crate::protocollo::handshake::HandshakeAccettato> {
@@ -658,15 +673,24 @@ fn esegui_il_worker(
         guardia.pid(),
         riuscita.evidenza
     );
+    // Ogni fallimento fra qui e la conduzione ha gia' chiuso il figlio, e
+    // passa dall'evidenza del dominio prima di uscire
+    // (`EvidenzaDaPrimaDelloSpawn::rileggi_il_fallimento`).
     let (supervisore, guardia) =
-        supervisore_o_raccogli("worker isolato", digest_immagine, token, guardia)?;
-    let (lettore, mut scrittore, accordo, guardia) = concludi_handshake(
+        match supervisore_o_raccogli("worker isolato", digest_immagine, token, guardia) {
+            Ok(coppia) => coppia,
+            Err(causa) => return Err(evidenza.rileggi_il_fallimento("worker", causa)),
+        };
+    let (lettore, mut scrittore, accordo, guardia) = match concludi_handshake(
         "worker",
         supervisore,
         riuscita.supervisore_legge,
         riuscita.supervisore_scrive,
         guardia,
-    )?;
+    ) {
+        Ok(quattro) => quattro,
+        Err(causa) => return Err(evidenza.rileggi_il_fallimento("worker", causa)),
+    };
 
     // --- l'incarico, sullo stesso canale ------------------------------------
     let incarico_frame = Frame::nuovo(Corpo::Incarico(Box::new(incarico)));
@@ -678,7 +702,7 @@ fn esegui_il_worker(
             eprintln!("plenora: pulizia del worker isolato: {difetto}");
         }
         drop(scrittore);
-        return Err(causa);
+        return Err(evidenza.rileggi_il_fallimento("worker", causa));
     }
 
     // --- il resto del dialogo, condotto dalla macchina a stati --------------
@@ -942,15 +966,23 @@ fn dialoga_con_verificatore(
     // esiste gia', `supervisore_per` non dipende dal verificatore appena
     // nato, e un `?` nudo la lascerebbe sfuggire al primo rifiuto legittimo
     // invece di un errore leggibile.
+    // Come per il worker: ogni fallimento fino alla conduzione passa
+    // dall'evidenza del dominio.
     let (supervisore, guardia) =
-        supervisore_o_raccogli("verificatore isolato", digest_immagine, token, guardia)?;
-    let (lettore, mut scrittore, accordo, guardia) = concludi_handshake(
+        match supervisore_o_raccogli("verificatore isolato", digest_immagine, token, guardia) {
+            Ok(coppia) => coppia,
+            Err(causa) => return Err(evidenza.rileggi_il_fallimento("verificatore", causa)),
+        };
+    let (lettore, mut scrittore, accordo, guardia) = match concludi_handshake(
         "verificatore",
         supervisore,
         riuscita.supervisore_legge,
         riuscita.supervisore_scrive,
         guardia,
-    )?;
+    ) {
+        Ok(quattro) => quattro,
+        Err(causa) => return Err(evidenza.rileggi_il_fallimento("verificatore", causa)),
+    };
 
     // --- l'incarico di verifica, sullo stesso canale ------------------------
     let incarico_frame = Frame::nuovo(Corpo::IncaricoVerifica(Box::new(incarico_verifica)));
@@ -962,7 +994,7 @@ fn dialoga_con_verificatore(
             eprintln!("plenora: pulizia del verificatore isolato: {difetto}");
         }
         drop(scrittore);
-        return Err(causa);
+        return Err(evidenza.rileggi_il_fallimento("verificatore", causa));
     }
 
     // --- il resto del dialogo, condotto dalla **stessa** macchina a stati --

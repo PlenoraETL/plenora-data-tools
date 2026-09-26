@@ -884,17 +884,86 @@ pub(super) struct EsitoDelSupervisore {
 /// Dominio, radice e tetto sono quelli del preparato — canonici, e il tetto
 /// riletto dal file — non i percorsi che il chiamante ha nominato.
 #[cfg(target_os = "linux")]
-pub(super) struct EvidenzaDaPrimaDelloSpawn(adattatori::LeggiEvidenzaDominio);
+pub(super) struct EvidenzaDaPrimaDelloSpawn {
+    lettore: adattatori::LeggiEvidenzaDominio,
+    dominio: PathBuf,
+}
 
 #[cfg(target_os = "linux")]
 impl EvidenzaDaPrimaDelloSpawn {
     /// Legge i contatori del dominio e dei suoi antenati adesso.
     pub(super) fn prendi(preparato: &super::DominioPreparato) -> Self {
-        Self(adattatori::LeggiEvidenzaDominio::nuova(
-            preparato.dominio.clone(),
-            &preparato.radice,
-            preparato.tetto_byte,
-        ))
+        Self {
+            lettore: adattatori::LeggiEvidenzaDominio::nuova(
+                preparato.dominio.clone(),
+                &preparato.radice,
+                preparato.tetto_byte,
+            ),
+            dominio: preparato.dominio.clone(),
+        }
+    }
+
+    /// Un fallimento del dialogo **prima** della conduzione — il
+    /// supervisore che non si costruisce, l'handshake, l'incarico che non si
+    /// scrive — riletto attraverso l'evidenza del dominio.
+    ///
+    /// # Perche'
+    ///
+    /// Perche' fra lo spawn e [`conduci_isolato`] il worker e' gia' vivo nel
+    /// suo dominio, e un OOM li' si presenta al supervisore come un canale
+    /// chiuso: la causa del dialogo direbbe «isolamento non disponibile» o
+    /// «protocollo», e la memoria sparirebbe dalla diagnosi. La precedenza
+    /// della §10.3 mette l'evidenza del dominio davanti all'esito del canale.
+    ///
+    /// Va chiamata dopo che il figlio e' stato chiuso e raccolto. Legge
+    /// l'evidenza solo a dominio quiescente (`F4-10`): se la quiescenza non
+    /// arriva entro [`conduzione::ATTESA_DELLA_QUIESCENZA`], la causa resta
+    /// quella del dialogo, e lo dice su stderr.
+    ///
+    /// Rende la causa invariata quando l'evidenza non dice niente
+    /// (`Assente`, `Indeterminata`) o non si legge.
+    pub(super) fn rileggi_il_fallimento(self, soggetto: &str, causa: PlenoraError) -> PlenoraError {
+        use crate::classificazione::{classifica_evidenza, ClasseEvidenzaMemoria};
+        use conduzione::LettoreDiEvidenza as _;
+        use produttori::Osservatore as _;
+
+        let mut osservatore = adattatori::SorvegliaDominio::nuova(self.dominio);
+        let scadenza = std::time::Instant::now() + conduzione::ATTESA_DELLA_QUIESCENZA;
+        loop {
+            match osservatore.quiescente() {
+                Ok(true) => break,
+                Ok(false) | Err(produttori::Difetto::Interrotta)
+                    if std::time::Instant::now() < scadenza =>
+                {
+                    std::thread::sleep(PASSO_DI_ATTESA);
+                }
+                _ => {
+                    eprintln!(
+                        "plenora: il dominio isolato del {soggetto} non e' quiescente dopo un \
+                         fallimento precoce: l'evidenza non si legge, resta la causa del dialogo"
+                    );
+                    return causa;
+                }
+            }
+        }
+        let mut lettore = self.lettore;
+        let Ok(prova) = lettore.evidenza() else {
+            return causa;
+        };
+        match classifica_evidenza(&prova) {
+            ClasseEvidenzaMemoria::Attribuita => PlenoraError::ResourceLimit(format!(
+                "il dominio isolato del {soggetto} ha raggiunto il proprio tetto prima della \
+                 conduzione: {prova:?}"
+            )),
+            ClasseEvidenzaMemoria::NonAttribuita => PlenoraError::UnattributedMemoryPressure {
+                contesto: format!("dominio isolato del {soggetto}, prima della conduzione"),
+                evidenza: Box::new(prova),
+            },
+            ClasseEvidenzaMemoria::Incoerente => PlenoraError::Internal(format!(
+                "l'evidenza del dominio isolato del {soggetto} non e' utilizzabile: Incoerente"
+            )),
+            ClasseEvidenzaMemoria::Assente | ClasseEvidenzaMemoria::Indeterminata => causa,
+        }
     }
 }
 
@@ -983,10 +1052,22 @@ pub(super) fn conduci_isolato<P: ProcessoFiglio>(
     // variabile locale invece di chiamare `ruolo.nome()` a ogni riga rende
     // visibile che e' **la stessa** fonte ovunque compaia `{soggetto}`.
     let soggetto = ruolo.nome();
-    let canale = produttori::CanaleOperativo::dal_supervisore(lettore, accordo)?;
+    // Un errore qui non puo' uscire con `?`: lascerebbe cadere `guardia` con
+    // il figlio vivo, e la sentinella di `FiglioVivo` interromperebbe il
+    // processo. Il figlio si chiude, e il fallimento passa dall'evidenza.
+    let canale = match produttori::CanaleOperativo::dal_supervisore(lettore, accordo) {
+        Ok(canale) => canale,
+        Err(causa) => {
+            let (_uscita, difetti) = super::prova::chiudi(guardia, Some(&causa));
+            for difetto in &difetti {
+                eprintln!("plenora: pulizia del {soggetto} isolato: {difetto}");
+            }
+            return Err(evidenza.rileggi_il_fallimento(soggetto, causa));
+        }
+    };
     let osservatore = adattatori::SorvegliaDominio::nuova(dominio.clone());
     let terminatore = adattatori::TerminaDominio::nuova(dominio);
-    let evidenza = evidenza.0;
+    let evidenza = evidenza.lettore;
     let dintorni = conduzione::Dintorni {
         ruolo,
         osservatore,

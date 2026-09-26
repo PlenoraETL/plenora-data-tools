@@ -128,3 +128,102 @@ fn un_file_assente_all_istantanea_lascia_none() {
     assert_eq!(evidenza.oom_locali, None);
     assert_eq!(evidenza.group_kill_locale, None);
 }
+
+/// L'evidenza da prima dello spawn su un dominio finto: `cgroup.events` dice
+/// se e' popolato.
+fn evidenza_su(radice: &Path, dominio: &Path) -> super::super::EvidenzaDaPrimaDelloSpawn {
+    super::super::EvidenzaDaPrimaDelloSpawn {
+        lettore: LeggiEvidenzaDominio::nuova(dominio.to_path_buf(), radice, 4096),
+        dominio: dominio.to_path_buf(),
+    }
+}
+
+fn popolato(dominio: &Path, si: bool) {
+    std::fs::write(
+        dominio.join("cgroup.events"),
+        format!("populated {}\nfrozen 0\n", u8::from(si)),
+    )
+    .expect("cgroup.events");
+}
+
+fn causa_del_dialogo() -> plenora_core::PlenoraError {
+    plenora_core::PlenoraError::IsolationUnavailable("il worker ha chiuso il canale".to_owned())
+}
+
+/// Un OOM attribuito fra lo spawn e la conduzione non si presenta come
+/// «isolamento non disponibile»: l'evidenza del dominio precede la causa del
+/// canale.
+#[test]
+fn un_oom_prima_della_conduzione_diventa_resource_limit() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, false);
+    let evidenza = evidenza_su(&radice, &dominio);
+    scrivi_dominio(&dominio, 1, 1, 1, 3, 4096);
+
+    let errore = evidenza.rileggi_il_fallimento("worker", causa_del_dialogo());
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{errore}"
+    );
+}
+
+/// Pressione osservata senza il gruppo ucciso: non attribuita, ma non taciuta.
+#[test]
+fn una_pressione_non_attribuita_prima_della_conduzione_resta_visibile() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, false);
+    let evidenza = evidenza_su(&radice, &dominio);
+    scrivi_dominio(&dominio, 1, 0, 0, 3, 4096);
+
+    let errore = evidenza.rileggi_il_fallimento("worker", causa_del_dialogo());
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::UnattributedMemoryPressure,
+        "{errore}"
+    );
+}
+
+/// Senza eventi di memoria la causa resta quella del dialogo.
+#[test]
+fn senza_eventi_resta_la_causa_del_dialogo() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, false);
+    let evidenza = evidenza_su(&radice, &dominio);
+
+    let errore = evidenza.rileggi_il_fallimento("worker", causa_del_dialogo());
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::IsolationUnavailable,
+        "{errore}"
+    );
+}
+
+/// Un dominio che non si svuota non si legge (`F4-10`): la causa resta quella
+/// del dialogo, anche se i contatori mostrerebbero un OOM.
+#[test]
+fn un_dominio_non_quiescente_non_si_legge() {
+    let (_base, radice, padre, dominio) = gerarchia();
+    scrivi_dominio(&dominio, 0, 0, 0, 0, 0);
+    scrivi_antenato(&padre, 0);
+    scrivi_antenato(&radice, 0);
+    popolato(&dominio, true);
+    let evidenza = evidenza_su(&radice, &dominio);
+    scrivi_dominio(&dominio, 1, 1, 1, 3, 4096);
+
+    let errore = evidenza.rileggi_il_fallimento("worker", causa_del_dialogo());
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::IsolationUnavailable,
+        "{errore}"
+    );
+}

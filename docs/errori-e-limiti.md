@@ -2370,6 +2370,30 @@ mancata del sorvegliante: `Builder::spawn` lascia cadere la chiusura con tutto
 ciò che ha catturato, quindi l'osservatore viaggia in una cella condivisa e chi
 resta fuori lo ritrova lì. *Rientro:* nessuno previsto.
 
+### Un fallimento prima della conduzione passa dall'evidenza del dominio
+
+**La regola.** L'istantanea «prima» dell'evidenza si prende dal dominio
+preparato, **prima dello spawn**: il tipo `EvidenzaDaPrimaDelloSpawn` si
+costruisce solo da un `&DominioPreparato`, che lo spawner consuma. Ogni
+fallimento fra lo spawn e la conduzione — il supervisore che non si costruisce,
+l'handshake, l'incarico che non si scrive, il canale operativo che non si apre
+— chiude il figlio e poi rilegge la propria causa attraverso l'evidenza: un OOM
+attribuito diventa `ResourceLimit`, una pressione osservata
+`UnattributedMemoryPressure`, un'evidenza incoerente `Internal`.
+
+**Perché.** Un worker ucciso per memoria mentre saluta si presenta come un
+canale chiuso, e la causa del dialogo direbbe «isolamento non disponibile». Con
+l'istantanea presa dopo l'`Incarico`, poi, un OOM avvenuto nel frattempo finiva
+nel «prima» e il delta lo cancellava.
+
+**Il perimetro.** L'evidenza si legge solo a dominio quiescente, come nella
+conduzione (`F4-10`). Se la quiescenza non arriva entro l'attesa della
+conduzione (500 ms), resta la causa del dialogo, e stderr lo dice: è la
+garanzia indebolita, perché in quel caso un OOM resterebbe senza nome.
+
+**La condizione di rientro.** Una conduzione che cominci allo spawn invece che
+dopo l'handshake, e sorvegli quindi l'intero intervallo con la stessa macchina.
+
 ### I quattro tempi del supervisore
 
 Sono il margine di cortesia, l'attesa della quiescenza, il tetto del drenaggio e
