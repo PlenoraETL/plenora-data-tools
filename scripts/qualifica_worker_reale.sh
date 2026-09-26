@@ -148,7 +148,9 @@ e_ancora_il_nostro() {
     esiste_il_pid "$pid" || return $?
     return 2
   fi
-  [[ "$eseguibile" == "$SLEEP_REALE" ]] || return 1
+  # Un eseguibile sostituito mentre il processo vive si legge con il suffisso
+  # « (deleted)»: il processo e' lo stesso, e il marcatore decide.
+  [[ "${eseguibile% (deleted)}" == "$SLEEP_REALE" ]] || return 1
   # `cat` e non `read`: `read` non distingue la fine del file da un errore di
   # lettura, `cat` fallisce. I NUL diventano \001, perche' una sostituzione di
   # comando non li porta; un argomento che contenesse gia' \001 si spezzerebbe,

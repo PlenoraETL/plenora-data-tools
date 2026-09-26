@@ -132,9 +132,20 @@ _abitato() {
     }' "$_eventi"
 }
 
+# Se `$1` c'e': 0 si', 1 solo se non esiste. Un percorso che non si lascia
+# osservare conta come presente, e lo si dice: la pulizia ci prova, e se non ci
+# riesce lo riporta, invece di saltare un residuo che non ha visto.
+presente() {
+  local errore
+  errore="$(LC_ALL=C stat -c %F "$1" 2>&1 >/dev/null)" && return 0
+  [[ "$errore" == *"No such file or directory"* ]] && return 1
+  echo "pulizia: $1 non si lascia osservare ($errore)" >&2
+  return 0
+}
+
 pulisci() {
   set +e
-  if [ -n "$DOMINIO" ] && [ -d "$DOMINIO" ]; then
+  if [ -n "$DOMINIO" ] && presente "$DOMINIO"; then
     [ -e "$DOMINIO/cgroup.kill" ] && echo 1 >"$DOMINIO/cgroup.kill" 2>/dev/null
     # La condizione la da' `cgroup.events`, non `-s cgroup.procs`: i file di
     # `cgroup2` sono virtuali e dichiarano dimensione zero anche quando hanno
@@ -160,7 +171,7 @@ pulisci() {
     done
     if [ "$_stato" -eq 1 ]; then
       rmdir "$DOMINIO" 2>/dev/null
-      [ -d "$DOMINIO" ] && fallisce "pulizia: $DOMINIO non si rimuove"
+      presente "$DOMINIO" && fallisce "pulizia: $DOMINIO non si rimuove"
     elif [ "$_stato" -eq 0 ]; then
       fallisce "pulizia: $DOMINIO e' ancora abitato dopo il tetto"
     else
@@ -173,14 +184,14 @@ pulisci() {
       rmdir "$DOMINIO" 2>/dev/null
     fi
   fi
-  if [ -n "$VICINO" ] && [ -d "$VICINO" ]; then
+  if [ -n "$VICINO" ] && presente "$VICINO"; then
     [ -e "$VICINO/cgroup.kill" ] && echo 1 >"$VICINO/cgroup.kill" 2>/dev/null
     rmdir "$VICINO" 2>/dev/null
-    [ -d "$VICINO" ] && fallisce "pulizia: $VICINO non si rimuove"
+    presente "$VICINO" && fallisce "pulizia: $VICINO non si rimuove"
   fi
-  if [ -n "$RADICE_ASSOLUTA" ] && [ -d "$RADICE_ASSOLUTA" ]; then
+  if [ -n "$RADICE_ASSOLUTA" ] && presente "$RADICE_ASSOLUTA"; then
     rmdir "$RADICE_ASSOLUTA" 2>/dev/null
-    [ -d "$RADICE_ASSOLUTA" ] && fallisce "pulizia: $RADICE_ASSOLUTA non si rimuove"
+    presente "$RADICE_ASSOLUTA" && fallisce "pulizia: $RADICE_ASSOLUTA non si rimuove"
   fi
   # La delega globale si rimette **solo** se e' stata accesa qui, e la rimozione
   # si rilegge: lasciare acceso un controllore che il gate ha acceso cambia la
@@ -198,9 +209,9 @@ pulisci() {
       fallisce "pulizia: $PUNTO/cgroup.subtree_control vale «$_delega» invece di «$SUBTREE_PRIMA»"
     fi
   fi
-  if [ -n "$TEMPORANEA" ] && [ -d "$TEMPORANEA" ]; then
+  if [ -n "$TEMPORANEA" ] && presente "$TEMPORANEA"; then
     rm -rf "$TEMPORANEA" 2>/dev/null
-    [ -d "$TEMPORANEA" ] && fallisce "pulizia: $TEMPORANEA non si rimuove"
+    presente "$TEMPORANEA" && fallisce "pulizia: $TEMPORANEA non si rimuove"
   fi
   set -e
 }

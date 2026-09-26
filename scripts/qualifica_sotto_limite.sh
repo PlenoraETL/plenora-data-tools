@@ -181,10 +181,21 @@ abitato() {
 #   margine: il giro successivo troverebbe un cgroup con quel nome, o peggio dei
 #   processi ancora dentro un tetto che nessuno governa piu'. Stampare `PERSO` e
 #   uscire zero direbbe a chi legge il riepilogo che e' andato tutto bene.
+# Se `$1` c'e': 0 si', 1 solo se non esiste. Un percorso che non si lascia
+# osservare conta come presente, e lo si dice: la pulizia ci prova, e se non ci
+# riesce lo riporta, invece di saltare un residuo che non ha visto.
+presente() {
+  local errore
+  errore="$(LC_ALL=C stat -c %F "$1" 2>&1 >/dev/null)" && return 0
+  [[ "$errore" == *"No such file or directory"* ]] && return 1
+  echo "pulizia: $1 non si lascia osservare ($errore)" >&2
+  return 0
+}
+
 pulizia() {
   local esito=$?
   local guasto=0
-  if [[ -n "$DOMINIO" && -d "$DOMINIO" ]]; then
+  if [[ -n "$DOMINIO" ]] && presente "$DOMINIO"; then
     # Prima si uccide cio' che c'e' dentro, poi si toglie: un cgroup abitato non
     # si rimuove, e `rmdir` fallirebbe lasciando il dominio in giro.
     if [[ -e "$DOMINIO/cgroup.kill" ]]; then
@@ -236,7 +247,7 @@ pulizia() {
         ;;
     esac
   fi
-  if [[ -n "$STANZA" && -d "$STANZA" ]] && ! rm -rf "$STANZA"; then
+  if [[ -n "$STANZA" ]] && presente "$STANZA" && ! rm -rf "$STANZA"; then
     echo "PERSO: la fixture $STANZA non si e' rimossa" >&2
     guasto=1
   fi

@@ -88,6 +88,17 @@ svuota() {
     return 1
 }
 
+# Se `$1` c'e': 0 si', 1 solo se non esiste. Un percorso che non si lascia
+# osservare conta come presente, e lo si dice: la pulizia ci prova, e se non ci
+# riesce lo riporta, invece di saltare un residuo che non ha visto.
+presente() {
+  local errore
+  errore="$(LC_ALL=C stat -c %F "$1" 2>&1 >/dev/null)" && return 0
+  [[ "$errore" == *"No such file or directory"* ]] && return 1
+  echo "pulizia: $1 non si lascia osservare ($errore)" >&2
+  return 0
+}
+
 # Solo sotto la radice di questa campagna: non tocca altro.
 pulisci() {
     local codice=$? residuo=0 pid dominio
@@ -96,7 +107,7 @@ pulisci() {
             --eseguibile "$BINARIO" || true
     done
     wait 2>/dev/null || true
-    if [ -d "$RADICE" ]; then
+    if presente "$RADICE"; then
         while IFS= read -r dominio; do
             svuota "$dominio" || { echo "qualifica: dominio abitato $dominio" >&2; residuo=1; }
             rmdir "$dominio" 2>/dev/null || { echo "qualifica: RESIDUO $dominio" >&2; residuo=1; }
