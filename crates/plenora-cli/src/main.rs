@@ -636,6 +636,29 @@ pub(crate) struct PlanInputsProbe {
     inputs: Vec<String>,
     #[serde(default)]
     crs_decisions: std::collections::BTreeMap<String, String>,
+    /// Il blocco `limits` del piano, **grezzo**: la sonda ne legge il solo
+    /// `plan.max_inputs`, e un blocco malformato a qualunque livello lo giudica
+    /// il planner, col proprio messaggio. Una struttura tipizzata qui
+    /// fallirebbe prima, con un altro.
+    #[serde(default)]
+    limits: Option<serde_json::Value>,
+}
+
+impl PlanInputsProbe {
+    /// Il tetto sugli input che `planner::validate` applichera': il default,
+    /// oppure l'override del piano se e' un intero che lo abbassa. Un override
+    /// piu' alto il planner lo rifiuta, e qui vale il default.
+    pub(crate) fn tetto_ingressi(&self) -> usize {
+        let predefinito = plenora_core::limits::Limits::default().plan.max_inputs;
+        self.limits
+            .as_ref()
+            .and_then(|limiti| limiti.get("plan"))
+            .and_then(|piano| piano.get("max_inputs"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|valore| usize::try_from(valore).ok())
+            .filter(|valore| *valore <= predefinito)
+            .unwrap_or(predefinito)
+    }
 }
 
 /// `schema_version` del piano, senza validazione strutturale.
@@ -2431,6 +2454,7 @@ mod tests {
                 "main".to_owned(),
                 definition.to_owned(),
             )]),
+            limits: None,
         }
     }
 
@@ -2446,6 +2470,7 @@ mod tests {
                 "other".to_owned(),
                 "EPSG:32632".to_owned(),
             )]),
+            limits: None,
         };
         let error = apply_crs_decisions(&probe, &mut contracts).expect_err("input ignoto");
         assert!(error.to_string().contains("crs_decisions"), "{error}");
@@ -3012,6 +3037,7 @@ mod tests {
         let probe = PlanInputsProbe {
             inputs: vec!["sinistra".to_owned(), "destra".to_owned()],
             crs_decisions: std::collections::BTreeMap::new(),
+            limits: None,
         };
         assert_eq!(
             pair_v4_inputs(&probe, &inputs).expect("accoppiamento"),

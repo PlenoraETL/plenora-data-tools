@@ -36,6 +36,9 @@ use plenora_kernels_table::{
 };
 use serde_json::Value;
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 // ---------------------------------------------------------------------------
 // Generatori deterministici dal payload
 // ---------------------------------------------------------------------------
@@ -478,7 +481,7 @@ fn diff_coalesce(selector: u8, payload: &[u8]) {
     );
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     if payload.len() < 3 {
         return;
     }

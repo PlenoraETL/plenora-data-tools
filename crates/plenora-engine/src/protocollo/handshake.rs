@@ -111,11 +111,9 @@ pub struct DescrizioneLocale {
 }
 
 /// Cio' che il supervisore pretende dall'altro lato.
-// Lato supervisore: lo raggiungono i casi e il percorso di qualificazione, che
-// si compila sotto `internals` ed e' l'unico a guidare un worker reale. Il
-// supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
-// non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
-// in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+// Lato supervisore: lo raggiunge il chiamante di produzione del profilo isolato
+// (`isolamento::esecuzione_isolata`), oltre ai casi e al percorso di
+// qualificazione.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtteseSupervisore {
     /// Cio' che il worker deve rispecchiare identico.
@@ -349,11 +347,9 @@ fn confronta_ambiente(atteso: &AmbienteCanonico, ricevuto: &AmbienteCanonico) ->
 /// Entrambi gli elenchi arrivano **gia' ordinati**, quindi l'appartenenza si
 /// decide con una scansione parallela invece che costruendo un insieme:
 /// l'insieme sarebbe una terza copia dei nomi, e i nomi vengono dal filo.
-// Lato supervisore: lo raggiungono i casi e il percorso di qualificazione, che
-// si compila sotto `internals` ed e' l'unico a guidare un worker reale. Il
-// supervisore che `PR-8` costruisce riceve un accordo **gia' concluso**, quindi
-// non passa da qui; il chiamante di produzione arriva con `PR-12`. La regola sta
-// in errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+// Lato supervisore: lo raggiunge il chiamante di produzione del profilo isolato
+// (`isolamento::esecuzione_isolata`), oltre ai casi e al percorso di
+// qualificazione.
 fn confronta_capability(richieste: &[String], offerte: &[String]) -> Result<()> {
     let mut scorre = offerte.iter();
     let mut corrente = scorre.next();
@@ -458,11 +454,10 @@ fn verifica_direzione(frame: &Frame, attesa: super::messaggi::Direzione) -> Resu
 ///
 /// Non ha `Clone`, e ogni transizione consuma `self`: uno stato concluso non
 /// e' riusabile perche' non esiste piu'.
-// Lato supervisore: lo raggiunge ora anche il chiamante di produzione
-// (`PR-12`, `isolamento::esecuzione_isolata`), non solo i casi e il percorso
-// di qualificazione. Il `commit_token` resta sotto `internals` (sotto)
-// perche' il solo lettore di quella copia specifica e' la macchina del
-// supervisore, che non ha ancora un chiamante di produzione — vedi
+// Lato supervisore: lo raggiunge il chiamante di produzione
+// (`isolamento::esecuzione_isolata`), oltre ai casi e al percorso di
+// qualificazione. La copia del `commit_token` resta sotto `internals`: la
+// produzione legge la propria — vedi
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[derive(Debug)]
 pub struct SupervisoreInAttesa {
@@ -594,12 +589,11 @@ impl SupervisoreInAttesa {
 /// descrizioni concordano (`isolamento::prova::dialoga`, che scarta
 /// l'accordo stesso una volta ottenuto).
 ///
-/// La struttura la produce ora anche il chiamante di produzione (`PR-12`,
-/// `isolamento::esecuzione_isolata`), non solo i casi e il percorso di
-/// qualificazione. Il campo `commit_token` resta sotto `internals`: il suo
-/// solo lettore e' la macchina del supervisore
-/// (`isolamento::macchina::produttori`), che non ha ancora un chiamante di
-/// produzione — vedi errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+/// La struttura la produce il chiamante di produzione
+/// (`isolamento::esecuzione_isolata`), oltre ai casi e al percorso di
+/// qualificazione. Il campo `commit_token` resta sotto `internals`: la
+/// produzione consegna al verificatore la propria copia del token, e questa
+/// la leggono solo i casi — vedi errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[derive(Debug)]
 pub struct HandshakeAccettato {
     #[cfg(any(test, feature = "internals"))]

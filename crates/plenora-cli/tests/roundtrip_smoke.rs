@@ -213,7 +213,7 @@ fn transform_wkb_v2_roundtrip() {
     );
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(stdout.contains("\"rows\":1"), "stdout: {stdout}");
-    assert!(output_path.exists());
+    assert!(output_path.try_exists().expect("stat"));
 }
 
 #[cfg(feature = "proj-backend")]
@@ -276,7 +276,7 @@ fn transform_arrow_v3_roundtrip() {
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(stdout.contains("\"rows\":1"), "stdout: {stdout}");
     assert!(stdout.contains("\"output_rows\":1"), "stdout: {stdout}");
-    assert!(output_path.exists());
+    assert!(output_path.try_exists().expect("stat"));
 
     let ipc_output = directory.path().join("output.arrow");
     let result = cli()
@@ -370,7 +370,7 @@ fn transform_arrow_from_coords_reports_row_diagnostics() {
     assert_eq!(diagnostics["examples"][0]["source_index"], 1);
     assert_eq!(diagnostics["examples"][0]["column"], "x");
     assert!(
-        !output_path.exists(),
+        !output_path.try_exists().expect("stat"),
         "publish atomico: nessun output parziale"
     );
 }
@@ -448,7 +448,7 @@ fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
         "envelope: {envelope}"
     );
     assert!(
-        !output_path.exists(),
+        !output_path.try_exists().expect("stat"),
         "publish atomico: nessun output parziale"
     );
 
@@ -464,7 +464,7 @@ fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
     assert_eq!(error["category"], "invalid_plan", "envelope: {envelope}");
     assert_eq!(error["phase"], "validate", "envelope: {envelope}");
     assert!(error["row_diagnostics"].is_null(), "envelope: {envelope}");
-    assert!(!output_path.exists());
+    assert!(!output_path.try_exists().expect("stat"));
 }
 
 /// BLOCK-06: l'output di `transform-arrow` porta le chiavi canoniche §2 in

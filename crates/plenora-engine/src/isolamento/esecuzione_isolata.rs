@@ -495,9 +495,9 @@ fn nome_del_dominio_verifica(identificativo: &[u8; 32]) -> String {
 /// # Errors
 ///
 /// L'errore dell'handshake, o un timeout se il proprio guardiano scade
-/// prima. Il figlio e' gia' chiuso e i suoi difetti di pulizia gia'
-/// riportati quando questa funzione rende un errore: il chiamante non deve
-/// chiudere una seconda volta.
+/// prima, con la sua provenienza ([`FallimentoDellHandshake`]). Il figlio e'
+/// gia' chiuso e i suoi difetti di pulizia gia' riportati quando questa
+/// funzione rende un errore: il chiamante non deve chiudere una seconda volta.
 /// # Il parametro `soggetto`
 ///
 /// Come per [`macchina::conduci_isolato`]: nomina chi sta dall'altro capo —
@@ -512,51 +512,117 @@ fn concludi_handshake(
     lettore_grezzo: std::io::PipeReader,
     mut scrittore: std::io::PipeWriter,
     guardia: FiglioVivo<std::process::Child>,
-) -> Result<(
-    std::io::PipeReader,
-    std::io::PipeWriter,
-    crate::protocollo::handshake::HandshakeAccettato,
-    FiglioVivo<std::process::Child>,
-)> {
-    rendi_non_bloccante(&lettore_grezzo)?;
+) -> std::result::Result<
+    (
+        std::io::PipeReader,
+        std::io::PipeWriter,
+        crate::protocollo::handshake::HandshakeAccettato,
+        FiglioVivo<std::process::Child>,
+    ),
+    FallimentoDellHandshake,
+> {
+    // Nessun `?` finche' `guardia` e' viva: un errore la lascerebbe cadere
+    // col figlio dentro, e la sentinella di `FiglioVivo` interromperebbe il
+    // processo invece di rendere l'errore.
+    let rinuncia = |guardia: FiglioVivo<std::process::Child>, causa: PlenoraError| {
+        let (_uscita, difetti_di_pulizia) = super::prova::chiudi(guardia, Some(&causa));
+        for difetto in &difetti_di_pulizia {
+            eprintln!("plenora: pulizia del {soggetto} isolato: {difetto}");
+        }
+        causa
+    };
+    if let Err(causa) = rendi_non_bloccante(&lettore_grezzo) {
+        return Err(FallimentoDellHandshake::DelCanale(rinuncia(guardia, causa)));
+    }
     let (spia, freno) = interruttore();
-    let guardiano = Guardiano::comincia(freno, spia.clone(), TETTO_DELLA_PAROLA)?;
+    let guardiano = match Guardiano::comincia(freno, spia.clone(), TETTO_DELLA_PAROLA) {
+        Ok(guardiano) => guardiano,
+        Err(causa) => return Err(FallimentoDellHandshake::DelCanale(rinuncia(guardia, causa))),
+    };
     let mut sorgente = SorgenteTerminabile::con_interruttore(lettore_grezzo, PASSO_DI_ATTESA, spia);
 
-    let esito = (|| -> Result<crate::protocollo::handshake::HandshakeAccettato> {
+    // Solo il giudizio su una `Risposta` arrivata per intero e' un fatto
+    // accertato; scrivere il saluto e leggere la risposta sono il canale.
+    let esito = (|| -> std::result::Result<_, FallimentoDellHandshake> {
         let saluto = Frame::nuovo(Corpo::Saluto(Box::new(supervisore.saluto().clone())));
-        prova::scrivi(&mut scrittore, &codifica(&saluto)?)?;
-        let Some(frame) = leggi_frame(&mut sorgente)? else {
-            return Err(non_disponibile(
+        codifica(&saluto)
+            .and_then(|byte| prova::scrivi(&mut scrittore, &byte))
+            .map_err(FallimentoDellHandshake::DelCanale)?;
+        let Some(frame) = leggi_frame(&mut sorgente).map_err(FallimentoDellHandshake::DelCanale)?
+        else {
+            return Err(FallimentoDellHandshake::DelCanale(non_disponibile(
                 "prova",
                 &format!("il {soggetto} ha chiuso senza rispondere al saluto"),
-            ));
+            )));
         };
-        supervisore.ricevi(frame)
+        supervisore
+            .ricevi(frame)
+            .map_err(FallimentoDellHandshake::DelGiudizio)
     })();
     let stato_guardiano = guardiano.ferma_e_raccogli();
     let lettore = sorgente.dentro();
 
     match esito {
         Ok(accordo) => Ok((lettore, scrittore, accordo, guardia)),
-        Err(causa) => {
-            let (_uscita, difetti_di_pulizia) = super::prova::chiudi(guardia, Some(&causa));
+        Err(fallimento) => {
+            let (_uscita, difetti_di_pulizia) =
+                super::prova::chiudi(guardia, Some(fallimento.causa()));
             for difetto in &difetti_di_pulizia {
                 eprintln!("plenora: pulizia del {soggetto} isolato: {difetto}");
             }
             drop(scrittore);
+            // Un guardiano scaduto dice che la parola non e' arrivata in
+            // tempo: qualunque cosa sia seguita, non e' un giudizio.
             Err(if stato_guardiano == StatoDelGuardiano::Scaduto {
-                non_disponibile(
+                FallimentoDellHandshake::DelCanale(non_disponibile(
                     "prova",
                     &format!(
                         "l'handshake col {soggetto} isolato non si e' concluso entro {} secondi: \
-                         {causa}",
-                        TETTO_DELLA_PAROLA.as_secs()
+                         {}",
+                        TETTO_DELLA_PAROLA.as_secs(),
+                        fallimento.causa()
                     ),
-                )
+                ))
             } else {
-                causa
+                fallimento
             })
+        }
+    }
+}
+
+/// Da dove viene il fallimento di un handshake, perche' la rilettura
+/// dell'evidenza lo pesa diversamente.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+enum FallimentoDellHandshake {
+    /// Il canale: il saluto non si scrive, la risposta non arriva o arriva
+    /// troncata, il guardiano scade. Un dominio che poi va terminato con
+    /// `cgroup.kill` rende l'esito ambiguo.
+    DelCanale(PlenoraError),
+    /// Il giudizio del supervisore su una `Risposta` arrivata per intero:
+    /// protocollo, artefatto, resolver, ambiente o capability incompatibili
+    /// (righe 9 e 10 della matrice). E' un fatto accertato, e una quiescenza
+    /// tardiva non lo rende ambiguo.
+    DelGiudizio(PlenoraError),
+}
+
+#[cfg(target_os = "linux")]
+impl FallimentoDellHandshake {
+    const fn causa(&self) -> &PlenoraError {
+        match self {
+            Self::DelCanale(causa) | Self::DelGiudizio(causa) => causa,
+        }
+    }
+
+    /// Rilegge la causa alla luce dell'evidenza del dominio.
+    fn rileggi(
+        self,
+        evidenza: macchina::EvidenzaDaPrimaDelloSpawn,
+        soggetto: &str,
+    ) -> PlenoraError {
+        match self {
+            Self::DelCanale(causa) => evidenza.rileggi_il_fallimento(soggetto, causa),
+            Self::DelGiudizio(causa) => evidenza.rileggi_il_giudizio(soggetto, causa),
         }
     }
 }
@@ -625,6 +691,9 @@ fn esegui_il_worker(
     // non quello grezzo richiesto dal piano: altrimenti il taglio della
     // politica dell'host non avrebbe alcun effetto sul dominio reale.
     let preparato = prepara_dominio(&mut gerarchia, concesso_byte, worker)?;
+    // Il «prima» dell'evidenza, adesso: `avvia` consuma `preparato`, e dopo
+    // non si potrebbe piu' prendere (`macchina::EvidenzaDaPrimaDelloSpawn`).
+    let evidenza = macchina::EvidenzaDaPrimaDelloSpawn::prendi(&preparato);
 
     let (incarico, contratto_di_uscita) = incarico_per(graph, ingressi, &temporaneo)?;
     let token = token_del_tentativo()?;
@@ -655,15 +724,24 @@ fn esegui_il_worker(
         guardia.pid(),
         riuscita.evidenza
     );
+    // Ogni fallimento fra qui e la conduzione ha gia' chiuso il figlio, e
+    // passa dall'evidenza del dominio prima di uscire
+    // (`EvidenzaDaPrimaDelloSpawn::rileggi_il_fallimento`).
     let (supervisore, guardia) =
-        supervisore_o_raccogli("worker isolato", digest_immagine, token, guardia)?;
-    let (lettore, mut scrittore, accordo, guardia) = concludi_handshake(
+        match supervisore_o_raccogli("worker isolato", digest_immagine, token, guardia) {
+            Ok(coppia) => coppia,
+            Err(causa) => return Err(evidenza.rileggi_il_fallimento("worker", causa)),
+        };
+    let (lettore, mut scrittore, accordo, guardia) = match concludi_handshake(
         "worker",
         supervisore,
         riuscita.supervisore_legge,
         riuscita.supervisore_scrive,
         guardia,
-    )?;
+    ) {
+        Ok(quattro) => quattro,
+        Err(fallimento) => return Err(fallimento.rileggi(evidenza, "worker")),
+    };
 
     // --- l'incarico, sullo stesso canale ------------------------------------
     let incarico_frame = Frame::nuovo(Corpo::Incarico(Box::new(incarico)));
@@ -675,7 +753,7 @@ fn esegui_il_worker(
             eprintln!("plenora: pulizia del worker isolato: {difetto}");
         }
         drop(scrittore);
-        return Err(causa);
+        return Err(evidenza.rileggi_il_fallimento("worker", causa));
     }
 
     // --- il resto del dialogo, condotto dalla macchina a stati --------------
@@ -693,8 +771,7 @@ fn esegui_il_worker(
         tempo_di_esecuzione,
         guardia,
         dominio.to_path_buf(),
-        radice,
-        concesso_byte,
+        evidenza,
         annullamento_esterno,
     );
     let (digest, conteggi) = esito?;
@@ -849,6 +926,9 @@ fn dialoga_con_verificatore(
         non_disponibile(dominio.to_string_lossy().as_ref(), &difetto.to_string())
     })?;
     let preparato = prepara_dominio(&mut gerarchia, concesso_byte, worker)?;
+    // Stessa regola del worker: il «prima» dell'evidenza si prende dal
+    // preparato, prima che `avvia` lo consumi.
+    let evidenza = macchina::EvidenzaDaPrimaDelloSpawn::prendi(&preparato);
 
     let argomento_verificatore: std::ffi::OsString = super::VERSIONE_VERIFICATORE.into();
     let da_eseguire = DaEseguire {
@@ -921,7 +1001,9 @@ fn dialoga_con_verificatore(
                 "plenora: pulizia del verificatore isolato (cancellato appena nato): {difetto}"
             );
         }
-        return Err(causa);
+        // Anche qui il dominio e' nato: un OOM attribuito concorrente precede
+        // la cancellazione (§10.3), il resto no.
+        return Err(evidenza.rileggi_la_cancellazione("verificatore", causa));
     }
     eprintln!(
         "plenora: preflight del dominio del verificatore riuscito, pid {:?}: {:?}",
@@ -937,15 +1019,23 @@ fn dialoga_con_verificatore(
     // esiste gia', `supervisore_per` non dipende dal verificatore appena
     // nato, e un `?` nudo la lascerebbe sfuggire al primo rifiuto legittimo
     // invece di un errore leggibile.
+    // Come per il worker: ogni fallimento fino alla conduzione passa
+    // dall'evidenza del dominio.
     let (supervisore, guardia) =
-        supervisore_o_raccogli("verificatore isolato", digest_immagine, token, guardia)?;
-    let (lettore, mut scrittore, accordo, guardia) = concludi_handshake(
+        match supervisore_o_raccogli("verificatore isolato", digest_immagine, token, guardia) {
+            Ok(coppia) => coppia,
+            Err(causa) => return Err(evidenza.rileggi_il_fallimento("verificatore", causa)),
+        };
+    let (lettore, mut scrittore, accordo, guardia) = match concludi_handshake(
         "verificatore",
         supervisore,
         riuscita.supervisore_legge,
         riuscita.supervisore_scrive,
         guardia,
-    )?;
+    ) {
+        Ok(quattro) => quattro,
+        Err(fallimento) => return Err(fallimento.rileggi(evidenza, "verificatore")),
+    };
 
     // --- l'incarico di verifica, sullo stesso canale ------------------------
     let incarico_frame = Frame::nuovo(Corpo::IncaricoVerifica(Box::new(incarico_verifica)));
@@ -957,7 +1047,7 @@ fn dialoga_con_verificatore(
             eprintln!("plenora: pulizia del verificatore isolato: {difetto}");
         }
         drop(scrittore);
-        return Err(causa);
+        return Err(evidenza.rileggi_il_fallimento("verificatore", causa));
     }
 
     // --- il resto del dialogo, condotto dalla **stessa** macchina a stati --
@@ -978,8 +1068,7 @@ fn dialoga_con_verificatore(
         tempo_di_verifica,
         guardia,
         dominio.to_path_buf(),
-        radice,
-        concesso_byte,
+        evidenza,
         annullamento_esterno,
     )
 }
@@ -1670,7 +1759,7 @@ mod tests {
             "la directory di dominio non si e' ripulita dopo il fallimento: {residui:?}"
         );
         assert!(
-            !destinazione.exists(),
+            !destinazione.try_exists().expect("stat"),
             "nessun output deve comparire quando il preflight isolato fallisce"
         );
     }
@@ -1739,7 +1828,10 @@ mod tests {
             esito.is_ok(),
             "la verifica confermata deve pubblicare: {esito:?}"
         );
-        assert!(destinazione.exists(), "la destinazione deve comparire");
+        assert!(
+            destinazione.try_exists().expect("stat"),
+            "la destinazione deve comparire"
+        );
         assert_eq!(
             std::fs::read(&destinazione).expect("lettura della destinazione"),
             byte,
@@ -1779,7 +1871,10 @@ mod tests {
             esito.is_err(),
             "una terminazione anomala non deve pubblicare"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Timeout del verificatore**: nessuna pubblicazione.
@@ -1808,7 +1903,10 @@ mod tests {
             errore.category(),
             plenora_core::error::ErrorCategory::Timeout
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Cancellazione durante la verifica**: nessuna pubblicazione.
@@ -1840,7 +1938,10 @@ mod tests {
             errore.category(),
             plenora_core::error::ErrorCategory::Cancelled
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Risposta di verifica incoerente**: il verificatore conferma un
@@ -1883,7 +1984,10 @@ mod tests {
             esito.is_err(),
             "un digest confermato ma sbagliato non deve pubblicare"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **Risposta positiva ma diversa da cio' che l'incarico aveva
@@ -1927,7 +2031,10 @@ mod tests {
             plenora_core::error::ErrorCategory::DataMapping,
             "il rifiuto deve venire dal confronto con l'incarico"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 
     /// **L'artefatto cambia fra la fine della verifica e la copia**: la
@@ -1969,6 +2076,9 @@ mod tests {
             esito.is_err(),
             "un artefatto modificato dopo la verifica non deve pubblicare"
         );
-        assert!(!destinazione.exists(), "nessun output deve comparire");
+        assert!(
+            !destinazione.try_exists().expect("stat"),
+            "nessun output deve comparire"
+        );
     }
 }

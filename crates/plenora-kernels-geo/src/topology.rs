@@ -57,6 +57,25 @@ pub enum TopologyError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// Il join spaziale che accoppia i candidati non ha concluso: un
+    /// predicato esatto interrotto o un'invariante interna. Non accusa
+    /// l'ingresso, e porta la *forma* del payload, mai il contenuto.
+    #[error("join spaziale non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
+}
+
+/// Il fallimento del join spaziale nella lingua di questo modulo, senza
+/// perdere la differenza fra un ingresso sbagliato e un calcolo che non ha
+/// concluso.
+fn dal_join(error: crate::spatial_join::SpatialJoinError) -> TopologyError {
+    use crate::spatial_join::SpatialJoinError as S;
+    match error {
+        S::ValidazioneNonConclusa(forma) => TopologyError::ValidazioneNonConclusa(forma),
+        S::CalcoloNonConcluso(forma) | S::Internal(forma) => {
+            TopologyError::CalcoloNonConcluso(forma)
+        }
+        altro => TopologyError::InvalidGeometry(altro.to_string()),
+    }
 }
 
 use crate::geometry_type_name as geometry_name;
@@ -382,7 +401,7 @@ fn polygon_overlay_impl(
             max_candidate_pairs,
         )
     }
-    .map_err(|error| TopologyError::InvalidGeometry(error.to_string()))?;
+    .map_err(dal_join)?;
     let boolean = |left: &Geometry<f64>, right: &Geometry<f64>, operation| {
         if validated {
             boolean_operation_validated(left, right, operation)
@@ -613,6 +632,28 @@ mod tests {
         Rect, Triangle,
     };
     use proptest::prelude::*;
+
+    /// Il join che non conclude resta un calcolo non concluso, non una
+    /// geometria invalida.
+    #[test]
+    fn il_join_non_concluso_non_diventa_una_geometria_invalida() {
+        use crate::spatial_join::SpatialJoinError as S;
+
+        assert!(matches!(
+            dal_join(S::ValidazioneNonConclusa("forma")),
+            TopologyError::ValidazioneNonConclusa("forma")
+        ));
+        for errore in [S::CalcoloNonConcluso("forma"), S::Internal("forma")] {
+            assert!(matches!(
+                dal_join(errore),
+                TopologyError::CalcoloNonConcluso("forma")
+            ));
+        }
+        assert!(matches!(
+            dal_join(S::InvalidPairLimit),
+            TopologyError::InvalidGeometry(_)
+        ));
+    }
 
     /// Sintetico attraverso la conversione reale (stessa motivazione di
     /// `predicates::classifica_lato_non_appiattisce_l_interruzione`): nessun

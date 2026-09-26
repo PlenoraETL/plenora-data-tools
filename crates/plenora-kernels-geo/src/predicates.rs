@@ -34,6 +34,11 @@ pub enum PredicateError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// `relate` non ha concluso su geometrie **valide**
+    /// ([`crate::calcolo_protetto`]): non accusa l'ingresso, e porta la
+    /// *forma* del payload, mai il contenuto.
+    #[error("predicato non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
 }
 
 /// Mappa l'esito della barriera sull'errore proprio di questo modulo,
@@ -72,7 +77,9 @@ fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), Predicat
 /// - `PredicateError::NonFiniteCoordinate`: `left` o `right` contiene
 ///   coordinate NaN o infinite;
 /// - `PredicateError::InvalidGeometry`: `left` o `right` non supera la
-///   validazione OGC (es. anello auto-intersecato).
+///   validazione OGC (es. anello auto-intersecato);
+/// - `PredicateError::CalcoloNonConcluso`: `relate` si interrompe su due
+///   geometrie valide.
 pub fn evaluate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -80,7 +87,7 @@ pub fn evaluate(
 ) -> Result<bool, PredicateError> {
     validate(left, "left")?;
     validate(right, "right")?;
-    Ok(evaluate_unchecked(left, right, predicate))
+    evaluate_unchecked(left, right, predicate)
 }
 
 /// Variante di [`evaluate`] SENZA il gate di ingresso (scansione di
@@ -98,24 +105,24 @@ pub fn evaluate(
 ///
 /// # Errors
 ///
-/// Infallibile su input che rispetta la precondizione (il `Result` resta
-/// per simmetria con [`evaluate`]); nessuna variante d'errore e'
-/// raggiungibile.
+/// `PredicateError::CalcoloNonConcluso` quando `relate` si interrompe: la
+/// validazione non basta a escluderlo ([`crate::calcolo_protetto`]).
 pub fn evaluate_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     predicate: SpatialPredicate,
 ) -> Result<bool, PredicateError> {
-    Ok(evaluate_unchecked(left, right, predicate))
+    evaluate_unchecked(left, right, predicate)
 }
 
 fn evaluate_unchecked(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     predicate: SpatialPredicate,
-) -> bool {
-    let matrix = left.relate(right);
-    match predicate {
+) -> Result<bool, PredicateError> {
+    let matrix = crate::calcolo_protetto(|| left.relate(right))
+        .map_err(PredicateError::CalcoloNonConcluso)?;
+    Ok(match predicate {
         SpatialPredicate::Intersects => matrix.is_intersects(),
         SpatialPredicate::Disjoint => matrix.is_disjoint(),
         SpatialPredicate::Contains => matrix.is_contains(),
@@ -127,7 +134,7 @@ fn evaluate_unchecked(
         SpatialPredicate::Touches => matrix.is_touches(),
         SpatialPredicate::Crosses => matrix.is_crosses(),
         SpatialPredicate::Overlaps => matrix.is_overlaps(),
-    }
+    })
 }
 
 #[cfg(test)]

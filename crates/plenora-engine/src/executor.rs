@@ -395,7 +395,8 @@ fn execute_physical(
     // radice dello store (default: temp di sistema; configurabile via
     // `RuntimeContext::temp_root`). Best-effort: un fallimento dello
     // scavenging non deve mai impedire un'esecuzione valida — le directory
-    // orfane restano e saranno raccolte al giro successivo.
+    // orfane restano, e un giro successivo le raccoglie solo se ha i permessi
+    // per farlo (errori-e-limiti.md#la-pulizia-dei-domini-non-esce-su-un-canale-machine-readable).
     let temp_root = runtime.temp_root.clone().unwrap_or_else(std::env::temp_dir);
     let _ = scavenge_stale_temp_dirs(&temp_root, DEFAULT_SCAVENGE_TTL);
     // Fail-closed, decisione documentata: niente degrado a tempdir semplice.

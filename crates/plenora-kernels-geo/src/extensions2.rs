@@ -440,8 +440,21 @@ pub struct GridRow {
     pub centroid_y: f64,
 }
 
+/// L'errore di un'estensione v2 nella categoria giusta: `Internal` se la
+/// validazione non ha concluso o un'invariante e' saltata — nessuno ha
+/// dimostrato che il piano o l'ingresso siano sbagliati — `InvalidPlan`
+/// altrimenti.
+fn errore_v2(operazione: &str, error: &ExtensionV2Error) -> PlenoraError {
+    match error {
+        ExtensionV2Error::Internal(_) | ExtensionV2Error::ValidazioneNonConclusa(_) => {
+            PlenoraError::Internal(format!("{operazione}: {error}"))
+        }
+        _ => PlenoraError::InvalidPlan(format!("{operazione}: {error}")),
+    }
+}
+
 fn grid_error(error: &ExtensionV2Error) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("geo.generate_grid: {error}"))
+    errore_v2("geo.generate_grid", error)
 }
 
 /// Adapter righe per `geo.generate_grid`: le celle sono gia' valide per
@@ -649,7 +662,7 @@ pub fn subdivide(
 }
 
 fn subdivide_error(error: &ExtensionV2Error) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("geo.subdivide: {error}"))
+    errore_v2("geo.subdivide", error)
 }
 
 /// Helper WKB per `geo.subdivide`: decodifica una cella, la spezza e
@@ -749,7 +762,7 @@ fn check_tolerance(tolerance: f64) -> Result<(), ExtensionV2Error> {
 }
 
 fn snap_error(error: &ExtensionV2Error) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("geo.snap: {error}"))
+    errore_v2("geo.snap", error)
 }
 
 /// Adapter di colonna per `geo.snap`.
@@ -806,6 +819,28 @@ mod tests {
     use super::*;
     use geo::{line_string, polygon, GeometryCollection, MultiLineString, Point};
     use geozero::{CoordDimensions, ToWkb};
+
+    /// Gli adapter v2 non accusano il piano di cio' che non ha concluso.
+    #[test]
+    fn gli_adapter_v2_separano_l_interno_dal_piano() {
+        use plenora_core::ErrorCategory;
+
+        for adapter in [grid_error, subdivide_error, snap_error] {
+            for interno in [
+                ExtensionV2Error::Internal("forma"),
+                ExtensionV2Error::ValidazioneNonConclusa("forma"),
+            ] {
+                let errore = adapter(&interno);
+                assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
+            }
+            let del_piano = adapter(&ExtensionV2Error::InvalidInput("anello aperto".to_owned()));
+            assert_eq!(
+                del_piano.category(),
+                ErrorCategory::InvalidPlan,
+                "{del_piano}"
+            );
+        }
+    }
 
     fn extent() -> GridExtent {
         GridExtent::new(0.0, 0.0, 10.0, 10.0).expect("extent valido")

@@ -113,16 +113,12 @@ pub mod ipc_boundary;
 // Il binario spedito deve riconoscere la riga di comando dello spawner, o un
 // worker avviato eseguirebbe il parser degli argomenti ordinario.
 //
-// Non tutto il modulo pero' e' raggiungibile da li'. Cio' che serve solo al
-// **supervisore** — preparazione del dominio, token, transizione, avvio —
-// resta sotto `cfg(any(test, feature = "internals"))` con la sua condizione di
-// rientro scritta sui singoli elementi: cade quando esiste un supervisore che
-// li chiama in produzione.
-//
-// Il frazionamento non e' pedanteria. Un `cfg` sul modulo intero dichiarerebbe
-// una condizione falsa in un verso o nell'altro: o «niente ha un chiamante»,
-// che il dispatch smentisce, o «tutto ce l'ha», che il preflight smentisce. E
-// un `cfg` che dichiara il falso e' peggio di nessun `cfg`, perche' chi legge
+// Il resto — preparazione del dominio, token, transizione, avvio — lo
+// raggiunge il supervisore del profilo isolato, che `plenora-cli run` chiama
+// quando un piano dichiara `max_domain_memory_bytes`. Cio' che resta senza
+// chiamante di produzione lo dichiara un `cfg` sul singolo elemento, mai sul
+// modulo: un `cfg` sul modulo intero dichiarerebbe una condizione falsa, e un
+// `cfg` che dichiara il falso e' peggio di nessun `cfg`, perche' chi legge
 // smette di controllare.
 //
 // Il `cfg` di piattaforma resta finche' non esiste un secondo dominio
@@ -266,12 +262,11 @@ pub mod prepare;
 mod protocollo;
 // Le osservazioni su una destinazione, e il passo 9.
 //
-// Il modulo e' pubblico per **`risolvi_commit`** soltanto: chi non riceve
-// risposta dal processo incaricato di pubblicare deve poter guardare il disco
-// senza passare da noi, e quella funzione un chiamante esterno ce l'ha per
-// definizione. Il passo 9 e la prova che consuma stanno invece sotto lo stesso
-// `cfg` del verificatore, perche' condividono con lui la stessa condizione:
-// nessun percorso di produzione li attraversa ancora.
+// Il modulo e' pubblico per **`risolvi_commit`**: chi non riceve risposta dal
+// processo incaricato di pubblicare deve poter guardare il disco senza passare
+// da noi, e quella funzione un chiamante esterno ce l'ha per definizione. Il
+// passo 9 e la prova che consuma li attraversa il profilo isolato, dopo il
+// verificatore.
 pub mod pubblicazione;
 // Quale implementazione risolve i CRS in questa build, detto in un posto solo.
 // Privato: e' una decisione interna, e la superficie pubblica non deve

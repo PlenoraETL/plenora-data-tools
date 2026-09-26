@@ -49,6 +49,14 @@ pub enum OperationError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// Un calcolo di `geo` non ha concluso su una geometria **valida**: si e'
+    /// interrotto dentro `relate` ([`crate::calcolo_protetto`]).
+    ///
+    /// Come [`Self::ValidazioneNonConclusa`], non accusa l'ingresso: la
+    /// geometria ha superato la validazione, ed e' la dipendenza a non
+    /// reggere. Porta la *forma* del payload, mai il contenuto.
+    #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), OperationError> {
@@ -235,15 +243,20 @@ pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>
     // target `wkt_operations`; il corpus non e' versionato, quindi la
     // copertura permanente e' il test
     // `point_on_surface_survives_negative_zero_coordinates`.
-    if has_negative_zero(geometry) {
+    //
+    // `interior_point` passa poi da `relate`, che puo' andare in panico anche
+    // su una geometria valida: gira dentro [`crate::calcolo_protetto`].
+    let punto = if has_negative_zero(geometry) {
         let normalized = geometry.map_coords(|coord| Coord {
             x: normalize_signed_zero(coord.x),
             y: normalize_signed_zero(coord.y),
         });
-        return Ok(normalized.interior_point().map(Geometry::Point));
+        crate::calcolo_protetto(|| normalized.interior_point())
+    } else {
+        crate::calcolo_protetto(|| geometry.interior_point())
     }
-
-    Ok(geometry.interior_point().map(Geometry::Point))
+    .map_err(OperationError::CalcoloNonConcluso)?;
+    Ok(punto.map(Geometry::Point))
 }
 
 /// Serializzazione WKT della geometria.

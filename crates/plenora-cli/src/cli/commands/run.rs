@@ -39,7 +39,11 @@ pub fn run_dag(
     output_path: &Path,
     geo_fusion: bool,
 ) -> Result<(), Box<dyn Error>> {
-    if output_path.exists() {
+    // Una destinazione che non si lascia osservare non e' libera.
+    if output_path
+        .try_exists()
+        .map_err(plenora_core::PlenoraError::Io)?
+    {
         return Err(contract(format!(
             "output gia' esistente, rifiuto di sovrascriverlo: {}",
             output_path.display()

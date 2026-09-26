@@ -8,6 +8,9 @@ use libfuzzer_sys::fuzz_target;
 use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step};
 use serde_json::json;
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 fn fixture(payload: &[u8]) -> RecordBatch {
     let values = payload.iter().take(128).copied().collect::<Vec<_>>();
     let numbers = values.iter().map(|value| f64::from(*value)).collect::<Vec<_>>();
@@ -56,7 +59,7 @@ fn plan(operation: &str, config: serde_json::Value) -> plenora_engine::Validated
     .expect("static advanced plan")
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     let batch = fixture(payload);
     let selector = payload.first().copied().unwrap_or_default() % 10;
     if selector < 6 {

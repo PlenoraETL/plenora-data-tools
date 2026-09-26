@@ -132,9 +132,38 @@ _abitato() {
     }' "$_eventi"
 }
 
+# Osserva `$1` con `lstat`: rende 0 se c'e', 1 solo se `lstat` dice ENOENT, 2
+# se non si sa. Il 3 dell'interprete e' riservato a FileNotFoundError: un
+# Python che manca (127) o un'eccezione non prevista (1) non lo producono, e
+# nessun messaggio d'errore viene interpretato come testo.
+osserva() {
+  local stato=0
+  python3 -c 'import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(3)' "$1" 2>/dev/null || stato=$?
+  case "$stato" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# Se `$1` c'e': 0 si', 1 solo se non esiste. Un percorso che non si lascia
+# osservare conta come presente, e lo si dice: la pulizia ci prova, e se non ci
+# riesce lo riporta, invece di saltare un residuo che non ha visto.
+presente() {
+  local stato=0
+  osserva "$1" || stato=$?
+  [[ "$stato" -eq 1 ]] && return 1
+  [[ "$stato" -eq 2 ]] && echo "pulizia: $1 non si lascia osservare" >&2
+  return 0
+}
+
 pulisci() {
   set +e
-  if [ -n "$DOMINIO" ] && [ -d "$DOMINIO" ]; then
+  if [ -n "$DOMINIO" ] && presente "$DOMINIO"; then
     [ -e "$DOMINIO/cgroup.kill" ] && echo 1 >"$DOMINIO/cgroup.kill" 2>/dev/null
     # La condizione la da' `cgroup.events`, non `-s cgroup.procs`: i file di
     # `cgroup2` sono virtuali e dichiarano dimensione zero anche quando hanno
@@ -152,16 +181,15 @@ pulisci() {
       # il blocco qui sotto.
       [ "$_stato" -eq 0 ] || break
       [ "$_giro" -lt 50 ] || break
-      local _pid
-      while read -r _pid; do
-        [ -n "$_pid" ] && kill -9 "$_pid" 2>/dev/null
-      done <"$DOMINIO/cgroup.procs"
+      # Il dominio, non i PID: un PID letto da `cgroup.procs` puo' tornare in
+      # uso prima del segnale, `cgroup.kill` colpisce solo chi e' dentro.
+      [ -e "$DOMINIO/cgroup.kill" ] && echo 1 >"$DOMINIO/cgroup.kill" 2>/dev/null
       _giro=$((_giro + 1))
       sleep 0.1
     done
     if [ "$_stato" -eq 1 ]; then
       rmdir "$DOMINIO" 2>/dev/null
-      [ -d "$DOMINIO" ] && fallisce "pulizia: $DOMINIO non si rimuove"
+      presente "$DOMINIO" && fallisce "pulizia: $DOMINIO non si rimuove"
     elif [ "$_stato" -eq 0 ]; then
       fallisce "pulizia: $DOMINIO e' ancora abitato dopo il tetto"
     else
@@ -174,14 +202,14 @@ pulisci() {
       rmdir "$DOMINIO" 2>/dev/null
     fi
   fi
-  if [ -n "$VICINO" ] && [ -d "$VICINO" ]; then
+  if [ -n "$VICINO" ] && presente "$VICINO"; then
     [ -e "$VICINO/cgroup.kill" ] && echo 1 >"$VICINO/cgroup.kill" 2>/dev/null
     rmdir "$VICINO" 2>/dev/null
-    [ -d "$VICINO" ] && fallisce "pulizia: $VICINO non si rimuove"
+    presente "$VICINO" && fallisce "pulizia: $VICINO non si rimuove"
   fi
-  if [ -n "$RADICE_ASSOLUTA" ] && [ -d "$RADICE_ASSOLUTA" ]; then
+  if [ -n "$RADICE_ASSOLUTA" ] && presente "$RADICE_ASSOLUTA"; then
     rmdir "$RADICE_ASSOLUTA" 2>/dev/null
-    [ -d "$RADICE_ASSOLUTA" ] && fallisce "pulizia: $RADICE_ASSOLUTA non si rimuove"
+    presente "$RADICE_ASSOLUTA" && fallisce "pulizia: $RADICE_ASSOLUTA non si rimuove"
   fi
   # La delega globale si rimette **solo** se e' stata accesa qui, e la rimozione
   # si rilegge: lasciare acceso un controllore che il gate ha acceso cambia la
@@ -199,9 +227,9 @@ pulisci() {
       fallisce "pulizia: $PUNTO/cgroup.subtree_control vale «$_delega» invece di «$SUBTREE_PRIMA»"
     fi
   fi
-  if [ -n "$TEMPORANEA" ] && [ -d "$TEMPORANEA" ]; then
+  if [ -n "$TEMPORANEA" ] && presente "$TEMPORANEA"; then
     rm -rf "$TEMPORANEA" 2>/dev/null
-    [ -d "$TEMPORANEA" ] && fallisce "pulizia: $TEMPORANEA non si rimuove"
+    presente "$TEMPORANEA" && fallisce "pulizia: $TEMPORANEA non si rimuove"
   fi
   set -e
 }
@@ -318,9 +346,13 @@ uguali() {
 [ "$(id -u)" = "0" ] || manca "serve root: il control plane crea il dominio e cambia identita'"
 
 for STRUMENTO in cargo rustc mkfifo timeout stat getent awk sed grep sort uniq \
-  sha256sum cut find xargs basename; do
+  sha256sum cut find xargs basename python3; do
   command -v "$STRUMENTO" >/dev/null || manca "$STRUMENTO non c'e'"
 done
+# I segnali ai figli passano da qui: un PID ricordato puo' tornare in uso, e
+# l'aiuto segnala solo se il processo e' ancora quello atteso.
+SEGNALA="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/segnala_verificato.py"
+python3 "$SEGNALA" --help >/dev/null || manca "python3 non esegue $SEGNALA"
 
 # Gli argomenti si validano **prima** di usarli, e non e' pedanteria: il gate
 # gira come root. Un `RADICE` con una barra o un `..` porterebbe `mkdir` e
@@ -855,7 +887,8 @@ else
   printf '%s scrivibile_dal_control_plane=no\n' "$VICINO/cgroup.procs" >>"$DOVE/controprova.txt"
   fallisce "controprova: il control plane non sposta un processo in $VICINO, e senza quello il rifiuto del worker li' non dice niente"
 fi
-kill -9 "$CAVIA" 2>/dev/null || true
+python3 "$SEGNALA" "$CAVIA" KILL --genitore $$ --eseguibile "$(command -v sleep)" \
+  --argomento 60 || true
 wait "$CAVIA" 2>/dev/null || true
 
 # Il `cgroup.procs` del padre si **registra** e non si conta: nessuno lo scrive,
@@ -914,7 +947,7 @@ if timeout "$ATTESA_MASSIMA" cat "$PRONTO_A" >/dev/null; then
   timeout "$ATTESA_MASSIMA" sh -c "printf 'via\n' > '$VIA_A'"
 else
   fallisce "braccio 2a: il supervisore non ha raggiunto l'attesa iniziale entro $ATTESA_MASSIMA s"
-  kill -9 "$SUPERVISORE_2A" 2>/dev/null
+  python3 "$SEGNALA" "$SUPERVISORE_2A" KILL --genitore $$ --eseguibile "$IMMAGINE_2A"
 fi
 wait "$SUPERVISORE_2A"
 USCITA_2A=$?
@@ -951,7 +984,7 @@ if timeout "$ATTESA_MASSIMA" cat "$PRONTO_B" >/dev/null; then
   timeout "$ATTESA_MASSIMA" sh -c "printf 'via\n' > '$VIA_B'"
 else
   fallisce "braccio 2b: il supervisore non ha raggiunto la barriera entro $ATTESA_MASSIMA s"
-  kill -9 "$SUPERVISORE_2B" 2>/dev/null
+  python3 "$SEGNALA" "$SUPERVISORE_2B" KILL --genitore $$ --eseguibile "$IMMAGINE_2B"
 fi
 wait "$SUPERVISORE_2B"
 USCITA_2B=$?

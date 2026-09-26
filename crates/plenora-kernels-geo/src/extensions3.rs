@@ -372,8 +372,20 @@ pub fn coverage_validate_nullable(
     coverage_validate_elements(&elements, &tree, tolerance, max_issues)
 }
 
+/// L'errore di un'estensione v3 nella categoria giusta: `Internal` se la
+/// validazione non ha concluso o un'invariante e' saltata, `InvalidPlan`
+/// altrimenti. Stessa regola di `extensions2::errore_v2`.
+fn errore_v3(operazione: &str, error: &ExtensionV3Error) -> PlenoraError {
+    match error {
+        ExtensionV3Error::Internal(_) | ExtensionV3Error::ValidazioneNonConclusa(_) => {
+            PlenoraError::Internal(format!("{operazione}: {error}"))
+        }
+        _ => PlenoraError::InvalidPlan(format!("{operazione}: {error}")),
+    }
+}
+
 fn coverage_error(error: &ExtensionV3Error) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("geo.coverage_validate: {error}"))
+    errore_v3("geo.coverage_validate", error)
 }
 
 /// Riga di output di `geo.coverage_validate` con geometria codificata WKB
@@ -578,7 +590,7 @@ pub fn shared_paths_nullable(
 }
 
 fn shared_paths_error(error: &ExtensionV3Error) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("geo.shared_paths: {error}"))
+    errore_v3("geo.shared_paths", error)
 }
 
 /// Riga di output di `geo.shared_paths` con geometria codificata WKB.
@@ -632,6 +644,28 @@ mod tests {
     use super::*;
     use geo::{polygon, MultiPolygon as GeoMultiPolygon, Point};
     use plenora_core::arrow::array::BinaryArray as ArrowBinaryArray;
+
+    /// Gli adapter v3 non accusano il piano di cio' che non ha concluso.
+    #[test]
+    fn gli_adapter_v3_separano_l_interno_dal_piano() {
+        use plenora_core::ErrorCategory;
+
+        for adapter in [coverage_error, shared_paths_error] {
+            for interno in [
+                ExtensionV3Error::Internal("forma"),
+                ExtensionV3Error::ValidazioneNonConclusa("forma"),
+            ] {
+                let errore = adapter(&interno);
+                assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
+            }
+            let del_piano = adapter(&ExtensionV3Error::IndexOverflow);
+            assert_eq!(
+                del_piano.category(),
+                ErrorCategory::InvalidPlan,
+                "{del_piano}"
+            );
+        }
+    }
 
     fn rectangle(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Geometry<f64> {
         Geometry::Polygon(polygon![

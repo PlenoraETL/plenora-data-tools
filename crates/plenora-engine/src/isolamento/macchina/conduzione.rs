@@ -238,6 +238,9 @@ pub(super) struct Contorno<P: ProcessoFiglio> {
     pub(super) raccolta: Option<String>,
     /// Il dominio che non si e' lasciato terminare.
     pub(super) terminazione: Option<String>,
+    /// Il dominio che, terminato, non si e' svuotato entro l'attesa: processi
+    /// possono esservi rimasti anche se `cgroup.kill` si e' scritto.
+    pub(super) abitato: Option<String>,
     /// L'`Annulla` che non si e' potuto mandare.
     ///
     /// Separato dagli altri perche' dice una cosa sua: il worker **non ha
@@ -263,6 +266,7 @@ impl<P: ProcessoFiglio> Default for Contorno<P> {
             drenaggio: None,
             raccolta: None,
             terminazione: None,
+            abitato: None,
             annulla: None,
             figlio_non_raccolto: None,
         }
@@ -283,6 +287,7 @@ impl<P: ProcessoFiglio> Contorno<P> {
         tutte.extend(self.drenaggio.clone());
         tutte.extend(self.raccolta.clone());
         tutte.extend(self.terminazione.clone());
+        tutte.extend(self.abitato.clone());
         tutte.extend(self.annulla.clone());
         tutte.sort();
         tutte.dedup();
@@ -404,7 +409,14 @@ fn ascolta<T: Terminatore>(
             if gia_forzato && std::time::Instant::now() >= scadenza {
                 // Forzato, e il dominio non si e' svuotato lo stesso. Non c'e'
                 // altro da aspettare: chi non muore con `cgroup.kill` non muore
-                // guardandolo piu' a lungo.
+                // guardandolo piu' a lungo. E' un fatto dell'esito, come nella
+                // rinuncia: processi possono essere rimasti.
+                if !registro.dominio_quiescente() {
+                    difetti.abitato = Some(format!(
+                        "il dominio non si e' svuotato entro {} ms dalla forzatura",
+                        attesa_della_quiescenza.as_millis()
+                    ));
+                }
                 break;
             }
         }
@@ -745,7 +757,7 @@ fn guarda_che_si_sia_svuotato<O: Osservatore>(
             }
         }
         if std::time::Instant::now() >= fine {
-            difetti.resoconti.push(format!(
+            difetti.abitato = Some(format!(
                 "il dominio non si e' svuotato entro {} ms dalla forzatura",
                 entro.as_millis()
             ));
@@ -1083,6 +1095,7 @@ where
     for fatto in coda.raccogli_i_fermi() {
         registro.applica(fatto);
     }
+    riconcilia_l_abitato(&registro, &mut difetti);
 
     // --- 5. si raccoglie il figlio, e poi si legge l'evidenza ---------------
     chiudi_il_figlio_e_leggi(
@@ -1103,6 +1116,7 @@ where
     for fatto in tardivi {
         registro.applica(fatto);
     }
+    riconcilia_l_abitato(&registro, &mut difetti);
     difetti.drenaggio = difetto_di_drenaggio;
 
     // --- 7. si conclude, una volta sola ------------------------------------
@@ -1115,6 +1129,15 @@ where
     difetti.rapporto = registro.evidenza_dei_fatti();
     let verdetto = registro.concludi(&difetti.righe());
     (verdetto, difetti)
+}
+
+/// Il dominio «abitato» lo decide il giro al momento in cui smette di
+/// aspettare, e il registro puo' ancora non aver visto la quiescenza gia'
+/// accodata. Applicati i fatti in coda, un dominio quiescente non e' abitato.
+fn riconcilia_l_abitato<P: ProcessoFiglio>(registro: &Registro, difetti: &mut Contorno<P>) {
+    if registro.dominio_quiescente() {
+        difetti.abitato = None;
+    }
 }
 
 #[cfg(test)]

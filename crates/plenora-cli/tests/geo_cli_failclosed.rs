@@ -170,7 +170,10 @@ fn transform_rejects_stdout_output_and_unsupported_schema_version() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists(), "nessun output parziale");
+    assert!(
+        !output.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
 }
 
 #[test]
@@ -192,7 +195,7 @@ fn transform_requires_a_crs_and_fails_closed_without_backend() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 
     // CRS dichiarato ma nessun backend PROJ compilato: la dichiarazione non
     // viene creduta — fail-closed, mai validazione ottimistica.
@@ -203,7 +206,10 @@ fn transform_requires_a_crs_and_fails_closed_without_backend() {
     .expect("schema");
     let result = cli_transform("transform", "input.bin", &schema, &output);
     assert!(!result.status.success());
-    assert!(!output.exists(), "nessun output parziale");
+    assert!(
+        !output.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
 }
 
 #[test]
@@ -244,7 +250,7 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 
     // CRS assente.
     std::fs::write(
@@ -259,7 +265,7 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 
     // CRS dichiarato senza backend: fail-closed.
     std::fs::write(
@@ -269,7 +275,7 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
     .expect("schema");
     let result = cli_transform("transform-arrow", "input.plngeo3", &schema, &output);
     assert!(!result.status.success());
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 }
 
 #[test]
@@ -307,7 +313,7 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 
     // Entrambi i CRS sono obbligatori.
     std::fs::write(
@@ -322,7 +328,7 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 
     // CRS dichiarati senza backend: fail-closed.
     std::fs::write(
@@ -332,7 +338,7 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
     .expect("schema");
     let result = cli_pair_arrow("left.bin", "right.bin", &schema, &output);
     assert!(!result.status.success());
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 }
 
 #[test]
@@ -426,7 +432,7 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
             "max_pairs={max_pairs}, stdout: {}",
             stdout_of(&result)
         );
-        assert!(!output.exists());
+        assert!(!output.try_exists().expect("stat"));
     }
 
     // CRS obbligatori su entrambi i lati.
@@ -455,7 +461,7 @@ fn spatial_join_enforces_version_max_pairs_and_crs_before_touching_data() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 }
 
 #[test]
@@ -481,7 +487,7 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 
     // `--input` singolo: equivalente a `--inputs` per un piano a un input.
     let document = json!({
@@ -561,5 +567,8 @@ fn blocking_plan_over_max_rows_fails_before_any_publication() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.exists(), "nessun output parziale");
+    assert!(
+        !output.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
 }

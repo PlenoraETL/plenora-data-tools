@@ -653,6 +653,12 @@ jobs:
         if: always()
         run: PYTHONDONTWRITEBYTECODE=1 python -m unittest scripts.test_check_release_manifest
 
+      # L'aiuto con cui gli script di qualifica segnalano i propri processi:
+      # vuole pidfd, quindi Linux, ed e' qui perche' e' il job Python su Linux.
+      - name: Casi di segnala_verificato
+        if: always()
+        run: PYTHONDONTWRITEBYTECODE=1 python -m unittest scripts.test_segnala_verificato
+
   # Audit supply-chain sui lockfile: senza questo job nessun controllo
   # osserverebbe le advisory RUSTSEC. Entrambi i lockfile sono coperti —
   # quello del fuzz ha un grafo suo e non e' verificato dall'audit del

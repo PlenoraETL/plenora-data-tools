@@ -58,6 +58,14 @@ set -Eeuo pipefail
 
 RADICE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$RADICE"
+SEGNALA="$RADICE/scripts/segnala_verificato.py"
+# L'eseguibile del nipote, risolto una volta: un percorso che non si risolve
+# ferma la sonda qui, invece di far sembrare «un altro processo» ogni nipote.
+SLEEP_REALE="$(readlink -f "$(command -v sleep)")" || SLEEP_REALE=""
+if [[ -z "$SLEEP_REALE" ]]; then
+  echo "PERSO: il percorso di sleep non si risolve: la sonda non puo' riconoscere il nipote" >&2
+  exit 1
+fi
 
 # Questo percorso **rifiuta** root, e il rifiuto arriva prima di ogni build.
 #
@@ -122,31 +130,94 @@ fi
 #
 #   Il nipote e' un `sleep` con una durata che nessun percorso ragionevole
 #   raggiunge: se sopravvive, lo si trova.
-# Se il processo `$1` porta ancora il marcatore `$2`.
+# Se il processo `$1` e' ancora il nostro: l'eseguibile di `sleep` e il
+# marcatore `$2` come argomento esatto.
 #
 # Un pid da solo non identifica niente: fra la morte di un processo e la riga
 # che lo guarda il kernel puo' aver dato quel numero a qualcun altro, e agire su
-# quel numero colpirebbe un estraneo. L'identita' si legge dagli **argomenti**,
-# che il marcatore rende unici.
+# quel numero colpirebbe un estraneo. L'identita' si legge dall'eseguibile e
+# dagli **argomenti**, che il marcatore rende unici.
+#
+# Rende 0 se e' ancora il nostro, 1 se non c'e' piu' o e' un altro, e 2 se non
+# si lascia osservare: un processo illeggibile non e' un processo sparito, e
+# solo «non esiste» e' assenza.
 e_ancora_il_nostro() {
-  local pid="$1" marcatore="$2" riga="/proc/$1/cmdline"
-  [[ -r "$riga" ]] || return 1
-  tr '\0' ' ' < "$riga" 2>/dev/null | grep -qF "$marcatore"
+  local pid="$1" marcatore="$2" eseguibile grezzo argomento
+  esiste_il_pid "$pid" || return $?
+  if ! eseguibile="$(readlink "/proc/$pid/exe" 2>/dev/null)"; then
+    esiste_il_pid "$pid" || return $?
+    return 2
+  fi
+  # Un eseguibile sostituito mentre il processo vive si legge con il suffisso
+  # « (deleted)»: il processo e' lo stesso, e il marcatore decide.
+  [[ "${eseguibile% (deleted)}" == "$SLEEP_REALE" ]] || return 1
+  # `cat` e non `read`: `read` non distingue la fine del file da un errore di
+  # lettura, `cat` fallisce. I NUL diventano \001, perche' una sostituzione di
+  # comando non li porta; un argomento che contenesse gia' \001 si spezzerebbe,
+  # e al piu' farebbe dire «ancora nostro», il verso prudente.
+  if ! grezzo="$(set -o pipefail; cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' '\001')"; then
+    esiste_il_pid "$pid" || return $?
+    return 2
+  fi
+  while [[ -n "$grezzo" ]]; do
+    argomento="${grezzo%%$'\001'*}"
+    [[ "$argomento" == "$marcatore" ]] && return 0
+    if [[ "$grezzo" == *$'\001'* ]]; then
+      grezzo="${grezzo#*$'\001'}"
+    else
+      grezzo=""
+    fi
+  done
+  return 1
+}
+
+# Osserva `$1` con `lstat`: rende 0 se c'e', 1 solo se `lstat` dice ENOENT, 2
+# se non si sa. Il 3 dell'interprete e' riservato a FileNotFoundError: un
+# Python che manca (127) o un'eccezione non prevista (1) non lo producono, e
+# nessun messaggio d'errore viene interpretato come testo.
+osserva() {
+  local stato=0
+  python3 -c 'import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(3)' "$1" 2>/dev/null || stato=$?
+  case "$stato" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# Se `/proc/$1` esiste: 0 si', 1 no, 2 non si sa. Solo «non esiste» e' 1.
+esiste_il_pid() {
+  osserva "/proc/$1"
 }
 
 # Aspetta che `$1` sparisca, ricontrollando l'identita' a ogni giro.
 #
 # Rende 0 se il processo non c'e' piu' — o se quel pid non e' piu' il nostro,
-# che e' la stessa cosa ai fini della sonda — e 1 se e' ancora li' allo scadere.
+# che e' la stessa cosa ai fini della sonda — 1 se e' ancora li' allo scadere,
+# e 2 se allo scadere non si lascia osservare.
 attendi_che_sparisca() {
   local pid="$1" marcatore="$2" giri="$3"
   local passato=0
+  local stato=0
   while [[ "$passato" -lt "$giri" ]]; do
-    e_ancora_il_nostro "$pid" "$marcatore" || return 0
+    stato=0
+    e_ancora_il_nostro "$pid" "$marcatore" || stato=$?
+    [[ "$stato" -eq 1 ]] && return 0
     sleep 0.2
     passato=$((passato + 1))
   done
+  [[ "$stato" -eq 2 ]] && return 2
   return 1
+}
+
+# Il nipote che non si lascia osservare non e' ne' vivo ne' sparito: la sonda
+# lo dice e perde.
+non_osservabile() {
+  echo "PERSO: il nipote $1 non si lascia osservare in /proc: non si puo' dire se sia sparito" >&2
 }
 
 verifica_il_nipote() {
@@ -160,41 +231,82 @@ verifica_il_nipote() {
     echo "PERSO: non si crea il file della sonda" >&2
     return 1
   }
-  # Il file si toglie in ogni caso, anche se la sonda esce a meta'.
-  trap 'rm -f "$dove"' RETURN
+  # Il file si toglie in ogni caso, anche se la sonda esce a meta'. La trap
+  # si toglie da se': una trap RETURN resta attiva dopo il ritorno, e sotto
+  # `set -u` la funzione successiva inciamperebbe su `$dove` non definita.
+  trap 'rm -f "$dove"; trap - RETURN' RETURN
 
   # Il figlio genera il nipote e poi aspetta: `timeout` uccidera' il figlio, e
   # cio' che si misura e' che cosa succede al nipote.
-  timeout --signal=KILL 1 sh -c "sleep $marcatore & echo \$! >&2; sleep 600" \
-    2>"$dove" || true
+  # Il nipote e' lanciato con lo stesso eseguibile che `e_ancora_il_nostro`
+  # confronta: risolverlo di nuovo qui aprirebbe una finestra fra i due.
+  # Eseguibile e marcatore entrano come argomenti posizionali, mai nel testo
+  # dello script. Il PID esce sul descrittore 3, e solo dopo che il nipote si
+  # e' visto con il proprio marcatore: un nipote che non parte non lascia un
+  # PID da giudicare sparito. Si pretende anche l'eseguibile: prima dell'exec
+  # il figlio e' ancora lo `sh` interno, la cui riga di comando contiene gia' il
+  # marcatore come argomento.
+  # shellcheck disable=SC2016 # il testo e' dello `sh` interno, apposta.
+  timeout --signal=KILL 1 sh -c '
+    "$1" "$2" &
+    p=$!
+    i=0
+    while [ "$i" -lt 50 ]; do
+      if [ "$(readlink "/proc/$p/exe" 2>/dev/null)" = "$1" ] \
+        && { tr "\0" "\n" < "/proc/$p/cmdline"; } 2>/dev/null | grep -qxF -- "$2"; then
+        echo "$p" >&3
+        break
+      fi
+      i=$((i + 1))
+      sleep 0.01
+    done
+    sleep 600' sh "$SLEEP_REALE" "$marcatore" 3>"$dove" || true
 
   local nipote
-  nipote="$(tr -dc '0-9' < "$dove")"
-  if [[ -z "$nipote" ]]; then
-    echo "PERSO: la sonda non ha prodotto un pid: non si puo' dire niente" >&2
+  nipote="$(cat "$dove")"
+  if [[ ! "$nipote" =~ ^[0-9]+$ ]]; then
+    echo "PERSO: la sonda non ha visto partire il nipote: non si puo' dire niente" >&2
     return 1
   fi
 
   # Un attimo perche' il segnale arrivi a tutto il gruppo, ricontrollando: se
   # sparisce prima, non si aspetta inutilmente.
-  if attendi_che_sparisca "$nipote" "$marcatore" 10; then
+  local esito=0
+  attendi_che_sparisca "$nipote" "$marcatore" 10 || esito=$?
+  if [[ "$esito" -eq 0 ]]; then
     echo "il timeout esterno elimina anche un nipote (misurato, pid $nipote)"
     return 0
   fi
+  local primo="$esito"
 
   # Il nipote e' vivo, ed e' proprio il nostro: la rete esterna non copre il
   # gruppo. Lo si chiude — prima con garbo, poi per forza — e **si guarda ogni
   # volta di nuovo**: dichiarare chiuso cio' che si e' solo segnalato e' lo
   # stesso difetto che questa sonda esiste per trovare.
-  kill -TERM "$nipote" 2>/dev/null || true
-  if ! attendi_che_sparisca "$nipote" "$marcatore" 25; then
-    if e_ancora_il_nostro "$nipote" "$marcatore"; then
-      kill -KILL "$nipote" 2>/dev/null || true
+  # Il segnale passa da un pidfd aperto prima di verificare il marcatore: fra
+  # la verifica e il segnale il PID non puo' cambiare processo.
+  python3 "$SEGNALA" "$nipote" TERM --eseguibile "$SLEEP_REALE" \
+    --argomento "$marcatore" || true
+  esito=0
+  attendi_che_sparisca "$nipote" "$marcatore" 25 || esito=$?
+  if [[ "$esito" -ne 0 ]]; then
+    python3 "$SEGNALA" "$nipote" KILL --eseguibile "$SLEEP_REALE" \
+      --argomento "$marcatore" || true
+    esito=0
+    attendi_che_sparisca "$nipote" "$marcatore" 25 || esito=$?
+    if [[ "$esito" -eq 2 ]]; then
+      non_osservabile "$nipote"
+      return 1
     fi
-    if ! attendi_che_sparisca "$nipote" "$marcatore" 25; then
+    if [[ "$esito" -ne 0 ]]; then
       echo "PERSO: il nipote $nipote e' sopravvissuto al timeout e non si lascia chiudere: la macchina resta con un processo della sonda addosso" >&2
       return 1
     fi
+  fi
+  # Chiuso da noi: che cosa si dice dipende dalla prima attesa.
+  if [[ "$primo" -eq 2 ]]; then
+    non_osservabile "$nipote"
+    return 1
   fi
   echo "PERSO: il nipote $nipote e' sopravvissuto al timeout: la rete esterna non copre il gruppo, e un worker che genera un processo puo' restare vivo con la pipe aperta" >&2
   return 1

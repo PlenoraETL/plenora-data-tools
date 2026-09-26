@@ -487,6 +487,43 @@ fn un_dominio_che_non_si_termina_non_produce_un_esito() {
     assert_eq!(dominio.quante_forzature(), 1);
 }
 
+/// **Un `cgroup.kill` riuscito non basta, anche nel giro ordinario.** La
+/// forzatura si scrive, il dominio resta abitato oltre l'attesa: nessun
+/// difetto di terminazione, ma il contorno porta il dominio abitato, e
+/// l'impedimento lo ha fra le sue ragioni.
+#[test]
+fn un_dominio_forzato_che_resta_abitato_lo_dichiara() {
+    let dominio = Dominio::che_si_svuota_dopo(usize::MAX);
+    let (esito, difetti) = conduci(
+        canale(filo(vec![])),
+        std::io::sink(),
+        Duration::from_millis(5),
+        Dintorni {
+            ruolo: Ruolo::Worker,
+            osservatore: GuardaIlDominio(std::sync::Arc::clone(&dominio)),
+            terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
+            evidenza: LeggiEvidenza::senza_pressione(),
+            figlio: FiglioVivo::nuovo(GiaUscito(Uscita::Codice(0))),
+            tetto_del_drenaggio: Duration::from_millis(200),
+            margine_di_cortesia: Duration::from_millis(20),
+            attesa_della_quiescenza: Duration::from_millis(50),
+        },
+        |_| (),
+    );
+
+    assert!(esito.is_err(), "senza quiescenza non c'e' un esito da dare");
+    assert_eq!(dominio.quante_forzature(), 1);
+    assert_eq!(difetti.terminazione, None);
+    assert!(
+        difetti
+            .abitato
+            .as_deref()
+            .is_some_and(|motivo| motivo.contains("non si e' svuotato entro")),
+        "manca il dominio rimasto abitato: {:?}",
+        difetti.abitato
+    );
+}
+
 // --- cio' che il drenaggio non lascia indietro --------------------------------
 
 /// **Nessun fatto arrivato prima della chiusura resta fuori.**
@@ -1102,6 +1139,48 @@ fn rinunciare_su_un_dominio_che_non_si_svuota_lo_dichiara() {
             .iter()
             .any(|riga| riga.contains("non si e' svuotato entro")),
         "manca il fatto che non si e' svuotato: {righe:?}"
+    );
+}
+
+/// **Un `cgroup.kill` riuscito non vuol dire un dominio vuoto.** La forzatura
+/// si scrive, il dominio resta abitato oltre l'attesa: il contorno lo porta
+/// come fatto a se', perche' l'errore di chi ha chiamato lo deve dire anche
+/// senza un difetto di terminazione.
+#[test]
+fn rinunciare_col_kill_riuscito_e_il_dominio_abitato_lo_dichiara() {
+    let (coda, fascio) = super::super::coda::apri();
+    drop(fascio.lettore);
+    drop(fascio.orologio);
+    drop(fascio.sorvegliante);
+    let annullatore = super::Annullatore::nuovo(fascio.annullatore);
+    let dominio = Dominio::che_si_svuota_dopo(usize::MAX);
+
+    let (esito, difetti) = super::rinuncia(
+        "sorvegliante",
+        &std::io::Error::from(std::io::ErrorKind::OutOfMemory),
+        Vec::new(),
+        &annullatore,
+        super::PerChiudere {
+            raccoglitore: fascio.raccoglitore,
+            figlio: FiglioVivo::nuovo(GiaUscito(Uscita::Codice(0))),
+            terminatore: ForzaIlDominio(std::sync::Arc::clone(&dominio)),
+            coda,
+            tetto_del_drenaggio: Duration::from_millis(500),
+            attesa_della_quiescenza: Duration::from_millis(30),
+        },
+        Some(GuardaIlDominio(std::sync::Arc::clone(&dominio))),
+        super::Contorno::default(),
+    );
+
+    assert!(matches!(esito, Err(Impedimento::ProduttoreNonNato { .. })));
+    assert_eq!(difetti.terminazione, None);
+    assert!(
+        difetti
+            .abitato
+            .as_deref()
+            .is_some_and(|motivo| motivo.contains("non si e' svuotato entro")),
+        "manca il dominio rimasto abitato: {:?}",
+        difetti.abitato
     );
 }
 

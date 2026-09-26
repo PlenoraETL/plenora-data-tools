@@ -1796,9 +1796,9 @@ pub fn causa_di_riga(error: &PlenoraError, ordinaria: &'static str) -> Option<&'
 /// non una copia per percorso.
 pub fn esito_kernel(error: OperationError) -> PlenoraError {
     match error {
-        OperationError::ValidazioneNonConclusa(_) | OperationError::Internal(_) => {
-            PlenoraError::Internal(error.to_string())
-        }
+        OperationError::ValidazioneNonConclusa(_)
+        | OperationError::CalcoloNonConcluso(_)
+        | OperationError::Internal(_) => PlenoraError::Internal(error.to_string()),
         altro => PlenoraError::InvalidPlan(altro.to_string()),
     }
 }

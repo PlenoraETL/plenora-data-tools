@@ -37,6 +37,9 @@
 use libfuzzer_sys::fuzz_target;
 use plenora_engine::interni::verifica_giro_del_frame;
 
+#[path = "comune/aggancio.rs"]
+mod aggancio;
+
 /// Le invarianti stanno **dentro** il crate, in `interni`: qui si applicano e
 /// si abortisce, ma non si decide che cosa significhino.
 ///
@@ -49,7 +52,7 @@ fn controlla(byte: &[u8]) {
     }
 }
 
-fuzz_target!(|payload: &[u8]| {
+fuzz_target!(init: aggancio::installa(), |payload: &[u8]| {
     // 1. I byte come arrivano: e' il framing a essere sotto esame.
     controlla(payload);
 

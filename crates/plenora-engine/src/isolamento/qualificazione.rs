@@ -475,7 +475,14 @@ fn pipe_residue() -> String {
         return "illeggibile".to_owned();
     };
     let mut trovate = Vec::new();
-    for voce in voci.flatten() {
+    // Una voce o un collegamento che non si leggono rendono la risposta
+    // «illeggibile», mai «nessuna»: un descrittore non osservato non e' un
+    // descrittore assente. Solo un collegamento sparito — descrittore chiuso
+    // fra l'elenco e la lettura — non conta.
+    for voce in voci {
+        let Ok(voce) = voce else {
+            return "illeggibile".to_owned();
+        };
         // La lettura della directory apre essa stessa un descrittore, che non
         // e' una pipe: non entra nell'elenco, ma va detto perche' chi lo legge
         // non se lo chieda.
@@ -489,10 +496,14 @@ fn pipe_residue() -> String {
         if numero < 3 {
             continue;
         }
-        if let Ok(bersaglio) = std::fs::read_link(voce.path()) {
-            if bersaglio.to_string_lossy().starts_with("pipe:[") {
-                trovate.push(numero.to_string());
+        match std::fs::read_link(voce.path()) {
+            Ok(bersaglio) => {
+                if bersaglio.to_string_lossy().starts_with("pipe:[") {
+                    trovate.push(numero.to_string());
+                }
             }
+            Err(errore) if errore.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return "illeggibile".to_owned(),
         }
     }
     if trovate.is_empty() {

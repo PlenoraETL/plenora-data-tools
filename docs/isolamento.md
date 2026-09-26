@@ -52,7 +52,7 @@ peggio di una che si sa di non avere.
 | **NG-2** | Non garantiamo l'attribuzione dell'OOM dove la piattaforma non offre evidenza specifica. Lì l'esito è `Internal`, ed è meno informativo di proposito. |
 | **NG-3** | Il limite copre la memoria **del dominio di isolamento**. Memoria mappata da altri processi, riservata da driver o allocata fuori dal dominio non è contenuta. |
 | **NG-4** | La cancellazione è cooperativa dentro il worker e forzata solo dopo un margine: non garantiamo un tempo massimo di reazione, solo un tempo massimo di attesa prima della terminazione. |
-| **NG-5** | Il cleanup degli artefatti temporanei è garantito nel percorso normale e *best-effort* dopo una terminazione violenta. La bonifica differita esiste già ([`errori-e-limiti.md`](errori-e-limiti.md)). |
+| **NG-5** | Il cleanup degli artefatti temporanei è *best-effort*: nel percorso normale si tenta sempre, ma una rimozione che fallisce non ferma l'esecuzione e non esce su un canale machine-readable; dopo una terminazione violenta non si tenta. La bonifica differita raccoglie i residui solo se ha i permessi per farlo ([`errori-e-limiti.md`](errori-e-limiti.md#la-pulizia-dei-domini-non-esce-su-un-canale-machine-readable)). |
 | **NG-6** | Su macOS **non c'è contenimento**: il profilo isolato non è supportato finché un prototipo non dimostri contenimento *e* attribuzione. |
 | **NG-7** | Non garantiamo che un worker malevolo sia contenuto. Il modello di minaccia è il **guasto**, non l'avversario: il worker è codice nostro che può sbagliare, non codice ostile. |
 | **NG-8** | `GA-3` è **validità strutturale, non correttezza dei valori**. Schema, contratto, framing, conteggi e sigillo dimostrano che l'output è completo e ben formato; **non** dimostrano che i numeri dentro siano quelli giusti. Un kernel che calcola male produce un output strutturalmente perfetto, e questa verifica lo pubblica. La correttezza dei valori resta affidata al determinismo dichiarato e alla suite, dove è sempre stata. |
@@ -1000,11 +1000,9 @@ alcun effetto osservabile all'esterno.
 per 3-8-bis, `pubblicazione::pubblica` per il 9. I passi 1 e 2 no, e non è una
 dimenticanza: leggono lo **stato terminale del figlio** e l'`Esito` che il
 worker dichiara, cioè due fatti che appartengono a chi possiede il ciclo di
-vita del processo. Chi li osserva oggi è la prova di qualificazione, che li
-applica prima di chiamare il verificatore; un supervisore di produzione che li
-applichi arriva con la PR che porta il lato supervisore. Prometterli qui come
-già disponibili significherebbe far cercare a chi legge una funzione che non
-esiste.
+vita del processo. Li osserva il supervisore del profilo isolato
+(`isolamento::esecuzione_isolata`, con la macchina a stati) prima di chiamare il
+verificatore, e la prova di qualificazione fa lo stesso sul proprio canale.
 
 Il passo 5-bis mancava, e la sua assenza era una lacuna e non una scelta: §4.4
 assegna al verificatore dell'artefatto la coerenza del digest, ma la sequenza
@@ -1078,11 +1076,10 @@ privati, nessun costruttore aperto e nessun `Clone`: l'unico modo di averne uno
 `NumeriDelCanale`: ciò che il tipo significa, invece di ciò che un commento
 dichiara.
 
-**Il passo 9 e il verificatore stanno sotto `cfg`, e `risolvi_commit` no.** La
-catena verifica → passo 9 è compiuta e nessun percorso di produzione la
-attraversa: il passo 9 riceve la prova, non la produce, quindi non è lui a dare
-un chiamante al verificatore. Chi la attraverserà è il supervisore, coi passi 1
-e 2. `risolvi_commit` invece è superficie pubblica da subito, perché il suo
+**La catena verifica → passo 9 la attraversa il supervisore, e `risolvi_commit`
+è pubblica.** Il passo 9 riceve la prova, non la produce, quindi non è lui a
+dare un chiamante al verificatore: glielo dà il supervisore del profilo isolato,
+coi passi 1 e 2. `risolvi_commit` invece è superficie pubblica, perché il suo
 chiamante è per definizione fuori: chi ha perso il processo incaricato di
 pubblicare. Regola e condizione di rientro stanno in
 [`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
@@ -1489,7 +1486,7 @@ Il footer non sottrae nulla a questo punto: i suoi byte fanno parte del file,
 quindi un token diverso dà un file diverso. Ciò che il footer risolve è
 l'**altro** problema, quello del contratto.
 
-### 4. Il footer entra nel confine ostile, e oggi non c'è
+### 4. Il footer entra nel confine ostile
 
 Adottare il footer risolve il problema del contratto e **ne apre uno nuovo**:
 una parte del file che nessuno validava comincia a contare.
@@ -1497,11 +1494,11 @@ una parte del file che nessuno validava comincia a contare.
 Il confine ostile per Arrow IPC che il progetto ha
 ([`errori-e-limiti.md`](errori-e-limiti.md)) percorre il footer e ne valida i
 campi 1, 2 e 3 — lo Schema, i blocchi dei dizionari, i blocchi dei record
-batch. **Il campo 4, i custom metadata, non è percorso affatto**: finora non
-lo leggeva nessuno.
+batch — e, da quando il token vi abita, anche il campo 4, i custom metadata
+(`PR-0`). Senza quel passo nessuno leggerebbe il campo 4 prima di arrow.
 
-E il modo in cui `arrow-ipc` 59.2.0 lo legge rende la lacuna urgente, perché
-il percorso del footer non è difensivo come quello dello schema:
+E il modo in cui `arrow-ipc` 59.2.0 lo legge è la ragione per cui il passo
+serve, perché il percorso del footer non è difensivo come quello dello schema:
 
 | dove | come legge |
 |---|---|
@@ -2470,7 +2467,11 @@ il kernel nell'evidenza proprio perché quel numero è parte dell'esito.
 
 ## 10. Matrice degli esiti
 
-`ResourceLimit` compare **solo** dove c'è evidenza attribuibile (`F4-2`).
+`ResourceLimit` **attribuito al dominio** compare solo dove c'è evidenza
+attribuibile (`F4-2`): la riga 5. Un tetto **dichiarato** — `max_batch_bytes`, il
+budget governato — che il worker vede superato e rifiuta da sé è invece l'errore
+tipizzato della riga 2, e porta la categoria che il worker dichiara, anche
+`ResourceLimit`: lì nessuno deduce un OOM, il rifiuto è la misura stessa.
 
 | # | esito | evidenza | categoria | output visibile | artefatto |
 |---|---|---|---|---|---|
@@ -2774,7 +2775,7 @@ Le tre righe che ne avevano bisogno:
 |---|---|---|
 | protocollo incompatibile | `Protocol` | è precisamente «violazione del protocollo». `Internal` direbbe «difetto nostro», e lo è solo a volte: due binari diversi in esecuzione sono una condizione di dispiegamento |
 | resolver incompatibile | `InvalidConfiguration` | **non `InvalidPlan`**: il piano può essere perfettamente valido, e lo sarebbe di nuovo con un ambiente coerente. È il componente a essere configurato male, non il piano a essere sbagliato |
-| timeout | `Timeout` | oggi non c'è modo di costruirlo |
+| timeout | `Timeout` | la costruisce la conduzione quando scade il tempo di esecuzione; prima di `PR-1` non c'era una variante che la dicesse |
 
 Erano **varianti nuove** di `PlenoraError`, cioè una modifica semantica di un
 tipo pubblico: sono andate in una PR propria (`PR-1`), con il proprio impatto

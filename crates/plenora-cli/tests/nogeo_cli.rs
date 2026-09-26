@@ -121,7 +121,7 @@ fn invalid_plan_is_rejected_before_input_is_opened() {
         .output()
         .expect("run CLI");
     assert!(!result.status.success());
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
     let stderr = String::from_utf8_lossy(&result.stdout);
     assert!(stderr.contains("fill_char"));
     assert!(!stderr.contains("missing.arrow"));
@@ -271,7 +271,7 @@ fn total_row_limit_across_batches_leaves_no_output() {
         .status()
         .expect("CLI");
     assert!(!status.success());
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 }
 
 #[test]
@@ -296,7 +296,7 @@ fn corrupt_ipc_and_missing_output_directory_fail_without_publication() {
         .status()
         .expect("CLI");
     assert!(!status.success());
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn binary_plan_requires_right_and_publishes_join_atomically() {
         .expect("missing right");
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stdout).contains("--right"));
-    assert!(!missing_output.exists());
+    assert!(!missing_output.try_exists().expect("stat"));
     assert!(Command::new(executable())
         .args(["run", "--plan"])
         .arg(&plan)
@@ -471,7 +471,7 @@ fn valid_blocking_plan_reports_missing_input_without_publication() {
         .status()
         .expect("CLI");
     assert!(!status.success());
-    assert!(!output.exists());
+    assert!(!output.try_exists().expect("stat"));
 }
 
 #[test]
@@ -561,7 +561,7 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
         String::from_utf8_lossy(&result.stdout)
     );
     assert!(
-        !output.exists(),
+        !output.try_exists().expect("stat"),
         "nessun output pubblicabile da un piano rifiutato"
     );
     // Il rifiuto deve venire dal GATE (provenance non attestabile), non
@@ -653,7 +653,7 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
             "{operation}: piano legacy blocking+diagnostico accettato: {stderr}"
         );
         assert!(
-            !output.exists(),
+            !output.try_exists().expect("stat"),
             "{operation}: nessun output pubblicabile da un piano rifiutato"
         );
         assert!(
@@ -772,7 +772,7 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
                 descriptor.id
             );
             assert!(
-                !output.exists(),
+                !output.try_exists().expect("stat"),
                 "{} (alias `{alias}`): output pubblicato da piano rifiutato",
                 descriptor.id
             );

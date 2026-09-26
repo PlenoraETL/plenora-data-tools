@@ -122,8 +122,7 @@ use super::{
     non_disponibile, DominioRivalidato, IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner,
     VERSIONE_RICHIESTA,
 };
-// Cio' che serve al solo avvio: il supervisore non ha ancora un chiamante di
-// produzione, e l'import lo dichiara insieme a cio' che importa.
+// Cio' che serve al solo avvio.
 use super::{
     esito, spawner_ammissibile, DominioPreparato, TentativoFallito, TransizioneFallita,
     TransizioneRiuscita,

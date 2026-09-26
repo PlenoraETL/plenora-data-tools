@@ -1143,10 +1143,13 @@ mod tests {
         let mut resta = true;
         for _ in 0..200_u32 {
             match std::fs::read_to_string(&comando) {
-                Err(_) => {
+                // Solo «non esiste» e' un processo sparito: una lettura che
+                // fallisce per altro non dice niente, e il caso non la conta.
+                Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => {
                     resta = false;
                     break;
                 }
+                Err(lettura) => panic!("{comando} non si legge: {lettura}"),
                 Ok(nome) if nome.trim() != "sleep" => {
                     resta = false;
                     break;
@@ -1265,10 +1268,13 @@ mod tests {
         let mut resta = true;
         for _ in 0..200_u32 {
             match std::fs::read_to_string(&comando) {
-                Err(_) => {
+                // Solo «non esiste» e' un processo sparito: una lettura che
+                // fallisce per altro non dice niente, e il caso non la conta.
+                Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => {
                     resta = false;
                     break;
                 }
+                Err(lettura) => panic!("{comando} non si legge: {lettura}"),
                 Ok(nome) if nome.trim() != "sleep" => {
                     resta = false;
                     break;
@@ -1301,7 +1307,13 @@ mod tests {
         // non una che ci siamo inventati.
         assert_eq!(uscita, Some(Uscita::Segnale(9)), "ucciso da SIGKILL");
         // Raccolto vuol dire raccolto: il pid non porta piu' uno zombie nostro.
-        let stato = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        // Sparito del tutto e' raccolto; una lettura che fallisce per altro non
+        // dice niente, e il caso non la conta come prova.
+        let stato = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stato) => stato,
+            Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(lettura) => panic!("/proc/{pid}/stat non si legge: {lettura}"),
+        };
         assert!(
             !stato.contains(" Z "),
             "il figlio e' rimasto zombie: {stato}"

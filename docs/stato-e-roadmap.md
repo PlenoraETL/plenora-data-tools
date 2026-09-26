@@ -110,7 +110,7 @@ servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
 | 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
 | 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
 | 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | quattro cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); progetto approvato, implementazione **in corso** per PR ([`isolamento.md`](isolamento.md)) |
+| **4** | **il contratto di memoria — questo punto 2** | **sì** | quattro cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); sequenza `PR-0` … `PR-12` integrata; resta la chiusura, in [Requisiti della fase 4](#requisiti-della-fase-4) |
 | 5 | il legacy ridotto a un confine di migrazione | sì | **aperta**: 0 criteri completati |
 | 6 | superficie pubblica e commenti | no | **aperta**: 2 criteri su 3 completati |
 
@@ -146,23 +146,14 @@ passato — non perché l'ordine delle fasi sia cambiato.
 | toolchain | `rust:1.98` nel container di riferimento |
 | CI | **non verde a quella revisione** — vedi sotto |
 
-**Il tag è una baseline strutturale, non una baseline con CI verde.** La
-distinzione non è formale: ciò che era stato verificato è un giro nel
-container di riferimento **a feature predefinite**, e da lì è stato scritto
-«tutti verdi» come se coprisse anche il resto. Non lo copriva.
-
-Il commit `9966508`, che il tag contiene, ha introdotto l'oracolo della
-superficie CLI come istantanea unica. L'istantanea fissa `backends: []`, che è
-vero con le feature predefinite e falso con `full-backends`, dove la CLI
-dichiara `["geos", "proj"]`. Il job `test full-backends (linux)` era quindi
-rosso da `9966508` in avanti, baseline compresa, e nessun giro locale a feature
-predefinite poteva accorgersene.
-
-Il difetto è chiuso: l'oracolo è ora un **modello** con un marcatore per il
-valore dei backend, materializzato da costanti esaustive per combinazione di
-feature, e il confronto resta byte per byte. Il tag **non è stato spostato**:
-una baseline che si muove per nascondere un difetto smette di essere una
-baseline.
+**Il tag è una baseline strutturale, non una baseline con CI verde.** A quella
+revisione il job `test full-backends (linux)` è rosso: l'oracolo della
+superficie CLI, entrato con `9966508`, fissa `backends: []`, che è vero con le
+feature predefinite e falso con `full-backends`. L'oracolo è oggi un
+**modello** con un marcatore per il valore dei backend, materializzato da
+costanti esaustive per combinazione di feature, e il confronto resta byte per
+byte. Il tag non si sposta: una baseline che si muove per nascondere un difetto
+smette di essere una baseline.
 
 **Profili di build supportati:** `default` e `full-backends`, come dichiara
 [`release.md`](release.md). Le combinazioni parziali — solo `geos-backend`,
@@ -215,392 +206,26 @@ I quattro livelli restano distinti, e solo il terzo garantisce la correttezza:
 
 ### Requisiti della fase 4
 
-Il progetto tecnico che li attua e' in
-[`isolamento.md`](isolamento.md): garanzie e non-garanzie, macchine a stati,
-protocollo, handshake, verifica, matrici e suddivisione in PR.
+Il progetto tecnico che li attua è in [`isolamento.md`](isolamento.md):
+garanzie e non-garanzie, macchine a stati, protocollo, handshake, verifica,
+matrici e suddivisione in PR. La sequenza `PR-0` … `PR-12` è integrata, e ciò
+che è entrato sta nel codice, nei test e in quel documento. Qui resta ciò che
+manca per chiudere la fase.
 
-L'implementazione è **iniziata**, per PR e in ordine. Quanto segue è ciò che
-resta aperto; ciò che è entrato sta nel codice e nei test, non qui.
+**Il criterio.** `PR-12` si verifica con «l'intera matrice, su Linux; su
+Windows e macOS il profilo è rifiutato in validazione»
+([`isolamento.md`](isolamento.md#112-le-pr-dopo-i-prototipi)), e la fase con
+`F4-5` (sotto).
 
-**Entrato**: le varianti d'errore della Fase 4 e `EvidenzaDiLimite` (`PR-1`);
-il formato piano v6 con `max_domain_memory_bytes` (`PR-2`); la classificazione
-deterministica degli esiti e la matrice §10 (`PR-3`); la forma sul filo del
-protocollo (`PR-4`) con i conteggi obbligatori dell'`Esito` (`PR-4b`); il
-`commit_token` tipizzato, il lettore limitato di frame, l'handshake come
-macchina a stati e la scrittura del token nel footer (`PR-5`); il
-**verificatore dell'artefatto in streaming**, con i passi da 3 a 8-bis, il
-passo 5-bis dell'integrità e il tetto cumulativo sui dizionari trattenuti
-(`PR-6`). Più il rafforzamento dei custom metadata IPC nel confine ostile
-(`PR-0`).
-
-Con `PR-7` esistono anche **il dominio di isolamento su Linux e la transizione
-allo spawner**: preflight del dominio con le quattro scritture rilette e il
-giudizio sul possesso, il confine fra supervisore e spawner con richiesta
-versionata e rivalidazione, la sequenza in sette passi che si spoglia
-dell'autorità, e il gate ostile `scripts/verifica_isolamento_linux.sh` — con la
-sua qualificazione su VM dedicata.
-
-Con `PR-8`, `PR-9` e `PR-10` la macchina a stati del supervisore, il worker
-reale e la catena di verifica e pubblicazione esistono tutte nel codice — non
-sono più **progettate**, sono **costruite e provate**, ed erano allora sotto
-`cfg(any(test, feature = "internals"))`. Quello che mancava non era il
-meccanismo: era il chiamante. `PR-12` ("attivazione") lo costruisce — vedi
-sotto — e con lui cade il `cfg` da tutto quel perimetro, `isolamento::macchina`
-compreso: il chiamante di produzione conduce il dialogo con la macchina a
-stati vera, non con `isolamento::prova::dialoga`, e l'attribuzione OOM della
-§10.0-bis è raggiungibile davvero. La cancellazione attraversa la stessa
-macchina tramite il token condiviso; sul percorso isolato Linux il gestore
-di segnale non crea thread nelle finestre di spawn.
-
-La sequenza di publish ha un chiamante di produzione: il percorso isolato
-di `PR-12`. Il verificatore confinato rilegge l'artefatto; il coordinatore
-pubblica soltanto dopo il confronto con l'incarico e l'esito positivo della
-barriera. Le parti della catena necessarie a questo percorso sono compilate
-in produzione; gli strumenti di sola qualifica conservano il proprio
-perimetro. La disponibilità operativa del profilo resta Linux-only.
-
-Che cosa consegna `PR-10`, in tre fatti. Il verificatore non rende più `()`: rende
-una **prova opaca**, `ArtefattoVerificato`, che porta l'handle già convalidato,
-i byte misurati e il digest accertato, e che il passo 9 consuma — senza
-costruttore aperto, senza `Clone`, senza `Debug`. Il passo 9 **copia** attraverso
-l'autorità di publish già qualificata invece di implementare un secondo commit
-per piattaforma, pretendendo il numero esatto di byte e ricalcolando lo SHA-256
-prima del commit: se qualcosa diverge, la destinazione non appare. E la
-pubblicazione riferisce ora su **due assi**, la durabilità e la pulizia del
-temporaneo, dove la seconda ha tre esiti perché «non c'è» e «non ho potuto
-guardare» non sono la stessa cosa.
-
-Il residuo del temporaneo era una perdita silenziosa, e apparteneva alla
-**classe**, non a un percorso: `persist_noclobber` ignora l'errore dell'`unlink`
-nel proprio ripiego. Ogni sito che pubblicava passa ora dall'autorità condivisa,
-compresi i due che in `legacy.rs` chiamavano `persist_noclobber` per conto
-proprio.
-
-Nessun percorso che pubblica scarta più l'avvertenza: `run` — DAG e legacy —
-`transform`, `transform-arrow`, `pair-arrow` e `spatial-join` la portano nel
-proprio documento di successo. Il ramo legacy di `run` un documento non ce
-l'aveva, e per un giro il silenzio è stato registrato come limite: registrarlo
-non lo toglie, e ora quel ramo emette il documento che il suo formato d'uscita
-già prevedeva. Regola e forma stanno in
-[`errori-e-limiti.md`](errori-e-limiti.md#ogni-comando-che-pubblica-dice-comè-andata-la-pulizia).
-`risolvi_commit` entra come superficie pubblica, con le cinque osservazioni e le
-otto ragioni: le due grandezze non hanno motivo di coincidere. E una destinazione
-occupata è ora un `Conflict` su entrambe le strade che la scoprono — il controllo
-preliminare e l'`AlreadyExists` del commit — come i documenti già prescrivevano:
-l'exit code passa da 2 a 5, perché il piano non ha niente di sbagliato.
-
-Il protocollo ha chiamanti di produzione nel worker, nel verificatore e nel
-supervisore del percorso isolato. La policy di attivazione sceglie quel
-percorso; gli inventari e le utilità di sola prova non acquisiscono una
-superficie pubblica per eliminare avvisi di codice morto.
-
-Il worker reale **percorre la sequenza intera**: si descrive, conclude
-l'accordo, riceve l'incarico, ne rivalida il piano e i contratti d'ingresso, lo
-esegue, scrive l'artefatto sul solo percorso temporaneo con il `commit_token`
-nel footer, manda il progresso e dichiara l'esito. Ciò che resta fuori è ciò che
-non gli appartiene: la verifica dell'artefatto (passi 3-8-bis) e la
-pubblicazione (passo 9) sono di chi lo ha osservato, e il worker non può
-verificare se stesso. Quei passi esistono da `PR-10`; chi li chiama in un
-supervisore di produzione è ancora un'altra PR.
-
-Il criterio d'uscita di `PR-9` era **l'esecuzione end-to-end sotto limite**, e
-la qualificazione che lo soddisfa è `scripts/qualifica_sotto_limite.sh`: il
-worker di produzione, raggiunto attraverso lo spawner, esegue dentro un dominio
-`cgroup2` con `memory.max` e conclude la sequenza intera. Fra due pipe nude si
-prova il cablaggio; «sotto limite» è un'altra affermazione, e la si fa su una VM
-con root, un dominio vero e le credenziali del worker distinte da quelle di chi
-lo avvia. Il verdetto lo dà l'unico oracolo, lo stesso che giudica la
-qualificazione fra due pipe. Che il qualificatore sappia diventare rosso non è
-dato per scontato: `scripts/mutazioni_del_qualificatore.sh` tocca una decisione
-per volta — la cessione della proprietà delle pipe, l'imposizione della
-variabile del canale, il confronto col digest dichiarato da fuori, la pulizia
-che dichiara un guasto, e la quiescenza che non si può osservare — e pretende
-un codice d'uscita diverso da zero **e** nessun `VINTO` nel testo. Sono
-decisioni che nessun caso di `cargo test` attraversa, ed è la ragione per cui
-hanno un giudice proprio.
-
-Il worker reale porta con sé un limite dichiarato, e va letto insieme: il
-profilo isolato descrive l'ambiente **senza** backend CRS, e con `proj-backend`
-il worker rifiuta prima dell'handshake, perché di quell'ambiente non esiste una
-radice esclusiva e inventariabile. Il rientro non è una data: è un elenco di
-cinque condizioni che un unico provider deve soddisfare, ed è registrato in
-[`errori-e-limiti.md`](errori-e-limiti.md#il-profilo-isolato-non-descrive-lambiente-proj-backend). E il tetto sui dizionari vive in
-`IpcLimits::max_retained_dictionary_body_bytes`, con un default del confine; i
-costruttori dei limiti lo restringono secondo il budget disponibile.
-`verifica_artefatto` riceve l'intero `&IpcLimits`, non un parametro o una
-policy separati. Perimetro e condizioni di rientro stanno in
-[`errori-e-limiti.md`](errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals).
-
-`PR-12` ("attivazione") è integrata in `main` tramite la PR GitHub #46
-(merge `8f2b602d8faed8b536faa95d579421becee723f4`). La qualificazione OOM
-mirata dichiarata sotto resta un lavoro aperto distinto: il merge non la
-trasforma in una prova eseguita. Quattro decisioni sono
-ratificate e costruite: (1) la presenza di `max_domain_memory_bytes` in un
-piano v6 **costituisce la richiesta** del profilo isolato — non un campo
-separato, e mai un tetto implicito — e una richiesta non può ricadere
-sull'esecuzione in-process; (2) la piattaforma si verifica in validazione,
-staticamente (`isolamento::attivazione::verifica_piattaforma`, cablata in
-`planner::validate`): su Windows e macOS una richiesta è `Unsupported`, non
-ignorata; la disponibilità dinamica di Linux (privilegi, cgroup, politica
-dell'host) resta un'altra verifica, in `PreparaIsolamento`; (3) gli errori
-distinguono `Unsupported` (piattaforma), `IsolationUnavailable` (Linux non
-può prepararlo, policy dell'host compresa) e `InvalidPlan` (incoerenza del
-piano stesso); (4) una politica minima dell'host — una variabile d'ambiente
-del dispiegamento, mai il piano — ritaglia il tetto richiesto
-(`min(richiesta, politica)`) e rifiuta prima di qualunque spawn se il tetto
-ritagliato scende sotto il budget governato effettivo, senza mai modificarlo
-in silenzio (`isolamento::attivazione::autorizza_profilo_isolato`).
-
-Il chiamante di produzione **esiste ed è collegato**:
-`isolamento::esecuzione_isolata::esegui_isolato` sequenzia **due domini** su
-dati reali — non la fixture di qualificazione — riusando ogni passo già
-costruito da `PR-8`/`PR-9`/`PR-10` senza reimplementarlo. Il primo dominio
-esegue il worker; viene **distrutto**, non solo svuotato, prima che il
-secondo nasca; il secondo esegue il verificatore — spawner e protocollo
-propri, un `IncaricoVerifica` al posto dell'`Incarico`, un terzo descrittore
-ereditato per l'artefatto in sola lettura — e solo se conferma digest e
-conteggi il coordinatore pubblica: la verifica non gira più nel suo processo
-(`isolamento.md#2-quater-topologia-chi-osserva-chi`). `plenora-cli run` lo sceglie davvero: un piano che
-dichiara `max_domain_memory_bytes` non tocca più `executor::execute` in
-alcun caso, nemmeno su Linux con privilegi sufficienti — la guardia in
-`execute` resta come difesa in profondità per chi lo chiamasse comunque in
-modo diretto, non come percorso previsto. La configurazione del
-dispiegamento — radice del cgroup2 delegato e identità del worker,
-`PLENORA_ISOLATION_CGROUP_ROOT` e `PLENORA_ISOLATION_WORKER_UIDGID` — segue
-lo stesso principio della politica di memoria dell'host: variabili
-d'ambiente del dispiegamento, mai il piano.
-
-Di conseguenza il `cfg(any(test, feature = "internals"))` è caduto da tutto
-il perimetro d'isolamento — dominio, canale, spawner, protocollo, verifica,
-pubblicazione, e **`isolamento::macchina`** compreso, con gli adattatori
-reali (`macchina::adattatori`) che implementano `Osservatore`, `Terminatore`
-e `LettoreDiEvidenza` contro i file veri del dominio. Il chiamante di
-produzione non guida più il dialogo con `isolamento::prova::dialoga` (che
-resta per la sola negoziazione dell'handshake, e per intero nella
-qualificazione fra due pipe): dopo l'accordo passa a
-`macchina::conduci_isolato`, e la classificazione della §10 — inclusa
-l'attribuzione OOM della §10.0-bis — è quella vera, non una sua
-approssimazione conservativa.
-
-**Dimostrato su VM**, non solo collegato in codice: un'esecuzione isolata
-reale, sotto un `cgroup2` delegato con privilegi reali (worker con identità
-distinta, root per il supervisore), ha prodotto un `EvidenzaDiLimite` con i
-contatori letti per davvero dal dominio e dai suoi antenati fino alla radice
-del control plane — tutti a zero, perché il tentativo non ha premuto sul
-tetto, ma letti, non presunti. Verificati nello stesso giro: il tetto
-concesso dalla politica dell'host (non quello grezzo richiesto dal piano) è
-quello scritto in `memory.max`; l'esecuzione completa pubblica l'artefatto
-con l'`isolation` machine-readable nell'output; il dominio non lascia
-residuo a nessuna uscita.
-
-**Residui prima di PT-shadow.** Il launcher esterno della VM dedicata
-persiste `TREE` nello stato di campagna. Verificato con `crea` ed `esegui`
-in processi distinti, senza ripassare `TREE` e con un valore ambientale
-diverso: prevale l'albero salvato. Il backup senza fix fallisce la stessa
-prova. Questi test sostituiscono le operazioni privilegiate con funzioni
-inerti: provano la selezione dell'albero, non riqualificano il contenimento.
-Launcher SHA-256
-`07319d54e61c2c19d8b283ec9265bace6f70cd86fc74f13e6eabecf73686951f`,
-evidenza in `/home/marco/verifica-tree-residui.EEKbFT` sulla VM dedicata.
-
-Il presidio delle distanze RDP è **implementato** e in questo giro è stato
-**revisionato in modo indipendente**, leggendo la logica e non fidandosi del
-nome o del commento: la traversata ripercorre esattamente gli stessi
-segmenti di `geo`, con lo stesso spareggio `>=`, e il denominatore replica
-`geo-types 0.7.19` chiamando la stessa `Euclidean.distance`/`Line::new` — non
-una reimplementazione a rischio di divergenza. Non è un placebo:
-`simplify_scale_miste::controprova_vendor_non_presidiato_debug_e_release`
-dimostra, sullo stesso ingresso finito e validato, sia il panico non
-presidiato in `dev` sia il vertice scartato silenziosamente in `release`
-— la prima riproduzione concreta, con input e output osservati, di
-questa classe di difetto attraverso il prodotto (non un replay del
-reperto storico, che resta perduto). La classificazione `Internal` dei
-nuovi rifiuti, e dei siti preesistenti che non la ricevevano ancora
-(`OperationError::Internal` in un cast, gli `Internal` di algoritmo esteso e
-join spaziale), è verificata contro gli assi categoria/diagnostica di riga
-stabiliti, non solo contro la compilazione.
-
-È inoltre **qualificato** in questo giro, in locale e nel container
-`rust:1.98`/l'immagine di fuzzing (la stessa toolchain della CI, non la sola
-macchina di sviluppo): suite completa del workspace (2273 test, 0 falliti),
-`cargo fmt --all --check`, `cargo clippy --workspace --all-targets` e la
-variante anti-panico R6, `verifica_assenza_assert.py`, compilazione di
-`fuzz/`, coverage (90,60% righe / 85,13% funzioni / 90,84% regioni, sopra le
-soglie 90/85/89 — `operations/rdp.rs` al 99,02% righe), e smoke
-`wkt_operations` (`exit=0`, zero artefatti di crash, 3 172 394+ esecuzioni in
-90s). Ambito e limite restano nel registro di
-[`errori-e-limiti.md`](errori-e-limiti.md#semplificazione-rdp-e-scale-numeriche-miste).
-
-**Non è ancora integrato**: il lavoro resta nel working tree di questo
-branch (`stabilizzazione-residui-post-pr12`), senza commit né merge — la
-qualifica di questo giro non sostituisce quella decisione, che è separata.
-
-**Una correzione distinta, non la stessa cosa del presidio RDP**: nello
-stesso giro, ma su un altro meccanismo, `esecuzione_isolata.rs` aveva una
-finestra di fuga della guardia `FiglioVivo` in entrambi i domini (worker e
-verificatore): fra lo spawn e il primo uso del supervisore, un
-`prova::supervisore_per(...)?` falliva lasciando cadere `guardia` non
-raccolta, e la sentinella di `Drop` (pensata per un `?` che «salta le
-porte») interveniva con `std::process::abort()` anche su un rifiuto
-legittimo — mascherando l'errore vero dietro un arresto del processo. Fix:
-una funzione condivisa `supervisore_o_raccogli` (stesso principio già usato
-da `prova::con_la_pulizia`: la causa sola se la pulizia non lascia difetti,
-altrimenti le due cose insieme) chiude il dominio e raccoglie il figlio
-prima di propagare l'errore, in entrambi i siti di chiamata. La sentinella
-stessa **non è stata toccata** — resta con lo stesso comportamento per la
-fuga vera che era nata a coprire.
-
-Verificato: `cargo test -p plenora-engine --lib isolamento::esecuzione_isolata::`
-(22/22, incluse due nuove prove di regressione che forzano il rifiuto con un
-digest malformato e confermano con `kill -0` che il pid non esiste più dopo),
-`cargo fmt --all --check`, clippy R6, e l'intera suite del workspace
-(2275 test, 0 falliti — i 2273 di prima più i due nuovi). Ri-riprodotto sulla
-VM il caso esatto che prima abortiva (fixture geo a 3 vertici, resolver
-`proj`): ora un JSON pulito
-(`invalid_configuration: il profilo isolato non e' disponibile con il
-resolver «proj»...`), `exit=2`, nessun core dump, nessun dominio cgroup
-residuo. Fingerprint del sorgente dopo il fix (stesso perimetro
-`:!benchmarks`):
-`499d06d54e435a2946833558c5207b819a899379d53ab377e089d26d9553c75a`. Stesso
-stato del presidio RDP — **implementato** e **qualificato** su questo giro,
-**non ancora integrato** — ma è un fatto separato, con la propria prova, non
-una riga in più nella voce RDP.
-
-**Controllo positivo riuscito, rifiuto preventivo verificato, OOM reale
-ancora non dimostrato — tre cose distinte, non una.** In questo giro,
-esclusivamente sulla VM dedicata, con il launcher esterno verificato
-(`07319d54e61c2c19d8b283ec9265bace6f70cd86fc74f13e6eabecf73686951f`) e senza
-alcuna modifica al prodotto:
-
-1. *Controllo positivo* — `table.explode` (scelta come sostituto di
-   `geo.buffer`, senza requisito PROJ/CRS: vedi
-   [`errori-e-limiti.md`](errori-e-limiti.md#geobuffer-è-strutturalmente-inutilizzabile-nel-profilo-isolato-con-qualunque-crs))
-   con un tetto governato/di dominio ampio (512 MiB) **completa senza
-   intoppi**: entrambi i domini `successo`, artefatto pubblicato, pulizia
-   `removed`. Dimostra che il profilo isolato e la fixture sono corretti
-   fuori da condizioni di pressione.
-2. *Rifiuto preventivo `ResourceLimit` verificato, non un OOM* — tre
-   tentativi di pressione (tetto governato=di dominio a 100 MiB, poi 70 MiB,
-   poi 66 MiB, sempre coerenti con la regola «governato ≤ dominio»), sullo
-   stesso `table.explode` con una riga da 8 000 000 di elementi, hanno
-   prodotto **lo stesso rifiuto** in tutti e tre i casi:
-   `resource_limit: max_batch_bytes superato su 'ingresso': 195001840 byte >
-   67108864`, fase `read`, uscita del worker con codice 0 (pulita, non
-   uccisa), `oom_locali`/`uccisi_nel_dominio`/`group_kill_locale` sempre a
-   zero. Letto il codice per capire perché il tetto di dominio non spostava
-   nulla: `check_batch_bytes` (`executor.rs`) applica un tetto **fisso**
-   (`BatchTarget::default().max_batch_bytes` = 64 MiB) sul singolo batch
-   dell'**ingresso**, e lo fa **prima** che `state.governor.reserve(...)`
-   riservi qualunque memoria e prima che un nodo qualsiasi (compreso
-   `table.explode`) esegua — la CLI costruisce sempre
-   `RuntimeContext { .., ..RuntimeContext::default() }`
-   (`plenora-cli/src/cli/commands/run.rs`): **non esiste un campo nello
-   schema del piano che lo dichiari**, quindi nessuna combinazione di
-   `max_governed_memory_bytes`/`max_domain_memory_bytes` lo tocca. I tre
-   tentativi non hanno mai raggiunto il ciclo interno non presidiato di
-   `explode` (`reshape.rs`, righe 949-996): sono stati respinti prima, alla
-   lettura.
-3. *OOM reale — dimostrato, con ambito dichiarato.* I tre tentativi di
-   questo giro restano **esauriti** (3 di 3) con lo stesso rifiuto
-   preventivo: nessuna evidenza kernel attribuita al dominio in nessuno dei
-   tre. Cercata anche un'evidenza già valida di un OOM reale attribuito sul
-   percorso di produzione attuale in quel momento: nessuna trovata, oltre a
-   quanto scritto sopra — solo casi con evidenza sintetica.
-
-   Una misura locale successiva (non privilegiata, nessuna VM) ha chiuso
-   l'incognita del fattore ×3 sull'ingresso: `arrow-ipc` legge il corpo del
-   messaggio come un'unica allocazione condivisa, e `get_array_memory_size()`
-   somma la capacità di quell'allocazione **una volta per buffer che la
-   condivide** (offset, valori, validity), senza deduplicare — con validity
-   presente (null nella lista) il rapporto converge a ×3 esatto, riprodotto
-   a 672 byte dal valore osservato in VM (195 001 168 contro
-   195 001 840). È contabilità Arrow sull'ingresso, non il meccanismo che ha
-   poi prodotto l'OOM sotto.
-
-   La stessa analisi ha scoperto — leggendo `select_rows`
-   (`plenora-kernels-table/src/lib.rs:1623`) e `take_list` di
-   `arrow-select 59.2.0` — che `table.explode` materializza la colonna lista
-   **che sta per sostituire** prima della sostituzione: per un batch a una
-   riga con lista di N elementi l'intermedio è **O(N²)**, mai governato. Voce
-   propria, con ambito e condizione di rientro, in
-   [`errori-e-limiti.md`](errori-e-limiti.md#corretto-tableexplode-materializzava-la-colonna-lista-che-stava-per-sostituire-con-crescita-quadratica) —
-   **non corretto in questo giro**, perché correggerlo prima avrebbe cambiato
-   il fenomeno sotto qualifica. Corretto separatamente in un secondo momento
-   (vedi "Prossimo passo" più sotto, ora completato): dettaglio del fix e dei
-   test di regressione in quel documento.
-
-   Un **quarto tentativo**, autorizzato separatamente e a sé (non uno dei
-   tre esauriti sopra), preceduto da due controlli positivi bloccanti — una
-   fixture minima a tetto 128 MiB (esclude un fallimento di avvio del
-   motore/governatore sotto isolamento) e la stessa fixture del tentativo
-   (N=10 000, un elemento per riga, ~1% null) a tetto largo di 2 GiB (picco
-   worker misurato **818 139 136 B**, conferma diretta e non stimata
-   dell'intermedio quadratico) — ha ripetuto il carico con tetto
-   **134 217 728 B (128 MiB)** esatto sul dominio. Risultato: `status:
-   error`, `category: ResourceLimit`, `EvidenzaDiLimite{oom_locali:1,
-   uccisi_nel_dominio:2, uccisi_nella_gerarchia:2, group_kill_locale:1,
-   picco_byte:134217728 (= tetto esatto), respinte_al_tetto:21}`; applicando
-   a mano `classifica_evidenza`/`classifica` (`classificazione.rs`) a questi
-   valori: `ol`, `kl`, `kh`, `g` tutti osservati e positivi →
-   `ClasseEvidenzaMemoria::Attribuita` → `EsitoClassificato::LimiteAttribuito`
-   → categoria pubblica `ResourceLimit` — la stessa che il programma ha
-   riportato, non un'altra via che vi capita a coincidere nel nome. Tre fonti
-   indipendenti concordi: l'evidenza del programma, `dmesg`
-   (`oom-kill:constraint=CONSTRAINT_MEMCG,
-   oom_memcg=/plenora-oom-test/plenora-isolato-b650dd3a550f03fc, pid=15400,
-   uid=65534`) e un campionamento a 20 ms di `memory.current`/`memory.events`
-   sul dominio. I "due uccisi" del dominio sono **un solo processo** (pid
-   15400, tgid 15400, monothread) ucciso due volte in log — la selezione
-   diretta del memcg e il `memory.oom.group` che rispazza lo stesso task —
-   non due processi distinti: verificato sul dump "Tasks state" di `dmesg`,
-   che elenca una sola riga. Nessuna pubblicazione, nessun residuo
-   (dominio/processi) dopo la raccolta dell'evidenza. Tentativo eseguito su
-   questo stesso worktree, branch `stabilizzazione-residui-post-pr12`, HEAD
-   `ec02d0562ea645d0a8410005ed429768dcdd6c6d` (invariato prima e dopo,
-   nessun commit), impronta staged+unstaged
-   `b3697a75c15912b9ccd0c4c2637acad270ea1f11c1ac85b75958ab6c7fbaef67` — a
-   quel momento `reshape.rs` non aveva modifiche non commesse (sha256
-   `db0c31a44934424375e82602b769531b0371b3f7574c4ccb2264b8159203233a`,
-   identico al commesso su quell'HEAD). **Il codice provato è quello
-   PRECEDENTE alla correzione descritta più sotto**, non il diff attuale.
-   Evidenza grezza (piani, generatore fixture throwaway, `dmesg`, log del
-   poller, riepilogo con impronta e timestamp) conservata fuori da git in
-   `evidenza-oom-explode-quadratico/` nel worktree, non tracciata, non
-   committata.
-
-   **Attribuzione e gestione dell'OOM qualificate sul percorso worker, con
-   questo carico e QUESTA IDENTITÀ DI CODICE (`reshape.rs` sha256
-   `db0c31a4...`, prima della correzione sotto). Non significa che tutte le
-   operazioni siano qualificate, e non significa che il codice attuale
-   (dopo la correzione) sia stato sottoposto alla stessa prova.** È una
-   scoperta storica su un comportamento ora corretto, non una
-   generalizzazione né una proprietà del diff presente: un'altra operazione,
-   un'altra forma di batch, o lo stesso `table.explode` con una crescita
-   diversa da quella quadratica qui sfruttata potrebbero non produrre lo
-   stesso esito — e il codice attuale, per costruzione della correzione
-   sotto, non presenta più questo specifico intermedio da riprovare. La
-   prova OOM **non è stata ripetuta** contro il diff corretto: sarebbe stata
-   una campagna VM non richiesta e senza informazione aggiuntiva, dato che i
-   test di regressione e la revisione indipendente del fix già dimostrano
-   l'assenza dell'intermedio O(N²) per altra via (vedi
-   [`errori-e-limiti.md`](errori-e-limiti.md#corretto-tableexplode-materializzava-la-colonna-lista-che-stava-per-sostituire-con-crescita-quadratica)).
-
-   **Prossimo passo pianificato, separato da questo giro — ora completato.**
-   Il difetto quadratico è stato corretto in un intervento a sé (non in
-   `select_rows`, condivisa e invariata: una nuova `select_rows_except`
-   locale a `reshape.rs`, usata solo da `explode` e solo quando la colonna di
-   output sostituisce quella sorgente), con due test di regressione
-   (`explode_su_riga_singola_con_lista_lunga_non_e_quadratico`,
-   `explode_con_output_column_distinto_mantiene_la_colonna_sorgente`) e
-   revisione indipendente del diff (un difetto minore trovato e corretto:
-   fusione di doc-comment fra due funzioni, per mancanza di separazione —
-   nulla di funzionale). Dettaglio completo, con hash e numeri dei gate
-   rieseguiti, in [`errori-e-limiti.md`](errori-e-limiti.md#corretto-tableexplode-materializzava-la-colonna-lista-che-stava-per-sostituire-con-crescita-quadratica).
-   Verificati su questo stesso worktree: `cargo fmt --check`, clippy R6, e la
-   suite completa di `plenora-kernels-table` (402 test, 0 falliti). **Non
-   ancora commesso**: restano i gate completi sull'intero contenuto del
-   worktree (non solo su questo file) prima di autorizzare commit/push/PR —
-   passo distinto, non ancora eseguito. Non riapre l'intera PR-12.
+| | stato |
+|---|---|
+| matrice §10, la logica | ogni riga ha un test: di tabella sulla classificazione, sulla conduzione con i finti, o sul verificatore. Le categorie delle righe 12 e 13 seguono la matrice |
+| matrice §10, il percorso di produzione | `scripts/qualifica_profilo_isolato.sh` guida `plenora-data-tools run`, il binario distribuito, con un dominio `cgroup2` reale e il worker con identità distinta: righe 1, 2, 4/6a (un `SIGKILL` da fuori: crash e terminazione senza evidenza non si distinguono da fuori), 5 prima e durante la conduzione con il controllo positivo del carico, 7, 8. L'oracolo è l'envelope su stdout — categoria **e** messaggio — più l'assenza dell'output e dei domini residui; un segnale non consegnato rende il caso rosso. Verde su VM (kernel 6.8) sull'albero di questa fase; l'evidenza sta fuori da Git, e lo script la rigenera |
+| righe senza un caso su VM | 3 (nessun kernel di produzione va in panico a comando), 6b (una pressione che non autorizza l'attribuzione non si provoca a comando), 9 e 10 (supervisore e worker sono la stessa immagine), da 11 a 14 (servirebbe manomettere l'artefatto fra worker e verificatore), 15 e 16 (publish e pulizia che falliscono dopo una verifica riuscita): coperte dai soli test, e la qualifica lo dichiara |
+| riga 16 | deviazione dichiarata: la pulizia dei domini non esce su un canale machine-readable ([`errori-e-limiti.md`](errori-e-limiti.md#la-pulizia-dei-domini-non-esce-su-un-canale-machine-readable)) |
+| `F4-5` | soddisfatto con i limiti dichiarati in [`errori-e-limiti.md`](errori-e-limiti.md#il-coordinatore-del-profilo-isolato-legge-fuori-dal-dominio): prima dell'autorizzazione il coordinatore legge solo il testo del piano e gli schemi degli ingressi, con tetti costanti, e nessun dato |
+| Windows | rifiuto in validazione provato dal binario vero, nel job Windows della CI |
+| macOS | rifiuto in validazione provato da un test unitario soltanto: la CI non ha un job macOS |
 
 I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le
 misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md), che è
@@ -621,8 +246,8 @@ Nascita vincolata e contenimento sono dimostrati. L'**attribuzione no**:
   piattaforma è **non supportata** (`F4-11`), e le sue misure restano solo
   come motivazione.
 
-Il progetto è **approvato per l'implementazione** e la sequenza di PR di
-[`isolamento.md`](isolamento.md) è in corso. Non è congelato: le PR che
+Il progetto è **approvato** e la sequenza di PR di
+[`isolamento.md`](isolamento.md) è integrata. Non è congelato: le PR che
 cambiano semantica — `PR-0`, `PR-1`, `PR-2`, `PR-5`, `PR-10`, `PR-12` — restano
 quelle dichiarate lì, e una revisione del progetto è ancora possibile davanti a
 un'evidenza nuova.
@@ -741,10 +366,6 @@ un namespace escluso «perché operativo» diventi un giorno semanticamente
 importante mentre nessuno lo guarda più. L'artefatto resta un singolo file
 Arrow IPC standard.
 
-Una stesura precedente sosteneva che un contenitore IPC non avesse posto per
-byte propri fuori dallo schema, e da quella premessa falsa faceva discendere
-una proiezione semantica applicata a tre punti. Non serve.
-
 **F4-21 — `CommitToken` è un tipo chiuso, con una forma concreta.** Un valore
 opaco di 32 byte reso da **esattamente 64 caratteri esadecimali minuscoli**,
 chiave `plenora.commit.token` nel footer, validazione prima dello spawn,
@@ -757,43 +378,26 @@ sessantaquattro caratteri gli permettono di vedere. Non garantisce la
 La generazione con un generatore crittograficamente sicuro è una
 raccomandazione al chiamante, non una proprietà del tipo.
 
-**F4-22 — I custom metadata entrano nel confine ostile.** Il validatore
-percorre oggi i campi 1, 2 e 3 del footer e **non il campo 4**, che è dove
-finirà il token; e `arrow-ipc` legge il footer con `key().unwrap()` e
-`value().unwrap()`, quindi una voce senza chiave o senza valore **panica**
-dentro la dipendenza — mentre il percorso dello schema, che usa `if let`, la
-salterebbe. Serve, prima che qualcuno scriva un token in un footer:
+**F4-22 — I custom metadata sono nel confine ostile.** `arrow-ipc` legge il
+campo 4 del footer con `key().unwrap()` e `value().unwrap()`, quindi una voce
+senza chiave o senza valore andrebbe in panico dentro la dipendenza. Il
+confine la valida prima di costruire il `FileReader`, e i requisiti sono:
 
 | | |
 |---|---|
 | **1** | validazione grezza di `Footer.custom_metadata` **prima** di costruire il `FileReader` |
-| **2** | chiave e valore **obbligatori**: oggi `fb_key_value` salta l'offset zero invece di rifiutarlo |
-| **3** | tetti applicati **prima** delle allocazioni: **256** coppie per collezione, **128** byte di chiave, **64 KiB** di valore. Costanti proprie del confine IPC — `MAX_IPC_CUSTOM_METADATA_*` — **non** derivate dal tetto sul CRS: il numero coincide, l'autorità no, e accoppiarle farebbe cambiare in silenzio ciò che il parser accetta il giorno in cui il tetto sul CRS si muove |
-| **3-ter** | sono **costanti interne non ampliabili**, non campi di `IpcLimits`: quella struttura è pubblica e riesportata, e serve ai limiti che un piano può modulare — un tetto contro l'abuso che il chiamante può alzare non è un tetto |
+| **2** | chiave e valore **obbligatori** |
+| **3** | tetti applicati **prima** delle allocazioni: **256** coppie per collezione, **128** byte di chiave, **64 KiB** di valore. Costanti proprie del confine IPC — `MAX_IPC_CUSTOM_METADATA_*` — **non** derivate dal tetto sul CRS |
+| **3-ter** | **costanti interne non ampliabili**, non campi di `IpcLimits`: un tetto contro l'abuso che il chiamante può alzare non è un tetto |
 | **3-bis** | UTF-8 verificato da noi; chiave vuota rifiutata; valore vuoto accettato; chiavi sconosciute accettate e ignorate — il confine valida la **forma**, non il vocabolario |
-| **4** | **chiavi duplicate rifiutate**: nessuna semantica «vince l'ultima», che per un token autoritativo sceglierebbe un vincitore arbitrario |
+| **4** | **chiavi duplicate rifiutate**: nessuna semantica «vince l'ultima» |
 | **5** | lettura autoritativa del token dal **footer validato**, non dalla `HashMap` di Arrow |
-| **6** | sedici test, non sette, e **divisi fra due PR**: dodici casi strutturali a `PR-0` — i tre tetti superati **separatamente**, chiave e valore assenti, chiave e valore vuoti, UTF-8 invalido in entrambi, duplicati uguali e divergenti, chiavi sconosciute — e quattro casi del token a `PR-5`, che è la prima in cui `CommitToken` esiste |
 
 **È una classe, non un caso.** `fb_key_value` è condiviso da tre chiamanti —
-campi, schema, messaggi — quindi la correzione vale per tutti, non solo per il
-footer. Ma «sta nell'helper» sarebbe impreciso e lascerebbe i duplicati senza
-proprietario: `fb_key_value` valida **una** coppia e la **restituisce**;
-`fb_custom_metadata`, che vede l'intera collezione, applica il tetto sul
-conteggio e rifiuta i duplicati — che sono una proprietà dell'insieme, non di
-un elemento.
-
-**Va chiuso in una PR propria, prima della fase 4.** È l'unica correzione di
-questo blocco che sarebbe necessaria anche se la fase 4 non esistesse: il
-campo 4 è invalidato da sempre, e adottare il footer per il token non ha
-creato il difetto ma l'ha scoperto. Cambia semantica in senso fail-closed — input che oggi passano domani sono
-rifiutati — e la registrazione in [`errori-e-limiti.md`](errori-e-limiti.md),
-con regola, perimetro, pericolo e condizione di rientro, è un **criterio
-d'uscita** della PR, non una nota a margine.
-
-Va dichiarato anche che cosa questo rifiuta: Arrow consente metadati
-arbitrari, quindi un file con una chiave sconosciuta e un valore da 100 KiB è
-un file Arrow **valido** che il confine Plenora rifiuta di proposito.
+campi, schema, messaggi — e valida **una** coppia; `fb_custom_metadata`, che
+vede l'intera collezione, applica il tetto sul conteggio e rifiuta i duplicati,
+che sono una proprietà dell'insieme. Che cosa questo rifiuta è registrato in
+[`errori-e-limiti.md`](errori-e-limiti.md).
 
 **F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
 contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
@@ -865,11 +469,11 @@ i due lati ne usassero due diversi, il supervisore potrebbe **rifiutare come
 invalido uno schema che il worker ha prodotto correttamente**, o accettarne
 uno che il worker non avrebbe potuto scrivere.
 
-Il confine è già pronto a riceverlo: dalla chiusura della fase 2 il resolver è
-un **argomento** di `contract_from_arrow_schema`, non una proprietà della
-compilazione. Il protocollo dovrà quindi trasportare quale resolver è in uso e
-il supervisore dovrà rifiutare un worker che ne dichiari uno diverso — un
-disaccordo qui è una condizione di errore, non una differenza da tollerare.
+Il resolver è un **argomento** di `contract_from_arrow_schema`, non una
+proprietà della compilazione, e l'handshake trasporta quale resolver è in uso:
+il supervisore rifiuta un worker che ne dichiari uno diverso. Un disaccordo qui
+è una condizione di errore (`InvalidConfiguration`, riga 10 della matrice), non
+una differenza da tollerare.
 
 **F4-5 — Nessuna allocazione critica prima dell'autorizzazione, oppure
 rifiuto esplicito.** È il criterio di uscita del punto 2. Con l'isolamento,
@@ -880,29 +484,11 @@ inizia, non che qualcuno abbia stimato in anticipo quanto servirà.
 prototipo non dimostri copertura *e* attribuzione del limite.
 
 
-**Stato della fase 0.** Working tree pulito e suite eseguita nel container
-1.98. Gli oracoli: il catalogo era già coperto da
-`crates/plenora-engine/tests/catalog_snapshot.snap`, l'IPC canonico e la
-fusione geo dai rispettivi test. Mancava l'identità dei piani — i test
-verificavano che `plan_hash` fosse lungo 64 caratteri, non **quale** valore
-avesse, quindi una riorganizzazione che cambiasse la forma canonica sarebbe
-passata senza far fallire nulla. Ora c'è
-`crates/plenora-engine/tests/oracoli_identita.snap`, che fissa i valori per
-nove piani rappresentativi insieme al JSON canonico da cui derivano, così un
-diff dice *cosa* è cambiato e non solo *che* qualcosa è cambiato.
-
 **Regola per i PR del refactor.** Nessun PR mescola spostamenti strutturali e
 cambiamenti semantici: un PR dichiara quale dei due è, e non è mai entrambi.
 Chi sposta codice non tocca algoritmi né visibilità pubbliche, e dimostra
 l'equivalenza attraverso gli oracoli; chi cambia semantica lo fa a struttura
 ferma, e versiona esplicitamente ciò che rompe.
-
-La regola nasce con un'eccezione già consumata, e vale la pena dirlo invece di
-lasciarla sembrare disattesa: il commit che ha chiuso la fase 0 mescola tre
-filoni — correzioni di review, migrazione a Rust 1.98, aggiornamento delle
-dipendenze. Erano intrecciati negli stessi file, e separarli avrebbe prodotto
-stati intermedi mai eseguiti. La regola vale **da lì in avanti**, dove la
-struttura è ferma e la separazione è possibile.
 
 ### Blocker dichiarato: la nuova linea normativa di `plenora-contracts`
 
@@ -996,13 +582,6 @@ versionato deve **registrare e verificare**, e allegare all'esito:
 Finché il criterio è aperto, ogni campagna eseguita con lo strumento fuori
 repository vale come **evidenza**, non come qualificazione.
 
-Va sciolta la posizione di `arrow_transform`, oggi in quarantena per una
-ragione dichiarata: `libfuzzer` aborta prima dell'unwinding, quindi il target
-resterebbe rosso a barriera funzionante. Due esiti ammessi, e nessuno dei due
-è il silenzio: **riattivarlo**, se `apache/arrow-rs#10575` avrà reso fallibile
-la conversione dello schema, oppure **riconfermare la quarantena per
-iscritto**, con la ragione aggiornata alla data del rilascio.
-
 ## 4. Qualifica prestazionale
 
 Oggi le prestazioni non sono qualificate: esistono una baseline di
@@ -1023,9 +602,8 @@ Serve, prima della produzione:
 - il **confronto con la baseline e con la release precedente**, perché il
   numero che conta non è il valore assoluto ma la differenza.
 
-Il lavoro non è in questo ramo e non lo anticipa: qui c'è la dichiarazione di
-che cosa manca, così che nessuno legga i numeri sparsi nel codice come se
-fossero un verdetto.
+Il lavoro non è cominciato: qui c'è la dichiarazione di che cosa manca, così
+che nessuno legga i numeri sparsi nel codice come se fossero un verdetto.
 
 ## 4-bis. Essenzialità e aggiornamento delle dipendenze per la 2.0.0
 
@@ -1168,12 +746,13 @@ diversi.
 | i ventiquattro fast path table e Geo | **rinviati**, uno per PR ciascuno, ognuno col proprio oracolo differenziale |
 | il **catalogo empirico della memoria** | **fuori dal perimetro**: le misure sono Windows-only e il profilo isolato è Linux, quindi non esiste una grandezza comune da consumare. Rientra solo dopo una campagna Linux con una metrica coerente col dominio |
 
-`memory-lab` **esiste**, fuori da questo repository, e nulla di esso è stato
-importato: nessun codice, nessun dato, nessuna dipendenza. Il repository del
-prodotto **non ha** una dipendenza di percorso verso di esso, e non deve
-averla; la provenienza si **cita** — commit immutabile e hash degli artefatti —
-non si copia, perché un artefatto di provenienza copiato descriverebbe misure
-che non importiamo e sarebbe vecchio alla campagna successiva.
+`memory-lab` **esiste**, fuori da questo repository. Dal suo candidato
+vengono le copie **vendorizzate** di `geo`, `wkt` e `i_shape` che il prodotto
+usa tramite `[patch.crates-io]`, ciascuna ricostruita dal pacchetto pubblicato
+più le patch in `patches/` e verificata da `scripts/verifica_vendor_provenienza.py`.
+Nient'altro: nessun dato, nessuna misura, nessuna dipendenza di percorso verso
+`memory-lab`, che il repository del prodotto non deve avere. La provenienza si
+**cita** — commit immutabile e hash degli artefatti — non si copia.
 
 **La sequenza**, e nessun passo salta il precedente:
 

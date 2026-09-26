@@ -106,7 +106,8 @@ pub struct ScavengeReport {
 /// Creato all'avvio dell'esecuzione, ospita tutti i file temporanei (spill
 /// e simili) sotto `plenora-<execution_id>-<random>/`. Il `Drop` rimuove
 /// ricorsivamente directory e lock; dopo un crash non intercettabile la
-/// directory resta e viene bonificata da [`scavenge_stale_temp_dirs`].
+/// directory resta, e [`scavenge_stale_temp_dirs`] la bonifica se chi lo esegue
+/// ha il permesso di rimuoverla.
 #[derive(Debug)]
 pub struct TempStore {
     directory: TempDir,
@@ -267,9 +268,15 @@ enum ScavengeAction {
 /// principale e' il lock file; PID e heartbeat sono segnali diagnostici.
 fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
     let lock_path = path.join(LOCK_FILE_NAME);
-    let lock = fs::read(&lock_path)
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<LockFile>(&raw).ok());
+    // Solo un lock che **non esiste** e' assente. Uno che c'e' e non si lascia
+    // leggere non dice niente sull'esecuzione che lo possiede, e la regola del
+    // lock assente — cancellare oltre TTL*2 — cancellerebbe forse uno store
+    // vivo: si tiene, sempre.
+    let lock = match fs::read(&lock_path) {
+        Ok(raw) => serde_json::from_slice::<LockFile>(&raw).ok(),
+        Err(errore) if errore.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return ScavengeAction::KeepConservative,
+    };
     if let Some(lock) = lock {
         // L'HEARTBEAT COMANDA, il PID puo' solo accelerare.
         //
@@ -323,11 +330,17 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
     // Lock assente o corrotto: conservativo, cancella solo oltre
     // TTL*2 misurato sul mtime (del lock se esiste, della directory
     // altrimenti). Metadati illeggibili → mai cancellare.
-    let mtime = fs::metadata(&lock_path)
-        .or_else(|_| fs::metadata(path))
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
+    // Il mtime della directory sostituisce quello del lock solo se il lock
+    // **non esiste**: un lock che c'e' e non si lascia misurare non si
+    // rimpiazza con un altro orologio, e la directory si tiene.
+    let mtime = match fs::metadata(&lock_path) {
+        Ok(metadata) => Ok(metadata),
+        Err(errore) if errore.kind() == std::io::ErrorKind::NotFound => fs::metadata(path),
+        Err(errore) => Err(errore),
+    }
+    .and_then(|metadata| metadata.modified())
+    .ok()
+    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
     match mtime {
         // `saturating_mul`: un TTL enorme non deve avvolgere la soglia e
         // trasformare «non abbastanza vecchio» in «da cancellare». Saturando,
@@ -565,7 +578,10 @@ mod tests {
             path = store.path().to_owned();
             assert!(path.join(LOCK_FILE_NAME).is_file());
         }
-        assert!(!path.exists(), "il Drop rimuove directory e lock");
+        assert!(
+            !path.try_exists().expect("stat"),
+            "il Drop rimuove directory e lock"
+        );
     }
 
     // -- Scavenging -----------------------------------------------------------
@@ -578,7 +594,10 @@ mod tests {
             scavenge_stale_temp_dirs(root.path(), Duration::from_secs(1)).expect("scavenge");
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 1);
-        assert!(store.path().exists(), "lock vivo: mai toccare");
+        assert!(
+            store.path().try_exists().expect("stat"),
+            "lock vivo: mai toccare"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -595,7 +614,10 @@ mod tests {
         let report =
             scavenge_stale_temp_dirs(root.path(), Duration::from_hours(24)).expect("scavenge");
         assert_eq!(report.removed.len(), 1);
-        assert!(!store.path().exists(), "processo morto: directory rimossa");
+        assert!(
+            !store.path().try_exists().expect("stat"),
+            "processo morto: directory rimossa"
+        );
         std::mem::forget(store); // la directory e' gia' stata rimossa
     }
 
@@ -619,7 +641,7 @@ mod tests {
             "il PID di un altro host non decide: {report:?}"
         );
         assert_eq!(report.kept_alive, 1);
-        assert!(store.path().exists());
+        assert!(store.path().try_exists().expect("stat"));
     }
 
     /// Il caso che l'uguaglianza di hostname da sola non copre: due macchine
@@ -642,7 +664,7 @@ mod tests {
             "un heartbeat fresco non puo' essere cancellato da un PID: {report:?}"
         );
         assert_eq!(report.kept_alive, 1);
-        assert!(store.path().exists());
+        assert!(store.path().try_exists().expect("stat"));
     }
 
     /// Lo stesso lock di un altro host, ma con heartbeat oltre il TTL: qui
@@ -655,7 +677,7 @@ mod tests {
         let report =
             scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
         assert_eq!(report.removed.len(), 1);
-        assert!(!store.path().exists());
+        assert!(!store.path().try_exists().expect("stat"));
         std::mem::forget(store);
     }
 
@@ -706,7 +728,7 @@ mod tests {
             "un processo locale vivo non e' orfano: {report:?}"
         );
         assert_eq!(report.kept_conservative, 1);
-        assert!(store.path().exists());
+        assert!(store.path().try_exists().expect("stat"));
     }
 
     #[test]
@@ -720,7 +742,7 @@ mod tests {
         let report =
             scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
         assert_eq!(report.removed.len(), 1);
-        assert!(!store.path().exists());
+        assert!(!store.path().try_exists().expect("stat"));
         std::mem::forget(store);
     }
 
@@ -734,7 +756,7 @@ mod tests {
             scavenge_stale_temp_dirs(root.path(), Duration::from_hours(24)).expect("scavenge");
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 1);
-        assert!(store.path().exists());
+        assert!(store.path().try_exists().expect("stat"));
     }
 
     #[test]
@@ -748,7 +770,7 @@ mod tests {
             scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_conservative, 1);
-        assert!(store.path().exists());
+        assert!(store.path().try_exists().expect("stat"));
         // Corrotto e piu' vecchio di TTL*2 (mtime del lock): cancellare.
         let old = SystemTime::now() - Duration::from_secs(3600);
         std::fs::File::options()
@@ -760,8 +782,34 @@ mod tests {
         let report =
             scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
         assert_eq!(report.removed.len(), 1);
-        assert!(!store.path().exists());
+        assert!(!store.path().try_exists().expect("stat"));
         std::mem::forget(store);
+    }
+
+    /// Un lock che c'e' e non si legge non e' un lock assente: nemmeno oltre
+    /// TTL*2 lo store si cancella. La lettura fallisce qui perche' al posto del
+    /// file c'e' una directory — un permesso negato non basterebbe, i casi
+    /// girano anche come root. Solo Unix: su Windows una directory non si apre
+    /// come file per cambiarle il mtime.
+    #[test]
+    #[cfg(unix)]
+    fn un_lock_illeggibile_non_autorizza_la_cancellazione() {
+        let root = tempfile::tempdir().expect("root");
+        let store = TempStore::with_root("exec-illeggibile", root.path()).expect("store");
+        let lock_path = store.path().join(LOCK_FILE_NAME);
+        fs::remove_file(&lock_path).expect("via il lock");
+        fs::create_dir(&lock_path).expect("un lock che non si legge");
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::open(&lock_path)
+            .expect("apertura della directory")
+            .set_modified(old)
+            .expect("set mtime");
+        let report =
+            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        assert!(report.removed.is_empty(), "{report:?}");
+        assert_eq!(report.kept_conservative, 1);
+        assert!(store.path().try_exists().expect("stat"));
+        fs::remove_dir(&lock_path).expect("via la directory");
     }
 
     #[test]
@@ -781,9 +829,9 @@ mod tests {
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 0);
         assert_eq!(report.kept_conservative, 1);
-        assert!(other_dir.exists());
-        assert!(stray_file.exists());
-        assert!(no_lock_dir.exists());
+        assert!(other_dir.try_exists().expect("stat"));
+        assert!(stray_file.try_exists().expect("stat"));
+        assert!(no_lock_dir.try_exists().expect("stat"));
     }
 
     #[test]
@@ -798,12 +846,12 @@ mod tests {
             scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 2);
-        assert!(first.path().exists());
-        assert!(second.path().exists());
+        assert!(first.path().try_exists().expect("stat"));
+        assert!(second.path().try_exists().expect("stat"));
         // Il Drop dell'uno lascia intatta la directory dell'altro.
         let second_path = second.path().to_owned();
         drop(first);
-        assert!(second_path.exists());
+        assert!(second_path.try_exists().expect("stat"));
         assert!(second_path.join(LOCK_FILE_NAME).is_file());
     }
 }

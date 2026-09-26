@@ -269,7 +269,7 @@ fn un_file_inesistente_o_illeggibile_e_un_errore_di_io_senza_pubblicazione() {
         }
     }
     assert!(
-        !output_path.exists(),
+        !output_path.try_exists().expect("stat"),
         "nessun output deve essere creato da un fallimento"
     );
 }
@@ -356,7 +356,7 @@ fn le_forme_incompatibili_sono_rifiutate() {
         assert!(!output.status.success(), "{descrizione}");
         envelope_di(&output, descrizione);
         assert!(
-            !output_path.exists(),
+            !output_path.try_exists().expect("stat"),
             "{descrizione}: nessun output da un'invocazione rifiutata"
         );
     }
@@ -452,7 +452,7 @@ fn nessun_fallimento_di_run_lascia_un_output() {
         assert!(!output.status.success(), "{descrizione}");
         envelope_di(&output, descrizione);
         assert!(
-            !output_path.exists(),
+            !output_path.try_exists().expect("stat"),
             "{descrizione}: output pubblicato da un'esecuzione fallita"
         );
     }
@@ -577,7 +577,7 @@ fn nessun_token_estraneo_viene_ignorato() {
             "{descrizione}: atteso `{atteso}`, ottenuto {envelope}"
         );
         assert!(
-            !uscita.exists(),
+            !uscita.try_exists().expect("stat"),
             "{descrizione}: nessun output da un'invocazione non compresa"
         );
     }
@@ -590,7 +590,7 @@ fn nessun_token_estraneo_viene_ignorato() {
     assert!(!output.status.success(), "token estraneo accettato");
     envelope_di(&output, "run con token estraneo");
     assert!(
-        !uscita.exists(),
+        !uscita.try_exists().expect("stat"),
         "un output non deve mai essere pubblicato da un'invocazione con token ignorati"
     );
 
@@ -779,7 +779,10 @@ fn un_limite_di_risorsa_produce_la_categoria_e_l_exit_code_dedicati() {
         Some(4),
         "la categoria `resource_limit` proietta sull'exit code 4"
     );
-    assert!(!uscita.exists(), "nessun output da un limite superato");
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output da un limite superato"
+    );
 }
 
 #[test]
@@ -859,7 +862,10 @@ fn il_budget_di_memoria_legacy_e_globale_e_include_il_picco() {
         envelope["error"]["category"], "resource_limit",
         "{envelope}"
     );
-    assert!(!uscita.exists(), "nessun output da un budget superato");
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output da un budget superato"
+    );
 }
 
 #[test]
@@ -923,7 +929,10 @@ fn il_budget_legacy_e_globale_anche_fra_i_due_lati_di_un_piano_binario() {
         envelope["error"]["category"], "resource_limit",
         "{envelope}"
     );
-    assert!(!uscita.exists(), "nessun output da un budget superato");
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output da un budget superato"
+    );
 }
 
 #[test]
@@ -1081,7 +1090,10 @@ fn il_budget_di_memoria_legacy_copre_anche_l_esecuzione() {
         !messaggio.contains("l'input materializzato"),
         "i due input entrano nel budget: il limite arriva dopo, {envelope}"
     );
-    assert!(!uscita.exists(), "nessun output da un budget superato");
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output da un budget superato"
+    );
 }
 
 #[test]
@@ -1124,7 +1136,10 @@ fn lo_stesso_piano_riesce_quando_il_budget_copre_anche_l_output() {
         "con 4 MiB di budget lo stesso piano deve riuscire: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert!(uscita.exists(), "l'output dev'essere stato pubblicato");
+    assert!(
+        uscita.try_exists().expect("stat"),
+        "l'output dev'essere stato pubblicato"
+    );
 }
 
 /// Input a tre colonne per i piani `melt`: `id` piu' due colonne valore.
