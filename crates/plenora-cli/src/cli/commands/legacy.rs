@@ -231,7 +231,11 @@ pub fn run_pipeline(
     right_path: Option<&Path>,
     output_path: &Path,
 ) -> Result<EsitoDellaPubblicazione, PlenoraError> {
-    if output_path.exists() {
+    // Una destinazione che non si lascia osservare non e' libera.
+    if output_path
+        .try_exists()
+        .map_err(plenora_core::PlenoraError::Io)?
+    {
         return Err(contract(format!(
             "output gia' esistente, rifiuto di sovrascriverlo: {}",
             output_path.display()

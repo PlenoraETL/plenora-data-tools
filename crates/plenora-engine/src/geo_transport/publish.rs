@@ -513,7 +513,12 @@ pub fn publish_with_profile<T>(
     profile: PublishProfile,
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
 ) -> Result<(T, EsitoDellaPubblicazione), PlenoraError> {
-    if output_path.exists() {
+    // `try_exists`, non `exists`: una destinazione che non si lascia
+    // osservare non e' una destinazione libera, e l'errore lo dice.
+    if output_path
+        .try_exists()
+        .map_err(|error| io_at(ErrorPhase::Probe, error))?
+    {
         // Check no-clobber al confine di commit
         // (errori-e-limiti.md#publish-e-cleanup, ICD §9): e' la precondizione
         // del rename atomico, non validazione del piano.
@@ -532,8 +537,15 @@ pub fn publish_with_profile<T>(
         return Err(conflitto_sulla_destinazione(output_path));
     }
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.is_dir() {
-        // Riconoscimento preliminare della destinazione: fase Probe.
+    // Riconoscimento preliminare della destinazione: fase Probe. Solo «non
+    // esiste» e «non e' una directory» sono del piano; una directory che non si
+    // lascia osservare e' un errore di I/O, non una directory inesistente.
+    let e_una_directory = match std::fs::metadata(parent) {
+        Ok(metadata) => metadata.is_dir(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(io_at(ErrorPhase::Probe, error)),
+    };
+    if !e_una_directory {
         return Err(PlenoraError::InvalidPlan(format!(
             "directory output inesistente: {}",
             parent.display()
@@ -864,7 +876,7 @@ mod tests {
         });
         assert!(matches!(result, Err(PlenoraError::Io(_))));
         assert!(
-            !destination.exists(),
+            !destination.try_exists().expect("stat"),
             "nessun file visibile alla destinazione"
         );
         // Il tempfile `.partial` e' ripulito dal Drop: directory vuota.
@@ -1091,6 +1103,9 @@ mod tests {
             "{error}"
         );
         assert!(matches!(error.untag(), PlenoraError::Unsupported(_)));
-        assert!(!destination.exists(), "nessuna pubblicazione parziale");
+        assert!(
+            !destination.try_exists().expect("stat"),
+            "nessuna pubblicazione parziale"
+        );
     }
 }
