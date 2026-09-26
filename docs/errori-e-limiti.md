@@ -1842,6 +1842,30 @@ JSON di controllo del progetto.
 **Condizione di rientro.** Il giorno che `serde_json` smetta di riservare quel
 nome, o offra un lettore che non lo reinterpreta.
 
+### Il WKT è tutto il testo
+
+**La regola.** `construction::geometry_from_wkt` rifiuta con `InvalidWkt` un
+testo che contiene un carattere NUL, o che dopo la geometria di primo livello
+ha qualcosa di diverso dallo spazio bianco: dopo la parentesi che chiude la
+prima aperta, oppure dopo `EMPTY`.
+
+**Perché.** Il parser di `wkt` 0.14 si ferma alla fine della geometria e non
+guarda il resto, e il suo tokenizer tratta `\0` come fine dell'ingresso:
+`POINT(1 2) garbage`, `POINT(1 2))` e `POINT(1 2)\0resto` diventavano tutti
+`POINT(1 2)` senza errore. Un testo che dice di più di quel che viene letto è
+malformato, e accettarlo scarta una parte dell'ingresso in silenzio.
+
+**Esattezza.** Il WKT non ha stringhe né commenti: le parentesi sono solo
+strutturali, e la fine della geometria si trova contandole. Lo spazio bianco
+ammesso è quello del tokenizer: spazio, tabulazione, `\n`, `\r`.
+
+**Che cosa cambia per chi legge.** Un testo con una coda, che prima passava, è
+rifiutato. Il perimetro è la sola funzione: è l'unico punto del prodotto che
+analizza WKT.
+
+**La condizione di rientro.** Un parser WKT che rifiuti da sé i token dopo la
+geometria e non tronchi al NUL.
+
 ### La validazione OGC sta dietro una barriera
 
 **La regola.** Nessun sito di `plenora-kernels-geo` chiama `check_validation` di
