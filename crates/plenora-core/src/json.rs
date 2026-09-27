@@ -1,70 +1,20 @@
 //! Lettura fail-closed del JSON di controllo.
 //!
-//! `serde_json` risolve le chiavi duplicate di un oggetto con la regola
-//! «vince l'ultima»: `{"a": 1, "a": 2}` diventa `{"a": 2}` senza che nulla lo
-//! segnali. Per i dati e' una tolleranza ragionevole; per il JSON di
-//! CONTROLLO — piani, config dei nodi, metadati contrattuali — non lo e':
+//! `serde_json` risolve le chiavi duplicate con «vince l'ultima». Per il JSON
+//! di controllo (piani, config dei nodi, metadati contrattuali) e' un
+//! pericolo: il piano eseguito puo' non essere quello scritto, e poiche' la
+//! risoluzione precede validazione e `plan_hash`, due testi diversi danno lo
+//! stesso hash. [`ensure_no_duplicate_keys`] rifiuta il documento invece di
+//! scegliere.
 //!
-//! - la chiave scartata puo' essere quella che l'autore intende, e il piano
-//!   eseguito non e' quello scritto;
-//! - la risoluzione avviene PRIMA della validazione e prima del `plan_hash`,
-//!   quindi due testi diversi producono lo stesso piano canonico e lo stesso
-//!   hash: la firma non distingue piu' l'input che l'ha prodotta.
-//!
-//! [`ensure_no_duplicate_keys`] rifiuta il documento invece di scegliere.
-//!
-//! # La chiave riservata di `serde_json`
-//!
-//! La stessa passata rifiuta una seconda ambiguita', della stessa specie e
-//! peggiore. `serde_json` riserva la chiave `$serde_json::private::RawValue`
-//! per trasportare JSON grezzo: quando e' la **prima** chiave di un oggetto,
-//! `serde_json::from_str::<Value>` non la legge come una chiave.
-//!
-//! Se il valore non e' una stringa, **fallisce**:
-//!
-//! ```text
-//! {"$serde_json::private::RawValue": 3}
-//!   -> invalid type: integer `3`, expected raw value
-//! ```
-//!
-//! Se il valore e' una stringa di JSON valido, e' peggio: **riesce**, e rende
-//! un documento diverso da quello scritto.
-//!
-//! ```text
-//! {"$serde_json::private::RawValue": "{\"schema_version\":4}"}
-//!   -> {"schema_version": 4}
-//! ```
-//!
-//! Il testo letterale e' un oggetto con una chiave e un valore stringa; il
-//! documento che il lettore ottiene e' un altro. E' la stessa perdita della
-//! chiave duplicata portata all'estremo — il piano eseguito non e' quello
-//! scritto — con in piu' un effetto che il solo controllo dei duplicati non
-//! chiude: **il contrabbando lo aggira**, perche' la passata vede un oggetto
-//! con una chiave sola mentre il documento effettivo ne ha due uguali.
-//!
-//! # E' una restrizione del contratto, non una correzione a costo zero
-//!
-//! Il rifiuto **toglie qualcosa**: un documento con quella chiave in seconda
-//! posizione, o annidata dove nessuna riscrittura la riordina, non e' ambiguo
-//! per nessun lettore, e da qui in avanti e' respinto lo stesso. Chi lo scrive
-//! riceve un errore al posto di un piano valido.
-//!
-//! Si restringe lo stesso, perche' la posizione non e' una proprieta' stabile
-//! del documento: la canonicalizzazione riordina le chiavi e `$` precede ogni
-//! lettera, quindi una chiave innocua diventa la prima del testo canonico. Un
-//! rifiuto ristretto alla sola prima posizione ammetterebbe documenti che il
-//! progetto stesso rende poi illeggibili — e lascerebbe aperto il
-//! contrabbando, che vive proprio in prima posizione.
-//!
-//! **Perimetro**: la chiave, a ogni posizione e profondita', in ogni documento
-//! JSON di controllo. Come **valore** stringa e' testo qualunque e passa.
-//! **Condizione di rientro**: il giorno che `serde_json` smetta di riservare
-//! quel nome, o offra un lettore che non lo reinterpreta, la restrizione non
-//! ha piu' ragione.
-//!
-//! L'escape non e' una via d'uscita: `serde_json` decodifica `\u0024` prima di
-//! consegnare la chiave, quindi `"\u0024serde_json..."` e' la stessa chiave e
-//! riceve lo stesso rifiuto.
+//! La stessa passata rifiuta la chiave riservata
+//! `$serde_json::private::RawValue`, a ogni posizione e profondita' e anche
+//! scritta con escape: in prima posizione `serde_json` la reinterpreta come
+//! JSON grezzo e puo' rendere un documento diverso da quello scritto,
+//! aggirando il controllo dei duplicati. E' una restrizione del contratto,
+//! con regola, perimetro e condizione di rientro in errori-e-limiti.md
+//! («Una chiave riservata di `serde_json` non è ammessa nel JSON di
+//! controllo»).
 
 use std::collections::HashSet;
 use std::fmt;
@@ -78,10 +28,8 @@ use crate::error::{PlenoraError, Result};
 /// La visita non costruisce nulla: attraversa il documento e tiene per ogni
 /// oggetto il solo insieme delle sue chiavi.
 ///
-/// Un documento sintatticamente INVALIDO non e' un errore per questa
-/// funzione: risponde a una sola domanda — ci sono chiavi ripetute? — e
-/// lascia che sia la deserializzazione vera a segnalare la sintassi, che ha
-/// il contesto per classificarla nella categoria giusta.
+/// Un documento sintatticamente invalido non e' un errore qui: la sintassi
+/// la segnala la deserializzazione vera, che sa classificarla.
 ///
 /// # Errors
 ///
@@ -235,12 +183,9 @@ mod tests {
 
     /// **La chiave riservata di `serde_json` e' rifiutata a ogni posizione.**
     ///
-    /// Non solo in prima posizione, che e' l'unica in cui
-    /// `serde_json` la reinterpreta: una riscrittura canonica riordina le
-    /// chiavi, e `$` viene prima di ogni lettera, quindi una chiave innocua in
-    /// seconda posizione diventa la prima del testo canonico. Restringere il
-    /// rifiuto alla sola prima posizione lascerebbe passare proprio il
-    /// documento che la canonicalizzazione rende illeggibile.
+    /// La canonicalizzazione riordina le chiavi e `$` precede ogni lettera,
+    /// quindi una chiave in seconda posizione diventa la prima del testo
+    /// canonico, l'unica che `serde_json` reinterpreta.
     #[test]
     fn la_chiave_riservata_e_rifiutata_a_ogni_posizione() {
         for testo in [
@@ -259,12 +204,9 @@ mod tests {
 
     /// **L'escape Unicode non e' una via d'uscita.**
     ///
-    /// `serde_json` decodifica gli escape prima di consegnare la chiave al
-    /// visitatore, quindi il confronto avviene sul nome decodificato. Un
-    /// rifiuto che cercasse la sequenza nel testo grezzo si farebbe aggirare
-    /// scrivendo un solo carattere in `\u0024xxxx`, e non e' teoria: `serde_json`
-    /// riconosce la chiave anche cosi', quindi il documento resterebbe
-    /// illeggibile mentre il confine lo dichiara buono.
+    /// `serde_json` decodifica gli escape prima di consegnare la chiave, e
+    /// riconosce la chiave riservata anche scritta come `\u0024...`: il
+    /// confronto avviene quindi sul nome decodificato.
     #[test]
     fn l_escape_unicode_non_aggira_il_rifiuto() {
         for testo in [
@@ -297,12 +239,9 @@ mod tests {
 
     /// **Il contrabbando di un documento diverso e' rifiutato.**
     ///
-    /// E' il verso peggiore, perche' non fallisce: `serde_json` **riesce** e
-    /// rende il documento contenuto nella stringa. Il testo letterale ha una
-    /// chiave sola, quindi il controllo dei duplicati non vede niente, mentre
-    /// il documento effettivo ne ha due uguali e le risolve con «vince
-    /// l'ultima». Senza questo rifiuto, il contrabbando aggira il controllo
-    /// che esiste apposta per quell'ambiguita'.
+    /// `serde_json` **riesce** e rende il documento contenuto nella stringa:
+    /// il testo letterale ha una chiave sola, il documento effettivo due
+    /// uguali, e il controllo dei duplicati verrebbe aggirato.
     #[test]
     fn il_contrabbando_non_aggira_il_controllo_dei_duplicati() {
         let contrabbando =

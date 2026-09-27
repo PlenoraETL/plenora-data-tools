@@ -1,21 +1,16 @@
 //! Contratti dati del grafo (architettura.md, decisioni D6, D16,
 //! D25; architettura.md#determinismo, architettura.md#planner-ed-executor).
 //!
-//! Qui vivono i tipi che descrivono ciò che scorre sugli archi del DAG
-//! (`DataContract`), l'identità logica stabile delle colonne
-//! (`FieldId`), la provenienza e lo scope delle proprietà
-//! (`PropertyConfidence`/`PropertyScope`/`ContractProperty`), le statistiche di
-//! runtime (`RuntimeStatistic`) e la sequenza logica dei batch
-//! (`BatchSequence`).
+//! I tipi che descrivono cio' che scorre sugli archi del DAG: il
+//! `DataContract`, l'identita' stabile delle colonne (`FieldId`), provenienza
+//! e scope delle proprieta', le statistiche di runtime e la sequenza logica
+//! dei batch (`BatchSequence`).
 //!
-//! Struttura aperta, comportamento chiuso: il modello ammette più colonne
-//! geometriche e una geometria attiva, ma in v1 [`DataContract::validate`]
-//! rifiuta contratti con più di una geometria (decisione D16).
-//!
-//! La type-safety avanzata sulle combinazioni confidence/scope prive di senso
-//! (es. `Proven` + scope `Schema` per proprietà dataset-wide, architettura.md#planner-ed-executor) è
-//! deliberatamente rimandata: la rappresentazione v1 è la coppia semplice
-//! `ContractProperty<T> { confidence, scope }`.
+//! Struttura aperta, comportamento chiuso: il modello ammette piu' colonne
+//! geometriche, ma [`DataContract::validate`] ne rifiuta piu' di una (D16).
+//! Le combinazioni confidence/scope prive di senso non sono escluse dai
+//! tipi: la rappresentazione e' la coppia `ContractProperty<T> { confidence,
+//! scope }`.
 
 pub mod arrow_metadata;
 pub mod arrow_schema;
@@ -48,15 +43,11 @@ impl fmt::Display for FieldId {
 
 /// Dimensionalità delle geometrie di una colonna (ICD §3.3).
 ///
-/// Il contratto rappresenta e propaga la dimensionalità, NON la elabora.
-/// Serializzazione ICD: `"xy"`, `"xyz"`, `"xym"`, `"xyzm"`, `"unknown"`
-/// (minuscola).
+/// Il contratto rappresenta e propaga la dimensionalita', non la elabora.
 ///
-/// `Unknown` significa «byte preservati, dimensionalità non risolta» e NON
-/// deve mai essere mappato a [`GeometryDimensions::Xy`] (regola R3.4): chi
-/// legge metadati privi di dimensionalità ottiene `Unknown`, mai un default
-/// silenzioso. Trattare `Unknown` come `Xy` nasconderebbe geometrie Z/M
-/// dietro un contratto 2D: errore di semantica, non semplificazione.
+/// `Unknown` significa «byte preservati, dimensionalita' non risolta» e non
+/// va mai mappato a [`GeometryDimensions::Xy`] (R3.4): nasconderebbe
+/// geometrie Z/M dietro un contratto 2D.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GeometryDimensions {
@@ -140,12 +131,9 @@ impl std::str::FromStr for GeometryDimensions {
 /// Framing binario delle celle geometria (ICD §3.3, regola R3.5: enum
 /// chiuso).
 ///
-/// Solo WKB ISO ed EWKB (estensione `PostGIS` con SRID/flag Z/M) sono
-/// rappresentabili. Altri framing — header `GeoPackage`, TWKB, … — NON sono
-/// rappresentabili: la discovery deve rifiutarli con errore esplicito, mai
-/// mapparli a un encoding noto.
-///
-/// Serializzazione ICD: `"wkb"`, `"ewkb"` (minuscola).
+/// Solo WKB ISO ed EWKB (`PostGIS`, con SRID/flag Z/M): altri framing
+/// (`GeoPackage`, TWKB, …) la discovery li rifiuta, mai mappati a un encoding
+/// noto.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GeometryEncoding {
@@ -200,20 +188,14 @@ impl std::str::FromStr for GeometryEncoding {
 
 /// Tipo geometrico canonico di una colonna (ICD §3.1, regola R3.1).
 ///
-/// Enum chiuso dei sedici tipi canonici, serializzati in minuscolo SENZA
-/// separatore (`point`, `linestring`, …): la forma coincide con quella dei
-/// sistemi esterni (`PostGIS`, `GeoPackage`, OGC WKT usano `LINESTRING`,
-/// `MULTIPOLYGON`), cosi' nessuna traduzione — e nessun punto di perdita di
-/// informazione — e' richiesta ai confini.
+/// Serializzati in minuscolo senza separatore (`linestring`), come i sistemi
+/// esterni (`PostGIS`, `GeoPackage`, WKT): ai confini non serve traduzione.
+/// Un componente puo' supportarne un sottoinsieme, ma rifiuta esplicitamente
+/// gli altri (R3.2).
 ///
-/// R3.2: un componente PUO' supportare un sottoinsieme dei tipi, ma DEVE
-/// rifiutare esplicitamente quelli che non supporta — mai degradarli,
-/// approssimarli o ignorarli in silenzio.
-///
-/// INVARIANTE: l'ordine di dichiarazione delle varianti E' l'ordine
-/// canonico di §3.1. `Ord` deriva da tale ordine e la serializzazione
-/// canonica delle liste di tipi (R3.4.1, vedi [`GeometryTypesProperty`])
-/// dipende da esso: non riordinare le varianti.
+/// INVARIANTE: l'ordine delle varianti e' l'ordine canonico di §3.1. `Ord`
+/// ne deriva e la serializzazione canonica delle liste di tipi (R3.4.1,
+/// [`GeometryTypesProperty`]) ne dipende: non riordinare le varianti.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GeometryType {
@@ -264,17 +246,9 @@ impl GeometryType {
     /// Mappa il type code WKB base ISO (senza la serie dimensionale 1000+
     /// ne' i flag EWKB, gia' estratti dal chiamante) al tipo canonico.
     ///
-    /// Codici: 1..=7 i sette tipi base, 8 `circularstring`,
-    /// 9 `compoundcurve`, 10 `curvepolygon`, 11 `multicurve`,
-    /// 12 `multisurface`, 15 `polyhedralsurface`, 16 `tin`, 17 `triangle`.
-    ///
-    /// Restituisce `None` per 13 e 14 (`curve`/`surface`, tipi ASTRATTI
-    /// non istanziabili: non compaiono mai come type code di una geometria
-    /// concreta sul filo) e per qualunque altro codice (0, 18+, code con
-    /// serie dimensionale non estratta). La scelta del rifiuto spetta al
-    /// chiamante (R3.2: rifiuto esplicito, mai degradazione) — coerente
-    /// con `parse_wkb_type_code` di `plenora-kernels-geo`, che oggi
-    /// supporta solo 1..=7 e rifiuta esplicitamente il resto.
+    /// Restituisce `None` per 13 e 14 (`curve`/`surface`, astratti, mai sul
+    /// filo) e per ogni codice sconosciuto: il rifiuto spetta al chiamante
+    /// (R3.2).
     #[must_use]
     pub const fn from_wkb_base_type(code: u32) -> Option<Self> {
         match code {
@@ -350,21 +324,14 @@ impl std::str::FromStr for GeometryType {
 /// Stato di dichiarazione dei tipi geometrici di una colonna (ICD R3.4.1,
 /// chiave canonica `plenora.geometry.types_declaration`).
 ///
-/// Tre stati che nella 1.x collassano in `unknown`:
+/// `Mixed` significa tipi diversi **per dichiarazione** (per esempio una
+/// colonna `PostGIS` `geometry` senza vincolo): e' informazione, non
+/// ignoranza. `Unresolved` significa byte non ispezionati e nessuna
+/// dichiarazione.
 ///
-/// - `Exact`: l'insieme dei tipi presenti e' noto ed e' quello elencato;
-/// - `Mixed`: la colonna ammette tipi diversi PER DICHIARAZIONE (es. una
-///   colonna `PostGIS` `geometry` senza vincolo): e' informazione, non
-///   ignoranza;
-/// - `Unresolved`: i byte non sono stati ispezionati e nessuna
-///   dichiarazione e' disponibile.
-///
-/// R3.4.1 vieta le conversioni `mixed` ↔ `unresolved`. Un input legacy
-/// privo di entrambe le chiavi `types`/`types_declaration` NON e'
-/// `Unresolved`: significa «proprieta' non dichiarata» e va preservato o
-/// normalizzato con un `LossReport`, mai interpretato come `unresolved`.
-///
-/// Serializzazione ICD: `"exact"`, `"mixed"`, `"unresolved"` (minuscola).
+/// R3.4.1 vieta le conversioni `mixed` ↔ `unresolved`. Un input legacy senza
+/// le chiavi `types`/`types_declaration` non e' `Unresolved` ma «proprieta'
+/// non dichiarata»: si preserva o si normalizza con un `LossReport`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TypesDeclaration {
@@ -469,25 +436,17 @@ impl std::error::Error for GeometryTypesPropertyError {}
 /// Coppia coerente (`types_declaration`, `types`) delle chiavi canoniche
 /// R2.2/R3.4.1 per una colonna geometrica.
 ///
-/// Le coerenze di R3.4.1 sono imposte per costruzione — campi privati,
-/// unico ingresso [`GeometryTypesProperty::new`]:
+/// Le coerenze di R3.4.1 sono imposte per costruzione (campi privati, unico
+/// ingresso [`GeometryTypesProperty::new`]): `Exact` richiede un elenco non
+/// vuoto, `Unresolved` lo vieta, `Mixed` lo ammette (vuoto conta come
+/// assente).
 ///
-/// - `Exact` richiede un elenco presente e non vuoto;
-/// - `Unresolved` vieta l'elenco (errore se presente);
-/// - `Mixed` ammette elenco assente o non vuoto (un elenco vuoto NON e'
-///   distinguibile dall'assenza e conta come assente).
+/// `new` normalizza l'elenco, cosi' una dichiarazione ha una sola
+/// serializzazione; il parsing ([`GeometryTypesProperty::from_canonical_list`])
+/// e' invece fail-closed su spazi, duplicati e ordine non canonico.
 ///
-/// `new` normalizza l'elenco (valori unici, ordine canonico §3.1) cosi'
-/// una stessa dichiarazione ha una sola serializzazione
-/// ([`GeometryTypesProperty::to_canonical_list`]). Il parsing testuale
-/// ([`GeometryTypesProperty::from_canonical_list`]) e' invece fail-closed:
-/// spazi, duplicati e ordine non canonico sono errori, mai correzioni
-/// silenziose — un produttore conforme non li emette.
-///
-/// Nessuna derivazione serde: la forma sul filo e' la coppia di chiavi di
-/// metadati R2.2 (`types_declaration` + lista canonica), non una
-/// serializzazione di struct, e una `Deserialize` derivata bypasserebbe il
-/// validatore.
+/// Niente serde derivato: sul filo c'e' la coppia di chiavi R2.2, e una
+/// `Deserialize` derivata aggirerebbe il validatore.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GeometryTypesProperty {
     declaration: TypesDeclaration,
@@ -895,48 +854,29 @@ impl std::str::FromStr for GeometryPrecision {
 }
 
 /// CRS di una colonna geometrica nel contratto (R4.1: gli stati di
-/// risoluzione non si collassano nel modello interno; R4.4: mai un CRS
-/// inventato — `Missing` non porta dati).
+/// risoluzione non si collassano; R4.4: mai un CRS inventato).
 ///
-/// - [`ContractCrs::Resolved`]: definizione risolta contro il database PROJ
-///   dalla discovery (solo una risoluzione produce questo valore);
-/// - [`ContractCrs::ResolvedByDecision`]: come `Resolved` (definizione
-///   risolta contro PROJ, gli stessi consumatori), ma la risoluzione e'
-///   l'effetto di una DECISIONE ESPLICITA DEL PIANO (R4.6.3, campo v4
-///   `crs_decisions`) su uno stato `DeclaredUnresolved` — non di una
-///   dichiarazione della sorgente. La distinzione serve all'emissione: le
-///   dichiarazioni in conflitto della sorgente (chiavi canoniche CRS e
-///   `geo.crs` legacy nei metadati di campo) sono sostituite dal CRS
-///   deciso, non propagate accanto ad esso; ovunque altro (gate delle op,
-///   fingerprint, riepiloghi) il valore e' un CRS risolto a tutti gli
-///   effetti;
-/// - [`ContractCrs::DeclaredUnresolved`]: il CRS c'e' ma non si risolve —
-///   il produttore dichiara `declared_unresolved`, oppure le
-///   rappresentazioni dichiarate sono in conflitto decidibile. R4.6.3: in
-///   assenza di una decisione esplicita nel piano il centro PROPAGA
-///   l'incoerenza senza risolverla (mai una scelta silenziosa) e senza
-///   pretendere un CRS risolvibile per operazioni che non lo richiedono;
-///   R4.6.4: l'incoerenza arriva al bordo di scrittura con le dichiarazioni
-///   ORIGINALI ri-emesse invariate (mai una persa, mai una inventata) —
-///   per questo la variante porta `crs_id` e `definition` con il suo
-///   formato (R4.3: una definizione senza discriminatore non e'
-///   interpretabile). Lo `srid` non entra nella variante: non e' una
-///   definizione risolvibile dal centro e viaggia come chiave di lineage
-///   nei metadati di campo (R2.4). Invariante di costruzione (imposta
-///   dalla discovery): almeno uno fra `crs_id` e `definition` e' presente
-///   — `declared_unresolved` senza rappresentazioni e' una contraddizione
-///   R4.1 e resta un errore;
-/// - [`ContractCrs::Missing`]: nessun CRS dichiarato in alcuna
-///   rappresentazione accettata. R4.6.3: la discovery non puo' pretendere un
-///   CRS risolvibile per operazioni che non lo richiedono — lo stato entra
-///   nel contratto, si propaga invariato negli output (R4.6.4, emesso come
-///   `plenora.geometry.crs_resolution = missing`) e ferma solo le op che
-///   dichiarano un `CrsRequirement`, in analyze (mai a meta' stream).
+/// - [`ContractCrs::Resolved`]: definizione risolta contro PROJ dalla
+///   discovery;
+/// - [`ContractCrs::ResolvedByDecision`]: risolta allo stesso modo, ma per
+///   una decisione esplicita del piano (R4.6.3, `crs_decisions`) su uno stato
+///   `DeclaredUnresolved`. Conta per l'emissione, dove il CRS deciso
+///   sostituisce le dichiarazioni in conflitto della sorgente; altrove e' un
+///   CRS risolto a tutti gli effetti;
+/// - [`ContractCrs::DeclaredUnresolved`]: il CRS c'e' ma non si risolve
+///   (dichiarato cosi', o dichiarazioni in conflitto). Senza decisione del
+///   piano l'incoerenza si propaga (R4.6.3) e arriva al bordo di scrittura con
+///   le dichiarazioni originali (R4.6.4): per questo la variante porta
+///   `crs_id` e `definition` col suo formato (R4.3). Lo `srid` viaggia come
+///   lineage nei metadati (R2.4). Invariante della discovery: almeno uno fra
+///   `crs_id` e `definition` e' presente (R4.1);
+/// - [`ContractCrs::Missing`]: nessun CRS dichiarato. Si propaga negli
+///   output (`plenora.geometry.crs_resolution = missing`) e ferma solo le op
+///   con un `CrsRequirement`, in analyze.
 ///
-/// `DeclaredUnresolved` ferma le op con `CrsRequirement` come `Missing`,
-/// nello stesso punto (analyze, compile-plan) e con la stessa categoria
-/// (`Crs`), ma con un messaggio distinto: la colonna DICHIARA
-/// un'incoerenza, non un'assenza.
+/// `DeclaredUnresolved` ferma le stesse op nello stesso punto e con la
+/// stessa categoria (`Crs`) di `Missing`, ma con un messaggio distinto: la
+/// colonna dichiara un'incoerenza, non un'assenza.
 #[derive(Clone, Debug)]
 pub enum ContractCrs {
     Resolved(ResolvedCrs),
@@ -1004,26 +944,18 @@ pub struct GeometryColumnContract {
     /// `plenora.geometry.types` + `plenora.geometry.types_declaration`,
     /// R2.2/R3.4.1).
     ///
-    /// DEFAULT per i costruttori esistenti:
-    /// [`GeometryColumnContract::undeclared_types`] — confidence `Unknown`,
-    /// cioe' «proprieta' non dichiarata». Attenzione alla distinzione di
-    /// R3.4.1: un input legacy privo di entrambe le chiavi NON e'
-    /// `TypesDeclaration::Unresolved`. `Unresolved` e' una dichiarazione
-    /// esplicita del produttore («byte non ispezionati»); il legacy
-    /// assente va preservato o normalizzato con un `LossReport`, mai
-    /// interpretato come `unresolved` (ne' convertito in/da `mixed`).
+    /// Default: [`GeometryColumnContract::undeclared_types`], cioe'
+    /// «proprieta' non dichiarata», distinta da `TypesDeclaration::Unresolved`
+    /// (vedi [`TypesDeclaration`]).
     pub types: ContractProperty<GeometryTypesProperty>,
 }
 
 impl GeometryColumnContract {
     /// Default del campo `types` per i contratti costruiti senza ispezione
-    /// dei tipi: proprieta' NON dichiarata (confidence `Unknown`, scope
+    /// dei tipi: proprieta' non dichiarata (confidence `Unknown`, scope
     /// `Schema`).
     ///
-    /// NON equivale a `Declared(TypesDeclaration::Unresolved)`: per
-    /// R3.4.1 l'assenza delle chiavi in un ingresso legacy significa
-    /// «proprieta' non dichiarata», uno stato distinto da `unresolved` che
-    /// va preservato o normalizzato con un `LossReport`.
+    /// Non equivale a `Declared(TypesDeclaration::Unresolved)` (R3.4.1).
     #[must_use]
     pub const fn undeclared_types() -> ContractProperty<GeometryTypesProperty> {
         ContractProperty::new(PropertyConfidence::Unknown, PropertyScope::Schema)
@@ -1032,24 +964,17 @@ impl GeometryColumnContract {
 
 /// Assegnatore di [`FieldId`] nel namespace globale del grafo (decisione D16).
 ///
-/// Il namespace degli ID è quello di **un grafo**: grafi distinti hanno
-/// legittimamente allocatori distinti. Dentro un grafo, invece, l'allocatore
-/// dev'essere uno solo, condiviso dal planner e dai moduli
-/// `analyze_contract` di tutte le famiglie di kernel — due allocatori non
-/// coordinati sullo stesso grafo assegnerebbero gli stessi ID a colonne
-/// diverse, e l'identità smetterebbe di distinguerle.
-/// Il planner crea quindi un unico allocatore per l'analisi dell'intero grafo e
-/// rimappa i `FieldId` delle geometrie di input con [`FieldAllocator::alloc`]
-/// (senza legare i nomi: due input possono avere colonne omonime);
-/// [`FieldAllocator::observe`] e' chiamato dai moduli `analyze_contract` per
-/// registrare gli ID gia' presenti nei contratti di input di ciascun nodo ed
-/// evitare collisioni con i futuri [`FieldAllocator::alloc`]; le colonne
-/// propagate mantengono l'ID di input; quelle derivate
-/// ([`FieldAllocator::derive`]) ne ricevono uno nuovo; le rinomine spostano
-/// l'identità ([`FieldAllocator::rename`]). L'interning per nome
-/// ([`FieldAllocator::intern`]) rende stabile l'ID di una colonna visibile
-/// tra nodi analizzati con lo stesso allocatore (usato per le chiavi
-/// `sorted_by`).
+/// Dentro un grafo l'allocatore e' uno solo, condiviso da planner e moduli
+/// `analyze_contract`: due allocatori non coordinati darebbero lo stesso ID a
+/// colonne diverse.
+///
+/// Il planner rimappa le geometrie di input con [`FieldAllocator::alloc`]
+/// (senza legare i nomi: gli input possono avere colonne omonime);
+/// [`FieldAllocator::observe`] registra gli ID gia' presenti negli input di un
+/// nodo. Le colonne propagate tengono l'ID, le derivate
+/// ([`FieldAllocator::derive`]) ne ricevono uno nuovo, le rinomine lo spostano
+/// ([`FieldAllocator::rename`]); [`FieldAllocator::intern`] rende stabile
+/// l'ID di una colonna per nome (chiavi `sorted_by`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FieldAllocator {
     next: u32,
@@ -1072,12 +997,8 @@ impl FieldAllocator {
     /// # Errors
     ///
     /// `PlenoraError::InvalidPlan` quando lo spazio degli identificatori e'
-    /// esaurito. Con un incremento saturante, arrivato a `u32::MAX`
-    /// l'allocatore renderebbe ripetutamente LO STESSO id, e la garanzia di
-    /// freschezza — su cui poggia l'identita' delle colonne nel grafo (D16) —
-    /// cadrebbe in silenzio, con due colonne diverse a condividere
-    /// identita'. Meglio un piano rifiutato che un grafo con identita'
-    /// ambigue.
+    /// esaurito: un incremento saturante renderebbe lo stesso id due volte, e
+    /// due colonne condividerebbero l'identita' (D16).
     pub fn alloc(&mut self) -> Result<FieldId> {
         let id = FieldId(self.next);
         self.next = self.next.checked_add(1).ok_or_else(|| {
@@ -1217,8 +1138,8 @@ impl<T> ContractProperty<T> {
     }
 }
 
-/// Proprietà tipizzate del contratto, v1 minimale (non un framework generico:
-/// nuove proprietà si aggiungono come campi tipizzati).
+/// Proprietà tipizzate del contratto: non un framework generico, le nuove
+/// proprietà si aggiungono come campi tipizzati.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ContractProperties {
     /// Chiavi di ordinamento dichiarate/dimostrate, come `FieldId` nel
@@ -1236,7 +1157,7 @@ pub struct ContractProperties {
 #[derive(Clone, Debug)]
 pub struct DataContract {
     pub schema: SchemaRef,
-    /// v1: al massimo una colonna geometrica (validato, decisione D16).
+    /// Al massimo una colonna geometrica (validato, decisione D16).
     pub geometries: Vec<GeometryColumnContract>,
     pub active_geometry: Option<FieldId>,
     pub properties: ContractProperties,
@@ -1278,22 +1199,16 @@ impl DataContract {
 
     /// Validazione strutturale del contratto.
     ///
-    /// Regole v1:
-    ///
-    /// - i nomi dei campi dello schema sono univoci — senza questo controllo
-    ///   `field_with_name` risolve al primo omonimo e il contratto puo'
-    ///   descrivere una colonna diversa da quella che verra' letta;
+    /// - nomi dei campi univoci (altrimenti `field_with_name` risolve al primo
+    ///   omonimo);
     /// - al massimo una colonna geometrica (D16);
     /// - ogni colonna geometrica esiste nello schema con lo stesso nome, la
-    ///   stessa nullability e **tipo fisico `Binary`** — il framing WKB/EWKB
-    ///   e' un vettore di byte, e ogni lettore della geometria fa `downcast`
-    ///   a `BinaryArray`: senza questo controllo un contratto che dichiara
-    ///   geometrica una colonna di tipo diverso passerebbe il dry-run e
-    ///   fallirebbe a runtime;
-    /// - se sia il contratto sia i metadati canonici della colonna dichiarano
-    ///   i tipi geometrici, le due dichiarazioni devono coincidere;
-    /// - `active_geometry`, se presente, riferisce una delle colonne
-    ///   geometriche dichiarate.
+    ///   stessa nullability e tipo fisico `Binary`, che ogni lettore della
+    ///   geometria presuppone;
+    /// - se contratto e metadati canonici dichiarano entrambi i tipi
+    ///   geometrici, coincidono;
+    /// - `active_geometry`, se presente, riferisce una colonna geometrica
+    ///   dichiarata.
     ///
     /// # Errors
     ///
@@ -1382,20 +1297,11 @@ pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str = "plenora.geometry.crs_reso
 /// Coerenza fra la proprieta' tipizzata `types` del contratto e i metadati
 /// canonici della colonna.
 ///
-/// Due controlli distinti, che non vanno confusi:
-///
-/// 1. **Validita' sintattica di ogni chiave presente.** Una chiave canonica
-///    che c'e' dev'essere leggibile, indipendentemente da cosa dichiari il
-///    contratto: «assente» e «presente ma malformata» sono stati diversi, e
-///    saltare il parsing quando il lato tipizzato tace lascerebbe passare
-///    `encoding = "twkb"` o un elenco di tipi fuori ordine.
-/// 2. **Coerenza fra le due fonti.** Qui il confronto scatta solo quando
-///    ENTRAMBE dichiarano qualcosa: un contratto senza dichiarazione resta
-///    legittimo (R3.4.1: «non dichiarato» e' uno stato, non un'assenza da
-///    colmare) e cosi' pure una colonna senza chiavi canoniche. Quando
-///    entrambe parlano e si contraddicono, il contratto e' incoerente e va
-///    rifiutato subito: e' il caso in cui il dry-run accetterebbe un
-///    contratto che a runtime leggerebbe altro.
+/// 1. Ogni chiave canonica presente dev'essere leggibile, qualunque cosa
+///    dichiari il contratto: «presente ma malformata» non e' «assente».
+/// 2. Le due fonti si confrontano solo quando entrambe dichiarano qualcosa
+///    (R3.4.1: «non dichiarato» e' uno stato legittimo); se si
+///    contraddicono, il contratto e' rifiutato.
 fn validate_declared_types(
     geometry: &GeometryColumnContract,
     metadata: &HashMap<String, String>,
@@ -1480,30 +1386,15 @@ fn validate_declared_types(
                 ))
             },
         )?;
-    // Lo stato di risoluzione del CRS NON e' confrontabile qui, ed e' una
-    // scelta, non una dimenticanza: il contratto puo' divergere dai metadati
-    // in ENTRAMBE le direzioni, legittimamente.
+    // Lo stato di risoluzione del CRS non si confronta qui: il contratto puo'
+    // divergere legittimamente dai metadati in entrambe le direzioni (la
+    // discovery declassa un `resolved` con chiavi in conflitto; una
+    // decisione di piano, R4.6.3, risolve un `missing`). La coerenza del CRS
+    // la decidono discovery e risoluzione per precedenza.
     //
-    // Piu' conservativo: la discovery declassa a `declared_unresolved` una
-    // colonna che dichiara `resolved` con chiavi in conflitto (`crs_id` e
-    // `srid` che non concordano) — e' il comportamento fail-closed voluto,
-    // e il contratto e' la vista CORRETTA, non una copia dei metadati.
-    //
-    // Meno conservativo: una decisione di piano (`crs_decisions`, R4.6.3)
-    // risolve un CRS che i metadati dichiarano `missing`; la decisione vive
-    // nel piano ed entra nel `plan_hash`, quindi e' tracciata altrove.
-    //
-    // Non esistendo una direzione sempre valida, un confronto qui
-    // rifiuterebbe contratti corretti. La coerenza del CRS resta dove ha il
-    // contesto per deciderla: la discovery e la risoluzione per precedenza.
-    //
-    // Tipi geometrici: qui il controllo resta a DUE lati presenti, e non e'
-    // una scorciatoia. Per R3.4.1 «non dichiarato» e' uno stato legittimo su
-    // entrambi i lati: un contratto puo' dichiarare tipi che i metadati non
-    // portano ancora (dopo un'op che li cambia, prima dell'emissione), e una
-    // colonna puo' portarli senza che il contratto li abbia letti. Rendere
-    // errore l'asimmetria rifiuterebbe contratti validi; la contraddizione,
-    // invece, e' sempre un errore.
+    // Tipi geometrici: il confronto scatta solo con entrambi i lati presenti,
+    // perche' «non dichiarato» e' legittimo su ciascun lato (R3.4.1); la
+    // contraddizione e' sempre un errore.
     let Some(declared) = geometry.types.value() else {
         return Ok(());
     };

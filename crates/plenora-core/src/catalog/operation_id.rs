@@ -1,33 +1,17 @@
 //! Identita' tipizzata delle operazioni del catalogo.
 //!
-//! # Perche' un enum e non una stringa
+//! Il formato pubblico dei piani usa stringhe (`table.filter`, `geo.buffer`),
+//! ma dentro il codice un enum rende esaustivi i `match`: la conversione
+//! avviene una volta, al parsing, e un descrittore nuovo senza il suo ramo e'
+//! un errore di compilazione invece che di runtime.
 //!
-//! Il formato pubblico dei piani usa stringhe — `table.filter`, `geo.buffer` —
-//! e continuera' a usarle: sono cio' che gli utenti scrivono e cio' che entra
-//! nell'identita' canonica di un piano. Ma una stringa che circola DENTRO il
-//! codice non e' un identificatore, e' un'occasione di errore: si puo'
-//! confrontare con un letterale sbagliato, si puo' costruire con un typo, e
-//! soprattutto **nessun `match` su stringhe puo' essere esaustivo**.
+//! La bijezione fra enum e `CATALOG` e' verificata in entrambe le direzioni
+//! da `l_enum_e_il_catalogo_sono_in_bijezione`.
 //!
-//! Questo enum sposta il confine: la conversione avviene una volta sola, al
-//! parsing, e da li' in avanti il compilatore sa quali operazioni esistono. Un
-//! descrittore nuovo nel catalogo senza il ramo corrispondente in un `match`
-//! diventa un errore di compilazione invece di un fallimento a runtime il
-//! giorno in cui qualcuno usa davvero l'operazione nuova.
-//!
-//! # La bijezione col catalogo e' verificata, non assunta
-//!
-//! Enum e `CATALOG` sono due elenchi delle stesse 146 operazioni, e due
-//! elenchi divergono. Il test `l_enum_e_il_catalogo_sono_in_bijezione` li
-//! confronta in entrambe le direzioni: nessuna variante senza descrittore,
-//! nessun descrittore senza variante.
-//!
-//! # Che cosa resta fuori dall'osservabile
-//!
-//! Questo enum. `as_str` restituisce esattamente l'id del catalogo, quindi
-//! la serializzazione canonica, il `plan_hash` e il `catalog_fingerprint`
-//! non dipendono da come l'identita' e' rappresentata dentro il codice.
-//! Gli alias legacy si risolvono in `find_operation`.
+//! L'enum non e' osservabile: `as_str` restituisce esattamente l'id del
+//! catalogo, quindi serializzazione canonica, `plan_hash` e
+//! `catalog_fingerprint` non ne dipendono. Gli alias legacy si risolvono in
+//! `find_operation`.
 
 /// Un'operazione del catalogo, per costruzione.
 ///

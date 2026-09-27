@@ -248,16 +248,13 @@ const fn worst_completeness(
 
 impl RowDiagnostics {
     /// Fonde `incoming` nel report accumulato applicando l'offset sorgente
-    /// assoluto: conteggi sommati in aritmetica controllata, esempi limitati
-    /// a `examples_limit`, completeness degradata se un contributo qualunque
-    /// non e' completo.
+    /// assoluto.
     ///
-    /// Vive qui, accanto al tipo, perche' la stessa procedura serve due
-    /// percorsi — l'executor del DAG e il runner fuso del trasporto geo — ed
-    /// e' logica di contratto (R9.9: mai un indice inventato, mai un
-    /// overflow silenzioso). Due copie parallele, fossero anche identiche
-    /// riga per riga, sarebbero due occasioni di divergere su un report che
-    /// finisce in output.
+    /// Conteggi sommati in aritmetica controllata, esempi limitati a
+    /// `examples_limit`, completeness degradata se un contributo non e'
+    /// completo. Sta accanto al tipo perche' la usano sia l'executor del DAG
+    /// sia il runner fuso del trasporto geo, ed e' logica di contratto (R9.9):
+    /// due copie potrebbero divergere.
     ///
     /// # Errors
     ///
@@ -325,15 +322,10 @@ impl RowDiagnostics {
         merged.examples_truncated = merged.examples_truncated
             || incoming.examples_truncated
             || merged.examples.len().saturating_sub(before) < incoming_example_count;
-        // Reticolo esplicito della completeness: `Unknown` > `Partial` >
-        // `Complete`, e la fusione tiene il PEGGIORE dei due.
-        //
-        // L'assegnazione diretta dipenderebbe dall'ordine: `Unknown` che
-        // riceve `Partial` diventerebbe `Partial`, cioe' migliorerebbe
-        // illegittimamente l'informazione — «non so quanto ho visto»
-        // tornerebbe «ho visto una parte» — mentre nell'ordine opposto
-        // resterebbe `Unknown`. Due stream con gli stessi contributi in
-        // ordine diverso darebbero due report diversi.
+        // Reticolo della completeness (`Unknown` > `Partial` > `Complete`): la
+        // fusione tiene il peggiore. Un'assegnazione diretta dipenderebbe
+        // dall'ordine dei contributi e potrebbe migliorare `Unknown` in
+        // `Partial`.
         merged.completeness = worst_completeness(merged.completeness, incoming.completeness);
         if incoming.completeness != RowDiagnosticsCompleteness::Complete {
             let mut knowledge_limits = merged.knowledge_limits.take().unwrap_or_default();

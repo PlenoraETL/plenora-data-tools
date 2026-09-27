@@ -66,8 +66,8 @@ pub enum GeoFusion {
     /// tabellari e le geo fuori dal perimetro fondibile.
     NotFusible,
     /// Trasformazione 1:1 sul posto: fondibile in un gruppo di nodi unari
-    /// consecutivi a parita' di colonna geometria e ruolo (le quattordici
-    ///   trasformazioni in place, piu' `reproject` e `make_valid`).
+    /// consecutivi a parita' di colonna geometria e ruolo (le trasformazioni
+    /// in place, piu' `reproject` e `make_valid`).
     TransformInPlace,
     /// Misura terminale: consuma la geometria producendo un valore non
     /// geometrico (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`
@@ -88,7 +88,7 @@ impl GeoFusion {
     }
 }
 
-/// Forma del risultato rispetto alle righe di input (da geo-tools-arrow).
+/// Forma del risultato rispetto alle righe di input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultShape {
     OneToOne,
@@ -137,15 +137,13 @@ pub enum DeterminismPolicy {
 
 /// Vincolo di espansione vincolante per un'operazione binaria (errori-e-limiti.md).
 ///
-/// Per le operazioni binarie nessuna base singola e' adeguata: il runtime
-/// calcola tutte le metriche di [`JoinExpansion`] e il catalogo dichiara
-/// quale e' vincolante. La soglia di confronto e' `max_expansion_factor`
-/// dei limiti effettivi, tranne per [`ExpansionConstraint::Custom`] che la
-/// sovrascrive per la singola operazione.
+/// Il runtime calcola tutte le metriche di [`JoinExpansion`] e il catalogo
+/// dichiara quale vincola. La soglia e' `max_expansion_factor`, tranne per
+/// [`ExpansionConstraint::Custom`] che la sovrascrive per l'operazione.
 ///
-/// `PartialEq`/`Eq`/`Hash` sono implementati a mano: il fattore di `Custom`
-/// e' confrontato e hashato per bit (`f64::to_bits`), mai per valore —
-/// nessuna ambiguita' su NaN/-0.0 nel fingerprint del catalogo (piano-v5.md#identita-e-fingerprint).
+/// `PartialEq`/`Eq`/`Hash` sono a mano: il fattore di `Custom` si confronta e
+/// si hasha per bit (`f64::to_bits`), senza ambiguita' su NaN/-0.0 nel
+/// fingerprint del catalogo (piano-v5.md#identita-e-fingerprint).
 #[derive(Debug, Clone, Copy)]
 pub enum ExpansionConstraint {
     /// `output / (left + right)`: default. E' la base fissa su cui e' tarato
@@ -162,14 +160,10 @@ pub enum ExpansionConstraint {
     /// architettura.md#planner-ed-executor), per operazioni la cui
     /// semantica di output non e' caratterizzabile con una base fissa.
     ///
-    /// Semantica scelta: la **metrica** vincolante resta
-    /// `output_over_sum_inputs` (la base piu' conservativa e stabile), ma la
-    /// **soglia** effettiva e' il fattore dichiarato, che sovrascrive
-    /// `max_expansion_factor` per la sola operazione — vedi
-    /// [`ExpansionConstraint::binding_threshold`]. Il fattore deve essere
-    /// finito e positivo: e' una costante di catalogo, non un input
-    /// esterno. Nessuna op v1 lo usa, ed e' riservato a op
-    /// future guidate da stime.
+    /// La metrica resta `output_over_sum_inputs`, ma la soglia e' il fattore
+    /// dichiarato, che sovrascrive `max_expansion_factor` per l'operazione
+    /// ([`ExpansionConstraint::binding_threshold`]). Il fattore, costante di
+    /// catalogo, dev'essere finito e positivo.
     Custom(f64),
 }
 
@@ -218,22 +212,15 @@ impl ExpansionConstraint {
 
     /// `true` se l'espansione osservata supera la soglia di questo vincolo.
     ///
-    /// E' la DECISIONE del limite, e non passa per le metriche `f64` di
-    /// [`JoinExpansion`]: i conteggi restano interi e il fattore viene
-    /// decomposto ([`crate::limits::expansion_exceeded`]). Decidere sul
-    /// rapporto in doppia precisione arrotonda i conteggi, e con
-    /// `left = right = 2^53` e `output = 2^53+1` il rapporto reale — maggiore
-    /// di 1 — diventa esattamente `1.0`, e il limite non scatterebbe. Le
-    /// metriche restano osservabili, ma non decidono.
+    /// Decide in aritmetica intera ([`crate::limits::expansion_exceeded`]),
+    /// non sulle metriche `f64` di [`JoinExpansion`], che oltre `2^53`
+    /// arrotondano i conteggi e potrebbero non far scattare il limite.
     ///
-    /// Base per vincolo: la somma degli input (`SumRelative`, `Custom`), il
-    /// solo lato sinistro o destro, e per `MaxRelative` il massimo delle tre
-    /// metriche — che supera la soglia **se e solo se** almeno una la supera,
-    /// e la metrica sulla somma e' sempre dominata dalle altre due.
-    ///
-    /// Denominatore nullo: coerente con [`JoinExpansion::compute`] — con
-    /// output non nullo la metrica e' infinita, quindi il vincolo scatta; con
-    /// output nullo vale zero e non scatta.
+    /// Base: la somma degli input (`SumRelative`, `Custom`), il solo lato
+    /// sinistro o destro, e per `MaxRelative` il massimo delle metriche, che
+    /// supera la soglia se e solo se almeno una la supera. Con denominatore
+    /// nullo vale la convenzione di [`JoinExpansion::compute`]: scatta solo se
+    /// l'output non e' vuoto.
     #[must_use]
     pub fn exceeded(
         self,
@@ -261,13 +248,9 @@ impl ExpansionConstraint {
 
 /// Metriche di espansione di un'operazione binaria (errori-e-limiti.md).
 ///
-/// Il runtime le calcola tutte e tre; il vincolo dichiarato in catalogo
-/// ([`ExpansionConstraint`]) seleziona quella vincolante.
-///
-/// Sono metriche **osservabili**, non la base della decisione: i rapporti
-/// sono `f64` e sopra 2^53 righe arrotondano i conteggi. Il limite si decide
-/// in aritmetica esatta con [`ExpansionConstraint::exceeded`]; questi valori
-/// servono a raccontare l'esito, non a stabilirlo.
+/// Il vincolo dichiarato in catalogo ([`ExpansionConstraint`]) seleziona
+/// quella vincolante. Sono metriche **osservabili** in `f64`: il limite si
+/// decide in aritmetica esatta con [`ExpansionConstraint::exceeded`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct JoinExpansion {
     /// Righe output / (righe left + righe right).
@@ -334,8 +317,8 @@ impl JoinExpansion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Maturity {
     Planned,
-    /// Kernel implementato ma in attesa del backend richiesto
-    /// (da `backend_pending` di geo-tools-arrow, op feature-gated geos/proj).
+    /// Kernel implementato ma in attesa del backend richiesto (op
+    /// feature-gated geos/proj).
     BackendPending,
     KernelValidated,
     PublicProtocol,
@@ -443,27 +426,16 @@ impl OperationDescriptor {
     /// Dichiara se l'operazione, nella configurazione data, puo' rifiutare
     /// righe con diagnostica row-scoped (`plenora-row-diagnostics-v1`).
     ///
-    /// Autorita' UNICA catalog-level (accanto a [`Self::source_row_provenance`]
-    /// e `required_capabilities`): la usano il gate provenance del planner, il
-    /// `prepare` (flag per kernel del machinery di segmento) e il gate dei
-    /// piani legacy della CLI. Nessuna lista duplicata altrove: chiunque
-    /// aggiunga un percorso di rifiuto row-scoped la dichiara QUI.
+    /// Autorita' unica catalog-level, accanto a [`Self::source_row_provenance`]
+    /// e `required_capabilities`: la usano il gate provenance del planner,
+    /// `prepare` e il gate dei piani legacy della CLI. Un nuovo percorso di
+    /// rifiuto row-scoped si dichiara qui.
     ///
-    /// La proprieta' e' config-sensitive per costruzione:
-    /// - `table.type_cast`: solo i target con conversione fallibile
-    ///   row-scoped (`int`, `float`, `bool`, `uint64`, `date`, `datetime`,
-    ///   `date32`, `timestamp_millis`, `decimal128`) e solo con `errors`
-    ///   assente/`coerce`/`raise`; gli altri target (es. `str`) sono totali;
-    /// - `table.md5_hash`/`table.sha256_hash`: solo con `null_policy=error`
-    ///   (`empty`/`literal` hanno semantica storica dichiarata, nessun
-    ///   rifiuto);
-    /// - `table.hmac_sha256`: MAI — le `null_policy` legacy producono
-    ///   output dichiarato, nessun rifiuto row-scoped possibile.
-    ///
-    /// Le op geo elencate sono quelle dispatchate nel DAG con raccolta
-    /// row-scoped (ledger `diag-transport`/`diag-wkt`): le op solo-trasporto
-    /// (es. `geo.geodesic_*`) non attraversano nessuno dei tre gate e restano
-    /// coperte dal contratto del trasporto.
+    /// E' config-sensitive: `table.type_cast` solo per i target con
+    /// conversione fallibile e `errors` assente/`coerce`/`raise`; gli hash solo
+    /// con `null_policy=error`; `table.hmac_sha256` mai. Le op geo sono quelle
+    /// dispatchate nel DAG con raccolta row-scoped: le op solo-trasporto
+    /// restano coperte dal contratto del trasporto.
     #[must_use]
     pub fn emits_row_diagnostics(&self, config: &serde_json::Value) -> bool {
         match self.family {
@@ -544,32 +516,21 @@ impl OperationDescriptor {
 // ---------------------------------------------------------------------------
 // Catalogo unificato delle operazioni (decisione D17/D20).
 //
-// Le voci sono raggruppate per famiglia e, dentro ciascuna, per versione di
-// estensione. I separatori dentro `CATALOG` sono l'unico indice: un elenco
-// riepilogativo qui sopra divergerebbe dal contenuto in silenzio.
+// Le voci sono raggruppate per famiglia e versione di estensione; i
+// separatori dentro `CATALOG` sono l'unico indice. Mapping degli id in
+// piano-v5.md#alias-legacy.
 //
-// Mapping degli id documentato in piano-v5.md#alias-legacy:
-// - tabellari: id storico invariato sotto il namespace `table.`;
-// - geografiche `geo_*`: il prefisso storico diventa il namespace
-//   (`geo_buffer` -> `geo.buffer`);
-// - predicati DE-9IM: `predicate_*` -> `geo.predicate_*`;
-// - estensioni geo nude: `<id>` -> `geo.<id>`.
-//
-// Scelte conservative dove i descrittori storici non dichiarano il metadato:
-// - `arity` geo: quei descrittori non contano gli input; `BinaryOrdered`
-//   solo per le op intrinsecamente binarie (join/overlay/filtri spaziali su
-//   due input); predicati, distanze a due colonne e `split` restano `Unary`
-//   (due colonne dello stesso input);
-// - `execution_class` geo: derivato da `result_shape` (1:1 -> Streaming,
-//   aggregazioni/tessellazioni -> Blocking, overlay/join -> BinaryBlocking);
-// - `cancellation_behavior`: Cooperative per kernel puri streaming,
-//   BoundaryOnly per blocking grandi, NonInterruptible per le op con
-//   capability esterna (`geos`/`proj`, chiamate monolitiche, errori-e-limiti.md);
-// - `result_shape`: `BinaryLineage` del sorgente geo non ha variante
-//   equivalente: mappato su `OneToMany` (un left puo' produrre piu' righe);
-// - `determinism`: `DefinedOrder` di default; `CanonicalOrder` per le set
-//   operation tabellari e le aggregazioni senza ordine; `InputOrder` per
-//   `concat` (ordine di arrivo dei rami).
+// Metadati dove i descrittori geo non li dichiarano, scelti conservativi:
+// - `arity`: `BinaryOrdered` solo per le op su due input; due colonne dello
+//   stesso input restano `Unary`;
+// - `execution_class`: da `result_shape` (1:1 -> Streaming, aggregazioni e
+//   tessellazioni -> Blocking, overlay/join -> BinaryBlocking);
+// - `cancellation_behavior`: `Cooperative` per i kernel puri streaming,
+//   `BoundaryOnly` per i blocking grandi, `NonInterruptible` per le op con
+//   capability esterna `geos`/`proj` (errori-e-limiti.md);
+// - `result_shape`: la lineage binaria geo diventa `OneToMany`;
+// - `determinism`: `DefinedOrder` di default, `CanonicalOrder` per set
+//   operation e aggregazioni senza ordine, `InputOrder` per `concat`.
 // ---------------------------------------------------------------------------
 
 macro_rules! op {
@@ -694,7 +655,7 @@ macro_rules! op {
 
 /// Catalogo unificato delle operazioni, tabellari e geografiche.
 pub static CATALOG: &[OperationDescriptor] = &[
-    // --- Tabellari Manipola-compat (37) -----------------------------------
+    // --- Tabellari Manipola-compat -----------------------------------
     op!(
         "table.add_row_number",
         Table,
@@ -1207,7 +1168,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         semantic_version = 2,
         kernel_version = 2
     ),
-    // --- Tabellari estensioni (25) -----------------------------------------
+    // --- Tabellari estensioni -----------------------------------------
     // anti_join: output <= left -> LeftRelative.
     op!(
         "table.anti_join",
@@ -1589,7 +1550,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         kernel_version = 2
     ),
-    // --- Geografiche Manipola-compat (33) -----------------------------------
+    // --- Geografiche Manipola-compat -----------------------------------
     op!(
         "geo.centroid",
         Geo,
@@ -2073,7 +2034,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TransformInPlace,
         semantic_version = 2
     ),
-    // --- Predicati DE-9IM, estensioni geo (11) ------------------------------
+    // --- Predicati DE-9IM, estensioni geo ------------------------------
     op!(
         "geo.predicate_intersects",
         Geo,
@@ -2217,7 +2178,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // --- Estensioni geo (21) -------------------------------------------------
+    // --- Estensioni geo -------------------------------------------------
     op!(
         "geo.affine_transform",
         Geo,
@@ -2509,7 +2470,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // --- Estensioni geo v1.1 (4) ---------------------------------------------
+    // --- Estensioni geo v1.1 ---------------------------------------------
     op!(
         "geo.from_wkt",
         Geo,
@@ -2565,7 +2526,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // --- Estensioni geo v1.2 (3) ---------------------------------------------
+    // --- Estensioni geo v1.2 ---------------------------------------------
     op!(
         "geo.generate_grid",
         Geo,
@@ -2611,7 +2572,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // --- Estensioni geo v1.3 (3) ---------------------------------------------
+    // --- Estensioni geo v1.3 ---------------------------------------------
     // Coperture poligonali (piantine di edifici): entrambe consumano l'intero
     // input (Blocking) e producono una riga per issue/tratto condiviso
     // (WholeToMany, schema nuovo); aree e lunghezze in unita' di mappa,
@@ -2662,7 +2623,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // --- Estensioni table v1.1 (4) -------------------------------------------
+    // --- Estensioni table v1.1 -------------------------------------------
     op!(
         "table.limit",
         Table,
@@ -2716,7 +2677,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // --- Estensioni table v1.2 (4) -------------------------------------------
+    // --- Estensioni table v1.2 -------------------------------------------
     op!(
         "table.align_schema",
         Table,
@@ -2770,10 +2731,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // --- Estensioni table v1.3 (1) -------------------------------------------
-    // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
-    // esatti, ma scoring per coppia candidata -> BinaryBlocking; ordine di
-    // output definito (scansione sinistra, indice destro).
+    // --- Estensioni table v1.3 -------------------------------------------
     // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
     // esatti, ma scoring per coppia candidata -> BinaryBlocking; ordine di
     // output definito (scansione sinistra, indice destro). Piu' candidati
@@ -2801,7 +2759,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
 /// `schema_version` 3 copre sia i piani nogeo legacy sia gli id storici del
 /// protocollo geo (v2/v3, `TransformArrowSchema`).
 pub static ALIASES: &[(u16, &str, &str)] = &[
-    // --- Piani nogeo legacy: id storico -> table.<id> (62) -----------------
+    // --- Piani nogeo legacy: id storico -> table.<id> -----------------
     (3, "add_row_number", "table.add_row_number"),
     (3, "aggregate", "table.aggregate"),
     (3, "bin", "table.bin"),
@@ -2864,7 +2822,7 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "assert_metadata", "table.assert_metadata"),
     (3, "assert_foreign_key", "table.assert_foreign_key"),
     (3, "reconcile", "table.reconcile"),
-    // --- Id geo storici: geo_* -> geo.<id senza prefisso> (33) -------------
+    // --- Id geo storici: geo_* -> geo.<id senza prefisso> -------------
     (3, "geo_centroid", "geo.centroid"),
     (3, "geo_convex_hull", "geo.convex_hull"),
     (3, "geo_envelope", "geo.envelope"),
@@ -2901,7 +2859,7 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "geo_within", "geo.within"),
     (3, "geo_make_valid", "geo.make_valid"),
     (3, "geo_reproject", "geo.reproject"),
-    // --- Predicati DE-9IM: id invariato sotto geo. (11) --------------------
+    // --- Predicati DE-9IM: id invariato sotto geo. --------------------
     (3, "predicate_intersects", "geo.predicate_intersects"),
     (3, "predicate_disjoint", "geo.predicate_disjoint"),
     (3, "predicate_contains", "geo.predicate_contains"),
@@ -2917,7 +2875,7 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "predicate_touches", "geo.predicate_touches"),
     (3, "predicate_crosses", "geo.predicate_crosses"),
     (3, "predicate_overlaps", "geo.predicate_overlaps"),
-    // --- Estensioni geo nude: <id> -> geo.<id> (21) ------------------------
+    // --- Estensioni geo nude: <id> -> geo.<id> ------------------------
     (3, "sjoin", "geo.sjoin"),
     (3, "affine_transform", "geo.affine_transform"),
     (3, "translate", "geo.translate"),
@@ -3299,8 +3257,7 @@ mod tests {
         const DUE_53: u64 = 1 << 53;
         let output = DUE_53 + 1;
         let metrica = JoinExpansion::compute(output, DUE_53, DUE_53);
-        // La metrica osservabile e' ancora (e resta) arrotondata: e' il
-        // motivo per cui non decide piu' lei.
+        // La metrica osservabile resta arrotondata: per questo non decide.
         assert!(
             metrica.binding_metric(ExpansionConstraint::MaxRelative) <= 1.0,
             "il rapporto in f64 dovrebbe collassare su 1.0"
@@ -3371,8 +3328,7 @@ mod tests {
         );
 
         // Sintassi della macro `op!`: `expansion_constraint = Custom(f)`
-        // coesiste con le altre chiavi in qualunque ordine. Nessuna op del
-        // catalogo v1 la usa (riservata a op future guidate da stime).
+        // coesiste con le altre chiavi in qualunque ordine.
         let descriptor = op!(
             "table.__custom_test",
             Table,
@@ -3397,12 +3353,12 @@ mod tests {
 
     #[test]
     fn geo_fusion_matches_the_adr_0012_perimeter() {
-        // architettura.md#geometrie D12.2, perimetro fondibile: le 16 trasformazioni
-        // 1:1 revistate (quattordici in place, piu' `reproject` e `make_valid`) sono
-        // TransformInPlace, le 5 misure terminali sono TerminalMeasure, TUTTO
-        // il resto (tabellari incluse) e' NotFusible. Il campo e'
-        // dichiarativo: la lista chiusa qui sotto e' il contratto; aggiungere
-        // un op fondibile richiede l'oracolo differenziale.
+        // architettura.md#geometrie D12.2, perimetro fondibile: le
+        // trasformazioni 1:1 in place (piu' `reproject` e `make_valid`) sono
+        // TransformInPlace, le misure terminali TerminalMeasure, tutto il resto
+        // (tabellari incluse) NotFusible. La lista chiusa qui sotto e' il
+        // contratto; aggiungere un op fondibile richiede l'oracolo
+        // differenziale.
         let transforms: HashSet<_> = CATALOG
             .iter()
             .filter(|op| op.geo_fusion == GeoFusion::TransformInPlace)
@@ -3576,10 +3532,9 @@ mod tests {
 
     #[test]
     fn row_diagnostics_emitting_operations_are_a_closed_catalog_set() {
-        // Mutation/anti-drift: il perimetro delle op che emettono diagnostica
-        // row-scoped e' chiuso e contato (16 table diag-kernel senza hmac +
-        // 24 geo DAG-dispatchate). Cambiarlo richiede un diff esplicito di
-        // questo test e del ledger di copertura.
+        // Anti-drift: il perimetro delle op che emettono diagnostica
+        // row-scoped e' chiuso e contato. Cambiarlo richiede un diff esplicito
+        // di questo test e del ledger di copertura.
         let probes = row_diagnostics_probes();
         let emitting: Vec<&str> = CATALOG
             .iter()
@@ -3603,12 +3558,11 @@ mod tests {
 
     #[test]
     fn row_diagnostics_changes_carry_the_declared_version_bumps() {
-        // piano-v5.md#identita-e-fingerprint: ogni op il cui comportamento osservabile, kernel o gate
-        // planner e' cambiato con la diagnostica row-scoped (delta 2026-08-03
-        // su baseline af812aa) dichiara il bump nelle componenti di versione.
-        // La tabella e' hard-coded dal delta e dalla baseline — nessun valore
-        // letto dal catalogo stesso (anti-tautologia): (id, semantic,
-        // config_schema, contract_analysis, kernel).
+        // piano-v5.md#identita-e-fingerprint: ogni op il cui comportamento
+        // osservabile, kernel o gate planner e' cambiato con la diagnostica
+        // row-scoped dichiara il bump nelle componenti di versione. La tabella
+        // e' scritta a mano, non letta dal catalogo (anti-tautologia): (id,
+        // semantic, config_schema, contract_analysis, kernel).
         let expected: &[(&str, u32, u32, u32, u32)] = &[
             // diag-kernel table: nuovo reject_rows / comportamento pubblico.
             ("table.date_extract", 2, 1, 1, 3),
@@ -3633,7 +3587,7 @@ mod tests {
             // contract analysis (piano-v5.md#identita-e-fingerprint,
             // piano-v5.md#contratti-di-input).
             ("geo.from_wkt", 3, 1, 2, 2),
-            // diag-transport / diag-coords: il rifiuto row-scoped ora porta
+            // diag-transport / diag-coords: il rifiuto row-scoped porta
             // il payload `plenora-row-diagnostics-v1` (comportamento
             // osservabile; kernel invariato -> bump semantico soltanto).
             ("geo.affine_transform", 2, 1, 1, 1),

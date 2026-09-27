@@ -22,13 +22,9 @@ pub mod error;
 pub mod json;
 pub mod limits;
 
-// Dalla radice esce SOLO cio' che `Plan Budget 1.0` obbliga a pubblicare
-// (`PLAN-013`). `DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE`,
-// `DEFAULT_MAX_TEMP_BYTES` e `DEFAULT_SPILL_PARTITIONS` restano in
-// [`limits`]: servono a condividere l'autorita' fra i crate, non a essere
-// facciata. Riesportarli li' promuoverebbe a superficie principale tre
-// dettagli che nessun contratto richiede, e toglierli dopo sarebbe una
-// rottura.
+// Dalla radice esce solo cio' che `Plan Budget 1.0` obbliga a pubblicare
+// (`PLAN-013`); gli altri default restano in [`limits`], perche' toglierli
+// dalla facciata dopo sarebbe una rottura.
 pub use limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES;
 pub mod panic_policy;
 
@@ -40,43 +36,18 @@ pub use error::{
 
 /// Costruisce un `RecordBatch` DICHIARANDO il numero di righe.
 ///
-/// `RecordBatch::try_new` deriva le righe dalla prima colonna. Con un vettore
-/// di colonne VUOTO non c'e' una prima colonna, e arrow **rifiuta** di
-/// costruire il batch: `must either specify a row count or at least one
-/// column`. Un batch a zero colonne e righe positive e' pero' legittimo in
-/// Arrow e il progetto ne produce: una tabella puo' avere una cardinalita'
-/// senza avere attributi, ed e' il risultato naturale di un `select_columns`
-/// che non seleziona nulla o di un input che nasce cosi'.
+/// `RecordBatch::try_new` deriva le righe dalla prima colonna e rifiuta un
+/// vettore di colonne vuoto. Un batch a zero colonne e righe positive e'
+/// pero' legittimo (per esempio un `select_columns` che non seleziona nulla),
+/// e con `try_new` un'operazione legittima fallirebbe.
 ///
-/// Ricostruirlo con `try_new` fa quindi FALLIRE un'operazione legittima: un
-/// `concat` di due e tre righe non rende cinque righe, non rende nulla. E' un
-/// difetto di disponibilita', non di correttezza: l'errore e' visibile, non
-/// e' un risultato sbagliato restituito in silenzio.
+/// Va usata in qualunque crate ovunque le colonne derivino dall'input; vive
+/// qui perche' serve anche all'engine. `try_new` resta legittimo dove il
+/// vettore non puo' essere vuoto per costruzione.
 ///
-/// # Dove va usato
-///
-/// Ovunque l'insieme delle colonne DERIVI dall'input, in **qualunque** crate:
-/// se le colonne vengono dall'input, possono essere zero. Vive qui e non nei
-/// kernel proprio per questo: ospitata in una foglia sarebbe invisibile
-/// all'engine, che ne ha bisogno almeno in tre punti (rivestimento dello
-/// schema in pubblicazione, compattazione dello staging, normalizzazione
-/// `LargeUtf8`). Un invariante del workspace non puo' abitare in una foglia.
-///
-/// Resta legittimo `RecordBatch::try_new` dove le colonne sono COSTRUITE
-/// dall'operazione e il vettore non puo' essere vuoto per costruzione.
-///
-/// # Semantica di `rows_if_empty`
-///
-/// Quando `columns` NON e' vuoto la cardinalita' la decidono le colonne,
-/// esattamente come fa `try_new`: `rows_if_empty` viene ignorato. Serve
-/// solo per il caso senza colonne, l'unico in cui arrow non ha da dove
-/// dedurla.
-///
-/// E' voluto che sia cosi'. La conversione di un sito diventa meccanica —
-/// si passa la cardinalita' della sorgente piu' vicina — e non introduce il
-/// rischio di dichiarare un numero sbagliato per un batch che le colonne ce
-/// le ha: se ci fosse da ragionare caso per caso, sarebbe proprio quel
-/// ragionamento a poter andare storto.
+/// `rows_if_empty` conta solo senza colonne: altrimenti la cardinalita' la
+/// decidono le colonne, come in `try_new`, cosi' la conversione di un sito
+/// resta meccanica e non puo' dichiarare un numero sbagliato.
 ///
 /// # Errors
 ///
@@ -110,13 +81,11 @@ pub mod arrow {
     /// Versione dei crate Arrow in uso (`arrow-schema` & co., unica per
     /// decisione D0).
     ///
-    /// I crate Arrow non espongono la propria versione a runtime: la costante
-    /// e' tenuta allineata da test dedicati a TUTTI i pin che la incarnano —
-    /// i quattro del `Cargo.toml` di root e quelli del progetto fuzz, che ha
-    /// un lock proprio. Entra nell'identita' dei grafi validati
-    /// (piano-v5.md#identita-e-fingerprint): un bump la fa divergere dai grafi
-    /// gia' validati, che `check_compatibility` respinge con `GRAPH_MISMATCH`.
-    /// Non entra invece nel `plan_hash`, che resta stabile fra versioni Arrow.
+    /// I crate Arrow non espongono la versione a runtime: i test sotto la
+    /// tengono allineata ai pin del workspace e del progetto fuzz. Entra
+    /// nell'identita' dei grafi (piano-v5.md#identita-e-fingerprint), quindi
+    /// un bump fa respingere i grafi gia' validati con `GRAPH_MISMATCH`; non
+    /// entra nel `plan_hash`.
     pub const VERSION: &str = "59.2.0";
 }
 
@@ -174,9 +143,8 @@ mod tests {
 
     /// `capabilities::ARROW_VERSION` e' la versione che il componente dichiara
     /// verso l'esterno; `arrow::VERSION` e' quella che impone nel confronto di
-    /// compatibilita' dei grafi. Devono essere lo stesso valore: oggi lo sono
-    /// per costruzione (alias), e questo test lo tiene vero se qualcuno
-    /// reintroduce un letterale.
+    /// compatibilita' dei grafi. Devono coincidere: sono un alias, e il test
+    /// lo tiene vero anche se tornasse un letterale.
     #[test]
     fn la_versione_dichiarata_e_quella_imposta_coincidono() {
         assert_eq!(crate::capabilities::ARROW_VERSION, super::arrow::VERSION);
