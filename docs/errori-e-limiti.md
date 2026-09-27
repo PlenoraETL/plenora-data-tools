@@ -1557,6 +1557,21 @@ esce su stderr): `fuzz/corpus` è ignorato da Git e non è una regressione.
 **Condizione di rientro.** Il giorno che `geo` non abbia più cammini di panico
 raggiungibili da byte esterni, e che i suoi `log` non pubblichino coordinate.
 
+### `geo.coverage_validate` rileva le sovrapposizioni, non i buchi
+
+**La regola.** `coverage_validate` segnala le coppie di poligoni che si
+sovrappongono per un'area maggiore della tolleranza. Non segnala i buchi fra
+poligoni adiacenti: che un buco sia un difetto o una scelta dipende dal
+dominio, e l'operazione non lo sa.
+
+**L'ambito.** `geo.coverage_validate` (`plenora_kernels_geo::extensions3`).
+
+**Il pericolo.** Una copertura con buchi risulta valida. Chi usa l'operazione
+come controllo completo di una tassellazione non vede i buchi.
+
+**La condizione di rientro.** Un parametro che dichiari l'area da coprire, o
+un'operazione separata per i buchi.
+
 ### Semplificazione RDP e scale numeriche miste
 
 **Regola e ambito.** `operations::simplify_with_policy`, per la politica
@@ -1904,6 +1919,26 @@ su stderr.
 
 **La condizione di rientro.** Una conduzione che cominci allo spawn invece che
 dopo l'handshake, e sorvegli quindi l'intero intervallo con la stessa macchina.
+
+### Un worker orfano finisce il proprio lavoro
+
+**La regola.** Se il coordinatore muore dopo lo spawn, il worker non se ne
+accorge. La chiusura del canale dopo l'`Incarico` non è un annullamento
+(`Ascoltato::FineDelCanale`: un supervisore può chiudere la propria direzione
+senza voler annullare), e il controllo sui namespace del padre
+(`identita::namespace_del_padre`) passa anche con un padre adottato da `init`.
+Il worker prosegue fino alla fine dentro il proprio dominio, e il suo esito non
+lo legge nessuno.
+
+**L'ambito.** Il profilo isolato su Linux, worker e verificatore.
+
+**Il pericolo.** Un processo che consuma CPU, e memoria fino al tetto del
+dominio, senza timeout — lo applica il coordinatore, che non c'è più — e un
+dominio `cgroup2` che nessuno rimuove. Nessun output è pubblicato: la
+pubblicazione è del coordinatore.
+
+**La condizione di rientro.** Rilevare la morte del supervisore — pid con
+start-time, un pidfd, o `PR_SET_PDEATHSIG` — e trattarla come un annullamento.
 
 ### La pulizia dei domini non esce su un canale machine-readable
 
