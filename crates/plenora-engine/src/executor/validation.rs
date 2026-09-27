@@ -16,7 +16,6 @@ use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
-use plenora_core::error::ReplayedError;
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{
     batch_geometry_cells, canonical_geometry_encoding, canonical_geometry_srid,
@@ -369,47 +368,9 @@ pub(super) fn check_join_expansion(
 /// in profondita' non lo ha a disposizione): lo riempie il tag di categoria al
 /// confine di uscita (`ExecState::tag_execution`).
 pub(super) fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> PlenoraError {
-    if let Some(diagnostics) = error.row_diagnostics().cloned() {
-        let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
-            category: error.category(),
-            phase: error.phase(),
-            remote_effect: error.remote_effect(),
-            retry: error.retry_disposition(),
-            message: error.to_string(),
-            node: Some(kernel.node_id.clone()),
-            operation: Some(kernel.operation.as_str().to_owned()),
-            execution_id: None,
-            execution_reason: error.execution_reason().map(ToOwned::to_owned),
-        }));
-        return replayed.with_row_diagnostics(diagnostics);
-    }
-    // Un limite di RISORSA conserva la categoria (`resource_limit`/exit 4, non
-    // `execution`/exit 6): e' cio' su cui il chiamante decide. Il contesto del
-    // nodo si aggiunge via `Replayed`. Si riconosce con `category()`, che
-    // attraversa gli involucri `Tagged`/`Replayed`, non con un match sulla
-    // variante esterna. Quali categorie preservare lo decide
-    // `error_propagation`, unico elenco condiviso col gemello legacy.
-    if crate::error_propagation::categoria_preservata(error.category()) {
-        return PlenoraError::Replayed(Box::new(ReplayedError {
-            category: error.category(),
-            phase: error.phase(),
-            remote_effect: error.remote_effect(),
-            retry: error.retry_disposition(),
-            message: error.to_string(),
-            node: Some(kernel.node_id.clone()),
-            operation: Some(kernel.operation.as_str().to_owned()),
-            execution_id: None,
-            execution_reason: error.execution_reason().map(ToOwned::to_owned),
-        }));
-    }
-    let reason = match error {
-        PlenoraError::Execution { reason, .. } => reason,
-        other => other.to_string(),
-    };
-    PlenoraError::Execution {
-        node: kernel.node_id.clone(),
-        operation: kernel.operation.as_str().to_owned(),
-        execution_id: String::new(),
-        reason,
-    }
+    crate::error_propagation::con_contesto_del_passo(
+        error,
+        kernel.node_id.clone(),
+        kernel.operation.as_str().to_owned(),
+    )
 }

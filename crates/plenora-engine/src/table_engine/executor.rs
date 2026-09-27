@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{ArrayRef, LargeStringArray, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Schema, SchemaRef};
-use plenora_core::error::ReplayedError;
 use plenora_core::{PlenoraError, Result};
 use serde::de::DeserializeOwned;
 
@@ -1532,35 +1531,10 @@ pub(crate) fn execute_batch_with_spill_row_diagnostics(
     execute_batch_with_spill_impl(batch, plan, spill_dir, true)
 }
 
-/// Contesto del passo per il percorso legacy (piani `schema_version <= 3`).
-///
-/// Stessa regola di `executor::step_error`: un errore con una categoria da
-/// preservare non si avvolge in `Execution`, o la stessa esecuzione darebbe
-/// categorie diverse a seconda della versione del piano. Preservate:
-/// `ResourceLimit` (exit 4), `Internal` (exit 70) e `Cancelled`. Indice del
-/// passo e operazione viaggiano in `Replayed`.
-fn legacy_step_error(error: &PlenoraError, index: usize, operation: &str) -> PlenoraError {
-    let categoria = error.category();
-    if crate::error_propagation::categoria_preservata(categoria) {
-        return PlenoraError::Replayed(Box::new(ReplayedError {
-            category: categoria,
-            phase: error.phase(),
-            remote_effect: error.remote_effect(),
-            retry: error.retry_disposition(),
-            message: error.to_string(),
-            node: Some(index.to_string()),
-            operation: Some(operation.to_owned()),
-            execution_id: None,
-            execution_reason: error.execution_reason().map(ToOwned::to_owned),
-        }));
-    }
-    PlenoraError::Execution {
-        node: index.to_string(),
-        operation: operation.to_owned(),
-        // Percorso legacy: nessuna esecuzione DAG, nessun execution_id.
-        execution_id: String::new(),
-        reason: error.to_string(),
-    }
+/// Contesto del passo per il percorso legacy (piani `schema_version <= 3`):
+/// la stessa costruzione dell'executor DAG, con l'indice del passo come nodo.
+fn legacy_step_error(error: PlenoraError, index: usize, operation: &str) -> PlenoraError {
+    crate::error_propagation::con_contesto_del_passo(error, index.to_string(), operation.to_owned())
 }
 
 fn execute_batch_with_spill_impl(
@@ -1599,11 +1573,11 @@ fn execute_batch_with_spill_impl(
                     )
                 }
             } else {
-                legacy_step_error(&error, index, &step.operation)
+                legacy_step_error(error, index, &step.operation)
             }
         })?;
         validate_batch(&batch, plan.limits(), &mut names_validated)
-            .map_err(|error| legacy_step_error(&error, index, &step.operation))?;
+            .map_err(|error| legacy_step_error(error, index, &step.operation))?;
     }
     Ok((batch, spill_metrics))
 }
