@@ -133,7 +133,7 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
             let mut digest = Md5::new();
             digest.update(parts.join("\u{1f}").as_bytes());
             let mut hex = String::new();
-            push_hex(&mut hex, &digest.finalize());
+            plenora_core::esadecimale::aggiungi_esadecimale(&mut hex, &digest.finalize());
             Ok(hex)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -241,7 +241,7 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
                 }
             }
             let mut hex = String::new();
-            push_hex(&mut hex, &digest.finalize());
+            plenora_core::esadecimale::aggiungi_esadecimale(&mut hex, &digest.finalize());
             Ok(hex)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -290,19 +290,6 @@ fn framed_vec(message: &mut Vec<u8>, value: &[u8], op: &str) -> Result<()> {
     message.extend_from_slice(&length.to_be_bytes());
     message.extend_from_slice(value);
     Ok(())
-}
-
-/// Esadecimale minuscolo in coda a `hex`, byte per byte.
-///
-/// Identico al formato `{:x}` dei digest md5/sha2 e a
-/// `write!(hex, "{byte:02x}")`, senza il machinery di formattazione per byte.
-fn push_hex(hex: &mut String, bytes: &[u8]) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    hex.reserve(bytes.len() * 2);
-    for &byte in bytes {
-        hex.push(char::from(HEX[usize::from(byte >> 4)]));
-        hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
 }
 
 /// Accesso tipizzato a una colonna, risolto una sola volta per batch.
@@ -454,7 +441,7 @@ fn fingerprint_rows<D: Digest>(
         let mut digest = D::new();
         digest.update(&message);
         hex.clear();
-        push_hex(&mut hex, &digest.finalize());
+        plenora_core::esadecimale::aggiungi_esadecimale(&mut hex, &digest.finalize());
         builder.append_value(&hex);
     }
     Ok(builder.finish())
@@ -706,7 +693,7 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
             continue;
         }
         hex.clear();
-        push_hex(
+        plenora_core::esadecimale::aggiungi_esadecimale(
             &mut hex,
             &hmac_sha256_with_states(&inner_base, &outer_base, &message),
         );

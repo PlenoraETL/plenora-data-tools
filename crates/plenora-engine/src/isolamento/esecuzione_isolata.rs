@@ -185,11 +185,7 @@ fn identificativo_del_tentativo() -> [u8; 32] {
 
 fn token_del_tentativo() -> Result<CommitToken> {
     let byte = identificativo_del_tentativo();
-    let esadecimale = byte.iter().fold(String::with_capacity(64), |mut testo, b| {
-        use std::fmt::Write as _;
-        let _ = write!(testo, "{b:02x}");
-        testo
-    });
+    let esadecimale = plenora_core::esadecimale::esadecimale(&byte);
     CommitToken::da_esadecimale(&esadecimale).map_err(|forma| {
         PlenoraError::Internal(format!(
             "commit_token generato in forma non canonica: {forma}"
@@ -199,14 +195,7 @@ fn token_del_tentativo() -> Result<CommitToken> {
 
 /// Il nome di una sottodirectory di dominio, univoco per tentativo.
 fn nome_del_dominio(identificativo: &[u8; 32]) -> String {
-    let corto = identificativo
-        .iter()
-        .take(8)
-        .fold(String::with_capacity(16), |mut testo, b| {
-            use std::fmt::Write as _;
-            let _ = write!(testo, "{b:02x}");
-            testo
-        });
+    let corto = plenora_core::esadecimale::esadecimale(&identificativo[..8]);
     format!("plenora-isolato-{corto}")
 }
 
@@ -419,14 +408,7 @@ pub fn esegui_isolato(
 /// domini non coesistono, ma i nomi devono distinguersi a colpo d'occhio fra
 /// le directory residue.
 fn nome_del_dominio_verifica(identificativo: &[u8; 32]) -> String {
-    let corto = identificativo
-        .iter()
-        .take(8)
-        .fold(String::with_capacity(16), |mut testo, b| {
-            use std::fmt::Write as _;
-            let _ = write!(testo, "{b:02x}");
-            testo
-        });
+    let corto = plenora_core::esadecimale::esadecimale(&identificativo[..8]);
     format!("plenora-verifica-{corto}")
 }
 
