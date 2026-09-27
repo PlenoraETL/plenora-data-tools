@@ -10,50 +10,38 @@ codice non ha modo di sapere quale meta' della frase valga ancora. La
 responsabilita', l'invariante, l'hazard e l'ordine operativo vanno tenuti; il
 diario intorno a loro no.
 
-Il gate impedisce che la cronaca rientri. Non riscrive nulla e non ha un
-elenco di deroghe per file: o la forma non c'e', o e' ammessa per una ragione
-LEGGIBILE NEL TESTO STESSO — un pin, un atto normativo datato, un artefatto
-immutabile citato con il proprio qualificatore, un valore che la data
-traduce. I puntatori governati dal gate documentale non sono un'ammissione:
-sono spenti prima delle regole, perche' la loro forma non venga scambiata
-per una sigla di campagna.
+Il gate impedisce che la cronaca rientri, e presidia soltanto le regole che si
+applicano senza interpretazione: niente debito anonimo e niente cronaca del
+processo di sviluppo. Non giudica lo stile, i tempi verbali o le date: una
+regola che deve indovinare la grammatica produce falsi positivi, e un gate
+che sbaglia smette di essere letto. I puntatori governati dal gate
+documentale sono spenti prima delle regole, perche' la loro forma non venga
+scambiata per una sigla di campagna.
 
 # Che cosa cerca
 
 1. **`marcatore-anonimo`** — `TODO`, `FIXME`, `HACK`, `XXX`. Un marcatore
    senza proprietario e senza scadenza non e' un impegno: e' un residuo che
    nessuno raccoglie.
-2. **`data-di-calendario`** — ammessa solo dove FISSA qualcosa: un pin
-   (`@ 2026-08-23`, `nightly-2026-08-01`), un atto normativo datato
-   (`emendamento 2026-08-17`), un artefatto immutabile citato con il proprio
-   qualificatore (`run 31166125840`, `baseline af812aa`), o una data che e'
-   un DATO — e allora la relazione che lo dice le sta attaccata
-   (`2026-07-25 = 20659 giorni`), oppure il valore sta sulla riga di codice
-   E il commento e' soltanto quella data, non una frase che la contiene.
-3. **`giro-di-review`** — `finding`, `hotfix`, `PR-3`, `nono giro`. Il numero
+2. **`giro-di-review`** — `finding`, `hotfix`, `PR-3`, `nono giro`. Il numero
    del giro dice quando e' stato trovato un difetto, non quale proprieta'
    sorvegli il codice. Resta ammesso il giro come ITERAZIONE («dal secondo
    giro in poi lo schema e' stabile»), che e' un fatto di esecuzione.
-4. **`tappa-di-campagna`** — `Fase 2A`, `Milestone D`, `secondo batch`,
+3. **`tappa-di-campagna`** — `Fase 2A`, `Milestone D`, `secondo batch`,
    `B1.3`, `filone`, `cantiere`. Una tappa e' finita per definizione, e
    `milestone` non ha eccezioni: la voce di roadmap si nomina con il proprio
    puntatore — `M3` — che il gate documentale definisce e questo gate non
    tocca.
-5. **`stesura-precedente`** — «la prima versione», «la versione precedente»,
+4. **`stesura-precedente`** — «la prima versione», «la versione precedente»,
    «prima del fix», «come prima». Descrivono un testo o un codice che non
    esiste piu' in albero, quindi non sono verificabili da chi legge.
-6. **`difetto-all-imperfetto`** — «lasciava passare», «non veniva
-   riconosciuto», «faceva scambiare». La spiegazione tecnica e' preziosa e
-   deve restare: va scritta al controfattuale presente — «cercare solo il
-   nome LETTERALE lascerebbe passare i siti che usano un helper» — che dice
-   la stessa cosa ed e' vera anche fra un anno.
 
 # Come guarda i sorgenti
 
 Guarda **soltanto la prosa**: i commenti di Rust, Python, shell, YAML, TOML e
 Dockerfile, e per Python anche le stringhe triple, che qui sono docstring. Le
-stringhe di codice restano fuori: un messaggio d'errore che cita una data e'
-comportamento osservabile, e si giudica come tale, non come commento.
+stringhe di codice restano fuori: un messaggio d'errore e' comportamento
+osservabile, e si giudica come tale, non come commento.
 
 Rust ha un lexer proprio (stringhe grezze `r#"..."#`, commenti annidati),
 Python usa `tokenize`, il resto e' a righe con le stringhe rimosse prima di
@@ -352,25 +340,6 @@ def prosa(nome, contenuto):
 # Le forme, e le sole ammissioni
 # ---------------------------------------------------------------------------
 
-DATA = re.compile(r'\b\d{4}-\d{2}-\d{2}\b')
-
-#: Un artefatto immutabile e' citato PER NOME: `run 31166125840`,
-#: `commit 4b9edda`, `tag v1.0.3`, `revisione 3598259`. Il qualificatore e'
-#: obbligatorio: senza, un numero qualunque — la cardinalita' di un caso
-#: limite, un valore a fondo scala — passerebbe per identificatore e
-#: assolverebbe la data che gli sta accanto.
-ARTEFATTO = re.compile(
-    r'\b(?:run|commit|sha|tag|revisione|artefatto|corpus|esecuzione|baseline)\b'
-    r'[\s:=(]*(?:annotat[oi]\s+)?[`"\']*'
-    r'(?=[0-9a-z._-]*[0-9])[0-9a-z._-]{5,}', re.IGNORECASE)
-
-#: La data FISSA qualcosa: e' un pin, o l'atto normativo che la porta.
-DATA_CHE_FISSA = re.compile(
-    r'@\s*\d{4}-\d{2}-\d{2}'
-    r'|\bnightly-\d{4}-\d{2}-\d{2}'
-    r'|\b(?:emendament[oi]|revisione|rilascio|policy|pin|scadenza|valid[oa] dal)\s+'
-    r'(?:del\s+)?\d{4}-\d{2}-\d{2}', re.IGNORECASE)
-
 ORDINALI = (r'primo|secondo|terzo|quarto|quinto|sesto|settimo|ottavo|nono|decimo'
             r'|undicesimo|dodicesimo|tredicesimo|quattordicesimo|ultimo')
 
@@ -378,41 +347,6 @@ ORDINALI = (r'primo|secondo|terzo|quarto|quinto|sesto|settimo|ottavo|nono|decimo
 #: lo dice senza ambiguita'.
 GIRO_AMMESSO = re.compile(r'\b(?:dal|al|nel|del|dopo il|entro il|a ogni|ogni)\s+$',
                           re.IGNORECASE)
-
-IMPERFETTO = re.compile(
-    r"\b\w{3,}(?:ava|eva|iva|avano|evano|ivano)\b"
-    r"|\b(?:era|erano|c'era|c'erano)\b", re.IGNORECASE)
-
-#: Sostantivi, aggettivi e congiuntivi che finiscono come un imperfetto.
-#: In italiano gli aggettivi in `-tiva`/`-siva` sono la classe piu' grossa
-#: (normativa, esaustiva, decisiva) e si escludono per forma; i verbi che
-#: condividono quella desinenza si nominano invece uno per uno, sotto.
-NON_IMPERFETTO = re.compile(
-    r'^(?:'
-    # Aggettivi: normativa, esaustiva, decisiva, successiva.
-    r'\w*[ts]iva'
-    # Sostantivi e aggettivi che finiscono in -iva senza esserlo.
-    r'|deriva|arriva|riva|saliva|oliva|diva|priva|schiva|gengiva|tardiva'
-    # Presente indicativo di verbi il cui tema finisce in -av/-ev/-iv: la
-    # desinenza plurale coincide con quella dell\'imperfetto di un\'altra
-    # coniugazione, e solo il lessico le distingue.
-    r'|arrivano|derivano|attivano|motivano|coltivano|privano'
-    r'|sollevano|rilevano|prelevano|elevano|allevano'
-    # Presente, congiuntivo e sostantivi in -ava/-eva/-iva.
-    r'|prova|trova|osserva|conserva|riserva|serva|preleva|leva|solleva|rileva'
-    r'|ricava|scava|cava|lava|salva|brava|schiava|nuova|piova|attiva'
-    r'|beva|scriva|scrivano|riceva|deva|neva|eleva|rinnova|approva'
-    r'|sopravviva|sopravvivano|conviva|convivano'
-    r')$', re.IGNORECASE)
-
-#: I verbi in `-tiva`/`-siva` che sono davvero imperfetti: la forma non li
-#: distingue dagli aggettivi, quindi si dichiarano.
-IMPERFETTO_COMUNQUE = frozenset((
-    'sentiva', 'sentivano', 'partiva', 'partivano', 'ripartiva', 'ripartivano',
-    'avvertiva', 'avvertivano', 'convertiva', 'convertivano', 'invertiva',
-    'invertivano', 'divertiva', 'esistiva', 'insistiva', 'resistiva',
-    'assistiva', 'consistiva', 'decideva', 'uccideva', 'chiudeva',
-))
 
 MARCATORE = re.compile(r'\b(?:TODO|FIXME|HACK|XXX)\b')
 
@@ -471,26 +405,6 @@ def _senza_citazioni(testo):
     return CITAZIONE.sub(' ', testo)
 
 
-#: Il valore che una data traduce sta sulla RIGA DI CODICE che il commento
-#: annota: `assert_eq!(giorni, 18_993);  // 2022-01-01`. Dentro la prosa un
-#: numero non e' una relazione, e' un numero.
-VALORE_ANNOTATO = re.compile(r'-?\b\d[\d_]*\b')
-
-#: L'ora del giorno, che accompagna una data senza farne una frase.
-ORA = re.compile(r'\b\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\b')
-
-
-def _solo_una_data(compatto):
-    """Il commento e' SOLTANTO una data, al piu' con l'ora e la punteggiatura.
-
-    E' la seconda meta' della deroga sul valore annotato, e senza di essa la
-    prima non basta: `const LIMITE: usize = 5;  // Corretto il 2026-07-27.`
-    ha un numero sulla riga, ma il commento non lo sta traducendo — sta
-    dicendo quando qualcuno ha toccato il file.
-    """
-    resto = ORA.sub(' ', DATA.sub(' ', compatto))
-    return not re.sub(r'[^0-9A-Za-zÀ-ÿ]', '', resto)
-
 MARCATORE_DI_COMMENTO = re.compile(r'(?:^|\s)(?://+[/!]?|#+|"""|\'\'\'|/\*+|\*+/?)')
 
 
@@ -499,29 +413,11 @@ def _senza_marker(testo):
     return MARCATORE_DI_COMMENTO.sub(' ', testo)
 
 
-#: La data e' un DATO quando la relazione che lo dice le e' ATTACCATA: la
-#: data (con l'eventuale ora) e subito dopo l'uguale, la freccia, il «vale» o
-#: il dominio temporale che la interpreta. `2026-07-25 = 20659 giorni` e'
-#: un'equivalenza; «corretto il 2026-07-27: overflow in ms» ha un `ms` nella
-#: stessa frase e non dice niente di quella data — e' cronaca con un termine
-#: tecnico accanto.
-RELAZIONE = (r'=|->|→|\bvale\b|\bvalgono\b|\bcorrisponde\b'
-             r'|\b(?:epoch|epoca|UTC|giorni|ms|millis|micros)\b')
-
-DATO_A_DESTRA = re.compile(
-    r'\d{4}-\d{2}-\d{2}'
-    r'(?:[T ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?)?'
-    r'[\s)\]]*(?:%s)' % RELAZIONE, re.IGNORECASE)
-
-DATO_A_SINISTRA = re.compile(r'(?:%s)[\s(\[]*$' % RELAZIONE, re.IGNORECASE)
-
-
-def difetti_del_commento(testo, puntatori, codice=''):
+def difetti_del_commento(testo, puntatori):
     """Le forme di diario in un singolo commento: (regola, brano)."""
     trovati = []
-    # I marker se ne vanno per primi: un blocco va a capo dove capita, e
-    # `emendamento` su una riga con la sua data sulla successiva e' la stessa
-    # frase per chi legge.
+    # I marker se ne vanno per primi: un blocco va a capo dove capita, e la
+    # stessa frase su due righe deve restare una frase sola.
     # Gli spazi si richiudono DOPO aver tolto marker e citazioni: un blocco
     # che va a capo lascia `in /// review`, e con due spazi in mezzo non e'
     # piu' la locuzione che l'ammissione riconosce.
@@ -530,35 +426,6 @@ def difetti_del_commento(testo, puntatori, codice=''):
 
     for colpo in MARCATORE.finditer(compatto):
         trovati.append(('marcatore-anonimo', colpo.group(0)))
-
-    # Una data e' un DATO quando la relazione che lo dice le sta ATTACCATA,
-    # oppure quando ANNOTA un valore: la riga di codice porta il numero E il
-    # commento e' soltanto quella data — `assert_eq!(giorni, 18_993);
-    # // 2022-01-01`. Le due condizioni valgono insieme: da sola, la prima
-    # assolve qualunque cronaca scritta in coda a una riga che contiene una
-    # cifra. Una data isolata, senza codice accanto, non e' un dato: non dice
-    # di che cosa sia il numero, e nove volte su dieci e' la data in cui
-    # qualcuno ha toccato il file.
-    annota_un_valore = (bool(VALORE_ANNOTATO.search(codice))
-                        and _solo_una_data(compatto))
-    for colpo in DATA.finditer(compatto):
-        if annota_un_valore:
-            continue
-        # Cio' che ammette una data dev'essere ACCANTO alla data e dev'essere
-        # ESPLICITO. Un termine tecnico che capita nella stessa frase non e'
-        # una relazione con quella data: «corretto il 2026-07-27: overflow in
-        # ms» non dice che quella data valga dei millisecondi.
-        stretto = compatto[max(0, colpo.start() - 24):colpo.end() + 4]
-        if DATA_CHE_FISSA.search(stretto):
-            continue
-        vicino = DATA.sub(' ', compatto[max(0, colpo.start() - 32):colpo.end() + 32])
-        if ARTEFATTO.search(vicino):
-            continue
-        if DATO_A_DESTRA.match(compatto[colpo.start():]):
-            continue
-        if DATO_A_SINISTRA.search(compatto[:colpo.start()]):
-            continue
-        trovati.append(('data-di-calendario', colpo.group(0)))
 
     for colpo in GIRO.finditer(compatto):
         if GIRO_AMMESSO.search(compatto[:colpo.start()]):
@@ -574,12 +441,6 @@ def difetti_del_commento(testo, puntatori, codice=''):
 
     for colpo in STESURA.finditer(compatto):
         trovati.append(('stesura-precedente', colpo.group(0)))
-
-    for colpo in IMPERFETTO.finditer(compatto):
-        parola = colpo.group(0).lower()
-        if parola not in IMPERFETTO_COMUNQUE and NON_IMPERFETTO.match(parola):
-            continue
-        trovati.append(('difetto-all-imperfetto', colpo.group(0)))
 
     return trovati
 
@@ -600,8 +461,8 @@ def controlla(sorgenti, puntatori=frozenset()):
                            'il file non e\' stato letto fino in fondo: '
                            'il verdetto sui suoi commenti non vale'))
             continue
-        for riga, testo, codice in commenti:
-            for regola, brano in difetti_del_commento(testo, puntatori, codice):
+        for riga, testo, _ in commenti:
+            for regola, brano in difetti_del_commento(testo, puntatori):
                 compatto = ' '.join(testo.split())
                 guasti.append((nome, riga, regola, brano, compatto[:120]))
     return guasti
@@ -659,20 +520,14 @@ PULITO = {
         '//!',
         '//! Il tetto vale per input: superarlo e\' un errore di risorsa.',
         'const MESSAGGIO: &str = "TODO: una stringa non e\' un commento";',
-        'const DATA: &str = "2026-08-06 in un messaggio d\'errore";',
         'const GREZZA: &str = r#"// nemmeno questa e\' un commento"#;',
         'const APICE: char = \'"\';  // la quote nel char non apre nulla',
         'fn f<\'a>(x: &\'a str) -> &\'a str { x }  // la lifetime nemmeno',
         '/* commento di blocco /* annidato */ ancora dentro */',
         '// Dal secondo giro in poi lo schema e\' stabile.',
-        '// Pin dell\'action: @ 2026-08-23, alzato a mano.',
-        '// Il piano lo dichiara: piano-v5.md, emendamento 2026-08-17.',
-        '// Verdetto dell\'ultima esecuzione riuscita (run 31166125840,',
-        '// 2026-08-07): la revisione dichiarata coincide.',
         '// La forma normativa resta valida.',
         '// Lo snapshot si committa con la modifica: il diff resta leggibile',
         '// in review.',
-        'assert_eq!(giorni, 18_993);  // 2022-01-01',
     )),
     'esempio.py': '\n'.join((
         '# -*- coding: utf-8 -*-',
@@ -685,7 +540,6 @@ PULITO = {
     'esempio.yml': '\n'.join((
         'run: echo "# non e\' un commento"',
         'chiave: ${VAR#prefisso}',
-        '# Toolchain pinnata: nightly-2026-08-01.',
     )),
 }
 
@@ -724,38 +578,16 @@ def prova_delle_righe():
 #: (nome, file, iniezione, CLASSE ATTESA).
 #:
 #: La classe attesa non e' un ornamento. Senza, una mutazione puo' passare
-#: perche' e' inciampata in un'altra regola — «la prima stesura diceva» cade
-#: sull'imperfetto anche a regola `stesura-precedente` rotta — e la prova
-#: dichiara sorvegliato cio' che non lo e' piu'.
+#: perche' e' inciampata in un'altra regola, e la prova dichiara sorvegliato
+#: cio' che non lo e' piu'.
 MUTAZIONI = (
     ('marcatore anonimo', 'esempio.rs', '// TODO: rivedere',
      'marcatore-anonimo'),
-    ('data nuda', 'esempio.rs',
-     '// Fino al 2026-07-27 il gate non esiste.', 'data-di-calendario'),
-    # Cio' che assolve una data dev'essere accanto a lei ed esplicito: un
-    # numero grande nella frase non e' una relazione, e senza qualificatore
-    # non e' nemmeno un artefatto.
-    ('data con un numero grande accanto', 'esempio.rs',
-     '// La classe chiusa qui: 9007199254740992 collassa col successivo,\n'
-     '// e la cosa si vede dal 2026-07-27.', 'data-di-calendario'),
-    ('data con un identificatore senza qualificatore', 'esempio.rs',
-     '// Chiuso in 4b9edda9 il 2026-08-07, e da allora il ramo tiene.',
-     'data-di-calendario'),
     ('giro di review', 'esempio.rs',
      '// Nono giro: la stessa proprieta\', un altro nome.', 'giro-di-review'),
     ('review come evento', 'esempio.rs',
      '// Il caso della review: due chiavi canoniche co-presenti.',
      'giro-di-review'),
-    ('data isolata', 'esempio.rs', '// 2026-07-27', 'data-di-calendario'),
-    ('data con un termine tecnico nella stessa frase', 'esempio.rs',
-     '// Corretto il 2026-07-27: overflow in ms.', 'data-di-calendario'),
-    ('data con un uguale altrove nella frase', 'esempio.rs',
-     '// Corretto il 2026-07-27: limite = 5.', 'data-di-calendario'),
-    # Il numero sulla riga di codice non basta: il commento deve essere QUELLA
-    # data, non una frase che la contiene.
-    ('data in una frase, in coda a una riga con un numero', 'esempio.rs',
-     'const LIMITE: usize = 5;  // Corretto il 2026-07-27.',
-     'data-di-calendario'),
     ('tappa di campagna', 'esempio.rs', '// Fase 2A: wiring del catalogo.',
      'tappa-di-campagna'),
     ('milestone da sola', 'esempio.rs', '// Milestone D, chiusa.',
@@ -768,14 +600,10 @@ MUTAZIONI = (
     ('stesura precedente', 'esempio.rs',
      '// La prima stesura di questo oracolo usa la forma sbagliata.',
      'stesura-precedente'),
-    ('imperfetto', 'esempio.rs',
-     '// Il controllo lasciava passare gli helper.', 'difetto-all-imperfetto'),
-    ('imperfetto in -iva', 'esempio.rs', '// Il tipo non veniva riconosciuto.',
-     'difetto-all-imperfetto'),
     ('cronaca in docstring', 'esempio.py', '"""Prima versione della sonda."""',
      'stesura-precedente'),
     ('cronaca in commento yaml', 'esempio.yml',
-     '# Esteso il 2026-08-06 alla CLI.', 'data-di-calendario'),
+     '# La versione precedente del job usa bash.', 'stesura-precedente'),
     # I lessici devono fallire CHIUSI: un file che non si lascia leggere fino
     # in fondo non e' un file pulito, e il commento vietato che segue non lo
     # vedrebbe nessuno.
@@ -837,14 +665,6 @@ def prova_di_mutazione(puntatori):
         raise SystemExit('`review` come evento non e\' piu\' vista')
     ammissioni += 1
 
-    # La data-dato: passa con la relazione attaccata e con il valore sulla
-    # riga di codice, non per il solo fatto di essere isolata.
-    if difetti_del_commento('// 2026-07-25 = 20659 giorni dall\'epoch.', puntatori):
-        raise SystemExit('la data con la relazione attaccata non passa piu\'')
-    if difetti_del_commento('// 1970-01-01', puntatori, 'assert_eq!(v, 0);'):
-        raise SystemExit('la data che annota un valore sulla riga non passa piu\'')
-    ammissioni += 1
-
     return len(MUTAZIONI), ammissioni
 
 
@@ -860,12 +680,11 @@ def main():
         for nome, riga, regola, brano, testo in guasti:
             print('%s:%d [%s: %s]\n    %s' % (nome, riga, regola, brano, testo),
                   file=sys.stderr)
-        print('\nLa spiegazione tecnica va tenuta, al controfattuale presente:\n'
-              '  «cercare solo il nome LETTERALE lascerebbe passare gli helper».',
+        print('\nLa spiegazione tecnica resta; il diario del lavoro sta in Git.',
               file=sys.stderr)
         return 1
     commenti = sum(len(prosa(nome, testo)) for nome, testo in sorgenti.items())
-    print('commenti al presente: %d commenti in %d sorgenti, %d puntatori '
+    print('commenti senza diario: %d commenti in %d sorgenti, %d puntatori '
           'governati importati dal gate documentale, %d mutazioni viste con la '
           'classe attesa, %d ammissioni verificate nei due versi, %d righe di '
           'commento controllate una per una'
