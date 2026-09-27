@@ -171,14 +171,11 @@ pub fn spatial_join(
 ///
 /// # Precondizione (contratto del chiamante)
 ///
-/// Ogni geometria dei due lati deve essere GIA' validata: coordinate finite
-/// e validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
-/// o da un kernel che valida il proprio output (es. `checked_result` in
-/// [`crate::topology`]). Su input che viola la precondizione il risultato
-/// e' indefinito e nessun errore dedicato e' garantito: la variante e' per
-/// i soli percorsi in cui la validazione e' dimostrata per costruzione
-/// (R0.1: mai un'inferenza sui chiamanti — il gate resta nella forma
-/// pubblica [`spatial_join`]).
+/// Ogni geometria dei due lati deve essere GIA' validata (coordinate finite,
+/// validita' OGC), come da [`crate::geometry_from_wkb`] o da un kernel che
+/// valida il proprio output (es. `checked_result` in [`crate::topology`]).
+/// Altrimenti il risultato e' indefinito. Solo per percorsi validati per
+/// costruzione (R0.1); il gate resta in [`spatial_join`].
 ///
 /// # Errors
 ///

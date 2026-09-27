@@ -66,11 +66,9 @@ pub(in crate::analyze) fn analyze_expand(op: &str, input: &DataContract) -> Resu
 /// `line_merge`, `overlay`): le colonne attributo non sono propagate; la
 /// geometria aggregata e' nullable (input vuoto -> geometria null).
 ///
-/// I metadati dello SCHEMA di input sono conservati (R2.4): riguardano il
-/// dataset, non le colonne attributo eliminate. Le colonne `extra` sono
-/// passate come `Field` interi: quelle copiate dall'input (le chiavi di
-/// `collect`) conservano i loro metadati (R2.4 identity-preserving), quelle
-/// sintetiche (`polygonize`, `overlay`) nascono senza.
+/// I metadati dello SCHEMA di input restano (R2.4): riguardano il dataset.
+/// Le colonne `extra` sono `Field` interi: quelle copiate dall'input (chiavi
+/// di `collect`) conservano i loro metadati, quelle sintetiche nascono senza.
 pub(in crate::analyze) fn analyze_geometry_only(
     input: &DataContract,
     geometry: &GeometryColumnContract,
@@ -100,23 +98,14 @@ pub(in crate::analyze) fn analyze_geometry_only(
 /// aggiornati al target risolto. La sorgente DEVE avere un CRS risolto
 /// (R4.6.3: il requisito e' dell'operazione, gate in analyze).
 ///
-/// piano-v5.md#contratti-di-input decisione 8: la riproiezione CAMBIA il fatto (il CRS della
-/// colonna), non ne descrive uno diverso — le chiavi canoniche CRS ereditate
-/// dal campo di input (`crs_id`, `crs_definition`+formato, `srid`,
-/// `axis_order`, `crs_resolution`) sono SOSTITUITE, non fuse: rimosse qui e
-/// ri-emesse dal contratto in `executor.rs::canonical_output_schema`, senza
-/// che il guard R2.6 veda mai una divergenza. Il guard resta intatto per
-/// tutte le altre chiavi. `srid` resta metadato d'autorita'; `axis_order`
-/// descrive invece le coordinate di OUTPUT del backend e viene fissato qui
-/// all'ordine GIS normalizzato (`lon_lat` o `easting_northing`), separato
-/// dall'ordine nativo della definizione d'autorita' (per esempio EPSG:4326
-/// e' authority `lat_lon`, ma PROJ produce x=longitudine/y=latitudine).
-///
-/// Quell'affermazione vale solo se le coordinate ENTRANO nell'ordine GIS
-/// normalizzato: [`require_normalized_axis_order`] lo impone fail-closed
-/// prima di riscrivere la chiave. Senza il gate, con source == target il
-/// backend restituirebbe i byte invariati (nessuna pipeline PROJ) e
-/// l'`axis_order` riscritto contraddirebbe le coordinate che descrive.
+/// La riproiezione cambia il CRS della colonna, quindi le chiavi canoniche
+/// CRS ereditate sono SOSTITUITE, non fuse (piano-v5.md#contratti-di-input,
+/// decisione 8): rimosse qui e ri-emesse da
+/// `executor.rs::canonical_output_schema`, senza divergenze per il guard
+/// R2.6. `axis_order` descrive le coordinate di OUTPUT del backend e si fissa
+/// all'ordine GIS normalizzato (EPSG:4326 e' `lat_lon` d'autorita', ma PROJ
+/// produce x=longitudine); vale solo se l'input e' gia' normalizzato, e
+/// [`require_normalized_axis_order`] lo impone fail-closed.
 pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,
@@ -388,7 +377,7 @@ pub(in crate::analyze) fn analyze_collect(
     analyze_geometry_only(input, geometry, &extra)
 }
 
-/// `generate_grid` (v1.2, generativa): input senza geometrie (trigger); lo
+/// `generate_grid` (generativa): input senza geometrie (trigger); lo
 /// schema di output e' nuovo (geometria nuovo `FieldId` non null +
 /// `cell_i`/`cell_j`, piu' centroidi opzionali) e il numero di celle,
 /// limitato da [`crate::extensions2::MAX_GRID_CELLS`], e' noto a secco
@@ -479,7 +468,7 @@ pub(in crate::analyze) fn analyze_generate_grid(
     )
 }
 
-/// `subdivide` (v1.2): espansione 1:N come `explode` (`__parent_index`,
+/// `subdivide`: espansione 1:N come `explode` (`__parent_index`,
 /// `sorted_by` preservato, `row_count` eliminato); `output_column` rinomina
 /// la colonna geometria preservando il `FieldId`.
 pub(in crate::analyze) fn analyze_subdivide(
@@ -534,7 +523,7 @@ pub(in crate::analyze) fn analyze_subdivide(
     )
 }
 
-/// `snap` (v1.2): 1:1 in place; `reference_wkb` validato strutturalmente e
+/// `snap`: 1:1 in place; `reference_wkb` validato strutturalmente e
 /// decodificato in analisi, `tolerance` finita e non negativa.
 pub(in crate::analyze) fn analyze_snap(
     op: &str,

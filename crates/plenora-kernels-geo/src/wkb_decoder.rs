@@ -1,19 +1,15 @@
 //! Decoder WKB validante (architettura.md#geometrie).
 //!
-//! UNA passata sui byte che esegue la validazione strutturale del contratto
-//! e costruisce la geometria nella stessa camminata — le due scansioni del
-//! percorso precedente (`validate_wkb_contract` + `geozero::Wkb::to_geo`)
-//! fuse senza cedere nulla della garanzia fail-closed.
+//! Una sola passata sui byte esegue la validazione strutturale del contratto
+//! e costruisce la geometria, senza cedere nulla della garanzia fail-closed.
 //!
-//! Contratto di parita' (verificato dall'oracolo differenziale nei test di
-//! questo modulo): ogni payload accettato/rifiutato dal percorso
-//! `validate_wkb_contract` + `Wkb::to_geo` produce qui lo stesso esito, la
-//! stessa categoria di errore e la stessa geometria, coordinata per
-//! coordinata. Le regole sono quelle del validatore strutturale esistente,
-//! nello stesso ordine di valutazione: byte order, type code (protocollo
-//! 2D: niente SRID/riservati/serie Z-M), conteggi contro i byte residui,
-//! X/Y finite, anelli chiusi (confronto esatto first == last), annidamento
-//! limitato, tipi figli delle multi-geometrie, nessun byte residuo.
+//! Contratto di parita' (verificato dall'oracolo differenziale nei test):
+//! ogni payload produce lo stesso esito, la stessa categoria di errore e la
+//! stessa geometria di `validate_wkb_contract` + `Wkb::to_geo`, con le regole
+//! del validatore strutturale nello stesso ordine di valutazione: byte
+//! order, type code (protocollo 2D), conteggi contro i byte residui, X/Y
+//! finite, anelli chiusi (first == last esatto), annidamento limitato, tipi
+//! figli delle multi-geometrie, nessun byte residuo.
 
 use geo::{
     Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
@@ -163,8 +159,8 @@ fn decode_geometry(
                     interiors.push(LineString::from(ring));
                 }
             }
-            // Zero anelli: poligono vuoto, accettato come dal percorso
-            // precedente (validatore strutturale e geozero concordi).
+            // Zero anelli: poligono vuoto, accettato come dal percorso di
+            // riferimento (validatore strutturale e geozero concordi).
             let exterior = exterior.unwrap_or_else(|| LineString::from(Vec::<(f64, f64)>::new()));
             Ok((3, Geometry::Polygon(Polygon::new(exterior, interiors))))
         }
@@ -249,7 +245,7 @@ mod tests {
     use crate::validate_wkb_contract;
 
     /// Oracolo differenziale (architettura.md#geometrie): per ogni payload, il percorso
-    /// precedente (`validate_wkb_contract` + `Wkb::to_geo`) e il decoder
+    /// di riferimento (`validate_wkb_contract` + `Wkb::to_geo`) e il decoder
     /// validante devono produrre lo stesso esito e, in caso di successo,
     /// la stessa geometria coordinata per coordinata.
     fn assert_parity(payload: &[u8], label: &str) {

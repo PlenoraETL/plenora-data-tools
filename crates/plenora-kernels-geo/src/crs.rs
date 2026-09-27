@@ -19,8 +19,7 @@ use serde_json::Value;
 ///
 /// Call this for every geographic input after WKB decoding and before any
 /// kernel work. Wrapper tipizzato: la logica e' in
-/// [`plenora_core::crs::validate_geometry_domain`], senza differenze di
-/// comportamento rispetto al sorgente.
+/// [`plenora_core::crs::validate_geometry_domain`].
 ///
 /// # Errors
 ///

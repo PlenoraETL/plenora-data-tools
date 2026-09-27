@@ -1,30 +1,17 @@
 //! Contratto di geometria su forme decodificate (architettura.md#geometrie, D12.3/D12.4).
 //!
-//! Due helper che riproducono SU `Geometry<f64>` cio' che il percorso non
-//! fuso ottiene con il round-trip WKB (encode canonico `to_wkb` +
-//! validazione del decoder architettura.md#geometrie):
+//! Riproduce su `Geometry<f64>` cio' che il percorso non fuso ottiene con il
+//! round-trip WKB (encode canonico `to_wkb` + validazione del decoder):
+//! [`wkb_size_xy`] da' la dimensione ESATTA del WKB ISO XY senza
+//! serializzare; [`validate_geometry_structural`] applica le regole di
+//! `wkb_decoder` nello stesso ordine e con gli stessi messaggi.
 //!
-//! - [`wkb_size_xy`]: dimensione ESATTA del WKB ISO XY prodotto da
-//!   `geozero::ToWkb::to_wkb(CoordDimensions::xy())` — camminata
-//!   strutturale, nessuna serializzazione, nessuna stima;
-//! - [`validate_geometry_structural`]: le stesse regole del decoder
-//!   validante (`wkb_decoder`), nello stesso ordine di valutazione e con
-//!   gli stessi messaggi d'errore.
-//!
-//! Note di parita' con l'encoder canonico (geozero 0.15), verificate dai
-//! test di questo modulo:
-//!
-//! - un `Polygon` e' SEMPRE codificato con l'anello esterno piu' gli
-//!   interni: un poligono vuoto produce un anello esterno a zero
-//!   coordinate, che il decoder rifiuta — quindi anche qui il poligono
-//!   vuoto e' rifiutato, esattamente come nel percorso non fuso (che lo
-//!   scopre alla ri-validazione post-encode);
-//! - `Line` e' codificata come `LineString` di due coordinate, `Rect` e
-//!   `Triangle` come poligoni (un anello chiuso di 5 e 4 coordinate):
-//!   misura e validazione seguono questa mappa canonica;
-//! - i figli delle multi-geometrie sono tipizzati per costruzione in
-//!   `geo` (un `MultiPoint` contiene solo `Point`): l'incoerenza di tipo
-//!   figlio prevista dal decoder non e' rappresentabile su geometria.
+//! Parita' con l'encoder canonico (geozero 0.15), verificata dai test: un
+//! `Polygon` e' sempre codificato con l'anello esterno, quindi il poligono
+//! vuoto e' rifiutato come nel percorso non fuso; `Line` vale come
+//! `LineString` di due coordinate, `Rect` e `Triangle` come poligoni.
+//! L'incoerenza di tipo dei figli delle multi-geometrie non e'
+//! rappresentabile in `geo`.
 
 use geo::{Coord, Geometry, LineString, Polygon};
 

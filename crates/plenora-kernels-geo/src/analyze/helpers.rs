@@ -32,15 +32,11 @@ pub(in crate::analyze) fn invalid_param(
 
 /// Il parametro non e' decodificabile — **oppure** il difetto e' nostro.
 ///
-/// # Perche' non basta `invalid_param`
-///
-/// Perche' la porta WKB rende `Internal` quando la validazione OGC non
-/// conclude, e scartare l'errore per dire «parametro non valido» accusa un WKB
-/// che nessuno ha dimostrato sbagliato: chi legge va a correggere un ingresso
-/// sano, e l'exit code cambia. L'errore interno passa percio' intatto.
-///
-/// La categoria si legge invece della variante, cosi' un errore avvolto —
-/// `Tagged`, diagnostica di riga — non sfugge al riconoscimento.
+/// La porta WKB rende `Internal` quando la validazione OGC non conclude:
+/// quell'errore passa intatto, perche' «parametro non valido» accuserebbe un
+/// WKB che nessuno ha dimostrato sbagliato e cambierebbe l'exit code. Si
+/// legge la categoria e non la variante, cosi' un errore avvolto (`Tagged`)
+/// non sfugge.
 pub(in crate::analyze) fn parametro_non_decodificabile(
     op: &str,
     name: &'static str,
@@ -127,22 +123,10 @@ pub(in crate::analyze) fn short_id(op: &str) -> &str {
 
 /// Decodifica e valida strutturalmente un WKB esadecimale da config.
 ///
-/// # Perche' sui byte e non su `&str`
-///
-/// Affettare la stringa per indici di byte (`&hex[index..index + 2]`) dopo
-/// aver controllato che la LUNGHEZZA IN BYTE sia pari non basta: le due cose
-/// non si implicano. `"a\u{e9}b"` e' lungo quattro
-/// byte — pari — ma l'indice 2 cade in mezzo alla codifica UTF-8 di `\u{e9}`,
-/// e affettare fuori da un confine di carattere e' un **panic**, non un
-/// errore. L'input arriva dalla configurazione di un piano, quindi da fuori.
-///
-/// Trovato dalla campagna fuzz notturna (`analyze_geo`, artefatto
-/// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`). Il lint anti-panic R6
-/// non copre questa classe: non c'e' nessun `unwrap`/`expect`/`panic!`, il
-/// panic e' dentro l'indicizzazione.
-///
-/// Ogni byte e' quindi esaminato per se': non ASCII o non esadecimale e' un
-/// errore esplicito, mai un panic.
+/// Si lavora sui byte e non su `&str`: una lunghezza in byte pari non
+/// garantisce confini di carattere (`"a\u{e9}b"`), e affettare una stringa
+/// fuori da un confine e' un panic che il lint R6 non vede. Ogni byte non
+/// ASCII o non esadecimale e' un errore esplicito.
 ///
 /// # Errors
 ///
@@ -169,7 +153,7 @@ pub(in crate::analyze) fn validate_other_wkb(op: &str, hex: &str) -> Result<()> 
 // Helper su contratti e schemi.
 // ---------------------------------------------------------------------------
 
-/// v1: esattamente una colonna geometria attiva per input (D16).
+/// Esattamente una colonna geometria attiva per input (D16).
 pub(in crate::analyze) fn single_geometry<'a>(
     op: &str,
     input: &'a DataContract,
@@ -186,13 +170,11 @@ pub(in crate::analyze) fn single_geometry<'a>(
 /// Identificazione della colonna geometria sul campo dello schema
 /// (piano-v5.md#contratti-di-input, decisione 8).
 ///
-/// Estensione `geoarrow.wkb` OPPURE sole chiavi canoniche
+/// Estensione `geoarrow.wkb` oppure sole chiavi canoniche
 /// (`plenora.geometry.*`), lo stesso criterio del trasporto
-/// ([`crate::arrow_adapter::field_declares_wkb_geometry`]). Il rifiuto vive
-/// QUI, in analisi del piano — lo stesso modello del rifiuto dimensionale di
-/// [`require_xy_dimensions`]: una colonna che il trasporto non saprebbe
-/// identificare e' fermata a compile-plan, mai scoperta a meta' esecuzione
-/// (architettura.md#geometrie).
+/// ([`crate::arrow_adapter::field_declares_wkb_geometry`]). Una colonna che
+/// il trasporto non saprebbe identificare si ferma a compile-plan, mai a
+/// meta' esecuzione (architettura.md#geometrie).
 pub(in crate::analyze) fn require_identifiable_geometry(
     op: &str,
     input: &DataContract,
@@ -217,11 +199,10 @@ pub(in crate::analyze) fn require_identifiable_geometry(
 /// Contratto di output di un'operazione che RISCRIVE i tipi geometrici
 /// della colonna (piano-v5.md#contratti-di-input, decisione 8).
 ///
-/// La proprieta' `types` dichiara i tipi dell'OUTPUT e le chiavi canoniche
-/// `types`/`types_declaration` ereditate dal campo di input sono rimosse —
-/// l'emissione (`executor.rs::canonical_output_schema`) le ri-emette dal
-/// contratto, senza conflitto R2.6 con la lineage. Tutto il resto e'
-/// preservato (stessi campi, stesso `FieldId`: trasformazione in place).
+/// La proprieta' `types` dichiara i tipi dell'OUTPUT; le chiavi canoniche
+/// `types`/`types_declaration` ereditate sono rimosse e
+/// `executor.rs::canonical_output_schema` le ri-emette dal contratto, senza
+/// conflitto R2.6. Il resto e' preservato (stesso `FieldId`, in place).
 pub(in crate::analyze) fn with_geometry_types(
     input: &DataContract,
     geometry: &GeometryColumnContract,
@@ -346,11 +327,9 @@ pub(in crate::analyze) fn with_schema_metadata(
 /// Copia del campo geometria con nullability aggiornata (per gli output a
 /// sole geometrie, dove l'aggregazione puo' produrre null).
 ///
-/// R2.4 identity-preserving: TUTTI i metadati del campo sorgente sono
-/// clonati — incluse le chiavi canoniche `plenora.*` gia' presenti in
-/// input — perche' il campo geometria sopravvive invariato (stesso nome,
-/// stessi byte); l'emissione canonica resta centralizzata a valle
-/// (`executor.rs::canonical_output_schema`), qui non si aggiunge nulla.
+/// R2.4 identity-preserving: si clonano TUTTI i metadati del campo, chiavi
+/// `plenora.*` comprese, perche' il campo sopravvive invariato; l'emissione
+/// canonica resta in `executor.rs::canonical_output_schema`.
 pub(in crate::analyze) fn geometry_field(
     input: &DataContract,
     geometry: &GeometryColumnContract,
@@ -446,29 +425,17 @@ pub(in crate::analyze) fn require_xy_dimensions(
 /// devono gia' essere nell'ordine GIS normalizzato del CRS SORGENTE
 /// (x=longitudine/easting, y=latitudine/northing).
 ///
-/// E' l'invariante che tutto il centro assume — la stessa dichiarata da
-/// [`plenora_core::crs::validate_geometry_domain`], che pero' puo' solo
-/// verificare i domini e non l'ordine (una coppia (lat, lon) italiana cade
-/// dentro il dominio lon/lat). L'unico segnale disponibile e' la chiave
-/// canonica `plenora.geometry.axis_order` dichiarata dal produttore, letta
-/// qui fail-closed (R5.1) e non usata per decidere. Con una dichiarazione
-/// divergente `geo.reproject` sbaglierebbe in due modi, entrambi silenziosi:
+/// [`plenora_core::crs::validate_geometry_domain`] verifica i domini ma non
+/// l'ordine (una coppia (lat, lon) italiana cade nel dominio lon/lat): l'unico
+/// segnale e' la chiave `plenora.geometry.axis_order` del produttore, letta
+/// fail-closed (R5.1). Con un ordine diverso `geo.reproject` sbaglierebbe in
+/// silenzio: con source == target i byte restano invariati ma `axis_order`
+/// viene riscritto; con source != target PROJ legge x=longitudine e
+/// trasforma coordinate invertite.
 ///
-/// - source == target: il backend non costruisce alcuna pipeline e
-///   restituisce i byte di input invariati
-///   ([`crate::proj_backend::Reprojector::new`]), mentre l'analisi
-///   riscrive `axis_order` con l'ordine GIS normalizzato — il metadato
-///   contraddirebbe le coordinate che descrive;
-/// - source != target: la pipeline PROJ e' normalizzata per la
-///   visualizzazione GIS e legge x=longitudine/easting — coordinate
-///   dichiarate al contrario verrebbero trasformate come se non lo fossero,
-///   producendo un risultato sbagliato invece di un errore.
-///
-/// La chiave assente resta accettata per il percorso legacy. `unknown`
-/// esplicito e' invece onesto per il trasporto ma non dimostra l'ordine fisico
-/// necessario a trasformare le coordinate: anche quello fallisce chiuso.
-/// Riordinare le coordinate non e' compito di questa op: sarebbe una
-/// trasformazione dei dati che nessuno ha chiesto.
+/// La chiave assente resta accettata per il percorso legacy; `unknown`
+/// esplicito non dimostra l'ordine fisico e fallisce chiuso. Riordinare le
+/// coordinate non e' compito di questa op.
 pub(in crate::analyze) fn require_normalized_axis_order(
     op: &str,
     input: &DataContract,

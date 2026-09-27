@@ -6,8 +6,8 @@ use crate::spatial_join::JoinPredicate;
 use crate::topology::OverlayMode;
 
 // ---------------------------------------------------------------------------
-// Config serde minimali (duplicazione documentata: stessi nomi e domini del
-// protocollo legacy, senza i parametri di trasporto).
+// Config serde minimali: stessi nomi e domini del protocollo legacy, senza i
+// parametri di trasporto.
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -149,7 +149,7 @@ pub(in crate::analyze) struct FromCoordsConfig {
     pub(in crate::analyze) crs: Option<String>,
 }
 
-/// Secondo operando geometrico da config (v1, D16: una sola colonna
+/// Secondo operando geometrico da config (D16: una sola colonna
 /// geometria per input): WKB codificato esadecimale, validato in analisi.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -251,7 +251,7 @@ pub(in crate::analyze) struct GridExtentConfig {
     pub(in crate::analyze) ymax: f64,
 }
 
-/// `generate_grid` (v1.2, generativa): `shape` default `square`,
+/// `generate_grid` (generativa): `shape` default `square`,
 /// `include_centroid` default false, CRS da `crs` o di piano.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -263,7 +263,7 @@ pub(in crate::analyze) struct GenerateGridConfig {
     pub(in crate::analyze) include_centroid: Option<bool>,
 }
 
-/// `subdivide` (v1.2): `output_column` rinomina la colonna geometria
+/// `subdivide`: `output_column` rinomina la colonna geometria
 /// (default: nome invariato, in place come `explode`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -272,7 +272,7 @@ pub(in crate::analyze) struct SubdivideConfig {
     pub(in crate::analyze) output_column: Option<String>,
 }
 
-/// `snap` (v1.2): riferimento WKB hex da config (convenzione D16, stesso CRS
+/// `snap`: riferimento WKB hex da config (convenzione D16, stesso CRS
 /// dell'input), validato strutturalmente e decodificato in analisi.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -281,7 +281,7 @@ pub(in crate::analyze) struct SnapConfig {
     pub(in crate::analyze) tolerance: f64,
 }
 
-/// `coverage_validate` (v1.3): tutti i campi opzionali; default kernel
+/// `coverage_validate`: tutti i campi opzionali; default kernel
 /// (`tolerance` 0, `max_issues` [`crate::extensions3::DEFAULT_MAX_ISSUES`]).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -290,7 +290,7 @@ pub(in crate::analyze) struct CoverageValidateConfig {
     pub(in crate::analyze) max_issues: Option<usize>,
 }
 
-/// `shared_paths` (v1.3): tutti i campi opzionali; default kernel
+/// `shared_paths`: tutti i campi opzionali; default kernel
 /// (`tolerance` 0, `min_length` 0).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -299,7 +299,7 @@ pub(in crate::analyze) struct SharedPathsConfig {
     pub(in crate::analyze) min_length: Option<f64>,
 }
 
-/// `cluster_dbscan` (v1.3): `eps` e `min_points` obbligatori; `output_column`
+/// `cluster_dbscan`: `eps` e `min_points` obbligatori; `output_column`
 /// opzionale (default [`super::CLUSTER_ID_COLUMN`]).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

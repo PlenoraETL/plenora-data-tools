@@ -1,4 +1,4 @@
-//! Pure geometry kernels shared by future transport adapters.
+//! Pure geometry kernels, independent of the transport adapters.
 
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::buffer::{BufferStyle, LineCap};
@@ -124,8 +124,8 @@ fn length_unchecked(geometry: &Geometry<f64>) -> f64 {
     }
 }
 
-/// Manipola currently defines perimeter through GeoSeries.length, therefore
-/// this intentionally shares the same semantics as `length`.
+/// Perimeter shares the semantics of `length`, as Manipola defines it through
+/// `GeoSeries.length`.
 ///
 /// # Errors
 ///
@@ -223,26 +223,13 @@ fn is_negative_zero(value: f64) -> bool {
 pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
 
-    // `geo` 0.33.1 calcola il punto interno con
-    // una sweep line che ordina gli eventi per coordinata. Con `-0.0` e `0.0`
-    // presenti insieme — due codifiche IEEE dello stesso valore — l'invariante
-    // sugli intervalli salta:
-    //
-    //   assertion failed: intervals_overlap(current_interval, overlapping_interval)
-    //   geo-0.33.1/src/algorithm/sweep/mod.rs:169
-    //
-    // E' un `debug_assert!`, quindi in release viene compilato via e il calcolo
-    // prosegue sull'invariante violata: il punto restituito sarebbe sbagliato
-    // in silenzio. Il fuzzing lo vede solo perche' cargo-fuzz attiva le
-    // debug-assertions.
-    //
-    // `check_validation()` non intercetta il caso, ed e' corretto che non lo
-    // faccia: il poligono e' valido: `-0.0` non e' una coordinata malformata.
-    // La normalizzazione avviene su una copia di lavoro, quindi la geometria
-    // del chiamante e il round-trip WKT restano intatti. Trovato dal fuzz
-    // target `wkt_operations`; il corpus non e' versionato, quindi la
-    // copertura permanente e' il test
-    // `point_on_surface_survives_negative_zero_coordinates`.
+    // Con `-0.0` e `0.0` presenti insieme la sweep line di `interior_point`
+    // (`geo` 0.33.1, `algorithm/sweep/mod.rs:169`) viola la propria
+    // invariante sugli intervalli: e' un `debug_assert!`, quindi in release
+    // il punto restituito e' sbagliato in silenzio. Il poligono e' valido e
+    // `check_validation()` non intercetta il caso: lo zero si normalizza su
+    // una copia di lavoro, e la geometria del chiamante resta intatta.
+    // Copertura: il test `point_on_surface_survives_negative_zero_coordinates`.
     //
     // `interior_point` passa poi da `relate`, che puo' andare in panico anche
     // su una geometria valida: gira dentro [`crate::calcolo_protetto`].
@@ -261,11 +248,10 @@ pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>
 
 /// Serializzazione WKT della geometria.
 ///
-/// Migrazione all'API fallibile di `wkt` v2 (`try_wkt_string`, diff 3+4 del
-/// candidato memory-lab): la vecchia `wkt_string()` resta infallibile nella
-/// firma e puo' panicare su un anello interno orfano (poligono con interni
-/// ma senza esterno) — `try_wkt_string()` lo rifiuta con un errore invece.
-/// Il testo reso e' fisso: il payload di `wkt` non attraversa il confine.
+/// Usa l'API fallibile `try_wkt_string`: `wkt_string()` puo' panicare su un
+/// anello interno orfano (poligono con interni ma senza esterno), che
+/// `try_wkt_string()` rifiuta con un errore. Il testo reso e' fisso: il
+/// payload di `wkt` non attraversa il confine.
 ///
 /// # Errors
 ///
@@ -564,14 +550,10 @@ mod tests {
         ])
     }
 
-    /// Regressione del crash che il fuzz target `wkt_operations` produce su
-    /// questo poligono, e che rende rossa ogni campagna finche' resta.
+    /// Regressione del fuzz target `wkt_operations`.
     ///
-    /// Il poligono contiene `-0.0` accanto a `0.0`: due codifiche IEEE dello
-    /// stesso valore. `geo` 0.33.1 lo dichiara valido — correttamente — ma la
-    /// sweep line di `interior_point()` viola la propria invariante sugli
-    /// intervalli. Con le debug-assertions e' un panico; in release sarebbe un
-    /// punto sbagliato restituito in silenzio.
+    /// Poligono valido con `-0.0` accanto a `0.0`: la sweep line di
+    /// `interior_point()` ne viola l'invariante (vedi `point_on_surface`).
     #[test]
     fn point_on_surface_survives_negative_zero_coordinates() {
         let with_negative_zero = Geometry::Polygon(polygon![
@@ -815,14 +797,10 @@ mod tests {
         assert_eq!(vertex_count(&boundary_unchecked(&duplicated)).unwrap(), 0);
     }
 
-    /// Regressione del reperto originale del laboratorio
-    /// (consegna-wkt-encoder): `MultiPolygon` col primo (e unico) componente
-    /// vuoto. Validazione OGC lo accetta — le geometrie vuote sono valide —
-    /// quindi il gate d'ingresso di `to_wkt` non lo ferma: sull'encoder v1
-    /// panica dentro `exterior().unwrap()`. La v2 lo tratta come un
-    /// componente vuoto legittimo e rende `MULTIPOLYGON(EMPTY)` — non e' un
-    /// errore, e' l'esito corretto: la migrazione a `try_wkt_string()` non
-    /// cambia questo caso, lo lascia riuscire dove l'encoder v1 panica.
+    /// `MultiPolygon` col primo (e unico) componente vuoto.
+    ///
+    /// E' valido OGC, quindi il gate d'ingresso di `to_wkt` non lo ferma:
+    /// l'esito corretto e' `MULTIPOLYGON(EMPTY)`, non un errore ne' un panico.
     #[test]
     fn to_wkt_su_multipolygon_col_primo_componente_vuoto_non_panica() {
         let vuoto = geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
@@ -834,14 +812,10 @@ mod tests {
         );
     }
 
-    /// Il caso che l'encoder v2 rifiuta davvero: un anello interno senza un
-    /// esterno che lo contenga (esterno vuoto, interni non vuoti) — la forma
-    /// che il vecchio encoder avrebbe dovuto «promuovere» a esterno per
-    /// scrivere qualcosa, e che la patch rifiuta esplicitamente invece.
-    /// Diverso dal caso sopra: li' l'esterno e' vuoto *e* non ci sono
-    /// interni; qui l'esterno e' vuoto ma un interno c'e' — la condizione
-    /// del guardiano (`num_interiors() != 0 && esterno vuoto`) scatta solo
-    /// qui.
+    /// Il caso che l'encoder rifiuta: esterno vuoto con un interno non vuoto.
+    ///
+    /// Diverso dal caso sopra, dove non ci sono interni: la condizione del
+    /// guardiano (`num_interiors() != 0 && esterno vuoto`) scatta solo qui.
     #[test]
     fn to_wkt_su_anello_interno_senza_esterno_e_rifiutato() {
         let interno = line_string![
@@ -877,28 +851,15 @@ mod tests {
         );
     }
 
-    // Z/M/ZM dell'elenco del laboratorio (diff 3) non e' esercitato qui,
-    // deliberatamente: il confine WKB di questo prodotto
-    // (`geometry_contract::geometry_from_wkb`) rifiuta ogni payload Z/M/ZM
-    // per contratto, quindi nessuna geometria con quella dimensionalita'
-    // raggiunge mai `operations::to_wkt` attraverso un percorso reale — solo
-    // 2D. La copertura Z/M/ZM dell'encoder resta quella del laboratorio e
-    // della suite upstream di `wkt` (`vendor/wkt-0.14.0-v2`), non di questo
-    // modulo.
-    //
-    // Stesso ragionamento per "streaming" e "round-trip" dell'elenco del
-    // laboratorio: `operations::to_wkt` espone solo la firma a `String`
-    // (`try_wkt_string`), mai un `Write` esterno ne' un percorso di
-    // rilettura. `point_wkt` in `extensions.rs`, l'unico altro punto WKT del
-    // prodotto, formatta un `Point` a mano e non passa da `wkt`: non e'
-    // toccato da questo diff. Streaming e round-trip restano coperti dalla
-    // suite upstream di `wkt`, non da questo modulo.
+    // Z/M/ZM, streaming e round-trip non si esercitano qui: il confine WKB
+    // (`geometry_contract::geometry_from_wkb`) rifiuta ogni payload Z/M/ZM, e
+    // `to_wkt` espone solo la firma a `String`. Quei casi li copre la suite
+    // upstream di `wkt` (`vendor/wkt-0.14.0-v2`).
 
-    /// Zero componenti: non un componente vuoto dentro un `MultiPolygon` non
-    /// vuoto (caso sopra), ma il `MultiPolygon` vuoto stesso. La forma resa
-    /// dall'encoder v2 e' diversa da quella con un solo componente vuoto:
-    /// niente parentesi, solo `EMPTY` dopo il prefisso — vedi
-    /// `wkt::to_wkt::geo_trait_impl::write_multi_polygon`.
+    /// Zero componenti: il `MultiPolygon` vuoto stesso.
+    ///
+    /// La forma resa e' senza parentesi, solo `EMPTY` dopo il prefisso (vedi
+    /// `wkt::to_wkt::geo_trait_impl::write_multi_polygon`).
     #[test]
     fn to_wkt_su_multipolygon_a_zero_componenti() {
         let vuoto = Geometry::MultiPolygon(MultiPolygon::new(Vec::new()));
@@ -914,11 +875,8 @@ mod tests {
     /// sposta gli altri componenti nella stringa resa.
     #[test]
     fn to_wkt_su_multipolygon_con_vuoto_in_diverse_posizioni() {
-        // Due quadrati DISTINTI e non sovrapposti (non due copie dello
-        // stesso): un MultiPolygon coi componenti sovrapposti e' invalido
-        // per OGC e verrebbe rifiutato da ensure_valid prima ancora di
-        // raggiungere la posizione del vuoto -- non e' quello che questo
-        // test vuole esercitare.
+        // Due quadrati DISTINTI e non sovrapposti: con componenti
+        // sovrapposti `ensure_valid` rifiuterebbe l'ingresso prima del vuoto.
         let ordinario = || {
             geo::Polygon::new(
                 line_string![
@@ -971,11 +929,8 @@ mod tests {
         }
     }
 
-    /// Controprova nella direzione opposta alle due sopra: un interno
-    /// **valido** (non orfano, esterno non vuoto) deve serializzare per
-    /// intero, non solo non essere rifiutato — il guardiano su
-    /// `InteriorWithoutExterior` non deve mai scattare su un poligono che ha
-    /// entrambi gli anelli.
+    /// Controprova: un interno valido (esterno non vuoto) serializza per
+    /// intero, e il guardiano su `InteriorWithoutExterior` non scatta.
     #[test]
     fn to_wkt_su_poligono_con_interno_valido_serializza_entrambi_gli_anelli() {
         let poligono = Geometry::Polygon(geo::Polygon::new(
@@ -996,11 +951,10 @@ mod tests {
         );
     }
 
-    /// Collection/nidificazione: lo stesso anello orfano di
-    /// `to_wkt_su_anello_interno_senza_esterno_e_rifiutato`, ma raggiunto
-    /// attraverso una `GeometryCollection` invece che come geometria di
-    /// primo livello — il rifiuto deve propagare attraverso la ricorsione
-    /// di `write_geometry_collection`, non fermarsi al primo membro valido.
+    /// L'anello orfano annidato in una `GeometryCollection`.
+    ///
+    /// Il rifiuto propaga attraverso la ricorsione di
+    /// `write_geometry_collection`, non si ferma al primo membro valido.
     #[test]
     fn to_wkt_su_geometrycollection_con_membro_orfano_annidato_e_rifiutato() {
         let interno = line_string![
@@ -1023,12 +977,11 @@ mod tests {
         );
     }
 
-    /// Regressione diff 5 (candidato memory-lab, `vendor/i_shape-1.18.0-buffer`):
-    /// area zero per un percorso vuoto, definita prima dell'accesso
-    /// all'ultimo vertice. Riprodotto anche sulla base (non e' un difetto
-    /// del predicato esatto): un `MultiPolygon` con un componente vuoto
-    /// accanto a uno ordinario, passato a `geo.buffer`, che appoggia su
-    /// `i_shape` per l'offset planare.
+    /// Componente vuoto accanto a uno ordinario, passato a `buffer`.
+    ///
+    /// L'offset planare passa da `i_shape` (`vendor/i_shape-1.18.0-buffer`),
+    /// che da' area zero a un percorso vuoto prima di accedere all'ultimo
+    /// vertice.
     #[test]
     fn buffer_su_multipolygon_con_componente_vuoto_non_panica() {
         let ordinario = polygon![
@@ -1041,7 +994,7 @@ mod tests {
 
         // Non importa se l'esito e' un buffer valido o un errore controllato:
         // importa che non panichi. `distance` positiva e negativa (offset
-        // interno/esterno), come nelle fixture del laboratorio.
+        // interno/esterno).
         for distance in [-1.0, 0.0, 1.0] {
             let _ = buffer(&geometria, distance);
         }
@@ -1073,10 +1026,8 @@ mod tests {
         }
     }
 
-    /// Ordine dei componenti: il vuoto puo' stare all'inizio o in mezzo, non
-    /// solo in coda come nel reperto originale sopra. "Nessun filtro dei
-    /// componenti in ingresso" (diff 5) non deve dipendere da dove il vuoto
-    /// capita nella sequenza.
+    /// Il vuoto all'inizio o in mezzo, non solo in coda: l'esito non dipende
+    /// dalla sua posizione.
     #[test]
     fn buffer_su_multipolygon_con_vuoto_in_diverse_posizioni_non_panica() {
         let ordinario = || {
@@ -1100,15 +1051,10 @@ mod tests {
             let _ = buffer(&vuoto_iniziale, distance);
         }
 
-        // Il vuoto in mezzo richiede due componenti ordinari DISTINTI e non
-        // sovrapposti: due copie dello stesso quadrato sarebbero un
-        // `MultiPolygon` invalido (auto-intersezione fra i due esterni
-        // identici), e la validazione OGC in ingresso lo rifiuterebbe prima
-        // di raggiungere la gestione del componente vuoto (diff 5) — il
-        // test proverebbe un rifiuto per un motivo estraneo, non l'assenza
-        // di panico su quel percorso. Con componenti distinti l'ingresso e'
-        // valido, quindi il buffer deve riuscire davvero: nessun `let _ =`
-        // che assolverebbe anche un rifiuto per la ragione sbagliata.
+        // Componenti DISTINTI e non sovrapposti: due copie dello stesso
+        // quadrato sarebbero un `MultiPolygon` invalido, rifiutato prima del
+        // vuoto. Con ingresso valido il buffer deve riuscire davvero: niente
+        // `let _ =`, che assolverebbe un rifiuto per la ragione sbagliata.
         let vuoto_centrale =
             Geometry::MultiPolygon(MultiPolygon::new(vec![ordinario(), vuoto(), ordinario2()]));
         for distance in [-1.0, 0.0, 1.0] {
@@ -1144,13 +1090,10 @@ mod tests {
         }
     }
 
-    /// Controllo ordinario: senza alcun componente vuoto, il buffer deve
-    /// restare un successo ordinario alle stesse tre distanze usate sopra —
-    /// le controprove sui vuoti sopra provano solo l'assenza di panico, non
-    /// che il percorso normale resti intatto. Un'unica soglia su area > 0
-    /// basta per distinguere "riuscito con un poligono" da "riuscito con
-    /// nulla dentro", senza pretendere un valore esatto che dipenderebbe
-    /// dall'implementazione dell'offset planare.
+    /// Controllo: senza vuoti il buffer riesce alle stesse tre distanze.
+    ///
+    /// Le prove sopra verificano solo l'assenza di panico. La soglia su
+    /// area > 0 non dipende dall'implementazione dell'offset planare.
     #[test]
     fn buffer_su_poligono_ordinario_senza_vuoti_riesce_alle_stesse_distanze() {
         let ordinario = Geometry::Polygon(polygon![

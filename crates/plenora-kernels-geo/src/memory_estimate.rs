@@ -1,53 +1,20 @@
 //! Stima della memoria nativa delle geometrie decodificate
 //! (architettura.md#memoria).
 //!
-//! architettura.md#memoria ("Resource accounting e reservation protocol") prescrive che la
-//! memoria nativa delle geometrie decodificate (oggi `geo::Geometry<f64>`,
-//! in futuro strutture GEOS nel backend feature-gated) sia **stimata e
-//! dichiarata come stima**, mai presentata come conteggio preciso. Questo
-//! modulo implementa l'euristica di stima per il livello geo:
-//!
-//! - [`estimate_geometry_native_bytes`]: STIMA dei byte nativi di una singola
-//!   geometria decodificata;
-//! - [`estimate_geometries_native_bytes`]: aggregazione su una sequenza di
-//!   geometrie (es. colonna decodificata di un batch);
-//! - [`DecodedNativeBytesEstimate`]: accumulatore thread-safe per i punti di
-//!   decode (adapter Arrow), pensato per essere letto dal governor come
-//!   metrica "stimata" (separata da riservato/osservato, architettura.md#memoria).
+//! La memoria nativa delle geometrie decodificate e' **stimata e dichiarata
+//! come stima**, mai presentata come conteggio preciso. Il modulo fornisce
+//! la stima per geometria ([`estimate_geometry_native_bytes`]), per sequenza
+//! ([`estimate_geometries_native_bytes`]) e l'accumulatore thread-safe
+//! [`DecodedNativeBytesEstimate`] letto dal governor come metrica "stimata".
 //!
 //! # Formula di stima (dichiarata)
 //!
-//! Tutti i valori restituiti da questo modulo sono STIME euristiche, non
-//! misure. La formula per tipo e':
-//!
-//! - ogni coordinata XY: [`COORD_XY_BYTES`] = 16 byte (2 x `size_of::<f64>()`);
-//! - ogni nodo geometrico (variante di `Geometry`): [`STRUCT_OVERHEAD_BYTES`]
-//!   = 32 byte di overhead dichiarato (tag enum + header della struttura
-//!   nativa, comprensivo di allineamento);
-//! - ogni `Vec` di coordinate/anelli/componenti: [`VEC_OVERHEAD_BYTES`] =
-//!   24 byte (puntatore + lunghezza + capacita').
-//!
-//! Per tipo:
-//!
-//! - `Point`: STRUCT + 1 coordinata;
-//! - `Line`/`Rect`: STRUCT + 2 coordinate; `Triangle`: STRUCT + 3 coordinate;
-//! - `LineString` (e ogni anello): STRUCT + VEC + N coordinate;
-//! - `Polygon`: STRUCT + VEC (vettore anelli interni) + anello esterno +
-//!   un anello per ogni buco;
-//! - `MultiPoint`: STRUCT + VEC + N coordinate (i punti sono inline nel
-//!   vettore);
-//! - `MultiLineString`: STRUCT + VEC + per ogni figlio VEC + N coordinate;
-//! - `MultiPolygon`: STRUCT + VEC + per ogni figlio il corpo poligonale
-//!   (come `Polygon`, senza ripetere il tag enum);
-//! - `GeometryCollection`: STRUCT + VEC + somma ricorsiva delle stime dei
-//!   figli.
-//!
-//! La stima e' intenzionalmente una **approssimazione per eccesso controllato
-//! del solo costo dei dati**: non modella la capacita' allocata in eccesso
-//! dei `Vec`, le indirezioni di un eventuale backend GEOS ne' le strutture
-//! ausiliarie (indici spaziali, envelope precalcolati). Va quindi riportata
-//! nelle metriche come "memoria nativa stimata", mai come conteggio preciso
-//! (architettura.md#memoria, paragrafo "Perimetro di `max_governed_memory_bytes`").
+//! [`COORD_XY_BYTES`] per coordinata XY, [`STRUCT_OVERHEAD_BYTES`] per nodo
+//! geometrico, [`VEC_OVERHEAD_BYTES`] per ogni `Vec` di coordinate, anelli o
+//! componenti; le collection sommano ricorsivamente i figli. La stima conta
+//! solo i dati: non modella la capacita' in eccesso dei `Vec`, le
+//! indirezioni GEOS ne' le strutture ausiliarie (architettura.md#memoria,
+//! "Perimetro di `max_governed_memory_bytes`").
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -146,11 +113,8 @@ pub fn estimate_geometries_native_bytes<'a>(
 /// Accumulatore thread-safe della STIMA dei byte nativi decodificati
 /// (architettura.md#memoria: metrica "stimata", separata da riservato/osservato).
 ///
-/// Punto di accumulo naturale per gli adapter che decodificano celle WKB in
-/// parallelo (rayon): ogni cella decodificata contribuisce la propria stima
-/// e il totale puo' essere letto in qualsiasi momento dal governor.
-/// L'integrazione con `plenora-engine` e' volutamente rimandata: qui vive
-/// solo il contatore e le funzioni di stima.
+/// Gli adapter che decodificano celle WKB in parallelo vi sommano la stima di
+/// ogni cella; il totale e' leggibile in qualsiasi momento.
 #[derive(Debug, Default)]
 pub struct DecodedNativeBytesEstimate {
     total: AtomicU64,

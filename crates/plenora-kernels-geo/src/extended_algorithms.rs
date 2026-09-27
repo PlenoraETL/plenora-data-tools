@@ -1,4 +1,4 @@
-//! Bounded algorithms extending the original Manipola operation set.
+//! Algoritmi geometrici estesi, con limiti di lavoro e di output dichiarati.
 
 use geo::algorithm::line_measures::{
     Bearing, Densify, Euclidean, FrechetDistance, Geodesic, InterpolateLine, Length,
@@ -110,8 +110,8 @@ fn checked_densified_line_count(
         let dy = segment.end.y - segment.start.y;
         let length = dx.hypot(dy);
         let pieces = (length / max_segment_length).ceil();
-        // Soglia 2^64, esatta in f64 e uguale al valore di `u64::MAX as f64`
-        // (che arrotonderebbe per eccesso): stesso confronto di prima.
+        // Soglia 2^64: esatta in f64 e uguale a `u64::MAX as f64`, che
+        // arrotonda per eccesso.
         if !pieces.is_finite() || pieces > 18_446_744_073_709_551_616.0 {
             return Err(ExtendedAlgorithmError::IndexOverflow);
         }
@@ -874,9 +874,7 @@ fn point_ratio_on_segment(
     if length_squared == 0.0 {
         return None;
     }
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Stessa forma non fusa, per lo stesso motivo.
     #[allow(clippy::suboptimal_flops)]
     let parameter = (((point.x() - segment.line.start.x) * dx
         + (point.y() - segment.line.start.y) * dy)
@@ -1089,8 +1087,8 @@ pub fn split_line(
     ratios.retain(|ratio| ratio.is_finite() && *ratio > 0.0 && *ratio < 1.0);
     ratios.sort_by(f64::total_cmp);
     // The tolerance requested by the caller may merge nearby cuts by design.
-    // With an exact (zero) tolerance, only absorb floating duplicates around a
-    // shared vertex; a fixed 1e-12 floor used to erase legitimate tiny pieces.
+    // With an exact (zero) tolerance, only floating duplicates around a
+    // shared vertex are absorbed, so legitimate tiny pieces survive.
     let ratio_tolerance = (tolerance / total_length).max(f64::EPSILON * 8.0);
     ratios.dedup_by(|left, right| (*left - *right).abs() <= ratio_tolerance);
     let part_count =

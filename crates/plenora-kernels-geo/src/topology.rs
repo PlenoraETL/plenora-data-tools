@@ -1,5 +1,5 @@
-//! Polygonal boolean kernels. Non-polygon inputs are rejected explicitly
-//! until a backend with full GEOS-compatible dimensional semantics is wired.
+//! Polygonal boolean kernels. Non-polygon inputs are rejected explicitly:
+//! they need a backend with full GEOS-compatible dimensional semantics.
 
 use geo::algorithm::bool_ops::unary_union;
 use geo::{BooleanOps, Buffer, CoordsIter, Geometry, MultiPolygon};
@@ -139,20 +139,16 @@ pub fn boolean_operation(
 
 /// Variante di [`boolean_operation`] SENZA il gate OGC di ingresso.
 ///
-/// La validazione OGC DELL'OUTPUT resta ([`checked_result`]): e' la
-/// garanzia del produttore per i consumatori a valle (regola delle catene,
-/// R0.1). Il rifiuto dei tipi non poligonali resta: e' il contratto del
-/// kernel, non una validazione.
+/// Restano la validazione OGC dell'output ([`checked_result`]), garanzia del
+/// produttore per i consumatori a valle (R0.1), e il rifiuto dei tipi non
+/// poligonali, che e' il contratto del kernel.
 ///
 /// # Precondizione (contratto del chiamante)
 ///
-/// Entrambi gli input devono essere GIA' validati OGC (e a coordinate
-/// finite), come garantito da [`crate::geometry_from_wkb`] al decode o da
-/// un kernel che valida il proprio output. Su input che viola la
-/// precondizione il risultato e' indefinito e nessun errore dedicato e'
-/// garantito: la variante e' per i soli percorsi in cui la validazione e'
-/// dimostrata per costruzione (R0.1: mai un'inferenza sui chiamanti — il
-/// gate resta nella forma pubblica [`boolean_operation`]).
+/// Entrambi gli input GIA' validati OGC e a coordinate finite, per
+/// costruzione: da [`crate::geometry_from_wkb`] o da un kernel che valida il
+/// proprio output, mai per inferenza sui chiamanti (R0.1). Altrimenti il
+/// risultato e' indefinito e nessun errore dedicato e' garantito.
 ///
 /// # Errors
 ///
@@ -383,9 +379,9 @@ fn polygon_overlay_impl(
             as_multi_polygon(geometry)?;
         }
     }
-    // Percorso gated: il join candidati rivalida gli input (comportamento
-    // pubblico invariato, gate intatti). Percorso validated: gli input
-    // sono coperti dalla precondizione, il join non rivalida.
+    // Percorso gated: il join candidati rivalida gli input. Percorso
+    // validated: gli input sono coperti dalla precondizione, il join non
+    // rivalida.
     let pairs = if validated {
         crate::spatial_join::spatial_join_validated(
             left,
@@ -655,9 +651,10 @@ mod tests {
         ));
     }
 
-    /// Sintetico attraverso la conversione reale (stessa motivazione di
-    /// `predicates::classifica_lato_non_appiattisce_l_interruzione`): nessun
-    /// reperto reale interrompe piu' `geo` col candidato esatto, quindi
+    /// Sintetico attraverso la conversione reale (come
+    /// `predicates::classifica_lato_non_appiattisce_l_interruzione`).
+    ///
+    /// Nessun reperto reale interrompe `geo` col candidato esatto, quindi
     /// l'innesco e' un `EsitoValidazione::NonConclusa` costruito a mano, ma
     /// la funzione chiamata e' quella vera di `dissolve`.
     #[test]
@@ -972,13 +969,10 @@ mod tests {
 
     #[test]
     fn validated_variants_document_the_caller_precondition() {
-        // Test di documentazione del contratto, NON un nuovo modo di
-        // accettare geometrie invalide in produzione: il percorso gated
-        // rifiuta il bowtie in INGRESSO (gate intatto), la variante
-        // validated omette quel gate perche' la precondizione e' del
-        // chiamante — qui violata ad arte. Gli errori ammessi restano solo
-        // quelli dei gate di OUTPUT (`InvalidGeometry` dal risultato) e di
-        // tipo: nessun panic, nessuna accettazione silenziosa garantita.
+        // Precondizione violata ad arte: il percorso gated rifiuta il bowtie
+        // in ingresso, la variante validated no. Gli errori ammessi sono solo
+        // quelli dei gate di output (`InvalidGeometry`) e di tipo: nessun
+        // panic.
         let bowtie = Geometry::Polygon(polygon![
             (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
             (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),

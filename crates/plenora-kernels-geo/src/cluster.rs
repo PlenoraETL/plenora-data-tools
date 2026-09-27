@@ -1,46 +1,27 @@
-//! Kernel di clustering spaziale per densita' (`geo.cluster_dbscan`),
-//! estensione di catalogo v1.3.
+//! Kernel di clustering spaziale per densita' (`geo.cluster_dbscan`).
 //!
 //! Kernel puro su `geo::Point<f64>` piu' l'adapter di colonna
 //! (`dbscan_column`) che mappa gli errori su [`PlenoraError`] preservando i
-//! messaggi, come `extensions.rs` (v1.1), `extensions2.rs` (v1.2) ed
-//! `extensions3.rs` (v1.3).
+//! messaggi.
 //!
-//! Scelte documentate (v1):
-//!
-//! - **Solo Point**: l'input dev'essere puntuale; ogni altro tipo geometrico
-//!   e' rifiutato esplicitamente (fail-closed, come `extensions3.rs` per i
-//!   non poligonali). Niente `use_centroid` in v1: il centroide di un
-//!   poligono non rappresenta la sua densita' spaziale e la scelta sarebbe
-//!   silenziosa; se servira', sara' un parametro di config esplicito in v2.
+//! - **Solo Point**: ogni altro tipo e' rifiutato (fail-closed). Niente
+//!   centroide dei poligoni: non rappresenta la loro densita' spaziale.
 //! - **DBSCAN standard**: un punto e' `core` se il suo eps-vicinato (distanza
-//!   euclidea `<= eps`, **incluso il punto stesso**) contiene almeno
-//!   `min_points` punti; i cluster sono le componenti connesse per densita'
-//!   dei core point; i punti non-core nel vicinato di un core sono `border`;
-//!   gli altri sono `noise`. Etichette `cluster_id` `UInt64` `0..k-1`; noise
-//!   assegnati al cluster che li raggiunge; solo i noise mai assegnati → `null` (colonna nullable). Un border
-//!   raggiungibile da due cluster e' assegnato al primo che lo raggiunge
-//!   (ordine di visita, vedi sotto).
-//! - **Vicinato via R-tree** (`rstar`, gia' dipendenza del crate, come
-//!   `spatial_join`/`snap`): range query con raggio `eps` per punto, nessuna
+//!   `<= eps`, punto stesso incluso) contiene almeno `min_points` punti; i
+//!   cluster sono le componenti connesse per densita' dei core; `cluster_id`
+//!   `UInt64` `0..k-1`, `null` per i noise mai assegnati. Un border
+//!   raggiungibile da due cluster va al primo che lo raggiunge.
+//! - **Vicinato via R-tree** (`rstar`): range query di raggio `eps`, nessuna
 //!   scansione O(n²).
-//! - **Determinismo obbligatorio**: la visita esterna segue l'indice di riga
-//!   crescente; le liste di vicini sono ordinate per indice; l'espansione di
-//!   un cluster e' una coda FIFO alimentata in ordine di indice; i cluster
-//!   sono numerati **in ordine di scoperta** (il primo cluster trovato
-//!   scorrendo le righe e' 0). Nessuna iterazione su hash map: stesso input
-//!   → stessi id, run dopo run.
-//! - Righe con geometria **null**: non partecipano al clustering e ricevono
-//!   etichetta null (null propagato, non noise); conservano la posizione.
-//! - `eps` finito e `> 0`, `min_points >= 1` (con `min_points = 1` ogni punto
-//!   e' core: i punti isolati formano cluster di un elemento). `eps` e' in
-//!   unita' di mappa: il requisito di catalogo e' `Projected`.
+//! - **Determinismo**: visita per indice di riga crescente, vicini ordinati
+//!   per indice, espansione FIFO, cluster numerati in ordine di scoperta;
+//!   nessuna iterazione su hash map.
+//! - Geometria **null**: etichetta null (non noise), posizione conservata.
+//! - `eps` finito e `> 0` in unita' di mappa (requisito `Projected`),
+//!   `min_points >= 1`.
 //!
-//! Il calcolo e' globale (un vicinato dipende da tutto l'input), quindi la
-//! classe di esecuzione e' `Blocking`; l'output resta allineato 1:1 alle
-//! righe di input (`OneToOne`).
-//!
-//! Errori: le condizioni del kernel puro usano [`ClusterError`].
+//! Calcolo globale, quindi classe `Blocking`; output `OneToOne`. Gli errori
+//! del kernel puro usano [`ClusterError`].
 
 use std::collections::{HashMap, VecDeque};
 
