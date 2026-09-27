@@ -887,18 +887,21 @@ che ne cita un frammento non rivela nulla che il chiamante non abbia scritto.
   `crs` (non `data_mapping`): il testo riguarda una definizione fornita nel
   piano o nei metadati, cioè configurazione, e senza di esso una definizione
   malformata non sarebbe diagnosticabile. Nella stessa variante finisce anche
-  il PROJJSON malformato **prodotto da PROJ**, con il testo di serde;
-- `geo` → `ProjBackendError::InvalidInput`/`InvalidOutput` e le varianti
-  omologhe dei kernel: `geo::Validation` nomina **ruoli e indici** («anello
-  interno numero 2», «coordinate at index 7»), mai i valori. È già la forma
-  strutturale che questo progetto usa nei propri messaggi.
+  il PROJJSON malformato **prodotto da PROJ**, con il testo di serde.
+
+`geo` non figura qui: il testo di `geo::Validation` interpola indici
+dell'ingresso, quindi si legge solo per classificare e ne esce una voce
+chiusa, `RagioneNonValida`, con un caso per la forma non riconosciuta. Vale
+per i kernel e per la trasformazione PROJ; lo presidia il canary
+`ogc_validation_classifies_overlap_without_leaking_the_member_index`.
 
 **Hazard:** la riga di confine è il *percorso*, non la libreria. Se
 `serde_json` venisse usato per deserializzare contenuto di celle su un
 percorso che propaga l'errore, o PROJ per interpretare una definizione presa
-dai dati, quei due punti diventerebbero fughe. Non c'è oggi un controllo
-automatico che tenga la mappa onesta: è una revisione da fare a ogni nuovo
-uso di una dipendenza sul percorso dati.
+dai dati, quei due punti diventerebbero fughe.
+`scripts/verifica_privacy_dipendenze.py` intercetta i nuovi siti diretti dei
+pattern noti, ma è un controllo testuale: la mappa resta una revisione da fare
+a ogni nuovo uso di una dipendenza sul percorso dati.
 **Condizione di rientro:** adattatori tipizzati per dipendenza **e
 operazione**, che espongano solo un codice stabile e un testo controllato,
 come già fatto per arrow, GEOS e la trasformazione PROJ.

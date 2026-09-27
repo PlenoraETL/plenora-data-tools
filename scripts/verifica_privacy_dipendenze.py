@@ -12,8 +12,8 @@ Che cosa NON garantisce, per costruzione (dichiaralo, non nasconderlo):
 
 - non dimostra che gli adattatori GIA' presenti negli usi elencati in
   `CONSENTITI` sanifichino correttamente oggi — quello lo dimostrano solo i
-  canary con dati riconoscibili (vedi `errori-e-limiti.md#privacy-dei-messaggi`
-  per l'elenco), non questo script;
+  test canary con dati riconoscibili, accanto a ciascun adattatore, non questo
+  script;
 - e' un controllo TESTUALE per pattern letterale: un alias
   (`use serde_json as sj;`), un wrapper locale, o una chiamata transitiva
   (una nostra funzione che internamente chiama la libreria, chiamata da un
