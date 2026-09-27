@@ -19,6 +19,7 @@
 //! `pub` in [`crate`]; qui gli elementi sono `pub` perche' `pub(crate)` in un
 //! modulo privato e' ridondante (`clippy::redundant_pub_crate`).
 
+use plenora_core::panic_policy::FormaPayload;
 use plenora_core::{ErrorCategory, EvidenzaDiLimite, PlenoraError};
 
 #[cfg(test)]
@@ -52,25 +53,36 @@ pub enum EsitoWorker {
 /// La forma del payload di un panico, **senza** il contenuto.
 ///
 /// Un tipo e non una `&'static str`, che accetterebbe qualunque letterale: il
-/// campo e' privato e l'unico costruttore, [`Self::di`], chiama
-/// [`plenora_core::panic_policy::forma_payload`]. Il contenuto non entra
-/// **per costruzione**.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FormaDelPayload(&'static str);
+/// campo e' privato e porta un [`FormaPayload`], un enum chiuso. Il contenuto
+/// non entra **per costruzione**.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct FormaDelPayload(FormaPayload);
+
+/// Il `Debug` porta la descrizione, non il nome della variante: finisce nel
+/// messaggio d'errore di un panico isolato, che resta quello di sempre.
+impl std::fmt::Debug for FormaDelPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FormaDelPayload")
+            .field(&self.0.descrizione())
+            .finish()
+    }
+}
 
 impl FormaDelPayload {
-    /// Legge la forma di un payload di panico.
-    ///
-    /// Delega a [`plenora_core::panic_policy::forma_payload`], che distingue
-    /// le forme senza leggere il contenuto: una sola nozione di «forma».
+    /// Legge la forma di un payload di panico ([`FormaPayload::di`]).
     pub fn di(payload: &(dyn std::any::Any + Send)) -> Self {
-        Self(plenora_core::panic_policy::forma_payload(payload))
+        Self(FormaPayload::di(payload))
+    }
+
+    /// Da una forma gia' nota, per esempio arrivata dal filo.
+    pub const fn da(forma: FormaPayload) -> Self {
+        Self(forma)
     }
 }
 
 impl std::fmt::Display for FormaDelPayload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
+        f.write_str(self.0.descrizione())
     }
 }
 

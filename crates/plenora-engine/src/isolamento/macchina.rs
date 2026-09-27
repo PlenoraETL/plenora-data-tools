@@ -1293,23 +1293,16 @@ fn errore_di_dominio(dal_filo: &ErroreSulFilo) -> PlenoraError {
     }))
 }
 
-/// La forma del panico, dal filo al dominio.
-///
-/// L'unico costruttore di `FormaDelPayload` chiama
-/// `plenora_core::panic_policy::forma_payload`, ed e' cio' che tiene il
-/// contenuto di un panico fuori dall'output. Qui si passa all'autorita' un
-/// **rappresentante** vuoto di ciascuna forma, di cui conta solo il tipo: la
-/// nozione di forma resta una sola.
-fn forma_di_dominio(forma: FormaPanicSulFilo) -> crate::classificazione::FormaDelPayload {
+/// La forma del panico, dal filo al dominio: un `match` esaustivo su due enum
+/// chiusi, senza contenuto da portare.
+const fn forma_di_dominio(forma: FormaPanicSulFilo) -> crate::classificazione::FormaDelPayload {
     use crate::classificazione::FormaDelPayload;
-    match forma {
-        FormaPanicSulFilo::Statico => {
-            let rappresentante: &'static str = "";
-            FormaDelPayload::di(&rappresentante)
-        }
-        FormaPanicSulFilo::Dinamico => FormaDelPayload::di(&String::new()),
-        FormaPanicSulFilo::NonTestuale => FormaDelPayload::di(&0_u8),
-    }
+    use plenora_core::panic_policy::FormaPayload;
+    FormaDelPayload::da(match forma {
+        FormaPanicSulFilo::Statico => FormaPayload::Statico,
+        FormaPanicSulFilo::Dinamico => FormaPayload::Dinamico,
+        FormaPanicSulFilo::NonTestuale => FormaPayload::NonTestuale,
+    })
 }
 
 #[cfg(target_os = "linux")]
