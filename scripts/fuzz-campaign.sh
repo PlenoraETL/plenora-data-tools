@@ -46,16 +46,43 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # copia a mano diverge in silenzio e la campagna esercita un elenco vecchio.
 # `awk` e non un interprete: lo script gira anche da Git Bash, dove Python puo'
 # mancare o essere quello di Windows, e un checkout CRLF lascia `\r` in coda.
+# Il parser e' chiuso: ogni `[[bin]]` deve dare un nome, e ogni nome deve
+# avere una forma di target. Una sezione saltata o un nome storpiato fermano
+# lo script invece di togliere un target dalla campagna.
+ELENCO="$(awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*\[\[bin\]\][[:space:]]*$/ { sezioni++; nel_bin = 1; next }
+    /^[[:space:]]*\[/ {
+        if (nel_bin) { print "fuzz/Cargo.toml: [[bin]] senza name" > "/dev/stderr"; esito = 1 }
+        nel_bin = 0
+    }
+    nel_bin && /^[[:space:]]*name[[:space:]]*=/ {
+        valore = $0
+        sub(/^[[:space:]]*name[[:space:]]*=[[:space:]]*/, "", valore)
+        sub(/[[:space:]]*(#.*)?$/, "", valore)
+        if (valore !~ /^"[A-Za-z0-9_-]+"$/ && valore !~ /^\047[A-Za-z0-9_-]+\047$/) {
+            print "fuzz/Cargo.toml: nome di [[bin]] non riconosciuto: " valore > "/dev/stderr"
+            esito = 1
+        }
+        print substr(valore, 2, length(valore) - 2)
+        nomi++
+        nel_bin = 0
+    }
+    END {
+        if (nel_bin) { print "fuzz/Cargo.toml: [[bin]] senza name" > "/dev/stderr"; esito = 1 }
+        if (nomi != sezioni || sezioni == 0) {
+            print "fuzz/Cargo.toml: " sezioni " [[bin]] e " nomi " nomi letti" > "/dev/stderr"
+            esito = 1
+        }
+        exit esito
+    }' "$PROJECT_ROOT/fuzz/Cargo.toml")" || {
+    echo "l'elenco dei target non si legge da fuzz/Cargo.toml" >&2
+    exit 1
+}
 ALL_TARGETS=()
 while IFS= read -r nome; do
     ALL_TARGETS+=("$nome")
-done < <(awk '
-    { sub(/\r$/, "") }
-    /^\[\[bin\]\]/ { nel_bin = 1; next }
-    /^\[/ { nel_bin = 0 }
-    nel_bin && /^name[[:space:]]*=/ {
-        sub(/^name[[:space:]]*=[[:space:]]*"/, ""); sub(/".*$/, ""); print; nel_bin = 0
-    }' "$PROJECT_ROOT/fuzz/Cargo.toml")
+done <<< "$ELENCO"
 if [ "${#ALL_TARGETS[@]}" -eq 0 ]; then
     echo "nessun target letto da fuzz/Cargo.toml" >&2
     exit 1
