@@ -1,11 +1,8 @@
 //! `capabilities` e `catalog`: i due documenti dichiarativi.
 //!
-//! Rispondono alla stessa domanda da due lati — che cosa questo binario sa
-//! fare — e non eseguono nulla. `capabilities` descrive la build (versione,
-//! backend compilati, Arrow); `catalog` descrive le operazioni.
-//!
-//! Entrambi sono fissati byte per byte da `tests/oracolo_superficie_cli.snap`:
-//! 44 KB il primo, 70 KB il secondo.
+//! Che cosa questo binario sa fare: `capabilities` descrive la build,
+//! `catalog` le operazioni. Entrambi sono fissati byte per byte da
+//! `tests/oracolo_superficie_cli.snap`.
 
 use std::error::Error;
 

@@ -19,12 +19,9 @@ pub const EXIT_INTERNO: i32 = 70;
 
 /// Envelope di errore §9 su **stdout**, con `stderr` lasciato vuoto.
 ///
-/// **Inversione dichiarata** rispetto alla convenzione di tenere gli errori
-/// su stderr: `plenora-database-tools` li emette su stdout e lascia stderr
-/// vuoto, e due componenti della stessa famiglia, orchestrati dallo stesso
-/// codice, non possono avere due convenzioni opposte su dove cercare un
-/// errore. La rottura per chi parsa stderr e' registrata in
-/// `docs/release.md`.
+/// E' la convenzione di `plenora-database-tools`, e due componenti della
+/// stessa famiglia non possono dividersi su dove cercare un errore. La
+/// rottura per chi parsa stderr e' registrata in `docs/release.md`.
 pub fn emit_error_envelope(
     mut stdout: impl Write,
     envelope: &serde_json::Value,
@@ -34,17 +31,10 @@ pub fn emit_error_envelope(
 
 /// Exit code stabile derivato dalla CATEGORIA dell'envelope.
 ///
-/// La categoria resta la fonte di verita': il codice e' una sua proiezione
-/// grossolana, per gli script che non vogliono parsare JSON. Il mapping e'
-/// totale su `plenora_core::ErrorCategory` — una categoria nuova che finisse
-/// qui senza un codice sarebbe un errore silenzioso, quindi il caso di
-/// default e' `70` e un test copre l'intero enum.
-///
-/// **Non e' allineato a `plenora-database-tools`**, che restituisce `1` per
-/// qualunque errore: e' una divergenza dichiarata (cli.md#exit-code).
-/// L'unica garanzia condivisa dalla famiglia e' «0 successo, non-zero
-/// errore»; chi scrive codice portabile fra i due componenti legge
-/// `error.category`, non questo numero.
+/// Il codice e' una proiezione grossolana della categoria per gli script;
+/// una stringa che non e' una categoria finisce su `70`. Diverge da
+/// `plenora-database-tools`, che rende `1` per ogni errore
+/// (cli.md#exit-code): chi scrive codice portabile legge `error.category`.
 ///
 /// | codice | significato |
 /// |---|---|
@@ -65,34 +55,12 @@ pub fn error_exit_code(envelope: &serde_json::Value) -> i32 {
 
 /// Exit code di una categoria, deciso **per ciascuna**.
 ///
-/// # Perche' un `match` su un tipo e non su una stringa
-///
-/// Con un `match` esaustivo su [`ErrorCategory`] la decisione e'
-/// **obbligatoria e anticipata alla compilazione**: una categoria nuova non
-/// compila finche' qualcuno non ne sceglie l'exit code. Confrontare il nome
-/// canonico e mandare tutto il resto su `EXIT_INTERNO` la renderebbe
-/// facoltativa, e una categoria nuova finirebbe in silenzio su 70 — cioe'
-/// dichiarerebbe un difetto interno di una condizione che non lo e'.
-///
-/// Non e' un sostituto del test: `ogni_categoria_ha_l_exit_code_dichiarato`
-/// itera `ErrorCategory::ALL` e pretende che la tabella scritta a mano nomini
-/// ogni categoria, quindi una variante nuova lo fa fallire. I due presidi
-/// dicono la stessa cosa in due momenti diversi.
-///
-/// **Che cosa non e' sorvegliato da nessuno dei due**: la tabella di
-/// [`cli.md`](../../../../docs/cli.md). E' scritta a mano e il `match`
-/// tipizzato non la vede, quindi va riletta quando si tocca questo `match`.
-///
-/// Il ripiego su 70 resta dove serve davvero: in [`error_exit_code`], per un
-/// envelope che porta una stringa che non e' una categoria — un JSON di
-/// un'altra versione, o corrotto.
-///
-/// # Gli exit code non si moltiplicano
-///
-/// Sono classi **grossolane** di proposito: la distinzione precisa vive in
-/// `error.category` dell'envelope, che e' machine-readable. Aggiungere un
-/// numero per ogni condizione nuova allargherebbe il contratto verso chi
-/// invoca l'eseguibile senza dirgli nulla che non possa gia' leggere.
+/// Il `match` esaustivo su [`ErrorCategory`] obbliga a scegliere l'exit code
+/// di ogni categoria nuova; `ogni_categoria_ha_l_exit_code_dichiarato` lo
+/// verifica anche in test. Nessuno dei due sorveglia la tabella di
+/// [`cli.md`](../../../../docs/cli.md), da rileggere quando si tocca questo
+/// `match`. Le classi restano grossolane di proposito: la distinzione
+/// precisa e' `error.category`.
 #[must_use]
 pub const fn exit_code_di(categoria: ErrorCategory) -> i32 {
     match categoria {
@@ -108,15 +76,9 @@ pub const fn exit_code_di(categoria: ErrorCategory) -> i32 {
         | ErrorCategory::Unsupported => 3,
         // Limite di risorsa DIMOSTRATO.
         ErrorCategory::ResourceLimit => 4,
-        // Condizioni operative e d'ambiente.
-        //
-        // `IsolationUnavailable` sta qui e non su 2: il piano e' valido, ed
-        // e' l'ambiente a non offrire l'isolamento.
-        //
-        // `UnattributedMemoryPressure` sta qui e non su 4 ne' su 70: dire 4
-        // attribuirebbe il superamento al budget del dominio senza prova,
-        // dire 70 dichiarerebbe un difetto interno senza prova. Cinque dice
-        // «condizione operativa», che e' quanto sappiamo.
+        // Condizioni operative e d'ambiente. `IsolationUnavailable`: il piano
+        // e' valido, e' l'ambiente a mancare. `UnattributedMemoryPressure`:
+        // 4 o 70 attribuirebbero una causa senza prova.
         ErrorCategory::Io
         | ErrorCategory::NotFound
         | ErrorCategory::Conflict
@@ -134,25 +96,18 @@ pub const fn exit_code_di(categoria: ErrorCategory) -> i32 {
     }
 }
 
-/// Envelope d'errore a quattro assi (R9.1, `protocol_version` 1): l'uscita
-/// CLI riporta categoria, fase, effetto remoto e disposizione di retry
-/// espliciti — mai dedotti dal messaggio (R9.2). Una riga JSON su stdout;
-/// `message` porta il testo dell'errore invariato. `retry` e' nella forma
-/// taggata condivisa (conformance/components.json): `{"kind": ...}` piu'
-/// `delay_ms` solo per `after(durata)`. `context` (presente
-/// solo per errori nati in un'esecuzione DAG) riporta nodo, operazione ed
-/// `execution_id` — la risposta a «quale step ha rotto» senza parsare il
-/// messaggio. L'exit code e' la proiezione della categoria
-/// ([`error_exit_code`]): 2, 3, 4, 5, 6, 70, piu' 130 per la cancellazione.
+/// Envelope d'errore a quattro assi (R9.1, `protocol_version` 1).
 ///
-/// Mapping dichiarato: `PlenoraError` -> i quattro assi del tipo; errori
-/// di parametro pubblico del trasporto Arrow -> `invalid_plan`/`validate`/
-/// `none`/`never`; errori I/O nudi (lettura piano/argomenti) ->
-/// `io`/`read`/`none`/`safe`; errori di parse JSON del piano ->
-/// `data_mapping`/`validate`/`none`/`never`; qualunque altro tipo ->
-/// `internal`/`validate`/`none`/`never`. I nomi non sono piu' scritti a mano
-/// in nessuno dei quattro rami: vengono da [`ErrorCategory`], [`ErrorPhase`] e
-/// [`RemoteEffect`], quindi seguono una rinomina invece di sopravviverle.
+/// Una riga JSON su stdout con categoria, fase, effetto remoto e
+/// disposizione di retry espliciti, mai dedotti dal messaggio (R9.2).
+/// `retry` e' nella forma taggata condivisa (conformance/components.json);
+/// `context`, per gli errori di un'esecuzione DAG, riporta nodo, operazione
+/// ed `execution_id`. I nomi vengono da [`ErrorCategory`], [`ErrorPhase`] e
+/// [`RemoteEffect`]. Errori non `PlenoraError`: parametro del trasporto Arrow
+/// -> `invalid_plan`/`validate`/`none`/`never`; I/O nudo ->
+/// `io`/`read`/`none`/`safe`; parse JSON del piano ->
+/// `data_mapping`/`validate`/`none`/`never`; altro ->
+/// `internal`/`validate`/`none`/`never`.
 pub fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json::Value {
     let plenora_error = error.downcast_ref::<PlenoraError>();
     let public_transport_parameter_error =

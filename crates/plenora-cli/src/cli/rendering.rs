@@ -1,14 +1,10 @@
 //! Rendering: come i documenti della CLI diventano JSON.
 //!
-//! Sono le forme che l'utente e i suoi script leggono davvero — descrittore
-//! di un'operazione, versione, backend compilati, contratto di un input — e
-//! quindi una superficie pubblica quanto i nomi dei comandi. Stanno insieme
-//! perche' cambiarne una senza vedere le altre e' il modo in cui due
-//! documenti della stessa CLI finiscono per descrivere lo stesso concetto
-//! con nomi diversi.
-//!
+//! Descrittore di un'operazione, versione, backend compilati, contratto di un
+//! input: superficie pubblica quanto i nomi dei comandi, e insieme perche'
+//! non descrivano lo stesso concetto con nomi diversi.
 //! `tests/oracolo_superficie_cli.snap` fissa `capabilities` e `catalog` byte
-//! per byte: qualunque modifica qui si vede li'.
+//! per byte.
 
 use plenora_core::catalog::{OperationDescriptor, CATALOG};
 use plenora_core::contract::{ContractCrs, DataContract};

@@ -1,15 +1,10 @@
 //! Superficie degli argomenti: aiuto, flag ammessi, e il loro rifiuto.
 //!
-//! Che cosa la CLI accetta e' una decisione, non una conseguenza di come il
-//! dispatch e' scritto: [`superficie`] la dichiara comando per comando, e
-//! [`reject_unknown_flags`] la fa rispettare PRIMA di qualunque uscita
-//! anticipata, help compreso. Un parser che risponde «va bene» a
-//! un'invocazione che non ha capito e' fail-open anche quando non pubblica
-//! nulla.
-//!
-//! I testi di aiuto stanno qui accanto perche' sono la stessa superficie
-//! vista dall'altro lato: `matrice_cli` verifica che dichiarino esattamente
-//! i flag che il dispatch accetta.
+//! [`superficie`] dichiara che cosa ogni comando accetta, e
+//! [`reject_unknown_flags`] lo fa rispettare prima di qualunque uscita
+//! anticipata, help compreso: un parser che accetta un'invocazione che non ha
+//! capito e' fail-open. I testi di aiuto stanno qui accanto, e `matrice_cli`
+//! verifica che dichiarino esattamente i flag del dispatch.
 
 use plenora_core::PlenoraError;
 
@@ -80,12 +75,9 @@ piu' di un input dichiarato e' l'unica forma ammessa.",
 
 /// Flag accettati da ciascun sottocomando, e quali possono ripetersi.
 ///
-/// E' l'unico posto in cui la superficie degli argomenti e' dichiarata: il
-/// controllo di §1.4 la confronta con l'help, e il dispatch la usa per
-/// rifiutare cio' che non conosce. Tre elenchi separati divergerebbero.
-///
-/// `--format` non compare: e' globale e viene tolto dagli argomenti prima
-/// del dispatch (`strip_output_format`).
+/// L'unico posto in cui la superficie e' dichiarata: il controllo di §1.4 la
+/// confronta con l'help, il dispatch la usa per rifiutare. `--format` non
+/// compare: e' globale e lo toglie prima `strip_output_format`.
 pub struct SuperficieComando {
     /// Flag ammessi, compresi quelli senza valore.
     flag: &'static [&'static str],
@@ -156,19 +148,10 @@ pub const fn superficie(comando: &str) -> Option<SuperficieComando> {
 /// Convalida la riga di comando di un sottocomando: nessun token puo'
 /// restare inosservato.
 ///
-/// Un parser che ignora cio' che non riconosce pubblica un output basato su
-/// un'invocazione DIVERSA da quella che l'utente ha scritto. Qui ogni
-/// argomento deve essere o un flag dichiarato, o il valore di un flag che ne
-/// prende uno: tutto il resto e' un errore.
-///
-/// Casi chiusi, tutti verificati dalla matrice:
-///
-/// - flag sconosciuto (`--boh`), anche in forma breve (`-x`);
-/// - flag a valore singolo ripetuto;
-/// - **posizionale inatteso** (`run pippo --plan ...`);
-/// - **flag usato come valore** (`--plan --output`), che senza questo
-///   controllo renderebbe `--output` il nome del piano;
-/// - **argomenti extra** dopo `--version` e `--help`.
+/// Ogni argomento e' un flag dichiarato o il valore di un flag che ne prende
+/// uno. Si rifiutano flag sconosciuti (anche brevi), flag a valore singolo
+/// ripetuti, posizionali inattesi, flag usati come valore (`--plan
+/// --output`) e argomenti extra dopo `--version` e `--help`.
 ///
 /// # Errors
 ///
