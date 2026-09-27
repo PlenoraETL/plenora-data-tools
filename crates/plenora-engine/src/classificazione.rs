@@ -70,6 +70,7 @@ impl std::fmt::Debug for FormaDelPayload {
 
 impl FormaDelPayload {
     /// Legge la forma di un payload di panico ([`FormaPayload::di`]).
+    #[cfg(test)]
     pub fn di(payload: &(dyn std::any::Any + Send)) -> Self {
         Self(FormaPayload::di(payload))
     }

@@ -7,20 +7,10 @@
 
 use std::path::{Path, PathBuf};
 
-use plenora_core::arrow::schema::{DataType, SchemaRef};
-use plenora_core::contract::{
-    ContractCrs, ContractProperties, ContractProperty, CrsDefinitionFormat, CrsResolution,
-    DataContract, FieldId, GeometryColumnContract, GeometryDimensions, PropertyConfidence,
-    PropertyScope,
-};
-use plenora_core::crs::ResolvedCrs;
+use plenora_core::arrow::schema::SchemaRef;
+use plenora_core::contract::{ContractCrs, DataContract};
 use plenora_core::PlenoraError;
 use plenora_engine::{ipc_boundary, Input, IpcLimits};
-use plenora_kernels_geo::arrow_adapter::{
-    read_contract_version, read_geometry_contract_keys, CanonicalGeometryKeys,
-    GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
-    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_NAMESPACE_PREFIX,
-};
 
 #[cfg(not(feature = "proj-backend"))]
 use plenora_core::crs::resolve_crs;
@@ -31,10 +21,7 @@ use crate::{contract, DagInputs, PlanInputsProbe};
 
 // La conversione schema -> contratto e' autorita' di `plenora-core`: qui
 // resta il contesto di file e input, che core non deve conoscere.
-pub use plenora_core::contract::arrow_schema::{
-    contract_crs_from_keys, contract_from_arrow_schema as discover_input_contract_from_schema,
-    crs_definition_from_metadata, geometry_contract_from_field,
-};
+pub use plenora_core::contract::arrow_schema::contract_from_arrow_schema as discover_input_contract_from_schema;
 
 /// Schema Arrow dell'header IPC di un input (file o stream format): nessuna
 /// riga di dati letta.
@@ -58,12 +45,12 @@ pub fn open_input(path: &Path, limits: &IpcLimits) -> Result<Input, PlenoraError
 ///
 /// Protocollo delle chiavi canoniche (contratti trasversali §2):
 ///
-/// - gate R2.5 all'ingresso: [`read_contract_version`];
-/// - per ogni campo geometria [`read_geometry_contract_keys`] applica chiavi
+/// - gate R2.5 all'ingresso: [`read_contract_version`](plenora_kernels_geo::arrow_adapter::read_contract_version);
+/// - per ogni campo geometria [`read_geometry_contract_keys`](plenora_kernels_geo::arrow_adapter::read_geometry_contract_keys) applica chiavi
 ///   canoniche, coerenza con le legacy (R2.6) e precedenza (R2.7);
 /// - le chiavi `plenora.geometry.*` bastano a riconoscere una colonna
 ///   geometrica; il tipo deve comunque essere `Binary`;
-/// - lo stato CRS lo decide [`contract_crs_from_keys`]. Un campo senza CRS
+/// - lo stato CRS lo decide [`contract_crs_from_keys`](plenora_core::contract::arrow_schema::contract_crs_from_keys). Un campo senza CRS
 ///   diventa [`ContractCrs::Missing`] (R4.6.3, R4.4) e ferma solo le op con
 ///   un `CrsRequirement`; un'incoerenza dichiarata diventa
 ///   [`ContractCrs::DeclaredUnresolved`]; `crs_resolution` senza alcuna

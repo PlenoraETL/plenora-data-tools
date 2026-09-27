@@ -150,6 +150,7 @@ pub fn make_valid_geometry(
 }
 
 use crate::geometry_type_name as geometry_type;
+#[cfg(test)]
 use crate::ValidazioneProtetta as _;
 
 fn ensure_linework(

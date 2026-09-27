@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{
+    ArrayRef, BinaryArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
 use plenora_core::arrow::ipc::reader::FileReader;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
@@ -18,6 +20,7 @@ use plenora_core::contract::{
     GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::diagnostics::RowDiagnosticsCompleteness;
 use plenora_core::{PlenoraError, Result};
 
 use ::geo::{polygon, Geometry, Point};

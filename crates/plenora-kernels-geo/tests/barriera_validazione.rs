@@ -49,7 +49,6 @@
 //! casi che lo ospitano, e osservare stderr dall'interno dello stesso processo
 //! non e' osservare cio' che esce.
 
-use geo::{Coord, LineString, Polygon};
 use plenora_core::ErrorCategory;
 use plenora_kernels_geo::geometry_from_wkb;
 

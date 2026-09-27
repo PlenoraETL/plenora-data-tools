@@ -47,7 +47,7 @@
 
 use std::io::Write as _;
 use std::os::unix::fs::MetadataExt as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use plenora_core::error::{PlenoraError, Result};
 use rustix::process::{Gid, Uid};
@@ -60,7 +60,6 @@ use super::identita::{leggi_identita, namespace_del_padre, rileggi_credenziali, 
 use super::lettura::leggi_limitato;
 use super::{
     non_disponibile, DominioRivalidato, IdentitaWorker, Montaggio, ProprietaFile, RichiestaSpawner,
-    VERSIONE_RICHIESTA,
 };
 // Cio' che serve al solo avvio.
 use super::{
@@ -76,7 +75,7 @@ use super::{
 /// Lo spawner e' **questa stessa immagine**, rieseguita da `/proc/self/exe` e
 /// mai da un percorso del chiamante, che avvierebbe un figlio fuori dal
 /// dominio indistinguibile da una transizione riuscita. Si riconosce dal suo
-/// `argv[1]`, [`VERSIONE_RICHIESTA`]: il chiamante di produzione deve passare
+/// `argv[1]`, [`VERSIONE_RICHIESTA`](super::VERSIONE_RICHIESTA): il chiamante di produzione deve passare
 /// la mano a [`dal_confine`] prima di ogni altra cosa all'avvio, thread
 /// compresi. L'obbligo lo prova la sentinella del gate ostile.
 ///

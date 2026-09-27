@@ -33,7 +33,6 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
 use plenora_core::contract::DataContract;
 use plenora_core::error::PlenoraError;
-use sha2::{Digest as _, Sha256};
 
 use crate::commit_token::CommitToken;
 use crate::ipc_boundary::{self, IpcLimits};

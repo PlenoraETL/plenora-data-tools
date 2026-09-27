@@ -16,7 +16,7 @@
 //! - ogni `execute` ha un `execution_id` riportato negli errori e nel lock del
 //!   [`crate::temp_store::TempStore`], creato **fail-closed**; la modalita'
 //!   diagnostica aggiunge contesto strutturale, MAI valori (errori-e-limiti.md);
-//! - i batch attraversano gli archi come [`GovernedBatch`] (batch, [`MemoryLease`]
+//! - i batch attraversano gli archi come [`GovernedBatch`] (batch, [`MemoryLease`](crate::governor::MemoryLease)
 //!   e [`BatchSequence`]): quota contata UNA
 //!   volta per batch all'ingresso dell'arco e condivisa al fan-out, sequenza
 //!   logica assegnata sugli input, propagata 1:1 negli streaming e riassegnata
@@ -47,18 +47,11 @@ mod state;
 mod streaming;
 mod validation;
 
-use blocking::{
-    dispatch_kernel, run_binary_blocking, run_blocking, run_kernel, spill_capable_unary,
-};
+use blocking::{run_binary_blocking, run_blocking, run_kernel, spill_capable_unary};
 use diagnostics::{row_diagnostic_stream, segment_emits_row_diagnostics};
 #[cfg(test)]
 use fusion::PANIC_AT_NODES;
-use fusion::{fused_group_terminal, fusion_group_len, try_run_fused_group};
-use geo::{
-    append_output_column, geo_accessors_batch, geo_cluster_dbscan_batch, geo_collect_batch,
-    geo_coverage_validate_batch, geo_from_wkt_batch, geo_generate_grid_batch,
-    geo_line_locate_point_batch, geo_shared_paths_batch, geo_snap_batch, geo_subdivide_batch,
-};
+use fusion::{fusion_group_len, try_run_fused_group};
 pub use input::{Input, Inputs};
 #[cfg(test)]
 use network::StoredEdgeError;
@@ -69,8 +62,7 @@ use staging::atomic_input_validation_stream;
 use state::ExecState;
 use streaming::run_streaming_chain;
 use validation::{
-    cancellation_behavior, check_edge_batch, check_edge_counts, check_expansion,
-    geometry_input_requirements, step_error, validate_wkb_cells,
+    cancellation_behavior, geometry_input_requirements, step_error, validate_wkb_cells,
 };
 
 // Quello che serve ai soli moduli di test di questo file, che raggiungono
@@ -101,39 +93,25 @@ use std::path::Path;
 #[cfg(test)]
 use validation::CANCEL_BEHAVIOR_OVERRIDES;
 
-use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use plenora_core::arrow::array::{
-    Array, ArrayRef, BinaryArray, Float64Array, RecordBatch, StringArray, UInt64Array,
-};
+#[cfg(test)]
+use plenora_core::arrow::array::Array;
+use plenora_core::arrow::array::RecordBatch;
 use plenora_core::catalog::CATALOG;
 use plenora_core::contract::{BatchSequence, DataContract};
-use plenora_core::diagnostics::{
-    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
-    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
-};
 use plenora_core::{ErrorPhase, PlenoraError, Result};
-use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
-use plenora_kernels_geo::operations;
 
-use crate::geo_transport::pair::preflight_decoded_bytes;
-use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
-use crate::geo_transport::unary::{
-    one_to_one_batch_fused, FusedStepError, FusedTerminal, FusedTerminalMeasure,
-};
-use crate::governor::{GovernedBatch, MemoryLease, MemoryPermit, ReservationResult};
+use crate::governor::GovernedBatch;
 use crate::planner::{
     check_compatibility, check_declared_input_contracts, local_capabilities, ValidatedGraph,
     ARROW_VERSION, ENGINE_VERSION,
 };
 use crate::prepare::{
-    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedKernel,
-    RuntimeContext, SegmentMode,
+    prepare, ExecutionPlan, PhysicalSegment, PreparedKernel, RuntimeContext, SegmentMode,
 };
-use crate::table_engine;
 use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
 
 /// Stream di batch del grafo (seriale, thread-locale nella v1): i batch

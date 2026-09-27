@@ -8,36 +8,23 @@
 //! una duplicazione che resta finche' manca una facciata per famiglia; per
 //! questo il `match` sta in un file proprio.
 
-use crate::geo_transport::pair::preflight_decoded_bytes;
 use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
-use crate::geo_transport::unary::{
-    causa_di_riga, collect_measure_failures, esito_kernel, one_to_one_batch_fused, FusedStepError,
-    FusedTerminal, FusedTerminalMeasure,
-};
-use crate::governor::{GovernedBatch, MemoryLease, MemoryPermit, ReservationResult};
-use crate::planner::{
-    check_compatibility, check_declared_input_contracts, local_capabilities, ValidatedGraph,
-    ARROW_VERSION, ENGINE_VERSION,
-};
+use crate::geo_transport::unary::{causa_di_riga, collect_measure_failures, esito_kernel};
+use crate::governor::GovernedBatch;
 use crate::prepare::{
-    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedGeoKernel,
-    PreparedKernel, PreparedTableKernel, RuntimeContext, SegmentMode,
+    ExecutionPlan, MeasureKind, PreparedConfig, PreparedGeoKernel, PreparedKernel,
+    PreparedTableKernel,
 };
 use crate::table_engine;
-use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
 use geo::Geometry;
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BinaryArray, Float64Array, RecordBatch, StringArray, UInt64Array,
+    Array, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
-use plenora_core::catalog::CATALOG;
-use plenora_core::contract::{BatchSequence, DataContract};
-use plenora_core::{ErrorPhase, PlenoraError, Result};
+use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
 use plenora_kernels_geo::operations::{self, OperationError};
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::geo::run_geo_binary_blocking;
 use super::geo::{
@@ -49,14 +36,12 @@ use super::geo::{
 use super::inject_test_panic;
 use super::metrics::{accumulate, accumulate_time, sum_rows};
 use super::state::ExecState;
-use super::validation::{
-    check_edge_batch, check_edge_counts, check_expansion, check_join_expansion,
-};
+use super::validation::{check_edge_batch, check_expansion, check_join_expansion};
 use plenora_core::arrow::select::concat::concat_batches;
 
 use super::{
-    blocking_output_sequence, check_batch_bytes, geo_binary_step_error, panic_step_error,
-    record_kernel_metrics, step_error, GeoBinarySide,
+    blocking_output_sequence, check_batch_bytes, panic_step_error, record_kernel_metrics,
+    step_error,
 };
 
 /// Un kernel su un batch: confine di panic policy dell'executor
