@@ -15,7 +15,9 @@
 //! sostituisce gli altri, e cio' che manca diventa un tempo che finisce, mai un
 //! successo.
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::Duration;
 
 use plenora_core::error::{
@@ -23,8 +25,10 @@ use plenora_core::error::{
     RetryDisposition,
 };
 
+#[cfg(unix)]
 use crate::cancellation::CancellationToken;
 use crate::classificazione::{classifica, EsitoClassificato, FattiDopoLaQuiescenza};
+#[cfg(unix)]
 use crate::protocollo::handshake::HandshakeAccettato;
 use crate::protocollo::messaggi::{
     CategoriaSulFilo, ConteggiDichiarati, Corpo, DiagnosticaSulFilo, DigestArtefatto,
@@ -32,6 +36,7 @@ use crate::protocollo::messaggi::{
     FormaPanicSulFilo, RetrySulFilo,
 };
 
+#[cfg(unix)]
 use super::figlio::{FiglioVivo, ProcessoFiglio};
 #[cfg(target_os = "linux")]
 use super::sorgente::{interruttore, Freno, PASSO_DI_ATTESA};
@@ -736,7 +741,6 @@ impl EvidenzaDaPrimaDelloSpawn {
     fn rileggi(self, soggetto: &str, causa: PlenoraError, precedenza: Precedenza) -> PlenoraError {
         use crate::classificazione::{classifica_evidenza, ClasseEvidenzaMemoria};
         use conduzione::{LettoreDiEvidenza as _, Terminatore as _};
-        use produttori::Osservatore as _;
 
         let mut osservatore = adattatori::SorvegliaDominio::nuova(self.dominio.clone());
         let terminato = if attendi_la_quiescenza(&mut osservatore) {

@@ -16,15 +16,10 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::ipc::writer::FileWriter;
-use plenora_core::arrow::schema::{Schema, SchemaRef};
-use plenora_core::contract::{ContractCrs, DataContract};
+use plenora_core::arrow::schema::SchemaRef;
+use plenora_core::contract::DataContract;
 use plenora_core::error::ErrorPhase;
 use plenora_core::{PlenoraError, Result};
-use plenora_kernels_geo::arrow_adapter::{
-    canonical_geometry_metadata, canonical_schema_version_metadata, strip_decided_crs_declarations,
-    GeometryMetadataDetails, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
-    PLENORA_GEOMETRY_SRID_KEY,
-};
 
 use crate::commit_token::CommitToken;
 use crate::geo_transport::publish::{

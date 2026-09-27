@@ -31,9 +31,7 @@ use plenora_engine::geo_transport::publish::{
     EsitoDellaPubblicazione, PublishOutcome, PuliziaDelTemporaneo, RagioneNonAccertabile,
 };
 use plenora_engine::geo_transport::transport::ArrowOutputFormat;
-use plenora_engine::plan::{
-    migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V5, PLAN_SCHEMA_VERSION_V6,
-};
+use plenora_engine::plan::{migrazione_v4, PLAN_SCHEMA_VERSION_V4, PLAN_SCHEMA_VERSION_V6};
 use plenora_engine::planner::ValidatedGraph;
 use plenora_engine::{CancellationToken, ExecutionMetrics, ExecutionPlan};
 use serde::Deserialize;
@@ -64,9 +62,12 @@ use cli::commands::legacy::{read_geometry_stream, transform_stream, TransformSch
 use cli::commands::run::{is_named_input, reject_legacy_row_diagnostics_plan, v4_inputs};
 #[cfg(test)]
 use cli::contract_discovery::{
-    apply_crs_decisions, at_input, contract_crs_from_keys, crs_definition_from_metadata,
-    discover_input_contract_from_schema, geometry_contract_from_field, ipc_header_schema,
+    apply_crs_decisions, at_input, discover_input_contract_from_schema, ipc_header_schema,
     open_input, pair_v4_inputs,
+};
+#[cfg(test)]
+use plenora_core::contract::arrow_schema::{
+    contract_crs_from_keys, crs_definition_from_metadata, geometry_contract_from_field,
 };
 // Serve ai casi **e** al dispatch dello spawner, che deve tradurre il proprio
 // rifiuto in un exit code senza passare da `esegui_processo`.
@@ -99,9 +100,9 @@ use plenora_kernels_geo::arrow_adapter::{
 #[cfg(test)]
 use plenora_kernels_geo::Operation;
 
-#[cfg(not(feature = "proj-backend"))]
+#[cfg(all(test, not(feature = "proj-backend")))]
 use plenora_core::crs::resolve_crs;
-#[cfg(feature = "proj-backend")]
+#[cfg(all(test, feature = "proj-backend"))]
 use plenora_kernels_geo::crs::resolve_crs;
 
 // ---------------------------------------------------------------------------

@@ -655,25 +655,6 @@ pub(crate) fn parse_wkb_type_code(
     Ok((geometry_type, stride))
 }
 
-/// Wrapper a dimensionalita' attesa `Xy`: serie ISO 1000+ e flag EWKB
-/// Z/M/SRID rifiutati. La variante stride-aware e'
-/// [`validate_wkb_geometry_with_dimensions`].
-fn validate_wkb_geometry(
-    cursor: &mut WkbCursor<'_>,
-    depth: usize,
-    max_depth: usize,
-    components: &mut u64,
-) -> Result<u32, PlenoraError> {
-    validate_wkb_geometry_with_dimensions(
-        cursor,
-        depth,
-        max_depth,
-        components,
-        GeometryDimensions::Xy,
-        EmbeddedSridPolicy::Reject,
-    )
-}
-
 #[derive(Clone, Copy)]
 enum EmbeddedSridPolicy {
     Reject,

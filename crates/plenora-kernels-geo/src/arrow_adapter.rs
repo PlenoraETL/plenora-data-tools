@@ -18,20 +18,10 @@
 //!
 //! Errori: mappati su [`PlenoraError`] preservando i messaggi.
 
-use std::collections::HashMap;
-
 use geo::Geometry;
 use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{Array, BinaryArray};
-use plenora_core::arrow::{DataType, Field, RecordBatch, Schema};
-use plenora_core::contract::{
-    AxisOrder, ContractCrs, CrsDefinitionFormat, CrsResolution, FieldId, GeometryColumnContract,
-    GeometryDimensions, GeometryEncoding, GeometryPrecision, GeometryTypesProperty,
-    SpatialSemantics,
-};
-use plenora_core::crs::{
-    authority_code_srid, definition_form, DefinitionForm, ResolvedCrs, MAX_CRS_DEFINITION_BYTES,
-};
+use plenora_core::arrow::RecordBatch;
 use plenora_core::PlenoraError;
 use rayon::prelude::*;
 
@@ -191,12 +181,15 @@ pub fn accumulate_decoded_cells_native_bytes(
 mod tests {
     use super::*;
     use geo::polygon;
-    use plenora_core::arrow::RecordBatch;
+    use plenora_core::arrow::{DataType, Field, RecordBatch, Schema};
     use plenora_core::contract::{
-        ContractCrs, ContractProperty, GeometryType, PropertyConfidence, PropertyScope,
+        AxisOrder, ContractCrs, ContractProperty, CrsDefinitionFormat, CrsResolution, FieldId,
+        GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryPrecision,
+        GeometryType, GeometryTypesProperty, PropertyConfidence, PropertyScope, SpatialSemantics,
         TypesDeclaration,
     };
-    use plenora_core::crs::{CrsKind, ResolvedCrs};
+    use plenora_core::crs::{CrsKind, ResolvedCrs, MAX_CRS_DEFINITION_BYTES};
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     const CRS: &str = "EPSG:3857";

@@ -19,7 +19,9 @@
 use std::process::Command;
 
 mod comune;
-use comune::{eseguibile, ricaduta_nel_parser};
+use comune::eseguibile;
+#[cfg(unix)]
+use comune::ricaduta_nel_parser;
 
 /// Che cosa il binario ha scritto, unito: l'envelope va su stdout, ma un
 /// messaggio che finisse su stderr non deve sfuggire al caso.

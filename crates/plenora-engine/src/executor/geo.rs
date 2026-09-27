@@ -7,20 +7,13 @@
 
 use crate::geo_transport::error::ArrowTransportError;
 use crate::geo_transport::pair::{decode_geometry_batches, preflight_decoded_bytes, PairOperation};
-use crate::geo_transport::transport::TransformArrowSchema;
 use crate::governor::GovernedBatch;
-use crate::prepare::{
-    AccessorKind, ExecutionPlan, GeoBinaryPlan, PreparedConfig, PreparedGeoKernel, PreparedKernel,
-    PreparedTableKernel,
-};
-use crate::table_engine;
-use crate::temp_store::TempStore;
+use crate::prepare::{AccessorKind, ExecutionPlan, GeoBinaryPlan, PreparedKernel};
 use plenora_core::arrow::array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::select::take::take;
-use plenora_core::contract::DataContract;
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_geo::analysis::{
     count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
@@ -37,10 +30,10 @@ use std::time::Instant;
 use super::inject_test_panic;
 use super::metrics::{accumulate, accumulate_time, sum_rows};
 use super::state::ExecState;
-use super::validation::{check_edge_batch, check_expansion, check_join_expansion};
+use super::validation::{check_edge_batch, check_join_expansion};
 use super::{
     blocking_output_sequence, check_batch_bytes, geo_binary_step_error, panic_step_error,
-    record_kernel_metrics, run_kernel, step_error, GeoBinarySide, GeoBinaryStepError,
+    step_error, GeoBinarySide, GeoBinaryStepError,
 };
 
 pub(super) fn kernel_geometry_cells<'a>(

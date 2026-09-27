@@ -12,24 +12,23 @@
 //! modo. Il modulo lavora solo sullo schema, senza leggere dati; il contesto
 //! di file e input resta nella CLI.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arrow::schema::Schema;
-use crate::arrow::schema::{DataType, Field, SchemaRef};
+use crate::arrow::schema::{DataType, SchemaRef};
 use crate::contract::arrow_metadata::{
-    canonical_geometry_metadata, canonical_geometry_srid, canonical_schema_version_metadata,
-    read_contract_version, read_geometry_contract_keys, strip_decided_crs_declarations,
-    CanonicalGeometryKeys, GeometryMetadataDetails, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
-    GEO_METADATA_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
+    canonical_geometry_metadata, canonical_schema_version_metadata, read_contract_version,
+    read_geometry_contract_keys, strip_decided_crs_declarations, CanonicalGeometryKeys,
+    GeometryMetadataDetails, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
+    PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
     PLENORA_GEOMETRY_NAMESPACE_PREFIX, PLENORA_GEOMETRY_SRID_KEY,
 };
 use crate::contract::{
     ContractCrs, ContractProperties, ContractProperty, CrsDefinitionFormat, CrsResolution,
-    DataContract, FieldId, GeometryColumnContract, GeometryDimensions, GeometryTypesProperty,
-    PropertyConfidence, PropertyScope,
+    DataContract, FieldId, GeometryColumnContract, GeometryDimensions, PropertyConfidence,
+    PropertyScope,
 };
-use crate::crs::{required_definition, validate_requirement, ResolvedCrs};
+use crate::crs::ResolvedCrs;
 use crate::PlenoraError;
 
 /// Come si risolve una definizione di CRS in un CRS risolto.
