@@ -88,9 +88,14 @@ fn cli_round_trip_is_atomic_and_refuses_overwrite() {
         .arg(&input)
         .arg("--output")
         .arg(&output)
-        .status()
+        .output()
         .expect("second CLI run");
-    assert!(!second.success());
+    // Destinazione occupata: `conflict`, exit 5, come la pubblicazione
+    // (errori-e-limiti.md#publish-e-cleanup), non `invalid_plan`.
+    let envelope: serde_json::Value = serde_json::from_slice(&second.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "conflict");
+    assert_eq!(envelope["error"]["phase"], "commit");
+    assert_eq!(second.status.code(), Some(5), "conflict -> 5");
 }
 
 #[test]

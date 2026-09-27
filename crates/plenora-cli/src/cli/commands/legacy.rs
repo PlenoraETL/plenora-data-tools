@@ -19,7 +19,8 @@ use plenora_core::{ErrorPhase, PlenoraError};
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
 use plenora_engine::geo_transport::publish::{
-    publish_with_profile, validate_pair_arrow_crs, validate_transform_arrow_crs, PublishProfile,
+    conflitto_sulla_destinazione, publish_with_profile, validate_pair_arrow_crs,
+    validate_transform_arrow_crs, verifica_destinazione_libera, PublishProfile,
 };
 use plenora_engine::geo_transport::transport::{
     pair_arrow_with_format, transform_arrow_with_format, ArrowOutputFormat, PairArrowSchema,
@@ -185,16 +186,8 @@ pub fn run_pipeline(
     right_path: Option<&Path>,
     output_path: &Path,
 ) -> Result<EsitoDellaPubblicazione, PlenoraError> {
-    // Una destinazione che non si lascia osservare non e' libera.
-    if output_path
-        .try_exists()
-        .map_err(plenora_core::PlenoraError::Io)?
-    {
-        return Err(contract(format!(
-            "output gia' esistente, rifiuto di sovrascriverlo: {}",
-            output_path.display()
-        )));
-    }
+    // Prima del lavoro, con la stessa classe della pubblicazione.
+    verifica_destinazione_libera(output_path)?;
     let plan: Plan = read_control_json(plan_path)?;
     let plan = plan.validate()?;
     if plan.requires_secondary() || plan.requires_blocking() {
@@ -640,8 +633,21 @@ pub fn write_self_test(path: &Path) -> Result<(), Box<dyn Error>> {
     let point = [
         1_u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 8, 64,
     ];
+    verifica_destinazione_libera(path)?;
     let transformed = transform_wkb(Operation::Centroid, &point)?;
-    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    // `create_new` e' l'autorita' del no-clobber: la destinazione comparsa
+    // dopo il controllo e' lo stesso `conflict`.
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|errore| {
+            if errore.kind() == std::io::ErrorKind::AlreadyExists {
+                conflitto_sulla_destinazione(path)
+            } else {
+                PlenoraError::Io(errore)
+            }
+        })?;
     let mut output = FrameWriter::new(BufWriter::new(file), 1)?;
     output.write_frame(Some(&transformed))?;
     let (mut writer, _) = output.finish()?;

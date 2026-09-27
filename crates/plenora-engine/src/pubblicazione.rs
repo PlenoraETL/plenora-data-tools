@@ -317,7 +317,7 @@ impl ArtefattoVerificato {
 ///
 /// # Errors
 ///
-/// - [`PlenoraError::InvalidPlan`] se la destinazione esiste gia': e' il
+/// - [`PlenoraError::Conflict`] se la destinazione esiste gia': e' il
 ///   no-clobber, e la prima esecuzione che pubblica vince;
 /// - [`PlenoraError::Io`] per i guasti della copia e del commit;
 /// - [`PlenoraError::DataMapping`] se l'artefatto non ha piu' i byte che la

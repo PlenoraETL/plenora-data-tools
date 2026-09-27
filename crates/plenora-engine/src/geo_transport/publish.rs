@@ -349,8 +349,12 @@ fn classify_filesystem(magic: u64) -> FilesystemClass {
 /// variante `Unsupported` in cui e' confluita.
 #[cfg(target_os = "linux")]
 fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
-    let stat = rustix::fs::statfs(parent)
-        .map_err(|errno| io::Error::from_raw_os_error(errno.raw_os_error()))?;
+    let stat = rustix::fs::statfs(parent).map_err(|errno| {
+        io_at(
+            ErrorPhase::Probe,
+            io::Error::from_raw_os_error(errno.raw_os_error()),
+        )
+    })?;
     #[allow(clippy::cast_sign_loss)] // I magic f_type dei filesystem sono positivi.
     let magic = stat.f_type as u64;
     match classify_filesystem(magic) {
@@ -434,14 +438,37 @@ fn io_at(phase: ErrorPhase, error: io::Error) -> PlenoraError {
     PlenoraError::Io(error).with_phase(phase)
 }
 
-/// La destinazione e' occupata: una sola forma, per le due strade che la
-/// scoprono.
+/// La destinazione e' occupata: una sola forma, per ogni strada che la
+/// scopre.
 ///
 /// Il testo non nomina chi l'ha scoperta, perche' a chi legge non cambia
 /// niente: la destinazione c'e', e la prima esecuzione che pubblica vince.
-fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
+#[must_use]
+pub fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
     PlenoraError::Conflict(format!("output gia' esistente: {}", output_path.display()))
         .with_phase(ErrorPhase::Commit)
+}
+
+/// Il controllo no-clobber anticipato: la destinazione non deve esistere
+/// (errori-e-limiti.md#publish-e-cleanup).
+///
+/// E' un'anticipazione: l'autorita' e' l'`AlreadyExists` al persist, e le due
+/// strade danno la stessa classe. Chi controlla prima di cominciare il lavoro,
+/// come la CLI, usa questa funzione e non una copia.
+///
+/// # Errors
+///
+/// `PlenoraError::Conflict`, fase `Commit`, se la destinazione esiste;
+/// `PlenoraError::Io`, fase `Probe`, se non si lascia osservare: una
+/// destinazione che non si lascia osservare non e' libera.
+pub fn verifica_destinazione_libera(output_path: &Path) -> Result<(), PlenoraError> {
+    if output_path
+        .try_exists()
+        .map_err(|error| io_at(ErrorPhase::Probe, error))?
+    {
+        return Err(conflitto_sulla_destinazione(output_path));
+    }
+    Ok(())
 }
 
 /// Pubblicazione atomica dell'output con profilo selezionabile (errori-e-limiti.md#publish-e-cleanup).
@@ -460,11 +487,13 @@ fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
 /// via `Drop`, quindi nessun errore [`ErrorPhase::Cleanup`].
 ///
 /// # Errors
-/// Restituisce `PlenoraError::InvalidPlan` se l'output esiste gia' (tag
-/// `Commit`) o la directory di destinazione non esiste (tag `Probe`);
-/// `PlenoraError::Unsupported` se il filesystem di destinazione
-/// e' di rete o non identificabile (tag `Probe`); `PlenoraError::Io` per i
-/// fallimenti di scrittura, sync o persist (tag `Write`/`Finalize`/`Commit`);
+/// Restituisce `PlenoraError::Conflict` se l'output esiste gia' (tag
+/// `Commit`); `PlenoraError::InvalidPlan` se la directory di destinazione non
+/// esiste (tag `Probe`); `PlenoraError::Unsupported` se il filesystem di
+/// destinazione e' di rete o non identificabile (tag `Probe`);
+/// `PlenoraError::Io` se la destinazione non si lascia osservare (tag
+/// `Probe`) e per i fallimenti di scrittura, sync o persist (tag
+/// `Write`/`Finalize`/`Commit`);
 /// propaga invariato l'errore della closure `write`.
 ///
 /// # Panics
@@ -477,19 +506,7 @@ pub fn publish_with_profile<T>(
     profile: PublishProfile,
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
 ) -> Result<(T, EsitoDellaPubblicazione), PlenoraError> {
-    // `try_exists`, non `exists`: una destinazione che non si lascia
-    // osservare non e' una destinazione libera, e l'errore lo dice.
-    if output_path
-        .try_exists()
-        .map_err(|error| io_at(ErrorPhase::Probe, error))?
-    {
-        // Check no-clobber al confine di commit
-        // (errori-e-limiti.md#publish-e-cleanup, ICD §9). `Conflict` e non
-        // `InvalidPlan`: il piano e' corretto, e' il posto a essere occupato.
-        // E' un'**anticipazione**: l'autorita' e' l'`AlreadyExists` al persist,
-        // e le due strade danno la stessa classe.
-        return Err(conflitto_sulla_destinazione(output_path));
-    }
+    verifica_destinazione_libera(output_path)?;
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
     // Riconoscimento preliminare della destinazione: fase Probe. Solo «non
     // esiste» e «non e' una directory» sono del piano; una directory che non si
@@ -833,6 +850,21 @@ mod tests {
     }
 
     // -- Tagging di fase al confine di publish (BLOCK-03, piano-v5.md#contratti-di-input) --------
+
+    /// Una destinazione che non si lascia osservare non e' libera: `Io`, fase
+    /// `Probe`. Sotto un file regolare `stat` fallisce con `ENOTDIR`, che non
+    /// e' `NotFound`; su Windows lo stesso percorso risponde «non trovato».
+    #[cfg(unix)]
+    #[test]
+    fn una_destinazione_non_osservabile_e_io_in_fase_probe() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let file = directory.path().join("file");
+        std::fs::write(&file, b"x").expect("fixture");
+        let error = verifica_destinazione_libera(&file.join("output.bin"))
+            .expect_err("destinazione non osservabile");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Io, "{error}");
+        assert_eq!(error.phase_tag(), Some(ErrorPhase::Probe), "{error}");
+    }
 
     #[test]
     fn io_at_tags_each_publish_phase_without_changing_text_or_axes() {

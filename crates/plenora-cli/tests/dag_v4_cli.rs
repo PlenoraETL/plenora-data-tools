@@ -317,9 +317,12 @@ fn run_v4_non_sovrascrive_un_output_esistente() {
     std::fs::write(&output_path, b"contenuto precedente").expect("output preesistente");
 
     let result = cli_run(&plan, &input, &output_path);
-    assert!(!result.status.success());
-    let stderr = String::from_utf8_lossy(&result.stdout);
-    assert!(stderr.contains("esistente"), "stderr: {stderr}");
+    // Destinazione occupata: `conflict`, exit 5, come la pubblicazione
+    // (errori-e-limiti.md#publish-e-cleanup), non `invalid_plan`.
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "conflict");
+    assert_eq!(envelope["error"]["phase"], "commit");
+    assert_eq!(result.status.code(), Some(5), "conflict -> 5");
     assert_eq!(
         std::fs::read(&output_path).expect("output intatto"),
         b"contenuto precedente",
