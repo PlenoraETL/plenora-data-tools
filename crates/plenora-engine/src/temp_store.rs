@@ -310,7 +310,7 @@ fn hostname_confrontabile(registrato: &str) -> bool {
 /// ma non e' nostro, quindi vivo. Il PID resta un segnale diagnostico
 /// (riutilizzabile), mai una prova sufficiente (errori-e-limiti.md).
 #[cfg(target_os = "linux")]
-fn process_alive(pid: u32) -> bool {
+pub(crate) fn process_alive(pid: u32) -> bool {
     let Some(pid) = i32::try_from(pid)
         .ok()
         .and_then(rustix::process::Pid::from_raw)

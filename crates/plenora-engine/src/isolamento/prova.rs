@@ -36,7 +36,6 @@ use plenora_core::error::PlenoraError;
 use sha2::{Digest as _, Sha256};
 
 use crate::commit_token::CommitToken;
-use crate::esadecimale32::Esadecimale32;
 use crate::ipc_boundary::{self, IpcLimits};
 use crate::planner;
 use crate::protocollo::codifica::codifica;
@@ -844,26 +843,15 @@ pub(super) fn supervisore_per(
 
 /// Lo SHA-256 di un file, in esadecimale minuscolo.
 pub(super) fn digest_dell_immagine(percorso: &Path) -> Result<String> {
-    use std::io::Read as _;
-
     let mut file = std::fs::File::open(percorso).map_err(|causa| {
         non_disponibile(
             "prova",
             &format!("l'immagine {} non si apre: {causa}", percorso.display()),
         )
     })?;
-    let mut digestore = Sha256::new();
-    let mut blocco = vec![0_u8; 64 * 1024];
-    loop {
-        let quanti = file.read(&mut blocco).map_err(|causa| {
-            non_disponibile("prova", &format!("l'immagine non si legge: {causa}"))
-        })?;
-        if quanti == 0 {
-            break;
-        }
-        digestore.update(&blocco[..quanti]);
-    }
-    Ok(Esadecimale32::dai_byte(digestore.finalize().into()).in_esadecimale())
+    crate::protocollo::digest::sha256_da_lettore(&mut file)
+        .map(|digest| digest.in_esadecimale())
+        .map_err(|causa| non_disponibile("prova", &format!("l'immagine non si legge: {causa}")))
 }
 
 /// Il piano dell'esempio `e1`, che filtra e ordina.
