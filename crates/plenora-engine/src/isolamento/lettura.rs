@@ -1,23 +1,9 @@
 //! Leggere un file di `/proc` o di `cgroup2` senza fidarsi della sua taglia.
 //!
-//! # Perche' non `fs::read_to_string`
-//!
-//! Non perche' non funzioni: la funzione comoda usa i metadati solo per
-//! **dimensionare il buffer iniziale**, e un file che dichiara lunghezza zero
-//! — come fanno quelli di `/proc` e di `cgroup2` — viene letto lo stesso, con
-//! qualche riallocazione in piu'.
-//!
-//! La ragione e' un'altra, ed e' che quella funzione legge **fino alla fine**.
-//! Su questi file la fine e' decisa da chi li produce, e alcuni sono
-//! virtualmente illimitati: `/proc/self/mountinfo` cresce con i mount,
-//! `/proc/self/status` con i campi che il kernel aggiunge. Nessuno di essi
-//! dovrebbe essere grande, ma «non dovrebbe» non e' un tetto, ed e' la stessa
-//! forma di fiducia che questo progetto rifiuta altrove: una lunghezza che
-//! decide qualcun altro.
-//!
-//! Qui il tetto e' nostro, ed e' applicato **durante** la lettura e non dopo:
-//! `take` non consegna piu' byte di quanti se ne ammettano, quindi un file che
-//! cresce senza fine non fa crescere il buffer con se'.
+//! `fs::read_to_string` legge **fino alla fine**, e su questi file la fine la
+//! decide chi li produce (`/proc/self/mountinfo` cresce con i mount). Qui il
+//! tetto e' nostro, applicato **durante** la lettura: `take` non consegna piu'
+//! byte di quanti se ne ammettano.
 
 use super::DifettoSuperficie;
 

@@ -1,29 +1,13 @@
 //! Una lettura che si puo' fermare, senza mentire su cosa e' successo.
 //!
-//! # Il problema
+//! Un lettore fermo dentro una `read` non si sveglia se qualcuno altrove lascia
+//! cadere un mandante: e' il caso del discendente del worker che tiene aperto
+//! l'estremo di scrittura, e quella non-garanzia deve diventare un ritardo
+//! dichiarato, non un blocco. Il descrittore va in modalita' **non
+//! bloccante**, e la lettura passa da un adattatore che aspetta a piccoli
+//! passi guardando un interruttore.
 //!
-//! Un lettore fermo dentro una `read` non si sveglia perche' qualcuno altrove
-//! lascia cadere un mandante: continua ad aspettare byte che non arrivano.
-//! Finche' vive, vive anche la sua bocchetta, e il drenaggio finale non vede
-//! mai `Disconnected`.
-//!
-//! Il caso non e' teorico: e' precisamente quello del discendente del worker
-//! che si porta dietro l'estremo di scrittura. L'EOF non arriva perche'
-//! qualcuno tiene aperto l'altro capo, ed e' il motivo per cui quella
-//! non-garanzia deve diventare un ritardo dichiarato e non un blocco.
-//!
-//! # La forma
-//!
-//! Il descrittore si mette in modalita' **non bloccante**, e la lettura passa
-//! da un adattatore che sa aspettare a piccoli passi guardando un interruttore.
-//!
-//! # Che cosa si promette, e che cosa no
-//!
-//! Le tre cose vanno tenute separate, perche' confonderle produce una promessa
-//! che il codice non puo' mantenere.
-//!
-//! **Le proprieta' implementative**, vere sempre, e sono due — nessuna delle
-//! quali parla di quanto dura un giro:
+//! Proprieta' implementative, vere sempre:
 //!
 //! - l'interruttore viene guardato **prima di ogni nuova lettura e prima di
 //!   ogni attesa**. Non c'e' cammino in cui la lettura riparta senza averlo
@@ -31,35 +15,15 @@
 //! - l'adattatore **non chiede mai volontariamente** un'attesa piu' lunga di un
 //!   passo. E' cio' che dipende da lui, ed e' tutto cio' che puo' promettere.
 //!
-//! Va detto chiaramente perche' e' facile scrivere il contrario: «ogni giro
-//! dura al piu' un passo» sarebbe **falso**. `sleep` garantisce che l'attesa non
-//! sia piu' *breve* di quanto si chiede, non che non sia piu' lunga: fra la
-//! richiesta e il risveglio ci sono lo scheduler e le chiamate di sistema, e
-//! nessuno dei due si fa promettere niente.
+//! Non-garanzia: nessun limite di tempo reale. `sleep` promette un minimo,
+//! non un massimo, e senza scheduler real-time il ritorno sulla CPU lo decide
+//! il kernel; un tetto sull'orologio da parete va preso altrove (timeout di
+//! livello piu' alto, `SIGKILL`). La soglia di qualificazione e' un attrezzo
+//! dei casi, sotto `cfg(test)`, non un contratto.
 //!
-//! **La non-garanzia**, che va detta: nessun limite di tempo reale. Fra il
-//! momento in cui l'interruttore cambia e il momento in cui questo processo
-//! torna sulla CPU puo' passare quanto il kernel decide, e senza uno scheduler
-//! real-time non esiste numero che lo impedisca. Chi ha bisogno di un tetto
-//! sull'orologio da parete deve prenderlo altrove — un timeout di livello piu'
-//! alto, o un `SIGKILL` — non da qui.
-//!
-//! **La soglia di qualificazione**, che e' un attrezzo dei casi e non un
-//! contratto: duecento millisecondi, misurati su una macchina che non e' in
-//! ginocchio, oltre i quali un arresto non visto e' un difetto e non un momento
-//! sfortunato. Vive sotto `cfg(test)`, perche' una costante pubblica prima o
-//! poi si legge come una promessa.
-//!
-//! # Che cosa questo adattatore **non** fa
-//!
-//! **Non finge un EOF.** Quando gli si chiede di fermarsi rende un errore, non
-//! `Ok(0)`: `Ok(0)` significa «l'altro capo ha chiuso», che e' uno dei quattro
-//! fatti positivi del successo, e dirlo perche' abbiamo smesso di ascoltare
-//! trasformerebbe una nostra decisione in un'affermazione sul worker.
-//!
-//! **Non ricompone i frame.** Le letture parziali restano parziali: rende
-//! quello che il descrittore gli ha dato, e lo stato del frame a meta' vive in
-//! chi legge i frame, che e' l'unico a sapere a che punto e'.
+//! **Non finge un EOF**: fermato, rende un errore e non `Ok(0)`, che
+//! affermerebbe che l'altro capo ha chiuso. **Non ricompone i frame**: lo
+//! stato del frame a meta' vive in chi legge i frame.
 
 use std::io::{ErrorKind, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,71 +32,36 @@ use std::time::Duration;
 
 /// Ogni quanto l'attesa si riapre per guardare l'interruttore.
 ///
-/// # Perche' questo numero, e che cosa promette
-///
-/// # Che cosa questo numero governa
-///
-/// L'attesa che l'adattatore **chiede**, e nient'altro. Non quanto dura in
-/// realta': `sleep` promette un minimo, non un massimo, e fra la richiesta e il
-/// risveglio ci sono lo scheduler e il kernel.
-///
-/// Dieci millisecondi tengono l'attesa fitta senza trasformarla in un giro a
-/// vuoto: un lettore fermo chiede di svegliarsi cento volte al secondo, che su
-/// un processo che non ha altro da fare non si misura.
-///
-/// Non e' un tempo di risposta del worker: e' la granularita' con cui *noi*
-/// chiediamo di riguardare un flag. Confonderli farebbe scegliere il numero per
-/// la ragione sbagliata.
+/// Governa l'attesa che l'adattatore **chiede**, non quanto dura davvero. Il
+/// valore tiene l'attesa fitta senza farne un giro a vuoto. E' la
+/// granularita' con cui guardiamo un flag, non un tempo di risposta del
+/// worker.
 pub(super) const PASSO_DI_ATTESA: Duration = Duration::from_millis(10);
 
 /// Quanti `Interrupted` di fila prima di prendere fiato.
 ///
-/// # Perche' serve, visto che il freno si guarda comunque
-///
-/// Perche' il freno da' una **via d'uscita**, non un limite al consumo. Una
-/// sorgente che rende `Interrupted` senza fermarsi mai — segnali consegnati di
-/// continuo — fa girare questo ciclo alla massima velocita' che la CPU concede:
-/// nessun dato, nessun errore terminale, e un core occupato a non fare niente
-/// finche' qualcuno non frena.
-///
-/// Dopo questa soglia si chiede un passo di attesa, come per `WouldBlock`. Il
-/// contatore riparte a ogni esito che non sia `Interrupted`, cosi' i segnali
-/// sporadici — quelli veri — non pagano nulla: sedici di fila non capitano per
-/// caso.
+/// Il freno da' una via d'uscita, non un limite al consumo: una sorgente che
+/// rende sempre `Interrupted` occuperebbe un core finche' nessuno frena. Dopo
+/// la soglia si chiede un passo di attesa, come per `WouldBlock`; il
+/// contatore riparte a ogni altro esito, e i segnali sporadici non pagano
+/// nulla.
 const INTERRUZIONI_PRIMA_DEL_RESPIRO: u32 = 16;
 
 /// La soglia entro cui l'arresto si vede **nell'ambiente di qualificazione**.
 ///
-/// # Che cosa non e'
-///
-/// **Non e' una garanzia**, e non appartiene a nessun contratto. Un processo
-/// puo' essere tolto dalla CPU dallo scheduler per quanto il kernel decide, e
-/// nessun numero scritto qui glielo impedisce: senza uno scheduler real-time
-/// non esiste un limite di tempo reale che il codice possa promettere.
-///
-/// Vive sotto `cfg(test)` proprio per questo. Se fosse visibile alla
-/// produzione, prima o poi qualcuno la leggerebbe come un tempo su cui contare
-/// — e lo farebbe in buona fede, perche' una costante pubblica sembra una
-/// promessa.
-///
-/// # Che cosa e'
-///
-/// Il numero oltre il quale, **su una macchina che non e' in ginocchio**, un
-/// arresto non visto significa un difetto e non un momento sfortunato. Serve a
-/// un caso per fallire quando il passo di attesa diventa troppo lungo o
-/// l'interruttore smette di essere guardato: senza una soglia, «si ferma in
-/// fretta» resterebbe un'impressione che nessuna regressione smentisce.
+/// **Non e' una garanzia**: senza scheduler real-time non esiste un limite di
+/// tempo reale, e per questo vive sotto `cfg(test)`, dove nessuno la legge
+/// come promessa. E' il numero oltre il quale, su una macchina che non e' in
+/// ginocchio, un arresto non visto e' un difetto: fa fallire un caso se il
+/// passo si allunga o l'interruttore smette di essere guardato.
 #[cfg(test)]
 const SOGLIA_DI_QUALIFICAZIONE_DELL_ARRESTO: Duration = Duration::from_millis(200);
 
 /// Chi puo' chiedere l'arresto.
 ///
-/// # Perche' due tipi e non un booleano condiviso
-///
-/// Perche' un booleano condiviso lo puo' leggere e scrivere chiunque, e non si
-/// vede piu' chi comanda. Qui il [`Freno`] **chiede** e la
-/// [`SorgenteTerminabile`] **ubbidisce**: chi ha in mano il freno non puo'
-/// leggere, e chi legge non puo' fermarsi da solo.
+/// Il [`Freno`] **chiede** e la [`SorgenteTerminabile`] **ubbidisce**: chi ha
+/// il freno non legge, e chi legge non si ferma da solo. Un booleano condiviso
+/// non direbbe chi comanda.
 #[derive(Debug, Clone)]
 pub(super) struct Freno {
     fermati: Arc<AtomicBool>,
@@ -200,13 +129,9 @@ pub(super) struct SorgenteTerminabile<R: Read> {
 impl<R: Read> SorgenteTerminabile<R> {
     /// La sorgente, e il freno per fermarla.
     ///
-    /// # Perche' questa forma e [`Self::con_interruttore`] esistono entrambe
-    ///
-    /// Perche' questa forma crea il freno **insieme** alla sorgente — la usa
-    /// chi ascolta per primo, come il lettore della conduzione
-    /// (`macchina::produttori::avvia_lettore`). Il worker ha bisogno del
-    /// contrario — il freno prima, perche' il thread che legge nasce dopo —
-    /// e passa da `con_interruttore`.
+    /// Crea il freno **insieme** alla sorgente, per chi ascolta per primo
+    /// (`macchina::produttori::avvia_lettore`). Il worker, che ha il freno
+    /// prima del thread che legge, passa da [`Self::con_interruttore`].
     pub(super) fn nuova(sorgente: R) -> (Self, Freno) {
         Self::con_passo(sorgente, PASSO_DI_ATTESA)
     }
@@ -257,16 +182,10 @@ impl<R: Read> SorgenteTerminabile<R> {
     /// La sorgente grezza, per chi deve continuare a leggerla con un
     /// meccanismo diverso.
     ///
-    /// # Perche' esiste
-    ///
-    /// Perche' l'handshake e il resto del dialogo hanno bisogno della stessa
-    /// attesa non bloccante ma di **due** interruttori diversi — l'handshake
-    /// ha il proprio tetto (`TETTO_DELLA_PAROLA`), il resto ne ha un altro —
-    /// e un interruttore non si puo' cambiare a meta' di un
-    /// `SorgenteTerminabile` gia' costruito. Chi guida entrambe le fasi
-    /// costruisce due `SorgenteTerminabile` in sequenza sulla stessa
-    /// sorgente grezza, e questo e' il punto in cui la prima la restituisce
-    /// alla seconda.
+    /// Handshake e resto del dialogo hanno due interruttori diversi (tetti
+    /// diversi), e un interruttore non si cambia a meta': si costruiscono due
+    /// `SorgenteTerminabile` in sequenza sulla stessa sorgente, e qui la prima
+    /// la restituisce alla seconda.
     pub(super) fn dentro(self) -> R {
         self.sorgente
     }
@@ -284,29 +203,12 @@ pub(super) const MOTIVO_DELL_ARRESTO: &str = "lettura fermata su richiesta";
 impl<R: Read> Read for SorgenteTerminabile<R> {
     /// Legge, aspettando a piccoli passi finche' non c'e' niente.
     ///
-    /// # I tre esiti del descrittore, e perche' si trattano diversamente
-    ///
-    /// `WouldBlock` non e' un errore: e' «adesso non c'e' niente». Si guarda
-    /// l'interruttore e si aspetta un passo. Riprovare subito sarebbe un giro a
-    /// vuoto che brucia un core per non fare nulla.
-    ///
-    /// `Interrupted` e' un segnale arrivato nel mezzo. Si riprova **senza
-    /// aspettare**: non e' una mancanza di dati, e trattarlo come tale
-    /// aggiungerebbe un ritardo a ogni segnale.
-    ///
-    /// Anche li' pero' l'interruttore si guarda, ed e' il giro a garantirlo: si
-    /// torna in cima, e in cima c'e' il controllo. Senza, una sorgente che
-    /// rendesse `Interrupted` senza fermarsi mai renderebbe l'arresto
-    /// inefficace.
-    ///
-    /// Il freno pero' e' una via d'uscita, non un limite al consumo: finche'
-    /// nessuno frena, quel ciclo occuperebbe un core a non fare niente. Da qui
-    /// [`INTERRUZIONI_PRIMA_DEL_RESPIRO`], che dopo un numero limitato di
-    /// interruzioni consecutive chiede un passo di attesa — continuando a
-    /// guardare il freno a ogni giro.
-    ///
-    /// Ogni altro errore e' del canale, e si rende cosi' com'e': riclassificarlo
-    /// direbbe che il problema e' altrove.
+    /// - `WouldBlock`: niente adesso; si guarda l'interruttore e si aspetta un
+    ///   passo.
+    /// - `Interrupted`: si riprova **senza aspettare**, tornando in cima, dove
+    ///   c'e' il controllo dell'interruttore; dopo
+    ///   [`INTERRUZIONI_PRIMA_DEL_RESPIRO`] consecutivi si aspetta un passo.
+    /// - Ogni altro errore e' del canale, e si rende cosi' com'e'.
     ///
     /// # Errors
     ///
@@ -346,12 +248,8 @@ impl<R: Read> Read for SorgenteTerminabile<R> {
 
 /// Mette un descrittore in modalita' non bloccante, **conservando il resto**.
 ///
-/// # Perche' si rileggono i flag invece di scriverne uno
-///
-/// Perche' `F_SETFL` scrive l'insieme intero: passargli il solo `O_NONBLOCK`
-/// spegnerebbe tutto il resto — `O_APPEND` e ogni altro flag di stato — e lo
-/// farebbe in silenzio, perche' la chiamata riesce. Si legge cio' che c'e', si
-/// aggiunge, e si riscrive.
+/// `F_SETFL` scrive l'insieme intero: il solo `O_NONBLOCK` spegnerebbe in
+/// silenzio gli altri flag. Si legge, si aggiunge, si riscrive.
 ///
 /// # Errors
 ///
@@ -509,21 +407,11 @@ mod tests {
 
     /// **L'arresto si vede entro la soglia di qualificazione.**
     ///
-    /// Il lettore e' fermo su una sorgente che non dara' mai niente. Qualcuno
-    /// chiede l'arresto da un altro thread, e la lettura deve tornare entro la
-    /// soglia.
-    ///
-    /// # A quale perimetro appartiene
-    ///
-    /// A quello della **qualificazione dell'ambiente**, non a quello della
-    /// correttezza. Se fallisce, la prima ipotesi da verificare e' lo stato
-    /// della macchina: non esiste un limite di tempo reale che il codice possa
-    /// promettere, e su una macchina in ginocchio questo caso direbbe qualcosa
-    /// su di lei.
-    ///
-    /// Che il freno **venga guardato** e' provato altrove, contando i giri
-    /// invece del tempo: e' il caso dell'`Interrupted` perpetuo, che non dipende
-    /// da nessuno scheduler.
+    /// Il lettore e' fermo su una sorgente muta, e l'arresto chiesto da un
+    /// altro thread deve farlo tornare entro la soglia. Appartiene alla
+    /// **qualificazione dell'ambiente**: se fallisce, si guarda prima la
+    /// macchina. Che il freno venga guardato lo prova, contando i giri, il caso
+    /// dell'`Interrupted` perpetuo.
     #[test]
     fn l_arresto_si_vede_entro_la_soglia_di_qualificazione() {
         /// Una sorgente che non da' mai niente e non finisce mai.
@@ -555,16 +443,9 @@ mod tests {
 
     /// **`Interrupted` perpetuo: il freno si vede lo stesso.**
     ///
-    /// Una sorgente che rende `Interrupted` e non si ferma mai e' il caso in cui
-    /// un adattatore che riprovasse senza guardare l'interruttore girerebbe su
-    /// una CPU **senza via d'uscita**: nessun dato, nessun errore terminale, e
-    /// nessuno che possa fermarlo.
-    ///
-    /// Il caso non guarda l'orologio: conta i giri. La sorgente si ferma da sola
-    /// dopo un numero fissato di `Interrupted`, e cio' che si pretende e' che
-    /// l'arresto — chiesto **prima** — sia visto al primo giro, cioe' che la
-    /// sorgente non venga interrogata affatto. E' la proprieta' implementativa,
-    /// e vale senza dipendere da nessuno scheduler.
+    /// Il caso conta i giri, non il tempo: la sorgente si ferma da sola dopo un
+    /// numero fissato di `Interrupted`, e l'arresto chiesto **prima** deve
+    /// essere visto al primo giro, senza interrogarla affatto.
     #[test]
     fn interrupted_perpetuo_non_rende_inefficace_il_freno() {
         /// Una sorgente che rende sempre `Interrupted`, e conta quante volte le
@@ -604,16 +485,9 @@ mod tests {
     /// **Il presidio contro il giro a vuoto**: dopo un numero limitato di
     /// interruzioni consecutive, l'adattatore prende fiato.
     ///
-    /// # Perche' le due misure sono entrambe solide
-    ///
-    /// Il **conteggio** delle interrogazioni e' un'uguaglianza esatta: la
-    /// sorgente frena da sola alla quarantesima, e non ce ne devono essere ne'
-    /// piu' ne' meno.
-    ///
-    /// Il **tempo** si misura solo verso il basso — «almeno due passi» — ed e'
-    /// l'unica direzione in cui `sleep` promette qualcosa. Con quaranta
-    /// interruzioni e una soglia di sedici, i respiri sono due: se l'adattatore
-    /// non li prendesse, il caso finirebbe in un batter d'occhio.
+    /// Il conteggio delle interrogazioni e' un'uguaglianza esatta. Il tempo si
+    /// misura solo verso il basso («almeno due passi»), l'unica direzione in
+    /// cui `sleep` promette qualcosa: senza respiri il caso finirebbe subito.
     #[test]
     fn dopo_troppe_interruzioni_di_fila_si_prende_fiato() {
         /// Rende sempre `Interrupted`, e frena da sola dopo un numero fissato.

@@ -69,8 +69,7 @@ fn nome(esito: &super::EsitoDelSupervisore) -> &'static str {
 
 /// Le permutazioni di un elenco, per provare che l'ordine non conta.
 ///
-/// Scritte a mano invece che prese da una dipendenza: sono sei righe, e una
-/// dipendenza nuova per sei righe non si aggiunge.
+/// Scritte a mano: poche righe non giustificano una dipendenza nuova.
 fn permutazioni<T>(elementi: Vec<T>) -> Vec<Vec<T>>
 where
     T: Clone,
@@ -142,7 +141,7 @@ fn stesso_esito_in_ogni_ordine(ricette: Vec<Ricetta>, atteso: &str) {
 
 /// **La proprieta' centrale**: l'ordine d'arrivo non decide.
 ///
-/// Quattro fatti positivi, in tutti i ventiquattro ordini possibili. Se la
+/// Quattro fatti positivi, in tutti gli ordini possibili. Se la
 /// riduzione dipendesse dalla corsa, almeno uno di questi ordini darebbe un
 /// esito diverso — ed e' esattamente la corsa che su una macchina vera non si
 /// riesce a riprodurre a comando.
@@ -210,18 +209,12 @@ fn la_cancellazione_da_sola_e_una_cancellazione() {
     );
 }
 
-/// Il collegamento esterno, non solo la regola: un `CancellationToken`
-/// cancellato fa nascere `Fatto::CancellazioneRichiesta` in coda tramite
-/// [`super::avvia_sorveglianza_esterna`], senza che nessuno lo costruisca a
-/// mano.
+/// Il collegamento esterno, non solo la regola.
 ///
-/// # Perche' questo caso non gira ovunque
-///
-/// A differenza del resto del file, `avvia_sorveglianza_esterna` e' di Linux
-/// — e' un aiutante di `conduci_isolato`, che lo e' — anche se non tocca
-/// niente di Linux esso stesso: la ragione e' la stessa di
-/// `segnala_pulizia_della_conduzione` e delle altre due funzioni sorelle,
-/// senza chiamante fuori da quel percorso.
+/// Un `CancellationToken` cancellato fa nascere
+/// `Fatto::CancellazioneRichiesta` in coda tramite
+/// [`super::avvia_sorveglianza_esterna`]. Il caso e' solo Linux perche' lo e'
+/// la funzione, aiutante di `conduci_isolato` senza altri chiamanti.
 #[cfg(target_os = "linux")]
 #[test]
 fn la_sorveglianza_esterna_accoda_la_cancellazione_quando_il_token_si_cancella() {
@@ -581,20 +574,10 @@ fn la_diagnostica_di_riga_non_attraversa_e_si_dichiara() {
 
 // --- l'oracolo delle conversioni --------------------------------------------
 //
-// # Perche' una tabella e non «i risultati sono tutti distinti»
-//
-// Perche' la distinzione prova l'**iniettivita'**, non la correttezza. Uno
-// scambio completo — `Schema` che diventa `Io` e `Io` che diventa `Schema` —
-// lascia venti risultati distinti, e un caso che conta le distinzioni lo trova
-// perfetto. Cio' che serve e' dire, per ogni variante, **quale** deve uscire.
-//
-// # Perche' la tabella prova anche di essere completa
-//
-// Perche' una tabella incompleta e' un oracolo che tace proprio dove serve: le
-// varianti che non elenca sono quelle di cui nessuno ha detto niente. I casi
-// confrontano quindi la tabella con `TUTTE` del filo e con l'elenco dichiarato
-// del cuore, in **entrambi** i versi — nessuna variante del filo senza riga,
-// nessuna variante del cuore che non sia il bersaglio di qualcuna.
+// Una tabella e non «i risultati sono tutti distinti»: la distinzione prova
+// l'iniettivita', non la correttezza, e uno scambio `Schema`/`Io` la supera.
+// La tabella si confronta con `TUTTE` del filo e con l'elenco del cuore in
+// entrambi i versi, perche' una riga mancante e' un oracolo che tace.
 
 /// Ogni categoria del filo, e la categoria del cuore che deve produrre.
 const ORACOLO_CATEGORIE: &[(CategoriaSulFilo, ErrorCategory)] = &[
@@ -1035,16 +1018,12 @@ fn le_osservazioni_mancate_si_conservano_tutte() {
     assert!(mancate.contains("evidenza"), "{mancate}");
 }
 
-/// **La sentinella sulla diagnostica**: due esiti diversi con diagnostiche
-/// diverse, in ordine opposto, danno lo **stesso** rapporto.
+/// **La sentinella sulla diagnostica**.
 ///
-/// # Perche' e' un caso a se'
-///
-/// Perche' il registro rifiuta di arbitrare fra due esiti, ma la diagnostica
-/// viaggia **dentro** l'esito, e prendere quella del primo arrivato sarebbe lo
-/// stesso arbitrato fatto un passo piu' in basso — dove non si vede. Quando il
-/// protocollo e' gia' contraddittorio, non si elegge niente: restano tutte, e
-/// il rapporto le riporta ordinate.
+/// Due esiti con diagnostiche diverse, in ordine opposto, danno lo stesso
+/// rapporto. La diagnostica viaggia dentro l'esito: prendere quella del primo
+/// arrivato sarebbe un arbitrato fra esiti, solo nascosto. Restano tutte,
+/// ordinate.
 #[test]
 fn due_esiti_con_diagnostiche_diverse_danno_lo_stesso_rapporto() {
     let con_diagnostica = |scope: &str, osservate: u64| {
@@ -1222,19 +1201,13 @@ fn le_cinque_famiglie_danno_cinque_esiti_distinti() {
     );
 }
 
-/// **Senza la quiescenza nessuna delle cinque produce un esito.**
+/// **Senza la quiescenza nessuna famiglia produce un esito.**
 ///
-/// # Perche' vale per tutte e non solo per il permesso di proseguire
-///
-/// Perche' la quiescenza non e' cio' che autorizza a **proseguire**: e' cio' che
-/// rende i contatori un'osservazione invece di una fotografia in movimento.
-/// Finche' nel dominio c'e' qualcuno vivo, un OOM puo' ancora arrivare — e la
-/// stessa esecuzione diventerebbe `Timeout` oppure `LimiteAttribuito` secondo
-/// quando il kernel lo consegna. Un errore dichiarato e un panico non sono meno
-/// esposti: sono classificazioni fatte sugli stessi contatori.
-///
-/// Restringere il controllo a `DaVerificare` lascerebbe verdi quattro di queste
-/// cinque righe. E' esattamente cio' che il caso esclude.
+/// La quiescenza rende i contatori un'osservazione e non una fotografia in
+/// movimento: finche' nel dominio c'e' qualcuno vivo un OOM puo' ancora
+/// arrivare, e la stessa esecuzione diventerebbe `Timeout` o
+/// `LimiteAttribuito` secondo quando il kernel lo consegna. Vale per ogni
+/// famiglia, non solo per `DaVerificare`.
 #[test]
 fn senza_quiescenza_nessuna_famiglia_produce_un_esito() {
     for (chi, fatti) in famiglie_senza_quiescenza() {
@@ -1252,14 +1225,10 @@ fn senza_quiescenza_nessuna_famiglia_produce_un_esito() {
 
 /// **Un difetto della conduzione basta a fermare la barriera.**
 ///
-/// Non e' in contraddizione con «i difetti non sono un esito»: la barriera non
-/// chiede com'e' andata, chiede se lo si e' visto abbastanza da poterlo dire. Un
-/// produttore che non ha accodato e un drenaggio che ha rinunciato sono
-/// esattamente le ragioni per cui la risposta puo' essere no.
-///
-/// Il caso parte da fatti **completi**, cosi' che a fare la differenza sia solo
-/// il difetto: senza, sarebbe la solita barriera incompleta con un'altra
-/// etichetta.
+/// La barriera chiede se si e' visto abbastanza per concludere, e un
+/// produttore che non ha accodato o un drenaggio che ha rinunciato dicono di
+/// no. Il caso parte da fatti completi, cosi' che la differenza la faccia solo
+/// il difetto.
 #[test]
 fn un_difetto_della_conduzione_ferma_la_barriera() {
     let completi = || {
@@ -1288,21 +1257,11 @@ fn un_difetto_della_conduzione_ferma_la_barriera() {
 
 /// **Gli assi vanno e tornano: ogni valore del filo torna se stesso.**
 ///
-/// # Che cosa tiene insieme
-///
-/// Le due direzioni della conversione stanno in due moduli, perche' hanno due
-/// chiamanti: il worker produce (`protocollo::assi`), il supervisore consuma
-/// (questo modulo). Gli `match` esaustivi impediscono che una variante nuova
-/// venga dimenticata da una delle due parti, ma **non** impediscono di
-/// mandarla nel posto sbagliato: `Timeout => Conflict` compila benissimo.
-///
-/// Questo caso e' cio' che lo impedisce. Un solo scambio in una delle due
-/// tabelle lo fa cadere, e il difetto che chiude non somiglia a un errore:
-/// somiglia a un errore del worker che arriva al supervisore con la categoria
-/// di un altro, cioe' a una diagnosi sbagliata su un guasto vero.
-///
-/// L'enumerazione parte dal filo — `TUTTE` e' generata dalla stessa lista che
-/// genera le varianti — quindi non c'e' un elenco da tenere aggiornato a mano.
+/// Le due direzioni stanno in due moduli: il worker produce
+/// (`protocollo::assi`), il supervisore consuma (questo modulo). Gli `match`
+/// esaustivi non impediscono di mandare una variante nel posto sbagliato
+/// (`Timeout => Conflict` compila): questo caso si', e un solo scambio lo fa
+/// cadere. L'enumerazione parte da `TUTTE`, generata con le varianti.
 #[test]
 fn gli_assi_vanno_e_tornano_dal_filo_al_dominio() {
     use crate::protocollo::assi::{
@@ -1334,13 +1293,10 @@ fn gli_assi_vanno_e_tornano_dal_filo_al_dominio() {
         );
     }
     for (variante, nome) in RetrySulFilo::TUTTE {
-        // I rappresentanti di `TUTTE` portano ritardi piccoli: qui l'andata e
-        // ritorno deve **riuscire**, e un rifiuto sarebbe un difetto della
-        // conversione, non del caso. Il rifiuto ha casi propri, accanto alla
-        // conversione, dove si guarda il valore che lo provoca.
-        // `PlenoraError` non e' confrontabile, quindi non si confrontano due
-        // `Result`: si guarda che l'esito sia riuscito **e** che il valore sia
-        // quello. Un `is_ok()` da solo lascerebbe passare qualunque variante.
+        // I rappresentanti di `TUTTE` portano ritardi piccoli, quindi l'andata
+        // e ritorno deve riuscire; il rifiuto ha casi propri. `PlenoraError`
+        // non e' confrontabile: si guarda che l'esito riesca **e** che il
+        // valore sia quello, perche' `is_ok()` da solo lascia passare tutto.
         assert!(
             ritentativo_sul_filo(super::ritentativo(variante)).is_ok_and(|resa| resa == *variante),
             "la disposizione «{nome}» non torna se stessa"

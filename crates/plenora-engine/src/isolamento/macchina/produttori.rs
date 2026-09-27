@@ -1,25 +1,12 @@
-//! I quattro produttori: guardano, e accodano cio' che vedono.
+//! I produttori: guardano, e accodano cio' che vedono.
 //!
-//! # Che cosa hanno in comune, e non e' un caso
+//! Ognuno finisce **rendendo il proprio resoconto**, che consuma la bocchetta:
+//! cosi' il canale si disconnette (finche' una bocchetta vive il drenaggio non
+//! vede `Disconnected`) e un rifiuto ad accodare torna fuori dalla coda,
+//! attraverso il `JoinHandle`.
 //!
-//! Tutti e quattro finiscono allo stesso modo: **rendono il proprio resoconto**
-//! e lasciano cadere la bocchetta. Non e' disciplina, e' il tipo — `resoconto`
-//! consuma la bocchetta — e serve a due cose che il consumatore non potrebbe
-//! ottenere altrimenti.
-//!
-//! La prima e' che il canale si disconnetta: finche' una bocchetta vive, il
-//! drenaggio finale non vede `Disconnected`.
-//!
-//! La seconda e' che un rifiuto torni **fuori dalla coda**. Un produttore che
-//! non riesce ad accodare non puo' dirlo accodando: il resoconto passa dal
-//! `JoinHandle`, che e' una via che non si riempie.
-//!
-//! # E che cosa non hanno in comune
-//!
-//! Nessuno di loro decide niente. Il lettore non dice «il worker ha finito»,
-//! l'orologio non dice «e' un timeout», il sorvegliante non dice «e' andata
-//! bene»: dicono cosa hanno visto, e il giudizio sta tutto nel consumatore, che
-//! e' l'unico ad avere il quadro.
+//! Nessun produttore giudica: dice che cosa ha visto, e il giudizio sta nel
+//! consumatore, l'unico ad avere il quadro.
 
 use std::io::Read;
 use std::thread::JoinHandle;
@@ -40,12 +27,8 @@ pub(super) type Resoconto = Option<Esaurita>;
 
 /// A che punto e' la conversazione, dal lato di chi ascolta.
 ///
-/// # Perche' il lettore ha uno stato
-///
-/// Perche' «fuori sequenza» non e' una proprieta' del messaggio ma del momento
-/// in cui arriva: un `Progresso` va benissimo prima dell'esito e non ha senso
-/// dopo, e senza sapere dove si e' arrivati non si puo' dire quale delle due
-/// cose sia.
+/// «Fuori sequenza» dipende dal momento, non dal messaggio: un `Progresso` va
+/// bene prima dell'esito e non dopo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PuntoDellaConversazione {
     /// Si accettano progressi, e un esito.
@@ -56,24 +39,11 @@ enum PuntoDellaConversazione {
 
 /// Il progresso, **conservato** invece che inoltrato.
 ///
-/// # Perche' si conserva l'ultimo invece di sommare
-///
-/// Perche' i contatori del `Progresso` sono **totali**, non incrementi: ogni
-/// rapporto dice quanto si e' fatto fin li'. L'ultimo li contiene tutti, e
-/// tenere solo lui non perde niente.
-///
-/// Sommarli sarebbe sbagliato due volte. Darebbe un numero che non significa
-/// nulla — la somma di sette letture cumulative non e' un conteggio di niente —
-/// e aprirebbe la strada al traboccamento, le cui due uscite sono entrambe
-/// cattive: saturare rende `u64::MAX` indistinguibile da un conteggio esatto
-/// pari a `u64::MAX`, cioe' una perdita **silenziosa**; andare in panico mette
-/// il supervisore in ginocchio per un numero che ha scelto il worker.
-///
-/// # Perche' coalescere serve comunque
-///
-/// Perche' quante volte il worker riporta lo sceglie lui, e un fatto per
-/// rapporto gli lascerebbe decidere quanto spazio occupare in coda. Conservando
-/// l'ultimo, cio' che arriva al consumatore e' **un fatto solo**.
+/// I contatori del `Progresso` sono **totali**, non incrementi: l'ultimo
+/// rapporto li contiene tutti. Sommarli darebbe un numero senza significato e
+/// aprirebbe al traboccamento (saturare e' una perdita silenziosa, il panico lo
+/// sceglierebbe il worker). Tenere solo l'ultimo fa arrivare al consumatore
+/// **un fatto solo**, qualunque sia il numero di rapporti scelto dal worker.
 #[derive(Debug, Default, Clone, Copy)]
 struct ProgressoOsservato {
     ultimo: Option<Progresso>,
@@ -119,42 +89,22 @@ impl ProgressoOsservato {
 
 /// Il canale **dopo** che l'handshake e' stato consumato.
 ///
-/// # Perche' il confine sta nel tipo
-///
-/// Perche' la sequenza che il lettore accetta — progressi, poi l'esito — e'
-/// giusta **solo dopo** che la `Risposta` e' stata letta e verificata. Su un
-/// canale grezzo il primo messaggio e' la `Risposta`, e un lettore che partisse
-/// da li' la troverebbe fuori sequenza: rifiuterebbe una conversazione
-/// perfettamente valida, e lo farebbe per un errore di chi lo ha avviato.
-///
-/// Un commento che dicesse «avviarlo dopo l'handshake» non basterebbe: chi
-/// scrive il chiamante lo legge una volta e poi non piu'. Qui la prova e' un
-/// valore — [`HandshakeAccettato`] — che **solo** l'handshake produce, e senza
-/// il quale questo tipo non si costruisce.
+/// La sequenza che il lettore accetta vale solo dopo la `Risposta`: su un
+/// canale grezzo la `Risposta` risulterebbe fuori sequenza. Il tipo lo impone
+/// chiedendo [`HandshakeAccettato`], che **solo** l'handshake produce.
 pub(super) struct CanaleOperativo<R: Read> {
     sorgente: R,
-    /// La prova, tenuta perche' esista e non perche' si legga.
-    ///
-    /// Il token che porta appartiene al publish, che qui non c'e': cio' che
-    /// serve a questo modulo e' che il valore **sia stato ottenuto**, e per
-    /// ottenerlo bisogna essere passati dall'handshake.
+    /// La prova, tenuta perche' esista e non perche' si legga: il token che
+    /// porta appartiene al publish.
     _accordo: HandshakeAccettato,
 }
 
 impl<R: Read> CanaleOperativo<R> {
     /// Il canale, dopo l'accordo, su una sorgente qualunque.
     ///
-    /// # Perche' vive solo nei casi
-    ///
-    /// Perche' una sorgente qualunque non si puo' rendere non bloccante, e un
-    /// lettore che resta dentro una `read` non si sveglia quando qualcuno frena.
-    /// In produzione la sorgente e' un descrittore, e c'e' un costruttore che se
-    /// ne occupa; qui non c'e' descrittore, e i casi che leggono da un vettore
-    /// di byte non hanno nulla da bloccare.
-    ///
-    /// Tenerlo disponibile alla produzione vorrebbe dire lasciare aperta la
-    /// strada per costruire un lettore che non si puo' fermare — e la si
-    /// prenderebbe senza accorgersene, perche' compila.
+    /// Solo nei casi: una sorgente qualunque non si rende non bloccante, e in
+    /// produzione darebbe un lettore che non si puo' fermare. I casi leggono da
+    /// un vettore di byte, che non blocca.
     #[cfg(test)]
     pub(super) const fn dopo_l_accordo(sorgente: R, accordo: HandshakeAccettato) -> Self {
         Self {
@@ -168,16 +118,9 @@ impl<R: Read> CanaleOperativo<R> {
 impl CanaleOperativo<std::io::PipeReader> {
     /// Il canale del supervisore, **reso non bloccante**.
     ///
-    /// # Perche' qui e non nel lettore
-    ///
-    /// Perche' il lettore e' generico su cio' che legge, e su una sorgente
-    /// generica non c'e' niente da mettere in modalita' non bloccante. Se lo
-    /// facesse lui, dovrebbe farlo «quando puo'» — cioe' mai in modo
-    /// verificabile.
-    ///
-    /// Qui invece il tipo e' un descrittore, e questo costruttore e' l'**unico**
-    /// modo di ottenere un canale operativo di produzione: chi lo usa non puo'
-    /// dimenticarsene, perche' non c'e' un'altra porta.
+    /// Sta qui e non nel lettore, che e' generico sulla sorgente: questo
+    /// costruttore e' l'**unico** modo di ottenere un canale operativo di
+    /// produzione, quindi la modalita' non bloccante non si puo' dimenticare.
     ///
     /// # Errors
     ///
@@ -198,24 +141,12 @@ impl CanaleOperativo<std::io::PipeReader> {
 
 /// Legge il canale del worker, e accoda quello che ne viene.
 ///
-/// # La sequenza che accetta
+/// Accetta zero o piu' `Progresso`, poi al piu' un `Esito`, poi la fine; tutto
+/// il resto e' **fuori sequenza**. Alla prima rottura accoda **un** fatto di
+/// protocollo e smette: inoltrare ogni messaggio inaspettato lascerebbe al
+/// worker decidere quanto spazio occupare in coda.
 ///
-/// Zero o piu' `Progresso`, poi al piu' un `Esito`, poi la fine. Tutto il resto
-/// e' **fuori sequenza**: un secondo esito, un progresso dopo l'esito, un
-/// messaggio di un tipo che a questo stadio il worker non manda.
-///
-/// # Che cosa fa quando la sequenza si rompe
-///
-/// Accoda **un** fatto di protocollo e smette. Non uno per messaggio
-/// inaspettato: quanti ne manda lo sceglie il worker, e inoltrarli tutti gli
-/// lascerebbe decidere quanto spazio occupare in coda — proprio la cosa da cui
-/// il budget protegge. Il primo dice gia' tutto: da li' in poi la conversazione
-/// non e' piu' quella che il protocollo descrive.
-///
-/// # Che cosa rende
-///
-/// Il filo, e il freno per fermarlo. Il filo rende il resoconto della propria
-/// bocchetta.
+/// Rende il filo, che rende il resoconto della bocchetta, e il freno.
 pub(super) fn avvia_lettore<R: Read + Send + 'static>(
     canale: CanaleOperativo<R>,
     bocchetta: Bocchetta,
@@ -234,7 +165,7 @@ pub(super) fn avvia_lettore<R: Read + Send + 'static>(
             ruolo,
         );
 
-        // Il progresso sommato si accoda **prima** della fine: cosi' chi legge
+        // Il progresso conservato si accoda **prima** della fine: cosi' chi legge
         // la coda incontra il lavoro fatto e poi la sua conclusione, che e'
         // l'ordine in cui sono successi.
         if let Some(fatto) = progresso.in_fatto() {
@@ -252,16 +183,9 @@ pub(super) fn avvia_lettore<R: Read + Send + 'static>(
 
 /// Fa nascere un filo, **e ammette che possa non nascere**.
 ///
-/// # Perche' non `std::thread::spawn`
-///
-/// Perche' `spawn` va in **panico** quando il sistema rifiuta un thread — un
-/// limite di processi raggiunto, memoria finita — e un panico li' e' il posto
-/// peggiore in cui scoprirlo: succede mentre i produttori stanno nascendo, cioe'
-/// quando alcuni sono gia' vivi e il figlio e' gia' avviato. Chi lo subisce non
-/// vede un errore, vede un supervisore che sparisce.
-///
-/// `Builder::spawn` rende invece un `Result`, e un rifiuto diventa una cosa da
-/// riportare e da cui tornare indietro.
+/// `std::thread::spawn` va in panico se il sistema rifiuta il thread, mentre
+/// alcuni produttori sono vivi e il figlio e' avviato; `Builder::spawn` rende
+/// un `Result`, e il rifiuto diventa un errore da cui tornare indietro.
 ///
 /// # Errors
 ///
@@ -283,40 +207,14 @@ fn nato<T: Send + 'static>(
 
 /// Far rifiutare una nascita **a comando**.
 ///
-/// # Perche' esiste, e perche' solo nei casi
+/// Il sistema rifiuta un thread solo quando e' esaurito: senza questa giuntura
+/// non si provano i cablaggi della rinuncia in `conduci` (dopo il lettore,
+/// l'orologio e il sorvegliante). Sta sotto `cfg(test)` e non dietro una
+/// feature, che un consumatore della libreria potrebbe scegliere.
 ///
-/// Perche' il cammino della rinuncia si percorre soltanto quando il sistema
-/// rifiuta un thread, e il sistema lo fa quando e' esaurito. Un caso che
-/// volesse arrivarci sul serio dovrebbe portare la macchina in quello stato:
-/// non e' una prova, e' un guasto.
-///
-/// Senza questa giuntura restano provabili le **conseguenze** della rinuncia —
-/// chiamandola direttamente — ma non i suoi tre **cablaggi**: che `conduci` la
-/// invochi dopo il lettore, dopo l'orologio e dopo il sorvegliante, ogni volta
-/// col nome giusto e con cio' che a quel punto esiste. Tre punti di chiamata
-/// sono tre occasioni di divergere, e quella che diverge e' sempre l'ultima.
-///
-/// Sta sotto `cfg(test)` e non dietro una feature. La differenza non e' che
-/// `cfg(test)` sia inaccessibile — chi controlla la build puo' selezionare i
-/// `cfg` che vuole — ma che **non appartiene a nessun percorso di compilazione
-/// previsto**: nessun profilo Cargo ordinario lo include, e nessun consumatore
-/// della libreria puo' chiederlo dal proprio `Cargo.toml`. Una feature, invece,
-/// e' fatta apposta per essere scelta da chi dipende da noi. Fuori dai casi il
-/// modulo non esiste, e `nato` non ha nulla da chiedergli.
-///
-/// # Perche' un turno **e** il filo che arma
-///
-/// Perche' i casi girano in parallelo, e ci vogliono tutte e due le difese.
-///
-/// Il turno serve perche' l'arma e' una: due casi che armassero insieme si
-/// sovrascriverebbero, e il secondo farebbe fallire una nascita che il primo
-/// stava aspettando — il primo resterebbe verde senza aver misurato niente.
-/// Chi arma tiene il turno finche' non ha finito.
-///
-/// Il filo serve perche' il turno non basta: mentre un caso e' armato, un caso
-/// **non armato** puo' far nascere i suoi produttori nello stesso momento e
-/// consumare il conteggio. Le nascite si contano quindi per filo, e `nato` viene
-/// sempre chiamato dal filo che conduce — che e' il filo del caso.
+/// I casi girano in parallelo: il turno impedisce a due casi di armare
+/// insieme, e le nascite si contano per filo perche' un caso non armato non
+/// consumi il conteggio. `nato` e' sempre chiamato dal filo del caso.
 #[cfg(test)]
 pub(super) mod inciampo {
     /// Il turno: uno solo arma per volta.
@@ -328,9 +226,7 @@ pub(super) mod inciampo {
 
     /// L'arma, che si disinnesca da sola.
     ///
-    /// Tenerla viva e' cio' che tiene armato il guasto; lasciarla cadere lo
-    /// spegne. Un ripristino da scrivere a mano si dimentica, e un caso
-    /// successivo troverebbe una nascita che fallisce senza averlo chiesto.
+    /// Il guasto resta armato finche' l'arma vive; lasciarla cadere lo spegne.
     pub(in crate::isolamento::macchina) struct Armato {
         /// Il turno, tenuto finche' l'arma vive.
         _turno: std::sync::MutexGuard<'static, ()>,
@@ -361,8 +257,8 @@ pub(super) mod inciampo {
     /// Se la nascita che si sta chiedendo adesso e' quella da far fallire.
     pub(super) fn tocca_a_questa() -> bool {
         // La presa si rilascia **prima** di rendere: `nato` sta per chiamare
-        // `Builder::spawn`, e tenere un lucchetto attraverso una nascita e' il
-        // modo di scoprire un giorno che due casi si aspettano a vicenda.
+        // `Builder::spawn`, e un lucchetto tenuto attraverso una nascita
+        // espone a un'attesa reciproca fra casi.
         let tocca = {
             let mut armato = ARMATO
                 .lock()
@@ -382,17 +278,10 @@ pub(super) mod inciampo {
 /// Il giro di lettura: rende il fatto con cui il canale finisce, e l'eventuale
 /// rifiuto incontrato per strada.
 ///
-/// # Perche' anche qui il ruolo decide, e non solo in `Registro::messaggio`
-///
-/// Perche' questo e' il punto in cui la conversazione passa da «in corso» a
-/// «conclusa»: se un `Corpo::EsitoVerifica` chiudesse un dialogo con un
-/// **worker** (o viceversa), la conversazione si direbbe conclusa da un
-/// messaggio che per quel ruolo non e' l'esito — e tutto cio' che arrivasse
-/// dopo verrebbe letto come «fuori sequenza» invece che come il vero
-/// protocollo violato: il corpo sbagliato. Trattandolo qui come «fuori
-/// sequenza» fin da subito, il messaggio non arriva nemmeno a
-/// `Registro::messaggio` come un possibile esito — le due difese si
-/// completano, non si sovrappongono a caso.
+/// Il ruolo decide anche qui, oltre che in `Registro::messaggio`, perche' qui
+/// la conversazione diventa «conclusa»: un esito del ruolo sbagliato e' fuori
+/// sequenza subito, invece di chiudere il dialogo e far leggere come fuori
+/// sequenza cio' che arriva dopo.
 fn fine_del_canale<R: Read>(
     sorgente: &mut SorgenteTerminabile<R>,
     bocchetta: &mut Bocchetta,
@@ -485,21 +374,12 @@ const fn se_conclusa(punto: PuntoDellaConversazione) -> &'static str {
 
 /// Misura il tempo dell'esecuzione, e dice quando e' finito.
 ///
-/// # Perche' un tempo solo
+/// Un tempo solo: il timeout dell'handshake si chiude **prima** che il canale
+/// operativo esista, e lo misura chi guida l'handshake.
 ///
-/// Perche' l'altro non appartiene a questa macchina. Il timeout dell'handshake
-/// misura dall'avvio alla `Risposta`, e quell'intervallo si chiude **prima** che
-/// il canale operativo esista — chi lo misura e' chi guida l'handshake. Averne
-/// due qui, percorsi in sequenza, farebbe partire il secondo solo dopo che il
-/// primo e' scaduto: il tempo dell'esecuzione comincerebbe a contare quando
-/// quello del saluto e' gia' finito, e un'esecuzione valida si vedrebbe
-/// scadere addosso un tempo che non e' il suo.
-///
-/// # Perche' aspetta a piccoli passi invece che tutto insieme
-///
-/// Perche' un'attesa sola non si interrompe: se il lavoro finisce prima, il filo
-/// resterebbe fermo fino alla scadenza, e con lui la sua bocchetta — che e'
-/// esattamente cio' che impedisce al canale di disconnettersi.
+/// Aspetta a passi perche' un'attesa sola non si interrompe: il filo, e con
+/// lui la bocchetta, resterebbe vivo fino alla scadenza e il canale non si
+/// disconnetterebbe.
 pub(super) fn avvia_orologio(
     tempo_di_esecuzione: Duration,
     bocchetta: Bocchetta,
@@ -573,12 +453,8 @@ fn attendi_o_fermati(interruttore: &Interruttore, quanto: Duration, passo: Durat
 
 /// Guarda il dominio finche' non e' vuoto.
 ///
-/// # Perche' la quiescenza si osserva invece di dedurla
-///
-/// Perche' «il figlio e' uscito» non dice niente sui suoi discendenti: il
-/// dominio puo' essere ancora abitato da qualcuno che il figlio ha avviato, e
-/// concludere sulla sua sola uscita direbbe che il lavoro e' finito mentre
-/// qualcosa gira ancora.
+/// La quiescenza si osserva: l'uscita del figlio non dice niente dei suoi
+/// discendenti, che possono abitare ancora il dominio.
 pub(super) fn avvia_sorvegliante<O>(
     osservatore: O,
     bocchetta: Bocchetta,
@@ -587,19 +463,10 @@ pub(super) fn avvia_sorvegliante<O>(
 where
     O: Osservatore + Send + 'static,
 {
-    // L'osservatore viaggia in una cella condivisa, e non catturato di peso.
-    //
-    // # Perche'
-    //
-    // Perche' deve poter **tornare indietro**. `Builder::spawn` prende la
-    // chiusura e, quando il sistema rifiuta il thread, la lascia cadere con
-    // tutto cio' che ha catturato: l'osservatore sparirebbe li'. Chi rinuncia a
-    // una nascita parziale ne ha bisogno — forza il dominio, e poi deve sapere
-    // se si e' svuotato. Senza, la rinuncia potrebbe dire «ho chiesto» e mai
-    // «e' successo».
-    //
-    // La chiusura lo prende al primo giro; chi resta fuori lo ritrova nella
-    // cella se la chiusura non e' mai partita.
+    // L'osservatore viaggia in una cella condivisa perche' deve poter tornare
+    // indietro: se il sistema rifiuta il thread, `Builder::spawn` lascia cadere
+    // la chiusura con cio' che ha catturato, e chi rinuncia ha bisogno
+    // dell'osservatore per sapere se il dominio forzato si e' svuotato.
     let cella = std::sync::Arc::new(std::sync::Mutex::new(Some(osservatore)));
     let sua = std::sync::Arc::clone(&cella);
     let (interruttore, freno) = crate::isolamento::sorgente::interruttore();
@@ -636,15 +503,8 @@ where
                 }
                 Err(Difetto::Impossibile(motivo)) => {
                     // Non aver potuto guardare e' un fatto **nostro**, e si
-                    // smette.
-                    //
-                    // Non perche' un tentativo successivo fallirebbe: potrebbe
-                    // benissimo riuscire. Si smette perche' l'osservazione
-                    // mancata rende **gia' incompleta** l'evidenza sulla
-                    // quiescenza, e una lettura riuscita dopo non cancella il
-                    // buco che c'e' stato: direbbe «adesso e' vuoto», non «lo e'
-                    // sempre stato». Insistere aggiungerebbe righe senza
-                    // aggiungere certezza.
+                    // smette: l'evidenza sulla quiescenza e' gia' incompleta, e
+                    // una lettura riuscita dopo non cancella il buco.
                     let _ = bocchetta.manda(Fatto::OsservazioneImpossibile {
                         chi: "quiescenza",
                         motivo,
@@ -673,16 +533,9 @@ where
 
 /// Perche' un'osservazione non e' avvenuta.
 ///
-/// # Perche' due varianti e non un messaggio
-///
-/// Perche' rispondono a domande diverse. «La lettura e' stata interrotta»
-/// significa che non e' avvenuta e che rifarla la fa avvenire: non manca niente
-/// all'evidenza, manca solo un tentativo. «Non si e' potuto guardare» significa
-/// che l'evidenza ha un buco, e quel buco resta anche se il tentativo dopo
-/// riesce.
-///
-/// Un messaggio solo obbligherebbe chi legge a indovinare quale delle due, e
-/// indovinerebbe leggendo il testo — cioe' male.
+/// Un'interruzione si rifa' senza lasciare buchi nell'evidenza; un'osservazione
+/// impossibile lascia un buco che resta. Due varianti evitano di distinguerle
+/// dal testo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Difetto {
     /// La lettura e' stata interrotta: si puo' rifare.
@@ -708,18 +561,9 @@ pub(super) trait Osservatore {
 
 /// Che cosa e' successo alla richiesta di annullamento.
 ///
-/// # Perche' tre esiti e non un `Option`
-///
-/// Perche' chi annulla deve poter distinguere tre cose che portano a decisioni
-/// diverse: la richiesta e' **in coda** e il supervisore la vedra'; la
-/// conduzione ha gia' **deposto** la bocchetta, quindi non ascolta piu' e
-/// annullare non serve; oppure la richiesta **non e' entrata**, e allora il
-/// supervisore non la vedra' mai — che e' l'unico caso in cui chi ha annullato
-/// deve fare qualcos'altro.
-///
-/// Un `Option<Esaurita>` le confonde: `None` direbbe insieme «fatto», «troppo
-/// tardi» e «lucchetto avvelenato».
-///
+/// Tre esiti e non un `Option<Esaurita>`, il cui `None` confonderebbe «fatto»
+/// e «troppo tardi»: solo `NonAccodata` chiede a chi annulla di fare
+/// qualcos'altro, perche' il supervisore non vedra' mai la richiesta.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum EsitoDellAnnullamento {
     /// La richiesta e' in coda.
@@ -732,11 +576,7 @@ pub(super) enum EsitoDellAnnullamento {
 
 /// Chi puo' chiedere l'annullamento.
 ///
-/// # Perche' non e' un filo
-///
-/// Perche' non ha niente da guardare: non aspetta un evento, lo **porta**. Un
-/// filo che dormisse in attesa di essere svegliato sarebbe un filo in piu' da
-/// fermare e da aspettare, per fare cio' che una chiamata fa da sola.
+/// Non e' un filo: non aspetta un evento, lo **porta**, e basta una chiamata.
 #[derive(Debug)]
 pub(super) struct Annullatore {
     bocchetta: std::sync::Mutex<Option<Bocchetta>>,
@@ -757,10 +597,8 @@ impl Annullatore {
     ///
     /// Rende cio' che la bocchetta non ha potuto dire, se qualcosa.
     pub(super) fn annulla(&self) -> EsitoDellAnnullamento {
-        // La presa si rilascia **prima** di accodare: tenere un lucchetto
-        // mentre si parla con la coda vorrebbe dire che chi annulla e chi
-        // depone si aspettano a vicenda per una cosa che riguarda solo la
-        // bocchetta, e la bocchetta a quel punto e' gia' nostra.
+        // La presa si rilascia **prima** di accodare: la bocchetta e' gia'
+        // nostra, e chi annulla e chi depone non devono aspettarsi.
         let Some(mut bocchetta) = self.prendi() else {
             return EsitoDellAnnullamento::GiaDeposta;
         };
@@ -782,18 +620,9 @@ impl Annullatore {
 
     /// Prende la bocchetta, **recuperando da un lucchetto avvelenato**.
     ///
-    /// # Perche' si recupera invece di rinunciare
-    ///
-    /// Perche' un lucchetto avvelenato dice che un altro thread e' morto con la
-    /// presa in mano, non che il dato sotto sia rotto: qui il dato e' un
-    /// `Option<Bocchetta>`, e le due sole cose che gli succedono sono «c'e'» e
-    /// «e' stata presa». Nessuna delle due si corrompe a meta'.
-    ///
-    /// Rinunciare con un `ok()?` collassa tre cose diverse nello stesso `None`:
-    /// lucchetto avvelenato, bocchetta gia' deposta, e successo. Su `annulla`
-    /// fa **sparire la richiesta** senza dirlo; su `deponi` lascia viva la
-    /// bocchetta fino al tetto del drenaggio, e chi legge quel difetto non ha
-    /// modo di risalire alla ragione.
+    /// Il dato e' un `Option<Bocchetta>`, che non si corrompe a meta'.
+    /// Rinunciare con `ok()?` farebbe sparire senza dirlo una richiesta di
+    /// annullamento, o lascerebbe viva la bocchetta fino al tetto del drenaggio.
     fn prendi(&self) -> Option<Bocchetta> {
         self.bocchetta
             .lock()

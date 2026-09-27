@@ -1,23 +1,12 @@
 //! Il worker: che cosa fa appena nasce, prima di dire qualunque cosa.
 //!
-//! # Che cosa trova, e perche' non gli basta
-//!
-//! Trova due descrittori **ereditati** e due numeri nell'ambiente. Nessuna delle
-//! due cose e' una prova: i numeri sono testo che qualcuno ha scritto, e i
-//! descrittori sono numeri che il kernel ha riusato mille volte. Il worker non
-//! ci crede — li **riguarda**, uno per uno, e rifiuta tutto cio' che non torna.
-//!
-//! Non e' diffidenza verso il supervisore. E' che fra la `exec` e questa riga il
-//! processo cambia identita', e cio' che vale prima va riletto adesso: un
+//! Trova due descrittori **ereditati** e due numeri nell'ambiente, e nessuna
+//! delle due cose e' una prova: li **riguarda** uno per uno e rifiuta cio' che
+//! non torna. Fra la `exec` e qui il processo ha cambiato identita', e un
 //! controllo fatto dall'altra parte descrive un altro processo.
 //!
-//! # Perche' i rifiuti sono tanti, e nominati
-//!
-//! Perche' ognuno e' una cosa diversa andata storta, e chi legge un log deve
-//! poterle distinguere. «Il canale non va bene» manda a guardare il canale; «la
-//! variabile non ha il separatore» manda a guardare chi l'ha scritta, che e' il
-//! posto giusto. Un rifiuto generico costa a chi diagnostica esattamente il
-//! tempo che si e' risparmiato chi lo ha scritto.
+//! I rifiuti sono nominati uno per uno, perche' ciascuno manda a guardare in
+//! un posto diverso.
 
 use plenora_core::error::PlenoraError;
 
@@ -46,15 +35,9 @@ mod esecuzione;
 
 /// Il separatore fra i due numeri nella variabile del canale.
 ///
-/// # Perche' una variabile con un separatore e non due variabili
-///
-/// Perche' due variabili sono quattro stati — entrambe, nessuna, e le due
-/// forme a meta' — e i due a meta' non hanno una lettura ovvia. Un worker che
-/// ne trova una sola non sa se l'altra e' andata persa o se il supervisore ha
-/// cambiato idea a meta', e qualunque cosa decida sta indovinando.
-///
-/// Con una variabile sola gli stati sono due: c'e' nella forma attesa, oppure
-/// no. Il canale e' **una** cosa, e attraversa il confine come una cosa sola.
+/// Una variabile sola, non due: due variabili hanno stati a meta' senza una
+/// lettura ovvia, mentre una sola c'e' nella forma attesa oppure no. Il
+/// canale attraversa il confine come una cosa sola.
 pub(super) const SEPARATORE: char = ':';
 
 /// I due numeri del canale, letti dall'ambiente e **non ancora creduti**.
@@ -82,14 +65,9 @@ impl Meta {
 
 /// Perche' il valore non e' stato accettato.
 ///
-/// # Perche' un tipo e non un messaggio
-///
-/// Perche' il messaggio e' cio' che si legge, non cio' che si decide. Un caso
-/// che confrontasse i messaggi proverebbe la formulazione; e uno che ne
-/// contasse i **distinti** si lascerebbe ingannare dai valori interpolati, che
-/// rendono diverse due occorrenze dello stesso ramo. Con un tipo, l'oracolo e'
-/// esatto: a ogni forma storta corrisponde **una** ragione nominata, e il caso
-/// la confronta per identita'.
+/// Un tipo e non un messaggio: i messaggi interpolano valori e provano la
+/// formulazione. Con un tipo a ogni forma storta corrisponde **una** ragione
+/// nominata, e i casi la confrontano per identita'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Rifiuto {
     /// La variabile non c'e'.
@@ -171,23 +149,10 @@ pub(super) fn numeri_dall_ambiente() -> Result<NumeriLetti> {
 
 /// Il giudizio sul valore, separato dalla lettura dell'ambiente.
 ///
-/// # Perche' separati
-///
-/// Perche' sono due cose diverse, e solo una si puo' provare. L'ambiente e'
-/// **globale al processo**: dei casi che lo scrivessero si darebbero fastidio a
-/// vicenda girando in parallelo, e la matrice dei rifiuti finirebbe per misurare
-/// l'ordine in cui il runner li ha lanciati. Il giudizio, isolato, e' una
-/// funzione pura: le forme storte si scrivono invece di produrle.
-///
-/// E' la stessa separazione fra osservazione e giudizio che il canale usa per
-/// l'adozione, e per la stessa ragione.
-///
-/// # Perche' non normalizza niente
-///
-/// Perche' ogni normalizzazione e' una forma accettata in piu' che nessuno ha
-/// dichiarato. Uno spazio intorno a un numero, un segno `+`, uno zero davanti:
-/// sono tutte cose che `parse` accetterebbe volentieri, e ognuna e' una
-/// variabile scritta da qualcosa che non e' il nostro supervisore.
+/// L'ambiente e' **globale al processo**, e casi che lo scrivessero si
+/// disturberebbero in parallelo; isolato, il giudizio e' una funzione pura e
+/// le forme storte si scrivono. Non normalizza niente: spazi, `+`, zeri
+/// davanti sarebbero forme che il supervisore non scrive.
 ///
 /// # Errors
 ///
@@ -216,13 +181,8 @@ fn numeri_da(grezzo: Option<&std::ffi::OsStr>) -> std::result::Result<NumeriLett
 
 /// Una meta' della variabile, letta come numero di descrittore.
 ///
-/// # Perche' il confronto con la forma canonica
-///
-/// Perche' `parse` accetta piu' di quanto la forma dichiari: `+3`, ` 3`, `03`
-/// valgono tutti tre, e sono tre modi di scrivere una cosa che il supervisore
-/// scrive in un modo solo. Accettarli vorrebbe dire che la variabile puo'
-/// arrivare da qualcos'altro — ed e' proprio cio' che il worker non deve
-/// concedere.
+/// Si confronta con la forma canonica perche' `parse` accetta `+3`, ` 3`,
+/// `03`, che il supervisore non scrive mai.
 fn numero(testo: &str, quale: Meta) -> std::result::Result<i32, Rifiuto> {
     if testo.is_empty() {
         return Err(Rifiuto::MetaVuota(quale));
@@ -258,23 +218,10 @@ fn numero(testo: &str, quale: Meta) -> std::result::Result<i32, Rifiuto> {
 
 /// Che il testo sia scritto **nella forma in cui il supervisore lo scrive**.
 ///
-/// # Perche' prima di leggere il numero, e non dopo
-///
-/// Perche' la forma e la grandezza sono due domande diverse, e chiederle
-/// nell'ordine sbagliato fa dare la risposta sbagliata alle forme composte.
-/// `+99999999999` e `09999999999` sono scritti male **e** troppo grandi: un
-/// controllo che leggesse prima il numero li chiamerebbe «troppo grandi», e
-/// manderebbe a cercare un valore fuori scala dove c'e' un segno di troppo o
-/// uno zero davanti. La forma viene prima perche' e' la domanda piu' esterna:
-/// finche' non si sa se e' scritto bene, che valore denoti non e' ancora una
-/// domanda sensata.
-///
-/// # Perche' un giudizio sintattico e non un confronto col valore
-///
-/// Perche' confrontare `testo` con `valore.to_string()` **richiede il valore**,
-/// e quindi arriva per forza dopo la lettura — cioe' dopo che il traboccamento
-/// ha gia' parlato. Le regole qui sotto non guardano quanto grande sia il
-/// numero: guardano com'e' scritto, e per questo si possono chiedere prima.
+/// Si giudica prima della grandezza, e sulla sintassi: `+99999999999` e
+/// `09999999999` sono scritti male **e** troppo grandi, e vanno chiamati
+/// «scritti male». Un confronto con `valore.to_string()` richiederebbe il
+/// valore, quindi arriverebbe dopo il traboccamento.
 ///
 /// # Errors
 ///
@@ -310,16 +257,10 @@ fn forma_canonica(testo: &str, quale: Meta) -> std::result::Result<(), Rifiuto> 
 
 /// I due estremi del worker, riaperti e verificati.
 ///
-/// Non sono i descrittori ereditati: sono **aperture nuove** sulle stesse pipe,
-/// possedute e chiuse dal loro `Drop`. Gli ereditati restano dove sono, e la
-/// nota sul perche' sta su [`canale::riapri_accertato`].
-///
-/// # Perche' esistono come tipo
-///
-/// Perche' c'e' chi li legge: l'accordo. Senza un consumatore, un tipo che li
-/// porti fuori ha due campi che nessuno usa — codice morto con un nome
-/// rassicurante, e il gate `-D dead-code` lo chiama col suo nome. E' l'accordo
-/// che li fa smettere di essere una verifica e li rende un canale.
+/// Sono **aperture nuove** sulle stesse pipe, possedute e chiuse dal loro
+/// `Drop`; gli ereditati restano dove sono (vedi
+/// [`canale::riapri_accertato`]). Il consumatore e' l'accordo, che li rende un
+/// canale.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub(super) struct Estremi {
@@ -331,13 +272,8 @@ pub(super) struct Estremi {
 
 /// Riapre i due estremi e **accerta** che siano quelli.
 ///
-/// # L'ordine, e perche' e' questo
-///
-/// 1. **monothread**, prima di tutto. Non e' una precondizione del canale: e'
-///    una precondizione del processo. Un worker con piu' task ha gia' fallito il
-///    passo che il supervisore ha imposto prima della `exec`, e scoprirlo dopo
-///    aver aperto i descrittori vorrebbe dire averli aperti in un processo che
-///    non ha diritto di esistere;
+/// 1. **monothread**, prima di tutto: e' una precondizione del processo,
+///    imposta dal supervisore prima della `exec`;
 /// 2. **i numeri**, che sono testo e vanno letti prima di poterli usare;
 /// 3. **la riapertura**, uno per uno, ciascuno col proprio verso atteso;
 /// 4. **la coppia**, che e' una domanda sui due insieme e non su ciascuno: due
@@ -369,17 +305,9 @@ pub(super) fn accerta_gli_estremi() -> Result<Estremi> {
 
 /// Che i due estremi non guardino la **stessa** pipe.
 ///
-/// # Perche' non basta che i numeri siano diversi
-///
-/// Perche' due numeri diversi possono nominare la stessa pipe: e' cio' che
-/// succede a chiunque duplichi un descrittore. Un canale in cui lettura e
-/// scrittura sono la stessa pipe non parla con il supervisore — parla con se
-/// stesso, e ogni cosa che il worker scrive gli torna indietro come se fosse un
-/// incarico.
-///
-/// Il confronto e' sull'impronta `(dispositivo, inode)`, che e' cio' che
-/// identifica la pipe: i due estremi di **una** pipe la condividono, ed e'
-/// esattamente il caso da escludere.
+/// Numeri diversi possono nominare la stessa pipe (un descrittore duplicato),
+/// e allora il worker parlerebbe con se stesso. Si confronta l'impronta
+/// `(dispositivo, inode)`, che i due estremi di **una** pipe condividono.
 ///
 /// # Errors
 ///
@@ -420,19 +348,10 @@ fn impronta(estremo: &std::fs::File, quale: &str) -> Result<(u64, u64)> {
 
 /// La quota di emissione del progresso, applicata dove il `Progresso` si conia.
 ///
-/// # Che cosa succede quando finisce
-///
-/// Il worker **smette di emetterlo e continua a lavorare**, e l'`Esito` parte
-/// comunque. Il progresso e' facoltativo: il supervisore non ne dipende, e
-/// interrompere il lavoro perche' si e' finita la quota di messaggi opzionali
-/// sarebbe rovinare cio' che conta per proteggere cio' che non conta.
-///
-/// # Perche' la quota sta qui e non in chi scrive
-///
-/// Perche' e' una regola del **protocollo**, non del canale: il supervisore
-/// conta i messaggi che riceve e ne rifiuta uno oltre la quota, quindi il
-/// contatore dei due lati deve essere la stessa nozione. Applicarla in chi
-/// scrive la legherebbe al mezzo, e un secondo mezzo la perderebbe.
+/// Finita la quota il worker **smette di emetterlo e continua a lavorare**, e
+/// l'`Esito` parte comunque: il progresso e' facoltativo. Sta qui perche' e'
+/// una regola del **protocollo**: il supervisore conta i messaggi ricevuti con
+/// la stessa nozione, indipendente dal mezzo.
 #[derive(Debug)]
 struct QuotaDiProgresso {
     emessi: usize,
@@ -477,39 +396,16 @@ impl QuotaDiProgresso {
 
 /// Le capability che questo worker offre, **derivate** da chi le conosce.
 ///
-/// # Perche' derivate e non scritte
+/// Vengono da [`crate::planner::compiled_capabilities`], la stessa autorita'
+/// che l'executor confronta col grafo validato: un elenco a mano divergerebbe.
+/// Non ci sono `arrow_ipc` ne' `wkb` (formato obbligatorio e codifica del
+/// contratto, non negoziabili), ne' i profili di publish: il worker non
+/// pubblica, ed e' la differenza con `local_capabilities`.
 ///
-/// Perche' l'autorita' su quali backend questa build sappia attraversare esiste
-/// gia': e' [`crate::planner::compiled_capabilities`], la stessa che l'executor
-/// confronta con l'identita' del grafo validato. Un elenco scritto a mano
-/// sarebbe una seconda dichiarazione della stessa cosa, e il giorno che una
-/// feature cambia le due divergono: il worker si accorderebbe su un backend che
-/// non ha, oppure rifiuterebbe un incarico che saprebbe eseguire.
-///
-/// E' anche il motivo per cui non c'e' ne' `arrow_ipc` ne' `wkb`. Arrow IPC e'
-/// il **formato obbligatorio** dell'incarico, non qualcosa su cui accordarsi;
-/// WKB e' una codifica del contratto geometrico. Nessuno dei due e'
-/// negoziabile, e metterlo fra le capability suggerirebbe che un worker possa
-/// non averlo.
-///
-/// # Perche' i profili di publish restano fuori
-///
-/// Perche' il worker **non pubblica**: scrive sul percorso temporaneo che il
-/// supervisore gli indica, e il passo 9 e' di chi ha osservato la verifica.
-/// Dichiarare un profilo di publish sarebbe offrire una capacita' che questo
-/// processo non esercita — ed e' esattamente la differenza fra
-/// `compiled_capabilities` e `local_capabilities`, che i profili li aggiunge.
-///
-/// # Perche' `proj` non puo' comparire
-///
-/// Non perche' venga sottratto, ma perche' non si arriva qui: con
-/// `proj-backend` la descrizione locale rifiuta l'ambiente **prima**
-/// dell'handshake, quindi nessun elenco parte. Sottrarlo darebbe l'impressione
-/// che un worker PROJ si accordi dichiarando di non avere PROJ.
-///
-/// `geos` compare quando e' compilato, e allora e' anche attraversabile: il
-/// worker esegue il piano con gli stessi kernel del percorso in-process, quindi
-/// un backend che c'e' e' un backend che l'incarico puo' usare.
+/// `proj` non compare perche' con `proj-backend` la descrizione locale
+/// rifiuta l'ambiente prima dell'handshake. `geos` compare quando e'
+/// compilato, ed e' attraversabile: il worker usa gli stessi kernel del
+/// percorso in-process.
 ///
 /// Il confronto e' **asimmetrico**: il supervisore chiede un sottoinsieme, e
 /// offrirne di piu' non e' un disaccordo. I nomi arrivano gia' in ordine
@@ -524,19 +420,14 @@ fn capability_offerte() -> Vec<String> {
 
 /// Conclude l'accordo con il supervisore.
 ///
-/// # La sequenza, e perche' non se ne puo' cambiare l'ordine
-///
-/// 1. **ci si descrive**, prima di leggere qualunque cosa. La descrizione e'
-///    una misura di questo processo, e misurarla dopo aver visto il `Saluto`
-///    aprirebbe la porta a farsi influenzare da cio' che si e' letto — che e'
-///    esattamente cio' che renderebbe il confronto vacuo;
+/// 1. **ci si descrive**, prima di leggere: una misura fatta dopo il `Saluto`
+///    potrebbe farsi influenzare da cio' che si e' letto;
 /// 2. si legge **un** frame. Il lettore guarda il prefisso, decide, e solo
-///    allora alloca: un frame ostile fa consumare quattro byte e nient'altro;
+///    allora alloca;
 /// 3. l'accordo lo giudica [`WorkerInAttesa::ricevi`], che confronta le due
 ///    descrizioni e rifiuta al primo disaccordo;
-/// 4. si risponde. La `Risposta` porta la **nostra** descrizione, non un'eco
-///    della sua: e' cio' che permette al supervisore di fare lo stesso
-///    confronto dal proprio lato.
+/// 4. si risponde con la **nostra** descrizione, non un'eco, perche' il
+///    supervisore faccia lo stesso confronto.
 ///
 /// # Errors
 ///
@@ -561,11 +452,8 @@ fn accordati(estremi: &mut Estremi) -> Result<WorkerAccordato> {
 
 /// Scrive tutti i byte, e si assicura che partano.
 ///
-/// # Perche' il `flush` conta
-///
-/// Perche' dall'altro capo c'e' un supervisore che **aspetta**: byte fermi in
-/// un buffer non sono byte arrivati, e la sua diagnosi sarebbe un timeout
-/// invece di «la risposta e' partita e non gli e' piaciuta».
+/// Il `flush` conta: il supervisore aspetta, e byte fermi in un buffer gli
+/// darebbero un timeout al posto della diagnosi vera.
 ///
 /// # Errors
 ///
@@ -581,27 +469,14 @@ fn scrivi_tutto(dove: &mut std::fs::File, byte: &[u8]) -> Result<()> {
 
 /// Il worker, dal confine: la sequenza intera.
 ///
-/// # Le due meta', e perche' il confine sta dove sta
-///
-/// **Prima che il canale esista** — estremi mancanti, storti, non riaperti —
-/// non c'e' nessuno a cui dire niente, e l'unica uscita e' un rifiuto che
-/// arrivera' al supervisore come uno stato terminale, non come un messaggio.
-///
-/// **Dopo l'accordo**, il canale c'e': ogni fallimento diventa un `Esito`
-/// dichiarato, cioe' una frase che il supervisore legge invece di dedurre. Un
-/// worker che morisse in silenzio lascerebbe l'altro lato a distinguere un
-/// guasto da un ritardo — che e' la distinzione che non si puo' fare da fuori.
-///
-/// # Perche' l'esito parte anche quando il lavoro fallisce
-///
-/// Perche' «e' andata male» e' un'informazione, e il supervisore la usa per
-/// classificare. Se partisse solo il successo, un errore sarebbe indistinguibile
-/// da un worker che si e' fermato, e la sequenza di `isolamento.md` dovrebbe
-/// indovinare.
+/// **Prima che il canale esista** non c'e' nessuno a cui dire niente, e
+/// l'unica uscita e' un rifiuto che il supervisore vede come stato terminale.
+/// **Dopo l'accordo** ogni fallimento diventa un `Esito` dichiarato, anche
+/// quando il lavoro fallisce: da fuori un guasto non si distingue da un
+/// ritardo.
 ///
 /// La riuscita di questa funzione **non e'** la riuscita dell'esecuzione
-/// isolata: il worker dichiara di se', e la verifica dell'artefatto e la
-/// pubblicazione appartengono a chi lo ha osservato.
+/// isolata: verifica e pubblicazione appartengono a chi ha osservato.
 #[cfg(target_os = "linux")]
 pub(super) fn dal_confine() -> DalConfine {
     let mut estremi = match accerta_gli_estremi() {
@@ -620,13 +495,9 @@ pub(super) fn dal_confine() -> DalConfine {
 
 /// Riceve l'incarico, lo esegue, e dichiara com'e' andata.
 ///
-/// # Perche' l'errore dell'esecuzione non esce di qui
-///
-/// Perche' esce **sul filo**. Un errore del lavoro e' un esito dichiarato, non
-/// un fallimento del worker: il worker fa cio' che gli tocca — riceve, prova, e
-/// dice com'e' andata. Cio' che invece esce di qui e' il
-/// fallimento del **canale**: se l'esito non parte, il supervisore non ha
-/// niente da leggere, e allora il worker e' davvero fallito.
+/// L'errore del lavoro esce **sul filo**, come esito dichiarato. Di qui esce
+/// solo il fallimento del canale: se l'esito non parte, il supervisore non ha
+/// niente da leggere.
 ///
 /// # Errors
 ///
@@ -643,20 +514,11 @@ fn lavora(estremi: Estremi, accordato: WorkerAccordato) -> Result<()> {
 
 /// Che cosa risale, dopo aver provato a dichiarare.
 ///
-/// # Perche' una funzione e non quattro righe in mezzo al lavoro
-///
-/// Perche' e' la regola che tiene insieme i due fatti, ed e' l'unica cosa qui
-/// che si possa sbagliare in silenzio: un `?` di troppo, un ramo che scarta il
-/// secondo, e nessuno se ne accorge finche' non capitano insieme. Isolata, un
-/// caso la attraversa in tutti e quattro i modi.
-///
-/// # La regola
-///
-/// Il filo porta **un** esito, e lo stato terminale ne porta un altro. Il
-/// supervisore li guarda entrambi — l'esito dichiarato e' il passo 2 della
-/// sequenza, lo stato terminale il passo 1 — quindi nessuno dei due va perso
-/// per far posto all'altro. Il limite e' registrato in
-/// errori-e-limiti.md#il-filo-porta-un-esito-solo.
+/// Il filo porta **un** esito e lo stato terminale un altro; il supervisore li
+/// guarda entrambi (passi 2 e 1 della sequenza), e nessuno va perso per far
+/// posto all'altro. E' una funzione a se' perche' un `?` di troppo scarterebbe
+/// il secondo fatto in silenzio; isolata, un caso la attraversa in tutti i
+/// modi. Registro: errori-e-limiti.md#il-filo-porta-un-esito-solo.
 ///
 /// # Errors
 ///
@@ -675,15 +537,9 @@ fn quel_che_resta(inviato: Result<()>, anche: Option<PlenoraError>) -> Result<()
         // errori-e-limiti.md#il-filo-porta-un-esito-solo.
         (Ok(()), Some(secondo)) => Err(secondo),
         (Err(invio), None) => Err(invio),
-        // Il caso peggiore: nemmeno l'esito e' partito. Entrambi i difetti
-        // sopravvivono, e in un ordine che si legge — prima che il canale non
-        // ha retto, poi che cosa si sarebbe dovuto dire.
-        //
-        // Il messaggio si compone qui invece di passare da `con_contesto`:
-        // quella funzione lascia intatte proprio le varianti che l'invio
-        // produce, e il secondo fatto sparirebbe senza che niente lo dica. La
-        // variante diventa quella del canale, ed e' corretta: cio' che manca e'
-        // il modo di parlare.
+        // Nemmeno l'esito e' partito: sopravvivono entrambi i difetti, prima
+        // il canale e poi cio' che si sarebbe dovuto dire. Non passa da
+        // `con_contesto`, che lascerebbe intatte le varianti dell'invio.
         (Err(invio), Some(secondo)) => Err(non_disponibile(
             "esito",
             &format!(
@@ -696,20 +552,11 @@ fn quel_che_resta(inviato: Result<()>, anche: Option<PlenoraError>) -> Result<()
 
 /// Cio' che il worker ha da dichiarare, e cio' che il filo non puo' portare.
 ///
-/// # Perche' due campi e non uno
-///
-/// Perche' l'`Esito` ha **un** posto, e certi cammini producono **due** fatti:
-/// un panico del lavoro insieme a una violazione del canale di controllo, per
-/// esempio. Il filo non li puo' portare entrambi — `Panic` ha la sola forma del
-/// payload, e sostituirlo con l'altro fatto perderebbe il panico — quindi il
-/// secondo esce di qui e fa uscire il processo **non-zero**.
-///
-/// Di quel secondo fatto sopravvive allora l'esistenza, non l'identita': chi
-/// osserva vede un'uscita non nulla accanto a un panico dichiarato, e non quale
-/// dei difetti possibili sia stato.
-///
-/// E' una limitazione del protocollo, non una scelta di questo modulo, ed e'
-/// registrata in errori-e-limiti.md#il-filo-porta-un-esito-solo.
+/// L'`Esito` ha **un** posto, e certi cammini producono due fatti (un panico
+/// e una violazione del canale di controllo). `Panic` porta solo il payload,
+/// quindi il secondo fatto esce di qui e fa uscire il processo **non-zero**:
+/// ne sopravvive l'esistenza, non l'identita'. Limite del protocollo,
+/// registrato in errori-e-limiti.md#il-filo-porta-un-esito-solo.
 #[cfg(target_os = "linux")]
 struct Dichiarazione {
     /// Cio' che parte sul filo.
@@ -735,13 +582,9 @@ impl Dichiarazione {
 
 /// Aggiunge un secondo fatto al messaggio di un errore del filo.
 ///
-/// # Perche' nel messaggio e non altrove
-///
-/// Perche' `ErroreSulFilo` ha **un** posto per il testo, e gli assi — categoria,
-/// fase, effetto, ritentativo — descrivono il primo errore: sovrascriverli col
-/// secondo direbbe che il guasto del canale ha causato cio' che invece il lavoro
-/// ha gia' deciso. Il messaggio e' l'unico campo che li puo' portare entrambi
-/// senza mentire su nessuno dei due.
+/// Gli assi di `ErroreSulFilo` (categoria, fase, effetto, ritentativo)
+/// descrivono il primo errore; il messaggio e' l'unico campo che porta
+/// entrambi senza mentire.
 #[cfg(target_os = "linux")]
 fn con_anche(
     mut errore: crate::protocollo::messaggi::ErroreSulFilo,
@@ -755,13 +598,8 @@ fn con_anche(
 
 /// Riceve l'incarico, lo esegue, e rende cio' che c'e' da dichiarare.
 ///
-/// # Perche' non rende un `Result`
-///
-/// Perche' dopo l'accordo **ogni** fallimento e' una cosa da dire, non una da
-/// far uscire in silenzio. Un `?` qui — sulla lettura dell'incarico, sul suo
-/// giudizio, sulla nascita dell'ascoltatore — farebbe uscire il worker senza
-/// che il supervisore riceva niente, e la diagnosi sarebbe uno stato terminale
-/// da interpretare invece di una frase da leggere.
+/// Non rende un `Result`: dopo l'accordo ogni fallimento si dichiara, e un
+/// `?` farebbe uscire il worker senza che il supervisore riceva niente.
 #[cfg(target_os = "linux")]
 fn ricevi_ed_esegui(
     mut legge: std::fs::File,
@@ -822,15 +660,9 @@ fn ricevi_ed_esegui(
             },
             |guasto| Dichiarazione::errore(&guasto),
         ),
-        // Due errori, e un posto solo: quello del lavoro tiene i propri assi —
-        // categoria, fase, effetto, ritentativo — e l'altro entra nel suo
-        // **messaggio**, che li puo' portare entrambi.
-        //
-        // Non passa da `con_contesto`: quella funzione, per progetto, lascia
-        // intatte le varianti che portano un errore di sistema o
-        // un'attribuzione propria — `Io`, `Protocol`, `IsolationUnavailable`,
-        // `Internal` — e proprio su quelle il secondo fatto sparirebbe in
-        // silenzio.
+        // Due errori, un posto: quello del lavoro tiene i propri assi, l'altro
+        // entra nel **messaggio**. Non passa da `con_contesto`, che lascia
+        // intatte `Io`, `Protocol`, `IsolationUnavailable`, `Internal`.
         Ok(Err(causa)) => Dichiarazione::sola(EsitoWorkerSulFilo::Errore {
             errore: Box::new(con_anche(errore_dichiarabile(&causa), guasto.as_ref())),
         }),
@@ -851,16 +683,9 @@ fn ricevi_ed_esegui(
 
 /// Il guasto che l'ascolto ha visto, se ne ha visto uno.
 ///
-/// # Che cosa e' un guasto e che cosa no
-///
 /// Sono guasti la violazione della sequenza, il cedimento del canale e il
-/// panico del lettore: tutti e tre dicono che lo scambio non e' quello
-/// concordato.
-///
-/// Non lo sono l'annullamento — e' cio' che il supervisore ha chiesto, e
-/// l'errore che ne segue arriva dal lavoro — la fine del canale, che un
-/// supervisore senza altro da dire puo' legittimamente produrre, e l'arresto,
-/// che e' una nostra decisione.
+/// panico del lettore. Non lo sono l'annullamento (chiesto dal supervisore),
+/// la fine del canale (legittima) e l'arresto (una nostra decisione).
 #[cfg(target_os = "linux")]
 fn guasto_dell_ascolto(ascoltato: ascolto::Ascoltato) -> Option<PlenoraError> {
     use ascolto::Ascoltato;

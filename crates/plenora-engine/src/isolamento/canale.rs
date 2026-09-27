@@ -1,24 +1,9 @@
 //! Gli estremi delle pipe: che cosa sono, e come si accerta che lo siano.
 //!
-//! # Perche' una verifica composta e non un controllo solo
-//!
-//! Perche' nessuno dei controlli disponibili, da solo, dice cio' che serve.
-//!
-//! `is_fifo()` dimostra che l'oggetto e' una FIFO, e accetta allo stesso modo
-//! una **pipe anonima** e una **FIFO nominata** del filesystem. Il contratto
-//! vuole solo le prime: una FIFO nominata puo' essere stata creata da chiunque
-//! abbia scrittura su una directory, e chiunque puo' aprirla dall'altro capo.
-//!
-//! Il verso non si vede dal tipo: un descrittore su una pipe puo' essere in
-//! lettura, in scrittura, o — se qualcuno riapre `/proc/self/fd` — in entrambi.
-//! `O_RDWR` non e' un caso limite da tollerare: e' un estremo che puo' fare
-//! cio' che l'altro dovrebbe fare, e il canale smette di avere due lati.
-//!
-//! E il numero non dice niente di suo: `0`, `1` e `2` sono descrittori
-//! legittimi, ma sono **stdin, stdout e stderr**, che per contratto non
-//! trasportano il protocollo.
-//!
-//! Quindi quattro prove, ciascuna per la cosa che sa:
+//! Nessun controllo da solo basta: `is_fifo()` accetta anche una FIFO
+//! nominata (che chiunque abbia scrittura sulla directory puo' aprire), il
+//! verso non si vede dal tipo, e `0`, `1`, `2` sono i flussi standard. Quindi
+//! quattro prove:
 //!
 //! | prova | che cosa dimostra |
 //! |---|---|
@@ -27,25 +12,13 @@
 //! | `readlink` ha la forma **esatta** `pipe:[cifre]` | e' **anonima**: il bersaglio di una FIFO del filesystem non ha quella forma |
 //! | `fdinfo` dice `O_RDONLY` o `O_WRONLY` | il verso e' quello atteso, e non e' `O_RDWR` |
 //!
-//! Piu' due prove **dopo la riapertura**, e servono entrambe. Riaprire
-//! `/proc/self/fd/N` rende un descrittore **nuovo**, quindi:
+//! Dopo la riapertura da `/proc/self/fd/N` si confrontano l'impronta
+//! `(st_dev, st_ino)` e il **verso**: la riapertura riapre la pipe, non
+//! l'estremo, e nel verso opposto rende un'impronta identica (misurato).
 //!
-//! - `(st_dev, st_ino)` uguali a quelli osservati prima, o niente direbbe che
-//!   punta ancora alla stessa pipe;
-//! - il **verso** riletto sul nuovo handle. Su Linux `/proc/self/fd/N` per una
-//!   pipe riapre **la pipe**, non l'estremo: la si puo' riaprire nel verso
-//!   opposto, e l'impronta resta identica. E' misurato, non temuto — quindi un
-//!   confronto sulla sola impronta accetterebbe un handle che legge dove
-//!   deve scrivere.
-//!
-//! # Che cosa questa verifica **non** dimostra
-//!
-//! Chi c'e' dall'altro capo. Una pipe anonima non porta l'identita' di chi la
-//! ha creata, e nessuna di queste prove la ricostruisce. Cio' che discrimina
-//! un supervisore da un estraneo e' l'handshake del protocollo, non il
-//! descrittore — e va detto, perche' la tentazione opposta e' forte: si e'
-//! appena finito di controllare quattro cose, e sembra di sapere piu' di
-//! quanto si sa.
+//! Non si dimostra chi c'e' dall'altro capo: una pipe anonima non porta
+//! l'identita' di chi l'ha creata. Quello lo discrimina l'handshake del
+//! protocollo, non il descrittore.
 
 use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
@@ -118,17 +91,10 @@ pub(super) fn numero_ammissibile(numero: i32) -> std::result::Result<(), String>
 
 /// Se il bersaglio di `readlink` ha la forma di una pipe **anonima**.
 ///
-/// # Perche' la forma esatta e non un prefisso
-///
-/// Perche' `pipe:[` come prefisso lascerebbe passare `pipe:[12x]`, `pipe:[]` e
-/// `pipe:[1]/qualcosa`. La forma e' fissa: `pipe:`, una parentesi quadra,
-/// almeno una cifra decimale, la chiusura, e **nient'altro**.
-///
-/// La proprieta' che serve e' stretta quanto basta: il bersaglio di una FIFO
-/// del filesystem **non coincide** con quella forma. Non serve promettere che
-/// cosa sia — un percorso, e con quale aspetto — perche' ogni promessa in piu'
-/// e' una cosa in piu' che puo' smettere di essere vera senza che nessuno se
-/// ne accorga.
+/// La forma e' esatta, non un prefisso (che lascerebbe passare `pipe:[12x]`,
+/// `pipe:[]`, `pipe:[1]/qualcosa`): `pipe:`, `[`, almeno una cifra decimale,
+/// `]`, e nient'altro. Basta che il bersaglio di una FIFO del filesystem non
+/// coincida con questa forma; non si promette altro su che aspetto abbia.
 pub(super) fn forma_di_pipe_anonima(bersaglio: &str) -> bool {
     let Some(dentro) = bersaglio
         .strip_prefix("pipe:[")
@@ -142,14 +108,9 @@ pub(super) fn forma_di_pipe_anonima(bersaglio: &str) -> bool {
 /// Il verso, dai flag di `fdinfo`.
 ///
 /// I flag sono in **ottale**, e i due bit bassi sono la modalita' d'accesso:
-/// `0` sola lettura, `1` sola scrittura, `2` lettura e scrittura.
-///
-/// # Perche' `O_RDWR` e' un rifiuto e non un caso piu' generoso
-///
-/// Perche' un estremo che puo' fare entrambe le cose non e' un estremo: e' il
-/// canale intero in mano a un lato solo. Il worker potrebbe leggere cio' che
-/// ha scritto per il supervisore, o scrivere su cio' da cui dovrebbe leggere,
-/// e il protocollo smetterebbe di avere due direzioni.
+/// `0` sola lettura, `1` sola scrittura, `2` lettura e scrittura. `O_RDWR` si
+/// rifiuta: un estremo che fa entrambe le cose e' il canale intero in mano a
+/// un lato solo.
 ///
 /// # Errors
 ///
@@ -183,15 +144,9 @@ pub(super) fn verso_dai_flag(flag: &str, atteso: Verso) -> std::result::Result<(
 
 /// La riga `flags:` di un `fdinfo`, se ce n'e' **esattamente una**.
 ///
-/// # Perche' assenza e duplicazione sono due errori
-///
-/// Perche' dicono due cose diverse. Senza la riga, il descrittore non e' cio'
-/// che crediamo — o `/proc` non e' quello vero — e non c'e' verso da leggere.
-/// Con due righe, il file ne porta due possibili, e prenderne una e' una
-/// convenzione che nessuno ha dichiarato: su un file di kernel una
-/// duplicazione dice che quel file non e' quello che crediamo.
-///
-/// Un solo messaggio per i due casi manderebbe a cercare la cosa sbagliata.
+/// Assenza e duplicazione sono due errori distinti: senza la riga non c'e'
+/// verso da leggere (il descrittore o `/proc` non sono cio' che crediamo), con
+/// due righe sceglierne una sarebbe una convenzione non dichiarata.
 ///
 /// # Errors
 ///
@@ -291,67 +246,29 @@ pub(super) fn accerta_coppia(legge: i32, scrive: i32) -> Result<super::NumeriDel
 
 /// Dove il worker legge i numeri dei suoi due estremi.
 ///
-/// # Perche' l'ambiente e non la riga di comando
+/// Sta nell'ambiente e non nella riga di comando, che appartiene a chi ha
+/// chiesto l'esecuzione. Non e' una prova: [`riapri_accertato`] riguarda i
+/// numeri, e un valore sbagliato porta a un rifiuto, non a un altro canale.
 ///
-/// Perche' la riga di comando del worker e' **sua**: gli argomenti dopo `--`
-/// arrivano da chi ha chiesto l'esecuzione, e infilarci due numeri vorrebbe dire
-/// che il canale occupa posizioni che appartengono a un altro. Un worker che
-/// legge i propri argomenti troverebbe due voci che non ha chiesto, e un worker
-/// che non se le aspetta le passerebbe oltre.
-///
-/// # Che cosa questa variabile **non** e'
-///
-/// Una prova. Chi legge da qui non deve credere ai numeri: deve riguardarli, ed
-/// e' esattamente cio' che fa [`riapri_accertato`]. Un numero sbagliato — per
-/// errore o perche' qualcuno ha riscritto l'ambiente — porta a un descrittore
-/// che non supera i controlli, non a un canale diverso accettato per buono.
-///
-/// # Chi la scrive e chi la legge
-///
-/// La scrive lo **spawner**, dalla coppia che ha appena rivalidato, e la
-/// **impone**: un valore ereditato indicherebbe descrittori veri di un altro
-/// canale, e il worker li troverebbe buoni. La legge il **worker**, che e' il
-/// primo a riaprire davvero i propri estremi.
+/// La scrive lo **spawner** dalla coppia rivalidata, e la **impone**: un
+/// valore ereditato indicherebbe descrittori veri di un altro canale. La
+/// legge il **worker**.
 pub(super) const VARIABILE_DEL_CANALE: &str = "PLENORA_CANALE";
 
 /// Lo stadio del worker: riguarda il descrittore ereditato, lo **riapre**, e
 /// confronta.
 ///
-/// # Perche' riaprire, invece di usare quello che c'e'
+/// Riapre perche' adottare un numero (`OwnedFd::from_raw_fd`,
+/// `BorrowedFd::borrow_raw`) richiede `unsafe`: `/proc/self/fd/<n>` rende un
+/// `File` posseduto, nato `CLOEXEC`. Dopo la riapertura servono due
+/// confronti: l'impronta `(dispositivo, inode)` dice **stessa pipe** (il
+/// numero puo' essere stato riusato), il verso dice **dal lato giusto**
+/// (riaprire nel verso opposto rende un'impronta identica, misurato).
 ///
-/// Perche' un descrittore ereditato e' un numero, e un numero non si puo'
-/// adottare in Rust senza `unsafe`: `OwnedFd::from_raw_fd` e
-/// `BorrowedFd::borrow_raw` lo sono entrambi, e questo progetto non ne ammette.
-/// Cio' che si puo' fare senza e' **aprirne uno nuovo** attraverso
-/// `/proc/self/fd/<n>`, che rende un `File` posseduto — chiuso dal suo `Drop`,
-/// e nato `CLOEXEC` come ogni apertura di Rust.
-///
-/// # I due confronti dopo la riapertura, e perche' nessuno dei due basta
-///
-/// **L'impronta** `(dispositivo, inode)` dice che il nuovo descrittore guarda la
-/// **stessa pipe** di quello ereditato. Senza, la riapertura potrebbe finire
-/// altrove — il numero puo' essere stato riusato fra il controllo e l'apertura —
-/// e il worker parlerebbe con qualcosa che non e' il supervisore.
-///
-/// **Il verso** dice che ci guarda dal lato giusto. E serve, perche' l'impronta
-/// da sola non lo dice: riaprire l'estremo di lettura di una pipe *in
-/// scrittura* riesce, e rende un descrittore con **impronta identica**. E' una
-/// cosa misurata, non dedotta: sono due aperture della stessa pipe, e la pipe e'
-/// una sola. Un controllo che si fermasse all'impronta accetterebbe un worker
-/// che scrive dove deve leggere, e il difetto si vedrebbe come un silenzio.
-///
-/// # Che cosa resta aperto, e va detto
-///
-/// Il descrittore **ereditato** resta li'. Riaprire non lo adotta e non lo
-/// chiude — anche questo e' misurato: dopo aver lasciato cadere il descrittore
-/// riaperto, il numero originale continua a nominare la stessa pipe — e
-/// chiuderlo richiederebbe di adottarlo, cioe' `unsafe`. Non e' `CLOEXEC`,
-/// perche' il supervisore glielo ha tolto apposta per farglielo ereditare.
-///
-/// La conseguenza e' un'**invariante operativa, non una garanzia**: finche' il
-/// worker non avvia altri processi, quel descrittore non va da nessuna parte. Se
-/// un domani il worker eseguisse qualcosa, se lo porterebbe dietro. Sta scritto
-/// fra le non-garanzie, dove le cose di questo genere devono stare.
+/// L'ereditato resta aperto e non e' `CLOEXEC`: chiuderlo richiederebbe di
+/// adottarlo. E' un'**invariante operativa, non una garanzia**: finche' il
+/// worker non avvia altri processi, quel descrittore non va da nessuna parte.
+/// Sta fra le non-garanzie.
 ///
 /// # Errors
 ///
@@ -363,13 +280,8 @@ pub(super) fn riapri_accertato(numero: i32, atteso: Verso) -> Result<std::fs::Fi
 
 /// Cio' che si osserva del descrittore **dopo** averlo riaperto.
 ///
-/// # Perche' un tipo, e non due letture in mezzo al codice
-///
-/// Perche' e' cio' che separa l'osservazione dal giudizio. Con le letture
-/// sparse nella funzione, il giudizio si puo' provare solo producendo davvero
-/// la divergenza — e le divergenze che contano non si producono su una macchina
-/// sana. Raccolte in un valore, il giudizio diventa una funzione pura, e le
-/// divergenze si scrivono.
+/// Separa l'osservazione dal giudizio: il giudizio diventa una funzione pura,
+/// e le divergenze, che su una macchina sana non si producono, si scrivono.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Adozione {
     impronta: Impronta,
@@ -405,27 +317,11 @@ fn osservazione_vera(riaperto: &std::fs::File) -> Result<Adozione> {
 
 /// Che il descrittore riaperto sia **lo stesso oggetto, dallo stesso lato**.
 ///
-/// # Perche' tre condizioni e non una
-///
-/// Perche' rispondono a tre domande diverse, e un solo messaggio per tutte e
-/// tre manderebbe a cercare la cosa sbagliata.
-///
-/// **L'inode** dice quale oggetto. **Il dispositivo** dice su quale filesystem:
-/// gli inode sono unici dentro un filesystem, non fra filesystem diversi, e
-/// confrontare il solo inode accetterebbe come «la stessa pipe» due oggetti che
-/// condividono un numero per caso. **Il verso** dice da che lato, e non lo dice
-/// nessuna delle altre due: riaprire in scrittura l'estremo di lettura di una
-/// pipe riesce e rende un'impronta **identica**, perche' sono due aperture della
-/// stessa pipe.
-///
-/// # Perche' e' una funzione a se'
-///
-/// Perche' altrimenti non si potrebbe provare. Le divergenze che questo
-/// controllo esiste per fermare non si producono su una macchina sana: fra
-/// l'accertamento e l'apertura non passa niente che possa cambiare il
-/// descrittore. Descrivere quell'assenza — «non e' raggiungibile» — racconta
-/// l'esecuzione sana, non prova il codice. Estratta, la divergenza si scrive, e
-/// il controllo si misura.
+/// Tre condizioni, ciascuna col suo messaggio: l'**inode** dice quale
+/// oggetto, il **dispositivo** su quale filesystem (gli inode sono unici solo
+/// dentro un filesystem), il **verso** da che lato, che l'impronta non dice.
+/// Sta a se' perche' le divergenze non si producono su una macchina sana: cosi'
+/// si scrivono, e il controllo si misura.
 ///
 /// # Errors
 ///
@@ -452,17 +348,11 @@ fn accerta_adozione(numero: i32, prima: &Impronta, dopo: &Adozione, atteso: Vers
 
 /// [`riapri_accertato`] con l'osservazione in mano al chiamante.
 ///
-/// # Perche' esiste, e perche' non e' una porta aperta
-///
-/// Esiste perche' il controllo dopo la riapertura vada **provato al suo posto**,
-/// e non solo come funzione isolata: togliere la chiamata da qui deve far
-/// diventare rosso qualcosa, altrimenti il controllo c'e' ma nessuno verifica
-/// che venga esercitato.
-///
-/// E' privata e ha **un solo chiamante di produzione**, che le passa
-/// [`osservazione_vera`]. Cio' che un osservatore puo' variare e' che cosa si
-/// dichiara di aver visto, mai che cosa si controlla: il giudizio resta
-/// [`accerta_adozione`], che questa funzione chiama sempre.
+/// Esiste perche' il controllo dopo la riapertura si provi **al suo posto**:
+/// togliere la chiamata da qui deve far fallire un caso. E' privata, e il suo
+/// solo chiamante di produzione le passa [`osservazione_vera`]; un
+/// osservatore puo' variare che cosa si dichiara di aver visto, mai che cosa
+/// si controlla, perche' il giudizio resta [`accerta_adozione`].
 ///
 /// # Errors
 ///
@@ -498,25 +388,13 @@ fn riapri_accertato_con(
 
 /// I due estremi destinati al worker, mentre stanno ancora nel supervisore.
 ///
-/// # Perche' un tipo che possiede, e non due variabili
+/// Li possiede perche' fra la rimozione di `CLOEXEC` e lo `spawn` ogni
+/// ritorno anticipato potrebbe lasciare nel supervisore un descrittore
+/// **ereditabile**: il prossimo `spawn` se lo porterebbe dietro, e l'EOF del
+/// canale non arriverebbe mai. `Drop` li chiude su **ogni** uscita.
 ///
-/// Perche' fra la rimozione di `CLOEXEC` e lo `spawn` ogni ritorno anticipato
-/// e' un cammino che potrebbe lasciare vivo, nel supervisore, un descrittore
-/// **ereditabile**: il prossimo `spawn` di chiunque se lo porterebbe dietro, e
-/// l'EOF del canale non arriverebbe mai perche' un estraneo terrebbe aperto
-/// l'altro capo.
-///
-/// Possedendoli, `Drop` corre su **ogni** uscita — il `?` che fallisce sul
-/// primo `fcntl`, quello che fallisce sul secondo, lo `spawn` che non riesce —
-/// e li chiude entrambi. Non e' una disciplina da ricordare: e' il tipo che non
-/// lascia scelta.
-///
-/// # Perche' non c'e' un modo di estrarli
-///
-/// Perche' un accessore che ne rendesse la proprieta' rimetterebbe in piedi
-/// esattamente i cammini che questo tipo esiste per chiudere. Cio' che si puo'
-/// avere sono i **numeri**, che servono alla richiesta e non tengono niente
-/// aperto.
+/// Non c'e' modo di estrarli: si hanno solo i **numeri**, che non tengono
+/// niente aperto.
 pub(super) struct EstremiDelWorker {
     legge: std::io::PipeReader,
     scrive: std::io::PipeWriter,
@@ -525,17 +403,14 @@ pub(super) struct EstremiDelWorker {
 impl EstremiDelWorker {
     /// I due numeri, per la richiesta — **riguardandoli**.
     ///
-    /// Non li si legge e basta: si passa da [`accerta_coppia`], che e' l'unica
-    /// che li rende. Costa due letture di `fdinfo` e toglie un modo di
-    /// sbagliare: senza, questo sarebbe un secondo posto in cui due interi
-    /// diventano «i numeri del canale» senza che nessuno li abbia guardati.
+    /// Passa da [`accerta_coppia`], l'unica che li rende: altrimenti questo
+    /// sarebbe un secondo posto in cui due interi diventano «i numeri del
+    /// canale» senza che nessuno li abbia guardati.
     ///
     /// # Errors
     ///
     /// [`PlenoraError::IsolationUnavailable`] se i due estremi non sono quelli
-    /// dichiarati. Qui non dovrebbe capitare — `apri` li ha appena creati — e
-    /// «non dovrebbe» e' precisamente cio' che questa chiamata smette di dare
-    /// per scontato.
+    /// dichiarati, anche se `apri` li ha appena creati.
     pub(super) fn numeri(&self) -> Result<super::NumeriDelCanale> {
         accerta_coppia(self.legge.as_raw_fd(), self.scrive.as_raw_fd())
     }
@@ -543,11 +418,8 @@ impl EstremiDelWorker {
 
 /// Il canale: quattro estremi, due per lato.
 ///
-/// Nasce **prima** della richiesta, e non e' un dettaglio d'ordine: la
-/// richiesta porta i numeri dei due estremi del worker, quindi non puo'
-/// esistere prima di loro. Costruirla vuota e riempirla dopo renderebbe
-/// rappresentabile una richiesta senza canale, che e' uno stato che non deve
-/// esistere.
+/// Nasce **prima** della richiesta, che ne porta i numeri: una richiesta
+/// senza canale non deve essere rappresentabile.
 ///
 /// # Errors
 ///
@@ -587,18 +459,10 @@ pub(super) fn apri() -> Result<(std::io::PipeReader, std::io::PipeWriter, Estrem
 
 /// Che i quattro estremi formino **due** pipe, accoppiate come dicono i nomi.
 ///
-/// # Perche' la validita' individuale non basta
-///
-/// Perche' quattro estremi ciascuno valido possono essere accoppiati male.
-/// Se `sup_legge` appartenesse alla pipe su cui scrive `sup_scrive`, il
-/// supervisore parlerebbe con se stesso e il worker con nessuno: nessuna delle
-/// verifiche precedenti se ne accorge, perche' ciascuna guarda un estremo alla
-/// volta.
-///
-/// E un canale accoppiato male non produce un errore. Produce **silenzio**:
-/// ognuno scrive e nessuno legge, finche' un timeout non chiude la faccenda
-/// dicendo la cosa sbagliata — «il worker non risponde» invece di «il canale
-/// non e' un canale».
+/// Quattro estremi validi uno per uno possono essere accoppiati male (per
+/// esempio `sup_legge` sulla pipe di `sup_scrive`), e un canale accoppiato
+/// male non da' errore: da' **silenzio**, finche' un timeout dice la cosa
+/// sbagliata.
 ///
 /// # Errors
 ///
@@ -634,23 +498,16 @@ fn accerta_topologia(
 impl EstremiDelWorker {
     /// Toglie `CLOEXEC` ai due estremi, e non a nient'altro.
     ///
-    /// # La finestra che questo apre, e perche' e' strettissima
-    ///
-    /// Da qui allo `spawn` i due descrittori sono **ereditabili**: qualunque
-    /// altro `spawn` del processo se li porterebbe dietro, e un estraneo che
-    /// tenesse aperto l'altro capo impedirebbe per sempre l'EOF del canale.
-    ///
-    /// Per questo la finestra contiene **solo** lo `spawn`: richiesta,
-    /// argomenti e `Command` sono gia' costruiti quando questa funzione viene
-    /// chiamata, e fra lei e il `.spawn()` non c'e' niente che possa fallire a
+    /// Da qui allo `spawn` i due descrittori sono **ereditabili**, quindi la
+    /// finestra contiene **solo** lo `spawn`: richiesta, argomenti e `Command`
+    /// sono gia' costruiti, e in mezzo non c'e' niente che possa fallire a
     /// lungo o creare processi.
     ///
     /// # Errors
     ///
     /// [`PlenoraError::IsolationUnavailable`] se `fcntl` non riesce. Il
     /// chiamante lascia allora cadere la guardia, che chiude **entrambi** gli
-    /// estremi — compreso il primo, se a fallire e' stato il secondo dopo che
-    /// il primo e' gia' diventato ereditabile.
+    /// estremi, anche il primo gia' reso ereditabile.
     pub(super) fn rendi_ereditabili(&self) -> Result<()> {
         use std::os::fd::AsFd as _;
         let togli = |quale: &str, fd: std::os::fd::BorrowedFd<'_>| {
@@ -678,27 +535,18 @@ impl EstremiDelWorker {
 // Il terzo descrittore: l'artefatto del verificatore
 // ---------------------------------------------------------------------------
 //
-// Non e' una pipe: e' un file regolare, aperto in sola lettura dal
-// coordinatore prima ancora che il verificatore nasca
+// Un file regolare, aperto in sola lettura dal coordinatore prima che il
+// verificatore nasca
 // (`isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite`,
-// `#2-quater-topologia-chi-osserva-chi`). Lo schema di accertamento e' pero'
-// lo stesso, in due tempi:
-// prima cio' che il descrittore ereditato dichiara di essere, poi — dopo la
-// riapertura da `/proc/self/fd/N` — che sia rimasto lo stesso oggetto e dal
-// verso giusto. Le sole differenze sono cio' che il tipo di oggetto rende
-// vero per costruzione: un file regolare non ha un «altro lato» con cui
-// formare un canale, quindi non c'e' una topologia da accertare; e il verso
-// e' sempre `Lettura`, perche' il coordinatore non cede mai un handle di
-// scrittura sull'artefatto (`GA-5`-simile: nessuna capability di
-// pubblicazione attraversa questo descrittore).
+// `#2-quater-topologia-chi-osserva-chi`). Lo schema e' quello delle pipe, in
+// due tempi, meno la topologia (un file non ha un altro lato); il verso e'
+// sempre `Lettura`, perche' il coordinatore non cede mai un handle di
+// scrittura sull'artefatto.
 
 /// Guarda il descrittore ereditato dell'artefatto e dice che cos'e', o
 /// perche' non va.
 ///
-/// Le prove sono le stesse di [`accerta`] meno quella specifica alla FIFO —
-/// qui si pretende un **file regolare** — e con lo stesso rigore: il numero
-/// non e' uno dei flussi standard, il verso dai flag di `fdinfo` e' quello
-/// atteso.
+/// Le prove di [`accerta`], con un **file regolare** al posto della FIFO.
 ///
 /// # Errors
 ///
@@ -733,18 +581,11 @@ pub(super) fn accerta_artefatto(numero: i32) -> Result<Estremo> {
 /// Riapre il terzo descrittore e **accerta** che sia lo stesso file, dal
 /// verso giusto.
 ///
-/// # Perche' riaprire, e perche' cosi'
-///
-/// Le stesse due ragioni di [`riapri_accertato`]: un descrittore ereditato
-/// non si puo' adottare senza `unsafe`, e la riapertura da
-/// `/proc/self/fd/<n>` rende un `File` posseduto — chiuso dal suo `Drop`,
-/// nato `CLOEXEC`. Per un file regolare la riapertura crea comunque una
-/// *open file description* indipendente: l'offset non e' condiviso con
-/// quello del coordinatore, ma la correttezza di chi legge questo handle non
-/// dipende da questo — chi lo consuma (`verifica::verifica_artefatto_handle`,
-/// e a valle `pubblicazione::copia_accertando`) legge sempre per **posizione**
-/// (`SeekSource::read_at` / `ArtefattoConvalidato::leggi_a`), mai in modo
-/// sequenziale dipendente dalla posizione corrente del descrittore.
+/// Stesse ragioni di [`riapri_accertato`]. La riapertura crea una *open file
+/// description* indipendente, con un offset non condiviso: chi consuma
+/// l'handle (`verifica::verifica_artefatto_handle`,
+/// `pubblicazione::copia_accertando`) legge sempre per **posizione**
+/// (`SeekSource::read_at` / `ArtefattoConvalidato::leggi_a`).
 ///
 /// # Errors
 ///
@@ -793,10 +634,8 @@ pub(super) const VARIABILE_ARTEFATTO: &str = "PLENORA_ARTEFATTO_LETTURA";
 
 /// Toglie `CLOEXEC` al descrittore dell'artefatto, e a nient'altro.
 ///
-/// Stessa finestra strettissima di [`EstremiDelWorker::rendi_ereditabili`],
-/// e stessa ragione: da qui allo `spawn` il descrittore e' **ereditabile**,
-/// quindi la chiamata sta immediatamente prima e non lascia niente in mezzo
-/// che possa fallire a lungo o creare processi.
+/// Stessa finestra di [`EstremiDelWorker::rendi_ereditabili`]: la chiamata
+/// sta immediatamente prima dello `spawn`.
 ///
 /// # Errors
 ///
@@ -811,32 +650,18 @@ pub(super) fn rendi_ereditabile_artefatto(file: &std::fs::File) -> Result<()> {
     })
 }
 
-/// I quattro punti in cui la qualificazione puo' chiedere un guasto.
+/// I punti in cui la qualificazione puo' chiedere un guasto.
 ///
-/// # Perche' esistono, e perche' non in produzione
+/// L'invariante da misurare e' **che cosa resta** quando un passo fallisce
+/// (nessun descrittore ereditabile nel supervisore, nessun processo, nessuno
+/// zombie), e su una macchina sana quei fallimenti non si producono a
+/// comando. Vivono sotto `qualificazione_isolamento`, un `cfg` di `rustc` e
+/// non una feature, che l'unificazione propagherebbe. Il punto si legge da
+/// una variabile d'ambiente, mai scritta: non c'e' stato da ripristinare.
 ///
-/// Perche' l'invariante da misurare non e' *come* un passo fallisce ma **che
-/// cosa resta** quando fallisce: nessun descrittore ereditabile vivo nel
-/// supervisore, nessun processo, nessuno zombie. Quei fallimenti non si
-/// producono a comando su una macchina sana — un `fcntl` su un descrittore
-/// valido riesce sempre — e senza un punto in cui chiederli l'invariante
-/// resterebbe non misurata.
-///
-/// Vivono sotto `qualificazione_isolamento`, che e' un `cfg` passato a `rustc`
-/// e **non** una feature: una feature l'unificazione la propaga a chi non l'ha
-/// chiesta, un `cfg` no.
-///
-/// # Perche' da una variabile d'ambiente e non da uno stato modificabile
-///
-/// Perche' uno stato che si accende e si spegne va anche rimesso a posto, e un
-/// ripristino dimenticato lascerebbe verde un braccio che non ha misurato
-/// niente. La variabile e' letta e mai scritta: ogni braccio del gate e' un
-/// processo suo, con il suo ambiente, e non c'e' niente da ripristinare.
-/// I quattro nomi ammessi. «dopo-lo-spawn» non ha un punto di chiamata qui —
-/// e' una giuntura del binario di qualificazione — ma sta nell'elenco lo stesso,
-/// perche' questa e' la lista di cio' che si riconosce, non di cio' che si
-/// esegue: senza, un braccio che lo chiedesse verrebbe rifiutato da tutti e tre
-/// i punti proprio mentre sta misurando il suo.
+/// «dopo-lo-spawn» non ha un punto di chiamata qui, ma sta nell'elenco perche'
+/// e' la lista di cio' che si riconosce: senza, il braccio che lo chiede
+/// verrebbe rifiutato dagli altri punti.
 #[cfg(qualificazione_isolamento)]
 pub(super) const PUNTI_DI_GUASTO: [&str; 4] =
     ["primo-fcntl", "secondo-fcntl", "spawn", "dopo-lo-spawn"];
@@ -847,13 +672,8 @@ pub(super) const VARIABILE_DI_GUASTO: &str = "PLENORA_QUALIFICAZIONE_GUASTO";
 
 /// Se la qualificazione ha chiesto un guasto **qui**.
 ///
-/// # Perche' un nome sconosciuto e' un rifiuto e non un'assenza
-///
-/// Perche' un valore che nessun punto riconosce vorrebbe dire che il gate ha
-/// chiesto un guasto che non arrivera' mai: il braccio proseguirebbe fino in
-/// fondo e riporterebbe verde, avendo misurato il cammino ordinario invece di
-/// quello che vuole. Un braccio che passa per non aver fatto niente e' peggio
-/// di un braccio rosso.
+/// Un nome sconosciuto e' un rifiuto: altrimenti il braccio misurerebbe il
+/// cammino ordinario e riporterebbe verde.
 ///
 /// # Errors
 ///
@@ -883,12 +703,8 @@ pub(super) fn guasto_richiesto(qui: &str) -> Result<()> {
 
 /// Che il processo abbia **un task solo**, adesso.
 ///
-/// # Perche' adesso e non una volta sola all'avvio
-///
-/// Perche' fra l'avvio e questo punto un thread puo' essere nato, e la finestra
-/// in cui i descrittori sono ereditabili e' esattamente quella che sta per
-/// aprirsi. Un accertamento fatto prima direbbe una cosa vera su un momento che
-/// non e' questo.
+/// Adesso, non all'avvio: fra l'avvio e la finestra in cui i descrittori
+/// diventano ereditabili puo' essere nato un thread.
 ///
 /// # Errors
 ///
@@ -997,14 +813,8 @@ mod tests {
     /// **Il fatto su cui poggia il confronto delle impronte**: i due lati di
     /// una pipe condividono l'inode.
     ///
-    /// E' cio' che rende l'impronta capace di dire «stessa pipe», ed e' anche
-    /// il motivo per cui due estremi con impronta uguale **non** possono essere
-    /// i due lati di un canale: sarebbero i due lati della stessa pipe, cioe' un
-    /// canale in cui il worker parla con se stesso.
-    ///
-    /// Va misurato e non dedotto, perche' l'intuizione dice il contrario — due
-    /// estremi, due oggetti — e su quell'intuizione il confronto sarebbe stato
-    /// scritto al rovescio.
+    /// Per questo due estremi con impronta uguale **non** possono essere i due
+    /// lati di un canale. Si misura perche' l'intuizione dice il contrario.
     #[test]
     #[cfg(target_os = "linux")]
     fn i_due_lati_di_una_pipe_condividono_l_inode() {
@@ -1081,13 +891,8 @@ mod tests {
     /// **Il fatto che rende necessario il secondo confronto**: l'impronta non
     /// dice il verso.
     ///
-    /// Riaprire l'estremo di *lettura* di una pipe **in scrittura** riesce, e
-    /// rende un descrittore con impronta identica — sono due aperture della
-    /// stessa pipe, e la pipe e' una sola. Un controllo che si fermasse
-    /// all'impronta accetterebbe un worker che scrive dove deve leggere.
-    ///
-    /// Questo caso misura il fatto, non il nostro controllo: e' il fatto a
-    /// dire perche' il controllo del verso non e' ridondante.
+    /// Riaprire l'estremo di *lettura* **in scrittura** riesce e rende
+    /// un'impronta identica. Il caso misura il fatto, non il nostro controllo.
     #[test]
     #[cfg(target_os = "linux")]
     fn l_impronta_non_distingue_il_verso() {
@@ -1160,10 +965,8 @@ mod tests {
     /// l'ereditato.
     ///
     /// Dopo che il descrittore riaperto e' caduto, il numero originale nomina
-    /// ancora la stessa pipe. E' la ragione per cui «il worker non avvia altri
-    /// processi» sta fra le invarianti operative e non fra le garanzie: quel
-    /// descrittore non e' `CLOEXEC`, e chiuderlo richiederebbe di adottarlo,
-    /// cioe' `unsafe`.
+    /// ancora la stessa pipe: per questo «il worker non avvia altri processi»
+    /// e' un'invariante operativa e non una garanzia.
     #[test]
     #[cfg(target_os = "linux")]
     fn riaprire_non_chiude_l_ereditato() {
@@ -1337,16 +1140,10 @@ mod tests {
 
     /// **La chiamata, al suo posto**: un inode divergente ferma la riapertura.
     ///
-    /// Su una pipe vera, con un osservatore che dichiara di aver visto un altro
-    /// oggetto. E' cio' che i casi sulla funzione pura non coprono: togliere la
-    /// chiamata da `riapri_accertato_con` li lascerebbe tutti verdi.
-    ///
-    /// # Perche' diverge **solo** l'inode
-    ///
-    /// Perche' un'osservazione tutta sbagliata — dispositivo zero e inode zero —
-    /// verrebbe fermata dal primo dei tre confronti che la incontra, e il caso
-    /// resterebbe verde anche togliendo gli altri due. Facendo divergere una
-    /// cosa sola, il caso misura **quel** confronto e non il gruppo.
+    /// Su una pipe vera, con un osservatore che dichiara un altro oggetto:
+    /// togliere la chiamata da `riapri_accertato_con` lascerebbe verdi i casi
+    /// sulla funzione pura. Diverge **solo** l'inode, perche' il caso misuri
+    /// quel confronto e non il primo dei tre che incontra.
     #[test]
     #[cfg(target_os = "linux")]
     fn un_inode_divergente_ferma_la_riapertura() {
@@ -1414,14 +1211,9 @@ mod tests {
 
     // --- accerta_artefatto: il terzo descrittore, un file regolare ----------
     //
-    // Stessa disciplina di `accerta` sopra, ma sull'oggetto che l'artefatto
-    // del verificatore e' per davvero — un file regolare, mai una pipe — con
-    // fd veri di questo stesso processo: nessun privilegio, nessuno spawn,
-    // nessun dominio. `numero_ammissibile`/`flag_di`/`verso_dai_flag` sono
-    // gia' provate pure sopra; qui si prova la **chiamata**, sullo stesso
-    // principio di `un_inode_divergente_ferma_la_riapertura` — una funzione
-    // corretta ma mai esercitata sul percorso vero e' una funzione che non
-    // protegge niente.
+    // Stessa disciplina di `accerta`, su un file regolare vero di questo
+    // processo, senza privilegi, spawn o dominio. Le funzioni pure sono
+    // provate sopra; qui si prova la **chiamata**.
 
     /// Un file regolare vero, con contenuto qualunque — serve solo un inode
     /// reale su cui `/proc/self/fd/<n>` possa risolversi.

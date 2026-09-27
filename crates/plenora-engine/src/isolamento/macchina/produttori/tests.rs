@@ -102,17 +102,10 @@ fn primo<'a>(fatti: &'a [Fatto], quale: &str) -> Option<&'a Fatto> {
 
 /// **Il progresso si coalesce**: cento rapporti, un fatto solo.
 ///
-/// E' la proprieta' su cui poggia il budget. Se il lettore ne inoltrasse uno per
-/// rapporto, quanto spazio occupare in coda lo sceglierebbe il worker — e la
-/// coda si riempirebbe di roba che non decide niente, tenendo fuori una
-/// cancellazione.
-///
-/// # E il fatto porta **l'ultimo totale**, non una somma
-///
-/// I contatori sono cumulativi: l'ultimo rapporto li contiene tutti. Sommarli
-/// darebbe un numero che non conta niente — la somma di cento letture
-/// cumulative non e' un conteggio di nulla — e aprirebbe la strada al
-/// traboccamento.
+/// E' la proprieta' su cui poggia il budget: altrimenti lo spazio in coda lo
+/// sceglierebbe il worker, tenendo fuori una cancellazione. Il fatto porta
+/// **l'ultimo totale**, non una somma: i contatori sono cumulativi, e
+/// sommarli non conterebbe niente e rischierebbe il traboccamento.
 #[test]
 fn cento_progressi_diventano_un_fatto_solo_con_l_ultimo_totale() {
     let (coda, fascio) = apri();
@@ -141,12 +134,9 @@ fn cento_progressi_diventano_un_fatto_solo_con_l_ultimo_totale() {
 
 /// **Un contatore che torna indietro e' una violazione del protocollo.**
 ///
-/// I contatori sono totali, e un totale non torna indietro. Non e' un rapporto
-/// strano da ignorare: e' il segno che l'altro lato non sta seguendo il
-/// contratto, e da li' in poi nessun numero che manda significa quello che dice.
-///
-/// Il lettore accoda **un** fatto e smette, come per ogni altra rottura della
-/// sequenza.
+/// I contatori sono totali, e un totale non torna indietro: l'altro lato non
+/// segue il contratto. Il lettore accoda **un** fatto e smette, come per ogni
+/// altra rottura della sequenza.
 #[test]
 fn un_contatore_che_torna_indietro_ferma_il_lettore() {
     let (coda, fascio) = apri();
@@ -302,8 +292,8 @@ fn un_frame_troncato_interrompe_e_non_finisce() {
 
 /// **Il lettore non supera mai il proprio budget.**
 ///
-/// Cento progressi, dieci esiti, un troncamento: qualunque cosa il worker
-/// mandi, i fatti che ne escono sono al piu' quattro.
+/// Cento progressi e dieci esiti: qualunque cosa il worker mandi, i fatti che
+/// ne escono stanno nel budget del lettore.
 #[test]
 fn il_lettore_non_supera_mai_il_budget() {
     let (coda, fascio) = apri();
@@ -331,19 +321,10 @@ fn il_lettore_non_supera_mai_il_budget() {
 
 /// **L'esito non puo' essere sorpassato dalla fine.**
 ///
-/// # Perche' e' garantito, e non sperato
-///
-/// Perche' li accoda **lo stesso produttore**, dalla stessa bocchetta, che e'
-/// un solo `SyncSender`: una coda FIFO conserva l'ordine di chi ci scrive.
-/// L'esito viene accodato appena letto, la fine dopo che la lettura e' finita,
-/// e non c'e' modo che la seconda arrivi prima del primo.
-///
-/// La proprieta' conta perche' senza di lei un consumatore potrebbe vedere la
-/// fine del canale e concludere «morto senza esito» mentre l'esito e' in coda —
-/// e l'esito e' cio' che distingue la riga 2 dalla riga 4 della matrice.
-///
-/// Il caso guarda le **posizioni** nel drenaggio, non i tempi: non c'e' niente
-/// da tarare.
+/// Li accoda lo stesso produttore da un solo `SyncSender`, e la coda FIFO
+/// conserva l'ordine. Senza, un consumatore potrebbe concludere «morto senza
+/// esito» con l'esito in coda: e' cio' che distingue la riga 2 dalla riga 4
+/// della matrice. Il caso guarda le posizioni nel drenaggio, non i tempi.
 #[test]
 fn la_fine_non_sorpassa_l_esito() {
     let (coda, fascio) = apri();
@@ -375,16 +356,9 @@ fn la_fine_non_sorpassa_l_esito() {
 
 /// **Su una pipe vera il lettore si ferma quando qualcuno frena.**
 ///
-/// # Perche' con `Cursor` questo caso non esiste
-///
-/// Perche' un `Cursor` non blocca mai: finisce i byte e rende `Ok(0)`. Tutti i
-/// casi che leggono da un vettore provano la **sequenza**, e nessuno prova che
-/// il lettore si possa fermare — su una pipe vera senza scrittori, `read`
-/// blocca, e un lettore bloccato non si sveglia perche' qualcuno frena.
-///
-/// Qui la pipe e' vera, l'altro capo resta **aperto** — cosi' l'EOF non arriva
-/// mai — e cio' che si pretende e' che il filo finisca comunque. Se il canale
-/// non fosse reso non bloccante, questo caso non tornerebbe.
+/// Un `Cursor` non blocca mai, quindi i casi su vettore non provano l'arresto.
+/// Qui la pipe e' vera e l'altro capo resta aperto, cosi' l'EOF non arriva: il
+/// filo deve finire comunque, e finisce solo se il canale e' non bloccante.
 #[test]
 #[cfg(target_os = "linux")]
 fn su_una_pipe_vera_il_lettore_si_ferma() {
@@ -480,8 +454,8 @@ fn un_orologio_fermato_non_accoda_e_non_aspetta() {
 
 /// Un osservatore che risponde come gli si dice.
 ///
-/// `Debug` perche' ora la nascita mancata lo rende indietro: senza, l'`expect`
-/// sulla nascita non compilerebbe.
+/// `Debug` perche' la nascita mancata lo rende indietro, e l'`expect` sulla
+/// nascita lo richiede.
 #[derive(Debug)]
 struct Copione {
     risposte: Vec<std::result::Result<bool, Difetto>>,
@@ -646,7 +620,7 @@ fn un_sorvegliante_fermato_smette_senza_accodare() {
 /// **La cancellazione si accoda una volta sola**, anche se la si chiede dieci.
 ///
 /// Il fatto e' gia' li'; ripeterlo spenderebbe gettoni per dire una cosa che il
-/// registro ha gia', e il budget dell'annullatore e' uno.
+/// registro ha gia'.
 #[test]
 fn la_cancellazione_si_accoda_una_volta_sola() {
     let (coda, fascio) = apri();
@@ -686,23 +660,11 @@ fn deporre_l_annullatore_non_accoda_niente() {
 
 /// **Un lucchetto avvelenato non fa sparire la cancellazione.**
 ///
-/// # Che cosa esclude
-///
-/// Che l'avvelenamento diventi una failure silenziosa. Con un `ok()?` il
-/// lucchetto avvelenato rende lo stesso `None` di «bocchetta gia' deposta»: la
-/// richiesta di annullamento sparisce, chi l'ha chiesta si sente rispondere
-/// «troppo tardi», e il worker continua a girare. Il caso peggiore possibile per
-/// una cancellazione, e nessuna riga da nessuna parte.
-///
-/// # Perche' recuperare e' corretto, e non una scorciatoia
-///
-/// Perche' un lucchetto avvelenato dice che un filo e' morto con la presa in
-/// mano, non che il dato sotto sia rotto. Qui il dato e' un `Option<Bocchetta>`, e le
-/// due sole cose che gli succedono sono «c'e'» e «e' stata presa»: nessuna delle
-/// due si corrompe a meta'. La `take` che segue le distingue in un colpo solo.
-///
-/// Il filo che muore stampa il suo panico su stderr: e' rumore voluto, ed e' il
-/// prezzo di avvelenare un lucchetto davvero invece di simularlo.
+/// Con un `ok()?` l'avvelenamento renderebbe lo stesso `None` di «bocchetta
+/// gia' deposta»: la cancellazione sparirebbe in silenzio e il worker
+/// continuerebbe. Recuperare e' corretto perche' il dato e' un
+/// `Option<Bocchetta>`, che non si corrompe a meta'. Il panico su stderr e'
+/// rumore voluto: il lucchetto si avvelena davvero.
 #[test]
 fn un_lucchetto_avvelenato_non_fa_sparire_la_cancellazione() {
     let (coda, fascio) = apri();
@@ -743,10 +705,8 @@ fn un_lucchetto_avvelenato_non_fa_sparire_la_cancellazione() {
 
 /// E anche `deponi` recupera: la bocchetta cade, e il canale si disconnette.
 ///
-/// Con un `ok()?` la bocchetta sarebbe rimasta viva, il drenaggio avrebbe
-/// aspettato fino al tetto dei trenta secondi, e il difetto riportato avrebbe
-/// parlato di un drenaggio che non vede la disconnessione — senza nominare la
-/// vera ragione.
+/// Con un `ok()?` la bocchetta resterebbe viva, il drenaggio aspetterebbe fino
+/// al tetto, e il difetto riportato non nominerebbe la vera ragione.
 #[test]
 fn un_lucchetto_avvelenato_non_trattiene_la_bocchetta() {
     let (coda, fascio) = apri();

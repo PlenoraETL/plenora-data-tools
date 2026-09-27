@@ -1,15 +1,8 @@
 //! Il perimetro di qualificazione: cio' che solo una macchina vera puo' dire.
 //!
-//! # Perche' e' un'immagine sola, con tre modi
-//!
-//! Perche' due dei tre modi devono essere **lo stesso binario** per costruzione,
-//! non per convenzione. Lo spawner e' l'immagine del supervisore rieseguita:
-//! provarlo con un secondo eseguibile proverebbe che due programmi diversi
-//! collaborano, che e' un'altra affermazione. E il worker ostile deve nascere
-//! dallo spawner, perche' cio' che si giudica e' l'identita' che lo spawner gli
-//! lascia.
-//!
-//! I modi sono:
+//! Un'immagine sola, perche' lo spawner deve essere **lo stesso binario** del
+//! supervisore rieseguito, e il worker ostile deve nascere dallo spawner, che
+//! ne fissa l'identita'. I modi:
 //!
 //! - **spawner**, riconosciuto perche' `argv[1]` e' la versione della richiesta.
 //!   E' il primo ramo di [`principale`], prima di qualunque altra cosa: e' la
@@ -18,42 +11,17 @@
 //! - **ostile**, che gira **dentro** il dominio con l'identita' del worker e
 //!   tenta cio' che non deve riuscire;
 //! - **finestra**, che misura che cosa resta leggibile di `/proc/self` **fra**
-//!   il cambio d'identita' e la `exec`. E' un intervallo che nessun altro modo
-//!   attraversa, e su cui poggia una scelta della sequenza.
+//!   il cambio d'identita' e la `exec`.
 //!
-//! # Perche' non e' compilato in produzione
+//! `qualificazione_isolamento` e' un `cfg` di `rustc`, non una feature di
+//! Cargo: l'unificazione non lo propaga. Chi controlla la build puo' metterlo
+//! in `RUSTFLAGS`: la garanzia e' contro l'incidente, non l'intenzione.
 //!
-//! `qualificazione_isolamento` non e' una feature di Cargo: e' un `cfg` che si
-//! passa a `rustc`. La differenza sta in **come** si accende. Una feature la si
-//! abilita dichiarandola fra le dipendenze, e l'unificazione la propaga a chi
-//! non l'ha chiesta; un `cfg` non si propaga, e nessun crate dipendente puo'
-//! accenderlo.
-//!
-//! Non e' pero' inaccessibile, e dirlo altrimenti sarebbe falso: chi controlla
-//! il comando di build lo puo' mettere in `RUSTFLAGS`. La garanzia e' contro
-//! l'incidente, non contro l'intenzione.
-//!
-//! # Il formato dell'evidenza
-//!
-//! Ogni riga che il gate legge comincia con `QI ` ed e' una coppia
-//! `chiave=valore`. Non e' un dettaglio estetico: il gate deve poter
-//! distinguere cio' che il programma **afferma** da cio' che stampa per gli
-//! umani, e un formato riconoscibile e' l'unico modo in cui un rapporto
-//! troncato o interrotto non si legge come un rapporto completo.
-//!
-//! # Ogni chiave compare una volta sola, e non e' una convenzione
-//!
-//! Nello stesso file scrivono **tre processi**: il supervisore, lo spawner che
-//! ne eredita lo stdout, e il worker che nasce dallo spawner. Il gate li legge
-//! come un flusso unico, e su un flusso unico due righe con la stessa chiave
-//! sono ambigue: leggerne una nasconde l'altra, ed e' il modo in cui un
-//! rapporto contraddittorio si legge come coerente.
-//!
-//! Per questo non esiste una chiave `modo` che ogni processo riempie a modo
-//! suo: esistono `modo_supervisore`, `modo_spawner`, `modo_ostile`,
-//! `modo_finestra`. Vale anche per le due fasi di un'attesa, che sono due
-//! chiavi e non due valori della stessa. Il gate rifiuta i duplicati, quindi
-//! una chiave riusata non passa inosservata — diventa rossa.
+//! Ogni riga di evidenza comincia con `QI ` ed e' una coppia `chiave=valore`,
+//! cosi' il gate distingue cio' che il programma afferma dal resto, e un
+//! rapporto troncato non si legge come completo. Nello stesso flusso scrivono
+//! supervisore, spawner e worker: ogni chiave compare **una volta sola**
+//! (`modo_supervisore`, `modo_spawner`, ...), e il gate rifiuta i duplicati.
 
 use std::ffi::OsString;
 use std::io::Write as _;
@@ -70,14 +38,9 @@ use super::{
 
 /// L'ingresso dell'immagine di qualificazione.
 ///
-/// # Il dispatch e' la prima cosa, e questo e' il punto
-///
-/// Il ramo dello spawner sta in cima e non ha niente prima di se'. Il primo
-/// passo della sequenza pretende un processo monothread, e un `main` che
-/// costruisse un pool di thread prima di guardare `argv` lo renderebbe
-/// impossibile — compilando, e passando ogni caso deterministico. Per questo
-/// qui si stampa anche il numero di task: e' la sentinella, e il gate pretende
-/// che sia uno.
+/// Il ramo dello spawner sta in cima, senza niente prima: il primo passo della
+/// sequenza pretende un processo monothread. Per questo si stampa anche il
+/// numero di task, la sentinella che il gate pretende uguale a uno.
 #[must_use]
 pub fn principale() -> ExitCode {
     let argomenti: Vec<OsString> = std::env::args_os().collect();
@@ -101,37 +64,14 @@ pub fn principale() -> ExitCode {
 
 /// Il modo **sotto limite**: il worker reale esegue dentro il dominio.
 ///
-/// # Che cosa aggiunge al modo supervisore
+/// Aggiunge al modo supervisore il **dialogo**: il worker e' l'immagine di
+/// produzione, e si vuole che **esegua** sotto `memory.max`, con i quattro
+/// controlli scritti dal preflight e i descrittori ricevuti **dallo spawner**.
+/// Il dialogo e' quello di `prova::sul_canale`, non una seconda copia.
 ///
-/// Il **dialogo**. Il modo supervisore prepara il dominio, avvia lo spawner e
-/// aspetta che il figlio esca: misura la nascita e il contenimento, e va bene
-/// per il gate ostile, dove il worker e' un programma qualunque. Qui invece il
-/// worker e' l'immagine di produzione in modalita' worker, e cio' che si vuole
-/// sapere e' che **esegua**: handshake, incarico, progresso, esito, artefatto
-/// riverificato, EOF — tutto sotto `memory.max`, con i quattro controlli scritti
-/// dal preflight.
-///
-/// # Perche' il dialogo non e' scritto qui
-///
-/// Perche' e' lo stesso di `prova::sul_canale`, che gia' lo fa fra due pipe
-/// nude. Riscriverlo darebbe due conversazioni che possono divergere, e a
-/// divergere sarebbe proprio quella che qualifica.
-///
-/// # Che cosa questo prova, e che cosa il modo supervisore non prova
-///
-/// Che il worker riceva i propri descrittori **dallo spawner** — la variabile
-/// del canale la scrive lui, dalla coppia che ha rivalidato — e che l'esecuzione
-/// stia dentro il tetto. Fra due pipe nude non c'e' ne' spawner ne' dominio: si
-/// prova il cablaggio, non il limite.
-///
-/// # Il digest arriva da fuori
-///
-/// L'ultimo argomento e' il digest che **chi lancia** ha misurato sull'immagine
-/// prima di consegnarla. Questo processo ne fa una misura propria, sul binario
-/// che sta per eseguire, e l'oracolo confronta le due. Misurare e confrontare
-/// col proprio valore sarebbe un confronto sempre vero: direbbe «e' il binario
-/// atteso» anche eseguendone un altro, che e' precisamente il caso per cui il
-/// controllo esiste.
+/// L'ultimo argomento e' il digest che **chi lancia** ha misurato
+/// sull'immagine; questo processo ne fa una misura propria, e l'oracolo
+/// confronta le due. Confrontare con il proprio valore sarebbe sempre vero.
 #[cfg(target_os = "linux")]
 fn modo_sotto_limite(argomenti: &[OsString]) -> ExitCode {
     dichiara("modo_sotto_limite", "avviato");
@@ -253,15 +193,9 @@ fn modo_sotto_limite(argomenti: &[OsString]) -> ExitCode {
         &format!("{:?}", referto.difetti_di_pulizia),
     );
 
-    // Il giudizio e' quello di `prova::giudica`, lo stesso che usa il percorso
-    // fra due pipe: un oracolo per strada sarebbe due oracoli, e a divergere
-    // sarebbe proprio quello che qualifica.
-    //
-    // L'atteso e' il digest **dichiarato sulla riga di comando**, e il referto
-    // porta quello **misurato qui** sull'immagine che si e' davvero eseguita. Il
-    // confronto lega quindi due misure indipendenti; passare qui il valore del
-    // referto lo renderebbe un confronto di un valore con se stesso — sempre
-    // vero, e muto proprio nel caso che deve prendere.
+    // L'oracolo e' `prova::giudica`, lo stesso del percorso fra due pipe.
+    // L'atteso e' il digest **dichiarato sulla riga di comando**, il referto
+    // porta quello **misurato qui**: due misure indipendenti.
     let manca = super::prova::giudica(&referto, "dominio", Some(dichiarato));
     if manca.is_empty() {
         dichiara("giudizio", "vinto");
@@ -304,18 +238,11 @@ fn modo_spawner(argomenti: &[OsString]) -> ExitCode {
 /// La riga di comando e'
 /// `supervisore <dominio> <radice> <tetto> <uid> <gid> [--attendi <pronto> <via>] [--barriera <pronto> <via>] -- <worker> [argomenti]`.
 ///
-/// # Le due attese, che servono a due cose opposte
-///
-/// `--attendi` ferma il processo **prima di tutto**, preflight compreso. Serve
-/// al braccio in cui la sostituzione dell'immagine avviene *prima* del
-/// controllo: il gate rinomina mentre il processo e' fermo qui, e
-/// l'accertamento trova poi un'immagine cancellata. Non tocca nessuna giuntura
-/// della libreria, perche' non ce n'e' bisogno: aspettare all'inizio lo sa fare
-/// il programma da se'.
-///
-/// `--barriera` ferma invece il processo **fra l'accertamento e lo `spawn`**, e
-/// li' una giuntura serve: e' il braccio in cui la sostituzione arriva dopo il
-/// controllo, e in cui deve partire lo stesso l'inode iniziale.
+/// `--attendi` ferma il processo **prima di tutto**, preflight compreso: e'
+/// il braccio in cui l'immagine si sostituisce prima del controllo.
+/// `--barriera` lo ferma **fra l'accertamento e lo `spawn`**, con una
+/// giuntura della libreria: e' il braccio in cui la sostituzione arriva dopo,
+/// e deve partire l'inode iniziale.
 fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
     dichiara("modo_supervisore", "avviato");
     let Some(taglio) = argomenti.iter().position(|pezzo| pezzo == "--") else {
@@ -453,23 +380,11 @@ fn modo_supervisore(argomenti: &[OsString]) -> ExitCode {
 /// Quali pipe anonime restano aperte in questo processo, oltre i flussi
 /// standard.
 ///
-/// # Perche' li nomina invece di contarli
-///
-/// Perche' un numero dice che qualcosa non torna, e un elenco dice **che
-/// cosa**. Quando un braccio diventa rosso, la differenza e' fra ricominciare
-/// l'indagine e leggerne il risultato.
-///
-/// # Perche' i primi tre non si guardano
-///
-/// Perche' possono essere pipe **legittimamente**, e non nostre: il gate gira
-/// dentro una pipeline, e in quel caso lo stdin del supervisore e' una pipe che
-/// gli ha dato la shell. E' misurato, non supposto.
-///
-/// Escluderli non allarga la maglia, perche' il canale non puo' stare li':
-/// `numero_ammissibile` rifiuta 0, 1 e 2 prima di ogni altra cosa. Guardarli
-/// legherebbe invece l'esito del braccio al modo in cui il gate viene invocato
-/// — verde se lanciato da un terminale, rosso dentro una pipeline — cioe' lo
-/// renderebbe una misura dell'ambiente e non del codice.
+/// Le nomina invece di contarle, perche' un rosso dica **che cosa**. I primi
+/// tre si saltano: dentro una pipeline lo stdin e' una pipe della shell
+/// (misurato), e il canale non puo' stare li' perche' `numero_ammissibile`
+/// rifiuta 0, 1 e 2. Guardarli farebbe dipendere l'esito da come il gate e'
+/// invocato.
 fn pipe_residue() -> String {
     let Ok(voci) = std::fs::read_dir("/proc/self/fd") else {
         return "illeggibile".to_owned();
@@ -515,13 +430,8 @@ fn pipe_residue() -> String {
 
 /// I figli che questo processo ha ancora, con il loro stato.
 ///
-/// # Perche' anche lo stato, e non la sola presenza
-///
-/// Perche' un figlio terminato ma non raccolto **c'e' ancora**: `/proc` gli
-/// tiene il posto finche' il padre non lo raccoglie, ed e' precisamente lo
-/// zombie che l'imbuto esiste per evitare. Un braccio che guardasse la sola
-/// assenza li chiamerebbe entrambi «rimasto», senza distinguere un figlio vivo
-/// da uno raccolto male — che sono due difetti diversi.
+/// Anche lo stato: un figlio terminato e non raccolto **c'e' ancora** (lo
+/// zombie che l'imbuto evita), e va distinto da uno vivo.
 fn figli_residui() -> String {
     // Il tid del thread principale coincide col pid, e questo programma e'
     // monothread per costruzione: `/proc/self/task/self` non esiste, mentre
@@ -552,13 +462,9 @@ fn figli_residui() -> String {
 ///
 /// La riga di comando e' `ostile <dominio> <radice>`.
 ///
-/// # Perche' esce sempre a zero
-///
-/// Perche' cio' che si giudica non e' se questo programma e' contento, ma che
-/// cosa ha osservato: un codice d'uscita che riassumesse tre tentativi
-/// perderebbe quale dei tre riesce quando non deve. Il gate legge le righe e
-/// decide; questo modo riporta e basta. Un'uscita non a zero resta riservata a
-/// cio' che gli impedisce di riportare.
+/// Esce sempre a zero: decide il gate leggendo le righe, e un codice
+/// riassuntivo perderebbe quale tentativo riesce. Un'uscita non a zero e'
+/// riservata a cio' che impedisce di riportare.
 fn modo_ostile(argomenti: &[OsString]) -> ExitCode {
     dichiara("modo_ostile", "avviato");
     let [_, _, dominio, radice] = argomenti else {
@@ -580,16 +486,11 @@ fn modo_ostile(argomenti: &[OsString]) -> ExitCode {
         );
     }
 
-    // Secondo tentativo: uscire dal dominio, che si fa scrivendo il
-    // `cgroup.procs` di **un altro** cgroup. Il proprio non porta da nessuna
-    // parte: ci si e' gia'.
-    //
-    // I bersagli sono due, e non sono equivalenti. Il padre e' quello ovvio, ma
-    // in cgroup v2 nessun processo puo' abitare un cgroup che ha figli e
-    // controllori delegati — nemmeno il control plane — quindi un rifiuto li'
-    // non dice niente sul worker: dice solo com'e' fatta la gerarchia. Un
-    // **fratello foglia** e' invece scrivibile dal control plane, ed e' il
-    // bersaglio su cui il rifiuto discrimina.
+    // Secondo tentativo: uscire dal dominio scrivendo il `cgroup.procs` di
+    // **un altro** cgroup. Il padre, in cgroup v2, ha figli e controllori
+    // delegati e non ammette processi nemmeno dal control plane: il suo
+    // rifiuto non dice niente sul worker. Discrimina un **fratello foglia**,
+    // scrivibile dal control plane.
     let padre = dominio
         .parent()
         .map_or_else(|| radice.clone(), Path::to_path_buf);
@@ -658,12 +559,8 @@ fn modo_ostile(argomenti: &[OsString]) -> ExitCode {
 
 /// I cgroup fratelli del dominio: le vie d'uscita che esistono davvero.
 ///
-/// # Perche' fallisce invece di rendere una lista corta
-///
-/// Perche' una lista vuota e una lista che non si e' potuta leggere sono
-/// indistinguibili dall'esterno, e il gate le legge allo stesso modo: «il
-/// worker non ha tentato nessuna fuga». Sarebbe un verde che dice «non e'
-/// riuscito» quando il vero significato e' «non ha provato».
+/// Fallisce invece di rendere una lista corta: una lista illeggibile letta
+/// come vuota direbbe «non e' riuscito» quando il worker non ha provato.
 ///
 /// # Errors
 ///
@@ -689,15 +586,9 @@ fn fratelli(padre: &Path, dominio: &Path) -> std::result::Result<Vec<PathBuf>, S
 
 /// Che cosa di `/proc/self` e' leggibile in questo momento.
 ///
-/// # Perche' e' evidenza e non un dettaglio
-///
-/// Perche' la verifica finale dello spawner porta avanti namespace e
-/// descrittori invece di rileggerli, e la necessita' di quella scelta dipende da
-/// che cosa `/proc/self` concede in quel preciso momento. Un'affermazione del
-/// genere va **misurata** sulla macchina che si qualifica.
-///
-/// Il prefisso conta: la stessa misura presa in due momenti diversi dice due
-/// cose diverse, e senza il momento non si sa quale delle due si sta leggendo.
+/// La verifica finale dello spawner porta avanti namespace e descrittori
+/// perche' `/proc/self` non li concede in quel momento: va misurato sulla
+/// macchina che si qualifica. Il prefisso dice in quale momento.
 fn riporta_leggibilita_di_proc(quando: &str) {
     for nome in ["status", "ns", "fd", "fdinfo"] {
         let percorso = format!("/proc/self/{nome}");
@@ -718,25 +609,10 @@ fn riporta_leggibilita_di_proc(quando: &str) {
 ///
 /// La riga di comando e' `finestra <uid> <gid>`.
 ///
-/// # Perche' e' un modo a se'
-///
-/// Perche' quell'intervallo non lo attraversa nessun altro modo, e le due
-/// misure che gli somigliano dicono un'altra cosa. Prima del cambio il processo
-/// e' ancora se stesso; dopo la `exec` il kernel **rimette** il flag *dumpable*
-/// e restituisce `/proc/<pid>` al nuovo proprietario, quindi il worker si legge
-/// senza problemi. Solo in mezzo — credenziali cambiate, immagine ancora la
-/// stessa — `/proc/<pid>` appartiene a root e le sue directory non si
-/// attraversano.
-///
-/// E' esattamente li' che vive il settimo passo della sequenza, ed e' la ragione
-/// per cui rilegge le credenziali invece dell'identita' intera. Misurarlo qui
-/// trasforma quella ragione da argomento in osservazione.
-///
-/// # Perche' non esegue niente dopo
-///
-/// Perche' non deve: le credenziali cambiate valgono per questo thread e il
-/// processo muore subito dopo aver riportato. Non c'e' nessun worker da
-/// avviare, e avviarlo confonderebbe due misure.
+/// Solo fra credenziali cambiate e `exec` `/proc/<pid>` appartiene a root; la
+/// `exec` rimette *dumpable*. Li' vive il settimo passo della sequenza, che
+/// per questo rilegge le credenziali invece dell'identita' intera. Non esegue
+/// niente dopo: il processo riporta e muore.
 fn modo_finestra(argomenti: &[OsString]) -> ExitCode {
     dichiara("modo_finestra", "avviato");
     let [_, _, uid, gid] = argomenti else {
@@ -773,13 +649,9 @@ fn modo_finestra(argomenti: &[OsString]) -> ExitCode {
 
 /// Aspetta il gate: si annuncia pronto, e poi aspetta il via.
 ///
-/// # Perche' due fifo e non un'attesa a tempo
-///
-/// Perche' un'attesa a tempo non e' una barriera: il gate non saprebbe se la
-/// sostituzione e' arrivata dentro la finestra, e un esito giusto sarebbe
-/// indistinguibile da un esito fortunato. Aprire una fifo in scrittura blocca
-/// finche' qualcuno non la apre in lettura, e viceversa: sono due appuntamenti,
-/// e nessuno dei due passa per l'orologio.
+/// Due fifo e non un'attesa a tempo: aprire una fifo blocca finche' l'altro
+/// capo non la apre, quindi l'appuntamento non passa per l'orologio, e un
+/// esito giusto non si confonde con uno fortunato.
 fn attendi(pronto: &Path, via: &Path) -> plenora_core::error::Result<()> {
     std::fs::write(pronto, b"pronto\n").map_err(|errore| {
         super::non_disponibile("barriera", &format!("{}: {errore}", pronto.display()))
@@ -850,17 +722,8 @@ fn riporta_evidenza(evidenza: &EvidenzaPreflight) {
 /// Identita', gruppi, capability, `no_new_privs` e namespace, un campo per
 /// cosa.
 ///
-/// # Perche' campi e non un `Debug`
-///
-/// Perche' il gate deve poterci fare **asserzioni esatte**, non una ricerca di
-/// sottostringhe. Un `Debug` e' una riga sola in cui `uid: [65534, 65534, …]`
-/// e `bounding: 2199023255551` stanno mescolati a tutto il resto: per
-/// pretendere che le capability effettive siano zero bisognerebbe cercare un
-/// pezzo di testo, e una ricerca di testo passa anche quando il campo cambia
-/// nome o quando due campi si somigliano.
-///
-/// Con un campo per cosa il gate confronta valori. E' la differenza fra un
-/// gate che legge e uno che sembra leggere.
+/// Campi e non un `Debug`: il gate confronta valori esatti invece di cercare
+/// sottostringhe.
 fn riporta_identita(quando: &str) {
     let identita = match super::identita::leggi_identita() {
         Ok(identita) => identita,
@@ -924,18 +787,10 @@ fn leggi(percorso: &Path) -> String {
 
 /// Un tentativo, col contenuto del bersaglio **prima e dopo**.
 ///
-/// # Perche' ogni tentativo porta le due letture
-///
-/// Perche' «non e' riuscito» e «non ha cambiato niente» sono due cose diverse,
-/// e la prima non implica la seconda: una scrittura puo' essere rifiutata dopo
-/// aver troncato il file, e un rifiuto che arriva a meta' lascia un valore
-/// diverso da quello di partenza. Senza le due letture il gate potrebbe solo
-/// dedurre l'invarianza dall'esito, che e' esattamente la deduzione sbagliata.
-///
-/// Vale anche per le vie d'uscita: `cgroup.procs` prima e dopo dice se il
-/// worker ci si e' spostato, e lo dice meglio dell'esito della `write` —
-/// perche' una `write` accettata che non sposta niente si legge come una
-/// riuscita.
+/// «Non e' riuscito» non implica «non ha cambiato niente»: una scrittura puo'
+/// essere rifiutata dopo aver troncato il file. Per le vie d'uscita,
+/// `cgroup.procs` prima e dopo dice se il worker si e' spostato meglio
+/// dell'esito della `write`.
 fn tentativo(percorso: &Path) -> String {
     let prima = leggi(percorso);
     let esito = scrivi(percorso, "0");

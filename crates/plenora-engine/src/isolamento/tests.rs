@@ -191,14 +191,11 @@ impl SuperficieDominio for Superficie {
 
 /// La sequenza **completa** e' quella dichiarata, operazione per operazione.
 ///
-/// Il registro comprende risoluzione del percorso, montaggio, possesso,
-/// namespace, scritture, riletture e quiescenza: e' l'unica forma in cui il
-/// caso distingue «scrivi e rileggi, uno per volta» da «scrivi tutto, poi
-/// rileggi tutto», e in cui si vede che **niente si scrive prima** di sapere
-/// dove si sta scrivendo e chi potrebbe disfarlo.
-///
-/// Si pretende l'uguaglianza **esatta**, non l'inclusione: e' il solo modo in
-/// cui un caso sull'ordine fallisce quando l'ordine cambia.
+/// Il registro comprende risoluzione, montaggio, possesso, namespace,
+/// scritture, riletture e quiescenza: distingue «scrivi e rileggi, uno per
+/// volta» da «scrivi tutto, poi rileggi», e mostra che **niente si scrive
+/// prima** di sapere dove e chi potrebbe disfarlo. Uguaglianza **esatta**, non
+/// inclusione, perche' il caso fallisca quando l'ordine cambia.
 #[test]
 fn la_sequenza_completa_e_quella_dichiarata() {
     let mut superficie = Superficie::onesta();
@@ -236,12 +233,8 @@ fn la_sequenza_completa_e_quella_dichiarata() {
 /// I bersagli del possesso comprendono **ogni antenato** fino alla radice, con
 /// la sua directory e il suo `cgroup.procs`.
 ///
-/// # Perche' il `cgroup.procs` del dominio non basta
-///
-/// Perche' non e' quello con cui si evade: scrivere il proprio pid nel
-/// `cgroup.procs` del dominio corrente non porta da nessuna parte, ci si e'
-/// gia'. Per uscire si scrive quello di un altro cgroup — il padre — e quella
-/// scrittura non tocca nessun file del dominio.
+/// Si evade scrivendo il `cgroup.procs` di un altro cgroup, il padre, che non
+/// tocca nessun file del dominio.
 #[test]
 fn i_bersagli_comprendono_gli_antenati_fino_alla_radice() {
     let bersagli = bersagli_del_possesso(
@@ -348,12 +341,8 @@ fn la_quiescenza_e_un_prerequisito_e_ogni_forma_ambigua_e_un_rifiuto() {
 /// Il possesso si verifica **preventivamente**, su ogni bersaglio, e per
 /// ciascuna delle vie di scrittura.
 ///
-/// # Il bit di gruppo si rifiuta sempre, GID a parte
-///
-/// Su un filesystem con ACL i bit di gruppo sono la **mask della classe**, non
-/// «il gruppo proprietario»: un file con `g+w` e un GID estraneo puo' portare
-/// una ACL nominativa per l'UID del worker, e quella vale. Rifiutare la mask
-/// costa qualche rifiuto in piu' su gerarchie che non useremmo comunque.
+/// Il bit di gruppo si rifiuta sempre, GID a parte: con le ACL e' la **mask
+/// della classe**, e una ACL nominativa per l'UID del worker varrebbe.
 #[test]
 fn il_possesso_della_gerarchia_e_un_prerequisito() {
     let vie = [
@@ -807,11 +796,8 @@ fn superficie_con_localevents() -> Superficie {
 /// L'evidenza sopravvive alla transizione riuscita, `memory_localevents`
 /// compreso.
 ///
-/// E' il caso che vale quando conta: consumare il token e' cio' che succede
-/// **nel ramo riuscito**, ed e' li' che un'evidenza attaccata al token andrebbe
-/// persa. Il contratto promette `memory_localevents` registrato insieme al
-/// sigillo, e una promessa mantenuta solo quando la transizione fallisce non e'
-/// quella promessa.
+/// E' nel ramo riuscito che il token si consuma, ed e' li' che un'evidenza
+/// attaccata al token andrebbe persa.
 #[test]
 fn l_evidenza_sopravvive_al_consumo_del_token() {
     let mut con = superficie_con_localevents();
@@ -951,31 +937,16 @@ fn un_percorso_non_utf8_attraversa_il_confine() {
 
 /// L'evidenza sopravvive **intera** anche quando l'avvio fallisce.
 ///
-/// # Perche' si prova su `esito` e non su `avvia`
-///
-/// Perche' l'affermazione da provare e' che i due rami portino la stessa
-/// evidenza, e quella e' una proprieta' di `esito`: `avvia` ci aggiunge
-/// l'accertamento dell'immagine e lo `spawn`, cioe' esattamente le due cose che
-/// dipendono dalla macchina.
-///
-/// Provarla su `avvia` vorrebbe dire far fallire davvero un avvio, e il modo
-/// naturale — far coincidere il worker col proprietario del binario dei casi,
-/// cosi' che lo spawner risulti riscrivibile — dipende dal bit di scrittura del
-/// proprietario, che e' probabile e non garantito: su un filesystem in sola
-/// lettura, o con una build riproducibile, non c'e', e il caso comincerebbe ad
-/// avviare processi invece di fallire.
-///
-/// Che l'immagine vera sia giudicata bene e' un'altra affermazione, e la prova
-/// il gate su Linux. Qui non c'e' nessuna giuntura che permetta di saltare
-/// quel giudizio: `esito` non lo esegue e non lo salta, non e' sulla sua
+/// Si prova su `esito`, non su `avvia`: che i due rami portino la stessa
+/// evidenza e' una proprieta' di `esito`, mentre `avvia` aggiunge
+/// accertamento dell'immagine e `spawn`, che dipendono dalla macchina. Far
+/// fallire davvero un avvio dipenderebbe dal bit di scrittura del
+/// proprietario del binario, probabile ma non garantito. Il giudizio
+/// sull'immagine vera lo prova il gate su Linux; `esito` non e' sulla sua
 /// strada.
 ///
-/// # Perche' il confronto e' integrale
-///
-/// Perche' la promessa e' che sopravviva `EvidenzaPreflight`, non alcuni dei
-/// suoi campi: montaggio, namespace e `memory_localevents` sono osservazioni
-/// quanto il dominio, e un confronto che ne guardasse solo qualcuna
-/// lascerebbe passare la perdita delle altre.
+/// Il confronto e' integrale: la promessa riguarda tutta
+/// `EvidenzaPreflight`, non alcuni campi.
 #[test]
 fn l_evidenza_sopravvive_intera_all_avvio_fallito() {
     let mut superficie = superficie_con_localevents();
@@ -1042,13 +1013,8 @@ fn un_comando_ordinario_non_e_uno_spawner() {
 /// Ogni versione del namespace riservato che non sia quella supportata e' un
 /// **rifiuto esplicito**, non una ricaduta nel parser della CLI.
 ///
-/// # Perche' e' la parte che conta
-///
-/// Perche' e' la differenza fra due diagnosi: «versione non supportata», che
-/// dice a un supervisore di un'altra generazione che cosa e' successo, e
-/// «comando sconosciuto», che manda a cercare un errore di digitazione. La
-/// seconda arriverebbe da sola se il riconoscimento guardasse la sola versione
-/// esatta.
+/// «Versione non supportata» dice che cosa e' successo; «comando sconosciuto»
+/// manderebbe a cercare un errore di digitazione.
 #[test]
 fn ogni_altra_versione_del_namespace_e_un_rifiuto() {
     for testo in [
@@ -1090,15 +1056,10 @@ fn una_versione_piu_vecchia_si_riconosce() {
 
 /// Il riconoscimento **non porta via niente** dell'argomento.
 ///
-/// La variante e' senza campi, quindi non c'e' una stringa da copiare: e' la
-/// forma in cui «non amplificare l'ingresso» non dipende da chi scrive il
-/// messaggio dopo. Un `argv` che contenesse ritorni a capo o byte non UTF-8
-/// non ha nessuna strada per arrivare in un log.
-///
-/// Il caso guarda il **comportamento**: due argomenti diversi, entrambi del
-/// namespace riservato, danno lo stesso identico esito. Misurare invece la
-/// dimensione dell'enum direbbe che cosa ha scelto il compilatore per il
-/// layout, che e' un'altra cosa e potrebbe coincidere per caso.
+/// La variante e' senza campi, quindi nessun `argv` arriva in un log. Il caso
+/// guarda il **comportamento** (due argomenti diversi del namespace riservato
+/// danno lo stesso esito), non la dimensione dell'enum, che dipende dal
+/// layout.
 #[test]
 fn il_rifiuto_non_trattiene_l_argomento() {
     let velenoso = "plenora-spawner-\nriga finta: qualcosa di inventato";
@@ -1223,13 +1184,9 @@ fn la_versione_del_worker_sta_nel_suo_namespace() {
 
 /// I due namespace sono **disgiunti**.
 ///
-/// # Perche' non e' ovvio, e perche' va fissato
-///
-/// Perche' il riconoscimento e' una regola sola applicata due volte, e le due
-/// applicazioni sono in fila. Se un prefisso fosse prefisso dell'altro, una
-/// riga destinata a una modalita' verrebbe rivendicata dalla prima interrogata
-/// — con un rifiuto che nomina la versione sbagliata, che e' peggio di nessun
-/// rifiuto.
+/// Il riconoscimento si applica in fila: se un prefisso contenesse l'altro,
+/// la prima modalita' interrogata rivendicherebbe la riga con un rifiuto che
+/// nomina la versione sbagliata.
 #[test]
 fn i_due_namespace_non_si_sovrappongono() {
     assert!(!PREFISSO_WORKER.starts_with(PREFISSO_RISERVATO));

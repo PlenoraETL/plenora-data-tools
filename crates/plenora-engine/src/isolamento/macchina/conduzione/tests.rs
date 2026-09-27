@@ -47,18 +47,10 @@ impl Osservatore for Guarda {
 
 /// Un dominio finto in cui la quiescenza **segue** la forzatura.
 ///
-/// # Perche' i due lati sono legati
-///
-/// Perche' nel dominio vero lo sono: `cgroup.kill` e' cio' che svuota il cgroup,
-/// e la quiescenza arriva un momento dopo. Un osservatore che dicesse «vuoto»
-/// indipendentemente dalla forzatura farebbe finire il giro **prima** del
-/// margine, il terminatore non verrebbe chiamato affatto, e i casi della
-/// cancellazione e del timeout resterebbero verdi misurando un cammino diverso
-/// da quello che dichiarano.
-///
-/// Un osservatore che dicesse «pieno» per sempre farebbe l'errore opposto:
-/// nessuna esecuzione arriverebbe a un esito, e ogni riga diventerebbe un
-/// impedimento.
+/// Come nel dominio vero, dove `cgroup.kill` svuota il cgroup. Un osservatore
+/// che dicesse «vuoto» da se' farebbe finire il giro prima del margine, senza
+/// chiamare il terminatore, e i casi di cancellazione e timeout misurerebbero
+/// un altro cammino; uno che dicesse «pieno» per sempre non darebbe mai esito.
 #[derive(Debug, Default)]
 pub(super) struct Dominio {
     /// Se il dominio si e' svuotato.
@@ -188,12 +180,9 @@ pub(super) struct LeggiEvidenza {
 impl LeggiEvidenza {
     /// L'evidenza di un dominio in cui non e' successo niente.
     ///
-    /// I contatori sono **zero**, non assenti: sono due cose diverse, e la
-    /// classificazione le distingue. Zero significa «l'ho letto, e non e'
-    /// successo niente»; assente significa «non l'ho letto», che e'
-    /// un'evidenza indeterminata e quindi inutilizzabile. Con tutti `None` ogni
-    /// caso finisce in `EvidenzaNonUtilizzabile`, e li' a sbagliare e' la
-    /// fixture, non la classificazione.
+    /// I contatori sono **zero**, non assenti: zero e' «letto, e non e'
+    /// successo niente», assente e' «non letto», cioe' evidenza inutilizzabile.
+    /// Con tutti `None` ogni caso finirebbe in `EvidenzaNonUtilizzabile`.
     pub(super) fn senza_pressione() -> Self {
         Self {
             risposta: Ok(EvidenzaDiLimite {
@@ -314,13 +303,9 @@ pub(super) fn valore<P: ProcessoFiglio>(contorno: &super::Contorno<P>, chiave: &
 
 /// Il tempo lungo: usato dove il timeout non deve scattare.
 ///
-/// # Perche' cinque secondi e non un'ora
-///
-/// Perche' «lungo» qui vuol dire «piu' lungo del caso», e il caso dura
-/// millisecondi. Un'ora sarebbe lo stesso rispetto a cio' che si prova, ma non
-/// rispetto a cio' che succede **quando il codice e' rotto**: se i produttori
-/// non venissero fermati, l'attesa dell'orologio durerebbe fino alla scadenza,
-/// e una batteria che si appende per un'ora non dice niente a nessuno.
+/// «Lungo» vuol dire piu' lungo del caso, che dura millisecondi, e non di piu':
+/// se il codice e' rotto e i produttori non si fermano, la batteria si appende
+/// fino alla scadenza.
 fn tempo_lungo() -> Duration {
     Duration::from_secs(5)
 }
@@ -400,12 +385,9 @@ fn sul_cammino_nominale_il_dominio_non_si_termina() {
 /// Un tempo che scade porta a `Timeout`, e **il dominio si termina una volta
 /// sola**.
 ///
-/// Chiederlo a ogni giro manderebbe segnali a un dominio che sta gia' morendo,
-/// senza accelerarlo: il conteggio lo fissa.
-///
-/// Il dominio e' **abitato** e si svuota solo dopo `cgroup.kill`: e' cio' che
-/// rende il caso una prova della forzatura invece che del giro che finisce da
-/// se'.
+/// Chiederlo a ogni giro manderebbe segnali a un dominio che sta gia' morendo.
+/// Il dominio e' abitato e si svuota solo dopo `cgroup.kill`, cosi' il caso
+/// prova la forzatura e non il giro che finisce da se'.
 #[test]
 fn un_tempo_scaduto_termina_il_dominio_una_volta_sola() {
     let dominio = Dominio::abitato();
@@ -439,14 +421,9 @@ fn un_tempo_scaduto_termina_il_dominio_una_volta_sola() {
 
 /// **Un dominio che non si lascia forzare non produce un esito.**
 ///
-/// La forzatura che fallisce non e' un difetto di contorno: e' la ragione per
-/// cui il dominio resta abitato, e su un dominio abitato i contatori non sono
-/// un'osservazione. Cio' che si puo' dire non e' «timeout» — sarebbe
-/// un'attribuzione fatta su una fotografia in movimento — ma **che la barriera
-/// non e' completa**, e perche'.
-///
-/// Il difetto resta accanto all'impedimento: i due si leggono insieme, e da soli
-/// direbbero meta' della storia.
+/// Su un dominio abitato i contatori non sono un'osservazione, quindi non si
+/// dice «timeout» ma che la barriera non e' completa. Il difetto della
+/// forzatura resta accanto all'impedimento: si leggono insieme.
 #[test]
 fn un_dominio_che_non_si_termina_non_produce_un_esito() {
     let dominio = Dominio::che_non_si_forza("cgroup.kill non si scrive");
@@ -528,16 +505,10 @@ fn un_dominio_forzato_che_resta_abitato_lo_dichiara() {
 
 /// **Nessun fatto arrivato prima della chiusura resta fuori.**
 ///
-/// Il caso costruisce la corsa peggiore: un canale che porta un esito **lento**,
-/// che arriva mentre il consumatore ha gia' smesso di aspettare perche' il
-/// tempo e' scaduto. Il fatto entra in coda dopo che il consumatore ha guardato
-/// per l'ultima volta e prima che il lettore venga fermato — cioe' proprio nella
-/// finestra in cui un drenaggio che si fermasse su un istante vuoto lo
-/// perderebbe.
-///
-/// L'esito deve comparire nel registro finale: si vede perche' la
-/// classificazione dice `timeout` **con** un esito dichiarato alle spalle, e il
-/// rapporto lo nomina.
+/// Un esito **lento** arriva dopo che il consumatore ha smesso di aspettare
+/// per il tempo scaduto e prima che il lettore venga fermato: e' la finestra
+/// in cui un drenaggio fermo su un istante vuoto lo perderebbe. Il drenaggio
+/// deve arrivare alla disconnessione.
 #[test]
 fn un_esito_tardivo_non_si_perde() {
     /// Una sorgente che consegna i byte solo dopo un ritardo.
@@ -604,19 +575,9 @@ fn un_esito_tardivo_non_si_perde() {
 /// **Il drenaggio non lascia indietro niente**: tutti i fatti sono nel registro
 /// finale.
 ///
-/// # Perche' questo caso prova il travaso, e per costruzione
-///
-/// Perche' **uscita ed evidenza sono accodate dopo che il giro e' finito**: la
-/// conduzione le osserva al passo 4, quando non ascolta piu'. Non possono
-/// quindi essere entrate dal giro principale, e l'unica via che resta e' il
-/// drenaggio. Se cio' che il drenaggio rende non venisse travasato nel
-/// registro, quelle due righe direbbero «non osservata» e «0».
-///
-/// Non dipende da nessuna corsa: un caso costruito su un fatto che arriva
-/// **tardi** dipenderebbe invece dal colpire una finestra di frazioni di
-/// millisecondo, e su una macchina diversa passerebbe o fallirebbe per ragioni
-/// che non riguardano il codice. Un caso cosi' e' peggio di nessun caso, e ce
-/// n'e' stato uno, e non c'e' piu'.
+/// Uscita ed evidenza si accodano al passo 4, dopo il giro: arrivano al
+/// registro solo attraverso il drenaggio, quindi il caso prova il travaso per
+/// costruzione, senza dipendere da una corsa.
 #[test]
 fn tutti_i_fatti_arrivano_al_registro_finale() {
     let (esito, difetti) = conduci(
@@ -642,10 +603,8 @@ fn tutti_i_fatti_arrivano_al_registro_finale() {
     assert_eq!(nome(&esito.classificato), "da_verificare");
     assert!(difetti.righe().is_empty(), "{:?}", difetti.righe());
 
-    // E si guarda **quali**. Uscita ed evidenza sono gli unici due fatti che la
-    // conduzione accoda **dopo** aver smesso di ascoltare: passano quindi per
-    // forza dal drenaggio, e se cio' che il drenaggio rende non entrasse nel
-    // registro, queste due righe direbbero «non osservata» e «0».
+    // E si guarda **quali**: uscita ed evidenza passano per forza dal
+    // drenaggio, e senza travaso direbbero «non osservata» e «0».
     assert_ne!(
         valore(&difetti, "uscite"),
         "nessuna",
@@ -663,12 +622,9 @@ fn tutti_i_fatti_arrivano_al_registro_finale() {
 
 /// **Un'evidenza illeggibile impedisce di proseguire.**
 ///
-/// `DaVerificare` significa «vai avanti verso la verifica e il publish», e
-/// darlo con una lettura del dominio che non c'e' stata autorizzerebbe a
-/// pubblicare senza sapere che cosa e' successo nel dominio.
-///
-/// E' la forma di difetto piu' insidiosa: un caso che *registra* l'osservazione
-/// mancata e insieme permette di ignorarla sembra una prova, e non lo e'.
+/// `DaVerificare` vuol dire «vai verso verifica e publish»: darlo senza una
+/// lettura del dominio autorizzerebbe a pubblicare senza sapere che cosa e'
+/// successo. Registrare l'osservazione mancata non basta, deve fermare.
 #[test]
 fn un_evidenza_illeggibile_impedisce_di_proseguire() {
     let (esito, _difetti) = conduci(
@@ -700,25 +656,14 @@ fn un_evidenza_illeggibile_impedisce_di_proseguire() {
 
 /// **Un guasto nella chiusura non nasconde i passi successivi.**
 ///
-/// # Perche' la chiusura non ha `?`
+/// La chiusura non ha `?`: ogni passo dopo il giro produce evidenza, e un `?`
+/// la sopprimerebbe, mandando a cercare un problema di lettura dove il
+/// problema e' un figlio. Qui il figlio non si raccoglie **e** l'evidenza si
+/// legge lo stesso.
 ///
-/// Perche' ogni passo dopo il giro produce **evidenza**, e un `?` la
-/// sopprimerebbe da li' in poi. Un figlio che non si lascia raccogliere e' un
-/// difetto; ma se per quel difetto non si leggesse piu' l'evidenza del dominio,
-/// il rapporto direbbe «evidenza non letta» — che manda a cercare un problema
-/// di lettura dove il problema e' un figlio.
-///
-/// Qui il figlio non si raccoglie **e** l'evidenza si legge lo stesso: si
-/// vedono tutti e due i marcatori, non solo il primo.
-///
-/// # E la guardia risale
-///
-/// Il figlio che non si e' lasciato raccogliere esiste ancora, e la conduzione
-/// non se ne libera con una riga di rapporto: lo consegna a chi l'ha chiamata,
-/// dentro il contorno. Questo caso e' quel chiamante, e infatti deve
-/// **rivendicarlo** — se lo lasciasse cadere, la sentinella fermerebbe il
-/// processo che esegue i casi. Non e' un inconveniente del caso: e' la prova
-/// che la proprieta' e' arrivata fin qui.
+/// Il figlio non raccolto risale a chi ha chiamato, dentro il contorno: il
+/// caso e' quel chiamante e deve rivendicarlo, altrimenti la sentinella
+/// ferma il processo dei casi.
 #[test]
 fn un_guasto_nella_chiusura_non_nasconde_i_passi_successivi() {
     /// Un figlio che non muore e non si lascia raccogliere.
@@ -752,10 +697,8 @@ fn un_guasto_nella_chiusura_non_nasconde_i_passi_successivi() {
         |_| (),
     );
 
-    // **La guardia e' qui.** Prima di ogni altra cosa: se la conduzione se ne
-    // fosse liberata — con una porta che rinuncia e prosegue — questo campo
-    // sarebbe `None`, il caso passerebbe lo stesso il resto delle domande, e
-    // nessuno saprebbe che un processo e' rimasto vivo.
+    // **La guardia e' qui**: se la conduzione se ne liberasse, il campo
+    // sarebbe `None` e nessuno saprebbe che un processo e' rimasto vivo.
     let guardia = difetti
         .figlio_non_raccolto
         .take()
@@ -855,18 +798,9 @@ fn un_produttore_che_muore_male_si_riporta() {
 /// **Un produttore che resta senza gettoni lo dice**, e il difetto torna dal
 /// resoconto.
 ///
-/// # Perche' si prova sulla bocchetta e non sulla conduzione
-///
-/// Perche' con i budget di oggi **nessun produttore puo' esaurirli**: il lettore
-/// ne ha quattro e ne spende al piu' tre, l'orologio due e ne spende due,
-/// sorvegliante e raccoglitore lo stesso. E' una proprieta' voluta — i budget
-/// sono tarati sul peggio — ma vuol dire che quel cammino, in una conduzione
-/// vera, non si raggiunge.
-///
-/// Provarlo qui e' quindi onesto per quello che e': la via del resoconto
-/// funziona, e servira' al primo produttore che avra' piu' da dire dei suoi
-/// gettoni. Cio' che tiene l'attesa dei produttori nella conduzione e' il caso
-/// del filo che muore male, che invece si raggiunge.
+/// Si prova sulla bocchetta perche' i budget sono tarati sul peggio e in una
+/// conduzione vera nessun produttore li esaurisce. Il caso prova la via del
+/// resoconto; l'attesa dei produttori la tiene il caso del filo che muore male.
 #[test]
 fn un_produttore_senza_gettoni_lo_riporta() {
     use super::super::coda::{apri, Produttore};
@@ -964,25 +898,12 @@ fn la_conduzione_rende_l_impedimento_invece_di_inghiottirlo() {
 
 /// **Chi rinuncia chiude comunque il dominio, raccoglie e drena.**
 ///
-/// # Che cosa esclude
-///
-/// L'idea che una nascita parziale sia «un tentativo non cominciato». Quando il
-/// secondo produttore non nasce, il worker **esiste gia'**: lo `spawn` e'
-/// avvenuto prima, puo' avere discendenti, e il primo produttore puo' avere gia'
-/// accodato. Tornare indietro senza chiudere il dominio lascerebbe processi vivi
-/// in un cgroup che nessuno guarda piu'; tornare senza drenare renderebbe una
-/// pagina bianca su un'esecuzione che qualcosa aveva gia' detto.
-///
-/// Il caso mette in coda un fatto **prima** di rinunciare, e lo cerca nel
-/// rapporto dopo.
-///
-/// # Che cosa non esclude
-///
-/// Che `conduci` chiami questa funzione nei tre punti giusti: qui la si chiama
-/// direttamente, perche' far fallire `Builder::spawn` a comando richiederebbe
-/// una giuntura nel codice di produzione per una condizione che il sistema
-/// concede solo quando e' esaurito. I tre punti di chiamata restano una lettura,
-/// non una misura.
+/// Una nascita parziale non e' un tentativo non cominciato: il worker esiste
+/// gia', puo' avere discendenti, e un produttore puo' avere gia' accodato.
+/// Senza chiudere restano processi vivi; senza drenare si perde cio' che era
+/// gia' stato detto. Il caso accoda un fatto **prima** di rinunciare e lo
+/// cerca nel rapporto dopo. Qui `rinuncia` si chiama direttamente; i cablaggi
+/// in `conduci` li provano i casi di `la_nascita_che_fallisce`.
 #[test]
 fn rinunciare_chiude_il_dominio_raccoglie_e_non_perde_i_fatti() {
     let (coda, fascio) = super::super::coda::apri();
@@ -1228,11 +1149,7 @@ fn rinunciare_senza_osservatore_dichiara_di_non_aver_guardato() {
 /// Percorre `conduci` con la `quale`-esima nascita che fallisce, e pretende cio'
 /// che ogni rinuncia deve fare.
 ///
-/// Le domande sono **le stesse per tutte e tre**: l'impedimento nomina chi non e'
-/// nato; il dominio e' stato chiuso **e si e' svuotato**; il figlio e' stato
-/// raccolto e la sua uscita e' nel rapporto; il drenaggio ha visto la
-/// disconnessione. Appartengono a ogni cammino, ed e' per questo che si chiedono
-/// qui invece che in tre posti che possono divergere.
+/// Le domande sono le stesse per ogni cammino, quindi stanno in un solo posto.
 fn la_nascita_che_fallisce(quale: usize, chi_atteso: &str) {
     let dominio = Dominio::che_si_svuota_dopo(2);
     let _armato = super::super::produttori::inciampo::fai_fallire_la_nascita(quale);
@@ -1316,12 +1233,9 @@ fn se_il_sorvegliante_non_nasce_si_rinuncia_e_l_osservatore_torna() {
 
 /// **Un margine di cortesia non rappresentabile si dice, e si forza subito.**
 ///
-/// # Perche' non si lascia `None`
-///
-/// Perche' sarebbe il peggio dei due mondi: senza scadenza non ci sarebbe niente
-/// a fermare l'attesa, e la terminazione forzata non arriverebbe mai. Una
-/// scadenza che non si puo' calcolare vale quindi **gia' passata** — e lo si
-/// dice, perche' un'attesa saltata in silenzio si legge come un'attesa scaduta.
+/// Senza scadenza la terminazione forzata non arriverebbe mai: la scadenza che
+/// non si calcola vale **gia' passata**, e lo si dice, perche' un'attesa
+/// saltata in silenzio si legge come un'attesa scaduta.
 #[test]
 fn un_margine_non_rappresentabile_si_osserva() {
     let dominio = Dominio::abitato();
@@ -1497,14 +1411,9 @@ fn un_uscita_non_rappresentabile_e_un_osservazione_mancata() {
 
 /// **E nel rollback vale lo stesso.**
 ///
-/// # Che cosa esclude
-///
-/// Che le due conversioni divergano. Nel rollback basta scartare
-/// `NonRappresentabile` insieme a `None` perche' «il sistema non sa dirmi come e'
-/// finito» valga «non e' ancora finito», e la differenza sparisca senza una
-/// riga. Due copie della stessa regola sono due occasioni di divergere, e la
-/// seconda e' quella che nessuno rilegge: la conversione e' quindi una sola, e
-/// questo caso e' l'altra meta' che la tiene vera su tutti e due i cammini.
+/// Scartare `NonRappresentabile` insieme a `None` farebbe valere «il sistema
+/// non sa dire come e' finito» come «non e' ancora finito». La conversione e'
+/// una sola, e questo caso la tiene vera anche sul secondo cammino.
 #[test]
 fn nel_rollback_un_uscita_non_rappresentabile_non_sparisce() {
     let (coda, fascio) = super::super::coda::apri();
@@ -1545,16 +1454,10 @@ fn nel_rollback_un_uscita_non_rappresentabile_non_sparisce() {
 
 /// **Anche dalla rinuncia la guardia risale, e non si scarica.**
 ///
-/// # Perche' serve, visto che il cammino ordinario ha gia' il suo caso
-///
-/// Perche' sono due punti di codice, e due punti che fanno la stessa cosa sono
-/// due occasioni di divergere. Il cammino ordinario ha un caso che rivendica la
-/// guardia; senza questo, una mutazione che nella rinuncia sostituisce la
-/// risalita con la via dei casi **non fa fallire niente**.
-///
-/// Qui il figlio non si lascia raccogliere mentre la conduzione sta gia'
-/// tornando indietro da una nascita mancata: il difetto e' doppio, e la guardia
-/// deve arrivare comunque a chi ha chiamato.
+/// E' un secondo punto di codice rispetto al cammino ordinario: senza questo
+/// caso, sostituire qui la risalita con la via dei casi non fa fallire niente.
+/// Il figlio non si raccoglie mentre si torna da una nascita mancata, e la
+/// guardia deve arrivare comunque a chi ha chiamato.
 #[test]
 fn anche_dalla_rinuncia_la_guardia_risale() {
     /// Un figlio che non muore e non si lascia raccogliere.

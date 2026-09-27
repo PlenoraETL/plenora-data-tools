@@ -1,49 +1,19 @@
 //! La macchina a stati del supervisore: fatti in una coda, un solo giudice.
 //!
-//! # La regola, e perche' e' una sola
+//! I produttori accodano **fatti**, mai conclusioni: nessuno di loro ha il
+//! quadro intero. Un solo consumatore raccoglie e alla fine chiama
+//! [`classifica`] **una volta**.
 //!
-//! **I produttori accodano fatti. Nessuno giudica.** Un produttore che
-//! concludesse — «questo e' un timeout», «questo e' un successo» — sposterebbe
-//! una decisione in un posto dove il quadro non c'e': il lettore non sa se il
-//! dominio e' quiescente, l'orologio non sa se il worker ha parlato, e chi
-//! osserva il cgroup non sa niente di entrambi. Ognuno concluderebbe da cio'
-//! che vede, e le conclusioni si contraddirebbero.
+//! La riduzione e' **commutativa** per costruzione: l'ordine d'arrivo dipende
+//! dallo scheduler, quindi ogni fatto accende un campo e nessun campo dipende
+//! da quando arriva. La precedenza fra le cause e' quella della §10.3,
+//! applicata solo da [`classifica`].
 //!
-//! Qui i produttori registrano **cio' che e' successo**, e basta. Un solo
-//! consumatore raccoglie, e alla fine chiama [`classifica`] **una volta**.
-//!
-//! # Perche' l'ordine d'arrivo non decide
-//!
-//! Perche' non e' una proprieta' del sistema, e' una proprieta' della corsa.
-//! Che l'EOF arrivi prima o dopo l'uscita del worker dipende dallo scheduler,
-//! e un esito che ne dipendesse cambierebbe da un'esecuzione all'altra sugli
-//! stessi fatti.
-//!
-//! La riduzione e' quindi **commutativa** per costruzione: ogni fatto accende
-//! un campo, e nessun campo dipende da quando arriva. La precedenza fra le
-//! cause e' quella della §10.3, applicata da [`classifica`] e da nessun altro.
-//! I casi la provano permutando i fatti e pretendendo lo stesso esito.
-//!
-//! # I quattro fatti che restano distinti
-//!
-//! `Esito`, **uscita**, **EOF** e **quiescenza** sono quattro cose diverse, e
-//! il successo le vuole tutte:
-//!
-//! - l'`Esito` e' un'**affermazione del worker**, e un'affermazione non e' una
-//!   prova: dice «ho finito», non «e' finito»;
-//! - l'**uscita** e' il processo che muore, **e** che qualcuno lo raccoglie:
-//!   un figlio non raccolto resta zombie, e uno zombie non e' un lavoro
-//!   concluso;
-//! - l'**EOF** e' l'unica cosa che dice che nessuno tiene piu' l'altro capo del
-//!   canale. Un discendente del worker che se lo fosse portato dietro lo
-//!   terrebbe aperto, e l'EOF non arriverebbe: e' precisamente cio' che
-//!   trasforma quella non-garanzia in un ritardo dichiarato invece che in un
-//!   risultato sbagliato;
-//! - la **quiescenza** e' il dominio vuoto, cioe' che nel cgroup non e' rimasto
-//!   nulla.
-//!
-//! Nessuna sostituisce le altre, e cio' che manca non diventa mai un successo:
-//! diventa un tempo che finisce.
+//! Il successo vuole quattro fatti distinti: l'`Esito` (un'affermazione del
+//! worker, non una prova), l'**uscita** raccolta, l'**EOF** (nessuno tiene piu'
+//! l'altro capo del canale) e la **quiescenza** del dominio. Nessuno
+//! sostituisce gli altri, e cio' che manca diventa un tempo che finisce, mai un
+//! successo.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -69,34 +39,16 @@ use super::sorgente::{interruttore, Freno, PASSO_DI_ATTESA};
 /// Chi sta dall'altro capo del dominio, e quale corpo del protocollo chiude
 /// il suo dialogo.
 ///
-/// # Perche' esiste come tipo, e non come una stringa
+/// E' la fonte unica su **quale** `Corpo` chiude la conversazione:
+/// `Corpo::Esito` per il worker, `Corpo::EsitoVerifica` per il verificatore
+/// (vedi [`crate::protocollo::messaggi::EsitoVerificaSulFilo`]). L'altro corpo
+/// arrivato qui e' un messaggio fuori posto per [`Registro::messaggio`], non un
+/// esito. [`Self::nome`] rende il testo dei log dalla stessa fonte, cosi' nome
+/// e scelta del corpo non divergono.
 ///
-/// Perche' non e' solo un'etichetta per i messaggi di log: e' la fonte di
-/// verita' su **quale** `Corpo` conta come "l'esito che chiude la
-/// conversazione" per questo dialogo — `Corpo::Esito` per il worker,
-/// `Corpo::EsitoVerifica` per il verificatore. I due corpi hanno forma quasi
-/// identica ma restano due tipi distinti sul filo (vedi
-/// [`crate::protocollo::messaggi::EsitoVerificaSulFilo`]), e un worker che
-/// mandasse un `EsitoVerifica` — o viceversa — non deve essere accettato come
-/// se fosse quello giusto solo perche' e' arrivato *un* esito qualunque:
-/// [`Registro::messaggio`] lo tratta come un messaggio fuori posto, non come
-/// l'esito che chiude il dialogo.
-///
-/// Sostituisce il parametro `soggetto: &str` che, senza questo tipo, le
-/// funzioni di questo modulo dovrebbero passare solo per i messaggi:
-/// [`Self::nome`] rende lo stesso testo, da un'unica fonte, cosi' il nome
-/// usato nei log e la scelta del corpo non possono divergere.
-///
-/// # Il `Default`, e perche' non e' una scorciatoia
-///
-/// Serve al solo `Registro::default()` interno al cammino di rinuncia
-/// (`conduzione::rinuncia`), che **non produce mai** un esito classificato —
-/// rinuncia sempre con `Impedimento::ProduttoreNonNato` — quindi il ruolo che
-/// usa per interpretare i fatti tardivi non decide mai se pubblicare.
-/// Ovunque il ruolo conti davvero — ogni `Dintorni` di produzione e di prova,
-/// [`conduci_isolato`] — lo si passa esplicitamente: il valore di default non
-/// sostituisce mai una scelta necessaria, copre solo un percorso in cui la
-/// scelta non ha conseguenze.
+/// Il `Default` serve solo a `Registro::default()` nel cammino di rinuncia
+/// (`conduzione::rinuncia`), che non produce mai un esito classificato; ovunque
+/// il ruolo conti lo si passa esplicitamente.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum Ruolo {
     #[default]
@@ -119,18 +71,9 @@ impl Ruolo {
 /// Codice e segnale sono cio' che il sistema operativo riporta; che un codice
 /// diverso da zero sia un problema lo decide chi classifica, non chi guarda.
 ///
-/// # Perche' un enum e non due campi facoltativi
-///
-/// Perche' due `Option` ammettono due stati che non esistono: **entrambi
-/// presenti** — un processo non esce contemporaneamente da se' e per un segnale
-/// — ed **entrambi assenti**, che non e' un'uscita ma l'assenza di
-/// un'osservazione. Con i campi, ogni lettore deve decidere cosa farne, e
-/// prima o poi due lettori decidono diversamente.
-///
-/// Con l'enum quei due stati non si possono scrivere. L'assenza
-/// dell'osservazione si dice altrove, con [`Fatto::OsservazioneImpossibile`]:
-/// e' un fatto **nostro**, e tenerlo fra le forme dell'uscita lo farebbe
-/// sembrare un modo di uscire.
+/// Un enum e non due `Option`: «entrambi presenti» ed «entrambi assenti» non
+/// sono uscite, e cosi' non si possono scrivere. L'assenza dell'osservazione e'
+/// un fatto nostro, e si dice con [`Fatto::OsservazioneImpossibile`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UscitaOsservata {
     /// Il processo e' uscito da se', con questo codice.
@@ -160,12 +103,9 @@ impl UscitaOsservata {
 
 /// Cio' che il worker **dichiara** di se', com'e' arrivato.
 ///
-/// # Perche' si conserva la forma del filo
-///
-/// Perche' la conversione verso l'errore di dominio perde qualcosa, e dove
-/// perde va deciso una volta e in un posto solo. Tenendo qui la forma arrivata,
-/// la perdita e' visibile e il rapporto puo' riportare cio' che il worker ha
-/// detto **davvero**, non la sua approssimazione.
+/// Si conserva la forma del filo perche' la conversione verso l'errore di
+/// dominio perde qualcosa: il rapporto riporta cio' che il worker ha detto
+/// davvero, e la perdita avviene in un posto solo.
 #[derive(Debug)]
 pub(super) enum EsitoDichiarato {
     /// «Ho finito.» Non «e' finito»: la verifica e il publish non sono
@@ -198,12 +138,9 @@ impl EsitoDichiarato {
 
     /// L'esito del **verificatore**, arrivato sul filo, senza giudizio.
     ///
-    /// Riduce alla stessa forma interna di [`Self::dal_filo`]: da qui in poi
-    /// — classificazione, rapporto, barriera — il codice non distingue piu'
-    /// chi ha dichiarato l'esito, perche' non gli serve. La distinzione che
-    /// conta e' gia' stata fatta: [`Registro::messaggio`] ha gia' accertato
-    /// che questo `EsitoVerificaSulFilo` e' davvero il corpo atteso per
-    /// questo dialogo.
+    /// Riduce alla stessa forma di [`Self::dal_filo`]: da qui in poi il codice
+    /// non distingue chi ha dichiarato l'esito. Che sia il corpo atteso lo ha
+    /// gia' accertato [`Registro::messaggio`].
     fn dal_filo_verifica(esito: EsitoVerificaSulFilo) -> Self {
         match esito {
             EsitoVerificaSulFilo::Successo {
@@ -241,11 +178,8 @@ pub(super) enum Fatto {
     /// Il canale e' finito male: il filo si e' rotto, o il protocollo e' stato
     /// violato.
     ///
-    /// # Perche' non e' `FineDelCanale`
-    ///
-    /// Perche' l'EOF pulito e' uno dei quattro fatti che il successo richiede, e
-    /// un troncamento non lo e'. Fonderli direbbe che un interlocutore
-    /// interrotto a meta' parola ha finito di parlare.
+    /// Distinto da `FineDelCanale`: l'EOF pulito e' uno dei fatti che il
+    /// successo richiede, un troncamento no.
     CanaleInterrotto(String),
     /// Il worker e' uscito, ed e' stato raccolto.
     UscitaDelWorker(UscitaOsservata),
@@ -255,18 +189,9 @@ pub(super) enum Fatto {
     EvidenzaDelDominio(Box<EvidenzaDiLimite>),
     /// Il tempo dato all'esecuzione e' finito.
     ///
-    /// # Perche' non dice quale fase
-    ///
-    /// Perche' questa macchina ne misura **una sola**. I timeout documentati
-    /// sono due — handshake e esecuzione — ma il primo misura dall'avvio alla
-    /// `Risposta`, cioe' un intervallo che si chiude **prima** che questa
-    /// macchina esista: `CanaleOperativo` si costruisce solo da un accordo gia'
-    /// concluso. Chi guida l'handshake misura quel tempo, e se scade non arriva
-    /// mai qui.
-    ///
-    /// Portare qui una fase che questa macchina non puo' emettere darebbe un
-    /// campo che vale sempre lo stesso, e prima o poi qualcuno lo leggerebbe
-    /// come se potesse valere altro.
+    /// Non dice la fase perche' questa macchina ne misura una sola: il timeout
+    /// dell'handshake scade prima che `CanaleOperativo` esista, e lo misura chi
+    /// guida l'handshake.
     TempoScaduto,
     /// Qualcuno ha chiesto di annullare.
     ///
@@ -283,24 +208,13 @@ pub(super) enum Fatto {
 }
 /// Cio' che i fatti hanno acceso, senza ancora concludere niente.
 ///
-/// # Perche' raccoglie invece di sovrascrivere
+/// Raccoglie invece di sovrascrivere: un campo sovrascritto arbitra in
+/// silenzio, e sui fatti contraddittori produce un esito che sembra normale.
+/// Due osservazioni uguali non cambiano niente; due diverse sono una
+/// contraddizione e diventano un impedimento, mai un esito.
 ///
-/// Perche' un campo che si sovrascrive sceglie in silenzio. «Vince il primo» e
-/// «vince l'ultimo» sono due arbitrati diversi, entrambi plausibili, e
-/// entrambi nascondono che c'e' qualcosa da arbitrare: sui fatti duplicati la
-/// scelta e' invisibile, e su quelli **contraddittori** produce un esito che
-/// sembra normale.
-///
-/// Qui si raccoglie tutto e si decide alla fine. Due osservazioni uguali sono
-/// la stessa cosa detta due volte, e non cambiano niente; due diverse sono una
-/// contraddizione, e diventano un impedimento — mai un esito.
-///
-/// # Perche' gli elenchi si riordinano
-///
-/// Perche' l'ordine d'arrivo e' una proprieta' della corsa, non
-/// dell'esecuzione. Due rapporti degli stessi fatti devono coincidere riga per
-/// riga anche se lo scheduler li ha consegnati in ordini diversi, quindi cio'
-/// che si riporta e' **ordinato e senza ripetizioni**.
+/// Cio' che si riporta e' **ordinato e senza ripetizioni**, perche' due
+/// rapporti degli stessi fatti coincidano qualunque sia l'ordine d'arrivo.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "sono cinque osservazioni indipendenti, ognuna con la sua sorgente e il suo \
@@ -369,17 +283,10 @@ impl Registro {
 
     /// Un messaggio dall'altro capo del dominio.
     ///
-    /// # Perche' il ruolo decide, e non la sola forma del corpo
-    ///
-    /// Perche' `Corpo::Esito` e `Corpo::EsitoVerifica` sono due tipi
-    /// distinti (`isolamento.md`, e vedi [`Ruolo`]), e solo **uno** dei due e'
-    /// quello atteso per questo dialogo. L'altro — se mai arrivasse, che sia
-    /// un bug, una risposta fuori sequenza, o l'esito di un altro tentativo —
-    /// non deve chiudere la conversazione **come se fosse** quello giusto:
-    /// finisce in `altri_messaggi`, esattamente come un `Saluto` o un
-    /// `Incarico` arrivati qui fuori posto. La conseguenza e' fail-closed:
-    /// senza un esito del tipo atteso, `cosa_manca_alla_barriera` vede
-    /// `esiti.len() != 1` e la barriera non si chiude mai su un successo.
+    /// Decide il ruolo (vedi [`Ruolo`]): l'esito del tipo non atteso finisce in
+    /// `altri_messaggi` come qualunque messaggio fuori posto. E' fail-closed:
+    /// senza un esito del tipo atteso `cosa_manca_alla_barriera` vede
+    /// `esiti.len() != 1` e la barriera non si chiude su un successo.
     fn messaggio(&mut self, corpo: Corpo) {
         match (self.ruolo, corpo) {
             (Ruolo::Worker, Corpo::Esito(esito)) => {
@@ -394,17 +301,9 @@ impl Registro {
 
     /// Se i produttori hanno detto tutto quello che possono dire.
     ///
-    /// # Perche' due fatti e non tre
-    ///
-    /// Perche' l'**uscita** non arriva dai produttori: la osserva il conduttore,
-    /// e la osserva **dopo** aver smesso di ascoltare — raccogliere un figlio
-    /// mentre si aspetta che parli vorrebbe dire ucciderlo per sapere se aveva
-    /// altro da dire.
-    ///
-    /// Aspettarla dentro il giro sarebbe quindi aspettare se stessi: il giro non
-    /// finirebbe mai, e a chiuderlo resterebbe solo il timeout — cioe' ogni
-    /// esecuzione, anche quella riuscita, finirebbe fuori tempo massimo. E' un
-    /// difetto che questo codice ha avuto, e che un caso ha trovato appendendosi.
+    /// Non pretende l'**uscita**: la osserva il conduttore **dopo** aver smesso
+    /// di ascoltare. Aspettarla qui sarebbe aspettare se stessi, e ogni
+    /// esecuzione finirebbe per timeout.
     pub(super) const fn si_puo_smettere_di_ascoltare(&self) -> bool {
         (self.fine_pulita || !self.interruzioni.is_empty()) && self.quiescente
     }
@@ -435,19 +334,12 @@ impl Registro {
 
     /// Se i tre fatti terminali sono tutti arrivati.
     ///
-    /// # Perche' tre e non quattro
-    ///
-    /// Perche' l'`Esito` **puo' mancare**: un worker che muore non dichiara
-    /// nulla, e aspettarlo vorrebbe dire aspettare per sempre un processo che
-    /// non c'e' piu'. La sua assenza e' un'informazione — «morto senza esito» —
-    /// non una condizione da attendere.
-    ///
-    /// Il canale conta come finito anche se si e' rotto: un filo troncato non
-    /// portera' altro. Che sia finito bene o male lo dice un campo diverso.
+    /// Non pretende l'`Esito`: un worker che muore non dichiara nulla, e
+    /// l'assenza e' un'informazione, non una condizione da attendere. Il canale
+    /// conta come finito anche se si e' rotto.
     ///
     /// Introspezione dei casi: la conduzione vera si ferma con
-    /// [`Self::si_puo_smettere_di_ascoltare`], che non pretende l'uscita —
-    /// l'osserva `chiudi`, dopo, per un'altra ragione.
+    /// [`Self::si_puo_smettere_di_ascoltare`].
     #[cfg(any(test, feature = "internals"))]
     pub(super) const fn concluso(&self) -> bool {
         (self.fine_pulita || !self.interruzioni.is_empty())
@@ -483,22 +375,10 @@ impl Registro {
 
     /// Le contraddizioni fra i fatti, **ordinate** e senza ripetizioni.
     ///
-    /// # Le tre, e perche' sono diverse fra loro
-    ///
-    /// **Piu' di un esito** e' una violazione del protocollo, e lo e' anche
-    /// quando i due dicono la stessa cosa: l'esito *chiude* la conversazione, e
-    /// un secondo messaggio dopo la chiusura dice che l'altro capo non sta
-    /// seguendo il protocollo — che i contenuti coincidano non lo rimette in
-    /// piedi. Qui non c'e' niente da arbitrare, e per questo non si arbitra.
-    ///
-    /// **Piu' di un'uscita diversa** e' una contraddizione **nostra**: l'uscita
-    /// la osserviamo noi, e osservarla due volte in modo uguale e' la stessa
-    /// lettura fatta due volte. In modo diverso significa che una delle due
-    /// letture e' rotta, e non c'e' modo di sapere quale.
-    ///
-    /// **Piu' di una lettura dell'evidenza** e' la stessa cosa: se ne fa una,
-    /// dopo la quiescenza, e due letture della stessa cosa in un momento in cui
-    /// nulla cambia piu' non dovrebbero esistere.
+    /// **Piu' di un esito** viola il protocollo anche se i contenuti coincidono:
+    /// l'esito chiude la conversazione. **Piu' di un'uscita diversa** e' una
+    /// lettura nostra rotta, senza modo di sapere quale. **Piu' di una lettura
+    /// dell'evidenza** non dovrebbe esistere: se ne fa una, dopo la quiescenza.
     fn contraddizioni(&self) -> Vec<String> {
         let mut trovate = Vec::new();
         if self.esiti.len() > 1 {
@@ -589,36 +469,13 @@ impl Registro {
 
     /// La diagnostica di riga arrivata con l'esito, **intera**.
     ///
-    /// # Perche' si possiede invece di contarla
+    /// Viaggia accanto all'errore e non dentro: [`DiagnosticaSulFilo`] non e'
+    /// isomorfa a `RowDiagnostics`, e riempirne i campi mancanti inventerebbe
+    /// osservazioni. E' un limite dichiarato: portarla fino a `RowDiagnostics`
+    /// richiede un portatore tipizzato, non dei default.
     ///
-    /// Perche' un conteggio conserva l'esistenza, non il contenuto: dire «ce
-    /// n'e' una» e buttarla e' un modo piu' educato di buttarla. Se il dato non
-    /// va perso, va **tenuto**.
-    ///
-    /// # Perche' fuori dall'errore
-    ///
-    /// Perche' [`DiagnosticaSulFilo`] non e' isomorfa a `RowDiagnostics`: le
-    /// mancano campi, e riempirli con valori inventati direbbe di aver osservato
-    /// cose che nessuno ha osservato. L'errore di dominio porta quindi i quattro
-    /// assi — quelli si', senza perdite — e la diagnostica viaggia **accanto**,
-    /// nella forma in cui e' arrivata.
-    ///
-    /// E' un limite dichiarato, non una perdita: chi legge l'esito del
-    /// supervisore ha tutto. Cio' che resta aperto e' se debba arrivare fino a
-    /// `RowDiagnostics`, e per farlo serve un portatore tipizzato — non dei
-    /// default.
-    ///
-    /// # Perche' solo quando l'esito e' uno
-    ///
-    /// Perche' con due esiti non esiste **la** diagnostica: ce ne sono due, e
-    /// prendere quella del primo arrivato sarebbe di nuovo un arbitrato — lo
-    /// stesso che il registro rifiuta di fare sull'esito, fatto di nascosto su
-    /// cio' che l'esito si porta dietro. Due rapporti degli stessi due esiti,
-    /// consegnati in ordine opposto, direbbero cose diverse.
-    ///
-    /// Quando gli esiti sono piu' d'uno il protocollo e' gia' contraddittorio e
-    /// non si conclude: le diagnostiche restano tutte nel rapporto, ordinate, e
-    /// nessuna viene eletta.
+    /// Solo quando l'esito e' uno: con piu' esiti sceglierne una sarebbe un
+    /// arbitrato, e restano tutte nel rapporto.
     fn diagnostica_di_riga(&self) -> Option<DiagnosticaSulFilo> {
         let [solo] = &self.esiti[..] else {
             return None;
@@ -650,20 +507,11 @@ impl Registro {
 
     /// I fatti per la classificazione, **consumando il registro**.
     ///
-    /// # Perche' consuma
+    /// Consuma perche' la classificazione avviene una volta sola.
     ///
-    /// Perche' la classificazione avviene una volta sola, e prendere `self` per
-    /// valore e' il modo di dirlo con il tipo invece che con un commento: dopo
-    /// questa chiamata il registro non esiste piu', quindi non c'e' una seconda
-    /// chiamata da evitare per disciplina.
-    ///
-    /// # Perche' `publish_completato` e' sempre falso
-    ///
-    /// Perche' il publish non appartiene a questo perimetro: e' la sequenza di
-    /// `PR-10`, e finche' non c'e' nessuno che la compie, dichiararla compiuta
-    /// sarebbe una bugia. La riga 1 della matrice resta quindi irraggiungibile
-    /// qui, e un worker che dichiara successo produce `DaVerificare` — che e'
-    /// «prosegui», non «riuscito».
+    /// `publish_completato` e' sempre falso: il publish non appartiene a questo
+    /// perimetro (`PR-10`). La riga 1 della matrice resta irraggiungibile qui, e
+    /// un successo dichiarato produce `DaVerificare`, cioe' «prosegui».
     fn in_fatti(self) -> FattiDopoLaQuiescenza {
         let esito = self.esiti.first().map(|dichiarato| match dichiarato {
             EsitoDichiarato::Successo { .. } => crate::classificazione::EsitoWorker::Successo,
@@ -686,12 +534,8 @@ impl Registro {
 
     /// L'esito, **classificato una volta sola**.
     ///
-    /// # Perche' le contraddizioni si guardano prima
-    ///
-    /// Perche' classificare fatti che si contraddicono produce un esito che
-    /// sembra normale. Chi lo legge non ha modo di sapere che sotto ci sono due
-    /// osservazioni incompatibili, e la prima cosa che farebbe con un esito
-    /// normale e' crederci.
+    /// Le contraddizioni si guardano prima: classificarle produrrebbe un esito
+    /// che sembra normale.
     ///
     /// # Errors
     ///
@@ -709,26 +553,16 @@ impl Registro {
         let diagnostica_di_riga = self.diagnostica_di_riga();
         let rapporto = self.evidenza_dei_fatti();
         let manca = self.cosa_manca_alla_barriera(difetti_della_conduzione);
-        // Il digest e i conteggi dichiarati non entrano in `classifica`
-        // (vedi `in_fatti`: il publish non appartiene a questo perimetro),
-        // ma chi riceve `DaVerificare` ne ha bisogno per la verifica
-        // indipendente — senza, non avrebbe nulla da confrontare col
-        // contenuto riletto dell'artefatto.
+        // Digest e conteggi non entrano in `classifica`, ma chi riceve
+        // `DaVerificare` li confronta con l'artefatto riletto.
         let esito_dichiarato = self.esiti.first().and_then(|dichiarato| match dichiarato {
             EsitoDichiarato::Successo { digest, conteggi } => Some((digest.clone(), *conteggi)),
             EsitoDichiarato::Errore(_) | EsitoDichiarato::Panic { .. } => None,
         });
 
-        // **La barriera precede la classificazione.** `FattiDopoLaQuiescenza` si
-        // chiama cosi' perche' quello e' il momento in cui i suoi campi
-        // significano qualcosa: prima, l'evidenza e' una fotografia di qualcosa
-        // che si muove, e l'esito del worker puo' non essere ancora arrivato.
-        // Costruirli su un dominio ancora abitato sarebbe una bugia dichiarata
-        // nel nome del tipo.
-        //
-        // Non e' una cautela in piu' su `DaVerificare`: e' la condizione perche'
-        // **qualunque** classificazione abbia senso. Senza, la stessa esecuzione
-        // diventa `Timeout` o `LimiteAttribuito` secondo quando il kernel
+        // **La barriera precede la classificazione**, per ogni esito: su un
+        // dominio ancora abitato l'evidenza si muove, e la stessa esecuzione
+        // diventerebbe `Timeout` o `LimiteAttribuito` secondo quando il kernel
         // consegna un OOM.
         if !self.quiescente {
             return Err(Impedimento::BarrieraIncompleta(manca));
@@ -736,22 +570,11 @@ impl Registro {
 
         let classificato = classifica(self.in_fatti());
 
-        // **Il resto della barriera governa il proseguire.**
-        //
-        // La quiescenza e' gia' stata pretesa sopra, per ogni esito: qui non se
-        // ne parla piu'. Cio' che resta in `manca` sono le altre voci — l'EOF
-        // che non e' arrivato, un'uscita che non e' pulita, un'osservazione
-        // saltata, un difetto della conduzione — e quelle non impediscono di
-        // **dire** com'e' andata: impediscono di **andare avanti**.
-        //
-        // `DaVerificare` non e' un esito, e' un permesso: dice «vai verso la
-        // verifica e il publish». Concederlo su un'esecuzione che non si e'
-        // vista finire vorrebbe dire pubblicare su una speranza, ed e'
-        // esattamente cio' che la §10.3 vieta.
-        //
-        // Gli altri esiti non si toccano: un errore dichiarato dal worker resta
-        // un errore anche se l'EOF non e' arrivato, e trasformarlo direbbe una
-        // cosa falsa su una cosa che si e' vista.
+        // **Il resto della barriera governa il proseguire.** Le altre voci di
+        // `manca` non impediscono di dire com'e' andata, impediscono di andare
+        // avanti: `DaVerificare` e' un permesso verso verifica e publish, e la
+        // §10.3 vieta di concederlo su un'esecuzione che non si e' vista
+        // finire. Gli altri esiti restano quelli osservati.
         if matches!(classificato, EsitoClassificato::DaVerificare { .. }) && !manca.is_empty() {
             return Err(Impedimento::BarrieraIncompleta(manca));
         }
@@ -766,15 +589,8 @@ impl Registro {
 
     /// Che cosa manca perche' si possa proseguire.
     ///
-    /// # Perche' l'elenco e non un «si'/no»
-    ///
-    /// Perche' chi legge deve sapere **che cosa** e' mancato: «non si e' visto
-    /// l'EOF» manda a cercare un discendente che tiene il canale, «il dominio
-    /// non e' quiescente» manda a guardare il cgroup, e un difetto della
-    /// conduzione manda a guardare noi. Un booleano li manderebbe tutti e tre
-    /// nello stesso posto sbagliato.
-    ///
-    /// L'elenco e' **ordinato**, come tutto cio' che il registro riporta.
+    /// Un elenco **ordinato** e non un booleano: ogni voce manda chi legge a
+    /// cercare in un posto diverso.
     fn cosa_manca_alla_barriera(&self, difetti_della_conduzione: &[String]) -> Vec<String> {
         let mut manca = Vec::new();
         if self.esiti.len() != 1 {
@@ -817,33 +633,17 @@ impl Registro {
 /// L'esito del supervisore: la classificazione, **e** cio' che non entra nella
 /// classificazione.
 ///
-/// # Perche' due campi
-///
-/// Perche' `EsitoClassificato` risponde a «com'e' andata», e la diagnostica di
-/// riga non e' una risposta a quella domanda: e' cio' che il worker osserva
-/// mentre lavora. Infilarla nell'errore richiederebbe di convertirla
-/// in `RowDiagnostics`, che ha campi che il filo non porta — e inventarli
-/// sarebbe peggio che tenerla da parte.
-///
-/// Tenendola qui, la conversione dell'errore resta **senza perdite sui quattro
-/// assi** e la diagnostica resta **intera nella sua forma**. Nessuna delle due
-/// affermazioni copre l'altra, e per questo sono due campi e non uno.
+/// La diagnostica di riga sta accanto a `EsitoClassificato` e non nell'errore:
+/// cosi' l'errore resta senza perdite sui quattro assi e la diagnostica resta
+/// intera nella forma del filo (vedi `Registro::diagnostica_di_riga`).
 #[derive(Debug)]
 pub(super) struct EsitoDelSupervisore {
     /// Com'e' andata, secondo la precedenza della §10.3.
     pub(super) classificato: EsitoClassificato,
     /// Che cosa il registro aveva, riga per riga.
     ///
-    /// # Perche' esce insieme all'esito
-    ///
-    /// Perche' l'esito e' una conclusione, e una conclusione non dice da quali
-    /// fatti viene. Due esecuzioni possono finire entrambe in `Timeout` — una
-    /// perche' il worker non ha mai parlato, l'altra perche' ha parlato tardi —
-    /// e chi legge deve poterle distinguere senza rieseguirle.
-    ///
-    /// E' anche l'unica finestra sul registro, che `concludi` consuma: senza,
-    /// nessun caso potrebbe dire **quali** fatti sono arrivati, solo che
-    /// l'esito e' quello.
+    /// Distingue esecuzioni con lo stesso esito ma fatti diversi, ed e' l'unica
+    /// finestra sul registro che `concludi` consuma.
     pub(super) rapporto: Vec<(&'static str, String)>,
     /// Cio' che il worker ha osservato sulle righe, se lo ha detto.
     ///
@@ -855,34 +655,20 @@ pub(super) struct EsitoDelSupervisore {
     /// esito e' un successo — indipendentemente da come `classificato` va a
     /// finire.
     ///
-    /// Non e' una seconda affermazione sull'esito: e' il dato grezzo che chi
-    /// riceve `DaVerificare` deve confrontare con l'artefatto riletto,
-    /// perche' questa macchina non lo fa (`in_fatti`, sopra). Un
-    /// `classificato` diverso da `DaVerificare` — timeout, OOM attribuito,
-    /// cancellazione — dice che quel successo dichiarato non autorizza
-    /// comunque la pubblicazione: chi legge questo campo deve guardare
-    /// `classificato` prima di usarlo, non il contrario.
+    /// E' il dato grezzo da confrontare con l'artefatto riletto. Non autorizza
+    /// nulla da solo: si guarda `classificato` prima di usarlo.
     pub(super) esito_dichiarato: Option<(DigestArtefatto, ConteggiDichiarati)>,
 }
 
 /// L'evidenza del dominio con l'istantanea «prima» gia' presa, **prima dello
 /// spawn**.
 ///
-/// # Perche' un tipo e non un ordine di chiamate
-///
-/// Perche' l'evidenza e' un delta, e un delta vale quanto il suo «prima».
-/// Un'istantanea presa dopo lo spawn — dopo l'handshake e l'`Incarico`, quando
-/// il worker lavora gia' — assorbe un OOM avvenuto nel frattempo: il delta
-/// torna zero, la classe diventa `Assente` e l'esito `Internal` invece di
-/// `ResourceLimit`, senza che niente lo segnali.
-///
-/// L'unico costruttore chiede in prestito il
-/// [`DominioPreparato`](super::DominioPreparato), che lo spawner **consuma**:
-/// dopo `avvia` quel valore non esiste piu', e il compilatore non lascia
-/// prendere l'istantanea tardi.
-///
-/// Dominio, radice e tetto sono quelli del preparato — canonici, e il tetto
-/// riletto dal file — non i percorsi che il chiamante ha nominato.
+/// L'evidenza e' un delta: un «prima» preso dopo lo spawn assorbe un OOM
+/// avvenuto nel frattempo, e l'esito diventa `Internal` invece di
+/// `ResourceLimit` in silenzio. L'unico costruttore prende in prestito il
+/// [`DominioPreparato`](super::DominioPreparato), che lo spawner consuma: il
+/// compilatore non lascia prendere l'istantanea tardi. Dominio, radice e tetto
+/// sono quelli canonici del preparato.
 #[cfg(target_os = "linux")]
 pub(super) struct EvidenzaDaPrimaDelloSpawn {
     lettore: adattatori::LeggiEvidenzaDominio,
@@ -908,24 +694,15 @@ impl EvidenzaDaPrimaDelloSpawn {
     /// scrive, il canale operativo che non si apre — riletto attraverso
     /// l'evidenza del dominio.
     ///
-    /// # Perche'
+    /// Fra lo spawn e [`conduci_isolato`] un OOM si presenta come un canale
+    /// chiuso; la §10.3 mette l'evidenza del dominio davanti all'esito del
+    /// canale.
     ///
-    /// Perche' fra lo spawn e [`conduci_isolato`] il worker e' gia' vivo nel
-    /// suo dominio, e un OOM li' si presenta al supervisore come un canale
-    /// chiuso: la causa del dialogo direbbe «isolamento non disponibile» o
-    /// «protocollo», e la memoria sparirebbe dalla diagnosi. La precedenza
-    /// della §10.3 mette l'evidenza del dominio davanti all'esito del canale.
-    ///
-    /// # La barriera prima della lettura
-    ///
-    /// Va chiamata dopo che il figlio e' stato chiuso e raccolto, ma il
-    /// figlio raccolto e' solo il capofila: l'evidenza si legge a dominio
+    /// Va chiamata dopo che il figlio e' stato raccolto, e legge a dominio
     /// **quiescente** (`F4-10`). Se la quiescenza non arriva entro
-    /// [`conduzione::ATTESA_DELLA_QUIESCENZA`], il dominio si termina con
-    /// `cgroup.kill` e si riattende, come prescrive la §10.3: l'esito e'
-    /// allora **ambiguo**, e resta attribuito solo se l'evidenza lo attribuisce.
-    /// Un dominio che non si svuota nemmeno dopo `cgroup.kill` non si legge, e
-    /// l'errore lo dice.
+    /// [`conduzione::ATTESA_DELLA_QUIESCENZA`], termina con `cgroup.kill` e
+    /// riattende: l'esito e' allora **ambiguo**, attribuito solo se l'evidenza
+    /// lo attribuisce. Un dominio che non si svuota nemmeno cosi' non si legge.
     ///
     /// Rende la causa invariata quando l'evidenza non dice niente
     /// (`Assente`, `Indeterminata`) e il dominio si e' svuotato da se'.
@@ -1059,64 +836,26 @@ fn attendi_la_quiescenza(osservatore: &mut adattatori::SorvegliaDominio) -> bool
 /// Conduce un tentativo reale: dominio vero, worker vero, evidenza vera —
 /// non i finti di `conduzione::tests`.
 ///
-/// # Che cosa fa, in ordine
-///
 /// Costruisce il [`produttori::CanaleOperativo`] dall'accordo gia' concluso
-/// (l'handshake e' compiuto da chi chiama, prima: questa macchina esiste
-/// solo dopo), gli adattatori reali del dominio
-/// ([`adattatori::SorvegliaDominio`], [`adattatori::TerminaDominio`], e
-/// [`adattatori::LeggiEvidenzaDominio`] da [`EvidenzaDaPrimaDelloSpawn`]) e i
-/// [`conduzione::Dintorni`], poi
-/// chiama [`conduzione::conduci`] e traduce il suo esito.
+/// (l'handshake lo compie chi chiama), gli adattatori reali del dominio e i
+/// [`conduzione::Dintorni`], poi chiama [`conduzione::conduci`] e traduce il
+/// suo esito.
 ///
-/// # Che cosa rende
+/// Rende digest e conteggi dichiarati **solo** quando la conduzione raggiunge
+/// `DaVerificare`: il permesso di procedere alla verifica indipendente, non la
+/// pubblicazione (`PR-10`). Ogni altro esito diventa un errore classificato.
 ///
-/// Il digest e i conteggi dichiarati dal worker, quando e **solo** quando la
-/// conduzione raggiunge `DaVerificare`: il permesso di procedere alla
-/// verifica indipendente, non la pubblicazione stessa (`PR-10`, che questo
-/// modulo non chiama). Ogni altro esito — timeout, OOM attribuito,
-/// cancellazione, pressione non attribuita, evidenza inutilizzabile, un
-/// errore o un panico dichiarati dal worker, una terminazione ambigua —
-/// diventa un errore classificato, mai un digest da passare alla verifica.
+/// `annullamento_esterno` (per esempio l'handler Ctrl-C della CLI) e'
+/// sorvegliato da un filo che nasce in `consegna_annullatore` e chiede
+/// l'annullamento tramite [`produttori::Annullatore`]. Se il filo non nasce la
+/// conduzione prosegue: la cancellazione e' cooperativa e senza promessa di
+/// immediatezza (`errori-e-limiti.md#cancellazione`).
 ///
-/// # La cancellazione esterna
-///
-/// `annullamento_esterno` e' il token che un chiamante — l'handler Ctrl-C
-/// della CLI, oggi — puo' cancellare mentre questa funzione e' ferma dentro
-/// [`conduzione::conduci`]. Il collegamento e' un filo che **sorveglia** il
-/// token e chiede l'annullamento tramite [`produttori::Annullatore`] non
-/// appena lo vede cancellato: `consegna_annullatore` e' l'unico momento in
-/// cui la conduzione consegna quell'annullatore, quindi il filo nasce li' e
-/// nessun altrove.
-///
-/// Se il filo di sorveglianza non nasce — un guasto del sistema, non
-/// un'evidenza sul dominio — la conduzione **prosegue comunque**: la
-/// cancellazione e' cooperativa e senza promessa di immediatezza
-/// (`errori-e-limiti.md#cancellazione`), e un tentativo che stesse
-/// altrimenti per riuscire non merita di fallire per un filo che nessuno ha
-/// chiesto di avviare.
-///
-/// # Il parametro `ruolo`
-///
-/// Nomina **chi** sta dall'altro capo del dominio — [`Ruolo::Worker`] o
-/// [`Ruolo::Verificatore`] — nei messaggi d'errore e di log, e sceglie quale
-/// corpo del protocollo la conduzione accetta come esito che chiude il
-/// dialogo (vedi [`Registro::messaggio`]). La macchina stessa resta
-/// **generica**: giudica un dialogo tracciato contro quiescenza, evidenza,
-/// timeout e cancellazione del dominio, e non guarda mai se chi le parla
-/// esegue un piano o rilegge un artefatto — ma un messaggio come «il worker
-/// isolato e' andato in panico» direbbe il falso se a essere andato in panico
-/// fosse il verificatore, e un `Corpo::EsitoVerifica` accettato come se fosse
-/// un `Corpo::Esito` (o viceversa) renderebbe invisibile una distinzione che
-/// il protocollo tratta come portante. Un parametro invece di due copie della
-/// funzione: due copie sarebbero due occasioni di divergere proprio nel punto
-/// — la classificazione — che questo modulo esiste per tenere unico.
-///
-/// # Il parametro `evidenza`
-///
-/// Porta l'istantanea «prima» dei contatori del dominio, e la si puo' avere
-/// solo da [`EvidenzaDaPrimaDelloSpawn::prendi`], che chiede in prestito il
-/// [`DominioPreparato`](super::DominioPreparato) che lo spawner consuma.
+/// `ruolo` nomina chi sta dall'altro capo nei messaggi e sceglie il corpo che
+/// chiude il dialogo (vedi [`Registro::messaggio`]); la macchina resta
+/// generica, e un parametro evita due copie che divergano proprio sulla
+/// classificazione. `evidenza` si ottiene solo da
+/// [`EvidenzaDaPrimaDelloSpawn::prendi`].
 ///
 /// # Errors
 ///
@@ -1137,9 +876,6 @@ pub(super) fn conduci_isolato<P: ProcessoFiglio>(
     evidenza: EvidenzaDaPrimaDelloSpawn,
     annullamento_esterno: CancellationToken,
 ) -> std::result::Result<(DigestArtefatto, ConteggiDichiarati), PlenoraError> {
-    // Un solo nome, usato per tutti i messaggi qui sotto: tenerlo come
-    // variabile locale invece di chiamare `ruolo.nome()` a ogni riga rende
-    // visibile che e' **la stessa** fonte ovunque compaia `{soggetto}`.
     let soggetto = ruolo.nome();
     // Un errore qui non puo' uscire con `?`: lascerebbe cadere `guardia` con
     // il figlio vivo, e la sentinella di `FiglioVivo` interromperebbe il
@@ -1208,10 +944,7 @@ pub(super) fn conduci_isolato<P: ProcessoFiglio>(
     if let Some(diagnostica) = &supervisore.diagnostica_di_riga {
         eprintln!("plenora: diagnostica di riga del {soggetto} isolato: {diagnostica:?}");
     }
-    // Un solo punto che legge l'evidenza e la categoria, qualunque sia
-    // l'esito: gli accessori di `EsitoClassificato` esistono apposta perche'
-    // un chiamante non debba ripetere la stessa estrazione in ogni ramo del
-    // match sotto.
+    // Un solo punto legge evidenza e categoria, qualunque sia l'esito.
     if !supervisore.classificato.pubblica() {
         if let Some(prova) = supervisore.classificato.evidenza() {
             eprintln!(
@@ -1292,11 +1025,9 @@ fn segnala_pulizia_della_conduzione<P: ProcessoFiglio>(contorno: &conduzione::Co
     {
         eprintln!("plenora: pulizia della conduzione isolata: {motivo}");
     }
-    // Se il figlio non si e' lasciato raccogliere, `contorno` lo porta
-    // ancora sotto guardia: lasciarlo cadere qui e' il cammino previsto
-    // (la sentinella di `FiglioVivo` scatta con un abort, mai in silenzio),
-    // ma un log chiaro prima di un abort vale piu' di un abort spiegato solo
-    // dal codice che lo ha causato.
+    // Un figlio non raccolto e' ancora sotto guardia: lasciarlo cadere fa
+    // scattare la sentinella di `FiglioVivo` con un abort, e il log lo
+    // annuncia prima.
     if contorno.figlio_non_raccolto.is_some() {
         eprintln!(
             "plenora: il worker isolato non si e' lasciato raccogliere: il processo abortira'"
@@ -1343,17 +1074,10 @@ fn interpreta_classificato(
             "il {soggetto} isolato non ha concluso entro {} secondi",
             tempo_di_esecuzione.as_secs()
         ))),
-        // `PlenoraError::Cancelled`, non `Internal`: e' la stessa categoria
-        // e lo stesso exit code (130) del percorso non isolato per lo
-        // stesso genere di esito — non un difetto interno, una
-        // cancellazione cooperativa osservata per davvero. `node`/
-        // `operation` qui non identificano un nodo del DAG (non ce n'e' uno
-        // in questo dialogo): portano il soggetto isolato e la fase in cui
-        // la cancellazione e' stata osservata, con lo stesso significato
-        // descrittivo che gia' hanno altrove in questo file i messaggi di
-        // `ResourceLimit`/`Timeout`. Nessun `execution_id` da questo lato
-        // del confine — resta assente (stringa vuota, omessa dal contesto
-        // reso, vedi `PlenoraError::execution_location`).
+        // `Cancelled`, non `Internal`: stessa categoria ed exit code del
+        // percorso non isolato. `node`/`operation` portano il soggetto isolato
+        // e la fase, non un nodo del DAG; `execution_id` resta vuoto (vedi
+        // `PlenoraError::execution_location`).
         EsitoClassificato::Cancellato { .. } => Err(PlenoraError::Cancelled {
             node: soggetto.to_owned(),
             operation: "dominio isolato".to_owned(),
@@ -1420,54 +1144,23 @@ fn interpreta_classificato(
 
 /// Perche' dai fatti non esce un esito.
 ///
-/// # Perche' non e' una variante dell'esito
-///
-/// Perche' non e' un modo in cui l'esecuzione puo' andare: e' un modo in cui la
-/// **nostra osservazione** puo' rompersi. Metterla fra gli esiti classificati
-/// la renderebbe una risposta alla domanda «com'e' andata», e non lo e' — la
-/// risposta e' che non lo sappiamo, e perche'.
+/// Non e' una variante dell'esito: non dice com'e' andata l'esecuzione, dice
+/// che la **nostra osservazione** si e' rotta, e perche'.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Impedimento {
     /// Un produttore non e' nato: l'esecuzione non e' stata **osservata**.
     ///
-    /// # Perche' e' un impedimento e non un esito
-    ///
-    /// Perche' non dice niente su come e' andata. Il sistema ha rifiutato un
-    /// thread — un limite raggiunto, memoria finita — e cio' che segue non e'
-    /// un'esecuzione osservata male: e' un'esecuzione di cui manca l'osservatore.
-    /// Darle un esito la farebbe sembrare qualcosa che e' andato in un modo.
-    ///
-    /// # Che cosa **non** significa
-    ///
-    /// Non significa «il tentativo non e' cominciato». Il worker a quel punto
-    /// **esiste gia'**, puo' avere discendenti, e puo' aver gia' scritto sul
-    /// canale. Dire che non e' cominciato lascerebbe credere che non ci sia
-    /// niente da chiudere — ed e' il contrario: chi rinuncia deve chiudere il
-    /// dominio, raccogliere il figlio e drenare cio' che e' gia' arrivato,
-    /// esattamente come su ogni altro cammino.
+    /// Non significa «il tentativo non e' cominciato»: il worker esiste gia',
+    /// e chi rinuncia deve chiudere il dominio, raccogliere il figlio e drenare
+    /// cio' che e' arrivato, come su ogni altro cammino.
     ProduttoreNonNato { chi: &'static str, motivo: String },
     /// La barriera causale non e' completa.
     ///
-    /// # Perche' un impedimento e non un esito piu' cauto
-    ///
-    /// Perche' cio' che manca non e' un'informazione in meno sullo stesso esito:
-    /// e' la ragione per cui **nessun esito significa quello che dice**.
-    ///
-    /// Il caso piu' netto e' la **quiescenza**. Finche' nel dominio c'e'
-    /// qualcuno vivo, i contatori della memoria non sono un'osservazione ma una
-    /// fotografia di qualcosa che si muove: il prototipo misura domini in cui
-    /// l'evidenza dice zero al ritorno della `wait` e uno duecento millisecondi
-    /// dopo. Classificare li' vorrebbe dire far dipendere l'esito
-    /// da quando il kernel consegna un evento — la stessa esecuzione
-    /// diventerebbe `Timeout` o `LimiteAttribuito` secondo il momento.
-    ///
-    /// Gli altri pezzi — l'EOF, l'uscita pulita, le osservazioni mancate —
-    /// impediscono invece di **proseguire**: `DaVerificare` e' un permesso, e
-    /// concederlo su un'esecuzione che non si e' vista finire vorrebbe dire
-    /// pubblicare su una speranza.
-    ///
-    /// Declassare silenziosamente a «terminazione ambigua» sarebbe peggio: chi
-    /// legge cercherebbe un worker morto male, invece della barriera che manca.
+    /// Senza **quiescenza** i contatori della memoria si muovono ancora (il
+    /// prototipo li misura cambiare dopo il ritorno della `wait`), e nessun
+    /// esito significa quello che dice. Le altre voci impediscono di
+    /// proseguire verso `DaVerificare`. Declassare a «terminazione ambigua»
+    /// manderebbe chi legge a cercare un worker morto male.
     BarrieraIncompleta(Vec<String>),
     /// Due o piu' fatti che non possono essere veri insieme.
     ///
@@ -1506,14 +1199,9 @@ impl std::fmt::Display for Impedimento {
 
 /// La categoria, dal filo al dominio.
 ///
-/// # Perche' esaustiva e scritta a mano
-///
-/// Perche' le due enumerazioni sono **due**, e restano allineate solo se
-/// qualcuno se ne accorge quando smettono di esserlo. Un `match` esaustivo lo
-/// fa fare al compilatore: una variante nuova da una parte non compila finche'
-/// non le si dice dove va. Una conversione per nome — passando dalle stringhe
-/// stabili — compilerebbe sempre e fallirebbe a runtime, cioe' nel posto
-/// sbagliato.
+/// Un `match` esaustivo scritto a mano: una variante nuova da una parte non
+/// compila finche' non la si mappa, dove una conversione per nome fallirebbe a
+/// runtime.
 const fn categoria(dal_filo: CategoriaSulFilo) -> ErrorCategory {
     match dal_filo {
         CategoriaSulFilo::InvalidPlan => ErrorCategory::InvalidPlan,
@@ -1584,35 +1272,13 @@ const fn ritentativo(dal_filo: &RetrySulFilo) -> RetryDisposition {
 
 /// L'errore del worker, portato **senza perdere gli assi**.
 ///
-/// # Perche' `Replayed` e non una variante scelta per categoria
+/// [`PlenoraError::Replayed`] porta i quattro assi cosi' come arrivano, senza
+/// ricalcolarli da una variante scelta per categoria. `execution_reason` e'
+/// `None` perche' il protocollo non lo trasporta.
 ///
-/// Perche' la categoria di `PlenoraError` discende dalla variante, tranne che
-/// qui: [`PlenoraError::Replayed`] porta gli assi **cosi' come arrivano**, e
-/// `category`, `phase`, `remote_effect` e `retry_disposition` li rendono senza
-/// ricalcolarli. Sceglierne invece una che «produca» la categoria dichiarata
-/// avrebbe funzionato per alcune e per altre no — e per quelle no la categoria
-/// riportata sarebbe stata inventata.
-///
-/// # Perche' `execution_reason` e' `None`
-///
-/// Perche' non viaggia. Quel campo serve a rigenerare il testo canonico quando
-/// l'execution id viene assegnato **dopo** lo snapshot, e il protocollo non lo
-/// trasporta: metterci il messaggio sanitizzato lo farebbe passare per un
-/// motivo semantico che nessuno ha mandato.
-///
-/// # Senza perdite **sugli assi**, e non oltre
-///
-/// La diagnostica di riga non entra qui, e dirlo per intero conta: questa
-/// conversione e' senza perdite sui quattro assi, non senza perdite in
-/// assoluto. [`DiagnosticaSulFilo`] non e' isomorfa a `RowDiagnostics` — le
-/// mancano campi — e completarli con valori inventati direbbe di aver osservato
-/// cose che nessuno ha osservato.
-///
-/// Non viene pero' nemmeno scartata: la possiede
-/// [`EsitoDelSupervisore::diagnostica_di_riga`], **intera** e nella forma in
-/// cui e' arrivata. Cio' che resta aperto e' se debba arrivare fino a
-/// `RowDiagnostics`, e per farlo serve un portatore tipizzato. La decisione e'
-/// registrata in `errori-e-limiti.md`.
+/// Senza perdite sugli assi, non in assoluto: la diagnostica di riga la
+/// possiede [`EsitoDelSupervisore::diagnostica_di_riga`], e il limite e'
+/// registrato in `errori-e-limiti.md`.
 fn errore_di_dominio(dal_filo: &ErroreSulFilo) -> PlenoraError {
     PlenoraError::Replayed(Box::new(ReplayedError {
         category: categoria(dal_filo.categoria),
@@ -1629,22 +1295,11 @@ fn errore_di_dominio(dal_filo: &ErroreSulFilo) -> PlenoraError {
 
 /// La forma del panico, dal filo al dominio.
 ///
-/// # Perche' passa dall'autorita' invece di riscrivere le tre stringhe
-///
-/// Perche' due elenchi della stessa cosa divergono. `FormaDelPayload` esiste
-/// per garantire che il **contenuto** di un panico non entri mai dove il
-/// progetto dichiara che non entra, e la garanzia sta nel fatto che il suo
-/// unico costruttore chiama `plenora_core::panic_policy::forma_payload`.
-/// Aggiungere un costruttore che prende una stringa la toglierebbe.
-///
-/// Qui si costruisce invece un **rappresentante** di ciascuna delle tre forme —
-/// un `&'static str`, una `String`, un intero — e si chiede all'autorita' che
-/// forma abbia. I rappresentanti sono vuoti o nulli: non portano niente da
-/// pubblicare, e l'unica cosa che si estrae da loro e' il loro **tipo**.
-///
-/// Cosi' la nozione di forma resta una sola. Se un giorno l'autorita' ne
-/// distinguesse una quarta, questa funzione la seguirebbe senza che nessuno se
-/// ne ricordi.
+/// L'unico costruttore di `FormaDelPayload` chiama
+/// `plenora_core::panic_policy::forma_payload`, ed e' cio' che tiene il
+/// contenuto di un panico fuori dall'output. Qui si passa all'autorita' un
+/// **rappresentante** vuoto di ciascuna forma, di cui conta solo il tipo: la
+/// nozione di forma resta una sola.
 fn forma_di_dominio(forma: FormaPanicSulFilo) -> crate::classificazione::FormaDelPayload {
     use crate::classificazione::FormaDelPayload;
     match forma {

@@ -24,24 +24,10 @@ const SOGLIA: Duration = Duration::from_secs(2);
 
 /// Aspetta che il filo dell'ascolto **abbia concluso**.
 ///
-/// # Perche' si guarda il filo, e non l'orologio
-///
-/// Perche' «il lettore ha gia' visto quel frame» e' un fatto, e un `sleep` non
-/// lo osserva: lo presume. La presunzione regge su una macchina scarica e salta
-/// su una carica, dove il caso diventa rosso senza che ci sia niente di rotto da
-/// trovare — un rosso che non insegna nulla e che si finisce per rilanciare.
-///
-/// `is_finished` guarda invece la cosa vera: il filo si e' concluso oppure no.
-/// Ci si riprova finche' non lo e', con un passo breve.
-///
-/// La soglia resta, ed e' quello che dice di essere: non una garanzia, ma il
-/// punto oltre il quale non si chiama piu' sfortuna.
-///
-/// # Perche' qui e non dentro `ferma_e_raccogli`
-///
-/// Perche' quella porta **consuma** l'ascolto e raccoglie il filo: e' la sola, e
-/// va bene che lo sia. Chiamarla per sapere se il lavoro e' finito vorrebbe dire
-/// non poterlo piu' chiedere.
+/// Guarda il filo con `is_finished`, a passi brevi, invece di presumerlo con
+/// un `sleep` che salta su una macchina carica. La soglia non e' una garanzia:
+/// e' il punto oltre il quale non si chiama piu' sfortuna. Non usa
+/// `ferma_e_raccogli`, che consuma l'ascolto.
 fn concluso(ascolto: &Ascolto) {
     let cominciato = Instant::now();
     while !ascolto.mano.is_finished() {
@@ -67,17 +53,10 @@ fn annulla() -> Vec<u8> {
 
 /// **Un `Annulla` cancella il token, e il lavoro cooperativo finisce da se'.**
 ///
-/// # Che cosa prova, e perche' e' il caso che conta
-///
-/// Che l'annullamento arrivi **al lavoro** e non solo al lettore. La leva e'
-/// una sola — lo stesso `CancellationToken` che entra nel `RuntimeContext` — e
-/// un lettore che la tirasse su un token diverso lascerebbe il lavoro correre
-/// fino in fondo: il supervisore dovrebbe allora forzare la terminazione, cioe'
-/// uccidere un processo che avrebbe potuto fermarsi da solo.
-///
-/// Il «lavoro» qui e' un ciclo che guarda il token, com'e' un confine
-/// cooperativo dell'executor. Nessuno lo interrompe da fuori: finisce perche' il
-/// token e' cancellato, e il caso fallisce se non finisce entro la soglia.
+/// Prova che l'annullamento arrivi **al lavoro**: la leva e' lo stesso
+/// `CancellationToken` del `RuntimeContext`, e un token diverso lascerebbe il
+/// lavoro correre fino alla terminazione forzata. Il «lavoro» e' un ciclo che
+/// guarda il token, come un confine cooperativo dell'executor.
 #[test]
 fn un_annullamento_ferma_il_lavoro_cooperativo_senza_forzature() {
     let (lettore, mut scrittore) = std::io::pipe().expect("la pipe si apre");
@@ -163,15 +142,9 @@ fn la_chiusura_del_canale_non_e_un_guasto() {
 
 /// **Un lettore che non ha visto niente si lascia comunque raccogliere.**
 ///
-/// # Perche' e' il caso che tiene in piedi tutti gli altri
-///
-/// Perche' e' il cammino normale: il lavoro finisce, nessun annullamento
-/// arriva, e il lettore e' fermo dentro la propria attesa. Se non si fermasse,
-/// il processo non uscirebbe — e un worker che non esce e' proprio cio' che il
-/// supervisore deve poi uccidere.
-///
-/// Il caso non ha bisogno di una soglia: se l'arresto non funzionasse,
-/// `ferma_e_raccogli` non tornerebbe affatto e sarebbe il runner a dirlo.
+/// E' il cammino normale: se l'arresto non funzionasse il processo non
+/// uscirebbe. Non serve una soglia: `ferma_e_raccogli` non tornerebbe, e lo
+/// direbbe il runner.
 #[test]
 fn un_ascolto_muto_si_ferma_e_si_raccoglie() {
     let (lettore, scrittore) = std::io::pipe().expect("la pipe si apre");

@@ -47,17 +47,9 @@ fn la_forma_attesa_passa() {
 
 /// **La matrice dei rifiuti**, con l'oracolo esatto.
 ///
-/// # Perche' il tipo e non il messaggio
-///
-/// Perche' un caso che confrontasse i messaggi proverebbe la formulazione, e uno
-/// che ne contasse i **distinti** si lascerebbe ingannare dai valori
-/// interpolati: due occorrenze dello stesso ramo, con meta' diverse, danno due
-/// stringhe diverse e sembrerebbero due ragioni. Il tipo non ha quel margine —
-/// a ogni forma storta corrisponde **una** variante, e il confronto e' per
-/// identita'.
-///
-/// La colonna della meta' non e' un dettaglio: dire «lettura» quando il guasto
-/// e' nella scrittura manda a guardare il descrittore sbagliato.
+/// Si confronta il tipo, non il messaggio, che interpola valori: a ogni forma
+/// storta corrisponde **una** variante. La colonna della meta' conta: dire
+/// «lettura» per un guasto nella scrittura manda al descrittore sbagliato.
 #[test]
 fn ogni_forma_storta_ha_la_sua_ragione() {
     let matrice: [(&str, Option<std::ffi::OsString>, Rifiuto); 20] = [
@@ -167,13 +159,9 @@ fn ogni_forma_storta_ha_la_sua_ragione() {
 
 /// **Ogni ragione dice una cosa diversa.**
 ///
-/// Il tipo garantisce che le ragioni siano distinte; questo caso garantisce che
-/// lo restino **una volta dette**. Due varianti che producessero lo stesso
-/// messaggio sarebbero due diagnosi che chi legge un log non puo' separare — e
-/// il tipo, da solo, non lo impedisce.
-///
-/// Le meta' entrano nel confronto perche' entrano nel messaggio: «lettura» e
-/// «scrittura» mandano a guardare due descrittori diversi.
+/// Il tipo garantisce ragioni distinte; il caso garantisce che restino
+/// distinte **una volta dette**, meta' comprese, perche' chi legge un log
+/// possa separarle.
 #[test]
 fn ragioni_distinte_danno_messaggi_distinti() {
     let tutte = [
@@ -311,19 +299,10 @@ fn due_numeri_uguali_passano_la_lettura_e_cadono_sulla_coppia() {
 
 /// **Le capability offerte sono quelle compilate, e nient'altro.**
 ///
-/// # Che cosa fissa
-///
-/// Due cose che possono rompersi separatamente. La **derivazione**: l'elenco
-/// viene da `compiled_capabilities`, quindi un backend che entra o esce dalla
-/// build entra o esce dall'accordo senza che nessuno aggiorni una seconda
-/// lista. E l'**assenza dei profili di publish**: sono in
-/// `local_capabilities`, non qui, perche' il worker scrive sul temporaneo e non
-/// pubblica — offrirli sarebbe promettere un passo che questo processo non
-/// esercita.
-///
-/// Il confronto e' fatto per uguaglianza sull'insieme intero e non per
-/// appartenenza: un caso che cercasse solo l'assenza di `publish_atomic`
-/// lascerebbe passare qualunque altra voce inventata.
+/// Fissa la **derivazione** da `compiled_capabilities` e l'**assenza dei
+/// profili di publish**, che stanno in `local_capabilities` perche' il worker
+/// non pubblica. Il confronto e' per uguaglianza sull'insieme intero, cosi'
+/// nessuna voce inventata passa.
 #[test]
 #[cfg(target_os = "linux")]
 fn le_capability_offerte_sono_i_backend_compilati() {
@@ -362,18 +341,11 @@ fn le_capability_offerte_sono_i_backend_compilati() {
 
 /// **Esaurita la quota il progresso smette, il lavoro no.**
 ///
-/// # Che cosa fissa
-///
-/// Le due meta' della regola, che si rompono separatamente. Che oltre
-/// [`MAX_PROGRESSO`] **non parta piu' niente**: il supervisore conta i messaggi
-/// e ne rifiuta uno oltre la quota, quindi emetterne di piu' non e' generosita',
-/// e' una violazione che l'altro capo classifica come tale. E che l'emissione
-/// oltre quota **non sia un errore**: se lo fosse, risalirebbe fino a fermare la
-/// scrittura dell'artefatto, cioe' rovinerebbe il lavoro per proteggere un
-/// messaggio facoltativo.
-///
-/// I giri sono piu' di [`MAX_PROGRESSO`] e la quota e' quella vera: un caso con
-/// una quota finta proverebbe il contatore, non la regola.
+/// Oltre [`MAX_PROGRESSO`] **non parte piu' niente** (il supervisore lo
+/// classificherebbe come violazione), e l'emissione oltre quota **non e' un
+/// errore** (fermerebbe l'artefatto per un messaggio facoltativo). I giri
+/// superano la quota vera: una quota finta proverebbe il contatore, non la
+/// regola.
 #[test]
 fn oltre_la_quota_il_progresso_tace_e_il_lavoro_continua() {
     let mut quota = super::QuotaDiProgresso::nuova();
@@ -432,18 +404,10 @@ fn l_errore_di_chi_invia_non_viene_ingoiato() {
 
 /// **La variabile del canale si scrive e si rilegge uguale.**
 ///
-/// # Che cosa tiene insieme
-///
-/// Le due meta' della stessa convenzione, che vivono in due posti: chi la
-/// **scrive** sta col tipo dei numeri, chi la **legge** sta qui. Sono separate
-/// perche' hanno due chiamanti — il supervisore scrive, il worker legge — e una
-/// forma nuova da una parte sola non romperebbe niente in compilazione: il
-/// worker rifiuterebbe a runtime una variabile che il supervisore considera
-/// corretta, e la diagnosi parlerebbe della variabile invece che della regola.
-///
-/// Il caso copre anche i valori che il parser tratta a parte — il tre, che e' il
-/// primo descrittore non standard — perche' una forma canonica che valesse solo
-/// per i numeri grandi non sarebbe una forma canonica.
+/// Chi scrive sta col tipo dei numeri, chi legge qui: una forma cambiata da
+/// una parte sola non romperebbe la compilazione, ma il worker rifiuterebbe a
+/// runtime. Copre anche il tre, primo descrittore non standard, che il parser
+/// tratta a parte.
 #[test]
 #[cfg(target_os = "linux")]
 fn la_variabile_del_canale_va_e_torna() {
@@ -459,16 +423,9 @@ fn la_variabile_del_canale_va_e_torna() {
 
 /// **I due fatti non collassano mai l'uno sull'altro.**
 ///
-/// # Che cosa esclude
-///
-/// I quattro modi in cui uno dei due puo' sparire, e sono quattro perche' le
-/// combinazioni sono quattro: si prova ognuna, perche' un ramo scritto male non
-/// si vede dagli altri.
-///
-/// Il caso che conta di piu' e' l'ultimo: quando **nemmeno l'esito parte**, chi
-/// legge deve trovare sia il canale che non ha retto sia il messaggio che non
-/// ha potuto portare. Un `?` sull'invio farebbe uscire il primo e perderebbe il secondo, e la
-/// diagnosi parlerebbe di una pipe rotta senza dire che cosa ci sarebbe passato.
+/// Si prova ognuna delle quattro combinazioni. Conta di piu' l'ultima: quando
+/// **nemmeno l'esito parte**, devono restare sia il canale che non ha retto
+/// sia il messaggio che non ha potuto portare.
 #[test]
 #[cfg(target_os = "linux")]
 fn i_due_fatti_sopravvivono_in_tutte_e_quattro_le_combinazioni() {
@@ -504,13 +461,8 @@ fn i_due_fatti_sopravvivono_in_tutte_e_quattro_le_combinazioni() {
 
 /// **Il secondo fatto entra nel messaggio dell'errore, senza toccarne gli assi.**
 ///
-/// # Che cosa esclude
-///
-/// Che un guasto del canale di controllo sparisca perche' il lavoro aveva gia'
-/// il proprio errore. E, dall'altra parte, che lo si porti dentro
-/// sovrascrivendo categoria o fase: quelle descrivono il **primo** errore, e
-/// riscriverle direbbe che il guasto del canale ha causato cio' che invece il
-/// lavoro ha gia' deciso.
+/// Esclude che il guasto del canale di controllo sparisca, e che entri
+/// sovrascrivendo categoria o fase, che descrivono il **primo** errore.
 #[test]
 #[cfg(target_os = "linux")]
 fn il_secondo_fatto_entra_nel_messaggio_e_non_negli_assi() {

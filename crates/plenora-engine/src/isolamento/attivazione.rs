@@ -3,45 +3,26 @@
 //!
 //! Due domande distinte, con due tempi distinti:
 //!
-//! 1. **La piattaforma lo supporta affatto?** E' un fatto statico — dipende
-//!    da quale binario e' stato compilato e su quale sistema gira, non
-//!    dall'ambiente di una singola esecuzione. Si verifica in validazione,
-//!    prima di ogni altra cosa, con [`verifica_piattaforma`]: su Windows e
-//!    macOS un piano che richiede l'isolamento e' respinto li', non ignorato
-//!    ne' lasciato ricadere sull'esecuzione in-process.
-//! 2. **Questo ambiente Linux puo' prepararlo, ora?** E' dinamico — dipende
-//!    da privilegi, cgroup delegati e dalla politica che il dispiegamento ha
-//!    configurato — e non e' una proprieta' del piano (isolamento.md,
-//!    `PreparaIsolamento`, §3.1 e §9-bis): lo stesso piano puo' riuscire su
-//!    una macchina e fallire su un'altra. Si verifica dopo, con
-//!    [`autorizza_profilo_isolato`], e il rifiuto e'
+//! 1. **La piattaforma lo supporta affatto?** Fatto statico, verificato in
+//!    validazione con [`verifica_piattaforma`]: su Windows e macOS il piano e'
+//!    respinto li', non ignorato ne' ricaduto sull'esecuzione in-process.
+//! 2. **Questo ambiente Linux puo' prepararlo, ora?** Dipende da privilegi,
+//!    cgroup delegati e politica del dispiegamento, non dal piano
+//!    (isolamento.md, `PreparaIsolamento`, §3.1 e §9-bis). Si verifica dopo,
+//!    con [`autorizza_profilo_isolato`], e il rifiuto e'
 //!    [`PlenoraError::IsolationUnavailable`], mai `InvalidPlan`.
 //!
-//! # Selezione: la presenza del campo, non un campo a parte
+//! La **richiesta** e' la sola presenza di `max_domain_memory_bytes` in un
+//! piano v6; l'assenza mantiene il percorso attuale, senza tetto implicito.
+//! Formato e hash del piano restano quelli ratificati (`Plan Budget 1.0`).
+//! Una richiesta di isolamento **non ricade mai** sull'esecuzione in-process:
+//! o parte isolata, o e' un rifiuto esplicito.
 //!
-//! Questa e' una decisione semantica nuova di `PR-12`, non una conseguenza
-//! gia' dimostrata della ratifica di `PR-2`: la sola presenza di
-//! `max_domain_memory_bytes` in un piano v6 costituisce la **richiesta** del
-//! profilo isolato. La sua assenza mantiene il percorso attuale, senza tetto
-//! implicito. Non esiste un campo separato "seleziona l'isolamento": il
-//! formato e l'hash del piano restano quelli gia' ratificati (`Plan Budget
-//! 1.0`) — questo modulo non li tocca, decide solo che cosa fare di un
-//! valore che il parser gia' produce.
-//!
-//! **Una richiesta di isolamento non puo' mai ricadere sull'esecuzione
-//! in-process.** Se la piattaforma non lo supporta, o l'host non puo'
-//! prepararlo, l'esito e' un rifiuto esplicito — mai un'esecuzione silenziosa
-//! col percorso ordinario, che negherebbe la garanzia che il piano ha chiesto.
-//!
-//! # Politica dell'host: fidata, separata dal piano
-//!
-//! Il tetto che l'host concede non viaggia nel piano ne' nel protocollo: un
-//! piano non fidato non deve poter scegliere il proprio budget (debito
-//! dichiarato in stato-e-roadmap.md). Viene da **configurazione del
-//! dispiegamento** — qui, una variabile d'ambiente del processo — che il
-//! piano non scrive e non legge. Senza di essa il profilo isolato non e'
-//! disponibile: non si ripiega su «allora vale ciò che chiede il piano»,
-//! che sarebbe l'host piu' esposto per omissione, non per scelta.
+//! Il tetto che l'host concede viene dalla **configurazione del
+//! dispiegamento** (una variabile d'ambiente), mai dal piano ne' dal
+//! protocollo: un piano non fidato non sceglie il proprio budget (debito
+//! dichiarato in stato-e-roadmap.md). Senza, il profilo isolato non e'
+//! disponibile.
 
 use plenora_core::error::{PlenoraError, Result};
 use serde::Serialize;
@@ -54,18 +35,11 @@ pub const VARIABILE_POLITICA_HOST: &str = "PLENORA_ISOLATION_HOST_MAX_MEMORY_BYT
 /// Rifiuta un profilo isolato richiesto su una piattaforma che non lo
 /// supporta.
 ///
-/// Presa dei fatti (`sistema_operativo`) separata dal giudizio, per la stessa
-/// ragione delle altre osservazioni di questo confine: la lettura puo'
-/// variare per motivi che il giudizio non deve conoscere — qui la lettura e'
-/// [`std::env::consts::OS`] al sito di chiamata reale — mentre il giudizio e'
-/// una funzione pura, verificabile su ogni piattaforma di CI senza dipendere
-/// da quella su cui il test gira davvero.
-///
-/// Non serve alcuna verifica dinamica — non un cgroup, non un privilegio —
-/// perche' la domanda a cui risponde non e' «questo ambiente lo offre ora»
-/// ma «questo binario, su questo sistema, potrebbe mai offrirlo». `F4-11` e
-/// `F4-6` la rendono un fatto della piattaforma: nessun prototipo dimostra
-/// oggi contenimento *e* attribuzione fuori da Linux.
+/// Il giudizio e' puro e separato dalla lettura ([`std::env::consts::OS`] al
+/// sito di chiamata), quindi si verifica su ogni piattaforma di CI. Nessuna
+/// verifica dinamica: `F4-11` e `F4-6` ne fanno un fatto della piattaforma,
+/// perche' nessun prototipo dimostra contenimento *e* attribuzione fuori da
+/// Linux.
 ///
 /// # Errors
 ///
@@ -142,9 +116,8 @@ fn politica_da(grezzo: Option<&str>) -> std::result::Result<u64, RifiutoPolitica
 
 /// Legge la politica dell'host dall'ambiente del processo.
 ///
-/// Linux soltanto: [`verifica_piattaforma`] ha gia' respinto, in validazione,
-/// ogni richiesta di isolamento su un'altra piattaforma — chi arriva qui e'
-/// gia' su Linux per costruzione.
+/// Linux soltanto: [`verifica_piattaforma`] ha gia' respinto in validazione
+/// le altre piattaforme.
 ///
 /// # Errors
 ///
@@ -159,17 +132,12 @@ pub fn leggi_politica_dell_host() -> Result<u64> {
 /// Decide se il profilo isolato puo' partire con questa politica dell'host,
 /// e a quale tetto.
 ///
-/// Il tetto effettivo e' `min(richiesto_byte, limite_host_byte)` — la
-/// politica dell'host **ritaglia**, non sostituisce, e non e' mai
-/// ampliabile dal piano. Se il tetto cosi' ritagliato scende sotto il
-/// budget governato effettivo, l'incoerenza si rifiuta qui, PRIMA di
-/// qualunque spawn: il dominio non modifica implicitamente i budget che il
-/// piano ha gia' dichiarato coerenti fra loro, li rifiuta apertamente.
-///
-/// Nessun codice di questa funzione avvia un processo o tocca dati: e' una
-/// decisione pura su tre interi, e chi in futuro costruira' il chiamante di
-/// produzione non potra' ottenere un tetto da passare allo spawner senza
-/// prima ottenere `Ok` da qui.
+/// Il tetto effettivo e' `min(richiesto_byte, limite_host_byte)`: l'host
+/// **ritaglia**, non sostituisce, e il piano non amplia. Se il tetto
+/// ritagliato scende sotto il budget governato effettivo si rifiuta qui,
+/// prima di qualunque spawn, invece di modificare implicitamente i budget del
+/// piano. E' una decisione pura su tre interi, e il tetto da passare allo
+/// spawner si ottiene solo con un `Ok` da qui.
 ///
 /// # Errors
 ///
@@ -211,23 +179,17 @@ pub fn prepara_e_autorizza(
 }
 
 /// Costruisce il rifiuto per una richiesta di isolamento che
-/// `executor::execute` non puo' ancora servire.
+/// `executor::execute` non puo' servire.
 ///
-/// Prova prima l'autorizzazione vera ([`prepara_e_autorizza`]): se rifiuta
-/// gia' — piattaforma, politica assente, ritaglio incoerente — quel motivo
-/// e' quello giusto. Se invece autorizza, resta comunque un rifiuto, perche'
-/// questa funzione e' chiamata solo dalla guardia di `executor::execute`
-/// (`PR-12`): il chiamante di produzione vero e'
-/// `isolamento::esecuzione_isolata::esegui_isolato`, che non passa da qui —
-/// se l'autorizzazione riesce ma si arriva comunque a questo punto, e'
-/// perche' qualcuno ha invocato `execute` direttamente su un piano che
-/// richiede l'isolamento, scavalcando il percorso isolato.
+/// Prova prima l'autorizzazione vera ([`prepara_e_autorizza`]): se rifiuta,
+/// quel motivo e' quello giusto. Se autorizza, resta un rifiuto: la funzione
+/// e' chiamata solo dalla guardia di `executor::execute`, e il chiamante di
+/// produzione (`isolamento::esecuzione_isolata::esegui_isolato`) non passa da
+/// qui. Arrivarci significa aver scavalcato il percorso isolato.
 ///
-/// Su una piattaforma diversa da Linux questo ramo non dovrebbe mai essere
-/// raggiunto: [`verifica_piattaforma`], chiamata da `planner::validate`
-/// prima che un `ValidatedGraph` possa esistere, ha gia' respinto la
-/// richiesta la'. Il ramo rifiuta comunque, invece di presupporre
-/// l'irraggiungibile: nessun `unreachable!` in codice di produzione (R6).
+/// Fuori da Linux il ramo non si raggiunge, perche' `planner::validate` ha
+/// gia' chiamato [`verifica_piattaforma`]; rifiuta comunque, senza
+/// `unreachable!` in produzione (R6).
 #[must_use]
 pub fn richiesta_isolamento_non_ancora_servibile(
     richiesto_byte: u64,

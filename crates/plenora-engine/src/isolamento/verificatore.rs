@@ -1,42 +1,24 @@
 //! Il verificatore: che cosa fa appena nasce, prima di dire qualunque cosa.
 //!
-//! # Mirror di `worker`, non una sua variante
+//! Mirror di `worker`: stesso confine fra «prima che il canale esista» e «dopo
+//! l'accordo», e le due pipe si accertano con
+//! [`super::worker::accerta_gli_estremi`]. Le differenze:
 //!
-//! Stessa disciplina, stesso confine fra «prima che il canale esista» e
-//! «dopo l'accordo», e per la stessa ragione: fino all'accordo non c'e'
-//! nessuno a cui dire niente, e da li' in poi ogni fallimento diventa un
-//! esito dichiarato invece di un rifiuto muto — ma non lo **stesso** tipo di
-//! esito del worker: vedi sotto.
-//!
-//! Cio' che distingue il verificatore dal worker non e' il canale — le due
-//! pipe si riaprono e si accertano esattamente allo stesso modo, e infatti
-//! questo modulo **riusa** [`super::worker::accerta_gli_estremi`] invece di
-//! duplicarlo — ma:
-//!
-//! - un **terzo** descrittore ereditato, l'artefatto in sola lettura, che il
-//!   worker non riceve mai;
-//! - l'incarico che riceve dopo l'accordo e' [`IncaricoVerifica`], non
-//!   [`Incarico`](crate::protocollo::messaggi::Incarico): non un piano da
-//!   eseguire, ma un contratto atteso, un digest atteso, conteggi attesi e un
-//!   budget di memoria da cui derivare i tetti del confine ostile Arrow IPC;
-//! - l'esito che dichiara e' [`crate::protocollo::messaggi::EsitoVerificaSulFilo`]
-//!   dentro `Corpo::EsitoVerifica`, non [`crate::protocollo::messaggi::EsitoWorkerSulFilo`]
-//!   dentro `Corpo::Esito`: stessa forma (successo con digest/conteggi
-//!   riconfermati, errore tipizzato, panic), tipo distinto sul filo — un
-//!   `EsitoVerificaSulFilo::Successo` dice «ho riconfermato», non «ho
-//!   eseguito». `isolamento::macchina::Ruolo::Verificatore` e' cio' che
-//!   dice alla macchina a stati del coordinatore di aspettarsi questo corpo
-//!   e non l'altro;
-//! - **nessuna capability offerta**: il verificatore non esegue nessun
-//!   kernel, quindi non ha niente da dichiarare di piu' della sola identita'
-//!   (artefatto, resolver, ambiente) — e il supervisore, dal proprio lato
-//!   (`isolamento::prova::supervisore_per`), non ne richiede nessuna;
-//! - **nessuna capability di pubblicazione**: questo processo non riceve mai
-//!   la destinazione finale, ne' un percorso ne' un handle di scrittura su
-//!   di essa. Il solo descrittore che riceve sull'artefatto e' aperto in
-//!   sola lettura dal coordinatore, e lo resta — lo stesso principio di
-//!   `GA-5` per il worker, qui applicato a un processo che non ha nemmeno il
-//!   piano da cui la destinazione potrebbe dedursi.
+//! - un **terzo** descrittore ereditato, l'artefatto in sola lettura;
+//! - riceve [`IncaricoVerifica`], non
+//!   [`Incarico`](crate::protocollo::messaggi::Incarico): contratto, digest e
+//!   conteggi attesi, e il budget da cui derivare i tetti del confine ostile
+//!   Arrow IPC;
+//! - dichiara [`crate::protocollo::messaggi::EsitoVerificaSulFilo`] in
+//!   `Corpo::EsitoVerifica`, non
+//!   [`crate::protocollo::messaggi::EsitoWorkerSulFilo`]: stessa forma, tipo
+//!   distinto («ho riconfermato», non «ho eseguito»), e
+//!   `isolamento::macchina::Ruolo::Verificatore` dice alla macchina quale
+//!   aspettarsi;
+//! - **nessuna capability offerta**, perche' non esegue kernel, e il
+//!   supervisore (`isolamento::prova::supervisore_per`) non ne richiede;
+//! - **nessuna capability di pubblicazione**: non riceve la destinazione ne'
+//!   un handle di scrittura, come `GA-5` per il worker.
 
 use plenora_core::error::PlenoraError;
 
@@ -81,18 +63,9 @@ fn numero_artefatto_dall_ambiente() -> Result<i32> {
 
 /// Il giudizio sul valore, separato dalla lettura dell'ambiente.
 ///
-/// # Perche' separati
-///
-/// Stessa ragione di [`super::worker::numeri_da`]: l'ambiente e' globale al
-/// processo, e casi che lo scrivessero si darebbero fastidio a vicenda
-/// girando in parallelo. Isolato, il giudizio e' una funzione pura, e le
-/// forme storte si scrivono invece di produrle mutando l'ambiente vero.
-///
-/// # Perche' la forma si giudica con `descrittore_canonico`
-///
-/// Perche' e' la stessa funzione che rilegge gli argomenti dello spawner —
-/// la forma che il coordinatore scrive con `i32::to_string()` e' una sola, e
-/// un secondo giudizio scritto qui potrebbe divergere dal primo.
+/// Come [`super::worker::numeri_da`]: l'ambiente e' globale al processo, e il
+/// giudizio puro si prova senza mutarlo. La forma si giudica con
+/// `descrittore_canonico`, la stessa funzione degli argomenti dello spawner.
 ///
 /// # Errors
 ///
@@ -107,14 +80,9 @@ fn numero_da(grezzo: Option<&str>) -> std::result::Result<i32, String> {
 
 /// Riapre i tre estremi e **accerta** che siano quelli.
 ///
-/// # L'ordine
-///
-/// 1. le due pipe, con [`super::worker::accerta_gli_estremi`] — che accerta
-///    gia' da solo il monothread, i due numeri, la riapertura di ciascuna e
-///    che non siano la stessa pipe;
-/// 2. il terzo descrittore, **dopo**: se il canale non regge non c'e' modo
-///    di dire al coordinatore che l'artefatto e' inaccessibile, quindi non
-///    ha senso accertarlo per primo.
+/// Prima le due pipe ([`super::worker::accerta_gli_estremi`]), poi il terzo
+/// descrittore: senza canale non si puo' dire al coordinatore che l'artefatto
+/// e' inaccessibile.
 ///
 /// # Errors
 ///
@@ -132,10 +100,8 @@ fn accerta_gli_estremi() -> Result<Estremi> {
 
 /// Conclude l'accordo con il coordinatore.
 ///
-/// Stessa sequenza di [`super::worker`], con una sola differenza dichiarata:
-/// la descrizione locale non offre **nessuna** capability — il verificatore
-/// non attraversa nessun kernel, e dichiararne una direbbe una capacita' che
-/// questo processo non esercita.
+/// Stessa sequenza di [`super::worker`], ma la descrizione locale non offre
+/// **nessuna** capability: il verificatore non esegue kernel.
 ///
 /// # Errors
 ///
@@ -204,13 +170,8 @@ pub(super) fn dal_confine() -> DalConfine {
 /// Riceve l'incarico di verifica, rilegge l'artefatto, e dichiara com'e'
 /// andata.
 ///
-/// # Perche' l'errore della verifica non esce di qui
-///
-/// Perche' esce **sul filo**, esattamente come per il worker: un artefatto
-/// che non supera i passi 3-8-bis non e' un fallimento del *verificatore* —
-/// e' l'esito che il coordinatore deve leggere per non pubblicare. Cio' che
-/// invece esce di qui e' il fallimento del **canale**: se l'esito non parte,
-/// il coordinatore non ha niente da leggere.
+/// L'errore della verifica esce **sul filo**: e' l'esito che il coordinatore
+/// legge per non pubblicare. Di qui esce solo il fallimento del canale.
 ///
 /// # Errors
 ///
@@ -275,27 +236,11 @@ fn esito_di_errore(causa: &PlenoraError) -> EsitoVerificaSulFilo {
 
 /// I passi da 3 a 8-bis, sull'artefatto ereditato — e nient'altro.
 ///
-/// # Perche' rende gia' l'`EsitoVerificaSulFilo`
-///
-/// Perche' il successo non porta la prova opaca che
-/// `verifica::verifica_artefatto_handle` costruisce (`ArtefattoVerificato`):
-/// quella prova vale nel processo che l'ha costruita, e non attraversa un
-/// confine — lo stesso principio per cui `isolamento::prova::riverifica` la
-/// lascia cadere. Cio' che il coordinatore ha bisogno di sapere e' digest e
-/// conteggi **riconfermati**, e questa funzione li rende esattamente uguali
-/// a quelli **attesi**: se la verifica e' riuscita, `attese.digest` e
-/// `attese.conteggi` sono per costruzione i valori che l'artefatto ha
-/// dimostrato di avere — passo 5-bis e passo 8 lo pretendono prima di
-/// concludere — quindi non c'e' un secondo valore «osservato» da leggere
-/// fuori dalla prova opaca.
-///
-/// # Perche' non rende un `Result`
-///
-/// Perche' non c'e' mai un errore da risalire: gli errori del confine
-/// diventano `EsitoVerificaSulFilo::Errore`, dentro il valore stesso che
-/// questa funzione rende sempre. Il canale del filo porta **un** esito, non
-/// un esito e un errore separato — un `Result<EsitoVerificaSulFilo>` che non
-/// e' mai `Err` direbbe una cosa falsa a chi legge la firma.
+/// Rende gia' l'`EsitoVerificaSulFilo`: la prova opaca `ArtefattoVerificato`
+/// non attraversa un confine. Sul successo digest e conteggi riconfermati
+/// sono per costruzione quelli **attesi**, che i passi 5-bis e 8 pretendono.
+/// Non rende un `Result`: gli errori del confine diventano
+/// `EsitoVerificaSulFilo::Errore`, e un `Result` mai `Err` mentirebbe.
 fn verifica(
     incarico: &IncaricoVerifica,
     token: &crate::commit_token::CommitToken,

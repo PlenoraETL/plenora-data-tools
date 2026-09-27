@@ -1,34 +1,16 @@
 //! Che cosa il worker fa dell'incarico: lo **rivalida**, lo esegue, e dichiara.
 //!
-//! # Perche' rivalida invece di fidarsi
+//! Rivalida perche' riceve un piano, non una prova. La rivalidazione e' la
+//! **stessa** `planner::validate`, e il `plan_hash` che ne esce si confronta
+//! con quello dichiarato: se divergono, i due lati non parlano dello stesso
+//! piano.
 //!
-//! Perche' il supervisore gli manda un piano, non una prova. Il piano e' gia'
-//! stato validato dall'altro lato, ma «e' stato validato» e' un'affermazione
-//! altrui: il worker che la accettasse eseguirebbe cio' che gli e' arrivato, e
-//! non cio' su cui i due si sono accordati. Un incarico intercettato o
-//! costruito male sarebbe eseguito senza che nessun passo lo neghi.
+//! Prima gli ingressi, poi il piano: `planner::validate` usa i contratti
+//! d'ingresso, e un contratto sbagliato va respinto nominando l'ingresso, non
+//! il piano.
 //!
-//! La rivalidazione non e' una copia della validazione del supervisore: e' la
-//! **stessa**, chiamata di nuovo. `planner::validate` e' un'autorita' unica, e
-//! il `plan_hash` che ne esce si confronta con quello dichiarato. Se
-//! divergono, i due lati non stanno parlando dello stesso piano — ed e' l'unica
-//! cosa che conta sapere.
-//!
-//! # L'ordine dei rifiuti
-//!
-//! Prima gli ingressi, poi il piano. Non e' indifferente: `planner::validate`
-//! ha bisogno dei contratti d'ingresso per validare il grafo, quindi un
-//! contratto che non e' quello atteso va respinto **prima** che il piano venga
-//! validato contro di lui. L'ordine opposto validerebbe un grafo su contratti
-//! che poi si scoprono sbagliati, e il rifiuto arriverebbe nominando il piano
-//! invece dell'ingresso che lo ha causato.
-//!
-//! # Che cosa questo modulo non fa
-//!
-//! Non pubblica, e non verifica il proprio artefatto. La verifica e' dei passi
-//! da 3 a 8-bis e la pubblicazione e' il passo 9: appartengono a chi ha
-//! osservato il worker, non al worker. Un processo che verificasse se stesso
-//! confronterebbe la propria affermazione con la propria affermazione.
+//! Non pubblica e non verifica il proprio artefatto: i passi da 3 a 8-bis e il
+//! passo 9 appartengono a chi osserva il worker.
 
 use std::path::Path;
 
@@ -60,18 +42,14 @@ const BLOCCO_DIGEST: usize = 64 * 1024;
 
 /// Esegue l'incarico e rende cio' che l'`Esito` dichiara.
 ///
-/// # Il progresso
-///
-/// L'osservatore riceve i totali dopo ogni batch scritto. Il suo errore
-/// **interrompe**: e' il canale verso chi aspetta, e continuare a scrivere
-/// senza di lui produrrebbe un artefatto che nessuno sa di dover verificare.
+/// L'osservatore del progresso riceve i totali dopo ogni batch scritto, e il
+/// suo errore **interrompe**: e' il canale verso chi aspetta.
 ///
 /// # Errors
 ///
 /// Qualunque errore della rivalidazione, dell'apertura degli ingressi,
 /// dell'esecuzione, della scrittura o del digest. Il chiamante lo porta
-/// sull'`Esito` come errore dichiarato: qui non si sanifica e non si
-/// riclassifica nulla, perche' gli assi dell'errore sono gia' quelli giusti.
+/// sull'`Esito` come errore dichiarato, senza sanificarlo ne' riclassificarlo.
 pub(super) fn esegui(
     incarico: &Incarico,
     token: &CommitToken,
@@ -141,17 +119,10 @@ pub(super) fn esegui(
 
 /// I contratti degli ingressi, **riletti dai file** e riconosciuti.
 ///
-/// # Perche' riletti e non trasportati
-///
-/// Perche' il contratto completo non viaggia, e la ragione sta sul tipo del
-/// filo: trasportarlo richiederebbe un codec reversibile del `DataContract`
-/// che oggi non esiste, e farebbe fidare il worker di una descrizione altrui
-/// invece del file che sta per leggere. Cio' che viaggia e' il **fingerprint**,
-/// cioe' quanto basta per dire «e' quello» senza dire che cos'e'.
-///
-/// Il fingerprint copre schema e contratto, non l'identita' dei dati: due file
-/// con righe diverse e lo stesso schema hanno lo stesso fingerprint, e va detto
-/// perche' non si prenda questo passo per una verifica del contenuto.
+/// Il contratto completo non viaggia (servirebbe un codec reversibile del
+/// `DataContract`, e il worker si fiderebbe di una descrizione altrui):
+/// viaggia il **fingerprint**. Copre schema e contratto, non il contenuto:
+/// file con righe diverse e lo stesso schema hanno lo stesso fingerprint.
 ///
 /// # Errors
 ///
@@ -198,13 +169,8 @@ fn contratti_degli_ingressi(
 
 /// Il formato dichiarato e' quello del file.
 ///
-/// # Perche' non basta lo sniffing
-///
-/// Perche' `Input::read_ipc_with_limits` riconosce il formato dal magic e apre
-/// di conseguenza: senza questo controllo, il campo `formato` dell'incarico
-/// sarebbe un campo che nessuno legge, e un ingresso dichiarato `file` e
-/// consegnato come `stream` verrebbe eseguito comunque. Un accordo su un valore
-/// che non si verifica non e' un accordo.
+/// `Input::read_ipc_with_limits` riconosce il formato dal magic: senza questo
+/// controllo il campo `formato` dell'incarico non lo leggerebbe nessuno.
 ///
 /// # Errors
 ///
@@ -240,13 +206,8 @@ const fn nome_del_formato(quale: IpcFormat) -> &'static str {
 
 /// Il piano rivalidato e' quello che l'incarico dichiara.
 ///
-/// # Perche' il confronto e' sull'hash e non sul testo
-///
-/// Perche' il `plan_hash` e' l'identita' del piano **migrato e canonico**, ed e'
-/// l'unica nozione di «stesso piano» che il programma ha. Confrontare i testi
-/// direbbe «stessi byte», che e' una domanda diversa: due testi diversi possono
-/// essere lo stesso piano, e il supervisore ne manda la forma canonica proprio
-/// perche' quella differenza non conti.
+/// Si confronta il `plan_hash`, identita' del piano **migrato e canonico**,
+/// non il testo: due testi diversi possono essere lo stesso piano.
 ///
 /// # Errors
 ///
@@ -269,18 +230,9 @@ fn accerta_il_piano(grafo: &planner::ValidatedGraph, incarico: &Incarico) -> Res
 
 /// Quanti nodi risultano completati **mentre** l'artefatto si scrive.
 ///
-/// # Perche' zero, e perche' non e' una svista
-///
-/// Perche' questa esecuzione e' uno stream: i nodi non finiscono uno dopo
-/// l'altro, restano attivi finche' l'ultimo batch non e' passato. Le metriche
-/// per nodo esistono dal primo istante — sono create tutte in una volta alla
-/// nascita dello stato — quindi contarle direbbe **quanti nodi ha il piano**,
-/// non quanti ne hanno finito il lavoro.
-///
-/// Dichiarare quel numero come «completati» sarebbe un progresso che parte al
-/// massimo e non si muove: peggio di zero, perche' sembrerebbe
-/// un'informazione. Zero dice cio' che si osserva, e cio' che si osserva e'
-/// niente.
+/// Zero: nello stream i nodi restano attivi fino all'ultimo batch, e le
+/// metriche per nodo esistono tutte dalla nascita dello stato, quindi
+/// contarle direbbe quanti nodi ha il piano. Zero dice cio' che si osserva.
 ///
 /// Il limite e' registrato in `errori-e-limiti.md`. Rientra quando l'executor
 /// osserva il completamento per nodo — che e' una contabilita' nuova sul
@@ -291,14 +243,9 @@ const fn nodi_completati_osservabili() -> u64 {
 
 /// Lo SHA-256 dell'intero artefatto finalizzato, footer compreso.
 ///
-/// # Perche' rileggendolo, e non mentre si scrive
-///
-/// Perche' il digest copre **il file finito**, footer compreso, e il footer lo
-/// scrive `finish` alla fine: un digest calcolato sui byte che passano
-/// coprirebbe tutto tranne la coda, cioe' non coprirebbe il sigillo. E'
-/// deliberatamente lo stesso valore che il passo 5-bis ricalcola: se le due
-/// letture divergessero, l'artefatto sarebbe cambiato fra la scrittura e la
-/// verifica, e il rifiuto arriverebbe da chi lo verifica.
+/// Si rilegge il file finito perche' il footer lo scrive `finish` alla fine,
+/// e un digest sui byte in transito non coprirebbe il sigillo. E' lo stesso
+/// valore che ricalcola il passo 5-bis.
 ///
 /// # Errors
 ///
@@ -332,24 +279,11 @@ fn digest_dell_artefatto(percorso: &Path) -> Result<DigestArtefatto> {
 
 /// L'errore di un ingresso, col nome che lo riguarda.
 ///
-/// Il **nome** e non il percorso: il nome e' quello che il piano dichiara, ed e'
-/// cio' che permette a chi legge di sapere quale arco del grafo non regge. Il
-/// percorso lo ha scelto il supervisore, che quindi lo sa gia'.
-///
-/// # Dove il nome si attacca, e dove no
-///
-/// `con_contesto` tocca soltanto le varianti che portano un **messaggio
-/// nostro** — `InvalidPlan`, `Schema`, `Crs`, `Unsupported` — e lascia intatte
-/// quelle che portano un errore di sistema o un'attribuzione propria, come `Io`
-/// e `DataMapping`. Su quelle il nome non compare, e va detto invece di
-/// lasciarlo credere.
-///
-/// Non lo si forza: anteporre il nome ricostruendo una variante diversa
-/// cambierebbe la **categoria** dell'errore, e un limite di risorsa che
-/// diventasse un errore di mappatura direbbe a chi classifica una cosa falsa —
-/// che e' peggio di un nome mancante. I rifiuti che questo modulo costruisce da
-/// se' nominano l'ingresso nel proprio testo, e sono quelli che riguardano
-/// l'incarico: formato dichiarato e fingerprint.
+/// Il **nome** che il piano dichiara, non il percorso, che il supervisore
+/// conosce gia'. `con_contesto` lo attacca solo alle varianti con un messaggio
+/// nostro (`InvalidPlan`, `Schema`, `Crs`, `Unsupported`), non a `Io` o
+/// `DataMapping`: forzarlo cambierebbe la categoria dell'errore. I rifiuti
+/// costruiti qui (formato, fingerprint) nominano l'ingresso da se'.
 fn all_ingresso(descrittore: &DescrittoreIngresso, causa: PlenoraError) -> PlenoraError {
     causa.con_contesto(&format!("ingresso `{}`", descrittore.nome))
 }
