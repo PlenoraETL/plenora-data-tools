@@ -51,7 +51,7 @@ use cli::commands::legacy::{
 use cli::commands::run::{run_command, DagInputs};
 use cli::commands::validate::validate_command;
 use cli::error_envelope::{emit_error_envelope, error_envelope, EXIT_CANCELLED, EXIT_INTERNO};
-use cli::process::{descrivi_panico_locale, esegui_processo};
+use cli::process::esegui_processo;
 use cli::rendering::{contract_json, hex_digest, version_json};
 
 // Quello che serve SOLO ai test di questo file, che raggiungono i nomi di
@@ -982,7 +982,9 @@ fn main() {
             let envelope = error_envelope(
                 &PlenoraError::Internal(format!(
                     "panico non gestito: {}{avvertenza}",
-                    descrivi_panico_locale(&panico)
+                    // La forma del payload, mai il testo: un `assert_eq!`
+                    // di una dipendenza puo' contenere i dati della riga.
+                    plenora_core::panic_policy::forma_payload(panico.as_ref())
                 )),
                 false,
             );

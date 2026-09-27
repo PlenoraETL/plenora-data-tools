@@ -1504,18 +1504,9 @@ pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), Arrow
     match esito {
         Ok(risultato) => risultato,
         Err(panico) => Err(ArrowTransportError::ArrowPanic(
-            descrivi_panico(&panico).to_owned(),
+            plenora_core::panic_policy::forma_payload(panico.as_ref()).to_owned(),
         )),
     }
-}
-
-/// Descrizione PUBBLICA e sanitizzata del payload di un panico.
-///
-/// Il testo di un panico di una dipendenza puo' contenere dati della riga
-/// (regola «errori senza dati»): si riporta solo la FORMA del payload.
-#[must_use]
-pub fn descrivi_panico(panico: &Box<dyn std::any::Any + Send>) -> &'static str {
-    plenora_core::panic_policy::forma_payload(panico.as_ref())
 }
 
 /// Corpo di [`decode_ipc`], senza la barriera antipanico.
