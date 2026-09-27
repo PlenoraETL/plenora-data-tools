@@ -17,11 +17,9 @@ use std::path::Path;
 use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
 use plenora_core::contract::DataContract;
 use plenora_core::error::{ErrorPhase, PlenoraError};
-use sha2::{Digest as _, Sha256};
 
 use crate::cancellation::CancellationToken;
 use crate::commit_token::CommitToken;
-use crate::esadecimale32::Esadecimale32;
 use crate::executor::{execute, Input, Inputs};
 use crate::ipc_boundary::{self, IpcFormat, IpcLimits};
 use crate::planner;
@@ -32,13 +30,6 @@ use crate::protocollo::messaggi::{
 };
 
 use super::Result;
-
-/// Byte letti per volta nel digest dell'artefatto.
-///
-/// Costante e piccola, per la stessa ragione del passo 5-bis: e' cio' che rende
-/// il digest a memoria costante invece che proporzionale alla dimensione
-/// dell'artefatto.
-const BLOCCO_DIGEST: usize = 64 * 1024;
 
 /// Esegue l'incarico e rende cio' che l'`Esito` dichiara.
 ///
@@ -251,29 +242,19 @@ const fn nodi_completati_osservabili() -> u64 {
 ///
 /// [`PlenoraError::Io`] se l'artefatto non si rilegge.
 fn digest_dell_artefatto(percorso: &Path) -> Result<DigestArtefatto> {
-    use std::io::Read as _;
-
     let mut artefatto = std::fs::File::open(percorso).map_err(|causa| {
         PlenoraError::Io(causa)
             .con_contesto("l'artefatto appena scritto non si rilegge per il digest")
             .with_phase(ErrorPhase::Read)
     })?;
-    let mut digestore = Sha256::new();
-    let mut blocco = vec![0_u8; BLOCCO_DIGEST];
-    loop {
-        let quanti = artefatto.read(&mut blocco).map_err(|causa| {
-            PlenoraError::Io(causa)
-                .con_contesto("l'artefatto non si legge per il digest")
-                .with_phase(ErrorPhase::Read)
-        })?;
-        if quanti == 0 {
-            break;
-        }
-        digestore.update(&blocco[..quanti]);
-    }
+    let digest = crate::protocollo::digest::sha256_da_lettore(&mut artefatto).map_err(|causa| {
+        PlenoraError::Io(causa)
+            .con_contesto("l'artefatto non si legge per il digest")
+            .with_phase(ErrorPhase::Read)
+    })?;
     Ok(DigestArtefatto {
         algoritmo: ALGORITMO_DIGEST.to_owned(),
-        valore: Esadecimale32::dai_byte(digestore.finalize().into()).in_esadecimale(),
+        valore: digest.in_esadecimale(),
     })
 }
 

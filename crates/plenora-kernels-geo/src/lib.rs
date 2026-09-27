@@ -881,16 +881,7 @@ pub fn validate_wkb_contract_with_depth(
     payload: &[u8],
     max_depth: usize,
 ) -> Result<(), PlenoraError> {
-    if payload.len() > MAX_WKB_BYTES {
-        return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
-    }
-    let mut cursor = WkbCursor::new(payload);
-    let mut components = 0_u64;
-    validate_wkb_geometry(&mut cursor, 0, max_depth, &mut components)?;
-    if cursor.remaining() != 0 {
-        return Err(invalid_wkb_structure("byte residui dopo la geometria"));
-    }
-    Ok(())
+    validate_wkb_contract_for_dimensions_with_depth(payload, GeometryDimensions::Xy, max_depth)
 }
 
 /// Variante stride-aware, con dimensionalita' attesa esplicita.

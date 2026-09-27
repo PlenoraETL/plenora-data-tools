@@ -1230,19 +1230,6 @@ mod tests {
         (figlio, pid)
     }
 
-    #[cfg(target_os = "linux")]
-    fn pid_esiste_ancora(pid: u32) -> bool {
-        // `kill -0` non manda nessun segnale: chiede solo al kernel se il pid
-        // esiste ancora, come processo vivo o come zombie non raccolto —
-        // esattamente cio' che questa prova deve escludere. Nessuna nuova
-        // dipendenza: e' l'utility di sistema, non una crate.
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .expect("kill -0 deve potersi eseguire")
-            .success()
-    }
-
     #[test]
     #[cfg(target_os = "linux")]
     fn supervisore_o_raccogli_rifiuta_con_errore_leggibile_e_raccoglie_il_worker() {
@@ -1288,7 +1275,7 @@ mod tests {
         // e' gia' tornato quando `esito` e' pronto, quindi la raccolta e' gia'
         // conclusa a questo punto, non in corso.
         assert!(
-            !pid_esiste_ancora(pid),
+            !crate::temp_store::process_alive(pid),
             "il worker deve essere stato raccolto (non residuo, non zombie): pid {pid}"
         );
     }
@@ -1334,7 +1321,7 @@ mod tests {
             );
         }
         assert!(
-            !pid_esiste_ancora(pid),
+            !crate::temp_store::process_alive(pid),
             "il verificatore deve essere stato raccolto (non residuo, non zombie): pid {pid}"
         );
     }
