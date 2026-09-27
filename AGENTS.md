@@ -39,6 +39,7 @@ posto in cui sono scritte.
 
 | serve | sta in |
 | --- | --- |
+| che cosa il codice dichiara oggi | [`docs/STATO.md`](docs/STATO.md) — generato con `python scripts/genera_stato.py`, non si modifica a mano |
 | che cosa manca, in ordine | [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) — autorità unica sullo stato |
 | dove le garanzie si fermano | [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) — il registro dei limiti |
 | crate, flusso, determinismo, memoria, backend | [`docs/architettura.md`](docs/architettura.md) |
