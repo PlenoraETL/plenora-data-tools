@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -10,8 +11,8 @@ use serde_json::Value;
 
 use crate::Limits;
 use crate::{
-    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, select_rows,
-    validate_output_name,
+    column_index, compare_bounds, replace_or_append, scalar_as_f64_rounded, scalar_as_numero,
+    scalar_as_string, select_rows, validate_output_name, NumericBound,
 };
 use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
@@ -186,9 +187,15 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
 pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
-    let numeric = (0..batch.num_rows())
-        .map(|row| scalar_as_f64_rounded(source.as_ref(), row))
+    // Il double calcola i bordi a larghezza uguale; la classe la decide il
+    // valore esatto, o un Int64 oltre 2^53 cadrebbe nella classe accanto.
+    let celle = (0..batch.num_rows())
+        .map(|row| scalar_as_numero(source.as_ref(), row))
         .collect::<Result<Vec<_>>>()?;
+    let numeric = celle
+        .iter()
+        .map(|numero| numero.map(|(valore, _)| valore))
+        .collect::<Vec<_>>();
     let edges = match &config.bins {
         Bins::Count(count) => equal_width_edges(&numeric, *count)?,
         Bins::Edges(edges) => {
@@ -215,14 +222,23 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
             "numero labels diverso dai bin".into(),
         ));
     }
-    let values = numeric
+    let values = celle
         .into_iter()
-        .map(|value| {
-            value.and_then(|value| {
+        .map(|numero| {
+            numero.and_then(|(_, esatto)| {
+                let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
                 (0..count)
                     .find(|index| {
-                        (value > edges[*index] || (*index == 0 && value >= edges[*index]))
-                            && value <= edges[*index + 1]
+                        let sopra = match rispetto(edges[*index]) {
+                            Some(Ordering::Greater) => true,
+                            Some(Ordering::Equal) => *index == 0,
+                            _ => false,
+                        };
+                        sopra
+                            && matches!(
+                                rispetto(edges[*index + 1]),
+                                Some(Ordering::Less | Ordering::Equal)
+                            )
                     })
                     .map(|index| {
                         config.labels.as_ref().map_or_else(
@@ -1406,6 +1422,44 @@ mod tests {
             Stat::Q25,
             Stat::Q75,
         ]
+    }
+
+    /// Un Int64 oltre 2^53 cade nella classe del suo valore, non in quella del
+    /// double vicino: 2^53 + 1 sta in (2^53, 2^53 + 2], non in (0, 2^53].
+    #[test]
+    fn bin_assegna_la_classe_sul_valore_esatto() {
+        let base = 1_i64 << 53;
+        let batch = RecordBatch::try_new(
+            Arc::new(plenora_core::arrow::schema::Schema::new(vec![
+                plenora_core::arrow::schema::Field::new("n", DataType::Int64, true),
+            ])),
+            vec![Arc::new(plenora_core::arrow::array::Int64Array::from(
+                vec![Some(base), Some(base + 1)],
+            ))],
+        )
+        .expect("fixture");
+        #[allow(clippy::cast_precision_loss)]
+        let bordi = vec![0.0, base as f64, (base + 2) as f64];
+        let config = Bin {
+            column: "n".into(),
+            bins: Bins::Edges(bordi),
+            labels: Some(vec!["bassa".into(), "alta".into()]),
+            output_column: Some("classe".into()),
+        };
+        let risultato = bin(&batch, &config).expect("bin");
+        let classi = risultato
+            .column_by_name("classe")
+            .expect("classe")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8")
+            .clone();
+        assert_eq!(
+            classi.value(0),
+            "bassa",
+            "2^53 e' il bordo superiore della prima"
+        );
+        assert_eq!(classi.value(1), "alta", "2^53 + 1 supera il bordo 2^53");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
-    Array, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+    Array, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
@@ -13,7 +13,10 @@ use serde::Deserialize;
 use plenora_core::{PlenoraError, Result};
 
 use crate::float64_source::Float64Source;
-use crate::{column_index, replace_or_append, scalar_as_string, select_rows, validate_output_name};
+use crate::{
+    column_index, ordine_esatto, replace_or_append, scalar_as_numero, scalar_as_string,
+    select_rows, validate_output_name, NumericBound,
+};
 
 use super::grouping::{
     build_native_groups, build_string_groups, cmp_i64_group_key, cmp_str_group_key,
@@ -164,6 +167,41 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
     }))
 }
 
+/// I valori distinti di un gruppo, deduplicati sul valore **esatto**: due
+/// interi oltre 2^53 con lo stesso double restano due valori. Su una colonna
+/// `Float64` il valore e' il double, con l'ordine di `total_cmp` (-0.0 e 0.0
+/// distinti, i NaN uno solo); sugli altri tipi `ordine_esatto`.
+///
+/// Un null resta nell'elenco, in testa: `reduce_numeric` decide con
+/// `skip_null`.
+///
+/// # Errors
+///
+/// Gli errori di `scalar_as_numero`.
+pub(super) fn distinti_esatti(array: &ArrayRef, rows: &[usize]) -> Result<Vec<Option<f64>>> {
+    let float64 = array.data_type() == &DataType::Float64;
+    let mut nulli = 0_usize;
+    let mut numeri = Vec::with_capacity(rows.len());
+    for row in rows {
+        match scalar_as_numero(array.as_ref(), *row)? {
+            Some(cella) => numeri.push(cella),
+            None => nulli += 1,
+        }
+    }
+    let ordine = |sinistra: &(f64, NumericBound), destra: &(f64, NumericBound)| {
+        if float64 {
+            sinistra.0.total_cmp(&destra.0)
+        } else {
+            ordine_esatto(sinistra.1, destra.1)
+        }
+    };
+    numeri.sort_by(ordine);
+    numeri.dedup_by(|destra, sinistra| ordine(sinistra, destra) == Ordering::Equal);
+    Ok(std::iter::repeat_n(None, nulli)
+        .chain(numeri.into_iter().map(|(valore, _)| Some(valore)))
+        .collect())
+}
+
 fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Option<f64>> {
     if !aggregation.skip_null && raw.iter().any(Option::is_none) {
         return Ok(None);
@@ -175,11 +213,8 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
     if !aggregation.distinct && !matches!(aggregation.function, AggFunction::Quantile) {
         return reduce_numeric_streaming(&raw, aggregation);
     }
+    // Con `distinct` i valori arrivano gia' distinti (`distinti_esatti`).
     let mut values = raw.into_iter().flatten().collect::<Vec<_>>();
-    if aggregation.distinct {
-        values.sort_by(f64::total_cmp);
-        values.dedup_by(|left, right| left.total_cmp(right) == Ordering::Equal);
-    }
     if values.is_empty() {
         return Ok(None);
     }
@@ -506,10 +541,13 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
             _ => {
                 let source = Float64Source::new(batch.column(index));
                 let values = map_groups(&groups, parallel, |rows| {
-                    let raw = rows
-                        .iter()
-                        .map(|row| source.value(*row))
-                        .collect::<Result<Vec<_>>>()?;
+                    let raw = if aggregation.distinct {
+                        distinti_esatti(batch.column(index), rows)?
+                    } else {
+                        rows.iter()
+                            .map(|row| source.value(*row))
+                            .collect::<Result<Vec<_>>>()?
+                    };
                     reduce_numeric(raw, aggregation)
                 })?;
                 result = replace_or_append(

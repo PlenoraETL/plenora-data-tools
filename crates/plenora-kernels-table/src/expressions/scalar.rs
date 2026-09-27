@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::BinaryOperator;
 use crate::{
-    column_index, compare_bounds, scalar_as_f64_rounded, scalar_as_string, NumericBound,
+    column_index, compare_bounds, scalar_as_numero, scalar_as_string, NumericBound,
     DIVISION_BY_ZERO_MESSAGE, NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
 };
 use plenora_core::{PlenoraError, Result};
@@ -106,49 +106,18 @@ pub fn confronta_numeri(left: Numero, right: Numero) -> Result<Ordering> {
     })
 }
 
-/// Il numero di una cella numerica: il double di `scalar_as_f64_rounded`
-/// (errori inclusi) e il valore esatto del tipo nativo.
+/// Il numero di una cella numerica (`scalar_as_numero`), finito.
 ///
 /// # Errors
 ///
-/// Come `scalar_as_f64_rounded`; `Schema` per un double non finito;
-/// `Internal` per un tipo che quella conversione accetta e qui non ha un
-/// valore esatto.
+/// Come `scalar_as_numero`; `Schema` per un double non finito.
 pub fn numero_della_cella(array: &dyn Array, row: usize) -> Result<Option<Numero>> {
-    use plenora_core::arrow::array::{
-        Date32Array, Decimal128Array, Float64Array, Int64Array, TimestampMillisecondArray,
-        UInt64Array,
-    };
-    let Some(valore) = scalar_as_f64_rounded(array, row)? else {
+    let Some((valore, esatto)) = scalar_as_numero(array, row)? else {
         return Ok(None);
     };
     if !valore.is_finite() {
         return Err(PlenoraError::Schema(NON_FINITE_INPUT_MESSAGE.into()));
     }
-    let any = array.as_any();
-    let esatto = if let Some(values) = any.downcast_ref::<Int64Array>() {
-        NumericBound::I64(values.value(row))
-    } else if let Some(values) = any.downcast_ref::<UInt64Array>() {
-        NumericBound::U64(values.value(row))
-    } else if let Some(values) = any.downcast_ref::<TimestampMillisecondArray>() {
-        NumericBound::I64(values.value(row))
-    } else if let Some(values) = any.downcast_ref::<Date32Array>() {
-        NumericBound::I64(i64::from(values.value(row)))
-    } else if let Some(values) = any.downcast_ref::<Float64Array>() {
-        NumericBound::F64(values.value(row))
-    } else if let Some(values) = any.downcast_ref::<Decimal128Array>() {
-        let DataType::Decimal128(_, scale) = values.data_type() else {
-            return Err(PlenoraError::Schema("decimal128 incoerente".into()));
-        };
-        NumericBound::Decimal {
-            unscaled: values.value(row),
-            scale: *scale,
-        }
-    } else {
-        return Err(PlenoraError::Internal(
-            "tipo numerico expression senza valore esatto".into(),
-        ));
-    };
     Ok(Some(Numero { valore, esatto }))
 }
 

@@ -640,8 +640,9 @@ d'origine di colonne e letterali, non sul loro double. Un operando prodotto da
 un calcolo (aritmetica, `round`, `floor`, `ceil`, `power`) vale il proprio
 double, che è il risultato dichiarato di quel calcolo; `negate` e `abs`
 restano esatti, e rifiutano un `Decimal128` il cui opposto non sta in `i128`.
-Due percorsi decisionali hanno ancora la proprietà: vedi
-[la voce che li dichiara](#tablebin-e-gli-aggregati-distinct-decidono-su-valori-arrotondati).
+Allo stesso modo `table.bin` assegna la classe e gli aggregati con
+`distinct` deduplicano sul valore esatto (`scalar_as_numero`), mentre bordi e
+riduzioni restano sul double.
 
 Non è una deroga con rientro: è la semantica dichiarata di quelle operazioni.
 
@@ -674,24 +675,6 @@ senza errore.
 (`RawValue`), con la verifica che l'hash canonico del piano non cambi.
 Nessuna delle due è una modifica locale: la prima cambia `Value` per tutto il
 workspace.
-
-### `table.bin` e gli aggregati `distinct` decidono su valori arrotondati
-
-**La regola.** `table.bin` assegna la classe confrontando con i bordi il
-double della colonna (`scalar_as_f64_rounded`), e gli aggregati numerici con
-`distinct` deduplicano i double (`Float64Source`). Un `Int64` oltre 2^53 o un
-`Decimal128` frazionario possono finire nella classe accanto, o essere contati
-come un solo valore distinto.
-
-**L'ambito.** `table.bin` e le funzioni numeriche di `table.aggregate` con
-`distinct`, compreso l'oracolo di riferimento degli aggregati.
-
-**Il pericolo che questo dichiara.** Una classe o un conteggio di distinti
-sbagliati, senza errore.
-
-**La condizione di rientro.** Confrontare e deduplicare sul valore esatto,
-come fanno i confronti di `table.expression`; la correzione segue questa
-voce e la toglie.
 
 ### Le funzioni di rango non accettano colonne testuali
 
