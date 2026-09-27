@@ -19,7 +19,8 @@ use plenora_core::{ErrorPhase, PlenoraError};
 use plenora_engine::geo_transport::pair_protocol::{write_pairs, MAX_PAIRS};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader, FrameWriter};
 use plenora_engine::geo_transport::publish::{
-    publish_with_profile, validate_pair_arrow_crs, validate_transform_arrow_crs, PublishProfile,
+    publish_with_profile, validate_pair_arrow_crs, validate_transform_arrow_crs,
+    verifica_destinazione_libera, PublishProfile,
 };
 use plenora_engine::geo_transport::transport::{
     pair_arrow_with_format, transform_arrow_with_format, ArrowOutputFormat, PairArrowSchema,
@@ -185,16 +186,8 @@ pub fn run_pipeline(
     right_path: Option<&Path>,
     output_path: &Path,
 ) -> Result<EsitoDellaPubblicazione, PlenoraError> {
-    // Una destinazione che non si lascia osservare non e' libera.
-    if output_path
-        .try_exists()
-        .map_err(plenora_core::PlenoraError::Io)?
-    {
-        return Err(contract(format!(
-            "output gia' esistente, rifiuto di sovrascriverlo: {}",
-            output_path.display()
-        )));
-    }
+    // Prima del lavoro, con la stessa classe della pubblicazione.
+    verifica_destinazione_libera(output_path)?;
     let plan: Plan = read_control_json(plan_path)?;
     let plan = plan.validate()?;
     if plan.requires_secondary() || plan.requires_blocking() {

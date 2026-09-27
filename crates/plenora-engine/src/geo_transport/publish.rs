@@ -444,6 +444,28 @@ fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
         .with_phase(ErrorPhase::Commit)
 }
 
+/// Il controllo no-clobber anticipato: la destinazione non deve esistere
+/// (errori-e-limiti.md#publish-e-cleanup).
+///
+/// E' un'anticipazione: l'autorita' e' l'`AlreadyExists` al persist, e le due
+/// strade danno la stessa classe. Chi controlla prima di cominciare il lavoro,
+/// come la CLI, usa questa funzione e non una copia.
+///
+/// # Errors
+///
+/// `PlenoraError::Conflict`, fase `Commit`, se la destinazione esiste;
+/// `PlenoraError::Io`, fase `Probe`, se non si lascia osservare: una
+/// destinazione che non si lascia osservare non e' libera.
+pub fn verifica_destinazione_libera(output_path: &Path) -> Result<(), PlenoraError> {
+    if output_path
+        .try_exists()
+        .map_err(|error| io_at(ErrorPhase::Probe, error))?
+    {
+        return Err(conflitto_sulla_destinazione(output_path));
+    }
+    Ok(())
+}
+
 /// Pubblicazione atomica dell'output con profilo selezionabile (errori-e-limiti.md#publish-e-cleanup).
 ///
 /// Rifiuta un output esistente, verifica il filesystem di destinazione
@@ -477,19 +499,7 @@ pub fn publish_with_profile<T>(
     profile: PublishProfile,
     write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
 ) -> Result<(T, EsitoDellaPubblicazione), PlenoraError> {
-    // `try_exists`, non `exists`: una destinazione che non si lascia
-    // osservare non e' una destinazione libera, e l'errore lo dice.
-    if output_path
-        .try_exists()
-        .map_err(|error| io_at(ErrorPhase::Probe, error))?
-    {
-        // Check no-clobber al confine di commit
-        // (errori-e-limiti.md#publish-e-cleanup, ICD §9). `Conflict` e non
-        // `InvalidPlan`: il piano e' corretto, e' il posto a essere occupato.
-        // E' un'**anticipazione**: l'autorita' e' l'`AlreadyExists` al persist,
-        // e le due strade danno la stessa classe.
-        return Err(conflitto_sulla_destinazione(output_path));
-    }
+    verifica_destinazione_libera(output_path)?;
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
     // Riconoscimento preliminare della destinazione: fase Probe. Solo «non
     // esiste» e «non e' una directory» sono del piano; una directory che non si
