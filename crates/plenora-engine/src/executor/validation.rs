@@ -8,9 +8,7 @@
 use std::collections::BTreeMap;
 
 use plenora_core::arrow::array::{Array, RecordBatch};
-use plenora_core::catalog::{
-    find_operation, CancellationBehavior, ExpansionConstraint, JoinExpansion,
-};
+use plenora_core::catalog::{CancellationBehavior, JoinExpansion};
 use plenora_core::contract::{DataContract, GeometryDimensions, GeometryEncoding};
 use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,

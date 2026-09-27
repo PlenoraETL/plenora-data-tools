@@ -18,7 +18,9 @@
 use std::process::Command;
 
 mod comune;
-use comune::{eseguibile, ricaduta_nel_parser};
+use comune::eseguibile;
+#[cfg(unix)]
+use comune::ricaduta_nel_parser;
 
 /// La variabile del canale, che questi casi tolgono di mezzo.
 ///

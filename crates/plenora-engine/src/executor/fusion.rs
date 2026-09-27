@@ -6,47 +6,22 @@
 //! ricade sul percorso non fuso, con lo stesso risultato, e il fatto e'
 //! contato in `geo_fusion_fallbacks` (D12.7).
 
-use crate::geo_transport::pair::preflight_decoded_bytes;
-use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
+use crate::geo_transport::transport::TransformArrowSchema;
 use crate::geo_transport::unary::{
     one_to_one_batch_fused, FusedStepError, FusedTerminal, FusedTerminalMeasure,
 };
-use crate::governor::{GovernedBatch, MemoryLease, MemoryPermit, ReservationResult};
-use crate::planner::{
-    check_compatibility, check_declared_input_contracts, local_capabilities, ValidatedGraph,
-    ARROW_VERSION, ENGINE_VERSION,
-};
-use crate::prepare::{
-    prepare, ExecutionPlan, MeasureKind, PhysicalSegment, PreparedConfig, PreparedGeoKernel,
-    PreparedKernel, PreparedTableKernel, RuntimeContext, SegmentMode,
-};
-use crate::table_engine;
-use crate::temp_store::{scavenge_stale_temp_dirs, TempStore, DEFAULT_SCAVENGE_TTL};
-use plenora_core::arrow::array::{
-    Array, ArrayRef, BinaryArray, Float64Array, RecordBatch, StringArray, UInt64Array,
-};
-use plenora_core::catalog::CATALOG;
-use plenora_core::contract::{BatchSequence, DataContract};
-use plenora_core::diagnostics::{
-    RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
-    ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
-};
-use plenora_core::{ErrorPhase, PlenoraError, Result};
-use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, decode_geometry_cell};
-use plenora_kernels_geo::operations;
+use crate::governor::ReservationResult;
+use crate::prepare::{MeasureKind, PhysicalSegment, PreparedGeoKernel, PreparedKernel};
+use plenora_core::arrow::array::{Array, BinaryArray, RecordBatch};
+use plenora_core::{PlenoraError, Result};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(test)]
 use super::inject_test_panic;
-use super::metrics::{accumulate, accumulate_time};
 use super::state::ExecState;
 use super::validation::{check_edge_batch, check_edge_counts, check_expansion};
-use super::{
-    check_batch_bytes, geo_binary_step_error, panic_step_error, record_kernel_metrics, step_error,
-};
+use super::{panic_step_error, record_kernel_metrics, step_error};
 
 /// Lunghezza del gruppo di fusione geo che si apre a `position` (0 se il
 /// kernel non apre un gruppo, architettura.md#geometrie): i membri condividono l'id assegnato

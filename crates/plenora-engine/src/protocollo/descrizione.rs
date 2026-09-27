@@ -8,6 +8,7 @@
 //! radice esclusiva, immutabile e inventariabile da cui ricavare l'insieme
 //! delle risorse. Perimetro e rientro in `errori-e-limiti.md`.
 
+#[cfg(unix)]
 use std::io::Read as _;
 
 use plenora_core::{PlenoraError, Result};
@@ -17,8 +18,11 @@ use crate::esadecimale32::Esadecimale32;
 use crate::risolutore::{Risolutore, VERSIONE};
 
 use super::digest::DigestSha256;
+#[cfg(unix)]
 use super::handshake::{Descrizione, DescrizioneLocale};
-use super::messaggi::{Ambiente, IdentitaArtefatto, IdentitaResolver};
+#[cfg(unix)]
+use super::messaggi::IdentitaArtefatto;
+use super::messaggi::{Ambiente, IdentitaResolver};
 
 /// Il percorso dell'immagine in esecuzione.
 ///
