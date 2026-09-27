@@ -16,17 +16,21 @@ CARGO_FUZZ="${FUZZ_CARGO_FUZZ:-/fuzzbin/cargo-fuzz}"
 # montano la stessa cosa non possono avere due nomi per dirlo.
 FUZZBIN_HOST="${FUZZBIN_HOST:-$HOME/.plenora-fuzz/bin}"
 
-ALL_TARGETS=(
-    plan_contract string_chain candidate_chain binary_ops
-    reshape_policies extended_ops advanced_ops
-    wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
-    geo_frame_stream
-    plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
-    protocollo_frame verifica_artefatto
-)
-TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# I target sono i `[[bin]]` di fuzz/Cargo.toml: una fonte sola, perche' una
+# copia a mano diverge in silenzio e la campagna esercita un elenco vecchio.
+ALL_TARGETS=()
+while IFS= read -r nome; do
+    ALL_TARGETS+=("$nome")
+done < <(python3 -c 'import sys, tomllib
+print("\n".join(b["name"] for b in tomllib.load(open(sys.argv[1], "rb"))["bin"]))' \
+    "$PROJECT_ROOT/fuzz/Cargo.toml")
+if [ "${#ALL_TARGETS[@]}" -eq 0 ]; then
+    echo "nessun target letto da fuzz/Cargo.toml" >&2
+    exit 1
+fi
+TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
 # shellcheck source=scripts/fuzz-preflight.sh
 . "$PROJECT_ROOT/scripts/fuzz-preflight.sh"

@@ -33,38 +33,31 @@ permissions:
   contents: read
 
 jobs:
+  # L'elenco dei target e' quello del manifesto, letto qui: una copia a mano
+  # nella matrice divergerebbe in silenzio, e un target nuovo non verrebbe mai
+  # esercitato di notte.
+  elenco:
+    name: elenco dei target
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.leggi.outputs.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: leggi
+        run: |
+          python3 -c 'import json, tomllib
+          nomi = [b["name"] for b in tomllib.load(open("fuzz/Cargo.toml", "rb"))["bin"]]
+          assert nomi, "nessun [[bin]] in fuzz/Cargo.toml"
+          print("target=" + json.dumps(nomi))' >> "$GITHUB_OUTPUT"
+
   fuzz:
     name: fuzz ${{ matrix.target }}
+    needs: elenco
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - plan_contract
-          - string_chain
-          - candidate_chain
-          - binary_ops
-          - reshape_policies
-          - extended_ops
-          - advanced_ops
-          - wkb_contract
-          - wkt_operations
-          - arrow_envelope
-          - arrow_ipc_decode
-          - arrow_transform
-          # Il nome cita la versione del formato canonico
-          # (errori-e-limiti.md#memoria-governata) che il target parsa: un nome che ne cita
-          # un'altra manda a cercare nel posto sbagliato. Il corpus non e'
-          # versionato (.gitignore), quindi una rinomina lo fa ripartire
-          # da zero.
-          - plan_v5_parse
-          - analyze_table
-          - analyze_geo
-          - diff_kernels
-          - executor_dag
-          - protocollo_frame
-          - verifica_artefatto
-          - geo_frame_stream
+        target: ${{ fromJSON(needs.elenco.outputs.target) }}
     env:
       MINUTES: ${{ github.event.inputs.minutes_per_target || '30' }}
     steps:

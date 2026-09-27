@@ -200,11 +200,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_pin_workflow.py
 
-      # I target fuzz sono elencati in quattro posti e tre sono copie a mano.
-      # Se una rinomina ne aggiorna uno solo, la campagna locale si ferma
-      # sul target inesistente e lo smoke esce 0 comunque: la copertura
-      # mancante non si vedrebbe da nessuna parte.
-      - name: Gate elenchi dei target fuzz
+      # Ogni target fuzz installa l'hook comune: senza, il panico atteso di
+      # una dipendenza interromperebbe il target a barriera funzionante.
+      - name: Gate hook comune dei target fuzz
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_target_fuzz.py
