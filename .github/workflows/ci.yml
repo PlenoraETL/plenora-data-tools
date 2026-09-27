@@ -211,11 +211,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_pin_workflow.py
 
-      # I target fuzz sono elencati in quattro posti e tre sono copie a mano.
-      # Se una rinomina ne aggiorna uno solo, la campagna locale si ferma
-      # sul target inesistente e lo smoke esce 0 comunque: la copertura
-      # mancante non si vedrebbe da nessuna parte.
-      - name: Gate elenchi dei target fuzz
+      # Ogni target fuzz installa l'hook comune: senza, il panico atteso di
+      # una dipendenza interromperebbe il target a barriera funzionante.
+      - name: Gate hook comune dei target fuzz
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_target_fuzz.py
@@ -224,16 +222,11 @@ jobs:
   # PROPRIO: un commento che racconta non deve nascondere un pin mobile.
   #
   # Guarda la PROSA di tutto il codice — commenti Rust, docstring Python,
-  # commenti di shell, YAML e TOML — e pretende che dica il presente: niente
-  # marcatori anonimi, tappe di campagna, `giro di review`, stesure
-  # precedenti o difetti raccontati all'imperfetto. La spiegazione tecnica resta e vale
-  # quanto il codice: va scritta al controfattuale presente.
-  #
-  # Non ha un elenco di deroghe per file: le uniche ammissioni sono leggibili
-  # nel testo stesso — una data che fissa un pin o un atto normativo, un
-  # artefatto immutabile citato per identificatore, un puntatore che il gate
-  # documentale definisce. Quelle definizioni le importa da
-  # `verifica_documentazione.py` invece di ricopiarle.
+  # commenti di shell, YAML e TOML — e presidia solo le regole oggettive:
+  # niente marcatori anonimi, tappe di campagna, `giro di review` o stesure
+  # precedenti. La spiegazione tecnica resta; il diario del lavoro sta in Git.
+  # I puntatori che il gate documentale definisce li importa da
+  # `verifica_documentazione.py` invece di ricopiarli.
   gate-commenti:
     name: gate commenti al presente
     runs-on: ubuntu-latest

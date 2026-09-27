@@ -38,25 +38,56 @@ MEMORY="${FUZZ_MEMORY:-10g}"
 JOBS="${FUZZ_JOBS:-1}"
 WORKERS="${FUZZ_WORKERS:-1}"
 
-ALL_TARGETS=(
-    # Portati da plenora-nogeo-tools
-    plan_contract string_chain candidate_chain binary_ops
-    reshape_policies extended_ops advanced_ops
-    # Trasporto geo e contratto WKB
-    wkb_contract wkt_operations arrow_envelope arrow_ipc_decode arrow_transform
-    geo_frame_stream
-    # Piano, analisi dei contratti, differenziale dei kernel, executor DAG
-    plan_v5_parse analyze_table analyze_geo diff_kernels executor_dag
-    # Protocollo supervisore/worker
-    protocollo_frame
-    # Verificatore dell'artefatto
-    verifica_artefatto
-)
-TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
 SECONDS_PER_TARGET=$(awk "BEGIN { printf \"%d\", $HOURS * 3600 }")
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# I target sono i `[[bin]]` di fuzz/Cargo.toml: una fonte sola, perche' una
+# copia a mano diverge in silenzio e la campagna esercita un elenco vecchio.
+# `awk` e non un interprete: lo script gira anche da Git Bash, dove Python puo'
+# mancare o essere quello di Windows, e un checkout CRLF lascia `\r` in coda.
+# Il parser e' chiuso: ogni `[[bin]]` deve dare un nome, e ogni nome deve
+# avere una forma di target. Una sezione saltata o un nome storpiato fermano
+# lo script invece di togliere un target dalla campagna.
+ELENCO="$(awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*\[\[bin\]\][[:space:]]*$/ { sezioni++; nel_bin = 1; next }
+    /^[[:space:]]*\[/ {
+        if (nel_bin) { print "fuzz/Cargo.toml: [[bin]] senza name" > "/dev/stderr"; esito = 1 }
+        nel_bin = 0
+    }
+    nel_bin && /^[[:space:]]*name[[:space:]]*=/ {
+        valore = $0
+        sub(/^[[:space:]]*name[[:space:]]*=[[:space:]]*/, "", valore)
+        sub(/[[:space:]]*(#.*)?$/, "", valore)
+        if (valore !~ /^"[A-Za-z0-9_-]+"$/ && valore !~ /^\047[A-Za-z0-9_-]+\047$/) {
+            print "fuzz/Cargo.toml: nome di [[bin]] non riconosciuto: " valore > "/dev/stderr"
+            esito = 1
+        }
+        print substr(valore, 2, length(valore) - 2)
+        nomi++
+        nel_bin = 0
+    }
+    END {
+        if (nel_bin) { print "fuzz/Cargo.toml: [[bin]] senza name" > "/dev/stderr"; esito = 1 }
+        if (nomi != sezioni || sezioni == 0) {
+            print "fuzz/Cargo.toml: " sezioni " [[bin]] e " nomi " nomi letti" > "/dev/stderr"
+            esito = 1
+        }
+        exit esito
+    }' "$PROJECT_ROOT/fuzz/Cargo.toml")" || {
+    echo "l'elenco dei target non si legge da fuzz/Cargo.toml" >&2
+    exit 1
+}
+ALL_TARGETS=()
+while IFS= read -r nome; do
+    ALL_TARGETS+=("$nome")
+done <<< "$ELENCO"
+if [ "${#ALL_TARGETS[@]}" -eq 0 ]; then
+    echo "nessun target letto da fuzz/Cargo.toml" >&2
+    exit 1
+fi
+TARGETS=(${FUZZ_TARGETS:-${ALL_TARGETS[@]}})
 
 # Gli stessi prerequisiti dello smoke, dalla stessa funzione, controllati
 # prima di partire. Qui contano il doppio: una campagna si lancia e si lascia
