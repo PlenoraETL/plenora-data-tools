@@ -349,8 +349,12 @@ fn classify_filesystem(magic: u64) -> FilesystemClass {
 /// variante `Unsupported` in cui e' confluita.
 #[cfg(target_os = "linux")]
 fn ensure_supported_publish_target(parent: &Path) -> Result<(), PlenoraError> {
-    let stat = rustix::fs::statfs(parent)
-        .map_err(|errno| io::Error::from_raw_os_error(errno.raw_os_error()))?;
+    let stat = rustix::fs::statfs(parent).map_err(|errno| {
+        io_at(
+            ErrorPhase::Probe,
+            io::Error::from_raw_os_error(errno.raw_os_error()),
+        )
+    })?;
     #[allow(clippy::cast_sign_loss)] // I magic f_type dei filesystem sono positivi.
     let magic = stat.f_type as u64;
     match classify_filesystem(magic) {
@@ -434,12 +438,13 @@ fn io_at(phase: ErrorPhase, error: io::Error) -> PlenoraError {
     PlenoraError::Io(error).with_phase(phase)
 }
 
-/// La destinazione e' occupata: una sola forma, per le due strade che la
-/// scoprono.
+/// La destinazione e' occupata: una sola forma, per ogni strada che la
+/// scopre.
 ///
 /// Il testo non nomina chi l'ha scoperta, perche' a chi legge non cambia
 /// niente: la destinazione c'e', e la prima esecuzione che pubblica vince.
-fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
+#[must_use]
+pub fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
     PlenoraError::Conflict(format!("output gia' esistente: {}", output_path.display()))
         .with_phase(ErrorPhase::Commit)
 }
@@ -482,11 +487,13 @@ pub fn verifica_destinazione_libera(output_path: &Path) -> Result<(), PlenoraErr
 /// via `Drop`, quindi nessun errore [`ErrorPhase::Cleanup`].
 ///
 /// # Errors
-/// Restituisce `PlenoraError::InvalidPlan` se l'output esiste gia' (tag
-/// `Commit`) o la directory di destinazione non esiste (tag `Probe`);
-/// `PlenoraError::Unsupported` se il filesystem di destinazione
-/// e' di rete o non identificabile (tag `Probe`); `PlenoraError::Io` per i
-/// fallimenti di scrittura, sync o persist (tag `Write`/`Finalize`/`Commit`);
+/// Restituisce `PlenoraError::Conflict` se l'output esiste gia' (tag
+/// `Commit`); `PlenoraError::InvalidPlan` se la directory di destinazione non
+/// esiste (tag `Probe`); `PlenoraError::Unsupported` se il filesystem di
+/// destinazione e' di rete o non identificabile (tag `Probe`);
+/// `PlenoraError::Io` se la destinazione non si lascia osservare (tag
+/// `Probe`) e per i fallimenti di scrittura, sync o persist (tag
+/// `Write`/`Finalize`/`Commit`);
 /// propaga invariato l'errore della closure `write`.
 ///
 /// # Panics
@@ -843,6 +850,21 @@ mod tests {
     }
 
     // -- Tagging di fase al confine di publish (BLOCK-03, piano-v5.md#contratti-di-input) --------
+
+    /// Una destinazione che non si lascia osservare non e' libera: `Io`, fase
+    /// `Probe`. Sotto un file regolare `stat` fallisce con `ENOTDIR`, che non
+    /// e' `NotFound`; su Windows lo stesso percorso risponde «non trovato».
+    #[cfg(unix)]
+    #[test]
+    fn una_destinazione_non_osservabile_e_io_in_fase_probe() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let file = directory.path().join("file");
+        std::fs::write(&file, b"x").expect("fixture");
+        let error = verifica_destinazione_libera(&file.join("output.bin"))
+            .expect_err("destinazione non osservabile");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Io, "{error}");
+        assert_eq!(error.phase_tag(), Some(ErrorPhase::Probe), "{error}");
+    }
 
     #[test]
     fn io_at_tags_each_publish_phase_without_changing_text_or_axes() {
