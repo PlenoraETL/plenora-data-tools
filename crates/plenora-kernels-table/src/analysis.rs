@@ -222,6 +222,11 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
             "numero labels diverso dai bin".into(),
         ));
     }
+    // Con `Count` i bordi esterni sono il minimo e il massimo dei dati, presi
+    // sul double: un valore esatto che vi arrotonda (2^53 + 1 sul bordo 2^53)
+    // e' il minimo o il massimo, e resta nella classe esterna. Con `Edges` i
+    // bordi sono del piano e valgono come scritti.
+    let esterni_aperti = matches!(config.bins, Bins::Count(_));
     let values = celle
         .into_iter()
         .map(|numero| {
@@ -229,16 +234,20 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
                 let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
                 (0..count)
                     .find(|index| {
+                        let primo = *index == 0;
+                        let ultimo = *index + 1 == count;
                         let sopra = match rispetto(edges[*index]) {
                             Some(Ordering::Greater) => true,
-                            Some(Ordering::Equal) => *index == 0,
-                            _ => false,
+                            Some(Ordering::Equal) => primo,
+                            Some(Ordering::Less) => primo && esterni_aperti,
+                            None => false,
                         };
-                        sopra
-                            && matches!(
-                                rispetto(edges[*index + 1]),
-                                Some(Ordering::Less | Ordering::Equal)
-                            )
+                        let sotto = match rispetto(edges[*index + 1]) {
+                            Some(Ordering::Less | Ordering::Equal) => true,
+                            Some(Ordering::Greater) => ultimo && esterni_aperti,
+                            None => false,
+                        };
+                        sopra && sotto
                     })
                     .map(|index| {
                         config.labels.as_ref().map_or_else(
@@ -1460,6 +1469,39 @@ mod tests {
             "2^53 e' il bordo superiore della prima"
         );
         assert_eq!(classi.value(1), "alta", "2^53 + 1 supera il bordo 2^53");
+    }
+
+    /// Con `Count` il massimo esatto resta nell'ultima classe anche se il suo
+    /// double e' il bordo: 2^53 + 1 arrotonda a 2^53, che e' il massimo preso.
+    #[test]
+    fn bin_a_numero_di_classi_non_perde_gli_estremi() {
+        let base = 1_i64 << 53;
+        let batch = RecordBatch::try_new(
+            Arc::new(plenora_core::arrow::schema::Schema::new(vec![
+                plenora_core::arrow::schema::Field::new("n", DataType::Int64, true),
+            ])),
+            vec![Arc::new(plenora_core::arrow::array::Int64Array::from(
+                vec![Some(-(base + 1)), Some(0), Some(base + 1)],
+            ))],
+        )
+        .expect("fixture");
+        let config = Bin {
+            column: "n".into(),
+            bins: Bins::Count(2),
+            labels: Some(vec!["bassa".into(), "alta".into()]),
+            output_column: Some("classe".into()),
+        };
+        let risultato = bin(&batch, &config).expect("bin");
+        let classi = risultato
+            .column_by_name("classe")
+            .expect("classe")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8")
+            .clone();
+        assert_eq!(classi.null_count(), 0, "nessun estremo senza classe");
+        assert_eq!(classi.value(0), "bassa");
+        assert_eq!(classi.value(2), "alta");
     }
 
     #[test]

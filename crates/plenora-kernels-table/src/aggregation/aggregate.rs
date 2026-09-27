@@ -170,7 +170,8 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
 /// I valori distinti di un gruppo, deduplicati sul valore **esatto**: due
 /// interi oltre 2^53 con lo stesso double restano due valori. Su una colonna
 /// `Float64` il valore e' il double, con l'ordine di `total_cmp` (-0.0 e 0.0
-/// distinti, i NaN uno solo); sugli altri tipi `ordine_esatto`.
+/// distinti, i NaN distinti per segno e payload); sugli altri tipi
+/// `ordine_esatto`.
 ///
 /// Un null resta nell'elenco, in testa: `reduce_numeric` decide con
 /// `skip_null`.

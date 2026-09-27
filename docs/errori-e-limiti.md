@@ -676,6 +676,25 @@ senza errore.
 Nessuna delle due è una modifica locale: la prima cambia `Value` per tutto il
 workspace.
 
+### Il testo numerico in notazione esponenziale si legge come double
+
+**La regola.** Una cella `Utf8` interpretata come numero si legge esatta con
+`NumericBound::parse` quando è un intero o un decimale posizionale fino a 38
+cifre significative; ogni altra forma che `f64` accetta (`9007199254740993e0`,
+`inf`, `NaN`, un decimale più lungo) diventa il suo double.
+
+**L'ambito.** Le decisioni sul testo numerico: le classi di `table.bin`, i
+distinti degli aggregati e i confronti con un letterale (`scalar_compare`:
+filtri e regole di governance su colonne `Utf8`).
+
+**Il pericolo che questo dichiara.** Due testi numerici in notazione
+esponenziale che differiscono oltre la precisione di un double contano come lo
+stesso valore, senza errore.
+
+**La condizione di rientro.** Un parser esatto per la notazione esponenziale
+(mantissa decimale e esponente in scala), oppure il rifiuto esplicito di quelle
+forme dove il valore serve a decidere.
+
 ### Le funzioni di rango non accettano colonne testuali
 
 **Regola.** `rank`, `dense_rank`, `percent_rank` e `cume_dist` rifiutano una
