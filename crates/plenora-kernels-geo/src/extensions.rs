@@ -27,14 +27,34 @@ use crate::construction::{geometry_from_wkt, ConstructionError};
 use crate::geometry_type_name;
 use crate::ValidazioneProtetta as _;
 
+/// L'errore delle estensioni geo (`extensions`, `extensions2`, `extensions3`):
+/// un tipo solo, perche' la regola di categoria ([`Self::e_interna`]) si
+/// scrive una volta.
 #[derive(Debug, Error)]
 pub enum ExtensionError {
+    #[error("parametro {name} non valido: {reason}")]
+    InvalidParameter {
+        name: &'static str,
+        reason: &'static str,
+    },
     #[error("geometria di input non valida: {0}")]
     InvalidInput(String),
+    #[error("geometria {index} non poligonale ({found}): attesa Polygon/MultiPolygon")]
+    UnsupportedGeometry { index: usize, found: &'static str },
+    #[error("geometria {index} non valida: {reason}")]
+    InvalidGeometry { index: usize, reason: String },
+    #[error("geometria {index} contiene coordinate NaN o infinite")]
+    NonFiniteCoordinate { index: usize },
     #[error("geometria prodotta non valida: {0}")]
     InvalidOutput(String),
-    #[error("indice non rappresentabile come uint64")]
+    #[error("celle della griglia oltre il limite {limit}: {actual}")]
+    CellLimit { actual: u64, limit: u64 },
+    #[error("issues di copertura oltre il limite {limit}")]
+    IssueLimit { limit: u64 },
+    #[error("indice o conteggio non rappresentabile come uint64")]
     IndexOverflow,
+    #[error("subdivide non converge entro {limit} livelli di ricorsione")]
+    SubdivideDepth { limit: u32 },
     /// Invariante interna violata (R6: errore propagato, mai panic).
     #[error("internal error: {0}")]
     Internal(&'static str),
@@ -47,7 +67,26 @@ pub enum ExtensionError {
     ValidazioneNonConclusa(&'static str),
 }
 
-fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionError> {
+impl ExtensionError {
+    /// `true` se la colpa non e' del piano: un'invariante saltata o una
+    /// validazione che non ha concluso. Il resto e' `InvalidPlan`.
+    #[must_use]
+    pub const fn e_interna(&self) -> bool {
+        matches!(self, Self::Internal(_) | Self::ValidazioneNonConclusa(_))
+    }
+
+    /// L'errore nella categoria giusta, con il prefisso dell'operazione.
+    #[must_use]
+    pub fn del_passo(&self, operazione: &str) -> PlenoraError {
+        if self.e_interna() {
+            PlenoraError::Internal(format!("{operazione}: {self}"))
+        } else {
+            PlenoraError::InvalidPlan(format!("{operazione}: {self}"))
+        }
+    }
+}
+
+pub(crate) fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionError> {
     geometry.validazione_protetta().map_err(|esito| {
         esito.separa(
             |ragione| ExtensionError::InvalidInput(ragione.to_string()),
@@ -56,7 +95,7 @@ fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionError> {
     })
 }
 
-fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionError> {
+pub(crate) fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionError> {
     geometry.validazione_protetta().map_err(|esito| {
         esito.separa(
             |ragione| ExtensionError::InvalidOutput(ragione.to_string()),
@@ -66,8 +105,22 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionEr
     Ok(geometry)
 }
 
-fn u64_len(len: usize) -> Result<u64, ExtensionError> {
+pub(crate) fn u64_len(len: usize) -> Result<u64, ExtensionError> {
     u64::try_from(len).map_err(|_| ExtensionError::IndexOverflow)
+}
+
+pub(crate) const fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionError {
+    ExtensionError::InvalidParameter { name, reason }
+}
+
+pub(crate) fn check_tolerance(tolerance: f64) -> Result<(), ExtensionError> {
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(invalid_parameter(
+            "tolerance",
+            "deve essere finita e non negativa",
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

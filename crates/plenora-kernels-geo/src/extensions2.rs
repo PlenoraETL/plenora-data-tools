@@ -1,6 +1,6 @@
 //! Kernel di `geo.generate_grid`, `geo.subdivide` e `geo.snap`.
 //!
-//! Kernel puri su `geo::Geometry<f64>` che rendono [`ExtensionV2Error`], piu'
+//! Kernel puri su `geo::Geometry<f64>` che rendono [`ExtensionError`], piu'
 //! gli adapter di colonna/righe (`snap_column`, `generate_grid_rows`,
 //! `subdivide_wkb`) che lo mappano su [`PlenoraError`] preservando i messaggi.
 //!
@@ -23,9 +23,11 @@ use plenora_core::arrow::array::BinaryArray;
 use plenora_core::PlenoraError;
 use rstar::RTree;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
+use crate::extensions::{
+    check_tolerance, ensure_valid, invalid_parameter, u64_len, validate_output, ExtensionError,
+};
 use crate::ValidazioneProtetta as _;
 
 /// Numero minimo di vertici ammesso per `max_vertices` (un anello chiuso ne
@@ -36,62 +38,6 @@ pub const MAX_SUBDIVIDE_DEPTH: u32 = 32;
 /// Limite di celle prodotte da `generate_grid` (verificato in analisi e nel
 /// kernel, prima dell'allocazione).
 pub const MAX_GRID_CELLS: u64 = 1_000_000;
-
-#[derive(Debug, Error)]
-pub enum ExtensionV2Error {
-    #[error("parametro {name} non valido: {reason}")]
-    InvalidParameter {
-        name: &'static str,
-        reason: &'static str,
-    },
-    #[error("geometria di input non valida: {0}")]
-    InvalidInput(String),
-    #[error("geometria prodotta non valida: {0}")]
-    InvalidOutput(String),
-    #[error("celle della griglia oltre il limite {limit}: {actual}")]
-    CellLimit { actual: u64, limit: u64 },
-    #[error("conteggio non rappresentabile come uint64")]
-    IndexOverflow,
-    #[error("subdivide non converge entro {limit} livelli di ricorsione")]
-    SubdivideDepth { limit: u32 },
-    /// Invariante interna violata (R6: errore propagato, mai panic).
-    #[error("internal error: {0}")]
-    Internal(&'static str),
-    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
-    ///
-    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
-    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
-    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
-    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
-    ValidazioneNonConclusa(&'static str),
-}
-
-fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), ExtensionV2Error> {
-    geometry.validazione_protetta().map_err(|esito| {
-        esito.separa(
-            |ragione| ExtensionV2Error::InvalidInput(ragione.to_string()),
-            ExtensionV2Error::ValidazioneNonConclusa,
-        )
-    })
-}
-
-fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtensionV2Error> {
-    geometry.validazione_protetta().map_err(|esito| {
-        esito.separa(
-            |ragione| ExtensionV2Error::InvalidOutput(ragione.to_string()),
-            ExtensionV2Error::ValidazioneNonConclusa,
-        )
-    })?;
-    Ok(geometry)
-}
-
-fn u64_len(len: usize) -> Result<u64, ExtensionV2Error> {
-    u64::try_from(len).map_err(|_| ExtensionV2Error::IndexOverflow)
-}
-
-const fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV2Error {
-    ExtensionV2Error::InvalidParameter { name, reason }
-}
 
 // ---------------------------------------------------------------------------
 // geo.generate_grid
@@ -119,10 +65,10 @@ impl GridExtent {
     ///
     /// # Errors
     ///
-    /// `ExtensionV2Error::InvalidParameter` se una coordinata non e'
+    /// `ExtensionError::InvalidParameter` se una coordinata non e'
     /// finita, oppure se `xmax <= xmin` o `ymax <= ymin` (extent
     /// degenere).
-    pub fn new(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Result<Self, ExtensionV2Error> {
+    pub fn new(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Result<Self, ExtensionError> {
         for (name, value) in [
             ("extent.xmin", xmin),
             ("extent.ymin", ymin),
@@ -174,7 +120,7 @@ pub struct GridCell {
     pub centroid_y: f64,
 }
 
-fn check_cell_size(cell_size: f64) -> Result<(), ExtensionV2Error> {
+fn check_cell_size(cell_size: f64) -> Result<(), ExtensionError> {
     if !cell_size.is_finite() || cell_size <= 0.0 {
         return Err(invalid_parameter(
             "cell_size",
@@ -184,12 +130,12 @@ fn check_cell_size(cell_size: f64) -> Result<(), ExtensionV2Error> {
     Ok(())
 }
 
-fn checked_axis_cells(span: f64, cell_size: f64) -> Result<u64, ExtensionV2Error> {
+fn checked_axis_cells(span: f64, cell_size: f64) -> Result<u64, ExtensionError> {
     let cells = (span / cell_size).ceil();
     // Soglia 2^64: esatta in f64 e uguale a `u64::MAX as f64`, che
     // arrotonda per eccesso.
     if !cells.is_finite() || cells > 18_446_744_073_709_551_616.0 {
-        return Err(ExtensionV2Error::IndexOverflow);
+        return Err(ExtensionError::IndexOverflow);
     }
     // Guardia sopra: cells finito e <= 2^64; uno span negativo satura a 0
     // (extent degenere -> griglia vuota).
@@ -200,17 +146,15 @@ fn checked_axis_cells(span: f64, cell_size: f64) -> Result<u64, ExtensionV2Error
 
 /// Dimensioni della griglia quadrata `(colonne, righe)`, con il limite di
 /// celle applicato al prodotto.
-fn square_dimensions(extent: &GridExtent, cell_size: f64) -> Result<(u64, u64), ExtensionV2Error> {
+fn square_dimensions(extent: &GridExtent, cell_size: f64) -> Result<(u64, u64), ExtensionError> {
     let columns = checked_axis_cells(extent.width(), cell_size)?;
     let rows = checked_axis_cells(extent.height(), cell_size)?;
-    let total = columns
-        .checked_mul(rows)
-        .ok_or(ExtensionV2Error::CellLimit {
-            actual: u64::MAX,
-            limit: MAX_GRID_CELLS,
-        })?;
+    let total = columns.checked_mul(rows).ok_or(ExtensionError::CellLimit {
+        actual: u64::MAX,
+        limit: MAX_GRID_CELLS,
+    })?;
     if total > MAX_GRID_CELLS {
-        return Err(ExtensionV2Error::CellLimit {
+        return Err(ExtensionError::CellLimit {
             actual: total,
             limit: MAX_GRID_CELLS,
         });
@@ -224,7 +168,7 @@ fn square_dimensions(extent: &GridExtent, cell_size: f64) -> Result<(u64, u64), 
 fn hex_centers(
     extent: &GridExtent,
     cell_size: f64,
-) -> Result<Vec<(u64, u64, f64, f64)>, ExtensionV2Error> {
+) -> Result<Vec<(u64, u64, f64, f64)>, ExtensionError> {
     let vertical_step = cell_size * 3.0_f64.sqrt();
     let column_step = 1.5 * cell_size;
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
@@ -245,13 +189,13 @@ fn hex_centers(
     } else if extent.width() < 2.0 * cell_size {
         0
     } else {
-        return Err(ExtensionV2Error::CellLimit {
+        return Err(ExtensionError::CellLimit {
             actual: u64::MAX,
             limit: MAX_GRID_CELLS,
         });
     };
     if columns > MAX_GRID_CELLS {
-        return Err(ExtensionV2Error::CellLimit {
+        return Err(ExtensionError::CellLimit {
             actual: columns,
             limit: MAX_GRID_CELLS,
         });
@@ -277,7 +221,7 @@ fn hex_centers(
         while cy + vertical_step / 2.0 <= extent.ymax {
             centers.push((cell_i, cell_j, cx, cy));
             if u64_len(centers.len())? > MAX_GRID_CELLS {
-                return Err(ExtensionV2Error::CellLimit {
+                return Err(ExtensionError::CellLimit {
                     actual: u64_len(centers.len())?,
                     limit: MAX_GRID_CELLS,
                 });
@@ -294,18 +238,18 @@ fn hex_centers(
 ///
 /// # Errors
 ///
-/// - `ExtensionV2Error::InvalidParameter`: `cell_size` non finito o
+/// - `ExtensionError::InvalidParameter`: `cell_size` non finito o
 ///   minore o uguale a zero.
-/// - `ExtensionV2Error::CellLimit`: le celle (totale per le griglie
+/// - `ExtensionError::CellLimit`: le celle (totale per le griglie
 ///   quadrate, colonne o totale per quelle esagonali) superano
 ///   [`MAX_GRID_CELLS`].
-/// - `ExtensionV2Error::IndexOverflow`: il numero di celle non e'
+/// - `ExtensionError::IndexOverflow`: il numero di celle non e'
 ///   rappresentabile come `u64`.
 pub fn grid_cell_count(
     extent: &GridExtent,
     cell_size: f64,
     shape: GridShape,
-) -> Result<u64, ExtensionV2Error> {
+) -> Result<u64, ExtensionError> {
     check_cell_size(cell_size)?;
     match shape {
         GridShape::Square => {
@@ -368,17 +312,17 @@ fn hex_cell(cell_i: u64, cell_j: u64, cx: f64, cy: f64, cell_size: f64) -> GridC
 ///
 /// # Errors
 ///
-/// - `ExtensionV2Error::InvalidParameter`: `cell_size` non finito o
+/// - `ExtensionError::InvalidParameter`: `cell_size` non finito o
 ///   minore o uguale a zero.
-/// - `ExtensionV2Error::CellLimit`: le celle superano [`MAX_GRID_CELLS`]
+/// - `ExtensionError::CellLimit`: le celle superano [`MAX_GRID_CELLS`]
 ///   (verificato prima dell'allocazione).
-/// - `ExtensionV2Error::IndexOverflow`: il numero di celle per asse non
+/// - `ExtensionError::IndexOverflow`: il numero di celle per asse non
 ///   e' rappresentabile come `u64`.
 pub fn generate_grid(
     extent: &GridExtent,
     cell_size: f64,
     shape: GridShape,
-) -> Result<Vec<GridCell>, ExtensionV2Error> {
+) -> Result<Vec<GridCell>, ExtensionError> {
     check_cell_size(cell_size)?;
     match shape {
         GridShape::Square => {
@@ -413,21 +357,8 @@ pub struct GridRow {
     pub centroid_y: f64,
 }
 
-/// L'errore di un'estensione v2 nella categoria giusta: `Internal` se la
-/// validazione non ha concluso o un'invariante e' saltata — nessuno ha
-/// dimostrato che il piano o l'ingresso siano sbagliati — `InvalidPlan`
-/// altrimenti.
-fn errore_v2(operazione: &str, error: &ExtensionV2Error) -> PlenoraError {
-    match error {
-        ExtensionV2Error::Internal(_) | ExtensionV2Error::ValidazioneNonConclusa(_) => {
-            PlenoraError::Internal(format!("{operazione}: {error}"))
-        }
-        _ => PlenoraError::InvalidPlan(format!("{operazione}: {error}")),
-    }
-}
-
-fn grid_error(error: &ExtensionV2Error) -> PlenoraError {
-    errore_v2("geo.generate_grid", error)
+fn grid_error(error: &ExtensionError) -> PlenoraError {
+    error.del_passo("geo.generate_grid")
 }
 
 /// Adapter righe per `geo.generate_grid`: le celle sono gia' valide per
@@ -463,7 +394,7 @@ pub fn generate_grid_rows(
 // geo.subdivide
 // ---------------------------------------------------------------------------
 
-const fn check_max_vertices(max_vertices: usize) -> Result<(), ExtensionV2Error> {
+const fn check_max_vertices(max_vertices: usize) -> Result<(), ExtensionError> {
     if max_vertices < MIN_SUBDIVIDE_VERTICES {
         return Err(invalid_parameter(
             "max_vertices",
@@ -506,19 +437,19 @@ fn subdivide_polygon(
     max_vertices: usize,
     depth: u32,
     parts: &mut Vec<Geometry<f64>>,
-) -> Result<(), ExtensionV2Error> {
+) -> Result<(), ExtensionError> {
     if polygon.coords_count() <= max_vertices {
         parts.push(Geometry::Polygon(polygon.clone()));
         return Ok(());
     }
     if depth >= MAX_SUBDIVIDE_DEPTH {
-        return Err(ExtensionV2Error::SubdivideDepth {
+        return Err(ExtensionError::SubdivideDepth {
             limit: MAX_SUBDIVIDE_DEPTH,
         });
     }
     let rect = polygon
         .bounding_rect()
-        .ok_or_else(|| ExtensionV2Error::InvalidInput("poligono senza envelope".to_owned()))?;
+        .ok_or_else(|| ExtensionError::InvalidInput("poligono senza envelope".to_owned()))?;
     let min = rect.min();
     let max = rect.max();
     let halves = if max.x - min.x >= max.y - min.y {
@@ -550,14 +481,14 @@ fn subdivide_polygon(
 fn subdivide_validated(
     geometry: &Geometry<f64>,
     max_vertices: usize,
-) -> Result<Vec<Geometry<f64>>, ExtensionV2Error> {
+) -> Result<Vec<Geometry<f64>>, ExtensionError> {
     if geometry.coords_count() <= max_vertices {
         return Ok(vec![geometry.clone()]);
     }
     let mut parts = Vec::new();
     match geometry {
         Geometry::Point(_) | Geometry::Line(_) => {
-            return Err(ExtensionV2Error::Internal(
+            return Err(ExtensionError::Internal(
                 "punto/linea hanno al piu' 2 vertici <= max_vertices",
             ));
         }
@@ -599,8 +530,8 @@ fn subdivide_validated(
     for part in &parts {
         part.validazione_protetta().map_err(|esito| {
             esito.separa(
-                |ragione| ExtensionV2Error::InvalidOutput(ragione.to_string()),
-                ExtensionV2Error::ValidazioneNonConclusa,
+                |ragione| ExtensionError::InvalidOutput(ragione.to_string()),
+                ExtensionError::ValidazioneNonConclusa,
             )
         })?;
     }
@@ -615,27 +546,27 @@ fn subdivide_validated(
 ///
 /// # Errors
 ///
-/// - `ExtensionV2Error::InvalidInput`: la geometria in ingresso non supera
+/// - `ExtensionError::InvalidInput`: la geometria in ingresso non supera
 ///   la validazione OGC.
-/// - `ExtensionV2Error::InvalidParameter`: `max_vertices` e' minore di
+/// - `ExtensionError::InvalidParameter`: `max_vertices` e' minore di
 ///   [`MIN_SUBDIVIDE_VERTICES`].
-/// - `ExtensionV2Error::SubdivideDepth`: il taglio ricorsivo non converge
+/// - `ExtensionError::SubdivideDepth`: il taglio ricorsivo non converge
 ///   entro [`MAX_SUBDIVIDE_DEPTH`] livelli (geometrie degenere).
-/// - `ExtensionV2Error::InvalidOutput`: una parte prodotta non supera la
+/// - `ExtensionError::InvalidOutput`: una parte prodotta non supera la
 ///   validazione OGC.
-/// - `ExtensionV2Error::Internal`: invariante interna violata (mai atteso:
+/// - `ExtensionError::Internal`: invariante interna violata (mai atteso:
 ///   punti e linee hanno al piu' 2 vertici).
 pub fn subdivide(
     geometry: &Geometry<f64>,
     max_vertices: usize,
-) -> Result<Vec<Geometry<f64>>, ExtensionV2Error> {
+) -> Result<Vec<Geometry<f64>>, ExtensionError> {
     ensure_valid(geometry)?;
     check_max_vertices(max_vertices)?;
     subdivide_validated(geometry, max_vertices)
 }
 
-fn subdivide_error(error: &ExtensionV2Error) -> PlenoraError {
-    errore_v2("geo.subdivide", error)
+fn subdivide_error(error: &ExtensionError) -> PlenoraError {
+    error.del_passo("geo.subdivide")
 }
 
 /// Helper WKB per `geo.subdivide`: decodifica una cella, la spezza e
@@ -664,7 +595,7 @@ fn snap_with_tree(
     geometry: &Geometry<f64>,
     tree: &RTree<[f64; 2]>,
     tolerance: f64,
-) -> Result<Geometry<f64>, ExtensionV2Error> {
+) -> Result<Geometry<f64>, ExtensionError> {
     // Rect/Triangle non esistono nel trasporto WKB; snappati come poligoni
     // per non violare l'invariante min <= max di Rect.
     let working = match geometry {
@@ -687,7 +618,7 @@ fn snap_validated(
     geometry: &Geometry<f64>,
     reference: &Geometry<f64>,
     tolerance: f64,
-) -> Result<Geometry<f64>, ExtensionV2Error> {
+) -> Result<Geometry<f64>, ExtensionError> {
     let reference_vertices: Vec<[f64; 2]> = reference
         .coords_iter()
         .map(|coordinate| [coordinate.x, coordinate.y])
@@ -707,35 +638,25 @@ fn snap_validated(
 ///
 /// # Errors
 ///
-/// - `ExtensionV2Error::InvalidInput`: la geometria in ingresso o il
+/// - `ExtensionError::InvalidInput`: la geometria in ingresso o il
 ///   riferimento non supera la validazione OGC.
-/// - `ExtensionV2Error::InvalidParameter`: `tolerance` non finita o
+/// - `ExtensionError::InvalidParameter`: `tolerance` non finita o
 ///   negativa.
-/// - `ExtensionV2Error::InvalidOutput`: la geometria snappata non supera
+/// - `ExtensionError::InvalidOutput`: la geometria snappata non supera
 ///   la validazione OGC (lo snap puo' collassare anelli).
 pub fn snap(
     geometry: &Geometry<f64>,
     reference: &Geometry<f64>,
     tolerance: f64,
-) -> Result<Geometry<f64>, ExtensionV2Error> {
+) -> Result<Geometry<f64>, ExtensionError> {
     ensure_valid(geometry)?;
     ensure_valid(reference)?;
     check_tolerance(tolerance)?;
     snap_validated(geometry, reference, tolerance)
 }
 
-fn check_tolerance(tolerance: f64) -> Result<(), ExtensionV2Error> {
-    if !tolerance.is_finite() || tolerance < 0.0 {
-        return Err(invalid_parameter(
-            "tolerance",
-            "deve essere finita e non negativa",
-        ));
-    }
-    Ok(())
-}
-
-fn snap_error(error: &ExtensionV2Error) -> PlenoraError {
-    errore_v2("geo.snap", error)
+fn snap_error(error: &ExtensionError) -> PlenoraError {
+    error.del_passo("geo.snap")
 }
 
 /// Adapter di colonna per `geo.snap`.
@@ -799,13 +720,13 @@ mod tests {
 
         for adapter in [grid_error, subdivide_error, snap_error] {
             for interno in [
-                ExtensionV2Error::Internal("forma"),
-                ExtensionV2Error::ValidazioneNonConclusa("forma"),
+                ExtensionError::Internal("forma"),
+                ExtensionError::ValidazioneNonConclusa("forma"),
             ] {
                 let errore = adapter(&interno);
                 assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
             }
-            let del_piano = adapter(&ExtensionV2Error::InvalidInput("anello aperto".to_owned()));
+            let del_piano = adapter(&ExtensionError::InvalidInput("anello aperto".to_owned()));
             assert_eq!(
                 del_piano.category(),
                 ErrorCategory::InvalidPlan,
@@ -950,7 +871,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(ExtensionV2Error::CellLimit {
+                Err(ExtensionError::CellLimit {
                     limit: MAX_GRID_CELLS,
                     ..
                 })
@@ -961,7 +882,7 @@ mod tests {
         let wide = GridExtent::new(0.0, 0.0, 1e9, 0.5).expect("extent");
         assert!(matches!(
             generate_grid(&wide, 1.0, GridShape::Hex),
-            Err(ExtensionV2Error::CellLimit { .. })
+            Err(ExtensionError::CellLimit { .. })
         ));
     }
 
@@ -1145,7 +1066,7 @@ mod tests {
         let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)]);
         assert!(matches!(
             subdivide(&line, 3),
-            Err(ExtensionV2Error::InvalidParameter {
+            Err(ExtensionError::InvalidParameter {
                 name: "max_vertices",
                 ..
             })
@@ -1288,7 +1209,7 @@ mod tests {
         for bad in [-1.0, f64::NAN, f64::INFINITY] {
             assert!(matches!(
                 snap(&input, &reference_line(), bad),
-                Err(ExtensionV2Error::InvalidParameter {
+                Err(ExtensionError::InvalidParameter {
                     name: "tolerance",
                     ..
                 })
