@@ -51,9 +51,9 @@ posto in cui sono scritte.
 | come si costruisce e che cosa si esegue | [`README.md`](README.md) |
 | perché una decisione è stata presa | `git log` |
 
-La superficie documentale è **chiusa**: un Markdown nuovo entra solo
-aggiornando l'allowlist di `scripts/verifica_documentazione.py`, che è
-l'autorità sul conteggio.
+Un documento nuovo è una decisione che si prende in PR; il gate
+`scripts/verifica_documentazione.py` ne controlla collegamenti e ancore come
+per tutti gli altri.
 
 ## Prima di dire «fatto»
 

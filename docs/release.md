@@ -12,7 +12,7 @@ su `main`: **sedici job**, e un rosso qualsiasi ferma il rilascio.
 | **anti-panico (R6)** | `cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table -p plenora-kernels-geo -p plenora-cli --lib --bins --locked -- -D unsafe-code -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::unreachable -D clippy::todo -D clippy::unimplemented` |
 | **assert nel codice di produzione** | `python scripts/verifica_assenza_assert.py` |
 | **pin delle action** | `python scripts/verifica_pin_workflow.py` |
-| **commenti al presente** | `python scripts/verifica_commenti.py` |
+| **commenti senza diario** | `python scripts/verifica_commenti.py` |
 | lint | `cargo clippy --workspace --all-targets --locked` |
 | backend nativi | gli stessi, con `--features full-backends`, solo Linux |
 | coverage | `cargo llvm-cov report --fail-under-lines 90 --fail-under-functions 85 --fail-under-regions 89` |
@@ -20,7 +20,8 @@ su `main`: **sedici job**, e un rosso qualsiasi ferma il rilascio.
 | audit supply-chain | `cargo audit` |
 | manifesti storici | `python scripts/check_release_manifest.py release/<v>.json --repo .` (uno per manifesto) |
 | documentazione generata | `python docs/_build/assemble.py --verify` |
-| superficie documentale | `python scripts/verifica_documentazione.py` |
+| collegamenti e puntatori dei documenti | `python scripts/verifica_documentazione.py` |
+| hook comune dei target fuzz | `python scripts/verifica_target_fuzz.py` |
 | memoria governata | `python scripts/verifica_memoria_governata.py` |
 
 Tre note sul gate anti-panico, tutte imparate a caro prezzo:

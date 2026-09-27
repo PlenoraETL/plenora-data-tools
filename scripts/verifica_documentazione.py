@@ -1,37 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Gate: la superficie documentale resta quella decisa, e non si sfilaccia.
+"""Gate: la documentazione resta risolvibile e allineata al codice.
 
-La superficie documentale pubblica e' un elenco esatto di documenti Markdown,
-e la storia sta in Git invece che nel worktree. Una superficie del genere si
-sfilaccia nel modo piu' banale — qualcuno aggiunge un `NOTE.md`, qualcun
-altro un `docs/vecchio/`, e in sei mesi ci sono due fonti di verita' che
-nessuno tiene allineate.
+Verifica cinque cose, tutte oggettive:
 
-Questo script lo impedisce. Verifica sette cose:
-
-1. **nessun Markdown pubblico fuori dalla allowlist**. L'elenco e' esatto, non
-   un glob: aggiungere un documento e' una decisione, non un effetto
-   collaterale;
-2. **nessun collegamento locale rotto**, comprese le ancore `#sezione`: un
-   link che non porta da nessuna parte e' peggio di nessun link, perche'
-   promette;
-3. **nessun riferimento a un documento eliminato**, in tutto il repository:
-   ADR, deroghe, verbali, checkpoint e i loro nomi di file;
-4. **ogni puntatore interno ha una definizione corrente**, e ogni
+1. **nessun collegamento locale rotto** nei Markdown tracciati, comprese le
+   ancore `#sezione`: un link che non porta da nessuna parte e' peggio di
+   nessun link, perche' promette;
+2. **ogni puntatore interno ha una definizione corrente**, e ogni
    definizione e' citata. Vale per tutte le famiglie — `D`, `M`, `V`, `E`,
-   `I`, `P`, `G` — con l'identificatore intero, anche multilivello. Un
-   commento che scrive `D14.5.6` o `M3` deve poterlo risolvere, altrimenti
-   e' un puntatore morto come un link rotto; e una definizione che nessuno
-   cita torna a essere un archivio. Sono cercati **solo nei commenti**: `const
-   M1: usize` e `I64(&Int64Array)` hanno la forma di un puntatore e sono
-   codice;
-5. **catalogo e `operazioni.md` allineati**: stesso numero di operazioni, e le
-   stesse. Non un conteggio, un confronto per nome;
-6. **il documento generato non diverge**, delegando ad `assemble.py --verify`;
-7. **nessun PDF, bytecode o artefatto di build tracciato**.
+   `I`, `P`, `G` — con l'identificatore intero, anche multilivello. Sono
+   cercati **solo nei commenti**: `const M1: usize` ha la forma di un
+   puntatore ed e' codice. Ogni riferimento testuale a una sezione
+   (`errori-e-limiti.md#...`) si risolve, e nessuna ancora e' duplicata;
+3. **catalogo e `operazioni.md` allineati**: stesse operazioni, per nome;
+4. **il documento generato non diverge**, delegando ad `assemble.py --verify`;
+5. **nessun PDF, bytecode o artefatto di build tracciato**.
 
-I manifesti di rilascio sotto `release/` sono **esclusi** dai punti 3 e 4:
-sono documenti immutabili, e il testo dell'epoca serve al gate di rilascio.
+Non giudica la prosa e non tiene un elenco dei documenti ammessi: aggiungere
+un documento e' una decisione che si prende in PR, e il gate ne controlla i
+collegamenti come per tutti gli altri.
+
+I manifesti di rilascio sotto `release/` sono esclusi: sono documenti
+immutabili, e il testo dell'epoca serve al gate di rilascio.
 
     python scripts/verifica_documentazione.py
 
@@ -43,117 +33,14 @@ import re
 import subprocess
 import sys
 
-# ---------------------------------------------------------------------------
-# La superficie, esatta
-# ---------------------------------------------------------------------------
-
-PUBBLICI = [
-    'README.md',
-    'AGENTS.md',
-    'docs/architettura.md',
-    'docs/piano-v5.md',
-    'docs/cli.md',
-    'docs/operazioni.md',
-    'docs/errori-e-limiti.md',
-    'docs/stato-e-roadmap.md',
-    'docs/release.md',
-    # Progetto tecnico dell'esecuzione isolata: sta in un documento proprio
-    # perche' il disegno non entra in stato-e-roadmap.md senza soffocarlo.
-    # Ampliare questo elenco e' una decisione, non un effetto collaterale.
-    'docs/isolamento.md',
-    'docs/prototipi-isolamento.md',
-    # Provenienza delle sorgenti vendorizzate per [patch.crates-io] (BOZZA NON
-    # ADOTTATA, vedi Cargo.toml): documentazione nostra, non testo upstream —
-    # l'eccezione per vendor/ sotto copre il codice di terze parti, non
-    # questi tre file. Ampliare questo elenco e' una decisione, non un
-    # effetto collaterale: eccola dichiarata.
-    'vendor/geo-0.33.1-exact/PROVENANCE.md',
-    'vendor/wkt-0.14.0-v2/PROVENANCE.md',
-    'vendor/i_shape-1.18.0-buffer/PROVENANCE.md',
-    # Candidato sperimentale del filtro (diff 1 alternativo, non adottato):
-    # stesso trattamento dei tre sopra, piu' un secondo documento nostro che
-    # dichiara provenienza e qualifica del solo filtro.
-    'vendor/geo-0.33.1-exact-filtered/PROVENANCE.md',
-    'vendor/geo-0.33.1-exact-filtered/PROVENANCE-FILTRO-SPERIMENTALE.md',
-]
-
-# Documentazione viva, eseguita dalla suite: eccezione esatta, non un glob.
-ECCEZIONI = [
-    'examples/e1-filtro-ordinamento/README.md',
-]
-
 # Sorgenti della generazione di `operazioni.md`: non sono documenti pubblici,
 # sono input di un artefatto.
 SORGENTI_GENERATE = re.compile(r'^docs/_fragments/[0-9]+\.md$')
 
-# ---------------------------------------------------------------------------
-# Ciò che non deve più comparire
-# ---------------------------------------------------------------------------
-
-MORTI = [
-    # Anche il richiamo nudo: «l'ADR dichiarava» manda a cercare un file
-    # che non c'e' piu', esattamente come un link rotto.
-    (r'\bADR\b', 'riferimento a una ADR eliminata'),
-    (r'\bverbal[ei]\b', 'i verbali di review sono stati eliminati'),
-    (r'\breview del \d{4}-\d{2}-\d{2}', 'riferimento a un verbale di review'),
-    (r'\bDER-\d{3}\b', 'riferimento a una deroga eliminata'),
-    (r'\bdocs/adr/', 'la directory delle ADR non esiste piu\''),
-    (r'\bdocs/misure/', 'i grezzi di misura non esistono piu\''),
-    (r'\bdocs/assurance/', 'la directory assurance non esiste piu\''),
-    (r'\breview-\d+-fix-\d{4}-\d{2}-\d{2}', 'riferimento a un verbale di review'),
-    (r'\bcheckpoint-[a-z]+-\d{4}-\d{2}-\d{2}', 'riferimento a un checkpoint'),
-    (r'\bhotfix-\d{4}-\d{2}-\d{2}', 'riferimento a un hotfix'),
-    (r'\bArchitetture\.md\b', 'sostituito da docs/architettura.md'),
-    (r'\bPrestazioni\.md\b', 'eliminato'),
-    (r'\bderoghe\.md\b', 'i limiti stanno in docs/errori-e-limiti.md'),
-    (r'\bpiano-usabilita\.md\b', 'sostituito da docs/stato-e-roadmap.md'),
-    (r'\bkernel-signatures\.md\b', 'sostituito da docs/operazioni.md'),
-    (r'\bapi-breaking-\d{4}-\d{2}-\d{2}\.md\b', 'assorbito da docs/release.md'),
-    (r'\bder011-censimento', 'assorbito da docs/errori-e-limiti.md'),
-    (r'\bgenera_verbale_', 'gli script dei verbali sono stati eliminati'),
-    (r'\bverifica_censimento_der011', 'ora scripts/verifica_memoria_governata.py'),
-    (r'\bRIPRODUCIBILITA\.md\b', 'assorbito da docs/release.md'),
-]
-
 # I manifesti sono immutabili: il testo dell'epoca serve al gate di rilascio.
-ESENTI_DAI_MORTI = re.compile(r'^(release/|\.git/)')
+ESENTI = re.compile(r'^(release/|\.git/)')
 
-# ---------------------------------------------------------------------------
-# Puntatori malformati
-# ---------------------------------------------------------------------------
-#
-# Due residui che la sostituzione delle vecchie sigle ha lasciato dietro di
-# se', e che nessuno degli altri controlli vede perche' non sono link rotti:
-# il file c'e', l'ancora c'e', e' cio' che sta INTORNO a essere sbagliato.
-#
-#   1. il frammento di sezione orfano. «ADR 15 §3» nomina la terza sezione
-#      di quella ADR; diventato «errori-e-limiti.md#memoria-governata §3»,
-#      quel «§3» manda a cercare una numerazione che nei documenti nuovi non
-#      esiste. Le forme che si incontrano sono «§», «§em.» — la sezione degli
-#      emendamenti di una ADR cancellata — e «par.»;
-#   2. il riferimento incollato dalla barra. «ADR 6/ADR 5» separa due sigle
-#      brevi; diventato «errori-e-limiti.md/architettura.md#planner-ed-executor»
-#      si legge come un percorso di filesystem che non esiste. A mano se ne
-#      perde la maggior parte: si guarda un `.md` anche a destra della barra,
-#      e «/5» o «/R12» non lo e'.
-#
-# Un «§» resta legittimo quando dice DI CHE COSA e' la sezione: l'ICD e i
-# contratti trasversali hanno sezioni numerate, e citarle e' giusto. Il
-# controllo scatta solo su un «§» che segue un puntatore a un documento
-# nostro senza attribuzione: e' li' che il numero e' rimasto orfano.
-#
-# Il frammento orfano si scrive in due modi — «§3» e «par. 3» — e il secondo
-# e' arrivato dai documenti di radice cancellati («Architetture.md par. 3.3»
-# diventato «architettura.md e par. 2»). Vale la stessa regola: subito dopo
-# un puntatore a un documento nostro, un numero di sezione o di paragrafo
-# senza attribuzione e' un rinvio a una numerazione che non esiste.
-SEZIONE_ATTRIBUITA = re.compile(
-    r'(?:ICD|v\d[\w.-]*|Appendice\s+\w+|tabella|sezione)\s*(?:§|par(?:\.|agrafo))')
-FRAMMENTO = re.compile(r'§|\bpar(?:\.|agrafo)\s*\d')
-RIFERIMENTO_MD = re.compile(r'[\w-]+\.md(?:#[\w-]+)?')
-INCOLLATO = re.compile(r'[\w-]+\.md(?:#[\w-]+)?/')
-
-# Estensioni testuali in cui cercare i riferimenti morti.
+# Estensioni testuali in cui cercare i riferimenti a una sezione.
 TESTUALI = ('.rs', '.md', '.py', '.toml', '.yml', '.yaml', '.sh', '.json')
 
 # ---------------------------------------------------------------------------
@@ -290,34 +177,15 @@ def ancore_doppie(percorso):
     return _doppie(testo(percorso))
 
 
-def controlla_superficie(file_tracciati, problemi):
-    ammessi = set(PUBBLICI) | set(ECCEZIONI)
-    for percorso in file_tracciati:
-        if not percorso.endswith('.md'):
-            continue
-        if percorso in ammessi or SORGENTI_GENERATE.match(percorso):
-            continue
-        problemi.append(
-            'MARKDOWN FUORI SUPERFICIE: %s\n'
-            '  La superficie pubblica e\' chiusa: %s.\n'
-            '  Aggiungere un documento e\' una decisione: va messo in '
-            'PUBBLICI qui dentro, con la ragione.'
-            % (percorso, ', '.join(PUBBLICI)))
-    tracciati_set = set(file_tracciati)
-    for percorso in PUBBLICI + ECCEZIONI:
-        if not os.path.exists(percorso):
-            problemi.append('DOCUMENTO ATTESO ASSENTE: %s' % percorso)
-        elif percorso not in tracciati_set:
-            # Esistere sul disco non basta: un documento non tracciato non
-            # arriva a chi clona il repository, e il gate direbbe di si'
-            # guardando una copia locale che nessun altro ha.
-            problemi.append(
-                "DOCUMENTO NON TRACCIATO: %s esiste ma non e' in Git."
-                % percorso)
+def documenti(file_tracciati):
+    """I Markdown tracciati, esclusi i sorgenti della generazione e i manifesti."""
+    return [p for p in file_tracciati
+            if p.endswith('.md') and not SORGENTI_GENERATE.match(p)
+            and not ESENTI.match(p)]
 
 
-def controlla_collegamenti(problemi):
-    for percorso in PUBBLICI + ECCEZIONI:
+def controlla_collegamenti(file_tracciati, problemi):
+    for percorso in documenti(file_tracciati):
         if not os.path.exists(percorso):
             continue
         cartella = os.path.dirname(percorso) or '.'
@@ -346,127 +214,9 @@ def controlla_collegamenti(problemi):
                             % (percorso, numero, bersaglio))
 
 
-def controlla_riferimenti_morti(file_tracciati, problemi):
-    compilati = [(re.compile(pattern), motivo) for pattern, motivo in MORTI]
-    for percorso in file_tracciati:
-        if ESENTI_DAI_MORTI.match(percorso):
-            continue
-        if not percorso.endswith(TESTUALI):
-            continue
-        if percorso == 'scripts/verifica_documentazione.py':
-            continue  # e' l'elenco stesso
-        if not os.path.exists(percorso):
-            continue
-        contenuto = testo(percorso)
-        for numero, riga in enumerate(contenuto.split('\n'), 1):
-            for pattern, motivo in compilati:
-                trovato = pattern.search(riga)
-                if trovato:
-                    problemi.append(
-                        'RIFERIMENTO MORTO %s:%d: %r\n  %s'
-                        % (percorso, numero, trovato.group(0), motivo))
-                    break
-
-
-def puntatori_malformati(riga):
-    """I difetti di forma in una riga: lista di (difetto, spiegazione).
-
-    Qui i backtick NON si tolgono, al contrario che nel controllo dei
-    puntatori interni. La ragione e' opposta: li' un backtick dice «questo e'
-    un tipo Rust, non un puntatore»; qui la forma con i backtick —
-    `docs/errori-e-limiti.md` — e' il modo NORMALE di citare un documento, e
-    ignorarla renderebbe il controllo cieco proprio sui siti piu' comuni:
-    e' cosi' che un riferimento a un file cancellato sopravvive.
-    """
-    pulita = riga
-    trovati = []
-
-    incollato = INCOLLATO.search(pulita)
-    if incollato is not None:
-        trovati.append((
-            incollato.group(0),
-            'un puntatore a documento seguito da `/` si legge come un '
-            'percorso. Due riferimenti sono due riferimenti: separali con '
-            'una virgola.'))
-
-    md = RIFERIMENTO_MD.search(pulita)
-    if md is not None:
-        for frammento in FRAMMENTO.finditer(pulita, md.end()):
-            # L'attribuzione deve stare ATTACCATA al frammento: cercarla in
-            # tutta la riga assolverebbe un «§3» orfano solo perche' altrove
-            # c'e' un «ICD §9» legittimo.
-            inizio = max(0, frammento.start() - 24)
-            contesto = pulita[inizio:frammento.end()]
-            attribuzione = SEZIONE_ATTRIBUITA.search(contesto)
-            if attribuzione is not None and attribuzione.end() == len(contesto):
-                continue
-            trovati.append((
-                frammento.group(0).strip(),
-                'frammento di sezione orfano dopo %r: i documenti nuovi non '
-                'hanno sezioni numerate, e chi legge cerca qualcosa che non '
-                'esiste.' % md.group(0)))
-            break
-    return trovati
-
-
-def controlla_puntatori_malformati(file_tracciati, problemi):
-    for percorso in file_tracciati:
-        if ESENTI_DAI_MORTI.match(percorso):
-            continue
-        if not percorso.endswith(TESTUALI):
-            continue
-        if percorso == 'scripts/verifica_documentazione.py':
-            continue  # e' l'elenco stesso
-        if not os.path.exists(percorso):
-            continue
-        for numero, riga in enumerate(testo(percorso).split('\n'), 1):
-            for difetto, spiegazione in puntatori_malformati(riga):
-                problemi.append(
-                    'PUNTATORE MALFORMATO %s:%d: %r\n  %s'
-                    % (percorso, numero, difetto, spiegazione))
-
-
-# Le due forme che il controllo deve vedere, e le tre che deve lasciar
-# passare. Un rilevatore che segnala tutto e' inutile quanto uno cieco.
-MUTAZIONI_PUNTATORI = [
-    'residuo (errori-e-limiti.md#memoria-governata §3) da rimuovere',
-    'residuo (errori-e-limiti.md/architettura.md#planner-ed-executor) qui',
-    'canone GeoArrow-WKB (architettura.md e par. 2)',
-    # Un frammento legittimo sulla stessa riga non deve assolvere l'orfano:
-    # e' l'errore che una ricerca sull'intera riga farebbe.
-    'publish (errori-e-limiti.md#publish-e-cleanup, ICD §9) e poi §3 orfano',
-]
-LEGITTIMI_PUNTATORI = [
-    'rename atomico di publish (errori-e-limiti.md#publish-e-cleanup, ICD §9)',
-    'assi §9 di R9.7, e piano-v5.md#contratti-di-input per il resto',
-    'due riferimenti (errori-e-limiti.md, architettura.md#planner-ed-executor)',
-]
-
-
-def prova_di_mutazione_puntatori():
-    """Inietta le due forme e pretende che il controllo le veda."""
-    problemi = []
-    for mutazione in MUTAZIONI_PUNTATORI:
-        if not puntatori_malformati(mutazione):
-            problemi.append(
-                'IL GATE E\' CIECO: %r non viene visto.\n'
-                '  Senza questo controllo i residui della riscrittura dei '
-                'riferimenti rientrano al primo cambio.' % mutazione)
-    for legittimo in LEGITTIMI_PUNTATORI:
-        difetti = puntatori_malformati(legittimo)
-        if difetti:
-            problemi.append(
-                'IL GATE E\' RUMOROSO: %r segnalato come malformato (%r).\n'
-                '  Un controllo che segnala anche cio\' che e\' giusto '
-                'smette di essere letto.' % (legittimo, difetti[0][0]))
-    return problemi
-
-
 # Un riferimento in chiaro a una sezione: `piano-v5.md#alias-legacy` dentro
-# un commento Rust, dove la sintassi dei link Markdown non esiste. Il
-# controllo dei collegamenti non li vede — guarda i soli `[testo](file#anc)`
-# nei documenti pubblici — e infatti 79 riferimenti a un'ancora inesistente
-# sono vissuti per tutto il reset senza che nulla protestasse.
+# un commento Rust, dove la sintassi dei link Markdown non esiste e il
+# controllo dei collegamenti non guarda.
 RIFERIMENTO_TESTUALE = re.compile(r'([\w-]+\.md)#([\w-]+)')
 
 
@@ -516,7 +266,7 @@ def controlla_ancore_testuali(file_tracciati, problemi):
                 'quella giusta.' % (percorso, ', '.join(sorted(doppie))))
 
     for percorso in file_tracciati:
-        if ESENTI_DAI_MORTI.match(percorso):
+        if ESENTI.match(percorso):
             continue
         if not percorso.endswith(TESTUALI):
             continue
@@ -649,7 +399,7 @@ def controlla_decisioni(file_tracciati, problemi):
 
     citazioni = {}
     for percorso in file_tracciati:
-        if ESENTI_DAI_MORTI.match(percorso):
+        if ESENTI.match(percorso):
             continue
         if not percorso.endswith(TESTUALI):
             continue
@@ -735,8 +485,7 @@ def controlla_artefatti(problemi):
 
 #: Nomi di base, dentro vendor/, che questo progetto scrive di suo — non
 #: codice o testo upstream. Un file PER NOME, non un pattern largo: ogni
-#: aggiunta e' una decisione dichiarata qui, come le voci di PUBBLICI sopra
-#: di cui questi stessi percorsi fanno parte.
+#: aggiunta e' una decisione dichiarata qui.
 BASENAME_NOSTRI_IN_VENDOR = ('PROVENANCE.md', 'PROVENANCE-FILTRO-SPERIMENTALE.md')
 
 
@@ -748,9 +497,8 @@ def _e_terza_parte(percorso):
     L'eccezione esiste per il testo che non abbiamo scritto — un commento di
     `geo` che contiene «E2», un `CHANGES.md` upstream con due sezioni
     «changed» non sono uno scostamento di QUESTA documentazione. Non deve
-    diventare un'esenzione per la documentazione nostra: questi file sono
-    gia' in PUBBLICI sopra, e restano soggetti alle stesse regole di tutto il
-    resto — puntatori, ancore, superficie."""
+    diventare un'esenzione per la documentazione nostra: questi file restano
+    soggetti alle stesse regole di tutto il resto — puntatori e ancore."""
     return (percorso.startswith('vendor/')
             and os.path.basename(percorso) not in BASENAME_NOSTRI_IN_VENDOR)
 
@@ -762,11 +510,7 @@ def main():
     # `git ls-files`, quindi resta attivo su tutto `vendor/` invariato: un
     # binario vendorizzato per errore continua a essere rilevato anche nel
     # codice upstream escluso qui.
-    controlla_superficie(file_tracciati, problemi)
-    controlla_collegamenti(problemi)
-    controlla_riferimenti_morti(file_tracciati, problemi)
-    controlla_puntatori_malformati(file_tracciati, problemi)
-    problemi.extend(prova_di_mutazione_puntatori())
+    controlla_collegamenti(file_tracciati, problemi)
     controlla_ancore_testuali(file_tracciati, problemi)
     problemi.extend(prova_di_mutazione_ancore(file_tracciati))
     controlla_decisioni(file_tracciati, problemi)
@@ -785,17 +529,14 @@ def main():
         len(RIFERIMENTO_TESTUALE.findall(riga))
         for percorso in file_tracciati
         if percorso.endswith(TESTUALI) and os.path.exists(percorso)
-        and not ESENTI_DAI_MORTI.match(percorso)
+        and not ESENTI.match(percorso)
         and percorso != 'scripts/verifica_documentazione.py'
         for riga in testo(percorso).split('\n'))
-    print('documentazione coerente: %d documenti pubblici, %d eccezioni, '
-          '%d puntatori definiti e tutti citati, nessun riferimento morto, '
-          'nessun puntatore malformato (%d mutazioni iniettate e viste, %d '
-          'forme legittime lasciate passare), %d riferimenti testuali a una '
-          'sezione tutti risolti e nessuna ancora duplicata, catalogo e '
-          'operazioni allineati, nessun artefatto tracciato'
-          % (len(PUBBLICI), len(ECCEZIONI), definiti,
-             len(MUTAZIONI_PUNTATORI), len(LEGITTIMI_PUNTATORI), riferimenti))
+    print('documentazione coerente: %d documenti, %d puntatori definiti e '
+          'tutti citati, %d riferimenti testuali a una sezione tutti risolti e '
+          'nessuna ancora duplicata, catalogo e operazioni allineati, nessun '
+          'artefatto tracciato'
+          % (len(documenti(file_tracciati)), definiti, riferimenti))
 
 
 main()

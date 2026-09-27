@@ -139,8 +139,8 @@ cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
 rustup target add x86_64-pc-windows-msvc
 cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc
 
-# i gate Python: assert nel codice di produzione, pin delle action, commenti al
-# presente, superficie documentale, e gli altri `scripts/verifica_*.py`
+# i gate Python: assert nel codice di produzione, pin delle action, commenti
+# senza diario, collegamenti dei documenti, e gli altri `scripts/verifica_*.py`
 for g in scripts/verifica_*.py; do python "$g" || break; done
 
 # coverage (le soglie sono quelle della CI) e smoke del fuzzing
