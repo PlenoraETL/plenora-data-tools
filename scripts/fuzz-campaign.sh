@@ -44,12 +44,18 @@ SECONDS_PER_TARGET=$(awk "BEGIN { printf \"%d\", $HOURS * 3600 }")
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # I target sono i `[[bin]]` di fuzz/Cargo.toml: una fonte sola, perche' una
 # copia a mano diverge in silenzio e la campagna esercita un elenco vecchio.
+# `awk` e non un interprete: lo script gira anche da Git Bash, dove Python puo'
+# mancare o essere quello di Windows, e un checkout CRLF lascia `\r` in coda.
 ALL_TARGETS=()
 while IFS= read -r nome; do
     ALL_TARGETS+=("$nome")
-done < <(python3 -c 'import sys, tomllib
-print("\n".join(b["name"] for b in tomllib.load(open(sys.argv[1], "rb"))["bin"]))' \
-    "$PROJECT_ROOT/fuzz/Cargo.toml")
+done < <(awk '
+    { sub(/\r$/, "") }
+    /^\[\[bin\]\]/ { nel_bin = 1; next }
+    /^\[/ { nel_bin = 0 }
+    nel_bin && /^name[[:space:]]*=/ {
+        sub(/^name[[:space:]]*=[[:space:]]*"/, ""); sub(/".*$/, ""); print; nel_bin = 0
+    }' "$PROJECT_ROOT/fuzz/Cargo.toml")
 if [ "${#ALL_TARGETS[@]}" -eq 0 ]; then
     echo "nessun target letto da fuzz/Cargo.toml" >&2
     exit 1
