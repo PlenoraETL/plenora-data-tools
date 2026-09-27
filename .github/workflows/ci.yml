@@ -135,6 +135,15 @@ jobs:
       - name: Clippy (esempi con required-features)
         run: cargo clippy -p plenora-engine --all-targets --locked --features internals
 
+      # errori-e-limiti.md#memoria-governata: il budget di memoria della libreria si chiama
+      # `max_governed_memory_bytes` e NON ha alias. Il nome della v4 vive
+      # solo nel modulo di migrazione. Senza questo gate la decisione
+      # sopravvive finche' qualcuno non riaggiunge il vecchio nome «per
+      # compatibilita'»: e' esattamente il modo in cui una promessa
+      # ritirata torna in circolazione.
+      - name: Gate nome del budget di memoria (errori-e-limiti.md#memoria-governata)
+        run: python scripts/verifica_nome_budget_memoria.py
+
   # I gate che leggono i SORGENTI, in un job proprio.
   #
   # release.md impone job separati, e la ragione e' operativa: in serie il
