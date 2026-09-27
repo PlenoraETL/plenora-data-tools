@@ -21,9 +21,9 @@ proprietà e cleanup. Dettaglio in [`isolamento.md`](isolamento.md).
 
 Il core è una release candidate credibile: i formati DAG sono **due** — il
 piano v5 e il piano v6, che aggiunge `max_domain_memory_bytes` e ha un dominio
-d'identità proprio — la CLI è l'eseguibile distribuito, le 146 operazioni del
-catalogo sono documentate, e la CI verifica Linux e Windows con sedici job —
-il conteggio lo dichiara [`release.md`](release.md), che è l'autorità sui gate.
+d'identità proprio — la CLI è l'eseguibile distribuito, il catalogo è
+documentato in [`operazioni.md`](operazioni.md), generato, e la CI verifica
+Linux e Windows ([`release.md`](release.md) è l'autorità sui gate).
 
 Il v4 continua a funzionare, migrato nel canonico v5, di cui condivide il
 `plan_hash`; il confine d'identità è fra v5 e v6, e lì soltanto.
@@ -33,89 +33,28 @@ ordine di precedenza.
 
 ---
 
-## 1. Reset documentale — **completato**
-
-La documentazione descrive ora soltanto ciò che il progetto è, i contratti
-validi, i limiti aperti e la strada verso la produzione. La storia resta in
-Git, non nel worktree: nessun archivio, nessun file conservato «per memoria».
-
-La superficie pubblica è chiusa da un gate che rifiuta ogni Markdown fuori
-dalla allowlist, i collegamenti rotti e i riferimenti a documenti eliminati.
-
 ## 2. La memoria governata non è un tetto duro
 
 **È il limite più serio del progetto**, ed è la ragione per cui il core non è
-in produzione.
+in produzione. Il tetto duro per esecuzione esiste, ed è il profilo isolato su
+Linux ([`errori-e-limiti.md`](errori-e-limiti.md#il-tetto-duro-per-esecuzione-è-il-profilo-isolato));
+il profilo in-process, quello predefinito, resta come descritto qui.
 
-Il budget governa la **ritenzione** del risultato, non la sua costruzione:
+Nel profilo in-process il budget governa la **ritenzione** del risultato, non la sua costruzione:
 dove il lease è preso dopo l'allocazione — quasi ovunque — un input che
 produce un output molto più grande del budget porta all'esaurimento della
 memoria **prima** che l'errore esista. Il fallimento è un OOM, non un errore
 diagnosticabile. Il quadro completo è in
 [`errori-e-limiti.md`](errori-e-limiti.md).
 
-### La decisione normativa: isolamento, non previsione
+### Le fasi 5 e 6
 
-Questo documento presentava due strade — preflight per operazione, oppure
-reservation preventiva — ed entrambe poggiavano sulla stessa assunzione: che
-la correttezza si ottenga **prevedendo** quanta memoria servirà. La decisione
-è ora una sola, e l'assunzione è respinta.
+Le fasi 0-4 del refactor sono chiuse; la storia sta in Git (tag
+`baseline-pre-fase-4`). Restano aperte la 5 — il legacy ridotto a un confine
+di migrazione — e la 6 — superficie pubblica e commenti, che cambia
+semantica solo la prima.
 
-**La garanzia è l'isolamento.** Il lavoro si esegue in un processo worker con
-un limite imposto dal sistema operativo, un supervisore che ne osserva l'esito,
-e una pubblicazione atomica verificata. Se il worker sfora, il sistema
-operativo lo termina; il supervisore lo constata e produce un errore
-diagnosticabile; nulla è stato pubblicato, perché la pubblicazione avviene solo
-alla fine e in modo atomico.
-
-Perché questa e non la previsione: **per le operazioni che dipendono dai dati
-una stima resta una stima**. Il fattore di espansione di un join, la
-cardinalità di un raggruppamento, la dimensione di un buffer geometrico non si
-conoscono prima di leggere i dati. Un preflight conservativo abbastanza da
-essere sempre corretto rifiuterebbe piani legittimi; uno abbastanza permissivo
-da accettarli non garantisce nulla. Fondare la correttezza su una stima
-significa avere una garanzia che vale finché la stima è giusta — cioè non una
-garanzia.
-
-**La profilazione preventiva resta utile, ma cambia ruolo**: non è il
-fondamento della correttezza, è l'ottimizzazione che fa fallire *prima e
-meglio*. Un piano che si sa insostenibile può essere rifiutato in validazione
-invece che dopo dieci minuti di lavoro. È valore reale, ed è subordinato.
-
-I prerequisiti già in piedi restano validi: il governor ha un permesso atomico
-— verifica e prenotazione in una sola operazione — e la contabilità è
-linearizzabile. Servono al secondo livello, non al primo.
-
-Il costo dichiarato di questa scelta: è un lavoro più grande di un preflight,
-e la ragione per farlo comunque è che il preflight non risolverebbe il
-problema. I meccanismi sono stati **prototipati in quattro cicli** — nascita
-vincolata e contenimento sono dimostrati, l'attribuzione solo sotto le
-condizioni dette più sotto — e su **macOS** il profilo isolato resta non
-supportato finché un prototipo non dimostri copertura *e* attribuzione.
-
-### Il refactor strutturale è il veicolo, non un lavoro parallelo
-
-Qualunque cosa la fase 4 aggiunga — il confine col worker, il protocollo col
-supervisore, l'eventuale profilazione preventiva — ha bisogno di **un posto
-solo dove abitare**. Oggi l'engine conosce i tipi di configurazione di ogni
-singolo kernel: senza le facciate di famiglia lo stesso lavoro andrebbe
-ripetuto per ciascuna delle 146 operazioni.
-
-L'ordine delle fasi va letto così: le prime tre non cambiano comportamento e
-servono a costruire il posto, la quarta è questo punto 2 e chiude il blocco.
-
-| fase | contenuto | cambia semantica | stato |
-|---|---|---|---|
-| 0 | baseline e oracoli | no | **chiusa** |
-| 1 | alleggerire la CLI, scomporre l'executor | no | **chiusa** |
-| 2 | autorità unica per Arrow/CRS, errori, limiti | no | **chiusa** |
-| 3 | `OperationId` esaustivo, facciate di famiglia | no | **chiusa** |
-| **4** | **il contratto di memoria — questo punto 2** | **sì** | quattro cicli di prototipi come **evidenza esplorativa** ([`prototipi-isolamento.md`](prototipi-isolamento.md)); sequenza `PR-0` … `PR-12` integrata; resta la chiusura, in [Requisiti della fase 4](#requisiti-della-fase-4) |
-| 5 | il legacy ridotto a un confine di migrazione | sì | **aperta**: 0 criteri completati |
-| 6 | superficie pubblica e commenti | no | **aperta**: 2 criteri su 3 completati |
-
-**Criteri di uscita delle fasi 5 e 6**, perché finora mancavano. Lo stato di
-ciascuno è verificabile, e nessuna delle due fasi si dichiara chiusa finché
+**Criteri di uscita.** Lo stato di ciascuno è verificabile, e nessuna delle due fasi si dichiara chiusa finché
 tutte le righe che la riguardano non lo sono:
 
 | fase | è chiusa quando | oggi |
@@ -133,89 +72,13 @@ l'unico dei suoi tre criteri ancora da fare. Il gate sui commenti è entrato
 prima del resto perché presidia una regressione — un commento che racconta il
 passato — non perché l'ordine delle fasi sia cambiato.
 
-### Baseline pre-fase-4 — freeze strutturale
+### La fase 4: chiusa, con i limiti dichiarati
 
-**Le modifiche strutturali sono ferme.** Lo stato registrato è:
-
-| | |
-|---|---|
-| commit | `922aea30a611727daee8aaf2c5bd924b49b71207` |
-| tag | `baseline-pre-fase-4` |
-| suite | 1511 test, **con le feature predefinite** |
-| gate | `fmt`, `clippy`, R6, i cinque gate Python nel container di riferimento |
-| toolchain | `rust:1.98` nel container di riferimento |
-| CI | **non verde a quella revisione** — vedi sotto |
-
-**Il tag è una baseline strutturale, non una baseline con CI verde.** A quella
-revisione il job `test full-backends (linux)` è rosso: l'oracolo della
-superficie CLI, entrato con `9966508`, fissa `backends: []`, che è vero con le
-feature predefinite e falso con `full-backends`. L'oracolo è oggi un
-**modello** con un marcatore per il valore dei backend, materializzato da
-costanti esaustive per combinazione di feature, e il confronto resta byte per
-byte. Il tag non si sposta: una baseline che si muove per nascondere un difetto
-smette di essere una baseline.
-
-**Profili di build supportati:** `default` e `full-backends`, come dichiara
-[`release.md`](release.md). Le combinazioni parziali — solo `geos-backend`,
-solo `proj-backend` — restano compilabili e l'oracolo ha aspettative
-esplicite anche per loro, così una build parziale non produce un verde
-falso; ma non sono coperte dal CI e non sono profili supportati.
-
-Da qui ogni passo sulla memoria appartiene alla fase 4 e non può più
-nascondersi dentro un refactor strutturale: se un commit tocca allocazioni,
-lo dichiara.
-
-**Che cosa hanno prodotto le fasi 0-3.**
-
-| | prima | dopo |
-|---|---|---|
-| `main.rs` | 5116 righe | **2835** in nove moduli |
-| `executor.rs` | 5481 righe | **975** in dodici moduli |
-| identità delle operazioni | stringhe libere | `OperationId`, 146 varianti in bijezione verificata |
-| dispatch dei kernel | un enum con 15 varianti di due famiglie | due facciate, ciascuna esaustiva sulla propria |
-| autorità Arrow↔contratto | divisa fra CLI ed executor | unica, in `plenora-core::contract` |
-| limiti tabellari | adattatore con due default nascosti | mappatura dichiarata fra due autorità |
-
-**Cinque oracoli** sorvegliano che nulla di osservabile cambi:
-
-| oracolo | che cosa fissa |
-|---|---|
-| `catalog_snapshot.snap` | i 146 descrittori, campo per campo |
-| `oracoli_identita.snap` | `plan_hash` e fingerprint di nove piani, col JSON canonico accanto |
-| `oracolo_superficie_cli.snap` | stdout, stderr ed exit code di 29 invocazioni, byte per byte |
-| `oracolo_metriche.snap` | righe, batch e spill per nodo, esclusi i tempi |
-| `oracolo_round_trip_contratto.rs` | contratto → schema → contratto, e la convergenza in un giro |
-
-
-### Perché le facciate non espongono `memory_profile()`
-
-Le facciate della fase 3 espongono l'esecuzione e nient'altro. Il metodo
-`memory_profile()` sembra preparazione neutra e non lo è: incorpora il modello
-predittivo che la decisione qui sopra ha respinto. Metterlo nell'interfaccia
-lo avrebbe promosso a contratto — e ogni implementazione futura avrebbe dovuto
-onorarlo, anche dopo aver scelto l'isolamento.
-
-I quattro livelli restano distinti, e solo il terzo garantisce la correttezza:
-
-| livello | che cosa dà |
-|---|---|
-| `OperationId` e facciate | struttura e tipizzazione, indipendenti dalla strategia di memoria |
-| profilo di allocazione | prima decisione concreta della fase 4, non un prerequisito |
-| **supervisore, isolamento, pubblicazione atomica verificata** | **la garanzia effettiva che il risultato sia valido** |
-| profilazione preventiva | ottimizzazione successiva, mai fondamento della correttezza |
-
-### Requisiti della fase 4
-
-Il progetto tecnico che li attua è in [`isolamento.md`](isolamento.md):
-garanzie e non-garanzie, macchine a stati, protocollo, handshake, verifica,
-matrici e suddivisione in PR. La sequenza `PR-0` … `PR-12` è integrata, e ciò
-che è entrato sta nel codice, nei test e in quel documento. Qui resta ciò che
-manca per chiudere la fase.
-
-**Il criterio.** `PR-12` si verifica con «l'intera matrice, su Linux; su
-Windows e macOS il profilo è rifiutato in validazione»
-([`isolamento.md`](isolamento.md#112-le-pr-dopo-i-prototipi)), e la fase con
-`F4-5` (sotto).
+Il progetto tecnico è in [`isolamento.md`](isolamento.md). La sequenza `PR-0`
+… `PR-12` è integrata, e il criterio di uscita è soddisfatto: «l'intera
+matrice, su Linux; su Windows e macOS il profilo è rifiutato in validazione»
+([`isolamento.md`](isolamento.md#112-le-pr-dopo-i-prototipi)), e `F4-5`. La
+tabella dice come, e dove la copertura si ferma.
 
 | | stato |
 |---|---|
@@ -227,268 +90,10 @@ Windows e macOS il profilo è rifiutato in validazione»
 | Windows | rifiuto in validazione provato dal binario vero, nel job Windows della CI |
 | macOS | rifiuto in validazione provato da un test unitario soltanto: la CI non ha un job macOS |
 
-I prototipi hanno avuto **quattro cicli**, e sono **evidenza esplorativa**: le
-misure stanno in [`prototipi-isolamento.md`](prototipi-isolamento.md), che è
-l'autorità sul loro numero e sul loro esito.
-
-Nascita vincolata e contenimento sono dimostrati. L'**attribuzione no**:
-
-- su **Linux** regge solo se il dominio è reso foglia dal kernel. Il secondo
-  ciclo ha eseguito un'evasione in tre passi — crea un sottogruppo, ci si
-  sposta, delega il controller — dopo la quale `memory.events.local` non vede
-  più l'uccisione;
-- su **Linux** regge solo con la separazione dei privilegi (`F4-15`): con lo
-  stesso UID il worker disfa il preflight e esce dal dominio;
-- su **Windows** nessuna fonte è sufficiente da sola: la notifica non è
-  garantita, la violazione interrogabile vive 25 millisecondi — meno di quanto
-  duri la barriera di quiescenza — e l'unico indicatore durevole ha falsi
-  positivi misurati, mentre l'assenza di falsi negativi non è dimostrata. La
-  piattaforma è **non supportata** (`F4-11`), e le sue misure restano solo
-  come motivazione.
-
-Il progetto è **approvato** e la sequenza di PR di
-[`isolamento.md`](isolamento.md) è integrata. Non è congelato: le PR che
-cambiano semantica — `PR-0`, `PR-1`, `PR-2`, `PR-5`, `PR-10`, `PR-12` — restano
-quelle dichiarate lì, e una revisione del progetto è ancora possibile davanti a
-un'evidenza nuova.
-
-Quello che **non** è approvato è saltare l'ordine: ogni PR presuppone le
-precedenti, e il criterio di uscita della fase (`F4-5`) si verifica su
-`PR-12`.
-
-**F4-9 — Il dominio è una foglia dimostrata.** L'attribuzione su Linux vale
-solo se il worker non può creare discendenti: `cgroup.max.depth = 0`, worker
-senza privilegi sulla gerarchia, e lettura anche degli eventi gerarchici come
-rete. Un dominio non sigillato non è un dominio osservabile.
-
-**F4-10 — La pubblicazione è preceduta da una barriera causale.** Quiescenza
-del dominio, poi snapshot e drain dell'evidenza, poi classificazione
-definitiva, poi la pubblicazione. Un OOM tardivo non può essere degradato ad
-avvertenza: il prototipo ha misurato un capofila uscito con 0, un processo
-ancora vivo e l'evidenza arrivata duecento millisecondi dopo.
-
-La quiescenza si legge da `cgroup.events`, campo `populated`, che il kernel
-garantisce comprendere i discendenti — **non** da `cgroup.procs`, che ha
-riportato `0` mentre un processo del dominio era vivo un livello sotto, e
-nemmeno da una scansione ricorsiva, che è una corsa.
-
-**F4-12 — Il dominio deve essere uccidibile.** `memory.oom.group = 1` non
-uccide i task con `oom_score_adj = -1000`, che si eredita da un chiamante
-protetto. Il prototipo ha misurato trecentocinque invocazioni dell'OOM e zero
-uccisioni, con il dominio bloccato. Lo spawner normalizza `oom_score_adj`, lo
-**rilegge** e fallisce chiuso; il supervisore dispone di `cgroup.kill`, che
-non consulta quel valore.
-
-**F4-13 — L'evidenza è una struttura, non un booleano.** Delta locali e
-gerarchici insieme — `oom`, `oom_kill`, `oom_group_kill` — con una
-classificazione dichiarata per ogni combinazione, compresa quella in cui il
-limite è raggiunto e nessuno è uccidibile.
-
-**F4-14 — Ogni proprietà configurata va riletta.** Tetto, group kill, sigillo,
-swap, `oom_score_adj` e leggibilità di `cgroup.events`: il preflight le scrive
-e le verifica, e il profilo isolato non parte se una sola diverge.
-
-**F4-15 — Il worker non possiede alcuna autorità sul proprio dominio.** Non
-«UID distinto», che è un modo e non la proprietà: nessuna fra identità reale,
-effettiva e salvata, gruppi supplementari, capability, namespace, descrittori
-scrivibili ereditati e permessi sulla gerarchia deve dargli scrittura sul
-control plane né la possibilità di lasciare il dominio. Il prototipo ha
-misurato un worker con lo stesso UID del supervisore rimettere
-`cgroup.max.depth` a 10, `memory.max` a 1 GiB, `memory.oom.group` a 0 e
-**uscire dal dominio**.
-
-Il **provider iniziale è uno solo** — identità distinta con gerarchia di
-proprietà del control plane — perché è l'unico provato. Helper del control
-plane e mount namespace restano strade documentate, ciascuna col proprio
-prototipo prima di essere offerta.
-
-La verifica sta in **`PreparaIsolamento`, prima dello spawn**, non nella
-validazione del piano: la disponibilità dipende dall'ambiente, non dal piano,
-e lo stesso piano è eseguibile su una macchina e non su un'altra. L'esito
-negativo è `IsolationUnavailable`.
-
-**F4-16 — Il commit point è dichiarato, e l'ambiguità si risolve con
-un'identità d'esecuzione.** La creazione no-clobber della destinazione rende
-atomico il file, non la coppia *pubblicato + riportato*: se il coordinatore muore dopo il commit, l'output è
-visibile e il chiamante non lo sa. `GA-1` copre i guasti **precedenti** il
-commit.
-
-Sigillo e contratto **non bastano** a risolvere: dimostrano che l'artefatto è
-valido, non che sia di quella esecuzione — due esecuzioni dello stesso piano su
-input diversi producono lo stesso contratto.
-
-Serve un **`commit_token` fornito dal chiamante prima dell'invocazione**, non
-scelto da noi e restituito alla fine: un coordinatore morto non restituisce
-nulla, e poiché è il processo del chiamante non può nemmeno comunicare la
-propria morte. La catena è handshake → metadati dell'artefatto → verifica
-prima della pubblicazione.
-
-È distinto dall'`execution_id`, che **resta com'è**: generato dall'engine a
-ogni `execute`, con un test che ne verifica la diversità, e senza alcun ruolo
-nella risoluzione — il chiamante non lo conosce prima, quindi non può
-confrontarlo con nulla.
-
-**L'unicità è una precondizione esterna e non verificabile da noi**, perché il
-token deve essere noto al chiamante prima dell'esecuzione. La garanzia è
-quindi condizionata: se il token non si ripete fra tentativi la risoluzione
-distingue questo output da qualunque altro; se si ripete, non lo distingue e
-non ce ne accorgiamo. Per il profilo isolato il token è **obbligatorio** —
-un'invocazione che non lo porta è rifiutata in validazione.
-
-La risoluzione è una procedura indipendente,
-`risolvi_commit(commit_token, destinazione)`, chiamabile da un processo
-successivo, e rende **osservazioni, non decisioni**: `CommittedMatching` —
-che richiede sigillo e struttura validi, non solo la chiave —
-`OccupiedByOtherAttempt`, `IdentityMissing`, `Absent`,
-`InvalidOrUnreadable`. In particolare `Absent` **non** autorizza a riprovare:
-un file può mancare anche per perdita di durabilità o rimozione esterna.
-
-**F4-19 — Una sola semantica di concorrenza sulla destinazione: no-clobber.**
-La prima pubblicazione vince, la seconda fallisce con `Conflict`. Mai una
-sostituzione silenziosa.
-
-Il commit point è la **creazione no-clobber della destinazione**, non un
-rename: `persist_noclobber` usa `RENAME_NOREPLACE` dove kernel e filesystem lo
-offrono, e altrimenti ripiega su `hard_link` più `unlink` — con l'errore
-dell'`unlink` ignorato, quindi con un temporaneo che può restare senza che
-nessuno lo dica. Il no-clobber regge in entrambi i rami; il silenzio no. Dopo
-il commit si verifica che il temporaneo non ci sia più, e se c'è lo si riporta
-con l'avvertenza machine-readable.
-
-**F4-20 — I metadati operativi stanno nel footer IPC, non nello schema.** Il
-formato Arrow IPC ha i custom metadata di file, che vivono nel footer:
-`FileWriter::write_metadata` li scrive, `FileReader::custom_metadata` li
-rilegge, e il percorso d'uscita usa già `FileWriter`. Il `commit_token` va lì.
-
-`Schema`, `DataContract`, `plan_hash` e i confronti restano invariati **per
-costruzione**, senza regole da applicare in tre punti e senza il rischio che
-un namespace escluso «perché operativo» diventi un giorno semanticamente
-importante mentre nessuno lo guarda più. L'artefatto resta un singolo file
-Arrow IPC standard.
-
-**F4-21 — `CommitToken` è un tipo chiuso, con una forma concreta.** Un valore
-opaco di 32 byte reso da **esattamente 64 caratteri esadecimali minuscoli**,
-chiave `plenora.commit.token` nel footer, validazione prima dello spawn,
-costruzione solo tramite un costruttore che valida, e **mai il valore grezzo
-negli errori**.
-
-Il costruttore garantisce **forma, lunghezza e alfabeto**, che è tutto ciò che
-sessantaquattro caratteri gli permettono di vedere. Non garantisce la
-**casualità** — un token di soli zeri è formalmente valido — né l'**unicità**.
-La generazione con un generatore crittograficamente sicuro è una
-raccomandazione al chiamante, non una proprietà del tipo.
-
-**F4-22 — I custom metadata sono nel confine ostile.** `arrow-ipc` legge il
-campo 4 del footer con `key().unwrap()` e `value().unwrap()`, quindi una voce
-senza chiave o senza valore andrebbe in panico dentro la dipendenza. Il
-confine la valida prima di costruire il `FileReader`, e i requisiti sono:
-
-| | |
-|---|---|
-| **1** | validazione grezza di `Footer.custom_metadata` **prima** di costruire il `FileReader` |
-| **2** | chiave e valore **obbligatori** |
-| **3** | tetti applicati **prima** delle allocazioni: **256** coppie per collezione, **128** byte di chiave, **64 KiB** di valore. Costanti proprie del confine IPC — `MAX_IPC_CUSTOM_METADATA_*` — **non** derivate dal tetto sul CRS |
-| **3-ter** | **costanti interne non ampliabili**, non campi di `IpcLimits`: un tetto contro l'abuso che il chiamante può alzare non è un tetto |
-| **3-bis** | UTF-8 verificato da noi; chiave vuota rifiutata; valore vuoto accettato; chiavi sconosciute accettate e ignorate — il confine valida la **forma**, non il vocabolario |
-| **4** | **chiavi duplicate rifiutate**: nessuna semantica «vince l'ultima» |
-| **5** | lettura autoritativa del token dal **footer validato**, non dalla `HashMap` di Arrow |
-
-**È una classe, non un caso.** `fb_key_value` è condiviso da tre chiamanti —
-campi, schema, messaggi — e valida **una** coppia; `fb_custom_metadata`, che
-vede l'intera collezione, applica il tetto sul conteggio e rifiuta i duplicati,
-che sono una proprietà dell'insieme. Che cosa questo rifiuta è registrato in
-[`errori-e-limiti.md`](errori-e-limiti.md).
-
-**F4-17 — Si attribuisce solo con il group kill locale.** I delta sono
-contatori aggregati su un intervallo e la loro coesistenza non prova un nesso:
-`oom_kill` conta le uccisioni da **qualunque** OOM killer, quindi un antenato
-con un tetto più basso lo fa salire senza che il tetto del dominio venga
-raggiunto. L'unico segnale che lega causa ed effetto in un solo fatto è
-`memory.events.local` → `oom_group_kill`: il kernel ha ucciso *questo* dominio
-*come gruppo*.
-
-`ResourceLimit` si attribuisce **solo** lì. Ogni altra combinazione con
-evidenza di pressione è **non attribuita** — una categoria propria, da
-aggiungere in `PR-1`, che porta i contatori e non conclude al posto di chi
-legge. In nessun caso ambiguo si pubblica.
-
-**F4-18 — I picchi non fondano garanzie.** `memory.peak` di un figlio ha
-superato quello del padre che lo contiene di 233 472 byte, mentre il kernel lo
-definisce come massimo del cgroup **e dei discendenti**: i due valori non
-rispettano quella relazione. Non se ne conclude né che il tetto sia stato
-superato né che non lo sia stato — il picco del padre non è più affidabile di
-quello del figlio, e usarlo per provare «superamento zero» mentre si dichiara
-il contatore inaffidabile sarebbe incoerente.
-
-**Su questo kernel il superamento temporaneo non è né dimostrato né escluso.**
-Resta che i picchi servono al dimensionamento con l'incertezza dichiarata, non
-a fondare garanzie. L'ipotesi dell'addebito *tentato* — la stessa firma
-trovata su Windows in `PeakJobMemoryUsed` — resta un'ipotesi finché non la
-prova una sonda dedicata.
-
-**F4-11 — Il profilo isolato su Windows è non supportato** finché non esiste
-una dipendenza vettata che copra tetto ed evidenza senza `unsafe`. La deroga
-alla regola permanente di `AGENTS.md` non è una decisione di questa fase.
-
-**F4-7 — Il tetto del dominio non è ampliabile dall'input.** Il limite in
-vigore è il minimo fra ciò che il piano chiede e la politica dell'host, che non
-viaggia nel piano né nel protocollo. Esiste anche un pavimento: sotto una certa
-soglia il dominio non è vitale, e i prototipi mostrano che i due sistemi lo
-comunicano male — `SIGKILL` prima di qualunque riga su Linux,
-`STATUS_STACK_OVERFLOW` su Windows. Un tetto sotto il pavimento va respinto in
-validazione.
-
-**F4-8 — L'esito si classifica dal dominio, mai dal codice d'uscita del
-capofila.** Su entrambe le piattaforme i prototipi hanno osservato un processo
-capofila **vivo, con uscita 0**, mentre il dominio aveva appena registrato un
-evento di limite. Su Linux `memory.oom.group=1` è quindi obbligatorio, non
-consigliato; su Windows, dove non esiste un equivalente, la precedenza
-dell'evidenza sul dichiarato è l'unica difesa.
-
-**F4-1 — Il limite è imposto dall'esterno.** Il worker esegue sotto un tetto
-di memoria imposto dal sistema operativo, non sotto un tetto che si
-autoapplica. Un processo che decide da solo quanto può allocare non è
-vincolato: è d'accordo con se stesso.
-
-**F4-2 — Il supervisore osserva l'esito, non lo deduce.** Se il worker viene
-terminato, il supervisore deve distinguere «terminato per il limite» da
-«uscito con errore» da «uscito bene». Un esito ambiguo diventerebbe un errore
-inventato o un successo non verificato.
-
-**F4-3 — La pubblicazione è atomica e verificata.** Nulla è visibile prima
-della fine, e ciò che diventa visibile è confrontato con ciò che era atteso.
-La garanzia non è che il worker si comporti bene, è che un worker che si
-comporta male non pubblichi.
-
-**F4-4 — Il resolver CRS è lo stesso da entrambe le parti.** Supervisore e
-worker devono usare **la stessa implementazione** di `CrsResolver`. Non è un
-dettaglio di configurazione: `plenora-core::crs::resolve_crs` e
-`plenora-kernels-geo::crs::resolve_crs` danno risposte diverse — il primo
-rifiuta con `CRS_BACKEND_UNAVAILABLE` ciò che il secondo risolve con PROJ. Se
-i due lati ne usassero due diversi, il supervisore potrebbe **rifiutare come
-invalido uno schema che il worker ha prodotto correttamente**, o accettarne
-uno che il worker non avrebbe potuto scrivere.
-
-Il resolver è un **argomento** di `contract_from_arrow_schema`, non una
-proprietà della compilazione, e l'handshake trasporta quale resolver è in uso:
-il supervisore rifiuta un worker che ne dichiari uno diverso. Un disaccordo qui
-è una condizione di errore (`InvalidConfiguration`, riga 10 della matrice), non
-una differenza da tollerare.
-
-**F4-5 — Nessuna allocazione critica prima dell'autorizzazione, oppure
-rifiuto esplicito.** È il criterio di uscita del punto 2. Con l'isolamento,
-«autorizzazione» significa che il limite è già in vigore quando il worker
-inizia, non che qualcuno abbia stimato in anticipo quanto servirà.
-
-**F4-6 — macOS resta non supportato** per il profilo isolato finché un
-prototipo non dimostri copertura *e* attribuzione del limite.
-
-
-**Regola per i PR del refactor.** Nessun PR mescola spostamenti strutturali e
-cambiamenti semantici: un PR dichiara quale dei due è, e non è mai entrambi.
-Chi sposta codice non tocca algoritmi né visibilità pubbliche, e dimostra
-l'equivalenza attraverso gli oracoli; chi cambia semantica lo fa a struttura
-ferma, e versiona esplicitamente ciò che rompe.
+La definizione dei requisiti `F4-1` … `F4-22`, con la motivazione che viene
+dai prototipi, sta in
+[`isolamento.md`](isolamento.md#2-sexies-i-requisiti-f4); qui ne resta lo
+stato, nella tabella sopra.
 
 ### Blocker dichiarato: la nuova linea normativa di `plenora-contracts`
 

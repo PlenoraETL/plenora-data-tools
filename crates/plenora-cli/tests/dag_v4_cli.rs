@@ -2527,7 +2527,7 @@ fn un_piano_che_richiede_isolamento_dipende_dalla_piattaforma_non_da_un_default(
 /// struttura valida in validazione non e' un'autorizzazione a eseguire —
 /// `executor::execute` respinge ANCHE quando la piattaforma e' Linux, perche'
 /// nessun chiamante di produzione collega oggi dominio, supervisore e worker
-/// (stato-e-roadmap.md#requisiti-della-fase-4). La prova che conta e'
+/// (isolamento.md#2-sexies-i-requisiti-f4). La prova che conta e'
 /// negativa: nessun file di output compare, su nessuna piattaforma.
 #[test]
 fn run_con_isolamento_non_esegue_mai_in_process() {
