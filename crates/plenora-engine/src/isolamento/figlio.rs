@@ -1060,6 +1060,15 @@ mod tests {
         guardia.arrenditi("il limite di raccolta e' scaduto")
     }
 
+    /// Se l'errore di lettura di `/proc/<pid>/...` dice che il processo non
+    /// c'e' piu': `NotFound` a directory gia' rimossa, oppure `ESRCH` (3 su
+    /// Linux) quando il processo esce fra l'apertura e la lettura. Ogni altro
+    /// errore non dice niente sull'esistenza.
+    #[cfg(unix)]
+    fn processo_sparito(lettura: &std::io::Error) -> bool {
+        lettura.kind() == std::io::ErrorKind::NotFound || lettura.raw_os_error() == Some(3)
+    }
+
     /// **La prova della resa**: il processo si ferma, dice com'e' andata, e il
     /// figlio non resta.
     ///
@@ -1083,6 +1092,7 @@ mod tests {
     /// in attesa ininterrompibile riceve il segnale e resta finche' la chiamata
     /// di sistema non ritorna — ed e' per questo che il messaggio dice «segnale
     /// inviato» e non «terminato».
+
     #[test]
     #[cfg(target_os = "linux")]
     fn la_resa_ferma_il_processo_e_non_lascia_il_figlio() {
@@ -1143,9 +1153,9 @@ mod tests {
         let mut resta = true;
         for _ in 0..200_u32 {
             match std::fs::read_to_string(&comando) {
-                // Solo «non esiste» e' un processo sparito: una lettura che
-                // fallisce per altro non dice niente, e il caso non la conta.
-                Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => {
+                // Solo un processo che non c'e' piu' e' sparito: una lettura
+                // che fallisce per altro non dice niente, e il caso non la conta.
+                Err(lettura) if processo_sparito(&lettura) => {
                     resta = false;
                     break;
                 }
@@ -1268,9 +1278,9 @@ mod tests {
         let mut resta = true;
         for _ in 0..200_u32 {
             match std::fs::read_to_string(&comando) {
-                // Solo «non esiste» e' un processo sparito: una lettura che
-                // fallisce per altro non dice niente, e il caso non la conta.
-                Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => {
+                // Solo un processo che non c'e' piu' e' sparito: una lettura
+                // che fallisce per altro non dice niente, e il caso non la conta.
+                Err(lettura) if processo_sparito(&lettura) => {
                     resta = false;
                     break;
                 }
@@ -1311,7 +1321,7 @@ mod tests {
         // dice niente, e il caso non la conta come prova.
         let stato = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stato) => stato,
-            Err(lettura) if lettura.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(lettura) if processo_sparito(&lettura) => String::new(),
             Err(lettura) => panic!("/proc/{pid}/stat non si legge: {lettura}"),
         };
         assert!(

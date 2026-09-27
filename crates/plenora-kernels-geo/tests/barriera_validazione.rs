@@ -38,11 +38,13 @@
 //! questo file verifica senza il candidato esatto non c'e' piu' per questi
 //! due reperti specifici quando il candidato e' applicato: resta la garanzia
 //! generale (contenimento se `geo` panicasse per un motivo diverso), provata
-//! separatamente e sinteticamente in `barriera_privacy_processo.rs`.
+//! separatamente e sinteticamente nel modulo `barriera_privacy_processo` dei
+//! test di `src/lib.rs`.
 //!
 //! # La verifica su stderr non e' qui
 //!
-//! Sta in `barriera_privacy_processo.rs`, perche' l'hook di panico e' **stato
+//! Sta nel modulo `barriera_privacy_processo` dei test di `src/lib.rs`, perche'
+//! l'hook di panico e' **stato
 //! globale del processo**: installarlo in questo binario legherebbe fra loro i
 //! casi che lo ospitano, e osservare stderr dall'interno dello stesso processo
 //! non e' osservare cio' che esce.
