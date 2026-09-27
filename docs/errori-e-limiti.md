@@ -2522,4 +2522,6 @@ un'indagine dedicata — fuori dal perimetro di questa integrazione.
 prenotazione descritti in questo documento esistano ancora **nella forma
 descritta**, e che i pattern eliminati non riappaiano. Un elenco del genere
 marcisce in silenzio: basta che qualcuno sposti una reservation e il documento
-resta convincente e falso.
+resta convincente e falso. I comportamenti del governor e della consegna
+dell'output non passano dallo script: li fissano i test di `governor.rs` e di
+`executor/tests.rs`, che verificano che cosa succede e non come è scritto.
