@@ -248,6 +248,16 @@ mod tests {
             "le tre forme restano distinguibili"
         );
         assert_eq!(forma_payload(altro.as_ref()), "payload non testuale");
+        // I testi sono pubblici: finiscono negli errori e sul filo di
+        // diagnosi. Si fissano tutti e tre.
+        assert_eq!(
+            forma_payload(statico.as_ref()),
+            "payload statico (contenuto non pubblicato)"
+        );
+        assert_eq!(
+            forma_payload(dinamico.as_ref()),
+            "payload dinamico (contenuto non pubblicato)"
+        );
     }
 
     #[test]

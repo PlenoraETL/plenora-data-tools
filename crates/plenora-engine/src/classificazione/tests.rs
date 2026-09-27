@@ -900,3 +900,22 @@ fn la_pressione_non_attribuita_sta_sopra_l_esito_del_worker() {
         "l'errore riportato sotto pressione e' quasi sempre la conseguenza"
     );
 }
+
+/// Il `Debug` di `FormaDelPayload` entra nel messaggio d'errore di un panico
+/// isolato: porta la descrizione pubblica, come quando il tipo era una stringa.
+#[test]
+fn il_debug_della_forma_porta_la_descrizione() {
+    let statico: &'static str = "segreto";
+    assert_eq!(
+        format!("{:?}", FormaDelPayload::di(&statico)),
+        "FormaDelPayload(\"payload statico (contenuto non pubblicato)\")"
+    );
+    assert_eq!(
+        format!("{:?}", FormaDelPayload::di(&"segreto".to_owned())),
+        "FormaDelPayload(\"payload dinamico (contenuto non pubblicato)\")"
+    );
+    assert_eq!(
+        format!("{:?}", FormaDelPayload::di(&7_u8)),
+        "FormaDelPayload(\"payload non testuale\")"
+    );
+}

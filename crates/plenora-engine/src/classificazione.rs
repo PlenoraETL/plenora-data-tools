@@ -55,8 +55,18 @@ pub enum EsitoWorker {
 /// Un tipo e non una `&'static str`, che accetterebbe qualunque letterale: il
 /// campo e' privato e porta un [`FormaPayload`], un enum chiuso. Il contenuto
 /// non entra **per costruzione**.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FormaDelPayload(FormaPayload);
+
+/// Il `Debug` porta la descrizione, non il nome della variante: finisce nel
+/// messaggio d'errore di un panico isolato, che resta quello di sempre.
+impl std::fmt::Debug for FormaDelPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FormaDelPayload")
+            .field(&self.0.descrizione())
+            .finish()
+    }
+}
 
 impl FormaDelPayload {
     /// Legge la forma di un payload di panico ([`FormaPayload::di`]).
