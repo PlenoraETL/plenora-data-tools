@@ -953,7 +953,8 @@ directory cancellabile per TTL, benché il processo sia vivo e locale.
 *Un heartbeat che fallisce è tollerato, ma solo per cinque minuti.* Un
 fallimento singolo della scrittura del lock si ritenta al batch successivo; uno
 **persistente** interrompe l'esecuzione con categoria `io` al primo confine di
-batch dopo cinque minuti senza un heartbeat riuscito. La soglia sta ben sotto
+batch dopo cinque minuti dal primo di una serie di heartbeat falliti
+consecutivi. La soglia sta ben sotto
 il TTL perché l'errore arrivi prima che un altro avvio possa raccogliere la
 directory con dentro lo spill di questa esecuzione.
 
@@ -1760,7 +1761,8 @@ nella sequenza di
 già aperto in scrittura sul filesystem del control plane sopravvive al cambio
 d'identità: i permessi si controllano all'apertura, non a ogni scrittura.
 Chiuderne uno ereditato per numero richiede di costruirne un proprietario da un
-intero grezzo, e ogni via è `unsafe`. Rifiutare è fail-closed; chiuderlo di
+intero grezzo, e ogni via è `unsafe`, che questo progetto non ammette.
+Rifiutare è fail-closed; chiuderlo di
 nascosto nasconderebbe che qualcuno lo ha passato. *Rientro:* una via sicura
 per chiudere un descrittore ereditato, o una decisione esplicita sul perimetro
 `unsafe`.
@@ -1778,8 +1780,8 @@ cambi le credenziali del processo intero.
 d'identità e la `exec` il kernel azzera *dumpable* e passa `/proc/<pid>` a
 root: `ns` non è più attraversabile dal processo stesso. Namespace e
 descrittori si portano avanti dal passo 4, lecitamente perché in mezzo stanno
-solo `prctl` e le `setres*id`, che non aprono descrittori né cambiano
-namespace. Rimettere *dumpable* aprirebbe il `ptrace` a un altro processo dello
+solo `prctl`, `setgroups` e le `setres*id`, che non aprono descrittori né
+cambiano namespace. Rimettere *dumpable* aprirebbe il `ptrace` a un altro processo dello
 stesso uid. *Rientro:* nessuno previsto; la misura sta nel modo `finestra` di
 `scripts/verifica_isolamento_linux.sh`, e un kernel che concedesse la lettura
 anche lì renderebbe la scelta non obbligata, non sbagliata.
@@ -1800,7 +1802,8 @@ siano puliti non dice nulla degli ereditati. *Rientro:* lo stesso della
 deviazione 1.
 
 **A quale condizione questa non-garanzia è accettabile.** Una pipe trattenuta
-da un discendente deve produrre *un ritardo*, mai *un risultato sbagliato*. Lo
+da un discendente deve poter produrre *un ritardo*, mai *un risultato
+sbagliato*. Lo
 vincola la macchina a stati del supervisore:
 
 1. **`Esito` da solo non autorizza il successo**: è un'affermazione del worker,
@@ -1820,7 +1823,8 @@ ogni uscita voluta lo passa a qualcuno o lo chiude, e le porte si chiamano per
 ciò che fanno — consegna, attesa, chiusura, arresto. Nessuna garantisce di
 riuscire: un processo che non si lascia raccogliere entro il limite **esiste
 ancora**, e qualcuno deve restarne responsabile. **Non esiste una porta che
-rinuncia e prosegue** (pid nel rapporto, difetto accanto, avanti): la riga
+rinuncia e prosegue**, e non deve esistere (pid nel rapporto, difetto accanto,
+avanti): la riga
 lascerebbe vivo un processo che nessuno aspetta né raccoglie, mentre il
 supervisore dichiara di aver finito. Le vie sono due, nessuna silenziosa:
 
@@ -1853,8 +1857,8 @@ affermasse di più farebbe smettere di cercarlo.
 | altro errore | segnale non inviato (*motivo*); può restare vivo |
 
 Nemmeno `InvalidInput` autorizza «già uscito»: è compatibile con un figlio
-finito ma non lo prova. Dopo l'`abort` non si raccoglie, perché nessuno può più
-aspettare: un figlio non raccolto passa al reaper del sistema, e la riga deve
+finito ma non lo prova. Quel percorso non raccoglie il figlio, e non è una dimenticanza: dopo l'`abort`
+nessuno può più aspettare: un figlio non raccolto passa al reaper del sistema, e la riga deve
 nominare l'altro esito, un figlio a cui **non** è arrivato niente.
 
 *Rientro:* la seconda via scompare quando lo spawner avrà sopra di sé un
@@ -2104,9 +2108,9 @@ rappresentazione è opaca e la forma testuale si **ricostruisce** dai byte, cos�
 coincide con quella del footer, dove il token vive sotto una chiave sola:
 `plenora.commit.token`.
 
-**Il perimetro.** I quattro confini che il token attraversa — il chiamante che
-lo fornisce, l'handshake, il writer del footer, il verificatore — perché la
-regola è nel tipo.
+**Il perimetro.** I quattro confini che il token attraversa: il chiamante che
+lo fornisce, l'handshake, il writer del footer, il verificatore. La regola vale
+su tutti e quattro perché è nel tipo, non nei quattro punti.
 
 **Il pericolo che copre.** Due, distinti:
 
@@ -2269,8 +2273,8 @@ tetto»: è rifarlo sul picco della concatenazione.
 **`header` e `data` sono obbligatori.** Un messaggio che dichiara
 `header_type` senza `header` salterebbe ogni controllo della prevalidazione
 fino all'`unwrap()` di Arrow; un `DictionaryBatch` senza `data` fa lo stesso
-dentro `read_dictionary`. Entrambi sono rifiutati: la barriera anti-panico è
-l'ultima difesa, non la prima.
+dentro `read_dictionary`. Entrambi sono rifiutati: la barriera anti-panico tradurrebbe il panico in
+errore, ma è l'ultima difesa, non la prima.
 
 **Il pericolo che copre.** Un ingresso che dichiara molti dizionari piccoli, o
 un delta, e fa trattenere al lettore molto più di quanto qualunque tetto
