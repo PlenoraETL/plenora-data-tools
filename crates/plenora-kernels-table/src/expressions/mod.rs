@@ -1282,4 +1282,117 @@ mod tests {
             None,
         );
     }
+
+    /// Scala negativa, timestamp oltre 2^53, e un `Decimal128` a `i128::MIN`
+    /// (fuori da ogni precisione, ma Arrow non verifica i valori).
+    fn fixture_estremi() -> RecordBatch {
+        use plenora_core::arrow::array::{Decimal128Array, TimestampMillisecondArray};
+        let scala_negativa = Decimal128Array::from(vec![Some(5_i128), Some(-3)])
+            .with_precision_and_scale(10, -2)
+            .expect("decimal128 a scala negativa");
+        let minimo = Decimal128Array::from(vec![Some(i128::MIN), Some(1)])
+            .with_precision_and_scale(38, 0)
+            .expect("decimal128");
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("neg", DataType::Decimal128(10, -2), true),
+                Field::new("min", DataType::Decimal128(38, 0), true),
+                Field::new(
+                    "ts",
+                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                    true,
+                ),
+                Field::new("i", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(scala_negativa),
+                Arc::new(minimo),
+                Arc::new(
+                    TimestampMillisecondArray::from(vec![Some((1_i64 << 53) + 1), Some(0)])
+                        .with_timezone("UTC"),
+                ),
+                Arc::new(Int64Array::from(vec![Some((1_i64 << 53) + 1), Some(-1)])),
+            ],
+        )
+        .expect("fixture estremi")
+    }
+
+    #[test]
+    fn scale_negative_esponenziali_e_timestamp_restano_esatti() {
+        let batch = fixture_estremi();
+        // 5 * 10^2 = 500.
+        assert_eq!(
+            booleani(&batch, bin("equal", col("neg"), lit(json!(500))))[..],
+            [Some(true), Some(false)]
+        );
+        // Un timestamp oltre 2^53 non e' il suo vicino.
+        assert_eq!(
+            booleani(
+                &batch,
+                bin("equal", col("ts"), lit(json!(9_007_199_254_740_992_i64)))
+            )[0],
+            Some(false)
+        );
+        assert_eq!(
+            booleani(&batch, bin("equal", col("ts"), col("i")))[0],
+            Some(true)
+        );
+        // La notazione esponenziale resta un double: 1e300 supera ogni i64.
+        assert_eq!(
+            booleani(&batch, bin("less", col("i"), lit(json!(1e300))))[..],
+            [Some(true), Some(true)]
+        );
+        assert_eq!(
+            booleani(&batch, bin("greater", col("i"), lit(json!(1e-7))))[..],
+            [Some(true), Some(false)]
+        );
+    }
+
+    #[test]
+    fn in_coalesce_e_case_portano_il_valore_esatto() {
+        let batch = fixture_estremi();
+        assert_eq!(
+            booleani(
+                &batch,
+                func(
+                    "in",
+                    vec![col("i"), lit(json!([9_007_199_254_740_992_i64]))]
+                )
+            )[0],
+            Some(false)
+        );
+        assert_eq!(
+            booleani(
+                &batch,
+                bin(
+                    "equal",
+                    func("coalesce", vec![col("i")]),
+                    lit(json!(9_007_199_254_740_993_i64))
+                )
+            )[0],
+            Some(true)
+        );
+        assert_eq!(
+            booleani(
+                &batch,
+                bin(
+                    "equal",
+                    case(vec![(lit(json!(true)), col("i"))], lit(json!(0))),
+                    lit(json!(9_007_199_254_740_992_i64))
+                )
+            )[0],
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn l_opposto_di_un_decimale_fuori_dominio_e_un_errore() {
+        let batch = fixture_estremi();
+        for espressione in [un("negate", col("min")), func("abs", vec![col("min")])] {
+            assert_equivalent(&batch, espressione.clone(), None);
+            let config = config(espressione, None);
+            let errore = expression_generic(&batch, &config).expect_err("fuori dominio");
+            assert!(matches!(errore, PlenoraError::Schema(_)), "{errore}");
+        }
+    }
 }

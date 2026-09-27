@@ -529,7 +529,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 return Ok(FastValue::Null);
             };
             Ok(FastValue::Number(match name {
-                Function::Abs => value.assoluto(),
+                Function::Abs => value.assoluto()?,
                 Function::Round => Numero::double(value.valore.round()),
                 _ => {
                     return Err(PlenoraError::Internal(
@@ -919,8 +919,10 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                 UnaryOperator::IsNotNull => FastValue::Boolean(!matches!(value, FastValue::Null)),
                 UnaryOperator::Not => fast_boolean(&value, "not")?
                     .map_or(FastValue::Null, |value| FastValue::Boolean(!value)),
-                UnaryOperator::Negate => fast_numero(&value, "negate")?
-                    .map_or(FastValue::Null, |value| FastValue::Number(value.opposto())),
+                UnaryOperator::Negate => match fast_numero(&value, "negate")? {
+                    Some(value) => FastValue::Number(value.opposto()?),
+                    None => FastValue::Null,
+                },
             })
         }
         FastNode::Binary { op, left, right } => {

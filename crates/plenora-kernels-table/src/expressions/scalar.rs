@@ -40,9 +40,13 @@ impl Numero {
     }
 
     /// Il numero opposto, esatto come l'originale.
-    #[must_use]
-    pub fn opposto(self) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// `Schema` per un `Decimal128` il cui opposto non sta in `i128`: e'
+    /// fuori da ogni precisione valida, e Arrow non verifica i valori.
+    pub fn opposto(self) -> Result<Self> {
+        Ok(Self {
             valore: -self.valore,
             esatto: match self.esatto {
                 NumericBound::I64(value) => value.checked_neg().map_or_else(
@@ -57,30 +61,37 @@ impl Numero {
                     scale: 0,
                 },
                 NumericBound::Decimal { unscaled, scale } => NumericBound::Decimal {
-                    unscaled: -unscaled,
+                    unscaled: unscaled.checked_neg().ok_or_else(decimale_fuori_dominio)?,
                     scale,
                 },
                 NumericBound::F64(value) => NumericBound::F64(-value),
             },
-        }
+        })
     }
 
     /// Il valore assoluto, esatto come l'originale.
-    #[must_use]
-    pub const fn assoluto(self) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Come [`Self::opposto`].
+    pub fn assoluto(self) -> Result<Self> {
+        Ok(Self {
             valore: self.valore.abs(),
             esatto: match self.esatto {
                 NumericBound::I64(value) => NumericBound::U64(value.unsigned_abs()),
                 NumericBound::Decimal { unscaled, scale } => NumericBound::Decimal {
-                    unscaled: unscaled.abs(),
+                    unscaled: unscaled.checked_abs().ok_or_else(decimale_fuori_dominio)?,
                     scale,
                 },
                 NumericBound::F64(value) => NumericBound::F64(value.abs()),
                 esatto @ NumericBound::U64(_) => esatto,
             },
-        }
+        })
     }
+}
+
+fn decimale_fuori_dominio() -> PlenoraError {
+    PlenoraError::Schema("decimal128 fuori dal dominio della precisione".into())
 }
 
 /// Confronto esatto di due numeri (`compare_bounds`).

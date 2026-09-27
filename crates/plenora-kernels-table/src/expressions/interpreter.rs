@@ -119,7 +119,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 return Ok(Scalar::Null);
             };
             Ok(Scalar::Number(match name {
-                Function::Abs => value.assoluto(),
+                Function::Abs => value.assoluto()?,
                 Function::Round => Numero::double(value.valore.round()),
                 _ => {
                     return Err(PlenoraError::Internal(
@@ -273,8 +273,10 @@ pub fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Res
                 UnaryOperator::Not => {
                     boolean(&value, "not")?.map_or(Scalar::Null, |value| Scalar::Boolean(!value))
                 }
-                UnaryOperator::Negate => numero(&value, "negate")?
-                    .map_or(Scalar::Null, |value| Scalar::Number(value.opposto())),
+                UnaryOperator::Negate => match numero(&value, "negate")? {
+                    Some(value) => Scalar::Number(value.opposto()?),
+                    None => Scalar::Null,
+                },
             })
         }
         Expression::Binary { op, left, right } => binary(
