@@ -34,7 +34,7 @@ pub const fn categoria_preservata(categoria: ErrorCategory) -> bool {
 /// Un errore gia' `Execution` conserva la propria `reason`, senza annidare il
 /// testo del contesto precedente. L'`execution_id` resta vuoto: lo riempie il
 /// confine di uscita dell'executor, e il percorso legacy non ne ha.
-pub(crate) fn con_contesto_del_passo(
+pub fn con_contesto_del_passo(
     error: PlenoraError,
     node: String,
     operation: String,
