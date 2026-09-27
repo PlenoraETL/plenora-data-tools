@@ -477,9 +477,8 @@ dizionario. Tutti e tre sono letti da `arrow-ipc` con `unwrap`, e tutti e tre
 erano trattati dal confine come opzionali — cioè saltati se assenti. Il writer
 li emette sempre, quindi pretenderli non rifiuta alcun file legittimo.
 
-**Che cosa resta aperto, per intero.** Una stesura precedente lo riduceva a
-«`Field.children`», che è solo la voce più visibile. La superficie non ancora
-validata è questa:
+**Che cosa resta aperto, per intero.** `Field.children` è solo la voce più
+visibile; la superficie non ancora validata è questa:
 
 | | che cosa manca |
 |---|---|
@@ -716,8 +715,8 @@ dell'unwinding.
 una dipendenza nominata va in panico su un ingresso che riceviamo per
 mestiere — `relate` di `geo`, `fb_to_schema` di `arrow-ipc`
 (`apache/arrow-rs#10575`) — e ne fa un esito classificato: è il comportamento
-corretto, e col solo hook di `libfuzzer-sys` teneva rossi `arrow_transform` e
-`wkt_operations` a barriera funzionante. Una **rete di sicurezza** — il
+corretto, e col solo hook di `libfuzzer-sys` `arrow_transform` e
+`wkt_operations` resterebbero rossi a barriera funzionante. Una **rete di sicurezza** — il
 `catch_unwind` dell'executor attorno a un kernel, quello del worker e del
 verificatore — intercetta un panico che non doveva avvenire: per il fuzz resta
 un crash, anche se in produzione diventa un errore `Internal`.
@@ -1000,9 +999,8 @@ proprio a dire *quale* livello ha esaurito il proprio tetto.
 **La condizione di rientro.** Alzare il numero non rompe chi costruisce, e
 non per convenzione ma per firma: `PressioneDegliAntenati::nuova` accetta una
 **slice** e copia nell'array privato, quindi la capacità non compare in nessun
-tipo pubblico. Una prima stesura passava l'array, e lì la promessa era falsa —
-`MAX_ANTENATI_OSSERVATI` era nella firma, e cambiarlo sarebbe stata una
-rottura.
+tipo pubblico: con l'array nella firma, `MAX_ANTENATI_OSSERVATI` farebbe parte
+dell'API, e cambiarlo sarebbe una rottura.
 
 Serve una gerarchia reale più profonda di otto in cui `Oa` sia risultato
 diagnosticamente insufficiente. Otto **non** è una misura: i prototipi non
@@ -1107,7 +1105,7 @@ non se ne inventa uno.
 **La regola.** Con la feature `proj-backend` attiva, il worker **rifiuta prima
 dell'handshake**: `protocollo::descrizione::di_questa_build` rende
 `PlenoraError::InvalidConfiguration` e nessun `Saluto` viene letto. Il profilo
-isolato di `PR-9` è quello **senza** backend CRS, e l'`Ambiente` che dichiara ha
+isolato è quello **senza** backend CRS, e l'`Ambiente` che dichiara ha
 un insieme di risorse realmente vuoto: `acquisizione_dinamica = false`,
 `risorse = []`, `backend_dinamici = []`, e il digest dell'insieme è quello
 canonico, versionato e domain-separated dell'insieme vuoto
@@ -1847,47 +1845,6 @@ quello che la riga deve nominare.
 responsabile del ciclo di vita capace di **tenere una guardia** — cioè un
 chiamante che riceva `FiglioVivo` invece di un errore tipizzato. È una condizione
 tecnica, non una data: vale quando è soddisfatta, da chiunque la soddisfi.
-
-### Un rifiuto legittimo dopo lo spawn non deve far scattare la sentinella di `FiglioVivo`
-
-**Distinta dal presidio RDP**: capitata nello stesso giro di lavoro ma su un
-altro meccanismo — non va fusa con quella voce.
-
-**Il difetto.** In entrambi i domini di `esecuzione_isolata.rs` (worker e
-verificatore), subito dopo `FiglioVivo::nuovo(...)`, una chiamata fallibile
-(`prova::supervisore_per(...)?`) usava `?` prima che la guardia fosse
-consumata da `concludi_handshake`. Un fallimento qui — incluso un rifiuto
-**legittimo**, non un bug — faceva cadere `guardia` ancora viva: la
-sentinella di `Drop` (pensata apposta per un `?` che «salta le porte» e
-lascia un figlio davvero sfuggito) interveniva con
-`std::process::abort()`, sostituendo un errore leggibile con l'arresto del
-processo. Il caso concreto che lo ha esposto: build con resolver `proj`
-contro il profilo isolato — un rifiuto atteso e corretto
-(vedi la voce sul profilo isolato e `proj-backend`), non un'anomalia, che
-però abortiva invece di restituire l'errore tipizzato.
-
-**Il fix.** Una funzione condivisa, `supervisore_o_raccogli`, che segue lo
-stesso principio già usato da `prova::con_la_pulizia` (non un'idea nuova):
-se il supervisore fallisce, chiude il dominio e raccoglie il figlio *prima*
-di propagare; se la pulizia non lascia difetti, la causa originale sola; se
-ne lascia, le due cose insieme via `non_disponibile`. Un'unica
-implementazione, usata da entrambi i siti di chiamata (worker e
-verificatore) — nessuna logica duplicata.
-
-**La sentinella stessa non è stata toccata.** Resta l'ultima difesa per la
-fuga vera — non è stata indebolita né rimossa; è stato tolto solo il varco
-specifico che la faceva scattare su un rifiuto atteso.
-
-**Verificato**, non solo compilato: due nuove prove di regressione
-(`supervisore_o_raccogli_rifiuta_con_errore_leggibile_e_raccoglie_il_worker`,
-l'equivalente per il verificatore) forzano il rifiuto con un digest
-malformato, verificano che il messaggio d'errore sia leggibile, e confermano
-con `kill -0` sul pid del figlio reale che è stato davvero raccolto, non
-lasciato residuo. Suite `isolamento::esecuzione_isolata::` 22/22, `cargo fmt
---all --check` pulito, clippy R6 a zero, suite dell'intero workspace 2275/2275
-(i 2273 precedenti più questi due). Ri-riprodotto sulla VM il caso esatto
-che abortiva: ora un JSON pulito con `category: invalid_configuration`,
-`exit=2`, nessun core dump, nessun residuo di dominio o processo.
 
 ### Chi rinuncia a una nascita parziale chiude il dominio, e ne osserva la quiescenza
 
