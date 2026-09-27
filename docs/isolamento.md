@@ -175,10 +175,9 @@ confine ostile per Arrow IPC che il progetto ha già
 che arrow veda i byte: la verifica ne eredita la disciplina e vi aggiunge il
 proprio tetto sui batch trattenuti.
 
-Il tetto dev'essere **dimostrabile**, non asserito. Una stesura precedente
-diceva «una quantità funzione del solo schema e del batch corrente, mai del
-numero di righe o di batch», ed era una promessa **non mantenibile da nessuna
-implementazione**: `FileReader` decodifica tutti i dizionari all'apertura e li
+Il tetto dev'essere **dimostrabile**, non asserito. «Una quantità funzione
+del solo schema e del batch corrente, mai del numero di righe o di batch»
+sarebbe una promessa **non mantenibile da nessuna implementazione**: `FileReader` decodifica tutti i dizionari all'apertura e li
 trattiene per l'intera scansione — e non è un difetto di quella libreria, è il
 formato, perché un batch dictionary-encoded non è decodificabile senza il suo
 dizionario — e tiene un indice di 24 byte per record batch.
@@ -266,8 +265,7 @@ Il **coordinatore** non materializza mai dati: non legge l'artefatto, non
 costruisce batch, non tocca Arrow. Tiene lo stato della macchina, i timeout, i
 descrittori, i contatori e il fermo dell'evidenza.
 
-«Non alloca affatto» sarebbe però falso, e la prima stesura lo scriveva. Un
-processo alloca: stack, allocatore, buffer dei messaggi del protocollo. La
+«Non alloca affatto» sarebbe però falso. Un processo alloca: stack, allocatore, buffer dei messaggi del protocollo. La
 proprietà vera è più debole e più utile:
 
 > la memoria del coordinatore è **limitata per costruzione e indipendente dai
@@ -294,8 +292,8 @@ righe o di batch.
 imposto da noi. Metterglielo riporterebbe la ricorsione — servirebbe qualcuno
 che ne osservi la terminazione, e per quel qualcuno di nuovo lo stesso.
 
-La prima stesura se la cavava scrivendo che «il chiamante osserva già la
-propria morte». È falso: **un processo non osserva la propria morte**. Può
+Dire che «il chiamante osserva già la propria morte» sarebbe falso: **un
+processo non osserva la propria morte**. Può
 osservarla solo suo padre, o l'ambiente che lo ha avviato. Se il coordinatore
 esaurisce la memoria, non c'è nessun esito da leggere e nessun errore
 strutturato da produrre: l'invocazione semplicemente termina.
@@ -484,8 +482,8 @@ prese, perché ognuna cambia che cosa il campo significa.
 |---|---|
 | piani v5 che non hanno il campo | restano **validi e invariati**, e il campo in v5 non esiste affatto: un v5 che lo dichiarasse va rifiutato (`PLAN-007`). In v6 è facoltativo, e la sua assenza significa una cosa sola: il profilo isolato non è selezionabile per quel piano, mai un tetto implicito. Nessuna migrazione forzata |
 | obbligatorietà | il campo è obbligatorio **solo** nel profilo isolato. Chiedere l'isolamento senza dichiarare il tetto è incoerente, e va respinto in validazione |
-| forma canonica e `plan_hash` | ogni piano **v5 esistente mantiene il proprio `plan_hash`**: la v5 non cambia, e nessun identificativo già pubblicato si muove. Un piano **v6 appartiene al dominio nuovo**, quindi un v5 e un v6 per il resto identici hanno identità diverse. Dentro la v6, il campo entra nella forma canonica **solo quando è presente**: un v6 che lo dichiara e uno che lo omette sono piani diversi. La stesura precedente diceva «un piano che non lo dichiara ha lo stesso `plan_hash`», che è vero dentro la v5 e **falso attraverso questo confine di versione**. Nessuna migrazione v5→v6 può fingere equivalenza di hash (`PLAN-021`). Attenzione a non generalizzare: **v4→v5 conserva l'equivalenza**, perché un v4 è migrato NEL canonico v5, e la ratifica lo dichiara esplicitamente (`PLAN-019`) |
-| versionamento | **non è una decisione additiva**, e la prima stesura sbagliava a chiamarla tale: vedi sotto |
+| forma canonica e `plan_hash` | ogni piano **v5 esistente mantiene il proprio `plan_hash`**: la v5 non cambia, e nessun identificativo già pubblicato si muove. Un piano **v6 appartiene al dominio nuovo**, quindi un v5 e un v6 per il resto identici hanno identità diverse. Dentro la v6, il campo entra nella forma canonica **solo quando è presente**: un v6 che lo dichiara e uno che lo omette sono piani diversi. «Un piano che non lo dichiara ha lo stesso `plan_hash`» è vero dentro la v5 e **falso attraverso questo confine di versione**. Nessuna migrazione v5→v6 può fingere equivalenza di hash (`PLAN-021`). Attenzione a non generalizzare: **v4→v5 conserva l'equivalenza**, perché un v4 è migrato NEL canonico v5, e la ratifica lo dichiara esplicitamente (`PLAN-019`) |
+| versionamento | **non è una decisione additiva**: vedi sotto |
 | ratifica in `plenora-contracts` | **adottata**: `Plan Budget 1.0` (`plenora-plan-budget-v1`) con la decisione `0005`, `PLAN-001…021`, mergiata in `5d15107`. È separata dall'adozione generale della nuova linea normativa, che resta un blocker a sé ([`stato-e-roadmap.md`](stato-e-roadmap.md)) |
 
 #### `deny_unknown_fields` rende il campo una rottura, non un'aggiunta
@@ -956,9 +954,8 @@ confronto.
 
 Il `commit_token` è **trasmesso e accettato** nel `Saluto`, e sta **solo lì**.
 
-La motivazione della stesura precedente era sbagliata: diceva che l'`Incarico`
-non andrebbe bene perché arriva dopo l'accordo, come se fosse troppo tardi.
-Non lo è — anche l'`Incarico` precede la scrittura del primo byte, quindi
+La ragione non è che l'`Incarico` arrivi troppo tardi perché segue
+l'accordo: anche l'`Incarico` precede la scrittura del primo byte, quindi
 tecnicamente andrebbero bene entrambi. La scelta è **architetturale**: legare
 il token all'handshake gli dà **una sola autorità**, quella su cui i due lati
 si sono già accordati prima di toccare i dati, invece di due copie che possono
@@ -1196,9 +1193,8 @@ risultati diversi**.
 
 #### Perché «digest delle risorse caricate» non funziona
 
-La prima stesura di questo documento chiedeva un digest delle risorse
-*effettivamente caricate*. Non è realizzabile prima dei dati, ed è un errore
-istruttivo: PROJ sceglie quali griglie aprire **in funzione della
+Un digest delle risorse *effettivamente caricate* non è realizzabile prima
+dei dati: PROJ sceglie quali griglie aprire **in funzione della
 trasformazione e dell'area elaborata**. Prima di vedere i dati non si sa quali
 risorse serviranno, quindi non se ne può calcolare il digest — e l'handshake
 deve concludersi *prima* dei dati.
@@ -1453,9 +1449,8 @@ filesystem chiude:
 ```
 
 Il chiamante si trova con un'operazione che *potrebbe* essere riuscita e
-nessun modo di saperlo dal nostro valore di ritorno. La prima stesura
-sosteneva che l'atomicità della pubblicazione coprisse anche questo. Non lo
-copre.
+nessun modo di saperlo dal nostro valore di ritorno. L'atomicità della
+pubblicazione non copre questo caso.
 
 ### La decisione: il commit point è dichiarato, e con esso l'ambiguità
 
@@ -1474,11 +1469,9 @@ solo la *notizia*.
 
 ### Perché sigillo e contratto non bastano
 
-La prima stesura diceva che il chiamante risolve l'ambiguità rileggendo la
-destinazione, perché l'artefatto porta sigillo e contratto. Non regge, e il
-documento lo ammetteva due paragrafi dopo senza accorgersi della
-contraddizione: sigillo e contratto dimostrano che l'artefatto è **valido**,
-non che sia **quello di questa esecuzione**.
+Rileggere la destinazione, perché l'artefatto porta sigillo e contratto, non
+basta a risolvere l'ambiguità: sigillo e contratto dimostrano che l'artefatto
+è **valido**, non che sia **quello di questa esecuzione**.
 
 Due esecuzioni dello stesso piano su input diversi producono lo stesso
 contratto. Un artefatto trovato sulla destinazione, integro e coerente col
@@ -1488,9 +1481,9 @@ dice «qui c'è un output valido», che non è la domanda.
 
 ### La catena che rende l'ambiguità risolvibile
 
-**L'identificativo lo sceglie il chiamante, non noi.** La prima stesura lo
-faceva scegliere al coordinatore e restituire alla fine, il che non risolve
-nulla nel solo caso che deve risolvere: se il coordinatore muore dopo il
+**L'identificativo lo sceglie il chiamante, non noi.** Farlo scegliere al
+coordinatore e restituirlo alla fine non risolverebbe nulla nel solo caso che
+deve risolvere: se il coordinatore muore dopo il
 commit non restituisce niente, e il chiamante non ha il token da
 confrontare. Peggio — il coordinatore **è** il processo del chiamante
 (§2-quater), quindi non può nemmeno restituire una condizione che descriva la
@@ -1510,8 +1503,7 @@ chiamante **possiede già prima**, e che può aver scritto dove vuole.
 
 ### Due identificativi, non uno
 
-Un identificativo solo non basta, e la stesura precedente ne usava uno per due
-lavori incompatibili.
+Un identificativo solo non basta: dovrebbe fare due lavori incompatibili.
 
 | | `execution_id` | `commit_token` |
 |---|---|---|
@@ -1520,8 +1512,8 @@ lavori incompatibili.
 | chi lo sceglie | **l'engine**, e resta così | **il chiamante** |
 | può ripetersi? | no, ma il chiamante non lo conosce prima | **non deve**, ed è una sua precondizione |
 
-L'`execution_id` **non cambia**. Una stesura precedente lo rendeva fornito dal
-chiamante, che era un cambiamento gratuito: è generato dall'engine, un test ne
+L'`execution_id` **non cambia**. Renderlo fornito dal chiamante sarebbe un
+cambiamento gratuito: è generato dall'engine, un test ne
 verifica la diversità a ogni esecuzione, e serve a correlare diagnostica —
 lavoro che fa già bene. Il chiamante non può usarlo per la risoluzione proprio
 perché non lo conosce prima, ed è per questo che il token è un'altra cosa.
@@ -1547,9 +1539,8 @@ chiave d'idempotenza, e chi ne ha già usata una sa che cosa promette.
 Arriva dall'esterno, finisce in un file pubblicato e viene confrontato: le tre
 cose che rendono una stringa libera una cattiva idea.
 
-La stesura precedente diceva «alfabeto dichiarato» e «massimo dichiarato»
-senza dichiarare né l'uno né l'altro, il che non è una specifica ma un
-promemoria. Eccoli.
+«Alfabeto dichiarato» e «massimo dichiarato», senza dichiarare né l'uno né
+l'altro, non sarebbero una specifica ma un promemoria. Eccoli.
 
 | | regola |
 |---|---|
@@ -1580,8 +1571,8 @@ collisione accidentale trascurabile, e non impedisce a nessuno di riusare
 deliberatamente lo stesso token — nel qual caso ottiene un token valido e una
 risoluzione che non distingue.
 
-Dire «32 byte di entropia», come faceva la stesura precedente, attribuiva al
-costruttore una garanzia che non può dare: l'entropia non è una proprietà
+Dire «32 byte di entropia» attribuirebbe al costruttore una garanzia che non
+può dare: l'entropia non è una proprietà
 osservabile di una stringa.
 
 L'ultima riga ha una conseguenza concreta sulla diagnostica: quando un
@@ -1606,7 +1597,7 @@ esistere più. E non conclude al posto di chi chiama:
 | `Absent` | la destinazione non esiste |
 | `InvalidOrUnreadable` | esiste ma non è leggibile, o non supera la verifica strutturale — **con la ragione**, vedi sotto |
 
-Tre cose che la stesura precedente sbagliava, e che questa tabella corregge.
+Tre cose che questa tabella fissa, perché la formulazione ovvia le sbaglia.
 
 **«Il contenuto precedente» non è osservabile.** Con `(token, destinazione)`
 non c'è modo di sapere che cosa ci fosse prima: un file che esiste e non porta
@@ -1659,10 +1650,9 @@ Il `commit_token` non è un'identità globale né un lock, e la §7-bis dichiara
 la precondizione da cui dipende.
 
 **Due esecuzioni sulla stessa destinazione non si sovrascrivono**: la prima
-che pubblica vince, la seconda fallisce con `Conflict`. La stesura precedente
-scriveva «vince l'ultima», che contraddiceva sia il passo 9 della verifica —
-dove una destinazione già esistente è un fallimento — sia il codice che c'è
-già.
+che pubblica vince, la seconda fallisce con `Conflict`. «Vince l'ultima»
+contraddirebbe sia il passo 9 della verifica — dove una destinazione già
+esistente è un fallimento — sia il codice che c'è già.
 
 ### Il commit point è una creazione no-clobber, non sempre un rename
 
@@ -1679,9 +1669,8 @@ quindi il no-clobber regge — ma **l'`unlink` che segue ha l'errore ignorato**,
 con tanto di commento nel sorgente. Se fallisce, il file temporaneo resta
 dov'era, senza che nessuno lo dica.
 
-C'è un dettaglio in più che il sorgente rivela, e va detto con precisione
-perché una stesura precedente lo aveva descritto male. I due errori non sono
-trattati allo stesso modo:
+C'è un dettaglio in più che il sorgente rivela, e va detto con precisione. I
+due errori non sono trattati allo stesso modo:
 
 | errore | che cosa significa | effetto |
 |---|---|---|
@@ -1721,9 +1710,8 @@ sarebbe stato un errore di categoria.
 Ciò che è pubblico è invece `risolvi_commit`, e il tipo che rende.
 
 **Per il profilo isolato il `commit_token` è obbligatorio.** Non «esegue lo
-stesso, con una garanzia in meno»: quella formulazione, che la stesura
-precedente conteneva insieme al suo contrario, farebbe dipendere una garanzia
-da ciò che il chiamante si è ricordato di fare. Un'invocazione del profilo
+stesso, con una garanzia in meno»: quella formulazione farebbe dipendere una
+garanzia da ciò che il chiamante si è ricordato di fare. Un'invocazione del profilo
 isolato senza token è **rifiutata in validazione**, come un piano che chiede
 l'isolamento senza dichiarare il tetto (§2-quinquies).
 
@@ -1750,10 +1738,9 @@ fare è quindi quella del meccanismo, non quella del numero:
 | un massimo istantaneo verificabile byte per byte | che l'esito di un dominio che ha superato il tetto sia comunque **classificato**, non ignorato |
 | un valore di picco riproducibile | che il picco osservato sia una misura, riportata con le sue ripetizioni |
 
-**Sul superamento la misura dice una cosa scomoda.** La prima stesura
-affermava che non era mai stato osservato: era un'affermazione senza prove,
-perché il picco dell'antenato non era mai stato letto. Ora lo è, e il quadro
-non è quello che ci si aspetta da nessuna delle due parti:
+**Sul superamento la misura dice una cosa scomoda.** Dire che non è mai
+osservato richiede di leggere il picco dell'antenato. Letto, il quadro non è
+quello che ci si aspetta da nessuna delle due parti:
 
 ```
     padre   memory.max    33 554 432
@@ -1765,10 +1752,9 @@ Il kernel definisce `memory.peak` come il massimo del cgroup **e dei suoi
 discendenti**. I due valori non rispettano quella relazione: il figlio supera
 il padre che lo contiene.
 
-**La conclusione onesta è che non se ne può trarre nessuna.** La stesura
-precedente usava il picco del padre per concludere «superamento zero» e nello
-stesso paragrafo dichiarava i picchi inaffidabili: non si possono fare
-entrambe le cose. Se i due contatori sono incoerenti, il valore del padre non
+**La conclusione onesta è che non se ne può trarre nessuna.** Usare il picco
+del padre per concludere «superamento zero» e insieme dichiarare i picchi
+inaffidabili non è coerente: non si possono fare entrambe le cose. Se i due contatori sono incoerenti, il valore del padre non
 prova più di quello del figlio.
 
 Quindi, su questo kernel e in questa configurazione: **i due `memory.peak` non
@@ -1872,8 +1858,8 @@ I tre si applicano **prima di qualunque allocazione proporzionale al
 conteggio**, che è il punto: il conteggio si legge dal vettore flatbuffer e si
 confronta col tetto senza costruire niente.
 
-**Perché non riusare `MAX_CRS_DEFINITION_BYTES`.** Una stesura precedente lo
-derivava da lì, e sarebbe stato un accoppiamento sbagliato: quella costante
+**Perché non riusare `MAX_CRS_DEFINITION_BYTES`.** Derivare il tetto da lì
+sarebbe un accoppiamento sbagliato: quella costante
 governa **una definizione di CRS**, questa governa **un confine IPC
 generico**. Che oggi valgano entrambe 64 KiB è una coincidenza numerica, non
 un'identità di autorità: il giorno in cui il tetto sul CRS cambiasse — perché
@@ -1890,7 +1876,7 @@ file che `pyarrow` legge senza storie.
 
 ### Dove vivono, e chi ne è l'autorità
 
-Due cose distinte che la stesura precedente confondeva:
+Due cose distinte, da non confondere:
 
 | | |
 |---|---|
@@ -1987,9 +1973,9 @@ footer regala e che con il token nello schema sarebbe stata falsa.
 
 ### 2. Il token sta nel footer, non nello schema
 
-La stesura precedente affermava che un contenitore Arrow IPC non ha un posto
-per byte propri fuori dallo schema. **È falso**, e la conseguenza era un
-disegno molto più complicato del necessario.
+Un contenitore Arrow IPC **ha** un posto per byte propri fuori dallo schema,
+e supporre il contrario porterebbe a un disegno molto più complicato del
+necessario.
 
 Il formato IPC ha i **custom metadata di file**, che vivono nel *footer* e non
 nello `Schema`. `arrow-ipc` 59.2.0 li espone da entrambi i lati, e c'è persino
@@ -2135,9 +2121,9 @@ eseguito la sequenza intera: da quel momento `memory.events.local` non vede
 piu' l'uccisione, e il supervisore classificherebbe `Internal` un guasto di
 risorse.
 
-**Il sigillo è una scrittura su un file, e il worker può riscriverla.** È il
-punto che la prima stesura trattava come uno strato fra tre, e che il
-prototipo ha ribaltato: con gli **stessi privilegi** del supervisore — il caso
+**Il sigillo è una scrittura su un file, e il worker può riscriverla.** Non
+è quindi uno strato fra tre, e il prototipo lo mostra: con gli **stessi
+privilegi** del supervisore — il caso
 normale di una libreria embedded, dove coordinatore e worker girano con lo
 stesso UID — il worker ha rimesso `cgroup.max.depth` a 10, `memory.max` a
 1 GiB, `memory.oom.group` a 0, e infine **è uscito dal dominio** spostandosi
@@ -2868,8 +2854,8 @@ manderebbe a cercare un difetto dove c'è un dimensionamento.
 
 ### 10.0-bis L'evidenza è una struttura, non un booleano
 
-La prima stesura leggeva un solo contatore. Il prototipo mostra che i segnali
-sono almeno tre e che le loro combinazioni **non collassano** in un sì o un
+Un solo contatore non basta. Il prototipo mostra che i segnali sono almeno
+tre e che le loro combinazioni **non collassano** in un sì o un
 no: `L12` ha prodotto `oom` locale a 1 con `oom_kill` locale a 0, e `L16` ha
 prodotto `oom` a 305 con `oom_kill` a 0. Sono tre situazioni diverse che un
 booleano appiattirebbe in una.
@@ -2896,10 +2882,9 @@ ne possono essere altri.
 
 ### Una sola combinazione autorizza l'attribuzione
 
-La prima stesura di questa tabella restituiva `ResourceLimit` in quattro righe
-su otto, e nella sezione successiva spiegava che i delta non dimostrano una
-causa. Le due cose non stanno insieme: se `Ol` e `Kl` possono appartenere a
-eventi distinti, allora la loro coesistenza **non autorizza** ad attribuire.
+Restituire `ResourceLimit` in quattro righe su otto non starebbe insieme al
+fatto che i delta non dimostrano una causa: se `Ol` e `Kl` possono appartenere
+a eventi distinti, allora la loro coesistenza **non autorizza** ad attribuire.
 
 L'unico segnale che lega causa ed effetto in un solo fatto è `G`, il group
 kill **locale**: il kernel ha ucciso questo dominio *come gruppo*, e lo ha
@@ -2937,13 +2922,12 @@ Nessuna riga con un `None` autorizza l'attribuzione, e vale in particolare per
 mai, confonderlo con «è scattato» porterebbe ad attribuire su un contatore mai
 visto. Entrambi gli errori sono peggiori del non concludere.
 
-Ma **«non attribuito» è a sua volta un'affermazione**, e una stesura
-precedente la faceva troppo larga: diceva che un `None` qualunque dà «non
-attribuito», e con
+Ma **«non attribuito» è a sua volta un'affermazione**, e va tenuta stretta.
+Se un `None` qualunque desse «non attribuito», con
 
     Ol = None, Kl = 0, Kh = 0, G = 0
 
-avrebbe dichiarato pressione di memoria non attribuibile dove non se n'è
+si dichiarerebbe pressione di memoria non attribuibile dove non se n'è
 osservata nessuna. Un'osservazione incompleta non è una pressione.
 
 Servono quindi **cinque** classi, non quattro:
@@ -3046,14 +3030,14 @@ classificazione. L'unico caso in cui potrebbe diventare causale è un antenato
 **dedicato** a un solo dominio, e allora però il tetto utile è il suo, non il
 nostro.
 
-La quinta riga è quella che la prima stesura dichiarava esaustiva senza
-esserlo. `oom_kill` conta i processi del cgroup uccisi da **qualunque** OOM
+La quinta riga esiste perché la classificazione senza di essa non è
+esaustiva. `oom_kill` conta i processi del cgroup uccisi da **qualunque** OOM
 killer, non solo dal proprio limite: un antenato con un tetto più basso
 uccide il worker facendo salire `Kl` mentre `Ol` resta a zero. Il prototipo
 l'ha riprodotta — padre a 32 MiB, dominio a 256 MiB — ottenendo `Ol = 0`,
 `Kl = 1`, `Kh = 1`, con il picco del dominio fermo al tetto **del padre**.
 
-La quarta riga è quella che il primo ciclo non sapeva esistere: `Ol` alto con
+La quarta riga copre un caso meno ovvio: `Ol` alto con
 `Kl` a zero non significa «niente è successo», significa limite raggiunto
 ripetutamente e nessuno da uccidere. Misurate **305 invocazioni** e **zero
 uccisioni**, con il dominio fermo.
@@ -3164,8 +3148,8 @@ punto di linearizzazione precede il commit point ed è così definito:
    misurato il caso in cui dice `0` mentre `populated` dice `1` e un processo
    del dominio è vivo un livello sotto. E nemmeno una scansione ricorsiva
    delle directory, che è una lettura non atomica di molti file mentre i
-   processi si spostano — la corsa non è teorica: si è manifestata in una
-   prima stesura dello scenario, e nell'unico verso che non produce un
+   processi si spostano — la corsa non è teorica: si è manifestata in uno
+   scenario che usava quella scansione, e nell'unico verso che non produce un
    allarme.
 
    Un tempo massimo d'attesa, oltre il quale si termina il dominio con
@@ -3200,9 +3184,9 @@ presente. Qui i produttori sono già stati aspettati, e `join` stabilisce che
 tutto ciò che hanno accodato è già visibile: non c'è un fatto in volo che una
 seconda lettura troverebbe.
 
-**Un OOM tardivo non è un'avvertenza.** La prima stesura degradava a
-diagnostica gli eventi che arrivano dopo la chiusura: era possibile solo
-perché la chiusura avveniva prima della quiescenza. Con i passi 2 e 3 al posto
+**Un OOM tardivo non è un'avvertenza.** Degradare a diagnostica gli eventi
+che arrivano dopo la chiusura sarebbe possibile solo se la chiusura avvenisse
+prima della quiescenza. Con i passi 2 e 3 al posto
 giusto, un evento successivo al punto 4 riguarda per costruzione un dominio
 già morto e già letto — e se ne arrivasse uno che contraddice la
 classificazione, è un difetto della barriera, non un'avvertenza da riportare.
@@ -3281,10 +3265,9 @@ non a chi consuma il dato.
 
 ### 11.1 I due prototipi bloccanti — conclusi
 
-Erano `PR-4` e `PR-9` nella prima stesura, cioè dopo protocollo e supervisore:
-sbagliato. Se il meccanismo di piattaforma non avesse retto, protocollo e
-supervisore sarebbero stati costruiti sopra un'assunzione mai verificata.
-Spostati davanti a tutto, sono stati **eseguiti**.
+Vengono prima di protocollo e supervisore, non dopo: se il meccanismo di
+piattaforma non reggesse, protocollo e supervisore sarebbero costruiti sopra
+un'assunzione mai verificata. Sono stati **eseguiti**.
 
 Che cosa dovevano dimostrare, con «contenimento» detto in modo che valga per
 entrambe le piattaforme e non solo per Linux:
@@ -3365,22 +3348,21 @@ domani vengono rifiutati. Va quindi registrata in
 confine ostile, con regola, perimetro, pericolo e condizione di rientro.
 
 Sei PR cambiano semantica — `PR-0`, `PR-1`, `PR-2`, `PR-5`, `PR-10` e
-`PR-12` — e nessuna delle sei è nascosta in mezzo alle altre. `PR-10` lo è diventata
-portando `risolvi_commit`: è una funzione pubblica nuova, non un dettaglio
-della pubblicazione. `PR-5` lo è diventata scrivendo
-il token nell'artefatto: la stesura precedente la marcava «nessun cambiamento
-semantico» quando cambia i byte del file prodotto.
+`PR-12` — e nessuna delle sei è nascosta in mezzo alle altre. `PR-10` lo è
+perché porta `risolvi_commit`: è una funzione pubblica nuova, non un dettaglio
+della pubblicazione. `PR-5` lo è perché scrive il token nell'artefatto: non è
+«nessun cambiamento semantico», perché cambia i byte del file prodotto.
 
 ### Perché Windows esce dal perimetro
 
-La prima stesura offriva due strade per l'`unsafe` che i Job Object
-richiedono: una **deroga** dichiarata in
+Per l'`unsafe` che i Job Object richiedono ci sarebbero due strade: una
+**deroga** dichiarata in
 [`errori-e-limiti.md`](errori-e-limiti.md), oppure una dipendenza vettata.
 
 La prima non è una strada disponibile. `AGENTS.md` proibisce `unsafe` nel
 workspace come **regola permanente e non opzionale**: derogarvi non è una PR
 della fase 4, è un cambiamento di governance, e spetta a chi quella regola
-l'ha scritta. Metterla in un elenco di PR la faceva sembrare una decisione
+l'ha scritta. Metterla in un elenco di PR la farebbe sembrare una decisione
 tecnica fra le altre.
 
 La seconda è stata **verificata invece che immaginata**, e oggi non esiste.
