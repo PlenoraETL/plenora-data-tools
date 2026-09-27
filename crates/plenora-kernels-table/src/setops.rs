@@ -111,18 +111,14 @@ impl KeyColumn<'_> {
 
 /// Tipi che [`CompactRowEncoder`] sa codificare come chiave di riga.
 ///
-/// NON e' il profilo scalare testuale, per quanto le due liste si somiglino:
-/// l'encoder non formatta niente, scrive la rappresentazione binaria. Accetta
-/// percio' `Decimal128` a qualunque scala (codifica l'`i128` grezzo) e non
-/// risolve la timezone (codifica i millisecondi). Confondere i due profili
-/// significherebbe rifiutare in validazione piani che il kernel esegue.
+/// Non e' il profilo scalare testuale: l'encoder scrive la rappresentazione
+/// binaria, quindi accetta `Decimal128` a qualunque scala (l'`i128` grezzo) e
+/// non risolve la timezone (i millisecondi).
 ///
-/// Vive QUI, accanto all'encoder che descrive, e non nell'analizzatore: una
-/// copia del `match` altrove e' una copia che diverge senza dirlo.
-/// `CompactRowEncoder::try_new` e questo predicato sono tenuti allineati da
-/// `il_predicato_e_l_encoder_accettano_gli_stessi_tipi`, e un tipo dichiarato
-/// codificabile che nessun ramo dell'encoder gestisce produce un errore
-/// `Internal`, non un rifiuto silenzioso.
+/// Sta accanto all'encoder perche' una copia del `match` altrove divergerebbe.
+/// Il test `il_predicato_e_l_encoder_accettano_gli_stessi_tipi` li tiene
+/// allineati; un tipo dichiarato codificabile e non gestito dall'encoder e'
+/// un errore `Internal`.
 #[must_use]
 pub fn key_encodable(data_type: &DataType) -> bool {
     match data_type {
@@ -370,12 +366,10 @@ pub fn union_distinct(
     _config: &SetOperation,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    // Fast path in-memory: stessi controlli e stessi errori del percorso
-    // originale (concat completa + dedup), ma la concatena fisica dei due
-    // input e' rimandata alla selezione finale: le chiavi di riga si
-    // accumulano sullo stesso set scandendo prima `left` poi `right`, cosi'
-    // la prima occorrenza (ordine di output) e' esattamente quella del
-    // batch combinato e si evita una copia completa degli input.
+    // Equivale a concat + dedup senza copiare gli input: le chiavi si
+    // accumulano in un solo set scandendo `left` poi `right`, quindi la prima
+    // occorrenza e' quella del batch combinato; la concat avviene solo sulla
+    // selezione finale.
     validate_schema(left, right)?;
     let rows = left
         .num_rows()

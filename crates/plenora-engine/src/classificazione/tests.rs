@@ -1,16 +1,9 @@
 //! Prove della classificazione §10.
 //!
-//! Due strati che non si coprono a vicenda:
-//!
-//! - un **caso nominato per ogni riga normativa**, che dice a parole quale
-//!   situazione sta descrivendo;
-//! - un **oracolo indipendente** sul prodotto esaustivo dei quattro segnali,
-//!   scritto dalla tabella e non dal `match` di produzione.
-//!
-//! Il secondo non sostituisce il primo. Un oracolo dice che le due
-//! formulazioni concordano, non che concordino su qualcosa di giusto: se
-//! entrambe sbagliassero la stessa riga, resterebbero d'accordo. I casi
-//! nominati sono l'ancoraggio alla matrice.
+//! Due strati: un **caso nominato per ogni riga normativa**, e un **oracolo
+//! indipendente** sul prodotto esaustivo dei quattro segnali, scritto dalla
+//! tabella e non dal `match` di produzione. L'oracolo dice che le due
+//! formulazioni concordano; i casi nominati le ancorano alla matrice.
 
 use plenora_core::{
     DiagnosticaSupplementare, ErrorCategory, EvidenzaDiLimite, PlenoraError, PressioneDegliAntenati,
@@ -52,16 +45,9 @@ fn fatti_con_evidenza(prova: EvidenzaDiLimite) -> FattiDopoLaQuiescenza {
 
 /// La classe attesa, derivata dalla tabella della §10.0-bis.
 ///
-/// # Perche' i predicati sono mutuamente esclusivi
-///
-/// Se fossero una catena ordinata — «prima incoerente, poi attribuita, ...» —
-/// l'oracolo replicherebbe l'ordine del `match` di produzione, e una
-/// sovrapposizione sbagliata li ingannerebbe **entrambi** allo stesso modo.
-///
-/// Qui ogni predicato porta le proprie esclusioni: `attribuita` richiede
-/// esplicitamente che non ci sia incoerenza, e cosi' via. L'oracolo verifica
-/// poi che esattamente **uno** sia vero, il che e' una proprieta' della
-/// tabella e non dell'ordine in cui la si legge.
+/// I predicati sono mutuamente esclusivi, non una catena ordinata che
+/// replicherebbe l'ordine del `match` di produzione: ognuno porta le proprie
+/// esclusioni, e l'oracolo verifica che esattamente **uno** sia vero.
 fn classe_attesa(
     ol: Option<u64>,
     kl: Option<u64>,
@@ -124,8 +110,8 @@ const LIVELLI: [Option<u64>; 4] = [None, Some(0), Some(1), Some(2)];
 
 #[test]
 fn il_prodotto_esaustivo_dei_quattro_segnali_concorda_con_l_oracolo() {
-    // 4^4 = 256 combinazioni. Generate, non elencate: un elenco scritto a
-    // mano avrebbe la stessa lacuna del codice che deve giudicare.
+    // Combinazioni generate, non elencate: un elenco a mano avrebbe la
+    // stessa lacuna del codice che deve giudicare.
     let mut viste = 0_usize;
     for ol in LIVELLI {
         for kl in LIVELLI {
@@ -333,10 +319,8 @@ fn riga_nessuna_evidenza() {
 
 #[test]
 fn riga_indeterminata_non_e_pressione() {
-    // La riga che ha imposto la quinta classe: `Ol` non letto e gli altri tre
-    // a zero. Non abbiamo osservato pressione — abbiamo un'osservazione
-    // incompleta — e dichiarare `NonAttribuita` affermerebbe una pressione
-    // mai vista.
+    // `Ol` non letto e gli altri tre a zero: un'osservazione incompleta, non
+    // una pressione.
     assert_eq!(
         classifica_evidenza(&evidenza(None, Some(0), Some(0), Some(0))),
         ClasseEvidenzaMemoria::Indeterminata
@@ -525,8 +509,7 @@ fn classifica_caso(caso: Combinazione) -> EsitoClassificato {
 
 #[test]
 fn tutte_le_combinazioni_degli_eventi_rispettano_la_precedenza() {
-    // 2 x 6 x 2 x 2 x 4 = 192 combinazioni, GENERATE. Elencarle a mano
-    // avrebbe lasciato fuori proprio quelle a cui nessuno pensa.
+    // Le combinazioni sono GENERATE, non elencate a mano.
     let combinazioni = tutte_le_combinazioni();
     assert_eq!(combinazioni.len(), 192);
     for caso in combinazioni {
@@ -558,11 +541,9 @@ fn l_evidenza_sopravvive_a_ogni_classificazione() {
 
 #[test]
 fn evidenza_incoerente_o_indeterminata_non_diventa_da_verificare() {
-    // Se `Incoerente` e `Indeterminata` ricadessero sull'esito del worker,
-    // con un worker che dichiara successo produrrebbero `DaVerificare` —
-    // cioe' «prosegui» mentre una lettura del dominio e' rotta o mancante. La §10.0-bis dice che NESSUNA delle cinque classi
-    // autorizza la pubblicazione, e proseguire alla verifica e' il primo
-    // passo verso di essa.
+    // Se `Incoerente` e `Indeterminata` ricadessero sull'esito del worker, un
+    // successo dichiarato darebbe `DaVerificare` con una lettura rotta o
+    // mancante, contro la §10.0-bis.
     for classe in [
         ClasseEvidenzaMemoria::Incoerente,
         ClasseEvidenzaMemoria::Indeterminata,
@@ -595,10 +576,8 @@ fn evidenza_incoerente_o_indeterminata_non_diventa_da_verificare() {
 
 #[test]
 fn evidenza_assente_non_sovrascrive_l_esito_del_worker() {
-    // La classe `Assente` NON e' un livello di precedenza: e' una lettura
-    // riuscita in cui non c'e' nulla, quindi non contraddice il worker.
-    // Farne un livello direbbe «difetto interno» ogni volta che il dominio e'
-    // stato letto e stava bene.
+    // La classe `Assente` NON e' un livello di precedenza: una lettura
+    // riuscita e vuota non contraddice il worker.
     let esito = classifica(FattiDopoLaQuiescenza::dopo_la_quiescenza(
         false,
         Some(evidenza_di_classe(ClasseEvidenzaMemoria::Assente)),
@@ -646,15 +625,10 @@ fn solo_il_publish_pubblica() {
 
 #[test]
 fn la_classificazione_e_ripetibile() {
-    // Il nome dice cio' che il test fa: esegue due volte gli STESSI fatti,
-    // quindi verifica la ripetibilita'. «L'ordine di arrivo e' irrilevante»
-    // sarebbe una promessa piu' grande, e questo test non la mantiene.
-    //
-    // Che l'ordine sia irrilevante e' una proprieta' del TIPO, non di questo
-    // test: `FattiDopoLaQuiescenza` non porta timestamp ne' sequenza, e non
-    // c'e' modo di esprimere due ordini diversi degli stessi fatti da
-    // confrontare. Attribuire a un test una prova che la struttura fornisce
-    // gia' avrebbe fatto sembrare verificato cio' che e' costruito.
+    // Esegue due volte gli STESSI fatti: verifica la ripetibilita'. Che
+    // l'ordine d'arrivo sia irrilevante e' una proprieta' del TIPO
+    // (`FattiDopoLaQuiescenza` non porta timestamp ne' sequenza), non di
+    // questo test.
     for caso in tutte_le_combinazioni() {
         let primo = livello_dell_esito(&classifica_caso(caso));
         let secondo = livello_dell_esito(&classifica_caso(caso));

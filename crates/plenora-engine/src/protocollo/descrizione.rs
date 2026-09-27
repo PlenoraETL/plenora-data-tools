@@ -1,23 +1,12 @@
 //! Come questa build **descrive se stessa** all'altro lato del filo.
 //!
-//! # Perche' ciascun lato si descrive da solo
+//! Ciascun lato si misura da solo (artefatto, resolver, ambiente): un worker
+//! che rispecchiasse la descrizione ricevuta renderebbe il confronto
+//! dell'handshake verde per costruzione.
 //!
-//! Perche' l'handshake confronta due descrizioni, e un confronto ha senso solo
-//! se le due arrivano da due misure indipendenti. Un worker che rispecchiasse
-//! la descrizione ricevuta direbbe sempre «siamo d'accordo»: il confronto
-//! resterebbe verde per costruzione, e la protezione contro un worker che non
-//! e' quello atteso sparirebbe senza che niente lo dica.
-//!
-//! Le tre parti — artefatto, resolver, ambiente — si misurano quindi qui, dal
-//! processo che le dichiara.
-//!
-//! # Che cosa questa build **non** sa descrivere
-//!
-//! L'ambiente PROJ. Con `proj-backend` la descrizione **rifiuta**, e il rifiuto
-//! e' la cosa corretta da fare: non esiste una radice esclusiva, immutabile e
-//! inventariabile da cui ricavare l'insieme delle risorse disponibili. La
-//! ragione, il perimetro e le condizioni di rientro stanno in
-//! `errori-e-limiti.md`.
+//! Con `proj-backend` la descrizione **rifiuta**: l'ambiente PROJ non ha una
+//! radice esclusiva, immutabile e inventariabile da cui ricavare l'insieme
+//! delle risorse. Perimetro e rientro in `errori-e-limiti.md`.
 
 use std::io::Read as _;
 
@@ -33,44 +22,25 @@ use super::messaggi::{Ambiente, IdentitaArtefatto, IdentitaResolver};
 
 /// Il percorso dell'immagine in esecuzione.
 ///
-/// Non e' il nome con cui il programma e' stato invocato: quello si puo'
-/// sostituire fra il momento in cui lo si guarda e quello in cui lo si legge —
-/// e' una `rename`, ed e' atomica. Questo collegamento il kernel lo tiene
-/// legato all'immagine **di questo processo**, e non c'e' nessuna risoluzione
-/// da rifare.
+/// Non il nome di invocazione, che una `rename` puo' sostituire fra il
+/// controllo e la lettura: questo collegamento il kernel lo tiene legato
+/// all'immagine **di questo processo**.
 #[cfg(target_os = "linux")]
 const IMMAGINE: &str = "/proc/self/exe";
 
 /// Quanto si legge per volta, digerendo l'immagine.
 ///
-/// # Perche' un buffer fisso, e perche' nessun tetto totale
-///
-/// Perche' il buffer **e'** il limite di memoria: si legge a blocchi e si
-/// digerisce, quindi l'occupazione non cresce con la dimensione del file.
-/// Aggiungere un tetto totale e presentarlo come limite di memoria direbbe una
-/// cosa falsa — la memoria e' gia' limitata da questo numero — e ne
-/// introdurrebbe uno arbitrario su cio' che l'immagine puo' essere grande.
-///
-/// Il tempo resta governato dall'handshake, che ha una scadenza sua: un'immagine
-/// abbastanza grande da renderlo lento fa scadere quella, e il rifiuto arriva
-/// da chi misura il tempo invece che da chi legge i byte.
+/// Il buffer **e'** il limite di memoria: si legge a blocchi, quindi non serve
+/// un tetto totale sulla dimensione dell'immagine. Il tempo lo governa la
+/// scadenza dell'handshake.
 const BLOCCO: usize = 64 * 1024;
 
 /// Il dominio del digest dell'insieme delle risorse.
 ///
-/// # Perche' un prefisso, e perche' versionato
-///
-/// Perche' un digest senza dominio e' un digest di byte, e gli stessi byte
-/// possono voler dire due cose. Il prefisso separa **questo** digest da ogni
-/// altro digest del programma: nessun contenuto casuale coincide con l'insieme
-/// vuoto, perche' l'insieme vuoto non e' l'hash di niente — e' l'hash di questa
-/// stringa.
-///
-/// La versione sta dentro il dominio perche' la **regola** di calcolo puo'
-/// cambiare: il giorno che l'insieme si inventaria davvero, quel digest non
-/// deve poter coincidere con uno calcolato con la regola di oggi. Due regole
-/// diverse danno due domini diversi, e due lati che ne usassero due si
-/// rifiuterebbero — che e' l'esito giusto.
+/// Il prefisso separa **questo** digest da ogni altro digest del programma:
+/// l'insieme vuoto e' l'hash di questa stringa, non di niente. La versione sta
+/// nel dominio perche' la regola di calcolo puo' cambiare, e due regole
+/// diverse non devono poter coincidere.
 const DOMINIO_INSIEME: &str = "plenora:insieme-risorse:v1";
 
 /// La descrizione di questa build, misurata adesso.
@@ -95,18 +65,10 @@ pub fn di_questa_build(capability: Vec<String>) -> Result<DescrizioneLocale> {
 
 /// L'identita' dell'immagine in esecuzione.
 ///
-/// # I due controlli, e perche' entrambi
-///
-/// **File regolare**: una directory, un socket o un dispositivo non sono
-/// un'immagine, e digerirli darebbe un valore che non descrive un programma.
-///
-/// **La dimensione non cambia sotto la lettura**: si prende la taglia dai
-/// metadati del descrittore **aperto**, si legge, e si confronta col numero di
-/// byte digeriti. Se divergono, qualcuno riscrive l'immagine mentre la si
-/// legge, e il digest non descrive ne' il prima ne' il dopo: descrive una
-/// cucitura dei due, che non e' nessun programma. Un digest cosi' e' peggio
-/// di nessun digest, perche' l'handshake lo confronterebbe come se significasse
-/// qualcosa.
+/// Due controlli: **file regolare**, perche' cio' che non e' un'immagine non
+/// descrive un programma; e **dimensione stabile**, confrontando la taglia del
+/// descrittore aperto con i byte digeriti. Se divergono l'immagine e' stata
+/// riscritta durante la lettura, e il digest descriverebbe una cucitura.
 ///
 /// # Errors
 ///
@@ -136,9 +98,8 @@ fn artefatto() -> Result<IdentitaArtefatto> {
             break;
         }
         digestore.update(&blocco[..quanti]);
-        // La somma non puo' traboccare su un file reale, ma «non puo'» non e'
-        // un controllo: `checked_add` rende l'impossibilita' osservata invece
-        // che presunta.
+        // Non trabocca su un file reale, ma `checked_add` lo controlla invece
+        // di presumerlo.
         letti = letti
             .checked_add(quanti as u64)
             .ok_or_else(|| non_leggibile("la somma dei byte letti trabocca"))?;
@@ -168,20 +129,11 @@ fn resolver(scelto: Risolutore) -> IdentitaResolver {
 
 /// L'ambiente di questa build, oppure il rifiuto di descriverlo.
 ///
-/// # Perche' l'insieme vuoto e' una descrizione e non un'assenza
-///
-/// Perche' «non ci sono risorse» e' un fatto, e si puo' dichiarare: l'insieme e'
-/// vuoto, il suo digest e' quello dell'insieme vuoto in questo dominio, e nulla
-/// puo' entrarci a esecuzione in corso perche' non c'e' nessun backend che
-/// scarichi qualcosa. Due lati che ne convengono convengono su qualcosa di
-/// verificabile.
-///
-/// Con PROJ non e' cosi', e la differenza non e' di grado. Non c'e' una radice
-/// esclusiva da inventariare: i percorsi si **aggiungono** a quelli esistenti, e
-/// la cache delle griglie e' attiva per default. Un digest ricavato dal solo
-/// searchpath sarebbe una falsa garanzia — due macchine con lo stesso
-/// searchpath e contenuti diversi lo condividerebbero, e l'handshake direbbe
-/// «stesso ambiente» su due ambienti diversi.
+/// L'insieme vuoto e' una descrizione verificabile: nessun backend scarica
+/// risorse a esecuzione in corso. Con PROJ i percorsi si **aggiungono** a
+/// quelli esistenti e la cache delle griglie e' attiva per default: un digest
+/// del solo searchpath direbbe «stesso ambiente» su macchine con contenuti
+/// diversi.
 ///
 /// # Errors
 ///
@@ -200,9 +152,8 @@ fn ambiente(scelto: Risolutore) -> Result<Ambiente> {
     }
     let mut digestore = Sha256::new();
     digestore.update(DOMINIO_INSIEME.as_bytes());
-    // Nessuna risorsa: **niente** dopo il dominio. Non uno zero, non una
-    // stringa vuota — l'insieme vuoto e' l'assenza di elementi, e aggiungere un
-    // segnaposto lo renderebbe l'insieme di un elemento chiamato «niente».
+    // Nessuna risorsa: **niente** dopo il dominio; un segnaposto farebbe un
+    // insieme di un elemento.
     let digest = DigestSha256::da_esadecimale(&in_esadecimale(digestore)).map_err(|forma| {
         PlenoraError::InvalidConfiguration(format!(
             "il digest dell'insieme vuoto non e' in forma canonica: {forma}"
@@ -218,12 +169,7 @@ fn ambiente(scelto: Risolutore) -> Result<Ambiente> {
 
 /// Lo SHA-256 concluso, nella forma che [`DigestSha256`] accetta.
 ///
-/// # Perche' passa da [`Esadecimale32`]
-///
-/// Perche' la grafia esadecimale ha gia' un'autorita', ed e' quel tipo: tiene i
-/// 32 byte, la forma canonica e il parsing. Formattarli qui a mano darebbe due
-/// grafie possibili al posto di una — e le due sarebbero uguali finche' qualcuno
-/// non tocca la seconda.
+/// Passa da [`Esadecimale32`], l'unica autorita' sulla grafia esadecimale.
 fn in_esadecimale(digestore: Sha256) -> String {
     Esadecimale32::dai_byte(digestore.finalize().into()).in_esadecimale()
 }

@@ -326,23 +326,13 @@ fn display(value: Evaluated) -> String {
 // ---------------------------------------------------------------------------
 // Fast path compilato di `table.formula`.
 //
-// L'AST viene compilato UNA VOLTA in bytecode postfix: indici di colonna
-// risolti e downcast degli array fatti in compilazione, letterali
-// pre-materializzati, nessuna allocazione per riga sul tier numerico.
-// Due tier:
-// - numerico: tutte le foglie sono numeri/colonne Int64-Float64 e tutti gli
-//   operatori sono aritmetici: stack di (f64, null) e output Float64 diretto;
-// - generale: stack di `Slot` con testo preso in prestito (`Cow`) dalle
-//   colonne Utf8 e dai letterali, stessa logica di output del generico.
-// Semantica IDENTICA a `evaluate`: stessa propagazione dei null, stessa
-// divisione per zero (`-0.0 == 0.0` incluso), nessun controllo di finitezza,
-// stessi errori nello stesso ordine di valutazione (postfix = ordine
-// sinistra-destra del generico; una colonna mancante errore al suo op, non
-// in compilazione). Ricade sul percorso generico quando una colonna non e'
-// Int64/Float64/Utf8 o quando il batch e' vuoto (nessuna riga da
-// compilare). Le colonne referenziate sono comunque risolte prima, per
-// decidere il tipo di output dallo schema: un batch vuoto non e' piu' un
-// caso permissivo.
+// L'AST e' compilato una volta in bytecode postfix, con colonne risolte e
+// downcast fatti in compilazione. Il tier numerico (solo foglie Int64/Float64
+// e operatori aritmetici) usa uno stack di (f64, null); il tier generale uno
+// stack di `Slot` con testo in prestito (`Cow`). Semantica identica a
+// `evaluate`: null, divisione per zero (`-0.0 == 0.0`), nessun controllo di
+// finitezza, stessi errori nello stesso ordine. Ricade sul generico quando
+// una colonna non e' Int64/Float64/Utf8 o il batch e' vuoto.
 // ---------------------------------------------------------------------------
 
 /// Accessore di colonna pre-risolto (indice + downcast fatti una volta).
@@ -560,14 +550,10 @@ impl<'a> FastProgram<'a> {
                         stack.push((values.value(row), values.is_null(row)));
                     }
                     FastColumn::I64(values) => {
-                        // Nullo: il valore non viene letto, il posto sullo
-                        // stack lo tiene lo zero. Non nullo: conversione
-                        // esatta o errore, in parita' con `scalar_as_f64_rounded` del
-                        // tier generico (che dal canto suo non arrotonda piu').
-                        // Arrotondamento dichiarato (errori-e-limiti.md#limiti-dichiarati): `formula`
-                        // produce `Float64` per contratto, come il tier
-                        // generico (`scalar_as_f64_rounded`) — e i due
-                        // percorsi devono dare la stessa risposta.
+                        // Nullo: il valore non viene letto e sullo stack va
+                        // lo zero. Non nullo: arrotondamento dichiarato
+                        // (errori-e-limiti.md#limiti-dichiarati), come il
+                        // tier generico (`scalar_as_f64_rounded`).
                         let value = if values.is_null(row) {
                             0.0
                         } else {
@@ -881,15 +867,8 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
 ///   `scalar_as_f64_rounded`/`scalar_as_string`); errore Arrow nella sostituzione.
 pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
     let expression = parse(&config.formula)?;
-    // Il tipo della colonna prodotta si decide dallo SCHEMA, MAI dai valori
-    // osservati. Deciderlo dai valori darebbe a un batch vuoto o tutto null
-    // un tipo diverso da quello dello stesso piano su dati pieni — e
-    // diverso da quello che l'analisi ha dichiarato nel contratto.
-    //
-    // Conseguenza voluta: una formula che nomina una colonna assente
-    // fallisce anche su un batch VUOTO. Senza risolvere le colonne non
-    // esiste un tipo di output da dichiarare, quindi non esiste una risposta
-    // giusta da dare.
+    // Tipo dallo schema, mai dai valori (vedi il doc sopra): una colonna
+    // assente fallisce anche su un batch vuoto.
     let kind = infer_expr_type(&expression, &|name| {
         let index = column_index(batch, name)?;
         column_formula_type(batch.schema_ref().field(index).data_type(), name)
@@ -998,11 +977,9 @@ fn formula_generic(
 // ---------------------------------------------------------------------------
 // Analisi statica del tipo prodotto (analyze_contract).
 //
-// `pub(crate)`: riusa il parser privato per classificare a secco il tipo
-// della colonna derivata, senza passare dal kernel.
-// Regole identiche a `evaluate`: colonne Int64/Float64 -> Number, ogni altro
-// tipo scalare -> Text; `+` con un operando Text -> Text (concatenazione),
-// `-` `*` `/` su Text -> errore certo a runtime (fail-closed).
+// Riusa il parser privato per classificare a secco il tipo della colonna
+// derivata. Regole identiche a `evaluate`: `+` con un operando Text e'
+// concatenazione, `-` `*` `/` su Text sono rifiutati (fail-closed).
 // ---------------------------------------------------------------------------
 
 /// Tipo statico della colonna prodotta da `formula`.
@@ -1028,8 +1005,8 @@ impl FormulaType {
 /// tutto il resto letto via `scalar_as_string` — quindi profilo testuale
 /// COMPLETO, timezone inclusa.
 ///
-/// Vive qui, accanto al kernel che la applica, e la usa anche l'analizzatore
-/// del contratto: una seconda copia sarebbe una copia che puo' divergere.
+/// La usa anche l'analizzatore del contratto, invece di una copia che
+/// potrebbe divergere.
 ///
 /// # Errors
 ///
@@ -1152,12 +1129,10 @@ mod tests {
 
     /// La guardia sul tipo statico e' SIMMETRICA, in entrambi i percorsi.
     ///
-    /// Con un AST inferito correttamente il caso non e' raggiungibile: e'
-    /// proprio per questo che il test forza il tipo, invece di cercare una
-    /// formula che lo produca. L'invariante che si sta fissando e' «il tipo
-    /// dichiarato non si adatta ai dati», e vale nei due versi: un ramo Text
-    /// che formattasse in silenzio un valore numerico lascerebbe passare
-    /// inosservata una divergenza dell'inferenza.
+    /// Con un'inferenza corretta il caso non e' raggiungibile, quindi il test
+    /// forza il tipo. L'invariante e' «il tipo dichiarato non si adatta ai
+    /// dati», nei due versi: un ramo Text che formattasse un numero
+    /// nasconderebbe una divergenza dell'inferenza.
     #[test]
     fn la_guardia_sul_tipo_statico_e_simmetrica() {
         let batch = fixture();

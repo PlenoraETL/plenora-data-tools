@@ -70,12 +70,8 @@ pub fn describe_json(
 
 /// `describe`: cosa contiene un input, senza eseguire nulla.
 ///
-/// E' il primo comando da invocare per scrivere un piano: senza, i nomi delle
-/// colonne, il CRS e l'encoding si scoprono solo facendo fallire un `run`.
-/// L'input passa dal confine IPC come in esecuzione — framing pre-validato,
-/// barriera anti-panico — ma `describe` legge il solo schema: i dizionari non
-/// si decodificano, e un file che `describe` accetta puo' essere rifiutato da
-/// `run` quando li legge
+/// Legge il solo schema passando dal confine IPC: i dizionari non si
+/// decodificano, quindi `run` puo' rifiutare un file che `describe` accetta
 /// (`errori-e-limiti.md#il-coordinatore-del-profilo-isolato-legge-fuori-dal-dominio`).
 pub fn describe_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     let input = value_after(args, "--input")?;

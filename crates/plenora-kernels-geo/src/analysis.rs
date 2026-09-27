@@ -110,13 +110,11 @@ pub fn minimum_distances(
 ///
 /// # Precondizione (contratto del chiamante)
 ///
-/// Ogni geometria dei due lati deve essere GIA' validata: coordinate finite
-/// e validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
-/// o da un kernel che valida il proprio output. Su input che viola la
-/// precondizione il risultato e' indefinito e nessun errore dedicato e'
-/// garantito: la variante e' per i soli percorsi in cui la validazione e'
-/// dimostrata per costruzione (R0.1: mai un'inferenza sui chiamanti — il
-/// gate resta nella forma pubblica [`minimum_distances`]).
+/// Ogni geometria dei due lati deve essere GIA' validata (coordinate finite,
+/// validita' OGC), come da [`crate::geometry_from_wkb`] o da un kernel che
+/// valida il proprio output. Altrimenti il risultato e' indefinito. Solo per
+/// percorsi validati per costruzione (R0.1); il gate resta in
+/// [`minimum_distances`].
 ///
 /// # Errors
 ///

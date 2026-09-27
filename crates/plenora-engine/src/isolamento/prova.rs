@@ -1,28 +1,14 @@
 //! Far percorrere a un worker **reale** la sequenza intera, e riferirne.
 //!
-//! # Che cosa prova, e che cosa no
+//! Prova il **cablaggio**, dalla modalita' riconosciuta alla raccolta del
+//! figlio, e che l'artefatto ci sia: il referto porta l'esito
+//! **riverificato** con i passi da 3 a 8-bis, non la sola affermazione del
+//! worker. **Non prova «sotto limite»**: qui non ci sono spawner ne' dominio
+//! `cgroup2`, che si attraversano sulla VM.
 //!
-//! Prova il **cablaggio**: che l'immagine indicata riconosca la modalita',
-//! erediti i due descrittori, si dichiari, concluda l'accordo, riceva
-//! l'incarico, ne rivalidi il piano, esegua, scriva l'artefatto, mandi il
-//! progresso, dichiari l'esito, chiuda il canale e sia raccolta. E che
-//! l'artefatto ci sia davvero: il referto porta l'esito **riverificato** con i
-//! passi da 3 a 8-bis, non la sola affermazione del worker.
-//!
-//! **Non prova «sotto limite».** Qui non c'e' ne' lo spawner ne' un dominio
-//! `cgroup2`: il worker nasce da questo processo e vive con la memoria che il
-//! sistema gli concede. Che esegua *sotto* `memory.max` e' un'altra
-//! affermazione, e la si fa attraversando spawner e dominio vero sulla VM.
-//!
-//! # Le due immagini, e che cosa le distingue davvero
-//!
-//! **Nessuna delle due contiene `internals`**, e va detto perche' ci si potrebbe
-//! aspettare il contrario: se l'harness fosse un caso di integrazione, cargo
-//! unificherebbe le feature fra dipendenze normali e di sviluppo e compilerebbe
-//! con `internals` anche il binario sotto prova. Essendo un binario a se',
-//! compilato da un'invocazione sua, quella unificazione non avviene.
-//!
-//! Cio' che le distingue e' la **provenienza**:
+//! Nessuna delle due immagini contiene `internals`: l'harness e' un binario
+//! compilato da un'invocazione sua, e l'unificazione delle feature non
+//! avviene. Le distingue la **provenienza**:
 //!
 //! - [`Immagine::DiIterazione`] sta nel target condiviso dell'harness, non e'
 //!   fissata da un digest, e nulla impedisce a una compilazione successiva di
@@ -31,22 +17,11 @@
 //!   parte, in un target suo, e fissata da uno SHA-256 che chi la fornisce
 //!   verifica prima e dopo. E' l'unica che qualifica.
 //!
-//! # Il figlio, e il tempo
-//!
-//! Il processo entra nella **guardia lineare** nella stessa espressione che lo
-//! crea, e ne esce da una porta sola: qualunque cammino — compreso quello di un
-//! errore a meta' handshake — passa da `chiudi`. Un `Child` nudo non basta: il
-//! suo `Drop` non termina niente, e un worker rotto sopravviverebbe all'harness
-//! che lo ha avviato.
-//!
-//! `chiudi` ha **due tempi**, e l'ordine conta: prima l'attesa, che lascia
-//! finire da se' chi sta gia' finendo; poi, solo allo scadere, la chiusura, che
-//! segnala. Terminare per primo metterebbe `Segnale(9)` nel referto di un
-//! percorso riuscito.
-//!
-//! Ogni attesa ha un tetto. Le letture passano da una sorgente fermabile che un
-//! guardiano ferma alla scadenza; la raccolta e' limitata dalla porta stessa. Un
-//! worker che non parla fa fallire il percorso, non lo appende.
+//! Il processo entra nella **guardia lineare** nella stessa espressione che
+//! lo crea, ed esce solo da `chiudi`, che ha due tempi: prima l'attesa, poi,
+//! allo scadere, la chiusura che segnala (terminare per primo metterebbe
+//! `Segnale(9)` nel referto di un percorso riuscito). Ogni attesa ha un tetto:
+//! un worker che non parla fa fallire il percorso, non lo appende.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -87,32 +62,18 @@ const TOKEN: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccd
 
 /// Quanto si concede al worker per dire tutto quello che ha da dire.
 ///
-/// # Perche' un tetto, e perche' questo
-///
-/// Perche' senza, un worker che non parla non fa fallire il percorso: lo
-/// **appende**. In una campagna e' peggio di un rosso — un rosso lo si legge, e
-/// una qualificazione ferma la si scopre il giorno dopo.
-///
-/// Trenta secondi sono due ordini di grandezza sopra il percorso intero su una
-/// macchina scarica: qui si esegue un piano di quattro righe. Non e' una misura
-/// di prestazione, e' la soglia oltre la quale «lento» e «fermo» non si
-/// distinguono piu'.
+/// Senza tetto un worker che non parla appende il percorso invece di farlo
+/// fallire. Il valore sta due ordini di grandezza sopra il percorso intero
+/// su un piano di quattro righe: non e' una misura di prestazione, ma la
+/// soglia oltre la quale «lento» e «fermo» non si distinguono.
 pub(super) const TETTO_DELLA_PAROLA: Duration = Duration::from_secs(30);
 
 /// Quanto si aspetta che il figlio finisca **da se'**, prima di segnalargli
 /// qualcosa.
 ///
-/// # Perche' esiste
-///
-/// Perche' sul cammino riuscito il worker sta gia' uscendo: ha chiuso il canale
-/// e sta finendo. Fra quel momento e la registrazione della sua uscita c'e' una
-/// finestra che non e' un guasto — e' il tempo che ci mette — e terminare li'
-/// vorrebbe dire uccidere un processo per aver tardato un millisecondo. Il
-/// referto direbbe `Segnale(9)` su un percorso perfettamente riuscito.
-///
-/// Due secondi sono molto piu' del necessario per un processo che ha gia' chiuso
-/// i propri descrittori, e molto meno del tetto della parola: chi tardasse
-/// davvero lo si scopre comunque.
+/// Sul cammino riuscito il worker ha chiuso il canale e sta uscendo:
+/// terminarlo li' metterebbe `Segnale(9)` nel referto di un percorso riuscito.
+/// Il valore e' molto sopra il necessario e molto sotto il tetto della parola.
 const CORTESIA_PRIMA_DEL_SEGNALE: Duration = Duration::from_secs(2);
 
 /// Quanto si concede alla raccolta **dopo** il segnale.
@@ -183,13 +144,9 @@ pub enum EsitoOsservato {
 
 /// Come il processo e' finito, per chi guarda il referto da fuori.
 ///
-/// # Perche' un secondo enum e non quello di `figlio`
-///
-/// Perche' quello e' `pub(super)`: i tipi dell'isolamento non escono dal crate,
-/// e renderli pubblici per un referto allargherebbe per sempre la superficie
-/// del motore. Qui ne esce **una copia con tre varianti**, e la conversione e'
-/// un `match` esaustivo: una variante nuova di la' non compila finche' non le si
-/// dice dove va.
+/// Una copia di quello di `figlio`, che e' `pub(super)` e non deve uscire dal
+/// crate. La conversione e' un `match` esaustivo: una variante nuova di la'
+/// non compila finche' non le si dice dove va.
 #[derive(Debug, PartialEq, Eq)]
 pub enum FineDelProcesso {
     /// Uscito da se', con questo codice.
@@ -214,12 +171,8 @@ impl FineDelProcesso {
 
 /// Che cosa la riverifica dell'artefatto ha detto.
 ///
-/// # Perche' un esito e non un booleano
-///
-/// Perche' «non verificato» ha due ragioni diverse — il worker non ha
-/// dichiarato un successo, oppure l'ha dichiarato e l'artefatto non regge — e
-/// confonderle direbbe che un errore atteso e un artefatto inventato sono la
-/// stessa cosa.
+/// «Non verificato» ha due ragioni (il worker non ha dichiarato un successo,
+/// oppure l'artefatto dichiarato non regge), che un booleano confonderebbe.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Artefatto {
     /// C'e', e supera i passi da 3 a 8-bis.
@@ -264,30 +217,14 @@ pub struct Referto {
 
 /// Cio' che la sequenza deve produrre, qualunque strada si sia percorsa.
 ///
-/// # Perche' l'oracolo e' uno solo
+/// L'oracolo e' uno solo per le due strade (due pipe nude, oppure spawner e
+/// dominio): le strade differiscono in che cosa attraversano, non in che cosa
+/// accettano. Tutto e' esatto, niente «almeno», perche' la fixture e' fissa
+/// (quattro righe, due sopra la soglia, un batch, **un** progresso), e
+/// l'artefatto si pretende **verificato**, non dichiarato.
 ///
-/// Perche' le strade sono due — due pipe nude, oppure spawner e dominio — e
-/// **cio' che si pretende non cambia**: se una delle due giudicasse piu'
-/// morbidamente, sarebbe proprio quella a dichiarare qualificato cio' che
-/// l'altra respinge. Con un solo giudizio, la differenza fra i due percorsi
-/// resta dove deve stare: in che cosa attraversano, non in che cosa accettano.
-///
-/// # Perche' tutto esatto, e niente «almeno»
-///
-/// Perche' la fixture e' fissa: quattro righe, due sopra la soglia, un batch
-/// solo, quindi **un** progresso. Una pretesa morbida lascerebbe passare sia un
-/// worker che ne manda cento — cioe' che ignora la quota — sia uno che ne manda
-/// uno perche' scrive meno del dovuto.
-///
-/// E l'artefatto si pretende **verificato**, non dichiarato: un worker che
-/// annunciasse un successo senza scrivere niente supererebbe un controllo che si
-/// fermi all'esito.
-///
-/// # Che cosa rende
-///
-/// L'elenco di cio' che manca, vuoto quando non manca niente. Non un booleano:
-/// chi legge un rosso deve sapere **quali** pretese sono cadute, e un booleano
-/// lo manderebbe a rileggere il referto per indovinarlo.
+/// Rende l'elenco di cio' che manca, vuoto quando non manca niente: chi legge
+/// un rosso deve sapere **quali** pretese sono cadute.
 #[must_use]
 pub fn giudica(referto: &Referto, etichetta: &str, digest_atteso: Option<&str>) -> Vec<String> {
     let mut manca = Vec::new();
@@ -346,13 +283,9 @@ pub fn giudica(referto: &Referto, etichetta: &str, digest_atteso: Option<&str>) 
 
 /// Un referto costruito da chi ha percorso la strada con lo spawner.
 ///
-/// # Perche' esiste
-///
-/// Perche' il percorso sotto limite osserva le stesse cose di [`percorri`] ma
-/// non le ottiene allo stesso modo: il figlio glielo consegna lo spawner, e
-/// l'immagine e' quella che gli e' stata indicata. Costruire il referto la'
-/// vorrebbe dire conoscere i campi da fuori, e allora l'oracolo giudicherebbe
-/// una struttura che qualcun altro ha riempito a mano.
+/// Il percorso sotto limite osserva le stesse cose di [`percorri`] ma le
+/// ottiene diversamente; costruire il referto la' vorrebbe dire riempire a
+/// mano la struttura che l'oracolo giudica.
 #[must_use]
 pub fn referto_del_dominio(
     digest_immagine: String,
@@ -434,16 +367,10 @@ pub fn percorri(immagine: &Immagine) -> Result<Referto> {
 
 /// La causa del dialogo, **con** i difetti che la pulizia ha lasciato.
 ///
-/// # Perche' una funzione e non un `?`
-///
-/// Perche' un `?` nudo scarterebbe i difetti di pulizia: chi legge il rosso
-/// saprebbe perche' il dialogo non ha retto, e non che il figlio ha anche
-/// protestato uscendo. Sono due fatti, non un dettaglio dello stesso, ed e'
-/// l'unica riga in cui uno dei due puo' sparire senza che nessuno se ne
-/// accorga — isolata, un caso la attraversa in entrambi i modi.
-///
-/// La composizione e' esplicita e non passa da `con_contesto`: quella funzione,
-/// per progetto, lascia intatte le varianti che questo percorso produce.
+/// Un `?` nudo scarterebbe i difetti di pulizia, che sono un fatto distinto
+/// dalla causa; isolata, la composizione si prova in entrambi i versi. Non
+/// passa da `con_contesto`, che lascia intatte le varianti che questo percorso
+/// produce.
 ///
 /// # Errors
 ///
@@ -462,21 +389,13 @@ fn con_la_pulizia(osservato: Result<Osservato>, difetti: &[String]) -> Result<Os
 /// Il dialogo intero su **un canale gia' aperto**, con la fixture e la
 /// riverifica.
 ///
-/// # Perche' esiste, e chi la usa
+/// [`percorri`] apre una pipe e avvia il worker da se'; il percorso sotto
+/// `cgroup2` riceve i due estremi dallo **spawner**. La conversazione e' la
+/// stessa, e due copie divergerebbero proprio sul percorso che qualifica.
 ///
-/// Perche' i canali sono due, ma la conversazione e' una. [`percorri`] apre una
-/// pipe e avvia il worker da se'; il percorso sotto `cgroup2` riceve invece i
-/// due estremi dallo **spawner**, che ha attraversato il dominio e lasciato
-/// cadere i privilegi. Cio' che accade fra i due estremi — saluto, accordo,
-/// incarico, progresso, esito, riverifica dell'artefatto, EOF — e' identico, e
-/// due copie divergerebbero proprio sul percorso che qualifica.
-///
-/// # `di_chi`
-///
-/// L'uid e il gid del worker, quando non e' questo processo. Dentro il dominio
-/// il worker gira con altre credenziali: la fixture e la directory
-/// dell'artefatto devono appartenergli, altrimenti il rifiuto che si osserva e'
-/// un permesso mancante e non una proprieta' del protocollo.
+/// `di_chi` e' l'uid e il gid del worker quando non e' questo processo: la
+/// fixture e la directory dell'artefatto devono appartenergli, o il rifiuto
+/// osservato sarebbe un permesso mancante.
 ///
 /// # Errors
 ///
@@ -516,12 +435,9 @@ pub(super) fn sul_canale(
 /// Da' al worker cio' che gli serve per leggere l'ingresso e scrivere
 /// l'artefatto.
 ///
-/// # Perche' il proprietario e non i permessi larghi
-///
-/// Perche' `0o777` renderebbe la fixture scrivibile da chiunque sulla macchina,
-/// e un percorso di qualificazione che allarga i permessi per far passare la
-/// prova misura anche la propria concessione. Il proprietario invece dice
-/// esattamente **chi**: il worker, e nessun altro.
+/// Cambia il proprietario invece di allargare i permessi: `0o777` renderebbe
+/// la fixture scrivibile da chiunque, e la prova misurerebbe anche la propria
+/// concessione.
 ///
 /// # Errors
 ///
@@ -628,23 +544,14 @@ pub(super) fn dialoga(
 /// Cio' che il dialogo ha visto, letto **alla luce** di com'e' andato il
 /// guardiano.
 ///
-/// # Le tre letture
+/// - **`Perduto`**: le letture non sono state limitate, e il percorso
+///   fallisce anche su un dialogo riuscito; la causa, se c'e', si affianca.
+/// - **`Scaduto`**: la scadenza spiega la causa, che altrimenti direbbe
+///   «lettura fermata su richiesta».
+/// - **`NonScaduto`**: niente da aggiungere.
 ///
-/// **`Perduto`**: nessuno puo' dire che le letture fossero limitate, e una
-/// qualificazione che non risponde del proprio tempo non risponde di niente. Il
-/// percorso fallisce anche su un dialogo riuscito, e la causa — se c'e' —
-/// non viene sostituita: le si affianca.
-///
-/// **`Scaduto`**: la scadenza non sostituisce la causa, la spiega. Senza, il rosso
-/// direbbe «lettura fermata su richiesta» e chi legge cercherebbe chi ha
-/// chiesto.
-///
-/// **`NonScaduto`**: non c'e' niente da aggiungere, in nessuno dei due versi.
-///
-/// I messaggi si compongono qui e non con `con_contesto`: quella funzione, per
-/// progetto, lascia intatte le varianti che la lettura produce — `Io` e
-/// `IsolationUnavailable` — e cio' che si vuole aggiungere sparirebbe senza che
-/// niente lo dica.
+/// I messaggi si compongono qui e non con `con_contesto`, che lascia intatte
+/// `Io` e `IsolationUnavailable`.
 ///
 /// # Errors
 ///
@@ -678,12 +585,9 @@ fn secondo_il_guardiano(visto: Result<Osservato>, stato: &StatoDelGuardiano) -> 
 
 /// Chi ferma le letture alla scadenza.
 ///
-/// # Perche' un thread e non una scadenza sulla lettura
-///
-/// Perche' la sorgente fermabile esiste gia' e guarda un interruttore: riusarla
-/// costa un thread che dorme. Una seconda nozione di scadenza — `SO_RCVTIMEO`,
-/// o un `poll` con timeout — sarebbe un secondo modo di smettere di ascoltare, e
-/// i due potrebbero divergere su che cosa significhi «fermo».
+/// Un thread che dorme e poi apre l'interruttore della sorgente fermabile:
+/// una seconda nozione di scadenza (`SO_RCVTIMEO`, `poll`) potrebbe divergere
+/// su che cosa significhi «fermo».
 pub(super) struct Guardiano {
     freno: Freno,
     mano: std::thread::JoinHandle<bool>,
@@ -691,12 +595,8 @@ pub(super) struct Guardiano {
 
 /// Che cosa il guardiano ha da dire, quando lo si raccoglie.
 ///
-/// # Perche' tre e non un booleano
-///
-/// Perche' «non scaduto» e «non lo so» non sono la stessa cosa. Un guardiano
-/// andato in panico non ha vigilato: il percorso e' arrivato in fondo senza la
-/// garanzia che lo limita, e un `false` lo direbbe tranquillo. Con tre
-/// stati chi legge deve nominare anche il terzo.
+/// Tre stati: un guardiano andato in panico non ha vigilato, e un `false`
+/// direbbe tranquillo un percorso rimasto senza tetto.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum StatoDelGuardiano {
     /// Ha vigilato fino alla fine, e la scadenza non e' scattata.
@@ -710,18 +610,13 @@ pub(super) enum StatoDelGuardiano {
 impl Guardiano {
     /// Comincia a contare verso `tetto`.
     ///
-    /// # Perche' il tetto e' un parametro
-    ///
-    /// Perche' non tutte le attese hanno la stessa taglia: l'handshake ha una
-    /// dimensione fissa indipendente dal piano, e il dialogo intero scala con
-    /// cio' che il piano fa eseguire. Un guardiano che portasse `TETTO_DELLA_PAROLA`
-    /// scritto dentro andrebbe bene per l'uno e male per l'altro.
+    /// Il tetto e' un parametro perche' l'handshake ha taglia fissa e il
+    /// dialogo intero scala con il piano.
     ///
     /// # Errors
     ///
     /// [`PlenoraError::IsolationUnavailable`] se il thread non nasce: senza
-    /// guardiano le letture non avrebbero tetto, e cominciare comunque darebbe
-    /// un percorso che puo' appendersi.
+    /// guardiano le letture non avrebbero tetto.
     pub(super) fn comincia(freno: Freno, spia: Interruttore, tetto: Duration) -> Result<Self> {
         // La scadenza si calcola **prima** di partire, e in modo controllato: un
         // `Instant + Duration` che tracima va in panico, e un guardiano che
@@ -761,13 +656,8 @@ impl Guardiano {
 
     /// Ferma il guardiano, e dice che cosa ha visto.
     ///
-    /// # Perche' il panico non diventa «non scaduto»
-    ///
-    /// Perche' sarebbero due affermazioni diverse dette con la stessa parola.
-    /// Un guardiano perduto non ha vigilato: il percorso e' arrivato dove e'
-    /// arrivato **senza** il tetto sulle letture, e un percorso che non puo'
-    /// garantire il proprio tempo non qualifica niente. Il payload non si
-    /// legge — non ci interessa che cosa dicesse — ma la sua assenza si.
+    /// Il panico non diventa «non scaduto»: un guardiano perduto non ha
+    /// vigilato, e il percorso non qualifica. Il payload non si legge.
     pub(super) fn ferma_e_raccogli(self) -> StatoDelGuardiano {
         self.freno.ferma();
         match self.mano.join() {
@@ -780,23 +670,10 @@ impl Guardiano {
 
 /// Chiude la guardia, e separa l'uscita dai difetti di pulizia.
 ///
-/// # Perche' un difetto di pulizia non fa fallire
-///
-/// Perche' non e' l'esito del percorso: e' un fatto **accanto**. Farlo risalire
-/// come errore sostituirebbe la causa vera — quella che ha portato fin qui —
-/// con l'ultima cosa andata storta.
-///
-/// # E perche' pero' ci si arrende, se il figlio resta
-///
-/// Perche' un figlio che non si raccoglie **esiste ancora**, e sopra questo
-/// percorso non c'e' nessuno a cui passarlo: il chiamante e' un processo di
-/// qualificazione che sta per finire, e finire lasciandolo vivo direbbe verde
-/// mentre un worker resta in giro.
-///
-/// `arrenditi` prova a ucciderlo e poi ferma tutto **dicendo perche'**: i
-/// difetti della pulizia e la causa che ha portato qui. Un rosso rumoroso e'
-/// l'unico esito onesto quando la pulizia non riesce, e il referto che si
-/// perde e' meno grave del processo che resta.
+/// Un difetto di pulizia non fa fallire: sta **accanto** alla causa, e non la
+/// sostituisce. Ma un figlio che non si raccoglie esiste ancora, e sopra non
+/// c'e' nessuno a cui passarlo: `arrenditi` prova a ucciderlo e ferma tutto
+/// dicendo perche'. Un referto perso e' meno grave di un processo che resta.
 pub(super) fn chiudi<P: super::figlio::ProcessoFiglio>(
     guardia: FiglioVivo<P>,
     causa: Option<&PlenoraError>,
@@ -818,12 +695,8 @@ pub(super) fn chiudi<P: super::figlio::ProcessoFiglio>(
 
 /// Termina il figlio e lo raccoglie, sommando i difetti gia' visti.
 ///
-/// # Perche' separata
-///
-/// Perche' e' il **secondo tempo**, e ci si arriva solo quando la cortesia e'
-/// finita: nessun cammino manda un segnale prima. Tenerla dentro [`chiudi`]
-/// avrebbe reso facile, un domani, spostare la terminazione sopra l'attesa
-/// senza accorgersene.
+/// E' il **secondo tempo**, dopo la cortesia; separata da [`chiudi`] perche'
+/// nessun cammino mandi un segnale prima dell'attesa.
 fn chiudi_per_forza<P: super::figlio::ProcessoFiglio>(
     guardia: FiglioVivo<P>,
     causa: Option<&PlenoraError>,
@@ -891,17 +764,10 @@ fn osservato(esito: EsitoWorkerSulFilo) -> EsitoOsservato {
 
 /// Riapre l'artefatto e gli fa i passi da 3 a 8-bis.
 ///
-/// # Perche' non basta l'esito
-///
-/// Perche' l'esito e' un'**affermazione del worker**, e un worker che
-/// dichiarasse un successo senza scrivere niente passerebbe un controllo che si
-/// fermi li'. Il verificatore confronta invece l'artefatto con cio' che e' stato
-/// dichiarato: sigillo, framing, digest dell'intero file, contratto per
-/// fingerprint, conteggi osservati e commit token del footer.
-///
-/// E' la **stessa funzione** che il supervisore usa nella sequenza, non una sua
-/// imitazione: se qui passasse qualcosa che li' non passa, il percorso direbbe
-/// il falso proprio su cio' che deve garantire.
+/// L'esito e' un'**affermazione del worker**. Il verificatore confronta
+/// l'artefatto con il dichiarato: sigillo, framing, digest dell'intero file,
+/// contratto per fingerprint, conteggi osservati e commit token del footer.
+/// E' la **stessa funzione** che il supervisore usa nella sequenza.
 fn riverifica(esito: &EsitoOsservato, riferimenti: &Riferimenti<'_>) -> Artefatto {
     let EsitoOsservato::Successo { digest, conteggi } = esito else {
         return Artefatto::NonDichiarato;
@@ -951,9 +817,8 @@ pub(super) fn scrivi(dove: &mut std::io::PipeWriter, byte: &[u8]) -> Result<()> 
 
 /// Il supervisore che si descrive **come il worker si dichiarera'**.
 ///
-/// Stessa versione, stesso resolver, stesso ambiente, e il digest dell'immagine
-/// che sta per eseguire. Se una sola delle quattro cose diverge, l'accordo cade
-/// — che e' precisamente cio' che l'handshake esiste per fare.
+/// Stessa versione, stesso resolver, stesso ambiente, e il digest
+/// dell'immagine che sta per eseguire: se una diverge, l'accordo cade.
 ///
 /// # Errors
 ///

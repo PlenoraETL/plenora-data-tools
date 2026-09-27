@@ -1,43 +1,18 @@
 //! Confronto ESATTO fra un `Decimal128` e un `f64`.
 //!
-//! # Perche' serve
-//!
-//! Un decimale e un double sono due razionali con denominatori diversi:
-//! `u / 10^s` contro `m * 2^e`. Convertire il decimale a double per
-//! confrontarli collassa valori distinti: `0.100000000000000001` e il double
-//! `1e-1` (`0.1000000000000000055511151231257827…`) diventano lo stesso
-//! numero e risultano uguali, mentre il primo e' strettamente minore.
-//!
-//! # Come
-//!
-//! Si porta il confronto su interi, senza divisioni:
+//! Convertire il decimale a double collassa valori distinti
+//! (`0.100000000000000001` e `1e-1` risulterebbero uguali). Il confronto si
+//! porta quindi su interi, senza divisioni:
 //!
 //! ```text
 //!   u / 10^s   ?   m * 2^e
-//!   u / (2^s · 5^s)  ?  m · 2^e
 //!   u · 5^max(0,-s)  ?  m · 5^max(0,s) · 2^(e+s)
 //! ```
 //!
-//! # Dimensione dell'aritmetica
-//!
-//! La scala di un `Decimal128` **non e' limitata inferiormente** da Arrow:
-//! `validate_decimal_precision_and_scale` (arrow-array 59.2.0) rifiuta solo
-//! `scale > 38`, quindi `Decimal128(38, -100)` e' un tipo valido e i suoi
-//! valori vanno confrontati, non dichiarati indecidibili. Con `scale = -128`
-//! il fattore e' `5^128 < 2^298`, che moltiplicato per `|u| < 2^127` arriva a
-//! **425 bit**: con 256 bit la funzione renderebbe `None` — «non so
-//! rispondere» su un valore legittimo.
-//!
-//! Si usano quindi 512 bit. Entrambi i lati nascono da un `u128` moltiplicato
-//! ripetutamente per 5, quindi non serve un prodotto fra numeri grandi: basta
-//! la moltiplicazione per una cifra. Il caso peggiore di ciascun lato —
-//! `|u| · 5^128 < 2^425` a sinistra, `2^53 · 5^127 < 2^348` a destra — ci sta
-//! con margine.
-//!
-//! La potenza di due residua puo' invece essere enorme (fino a `2^1202` con i
-//! subnormali) e non serve calcolarla: se lo spostamento porta un lato oltre
-//! i 512 bit, quel lato supera l'altro — che per costruzione ci sta dentro —
-//! e il confronto e' deciso senza aritmetica a precisione arbitraria.
+//! Arrow non limita inferiormente la scala di un `Decimal128`: con
+//! `scale = -128` un lato arriva a 425 bit, quindi l'aritmetica e' a 512 bit.
+//! Se lo spostamento per la potenza di due porta un lato oltre i 512 bit,
+//! quel lato supera l'altro e il confronto e' deciso senza calcolarlo.
 
 use std::cmp::Ordering;
 
@@ -343,16 +318,11 @@ mod tests {
         }
     }
 
-    /// Oracolo INDIPENDENTE: confronta `unscaled / 10^scale` con il valore
-    /// esatto del double usando le frazioni razionali di `num`… che qui non
-    /// c'e'. Si costruisce quindi il razionale a mano con `i128` estesi a
-    /// `u128` in forma `numeratore/denominatore` normalizzata, per i casi in
-    /// cui entrambi i lati stanno nei 128 bit.
+    /// Oracolo indipendente a prodotti incrociati in `i128`.
     ///
-    /// Non e' una seconda implementazione della stessa idea: il comparatore
-    /// lavora per potenze di 5 e spostamenti, l'oracolo per prodotti incrociati
-    /// di frazioni. Se condividessero un errore, dovrebbero sbagliare in due
-    /// modi diversi allo stesso momento.
+    /// Copre i casi in cui entrambi i lati stanno nei 128 bit; il comparatore
+    /// lavora invece per potenze di 5 e spostamenti, quindi i due non
+    /// condividono il metodo.
     fn oracolo_razionale(unscaled: i128, scale: i8, expected: f64) -> Option<Ordering> {
         if !expected.is_finite() {
             return None;
@@ -395,18 +365,10 @@ mod tests {
 
     /// Secondo oracolo indipendente, a precisione ARBITRARIA.
     ///
-    /// [`oracolo_razionale`] lavora con prodotti incrociati in `i128` e quindi
-    /// si arrende — restituendo `None` — proprio nella regione che il
-    /// comparatore risolve con l'aritmetica a 512 bit: scale estreme,
-    /// `unscaled` a fondo scala, double vicini a `f64::MAX` o subnormali. Li'
-    /// il comparatore resterebbe senza giudice.
-    ///
-    /// Questo oracolo non ha un dominio: rappresenta le magnitudini come cifre
-    /// in base 2^32 su un `Vec` che cresce quanto serve, moltiplica per dieci
-    /// ripetutamente e sposta bit a bit. Non condivide nulla con il
-    /// comparatore — ne' le tabelle di potenze di 5, ne' i limbi a lunghezza
-    /// fissa, ne' la normalizzazione della scala: e' l'aritmetica delle
-    /// elementari, lenta e ovvia.
+    /// Copre la regione in cui [`oracolo_razionale`] rende `None`: scale
+    /// estreme, `unscaled` a fondo scala, double vicini a `f64::MAX` o
+    /// subnormali. Cifre in base 2^32 su un `Vec` che cresce quanto serve,
+    /// senza nulla in comune con il comparatore.
     #[derive(Clone, PartialEq, Eq)]
     struct Cifre(Vec<u32>);
 

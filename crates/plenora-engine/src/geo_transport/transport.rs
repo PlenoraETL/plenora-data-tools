@@ -29,7 +29,7 @@
 pub const ENVELOPE_MAGIC: &[u8; 8] = b"PLNGEO3\0";
 pub const ENVELOPE_TRAILER_MAGIC: &[u8; 8] = b"GEOEND3\0";
 // Costanti dei metadati GeoArrow: casa unica in `arrow_adapter`
-// e qui ri-esportate perche' il percorso storico resti valido.
+// e qui ri-esportate perche' chi le importa da questo modulo le trovi.
 pub use plenora_kernels_geo::arrow_adapter::{
     DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
 };
@@ -55,18 +55,12 @@ pub const MAX_IPC_METADATA_BYTES: usize = 16 * 1024 * 1024;
 // --- Custom metadata IPC: tetti duri del confine ----------------------------
 //
 // `MAX_IPC_METADATA_BYTES` limita i BYTE dei metadati, non il numero di
-// elementi: centomila coppie minuscole ci stanno comodamente dentro e
-// producono centomila allocazioni in chi le raccoglie. Questi tre tetti
-// limitano la forma, e si applicano PRIMA di qualunque allocazione
-// proporzionale al conteggio.
+// elementi: molte coppie minuscole producono altrettante allocazioni. Questi
+// tetti limitano la forma, PRIMA di qualunque allocazione proporzionale al
+// conteggio, e non sono campi di `IpcLimits`: un tetto contro l'abuso che il
+// chiamante puo' alzare non e' un tetto.
 //
-// Sono costanti INTERNE al confine e non ampliabili: non sono campi di
-// `IpcLimits`, che esiste per i limiti che un piano puo' modulare. Un tetto
-// contro l'abuso che il chiamante puo' alzare non e' un tetto.
-//
-// Conseguenza dichiarata: Arrow consente metadati arbitrari, quindi un file
-// con una chiave sconosciuta e un valore oltre il tetto e' un file Arrow
-// VALIDO che questo confine rifiuta di proposito
+// Un file Arrow VALIDO con un valore oltre il tetto e' rifiutato di proposito
 // (errori-e-limiti.md#custom-metadata-ipc-oltre-i-tetti-del-confine).
 
 /// Coppie chiave-valore massime in UNA collezione di custom metadata.
@@ -86,11 +80,9 @@ pub(crate) const MAX_IPC_CUSTOM_METADATA_KEY_BYTES: usize = 128;
 /// Byte massimi di un valore di custom metadata.
 ///
 /// Il valore legittimo piu' grande che il progetto scriva e' una definizione
-/// di CRS, il cui tetto oggi vale 64 KiB. Il numero coincide, l'AUTORITA' no:
-/// `MAX_CRS_DEFINITION_BYTES` governa una definizione di CRS, questa costante
-/// governa un confine IPC generico. Derivarla da quella farebbe cambiare in
-/// silenzio cio' che il parser accetta il giorno in cui il tetto sul CRS si
-/// muove — e nessuno collegherebbe le due cose.
+/// di CRS. Il numero coincide con `MAX_CRS_DEFINITION_BYTES` ma non ne
+/// deriva: questa costante governa un confine IPC generico, e non deve
+/// cambiare in silenzio quando si muove il tetto sul CRS.
 pub(crate) const MAX_IPC_CUSTOM_METADATA_VALUE_BYTES: usize = 64 * 1024;
 pub const AREA_COLUMN: &str = "area";
 pub const WKT_COLUMN: &str = "wkt";
@@ -316,17 +308,15 @@ mod tests {
     ];
 
     /// **Con il candidato esatto (BOZZA NON ADOTTATA, Cargo.toml), il
-    /// reperto e' un ingresso invalido in ogni profilo — non piu' una
-    /// validazione interrotta.**
+    /// reperto e' un ingresso invalido in ogni profilo, non una validazione
+    /// interrotta.**
     ///
     /// E' il percorso non fuso, per intero: cella WKB -> trasporto -> errore.
     /// Senza il diff 1 (`vendor/geo-0.33.1-exact`) l'attesa dipende dal
-    /// profilo, perche' il panico e' un `debug_assert!` che scatta solo
-    /// con le asserzioni di debug attive. Il segno corretto di `orient2d`
-    /// toglie la causa dell'asserzione: `geo` conclude sempre, misurato qui,
-    /// non dedotto dalla patch. Vedi
-    /// `plenora-kernels-geo/tests/barriera_validazione.rs` per lo stesso
-    /// reperto verificato al confine del decoder.
+    /// profilo, perche' il panico e' un `debug_assert!` attivo solo con le
+    /// asserzioni di debug. Il segno corretto di `orient2d` ne toglie la
+    /// causa. Lo stesso reperto al confine del decoder e' in
+    /// `plenora-kernels-geo/tests/barriera_validazione.rs`.
     #[test]
     fn il_reperto_e_un_ingresso_invalido_in_ogni_profilo() {
         let (schema, batch) = fixture_batch(&[Some(REPERTO_VALIDAZIONE)]);
@@ -541,18 +531,13 @@ mod tests {
             .expect("geometry column")
             .1;
 
-        // Forma v4 a parita' di input: stesso contratto che la discovery
-        // costruirebbe per questa colonna (CRS risolto, dimensions xy,
-        // encoding non dichiarato, tipi non dichiarati). Il canonical porta
-        // l'`id` d'autorita' (forma della risoluzione PROJ): la deduzione
-        // `srid` (piano-v5.md#contratti-di-input, emendamento 2026-07-31) produce 3857 su
-        // ENTRAMBI i percorsi — legacy dalla forma `authority:code` della
-        // definizione, v4 dall'`id` del canonical — e l'identita' regge.
-        // Senza `coordinate_system` anche `axis_order` coincide (`unknown`):
-        // con gli assi presenti il v4 dedurrebbe mentre il legacy resta
-        // `unknown` — LIMITE DICHIARATO del trasporto legacy (coperto dai
-        // test di `arrow_adapter`), per questo la forma di questo fixture
-        // non porta gli assi.
+        // Forma v4 a parita' di input: il contratto che la discovery
+        // costruirebbe per questa colonna. La deduzione `srid`
+        // (piano-v5.md#contratti-di-input, emendamento 2026-07-31) produce
+        // 3857 su ENTRAMBI i percorsi e l'identita' regge. Il fixture non porta
+        // `coordinate_system`: con gli assi il v4 dedurrebbe `axis_order` e il
+        // legacy resterebbe `unknown`, LIMITE DICHIARATO del trasporto legacy
+        // (coperto dai test di `arrow_adapter`).
         let contract = GeometryColumnContract {
             field_id: FieldId(0),
             name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
@@ -1477,24 +1462,12 @@ mod tests {
     ///
     /// # Che cosa NON verifica
     ///
-    /// La **barriera anti-panico**. Il confine pretende il campo `fields` —
-    /// che `arrow-ipc` legge con `fields().unwrap()` — quindi lo schema
-    /// dell'artefatto non arriva fino a `fb_to_schema` e non c'e' nessun
-    /// panico da convertire in `ArrowPanic`.
-    ///
-    /// La barriera resta necessaria, perche' `convert.rs` ha una ventina di
-    /// `panic!`/`unimplemented!` sui codici di tipo che il confine non copre
-    /// ancora, ed e' verificata da
-    /// [`super::super::ipc`] nel modulo `barriera_antipanico`, con un input
-    /// costruito apposta: uno stream con una colonna `List` a cui viene tolto
-    /// il campo `children`.
-    ///
-    /// # Perche' un caso costruito e non il solo fuzzing
-    ///
-    /// Perche' il fuzzing la esercita solo se trova l'ingresso: il target
-    /// `arrow_transform` tollera il panico dentro questa barriera di
-    /// dipendenza (`errori-e-limiti.md#panici-attesi-nel-fuzzing`), ma non
-    /// garantisce di raggiungerlo. Il caso costruito lo raggiunge sempre.
+    /// La **barriera anti-panico**: il confine pretende il campo `fields`,
+    /// quindi lo schema dell'artefatto non arriva a `fb_to_schema`. La
+    /// barriera e' verificata in [`super::super::ipc`], modulo
+    /// `barriera_antipanico`, con un input costruito apposta, perche' il
+    /// fuzzing la esercita solo se trova l'ingresso
+    /// (`errori-e-limiti.md#panici-attesi-nel-fuzzing`).
     #[test]
     fn ipc_decode_rifiuta_lo_schema_senza_fields_prima_di_arrow() {
         /// Offset del marcatore di fine stream dentro l'artefatto: vedi il
@@ -1528,17 +1501,10 @@ mod tests {
         // senza alcun beneficio.
         let esito = decode_ipc(payload);
 
-        // Lo Schema che l'artefatto porta non ha il campo `fields`, e
-        // `fb_to_schema` lo legge con `fields().unwrap()`. Il confine lo
-        // pretende, quindi il rifiuto e' strutturato invece di essere un
-        // panico intercettato.
-        //
-        // La barriera anti-panico resta necessaria — `convert.rs` ha una
-        // ventina di `panic!`/`unimplemented!` sui codici di tipo, non ancora
-        // coperti — ed e' esercitata da
-        // `ipc::barriera_antipanico`, che le porta un input costruito
-        // apposta: uno stream con una colonna `List` a cui viene tolto il
-        // campo `children`.
+        // Lo Schema dell'artefatto non ha `fields`, che `fb_to_schema` legge
+        // con `fields().unwrap()`: il confine lo pretende e il rifiuto e'
+        // strutturato. La barriera anti-panico e' esercitata da
+        // `ipc::barriera_antipanico`.
         assert!(
             matches!(esito, Err(ArrowTransportError::IpcSchemaInvalid(_))),
             "atteso IpcSchemaInvalid, ottenuto {esito:?}"
@@ -1547,17 +1513,12 @@ mod tests {
 
     #[test]
     fn ipc_decode_rejects_oversized_metadata_and_truncation_without_oom() {
-        // Regressione fuzz (OOM): 4 byte che dichiarano ~709 MiB di metadati
-        // in formato legacy. Senza pre-validazione arrow-rs allocherebbe
-        // quanto dichiarato; il rifiuto avviene leggendo il solo prefisso, ed
-        // e' la proprieta' che questa regressione difende.
-        //
-        // La DIAGNOSI e' «troncato», non «troppo grande»: quattro byte che
-        // dichiarano 709 MiB descrivono un payload che non c'e', e nessuno
-        // supera un tetto con byte che non esistono. La verifica di
-        // disponibilita' precede quella del tetto, cosi' un input ostile
-        // minuscolo non esce come `resource_limit` — che suggerirebbe al
-        // chiamante di rilanciare con piu' budget.
+        // Regressione fuzz (OOM): pochi byte che dichiarano centinaia di MiB
+        // di metadati in formato legacy. Il rifiuto avviene leggendo il solo
+        // prefisso. La diagnosi e' «troncato», non «troppo grande»: la
+        // disponibilita' si verifica prima del tetto, cosi' un input ostile
+        // minuscolo non esce come `resource_limit`, che inviterebbe a
+        // rilanciare con piu' budget.
         let oom_input = [0x5b, 0x74, 0x32, 0x2a];
         assert!(matches!(
             decode_ipc(&oom_input),
@@ -1573,16 +1534,9 @@ mod tests {
             decode_ipc(&[]),
             Err(ArrowTransportError::IpcTruncated)
         ));
-        // Metadati oltre il tetto assoluto, con i byte REALMENTE presenti nel
-        // payload: e' l'unico modo di raggiungere il tetto, dato che la
-        // disponibilita' viene verificata per prima, ed e' anche l'unico caso
-        // in cui `resource_limit` e' la diagnosi giusta — il payload esiste,
-        // e' solo piu' grande di quanto ammettiamo.
-        //
-        // MAX_IPC_METADATA_BYTES e' una costante da 16 MiB: entra in u32; la
-        // conversione e' totale per contratto. Il tetto scatta comunque PRIMA
-        // di leggere quei byte: il payload grande serve al test, non al
-        // validatore.
+        // Metadati oltre il tetto con i byte REALMENTE presenti: e' l'unico
+        // caso in cui `resource_limit` e' la diagnosi giusta. Il tetto scatta
+        // comunque PRIMA di leggere quei byte.
         let declared = u32::try_from(MAX_IPC_METADATA_BYTES).expect("tetto metadati entro u32") + 8;
         let mut oversized = vec![0xff, 0xff, 0xff, 0xff];
         oversized.extend_from_slice(&declared.to_le_bytes());
@@ -2272,7 +2226,7 @@ mod tests {
         assert!(report.validate_for_emission().is_ok());
 
         // Controllo: senza diagnostica accumulata l'errore non row-scoped
-        // propaga com'e', senza report (comportamento storico invariato).
+        // propaga com'e', senza report.
         let (schema, clean) = fixture_batch(&[Some(line_wkb().as_slice())]);
         let error = super::super::unary::transform_batches(
             &schema,

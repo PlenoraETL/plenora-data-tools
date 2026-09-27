@@ -1,35 +1,16 @@
 //! Ascoltare l'annullamento **mentre** si lavora, e smettere quando si vuole.
 //!
-//! # Perche' serve un secondo lettore
+//! L'`Annulla` arriva mentre il worker e' dentro l'executor, che non ascolta
+//! il canale e non deve conoscere il protocollo. L'unica leva comune e' la
+//! cancellazione, che l'executor gia' osserva ai propri confini cooperativi:
+//! questo lettore, su un thread suo, la tira.
 //!
-//! Perche' l'`Annulla` arriva quando il worker sta gia' eseguendo, e chi
-//! esegue non e' in ascolto: e' dentro l'executor, che consuma batch. Un
-//! `Annulla` letto solo alla fine sarebbe letto quando non serve piu'.
+//! Il lettore si ferma obbligatoriamente: fermo in una `read`, impedirebbe al
+//! processo di uscire. Si ferma e si raccoglie con una funzione sola, che
+//! consuma [`Ascolto`].
 //!
-//! # Perche' e' un thread e non un giro nel mezzo del lavoro
-//!
-//! Perche' il lavoro non ha un punto in cui passare: l'esecuzione e' uno
-//! stream tirato dalla scrittura dell'artefatto, e infilarci un controllo del
-//! canale vorrebbe dire far conoscere il protocollo a chi scrive i byte. La
-//! cancellazione, che invece l'executor **gia'** osserva ai propri confini
-//! cooperativi, e' l'unico canale che i due condividono — e questo lettore non
-//! fa altro che tirare quella leva.
-//!
-//! # Perche' si puo' fermare, e perche' e' obbligatorio
-//!
-//! Un lettore fermo dentro una `read` non si sveglia perche' altrove il lavoro
-//! e' finito: aspetta byte che non arrivano. Se non lo si ferma, il processo
-//! non esce — e un worker che non esce e' esattamente cio' che il supervisore
-//! deve poi uccidere, cioe' il caso peggiore.
-//!
-//! Per questo il tipo non ha un cammino in cui il thread resti indietro: si
-//! ferma e si raccoglie con una funzione sola, che consuma [`Ascolto`].
-//!
-//! # Che cosa non fa
-//!
-//! **Non decide.** Rende un [`Ascoltato`] e basta: che un fatto sia un guasto
-//! o un accadimento previsto lo stabilisce chi ha in mano anche l'esito del
-//! lavoro, perche' e' l'unico che li puo' mettere insieme.
+//! **Non decide**: rende un [`Ascoltato`], e se sia un guasto lo stabilisce
+//! chi ha in mano anche l'esito del lavoro.
 
 use std::io::Read;
 use std::os::fd::AsFd;
@@ -48,15 +29,8 @@ use super::Result;
 
 /// Che cosa l'ascolto ha visto, prima di essere fermato.
 ///
-/// # Perche' un enum e non un `Result`
-///
-/// Perche' non sono due casi ma sei, e tre di essi non sono ne' successi ne'
-/// fallimenti: sono **accadimenti**. Un `Result` costringerebbe a scegliere da
-/// che parte metterli, e chi legge si troverebbe un EOF classificato come
-/// errore o un guasto classificato come esito normale.
-///
-/// Essendo un enum chiuso, chi lo riceve deve nominarli tutti: e' cio' che
-/// impedisce a uno di essi di sparire in un `_ => {}`.
+/// Un enum chiuso e non un `Result`: alcuni casi sono **accadimenti**, ne'
+/// successi ne' fallimenti, e chi lo riceve deve nominarli tutti.
 #[derive(Debug)]
 pub(super) enum Ascoltato {
     /// E' arrivato un `Annulla`, e il token e' stato cancellato.
@@ -94,19 +68,14 @@ pub(super) struct Ascolto {
 impl Ascolto {
     /// Comincia ad ascoltare.
     ///
-    /// # Un frame solo, e perche' basta
-    ///
-    /// Il lettore legge **un** frame e finisce. Dopo l'`Incarico` il
-    /// protocollo ammette al piu' un `Annulla`, e un secondo messaggio non
-    /// avrebbe uno stato in cui arrivare: leggerne altri vorrebbe dire tenere
-    /// vivo un lettore per un caso che non esiste.
+    /// Il lettore legge **un** frame e finisce: dopo l'`Incarico` il
+    /// protocollo ammette al piu' un `Annulla`.
     ///
     /// # Errors
     ///
     /// [`PlenoraError::IsolationUnavailable`] se il descrittore non si mette
-    /// in modalita' non bloccante, o se il thread non nasce. Senza modalita'
-    /// non bloccante il lettore non sarebbe fermabile, e cominciare comunque
-    /// darebbe un ascolto che nessuno puo' concludere.
+    /// in modalita' non bloccante, o se il thread non nasce: senza, il lettore
+    /// non sarebbe fermabile.
     pub(super) fn comincia<R: Read + AsFd + Send + 'static>(
         canale: R,
         annullamento: CancellationToken,
@@ -131,14 +100,9 @@ impl Ascolto {
 
     /// Ferma il lettore e ne raccoglie l'esito.
     ///
-    /// Consuma `self`: non esiste un cammino in cui si fermi senza essere
-    /// raccolto, ne' uno in cui si raccolga due volte.
-    ///
-    /// # Perche' non rende un `Result`
-    ///
-    /// Perche' non c'e' niente che possa fallire: un `join` su un thread che
-    /// e' andato in panico non e' un fallimento di questa funzione, e' un
-    /// fatto sul lettore — e ha la sua variante.
+    /// Consuma `self`: non si ferma senza raccogliere, ne' si raccoglie due
+    /// volte. Non rende un `Result`: un lettore andato in panico e' un fatto
+    /// con la sua variante, non un fallimento di questa funzione.
     pub(super) fn ferma_e_raccogli(self) -> Ascoltato {
         self.freno.ferma();
         self.mano.join().unwrap_or_else(|payload| {
@@ -152,12 +116,9 @@ impl Ascolto {
 
 /// Legge un frame, e dice che cos'e'.
 ///
-/// # Perche' l'arresto si riconosce dall'interruttore e non dal messaggio
-///
-/// Perche' la sorgente rende un errore di I/O ordinario quando la si ferma, e
-/// distinguerlo dal testo vorrebbe dire confrontare stringhe: chi un giorno
-/// riscrive quel messaggio trasforma silenziosamente un nostro arresto in un
-/// guasto del canale. Chi ha chiesto l'arresto lo sa, e glielo si chiede.
+/// L'arresto si riconosce dall'interruttore, non dal testo dell'errore di
+/// I/O: riscrivere quel messaggio trasformerebbe in silenzio un nostro
+/// arresto in un guasto del canale.
 fn ascolta<R: Read>(
     sorgente: &mut SorgenteTerminabile<R>,
     annullamento: &CancellationToken,

@@ -1,11 +1,8 @@
 //! Regressioni del formato v6.
 //!
-//! In un file proprio e non in un modulo `#[cfg(test)]` in linea: il gate
-//! `verifica_nome_budget_memoria` e' esplicito nel non esentare i moduli in
-//! linea, perche' «un nome che rientra da un modulo di test in linea rientra
-//! comunque nel file sbagliato». Qui c'e' bisogno di nominare
-//! `max_memory_bytes` — il nome della v4 — per verificare che la v6 lo
-//! rifiuti, e questo e' il posto dove farlo senza aggirare la regola.
+//! In un file proprio perche' il gate `verifica_nome_budget_memoria` non
+//! esenta i moduli di test in linea, e qui serve nominare il nome della v4
+//! per verificare che la v6 lo rifiuti.
 
 use super::{PlanV6, PLAN_SCHEMA_VERSION_V6};
 use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V5};
@@ -40,16 +37,9 @@ fn un_piano_v6_e_accettato() {
 
 #[test]
 fn il_parser_della_v6_pretende_la_v6() {
-    // Il controllo di versione dentro `PlanV6::parse` non ha altra
-    // copertura: tutti gli altri test gli passano documenti che dichiarano 6,
-    // e chi entra dal dispatch e' gia' stato smistato. Toglierlo resterebbe
-    // invisibile senza questo caso.
-    //
-    // E' l'invariante che regge se qualcuno chiama il parser della v6 senza
-    // passare dal dispatch — un chiamante della libreria, un fuzzer, un test.
-    // Senza, un documento v5 verrebbe accettato dal parser sbagliato e
-    // canonicalizzato nel dominio sbagliato: stesso piano, identita' di un
-    // altro formato.
+    // Il controllo di versione dentro `PlanV6::parse` ha solo questa
+    // copertura: regge chi chiama il parser senza passare dal dispatch, e
+    // senza di esso un v5 finirebbe nel dominio d'identita' sbagliato.
     for versione in [
         PLAN_SCHEMA_VERSION_V5,
         crate::plan::PLAN_SCHEMA_VERSION_V4,
@@ -236,14 +226,9 @@ fn un_tetto_oltre_u64_e_rifiutato() {
         plenora_core::ErrorCategory::DataMapping,
         "un numero che non entra nel tipo e' un difetto di mapping, non un piano invalido: {errore}"
     );
-    // La fase e' `Write`, non `Validate`, e non e' una svista: e'
-    // l'approssimazione dichiarata per un `DataMapping` NON taggato — il
-    // lato con possibile effetto, scelto conservativamente quando la variante
-    // non distingue il momento. Il parse del piano non tagga la fase ai
-    // confini, quindi qui la derivazione resta quella.
-    //
-    // Il test la fissa per non lasciarla cambiare in silenzio; raffinarla
-    // richiederebbe un tagging al confine del parser, che non c'e'.
+    // La fase e' `Write`: e' l'approssimazione dichiarata per un
+    // `DataMapping` non taggato, e il parse del piano non tagga la fase. Il
+    // test la fissa per non lasciarla cambiare in silenzio.
     assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     // Che il valore non sia stato saturato lo dimostra gia' l'`expect_err`:
     // saturare significherebbe ACCETTARE il documento con un tetto diverso da
@@ -325,14 +310,10 @@ fn il_documento_v6_fa_il_giro_completo() {
 
 #[test]
 fn lo_stesso_piano_in_v5_e_in_v6_ha_identita_diverse() {
-    // `PLAN-018`. Le due strutture sono identiche — stessi nodi, stessi
-    // archi, stessi limiti — e i due documenti no: il canonico dichiara
-    // la propria versione, quindi i byte che si hashano differiscono, e
-    // il separatore di dominio li tiene distinti anche se non
-    // differissero.
-    //
-    // Da NON generalizzare: la v4 condivide l'identita' con la v5
-    // (`PLAN-019`), e le regressioni della migrazione lo verificano.
+    // `PLAN-018`: strutture identiche, documenti no. Il canonico dichiara la
+    // propria versione, e il separatore di dominio li distinguerebbe anche
+    // se non lo facesse. La v4 invece condivide l'identita' della v5
+    // (`PLAN-019`).
     let come_v5 =
         PlanV5::parse_default(&piano(PLAN_SCHEMA_VERSION_V5, &json!({}))).expect("un v5 valido");
     let come_v6 =

@@ -1,87 +1,37 @@
 //! Il figlio appena avviato, finche' non e' stato consegnato o raccolto.
 //!
-//! # Perche' una guardia, e perche' con piu' di un'uscita
-//!
-//! Perche' fra lo `spawn` e la consegna al chiamante ci sono cammini che
-//! falliscono, e su quei cammini **un processo esiste gia'**. Chiudere i
-//! descrittori non basta: un figlio non terminato resta orfano quando il
-//! supervisore esce, e uno terminato ma non raccolto resta zombie finche' il
-//! supervisore vive.
-//!
-//! Le uscite volute si chiamano per cio' che fanno, non per un numero d'ordine:
-//! un'uscita nuova rinumererebbe le altre, e la prosa direbbe il falso mentre il
-//! codice regge.
+//! Fra lo `spawn` e la consegna ci sono cammini che falliscono con **un
+//! processo gia' esistente**: non terminato resterebbe orfano, non raccolto
+//! resterebbe zombie. Le uscite volute:
 //!
 //! - **la consegna** — [`FiglioVivo::consegna`] — passa il processo a chi lo ha
 //!   chiesto;
 //! - **l'attesa** — [`FiglioVivo::attendi_la_fine`] — lo lascia finire da se',
 //!   senza segnalargli niente, e restituisce la guardia a chi non fa in tempo;
 //! - **la chiusura** — [`FiglioVivo::termina_e_raccogli`] — lo termina e dice
-//!   com'e' andata, e **restituisce la guardia** quando non ci riesce, perche'
-//!   un processo che non si lascia raccogliere esiste ancora e qualcuno deve
-//!   restarne responsabile;
+//!   com'e' andata, e **restituisce la guardia** quando non riesce a
+//!   raccoglierlo, perche' qualcuno deve restarne responsabile;
 //! - **l'arresto** — [`FiglioVivo::arrenditi`] — ferma tutto **dicendo
-//!   perche'**: si usa quando sopra non c'e' nessuno che possa riprovare.
+//!   perche'**, quando sopra non c'e' nessuno che possa riprovare.
 //!
-//! Le prime tre non sono alternative fra loro nello stesso momento: chi ha
-//! fretta di chiudere passa dalla chiusura, chi ha motivo di credere che il
-//! figlio stia gia' finendo passa prima dall'attesa — e allora la chiusura
-//! diventa il secondo tempo, non il primo.
+//! Non esiste una porta che «rinuncia e prosegue»: registrare il pid non e'
+//! raccogliere. Resta il drop implicito (un `?`, un `return`, la fine dello
+//! scope): il processo sta in un `Option` che le porte consumano, e [`Drop`] e'
+//! una **sentinella fail-stop** che, se lo trova ancora, tenta la terminazione
+//! **best-effort**, lo dice su `stderr` e abortisce. Un rimedio silenzioso
+//! nasconderebbe il cammino sfuggito.
 //!
-//! # Perche' non esiste una porta che «rinuncia e prosegue»
-//!
-//! Perche' sarebbe la porta che tutti userebbero. Registrare il pid e un difetto
-//! si legge come diligenza, ma non e' proprieta' e non e' raccolta: il processo
-//! resta li', nessuno lo aspetta, e il supervisore prosegue con una riga di
-//! rapporto al posto di un responsabile. La guardia che torna da
-//! `termina_e_raccogli` deve quindi **risalire** a chi puo' ancora riprovare —
-//! ed e' cio' che il contorno della conduzione fa, portandola fuori — oppure
-//! fermare tutto.
-//!
-//! Ma in Rust c'e' sempre un'altra uscita, e non e' facoltativa: **il drop
-//! implicito**. Un `?` che esce prima, un `return` aggiunto un domani, la
-//! semplice fine dello scope — ognuno rilascia il valore senza passare da
-//! nessuna delle porte. Senza un `Drop`, `Child` verrebbe lasciato andare e il
-//! figlio resterebbe: non terminato, non raccolto, e senza che niente lo dica.
-//!
-//! Per questo il processo sta in un `Option`, che le uscite **consumano**, e
-//! [`Drop`] e' una **sentinella fail-stop**: se trova ancora qualcosa, quel
-//! qualcosa e' sfuggito.
-//!
-//! # Perche' la sentinella abortisce invece di rimediare
-//!
-//! Perche' non e' la pulizia ordinaria, e fingere che lo sia sarebbe la cosa
-//! peggiore. `Drop` non puo' rendere un errore: qualunque cosa faccia — anche
-//! terminare e raccogliere correttamente — lo farebbe **in silenzio**, e il
-//! supervisore proseguirebbe credendo che il cammino sfuggito non esista.
-//! Quella e' la condizione in cui un difetto resta per sempre, perche' nessuno
-//! lo vede mai.
-//!
-//! La sentinella tenta quindi la terminazione **best-effort** — meglio un
-//! figlio ucciso che uno orfano — dice su `stderr` che cosa e' successo, e
-//! ferma il processo. Non e' un rimedio: e' un rifiuto di proseguire.
-//!
-//! # Perche' l'attesa e' limitata
-//!
-//! Perche' `wait` senza limite lega il supervisore al figlio: un processo in
-//! stato ininterrompibile non risponde a `SIGKILL` finche' non esce da li', e
-//! il supervisore resterebbe fermo a guardarlo. Un figlio che non si lascia
-//! raccogliere entro il tempo dato diventa un **difetto riportato**, non un
-//! blocco: chi decide che farne e' la macchina dei timeout, che ha il quadro
-//! che questa funzione non ha.
+//! L'attesa e' limitata: un processo in stato ininterrompibile non risponde a
+//! `SIGKILL`, e un figlio che non si lascia raccogliere diventa un **difetto
+//! riportato**, che decide la macchina dei timeout.
 
 use std::time::Duration;
 
 /// Quanto si aspetta che un figlio da chiudere si lasci raccogliere.
 ///
-/// # Perche' questo ordine di grandezza
-///
-/// Perche' fra `SIGKILL` e l'uscita c'e' solo il tempo che il kernel impiega a
-/// smontare il processo, che sono microsecondi — a meno che il figlio non sia
-/// fermo in uno stato ininterrompibile, e li' non c'e' attesa ragionevole che
-/// basti. Due secondi non sono la stima di quanto ci vuole: sono il punto oltre
-/// il quale continuare ad aspettare non e' piu' un'attesa ma un blocco, e il
-/// supervisore ha altro da chiudere.
+/// Dopo `SIGKILL` bastano microsecondi, salvo uno stato ininterrompibile, dove
+/// nessuna attesa basta. Il valore non e' una stima: e' il punto oltre il
+/// quale aspettare diventa un blocco.
 pub(super) const LIMITE_DI_RACCOLTA: Duration = Duration::from_secs(2);
 
 /// Ogni quanto si riguarda, mentre si aspetta.
@@ -94,13 +44,9 @@ pub(super) const PASSO_DI_RACCOLTA: Duration = Duration::from_millis(2);
 
 /// Come un processo e' finito, nella forma che il sistema operativo riporta.
 ///
-/// # Perche' un tipo qui e non `ExitStatus`
-///
-/// Perche' `ExitStatus` e' opaco e platform-specific, e i suoi accessori
-/// rendono due `Option` che ammettono combinazioni che non esistono. Questo tipo
-/// le chiude: un processo o esce da se' con un codice, o viene fermato da un
-/// segnale, oppure — e capita — il sistema riporta uno stato da cui non si
-/// ricava nessuno dei due, e allora non si inventa niente.
+/// `ExitStatus` e' opaco, e i suoi accessori ammettono combinazioni che non
+/// esistono. Qui un processo esce con un codice, o e' fermato da un segnale,
+/// oppure lo stato non dice nessuno dei due, e non si inventa niente.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Uscita {
     /// Uscito da se'.
@@ -134,32 +80,18 @@ impl Uscita {
 
 /// Le tre operazioni che la guardia fa sul processo.
 ///
-/// # Perche' un trait e non `Child` direttamente
-///
-/// Perche' i cammini che contano sono quelli che non si producono a comando.
-/// «Il figlio si termina ma non si lascia raccogliere» e' esattamente il caso
-/// per cui il limite esiste, e su un processo vero servirebbe un programma che
-/// ignora `SIGKILL` — cosa che non si scrive, e che se si scrivesse resterebbe
-/// in giro dopo il caso.
-///
-/// Con il trait quel cammino si compone: `prova_a_raccogliere` che dice sempre
-/// «ancora vivo», `termina` che riesce. E' la stessa ragione dell'orologio
-/// iniettabile: si prova la **regola**, non la macchina.
+/// Un trait perche' i cammini che contano non si producono a comando: «si
+/// termina ma non si lascia raccogliere» su un processo vero richiederebbe un
+/// programma che ignora `SIGKILL`. Col trait si compone, e si prova la
+/// **regola**, come con l'orologio iniettabile.
 pub(super) trait ProcessoFiglio {
     /// Il pid, per l'evidenza.
     fn pid(&self) -> u32;
     /// L'uscita, se il processo e' finito; `None` se e' ancora vivo.
     ///
-    /// # Perche' rende l'uscita e non un «si'/no»
-    ///
-    /// Perche' un booleano dice che il processo e' finito e butta via **come**.
-    /// Successo, codice diverso da zero e morte per segnale diventano la stessa
-    /// cosa, e chi classifica non ha piu' modo di distinguerli: la riga 2 e la
-    /// riga 4 della matrice collassano.
-    ///
-    /// `None` in `Uscita` significa «non rappresentabile»: un `ExitStatus` che
-    /// non porta ne' codice ne' segnale non e' un modo di uscire, e' una lettura
-    /// che non dice niente — e va detta come tale, non travestita da zero.
+    /// Rende l'uscita e non un booleano, che confonderebbe successo, codice
+    /// diverso da zero e morte per segnale. `None` in `Uscita` significa «non
+    /// rappresentabile», non zero.
     fn prova_a_raccogliere(&mut self) -> std::io::Result<Option<Uscita>>;
     /// Gli manda il segnale che lo termina.
     fn termina(&mut self) -> std::io::Result<()>;
@@ -181,16 +113,10 @@ impl ProcessoFiglio for std::process::Child {
 
 /// L'orologio del supervisore.
 ///
-/// # Perche' iniettabile
-///
-/// Perche' i casi deterministici non devono dormire. Un caso che aspettasse
-/// davvero misurerebbe la macchina su cui gira — e su una macchina carica
-/// misurerebbe un'altra cosa — mentre cio' che va provato e' la **regola**:
-/// quante volte si guarda, e che cosa si decide allo scadere.
-///
-/// Monotono per costruzione: `Instant` non torna indietro nemmeno se l'ora di
-/// sistema cambia, e un'attesa misurata sull'ora di sistema potrebbe diventare
-/// negativa proprio mentre qualcuno sincronizza l'orologio.
+/// Iniettabile perche' i casi deterministici non devono dormire: si prova la
+/// **regola** (quante volte si guarda, che cosa si decide allo scadere), non
+/// la macchina. Monotono: `Instant` non torna indietro se l'ora di sistema
+/// cambia.
 pub(super) trait Orologio {
     /// Quanto tempo e' passato dall'inizio dell'attesa.
     fn trascorso(&self) -> Duration;
@@ -226,17 +152,9 @@ impl Orologio for OrologioDiSistema {
 
 /// Come e' finita la chiusura di un figlio.
 ///
-/// # Perche' la guardia torna indietro quando non si raccoglie
-///
-/// Perche' un processo che non si e' lasciato raccogliere **esiste ancora**, e
-/// qualcuno deve restarne responsabile. Rendere solo un messaggio d'errore lo
-/// lascerebbe senza padrone: la guardia sarebbe gia' stata consumata, la
-/// sentinella non potrebbe intervenire, e il processo resterebbe li' con
-/// nessuno che possa nemmeno riprovare.
-///
-/// Restituendola, la scelta torna a chi ha il quadro: riprovare, farla risalire
-/// ancora a chi sta sopra, oppure — quando sopra non c'e' nessuno —
-/// [`FiglioVivo::arrenditi`], che ferma tutto dicendo perche'.
+/// Quando non si raccoglie, la guardia torna indietro: il processo **esiste
+/// ancora** e qualcuno deve restarne responsabile. La scelta torna a chi ha il
+/// quadro: riprovare, farla risalire, oppure [`FiglioVivo::arrenditi`].
 #[derive(Debug)]
 pub(super) enum Chiusura<P: ProcessoFiglio> {
     /// Raccolto. L'uscita, e i difetti incontrati per strada.
@@ -281,13 +199,10 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
 
     /// La porta della **consegna**: il processo passa a chi lo ha chiesto.
     ///
-    /// Da qui in poi la responsabilita' di terminarlo e raccoglierlo e' del
-    /// chiamante, e questa guardia non ha piu' niente da custodire.
-    ///
-    /// Rende `None` solo se la guardia e' gia' vuota, che per costruzione non
-    /// puo' accadere — ogni porta prende `self` per valore. Il tipo lo
-    /// dice comunque invece di affermarlo con una primitiva di panico, che in
-    /// questo progetto non si usa.
+    /// Da qui in poi terminarlo e raccoglierlo spetta al chiamante. Rende
+    /// `None` solo se la guardia e' gia' vuota, che per costruzione non accade
+    /// (ogni porta prende `self` per valore): il tipo lo dice senza primitive
+    /// di panico.
     pub(super) fn consegna(mut self) -> Option<P> {
         self.processo.take()
     }
@@ -295,26 +210,13 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
     /// La porta dell'**attesa**: si lascia finire da se', senza segnalargli
     /// niente.
     ///
-    /// # Perche' esiste, accanto a `termina_e_raccogli`
+    /// Su un cammino riuscito il figlio sta gia' uscendo, e
+    /// `termina_e_raccogli` in quella finestra lo ucciderebbe senza motivo.
+    /// Qui si guarda, si aspetta un poco e si riguarda fino allo scadere.
     ///
-    /// Perche' su un cammino riuscito il figlio sta gia' uscendo, e fra «ha
-    /// chiuso il canale» e «il kernel ha registrato la sua uscita» c'e' una
-    /// finestra che non e' un guasto: e' il tempo che ci mette a finire.
-    /// `termina_e_raccogli` in quella finestra **manda un segnale**, perche' il
-    /// suo primo sguardo lo trova ancora vivo — e un worker ucciso per aver
-    /// tardato un millisecondo e' un worker ucciso senza motivo.
-    ///
-    /// Qui invece non si segnala mai: si guarda, si aspetta un poco, si
-    /// riguarda, finche' il tempo dato non e' finito. Chi non fa in tempo torna
-    /// **dentro la guardia**, e il chiamante decide se concedergli altro tempo o
-    /// passare alla porta della chiusura.
-    ///
-    /// # Che cosa rende
-    ///
-    /// [`Chiusura::Raccolto`] con l'uscita, se ha finito; altrimenti
-    /// [`Chiusura::NonRaccolto`] con la guardia intatta. I difetti sono quelli
-    /// dell'interrogazione: qui non c'e' nessuna terminazione che possa
-    /// fallire.
+    /// Rende [`Chiusura::Raccolto`] con l'uscita se ha finito, altrimenti
+    /// [`Chiusura::NonRaccolto`] con la guardia intatta. I difetti sono solo
+    /// quelli dell'interrogazione.
     pub(super) fn attendi_la_fine(
         mut self,
         limite: Duration,
@@ -362,38 +264,15 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
     /// La porta della **chiusura**: si termina il figlio, e si dice se qualcosa
     /// e' andato storto.
     ///
-    /// # L'ordine, e la corsa che sta in mezzo
+    /// Prima si prova a raccogliere, poi si termina se e' ancora vivo, infine
+    /// si raccoglie **entro un limite di tempo**. Se il figlio esce nel mezzo la
+    /// terminazione puo' rispondere «non piu' terminabile», e non e' un difetto;
+    /// il pid non si ricicla, perche' uno zombie lo tiene finche' il padre non
+    /// lo raccoglie. Per questo la raccolta segue **comunque**.
     ///
-    /// Prima si prova a raccogliere: se il figlio e' gia' uscito da solo non
-    /// c'e' niente da terminare.
-    ///
-    /// Poi la terminazione, se e' ancora vivo. Fra le due c'e' una corsa — il
-    /// figlio puo' uscire proprio li' — e allora la terminazione puo'
-    /// rispondere che quel processo non e' piu' terminabile. Non e' un difetto:
-    /// e' il caso in cui il lavoro e' gia' fatto.
-    ///
-    /// **Il pid non viene riciclato in quella finestra**, e la ragione e' che
-    /// un figlio uscito e non ancora raccolto resta *zombie*: il suo pid
-    /// appartiene ancora a lui, e nessun altro processo puo' riceverlo finche'
-    /// il padre non lo raccoglie. La corsa e' quindi innocua non perche' sia
-    /// stretta, ma perche' il kernel tiene il posto.
-    ///
-    /// Per questo dopo la terminazione — riuscita o rifiutata — **la raccolta
-    /// segue comunque**: uscire li' lascerebbe proprio lo zombie che questa
-    /// funzione esiste per chiudere.
-    ///
-    /// Infine la raccolta, **limitata nel tempo**: si guarda, si aspetta un
-    /// poco, si riguarda, finche' il tempo dato non e' finito.
-    ///
-    /// # Che cosa rende
-    ///
-    /// **L'uscita**, se il figlio e' stato raccolto, e il motivo se qualcosa e'
-    /// andato storto. Le due cose sono indipendenti: un figlio puo' essere
-    /// raccolto **e** aver dato problemi nel terminarlo, e un figlio che non si
-    /// raccoglie non ha un'uscita da mostrare.
-    ///
-    /// Il difetto e' di **pulizia**, e il chiamante lo conserva insieme a quello
-    /// che lo ha portato qui — non al suo posto.
+    /// Rende l'uscita se il figlio e' stato raccolto e il motivo se qualcosa e'
+    /// andato storto, indipendenti fra loro. Il difetto e' di **pulizia**, e il
+    /// chiamante lo conserva accanto a quello che lo ha portato qui.
     pub(super) fn termina_e_raccogli(
         mut self,
         limite: Duration,
@@ -401,15 +280,10 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
     ) -> Chiusura<P> {
         let mut difetti = Vec::new();
 
-        // Il processo resta **dentro la guardia** per tutta la funzione. Le
-        // operazioni passano da `as_mut`, e `take` avviene solo quando la
-        // raccolta e' riuscita: cosi' ogni ritorno anticipato lascia la guardia
-        // piena, e la guardia piena e' cio' che il chiamante deve sistemare.
-        //
-        // Estrarlo subito significherebbe che su ogni cammino di fallimento il
-        // figlio sparisce: la sentinella non puo' intervenire su una guardia
-        // gia' vuota, e nessuno resta responsabile di un processo che puo'
-        // essere ancora vivo.
+        // Il processo resta **dentro la guardia** per tutta la funzione, e
+        // `take` avviene solo a raccolta riuscita: ogni ritorno anticipato
+        // lascia la guardia piena, e un processo forse vivo non resta senza
+        // responsabile.
         let Some(processo) = self.processo.as_mut() else {
             return Chiusura::Raccolto {
                 uscita: None,
@@ -485,33 +359,13 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
 
     /// La porta dell'**arresto**: ferma tutto, dicendo perche'.
     ///
-    /// # Quando si usa
-    ///
-    /// Quando il figlio non si e' lasciato raccogliere e sopra non c'e' nessuno
-    /// che possa riprovare. Non e' il caso ordinario: dove un responsabile
-    /// esiste, la guardia gli risale e la scelta resta sua.
-    ///
-    /// # Perche' fermare e non proseguire riportando
-    ///
-    /// Perche' proseguire vorrebbe dire lasciare un processo che nessuno
-    /// aspetta, in un processo che intanto dichiara di aver finito. Una riga di
-    /// rapporto non lo raccoglie: descrive la perdita, e poi la lascia
-    /// accadere. Fra le due cose sbagliate — fermarsi troppo presto e perdere un
-    /// processo in silenzio — la seconda e' quella che non si scopre mai.
-    ///
-    /// # Perche' `abort` e non un panico
-    ///
-    /// Per la stessa ragione della sentinella: un panico si puo' catturare, e un
-    /// difetto catturato torna a essere invisibile.
+    /// Si usa quando il figlio non si e' lasciato raccogliere e sopra non c'e'
+    /// nessuno che possa riprovare. Proseguire lascerebbe un processo che
+    /// nessuno aspetta; `abort` e non un panico, perche' un panico si cattura.
     pub(super) fn arrenditi(mut self, contesto: &str) -> ! {
-        // **Prima si prova a ucciderlo, poi ci si ferma.** `abort` ferma noi,
-        // non lui: senza questo tentativo il figlio passa al reaper del sistema e
-        // sopravvive al processo che dichiara di fermarsi per non lasciarlo
-        // vivo.
-        //
-        // Cio' che si puo' dire e' che il segnale e' partito, non che il figlio
-        // sia morto: `termina` manda, non osserva. La riga riporta quindi il
-        // tentativo, non un esito che nessuno ha visto.
+        // Prima si prova a ucciderlo, poi ci si ferma: `abort` ferma noi, non
+        // lui. La riga riporta il tentativo, non l'esito: `termina` manda, non
+        // osserva.
         let (numero, colpo) = self.processo.take().map_or_else(
             || {
                 (
@@ -534,17 +388,9 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
 
     /// Smonta la guardia senza chiudere niente. **Solo nei casi.**
     ///
-    /// # Perche' esiste, e perche' non e' una porta
-    ///
-    /// Perche' nei casi il processo non e' un processo: e' una finzione che non
-    /// tiene nessuna risorsa, e farle attraversare una vera chiusura
-    /// misurerebbe la finzione invece della regola.
-    ///
-    /// La garanzia non e' che nessuno possa accendere `cfg(test)` — chi controlla
-    /// la build puo' selezionare i `cfg` che vuole. E' che questa via **non
-    /// appartiene alla build ordinaria di Cargo** e non e' raggiungibile
-    /// dall'API: nessun percorso di compilazione previsto la include, e nessun
-    /// chiamante puo' nominarla.
+    /// Nei casi il processo e' una finzione senza risorse. La via non
+    /// appartiene alla build ordinaria di Cargo e non e' raggiungibile
+    /// dall'API; chi controlla la build puo' comunque accendere `cfg(test)`.
     #[cfg(test)]
     pub(super) fn smonta(mut self) -> Option<u32> {
         self.processo.take().map(|processo| processo.pid())
@@ -554,32 +400,13 @@ impl<P: ProcessoFiglio> FiglioVivo<P> {
 impl<P: ProcessoFiglio> Drop for FiglioVivo<P> {
     /// La sentinella: se qui c'e' ancora un processo, e' sfuggito.
     ///
-    /// Non e' la pulizia ordinaria — quella passa dalle porte che raccolgono,
-    /// l'attesa e la chiusura, e che possono dire com'e' andata proprio perche'
-    /// raccolgono. Questa e' l'ultima riga: tenta
-    /// la terminazione perche' un figlio a cui e' arrivato un segnale e' meglio
-    /// di uno a cui non e' arrivato niente, **riporta che cosa si e' potuto
-    /// fare**, e ferma il processo.
+    /// Non e' la pulizia ordinaria, che passa dalle porte. Tenta la
+    /// terminazione, **riporta che cosa si e' potuto fare** («segnale inviato»
+    /// o no, mai «morto»: nessuno lo raccoglie) e abortisce. Un rimedio
+    /// silenzioso nasconderebbe il `?` che salta le porte.
     ///
-    /// La risposta entra nel messaggio e non si scarta: «segnale inviato» e
-    /// «segnale non inviato» sono due situazioni diverse per chi legge il log, e
-    /// scriverne una sola le fa sembrare la stessa. Nessuna delle due dice che il
-    /// figlio sia morto — qui nessuno lo raccoglie, e quindi nessuno lo sa.
-    ///
-    /// # Perche' `abort` e non un rimedio silenzioso
-    ///
-    /// Perche' un rimedio silenzioso **funzionerebbe**, e sarebbe il problema:
-    /// il cammino sfuggito continuerebbe a esistere, il supervisore
-    /// proseguirebbe come se niente fosse, e nessuno saprebbe mai che c'e' un
-    /// `?` che salta le porte. Un difetto che si auto-ripara e' un difetto che
-    /// non si corregge.
-    ///
-    /// # Perche' una riga su `stderr`
-    ///
-    /// Perche' un `abort` muto e' indiagnosticabile: chi lo trova nei log vede
-    /// un processo sparito e nient'altro. Il contratto «stderr vuoto» vale per
-    /// il funzionamento ordinario, e questo non lo e' — e' il momento in cui il
-    /// programma dichiara di non potersi fidare di se stesso.
+    /// La riga su `stderr` rende l'`abort` diagnosticabile: il contratto
+    /// «stderr vuoto» vale per il funzionamento ordinario, e questo non lo e'.
     fn drop(&mut self) {
         let Some(mut processo) = self.processo.take() else {
             return;
@@ -597,38 +424,15 @@ impl<P: ProcessoFiglio> Drop for FiglioVivo<P> {
 
 /// L'ultimo tentativo di terminazione, e **che cosa si e' potuto fare**.
 ///
-/// # Perche' provare, prima di fermarsi
+/// Si prova prima di fermarsi perche' `abort` ferma noi, non il figlio, che
+/// passerebbe al reaper del sistema. Nessuna delle tre risposte dice
+/// «terminato»: [`ProcessoFiglio::termina`] manda il segnale e non osserva
+/// l'uscita, e un processo ininterrompibile lo riceve e resta. Nemmeno
+/// `InvalidInput` prova «gia' uscito»: per contratto significa «non piu'
+/// terminabile».
 ///
-/// Perche' `abort` ferma **noi**, non il figlio. Un processo lasciato cadere non
-/// muore: passa al reaper del sistema e sopravvive al supervisore. Fermarsi senza
-/// aver provato a ucciderlo sarebbe la meta' del lavoro, e la meta' che non si
-/// vede.
-///
-/// # Perche' nessuna delle tre risposte dice «terminato»
-///
-/// Perche' nessuna delle tre lo sa. [`ProcessoFiglio::termina`] **manda** la
-/// terminazione; non osserva l'uscita — nel cammino ordinario e' seguita da
-/// `prova_a_raccogliere` proprio per questo. Un `SIGKILL` accettato dice che il
-/// segnale e' partito, non che il processo sia finito: un processo in attesa
-/// ininterrompibile lo riceve e resta li' finche' la chiamata di sistema non
-/// ritorna.
-///
-/// Scrivere «terminato» sarebbe quindi un'affermazione piu' forte di quella che
-/// il tipo autorizza, e in un log e' peggio del silenzio: chi legge smetterebbe
-/// di cercare un processo che c'e' ancora. Le tre risposte dicono cio' che si e'
-/// fatto, e dichiarano ogni volta che **l'uscita non e' stata osservata**.
-///
-/// Nemmeno `InvalidInput` autorizza «gia' uscito»: il contratto del tratto dice
-/// che quel genere significa «non piu' terminabile», che e' compatibile con un
-/// figlio gia' finito ma non lo prova.
-///
-/// # Perche' non si raccoglie
-///
-/// Perche' dopo non c'e' piu' nessuno che possa aspettare. Un figlio non raccolto
-/// passa al reaper del sistema, che se ne occupa; un figlio a cui **non** e'
-/// arrivato niente e' l'altro esito, ed e' il solo che valga la pena leggere in
-/// un log — per questo la risposta torna indietro invece di essere scartata con
-/// un `let _`.
+/// Non si raccoglie: dopo non c'e' nessuno che aspetti. La risposta torna
+/// indietro perche' «non e' arrivato niente» e' l'esito da leggere nel log.
 fn ultimo_tentativo_di_terminazione<P: ProcessoFiglio>(processo: &mut P) -> String {
     match processo.termina() {
         Ok(()) => "segnale di terminazione inviato; uscita non osservata".to_owned(),
@@ -885,22 +689,10 @@ mod tests {
 
     /// **Due guasti sono due difetti, e la guardia torna piena.**
     ///
-    /// # Che cosa esclude
-    ///
-    /// Due cose insieme.
-    ///
-    /// La prima: che il secondo difetto **sostituisca** il primo. Una
-    /// terminazione rifiutata e una raccolta impossibile sono due cose, e la
-    /// seconda non spiega la prima. Chi legge un solo difetto cerchera' un
-    /// problema di raccolta su un processo a cui nessuno e' riuscito nemmeno a
-    /// mandare il segnale.
-    ///
-    /// La seconda, piu' grave: che il figlio **sparisca** sul cammino di
-    /// fallimento. Estrarlo dalla guardia all'inizio lascia ogni ritorno
-    /// anticipato senza padrone — guardia consumata, sentinella senza niente da
-    /// sorvegliare, e un processo che puo' essere ancora vivo. Chiedere il `pid`
-    /// alla guardia che torna e' il modo di vederlo: una guardia svuotata
-    /// risponde `None`.
+    /// Esclude che il secondo difetto sostituisca il primo (una terminazione
+    /// rifiutata non si spiega con la raccolta), e che il figlio **sparisca**
+    /// sul cammino di fallimento: il `pid` chiesto alla guardia che torna lo
+    /// mostra, perche' una guardia svuotata risponde `None`.
     #[test]
     fn una_terminazione_rifiutata_e_una_raccolta_impossibile_sono_due_difetti() {
         let finto = FigliFinto::nuovo(vec![
@@ -954,17 +746,11 @@ mod tests {
 
     /// **Le tre risposte dell'ultimo tentativo, e nessuna dice «terminato».**
     ///
-    /// # Perche' le stringhe esatte e non solo la distinzione
-    ///
-    /// Perche' tre risposte distinte provano l'iniettivita', non la
-    /// correttezza: sarebbero distinte anche se dicessero tutte una cosa piu'
-    /// forte del vero. Cio' che conta e' **che cosa affermano**, e l'affermazione
-    /// da escludere e' «il processo e' finito» — che nessuna delle tre e'
-    /// autorizzata a fare, perche' [`ProcessoFiglio::termina`] manda la
-    /// terminazione e non osserva l'uscita.
-    ///
-    /// Il caso su `/bin/sleep` mostra che nel caso qualificato il pid sparisce;
-    /// questo fissa che non lo si trasformi in una garanzia universale.
+    /// Stringhe esatte: tre risposte distinte proverebbero solo l'iniettivita'.
+    /// L'affermazione da escludere e' «il processo e' finito», perche'
+    /// [`ProcessoFiglio::termina`] non osserva l'uscita. Il caso su `/bin/sleep`
+    /// mostra che il pid sparisce; questo impedisce di farne una garanzia
+    /// universale.
     #[test]
     fn l_ultimo_tentativo_dice_cio_che_ha_fatto_e_non_di_piu() {
         // 1. Il segnale parte.
@@ -1019,22 +805,11 @@ mod tests {
 
     /// La resa, in un processo che puo' permettersi di morire.
     ///
-    /// Soggetto del caso che viene dopo, come `sentinella_soggetto`. Qui pero'
-    /// il figlio **non** e' sfuggito: qualcuno ha provato a raccoglierlo, non ci
-    /// e' riuscito, e sopra non c'e' nessuno che possa riprovare.
-    ///
-    /// # Perche' un `/bin/sleep` e non un finto
-    ///
-    /// Perche' cio' che il caso deve misurare e' che il figlio **muore**, e un
-    /// finto non muore: risponderebbe `Ok(())` alla terminazione e il caso
-    /// resterebbe verde anche se la resa non uccidesse nessuno. E' esattamente
-    /// il difetto da escludere — `abort` ferma noi, non lui, e un processo
-    /// lasciato cadere passa al reaper del sistema e sopravvive.
-    ///
-    /// La resa si chiama qui direttamente. Portare un `/bin/sleep` a non
-    /// lasciarsi raccogliere richiederebbe un programma che ignora `SIGKILL`,
-    /// che non si scrive: il cammino che porta alla resa e' provato altrove, e
-    /// questo caso prova che cosa la resa **fa**.
+    /// Soggetto del caso che segue, come `sentinella_soggetto`: qui il figlio
+    /// non e' sfuggito, non si e' lasciato raccogliere. Un `/bin/sleep` vero,
+    /// perche' un finto non muore e il caso resterebbe verde anche se la resa
+    /// non uccidesse nessuno. La resa si chiama direttamente: il cammino che ci
+    /// porta e' provato altrove.
     #[test]
     #[ignore = "abortisce di proposito: lo esegue il caso che lo osserva"]
     #[cfg(target_os = "linux")]
@@ -1072,26 +847,13 @@ mod tests {
     /// **La prova della resa**: il processo si ferma, dice com'e' andata, e il
     /// figlio non resta.
     ///
-    /// # Perche' da fuori, e perche' distinta dalla sentinella
+    /// Da fuori, perche' un caso non osserva la propria fine. La riga deve
+    /// restare diversa da quella della sentinella: «sfuggito» manda a cercare
+    /// un cammino, la resa manda a guardare il figlio.
     ///
-    /// Da fuori per la stessa ragione: un caso non puo' osservare la propria
-    /// fine. Distinta perche' le due righe devono restare **diverse**. La
-    /// sentinella dice «sfuggito», e manda a cercare un cammino che non passa da
-    /// nessuna porta; la resa dice «non si e' lasciato raccogliere, e nessuno
-    /// puo' riprovare», e manda a guardare il figlio. Se un giorno collassassero
-    /// nella stessa riga, questo caso lo direbbe.
-    ///
-    /// # La misura che conta, e fin dove arriva
-    ///
-    /// Il pid che sparisce. Fermarsi dichiarando di non voler lasciare un
-    /// processo vivo, e lasciarlo vivo, e' peggio del difetto da evitare.
-    ///
-    /// Vale pero' **per questo caso**, non in generale: prova che su un
-    /// `/bin/sleep` ordinario la resa manda il segnale prima di fermarsi e il
-    /// processo se ne va. Non prova che un qualunque figlio muoia — un processo
-    /// in attesa ininterrompibile riceve il segnale e resta finche' la chiamata
-    /// di sistema non ritorna — ed e' per questo che il messaggio dice «segnale
-    /// inviato» e non «terminato».
+    /// Misura che il pid sparisca **in questo caso**, su un `/bin/sleep`
+    /// ordinario: un processo ininterrompibile resterebbe, per questo il
+    /// messaggio dice «segnale inviato» e non «terminato».
 
     #[test]
     #[cfg(target_os = "linux")]
@@ -1215,13 +977,9 @@ mod tests {
     /// **La prova della sentinella**: il processo si ferma, lo dice, e il figlio
     /// sfuggito non resta.
     ///
-    /// # Perche' da fuori
-    ///
-    /// Perche' l'effetto della sentinella e' fermare il processo, e un caso non
-    /// puo' osservare la propria fine. Chi guarda e' un processo diverso: rilegge
-    /// il proprio eseguibile chiedendogli il solo caso `sentinella_soggetto`, e
-    /// misura tre cose che insieme distinguono la sentinella da qualunque altra
-    /// morte — il segnale, la riga che la spiega, e l'assenza del nipote.
+    /// Da fuori: il processo rilegge il proprio eseguibile chiedendo il solo
+    /// caso `sentinella_soggetto`, e misura il segnale, la riga che la spiega e
+    /// l'assenza del nipote.
     #[test]
     #[cfg(target_os = "linux")]
     fn la_sentinella_ferma_il_processo_e_non_lascia_il_figlio() {

@@ -1,15 +1,9 @@
 //! Dispatch delle estensioni geo v1.1-v1.3 sugli adapter Arrow dei kernel.
 //!
-//! Le operazioni geometriche non passano dal dispatch tabellare: hanno bisogno
-//! di decodificare le celle WKB, di conoscere quale colonna e' la geometria
-//! attiva e di riattaccare l'output con l'encoding e il CRS giusti.
-//!
-//! # L'indice della colonna e' risolto in `prepare`
-//!
-//! `kernel_geometry_cells` non cerca la colonna: la trova per indice, deciso
-//! una volta sola durante la preparazione. E' un hot path — per batch, non per
-//! piano — e cercare un nome a ogni batch sarebbe lavoro ripetuto per una
-//! risposta che non cambia.
+//! Le operazioni geometriche non passano dal dispatch tabellare: decodificano
+//! le celle WKB, conoscono la colonna geometria attiva e riattaccano l'output
+//! con encoding e CRS giusti. `kernel_geometry_cells` trova la colonna per
+//! indice, risolto una volta in `prepare`, perche' e' un hot path per batch.
 
 use crate::geo_transport::error::ArrowTransportError;
 use crate::geo_transport::pair::{decode_geometry_batches, preflight_decoded_bytes, PairOperation};
@@ -500,34 +494,23 @@ pub(super) fn geo_cluster_dbscan_batch(
     )
 }
 
-/// Ramo geo di [`run_binary_blocking`] (architettura.md#geometrie, D14.2): stesso
-/// guscio del ramo tabellare — drenaggio dei due rami a monte,
-/// `concat_batches`, tetti in byte per batch, reservation in ordine globale fisso
-/// left→right, cancellazione post-drenaggio, `catch_unwind`,
-/// `check_join_expansion`, `blocking_output_sequence`, metriche — con il
-/// cuore sostituito da decode totale D14.3 → kernel `*_validated` → output
-/// secondo il contratto v4 ([`execute_geo_binary`]).
+/// Ramo geo di [`run_binary_blocking`] (architettura.md#geometrie, D14.2).
 ///
-/// Cancellazione `BoundaryOnly` (catalogo, D14.5.5): i confini sono quelli
-/// esistenti (batch in drenaggio + post-drenaggio pre-kernel), nessun check
-/// dentro il kernel — comportamento voluto, non lacuna.
+/// Stesso guscio del ramo tabellare, con il cuore sostituito da decode totale
+/// D14.3 → kernel `*_validated` → output del contratto v4
+/// ([`execute_geo_binary`]). Cancellazione `BoundaryOnly` (D14.5.5): nessun
+/// check dentro il kernel, per scelta.
 ///
-/// Contabilita' D14.4: per ciascun lato, nell'ordine globale fisso
-/// left→right — reservation dei byte Arrow, preflight della forma
-/// decodificata ([`preflight_decoded_bytes`]), reservation della forma
-/// decodificata, decode. Rifiuto fail-closed PRIMA dell'allocazione: una
-/// reservation rifiutata ferma il nodo senza partial state (i lease sono
-/// RAII). Il lease Arrow right e' rilasciato prima del kernel (il left
-/// resta per take/passthrough); i lease decodificati dopo il lease
-/// dell'output.
+/// Contabilita' D14.4, per lato in ordine left→right: reservation dei byte
+/// Arrow, preflight della forma decodificata ([`preflight_decoded_bytes`]),
+/// sua reservation, decode. Una reservation rifiutata ferma il nodo PRIMA
+/// dell'allocazione, senza stato parziale (lease RAII).
 ///
-/// Errori D14.5: decode → fase `Read` con side/riga strutturati,
-/// kernel e costruzione output → fase `Write` (carrier
-/// [`GeoBinaryStepError`], conversione [`geo_binary_step_error`]); il primo
-/// errore e' in ordine (side, riga) per costruzione della sequenza.
-// La lunghezza e' data dal guscio architettura.md#memoria completo (concat, reservation,
-// metriche) piu' la sequenza D14.4 per lato: sequenza lineare, non
-// complessita' logica (stesso criterio di `pair_arrow`).
+/// Errori D14.5: decode → fase `Read` con side/riga, kernel e output → fase
+/// `Write` ([`GeoBinaryStepError`], [`geo_binary_step_error`]); il primo
+/// errore e' in ordine (side, riga).
+// Sequenza lineare lunga (guscio di memoria completo piu' D14.4 per lato),
+// non complessita' logica.
 #[allow(clippy::too_many_lines)]
 pub(super) fn run_geo_binary_blocking(
     plan: &Rc<ExecutionPlan>,
@@ -728,29 +711,16 @@ pub(super) fn run_geo_binary_blocking(
     ))
 }
 
-/// Cuore del ramo geo (D14.2): kernel `*_validated` (architettura.md#geometrie:
-/// precondizione soddisfatta per costruzione dal decode totale D14.3,
-/// eseguito dal chiamante) e costruzione dell'output secondo il contratto
-/// v4:
+/// Cuore del ramo geo (D14.2): kernel `*_validated` e output del contratto v4.
 ///
-/// - `sjoin`: `take` delle colonne left sugli indici di coppia + colonna
-///   `right_index` (non-null per inner join);
-/// - `nearest`: come sjoin + colonna `distance` (una riga per match, gia'
-///   filtrato su `max_distance` dal kernel);
-/// - `within`/`count_points_in_polygons`: left passthrough + colonna
-///   flag/conteggio allineata alle righe left (null dove la geometria left
-///   e' null).
-///
-/// Lo schema di output e' quello del contratto inferito dal planner
-/// (fonte unica di verita', configurazioni preparate) — identico per costruzione allo schema del
-/// contratto analyze v4, verificato dai test di identita'.
+/// La precondizione dei kernel `*_validated` (architettura.md#geometrie) e'
+/// soddisfatta dal decode totale D14.3 del chiamante. Lo schema di output e'
+/// quello del contratto inferito dal planner, identico per costruzione a
+/// quello di analyze v4 (verificato dai test di identita').
 ///
 /// Gli errori propagano come sorgente grezza: fase (`Write`), side e riga
 /// sono aggiunti dal chiamante nel carrier [`GeoBinaryStepError`] (D14.5.2).
-// La lunghezza e' data dalla sequenza lineare dei quattro casi del
-// perimetro della fusione (kernel e costruzione output per op), non da
-// complessita'
-// logica (stesso criterio di `pair_arrow`).
+// Sequenza lineare lunga, un caso per operazione, non complessita' logica.
 #[allow(clippy::too_many_lines)]
 pub(super) fn execute_geo_binary(
     kernel: &PreparedKernel,
@@ -874,13 +844,9 @@ fn errore_di_estensione(errore: plenora_kernels_geo::extensions::ExtensionError)
 /// kernel non ha concluso — la validazione o `relate` si sono interrotte, o
 /// un'invariante e' saltata — `InvalidPlan` altrimenti.
 ///
-/// # Perche' non `InvalidPlan` per tutto
-///
-/// Perche' un calcolo che non conclude su geometrie valide non e' un errore
-/// del piano: chiamarlo cosi' manda chi legge a correggere un ingresso che
-/// nessuno ha dimostrato sbagliato, e ne cambia l'exit code. La decisione e'
-/// quella di [`ArrowTransportError::errore_del_passo`], una sola per tutti i
-/// passi geo; il testo resta quello del kernel.
+/// Un calcolo che non conclude su geometrie valide non e' un errore del
+/// piano; la decisione e' quella di
+/// [`ArrowTransportError::errore_del_passo`], comune a tutti i passi geo.
 fn errore_di_coppia(errore: impl Into<ArrowTransportError>) -> PlenoraError {
     let errore: ArrowTransportError = errore.into();
     let testo = errore.to_string();

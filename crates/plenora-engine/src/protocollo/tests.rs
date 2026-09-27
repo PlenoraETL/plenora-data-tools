@@ -1,16 +1,10 @@
 //! Prove della **forma sul filo**.
 //!
-//! # Perche' i vettori sono scritti a mano
-//!
-//! Un round-trip prova che il codificatore e il decodificatore concordano.
-//! Non prova che concordino su qualcosa di giusto: se il codificatore
-//! emettesse `"tipo":"saluto "` con uno spazio, il decodificatore lo
-//! riaccetterebbe e il test resterebbe verde per sempre.
-//!
-//! Per questo l'oracolo e' un **testo scritto a mano**, byte per byte,
-//! prefisso compreso — e il codificatore e il decodificatore ci vengono
-//! confrontati **separatamente**. Il round-trip resta, ma come prova
-//! secondaria: dice solo che i due versi non hanno derive reciproche.
+//! L'oracolo e' un **testo scritto a mano**, byte per byte, prefisso
+//! compreso, e codificatore e decodificatore gli sono confrontati
+//! **separatamente**: un round-trip resterebbe verde anche se entrambi
+//! concordassero su una forma sbagliata. Il round-trip resta come prova
+//! secondaria.
 
 use serde_json::value::RawValue;
 
@@ -125,12 +119,9 @@ fn token_di_prova() -> CommitToken {
 
 /// Un digest dalla forma canonica, per le fixture.
 ///
-/// I test condividono **il costruttore**, non un valore: ciascuno sceglie il
-/// proprio testo, e a garantirne la forma e' il tipo del filo.
-///
-/// Nei casi «massimi» un digest non puo' essere fatto di caratteri che JSON
-/// espande — e' ASCII esadecimale — quindi il tetto del frame resta su questi
-/// campi un maggiorante conservativo, ed e' giusto che lo sia.
+/// I test condividono **il costruttore**, non un valore. Un digest e' ASCII
+/// esadecimale e JSON non lo espande, quindi sui digest il tetto del frame
+/// resta un maggiorante conservativo.
 fn digest(testo: &str) -> DigestSha256 {
     DigestSha256::da_esadecimale(testo).expect("canonico")
 }
@@ -682,11 +673,9 @@ fn i_conteggi_del_successo_sono_obbligatori() {
 
 /// `nodi_completati` **non** entra nei conteggi del `Successo`.
 ///
-/// `Progresso` lo porta, e la simmetria inviterebbe ad aggiungerlo anche qui.
-/// Non si puo': rileggendo un file Arrow IPC si osservano righe e batch, non
-/// quanti nodi del piano li hanno prodotti. Un numero che il verificatore non
-/// puo' confrontare gli chiederebbe di crederci, ed e' cio' che il passo 8
-/// esiste per non fare.
+/// Rileggendo un file Arrow IPC si osservano righe e batch, non nodi: un
+/// numero che il verificatore non puo' confrontare gli chiederebbe di
+/// crederci (passo 8).
 #[test]
 fn i_conteggi_del_successo_non_portano_i_nodi() {
     let corpo = concat!(
@@ -712,13 +701,9 @@ fn un_campo_mancante_e_un_errore() {
 
 /// La versione ricevuta non finisce nel messaggio.
 ///
-/// E' un `u16` che sceglie chi scrive il frame: un numero arbitrario nel
-/// rifiuto e' un numero arbitrario nel log di chi indaga. Cio' che il rifiuto
-/// puo' dire e' **la nostra** versione, che e' una costante di questo binario.
-///
-/// La sentinella e' valida come `u16` e sconosciuta come versione: sta nel
-/// dominio del tipo, quindi arriva fino al confronto invece di essere respinta
-/// prima come numero malformato.
+/// La sceglie chi scrive il frame; il rifiuto puo' dire solo **la nostra**
+/// versione. La sentinella e' un `u16` valido e una versione sconosciuta,
+/// quindi arriva fino al confronto.
 #[test]
 fn la_versione_ricevuta_non_compare_nel_rifiuto() {
     const SENTINELLA: u16 = 51_423;
@@ -822,11 +807,9 @@ fn un_enum_fuori_dominio_e_un_errore() {
 
 /// Anche gli enum **con tag interno** rifiutano i campi ignoti.
 ///
-/// Vale la pena provarlo a parte: `deny_unknown_fields` su un enum con tag
-/// interno non copre le varianti *unitarie*, che `serde` riconosce dal tag e
-/// poi accetta con qualunque contorno. Entrambi gli enum con tag del
-/// protocollo — `retry` ed `esito` — sono scritti con sole varianti di
-/// struttura proprio per questo, e qui si verifica che la scrittura tenga.
+/// `deny_unknown_fields` su un enum con tag interno non copre le varianti
+/// *unitarie*: `retry` ed `esito` sono scritti con sole varianti di
+/// struttura, e qui si verifica che la scrittura tenga.
 #[test]
 fn gli_enum_con_tag_interno_rifiutano_i_campi_ignoti() {
     // --- `esito`: un caso per ogni nome **generato**.
@@ -980,12 +963,9 @@ fn ripeti(n: usize) -> String {
 /// Il carattere che JSON **deve** espandere: `U+0001`, un byte decodificato,
 /// sei byte codificati.
 ///
-/// Serve alle fixture massime. Con `"a"` il frame massimo resterebbe a un
-/// sesto della taglia che il tetto gli concede, quindi la prova dei massimi
-/// non toccherebbe mai `ESPANSIONE_ESCAPE`: una mutazione a `1` la lascerebbe
-/// verde pur rendendo non codificabile un frame **strutturalmente ammesso**
-/// che portasse caratteri di controllo — e i campi del protocollo ammettono
-/// qualunque stringa.
+/// Con `"a"` i frame massimi resterebbero lontani dal tetto e la prova non
+/// toccherebbe `ESPANSIONE_ESCAPE`: una mutazione a `1` resterebbe verde pur
+/// rendendo non codificabile un frame ammesso con caratteri di controllo.
 const ESPANDIBILE: &str = "\u{1}";
 
 /// `n` byte decodificati che ne diventano `n * ESPANSIONE_ESCAPE` codificati.
@@ -1065,14 +1045,10 @@ type CasoTetto = (&'static str, usize, Box<dyn Fn(usize) -> Frame>);
 
 /// I tre costruttori di caso, uno per corpo che ne ha bisogno.
 ///
-/// Ognuno ripete lo stesso gesto — parti dal frame di prova, entra nel corpo,
-/// porta **un** campo a lunghezza `n` — e cio' che cambia e' la sola riga che
-/// nomina il campo. Il resto e' impalcatura: tenerne una copia per caso
-/// significa che una svista nell'impalcatura si legge tredici volte.
-///
-/// L'`if let` che non trova la variante attesa lascia il frame intatto, e la
-/// riga fallisce a `tetto + 1` perche' il frame resta valido. E' il controllo
-/// sulla tabella descritto in `ogni_campo_limitato_e_provato_sul_proprio_confine`.
+/// Ognuno parte dal frame di prova e porta **un** campo a lunghezza `n`:
+/// cambia solo la riga che nomina il campo. Un `if let` che non trova la
+/// variante lascia il frame valido, e la riga fallisce a `tetto + 1` (vedi
+/// `ogni_campo_limitato_e_provato_sul_proprio_confine`).
 fn caso_su_saluto(applica: impl Fn(&mut Saluto, usize) + 'static) -> Box<dyn Fn(usize) -> Frame> {
     Box::new(move |n| {
         let mut frame = saluto();
@@ -1395,22 +1371,14 @@ fn diagnostica_con(applica: impl FnOnce(&mut DiagnosticaSulFilo)) -> Frame {
     errore_con(|e| e.diagnostica = Some(diagnostica))
 }
 
-/// I quattro **digest** non compaiono in questa tabella, e non per
-/// dimenticanza: non hanno un tetto da provare. Un digest ha una **forma** —
-/// 64 esadecimali minuscoli — e la forma e' del tipo, quindi «al tetto» e
-/// «oltre il tetto» non sono stati che si possano costruire. Le forme
-/// rifiutate stanno nelle prove del tipo, una per una.
-///
 /// **Ogni** campo limitato, provato sul proprio confine.
 ///
-/// Senza questo, i tetti sarebbero applicati ma quasi mai esercitati: una
-/// costante sbagliata in uno dei `limita` — il tetto del percorso su un
-/// identificatore, per dire — passerebbe inosservata, perché nessun test
-/// arriverebbe a quel confine.
+/// Senza questo una costante sbagliata in uno dei `limita` passerebbe
+/// inosservata. Il caso a `tetto + 1` controlla anche la tabella: un
+/// costruttore che non modificasse il campo lascerebbe il frame valido.
 ///
-/// Il caso a `tetto + 1` fa anche da controllo sulla tabella stessa: se un
-/// costruttore non modificasse davvero il campo che dichiara, il frame
-/// resterebbe valido e la riga fallirebbe.
+/// I digest non ci sono: la loro forma e' del tipo, e «oltre il tetto» non si
+/// puo' costruire; le forme rifiutate stanno nelle prove del tipo.
 #[test]
 fn ogni_campo_limitato_e_provato_sul_proprio_confine() {
     let tutti = casi_saluto()
@@ -1671,14 +1639,10 @@ fn gli_otto_massimi_stanno_sotto_il_tetto_e_l_incarico_e_il_maggiore() {
 /// Le invarianti che il target fuzz pretende, applicate qui dalla suite
 /// ordinaria.
 ///
-/// Non sono riscritte: chiamano `interni::verifica_giro_del_frame`, la stessa
-/// funzione che invoca il target. Riscriverle creerebbe due definizioni della
-/// stessa promessa, e la copia nei test resterebbe verde mentre quella del
-/// fuzzer sbaglia.
-///
-/// I casi sono **non canonici** di proposito — chiavi in ordine diverso,
-/// spazi, un piano grezzo con la sua formattazione — perche' e' li' che
-/// un'invariante di idempotenza si rompe.
+/// Chiamano `interni::verifica_giro_del_frame`, la stessa funzione del target,
+/// invece di riscriverle. I casi sono **non canonici** di proposito (chiavi in
+/// altro ordine, spazi, piano grezzo formattato): e' li' che l'idempotenza si
+/// rompe.
 #[test]
 fn le_invarianti_del_target_fuzz_reggono() {
     let non_canonici = [
@@ -1813,9 +1777,8 @@ fn il_contenuto_non_entra_negli_errori_del_writer() {
 /// `incarico_verifica`, diciassette caratteri: qui si verifica che
 /// l'assunzione regga.
 ///
-/// E' il genere di premessa che marcisce in silenzio. Un tipo futuro con un
-/// nome piu' lungo non romperebbe niente di visibile — renderebbe soltanto la
-/// derivazione del tetto un po' meno vera di quanto dichiara.
+/// Un tipo futuro con un nome piu' lungo renderebbe la derivazione del tetto
+/// meno vera di quanto dichiara, senza rompere niente di visibile.
 #[test]
 fn nessun_nome_di_tipo_supera_i_diciassette_caratteri() {
     let mut piu_lungo = 0;
@@ -1873,18 +1836,12 @@ fn nome_sul_filo<T: serde::Serialize>(valore: &T) -> String {
 
 /// Le due proprieta' del vocabolario che la macro **non** garantisce.
 ///
-/// L'esaustivita' non si prova qui, ed e' il punto: `TUTTE` nasce dalla
-/// stessa lista che genera le varianti, quindi una variante nuova ci entra da
-/// sola. Una tabella scritta a mano nel test enumererebbe se stessa: una
-/// variante aggiunta all'enum la lascerebbe invariata, e il test verde.
+/// L'esaustivita' non si prova qui: `TUTTE` nasce dalla stessa lista delle
+/// varianti. Restano due difetti che la macro non esclude:
 ///
-/// Restano due cose che la macro non puo' garantire, ed entrambe sono difetti
-/// veri:
-///
-/// - due varianti col **medesimo** nome sul filo. La macro le accetta e
-///   `serde` pure: la seconda diventa irraggiungibile in lettura;
-/// - un nome che rilegge la variante **di un'altra**, che e' come il caso
-///   precedente si manifesta dal lato del decoder.
+/// - due varianti col **medesimo** nome sul filo: la seconda diventa
+///   irraggiungibile in lettura;
+/// - un nome che rilegge la variante **di un'altra**.
 fn vocabolario_biunivoco<T>(tutte: &[(T, &'static str)], etichetta: &str)
 where
     T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + core::fmt::Debug + Copy,
@@ -2007,15 +1964,9 @@ fn ogni_tipo_ha_una_sola_direzione() {
 
 /// Nessun errore del decoder riporta cio' che ha letto.
 ///
-/// E' l'asse che il rifiuto per forma lascia aperto: `serde` costruisce i
-/// propri messaggi **dal valore incontrato** — «invalid type: string "…"»,
-/// «unknown field `…`» — e su questo canale quel valore lo sceglie l'altro
-/// capo. Un frame malformato ad arte sarebbe un modo di far scrivere testo
-/// arbitrario nel log di chi indaga; e poiche' il `Saluto` porta il
-/// `commit_token`, il testo arbitrario potrebbe essere il token.
-///
-/// Cio' che resta e' dove, non che cosa: categoria, riga e colonna. Chi indaga
-/// ha il frame in mano.
+/// I messaggi di `serde` incorporano il valore incontrato, che qui sceglie
+/// l'altro capo, e il `Saluto` porta il `commit_token`. Resta dove, non che
+/// cosa: categoria, riga e colonna.
 #[test]
 fn nessun_errore_del_decoder_riporta_cio_che_ha_letto() {
     const SENTINELLA: &str = "SEGRETO-8675309124816324";

@@ -9,14 +9,10 @@
 //!
 //! # Il tetto si applica prima di allocare
 //!
-//! In lettura si prendono i quattro byte del prefisso, si confronta con
-//! [`MAX_PROTOCOL_FRAME_BYTES`], e **solo dopo** si guarda il payload. Un
-//! frame che dichiara un gigabyte non ne fa allocare nemmeno uno.
-//!
-//! In scrittura non si costruisce un buffer illimitato per poi misurarlo:
-//! [`ScrittoreLimitato`] fallisce al primo byte oltre il tetto. La differenza
-//! conta quando il frame e' grande — misurare dopo significa aver gia'
-//! allocato cio' che si vuole rifiutare.
+//! In lettura si confronta il prefisso con [`MAX_PROTOCOL_FRAME_BYTES`]
+//! **prima** di guardare il payload: un frame che dichiara un gigabyte non ne
+//! fa allocare nemmeno uno. In scrittura [`ScrittoreLimitato`] fallisce al
+//! primo byte oltre il tetto, invece di misurare dopo aver allocato.
 
 use std::io::{self, Write};
 
@@ -42,10 +38,9 @@ pub const BYTE_PREFISSO: usize = 4;
 /// `chiave("percorso")` e' `"percorso":`, cioe' il nome piu' due virgolette e
 /// i due punti.
 ///
-/// Il conto lo fa il compilatore sul nome vero, e non un numero scritto a
-/// mano accanto al nome: un numero vicino a una stringa e' un numero che se ne
-/// separa, e il maggiorante resterebbe conservativo mentre la derivazione
-/// dichiarata smetterebbe di essere quella applicata.
+/// Il conto lo fa il compilatore sul nome vero: un numero scritto a mano
+/// accanto al nome potrebbe separarsene, e la derivazione dichiarata
+/// smetterebbe di essere quella applicata.
 const fn chiave(nome: &str) -> usize {
     nome.len() + 3
 }
@@ -58,11 +53,8 @@ const fn letterale(valore: &str) -> usize {
 /// Byte dell'involucro JSON.
 ///
 /// `{"protocol_version":65535,"tipo":"incarico_verifica","corpo":}` e' la
-/// forma piu' lunga: `u16` a cinque cifre e il nome di tipo piu' lungo.
-///
-/// «Piu' lungo» fra gli **otto tipi di messaggio** — `incarico_verifica`,
-/// diciassette caratteri — non fra i nomi degli assi dell'errore, che sono
-/// ben piu' lunghi ma non compaiono mai qui: `tipo` non li puo' contenere.
+/// forma piu' lunga: `u16` a cinque cifre e il nome di tipo di messaggio piu'
+/// lungo. I nomi degli assi dell'errore non contano: `tipo` non li contiene.
 const INVOLUCRO_BYTES: usize = {
     // { } piu' le due virgole fra i tre campi.
     let struttura = 2 + 2;
@@ -119,10 +111,9 @@ const INCARICO_BYTES: usize = {
 
 /// Tetto del payload di un frame, **prefisso escluso**.
 ///
-/// Derivato con aritmetica `checked` dai tetti dei campi e dall'involucro
-/// contato. Non e' un numero tondo scelto: e' una somma, e i test verificano
-/// che gli otto messaggi massimi ci stiano dentro e che l'`Incarico` sia
-/// davvero il piu' grande.
+/// Derivato con aritmetica `checked` dai tetti dei campi e dall'involucro: e'
+/// una somma, non un numero scelto. I test verificano che i messaggi massimi
+/// ci stiano e che l'`Incarico` sia il piu' grande.
 pub const MAX_PROTOCOL_FRAME_BYTES: usize = match INVOLUCRO_BYTES.checked_add(INCARICO_BYTES) {
     Some(totale) => totale,
     // Irraggiungibile: la somma di due costanti note. `panic!` in contesto
@@ -192,12 +183,9 @@ const fn errore(messaggio: String) -> PlenoraError {
 
 /// L'errore di `serde_json` ridotto a **posizione e categoria**.
 ///
-/// Il suo `Display` incorpora il valore che ha incontrato: «invalid type:
-/// string "…"», «unknown field `…`». Su un canale ostile quel valore e' testo
-/// scelto dall'altro capo, e finirebbe nel log di chi indaga insieme al motivo
-/// per cui lo stava guardando. La riga e la colonna dicono **dove** senza dire
-/// **che cosa**: bastano a trovare il campo nel frame che si ha in mano, e non
-/// portano nulla.
+/// Il suo `Display` incorpora il valore incontrato, che su un canale ostile e'
+/// testo scelto dall'altro capo e finirebbe nel log. Riga e colonna dicono
+/// **dove** senza dire **che cosa**.
 fn da_serde(contesto: &str, origine: &serde_json::Error) -> PlenoraError {
     let categoria = match origine.classify() {
         serde_json::error::Category::Io => "lettura interrotta",
@@ -238,17 +226,9 @@ pub fn codifica(frame: &Frame) -> Result<Vec<u8>> {
 
 /// La lunghezza dichiarata dal prefisso, **se sta sotto il tetto**.
 ///
-/// Esiste separata da [`decodifica`] per una ragione precisa, e va detta senza
-/// abbellirla: `decodifica` riceve una slice, quindi quando viene chiamata i
-/// byte del payload **qualcuno li ha gia' letti**. Il suo rifiuto e' sincero
-/// su di se' — non alloca e non guarda oltre i quattro byte — ma non impedisce
-/// da solo che un frame ostile faccia leggere un gigabyte da un pipe.
-///
-/// Quella difesa appartiene al lettore, ed e' questa funzione che gliela da':
-/// prende i quattro byte, decide, e solo se dice `Ok` il lettore ne legge
-/// altri. Qui c'e' il predicato su cui il lettore si appoggia, unico per
-/// costruzione: `decodifica` usa **questo** confronto, non una copia che
-/// potrebbe divergere.
+/// Separata da [`decodifica`], che riceve byte gia' letti: e' il predicato con
+/// cui il lettore decide, dai soli quattro byte, se leggere il resto.
+/// `decodifica` usa **questo** confronto, non una copia.
 ///
 /// # Errors
 ///
@@ -307,11 +287,9 @@ pub fn decodifica(byte: &[u8]) -> Result<Frame> {
         ))
     })?;
     // Le chiavi duplicate si rifiutano PRIMA della deserializzazione:
-    // `serde_json` le risolverebbe con «vince l'ultima», e due frame diversi
-    // diventerebbero lo stesso messaggio.
-    // L'errore d'origine **non** viene incorporato: nomina la chiave duplicata,
-    // e la chiave la sceglie chi ha scritto il frame. Che ce ne sia una basta a
-    // rifiutare, e il frame ce l'ha in mano chi indaga.
+    // `serde_json` farebbe vincere l'ultima, e due frame diversi
+    // diventerebbero lo stesso messaggio. L'errore d'origine **non** si
+    // incorpora: nomina la chiave, scelta da chi ha scritto il frame.
     plenora_core::json::ensure_no_duplicate_keys(testo).map_err(|_| {
         errore("chiave JSON duplicata nel frame: il documento e' ambiguo".to_owned())
     })?;
@@ -391,11 +369,8 @@ fn limita(valore: &str, tetto: usize, campo: &str) -> Result<()> {
 
 /// Un campo che **identifica** qualcosa non puo' essere vuoto.
 ///
-/// Il tetto dice quanto puo' essere grande e non dice nulla su quanto debba
-/// essere: una stringa vuota li rispetta tutti. Due descrizioni fatte di campi
-/// vuoti sono uguali fra loro, quindi si accordano — e l'handshake conclude
-/// avendo confrontato il nulla con il nulla. Un confronto che non puo' fallire
-/// e' un confronto che non protegge.
+/// Una stringa vuota rispetta ogni tetto, e due descrizioni di campi vuoti
+/// si accorderebbero confrontando il nulla con il nulla.
 pub(super) fn non_vuoto(valore: &str, campo: &str) -> Result<()> {
     if valore.is_empty() {
         return Err(errore(format!(
@@ -424,9 +399,8 @@ fn limita_elementi<T>(elementi: &[T], tetto: usize, campo: &str) -> Result<()> {
 /// I tetti per campo, applicati in entrambi i versi.
 ///
 /// In scrittura impediscono di produrre un frame che il ricevente
-/// rifiuterebbe; in lettura sono la difesa. Applicarli da un lato solo
-/// avrebbe reso il protocollo asimmetrico proprio dove i due lati devono
-/// concordare.
+/// rifiuterebbe; in lettura sono la difesa. Sono gli stessi da entrambi i
+/// lati.
 fn verifica_forma(frame: &Frame) -> Result<()> {
     match frame.corpo() {
         Corpo::Saluto(saluto) => {
@@ -479,13 +453,11 @@ pub(super) fn verifica_incarico(incarico: &super::messaggi::Incarico) -> Result<
 
 /// La forma di un `IncaricoVerifica`.
 ///
-/// `contract_fingerprint_atteso` non ha un tetto da applicare qui: e' un
-/// [`super::messaggi::DigestSha256`], e la forma canonica e' del tipo, non di
-/// un controllo. `conteggi_attesi` e `budget_memoria_governata_bytes` sono
-/// interi puri, come i conteggi del `Successo` e i contatori del
-/// `Progresso`: il loro dominio e' il tipo. Resta da limitare solo
-/// `digest_atteso`, che porta un campo `algoritmo` sciolto — la stessa
-/// ragione per cui `verifica_esito` lo limita sul `Successo`.
+/// `contract_fingerprint_atteso` e' un [`super::messaggi::DigestSha256`], la
+/// cui forma canonica e' del tipo; `conteggi_attesi` e
+/// `budget_memoria_governata_bytes` sono interi, con il tipo per dominio.
+/// Resta da limitare `digest_atteso`, che porta un campo `algoritmo` sciolto,
+/// come `verifica_esito` sul `Successo`.
 pub(super) fn verifica_incarico_verifica(
     incarico: &super::messaggi::IncaricoVerifica,
 ) -> Result<()> {
@@ -505,9 +477,8 @@ pub(super) fn verifica_incarico_verifica(
 ///
 /// `pub(super)` e chiamata da entrambe le parti: l'handshake la usa sulla
 /// **propria** descrizione prima di spedirla, `verifica_forma` su quella
-/// ricevuta. Un lato che si validasse con regole diverse dall'altro
-/// scoprirebbe i propri difetti dalla risposta dell'interlocutore, che e' il
-/// posto peggiore per scoprirli.
+/// ricevuta. Cosi' un lato non scopre i propri difetti dalla risposta
+/// dell'altro.
 pub(super) fn verifica_identita(
     artefatto: &super::messaggi::IdentitaArtefatto,
     resolver: &super::messaggi::IdentitaResolver,

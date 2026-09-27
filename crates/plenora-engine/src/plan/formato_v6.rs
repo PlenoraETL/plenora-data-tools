@@ -3,46 +3,16 @@
 //! Ratificato in `plenora-contracts` come `Plan Budget 1.0`
 //! (`plenora-plan-budget-v1`), requisiti `PLAN-001` … `PLAN-021`.
 //!
-//! # Perche' una versione nuova e non un campo in piu'
+//! Una versione nuova e non un campo in piu': con `deny_unknown_fields` un
+//! lettore v5 rifiuterebbe il documento, e l'aggiunta non sarebbe
+//! compatibile in avanti (stesso ragionamento di [`super::migrazione_v4`]).
 //!
-//! `LimitsOverride` ha `deny_unknown_fields`. Un lettore v5 messo davanti a
-//! un piano che dichiara il campo nuovo non lo ignora: **rifiuta il
-//! documento**. L'aggiunta dentro la v5 sarebbe percio' compatibile
-//! all'indietro — i piani vecchi restano validi — e **non** in avanti, e
-//! l'incompatibilita' in avanti e' quella che rompe i dispiegamenti, perche'
-//! e' li' che i lettori vecchi esistono gia'.
-//!
-//! E' lo stesso ragionamento, e lo stesso precedente, della migrazione v4→v5
-//! ([`super::migrazione_v4`]): `deny_unknown_fields` e' una scelta
-//! deliberata di questo formato, e convivere con una sua conseguenza
-//! fingendo che sia additiva la contraddirebbe.
-//!
-//! # Che cosa NON fa questo modulo
-//!
-//! **Non migra.** Non esiste un `PlanV5 -> PlanV6`, e non e' una svista:
-//! `PLAN-021` vieta di presentare i due documenti come identita' equivalenti,
-//! e una migrazione che cambia identita' va progettata con chi consuma gli
-//! hash — come comunicare il nuovo, come invalidare cache e grafi
-//! persistiti, quale tipo rappresenti la vecchia e la nuova. Nessuno di
-//! quei consumatori esiste oggi. La v5 e la v6 sono **percorsi paralleli**:
-//! un piano v6 si scrive o si deserializza esplicitamente.
-//!
-//! # Come si separano le identita'
-//!
-//! La v6 non collassa nel canonico v5, e non ci si arriva **cambiando la
-//! versione a un piano v5**: quello produrrebbe un `PlanV5` che dichiara `6`
-//! senza portare il tetto, cioe' un valore che nessun parser puo' generare.
-//!
-//! Qui il documento validato e' un [`super::ValidatedPlanV6`], che conserva
-//! un [`PlanV6`] intero. La sua forma canonica dichiara `schema_version: 6`,
-//! vi materializza il tetto quando c'e', e il separatore di dominio del
-//! `plan_hash` e' scelto dalla **variante** del piano validato, non da un
-//! campo mutabile. Un v5 e un v6 per il resto identici hanno percio'
-//! identita' **diverse** (`PLAN-018`).
-//!
-//! Attenzione a non generalizzare: la v4 **conserva** l'equivalenza con la
-//! v5, perche' e' migrata nel canonico v5 e ne condivide il `plan_hash`. Il
-//! confine d'identita' e' fra v5 e v6, e li' soltanto (`PLAN-019`).
+//! Nessuna migrazione v5 -> v6: `PLAN-021` vieta di presentare i due
+//! documenti come identita' equivalenti. Il documento validato e' un
+//! [`super::ValidatedPlanV6`] con un [`PlanV6`] intero; la forma canonica
+//! dichiara `6`, materializza il tetto, e il dominio del `plan_hash` viene
+//! dalla variante, non da un campo mutabile (`PLAN-018`). La v4 invece
+//! condivide l'identita' della v5 (`PLAN-019`).
 
 use serde::{Deserialize, Serialize};
 
@@ -58,22 +28,10 @@ use std::collections::BTreeMap;
 /// Override dei limiti **come li scrive la v6**: con
 /// `max_domain_memory_bytes`.
 ///
-/// E' pubblica e va nei due versi — vedi la nota sulla simmetria piu' sotto —
-/// perche' e' il blocco `limits` di un documento pubblico.
-/// `deny_unknown_fields` e' cio' che rende impossibile, per costruzione e non
-/// per controllo:
-///
-/// - un piano **v5 che dichiara `max_domain_memory_bytes`** — lo
-///   deserializza [`LimitsOverride`], che non conosce quel nome (`PLAN-007`);
-/// - un piano **v6 con un nome che la v6 non ha** — lo deserializza questa,
-///   che conosce solo i nomi della v6.
-/// # Simmetrica alla v5, anche in scrittura
-///
-/// Deriva `Serialize` con gli stessi `skip_serializing_if` di
-/// [`LimitsOverride`]: un tipo pubblico di piano che si puo' leggere e non
-/// scrivere sarebbe asimmetrico senza motivo, e chi costruisce un v6 a mano
-/// deve poterlo emettere. Un limite assente non compare, come nella v5, cosi'
-/// il giro `serializza -> deserializza` rende lo stesso documento.
+/// `deny_unknown_fields` rifiuta per costruzione un v5 con
+/// `max_domain_memory_bytes` (`PLAN-007`) e un v6 con un nome che la v6 non
+/// ha. Serializza con gli stessi `skip_serializing_if` di [`LimitsOverride`],
+/// cosi' il giro `serializza -> deserializza` rende lo stesso documento.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LimitsOverrideV6 {
@@ -236,11 +194,9 @@ impl PlanV6 {
     /// La **vista v5** della struttura: gli stessi nodi, archi e limiti
     /// condivisi, senza il tetto del dominio.
     ///
-    /// Serve a due cose, entrambe interne: validare la struttura col nucleo
-    /// condiviso, e costruire la forma canonica — che poi dichiara la
-    /// versione 6 e vi aggiunge il tetto. Non e' pubblica perche' un `PlanV5`
-    /// ricavato da un v6 non e' un piano v5: e' una proiezione, e trattarla
-    /// come documento produrrebbe un `plan_hash` del dominio sbagliato.
+    /// Serve a validare col nucleo condiviso e a costruire la forma canonica.
+    /// Non e' pubblica: e' una proiezione, e come documento darebbe un
+    /// `plan_hash` del dominio sbagliato.
     pub(crate) fn come_struttura_condivisa(&self) -> PlanV5 {
         PlanV5 {
             schema_version: super::PLAN_SCHEMA_VERSION_V5,

@@ -2,19 +2,8 @@
 //!
 //! `run` sui piani `schema_version <= 3`, il trasporto WKB v2 e v3 —
 //! `transform`, `spatial-join`, `transform-arrow`, `pair-arrow` — e
-//! `self-test`.
-//!
-//! # Perche' stanno insieme, e perche' qui
-//!
-//! Sono il lato legacy di un dispatch: un piano con `schema_version <= 3`
-//! arriva qui, uno con una versione DAG va al planner/executor. Tenere quel
-//! lato in un modulo solo rende il confine visibile — si vede che cosa e'
-//! congelato e che cosa no, invece di doverlo dedurre.
-//!
-//! Formato sul filo, messaggi ed exit code sono superficie compatibile: chi
-//! invoca questi comandi si aspetta esattamente quelli. Non e' codice da
-//! migliorare — una miglioria qui e' una rottura per qualcuno — e' codice da
-//! tenere fermo.
+//! `self-test`. Formato sul filo, messaggi ed exit code sono superficie
+//! compatibile: qui una miglioria e' una rottura per qualcuno.
 
 use std::error::Error;
 use std::fs::{File, OpenOptions};
@@ -51,27 +40,11 @@ use plenora_kernels_geo::crs::resolve_crs;
 use crate::{contract, limite_risorsa, optional_value_after, read_control_json};
 use plenora_engine::geo_transport::publish::EsitoDellaPubblicazione;
 
-/// Materializza un input completo entro un budget di memoria RESIDUO,
-/// restituendo il consumo che resta vivo dopo la concatenazione.
-///
-/// Il budget dev'essere globale, non per input: con la contabilita' per
-/// singolo input i due lati di un piano binario potrebbero occupare ciascuno
-/// l'intero `max_governed_memory_bytes`, cioe' il doppio del dichiarato. Il chiamante
-/// scala il residuo e passa quello.
-///
-/// La CONCATENAZIONE finale duplica temporaneamente i dati — i batch di
-/// partenza restano vivi finche' `concat_batches` non ha finito — quindi si
-/// verifica il PICCO, non solo la somma dei batch accumulati.
 /// Memoria che resta del budget dichiarato dal piano dopo `trattenuti` byte.
 ///
-/// Fallisce CHIUSO, e la soglia e' lo ZERO, non il segno. Rifiutare la sola
-/// sottrazione negativa, rendendo `0` a budget esattamente esaurito, farebbe
-/// partire comunque il passo successivo, fermato piu' tardi da
-/// `with_memory_budget(0)`: fra i due momenti c'e' spazio per allocare. Zero
-/// memoria residua e' gia' l'esaurimento, e l'errore va dato qui.
-///
-/// Il testo dice chi ha trattenuto la memoria, perche' e' l'informazione che
-/// serve a chi deve alzare il budget.
+/// La soglia e' lo zero, non il segno: con budget esaurito il passo
+/// successivo partirebbe comunque, lasciando spazio per allocare. Il testo
+/// dice chi ha trattenuto la memoria.
 fn residuo_di(budget: usize, trattenuti: usize, chi: &str) -> Result<usize, PlenoraError> {
     // `saturating_sub`: la sottrazione sotto zero e lo zero esatto sono lo
     // stesso caso — nessuna memoria residua — e vanno trattati insieme.
@@ -88,19 +61,11 @@ fn residuo_di(budget: usize, trattenuti: usize, chi: &str) -> Result<usize, Plen
 /// Controllo di AMMISSIONE dell'output, **dopo** che il kernel l'ha
 /// costruito.
 ///
-/// Il nome dice cosa e' e cosa non e'. L'output e' memoria trattenuta:
-/// finche' non e' pubblicato convive con gli input, quindi la somma
-/// dev'essere dentro il budget dichiarato: senza questo controllo il
-/// caricamento sarebbe limitato e la produzione no. Ma il controllo avviene
-/// **dopo l'allocazione**: se il kernel alloca oltre la memoria disponibile,
-/// il processo esaurisce la memoria e questo errore non viene mai raggiunto.
-///
-/// Non e' quindi un tetto duro sulla memoria: e' un'ammissione a valle, che
-/// impedisce di PUBBLICARE un risultato fuori budget e rende l'eccesso
-/// diagnosticabile quando la macchina regge. Il rifiuto PREVENTIVO, dove
-/// esiste, vive nei kernel (`preflight_output_bytes`) ed e' applicato alle
-/// operazioni il cui numero di righe di output e' noto prima di allocare.
-/// Le altre restano coperte solo da qui: residuo dichiarato in
+/// Input e output convivono finche' l'output non e' pubblicato, quindi la
+/// somma deve stare nel budget. Non e' un tetto duro: se il kernel alloca
+/// oltre la memoria, il processo muore prima. Il rifiuto preventivo vive nei
+/// kernel che conoscono le righe in anticipo (`preflight_output_bytes`);
+/// residuo dichiarato in
 /// errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
 fn ammissione_output(
     output: &RecordBatch,
@@ -161,15 +126,9 @@ fn load_complete_within(
         bytes = bytes
             .checked_add(batch.get_array_memory_size())
             .ok_or_else(|| limite_risorsa("overflow nel conteggio dei byte"))?;
-        // Il picco include la copia che `concat_batches` produce: i batch di
-        // partenza restano vivi mentre la concatenazione alloca il risultato.
-        //
-        // Aritmetica CONTROLLATA, non saturante: `saturating_mul` a fondo
-        // scala restituisce `usize::MAX`, e se il budget fosse anch'esso a
-        // fondo scala il confronto `picco > budget` sarebbe falso proprio
-        // quando la stima non e' piu' misurabile. Un numero che ha perso il
-        // conto non puo' autorizzare nulla: il traboccamento e' esso stesso
-        // il superamento del budget.
+        // Il picco include la copia che `concat_batches` produce. Aritmetica
+        // controllata: un traboccamento e' esso stesso il superamento del
+        // budget, mentre `saturating_mul` potrebbe autorizzare tutto.
         let Some(picco) = bytes.checked_mul(2) else {
             return Err(PlenoraError::ResourceLimit(format!(
                 "stima del picco di memoria non piu' rappresentabile a {bytes} byte \
@@ -199,14 +158,9 @@ fn load_complete_within(
 
 /// Pubblica un batch, passando dall'**autorita' condivisa**.
 ///
-/// # Perche' non un `persist_noclobber` proprio
-///
-/// Perche' una seconda implementazione del commit e' una seconda occasione di
-/// perdere le stesse cose: il tempfile nella directory giusta, il retry sui
-/// guasti transitori, il `sync_all` prima del rename, e soprattutto
-/// l'accertamento del temporaneo dopo il commit, che senza l'autorita' condivisa
-/// non c'e': `persist_noclobber` ignora l'errore dell'`unlink` nel proprio
-/// ripiego. Il difetto e' della classe, non del solo percorso isolato.
+/// Un `persist_noclobber` proprio perderebbe tempfile nella directory giusta,
+/// retry, `sync_all` e soprattutto l'accertamento del temporaneo dopo il
+/// commit (`persist_noclobber` ignora l'errore dell'`unlink`).
 fn publish_one(
     output_path: &Path,
     output: &RecordBatch,
@@ -244,19 +198,11 @@ pub fn run_pipeline(
     let plan: Plan = read_control_json(plan_path)?;
     let plan = plan.validate()?;
     if plan.requires_secondary() || plan.requires_blocking() {
-        // Contabilita' GLOBALE del budget, non per input: il secondo lato
-        // riceve cio' che resta dopo il primo. Chiamando due volte
-        // `load_complete` ciascun lato riceverebbe l'intero
-        // `max_governed_memory_bytes`, cioe' il doppio del dichiarato.
-        //
-        // ATTENZIONE a cosa questo garantisce. Il CARICAMENTO e' limitato
-        // davvero: i batch si contano mentre si accumulano e si smette prima
-        // di superare il budget. L'ESECUZIONE no: i kernel ricevono il
-        // budget residuo, e alcuni lo usano per rifiutare in anticipo
-        // (`preflight_output_bytes`), ma gli altri costruiscono l'output e
-        // solo dopo lo si ammette o lo si rifiuta. Su quelli il budget e' un
-        // controllo di ammissione a valle, non un tetto duro: vedi errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
-        // Non chiamarlo «budget globale» senza questa distinzione.
+        // Contabilita' globale del budget: il secondo lato riceve cio' che
+        // resta dopo il primo, altrimenti il totale sarebbe il doppio. Il
+        // caricamento e' limitato davvero; l'esecuzione solo dove i kernel
+        // rifiutano in anticipo, altrove e' un'ammissione a valle
+        // (errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce).
         let budget = plan.limits().max_governed_memory_bytes;
         let (left, usati) = load_complete_within(input_path, &plan, budget)?;
         let output = if plan.requires_secondary() {
@@ -548,16 +494,10 @@ pub fn execute_transform_arrow(
         publish_with_profile(output_path, PublishProfile::Atomic, |output_writer| {
             transform_arrow_with_format(&mut input_reader, output_writer, &schema, output_format)
                 .map_err(|error| {
-                    // Un rifiuto row-scoped (R9.9) e' un difetto del DATO letto,
-                    // non del piano: assi data_mapping/read e diagnostica
-                    // preservata, mai riclassificato invalid_plan/validate.
-                    // Gli errori non row-scoped mantengono la classificazione
-                    // storica `contract` (unico percorso del trasporto legacy che
-                    // produce diagnostica: `transform_arrow`; `pair_arrow` e il
-                    // v2 a frame WKB non ne emettono).
-                    // Un errore interno del kernel — una validazione o un
-                    // calcolo che non concludono — resta interno: la
-                    // decisione e' `ArrowTransportError::errore_del_passo`.
+                    // Un rifiuto row-scoped (R9.9) e' un difetto del dato
+                    // letto: data_mapping/read con diagnostica preservata. Gli
+                    // altri restano `contract`; un errore interno del kernel
+                    // resta interno (`ArrowTransportError::errore_del_passo`).
                     error.row_diagnostics().map_or_else(
                         || error.errore_del_passo(),
                         |diagnostics| {

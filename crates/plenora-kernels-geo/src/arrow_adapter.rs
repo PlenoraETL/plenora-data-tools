@@ -1,41 +1,22 @@
 //! Adapter Arrow per il canone GeoArrow-WKB (rappresentazione).
 //!
-//! Contiene le sole parti di rappresentazione: metadati di estensione
-//! `GeoArrow` (`ARROW:extension:name` = `geoarrow.wkb`), metadato `geo` JSON
-//! con le chiavi `crs`, `dimensions` (ICD §3.3) ed `encoding` — quest'ultima
-//! scritta solo quando il contratto la dichiara, mai come default —
-//! decode/encode delle celle WKB con limiti per cella e helper sui
-//! `RecordBatch`. L'envelope `PLNGEO3`, i checksum, la CLI e gli schemi
-//! `TransformArrowSchema`/`PairArrowSchema` vivono in `plenora-engine`.
+//! Casa unica dei metadati `GeoArrow` (`geoarrow.wkb`, metadato `geo` con
+//! `crs`, `dimensions` (ICD §3.3) ed `encoding`, quest'ultima solo se il
+//! contratto la dichiara), del decode/encode delle celle WKB con limite per
+//! cella e degli helper sui `RecordBatch`; il trasporto Arrow di
+//! `plenora-engine::geo_transport` delega qui. Envelope `PLNGEO3`, checksum,
+//! CLI e schemi Arrow vivono in `plenora-engine`. Le celle non-null sono
+//! validate dal validatore WKB del kernel; i null sono preservati.
 //!
-//! Questo modulo e' la casa unica dei metadati `GeoArrow`:
-//! il trasporto Arrow v3 di `plenora-engine::geo_transport` delega qui
-//! (stesso JSON in uscita byte-per-byte).
+//! Chiavi canoniche `plenora.geometry.*` e `plenora.contract.version`
+//! (R2.1/R2.2, deroga DER-ICD-002: errori-e-limiti.md#limiti-dichiarati):
+//! emissione da [`GeometryColumnContract`], inclusi gli stati `missing` e
+//! `declared_unresolved` (R4.6.3/R4.6.4, piano-v5.md#contratti-di-input);
+//! `plenora.field_id` e' solo letta. Lettura fail-closed per chiave (R5.1),
+//! divergenza dal legacy `geo` → errore (R2.6), completamento per precedenza
+//! canonica > legacy > standard esterno (R2.7).
 //!
-//! Le geometrie viaggiano in una colonna `Binary`; ogni cella non-null e'
-//! validata dal validatore WKB del kernel e i null sono preservati.
-//!
-//! Protocollo delle chiavi canoniche (contratti trasversali v2.0-rc10 §2, proposta in attesa di
-//! ratifica; emissione con deroga registrata §15.4/DER-ICD-002 — vedi
-//! `docs/errori-e-limiti.md` errori-e-limiti.md#limiti-dichiarati): protocollo delle chiavi canoniche
-//! `plenora.geometry.*` e `plenora.contract.version` (R2.1/R2.2: namespace
-//! dedicato, una chiave per nozione, MAI un blob unico). R4.6.3 (rc9/rc10):
-//! l'emissione porta anche gli stati `crs_resolution = missing` (nessuna
-//! chiave CRS, coerenza R2.2) e `declared_unresolved` (dichiarazioni
-//! originali ri-emesse invariate, R4.6.4) — piano-v5.md#contratti-di-input decisione 7. `plenora.field_id`
-//! e' solo letta (R2.2 opzionale; non si emette il `FieldId` di grafo, che
-//! non ha significato fuori dal processo — piano-v5.md#contratti-di-input decisione 3). Questo
-//! modulo
-//! fornisce emissione da [`GeometryColumnContract`], lettura fail-closed per
-//! chiave (R5.1: valore non canonico → errore esplicito, mai ignorato o
-//! corretto), coerenza fra chiavi canoniche e metadato legacy `geo` (R2.6:
-//! divergenza → il componente fallisce, non sceglie) e completamento per
-//! precedenza canonica > legacy > standard esterno (R2.7: completamento, mai
-//! arbitrato). Il cablaggio nei siti di produzione avviene altrove.
-//!
-//! Errori: le condizioni `ArrowTransportError` del sorgente sono mappate su
-//! [`PlenoraError`] preservando i messaggi (colonne/schema → `Schema`, CRS →
-//! `Crs`, limiti cella → `Contract`, serializzazione JSON metadati → `Json`).
+//! Errori: mappati su [`PlenoraError`] preservando i messaggi.
 
 use std::collections::HashMap;
 
@@ -139,17 +120,11 @@ pub fn map_nullable<T: Send>(
     cells: &BinaryArray,
     f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync,
 ) -> Result<Vec<Option<T>>, PlenoraError> {
-    // architettura.md#determinismo: il collect parallelo di `Result` sceglie l'errore in modo
-    // NON deterministico (il primo che acquisisce il mutex interno di
-    // rayon). Qui i `Result` sono raccolti per riga (l'ordine del collect
-    // parallelo indicizzato e' preservato) e il primo errore IN ORDINE DI
-    // RIGA e' selezionato dal collect sequenziale: stesso input, stesso
-    // errore, sempre. L'identita' dell'errore e' output.
-    //
-    // La parallelizzazione e' sugli INDICI. Materializzare prima un
-    // `Vec<Option<&[u8]>>` di tutte le celle, solo per avere un iteratore
-    // indicizzato, costerebbe un'allocazione da una riga per elemento su ogni
-    // colonna geometrica, in un percorso che gia' scorre l'array.
+    // architettura.md#determinismo: il collect parallelo di `Result` sceglie
+    // l'errore in modo non deterministico. Qui i `Result` sono raccolti per
+    // riga e il collect sequenziale seleziona il primo errore in ordine di
+    // riga: l'identita' dell'errore e' output. Si parallelizza sugli indici
+    // per non materializzare un `Vec` di tutte le celle.
     let results: Vec<Result<Option<T>, PlenoraError>> = (0..cells.len())
         .into_par_iter()
         .map(|row| {
@@ -192,10 +167,8 @@ pub fn estimate_decoded_cells_native_bytes(cells: &BinaryArray) -> Result<u64, P
 /// Come [`estimate_decoded_cells_native_bytes`], ma accumula ogni STIMA di
 /// cella decodificata in `accumulator`.
 ///
-/// Punto naturale di raccolta della metrica "stimata" per il governor;
-/// l'integrazione con `plenora-engine` e' volutamente rimandata. Restituisce
-/// il totale corrente dell'accumulatore, non il solo contributo di questa
-/// colonna.
+/// Restituisce il totale corrente dell'accumulatore, non il solo contributo
+/// di questa colonna.
 ///
 /// # Errors
 ///
@@ -817,10 +790,8 @@ mod tests {
         // Completamento DELL'ASSENTE (R2.7): senza dettagli espliciti,
         // axis_order descrive i byte x/y normalizzati (EPSG:4326 -> lon_lat),
         // mentre lo srid resta dedotto dall'autorita' (id EPSG:4326 -> 4326).
-        // Lo stub `{"type":"ProjectedCRS"}`
-        // della fixture storica resta coperto da
-        // `canonical_metadata_minimal_omits_everything_not_declared`
-        // (comportamento precedente preservato: `unknown` + niente srid).
+        // Lo stub `{"type":"ProjectedCRS"}` (`unknown` + niente srid) e'
+        // coperto da `canonical_metadata_minimal_omits_everything_not_declared`.
         let metadata = canonical_geometry_metadata(
             &epsg_4326_realistic_contract(),
             &GeometryMetadataDetails::default(),

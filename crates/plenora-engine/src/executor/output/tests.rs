@@ -21,17 +21,10 @@ fn i_conteggi_avanzano_di_un_batch_e_delle_sue_righe() {
 
 /// **La somma delle righe che trabocca si rifiuta: non avvolge e non satura.**
 ///
-/// # Che cosa uccide
-///
-/// Le due scorciatoie, e le uccide separatamente perche' falliscono in modi
-/// diversi. Con `wrapping_add` il risultato sarebbe `6`: un artefatto con 2^64
-/// righe di troppo avrebbe conteggi che **combaciano** con quelli osservati da
-/// chi verifica, e il passo 8 direbbe che va tutto bene. Con `saturating_add`
-/// sarebbe `u64::MAX`, cioe' lo stesso numero per due artefatti diversi — una
-/// perdita silenziosa, che e' la peggiore.
-///
-/// L'unica risposta che resta vera in entrambi i casi e' non rispondere: un
-/// errore.
+/// Con `wrapping_add` i conteggi di un artefatto con 2^64 righe di troppo
+/// combacerebbero con quelli osservati al passo 8; con `saturating_add`
+/// sarebbero `u64::MAX` per due artefatti diversi. L'unica risposta vera e'
+/// un errore.
 #[test]
 fn la_somma_delle_righe_che_trabocca_e_un_errore() {
     let esito = avanza(da(u64::MAX - 3, 1), 10);
@@ -78,28 +71,11 @@ fn le_righe_di_un_batch_passano_per_una_conversione_controllata() {
 
 /// **I generi dell'incarico sono questi cinque, con queste fasi.**
 ///
-/// # Perche' la distinzione conta
-///
-/// Perche' dice a chi legge dove intervenire. Questi generi parlano di cio' che
-/// l'incarico ha chiesto — un percorso, una directory, la forma del percorso — e
-/// nessun permesso li risolve; tutto il resto e' l'ambiente che risponde di no,
-/// e correggere l'incarico non servirebbe a niente.
-///
-/// # Perche' l'elenco e' riscritto qui, e non letto dalla tabella
-///
-/// Perche' un caso che legge la tabella per giudicare la tabella non giudica
-/// niente: qualunque riga la tabella porti, il caso la trova coerente con se
-/// stessa e resta verde. E' il verso in cui un controllo si svuota senza che
-/// nessuno se ne accorga.
-///
-/// L'elenco qui e' quindi un'**affermazione indipendente**: dice quali generi
-/// devono essere dell'incarico e con quale fase, e il confronto e' nei due
-/// versi — niente di meno, niente di piu'. Una riga aggiunta alla tabella e non
-/// qui fa cadere il caso, ed e' cio' che si vuole: chi la aggiunge deve dire
-/// anche perche'.
-///
-/// Il caso guarda la **categoria**, non il messaggio: il testo di `io::Error`
-/// dipende dalla piattaforma e dalla lingua del sistema.
+/// L'elenco e' riscritto qui invece di essere letto dalla tabella: un caso
+/// che legge la tabella per giudicarla resta verde qualunque riga porti. Il
+/// confronto e' nei due versi, quindi una riga aggiunta solo alla tabella fa
+/// cadere il caso. Si guarda la categoria, non il testo di `io::Error`, che
+/// dipende da piattaforma e lingua.
 #[test]
 fn i_generi_dell_incarico_sono_questi_cinque() {
     use std::io::{Error, ErrorKind};
@@ -184,21 +160,10 @@ fn rifiuto_vero(percorso: &std::path::Path) -> std::io::Error {
 /// **Due forme di percorso arrivano come difetto dell'incarico, su ogni
 /// piattaforma.**
 ///
-/// # Che cosa esclude
-///
-/// Che la tabella classifichi generi che nessuna apertura puo' produrre. Una
-/// riga irraggiungibile non e' una difesa: e' una dichiarazione, e il caso che
-/// la guarda con un `ErrorKind` costruito a mano resterebbe verde qualunque cosa
-/// faccia il sistema vero.
-///
-/// # Perche' si pretende anche il genere, e non la sola categoria
-///
-/// Perche' la categoria e' la **nostra** decisione e il genere e' quello del
-/// sistema: guardare solo la prima nasconde un cambio del secondo finche' i due
-/// generi restano entrambi in tabella. Qui succede davvero: un componente
-/// intermedio che e' un file da' `NotADirectory` su Unix e `NotFound` su
-/// Windows, e con la sola categoria quella divergenza resta invisibile, perche'
-/// la classificazione combacia.
+/// Esclude righe della tabella che nessuna apertura reale produce. Si
+/// pretende anche il genere, non solo la categoria: un componente intermedio
+/// che e' un file da' `NotADirectory` su Unix e `NotFound` su Windows, e con la
+/// sola categoria la divergenza resterebbe invisibile.
 #[test]
 fn due_forme_di_percorso_sono_difetti_dell_incarico_ovunque() {
     let stanza = tempfile::tempdir().expect("una directory temporanea");
@@ -238,26 +203,11 @@ fn due_forme_di_percorso_sono_difetti_dell_incarico_ovunque() {
 
 /// **Una directory esistente e' ambigua, e le due piattaforme non concordano.**
 ///
-/// # Che cosa dice questo caso
-///
-/// Che su Unix un percorso che nomina una directory arriva come
-/// `AlreadyExists` — un difetto dell'incarico, fase `Commit` — mentre su Windows
-/// arriva come `PermissionDenied`, che e' **indistinguibile** da un vero difetto
-/// di permessi e resta percio' `Io`, fase `Write`.
-///
-/// # Perche' la tabella non si allarga
-///
-/// Perche' aggiungerci `PermissionDenied` direbbe «incarico da correggere» anche
-/// quando il permesso manca davvero, e manderebbe chi legge a cambiare un
-/// percorso che e' giusto. Fra i due errori si sceglie quello **conservativo**:
-/// una diagnosi meno precisa e mai falsa. La deviazione e' registrata in
+/// Su Unix arriva `AlreadyExists` (incarico, fase `Commit`), su Windows
+/// `PermissionDenied`, indistinguibile da un vero difetto di permessi e quindi
+/// `Io`, fase `Write`: la diagnosi conservativa, registrata in
 /// errori-e-limiti.md#lapertura-dellartefatto-temporaneo-quali-generi-sono-dellincarico.
-///
-/// # Perche' il caso resta, invece di togliere la directory
-///
-/// Perche' e' la prova dell'ambiguita': se una piattaforma cambiasse risposta,
-/// questo caso diventerebbe rosso e chiederebbe una decisione nuova, invece di
-/// lasciare che il comportamento cambi in silenzio.
+/// Se una piattaforma cambiasse risposta, il caso diventerebbe rosso.
 #[test]
 fn una_directory_esistente_e_ambigua_fra_le_piattaforme() {
     let stanza = tempfile::tempdir().expect("una directory temporanea");

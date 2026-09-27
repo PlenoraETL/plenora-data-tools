@@ -42,19 +42,13 @@ use super::{
 // Validazione parametri per gruppo di operazioni.
 // ---------------------------------------------------------------------------
 
-/// R4.6.3: il requisito di CRS risolvibile e' condizionato alle operazioni
-/// che lo usano. Una colonna con CRS non risolto attraversa libera le op
-/// senza `CrsRequirement` e si ferma QUI — il punto in cui un'op che
-/// dichiara il requisito tocca la colonna, in validazione del piano
-/// (compile-plan, deterministico), mai a meta' stream. Stessa categoria
-/// degli altri requisiti CRS non soddisfatti (`PlenoraError::Crs`); il
-/// messaggio dichiara la causa, distinta per stato:
+/// Gate R4.6.3 del CRS risolto, a compile-plan e mai a meta' stream.
 ///
-/// - `Missing`: nessun CRS dichiarato in alcuna rappresentazione accettata
-///   (R4.4: mai un CRS inventato);
-/// - `DeclaredUnresolved`: la colonna DICHIARA un'incoerenza, non
-///   un'assenza — la risoluzione richiede una decisione esplicita nel
-///   piano (R4.6.3), mai una scelta silenziosa del centro.
+/// Una colonna con CRS non risolto attraversa le op senza `CrsRequirement` e
+/// si ferma qui, quando la tocca un'op che dichiara il requisito. L'errore e'
+/// `PlenoraError::Crs` e il messaggio distingue `Missing` (nessun CRS
+/// dichiarato, R4.4: mai un CRS inventato) da `DeclaredUnresolved` (la
+/// colonna dichiara un'incoerenza che solo il piano puo' risolvere).
 pub(in crate::analyze) fn require_resolved_crs<'a>(
     op: &str,
     geometry: &'a GeometryColumnContract,
@@ -199,29 +193,12 @@ fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
 /// Tipi geometrici dell'output delle trasformazioni 1:1 in place (mappa
 /// per-op, piano-v5.md#contratti-di-input decisione 8).
 ///
-/// Un op che cambia il tipo dichiara i tipi dell'OUTPUT, mai quelli
-/// dell'input: `Some` per le op che cambiano il tipo, `None` per quelle a
-/// tipo preservato (propagazione identity-preserving, corretta com'e').
-/// Insiemi verificati contro i kernel:
-///
-/// - `centroid`, `point_on_surface`, `line_interpolate_point`: sempre
-///   `Point` (il vuoto e' errore o cella null, mai un altro tipo);
-/// - `convex_hull`: sempre `Polygon` (il kernel avvolge il risultato in
-///   `Geometry::Polygon`, anche degenere/vuoto);
-/// - `concave_hull`: sempre `Polygon` (NON tipo-preservato: l'hull delle
-///   coordinate e' costruito come poligono);
-/// - `envelope`: `Point` (degenere su un punto), `LineString` (degenere su
-///   una coordinata) o `Polygon`;
-/// - `line_substring`: `Point` (frazioni coincidenti o linea di lunghezza
-///   zero) o `LineString`;
-/// - `buffer`: sempre `MultiPolygon` (forma unica del kernel);
-/// - `boundary`: `MultiPoint` (estremi di linee), `MultiLineString`
-///   (anelli di poligoni) o `GeometryCollection` (punti, collezioni);
-/// - `make_valid`: `mixed` senza elenco — l'output dipende dalla
-///   riparazione GEOS cella-per-cella (un input valido passa invariato, uno
-///   invalido puo' cambiare tipo anche con `keep_collapsed`): l'insieme non
-///   e' enumerabile a secco e la colonna ammette tipi diversi PER
-///   DICHIARAZIONE (R3.4.1), che e' informazione onesta, non `unresolved`.
+/// `Some` con i tipi dell'OUTPUT, verificati contro i kernel, per le op che
+/// cambiano il tipo; `None` per quelle che lo preservano. Casi non ovvi:
+/// `convex_hull` e `concave_hull` producono sempre `Polygon`, anche
+/// degenere; `make_valid` dichiara `mixed` senza elenco, perche' la
+/// riparazione GEOS cella per cella puo' cambiare tipo e l'insieme non e'
+/// enumerabile a secco (R3.4.1).
 fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
     match op {
         "geo.centroid" | "geo.point_on_surface" | "geo.line_interpolate_point" => {
@@ -265,7 +242,7 @@ fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
 }
 
 /// Inferenza per le operazioni unarie (tutto tranne `from_coords` e le
-/// binarie, gestite altrove). `fields` alloca i `FieldId` delle op v1.3 che
+/// binarie, gestite altrove). `fields` alloca i `FieldId` delle op che
 /// creano una nuova colonna geometria.
 // Dispatcher esaustivo sulle op unarie del catalogo: la lunghezza e' la
 // sequenza lineare dei casi sul contratto, non complessita' logica.

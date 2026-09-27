@@ -95,13 +95,10 @@ pub fn evaluate(
 ///
 /// # Precondizione (contratto del chiamante)
 ///
-/// Entrambe le geometrie devono essere GIA' validate: coordinate finite e
-/// validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
-/// o da un kernel che valida il proprio output. Su input che viola la
-/// precondizione il risultato e' indefinito e nessun errore dedicato e'
-/// garantito: la variante e' per i soli percorsi in cui la validazione e'
-/// dimostrata per costruzione (R0.1: mai un'inferenza sui chiamanti — il
-/// gate resta nella forma pubblica [`evaluate`]).
+/// Entrambe le geometrie devono essere GIA' validate (coordinate finite,
+/// validita' OGC), come da [`crate::geometry_from_wkb`] o da un kernel che
+/// valida il proprio output. Altrimenti il risultato e' indefinito. Solo per
+/// percorsi validati per costruzione (R0.1); il gate resta in [`evaluate`].
 ///
 /// # Errors
 ///
@@ -144,12 +141,10 @@ mod tests {
 
     /// **Sintetico attraverso la conversione reale**: `classifica_lato` e' la
     /// stessa funzione che `validate` chiama davvero, non una copia.
-    /// L'innesco (`EsitoValidazione::NonConclusa` costruito a mano) e'
-    /// sintetico perche' nessun reperto reale interrompe piu' `geo` col
-    /// candidato esatto (diff 1) — vedi
-    /// `tests/distinzione_attraverso_i_chiamanti.rs`. Prova che l'interruzione
-    /// resta un `ValidazioneNonConclusa` col lato di questo modulo, non
-    /// un'altra variante.
+    /// L'innesco e' costruito a mano perche' nessun reperto reale interrompe
+    /// `geo` col candidato esatto (vedi
+    /// `tests/distinzione_attraverso_i_chiamanti.rs`). Prova che l'interruzione
+    /// resta un `ValidazioneNonConclusa` col lato di questo modulo.
     #[test]
     fn classifica_lato_non_appiattisce_l_interruzione() {
         let esito = crate::EsitoValidazione::NonConclusa("forma di prova");

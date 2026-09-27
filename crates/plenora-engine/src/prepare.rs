@@ -1,44 +1,25 @@
 //! Preparer del DAG — `prepare(&ValidatedGraph, &RuntimeContext) ->
 //! ExecutionPlan`.
 //!
-//! Tre vincoli: hot path minimale, configurazioni preparate e tipizzate
-//! prima dell'esecuzione, osservabilita' per nodo anche nei segmenti fusi
-//! (architettura.md#planner-ed-executor).
+//! Qui si prendono le decisioni fisiche **per questa esecuzione**
+//! (architettura.md#planner-ed-executor):
 //!
-//! Il [`ValidatedGraph`] contiene solo decisioni semantiche stabili; qui si
-//! prendono le decisioni fisiche **per questa esecuzione**:
+//! - scomposizione in [`PhysicalSegment`] con [`SegmentMode`] esplicita: le
+//!   catene massimali di nodi `Streaming` formano un segmento fuso
+//!   (`LinearStreaming`, o `GeoFused` se tutti geo, eseguito come
+//!   `LinearStreaming`); ogni nodo blocking e' un segmento a se';
+//! - un [`PreparedKernel`] per nodo, con configurazione tipizzata e
+//!   rivalidata, indici di colonna e CRS risolti: niente JSON ne' ricerche per
+//!   nome nel loop di esecuzione;
+//! - last consumer di ogni arco e punti di materializzazione (fan-out, D9);
+//! - configurazione delle metriche, per nodo logico e per segmento.
 //!
-//! - scomposizione del DAG in [`PhysicalSegment`] con [`SegmentMode`]
-//!   esplicita: catene massimali di nodi `Streaming` fusi in un unico
-//!   segmento (`LinearStreaming`, oppure `GeoFused` se tutti i nodi sono
-//!   geo — nella v1 eseguito come `LinearStreaming`, ma la struttura per
-//!   kernel [`GeoRole`] e' il punto di aggancio per una cache di decode, vincolo
-//!   decode/encode geo minimizzato); ogni nodo `Blocking`/`BinaryBlocking` e' un segmento a se';
-//! - [`PreparedKernel`] per ogni nodo: configurazione deserializzata,
-//!   tipizzata e gia' rivalidata, indici di colonna e CRS risolti — niente
-//!   JSON ne' ricerche per nome nel loop di esecuzione (configurazioni preparate, hot path minimale);
-//! - last consumer di ogni arco (rilascio al last consumer) e punti di materializzazione espliciti
-//!   (`materialize_output`, materializzazione minima: fan-out, decisione D9);
-//! - configurazione delle metriche (osservabilita' per nodo: per nodo logico anche dentro ai
-//!   segmenti fusi, e per segmento).
-//!
-//! Statistiche di runtime (architettura.md#planner-ed-executor): [`RuntimeStatistic::Unknown`] e' il
-//! default e impone scelte conservative. Nella v1 seriale le statistiche
-//! `Known`/`Estimated` non cambiano ancora nessuna decisione fisica (il
-//! parallelismo adattivo non esiste): sono validate, propagate nel piano per
-//! osservabilita' e pronte per chi le usera'.
-//!
-//! Limitazioni v1 (fail-closed in `prepare`, mai a meta' esecuzione): il
-//! dispatch copre le trasformazioni geo 1:1 in place, le misure "add
-//! column", le estensioni geo v1.1-v1.3 (`from_wkt`,
-//! `geometry_accessors`, `collect`, `line_locate_point`, `generate_grid`,
-//! `subdivide`, `snap`, `coverage_validate`, `shared_paths`,
-//! `cluster_dbscan`) e i quattro binari geo di architettura.md#geometrie
-//! (`geo.sjoin`, `geo.nearest`, `geo.within`,
-//! `geo.count_points_in_polygons`); le altre op geo — es. `geo.dissolve`,
-//! `geo.explode`, predicati, distanze, i binari geo con ri-encode (clip,
-//! overlay, booleane pairwise: il ri-encode di D14.1 non e' implementato) — e le op tabellari
-//! N-arie con piu' di due input sono rifiutate con `PlenoraError::Unsupported`.
+//! [`RuntimeStatistic::Unknown`] e' il default e impone scelte conservative;
+//! le statistiche `Known`/`Estimated` sono validate e propagate ma non
+//! cambiano decisioni fisiche. Le op fuori dal dispatch dell'executor (per
+//! esempio i binari geo con ri-encode, D14.1, e le op tabellari N-arie con
+//! piu' di due input) si rifiutano qui con `PlenoraError::Unsupported`, mai a
+//! meta' esecuzione.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -65,9 +46,8 @@ use crate::table_engine;
 
 /// Dimensione di batch obiettivo e tetto duro (architettura.md tetto in byte per batch).
 ///
-/// La v1 non ri-pacchettizza i batch in lettura (conservativo): il target
-/// e' consultivo per le scelte fisiche future, `max_batch_bytes` e' un
-/// limite duro verificato dall'executor su ogni batch che scorre nel piano.
+/// I batch in lettura non si ri-pacchettizzano: il target e' consultivo,
+/// `max_batch_bytes` e' un limite duro verificato dall'executor su ogni batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BatchTarget {
     /// Obiettivo consultivo di byte per batch (tetto in byte per batch).
@@ -106,9 +86,8 @@ pub struct RuntimeContext {
     /// Statistiche per nome di input; gli input assenti valgono
     /// [`InputStatistics::default`] (tutto `Unknown` → conservativo).
     pub statistics: BTreeMap<String, InputStatistics>,
-    /// Grado massimo di parallelismo offerto dall'ambiente. La v1 esegue
-    /// sempre seriale (`SerialFused`, parallelismo solo dove conviene): il valore e' registrato nel piano
-    /// e lo useranno le strategie parallele, quando esisteranno.
+    /// Grado massimo di parallelismo offerto dall'ambiente. L'esecuzione e'
+    /// seriale (`SerialFused`): il valore e' registrato nel piano.
     pub max_parallelism: u32,
     /// Dimensionamento dei batch (tetto in byte per batch).
     pub batch_target: BatchTarget,
@@ -137,45 +116,26 @@ pub struct RuntimeContext {
     /// serve alla disattivazione operativa, all'oracolo differenziale e ai
     /// benchmark A/B.
     pub geo_fusion: bool,
-    /// `Some` solo dentro il worker isolato, che esegue il piano che gli e'
-    /// stato affidato **nel proprio dominio gia' confinato** (`PR-12`).
+    /// `Some` solo dentro il worker isolato, che esegue il piano affidatogli
+    /// **nel proprio dominio gia' confinato**.
     ///
-    /// Un piano che dichiara `max_domain_memory_bytes` chiede il profilo
-    /// isolato, e [`crate::executor::execute`] lo rifiuta finche' non e'
-    /// servito da qui — mai un'esecuzione in-process silenziosa (vedi
-    /// [`crate::isolamento::attivazione`]). Il worker rivalida lo STESSO
-    /// piano canonico (col campo ancora presente) prima di eseguirlo per
-    /// davvero: senza questo segnale rifiuterebbe se stesso, scambiando la
-    /// richiesta che sta gia' servendo per una richiesta non ancora servita.
-    /// Non e' una decisione fisica e non entra in `ExecutionPlan`, come
-    /// `cancellation`/`diagnostics`/`temp_root`: lo consuma direttamente
-    /// `execute`, una volta, all'ingresso.
+    /// Un piano con `max_domain_memory_bytes` chiede il profilo isolato, e
+    /// [`crate::executor::execute`] lo rifiuta finche' non e' servito da qui
+    /// (vedi [`crate::isolamento::attivazione`]); il worker rivalida lo stesso
+    /// piano canonico e senza questo segnale rifiuterebbe se stesso. Lo consuma
+    /// `execute` all'ingresso; non entra in `ExecutionPlan`.
     ///
-    /// Il campo resta `pub` come ogni altro di questa struttura — serve a
-    /// `..RuntimeContext::default()`, che richiede ogni campo visibile al
-    /// chiamante anche quando non lo nomina — ma il suo TIPO e' [`Confinamento`],
-    /// che non ha un costruttore pubblico: un chiamante esterno al crate puo'
-    /// nominare il campo e lasciarlo `None`, ma non puo' costruire un
-    /// `Some(Confinamento(..))` da solo. E' una prova non costruibile
-    /// dall'esterno: un `bool` pubblico lascerebbe la porta aperta a
-    /// chiunque, `pub(crate)` la chiuderebbe rompendo l'aggiornamento
-    /// funzionale altrove. L'unico punto della produzione che lo produce e'
-    /// il worker isolato (`isolamento::worker::esecuzione`); nessun altro
-    /// percorso di produzione lo nomina.
+    /// Il campo e' `pub` per `..RuntimeContext::default()`, ma [`Confinamento`]
+    /// non ha costruttore pubblico: da fuori si puo' solo lasciarlo `None`.
+    /// L'unico produttore e' `isolamento::worker::esecuzione`.
     pub gia_confinato: Option<Confinamento>,
 }
 
 /// La prova che un [`RuntimeContext`] sta eseguendo dentro il worker isolato,
 /// nel proprio dominio gia' confinato — non costruibile fuori dal crate.
 ///
-/// # Perche' un tipo e non un `bool`
-///
-/// Un `bool` pubblico e' scrivibile da chiunque costruisca un
-/// `RuntimeContext`, anche solo con `..RuntimeContext::default()`. Il campo
-/// unico di questa struttura e' privato: chi e' fuori dal crate puo'
-/// nominare `Confinamento` — appare nel tipo di un campo pubblico — ma non
-/// puo' costruirne un valore, perche' non c'e' un costruttore pubblico e non
-/// c'e' un modo di scrivere il campo privato da fuori.
+/// Un `bool` pubblico sarebbe scrivibile da chiunque costruisca un
+/// `RuntimeContext`; il campo privato di questo tipo no.
 #[derive(Debug, Clone, Copy)]
 pub struct Confinamento(());
 
@@ -251,7 +211,7 @@ pub enum SegmentMode {
 
 /// Strategia di parallelismo scelta dal piano (architettura.md parallelismo solo dove conviene).
 ///
-/// La v1 sceglie sempre `SerialFused` per i segmenti streaming e
+/// Oggi e' sempre `SerialFused` per i segmenti streaming e
 /// `BlockingSingleTask` per quelli blocking: il parallelismo si attiva solo
 /// con benefici misurati.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,9 +229,8 @@ pub enum ParallelismStrategy {
 /// Ruolo di un kernel geo dentro a un segmento `GeoFused`: decode/encode geo
 /// minimizzato, con le configurazioni gia' preparate.
 ///
-/// E' il punto di aggancio per una cache di decode: i kernel
-/// `TransformInPlace` possono condividere le geometrie decodificate lungo la
-/// catena; nella v1 ognuno decodifica/encoda via `transform_batches`.
+/// E' il punto di aggancio per una cache di decode; oggi ogni kernel
+/// decodifica ed encoda via `transform_batches`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeoRole {
     /// Trasformazione 1:1 che sostituisce la geometria in place (schema e
@@ -298,7 +257,7 @@ pub enum GeoRole {
     BinaryBlocking,
 }
 
-/// Misura geo v1 con semantica "aggiungi colonna".
+/// Misura geo con semantica "aggiungi colonna".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeasureKind {
     /// `geo.area` → colonna `Float64`.
@@ -366,18 +325,12 @@ impl AccessorKind {
 
 /// Piano fisico di un binario geo (architettura.md#geometrie, D14.1/D14.2).
 ///
-/// Perimetro: `geo.sjoin`, `geo.nearest`, `geo.within`,
-/// `geo.count_points_in_polygons` — nessuna ri-encode, output via `take`
-/// sulle colonne left (sjoin, nearest) o left passthrough + colonna
-/// scalare (within, count).
-///
-/// I parametri sono tipizzati e rivalidati in `prepare` con la stessa
-/// tabella per-op del trasporto pair estratta in forma pura
-/// (`geo_transport::pair::validate_pair_parameters`, una sola fonte per v3
-/// e v4); gli indici delle colonne geometria sono risolti sui due contratti
-/// (hot path minimale: nessuna ricerca per nome a runtime); i tetti assoluti D14.6 sono
-/// risolti qui dai limiti effettivi del piano — nessuna manopola `max_pairs`
-/// da config nodo stile v3.
+/// Nessuna ri-encode: output via `take` sulle colonne left, o left
+/// passthrough piu' una colonna scalare. I parametri sono rivalidati con la
+/// tabella per-op del trasporto pair
+/// (`geo_transport::pair::validate_pair_parameters`, una sola fonte), gli
+/// indici geometria sono risolti sui contratti e i tetti D14.6 vengono dai
+/// limiti effettivi del piano, non da una config di nodo.
 #[derive(Debug)]
 pub struct GeoBinaryPlan {
     /// Operazione binaria (solo le quattro geo del perimetro).
@@ -537,13 +490,9 @@ pub enum PreparedGeoKernel {
 
 /// Configurazione preparata, per famiglia.
 ///
-/// # Perche' due enum e non uno
-///
-/// Un enum solo con quindici varianti costringerebbe l'executor a smistarle
-/// tutte, cioe' a conoscere il tipo di configurazione di OGNI operazione
-/// delle due famiglie. Separarle tiene quella conoscenza dentro la famiglia
-/// che la possiede, e lascia all'orchestrazione le tre cose che la riguardano
-/// davvero — classe di esecuzione, contratto, cancellazione.
+/// Due enum e non uno: ogni famiglia tiene la conoscenza delle proprie
+/// configurazioni, e l'orchestrazione vede solo classe di esecuzione,
+/// contratto e cancellazione.
 #[derive(Debug)]
 pub enum PreparedConfig {
     /// Kernel tabellare.
@@ -697,14 +646,10 @@ pub struct PreparedKernel {
     /// planner e del gate legacy CLI), risolta in `prepare` — nessuno scan
     /// del catalogo ne' lista duplicata a runtime.
     pub emits_row_diagnostics: bool,
-    /// Gruppo di fusione geo del kernel (architettura.md#geometrie): `Some(id)` per i membri
-    /// di un run massimale (>= 2) di kernel `GeoTransform` consecutivi
-    /// fondibili (capability `TransformInPlace` di entrambi i nodi adiacenti,
-    /// stessa colonna geometria, stesso ruolo), piu' UNA misura terminale
-    /// opzionale in coda (capability `TerminalMeasure`, config
-    /// `GeoMeasure`); l'id e' condiviso dai membri e apre il gruppo sul
-    /// primo. `None` se il kernel non e' in un gruppo o se il kill switch
-    /// `RuntimeContext::geo_fusion` e' spento (D12.9).
+    /// Gruppo di fusione geo del kernel (architettura.md#geometrie): `Some(id)`
+    /// per i membri di un gruppo (vedi `annotate_fusion_groups`), con l'id
+    /// condiviso e l'apertura sul primo. `None` fuori da un gruppo o con il
+    /// kill switch `RuntimeContext::geo_fusion` spento (D12.9).
     pub fusion_group: Option<u32>,
 }
 
@@ -717,7 +662,7 @@ pub struct PhysicalSegment {
     pub kernels: Box<[PreparedKernel]>,
     /// Modalita' fisica esplicita.
     pub mode: SegmentMode,
-    /// Strategia di parallelismo scelta (v1: seriale ovunque, parallelismo solo dove conviene).
+    /// Strategia di parallelismo scelta (oggi seriale ovunque).
     pub parallelism: ParallelismStrategy,
     /// Archi di input del segmento (1 per streaming/blocking, 2 per
     /// binary-blocking): nomi di input del piano o id di nodi produttori.
@@ -761,7 +706,7 @@ pub struct ExecutionPlan {
     /// copia di `RuntimeContext::geo_fusion` per questa esecuzione.
     geo_fusion: bool,
     /// Statistiche per input come dichiarate nel `RuntimeContext`
-    /// (osservabilita'; nessuna scelta fisica v1 dipende da esse).
+    /// (osservabilita'; nessuna scelta fisica dipende da esse).
     input_statistics: BTreeMap<String, InputStatistics>,
 }
 
@@ -823,19 +768,14 @@ impl ExecutionPlan {
 
 /// Vista pubblica di sola lettura sulla strategia fisica (dry-run).
 ///
-/// Restituisce l'[`ExecutionPlan`] che `execute` produrrebbe per questo
-/// grafo e contesto, **senza eseguire nulla**
-/// (architettura.md#planner-ed-executor).
-///
-/// L'API operativa resta a due passi (`validate` -> `execute`); `explain`
-/// esiste per l'ispezione (es. `validate` della CLI, che mostra segmenti e
-/// strategia prima di correre) e condivide con `execute` lo stesso esito di
-/// fattibilita': un piano fuori dal dispatch v1 fallisce qui come là.
+/// Restituisce l'[`ExecutionPlan`] che `execute` produrrebbe, **senza eseguire
+/// nulla** (architettura.md#planner-ed-executor), con lo stesso esito di
+/// fattibilita'.
 ///
 /// # Errors
 ///
 /// Come la `prepare` interna: `PlenoraError::Unsupported` per operazioni
-/// fuori dal dispatch v1 (fail-closed a secco, non a meta' esecuzione).
+/// fuori dal dispatch (fail-closed a secco, non a meta' esecuzione).
 pub fn explain(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<ExecutionPlan> {
     prepare(graph, runtime)
 }
@@ -843,17 +783,13 @@ pub fn explain(graph: &ValidatedGraph, runtime: &RuntimeContext) -> Result<Execu
 /// `prepare` (architettura.md, architettura.md#planner-ed-executor): decisioni fisiche per questa
 /// esecuzione a partire dal grafo validato e dal contesto runtime.
 ///
-/// **Interna al crate** (architettura.md#planner-ed-executor): l'API pubblica del motore e' a due passi
-/// (`validate` -> `execute`); la strategia fisica e' un dettaglio di
-/// implementazione di `execute`. L'unica vista pubblica e' [`explain`],
-/// per l'ispezione a secco (dry-run della CLI).
-///
-/// Funzione pura e a secco: nessuna lettura di dati. Produce sempre un piano
-/// valido con statistiche assenti (`Unknown` → conservativo, architettura.md#planner-ed-executor).
+/// Interna al crate: la strategia fisica e' un dettaglio di `execute`, e
+/// l'unica vista pubblica e' [`explain`]. Pura e a secco; con statistiche
+/// assenti produce un piano conservativo.
 ///
 /// # Errors
 ///
-/// `PlenoraError::Unsupported` per operazioni fuori dal dispatch v1
+/// `PlenoraError::Unsupported` per operazioni fuori dal dispatch
 /// dell'executor (fail-closed qui, non a meta' stream);
 /// `PlenoraError::InvalidPlan`/`PlenoraError::Schema` se una configurazione gia'
 /// validata semanticamente non supera la rivalidazione fisica (difesa in
@@ -1084,19 +1020,14 @@ fn build_segments<'a>(
     Ok((segments, node_segment))
 }
 
-/// Annota i gruppi di fusione geo dentro a un segmento (architettura.md#geometrie D12.2):
-/// run massimali di almeno due kernel consecutivi fondibili — capability
-/// `GeoFusion::TransformInPlace` di ENTRAMBI i nodi adiacenti, ruolo
-/// [`GeoRole::TransformInPlace`], config `GeoTransform` e stessa colonna
-/// geometria — piu' UNA misura terminale opzionale in coda (capability
-/// `GeoFusion::TerminalMeasure`, ruolo [`GeoRole::MeasureAddColumn`], config
-/// `GeoMeasure`, stessa colonna). Con la misura in coda basta UN solo
-/// transform (gruppo di due nodi); una misura da sola non forma mai gruppo
-/// (non c'e' nulla da fondere: resta sul percorso nodo-per-nodo). Ogni
-/// gruppo riceve un id progressivo (per segmento) condiviso dai membri;
-/// l'executor riconosce l'apertura sul primo membro. I run di un solo
-/// transform senza misura non sono annotati: il runner fuso non avrebbe
-/// vantaggio e il percorso nodo-per-nodo resta il riferimento.
+/// Annota i gruppi di fusione geo dentro a un segmento (architettura.md#geometrie D12.2).
+///
+/// Un gruppo e' un run massimale di kernel `GeoTransform` consecutivi
+/// fondibili (`GeoFusion::TransformInPlace` su entrambi i nodi adiacenti,
+/// stessa colonna geometria) piu' al massimo una misura terminale
+/// (`GeoFusion::TerminalMeasure`). Servono almeno due nodi, di cui almeno un
+/// transform; gli altri restano sul percorso nodo-per-nodo, che e' il
+/// riferimento. L'id e' progressivo per segmento.
 fn annotate_fusion_groups(kernels: &mut [PreparedKernel]) {
     let fusible_transform = |kernel: &PreparedKernel| {
         kernel.geo_fusion == plenora_core::catalog::GeoFusion::TransformInPlace
@@ -1268,13 +1199,10 @@ fn prepare_kernel(
 /// Limiti del motore tabellare legacy derivati dai limiti effettivi del
 /// piano (i campi senza corrispettivo restano ai default legacy).
 ///
-/// Mapping documentato (semantica errori-e-limiti.md): il `max_rows` legacy e' un limite
-/// **per batch/tabella** del motore a tabella intera; qui lo si ancora a
-/// `max_input_rows` (tetto conservativo sulla tabella materializzata dai
-/// nodi blocking). I limiti per arco (`max_rows_per_edge`) e di espansione
-/// restano applicati dall'executor con la semantica cumulativa corretta —
-/// mapparli sul `max_rows` legacy li farebbe scattare per batch, non per
-/// arco.
+/// Il `max_rows` legacy e' un limite per tabella: lo si ancora a
+/// `max_input_rows` (errori-e-limiti.md). I limiti per arco e di espansione
+/// restano all'executor, con semantica cumulativa: sul `max_rows` legacy
+/// scatterebbero per batch.
 fn limiti_dei_kernel_tabellari(limits: &Limits) -> Result<table_engine::Limits> {
     // Le conversioni verso `usize` sono fail-closed. Con `unwrap_or(usize::MAX)`,
     // su una piattaforma dove `usize` e' piu' stretto di `u64`, un budget che
@@ -1503,26 +1431,14 @@ struct GeoBinaryOutputColumnConfig {
 /// `None` se l'op non e' nel perimetro (clip, overlay, booleane pairwise:
 /// richiedono il ri-encode, e restano `Unsupported`).
 ///
-/// D14.6: il tetto assoluto per-op NON e' una manopola
-/// di nodo ne' un campo di catalogo — e' il tetto righe del piano gia' in
-/// vigore sull'arco di output del nodo (`max_output_rows` se il nodo produce
-/// l'output del piano, `max_rows_per_edge` altrimenti), passato al kernel
-/// come `max_pairs`/`max_results` (rifiuto durante il calcolo, prima della
-/// materializzazione completa delle coppie) e riverificato post-hoc dai
-/// check esistenti (`check_join_expansion` errori-e-limiti.md + conteggi per arco/output).
-/// Una sola fonte: i limiti effettivi del piano. Per i confronti n×m di
-/// `nearest` (lavoro, non espansione) il tetto e' il quadrato del massimo
-/// tra `max_input_rows` e `max_rows_per_edge`: ogni lato e' coperto da uno
-/// dei due, il prodotto per costruzione.
-///
-/// La rivalidazione passa per la tabella per-op del trasporto pair estratta
-/// in forma pura (D14.2): i parametri del nodo (predicato, `max_distance`) e
-/// i tetti risolti sono verificati insieme, con le stesse regole di dominio
-/// del v3 — incluso il tetto del protocollo coppie (`MAX_PAIRS`): un piano
-/// con limiti di righe oltre quel tetto e' rifiutato qui, fail-closed.
-// La lunghezza e' data dalla sequenza lineare dei casi per op (config
-// tipizzata + vista parametri) e dalla risoluzione documentata dei tetti
-// D14.6, non da complessita' logica.
+/// D14.6: il tetto per-op e' il tetto righe del piano sull'arco di output del
+/// nodo (`max_output_rows` o `max_rows_per_edge`), passato al kernel come
+/// `max_pairs`/`max_results` e riverificato dai controlli per arco. Per i
+/// confronti di `nearest` il tetto e' il quadrato del massimo fra
+/// `max_input_rows` e `max_rows_per_edge`. La rivalidazione usa la tabella
+/// per-op del trasporto pair (D14.2), compreso `MAX_PAIRS`.
+// La lunghezza viene dalla sequenza lineare dei casi per op e dalla
+// risoluzione dei tetti D14.6, non da complessita' logica.
 #[allow(clippy::too_many_lines)]
 fn prepare_geo_binary(
     node: &NodeV5,
@@ -1674,7 +1590,7 @@ fn descrittore_tipizzato(
 }
 
 /// Mapping op geo v4 → [`ArrowOperation`] del trasporto (trasformazioni 1:1
-/// in place coperte dal dispatch v1).
+/// in place coperte dal dispatch).
 fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
     match OperationId::from_canonical(id)? {
         OperationId::GeoCentroid => Some(ArrowOperation::Centroid),
@@ -1701,14 +1617,13 @@ fn geo_transform_operation(id: &str) -> Option<ArrowOperation> {
 
 /// Kernel geo: trasformazioni 1:1 in place via `transform_batches`, misure
 /// "add column" via dispatch dedicato, binari geo di architettura.md#geometrie via
-/// [`prepare_geo_binary`]; il resto e' fuori dal dispatch v1.
+/// [`prepare_geo_binary`]; il resto e' fuori dal dispatch.
 ///
 /// `input_contracts` sono i contratti degli archi di input del nodo (1 per
 /// le unarie, 2 per i binari); `limits` e `is_plan_output` servono solo al
 /// braccio binario (tetti assoluti D14.6).
-// La lunghezza e' data dalla sequenza lineare dei bracci di dispatch
-// (trasformazioni, misure, binari geo, estensioni), non da complessita'
-// logica.
+// La lunghezza viene dalla sequenza lineare dei bracci di dispatch, non da
+// complessita' logica.
 #[allow(clippy::too_many_lines)]
 fn prepare_geo(
     node: &NodeV5,

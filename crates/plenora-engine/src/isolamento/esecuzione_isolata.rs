@@ -2,45 +2,23 @@
 //! e verificatore — spawner, protocollo, conduzione a stati e pubblicazione,
 //! per una richiesta reale — non una fixture.
 //!
-//! # Che cosa collega, e a che cosa NON rinuncia
+//! Non reimplementa nessun passo: sequenzia `prepara_dominio`,
+//! `spawner::avvia`, l'handshake di `prova` (una volta per dominio) e
+//! `macchina::conduci_isolato`, la **stessa** macchina per entrambi i dialoghi
+//! (`isolamento.md#2-quater-topologia-chi-osserva-chi`). La verifica avviene
+//! nel dominio del **verificatore** ([`verificatore`](super::verificatore)),
+//! su un handle distinto, dopo che il dominio del worker e' stato distrutto.
+//! Vedi [`esegui_isolato`] per la sequenza e [`verifica_poi_pubblica`] per la
+//! barriera fra verifica e pubblicazione.
 //!
-//! Ogni passo qui e' un pezzo gia' costruito e gia' provato altrove
-//! (`prepara_dominio`, `spawner::avvia`, l'handshake di `prova`,
-//! `macchina::conduci_isolato`, `verifica::verifica_artefatto_handle`,
-//! `pubblicazione::pubblica`): questo modulo non reimplementa niente di quei
-//! passi, li sequenzia con dati reali al posto della fixture di
-//! qualificazione. L'handshake e' quello di `isolamento::prova`, riusato **due
-//! volte** — una per dominio; il resto del dialogo — progresso, esito,
-//! quiescenza del dominio, evidenza OOM — lo guida `isolamento::macchina`,
-//! con gli adattatori reali del dominio al posto dei finti dei casi, e la
-//! **stessa** macchina per entrambi i dialoghi
-//! (`isolamento.md#2-quater-topologia-chi-osserva-chi`).
+//! Vale anche qui la sentinella di [`super::figlio::FiglioVivo`]: un worker
+//! che non si lascia raccogliere abortisce il processo, anche sotto
+//! `plenora-cli run`. Un figlio fuori controllo con privilegi ceduti e' peggio
+//! di un'interruzione dichiarata.
 //!
-//! Il worker non chiama piu' `verifica::verifica_artefatto` ne'
-//! `pubblicazione::pubblica` direttamente: la verifica avviene nel dominio del
-//! **verificatore** ([`verificatore`](super::verificatore)), su un handle
-//! distinto dal suo, dopo che il dominio del worker e' gia' stato distrutto —
-//! non solo svuotato. Vedi [`esegui_isolato`] per la sequenza, e
-//! [`verifica_poi_pubblica`] per il punto in cui la barriera fra verifica e
-//! pubblicazione si decide.
-//!
-//! # Una proprieta' ereditata, non nuova: il figlio non raccolto abortisce il processo
-//!
-//! [`super::figlio::FiglioVivo`] e la sua sentinella `Drop` fermano l'intero
-//! processo (`std::process::abort`) se un worker non si lascia raccogliere
-//! ne' con la cortesia ne' con la terminazione forzata: e' una proprieta'
-//! **preesistente** della gestione del figlio, non introdotta qui, e vale
-//! ora anche per un'esecuzione reale invocata da `plenora-cli run` — non
-//! solo per la qualificazione. La ragione e' la stessa ovunque: un figlio
-//! fuori controllo con privilegi ceduti e' un rischio peggiore di
-//! un'interruzione dichiarata del supervisore.
-//!
-//! # Configurazione fidata, separata dal piano
-//!
-//! Come la politica di memoria dell'host ([`super::attivazione`]), la
-//! radice del cgroup2 delegato e l'identita' a cui il worker cede i
-//! privilegi sono configurazione del **dispiegamento**: variabili
-//! d'ambiente del processo, mai il piano.
+//! Radice del cgroup2 delegato e identita' del worker sono configurazione del
+//! **dispiegamento**, come la politica di memoria dell'host
+//! ([`super::attivazione`]): variabili d'ambiente, mai il piano.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -81,14 +59,9 @@ pub const VARIABILE_IDENTITA_WORKER: &str = "PLENORA_ISOLATION_WORKER_UIDGID";
 
 /// Variabile d'ambiente del tempo massimo concesso all'esecuzione isolata.
 ///
-/// Dall'accordo concluso alla dichiarazione dell'esito — non l'handshake,
-/// che ha il proprio tetto fisso ([`TETTO_DELLA_PAROLA`]) perche' la sua
-/// taglia non dipende dal piano.
-///
-/// Stessa configurazione fidata delle altre due, con lo stesso principio:
-/// del dispiegamento, mai del piano, e senza un default permissivo — un
-/// piano puo' eseguire per un tempo qualunque, e nessun numero scelto qui
-/// varrebbe per ogni piano.
+/// Conta dall'accordo concluso alla dichiarazione dell'esito; l'handshake ha
+/// il proprio tetto fisso ([`TETTO_DELLA_PAROLA`]). Del dispiegamento, mai del
+/// piano, e senza default: nessun numero varrebbe per ogni piano.
 pub const VARIABILE_TEMPO_DI_ESECUZIONE: &str = "PLENORA_ISOLATION_EXECUTION_TIMEOUT_SECONDS";
 
 /// Perche' la configurazione del dispiegamento non basta a costruire un
@@ -241,13 +214,9 @@ fn nome_del_dominio(identificativo: &[u8; 32]) -> String {
 /// validato e dai percorsi REALI degli ingressi — non dalla fixture di
 /// qualificazione.
 ///
-/// # Perche' dal grafo e non da una nuova validazione
-///
-/// Il grafo e' gia' stato validato una volta dal chiamante (`planner::validate`,
-/// nel percorso CLI): rivalidare qui produrrebbe un secondo `plan_hash` e un
-/// secondo `ValidatedGraph`, e se i due divergessero per una qualunque
-/// ragione l'incarico porterebbe un hash diverso da quello su cui il
-/// chiamante ha gia' deciso.
+/// Il grafo arriva gia' validato (`planner::validate`, nel percorso CLI):
+/// rivalidare produrrebbe un secondo `plan_hash`, che potrebbe divergere da
+/// quello su cui il chiamante ha deciso.
 fn incarico_per(
     graph: &ValidatedGraph,
     ingressi: &[(String, PathBuf)],
@@ -320,17 +289,11 @@ fn percorso_in_testo(percorso: &Path) -> Result<String> {
 /// domini in sequenza — quello del worker e quello del verificatore — con la
 /// politica dell'host gia' autorizzata dal chiamante.
 ///
-/// # La sequenza a due domini, e l'invariante che la governa
-///
-/// `isolamento.md#2-quater-topologia-chi-osserva-chi` la vuole cosi': il
-/// dominio del worker viene
-/// **distrutto** — non solo svuotato — prima che quello del verificatore
-/// nasca, perche' l'attribuzione dell'evidenza dipende dal fatto che i due
-/// non coesistano mai (`picco(worker)` e `picco(verificatore)` non si
-/// sommano solo se sono sequenziali per davvero). Questa funzione impone
-/// l'ordine costruendolo: [`esegui_il_worker`] rimuove il **suo** dominio
-/// prima di rendere, qualunque sia l'esito, e solo *dopo* che e' tornato
-/// questa funzione crea il secondo.
+/// Il dominio del worker e' **distrutto**, non solo svuotato, prima che nasca
+/// quello del verificatore (`isolamento.md#2-quater-topologia-chi-osserva-chi`):
+/// i picchi dei due non si sommano solo se sono davvero sequenziali.
+/// [`esegui_il_worker`] rimuove il proprio dominio prima di rendere, qualunque
+/// sia l'esito, e solo dopo si crea il secondo.
 ///
 /// # Errors
 ///
@@ -392,22 +355,14 @@ pub fn esegui_isolato(
 
     // --- il dominio del verificatore, e la pubblicazione --------------------
     //
-    // Nasce solo qui: il dominio del worker sopra e' gia' stato rimosso, non
-    // solo svuotato. `_cartella_lavoro` resta viva fino alla fine di questa
-    // funzione — il suo `Drop` cancella la directory che contiene
-    // `temporaneo` — perche' il coordinatore deve poter aprire l'artefatto
-    // anche dopo che il worker e il suo dominio non ci sono piu'.
+    // Il dominio del worker e' gia' rimosso. `_cartella_lavoro` vive fino alla
+    // fine: il suo `Drop` cancella la directory di `temporaneo`, che il
+    // coordinatore deve ancora aprire.
     //
-    // Controllo sincrono di transizione: fra la distruzione del dominio del
-    // worker sopra e la nascita di quello del verificatore qui sotto non
-    // gira nessun `conduci_isolato` che sorvegli `annullamento_esterno` — la
-    // finestra non ha un confine cooperativo proprio. Senza questo controllo
-    // esplicito una cancellazione richiesta esattamente qui non verrebbe
-    // osservata fino al primo confine cooperativo nel dominio del
-    // verificatore (dentro il dialogo del verificatore), dopo aver gia' fatto
-    // nascere un secondo dominio per un tentativo gia' cancellato. Il
-    // secondo controllo, appena prima dello spawn vero, e' in
-    // `dialoga_con_verificatore`.
+    // Fra i due domini nessun `conduci_isolato` sorveglia
+    // `annullamento_esterno`: questo controllo evita di far nascere un secondo
+    // dominio per un tentativo gia' cancellato. Il secondo controllo, appena
+    // prima dello spawn, e' in `dialoga_con_verificatore`.
     if annullamento_esterno.is_cancelled() {
         // `Cancelled`, non `Internal`: stessa categoria e stesso exit code
         // (130) di ogni altra cancellazione isolata (vedi
@@ -458,14 +413,11 @@ pub fn esegui_isolato(
     risultato
 }
 
-/// Il nome di una sottodirectory di dominio per il **verificatore**,
-/// distinto da quello del worker ([`nome_del_dominio`]) — un identificativo
-/// nuovo, non lo stesso del worker con un suffisso: il worker e il
-/// verificatore non hanno mai lo stesso tentativo aperto contemporaneamente
-/// (il dominio del worker e' gia' distrutto quando nasce quello del
-/// verificatore), ma i due nomi devono comunque poter distinguersi a colpo
-/// d'occhio in un elenco di
-/// directory residue.
+/// Il nome della sottodirectory di dominio del **verificatore**.
+///
+/// Un identificativo nuovo, non quello del worker con un suffisso: i due
+/// domini non coesistono, ma i nomi devono distinguersi a colpo d'occhio fra
+/// le directory residue.
 fn nome_del_dominio_verifica(identificativo: &[u8; 32]) -> String {
     let corto = identificativo
         .iter()
@@ -481,30 +433,21 @@ fn nome_del_dominio_verifica(identificativo: &[u8; 32]) -> String {
 /// Conclude l'handshake col worker, col proprio guardiano e il proprio
 /// tetto fisso ([`TETTO_DELLA_PAROLA`]).
 ///
-/// # Perche' un tetto diverso da quello dell'esecuzione
+/// L'handshake ha taglia fissa, indipendente dal piano; il resto del dialogo
+/// ha il tetto `tempo_di_esecuzione`. Un interruttore condiviso confonderebbe
+/// a chi appartiene la scadenza, per questo la sorgente grezza torna al
+/// chiamante e non resta in un `SorgenteTerminabile`.
 ///
-/// Perche' l'handshake e' una negoziazione di taglia fissa, indipendente da
-/// quanto il piano fa eseguire — la stessa ragione per cui
-/// `isolamento::prova` lo usa per il dialogo intero quando non c'e'
-/// un'esecuzione vera dietro. Il resto del dialogo ha un tetto diverso
-/// (`tempo_di_esecuzione`), e i due non possono condividere lo stesso
-/// interruttore senza confondere a quale dei due la scadenza appartenga —
-/// per questo la sorgente grezza torna al chiamante alla fine, non
-/// incapsulata in un secondo `SorgenteTerminabile`.
+/// `soggetto` nomina chi sta dall'altro capo (`"worker"` o `"verificatore"`),
+/// solo per i messaggi, come in [`macchina::conduci_isolato`]: l'handshake
+/// concorda le stesse quattro cose per entrambi i ruoli.
 ///
 /// # Errors
 ///
 /// L'errore dell'handshake, o un timeout se il proprio guardiano scade
 /// prima, con la sua provenienza ([`FallimentoDellHandshake`]). Il figlio e'
-/// gia' chiuso e i suoi difetti di pulizia gia' riportati quando questa
-/// funzione rende un errore: il chiamante non deve chiudere una seconda volta.
-/// # Il parametro `soggetto`
-///
-/// Come per [`macchina::conduci_isolato`]: nomina chi sta dall'altro capo —
-/// `"worker"` o `"verificatore"` — solo per i messaggi. La sequenza e'
-/// identica per i due: l'handshake non sa e non deve sapere chi ha davanti,
-/// perche' concorda solo su identita' dell'artefatto, resolver, ambiente e
-/// `commit_token` — le stesse quattro cose per entrambi i ruoli.
+/// gia' chiuso e i suoi difetti di pulizia gia' riportati: il chiamante non
+/// deve chiudere una seconda volta.
 #[cfg(target_os = "linux")]
 fn concludi_handshake(
     soggetto: &str,
@@ -627,19 +570,14 @@ impl FallimentoDellHandshake {
     }
 }
 
-/// Il dominio del worker: esecuzione, artefatto scritto sul
-/// temporaneo — e **nient'altro**. Non verifica, non pubblica: quei passi
-/// appartengono al dominio del verificatore, che comincia solo dopo che il
-/// chiamante ha distrutto il dominio che questa funzione ha usato.
+/// Il dominio del worker: esecuzione, artefatto scritto sul temporaneo, e
+/// **nient'altro**.
 ///
-/// # Che cosa rende
-///
-/// La `TempDir` (deve restare viva finche' il dominio del verificatore non ha
-/// finito di leggere `temporaneo` — il suo `Drop` cancella la directory), il
-/// percorso del temporaneo, il contratto d'uscita, il `commit_token` del
-/// tentativo, e il digest e i conteggi **dichiarati** dal worker — gli
-/// stessi quattro valori che oggi alimentano `AtteseVerifica`, solo spostati
-/// al chiamante perche' qui non c'e' piu' nessuna verifica da alimentare.
+/// Non verifica e non pubblica: la verifica e' del dominio del verificatore,
+/// la pubblicazione di `verifica_poi_pubblica`, solo dopo la verifica. Rende
+/// la `TempDir` (viva finche' il verificatore non ha letto `temporaneo`), il
+/// percorso del temporaneo, il contratto d'uscita, il `commit_token` e il
+/// digest e i conteggi **dichiarati** dal worker.
 ///
 /// # Errors
 ///
@@ -789,25 +727,16 @@ fn esegui_il_worker(
 /// Consegna `supervisore_per`, o raccoglie la guardia prima di restituire
 /// l'errore.
 ///
-/// # Perche' esiste
-///
-/// Fra la nascita del figlio (`FiglioVivo::nuovo`) e la consegna della
-/// guardia a `concludi_handshake` c'e' una finestra: `supervisore_per`
-/// costruisce la descrizione locale del coordinatore — identita', resolver,
-/// ambiente — e puo' rifiutare (l'ambiente PROJ non e' inventariabile, per
-/// esempio: un rifiuto legittimo, non un difetto interno). Un `?` nudo in
-/// quella finestra lascerebbe la guardia non raccolta: la sentinella di
-/// `FiglioVivo::Drop` la vedrebbe sfuggita e abortirebbe il processo al
-/// posto di restituire l'errore leggibile che il chiamante deve vedere.
-/// Condivisa dal worker e dal verificatore: e' la stessa finestra in
-/// entrambi, e una correzione sola serve a entrambi i punti simmetrici.
+/// Fra `FiglioVivo::nuovo` e `concludi_handshake`, `supervisore_per` puo'
+/// rifiutare legittimamente (per esempio ambiente PROJ non inventariabile):
+/// un `?` nudo lascerebbe la guardia alla sentinella, che abortirebbe invece
+/// di restituire l'errore. Condivisa da worker e verificatore.
 ///
 /// # Errors
 ///
 /// La causa di `supervisore_per`, sola se la raccolta del figlio non ha
-/// lasciato difetti; altrimenti un errore che porta **entrambi** i fatti —
-/// mai il solo difetto di pulizia al posto della causa vera, sullo stesso
-/// principio di `prova::con_la_pulizia`.
+/// lasciato difetti; altrimenti un errore che porta **entrambi** i fatti, come
+/// `prova::con_la_pulizia`.
 #[cfg(target_os = "linux")]
 fn supervisore_o_raccogli<P: super::figlio::ProcessoFiglio>(
     cosa: &str,
@@ -837,13 +766,11 @@ fn supervisore_o_raccogli<P: super::figlio::ProcessoFiglio>(
 }
 
 /// L'`IncaricoVerifica`: contratto atteso (per fingerprint), digest atteso,
-/// conteggi attesi e budget di memoria governata — gli stessi quattro valori
-/// che oggi alimentano `AtteseVerifica` nel percorso in-process, nella loro
-/// forma sul filo.
+/// conteggi attesi e budget di memoria governata, nella forma sul filo.
 ///
-/// Il `commit_token` non c'e': e' gia' stato trasmesso e accettato nel
-/// `Saluto` (`isolamento.md#43-messaggi`), e il verificatore lo riceve da
-/// `WorkerAccordato::commit_token`, non da questo messaggio.
+/// Il `commit_token` non c'e': viaggia nel `Saluto`
+/// (`isolamento.md#43-messaggi`), e il verificatore lo riceve da
+/// `WorkerAccordato::commit_token`.
 ///
 /// # Errors
 ///
@@ -879,29 +806,16 @@ fn incarico_verifica_per(
 /// descrittore ceduto, conclude l'accordo, manda l'`IncaricoVerifica`, e
 /// conduce il resto con la stessa macchina a stati del worker.
 ///
-/// # Perche' lo stesso `concesso_byte` del worker
+/// Stesso `concesso_byte` del worker: i due domini non coesistono, quindi il
+/// tetto di ciascuno e' quello del totale
+/// (`isolamento.md#2-quater-topologia-chi-osserva-chi`).
 ///
-/// Perche' `isolamento.md#2-quater-topologia-chi-osserva-chi` lo vuole
-/// cosi': i due domini non
-/// coesistono mai, quindi il tetto per **ciascuno** e' il tetto del totale —
-/// non una frazione. Dimezzarlo qui darebbe al verificatore meno di quanto
-/// il budget governato del piano promette di rispettare, per una ragione che
-/// non ha niente a che fare con quanto il verificatore trattiene davvero.
-///
-/// # Il tetto del dialogo, e la decisione che non e' ancora misurata
-///
-/// Riusa `tempo_di_esecuzione` — lo stesso tetto configurato per il dialogo
-/// col worker — invece di un tetto dedicato piu' stretto. E' una scelta
-/// **deliberatamente conservativa**: la verifica fa molto meno lavoro
-/// dell'esecuzione (rilegge in streaming, non esegue un piano), quindi un
-/// tetto dedicato piu' stretto sarebbe probabilmente piu' corretto — ma
-/// nessuna misura esiste ancora per sceglierlo senza indovinare, e
-/// introdurre una quarta variabile di dispiegamento non misurata sarebbe
-/// esattamente l'errore che questo progetto ha scelto di non fare altrove
-/// (`isolamento.md#2-quinquies-il-piano-chiede-la-politica-dellhost-concede`).
-/// Riusare il tetto esistente non aggiunge
-/// stato di configurazione nuovo, e resta un tetto **imposto** anche se piu'
-/// largo del necessario.
+/// Riusa `tempo_di_esecuzione` invece di un tetto dedicato: la verifica fa
+/// meno lavoro e un tetto piu' stretto sarebbe probabilmente piu' corretto,
+/// ma non c'e' una misura per sceglierlo, e una variabile di dispiegamento
+/// non misurata e' cio' che
+/// `isolamento.md#2-quinquies-il-piano-chiede-la-politica-dellhost-concede`
+/// evita. Il tetto resta **imposto**, solo piu' largo.
 ///
 /// # Errors
 ///
@@ -972,16 +886,10 @@ fn dialoga_con_verificatore(
         causa.con_contesto("lo spawner del verificatore non e' partito")
     })?;
     let guardia = FiglioVivo::nuovo(riuscita.figlio);
-    // Terzo controllo, il piu' importante: chiude la finestra che il
-    // secondo controllo sopra non puo' chiudere — il segnale puo' essere
-    // arrivato esattamente fra quel controllo e la `spawn()` che e' appena
-    // avvenuta. Qui il verificatore esiste gia' per davvero: se la
-    // cancellazione e' gia' richiesta, va terminato e raccolto **subito**,
-    // prima dell'handshake — non lasciato vivo ne' zombie — riusando lo
-    // stesso `prova::chiudi` che questa stessa funzione usa poco sotto per
-    // gli altri fallimenti precoci del dialogo (handshake, scrittura
-    // dell'incarico): non serve un meccanismo nuovo, `conduci_isolato` non
-    // e' nemmeno cominciato a sorvegliare a questo punto.
+    // Terzo controllo: la cancellazione puo' arrivare fra il secondo e la
+    // `spawn()`. Il verificatore esiste gia', quindi si termina e si raccoglie
+    // **subito**, prima dell'handshake, con lo stesso `prova::chiudi` degli
+    // altri fallimenti precoci: `conduci_isolato` non sorveglia ancora.
     if annullamento_esterno.is_cancelled() {
         let causa = PlenoraError::Cancelled {
             node: "verificatore".to_owned(),
@@ -1012,15 +920,9 @@ fn dialoga_con_verificatore(
     );
 
     // Stessa identita' del worker: il `commit_token` del tentativo, non uno
-    // nuovo — e' la decisione presa e non si riapre (vedi la richiesta di
-    // questo lavoro): il verificatore accerta lo **stesso** tentativo.
-    //
-    // Stessa finestra del worker sopra, e stessa correzione: la guardia
-    // esiste gia', `supervisore_per` non dipende dal verificatore appena
-    // nato, e un `?` nudo la lascerebbe sfuggire al primo rifiuto legittimo
-    // invece di un errore leggibile.
-    // Come per il worker: ogni fallimento fino alla conduzione passa
-    // dall'evidenza del dominio.
+    // nuovo, perche' il verificatore accerta lo **stesso** tentativo.
+    // `supervisore_o_raccogli` copre la stessa finestra del worker, e ogni
+    // fallimento fino alla conduzione passa dall'evidenza del dominio.
     let (supervisore, guardia) =
         match supervisore_o_raccogli("verificatore isolato", digest_immagine, token, guardia) {
             Ok(coppia) => coppia,
@@ -1052,14 +954,10 @@ fn dialoga_con_verificatore(
 
     // --- il resto del dialogo, condotto dalla **stessa** macchina a stati --
     //
-    // `macchina::conduci_isolato` e' generica su «un dialogo che finisce con
-    // l'esito atteso per questo ruolo — `Corpo::Esito` per il worker,
-    // `Corpo::EsitoVerifica` per il verificatore — tracciato contro
-    // quiescenza, evidenza, timeout e cancellazione del dominio». Il ruolo
-    // (`macchina::Ruolo::Verificatore`) e' cio' che le dice quale dei due
-    // corpi accettare: mai un match che tratti l'uno come se fosse l'altro.
-    // Riusarla qui e' la ragione per cui questo modulo non duplica la
-    // classificazione della §10.
+    // `macchina::conduci_isolato` e' generica sull'esito atteso dal ruolo
+    // (`Corpo::Esito` per il worker, `Corpo::EsitoVerifica` per il
+    // verificatore): `macchina::Ruolo::Verificatore` le dice quale corpo
+    // accettare. Cosi' la classificazione della §10 non si duplica.
     macchina::conduci_isolato(
         macchina::Ruolo::Verificatore,
         lettore,
@@ -1073,58 +971,28 @@ fn dialoga_con_verificatore(
     )
 }
 
-/// Il nucleo **testabile** della sequenza a due domini: apre l'artefatto in
-/// sola lettura (passo 1), conduce il dialogo di verifica attraverso
-/// `esegui_verificatore` (passi 2-4, iniettato — in produzione avvia
-/// davvero il secondo dominio via [`dialoga_con_verificatore`], nei test una
-/// chiusura che simula ogni esito senza cgroup ne' processi), e — solo se il
-/// dialogo conferma digest e conteggi — pubblica (passo 9) con l'handle **del
-/// coordinatore**, aperto qui e non nel dominio del verificatore.
+/// Il nucleo **testabile** della sequenza a due domini.
 ///
-/// # Perche' e' separato da [`esegui_il_verificatore_e_pubblica`]
+/// Apre l'artefatto in sola lettura (passo 1), conduce il dialogo di verifica
+/// con `esegui_verificatore` (passi 2-4: in produzione
+/// [`dialoga_con_verificatore`], nei casi una chiusura che simula ogni esito)
+/// e, solo se il dialogo conferma digest e conteggi, pubblica (passo 9) con
+/// l'handle **del coordinatore**. Separata da
+/// [`esegui_il_verificatore_e_pubblica`] perche' non tocca cgroup ne'
+/// processi: la barriera si prova senza privilegi.
 ///
-/// Perche' e' l'unica parte di questa fase che non tocca ne' un cgroup ne'
-/// un processo: prende un percorso gia' scritto, una funzione che promette
-/// «digest e conteggi confermati o un errore», e decide se pubblicare.
-/// Separarla rende la barriera fra verifica e pubblicazione **provabile
-/// senza privilegi ne' una VM** — un caso deterministico le passa una
-/// chiusura che restituisce ciascuno degli esiti della matrice (successo,
-/// rifiuto, timeout, cancellazione, uscita anomala) e guarda se la
-/// destinazione compare.
+/// L'handle e' quello del passo 1 perche' quello del verificatore muore con
+/// lui. `ipc_boundary::artefatto_gia_accertato` non rifa' il framing, ma
+/// `pubblicazione::copia_accertando` rimisura il file e ricalcola il digest sui
+/// byte **effettivamente copiati** prima del commit point: un artefatto
+/// mutato dopo la verifica resta rilevato li'
+/// (`pubblicazione::tests::un_artefatto_accorciato_dopo_la_verifica_non_si_pubblica`,
+/// `..._alterato_a_pari_lunghezza_non_si_pubblica`).
 ///
-/// # Perche' l'handle del passo 1 e non quello del verificatore
-///
-/// Perche' sono descrittori diversi in processi diversi: quello del
-/// verificatore muore con lui. `ipc_boundary::artefatto_gia_accertato`
-/// avvolge **questo** handle — aperto dal coordinatore prima ancora che il
-/// verificatore nascesse — senza rifare il framing che il verificatore ha
-/// gia' accertato nel proprio dominio: non e' una scorciatoia sulla verifica,
-/// perche' `pubblicazione::copia_accertando` rimisura comunque il file
-/// **ora** e ricalcola il digest sui byte **effettivamente copiati** prima
-/// del commit point. Una divergenza fra cio' che il verificatore ha
-/// controllato e cio' che c'e' ora su questo stesso file — compreso un
-/// artefatto modificato fra la fine della verifica e questa copia — resta
-/// rilevata li', non qui: e' il vincolo di integrita' gia' provato da
-/// `pubblicazione::tests::un_artefatto_accorciato_dopo_la_verifica_non_si_pubblica`
-/// e `..._alterato_a_pari_lunghezza_non_si_pubblica`, che questo percorso
-/// nuovo non bypassa.
-///
-/// # Perche' la risposta si confronta con l'incarico, non solo con se stessa
-///
-/// Perche' la barriera del dialogo (`macchina::conduci_isolato`) controlla
-/// **che** il dialogo sia arrivato a un esito pulito — quiescenza, uscita
-/// pulita, un solo esito del tipo atteso — non **che** quell'esito sia
-/// quello di *questo* tentativo. Un verificatore che rispondesse con un
-/// digest o dei conteggi plausibili ma sbagliati — un bug, una risposta
-/// fuori sequenza, l'esito di un altro tentativo letto per errore —
-/// passerebbe quella barriera senza che nessuno se ne accorga. Qui si
-/// confronta cio' che il dialogo ha confermato con cio' che
-/// `IncaricoVerifica` aveva **chiesto**: un disaccordo e' un rifiuto, prima
-/// ancora di guardare i byte sul disco. E' un controllo indipendente da
-/// quello che segue — la ricoerenza col contenuto reale del file, che
-/// `copia_accertando` fa dopo — e i due non si sostituiscono a vicenda: uno
-/// scopre una risposta incoerente con l'incarico, l'altro un file mutato
-/// dopo la verifica.
+/// La risposta si confronta con cio' che l'`IncaricoVerifica` ha **chiesto**:
+/// la barriera del dialogo accerta un esito pulito, non che sia quello di
+/// *questo* tentativo. I due controlli sono indipendenti: uno scopre una
+/// risposta incoerente con l'incarico, l'altro un file mutato.
 ///
 /// # Errors
 ///
@@ -1362,26 +1230,14 @@ mod tests {
 
     // --- supervisore_o_raccogli: la guardia non sfugge a un rifiuto --------
     //
-    // Il reperto: `supervisore_per` puo' rifiutare legittimamente (l'ambiente
-    // PROJ non e' inventariabile, fra i casi reali) fra la nascita del
-    // figlio e la consegna della guardia a `concludi_handshake`. Un `?` nudo
-    // in quella finestra lascerebbe la guardia non raccolta: `FiglioVivo::Drop`
-    // la troverebbe sfuggita e aborterebbe l'intero processo al posto di
-    // restituire un errore. Qui si forza lo
-    // stesso rifiuto per un'altra via — un `digest_immagine` non canonico,
-    // che `supervisore_per` rifiuta subito, senza toccare l'ambiente — su un
-    // **vero** processo figlio, cosi' la raccolta e' osservabile dall'esterno
-    // (il pid smette di esistere) e non solo dedotta dal tipo restituito.
-    //
-    // Tre proprieta', per ciascuno dei due punti simmetrici (worker e
-    // verificatore, stessa funzione condivisa, sola l'etichetta cambia):
-    //  1. l'errore e' quello leggibile di `supervisore_per` — la funzione
-    //     rende un `Result`, il processo di prova non e' mai abortito;
-    //  2. nessuna pubblicazione puo' essere seguita: il rifiuto avviene
-    //     prima di `concludi_handshake`, quindi prima che un `Incarico`
-    //     sia mai spedito o che un artefatto sia mai nominato;
-    //  3. il figlio e' raccolto per davvero, non lasciato residuo: verificato
-    //     dall'esterno con `kill -0`, non fidandosi del solo tipo di ritorno.
+    // `supervisore_per` puo' rifiutare fra la nascita del figlio e
+    // `concludi_handshake`; un `?` nudo farebbe abortire il processo. Qui il
+    // rifiuto si forza con un `digest_immagine` non canonico, su un **vero**
+    // processo figlio, per ciascuno dei due punti (worker e verificatore):
+    //  1. l'errore e' quello leggibile di `supervisore_per`, e il processo di
+    //     prova non abortisce;
+    //  2. nessuna pubblicazione: il rifiuto precede `concludi_handshake`;
+    //  3. il figlio e' raccolto davvero, verificato dall'esterno con `kill -0`.
     #[cfg(target_os = "linux")]
     fn figlio_di_prova_reale() -> (std::process::Child, u32) {
         let figlio = std::process::Command::new("sleep")
@@ -1418,17 +1274,11 @@ mod tests {
         let causa = esito.expect_err("un digest non canonico deve far rifiutare supervisore_per");
         let testo = causa.to_string();
         // `supervisore_per` valida l'ambiente PRIMA del digest: con
-        // `proj-backend` compilato, `descrizione::di_questa_build` rifiuta
-        // sempre sul resolver PROJ (`protocollo/descrizione.rs::ambiente`) e il
-        // digest iniettato da questa prova non viene mai raggiunto. Senza
-        // quella feature l'ambiente e' inventariabile e la causa e' quella del
-        // digest non canonico. Le due categorie sono diverse per costruzione
-        // (`PlenoraError::InvalidConfiguration` contro
-        // `PlenoraError::IsolationUnavailable`, che avvolge il rifiuto del
-        // digest tramite `non_disponibile`): nessuna delle due varianti porta
-        // una causa strutturata separata dal testo (nessun campo `#[source]`
-        // nell'enum), quindi l'asserzione sul testo esatto e' la verifica di
-        // conservazione della causa disponibile.
+        // `proj-backend` compilato rifiuta sempre sul resolver PROJ
+        // (`protocollo/descrizione.rs::ambiente`, `InvalidConfiguration`),
+        // senza la causa e' il digest non canonico (`IsolationUnavailable`).
+        // Nessuna delle due varianti porta una causa strutturata, quindi si
+        // confronta il testo esatto.
         if cfg!(feature = "proj-backend") {
             assert_eq!(
                 causa.category(),
@@ -1695,16 +1545,12 @@ mod tests {
 
     // --- esegui_isolato, senza privilegi ne' una VM vera ---------------------
     //
-    // Un tempdir qualunque non e' sotto nessun montaggio `cgroup2`: il
-    // preflight (`prepara_dominio` -> `accerta_perimetro` -> `montaggio`)
-    // deve fallire su questo, prima di avvicinarsi allo spawner — la stessa
-    // classe di rifiuto che un dispiegamento mal configurato produrrebbe
-    // davvero, provabile qui senza radici ne' un cgroup2 delegato.
+    // Un tempdir qualunque non sta sotto un montaggio `cgroup2`: il preflight
+    // (`prepara_dominio` -> `accerta_perimetro` -> `montaggio`) fallisce prima
+    // dello spawner, come per un dispiegamento mal configurato.
     //
-    // E' l'unico test di questo modulo che tocca le tre variabili
-    // d'ambiente di configurazione: nessun altro test, in questo processo,
-    // le legge o le scrive, quindi non c'e' una corsa da evitare fra thread
-    // di test paralleli.
+    // E' l'unico caso che tocca le tre variabili d'ambiente di configurazione,
+    // quindi non c'e' corsa fra thread di test paralleli.
     #[cfg(target_os = "linux")]
     #[test]
     fn esegui_isolato_senza_cgroup2_reale_fallisce_ripulisce_e_non_scrive_output() {
@@ -1766,14 +1612,9 @@ mod tests {
 
     // --- verifica_poi_pubblica: la barriera, senza cgroup ne' processi ------
     //
-    // `verifica_poi_pubblica` e' il nucleo testabile della sequenza a due
-    // domini (vedi la sua doc): prende un percorso gia' scritto e una
-    // chiusura che promette «digest e conteggi confermati o un errore», e
-    // decide se pubblicare. Qui la chiusura non parla con nessun processo —
-    // simula ciascun esito della matrice — cosi' la barriera fra verifica e
-    // pubblicazione si prova senza privilegi ne' una VM, esattamente come
-    // `esegui_isolato_senza_cgroup2_reale_...` prova il preflight senza un
-    // cgroup2 vero.
+    // La chiusura non parla con nessun processo: simula ciascun esito della
+    // matrice, e la barriera fra verifica e pubblicazione si prova senza
+    // privilegi.
 
     fn digest_reale(byte: &[u8]) -> DigestArtefatto {
         let mut hasher = Sha256::new();
@@ -1839,14 +1680,13 @@ mod tests {
         );
     }
 
-    /// **Verifica riuscita ma processo uscito male dopo**: dal punto di
-    /// vista di questa barriera e' indistinguibile da qualunque altro
-    /// rifiuto del dialogo — `macchina::conduci_isolato` non concede
-    /// `DaVerificare` finche' quiescenza, EOF e uscita pulita non sono TUTTI
-    /// osservati (`isolamento.md#31-supervisore`), quindi una terminazione
-    /// anomala dopo
-    /// un `Successo` dichiarato produce un `Err` prima ancora che questa
-    /// chiusura possa restituire un digest confermato — mai pubblicato.
+    /// **Verifica riuscita ma processo uscito male dopo**: e' un rifiuto come
+    /// gli altri.
+    ///
+    /// `macchina::conduci_isolato` non concede `DaVerificare` finche'
+    /// quiescenza, EOF e uscita pulita non sono tutti osservati
+    /// (`isolamento.md#31-supervisore`): l'uscita anomala produce un `Err`, e
+    /// niente si pubblica.
     #[test]
     fn un_verificatore_uscito_male_dopo_il_successo_non_pubblica() {
         let (_dir, temporaneo, byte) = artefatto_di_prova();
@@ -1944,27 +1784,20 @@ mod tests {
         );
     }
 
-    /// **Risposta di verifica incoerente**: il verificatore conferma un
-    /// digest che non e' quello vero dell'artefatto — un `Esito` dichiarato
-    /// male, o fuori sequenza rispetto a cio' che il coordinatore ha
-    /// davvero sul disco. `pubblicazione::copia_accertando` lo scopre
-    /// ricalcolando il digest **sui byte effettivamente copiati**, prima del
-    /// commit point: e' lo stesso presidio di
+    /// **Risposta di verifica incoerente**: il digest confermato non e' quello
+    /// vero dell'artefatto.
+    ///
+    /// `pubblicazione::copia_accertando` lo scopre ricalcolando il digest sui
+    /// byte copiati, prima del commit point: lo stesso presidio di
     /// `pubblicazione::tests::un_artefatto_alterato_a_pari_lunghezza_non_si_pubblica`,
-    /// esercitato qui attraverso la sequenza a due domini invece che a mano.
+    /// qui attraverso la sequenza a due domini.
     #[test]
     fn una_risposta_di_verifica_incoerente_non_pubblica() {
         let (_dir, temporaneo, byte) = artefatto_di_prova();
-        // Un digest canonico ma **sbagliato**: non quello dell'artefatto
-        // vero, quindi la ricalcolo di `copia_accertando` non puo' combaciare.
-        //
-        // L'atteso passato a `verifica_poi_pubblica` e' lo **stesso** digest
-        // sbagliato che la chiusura conferma: questo test isola il presidio
-        // di `copia_accertando` sul contenuto reale del file, non il nuovo
-        // confronto con l'incarico (quello e'
-        // `una_risposta_verificatore_diversa_dall_incarico_non_pubblica`,
-        // sotto) — i due controlli sono indipendenti, e ciascuno va provato
-        // senza che l'altro possa mascherarlo.
+        // Un digest canonico ma **sbagliato**. L'atteso passato a
+        // `verifica_poi_pubblica` e' lo stesso digest, cosi' il caso isola il
+        // presidio di `copia_accertando`; il confronto con l'incarico lo prova
+        // `una_risposta_verificatore_diversa_dall_incarico_non_pubblica`.
         let digest_sbagliato = digest_reale(b"tutt'altro contenuto");
         assert_ne!(digest_sbagliato.valore, digest_reale(&byte).valore);
         let atteso = digest_sbagliato.clone();
@@ -1991,15 +1824,12 @@ mod tests {
     }
 
     /// **Risposta positiva ma diversa da cio' che l'incarico aveva
-    /// chiesto**: il verificatore non dichiara errore, e digest/conteggi
-    /// sono *internamente* coerenti con l'artefatto reale — se questo fosse
-    /// l'unico controllo, `copia_accertando` da solo li accetterebbe. Ma non
-    /// sono la risposta a **questo** `IncaricoVerifica`: i conteggi
-    /// confermati sono diversi da quelli richiesti. E' il caso che la
-    /// barriera del dialogo, da sola, non vede — la revisione lo ha
-    /// segnalato esplicitamente — ed e' distinto dal test precedente, che
-    /// verifica invece un digest sbagliato rispetto al contenuto reale del
-    /// file.
+    /// chiesto**.
+    ///
+    /// Digest e conteggi sono coerenti con l'artefatto reale, e
+    /// `copia_accertando` da solo li accetterebbe, ma i conteggi non sono
+    /// quelli richiesti: la barriera del dialogo non lo vede, il confronto con
+    /// l'incarico si'.
     #[test]
     fn una_risposta_verificatore_diversa_dall_incarico_non_pubblica() {
         let (_dir, temporaneo, byte) = artefatto_di_prova();

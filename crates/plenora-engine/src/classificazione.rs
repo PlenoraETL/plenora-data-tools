@@ -8,33 +8,16 @@
 //! matrice degli esiti, la classificazione dell'evidenza di memoria
 //! (§10.0-bis) e la precedenza fra eventi concorrenti (§10.3).
 //!
-//! # Che cosa NON e' qui
+//! La **barriera causale** che decide *quando* i fatti sono completi (coda
+//! unica, quiescenza, snapshot dell'evidenza) appartiene al supervisore; qui
+//! si assume avvenuta, come dice [`FattiDopoLaQuiescenza`]. Niente timestamp
+//! ne' ordine d'arrivo: la §10.3 chiude l'insieme degli eventi **prima** di
+//! classificare.
 //!
-//! La **barriera causale** che decide *quando* i fatti sono completi — coda
-//! unica, quiescenza del dominio, snapshot dell'evidenza — appartiene al
-//! supervisore. Qui si assume che sia gia' avvenuta, e il nome
-//! [`FattiDopoLaQuiescenza`] lo dice: prima della quiescenza un
-//! `esito_worker: None` sarebbe ambiguo fra «morto senza esito» e «sta ancora
-//! lavorando», e classificarlo sarebbe una corsa.
-//!
-//! Niente timestamp e nessun ordine d'arrivo. Non e' una semplificazione: e'
-//! il punto. La §10.3 chiude l'insieme degli eventi **prima** di
-//! classificare, quindi due esecuzioni identiche non possono divergere per
-//! l'ordine in cui i fatti sono arrivati — e un tipo che portasse l'ordine
-//! inviterebbe a usarlo.
-//!
-//! # Niente di questo esce dal crate, e niente `serde`
-//!
-//! Il formato sul filo appartiene al modulo `protocollo`. Rendere questi tipi
-//! pubblici o serializzabili significherebbe deciderlo qui, senza dirlo, e
-//! poi doverlo cambiare rompendo qualcuno.
-//!
-//! A tenerli dentro e' **il modulo**, dichiarato `mod classificazione;` senza
-//! `pub` in [`crate`]. Gli elementi qui sono `pub` e non `pub(crate)` perche'
-//! dentro un modulo privato le due cose hanno lo stesso effetto — nulla
-//! raggiunge l'esterno — e la seconda e' ridondante (`clippy::redundant_pub_crate`).
-//! Rendere pubblico il modulo sarebbe la modifica da non fare distrattamente:
-//! e' quella riga, non le visibilita' qui dentro.
+//! Niente esce dal crate, e niente `serde`: il formato sul filo appartiene al
+//! modulo `protocollo`. A tenere dentro i tipi e' `mod classificazione;` senza
+//! `pub` in [`crate`]; qui gli elementi sono `pub` perche' `pub(crate)` in un
+//! modulo privato e' ridondante (`clippy::redundant_pub_crate`).
 
 use plenora_core::{ErrorCategory, EvidenzaDiLimite, PlenoraError};
 
@@ -68,18 +51,10 @@ pub enum EsitoWorker {
 
 /// La forma del payload di un panico, **senza** il contenuto.
 ///
-/// # Perche' un tipo e non una `&'static str`
-///
-/// Una stringa statica accetta qualunque stringa statica: un commento
-/// potrebbe promettere l'autorita' di
-/// [`plenora_core::panic_policy::forma_payload`], ma il tipo non la
-/// imporrebbe. Basterebbe un letterale — o una stringa costruita altrove —
-/// perche' del contenuto finisca dove il progetto dichiara che non finisce
-/// mai.
-///
-/// Qui il campo e' privato e l'unico costruttore e' [`Self::di`], che chiama
-/// quell'autorita'. Il contenuto non puo' entrare **per costruzione**, non
-/// per disciplina.
+/// Un tipo e non una `&'static str`, che accetterebbe qualunque letterale: il
+/// campo e' privato e l'unico costruttore, [`Self::di`], chiama
+/// [`plenora_core::panic_policy::forma_payload`]. Il contenuto non entra
+/// **per costruzione**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FormaDelPayload(&'static str);
 
@@ -87,10 +62,7 @@ impl FormaDelPayload {
     /// Legge la forma di un payload di panico.
     ///
     /// Delega a [`plenora_core::panic_policy::forma_payload`], che distingue
-    /// i tre casi che `std` puo' produrre senza leggere il contenuto di
-    /// nessuno. Ricreare qui quella classificazione avrebbe prodotto due
-    /// nozioni di «forma» libere di divergere, e una delle due avrebbe finito
-    /// per pubblicare qualcosa.
+    /// le forme senza leggere il contenuto: una sola nozione di «forma».
     pub fn di(payload: &(dyn std::any::Any + Send)) -> Self {
         Self(plenora_core::panic_policy::forma_payload(payload))
     }
@@ -136,11 +108,9 @@ impl Segnale {
 
 /// Che cosa l'evidenza di memoria autorizza a dire.
 ///
-/// Cinque classi, non quattro. La quinta esiste perche' «non attribuito» e'
-/// **a sua volta un'affermazione**: con `Ol` non letto e gli altri tre a zero
-/// non abbiamo osservato pressione, abbiamo un'osservazione incompleta, e
-/// dichiarare pressione non attribuibile affermerebbe qualcosa che nessuno ha
-/// visto.
+/// `Indeterminata` esiste perche' «non attribuito» e' **a sua volta
+/// un'affermazione**: con `Ol` non letto e gli altri a zero l'osservazione e'
+/// incompleta, non una pressione.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClasseEvidenzaMemoria {
     /// Relazioni impossibili fra i segnali: la misura non e' una misura.
@@ -162,10 +132,8 @@ impl ClasseEvidenzaMemoria {
         match self {
             Self::Attribuita => ErrorCategory::ResourceLimit,
             Self::NonAttribuita => ErrorCategory::UnattributedMemoryPressure,
-            // Le tre restanti dicono, in tre modi diversi, che non c'e' una
-            // conclusione sulla memoria da trarre. `Internal` e' quello che
-            // resta, e non e' un ripiego: e' l'unica categoria che non
-            // afferma nulla sul budget del chiamante.
+            // Nessuna conclusione sulla memoria: `Internal` e' l'unica
+            // categoria che non afferma nulla sul budget del chiamante.
             Self::Assente | Self::Indeterminata | Self::Incoerente => ErrorCategory::Internal,
         }
     }
@@ -173,16 +141,10 @@ impl ClasseEvidenzaMemoria {
 
 /// Classifica l'evidenza secondo la §10.0-bis.
 ///
-/// # L'ordine e' normativo
-///
-/// Le condizioni si **sovrappongono** — `Ol` positivo, `Kl = 2`, `Kh = 1`,
-/// `G` positivo soddisfa sia «tutti positivi» sia `Kl > Kh` — quindi l'ordine
-/// non e' un dettaglio d'implementazione: incoerente, attribuita, assente,
-/// non attribuita, indeterminata.
-///
-/// L'incoerenza viene per prima perche' e' l'unica che dice «questa misura
-/// non e' una misura»: applicare le altre a una lettura rotta produrrebbe una
-/// classificazione dall'aria normale.
+/// L'ordine e' normativo, perche' le condizioni si **sovrappongono**:
+/// incoerente, attribuita, assente, non attribuita, indeterminata.
+/// L'incoerenza viene prima perche' le altre, applicate a una lettura rotta,
+/// darebbero una classificazione dall'aria normale.
 pub fn classifica_evidenza(evidenza: &EvidenzaDiLimite) -> ClasseEvidenzaMemoria {
     // 1. L'incoerenza si valuta sui VALORI GREZZI, prima della riduzione a
     //    livelli. Dopo, `Kl = 2` e `Kh = 1` sono entrambi «positivo» e la
@@ -198,15 +160,9 @@ pub fn classifica_evidenza(evidenza: &EvidenzaDiLimite) -> ClasseEvidenzaMemoria
     let kh = Segnale::di(evidenza.uccisi_nella_gerarchia);
     let g = Segnale::di(evidenza.group_kill_locale);
 
-    // Due contraddizioni fra segnali, entrambe constatabili solo se i
-    // segnali coinvolti sono stati OSSERVATI: non aver letto un contatore non
-    // e' un conflitto fra contatori.
-    //
-    // - `G` senza `Ol`: un group kill locale scattato senza che il tetto di
-    //   questo dominio sia mai stato invocato;
-    // - `G` senza `Kh`: un group kill che non ha ucciso nulla, ne' nel
-    //   dominio ne' sotto. Un group kill uccide il gruppo — se il conteggio
-    //   ricorsivo e' zero, una delle due letture e' rotta.
+    // Due contraddizioni, constatabili solo su segnali OSSERVATI: `G` senza
+    // `Ol` (group kill senza che il tetto del dominio sia stato invocato) e
+    // `G` senza `Kh` (group kill che non ha ucciso nulla).
     if g.positivo() && (ol == Segnale::Zero || kh == Segnale::Zero) {
         return ClasseEvidenzaMemoria::Incoerente;
     }
@@ -235,16 +191,10 @@ pub fn classifica_evidenza(evidenza: &EvidenzaDiLimite) -> ClasseEvidenzaMemoria
 
 /// I fatti su cui si classifica, raccolti **dopo la quiescenza del dominio**.
 ///
-/// # Perche' il nome porta il vincolo
-///
 /// Prima della quiescenza `esito_worker: None` sarebbe ambiguo fra «morto
-/// senza esito» e «sta ancora lavorando», e l'evidenza sarebbe una lettura
-/// parziale: il prototipo ha misurato un dominio in cui, al ritorno della
-/// `wait`, l'evidenza vale zero e duecento millisecondi dopo vale uno.
-///
-/// I campi sono privati e si passa da [`Self::dopo_la_quiescenza`], cosi'
-/// chi costruisce questi fatti deve nominare la condizione sotto cui sono
-/// validi invece di riempire una struttura.
+/// senza esito» e «sta ancora lavorando», e l'evidenza una lettura parziale
+/// che puo' ancora cambiare. I campi sono privati: si passa da
+/// [`Self::dopo_la_quiescenza`], che nomina la condizione.
 #[derive(Debug)]
 pub struct FattiDopoLaQuiescenza {
     publish_completato: bool,
@@ -277,14 +227,8 @@ impl FattiDopoLaQuiescenza {
 
 /// L'esito, dopo la precedenza della §10.3.
 ///
-/// # L'evidenza si conserva sempre
-///
-/// Ogni variante che possa coesistere con una lettura la porta con se',
-/// comprese quelle in cui la classe e' assente, indeterminata o incoerente.
-/// `ResourceLimit` non puo' essere una conclusione priva della prova che l'ha
-/// autorizzata — li' l'evidenza e' **obbligatoria per tipo** — e le altre non
-/// devono buttare via cio' che il sistema ha detto solo perche' non ha deciso
-/// l'esito.
+/// Ogni variante che possa coesistere con una lettura la porta con se'; dove
+/// la prova autorizza l'esito e' **obbligatoria per tipo**.
 #[derive(Debug)]
 pub enum EsitoClassificato {
     /// Riga 1: l'output e' visibile. Nessun evento successivo lo rende non
@@ -308,16 +252,10 @@ pub enum EsitoClassificato {
     PressioneNonAttribuita(Box<EvidenzaDiLimite>),
     /// L'evidenza c'e' e **non e' utilizzabile**: incoerente o indeterminata.
     ///
-    /// E' terminale, e viene prima dell'esito dichiarato dal worker.
-    /// Lasciandola ricadere su quell'esito, un worker che dichiara successo
-    /// produrrebbe `DaVerificare`: cioe' «prosegui» mentre una lettura del
-    /// dominio e' rotta o mancante. La
-    /// §10.0-bis dice che **nessuna** delle cinque classi autorizza la
-    /// pubblicazione, e proseguire alla verifica e' il primo passo verso di
-    /// essa.
-    ///
-    /// La prova e' obbligatoria: e' proprio cio' che va guardato per capire
-    /// perche' la lettura non e' utilizzabile.
+    /// E' terminale e viene prima dell'esito del worker: altrimenti un
+    /// successo dichiarato darebbe `DaVerificare` con una lettura rotta, e per
+    /// la §10.0-bis queste classi non autorizzano la pubblicazione. La prova e'
+    /// obbligatoria.
     EvidenzaNonUtilizzabile {
         classe: ClasseEvidenzaMemoria,
         prova: Box<EvidenzaDiLimite>,
@@ -394,28 +332,13 @@ impl EsitoClassificato {
 
 /// Classifica i fatti secondo la precedenza **totale** della §10.3.
 ///
-/// L'ordine, dal fatto piu' esterno al meno verificabile:
+/// L'ordine va dal fatto piu' esterno al meno verificabile: publish
+/// completato, OOM attribuito, timeout, cancellazione, pressione non
+/// attribuita, evidenza non utilizzabile, esito del worker, terminazione
+/// ambigua (mai `ResourceLimit`).
 ///
-/// 1. **publish completato** — e' osservabile fuori dal sistema;
-/// 2. **OOM attribuito** — ha evidenza specifica del dominio;
-/// 3. **timeout** — e' il nostro orologio, misurato;
-/// 4. **cancellazione** — e' la nostra decisione;
-/// 5. **pressione non attribuita** — una prova che non conclude;
-/// 6. **evidenza incoerente o indeterminata** — una lettura che non e'
-///    utilizzabile. Sta qui e non piu' in basso perche' proseguire alla
-///    verifica con una lettura rotta e' il primo passo verso una
-///    pubblicazione che la §10.0-bis vieta;
-/// 7. **esito dichiarato dal worker** — l'affermazione di un processo che
-///    potrebbe essere in difficolta';
-/// 8. **terminazione ambigua** — l'ultimo, e per costruzione mai
-///    `ResourceLimit`.
-///
-/// # Perche' il livello 5 sta li'
-///
-/// Sotto timeout e cancellazione perche' quelli sono fatti nostri che
-/// concludono, e una prova che non conclude non puo' scavalcarli. Sopra
-/// l'esito del worker per la stessa ragione per cui ci sta l'OOM attribuito:
-/// l'errore che un processo riesce a riportare mentre il dominio e' sotto
+/// La pressione non attribuita sta sotto timeout e cancellazione, fatti nostri
+/// che concludono, e sopra l'esito del worker: l'errore riportato sotto
 /// pressione e' quasi sempre la conseguenza, non la causa.
 pub fn classifica(fatti: FattiDopoLaQuiescenza) -> EsitoClassificato {
     let FattiDopoLaQuiescenza {
@@ -426,10 +349,7 @@ pub fn classifica(fatti: FattiDopoLaQuiescenza) -> EsitoClassificato {
         esito_worker,
     } = fatti;
 
-    // Classe e prova viaggiano insieme: cosi' i due rami che richiedono la
-    // prova la ricevono per COSTRUZIONE, e non serve un ramo irraggiungibile
-    // che fabbrichi un'evidenza vuota — la quale finirebbe poi riportata
-    // come «la prova che ha autorizzato l'attribuzione».
+    // Classe e prova viaggiano insieme (vedi `Letta`).
     let letta = Letta::da(evidenza);
 
     if publish_completato {
@@ -460,10 +380,8 @@ pub fn classifica(fatti: FattiDopoLaQuiescenza) -> EsitoClassificato {
     }
     // 6. Evidenza incoerente o indeterminata: terminale.
     //
-    // NON `Assente`, che e' una lettura riuscita in cui non c'e' nulla: li'
-    // non c'e' niente che contraddica l'esito del worker, e sovrascriverlo
-    // significherebbe dire «difetto interno» ogni volta che il dominio e'
-    // stato letto e stava bene.
+    // NON `Assente`: una lettura riuscita e vuota non contraddice l'esito
+    // del worker.
     if let Letta::Con(
         classe @ (ClasseEvidenzaMemoria::Incoerente | ClasseEvidenzaMemoria::Indeterminata),
         prova,
@@ -488,12 +406,9 @@ pub fn classifica(fatti: FattiDopoLaQuiescenza) -> EsitoClassificato {
 
 /// Evidenza e sua classe, insieme o nessuna delle due.
 ///
-/// Esiste per una ragione sola: rendere impossibile un `Attribuita` senza la
-/// prova. Con `Option<ClasseEvidenzaMemoria>` e `Option<Box<...>>` separati il
-/// compilatore non puo' dimostrare che la seconda c'e' quando la prima dice
-/// `Attribuita`, e il ramo si chiuderebbe con un ripiego che fabbrica
-/// un'evidenza vuota — poi riportata come la prova che ha autorizzato
-/// l'attribuzione.
+/// Rende impossibile un `Attribuita` senza la prova: con due `Option` separati
+/// servirebbe un ripiego che fabbrica un'evidenza vuota, poi riportata come
+/// prova.
 #[derive(Debug)]
 enum Letta {
     Nessuna,

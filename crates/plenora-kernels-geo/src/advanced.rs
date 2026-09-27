@@ -116,15 +116,11 @@ pub fn voronoi_cells(
         cell.validazione_protetta().map_err(classifica_cella)?;
     }
 
-    // Pre-filtro per bounding rect: il bounding rect di una cella copre per
-    // costruzione (min/max esatti delle coordinate, bordo incluso) ogni
-    // punto della cella, quindi un punto che interseca la cella interseca
-    // sempre anche il suo bounding rect. Scartare le celle il cui rect non
-    // interseca il punto non puo' cambiare l'esito di `Intersects`, ma
-    // evita il predicato geometrico costoso sulle celle lontane. Il rect
-    // e' calcolato una sola volta per cella, fuori dal loop sui punti.
-    // `bounding_rect` e' `Option` (None per cella vuota, che non puo'
-    // intersecare alcun punto: esito coerente col predicato geometrico).
+    // Pre-filtro per bounding rect: il rect (min/max esatti, bordo incluso)
+    // copre ogni punto della cella, quindi scartare le celle il cui rect non
+    // interseca il punto non cambia l'esito di `Intersects` ed evita il
+    // predicato costoso sulle celle lontane. `None` = cella vuota, che non
+    // interseca alcun punto.
     let cell_bounds: Vec<Option<Rect<f64>>> =
         cells.iter().map(BoundingRect::bounding_rect).collect();
 

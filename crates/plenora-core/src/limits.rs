@@ -33,73 +33,39 @@ impl Default for RowLimits {
     }
 }
 
-/// Budget di memoria governato applicato quando il piano non lo dichiara:
-/// **536 870 912 byte**, cioe' 512 MiB.
+/// Budget di memoria governato applicato quando il piano non lo dichiara.
 ///
-/// # Perche' e' pubblica
+/// E' pubblica perche' `Plan Budget 1.0` (`PLAN-013`) obbliga a pubblicare il
+/// default applicato: senza, chi invia un piano non puo' verificare prima che
+/// il tetto del dominio sia `>=` al budget governato effettivo.
 ///
-/// Il contratto `Plan Budget 1.0` (`PLAN-013`) obbliga il componente a
-/// **pubblicare** il default che applica. Senza, la regola per cui il tetto
-/// del dominio deve essere `>=` al budget governato **effettivo** non e'
-/// verificabile da chi invia un piano prima di inviarlo: il vincolo si
-/// scoprirebbe solo al rifiuto.
-///
-/// # Perche' e' una costante e non un letterale ripetuto
-///
-/// Il default serve in due punti — qui e nei kernel tabellari — e due
-/// letterali indipendenti divergerebbero senza che nulla lo noti. Non e' un
-/// rischio ipotetico che arriverebbe con una versione futura del formato: si
-/// manifesterebbe come due componenti dello stesso processo che applicano
-/// budget diversi allo stesso piano.
-///
-/// Chi aggiunge un terzo sito deve puntare qui.
+/// E' una costante sola perche' serve anche ai kernel tabellari: due letterali
+/// divergerebbero in silenzio, con budget diversi applicati allo stesso piano.
 pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES: u64 = DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE as u64;
 
 /// Lo stesso default per chi lo tiene in `usize`.
 ///
-/// # Perche' il letterale sta QUI e non nella forma `u64`
+/// Il letterale sta qui e non nella forma `u64`: `as usize` troncherebbe su un
+/// target a 32 bit, che applicherebbe un budget diverso da quello pubblicato.
 ///
-/// Partire dal `u64` e convertire con `as usize` troncherebbe su un target a
-/// 32 bit, e ripiegare su [`usize::MAX`] o su qualunque altro valore sarebbe
-/// peggio del troncamento: quel target applicherebbe un budget **diverso** da
-/// quello pubblicato, cioe' proprio la divergenza che questa costante chiude.
-///
-/// # Perche' la conversione e' esatta
-///
-/// **Perche' questo valore e' rappresentabile in entrambe le forme**, non
-/// perche' `usize as u64` sia un allargamento in generale: non lo e', e su un
-/// target con `usize` piu' largo di 64 bit perderebbe. E' una proprieta' del
-/// numero, e vale finche' il numero resta questo — non una garanzia sui tipi
-/// che si possa riusare altrove senza guardare il valore.
-///
-/// Chi lo cambia deve rifare questa verifica, non ereditarla.
-///
-/// # Chi esclude i target che non lo rappresentano
-///
-/// Il compilatore, da solo. Il valore entra in un `usize` a 32 bit —
-/// 536 870 912 sta sotto 4 294 967 295 — quindi restano fuori solo i target
-/// piu' stretti, dove **il letterale stesso** va in overflow in valutazione
-/// costante, che e' un errore di compilazione.
+/// La conversione verso `u64` e' esatta perche' **questo valore** e'
+/// rappresentabile in entrambe le forme, non perche' `usize as u64` lo sia in
+/// generale: chi cambia il valore rifa la verifica. Sui target dove il
+/// letterale non entra in `usize` la valutazione costante va in overflow, e
+/// la compilazione fallisce.
 pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE: usize = 512 * 1024 * 1024;
 
-/// Quota di spill su disco applicata quando il piano non la dichiara:
-/// **8 GiB**.
+/// Quota di spill su disco applicata quando il piano non la dichiara.
 ///
-/// Stessa classe di [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: serve qui e nei
-/// kernel tabellari, che la referenziano, e il percorso legacy la porta fino
-/// agli override del piano. Due letterali indipendenti potrebbero divergere
-/// senza che nulla lo noti; una costante sola lo rende impossibile.
+/// Costante sola per la stessa ragione di [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]:
+/// la usano anche i kernel tabellari e il percorso legacy.
 pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
-/// Partizioni di spill applicate quando il piano non le dichiara: **64**.
+/// Partizioni di spill applicate quando il piano non le dichiara.
 ///
-/// Stessa classe delle due precedenti. Vive in `u32` perche' e' cosi' che il
-/// piano la dichiara; i kernel la tengono in `usize`.
-///
-/// Anche qui la conversione e' esatta **perche' 64 e' rappresentabile in
-/// entrambe le forme**, non perche' `u32 as usize` sia sicuro in generale —
-/// su un target a 16 bit non lo sarebbe. Vale per questo valore, e chi lo
-/// cambia deve riguardarlo.
+/// Vive in `u32` come nel piano; i kernel la tengono in `usize`. La
+/// conversione e' esatta per questo valore, non in generale (su un target a
+/// 16 bit non lo sarebbe): chi lo cambia la riguarda.
 pub const DEFAULT_SPILL_PARTITIONS: u32 = 64;
 
 /// Limiti alla complessità del piano, applicati durante il parsing (errori-e-limiti.md).
@@ -147,14 +113,12 @@ pub struct Limits {
     pub spill_partitions: u32,
     /// Grado massimo di parallelismo (risorsa, non proprietà dei nodi).
     ///
-    /// `0` significa «numero di core logici». Il tetto e' applicato
-    /// dimensionando il pool Rayon del processo
-    /// (`plenora_engine::parallelism::configure`), che e' l'unica leva che
-    /// copre insieme tutti i percorsi paralleli dei kernel; e' quindi una
-    /// configurazione **di processo**, fatta dal binario prima
-    /// dell'esecuzione, non una proprieta' per-piano.
+    /// `0` significa «numero di core logici». Si applica dimensionando il pool
+    /// Rayon del processo (`plenora_engine::parallelism::configure`), l'unica
+    /// leva che copre tutti i percorsi paralleli: e' configurazione **di
+    /// processo**, non per-piano.
     pub max_parallelism: u32,
-    /// Limite per cella WKB (da geo-tools-arrow).
+    /// Limite per cella WKB.
     pub max_wkb_cell_bytes: u64,
     /// Limite payload complessivo in lettura.
     pub max_payload_bytes: u64,
@@ -179,20 +143,12 @@ impl Limits {
 
     /// Validazione dei limiti effettivi, in un punto solo.
     ///
-    /// Un limite fuori dominio va RIFIUTATO, non corretto. Una correzione
-    /// silenziosa al preparer — `spill_partitions.max(2)` — farebbe eseguire
-    /// con 2 un piano che dichiara 1, cioe' con limiti diversi da quelli
-    /// dichiarati e senza che nulla lo segnali. Per un componente
-    /// fail-closed la correzione silenziosa di un input e' il verso
-    /// sbagliato, e sparpagliata sui punti d'uso non coprirebbe i piani che
-    /// quel percorso non attraversano (i piani solo-geo).
-    ///
-    /// Le regole ricalcano quelle del motore tabellare legacy — un limite a
-    /// zero rende il componente incapace di fare alcunche', e va detto subito
-    /// invece che scoperto al primo batch — e vi aggiungono
-    /// `max_expansion_factor`, che dev'essere finito e positivo: un `NaN`
-    /// costruito via API Rust rende falso ogni confronto successivo e apre il
-    /// limite invece di chiuderlo.
+    /// Un limite fuori dominio si rifiuta, non si corregge: una correzione
+    /// silenziosa (per esempio `spill_partitions.max(2)`) eseguirebbe il piano
+    /// con limiti diversi da quelli dichiarati. Un limite a zero rende il
+    /// componente incapace di fare alcunche', e va detto subito.
+    /// `max_expansion_factor` dev'essere finito e positivo: un `NaN` rende
+    /// falso ogni confronto e aprirebbe il limite.
     ///
     /// # Errors
     ///
@@ -243,22 +199,13 @@ impl Limits {
         if self.max_regex_bytes == 0 {
             return nullo("max_regex_bytes");
         }
-        // Limiti di piano: si rifiuta lo zero SOLO dove nessun documento
-        // valido potrebbe rispettarlo.
-        //
-        // La distinzione non e' pedanteria. I tetti sui NODI — nodi, archi,
-        // profondita', fan-out, byte di config — valgono legittimamente zero
-        // per un piano **pass-through** (`nodes: []`, `output` che riferisce
-        // un input), che questo formato documenta e testa come valido: una
-        // policy che ammette solo pass-through e' una policy sensata.
-        // Rifiutarli in blocco la renderebbe impossibile, e farebbe di
-        // peggio: il parse accetterebbe il piano (zero nodi non superano un
-        // tetto di zero) e la validazione dei limiti lo rifiuterebbe dopo —
-        // due verdetti discordi sullo stesso documento.
-        //
-        // Restano incompatibili con qualunque documento: un piano ha dei
-        // byte, ha almeno un input da cui leggere, e ha identificatori non
-        // vuoti.
+        // Limiti di piano: si rifiuta lo zero solo dove nessun documento
+        // valido potrebbe rispettarlo. I tetti sui nodi (nodi, archi,
+        // profondita', fan-out, byte di config) valgono legittimamente zero
+        // per un piano pass-through (`nodes: []`), che il formato ammette; il
+        // parse lo accetterebbe e la validazione lo rifiuterebbe, due verdetti
+        // discordi. Un piano invece ha sempre byte, almeno un input e
+        // identificatori non vuoti.
         if self.plan.max_plan_json_bytes == 0 {
             return nullo("plan.max_plan_json_bytes");
         }
@@ -303,38 +250,24 @@ impl Default for Limits {
 
 /// `true` se `output_rows` supera `base_rows * factor`.
 ///
-/// NESSUN conteggio passa per `f64`. Il fattore e' un double per contratto
-/// (errori-e-limiti.md), quindi lo si decompone in `mantissa * 2^esponente` e il confronto
-/// resta fra interi:
+/// Nessun conteggio passa per `f64`: il fattore (un double per contratto,
+/// errori-e-limiti.md) si decompone in `mantissa * 2^esponente` e il
+/// confronto resta fra interi:
 ///
 /// ```text
 ///   output_rows  >  base_rows * mantissa * 2^esponente
 /// ```
 ///
-/// Calcolare la soglia come `(base_rows as f64) * factor` arrotonda i
-/// CONTEGGI: con `base_rows = output_rows = 2^53+1` e fattore `1` una
-/// cardinalita' valida verrebbe rifiutata, e — nel verso opposto, quello che
-/// conta per un limite — `base = 2^53`, `output = 2^53+1` e fattore `1`
-/// collasserebbero sullo stesso double, lasciando passare un'espansione oltre
-/// la soglia.
+/// Una soglia `(base_rows as f64) * factor` arrotonderebbe i conteggi oltre
+/// `2^53` e lascerebbe passare un'espansione oltre la soglia.
 ///
-/// Un fattore non finito o non positivo e' **fail-closed**: la funzione
-/// risponde `true`, cioe' «limite superato».
+/// Un fattore non finito o non positivo e' **fail-closed** (risponde `true`):
+/// [`Limits::validate`] lo esclude a monte, ma una soglia non ordinabile non
+/// puo' dire che il limite sia rispettato.
 ///
-/// [`Limits::validate`] esclude quei fattori a monte, quindi il caso non
-/// dovrebbe presentarsi; se si presenta, la soglia non e' ordinabile e non si
-/// puo' dire che il limite sia rispettato. Rispondere `false` — «tutto bene»
-/// — su una soglia che non si sa confrontare e' esattamente il modo in cui un
-/// limite smette di limitare: un `NaN` in configurazione avrebbe aperto ogni
-/// espansione invece di chiuderla.
-///
-/// La base e' un `u64` — un conteggio di righe — e su tutto quel dominio la
-/// funzione e' totale: `base * mantissa <= 2^64 * 2^53 = 2^117` non trabocca
-/// mai. La variante interna [`expansion_exceeded_wide`] prende una base a
-/// 128 bit per la somma dei due lati di un'operazione binaria; non e'
-/// pubblica proprio perche' fuori da quel dominio ristretto il prodotto puo'
-/// traboccare, e una funzione pubblica con una precondizione taciuta e' una
-/// trappola.
+/// Su tutta la base `u64` la funzione e' totale (`base * mantissa <= 2^117`).
+/// [`expansion_exceeded_wide`] prende una base a 128 bit e non e' pubblica,
+/// perche' fuori da quel dominio il prodotto puo' traboccare.
 #[must_use]
 pub fn expansion_exceeded(output_rows: u64, base_rows: u64, factor: f64) -> bool {
     expansion_exceeded_wide(output_rows, u128::from(base_rows), factor)

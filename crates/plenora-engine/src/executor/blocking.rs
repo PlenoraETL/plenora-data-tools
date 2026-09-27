@@ -1,17 +1,12 @@
 //! Il percorso bloccante: materializza, esegue, misura.
 //!
-//! Un kernel blocking non puo' emettere finche' non ha visto tutto l'input:
-//! un ordinamento, un'aggregazione, un join. Qui l'input viene materializzato,
-//! il kernel eseguito e l'esito misurato.
+//! Un kernel blocking (ordinamento, aggregazione, join) non emette finche'
+//! non ha visto tutto l'input: qui l'input e' materializzato, il kernel
+//! eseguito e l'esito misurato.
 //!
-//! # Perche' il dispatch e' un `match` grande
-//!
-//! `dispatch_kernel` conosce il tipo di configurazione di ogni singola
-//! operazione, ed e' una duplicazione: all'engine basterebbero la classe di
-//! esecuzione, il contratto e la cancellazione. Toglierla richiede una
-//! facciata per famiglia che oggi non esiste, e finche' non esiste il `match`
-//! resta — ed e' bene che stia in un file proprio, dove si vede quanto e'
-//! grande, invece che sepolto in mezzo ad altre cinquemila righe.
+//! `dispatch_kernel` conosce il tipo di configurazione di ogni operazione,
+//! una duplicazione che resta finche' manca una facciata per famiglia; per
+//! questo il `match` sta in un file proprio.
 
 use crate::geo_transport::pair::preflight_decoded_bytes;
 use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
@@ -65,19 +60,14 @@ use super::{
 };
 
 /// Un kernel su un batch: confine di panic policy dell'executor
-/// (errori-e-limiti.md#panic-policy). Un panic del kernel
-/// e' intercettato qui — il livello piu' interno che conserva l'attribuzione
-/// di nodo — e convertito in errore `Execution` con il solo messaggio del panic
-/// ([`panic_step_error`]); l'errore propaga nello stream, quindi il publish
-/// atomico non e' mai raggiunto dopo un panic.
+/// (errori-e-limiti.md#panic-policy).
 ///
-/// `AssertUnwindSafe` e' legittimo in questo punto: l'esecuzione v1 e'
-/// seriale, batch e config sono proprieta' esclusiva della chiamata (nessuno
-/// stato condiviso mutabile attraversa il confine) e l'errore ferma lo
-/// stream, quindi un eventuale stato interno del kernel lasciato incoerente
-/// dal panic non e' mai riusato. I confini `UnwindSafe` dichiarati per il
-/// DAG parallelo valgono soltanto quando esistera' uno scheduler che li
-/// attraversi (M3).
+/// Il panic e' intercettato qui, il livello piu' interno che conserva
+/// l'attribuzione di nodo, e convertito in errore `Internal` con la sola
+/// forma del payload ([`panic_step_error`]); l'errore ferma lo stream, quindi il
+/// publish non e' raggiunto. `AssertUnwindSafe` regge perche' l'esecuzione e'
+/// seriale, batch e config sono proprieta' esclusiva della chiamata e uno
+/// stato del kernel lasciato incoerente non e' mai riusato.
 pub(super) fn run_kernel(
     kernel: &PreparedKernel,
     batch: RecordBatch,
@@ -95,14 +85,11 @@ pub(super) fn run_kernel(
 
 /// Dispatch per famiglia di un kernel su un batch.
 ///
-/// I kernel tabellari unari ricevono la directory di spill condivisa
-/// dell'esecuzione (architettura.md#memoria, spill generalizzato): `sort`/`distinct`/`aggregate`
-/// sopra la soglia di spill scrivono nel `TempStore` e le loro metriche sono
-/// accumulate in [`ExecState`].
-///
-/// Smista per FAMIGLIA, non per operazione: le quindici forme vivono dentro
-/// la famiglia che le possiede, e all'orchestrazione restano le tre cose che
-/// la riguardano davvero — classe di esecuzione, contratto, cancellazione.
+/// I kernel tabellari unari ricevono la directory di spill dell'esecuzione
+/// (architettura.md#memoria): `sort`/`distinct`/`aggregate` sopra soglia
+/// scrivono nel `TempStore` e le metriche finiscono in [`ExecState`].
+/// All'orchestrazione restano classe di esecuzione, contratto e
+/// cancellazione; le forme delle operazioni vivono nella famiglia.
 pub(super) fn dispatch_kernel(
     kernel: &PreparedKernel,
     batch: RecordBatch,
@@ -150,10 +137,8 @@ impl PreparedTableKernel {
 impl PreparedGeoKernel {
     /// Esegue un batch. Facciata della famiglia geometrica.
     ///
-    /// Il `match` e' esaustivo su QUESTA famiglia: una variante nuova non
-    /// compila finche' qualcuno non decide che cosa farne. E' la garanzia
-    /// che un dispatch unico non puo' dare: un enum di quindici varianti
-    /// condivise fra due famiglie non dice a quale delle due manca un caso.
+    /// Il `match` e' esaustivo su questa famiglia: una variante nuova non
+    /// compila finche' non si decide che cosa farne.
     ///
     /// # Errors
     ///
@@ -350,12 +335,8 @@ pub(super) fn measure_f64_raw(
 }
 
 // ---------------------------------------------------------------------------
-// Orchestrazione dei segmenti bloccanti
-//
-// Materializzazione, reservation, smistamento per famiglia. Sono generiche:
-// vivono qui e non in `geo.rs` perche' la decisione di dove materializzare
-// non e' una questione geometrica: il ramo geo binario e' solo quello con il
-// percorso dedicato.
+// Orchestrazione dei segmenti bloccanti: materializzazione, reservation,
+// smistamento per famiglia. Generica, quindi non sta in `geo.rs`.
 // ---------------------------------------------------------------------------
 
 /// Il kernel di un segmento blocking unario e' spill-capable (architettura.md#memoria,
@@ -365,16 +346,13 @@ pub(super) fn spill_capable_unary(kernel: &PreparedKernel) -> bool {
     kernel.config.unary_spill_capable()
 }
 
-/// Segmento blocking unario: input materializzato (previsto dal piano, materializzazione minima),
-/// concatenato ed eseguito una sola volta.
+/// Segmento blocking unario: input materializzato, concatenato ed eseguito
+/// una sola volta.
 ///
-/// Confine architettura.md#memoria: i lease degli input sono trattenuti durante la
-/// concatenazione (i buffer sorgente sono vivi), poi la materializzazione
-/// concatenata riceve il suo lease — reservation completa prima di iniziare
-/// (categoria "memoria stimabile"), acquisita PRIMA di rilasciare gli input
-/// (mai sotto-conteggio al confine) — e l'output riceve a sua volta un
-/// lease nuovo. Sequenza riassegnata con la regola documentata in
-/// [`blocking_output_sequence`].
+/// Confine architettura.md#memoria: la materializzazione concatenata riceve
+/// il suo lease, con reservation completa, PRIMA che si rilascino quelli
+/// degli input (mai sotto-conteggio al confine); l'output riceve un lease
+/// nuovo. Sequenza da [`blocking_output_sequence`].
 pub(super) fn run_blocking(
     plan: &Rc<ExecutionPlan>,
     segment_index: usize,
@@ -407,15 +385,10 @@ pub(super) fn run_blocking(
     // verificato i byte: il tetto duro in byte per batch si applica anche qui (fail-closed).
     // I byte restituiti alimentano la reservation (hot path minimale: un solo conteggio).
     let full_bytes = check_batch_bytes(state, &full, &kernel.node_id)?;
-    // architettura.md#memoria (spill generalizzato): se il kernel spillera' — stessa soglia
-    // deterministica valutata al dispatch tabellare (`should_spill_unary`
-    // sui byte stimati dell'input), stessi limiti — l'intermedio
-    // concatenato NON consuma quota governor: la memoria di lavoro
-    // dell'operatore e' auto-limitata dallo spill su disco e la
-    // reservation fallirebbe per costruzione (la soglia ha la stessa
-    // grandezza del budget). Altrimenti reservation completa
-    // dell'intermedio prima di rilasciare i lease degli input (architettura.md#memoria:
-    // mai attesa con reservation parziale).
+    // architettura.md#memoria: se il kernel spillera' (stessa soglia di
+    // `should_spill_unary` sui byte stimati dell'input) l'intermedio non
+    // consuma quota, perche' la reservation fallirebbe per costruzione;
+    // altrimenti reservation completa prima di rilasciare gli input.
     let spill_path = kernel
         .config
         .table()
@@ -462,15 +435,11 @@ pub(super) fn run_blocking(
 /// Segmento blocking binario: left e right materializzati, concatenati ed
 /// eseguiti una sola volta via `execute_binary`.
 ///
-/// Confine architettura.md#memoria come [`run_blocking`], con reservation multiple in
-/// ORDINE GLOBALE FISSO — left prima di right — completa prima di iniziare
-/// (mai attesa con reservation parziale; in v1 fail-fast non c'e' attesa,
-/// ma l'ordine e' gia' quello richiesto al runtime parallelo M3 per evitare
-/// deadlock). Sequenza riassegnata con la regola documentata in
-/// [`blocking_output_sequence`] (scansione seriale left-then-right).
-// La lunghezza e' data dal guscio architettura.md#memoria completo (concat, reservation,
-// metriche) piu' lo smistamento D14.2: sequenza lineare, non complessita'
-// logica (stesso criterio di `pair_arrow`).
+/// Confine architettura.md#memoria come [`run_blocking`], con reservation in
+/// ordine globale fisso, left prima di right, completa prima di iniziare.
+/// Sequenza da [`blocking_output_sequence`] (scansione left-then-right).
+// Sequenza lineare lunga (guscio di memoria completo piu' smistamento
+// D14.2), non complessita' logica.
 #[allow(clippy::too_many_lines)]
 pub(super) fn run_binary_blocking(
     plan: &Rc<ExecutionPlan>,
@@ -637,15 +606,11 @@ mod tests {
             .expect("fixture wkb")
     }
 
-    /// **Prova del componente `misura_riga`**: non della raccolta
-    /// (`misura_colonna`/`collect_measure_failures`), non dell'executor —
-    /// una sola cella, un solo kernel sintetico.
+    /// Prova del solo componente `misura_riga`: una cella, un kernel sintetico.
     ///
-    /// WKB ordinario e valido: la decodifica riesce, il kernel sintetico e'
-    /// l'unico a fallire. Restituisce direttamente
-    /// `OperationError::ValidazioneNonConclusa`: nessun panico qui, la
-    /// barriera e la sua conversione sono provate separatamente (prove
-    /// 1/2/3 sul contenimento, tuttora in parte da progettare).
+    /// Il WKB e' valido e il kernel sintetico e' l'unico a fallire con
+    /// `OperationError::ValidazioneNonConclusa`; la barriera di panic e' provata
+    /// altrove.
     #[test]
     fn misura_riga_valida_non_conclusa_diventa_internal_senza_causa() {
         let payload = wkb_valido();
@@ -695,18 +660,13 @@ mod tests {
         );
     }
 
-    /// Prova del componente: se `to_wkt` rende `WktSerialization` (l'anello
-    /// interno senza esterno della migrazione WKT v2, diff 3/4 del
-    /// candidato memory-lab), la classificazione resta quella ordinaria —
-    /// stessa forma della prova sopra con `InvalidInput`. Sintetico di
-    /// proposito: il decoder WKB di questo prodotto rifiuta QUALUNQUE
-    /// anello (compreso l'esterno) sotto le quattro coordinate —
-    /// `geometry_contract.rs::check_ring` — quindi un payload che arrivi da
-    /// WKB non puo' mai portare l'esterno vuoto che innesca il guardiano di
-    /// `wkt`: la prova sotto (`decode_geometry_cell_rifiuta_...`) lo
-    /// verifica. Qui si prova solo che, SE il kernel rendesse comunque
-    /// quell'errore — da un ingresso costruito altrove, non da WKB — la
-    /// classificazione sarebbe corretta.
+    /// Se `to_wkt` rende `WktSerialization` la classificazione resta quella
+    /// ordinaria.
+    ///
+    /// Sintetico di proposito: il decoder WKB rifiuta qualunque anello sotto
+    /// le quattro coordinate (`geometry_contract.rs::check_ring`), quindi da
+    /// WKB l'errore non e' raggiungibile, come verifica
+    /// `decode_geometry_cell_rifiuta_...`.
     #[test]
     fn misura_riga_wkt_serialization_resta_invalidplan_con_causa_kernel() {
         let payload = wkb_valido();
@@ -779,15 +739,9 @@ mod tests {
         assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
     }
 
-    // Prove di `misura_colonna`: la precedenza nella raccolta non fusa va
-    // sorvegliata qui, con gli stessi scenari misti gia' usati per
-    // `measure_cells` sul percorso fuso — un test su `misura_riga` non
-    // attraversa `collect_measure_failures`, e questi si'. La selezione
-    // della riga qui e' per indice esplicito (parametro di `per_row`), non
-    // per identita' di indirizzo: `misura_colonna` non manipola geometrie,
-    // solo indici di riga. La raccolta e' condivisa col percorso fuso
-    // (`collect_measure_failures`): una divergenza tra le due la vedrebbero
-    // entrambe le batterie di test, non una sola.
+    // Prove di `misura_colonna`, con gli scenari misti di `measure_cells` sul
+    // percorso fuso: solo questi attraversano `collect_measure_failures`,
+    // condivisa dai due percorsi. La riga si seleziona per indice.
 
     /// Un fallimento ordinario a riga 0, uno interrotto a riga 1: vince
     /// comunque l'interruzione.
@@ -885,16 +839,12 @@ mod tests {
         assert_eq!(indici, vec![1, 2]);
     }
 
-    /// **Riga valida seguita da errore, sul ciclo di raccolta REALE
-    /// (`misura_colonna`), non su una sola cella.** Riga 0 calcola un WKT
-    /// vero (non un segnaposto: una `assert_eq!` su un valore diverso da
-    /// quello reale del kernel la vedrebbe), riga 1 fallisce con
-    /// `WktSerialization`. Sintetico di proposito, come le prove gemelle su
-    /// `misura_riga`/`measure_cells`: nessun payload WKB porta l'esterno
-    /// vuoto che innesca quell'errore (vedi
-    /// `decode_geometry_cell_rifiuta_...`), tenuta separata dal rifiuto
-    /// strutturale reale — qui si prova la raccolta multi-riga, non la
-    /// raggiungibilita'.
+    /// Riga valida seguita da errore sul ciclo di raccolta reale
+    /// (`misura_colonna`).
+    ///
+    /// Riga 0 calcola un WKT vero, riga 1 fallisce con `WktSerialization`
+    /// (sintetico, vedi `decode_geometry_cell_rifiuta_...`): si prova la
+    /// raccolta multi-riga, non la raggiungibilita'.
     #[test]
     fn misura_colonna_riga_valida_poi_wkt_serialization_non_pubblica_nulla() {
         let valore_riga_0 = operations::to_wkt(&Geometry::Point(Point::new(1.0, 2.0)))

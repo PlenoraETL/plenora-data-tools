@@ -1,60 +1,21 @@
-//! Kernel delle estensioni di catalogo v1.3 (`geo.coverage_validate`,
-//! `geo.shared_paths`).
+//! Kernel di `geo.coverage_validate` e `geo.shared_paths`, con semantica di
+//! riferimento `PostGIS` (`ST_SharedPaths`, validazione di coperture).
 //!
-//! Kernel puri su `geo::Geometry<f64>` piu' gli adapter di colonna
-//! (`coverage_validate_rows`, `shared_paths_rows`) che mappano gli errori su
-//! [`PlenoraError`] preservando i messaggi, come `extensions.rs` (v1.1) e
-//! `extensions2.rs` (v1.2). Semantica di riferimento: `PostGIS`
-//! (`ST_SharedPaths`, validazione di coperture). Caso d'uso: piantine di
-//! edifici — stanze adiacenti, pareti condivise, grafo degli spazi.
+//! Kernel puri su `geo::Geometry<f64>` che rendono [`ExtensionV3Error`], piu'
+//! gli adapter di colonna (`coverage_validate_rows`, `shared_paths_rows`) che
+//! lo mappano su [`PlenoraError`] preservando i messaggi.
 //!
-//! Scelte documentate (v1):
-//!
-//! - Entrambe le op accettano solo geometrie poligonali
-//!   (Polygon/MultiPolygon) valide; gli altri tipi e le geometrie invalide
-//!   sono rifiutati esplicitamente (fail-closed), come in `topology.rs`.
-//! - Le coppie candidate sono selezionate con un R-tree sugli envelope
-//!   (`rstar`, gia' dipendenza del crate); l'intersezione degli AABB include
-//!   il contatto (zero-area), quindi anche i confini che si toccano sono
-//!   candidati. Ogni coppia `(a, b)` con `a < b` e' esaminata una sola volta,
-//!   in ordine lessicografico: l'output e' deterministico.
-//! - `coverage_validate` rileva gli **overlap**: per ogni coppia candidata
-//!   l'intersezione nativa (`BooleanOps`, come `topology.rs`) con area
-//!   `> tolerance` produce una issue `overlap` con area e geometria della
-//!   zona sovrapposta (Polygon se singola componente, `MultiPolygon` altrimenti).
-//!   `tolerance` default 0: solo overlap di area strettamente positiva.
-//!   **I buchi (gap) non sono rilevati in v1**: richiederebbero l'unione
-//!   dell'intera copertura e la differenza con l'envelope/la convessa,
-//!   con una definizione di "buco atteso" che dipende dal dominio (buchi
-//!   interni vs bordi esterni); la scelta e' rinviata a una v2 con config
-//!   dedicata. Il tipo issue e' comunque modellato come enum per estensione.
-//! - `coverage_validate` e' fail-closed su `max_issues` (default
-//!   [`DEFAULT_MAX_ISSUES`]): superato il limite fallisce, non tronca.
-//! - `shared_paths` estrae i tratti di confine condivisi: per ogni coppia
-//!   candidata, l'intersezione collineare dei boundary (anelli esterni E
-//!   interni) segmento per segmento via `line_intersection` (algoritmo
-//!   robusto tipo JTS gia' in `geo`); i contatti puntuali
-//!   (`SinglePoint`) sono esclusi per costruzione. I segmenti collineari con
-//!   lunghezza `<= tolerance` sono scartati (anti-rumore, default 0: tiene
-//!   tutto cio' che ha lunghezza positiva); la coppia produce una riga solo
-//!   se la lunghezza totale condivisa e' `>= min_length` (default 0).
-//!   **Una riga per coppia** (non per singolo segmento): la geometria e' una
-//!   `LineString` se il confine condiviso e' un segmento unico, altrimenti una
-//!   `MultiLineString`; `shared_length` e' la somma delle lunghezze. Per il
-//!   grafo delle adiacenze (un arco per coppia di stanze) questa e' la
-//!   granularita' utile; lo splitting in tratti connessi separati alla
-//!   `PostGIS` e' un possibile raffinamento (punto aperto).
-//! - Le coppie con overlap di area non sono escluse da `shared_paths`: se
-//!   condividono anche porzioni di boundary collineari, i tratti sono
-//!   riportati (come in `PostGIS`).
-//!
-//! Complessita': la conferma per coppia di `shared_paths` e' O(n*m) sui
-//! segmenti dei boundary (con pre-filtro bbox per segmento); accettabile per
-//! piantine (poligoni piccoli), il filtro R-tree limita le coppie. Entrambi
-//! i kernel sono sequenziali e deterministici; la parallelizzazione
-//! (precedente: `spatial_join`) e' un follow-up di prestazioni.
-//!
-//! Errori: le condizioni dei kernel puri usano [`ExtensionV3Error`].
+//! - Entrambe accettano solo Polygon/MultiPolygon validi (fail-closed).
+//! - Le coppie candidate vengono da un R-tree sugli envelope, contatto
+//!   incluso; ogni coppia `(a, b)` con `a < b` e' esaminata una volta, in
+//!   ordine lessicografico: l'output e' deterministico.
+//! - `coverage_validate` rileva solo gli **overlap** di area `> tolerance`;
+//!   **i buchi (gap) non sono rilevati**, perche' "buco atteso" dipende dal
+//!   dominio. Oltre `max_issues` fallisce, non tronca.
+//! - `shared_paths` produce **una riga per coppia** (non per segmento) con i
+//!   tratti collineari condivisi dai boundary, anelli interni compresi; i
+//!   contatti puntuali sono esclusi, le coppie in overlap no (come `PostGIS`).
+//!   La conferma per coppia e' O(n*m) sui segmenti, con pre-filtro bbox.
 
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{
@@ -242,7 +203,7 @@ fn candidate_pairs(
 // geo.coverage_validate
 // ---------------------------------------------------------------------------
 
-/// Tipo di issue di copertura (v1: solo overlap; i gap sono rinviati a v2).
+/// Tipo di issue di copertura (solo overlap: i gap non sono rilevati).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoverageIssueType {
     Overlap,
@@ -721,7 +682,7 @@ mod tests {
     #[test]
     fn coverage_validate_ignores_disjoint_touching_and_gapped_pairs() {
         // Disjointi, solo bordo in comune (area nulla), e buco tra stanze
-        // (gap: non rilevato in v1, scelta documentata nel modulo).
+        // (gap: non rilevato, vedi il doc del modulo).
         let inputs = vec![
             rectangle(0.0, 0.0, 4.0, 4.0),
             rectangle(4.0, 0.0, 8.0, 4.0), // tocca la prima sul bordo x=4

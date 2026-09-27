@@ -458,15 +458,10 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 ///   violate (errore Internal).
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
     super::reject_literal_zero_divisor(&config.expression)?;
-    // Il tipo della colonna prodotta si decide dallo SCHEMA, MAI dai valori
-    // calcolati: e' la stessa funzione che usa l'analizzatore del contratto,
-    // quindi lo schema promesso e quello prodotto non possono divergere.
-    // Risolverlo dai valori significherebbe che un batch vuoto o tutto null
-    // ripiega su `Utf8` anche dove il contratto dice `Boolean` o `Float64`.
+    // Tipo dallo SCHEMA, mai dai valori (vedi il doc sopra).
     let kind = static_output_kind(batch, config)?;
-    // Batch vuoto: non c'e' niente da compilare, quindi si passa dal
-    // generico. Le colonne sono gia' state risolte qui sopra per decidere il
-    // tipo, quindi un batch vuoto non e' piu' un caso permissivo.
+    // Batch vuoto: niente da compilare, si passa dal generico. Le colonne
+    // sono gia' state risolte qui sopra per decidere il tipo.
     if batch.num_rows() > 0 {
         return FastProgram::compile(&config.expression, batch).run(batch, config, kind);
     }
@@ -479,8 +474,7 @@ pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<R
 ///
 /// Gli stessi di [`super::static_type::infer`] e
 /// [`super::static_type::resolve_output`], con la colonna assente riportata
-/// come `Schema` (l'errore che i kernel danno da sempre per una colonna che
-/// non c'e').
+/// come `Schema`, come negli altri kernel.
 pub(super) fn static_output_kind(
     batch: &RecordBatch,
     config: &ExpressionTransform,
@@ -492,7 +486,7 @@ pub(super) fn static_output_kind(
     static_type::resolve_output("table.expression", possibili, config.output_type)
 }
 
-/// Percorso generico originale: interprete ricorsivo sull'AST, usato sui
+/// Percorso generico: interprete ricorsivo sull'AST, usato sui
 /// batch vuoti e come oracolo dei test.
 #[cfg(test)]
 pub fn expression_generic(

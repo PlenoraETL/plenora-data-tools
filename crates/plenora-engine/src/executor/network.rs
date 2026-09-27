@@ -1,19 +1,9 @@
 //! Canale d'arco condiviso: il tee del fan-out.
 //!
-//! Quando piu' nodi consumano lo stesso arco, i batch vanno consegnati a
-//! tutti senza rileggere la sorgente e senza tenerli in memoria piu' del
-//! necessario (decisione D9: materializzazione minima, rilascio al last
-//! consumer).
-//!
-//! # L'errore va conservato, non ripetuto
-//!
-//! Un errore a monte raggiunge N consumatori, ma e' successo **una volta
-//! sola**. `StoredEdgeError` lo conserva nella sua forma completa — categoria,
-//! fase, effetto remoto, disposizione di retry, diagnostica di riga — e ogni
-//! consumatore successivo lo riceve come `Replayed`: sa che sta guardando la
-//! ripetizione di un errore gia' accaduto, non un secondo guasto. Senza quella
-//! distinzione N consumatori produrrebbero N errori indistinguibili, e chi
-//! legge i log conterebbe N guasti dove ce n'e' uno.
+//! Con piu' consumatori i batch sono consegnati a tutti senza rileggere la
+//! sorgente e rilasciati all'ultimo consumatore (D9). Un errore a monte e'
+//! conservato completo in `StoredEdgeError` e i consumatori successivi lo
+//! ricevono come `Replayed`, cosi' un guasto non appare come N guasti.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

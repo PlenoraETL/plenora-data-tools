@@ -274,22 +274,14 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         &rejections,
         "righe non conformi; consultare row_diagnostics",
     )?;
-    // Fast path in due livelli. Semantica identica al percorso generico,
-    // che i test tengono come oracolo indipendente
-    // (`assert_unique_reference`): scansione in ordine di riga, errore sul
-    // primo duplicato con lo stesso messaggio, skip `nulls_equal=false`
-    // identico, output invariato in assenza di duplicati.
+    // Fast path in due livelli, con semantica identica al percorso generico;
+    // l'oracolo nei test e' `assert_unique_reference`.
     //
-    // 1. Chiave su colonna SINGOLA di tipo Int64/UInt64/Float64/Boolean/Utf8:
-    //    la codifica di `key_for_row` e' iniettiva per colonna (prefisso di
-    //    tipo costante, valore con Display shortest-roundtrip: NaN -> "NaN",
-    //    -0.0 -> "-0" distinto da "0"), quindi l'uguaglianza fra chiavi
-    //    coincide con quella fra valori nativi (Float64 con NaN canonizzato,
-    //    cosi' payload NaN diversi restano "lo stesso NaN" come nelle chiavi
-    //    stringa). `HashSet` di valori nativi o `&str` presi in prestito:
-    //    nessuna allocazione per riga. I null sono contati a parte (un solo
-    //    null ammesso con `nulls_equal=true`, come il marcatore 0 del
-    //    generico).
+    // 1. Chiave su colonna singola nativa: la codifica di `key_for_row` e'
+    //    iniettiva (NaN -> "NaN", -0.0 distinto da 0.0), quindi basta
+    //    l'uguaglianza fra valori nativi, con i NaN canonizzati a un solo
+    //    NaN. `HashSet` di valori o `&str` in prestito: nessuna allocazione
+    //    per riga. I null sono contati a parte, come il marcatore 0.
     if let [index] = indices.as_slice() {
         let column = batch.column(*index);
         if let Some(values) = column.as_any().downcast_ref::<Int64Array>() {
@@ -638,7 +630,7 @@ pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
     replace_or_append(batch, &config.output_column, data_type, true, values)
 }
 
-/// Percorso generico originale (concat + take): fallback per i tipi non
+/// Percorso generico (concat + take): fallback per i tipi non
 /// coperti da `cleansing::coalesce_fast` e oracolo dei test di equivalenza.
 pub(crate) fn coalesce_generic(batch: &RecordBatch, indices: &[usize]) -> Result<ArrayRef> {
     let arrays = indices

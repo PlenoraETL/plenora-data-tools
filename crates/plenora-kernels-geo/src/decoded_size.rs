@@ -1,52 +1,27 @@
 //! Preflight della forma decodificata (architettura.md#geometrie D14.4).
 //!
-//! [`decoded_size_xy`] calcola la dimensione in byte della geometria
-//! `Geometry<f64>` che il decoder validante ([`crate::wkb_decoder`])
-//! costruirebbe da una cella WKB, SENZA decodificarla — la reservation del
-//! governor avviene prima dell'allocazione (R7 nell'ordine giusto: riservare
-//! prima di decodificare, rifiutare prima di allocare).
+//! [`decoded_size_xy`] calcola i byte della `Geometry<f64>` che il decoder
+//! validante ([`crate::wkb_decoder`]) costruirebbe da una cella WKB, SENZA
+//! decodificarla: il governor riserva prima di decodificare e rifiuta prima
+//! di allocare (R7).
 //!
-//! La camminata e' speculare a quella del decoder (`decode_geometry`): stesso
-//! ordine di valutazione (byte order, type code, conteggi contro i byte
-//! residui, profondita', componenti), stessi limiti ([`MAX_WKB_BYTES`],
-//! [`MAX_WKB_DEPTH`], [`MAX_WKB_COMPONENTS`]) — ma salta i VALORI delle
-//! coordinate (la finitezza e' un controllo del decoder, irrilevante per la
-//! misura) e accumula byte invece di costruire. I controlli sono un
-//! sottoinsieme di quelli del decoder nello stesso ordine: se il preflight
-//! fallisce su una cella, il decode fallisce sulla stessa cella — il
-//! chiamante usa l'esito solo per dimensionare e delega SEMPRE al decode il
-//! rapporto d'errore canonico (una sola fonte di verita', D14.3).
+//! La camminata e' speculare a `decode_geometry`: stesso ordine di
+//! valutazione e stessi limiti ([`MAX_WKB_BYTES`], [`MAX_WKB_DEPTH`],
+//! [`MAX_WKB_COMPONENTS`]), ma salta i valori delle coordinate e accumula
+//! byte invece di costruire. I controlli sono un sottoinsieme di quelli del
+//! decoder, quindi se il preflight fallisce su una cella fallisce anche il
+//! decode; il rapporto d'errore canonico resta sempre al decode (D14.3).
 //!
 //! # Modello di memoria (dichiarato)
 //!
-//! La formula conta il layout fisico denso della forma decodificata
-//! (`Vec` con capacita' esatta, come li produce il decoder — vedi il test di
-//! conservativita' di questo modulo):
-//!
-//! - ogni valore `Geometry<f64>` occupa [`GEOMETRY_BYTES`] (l'enum intero,
-//!   qualunque sia la variante: e' il costo di uno slot in
-//!   `Vec<Geometry<f64>>` dei figli di una collection);
-//! - lo slot radice `Option<Geometry<f64>>` della colonna decodificata e'
-//!   [`OPTION_SLOT_BYTES`] per riga (contato dal chiamante per cella, null
-//!   incluse);
-//! - heap per sequenza: [`COORD_BYTES`] per coordinata (`Vec<Coord<f64>>` di
-//!   linestring e anelli, punti inline di una `MultiPoint`),
-//!   [`POINT_BYTES`] per figlio di `MultiPoint`, [`LINESTRING_BYTES`] per
-//!   anello interno e per figlio di `MultiLineString`, [`POLYGON_BYTES`] per
-//!   figlio di `MultiPolygon`, [`GEOMETRY_BYTES`] per figlio di collection
-//!   (piu' la ricorsione sul figlio).
-//!
-//! Deviazione dichiarata rispetto allo schizzo iniziale (`16·n_coord` +
-//! `24·n_vec` + `8·n_enum` + 24 per slot): quelle costanti NON coprono il layout
-//! fisico — un valore `Geometry<f64>` costa `size_of::<Geometry<f64>>()`
-//! qualunque sia la variante (8 di enum + 16 di coordinata non pagano i 56
-//! byte dello slot), e la stima non sarebbe conservativa. Le costanti qui
-//! sono i `size_of` reali, verificate per costruzione dal test di
-//! conservativita' su corpus multi-tipo (stima ≥ memoria reale misurata —
-//! stesso ruolo del test errori-e-limiti.md#limiti-dichiarati). Lo slack di allocazione (`Vec` con
-//! capacita' > lunghezza) e' fuori modello per costruzione: il decoder
-//! alloca ogni `Vec` con capacita' esatta (`with_capacity`), invariante
-//! verificata dal test.
+//! La formula conta il layout fisico denso (`Vec` a capacita' esatta, come li
+//! alloca il decoder) con i `size_of` reali: [`GEOMETRY_BYTES`] per ogni
+//! valore `Geometry<f64>` qualunque sia la variante, [`OPTION_SLOT_BYTES`]
+//! per lo slot radice di riga (contato dal chiamante, null incluse), piu'
+//! l'heap per sequenza ([`COORD_BYTES`], [`POINT_BYTES`],
+//! [`LINESTRING_BYTES`], [`POLYGON_BYTES`]). Il test di conservativita' su
+//! corpus multi-tipo verifica stima ≥ memoria reale e l'assenza di slack di
+//! allocazione.
 
 use geo::Geometry;
 

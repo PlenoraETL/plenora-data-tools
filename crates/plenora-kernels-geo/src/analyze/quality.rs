@@ -1,4 +1,4 @@
-//! Qualita' e copertura (v1.3): inferenza per `coverage_validate`,
+//! Qualita' e copertura: inferenza per `coverage_validate`,
 //! `shared_paths` e `cluster_dbscan` e la forma di risultato condivisa
 //! `WholeToMany` delle op di copertura.
 
@@ -25,7 +25,7 @@ use super::{
     SHARED_LENGTH_COLUMN,
 };
 
-/// Costruisce il contratto `WholeToMany` delle op di copertura v1.3: schema
+/// Costruisce il contratto `WholeToMany` delle op di copertura: schema
 /// nuovo con le colonne diagnostiche non-null elencate piu' la geometria WKB
 /// non-null (nuovo `FieldId`, CRS dell'input); proprieta' azzerate.
 ///
@@ -80,7 +80,7 @@ pub(in crate::analyze) fn analyze_coverage_rows(
     )
 }
 
-/// `coverage_validate` (v1.3): `tolerance` finita non negativa, `max_issues`
+/// `coverage_validate`: `tolerance` finita non negativa, `max_issues`
 /// maggiore di zero; una riga per overlap.
 pub(in crate::analyze) fn analyze_coverage_validate(
     op: &str,
@@ -115,7 +115,7 @@ pub(in crate::analyze) fn analyze_coverage_validate(
     )
 }
 
-/// `shared_paths` (v1.3): `tolerance` e `min_length` finite non negative; una
+/// `shared_paths`: `tolerance` e `min_length` finite non negative; una
 /// riga per coppia con confine condiviso.
 pub(in crate::analyze) fn analyze_shared_paths(
     op: &str,
@@ -143,7 +143,7 @@ pub(in crate::analyze) fn analyze_shared_paths(
     )
 }
 
-/// `cluster_dbscan` (v1.3): `eps` finito e maggiore di zero, `min_points >=
+/// `cluster_dbscan`: `eps` finito e maggiore di zero, `min_points >=
 /// 1`; aggiunge la colonna etichetta `UInt64` nullable (noise → null). Output
 /// allineato alle righe: le proprieta' dell'input sono preservate.
 pub(in crate::analyze) fn analyze_cluster_dbscan(

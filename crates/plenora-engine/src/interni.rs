@@ -1,37 +1,14 @@
 //! Facciata **minima** per i due consumatori fuori dal crate.
 //!
-//! # Superficie pubblica instabile e non-production
+//! Esiste solo con la feature `internals`, fuori dal `default` e abilitata
+//! soltanto dal crate `fuzz/` e dalla sonda di calibrazione: superficie
+//! instabile e non-production, che puo' cambiare o sparire senza preavviso.
 //!
-//! Questo modulo esiste solo con la feature `internals`, che non e' nel
-//! `default` e che **nessun consumatore di produzione** abilita: gli unici a
-//! farlo sono il crate `fuzz/` e la sonda di calibrazione, che sono strumenti
-//! di verifica di questo repository. Non ha garanzie di stabilita' e non e'
-//! pensato per essere usato in produzione: puo' cambiare o sparire senza
-//! preavviso.
-//!
-//! # Perche' una facciata e non il modulo
-//!
-//! Esporre `pub mod protocollo` sotto la stessa feature lo renderebbe API
-//! pubblica a tutti gli effetti ogni volta che la feature e' attiva — e il
-//! crate `fuzz/` e' precisamente un consumatore che la attiva. «Privato
-//! tranne che per chi lo usa» non e' privato.
-//!
-//! Qui invece esce un verdetto per confine e nessun DTO del protocollo:
-//!
-//! - [`verifica_giro_del_frame`], che esercita codificatore e decodificatore
-//!   **dall'interno** e restituisce un verdetto, non una struttura;
-//! - [`verifica_lettore_frame_geo`], che esercita il lettore dello stream
-//!   `PLNGEO2` e rende un verdetto, non i frame letti;
-//! - [`verifica_artefatto_ostile`], che esercita il verificatore
-//!   dell'artefatto su byte arbitrari e rende accettato/rifiutato, con
-//!   [`artefatto_di_prova`], [`schema_di_prova`] e [`TOKEN_DI_PROVA`] a
-//!   descrivere le attese che quel verdetto presuppone;
-//! - [`MAX_PIANO_CANONICO_BYTES`], l'unico limite che la sonda di
-//!   calibrazione deve leggere.
-//!
-//! Il vantaggio non e' solo di superficie: scritte qui, le invarianti del
-//! fuzzer stanno **dentro** il crate, quindi le compila e le controlla la
-//! build normale invece della sola toolchain nightly.
+//! Una facciata e non `pub mod protocollo`: sotto feature il modulo sarebbe
+//! API pubblica per chi la attiva. Qui escono verdetti per confine, nessun DTO
+//! del protocollo, e l'unico limite che la sonda deve leggere
+//! ([`MAX_PIANO_CANONICO_BYTES`]). Scritte qui, le invarianti del fuzzer le
+//! compila e le controlla la build normale.
 
 use crate::protocollo::codifica::{codifica, decodifica, BYTE_PREFISSO, MAX_PROTOCOL_FRAME_BYTES};
 
@@ -43,9 +20,8 @@ pub const MAX_PIANO_CANONICO_BYTES: usize = crate::protocollo::limiti::MAX_PIANO
 
 /// Esercita il giro completo su byte arbitrari e rende un verdetto.
 ///
-/// Un ingresso che non e' un frame **non e' un guasto**: la gran parte di
-/// cio' che produce un fuzzer non lo e', e restituisce `Ok(())`. Sono guasti
-/// solo le rotture d'invariante.
+/// Un ingresso che non e' un frame **non e' un guasto** e rende `Ok(())`;
+/// sono guasti solo le rotture d'invariante.
 ///
 /// # Errors
 ///
@@ -57,9 +33,7 @@ pub const MAX_PIANO_CANONICO_BYTES: usize = crate::protocollo::limiti::MAX_PIANO
 /// - una forma canonica che non si rilegge, o che rilegge un'altra struttura;
 /// - una seconda codifica diversa dalla prima.
 ///
-/// Le ultime due sono la difesa contro la deriva silenziosa fra i due versi:
-/// un decoder che accettasse qualcosa che il codificatore non sa riprodurre
-/// romperebbe il giro senza che nessun test nominale se ne accorga.
+/// Le ultime due difendono dalla deriva fra decoder e codificatore.
 pub fn verifica_giro_del_frame(byte: &[u8]) -> Result<(), String> {
     let Ok(frame) = decodifica(byte) else {
         return Ok(());
@@ -133,13 +107,10 @@ impl std::io::Read for SorgenteSorvegliata<'_> {
 /// Esaurisce il lettore dello stream `PLNGEO2` su byte arbitrari e rende un
 /// verdetto.
 ///
-/// `schema_rows` e' un ingresso del chiamante, non dello stream: il lettore
-/// pretende che coincida con il contatore dichiarato nell'header, quindi
-/// arriva come parametro e permette di esercitare sia il ramo che accetta sia
-/// quello che rifiuta.
-///
-/// Un ingresso che non e' uno stream **non e' un guasto**: la gran parte di
-/// cio' che produce un fuzzer non lo e', e restituisce `Ok(())`.
+/// `schema_rows` arriva dal chiamante perche' il lettore pretende che
+/// coincida con il contatore dell'header: cosi' si esercitano entrambi i
+/// rami. Un ingresso che non e' uno stream **non e' un guasto** e rende
+/// `Ok(())`.
 ///
 /// # Errors
 ///
@@ -150,25 +121,10 @@ impl std::io::Read for SorgenteSorvegliata<'_> {
 /// - la somma dei frame resi supera i byte della sorgente;
 /// - il lettore rende ancora un frame dopo aver dichiarato la fine.
 ///
-/// La prima e' la difesa sull'**amplificazione**, ed e' l'unica che la
-/// sorveglia: `length` arriva dallo stream e puo' dichiarare fino a
-/// `MAX_GEOMETRY_BYTES`, ma la fetta passata a `Read::read` resta il buffer
-/// fisso. Un lettore che dimensionasse sul dichiarato la romperebbe **anche
-/// quando poi fallisce**, perche' la richiesta precede l'EOF che la delude:
-/// per questo il controllo si fa alla fine, sul massimo osservato, e vale su
-/// tutti i percorsi compresi quelli d'errore.
-///
-/// Non misura lo heap. Misura la taglia richiesta, che e' cio' che il lettore
-/// decide; quanto l'allocatore poi tocchi non e' una scelta di questo codice.
-///
-/// La seconda e la terza sono un'altra promessa: un frame accettato non
-/// materializza byte che la sorgente non ha consegnato. Proteggono dalla
-/// duplicazione, non dall'allocazione anticipata, e le due cose restano
-/// distinte.
-///
-/// La quarta chiude il ciclo: un lettore che tornasse a rendere frame dopo
-/// `Ok(None)` non avrebbe una fine, e la campagna girerebbe per sempre su un
-/// ingresso da poche decine di byte.
+/// La prima sorveglia l'amplificazione (`length` dichiarato fino a
+/// `MAX_GEOMETRY_BYTES` contro un buffer fisso) e vale anche sui percorsi
+/// d'errore; misura la taglia richiesta, non lo heap. La seconda e la terza
+/// escludono byte materializzati dal nulla; la quarta un ciclo senza fine.
 pub fn verifica_lettore_frame_geo(byte: &[u8], schema_rows: u64) -> Result<(), String> {
     let massima = std::cell::Cell::new(0_usize);
     let esito = esaurisci_lo_stream(
@@ -262,50 +218,21 @@ fn esaurisci_lo_stream(
 /// Esercita il **verificatore dell'artefatto** su byte arbitrari e rende un
 /// verdetto.
 ///
-/// # L'invariante che sorveglia
+/// Rifiutare **non e' un guasto** (`Ok(false)`); l'unico guasto sorvegliato e'
+/// il panico, che `libfuzzer` rileva da se' e che qui non si intercetta. La
+/// regola «errori senza dati» si prova nella suite con sentinelle: un fuzzer
+/// non puo' distinguere un'eco da un ingresso che coincide con un messaggio
+/// statico.
 ///
-/// Byte arbitrari non sono quasi mai un artefatto valido, quindi il caso
-/// ordinario e' un rifiuto: rifiutare **non e' un guasto**, ed e' la ragione
-/// per cui un verificatore che respinge rende `Ok(false)` e non un errore. Il
-/// guasto e' uno solo: che il verificatore **panichi** invece di concludere.
-///
-/// Il panico non si intercetta qui — `libfuzzer` lo rileva da se', e prenderlo
-/// significherebbe nasconderlo — quindi la funzione non ha nulla da
-/// restituire quando tutto va come deve. Il valore del target sta nel
-/// percorso che attraversa: framing, footer, tetto sui dizionari, digest,
-/// schema, contratto, conteggi e token, tutti sotto la barriera anti-panico
-/// del confine.
-///
-/// # Perche' non sorveglia anche l'eco dei dati nell'errore
-///
-/// La regola «errori senza dati» vale, e la prova sta nella suite, dove i
-/// valori delle celle sono sentinelle riconoscibili. Un fuzzer non puo'
-/// esercitarla: cercare una finestra dell'ingresso nel testo dell'errore
-/// segnala anche quando l'ingresso **coincide** con un nostro messaggio
-/// statico, e i nostri messaggi sono testo noto e breve. Un ingresso costruito
-/// per combaciare con essi fa scattare la guardia senza che nulla sia stato
-/// riecheggiato, e una guardia che un avversario sa far scattare a comando non
-/// sorveglia niente.
-///
-/// # Che cosa rende
-///
-/// `Ok(true)` se il verificatore ha **accettato** l'artefatto, `Ok(false)` se
-/// lo ha **rifiutato**. Entrambi sono esiti legittimi da byte arbitrari, e il
-/// target non pretende nessuno dei due; ma l'esito dev'essere **osservabile**,
-/// altrimenti nulla puo' provare che l'harness sia in grado di arrivare in
-/// fondo — e un harness che si ferma sempre al primo passo passerebbe per
-/// funzionante.
+/// `Ok(true)` se l'artefatto e' accettato, `Ok(false)` se rifiutato: l'esito
+/// dev'essere osservabile, o un harness che si ferma sempre al primo passo
+/// passerebbe per funzionante.
 ///
 /// # Errors
 ///
-/// Mai per un ingresso rifiutato, che e' `Ok(false)`. Due famiglie:
-///
-/// - guasti dell'**harness**: workspace non raggiungibile o gia' in uso,
-///   apertura, scrittura, svuotamento, token di prova non canonico;
-/// - esiti del **verificatore** che non sono rifiuti: un errore di categoria
-///   `io`, che dice dell'ambiente e non dell'ingresso, e qualunque categoria
-///   che il contratto di `verifica_artefatto` non dichiari. La regola completa
-///   e' in [`classifica_esito`].
+/// Mai per un ingresso rifiutato. Guasti dell'harness (workspace, apertura,
+/// scrittura, svuotamento, token di prova non canonico) ed esiti del
+/// verificatore che non sono rifiuti, secondo [`classifica_esito`].
 pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
     use plenora_core::contract::DataContract;
 
@@ -371,17 +298,9 @@ pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
 
 /// Traduce l'esito del verificatore nel verdetto del target.
 ///
-/// # Perche' non basta `is_ok()`
-///
-/// Perche' appiattirebbe **ogni** errore su «rifiutato», e un errore di I/O —
-/// il file che non si apre, il disco che non risponde — diventerebbe un
-/// ingresso respinto. Il fuzzer registrerebbe copertura per un percorso che non
-/// ha attraversato, e un ambiente rotto passerebbe per un milione di rifiuti
-/// legittimi. E' la stessa classe di un harness che scarta l'esito: un
-/// verdetto che non distingue non e' un verdetto.
-///
-/// La classificazione segue il contratto di `verifica_artefatto`, che dichiara
-/// quali categorie puo' produrre:
+/// `is_ok()` non basta: un errore di I/O diventerebbe un rifiuto legittimo e
+/// un ambiente rotto passerebbe per copertura. La classificazione segue il
+/// contratto di `verifica_artefatto`:
 ///
 /// | esito | verdetto |
 /// |---|---|
@@ -389,9 +308,6 @@ pub fn verifica_artefatto_ostile(byte: &[u8]) -> Result<bool, String> {
 /// | `data_mapping`, `schema`, e `internal` dei passi 4-5 (sigillo e framing, riconosciuto dal prefisso costante) | `Ok(false)`: rifiutato, ed e' il caso ordinario |
 /// | `io` | `Err`: guasto dell'harness o dell'ambiente, non dell'ingresso |
 /// | qualunque altra | `Err`: il verificatore non la dichiara, quindi o il contratto e' cambiato o e' un difetto. In entrambi i casi tacere sarebbe peggio |
-///
-/// L'ultima riga e' la piu' importante: senza, una categoria nuova verrebbe
-/// letta come rifiuto e nessuno se ne accorgerebbe.
 ///
 /// # Errors
 ///
@@ -427,52 +343,26 @@ thread_local! {
     /// Il workspace di questo thread: creato alla prima iterazione, riusato da
     /// tutte le successive.
     ///
-    /// **Per thread e non globale.** `libfuzzer` puo' girare con piu' worker, e
-    /// un percorso unico condiviso richiederebbe un lock: due iterazioni che
-    /// riscrivono lo stesso file mentre il verificatore lo legge darebbero
-    /// esiti che non appartengono a nessuno dei due ingressi. Una risorsa per
-    /// thread toglie il problema invece di sincronizzarlo.
+    /// Per thread e non globale: con piu' worker di `libfuzzer` un percorso
+    /// condiviso richiederebbe un lock.
     static WORKSPACE: std::cell::RefCell<Option<(tempfile::TempDir, std::path::PathBuf)>> =
         const { std::cell::RefCell::new(None) };
 }
 
 /// Scrive i byte nel workspace del thread e ne rende il percorso.
 ///
-/// # Perche' non una temp dir per iterazione
-///
-/// Perche' una campagna esegue milioni di casi, e creare e distruggere una
-/// directory e un file per ciascuno e' traffico sul filesystem proporzionale
-/// agli ingressi. Un workspace per thread lo rende **costante**, ed e' una
-/// ragione che si regge da sola: meno lavoro per lo stesso risultato.
-///
-/// `scripts/fuzz-campaign.sh` tiene corpus e artifact in `tmpfs`, e i runner
-/// impostano `TMPDIR` di conseguenza. La ragione documentata di quella scelta
-/// e' **prudenziale, non causale**: durante le campagne su un host poi escluso
-/// si sono osservati blocchi con una firma comune nel kernel — un task in
-/// stato `D` dentro una `mmap` — e la causa prima **non e' stata attribuita**.
-/// Ridurre l'I/O riduce una superficie sospetta; non e' dimostrato che sia
-/// quella la causa, e scriverlo come se lo fosse sarebbe una spiegazione presa
-/// per una prova. L'evidenza sta in `archivio-wedge`, e la regola sulle
-/// campagne in release.md.
-///
-/// # Il troncamento non e' un dettaglio
-///
-/// `create(true).truncate(true)` azzera il file **prima** di scrivere: senza,
-/// un ingresso corto lascerebbe in coda i byte di quello lungo che lo precede,
-/// e il verificatore leggerebbe un artefatto che il fuzzer non ha mai
-/// prodotto. Sarebbe un caso non riproducibile per costruzione.
+/// Un workspace per thread rende costante il traffico sul filesystem, invece
+/// di una directory per ciascuno dei milioni di casi. La regola su `tmpfs`
+/// per le campagne sta in release.md. `truncate(true)` azzera il file prima
+/// di scrivere: senza, un ingresso corto conserverebbe la coda del
+/// precedente.
 ///
 /// # Errors
 ///
-/// Ogni guasto e' un `Err` dell'harness, mai un rifiuto ordinario:
-///
-/// - il thread local **non e' raggiungibile**, perche' gia' distrutto;
-/// - il workspace e' **gia' in prestito** su questo thread;
-/// - creazione della directory, apertura, scrittura, svuotamento.
-///
-/// I primi due nascono dalle forme fallibili di `try_with` e `try_borrow_mut`:
-/// con `with` e `borrow_mut` sarebbero panici, cioe' guasti dell'harness
-/// indistinguibili da un crash del target.
+/// Ogni guasto e' un `Err` dell'harness, mai un rifiuto ordinario: thread
+/// local gia' distrutto, workspace gia' in prestito (dalle forme fallibili
+/// `try_with` e `try_borrow_mut`), creazione della directory, apertura,
+/// scrittura, svuotamento.
 pub(crate) fn scrivi_nel_workspace(byte: &[u8]) -> Result<std::path::PathBuf, String> {
     use std::io::Write as _;
 
@@ -529,10 +419,8 @@ pub fn schema_di_prova() -> plenora_core::arrow::schema::SchemaRef {
 /// Un artefatto **coerente con le attese** di [`verifica_artefatto_ostile`]:
 /// lo schema di prova, zero batch, zero righe e il token di prova.
 ///
-/// Esiste perche' la garanzia «l'harness sa arrivare in fondo» sia
-/// dimostrabile. Il corpus del fuzzer non e' versionato, quindi una campagna da
-/// zero non produce da sola un Arrow IPC valido con queste attese: questo e' il
-/// seed, nella sola forma che il repository conserva.
+/// E' il seed che il repository conserva, dato che il corpus del fuzzer non
+/// e' versionato.
 ///
 /// # Panics
 ///

@@ -90,33 +90,20 @@ pub struct ExecutionMetrics {
     /// identico, cambia solo la scelta fisica.
     pub geo_fusion_fallbacks: u64,
     /// Gruppi geo che sono **entrati** nel runner fuso
-    /// (architettura.md#geometrie D12.10): uno per ogni batch che raggiunge
-    /// `one_to_one_batch_fused`, dopo preflight, preparazione e reservation.
+    /// (architettura.md#geometrie D12.10).
     ///
-    /// **Avviati, non riusciti.** Il conteggio sale anche se il gruppo
-    /// termina con errore o con un panic convertito, ed e' deliberato: senza,
-    /// gli oracoli degli errori non potrebbero dimostrare di aver raggiunto
-    /// il percorso fuso — proverebbero che i due percorsi concordano, non che
-    /// siano due.
-    ///
-    /// **L'assenza di fallback non prova l'ingresso nel runner.**
-    /// `geo_fusion_fallbacks` sale soltanto per la rinuncia dovuta alla
-    /// reservation del governor, e resta a zero in tutti gli altri modi di
-    /// non fondere: kill switch spento, gruppo non formato, byte decodificati
-    /// ignoti. Chi deve sapere se il percorso fuso ha girato legge questo
-    /// contatore, e lo confronta con il valore **esatto**: `> 0` accetterebbe
-    /// sia un incremento doppio sia un batch non contato.
+    /// Conta ogni batch che raggiunge `one_to_one_batch_fused` dopo preflight,
+    /// preparazione e reservation, anche se poi fallisce: cosi' gli oracoli
+    /// degli errori provano di aver percorso il ramo fuso. L'assenza di
+    /// fallback non lo prova, perche' `geo_fusion_fallbacks` conta solo la
+    /// rinuncia per reservation. Si confronta col valore **esatto**.
     pub geo_fusion_groups_started: u64,
     /// `true` se almeno un contatore ha raggiunto il proprio fondo scala e i
     /// valori qui sopra sono quindi LIMITI INFERIORI, non conteggi.
     ///
-    /// I limiti di riga sono configurabili fino a `u64::MAX`, quindi la somma
-    /// e' rappresentabile solo finche' i conteggi restano piccoli rispetto a
-    /// quel fondo scala. Le uscite possibili sono tre: avvolgere (un
-    /// contatore che riparte da zero e mente), andare in panico
-    /// (`overflow-checks` e' attivo anche in release: una metrica che abbatte
-    /// l'esecuzione) o saturare. Si satura, ma senza tacerlo: questo flag e'
-    /// la differenza fra una degradazione dichiarata e una silenziosa.
+    /// I contatori saturano invece di avvolgere o andare in panico
+    /// (`overflow-checks` e' attivo anche in release); questo flag dichiara la
+    /// saturazione.
     pub counters_saturated: bool,
 }
 

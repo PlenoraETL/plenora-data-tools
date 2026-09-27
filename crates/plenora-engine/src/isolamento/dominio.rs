@@ -28,13 +28,9 @@ type Esito<T> = std::result::Result<T, DifettoSuperficie>;
 /// Una directory della gerarchia `cgroup2`, con la radice del control plane
 /// fino a cui il possesso va giudicato.
 ///
-/// # I percorsi si risolvono **una volta**, alla costruzione
-///
-/// Non a ogni chiamata, e soprattutto non solo dove servono per il confronto:
-/// se `dominio()` rendesse il canonico e le scritture usassero il percorso
-/// nominato, il preflight giudicherebbe un percorso e ne modificherebbe un
-/// altro ogni volta che nel mezzo c'e' un link simbolico o un `..`. Qui il
-/// canonico e' l'unico che esiste dopo la costruzione.
+/// I percorsi si risolvono **una volta**, alla costruzione: dopo esiste solo
+/// il canonico, e il preflight non puo' giudicare un percorso e scriverne un
+/// altro attraverso un link simbolico o un `..`.
 pub(super) struct Gerarchia {
     dominio: PathBuf,
     radice: PathBuf,
@@ -118,26 +114,13 @@ impl SuperficieDominio for Gerarchia {
 
 /// Il montaggio `cgroup2` che contiene quel percorso.
 ///
-/// # Perche' «che contiene» e non «il primo»
+/// Non il primo: con piu' `cgroup2` o un bind mount di sottoalbero si
+/// registrerebbero le opzioni di un filesystem e l'appartenenza su un altro.
+/// Vince il punto di mount che e' il prefisso **piu' lungo**, confrontato per
+/// **componenti** (`/sys/fs/cgroup2` non e' prefisso di `/sys/fs/cgroup/x`).
 ///
-/// Con piu' di un `cgroup2` montato — o con un bind mount di un sottoalbero —
-/// prendere il primo significa registrare le opzioni di un filesystem e
-/// calcolare l'appartenenza su un altro. Sono due affermazioni su due oggetti
-/// diversi, e nulla nel codice direbbe che non parlano della stessa cosa.
-///
-/// Si sceglie quello il cui punto di mount e' il prefisso **piu' lungo** del
-/// percorso: e' il mount attraverso cui quel percorso e' effettivamente
-/// raggiunto, perche' un mount piu' profondo copre quello che sta sopra. Il
-/// confronto e' fra `Path`, quindi per **componenti**: `/sys/fs/cgroup2` non e'
-/// un prefisso di `/sys/fs/cgroup/x` per quanto lo sia il suo testo.
-///
-/// # Perche' ogni riga deve interpretarsi
-///
-/// Una riga che non si legge non si salta. `/proc/self/mountinfo` lo scrive il
-/// kernel in un formato fisso: una riga che non lo rispetta significa che il
-/// formato e' cambiato sotto di noi, e continuare vorrebbe dire scegliere un
-/// montaggio avendo ignorato proprio la riga che non si capisce — che
-/// potrebbe essere quella giusta.
+/// Una riga che non si interpreta non si salta: il formato e' del kernel, e
+/// la riga ignorata potrebbe essere quella giusta.
 ///
 /// # Errors
 ///
@@ -201,11 +184,9 @@ struct Voce {
 
 /// Una riga di `/proc/self/mountinfo`.
 ///
-/// Il formato ha campi posizionali fino a un numero **variabile** di campi
-/// opzionali, chiusi da un `-` isolato; dopo il trattino vengono tipo, sorgente
-/// e opzioni del superblocco. Contare le posizioni oltre il trattino senza
-/// cercarlo darebbe campi sbagliati esattamente sulle macchine che hanno campi
-/// opzionali, cioe' quelle con propagazione fra mount.
+/// I campi opzionali sono in numero **variabile** e chiusi da un `-` isolato,
+/// dopo il quale vengono tipo, sorgente e opzioni del superblocco: il
+/// trattino si cerca, non si conta.
 ///
 /// # Errors
 ///
@@ -278,22 +259,10 @@ fn voce_di_mountinfo(riga: &str) -> std::result::Result<Voce, String> {
 
 /// Decodifica gli escape ottali dei percorsi di `mountinfo`.
 ///
-/// # Perche' sui byte e non sui caratteri
-///
-/// Un percorso su Linux e' una sequenza di **byte**, non di caratteri, e non e'
-/// tenuto a essere UTF-8. Decodificare carattere per carattere spezzerebbe ogni
-/// sequenza multibyte in byte separati e la ricomporrebbe sbagliata: un
-/// percorso con un accento diventerebbe un percorso diverso, e il confronto per
-/// prefisso fallirebbe senza che nulla lo segnali.
-///
-/// Qui si lavora sui byte e si costruisce un `OsString` da quei byte: cio' che
-/// entra esce identico, UTF-8 o no.
-///
-/// # Perche' un escape ignoto e' un errore
-///
-/// Il kernel ne emette **quattro**: spazio, tab, newline, backslash. Accettarne
-/// altri significherebbe interpretare una sequenza che nessuno ha dichiarato,
-/// e un percorso interpretato male non e' quel percorso.
+/// Lavora sui **byte** e costruisce un `OsString`: un percorso Linux non e'
+/// tenuto a essere UTF-8, e decodificare per caratteri altererebbe le
+/// sequenze multibyte. Gli escape ammessi sono i quattro che il kernel emette
+/// (spazio, tab, newline, backslash).
 ///
 /// # Errors
 ///

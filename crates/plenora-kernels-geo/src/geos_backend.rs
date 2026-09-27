@@ -71,11 +71,9 @@ pub enum GeosBackendError {
 // `Result` di GEOS): la conversione non richiede il consumo, ma il puntatore
 // a funzione si.
 //
-// Il testo dell'errore GEOS viene DELIBERATAMENTE scartato: e' scritto dalla
-// libreria nativa e puo' contenere coordinate dell'input
-// (errori-e-limiti.md#privacy-dei-messaggi). Resta il contesto generico; i
-// punti che sanno dire di piu' costruiscono la variante direttamente con il
-// proprio contesto statico.
+// Il testo dell'errore GEOS e' scartato (vedi `GeosBackendError::Geos`); i
+// punti che sanno dire di piu' costruiscono la variante con il proprio
+// contesto statico.
 #[allow(clippy::needless_pass_by_value)]
 fn geos_error(_error: geos::Error) -> GeosBackendError {
     GeosBackendError::Geos("chiamata alla libreria nativa")

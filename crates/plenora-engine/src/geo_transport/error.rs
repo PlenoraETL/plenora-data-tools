@@ -27,18 +27,13 @@ use super::transport::{MAX_BATCHES, MAX_CELL_BYTES, MAX_COLUMNS};
 ///
 /// Questo enum e' `pub`, riesportato da `plenora-engine` e
 /// `#[non_exhaustive]`: un consumatore esterno deve prevedere un ramo
-/// generico, e aggiungere una variante non e' una rottura.
+/// generico, e aggiungere una variante non e' una rottura. Le diagnosi sui
+/// tetti dei custom metadata restano distinte perche' un test deve poter dire
+/// quale tetto ha parato.
 ///
-/// Non lo e' sempre stato. Le cinque diagnosi sui tetti dei custom metadata
-/// hanno rotto i `match` esaustivi scritti fuori dal workspace — rottura
-/// accettata formalmente, ed e' il prezzo di distinguerle invece di
-/// comprimerle in una variante generica: i tre tetti devono essere superabili
-/// separatamente, altrimenti un test non puo' dire quale abbia parato.
-/// `#[non_exhaustive]` e' cio' che rende quella l'ultima volta.
-///
-/// Dentro il workspace nessun `match` su questo enum e' esaustivo, e la
-/// disciplina dei mapping esaustivi resta dove serve: sulla corrispondenza
-/// variante -> categoria.
+/// Dentro il workspace nessun `match` su questo enum e' esaustivo: la
+/// disciplina dei mapping esaustivi vale sulla corrispondenza variante ->
+/// categoria.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ArrowTransportError {
@@ -114,11 +109,10 @@ pub enum ArrowTransportError {
     IpcBodyTooLarge { declared: u64, limit: u64 },
     /// Somma dei body dei blocchi dizionario oltre il tetto del verificatore.
     ///
-    /// E' un tetto **cumulativo**, e non lo copre `IpcBodyTooLarge`: mille
-    /// dizionari da un megabyte stanno ciascuno sotto `max_body_bytes` e
-    /// insieme trattengono un gigabyte, perche' `FileReader` li decodifica
-    /// tutti all'apertura e li tiene vivi per l'intera scansione. Il
-    /// controllo e' sui `bodyLength` DICHIARATI nel footer, quindi avviene
+    /// Tetto **cumulativo**, non coperto da `IpcBodyTooLarge`: `FileReader`
+    /// decodifica tutti i dizionari all'apertura e li tiene vivi per l'intera
+    /// scansione, quindi molti dizionari piccoli trattengono insieme molta
+    /// memoria. Il controllo e' sui `bodyLength` DICHIARATI nel footer,
     /// prima che arrow ne decodifichi uno.
     #[error("body dei dizionari IPC da {declared} byte oltre il limite {limit}")]
     IpcRetainedDictionariesTooLarge { declared: u64, limit: u64 },
@@ -182,26 +176,17 @@ pub enum ArrowTransportError {
     Arrow(String),
     /// `arrow-ipc` e' andato in panico decodificando lo schema del payload.
     ///
-    /// Non e' un errore nostro ne' un difetto del chiamante: `fb_to_schema`
-    /// contiene venti `panic!`/`unimplemented!` raggiungibili da un `FlatBuffer`
-    /// non fidato, e i reader la chiamano sempre. Le API che la avvolgono si
-    /// chiamano `try_*` ma sono fallibili solo sul parsing esterno: appena
-    /// ottengono lo schema fanno `.map(fb_to_schema)`.
-    ///
-    /// La variante esiste per distinguerlo da `Arrow(String)`, che rappresenta
-    /// un errore che la libreria ha *restituito*. Qui la libreria e' abortita,
-    /// e la differenza va resa visibile invece che appiattita.
+    /// `fb_to_schema` contiene `panic!`/`unimplemented!` raggiungibili da un
+    /// `FlatBuffer` non fidato, e le API `try_*` che la avvolgono la chiamano
+    /// sempre. Distinta da `Arrow(String)`, che e' un errore *restituito* dalla
+    /// libreria: qui la libreria e' abortita.
     #[error("arrow-ipc in panico sullo schema del payload: {0}")]
     ArrowPanic(String),
     /// Un errore che **sotto** e' gia' `Internal`, e resta tale.
     ///
-    /// Senza questa variante un `PlenoraError::Internal` cade nel ramo
-    /// generico e diventa `Arrow(String)`, cioe' un errore della libreria
-    /// arrow; poi il passo dell'executor lo riscrive `InvalidPlan`. Un difetto
-    /// nostro diventerebbe cosi' una colpa del piano, che e' l'attribuzione
-    /// sbagliata e manda chi legge a correggere un ingresso sano.
-    ///
-    /// Il caso che la rende necessaria e' la validazione OGC che **non
+    /// Senza questa variante un `PlenoraError::Internal` diventerebbe
+    /// `Arrow(String)` e poi `InvalidPlan` nel passo dell'executor: un difetto
+    /// nostro attribuito al piano. Serve alla validazione OGC che **non
     /// conclude**: vedi `errori-e-limiti.md`.
     #[error("errore interno propagato: {0}")]
     Interno(String),
@@ -270,18 +255,11 @@ pub enum ArrowTransportError {
 impl ArrowTransportError {
     /// L'errore di un passo del kernel, **attribuito a chi ne ha colpa**.
     ///
-    /// # Perche' non basta `InvalidPlan`
-    ///
-    /// Perche' non ogni fallimento di un passo e' colpa del piano. Un difetto
-    /// nostro — o una validazione che non ha concluso, che non ha giudicato
-    /// nulla — chiamato `InvalidPlan` manda chi legge a correggere un ingresso
-    /// che nessuno ha dimostrato sbagliato, e ne cambia l'exit code.
-    ///
-    /// # Perche' qui e non nei due chiamanti
-    ///
-    /// Perche' i chiamanti sono due — il passo fuso e quello non fuso — e due
-    /// copie della stessa decisione divergono: e' gia' successo che un ramo
-    /// conservasse la diagnostica di riga e l'altro no.
+    /// Non ogni fallimento di un passo e' colpa del piano: un difetto nostro,
+    /// o una validazione che non ha concluso, chiamato `InvalidPlan` manda a
+    /// correggere un ingresso sano e cambia l'exit code. La decisione sta qui
+    /// e non nei due chiamanti (passo fuso e non fuso) perche' due copie
+    /// divergono.
     #[must_use]
     pub fn errore_del_passo(&self) -> PlenoraError {
         if self.source_error().e_interna() {
@@ -292,24 +270,15 @@ impl ArrowTransportError {
 
     /// **La colpa non e' di chi ha scritto il piano.**
     ///
-    /// Due famiglie: gli errori gia' interni qui — o una libreria abortita — e
-    /// gli esiti tipizzati dei kernel che dicono «la validazione OGC non ha
-    /// concluso». I secondi non sono un giudizio sull'ingresso: nessuno lo ha
-    /// dato, e attribuirlo al piano manda chi legge a correggere una geometria
-    /// che nessuno ha dimostrato sbagliata.
+    /// Due famiglie: gli errori gia' interni (o una libreria abortita) e gli
+    /// esiti tipizzati dei kernel che dicono «la validazione OGC non ha
+    /// concluso», che non sono un giudizio sull'ingresso.
     ///
     /// Va chiamata sulla **causa**, non sull'involucro: `RowDiagnostics`
-    /// avvolge senza cambiare cio' che e' andato storto, e classificare
-    /// l'involucro farebbe cadere nel ramo generico ogni errore interno che
-    /// porti una diagnostica di riga. La traversata e' quella di
-    /// [`Self::source_error`], che esiste gia' per lo stesso motivo.
-    // NON `const`: il ramo `geos-backend` chiama `category()`, che non lo e'.
-    // Clippy suggerisce `const fn` perche' nella configurazione predefinita
-    // quel ramo non e' compilato — e il suggerimento, preso alla lettera,
-    // rompe la build con la feature attiva. Guardare la categoria invece
-    // della variante e' cio' che permette di riconoscere un `Internal`
-    // avvolto in `Tagged` o in una diagnostica di riga, e vale piu' della
-    // constness.
+    /// avvolge senza cambiare cio' che e' andato storto. La traversata e'
+    /// quella di [`Self::source_error`].
+    // NON `const`: il ramo `geos-backend` chiama `category()`, che non lo e';
+    // il suggerimento di clippy vale solo senza la feature.
     #[allow(clippy::missing_const_for_fn)]
     pub(crate) fn e_interna(&self) -> bool {
         use plenora_kernels_geo::advanced::AdvancedError as A;
@@ -358,13 +327,10 @@ impl ArrowTransportError {
 
     /// Errore restituito da arrow-rs, **sanificato**.
     ///
-    /// Il testo di arrow-rs cita regolarmente il valore che ha causato il
-    /// difetto: farlo attraversare il confine cosi' com'e' violerebbe la
-    /// regola «errori senza dati» (errori-e-limiti.md#privacy-dei-messaggi)
-    /// e legherebbe la privacy dei nostri errori al comportamento di una
-    /// dipendenza. Passa quindi il solo codice della variante
-    /// ([`plenora_core::error::arrow_error_code`]), che dice che genere di
-    /// difetto e' senza dire su quale dato.
+    /// Il testo di arrow-rs cita spesso il valore che ha causato il difetto,
+    /// e violerebbe la regola «errori senza dati»
+    /// (errori-e-limiti.md#privacy-dei-messaggi). Passa il solo codice della
+    /// variante ([`plenora_core::error::arrow_error_code`]).
     #[must_use]
     pub fn arrow(error: &plenora_core::arrow::ArrowError) -> Self {
         Self::Arrow(format!(
@@ -420,16 +386,11 @@ impl ArrowTransportError {
 
 /// Conversione dagli errori del kernel WKB (`geometry_from_wkb`,
 /// `transform_wkb`, `validate_wkb_contract`), che rendono `PlenoraError`.
-/// Le varianti `InvalidPlan`/`Unsupported`/`Schema` di `PlenoraError`
-/// portano nel payload la stringa ESATTA dell'errore originale, quindi
-/// vanno in `Geometry` preservando il messaggio. `Io` conserva l'errore
-/// I/O incapsulato. `DataMapping`, `Crs` e `Execution` non hanno una
-/// variante dedicata in `ArrowTransportError` (nel flusso del trasporto
-/// non si presentano mai: il kernel WKB emette solo errori di
-/// contratto/unsupported): sono mappate su `Arrow` mantenendo il testo
-/// completo dell'errore. Il wrapper di fase `Tagged` (BLOCK-03) e'
-/// attraversato: il tag riguarda l'asse fase, che il trasporto non porta —
-/// la conversione vede la variante interna, esattamente come senza tag.
+/// `InvalidPlan`/`Unsupported`/`Schema` portano la stringa ESATTA
+/// dell'errore originale e vanno in `Geometry`; `Io` conserva l'errore I/O.
+/// Le altre varianti, che il kernel WKB non emette, vanno in `Arrow` col testo
+/// completo. `Tagged` (BLOCK-03) e' attraversato: il trasporto non porta
+/// l'asse fase.
 impl From<PlenoraError> for ArrowTransportError {
     fn from(error: PlenoraError) -> Self {
         match error {
@@ -559,17 +520,9 @@ mod tests {
             );
         }
 
-        // Il conteggio fissa la tabella **scritta qui**: se un caso venisse
-        // tolto, o se un `cfg` ne facesse cadere uno senza che nessuno se ne
-        // accorga, il numero non torna.
-        //
-        // Non scopre un kernel NUOVO che acquisti la variante e non venga
-        // aggiunto: in quel caso non cambierebbero ne' il vettore ne' questo
-        // numero, e il caso resterebbe verde. La completezza rispetto ai rami
-        // che `e_interna` riconosce OGGI e' stata verificata confrontando i
-        // due elenchi a mano — dodici rami di kernel qui, i tre non-kernel in
-        // `i_rami_interni_non_kernel_sono_riconosciuti` — non da questa
-        // asserzione.
+        // Il conteggio fissa la tabella scritta qui: un caso tolto, o fatto
+        // cadere da un `cfg`, fa fallire. Non scopre un kernel nuovo che
+        // acquisti la variante senza essere aggiunto.
         let attesi = 10
             + usize::from(cfg!(feature = "proj-backend"))
             + usize::from(cfg!(feature = "geos-backend"));

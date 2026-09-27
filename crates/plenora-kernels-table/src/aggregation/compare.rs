@@ -43,24 +43,10 @@ pub(in crate::aggregation) fn row_key(
 /// Semantica: null dopo i valori (uguaglianza tra null); confronto nel
 /// dominio NATIVO di ogni tipo supportato, mai sulla forma testuale.
 ///
-/// Un ripiego testuale per tutti i tipi diversi da Int64/UInt64/Float64
-/// darebbe un ordine sbagliato dove conta di piu':
-///
-/// - **Decimal128** — "10" ordina prima di "9", e i negativi si dispongono
-///   al contrario del loro valore;
-/// - **Timestamp con timezone** — la stringa e' l'ora LOCALE, e all'ora
-///   legale l'ordine lessicografico delle ore locali non e' l'ordine degli
-///   istanti UTC;
-/// - **Binary** — pretenderebbe UTF-8 valido e fallirebbe su qualunque
-///   colonna binaria che non lo sia (una geometria WKB, per esempio).
-///
-/// Lo stesso comparatore alimenta `sort`, il top-N e il merge k-way dello
-/// spill, quindi l'errore si propagherebbe a tutti e tre. I confronti nativi
-/// eliminano anche la costruzione di stringhe e il parsing della timezone
-/// dentro un sort O(n log n).
-///
-/// I tipi fuori dal profilo scalare sono rifiutati esplicitamente, invece di
-/// ricevere un ordine arbitrario.
+/// Un ripiego testuale sbaglierebbe l'ordine di `Decimal128` ("10" prima di
+/// "9"), dei `Timestamp` con timezone (ora locale, non istante UTC) e
+/// fallirebbe sui `Binary` non UTF-8. I tipi fuori dal profilo scalare sono
+/// rifiutati esplicitamente, invece di ricevere un ordine arbitrario.
 ///
 /// # Errors
 ///
@@ -72,13 +58,11 @@ pub(in crate::aggregation) fn row_key(
 /// Questi controlli precedono la decisione sui null: due celle nulle di tipi
 /// non confrontabili sono un errore, non `Equal`.
 ///
-/// I tre siti d'uso sono `compare_at` (stesso batch), `ColumnComparator`
+/// I siti d'uso sono `compare_at` (stesso batch), `ColumnComparator`
 /// (fast path tipizzato) e il merge k-way dello spill
 /// (`spill::compare_cells`, batch diversi — da qui la forma a due array).
-// Il corpo e' un dispatch lineare per tipo Arrow: e' cresciuto di dieci righe
-// con il null logico della dictionary, e spezzarlo in due meta' arbitrarie
-// renderebbe piu' difficile verificare che ogni tipo sia trattato una volta
-// sola.
+// Dispatch lineare per tipo Arrow: spezzarlo renderebbe piu' difficile
+// verificare che ogni tipo sia trattato una volta sola.
 #[allow(clippy::too_many_lines)]
 pub fn compare_cells_typed(
     left: &ArrayRef,
@@ -86,27 +70,17 @@ pub fn compare_cells_typed(
     right: &ArrayRef,
     right_row: usize,
 ) -> Result<Ordering> {
-    // ORDINE DEI CONTROLLI. Prima il dominio, poi i null. Il contrario e'
-    // fail-open: decidendo sui null in testa si risponderebbe `Equal` a due
-    // celle nulle di tipi INCOMPATIBILI o non ordinabili, cioe' proprio dove
-    // la funzione deve rifiutare — e con gli stessi tipi, ma valori non
-    // nulli, si risponderebbe `Schema`. La stessa coppia di colonne darebbe
-    // due contratti diversi a seconda del contenuto delle celle. Un difetto
-    // mascherato dai null e' un difetto che si manifesta piu' tardi, altrove.
+    // Prima il dominio, poi i null: decidendo sui null in testa, due celle
+    // nulle di tipi incompatibili darebbero `Equal` invece di `Schema`, e la
+    // stessa coppia di colonne avrebbe due contratti a seconda dei valori.
     //
-    // 1. Indici. L'API e' pubblica e prende due array e due indici
-    //    indipendenti: nulla garantisce che siano in intervallo. `is_null` e
-    //    `value` di arrow vanno in panico fuori intervallo, e un panico e'
-    //    vietato dal gate R6 oltre che inutile a chi ci chiama.
+    // 1. Indici: l'API e' pubblica e `is_null`/`value` di arrow vanno in
+    //    panico fuori intervallo (gate R6).
     riga_in_intervallo(left, left_row, "sinistra")?;
     riga_in_intervallo(right, right_row, "destra")?;
 
-    // 2. Dominio confrontabile. Non basta che i due tipi siano ordinabili:
-    //    devono appartenere alla STESSA famiglia di confronto, altrimenti
-    //    non esiste un ordine fra loro. La famiglia non e' il tipo esatto —
-    //    `Decimal128(10, 2)` e `Decimal128(12, 3)` si confrontano per valore,
-    //    e due timestamp con timezone diverse si confrontano per istante —
-    //    quindi il criterio e' la famiglia, non l'uguaglianza dei `DataType`.
+    // 2. Dominio: i due tipi devono stare nella stessa famiglia di confronto
+    //    (vedi `ComparisonFamily`).
     let (Some(left_family), Some(right_family)) = (
         comparison_family(left.data_type()),
         comparison_family(right.data_type()),
@@ -125,12 +99,9 @@ pub fn compare_cells_typed(
         )));
     }
 
-    // 3. Integrita' della cella, ENTRAMBE. `is_logically_null` risponde
-    //    `false` su una chiave dictionary malformata — per non trasformare un
-    //    difetto in un silenzio. Uscendo prima di risolvere questa cella
-    //    perche' l'altra e' nulla, il silenzio tornerebbe: la risoluzione
-    //    e' fallibile e avviene per ENTRAMBE le celle prima di qualunque
-    //    uscita anticipata.
+    // 3. Integrita' di ENTRAMBE le celle prima di qualunque uscita
+    //    anticipata: una chiave dictionary malformata non deve passare in
+    //    silenzio perche' l'altra cella e' nulla.
     let left_null = cella_logicamente_nulla(left, left_row)?;
     let right_null = cella_logicamente_nulla(right, right_row)?;
 
@@ -144,12 +115,8 @@ pub fn compare_cells_typed(
         (false, false) => {}
     }
 
-    // 5. Dispatch sulla FAMIGLIA, non su una catena di `downcast_ref`. Il
-    //    match e' esaustivo: aggiungere una variante a `ComparisonFamily`
-    //    senza aggiungere il braccio corrispondente non compila. L'elenco
-    //    dei tipi vive in un posto solo: in tre copie — la tabella, questa
-    //    catena e `validate_sortable` — resterebbe allineato per
-    //    raccomandazione, e una raccomandazione non e' un vincolo.
+    // 5. Dispatch esaustivo sulla famiglia: una variante nuova di
+    //    `ComparisonFamily` senza braccio non compila.
     match left_family {
         ComparisonFamily::Int64 => {
             let (left_values, right_values) = coppia::<Int64Array>(left, right)?;
@@ -262,9 +229,7 @@ fn coppia<'a, A: 'static>(left: &'a ArrayRef, right: &'a ArrayRef) -> Result<(&'
 /// Due celle sono confrontabili se e solo se stanno nella stessa famiglia.
 /// La famiglia non coincide col `DataType`: `Decimal128(10, 2)` e
 /// `Decimal128(12, 3)` si confrontano per VALORE, due `Timestamp` con
-/// timezone diverse per ISTANTE. Chiedere l'uguaglianza dei `DataType`
-/// rifiuterebbe confronti corretti; chiedere solo che siano entrambi
-/// ordinabili accetterebbe un Int64 contro una stringa.
+/// timezone diverse per ISTANTE.
 ///
 /// `None` per i tipi che [`compare_cells_typed`] non sa confrontare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,12 +248,9 @@ enum ComparisonFamily {
 
 /// Tabella UNICA dei tipi confrontabili.
 ///
-/// La usano [`compare_cells_typed`] (dispatch), [`is_sortable`] e
-/// [`validate_sortable`]: l'elenco dei tipi esiste in un punto solo, e i due
-/// dispatch sono `match` ESAUSTIVI sulla famiglia, quindi aggiungere una
-/// variante senza aggiungere i bracci non compila. Tre elenchi scritti a
-/// mano resterebbero allineati per raccomandazione, e una raccomandazione
-/// non impedisce nulla.
+/// La usano [`compare_cells_typed`], [`is_sortable`] e
+/// [`validate_sortable`]. I dispatch sono `match` esaustivi sulla famiglia:
+/// una variante senza bracci non compila.
 const fn comparison_family(data_type: &DataType) -> Option<ComparisonFamily> {
     match data_type {
         DataType::Int64 => Some(ComparisonFamily::Int64),
@@ -352,13 +314,9 @@ pub const fn is_sortable(data_type: &DataType) -> bool {
 /// Verifica che una colonna sia ordinabile da [`compare_cells_typed`], senza
 /// confrontare nulla.
 ///
-/// Vive accanto a `compare_cells_typed` apposta: e' l'elenco dei tipi che
-/// quella funzione sa confrontare, e le due devono restare allineate.
-///
-/// Quasi tutti i tipi si decidono guardando solo lo schema, quindi il costo
-/// e' costante; le sole colonne che richiedono una passata sulle righe sono i
-/// dictionary, dove una chiave fuori dal dizionario e' una proprieta' della
-/// singola cella.
+/// Quasi tutti i tipi si decidono dallo schema; solo i dictionary richiedono
+/// una passata sulle righe, perche' una chiave fuori dal dizionario e'
+/// proprieta' della singola cella.
 ///
 /// # Errors
 ///
@@ -366,8 +324,7 @@ pub const fn is_sortable(data_type: &DataType) -> bool {
 /// incoerente con il proprio schema o se una chiave dictionary non e'
 /// risolvibile.
 pub fn validate_sortable(array: &ArrayRef, rows: usize) -> Result<()> {
-    // Stessa tabella del comparatore: l'elenco dei tipi ordinabili non esiste
-    // piu' in una seconda copia scritta a mano.
+    // Stessa tabella del comparatore.
     let Some(family) = comparison_family(array.data_type()) else {
         return Err(PlenoraError::Schema(format!(
             "tipo {:?} non ordinabile: nessun confronto nativo definito",
@@ -375,8 +332,7 @@ pub fn validate_sortable(array: &ArrayRef, rows: usize) -> Result<()> {
         )));
     };
     // Match esaustivo: una famiglia nuova senza il proprio braccio non
-    // compila. Quasi tutti i tipi si decidono guardando solo lo schema; le
-    // sole colonne che richiedono una passata sulle righe sono i dictionary.
+    // compila.
     match family {
         ComparisonFamily::Int64
         | ComparisonFamily::UInt64

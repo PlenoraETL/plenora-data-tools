@@ -5,16 +5,12 @@
 //! `geo::Geometry<f64>` gia' decodificate (il decode WKB resta a carico di
 //! [`crate::geometry_from_wkb`], che applica il contratto strutturale).
 //!
-//! Metrica di tolleranza scelta: **confronto per-coordinate** dopo un
-//! eventuale riallineamento canonico (normalizzazione topologica), non la
-//! distanza di Hausdorff. Ogni coordinata di `left` e' confrontata con la
-//! coordinata corrispondente di `right`: lo scarto assoluto per asse deve
-//! essere `<= tolerance`. E' l'approccio piu' semplice e deterministico;
-//! non richiede il calcolo di distanze punto-geometria. Limite noto: la
-//! normalizzazione e' esatta (non tiene conto della tolleranza), quindi
-//! rappresentazioni con coordinate che differiscono entro la tolleranza
-//! possono canonizzare il punto iniziale degli anelli in modo diverso; in
-//! quel caso il confronto resta conservativo (puo' dare `false`).
+//! Tolleranza **per coordinata** (non Hausdorff), dopo l'eventuale
+//! normalizzazione topologica: lo scarto assoluto per asse fra coordinate
+//! corrispondenti deve essere `<= tolerance`. Limite noto: la
+//! normalizzazione e' esatta, quindi coordinate che differiscono entro la
+//! tolleranza possono canonizzare gli anelli in modo diverso; il confronto
+//! resta conservativo (puo' dare `false`).
 //!
 //! Semantica scalare (architettura.md#determinismo): `-0.0` e `+0.0` sono uguali, `NaN` e'
 //! uguale a `NaN` ai soli fini del confronto (la validazione dinamica

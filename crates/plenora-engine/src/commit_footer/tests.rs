@@ -129,17 +129,12 @@ fn un_token_non_canonico_e_rifiutato_e_non_compare_nel_messaggio() {
     }
 }
 
-/// **Duplicato**: il nostro writer non puo' produrlo, e va detto perche'.
+/// **Duplicato**: il nostro writer non puo' produrlo.
 ///
 /// `FileWriter::write_metadata` tiene le coppie in una mappa, quindi due
-/// scritture della stessa chiave **collassano** in una. Un test che se lo
-/// aspettasse rifiutato costruirebbe un caso impossibile e proverebbe una cosa
-/// falsa: qui si fissa il fatto vero, cioe' che da questo lato il duplicato
-/// non nasce.
-///
-/// Il duplicato puo' arrivare solo da un produttore estraneo, e li' lo rifiuta
-/// la traversata rinforzata — provato in `ipc.rs`, `caso_10`, `caso_11` e,
-/// attraverso la variante che estrae, `caso_14`.
+/// scritture della stessa chiave collassano: si fissa questo fatto. Il
+/// duplicato di un produttore estraneo lo rifiuta la traversata rinforzata
+/// (`ipc.rs`, `caso_10`, `caso_11`, `caso_14`).
 #[test]
 fn il_nostro_writer_non_puo_emettere_un_token_duplicato() {
     let byte = artefatto_con_metadata(&[
@@ -239,21 +234,11 @@ fn un_token_diverso_cambia_i_byte_ma_non_lo_schema() {
 
     // --- E il `DataContract` col suo fingerprint.
     //
-    // Lo schema uguale **non implica** il contratto uguale: il contratto si
-    // ricava dallo schema piu' i metadati canonici, e un token che ne
-    // toccasse uno cambierebbe il fingerprint senza cambiare i campi, ed e'
-    // il danno peggiore che il `commit_token` possa fare: due esecuzioni
-    // identiche dello stesso piano diventerebbero incompatibili solo per il
-    // tentativo che le ha prodotte.
-    //
-    // Va detto che cosa sorveglia davvero, perche' oggi **nessuna mutazione
-    // del codice di produzione lo fa fallire**: il token finisce nel footer,
-    // che non entra nello schema, quindi il fingerprint non puo' divergere
-    // per costruzione. Questa asserzione e' una guardia contro un cambiamento
-    // che oggi non esiste — scrivere il token nei metadati dello schema
-    // invece che nel footer — e quel giorno sarebbe l'unica cosa a
-    // fermarlo. E' una guardia dichiarata, non una prova verificata: chiamarla
-    // «coperta dalle mutazioni» sarebbe falso.
+    // Un token che toccasse i metadati dello schema cambierebbe il fingerprint
+    // senza cambiare i campi, e due esecuzioni identiche diventerebbero
+    // incompatibili. Il token sta nel footer, quindi nessuna mutazione di
+    // produzione fa fallire questa asserzione: e' una guardia dichiarata
+    // contro quel cambiamento, non una prova coperta dalle mutazioni.
     let impronta = |schema: SchemaRef| {
         let contratto = contract_from_arrow_schema(schema, risolvi_crs)
             .expect("il contratto si ricava dallo schema");
@@ -314,21 +299,10 @@ fn risolvi_crs(
 
 /// Il `plan_hash` non dipende dal `commit_token`, e il legame e' **causale**.
 ///
-/// Validare due volte lo stesso piano con lo stesso contratto, costruito da
-/// uno schema di comodo, non proverebbe nulla: due `plan_hash` uguali
-/// sarebbero garantiti dal determinismo di `validate`, non dal fatto che il
-/// token non conti. Sarebbe il determinismo spacciato per indipendenza.
-///
-/// Qui la catena e' completa e ogni anello parte dall'artefatto vero:
-///
-/// 1. si producono **due artefatti** con token diversi;
-/// 2. si rilegge lo `Schema` di **ciascuno**;
-/// 3. si costruisce il `DataContract` da **ciascuno** schema;
-/// 4. si valida **lo stesso piano** con ciascun contratto;
-/// 5. si confrontano i `plan_hash`.
-///
-/// Cosi' un token che toccasse lo schema — l'unico modo in cui potrebbe
-/// arrivare al piano — farebbe divergere i due hash, e il test lo direbbe.
+/// Due validazioni dello stesso contratto proverebbero solo il determinismo di
+/// `validate`. Qui ogni anello parte dall'artefatto vero: due artefatti con
+/// token diversi, lo `Schema` di ciascuno, il `DataContract` da ciascuno, lo
+/// stesso piano validato con entrambi, e i due `plan_hash` confrontati.
 #[test]
 fn il_plan_hash_non_dipende_dal_token_lungo_tutta_la_catena() {
     use plenora_core::arrow::ipc::reader::FileReader;

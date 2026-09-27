@@ -1,26 +1,10 @@
 //! Codec dei metadati contrattuali sugli schemi Arrow.
 //!
 //! Legge e scrive le chiavi canoniche `plenora.*` e i metadati `GeoArrow` su
-//! campi e schemi. **Non tocca una sola cella di dati**: lavora sui metadati,
-//! e questa e' la ragione per cui puo' vivere qui invece che nei kernel.
-//!
-//! # Perche' e' in `plenora-core`
-//!
-//! Due componenti diversi decidono con questo codec come interpretare ed
-//! emettere uno schema: la CLI in ingresso, l'executor in uscita. Se il codec
-//! vivesse in `plenora-kernels-geo`, insieme alle operazioni sulle celle WKB,
-//! nessuno dei due lo avrebbe sotto di se' e ciascuno ne ricaverebbe le
-//! proprie conclusioni.
-//!
-//! Con l'esecuzione isolata in un processo worker quel confine non e' una
-//! questione di ordine ma un protocollo: supervisore e
-//! worker devono leggere lo stesso schema allo stesso modo, altrimenti la
-//! verifica della pubblicazione confronta due interpretazioni invece di due
-//! risultati. L'autorita' deve quindi stare sotto entrambi, e `plenora-core`
-//! e' l'unico posto che lo e'.
-//!
-//! Le operazioni su celle WKB — decode, encode, stima dei byte nativi —
-//! restano nei kernel geo, dove hanno bisogno di `geo` e `geozero`.
+//! campi e schemi, senza toccare una cella di dati. Sta in `plenora-core`
+//! perche' CLI ed executor, e quindi supervisore e worker isolato, devono
+//! interpretare ed emettere uno schema allo stesso modo: l'autorita' sta
+//! sotto entrambi. Le operazioni sulle celle WKB restano nei kernel geo.
 
 use std::collections::HashMap;
 
@@ -35,9 +19,8 @@ use crate::crs::{
 };
 use crate::PlenoraError;
 
-// Le cinque chiavi che il contratto dichiara gia' sono ri-esportate da qui:
-// chi legge o scrive metadati ha un solo posto dove cercarle, e chi le
-// raggiunge attraverso l'adapter geo continua a trovarle.
+// Le chiavi che il contratto dichiara gia' sono ri-esportate da qui: chi
+// legge o scrive metadati ha un solo posto dove cercarle.
 pub use crate::contract::{
     PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_DIMENSIONS_KEY,
     PLENORA_GEOMETRY_ENCODING_KEY, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
@@ -50,13 +33,6 @@ pub const GEO_METADATA_KEY: &str = "geo";
 pub const DEFAULT_GEOMETRY_COLUMN: &str = "geometry";
 pub const MAX_CELL_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Chiave canonica del framing binario delle celle (R2.1/R2.2, tabella §2:
-/// `wkb` | `ewkb`).
-///
-/// Chiave canonica dell'elenco dei tipi (R2.2/R3.4.1: valori unici in ordine
-/// §3.1 separati da `,` senza spazi; obbligatoria e non vuota se
-/// `types_declaration = exact`).
-///
 /// Chiave canonica dello SRID (R2.2: intero decimale senza segno; opzionale,
 /// emessa solo se noto).
 pub const PLENORA_GEOMETRY_SRID_KEY: &str = "plenora.geometry.srid";
@@ -83,8 +59,8 @@ pub const PLENORA_GEOMETRY_PRECISION_KEY: &str = "plenora.geometry.precision";
 /// Chiave canonica dell'identita' logica stabile della colonna (R2.2:
 /// intero decimale senza segno; opzionale).
 pub const PLENORA_FIELD_ID_KEY: &str = "plenora.field_id";
-/// Chiave di versione del protocollo dei metadati (R2.5: intero decimale,
-/// oggi `1`; vive in `Schema::metadata`, MAI nel campo, ed e' obbligatoria
+/// Chiave di versione del protocollo dei metadati (R2.5: intero decimale;
+/// vive in `Schema::metadata`, MAI nel campo, ed e' obbligatoria
 /// se sono presenti chiavi canoniche).
 pub const PLENORA_CONTRACT_VERSION_KEY: &str = "plenora.contract.version";
 /// Versione corrente del protocollo dei metadati (R2.5): un consumatore che
@@ -106,14 +82,11 @@ pub const PLENORA_GEOMETRY_NAMESPACE_PREFIX: &str = "plenora.geometry.";
 /// lettore di plenora-database-tools, stessa regola di robustezza).
 const MAX_CRS_ID_BYTES: usize = 1_024;
 
-/// Coordinate massime per cella: una cella da 64 MiB contiene al piu' 16 byte
-/// per coordinata XY.
+/// Coordinate massime per cella, a 16 byte per coordinata XY.
 ///
-/// Scelta dichiarata: il bound NON e' reso stride-aware. Con Z/M lo
-/// stride reale e' 24/32 byte e il conteggio massimo reale scende, quindi il
-/// bound su 16 byte resta permissivo ma sempre sicuro (mai sotto il reale);
-/// irrigidirlo richiederebbe la dimensionalita' risolta, che per `Unknown`
-/// (R3.4) non esiste. Si mantiene il bound conservativo unico.
+/// Il bound non tiene conto dello stride Z/M (24/32 byte): resta permissivo ma
+/// mai sotto il reale, e irrigidirlo richiederebbe una dimensionalita'
+/// risolta che per `Unknown` (R3.4) non esiste.
 pub const MAX_CELL_COORDINATES: u64 = MAX_CELL_BYTES / 16;
 
 fn missing_geometry_column(name: &str) -> PlenoraError {
@@ -128,13 +101,10 @@ fn missing_geoarrow_metadata(name: &str) -> PlenoraError {
 
 /// Il campo si dichiara colonna geometria WKB?
 ///
-/// Identificazione ammessa (piano-v5.md#contratti-di-input, decisione 8): l'estensione
-/// `GeoArrow` `ARROW:extension:name = geoarrow.wkb` OPPURE la forma a sole
-/// chiavi canoniche — almeno una chiave `plenora.geometry.*`, autosufficiente
-/// come in discovery (`plenora.geometry.encoding` +
-/// `plenora.geometry.dimensions` bastano: l'estensione e' ammessa, non
-/// richiesta). Un nome di estensione DIVERSO da `geoarrow.wkb` dichiara un
-/// altro framing: mai accettato, anche in presenza di chiavi canoniche.
+/// Vale l'estensione `geoarrow.wkb` oppure la sola presenza di chiavi
+/// `plenora.geometry.*` (piano-v5.md#contratti-di-input, decisione 8). Un
+/// nome di estensione diverso da `geoarrow.wkb` dichiara un altro framing e
+/// non e' mai accettato, anche con chiavi canoniche.
 #[must_use]
 pub fn field_declares_wkb_geometry(field: &Field) -> bool {
     field.metadata().get(GEOARROW_EXTENSION_KEY).map_or_else(
@@ -179,9 +149,8 @@ pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, Pleno
 /// Metadato `GeoArrow` `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
 ///
-/// Casa unica del formato: anche il trasporto Arrow v3 di
-/// `plenora-engine` delega qui, quindi il JSON in uscita e' identico
-/// byte-per-byte nei due percorsi.
+/// Casa unica del formato: anche il trasporto Arrow di `plenora-engine`
+/// delega qui, cosi' il JSON e' identico byte per byte nei due percorsi.
 ///
 /// # Errors
 ///
@@ -214,9 +183,8 @@ pub fn geo_metadata_json_with_dimensions(
 /// `encoding` in forma ICD ([`GeometryEncoding::as_str`]) quando il contratto
 /// la dichiara (`Some`).
 ///
-/// Con `None` la chiave e' omessa e il JSON e' identico byte-per-byte a
-/// [`geo_metadata_json_with_dimensions`]: fingerprint e retrocompatibilita'
-/// restano invariati per chi non dichiara l'encoding.
+/// Con `None` il JSON e' identico byte per byte a
+/// [`geo_metadata_json_with_dimensions`], e il fingerprint non cambia.
 ///
 /// # Errors
 ///
@@ -295,11 +263,9 @@ pub fn geometry_output_field_with_dimensions(
 /// Come [`geometry_output_field_with_dimensions`], con in piu' la chiave
 /// `geo.encoding` quando il contratto la dichiara (`Some`).
 ///
-/// Un contratto con encoding dichiarato che attraversa un kernel che
-/// riscrive il campo (es. `reproject`) conserva la chiave nel metadato
-/// riscritto, coerente col contratto. Con `None` la chiave e' omessa e il
-/// metadato e' identico byte-per-byte alla forma senza encoding (fingerprint
-/// e retrocompatibilita' invariati).
+/// Un kernel che riscrive il campo (es. `reproject`) conserva cosi' la
+/// chiave. Con `None` il metadato e' identico byte per byte alla forma senza
+/// encoding.
 ///
 /// # Errors
 ///
@@ -359,18 +325,14 @@ pub fn geometry_encoding_from_metadata(field: &Field) -> Option<GeometryEncoding
 
 /// Variante STRICT di [`geometry_encoding_from_metadata`], per la discovery.
 ///
-/// La chiave `encoding` presente ma fuori dall'enum chiuso (R3.5: header
-/// `GeoPackage`, TWKB, valori non testuali) e' un framing non rappresentabile
-/// e va rifiutato con errore esplicito — mai mappata a un encoding noto o
-/// ignorata. Chiave assente o metadato `geo` non valido → `Ok(None)` (la
-/// dimensionalita'/il framing non dichiarati restano non risolti, R3.4; il
-/// messaggio non riporta il valore, «errori senza dati»).
+/// Una chiave `encoding` fuori dall'enum chiuso (R3.5) e' un framing non
+/// rappresentabile e si rifiuta, mai mappata o ignorata. Chiave assente o
+/// metadato `geo` non valido danno `Ok(None)` (R3.4).
 ///
 /// # Errors
 ///
 /// `PlenoraError::Unsupported` se la chiave `encoding` e' presente ma non
-/// rappresentabile: valore non testuale o fuori dall'enum chiuso R3.5
-/// (ammessi solo `wkb` ed `ewkb`).
+/// rappresentabile: valore non testuale o fuori dall'enum chiuso R3.5.
 pub fn geometry_encoding_from_metadata_strict(
     field: &Field,
 ) -> Result<Option<GeometryEncoding>, PlenoraError> {
@@ -395,15 +357,10 @@ pub fn geometry_encoding_from_metadata_strict(
 
 /// Il metadato legacy `geo` di un campo come valore JSON.
 ///
-/// `Ok(None)` = chiave ASSENTE. JSON malformato = `Err`.
-///
-/// La distinzione e' il punto: piano-v5.md#contratti-di-input (R5.1) impone che «illeggibile» non
-/// equivalga ad «assente». Ridurre l'errore con un `.ok()` renderebbe un
-/// metadato `geo` malformato indistinguibile da uno mancante, e la
-/// risoluzione del contratto proseguirebbe completando le nozioni dalle sole
-/// chiavi canoniche — ignorando in silenzio un legacy coesistente che non e'
-/// riuscita a leggere. Un input corrotto sarebbe cosi' accettato come se
-/// dichiarasse solo cio' che si e' capito di lui.
+/// `Ok(None)` = chiave assente; JSON malformato = `Err`. R5.1
+/// (piano-v5.md#contratti-di-input): «illeggibile» non e' «assente». Con un
+/// `.ok()` un `geo` malformato sparirebbe e il contratto si completerebbe
+/// dalle sole chiavi canoniche, ignorando un legacy che non si e' letto.
 ///
 /// # Errors
 ///
@@ -430,22 +387,20 @@ fn geo_metadata_value(field: &Field) -> Result<Option<serde_json::Value>, Plenor
         })
 }
 
-/// Lettura opportunistica del metadato `geo`, per i soli lettori che
-/// dichiarano di NON decidere ([`geometry_dimensions_from_metadata`],
-/// [`geometry_encoding_from_metadata`]): un metadato illeggibile vale come
-/// «nozione non dichiarata».
+/// Lettura opportunistica del metadato `geo`: un metadato illeggibile vale
+/// come «nozione non dichiarata».
 ///
-/// E' ammesso solo qui perche' quei lettori non costruiscono contratti e non
-/// applicano precedenze: alimentano l'analisi a secco, dove una nozione non
-/// risolta e' un esito legittimo. Ogni percorso che costruisce o confronta un
-/// contratto usa la forma fallibile.
+/// Ammessa solo per [`geometry_dimensions_from_metadata`] e
+/// [`geometry_encoding_from_metadata`], che alimentano l'analisi a secco e non
+/// costruiscono ne' confrontano contratti; quei percorsi usano la forma
+/// fallibile.
 fn geo_metadata_value_lenient(field: &Field) -> Option<serde_json::Value> {
     geo_metadata_value(field).ok().flatten()
 }
 
 // ---------------------------------------------------------------------------
-// Protocollo delle chiavi canoniche (contratti trasversali
-// v2.0-rc10 §2, proposta in attesa di ratifica): emissione da
+// Protocollo delle chiavi canoniche (§2, proposta in attesa di ratifica):
+// emissione da
 // `GeometryColumnContract`, lettura fail-closed per chiave (R5.1), coerenza
 // canonica-vs-legacy (R2.6) e completamento per precedenza (R2.7).
 // ---------------------------------------------------------------------------
@@ -478,66 +433,31 @@ pub struct GeometryMetadataDetails {
 /// Metadati di campo canonici R2.2 per una colonna geometrica, costruiti da
 /// un [`GeometryColumnContract`] e dai dettagli che il contratto non modella.
 ///
-/// Decisioni di formato (il punto delicato e' la coerenza con il metadato
-/// legacy `geo` e con l'emissione di plenora-database-tools):
+/// - `crs_resolution` riflette lo stato del contratto: `resolved`
+///   (`ResolvedCrs` nasce solo da una risoluzione PROJ), `declared_unresolved`
+///   o `missing` (R4.6.3/R4.6.4, mai un CRS inventato, R4.4).
+/// - Con `declared_unresolved` le dichiarazioni originali (`crs_id` e/o
+///   `crs_definition` col formato, R4.3) si ri-emettono invariate (R4.6.4);
+///   `srid` resta alla lineage. Con il solo SRID non si emette nemmeno
+///   `axis_order`: la tabella R2.2 non lo impone e sintetizzarlo sarebbe
+///   inventarlo.
+/// - Con `missing` non si emette alcuna chiave CRS (coerenza R2.2).
+/// - La forma della definizione decide la chiave ([`definition_form`], vedi
+///   [`insert_resolved_crs_keys`]), coerente con `geo.crs` di
+///   [`geo_metadata_json`] e con plenora-database-tools.
+/// - `axis_order` e' obbligatorio con `crs_id` o `crs_definition` e si
+///   completa solo se assente (R2.7, piano-v5.md#contratti-di-input,
+///   emendamento 2026-07-31): dettaglio esplicito, poi ordine GIS
+///   normalizzato dalla definizione, infine `unknown`. `srid` (opzionale,
+///   R5.2) segue la stessa cascata via [`ResolvedCrs::authority_srid`] e
+///   resta assente se nessuno decide.
+/// - `types`/`types_declaration` si emettono solo se il campo `types` porta
+///   un valore: confidence `Unknown` non emette nulla (R3.4.1); `types` e'
+///   omessa con elenco vuoto.
 ///
-/// - `crs_resolution` riflette lo stato del contratto: `resolved` per un
-///   `ResolvedCrs` (risolto per costruzione — lo produce solo una risoluzione
-///   contro il database PROJ — quindi il valore e' onesto, non un default),
-///   `declared_unresolved` per `ContractCrs::DeclaredUnresolved` (R4.6.3:
-///   l'incoerenza si propaga dichiarata, mai risolta in silenzio),
-///   `missing` per `ContractCrs::Missing` (R4.6.3/R4.6.4: lo stato mancante
-///   si propaga invariato, mai un CRS inventato — R4.4);
-/// - con `declared_unresolved` le dichiarazioni ORIGINALI sono ri-emesse
-///   invariate (R4.6.4: l'incoerenza non risolta arriva al bordo di
-///   scrittura — R2.4, mai una persa, mai una inventata): `crs_id` e/o
-///   `crs_definition` con il suo `crs_definition_format` (R4.3), cosi' come
-///   le porta il contratto; `srid` non e' ri-emesso dal blocco (non e'
-///   modellato dal contratto: resta propagato dalla lineage). Con la SOLA
-///   rappresentazione SRID (R4.3.1: il produttore conosce il codice
-///   numerico, non l'autorita' — R4.4) il blocco non emette nemmeno
-///   `axis_order` (la tabella R2.2 lo impone solo con `crs_id` o
-///   `crs_definition`): sintetizzarlo sarebbe una dichiarazione inventata;
-/// - con `missing` NON sono emesse `crs_id`/`crs_definition`/
-///   `crs_definition_format`/`axis_order`/`srid` (coerenza R2.2:
-///   `crs_resolution = missing` non ammette metadati CRS dichiarati);
-/// - la forma della definizione CRS decide la chiave
-///   ([`definition_form`], piano-v5.md#contratti-di-input emendamento 2026-07-31): un oggetto
-///   JSON (PROJJSON) e' emesso come `crs_definition` + `projjson`, un testo
-///   WKT1/WKT2 come `crs_definition` + `wkt`/`wkt2`, un identificatore di
-///   autorita' (es. `EPSG:4326`) come `crs_id`. E' la stessa distinzione che
-///   [`geo_metadata_json`] applica al metadato legacy `geo.crs` (oggetto
-///   JSON incorporato vs stringa authority:code), cosi' le due
-///   rappresentazioni sono coerenti per costruzione (R2.6); e' anche la
-///   forma emessa da plenora-database-tools (`crs_id` = `EPSG:xxxx`).
-///   Limite preesistente invariato: una proj-string (`+proj=...`) non ha
-///   formato nella tabella §2 e resta in `crs_id`
-///   ([`DefinitionForm::Other`]).
-/// - con un CRS risolto `axis_order` e' sempre emesso, e con `declared_unresolved`
-///   e' emesso quando `crs_id` o `crs_definition` e' presente (obbligatorio
-///   in quei casi) per completamento DELL'ASSENTE, mai arbitrato (R2.7 —
-///   piano-v5.md#contratti-di-input, emendamento 2026-07-31): vince il dettaglio esplicito, poi
-///   l'ordine GIS normalizzato quando la definizione canonica permette di
-///   stabilire gli assi, cioe' l'ordine fisico x/y letto e scritto dai
-///   kernel; `unknown` resta il fallback quando gli assi non sono deducibili (la
-///   chiave qui e' obbligatoria, non opzionale, e `unknown` non e' un
-///   default al posto dell'assente — R5.2 riguarda le chiavi opzionali:
-///   `srid`, `spatial_semantics`, `precision`, `encoding`. `srid` segue la
-///   stessa cascata di completamento via
-///   [`ResolvedCrs::authority_srid`] e resta assente se neanche la
-///   deduzione decide).
-/// - `types`/`types_declaration` sono emesse SOLO se il campo `types` porta
-///   un valore (confidence `Declared`/`Proven`/`Estimated`); confidence
-///   `Unknown` («proprieta' non dichiarata», R3.4.1) non emette nulla: mai
-///   inventare una dichiarazione. `types` e' omessa quando l'elenco e' vuoto
-///   (`unresolved`, o `mixed` senza elenco), come da forma canonica.
-///
-/// Le chiavi `GeoArrow` (`ARROW:extension:name`, `geo`) RESTANO emesse dai
-/// costruttori esistenti (R2.6 ammette la coesistenza se coerente): questa
-/// funzione produce solo il blocco canonico; la fusione nei campi di output
-/// e' responsabilita' del chiamante, cosi' come
-/// l'aggiunta di `plenora.contract.version` nei metadati dello schema
-/// ([`canonical_schema_version_metadata`]).
+/// Le chiavi `GeoArrow` restano emesse dai costruttori (R2.6); la fusione nei
+/// campi di output e `plenora.contract.version`
+/// ([`canonical_schema_version_metadata`]) spettano al chiamante.
 #[must_use]
 pub fn canonical_geometry_metadata(
     contract: &GeometryColumnContract,
@@ -581,19 +501,12 @@ pub fn canonical_geometry_metadata(
             definition,
             definition_format,
         } => {
-            // R4.6.4: le dichiarazioni originali sono ri-emesse invariate —
-            // l'incoerenza arriva al bordo di scrittura com'e', mai persa
-            // e mai conciliata. `axis_order` e' emesso come per `resolved`
-            // (obbligatorio per la tabella R2.2 quando `crs_id` o
-            // `crs_definition` e' presente): qui NON c'e' un `ResolvedCrs`
-            // da cui dedurre (lo stato porta le dichiarazioni, non una
-            // definizione risolta), quindi senza dettaglio esplicito vale
-            // `unknown` — l'assenza di una dichiarazione, che non
-            // sovrascrive la lineage (vedi `canonical_output_schema`).
-            // Con la SOLA rappresentazione SRID (R4.3.1 — il produttore
-            // conosce il codice, non l'autorita') la tabella R2.2 non
-            // impone `axis_order` e il centro non lo sintetizza (R4.4):
-            // resta alla lineage, se dichiarato.
+            // R4.6.4: le dichiarazioni originali si ri-emettono invariate.
+            // `axis_order` e' obbligatorio con `crs_id` o `crs_definition`;
+            // senza un `ResolvedCrs` da cui dedurre, vale `unknown` se manca
+            // un dettaglio esplicito, e non sovrascrive la lineage (vedi
+            // `canonical_output_schema`). Con il solo SRID non si sintetizza
+            // (R4.4).
             if let Some(crs_id) = crs_id {
                 metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), crs_id.clone());
             }
@@ -642,39 +555,24 @@ pub fn canonical_geometry_metadata(
     metadata
 }
 
-/// Chiavi CRS di uno stato `resolved` (R2.2): corpo condiviso fra
-/// [`canonical_geometry_metadata`] (braccio `Resolved`/`ResolvedByDecision`,
-/// che passa il `ResolvedCrs`) e
-/// [`canonical_geometry_metadata_for_resolved_definition`] (trasporto
-/// legacy, che passa `None` e deduce lo `srid` a monte dalla forma
-/// `authority:code`) — stessa forma e stessi byte a parita' di definizione
-/// e dettagli.
+/// Chiavi CRS di uno stato `resolved` (R2.2), corpo condiviso fra
+/// [`canonical_geometry_metadata`] e
+/// [`canonical_geometry_metadata_for_resolved_definition`]: stessi byte a
+/// parita' di definizione e dettagli.
 ///
-/// La FORMA della definizione decide la chiave ([`definition_form`],
-/// piano-v5.md#contratti-di-input emendamento 2026-07-31 — classe B): oggetto JSON (PROJJSON) →
-/// `crs_definition` + `crs_definition_format = projjson`; testo WKT1/WKT2
-/// → `crs_definition` (byte originali) + `wkt`/`wkt2` (etichetta derivata
-/// dalla stringa stessa: passthrough idempotente contro la lineage, nessuno
-/// stato nuovo in `ResolvedCrs`); identificatore d'autorita' e ogni altra
-/// forma → `crs_id`. E' la stessa distinzione che [`geo_metadata_json`]
-/// applica al metadato legacy `geo.crs` (oggetto JSON incorporato vs
-/// stringa authority:code), cosi' le due rappresentazioni restano coerenti
-/// per costruzione (R2.6). Mandare ogni testo non-JSON in `crs_id` sarebbe
-/// sbagliato per il WKT: romperebbe il passthrough R2.6 contro una lineage
-/// `crs_definition = wkt`. Limite dichiarato: una proj-string non ha formato
-/// nella tabella §2
-/// e resta in `crs_id` ([`DefinitionForm::Other`]).
+/// La forma della definizione decide la chiave ([`definition_form`],
+/// piano-v5.md#contratti-di-input, emendamento 2026-07-31, classe B):
+/// PROJJSON -> `crs_definition` + `projjson`; WKT1/WKT2 -> `crs_definition`
+/// (byte originali) + `wkt`/`wkt2`; ogni altra forma -> `crs_id`. E' la
+/// distinzione di [`geo_metadata_json`] per `geo.crs`, quindi le due
+/// rappresentazioni sono coerenti per costruzione (R2.6). Limite dichiarato:
+/// una proj-string non ha formato in §2 e resta in `crs_id`
+/// ([`DefinitionForm::Other`]).
 ///
-/// `axis_order` e' sempre emesso (obbligatorio quando un CRS e' presente)
-/// con completamento DELL'ASSENTE, mai arbitrato (R2.7 — piano-v5.md#contratti-di-input,
-/// emendamento 2026-07-31): vince il dettaglio esplicito di `details`, poi
-/// l'ordine GIS normalizzato quando la definizione canonica permette di
-/// stabilire gli assi, cioe' l'ordine fisico x/y letto e scritto dai kernel;
-/// `unknown` resta il fallback quando gli assi non sono deducibili (non un
-/// default al posto dell'assente: la chiave qui e' obbligatoria). `srid`
-/// (opzionale R5.2) segue la stessa cascata senza fondo: dettaglio
-/// esplicito, poi deduzione ([`ResolvedCrs::authority_srid`]), altrimenti
-/// chiave assente.
+/// `axis_order` e' sempre emesso e si completa solo se assente (R2.7):
+/// dettaglio esplicito, poi ordine GIS normalizzato dalla definizione, infine
+/// `unknown`. `srid` (opzionale, R5.2) segue la stessa cascata senza fondo:
+/// dettaglio, poi [`ResolvedCrs::authority_srid`], altrimenti assente.
 fn insert_resolved_crs_keys(
     metadata: &mut HashMap<String, String>,
     definition: &str,
@@ -729,28 +627,16 @@ fn insert_resolved_crs_keys(
 /// Blocco canonico R2.2 da una definizione CRS gia' risolta al bordo del
 /// produttore, senza un [`ResolvedCrs`].
 ///
-/// BLOCK-06 (parita' del percorso legacy col v4,
-/// errori-e-limiti.md#limiti-dichiarati estesa): il trasporto legacy `geo_transport` valida il CRS
-/// al livello comandi (risoluzione PROJ obbligatoria in `publish.rs`) e
-/// trasporta la sola definizione; un `ResolvedCrs` richiederebbe una
-/// risoluzione che il trasporto non esegue.
+/// Serve al trasporto legacy `geo_transport` (BLOCK-06,
+/// errori-e-limiti.md#limiti-dichiarati), che risolve il CRS al livello
+/// comandi e porta la sola definizione. Emette `resolved` nella forma di
+/// [`insert_resolved_crs_keys`]; non emette `types`/`types_declaration`
+/// (R3.4.1), e `encoding` solo se dichiarata (R5.2).
 ///
-/// Lo stato emesso e' `resolved` — il CRS dichiarato nell'operazione e'
-/// stato risolto al bordo comandi, ed e' lo stesso che il metadato legacy
-/// `geo.crs` dichiara (coerenza R2.6 per costruzione). La forma e' quella
-/// del braccio `Resolved` di [`canonical_geometry_metadata`] (corpo
-/// condiviso [`insert_resolved_crs_keys`]: byte identici a parita' di
-/// definizione e dettagli). `types`/`types_declaration` NON sono emesse: il
-/// trasporto legacy non dichiara i tipi e inventarli e' vietato (R3.4.1);
-/// `encoding` e' emessa solo se il chiamante la dichiara (R5.2).
-///
-/// Deduzione d'autorita' (piano-v5.md#contratti-di-input, emendamento 2026-07-31): senza un
-/// `ResolvedCrs` la definizione canonica non e' disponibile, quindi lo
-/// `srid` e' dedotto dalla forma `authority:code` della definizione quando
-/// numerica ([`authority_code_srid`] — `EPSG:4326` → 4326), mentre
-/// `axis_order` resta `unknown` — LIMITE DICHIARATO: il trasporto legacy
-/// non risolve la definizione e non puo' dedurre gli assi onestamente
-/// (dedurli dalla stringa sarebbe inventarli).
+/// Lo `srid` si deduce dalla forma `authority:code` ([`authority_code_srid`]);
+/// `axis_order` resta `unknown`, **limite dichiarato**: dedurre gli assi dalla
+/// stringa sarebbe inventarli (piano-v5.md#contratti-di-input, emendamento
+/// 2026-07-31).
 #[must_use]
 pub fn canonical_geometry_metadata_for_resolved_definition(
     definition: &str,
@@ -851,13 +737,11 @@ pub fn strip_rewritten_types_declarations<S: std::hash::BuildHasher>(
 }
 
 /// Rimuove le chiavi canoniche del CRS dai metadati di un campo geometria,
-/// SENZA toccare il metadato legacy `geo` (gia' riscritto dall'operazione
-/// col CRS di output).
+/// senza toccare il metadato legacy `geo` (gia' riscritto dall'operazione).
 ///
-/// Usata dall'analisi di `geo.reproject` (piano-v5.md#contratti-di-input, decisione 8): la
-/// riproiezione CAMBIA il fatto (il CRS della colonna), non ne descrive uno
-/// diverso — le chiavi della sorgente sono sostituite e il blocco canonico
-/// ri-emette il target dal contratto, senza conflitto R2.6 con la lineage.
+/// Per `geo.reproject` (piano-v5.md#contratti-di-input, decisione 8): la
+/// riproiezione cambia il CRS, quindi le chiavi della sorgente si sostituiscono
+/// e il blocco canonico ri-emette il target senza conflitto R2.6.
 pub fn strip_rewritten_crs_keys<S: std::hash::BuildHasher>(
     metadata: &mut HashMap<String, String, S>,
 ) {
@@ -868,14 +752,11 @@ pub fn strip_rewritten_crs_keys<S: std::hash::BuildHasher>(
 
 /// Rimuove le dichiarazioni CRS dai metadati di un campo geometria.
 ///
-/// Toglie le chiavi canoniche di [`CRS_KEYS_REPLACED_BY_DECISION`] e il
-/// membro `crs` del metadato legacy `geo` (se il metadato resta vuoto,
-/// rimosso): usato all'emissione quando una decisione esplicita del piano
-/// ([`ContractCrs::ResolvedByDecision`], R4.6.3) sostituisce le
-/// dichiarazioni della sorgente — il blocco canonico ri-emette il CRS
-/// deciso senza conflitti R2.6 con la lineage. Un metadato `geo` non
-/// oggetto o non JSON resta invariato: non porta un membro `crs` da
-/// sostituire (un `geo` malformato e' gia' errore di discovery, a monte).
+/// Toglie le chiavi di [`CRS_KEYS_REPLACED_BY_DECISION`] e il membro `crs`
+/// del metadato `geo` (rimosso se resta vuoto), quando una decisione del
+/// piano ([`ContractCrs::ResolvedByDecision`], R4.6.3) sostituisce le
+/// dichiarazioni della sorgente. Un `geo` non oggetto o non JSON resta
+/// invariato: il `geo` malformato e' gia' un errore di discovery.
 pub fn strip_decided_crs_declarations<S: std::hash::BuildHasher>(
     metadata: &mut HashMap<String, String, S>,
 ) {
@@ -968,11 +849,9 @@ pub fn canonical_geometry_dimensions(
 
 /// Coppia (`types_declaration`, `types`) canonica (R2.2/R3.4.1).
 ///
-/// Le coerenze sono imposte da [`GeometryTypesProperty::from_canonical_list`]
-/// (`exact` richiede l'elenco, `unresolved` lo vieta, forma testuale unica).
-/// Entrambe le chiavi assenti → `Ok(None)` («proprieta' non dichiarata»,
-/// MAI interpretata come `unresolved`); `types` senza `types_declaration` →
-/// errore (un produttore conforme emette sempre la dichiarazione, R3.4.1).
+/// Le coerenze sono di [`GeometryTypesProperty::from_canonical_list`].
+/// Entrambe le chiavi assenti danno `Ok(None)` («proprieta' non dichiarata»,
+/// mai `unresolved`); `types` senza `types_declaration` e' un errore.
 ///
 /// # Errors
 ///
@@ -1167,17 +1046,11 @@ pub fn canonical_field_id(field: &Field) -> Result<Option<FieldId>, PlenoraError
 /// Versione del protocollo dei metadati dichiarata dallo schema, con il
 /// gate R2.5.
 ///
-/// Chiave presente: deve essere un intero decimale senza segno; una
-/// versione MAGGIORE di [`PLENORA_CONTRACT_VERSION`] e' rifiutata con
-/// errore esplicito (R2.5: mai un'interpretazione parziale). La versione `0`
-/// e' accettata: R2.5 impone il fallimento solo per versioni successive a
-/// quella nota, e il protocollo `1` e' il primo definito — nessuna versione
-/// minore puo' introdurre chiavi che la `1` non conosca.
-///
-/// Chiave assente: se lo schema (metadati di schema o di qualunque campo)
-/// porta chiavi nel namespace `plenora.`, R2.5 la richiede → errore
-/// esplicito; senza chiavi canoniche → `Ok(None)` (input legacy o non
-/// plenora, nessun protocollo da verificare).
+/// Presente: intero decimale senza segno; una versione maggiore di
+/// [`PLENORA_CONTRACT_VERSION`] si rifiuta (R2.5, mai un'interpretazione
+/// parziale). Una versione minore si accetta, perche' R2.5 fa fallire solo
+/// le successive. Assente: errore se lo schema porta chiavi `plenora.`,
+/// altrimenti `Ok(None)` (input legacy o non plenora).
 ///
 /// # Errors
 ///
@@ -1372,37 +1245,20 @@ fn legacy_crs_is_coherent(keys: &CanonicalGeometryKeys, legacy: &LegacyCrs) -> b
 
 /// Lettura di contratto di un campo geometria.
 ///
-/// Chiavi canoniche (fail-closed per chiave), coerenza con il metadato
-/// legacy `geo` (R2.6) e completamento per precedenza canonica > legacy >
-/// standard esterno (R2.7).
+/// 1. ogni chiave canonica e' letta dal suo reader tipizzato: assente ->
+///    `None`, non canonica -> errore (R5.1);
+/// 2. coerenze fra chiavi canoniche: `axis_order` obbligatorio con `crs_id`
+///    o `crs_definition` (`unknown` ammesso); `crs_resolution = missing`
+///    esclude `crs_id`/`crs_definition`/`srid`/`axis_order`;
+/// 3. R2.6: una nozione presente sia canonica sia legacy deve coincidere
+///    (il CRS a parita' di forma; forme non confrontabili contano come
+///    divergenza): il componente fallisce, non sceglie;
+/// 4. completamento R2.7, senza ispezionare i dati: canonica > legacy >
+///    standard esterno (`geoarrow.wkb` completa `encoding` con `wkb`). Non si
+///    controlla encoding contro estensione: EWKB e' un dialetto WKB e i
+///    costruttori emettono legittimamente `ewkb` sotto quel nome.
 ///
-/// Protocollo:
-///
-/// 1. ogni chiave canonica e' parsata dal suo reader tipizzato: assente →
-///    `None`, valore non canonico → errore (R5.1);
-/// 2. coerenze FRA chiavi canoniche: `axis_order` obbligatorio se `crs_id` o
-///    `crs_definition` e' presente (tabella §2, valore `unknown` ammesso);
-///    `crs_resolution = missing` non ammette `crs_id`/`crs_definition`/
-///    `srid`/`axis_order` (coerenza gia' imposta da plenora-database-tools);
-/// 3. coerenza R2.6 con il legacy: ogni nozione presente in DUE
-///    rappresentazioni deve coincidere — `encoding` e `dimensions` a parita'
-///    di valore canonico, il CRS a parita' di forma (stringa
-///    authority:code ↔ `crs_id`, oggetto PROJJSON ↔ `crs_definition` con
-///    formato `projjson`, confronto per valore JSON); forme non confrontabili
-///    (es. `crs_id` canonico contro oggetto legacy) contano come divergenza:
-///    il componente fallisce, non sceglie;
-/// 4. completamento R2.7 (mai arbitrato, decidibile senza ispezionare i
-///    dati): una nozione assente nel rango canonico e' adottata dal legacy;
-///    se assente anche li, il solo standard esterno `ARROW:extension:name =
-///    geoarrow.wkb` completa `encoding` con `wkb`. Nessun controllo di
-///    coerenza fra encoding e nome di estensione: `geoarrow.wkb`
-///    dichiara la famiglia binaria WKB (di cui EWKB e' il dialetto con
-///    SRID) e i costruttori di questo modulo emettono legittimamente
-///    `ewkb` sotto quel nome.
-///
-/// Il gate di versione R2.5 NON e' applicato qui: la versione vive nei
-/// metadati dello schema ([`read_contract_version`]), non nel campo, e
-/// resta responsabilita' del chiamante.
+/// Il gate di versione R2.5 spetta al chiamante ([`read_contract_version`]).
 ///
 /// # Errors
 ///

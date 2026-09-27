@@ -1,34 +1,18 @@
 //! plenora-kernels-geo — kernel geografici su `geo::Geometry<f64>` e adapter
 //! Arrow per il canone GeoArrow-WKB (architettura.md#geometrie).
 //!
-//! Contiene il validatore WKB strutturale, i kernel puri (`operations`, `analysis`, `topology`,
-//! `predicates`, `construction`, `equality`, `extended`,
-//! `extended_algorithms`, `advanced`, `spatial_join`, `extensions`,
-//! `extensions2`, `extensions3`, `cluster`),
-//! backend opzionali (`geos_backend`,
-//! `proj_backend`) e l'adapter Arrow di rappresentazione (`arrow_adapter`).
+//! Contiene il validatore WKB strutturale, i kernel puri, i backend opzionali
+//! (`geos_backend`, `proj_backend`; feature `geos-backend`, `proj-backend`,
+//! `full-backends`), [`arrow_adapter`](crate::arrow_adapter) per la
+//! rappresentazione GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei
+//! contratti. L'adapter ammette una cache di decode per segmento senza
+//! modifiche ai contratti.
 //!
-//! L'adapter è progettato per ammettere la cache di decode per segmento
-//! (architettura.md: decode/encode geo minimizzato, WKB come confine)
-//! senza modifiche ai contratti.
-//!
-//! - [`arrow_adapter`](crate::arrow_adapter) per la rappresentazione
-//!   GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti
-//!   (`analyze_contract` del catalogo).
-//! - [`memory_estimate`](crate::memory_estimate) per la STIMA dichiarata
-//!   della memoria nativa delle geometrie decodificate
-//!   (architettura.md#memoria): mai un conteggio preciso.
-//! - [`geometry_contract`](crate::geometry_contract) per il contratto sulle
-//!   geometrie decodificate (architettura.md#geometrie): dimensione esatta del WKB ISO XY e
-//!   validazione strutturale su `Geometry`.
-//!
-//! Errori: il sorgente usava `GeoEngineError`; qui le stesse condizioni sono
-//! mappate su [`plenora_core::PlenoraError`] preservando i messaggi:
-//! - `InvalidWkb` / `EmptyGeometry` / `WkbSerialization` / `NonFiniteCoordinate`
-//!   / `InvalidWkbStructure` / `InvalidGeometry` → `PlenoraError::InvalidPlan`;
-//! - `UnsupportedWkbDimension` → `PlenoraError::Unsupported`.
-//!
-//! Feature: `geos-backend`, `proj-backend`, `full-backends`.
+//! [`memory_estimate`](crate::memory_estimate) da' una STIMA della memoria
+//! nativa delle geometrie decodificate, mai un conteggio preciso
+//! (architettura.md#memoria); [`geometry_contract`](crate::geometry_contract)
+//! fissa la dimensione esatta del WKB ISO XY e la validazione strutturale su
+//! `Geometry`. Gli errori sono [`plenora_core::PlenoraError`].
 
 pub mod advanced;
 pub mod analysis;
@@ -85,8 +69,7 @@ impl Operation {
     }
 }
 
-/// Mappatura delle varianti `GeoEngineError` del sorgente su `PlenoraError`
-/// (messaggi invariati).
+/// Costruttori degli errori di geometria su `PlenoraError`.
 fn empty_geometry(operation: &'static str) -> PlenoraError {
     PlenoraError::InvalidPlan(format!("geometria vuota non supportata da {operation}"))
 }
@@ -142,11 +125,9 @@ fn invalid_geometry(error: impl std::fmt::Display) -> PlenoraError {
 /// # Errors
 ///
 /// [`PlenoraError::InvalidPlan`] se la geometria non e' valida secondo OGC;
-/// [`PlenoraError::Internal`] se la validazione **non conclude**. I due casi
-/// non si confondono: nel secondo nessuno ha dimostrato che l'ingresso sia
-/// invalido, e dire «piano invalido» manderebbe chi legge a correggere un
-/// errore che non ha commesso. E' la stessa distinzione, e la stessa ragione,
-/// del panico di un kernel nell'executor.
+/// [`PlenoraError::Internal`] se la validazione **non conclude**: nessuno ha
+/// dimostrato che l'ingresso sia invalido, come per il panico di un kernel
+/// nell'executor.
 pub(crate) fn valida_ogc<G>(geometria: &G) -> Result<(), PlenoraError>
 where
     G: geo::algorithm::validation::Validation + AnelliSemplici,
@@ -163,17 +144,10 @@ where
 
 /// Perche' una geometria non e' utilizzabile, in **vocabolario nostro**.
 ///
-/// # Perche' non si riporta il testo di `geo`
-///
-/// Perche' quei messaggi interpolano gli **indici** dell'ingresso — «geometry
-/// at index N», «polygons at indices N and M», «coordinate at index N» — che
-/// sono fatti sui dati di chi chiama. E' la stessa regola gia' applicata agli
-/// errori di arrow, GEOS e PROJ: il testo della dipendenza non attraversa il
-/// confine.
-///
-/// Il testo di `geo` si **legge** per classificare, e non si **pubblica**: ne
-/// esce sempre e solo una di queste voci. Una forma che non si riconosce cade
-/// su [`Self::NonSpecificata`], che dice quel che sa senza inventare.
+/// I messaggi di `geo` interpolano indici dell'ingresso, cioe' fatti sui dati
+/// di chi chiama: come per arrow, GEOS e PROJ, il testo della dipendenza si
+/// legge per classificare e non attraversa il confine. Una forma non
+/// riconosciuta cade su [`Self::NonSpecificata`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RagioneNonValida {
     /// Una coordinata non finita: NaN o infinito.
@@ -232,13 +206,8 @@ impl std::fmt::Display for RagioneNonValida {
 /// Come e' andata una validazione **protetta**: due esiti che non si
 /// confondono.
 ///
-/// # Perche' non basta un testo comune
-///
-/// Perche' «la geometria e' invalida» e «la validazione non ha concluso» sono
-/// affermazioni diverse, e la seconda non implica la prima: un validatore
-/// interrotto non ha dimostrato niente sull'ingresso. Un tipo solo per i due
-/// casi costringerebbe chi classifica a indovinare, e chi indovina sbaglia
-/// verso `InvalidPlan` — cioe' verso l'accusa a chi ha scritto l'ingresso.
+/// Un validatore interrotto non ha dimostrato niente sull'ingresso: un tipo
+/// solo per i due casi spingerebbe chi classifica verso `InvalidPlan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EsitoValidazione {
     /// La validazione ha concluso: la geometria non e' valida.
@@ -261,14 +230,8 @@ impl std::fmt::Display for EsitoValidazione {
 impl EsitoValidazione {
     /// Separa i due casi verso l'errore del chiamante.
     ///
-    /// # Perche' un metodo e non `to_string()`
-    ///
-    /// Perche' `to_string()` fa collassare i due casi in un testo, e il testo
-    /// finisce in qualunque variante il chiamante abbia sottomano — di solito
-    /// una che dice «ingresso non valido». Cosi' la distinzione muore *dopo*
-    /// il tipo che esiste per farla vivere. Qui i due rami sono due argomenti:
-    /// chi converte deve dire che cosa fa in entrambi, e il compilatore non
-    /// lascia dimenticarne uno.
+    /// `to_string()` farebbe collassare i due casi in un testo; qui sono due
+    /// argomenti, e il compilatore non lascia dimenticarne uno.
     pub(crate) fn separa<E>(
         self,
         invalida: impl FnOnce(RagioneNonValida) -> E,
@@ -283,12 +246,9 @@ impl EsitoValidazione {
 
 /// La validazione OGC, dietro la barriera, per chi ha un errore proprio.
 ///
-/// # Perche' un tratto e non una funzione libera
-///
-/// Perche' i siti che validano sono decine e ognuno mappa il guasto sul
-/// **proprio** tipo d'errore — `AdvancedError`, `ClusterError`,
-/// `ExtensionError` e gli altri. Un tratto con lo stesso nome del metodo che
-/// sostituisce lascia intatta ogni mappatura: al sito cambia una parola.
+/// E' un tratto perche' ogni sito mappa il guasto sul proprio tipo d'errore
+/// (`AdvancedError`, `ClusterError`, ...): il metodo affianca
+/// `check_validation` e lascia intatte le mappature.
 pub(crate) trait ValidazioneProtetta {
     /// Come `check_validation`, ma **non va in panico**.
     ///
@@ -312,12 +272,9 @@ where
                 RagioneNonValida::AutoIntersezione,
             ));
         }
-        // `check_validation` di `geo` puo' andare in panico invece di rendere
-        // un errore: la sua `relate` costruisce un grafo topologico in virgola
-        // mobile e chiama `panic!` quando due conclusioni sullo stesso punto si
-        // contraddicono. Il messaggio stesso dice «this can happen with invalid
-        // geometries» — cioe' proprio con l'ingresso ostile che questo crate
-        // riceve per mestiere.
+        // `check_validation` di `geo` puo' andare in panico: la sua `relate`
+        // chiama `panic!` quando due conclusioni sullo stesso punto si
+        // contraddicono, anche su geometrie invalide in ingresso.
         let esito = plenora_core::panic_policy::barriera_di_dipendenza(
             std::panic::AssertUnwindSafe(|| self.check_validation()),
         );
@@ -326,15 +283,10 @@ where
             Ok(Err(causa)) => Err(EsitoValidazione::NonValida(RagioneNonValida::dal_testo(
                 &causa.to_string(),
             ))),
-            // Il payload di `geo` porta le **coordinate** che hanno provocato
-            // la contraddizione, cioe' dati dell'ingresso. Si pubblica la forma
-            // del payload, non il contenuto: e' la stessa nozione condivisa che
-            // usano le altre barriere del progetto.
-            //
-            // La barriera da sola non basta a mantenere la promessa: l'hook di
-            // panico di `std` stampa il payload PRIMA che `catch_unwind` lo
-            // veda. Chi ospita questo crate deve installare la politica
-            // sanitizzata di `plenora_core::panic_policy`.
+            // Il payload porta coordinate dell'ingresso: si pubblica la sua
+            // forma, non il contenuto. L'hook di panico di `std` lo stampa
+            // prima di `catch_unwind`, quindi chi ospita il crate deve
+            // installare la politica di `plenora_core::panic_policy`.
             Err(payload) => Err(EsitoValidazione::NonConclusa(
                 plenora_core::panic_policy::forma_payload(&*payload),
             )),
@@ -344,28 +296,14 @@ where
 
 /// Gli anelli di un poligono che **tornano indietro** su se stessi.
 ///
-/// # Perche' un controllo nostro
+/// `geo` 0.33.1 non le vede: la sua ricerca di auto-intersezioni salta le
+/// coppie di segmenti adiacenti, e una punta (il segmento che ripercorre il
+/// precedente) sta proprio fra due adiacenti. Su un anello collassato
+/// `relate` rende matrici prive di senso, e la validazione dei buchi accetta
+/// poligoni invalidi, oppure va in panico.
 ///
-/// Perche' `geo` 0.33.1 non lo fa. La sua ricerca di auto-intersezioni
-/// (`validation::utils::linestring_has_self_intersection`) salta le coppie di
-/// segmenti **adiacenti**, che condividono un vertice per costruzione, e una
-/// punta — il segmento che ripercorre all'indietro il precedente — sta
-/// proprio fra due segmenti adiacenti. In un triangolo tutte le coppie sono
-/// adiacenti: un anello di tre punti collineari, che ha area zero e non e'
-/// semplice, passa per valido.
-///
-/// Non e' un difetto di forma soltanto. Su un anello collassato `relate`
-/// rende matrici prive di senso — un triangolo degenere che «contiene» un
-/// triangolo vero — e la validazione dei buchi, che di `relate` si fida,
-/// accetta poligoni invalidi; oppure va in panico. Tutto cio' che dopo si
-/// fida della validazione calcolerebbe su una geometria invalida.
-///
-/// # Perche' e' esatto
-///
-/// La collinearita' e' il segno di `orient2d` del kernel robusto di `geo`,
-/// esatto sui `f64`. Il verso, fra punti gia' collineari, e' un confronto di
-/// coordinate. Nessuna tolleranza: un vertice quasi collineare non e' una
-/// punta, uno collineare si'.
+/// Il controllo e' esatto: collinearita' dal segno di `orient2d` del kernel
+/// robusto, verso da un confronto di coordinate, nessuna tolleranza.
 pub(crate) trait AnelliSemplici {
     /// Se un anello di un poligono contenuto ha una punta.
     fn ha_un_anello_con_punta(&self) -> bool;
@@ -432,14 +370,10 @@ fn poligono_con_punta(poligono: &geo::Polygon<f64>) -> bool {
 
 /// Un triangolo coi tre vertici collineari, col segno **esatto**.
 ///
-/// # Perche' non basta `geo`
-///
-/// Perche' la validazione di `Triangle` in `geo` 0.33.1 chiama
-/// `robust::orient2d` direttamente e ne confronta il risultato con zero: su
-/// coordinate estreme il determinante trabocca, il risultato e' NaN, e
-/// `NaN == 0` e' falso — un triangolo degenere passa. Il kernel robusto di
-/// `geo` scelto dal progetto da' invece il segno esatto su ogni `f64` finito.
-/// Le coordinate non finite restano a `geo`, con la loro ragione.
+/// La validazione di `Triangle` in `geo` 0.33.1 confronta `robust::orient2d`
+/// con zero: su coordinate estreme il determinante e' NaN e un triangolo
+/// degenere passa. `RobustKernel` da' il segno esatto su ogni `f64` finito;
+/// le coordinate non finite restano a `geo`.
 fn triangolo_degenere(triangolo: &geo::Triangle<f64>) -> bool {
     use geo::algorithm::kernels::{Kernel, Orientation, RobustKernel};
 
@@ -489,16 +423,10 @@ impl AnelliSemplici for Geometry<f64> {
 
 /// Un calcolo di `geo` che passa da `relate`, **dietro una barriera**.
 ///
-/// # Perche' anche su geometrie valide
-///
-/// Perche' la validazione non basta. `relate` costruisce un grafo topologico
-/// in virgola mobile e chiama `panic!` quando due conclusioni sullo stesso
-/// punto si contraddicono (`edge_end_bundle_star.rs`, «topology position
-/// conflict»), e il fuzz target `wkt_operations` lo raggiunge con poligoni che
-/// `check_validation` accetta. `interior_point` ci passa per scegliere il
-/// punto, i predicati spaziali per definizione.
-///
-/// Il lavoro deve contenere la sola chiamata a `geo`: e' una
+/// Serve anche su geometrie valide: `relate` va in panico su un «topology
+/// position conflict» con poligoni che `check_validation` accetta (fuzz
+/// target `wkt_operations`), e ci passano `interior_point` e i predicati
+/// spaziali. Il lavoro contiene la sola chiamata a `geo`: e' una
 /// [`barriera_di_dipendenza`](plenora_core::panic_policy::barriera_di_dipendenza).
 ///
 /// # Errors
@@ -668,32 +596,18 @@ pub(crate) fn checked_count(
 /// Interpreta il type code WKB e ne deriva tipo base e stride coordinata,
 /// verificando la coerenza con la dimensionalita' attesa.
 ///
-/// Forme ammesse:
-/// - ISO: `tipo + 1000 * dimensione` con dimensione 0..=3 (XY, Z, M, ZM);
-/// - EWKB: flag Z ([`EWKB_Z_FLAG`]) e/o M ([`EWKB_M_FLAG`]) e tipo base nei
-///   16 bit bassi, senza altri bit alti attivi.
+/// Forme ammesse: ISO `tipo + 1000 * dimensione` con dimensione 0..=3, ed
+/// EWKB con flag Z ([`EWKB_Z_FLAG`]) e/o M ([`EWKB_M_FLAG`]) e tipo base nei
+/// 16 bit bassi, senza altri bit alti. Il flag SRID EWKB e' sempre
+/// rifiutato (lo SRID non e' preservabile); i codici dimensione ISO oltre 3
+/// danno [`unsupported_wkb_dimension`]. Un EWKB senza flag Z/M e senza SRID
+/// e' byte-identico a WKB ISO e passa come `xy`: il gate sta sui type code,
+/// non sulla chiave `encoding` del metadato `geo`.
 ///
-/// Il flag SRID EWKB e' sempre rifiutato, per qualunque dimensionalita'
-/// attesa: lo SRID non e' preservabile. I codici dimensione ISO oltre 3
-/// mantengono l'errore storico ([`unsupported_wkb_dimension`]), cosi' i
-/// chiamanti non osservano un cambio di variante d'errore su input
-/// malformati.
-///
-/// Comportamento dichiarato: un payload EWKB SENZA flag Z/M e
-/// senza SRID ha type code byte-identici a WKB ISO — le due forme sono
-/// indistinguibili sul filo e un input dichiarato `encoding: ewkb` puro-XY
-/// passa i gate come `xy`. L'encoding dichiarato nei metadati non cambia la
-/// validazione strutturale: il gate resta sui type code, non sulla chiave
-/// `encoding` del metadato `geo`.
-///
-/// Coerenza con la dimensionalita' attesa:
-/// - `Xy`: ogni marcatore dimensionale e' rifiutato con l'errore storico,
-///   come fa il validatore a sola XY;
-/// - `Unknown` (R3.4: byte preservati, dimensionalita' dal type code):
-///   qualunque forma valida e' accettata e lo stride e' derivato dal type
-///   code stesso, geometria per geometria;
-/// - `Xyz`/`Xym`/`Xyzm`: la divergenza dal type code produce l'errore
-///   dedicato [`wkb_dimension_mismatch`], mai un passthrough.
+/// Con `Xy` ogni marcatore dimensionale da' [`unsupported_wkb_dimension`];
+/// con `Unknown` (R3.4) lo stride si deriva dal type code, geometria per
+/// geometria; con `Xyz`/`Xym`/`Xyzm` una divergenza da'
+/// [`wkb_dimension_mismatch`], mai un passthrough.
 pub(crate) fn parse_wkb_type_code(
     raw_type: u32,
     expected: GeometryDimensions,
@@ -742,9 +656,8 @@ pub(crate) fn parse_wkb_type_code(
 }
 
 /// Wrapper a dimensionalita' attesa `Xy`: serie ISO 1000+ e flag EWKB
-/// Z/M/SRID rifiutati, come il validatore storico. Usato dal percorso
-/// pubblico storico; la
-/// variante stride-aware e' [`validate_wkb_geometry_with_dimensions`].
+/// Z/M/SRID rifiutati. La variante stride-aware e'
+/// [`validate_wkb_geometry_with_dimensions`].
 fn validate_wkb_geometry(
     cursor: &mut WkbCursor<'_>,
     depth: usize,
@@ -795,11 +708,9 @@ fn type_code_without_embedded_srid(
 /// sui byte e finitezza di X/Y sono verificati con lo stride della
 /// dimensionalita' attesa (o derivato dal type code, se `Unknown`).
 ///
-/// Le ordinate extra (Z/M) sono saltate via stride: mai lette, mai
-/// reinterpretate, mai validate. In particolare la finitezza di Z/M NON e'
-/// controllata — scelta deliberata: i byte sono preservati senza elaborare
-/// le ordinate extra, quindi un NaN in Z/M non e' un dato elaborato dal kernel
-/// — e la chiusura degli anelli e' valutata sulle sole X/Y.
+/// Le ordinate extra (Z/M) sono saltate via stride, mai lette ne' validate:
+/// un NaN in Z/M passa, perche' il kernel non elabora quelle ordinate. La
+/// chiusura degli anelli si valuta sulle sole X/Y.
 fn validate_wkb_geometry_with_dimensions(
     cursor: &mut WkbCursor<'_>,
     depth: usize,
@@ -904,28 +815,10 @@ fn validate_wkb_geometry_with_dimensions(
 
 /// Byte di un WKB scritto in esadecimale; `None` se la stringa non lo e'.
 ///
-/// # Perche' sui byte e non su `&str`
-///
-/// Affettare la stringa per indici di byte (`&hex[index..index + 2]`) dopo
-/// aver controllato che la LUNGHEZZA IN BYTE sia pari non basta: le due
-/// cose non si implicano. `"a\u{e9}b"` e' lungo quattro
-/// byte — pari — ma l'indice 2 cade in mezzo alla codifica UTF-8 di
-/// `\u{e9}`, e affettare fuori da un confine di carattere e' un **panic**,
-/// non un errore. L'input arriva dalla configurazione di un piano, quindi da
-/// fuori.
-///
-/// Trovato dalla campagna fuzz notturna (`analyze_geo`, artefatto
-/// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`). Il lint anti-panic R6
-/// non copre questa classe: non c'e' nessun `unwrap`/`expect`/`panic!` — il
-/// panic e' dentro l'indicizzazione.
-///
-/// Un esadecimale valido e' per definizione ASCII, quindi ogni byte fuori da
-/// quell'insieme e' gia' un input non valido, non un carattere da
-/// interpretare: la decodifica lavora sui byte e non affetta mai la stringa.
-///
-/// Vive QUI, accanto al validatore che la accompagna sempre, e non in due
-/// copie: due copie della stessa decodifica sono due copie dello stesso
-/// difetto.
+/// Lavora sui byte e non affetta mai la stringa: una lunghezza in byte pari
+/// non garantisce confini di carattere (`"a\u{e9}b"`), e affettare fuori da
+/// un confine e' un panic che il lint R6 non vede. L'input arriva dalla
+/// configurazione di un piano, quindi da fuori.
 ///
 /// `None` per stringa vuota, di lunghezza dispari, o con un byte che non e'
 /// una cifra esadecimale ASCII. Il chiamante lo traduce nel proprio errore.
@@ -1010,7 +903,7 @@ pub fn validate_wkb_contract_with_depth(
 /// ordinate extra (Z/M) non sono lette: vedi
 /// [`validate_wkb_geometry_with_dimensions`].
 ///
-/// Nessun chiamante passa ancora la dimensionalita' del contratto di
+/// In produzione nessun chiamante passa la dimensionalita' del contratto di
 /// colonna: usano tutti [`validate_wkb_contract`], cioe' `Xy`.
 ///
 /// # Errors
@@ -1062,8 +955,8 @@ pub fn validate_wkb_contract_for_dimensions_with_depth(
 ///
 /// A differenza dei decoder dei kernel geometrici, questo gate ammette il
 /// flag SRID soltanto per encoding EWKB dichiarato e verifica ogni SRID
-/// embedded contro l'autorita' governata. I decoder elaboranti continuano a rifiutare
-/// lo SRID embedded finche' non possono preservarlo.
+/// embedded contro l'autorita' governata. I decoder elaboranti rifiutano lo
+/// SRID embedded, che non possono preservare.
 ///
 /// # Errors
 ///
@@ -1212,15 +1105,12 @@ pub fn check_geometry_valid(geometry: &Geometry<f64>) -> Result<(), PlenoraError
 /// Pipeline di [`transform_wkb`] su una geometria gia' decodificata
 /// (architettura.md#geometrie D12.4, profilo A).
 ///
-/// Per `centroid`/`convex_hull`/`envelope`: stesso ordine e stessi messaggi
-/// — kernel con validazione OGC dell'output
-/// ([`transform_geometry_validated`]), limite di 64 MiB sul WKB equivalente
+/// Stesso ordine e stessi messaggi: kernel con validazione OGC dell'output
+/// ([`transform_geometry_validated`]), limite sul WKB equivalente
 /// ([`geometry_contract::wkb_size_xy`], esatto per costruzione), validazione
-/// strutturale ([`geometry_contract::validate_geometry_structural`], parita'
-/// con `validate_wkb_contract` dimostrata dai test di `geometry_contract`).
-/// Manca solo la serializzazione, demandata al chiamante: `to_wkb` su `Vec`
-/// non ha casi di fallimento raggiungibili da una geometria che ha superato
-/// questi controlli.
+/// strutturale ([`geometry_contract::validate_geometry_structural`]). La
+/// serializzazione resta al chiamante: `to_wkb` su `Vec` non fallisce su una
+/// geometria che ha superato questi controlli.
 ///
 /// # Errors
 ///
@@ -1251,23 +1141,17 @@ mod tests {
             .expect("decode result")
     }
 
-    /// Equivalente dei match sulle varianti `GeoEngineError` del sorgente:
-    /// la condizione e' identificata dal messaggio, preservato verbatim.
+    /// La condizione d'errore e' identificata dal messaggio.
     fn is_contract_error(result: &Result<Geometry<f64>, PlenoraError>, message: &str) -> bool {
         matches!(result, Err(PlenoraError::InvalidPlan(reason)) if reason == message)
     }
 
-    /// Il crash della campagna fuzz notturna (`analyze_geo`, artefatto
-    /// `crash-fd1eba39798feba74d4fc8837358f35c82a4a34a`).
-    ///
-    /// Affettare la stringa per indici di byte controllando la sola
-    /// PARITA' della lunghezza non basta: `"a\u{e9}b"` e'
-    /// lungo quattro byte — pari — ma l'indice 2 cade in mezzo alla codifica
-    /// UTF-8 di `\u{e9}`, e affettare fuori da un confine di carattere e' un
-    /// panic. L'input viene dalla configurazione di un piano.
+    /// Una lunghezza in byte pari non garantisce confini di carattere
+    /// (`"a\u{e9}b"`): la decodifica di un esadecimale da config non va mai in
+    /// panic.
     #[test]
     fn il_wkb_esadecimale_non_va_mai_in_panic_su_input_ostile() {
-        // Il caso del crash: lunghezza pari in byte, confine di carattere no.
+        // Lunghezza pari in byte, confine di carattere no.
         assert_eq!(wkb_hex_to_bytes("a\u{e9}b"), None, "il caso del crash");
 
         // La stessa forma con altri caratteri multi-byte, di lunghezza pari.
@@ -1472,23 +1356,14 @@ mod tests {
         ));
     }
 
-    /// La validazione OGC (`valida_ogc`/`RagioneNonValida::dal_testo`) legge
-    /// il testo di `geo` per classificare, senza pubblicarlo
-    /// (errori-e-limiti.md#privacy-dei-messaggi, stessa regola di arrow/GEOS/
-    /// PROJ/wkt). Canary attraverso il confine pubblico reale
-    /// (`geometry_from_wkb`, non `validazione_protetta`/`check_validation` in
-    /// isolamento).
+    /// La validazione OGC legge il testo di `geo` per classificare, senza
+    /// pubblicarlo (errori-e-limiti.md#privacy-dei-messaggi); il canary passa
+    /// dal confine pubblico reale (`geometry_from_wkb`).
     ///
-    /// Il dato che `geo` interpola qui non e' una coordinata ma un **indice
-    /// posizionale**: per una `MultiPolygon` con membri che si sovrappongono,
-    /// il testo grezzo e' `"polygons at indices I e J overlap"` (verificato
-    /// nella controprova sotto, sul sorgente vendorizzato
-    /// `algorithm/validation/multi_polygon.rs:29`) — un fatto sui dati di chi
-    /// chiama (quanti poligoni, quali si toccano) tanto quanto lo sarebbe una
-    /// coordinata. La classificazione lo riduce a una delle sette stringhe
-    /// fisse di [`RagioneNonValida`], che per costruzione (il `match` in
-    /// `Display`) non puo' MAI interpolare un indice o un valore — non solo
-    /// per questo input.
+    /// Qui `geo` interpola un **indice posizionale** (`"polygons at indices I
+    /// e J overlap"`, `algorithm/validation/multi_polygon.rs` vendorizzato),
+    /// un fatto sui dati di chi chiama quanto una coordinata. Le stringhe
+    /// fisse di [`RagioneNonValida`] non possono interpolare alcun valore.
     #[test]
     fn ogc_validation_classifies_overlap_without_leaking_the_member_index() {
         // Due quadrati sovrapposti come membri 0 e 1 di una MultiPolygon:
@@ -1623,7 +1498,7 @@ mod tests {
             Err(PlenoraError::InvalidPlan(reason))
                 if reason == "struttura WKB non valida: annidamento geometrie oltre il limite"
         ));
-        // Il default resta 64 (comportamento invariato di validate_wkb_contract).
+        // Il default di validate_wkb_contract e' MAX_WKB_DEPTH.
         assert!(validate_wkb_contract(&payload).is_ok());
     }
 
@@ -1752,7 +1627,7 @@ mod tests {
 
     #[test]
     fn type_code_incoherent_with_expected_dimensions_gets_dedicated_error() {
-        // Dichiara Xy ma il type code e' Z (ISO): rifiuto storico del wrapper.
+        // Dichiara Xy ma il type code e' Z (ISO): rifiuto del wrapper XY.
         let mut z_point = Vec::new();
         push_header(&mut z_point, 1001);
         push_coordinate(&mut z_point, 1.0, 2.0, &[3.0]);
@@ -1949,7 +1824,7 @@ mod tests {
             Err(PlenoraError::InvalidPlan(message))
                 if message == "struttura WKB non valida: annidamento geometrie oltre il limite"
         ));
-        // Il default resta 64 anche per la variante stride-aware.
+        // Default MAX_WKB_DEPTH anche per la variante stride-aware.
         assert!(validate_wkb_contract_for_dimensions(&outer, GeometryDimensions::Xyzm).is_ok());
     }
 
@@ -2017,7 +1892,7 @@ mod tests {
 
     #[test]
     fn xy_wrapper_still_rejects_ewkb_flags_like_before() {
-        // Il wrapper a sola XY rifiuta i flag EWKB con l'errore storico.
+        // Il wrapper a sola XY rifiuta i flag EWKB con `unsupported_wkb_dimension`.
         for raw_type in [0x8000_0001_u32, 0x4000_0001, 0xC000_0001, 0x2000_0001] {
             let mut payload = Vec::new();
             push_header(&mut payload, raw_type);
@@ -2068,28 +1943,13 @@ mod tests {
     /// Che cosa esce davvero da **stderr** quando `validazione_protetta`
     /// contiene un panico — modulo unitario, non `tests/` d'integrazione.
     ///
-    /// # Perche' qui e non in un file a parte con una feature dedicata
+    /// Sta sotto `#[cfg(test)]` e non dietro una feature `test-support`, che
+    /// lascerebbe un `panic!` raggiungibile in una superficie pubblica: il
+    /// sottoprocesso rilancia questo stesso binario di test.
     ///
-    /// Esporre `pub fn
-    /// test_support_forza_panico_di_validazione()` dietro una feature
-    /// `test-support` lascerebbe una superficie pubblica reale (raggiungibile
-    /// da chiunque abilitasse quella feature, `panic!` fuori da
-    /// `#[cfg(test)]`), non "irraggiungibile" come l'etichetta della feature
-    /// suggerirebbe. `#[cfg(test)]` risolve lo
-    /// stesso problema senza aggiungere nulla: e' vero che non esiste quando
-    /// il crate e' una dipendenza normale di un altro bersaglio, ma qui non
-    /// serve che esista li' — il sottoprocesso rilancia QUESTO STESSO
-    /// binario di test (`cargo test -p plenora-kernels-geo --lib`), che
-    /// `#[cfg(test)]` lo compila per definizione. Nessuna feature, nessuna
-    /// funzione pubblica, nessun dev-dependency su se stessi.
-    ///
-    /// # Perche' su un processo e non in memoria
-    ///
-    /// Perche' l'hook di `std` stampa **prima** dell'unwinding: nessun
-    /// `catch_unwind` dentro lo stesso processo puo' osservare se il payload
-    /// sia stato pubblicato. L'hook e' **stato globale del processo**:
-    /// installarlo nel binario che ospita gli altri test della barriera li
-    /// legherebbe a questo — da qui il sottoprocesso.
+    /// Serve un processo perche' l'hook di `std` stampa **prima**
+    /// dell'unwinding, e un `catch_unwind` non vede se il payload e' uscito;
+    /// l'hook e' stato globale e legherebbe gli altri test a questo.
     mod barriera_privacy_processo {
         use crate::ValidazioneProtetta as _;
         use std::process::Command;
@@ -2192,9 +2052,8 @@ mod tests {
         /// quando la variabile e' presente.
         ///
         /// Pretende l'**esito tipizzato** di `validazione_protetta`
-        /// (`EsitoValidazione::NonConclusa` col testo esatto), non due
-        /// sottostringhe: cosi' il caso vede anche un cambio di variante,
-        /// non solo la sparizione di due frammenti.
+        /// (`EsitoValidazione::NonConclusa` col testo esatto), cosi' vede anche
+        /// un cambio di variante.
         #[test]
         fn il_ramo_figlio_non_e_un_test_vero() {
             struct TipoDiProva;
@@ -2247,16 +2106,12 @@ mod tests {
         }
     }
 
-    /// Il logging di `relate` (diff 2 del candidato memory-lab) resta
-    /// statico anche con un logger attivo a Trace — riuso di
-    /// `privacy_probe.rs` gia' consegnato dal laboratorio (coppia di
-    /// quadrati sovrapposti, matrice attesa `212101212`, elenco dei
-    /// messaggi ammessi), non una coppia nuova ne' `evaluate_unchecked`:
-    /// `a.relate(&b)` diretto, come nel probe.
+    /// Il logging di `relate` nel `geo` vendorizzato resta statico anche con
+    /// un logger attivo a Trace: stessa coppia di quadrati, matrice ed elenco
+    /// dei messaggi ammessi di `privacy_probe.rs`, con `a.relate(&b)` diretto.
     ///
-    /// Sottoprocesso per lo stesso motivo di `barriera_privacy_processo`:
-    /// `log::set_logger` e' installabile una sola volta per processo, e
-    /// legherebbe questo test a qualunque altro giri nello stesso binario.
+    /// Sottoprocesso perche' `log::set_logger` si installa una sola volta per
+    /// processo.
     mod prova_logging_relate {
         use geo::{LineString, Polygon, Relate};
         use std::process::Command;
@@ -2264,10 +2119,8 @@ mod tests {
 
         const VARIABILE: &str = "PLENORA_TEST_LOGGING_RELATE";
 
-        /// I dodici siti statici del candidato (diff 2), da
-        /// `results/geo-ogc-panic/windows/logging-wkt-01/allowed-events.json`
-        /// nel congelamento del laboratorio — copiati, non ridigitati a
-        /// memoria.
+        /// I siti di log statici di `relate`, copiati da
+        /// `results/geo-ogc-panic/windows/logging-wkt-01/allowed-events.json`.
         const MESSAGGI_AMMESSI: [&str; 12] = [
             "geo.relate.edge_end_bundle_star.0",
             "geo.relate.edge_end_bundle_star.1",
@@ -2315,10 +2168,9 @@ mod tests {
             )
         }
 
-        /// **Controllo positivo, elenco dei messaggi ammessi, logger
-        /// davvero attivo a Trace**: le tre condizioni della consegna,
-        /// verificate insieme — nessuna delle tre da sola proverebbe che il
-        /// gate ha esercitato `relate` con la patch attiva.
+        /// Controllo positivo, messaggi ammessi, logger attivo a Trace:
+        /// nessuna delle tre condizioni da sola prova che il gate ha
+        /// esercitato `relate`.
         #[test]
         fn relate_su_quadrati_sovrapposti_non_emette_testo_non_ammesso() {
             let (riuscito, stdout) = esegui_figlio();
@@ -2350,9 +2202,8 @@ mod tests {
             log::set_max_level(log::LevelFilter::Trace);
             log::info!(target: "prova_logging_relate", "logger-active");
 
-            // Stessa coppia del probe consegnato: due quadrati che si
-            // sovrappongono, Relate diretto — non `evaluate_unchecked`, non
-            // un nuovo reperto.
+            // Stessa coppia di `privacy_probe.rs`: due quadrati che si
+            // sovrappongono, Relate diretto.
             let quadrato = |x: f64, y: f64| {
                 Polygon::new(
                     LineString::from(vec![
@@ -2409,21 +2260,11 @@ mod tests {
         // Originali e ridotti A/B: stesso gate, quattro reperti reali.
         // ---------------------------------------------------------------
         //
-        // Il controllo sui quadrati sopra prova che il gate FUNZIONA
-        // (controllo positivo, sintetico); questi quattro provano che
-        // REGGE sui reperti veri del laboratorio — due che il candidato
-        // esatto giudica invalidi in modo diverso, uno che il ridotto
-        // rende valido, con lo stesso elenco di messaggi ammessi e un
-        // verdetto specifico per fixture (non solo "non panica").
-        //
-        // Decodifica grezza (`geozero::wkb::Wkb(...).to_geo()`), non
-        // `geometry_from_wkb` di questo crate: il bersaglio e' `check_validation`
-        // di `geo`, non il nostro cancello strutturale — stesso perimetro
-        // di `privacy_probe.rs` consegnato.
-        //
-        // Verdetti e conteggio dei record presi dall'evidenza congelata del
-        // laboratorio (`privacy-{debug,release}-{original,reduced}-{A,B}.stdout`,
-        // identici nei due profili), non ridedotti qui.
+        // I quadrati provano che il gate funziona; questi reperti che reggono
+        // su dati reali, con un verdetto specifico per fixture. Decodifica
+        // grezza (`geozero`), perche' il bersaglio e' `check_validation` di
+        // `geo` e non il cancello strutturale. Verdetti e conteggi vengono da
+        // `privacy-{debug,release}-{original,reduced}-{A,B}.stdout`.
         const REPERTO_ORIGINALE_A: &[u8] = &[
             1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0,
@@ -2510,10 +2351,8 @@ mod tests {
             );
         }
 
-        /// Originale A: `InvalidPolygon(GeometryIndex(2), SelfIntersection(Exterior))`
-        /// — il poligono 2 e' auto-intersecante, non il conflitto a coppia
-        /// che il diff 1 corregge. Verdetto e conteggio dall'evidenza
-        /// congelata del laboratorio.
+        /// Originale A: il poligono 2 e' auto-intersecante, non un conflitto a
+        /// coppia.
         #[test]
         fn originale_a_verdetto_specifico_e_soli_messaggi_ammessi() {
             verifica_reperto(
@@ -2523,9 +2362,7 @@ mod tests {
             );
         }
 
-        /// Originale B: `ElementsOverlaps(1, 2)` — il conflitto a coppia
-        /// che il diff 1 risolve (senza il diff, il guardiano vede un solo
-        /// operando).
+        /// Originale B: `ElementsOverlaps(1, 2)`, il conflitto a coppia.
         #[test]
         fn originale_b_verdetto_specifico_e_soli_messaggi_ammessi() {
             verifica_reperto(
@@ -2535,18 +2372,15 @@ mod tests {
             );
         }
 
-        /// Ridotto A: **valido**. Diverso dall'originale non solo per
-        /// dimensione — il minimizzatore ha tolto il terzo poligono
-        /// invalido, lasciando una coppia che il candidato esatto giudica
-        /// corretta.
+        /// Ridotto A: **valido**, senza il terzo poligono invalido
+        /// dell'originale.
         #[test]
         fn ridotto_a_e_valido_e_soli_messaggi_ammessi() {
             verifica_reperto("ridotto_a", "Ok(())", 9);
         }
 
-        /// Ridotto B: `ElementsOverlaps(0, 1)` — invalido come l'originale,
-        /// indici diversi perche' il minimizzatore ha tolto un poligono a
-        /// monte.
+        /// Ridotto B: `ElementsOverlaps(0, 1)`, invalido come l'originale con
+        /// un poligono in meno a monte.
         #[test]
         fn ridotto_b_verdetto_specifico_e_soli_messaggi_ammessi() {
             verifica_reperto(
@@ -2556,10 +2390,8 @@ mod tests {
             );
         }
 
-        /// Il ramo figlio per i quattro reperti: un logger fresco per
-        /// processo (necessario: `log::set_logger` e' installabile una sola
-        /// volta), decodifica grezza, `check_validation` diretto — stesso
-        /// perimetro di `privacy_probe.rs`.
+        /// Il ramo figlio dei reperti: logger fresco per processo, decodifica
+        /// grezza, `check_validation` diretto.
         #[test]
         fn il_ramo_figlio_reperto_non_e_un_test_vero() {
             use geo::algorithm::validation::Validation as _;
@@ -2581,11 +2413,8 @@ mod tests {
                 altro => panic!("reperto sconosciuto: {altro}"),
             };
             let geometria: Geometry<f64> = Wkb(payload).to_geo().expect("decodifica grezza");
-            // `check_validation` diretto (non `validazione_protetta`): qui
-            // interessa il verdetto vero di `geo`, non la barriera — il
-            // candidato esatto non deve piu' panicare su questi reperti
-            // (provato altrove, barriera_validazione.rs), quindi non serve
-            // contenimento per raggiungere un verdetto.
+            // `check_validation` diretto: interessa il verdetto di `geo`, che
+            // su questi reperti non va in panico (barriera_validazione.rs).
             let esito = geometria.check_validation();
 
             let records = LOGGER.0.lock().unwrap();

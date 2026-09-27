@@ -1,37 +1,15 @@
-//! Che cosa succede alla CATEGORIA di un errore quando gli si aggiunge il
+//! Che cosa succede alla categoria di un errore quando gli si aggiunge il
 //! contesto del passo.
 //!
-//! Quando un passo fallisce, chi propaga l'errore vi aggiunge nodo e
-//! operazione. Avvolgere tutto in [`PlenoraError::Execution`] e' il modo
-//! ovvio, e **sostituisce** la categoria: ogni errore diventerebbe
-//! `execution`, exit 6, retry `Never`.
+//! Avvolgere tutto in [`PlenoraError::Execution`] sostituirebbe la categoria
+//! (exit 6, retry `Never`) e cancellerebbe decisioni: un errore
+//! [`ErrorCategory::Io`] durante lo spill e' ritentabile. Una lista di
+//! categorie da preservare resterebbe indietro alla prima categoria nuova.
 //!
-//! ## Perche' una lista di eccezioni non puo' funzionare
-//!
-//! Un elenco di categorie «preservate» e' la forma sbagliata del problema,
-//! per due ragioni.
-//!
-//! **Cancella decisioni.** [`ErrorCategory::Io`] ha disposizione di
-//! ritentativo `Safe`: un errore di I/O durante lo spill e' ritentabile, e
-//! trasformarlo in `execution` lo renderebbe `Never` — cioe' direbbe al
-//! chiamante di non riprovare una cosa che si puo' riprovare. Lo stesso vale
-//! per `Timeout`, `Transient`, `Authentication`, `Authorization`,
-//! `NotFound`, `Conflict`: sono tutte categorie su cui un chiamante fa
-//! qualcosa di specifico, e una lista corta le butta via.
-//!
-//! **E' destinata a restare indietro.** Una lista di eccezioni va aggiornata
-//! ogni volta che si aggiunge una categoria, e nessuno se ne ricorda.
-//!
-//! ## La regola
-//!
-//! Si inverte il default. Un errore che porta gia' una classificazione la
-//! **conserva**, e il contesto del passo gli viene aggiunto tramite
-//! [`PlenoraError::Replayed`], che porta categoria e attribuzione insieme.
-//! `Execution` viene costruito solo per un fallimento che classificazione
-//! propria non ne ha — cioe' per un errore che e' gia' `Execution`.
-//!
-//! Cosi' non c'e' nessuna lista da tenere allineata: la regola vale per
-//! costruzione anche per le categorie che verranno.
+//! La regola inverte il default: un errore gia' classificato conserva la
+//! categoria e riceve il contesto tramite [`PlenoraError::Replayed`];
+//! `Execution` si costruisce solo per un errore che e' gia' `Execution`. Vale
+//! per costruzione anche per le categorie future.
 
 use plenora_core::ErrorCategory;
 
@@ -53,16 +31,10 @@ mod tests {
 
     #[test]
     fn l_elenco_delle_categorie_viene_da_una_fonte_sola() {
-        // Nessuna copia locale: l'elenco e' `ErrorCategory::ALL`, e la sua
-        // completezza e' presidiata in `plenora-core` dalla coppia
-        // `ALL` + `index` (match esaustivo). Un array scritto a mano qui,
-        // verificato con `len() == 18`, resterebbe vero aggiungendo una
-        // diciannovesima variante all'enum: prometterebbe un controllo che
-        // non fa.
-        //
-        // «Canonica» sarebbe la parola sbagliata per la fonte: diciotto
-        // categorie vengono dal canone congelato, due sono estensioni locali.
-        // Cio' che conta qui e' che la fonte sia UNA.
+        // L'elenco e' `ErrorCategory::ALL`, la cui completezza e' presidiata
+        // in `plenora-core` da un match esaustivo: una copia locale con la
+        // lunghezza scritta a mano resterebbe verde anche con una variante in
+        // piu'.
         assert!(
             !ErrorCategory::ALL.is_empty(),
             "l'elenco delle categorie supportate non e' vuoto"

@@ -1,52 +1,25 @@
 //! Fa percorrere a un worker **reale** la sequenza intera, e giudica il referto.
 //!
-//! # Perche' un binario e non un caso
+//! E' un binario e non un caso di test perche' l'harness, come il supervisore,
+//! toglie `CLOEXEC` a due descrittori prima di avviare un processo, e
+//! `accerta_monothread` pretende un thread solo: libtest esegue ogni caso in un
+//! thread proprio.
 //!
-//! Perche' l'harness fa esattamente cio' che fa il supervisore: toglie
-//! `CLOEXEC` a due descrittori e subito dopo avvia un processo. In quella
-//! finestra i due estremi sono ereditabili da **qualunque** altro `spawn` del
-//! processo, e per questo `accerta_monothread` pretende un thread solo.
-//!
-//! Un binario di test non lo puo' garantire: libtest esegue ogni caso in un
-//! thread proprio, e il conteggio dei task e' due prima ancora che il caso
-//! cominci. Rinunciare al controllo per far girare il caso avrebbe fatto
-//! divergere l'harness dal codice che dice di provare — e proprio sulla riga
-//! piu' delicata.
-//!
-//! # La grammatica, e perche' e' esatta
-//!
-//! Due sole righe di comando sono ammesse:
+//! Sono ammesse due sole righe di comando, ogni opzione una volta sola, senza
+//! opzioni sconosciute ne' valori per difetto:
 //!
 //! ```text
 //!   --immagine <percorso> --etichetta iterazione
 //!   --immagine <percorso> --etichetta produzione --digest <64 esadecimali>
 //! ```
 //!
-//! Ogni opzione **una volta sola**, nessuna opzione sconosciuta, nessun
-//! argomento sciolto, nessun valore per difetto. Una grammatica permissiva
-//! qualifica cio' che chi lancia non ha chiesto: un `--digest` ripetuto
-//! sceglierebbe in silenzio una delle due copie, un'opzione con un refuso
-//! verrebbe ignorata, e `produzione` senza digest direbbe di aver qualificato un
-//! binario senza poterlo nominare.
-//!
-//! # I due ingressi, e perche' non comunicano
-//!
-//! `iterazione`: l'immagine sta nel target condiviso dell'harness e nessun
-//! digest la fissa. Serve a lavorare, e **non qualifica** — per questo un digest
-//! non glielo si puo' nemmeno passare.
-//!
-//! `produzione`: l'immagine e' compilata a parte, in un target suo, e il digest
-//! dice quale ci si aspetta di aver eseguito. Qualifica.
-//!
-//! # Che cosa prova, e che cosa no
+//! `iterazione` usa l'immagine del target condiviso e **non qualifica**;
+//! `produzione` usa un'immagine compilata a parte, fissata dal digest.
 //!
 //! Prova immagine reale, eredita' dei descrittori, handshake, incarico,
-//! progresso, esito, **artefatto riverificato**, EOF e raccolta del processo.
-//!
-//! **Non prova «sotto limite».** Qui non c'e' ne' lo spawner ne' un dominio
-//! `cgroup2`: il worker nasce da questo processo e vive con la memoria che il
-//! sistema gli concede. Quel verde arriva soltanto sulla VM, attraversando
-//! spawner e dominio vero con `memory.max`.
+//! progresso, esito, artefatto riverificato, EOF e raccolta del processo.
+//! **Non prova «sotto limite»**: qui non ci sono spawner ne' dominio `cgroup2`,
+//! e quel verde arriva solo dalla VM.
 
 /// Che cosa la riga di comando chiede.
 #[cfg(all(target_os = "linux", feature = "internals"))]
@@ -147,17 +120,9 @@ fn canonico(digest: &str) -> bool {
 
 /// Il giudizio, che **non e' scritto qui**.
 ///
-/// # Perche' sta nella libreria
-///
-/// Perche' le strade che portano un worker fino all'esito sono due — due pipe
-/// nude, oppure spawner e dominio — e cio' che si pretende non cambia. Un
-/// oracolo per strada sarebbe due oracoli, e a divergere sarebbe proprio quello
-/// che qualifica: la strada piu' severa direbbe rosso su cio' che l'altra
-/// accetta, e nessuno saprebbe quale delle due ha ragione.
-///
-/// Qui resta solo il modo di **riportarlo**: le pretese cadute si stampano una
-/// per riga, perche' chi legge un rosso non debba rileggere il referto per
-/// indovinare quali fossero.
+/// Sta nella libreria perche' le strade fino all'esito sono due (pipe nude,
+/// oppure spawner e dominio) e l'oracolo deve essere uno. Qui resta solo il
+/// modo di riportarlo: una pretesa caduta per riga.
 #[cfg(all(target_os = "linux", feature = "internals"))]
 fn riporta(manca: &[String]) -> bool {
     for difetto in manca {
@@ -267,13 +232,10 @@ mod tests {
 
     /// **Ogni forma storta e' un rifiuto, e ognuna dice quale.**
     ///
-    /// # Che cosa esclude
-    ///
-    /// Che una riga di comando che nessuno ha chiesto qualifichi comunque
-    /// qualcosa. I casi sono elencati uno per uno perche' falliscono in modi
-    /// diversi: un duplicato sceglierebbe in silenzio una delle due copie,
-    /// un'opzione con un refuso verrebbe ignorata, e `produzione` senza digest
-    /// direbbe di aver qualificato un binario senza poterlo nominare.
+    /// I casi sono elencati uno per uno perche' falliscono in modi diversi: un
+    /// duplicato sceglierebbe in silenzio una copia, un refuso verrebbe
+    /// ignorato, `produzione` senza digest qualificherebbe un binario senza
+    /// nominarlo.
     #[test]
     fn ogni_riga_storta_ha_il_suo_rifiuto() {
         let storte: [(&[&str], &str); 8] = [

@@ -1,8 +1,6 @@
 //! Verifica in streaming dell'artefatto prodotto: i passi da 3 a 8-bis della
 //! sequenza di `isolamento.md`, in-process.
 //!
-//! # Che cosa verifica, e in quale ordine
-//!
 //! L'ordine e' vincolante, e ogni passo puo' solo fermare la sequenza:
 //!
 //! | # | passo | fallisce se |
@@ -16,62 +14,18 @@
 //! | 8 | completezza | righe o batch osservati non sono quelli dichiarati |
 //! | 8-bis | identita' | il `commit_token` non e' quello atteso |
 //!
-//! I passi 1 e 2 — stato terminale del worker ed esito dichiarato — non sono
-//! qui: presuppongono un processo da osservare, e appartengono al supervisore.
-//! Il passo 9, la pubblicazione, e' di chi pubblica.
+//! I passi 1-2 appartengono al supervisore, il 9 a chi pubblica. I passi 4 e 5
+//! sono due decisioni su una sola traversata. Framing, token, digest e
+//! consegna ad arrow usano **lo stesso `File`, aperto una volta**: difende
+//! dalla sostituzione del percorso, non dalla mutazione in place dei byte.
 //!
-//! **I passi 4 e 5 sono due decisioni logiche su una sola traversata.** Il
-//! confine ostile osserva magic, coda, footer e blocchi in un passaggio, e
-//! separarli in due letture non aggiungerebbe una garanzia: aggiungerebbe una
-//! finestra fra le due.
-//!
-//! # Un handle solo
-//!
-//! Framing, estrazione del token, digest e consegna ad arrow riferiscono **lo
-//! stesso `File`, aperto una volta**. Riaprire per percorso fra un passo e
-//! l'altro darebbe a ogni riapertura la possibilita' di trovare un file
-//! diverso, e la verifica direbbe cose vere su file diversi.
-//!
-//! Resta la non-garanzia gia' dichiarata: tenere un handle aperto difende
-//! dalla **sostituzione** del percorso, non dalla **mutazione in place** dei
-//! byte, che un altro processo puo' fare attraverso il proprio descrittore.
-//!
-//! # La memoria trattenuta
-//!
-//! Non e' funzione del solo schema e del batch corrente, e dichiararlo
-//! sarebbe falso. `FileReader` decodifica **tutti** i dizionari dentro
-//! `try_new` e li trattiene per l'intera scansione, e tiene un indice di 24
-//! byte per record batch. Il limite conservativo e':
-//!
-//! ```text
-//!     schema limitato
-//!   + custom metadata limitati        (tetti del confine: coppie, chiave, valore)
-//!   + indice dei blocchi              (24 B x max_record_batches)
-//!   + body dei dizionari trattenuti   (<= IpcLimits::max_retained_dictionary_body_bytes)
-//!   + un solo record batch corrente   (<= max_body_bytes)
-//!   + overhead strutturale limitato
-//! ```
-//!
-//! Ogni componente ha un tetto **imposto prima della decodifica**; nessun
-//! record batch precedente resta vivo; e il picco non puo' superare quella
-//! formula. L'ultima riga e' l'unica non misurabile in byte di IPC: e'
-//! l'overhead delle strutture di arrow, limitato da schema, metadati e numero
-//! massimo di messaggi. Non si promette uguaglianza fra i `bodyLength` del
-//! footer e l'heap esatto di arrow — sono due grandezze diverse, e prometterlo
-//! sarebbe una precisione inventata.
-//!
-//! Il tetto sui dizionari e' l'unico cumulativo del confine: il tetto per
-//! singolo body non li governa, perche' e' la loro **somma** a restare viva.
-//! Vive in [`IpcLimits`] e non qui, cosi' lo applicano tutti i lettori dello
-//! stesso formato e non il solo verificatore — un tetto che protegge un
-//! percorso soltanto lascia aperta la classe del difetto.
-//!
-//! I dizionari **delta** sono rifiutati in prevalidazione, e la formula
-//! dipende da quel rifiuto: su un delta arrow concatena il dizionario
-//! precedente con il nuovo in un buffer ulteriore mentre entrambi gli
-//! originali sono ancora vivi, quindi il picco si avvicina al **doppio** della
-//! somma dei body e la riga qui sopra sarebbe falsa. Il nostro `FileWriter`
-//! non ne produce.
+//! Memoria trattenuta: schema, custom metadata e indice dei blocchi limitati,
+//! piu' i body dei dizionari (`FileReader` li trattiene tutti; tetto cumulativo
+//! `IpcLimits::max_retained_dictionary_body_bytes`), piu' un solo record
+//! batch (`max_body_bytes`), piu' overhead strutturale limitato. Ogni tetto si
+//! impone prima della decodifica. La formula dipende dal rifiuto dei
+//! dizionari **delta** in prevalidazione: con un delta arrow concatena e il
+//! picco si avvicina al doppio.
 
 use std::path::Path;
 
@@ -105,33 +59,11 @@ pub struct AtteseVerifica<'a> {
     /// Il **fingerprint** del contratto che il piano validato prevede — non
     /// il contratto stesso.
     ///
-    /// # Perche' un fingerprint e non un `&DataContract`
-    ///
-    /// Perche' il passo 7 non guarda mai altro del contratto atteso: confronta
-    /// `contract_fingerprint(&letto)` con `contract_fingerprint(atteso)`, ed e'
-    /// l'unico uso che questo tipo fa del campo. Portare il contratto intero
-    /// costringerebbe ogni chiamante ad averne uno **in memoria**, e il
-    /// verificatore che gira nel proprio dominio di isolamento
-    /// (`isolamento.md#2-quater-topologia-chi-osserva-chi`) non ne riceve
-    /// uno: riceve — come per
-    /// `DescrittoreIngresso::contract_fingerprint_atteso` e
-    /// `protocollo::messaggi::IncaricoVerifica::contract_fingerprint_atteso`
-    /// — solo l'impronta, nella stessa forma canonica gia' in uso per gli
-    /// ingressi del worker.
-    ///
-    /// # Perche' `DigestSha256` e non `planner::ContractFingerprint`
-    ///
-    /// Perche' e' la forma **sul filo**, e chi la riceve attraverso il
-    /// protocollo (il verificatore isolato) la passa qui **senza
-    /// conversione**: un secondo tipo avrebbe richiesto un costruttore che
-    /// `ContractFingerprint` non ha — nasce solo da
-    /// [`crate::planner::contract_fingerprint`], mai da byte grezzi ricevuti
-    /// — e lo avrebbe fatto apposta per un confronto che le due
-    /// rappresentazioni (32 byte, o 64 esadecimali) fanno gia' identicamente.
-    /// Un chiamante che ha un `ContractFingerprint` in memoria lo riduce con
-    /// `DigestSha256::da_esadecimale(&impronta.to_hex())`, lo stesso giro che
-    /// `isolamento::esecuzione_isolata::incarico_per` gia' fa per
-    /// `DescrittoreIngresso::contract_fingerprint_atteso`.
+    /// Il passo 7 confronta solo le impronte, e il verificatore isolato
+    /// (`isolamento.md#2-quater-topologia-chi-osserva-chi`) riceve solo
+    /// l'impronta. E' un `DigestSha256`, la forma sul filo, cosi' passa qui
+    /// senza conversione; da un `ContractFingerprint` si ottiene con
+    /// `DigestSha256::da_esadecimale(&impronta.to_hex())`.
     pub contratto_fingerprint_atteso: DigestSha256,
     /// Il digest dichiarato dal produttore dell'artefatto.
     pub digest: &'a DigestArtefatto,
@@ -183,18 +115,11 @@ pub fn verifica_artefatto(
 /// Un errore dei passi 4-5 — sigillo, framing, tetti del confine — nella
 /// categoria della riga 12 della matrice: `Internal`.
 ///
-/// # Perche' non `DataMapping` o `ResourceLimit`
-///
-/// Perche' l'artefatto l'ha scritto il nostro worker, e un sigillo rotto o un
-/// framing che non torna dicono che qualcosa **nel sistema** non va — il
-/// worker, il canale, il disco — non che i dati di chi chiama siano sbagliati:
-/// `DataMapping` lo manderebbe a correggere un ingresso innocente. E un tetto
-/// del confine superato da un artefatto che il worker ha prodotto sotto i
-/// propri limiti e' un'incoerenza fra i due lati, non un budget da alzare:
-/// `ResourceLimit` e' riservato all'evidenza del dominio (`F4-2`).
-///
-/// L'I/O resta I/O: un disco che non risponde non e' un difetto nostro, ed e'
-/// la categoria su cui chi chiama decide di riprovare.
+/// L'artefatto l'ha scritto il nostro worker: un sigillo rotto dice che
+/// qualcosa nel sistema non va, non che l'ingresso sia sbagliato
+/// (`DataMapping`), e un tetto superato e' un'incoerenza fra i due lati, non
+/// un budget (`ResourceLimit` e' dell'evidenza del dominio, `F4-2`). L'I/O
+/// resta I/O, ritentabile.
 fn artefatto_troncato(errore: PlenoraError) -> PlenoraError {
     match errore.category() {
         plenora_core::ErrorCategory::Io => errore,
@@ -213,16 +138,9 @@ pub const PREFISSO_PASSI_4_5: &str = "verifica dell'artefatto, sigillo o framing
 /// Come [`verifica_artefatto`], ma da un `File` **gia' aperto** invece che da
 /// un percorso.
 ///
-/// # Perche' esiste
-///
-/// Il verificatore che gira nel proprio dominio di isolamento
-/// (`isolamento.md#2-quater-topologia-chi-osserva-chi`) riceve l'artefatto
-/// come descrittore gia'
-/// aperto in sola lettura dal coordinatore — mai un percorso, per lo stesso
-/// principio di `GA-5`: un handle non da' al verificatore un modo per
-/// scoprire la destinazione finale, che non gli viene comunicata affatto, e
-/// riaprire per percorso qui dentro riaprirebbe esattamente cio' che questo
-/// entry point esiste per evitare.
+/// Il verificatore isolato riceve l'artefatto come descrittore aperto in
+/// sola lettura, mai come percorso (`GA-5`): non deve poter scoprire la
+/// destinazione finale.
 ///
 /// # Errors
 ///
@@ -268,16 +186,8 @@ fn verifica_artefatto_aperto(
 
     // --- passo 7: contratto ------------------------------------------------
     //
-    // Il confronto passa dal **fingerprint**, che e' l'autorita' gia' in uso:
-    // e' con quello che il planner verifica un contratto contro quello atteso
-    // dal grafo validato. Confrontare i campi a mano avrebbe introdotto una
-    // seconda nozione di uguaglianza fra contratti, libera di divergere dalla
-    // prima appena uno dei due elenchi cambia. L'atteso arriva gia' ridotto a
-    // fingerprint, nella forma sul filo (vedi il commento su
-    // [`AtteseVerifica::contratto_fingerprint_atteso`]): qui non c'e' un
-    // secondo contratto da ridurre, solo un confronto per esadecimale — lo
-    // stesso giro che il worker fa contro `contract_fingerprint_atteso` di
-    // ogni ingresso.
+    // Il confronto passa dal fingerprint, la stessa autorita' del planner:
+    // una seconda nozione di uguaglianza fra contratti potrebbe divergere.
     if contract_fingerprint(&contratto)?.to_hex()
         != attese.contratto_fingerprint_atteso.in_esadecimale()
     {
@@ -382,18 +292,14 @@ fn verifica_digest(
 
 /// Passo 8: righe e batch, contati mentre scorrono.
 ///
-/// Nessun batch precedente resta vivo: ogni `RecordBatch` e' rilasciato prima
-/// che il successivo sia letto, e la funzione non tiene alcuna collezione.
-///
-/// L'aritmetica e' **controllata**. Un `wrapping` farebbe combaciare i
-/// conteggi di un artefatto che ne ha 2^64 di troppo, e un `saturating`
-/// direbbe `u64::MAX` per due artefatti diversi.
+/// Nessun batch precedente resta vivo. L'aritmetica e' controllata: un
+/// `wrapping` farebbe combaciare conteggi sbagliati di 2^64, un `saturating`
+/// darebbe `u64::MAX` per due artefatti diversi.
 ///
 /// # Errors
 ///
 /// Propaga l'errore che l'iteratore rende leggendo un batch; e
-/// [`PlenoraError::ResourceLimit`] se righe o batch non stanno in un `u64`,
-/// che e' il controllo dell'aritmetica detto qui sopra.
+/// [`PlenoraError::ResourceLimit`] se righe o batch non stanno in un `u64`.
 pub fn conta_in_streaming(
     batch: impl Iterator<Item = Result<plenora_core::arrow::array::RecordBatch>>,
 ) -> Result<ConteggiDichiarati> {

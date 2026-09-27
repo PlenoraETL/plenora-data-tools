@@ -1,20 +1,12 @@
 //! Gli ingressi di un'esecuzione: da dove arrivano i batch.
 //!
-//! [`Input`] e' una sorgente — batch in memoria, un file Arrow IPC, uno
-//! stream, un iteratore del chiamante. [`Inputs`] e' l'insieme che il piano
-//! si aspetta, indicizzato per nome.
+//! [`Input`] e' una sorgente (batch in memoria, file o stream Arrow IPC,
+//! iteratore del chiamante); [`Inputs`] e' l'insieme atteso dal piano,
+//! indicizzato per nome.
 //!
-//! # I due profili
-//!
-//! [`Inputs::strict`] esige che ogni ingresso porti il proprio
-//! [`DataContract`], e il confronto col grafo validato e' sul **fingerprint
-//! completo** del contratto. Il profilo permissivo confronta invece lo schema
-//! Arrow, che non distingue due contratti che lo condividono — CRS risolto
-//! contro mancante, tipi dichiarati diversi.
-//!
-//! Il permissivo resta il default non perche' sia migliore, ma perche'
-//! cambiarlo romperebbe ogni chiamante che oggi compila: e' una decisione di
-//! rilascio, non di questa API.
+//! [`Inputs::strict`] esige un [`DataContract`] per ogni ingresso e confronta
+//! il **fingerprint completo**; il profilo permissivo confronta solo lo schema
+//! Arrow e resta il default perche' cambiarlo romperebbe i chiamanti esistenti.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -32,21 +24,16 @@ use crate::ipc_boundary::{self, IpcFormat, IpcLimits};
 
 /// Un input del piano: lettore Arrow IPC o iteratore di `RecordBatch`.
 ///
-/// L'enum e' **opaco**: si costruisce solo dai costruttori, che sono l'unico
-/// punto in cui l'invariante «`Batches` non e' mai vuoto» viene imposta.
-/// Con la variante costruibile da fuori, un chiamante potrebbe scrivere
-/// `Input::Batches(vec![])` aggirando [`Input::from_batches`], e
-/// [`Input::schema`] indicizzerebbe `batches[0]` andando in panico su
-/// un'API pubblica.
+/// L'enum e' **opaco**: solo i costruttori impongono l'invariante
+/// "`Batches` non e' mai vuoto", da cui dipende [`Input::schema`] che legge
+/// `batches[0]`.
 pub enum Input {
     /// Batch gia' in memoria. Invariante: mai vuoto (vedi
     /// [`Input::from_batches`]).
     ///
-    /// `#[non_exhaustive]` rende la variante non costruibile fuori dal crate:
-    /// e' cio' che chiude il bypass del costruttore. E' una variante di
-    /// struttura, non di tupla, perche' su una variante di tupla
-    /// `#[non_exhaustive]` rende privato il costruttore e blocca anche il
-    /// pattern matching dall'esterno, che invece resta legittimo.
+    /// `#[non_exhaustive]` la rende non costruibile fuori dal crate; e' una
+    /// variante di struttura perche' su una di tupla bloccherebbe anche il
+    /// pattern matching dall'esterno.
     #[non_exhaustive]
     Batches {
         /// I batch, nell'ordine di ingresso.
@@ -140,10 +127,8 @@ impl Input {
     /// limiti effettivi del piano
     /// ([`crate::ipc_boundary::limits_from_plan`]).
     ///
-    /// E' la forma da usare quando il piano e' gia' validato: i tetti sul
-    /// body e sul numero di messaggi si applicano allora alle lunghezze
-    /// DICHIARATE, prima che arrow allochi, invece che al batch gia'
-    /// materializzato.
+    /// Con il piano gia' validato i tetti su body e numero di messaggi si
+    /// applicano alle lunghezze DICHIARATE, prima che arrow allochi.
     ///
     /// # Errors
     ///
@@ -209,22 +194,13 @@ impl Inputs {
         Self::default()
     }
 
-    /// Insieme vuoto nel profilo **stretto**: ogni input deve portare il
-    /// proprio [`DataContract`], e [`Inputs::add`] fallisce invece di
-    /// accettarne uno senza.
+    /// Insieme vuoto nel profilo **stretto**.
     ///
-    /// E' il profilo da usare quando il confine deve essere chiuso davvero:
-    /// il fingerprint completo del contratto viene confrontato con quello
-    /// registrato nel grafo validato, la stessa garanzia di
-    /// [`crate::planner::check_input_compatibility`]. Nel profilo permissivo
-    /// il confronto e' sullo schema Arrow completo, che non distingue due
-    /// contratti che condividono lo schema (CRS risolto contro mancante,
-    /// tipi dichiarati diversi).
-    ///
-    /// Perche' non e' il default: renderlo tale cambierebbe il comportamento
-    /// di ogni chiamante esistente che oggi compila — una rottura semver che
-    /// spetta a chi rilascia, non a questa API. Chi vuole la garanzia forte
-    /// la chiede qui, esplicitamente.
+    /// Ogni input deve portare il proprio [`DataContract`] e [`Inputs::add`]
+    /// fallisce; il fingerprint completo del contratto e' confrontato con
+    /// quello del grafo validato, la stessa garanzia di
+    /// [`crate::planner::check_input_compatibility`]. Non e' il default perche'
+    /// cambierebbe il comportamento dei chiamanti esistenti (rottura semver).
     #[must_use]
     pub fn strict() -> Self {
         Self {
@@ -241,27 +217,16 @@ impl Inputs {
 
     /// Aggiunge un input per nome, SENZA dichiararne il contratto.
     ///
-    /// Il confine che l'esecuzione puo' chiudere su questo input e' allora
-    /// quello dello schema Arrow completo (campi e metadati di campo): ferma
-    /// una sorgente con schema diverso, ma NON distingue due contratti che
-    /// condividono lo schema e differiscono nella geometria — CRS risolto
-    /// contro mancante, tipi dichiarati diversi. E' il minimo garantito, non
-    /// la stessa verifica di [`crate::planner::check_input_compatibility`].
-    ///
-    /// Per il confine chiuso — fingerprint completo del contratto — si usa
-    /// [`Inputs::add_with_contract`], e per renderlo obbligatorio su tutto
-    /// l'insieme [`Inputs::strict`]. La CLI passa sempre i contratti della
-    /// discovery; questa variante resta per chi incorpora l'engine e il
-    /// contratto non ce l'ha, non e' la forma da preferire.
+    /// Il confine si chiude allora sullo schema Arrow completo (campi e
+    /// metadati di campo): ferma uno schema diverso, ma NON distingue due
+    /// contratti che condividono lo schema e differiscono nella geometria (CRS
+    /// risolto contro mancante, tipi dichiarati diversi).
     ///
     /// # Deprecazione
     ///
-    /// Il percorso senza contratto e' **deprecato**: resta per non rompere i
-    /// chiamanti esistenti, non perche' sia una forma da usare. La CLI non lo
-    /// usa piu' e l'SDK Python non lo esporra' affatto. Migrare a
-    /// [`Inputs::add_with_contract`], possibilmente su un insieme costruito
-    /// con [`Inputs::strict`], che rende l'omissione un errore invece di una
-    /// dimenticanza.
+    /// Il percorso senza contratto resta solo per non rompere i chiamanti
+    /// esistenti. Migrare a [`Inputs::add_with_contract`], possibilmente su un
+    /// insieme [`Inputs::strict`], che rende l'omissione un errore.
     ///
     /// # Errors
     ///
@@ -291,17 +256,11 @@ impl Inputs {
 
     /// Aggiunge un input DICHIARANDONE il contratto.
     ///
-    /// L'esecuzione verifica allora il **fingerprint completo** del contratto
-    /// contro quello registrato nel grafo validato: la stessa garanzia di
-    /// [`crate::planner::check_input_compatibility`], applicata al momento in
-    /// cui i dati entrano davvero.
-    ///
-    /// Senza contratto l'esecuzione confronta solo lo schema Arrow (campi e
-    /// metadati) — quanto `Input` sa di se stesso. Basta a fermare uno schema
-    /// diverso, ma NON a distinguere due contratti che condividono lo schema
-    /// e differiscono nella geometria (CRS risolto contro mancante, tipi
-    /// dichiarati diversi). Chi incorpora l'engine come libreria e vuole il
-    /// confine chiuso passa il contratto qui.
+    /// L'esecuzione verifica il **fingerprint completo** del contratto contro
+    /// quello del grafo validato, la stessa garanzia di
+    /// [`crate::planner::check_input_compatibility`] al momento in cui i dati
+    /// entrano. Senza contratto il confronto e' solo sullo schema (vedi
+    /// [`Inputs::add`]).
     ///
     /// # Errors
     ///

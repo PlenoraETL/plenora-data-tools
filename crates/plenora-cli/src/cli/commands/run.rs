@@ -55,14 +55,9 @@ pub fn run_dag(
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
     let graph = planner::validate(plan_text, &contracts)?;
-    // `PR-12`: un piano che dichiara `max_domain_memory_bytes` chiede il
-    // profilo isolato. `planner::validate` ha gia' respinto la richiesta
-    // fuori da Linux (`Unsupported`) prima che questo `graph` potesse
-    // esistere: se arriviamo qui con una richiesta, siamo su Linux per
-    // costruzione, e il percorso e' un altro — mai l'esecuzione in-process
-    // sotto. Su chi non e' Linux questo ramo non si compila nemmeno: non
-    // esiste un `graph.plan().max_domain_memory_bytes() == Some(_)`
-    // raggiungibile li'.
+    // Un piano con `max_domain_memory_bytes` chiede il profilo isolato:
+    // `planner::validate` lo ha gia' respinto fuori da Linux, e qui il
+    // percorso e' un altro, mai l'esecuzione in-process sotto.
     #[cfg(target_os = "linux")]
     if let Some(richiesto_byte) = graph.plan().max_domain_memory_bytes() {
         return run_isolato(&graph, &pairs, output_path, richiesto_byte);
@@ -87,14 +82,10 @@ pub fn run_dag(
         graph.effective_limits(),
         runtime.batch_target.max_batch_bytes,
     );
-    // Gli input portano il proprio contratto: l'esecuzione verifica allora il
-    // fingerprint COMPLETO contro quello registrato nel grafo, non il solo
-    // schema Arrow. E' lo stesso contratto su cui il piano e' stato validato,
-    // quindi il confine si chiude senza rileggere nulla.
-    // Profilo STRETTO: un input senza contratto non e' un'omissione tollerata
-    // ma un errore. La CLI ha sempre i contratti della discovery, quindi il
-    // profilo permissivo non le serve — e non averlo a disposizione e' cio'
-    // che impedisce a una modifica futura di reintrodurlo per distrazione.
+    // Gli input portano il proprio contratto, quindi si verifica il
+    // fingerprint completo del grafo, non il solo schema. Profilo stretto: un
+    // input senza contratto e' un errore, e la CLI ha sempre i contratti
+    // della discovery.
     let mut inputs = Inputs::strict();
     for (name, path) in &pairs {
         let contract = contracts
@@ -117,14 +108,11 @@ pub fn run_dag(
     Ok(())
 }
 
-/// Il percorso isolato di `run` (`PR-12`): autorizza la politica dell'host,
-/// poi esegue per davvero — dominio, spawner, protocollo, verifica e
-/// pubblicazione — invece del percorso in-process sopra.
+/// Il percorso isolato di `run`: autorizza la politica dell'host, poi
+/// esegue con dominio, spawner, protocollo, verifica e pubblicazione.
 ///
-/// Stesso formato d'uscita del percorso in-process (`campi_della_pubblicazione`),
-/// ma senza le metriche per nodo: quelle restano nel processo worker, che le
-/// scarta dopo aver scritto l'artefatto (documentato in
-/// `isolamento::esecuzione_isolata`), non attraversano il confine.
+/// Stesso formato d'uscita del percorso in-process, senza le metriche per
+/// nodo, che restano nel worker (`isolamento::esecuzione_isolata`).
 #[cfg(target_os = "linux")]
 fn run_isolato(
     graph: &plenora_engine::planner::ValidatedGraph,
@@ -176,14 +164,10 @@ fn run_isolato(
     Ok(())
 }
 
-/// Percorsi di input per un piano DAG: `--input` singolo e/o `--inputs`
-/// multiplo (valori fino al prossimo flag).
 /// Sorgenti degli input di un piano DAG, come dichiarate sulla riga di
-/// comando.
+/// comando: `--input` singolo e/o `--inputs` multiplo.
 ///
-/// Le due forme non si mescolano: o l'accoppiamento e' esplicito, o e'
-/// posizionale. Accettarle insieme darebbe una riga di comando in cui meta'
-/// degli input e' verificabile a colpo d'occhio e meta' no.
+/// Le due forme, esplicita e posizionale, non si mescolano.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DagInputs {
     /// Forma NOMINALE `--input nome=percorso`, ripetibile: l'accoppiamento e'
@@ -268,20 +252,11 @@ pub fn v4_inputs(args: &[String]) -> Result<DagInputs, PlenoraError> {
 }
 
 pub fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), PlenoraError> {
-    // Fail-closed su TUTTI i piani legacy che contengono op row-diagnostics,
-    // anche blocking/secondary: nel percorso legacy non esiste gate
-    // provenance (quello e' solo DAG) e un nodo blocking (es. sort)
-    // renderebbe gli indici pubblicati posizioni post-riordino, non
-    // `source_row_zero_based`. Nessun indice inventato: si richiede DAG.
-    //
-    // Autorita' UNICA: `OperationDescriptor::emits_row_diagnostics`
-    // (catalogo plenora-core), la stessa del gate provenance del planner e
-    // del machinery di segmento dell'executor — nessuna lista locale
-    // duplicata, che qui ometterebbe formula/expression (hmac_sha256 non
-    // emette, md5/sha256 solo con null_policy=error). La scansione
-    // precede la validazione legacy: un'op diagnostica richiede DAG
-    // anche se il resto del piano sarebbe invalido — mai eseguire per poi
-    // scoprire indici inventati.
+    // Fail-closed su tutti i piani legacy con op row-diagnostics: il percorso
+    // legacy non ha il gate provenance, e dopo un nodo blocking gli indici
+    // pubblicati non sarebbero `source_row_zero_based`. Si richiede DAG.
+    // L'autorita' e' `OperationDescriptor::emits_row_diagnostics`, senza
+    // liste locali; la scansione precede la validazione legacy.
     let document: serde_json::Value = serde_json::from_str(plan_text)?;
     let requires_v4 = document
         .get("steps")
@@ -341,13 +316,9 @@ pub fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
         optional_value_after(args, "--right")?.as_deref(),
         &output_path,
     )?;
-    // Il ramo legacy emette ora un documento di successo, come gia' fa il ramo
-    // DAG dello stesso comando. Non e' cosmesi: senza un documento l'avvertenza
-    // di pulizia non ha dove uscire, e una pubblicazione che lascia spazzatura
-    // senza dirlo e' un fallimento silenzioso. Il formato d'uscita e' gia'
-    // JSON per contratto — `OutputFormat::require_json` lo impone in testa a
-    // questo comando — quindi il documento non introduce un canale nuovo: usa
-    // quello che il comando dichiara di avere.
+    // Il ramo legacy emette un documento di successo, come il ramo DAG: senza,
+    // l'avvertenza di pulizia non avrebbe dove uscire. Il formato e' gia' JSON
+    // per contratto (`OutputFormat::require_json`).
     let mut documento = serde_json::Map::new();
     documento.insert(
         "status".to_owned(),

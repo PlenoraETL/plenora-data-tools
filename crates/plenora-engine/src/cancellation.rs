@@ -1,22 +1,13 @@
 //! Token di cancellazione cooperativa (errori-e-limiti.md#cancellazione).
 //!
-//! Decisione di dipendenza: valutata la crate `cancellation-token`
-//! (piccola, senza `unsafe`), ma oggi il token e' un semplice flag
-//! condiviso — nessuna attesa/notifica, nessuna gerarchia di token: il
-//! runtime v1 e' seriale e il check e' un `load` atomico ai confini
-//! dell'executor. La politica del workspace (punto unico di versione con
-//! pin esatti; cfr. `temp_store`, che preferisce fallback conservativi a
-//! nuove dipendenze) scoraggia una dipendenza per una primitiva banale:
-//! `Arc<AtomicBool>` dietro un tipo dedicato copre il bisogno e lascia il
-//! tipo libero di crescere (attesa, gerarchie) senza cambiare la
-//! superficie pubblica.
+//! Un `Arc<AtomicBool>` dietro un tipo dedicato: basta un flag condiviso, e
+//! il tipo puo' crescere (attesa, gerarchie) senza cambiare la superficie
+//! pubblica. Nessuna dipendenza esterna per una primitiva banale.
 //!
-//! Oggi i kernel NON vedono il token — i check sono solo ai
-//! confini dell'executor (tra batch nelle catene streaming, tra kernel,
-//! durante il drenaggio dei segmenti blocking, sull'output del piano) e
-//! onorano il `CancellationBehavior` dichiarato in catalogo. Il passaggio
-//! del token ai kernel (check interni per le op `Cooperative` su batch
-//! grandi) e' previsto con il runtime parallelo in M3.
+//! I kernel non vedono il token: i check stanno ai confini dell'executor (fra
+//! batch, fra kernel, nel drenaggio dei segmenti blocking, sull'output) e
+//! onorano il `CancellationBehavior` del catalogo. I check interni ai kernel
+//! arrivano con il runtime parallelo (M3).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -56,20 +47,14 @@ impl CancellationToken {
         self.flag.load(Ordering::Acquire)
     }
 
-    /// Il flag atomico condiviso, per un installatore che deve scrivere
-    /// **lo stesso bit** che [`is_cancelled`](Self::is_cancelled) legge,
-    /// senza passare da [`cancel`](Self::cancel) — il caso d'uso e' un
-    /// gestore di segnale esterno (`signal_hook::flag::register`, sul
-    /// percorso isolato di `isolamento::esecuzione_isolata`) che riceve un
-    /// `Arc<AtomicBool>` da condividere con una libreria, non un
-    /// `&CancellationToken` da chiamare.
+    /// Il flag atomico condiviso, per chi deve scrivere lo stesso bit che
+    /// [`is_cancelled`](Self::is_cancelled) legge senza chiamare
+    /// [`cancel`](Self::cancel).
     ///
-    /// Il clone condivide l'`Arc`: scrivere nel flag restituito e' visibile
-    /// a questo token e a tutti i suoi cloni, esattamente come
-    /// [`cancel`](Self::cancel). `signal_hook::flag::register` scrive con
-    /// `Ordering::SeqCst` — piu' forte di `Ordering::Release` che `cancel`
-    /// usa, e compatibile con l'`Ordering::Acquire` di
-    /// [`is_cancelled`](Self::is_cancelled).
+    /// Serve a un gestore di segnale esterno (`signal_hook::flag::register`)
+    /// che vuole un `Arc<AtomicBool>`. Scrivere nel flag equivale a `cancel`
+    /// per questo token e tutti i suoi cloni; `SeqCst` e' compatibile con
+    /// l'`Acquire` di `is_cancelled`.
     #[must_use]
     pub fn condividi_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.flag)

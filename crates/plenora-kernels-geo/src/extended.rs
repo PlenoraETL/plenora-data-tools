@@ -1,4 +1,5 @@
-//! Operations beyond the original Manipola catalog.
+//! Operazioni geometriche estese: trasformazioni affini, concave hull,
+//! distanza di Hausdorff, distanze e lunghezze geodetiche.
 
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::concave_hull::ConcaveHullOptions;
@@ -83,20 +84,15 @@ pub fn affine_transform(
 
 /// Variante di [`affine_transform`] SENZA il gate OGC di ingresso.
 ///
-/// La scansione di finitezza e' coperta dalla stessa precondizione. La
-/// validazione OGC DELL'OUTPUT resta: e' la garanzia del produttore per
-/// i consumatori a valle (regola delle catene, R0.1).
+/// La validazione OGC dell'output resta: e' la garanzia del produttore per
+/// i consumatori a valle (R0.1).
 ///
 /// # Precondizione (contratto del chiamante)
 ///
-/// La geometria di input deve essere GIA' validata: coordinate finite e
-/// validita' OGC, come garantito da [`crate::geometry_from_wkb`] al decode
-/// o da un kernel che valida il proprio output. Su input che viola la
-/// precondizione il risultato e' indefinito (tipicamente intercettato dal
-/// gate di output, ma non garantito): la variante e' per i soli percorsi
-/// in cui la validazione e' dimostrata per costruzione (R0.1: mai
-/// un'inferenza sui chiamanti — il gate di ingresso resta nella forma
-/// pubblica [`affine_transform`]).
+/// Input GIA' validato (finitezza + OGC), per costruzione: da
+/// [`crate::geometry_from_wkb`] o da un kernel che valida il proprio output,
+/// mai per inferenza sui chiamanti (R0.1). Altrimenti il risultato e'
+/// indefinito.
 ///
 /// # Errors
 ///
@@ -229,9 +225,7 @@ fn rotate_coefficients(
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let x_offset = origin.x() - cosine * origin.x() + sine * origin.y();
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Stessa forma non fusa, per lo stesso motivo.
     #[allow(clippy::suboptimal_flops)]
     let y_offset = origin.y() - sine * origin.x() - cosine * origin.y();
     Ok((x_offset, y_offset, cosine, sine))
@@ -526,13 +520,9 @@ mod tests {
 
     #[test]
     fn validated_variants_document_the_caller_precondition() {
-        // Test di documentazione del contratto, NON un nuovo modo di
-        // accettare geometrie invalide in produzione: il percorso gated
-        // rifiuta il bowtie in INGRESSO (gate intatto), la variante
-        // validated omette quel gate perche' la precondizione e' del
-        // chiamante — qui violata ad arte. Il gate di OUTPUT resta: la
-        // trasformata affine di un bowtie e' ancora un bowtie e viene
-        // rifiutata in uscita.
+        // Precondizione violata ad arte: il percorso gated rifiuta il bowtie
+        // in ingresso, la variante validated no, ma il gate di output lo
+        // rifiuta comunque (la trasformata affine di un bowtie e' un bowtie).
         let bowtie = Geometry::Polygon(polygon![
             (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
             (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),

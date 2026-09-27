@@ -1,24 +1,13 @@
 //! L'uscita di un'esecuzione: lo stream dei batch, e la pubblicazione.
 //!
-//! [`Output`] e' un iteratore di batch piu' le metriche. Non e' solo un
-//! contenitore: e' il punto in cui il contratto dichiarato diventa uno schema
-//! Arrow vero, con i metadati canonici della geometria, e in cui la
-//! pubblicazione avviene in modo **atomico** — nessun output parziale, mai.
+//! [`Output`] e' un iteratore di batch piu' le metriche, e il punto in cui la
+//! pubblicazione avviene in modo **atomico**: nessun output parziale, mai.
 //!
-//! # Il rivestimento dello schema
-//!
-//! Lo schema pubblicato non e' quello che i kernel producono: e' quello che
-//! il contratto DICHIARA. I metadati geo canonici vengono riscritti qui, in un
-//! punto solo, e le dichiarazioni di CRS gia' decise dal piano vengono
-//! sostituite invece di sommarsi a quelle della sorgente. Farlo altrove
-//! significherebbe avere due verita' sullo schema di uscita.
-//!
-//! # Perche' la durabilita' e' un esito, non un booleano
-//!
-//! `PublishedButDurabilityUnconfirmed` esiste perche' su alcune piattaforme il
-//! `fsync` della directory non e' disponibile o non e' significativo: il file
-//! c'e', ma nessuno puo' promettere che sopravviva a un'interruzione
-//! dell'alimentazione. Dirlo e' diverso dal tacerlo.
+//! Lo schema pubblicato e' quello che il contratto DICHIARA: i metadati geo
+//! canonici sono riscritti qui, in un punto solo, e le dichiarazioni di CRS del
+//! piano sostituiscono quelle della sorgente invece di sommarsi.
+//! `PublishedButDurabilityUnconfirmed` dichiara i casi in cui il `fsync` della
+//! directory non e' disponibile o non e' significativo.
 
 use std::io::Write;
 use std::path::Path;
@@ -145,23 +134,16 @@ impl Output {
     }
 
     /// Scrive l'output in Arrow IPC file format con publish atomico
-    /// (decisione D22/errori-e-limiti.md#publish-e-cleanup): tempfile nella
-    /// directory di destinazione, persist no-clobber solo a stream completato
-    /// con successo — nessun output parziale e' mai visibile.
+    /// (D22, errori-e-limiti.md#publish-e-cleanup).
     ///
-    /// L'header IPC porta lo schema di [`Output::schema`]: quello del
-    /// contratto piu' il blocco canonico R2.2 per ogni colonna geometrica e la
-    /// versione R2.5 nei metadati dello schema; le chiavi `GeoArrow` legacy
-    /// restano (coesistenza coerente, R2.6).
+    /// Tempfile nella directory di destinazione, persist no-clobber solo a
+    /// stream completato con successo. L'header IPC porta lo schema di
+    /// [`Output::schema`]: contratto, blocco canonico R2.2 per ogni colonna
+    /// geometrica, versione R2.5, chiavi `GeoArrow` legacy (R2.6).
     ///
-    /// # Perche' non esiste una forma che non renda l'esito
-    ///
-    /// Perche' la sua unica funzione sarebbe **scartare le avvertenze**: la
-    /// durabilita' non confermata e il temporaneo rimasto sparirebbero dentro
-    /// la firma, senza che nessuno lo dica. Un comodo che perde cio' che chi
-    /// pubblica deve sapere non e' un comodo: e' la stessa perdita silenziosa,
-    /// in un posto dove e' piu' difficile vederla. Chi l'esito non lo vuole lo
-    /// lascia cadere **a vista**, dove chi legge il codice se ne accorge.
+    /// L'esito si rende sempre: una forma senza esito scarterebbe in silenzio
+    /// la durabilita' non confermata e il temporaneo rimasto. Chi non lo vuole
+    /// lo lascia cadere a vista.
     ///
     /// # Errors
     ///
@@ -200,13 +182,9 @@ impl Output {
     /// Come [`Output::write_ipc_file_with_profile`], ma **solo per i casi**:
     /// pubblica col profilo atomico e lascia cadere le avvertenze.
     ///
-    /// # Perche' esiste solo sotto `cfg(test)`
-    ///
-    /// Perche' in produzione un comodo cosi' non c'e': la sua unica funzione
-    /// sarebbe scartare cio' che chi pubblica deve sapere, e appartiene alla
-    /// classe dei siti che perdono un'avvertenza. Nei casi che giudicano altro
-    /// — un errore atteso, le metriche, i byte scritti — ignorarle e'
-    /// legittimo, e il nome lo dichiara invece di nasconderlo dietro una firma.
+    /// Esiste solo sotto `cfg(test)` perche' scarta cio' che chi pubblica deve
+    /// sapere; nei casi che giudicano altro ignorarle e' legittimo, e il nome
+    /// lo dichiara.
     #[cfg(test)]
     pub(crate) fn write_ipc_file_ignorando_le_avvertenze(
         self,
@@ -219,30 +197,13 @@ impl Output {
     /// Scrive l'artefatto di un'esecuzione **isolata** sul solo percorso
     /// temporaneo, e ne rende i conteggi.
     ///
-    /// # Che cosa questo non fa, e perche'
+    /// Non pubblica e non conosce la destinazione finale: la pubblicazione e'
+    /// il passo 9 di `isolamento.md`, di chi ha osservato la verifica, non di
+    /// chi ha prodotto i byte. Per questo non usa [`publish_with_profile`], che
+    /// rinomina; il no-clobber resta, con l'apertura in `create_new`.
     ///
-    /// Non pubblica, e non conosce la destinazione finale. Il worker scrive
-    /// dove il supervisore gli ha detto di scrivere; la pubblicazione e' il
-    /// passo 9 della sequenza di `isolamento.md`, ed e' di chi ha osservato la
-    /// verifica — non di chi ha prodotto i byte. Un worker che sapesse la
-    /// destinazione finale potrebbe pubblicarvi qualcosa senza passare da
-    /// nessuna verifica, e la sequenza esiste per impedirlo.
-    ///
-    /// Per la stessa ragione non c'e' [`publish_with_profile`]: quella funzione
-    /// scrive in un tempfile e lo **rinomina**, cioe' fa proprio il passo che
-    /// qui non deve avvenire. Il no-clobber resta, perche' e' una garanzia sul
-    /// percorso e non sul rename: aprire con `create_new` fa fallire un
-    /// artefatto che sovrascriverebbe qualcosa.
-    ///
-    /// # Perche' token e osservatore sono obbligatori
-    ///
-    /// Perche' un artefatto isolato **senza token non e' attribuibile** al
-    /// tentativo che lo ha prodotto, e il passo 8-bis lo rifiuterebbe. Se il
-    /// token fosse un `Option`, dimenticarlo sarebbe possibile e il difetto si
-    /// vedrebbe solo dall'altra parte del filo, come un artefatto respinto per
-    /// una ragione che non nomina la causa. Lo stesso vale per l'osservatore:
-    /// un progresso facoltativo e' un progresso che qualcuno prima o poi non
-    /// passa.
+    /// Token e osservatore non sono `Option`: un artefatto senza token non e'
+    /// attribuibile al tentativo e il passo 8-bis lo rifiuterebbe.
     ///
     /// # Errors
     ///
@@ -284,44 +245,19 @@ impl Output {
 /// I generi d'errore che parlano dell'**incarico**, con la fase e cio' che si
 /// dice a chi legge.
 ///
-/// # Perche' una tabella e non una catena di rami
+/// Riguardano la destinazione (percorso occupato, directory assente) o la
+/// forma del percorso (rifiutata dal sistema, componente intermedio che e' un
+/// file, directory dove serve un file): il protocollo limita la lunghezza del
+/// percorso, non la forma. Tutto il resto ricade su `Io`.
 ///
-/// Perche' l'elenco e' proprio la cosa da guardare: chi legge deve vedere in un
-/// colpo **quali** generi sono dell'incarico, e chi lo estende aggiunge una riga
-/// invece di infilare un ramo in mezzo a una catena. La ricaduta resta una sola,
-/// sotto, e non si nasconde fra i casi.
-///
-/// # Perche' proprio questi cinque
-///
-/// I primi due riguardano la destinazione: un percorso **gia' occupato**, e la
-/// directory che avrebbe dovuto contenerlo e che **non c'e'**. Gli altri tre
-/// riguardano la forma del percorso: uno che il sistema non accetta — un byte
-/// NUL, per dire —, un componente intermedio che e' un **file** invece di una
-/// directory, e un percorso che nomina una **directory** dove serve un file. Il
-/// protocollo limita la lunghezza del percorso, non la sua forma: quelle forme
-/// arrivano fin qui.
-///
-/// # Quale genere arrivi lo decide il sistema, e i sistemi non concordano
-///
-/// La tabella dice come si **classifica** un genere, non quale genere una data
-/// forma produca: quello lo decide il kernel, e non e' lo stesso ovunque. Un
-/// componente intermedio che e' un file da' `NotADirectory` su Unix e `NotFound`
-/// su Windows — entrambi qui dentro, quindi la classificazione non cambia.
-///
-/// Una directory esistente no: su Unix e' `AlreadyExists`, su Windows
-/// `PermissionDenied`, che in questa tabella **non c'e'** e resta percio' `Io`.
-/// E' una deviazione dichiarata, non una dimenticanza: `PermissionDenied` e'
-/// indistinguibile da un permesso che manca davvero, e ammetterlo qui direbbe
-/// «correggi l'incarico» a chi invece ha un problema di permessi. Fra due
-/// diagnosi imprecise si tiene quella **conservativa**. Sta scritto in
+/// Quale genere arrivi lo decide il sistema: una directory esistente da'
+/// `AlreadyExists` su Unix e `PermissionDenied` su Windows, che qui non c'e' e
+/// resta `Io`, la diagnosi conservativa. Deviazione dichiarata in
 /// errori-e-limiti.md#lapertura-dellartefatto-temporaneo-quali-generi-sono-dellincarico,
-/// e due casi pretendono il genere reale su ciascuna piattaforma: se una
-/// cambiasse risposta, diventerebbero rossi invece di adattarsi.
+/// e due casi pretendono il genere reale su ciascuna piattaforma.
 ///
-/// # Le fasi
-///
-/// `Probe` quando il difetto si vede **guardando** il percorso o l'albero che lo
-/// contiene; `Commit` quando si vede solo provando a occupare la destinazione.
+/// Fasi: `Probe` quando il difetto si vede guardando il percorso, `Commit`
+/// quando si vede solo provando a occupare la destinazione.
 const GENERI_DELL_INCARICO: &[(std::io::ErrorKind, ErrorPhase, &str)] = &[
     (
         std::io::ErrorKind::AlreadyExists,
@@ -352,25 +288,10 @@ const GENERI_DELL_INCARICO: &[(std::io::ErrorKind, ErrorPhase, &str)] = &[
 
 /// Perche' l'artefatto temporaneo non si e' aperto.
 ///
-/// # Perche' non tutto e' un piano invalido
-///
-/// Perche' i generi di [`GENERI_DELL_INCARICO`] parlano di **cio' che il
-/// chiamante ha chiesto** — un percorso occupato, una directory che non c'e', un
-/// percorso di forma sbagliata — e nessun permesso li risolve; tutto il resto
-/// parla di **cio' che l'ambiente ha risposto**: permessi, disco, un filesystem
-/// in sola lettura. Chiamarli tutti `InvalidPlan` direbbe a chi legge di
-/// correggere l'incarico anche quando l'incarico e' corretto.
-///
-/// # Perche' la ricaduta e' il verso pericoloso
-///
-/// Perche' sbagliare in questo verso non si vede: un difetto dell'incarico
-/// classificato `Io` manda chi legge a cercare un permesso o dello spazio che
-/// non c'entrano, mentre il percorso sbagliato resta dov'e'. Il verso opposto —
-/// un guasto d'ambiente chiamato `InvalidPlan` — e' altrettanto falso ma si
-/// scopre subito, perche' l'incarico che si va a controllare risulta corretto.
-///
-/// La distinzione passa dal genere dell'errore, non dal suo testo: il testo di
-/// `io::Error` dipende dalla piattaforma e dalla lingua del sistema.
+/// I generi di [`GENERI_DELL_INCARICO`] parlano di cio' che il chiamante ha
+/// chiesto e diventano `InvalidPlan`; il resto parla dell'ambiente (permessi,
+/// disco, sola lettura) e resta `Io`. La distinzione passa dal genere, non dal
+/// testo di `io::Error`, che dipende da piattaforma e lingua.
 fn non_apribile(temporaneo: &Path, causa: &std::io::Error) -> PlenoraError {
     let dove = temporaneo.display();
     for (genere, fase, detto) in GENERI_DELL_INCARICO {
@@ -389,40 +310,17 @@ fn non_apribile(temporaneo: &Path, causa: &std::io::Error) -> PlenoraError {
 
 /// Il ciclo che scrive un artefatto: **l'unica autorita'** che lo fa.
 ///
-/// # Che cosa decide, e perche' in un posto solo
+/// Rivestimento dello schema, scrittura dei batch, conteggi, footer prima di
+/// `finish` e controlli terminali devono valere insieme: un secondo ciclo
+/// sarebbe una seconda autorita' sul formato. I due chiamanti differiscono
+/// solo per destinazione dei byte, token e osservatore.
 ///
-/// Il rivestimento canonico dello schema, la scrittura dei batch, i conteggi
-/// cumulativi, il footer prima di `finish`, e i due controlli terminali. Sono
-/// cinque decisioni che devono valere insieme: un secondo ciclo che ne
-/// riproducesse quattro sarebbe una seconda autorita' sul formato, e prima o
-/// poi divergerebbe da questa senza che nessuno dei due lati se ne accorga —
-/// l'artefatto sarebbe scritto in un modo e verificato in un altro.
+/// I conteggi sono esatti e cumulativi, con aritmetica **controllata**: ne'
+/// `wrapping` ne' `saturating`. [`crate::verifica::conta_in_streaming`] applica
+/// lo stesso contratto in modo indipendente, e il passo 8 confronta i due.
 ///
-/// I due chiamanti differiscono solo per cio' che sta **fuori** dal ciclo:
-/// dove finiscono i byte, se un token li identifica, e se qualcuno aspetta il
-/// progresso.
-///
-/// # I conteggi
-///
-/// Sono esatti e cumulativi, e l'aritmetica e' **controllata**. Un `wrapping`
-/// farebbe combaciare i conteggi di un artefatto che ne ha 2^64 di troppo, e un
-/// `saturating` direbbe `u64::MAX` per due artefatti diversi.
-///
-/// Chi riverifica — [`crate::verifica::conta_in_streaming`] — applica lo
-/// **stesso contratto matematico**, e lo applica in modo indipendente: due
-/// implementazioni separate, ciascuna col proprio caso, che devono concordare
-/// su ogni ingresso. Non e' una scelta di stile condivisa: se una delle due si
-/// spostasse su un'aritmetica che avvolge o satura, il passo 8 confronterebbe
-/// due numeri prodotti da regole diverse, e la coincidenza non direbbe piu'
-/// niente sull'artefatto.
-///
-/// # L'osservatore
-///
-/// Riceve lo snapshot **dopo ogni batch scritto con successo**, non prima: un
-/// progresso emesso davanti a una scrittura che poi fallisce dichiarerebbe
-/// righe che non sono nell'artefatto. Il suo errore **interrompe**: se il
-/// canale verso chi aspetta e' rotto, continuare a scrivere produrrebbe un
-/// artefatto che nessuno sa di dover verificare.
+/// L'osservatore riceve lo snapshot dopo ogni batch scritto con successo, e il
+/// suo errore interrompe la scrittura.
 ///
 /// # Errors
 ///
@@ -527,18 +425,10 @@ impl Iterator for Output {
     /// Consumo batch per batch dell'output.
     ///
     /// A stream esaurito corre il **controllo di salute terminale**: se la
-    /// contabilita' del governor e' stata marcata incoerente — cosa che puo'
-    /// accadere dentro il `Drop` dell'ultimo lease, dove un errore non puo'
-    /// essere propagato — l'iteratore produce **una volta** `Some(Err(...))` e
-    /// poi `None`.
-    ///
-    /// Senza questo controllo chi consuma con `for batch in output` non
-    /// passerebbe ne' da [`Output::collect_batches`] ne' dal publish atomico,
-    /// e una corruzione rilevata all'ultimo rilascio diventerebbe un successo
-    /// silenzioso: lo stream finirebbe e basta.
-    ///
-    /// L'errore e' emesso una sola volta (`esaurito`): ripeterlo a ogni
-    /// chiamata trasformerebbe un `for` in un ciclo che non termina.
+    /// contabilita' del governor e' stata marcata incoerente (per esempio nel
+    /// `Drop` dell'ultimo lease, dove un errore non si propaga) l'iteratore
+    /// produce **una volta** `Some(Err(...))` e poi `None`. Senza, un `for`
+    /// sull'output renderebbe la corruzione un successo silenzioso.
     fn next(&mut self) -> Option<Self::Item> {
         if self.esaurito {
             return None;

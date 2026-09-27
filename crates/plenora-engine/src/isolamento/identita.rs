@@ -1,10 +1,7 @@
 //! `F4-15`: che il worker **non possieda alcuna autorita' sul control plane**.
 //!
-//! # La proprieta' non e' «UID distinto»
-//!
-//! UID/GID distinto e' il **meccanismo**, e per giunta l'unico prototipato
-//! (`L19b`, cinque operazioni su cinque respinte). La proprieta' e' un'altra, e
-//! guardare solo l'UID la lascerebbe scoperta su cinque assi:
+//! UID/GID distinto e' il **meccanismo** (l'unico prototipato, `L19b`), non la
+//! proprieta'. Guardare solo l'UID lascia scoperti cinque assi:
 //!
 //! | asse | perche' l'UID non basta |
 //! |---|---|
@@ -14,27 +11,13 @@
 //! | namespace | uno user namespace proprio rida' capability piene **dentro di se'** |
 //! | descrittori ereditati | un `fd` gia' aperto in scrittura sopravvive al cambio di UID |
 //!
-//! L'ultima riga e' la piu' insidiosa: **il cambio d'identita' non revoca
-//! l'autorita' gia' acquisita**. Un descrittore aperto sulla gerarchia prima
-//! della `setresuid` resta scrivibile dopo, perche' il controllo dei permessi
-//! avviene all'apertura e non a ogni scrittura. L'assenza di descrittori
-//! scrivibili verso il control plane e' quindi una **proprieta' autonoma**,
-//! non una conseguenza.
+//! Il cambio d'identita' non revoca l'autorita' gia' acquisita: i permessi si
+//! controllano all'apertura. L'assenza di descrittori scrivibili verso il
+//! control plane e' quindi una **proprieta' autonoma**.
 //!
-//! # Non leggibile significa autorita' non esclusa
-//!
-//! Ogni lettura qui e' fail-closed. Un campo che manca, un numero che non si
-//! interpreta, una directory che non si apre: nessuno di questi e' «nessuna
-//! autorita'», sono «non lo sappiamo», e non saperlo e' esattamente il caso in
-//! cui non si parte. Un `filter_map` che scarta in silenzio trasformerebbe un
-//! valore malformato in un lasciapassare.
-//!
-//! # Perche' si rilegge invece di dedurre
-//!
-//! Perche' impostare non e' essere. Ogni riga qui sotto e' cio' che il
-//! processo **e'**, letto da `/proc/self`, e non cio' che qualcuno ha chiesto
-//! che fosse. E' la stessa disciplina del preflight sul dominio, applicata
-//! all'identita'.
+//! Ogni lettura e' fail-closed: un campo mancante o malformato significa «non
+//! lo sappiamo», e non si parte. Si rilegge da `/proc/self` cio' che il
+//! processo **e'**, non cio' che si e' chiesto che fosse.
 
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::io::AsRawFd as _;
@@ -130,30 +113,15 @@ impl Identita {
     ///
     /// Vuoto significa che nessuno dei sei assi lascia una strada.
     ///
-    /// # Il control plane si identifica dal filesystem, non dal percorso
+    /// Il control plane si riconosce dal **dispositivo**, non dal percorso: un
+    /// bind mount o un secondo punto di mount dello stesso superblocco porta
+    /// alla stessa gerarchia. Ne segue che si rifiuta anche un `fd` scrivibile
+    /// su un cgroup2 estraneo, che e' il verso giusto in cui essere severi.
     ///
-    /// Un `fd` puo' raggiungere la gerarchia attraverso un bind mount o un
-    /// secondo punto di mount dello stesso superblocco: il percorso sarebbe un
-    /// altro, il filesystem lo stesso, e la scrittura arriverebbe ugualmente.
-    /// Il confronto e' quindi sul **dispositivo**, che e' cio' che il kernel
-    /// considera lo stesso oggetto.
-    ///
-    /// Ne segue che un `fd` scrivibile su un cgroup2 **estraneo** viene
-    /// rifiutato insieme agli altri. E' piu' severo del necessario, ed e' il
-    /// verso giusto in cui esserlo: scrivere in un cgroup qualunque e'
-    /// autorita' che il worker non deve avere.
-    ///
-    /// # `bounding` non entra nel giudizio, e va detto
-    ///
-    /// Un bounding set non vuoto **non da' autorita' da solo**: e' il tetto di
-    /// cio' che un processo potrebbe acquisire, non cio' che ha. Con
-    /// `no_new_privs` attivo e le altre quattro maschere a zero non esiste una
-    /// transizione che lo faccia diventare autorita', perche' `no_new_privs` e'
-    /// proprio cio' che vieta quelle transizioni.
-    ///
-    /// Pretenderlo vuoto rifiuterebbe ambienti sani — svuotarlo richiede
-    /// `CAP_SETPCAP`, che spesso non c'e' — senza rendere piu' stretta nessuna
-    /// garanzia. Si registra e non si giudica.
+    /// `bounding` si registra e non si giudica: e' il tetto di cio' che si
+    /// potrebbe acquisire, e con `no_new_privs` e le altre quattro maschere a
+    /// zero nessuna transizione lo rende autorita'. Pretenderlo vuoto
+    /// richiederebbe `CAP_SETPCAP` e rifiuterebbe ambienti sani.
     pub(super) fn autorita_residua(
         &self,
         dispositivo_control_plane: u64,
@@ -209,52 +177,21 @@ impl Identita {
 
     /// I namespace che non coincidono con quelli attesi.
     ///
-    /// # Perche' sono un asse e non un dato
+    /// Una `unshare` cambia **rispetto a quale namespace** capability e
+    /// proprieta' dei file hanno significato (`user`), quali percorsi esistono
+    /// (`mnt`), e cosi' per `pid` e `cgroup`. Lo spawner li eredita dal
+    /// processo che prepara, quindi una differenza significa una `unshare` nel
+    /// mezzo.
     ///
-    /// Non perche' una `unshare` di `user` nasconda le capability: dentro il
-    /// namespace nuovo ci sono, e la maschera le mostra. Il punto e' un altro,
-    /// ed e' che cambia **rispetto a quale namespace** capability e proprieta'
-    /// dei file hanno significato: un UID che li' non ha autorita' puo' averla
-    /// su file mappati diversamente, e le stesse maschere lette prima e dopo
-    /// non parlano piu' della stessa cosa. Lo stesso vale, con effetti diversi,
-    /// per `mnt` — che cambia quali percorsi esistono — per `pid` e per
-    /// `cgroup`.
+    /// Il controllo vale al momento della `exec`, non dopo: `no_new_privs` non
+    /// vieta `unshare`. La prova ostile accetta due esiti: `unshare` rifiutata
+    /// dall'host, oppure riuscita senza poter riscrivere il control plane ne'
+    /// uscire dal dominio, perche' i file della gerarchia appartengono a un UID
+    /// non mappato nel namespace nuovo e il dominio e' sigillato.
     ///
-    /// Lo spawner nasce dal processo che prepara e li **eredita**: una
-    /// differenza significa che nel mezzo qualcuno ha fatto una `unshare`.
-    ///
-    /// # Che cosa questo controllo non copre, e va detto
-    ///
-    /// Dice che nel momento della `exec` il namespace e' quello giusto. Non impedisce al worker di fare `unshare` **dopo**, e sarebbe falso
-    /// dire che `no_new_privs` lo impedisca: `no_new_privs` vieta di acquisire
-    /// privilegi attraverso una `execve` — setuid, capability di file — e non
-    /// tocca `unshare`. Un processo non privilegiato che crea uno user
-    /// namespace, dove la policy del kernel lo consente, lo crea anche con
-    /// `no_new_privs = 1`, e dentro quel namespace ha capability piene.
-    ///
-    /// La prova ostile non deve quindi pretendere che la `unshare` fallisca.
-    /// Deve accettare **due** esiti, ed entrambi sono un successo:
-    ///
-    /// - la `unshare` e' rifiutata dalla policy dell'host;
-    /// - la `unshare` riesce, il namespace cambia e nel figlio ci sono
-    ///   capability, ma riscrivere il control plane e uscire dal dominio
-    ///   restano impossibili, e lo stato resta invariato.
-    ///
-    /// Il secondo e' quello che conta, perche' e' quello che dice **perche'**
-    /// regge: non un flag, ma il fatto che i file della gerarchia appartengono
-    /// a un UID che nel namespace nuovo non e' mappato, e che il dominio e'
-    /// sigillato. Le capability di uno user namespace valgono sugli oggetti di
-    /// quel namespace, non su quelli del padre.
-    ///
-    /// # I quattro che si pretendono
-    ///
-    /// `user`, `pid`, `cgroup`, `mnt`. Gli altri si registrano ma non si
-    /// giudicano: `net`, `uts` e `ipc` non danno autorita' sul control plane, e
-    /// pretenderli identici rifiuterebbe ambienti sani.
-    ///
-    /// Mancante, duplicato o diverso sono tutti e tre un motivo: di un
-    /// namespace che non si sa nominare non si sa nemmeno dire che sia quello
-    /// giusto.
+    /// Si pretendono `user`, `pid`, `cgroup`, `mnt`; `net`, `uts` e `ipc` si
+    /// registrano, perche' non danno autorita' sul control plane. Mancante,
+    /// duplicato o diverso sono tutti un motivo.
     fn namespace_divergenti(&self, attesi: &[(String, String)]) -> Vec<Autorita> {
         /// I namespace che danno autorita' sul control plane.
         const PRETESI: [&str; 4] = ["user", "pid", "cgroup", "mnt"];
@@ -298,31 +235,13 @@ fn unico<'a>(namespace: &'a [(String, String)], cercato: &str) -> Option<&'a str
 
 /// Legge da `/proc/self` cio' che il processo **e'**.
 ///
-/// # Quando si puo' chiamare, e quando no
+/// Si chiama **prima** del cambio d'identita': dopo, il kernel azzera il flag
+/// *dumpable* e passa `/proc/<pid>` a `root`. Sulla gerarchia qualificata
+/// restano leggibili `status` e `fd`, cade `ns`, e senza namespace la
+/// rilettura completa non e' possibile. La `exec` chiude la finestra; dentro,
+/// il settimo passo dello spawner usa [`rileggi_credenziali`].
 ///
-/// **Prima** del cambio d'identita'. Nella finestra che va dal cambio alla
-/// `exec` non funziona, e non e' un difetto di questo codice: quando un
-/// processo cambia le proprie credenziali il kernel azzera il suo flag
-/// *dumpable*, e con esso passa `/proc/<pid>` a `root`.
-///
-/// Che cosa si perde davvero non e' pero' materia di deduzione, ed e' il
-/// motivo per cui il gate lo misura invece di darlo per scontato: sulla
-/// gerarchia qualificata `status` resta leggibile — e' un file, e i permessi
-/// della directory concedono l'attraversamento a tutti — e resta leggibile
-/// anche `fd`, perche' il kernel fa un'eccezione esplicita per il processo che
-/// guarda i propri descrittori. Cade `ns`, che quell'eccezione non ce l'ha, ed
-/// e' abbastanza: senza i namespace la rilettura completa non e' possibile.
-///
-/// La finestra si chiude con la `exec`, che rimette *dumpable* e restituisce
-/// `/proc/<pid>` al nuovo proprietario: il worker, dopo, si legge senza
-/// problemi. Chi vive **dentro** la finestra e' il settimo passo dello
-/// spawner, e per quello c'e' [`rileggi_credenziali`].
-///
-/// La misura sta nel modo `finestra` di `scripts/verifica_isolamento_linux.sh`,
-/// che riporta la leggibilita' prima e dopo il cambio nello stesso processo.
-/// Un kernel che concedesse tutto anche li' renderebbe [`rileggi_credenziali`]
-/// non obbligatoria, non sbagliata: la sua correttezza poggia su un'altra
-/// ragione, ed e' scritta li'.
+/// La misura sta nel modo `finestra` di `scripts/verifica_isolamento_linux.sh`.
 ///
 /// # Errors
 ///
@@ -420,30 +339,15 @@ fn maschera(status: &str, chiave: &str) -> std::result::Result<u64, String> {
 
 /// Rilegge cio' che il cambio d'identita' puo' aver cambiato.
 ///
-/// # Perche' namespace e descrittori si portano avanti invece di rileggerli
+/// Namespace e descrittori si portano avanti, perche' dopo il cambio non si
+/// leggono ([`leggi_identita`]) e fra le due letture ci sono solo
+/// `no_new_privs`, `setgroups` e le `setres*id`: nessuna apre o chiude
+/// descrittori o cambia namespace. Cio' che cambia (uid, gid, gruppi, le
+/// cinque maschere, `no_new_privs`) sta in `/proc/self/status`, che resta
+/// leggibile: nessun asse di `F4-15` esce dalla verifica.
 ///
-/// Non per comodita': **dopo** il cambio non sono leggibili, per la ragione
-/// spiegata su [`leggi_identita`]. La domanda vera e' se portarli avanti sia
-/// lecito, e la risposta dipende da che cosa sta in mezzo fra le due letture.
-///
-/// In mezzo ci sono tre cose sole: `no_new_privs`, `setgroups` e le tre
-/// `setres*id`. Nessuna apre o chiude un descrittore, e nessuna cambia un
-/// namespace — cambiarli richiede `unshare`, `setns` o `clone`, che qui non
-/// compaiono. Le due osservazioni portate avanti sono quindi ancora vere, e
-/// dirlo non e' una concessione: e' l'unica ragione per cui la verifica finale
-/// resta completa.
-///
-/// Cio' che invece **cambia** — uid, gid, gruppi supplementari, le cinque
-/// maschere di capability, `no_new_privs` — sta tutto in `/proc/self/status`,
-/// che resta leggibile. Nessun asse di `F4-15` esce dalla verifica: quelli che
-/// non si rileggono sono quelli che non si possono essere mossi.
-///
-/// # Perche' non si riapre l'accesso
-///
-/// Perche' l'unico modo sarebbe rimettere il flag *dumpable*, e quel flag e'
-/// anche cio' che permette a un altro processo dello stesso uid di fare
-/// `ptrace` su questo. Riaprire `/proc` per potersi guardare allo specchio
-/// significherebbe aprire una porta molto piu' grande di cio' che si guadagna.
+/// Non si rimette *dumpable*: permetterebbe `ptrace` a un altro processo
+/// dello stesso uid.
 ///
 /// # Errors
 ///
@@ -469,58 +373,27 @@ pub(super) fn rileggi_credenziali(prima: &Identita) -> std::result::Result<Ident
 
 /// Gli identificatori dei namespace.
 ///
-/// Si registrano e non si giudicano: quale namespace sia «giusto» dipende da
-/// come il supervisore e' stato avviato, e deciderlo qui imporrebbe una
-/// topologia che il documento non fissa. Chi confronta e' il gate, che sa in
-/// quale ambiente sta girando.
-///
-/// Ma **illeggibili e' un errore**: un `/proc/self/ns` che non si apre e' un
-/// ambiente su cui non si puo' dire nulla, e su un asse di `F4-15` non poter
-/// dire nulla vale come non poter escludere.
+/// Si registrano e non si giudicano qui: chi confronta sa in quale ambiente
+/// gira. Ma **illeggibili e' un errore**: su un asse di `F4-15` non poter dire
+/// nulla vale come non poter escludere.
 pub(super) fn namespace_di_self() -> std::result::Result<Vec<(String, String)>, String> {
     namespace_in(Path::new("/proc/self/ns"))
 }
 
 /// I namespace del processo che ci ha generato.
 ///
-/// # Perche' il padre e non un argomento
+/// Il PPID e `/proc/<ppid>/ns` sono un fatto del kernel; un valore passato
+/// dal supervisore direbbe solo che mittente e lettore sono d'accordo.
 ///
-/// Perche' lo spawner deve poter dire che i namespace in cui gira sono quelli
-/// del supervisore, e un valore che gli arriva **dal** supervisore non lo dice:
-/// direbbe soltanto che chi ha scritto l'argomento e chi lo legge sono
-/// d'accordo, il che e' vero anche quando entrambi si sbagliano e vero per
-/// costruzione quando l'argomento e' stato inventato.
+/// Non dice che il supervisore sia vivo. Se muore prima di questa lettura, lo
+/// spawner e' adottato da `init`, che nel caso ordinario ha gli stessi
+/// namespace: il confronto passa e il worker parte orfano. E fra la lettura
+/// del PPID e quella dei namespace il pid puo' essere riciclato. Rilevare la
+/// morte del supervisore richiede pid **piu'** start-time, o un canale la cui
+/// chiusura si osserva: proprieta' del ciclo di vita del supervisore, che
+/// questo modulo non contiene (errori-e-limiti.md#un-worker-orfano-finisce-il-proprio-lavoro).
 ///
-/// Il PPID e i link sotto `/proc/<ppid>/ns` sono invece un fatto del kernel:
-/// nessuna riga di comando li cambia.
-///
-/// # Che cosa questo **non** dice: che il supervisore sia vivo
-///
-/// Sarebbe comodo leggerlo come una rilevazione della morte del padre, e non lo
-/// e'. Se il supervisore muore fra lo `spawn` e questa lettura, lo spawner viene
-/// adottato da `init`, e i namespace di `init` sono quelli dell'host. Un
-/// supervisore che sta anch'esso nei namespace dell'host — il caso ordinario —
-/// ha quindi gli stessi identificatori di `init`: **coincidono**, il confronto
-/// passa, e il worker parte orfano.
-///
-/// C'e' inoltre una corsa fra le due letture: il PPID si legge da
-/// `/proc/self/status`, i namespace da `/proc/<ppid>/ns`, e in mezzo il padre
-/// puo' morire e il pid essere riciclato da un altro processo. Il risultato
-/// sarebbe allora il namespace di un estraneo, senza che niente lo segnali.
-///
-/// Nessuna delle due cose si chiude qui, e nominarle serve a non credere di
-/// avere una garanzia che non si ha. Rilevare la morte del supervisore vuol
-/// dire legare la sua identita' con pid **piu'** start-time e riverificarla, o
-/// piu' semplicemente tenere aperto un canale la cui chiusura si osserva: sono
-/// entrambe proprieta' del ciclo di vita del supervisore, e un supervisore
-/// questo modulo non lo contiene. Rientrano quando esiste il primo chiamante di
-/// produzione, insieme a chi sorveglia il worker e ne raccoglie l'esito.
-///
-/// Cio' che questa lettura da' e' comunque piu' di un argomento, ed e' il
-/// motivo per cui resta: i namespace con cui il confronto avviene sono quelli
-/// del processo che il kernel indica come padre, non quelli che una riga di
-/// comando afferma. Chiude la `unshare` fra lo `spawn` e la `exec`, che e' cio'
-/// per cui esiste; non chiude l'orfananza.
+/// Chiude la `unshare` fra lo `spawn` e la `exec`; non chiude l'orfananza.
 ///
 /// # Errors
 ///
@@ -552,49 +425,23 @@ fn namespace_in(directory: &Path) -> std::result::Result<Vec<(String, String)>, 
 
 /// I descrittori aperti in scrittura, col filesystem su cui stanno.
 ///
-/// # L'enumerazione usa **un** descrittore, e lo esclude
+/// L'enumerazione usa **un** descrittore e lo esclude: `rustix` rende un
+/// `OwnedFd` che `Dir::new` possiede, e `Dir::fd()` ne da' il numero.
+/// `Dir::read_from` ne aprirebbe un secondo, non escluso; `std::fs::read_dir`
+/// non espone il numero.
 ///
-/// Aprire la directory dei descrittori ne crea uno, che comparirebbe
-/// nell'elenco. Si apre con `rustix`, che rende un `OwnedFd`, e lo si consegna
-/// a `Dir::new`, che ne prende **possesso** invece di aprirne un altro:
-/// `Dir::fd()` rende il numero interrogabile, e si esclude.
+/// Il modo di accesso si legge dai `flags` **ottali** di `fdinfo`, non dai
+/// permessi del file: conta come il descrittore e' stato aperto.
 ///
-/// `Dir::read_from` no: quella ne apre un **secondo**, che nessuno
-/// escluderebbe. Quel secondo si chiude insieme all'iteratore, e la lettura del
-/// suo `fdinfo` fallirebbe — facendo cadere l'intera scansione per un
-/// descrittore che e' nostro.
-///
-/// Con `std::fs::read_dir` il numero non e' interrogabile affatto: `AsRawFd`
-/// non e' implementato per `ReadDir`, e l'unica alternativa sarebbe
-/// indovinarlo.
-///
-/// # Il modo di accesso si legge da `fdinfo`
-///
-/// Il campo `flags` e' in **ottale**, e i due bit bassi sono `O_RDONLY`,
-/// `O_WRONLY`, `O_RDWR`. Si guarda li' e non nei permessi del file, perche'
-/// cio' che conta e' come il descrittore e' stato aperto — ed e' precisamente
-/// il punto: un `fd` aperto in scrittura resta scrivibile dopo il cambio
-/// d'identita'.
-///
-/// # La precondizione: un thread solo
-///
-/// Fra lo scatto dell'elenco e la lettura di ogni `fdinfo` passa del tempo, e
-/// in quel tempo **un altro thread potrebbe chiudere un descrittore**. In un
-/// processo monothread non accade, e lo spawner quella condizione la accerta
-/// come primo passo, prima di chiamare qui.
-///
-/// Un descrittore **sparito** fra lo scatto e la lettura non e' pero' un
-/// difetto in nessuno dei due casi, ed e' l'unica forma di fallimento che si
-/// tollera: un `fd` che non esiste non da' autorita' a nessuno, e rifiutare
-/// per la sua assenza sarebbe fail-closed su un pericolo che non c'e'. La
-/// distinzione e' fra «non esiste» e «non si legge»: la prima si salta, la
-/// seconda resta un rifiuto.
+/// Precondizione: un thread solo, che lo spawner accerta al primo passo.
+/// Un descrittore **sparito** fra elenco e lettura si salta (non da'
+/// autorita'); uno che non si legge resta un rifiuto.
 ///
 /// # Errors
 ///
 /// Qualunque voce che non si riesca a leggere per una ragione diversa
-/// dall'assenza. Un descrittore su cui non sappiamo dire se e' scrivibile e'
-/// un descrittore che non possiamo escludere.
+/// dall'assenza: un descrittore di cui non si sa se e' scrivibile non si puo'
+/// escludere.
 fn descrittori_scrivibili() -> std::result::Result<Vec<Descrittore>, String> {
     let cartella = rustix::fs::open(
         "/proc/self/fd",
@@ -806,36 +653,13 @@ mod tests {
         assert!(identita.autorita_residua(CGROUP2, &attesi()).is_empty());
     }
 
-    // # Perche' la scansione reale dei descrittori non si prova qui
+    // La scansione reale dei descrittori non si prova qui: il binario di test
+    // condivide la tabella dei descrittori fra casi paralleli, e la tolleranza
+    // dell'assenza nasconderebbe proprio il difetto da sorvegliare (un secondo
+    // descrittore non escluso). Restano le prove di parsing puro.
     //
-    // Perche' cio' che la scansione fa dipende dalla **tabella dei descrittori
-    // del processo**, e un binario di test la condivide fra tutti i casi che
-    // girano in parallelo. Fra lo scatto dell'elenco e la lettura di ogni
-    // `fdinfo` un altro thread apre e chiude file, e un caso che dipende da
-    // quel contenuto non e' deterministico: sarebbe verde o rosso a seconda di
-    // che cosa stanno facendo gli altri, e un caso che fallisce a caso smette
-    // di essere letto.
-    //
-    // La cosa e' peggiore di un semplice colore instabile. Quello che il caso
-    // dovrebbe sorvegliare — che la scansione non apra un secondo descrittore
-    // che poi nessuno esclude — si manifesta come un `fdinfo` che non si legge.
-    // Ma la tolleranza dell'assenza, che qui e' necessaria e giusta, salta
-    // proprio quei descrittori: in un runner condiviso il difetto che il caso
-    // esiste per vedere passerebbe **inosservato**, e il verde direbbe che non
-    // c'e' invece che dire che non e' stato guardato.
-    //
-    // Dichiararlo deterministico sarebbe quindi due volte falso, e un caso che
-    // afferma piu' di quanto misura e' peggio di nessun caso: qui restano le
-    // sole prove di parsing puro, che non toccano `/proc`.
-    //
-    // Dove si prova davvero: nel processo dello spawner, che e' monothread per
-    // costruzione — il primo passo della sequenza lo accerta — e che nessun
-    // altro perturba. Il gate `scripts/verifica_isolamento_linux.sh` lo esegue
-    // sulla VM dedicata, ed e' l'unico posto in cui l'affermazione «non colano
-    // descrittori» e' misurabile.
-    //
-    // (Nota di modulo, non doc di un elemento: il caso non esiste, e questa e'
-    // la ragione per cui non esiste.)
+    // Si prova nel processo monothread dello spawner, con il gate
+    // `scripts/verifica_isolamento_linux.sh` sulla VM dedicata.
 
     /// Ogni forma malformata di `/proc/self/status` e' un errore, non un valore
     /// di ripiego.

@@ -1,13 +1,10 @@
-//! Fail-closed coordinate-reference-system contract for public adapters.
+//! Contratto CRS fail-closed per gli adapter pubblici.
 //!
-//! Coordinates alone never identify a CRS reliably.  The caller must provide
-//! a definition and, when the PROJ backend is enabled, this module resolves it
-//! against the bundled database before a spatial kernel is allowed to run.
-//!
-//! `plenora-core` non ha la feature `proj-backend`: qui vive il contratto CRS
-//! backend-indipendente, mentre la risoluzione PROJ (che costruisce
-//! [`ResolvedCrs`] dal database bundled) resta in `plenora-kernels-geo`
-//! dietro quella feature. Senza backend [`resolve_crs`] fallisce chiuso.
+//! Le sole coordinate non identificano un CRS: il chiamante fornisce una
+//! definizione, che va risolta prima che un kernel spaziale giri. Qui vive il
+//! contratto indipendente dal backend; la risoluzione PROJ (che costruisce
+//! [`ResolvedCrs`]) sta in `plenora-kernels-geo` dietro `proj-backend`, e
+//! senza backend [`resolve_crs`] fallisce chiuso.
 
 use std::fmt;
 
@@ -90,19 +87,12 @@ impl ResolvedCrs {
     /// Ordine degli assi dedotto dalla definizione canonica d'autorita'
     /// (piano-v5.md#contratti-di-input, emendamento 2026-07-31).
     ///
-    /// Legge le direzioni dei primi due assi di `coordinate_system` nel
-    /// PROJJSON — lo stesso oggetto con cui il kernel opera — e le combina
-    /// col `kind`: geographic (north,east) → [`AxisOrder::LatLon`],
-    /// geographic (east,north) → [`AxisOrder::LonLat`], projected
-    /// (east,north) → [`AxisOrder::EastingNorthing`], projected (north,east)
-    /// → [`AxisOrder::NorthingEasting`]. La mappa e' solo direzioni+kind →
-    /// variante: NESSUNA tabella di CRS hardcoded — EPSG:4326 → `lat_lon`,
-    /// OGC:CRS84 → `lon_lat`, EPSG:32632 → `easting_northing` escono gratis
-    /// dalla definizione.
-    ///
-    /// Deduzione da autorita', mai invenzione: assi assenti o meno di due assi
-    /// restituiscono `None`; due direzioni presenti ma fuori dalle quattro
-    /// combinazioni canoniche producono [`AxisOrder::Other`].
+    /// Combina le direzioni dei primi due assi di `coordinate_system` nel
+    /// PROJJSON con il `kind`, senza tabelle di CRS: per esempio geographic
+    /// (north,east) da' [`AxisOrder::LatLon`], projected (east,north)
+    /// [`AxisOrder::EastingNorthing`]. Meno di due assi da' `None`; due
+    /// direzioni fuori dalle quattro combinazioni canoniche danno
+    /// [`AxisOrder::Other`].
     #[must_use]
     pub fn authority_axis_order(&self) -> Option<AxisOrder> {
         let axes = self
@@ -121,14 +111,12 @@ impl ResolvedCrs {
         }
     }
 
-    /// Ordine delle coordinate usato dalle pipeline PROJ normalizzate per
+    /// Ordine delle coordinate prodotto dalle pipeline PROJ normalizzate per
     /// visualizzazione GIS, distinto dall'ordine nativo dell'autorita'.
     ///
-    /// `proj_backend` costruisce le trasformazioni con `Proj::new_known_crs`
-    /// e produce sempre x/y normalizzato: longitudine/latitudine per un CRS
-    /// geografico, easting/northing per uno proiettato. Questo valore descrive
-    /// quindi i byte di output dell'esecuzione; [`Self::authority_axis_order`]
-    /// resta disponibile separatamente come metadato della definizione CRS.
+    /// `proj_backend` usa `Proj::new_known_crs` e produce sempre x/y
+    /// normalizzato (lon/lat o easting/northing): descrive i byte di output;
+    /// [`Self::authority_axis_order`] resta il metadato della definizione.
     #[must_use]
     pub const fn normalized_gis_axis_order(&self) -> AxisOrder {
         match self.kind {
@@ -140,11 +128,10 @@ impl ResolvedCrs {
     /// SRID dedotto dalla definizione canonica d'autorita' (piano-v5.md#contratti-di-input,
     /// emendamento 2026-07-31).
     ///
-    /// `id.code` numerico (in PROJJSON il codice puo' essere numero o
-    /// stringa — entrambe le forme sono accettate solo se numeriche) quando
-    /// `id.authority` e' una stringa d'autorita'. Codice non numerico (es.
-    /// `"CRS84"`), oltre `u32`, o `id` assente → `None`: lo `srid` resta
-    /// non emesso (chiave opzionale R5.2), mai indovinato.
+    /// `id.code` numerico (numero o stringa numerica) quando `id.authority` e'
+    /// una stringa. Codice non numerico, oltre `u32` o `id` assente danno
+    /// `None`: lo `srid` resta non emesso (chiave opzionale R5.2), mai
+    /// indovinato.
     #[must_use]
     pub fn authority_srid(&self) -> Option<u32> {
         self.authority_identifier().map(|(_, code)| code)
@@ -167,15 +154,12 @@ impl ResolvedCrs {
     }
 }
 
-/// SRID da un identificatore testuale `authority:code` (es. `EPSG:4326` →
-/// 4326).
+/// SRID da un identificatore testuale `authority:code` (es. `EPSG:4326`).
 ///
-/// La forma usata dal trasporto legacy, che trasporta la sola definizione
-/// senza un [`ResolvedCrs`] (piano-v5.md#contratti-di-input, emendamento 2026-07-31). `None` per
-/// ogni altra forma (autorita' o codice vuoti, codice non numerico, oltre
-/// `u32`) — mai indovinare: lo `srid` non e' decidibile e l'identificatore
-/// resta intero alla risoluzione. E' l'unica fonte di questo parsing: una
-/// seconda copia deciderebbe per conto proprio quali forme sono valide.
+/// Serve al trasporto legacy, che porta la sola definizione senza un
+/// [`ResolvedCrs`] (piano-v5.md#contratti-di-input, emendamento 2026-07-31).
+/// Ogni altra forma (parti vuote, codice non numerico, oltre `u32`) da'
+/// `None`, mai un valore indovinato. E' l'unica fonte di questo parsing.
 #[must_use]
 pub fn authority_code_srid(crs_id: &str) -> Option<u32> {
     let (authority, code) = crs_id.rsplit_once(':')?;
@@ -202,14 +186,12 @@ pub fn authority_code_identifier(crs_id: &str) -> Option<(&str, u32)> {
     Some((authority, code.parse().ok()?))
 }
 
-/// Forma testuale di una definizione CRS (piano-v5.md#contratti-di-input, emendamento 2026-07-31
-/// — classe B, emissione).
+/// Forma testuale di una definizione CRS (piano-v5.md#contratti-di-input,
+/// emendamento 2026-07-31, classe B, emissione).
 ///
-/// Classifica la SOLA stringa, senza backend e senza indovinare: serve
-/// all'emissione del blocco canonico R2.2 per scegliere fra
-/// `crs_id` (identificatore) e `crs_definition`+`crs_definition_format`
-/// (definizione testuale nel formato riconosciuto) — un passthrough
-/// idempotente contro la lineage, mai una riscrittura.
+/// Classifica la sola stringa, senza backend: sceglie per il blocco canonico
+/// R2.2 fra `crs_id` e `crs_definition`+`crs_definition_format`, come
+/// passthrough idempotente della lineage, mai una riscrittura.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DefinitionForm {
     /// Identificatore d'autorita': UNA SOLA coppia `auth:code` senza spazi,
@@ -417,10 +399,8 @@ fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsEr
 
 /// Risoluzione fail-closed senza backend PROJ.
 ///
-/// La risoluzione reale (PROJJSON canonico, classificazione geographic/
-/// projected, unita' lineare) vive in `plenora-kernels-geo` dietro la feature
-/// `proj-backend`; senza backend nessuna dichiarazione non verificata viene
-/// accettata, esattamente come nel sorgente compilato senza `proj-backend`.
+/// La risoluzione reale vive in `plenora-kernels-geo` dietro `proj-backend`;
+/// senza backend nessuna dichiarazione non verificata e' accettata.
 ///
 /// # Errors
 ///
@@ -491,14 +471,14 @@ fn ensure_geographic(crs: &ResolvedCrs) -> Result<(), CrsError> {
     Ok(())
 }
 
-/// Validates normalized GIS axis order (x=longitude, y=latitude).  Call this
-/// for every geographic input after WKB decoding and before any kernel work.
+/// Verifica il dominio delle coordinate di un input geografico.
 ///
-/// A differenza del sorgente, che itera su `geo::Geometry`, qui il dominio e'
-/// verificato su un iteratore di coordinate `(x, y)`: `plenora-core` non
-/// dipende da `geo`. Il wrapper tipizzato su `geo::Geometry` e' in
-/// `plenora-kernels-geo` (`plenora_kernels_geo::crs::validate_geometry_domain`)
-/// e deleghi a questa funzione, senza differenze di comportamento.
+/// Presuppone l'ordine GIS normalizzato (x=longitudine, y=latitudine) e va
+/// chiamata su ogni input geografico dopo la decodifica WKB, prima dei kernel.
+///
+/// Lavora su coordinate `(x, y)` perche' `plenora-core` non dipende da `geo`;
+/// `plenora_kernels_geo::crs::validate_geometry_domain` e' il wrapper su
+/// `geo::Geometry` e delega qui.
 ///
 /// # Errors
 ///

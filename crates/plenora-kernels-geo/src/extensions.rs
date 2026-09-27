@@ -1,13 +1,11 @@
-//! Kernel delle estensioni di catalogo v1.1 (`geo.from_wkt`,
-//! `geo.geometry_accessors`, `geo.collect`, `geo.line_locate_point`).
+//! Kernel di `geo.from_wkt`, `geo.geometry_accessors`, `geo.collect` e
+//! `geo.line_locate_point`.
 //!
 //! Kernel puri su `geo::Geometry<f64>` piu' l'adapter di colonna per
 //! `from_wkt` (input `Utf8` -> celle WKB). Il raggruppamento di `collect`
-//! per chiave resta una responsabilita' dell'engine (come per `dissolve`):
-//! il kernel riceve un gruppo ordinato e produce la collezione.
-//!
-//! Errori: le condizioni dei kernel puri usano [`ExtensionError`]; l'adapter
-//! di colonna mappa tutto su [`PlenoraError`] preservando i messaggi.
+//! per chiave e' dell'engine (come per `dissolve`): il kernel riceve un
+//! gruppo ordinato. I kernel puri rendono [`ExtensionError`]; l'adapter lo
+//! mappa su [`PlenoraError`] preservando i messaggi.
 
 use std::collections::BTreeMap;
 
@@ -76,15 +74,14 @@ fn u64_len(len: usize) -> Result<u64, ExtensionError> {
 // geo.from_wkt
 // ---------------------------------------------------------------------------
 
-/// Politica legacy sugli errori di parsing WKT.
+/// Politica sugli errori di parsing WKT, accettata in deserializzazione.
 ///
-/// Entrambe le varianti rifiutano ora l'intero output con diagnostica
-/// row-scoped: il valore resta accettato in deserializzazione per leggere
-/// piani storici, ma non autorizza piu' remediation implicita.
+/// Entrambe le varianti rifiutano l'intero output con diagnostica
+/// row-scoped: nessuna delle due autorizza remediation implicita.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnWktError {
-    /// Nome legacy: nessuna cella invalida viene piu' convertita in null.
+    /// Nessuna cella invalida viene convertita in null, nonostante il nome.
     Null,
     /// Cella WKT invalida -> rifiuto fail-closed row-scoped.
     Fail,
@@ -232,7 +229,7 @@ pub fn from_wkt_column_named(
 
 /// Accessori per riga di `geo.geometry_accessors`.
 ///
-/// Convenzioni (documentate, v1):
+/// Convenzioni:
 /// - `num_geometries`: parti della geometria (1 per le geometrie semplici,
 ///   N per Multi*/`GeometryCollection`);
 /// - `num_interior_rings`: anelli interni di Polygon/MultiPolygon, 0 altro;
@@ -392,7 +389,7 @@ pub fn collect_geometries(
 /// Frazione [0,1] della proiezione del punto piu' vicino sulla linea
 /// (semantica `ST_LineLocatePoint`).
 ///
-/// `None` per geometrie non-LineString (incluse `MultiLineString` in v1)
+/// `None` per geometrie non-LineString (incluse `MultiLineString`)
 /// o linee vuote.
 ///
 /// # Errors

@@ -1,19 +1,13 @@
-//! Capability dichiarative del componente (ICD §10 R10.2, contratti
-//! trasversali v2.0-rc10 — proposta in attesa di ratifica, la forma e'
-//! definita localmente in attesa di una convenzione trasversale).
+//! Capability dichiarative del componente (ICD §10 R10.2; forma locale in
+//! attesa di una convenzione trasversale ratificata).
 //!
-//! Interrogabili PRIMA dell'esecuzione, in forma leggibile da un programma
-//! (JSON via CLI `capabilities`), mai desumibili per tentativi. La fonte
-//! e' UNA SOLA: il modello geometrico canonico (R3.1-R3.5) e il catalogo
-//! delle operazioni ([`crate::catalog::CATALOG`]) — le capability non
-//! possono divergere da cio' che il planner accetta o rifiuta.
+//! Interrogabili prima dell'esecuzione in JSON (CLI `capabilities`), mai
+//! desumibili per tentativi. Derivano dal modello geometrico canonico
+//! (R3.1-R3.5) e da [`crate::catalog::CATALOG`], quindi non divergono da
+//! cio' che il planner accetta o rifiuta.
 //!
-//! Regole collegate: R10.1 (il planner fallisce a compile-plan, mai a
-//! meta' esecuzione), R10.3 (il rifiuto nomina la capability mancante in
-//! forma tipizzata — `planner.rs` passo 4), R10.4 (nessuna degradazione
-//! silenziosa: un tipo non supportato e' rifiutato, mai approssimato),
-//! R3.3/R3.3.1 (le cinque dimensioni si rappresentano e propagano sempre;
-//! l'elaborazione e' solo XY con rifiuto esplicito per Z/M).
+//! Regole collegate: R10.1, R10.3 (`planner.rs` passo 4), R10.4, R3.3/R3.3.1
+//! (le dimensioni si propagano tutte, l'elaborazione e' solo XY).
 
 use serde::Serialize;
 
@@ -28,13 +22,9 @@ pub const CAPABILITIES_PROTOCOL_VERSION: u32 = 1;
 
 /// Versione Arrow pinnata (R1).
 ///
-/// Deriva da [`crate::arrow::VERSION`] invece di ripeterne il letterale: la
-/// decisione D0 (architettura.md) vuole un solo punto di versione, e questa
-/// costante e' quella che finisce nel documento `capabilities` letto da fuori,
-/// mentre il confronto di compatibilita' dei grafi usa `arrow::VERSION`
-/// (planner.rs, `check_compatibility`). Due letterali indipendenti
-/// potrebbero divergere in silenzio, e il componente dichiarerebbe a chi lo
-/// interroga una versione diversa da quella che impone.
+/// Deriva da [`crate::arrow::VERSION`] (D0, un solo punto di versione): il
+/// documento `capabilities` e `check_compatibility` devono dichiarare la
+/// stessa versione che il componente impone.
 pub const ARROW_VERSION: &str = crate::arrow::VERSION;
 
 /// Modello geometrico dichiarato (R3.1-R3.5): che cosa il componente sa

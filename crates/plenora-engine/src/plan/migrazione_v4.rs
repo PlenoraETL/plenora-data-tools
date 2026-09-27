@@ -1,73 +1,24 @@
 //! Migrazione esplicita dei piani `schema_version: 4` al canonico v5
 //! (errori-e-limiti.md#memoria-governata).
 //!
-//! # Perche' un parser separato e non un alias
+//! Un parser separato e non `serde(alias)`: il nome della v4 promette un tetto
+//! sull'intero processo che in-process non esiste
+//! (errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce), e non
+//! deve funzionare nella v5. Con `deny_unknown_fields` su entrambe le
+//! strutture, un v5 col nome vecchio, un v4 col nome nuovo e un piano con
+//! entrambe le chiavi si rifiutano per costruzione; le chiavi duplicate le
+//! rifiuta prima `ensure_no_duplicate_keys`.
 //!
-//! `serde(alias)` avrebbe fatto accettare `max_memory_bytes` **anche** ai
-//! piani v5, e un nome che continua a funzionare e' un nome che continua a
-//! promettere: chi lo scrive crede ancora in un tetto sull'intero processo
-//! che in-process non esiste
-//! (errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce). Qui la
-//! v4 ha una struttura **propria**, che conosce solo il nome vecchio, ed e'
-//! usata **solo** da questa migrazione.
+//! La migrazione tocca solo `schema_version` e il blocco `limits`, ma passa
+//! da `serde_json::Value`: spazi, ordine delle chiavi e forma dei numeri
+//! possono cambiare. Si promettono l'equivalenza semantica dei valori non
+//! toccati e quella canonica del risultato: stesso `plan_hash`
+//! (piano-v5.md#identita-e-fingerprint).
 //!
-//! Ne segue, per costruzione e non per controllo aggiuntivo:
-//!
-//! - un piano **v5 con il nome vecchio** e' rifiutato — `LimitsOverride` ha
-//!   `deny_unknown_fields` e non conosce `max_memory_bytes`;
-//! - un piano **v4 con il nome nuovo** e' rifiutato — `LimitsOverrideV4` ha
-//!   `deny_unknown_fields` e non conosce `max_governed_memory_bytes`;
-//! - un piano con **entrambe le chiavi** e' rifiutato in ogni versione, per
-//!   la stessa ragione: qualunque sia la versione dichiarata, una delle due
-//!   e' sconosciuta alla struttura che la deserializza.
-//!
-//! Le chiavi **duplicate** (lo stesso nome due volte) sono rifiutate prima
-//! ancora, da `ensure_no_duplicate_keys`: `serde_json` le risolverebbe con
-//! «vince l'ultima», e la risoluzione avverrebbe prima della migrazione,
-//! producendo due testi diversi con lo stesso piano canonico.
-//!
-//! # Che cosa la migrazione promette, e che cosa no
-//!
-//! La migrazione tocca **due** cose sul piano semantico: `schema_version`,
-//! che diventa 5, e il blocco `limits`, che attraversa le due strutture
-//! tipizzate. Nodi, input, `crs_decisions` e `output` non vengono
-//! interpretati.
-//!
-//! **Non e' però una riscrittura testuale.** Il piano viene deserializzato in
-//! un `serde_json::Value` e riserializzato: `serde_json` conserva l'ordine
-//! delle chiavi solo con la feature `preserve_order`, e la sintassi dei
-//! numeri passa dal suo parser e dal suo formattatore. Spazi, a capo, ordine
-//! delle chiavi e forma dei letterali numerici **possono cambiare**.
-//!
-//! Cio' che e' promesso — e verificato dai test — e' l'equivalenza
-//! **semantica** dei valori non toccati e l'equivalenza **canonica** del
-//! risultato: un piano v4 e il v5 equivalente producono lo stesso piano
-//! canonico e lo stesso `plan_hash`. Che e' poi la sola equivalenza che
-//! conti, perche' e' quella su cui poggiano cache e riproducibilita' (piano-v5.md#identita-e-fingerprint).
-//!
-//! # Idempotenza
-//!
-//! L'ingresso reale e' [`testo_canonico_v5`], ed e' li' che l'idempotenza
-//! deve valere: applicato al proprio risultato non cambia nulla e **non
-//! cambia esito** — se la prima passata riesce, la seconda riesce. Per questo
-//! il tetto `max_plan_json_bytes` viene applicato anche al testo **migrato**:
-//! senza quel controllo un piano v4 lungo esattamente quanto il tetto
-//! passerebbe la prima volta e fallirebbe la seconda, perche' il nome nuovo
-//! e' piu' lungo di nove byte. Un ingresso che cambia risposta a input
-//! costante e' peggio di un ingresso severo.
-//!
-//! La sola funzione di migrazione, invece, **rifiuta** un piano gia' migrato
-//! invece di operarci in silenzio: chiamarla due volte e' un errore di chi
-//! chiama, e un errore di chi chiama va detto.
-//!
-//! # Superficie pubblica
-//!
-//! Pubblico e' solo [`testo_canonico_v5`], che riceve i [`PlanLimits`] e li
-//! applica. Le funzioni interne costruiscono un `serde_json::Value` dal
-//! testo, cioe' allocano guidate dal contenuto: esporle avrebbe offerto un
-//! ingresso che aggira il tetto di errori-e-limiti.md, ed e' esattamente il genere di
-//! porta di servizio che un tetto applicato «il prima possibile» esiste per
-//! non avere.
+//! [`testo_canonico_v5`] e' l'unico ingresso pubblico ed e' idempotente anche
+//! sull'esito; la funzione di migrazione interna rifiuta un piano gia'
+//! migrato. Le funzioni interne allocano guidate dal contenuto, quindi
+//! esporle aggirerebbe il tetto di errori-e-limiti.md.
 
 use std::borrow::Cow;
 
@@ -127,12 +78,9 @@ pub(super) struct LimitsOverrideV4 {
 impl LimitsOverrideV4 {
     /// Traduce gli override v4 nella forma v5.
     ///
-    /// È una costruzione per campi, non una riscrittura di chiavi, e la
-    /// differenza conta: se qualcuno aggiunge un limite a
-    /// [`LimitsOverride`], questo letterale smette di compilare. Una
-    /// migrazione che si dimentica di un campo nuovo lo lascerebbe cadere in
-    /// silenzio, ed e' esattamente il modo in cui un piano migrato finisce
-    /// per girare sotto limiti che non ha chiesto.
+    /// Costruzione per campi, non riscrittura di chiavi: un limite nuovo in
+    /// [`LimitsOverride`] fa smettere di compilare questo letterale invece di
+    /// cadere in silenzio dal piano migrato.
     const fn in_v5(self) -> LimitsOverride {
         let Self {
             max_input_rows,
@@ -182,10 +130,8 @@ const fn errore(messaggio: String) -> PlenoraError {
 
 /// Legge `schema_version` da un testo JSON senza deserializzare il resto.
 ///
-/// Serve a scegliere il percorso **prima** di impegnarsi su una struttura:
-/// deserializzare con quella sbagliata darebbe un errore di campo
-/// sconosciuto invece di un errore di versione, e manderebbe chi legge a
-/// cercare il problema nel posto sbagliato.
+/// Sceglie il percorso prima di impegnarsi su una struttura, cosi' l'errore
+/// e' di versione e non di campo sconosciuto.
 ///
 /// # Errors
 ///
@@ -209,29 +155,22 @@ pub(super) fn versione_dichiarata(json_text: &str) -> Result<u16> {
 
 /// Migra il testo di un piano v4 nel testo di un piano v5.
 ///
-/// La riscrittura tocca **due** cose e nient'altro: `schema_version` diventa
-/// 5 e il blocco `limits` viene ricostruito da `LimitsOverrideV4` tramite
-/// `LimitsOverrideV4::in_v5`, dove `max_memory_bytes` diventa
-/// `max_governed_memory_bytes`. Il valore non cambia — cambia il nome,
-/// perche' e' il nome a essere stato sbagliato (errori-e-limiti.md#memoria-governata).
-///
-/// Il passaggio dalla struttura v4 non e' un dettaglio di comodo: rifiuta
-/// fail-closed un v4 con chiavi sconosciute o col nome nuovo, che una
-/// riscrittura cieca dell'albero lascerebbe passare fino alla validazione v5,
-/// dove l'errore parlerebbe della versione sbagliata e manderebbe chi legge a
-/// cercare il problema nel posto sbagliato.
+/// `schema_version` diventa 5 e il blocco `limits` si ricostruisce con
+/// `LimitsOverrideV4::in_v5`: `max_memory_bytes` diventa
+/// `max_governed_memory_bytes`, con lo stesso valore
+/// (errori-e-limiti.md#memoria-governata). Il passaggio dalla struttura v4
+/// rifiuta qui un v4 con chiavi sconosciute, invece di lasciarlo arrivare
+/// alla validazione v5 con un errore di versione sbagliata.
 ///
 /// # Errors
 ///
 /// `PlenoraError::DataMapping` se il testo non e' JSON valido, o se il blocco
-/// `limits` non e' valido per la v4 — chiavi sconosciute e il nome della v5
-/// incluse: e' la stessa categoria che `PlanV5::parse` produce per lo stesso
-/// difetto scritto in v5, e da essa dipende l'exit code.
+/// `limits` non e' valido per la v4 (la stessa categoria che `PlanV5::parse`
+/// produce per lo stesso difetto, da cui dipende l'exit code).
 /// `PlenoraError::InvalidPlan` se contiene chiavi duplicate, se non dichiara
 /// `schema_version: 4` o se non e' un oggetto.
-/// `PlenoraError::Internal` solo per un fallimento di serializzazione, che su
-/// una struttura di `Option<numero>` non ha modo di accadere: e' il caso
-/// "impossibile" reso esplicito invece che assunto (R6).
+/// `PlenoraError::Internal` solo per un fallimento di serializzazione,
+/// impossibile su `Option<numero>` ma reso esplicito (R6).
 fn migra_v4_a_v5(json_text: &str) -> Result<String> {
     plenora_core::json::ensure_no_duplicate_keys(json_text)?;
     let versione = versione_dichiarata(json_text)?;
@@ -288,24 +227,12 @@ fn migra_v4_a_v5(json_text: &str) -> Result<String> {
 /// Porta un testo di piano alla versione canonica v5, migrandolo se dichiara
 /// la v4.
 ///
-/// È il **solo** ingresso di versione del crate: `planner::validate` lo
-/// attraversa, e chi vuole un piano canonico non deve indovinare quale parser
-/// usare. Un piano gia' v5 attraversa **senza copia** (`Cow::Borrowed`): la
-/// migrazione non deve costare a chi non la usa.
-///
-/// Il tetto `max_plan_json_bytes` si applica **due volte**: al testo fornito,
-/// prima di costruire qualunque albero JSON (errori-e-limiti.md: migrare significa
-/// allocare, e allocare guidati dal contenuto prima di averlo limitato e'
-/// cio' che errori-e-limiti.md vieta), e al testo **migrato**, prima di restituirlo.
-///
-/// Il secondo controllo non e' ridondante: il nome della v5 e' piu' lungo di
-/// nove byte, quindi un v4 lungo esattamente quanto il tetto migra in un
-/// testo che lo supera. Senza quel controllo la funzione risponderebbe `Ok`
-/// alla prima chiamata e `Err` alla seconda sullo stesso input — l'idempotenza
-/// varrebbe sul valore ma non sull'esito, che e' il modo peggiore in cui puo'
-/// non valere. Ne segue anche che un v4 e il v5 equivalente vengono accettati
-/// o rifiutati **insieme**: il v5 equivalente ha la stessa chiave lunga e
-/// quindi la stessa dimensione del migrato.
+/// E' il **solo** ingresso di versione del crate; un piano gia' v5 attraversa
+/// senza copia (`Cow::Borrowed`). Il tetto `max_plan_json_bytes` si applica
+/// al testo fornito, prima di costruire un albero JSON (errori-e-limiti.md),
+/// e al testo migrato: il nome della v5 e' piu' lungo, e senza il secondo
+/// controllo lo stesso input darebbe `Ok` e poi `Err`. Cosi' un v4 e il v5
+/// equivalente si accettano o si rifiutano insieme.
 ///
 /// # Errors
 ///

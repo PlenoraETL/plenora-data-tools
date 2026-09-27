@@ -10,11 +10,11 @@
 //! `validate_transform_arrow_crs`/`validate_pair_arrow_crs` → esecuzione
 //! (`transform_arrow`/`pair_arrow`) → `publish_with_profile`.
 //!
-//! Profili di publish (errori-e-limiti.md#publish-e-cleanup): [`PublishProfile::Atomic`] e' il comportamento
-//! storico; [`PublishProfile::DurableAtomic`] aggiunge il `fsync` della
-//! directory dopo il persist. L'esito e' tipizzato ([`PublishOutcome`]) e la
-//! destinazione passa un riconoscimento fail-closed del filesystem
-//! ([`PlenoraError::Unsupported`]).
+//! Profili di publish (errori-e-limiti.md#publish-e-cleanup):
+//! [`PublishProfile::DurableAtomic`] aggiunge a [`PublishProfile::Atomic`]
+//! il `fsync` della directory dopo il persist. L'esito e' tipizzato
+//! ([`PublishOutcome`]) e la destinazione passa un riconoscimento
+//! fail-closed del filesystem ([`PlenoraError::Unsupported`]).
 
 use std::io::{self, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -35,14 +35,12 @@ use crate::risolutore::risolvi as resolve_crs;
 use super::transport::{ArrowOperation, PairArrowSchema, TransformArrowSchema};
 
 /// Verifica semantica del CRS per `transform_arrow`. Deve essere chiamata
-/// DOPO
-/// [`TransformArrowSchema::validate_parameters`] e prima di toccare i dati.
+/// DOPO [`TransformArrowSchema::validate_parameters`] e prima di toccare i
+/// dati.
 ///
-/// Il requisito CRS dell'operazione e' risolto dal catalogo core tramite il
-/// `catalog_name` legacy (gli alias `geo_*` -> `geo.*` sono gia' nel
-/// catalogo). Un requisito `None` e' trattato come `CrsRequirement::Known`:
-/// nel catalogo tutte le operazioni geo hanno `Some(_)`, quindi il ramo e'
-/// irraggiungibile.
+/// Il requisito CRS e' risolto dal catalogo core tramite il `catalog_name`
+/// (gli alias `geo_*` -> `geo.*` sono nel catalogo). Un requisito `None` e'
+/// trattato come `CrsRequirement::Known`; nel catalogo non si presenta.
 ///
 /// # Errors
 /// Restituisce `PlenoraError::Crs` se il CRS manca, e' invalido, non e'
@@ -145,32 +143,14 @@ pub enum PublishOutcome {
 
 /// Che ne e' stato del temporaneo, dopo il commit point.
 ///
-/// # Perche' esiste
+/// `persist_noclobber` ripiega, dove manca `RENAME_NOREPLACE`, su
+/// `hard_link` seguito da `unlink`: il no-clobber regge, ma l'errore
+/// dell'`unlink` e' ignorato e il temporaneo puo' restare senza che nessuno
+/// lo dica. Questo tipo rende il residuo un esito riportato.
 ///
-/// Perche' `persist_noclobber` non e' una primitiva sola. Dove kernel e
-/// filesystem offrono `RENAME_NOREPLACE` il commit e' un rename e non lascia
-/// niente. Dove non la offrono si ripiega su `hard_link` seguito da `unlink`: il
-/// commit point diventa il collegamento — che fallisce se il nome esiste, quindi
-/// il no-clobber regge lo stesso — ma **l'errore dell'`unlink` e' ignorato**, e
-/// se fallisce il temporaneo resta al suo posto senza che nessuno lo dica.
-///
-/// Il silenzio e' la cosa da chiudere: e' la stessa politica per cui un cleanup
-/// fallito e' un esito riportato, non un dettaglio.
-///
-/// # Perche' tre stati e non due
-///
-/// Perche' «non c'e'» e «non ho potuto guardare» sono cose diverse, e un solo
-/// valore per entrambe le rende indistinguibili proprio dove la distinzione
-/// serve: chi legge concluderebbe «niente da bonificare» senza che nessuno abbia
-/// guardato. E' fail-open, ed e' la stessa ragione per cui la quiescenza di un
-/// dominio ha tre esiti e non due.
-///
-/// # Perche' non porta la causa dell'`unlink`
-///
-/// Perche' `tempfile` non la espone: la ignora dentro il ripiego. Riportare una
-/// causa vorrebbe dire inventarla. Qui si dice **cio' che si osserva** — il file
-/// c'e', oppure non lo si e' potuto accertare — e la ragione riguarda
-/// l'osservazione, non il commit.
+/// Tre stati e non due perche' «non c'e'» e «non ho potuto guardare» sono
+/// diversi: confonderli sarebbe fail-open. Non porta la causa dell'`unlink`
+/// perche' `tempfile` non la espone: si dice solo cio' che si osserva.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PuliziaDelTemporaneo {
     /// Il temporaneo non c'e' piu': niente da bonificare.
@@ -209,20 +189,13 @@ pub enum RagioneNonAccertabile {
 
 /// Com'e' andata una pubblicazione, sui **due** assi che la descrivono.
 ///
-/// # Perche' due assi e non un enum solo
+/// La durabilita' riguarda la **destinazione**, la pulizia il
+/// **temporaneo**: sono indipendenti, e un enum solo dovrebbe enumerarne le
+/// combinazioni.
 ///
-/// Perche' dicono cose indipendenti: la durabilita' riguarda la
-/// **destinazione**, la pulizia riguarda il **temporaneo**. Comprimerli
-/// costringerebbe a inventare una variante per ogni combinazione, e chi legge
-/// dovrebbe scomporla per sapere quale delle due lo riguarda.
-///
-/// # Perche' dopo il commit nessuno dei due diventa un errore
-///
-/// Perche' dopo il commit point l'output e' visibile, e nessun evento
-/// successivo puo' renderlo non riuscito. Una durabilita' non confermata e un
-/// temporaneo rimasto sono **avvertenze**: dirle come fallimenti manderebbe chi
-/// legge a rifare una cosa gia' fatta, e rifarla troverebbe la destinazione
-/// occupata. Prima del commit, invece, un errore resta un errore.
+/// Dopo il commit point l'output e' visibile e nessuno dei due diventa un
+/// errore: sono **avvertenze**, perche' rifare la pubblicazione troverebbe
+/// la destinazione occupata. Prima del commit un errore resta un errore.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EsitoDellaPubblicazione {
     /// Se le garanzie di durabilita' del profilo sono state soddisfatte.
@@ -258,19 +231,14 @@ fn accerta_il_temporaneo(percorso: PathBuf) -> PuliziaDelTemporaneo {
 
 impl PublishOutcome {
     /// Effetto dell'esito sull'asse canonico «effetto remoto» (R9.6,
-    /// contratti trasversali v2.0-rc10 §9): collegamento
-    /// esplicito tra errori-e-limiti.md#publish-e-cleanup e il modello a quattro assi (R9.1), SENZA
-    /// duplicare l'esito in una variante d'errore — l'esito ignoto non e'
-    /// una categoria d'errore (R9.3).
+    /// contratti trasversali v2.0-rc10 §9), senza duplicare l'esito in una
+    /// variante d'errore: l'esito ignoto non e' una categoria d'errore (R9.3).
     ///
-    /// Entrambi gli esiti mappano su [`RemoteEffect::Committed`]: a publish
-    /// terminato l'output e' completo e visibile alla destinazione, quindi
-    /// l'effetto e' determinato e definitivo dal punto di vista del
-    /// chiamante. In [`PublishOutcome::PublishedButDurabilityUnconfirmed`]
-    /// cio' che non e' confermato e' la DURABILITA' (sopravvivenza a un
-    /// crash della macchina, errori-e-limiti.md#publish-e-cleanup), non l'esistenza dell'effetto:
-    /// [`RemoteEffect::Unknown`] («effetto non determinabile con i mezzi
-    /// disponibili», R9.6) sarebbe scorretto — l'output e' osservabile.
+    /// Entrambi gli esiti mappano su [`RemoteEffect::Committed`]: l'output e'
+    /// completo e visibile. In
+    /// [`PublishOutcome::PublishedButDurabilityUnconfirmed`] non e' confermata
+    /// la DURABILITA' (errori-e-limiti.md#publish-e-cleanup), non l'esistenza
+    /// dell'effetto, quindi [`RemoteEffect::Unknown`] sarebbe scorretto.
     #[must_use]
     pub const fn remote_effect(self) -> RemoteEffect {
         match self {
@@ -292,9 +260,8 @@ const PERSIST_INITIAL_BACKOFF: Duration = Duration::from_millis(20);
 /// (`ERROR_ACCESS_DENIED` = 5, `ERROR_SHARING_VIOLATION` = 32,
 /// `ERROR_LOCK_VIOLATION` = 33) sono ritentati con backoff breve.
 ///
-/// La funzione e' volutamente indipendente dalla piattaforma per restare
-/// testabile ovunque: su Unix `rename(2)` non produce mai questi raw OS
-/// error (5 = `EIO`, 32 = `EPIPE`, 33 = `EDOM`), quindi il retry non scatta.
+/// Indipendente dalla piattaforma per restare testabile ovunque: su Unix
+/// `rename(2)` non produce questi raw OS error, quindi il retry non scatta.
 fn retryable_persist_error(error: &io::Error) -> bool {
     if error.kind() == ErrorKind::AlreadyExists {
         return false;
@@ -486,14 +453,11 @@ fn conflitto_sulla_destinazione(output_path: &Path) -> PlenoraError {
 /// [`PublishProfile::DurableAtomic`] sincronizza anche la directory dopo il
 /// persist e l'esito riflette la conferma della durabilita'.
 ///
-/// Tagging di fase (BLOCK-03, piano-v5.md#contratti-di-input): ogni punto del confine dichiara il
-/// momento esatto — riconoscimento della destinazione [`ErrorPhase::Probe`],
-/// creazione del tempfile [`ErrorPhase::Write`], flush/sync del writer
-/// [`ErrorPhase::Finalize`], check no-clobber e rename atomico
-/// [`ErrorPhase::Commit`]. Gli errori della closure `write` NON sono
-/// taggati (nascono nel chiamante e restano derivati per variante); la
-/// pulizia del tempfile e' via `Drop`, infallibile — nessun errore
-/// [`ErrorPhase::Cleanup`] e' prodotto.
+/// Tagging di fase (BLOCK-03, piano-v5.md#contratti-di-input): destinazione
+/// [`ErrorPhase::Probe`], tempfile [`ErrorPhase::Write`], flush/sync
+/// [`ErrorPhase::Finalize`], no-clobber e rename [`ErrorPhase::Commit`]. Gli
+/// errori della closure `write` NON sono taggati; la pulizia del tempfile e'
+/// via `Drop`, quindi nessun errore [`ErrorPhase::Cleanup`].
 ///
 /// # Errors
 /// Restituisce `PlenoraError::InvalidPlan` se l'output esiste gia' (tag
@@ -520,20 +484,10 @@ pub fn publish_with_profile<T>(
         .map_err(|error| io_at(ErrorPhase::Probe, error))?
     {
         // Check no-clobber al confine di commit
-        // (errori-e-limiti.md#publish-e-cleanup, ICD §9): e' la precondizione
-        // del rename atomico, non validazione del piano.
-        //
-        // `Conflict` e non `InvalidPlan`: la variante e' documentata come
-        // «destinazione gia' esistente o conflitto di scrittura», e il piano
-        // qui non ha niente di sbagliato — e' il posto a essere occupato.
-        // Chiamarlo piano invalido manderebbe chi legge a correggere qualcosa
-        // che e' gia' corretto.
-        //
-        // Questo controllo resta un'**anticipazione**, non l'autorita': fra
-        // qui e il commit la destinazione puo' comparire, e chi decide e'
-        // l'`AlreadyExists` osservato al persist. Le due strade devono percio'
-        // dire la stessa cosa, altrimenti la classe dipenderebbe da chi arriva
-        // prima.
+        // (errori-e-limiti.md#publish-e-cleanup, ICD §9). `Conflict` e non
+        // `InvalidPlan`: il piano e' corretto, e' il posto a essere occupato.
+        // E' un'**anticipazione**: l'autorita' e' l'`AlreadyExists` al persist,
+        // e le due strade danno la stessa classe.
         return Err(conflitto_sulla_destinazione(output_path));
     }
     let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
@@ -607,13 +561,8 @@ pub fn publish_with_profile<T>(
             }
         }
     })
-    // Rename atomico: fase Commit (§9).
-    //
-    // L'`AlreadyExists` osservato qui e' **l'autorita'**: dice che il nome
-    // c'e' nell'istante del commit, che e' l'unico istante che conta. Il
-    // controllo preliminare puo' mancarlo — fra i due sta la scrittura intera —
-    // e se le due strade dessero classi diverse la stessa condizione avrebbe
-    // due nomi a seconda di quanto dura la scrittura.
+    // Rename atomico: fase Commit (§9). L'`AlreadyExists` osservato qui e'
+    // **l'autorita'**, e ha la stessa classe del controllo preliminare.
     .map_err(|error| {
         if error.kind() == ErrorKind::AlreadyExists {
             conflitto_sulla_destinazione(output_path)
@@ -648,11 +597,8 @@ mod tests {
 
     /// Pubblica col profilo atomico **ignorando l'esito**.
     ///
-    /// Esiste solo qui. In produzione un wrapper cosi' non c'e': la sua unica
-    /// funzione sarebbe scartare le avvertenze, e appartiene alla classe dei
-    /// siti che le perdono. Nei casi che giudicano altro — il valore reso, il
-    /// no-clobber, la fase di un errore — ignorarle e' legittimo, e questo nome
-    /// lo dice invece di nasconderlo.
+    /// Esiste solo nei test: in produzione scartare le avvertenze e' la classe
+    /// di difetto da evitare. Qui serve ai casi che giudicano altro.
     fn pubblica_ignorando_l_esito<T>(
         output_path: &Path,
         write: impl FnOnce(&mut dyn Write) -> Result<T, PlenoraError>,
@@ -941,11 +887,8 @@ mod tests {
 
     /// **La stessa classe se la collisione si scopre al commit.**
     ///
-    /// E' il caso che il controllo preliminare non puo' vedere: la
-    /// destinazione compare **mentre** si scrive. Se le due strade dessero
-    /// classi diverse, la stessa condizione avrebbe due nomi a seconda di
-    /// quanto e' durata la scrittura, e chi automatizza dovrebbe conoscerli
-    /// entrambi.
+    /// La destinazione compare **mentre** si scrive: il controllo preliminare
+    /// non la vede, e la classe deve essere la stessa.
     #[test]
     fn a_destination_appearing_during_the_write_is_the_same_conflict() {
         let directory = tempfile::tempdir().expect("tempdir");

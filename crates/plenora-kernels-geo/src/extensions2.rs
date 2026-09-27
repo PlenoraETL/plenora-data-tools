@@ -1,41 +1,19 @@
-//! Kernel delle estensioni di catalogo v1.2 (`geo.generate_grid`,
-//! `geo.subdivide`, `geo.snap`).
+//! Kernel di `geo.generate_grid`, `geo.subdivide` e `geo.snap`.
 //!
-//! Kernel puri su `geo::Geometry<f64>` piu' gli adapter di colonna/righe
-//! (`snap_column` via `map_nullable`, `generate_grid_rows`, `subdivide_wkb`)
-//! che mappano gli errori su [`PlenoraError`] preservando i messaggi, come
-//! `extensions.rs` per la v1.1.
+//! Kernel puri su `geo::Geometry<f64>` che rendono [`ExtensionV2Error`], piu'
+//! gli adapter di colonna/righe (`snap_column`, `generate_grid_rows`,
+//! `subdivide_wkb`) che lo mappano su [`PlenoraError`] preservando i messaggi.
 //!
-//! Scelte documentate (v1):
-//!
-//! - `generate_grid` e' generativa: produce una cella poligonale per riga.
-//!   Celle `square`: tiling esatto dell'extent, le celle di bordo sono
-//!   tagliate sull'extent (l'ultima colonna/riga puo' essere piu' stretta);
-//!   gli indici `cell_i`/`cell_j` partono da 0 in `(xmin, ymin)`. Celle
-//!   `hex`: esagoni a lato `cell_size` (flat-top, vertice a est),
-//!   **interamente contenuti** nell'extent (niente taglio di bordo: gli
-//!   esagoni che uscirebbero non sono emessi); colonne dispari sfalsate di
-//!   meta' passo verticale. Il numero di celle e' limitato da
-//!   [`MAX_GRID_CELLS`], verificato prima dell'allocazione.
-//! - `subdivide` spezza le geometrie con piu' di `max_vertices` vertici
-//!   (taglio ricorsivo sull'envelope a meta' sull'asse lungo per i poligoni,
-//!   chunking con vertice condiviso per le linee, chunking semplice per i
-//!   `MultiPoint`). Le geometrie sotto soglia passano invariate (stesso tipo);
-//!   sopra soglia le parti sono dei tipi componenti (Polygon, `LineString`,
-//!   `MultiPoint`). Il taglio poligonale include la linea di taglio in entrambe
-//!   le meta' (sovrapposizione di area nulla): la somma delle aree delle
-//!   parti e' preservata. Ricorsione limitata da [`MAX_SUBDIVIDE_DEPTH`]
-//!   (fail-closed oltre il limite, geometrie degenere).
-//! - `snap` e' nativo (niente GEOS): ogni vertice dell'input e' agganciato
-//!   al vertice del riferimento piu' vicino se la distanza euclidea e' <=
-//!   `tolerance`, altrimenti resta invariato. La ricerca del piu' vicino usa
-//!   un R-tree (`rstar`, gia' dipendenza del crate); a parita' di distanza
-//!   la scelta e' deterministica ma non specificata. `Rect`/`Triangle`
-//!   (assenti dal trasporto WKB) sono promossi a Polygon quando snappati.
-//!   L'output e' validato: lo snap puo' collassare anelli e in quel caso
-//!   fallisce (`InvalidOutput`).
-//!
-//! Errori: le condizioni dei kernel puri usano [`ExtensionV2Error`].
+//! - `generate_grid` produce una cella poligonale per riga. Celle `square`:
+//!   tiling esatto dell'extent, celle di bordo tagliate sull'extent, indici
+//!   `cell_i`/`cell_j` da 0 in `(xmin, ymin)`. Celle `hex`: esagoni flat-top
+//!   a lato `cell_size`, emessi solo se interamente contenuti nell'extent.
+//!   Il limite [`MAX_GRID_CELLS`] e' verificato prima dell'allocazione.
+//! - `subdivide` taglia ricorsivamente i poligoni (somma delle aree
+//!   preservata, profondita' limitata da [`MAX_SUBDIVIDE_DEPTH`]) e spezza a
+//!   blocchi linee e `MultiPoint`; sotto soglia la geometria passa invariata.
+//! - `snap` e' nativo (R-tree, niente GEOS): a parita' di distanza la scelta
+//!   e' deterministica ma non specificata; l'output e' validato.
 
 use geo::{
     Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, LineString, MapCoords, MultiPoint,
@@ -208,13 +186,13 @@ fn check_cell_size(cell_size: f64) -> Result<(), ExtensionV2Error> {
 
 fn checked_axis_cells(span: f64, cell_size: f64) -> Result<u64, ExtensionV2Error> {
     let cells = (span / cell_size).ceil();
-    // Soglia 2^64, esatta in f64 e uguale al valore di `u64::MAX as f64`
-    // (che arrotonderebbe per eccesso): stesso confronto di prima.
+    // Soglia 2^64: esatta in f64 e uguale a `u64::MAX as f64`, che
+    // arrotonda per eccesso.
     if !cells.is_finite() || cells > 18_446_744_073_709_551_616.0 {
         return Err(ExtensionV2Error::IndexOverflow);
     }
     // Guardia sopra: cells finito e <= 2^64; uno span negativo satura a 0
-    // (comportamento preesistente: extent degenere -> griglia vuota).
+    // (extent degenere -> griglia vuota).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let cells_u64 = cells as u64;
     Ok(cells_u64)
@@ -280,11 +258,8 @@ fn hex_centers(
     }
     let mut centers = Vec::new();
     for cell_i in 0..columns {
-        // cell_i < columns <= MAX_GRID_CELLS (1e6, verificato sopra): ben
-        // sotto 2^52, la conversione in f64 e' esatta.
-        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-        // fusa e' il contratto numerico.
+        // cell_i < columns <= MAX_GRID_CELLS (verificato sopra): ben sotto
+        // 2^52, la conversione in f64 e' esatta. Forma non fusa come sopra.
         #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
         let cx = extent.xmin + cell_size + cell_i as f64 * column_step;
         let first_cy = if cell_i % 2 == 0 {
@@ -295,9 +270,9 @@ fn hex_centers(
         let mut cell_j = 0_u64;
         let mut cy = first_cy;
         // Accumulo voluto: `first_cy + cell_j * vertical_step` cambierebbe
-        // l'arrotondamento delle coordinate di griglia (contratto numerico
-        // esistente). Il loop e' limitato dal contatore `cell_j` e dal
-        // limite MAX_GRID_CELLS, mai dalla sola aritmetica float.
+        // l'arrotondamento delle coordinate di griglia (contratto numerico).
+        // Il loop e' limitato dal contatore `cell_j` e da `MAX_GRID_CELLS`,
+        // mai dalla sola aritmetica float.
         #[allow(clippy::while_float)]
         while cy + vertical_step / 2.0 <= extent.ymax {
             centers.push((cell_i, cell_j, cx, cy));
@@ -343,7 +318,7 @@ pub fn grid_cell_count(
 
 fn square_cell(extent: &GridExtent, cell_size: f64, cell_i: u64, cell_j: u64) -> GridCell {
     // cell_i e cell_j sono minori delle dimensioni della griglia, il cui
-    // prodotto e' <= MAX_GRID_CELLS (1e6, verificato in square_dimensions):
+    // prodotto e' <= MAX_GRID_CELLS (verificato in square_dimensions):
     // ben sotto 2^52, le conversioni in f64 sono esatte.
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
     // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
@@ -351,9 +326,7 @@ fn square_cell(extent: &GridExtent, cell_size: f64, cell_i: u64, cell_j: u64) ->
     #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let x0 = extent.xmin + cell_i as f64 * cell_size;
     let x1 = (x0 + cell_size).min(extent.xmax);
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Stessa forma non fusa, per lo stesso motivo.
     #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let y0 = extent.ymin + cell_j as f64 * cell_size;
     let y1 = (y0 + cell_size).min(extent.ymax);
@@ -410,7 +383,7 @@ pub fn generate_grid(
     match shape {
         GridShape::Square => {
             let (columns, rows) = square_dimensions(extent, cell_size)?;
-            // columns * rows <= MAX_GRID_CELLS (1e6, verificato in
+            // columns * rows <= MAX_GRID_CELLS (verificato in
             // square_dimensions): entra in usize anche su target a 32 bit.
             #[allow(clippy::cast_possible_truncation)]
             let cell_count = (columns * rows) as usize;
@@ -786,9 +759,8 @@ pub fn snap_column(
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
     ensure_valid(reference).map_err(|error| snap_error(&error))?;
     check_tolerance(tolerance).map_err(|error| snap_error(&error))?;
-    // L'R-tree del riferimento e' costruito UNA VOLTA per colonna (hot path minimale: il
-    // riferimento non cambia mai tra le righe), non per cella — il costo
-    // O(V log V) e' condiviso da tutte le query delle N righe.
+    // L'R-tree del riferimento e' costruito una volta per colonna, non per
+    // cella: il riferimento non cambia tra le righe.
     let reference_vertices: Vec<[f64; 2]> = reference
         .coords_iter()
         .map(|coordinate| [coordinate.x, coordinate.y])

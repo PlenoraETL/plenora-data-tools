@@ -1,86 +1,41 @@
 //! La coda dei fatti: una sola, limitata, con lo spazio dei terminali riservato.
 //!
-//! # Perche' una sola coda
+//! Una sola coda perche' due code riaprono due arbitrati: l'ordine fra vie
+//! (la quiescenza osservata mentre un `Esito` gia' arrivato aspetta
+//! sull'altra) e la chiusura atomica di due ingressi.
 //!
-//! Perche' due code rimettono in piedi due arbitrati che la coda unica esiste
-//! per togliere.
+//! Limitata perche' il worker sceglie quanti messaggi mandare. Perche' una
+//! coda piena di `Progresso` non tenga fuori una cancellazione servono
+//! insieme due cose:
 //!
-//! Il primo e' l'ordine fra vie diverse: la quiescenza puo' essere osservata
-//! sulla via dei terminali mentre un `Esito` gia' arrivato aspetta ancora
-//! sull'altra, e il consumatore concluderebbe che il worker e' morto senza dire
-//! niente — mentre lo ha detto, e il messaggio e' li'.
+//! 1. il progresso si coalesce prima di entrare, in un fatto solo;
+//! 2. ogni produttore ha un budget finito e la capacita' e' la somma dei
+//!    budget: il posto di un terminale e' suo per costruzione.
 //!
-//! Il secondo e' la chiusura: chiudere e drenare **due** ingressi in modo
-//! atomico e' un problema nuovo, che si risolve con un altro arbitrato. Una
-//! coda sola non ha ordine fra vie, perche' non ha vie.
-//!
-//! # Perche' limitata, e perche' questo non blocca i terminali
-//!
-//! Limitata perche' il worker sceglie quanti messaggi mandare, e una coda che
-//! cresce con quella scelta e' una via alla memoria che il chiamante non
-//! governa.
-//!
-//! Ma una coda limitata usata indistintamente da tutti ricrea proprio il blocco
-//! che i thread devono evitare: piena di `Progresso`, terrebbe fuori una
-//! cancellazione. Due cose lo impediscono insieme, e nessuna delle due basta da
-//! sola:
-//!
-//! 1. il **progresso si coalesce prima** di entrare: non e' un fatto per batch,
-//!    e' un fatto solo che dice quanto si e' fatto. Cio' che il worker sceglie
-//!    non decide quante volte si accoda;
-//! 2. ogni produttore ha un **budget finito**, e la capacita' e' la **somma**
-//!    dei budget. Non e' una stima con margine: e' un'identita', e la si
-//!    verifica. Un produttore terminale non puo' quindi trovare il suo posto
-//!    occupato, perche' quel posto e' suo per costruzione — nessun altro ha i
-//!    gettoni per prenderglielo.
-//!
-//! # Perche' la chiusura non guarda se e' vuota
-//!
-//! Perche' «vuota adesso» non e' «non arrivera' altro»: fra la domanda e la
-//! risposta un produttore vivo puo' accodare, e un drenaggio che si fermasse li'
-//! perderebbe proprio i fatti dell'ultimo istante — che sono quelli che
-//! contano. Si lasciano cadere **tutte** le bocchette e si drena finche' il
-//! canale non dice `Disconnected`, che vuol dire «nessuno puo' piu' scrivere» ed
-//! e' l'unica affermazione utile.
+//! La chiusura non guarda se la coda e' vuota: lascia cadere tutte le
+//! bocchette e drena fino a `Disconnected`, l'unico segnale che nessuno puo'
+//! piu' scrivere.
 
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
 /// Quanto si aspetta che il canale si disconnetta, prima di dire che qualcuno
 /// e' rimasto vivo.
 ///
-/// # Che cosa e' questo numero
+/// Non e' una stima: un drenaggio ordinario finisce subito, e il tetto sta
+/// molto oltre, cosi' che scattare significhi «qualcuno e' rimasto vivo» e mai
+/// «e' stato lento». La scadenza e' assoluta: si misura una volta e non
+/// riparte a ogni fatto, altrimenti un produttore che manda qualcosa di
+/// continuo terrebbe aperto il drenaggio per sempre.
 ///
-/// Non la stima di quanto ci vuole: un drenaggio ordinario finisce appena i
-/// thread muoiono, cioe' subito. E' il punto oltre il quale continuare ad
-/// aspettare non e' piu' un'attesa ma un blocco, e trenta secondi lo mettono
-/// molto oltre qualunque drenaggio vero — cosi' che scattare significhi sempre
-/// «qualcuno e' rimasto vivo» e mai «e' stato lento».
-///
-/// # E' una scadenza **assoluta**
-///
-/// Si misura una volta, all'inizio, e non riparte quando arriva un fatto. E'
-/// la differenza fra un tetto e nessun tetto: con una scadenza che si rinnova a
-/// ogni consegna, un produttore che manda qualcosa ogni ventinove secondi
-/// terrebbe aperto il drenaggio per sempre, e il tetto ci sarebbe solo sulla
-/// carta.
-///
-/// # E' un limite governato
-///
-/// Nominato qui, motivato qui, e registrato in `errori-e-limiti.md` con regola,
-/// perimetro e condizione di rientro.
+/// Limite registrato in `errori-e-limiti.md`.
 const TETTO_DEL_DRENAGGIO: std::time::Duration = std::time::Duration::from_secs(30);
 
 use super::Fatto;
 
 /// Chi accoda, e quanto puo' accodare.
 ///
-/// # Perche' il budget sta nel tipo
-///
-/// Perche' un numero scritto in una costante lontana si scollega da chi lo
-/// spende. Qui il produttore **e'** il suo budget: chiedere una bocchetta
-/// significa dichiarare chi si e', e da quella dichiarazione discende quanti
-/// fatti si possono accodare. Non c'e' modo di chiederne di piu' senza
-/// aggiungere un produttore, e aggiungerne uno cambia la capacita'.
+/// Il budget sta nel tipo: chiedere una bocchetta dichiara il produttore, e
+/// accodare di piu' richiede un produttore nuovo, che cambia la capacita'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Produttore {
     /// Legge il canale del worker.
@@ -184,15 +139,9 @@ fn svuota_senza_bloccare(ricevitore: &Receiver<Fatto>, dentro: &mut Vec<Fatto>) 
 
 /// Un istante oltre il quale non si aspetta piu'.
 ///
-/// # Perche' un tipo, e non una somma sul posto
-///
-/// Perche' cosi' la regola — **si calcola una volta e non riparte** — si puo'
-/// provare senza aspettare. Con la somma scritta dentro il giro, l'unico modo
-/// di verificarla sarebbe far passare il tempo davvero, e un caso che aspetta
-/// misura la macchina su cui gira invece della regola.
-///
-/// Qui la regola e' una funzione di due istanti, e un caso la interroga con gli
-/// istanti che vuole.
+/// E' un tipo e non una somma sul posto perche' la regola — si calcola una
+/// volta e non riparte — si provi con istanti scelti, senza far passare il
+/// tempo davvero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Scadenza {
     fine: std::time::Instant,
@@ -219,22 +168,13 @@ impl Scadenza {
 
 /// Il posto di un produttore in coda, con i suoi gettoni.
 ///
-/// # Perche' rifiuta invece di bloccare
+/// Finito il budget, `manda` rifiuta invece di bloccare: un produttore
+/// bloccato non riporta piu' niente e non puo' dirlo. Dentro il budget il
+/// rifiuto non arriva, perche' la capacita' e' la somma dei budget.
 ///
-/// Perche' un produttore bloccato e' un produttore che non riporta piu' niente,
-/// e non ha modo di dirlo. Finito il budget, `manda` rende un rifiuto: il
-/// produttore lo vede, smette, e chi legge il rapporto sa che resta altro da
-/// dire. Il blocco invece non si vede da nessuna parte.
-///
-/// Dentro il budget il rifiuto non arriva mai, perche' la capacita' e' la somma
-/// dei budget: il posto c'e' per costruzione.
-/// # Perche' non e' clonabile
-///
-/// Perche' una copia raddoppierebbe i gettoni senza raddoppiare la capacita', e
-/// il conto su cui poggia lo spazio riservato smetterebbe di valere: due
-/// lettori spenderebbero otto posti su undici, e un terminale troverebbe la
-/// coda piena. Non c'e' `Clone`, e non c'e' modo di costruirne una fuori da
-/// [`apri`].
+/// Non e' clonabile e nasce solo in [`apri`]: una copia raddoppierebbe i
+/// gettoni senza raddoppiare la capacita', e un terminale potrebbe trovare la
+/// coda piena.
 #[derive(Debug)]
 pub(super) struct Bocchetta {
     chi: Produttore,
@@ -242,13 +182,9 @@ pub(super) struct Bocchetta {
     canale: SyncSender<Fatto>,
     /// Il primo rifiuto, se ce n'e' stato uno.
     ///
-    /// # Perche' si conserva qui e non si accoda
-    ///
-    /// Perche' un rifiuto nasce quando la coda non accetta piu': accodarlo
-    /// vorrebbe dire riportare che la coda e' piena **attraverso la coda
-    /// piena**, che e' la definizione di un messaggio che non arriva. Resta
-    /// invece nella bocchetta, e il produttore lo rende dal proprio
-    /// `JoinHandle` — una via che non passa dalla coda e non puo' riempirsi.
+    /// Non si accoda, perche' nasce quando la coda non accetta piu': il
+    /// produttore lo rende dal proprio `JoinHandle`, una via che non passa
+    /// dalla coda.
     primo_rifiuto: Option<Esaurita>,
 }
 
@@ -257,10 +193,9 @@ impl Bocchetta {
     ///
     /// # Errors
     ///
-    /// [`Esaurita`] quando il budget e' finito — o, per costruzione mai, quando
-    /// la coda e' piena. I due casi si distinguono perche' mandano a guardare
-    /// due cose diverse: il primo un produttore troppo loquace, il secondo un
-    /// invariante rotto.
+    /// [`Esaurita`] quando il budget e' finito, o quando la coda e' piena, che
+    /// per costruzione non accade: il primo caso indica un produttore troppo
+    /// loquace, il secondo un invariante rotto.
     pub(super) fn manda(&mut self, fatto: Fatto) -> std::result::Result<(), Esaurita> {
         if self.rimasti == 0 {
             return Err(self.annota(Esaurita::Budget(self.chi)));
@@ -284,18 +219,10 @@ impl Bocchetta {
 
     /// Registra il primo rifiuto e lo rende.
     ///
-    /// # Perche' il primo, e perche' oggi non fa differenza
-    ///
-    /// Il primo e non l'ultimo, perche' i successivi ne sono la conseguenza.
-    /// Va pero' detto per intero: da una bocchetta sola i rifiuti hanno tutti
-    /// **lo stesso valore** — `Esaurita` porta il produttore, che non cambia — e
-    /// una volta finito il budget ogni tentativo successivo rifiuta per quella
-    /// ragione, senza mai arrivare alle altre due.
-    ///
-    /// Nessuna esecuzione raggiungibile distingue quindi il primo dall'ultimo:
-    /// questa e' stabilita' dell'ordine per un domani in cui i rifiuti possano
-    /// differire, non un controllo che qualche caso mette alla prova. Un caso
-    /// che dicesse di provarlo sarebbe vacuo, e ce n'e' stato uno: e' stato tolto.
+    /// Il primo, perche' i successivi ne sono la conseguenza. Da una bocchetta
+    /// sola i rifiuti hanno tutti lo stesso valore, quindi nessuna esecuzione
+    /// raggiungibile distingue il primo dall'ultimo: e' stabilita' dell'ordine,
+    /// non un controllo che un caso possa provare.
     const fn annota(&mut self, quale: Esaurita) -> Esaurita {
         if self.primo_rifiuto.is_none() {
             self.primo_rifiuto = Some(quale);
@@ -352,19 +279,12 @@ impl std::fmt::Display for Esaurita {
     }
 }
 
-/// Le cinque bocchette, consegnate **una volta sola**.
+/// Le bocchette dei produttori, consegnate una volta sola.
 ///
-/// # Perche' un fascio con i nomi, e non una funzione che le distribuisce
-///
-/// Perche' una funzione si chiama due volte. Con `bocchetta(Produttore::Lettore)`
-/// nessuno impedisce di chiederne due, e due lettori hanno otto gettoni su
-/// undici: il conto su cui poggia lo spazio riservato ai terminali smette di
-/// valere, e la somma dei budget non dimostra piu' la capacita' necessaria.
-///
-/// Qui le bocchette **esistono in cinque esemplari** perche' i campi sono
-/// cinque, non clonabili, e nascono tutti insieme in [`apri`]. Non c'e' modo di
-/// averne una sesta: chi la volesse dovrebbe aprire un'altra coda, che e' un
-/// altro consumatore e un altro conto.
+/// Un fascio con i nomi e non una funzione che le distribuisce, perche' una
+/// funzione si chiama due volte: due lettori spenderebbero lo spazio
+/// riservato ai terminali. I campi, non clonabili, nascono tutti insieme in
+/// [`apri`].
 #[derive(Debug)]
 pub(super) struct Fascio {
     pub(super) lettore: Bocchetta,
@@ -428,18 +348,9 @@ pub(super) fn apri() -> (Coda, Fascio) {
 impl Coda {
     /// Il prossimo fatto, aspettando al piu' `limite`.
     ///
-    /// # Perche' rende tre cose e non due
-    ///
-    /// Perche' «non e' arrivato niente» e «non arrivera' piu' niente» sono
-    /// risposte diverse, e chi ascolta ne fa due cose diverse: sulla prima
-    /// riprova, sulla seconda smette.
-    ///
-    /// Distinguerle **qui** e non con una seconda domanda non e' comodita': una
-    /// domanda separata dovrebbe interrogare il canale, e interrogarlo con
-    /// `try_recv` **mangia un fatto** se ce n'e' uno. Il fatto sparirebbe
-    /// dentro una domanda che ne chiede un'altra, e sparirebbe in
-    /// silenzio. `recv_timeout` invece distingue le tre risposte senza
-    /// consumare niente che non sia il fatto reso.
+    /// Distingue nella stessa chiamata «non e' arrivato niente» (si riprova) da
+    /// «non arrivera' piu' niente» (si smette): una domanda separata con
+    /// `try_recv` consumerebbe in silenzio un fatto presente.
     pub(super) fn prossimo(&self, limite: std::time::Duration) -> Presa {
         match self.ricevitore.recv_timeout(limite) {
             Ok(fatto) => Presa::Fatto(fatto),
@@ -448,84 +359,39 @@ impl Coda {
         }
     }
 
-    /// Prende cio' che e' **gia'** in coda, senza aspettare.
+    /// Prende cio' che e' gia' in coda, senza aspettare e senza chiudere.
     ///
-    /// # Perche' non e' il drenaggio, e quando e' lecita
+    /// Non e' il drenaggio, ne' un `is_empty()` sul futuro: e' lecita solo
+    /// quando ogni produttore in grado di accodare e' gia' stato fermato e
+    /// aspettato, perche' il `join` rende visibile qui tutto cio' che ha
+    /// accodato.
     ///
-    /// Perche' il drenaggio serve a non perdere cio' che *sta per* arrivare, e
-    /// per quello lascia cadere le bocchette e aspetta la disconnessione.
-    /// Questa fa una cosa piu' piccola: raccoglie cio' che c'e' **adesso**, e
-    /// non chiude niente.
-    ///
-    /// Non e' quindi il `is_empty()` vietato altrove, che sarebbe una domanda
-    /// sul futuro travestita da domanda sul presente. E' lecita a una sola
-    /// condizione: che ogni produttore in grado di accodare sia gia' stato
-    /// **fermato e aspettato**. Il `join` di un thread stabilisce che tutto cio'
-    /// che quel thread ha accodato e' gia' visibile qui — non c'e' un fatto in
-    /// volo che una seconda lettura troverebbe.
-    ///
-    /// # Perche' serve
-    ///
-    /// Perche' fra la fine dell'ascolto e la lettura dell'evidenza c'e' una
-    /// decisione che dipende dai fatti: **il dominio e' quiescente?** Se la
-    /// quiescenza e' stata accodata dopo l'ultima interrogazione del giro, e la
-    /// si scoprisse soltanto al drenaggio finale, l'evidenza verrebbe saltata su
-    /// un dominio che nel frattempo si e' svuotato — e l'esito direbbe «tempo
-    /// scaduto» su un'esecuzione uccisa dall'OOM.
+    /// Serve a sapere, prima di leggere l'evidenza, se il dominio e'
+    /// quiescente: una quiescenza scoperta solo al drenaggio finale farebbe
+    /// saltare l'evidenza, e l'esito direbbe «tempo scaduto» su un'esecuzione
+    /// uccisa dall'OOM.
     pub(super) fn raccogli_i_fermi(&self) -> Vec<Fatto> {
         let mut fermi = Vec::new();
         svuota_senza_bloccare(&self.ricevitore, &mut fermi);
         fermi
     }
 
-    /// Chiude e drena.
-    ///
-    /// # Perche' non guarda se e' vuota
-    ///
-    /// Perche' «vuota adesso» non dice niente su cio' che sta per arrivare: fra
-    /// la domanda e la risposta un produttore vivo puo' accodare, e fermarsi li'
-    /// perderebbe i fatti dell'ultimo istante — quelli che raccontano com'e'
-    /// finita. Qui si lascia cadere il modello, si aspetta che le bocchette
-    /// cadano con i loro thread, e si legge finche' il canale non dice
-    /// `Disconnected`: l'unica affermazione che significa «nessuno puo' piu'
-    /// scrivere».
+    /// Chiude e drena fino a `Disconnected`, senza fermarsi su un istante vuoto.
     ///
     /// # Che cosa il chiamante deve aver gia' fatto
     ///
-    /// Tre cose, e nessuna delle tre e' facoltativa.
+    /// 1. rendere terminabili le sorgenti bloccanti dei produttori: un lettore
+    ///    fermo in una `read` tiene viva la sua bocchetta;
+    /// 2. aspettare i produttori e prenderne il resoconto;
+    /// 3. lasciar cadere ogni bocchetta, anche quelle del consumatore.
     ///
-    /// 1. **Rendere terminabili le sorgenti bloccanti dei produttori.** Un
-    ///    lettore fermo dentro una `read` non si sveglia perche' qualcuno
-    ///    altrove lascia cadere un mandante: continuerebbe ad aspettare byte che
-    ///    non arrivano, e la sua bocchetta resterebbe viva insieme a lui.
-    /// 2. **Aspettare i produttori**, e prendersi il loro resoconto. Finche' un
-    ///    thread vive, la sua bocchetta vive.
-    /// 3. **Lasciar cadere ogni bocchetta**, comprese quelle che il consumatore
-    ///    tiene per se'.
+    /// Se ne manca una l'attesa non finisce: il tetto la trasforma in un
+    /// difetto detto, ed e' lungo abbastanza da non interrompere un drenaggio
+    /// vero.
     ///
-    /// Fatte le tre, questa funzione finisce sul `Disconnected`, che e' la
-    /// condizione voluta.
-    ///
-    /// # Perche' c'e' comunque un tetto
-    ///
-    /// Perche' se una delle tre non e' stata fatta — un lettore fermo dentro una
-    /// `read`, una bocchetta dimenticata in una chiusura — l'attesa non finisce
-    /// mai, e un supervisore appeso e' il peggiore degli esiti: non conclude,
-    /// non riporta, e non si distingue da uno che sta lavorando.
-    ///
-    /// Il tetto non e' quindi una scorciatoia sul drenaggio: e' lungo abbastanza
-    /// da non poter interrompere un drenaggio vero, e serve a **trasformare
-    /// un'attesa infinita in un difetto detto**. Chi lo legge sa che qualcuno e'
-    /// rimasto vivo, ed e' l'unica informazione utile in quel momento.
-    ///
-    /// # Che cosa rende
-    ///
-    /// I fatti raccolti, e il motivo se il canale non si e' mai disconnesso.
-    ///
-    /// Il chiamante di produzione passa invece per
-    /// [`Self::chiudi_e_drena_entro`] con [`Self::tetto_di_produzione`]: qui
-    /// resta la comodita' per i casi che vogliono il tetto vero senza
-    /// scriverlo due volte.
+    /// Rende i fatti raccolti, e il motivo se il canale non si e' disconnesso.
+    /// La produzione passa da [`Self::chiudi_e_drena_entro`] con
+    /// [`Self::tetto_di_produzione`]; questa serve ai casi.
     #[cfg(any(test, feature = "internals"))]
     pub(super) fn chiudi_e_drena(self) -> (Vec<Fatto>, Option<String>) {
         self.chiudi_e_drena_entro(TETTO_DEL_DRENAGGIO)
@@ -538,27 +404,17 @@ impl Coda {
 
     /// [`Self::chiudi_e_drena`] con il tetto in mano al chiamante.
     ///
-    /// Esiste per **una** prova: che un produttore rimasto vivo diventi un
-    /// difetto detto invece di un'attesa infinita. Con il tetto vero quel caso
-    /// durerebbe mezzo minuto, e un caso che dura mezzo minuto non lo esegue
-    /// nessuno — che e' il modo in cui un controllo smette di esistere.
-    ///
-    /// E' privata e ha un solo chiamante di produzione, che le passa la
-    /// costante. Cio' che un chiamante di prova puo' variare e' **quanto** si
-    /// aspetta, mai che cosa si conclude.
+    /// Permette di provare in fretta che un produttore rimasto vivo diventi un
+    /// difetto detto. L'unico chiamante di produzione passa la costante: una
+    /// prova varia quanto si aspetta, mai che cosa si conclude.
     pub(super) fn chiudi_e_drena_entro(
         self,
         tetto: std::time::Duration,
     ) -> (Vec<Fatto>, Option<String>) {
-        // La scadenza si calcola **una volta**. Ricalcolarla dentro il giro, o
-        // farla ripartire quando arriva un fatto, darebbe a un produttore lento
-        // il potere di prolungare il drenaggio all'infinito.
-        //
-        // `checked_add` e non `+`: la somma di un `Instant` e una durata **puo'
-        // andare in overflow**, e l'operatore in quel caso va in panico. Con
-        // trenta secondi non accade su nessuna macchina reale, ma un panico
-        // dentro la chiusura del supervisore sarebbe il posto peggiore in cui
-        // scoprirlo — e un'impossibilita' osservata va detta, non presunta.
+        // La scadenza si calcola una volta: rinnovarla a ogni fatto darebbe a
+        // un produttore lento il potere di prolungare il drenaggio.
+        // `checked_add` e non `+`: l'overflow di `Instant` va in panico, e
+        // un'impossibilita' osservata va detta, non presunta.
         let Some(scadenza) = Scadenza::nuova(std::time::Instant::now(), tetto) else {
             let mut subito = Vec::new();
             svuota_senza_bloccare(&self.ricevitore, &mut subito);
@@ -575,12 +431,9 @@ impl Coda {
         loop {
             let rimasto = scadenza.rimasto(std::time::Instant::now());
             if rimasto.is_zero() {
-                // **Prima di rinunciare, si svuota cio' che c'e' gia'.** Il
-                // tempo e' finito per l'*attesa*, non per i fatti arrivati
-                // mentre si aspetta: tornare senza prenderli perderebbe
-                // proprio quelli dell'ultimo istante, che sono quelli che
-                // raccontano com'e' finita. Non e' un'attesa in piu':
-                // `try_recv` non blocca, e si ferma appena la coda e' vuota.
+                // Prima di rinunciare si prende cio' che c'e' gia': il tempo e'
+                // finito per l'attesa, non per i fatti arrivati. `try_recv` non
+                // blocca.
                 svuota_senza_bloccare(&self.ricevitore, &mut raccolti);
                 return (
                     raccolti,
@@ -607,13 +460,10 @@ mod tests {
     use super::{apri, Esaurita, Presa, Produttore, CAPACITA};
     use crate::isolamento::macchina::{Fatto, UscitaOsservata};
 
-    /// La somma dei budget, **ricalcolata qui**.
+    /// La somma dei budget, ricalcolata qui.
     ///
-    /// I casi operativi confrontano con questa e non con [`CAPACITA`]: un caso
-    /// che si misurasse sulla costante che deve giudicare si guarirebbe da solo
-    /// — abbassare la costante abbasserebbe anche il valore atteso, e il caso
-    /// resterebbe verde con la coda piu' piccola del necessario. E' un difetto
-    /// che questa batteria ha avuto davvero, e che una mutazione ha scoperto.
+    /// I casi confrontano con questa e non con [`CAPACITA`]: un caso misurato
+    /// sulla costante che giudica resterebbe verde anche abbassandola.
     fn somma_dei_budget() -> usize {
         Produttore::TUTTI.iter().map(|chi| chi.budget()).sum()
     }
@@ -670,16 +520,9 @@ mod tests {
     /// **Il fascio consegna cinque bocchette, e i loro gettoni sono la
     /// capacita'.**
     ///
-    /// E' la proprieta' strutturale su cui poggia lo spazio riservato: le
-    /// bocchette che esistono sono **quelle** e non altre, quindi la somma dei
-    /// loro budget e' la somma dei budget. Una funzione che le distribuisse a
-    /// richiesta non lo garantirebbe — due lettori avrebbero otto gettoni su
-    /// undici — e nessun caso a runtime potrebbe accorgersene, perche' il
-    /// difetto sarebbe nella possibilita', non in una chiamata.
-    ///
-    /// Qui la garanzia sta nel tipo: cinque campi, nessun `Clone`, un solo
-    /// costruttore. Questo caso misura che i cinque campi spendano esattamente
-    /// la capacita'.
+    /// La garanzia strutturale sta nel tipo (campi fissi, nessun `Clone`, un
+    /// solo costruttore); qui si misura che i campi spendano esattamente la
+    /// capacita'.
     #[test]
     fn il_fascio_ha_cinque_bocchette_che_valgono_la_capacita() {
         let (coda, fascio) = apri();
@@ -895,31 +738,12 @@ mod tests {
 
     /// **Il drenaggio vero ha un tetto, e conserva i fatti gia' accodati.**
     ///
-    /// # Che cosa prova, e che cosa lascia all'altro caso
-    ///
-    /// Che il drenaggio **vero** si fermi quando il produttore resta vivo, e che
-    /// nel fermarsi non butti via cio' che aveva gia' sentito: quello che si e'
-    /// raccolto prima di rinunciare e' evidenza quanto la rinuncia.
-    ///
-    /// Che la scadenza sia **assoluta** — calcolata una volta, e non rinnovata
-    /// da cio' che arriva — lo prova
-    /// `la_regola_della_scadenza_non_dipende_dall_orologio`, che sceglie gli
-    /// istanti e non aspetta. Qui non si finge di distinguere il rinnovo
-    /// misurando durate: una misura del genere direbbe qualcosa sulla macchina.
-    ///
-    /// # Perche' due canali laterali e nessun `sleep`
-    ///
-    /// Perche' un `sleep` che deve garantire che un evento **sia gia'
-    /// accaduto** e' una scommessa sullo scheduler, e su una macchina carica la
-    /// si perde: il produttore non arriva a mandare, il drenaggio scade a mani
-    /// vuote, e il caso diventa rosso senza che nulla sia rotto. E' successo.
-    ///
-    /// I due canali tolgono la scommessa. Il primo porta «il fatto e' in coda»,
-    /// e il test non comincia a drenare prima di averlo ricevuto: cosi' «gia'
-    /// accodato» e' un fatto osservato, non un'attesa sperata. Il secondo tiene
-    /// vivo il produttore — cioe' gli fa trattenere la bocchetta — finche' il
-    /// test non lo libera, che e' l'unico modo di garantire che il canale
-    /// **non** si disconnetta mentre si drena.
+    /// La scadenza assoluta la prova
+    /// `la_regola_della_scadenza_non_dipende_dall_orologio`, senza misurare
+    /// durate. Due canali laterali sostituiscono un `sleep`, che su una
+    /// macchina carica perde la scommessa sullo scheduler: il primo dice «il
+    /// fatto e' in coda» prima che si cominci a drenare, il secondo tiene viva
+    /// la bocchetta finche' il drenaggio non e' scaduto.
     #[test]
     fn il_drenaggio_vero_ha_un_tetto_e_conserva_i_fatti() {
         let (coda, fascio) = apri();
@@ -968,15 +792,9 @@ mod tests {
 
     /// **La regola della scadenza, senza orologio.**
     ///
-    /// Una scadenza si calcola da un istante e non si sposta: interrogata a
-    /// istanti successivi rende un residuo che **cala e basta**, e nessun fatto
-    /// che arriva nel frattempo la rinnova. Qui gli istanti li sceglie il caso,
-    /// quindi la regola si prova senza aspettare — e senza misurare la macchina
-    /// su cui gira invece del codice.
-    ///
-    /// Il caso col tempo vero resta, ed e' un'altra cosa: quello prova che il
-    /// drenaggio vero finisca davvero, con il margine che un orologio da parete
-    /// richiede.
+    /// Il residuo cala e basta, e interrogarla non la rinnova. Gli istanti li
+    /// sceglie il caso, quindi non si aspetta e non si misura la macchina; che
+    /// il drenaggio vero finisca lo prova il caso col tempo vero.
     #[test]
     fn la_regola_della_scadenza_non_dipende_dall_orologio() {
         let inizio = std::time::Instant::now();
@@ -1017,18 +835,10 @@ mod tests {
 
     /// **Allo scadere non si perde cio' che e' gia' in coda.**
     ///
-    /// # Perche' e' un caso a se', e perche' e' deterministico
-    ///
-    /// Perche' il tempo finisce per l'**attesa**, non per i fatti gia'
-    /// arrivati: tornare senza prenderli perderebbe proprio quelli dell'ultimo
-    /// istante, che sono quelli che raccontano com'e' finita. E' un difetto che
-    /// si vede solo quando **piu' di un fatto** e' pronto allo scadere, quindi
-    /// un caso con un fatto solo lo lascerebbe passare.
-    ///
-    /// Non c'e' niente da tarare: i fatti si accodano **prima**, il mandante
-    /// resta vivo — cosi' il canale non si disconnette — e il tetto e' zero, che
-    /// vuol dire «gia' scaduto» al primo giro. L'esito atteso e' quindi: tutti i
-    /// fatti, **insieme** al difetto di mancata disconnessione.
+    /// Il difetto si vede solo con piu' di un fatto pronto allo scadere. Il
+    /// caso e' deterministico: i fatti si accodano prima, il lettore resta vivo
+    /// e il tetto e' zero, quindi l'atteso e' tutti i fatti insieme al difetto
+    /// di mancata disconnessione.
     #[test]
     fn allo_scadere_i_fatti_gia_accodati_tornano_tutti() {
         let (coda, fascio) = apri();

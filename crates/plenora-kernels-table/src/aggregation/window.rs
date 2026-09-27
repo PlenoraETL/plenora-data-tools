@@ -48,14 +48,9 @@ pub struct RollingWindow {
 
 /// Che cosa serve a una variante per essere calcolata.
 ///
-/// Un `match` **esaustivo** e non due `matches!` indipendenti: con due elenchi
-/// una variante nuova puo' mancare da entrambi, compilare, e finire a leggere
-/// valori che nessuno ha calcolato. Qui una `WindowKind` senza strategia non
-/// compila.
-///
-/// E' anche l'**unica** autorita' sulla classificazione: l'analizzatore la
-/// interroga invece di tenere un proprio elenco, cosi' una variante nuova non
-/// puo' essere di rango per il kernel e di qualcos'altro per l'analisi.
+/// Un `match` **esaustivo**: una `WindowKind` senza strategia non compila.
+/// E' l'unica autorita' sulla classificazione, interrogata anche
+/// dall'analizzatore.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Strategia {
     /// Rende un valore numerico: legge la colonna come `f64`, arrotondando.
@@ -141,10 +136,7 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
         .as_deref()
         .map(|name| column_index(&ordered, name))
         .transpose()?;
-    // Partizionamento condiviso con `window_function`: chiavi testuali
-    // prese in prestito (`TextSource`, nessuna String per riga), hash
-    // FxHash+splitmix64, iterazione delle partizioni nello stesso ordine
-    // del BTreeMap originale (chiave `Option<String>` crescente).
+    // Partizionamento condiviso con `window_function` (`build_partitions`).
     let partitions = build_partitions(&ordered, group)?;
     let numbers = Float64Source::new(ordered.column(source));
     let compute = |rows: &[usize]| -> Result<Vec<Option<f64>>> {
@@ -273,15 +265,13 @@ pub struct WindowFunction {
 /// un `Float64` per contratto
 /// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
 ///
-/// Le quattro varianti di **rango** — `rank`, `dense_rank`, `percent_rank`,
-/// `cume_dist` — non convertono: ordinano e confrontano il dominio originale
-/// con la stessa autorita' tipizzata del sort, perche' su una decisione
-/// l'arrotondamento farebbe risultare a pari merito valori distinti. Per la
-/// stessa ragione **non accettano colonne `Utf8`**: il testo numerico non ha
-/// un ordine esatto, e l'analizzatore lo rifiuta con lo stesso confine.
+/// Le varianti di **rango** (`rank`, `dense_rank`, `percent_rank`,
+/// `cume_dist`) non convertono: confrontano il dominio originale come il
+/// sort, perche' l'arrotondamento renderebbe pari merito valori distinti.
+/// Per la stessa ragione **non accettano colonne `Utf8`**.
 ///
-/// `cumcount` e `ntile` non leggono i valori — dipendono dalla posizione — ma
-/// il contratto numerico della colonna vale anche per loro.
+/// `cumcount` e `ntile` dipendono dalla posizione, ma il contratto numerico
+/// della colonna vale anche per loro.
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
     if config.offset == 0 {
         return Err(PlenoraError::InvalidPlan(
@@ -316,27 +306,12 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
         .as_deref()
         .map(|name| column_index(&ordered, name))
         .transpose()?;
-    // Partizionamento condiviso con `rolling_window`: chiavi testuali prese
-    // in prestito (`TextSource`, nessuna String per riga), hash
-    // FxHash+splitmix64, iterazione delle partizioni nello stesso ordine
-    // del BTreeMap originale (chiave `Option<String>` crescente).
+    // Partizionamento condiviso con `rolling_window`.
     let partitions = build_partitions(&ordered, group_index)?;
     let colonna = ordered.column(source_index);
-    // Due letture diverse della stessa colonna, e la differenza e' il
-    // contratto.
-    //
-    // Le varianti che producono un VALORE rendono un `Float64`: li'
-    // l'arrotondamento e' la semantica dichiarata
-    // (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-    //
-    // Le varianti di RANGO **decidono**: ordinano e confrontano. Convertire
-    // prima di confrontare farebbe collassare due interi distinti oltre 2^53
-    // sullo stesso double, e valori diversi risulterebbero a pari merito.
-    // Quelle confrontano il dominio originale.
-    //
-    // Il dominio numerico si valida **sempre**, anche per le varianti di
-    // posizione: e' il contratto della colonna, e non dipende da cosa il
-    // kernel poi ne fa.
+    // Le varianti di VALORE leggono `Float64` (arrotondamento dichiarato),
+    // quelle di RANGO il dominio originale (vedi il doc sopra). Il dominio
+    // numerico si valida sempre, anche per le varianti di posizione.
     let strategia = strategia(&config.function);
     let source = (strategia == Strategia::Valore).then(|| Float64Source::new(colonna));
     let ordine = match strategia {

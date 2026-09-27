@@ -1,15 +1,9 @@
 //! Scoperta del contratto di un input Arrow, e le decisioni sul CRS.
 //!
-//! Che cosa un file dichiara di se' — campi, colonna geometrica, dimensioni,
-//! encoding, CRS — letto dai soli metadati dello schema, senza toccare una
-//! riga di dati. E' la superficie da cui nascono `describe`, la validazione
-//! del piano e la verifica di compatibilita' degli input.
-//!
-//! Le regole sul CRS sono qui e non sparse: una dichiarazione incoerente
-//! resta incoerente (`DeclaredUnresolved`) invece di essere risolta in
-//! silenzio a favore di una delle due forme, e la risoluzione per decisione
-//! del piano ([`apply_crs_decisions`]) sostituisce le dichiarazioni della
-//! sorgente in un punto solo.
+//! Il contratto si legge dai soli metadati dello schema, senza toccare una
+//! riga: ne nascono `describe`, la validazione del piano e la verifica degli
+//! input. Una dichiarazione CRS incoerente resta `DeclaredUnresolved`, e la
+//! sola risoluzione e' la decisione del piano ([`apply_crs_decisions`]).
 
 use std::path::{Path, PathBuf};
 
@@ -45,14 +39,9 @@ pub use plenora_core::contract::arrow_schema::{
 /// Schema Arrow dell'header IPC di un input (file o stream format): nessuna
 /// riga di dati letta.
 ///
-/// Passa dal lettore di confine condiviso ([`plenora_engine::ipc_boundary`]):
-/// framing e limiti pre-validati prima che arrow allochi, panico di
-/// `fb_to_schema` convertito in errore. La CLI non apre piu'
-/// `FileReader`/`StreamReader` per conto proprio su input non fidati.
-///
-/// Confine di lettura (BLOCK-03): gli errori `Io`/`DataMapping` di apertura
-/// e parse dell'header nascono leggendo la sorgente — tag
-/// [`ErrorPhase::Read`].
+/// Passa dal lettore di confine condiviso ([`plenora_engine::ipc_boundary`]);
+/// gli errori di apertura e parse dell'header portano [`ErrorPhase::Read`]
+/// (BLOCK-03).
 pub fn ipc_header_schema(path: &Path) -> Result<SchemaRef, PlenoraError> {
     ipc_boundary::header_schema(path, &IpcLimits::default())
 }
@@ -69,32 +58,16 @@ pub fn open_input(path: &Path, limits: &IpcLimits) -> Result<Input, PlenoraError
 ///
 /// Protocollo delle chiavi canoniche (contratti trasversali §2):
 ///
-/// - gate R2.5 all'ingresso: [`read_contract_version`] — una versione
-///   successiva a quella nota, una chiave di versione malformata o chiavi
-///   canoniche senza versione sono errori propagati, mai ignorati;
-/// - sorgente primaria per ogni campo geometria:
-///   [`read_geometry_contract_keys`] — chiavi canoniche fail-closed,
-///   coerenza canonica/legacy (R2.6: divergenza -> errore) e completamento
-///   per precedenza (R2.7) sono applicati dal reader;
-/// - riconoscimento (1c): le chiavi canoniche sono autosufficienti (tabella
-///   §2), quindi un campo con chiavi `plenora.geometry.*` e' riconosciuto
-///   come colonna geometrica anche SENZA l'estensione `geoarrow.wkb` e il
-///   metadato `geo`; in entrambi i percorsi il tipo DEVE essere `Binary`,
-///   altrimenti errore esplicito;
-/// - CRS: lo stato e' deciso da [`contract_crs_from_keys`] sulla
-///   rappresentazione completata (canonica o legacy) e sulla
-///   `crs_resolution` dichiarata. R4.6.3 (v2.0-rc9/rc10): un campo
-///   geometrico SENZA CRS dichiarato NON e' un errore — il centro non puo'
-///   pretendere un CRS risolvibile per operazioni che non lo richiedono;
-///   lo stato entra nel contratto come [`ContractCrs::Missing`] (R4.4: mai
-///   un CRS inventato) e ferma solo le op che dichiarano un
-///   `CrsRequirement`, in analyze. Un'incoerenza dichiarata
-///   (`declared_unresolved`) o un conflitto decidibile fra rappresentazioni
-///   diventano [`ContractCrs::DeclaredUnresolved`], preservati e mai
-///   risolti in assenza di una decisione esplicita nel piano
-///   (`crs_decisions`). Resta errore la dichiarazione contraddittoria
-///   (`crs_resolution` valorizzata ma nessuna rappresentazione: R4.1 vieta
-///   di collassarla su `missing`).
+/// - gate R2.5 all'ingresso: [`read_contract_version`];
+/// - per ogni campo geometria [`read_geometry_contract_keys`] applica chiavi
+///   canoniche, coerenza con le legacy (R2.6) e precedenza (R2.7);
+/// - le chiavi `plenora.geometry.*` bastano a riconoscere una colonna
+///   geometrica; il tipo deve comunque essere `Binary`;
+/// - lo stato CRS lo decide [`contract_crs_from_keys`]. Un campo senza CRS
+///   diventa [`ContractCrs::Missing`] (R4.6.3, R4.4) e ferma solo le op con
+///   un `CrsRequirement`; un'incoerenza dichiarata diventa
+///   [`ContractCrs::DeclaredUnresolved`]; `crs_resolution` senza alcuna
+///   rappresentazione resta un errore (R4.1).
 pub fn discover_input_contract(path: &Path) -> Result<DataContract, PlenoraError> {
     // Il risolutore e' quello scelto dalla build (base oppure PROJ): l'autorita'
     // in core interpreta lo schema, il chiamante fornisce il backend. Non e'
@@ -110,16 +83,10 @@ pub fn at_input(name: &str, path: &Path, error: PlenoraError) -> PlenoraError {
 
 /// Accoppia gli input della riga di comando a quelli dichiarati dal piano DAG.
 ///
-/// Nella forma NOMINALE l'accoppiamento e' quello scritto: ogni nome dev'essere
-/// dichiarato dal piano e ogni input dichiarato dev'essere fornito, una volta
-/// sola.
-///
-/// La forma POSIZIONALE e' ammessa **solo con un input dichiarato**. Con due o
-/// piu' input non e' verificabile: due file scambiati con lo stesso schema
-/// producono un risultato sbagliato invece di un errore — il piano gira, i
-/// contratti combaciano, e nessuno se ne accorge. E' l'unico punto della CLI
-/// in cui uno scambio dell'utente non sarebbe intercettabile dal componente,
-/// e per questo quella forma non arriva all'esecuzione.
+/// Nella forma nominale ogni nome dev'essere dichiarato e ogni input
+/// dichiarato fornito una volta. La forma posizionale e' ammessa solo con un
+/// input dichiarato: con due file scambiati dello stesso schema il piano
+/// girerebbe e darebbe un risultato sbagliato.
 ///
 /// # Errors
 ///
@@ -174,13 +141,8 @@ pub fn pair_v4_inputs(
         DagInputs::Positional(paths) => paths,
     };
     if probe.inputs.len() > 1 {
-        // Con piu' di un input la forma posizionale non e' VERIFICABILE: due
-        // percorsi scambiati sono indistinguibili da due percorsi giusti, e
-        // se gli schemi coincidono il piano gira producendo il risultato
-        // sbagliato. Un avviso non basta — nei log di una pipeline non lo
-        // legge nessuno — quindi si rifiuta prima di toccare i file,
-        // indicando la forma che chiude il problema. Resta ammessa con un
-        // input solo, dove non c'e' niente da scambiare.
+        // Con piu' di un input la forma posizionale non e' verificabile: si
+        // rifiuta prima di toccare i file, indicando la forma nominale.
         return Err(contract(format!(
             "`--inputs` accoppia i percorsi per POSIZIONE e non e' ammesso con {} input \
              dichiarati: usare la forma nominale `{}`",
@@ -224,27 +186,17 @@ pub fn discover_contracts(
 }
 
 /// Applica le decisioni CRS esplicite del piano DAG (`crs_decisions`,
-/// R4.6.3) ai contratti scoperti: per ogni input nominato, la definizione
-/// decisa e' risolta contro il backend (senza `proj-backend`:
-/// `BackendUnavailable`, come il CRS di piano) e sostituisce lo stato
-/// [`ContractCrs::DeclaredUnresolved`] con
-/// [`ContractCrs::ResolvedByDecision`] — un CRS risolto a tutti gli effetti
-/// per le op a valle, marcato perche' l'emissione SOSTITUISCA le
-/// dichiarazioni della sorgente con il CRS deciso
-/// (`strip_decided_crs_declarations` nella fusione dello schema di
-/// output). Lo schema del contratto di input NON e' toccato: il check
-/// fail-closed dell'executor confronta i campi del file con quelli del
-/// contratto validato (metadati inclusi). La decisione resta esplicita nel
-/// piano e coperta dal `plan_hash` (piano-v5.md#identita-e-fingerprint); il fingerprint del contratto
-/// di input cambia di conseguenza (un piano con decisione non accetta in
-/// riesecuzione l'input non deciso senza rivalidazione).
+/// R4.6.3) ai contratti scoperti.
 ///
-/// Errori espliciti (mai una decisione ignorata in silenzio): input non
-/// fornito o senza colonna geometrica; stato diverso da
-/// `DeclaredUnresolved` (su `Missing` sarebbe un CRS inventato — R4.4; su
-/// `Resolved` una contraddizione del piano); definizione non risolvibile.
-/// I messaggi non riportano valori di dichiarazioni (regola «errori senza
-/// dati»).
+/// La definizione decisa si risolve contro il backend e porta lo stato da
+/// [`ContractCrs::DeclaredUnresolved`] a [`ContractCrs::ResolvedByDecision`],
+/// che in emissione sostituisce le dichiarazioni della sorgente. Lo schema
+/// del contratto di input non cambia; il fingerprint si', e la decisione e'
+/// coperta dal `plan_hash`.
+///
+/// Errori espliciti: input non fornito o senza colonna geometrica; stato
+/// diverso da `DeclaredUnresolved` (R4.4); definizione non risolvibile. I
+/// messaggi non riportano valori di dichiarazioni.
 pub fn apply_crs_decisions(
     probe: &PlanInputsProbe,
     contracts: &mut [(String, DataContract)],

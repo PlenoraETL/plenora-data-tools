@@ -62,16 +62,10 @@ pub(in crate::analyze) fn analyze_melt(
     let value_data_type = if homogeneous {
         value_type
     } else if matches!(config.type_policy, reshape::HeterogeneousTypePolicy::String) {
-        // STESSA prevalidazione del kernel, non solo la policy. Dichiarare
-        // `Utf8` perche' `type_policy = "string"` e' scritto nella config non
-        // basta: il kernel rifiuta i tipi che il formatter non sa convertire
-        // e le timezone non risolvibili, e lo fa guardando SOLO lo schema.
-        // L'analisi guarda lo stesso schema: senza replicarla accetterebbe
-        // piani che l'esecuzione sa gia' impossibili — e un contratto che promette
-        // un output che non verra' mai prodotto e' peggio di un rifiuto.
-        //
-        // La categoria resta `Schema`: e' il tipo della colonna a non essere
-        // convertibile, non il piano a essere malformato.
+        // STESSA prevalidazione del kernel, che rifiuta dallo schema i tipi
+        // non convertibili e le timezone non risolvibili: senza, il contratto
+        // prometterebbe un output che non verra' mai prodotto. La categoria
+        // resta `Schema`: e' il tipo della colonna a non essere convertibile.
         for index in &value_indices {
             let campo = &source_fields[*index];
             crate::validate_text_convertible(campo.data_type(), campo.name())

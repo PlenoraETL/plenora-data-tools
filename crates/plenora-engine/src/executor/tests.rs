@@ -338,22 +338,10 @@ fn attribuzione(error: &PlenoraError) -> (String, String, String) {
 #[test]
 fn il_dettaglio_diagnostico_sopravvive_all_assegnazione_dell_execution_id() {
     // `with_execution_id` RIGENERA il messaggio da `execution_reason` per
-    // le categorie `Execution` e `Cancelled`. Un `with_diagnostics` che
-    // scrivesse il suffisso nel solo `message` lo vedrebbe sparire alla
-    // chiamata successiva.
-    //
-    // Il test esercita la SEQUENZA reale delle due funzioni, non uno stato
-    // costruito a mano: partendo da un `Replayed` senza suffisso, applica
-    // l'arricchimento e poi l'assegnazione dell'id. Scrivendo il suffisso
-    // nel solo `message`, cade.
-    //
-    // Nota di raggiungibilita': con la politica di propagazione attuale non
-    // ho individuato un percorso in cui un errore che passa da
-    // `with_diagnostics` porti categoria `Execution` o `Cancelled` (le
-    // cancellazioni usano `?` e non attraversano l'arricchimento). Il difetto
-    // e' quindi LATENTE: si manifesterebbe appena un errore di quelle
-    // categorie passasse di li'. Un test sulla composizione e' l'unico modo
-    // di fissarlo prima che accada.
+    // `Execution` e `Cancelled`: un suffisso scritto nel solo `message`
+    // sparirebbe. Il test esercita la sequenza reale delle due funzioni su un
+    // `Replayed` senza suffisso. Oggi nessun percorso noto porta quelle
+    // categorie attraverso `with_diagnostics`: il test fissa un difetto latente.
     for categoria in [
         plenora_core::ErrorCategory::Execution,
         plenora_core::ErrorCategory::Cancelled,
@@ -6051,12 +6039,10 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
 }
 
 // ---------------------------------------------------------------------------
-// architettura.md#memoria: staging memory-first degli accepted row-diagnostics
-//
-// La barriera R9.9 resta invariata: nessun accepted esce prima che la
-// scansione sia completa. Cambia solo DOVE i batch attendono. I test che
-// seguono verificano che le due modalita' siano indistinguibili sul
-// risultato, e che il passaggio al disco sia deterministico e completo.
+// architettura.md#memoria: staging memory-first degli accepted row-diagnostics.
+// La barriera R9.9 resta: cambia solo dove i batch attendono. Le due modalita'
+// devono dare lo stesso risultato, e il passaggio al disco essere
+// deterministico e completo.
 // ---------------------------------------------------------------------------
 
 /// Schema e batch delle prove dello staging memory-first: quattro batch da tre righe.
@@ -6696,19 +6682,11 @@ fn staging_fanout_batch(indice: usize) -> RecordBatch {
 
 /// Piano a fan-out: un input, due consumatori row-diagnostics, convergenza.
 ///
-/// Mentre il primo ramo viene drenato, `EdgeShared` conserva i batch gia'
-/// prelevati per il secondo e ne **trattiene i lease** (buffer del tee,
-/// `executor.rs`). Quelle prenotazioni sono vive nel governor ma invisibili a
-/// qualunque contatore locale del ramo: e' la classe che una soglia basata
-/// sul solo contatore locale non coprirebbe.
-///
-/// I rami usano `table.type_cast` da testo a intero — operazione
-/// row-diagnostics — perche' **riduce** i byte: trenta caratteri diventano
-/// otto. Serve a separare le due grandezze. Se il ramo non riducesse,
-/// l'uscita concatenata alla convergenza sarebbe grande almeno quanto
-/// l'input, `check_batch_bytes` costringerebbe `max_batch_bytes` ad essere
-/// altrettanto grande, e quell'headroom coprirebbe **per caso** proprio le
-/// prenotazioni del tee che questo test deve esporre.
+/// Durante il drenaggio del primo ramo `EdgeShared` trattiene i lease dei
+/// batch per il secondo: prenotazioni vive nel governor ma invisibili a un
+/// contatore locale del ramo. I rami usano `table.type_cast` da testo a intero
+/// perche' riduce i byte: altrimenti `max_batch_bytes` dovrebbe crescere e il
+/// suo headroom coprirebbe per caso le prenotazioni del tee.
 fn staging_piano_fanout(primo_ramo_diagnostico: bool) -> serde_json::Value {
     let cast = |id: &str| {
         json!({"id": id, "op": "table.type_cast", "in": ["main"],
@@ -6771,22 +6749,13 @@ fn staging_fanout_esito(
 
 #[test]
 fn staging_fanout_nessun_falso_resource_limit() {
-    // Invariante, non un budget fortunato: per OGNI budget in cui il percorso
-    // disco riesce, deve riuscire anche quello che puo' scegliere la memoria,
-    // con lo stesso risultato e senza sfondare il budget.
+    // Invariante: per ogni budget in cui il percorso disco riesce, riesce
+    // anche quello che puo' scegliere la memoria, con lo stesso risultato.
     //
-    // COPERTURA, detta com'e'. Questo test **non discrimina** fra due
-    // soglie diverse: passa con l'una e con l'altra. La ragione e'
-    // strutturale, ed e' misurata: in un fan-out i due rami devono
-    // riconvergere, e in v1 sempre attraverso un nodo che materializza
-    // (`concat`/`join` binari, `BinaryBlocking`). Quel nodo drena e trattiene
-    // comunque tutti i batch del ramo, quindi il picco governato e' lo STESSO
-    // nelle due modalita' — 143 744 byte in entrambe. Dove il tee trattiene,
-    // la memoria non aggiunge nulla al picco.
-    //
-    // Il test resta come guardia dell'invariante: se comparisse un binario
-    // streaming, uno scheduler parallelo o un altro punto di ritenzione,
-    // questa e' la prima topologia in cui la differenza si vedrebbe.
+    // Il test non discrimina fra soglie diverse: i rami di un fan-out
+    // riconvergono sempre in un nodo che materializza, quindi il picco
+    // governato e' lo stesso nelle due modalita'. Resta come guardia per un
+    // binario streaming, uno scheduler parallelo o un altro punto di ritenzione.
     const PICCOLO: usize = 73_728;
     const BATCH: usize = 32;
     for primo_ramo_diagnostico in [true, false] {
@@ -6841,15 +6810,9 @@ fn staging_output_semplice() -> Output {
 
 #[test]
 fn iterator_pubblico_intercetta_la_contabilita_corrotta() {
-    // L'API che il chiamante usa davvero: `for batch in output`, cioe'
-    // `Iterator`, consumata qui come `collect::<Result<Vec<_>>>()`. Una
-    // contabilita' corrotta non deve mai diventare un successo silenzioso su
-    // questo percorso.
-    //
-    // Corrompendo PRIMA di tirare batch l'errore arriva gia' dalla prima
-    // reservation dell'arco d'ingresso, incapsulato dal tag di fase: e' il
-    // comportamento giusto — piu' presto si ferma, meglio e'. Il caso in cui
-    // a intercettare e' il controllo TERMINALE e' coperto da
+    // L'API reale: `for batch in output`, qui come `collect`. Corrompendo
+    // prima di tirare batch l'errore arriva gia' dalla prima reservation
+    // dell'arco d'ingresso; il controllo terminale e' coperto da
     // `iterator_corrotto_a_meta_stream_emette_una_sola_volta`.
     let output = staging_output_semplice();
     let governor = output.state.governor.clone();

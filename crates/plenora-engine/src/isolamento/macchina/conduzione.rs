@@ -1,39 +1,14 @@
 //! La conduzione: un solo consumatore, e una chiusura che non perde niente.
 //!
-//! # La sequenza causale, e perche' e' quella
+//! Sequenza: si ascolta finche' i fatti terminali non ci sono tutti (o si
+//! decide di chiudere); si chiude l'ingresso del worker; si fermano **e** si
+//! aspettano i produttori; si raccoglie il figlio e poi si legge l'evidenza; si
+//! drena fino a `Disconnected`; si conclude una volta sola.
 //!
-//! 1. **Si ascolta.** I fatti arrivano dai produttori e accendono il registro,
-//!    finche' i tre fatti terminali non ci sono tutti — oppure finche' non si
-//!    decide di chiudere prima.
-//! 2. **Si chiudono gli ingressi.** L'estremo su cui il supervisore scrive cade:
-//!    da quel momento il worker vede la fine del proprio ingresso, e sa che non
-//!    arrivera' altro. Prima di questo passo il canale e' ancora aperto, e
-//!    chiuderlo prima vorrebbe dire rinunciare a poter annullare.
-//! 3. **Si fermano i produttori, e li si aspetta.** Fermarli senza aspettarli
-//!    lascerebbe vive le loro bocchette; aspettarli senza fermarli aspetterebbe
-//!    per sempre. Il loro resoconto torna dal `JoinHandle`, che e' una via che
-//!    non passa dalla coda.
-//! 4. **Si raccoglie il figlio, e si legge l'evidenza.** In quest'ordine, e
-//!    dopo la quiescenza: l'evidenza letta prima misurerebbe un dominio ancora
-//!    abitato.
-//! 5. **Si drena** fino a `Disconnected`.
-//! 6. **Si conclude**, una volta sola.
-//!
-//! # Che cosa garantisce che niente resti fuori
-//!
-//! Due cose, e nessuna delle due e' una promessa a parole.
-//!
-//! **Niente resta fuori dal drenaggio.** Un fatto accodato e' nel canale; il
-//! drenaggio legge finche' il canale non dice `Disconnected`, e il canale lo
-//! dice solo quando **ogni** bocchetta e' caduta — cioe' dopo che ogni
-//! produttore e' stato aspettato. Non c'e' istante in cui il drenaggio smetta
-//! mentre qualcuno puo' ancora scrivere.
-//!
-//! **Niente compare dopo lo snapshot.** Perche' dopo non c'e' piu' nessuno a
-//! cui comparire: `chiudi_e_drena` **consuma la coda**, e con lei il
-//! ricevitore. Non e' che si smetta di guardare: e' che non esiste piu' un
-//! posto da cui prendere. La garanzia sta nel tipo, non nella disciplina di chi
-//! scrive il seguito.
+//! Niente resta fuori dal drenaggio: il canale dice `Disconnected` solo quando
+//! ogni bocchetta e' caduta, cioe' dopo che ogni produttore e' stato aspettato.
+//! Niente compare dopo lo snapshot: `chiudi_e_drena` consuma la coda e il
+//! ricevitore, e la garanzia sta nel tipo.
 
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -65,43 +40,20 @@ const PASSO_DEL_GIRO: Duration = Duration::from_millis(10);
 /// Quanto si concede al dominio, dopo aver deciso di chiudere, prima di
 /// smettere di aspettare i fatti terminali.
 ///
-/// # Perche' un margine e non zero
-///
-/// Perche' fra la decisione di chiudere e la quiescenza c'e' del lavoro vero:
-/// il segnale arriva, i processi muoiono, il cgroup si svuota. Chiudere a zero
-/// riporterebbe «non quiescente» su domini che lo diventano un istante dopo, e
-/// quella riga manderebbe a cercare un residuo che non c'e'.
-///
-/// # Perche' un margine e non un'attesa
-///
-/// Perche' se il dominio non si svuota, non si svuotera' guardandolo piu' a
-/// lungo: c'e' qualcosa che non muore, ed e' un fatto da riportare. Il margine
-/// separa «ci ha messo un momento» da «non e' successo».
+/// Non zero, perche' fra la decisione e la quiescenza c'e' lavoro vero, e un
+/// «non quiescente» spurio manderebbe a cercare un residuo che non c'e'. Non
+/// illimitato, perche' un dominio che non si svuota non si svuota guardandolo
+/// di piu': e' un fatto da riportare.
 pub(super) const MARGINE_DI_CORTESIA: Duration = Duration::from_secs(2);
 
 /// Quanto si aspetta che il dominio si svuoti **dopo** la forzatura.
 ///
-/// # Perche' non e' il margine di cortesia
-///
-/// Perche' misura una cosa diversa. Il margine e' cortesia verso il worker —
-/// «chiudi con calma» — e si concede **prima** di forzare, a un processo che
-/// puo' ancora scegliere. Questa e' il tempo che il kernel impiega a svuotare
-/// davvero il cgroup **dopo** `cgroup.kill`, e non e' concessa a nessuno: e'
-/// solo il ritardo fra il segnale e il suo effetto.
-///
-/// # Perche' senza di lei l'esito dipenderebbe dall'orologio
-///
-/// Perche' l'evidenza di un dominio non ancora vuoto e' una fotografia di
-/// qualcosa che si muove. Il prototipo lo misura: al ritorno della `wait`
-/// l'evidenza di OOM dice zero, e duecento millisecondi dopo dice uno. La
-/// stessa esecuzione, letta troppo presto, diventerebbe `Timeout` invece che
-/// `LimiteAttribuito` — e la differenza non sarebbe nel worker ma in quando il
-/// kernel ha consegnato l'evento.
-///
-/// Mezzo secondo e' il doppio abbondante di cio' che il prototipo ha visto. Non
-/// e' una promessa che basti sempre: se non basta, il dominio resta non
-/// quiescente e **si dichiara**, che e' l'esito giusto per un'osservazione che
-/// non si e' potuta fare.
+/// Non e' il margine di cortesia: e' il ritardo fra `cgroup.kill` e il suo
+/// effetto. Senza, l'evidenza fotograferebbe un dominio che si muove: il
+/// prototipo vede l'evidenza di OOM a zero al ritorno della `wait` e a uno
+/// duecento millisecondi dopo, e la stessa esecuzione diventerebbe `Timeout`
+/// invece di `LimiteAttribuito`. Il valore e' il doppio abbondante di quella
+/// misura; se non basta, il dominio resta non quiescente e **si dichiara**.
 pub(super) const ATTESA_DELLA_QUIESCENZA: Duration = Duration::from_millis(500);
 
 /// Chi legge l'evidenza del dominio.
@@ -130,11 +82,8 @@ pub(super) trait Terminatore {
 
 /// Cio' che sta intorno alla conduzione, e che i casi sostituiscono.
 ///
-/// # Perche' un fascio e non cinque parametri
-///
-/// Perche' cinque parametri in fila si scambiano fra loro senza che il
-/// compilatore se ne accorga, quando due hanno lo stesso tipo. Con i nomi, uno
-/// scambio non compila.
+/// Un fascio con nomi e non parametri in fila: due dello stesso tipo si
+/// scambierebbero senza che il compilatore se ne accorga.
 pub(super) struct Dintorni<O, T, E, P>
 where
     O: Osservatore + Send + 'static,
@@ -155,78 +104,35 @@ where
     pub(super) figlio: FiglioVivo<P>,
     /// Quanto si aspetta che il canale si disconnetta, alla chiusura.
     ///
-    /// # Perche' e' qui e non solo nella coda
-    ///
-    /// Perche' i casi che provano **cosa succede quando la chiusura e'
-    /// sbagliata** — un produttore non fermato, una bocchetta dimenticata —
-    /// devono poterlo fare in fretta. Col tetto di produzione ciascuno di
-    /// quei casi durerebbe mezzo minuto, e una batteria che dura mezz'ora non
-    /// la esegue nessuno: e' il modo in cui un controllo smette di esistere.
-    ///
-    /// La produzione passa [`Coda::tetto_di_produzione`]. Cio' che un
-    /// chiamante di prova puo' variare e' **quanto** si aspetta, mai che cosa
-    /// si conclude.
+    /// La produzione passa [`Coda::tetto_di_produzione`]; i casi che provano
+    /// una chiusura sbagliata lo accorciano per restare veloci. Un chiamante di
+    /// prova varia **quanto** si aspetta, mai che cosa si conclude.
     pub(super) tetto_del_drenaggio: Duration,
     /// Quanto si concede al dominio dopo aver deciso di chiudere.
     ///
-    /// Iniettabile per la stessa ragione del tetto: i casi che percorrono le
-    /// righe in cui si chiude prima — timeout, cancellazione — pagherebbero due
-    /// secondi ciascuno, e una batteria lenta e' una batteria che non si
-    /// esegue. La produzione passa [`MARGINE_DI_CORTESIA`].
+    /// Iniettabile per la stessa ragione del tetto. La produzione passa
+    /// [`MARGINE_DI_CORTESIA`].
     pub(super) margine_di_cortesia: Duration,
     /// Quanto si aspetta che il dominio si svuoti **dopo** la forzatura.
     ///
-    /// # Perche' e' un'attesa a se'
-    ///
-    /// Perche' misura una cosa diversa dal margine. Il margine e' cortesia verso
-    /// il worker — «chiudi con calma» — e si concede **prima** di forzare.
-    /// Questa e' il tempo che il kernel impiega a svuotare davvero il cgroup
-    /// **dopo** il segnale, e senza di lei si leggerebbe l'evidenza di un
-    /// dominio in cui qualcosa sta ancora morendo.
-    ///
-    /// La produzione passa [`ATTESA_DELLA_QUIESCENZA`], dove sta anche la
-    /// misura del prototipo che ne fissa l'ordine di grandezza. I casi la
-    /// accorciano, perche' un caso che aspettasse mezzo secondo per ogni riga
-    /// misurerebbe soprattutto la pazienza di chi lo esegue.
+    /// La produzione passa [`ATTESA_DELLA_QUIESCENZA`], che spiega perche' e'
+    /// un'attesa distinta dal margine; i casi la accorciano.
     pub(super) attesa_della_quiescenza: Duration,
 }
 
 /// Cio' che sta **intorno** all'esito.
 ///
-/// # Perche' il rapporto sta qui e non dentro l'esito
+/// Il rapporto sta qui perche' l'esito puo' mancare, e quando la conclusione
+/// rifiuta il rapporto e' l'unica cosa che dice quali fatti ci sono.
 ///
-/// Perche' l'esito puo' non esserci. Quando la conclusione rifiuta — fatti che
-/// si contraddicono, barriera incompleta, un produttore che non e' nato — chi
-/// legge ha **piu'** bisogno del rapporto, non meno: e' l'unica cosa che dice
-/// quali fatti ci sono. Tenerlo dentro l'esito lo farebbe sparire proprio nei
-/// casi in cui serve.
+/// I difetti sono cose **nostre** e non classificano l'esecuzione, ma entrano
+/// nel giudizio sulla barriera: dicono se si e' visto abbastanza per
+/// concludere. Con la barriera completa restano accanto all'esito.
 ///
-/// # Che cosa fanno i difetti
-///
-/// I difetti sono cose **nostre** — un produttore che non ha potuto dire tutto,
-/// un dominio che non si e' lasciato terminare — e non sono un esito: nessuno di
-/// loro dice come sia andata l'esecuzione, e nessuno di loro la classifica.
-///
-/// Entrano pero' nel **giudizio sulla barriera**. Non e' una contraddizione: la
-/// barriera non chiede «com'e' andata», chiede «l'ho visto abbastanza da poterlo
-/// dire». Un produttore che non ha accodato e un drenaggio che ha rinunciato
-/// sono esattamente le ragioni per cui la risposta puo' essere no. Tenerli fuori
-/// significherebbe concludere su un'osservazione che sappiamo incompleta —
-/// sapendolo, e tacendolo.
-///
-/// Sui cammini in cui la barriera e' completa restano dove stanno: accanto
-/// all'esito, non al suo posto.
-/// # Perche' porta il figlio non raccolto
-///
-/// Perche' un processo che non si e' lasciato raccogliere **esiste ancora**, e
-/// il difetto che lo dice non lo raccoglie. Lasciarlo cadere qui dentro
-/// significherebbe scaricarne la proprieta' su una riga di testo: la riga
-/// descrive la perdita, e poi la perdita accade.
-///
-/// La guardia risale quindi a chi ha chiamato la conduzione, che e' l'unico
-/// sopra di lei a poter ancora riprovare o a decidere di fermarsi. E se anche
-/// lui la lascia cadere, la sentinella e' ancora armata: la proprieta' non si
-/// perde mai in silenzio, si perde con un abort.
+/// Il figlio non raccolto esiste ancora, e la sua guardia risale a chi ha
+/// chiamato la conduzione, l'unico che puo' riprovare o fermarsi. Se anche lui
+/// la lascia cadere, la sentinella abortisce: la proprieta' non si perde in
+/// silenzio.
 pub(super) struct Contorno<P: ProcessoFiglio> {
     /// Che cosa il registro aveva, riga per riga.
     pub(super) rapporto: Vec<(&'static str, String)>,
@@ -243,10 +149,8 @@ pub(super) struct Contorno<P: ProcessoFiglio> {
     pub(super) abitato: Option<String>,
     /// L'`Annulla` che non si e' potuto mandare.
     ///
-    /// Separato dagli altri perche' dice una cosa sua: il worker **non ha
-    /// saputo** che qualcuno vuole fermarlo, e quindi non ha modo di
-    /// chiudere ordinatamente. Il margine gli e' stato concesso lo stesso, ma su
-    /// una richiesta che non gli e' arrivata.
+    /// Separato perche' dice che il worker **non ha saputo** di essere fermato:
+    /// il margine gli e' stato concesso su una richiesta che non gli e' arrivata.
     pub(super) annulla: Option<String>,
     /// Il figlio che non si e' lasciato raccogliere, **ancora sotto guardia**.
     ///
@@ -297,19 +201,9 @@ impl<P: ProcessoFiglio> Contorno<P> {
 
 /// Ascolta i fatti finche' c'e' qualcosa da ascoltare.
 ///
-/// # La chiusura, quando si decide di chiuderla
-///
-/// Nell'ordine della §8.1, e **una volta sola**:
-///
-/// 1. si **chiede** al worker di smettere, ma solo se qualcuno ha annullato: su
-///    un tempo scaduto non si chiede, perche' il tempo che ha e' quello e
-///    riaprire una conversazione finita gli darebbe un'attesa in piu' che
-///    nessuno gli ha concesso;
-/// 2. si aspetta il **margine di cortesia** — un worker che chiude un file
-///    ordinatamente lascia meno lavoro al cleanup di uno terminato a meta';
-/// 3. scaduto il margine, si **forza**. Non prima: forzare nello stesso istante
-///    in cui si chiede vorrebbe dire non aver chiesto niente, e il margine
-///    sarebbe una riga di documento senza un comportamento sotto.
+/// Decisa la chiusura, nell'ordine della §8.1 e **una volta sola**: si chiede
+/// (solo su cancellazione), si aspetta il margine di cortesia, e solo dopo si
+/// forza.
 fn ascolta<T: Terminatore>(
     coda: &super::coda::Coda,
     registro: &mut Registro,
@@ -320,10 +214,8 @@ fn ascolta<T: Terminatore>(
     attesa_della_quiescenza: Duration,
 ) {
     let mut scadenza_di_cortesia = None;
-    // Distinto dalla scadenza: e' **la decisione**, e la decisione si prende una
-    // volta anche quando la scadenza non si e' potuta calcolare. Legarla alla
-    // scadenza fa richiamare il terminatore a ogni giro nel caso in cui la
-    // scadenza manchi.
+    // Distinto dalla scadenza: la decisione si prende una volta anche quando la
+    // scadenza non si e' potuta calcolare.
     let mut gia_deciso_di_chiudere = false;
     // Distinto ancora: dopo la forzatura si torna ad ascoltare, e senza questo
     // la condizione del margine forzerebbe a ogni giro.
@@ -337,10 +229,8 @@ fn ascolta<T: Terminatore>(
         if registro.si_deve_chiudere() && !gia_deciso_di_chiudere {
             gia_deciso_di_chiudere = true;
 
-            // 1. Si **chiede** al worker di smettere, se e' lui che qualcuno
-            //    vuole annullare. Su un tempo scaduto non si chiede: il tempo
-            //    che ha e' quello, e riaprire una conversazione il cui
-            //    tempo e' finito darebbe al worker un'attesa in piu' che
+            // 1. Si **chiede** al worker di smettere, solo su cancellazione: su
+            //    un tempo scaduto chiedere gli darebbe un'attesa in piu' che
             //    nessuno gli ha concesso.
             if registro.cancellazione_richiesta() {
                 if let Err(motivo) = manda_annulla(ingresso_verso_il_worker) {
@@ -348,16 +238,10 @@ fn ascolta<T: Terminatore>(
                 }
             }
 
-            // 2. Il **margine di cortesia**. Un worker che sta chiudendo un file
-            //    ordinatamente lascia meno lavoro al cleanup di uno terminato a
-            //    meta'. Non e' una garanzia di reazione: e' una preferenza con
-            //    una scadenza.
-            //
-            //    `checked_add` puo' rendere `None`. Lasciare `None` sarebbe il
-            //    peggio dei due mondi: non ci sarebbe nessuna scadenza a fermare
-            //    l'attesa, e la terminazione forzata non arriverebbe mai. Una
-            //    scadenza non rappresentabile vale quindi **gia' passata**, e lo
-            //    si dice.
+            // 2. Il **margine di cortesia**: una preferenza con una scadenza,
+            //    non una garanzia di reazione. Una scadenza non rappresentabile
+            //    vale **gia' passata**, e lo si dice: senza scadenza la
+            //    forzatura non arriverebbe mai.
             if let Some(quando) = std::time::Instant::now().checked_add(margine_di_cortesia) {
                 scadenza_di_cortesia = Some(quando);
             } else {
@@ -371,29 +255,17 @@ fn ascolta<T: Terminatore>(
         }
 
         // 3. Scaduto il margine, la **terminazione forzata** del dominio. Non
-        //    prima: forzare nello stesso istante in cui si chiede vorrebbe dire
-        //    non aver chiesto niente, e il margine sarebbe una riga di
-        //    documento senza un comportamento sotto.
+        //    prima: forzare subito vorrebbe dire non aver chiesto niente.
         if let Some(scadenza) = scadenza_di_cortesia {
             if !gia_forzato && std::time::Instant::now() >= scadenza {
                 gia_forzato = true;
                 if let Err(motivo) = terminatore.termina() {
                     difetti.terminazione = Some(motivo);
                 }
-                // 4. E **si continua ad ascoltare**, perche' la forzatura non e'
-                //    la fine: e' cio' che *rende* quiescente il dominio, e la
-                //    quiescenza arriva un momento dopo. Smettere qui
-                //    vorrebbe dire leggere l'evidenza di un dominio in cui
-                //    qualcosa puo' ancora morire, e un OOM consegnato dopo
-                //    non e' un OOM avvenuto dopo: la stessa esecuzione
-                //    diventerebbe `Timeout` o `LimiteAttribuito` secondo quando
-                //    arriva.
-                //    La seconda scadenza si calcola come la prima, e come la
-                //    prima puo' non essere rappresentabile. Un `or_else` muto la
-                //    farebbe valere «gia' passata» **senza dirlo**: si
-                //    smetterebbe di aspettare la quiescenza al giro dopo, e chi
-                //    legge un dominio non quiescente cercherebbe un residuo
-                //    invece di una somma che non si e' potuta fare.
+                // 4. E **si continua ad ascoltare**: la quiescenza arriva un
+                //    momento dopo la forzatura (vedi `ATTESA_DELLA_QUIESCENZA`).
+                //    Una seconda scadenza non rappresentabile si dichiara, come
+                //    la prima, invece di valere «gia' passata» in silenzio.
                 if let Some(quando) = std::time::Instant::now().checked_add(attesa_della_quiescenza)
                 {
                     scadenza_di_cortesia = Some(quando);
@@ -432,17 +304,10 @@ fn ascolta<T: Terminatore>(
 
 /// Raccoglie il figlio, poi legge l'evidenza, e accoda cio' che ha visto.
 ///
-/// # Perche' in quest'ordine, e perche' senza ritorni anticipati
-///
-/// L'ordine: l'evidenza letta prima della raccolta misurerebbe un dominio in cui
-/// qualcosa puo' ancora succedere, e riporterebbe numeri che un istante dopo
-/// sono altri.
-///
-/// L'assenza di ritorni anticipati: ogni passo qui **produce evidenza**, e
-/// tornare indietro la sopprimerebbe da li' in poi. Un figlio che non si lascia
-/// raccogliere e' un difetto; ma se per quel difetto non si leggesse piu'
-/// l'evidenza del dominio, il rapporto direbbe «evidenza non letta» — e
-/// manderebbe a cercare un problema di lettura dove il problema e' un figlio.
+/// In quest'ordine, perche' l'evidenza letta prima della raccolta misurerebbe un
+/// dominio ancora in movimento. Senza ritorni anticipati, perche' ogni passo
+/// produce evidenza: un figlio non raccolto non deve sopprimere la lettura del
+/// dominio.
 fn chiudi_il_figlio_e_leggi<P: ProcessoFiglio, E: LettoreDiEvidenza>(
     figlio: FiglioVivo<P>,
     evidenza: &mut E,
@@ -450,10 +315,6 @@ fn chiudi_il_figlio_e_leggi<P: ProcessoFiglio, E: LettoreDiEvidenza>(
     difetti: &mut Contorno<P>,
     dominio_quiescente: bool,
 ) {
-    //
-    // In quest'ordine. L'evidenza letta prima della raccolta misurerebbe un
-    // dominio in cui qualcosa puo' ancora succedere, e riporterebbe numeri che
-    // un istante dopo sono altri.
     let pid = figlio.pid();
     let uscita = match figlio.termina_e_raccogli(
         LIMITE_DI_RACCOLTA,
@@ -470,13 +331,8 @@ fn chiudi_il_figlio_e_leggi<P: ProcessoFiglio, E: LettoreDiEvidenza>(
             guardia,
             difetti: quali,
         } => {
-            // La guardia **risale**, e non si scarica qui.
-            //
-            // Rinunciare dichiarandolo — pid nel rapporto, difetto accanto —
-            // sembra diligenza ed e' una perdita: la riga descrive un processo
-            // vivo, e poi lo lascia vivo. Sopra c'e' chi ha chiamato la
-            // conduzione, che puo' ancora riprovare o decidere di fermarsi, e la
-            // scelta e' sua.
+            // La guardia **risale** a chi ha chiamato (vedi `Contorno`), e non
+            // si scarica su una riga di rapporto.
             let mut quali = quali;
             if let Some(numero) = guardia.pid() {
                 quali.push(format!(
@@ -491,12 +347,9 @@ fn chiudi_il_figlio_e_leggi<P: ProcessoFiglio, E: LettoreDiEvidenza>(
     };
     accoda_l_uscita(uscita, pid, raccoglitore);
 
-    // L'evidenza si legge **solo** su un dominio quiescente. Su un dominio
-    // ancora abitato i contatori non sono un'osservazione: sono una fotografia
-    // di qualcosa che si sta muovendo, e attribuire su quella firma
-    // significherebbe far dipendere l'esito da quando il kernel ha consegnato un
-    // evento. Non leggerla non e' rinunciare a un'informazione: e' rifiutarne
-    // una che non ha significato.
+    // L'evidenza si legge **solo** su un dominio quiescente: su uno abitato i
+    // contatori si muovono ancora, e l'esito dipenderebbe da quando il kernel
+    // consegna un evento.
     if !dominio_quiescente {
         let _ = raccoglitore.manda(Fatto::OsservazioneImpossibile {
             chi: "evidenza",
@@ -526,11 +379,8 @@ fn chiudi_il_figlio_e_leggi<P: ProcessoFiglio, E: LettoreDiEvidenza>(
 
 /// Ferma i produttori, li aspetta, e prende il loro resoconto.
 ///
-/// # Perche' le due cose insieme
-///
-/// Perche' separarle e' il modo di sbagliarle. Fermare senza aspettare lascia
-/// vive le bocchette e il canale non si disconnette; aspettare senza fermare
-/// aspetta per sempre. Sono un gesto solo, e stanno in una funzione sola.
+/// Un gesto solo: fermare senza aspettare lascia vive le bocchette, aspettare
+/// senza fermare aspetta per sempre.
 fn ferma_e_aspetta(
     fili: [(&'static str, JoinHandle<Resoconto>, Freno); 3],
     difetti: &mut Contorno<impl ProcessoFiglio>,
@@ -559,28 +409,16 @@ type Avviati = Vec<(&'static str, JoinHandle<Resoconto>, Freno)>;
 
 /// Fa nascere i tre produttori, in ordine.
 ///
-/// # Perche' uno per volta e non tutti insieme
-///
-/// Perche' ognuno puo' non nascere: `Builder::spawn` rende un errore quando il
-/// sistema rifiuta un thread, e quel rifiuto arriva al secondo o al terzo tanto
-/// quanto al primo. Farli nascere uno per volta significa sapere **chi** ha
-/// rifiutato e **quali** sono gia' vivi — cioe' avere in mano cio' che serve per
-/// tornare indietro.
+/// Uno per volta, perche' ognuno puo' non nascere (`Builder::spawn` puo'
+/// rifiutare): cosi' si sa **chi** ha rifiutato e **quali** sono gia' vivi.
 ///
 /// # Errors
 ///
-/// Il nome di chi non e' nato, il motivo che il sistema ha dato, l'elenco di
-/// quelli gia' vivi, e **l'osservatore**.
-///
-/// L'elenco non e' un dettaglio: senza, chi si ritira non saprebbe chi fermare,
-/// e resterebbero produttori vivi con la loro bocchetta — il canale non si
-/// disconnetterebbe mai.
-///
-/// L'osservatore nemmeno: chi si ritira forza il dominio, e poi deve
-/// **guardare** se si e' svuotato. Su tutti e tre i cammini il sorvegliante non
-/// e' mai nato — e' l'ultimo — quindi l'osservatore c'e' ancora: nei primi due
-/// perche' non e' stato usato, nel terzo perche' la nascita mancata lo rende
-/// indietro.
+/// Il nome di chi non e' nato, il motivo del sistema, l'elenco di quelli gia'
+/// vivi (da fermare, o il canale non si disconnetterebbe mai) e l'osservatore,
+/// che serve a chi si ritira per guardare se il dominio si e' svuotato. Il
+/// sorvegliante nasce per ultimo, quindi su ogni cammino d'errore l'osservatore
+/// c'e' ancora.
 fn fai_nascere_i_produttori<R, O>(
     canale: CanaleOperativo<R>,
     osservatore: O,
@@ -628,12 +466,8 @@ where
 
 /// Cio' che serve per chiudere, comunque vada.
 ///
-/// # Perche' un fascio e non sei argomenti
-///
-/// Perche' sono le stesse sei cose su due cammini opposti — i produttori nascono
-/// oppure no — e tenerle insieme dice che la chiusura e' **una**: chi si ritira
-/// da una nascita parziale fa cio' che fa la conduzione completa, non una
-/// versione ridotta.
+/// Le stesse cose servono sia se i produttori nascono sia se no: la chiusura e'
+/// **una**, e la rinuncia non ne fa una versione ridotta.
 struct PerChiudere<T: Terminatore, P: ProcessoFiglio> {
     /// La bocchetta con cui si accoda l'uscita del figlio.
     raccoglitore: Bocchetta,
@@ -651,28 +485,14 @@ struct PerChiudere<T: Terminatore, P: ProcessoFiglio> {
 
 /// Accoda l'uscita del figlio, **com'e'**.
 ///
-/// # Perche' una funzione sola per due cammini
+/// Una funzione sola per la chiusura ordinaria e per la rinuncia, perche' la
+/// conversione non diverga fra le due.
 ///
-/// Perche' i cammini sono due — la chiusura ordinaria e la rinuncia a una
-/// nascita parziale — e la conversione e' una. Due copie sono due occasioni di
-/// divergere, e quella che diverge e' sempre la seconda: basta che la rinuncia
-/// scarti `NonRappresentabile` insieme a `None` perche' «il sistema non sa dirmi
-/// come e' finito» valga «non e' ancora finito».
-///
-/// # Perche' `NonRappresentabile` non e' `None`
-///
-/// Perche' dicono due cose opposte. `None` e' «non l'ho raccolto», e il difetto
-/// della raccolta lo dice gia'; accodare qualcosa li' inventerebbe un'uscita che
-/// nessuno ha visto. `NonRappresentabile` e' «l'ho raccolto, ed **e' finito**, ma
-/// il sistema non riporta ne' un codice ne' un segnale»: e' un'osservazione
-/// mancata su un'uscita avvenuta. Trattarla come niente la farebbe leggere come
-/// un worker ancora vivo, e la barriera direbbe «l'uscita non e' stata osservata»
-/// senza dire che qualcuno ha guardato e non ha capito.
-///
-/// # Perche' successo, codice e segnale restano tre cose
-///
-/// Perche' chi classifica deve poterle distinguere: un'uscita a zero, una
-/// diversa da zero e una morte per segnale sono tre righe diverse della matrice.
+/// `None` e' «non raccolto», e il difetto della raccolta lo dice gia': non si
+/// accoda niente. `NonRappresentabile` e' un'uscita **avvenuta** che il sistema
+/// non sa descrivere, e si accoda come osservazione impossibile: trattarla come
+/// `None` la farebbe leggere come un worker ancora vivo. Codice e segnale
+/// restano distinti perche' sono righe diverse della matrice.
 fn accoda_l_uscita(uscita: Option<Uscita>, pid: Option<u32>, raccoglitore: &mut Bocchetta) {
     match uscita {
         Some(Uscita::Codice(codice)) => {
@@ -696,20 +516,12 @@ fn accoda_l_uscita(uscita: Option<Uscita>, pid: Option<u32>, raccoglitore: &mut 
 
 /// Guarda il dominio finche' non si e' svuotato, o finche' non e' troppo tardi.
 ///
-/// # Perche' guardare, quando si e' gia' chiesto
+/// Serve perche' `cgroup.kill` e' **asincrono**: la scrittura torna, e i
+/// processi muoiono dopo.
 ///
-/// Perche' `cgroup.kill` e' **asincrono**: la scrittura torna, e i processi
-/// muoiono dopo. Fermarsi alla chiamata vorrebbe dire riportare «ho chiesto»
-/// lasciando credere «e' successo», e un dominio ancora abitato ha contatori che
-/// non sono un'osservazione.
-///
-/// # Che cosa accoda
-///
-/// La quiescenza, se arriva. L'impossibilita' di guardare, se l'osservatore
-/// manca o rifiuta. **Niente**, se il tempo finisce: «non si e' svuotato entro»
-/// non e' un fatto sul dominio, e' l'assenza del fatto atteso — e la
-/// barriera la tratta come tale. Il motivo va accanto, fra i difetti, perche'
-/// senza chi legge vedrebbe un dominio abitato e nessuna spiegazione.
+/// Accoda la quiescenza se arriva, l'impossibilita' di guardare se
+/// l'osservatore manca o rifiuta, e **niente** se il tempo finisce: e' l'assenza
+/// del fatto atteso, e il motivo va fra i difetti.
 fn guarda_che_si_sia_svuotato<O: Osservatore>(
     osservatore: Option<O>,
     entro: Duration,
@@ -724,11 +536,8 @@ fn guarda_che_si_sia_svuotato<O: Osservatore>(
         return;
     };
 
-    // La scadenza e' **assoluta**, come quella del drenaggio: una che si
-    // rinnovasse a ogni giro non finirebbe mai su un dominio che risponde.
-    // `checked_add` puo' non rappresentarla, e allora non si aspetta — ma lo si
-    // dice, perche' un'attesa saltata in silenzio si legge come un'attesa
-    // scaduta.
+    // La scadenza e' **assoluta**, come quella del drenaggio. Se non e'
+    // rappresentabile non si aspetta, e lo si dice.
     let Some(fine) = std::time::Instant::now().checked_add(entro) else {
         difetti.resoconti.push(format!(
             "attesa della quiescenza: {} ms non sono rappresentabili come scadenza, e non si guarda",
@@ -743,10 +552,7 @@ fn guarda_che_si_sia_svuotato<O: Osservatore>(
                 let _ = raccoglitore.manda(Fatto::DominioQuiescente);
                 return;
             }
-            // Ancora abitato, oppure interrotto: in tutti e due i casi si
-            // riprova. Un'interruzione non e' una mancanza — la lettura non e'
-            // avvenuta, e riprovarla la fa avvenire — e un dominio pieno non e'
-            // una risposta definitiva finche' c'e' tempo.
+            // Ancora abitato, oppure interrotto: finche' c'e' tempo si riprova.
             Ok(false) | Err(Difetto::Interrotta) => (),
             Err(Difetto::Impossibile(motivo)) => {
                 let _ = raccoglitore.manda(Fatto::OsservazioneImpossibile {
@@ -769,18 +575,9 @@ fn guarda_che_si_sia_svuotato<O: Osservatore>(
 
 /// Torna indietro da una partenza parziale.
 ///
-/// # Perche' l'ordine e' questo
-///
-/// Prima si fermano e si aspettano i fili gia' vivi, perche' finche' vivono
-/// vivono le loro bocchette. Poi cadono le bocchette che il conduttore tiene per
-/// se'. Poi **si raccoglie il figlio**: e' l'unica cosa che non si puo'
-/// saltare, perche' `FiglioVivo` lasciato cadere fa abortire il processo — la
-/// sentinella non distingue un cammino sfortunato da un `?` dimenticato, ed e'
-/// giusto cosi'.
-///
-/// Non si classifica — non c'e' un'esecuzione osservata da classificare — ma si
-/// fa tutto il resto: si chiude il dominio, si **guarda che si sia svuotato**,
-/// si raccoglie il figlio e si drena.
+/// Non si classifica, ma si fa tutto il resto: si chiude il dominio, si guarda
+/// che si sia svuotato, si fermano i fili gia' vivi, si **raccoglie il figlio**
+/// (un `FiglioVivo` lasciato cadere fa abortire il processo) e si drena.
 fn rinuncia<T: Terminatore, P: ProcessoFiglio, O: Osservatore>(
     chi: &'static str,
     errore: &std::io::Error,
@@ -803,20 +600,14 @@ fn rinuncia<T: Terminatore, P: ProcessoFiglio, O: Osservatore>(
     } = per_chiudere;
     let mut raccoglitore = raccoglitore;
 
-    // 1. Il dominio si chiude. Il worker **esiste gia'** — lo `spawn` e'
-    //    avvenuto prima di arrivare qui — e puo' avere discendenti: rinunciare
-    //    senza chiuderlo lascerebbe processi vivi in un dominio che nessuno
-    //    guarda piu'.
+    // 1. Il dominio si chiude: il worker **esiste gia'** e puo' avere
+    //    discendenti.
     if let Err(motivo) = terminatore.termina() {
         difetti.terminazione = Some(motivo);
     }
 
-    // 2. E si **guarda** che si sia svuotato.
-    //
-    //    Chiedere non e' osservare: `cgroup.kill` e' asincrono, e una rinuncia
-    //    che si fermasse alla chiamata direbbe «ho chiesto» lasciando credere
-    //    «e' successo». Il sorvegliante qui non c'e' — su tutti i cammini della
-    //    rinuncia non e' mai nato — quindi si guarda da soli.
+    // 2. E si **guarda** che si sia svuotato, da soli: sui cammini della
+    //    rinuncia il sorvegliante non e' mai nato.
     guarda_che_si_sia_svuotato(
         osservatore,
         attesa_della_quiescenza,
@@ -869,10 +660,8 @@ fn rinuncia<T: Terminatore, P: ProcessoFiglio, O: Osservatore>(
     }
     difetti.dal_produttore(raccoglitore.resoconto());
 
-    // 5. Si drena. Il lettore puo' aver gia' accodato, e chi ha ricevuto
-    //    l'annullatore puo' aver gia' annullato: quei fatti esistono, e buttarli
-    //    renderebbe il rapporto una pagina bianca su un'esecuzione che qualcosa
-    //    aveva gia' detto.
+    // 5. Si drena: il lettore e l'annullatore possono aver gia' accodato, e
+    //    quei fatti vanno nel rapporto.
     let (tardivi, difetto_di_drenaggio) = coda.chiudi_e_drena_entro(tetto_del_drenaggio);
     difetti.drenaggio = difetto_di_drenaggio;
     let mut registro = Registro::default();
@@ -902,21 +691,13 @@ fn riunisci(difetti: &[String]) -> Option<String> {
 
 /// Il motivo che accompagna l'`Annulla`.
 ///
-/// Fisso e non descrittivo di chi ha annullato: il motivo viaggia sul filo
-/// verso un processo che non deve sapere niente di chi sta dall'altra parte, e
-/// un testo variabile sarebbe una via per cui qualcosa del supervisore finisce
-/// nel worker.
+/// Fisso: un testo variabile porterebbe nel worker qualcosa del supervisore.
 const MOTIVO_DELL_ANNULLA: &str = "annullato dal supervisore";
 
 /// Manda l'`Annulla` sul filo, e si assicura che parta.
 ///
-/// # Perche' `flush` e non solo `write_all`
-///
-/// Perche' `write_all` mette i byte dove il tipo li accetta, che non e'
-/// necessariamente il descrittore: con uno scrittore bufferizzato la richiesta
-/// resterebbe in memoria fino alla prossima occasione, e la prossima occasione
-/// qui e' la **chiusura dell'ingresso** — cioe' dopo il margine, quando ormai
-/// non serve piu'.
+/// Serve `flush`: con uno scrittore bufferizzato la richiesta partirebbe solo
+/// alla chiusura dell'ingresso, dopo il margine, quando non serve piu'.
 ///
 /// # Errors
 ///
@@ -936,12 +717,9 @@ fn manda_annulla(ingresso: &mut impl std::io::Write) -> std::result::Result<(), 
 
 /// Conduce un tentativo dall'inizio alla classificazione.
 ///
-/// # Chi puo' annullare
-///
-/// Chi riceve l'annullatore da `consegna_annullatore`, che viene chiamata
-/// **prima** che la conduzione si metta ad ascoltare. E' l'unico momento utile:
-/// dopo, questa funzione non torna finche' non ha concluso, e un annullatore
-/// consegnato alla fine potrebbe annullare solo cio' che e' gia' finito.
+/// Puo' annullare chi riceve l'annullatore da `consegna_annullatore`, chiamata
+/// **prima** di mettersi ad ascoltare: dopo, la funzione non torna finche' non
+/// ha concluso.
 ///
 /// # Errors
 ///
@@ -977,18 +755,11 @@ where
 
     let mut difetti = Contorno::default();
     let (coda, fascio) = apri();
-    // L'annullatore si consegna **prima** di mettersi ad ascoltare. Tenerlo per
-    // se' vorrebbe dire che nessuno puo' annullare mentre si ascolta, cioe' in
-    // ogni momento in cui annullare serve: la cancellazione diventerebbe una
-    // parola del documento senza un modo di dirla.
+    // L'annullatore si consegna **prima** di mettersi ad ascoltare.
     let annullatore = std::sync::Arc::new(Annullatore::nuovo(fascio.annullatore));
     consegna_annullatore(&annullatore);
-    // I tre fili nascono **uno per volta**, e ognuno puo' non nascere. Quando
-    // uno rifiuta, si torna indietro su quelli gia' vivi: fermarli, aspettarli,
-    // e lasciar cadere le bocchette. Senza il rollback resterebbero produttori
-    // vivi con la loro bocchetta, il canale non si disconnetterebbe mai, e —
-    // peggio — `FiglioVivo` cadrebbe senza passare da nessuna delle sue porte,
-    // facendo scattare la sentinella su un cammino che e' solo sfortunato.
+    // Se un filo non nasce, `rinuncia` torna indietro su quelli gia' vivi e
+    // raccoglie il figlio.
     let per_chiudere = PerChiudere {
         raccoglitore: fascio.raccoglitore,
         figlio,
@@ -1038,11 +809,6 @@ where
     let mut registro = Registro::nuovo(ruolo);
 
     // --- 1. si ascolta ------------------------------------------------------
-    //
-    // In una funzione sua perche' e' una regola intera: si ascolta finche' i
-    // produttori hanno da dire, e quando si decide di chiudere si segue la
-    // §8.1 — si chiede, si aspetta, si forza. Leggerla in mezzo al resto la
-    // farebbe sembrare una serie di condizioni invece di una sequenza.
     ascolta(
         &coda,
         &mut registro,
@@ -1061,10 +827,6 @@ where
     drop(ingresso_verso_il_worker);
 
     // --- 3. si fermano i produttori, e li si aspetta ------------------------
-    //
-    // In una funzione sua: non per lunghezza, ma perche' e' una sequenza con
-    // una regola propria — fermare, aspettare, raccogliere il resoconto — che si
-    // legge tutta insieme o non si legge.
     ferma_e_aspetta(
         [
             ("lettore", filo_lettore, freno_lettore),
@@ -1073,25 +835,16 @@ where
         ],
         &mut difetti,
     );
-    // La bocchetta dell'annullatore cade qui. Chi lo ha ricevuto puo' tenerne
-    // ancora una copia: `deponi` la svuota comunque, e da quel momento la sua
-    // richiesta non accoda piu' niente — il che e' giusto, perche' la coda non
-    // ascolta piu'.
+    // La bocchetta dell'annullatore cade qui: `deponi` la svuota anche se chi
+    // lo ha ricevuto ne tiene una copia.
     difetti.dal_produttore(annullatore.deponi());
 
     // --- 4. si prende cio' che i produttori hanno gia' detto ----------------
     //
-    // **Prima** di decidere se leggere l'evidenza, e non dopo. I tre fili sono
-    // stati fermati e aspettati: cio' che hanno accodato e' tutto qui, e
-    // nient'altro puo' arrivare da loro.
-    //
-    // Senza questo passo la quiescenza accodata **dopo l'ultima interrogazione
-    // del giro** resterebbe invisibile fino al drenaggio finale: l'evidenza
-    // verrebbe saltata perche' il registro dice ancora «abitato», e il drenaggio
-    // subito dopo renderebbe il registro quiescente. La conclusione troverebbe
-    // la barriera completa e classificherebbe **senza evidenza** — «tempo
-    // scaduto» su un'esecuzione uccisa dall'OOM. E' una finestra piccola, ed e'
-    // esattamente la finestra in cui i fatti terminali arrivano.
+    // **Prima** di decidere se leggere l'evidenza. Una quiescenza accodata dopo
+    // l'ultima interrogazione resterebbe invisibile fino al drenaggio: l'evidenza verrebbe
+    // saltata e la conclusione classificherebbe **senza evidenza** («tempo
+    // scaduto» su un'esecuzione uccisa dall'OOM).
     for fatto in coda.raccogli_i_fermi() {
         registro.applica(fatto);
     }
@@ -1109,9 +862,8 @@ where
 
     // --- 6. si drena --------------------------------------------------------
     //
-    // Restano i fatti che questa funzione stessa ha appena accodato — l'uscita
-    // del figlio, l'evidenza — e nient'altro: qui il drenaggio serve a vederli
-    // e a stabilire che il canale si e' davvero disconnesso.
+    // Restano l'uscita del figlio e l'evidenza; il drenaggio stabilisce anche
+    // che il canale si e' davvero disconnesso.
     let (tardivi, difetto_di_drenaggio) = coda.chiudi_e_drena_entro(tetto_del_drenaggio);
     for fatto in tardivi {
         registro.applica(fatto);
@@ -1120,12 +872,9 @@ where
     difetti.drenaggio = difetto_di_drenaggio;
 
     // --- 7. si conclude, una volta sola ------------------------------------
-    // La conclusione riceve i difetti della conduzione: un figlio non
-    // raccolto, un'evidenza illeggibile, un produttore morto o un drenaggio
-    // incompleto sono ragioni per **non proseguire**, e tenerli in una seconda
-    // meta' della tupla li lascerebbe accanto a un permesso di andare avanti.
-    // Il rapporto si prende **prima** di concludere, perche' `concludi` consuma
-    // il registro e perche' deve uscire anche quando la conclusione rifiuta.
+    // La conclusione riceve i difetti della conduzione, che sono ragioni per
+    // **non proseguire**. Il rapporto si prende prima: `concludi` consuma il
+    // registro, e il rapporto deve uscire anche quando la conclusione rifiuta.
     difetti.rapporto = registro.evidenza_dei_fatti();
     let verdetto = registro.concludi(&difetti.righe());
     (verdetto, difetti)

@@ -1,53 +1,17 @@
 //! Che cosa si vede su una destinazione, dopo che qualcuno ha provato a
-//! pubblicarci.
+//! pubblicarci; e il passo 9, la pubblicazione atomica no-clobber
+//! ([`pubblica`]).
 //!
-//! # Che cosa vive qui
+//! Separato da [`crate::verifica`] perche' la verifica non tocca niente,
+//! mentre il passo 9 rende visibile un output ed e' irreversibile.
 //!
-//! La **superficie pubblica** della domanda «com'e' andata?»: le cinque
-//! osservazioni che si possono fare su una destinazione dato il token di un
-//! tentativo, e le ragioni per cui una destinazione esistente puo' restare
-//! non giudicabile.
-//!
-//! I passi da 3 a 8-bis stanno in [`crate::verifica`]; il passo 9 — la
-//! pubblicazione atomica no-clobber — sta qui, in [`pubblica`].
-//!
-//! # Perche' un modulo separato da `verifica`
-//!
-//! Perche' i due hanno confini diversi. `verifica` **non tocca niente**: apre,
-//! legge, confronta, e qualunque cosa concluda lascia il mondo come lo trova. Il
-//! passo 9 invece e' l'unico che rende visibile un output, ed e' irreversibile:
-//! dopo, nessun evento successivo puo' renderlo non riuscito.
-//!
-//! Tenerli nello stesso modulo direbbe che sono la stessa specie di cosa, e la
-//! specie e' proprio cio' che li distingue: uno si puo' rifare, l'altro no.
-//!
-//! # I tre vincoli che questo modulo rispetta
-//!
-//! **Il passo 9 non accetta un percorso.** Un `&Path` non porta con se' la prova
-//! di aver superato i passi da 3 a 8-bis: chiunque potrebbe costruirne uno e
-//! chiedere di pubblicare un file che nessuno ha verificato. Cio' che il passo 9
-//! consuma e' [`ArtefattoVerificato`], **opaco e prodotto soltanto dal
-//! verificatore**, con i campi privati e nessun costruttore aperto — la stessa
-//! forma di `isolamento::NumeriDelCanale`, dove «rivalidato» e' una proprieta'
-//! del tipo e non una promessa nel commento di chi lo costruisce. E lo consuma
-//! per valore: una prova che si potesse riusare direbbe che due pubblicazioni
-//! diverse hanno la stessa verifica dietro.
-//!
-//! **Il residuo dice che cosa e dove, e sa di non sapere.** Nel ripiego di
-//! `persist_noclobber` — `hard_link` seguito da `unlink`, con l'errore
-//! dell'`unlink` ignorato — il temporaneo puo' restare al suo posto. I soli byte
-//! non basterebbero: chi deve bonificare ha bisogno del percorso. E
-//! l'accertamento stesso puo' fallire, **dopo** un commit gia' riuscito: percio'
-//! `geo_transport::publish::PuliziaDelTemporaneo` sa dire «non l'ho potuto
-//! accertare», che non e' ne' «niente da bonificare» ne' un fallimento della
-//! pubblicazione. E' la stessa distinzione a tre stati della quiescenza di un
-//! dominio, e per la stessa ragione: confondere «vuoto» con «non l'ho potuto
-//! guardare» e' fail-open.
-//!
-//! **La durabilita' e il residuo restano due fatti.** Uno riguarda la
-//! destinazione, l'altro il temporaneo; comprimerli in un enum solo
-//! costringerebbe a inventare una variante per ogni combinazione. Stanno percio'
-//! sui due assi di `geo_transport::publish::EsitoDellaPubblicazione`.
+//! - Il passo 9 non accetta un percorso: consuma per valore
+//!   [`ArtefattoVerificato`], opaco e prodotto solo dal verificatore.
+//! - Il residuo del temporaneo dice che cosa e dove, e sa dire «non l'ho
+//!   potuto accertare» (`geo_transport::publish::PuliziaDelTemporaneo`):
+//!   confondere «vuoto» con «non guardato» e' fail-open.
+//! - Durabilita' e residuo restano due assi di
+//!   `geo_transport::publish::EsitoDellaPubblicazione`.
 
 use std::io::{ErrorKind, Write};
 use std::path::Path;
@@ -68,18 +32,9 @@ use crate::ipc_boundary::{
 
 /// Che cosa si vede guardando una destinazione, dato il token di un tentativo.
 ///
-/// # Perche' osservazioni e non decisioni
-///
-/// Perche' chi chiama sa cose che questo codice non sa: se quel percorso e'
-/// suo, se qualcun altro ci scrive, se ritentare abbia senso. Rendere una
-/// decisione — «riprova», «rinuncia» — vorrebbe dire prenderla al posto suo con
-/// meno informazioni delle sue.
-///
-/// # Perche' non e' un `Result`
-///
-/// Perche' nessuna di queste cinque e' un guasto di questa funzione: sono tutte
-/// osservazioni riuscite. Anche [`Self::InvalidOrUnreadable`] dice che si e'
-/// guardato e che cosa si e' trovato, non che l'osservazione sia fallita.
+/// Osservazioni e non decisioni: chi chiama sa se il percorso e' suo e se
+/// ritentare abbia senso. Non e' un `Result` perche' ognuna e'
+/// un'osservazione riuscita, anche [`Self::InvalidOrUnreadable`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OsservazioneDelCommit {
     /// La destinazione esiste, porta **questo** token, e sigillo e struttura
@@ -110,29 +65,13 @@ pub enum OsservazioneDelCommit {
 
 /// Perche' una destinazione esistente non si e' potuta giudicare.
 ///
-/// # Perche' strutturata invece che un testo
+/// Strutturata, perche' le decisioni che ne seguono sono diverse e un testo
+/// cambia con piattaforma e lingua. Ogni guasto che il codice sa distinguere
+/// ha una voce sua; gli altri stanno in [`Self::GuastoDiLettura`], invece di
+/// ricevere una diagnosi precisa e falsa.
 ///
-/// Perche' le decisioni che ne seguono sono diverse, e un testo obbligherebbe
-/// chi legge a distinguerle confrontando stringhe che cambiano con la
-/// piattaforma e con la lingua del sistema. Un permesso negato si risolve con i
-/// permessi; un sigillo che non corrisponde e' un file da non toccare.
-///
-/// # Perche' otto e non cinque
-///
-/// Perche' cinque sono le **osservazioni**, non le ragioni. Un elenco che
-/// coprisse solo permesso, framing, sigillo e footer costringerebbe a
-/// classificare come «framing non valido» un disco che risponde male, o come
-/// «footer rifiutato» un tetto del confine superato: due diagnosi false che
-/// mandano chi legge dalla parte sbagliata. Ogni guasto che il codice sa
-/// distinguere ha una voce sua; quelli che non sa distinguere stanno in
-/// [`Self::GuastoDiLettura`], che dice esattamente quello.
-///
-/// # Che cosa non porta
-///
-/// Nessun byte dei dati e nessun frammento di percorso oltre quello che il
-/// chiamante ha gia' passato: dice **di che genere** di guasto si tratta, non
-/// che cosa il file contiene. E' la stessa regola di ogni altro errore del
-/// progetto, e vale anche qui perche' questa e' superficie pubblica.
+/// Non porta byte dei dati ne' frammenti di percorso: dice di che genere e'
+/// il guasto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RagioneNonLeggibile {
     /// Il file c'e' e non si apre: permessi.
@@ -168,24 +107,11 @@ pub enum RagioneNonLeggibile {
 
 /// Che cosa c'e' sulla destinazione, dato il token di un tentativo.
 ///
-/// Non e' un metodo dell'oggetto d'esecuzione: quell'oggetto puo' mancare, ed e'
-/// proprio la situazione in cui la domanda si pone.
-///
-/// # Perche' non rende un `Result`
-///
-/// Perche' ogni esito qui e' un'**osservazione riuscita**, compreso quello che
-/// dice di non poter concludere. Chi chiama non riceve risposta dal processo
-/// incaricato di pubblicare, e cio' che gli serve e' sapere cosa c'e' sul
-/// disco: un errore lo costringerebbe a distinguere «non ho potuto guardare» da
-/// «ho guardato e non si capisce», che e' proprio la distinzione che
-/// [`RagioneNonLeggibile`] gli da' gia'.
-///
-/// # Quali tetti applica
-///
-/// Quelli di default del confine. La destinazione e' un artefatto che questo
-/// programma ha prodotto, non un ingresso di terzi, e la firma non porta limiti
-/// perche' chiederli a chi ha perso il processo vorrebbe dire chiedergli di
-/// ricostruire anche il budget della scrittura.
+/// Non e' un metodo dell'oggetto d'esecuzione, che e' proprio cio' che puo'
+/// mancare. Non rende un `Result`: ogni esito e' un'osservazione riuscita, e
+/// [`RagioneNonLeggibile`] distingue gia' cio' che non si conclude. Applica i
+/// tetti di default del confine: la destinazione e' un artefatto nostro, e chi
+/// ha perso il processo non deve ricostruire il budget della scrittura.
 #[must_use]
 pub fn risolvi_commit(commit_token: &CommitToken, destinazione: &Path) -> OsservazioneDelCommit {
     // Una **sola** apertura, e da qui in poi si legge solo da quell'handle:
@@ -229,24 +155,13 @@ pub fn risolvi_commit(commit_token: &CommitToken, destinazione: &Path) -> Osserv
 
 /// Legge l'artefatto fino in fondo, e butta via cio' che legge.
 ///
-/// # Perche' non basta il footer
+/// Il footer dice dove stanno i blocchi, non che cosa contengano, e il
+/// formato Arrow file non ha un checksum complessivo: per sapere se i corpi si
+/// leggono bisogna leggerli. Si fa solo quando il token e' il nostro.
 ///
-/// Perche' il footer descrive **dove** stanno i blocchi, non che cosa
-/// contengano: un file con envelope e footer intatti e corpi illeggibili passa
-/// ogni controllo di struttura. Il formato Arrow file non ha un checksum
-/// sull'intero contenuto, quindi l'unico modo di sapere se i corpi si leggono
-/// e' leggerli.
-///
-/// Si fa **solo** quando il token e' il nostro. Un tentativo altrui e un token
-/// assente non affermano niente sulla leggibilita', quindi pagarne la lettura
-/// sarebbe spesa senza risposta.
-///
-/// # Che cosa questo **non** dimostra
-///
-/// Che i byte siano quelli verificati. Il digest dichiarato vive nell'`Esito`
-/// del worker, e chi arriva qui l'`Esito` non ce l'ha — e' precisamente la
-/// situazione in cui la domanda si pone. `CommittedMatching` dice «di questo
-/// tentativo, e leggibile per intero», non «identico a cio' che fu verificato».
+/// **Non dimostra** che i byte siano quelli verificati: il digest vive
+/// nell'`Esito`, che qui manca. `CommittedMatching` dice «di questo tentativo,
+/// e leggibile per intero».
 fn percorri_i_corpi(
     artefatto: ArtefattoConvalidato,
 ) -> std::result::Result<(), RagioneNonLeggibile> {
@@ -285,18 +200,9 @@ const fn non_leggibile(ragione: RagioneNonLeggibile) -> OsservazioneDelCommit {
 
 /// Da che cosa il confine ha rifiutato, a **perche'** chi legge non conclude.
 ///
-/// # Perche' le voci del confine si elencano, e il resto no
-///
-/// Perche' `ArrowTransportError` copre due domini: il confine — apertura,
-/// sigillo, framing, tetti, footer — e l'esecuzione dei kernel. Elencarle tutte
-/// obbligherebbe a decidere qui che ragione dare a un guasto di `polygonize`,
-/// che questa porta non puo' produrre: aprire e validare un file non esegue
-/// nessuna operazione.
-///
-/// Si elencano quindi **tutte** le voci del confine, una per una, perche' li'
-/// una variante nuova deve costringere a scegliere. Il ramo finale raccoglie il
-/// resto e lo dichiara per quello che e': un guasto che questa porta non sa
-/// distinguere, ed e' meglio dirlo che dargli una voce piu' precisa e falsa.
+/// Si elencano tutte le voci del confine di `ArrowTransportError`, perche' li'
+/// una variante nuova deve costringere a scegliere; il ramo finale raccoglie
+/// le voci dei kernel, che aprire e validare un file non puo' produrre.
 fn ragione_di(causa: &ArrowTransportError) -> RagioneNonLeggibile {
     use ArrowTransportError as E;
     match causa {
@@ -364,33 +270,11 @@ fn ragione_di(causa: &ArrowTransportError) -> RagioneNonLeggibile {
 
 /// L'artefatto che ha superato i passi da 3 a 8-bis.
 ///
-/// # Perche' un tipo, e non un percorso
-///
-/// Perche' un `&Path` non porta con se' nessuna prova: chiunque potrebbe
-/// costruirne uno e chiedere di pubblicare un file che nessuno ha verificato. Un
-/// tipo con i campi privati e nessun costruttore aperto rende quella pretesa
-/// **irrappresentabile**: l'unico modo di averne uno e' che il verificatore lo
-/// abbia prodotto, e produrlo significa aver attraversato la sequenza.
-///
-/// E' la stessa forma di `isolamento::NumeriDelCanale`, dove «rivalidato» e' cio'
-/// che il tipo significa e non una promessa nel commento di chi lo costruisce.
-///
-/// # Perche' conserva l'handle, e non lo riapre
-///
-/// Perche' riaprire per percorso darebbe al passo 9 la possibilita' di trovare
-/// un file **diverso** da quello verificato: fra la verifica e la
-/// pubblicazione ci sarebbe una finestra, e la prova varrebbe per un file che
-/// non e' piu' quello. L'handle e' lo stesso che ha letto il sigillo.
-///
-/// # Perche' non e' clonabile
-///
-/// Perche' una prova che si potesse duplicare direbbe che due pubblicazioni
-/// diverse hanno la stessa verifica dietro. Il passo 9 la **consuma**.
-///
-/// # Perche' non deriva `Debug`
-///
-/// Perche' porterebbe il digest in ogni log che stampasse la prova, e il digest
-/// e' l'identita' di un artefatto. Il tipo che la custodisce non la mostra.
+/// Campi privati e nessun costruttore aperto: averne uno significa che il
+/// verificatore l'ha prodotto. Conserva l'handle che ha letto il sigillo,
+/// perche' riaprire per percorso aprirebbe una finestra verso un file diverso.
+/// Non e' clonabile (il passo 9 lo consuma) e non deriva `Debug`, che
+/// porterebbe il digest nei log.
 pub(crate) struct ArtefattoVerificato {
     /// L'handle gia' aperto e convalidato: la sorgente dei byte da pubblicare.
     artefatto: ArtefattoConvalidato,
@@ -420,38 +304,16 @@ impl ArtefattoVerificato {
 
 /// Passo 9: rende visibile l'artefatto verificato, **senza mai sostituire**.
 ///
-/// # Perche' copia invece di spostare il file
+/// Copia attraverso il commit atomico no-clobber gia' qualificato nel crate
+/// invece di spostare il file, che richiederebbe una seconda implementazione
+/// per piattaforma. Costo dichiarato: una lettura e una scrittura integrali in
+/// piu'. Condizione di rientro: una primitiva cross-platform qualificata che
+/// committi un file esistente conservando no-clobber e l'osservabilita' della
+/// pulizia.
 ///
-/// Perche' il commit atomico no-clobber ha gia' un'autorita' qualificata in
-/// questo crate — tempfile nella directory di destinazione, `sync_all`, retry
-/// sui guasti transitori, `persist_noclobber`, `fsync` della directory secondo
-/// il profilo — e quell'autorita' scrive **attraverso un writer**. Spostare il
-/// file dov'e' vorrebbe dire una seconda implementazione del commit: su Unix
-/// `renameat2(RENAME_NOREPLACE)` con ripiego, su Windows `MoveFileExW`, cioe'
-/// codice per piattaforma e una dipendenza nuova, per riottenere garanzie che
-/// gia' esistono e sono provate.
-///
-/// **Il costo e' dichiarato**: una lettura e una scrittura integrali in piu', e
-/// le due copie coesistono fino al commit. E' lo stesso genere di costo gia'
-/// accettato per il passo 5-bis, e per la stessa ragione: si paga una passata
-/// per non fidarsi.
-///
-/// **Condizione di rientro**: una primitiva cross-platform qualificata che
-/// committi direttamente un file esistente conservando no-clobber e
-/// l'osservabilita' della pulizia.
-///
-/// # Che cosa si pretende durante la copia
-///
-/// Il **numero esatto** di byte verificati, preteso prima di leggere: la prova
-/// e l'handle portano quel numero da due momenti diversi, e se si contraddicono
-/// la prova non riguarda questo handle. Poi lo **SHA-256 ricalcolato sui byte
-/// effettivamente copiati**, confrontato prima del commit. Non e' una ripetizione
-/// del passo 5-bis: quello ha misurato i byte letti allora, questo misura i byte
-/// che finiscono nella destinazione. Fra i due c'e' una copia, ed e' proprio la
-/// copia a poter sbagliare.
-///
-/// Qualunque divergenza ferma la closure, e una closure che si ferma vuol dire
-/// che il commit non avviene: la destinazione **non appare**.
+/// Durante la copia si pretendono il numero esatto di byte verificati e lo
+/// SHA-256 ricalcolato sui byte copiati; qualunque divergenza ferma la closure
+/// e la destinazione non appare.
 ///
 /// # Errors
 ///
@@ -491,17 +353,10 @@ fn copia_accertando(
     digest_atteso: &Esadecimale32,
     uscita: &mut dyn Write,
 ) -> Result<()> {
-    // Il conteggio, chiesto al descrittore **adesso**: e' una misura nuova, non
-    // la copia di quella che la prova gia' porta. Confrontare `byte_verificati`
-    // con `artefatto.byte_totali()` sarebbe tautologico — entrambi vengono
-    // dall'apertura, e il duplicato porta con se' lo stesso valore — mentre
-    // interrogare il descrittore scopre l'unica cosa che puo' essere successa
-    // davvero: il file mutato **in place** dopo la verifica.
-    //
-    // Dopo il ciclo non ci sarebbe niente da chiedere: il ciclo legge a offset
-    // esatti e `leggi_a` **fallisce** invece di consegnare corto, quindi un
-    // confronto finale fra `copiati` e il numero che ha guidato il ciclo
-    // direbbe solo che il ciclo ha girato.
+    // Il conteggio si chiede al descrittore adesso: confrontare con
+    // `artefatto.byte_totali()` sarebbe tautologico, mentre il descrittore
+    // scopre la mutazione in place dopo la verifica. Dopo il ciclo non serve
+    // un confronto: `leggi_a` fallisce invece di consegnare corto.
     let misurati = artefatto.misura_ora()?;
     if misurati != byte_verificati {
         // Non e' un difetto interno: e' il file sotto di noi che e' cambiato.

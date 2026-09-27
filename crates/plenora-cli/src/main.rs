@@ -1,47 +1,22 @@
-//! Interfaccia a riga di comando di plenora-data-tools (architettura.md).
+//! Interfaccia a riga di comando di plenora-data-tools (architettura.md, cli.md).
 //!
-//! Un solo eseguibile serve tre gruppi di comandi che non condividono il
-//! percorso di esecuzione:
+//! Un solo eseguibile per tre gruppi di comandi che non condividono il
+//! percorso di esecuzione: tabellari (`run`, `self-test`), geospaziali
+//! (`capabilities`, `transform`, `spatial-join`, `transform-arrow`,
+//! `pair-arrow`) e sul catalogo unificato (`catalog`, `validate`).
 //!
-//! - tabellari: `run --plan --input [--right] --output` (lettura Arrow IPC
-//!   file format, streaming batch-per-batch se nessuno step e' blocking,
-//!   limiti righe globali, publish atomico con `persist_noclobber`),
-//!   `self-test` (integrita' del catalogo);
-//! - geospaziali: `capabilities`, `transform` (framing WKB v2 `PLNGEO2`),
-//!   `spatial-join` (v2), `transform-arrow` (envelope v3 `PLNGEO3`),
-//!   `pair-arrow` (v3), `self-test --output`;
-//! - sul catalogo unificato di `plenora-core`: `catalog [--family
-//!   table|geo]` e `validate --plan --inputs ...`.
+//! **Superficie a compatibilita' congelata**: i comandi geospaziali e `run`
+//! sui piani `schema_version <= 3` (modulo `cli::commands::legacy`). `validate`
+//! e `run` sui piani DAG passano da `plenora_engine::planner::validate` ed
+//! `execute`: la v4 migra al canonico v5, la v6 ha parser e dominio di
+//! `plan_hash` propri.
 //!
-//! **Superficie a compatibilita' congelata**: i comandi geospaziali e il solo
-//! `run` sui piani `schema_version <= 3`. Li' formato sul filo, messaggi ed
-//! exit code sono quelli che chi gia' invoca l'eseguibile si aspetta, e
-//! cambiarli e' una rottura (vedi il modulo `cli::commands::legacy`). Il
-//! `run` sui piani DAG non e' in quel perimetro.
-//!
-//! # Le tre versioni del piano non collassano l'una nell'altra
-//!
-//! `validate` e `run` instradano sul planner/executor del DAG
-//! (`plenora_engine::planner::validate` + `plenora_engine::execute`):
-//! `schema_version: 5`; `4`, migrato al canonico v5 prima di ogni altra cosa
-//! (piano-v5.md, migrazione), con cui condivide l'identita'; e `6`, che ha un
-//! parser proprio, puo' dichiarare `max_domain_memory_bytes` e sta nel
-//! **proprio** dominio di `plan_hash`. I piani con `schema_version` <= 3
-//! restano sul `table_engine`. Dettagli nella sezione "DAG" piu' sotto.
-//!
-//! # Fail-closed
-//!
-//! Nessun output parziale, publish atomico su tempfile +
-//! `persist_noclobber`, messaggi senza dati sensibili, e mai un'uscita a zero
-//! dopo un errore. L'exit code dipende dalla **categoria** dell'errore: la
-//! tabella sta in `docs/cli.md` e la decisione per ciascuna categoria in
-//! [`cli::error_envelope::exit_code_di`] — qui non si duplica.
-//!
-//! Cancellazione cooperativa (errori-e-limiti.md#cancellazione): `run`
-//! installa un handler Ctrl-C che cancella l'esecuzione DAG tramite
-//! `CancellationToken` — al cancel nessun output e' pubblicato, messaggio
-//! pulito ed exit code dedicato 130 (128 + SIGINT); un secondo Ctrl-C forza
-//! l'uscita immediata.
+//! Fail-closed: nessun output parziale, publish atomico no-clobber, messaggi
+//! senza dati, mai un'uscita a zero dopo un errore. L'exit code dipende dalla
+//! categoria ([`cli::error_envelope::exit_code_di`], tabella in `docs/cli.md`).
+//! Ctrl-C cancella l'esecuzione DAG in modo cooperativo senza pubblicare
+//! nulla, con exit 130; il secondo forza l'uscita
+//! (errori-e-limiti.md#cancellazione).
 
 use std::borrow::Cow;
 use std::env;
@@ -139,13 +114,8 @@ pub(crate) fn contract(message: impl Into<String>) -> PlenoraError {
 
 /// Costruttore esplicito dei limiti di RISORSA della CLI.
 ///
-/// Esiste per la stessa ragione per cui esiste `contract`: rendere la
-/// categoria visibile nel punto d'uso. Facendo passare tetti e traboccamenti
-/// da `contract` uscirebbero come `invalid_plan`, e un censimento della
-/// classe — che cerca le occorrenze di `PlenoraError::ResourceLimit` — non li
-/// troverebbe, perche' sarebbero nascosti dietro un helper. Due costruttori
-/// distinti rendono la scelta leggibile a chi scrive e cercabile a chi
-/// verifica.
+/// Come `contract`, rende la categoria visibile e cercabile nel punto d'uso:
+/// passando da `contract` tetti e traboccamenti uscirebbero `invalid_plan`.
 pub(crate) fn limite_risorsa(message: impl Into<String>) -> PlenoraError {
     PlenoraError::ResourceLimit(message.into())
 }
@@ -237,16 +207,12 @@ pub(crate) fn strip_output_format(args: Vec<String>) -> Result<Vec<String>, Plen
     Ok(rimanenti)
 }
 
-/// Handler Ctrl-C (errori-e-limiti.md#cancellazione): il primo Ctrl-C cancella il token —
-/// l'executor si ferma al prossimo confine cooperativo con
-/// `PlenoraError::Cancelled` e la CLI esce con [`EXIT_CANCELLED`] senza
-/// pubblicare nulla; il secondo forza l'uscita immediata (comportamento
-/// accettato e documentato in errori-e-limiti.md: un kernel `NonInterruptible` in corso
-/// non offre altri punti di interruzione).
+/// Handler Ctrl-C (errori-e-limiti.md#cancellazione).
 ///
-/// `ctrlc::set_handler` e' installabile una sola volta per processo: la CLI
-/// esegue un comando per processo, quindi un fallimento e' un errore vero
-/// (fail-closed).
+/// Il primo Ctrl-C cancella il token: l'executor si ferma al prossimo confine
+/// cooperativo e la CLI esce con [`EXIT_CANCELLED`] senza pubblicare nulla.
+/// Il secondo forza l'uscita immediata. `ctrlc::set_handler` si installa una
+/// volta per processo, quindi un fallimento e' un errore vero.
 pub(crate) fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), PlenoraError> {
     let token = token.clone();
     let requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -275,55 +241,24 @@ pub(crate) fn install_ctrlc_handler(token: &CancellationToken) -> Result<(), Ple
     .map_err(|error| contract(format!("handler ctrl-c non installabile: {error}")))
 }
 
-/// Gestore SIGINT del **percorso isolato** (`isolamento::esecuzione_isolata`,
-/// `PR-12`) — non installa [`install_ctrlc_handler`] sopra, e per una
-/// ragione precisa: `ctrlc::set_handler` fa nascere un thread che vive per
-/// tutta la vita del processo (verificato nel suo sorgente, nessun modo di
-/// fermarlo o unirlo), e quel thread fa fallire
-/// `isolamento::canale::accerta_monothread` — che accerta un solo task,
-/// adesso, subito prima di rendere i descrittori ereditabili — a
-/// **entrambe** le finestre di spawn (worker e verificatore), non solo alla
-/// prima.
+/// Gestore SIGINT del **percorso isolato** (`isolamento::esecuzione_isolata`).
 ///
-/// # Il meccanismo, e perche' copre tutte e tre le finestre
+/// Non usa [`install_ctrlc_handler`]: `ctrlc::set_handler` crea un thread
+/// permanente, che farebbe fallire `isolamento::canale::accerta_monothread` a
+/// entrambe le finestre di spawn. `signal_hook::flag::register` e
+/// `register_conditional_shutdown` non creano thread: installano una
+/// `sigaction` per tutta la vita del processo e scrivono direttamente
+/// [`CancellationToken::condividi_flag`], quindi coprono worker, transizione
+/// e verificatore.
 ///
-/// `signal_hook::flag::register`/`register_conditional_shutdown` non fanno
-/// nascere nessun thread (verificato leggendo il sorgente della crate, fino
-/// a `libc::sigaction`, non assunto dal nome): installano una vera
-/// `sigaction`, **una sola volta per tutta la vita del processo** — non
-/// nascono ne' muoiono a ogni finestra. Scrivono direttamente
-/// [`CancellationToken::condividi_flag`]: lo stesso bit che il motore gia'
-/// controlla ai confini cooperativi, senza un thread intermedio che lo
-/// faccia per loro. Percio' la copertura e' identica nella fase worker,
-/// nella transizione fra le due fasi e nella fase verificatore — non c'e'
-/// un'installazione per finestra da ripetere o da perdere.
+/// La chiusura di shutdown va registrata per prima (lo impone la sua doc): al
+/// primo Ctrl-C trova il flag `false` e non esce, al secondo lo trova `true`
+/// ed esce con `signal_hook::low_level::exit`.
 ///
-/// # L'ordine di registrazione non e' arbitrario
-///
-/// La doc di `register_conditional_shutdown` impone: "the shutdown must go
-/// first". Registrata per prima, quella chiusura legge il valore che il flag
-/// ha immediatamente **prima** di questa consegna del segnale: al primo
-/// Ctrl-C lo trova
-/// `false` (nessuna pressione precedente) e non esce; la seconda
-/// registrazione lo mette a `true` subito dopo. Al secondo Ctrl-C (in
-/// qualunque delle tre finestre: il flag e' lo stesso `Arc` per tutto il
-/// processo) la prima registrazione lo trova gia' `true` ed esce
-/// immediatamente con `signal_hook::low_level::exit`.
-///
-/// # Differenze dichiarate rispetto a [`install_ctrlc_handler`]
-/// (errori-e-limiti.md#cancellazione) — non equivalenza presunta
-///
-/// - **Nessun messaggio interattivo**: le due chiusure installate qui sono
-///   quelle fisse e gia' verificate della crate (uno `store` atomico, un
-///   confronto piu' `low_level::exit`) — non c'e' un punto per iniettare una
-///   `eprintln!` senza scrivere `unsafe` nel workspace. Il messaggio del
-///   primo Ctrl-C ("annullamento in corso...") non compare sul percorso
-///   isolato; quello del secondo non e' raggiungibile in nessun percorso,
-///   perche' l'uscita e' immediata e async-signal-safe per costruzione.
-/// - **Il secondo Ctrl-C esce con `signal_hook::low_level::exit`, non
-///   `std::process::exit`**: stesso codice ([`EXIT_CANCELLED`] = 130), ma
-///   senza eseguire `atexit`/flush — nessuna garanzia di cleanup, esplicita
-///   nella doc stessa della funzione, non solo nella nostra.
+/// Differenze da [`install_ctrlc_handler`] (errori-e-limiti.md#cancellazione):
+/// nessun messaggio interattivo, perche' le chiusure sono quelle fisse della
+/// crate e iniettarne uno richiederebbe `unsafe`; il secondo Ctrl-C esce con
+/// lo stesso codice ([`EXIT_CANCELLED`]) ma senza `atexit` ne' flush.
 ///
 /// # Errors
 ///
@@ -355,33 +290,19 @@ pub(crate) fn installa_gestore_segnale_isolato(
 /// Esito tipizzato del publish (errori-e-limiti.md#publish-e-cleanup) in forma verificabile, **senza
 /// scrivere su stderr**.
 ///
-/// Un avviso su stderr sarebbe invisibile a un consumatore automatico e
-/// insieme una crepa nel contratto «stderr vuoto»
-/// (errori-e-limiti.md#envelope-e-canali). Il chiamante lo riporta invece nel
-/// proprio documento di uscita, dove chi legge le metriche lo trova senza
-/// intercettare un canale che per contratto non porta nulla.
-///
-/// Con il profilo `Atomic` l'esito e' sempre `Published`; il ramo non
-/// confermato serve ai chiamanti che useranno `DurableAtomic`.
+/// Il chiamante lo riporta nel proprio documento di uscita: stderr resta
+/// vuoto per contratto (errori-e-limiti.md#envelope-e-canali). Con il profilo
+/// `Atomic` l'esito e' sempre `Published`.
 pub(crate) const fn durabilita_confermata(outcome: PublishOutcome) -> bool {
     !matches!(outcome, PublishOutcome::PublishedButDurabilityUnconfirmed)
 }
 
 /// L'esito di una pubblicazione, nei campi del documento di uscita.
 ///
-/// # Perche' due campi e non uno
-///
-/// Perche' la durabilita' riguarda la destinazione e la pulizia il temporaneo:
-/// chi legge deve poter sapere che l'output c'e' **e** che e' rimasta
-/// spazzatura, senza dover dedurre l'una dall'altra.
-///
-/// # Perche' `temp_cleanup` e' sempre un oggetto
-///
-/// Perche' chi consuma il documento non deve prima scoprire di che **tipo** e'
-/// il valore. Una stringa per un caso e un oggetto per gli altri costringe a
-/// due rami prima ancora di leggere lo stato, e il giorno che «rimosso»
-/// acquistasse un campo la forma cambierebbe sotto chi la legge. Lo stato sta
-/// sempre in `state`; gli altri campi dipendono da lui.
+/// Due campi, perche' durabilita' della destinazione e pulizia del
+/// temporaneo sono fatti distinti. `temp_cleanup` e' sempre un oggetto, con
+/// lo stato in `state`, cosi' chi lo consuma non deve prima scoprirne il
+/// tipo.
 pub(crate) fn campi_della_pubblicazione(esito: &EsitoDellaPubblicazione) -> Vec<(String, Value)> {
     let pulizia = match &esito.pulizia {
         PuliziaDelTemporaneo::Rimosso => serde_json::json!({ "state": "removed" }),
@@ -423,24 +344,9 @@ pub(crate) fn campi_della_pubblicazione(esito: &EsitoDellaPubblicazione) -> Vec<
 
 /// Scrive il percorso del residuo in una forma **ricostruibile**.
 ///
-/// # Perche' non `Path::display()`
-///
-/// Perche' `display()` e' dichiaratamente lossy: sostituisce con `U+FFFD` cio'
-/// che non e' testo valido. Un'indicazione di bonifica con un carattere
-/// sostituito indica un file che non esiste, ed e' peggio di nessuna
-/// indicazione: manda a cancellare il nome sbagliato, o a cercare invano.
-///
-/// # Perche' non `OsStr::as_encoded_bytes`
-///
-/// Perche' quella e' una forma **interna**, che la libreria standard dichiara
-/// non specificata: si puo' ridare a `OsStr` nello stesso processo, e nient'altro
-/// e' promesso. Un consumatore che legge il documento non ha quel processo, e
-/// non ha nessun contratto su come interpretare quegli ottetti. Riportarli
-/// sarebbe dire «esatti» di byte che nessuno sa rileggere.
-///
-/// # La forma, e come si rilegge
-///
-/// `path_encoding` c'e' **sempre**, e dice come leggere il resto:
+/// Non `Path::display()`, che e' lossy e indicherebbe un file che non esiste;
+/// non `OsStr::as_encoded_bytes`, forma interna non specificata. Si usano le
+/// codifiche native, e `path_encoding` c'e' sempre:
 ///
 /// | `path_encoding` | campo | come si ricostruisce |
 /// |---|---|---|
@@ -448,13 +354,7 @@ pub(crate) fn campi_della_pubblicazione(esito: &EsitoDellaPubblicazione) -> Vec<
 /// | `unix_bytes` | `path_units`, interi 0-255 | `OsStringExt::from_vec` |
 /// | `windows_utf16` | `path_units`, interi 0-65535 | `OsStringExt::from_wide` |
 ///
-/// Sono le codifiche **native** dei due sistemi: su Unix un percorso e' una
-/// sequenza di byte che non deve essere testo, su Windows una sequenza di unita'
-/// UTF-16 che puo' contenere surrogati spaiati. Chi ricostruisce usa la funzione
-/// standard della propria piattaforma, non una conversione nostra.
-///
-/// `path` resta quando il percorso e' testo valido, che e' il caso ordinario:
-/// un umano lo legge, e un programma lo usa senza decodificare niente.
+/// `path` resta quando il percorso e' testo valido, il caso ordinario.
 fn aggiungi_il_percorso(oggetto: &mut serde_json::Map<String, Value>, percorso: &Path) {
     if let Some(testo) = percorso.to_str() {
         oggetto.insert("path_encoding".to_owned(), Value::String("utf8".to_owned()));
@@ -507,16 +407,9 @@ fn unita_native(_percorso: &Path) -> (&'static str, Vec<Value>) {
 
 /// L'esito della pubblicazione, come frammento di un documento scritto a mano.
 ///
-/// # Perche' esiste
-///
-/// Perche' alcuni comandi costruiscono il proprio JSON con `format!` invece che
-/// con `serde_json`, e riscriverli tutti per aggiungere due campi cambierebbe
-/// ordine e formattazione di documenti che qualcuno gia' legge. Questo rende i
-/// **soli** campi nuovi, gia' virgolettati e con l'escape giusto, pronti da
-/// concatenare dopo l'ultimo campo esistente.
-///
-/// Non c'e' virgola in testa ne' in coda: la mette chi compone, che e' l'unico
-/// a sapere dove sta.
+/// Per i comandi che compongono il JSON con `format!`: rende i soli campi
+/// nuovi, gia' con l'escape giusto, senza virgola in testa ne' in coda, cosi'
+/// ordine e formattazione dei documenti esistenti non cambiano.
 pub(crate) fn frammento_della_pubblicazione(esito: &EsitoDellaPubblicazione) -> String {
     campi_della_pubblicazione(esito)
         .into_iter()
@@ -563,8 +456,8 @@ fn argument_value(args: &[String], name: &str) -> Result<String, PlenoraError> {
 }
 
 /// Formato dei due output Arrow legacy. L'assenza del flag conserva
-/// l'envelope PLNGEO3 storico; qualunque valore non dichiarato fallisce
-/// prima di aprire il percorso di pubblicazione.
+/// l'envelope PLNGEO3; qualunque valore non dichiarato fallisce prima di
+/// aprire il percorso di pubblicazione.
 pub(crate) fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, PlenoraError> {
     let Some(position) = args.iter().position(|value| value == "--output-format") else {
         return Ok(ArrowOutputFormat::PlnGeo3);
@@ -583,43 +476,15 @@ pub(crate) fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, 
 // DAG: scoperta dei contratti, validate e run
 // ---------------------------------------------------------------------------
 //
-// Un piano con `schema_version: 4` segue il percorso del DAG:
-//
-// - **scoperta dei contratti di input**: per ogni percorso si legge il solo
-//   header Arrow IPC (file format o stream format, sniffato dal magic
-//   `ARROW1`) e si costruisce il `DataContract`: schema Arrow e, se una
-//   colonna porta i metadati GeoArrow (`ARROW:extension:name = geoarrow.wkb`
-//   + metadato `geo` con chiave `crs`) o le chiavi canoniche, il
-//   `GeometryColumnContract` con lo stato CRS deciso da
-//   `contract_crs_from_keys` (risolto se una sola rappresentazione,
-//   `DeclaredUnresolved` se dichiarato o in conflitto decidibile, `Missing`
-//   se assente — R4.6.3). Metadati incoerenti (estensione senza `geo.crs`,
-//   `geo` senza estensione, colonna non `Binary`, piu' di una colonna
-//   geometrica — D16) sono rifiutati. Il `FieldId` della geometria di
-//   input e' provvisorio: il planner lo rimappa nel namespace del grafo;
-// - **decisioni CRS del piano** (`crs_decisions`, R4.6.3): applicate ai
-//   contratti scoperti prima della validazione — la definizione decisa
-//   sostituisce uno stato `DeclaredUnresolved` (risolta col backend PROJ,
-//   feature-dispatch come gli altri percorsi);
-// - **accoppiamento input**: i percorsi di `--input`/`--inputs` sono legati
-//   agli input dichiarati dal piano **in ordine di dichiarazione**
-//   (posizionale, deterministico); un conteggio diverso e' un errore;
-// - **validate**: `planner::validate` (la validazione statica, quella su
-//   header e metadati — D8;
-//   piano-v5.md#identita-e-fingerprint,
-//   architettura.md#planner-ed-executor) e poi `explain` con
-//   il `RuntimeContext` di default per il riepilogo della strategia fisica —
-//   un piano valido semanticamente ma fuori dal dispatch v1 fallisce qui,
-//   non a meta' esecuzione. Il riepilogo JSON su stdout riporta: nodi, archi
-//   con contratti (campi + geometria), ordine topologico, segmenti con modo e
-//   strategia di parallelismo, capability richieste, fingerprint dei
-//   contratti di input e `plan_hash`;
-// - **run**: `execute` sul grafo validato con input lazy (`Input::read_ipc_*`,
-//   stesso sniffing del formato) e scrittura con
-//   `Output::write_ipc_file_with_profile`
-//   (publish atomico no-clobber gia' dentro). Le metriche per nodo e per
-//   segmento (righe in/out, batch, wall time in ms) sono stampate in JSON su
-//   **stdout**, come gli altri riepiloghi della CLI.
+// - scoperta dei contratti dal solo header IPC (`cli::contract_discovery`),
+//   con i metadati incoerenti rifiutati e il `FieldId` provvisorio;
+// - decisioni CRS del piano (`crs_decisions`, R4.6.3) applicate prima della
+//   validazione;
+// - accoppiamento degli input di `--input`/`--inputs` a quelli dichiarati;
+// - `validate`: `planner::validate` (D8) ed `explain`, cosi' un piano fuori
+//   dal dispatch fallisce qui; riepilogo JSON su stdout;
+// - `run`: `execute` con input lazy e publish atomico no-clobber; metriche
+//   per nodo e per segmento in JSON su stdout.
 
 /// Sonda del solo `schema_version`: decide il percorso (DAG vs legacy).
 #[derive(Debug, Deserialize)]
@@ -670,18 +535,9 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
 /// dichiara la forma lineare legacy (`schema_version <= 3`), che prosegue sul
 /// percorso invariato.
 ///
-/// Che cosa succede a ciascuna versione:
-///
-/// - **v4**: migrata al canonico v5, con cui condivide l'identita';
-/// - **v5**: prestata invariata;
-/// - **v6**: prestata **invariata**. Non si migra e non si rinormalizza:
-///   riscriverla anche solo per normalizzarla cambierebbe un documento che
-///   porta la propria identita'.
-///
-/// La CLI sonda il piano piu' volte (input dichiarati, decisioni CRS) prima
-/// di chiamare il planner: se la migrazione avvenisse solo dentro il planner,
-/// quelle sonde leggerebbero il testo v4 e il planner un altro testo. Qui il
-/// testo e' deciso una volta, e da li' in poi tutti guardano quello.
+/// La v4 migra al canonico v5; v5 e v6 si prestano invariate. La CLI sonda il
+/// piano piu' volte prima del planner, e tutte le sonde devono leggere lo
+/// stesso testo.
 pub(crate) fn testo_piano_dag(plan_text: &str) -> Result<Option<Cow<'_, str>>, PlenoraError> {
     let versione = plan_schema_version(plan_text)?;
     if versione < u32::from(PLAN_SCHEMA_VERSION_V4) {
@@ -708,13 +564,9 @@ const MAX_CONTROL_JSON_BYTES: u64 = 16 * 1024 * 1024;
 /// Legge un documento JSON di CONTROLLO da file: limitato nei byte e
 /// rifiutato se contiene chiavi duplicate.
 ///
-/// E' l'**unico** lettore dei documenti di controllo della CLI. Un sito che
-/// chiami `serde_json::from_reader` per conto proprio non ha tetto sui byte e
-/// risolve le chiavi duplicate con «vince l'ultima» — la stessa ambiguita'
-/// che il piano DAG rifiuta, lasciata aperta sui piani legacy, sugli schemi
-/// di comando e sulle sonde di instradamento.
-///
-/// Confine di lettura (BLOCK-03): gli errori nascono leggendo la sorgente.
+/// E' l'unico lettore dei documenti di controllo: `serde_json::from_reader`
+/// non ha tetto e fa vincere l'ultima chiave duplicata. Gli errori nascono
+/// leggendo la sorgente (BLOCK-03).
 fn read_control_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, PlenoraError> {
     let text = read_control_json_text(path)?;
     plenora_core::json::ensure_no_duplicate_keys(&text)?;
@@ -758,13 +610,8 @@ pub(crate) fn contract_error_missing(name: &str) -> PlenoraError {
 /// Testo del piano, letto una volta e gia' verificato contro le chiavi
 /// duplicate.
 ///
-/// Il piano attraversa piu' sonde (`schema_version`, `inputs`,
-/// `crs_decisions`) e infine la deserializzazione vera: il controllo si fa
-/// QUI, sul testo, cosi' vale per tutte insieme invece che dipendere da quale
-/// sonda lo legge per prima. Per i piani DAG la ripetono i parser di formato
-/// — `PlanV5::parse` e `PlanV6::parse`, ciascuno per il proprio — e la
-/// ripete il dispatch prima di leggere la versione: e' idempotente, e copre
-/// anche chi non passa dalla CLI.
+/// Il controllo sul testo vale per tutte le sonde successive; i parser di
+/// formato e il dispatch lo ripetono, ed e' idempotente.
 pub(crate) fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError> {
     let text = read_control_json_text(path)?;
     plenora_core::json::ensure_no_duplicate_keys(&text)?;
@@ -776,11 +623,9 @@ pub(crate) fn read_control_plan_text(path: &Path) -> Result<String, PlenoraError
 ///
 /// # Errors
 ///
-/// `Internal` se un arco del grafo manca dai contratti: impossibile per
-/// costruzione su un grafo validato (stessa invariante di
-/// [`ValidatedGraph::output_contract`]), ma il compilatore non puo'
-/// dimostrarlo — l'invariante violata diventa un errore esplicito, mai un
-/// panic (R6).
+/// `Internal` se un arco del grafo manca dai contratti: impossibile su un
+/// grafo validato (come [`ValidatedGraph::output_contract`]), ma reso
+/// errore esplicito invece di un panic (R6).
 pub(crate) fn graph_summary_json(
     graph: &ValidatedGraph,
     execution: &ExecutionPlan,
@@ -1074,55 +919,24 @@ pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 fn main() {
-    // Ultima barriera del processo: un panico che sfugge — nostro o di una
-    // dipendenza — deve diventare un ENVELOPE su stdout, non testo su stderr.
+    // Ultima barriera del processo: un panico che sfugge, anche di una
+    // dipendenza, diventa un envelope su stdout. L'hook di default scriverebbe
+    // su stderr, quindi si silenzia (`plenora_core::panic_policy`).
     //
-    // Il gate R6 vieta le primitive di panico nelle nostre librerie, ma non
-    // puo' vietarle ad arrow; e l'hook di default stampa su stderr prima
-    // dell'unwinding, rompendo il contratto «stderr vuoto» proprio nel
-    // momento peggiore. L'hook viene quindi silenziato e l'informazione
-    // recuperata qui, dove ha un canale e un exit code.
-    //
-    // La politica vive in `plenora_core::panic_policy` perche' non riguarda
-    // solo la CLI: un embedder — un binding PyO3, per esempio — ha lo stesso
-    // problema su uno stderr che non e' nemmeno suo, e installa `Sanitized`.
-    //
-    // L'ESITO va guardato, non ignorato. `install` risponde `false` se un
-    // hook e' gia' stato installato passando da quella API. Qui siamo il
-    // processo e siamo la prima istruzione di `main`, quindi `false`
-    // significa che qualcosa e' arrivato prima del nostro ingresso — e
-    // allora il contratto «stderr vuoto» non e' piu' garantito, perche'
-    // l'hook attivo non e' il nostro. Non e' un errore da cui uscire: e' un
-    // fatto da DICHIARARE se poi un panico succede davvero. Silenziarlo
-    // significherebbe promettere un canale pulito senza piu' governarlo.
-    //
-    // Nota di ambito: nemmeno un `true` rende l'hook inamovibile — un
-    // `std::panic::set_hook` successivo, da qualunque componente, lo
-    // sostituisce. Vedi la sezione «Che cosa questo modulo NON garantisce»
-    // di `panic_policy`.
+    // L'esito di `install` si conserva: `false` significa che un hook era gia'
+    // installato prima di `main`, e se poi un panico arriva va dichiarato che
+    // «stderr vuoto» non e' garantito. Nemmeno `true` impedisce un
+    // `set_hook` successivo (vedi `panic_policy`).
     let politica_nostra =
         plenora_core::panic_policy::install(plenora_core::panic_policy::PanicPolicy::Silent);
 
-    // I due dispatch delle modalita' riservate, e stanno **qui** per una ragione
-    // precisa.
+    // I dispatch delle modalita' riservate stanno qui, prima di tutto.
     //
-    // Il dispatch dello spawner.
-    //
-    // Questo eseguibile e' anche lo spawner del profilo isolato: e' la propria
-    // immagine, rieseguita, e si riconosce perche' `argv[1]` porta la versione
-    // della richiesta. Se non lo riconoscesse, un worker avviato finirebbe nel
-    // parser degli argomenti ordinario e si lamenterebbe di un comando
-    // sconosciuto.
-    //
-    // Prima di ogni altra cosa perche' il primo passo della sequenza pretende
-    // un processo **monothread**: le credenziali si cambiano per thread, e
-    // quelli che restassero sarebbero privilegiati. Fra l'ingresso del processo
-    // e questa riga non nasce nessun thread — l'installazione della politica
-    // anti-panico non ne crea — mentre `esegui_processo` puo' costruire il pool
-    // di rayon. Spostare il dispatch dopo renderebbe lo spawner impossibile a
-    // runtime, senza che nulla lo dica prima.
-    //
-    // Il caso riuscito non torna: la `exec` ha sostituito l'immagine.
+    // Questo eseguibile e' anche lo spawner del profilo isolato, riconosciuto
+    // da `argv[1]`. Lo spawner pretende un processo monothread (le
+    // credenziali si cambiano per thread): fino a qui non nasce nessun
+    // thread, mentre `esegui_processo` puo' costruire il pool di rayon. Il
+    // caso riuscito non torna: la `exec` ha sostituito l'immagine.
     #[cfg(target_os = "linux")]
     {
         let argomenti: Vec<std::ffi::OsString> = std::env::args_os().collect();
@@ -1214,19 +1028,10 @@ mod tests {
     /// resta senza codice in silenzio.
     #[test]
     fn un_errore_interno_di_passo_esce_come_interno_non_come_esecuzione() {
-        // I due propagatori aggiungono il contesto del passo avvolgendo
-        // l'errore in `Replayed`, che porta con se' la categoria. Questo test
-        // copre l'ULTIMO anello della catena: che una
-        // categoria `Internal` arrivata fin qui dentro un `Replayed` diventi
-        // `internal`/exit 70 e non `execution`/exit 6.
-        //
-        // Gli anelli precedenti sono verificati altrove: la scelta di quali
-        // categorie preservare sta in `plenora_engine::error_propagation`, con
-        // il proprio test, e i due propagatori usano quel predicato invece di
-        // due elenchi scritti a mano. Non esiste un test end-to-end da un
-        // piano perche' nessun `Internal` dei kernel e' raggiungibile da un
-        // piano valido — sono rami difensivi e invarianti di file temporanei
-        // — quindi la catena e' verificata a segmenti, e questo e' l'ultimo.
+        // Ultimo anello della catena: una categoria `Internal` dentro un
+        // `Replayed` diventa `internal`/exit 70, non `execution`/exit 6. Gli
+        // anelli precedenti sono provati in `plenora_engine::error_propagation`;
+        // nessun `Internal` dei kernel e' raggiungibile da un piano valido.
         let replayed = PlenoraError::Replayed(Box::new(plenora_core::error::ReplayedError {
             category: plenora_core::ErrorCategory::Internal,
             phase: ErrorPhase::Write,
@@ -1259,16 +1064,9 @@ mod tests {
 
     #[test]
     fn ogni_categoria_ha_l_exit_code_dichiarato() {
-        // La tabella e' scritta a mano APPOSTA: e' la seconda opinione. Se
-        // fosse derivata da `exit_code_di` verificherebbe che il codice e'
-        // uguale a se stesso.
-        //
-        // Il verso del giro conta quanto la tabella: si itera
-        // `ErrorCategory::ALL` e si PRETENDE che la tabella nomini ogni
-        // categoria. Iterando la tabella, una categoria nuova non sarebbe
-        // nominata da nessuno e resterebbe non coperta in silenzio; cosi'
-        // invece chi ne aggiunge una deve passare di qui, come deve passare
-        // da `exit_code_di`.
+        // La tabella e' scritta a mano: e' la seconda opinione rispetto a
+        // `exit_code_di`. Si itera `ErrorCategory::ALL` e si pretende che la
+        // tabella nomini ogni categoria, cosi' una nuova non resta scoperta.
         let atteso: [(&str, i32); 20] = [
             ("invalid_plan", 2),
             ("invalid_configuration", 2),
@@ -2143,14 +1941,10 @@ mod tests {
 
     #[test]
     fn discovery_conflicting_crs_id_and_srid_become_declared_unresolved() {
-        // Il caso `conflicting_crs` del corpus di conformita':
-        // crs_id=EPSG:4326 con srid=3003 (R4.3.1). Il centro PRESERVA
-        // (expect_by_role: transformation_core = preserve): niente errore,
-        // niente scelta silenziosa — lo stato diventa DeclaredUnresolved
-        // con la dichiarazione originale.
-        // La fixture omette `crs_resolution`; lo stesso conflitto resta
-        // preservato anche quando il produttore dichiara `resolved` (test
-        // successivo): una dichiarazione non puo' nascondere H-06.
+        // Il caso `conflicting_crs` del corpus di conformita': crs_id=EPSG:4326
+        // con srid=3003 (R4.3.1). Il centro preserva: lo stato diventa
+        // DeclaredUnresolved con la dichiarazione originale. Resta preservato
+        // anche con `resolved` dichiarato (test successivo, H-06).
         let field = canonical_crs_field(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
@@ -2199,13 +1993,10 @@ mod tests {
     #[test]
     fn discovery_crs_id_and_definition_copresent_become_declared_unresolved() {
         // Due rappresentazioni risolvibili co-presenti: l'accordo non e'
-        // decidibile testualmente (R2.7: mai arbitrato sul dato), quindi lo
-        // stato e' `DeclaredUnresolved` con ENTRAMBE le dichiarazioni.
-        // Farne vincere una sarebbe una scelta silenziosa sul dato.
-        // Emendamento 2026-07-31 (classe A): la regola (2a) vale SOLO per
-        // input NON dichiarati, ed e' per questo che la fixture non porta
-        // `crs_resolution`. Aggiungendolo come `resolved`, la dichiarazione
-        // esplicita vincerebbe e questo non sarebbe piu' il caso (2a).
+        // decidibile testualmente (R2.7), quindi `DeclaredUnresolved` con
+        // entrambe le dichiarazioni. Emendamento 2026-07-31 (classe A): la
+        // regola (2a) vale solo per input non dichiarati, per questo la fixture
+        // non porta `crs_resolution`.
         let field = canonical_crs_field(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (
@@ -2724,15 +2515,11 @@ mod tests {
 
     #[test]
     fn contract_crs_from_keys_srid_only_declared_unresolved_is_a_representation() {
-        // Catena MySQL TLS Database→Data: il provider conosce lo SRID
-        // numerico dal catalogo ma non puo' inventare l'autorita' (R4.4) —
-        // dichiara `declared_unresolved` con SOLO `srid`, senza
-        // `crs_id`/`crs_definition`. R4.3.1: lo SRID numerico e' la terza
-        // rappresentazione CRS (dopo definizione e identificatore), quindi
-        // la dichiarazione NON e' la contraddizione R4.1 — lo stato e'
-        // `DeclaredUnresolved` con crs_id/definition/format ASSENTI (mai
-        // sintetizzati); lo SRID resta custodito dallo schema Arrow
-        // originale (il contratto non lo modella).
+        // Catena MySQL TLS Database→Data: il provider dichiara
+        // `declared_unresolved` con solo `srid` (R4.4). Lo SRID e' la terza
+        // rappresentazione CRS (R4.3.1), quindi non e' la contraddizione R4.1:
+        // `DeclaredUnresolved` con crs_id/definition/format assenti, mai
+        // sintetizzati.
         let keys = CanonicalGeometryKeys {
             srid: Some(4326),
             crs_resolution: Some(CrsResolution::DeclaredUnresolved),
@@ -3408,15 +3195,9 @@ mod uscita_della_pubblicazione {
         PathBuf::from(std::ffi::OsString::from_wide(&parole))
     }
 
-    /// `installa_gestore_segnale_isolato` non fa nascere un thread — a
-    /// differenza di `install_ctrlc_handler`, che per questo non e'
-    /// installabile in un test dello stesso processo (una sola volta per
-    /// processo, e altri test lo condividerebbero). `signal_hook::flag::
-    /// register`/`register_conditional_shutdown` accettano invece
-    /// registrazioni multiple per lo stesso segnale (e' il loro scopo:
-    /// piu' azioni indipendenti), quindi installarli qui non interferisce
-    /// con null'altro nel processo di test — e la registrazione stessa,
-    /// non solo la sua assenza di panico, e' cio' che questo test accerta.
+    /// `installa_gestore_segnale_isolato` non fa nascere un thread e accetta
+    /// registrazioni multiple, quindi si puo' installare in un test senza
+    /// interferire con il processo; si accerta la registrazione stessa.
     #[test]
     #[cfg(target_os = "linux")]
     fn installa_gestore_segnale_isolato_riesce_su_un_token_nuovo() {

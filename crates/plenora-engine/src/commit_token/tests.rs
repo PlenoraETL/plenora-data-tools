@@ -1,12 +1,8 @@
 //! Prove del `commit_token`: **solo cio' che non e' la forma**.
 //!
-//! La conformita' di forma — accettazione, rifiuti, riservatezza del testo
-//! rifiutato — sta nelle prove della rappresentazione condivisa, dove vive il
-//! codice che la decide. Qui resta la **riservatezza del valore**, che e' la
-//! proprieta' per cui questo tipo esiste separato dal digest: un valore che
-//! l'altro capo del canale controlla non si copia nei log, perche' il log lo
-//! conserva e lo diffonde insieme al motivo per cui qualcuno lo stava
-//! guardando.
+//! La conformita' di forma sta nelle prove della rappresentazione condivisa;
+//! qui resta la riservatezza del valore, la proprieta' per cui questo tipo
+//! esiste separato dal digest.
 
 use super::{CommitToken, FormaTokenNonValida, CHIAVE_FOOTER_COMMIT_TOKEN};
 use crate::esadecimale32::CARATTERI;
@@ -72,12 +68,9 @@ fn il_giro_serde_conserva_la_forma_canonica() {
 /// Un token canonico si legge **comunque arrivi**, non solo da un buffer in
 /// memoria.
 ///
-/// Sono i due modi ordinari di non poter prestare una stringa, e con una
-/// lettura che pretende il prestito un token perfettamente canonico verrebbe
-/// rifiutato con «expected a borrowed string»: un rifiuto per la forma del
-/// **trasporto**, indistinguibile da un rifiuto del token. Il token viaggia
-/// nel `Saluto`, che il worker legge da un pipe, quindi il primo caso e' il
-/// percorso vero.
+/// Una lettura che pretende il prestito rifiuterebbe un token canonico con
+/// «expected a borrowed string», un rifiuto del trasporto indistinguibile da
+/// uno del token. Il `Saluto` arriva da un pipe, quindi e' il caso vero.
 #[test]
 fn un_token_canonico_si_legge_anche_da_sorgenti_non_prestabili() {
     let atteso = CommitToken::da_esadecimale(CANONICO).expect("canonico");

@@ -1,16 +1,13 @@
 //! Le primitive di incorniciatura dei tre stream checksummati.
 //!
-//! `PLNGEO2`, `PLNGEO3` e `PLNPAIR1` hanno contenuti diversi e la stessa
-//! ossatura: sedici byte di header — magic piu' un contatore — e una chiusura
-//! fatta di trailer, digest e fine dello stream. L'ossatura sta qui, in un
-//! esemplare solo, perche' un confine fail-closed in piu' copie e' un confine
-//! che si puo' correggere in alcune e non in tutte, senza che nulla lo dica.
+//! `PLNGEO2`, `PLNGEO3` e `PLNPAIR1` condividono l'ossatura: sedici byte di
+//! header (magic piu' un contatore) e una chiusura fatta di trailer, digest e
+//! fine dello stream. Sta qui in un esemplare solo, perche' un confine
+//! fail-closed copiato si corregge in alcune copie e non in tutte.
 //!
-//! Nessun errore comune: ogni stream conserva il proprio vocabolario, e queste
-//! funzioni dicono soltanto **che cosa** non torna. Il confine e' quello: la
-//! forma si condivide, la diagnosi no. Fuori resta anche il framing di Arrow
-//! (`ipc.rs`), che ha altro formato, altri limiti e altri errori — una
-//! primitiva che li contenesse entrambi sarebbe una somiglianza imposta.
+//! Gli errori no: ogni stream conserva il proprio vocabolario e queste
+//! funzioni dicono solo **che cosa** non torna. Resta fuori il framing di
+//! Arrow (`ipc.rs`), che ha altro formato, altri limiti e altri errori.
 
 use std::io::{self, Read, Write};
 

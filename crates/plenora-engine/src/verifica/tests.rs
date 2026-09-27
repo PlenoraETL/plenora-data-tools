@@ -518,20 +518,10 @@ fn i_dizionari_oltre_il_tetto_sono_respinti_prima_di_arrow() {
 /// Il conteggio incrementale regge a `N` e a `10N` batch, e **discrimina** a
 /// entrambe le scale.
 ///
-/// # Che cosa prova, e che cosa no
-///
-/// Prova che il verificatore attraversa **tutti** i batch e li somma
-/// esattamente: un lettore che si fermasse al primo, o che ne contasse uno di
-/// troppo, fallirebbe qui — ed e' la ragione per cui ogni scala include anche
-/// un conteggio sbagliato di uno, che deve essere respinto. Senza quella
-/// seconda meta' il caso passerebbe anche con un verificatore che non
-/// verifica.
-///
-/// **Non prova** che nessun batch precedente resti vivo. Quella proprieta' e'
-/// **strutturale** — la funzione di conteggio non tiene collezioni — e
-/// in-process non esiste un tetto imposto che la renda osservabile: e'
-/// esattamente cio' che manca finche' il profilo isolato non esiste. Scrivere
-/// che due esecuzioni riuscite la dimostrano sarebbe un falso oracolo.
+/// Ogni scala include un conteggio sbagliato di uno, che deve essere
+/// respinto: senza, il caso passerebbe anche con un verificatore che non
+/// verifica. **Non prova** la non-ritenzione dei batch, che e' strutturale e
+/// in-process non ha un tetto che la renda osservabile.
 #[test]
 fn il_conteggio_incrementale_discrimina_a_n_e_a_dieci_n_batch() {
     for (quanti, righe) in [(5_usize, 15_u64), (50, 150)] {
@@ -608,16 +598,10 @@ fn nessun_errore_porta_valori_dell_artefatto() {
 
 /// Il conteggio **non trattiene** il batch precedente.
 ///
-/// La prova non ha bisogno di un limite di processo, e infatti non ne usa uno.
-/// L'iteratore consegna batch costruiti su un array di cui conserva soltanto
-/// una [`Weak`](std::sync::Weak): prima di produrre il successivo pretende che
-/// quella `Weak` non si possa piu' promuovere, cioe' che l'ultimo riferimento
-/// forte sia caduto. Se il consumatore accumulasse — un `Vec`, una `HashMap`,
-/// perfino una sola variabile viva — il riferimento resterebbe e il test
-/// fallirebbe qui, non in un profiler.
-///
-/// E' il criterio di uscita normativo «nessun record batch precedente resta
-/// vivo», reso osservabile.
+/// L'iteratore conserva solo una [`Weak`](std::sync::Weak) dell'array dei
+/// batch e, prima di produrre il successivo, pretende che non si possa piu'
+/// promuovere: un consumatore che accumulasse farebbe fallire il test qui. E'
+/// il criterio «nessun record batch precedente resta vivo», reso osservabile.
 #[test]
 fn nessun_batch_precedente_resta_vivo_durante_il_conteggio() {
     use std::sync::Weak;
@@ -762,16 +746,11 @@ fn uno_schema_incoerente_fa_fallire_la_ricostruzione_del_contratto() {
 
 /// L'harness del fuzz **accetta** un artefatto coerente con le proprie attese.
 ///
-/// Il corpus del fuzzer non e' versionato (`/fuzz/corpus` e' ignorato), quindi
-/// non esiste un seed committato che garantisca al target di produrre un Arrow
-/// IPC ben formato con lo schema, i conteggi e il token che l'harness fissa.
-/// Questo caso e' il sostituto, e pretende `Ok(true)`: un `Ok(false)` direbbe
-/// che l'harness si e' fermato prima, e nessuno se ne accorgerebbe.
-///
-/// L'artefatto viene da `interni::artefatto_di_prova`, cioe' dalla **stessa**
-/// definizione da cui l'harness ricava le attese: costruirlo qui a mano
-/// avrebbe creato due fixture libere di divergere, e la divergenza avrebbe
-/// spento la prova senza rompere il test.
+/// Il corpus del fuzzer non e' versionato, quindi questo caso sostituisce un
+/// seed ben formato e pretende `Ok(true)`: un `Ok(false)` direbbe che
+/// l'harness si e' fermato prima. L'artefatto viene da
+/// `interni::artefatto_di_prova`, la stessa definizione da cui l'harness
+/// ricava le attese.
 #[test]
 fn l_harness_del_fuzz_accetta_un_artefatto_coerente_con_le_sue_attese() {
     let byte = crate::interni::artefatto_di_prova();
@@ -794,20 +773,11 @@ fn l_harness_del_fuzz_rifiuta_un_artefatto_estraneo() {
 
 /// Il workspace dell'harness e' **riusato** e **troncato** a ogni scrittura.
 ///
-/// La sequenza e' valido → corto → valido, e prova due cose distinte:
-///
-/// - **riuso**: il percorso reso e' sempre lo stesso, quindi il workspace nasce
-///   una volta per thread e non per iterazione. Senza, una campagna da milioni
-///   di casi creerebbe altrettante directory, e il traffico sul filesystem
-///   crescerebbe con gli ingressi invece di restare costante;
-/// - **nessun byte residuo**: dopo l'ingresso corto il file sul disco e'
-///   **esattamente** quello corto. Senza troncamento conserverebbe la coda del
-///   valido che lo precede, e il verificatore leggerebbe un artefatto che il
-///   fuzzer non ha mai prodotto — irriproducibile per costruzione.
-///
-/// La lettura del file e' il punto: asserire sul solo esito non
-/// distinguerebbe un troncamento riuscito da un residuo che viene comunque
-/// rifiutato.
+/// Sequenza valido → corto → valido: il percorso reso e' sempre lo stesso (un
+/// workspace per thread, non per iterazione), e dopo l'ingresso corto il file
+/// e' **esattamente** quello corto, senza la coda del precedente. Si rilegge
+/// il file perche' l'esito da solo non distinguerebbe un troncamento da un
+/// residuo comunque rifiutato.
 #[test]
 fn il_workspace_dell_harness_e_riusato_e_troncato() {
     let lungo = crate::interni::artefatto_di_prova();
@@ -832,16 +802,9 @@ fn il_workspace_dell_harness_e_riusato_e_troncato() {
 
 /// E il giro completo regge sulla stessa sequenza.
 ///
-/// **Non e' l'oracolo del troncamento**, e dirlo sarebbe sbagliato: senza
-/// troncamento l'ingresso corto lascerebbe in coda i byte del valido che lo
-/// precede, e il risultato verrebbe respinto lo stesso — l'esito non
-/// cambierebbe. L'oracolo discriminante e' quello qui sopra, che **rilegge il
-/// file** e pretende che sia esattamente l'ingresso corto.
-///
-/// Qui si prova un'altra cosa, che quel caso non copre: che il verificatore
-/// riapra ogni volta il percorso riusato e ne renda il verdetto giusto —
-/// accettato, rifiutato, accettato di nuovo — cioe' che il riuso del workspace
-/// non lasci il giro in uno stato da cui non si torna.
+/// Non e' l'oracolo del troncamento (quello e' il caso sopra): prova che il
+/// verificatore riapra ogni volta il percorso riusato e ne renda il verdetto
+/// giusto, accettato, rifiutato, accettato di nuovo.
 #[test]
 fn valido_corto_valido_rende_gli_esiti_attesi() {
     let valido = crate::interni::artefatto_di_prova();
@@ -885,8 +848,8 @@ fn un_internal_qualsiasi_non_e_un_rifiuto() {
     assert!(rottura.contains("internal"), "{rottura}");
 }
 
-/// `ResourceLimit` non e' piu' nel contratto del verificatore (riga 12 della
-/// matrice): se ricomparisse, e' un guasto da vedere.
+/// `ResourceLimit` non e' nel contratto del verificatore (riga 12 della
+/// matrice): se comparisse, e' un guasto da vedere.
 #[test]
 fn resource_limit_non_e_piu_un_rifiuto_del_verificatore() {
     use plenora_core::error::PlenoraError;

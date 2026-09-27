@@ -1,60 +1,21 @@
 //! Formati del piano DAG dichiarativo (architettura.md, piano-v5.md#identita-e-fingerprint, errori-e-limiti.md).
 //!
-//! Le versioni DAG sono **due**, e non collassano l'una nell'altra: la **v5**
-//! qui, la **v6** in [`formato_v6`], che aggiunge `max_domain_memory_bytes` e
-//! sta nel proprio dominio d'identita'. La **v4** e' migrata nel canonico v5
-//! e ne condivide il `plan_hash`; i formati lineari sotto la `4` restano al
-//! `table_engine`.
+//! Le versioni DAG sono **due** e non collassano: la **v5** qui, la **v6** in
+//! [`formato_v6`] (aggiunge `max_domain_memory_bytes`, dominio d'identita'
+//! proprio). La **v4** passa da [`migrazione_v4::testo_canonico_v5`] e
+//! condivide il `plan_hash` della v5; i formati lineari sotto la `4` restano
+//! al `table_engine`. L'ingresso comune e' [`valida_per_versione`].
 //!
-//! L'ingresso comune e' [`valida_per_versione`], che sceglie il parser dalla
-//! versione dichiarata e rende un [`PianoValidato`].
+//! [`PlanV5::parse`] applica i [`PlanLimits`] durante il parsing, prima di
+//! allocazioni guidate dal contenuto, poi la validazione strutturale e la
+//! risoluzione alias. I `PlanLimits` arrivano dal chiamante e sono il tetto:
+//! il blocco `limits` del piano puo' solo restringerli
+//! ([`LimitsOverride::ensure_restringe`]), tranne il tetto sui byte, che si
+//! applica prima di leggere il documento.
 //!
-//! Qui vivono:
-//!
-//! - [`PlanV5`]/[`NodeV5`]: il formato dichiarativo (solo dipendenze e
-//!   configurazioni, nessuna annotazione di esecuzione), serde con
-//!   `deny_unknown_fields` a ogni livello. `NodeV5` e' condiviso dalle due
-//!   versioni: i nodi non cambiano fra v5 e v6;
-//! - [`PlanV5::parse`]: applicazione dei [`PlanLimits`] DURANTE il parsing
-//!   (errori-e-limiti.md: il prima possibile, prima di allocazioni guidate dal contenuto),
-//!   poi validazione strutturale (id unici, riferimenti esistenti, aciclicità,
-//!   output raggiungibile, arietà da catalogo) e risoluzione alias verso gli
-//!   id canonici;
-//! - [`PlanV5::from_legacy`]: migrazione del piano lineare legacy
-//!   (`Plan{steps}`, `schema_version` <= 3) nel caso degenerato del DAG —
-//!   deterministica e idempotente (decisione D20, piano-v5.md#identita-e-fingerprint);
-//! - [`canonical_json`]: serializzazione canonica ai fini del `plan_hash`
-//!   (piano-v5.md#identita-e-fingerprint): chiavi ordinate, nodi in ordine topologico deterministico,
-//!   alias sostituiti dagli id canonici, numeri della config normalizzati
-//!   (`100` ≡ `100.0`), default noti materializzati (limiti effettivi,
-//!   config omessa ≡ `{}`).
-//!
-//! Scelte v1 documentate:
-//!
-//! - i `PlanLimits` di parsing arrivano dal CHIAMANTE (default fail-closed
-//!   [`PlanLimits::default`]) e sono il **tetto**: il campo `limits` del piano
-//!   ([`LimitsOverride`]) può solo restringerlo, mai allargarlo
-//!   ([`LimitsOverride::ensure_restringe`]). La sotto-sezione `plan` governa
-//!   il piano che la dichiara: i conteggi strutturali si applicano con i
-//!   limiti così ristretti. Il tetto sui byte fa eccezione — resta quello del
-//!   chiamante, perché va applicato prima di costruire qualunque albero JSON
-//!   e quindi non può provenire dal documento che si sta ancora leggendo. Il
-//!   valore dichiarato entra comunque nella forma canonica, che è dove è
-//!   sempre stato;
-//! - `output` può riferire un nodo o un input (piano pass-through); ogni nodo
-//!   deve essere antenato dell'output (niente nodi morti) e ogni input
-//!   dichiarato deve essere referenziato da almeno un nodo (niente input
-//!   morti), a meno che non sia l'output stesso;
-//! - la materializzazione dei default PER OPERAZIONE dentro `config` è
-//!   rimandata: richiede schemi di config tipizzati per operazione, che la v1
-//!   non ha (fuori scope) — qui la config resta `serde_json::Value`
-//!   (l'equivalenza null ≡ `{}` e la normalizzazione dei numeri sono già
-//!   applicate).
-//!
-//! La v4 non ha un percorso di lettura qui dentro: chi presenta un piano v4
-//! passa da [`migrazione_v4::testo_canonico_v5`]. Il nome che la v4 dava al
-//! budget di memoria esiste ancora in un solo modulo del workspace, quello,
-//! ed è lì che è documentato.
+//! [`canonical_json`] produce la forma del `plan_hash`. I default per
+//! operazione dentro `config` non si materializzano: la config resta
+//! `serde_json::Value` senza schemi tipizzati per operazione.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -71,17 +32,10 @@ pub mod migrazione_v4;
 
 /// Versione CANONICA del formato piano DAG (architettura.md).
 ///
-/// La v5 differisce dalla v4 per un solo campo, ma il campo cambia il
-/// contratto: il budget di memoria si chiama ora `max_governed_memory_bytes`
-/// (errori-e-limiti.md#memoria-governata). Il nome della v4 promette un tetto
-/// sull'intero processo che in-process non e' realizzabile; questo dice
-/// quello che il limite fa davvero, cioe' governare la memoria che la
-/// libreria controlla.
-///
-/// **Non c'e' alias.** Un piano v5 con il nome della v4 e' rifiutato, e un
-/// piano v4 con il nome nuovo pure: un nome che continua a funzionare e' un
-/// nome che continua a promettere. I piani v4 passano dalla migrazione
-/// esplicita ([`migrazione_v4`]).
+/// Il budget di memoria si chiama `max_governed_memory_bytes`
+/// (errori-e-limiti.md#memoria-governata): governa la memoria che la
+/// libreria controlla. Nessun alias col nome della v4, in nessuna delle due
+/// direzioni; i piani v4 passano da [`migrazione_v4`].
 pub const PLAN_SCHEMA_VERSION_V5: u16 = 5;
 
 /// La v4, accettata **solo** dalla migrazione.
@@ -196,19 +150,11 @@ impl LimitsOverride {
     /// Verifica che i limiti **di piano** dichiarati non superino quelli
     /// di chi esegue il parse (piano-v5.md#limiti-dichiarabili-nel-piano).
     ///
-    /// La policy di parsing e' l'unica che esista davvero come argomento:
-    /// `PlanV5::parse` la riceve dal chiamante, e un documento che la alzasse
-    /// deciderebbe da se' quanto puo' costare interpretarlo: un `apply_to`
-    /// che sostituisse i valori e basta lascerebbe alla sotto-sezione `plan`
-    /// il modo di ampliarla.
-    ///
-    /// Sui limiti **dati/runtime** non c'e' invece alcuna policy da
-    /// restringere: la base e' [`Limits::default`], cioe' il valore che vale
-    /// quando il piano non dichiara nulla, non un tetto imposto da un host.
-    /// Dichiararli — anche piu' alti del default — e' il modo previsto per
-    /// configurare l'esecuzione, e resta chiuso da [`Limits::validate`].
-    /// Che cosa questo NON protegge, per chi accetta piani non fidati, e'
-    /// registrato in errori-e-limiti.md.
+    /// Un documento non decide da se' quanto puo' costare interpretarlo. Sui
+    /// limiti dati/runtime la base e' [`Limits::default`], non un tetto
+    /// dell'host: dichiararli, anche piu' alti, e' il modo di configurare
+    /// l'esecuzione, chiuso da [`Limits::validate`]. Che cosa questo non
+    /// protegge per chi accetta piani non fidati e' in errori-e-limiti.md.
     ///
     /// # Errors
     ///
@@ -361,15 +307,13 @@ pub struct PlanV5 {
     pub crs: Option<String>,
     #[serde(default)]
     pub inputs: Vec<String>,
-    /// Decisioni CRS esplicite del piano (R4.6.3): mappa nome input →
-    /// definizione CRS che il centro DECIDE per quell'input, risolvendo
-    /// un'incoerenza dichiarata (`declared_unresolved`). E' la sola forma
-    /// con cui il centro puo' risolvere un'incoerenza: esplicita nel piano,
-    /// coperta dal `plan_hash` (piano-v5.md#identita-e-fingerprint) e applicata al contratto di input
-    /// prima della validazione (CLI). Le chiavi devono essere input
-    /// dichiarati; una decisione su uno stato diverso da
-    /// `declared_unresolved` e' un errore (su `missing` sarebbe un CRS
-    /// inventato — R4.4; su `resolved` una contraddizione del piano).
+    /// Decisioni CRS esplicite del piano (R4.6.3): nome input → definizione
+    /// CRS che risolve un'incoerenza dichiarata (`declared_unresolved`).
+    ///
+    /// E' la sola forma di risoluzione, coperta dal `plan_hash` e applicata al
+    /// contratto prima della validazione. Una decisione su `missing`
+    /// inventerebbe un CRS (R4.4), su `resolved` contraddirebbe il piano:
+    /// entrambe sono errori.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub crs_decisions: BTreeMap<String, String>,
     pub nodes: Vec<NodeV5>,
@@ -378,22 +322,11 @@ pub struct PlanV5 {
     pub output: String,
 }
 
-/// Piano v5 che ha superato parsing, limiti e validazione strutturale.
-///
-/// Contiene solo decisioni strutturali stabili: l'inferenza dei contratti
-/// degli archi (`analyze_contract`) avviene nel planner, ed è quella a
-/// produrre il `ValidatedGraph` completo.
-///
 /// Cio' che la validazione strutturale produce, **senza** il documento.
 ///
-/// Neutro rispetto alla versione di proposito: nodi, archi, arieta' e regola
-/// di sola restrizione sono gli stessi per v5 e v6, e sono l'unica cosa che
-/// le due varianti condividono. Il **documento** no — quello e' un `PlanV5`
-/// per la v5 e un `PlanV6` per la v6 — e tenerli separati e' cio' che
-/// impedisce a una variante di rendere il tipo dell'altra.
-///
-/// Privato: nessun chiamante ha motivo di vedere il nucleo senza il piano a
-/// cui appartiene.
+/// Nodi, archi, arieta' e regola di sola restrizione sono gli stessi per v5 e
+/// v6; il documento resta separato, cosi' una variante non puo' rendere il
+/// tipo dell'altra. L'inferenza dei contratti avviene nel planner.
 #[derive(Debug, Clone)]
 struct NucleoPianoValidato {
     /// Id dei nodi in ordine topologico deterministico (Kahn con tie-break
@@ -407,17 +340,12 @@ struct NucleoPianoValidato {
 pub struct ValidatedPlanV5 {
     /// Il documento v5 validato.
     plan: PlanV5,
-    /// I `PlanLimits` con cui il piano è stato **effettivamente** validato:
-    /// quelli di chi ha eseguito il parse, ristretti da ciò che il piano ha
-    /// dichiarato.
+    /// I `PlanLimits` con cui il piano e' stato **effettivamente** validato:
+    /// quelli del chiamante, ristretti dal piano.
     ///
-    /// Sono conservati perché la forma canonica li materializza, e
-    /// materializzare i default della libreria al posto loro produrrebbe un
-    /// canonico che dichiara vincoli che il piano non rispetta: una catena
-    /// profonda 300, accettata da un chiamante con `max_plan_depth` 512,
-    /// verrebbe canonicalizzata dichiarando il default 256 — e quel canonico,
-    /// riletto, si rifiuterebbe da solo. Con la policy di default il valore
-    /// coincide comunque, quindi i `plan_hash` gia' persistiti non cambiano.
+    /// La forma canonica li materializza: con i default della libreria, un
+    /// piano accettato sotto una policy piu' larga dichiarerebbe vincoli che
+    /// non rispetta, e il suo canonico si rifiuterebbe da solo.
     nucleo: NucleoPianoValidato,
 }
 
@@ -466,17 +394,10 @@ impl ValidatedPlanV5 {
 
     /// Serializzazione canonica ai fini del `plan_hash` (piano-v5.md#identita-e-fingerprint).
     ///
-    /// Materializza i limiti di piano contro i **default della libreria**,
-    /// non contro la policy di chi ha eseguito il parse. L'identita' di un
-    /// piano e' una proprieta' del piano: se dipendesse dalla policy
-    /// esterna, lo stesso documento — con la stessa esecuzione — avrebbe due
-    /// `plan_hash` diversi sotto due chiamanti diversi, e un grafo
-    /// persistito non sarebbe piu' confrontabile con se stesso.
-    ///
-    /// Il prezzo e' dichiarato in piano-v5.md: un piano accettato **solo**
-    /// grazie a una policy piu' larga del default ha un canonico che, riletto
-    /// con i default, verrebbe rifiutato. Non e' una contraddizione — quel
-    /// piano non e' valido sotto i default, e il canonico lo dice.
+    /// Materializza i limiti di piano contro i **default della libreria**: il
+    /// `plan_hash` e' una proprieta' del piano e non dipende dalla policy del
+    /// chiamante. Un piano accettato solo grazie a una policy piu' larga ha un
+    /// canonico che i default rifiutano (dichiarato in piano-v5.md).
     #[must_use]
     pub fn canonical_json(&self) -> Value {
         canonical_json(&self.plan)
@@ -485,21 +406,10 @@ impl ValidatedPlanV5 {
 
 /// Piano **v6** che ha superato parsing, limiti e validazione strutturale.
 ///
-/// # Perche' un tipo proprio, e perche' con un `PlanV6` dentro
-///
-/// Allegare il tetto a un [`ValidatedPlanV5`] mutandone `schema_version`
-/// conserverebbe un documento che nessun parser puo' produrre: un `PlanV5`
-/// che dichiara `6` e non porta il tetto. Incapsularlo non basta — il campo
-/// laterale sparirebbe dalla vista, ma il documento resterebbe quello, e un
-/// accessore lo esporrebbe.
-///
-/// Registrare un'incoerenza con un test non e' eliminarla. Qui il documento e'
-/// un [`formato_v6::PlanV6`] **vero**: la versione e il tetto sono suoi
-/// campi, e non esiste nessun accessore che renda l'uno senza l'altro.
-///
-/// Cio' che le due varianti condividono e' soltanto il
-/// [`NucleoPianoValidato`] — ordine topologico e limiti effettivi — perche'
-/// quella parte della validazione e' davvero la stessa.
+/// Il documento e' un [`formato_v6::PlanV6`] vero: versione e tetto sono suoi
+/// campi, e nessun accessore rende l'uno senza l'altro. Un [`ValidatedPlanV5`]
+/// con `schema_version` mutato sarebbe un documento che nessun parser
+/// produce. Con la v5 condivide solo il [`NucleoPianoValidato`].
 #[derive(Debug, Clone)]
 pub struct ValidatedPlanV6 {
     plan: formato_v6::PlanV6,
@@ -561,16 +471,9 @@ impl ValidatedPlanV6 {
 
 /// Un piano validato, con la propria versione di formato.
 ///
-/// E' cio' che il dispatch rende: le due versioni DAG non collassano l'una
-/// nell'altra, quindi non possono condividere un tipo che ne nasconda la
-/// differenza.
-///
-/// # Perche' `non_exhaustive`
-///
-/// Una v7 non deve essere un'altra rottura per chi fa `match` da fuori. Chi
-/// deve distinguere le versioni che esistono oggi lo fa, e mette un ramo per
-/// quelle che verranno; chi non deve, usa gli accessori qui sotto, che
-/// delegano.
+/// Le due versioni DAG non condividono un tipo che ne nasconda la
+/// differenza. `non_exhaustive`: una versione nuova non rompe chi fa `match`
+/// da fuori; chi non deve distinguere usa gli accessori, che delegano.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PianoValidato {
@@ -678,13 +581,9 @@ impl PianoValidato {
 
     /// La **proiezione strutturale** condivisa, per uso interno al crate.
     ///
-    /// Per la v5 e' il documento stesso, prestato. Per la v6 e' una copia
-    /// costruita — nodi, archi, limiti condivisi — che dichiara 5 perche' e'
-    /// esattamente cio' che e': una proiezione, non il documento v6.
-    ///
-    /// `pub(crate)` di proposito. Da fuori non deve esistere un modo di
-    /// ottenere un `PlanV5` da un piano v6: chi ci canonicalizzasse sopra
-    /// otterrebbe un `plan_hash` del dominio sbagliato.
+    /// Per la v5 e' il documento stesso, prestato; per la v6 una copia che
+    /// dichiara 5, perche' e' una proiezione. `pub(crate)`: da fuori un
+    /// `PlanV5` ricavato da un v6 darebbe un `plan_hash` del dominio sbagliato.
     pub(crate) fn struttura_condivisa(&self) -> std::borrow::Cow<'_, PlanV5> {
         match self {
             Self::V5(piano) => std::borrow::Cow::Borrowed(piano.plan()),
@@ -708,21 +607,10 @@ impl PianoValidato {
 
 /// Dispatch per versione: **una sola lettura decide il percorso**.
 ///
-/// # Che cosa promette, con precisione
-///
-/// Una lettura decide il dispatch. Il parser scelto **verifica di nuovo** il
-/// proprio formato, ed e' giusto che lo faccia: e' l'unico invariante che
-/// impedisce a `PlanV5::parse` di accettare un v6 se qualcuno lo chiamasse
-/// direttamente. La v4 ne fa una terza, nella propria migrazione, per la
-/// stessa ragione.
-///
-/// Cio' che NON accade piu' e' che tre letture indipendenti possano
-/// disaccordarsi su quale percorso prendere: la scelta si fa qui e una volta.
-///
-/// I limiti sui byte e le chiavi duplicate vengono prima della lettura:
-/// `serde_json` risolverebbe una `schema_version` duplicata con «vince
-/// l'ultima», e il percorso finirebbe per dipendere da quale duplicato ha
-/// vinto.
+/// Il parser scelto riverifica il proprio formato, perche' `PlanV5::parse`
+/// non deve accettare un v6 se chiamato direttamente. Limite sui byte e
+/// chiavi duplicate vengono prima della lettura: con una `schema_version`
+/// duplicata `serde_json` farebbe vincere l'ultima.
 ///
 /// # Errors
 ///
@@ -808,13 +696,8 @@ impl PlanV5 {
 
     /// Limiti effettivi e validazione strutturale, **condivisi** fra v5 e v6.
     ///
-    /// Estratto da [`PlanV5::parse`] perche' i due formati differiscono solo
-    /// nel blocco `limits` e nella versione: nodi, archi, arieta', alias e
-    /// regola di sola restrizione sono gli stessi, e duplicarli avrebbe
-    /// prodotto due validazioni libere di divergere.
-    ///
-    /// Non controlla la versione: quello lo fa il parser di ciascun formato,
-    /// che e' l'unico a sapere quale pretendere.
+    /// Una sola validazione di nodi, archi, arieta', alias e sola restrizione.
+    /// Non controlla la versione: lo fa il parser di ciascun formato.
     pub(crate) fn valida_struttura_condivisa(
         mut plan: Self,
         plan_limits: &PlanLimits,
@@ -822,7 +705,7 @@ impl PlanV5 {
         // Il blocco `limits` puo' solo RESTRINGERE la policy di chi esegue
         // (piano-v5.md#limiti-dichiarabili-nel-piano). La base e' quella del
         // chiamante per i limiti di piano e quella della libreria per i
-        // limiti dati/runtime, che e' l'unica policy che la v1 conosce.
+        // limiti dati/runtime.
         let base = Limits {
             plan: plan_limits.clone(),
             ..Limits::default()
@@ -834,29 +717,12 @@ impl PlanV5 {
         // senza che nulla li applichi: l'identita' del piano affermerebbe una
         // proprieta' che il parser non ha verificato.
         let effective_plan_limits = plan.limits.plan.apply_to(plan_limits);
-        // `max_plan_json_bytes` e' l'unico degli otto a non essere applicato
-        // al documento che lo dichiara.
-        //
-        // Non e' una dimenticanza, e' una proprieta' del limite: un tetto sul
-        // testo va applicato prima di leggere il testo, quindi non puo'
-        // venire dal testo. Riapplicarlo dopo il parse sembra innocuo ed e'
-        // una trappola: la forma canonica materializza tutti i limiti
-        // effettivi, quindi e' sempre piu' grande del documento compatto che
-        // l'ha prodotta. Un piano che dichiarasse 300 byte sarebbe stato
-        // accettato, e la sua forma canonica — quella che porta il
-        // `plan_hash` ed e' pensata per essere conservata e riletta — non
-        // sarebbe piu' rientrata. Il campo resta comunque soggetto alla
-        // regola di sola restrizione: un piano non puo' dichiararlo piu'
-        // largo di quello di chi esegue.
-        //
-        // Il valore DICHIARATO resta pero' quello che entra nella forma
-        // canonica, come e' sempre stato. Sovrascriverlo qui con il tetto
-        // del chiamante cambierebbe il `plan_hash` di ogni piano che lo dichiara
-        // esplicitamente, anche con la policy di default: un'identita' gia'
-        // persistita sarebbe diventata un'altra senza cambio di dominio.
-        // `validate_structure` non lo legge — il tetto sui byte si applica
-        // prima del parse — quindi lasciarlo al valore dichiarato non cambia
-        // nulla della validazione.
+        // `max_plan_json_bytes` non si applica al documento che lo dichiara:
+        // un tetto sul testo precede la lettura del testo. Riapplicarlo dopo
+        // rifiuterebbe la forma canonica, che materializza tutti i limiti ed
+        // e' sempre piu' grande del documento compatto. Resta soggetto alla
+        // sola restrizione, e nel canonico entra il valore dichiarato: il
+        // tetto del chiamante cambierebbe il `plan_hash`.
         let topo_order = plan.validate_structure(&effective_plan_limits)?;
         Ok(ValidatedPlanV5 {
             plan,
@@ -980,14 +846,9 @@ impl PlanV5 {
     // peggiorerebbe solo la leggibilita'.
     #[allow(clippy::too_many_lines)]
     fn validate_structure(&mut self, plan_limits: &PlanLimits) -> Result<Vec<String>> {
-        // Un `PlanV5` dichiara **5**, punto. Anche qui dentro.
-        //
-        // Il controllo NON si allarga alle due versioni DAG: la v6 si
-        // proietta esplicitamente in una struttura v5 — che dichiara 5,
-        // perche' e' cio' che e' — e ricompone poi il proprio documento. Il
-        // vincolo resta stretto,
-        // quindi nemmeno il codice interno puo' costruire un
-        // `ValidatedPlanV5` che afferma di essere un v6.
+        // Un `PlanV5` dichiara **5**, anche qui dentro: la v6 si proietta
+        // esplicitamente in una struttura v5, quindi nemmeno il codice interno
+        // costruisce un `ValidatedPlanV5` che afferma di essere un v6.
         if self.schema_version != PLAN_SCHEMA_VERSION_V5 {
             return Err(contract_error(format!(
                 "schema_version {} non supportata; attesa {PLAN_SCHEMA_VERSION_V5}",
@@ -1298,15 +1159,10 @@ fn ancestors_of_output(plan: &PlanV5) -> HashSet<&str> {
 /// `100.0`, vedi [`canonical_numbers`]), default noti materializzati: limiti
 /// effettivi completi e config omessa ≡ `{}`.
 ///
-/// NON applicata (scelta v1): la materializzazione dei default DENTRO le
-/// config per operazione — richiede schemi di config tipizzati per operazione,
-/// che la v1 non ha (la config resta `serde_json::Value`, fuori scope). Una
-/// config omessa e una con i default resi espliciti producono quindi piani
-/// canonici diversi finche' gli schemi tipizzati non saranno introdotti.
-///
-/// Il piano si assume strutturalmente valido (prodotto da [`PlanV5::parse`] o
-/// [`PlanV5::from_legacy`]); su un piano non valido l'ordinamento ricade su
-/// quello lessicografico degli id, mantenendo la funzione totale.
+/// I default dentro le config per operazione non si materializzano: una
+/// config omessa e una con i default espliciti danno canonici diversi. Su un
+/// piano non valido l'ordinamento ricade su quello lessicografico degli id,
+/// e la funzione resta totale.
 #[must_use]
 pub fn canonical_json(plan: &PlanV5) -> Value {
     canonico(plan, PLAN_SCHEMA_VERSION_V5, None)
@@ -1314,15 +1170,10 @@ pub fn canonical_json(plan: &PlanV5) -> Value {
 
 /// Il costruttore vero della forma canonica, **privato**.
 ///
-/// Prende versione e tetto del dominio come parametri perche' i due formati
-/// li scelgono diversamente, e resta privato perche' quei parametri
-/// ammettono combinazioni che nessun formato produce — una v5 con un tetto,
-/// o una versione arbitraria con la semantica della v5. Esporlo avrebbe
-/// offerto a chi chiama un modo di fabbricare un canonico che nessun parser
-/// puo' generare, e quindi un `plan_hash` che non appartiene a nessun piano.
-///
-/// I due soli chiamanti legittimi sono [`canonical_json`], che e' la v5, e
-/// [`ValidatedPlanV6::canonical_json`], che e' la v6.
+/// Versione e tetto sono parametri perche' i due formati li scelgono
+/// diversamente; esporlo permetterebbe combinazioni che nessun parser
+/// produce. Chiamanti: [`canonical_json`] (v5) e
+/// [`ValidatedPlanV6::canonical_json`] (v6).
 fn canonico(plan: &PlanV5, versione: u16, tetto: Option<u64>) -> Value {
     let plan_limits = plan.limits.plan.apply_to(&PlanLimits::default());
     let order = canonical_node_order(plan);
@@ -1438,16 +1289,10 @@ fn canonical_numbers(value: &Value) -> Value {
 /// Forma canonica di un numero: float a valore intero esattamente
 /// rappresentabile (|v| <= 2^53) diventa intero; tutto il resto e' invariato.
 ///
-/// La canonicalizzazione si applica SOLO ai numeri originariamente in virgola
-/// mobile. Un numero gia' in forma intera (`i64`/`u64`) e' canonico per
-/// costruzione e viene restituito invariato: farlo passare per `f64` —
-/// chiamando `as_f64()` incondizionatamente — arrotonda le cifre oltre 2^53 e
-/// fa collassare interi distinti sulla stessa forma canonica. L'intero
-/// 9007199254740993 (2^53+1) diventerebbe il double 9007199254740992.0,
-/// supererebbe la guardia `|v| <= 2^53` e sarebbe canonicalizzato come
-/// 9007199254740992: due config semanticamente diverse
-/// con lo stesso `plan_hash` (violazione di architettura.md#determinismo / piano-v5.md#identita-e-fingerprint, cache e riuso del
-/// piano non piu' sicuri).
+/// Solo i numeri in virgola mobile si canonicalizzano: un `i64`/`u64` fatto
+/// passare per `f64` perde le cifre oltre 2^53 (2^53+1 diventerebbe 2^53), e
+/// due config diverse avrebbero lo stesso `plan_hash`
+/// (architettura.md#determinismo).
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -1482,11 +1327,9 @@ fn canonical_number(number: &Number) -> Value {
 /// Ordine topologico deterministico; su grafo invalido ricade
 /// sull'ordinamento lessicografico degli id (funzione totale).
 ///
-/// L'ordinamento NON dipende dai `PlanLimits`: un piano valido oltre i
-/// default (parsing con limiti custom, es. profondita' maggiore) deve
-/// canonicalizzare nello stesso ordine topologico, non ricadere sul
-/// lessicografico. Il fallback resta solo per i grafi ciclici (piani non
-/// passati per [`PlanV5::parse`]).
+/// L'ordinamento non dipende dai `PlanLimits`: un piano valido oltre i
+/// default canonicalizza nello stesso ordine topologico. Il fallback resta
+/// per i grafi ciclici.
 fn canonical_node_order(plan: &PlanV5) -> Vec<String> {
     let without_limits = PlanLimits {
         max_plan_json_bytes: usize::MAX,

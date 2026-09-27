@@ -8,24 +8,12 @@
 //! passa di qui: usa `scalar_as_f64` (esatto o errore) o `scalar_compare`,
 //! che non converte affatto.
 //!
-//! # Che cosa condivide, e che cosa no
-//!
-//! Qui c'e' soltanto il downcast, la lettura del valore, il null e la
-//! conversione. Riduzioni, comparatori, raggruppamenti, ordinamenti e le
-//! politiche proprie di `aggregate`, delle finestre e di `pivot` restano dove
-//! sono: sono cio' che distingue quelle operazioni, e condividerle
-//! significherebbe dire che sono la stessa.
-//!
-//! Il modulo e' privato: il `pub` qui dentro non esce dal crate.
-//!
-//! # Perche' esiste
-//!
-//! I rami veloci sono un'ottimizzazione sul **tipo fisico** Arrow, non una
-//! semantica alternativa: ogni ramo deve rendere cio' che renderebbe
-//! `scalar_as_f64_rounded`. In un esemplare solo quella regola si verifica
-//! una volta; sparsa fra i chiamanti, ognuno potrebbe seguirla a modo suo e
-//! lo stesso valore darebbe esiti diversi secondo la codifica della
-//! colonna.
+//! Qui stanno solo downcast, lettura, null e conversione; riduzioni,
+//! comparatori e politiche delle singole operazioni restano nei loro moduli.
+//! I rami veloci sono un'ottimizzazione sul tipo fisico Arrow: ogni ramo
+//! rende cio' che renderebbe `scalar_as_f64_rounded`, e tenerli in un punto
+//! solo impedisce che lo stesso valore dia esiti diversi secondo la codifica
+//! della colonna. Il modulo e' privato: il `pub` non esce dal crate.
 
 use std::cmp::Ordering;
 
@@ -62,10 +50,8 @@ impl<'a> Float64Source<'a> {
 
     /// Il valore della riga, `None` se null.
     ///
-    /// **Tutti i rami devono concordare con [`scalar_as_f64_rounded`].** Se
-    /// uno di essi rifiutasse o convertisse diversamente dal ramo generico,
-    /// lo stesso valore darebbe esiti diversi a seconda di come e' codificata
-    /// la colonna.
+    /// **Tutti i rami concordano con [`scalar_as_f64_rounded`]**, altrimenti
+    /// lo stesso valore darebbe esiti diversi secondo la codifica.
     ///
     /// # Errors
     ///
@@ -98,11 +84,8 @@ impl<'a> Float64Source<'a> {
 
 /// I tipi che il contratto considera **numerici**.
 ///
-/// Autorita' unica: la usano l'analizzatore (`require_numeric`) e i kernel.
-/// Due elenchi scritti a mano divergerebbero, e la divergenza si vedrebbe
-/// solo come un piano accettato in analisi e rifiutato in esecuzione, o —
-/// peggio — accettato da entrambi e calcolato su un ordine che nessuno dei
-/// due ha inteso.
+/// Autorita' unica per l'analizzatore (`require_numeric`) e i kernel: due
+/// elenchi separati farebbero divergere analisi ed esecuzione.
 ///
 /// `Utf8` c'e' perche' il contratto ammette il testo **interpretato come
 /// numero**; `Boolean`, `Binary` e le dictionary non ci sono.
@@ -129,17 +112,10 @@ pub const fn dominio_numerico(data_type: &DataType) -> bool {
 ///
 /// # Il testo numerico non e' ordinabile qui
 ///
-/// `Utf8` sta nel dominio numerico perche' il contratto ammette il testo
-/// **interpretato come numero**, e per le operazioni che producono un valore
-/// l'interpretazione arrotonda, come dichiarato. Su un percorso che **decide**
-/// pero' non si puo': `"9007199254740993"` e `"9007199254740992"` sono numeri
-/// distinti, e interpretarli come double li renderebbe a pari merito —
-/// esattamente cio' che il confronto sul dominio originale evita per gli
-/// interi nativi. Confrontarli esattamente richiederebbe un'aritmetica
-/// decimale che questo kernel non ha.
-///
-/// Il testo e' quindi **rifiutato** dalle operazioni di rango, in analisi e in
-/// esecuzione. E' un restringimento dichiarato, non un difetto silenzioso.
+/// Interpretato come double, `"9007199254740993"` e `"9007199254740992"`
+/// sarebbero a pari merito, e il kernel non ha un'aritmetica decimale per
+/// confrontarli esattamente. Le operazioni di rango rifiutano quindi `Utf8`,
+/// in analisi e in esecuzione: e' un restringimento dichiarato.
 pub struct OrdineNumerico<'a>(&'a ArrayRef);
 
 impl<'a> OrdineNumerico<'a> {
@@ -177,11 +153,9 @@ impl<'a> OrdineNumerico<'a> {
 
 /// Pretende che i valori rispettino il contratto numerico della colonna.
 ///
-/// Serve alle varianti che non leggono i valori — dipendono dalla posizione —
-/// e che pero' non possono per questo saltare il contratto: una colonna di
-/// testo dichiarata numerica e piena di parole e' un ingresso invalido a
-/// prescindere da cosa il kernel ne fa. Per i tipi nativi non c'e' nulla da
-/// verificare: il dominio e' il tipo.
+/// Serve alle varianti che dipendono solo dalla posizione: una colonna di
+/// testo non numerico resta un ingresso invalido anche se il kernel non ne
+/// legge i valori. Per i tipi nativi il dominio e' il tipo.
 ///
 /// # Errors
 ///

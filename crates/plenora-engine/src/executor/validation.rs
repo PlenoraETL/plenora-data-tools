@@ -1,16 +1,9 @@
 //! Validazione dinamica: cio' che solo i dati possono dire.
 //!
-//! La validazione statica (decisione D8) legge header e metadati e non puo'
-//! guardare dentro le celle. Qui si controlla il resto: la validita' strutturale
-//! del WKB, i tetti di righe e byte per arco, e i vincoli di espansione — quanto
-//! un'operazione ha il diritto di far crescere il proprio input.
-//!
-//! # Perche' l'espansione ha un tetto
-//!
-//! Un'operazione che moltiplica le righe (un join, un explode) puo' trasformare
-//! un input innocuo in un output ingestibile. Il vincolo dichiarato nel catalogo
-//! dice quanto e' lecito crescere; qui si verifica che sia rispettato, sui dati
-//! veri e non sulla stima.
+//! La validazione statica (D8) non guarda dentro le celle. Qui si controllano
+//! la validita' strutturale del WKB, i tetti di righe e byte per arco e il
+//! vincolo di espansione dichiarato in catalogo, sui dati veri e non sulla
+//! stima.
 
 use std::collections::BTreeMap;
 
@@ -327,14 +320,12 @@ pub(super) fn check_expansion(
     Ok(())
 }
 
-/// Fattore di espansione per nodo binario (errori-e-limiti.md): calcola tutte le
-/// metriche [`JoinExpansion`] e applica il vincolo vincolante dichiarato in
-/// catalogo per l'operazione (default `SumRelative` se l'op non e' in
-/// catalogo — non dovrebbe accadere: il piano e' validato sul catalogo).
-/// La soglia e' `max_expansion_factor` dei limiti effettivi, tranne per il
-/// vincolo `Custom(fattore)`: il fattore dichiarato in catalogo la
-/// sovrascrive per la singola operazione (stima a priori,
-/// architettura.md#planner-ed-executor, errori-e-limiti.md).
+/// Fattore di espansione per nodo binario (errori-e-limiti.md).
+///
+/// Calcola tutte le metriche [`JoinExpansion`] e applica il vincolo dichiarato
+/// in catalogo (default `SumRelative`, il piano e' validato sul catalogo).
+/// La soglia e' `max_expansion_factor`, salvo `Custom(fattore)` che la
+/// sovrascrive per l'operazione (architettura.md#planner-ed-executor).
 pub(super) fn check_join_expansion(
     state: &ExecState,
     kernel: &PreparedKernel,
@@ -392,23 +383,12 @@ pub(super) fn step_error(kernel: &PreparedKernel, error: PlenoraError) -> Plenor
         }));
         return replayed.with_row_diagnostics(diagnostics);
     }
-    // Un limite di RISORSA non diventa `Execution`: la categoria e' cio' su
-    // cui il chiamante decide (rilanciare con piu' budget, non correggere il
-    // piano), e avvolgerla in `Execution` la farebbe sparire — l'errore
-    // uscirebbe come `execution`/exit 6 invece di `resource_limit`/exit 4. Si conserva
-    // la categoria e si aggiunge il contesto del nodo tramite `Replayed`, che
-    // e' il portatore tipizzato di categoria + attribuzione.
-    // Il riconoscimento passa da `category()`, non da un `matches!` sulla
-    // variante ESTERNA: un `ResourceLimit` puo' arrivare dentro un involucro
-    // trasparente — `Tagged` (fase dichiarata da un confine) o un `Replayed`
-    // gia' costruito da un livello piu' interno — e in quel caso un match
-    // sulla variante non lo vedrebbe, quindi la categoria si perderebbe
-    // esattamente nei casi in cui e' stata dichiarata con piu' cura.
-    // `category()` attraversa gli involucri per costruzione.
-    //
-    // QUALI categorie si preservano lo decide `error_propagation`, non questa
-    // funzione: il gemello legacy fa la stessa scelta, e due elenchi scritti
-    // a mano in due file divergerebbero.
+    // Un limite di RISORSA conserva la categoria (`resource_limit`/exit 4, non
+    // `execution`/exit 6): e' cio' su cui il chiamante decide. Il contesto del
+    // nodo si aggiunge via `Replayed`. Si riconosce con `category()`, che
+    // attraversa gli involucri `Tagged`/`Replayed`, non con un match sulla
+    // variante esterna. Quali categorie preservare lo decide
+    // `error_propagation`, unico elenco condiviso col gemello legacy.
     if crate::error_propagation::categoria_preservata(error.category()) {
         return PlenoraError::Replayed(Box::new(ReplayedError {
             category: error.category(),

@@ -105,16 +105,11 @@ fn i_file_prodotti_da_arrow_passano_il_confine_in_entrambi_i_formati() {
 
 #[test]
 fn il_confine_rifiuta_i_metadati_oltre_il_tetto_prima_di_allocare() {
-    // Messaggio stream con metadata_len dichiarato enorme: senza la
-    // pre-validazione arrow tenterebbe l'allocazione. Il confine lo rifiuta
-    // leggendo solo gli 8 byte del prefisso.
-    //
-    // Le due diagnosi vanno distinte. Una lunghezza che il file
-    // NON contiene descrive un file troncato (`data_mapping`); una lunghezza
-    // che il file contiene davvero ma sfora il tetto e' un limite di risorsa
-    // (`resource_limit`). Entrambe rifiutano prima di allocare — e' la
-    // proprieta' che questo test difende — ma dicono al chiamante due cose
-    // diverse, e non vanno collassate in una.
+    // Messaggio stream con metadata_len dichiarato enorme: il confine lo
+    // rifiuta leggendo solo gli 8 byte del prefisso, prima di allocare. Una
+    // lunghezza che il file non contiene e' un file troncato
+    // (`data_mapping`); una che contiene ma sfora il tetto e' un limite di
+    // risorsa (`resource_limit`).
     let directory = tempfile::tempdir().expect("tempdir");
 
     // (a) dichiarazione impossibile in 40 byte di file: TRONCATO.
@@ -508,31 +503,11 @@ fn scrivi(
 /// Il tetto sui dizionari e' **cumulativo**, e vale sugli **ingressi
 /// pubblici**.
 ///
-/// # Che cosa dimostra, e che cosa non basterebbe
-///
-/// Un tetto a zero su un file con dizionari dimostra soltanto che **almeno
-/// un** dizionario viene contato: lo supererebbe anche un controllo sul
-/// massimo, o sul primo che passa. La cumulativita' si dimostra solo con un
-/// tetto che **ciascun body rispetta e la loro somma no**.
-///
-/// Il caso lo costruisce cosi': un file con un dizionario e uno con due, e il
-/// tetto piu' stretto al quale il primo si apre ancora. A quel tetto ogni
-/// singolo dizionario del secondo file sta dentro — sono della stessa taglia —
-/// e solo la somma lo supera.
-///
-/// # Perche' il tetto si cerca invece di scriverlo
-///
-/// Perche' un numero scritto qui sarebbe la taglia che i dizionari hanno
-/// **oggi**, con questa versione di arrow e queste stringhe: cambierebbe sotto
-/// il test senza che il test se ne accorga, e diventerebbe o inefficace o
-/// rosso per la ragione sbagliata. Cercarlo lo lega alla realta' misurata.
-///
-/// # Perche' vale sugli ingressi pubblici
-///
-/// Perche' `open` e `open_with_format` aprono lo stesso formato con lo stesso
-/// lettore di arrow, che i dizionari li decodifica dentro `try_new` e li
-/// trattiene. Una difesa che copre un percorso e non i suoi gemelli non e' una
-/// difesa, e' una coincidenza.
+/// La cumulativita' si dimostra solo con un tetto che ciascun body rispetta e
+/// la somma no: un file con un dizionario, uno con due della stessa taglia, e
+/// il tetto piu' stretto al quale il primo si apre ancora. Il tetto si cerca
+/// invece di scriverlo, perche' la taglia dipende da arrow e dalle stringhe.
+/// Vale per `open` e `open_with_format`, che usano lo stesso lettore.
 #[test]
 fn il_tetto_sui_dizionari_e_cumulativo_anche_sugli_ingressi_pubblici() {
     use plenora_core::error::ErrorCategory;
@@ -565,14 +540,9 @@ fn il_tetto_sui_dizionari_e_cumulativo_anche_sugli_ingressi_pubblici() {
             max_retained_dictionary_body_bytes: tetto,
             ..IpcLimits::default()
         };
-        // Ricerca binaria fra zero e il tetto di default. L'estremo alto e' il
-        // default e non un numero scelto qui: e' il piu' grande valore che il
-        // confine ammette senza configurazione, quindi se la soglia non ci
-        // stesse dentro non ci sarebbe niente da cercare.
-        //
-        // L'apertura e' monotona nel tetto: un file che si apre a un certo
-        // valore si apre anche a tutti quelli maggiori. La bisezione e' lecita
-        // per questo.
+        // Ricerca binaria fra zero e il tetto di default, il massimo che il
+        // confine ammette senza configurazione. L'apertura e' monotona nel
+        // tetto, quindi la bisezione e' lecita.
         let apre = |tetto: u64| open_with_format(&uno, formato, &stretto(tetto)).is_ok();
         assert!(
             apre(IpcLimits::default().max_retained_dictionary_body_bytes),
@@ -719,12 +689,8 @@ fn il_budget_di_memoria_limita_il_confine_anche_senza_piano_v4() {
 
 /// I tre tetti sui custom metadata sono limiti, non file rotti.
 ///
-/// La distinzione non e' accademica: `DataMapping` dice al chiamante che il
-/// file e' corrotto, e lo manda a cercare un difetto che non c'e'. La forma
-/// non ammessa resta `DataMapping`, perche' li' il file lo e' davvero.
-///
-/// Ogni caso verifica **categoria e fase** insieme: il tag del confine deve
-/// vincere sulla derivazione per variante, e questi errori nascono leggendo.
+/// La forma non ammessa resta `DataMapping`, perche' li' il file e' davvero
+/// rotto. Ogni caso verifica categoria e fase insieme.
 #[test]
 fn i_tetti_dei_custom_metadata_sono_limiti_di_risorse() {
     use plenora_core::error::{ErrorCategory, ErrorPhase};

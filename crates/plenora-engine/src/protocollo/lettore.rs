@@ -1,16 +1,10 @@
 //! Il lettore limitato: **legge il prefisso, decide, poi alloca**.
 //!
-//! # Perche' esiste, dato che `decodifica` esiste gia'
-//!
-//! `decodifica` riceve una slice: quando viene chiamata i byte del payload
-//! qualcuno li ha gia' letti. Il suo rifiuto e' sincero su di se' — non alloca
-//! e non guarda oltre i quattro byte — ma da solo non impedisce che un frame
-//! ostile faccia leggere un gigabyte da un canale.
-//!
-//! Quella difesa e' qui, ed e' l'unico posto in cui puo' stare: solo chi legge
+//! `decodifica` riceve una slice, cioe' byte gia' letti: da sola non impedisce
+//! che un frame ostile faccia leggere un gigabyte da un canale. Solo chi legge
 //! puo' decidere di **non** leggere.
 //!
-//! # L'ordine, che e' tutto
+//! # L'ordine
 //!
 //! 1. si leggono esattamente [`BYTE_PREFISSO`] byte;
 //! 2. si chiama [`lunghezza_dichiarata`], l'autorita' gia' provata — non una
@@ -18,15 +12,11 @@
 //! 3. **solo se accetta** si alloca — una volta sola, e in modo fallibile —
 //!    e si legge.
 //!
-//! Un prefisso che dichiara `MAX + 1` fa consumare quattro byte e nient'altro.
-//! Non e' una conseguenza da dedurre leggendo il codice: e' provata con un
-//! lettore-spia che conta i byte consumati.
+//! Un prefisso che dichiara `MAX + 1` fa consumare quattro byte e nient'altro;
+//! lo prova un lettore-spia che conta i byte consumati.
 //!
-//! # Generico su [`Read`], deliberatamente
-//!
-//! Nessun pipe concreto: il canale reale arriva col worker e col supervisore.
-//! Qui c'e' la regola di lettura, e la si prova su sorgenti costruite apposta
-//! per essere ostili — cosa che con un pipe vero sarebbe molto piu' difficile.
+//! Generico su [`Read`] per provare la regola su sorgenti costruite ostili; il
+//! canale reale lo portano worker e supervisore.
 
 use std::io::{ErrorKind, Read};
 
@@ -37,15 +27,9 @@ use super::messaggi::Frame;
 
 /// I byte totali del frame: prefisso piu' payload dichiarato.
 ///
-/// Sta in una funzione sua per poterla **chiamare** in un test invece di
-/// riscrivere `checked_add` accanto all'asserzione: un test che rifa' il
-/// calcolo prova il calcolo del test, e resterebbe verde anche se la somma di
-/// produzione sparisse.
-///
-/// Il ramo di traboccamento e' irraggiungibile per il chiamante vero —
-/// `lunghezza_dichiarata` ha gia' respinto tutto cio' che supera il tetto —
-/// ma esiste perche' la garanzia sta nel tetto, non qui, e un giorno il tetto
-/// potrebbe cambiare senza che nessuno ripassi da questa riga.
+/// Funzione a se' perche' il test chiami la somma di produzione invece di
+/// rifarla. Il traboccamento e' irraggiungibile finche' `lunghezza_dichiarata`
+/// applica il tetto, ma la garanzia sta nel tetto, non qui.
 fn totale_frame(dichiarata: usize) -> Result<usize> {
     BYTE_PREFISSO.checked_add(dichiarata).ok_or_else(|| {
         PlenoraError::Protocol(format!(
@@ -56,18 +40,14 @@ fn totale_frame(dichiarata: usize) -> Result<usize> {
 
 /// Legge un frame da una sorgente qualsiasi.
 ///
-/// Rende `Ok(None)` **solo** se la sorgente e' finita in modo pulito prima del
-/// primo byte del prefisso, cioe' al confine fra un messaggio e il successivo.
-/// E' una condizione diversa da un prefisso troncato, e tenerle separate
-/// conta: la prima e' la fine normale di una conversazione, la seconda e' un
-/// interlocutore che si e' interrotto a meta' parola.
+/// Rende `Ok(None)` **solo** se la sorgente finisce prima del primo byte del
+/// prefisso, cioe' al confine fra due messaggi: la fine normale di una
+/// conversazione, distinta da un prefisso troncato.
 ///
 /// # Errors
 ///
 /// - [`PlenoraError::Io`] se la sorgente fallisce, **conservato**: un guasto
-///   del canale non e' una violazione del protocollo, e riclassificarlo come
-///   tale direbbe che ha sbagliato l'altro capo quando invece si e' rotto il
-///   filo;
+///   del canale non e' una violazione del protocollo dell'altro capo;
 /// - [`PlenoraError::Protocol`] per prefisso o payload troncato, lunghezza
 ///   oltre il tetto, e per tutto cio' che `decodifica` rifiuta.
 pub fn leggi_frame<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<Frame>> {
@@ -79,24 +59,12 @@ pub fn leggi_frame<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<Frame>> 
     // si sa che e' un numero che abbiamo accettato.
     let dichiarata = lunghezza_dichiarata(prefisso)?;
 
-    // **Un** buffer, non due.
-    //
-    // Allocare il payload e poi un secondo `Vec` per rimetterci davanti il
-    // prefisso costerebbe, al limite, due volte ~64 MiB: il doppio di cio' che
-    // il tetto concede. Un tetto smette di essere un tetto se chi lo rispetta
-    // alloca due volte.
-    //
-    // E l'allocazione e' **fallibile**. `vec![0; n]` aborta il processo se il
-    // sistema non ha memoria: su un numero che arriva dall'altro capo del
-    // canale, un abort e' la risposta sbagliata — e non e' nemmeno un errore
-    // che qualcuno possa classificare, perche' il processo non c'e' piu'.
-    //
-    // Questa proprieta' **non e' provata dalla suite**, e va detto invece di
-    // lasciarlo credere: la differenza fra `try_reserve_exact` e
-    // `reserve_exact` si manifesta solo a memoria esaurita, e un test non puo'
-    // esaurirla in modo portabile. Cio' che la sorregge e' la firma —
-    // `try_reserve_exact` rende un `Result`, quindi il fallimento non si puo'
-    // ignorare senza scriverlo.
+    // **Un** buffer, non due: un secondo `Vec` per il prefisso raddoppierebbe
+    // cio' che il tetto concede. L'allocazione e' **fallibile**: su un numero
+    // che arriva dall'altro capo, l'abort di `vec![0; n]` a memoria esaurita
+    // e' la risposta sbagliata. Proprieta' non provata dalla suite (servirebbe
+    // esaurire la memoria in modo portabile): la sorregge la firma di
+    // `try_reserve_exact`, che rende un `Result`.
     let totale = totale_frame(dichiarata)?;
     let mut frame: Vec<u8> = Vec::new();
     frame.try_reserve_exact(totale).map_err(|_| {
@@ -135,8 +103,7 @@ fn leggi_prefisso<R: Read + ?Sized>(sorgente: &mut R) -> Result<Option<[u8; BYTE
 
 /// Perche' una lettura esatta non e' riuscita.
 ///
-/// Le due cause vanno tenute separate fin qui: piu' in su diventerebbero lo
-/// stesso errore, e «il canale si e' rotto» finirebbe scritto come «l'altro
+/// Le due cause restano separate: «il canale si e' rotto» non e' «l'altro
 /// capo ha violato il protocollo».
 enum ErroreLettura {
     Io(std::io::Error),
@@ -146,10 +113,9 @@ enum ErroreLettura {
 /// Riempie `destinazione` per intero, o dice quanti byte ha fatto in tempo a
 /// leggere.
 ///
-/// Scritta a mano invece di `Read::read_exact` per una ragione sola: quella
-/// rende un `io::Error` di `UnexpectedEof` che **non dice quanti byte sono
-/// arrivati**. Su un prefisso quel numero e' la differenza fra «la
-/// conversazione e' finita» e «si e' interrotta a meta'».
+/// Non usa `Read::read_exact` perche' il suo `UnexpectedEof` non dice quanti
+/// byte sono arrivati, e su un prefisso quel numero distingue la fine della
+/// conversazione da un'interruzione.
 fn leggi_esatti<R: Read + ?Sized>(
     sorgente: &mut R,
     destinazione: &mut [u8],
@@ -159,9 +125,8 @@ fn leggi_esatti<R: Read + ?Sized>(
         match sorgente.read(&mut destinazione[letti..]) {
             Ok(0) => return Err(ErroreLettura::Troncato { letti }),
             Ok(quanti) => letti += quanti,
-            // `Interrupted` non e' un guasto: e' un segnale arrivato durante
-            // la syscall. Trattarlo da errore farebbe fallire una lettura
-            // legittima ogni volta che il processo riceve un segnale.
+            // `Interrupted` e' un segnale arrivato durante la syscall, non un
+            // guasto.
             Err(errore) if errore.kind() == ErrorKind::Interrupted => {}
             Err(errore) => return Err(ErroreLettura::Io(errore)),
         }

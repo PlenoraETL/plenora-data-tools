@@ -1,38 +1,17 @@
 //! Lo spawner: entra nel dominio, si spoglia dell'autorita', esegue.
 //!
-//! # Perche' un processo dedicato
-//!
-//! Perche' la sequenza deve girare **fra la nascita del processo e la `exec`**,
-//! e li' non si va senza `unsafe`: `CommandExt::pre_exec` e' `unsafe`, e questo
-//! progetto non ne ammette.
-//!
-//! La strada senza `unsafe` e' spostare la sequenza in un processo **suo**: il
-//! supervisore lancia lo spawner con un `Command::spawn` ordinario, lo spawner
-//! — che e' un processo normale, non un intervallo fra `fork` ed `exec` —
-//! esegue tutti i passi con chiamate sicure, e finisce con `CommandExt::exec`,
-//! che **e' safe** e sostituisce l'immagine senza tornare.
-//!
-//! # Il vincolo del thread singolo, che non e' un dettaglio
+//! E' un processo dedicato perche' la sequenza deve girare fra la nascita del
+//! processo e la `exec`, e `CommandExt::pre_exec` e' `unsafe`. Il supervisore
+//! lo lancia con un `Command::spawn` ordinario, lo spawner esegue i passi con
+//! chiamate sicure e finisce con `CommandExt::exec`, che e' safe.
 //!
 //! `rustix::thread::{set_thread_groups, set_thread_res_gid, set_thread_res_uid}`
-//! sono i syscall **per-thread**: cambiano le credenziali del solo thread
-//! chiamante, non del processo. Il wrapper di glibc le propaga a tutti i thread
-//! con un segnale; queste no.
+//! cambiano le credenziali del **solo thread** chiamante: in un processo
+//! multithread gli altri thread resterebbero privilegiati. Per questo il primo
+//! passo pretende un task solo, e **queste API valgono solo qui**.
 //!
-//! In uno spawner monothread la differenza non esiste — c'e' un thread solo, e
-//! la `exec` conserva le credenziali del chiamante uccidendo gli altri. In un
-//! processo multithread la differenza e' un buco: gli altri thread restano
-//! privilegiati, e uno di essi puo' fare cio' che al thread spogliato e'
-//! vietato.
-//!
-//! Da qui il **primo** passo della sequenza, che verifica `/proc/self/task` e
-//! rifiuta se i task non sono esattamente uno. E da qui il divieto: **queste
-//! API valgono solo qui**, e un chiamante multithread non deve usarle.
-//!
-//! # La sequenza e' fail-closed
-//!
-//! Sette passi, in quest'ordine, e nessun errore intermedio si ignora o si
-//! compensa proseguendo:
+//! La sequenza e' fail-closed: nessun errore intermedio si ignora o si
+//! compensa.
 //!
 //! 1. lo spawner e' monothread;
 //! 2. si entra nel cgroup, e si rilegge l'appartenenza;
@@ -43,67 +22,28 @@
 //!    salvati;
 //! 7. si rileggono identita', gruppi, capability e `no_new_privs`, e si esegue.
 //!
-//! # Che cosa il gate ostile deve provare, e che i casi qui non provano
+//! L'ordine: il cgroup prima dell'identita' (dopo la `setresuid` non si scrive
+//! piu' nella gerarchia), `no_new_privs` prima del cambio d'identita', i
+//! gruppi prima del GID (`setgroups` richiede l'autorita' che il cambio di GID
+//! toglie).
 //!
-//! I casi deterministici provano le regole; l'ambiente no. Queste tre cose
-//! esistono solo su una macchina vera, e senza di esse resterebbero
-//! affermazioni:
+//! Il gate ostile (`scripts/verifica_isolamento_linux.sh`, che fallisce se
+//! mancano i prerequisiti) prova cio' che i casi qui non possono:
 //!
-//! 1. **la sentinella sul dispatch**: questa stessa immagine, rieseguita con
-//!    `argv[1]` uguale alla versione della richiesta, arriva in modalita'
-//!    spawner con **un task solo**. E' cio' che un obbligo scritto non
-//!    garantisce: un `main` che avvia un pool di thread prima di guardare
-//!    `argv` compila, passa ogni caso qui, e rompe il passo 1 solo a runtime;
-//! 2. **l'immagine sostituita**. La proprieta' da provare e' che il binario
-//!    sostitutivo **non parta mai**, e non che parta sempre quello iniziale:
-//!    quest'ultima e' falsa, perche' una `rename` sopra il pathname originario
-//!    toglie l'ultimo collegamento all'inode e fa comparire ` (deleted)` nel
-//!    bersaglio di `/proc/self/exe`, che [`accerta_immagine`] rifiuta. La stessa
-//!    prova non puo' pretendere il rifiuto e la partenza.
-//!
-//!    Gli esiti ammessi sono quindi **due**, e la prova passa con entrambi:
-//!    la sostituzione avviene prima del controllo, e l'esito e'
-//!    [`TransizioneFallita`]; oppure avviene dopo, e parte l'inode iniziale
-//!    attraverso `/proc/self/exe`.
-//!
-//!    Il secondo ramo si distingue solo con una **barriera controllata** fra il
-//!    controllo e lo `spawn`: una corsa temporizzata — sostituire e sperare di
-//!    aver colpito la finestra giusta — non separa «l'inode iniziale e' partito
-//!    perche' il codice e' giusto» da «e' partito perche' la sostituzione e'
-//!    arrivata tardi». La barriera va **dopo** l'accertamento dell'immagine,
-//!    che non e' negoziabile: e' il parametro `dopo_accertamento` di `tenta`.
-//!    Cio' che quel parametro non puo' fare e' saltare il controllo e cambiare
-//!    l'inode che `/proc/self/exe` raggiunge; **rendere obsolete altre
-//!    osservazioni invece si**, ed e' proprio quello che il gate fa — la
-//!    `rename` invalida la fotografia ` (deleted)` che il controllo ha appena
-//!    scattato.
-//!
-//!    La produzione ci passa una callback vuota. L'ingresso che ne passa una
-//!    vera vive sotto `#[cfg(test)]` oppure in un binario **solo** di
-//!    qualificazione, dietro un `cfg` di riga di comando: non dietro una
-//!    feature, che l'unificazione propaga a chi non l'ha chiesta. Chi
-//!    costruisce puo' comunque accenderlo di proposito, e va detto: il
-//!    perimetro protegge dall'incidente, non dall'intenzione.
-//!
-//!    Va detto anche cio' che il controllo ` (deleted)` **non** e': una
-//!    garanzia all'istante della `exec`. E' una fotografia, e fra lo scatto e
-//!    la `exec` il pathname puo' cambiare ancora. Cio' che regge non e' quel
-//!    controllo ma l'esecuzione di `/proc/self/exe`, che al nome non torna;
-//! 3. **la separazione di privilegio**: che un worker spogliato non possa
-//!    riscrivere i quattro controlli, non possa scrivere il `cgroup.procs` del
-//!    padre, e che dopo una `unshare` — riuscita o rifiutata dalla policy — lo
-//!    stato resti invariato.
-//!
-//! Il gate e' `scripts/verifica_isolamento_linux.sh`, e fallisce quando i
-//! prerequisiti mancano invece di saltare verde.
-//!
-//! L'ordine ha una ragione a ogni giunzione. Il cgroup **prima** dell'identita'
-//! perche' entrarci richiede di scrivere nella gerarchia, e dopo la
-//! `setresuid` non si potrebbe piu'. `no_new_privs` **prima** del cambio
-//! d'identita' perche' e' cio' che impedisce a una `exec` successiva di
-//! riguadagnare privilegi via setuid: dopo, sarebbe una porta chiusa quando
-//! qualcuno e' gia' passato. I gruppi **prima** del GID perche' `setgroups`
-//! richiede autorita' che il cambio di GID toglie.
+//! 1. **la sentinella sul dispatch**: questa immagine, rieseguita con
+//!    `argv[1]` uguale alla versione della richiesta, arriva spawner con **un
+//!    task solo**;
+//! 2. **l'immagine sostituita**: il binario sostitutivo non parte mai. Gli
+//!    esiti ammessi sono due: sostituzione prima del controllo e
+//!    [`TransizioneFallita`] (` (deleted)`, rifiutato da [`accerta_immagine`]),
+//!    oppure dopo, e parte l'inode iniziale via `/proc/self/exe`. Li separa una
+//!    barriera controllata dopo l'accertamento (`dopo_accertamento` di
+//!    `tenta`), non una corsa temporizzata. Il controllo ` (deleted)` e' una
+//!    fotografia, non una garanzia all'istante della `exec`: regge
+//!    l'esecuzione di `/proc/self/exe`;
+//! 3. **la separazione di privilegio**: un worker spogliato non riscrive i
+//!    quattro controlli ne' il `cgroup.procs` del padre, e dopo una `unshare`
+//!    lo stato resta invariato.
 
 use std::io::Write as _;
 use std::os::unix::fs::MetadataExt as _;
@@ -130,53 +70,21 @@ use super::{
 
 /// Avvia lo spawner sul dominio appena preparato.
 ///
-/// # Perche' consuma il token
+/// Consuma il token: un dominio, uno spawner. Attraversa il confine solo
+/// [`RichiestaSpawner`]; l'evidenza esce da questa parte, insieme al figlio.
 ///
-/// Perche' il preflight prepara **un** dominio e ne avvia **uno** spawner.
-/// Prendere il token per riferimento permetterebbe di avviarne due sullo stesso
-/// dominio: il secondo troverebbe la quiescenza gia' rotta dal primo, e la
-/// troverebbe rotta per una ragione che il rifiuto non sa distinguere da un
-/// dominio altrui.
-///
-/// # Che cosa attraversa il confine
-///
-/// Solo [`RichiestaSpawner`], che dice su che cosa lavorare e non afferma
-/// niente. Il token resta qui e muore qui: non e' trasmissibile, e non c'e'
-/// nessuna forma in cui lo spawner possa riceverlo e crederci.
-///
-/// L'evidenza esce invece **da questa parte**, insieme al figlio: e' cio' che
-/// il preflight ha osservato, vale dopo la transizione, e non e' una prova che
-/// lo spawner debba ricevere.
-///
-/// # Quale binario, e perche' non lo sceglie il chiamante
-///
-/// Lo spawner e' **questa stessa immagine**, rieseguita. Il percorso viene dal
-/// kernel — `/proc/self/exe` — e non da un argomento: un percorso scelto dal
-/// chiamante renderebbe questa funzione un `Command::spawn` qualunque, capace
-/// di rendere un figlio nato fuori dal dominio, con l'identita' del supervisore
-/// e senza nessuno dei sette passi, e indistinguibile per il chiamante da una
-/// transizione riuscita.
-///
-/// Il figlio si riconosce come spawner perche' il suo `argv[1]` e'
-/// [`VERSIONE_RICHIESTA`]. Da qui un obbligo per il chiamante di produzione, che
-/// vale prima di ogni altra cosa che faccia all'avvio — thread compresi, perche'
-/// il primo passo della sequenza pretende un processo monothread: se `argv[1]`
-/// e' quella stringa, il programma e' uno spawner e passa la mano a
-/// [`dal_confine`].
-///
-/// L'obbligo va **provato**, non dichiarato: un `main` che crea un pool di
-/// thread prima di guardare `argv` compila, passa ogni caso deterministico, e
-/// rende impossibile il passo 1 solo a runtime e solo sulla macchina vera. La
-/// sentinella del gate ostile riesegue quindi questa stessa immagine con
-/// `argv[1]` uguale a [`VERSIONE_RICHIESTA`] e pretende che arrivi in modalita'
-/// spawner con un task solo.
+/// Lo spawner e' **questa stessa immagine**, rieseguita da `/proc/self/exe` e
+/// mai da un percorso del chiamante, che avvierebbe un figlio fuori dal
+/// dominio indistinguibile da una transizione riuscita. Si riconosce dal suo
+/// `argv[1]`, [`VERSIONE_RICHIESTA`]: il chiamante di produzione deve passare
+/// la mano a [`dal_confine`] prima di ogni altra cosa all'avvio, thread
+/// compresi. L'obbligo lo prova la sentinella del gate ostile.
 ///
 /// # Errors
 ///
-/// [`TransizioneFallita`], che porta la causa **e** l'evidenza. E' in un `Box`
-/// perche' porta tutto cio' che il preflight ha osservato — percorsi, montaggio,
-/// namespace — ed e' quindi molto piu' grande dell'esito riuscito: senza,
-/// **ogni** chiamata pagherebbe in pila la dimensione del ramo raro.
+/// [`TransizioneFallita`], che porta la causa **e** l'evidenza. Sta in un
+/// `Box` perche' e' molto piu' grande dell'esito riuscito, che altrimenti
+/// pagherebbe in pila la dimensione del ramo raro.
 pub(super) fn avvia(
     preparato: DominioPreparato,
     da_eseguire: &DaEseguire<'_>,
@@ -188,49 +96,22 @@ pub(super) fn avvia(
     avvia_interno(preparato, da_eseguire, artefatto, || Ok(()), || Ok(()))
 }
 
-/// Il corpo condiviso fra [`avvia`] e la sua variante con barriera.
+/// Il tentativo vero e proprio, condiviso fra [`avvia`] e la sua variante con
+/// barriera.
 ///
-/// Sta qui e non dentro `avvia` perche' la variante con barriera vive nel
-/// perimetro di qualificazione, e due copie della sequenza sarebbero due
-/// sequenze che possono divergere — proprio quella che il gate misura.
-/// Il tentativo vero e proprio.
+/// Una copia sola, perche' la variante vive nel perimetro di qualificazione e
+/// due sequenze potrebbero divergere proprio dove il gate misura.
 ///
-/// # L'ordine dei due, e perche' non e' invertibile
+/// `accerta_immagine` viene **prima** e non passa da un parametro: cederla al
+/// chiamante la renderebbe facoltativa. `dopo_accertamento` viene **dopo**: e'
+/// la barriera con cui il gate sostituisce il binario fra controllo e `spawn`.
+/// Non puo' saltare il controllo ne' cambiare l'inode che `/proc/self/exe`
+/// raggiunge; rende obsoleta la fotografia ` (deleted)`, e basta perche'
+/// l'inode e' l'unica cosa che si esegue.
 ///
-/// `accerta_immagine` viene **prima** e non passa da nessun parametro. E' la
-/// condizione che rende lo spawner uno spawner — immagine non cancellata,
-/// regolare, non riscrivibile dal worker — e cederla al chiamante la
-/// renderebbe facoltativa: chi passasse un accertamento vuoto avrebbe lo
-/// `spawn` senza nessun controllo. Il binario resterebbe `/proc/self/exe`, ma
-/// l'invariante non varrebbe piu' per costruzione, e varrebbe solo finche'
-/// tutti i chiamanti si comportano bene.
-///
-/// `dopo_accertamento` viene **dopo**. E' la barriera che il gate ostile ha
-/// bisogno di inserire per sostituire il binario **fra** il controllo e lo
-/// `spawn`, che e' l'unico modo di distinguere «l'inode iniziale e' partito
-/// perche' il codice e' giusto» da «e' partito perche' la sostituzione e'
-/// arrivata tardi».
-///
-/// # Che cosa la barriera puo' e non puo' fare
-///
-/// Non puo' **saltare** il controllo, perche' non lo sostituisce: quando viene
-/// chiamata, l'accertamento e' gia' avvenuto. E non puo' cambiare **l'inode
-/// che `/proc/self/exe` raggiunge**, che e' quello di questo processo e non
-/// dipende da nessun nome.
-///
-/// Puo' invece rendere obsolete le altre osservazioni, ed e' precisamente cio'
-/// che il gate fa: rinominando il pathname invalida la fotografia
-/// ` (deleted)` appena scattata. Dire che «non puo' disfare cio' che il
-/// controllo ha stabilito» sarebbe quindi falso — di quel controllo restano
-/// vere solo le conclusioni che riguardano l'inode, e la ragione per cui basta
-/// e' che l'inode e' anche l'unica cosa che si esegue.
-///
-/// La produzione passa una callback vuota. Che nessun altro possa passarne una
-/// diversa e' garantito dal fatto che questa funzione e' **privata** e ha un
-/// solo chiamante: l'ingresso che serve al gate vive sotto `#[cfg(test)]` o in
-/// un binario solo di qualificazione, mai dietro una feature — perche' una
-/// feature l'unificazione la propaga, e ci si arriverebbe senza averlo
-/// chiesto.
+/// La produzione passa una callback vuota. La funzione e' privata con un solo
+/// chiamante: l'ingresso del gate vive sotto `#[cfg(test)]` o in un binario
+/// di qualificazione, mai dietro una feature, che l'unificazione propaga.
 fn tenta(
     richiesta: &RichiestaSpawner,
     worker: IdentitaWorker,
@@ -242,17 +123,11 @@ fn tenta(
     accerta_immagine(worker)?;
     dopo_accertamento()?;
 
-    // 1. Il comando si costruisce **mentre tutto e' ancora `CLOEXEC`**.
+    // 1. Il comando si costruisce **mentre tutto e' ancora `CLOEXEC`**, per non
+    // allungare la finestra con allocazioni e fallimenti.
     //
-    // Non e' un ordine di comodo: costruire gli argomenti dopo aver reso
-    // ereditabili i descrittori allungherebbe la finestra di tutto cio' che
-    // serve a costruirli — allocazioni, formattazioni, e ogni loro possibile
-    // fallimento.
-    //
-    // Si esegue `/proc/self/exe`, non il nome che quel collegamento risolve: il
-    // nome puo' essere sostituito fra il giudizio e questa riga — una `rename`
-    // e' atomica — mentre il collegamento resta legato all'immagine di questo
-    // processo.
+    // Si esegue `/proc/self/exe`, non il nome che risolve: il nome si puo'
+    // sostituire con una `rename`, il collegamento resta legato all'immagine.
     let mut comando = std::process::Command::new(IMMAGINE);
     comando
         .args(richiesta.in_argomenti())
@@ -303,18 +178,10 @@ const IMMAGINE: &str = "/proc/self/exe";
 
 /// Che l'immagine in esecuzione sia rieseguibile.
 ///
-/// # Le due letture, e perche' in quest'ordine
-///
-/// Il **nome** si legge con `read_link`, che rende il bersaglio cosi' com'e',
-/// suffisso ` (deleted)` compreso. L'**inode** si interroga invece attraverso
-/// `/proc/self/exe`, che si risolve all'immagine anche quando quel nome non
-/// esiste piu'.
-///
-/// Interrogare il nome sarebbe sbagliato due volte. Su un'immagine rimossa
-/// fallirebbe con `NotFound` prima ancora che qualcuno guardi il suffisso, e il
-/// rifiuto arriverebbe con la ragione sbagliata. E su un'immagine sostituita
-/// riuscirebbe, descrivendo pero' il file **nuovo**: proprietario e permessi
-/// giudicati sarebbero di un binario che non e' questo.
+/// Il **nome** si legge con `read_link`, suffisso ` (deleted)` compreso;
+/// l'**inode** si interroga attraverso `/proc/self/exe`. Interrogare il nome
+/// fallirebbe su un'immagine rimossa con la ragione sbagliata, e su una
+/// sostituita descriverebbe il file nuovo.
 ///
 /// # Errors
 ///
@@ -340,21 +207,11 @@ fn accerta_immagine(worker: IdentitaWorker) -> Result<()> {
 
 /// L'ingresso dello spawner: legge la richiesta, rivalida, esegue.
 ///
-/// # Perche' rivalida invece di ricevere una prova
-///
-/// Perche' una prova sarebbe qualcosa che questo processo accetta per buona, e
-/// un processo che crede a cio' che gli viene detto non aggiunge nessuna
-/// garanzia a quella del mittente. Qui si riguarda tutto: ambiente, percorsi,
-/// montaggio, permessi, namespace e i quattro controlli — e l'esito e' un
-/// [`DominioRivalidato`] **locale**, che nessuno ha spedito.
-///
-/// # Che cosa **non** fa, e perche' non e' una svista
-///
-/// Non scrive i quattro controlli: li rilegge. Il tetto deve essere gia' in
-/// vigore quando questo processo nasce (`F4-1`, `GA-7`), e scriverlo qui
-/// vorrebbe dire che fra la nascita e il limite c'e' una finestra. Spostare
-/// l'intero preflight qui cambierebbe la macchina a stati documentata, e non e'
-/// una cosa che si fa di straforo.
+/// Rivalida tutto (ambiente, percorsi, montaggio, permessi, namespace e i
+/// quattro controlli) in un [`DominioRivalidato`] **locale**: un processo che
+/// crede al mittente non aggiunge garanzie. Non scrive i controlli, li
+/// rilegge: il tetto e' gia' in vigore quando lo spawner nasce (`F4-1`,
+/// `GA-7`).
 ///
 /// # Errors
 ///
@@ -365,24 +222,13 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
     let richiesta =
         RichiestaSpawner::da_argomenti(grezza).map_err(|motivo| passo("richiesta", &motivo))?;
 
-    // Stadio 2: i due descrittori ereditati si riguardano **qui**, prima di
-    // entrare nel dominio e prima di spogliarsi dell'autorita'.
+    // Stadio 2: i due descrittori ereditati si **riguardano** qui, prima di
+    // entrare nel dominio e di spogliarsi dell'autorita': rifiutare dopo
+    // costerebbe un rimedio. La verifica del supervisore riguardava i suoi
+    // descrittori, non questi numeri.
     //
-    // Prima, perche' un canale che non regge e' un motivo per non proseguire, e
-    // proseguire vorrebbe dire configurare un dominio e cambiare identita' per
-    // poi accorgersene dopo — quando rifiutare costa un rimedio invece di un
-    // ritorno.
-    //
-    // E si **riguardano**, non si ricevono: cio' che attraversa il confine sono
-    // due numeri, che non affermano niente. Il supervisore li ha verificati nel
-    // proprio processo, ma quella verifica riguarda i **suoi** descrittori; qui
-    // sono altri numeri in un'altra tabella, e l'unica cosa che li lega e'
-    // un'affermazione del chiamante.
-    // La coppia **rivalidata qui** e' cio' che il worker ricevera', e non i due
-    // numeri della richiesta: sono gli stessi valori solo finche' nessuno mente,
-    // e il senso di questo passo e' proprio non doverlo dare per scontato. Il
-    // valore non si costruisce, si **riceve** da chi lo ha verificato: non c'e'
-    // un modo di ottenerne uno senza passare di li'.
+    // Il worker riceve la coppia **rivalidata qui**, non i numeri della
+    // richiesta, e il valore si ottiene solo da chi lo ha verificato.
     let canale_del_worker =
         canale::accerta_coppia(richiesta.worker_legge, richiesta.worker_scrive)?;
     // Il terzo descrittore, quando c'e': stesso principio dei due estremi del
@@ -414,26 +260,11 @@ pub(super) fn dal_confine(argomenti: &[std::ffi::OsString]) -> Result<std::conve
 
 /// [`avvia`] con una barriera fra l'accertamento dell'immagine e lo `spawn`.
 ///
-/// # Perche' esiste, e perche' non esiste in produzione
-///
-/// Esiste per **una** prova: che a essere eseguito sia l'inode e non il nome.
-/// Dimostrarlo richiede di sostituire il binario mentre il processo e' fermo
-/// fra il controllo e lo `spawn`, e senza un punto in cui fermarlo resterebbe
-/// una corsa temporizzata — sostituire e sperare di aver colpito la finestra,
-/// che non separa «e' partito l'inode giusto perche' il codice e' giusto» da
-/// «perche' la sostituzione e' arrivata tardi».
-///
-/// Non entra in produzione per incidente perche' `qualificazione_isolamento`
-/// non e' una feature: e' un `cfg` che si passa a `rustc`. Una feature la si
-/// abilita dichiarandola fra le dipendenze, e l'unificazione la propaga anche a
-/// chi non l'ha chiesta; un `cfg` non si propaga. Chi costruisce puo'
-/// comunque metterlo in `RUSTFLAGS`: la garanzia e' contro l'incidente, non
-/// contro l'intenzione.
-///
-/// La barriera non puo' saltare l'accertamento — quando corre, quello e' gia'
-/// avvenuto — ne' cambiare l'inode che `/proc/self/exe` raggiunge. Rende invece
-/// obsolete le osservazioni sul nome, ed e' esattamente cio' che il gate le
-/// chiede di fare.
+/// Serve a **una** prova: che si esegua l'inode e non il nome, sostituendo il
+/// binario mentre il processo e' fermo fra controllo e `spawn`. Sta sotto
+/// `qualificazione_isolamento`, un `cfg` di `rustc` e non una feature, che
+/// l'unificazione propagherebbe; chi lo mette in `RUSTFLAGS` lo accende di
+/// proposito, e la garanzia e' contro l'incidente, non l'intenzione.
 ///
 /// # Errors
 ///
@@ -525,15 +356,10 @@ fn avvia_interno(
     // **un punto solo**. Non e' eleganza: due punti di rimedio sono due
     // occasioni di divergere, e quella che diverge e' sempre la seconda.
     if let Err(causa) = dopo_lo_spawn() {
-        // Si conservano **entrambi** i difetti. La causa dice perche' la
-        // transizione non e' riuscita; il difetto di pulizia dice che cosa e'
-        // rimasto — e sono due fatti diversi, che il supervisore usa in due
-        // momenti diversi. Sostituire il primo col secondo direbbe che il
-        // problema e' la pulizia, che e' la diagnosi sbagliata.
-        // L'uscita non serve qui: su questo cammino la transizione non e'
-        // avvenuta, e **come** il figlio e' morto non aggiunge niente a
-        // «l'avvio e' fallito». Chi la usa e' il supervisore, che raccoglie un
-        // figlio che ha lavorato.
+        // Si conservano **entrambi** i difetti: la causa dice perche' la
+        // transizione non e' riuscita, il difetto di pulizia che cosa e'
+        // rimasto. L'uscita del figlio non aggiunge niente a «l'avvio e'
+        // fallito».
         let difetto_di_pulizia = match figlio.termina_e_raccogli(
             figlio_guardia::LIMITE_DI_RACCOLTA,
             &figlio_guardia::OrologioDiSistema::nuovo(figlio_guardia::PASSO_DI_RACCOLTA),
@@ -542,17 +368,9 @@ fn avvia_interno(
                 (!difetti.is_empty()).then(|| difetti.join("; "))
             }
             figlio_guardia::Chiusura::NonRaccolto { guardia, difetti } => {
-                // Qui **non** c'e' nessuno a cui la guardia possa risalire.
-                //
-                // Cio' che questa funzione rende e' un errore tipizzato, e un
-                // errore non tiene un processo: attraversa i confini, viene
-                // convertito, e finisce in una superficie pubblica dove un
-                // `FiglioVivo` non ha posto. Farlo scendere in una riga di
-                // rapporto lascerebbe un processo che nessuno aspetta mentre
-                // l'avvio dichiara di essere fallito ordinatamente.
-                //
-                // Ci si ferma, dicendo perche'. E' l'esito peggiore tranne uno:
-                // proseguire.
+                // Qui la guardia non puo' risalire a nessuno: un errore
+                // tipizzato non tiene un processo. Ci si ferma, dicendo
+                // perche'; proseguire sarebbe peggio.
                 guardia.arrenditi(&format!(
                     "l'avvio non e' riuscito e la chiusura del figlio nemmeno: {}",
                     difetti.join("; ")
@@ -587,21 +405,11 @@ fn avvia_interno(
 
 /// La riga di comando divisa sul `--`.
 ///
-/// Il separatore serve perche' gli argomenti del worker sono arbitrari: senza,
-/// un worker chiamato con sei argomenti che cominciano con la stringa di
-/// versione sarebbe indistinguibile da una richiesta.
-///
-/// # Perche' presta invece di copiare
-///
-/// Perche' questo codice gira **prima** del passo 2, cioe' mentre il processo
-/// e' ancora fuori dal cgroup e nessun tetto lo governa. Copiare la richiesta e
-/// tutti gli argomenti del worker raddoppierebbe li' una quantita' che il
-/// chiamante sceglie e che `ARG_MAX` limita a qualche megabyte: piccola in
-/// assoluto, ma non governata, e allocata esattamente dove il limite non c'e'
-/// ancora.
-///
-/// Le fette vivono quanto gli argomenti da cui vengono, che sono quelli del
-/// processo e durano fino alla `exec`: non c'e' niente da possedere.
+/// Il separatore distingue gli argomenti arbitrari del worker dalla
+/// richiesta. Presta invece di copiare: il codice gira **prima** del passo 2,
+/// fuori dal cgroup, dove una copia di argomenti scelti dal chiamante non
+/// sarebbe governata. Le fette durano quanto gli argomenti del processo, cioe'
+/// fino alla `exec`.
 fn spacca(argomenti: &[std::ffi::OsString]) -> Result<(&[std::ffi::OsString], DaEseguire<'_>)> {
     let taglio = argomenti
         .iter()
@@ -623,13 +431,9 @@ fn spacca(argomenti: &[std::ffi::OsString]) -> Result<(&[std::ffi::OsString], Da
 /// Che cosa lo spawner deve **eseguire**.
 ///
 /// Dominio, montaggio, radice, namespace e identita' non stanno qui: arrivano
-/// tutti insieme dal token che il preflight rende, e arrivarci come campi
-/// indipendenti permetterebbe di verificare una combinazione ed eseguirne
-/// un'altra.
-///
-/// I campi sono **prestiti**: cio' che va eseguito e' gia' in memoria — negli
-/// argomenti del processo, o presso il supervisore — e riprodurlo qui vorrebbe
-/// dire allocare fuori dal dominio una quantita' che il chiamante sceglie.
+/// insieme dal token, perche' campi indipendenti permetterebbero di
+/// verificare una combinazione ed eseguirne un'altra. I campi sono
+/// **prestiti**, per non allocare fuori dal dominio.
 pub(super) struct DaEseguire<'a> {
     pub(super) eseguibile: &'a Path,
     pub(super) argomenti: &'a [std::ffi::OsString],
@@ -637,19 +441,15 @@ pub(super) struct DaEseguire<'a> {
 
 /// Esegue la sequenza e poi il worker.
 ///
-/// # Che cosa rende
-///
-/// Non rende mai `Ok`: se la `exec` riesce, ha sostituito l'immagine e questa
-/// funzione non esiste piu'. Il tipo lo dice — `Infallible` nel ramo riuscito —
-/// perche' una firma che ammettesse un ritorno normale inviterebbe a
-/// scriverci del codice dopo, e quel codice non girerebbe mai.
+/// Non rende mai `Ok`: se la `exec` riesce, l'immagine e' sostituita.
+/// `Infallible` nel ramo riuscito impedisce di scrivere codice che non
+/// girerebbe mai.
 ///
 /// # Errors
 ///
 /// [`PlenoraError::IsolationUnavailable`] per ogni passo che non regge, col
-/// nome del passo e il modo. Nessun passo si compensa proseguendo: un ambiente
-/// che non concede uno dei sette non e' un ambiente in cui il profilo isolato
-/// vale meno, e' uno in cui non vale.
+/// nome del passo e il modo. Nessun passo si compensa proseguendo: senza uno
+/// dei sette il profilo isolato non vale.
 fn entra_ed_esegui(
     rivalidato: DominioRivalidato,
     canale_del_worker: super::NumeriDelCanale,
@@ -672,49 +472,19 @@ fn entra_ed_esegui(
 
     // --- 4-bis. il canale passa al worker anche come proprieta' ------------
     //
-    // # Perche' serve
+    // Il worker **riapre** i propri estremi da `/proc/self/fd` (l'adozione per
+    // numero e' `unsafe`), e la riapertura controlla i permessi sull'inode
+    // della pipe, che appartiene al supervisore: dopo il passo 6 risponderebbe
+    // `Permission denied`.
     //
-    // Perche' il worker **riapre** i propri estremi da `/proc/self/fd`, e quella
-    // riapertura controlla i permessi sull'inode della pipe. Le pipe le ha
-    // create il supervisore, quindi appartengono a lui: dopo il passo 6 il
-    // worker ha un'altra identita' e la riapertura gli risponde
-    // `Permission denied`. Il canale ci sarebbe — i descrittori sono ereditati e
-    // validi — e il worker non potrebbe prenderne possesso.
+    // Qui e non altrove: prima, sarebbe un'autorita' esercitata dentro la
+    // verifica del passo 4; dopo, il passo 6 ha tolto i privilegi per farlo.
     //
-    // Non lo si evita smettendo di riaprire: prendere possesso di un descrittore
-    // ereditato **per numero** richiede di costruirne un proprietario da un
-    // intero grezzo, e ogni via per farlo e' `unsafe`, che questo crate vieta.
-    // La riapertura e' la sola forma sicura, ed e' anche quella che permette di
-    // **accertare** che l'estremo sia quello dichiarato invece di crederci.
-    //
-    // # Perche' proprio qui
-    //
-    // Non prima: il passo 4 pretende che non resti nessun descrittore scrivibile
-    // verso il control plane, e un cambio di proprieta' fatto sopra sarebbe
-    // un'autorita' esercitata nel mezzo di quella verifica. Non dopo: il passo 6
-    // toglie proprio i privilegi che servono a cedere la proprieta'.
-    //
-    // # Che cosa si cede, e che cosa no
-    //
-    // I **due oggetti pipe**, che sono due e non quattro: ogni pipe ha un inode
-    // solo, e i due lati lo condividono. Cedere l'estremo del worker cede quindi
-    // anche l'inode su cui il supervisore ha il proprio estremo — e va detto,
-    // perche' e' facile leggerlo come «gli altri due restano miei».
-    //
-    // Cio' che il supervisore conserva sono i propri **handle gia' aperti**, non
-    // la proprieta' degli inode: il permesso si controlla all'apertura, e i suoi
-    // descrittori sono aperti da prima. Continua a leggere e scrivere come
-    // sempre; cio' che non potrebbe piu' fare e' **riaprirli** da
-    // `/proc/self/fd`, che e' un'operazione che non compie.
-    //
-    // Al worker questo non da' niente che non abbia gia' — i descrittori li ha
-    // ereditati — gli da' il modo di riaprirli, che e' come il protocollo
-    // pretende che li prenda.
-    //
-    // Il cambio passa dal percorso e non dal numero: `chown` su
-    // `/proc/self/fd/N` segue il collegamento fino all'inode della pipe, e non
-    // richiede di costruire un prestito da un intero — che sarebbe di nuovo
-    // `unsafe`.
+    // Si cedono i **due oggetti pipe**: i due lati condividono l'inode, quindi
+    // si cede anche quello dell'estremo del supervisore. Il supervisore
+    // conserva gli handle gia' aperti (il permesso si controlla all'apertura),
+    // e non li riapre. Il `chown` passa da `/proc/self/fd/N`, che segue il
+    // collegamento fino all'inode senza costruire un prestito da un intero.
     for (numero, quale) in [
         (canale_del_worker.legge, "lettura"),
         (canale_del_worker.scrive, "scrittura"),
@@ -773,34 +543,22 @@ fn entra_ed_esegui(
 
     // --- 7. rilettura, e solo allora la exec -------------------------------
     //
-    // Impostare non e' essere. Cio' che segue e' cio' che il processo **e'**,
-    // letto da `/proc/self`, e se non coincide con l'incarico la `exec` non
-    // parte.
-    // `rileggi_credenziali` e non `leggi_identita`: dopo la `setresuid` il
-    // kernel azzera il flag *dumpable* e rende `/proc/self/{ns,fd,fdinfo}`
-    // inattraversabili al processo stesso. Cio' che si rilegge e' cio' che il
-    // cambio puo' aver toccato; cio' che si porta avanti e' cio' che non puo'
-    // essersi mosso, e la ragione sta sulla funzione.
+    // Impostare non e' essere: se cio' che il processo **e'** non coincide con
+    // l'incarico, la `exec` non parte. `rileggi_credenziali` e non
+    // `leggi_identita`: dopo la `setresuid` il flag *dumpable* rende
+    // `/proc/self/{ns,fd,fdinfo}` inattraversabili, e la ragione sta sulla
+    // funzione.
     let dopo = rileggi_credenziali(&prima).map_err(|errore| passo("rilettura", &errore))?;
     verifica_spogliato(&dopo, &namespace_del_padre, worker, dispositivo)?;
 
-    // La variabile del canale si **impone**, e non si aggiunge: `env` sostituisce
-    // qualunque valore ereditato. Un `PLENORA_CANALE` gia' presente
-    // nell'ambiente — messo da chi ha avviato il supervisore, o rimasto da un
-    // tentativo precedente — direbbe al worker due numeri che non sono i suoi, e
-    // il worker li rivaliderebbe trovandoli buoni: sarebbero descrittori veri,
-    // solo di un altro canale.
+    // La variabile del canale si **impone**: `env` sostituisce un
+    // `PLENORA_CANALE` ereditato, che indicherebbe descrittori veri di un
+    // altro canale. La forma la decide `in_variabile`, e il worker rivalida
+    // comunque.
     //
-    // La forma la decide `in_variabile`, che e' la meta' scrivente della stessa
-    // convenzione che il worker legge. E il worker **rivalida comunque**: quello
-    // che arriva di qui e' un'affermazione, come tutto il resto che attraversa
-    // una `exec`.
-    //
-    // La variabile dell'artefatto segue lo stesso principio, e si aggiunge
-    // **solo** quando c'e' un numero da dire: un `PLENORA_ARTEFATTO_LETTURA`
-    // scritto per un worker ordinario affermerebbe un terzo descrittore che
-    // non esiste, e il worker — che non lo legge mai — non se ne
-    // accorgerebbe: e' il verificatore a dipenderne, e solo lui la cerca.
+    // `PLENORA_ARTEFATTO_LETTURA` si aggiunge **solo** quando c'e' un numero:
+    // per un worker ordinario affermerebbe un descrittore che non esiste, e
+    // solo il verificatore la legge.
     let mut comando = std::process::Command::new(da_eseguire.eseguibile);
     comando.args(da_eseguire.argomenti).env(
         canale::VARIABILE_DEL_CANALE,
@@ -818,18 +576,14 @@ fn entra_ed_esegui(
 /// appartenenza al dominio, uccidibilita', nessun descrittore scrivibile
 /// verso il control plane.
 ///
-/// # Perche' separata
-///
-/// Perche' `entra_ed_esegui` supera altrimenti il tetto di righe per
-/// funzione (R6): non e' un taglio arbitrario, segue lo stesso confine che
-/// il commento di `entra_ed_esegui` traccia fra «prima del cambio
-/// d'identita'» e il cambio stesso. Rende `dispositivo` e `prima`
-/// perche' li usa anche il passo 7, dopo il cambio — non li ricalcola.
+/// Separata per il tetto di righe per funzione (R6), sul confine «prima del
+/// cambio d'identita'». Rende `dispositivo` e `prima`, che servono anche al
+/// passo 7.
 ///
 /// # Errors
 ///
 /// [`PlenoraError::IsolationUnavailable`] al primo dei quattro passi che non
-/// regge, con lo stesso nome di passo che aveva prima dell'estrazione.
+/// regge, col nome del passo.
 fn accerta_prima_del_cambio_identita(
     dominio: &Path,
     radice: &Path,
@@ -868,14 +622,9 @@ fn accerta_prima_del_cambio_identita(
 
     // --- 3. uccidibilita' --------------------------------------------------
     //
-    // A `-1000` il kernel non uccide il task **nemmeno con
-    // `memory.oom.group = 1`**: un worker che eredita quel valore da un
-    // chiamante protetto sopravvive al group kill e riproduce `F4-8`. E l'esito
-    // e' peggiore della sopravvivenza: un dominio che raggiunge il limite senza
-    // uccidere nessuno non avanza piu', e richiede un `cgroup.kill`
-    // dall'esterno.
-    //
-    // Scrivere senza verificare non e' normalizzare: e' sperare.
+    // A `-1000` il kernel non uccide il task nemmeno con
+    // `memory.oom.group = 1`: il worker sopravvive al group kill (`F4-8`), e
+    // il dominio al limite non avanza piu' senza un `cgroup.kill` esterno.
     scrivi(Path::new("/proc/self/oom_score_adj"), "0")
         .map_err(|errore| passo("oom_score_adj", &errore))?;
     let riletto = leggi_limitato(Path::new("/proc/self/oom_score_adj"))
@@ -889,18 +638,10 @@ fn accerta_prima_del_cambio_identita(
 
     // --- 4. nessun descrittore scrivibile verso il control plane -----------
     //
-    // E' una proprieta' **autonoma**, non una conseguenza dei passi 5 e 6: il
-    // cambio d'identita' non revoca l'autorita' gia' acquisita, perche' il
-    // controllo dei permessi avviene all'apertura e non a ogni scrittura. Un
-    // `fd` aperto sulla gerarchia prima della `setresuid` resta scrivibile
-    // dopo.
-    //
-    // Qui si **verifica e si rifiuta**, non si chiude. Chiudere un descrittore
-    // ereditato per numero richiede di costruirne un proprietario da un intero
-    // grezzo, e ogni via per farlo e' `unsafe`. Rifiutare e' fail-closed e non
-    // richiede niente: un ambiente che ci passa un `fd` sul control plane non
-    // e' un ambiente in cui possiamo isolare, e chiuderlo di nascosto
-    // nasconderebbe che qualcuno ce lo ha dato.
+    // Proprieta' **autonoma**: il permesso si controlla all'apertura, e un
+    // `fd` aperto sulla gerarchia prima della `setresuid` resta scrivibile.
+    // Si **rifiuta**, non si chiude: chiudere per numero e' `unsafe`, e
+    // chiuderlo di nascosto nasconderebbe chi ce lo ha dato.
     let dispositivo = dispositivo_di(radice).map_err(|errore| passo("descrittori", &errore))?;
     let prima = leggi_identita().map_err(|errore| passo("descrittori", &errore))?;
     let aperti: Vec<&str> = prima
@@ -924,9 +665,8 @@ fn accerta_prima_del_cambio_identita(
 
 /// Quanti task ha questo processo.
 ///
-/// Una voce che non si legge e' un errore e non uno scarto: sottocontare i
-/// task significherebbe dichiarare monothread un processo che non lo e', che e'
-/// esattamente la condizione che questo passo esiste per escludere.
+/// Una voce che non si legge e' un errore: sottocontare dichiarerebbe
+/// monothread un processo che non lo e'.
 ///
 /// # Errors
 ///
@@ -975,18 +715,9 @@ fn verifica_spogliato(
 
 /// Il percorso v2 in `/proc/self/cgroup`.
 ///
-/// # Perche' fail-closed
-///
-/// Il file ha, in cgroup v2, **una sola** riga con ID gerarchia zero. Un
-/// parser che prende la prima che incontra accetta:
-///
-/// - un file con **due** righe `0::`, dove quale valga non lo dichiara
-///   nessuno;
-/// - una riga `0::` con un percorso **relativo** o vuoto, che non e' un
-///   percorso di cgroup e non si puo' confrontare con niente.
-///
-/// Su un sistema ibrido il file porta anche righe v1: quelle si saltano, ed e'
-/// il motivo per cui non basta prendere la prima riga qualunque essa sia.
+/// Fail-closed: in cgroup v2 c'e' **una sola** riga con ID gerarchia zero, e
+/// si rifiutano due righe `0::` o un percorso relativo o vuoto. Le righe v1
+/// di un sistema ibrido si saltano.
 ///
 /// # Errors
 ///
@@ -1019,15 +750,12 @@ fn percorso_cgroup(contenuto: &str) -> std::result::Result<&str, &'static str> {
 /// Il percorso del dominio **dentro** la gerarchia.
 ///
 /// `/proc/self/cgroup` riporta il percorso relativo alla radice della
-/// gerarchia, non quello nel filesystem. La conversione toglie il punto di
-/// mount e rimette la radice del mount: con un bind mount di sottoalbero la
-/// radice non e' `/`, e ignorarla sposta il percorso calcolato di tutto il
-/// ramo.
+/// gerarchia: si toglie il punto di mount e si rimette la radice del mount,
+/// che con un bind mount di sottoalbero non e' `/`.
 ///
 /// # Errors
 ///
-/// Se il dominio non sta sotto quel punto di mount: e' un montaggio che non lo
-/// contiene, e calcolarci sopra un percorso darebbe un risultato senza
+/// Se il dominio non sta sotto quel punto di mount: il risultato non avrebbe
 /// significato.
 fn dentro_la_gerarchia(
     dominio: &Path,

@@ -66,15 +66,10 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
             "testo oltre il limite di 64 MiB".to_owned(),
         ));
     }
-    // Riconoscimento del tipo senza allocare: si ispeziona solo la porzione
-    // di testo prima del primo `(`, dove vivono il type name OGC (tutti
-    // entro una ventina di caratteri ASCII: POINT, LINESTRING, POLYGON,
-    // MULTIPOINT, ...) e l'eventuale suffisso dimensionale. Il confronto
-    // ASCII case-insensitive e' equivalente per costruzione alla precedente
-    // copia `to_ascii_uppercase` dell'intera cella: i token cercati
-    // ("SRID=", "Z", "M", "ZM") sono puramente ASCII e
-    // `to_ascii_uppercase` non altera ne' i byte non ASCII ne' lo
-    // whitespace, quindi tokenizzazione ed esito sono identici su ogni
+    // Riconoscimento del tipo senza allocare: si ispeziona solo il testo
+    // prima del primo `(`, dove stanno il type name OGC e l'eventuale
+    // suffisso dimensionale. I token cercati ("SRID=", "Z", "M", "ZM") sono
+    // ASCII, quindi il confronto ASCII case-insensitive e' esatto su ogni
     // input, inclusi prefissi malformati o arbitrariamente lunghi.
     let head = value.trim_start();
     let prefix_end = head.find('(').unwrap_or(head.len());

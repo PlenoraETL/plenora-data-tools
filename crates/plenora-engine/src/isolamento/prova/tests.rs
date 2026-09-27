@@ -6,15 +6,10 @@ use super::chiudi;
 
 /// Un figlio che protesta in **tutti e due** i tempi della chiusura.
 ///
-/// Il primo sguardo non risponde — e' la cortesia che incontra un difetto — il
-/// secondo lo trova vivo, cosi' la terminazione viene tentata davvero e
-/// protesta, e il terzo lo raccoglie. E' l'unico modo di attraversare entrambe
-/// le fasi in un caso solo, e serve proprio a questo: i difetti della prima non
-/// devono sparire passando alla seconda.
-///
-/// Il caso in cui la raccolta non riesce affatto non si prova qui: li' la
-/// sentinella ferma il processo, ed e' proprio cio' che deve fare — un caso che
-/// lo esercitasse fermerebbe il runner.
+/// Il primo sguardo da' un difetto, il secondo lo trova vivo e la
+/// terminazione protesta, il terzo lo raccoglie: attraversa entrambe le fasi
+/// in un caso solo. La raccolta che non riesce affatto non si prova qui: la
+/// sentinella fermerebbe il runner.
 struct CheProtesta {
     sguardi: std::cell::Cell<u8>,
 }
@@ -58,16 +53,10 @@ impl ProcessoFiglio for CheEUscito {
 
 /// **I difetti dei due tempi si sommano, e nessuno sparisce.**
 ///
-/// # Che cosa esclude
-///
-/// Due perdite diverse. Che una terminazione andata storta passi inosservata
-/// perche' la raccolta poi e' riuscita; e che il difetto della **cortesia** —
-/// il primo tempo — venga buttato via passando al secondo. Il secondo caso e'
-/// il piu' facile da introdurre: basta cominciare la terminazione con una lista
-/// vuota invece che con quella gia' raccolta.
-///
-/// `chiudi` non fallisce — un difetto di pulizia non e' l'esito del percorso —
-/// quindi l'unica cosa che li rende visibili e' che vengano **riportati**.
+/// Esclude che una terminazione andata storta passi inosservata perche' la
+/// raccolta poi riesce, e che il difetto della cortesia si perda passando al
+/// secondo tempo. `chiudi` non fallisce, quindi li rende visibili solo il
+/// fatto che vengano **riportati**.
 #[test]
 fn i_difetti_dei_due_tempi_si_sommano() {
     let finto = CheProtesta {
@@ -137,16 +126,10 @@ impl ProcessoFiglio for &CheStaFinendo {
 
 /// **Un worker che sta uscendo non viene ucciso per una corsa.**
 ///
-/// # Che cosa esclude
-///
-/// Il difetto piu' silenzioso di tutti: un percorso **riuscito** che riporta
-/// `Segnale(9)` perche' il primo sguardo ha trovato il figlio ancora vivo. Il
-/// tetto della raccolta misura l'attesa **dopo** il segnale, quindi non
-/// protegge da niente qui: senza una cortesia prima, ogni worker piu' lento di
-/// uno sguardo verrebbe terminato — e il referto direbbe che il worker e' stato
-/// fermato, quando invece stava finendo.
-///
-/// Il caso non guarda i tempi: guarda che **nessun segnale sia partito**.
+/// Esclude un percorso **riuscito** che riporta `Segnale(9)` perche' il primo
+/// sguardo ha trovato il figlio vivo: il tetto della raccolta misura l'attesa
+/// dopo il segnale, e qui non protegge. Il caso non guarda i tempi: guarda
+/// che **nessun segnale sia partito**.
 #[test]
 fn un_figlio_che_sta_finendo_non_viene_segnalato() {
     let finto = CheStaFinendo {
@@ -184,12 +167,8 @@ fn causa() -> plenora_core::PlenoraError {
 
 /// **Un dialogo fallito non nasconde i difetti di pulizia.**
 ///
-/// # Che cosa esclude
-///
-/// Che il rosso dica soltanto perche' il dialogo non ha retto, tacendo che il
-/// figlio ha anche protestato uscendo. Sono due fatti: senza il secondo, chi
-/// legge chiude il caso sul primo e non sa che c'e' un processo che si e'
-/// comportato male.
+/// Esclude un rosso che dica solo perche' il dialogo non ha retto, tacendo
+/// che il figlio ha anche protestato uscendo.
 #[test]
 fn un_dialogo_fallito_porta_con_se_i_difetti_di_pulizia() {
     let difetti = vec!["non si riesce a terminare il figlio: no".to_owned()];
@@ -220,13 +199,9 @@ fn senza_difetti_la_causa_non_viene_riscritta() {
 /// **Un guardiano perduto non lascia verde un percorso, in nessuno dei due
 /// versi.**
 ///
-/// # Che cosa esclude
-///
-/// Che un percorso arrivi in fondo senza la garanzia che lo limita e lo dica
-/// riuscito. Il caso attraversa **entrambi** i versi perche' falliscono in modi
-/// diversi: su un dialogo riuscito la perdita e' l'unico fatto, e un ramo che la
-/// ignorasse darebbe un verde pulito; su un dialogo fallito la perdita si
-/// affianca alla causa, e un ramo che la sostituisse perderebbe il motivo vero.
+/// Su un dialogo riuscito la perdita e' l'unico fatto, e ignorarla darebbe un
+/// verde; su uno fallito si affianca alla causa, e sostituirla perderebbe il
+/// motivo vero.
 #[test]
 fn un_guardiano_perduto_non_lascia_verde() {
     use super::StatoDelGuardiano::{NonScaduto, Perduto, Scaduto};
@@ -289,16 +264,9 @@ type Rottura = (&'static str, fn(&mut super::Referto));
 
 /// **Ogni pretesa dell'oracolo cade da sola.**
 ///
-/// # Che cosa esclude
-///
-/// Che una pretesa sia scritta e non guardata. Un oracolo con otto righe e un
-/// caso che ne prova una sola direbbe di giudicare otto cose e ne
-/// giudicherebbe una: le altre sette resterebbero verdi qualunque cosa
-/// arrivasse, ed e' esattamente il modo in cui un qualificatore certifica
-/// un'esecuzione diversa da quella dichiarata.
-///
-/// Il referto di partenza passa; ogni riga qui sotto ne rompe **una** cosa e
-/// pretende che l'oracolo se ne accorga.
+/// Esclude una pretesa scritta e non guardata. Il referto di partenza passa;
+/// ogni riga qui sotto ne rompe **una** cosa e pretende che l'oracolo se ne
+/// accorga.
 #[test]
 fn ogni_pretesa_dell_oracolo_cade_da_sola() {
     let atteso = "a".repeat(64);

@@ -1,37 +1,25 @@
-//! Il protocollo fra supervisore e worker: **solo la forma serializzata**.
-//!
-//! Questo modulo definisce cosa viaggia sul filo e come si scrive e si legge.
-//! Non definisce **quando**: la costruzione dell'handshake e la verifica
-//! semantica dei suoi campi appartengono alla PR successiva, e tenerle fuori
-//! e' deliberato — un modulo che sa serializzare e anche decidere e' un
-//! modulo in cui un errore di decisione si nasconde dietro un errore di
-//! formato.
+//! Il protocollo fra supervisore e worker: la forma sul filo, la sua
+//! scrittura e lettura, e la verifica pura dell'handshake.
 //!
 //! Niente qui apre un pipe, avvia un processo o parla con un worker.
 //!
-//! # Perche' e' privato, e come lo raggiunge chi sta fuori
+//! # Perche' e' privato
 //!
-//! Il protocollo e' interno. Renderlo pubblico significherebbe promettere di
-//! non cambiarlo, e non c'e' ragione di promettere a nessuno la forma di un
-//! canale fra due processi che spediamo insieme.
-//!
-//! Il crate `fuzz/` e la sonda di calibrazione stanno fuori dal crate e non
-//! possono entrare qui: passano da `crate::interni`, che rende un verdetto e
-//! una costante e **non** i tipi di questo modulo.
+//! Renderlo pubblico significherebbe promettere di non cambiare un canale fra
+//! due processi che spediamo insieme. Il crate `fuzz/` e la sonda di
+//! calibrazione passano da `crate::interni`, che rende un verdetto e una
+//! costante e **non** i tipi di questo modulo.
 
-/// Il digest SHA-256 sul filo.
-///
-/// `pub` come gli altri moduli del protocollo, e non privato al protocollo: i
-/// messaggi lo espongono in campi `pub`, e un tipo meno visibile del campo che
-/// lo porta e' un tipo che chi riceve quel campo non puo' nominare — quindi non
-/// puo' costruire il messaggio. Fuori dal crate non esce comunque, perche'
-/// `protocollo` e' privato: la forma di un digest sul filo e' una regola del
-/// protocollo, non della superficie pubblica.
-// Come questa build descrive se stessa: il primo chiamante e' il worker, che
-// deve dire all'altro lato chi e'.
 pub mod assi;
 pub mod codifica;
+// Come questa build descrive se stessa: il primo chiamante e' il worker, che
+// deve dire all'altro lato chi e'.
 pub mod descrizione;
+/// Il digest SHA-256 sul filo.
+///
+/// `pub` perche' i messaggi lo espongono in campi `pub`, e un tipo meno
+/// visibile del campo non si puo' nominare; fuori dal crate non esce, perche'
+/// `protocollo` e' privato.
 pub mod digest;
 pub mod handshake;
 pub mod lettore;

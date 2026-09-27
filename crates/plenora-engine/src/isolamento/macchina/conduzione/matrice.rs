@@ -1,34 +1,13 @@
 //! La matrice degli esiti, percorsa da un worker **fittizio**.
 //!
-//! # Che cosa copre, e che cosa no
+//! Copre le righe della §10.1 raggiungibili da questo perimetro. Fuori: la
+//! **riga 1** (verifica e publish, `PR-10`: qui il successo dichiarato produce
+//! `DaVerificare`), le **righe 9 e 10** (handshake, che questa macchina non
+//! guida) e le **righe da 11 a 16** (verifica, publish e cleanup, `PR-10`).
 //!
-//! Le righe della §10.1 che questo perimetro puo' raggiungere. Sono nove, e le
-//! altre mancano per ragioni dichiarate, non per dimenticanza:
-//!
-//! - la **riga 1** vuole la verifica e il publish, che sono di `PR-10`: qui un
-//!   worker che dichiara successo produce `DaVerificare`, cioe' «prosegui», e
-//!   dirlo «riuscito» sarebbe una bugia;
-//! - le **righe 9 e 10** vivono nell'handshake, che questa macchina non guida:
-//!   il canale operativo comincia **dopo** l'accordo, e senza accordo non
-//!   esiste;
-//! - le **righe da 11 a 16** sono verifica, publish e cleanup dell'artefatto,
-//!   tutte di `PR-10`.
-//!
-//! # Perche' una tabella e non nove casi scritti a mano
-//!
-//! Perche' nove casi scritti a mano divergono: uno controlla l'esito, un altro
-//! anche il rapporto, un terzo dimentica i difetti. La tabella impone a ogni
-//! riga le stesse domande — che cosa si e' concluso, che cosa dice il rapporto,
-//! che cosa e' rimasto — e una riga che non risponde a tutte non si scrive.
-//!
-//! # Perche' il worker e' fittizio, e non e' un limite
-//!
-//! Perche' cio' che si prova qui e' la **macchina**, non il worker: che davanti
-//! a un panico dichiarato concluda «panico», davanti a un silenzio concluda
-//! «terminazione ambigua», e che in entrambi i casi non resti niente. Un worker
-//! vero aggiungerebbe i suoi modi di rompersi senza aggiungere una sola
-//! risposta a queste domande — e li aggiungera' con `PR-9`, dove sara' lui il
-//! soggetto.
+//! Una tabella impone a ogni riga le stesse domande: che cosa si e' concluso,
+//! che cosa dice il rapporto, che cosa e' rimasto. Il worker e' fittizio perche'
+//! il soggetto e' la **macchina**; il worker vero e' il soggetto di `PR-9`.
 
 use std::time::Duration;
 
@@ -60,18 +39,12 @@ struct Copione {
     tempo: Duration,
     /// Se qualcuno annulla.
     annulla: bool,
-    /// Come il figlio esce.
-    ///
-    /// Non un dettaglio: e' cio' che distingue la riga 2 dalla riga 4, e una
-    /// tabella che non lo dichiarasse passerebbe con un'uscita qualunque.
+    /// Come il figlio esce: distingue la riga 2 dalla riga 4.
     uscita: Uscita,
     /// Se il dominio e' gia' vuoto quando si comincia a guardare.
     ///
-    /// Le righe in cui il lavoro finisce da solo lo vogliono vuoto; quella del
-    /// timeout no — un timeout su un dominio gia' quiescente non scatterebbe
-    /// mai, perche' non ci sarebbe piu' niente da aspettare. Li' il dominio
-    /// resiste qualche giro e si svuota **dopo la forzatura**, che e' cio' che
-    /// la forzatura ottiene.
+    /// Falso solo per il timeout: su un dominio gia' quiescente non
+    /// scatterebbe mai. Li' il dominio si svuota **dopo la forzatura**.
     si_quieta: bool,
 }
 
@@ -83,9 +56,8 @@ struct Attesa {
     categoria: Option<ErrorCategory>,
     /// Come il rapporto deve dire l'uscita.
     ///
-    /// **Il testo esatto.** Controllare che la riga «non dica nessuna» lascia
-    /// passare qualunque uscita, e con essa la differenza fra un worker che
-    /// finisce e uno che viene ucciso: e' il difetto che questa tabella ha avuto.
+    /// **Il testo esatto**: un controllo piu' lasco lascerebbe passare la
+    /// differenza fra un worker che finisce e uno che viene ucciso.
     uscita: &'static str,
 }
 
@@ -143,16 +115,11 @@ fn panico_dichiarato() -> Corpo {
 
 /// Percorre una riga e pretende cio' che la riga dice.
 ///
-/// Le domande sono **le stesse per tutte**: l'esito, la categoria, e — sempre —
-/// che il figlio sia stato raccolto, che il canale si sia disconnesso e che non
-/// resti nessun difetto di conduzione. Le ultime tre non appartengono a una riga
-/// in particolare: appartengono a tutte, ed e' per questo che si chiedono qui
-/// invece che in nove posti diversi.
+/// Le domande sono **le stesse per tutte**: l'esito, la categoria, l'uscita,
+/// la disconnessione del canale e l'assenza di difetti di conduzione.
 fn percorri(riga: &str, copione: Copione, attesa: &Attesa) {
-    // Chi si quieta da se' e' un dominio gia' vuoto: il worker ha chiuso, e non
-    // c'e' niente da forzare. Chi non si quieta resta **abitato** finche'
-    // `cgroup.kill` non lo svuota — ed e' cosi' che una riga di timeout arriva a
-    // un esito invece che a un impedimento.
+    // Chi non si quieta resta **abitato** finche' `cgroup.kill` non lo svuota:
+    // cosi' una riga di timeout arriva a un esito invece che a un impedimento.
     let dominio = if copione.si_quieta {
         Dominio::gia_vuoto()
     } else {
@@ -255,13 +222,9 @@ fn riga_3_panic_nel_worker() {
 /// L'assenza dell'esito non e' una variante: e' un'assenza, e produce una
 /// terminazione ambigua — **mai** dedotta come OOM.
 ///
-/// # Perche' qui l'uscita e' un segnale
-///
-/// Perche' un crash e' questo: il processo non finisce, viene fermato. E'
-/// anche il caso che rende **discriminante** la colonna dell'uscita: se il
-/// codice riducesse l'uscita a «raccolto si'/no», questa riga direbbe
-/// «codice 0» come tutte le altre, e la differenza fra un worker che finisce e
-/// uno che muore sparirebbe senza che nessun caso se ne accorga.
+/// L'uscita e' un segnale, ed e' il caso che rende **discriminante** la colonna
+/// dell'uscita: ridotta a «raccolto si'/no», questa riga direbbe «codice 0»
+/// come le altre.
 #[test]
 fn riga_4_crash_senza_esito() {
     percorri(
@@ -385,8 +348,7 @@ fn riga_7_timeout() {
             tempo: Duration::from_millis(5),
             annulla: false,
             // Il dominio **non** si svuota: e' cio' che lascia scattare il
-            // tempo. Con un dominio gia' vuoto e un canale gia' finito non ci
-            // sarebbe niente da aspettare, e nessun timeout da misurare.
+            // tempo.
             si_quieta: false,
             uscita: Uscita::Codice(0),
         },
@@ -401,22 +363,8 @@ fn riga_7_timeout() {
 /// **Riga 8**: la cancellazione chiesta **prima che il giro cominci ad
 /// ascoltare** resta agganciata.
 ///
-/// # Perche' una barriera e non un'attesa
-///
-/// Perche' il caso interessante e' proprio quello: qualcuno annulla nell'istante
-/// in cui riceve l'annullatore, e la conduzione non ha ancora guardato la coda
-/// nemmeno una volta. Una cancellazione che si perdesse li' sarebbe la piu'
-/// difficile da vedere — chi annulla lo fa subito, e chi guarda arriva dopo.
-///
-/// La barriera e' **deterministica**, non temporale: `consegna_annullatore`
-/// viene chiamata dalla conduzione **prima** del giro, e questo caso annulla
-/// dentro quella chiamata. Non c'e' finestra da colpire, non c'e' `sleep` da
-/// tarare: l'ordine e' garantito dal punto in cui la chiamata avviene. Un caso
-/// costruito con un `sleep` proverebbe la stessa cosa su una macchina scarica e
-/// un'altra su una carica.
-///
-/// Il lavoro non finisce da solo — il dominio non si svuota — cosi' che a
-/// chiudere sia la cancellazione e non la fine naturale.
+/// Si annulla dentro `consegna_annullatore`, che la conduzione chiama **prima**
+/// del giro: l'ordine e' deterministico, senza `sleep` da tarare.
 #[test]
 fn riga_8_cancellazione_chiesta_prima_del_giro_resta_agganciata() {
     // Il dominio e' abitato: cosi' a chiudere il giro e' la cancellazione, non
@@ -455,10 +403,7 @@ fn riga_8_cancellazione_chiesta_prima_del_giro_resta_agganciata() {
 /// E la stessa cancellazione, chiesta **mentre** il giro ascolta, arriva
 /// ugualmente.
 ///
-/// L'altro caso prova che non si perde chi arriva troppo presto; questo che non
-/// si perde chi arriva dopo. Il `sleep` qui e' innocuo perche' cio' che si
-/// pretende non ha scadenza: la cancellazione arriva quando arriva, e l'esito e'
-/// quello in ogni caso.
+/// Il `sleep` e' innocuo: l'esito atteso non dipende da quando arriva.
 #[test]
 fn la_cancellazione_arriva_anche_a_giro_iniziato() {
     let dominio = Dominio::abitato();
@@ -492,25 +437,14 @@ type Eventi = std::sync::Arc<std::sync::Mutex<Vec<(String, std::time::Instant)>>
 
 /// Un margine abbastanza lungo da potersi misurare.
 ///
-/// Non e' una taratura: e' un valore che sta comodamente sopra la risoluzione di
-/// `Instant` e sopra il rumore di uno scheduler carico, cosi' che l'asserzione
-/// sul minimo trascorso dipenda dal comportamento e non dalla macchina.
+/// Sta sopra la risoluzione di `Instant`, cosi' che l'asserzione sul minimo
+/// trascorso dipenda dal comportamento e non dalla macchina.
 const MARGINE_MISURABILE: Duration = Duration::from_millis(80);
 
 /// **La cancellazione arriva al worker, e prima che il dominio venga forzato.**
 ///
-/// # Che cosa prova, e perche' l'ordine conta
-///
-/// La §8.1 dice: `Annulla` sul filo, poi il margine, poi la terminazione
-/// forzata. Il margine esiste perche' un worker che chiude un file
-/// ordinatamente lascia meno lavoro al cleanup di uno terminato a meta'.
-///
-/// Forzare nello stesso istante in cui si chiede vorrebbe dire non aver chiesto
-/// niente: il margine sarebbe una riga di documento senza un comportamento
-/// sotto, e un caso che guardasse solo la chiamata al terminatore lo
-/// lascerebbe passare.
-///
-/// Qui si guarda **cosa e' finito sul filo** e **quando** e' stato chiamato il
+/// La §8.1: `Annulla` sul filo, poi il margine, poi la terminazione forzata.
+/// Si guarda **cosa e' finito sul filo** e **quando** e' stato chiamato il
 /// terminatore, su una traccia condivisa che conserva l'ordine.
 #[test]
 fn la_cancellazione_arriva_sul_filo_prima_della_terminazione() {
@@ -550,9 +484,8 @@ fn la_cancellazione_arriva_sul_filo_prima_della_terminazione() {
     }
 
     let eventi: Eventi = std::sync::Arc::default();
-    // Il dominio e' abitato: il worker non chiude da se', e senza la forzatura
-    // il giro non arriverebbe mai alla fine. E' cio' che rende l'ordine
-    // osservabile invece che accidentale.
+    // Il dominio e' abitato: senza la forzatura il giro non finirebbe, e
+    // l'ordine e' osservabile invece che accidentale.
     let dominio = Dominio::abitato();
     let (_esito, _difetti) = conduci(
         canale(filo(vec![])),
@@ -595,17 +528,8 @@ fn la_cancellazione_arriva_sul_filo_prima_della_terminazione() {
         .expect("il conteggio e' un numero");
     assert!(quanti > 0, "sul filo non e' finito niente");
 
-    // **E fra i due e' passato il margine.**
-    //
-    // L'ordine da solo non lo dice: forzare nell'istante successivo all'`Annulla`
-    // rispetta l'ordine e non concede niente, e il margine resterebbe una riga di
-    // documento senza un comportamento sotto. Il worker che chiude un file
-    // ordinatamente non ne trarrebbe nulla.
-    //
-    // La misura e' un **minimo**, e per questo non e' fragile: `sleep` promette
-    // che l'attesa non sia piu' breve di quanto si chiede, non che non sia piu'
-    // lunga. Una macchina carica allunga l'intervallo, e l'asserzione regge; il
-    // difetto da escludere lo accorcia a zero, e l'asserzione cade.
+    // **E fra i due e' passato il margine**: l'ordine da solo non lo dice. La
+    // misura e' un **minimo**, quindi una macchina carica non la rompe.
     let atteso = visti[1].1.duration_since(visti[0].1);
     assert!(
         atteso >= MARGINE_MISURABILE,
@@ -616,9 +540,7 @@ fn la_cancellazione_arriva_sul_filo_prima_della_terminazione() {
 
 /// **Un tempo scaduto non chiede: forza e basta.**
 ///
-/// Il tempo che il worker ha e' quello. Riaprire una conversazione il cui
-/// tempo e' finito gli darebbe un'attesa in piu' che nessuno gli ha concesso, e
-/// il margine gliela darebbe due volte.
+/// Chiedere gli darebbe un'attesa in piu' che nessuno gli ha concesso.
 #[test]
 fn un_tempo_scaduto_non_manda_annulla() {
     struct Raccoglie(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -663,14 +585,12 @@ fn un_tempo_scaduto_non_manda_annulla() {
 
 /// **La cancellazione termina il dominio.**
 ///
-/// Non basta dirlo: chi annulla si aspetta che il lavoro **smetta**, e smettere
-/// vuol dire che qualcuno lo ferma. Senza questa chiamata la cancellazione
-/// sarebbe un'etichetta sull'esito, con il worker che continua a girare.
+/// Altrimenti la cancellazione sarebbe un'etichetta sull'esito, con il worker
+/// che continua a girare.
 #[test]
 fn la_cancellazione_termina_il_dominio() {
-    // Il worker **non** chiude da se': se lo facesse, il giro finirebbe prima
-    // del margine e il caso resterebbe verde senza che nessuno abbia terminato
-    // niente — cioe' proprio la falla che deve escludere.
+    // Il worker **non** chiude da se': altrimenti il caso resterebbe verde
+    // senza che nessuno abbia terminato niente.
     let dominio = Dominio::abitato();
     let (_esito, _difetti) = conduci(
         canale(filo(vec![])),
@@ -699,10 +619,8 @@ fn la_cancellazione_termina_il_dominio() {
 
 /// **La riga 1 non e' raggiungibile qui, e il caso lo fissa.**
 ///
-/// Un worker che dichiara successo produce `DaVerificare` — «prosegui» — e non
-/// `Pubblicato`. Se un domani questa riga cambiasse senza che la verifica e il
-/// publish esistano, questo caso lo direbbe: e' la differenza fra «il worker
-/// dice di aver finito» e «l'output e' visibile».
+/// Un worker che dichiara successo produce `DaVerificare` («prosegui») e non
+/// `Pubblicato`: «il worker dice di aver finito» non e' «l'output e' visibile».
 #[test]
 fn la_riga_1_non_e_raggiungibile_senza_publish() {
     percorri(
@@ -755,10 +673,8 @@ fn un_evidenza_non_letta_non_e_un_dominio_tranquillo() {
 
 /// Un lettore d'evidenza che risponde **secondo lo stato del dominio**.
 ///
-/// Finche' il dominio e' abitato dice zero; quando si e' svuotato dice OOM. Non
-/// e' un artificio: e' cio' che il prototipo misura. Al ritorno della `wait`
-/// l'evidenza dice zero, e duecento millisecondi dopo dice uno, perche' il
-/// kernel consegna l'evento quando il cgroup finisce di svuotarsi.
+/// Finche' il dominio non e' stato forzato dice zero, dopo dice OOM: e' cio'
+/// che il prototipo misura (vedi `ATTESA_DELLA_QUIESCENZA`).
 struct EvidenzaCheSegueIlDominio {
     dominio: std::sync::Arc<Dominio>,
     letture: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -779,18 +695,9 @@ impl super::LettoreDiEvidenza for EvidenzaCheSegueIlDominio {
 
 /// **L'OOM che arriva dopo la forzatura si vede.**
 ///
-/// # Che cosa esclude
-///
-/// Che la conduzione smetta di ascoltare nell'istante in cui forza. Smettendo
-/// li', l'evidenza verrebbe letta su un dominio in cui qualcosa sta ancora
-/// morendo: i contatori direbbero zero, e la stessa esecuzione sarebbe un
-/// timeout senza causa invece di un limite attribuito. La differenza non
-/// starebbe nel worker ma in quando il kernel ha consegnato l'evento — cioe'
-/// l'esito dipenderebbe dall'orologio.
-///
-/// La riga 5 prova che l'attribuzione funziona quando l'evidenza c'e' subito.
-/// Questo caso prova che funziona anche quando arriva **tardi**, che e' il caso
-/// vero.
+/// Esclude che la conduzione smetta di ascoltare nell'istante in cui forza:
+/// l'evidenza direbbe zero e l'esito sarebbe un timeout. La riga 5 prova
+/// l'evidenza immediata; questo caso quella che arriva **tardi**.
 #[test]
 fn l_oom_tardivo_si_vede_perche_si_continua_ad_ascoltare_dopo_la_forzatura() {
     let dominio = Dominio::abitato();
@@ -831,15 +738,9 @@ fn l_oom_tardivo_si_vede_perche_si_continua_ad_ascoltare_dopo_la_forzatura() {
 
 /// **Su un dominio ancora abitato l'evidenza non si legge affatto.**
 ///
-/// # Perche' non basta rifiutare l'esito
-///
-/// Perche' rifiutare l'esito e leggere comunque lascerebbe nel rapporto una
-/// riga `evidenze_lette: 1` che dice il falso: quei contatori non sono
-/// un'osservazione, e chi legge il rapporto non ha modo di saperlo. Il conteggio
-/// a zero e' la forma in cui la rinuncia si vede.
-///
-/// Il dominio qui non si lascia forzare, cosi' che a restare abitato sia lui e
-/// non la mancanza di un tentativo.
+/// Non basta rifiutare l'esito: `evidenze_lette: 1` direbbe il falso nel
+/// rapporto. Il dominio non si lascia forzare, cosi' resta abitato nonostante
+/// il tentativo.
 #[test]
 fn su_un_dominio_abitato_l_evidenza_non_si_legge() {
     let dominio = Dominio::che_non_si_forza("cgroup.kill non si scrive");
@@ -880,29 +781,13 @@ fn su_un_dominio_abitato_l_evidenza_non_si_legge() {
 
 /// **La quiescenza accodata dopo l'ultima interrogazione del giro si vede.**
 ///
-/// # La finestra
+/// La finestra: il sorvegliante accoda la quiescenza dopo l'ultima
+/// interrogazione del giro, e il registro non lo sa ancora quando decide se
+/// leggere l'evidenza (vedi il passo 4 di `conduci`).
 ///
-/// Il giro smette di interrogare la coda nell'istante in cui decide di
-/// smettere. Il sorvegliante, che vive nel suo filo, puo' accodare la quiescenza
-/// **subito dopo** quell'istante e prima di essere fermato: il fatto e' in coda,
-/// ma il registro non lo sa ancora.
-///
-/// Chi legge l'evidenza guardando il registro trova «dominio abitato» e la
-/// salta. Il drenaggio finale, un momento dopo, applica la quiescenza — e la
-/// conclusione trova la barriera **completa** e classifica senza evidenza. La
-/// stessa esecuzione, uccisa dall'OOM, si chiama «tempo scaduto».
-///
-/// # Perche' e' deterministico e non una corsa colpita a caso
-///
-/// Perche' i due lati sono legati da una barriera, non da un'attesa. Il
-/// terminatore non torna finche' il sorvegliante non ha **accodato** la
-/// quiescenza: lo sa perche' l'osservatore lo annuncia cadendo, e l'osservatore
-/// cade quando il filo del sorvegliante finisce — cioe' dopo la `manda`. E
-/// l'attesa della quiescenza e' zero, cosi' il giro dopo la forzatura esce
-/// **senza interrogare** la coda un'altra volta.
-///
-/// Non c'e' `sleep` da tarare: l'ordine e' garantito da dove stanno le
-/// chiamate.
+/// Deterministico: il terminatore non torna finche' l'osservatore, cadendo dopo
+/// la `manda`, non annuncia l'accodamento; con l'attesa della quiescenza a zero
+/// il giro esce **senza interrogare** la coda un'altra volta.
 #[test]
 fn la_quiescenza_accodata_all_ultimo_istante_si_vede() {
     /// L'osservatore, che annuncia cadendo di aver finito il suo lavoro.

@@ -1,12 +1,7 @@
 //! Il processo: dagli argomenti all'exit code.
 //!
-//! Sta fra `main` e il dispatch. `main` installa la politica anti-panico e
-//! avvolge questa funzione in `catch_unwind`; qui si raccolgono gli
-//! argomenti, si delega al dispatch e si traduce l'esito in un exit code,
-//! passando sempre dall'envelope.
-//!
-//! Restituire il codice invece di uscire e' cio' che permette a `main` di
-//! avvolgere il tutto: `std::process::exit` da qui salterebbe la barriera.
+//! Rende il codice invece di uscire, cosi' `main` puo' avvolgere tutto nella
+//! barriera anti-panico (`catch_unwind`); l'esito passa sempre dall'envelope.
 
 use std::env;
 

@@ -1,19 +1,10 @@
 //! Tipo statico di un'espressione: l'insieme dei tipi che puo' produrre,
 //! ricavato dal solo SCHEMA.
 //!
-//! # Perche' vive qui e non nell'analizzatore
-//!
-//! Il tipo della colonna prodotta e' parte del contratto, e un contratto non
-//! puo' dipendere dai valori: due batch con lo stesso schema e la stessa
-//! configurazione devono produrre lo stesso schema. Risolvendo
-//! `output_type = auto` sui valori calcolati, un batch vuoto o tutto null
-//! non ne osserverebbe nessuno — e ripiegherebbe su `Utf8` anche dove
-//! l'analisi ha promesso `Boolean` o `Float64`.
-//!
-//! Questo modulo e' la sorgente UNICA della regola: lo usa l'analizzatore per
-//! dichiarare il contratto e lo usa il kernel per costruire la colonna. Due
-//! copie della stessa regola sono due copie dello stesso difetto, e la
-//! seconda diverge senza dirlo.
+//! Il tipo prodotto e' parte del contratto e non puo' dipendere dai valori:
+//! risolto sui valori, un batch vuoto o tutto null ripiegherebbe su `Utf8`
+//! anche dove l'analisi ha promesso `Boolean` o `Float64`. Questo modulo e'
+//! la sorgente UNICA della regola, per l'analizzatore e per il kernel.
 
 use plenora_core::arrow::schema::{DataType, TimeUnit};
 use plenora_core::{PlenoraError, Result};
@@ -80,20 +71,11 @@ impl Kind {
 ///
 /// # Perche' un insieme e non un tipo
 ///
-/// Un solo stato `Any` terrebbe insieme due cose diverse: un letterale null
-/// — compatibile con qualsiasi tipo — e un sotto-albero eterogeneo, il cui
-/// tipo dipende dai dati. Trattato come elemento neutro dell'incontro,
-/// l'eterogeneita' sparirebbe al passo successivo:
-///
-/// - `coalesce(numero, testo, booleano)` diventerebbe `Any` e poi
-///   `Boolean`, cioe' un risultato che dipende dall'ORDINE degli argomenti;
-/// - `equal(coalesce(nullo, testo), numero)` passerebbe, perche' il
-///   `coalesce` eterogeneo tornerebbe `Any` e il confronto lo assorbirebbe
-///   come `Number` — e a runtime confronterebbe testo con numero.
-///
-/// Un insieme non perde niente: l'unione di `coalesce`/`case` accumula, i
-/// confronti pretendono che l'unione abbia al piu' UN tipo, e la
-/// compatibilita' col tipo dichiarato si decide sull'insieme intero.
+/// Un solo stato `Any` confonderebbe il letterale null (compatibile con
+/// tutto) con un sotto-albero eterogeneo, e l'eterogeneita' sparirebbe al
+/// passo successivo: `equal(coalesce(nullo, testo), numero)` passerebbe e a
+/// runtime confronterebbe testo con numero. Con un insieme l'unione di
+/// `coalesce`/`case` accumula e i confronti pretendono al piu' UN tipo.
 ///
 /// L'insieme VUOTO non significa «sconosciuto»: significa **solo null**. E'
 /// l'unico stato compatibile con qualunque richiesta, perche' il null
@@ -172,10 +154,8 @@ const fn unione(left: TypeSet, right: TypeSet) -> TypeSet {
 /// Due sotto-alberi finiscono in `scalar::compare`, che rifiuta i tipi
 /// incompatibili **a prescindere** da `output_type`.
 ///
-/// La condizione e' sull'UNIONE: se i tipi possibili dei due operandi, presi
-/// insieme, sono piu' di uno, esiste una combinazione di righe in cui
-/// `compare` riceve tipi diversi. Vale anche quando l'eterogeneita' e'
-/// annidata dentro un `coalesce` o un `case`.
+/// La condizione e' sull'UNIONE: con piu' di un tipo possibile esiste una
+/// combinazione di righe in cui `compare` riceve tipi diversi.
 ///
 /// «Solo null» passa: `compare` con un null restituisce `None`, non un
 /// errore.
@@ -269,10 +249,8 @@ fn literal_kind(op: &str, value: &Value) -> Result<TypeSet> {
 /// `InvalidPlan` con il prefisso `op`: colonna assente o di tipo non
 /// valutabile, arieta' errata, operando di tipo sbagliato, confronto fra tipi
 /// eterogenei, letterale non scalare.
-// Le regole di tipo dell'AST sono intrinsecamente ramificate.
-// match_same_arms: bracci identici ma di funzioni semanticamente distinte
-// (es. coalesce vs greatest/least) restano separati per documentare ogni caso
-// del dispatcher, come da prassi safety-critical.
+// Le regole di tipo dell'AST sono intrinsecamente ramificate; bracci
+// identici di funzioni distinte restano separati, un caso per funzione.
 #[allow(clippy::too_many_lines, clippy::match_same_arms)]
 pub fn infer(
     op: &str,
@@ -558,17 +536,11 @@ fn temporal_kind(
 
 /// Il tipo della colonna prodotta, dallo SCHEMA soltanto.
 ///
-/// Con `auto` l'insieme dev'essere un singoletto — l'eterogeneita' e' proprio
-/// il caso che il runtime rifiuterebbe, e il messaggio indica la via d'uscita.
-/// «Solo null» diventa `Text`, come fa il kernel quando non osserva nessun
-/// valore — ma qui e' una decisione sullo SCHEMA, quindi vale anche per un
-/// batch pieno.
+/// Con `auto` l'insieme dev'essere un singoletto; «solo null» diventa `Text`,
+/// anche per un batch pieno, perche' la decisione e' sullo SCHEMA.
 ///
-/// Con un `output_type` dichiarato il kernel NON converte: applica
-/// `number()` / `boolean()` / `text()` / `scalar_date32()` /
-/// `scalar_timestamp_ms()`, che accettano il proprio tipo e il null e
-/// rifiutano tutto il resto. La politica dipendente dai dati e' applicata
-/// QUI, esplicitamente, e solo qui:
+/// Con un `output_type` dichiarato il kernel NON converte: accetta il proprio
+/// tipo e il null e rifiuta il resto. La politica e' decisa qui:
 ///
 /// - «solo null»: accettato, il runtime scrive null;
 /// - il tipo dichiarato **appartiene** all'insieme: accettato. Se l'insieme

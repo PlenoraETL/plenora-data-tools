@@ -8,25 +8,17 @@
 //! # Non sono i default del piano
 //!
 //! `PlanLimits::max_plan_json_bytes`, `max_inputs` e `max_identifier_bytes`
-//! sono **default ampliabili** dalla policy di chi esegue: un chiamante puo'
-//! dichiararne di piu' larghi, e un piano che li sfrutta resta valido.
-//!
-//! Qui invece sono **tetti del profilo isolato**. Ne segue una conseguenza
-//! che va detta e non scoperta: un piano valido sotto una policy piu' larga
-//! puo' essere **non isolabile**, e deve ricevere un rifiuto esplicito che lo
-//! dica — non un errore di serializzazione.
+//! sono default ampliabili dalla policy; questi sono **tetti del profilo
+//! isolato**. Un piano valido sotto una policy piu' larga puo' quindi essere
+//! **non isolabile**, e riceve un rifiuto esplicito che lo dica, non un errore
+//! di serializzazione.
 
 /// Byte della forma canonica di un piano che il protocollo trasporta.
 ///
-/// **Limite di policy del profilo isolato, non massimo universale.** La
-/// calibrazione (`examples/calibra_canonico.rs`) misura il rapporto fra testo
-/// e canonico su piani costruiti per massimizzarlo: il caso peggiore
-/// osservato porta un testo al tetto a ~54,3 MiB, e questo limite lascia il
-/// 17,8 % di margine sulla proiezione.
-///
-/// Nessun insieme finito di piani dimostra quel rapporto per **tutti** i
-/// documenti validi, quindi il presidio non e' il numero: e' il writer
-/// limitato, che si ferma appena lo supera invece di scoprirlo dopo.
+/// **Limite di policy del profilo isolato, non massimo universale.** Il
+/// margine sul caso peggiore lo misura `examples/calibra_canonico.rs`; nessun
+/// insieme finito di piani lo dimostra per tutti, quindi il presidio e' il
+/// writer limitato, che si ferma appena il tetto e' superato.
 pub const MAX_PIANO_CANONICO_BYTES: usize = 64 * 1024 * 1024;
 
 /// Ingressi che un `Incarico` puo' descrivere.
@@ -42,18 +34,11 @@ pub const MAX_PERCORSO_BYTES: usize = 4_096;
 /// Caratteri di un digest nella forma sul filo: l'esadecimale minuscolo dei
 /// 32 byte di uno SHA-256.
 ///
-/// **Derivata, non scelta**: l'autorita' e' `digest::DIGEST_BYTES`, che e' il
-/// numero che non puo' cambiare senza cambiare algoritmo. Scriverne uno qui e
-/// uno la' sarebbero due autorita' che possono divergere.
-///
-/// Non e' un tetto come gli altri: la forma canonica pretende **esattamente**
-/// questa lunghezza, non «al piu'». E non c'e' un controllo che la applichi —
-/// c'e' un **tipo**, `digest::DigestSha256`, di cui non esiste un valore non
-/// canonico. Questa costante resta perche' la derivazione del tetto del frame
-/// ha bisogno di un numero.
-///
-/// Essendo ASCII, caratteri e byte coincidono: il nome dice `BYTES` perche' e'
-/// nella famiglia dei tetti per campo, che si applicano ai byte decodificati.
+/// Derivata da `digest::DIGEST_BYTES`, l'unica autorita'. Non e' un tetto
+/// come gli altri: la forma canonica pretende **esattamente** questa
+/// lunghezza, e la applica il tipo `digest::DigestSha256`; la costante serve
+/// alla derivazione del tetto del frame. Essendo ASCII, caratteri e byte
+/// coincidono.
 pub const MAX_DIGEST_BYTES: usize = super::digest::DIGEST_BYTES * 2;
 
 /// Byte **decodificati** di una versione dichiarata.
@@ -100,12 +85,9 @@ pub const MAX_MESSAGGI_VERSO_SUPERVISORE: usize = 2 + MAX_PROGRESSO;
 /// Quota **totale di emissione** dei messaggi di progresso.
 ///
 /// Esaurita la quota il worker **smette di emetterli e continua a
-/// lavorare**: il progresso e' facoltativo e il supervisore non ne dipende.
-/// Riceverne uno oltre la quota e' invece una violazione del protocollo — e
-/// va distinta, perche' significa che l'altro capo non rispetta il proprio
-/// contatore.
-///
-/// Non e' un tetto sulla frequenza: quello e' meccanismo, e appartiene al
+/// lavorare**: il progresso e' facoltativo. Riceverne uno oltre la quota e'
+/// una violazione del protocollo distinta: l'altro capo non rispetta il
+/// proprio contatore. Non e' un tetto sulla frequenza, che spetta al
 /// supervisore.
 pub const MAX_PROGRESSO: usize = 1_024;
 

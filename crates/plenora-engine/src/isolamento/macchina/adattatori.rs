@@ -1,24 +1,18 @@
-//! Adattatori reali per la conduzione: un dominio `cgroup2` vero, non un
-//! test.
+//! Adattatori reali per la conduzione, su un dominio `cgroup2` vero.
 //!
-//! Implementano i tre contratti che [`super::produttori::Osservatore`],
+//! Implementano [`super::produttori::Osservatore`],
 //! [`super::conduzione::Terminatore`] e [`super::conduzione::LettoreDiEvidenza`]
-//! dichiarano, leggendo e scrivendo i file veri del dominio. Il giudizio —
-//! quiescente o no, quale evidenza autorizza l'attribuzione — resta dove e'
-//! gia' costruito e provato: [`crate::classificazione::classifica`]. Qui si
-//! legge, non si giudica: ogni lettura mancata o incoerente diventa `None` o
-//! [`Difetto`], mai un valore inventato.
+//! sui file del dominio. Qui si legge, non si giudica: il giudizio sta in
+//! [`crate::classificazione::classifica`], e ogni lettura mancata o
+//! incoerente diventa `None` o [`Difetto`], mai un valore inventato.
 //!
 //! # Fino a dove si guardano gli antenati
 //!
 //! `Oa` (`PressioneDegliAntenati`) cammina dal genitore del dominio fino
-//! alla **radice del control plane** compresa, e non oltre. E' lo stesso
-//! confine che [`super::super::accerta_perimetro`] gia' usa per giudicare il
-//! possesso: e' l'unico confine garantito raggiungibile qualunque sia il
-//! dispiegamento, perche' e' quello che `PLENORA_ISOLATION_CGROUP_ROOT`
-//! dichiara. Andare oltre significherebbe leggere cgroup che questo
-//! dispiegamento non ha dichiarato di governare — path che potrebbero non
-//! esistere affatto se il supervisore vede solo il sottoalbero delegato.
+//! alla radice del control plane compresa, lo stesso confine di
+//! [`super::super::accerta_perimetro`]: e' quello che
+//! `PLENORA_ISOLATION_CGROUP_ROOT` dichiara, e oltre ci sono cgroup non
+//! governati, forse nemmeno visibili dal sottoalbero delegato.
 
 use std::path::{Path, PathBuf};
 
@@ -32,13 +26,9 @@ use super::produttori::{Difetto, Osservatore};
 /// Un contatore da `memory.events`/`memory.events.local`: `chiave valore` per
 /// riga, come `cgroup.events`.
 ///
-/// # Perche' sempre `Option`, mai un errore separato
-///
-/// Perche' [`EvidenzaDiLimite`] non distingue «il file manca», «la chiave
-/// manca» e «la chiave compare due volte»: tutte e tre dicono la stessa cosa
-/// a chi giudica, cioe' che quel numero non e' un'osservazione su cui
-/// contare. Distinguerle qui per poi appiattirle subito dopo aggiungerebbe
-/// una forma senza un lettore.
+/// `None` copre file mancante, chiave mancante e chiave doppia:
+/// [`EvidenzaDiLimite`] non li distingue, tutti dicono che il numero non e'
+/// un'osservazione su cui contare.
 fn contatore(testo: &str, chiave: &str) -> Option<u64> {
     let mut trovato = None;
     for riga in testo.lines() {
@@ -77,13 +67,9 @@ impl SorvegliaDominio {
 /// Traduce il difetto di una lettura reale nel `Difetto` che i produttori
 /// dichiarano.
 ///
-/// # Perche' `Interrotta` e non sempre `Impossibile`
-///
-/// Perche' un `ErrorKind::Interrupted` non e' una lettura mancata: e' un
-/// segnale arrivato nel mezzo, e la lettura successiva la fa avvenire senza
-/// che l'evidenza ne resti incompleta. Trattarla come `Impossibile`
-/// riporterebbe un difetto nostro per un evento che il giro dopo risolve da
-/// solo — esattamente cio' che [`Difetto::Interrotta`] esiste per evitare.
+/// `ErrorKind::Interrupted` diventa [`Difetto::Interrotta`], non
+/// `Impossibile`: e' un segnale arrivato nel mezzo, e la lettura successiva
+/// lo risolve senza lasciare l'evidenza incompleta.
 fn difetto_da_lettura(difetto: super::super::DifettoSuperficie) -> Difetto {
     match difetto {
         super::super::DifettoSuperficie::Lettura { causa, .. }
@@ -108,13 +94,9 @@ impl Osservatore for SorvegliaDominio {
 
 /// Sa svuotare il dominio scrivendo `cgroup.kill`.
 ///
-/// # Perche' non passa da `SuperficieDominio::scrivi`
-///
-/// Perche' quel metodo scrive **solo** i quattro controlli del preflight
-/// (`Controllo::ORDINE`), con la semantica «il file esiste gia', non lo
-/// creo»: `cgroup.kill` non e' uno di quei quattro, e non ha bisogno della
-/// rilettura verificata che quel percorso impone — scrivere e' l'unica
-/// operazione che il kernel gli riconosce.
+/// Non passa da `SuperficieDominio::scrivi`, che scrive solo i controlli del
+/// preflight (`Controllo::ORDINE`) con rilettura verificata: `cgroup.kill`
+/// non e' fra questi e non si rilegge.
 pub(super) struct TerminaDominio {
     dominio: PathBuf,
 }
@@ -178,13 +160,9 @@ fn leggi_intero_semplice(percorso: &Path) -> Option<u64> {
 /// Il delta fra due letture dello stesso contatore, o `None` se una delle
 /// due manca o se il delta sarebbe negativo.
 ///
-/// # Perche' un delta negativo e' `None` e non zero
-///
-/// Perche' un contatore di `cgroup2` e' monotono per tutta la vita del
-/// dominio: se la lettura «dopo» e' minore della lettura «prima», qualcosa
-/// nella lettura stessa non regge — non e' una diminuzione vera. Riportarla
-/// come zero la farebbe sembrare «nessuna pressione», che e' esattamente il
-/// contrario di un'evidenza che non torna.
+/// Un contatore di `cgroup2` e' monotono per la vita del dominio: un delta
+/// negativo e' una lettura che non regge, e come zero sembrerebbe «nessuna
+/// pressione».
 fn delta(prima: Option<u64>, dopo: Option<u64>) -> Option<u64> {
     dopo.and_then(|d| prima.and_then(|p| d.checked_sub(p)))
 }

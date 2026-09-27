@@ -146,28 +146,17 @@ impl<R: Read> FrameReader<R> {
         if self.total_bytes > MAX_STREAM_BYTES {
             return Err(ProtocolError::StreamTooLarge);
         }
-        // La memoria cresce con i byte letti, non con quelli dichiarati.
-        //
-        // `length` viene dallo stream, e `MAX_GEOMETRY_BYTES` governa quanto
-        // lo stream puo' **dichiarare** — 64 MiB — non quanto si alloca prima
-        // di sapere se quei byte esistano. Un `vec![0; length]` li allocherebbe
-        // e azzererebbe tutti su un frame che puo' finire dopo quattro byte,
-        // e su una sorgente ostile ripetuta e' un'amplificazione di ordini di
-        // grandezza fra ingresso e memoria toccata.
-        //
-        // Il buffer e' fisso e riusato; il frame si accoda con cio' che una
-        // `read` ha davvero reso.
+        // La memoria cresce con i byte letti, non con quelli dichiarati:
+        // `MAX_GEOMETRY_BYTES` limita quanto lo stream puo' **dichiarare**, e
+        // un `vec![0; length]` allocherebbe e azzererebbe tutto anche per un
+        // frame che finisce dopo quattro byte. Il buffer e' fisso e riusato.
         let mut payload = Vec::new();
         let mut buffer = [0_u8; BUFFER_LETTURA_BYTES];
         let mut remaining = length;
         while remaining > 0 {
-            // La finestra e' il minimo fra cio' che manca e il buffer, e sta
-            // in `usize` per costruzione: se `remaining` non entra in `usize`
-            // allora e' maggiore di `usize::MAX`, che a sua volta non e' mai
-            // minore di 16 KiB, quindi il minimo e' il buffer. Il ramo di
-            // ripiego non e' un ripiego — rende **lo stesso valore** del ramo
-            // riuscito — e per questo non c'e' un errore da classificare: una
-            // conversione che non puo' sbagliare non ha un esito da nominare.
+            // In `usize` per costruzione: se `remaining` non ci entra e'
+            // maggiore di `usize::MAX`, quindi del buffer. Il ripiego rende
+            // lo stesso valore del ramo riuscito: non c'e' errore da nominare.
             let vuole = usize::try_from(remaining).map_or(BUFFER_LETTURA_BYTES, |manca| {
                 manca.min(BUFFER_LETTURA_BYTES)
             });
@@ -187,14 +176,10 @@ impl<R: Read> FrameReader<R> {
             }
             if letti > vuole {
                 // `Read::read` promette di non rendere piu' byte della fetta
-                // che ha ricevuto. La promessa e' del `Read`, non del tipo, e
-                // un implementatore rotto la viola.
-                //
-                // Non si tronca e non si prosegue: accodare la fetta intera
-                // farebbe entrare nel frame — e nel digest — byte che nessuno
-                // ha scritto, cioe' un risultato sbagliato al posto di un
-                // errore. La colpa e' della sorgente, quindi `Io`; il
-                // messaggio e' costante e non porta ne' taglie ne' contenuti.
+                // ricevuta, ma un implementatore rotto puo' violarlo. Accodare
+                // la fetta farebbe entrare nel frame e nel digest byte che
+                // nessuno ha scritto: si rifiuta con `Io` (colpa della
+                // sorgente), messaggio costante senza taglie ne' contenuti.
                 return Err(ProtocolError::Io(std::io::Error::other(
                     "il lettore ha reso piu' byte della finestra richiesta",
                 )));
@@ -412,15 +397,10 @@ mod tests {
     /// Le invarianti che il target fuzz `geo_frame_stream` pretende, applicate
     /// qui dalla suite ordinaria.
     ///
-    /// Non sono riscritte: chiamano `interni::verifica_lettore_frame_geo`, la
-    /// stessa funzione che invoca il target. Riscriverle creerebbe due
-    /// definizioni della stessa promessa, e la copia nei test resterebbe verde
-    /// mentre quella del fuzzer sbaglia.
-    ///
-    /// La sentinella e' il caso `dichiara_molto_consegna_poco`: un frame che
-    /// dichiara sedici mebibyte davanti a sei byte di sorgente. E' esattamente
-    /// la forma che un lettore dimensionato sul dichiarato tratterebbe come
-    /// richiesta di memoria, e qui deve solo rendere un errore.
+    /// Chiamano `interni::verifica_lettore_frame_geo`, la stessa funzione del
+    /// target, per non avere due definizioni della stessa promessa. La
+    /// sentinella e' `dichiara_molto_consegna_poco`: un frame che dichiara
+    /// molti byte davanti a pochi di sorgente deve rendere solo un errore.
     #[test]
     fn le_invarianti_del_target_fuzz_reggono() {
         // Mille volte il buffer fisso: la distanza fra i due numeri e' cio'

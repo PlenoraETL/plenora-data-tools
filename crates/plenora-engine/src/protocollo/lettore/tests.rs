@@ -298,21 +298,11 @@ fn una_interruzione_non_fa_fallire_la_lettura() {
 
 /// Il frame riassemblato e' identico a quello scritto, anche a morsi minuscoli.
 ///
-/// Il nome dice cio' che il test **osserva**, e nient'altro. «In un solo
-/// buffer» si attribuirebbe la prova del numero di allocazioni: dall'esterno
-/// quel numero non e' osservabile, e un nome che promette piu' di quanto
-/// misura e' peggio di un test assente — chi legge l'elenco crede che quella
-/// proprieta' sia coperta.
-///
-/// Cio' che qui si prova e' il riassemblaggio: prefisso e payload tornano un
-/// frame uguale all'originale anche quando la sorgente li consegna tre byte
-/// per volta. E' la proprieta' che l'aritmetica del buffer puo' rompere, ed e'
-/// infatti quella che la mutazione «il buffer unico e' dimensionato male»
-/// fa cadere.
-///
-/// Il numero di allocazioni e la loro fallibilita' non si provano da qui: la
-/// seconda sta nella firma — `try_reserve_exact` rende un `Result`, e
-/// sostituirla con `reserve_exact` non compila.
+/// Prefisso e payload tornano un frame uguale anche quando la sorgente li
+/// consegna tre byte per volta: e' la proprieta' che l'aritmetica del buffer
+/// puo' rompere. Il numero di allocazioni non e' osservabile da qui, e il
+/// nome non lo promette; la fallibilita' sta nella firma di
+/// `try_reserve_exact`.
 #[test]
 fn il_frame_riassemblato_e_identico_a_quello_scritto() {
     let atteso = annulla("un motivo abbastanza lungo da non essere banale");
@@ -328,10 +318,8 @@ fn il_frame_riassemblato_e_identico_a_quello_scritto() {
 /// Una lunghezza che non sta in `usize` col prefisso davanti e' un errore
 /// tipizzato, non un traboccamento.
 ///
-/// Su un `usize` a 64 bit il caso non e' raggiungibile — il tetto lo esclude
-/// molto prima — ma il `checked_add` c'e' lo stesso: e' il genere di somma che
-/// su una piattaforma a 32 bit diventerebbe raggiungibile, e scoprirlo li'
-/// sarebbe scoprirlo tardi.
+/// Su un `usize` a 64 bit il tetto lo esclude, ma il `checked_add` c'e' lo
+/// stesso: su una piattaforma a 32 bit la somma diventerebbe raggiungibile.
 #[test]
 fn la_somma_col_prefisso_e_controllata() {
     // La funzione di produzione, chiamata. Asserire

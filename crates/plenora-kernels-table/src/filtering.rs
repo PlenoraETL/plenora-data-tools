@@ -86,12 +86,10 @@ fn json_text(value: &serde_json::Value) -> String {
 /// Condizione di filtro con il valore atteso risolto UNA volta per batch
 /// (hot path minimale: nessun parse del letterale per riga nel percorso generico).
 ///
-/// Il parse avviene alla PRIMA valutazione di riga e il risultato
-/// (successo o messaggio d'errore) e' riusato per tutte le righe
-/// successive: il punto di errore e' identico al parse per riga (la prima
-/// riga valutata), il costo e' pagato una volta. `PlenoraError` non e'
-/// `Clone`: la cella conserva il messaggio e ricostruisce la variante
-/// (`Contract`, testo identico).
+/// Il parse avviene alla prima valutazione di riga e il risultato, successo
+/// o errore, vale per tutte le successive: il punto di errore e' lo stesso
+/// del parse per riga. `PlenoraError` non e' `Clone`, quindi la cella
+/// conserva il messaggio e ricostruisce la variante `InvalidPlan`.
 struct PreparedCondition {
     operator: Operator,
     /// `json_text` del valore di configurazione, calcolato al costruttore.
@@ -184,7 +182,7 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
                     .ok_or_else(|| PlenoraError::Schema("array Int64 incoerente".into()))?;
                 compare_i64(values.value(row), bound) == Some(Ordering::Equal)
             } else if array.data_type() == &DataType::Float64 {
-                // Semantica storica sui double (`total_cmp`, 0.0 == -0.0,
+                // Semantica sui double (`total_cmp`, 0.0 == -0.0,
                 // NaN uguale a NaN); un letterale intero oltre 2^53 usa il
                 // confronto misto esatto invece dell'arrotondamento a f64.
                 let bound =
@@ -255,16 +253,11 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
 // ---------------------------------------------------------------------------
 // Fast path tipizzati di `table.filter`.
 //
-// Per i tipi Arrow principali (Int64, UInt64, Float64, Utf8, Boolean) il
-// confronto avviene sui valori nativi, senza conversione scalare per riga ne'
-// allocazioni; la semantica e' IDENTICA a `evaluate` (null handling, NaN,
-// -0.0 vs 0.0, confronto esatto nativo per Int64/UInt64 — nessun collasso
-// oltre 2^53 — confronto misto intero<->double via `NumericBound`, confronto
-// testuale per UInt64/Boolean in `==`/`!=`, ordine righe). `fast_rows`
-// restituisce `None` quando tipo/operatore non sono coperti o quando il
-// valore di confronto non e' canonico: il chiamante ricade sul percorso
-// generico riga-per-riga, che riproduce esattamente lo stesso comportamento
-// (errori di contratto inclusi).
+// Confronto sui valori nativi, con semantica identica a `evaluate`: null,
+// NaN, -0.0, confronto esatto per Int64/UInt64 oltre 2^53, confronto misto
+// via `NumericBound`, ordine delle righe. `fast_rows` rende `None` quando
+// tipo, operatore o valore di confronto non sono coperti, e il chiamante
+// ricade sul percorso generico riga per riga.
 // ---------------------------------------------------------------------------
 
 /// Righe non nulle di `array` per cui `pred` e' vera, in ordine crescente.
@@ -377,7 +370,7 @@ fn fast_rows(
                 rows_where(values, |row| (values.value(row) == expected) != negate)
             } else {
                 // Ultimo tipo della catena: downcast fallito = tipo non
-                // gestito, stesso `None` di prima.
+                // gestito, quindi `None`.
                 let values = array.as_any().downcast_ref::<BooleanArray>()?;
                 // Il generico confronta "true"/"false": equivalente al
                 // confronto nativo sui soli valori booleani possibili.
@@ -406,7 +399,7 @@ fn fast_rows(
                 })
             } else {
                 // Ultimo tipo della catena: downcast fallito = tipo non
-                // gestito, stesso `None` di prima.
+                // gestito, quindi `None`.
                 let values = array.as_any().downcast_ref::<Float64Array>()?;
                 rows_where(values, |row| {
                     ordered_typed(compare_f64(values.value(row), bound), operator)
@@ -434,7 +427,7 @@ fn fast_rows(
                 })
             } else {
                 // Ultimo tipo della catena: downcast fallito = tipo non
-                // gestito, stesso `None` di prima.
+                // gestito, quindi `None`.
                 let values = array.as_any().downcast_ref::<Float64Array>()?;
                 rows_where(values, |row| {
                     within_bounds(

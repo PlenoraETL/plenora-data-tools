@@ -22,15 +22,10 @@ fn digest_di(byte: &[u8]) -> String {
 ///
 /// # Che cosa esclude
 ///
-/// Che due digest diversi coincidano per caso. Senza il prefisso, l'insieme
-/// vuoto sarebbe l'hash di zero byte — un valore che qualunque altro punto del
-/// programma potrebbe produrre digerendo niente, e che l'handshake
-/// confronterebbe come se significasse «stesso ambiente».
-///
-/// Il caso confronta con **entrambe** le cose sbagliate: l'hash del nulla, e
-/// l'hash del dominio con un segnaposto dopo. Il secondo perche' l'insieme
-/// vuoto e' l'assenza di elementi, non l'insieme di un elemento chiamato
-/// «niente».
+/// Che due digest diversi coincidano per caso: senza prefisso l'insieme vuoto
+/// sarebbe l'hash di zero byte, producibile altrove digerendo niente. Il caso
+/// confronta con **entrambe** le forme sbagliate: l'hash del nulla e il
+/// dominio seguito da un segnaposto.
 #[test]
 fn il_digest_dell_insieme_vuoto_e_dominato() {
     let Ok(vuoto) = ambiente(Risolutore::SenzaBackend) else {

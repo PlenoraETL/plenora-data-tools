@@ -22,11 +22,9 @@ use plenora_core::{PlenoraError, Result};
 // ---------------------------------------------------------------------------
 // Fast path compilato di `table.expression`.
 //
-// L'AST viene compilato UNA VOLTA in un albero di `FastNode`: indici di
-// colonna risolti e downcast degli array fatti in compilazione, letterali
-// pre-materializzati (`literal` eseguito una sola volta), testo delle colonne
-// Utf8 e dei letterali preso in prestito (`Cow`, nessun clone per riga).
-// Semantica IDENTICA a `evaluate`:
+// L'AST si compila UNA VOLTA in un albero di `FastNode` (indici, downcast e
+// letterali risolti in compilazione, testo preso in prestito). Semantica
+// IDENTICA a `evaluate`:
 // - errori lazy come nel generico: un letterale non valido o una colonna
 //   assente in un ramo `case` non percorso non falliscono (`FastNode::Error`
 //   rilascia l'errore solo quando il nodo viene valutato);

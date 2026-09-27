@@ -455,11 +455,9 @@ const fn validate_aligned_pair_rows(
 /// Errore di decodifica di una colonna geometria con posizione strutturata
 /// (architettura.md#geometrie D14.5).
 ///
-/// L'indice di riga nella sequenza decodificata e' un CAMPO — `None` per
-/// gli errori senza una riga (limite righe, colonna geometria assente o non
-/// Binary) — mai nel testo del messaggio (regola 8: la posizione va nel
-/// campo, non nella frase). La sorgente e' l'errore del trasporto invariato
-/// nel testo: il percorso v3 lo propaga cosi' com'e'.
+/// L'indice di riga e' un CAMPO (`None` per gli errori senza una riga), mai
+/// nel testo del messaggio (regola 8). La sorgente e' l'errore del
+/// trasporto invariato.
 #[derive(Debug)]
 pub struct GeometryDecodeError {
     /// Riga della cella che ha prodotto l'errore, se applicabile.
@@ -492,8 +490,8 @@ fn decode_geometry_side(
         });
     }
     let geometry_index = geometry_column_index(&schema, geometry_column)?;
-    // Trasporto v3 invariato (perimetro architettura.md#geometrie): la posizione strutturata
-    // della cella e' scartata qui, l'errore propaga nel testo storico.
+    // Trasporto v3 (perimetro architettura.md#geometrie): la posizione
+    // strutturata della cella si scarta, l'errore propaga come testo.
     let geometries =
         decode_geometry_batches(&schema, &batches, geometry_index).map_err(|error| error.source)?;
     Ok((schema, batches, geometries))
@@ -503,22 +501,16 @@ fn decode_geometry_side(
 ///
 /// Schema e batch IPC → geometrie materializzate, con i gate `MAX_ROWS`
 /// (righe totali) e `MAX_CELL_BYTES` (per cella) in un'unica fonte di
-/// verita'. Usata da `pair_arrow` (trasporto v3, via
-/// [`decode_geometry_side`]) e dal ramo geo di `run_binary_blocking` (piano
-/// v4): una sola camminata validante (architettura.md#geometrie), totale e mai lazy (D14.3).
+/// verita'. Usata da `pair_arrow` (via [`decode_geometry_side`]) e dal ramo
+/// geo di `run_binary_blocking`: una sola camminata validante, totale e mai
+/// lazy (D14.3).
 ///
-/// La validazione OGC in `geometry_from_wkb` e' la precondizione dimostrata
-/// per costruzione che autorizza le varianti `*_validated` dei kernel a
-/// valle (R0.1): il gate dei kernel non si ripete perche' e' gia' stato
-/// eseguito qui, geometria per geometria.
+/// La validazione OGC in `geometry_from_wkb` e' la precondizione che
+/// autorizza le varianti `*_validated` dei kernel a valle (R0.1).
 ///
-/// L'indice della colonna geometria e' risolto dal chiamante (hot path minimale); il nome
-/// e' recuperato dallo schema solo per il contesto d'errore.
-///
-/// L'errore porta l'indice di riga della cella come campo strutturato
-/// ([`GeometryDecodeError`], D14.5): il trasporto v3 lo scarta
-/// (`decode_geometry_side`, comportamento invariato), il piano DAG lo
-/// pubblica nel carrier `GeoBinaryStepError`.
+/// L'indice della colonna e' risolto dal chiamante; il nome serve solo al
+/// contesto d'errore. L'indice di riga ([`GeometryDecodeError`], D14.5) il
+/// trasporto v3 lo scarta, il piano DAG lo pubblica in `GeoBinaryStepError`.
 ///
 /// # Errors
 ///
@@ -587,18 +579,15 @@ pub fn decode_geometry_batches(
 
 /// Preflight della forma decodificata (architettura.md#geometrie D14.4).
 ///
-/// Dimensione in byte della colonna geometria decodificata — slot `Option`
-/// per riga (null inclusi) piu' l'heap di ogni cella via
-/// [`plenora_kernels_geo::decoded_size::decoded_size_xy`] — SENZA
-/// decodificare. Alimenta la reservation del governor prima
-/// dell'allocazione (riservare prima di decodificare, rifiutare prima di
-/// allocare).
+/// Dimensione in byte della colonna geometria decodificata (slot `Option`
+/// per riga piu' l'heap di ogni cella, via
+/// [`plenora_kernels_geo::decoded_size::decoded_size_xy`]) SENZA
+/// decodificare: alimenta la reservation del governor prima
+/// dell'allocazione.
 ///
-/// Best-effort per costruzione: e' una MISURA, non una validazione. Se la
-/// camminata si interrompe (schema incoerente, colonna non Binary o cella
-/// che il decoder rifiutera'), restituisce il parziale accumulato e il
-/// decode validante ([`decode_geometry_batches`]) riporta l'errore canonico
-/// sulla stessa cella — una sola fonte di verita' sugli errori (D14.3).
+/// E' una MISURA, non una validazione: se la camminata si interrompe rende
+/// il parziale, e [`decode_geometry_batches`] riporta l'errore canonico
+/// sulla stessa cella (D14.3).
 #[must_use]
 pub fn preflight_decoded_bytes(
     schema: &Schema,
@@ -775,10 +764,8 @@ fn replace_geometry_batches(
 /// - propaga gli errori di decodifica dei due lati (envelope, IPC, limiti,
 ///   validazione WKB), dei kernel binari e di codifica dell'output
 ///   (`encode_ipc`, `EnvelopeWriter`).
-// Pipeline unica su tutte le PairOperation: la lunghezza e' data dalla
-// sequenza lineare dei casi del dispatcher sul contratto v3, non da
-// complessita' logica, e spezzarla in funzioni artificiali
-// peggiorerebbe solo la leggibilita'.
+// Pipeline unica su tutte le PairOperation: la lunghezza e' la sequenza
+// lineare dei casi del dispatcher, non complessita' logica.
 #[allow(clippy::too_many_lines)]
 pub fn pair_arrow(
     left_reader: impl Read,
@@ -795,8 +782,8 @@ pub fn pair_arrow(
     )
 }
 
-/// Variante pubblica con formato d'output esplicito; il wrapper storico
-/// [`pair_arrow`] conserva PLNGEO3 come default.
+/// Variante pubblica con formato d'output esplicito; [`pair_arrow`]
+/// conserva PLNGEO3 come default.
 ///
 /// # Errors
 ///

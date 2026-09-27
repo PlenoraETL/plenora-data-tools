@@ -1,73 +1,29 @@
 //! Planner del DAG — `validate`
 //! (architettura.md#planner-ed-executor, piano-v5.md#identita-e-fingerprint).
 //!
-//! [`validate`] e' una funzione pura e a secco: legge il piano JSON e i
-//! contratti di input (schemi Arrow dagli header IPC, nessuna riga di dati) e
-//! produce un [`ValidatedGraph`] immutabile contenente **solo decisioni
-//! semantiche stabili** — struttura, tipi, CRS, ordini dichiarati, identita'
-//! (piano-v5.md#identita-e-fingerprint). Nessuna decisione fisica: quelle
-//! stanno in `prepare`/`ExecutionPlan`
-//! (architettura.md#planner-ed-executor), non qui.
+//! [`validate`] e' pura e a secco: legge il piano e i contratti di input
+//! (schemi dagli header IPC, nessuna riga) e produce un [`ValidatedGraph`]
+//! immutabile con le sole decisioni semantiche stabili (struttura, tipi, CRS,
+//! ordini, identita'). Le decisioni fisiche stanno in `prepare`.
 //!
-//! Passi (architettura.md):
+//! Passi: parsing per versione con `PlanLimits` di default
+//! ([`crate::plan::valida_per_versione`]); CRS di piano; verifica delle
+//! `required_capabilities` contro i backend compilati; inferenza dei
+//! `DataContract` in ordine topologico con un unico [`FieldAllocator`], che
+//! rimappa all'ingresso i `FieldId` delle geometrie di input (D16); identita'
+//! del grafo (piano-v5.md#identita-e-fingerprint).
 //!
-//! 1. scelta del parser dalla `schema_version` dichiarata, poi `PlanLimits`
-//!    di default durante il parsing (errori-e-limiti.md), validazione
-//!    strutturale e risoluzione alias — in [`crate::plan::valida_per_versione`],
-//!    che smista a [`PlanV5::parse`] o a
-//!    [`crate::plan::formato_v6::PlanV6::parse`]. La struttura che i due
-//!    validano e' la stessa; i formati e le identita' no;
-//! 2. risoluzione del CRS di piano (campo `crs`): feature-dispatch come
-//!    `geo_transport` — con `proj-backend` la risoluzione PROJ reale, senza
-//!    fail-closed `CRS_BACKEND_UNAVAILABLE`;
-//! 3. verifica delle `required_capabilities` di ogni op contro i backend
-//!    compilati (`geos-backend`/`proj-backend`): un'op senza backend fallisce
-//!    qui, non a meta' esecuzione;
-//! 4. inferenza dei `DataContract` arco per arco in ordine topologico
-//!    (`analyze_table_contract` / `analyze_geo_contract` per famiglia), con un
-//!    unico [`FieldAllocator`] per grafo: i `FieldId` delle geometrie di input
-//!    sono **rimappati all'ingresso** nel namespace globale del grafo
-//!    (decisione D16: due input non possono collidere);
-//! 5. costruzione dell'identita' (piano-v5.md#identita-e-fingerprint): `plan_hash` (SHA-256 del piano
-//!    canonico serializzato stabile), `catalog_fingerprint` (hash dei
-//!    descrittori delle op usate, in ordine stabile, con le quattro versioni
-//!    per-componente), `engine_version`, `arrow_version`,
-//!    `required_capabilities`, `input_contract_fingerprints`,
-//!    `plan_format_version`.
+//! Conseguenze della rimappatura: `sorted_by` con chiavi su un contratto di
+//! input e' rifiutato, perche' quelle chiavi non sono riferibili nel
+//! namespace del grafo. `input_contract_fingerprints` esclude i `FieldId` e
+//! include il CRS (definizione testuale, quindi conservativo) e lo stato
+//! `missing` (R4.6.3). Il profilo di publish di default entra nelle
+//! `required_capabilities` e lo verifica [`check_compatibility`]
+//! (errori-e-limiti.md#publish-e-cleanup). I fingerprint vivono solo in
+//! memoria: la stabilita' cross-build non e' richiesta.
 //!
-//! Scelte v1 documentate:
-//!
-//! - **Rimappatura dei `FieldId` di input**: gli id nei contratti di input
-//!   sono ignorati; ogni colonna geometrica di input riceve un id fresco dal
-//!   namespace del grafo (in ordine di dichiarazione degli input) e il nome
-//!   e' legato al nuovo id nell'allocatore, cosi' un `intern` successivo sul
-//!   nome della geometria resta coerente. Di conseguenza una proprieta'
-//!   `sorted_by` con chiavi su un contratto di input e' rifiutata (fail-closed):
-//!   le chiavi `FieldId` del chiamante non sono riferibili a colonne nel
-//!   namespace del grafo (punto aperto: trasportare le chiavi per nome);
-//! - **`input_contract_fingerprints`**: hash di schema + geometria
-//!   (serializzazione stabile), `FieldId` esclusi perche' identita' interna
-//!   del grafo, non dell'input; il CRS entra con definizione, tipo e unita'
-//!   lineare — due definizioni testualmente diverse dello stesso CRS producono
-//!   fingerprint diversi (conservativo, fail-closed) — e lo stato `missing`
-//!   (R4.6.3) entra come valore canonico: un contratto senza CRS non ha lo
-//!   stesso fingerprint di uno con CRS risolto;
-//! - **profilo di publish**: il formato piano non dichiara ancora un
-//!   profilo (`AtomicPublish`/`DurableAtomicPublish`, errori-e-limiti.md#publish-e-cleanup); finche' non lo
-//!   fara', il default `AtomicPublish` entra nelle `required_capabilities`
-//!   qui raccolte ed e' verificato da [`check_compatibility`] contro le
-//!   capability dell'ambiente, come i backend — senza cambi di API;
-//! - fingerprint e hash usano serializzazioni JSON stabili (chiavi ordinate);
-//!   i tipi Arrow entrano con la loro forma `Debug`: i fingerprint vivono solo
-//!   in memoria nella v1 (piano-v5.md#identita-e-fingerprint, serializzazione persistente rimandata), la
-//!   stabilita' cross-build non e' richiesta.
-//!
-//! # Type-state
-//!
-//! [`ValidatedGraph`] non ha costruttori pubblici: si ottiene solo da
-//! [`validate`], e `execute` accetta esclusivamente `&ValidatedGraph`:
-//! nessun percorso non validato puo' raggiungere l'esecuzione
-//! (architettura.md#planner-ed-executor).
+//! [`ValidatedGraph`] non ha costruttori pubblici: nessun percorso non
+//! validato raggiunge `execute`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -107,41 +63,20 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Separatore di dominio del `plan_hash` (piano-v5.md#identita-e-fingerprint, esteso da errori-e-limiti.md#memoria-governata).
 ///
-/// Il `plan_hash` non e' piu' `SHA256(canonical_json)` ma
-/// `SHA256(dominio || canonical_json)`. Il dominio nomina la versione del
-/// formato canonico, e questo **invalida esplicitamente** ogni hash prodotto
-/// prima della v5.
-///
-/// Senza di esso l'invalidazione sarebbe soltanto probabile: il piano
-/// canonico v5 nomina il budget di memoria diversamente dalla v4 (vedi
-/// [`crate::plan::migrazione_v4`]), quindi in pratica ogni hash cambierebbe
-/// comunque — ma «in pratica» e' una proprieta' del contenuto, non una
-/// garanzia della funzione. Un grafo riusato per sbaglio con un hash di prima
-/// e' un piano eseguito sotto un contratto di memoria che non e' piu' il suo.
-///
-/// Che cosa il dominio garantisce, con precisione: che gli **input** della
-/// funzione di hash siano disgiunti fra le due regole — uno ha il prefisso,
-/// l'altro no. Da input disgiunti non segue che gli output lo siano: un
-/// digest uguale fra i due domini **richiederebbe una collisione SHA-256**.
-/// E' la stessa assunzione su cui il `plan_hash` poggia comunque; il
-/// dominio la riusa, non la rafforza, e non abolisce la crittografia.
-///
-/// La difesa vera contro il riuso di un grafo validato sotto un'altra
-/// versione del formato non e' l'hash ma il confronto esplicito di
-/// `plan_format_version` in [`check_compatibility`].
+/// `plan_hash = SHA256(dominio || canonical_json)`: il dominio nomina la
+/// versione del formato canonico e rende disgiunti gli input rispetto agli
+/// hash senza prefisso, cosi' l'invalidazione e' garantita dalla funzione e
+/// non dal contenuto. Un digest uguale richiederebbe una collisione SHA-256,
+/// la stessa assunzione su cui il `plan_hash` poggia comunque. La difesa
+/// contro il riuso fra versioni e' il confronto di `plan_format_version` in
+/// [`check_compatibility`].
 const PLAN_HASH_DOMAIN: &[u8] = b"plenora/plan_hash/v5\0";
 
 /// Separatore di dominio dei piani **v6** (`PLAN-018`).
 ///
-/// Distinto da quello della v5, e per la stessa ragione per cui quello
-/// esiste: un v5 e un v6 per il resto identici devono avere identita'
-/// diverse, e «in pratica differiranno comunque perche' il canonico dichiara
-/// una versione diversa» e' una proprieta' del contenuto, non una garanzia
-/// della funzione.
-///
-/// **Non generalizzare.** Che ogni versione abbia un dominio proprio sarebbe
-/// falso: la v4 e' migrata NEL canonico v5 e ne condivide il `plan_hash`
-/// (`PLAN-019`). Il confine e' fra v5 e v6, e li' soltanto.
+/// Un v5 e un v6 per il resto identici devono avere identita' diverse. Non
+/// vale per ogni versione: la v4 e' migrata nel canonico v5 e ne condivide il
+/// `plan_hash` (`PLAN-019`).
 const PLAN_HASH_DOMAIN_V6: &[u8] = b"plenora/plan_hash/v6\0";
 
 /// Il dominio che compete alla versione del formato canonico.
@@ -458,16 +393,12 @@ impl ValidatedGraph {
 
 /// `validate` del DAG (architettura.md, piano-v5.md#identita-e-fingerprint, architettura.md#planner-ed-executor).
 ///
-/// Un piano `schema_version: 4` entra da qui attraverso la migrazione
-/// esplicita (errori-e-limiti.md#memoria-governata). Le versioni DAG restano
-/// due — la v5 e la v6 non collassano l'una nell'altra — ma la **struttura**
-/// che il resto della validazione attraversa e' una sola.
+/// Un piano `schema_version: 4` entra con la migrazione esplicita
+/// (errori-e-limiti.md#memoria-governata); v5 e v6 restano distinte, ma la
+/// struttura che il resto della validazione attraversa e' una sola.
 ///
 /// `input_contracts` associa a ogni nome dichiarato in `inputs` il contratto
-/// letto dagli header (nessuna riga di dati): nomi duplicati, mancanti o
-/// extra sono rifiutati (fail-closed). I `FieldId` delle colonne geometriche
-/// di input sono rimappati nel namespace globale del grafo; i fingerprint di
-/// input sono calcolati sui contratti come forniti (schema + geometria).
+/// letto dagli header: nomi duplicati, mancanti o extra sono rifiutati.
 ///
 /// # Errors
 ///
@@ -476,47 +407,31 @@ impl ValidatedGraph {
 ///   grafo che perde la geometria prima di un'op geo;
 /// - `Unsupported`: operazione sconosciuta/`Planned`, capability non
 ///   compilata (`geos`/`proj`), schema di output non inferibile a secco;
-/// - `Schema`: contratti (di input o inferiti) che violano le regole v1 (D16);
+/// - `Schema`: contratti (di input o inferiti) che violano le regole (D16);
 /// - `Crs`: CRS di piano assente/invalido, backend PROJ non compilato,
 ///   requisito CRS di un nodo non soddisfatto, mismatch CRS left/right;
-/// - `Internal`: invariante interna violata (op risolta in parsing, arco
-///   risolto dalla validazione strutturale) — impossibile su input esterno,
-///   per quanto malformato; il caso "impossibile" e' un errore esplicito,
-///   mai un panic (R6).
+/// - `Internal`: invariante interna violata, impossibile su input esterno;
+///   un errore esplicito, mai un panic (R6).
 #[allow(clippy::too_many_lines)] // Passi sequenziali di par. 6.1: spezzarli nuocerebbe alla leggibilita'.
 pub fn validate(
     plan_json: &str,
     input_contracts: &[(String, DataContract)],
 ) -> Result<ValidatedGraph> {
-    // Passo 0: versione, in un punto solo. Le versioni DAG sono due e NON
-    // collassano l'una nell'altra:
-    //
-    // - la **v4** e' migrata nel canonico v5 e ne condivide il `plan_hash`
-    //   (errori-e-limiti.md#memoria-governata, `PLAN-019`);
-    // - la **v5** attraversa senza copia;
-    // - la **v6** ha un parser proprio, perche' porta un campo che la v5
-    //   rifiuta, e resta nel proprio dominio d'identita' (`PLAN-002`,
-    //   `PLAN-018`). Non c'e' nessuna migrazione v5 -> v6: sarebbe un
-    //   cambio d'identita', e `PLAN-021` vieta di presentarlo come
-    //   equivalenza.
+    // Passo 0: versione, in un punto solo. La v4 e' migrata nel canonico v5
+    // (`PLAN-019`); la v5 attraversa senza copia; la v6 ha un parser e un
+    // dominio d'identita' propri (`PLAN-002`, `PLAN-018`), senza migrazione
+    // v5 -> v6 (`PLAN-021`).
     // Passo 1: limiti di default DURANTE il parsing, struttura, arieta',
     // risoluzione alias, scelti dal parser della versione dichiarata.
     let plan_limits = PlanLimits::default();
     let plan = crate::plan::valida_per_versione(plan_json, &plan_limits)?;
-    // Validazione dei limiti effettivi in un punto solo, prima di qualunque
-    // decisione: qui la attraversano TUTTI i piani, compresi quelli solo-geo
-    // che non passano dal preparer tabellare — dove un controllo del genere
-    // correggerebbe in silenzio invece di rifiutare, e non coprirebbe loro.
+    // Validazione dei limiti effettivi in un punto solo, per tutti i piani,
+    // compresi i solo-geo che non passano dal preparer tabellare.
     plan.effective_limits().validate()?;
-    // Passo 1-bis (`PR-12`): la piattaforma supporta AFFATTO il profilo
-    // isolato che il piano richiede? E' un fatto statico del binario e del
-    // sistema, non dell'ambiente di questa esecuzione — la disponibilita'
-    // dinamica (privilegi, cgroup, politica dell'host) resta a
-    // `PreparaIsolamento`, dopo, e non e' una proprieta' del piano. Qui si
-    // rifiuta solo cio' che nessun ambiente di questa piattaforma potrebbe
-    // mai offrire (F4-6, F4-11): Windows e macOS restano rifiutati in
-    // validazione, non ignorati ne' fatti ricadere sull'esecuzione
-    // in-process.
+    // Passo 1-bis: la piattaforma supporta il profilo isolato richiesto? E'
+    // un fatto statico del binario; la disponibilita' dinamica (privilegi,
+    // cgroup) resta a `PreparaIsolamento`. Windows e macOS si rifiutano in
+    // validazione (F4-6, F4-11), senza ricadere sull'esecuzione in-process.
     crate::isolamento::attivazione::verifica_piattaforma(
         plan.max_domain_memory_bytes().is_some(),
         std::env::consts::OS,
@@ -721,18 +636,12 @@ pub fn validate(
 }
 
 /// Verifica di compatibilita' di un grafo validato con l'ambiente corrente
-/// (piano-v5.md#identita-e-fingerprint): qualunque mismatch rifiuta il grafo, mai procedere alla cieca.
+/// (piano-v5.md#identita-e-fingerprint): qualunque mismatch rifiuta il grafo.
 ///
-/// I mismatch rilevati: **versione del formato piano diversa**, catalogo
-/// cambiato (o op usata rimossa), versione engine diversa, versione Arrow
-/// diversa, capability non piu' disponibili (backend o profilo di publish,
-/// errori-e-limiti.md#publish-e-cleanup).
-///
-/// `current_catalog` e' il catalogo contro cui riverificare (in produzione
-/// `plenora_core::catalog::CATALOG`); `engine_version` e `arrow_version`
-/// sono quelli dell'ambiente corrente (in produzione [`ENGINE_VERSION`] e
-/// [`ARROW_VERSION`]); `capabilities` sono quelle offerte dall'ambiente
-/// corrente (backend compilati + profili di publish supportati, errori-e-limiti.md#publish-e-cleanup).
+/// Confronta versione del formato piano, catalogo, versione engine, versione
+/// Arrow e capability (backend e profili di publish). In produzione gli
+/// argomenti sono `plenora_core::catalog::CATALOG`, [`ENGINE_VERSION`] e
+/// [`ARROW_VERSION`].
 ///
 /// # Errors
 ///
@@ -927,12 +836,10 @@ fn catalog_fingerprint(descriptors: &[&OperationDescriptor]) -> Result<CatalogFi
 /// Serializzazione stabile di un descrittore (nomi enum espliciti, non
 /// `Debug`: il fingerprint non deve dipendere dai nomi Rust).
 ///
-/// architettura.md#geometrie D12.2 (decisione deliberata): `geo_fusion` resta FUORI da
-/// questa forma canonica e quindi dal `catalog_fingerprint` — il fingerprint
-/// guarda la compatibilita' semantica dei piani, la fondibilita' e' una
-/// capability FISICA (architettura.md#planner-ed-executor): aggiungerla invaliderebbe piani semanticamente
-/// identici. Il campo resta osservabile nello snapshot di catalogo
-/// (`planner/tests.rs`) e nelle capability JSON (`capabilities.rs`).
+/// `geo_fusion` resta fuori (architettura.md#geometrie D12.2): e' una
+/// capability fisica, e includerla invaliderebbe piani semanticamente
+/// identici. Resta osservabile nello snapshot di catalogo e nelle capability
+/// JSON.
 fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
     json!({
         "id": descriptor.id,
@@ -1007,12 +914,9 @@ fn descriptor_canonical(descriptor: &OperationDescriptor) -> Value {
 
 /// Fingerprint di un contratto di input: schema + geometria (piano-v5.md#identita-e-fingerprint).
 ///
-/// I `FieldId` sono esclusi: identita' interna del grafo (rimappata
-/// all'ingresso, D16), non dell'input. `active_geometry` e le proprieta' di
-/// `ContractProperties` sono escluse per lo stesso motivo (riferiscono
-/// `FieldId`). Le proprieta' tipizzate della GEOMETRIA — `encoding`, `types` —
-/// non riferiscono `FieldId` e sono invece parte del contratto osservabile:
-/// entrano nel fingerprint.
+/// Esclusi i `FieldId`, `active_geometry` e `ContractProperties`, che sono
+/// identita' interna del grafo (D16); inclusi `encoding` e `types` della
+/// geometria, che sono contratto osservabile.
 ///
 /// # Errors
 ///
@@ -1028,8 +932,8 @@ pub fn contract_fingerprint(contract: &DataContract) -> Result<ContractFingerpri
 }
 
 /// Serializzazione stabile di schema + geometrie (chiavi ordinate da
-/// `serde_json::Map`; i tipi Arrow in forma `Debug` — fingerprint solo in
-/// memoria nella v1, piano-v5.md#identita-e-fingerprint).
+/// `serde_json::Map`; i tipi Arrow in forma `Debug`, perche' il fingerprint
+/// vive solo in memoria, piano-v5.md#identita-e-fingerprint).
 fn contract_canonical(contract: &DataContract) -> Value {
     let fields: Vec<Value> = contract
         .schema
@@ -1048,17 +952,10 @@ fn contract_canonical(contract: &DataContract) -> Value {
         .geometries
         .iter()
         .map(|geometry| {
-            // R4.6.3/piano-v5.md#identita-e-fingerprint: lo stato del CRS ENTRA nel fingerprint — un
-            // contratto con CRS risolto e uno con CRS mancante non sono lo
-            // stesso contratto (altrimenti un piano validato su input
-            // risolto accetterebbe in riesecuzione un input senza CRS senza
-            // rivalidazione, spostando il fallimento a runtime). La forma
-            // risolta e' byte-identica a prima (fingerprint esistenti
-            // stabili); `missing` e' il valore canonico R2.2.
-            // `DeclaredUnresolved` entra in forma canonica con le
-            // dichiarazioni: due incoerenze dichiarate diverse non sono lo
-            // stesso contratto, e nessuno dei tre stati collide con un
-            // altro.
+            // Lo stato del CRS entra nel fingerprint (R4.6.3): un contratto
+            // con CRS mancante non deve passare per uno con CRS risolto.
+            // `missing` e' il valore canonico R2.2; `DeclaredUnresolved`
+            // entra con le dichiarazioni, e i tre stati non collidono.
             let crs = match &geometry.crs {
                 // `ResolvedByDecision` ha la stessa forma canonica di
                 // `Resolved`: il contratto effettivo e' lo stesso CRS

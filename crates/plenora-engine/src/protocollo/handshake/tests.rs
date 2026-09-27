@@ -1,13 +1,8 @@
 //! Prove dell'handshake.
 //!
-//! Tre strati che non si coprono a vicenda:
-//!
-//! - il **giro nominale**, che dice che due lati d'accordo si accordano;
-//! - un **caso per ogni asse**, perche' un confronto dimenticato lascerebbe
-//!   passare esattamente la cosa che quell'asse esiste per fermare;
-//! - le **transizioni vietate**, che sono la meta' della macchina a stati:
-//!   dire cosa succede quando arriva il messaggio sbagliato e' dire cosa fa
-//!   davvero.
+//! Tre strati: il **giro nominale**; un **caso per ogni asse**, perche' un
+//! confronto dimenticato lascia passare cio' che l'asse ferma; le
+//! **transizioni vietate**, meta' della macchina a stati.
 
 use plenora_core::{ErrorCategory, PlenoraError};
 
@@ -586,26 +581,15 @@ fn un_tipo_fuori_sequenza_e_rifiutato() {
 /// Il riuso di uno stato concluso **non compila**, e qui non c'e' un oracolo
 /// che lo provi.
 ///
-/// Ogni transizione consuma `self`, quindi un secondo `ricevi` sullo stesso
-/// supervisore non e' un errore da gestire: e' codice che il compilatore
-/// rifiuta. La garanzia sta nella firma — `fn ricevi(self, ..)` su un tipo
-/// senza `Clone` — e il compilatore la fa rispettare a ogni chiamata del
-/// crate.
+/// Ogni transizione consuma `self` su un tipo senza `Clone`: la garanzia sta
+/// nella firma. Un `compile_fail` qui non verrebbe mai eseguito (`rustdoc`
+/// non raccoglie doctest da moduli `#[cfg(test)]`), e raccolto fallirebbe per
+/// la privacy di `protocollo`, non per il valore mosso. Provarla richiede
+/// `trybuild` o `compiletest`, una dipendenza nuova: e' dichiarata e non
+/// provata.
 ///
-/// **Un `compile_fail` qui sarebbe peggio di niente.** Un blocco
-/// ```` ```compile_fail ```` su questa doc non verrebbe **mai eseguito**:
-/// `rustdoc` non raccoglie i doctest dai moduli `#[cfg(test)]`, e `cargo test
-/// --doc` risponde «0 tests». Raccolto sarebbe peggio ancora: `protocollo` e'
-/// un modulo privato, quindi quel codice fallirebbe per **privacy**, non per
-/// il valore mosso — un `compile_fail` che passa per la ragione sbagliata e'
-/// un oracolo che dichiara una proprieta' senza sorvegliarla.
-///
-/// Provarla davvero richiede `trybuild` o `compiletest`, cioe' una dipendenza
-/// nuova, e una superficie da cui il tipo sia raggiungibile. Fino ad allora e'
-/// dichiarata e non provata, ed e' scritto qui.
-///
-/// Il test qui sotto prova un'altra cosa, vera e verificabile: due handshake
-/// distinti non condividono stato.
+/// Il test qui sotto prova un'altra cosa: due handshake distinti non
+/// condividono stato.
 #[test]
 fn due_handshake_distinti_non_si_influenzano() {
     let (primo, _) = giro_nominale();
@@ -616,11 +600,9 @@ fn due_handshake_distinti_non_si_influenzano() {
 /// La versione del protocollo non e' un asse da confrontare qui, ed e' giusto
 /// cosi'.
 ///
-/// Non c'e' un campo da impostare: il frame la deriva dalla costante e il
-/// decoder rifiuta qualunque altra. Un confronto in questo modulo sarebbe una
-/// guardia che non puo' fallire — cioe' una guardia che sembra proteggere e
-/// non protegge. Quello che si puo' provare, e che qui si prova, e' che un
-/// frame di versione diversa **non arriva mai** all'handshake.
+/// Il frame la deriva dalla costante e il decoder rifiuta ogni altra: un
+/// confronto qui non potrebbe fallire. Si prova invece che un frame di
+/// versione diversa **non arriva mai** all'handshake.
 #[test]
 fn un_frame_di_versione_diversa_non_arriva_all_handshake() {
     use crate::protocollo::codifica::decodifica;
@@ -646,14 +628,9 @@ const SENTINELLA: &str = "SEGRETO-8675309124816324";
 
 /// Un errore che cita il valore ricevuto e' quel valore in un log.
 ///
-/// Il rifiuto e' il momento in cui qualcuno guarda, ed e' anche il momento in
-/// cui cio' che si mostra viene copiato nel log insieme al motivo per cui lo
-/// si stava guardando. Chi indaga ha il frame in mano: il messaggio deve dirgli
-/// **quale campo** non torna, non che cosa c'e' scritto.
-///
-/// Ogni caso passa da un asse diverso del confronto, perche' la riservatezza
-/// non e' una proprieta' del modulo ma di ciascun percorso d'errore: basta uno
-/// che copi il valore.
+/// Chi indaga ha il frame in mano: il messaggio dice **quale campo** non
+/// torna, non che cosa c'e' scritto. Ogni caso passa da un asse diverso,
+/// perche' basta un percorso d'errore che copi il valore.
 #[test]
 fn nessun_errore_dell_handshake_porta_cio_che_arriva_dal_filo() {
     /// La sentinella numerica, per i campi che non sono testo.
@@ -720,14 +697,9 @@ fn nessun_errore_dell_handshake_porta_cio_che_arriva_dal_filo() {
 
 /// Due descrizioni **vuote** si accorderebbero, e non e' un accordo.
 ///
-/// L'handshake confronta per uguaglianza, e la stringa vuota e' uguale alla
-/// stringa vuota: due lati che non dichiarano nulla concludono l'accordo
-/// avendo confrontato il nulla col nulla. Il tetto non lo impedisce — una
-/// stringa vuota sta sotto qualunque tetto — quindi serve una regola che
-/// dica non solo «quanto grande», ma «che ci sia».
-///
-/// Si prova su **entrambi i lati**: il rifiuto della propria descrizione
-/// arriva alla costruzione, quello della descrizione ricevuta alla verifica.
+/// La stringa vuota sta sotto ogni tetto ed e' uguale a se stessa: serve una
+/// regola che dica «che ci sia». Si prova su **entrambi i lati**: la propria
+/// descrizione alla costruzione, quella ricevuta alla verifica.
 #[test]
 fn una_descrizione_vuota_non_si_costruisce_ne_si_accetta() {
     // Il proprio lato, prima di spedire.
@@ -764,13 +736,9 @@ fn una_descrizione_vuota_non_si_costruisce_ne_si_accetta() {
 
 /// Un digest non canonico **non si costruisce**, quindi non arriva qui.
 ///
-/// Questo test non prova piu' un rifiuto: prova che il rifiuto non serve. I
-/// quattro digest del filo sono `DigestSha256`, e non esiste un valore di quel
-/// tipo che non sia canonico — le forme rifiutate stanno nelle prove del tipo,
-/// dove sono esercitate una per una.
-///
-/// Cio' che resta da provare **qui** e' l'altra meta': che due digest canonici
-/// e diversi siano un disaccordo, e che il disaccordo sia dell'asse giusto.
+/// I digest del filo sono `DigestSha256`, che non ha valori non canonici; le
+/// forme rifiutate stanno nelle prove del tipo. Qui resta da provare che due
+/// digest canonici e diversi siano un disaccordo dell'asse giusto.
 #[test]
 fn due_digest_canonici_e_diversi_sono_un_disaccordo() {
     let mut risposta = risposta_nominale();
@@ -789,12 +757,9 @@ fn due_digest_canonici_e_diversi_sono_un_disaccordo() {
 
 /// Attese che **nessuna** risposta valida potrebbe soddisfare.
 ///
-/// Facendo passare le capability richieste dalla sola riduzione a forma
-/// canonica — ordine e duplicati — e non dalla verifica che vale per quelle
-/// offerte, il supervisore potrebbe chiedere un nome vuoto, che nessuna
-/// `Risposta` valida puo' portare, o piu' capability di quante una `Risposta`
-/// ne ammetta: in entrambi i casi l'accordo sarebbe impossibile per
-/// costruzione, e lo si scoprirebbe al confronto invece che alla costruzione.
+/// Le capability richieste passano dalla stessa verifica delle offerte:
+/// altrimenti un nome vuoto, o piu' capability di quante una `Risposta` ne
+/// ammetta, renderebbero l'accordo impossibile, scoperto solo al confronto.
 #[test]
 fn le_capability_richieste_passano_dalla_stessa_verifica_delle_offerte() {
     use crate::protocollo::limiti::MAX_CAPABILITY;
@@ -848,14 +813,9 @@ fn un_incarico_malformato_e_rifiutato_anche_da_un_frame_diretto() {
 
 /// Due descrizioni **logicamente uguali** producono lo stesso frame.
 ///
-/// Risorse, backend e capability sono insiemi: elencarli in ordine diverso
-/// descrive lo stesso ambiente. Se il frame spedito conservasse l'ordine
-/// d'origine, due supervisori d'accordo emetterebbero byte diversi, e il
-/// determinismo del filo dipenderebbe dall'ordine in cui qualcuno ha riempito
-/// un `Vec`.
-///
-/// L'oracolo sono i **byte**, non la struttura: confrontare due `Saluto` con
-/// `==` proverebbe che i campi coincidono, non che coincida cio' che viaggia.
+/// Gli insiemi elencati in ordine diverso descrivono lo stesso ambiente, e il
+/// frame spedito non deve dipendere dall'ordine di un `Vec`. L'oracolo sono i
+/// **byte**: `==` su due `Saluto` non dice che coincida cio' che viaggia.
 #[test]
 fn due_descrizioni_equivalenti_producono_lo_stesso_saluto() {
     let dritto = SupervisoreInAttesa::nuovo(attese()).expect("coerenti");
@@ -933,11 +893,9 @@ fn i_due_lati_si_accordano_qualunque_sia_l_ordine_d_origine() {
 /// Cio' che si spedisce e' **ordinato**, e lo si dice senza confrontarlo con
 /// se stesso.
 ///
-/// I due oracoli qui sopra confrontano due esiti dello **stesso** percorso:
-/// provano che l'ordine d'origine non conta, e infatti una deviazione
-/// applicata a entrambi i lati sfugge a tutti e due — verificato iniettandola.
-/// Questo test dice invece una proprieta' assoluta del frame emesso, che non
-/// ha bisogno di un secondo frame per essere vera.
+/// Gli oracoli qui sopra confrontano due esiti dello stesso percorso, e una
+/// deviazione applicata a entrambi i lati sfuggirebbe. Questo prova una
+/// proprieta' assoluta del frame emesso.
 #[test]
 fn cio_che_si_spedisce_porta_gli_insiemi_ordinati() {
     let mut sue = attese();

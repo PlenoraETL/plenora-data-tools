@@ -1,172 +1,54 @@
-//! Inferenza a secco dei `DataContract` per le 75 operazioni `geo.*`
-//! (architettura.md e 6.1, architettura.md#planner-ed-executor).
+//! Inferenza a secco dei `DataContract` per le operazioni `geo.*`
+//! (architettura.md#planner-ed-executor).
 //!
-//! [`analyze_geo_contract`] e' l'`analyze_contract` del catalogo per la
-//! famiglia geo: dato l'id dell'operazione, i contratti di input, la config
-//! JSON del nodo e il CRS di piano, produce il contratto dell'arco in uscita
-//! oppure fallisce **in validazione** (fail-closed), mai a runtime.
+//! [`analyze_geo_contract`] ricava il contratto dell'arco in uscita da id
+//! dell'operazione, contratti di input, config JSON e CRS di piano, oppure
+//! fallisce **in validazione** (fail-closed), mai a runtime.
+//! `required_capabilities` non si verifica qui: il controllo sui backend
+//! compilati spetta al planner.
 //!
-//! # Scelta sul riuso delle config (documentata, richiesta del task)
+//! # Config
 //!
-//! Le config legacy `TransformArrowSchema`/`PairArrowSchema` vivono in
-//! `plenora-engine::geo_transport::transport` e sono legate al protocollo di
-//! trasporto v3 (conteggi righe obbligatori, limiti di trasporto
-//! `MAX_ROWS`/`MAX_PAIRS`, errori `ArrowTransportError`): spostarle in
-//! `kernels-geo` trascinerebbe dettagli del trasporto nel livello di analisi
-//! semantica. Si e' scelta la **duplicazione minimale**: struct serde nuove,
-//! con gli stessi nomi di parametro e gli stessi domini di validazione di
-//! `validate_parameters` (finitezza, segni, range `[0,1]`, vincoli incrociati
-//! `start_ratio <= end_ratio`, 6 coefficienti affini). Gli enum semantici
-//! ([`crate::spatial_join::JoinPredicate`], [`crate::topology::OverlayMode`])
-//! sono gia' in `kernels-geo` e sono riusati; per `cap`/`policy` si definiscono
-//! enum di config locali, lo stesso pattern seguito dall'engine.
+//! Le struct serde sono locali: stessi nomi e domini di `validate_parameters`
+//! delle config di `plenora-engine::geo_transport`, senza i limiti di
+//! trasporto, che non appartengono all'analisi semantica. Gli enum semantici
+//! di `kernels-geo` sono riusati.
 //!
-//! # Convenzioni di output (v1)
+//! # Forme di output
 //!
-//! - trasformazioni 1:1 (centroid, buffer, simplify, ...): schema invariato,
-//!   geometria trasformata in place con lo stesso `FieldId`; le op che
-//!   CAMBIANO il tipo geometrico dichiarano i tipi dell'output nella
-//!   proprieta' `types` del contratto e sostituiscono le chiavi canoniche
-//!   `types`/`types_declaration` ereditate (piano-v5.md#contratti-di-input, decisione 8);
-//! - misure/predicati: la geometria resta e si **aggiunge** una colonna
-//!   (`Float64` aree/lunghezze/distanze, `Boolean` predicati, `UInt64`
-//!   `vertex_count`/`count`, `Utf8` `to_wkt`); nome da `output_column` o
-//!   default documentato (nome breve dell'op, `wkt`, `within`, `count`);
-//! - `bounds_extractor`: quattro colonne `{geometria}_minx/miny/maxx/maxy`
-//!   (convenzione del trasporto legacy);
-//! - `explode`/`delaunay`/`split`: schema invariato piu' `__parent_index`
-//!   (`UInt64`, non null); piu' righe per riga di input;
-//! - `dissolve`/`line_builder`/`polygon_builder`/`polygonize`/`line_merge`:
-//!   aggregazione a sole geometrie (le colonne attributo non sono propagate,
-//!   come nel kernel legacy; il group-by resta a `table.aggregate`);
-//! - `sjoin`: schema left + `__right_index` (`UInt64`, non null): join con
-//!   lineage, gli attributi right si agganciano con `table.join` a valle;
-//! - `nearest`: schema left + `__right_index` + `distance` (entrambe nullable:
-//!   righe left senza match entro `max_distance` producono null);
-//! - `overlay`: sola geometria + `__left_index`/`__right_index` nullable
-//!   (convenzione del kernel legacy);
-//! - `clip`/`intersection`/`union`/`difference`/`symmetric_difference`:
-//!   schema left invariato, geometria sostituita in place (allineate alle
-//!   righe left nel protocollo legacy);
-//! - `within`/`count_points_in_polygons`: schema left + colonna scalare
-//!   (`within` Boolean, `count` `UInt64`), allineate alle righe left;
-//! - `reproject`: schema invariato, `GeometryColumnContract.crs` e metadato
-//!   `geo.crs` aggiornati al target (unico step che modifica il CRS); le
-//!   chiavi canoniche CRS ereditate dalla sorgente sono sostituite
-//!   (piano-v5.md#contratti-di-input, decisione 8);
-//! - `from_coords`: aggiunge la colonna geometria (nuovo `FieldId`,
-//!   `nullable=false` da specifica: coordinate null sono errore a runtime,
-//!   non geometria null);
-//! - `from_wkt`: come `from_coords` (input non geometrico, nuovo `FieldId`),
-//!   ma la colonna geometria e' **nullable** (celle WKT sorgente null restano
-//!   null; WKT invalido rifiuta l'output con diagnostica row-scoped); CRS da config `crs` o di
-//!   piano, requisito `Known`;
-//! - `geometry_accessors`: aggiunge fino a 6 colonne per riga
-//!   (`geometry_type` Utf8, `num_geometries`/`num_interior_rings` `UInt64`,
-//!   `start_point`/`end_point` Utf8, `is_closed` Boolean, tutte nullable),
-//!   filtrabili con `fields` e prefissabili con `output_prefix`;
-//! - `collect`: aggregazione a sole geometrie come `dissolve`, piu' le
-//!   colonne chiave di `group_by` (copiate dallo schema di input; gli altri
-//!   attributi non sono propagati);
-//! - `line_locate_point`: aggiunge `fraction` Float64 nullable (punto da
-//!   config `point_wkb`, stessa convenzione D16 di `other_wkb`);
-//! - `generate_grid` (v1.2, generativa): come `from_coords` richiede un input
-//!   senza geometrie (l'input funge da trigger, le sue colonne non sono
-//!   propagate: l'output e' una riga per cella). Schema nuovo: `geometry`
-//!   (nuovo `FieldId`, non null), `cell_i`/`cell_j` `UInt64` non null, piu'
-//!   `centroid_x`/`centroid_y` Float64 non null se `include_centroid`. CRS da
-//!   config `crs` o di piano. Extent finito e non degenere, `cell_size > 0`,
-//!   numero celle entro [`crate::extensions2::MAX_GRID_CELLS`]; il conteggio
-//!   esatto e' esposto come `row_count` `Estimated` (la convenzione v1
-//!   riserva `Proven` alle fonti dimostrabili dagli header);
-//! - `subdivide` (v1.2): espansione 1:N come `explode` (`__parent_index`,
-//!   `row_count` eliminato, `sorted_by` preservato); `max_vertices >= 4`;
-//!   `output_column` rinomina la colonna geometria (stesso `FieldId`);
-//! - `snap` (v1.2): 1:1 in place, schema invariato; `reference_wkb` (hex)
-//!   validato strutturalmente E decodificato in analisi, `tolerance >= 0`;
-//!   il riferimento e' assunto nello stesso CRS dell'input (D16), requisito
-//!   `SameProjected` come le distanze "unarie";
-//! - `geometry_diagnostics`: la colonna geometria e' **sostituita** dalle 10
-//!   colonne diagnostiche [`DIAGNOSTIC_COLUMNS`] (il contratto diventa
-//!   non-geografico), come nel kernel legacy.
-//! - `coverage_validate`/`shared_paths` (v1.3, WholeToMany): consumano
-//!   l'intera copertura (Blocking) e producono uno schema **nuovo** — una
-//!   riga per issue/tratto condiviso: colonne diagnostiche non-null piu'
-//!   geometria WKB non-null con **nuovo `FieldId`** e CRS dell'input
-//!   (`SameProjected`: aree/lunghezze in unita' di mappa); le colonne
-//!   attributo dell'input non sono propagate e le proprieta' sono azzerate.
-//! - `cluster_dbscan` (v1.3): calcolo globale (Blocking) ma output allineato
-//!   alle righe (OneToOne): aggiunge la colonna `cluster_id` `UInt64`
-//!   **nullable** (noise → null), nome da `output_column`; `eps` finito e
-//!   `> 0`, `min_points >= 1`; `Projected` (eps in unita' di mappa).
+//! Le trasformazioni 1:1 riscrivono la geometria in place con lo stesso
+//! `FieldId`; quelle che cambiano tipo dichiarano i tipi dell'output e
+//! sostituiscono le chiavi canoniche ereditate (piano-v5.md#contratti-di-input,
+//! decisione 8). Misure e predicati aggiungono una colonna, le espansioni 1:N
+//! aggiungono `__parent_index`, le aggregazioni tengono le sole geometrie, i
+//! join aggiungono `__right_index`, i produttori creano una colonna geometria
+//! con nuovo `FieldId`. Il dettaglio per operazione sta sulle funzioni di
+//! inferenza.
 //!
-//! # Operand i binari "unari" (decisione v1)
+//! Il catalogo marca `Unary` predicati, distanze a due colonne e `split`, ma
+//! un input ha una sola colonna geometria (D16): il secondo operando arriva
+//! dalla config come WKB hex (`other_wkb`), validato in analisi, con CRS
+//! assunto uguale a quello dell'input.
 //!
-//! Il catalogo marca `Unary` predicati, distanze a due colonne e `split`
-//! ("due colonne dello stesso input"), ma la v1 (D16) ammette **una sola**
-//! colonna geometria per input: il secondo operando e' quindi fornito dalla
-//! config come `other_wkb` (WKB hex), validato strutturalmente in analisi
-//! con il validatore del kernel. La sua CRS e' assunta uguale a quella
-//! dell'input (stesso requisito `SameProjected`/`Geographic` dell'op).
-//! Punto aperto per 2A-3: input multi-geometria post-v1.
+//! # CRS, dimensionalita', encoding
 //!
-//! # Verifiche fail-closed in analisi
+//! Una definizione in config testualmente uguale al CRS di piano lo riusa
+//! senza backend; altrimenti `resolve_crs`, che senza `proj-backend` fallisce
+//! chiuso (`CRS_BACKEND_UNAVAILABLE`). Ogni kernel che consuma una geometria
+//! la decodifica in XY, quindi un input con `dimensions != Xy` si rifiuta a
+//! compile-plan (R3.4); produttori e output ricodificati dichiarano `Xy`, e
+//! le dimensionalita' estese passano solo per le op tabellari.
 //!
-//! - op presente nel catalogo e di famiglia geo, arieta' rispettata;
-//! - ogni input ha esattamente una colonna geometria attiva (v1), salvo
-//!   `from_coords` che ne richiede zero;
-//! - la colonna geometria e' identificabile dal trasporto (estensione
-//!   `geoarrow.wkb` o sole chiavi canoniche — piano-v5.md#contratti-di-input decisione 8, mai un
-//!   rifiuto a meta' esecuzione);
-//! - `crs_requirement` del descriptor verificato con
-//!   [`plenora_core::crs::validate_requirement`] sui CRS dei contratti
-//!   (per `reproject`: sorgente + target; per `from_coords`: CRS di output);
-//! - config deserializzata con `deny_unknown_fields` e domini validati;
-//! - `required_capabilities` non e' verificata qui: il descriptor la dichiara
-//!   e il controllo sui backend compilati spetta al planner (par. 6.1,
-//!   passo 5); l'analisi registra il requisito risolvendo l'op dal catalogo.
-//!
-//! # Risoluzione CRS in analisi
-//!
-//! Il CRS di piano (`plan_crs`) e' gia' risolto dal planner: una definizione
-//! testualmente uguale in config (`target_crs`, `crs` di `from_coords`) lo
-//! riusa senza chiamare il backend. Altrimenti si invoca `resolve_crs`, che
-//! senza feature `proj-backend` fallisce chiuso (`CRS_BACKEND_UNAVAILABLE`),
-//! come nel sorgente.
-//!
-//! # Dimensionalita'
-//!
-//! Ogni kernel geo che consuma una geometria la decodifica in
-//! `geo::Geometry<f64>` (XY): l'analisi rifiuta a compile-plan
-//! ([`PlenoraError::Unsupported`], mai a meta' esecuzione) ogni contratto di
-//! input con `dimensions != Xy` — Z/M dichiarate o `Unknown` (R3.4). I
-//! produttori (`from_coords`, `from_wkt`, `generate_grid`) e gli output
-//! ricodificati (`coverage_validate`, `shared_paths`) dichiarano `Xy`; i
-//! metadati `geo` dei campi prodotti scrivono sempre la dimensionalita' del
-//! contratto di output. Il trasporto byte-preserving delle dimensionalita'
-//! estese resta affidato alle op tabellari (passthrough).
-//!
-//! # Encoding
-//!
-//! I writer dei metadati `geo` di output scrivono la chiave `encoding` solo
-//! quando il contratto la dichiara (`Some`) e la omettono con `None`
-//! (fingerprint e retrocompatibilita' invariati): un contratto con encoding
-//! dichiarato che attraversa un kernel che riscrive il campo (`reproject`)
-//! conserva la chiave nel metadato — coerenza contratto↔metadato. I
-//! produttori e gli output ricodificati (WKB ISO XY) non dichiarano alcun
-//! encoding. Nota sui type code: EWKB senza flag Z/M e senza SRID e'
-//! byte-identico a WKB ISO, quindi un input `encoding: ewkb` puro-XY e'
-//! indistinguibile da ISO e passa i gate come `xy` (comportamento
-//! dichiarato); il flag SRID EWKB e' invece sempre rifiutato dal validatore
-//! celle al gate di lettura dell'esecutore, per qualunque dimensionalita'
-//! dichiarata.
+//! La chiave `encoding` dei metadati `geo` di output si scrive solo se il
+//! contratto la dichiara. EWKB senza flag Z/M e senza SRID e' byte-identico a
+//! WKB ISO e passa come `xy`; il flag SRID EWKB e' sempre rifiutato dal
+//! validatore celle dell'esecutore.
 //!
 //! # Proprieta' del contratto
 //!
-//! Le op 1:1 allineate alle righe preservano `sorted_by`/`row_count`;
-//! `explode`/`delaunay`/`split` preservano `sorted_by` (espansione stabile)
-//! ma eliminano `row_count`; join e aggregazioni eliminano entrambe
-//! (declassamento obbligatorio, par. 4.3).
+//! Le op 1:1 preservano `sorted_by`/`row_count`; le espansioni 1:N
+//! preservano `sorted_by` ma eliminano `row_count`; join e aggregazioni
+//! eliminano entrambe (declassamento obbligatorio, par. 4.3).
 
 mod config;
 mod dispatch;
@@ -269,7 +151,7 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 ///
 /// Fallisce (fail-closed, in validazione) se: l'op non e' nel catalogo o non
 /// e' geo; l'arieta' non e' rispettata; un input non ha esattamente una
-/// colonna geometria attiva (v1); la colonna geometria non e' identificabile
+/// colonna geometria attiva; la colonna geometria non e' identificabile
 /// dal trasporto (ne' estensione `geoarrow.wkb` ne' chiavi canoniche,
 /// piano-v5.md#contratti-di-input decisione 8); la geometria di input non e' `Xy` per un kernel
 /// che la elabora; il `crs_requirement` non e' soddisfatto;
@@ -471,16 +353,14 @@ mod tests {
     /// Replay deterministico dell'invariante di `fuzz_targets/analyze_geo.rs`
     /// («mai panic») sui soli parametri WKB esadecimali.
     ///
-    /// NON e' una campagna libFuzzer: non esplora, ripete un elenco scritto a
-    /// mano. Copre pero' esattamente il percorso su cui la campagna notturna
-    /// e' andata in panic — `analyze_geo_contract` -> `validate_wkb_hex` —
-    /// per ogni operazione che accetta un WKB da configurazione, e serve
-    /// dove la campagna vera non e' eseguibile (immagine nightly e
-    /// `cargo-fuzz` assenti: release.md#fuzzing).
+    /// Non esplora: ripete un elenco scritto a mano sul percorso
+    /// `analyze_geo_contract` -> `validate_wkb_hex`, per ogni operazione che
+    /// accetta un WKB da configurazione, dove la campagna libFuzzer non e'
+    /// eseguibile (release.md#fuzzing).
     #[test]
     fn nessun_wkb_di_config_ostile_manda_in_panic_l_analisi() {
         let ostili = [
-            // Il caso del crash: lunghezza pari in byte, taglio dentro `\u{e9}`.
+            // Lunghezza pari in byte, taglio dentro `\u{e9}`.
             "a\u{e9}b",
             "\u{e9}\u{e9}",
             "0\u{e9}0",
@@ -551,7 +431,7 @@ mod tests {
         /// Griglia generativa: schema nuovo (geometria non null nuovo `FieldId`,
         /// `cell_i/cell_j`, centroidi opzionali) + `row_count` esatto.
         Grid { centroid: bool },
-        /// Op di copertura v1.3 (WholeToMany): schema nuovo completo (tutto
+        /// Op di copertura (WholeToMany): schema nuovo completo (tutto
         /// non null), geometria con nuovo `FieldId` e CRS dell'input.
         CoverageRows(Vec<(&'static str, DataType, bool)>),
         /// Schema invariato, CRS del contratto aggiornato al target.
@@ -569,7 +449,7 @@ mod tests {
         (name, DataType::Float64, true)
     }
 
-    // Tabella di fixture: la lunghezza e' data dall'elenco dei 69 casi
+    // Tabella di fixture: la lunghezza e' data dall'elenco dei casi
     // (config + contratto atteso per op), non da logica da spezzare.
     #[allow(clippy::too_many_lines)]
     fn cases() -> Vec<Case> {
@@ -676,7 +556,7 @@ mod tests {
                 json!({"reference_wkb": point_wkb_hex(), "tolerance": 0.5}),
                 Expect::Unchanged,
             ),
-            // --- Coperture v1.3 (WholeToMany, schema nuovo) ------------------
+            // --- Coperture (WholeToMany, schema nuovo) -----------------------
             unary(
                 "geo.coverage_validate",
                 json!({}),
@@ -698,7 +578,7 @@ mod tests {
                     (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
                 ]),
             ),
-            // --- Clustering v1.3 (Blocking, output allineato alle righe) -----
+            // --- Clustering (Blocking, output allineato alle righe) ----------
             unary(
                 "geo.cluster_dbscan",
                 json!({"eps": 10.0, "min_points": 3}),
@@ -3162,14 +3042,10 @@ mod tests {
 
     #[test]
     fn reproject_identity_never_relabels_untouched_coordinates() {
-        // Con source == target il backend PROJ non
-        // costruisce alcuna pipeline e restituisce la geometria di input byte
-        // per byte (`proj_backend::Reprojector::new` /
-        // `identical_crs_is_an_exact_noop`). Una colonna che DICHIARA
-        // `axis_order = lat_lon` uscirebbe quindi con le STESSE coordinate ma
-        // etichettata `lon_lat` (l'ordine GIS normalizzato del target): il
-        // metadato contraddirebbe i byte e un consumatore a valle leggerebbe
-        // la latitudine come longitudine. Fail-closed: rifiuto in analisi.
+        // Con source == target PROJ restituisce i byte di input invariati
+        // (`identical_crs_is_an_exact_noop`): una colonna `lat_lon` uscirebbe
+        // etichettata `lon_lat` con le stesse coordinate, e a valle la
+        // latitudine si leggerebbe come longitudine. Rifiuto in analisi.
         let input = geo_contract_with_declared_axis_order(geographic_crs(), "lat_lon");
         let result = analyze_one(
             "geo.reproject",
@@ -3261,8 +3137,8 @@ mod tests {
         );
 
         // Colonna senza alcuna chiave canonica (solo `geoarrow.wkb` +
-        // `geo`): nessuna dichiarazione da contraddire, comportamento
-        // storico invariato.
+        // `geo`): nessuna dichiarazione da contraddire, l'analisi
+        // accetta.
         analyze_one(
             "geo.reproject",
             &[geo_contract(projected_crs())],

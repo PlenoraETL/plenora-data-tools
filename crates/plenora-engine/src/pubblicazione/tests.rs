@@ -328,15 +328,9 @@ fn il_profilo_durabile_dichiara_il_proprio_esito() {
 
 // --- i due accertamenti della copia -----------------------------------------
 //
-// I casi qui sotto passano dalla **porta di produzione**: verificano, poi
-// alterano il file, poi chiamano il passo 9. Costruire a mano una discordanza
-// che quella porta non puo' produrre proverebbe che la riga esiste, non che
-// serva a qualcosa; e un controllo che nessun percorso reale puo' far fallire
-// non e' un controllo.
-//
-// Alterare il file dopo la verifica e' precisamente cio' che puo' succedere:
-// un handle aperto difende dalla **sostituzione** del percorso, non dalla
-// **mutazione in place** dei byte, ed e' una non-garanzia gia' dichiarata.
+// I casi passano dalla porta di produzione: verificano, alterano il file,
+// poi chiamano il passo 9. L'handle difende dalla sostituzione del percorso,
+// non dalla mutazione in place dei byte.
 
 /// **Un artefatto accorciato dopo la verifica non si pubblica.**
 ///
@@ -404,21 +398,10 @@ fn un_artefatto_alterato_a_pari_lunghezza_non_si_pubblica() {
 
 /// **Un corpo illeggibile non e' un commit riuscito, anche se l'involucro regge.**
 ///
-/// E' il caso che distingue «struttura valida» da «leggibile». Il footer dice
-/// **dove** stanno i blocchi e con che intestazione, non che cosa contengano, e
-/// il formato Arrow file non ha un checksum sull'intero contenuto: senza
-/// percorrere i corpi, una destinazione col nostro token e i dati illeggibili
-/// direbbe `CommittedMatching` — cioe' «riuscito» di un output inutilizzabile.
-///
-/// # Perche' questo caso non puo' diventare vacuo
-///
-/// Perche' pretende la propria premessa: **prima** afferma che la convalida di
-/// struttura passa, e solo dopo che l'osservazione rifiuta. Se un domani quella
-/// posizione diventasse strutturalmente invalida, a fallire sarebbe la prima
-/// affermazione — rumorosamente — invece di passare per la ragione sbagliata.
-///
-/// La posizione non e' scelta a caso: su questa fissatura sono 101 su 1210 i
-/// byte che solo la traversata vede, e questo e' il primo.
+/// Senza percorrere i corpi, una destinazione col nostro token e dati
+/// illeggibili direbbe `CommittedMatching`. Il caso afferma prima che la
+/// convalida di struttura passa, poi che l'osservazione rifiuta, cosi' non
+/// puo' diventare vacuo.
 #[test]
 fn un_corpo_illeggibile_col_nostro_token_non_e_un_commit_riuscito() {
     /// Un byte del corpo che la convalida di struttura non guarda.

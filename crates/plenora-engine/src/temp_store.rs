@@ -1,46 +1,21 @@
 //! Store temporaneo condiviso per esecuzione e scavenging all'avvio
 //! (errori-e-limiti.md, "Crash non intercettabili").
 //!
-//! `catch_unwind` non copre `panic = "abort"`, crash nei backend nativi,
-//! OOM killer e kill esterni: la difesa strutturale e' una directory
-//! temporanea isolata per `execution_id` con un lock file come prova
-//! principale di esecuzione viva.
+//! `catch_unwind` non copre `panic = "abort"`, crash nei backend nativi, OOM
+//! killer e kill esterni: la difesa strutturale e' una directory temporanea
+//! isolata per `execution_id`, con un lock file (`lock.json`) il cui
+//! heartbeat e' la prova principale di esecuzione viva. Il chiamante decide
+//! quando invocare [`heartbeat`](TempStore::heartbeat): lo store non ha timer.
 //!
-//! - [`TempStore`]: radice configurabile (default: temp di sistema),
-//!   sotto-directory `plenora-<execution_id>-<random>/` con lock file
-//!   `lock.json` (`execution_id`, PID, hostname, timestamp di creazione e di
-//!   heartbeat). RAII: al `Drop` rimuove directory e lock.
-//! - [`heartbeat`](TempStore::heartbeat): aggiorna il timestamp nel lock.
-//!   Nella v1 seriale e' il chiamante a decidere quando invocarla (es. a
-//!   ogni batch o a intervalli regolari): lo store non ha timer interni.
-//!   PID, hostname e heartbeat sono segnali diagnostici, mai prove
-//!   sufficienti (PID riutilizzabile; una macchina sospesa puo' rendere
-//!   vecchio il timestamp senza che l'esecuzione sia orfana) — lo
-//!   scavenging applica per questo un TTL conservativo.
-//! - [`scavenge_stale_temp_dirs`]: da invocare all'avvio. Elimina solo
-//!   directory `plenora-*` con un heartbeat piu' vecchio del TTL, oppure —
-//!   piu' in fretta — con un heartbeat fermo da oltre [`GRAZIA_PID`] il cui
-//!   lock viene da questa macchina e nomina un processo che non esiste piu'.
-//!   **Un heartbeat fresco non e' MAI toccato**, qualunque cosa dica il PID;
-//!   qualunque voce fuori dal pattern `plenora-*` non e' MAI toccata
-//!   (fail-safe totale). La garanzia sull'heartbeat vale al momento del
-//!   controllo: decisione e rimozione non sono atomiche, e il residuo e'
-//!   dichiarato in errori-e-limiti.md.
+//! [`scavenge_stale_temp_dirs`] tocca solo directory `plenora-*`. Comanda
+//! l'heartbeat: un heartbeat fresco non si tocca mai, qualunque cosa dica il
+//! PID. PID e hostname sono segnali, non prove (PID riutilizzabili, hostname
+//! uguali fra immagini clonate e container): il PID puo' solo accelerare la
+//! bonifica di un lock gia' fermo. Decisione e rimozione non sono atomiche; il
+//! residuo e' in errori-e-limiti.md.
 //!
-//! L'ordine dei due segnali non e' un dettaglio. Il PID e' interpretabile
-//! solo localmente, e l'hostname registrato non e' una prova d'identita':
-//! immagini clonate e container condividono lo stesso nome. Su una
-//! `temp_root` condivisa fra host, un PID vivo altrove ma inesistente qui
-//! basterebbe a cancellare la directory di un'esecuzione che sta scrivendo.
-//! L'heartbeat, che quell'esecuzione aggiorna ogni secondo, e' invece una
-//! prova positiva di vita: comanda lui, e il PID puo' solo accelerare la
-//! bonifica di un lock gia' fermo.
-//!
-//! Verifica PID: solo su Linux, via `kill(pid, 0)` con rustix (dipendenza
-//! gia' presente per `statfs` in `geo_transport::publish`). Su Windows e
-//! sugli altri Unix, senza nuove dipendenze pesanti, il fallback
-//! conservativo considera il processo vivo e decide solo il TTL
-//! dell'heartbeat.
+//! Il PID si interroga solo su Linux (`kill(pid, 0)` con rustix); altrove il
+//! fallback considera il processo vivo e decide il solo TTL.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,12 +43,9 @@ const MAX_EXECUTION_ID_LEN: usize = 128;
 
 /// Eta' minima dell'heartbeat perche' il PID registrato conti qualcosa.
 ///
-/// L'executor scrive il lock con un throttle di un secondo, quindi
-/// un'esecuzione viva ha sempre un heartbeat molto piu' giovane di questo
-/// valore. Cinque minuti sono tre ordini di grandezza sopra la cadenza e tre
-/// sotto il TTL di default: abbastanza da coprire una pausa lunga di I/O o
-/// una macchina sotto carico, abbastanza poco da bonificare in fretta dopo
-/// un crash senza aspettare le 24 ore.
+/// L'executor scrive il lock ogni secondo al piu': la grazia sta molto sopra
+/// quella cadenza, per coprire pause di I/O e macchine sotto carico, e molto
+/// sotto il TTL di default, per bonificare in fretta dopo un crash.
 const GRAZIA_PID: Duration = Duration::from_secs(300);
 
 /// Contenuto del lock file `lock.json` (errori-e-limiti.md): il lock file stesso e' la
@@ -125,14 +97,13 @@ impl TempStore {
     }
 
     /// Crea lo store sotto `root`: directory `plenora-<execution_id>-<random>/`
-    /// e lock file `lock.json` con `execution_id`, PID, hostname e timestamp di
-    /// creazione/heartbeat.
+    /// e lock file `lock.json`.
     ///
     /// # Errors
     /// Restituisce `PlenoraError::InvalidPlan` se `execution_id` e' vuoto, troppo
     /// lungo o contiene caratteri fuori da `[A-Za-z0-9._-]` (finisce nel nome
-    /// della directory: validazione restrittiva fail-closed);
-    /// `PlenoraError::Io` per i fallimenti di creazione di directory e lock.
+    /// della directory); `PlenoraError::Io` per i fallimenti di creazione di
+    /// directory e lock.
     pub fn with_root(execution_id: &str, root: &Path) -> Result<Self, PlenoraError> {
         validate_execution_id(execution_id)?;
         let directory = tempfile::Builder::new()
@@ -163,11 +134,9 @@ impl TempStore {
 
     /// Aggiorna il timestamp di heartbeat nel lock file (errori-e-limiti.md).
     ///
-    /// Nella v1 seriale la periodicita' e' decisa dal chiamante: invocarla a
-    /// intervalli ben piu' brevi del TTL di scavenging (es. a ogni batch) —
-    /// lo store non ha timer interni. La scrittura non e' atomica: un crash
-    /// a meta' scrittura produce un lock corrotto, che lo scavenging tratta
-    /// in modo conservativo (vedi [`scavenge_stale_temp_dirs`]).
+    /// Va invocata a intervalli ben piu' brevi del TTL di scavenging. La
+    /// scrittura non e' atomica: un lock corrotto da un crash e' trattato in
+    /// modo conservativo da [`scavenge_stale_temp_dirs`].
     ///
     /// # Errors
     /// Restituisce `PlenoraError::Io` se la riscrittura del lock fallisce.
@@ -179,22 +148,11 @@ impl TempStore {
 
 /// Scavenging all'avvio delle directory temporanee orfane (errori-e-limiti.md).
 ///
-/// Elenca le voci `plenora-*` in `root` (SOLO directory, SOLO con quel
-/// prefisso: qualunque altra voce e' ignorata e mai toccata) e per ognuna
-/// legge il lock:
-///
-/// - PID non piu' esistente sulla macchina (verifica `kill(pid, 0)` solo su
-///   Linux) **oppure** heartbeat piu' vecchio di `ttl` → directory e lock
-///   cancellati;
-/// - lock vivo con heartbeat fresco → mai toccato;
-/// - lock assente o corrotto → conservativo: cancellato solo se piu' vecchio
-///   di `ttl * 2` (mtime del lock file, o della directory se il lock manca),
-///   altrimenti lasciato in pace. Razionale: un crash a meta' scrittura del
-///   lock non deve rendere la directory immortale, ma la cancellazione resta
-///   subordinata a un margine doppio del TTL.
-///
-/// Gli errori sulle singole voci non interrompono il giro: sono conteggiati
-/// in [`ScavengeReport::kept_conservative`].
+/// Esamina solo le directory `plenora-*` in `root` e ne legge il lock, con i
+/// criteri del doc di modulo. Un lock assente o corrotto (crash a meta'
+/// scrittura) si cancella solo oltre `ttl * 2`, misurato sull'mtime del lock
+/// o della directory. Gli errori sulle singole voci non interrompono il giro:
+/// sono conteggiati in [`ScavengeReport::kept_conservative`].
 ///
 /// # Errors
 /// Restituisce `PlenoraError::Io` se `root` non e' elencabile.
@@ -224,18 +182,11 @@ pub fn scavenge_stale_temp_dirs(
         }
         match classify_temp_dir(&entry.path(), ttl, now) {
             ScavengeAction::Remove => {
-                // Riclassificazione IMMEDIATA prima di cancellare, con
-                // l'orologio riletto.
-                //
-                // Fra la scansione della directory e la rimozione passa il
-                // tempo di esaminare tutte le voci precedenti: in quella
-                // finestra l'esecuzione proprietaria puo' aver rinnovato il
-                // proprio heartbeat, e `remove_dir_all` avrebbe cancellato
-                // una directory tornata viva. La seconda lettura riduce la
-                // finestra a quella fra il controllo e la `remove_dir_all`,
-                // ma NON la chiude: e' un TOCTOU, dichiarato in
-                // errori-e-limiti.md, e chiuderlo richiede una lease
-                // interprocesso che la v1 non ha.
+                // Riclassificazione immediata, con l'orologio riletto:
+                // durante la scansione l'esecuzione proprietaria puo' aver
+                // rinnovato l'heartbeat. Resta la finestra fra controllo e
+                // `remove_dir_all`, un TOCTOU dichiarato in errori-e-limiti.md;
+                // chiuderla richiede una lease interprocesso.
                 if classify_temp_dir(&entry.path(), ttl, now_unix_secs()) == ScavengeAction::Remove
                 {
                     match fs::remove_dir_all(entry.path()) {
@@ -283,17 +234,12 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
         // `saturating_sub`: un heartbeat nel futuro (clock skew) conta come
         // fresco, mai come scaduto.
         let eta_heartbeat = now.saturating_sub(lock.heartbeat_unix_secs);
-        // Un processo LOCALE ancora vivo non si cancella nemmeno per TTL.
-        //
-        // L'heartbeat non viene da un timer: lo scrive l'executor ai confini
-        // di batch. Un'operazione bloccata a lungo su I/O, una macchina
-        // ibernata o un salto in avanti dell'orologio possono quindi
-        // invecchiarlo oltre il TTL mentre l'esecuzione e' viva e sta
-        // scrivendo nella sua directory. Dove il PID e' davvero
-        // interrogabile — solo Linux — un processo vivo con lo stesso
-        // hostname e' la prova che manca, e vince sulla scadenza. Altrove
-        // `process_alive` risponde «vivo» per prudenza e non prova nulla:
-        // usarlo qui bloccherebbe ogni bonifica.
+        // Un processo locale ancora vivo non si cancella nemmeno per TTL:
+        // l'heartbeat si scrive ai confini di batch, e I/O bloccato,
+        // ibernazione o salti d'orologio possono invecchiarlo mentre
+        // l'esecuzione e' viva. Vale solo dove il PID e' interrogabile (Linux):
+        // altrove `process_alive` risponde «vivo» per prudenza e bloccherebbe
+        // ogni bonifica.
         let locale_e_vivo =
             PID_VERIFICABILE && hostname_confrontabile(&lock.hostname) && process_alive(lock.pid);
         if eta_heartbeat > ttl.as_secs() {
@@ -302,23 +248,12 @@ fn classify_temp_dir(path: &Path, ttl: Duration, now: u64) -> ScavengeAction {
             }
             return ScavengeAction::Remove;
         }
-        // Da qui in giu' l'heartbeat e' dentro il TTL. Il PID serve solo a
-        // bonificare in fretta dopo un crash, senza aspettare le 24 ore, e
-        // per farlo servono DUE prove concordi, non una:
-        //
-        // - il lock dice di venire da questa macchina. Non e' una prova
-        //   forte: hostname uguali sono normali fra immagini clonate,
-        //   container e host configurati allo stesso modo, quindi da sola
-        //   l'uguaglianza non basta;
-        // - l'heartbeat e' fermo da piu' di [`GRAZIA_PID`]. Un'esecuzione
-        //   viva scrive il proprio lock a intervalli di un secondo, quindi
-        //   un heartbeat piu' vecchio della grazia significa che *quel*
-        //   processo non sta scrivendo — chiunque sia il PID.
-        //
-        // Il PID NON si interroga su un heartbeat fresco: basterebbe un
-        // hostname omonimo su una `temp_root` condivisa perche' un PID
-        // inesistente qui — ma vivo altrove — motivi la cancellazione di
-        // un'esecuzione che sta scrivendo in quel momento.
+        // Da qui l'heartbeat e' dentro il TTL. Il PID accelera la bonifica
+        // solo con due prove concordi: il lock viene da questa macchina
+        // (prova debole da sola) e l'heartbeat e' fermo da piu' di
+        // [`GRAZIA_PID`]. Su un heartbeat fresco il PID non si interroga: un
+        // hostname omonimo su una `temp_root` condivisa basterebbe a
+        // cancellare un'esecuzione viva altrove.
         if eta_heartbeat > GRAZIA_PID.as_secs()
             && hostname_confrontabile(&lock.hostname)
             && !process_alive(lock.pid)
@@ -449,14 +384,9 @@ fn now_unix_secs() -> u64 {
 
 /// Hostname della macchina (errori-e-limiti.md: segnale, mai prova).
 ///
-/// Su Linux si legge da `/proc/sys/kernel/hostname`, che e' il nome che il
-/// kernel conosce: e' l'unica piattaforma dove il PID del lock viene davvero
-/// interrogato ([`process_alive`]), quindi e' l'unica dove il confronto fra
-/// host deve essere affidabile. Le variabili d'ambiente restano il ripiego —
-/// `HOSTNAME` non e' esportata dalla maggior parte delle shell, e un lock
-/// scritto con `unknown` non e' confrontabile con nulla.
-///
-/// Nessuna dipendenza nuova: `std::fs` e le variabili d'ambiente.
+/// Su Linux, l'unica piattaforma dove [`process_alive`] interroga il PID, si
+/// legge `/proc/sys/kernel/hostname`; altrove si ripiega sulle variabili
+/// d'ambiente.
 fn hostname() -> String {
     #[cfg(target_os = "linux")]
     if let Ok(nome) = fs::read_to_string("/proc/sys/kernel/hostname") {
