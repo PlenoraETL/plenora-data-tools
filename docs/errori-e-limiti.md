@@ -911,9 +911,9 @@ come già fatto per arrow, GEOS e la trasformazione PROJ.
 Una directory `plenora-*` è rimossa se il suo heartbeat è più vecchio del TTL,
 oppure — più in fretta — se l'heartbeat è fermo da oltre cinque minuti **e**
 il lock viene da questa macchina **e** il PID registrato non esiste più. Un
-heartbeat fresco non è mai toccato, qualunque cosa dica il PID; e su Linux,
-dove il PID è davvero interrogabile, **un processo locale vivo blocca anche la
-rimozione per TTL**.
+heartbeat fresco non è mai toccato, qualunque cosa dica il PID; su Linux, dove
+il PID è interrogabile, **un processo locale vivo blocca anche la rimozione
+per TTL**.
 
 **Regola:** il PID non è mai da solo motivo di rimozione, e la scadenza non
 prevale su una prova positiva di vita. Un lock che esiste e non si lascia
@@ -922,50 +922,41 @@ leggere non vale come assente: la directory si tiene sempre, e la conta
 **Ambito:** `plenora_engine::temp_store::scavenge_stale_temp_dirs`; la
 verifica reale del PID esiste solo su Linux.
 
-**Hazard, in tre parti.**
+**Hazard.**
 
-*Identità di macchina.* L'hostname registrato **non è un'identità**. Immagini
-clonate, container e host configurati allo stesso modo condividono lo stesso
-nome, quindi l'uguaglianza da sola non prova nulla. Resta il caso di
-un'esecuzione remota **sospesa** da oltre cinque minuti su un host omonimo con
-radice condivisa: non è distinguibile da un crash locale.
+*Identità di macchina.* L'hostname registrato **non è un'identità**: immagini
+clonate, container e host configurati allo stesso modo lo condividono.
+Un'esecuzione remota **sospesa** da oltre cinque minuti su un host omonimo con
+radice condivisa non è distinguibile da un crash locale.
 
-*L'heartbeat non è un timer.* Lo scrive l'executor ai confini di batch. Un'I/O
-bloccata a lungo, un'ibernazione o un salto in avanti dell'orologio possono
-invecchiarlo oltre il TTL mentre l'esecuzione è viva. Su Linux il PID vivo la
-protegge; su **Windows e sugli altri Unix il PID non è verificabile**, quindi
-lì la scadenza decide da sola e una directory di un processo bloccato oltre le
-24 ore può essere raccolta.
+*L'heartbeat non è un timer.* Lo scrive l'executor ai confini di batch: I/O
+bloccata a lungo, ibernazione o salto in avanti dell'orologio possono
+invecchiarlo oltre il TTL a esecuzione viva. Su Linux il PID vivo la protegge;
+su **Windows e sugli altri Unix il PID non è verificabile**, la scadenza decide
+da sola, e la directory di un processo bloccato oltre le 24 ore può essere
+raccolta.
 
-*PID riciclati.* Il veto su TTL usa un PID che il sistema può aver riassegnato
-a un processo estraneo: in quel caso la directory resta, contata in
-`kept_conservative`. È il verso prudente — si perde spazio, non dati.
+*PID riciclati.* Il veto su TTL può poggiare su un PID riassegnato a un
+processo estraneo: la directory resta, contata in `kept_conservative`. Si perde
+spazio, non dati.
 
-*La decisione e la rimozione non sono atomiche.* Lo scavenger classifica,
-poi rimuove. La classificazione è ripetuta immediatamente prima della
-`remove_dir_all`, con l'orologio riletto, così la finestra non è più l'intera
-scansione della radice — ma resta una finestra: fra il secondo controllo e la
-rimozione un'esecuzione può rinnovare l'heartbeat, e la directory viene
-cancellata comunque. La garanzia «un heartbeat fresco non è mai toccato» è
-quindi esatta al momento del controllo, non per l'intera durata della
-rimozione.
+*La decisione e la rimozione non sono atomiche.* La classificazione si ripete
+subito prima della `remove_dir_all`, con l'orologio riletto; un heartbeat
+rinnovato fra quel controllo e la rimozione non salva la directory. «Un
+heartbeat fresco non è mai toccato» è esatta al momento del controllo, non per
+l'intera rimozione.
 
 *L'hostname può cambiare.* Il veto del PID vivo confronta l'hostname corrente
-con quello scritto nel lock. Se la macchina viene rinominata mentre
-un'esecuzione è in corso, il confronto fallisce e la sua directory torna
-cancellabile per TTL, benché il processo sia vivo e locale.
+con quello del lock: una macchina rinominata a esecuzione in corso rende la sua
+directory cancellabile per TTL, benché il processo sia vivo e locale.
 
-*Un heartbeat che fallisce è tollerato, ma solo per cinque minuti.* La
-scrittura del lock può fallire per una ragione transitoria, e fermare per
-quello un'esecuzione lunga sarebbe sproporzionato: il singolo fallimento
-viene ritentato al batch successivo. Un fallimento **persistente** è invece
-un errore esplicito — l'esecuzione si interrompe con categoria `io` al primo
-confine di batch dopo cinque minuti senza un heartbeat riuscito. Non è
-tolleranza illimitata mascherata da robustezza: oltre quella soglia il
-timestamp nel lock smette di avanzare, e superato il TTL un altro avvio
-potrebbe raccogliere la directory con dentro lo spill di questa esecuzione.
-La soglia è ben sotto il TTL proprio perché l'errore arrivi molto prima del
-danno.
+*Un heartbeat che fallisce è tollerato, ma solo per cinque minuti.* Un
+fallimento singolo della scrittura del lock si ritenta al batch successivo; uno
+**persistente** interrompe l'esecuzione con categoria `io` al primo confine di
+batch dopo cinque minuti dal primo di una serie di heartbeat falliti
+consecutivi. La soglia sta ben sotto
+il TTL perché l'errore arrivi prima che un altro avvio possa raccogliere la
+directory con dentro lo spill di questa esecuzione.
 
 **Condizione di rientro:** una lease con identità di macchina e di avvio
 verificabile (boot id, namespace) più un heartbeat scritto da un timer
@@ -1631,65 +1622,59 @@ un'operazione separata per i buchi.
 ### Semplificazione RDP e scale numeriche miste
 
 **Regola e ambito.** `operations::simplify_with_policy`, per la politica
-`DouglasPeucker`, controlla le distanze RDP sulla geometria di lavoro prima
-di invocare `geo`. Vale per linee, anelli esterni e interni, multi-geometrie
-e componenti delle collezioni. Il controllo ripercorre gli stessi segmenti,
-con lo stesso spareggio `>=`, senza cambiare vertici o tolleranza. Non basta
-controllare il massimo: ogni distanza deve essere finita, anche quando
-un'altra distanza finita nasconderebbe un `NaN` nel fold.
+`DouglasPeucker`, controlla le distanze RDP sulla geometria di lavoro prima di
+invocare `geo` — linee, anelli esterni e interni, multi-geometrie, componenti
+delle collezioni — ripercorrendo gli stessi segmenti con lo stesso spareggio
+`>=`, senza cambiare vertici o tolleranza. **Ogni** distanza deve essere
+finita, non solo il massimo: un'altra distanza finita nasconderebbe un `NaN`
+nel fold.
 
-**Hazard.** Coordinate finite e validità OGC non assicurano che
-`dx*dx + dy*dy` sia rappresentabile. La normalizzazione globale non basta
-quando componenti molto piccole convivono con componenti di scala ordinaria.
-Un segmento con estremi distinti può avere denominatore arrotondato a zero;
-una divisione `0/0` produce `NaN`. In `geo 0.33.1`, se tutte le distanze
-intermedie sono `NaN`, il massimo conserva l'indice zero e raggiunge il
-`debug_assert_ne!` in `simplify.rs:108`. In release l'asserzione manca:
-il ramo di eliminazione può scartare un vertice oltre la tolleranza richiesta.
+**Hazard.** Coordinate finite e validità OGC non assicurano che `dx*dx + dy*dy`
+sia rappresentabile, e la normalizzazione globale non basta quando componenti
+molto piccole convivono con componenti di scala ordinaria: un segmento con
+estremi distinti può avere denominatore arrotondato a zero, e `0/0` dà `NaN`.
+In `geo 0.33.1`, se tutte le distanze intermedie sono `NaN`, il massimo
+conserva l'indice zero: in debug raggiunge il `debug_assert_ne!` in
+`simplify.rs:108`, in release il ramo di eliminazione può scartare un vertice
+oltre la tolleranza richiesta. Il denominatore replica i prodotti e la somma
+separati di `geo-types 0.7.19`: l'eccezione locale a `clippy::suboptimal_flops`
+evita che un `mul_add` cambi gli arrotondamenti della precondizione verificata.
 
-Il calcolo del denominatore replica i prodotti e la somma separati di
-`geo-types 0.7.19`: l'eccezione locale a `clippy::suboptimal_flops` evita che
-un `mul_add` cambi gli arrotondamenti della precondizione verificata.
-
-**Rifiuto esplicito.** Un denominatore nullo per estremi distinti, un
-denominatore non finito o una distanza non finita rendono
-`OperationError::Internal("semplificazione: distanza non rappresentabile")`.
-Non si attribuisce invalidità all'ingresso OGC-valido, non si pubblicano
-coordinate e non si restituiscono componenti parziali. La tolleranza zero
-conserva il percorso senza calcolo di distanze. Il vendor resta invariato:
-la protezione è al confine del prodotto, non una correzione upstream.
-Le conversioni del trasporto e delle misure fuse/blocking mantengono la
-categoria `Internal`, senza diagnostica che attribuisca il difetto alla
-riga. La stessa regola copre le varianti interne dell'algoritmo esteso e
-del join spaziale, non soltanto `OperationError`.
+**Rifiuto esplicito.** Denominatore nullo per estremi distinti, denominatore
+non finito o distanza non finita rendono
+`OperationError::Internal("semplificazione: distanza non rappresentabile")`,
+senza attribuire invalidità all'ingresso OGC-valido, pubblicare coordinate o
+restituire componenti parziali. La categoria `Internal`, senza diagnostica che
+attribuisca il difetto alla riga, si mantiene nelle conversioni del trasporto e
+delle misure fuse/blocking e nelle varianti interne dell'algoritmo esteso e del
+join spaziale. La tolleranza zero non calcola distanze. Il vendor resta
+invariato: la protezione è al confine del prodotto, non una correzione
+upstream.
 
 **Reperti riproducibili.** `tests/simplify_scale_miste.rs` contiene una
-`MultiLineString` finita con componente
-`[(0,0),(0,1e-200),(1e-200,0)]` e componente ordinaria
-`[(1,1),(2,2)]`, anche costruita tramite il parser WKT del prodotto.
-Con tolleranza `1e-220`, il vertice intermedio della prima componente
-deve restare: la sua distanza geometrica dal segmento è `1e-200`.
-La controprova sul vendor senza presidio panica in debug e in release
-restituisce i soli estremi. La regressione del prodotto richiede il rifiuto
-tipizzato in entrambi i profili. Un secondo reperto usa due poligoni finiti
-a scale diverse. Gli oracoli ordinari confrontano i vertici con quelli di
-`geo`, inclusi gli spareggi.
+`MultiLineString` finita con componente `[(0,0),(0,1e-200),(1e-200,0)]` e
+componente ordinaria `[(1,1),(2,2)]`, anche costruita dal parser WKT del
+prodotto: con tolleranza `1e-220` il vertice intermedio (distanza `1e-200`)
+deve restare. Il vendor senza presidio panica in debug e in release rende i
+soli estremi; il prodotto deve rendere il rifiuto tipizzato in entrambi i
+profili. Un secondo reperto usa due poligoni finiti a scale diverse; gli
+oracoli ordinari confrontano i vertici con quelli di `geo`, spareggi inclusi.
 
-**Limite storico.** Il WKT del finding fuzz del 2026-09-01 non è disponibile.
-Questi sono nuovi reperti della stessa classe, non un replay recuperato.
-La prova isolata con NaN letterali non dimostra la raggiungibilità dal
-prodotto e non è usata per giustificare il presidio.
+**Limite storico.** Il WKT del finding fuzz del 2026-09-01 non è disponibile:
+questi sono nuovi reperti della stessa classe, non un replay. La prova isolata
+con NaN letterali non dimostra la raggiungibilità dal prodotto e non giustifica
+il presidio.
 
 **Costo e non-garanzie.** Il controllo aggiunge una traversata RDP, con stack
-esplicito O(n), prima di quella della dipendenza. Non è una misura di costo
-applicativo e non costituisce una prova di aritmetica esatta di RDP.
-Non modifica né qualifica `PreserveTopology`, la normalizzazione delle
-coordinate, o gli altri kernel che calcolano distanze.
+esplicito O(n), prima di quella della dipendenza; non è una misura di costo
+applicativo né una prova di aritmetica esatta di RDP. Non modifica né qualifica
+`PreserveTopology`, la normalizzazione delle coordinate o gli altri kernel che
+calcolano distanze.
 
 **Condizione di rientro.** Sostituire la doppia traversata richiede un
-percorso fallibile che controlli ogni distanza durante il calcolo stesso,
-oppure una dipendenza corretta e riqualificata. I reperti, i rifiuti
-tipizzati e gli oracoli restano obbligatori. Lo stato della qualifica è in
+percorso fallibile che controlli ogni distanza durante il calcolo, oppure una
+dipendenza corretta e riqualificata; reperti, rifiuti tipizzati e oracoli
+restano obbligatori. Lo stato della qualifica è in
 [`stato-e-roadmap.md`](stato-e-roadmap.md).
 
 ### Il filo porta un esito solo
@@ -1768,135 +1753,102 @@ produzione.
 
 ### Isolamento Linux: quattro deviazioni dello spawner
 
-Sono scelte che si allontanano dalla forma ovvia, e ciascuna ha una condizione
-di rientro propria. Il contesto è la sequenza di
+Scelte che si allontanano dalla forma ovvia, ciascuna con un rientro proprio,
+nella sequenza di
 [`isolamento.md`](isolamento.md#9-bis-preflight-del-dominio-scrivere-non-e-configurare).
 
 **1. Sui descrittori si verifica e si rifiuta, non si chiude.** Un descrittore
 già aperto in scrittura sul filesystem del control plane sopravvive al cambio
-d'identità: il controllo dei permessi avviene all'apertura, non a ogni
-scrittura. La risposta ovvia sarebbe chiuderlo. Chiudere un descrittore
-ereditato per numero richiede però di costruirne un proprietario da un intero
-grezzo, e ogni via per farlo è `unsafe`, che questo progetto non ammette.
-
-Rifiutare è fail-closed e non richiede niente: un ambiente che ci passa un
-descrittore sul control plane non è un ambiente in cui possiamo isolare, e
-chiuderlo di nascosto nasconderebbe che qualcuno ce lo ha dato. *Rientro:* una
-via sicura per chiudere un descrittore ereditato, o una decisione esplicita sul
-perimetro `unsafe`.
+d'identità: i permessi si controllano all'apertura, non a ogni scrittura.
+Chiuderne uno ereditato per numero richiede di costruirne un proprietario da un
+intero grezzo, e ogni via è `unsafe`, che questo progetto non ammette.
+Rifiutare è fail-closed; chiuderlo di
+nascosto nasconderebbe che qualcuno lo ha passato. *Rientro:* una via sicura
+per chiudere un descrittore ereditato, o una decisione esplicita sul perimetro
+`unsafe`.
 
 **2. Lo spawner deve essere monothread, e lo accerta.**
 `rustix::thread::{set_thread_groups, set_thread_res_gid, set_thread_res_uid}`
-sono i syscall **per-thread**: cambiano le credenziali del solo thread
-chiamante, non del processo. Il wrapper di glibc le propaga a tutti i thread
-con un segnale; queste no.
+sono i syscall **per-thread**: a differenza del wrapper di glibc non propagano
+le credenziali agli altri thread, che in un processo multithread resterebbero
+privilegiati. Il primo passo della sequenza conta `/proc/self/task` e rifiuta
+se i task non sono esattamente uno: **queste API valgono solo lì**, dove la
+`exec` conserva le credenziali del chiamante. *Rientro:* una API sicura che
+cambi le credenziali del processo intero.
 
-In un processo monothread la differenza non esiste — c'è un thread solo, e la
-`exec` conserva le credenziali del chiamante uccidendo gli altri. In un
-processo multithread è un buco: gli altri thread restano privilegiati, e uno di
-essi può fare ciò che al thread spogliato è vietato. Da qui il primo passo
-della sequenza, che conta `/proc/self/task` e rifiuta se i task non sono
-esattamente uno, e il divieto: **queste API valgono solo lì**. *Rientro:* una
-API sicura che cambi le credenziali del processo intero.
-
-**3. Il passo 7 rilegge le credenziali, non l'identità intera.** Nella finestra
-fra il cambio d'identità e la `exec` il kernel azzera *dumpable* e passa
-`/proc/<pid>` a root: `ns` non è più attraversabile dal processo stesso.
-Namespace e descrittori si portano avanti dalla lettura del passo 4, ed è
-lecito perché in mezzo stanno solo `prctl` e le `setres*id`, che non aprono
-descrittori e non cambiano namespace.
-
-Riaprire l'accesso richiederebbe di rimettere *dumpable*, che è anche ciò che
-permette a un altro processo dello stesso uid di fare `ptrace` su questo:
-guadagnare uno specchio al prezzo di una porta. *Rientro:* nessuno previsto; la
-misura sta nel modo `finestra` di `scripts/verifica_isolamento_linux.sh`, e un
-kernel che concedesse la lettura anche lì renderebbe la scelta non obbligata,
-non sbagliata.
+**3. Il passo 7 rilegge le credenziali, non l'identità intera.** Fra il cambio
+d'identità e la `exec` il kernel azzera *dumpable* e passa `/proc/<pid>` a
+root: `ns` non è più attraversabile dal processo stesso. Namespace e
+descrittori si portano avanti dal passo 4, lecitamente perché in mezzo stanno
+solo `prctl`, `setgroups` e le `setres*id`, che non aprono descrittori né
+cambiano namespace. Rimettere *dumpable* aprirebbe il `ptrace` a un altro processo dello
+stesso uid. *Rientro:* nessuno previsto; la misura sta nel modo `finestra` di
+`scripts/verifica_isolamento_linux.sh`, e un kernel che concedesse la lettura
+anche lì renderebbe la scelta non obbligata, non sbagliata.
 
 **4. I due estremi del canale si riaprono, e gli ereditati restano aperti.** Il
-worker riceve i suoi due estremi come **numeri**, e un numero non si adotta
-senza `unsafe` — `OwnedFd::from_raw_fd` e `BorrowedFd::borrow_raw` lo sono
-entrambi. Ciò che si può fare senza è aprirne di nuovi attraverso
-`/proc/self/fd/<n>`, che rende descrittori posseduti e nati `CLOEXEC`.
-
-I due ereditati restano però aperti, e **non** sono `CLOEXEC`: il supervisore
-gliel'ha tolto apposta per farglieli ereditare. È misurato, non dedotto — dopo
-che il descrittore riaperto è caduto, il numero originale nomina ancora la
-stessa pipe.
+worker riceve i due estremi come **numeri**, e adottarli richiede `unsafe`
+(`OwnedFd::from_raw_fd`, `BorrowedFd::borrow_raw`): li riapre da
+`/proc/self/fd/<n>`, ottenendo descrittori posseduti e nati `CLOEXEC`. Gli
+ereditati restano aperti e **non** sono `CLOEXEC`, perché il supervisore lo
+toglie per farglieli ereditare: è misurato che, caduto il descrittore
+riaperto, il numero originale nomina ancora la stessa pipe.
 
 **La conseguenza è una non-garanzia.** «Il worker non avvia altri processi» è
-un'**invariante operativa**, non qualcosa che il codice impedisce: se un giorno
-il worker eseguisse qualcosa, se li porterebbe dietro, e un estraneo che tenesse
-aperto l'altro capo impedirebbe per sempre l'EOF del canale. Va detto qui perché
-non si deduca dal fatto che i descrittori riaperti sono puliti che lo siano
-anche gli altri. *Rientro:* lo stesso della deviazione 1 — una via sicura per
-chiudere un descrittore ereditato, o una decisione esplicita sul perimetro
-`unsafe`.
+un'**invariante operativa**, non qualcosa che il codice impedisce: un processo
+avviato dal worker erediterebbe quei descrittori, e un estraneo che tenesse
+aperto l'altro capo impedirebbe per sempre l'EOF del canale. Che i riaperti
+siano puliti non dice nulla degli ereditati. *Rientro:* lo stesso della
+deviazione 1.
 
-**A quale condizione questa non-garanzia è accettabile.** Non da sola: una
-pipe trattenuta da un discendente deve poter produrre *un ritardo*, mai *un
-risultato sbagliato*. La condizione sta nella macchina a stati del supervisore,
-ed è vincolante:
+**A quale condizione questa non-garanzia è accettabile.** Una pipe trattenuta
+da un discendente deve poter produrre *un ritardo*, mai *un risultato
+sbagliato*. Lo
+vincola la macchina a stati del supervisore:
 
-1. **`Esito` da solo non autorizza il successo.** Un messaggio che dice «ho
-   finito» è un'affermazione del worker, e un'affermazione non è una prova. Da
-   sola, autorizzerebbe a pubblicare mentre qualcosa è ancora vivo.
-2. **Servono anche le altre tre.** La morte del worker *e la sua raccolta* —
-   che sono due cose, perché un processo raccolto male resta zombie; l'**EOF**
-   del canale, che è ciò che dice che nessuno tiene più l'altro capo; e la
-   **quiescenza del dominio**, che è ciò che dice che nel cgroup non è rimasto
-   nulla. Nessuna delle quattro sostituisce le altre.
+1. **`Esito` da solo non autorizza il successo**: è un'affermazione del worker,
+   non una prova.
+2. **Servono anche le altre tre**: la morte del worker *e la sua raccolta* (un
+   processo raccolto male resta zombie), l'**EOF** del canale (nessuno tiene più
+   l'altro capo), la **quiescenza del dominio** (nel cgroup non è rimasto
+   nulla). Nessuna delle quattro sostituisce le altre.
 3. **Un discendente che trattiene la pipe porta a timeout o incompletezza, mai
-   a pubblicazione.** È il modo in cui la non-garanzia si trasforma in un esito
-   dichiarato invece che in un danno silenzioso: l'EOF non arriva, il tempo
-   finisce, e l'esito dice che non si è potuto concludere — non che si è
+   a pubblicazione**: l'esito dice che non si è potuto concludere, non che si è
    concluso bene.
 
 ### La proprietà del figlio non si scarica su una riga di rapporto
 
-Fra lo `spawn` e la consegna al chiamante il figlio sta sotto una **guardia**, e
-ogni uscita voluta o lo passa a qualcuno o lo chiude: le porte si chiamano per
-ciò che fanno — consegna, attesa, chiusura, arresto — perché un elenco numerato
-mentirebbe alla prima porta aggiunta. Nessuna di esse però garantisce di
+Fra lo `spawn` e la consegna al chiamante il figlio sta sotto una **guardia**:
+ogni uscita voluta lo passa a qualcuno o lo chiude, e le porte si chiamano per
+ciò che fanno — consegna, attesa, chiusura, arresto. Nessuna garantisce di
 riuscire: un processo che non si lascia raccogliere entro il limite **esiste
-ancora**, e qualcuno deve restarne responsabile.
+ancora**, e qualcuno deve restarne responsabile. **Non esiste una porta che
+rinuncia e prosegue**, e non deve esistere (pid nel rapporto, difetto accanto,
+avanti): la riga
+lascerebbe vivo un processo che nessuno aspetta né raccoglie, mentre il
+supervisore dichiara di aver finito. Le vie sono due, nessuna silenziosa:
 
-La tentazione è una porta che rinuncia e prosegue — pid nel rapporto, difetto
-accanto, avanti. Si legge come diligenza ed è una perdita: la riga
-descrive un processo vivo, e poi lo lascia vivo. Nessuno lo aspetta, nessuno lo
-raccoglie, e il supervisore intanto dichiara di aver finito. **Quella porta non
-esiste**, e non deve esistere: sarebbe quella che tutti userebbero.
-
-Le vie sono quindi due, e nessuna delle due è silenziosa:
-
-1. **la guardia risale** a chi può ancora riprovare. La conduzione la porta fuori
-   nel proprio contorno, insieme al difetto che dice perché: chi ha chiamato ha
-   in mano un processo vivo, e la scelta — riprovare, farla risalire ancora,
-   fermarsi — è sua. Se la lascia cadere senza deciderla, la sentinella `Drop` è
-   ancora armata: la proprietà non si perde mai in silenzio, si perde con un
-   abort;
-2. **ci si arrende**, quando sopra non c'è nessuno. È il caso dello spawner: ciò
-   che quella funzione rende è un errore tipizzato, e un errore non tiene un
-   processo — attraversa i confini, viene convertito, e finisce in una superficie
-   pubblica dove una guardia non ha posto. Allora si ferma il processo dicendo
-   che cosa è successo, con una riga **diversa** da quella della sentinella: la
-   sentinella dice «sfuggito» e manda a cercare un cammino che non passa da
-   nessuna porta; la resa dice «non si è lasciato raccogliere, e nessuno può
-   riprovare» e manda a guardare il figlio.
+1. **la guardia risale** a chi può ancora riprovare: la conduzione la porta
+   fuori nel proprio contorno, insieme al difetto che dice perché, e riprovare,
+   farla risalire o fermarsi è scelta del chiamante. Se la lascia cadere senza
+   deciderla, la sentinella `Drop` è ancora armata: la proprietà non si perde
+   mai in silenzio, si perde con un abort;
+2. **ci si arrende**, quando sopra non c'è nessuno: è il caso dello spawner, che
+   rende un errore tipizzato, e un errore non tiene un processo. La riga è
+   **diversa** da quella della sentinella: la sentinella dice «sfuggito» e manda
+   a cercare un cammino che non passa da nessuna porta; la resa dice «non si è
+   lasciato raccogliere, e nessuno può riprovare» e manda a guardare il figlio.
 
 **La resa manda la terminazione, e riporta che cosa ha potuto fare.** `abort`
-ferma **noi**, non il figlio: un processo lasciato cadere non muore, passa al
-reaper del sistema e sopravvive al supervisore che dichiarava di fermarsi per non
-lasciarlo vivo. La resa tenta quindi esplicitamente la terminazione prima di
-fermarsi. Lo fa anche la sentinella, per la stessa ragione.
+ferma **noi**, non il figlio, che passerebbe al reaper del sistema
+sopravvivendo al supervisore: la resa, come la sentinella, tenta esplicitamente
+la terminazione prima di fermarsi.
 
 **Nessuna delle risposte dice «terminato».** Mandare la terminazione non è
-osservare l'uscita: nel cammino ordinario `termina()` è seguita da
-`prova_a_raccogliere` proprio perché la prima non basta. Un `SIGKILL` accettato
-dice che il segnale è partito, non che il processo sia finito — uno in attesa
-ininterrompibile lo riceve e resta finché la chiamata di sistema non ritorna. In
-un log l'affermazione più forte del vero è peggio del silenzio: chi legge
-smetterebbe di cercare un processo che c'è ancora. Le tre risposte sono quindi:
+osservare l'uscita (nel cammino ordinario `termina()` è seguita da
+`prova_a_raccogliere`): un processo in attesa ininterrompibile sopravvive a un
+`SIGKILL` accettato finché la chiamata di sistema non ritorna, e un log che
+affermasse di più farebbe smettere di cercarlo.
 
 | risposta di `termina()` | ciò che si riporta |
 |---|---|
@@ -1904,17 +1856,14 @@ smetterebbe di cercare un processo che c'è ancora. Le tre risposte sono quindi:
 | `InvalidInput` | processo non più terminabile; uscita non osservata |
 | altro errore | segnale non inviato (*motivo*); può restare vivo |
 
-Nemmeno `InvalidInput` autorizza «già uscito»: il contratto dice «non più
-terminabile», che è compatibile con un figlio finito ma non lo prova.
-
-Non si raccoglie, invece, e non è una dimenticanza: dopo l'`abort` non c'è più
-nessuno che possa aspettare. Un figlio non raccolto passa al reaper del sistema,
-che se ne occupa; un figlio a cui **non** è arrivato niente è l'altro esito, ed è
-quello che la riga deve nominare.
+Nemmeno `InvalidInput` autorizza «già uscito»: è compatibile con un figlio
+finito ma non lo prova. Quel percorso non raccoglie il figlio, e non è una dimenticanza: dopo l'`abort`
+nessuno può più aspettare: un figlio non raccolto passa al reaper del sistema, e la riga deve
+nominare l'altro esito, un figlio a cui **non** è arrivato niente.
 
 *Rientro:* la seconda via scompare quando lo spawner avrà sopra di sé un
-responsabile del ciclo di vita capace di **tenere una guardia** — cioè un
-chiamante che riceva `FiglioVivo` invece di un errore tipizzato. È una condizione
+responsabile del ciclo di vita capace di **tenere una guardia** — un chiamante
+che riceva `FiglioVivo` invece di un errore tipizzato. È una condizione
 tecnica, non una data: vale quando è soddisfatta, da chiunque la soddisfi.
 
 ### Chi rinuncia a una nascita parziale chiude il dominio, e ne osserva la quiescenza
@@ -2153,36 +2102,26 @@ costruito male».
 ### Il `commit_token`: forma canonica unica, e valore mai mostrato
 
 **La regola.** Un `commit_token` è esattamente 64 caratteri esadecimali
-**minuscoli**. Non esiste un `CommitToken` non valido: il controllo sta in un
-punto solo, il costruttore, e chi ne ha uno in mano non deve validarlo. La
-rappresentazione interna è opaca e la forma testuale si **ricostruisce** dai
-byte, così non può esistere un token che rende una grafia diversa da quella
-che finirà nel footer.
+**minuscoli**, controllati in un punto solo, il costruttore: non esiste un
+`CommitToken` non valido, e chi ne ha uno non deve validarlo. La
+rappresentazione è opaca e la forma testuale si **ricostruisce** dai byte, così
+coincide con quella del footer, dove il token vive sotto una chiave sola:
+`plenora.commit.token`.
 
-Nel footer di un artefatto vive sotto una chiave sola: `plenora.commit.token`.
-
-**Il perimetro.** Il token attraversa quattro confini — il chiamante che lo
-fornisce, l'handshake che lo trasmette, il writer che lo scrive nel footer, il
-verificatore che lo rilegge. La regola vale su tutti e quattro perché è nel
-tipo, non nei quattro punti.
+**Il perimetro.** I quattro confini che il token attraversa: il chiamante che
+lo fornisce, l'handshake, il writer del footer, il verificatore. La regola vale
+su tutti e quattro perché è nel tipo, non nei quattro punti.
 
 **Il pericolo che copre.** Due, distinti:
 
-- **due grafie dello stesso valore.** Il footer si confronta byte per byte:
-  accettare `ABC…` accanto a `abc…` darebbe due artefatti diversi per lo
-  stesso commit. Per questo la forma non canonica si **rifiuta** e non si
-  normalizza — normalizzare significherebbe accettare due grafie e poi
-  scoprire che il footer le distingue comunque;
-- **il valore in un log.** `Debug` e `Display` non lo mostrano, e nessun
-  errore lo contiene. `Debug` in particolare è ciò che finisce in un log per
-  sbaglio, dentro il `{:?}` di una struttura più grande. Il rifiuto è proprio
-  il momento in cui qualcuno vorrebbe vedere il token per capire, ed è anche
-  il momento in cui mostrarlo lo consegna a chi legge quel log. L'errore del
-  footer non canonico è un `&'static str`: non è una disciplina da ricordare,
-  è il tipo che non consente di portarci dentro il valore.
-
-La serializzazione invece lo emette, e l'asimmetria è voluta: sul filo serve,
-in un log no.
+- **due grafie dello stesso valore.** Il footer si confronta byte per byte, e
+  `ABC…` accanto a `abc…` darebbe due artefatti per lo stesso commit: la forma
+  non canonica si **rifiuta**, non si normalizza;
+- **il valore in un log.** `Debug` e `Display` non lo mostrano e nessun errore
+  lo contiene: `Debug` finisce in un log per sbaglio, dentro il `{:?}` di una
+  struttura più grande. L'errore del footer non canonico è un `&'static str`:
+  è il tipo a non consentire di portarci dentro il valore. La serializzazione
+  invece lo emette, per scelta: sul filo serve, in un log no.
 
 **Le quattro forme del footer.**
 
@@ -2193,31 +2132,27 @@ in un log no.
 | presente ma non canonico | **rifiutato sempre**, in ogni percorso |
 | chiave duplicata | rifiutato dalla traversata rinforzata |
 
-Il duplicato non può nascere da questo lato: `FileWriter::write_metadata`
-tiene le coppie in una mappa e due scritture della stessa chiave collassano.
-Può arrivare solo da un produttore estraneo, e lì lo rifiuta il parser.
-
-Che il token sia **obbligatorio** è una proprietà del percorso isolato, non
-della lettura: `leggi_commit_token` dice cosa c'è, non se doveva esserci.
+Il duplicato arriva solo da un produttore estraneo (`FileWriter::write_metadata`
+tiene le coppie in una mappa, e due scritture della stessa chiave collassano),
+e lo rifiuta il parser. Che il token sia **obbligatorio** è una proprietà del
+percorso isolato, non della lettura: `leggi_commit_token` dice cosa c'è, non se
+doveva esserci.
 
 **Come si legge, e come non si legge.** Il token si estrae dalla **stessa
-traversata** che convalida il footer, non da `FileReader::custom_metadata`.
-Quella sarebbe una terza strada nel footer, e di tutti i controlli che il
-parser rinforzato applica non ne farebbe nessuno — allocazione limitata,
-chiavi e valori presenti, duplicati rifiutati. Un valore autoritativo
-raggiungibile senza convalida è peggio di un valore assente.
+traversata** che convalida il footer, non da `FileReader::custom_metadata`, che
+salterebbe i controlli del parser rinforzato (allocazione limitata, chiavi e
+valori presenti, duplicati rifiutati): un valore autoritativo raggiungibile
+senza convalida è peggio di un valore assente.
 
-**Senza token i byte non cambiano.** Con `None` non si scrive nulla, nemmeno
-una chiave vuota: è ciò che rende innocuo aggiungere il token al percorso
-in-process, che passa sempre `None`. Un writer che scrivesse una chiave vuota
-supererebbe ogni prova sul contenuto e cambierebbe ogni artefatto già
-prodotto.
+**Senza token i byte non cambiano.** Con `None`, che il percorso in-process
+passa sempre, non si scrive nulla, nemmeno una chiave vuota, che cambierebbe
+ogni artefatto già prodotto.
 
 **La condizione di rientro.** Cambiare la forma canonica — lunghezza,
-alfabeto, grafia — significa cambiare la chiave del footer insieme a essa: due
-grafie sotto lo stesso nome non sono distinguibili da chi rilegge. Mostrare il
-valore in `Debug` non ha condizione di rientro: se serve, esiste già
-`in_esadecimale`, che è una riga che si legge in review.
+alfabeto, grafia — significa cambiare insieme la chiave del footer: due grafie
+sotto lo stesso nome non sono distinguibili da chi rilegge. Mostrare il valore
+in `Debug` non ha condizione di rientro: se serve, esiste già
+`in_esadecimale`.
 
 ### Il `commit_token` si deserializza solo da formati autodescrittivi
 
@@ -2287,79 +2222,59 @@ test che mostri il rifiuto senza di esse.
 
 **La regola.** `IpcLimits::max_retained_dictionary_body_bytes` limita la
 **somma** dei `bodyLength` dei `DictionaryBatch`, non il più grande. È l'unico
-tetto cumulativo del confine, e c'è perché i dizionari sono l'unica cosa che
-il lettore trattiene tutta insieme: `FileReader` li decodifica dentro
-`try_new` e li tiene per l'intera scansione, uno `StreamReader` accumula
-quelli che incontra. Il tetto per singolo body non li governa: mille dizionari
-da un megabyte lo rispettano tutti e insieme trattengono un gigabyte.
-
-Si applica in **due punti complementari**, e nessuno dei due sostituisce
-l'altro:
+tetto cumulativo del confine, perché i dizionari sono l'unica cosa che il
+lettore trattiene tutta insieme (`FileReader` li decodifica in `try_new` e li
+tiene per l'intera scansione, uno `StreamReader` accumula quelli che incontra):
+mille dizionari da un megabyte rispettano il tetto per singolo body e insieme
+trattengono un gigabyte. Si applica in **due punti complementari**, nessuno dei
+quali sostituisce l'altro:
 
 | dove | che cosa vede |
 |---|---|
 | la traversata dei messaggi | i `DictionaryBatch` incontrati percorrendo la regione dati — vale per lo stream, per il file e per ogni lettore ostile |
 | i blocchi del footer | quelli che `FileReader` leggerà **davvero**, saltando agli offset senza percorrere la regione |
 
-Superamento e **trabocco** della somma sono cose diverse e hanno errori
-diversi. Il superamento rende sempre `IpcRetainedDictionariesTooLarge`, con la
-somma vera e il tetto. Il trabocco non porta nessun numero — non ce n'è uno
-onesto — e la variante dipende da **dove** è avvenuto:
+Il superamento rende sempre `IpcRetainedDictionariesTooLarge`, con la somma
+vera e il tetto; il **trabocco** della somma non porta nessun numero, e la
+variante dipende da **dove** avviene:
 
 | percorso | trabocco |
 |---|---|
 | traversata dei messaggi | `IpcTruncated`: si sta percorrendo la regione dei messaggi, e un footer può non esserci affatto — lo stream non ne ha uno |
 | conteggio dei blocchi del footer | `IpcFooterInvalid`: lì il footer c'è per definizione, ed è la struttura incoerente |
 
-Nominare una struttura assente manderebbe chi legge a cercarla.
-
-**Il framing invalido vince sul tetto.** Fra le due interruzioni possibili
-sullo stesso file — footer rotto e tetto superato — resta quella che corre per
-prima nell'ordine logico della convalida: `validate_footer_blocks` **precede**
-`verifica_tetto_dizionari`. Sommare i `bodyLength` di blocchi troncati,
-disallineati o che escono dalla regione dati prima di sapere che quei blocchi
-esistono davvero classificherebbe un file strutturalmente rotto come un file
-che ha semplicemente chiesto troppo (`IpcRetainedDictionariesTooLarge` invece
-di `IpcFooterInvalid`), e manderebbe chi legge ad alzare un tetto che nessun
-tetto può salvare.
+**Il framing invalido vince sul tetto.** `validate_footer_blocks` **precede**
+`verifica_tetto_dizionari`: sommare i `bodyLength` di blocchi troncati,
+disallineati o fuori dalla regione dati classificherebbe un file
+strutturalmente rotto come `IpcRetainedDictionariesTooLarge` invece di
+`IpcFooterInvalid`, e manderebbe ad alzare un tetto che nessun tetto può
+salvare.
 
 **La sovrastima dichiarata.** La traversata somma **tutti** i
 `DictionaryBatch`, anche quando lo stream **sostituisce** un dizionario già
-visto — stesso `id`, valori nuovi. Arrow in quel caso ne tiene uno solo, quindi
-la nostra somma è maggiore di ciò che resta vivo, e uno stream con molte
-sostituzioni può essere rifiutato pur restando entro il consumo reale.
+visto (stesso `id`, valori nuovi) e Arrow ne tiene uno solo: uno stream con
+molte sostituzioni può essere rifiutato pur restando entro il consumo reale. È
+**conservativa e voluta**: sommare per `id` vorrebbe dire fidarsi che il
+lettore a valle rimpiazzi come previsto. La condizione di rientro: se un carico
+reale usa sostituzioni ripetute, la somma diventa per `id`, provando — non
+assumendo — che la regola di rimpiazzo coincide con quella del lettore.
 
-È una sovrastima **conservativa e voluta**: distinguere i `dictionary id` in
-prevalidazione significherebbe tenere una mappa `id → ultimo bodyLength` e
-fidarsi che il lettore a valle faccia la stessa scelta di rimpiazzo che noi
-prevediamo. Preferiamo rifiutare qualcosa di accettabile piuttosto che
-ammettere un consumo che non abbiamo misurato. La condizione di rientro: il
-giorno in cui un carico reale usi sostituzioni ripetute, la somma diventa per
-`id` — e allora va provato che la regola di rimpiazzo coincide con quella del
-lettore, non assunto.
-
-**I dizionari delta sono rifiutati.** Con `isDelta`, Arrow non trattiene il
-body dichiarato: concatena il dizionario precedente con il nuovo in un buffer
-ulteriore, mentre entrambi gli originali sono ancora vivi. Il picco si avvicina
-al **doppio** della somma, e la formula della memoria trattenuta di
-[`isolamento.md`](isolamento.md) sarebbe falsa proprio quando il tetto dice che
-va tutto bene.
-
-Il rifiuto è in prevalidazione, comune a tutti i lettori, ed è una
-**deviazione dal formato**: un dizionario delta è un ingresso Arrow stream
-perfettamente valido, e questo confine lo esclude deliberatamente. Ciò che si
-perde è un ingresso legittimo che nessuno dei nostri produttori genera — il
-`FileWriter` non ne emette — quindi il costo oggi è nullo, ma il costo esiste e
-un lettore esterno che ce ne mandasse uno verrebbe rifiutato senza aver
-sbagliato niente. Il rientro non è «alzare il tetto»: è rifarlo sul picco della
-concatenazione.
+**I dizionari delta sono rifiutati.** Con `isDelta` Arrow concatena il
+dizionario precedente e il nuovo in un buffer ulteriore, mentre entrambi gli
+originali sono vivi: il picco si avvicina al **doppio** della somma, e la
+formula della memoria trattenuta di [`isolamento.md`](isolamento.md) sarebbe
+falsa proprio quando il tetto dice che va tutto bene. Il rifiuto, in
+prevalidazione e comune a tutti i lettori, è una **deviazione dal formato**: un
+delta è un ingresso Arrow stream valido. Nessuno dei nostri produttori lo
+genera (il `FileWriter` non ne emette), ma un lettore esterno che ne mandasse
+uno sarebbe rifiutato senza aver sbagliato niente. Il rientro non è «alzare il
+tetto»: è rifarlo sul picco della concatenazione.
 
 **`header` e `data` sono obbligatori.** Un messaggio che dichiara
-`header_type` senza portare l'`header` salta ogni controllo della
-prevalidazione e arriva ad Arrow, che lo legge con `unwrap()`; un
-`DictionaryBatch` senza `data` fa lo stesso dentro `read_dictionary`. Entrambi
-sono rifiutati: la barriera anti-panico tradurrebbe il panico in errore, ma è
-l'ultima difesa e non la prima.
+`header_type` senza `header` salterebbe ogni controllo della prevalidazione
+fino all'`unwrap()` di Arrow; un `DictionaryBatch` senza `data` fa lo stesso
+dentro `read_dictionary`. Entrambi sono rifiutati: la barriera anti-panico tradurrebbe il panico in
+errore, ma è l'ultima difesa, non la prima.
 
 **Il pericolo che copre.** Un ingresso che dichiara molti dizionari piccoli, o
 un delta, e fa trattenere al lettore molto più di quanto qualunque tetto
