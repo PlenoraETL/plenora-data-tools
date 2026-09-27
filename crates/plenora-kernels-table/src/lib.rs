@@ -1045,7 +1045,7 @@ pub fn compare_i64(actual: i64, bound: NumericBound) -> Option<Ordering> {
             unscaled,
             scale,
         )),
-        NumericBound::F64(expected) => compare_i64_f64(actual, expected),
+        NumericBound::F64(expected) => compare_i128_f64(i128::from(actual), expected),
     }
 }
 
@@ -1066,7 +1066,7 @@ pub fn compare_u64(actual: u64, bound: NumericBound) -> Option<Ordering> {
             unscaled,
             scale,
         )),
-        NumericBound::F64(expected) => compare_u64_f64(actual, expected),
+        NumericBound::F64(expected) => compare_i128_f64(i128::from(actual), expected),
     }
 }
 
@@ -1080,8 +1080,12 @@ pub fn compare_u64(actual: u64, bound: NumericBound) -> Option<Ordering> {
 /// `0.100000000000000001`, che convertito a double le sarebbe uguale.
 pub fn compare_f64(actual: f64, bound: NumericBound) -> Option<Ordering> {
     match bound {
-        NumericBound::I64(expected) => compare_i64_f64(expected, actual).map(Ordering::reverse),
-        NumericBound::U64(expected) => compare_u64_f64(expected, actual).map(Ordering::reverse),
+        NumericBound::I64(expected) => {
+            compare_i128_f64(i128::from(expected), actual).map(Ordering::reverse)
+        }
+        NumericBound::U64(expected) => {
+            compare_i128_f64(i128::from(expected), actual).map(Ordering::reverse)
+        }
         // `compare_decimal_with_f64` ordina il decimale rispetto al double:
         // qui l'attore e' il double, quindi il verso si rovescia.
         NumericBound::Decimal { unscaled, scale } => {
@@ -1089,75 +1093,6 @@ pub fn compare_f64(actual: f64, bound: NumericBound) -> Option<Ordering> {
         }
         NumericBound::F64(expected) => actual.partial_cmp(&expected),
     }
-}
-
-#[allow(clippy::float_cmp, clippy::cast_possible_truncation)]
-// I confronti con inf e i cast f64->i64 sono esatti per costruzione: i rami
-// sopra garantiscono finitezza, gamma e (dove richiesto) integrita'.
-fn compare_i64_f64(actual: i64, expected: f64) -> Option<Ordering> {
-    if expected.is_nan() {
-        return None;
-    }
-    if expected == f64::INFINITY {
-        return Some(Ordering::Less);
-    }
-    if expected == f64::NEG_INFINITY {
-        return Some(Ordering::Greater);
-    }
-    // Oltre 2^63 (in valore assoluto) il double e' certamente intero (non
-    // esistono doppi frazionari oltre 2^52) e fuori gamma i64: ordina per segno.
-    if expected >= 9_223_372_036_854_775_808.0 {
-        return Some(Ordering::Less);
-    }
-    if expected < -9_223_372_036_854_775_808.0 {
-        return Some(Ordering::Greater);
-    }
-    if expected.fract() == 0.0 {
-        // Double intero in gamma i64 (2^63 negativo incluso): cast esatto.
-        return Some(actual.cmp(&(expected as i64)));
-    }
-    // Double frazionario (qui |expected| < 2^52, floor esatto in i64): mai
-    // uguale a un intero, ordina per floor.
-    let floor = expected.floor() as i64;
-    Some(if actual <= floor {
-        Ordering::Less
-    } else {
-        Ordering::Greater
-    })
-}
-
-// Come `compare_i64_f64`: guardie di finitezza, segno, gamma e integrita'.
-// I cast f64 -> u64 nel corpo sono esatti per costruzione: NaN e infiniti
-// sono esclusi dalle guardie iniziali, il segno negativo dalla guardia
-// `expected < 0.0`, l'overflow dalla guardia `expected >= 2^64`.
-#[allow(
-    clippy::float_cmp,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
-fn compare_u64_f64(actual: u64, expected: f64) -> Option<Ordering> {
-    if expected.is_nan() {
-        return None;
-    }
-    if expected == f64::INFINITY {
-        return Some(Ordering::Less);
-    }
-    if expected == f64::NEG_INFINITY || expected < 0.0 {
-        return Some(Ordering::Greater);
-    }
-    if expected >= 18_446_744_073_709_551_616.0 {
-        return Some(Ordering::Less);
-    }
-    if expected.fract() == 0.0 {
-        // Double intero in [0, 2^64): cast esatto.
-        return Some(actual.cmp(&(expected as u64)));
-    }
-    let floor = expected.floor() as u64;
-    Some(if actual <= floor {
-        Ordering::Less
-    } else {
-        Ordering::Greater
-    })
 }
 
 /// `2^127`: primo double oltre la gamma `i128`.
@@ -1176,8 +1111,12 @@ pub fn compare_i128(actual: i128, bound: NumericBound) -> Option<Ordering> {
     }
 }
 
-// Come `compare_i64_f64`: guardie di NaN, infiniti, gamma e integrita' prima
-// di ogni cast, che risulta quindi esatto per costruzione.
+// Il confronto esatto intero <-> double per `i64`, `u64` e `i128`: un intero
+// piu' stretto si allarga senza perdita, e le guardie non dipendono dalla
+// larghezza. NaN, infiniti, gamma e integrita' si escludono prima di ogni
+// cast, che risulta quindi esatto per costruzione. Oltre 2^127 il double e'
+// certamente intero e fuori gamma: ordina per segno. Un double frazionario
+// non e' mai uguale a un intero: ordina per floor.
 #[allow(clippy::float_cmp, clippy::cast_possible_truncation)]
 fn compare_i128_f64(actual: i128, expected: f64) -> Option<Ordering> {
     if expected.is_nan() {
@@ -1460,6 +1399,134 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
 
 #[cfg(test)]
 mod tests {
+    /// Valori limite piu' una sequenza deterministica, senza duplicati.
+    fn interi_e_double_di_prova() -> (Vec<i128>, Vec<f64>) {
+        let mut doppi = vec![
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -0.0,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            5e-324,
+            0.5,
+            -0.5,
+            1.5,
+            -1.5,
+            9_007_199_254_740_992.0,
+            9_007_199_254_740_993.0,
+            -9_007_199_254_740_992.0,
+            4_503_599_627_370_495.5,
+            -4_503_599_627_370_495.5,
+            9_223_372_036_854_775_808.0,
+            -9_223_372_036_854_775_808.0,
+            9_223_372_036_854_774_784.0,
+            18_446_744_073_709_551_616.0,
+            18_446_744_073_709_549_568.0,
+            1.7e38,
+            -1.7e38,
+            f64::MAX,
+            f64::MIN,
+        ];
+        let mut interi: Vec<i128> = vec![
+            0,
+            1,
+            -1,
+            2,
+            -2,
+            (1 << 53) - 1,
+            1 << 53,
+            (1 << 53) + 1,
+            -(1 << 53),
+            i128::from(i64::MAX),
+            i128::from(i64::MIN),
+            i128::from(i64::MAX) - 1024,
+            i128::from(u64::MAX),
+            i128::from(u64::MAX) - 2048,
+        ];
+        // splitmix64: deterministico, senza dipendenze.
+        let mut stato: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut prossimo = || {
+            stato = stato.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = stato;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        for _ in 0..400 {
+            let bits = prossimo();
+            let doppio = f64::from_bits(bits);
+            if doppio.is_finite() {
+                doppi.push(doppio);
+                doppi.push(doppio.trunc());
+            }
+            interi.push(i128::from(bits));
+            interi.push(i128::from(bits.cast_signed()));
+            interi.push(i128::from((bits >> 11).cast_signed()) - (1 << 52));
+        }
+        // Interi vicini ai double: il caso in cui un cast sbagliato di un'unita'
+        // cambia l'ordine.
+        for &doppio in &doppi.clone() {
+            if doppio.is_finite() && doppio.abs() < 1.8e19 {
+                #[allow(clippy::cast_possible_truncation)]
+                let vicino = doppio.trunc() as i128;
+                interi.extend([vicino - 1, vicino, vicino + 1]);
+            }
+        }
+
+        interi.sort_unstable();
+        interi.dedup();
+        doppi.sort_by_key(|doppio| doppio.to_bits());
+        doppi.dedup_by_key(|doppio| doppio.to_bits());
+        (interi, doppi)
+    }
+
+    /// Oracolo (architettura.md#determinismo): il confronto intero <-> double
+    /// di `compare_i64`, `compare_u64`, `compare_i128` e `compare_f64`
+    /// coincide con il confronto razionale esatto di `exact_compare`, che non
+    /// converte mai il double in intero.
+    #[test]
+    fn interi_contro_double_coincidono_con_il_confronto_razionale() {
+        use crate::exact_compare::compare_decimal_with_f64 as oracolo;
+
+        let (interi, doppi) = interi_e_double_di_prova();
+        for &intero in &interi {
+            for &doppio in &doppi {
+                let atteso = oracolo(intero, 0, doppio);
+                if let Ok(valore) = i64::try_from(intero) {
+                    assert_eq!(
+                        compare_i64(valore, NumericBound::F64(doppio)),
+                        atteso,
+                        "i64 {valore} contro {doppio:e}"
+                    );
+                    assert_eq!(
+                        compare_f64(doppio, NumericBound::I64(valore)),
+                        atteso.map(Ordering::reverse),
+                        "{doppio:e} contro i64 {valore}"
+                    );
+                }
+                if let Ok(valore) = u64::try_from(intero) {
+                    assert_eq!(
+                        compare_u64(valore, NumericBound::F64(doppio)),
+                        atteso,
+                        "u64 {valore} contro {doppio:e}"
+                    );
+                    assert_eq!(
+                        compare_f64(doppio, NumericBound::U64(valore)),
+                        atteso.map(Ordering::reverse),
+                        "{doppio:e} contro u64 {valore}"
+                    );
+                }
+                assert_eq!(
+                    compare_i128(intero, NumericBound::F64(doppio)),
+                    atteso,
+                    "i128 {intero} contro {doppio:e}"
+                );
+            }
+        }
+    }
+
     use plenora_core::arrow::array::{Int64Array, StringArray};
     use plenora_core::arrow::schema::{DataType, Field, Schema};
 
