@@ -367,97 +367,25 @@ unica per quattro operazioni diverse che ne sottostimava tre.
 La formula corretta per descrivere la garanzia è **controllo di ammissione
 post-allocazione**, non budget globale duro.
 
-### CORRETTO: `table.explode` materializzava la colonna lista che stava per sostituire, con crescita quadratica
+### Una colonna che l'operazione sostituisce non si materializza: provato solo per `explode`
 
-**Non era un limite deliberato**: era un difetto non presidiato nel kernel,
-distinto dal fattore di sovraconteggio ×3 sull'ingresso IPC (che è
-contabilità di lettura, non un difetto del kernel) — le due cose non vanno
-confuse, e questa voce copre solo la seconda.
+**La regola.** Un kernel che sostituisce una colonna non ne materializza la
+versione vecchia: `select_rows` fa `take()` su tutte le colonne, e su una
+colonna lista concentrata su poche righe l'intermedio cresce col quadrato
+della lunghezza, fuori da ogni prenotazione del governor.
 
-**Che cosa succedeva.** `reshape::explode` (`crates/plenora-kernels-table/src/reshape.rs`)
-chiamava `select_rows(batch, &rows)` **prima** di sostituire la
-colonna esplosa con `replace_or_append`. `select_rows`
-(`crates/plenora-kernels-table/src/lib.rs`, riga 1623 — condivisa da molti
-altri kernel, mai toccata da questa correzione) fa `take()` su **tutte** le
-colonne del batch — inclusa la colonna lista originale, non ancora rimossa.
+**L'ambito.** `table.explode` usa `select_rows_except`, che mette un
+segnaposto nullo sulla colonna che sta per sostituire; lo provano
+`reshape::tests::explode_su_riga_singola_con_lista_lunga_non_e_quadratico` e
+`reshape::tests::explode_con_output_column_distinto_mantiene_la_colonna_sorgente`.
+Gli altri kernel di `reshape.rs` — `unnest` per primo, che gestisce gli indici
+a modo suo — **non** sono stati verificati.
 
-Per un batch con una sola riga la cui lista ha N elementi, `rows` ha
-lunghezza N (un indice per elemento esploso, tutti col valore `0`, l'unica
-riga sorgente). `take()` su un `ListArray` (`arrow-select 59.2.0`,
-`src/take.rs`, funzione `take_list`, righe 648-729) calcola
-`capacity = child_data.len() / values.len() * indices.len()`: con
-`values.len() = 1` e `child_data.len() = N`, `capacity = N × N`. Il ciclo
-successivo copia (`array_data.try_extend`) l'intera lista sorgente per
-**ciascuno** dei N indici. Il risultato è un intermedio da **N² elementi**,
-scartato poche righe dopo quando `replace_or_append` sostituisce quella
-stessa colonna con l'output vero di `explode`.
+**Il pericolo.** Un intermedio non governato che porta il processo all'OOM
+prima che l'errore di budget esista.
 
-**Fuori da qualunque contabilità.** Questo intermedio non passava da
-`state.governor.reserve(...)`: nessun `MemoryPermit` lo copriva, nessun tetto
-di dominio lo vedeva finché non toccava pagina per pagina durante la copia. Era
-un'istanza concreta, con causa e citazione di riga, della categoria già
-descritta sopra come "copie intermedie... buffer di crescita" fuori dal
-perimetro governato — e la causa diretta dell'OOM del dominio isolato
-riprodotto durante la qualificazione (vedi [`stato-e-roadmap.md`](stato-e-roadmap.md)).
-
-**Identità del codice provato.** La prova OOM è stata eseguita contro il
-comportamento di `select_rows`/`explode` **così com'erano al commit**
-`ec02d0562ea645d0a8410005ed429768dcdd6c6d` (`reshape.rs` non aveva modifiche
-non commesse a quel momento: `git show HEAD:.../reshape.rs` ha sha256
-`db0c31a44934424375e82602b769531b0371b3f7574c4ccb2264b8159203233a`, identico
-al working tree usato per il tentativo). **Resta una prova storica di quel
-comportamento, non una proprietà del codice attuale**: dopo la correzione
-descritta sotto, `reshape.rs` ha sha256
-`7bda05882b226e96e762524557f690ac15aa080abfea0931ca2a723d3b5ba8b3` e quello
-specifico scenario (intermedio O(N²) mai governato) non si riproduce più — la
-prova OOM **non è stata ripetuta** contro il nuovo diff, di proposito: la
-correzione qui sotto è esattamente ciò che quello scenario esercitava, e
-riprovarlo non avrebbe potuto che confermare l'assenza dell'intermedio già
-dimostrata dai test di regressione e dalla revisione indipendente del fix.
-
-**Non lineare nella forma comune del carico.** Su un batch con molte righe
-e liste corte (il caso comune, es. la fixture di benchmark con 0-4 elementi
-per riga) il rapporto `child_data.len() / values.len()` è la lunghezza media
-di lista — piccolo — e la crescita restava lineare. Il quadratico si
-manifestava solo nel caso degenere di poche righe con liste molto lunghe: a
-N = 10 000 elementi in una singola riga, l'intermedio misurato in VM era
-818 139 136 byte (~780 MiB, coerente con la stima ≈763 MiB) a fronte di un
-batch d'ingresso di poche centinaia di KB.
-
-**Come è stata corretta.** `explode` non chiama più `select_rows` senza
-condizioni: una nuova funzione locale e non esportata,
-`select_rows_except(batch, rows, skip_index)`
-(`crates/plenora-kernels-table/src/reshape.rs`), replica `select_rows` ma,
-sulla sola colonna sorgente che sta per essere sostituita, mette un
-placeholder nullo economico (`new_null_array`, stessa lunghezza e tipo,
-nessuna `take()`) invece di materializzarla — usata SOLO quando
-`output_name == config.column`, cioè quando `replace_or_append` la
-sostituisce davvero due righe dopo. Quando `output_column` è un nome
-**diverso**, la colonna sorgente resta nell'output (ripetuta per riga,
-comportamento invariato — vedi `analyze_explode`/`analyze_append`) e si passa
-ancora dal normale `select_rows`, perché lì il risultato serve davvero.
-`select_rows` stesso non è stato toccato: resta condivisa e invariata per
-tutti gli altri chiamanti (`melt`/`pivot`/`transpose`/`table_diff`/`filtering`/
-`joins`/`setops`/`spill`/`analysis`).
-
-Regressione: `reshape::tests::explode_su_riga_singola_con_lista_lunga_non_e_quadratico`
-(batch a riga singola, N=50 000 elementi — con il vecchio percorso
-l'intermedio sarebbe stato ≈2,5×10⁹ elementi Int64, ~20 GB, impraticabile in
-un test unitario; col fix completa in millisecondi con output corretto) e
-`reshape::tests::explode_con_output_column_distinto_mantiene_la_colonna_sorgente`
-(verifica che il caso `output_column` diverso, che deve continuare a
-materializzare la colonna sorgente, non sia cambiato). Verificata anche
-empiricamente, separatamente dal fix, la crescita super-lineare del percorso
-non modificato di `select_rows` su questa fixture degenere (2 000→16 000
-elementi: 22 ms→825 ms, non 8× come atteso da un fattore lineare).
-
-**Ambito.** Ogni chiamata a `table.explode` la cui colonna lista sia
-concentrata su poche righe con molti elementi, quando la colonna di output
-coincide col nome della colonna sorgente. Non censito se lo stesso schema
-(`select_rows` su una colonna che l'operazione sta per sostituire) si ripeta
-in altri kernel di `reshape.rs` (es. `unnest`, che ha una sua gestione degli
-indici separata e non è stata verificata qui) — resta un'area da controllare
-separatamente, non presunta esente.
+**La condizione di rientro.** Una verifica degli altri chiamanti di
+`select_rows` che sostituiscono una colonna, con un test per ciascuno.
 
 ### Il tetto duro per esecuzione è il profilo isolato
 
@@ -1308,279 +1236,48 @@ abbassamento di rigore sulle altre tre prove.
 ### Moduli compilati solo sotto `test` e `internals`
 
 **La regola.** Il codice senza un chiamante di produzione è compilato solo
-sotto `test` o la feature `internals`, e il `cfg` lo dichiara elemento per
-elemento. Non è un'ottimizzazione: è la dichiarazione che quel codice **non ha
-un chiamante di produzione**. Oggi il perimetro è quello elencato sotto:
-`commit_footer::leggi_commit_token`, `geo_transport::ipc::parse_footer`, alcuni
-elementi del protocollo e l'introspezione della macchina a stati. Il
-verificatore (`plenora_engine::verifica`, i passi da 3 a 8-bis) e il passo 9
-che ne consuma la prova non ne fanno parte: li attraversa il profilo isolato,
-con i passi 1 e 2 osservati dal supervisore.
+sotto `test` o la feature `internals`, e il `cfg` lo dichiara **elemento per
+elemento**: un `cfg` sul modulo intero direbbe che nessuno lo usa, e di solito
+non è vero. Mai un `allow(dead_code)`: un `allow` zittisce l'avviso e lascia il
+codice nella build, un `cfg` dichiara la condizione — e se qualcuno aggiunge il
+chiamante e dimentica il `cfg`, il compilatore glielo dice. Nemmeno `pub` per
+far tacere `dead_code`: allargherebbe la superficie invece di deciderla.
 
-**Perché il passo 9 da solo non bastava a togliere il `cfg` al verificatore.**
-`pubblicazione::pubblica` **non chiama** il verificatore: riceve la prova già
-fatta. Il chiamante del verificatore è il supervisore, che osserva lo stato
-terminale del figlio e il suo `Esito` — i passi 1 e 2 — e poi chiede la
-verifica.
+**Il perimetro, oggi.**
 
-**Perché non si è scelto di renderli pubblici.** Perché sarebbe stata la
-scorciatoia che questo registro vieta, in una forma più difficile da vedere.
-`dead_code` tace davanti a una funzione pubblica **anche quando nessuno può
-chiamarla**: rendere `pub` il verificatore avrebbe tolto dieci avvisi senza
-togliere una riga di codice non usato, e per giunta avrebbe allargato la
-superficie — `DigestArtefatto` e `ConteggiDichiarati` sarebbero dovuti uscire
-con lui, perché le firme li nominano. Una superficie pubblica si decide, non si
-eredita da un avviso.
+| elemento | `cfg` | perché |
+|---|---|---|
+| `commit_footer::leggi_commit_token` | `test` | fa una traversata propria; il verificatore estrae il token nella **sua** e condivide con lei solo `interpreta_commit_token`, che ha un chiamante di produzione in `pubblicazione::risolvi_commit` |
+| la forma breve di `geo_transport::ipc::parse_footer` | `test` | la produzione passa tutta per `parse_footer_estraendo` |
+| gli inventari `TUTTE` e `NOMI` dei messaggi del protocollo | `test` | servono ai casi che attraversano ogni variante; la produzione converte una variante per volta |
+| il campo `commit_token` di `HandshakeAccettato`, con la copia in `SupervisoreInAttesa` | `any(test, internals)` | la produzione tiene la **propria** copia del token (`esecuzione_isolata`) e la consegna al verificatore; questa la leggono solo i casi |
+| `Registro::concluso` e `quattro_fatti_positivi`, `Coda::terminale`, `rimasti` e `chiudi_e_drena` | `any(test, internals)` | introspezione dei casi; il giudizio vero è `classifica`, la conduzione vera `si_puo_smettere_di_ascoltare` e `chiudi_e_drena_entro` |
 
-**Che cosa è invece uscito dal perimetro con `PR-10`, e perché.** Solo ciò che ha
-acquistato un chiamante di produzione vero, che è `pubblicazione::risolvi_commit`:
+Il braccio `internals` c'è dove la facciata `interni` porta il fuzzer; sugli
+elementi `pub(crate)` la feature non darebbe un chiamante in più, e un `cfg`
+più largo del necessario dichiarerebbe una condizione falsa.
 
-| elemento | chi lo chiama ora |
-|---|---|
-| `commit_footer::interpreta_commit_token` | `risolvi_commit`, per giudicare il token trovato |
-| `ipc_boundary::convalida_artefatto_con_causa` | `risolvi_commit`, che apre **una volta sola** e vuole la causa fine |
-| `ipc_boundary::ArtefattoConvalidato` e `in_batches` | `risolvi_commit`, per percorrere i corpi |
+**La misura.** `RUSTFLAGS="-D dead-code" cargo check -p plenora-engine` su
+**Linux** è pulito: zero diagnostiche, e una sola voce morta lo fa fallire. Su
+Windows il codice `cfg(target_os = "linux")` non è compilato, quindi ciò che
+solo lui usa resta senza consumatori: quel conteggio è informativo, non
+l'oracolo. Un elenco come quello sopra si aggiorna **insieme** alla misura, e
+lo produce la misura, non una lettura a mano.
 
-`convalida_artefatto` — la forma che traduce la causa in `PlenoraError`, che
-serve al solo verificatore — e i metodi `ArtefattoConvalidato::duplica`,
-`misura_ora`, `byte_totali`, `leggi_a`, più `geo_transport::ipc::SeekSource::lettore`
-li usa la sola catena verifica → passo 9, e sono usciti dal perimetro insieme a
-lei, quando il profilo isolato le ha dato un chiamante di produzione.
+Il `cfg` di piattaforma sta sui soli sottomoduli che toccano il kernel:
+l'orchestrazione e i suoi casi provano la procedura, non l'ambiente, e un `cfg`
+sul modulo intero li renderebbe verdi per assenza sulle altre piattaforme.
 
-**Il conto è misurato, non asserito, e la piattaforma cambia che cosa dice.**
+**Il pericolo.** Codice che entra nel binario distribuito senza che nessuno lo
+eserciti.
 
-Su **Linux** — dove tutta la catena dell'isolamento è compilata e ha i propri
-chiamanti — `RUSTFLAGS="-D dead-code" cargo check -p plenora-engine` è **pulito**:
-zero diagnostiche. Non è un confronto fra due numeri, è un'affermazione assoluta,
-e il gate è fail-closed: una sola voce morta lo fa fallire.
+**Che cosa questo perde.** Un elemento sotto `cfg` non è compilato dalla build
+di produzione; lo compilano `cargo test` e `cargo clippy --all-targets`, che la
+CI esegue.
 
-Su **Windows** la stessa misura ne rende **177**, e non è un difetto di `PR-10`:
-il codice `cfg(target_os = "linux")` non è compilato, quindi ciò che solo lui usa
-— la matrice di classificazione, il lato supervisore del protocollo — resta senza
-consumatori. Il numero è **177 prima** di `PR-10` e **177 dopo**, confrontate una
-per una: nessuna nuova, nessuna sparita.
-
-**La misura si prende contando tutte le righe `error:`**, non quelle che
-cominciano per `function`, `struct` o `method`. Un elenco di forme lascia fuori
-`field … is never read`, ed è esattamente ciò che è successo a una stesura
-precedente di questa riga: il conto su Windows tornava mentre su Linux un campo
-diventato illeggibile faceva fallire il gate. Un conteggio che filtra per forme
-note conta ciò che ci si aspetta di trovare — ed è la ragione per cui la misura
-autoritativa è quella di Linux, che non conta niente e si limita a passare o
-fallire.
-
-Il `cfg` sul modulo `protocollo` **è caduto con `PR-9`**, e la condizione che lo
-reggeva era scritta: serviva un chiamante esterno al modulo. Quel chiamante è il
-worker, che si descrive, legge il `Saluto`, giudica l'accordo e risponde — da
-codice di produzione, raggiunto dal dispatch della riga di comando. Ciò che
-dentro il modulo non ha ancora un chiamante lo dichiara ora **elemento per
-elemento**, perché un `cfg` sul modulo intero direbbe che nessuno lo usa, e non
-è più vero.
-
-**Il perimetro.** Il modulo `verifica`, che esegue i passi da 3 a 8-bis della
-sequenza di [`isolamento.md`](isolamento.md), la sola funzione di lettura del
-token dal footer, e la forma breve di `parse_footer` (da quando la convalida
-estrae anche un custom metadata, la produzione passa tutta per
-`parse_footer_estraendo`). `commit_footer::scrivi_commit_token` è invece
-incondizionato, perché il writer in-process lo chiama davvero (con `None`).
-
-Dentro `protocollo` il perimetro non è più il modulo ma un **elenco**, e
-l'elenco l'ha prodotto `-D dead-code` su Linux, non una lettura a mano:
-
-- il lato supervisore dell'handshake **non** c'è più: `AtteseSupervisore`,
-  `SupervisoreInAttesa`, `confronta_capability` e `HandshakeAccettato` li
-  raggiunge il chiamante di produzione del profilo isolato (vedi
-  l'aggiornamento su `PR-12`, sotto). Resta sotto `any(test, internals)` il
-  solo campo `commit_token` di `HandshakeAccettato`, con la sua copia in
-  `SupervisoreInAttesa`, per la ragione scritta là;
-- gli **inventari generati dalle macro** dei messaggi, `TUTTE` e `NOMI`, sotto
-  `cfg(test)`. Esistono per essere enumerati dai casi che attraversano ogni
-  variante; la produzione converte una variante per volta e non ha bisogno
-  dell'elenco. Né il fuzzer né la facciata `interni` li nominano, e un `cfg` più
-  largo dichiarerebbe un chiamante che non esiste;
-- `WorkerAccordato::commit_token`, sotto `cfg(test)`: è una **seconda porta** sul
-  token, che chi esegue riceve invece da `ricevi_incarico`, insieme
-  all'incarico e nello stesso momento.
-
-Fuori dal protocollo, nell'isolamento, la regola tiene la sola introspezione
-della macchina a stati (sotto, «Che cosa resta sotto `cfg`»).
-`SorgenteTerminabile::nuova` e `con_passo`, `FiglioVivo::attendi_la_fine` e
-`isolamento::prova` non sono nel perimetro: il chiamante di produzione del
-profilo isolato li usa, e `prova` è compilato su Linux senza altre condizioni.
-
-Un elemento del filo che avesse un chiamante solo di prova senza dirlo
-lascerebbe l'avviso a qualcun altro: è la ragione per cui l'elenco si aggiorna
-insieme al gate, e non dopo.
-
-Il **supporto esclusivo del verificatore** segue il verificatore, per intero:
-`ipc_boundary::convalida_artefatto` e i metodi
-`ArtefattoConvalidato::duplica`, `misura_ora`, `byte_totali` e `leggi_a`, più
-`geo_transport::ipc::SeekSource::lettore`, oggi fuori dal perimetro con lui. Un
-`cfg` sul modulo che lasciasse scoperto ciò che solo quel modulo usa non sarebbe
-un perimetro, ma una linea tracciata a metà.
-
-Ne sono usciti con `PR-10` i soli elementi che un chiamante di produzione l'hanno
-davvero — `commit_footer::interpreta_commit_token`,
-`ipc_boundary::convalida_artefatto_con_causa`, `ArtefattoConvalidato` col suo
-`in_batches` — e quel chiamante è `pubblicazione::risolvi_commit`, che apre la
-destinazione una volta sola e ne percorre i corpi.
-
-`Esadecimale32::dai_byte` **ne è uscita** con `PR-9`, e per la ragione scritta
-nella sua documentazione: serve a chi il valore lo *calcola* invece di
-riceverlo come testo. Il worker calcola lo SHA-256 dell'artefatto che ha
-appena scritto e lo deve dichiarare nell'`Esito`; senza quella funzione
-formatterebbe i byte a mano, e nel crate ci sarebbero due grafie esadecimali al
-posto di una.
-
-Sono uscite dal perimetro, sempre con `PR-9` e sempre perché hanno acquistato un
-chiamante di produzione, anche `canale::VARIABILE_DEL_CANALE` con
-`in_variabile`, `EstremiDelWorker` con `numeri` e `rendi_ereditabili`,
-`accerta_monothread`, `accerta_topologia` e `apri`. Non è una lettura a mano:
-sono esattamente gli avvisi che spariscono confrontando `cargo clippy
---workspace --all-targets` sull'albero e sulla base. Il verso opposto — un
-elemento che *entra* nel perimetro — resta quello che l'elenco qui sopra
-registra elemento per elemento.
-
-**Perché due `cfg` diversi e non uno.** `protocollo` e `verifica` portano anche
-l'arm `internals` perché la facciata `interni` è il modo in cui il fuzzer li
-raggiunge. `commit_footer::leggi_commit_token` e `ipc::parse_footer` sono
-`pub(crate)`: la feature non porterebbe loro nessun chiamante in più,
-porterebbe un `dead_code` nella build che la abilita. Un `cfg` più largo del
-necessario dichiara una condizione falsa, ed è il modo educato di riaprire
-l'avviso che il `cfg` esisteva per chiudere.
-
-**Perché non un `allow(dead_code)`.** Sono due modi di trattare lo stesso
-fatto, e non sono equivalenti. Un `allow` **zittisce** l'avviso e lascia il
-codice nella build: il lettore vede un attributo e deve fidarsi che qualcuno
-lo tolga. Un `cfg` **dichiara** la condizione: il codice non entra nel
-binario di produzione finché la condizione non cambia, e la condizione è
-scritta. Se un giorno qualcuno aggiunge il chiamante e dimentica il `cfg`, il
-compilatore glielo dice; se dimentica un `allow`, non glielo dice nessuno.
-
-**Il pericolo che copre.** Codice non raggiungibile che entra comunque nel
-binario distribuito, e che nessuno esercita — la definizione di superficie che
-esiste senza che nessuno se ne occupi.
-
-**Che cosa questo perde, e va detto.** Il modulo non è compilato dalla build
-di produzione, quindi un errore che si manifestasse solo lì non verrebbe visto
-da `cargo build`. È coperto: `cargo test` e `cargo clippy --all-targets` lo
-compilano entrambi, e la CI li esegue tutti e due.
-
-**La condizione di rientro.** Quella su `protocollo` è **soddisfatta**, e non
-lo era prima: non con `PR-5`, perché l'handshake che `PR-5` aggiunge sta
-*dentro* `protocollo` e ne consuma i messaggi senza esserne un chiamante; e non
-con `PR-8`, che porta il ciclo di vita del supervisore ma lo compila sotto
-`internals`, quindi non gli dà un chiamante di produzione. È `PR-9`, col worker
-reale nell'eseguibile distribuito, a soddisfarla — verificato togliendo il `cfg`
-e leggendo l'output del gate, non dedotto: i diciassette elementi rimasti
-scoperti sono stati dichiarati uno per uno o collegati.
-
-I `cfg` per elemento cadono a loro volta quando il chiamante arriva: quelli del
-lato supervisore con `PR-12`, gli inventari quando la produzione avrà una
-ragione per enumerare le varianti — e finché non l'ha, non gliene si inventa
-una.
-
-Il `cfg` su `verifica` **non** è sparito con `PR-10`, e la previsione di questo
-registro era troppo ottimista: `PR-10` porta il passo 9, ma il passo 9 riceve la
-prova, non la produce, quindi la catena resta senza chi la attraversi. È
-sparito con `PR-12` — vedi sotto — che porta il **lato supervisore**, cioè chi
-osserva lo stato terminale del figlio e il suo `Esito` e da lì entra nella
-sequenza.
-
-**Aggiornamento — `PR-12` ("attivazione").** Il chiamante di produzione che
-tutto questo registro anticipava è arrivato:
-`isolamento::esecuzione_isolata::esegui_isolato`, raggiunto da `plenora-cli
-run` quando un piano dichiara `max_domain_memory_bytes`. Con lui il
-`cfg(any(test, feature = "internals"))` è caduto dalla quasi totalità del
-perimetro descritto sopra:
-
-- il verificatore (`verifica`, i passi da 3 a 8-bis) e il suo supporto
-  esclusivo — non è più vero che `plenora_engine::verifica` sia compilato
-  solo sotto `test` o `internals`;
-- il resto della pubblicazione (`pubblicazione::pubblica`,
-  `copia_accertando`, `ArtefattoVerificato` col suo `accertato`);
-- il lato supervisore del protocollo (`AtteseSupervisore`,
-  `SupervisoreInAttesa`, `HandshakeAccettato`, `confronta_capability`) —
-  tranne un campo, sotto;
-- dominio, canale, spawner e figlio dell'isolamento (`isolamento::dominio`,
-  `canale`, `spawner`, `figlio`);
-- `isolamento::prova`, per l'handshake: il chiamante di produzione lo
-  riusa (`prova::supervisore_per`, `prova::digest_dell_immagine`,
-  `Guardiano`, `scrivi`) per la sola negoziazione iniziale, con un tetto
-  fisso (`TETTO_DELLA_PAROLA`) indipendente dal piano;
-- `isolamento::macchina` per intero, `classificazione.rs`
-  (`ClasseEvidenzaMemoria`, `classifica_evidenza`, `classifica`,
-  `EsitoClassificato` e affini) e gli adattatori reali del dominio
-  (`macchina::adattatori`, nuovo con `PR-12`): il resto del dialogo — 
-  progresso, esito, quiescenza, evidenza OOM — non passa più da
-  `isolamento::prova::dialoga` (rimasto solo per la qualificazione
-  fra due pipe e per `isolamento::qualificazione::modo_sotto_limite`),
-  passa da `isolamento::macchina::conduci_isolato`, con `Osservatore`,
-  `Terminatore` e `LettoreDiEvidenza` implementati per davvero contro i
-  file veri del dominio (`cgroup.events`, `cgroup.kill`,
-  `memory.events[.local]`, `memory.peak`, e gli antenati fino alla radice
-  del control plane compresa). L'attribuzione OOM della §10.0-bis è quindi
-  raggiungibile in produzione, verificata su VM reale con evidenza
-  osservata (non solo con i finti dei casi).
-
-**Che cosa resta sotto `cfg`, e perché.** Il campo `commit_token` di
-`HandshakeAccettato`, con la sua copia privata in `SupervisoreInAttesa`: il
-chiamante di produzione tiene il token nella **propria** copia
-(`esecuzione_isolata`) e la consegna al verificatore, quindi quella seconda
-porta sul token la leggono solo i casi. Restano sotto `cfg` anche
-`Registro::concluso`/`quattro_fatti_positivi` e
-`Coda::terminale`/`rimasti`/`chiudi_e_drena`: introspezione dei casi, mai il
-giudizio vero (`classifica`) o la conduzione vera
-(`si_puo_smettere_di_ascoltare`, `chiudi_e_drena_entro`). La cancellazione
-non è nel perimetro: `conduci_isolato` sorveglia lo stesso
-`CancellationToken` che l'handler Ctrl-C della CLI cancella, e la qualifica
-del profilo isolato la prova sul binario distribuito (riga 8).
-
-**La misura autoritativa resta pulita.** `RUSTFLAGS="-D dead-code" cargo
-check -p plenora-engine` su Linux è **ancora zero diagnostiche** dopo `PR-12`
-— verificato, non presunto, in due giri di ungating (il chiamante e poi la
-macchina a stati): ogni regressione emersa (`TransizioneRiuscita`/`TransizioneFallita`
-non lette dal nuovo chiamante, `HandshakeAccettato::commit_token` senza
-lettore di produzione, i campi `evidenza` di `EsitoClassificato` scartati
-dal `match`, gli accessori `EsitoClassificato::{evidenza,categoria,pubblica}`
-e `ClasseEvidenzaMemoria::categoria` mai chiamati) è stata corretta dandole
-un consumo vero — `eprintln!` diagnostici che riportano l'evidenza raccolta
-davvero, non un `allow(dead_code)` — tranne il campo `commit_token` (sopra),
-il cui lettore di produzione è un'altra copia del token: lì il `cfg` lo dichiara. Il
-conteggio su Windows è cambiato di conseguenza —
-più superficie cross-platform è ora compilata anche lì — ma resta quello che
-era già prima di `PR-12`: un numero informativo, non l'oracolo. La misura
-che conta è quella di Linux, per la stessa ragione scritta sopra: non conta
-niente, si limita a passare o fallire.
-
-Di `leggi_commit_token` è uscita col medesimo giro la sola
-`interpreta_commit_token`, e non l'intera funzione. Il verificatore deve
-riferire framing, token, digest e consegna ad Arrow **a un solo handle**, mentre
-`leggi_commit_token` fa una traversata propria: chiamarla significherebbe
-convalidare due volte, con una finestra in mezzo. Il verificatore estrae quindi
-il token durante la **propria** traversata, e condivide con quella funzione la
-sola parte che potrebbe divergere — l'interpretazione del testo trovato. È
-quella ad avere un chiamante di produzione, in `pubblicazione::risolvi_commit`;
-`leggi_commit_token` resta sotto `cfg(test)` finché un percorso di produzione
-non voglia la sua traversata.
-
-Il `cfg` su `parse_footer` sparisce il giorno che un percorso di produzione
-torni a volere i soli blocchi; finché non esiste, la funzione è scaffolding dei
-test e sta scritto che lo è.
-
-**Il dominio di isolamento ha lo stesso perimetro, e due condizioni di rientro
-invece di una.** `plenora_engine::isolamento` sta sotto
-`#[cfg(any(test, feature = "internals"))]` come `protocollo` e `verifica`, e la
-sua visibilità cade quando esiste un supervisore che lo chiama in produzione,
-cioè con **`PR-8`**. Il `cfg` di piattaforma sui sottomoduli che toccano il
-kernel resta invece finché non esiste un secondo dominio supportato. Sono
-indipendenti, e vanno scritte separate: se fossero una condizione sola, la
-rimozione della prima porterebbe via anche la seconda.
-
-L'orchestrazione e i suoi casi sono **multipiattaforma** — provano la
-procedura, non l'ambiente — quindi `cfg(target_os = "linux")` sta sui soli
-sottomoduli. Un `cfg` di piattaforma sul modulo intero renderebbe i casi
-deterministici non compilati altrove, cioè verdi per assenza.
+**La condizione di rientro.** Per ciascun elemento, un chiamante di produzione:
+a quel punto il suo `cfg` cade, e la misura lo conferma. Finché non esiste,
+non se ne inventa uno.
 
 ### Il profilo isolato non descrive l'ambiente `proj-backend`
 
