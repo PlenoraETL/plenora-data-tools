@@ -1,12 +1,8 @@
 //! Hasher deterministico condiviso delle chiavi.
 //!
-//! Lo stesso hasher serve a quattro moduli — `joins`, `governance`,
-//! `reshape`, `aggregation::grouping` — e vive qui in un posto solo.
-//! Quattro copie di una funzione di hash sarebbero quattro occasioni di
-//! divergere: basta che una sola cambi il finalizer o la costante per avere
-//! due kernel che raggruppano le stesse chiavi in modo diverso, con un difetto
-//! che si manifesta solo su certi dati e solo in certi percorsi. Vive qui, in
-//! un posto solo.
+//! Un solo hasher per tutti i kernel che raggruppano o uniscono per chiave:
+//! due copie che divergono sul finalizer o sulla costante raggrupperebbero
+//! le stesse chiavi in modo diverso, e solo su certi dati.
 
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -17,27 +13,15 @@ use std::hash::{BuildHasherDefault, Hasher};
 ///
 /// # Rischio residuo dichiarato
 ///
-/// Le chiavi SONO valori delle righe, cioe' dati di input: chi li fornisce
-/// puo' sceglierli. La ricorrenza moltiplicativa non e' *keyed*, quindi
-/// collisioni su piu' blocchi sono costruibili e il finalizer non le
-/// elimina — sparpaglia i bit, non rende la funzione resistente. I limiti di
-/// piano (`max_input_rows`, `max_rows_per_edge`) bound-ano `n` e quindi il
-/// costo peggiore, ma NON impediscono un comportamento quadratico entro quel
-/// `n`: un input costruito apposta puo' far degradare build e probe.
+/// Le chiavi sono dati di input e la funzione non e' *keyed*: collisioni
+/// costruite apposta degradano build e probe fino al quadratico entro i
+/// limiti di piano (`max_input_rows`, `max_rows_per_edge`), che bound-ano
+/// solo `n`. Un hasher con chiave per processo toglierebbe la stabilita'
+/// dell'hash fra esecuzioni, su cui poggiano piu' kernel. Registro:
+/// `errori-e-limiti.md#limiti-dichiarati`.
 ///
-/// La mitigazione vera e' un hasher con chiave per processo. Non e' fatta
-/// qui perche' cambia una proprieta' su cui poggiano piu' kernel — la
-/// stabilita' dell'hash fra esecuzioni — e va verificata su tutti gli usi di
-/// `FastHasher` prima di essere introdotta. Fino ad allora il rischio e'
-/// questo, dichiarato, non «le chiavi non sono controllabili».
-///
-/// Registrato come **errori-e-limiti.md#limiti-dichiarati** in `docs/errori-e-limiti.md`: un rischio residuo
-/// accettato vive nel registro delle deroghe, con owner e condizione di
-/// rientro, non solo in un commento che nessun processo rilegge.
-///
-/// Il finalizer NON e' decorativo: senza, le chiavi con un prefisso comune
-/// lungo (stesso tipo, stessa lunghezza) si concentrano in pochi bucket —
-/// misurato: 328 elementi nel bucket peggiore contro 7 con finalizer.
+/// Il finalizer non e' decorativo: senza, le chiavi con un lungo prefisso
+/// comune (stesso tipo, stessa lunghezza) si concentrano in pochi bucket.
 #[derive(Default)]
 pub struct KeyHasher(u64);
 
@@ -51,11 +35,8 @@ impl Hasher for KeyHasher {
 
     fn write(&mut self, bytes: &[u8]) {
         const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        // `as_chunks::<8>()` restituisce blocchi gia' tipizzati `[u8; 8]` e
-        // il resto: la totalita' della conversione e' nel TIPO, non piu' in
-        // un commento accanto a una copia. I valori prodotti sono gli stessi
-        // — stessi blocchi, stesso ordine, stesso trattamento del resto —
-        // quindi l'hash non cambia.
+        // `as_chunks::<8>()` da' blocchi tipizzati `[u8; 8]` e il resto: la
+        // conversione e' totale per tipo.
         let (blocchi, remainder) = bytes.as_chunks::<8>();
         for blocco in blocchi {
             let value = u64::from_le_bytes(*blocco);

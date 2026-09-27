@@ -1,48 +1,22 @@
-//! `table.fuzzy_join` (estensione table v1.3): join per similarita' testuale
-//! su anagrafiche sporche (`BinaryOrdered`, `Blocking`, `BoundaryOnly`).
+//! `table.fuzzy_join`: join per similarita' testuale su anagrafiche sporche.
 //!
-//! Semantica documentata (v1, deliberatamente semplice):
-//! - coppie candidate SOLO via blocking sul lato destro (`prefix` = primi N
-//!   caratteri della chiave normalizzata uguali, `soundex` = stesso codice
-//!   soundex, `none` = tutte le coppie: il blocco unico copre l'intero lato
-//!   destro e scatta subito il limite `max_candidates`);
-//! - ogni coppia candidata con score >= `threshold` produce UNA riga di
-//!   output (come un join, nessun best-match per riga); la colonna score e'
-//!   Float64 (`score_column`, default `score`);
-//! - `how = inner` (default): solo le coppie che superano soglia; `how =
-//!   left`: le righe sinistre senza alcuna coppia a soglia compaiono una
-//!   volta con colonne destre e score null;
-//! - chiavi null non matchano mai (in `left` compaiono come non matchate);
-//! - normalizzazione: case-insensitive di default (lowercase Unicode) sia per
-//!   le metriche sia per il blocking; `case_sensitive = true` la disattiva
-//!   (soundex resta intrinsecamente case-insensitive);
-//! - schema di output: naming del join Manipola (`combine_horizontal` con
-//!   `left_keys`): la chiave sinistra conserva il nome, le altre colonne
-//!   sinistre prendono suffisso `_L`, TUTTE le colonne destre (chiave
-//!   inclusa, a differenza del join esatto: nel fuzzy le due chiavi differiscono
-//!   e il valore destro e' parte del risultato) prendono suffisso `_R`;
-//!   in coda la colonna score (nullable solo con `how = left`);
-//! - ordine di output deterministico: scansione delle righe sinistre in
-//!   ordine, poi candidate destre in ordine di indice destro; nessuna
-//!   iterazione su hash map influenza l'ordine (i blocchi sono `Vec` in
-//!   ordine di inserzione);
-//! - limiti fail-closed: un blocco destro con piu' di `max_candidates` righe
-//!   abortisce con errore `InvalidPlan` (default 50); le righe di output non
-//!   possono superare `limits.max_rows`.
+//! Config, schema e ordine di output: `operazioni.md#tablefuzzy-join`.
+//! Qui i punti che il codice deve garantire:
+//! - le coppie candidate vengono solo dal blocking sul lato destro; un blocco
+//!   oltre `max_candidates` e' un errore, non un troncamento;
+//! - ogni coppia con score >= `threshold` produce una riga (nessun
+//!   best-match); le chiavi null non matchano mai;
+//! - la normalizzazione (lowercase Unicode, salvo `case_sensitive`) vale sia
+//!   per le metriche sia per il blocking;
+//! - l'ordine di output non dipende da hash map: i blocchi sono `Vec` in
+//!   ordine di inserzione.
 //!
-//! Metriche (implementate a mano, nessuna dipendenza nuova):
-//! - `jaro_winkler`: similarita' di Jaro su caratteri Unicode con boost di
-//!   prefisso di Winkler (p = 0.1, prefisso massimo 4 caratteri, nessuna
-//!   soglia minima di attivazione del boost);
-//! - `levenshtein`: distanza di edit su caratteri Unicode normalizzata come
-//!   `1 - dist/max_len` (due stringhe vuote -> 1.0);
-//! - `jaccard`: coefficiente di Jaccard sui token (split su whitespace,
-//!   insiemi; due stringhe senza token -> 1.0).
-//!
-//! Soundex: American Soundex classico sulle sole lettere ASCII (le altre,
-//!   cifre e caratteri non ASCII inclusi, sono ignorate e non interrompono le
-//!   run); vocali che separano lettere dello stesso codice le fanno codificare
-//!   due volte, `h`/`w` no.
+//! Metriche su caratteri Unicode: Jaro-Winkler (p = 0.1, prefisso massimo 4,
+//! nessuna soglia di attivazione del boost); Levenshtein normalizzato come
+//! `1 - dist/max_len`; Jaccard sui token separati da whitespace. Due stringhe
+//! vuote valgono 1.0. Soundex: American Soundex sulle sole lettere ASCII (le
+//! altre sono ignorate e non interrompono le run); `h`/`w` non separano
+//! lettere dello stesso codice, le vocali si'.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -436,22 +410,17 @@ enum FuzzyRowForm<'a> {
     Tokens(std::collections::HashSet<&'a str>),
 }
 
-/// Join per similarita' testuale (estensione v1.3): vedi la documentazione di
-/// modulo per la semantica completa.
+/// Join per similarita' testuale; semantica nella documentazione di modulo.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: config non valida (come `validate_config`).
-/// - `ResourceLimit`: blocco destro
-///   oltre `max_candidates`;
-/// - `ResourceLimit`: output oltre `limits.max_rows` o
-///   `limits.max_columns`;
+/// - `ResourceLimit`: blocco destro oltre `max_candidates`; output oltre
+///   `limits.max_rows` o `limits.max_columns`.
 /// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione del
 ///   nome della colonna score con lo schema di output; errore Arrow nella
 ///   costruzione del batch.
-// Sequenza lineare delle fasi del join fuzzy (validazione, blocco
-// candidati, scoring con soglia, costruzione dell'output): la lunghezza
-// e' nella pipeline, non nella complessita' logica.
+// Fasi in sequenza lineare: la lunghezza e' nella pipeline, non nella logica.
 #[allow(clippy::too_many_lines)]
 pub fn fuzzy_join(
     left: &RecordBatch,

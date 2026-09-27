@@ -206,20 +206,13 @@ pub(in crate::analyze) fn merge_geometry(
     }
 }
 
-/// Merge R2.4 dei metadata di schema di due sorgenti.
+/// Merge R2.4 dei metadata di schema di N sorgenti.
 ///
-/// Per le op con due schemi di input (join e varianti, `union_distinct`,
-/// `table_diff`): chiave presente in una sola sorgente -> copiata; presente
-/// in entrambe con lo stesso valore -> copiata; presente in entrambe con
-/// valori diversi -> errore `InvalidPlan` (conflitto fra sorgenti = errore, mai
-/// precedenza implicita; il messaggio nomina la chiave, mai i valori).
-/// Merge dei metadata di schema di N sorgenti (R2.4): una chiave presente
-/// in una sola sorgente e' copiata; presente in piu' sorgenti con lo
-/// stesso valore e' copiata; con valori diversi e' un errore che nomina
-/// SOLO la chiave (mai i valori, regola 8). Le sorgenti sono esaminate in
-/// ordine di dichiarazione e le chiavi di ciascuna in ordine
-/// lessicografico: il primo conflitto riportato e' deterministico
-/// (architettura.md#determinismo), mai dipendente dall'ordine di iterazione delle `HashMap`.
+/// Una chiave su una sola sorgente, o con lo stesso valore su piu' sorgenti,
+/// e' copiata; valori diversi sono un errore `InvalidPlan` che nomina SOLO la
+/// chiave (regola 8), mai precedenza implicita. Sorgenti in ordine di
+/// dichiarazione e chiavi in ordine lessicografico: il primo conflitto e'
+/// deterministico (architettura.md#determinismo).
 fn merge_metadata_maps(
     op: &str,
     merged: &mut HashMap<String, String>,

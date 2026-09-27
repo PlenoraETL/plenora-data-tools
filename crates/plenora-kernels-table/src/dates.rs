@@ -28,13 +28,9 @@ fn parse(value: &str, format: &str) -> Option<NaiveDateTime> {
 // ---------------------------------------------------------------------------
 // Fast path dei kernel data.
 //
-// Il costo dominante dei kernel data e' doppio: la conversione scalare per
-// riga (`scalar_as_string`, con allocazione `String` per ogni valore) e il
-// parsing strftime dei formati chrono, rieseguito a ogni riga sia in lettura
-// (`parse_from_str`) sia in scrittura (`format`). Qui gli item strftime sono
-// compilati UNA VOLTA (`compile_items`) e il loop lavora sui `&str` nativi di
-// una colonna Utf8; per gli altri tipi Arrow si ricade sul percorso generico
-// riga-per-riga, che riproduce esattamente il comportamento originale.
+// Gli item strftime sono compilati una volta (`compile_items`) e il loop
+// lavora sui `&str` nativi di una colonna Utf8; gli altri tipi Arrow
+// ricadono sul percorso generico riga per riga, con lo stesso comportamento.
 // ---------------------------------------------------------------------------
 
 /// Item strftime precompilati di un formato chrono (prestazione, semantica
@@ -350,16 +346,10 @@ pub struct DateDiff {
 ///
 /// # Arrotondamento dichiarato
 ///
-/// Il risultato e' per contratto un `Float64` in unita' frazionarie, quindi
-/// la conversione dei nanosecondi a `f64` e' volutamente arrotondata: oltre
-/// 2^53 nanosecondi — circa 104 giorni — il conteggio esatto non entra in un
-/// double, e pretendere l'esattezza qui rifiuterebbe ogni intervallo di
-/// qualche mese, che e' l'uso normale dell'operazione.
-///
-/// «Fuori scala» riguarda percio' i soli nanosecondi oltre `i64`
-/// (`num_nanoseconds` restituisce `None`): circa 292 anni. Affiancarvi un
-/// `to_f64()`, che non fallisce mai, dichiarerebbe un controllo di
-/// rappresentabilita' inesistente.
+/// Il risultato e' per contratto un `Float64`, quindi la conversione dei
+/// nanosecondi e' arrotondata: oltre 2^53 nanosecondi (circa 104 giorni) il
+/// conteggio esatto non entra in un double. «Fuori scala» riguarda solo i
+/// nanosecondi oltre `i64` (circa 292 anni).
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: l'output e' Float64 per contratto.
 fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usize) -> Result<f64> {
     end.signed_duration_since(start)

@@ -1,12 +1,9 @@
 //! Analyzer a secco di `formula` ed `expression`
 //! (kernel `formula.rs` / `expressions.rs`).
 //!
-//! Le regole di tipo NON vivono qui: stanno accanto ai kernel che le
-//! applicano (`expressions::static_type` e `formula::column_formula_type`), e
-//! questo modulo si limita a chiamarle con lo schema del contratto. E' la
-//! stessa funzione che il kernel usa per decidere il tipo della colonna
-//! prodotta, quindi contratto dichiarato e schema prodotto non possono
-//! divergere.
+//! Le regole di tipo stanno accanto ai kernel (`expressions::static_type` e
+//! `formula::column_formula_type`): questo modulo le chiama con lo schema del
+//! contratto, quindi contratto dichiarato e schema prodotto non divergono.
 
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::{PlenoraError, Result};

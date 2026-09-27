@@ -164,10 +164,7 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
         })
         .collect::<Result<Vec<_>>>()?;
     // pandas.cut uses right-closed intervals and expands only the open side.
-    // Come sopra: forma non fusa (niente mul_add/FMA). Il lint della 1.98
-    // copre anche questo sito, e la ragione e' la stessa — la fusione
-    // altera l'arrotondamento IEEE e romperebbe il determinismo
-    // bit-esatto.
+    // Come sopra: forma non fusa (niente mul_add/FMA).
     #[allow(clippy::suboptimal_flops)]
     {
         edges[0] -= (max - min) * 0.001;
@@ -318,9 +315,7 @@ impl JsonTargets {
 
 /// Colonne path -> valori dense per riga (null dove il path manca).
 ///
-/// Costruite direttamente durante la scansione: evita la `BTreeMap` per
-/// riga, la raccolta/ordinamento delle chiavi per cella e la copia dei
-/// valori nelle colonne di output dell'implementazione originale.
+/// Costruite direttamente durante la scansione, senza `BTreeMap` per riga.
 #[derive(Default)]
 struct PathColumns {
     paths: Vec<String>,
@@ -353,15 +348,12 @@ impl PathColumns {
 
 /// Stato della scansione JSON di una riga (fast path).
 ///
-/// Buffer delle celle emesse dalla riga (path, testo), buffer riusato per
-/// il path corrente e flag per le chiavi "ambigue" (vuote o contenenti
-/// '.'). Le celle sono riversate nelle colonne solo a riga valida: JSON
-/// invalido o radice non oggetto scartano il buffer (l'originale produce
-/// una riga vuota). Con chiavi ambigue due derivazioni diverse possono
-/// produrre lo stesso path appiattito e l'originale risolve il conflitto
-/// iterando le chiavi in ordine lessicografico (`BTreeMap` di `serde_json`:
-/// non riproducibile in streaming ordine-documento, quindi il driver
-/// ricade sul parsing completo per quella riga.
+/// Le celle si riversano nelle colonne solo a riga valida: JSON invalido o
+/// radice non oggetto scartano il buffer (riga vuota, come nel parsing
+/// completo). Le chiavi "ambigue" (vuote o con '.') possono produrre lo
+/// stesso path per due derivazioni, e il parsing completo risolve il
+/// conflitto in ordine lessicografico: il driver ricade su di esso per
+/// quella riga.
 struct RowFlatten<'a> {
     cells: &'a mut Vec<(String, String)>,
     path: String,
@@ -384,7 +376,7 @@ impl RowFlatten<'_> {
         depth: usize,
     ) -> std::result::Result<(), A::Error> {
         if depth > self.max {
-            // Oggetto oltre max_level: l'originale lo scarta senza
+            // Oggetto oltre max_level: si scarta senza
             // emettere nulla (ma il parser valida comunque il contenuto).
             while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
             return Ok(());
@@ -395,7 +387,7 @@ impl RowFlatten<'_> {
             if key.is_empty() || key.contains('.') {
                 self.weird_key = true;
             }
-            // Stessa regola di join dell'originale: niente punto se il
+            // Stessa regola di join del parsing completo: niente punto se il
             // path corrente e' vuoto.
             if !empty {
                 self.path.push('.');
@@ -458,8 +450,8 @@ impl<'de> Visitor<'de> for LeafSeed<'_, '_> {
 
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> std::result::Result<Self::Value, A::Error> {
         if self.capture {
-            // Stesso Value dell'originale: la serializzazione compatta e'
-            // identica per costruzione.
+            // Stesso Value del parsing completo: la serializzazione compatta
+            // e' identica per costruzione.
             let value = Value::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
             self.row.emit(value_text(&value));
         } else {
@@ -577,10 +569,8 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
 /// Appiattisce una riga JSON nelle colonne path -> testo.
 ///
 /// Fast path: parsing streaming con serde (stessa validazione di
-/// `from_str::<Value>`, quindi errori, limiti di annidamento e resa
-/// testuale identici), senza costruire l'albero `Value` e saltando i
-/// sotto-alberi non richiesti. JSON invalido o radice non-oggetto =>
-/// nessuna emissione (come l'originale); chiavi vuote o con '.' =>
+/// `from_str::<Value>`), senza costruire l'albero `Value`. JSON invalido o
+/// radice non-oggetto => nessuna emissione; chiavi vuote o con '.' =>
 /// fallback al parsing completo della riga.
 fn flatten_row(
     text: &str,
@@ -604,9 +594,9 @@ fn flatten_row(
         parsed.is_ok() && deserializer.end().is_ok()
     };
     if row.weird_key {
-        // Fallback: algoritmo originale (ordine di emissione sulle chiavi
-        // ordinate, risoluzione dei conflitti inclusa); sostituisce le
-        // emissioni del fast path per questa riga.
+        // Fallback: parsing completo (emissione sulle chiavi ordinate,
+        // risoluzione dei conflitti inclusa); sostituisce le emissioni del
+        // fast path per questa riga.
         let mut map = BTreeMap::new();
         let parsed = serde_json::from_str::<Value>(text)
             .ok()
@@ -847,10 +837,8 @@ fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
 /// richiesto da min/max/quantili) e momenti (somma, media, varianza) in
 /// singola passata.
 ///
-/// Replica bit per bit la semantica del percorso generico, che ricalcola
-/// sort e momenti per ogni coppia (riga, statistica): stesse operazioni f64
-/// nello stesso ordine (somme con `Iterator::sum`, varianza
-/// su `mean`, quantili su copia ordinata con `f64::total_cmp`).
+/// Replica bit per bit il percorso generico: stesse operazioni f64 nello
+/// stesso ordine.
 fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
     let count = values.len().to_f64();
     if values.is_empty() {
@@ -865,8 +853,8 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
             })
             .collect();
     }
-    // L'originale valuta `values.len().to_f64()?` prima di ogni statistica
-    // diversa da Count: se fallisce, tutte (tranne Count) sono null.
+    // Il percorso generico valuta `values.len().to_f64()?` prima di ogni
+    // statistica diversa da Count: se fallisce, tutte (tranne Count) sono null.
     let Some(len) = count else {
         return stats.iter().map(|_| None).collect();
     };
@@ -928,10 +916,8 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
         .as_deref()
         .map(|name| column_index(batch, name))
         .transpose()?;
-    // Passata unica con interning delle chiavi: il percorso generico
-    // ricalcola la chiave (con allocazione) di ogni riga per ciascuna
-    // statistica e riesegue sort + momenti per ogni coppia (riga,
-    // statistica); qui ogni gruppo e' aggregato una sola volta.
+    // Passata unica con interning delle chiavi: ogni gruppo e' aggregato una
+    // sola volta.
     let mut groups: Vec<Vec<f64>> = Vec::new();
     let mut row_group: Vec<usize> = Vec::with_capacity(batch.num_rows());
     if let Some(group_index) = group_index {
@@ -960,8 +946,8 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
             row_group.push(0);
         }
     }
-    // Gruppi con tutti i valori null: l'originale non li inserisce nella
-    // mappa, quindi ogni statistica (Count incluso) e' null.
+    // Gruppi con tutti i valori null: il percorso generico non li inserisce
+    // nella mappa, quindi ogni statistica (Count incluso) e' null.
     let group_stats: Vec<Vec<Option<f64>>> = groups
         .iter()
         .map(|values| {

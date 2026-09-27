@@ -227,14 +227,11 @@ fn parse_datetime_default(
 /// # Errors
 ///
 /// - `InvalidPlan`: nome di colonna di output non valido, valore non
-///   rappresentabile come testo (come
-///   `scalar_as_string`, percorso non-Utf8), guardia interna su parser
-///   compilato singolo;
+///   rappresentabile come testo (come `scalar_as_string`, percorso
+///   non-Utf8), guardia interna su parser compilato singolo;
 /// - `Schema`: colonna assente dal batch.
-// Sequenza lineare (parsing esplicito o multi-formato, poi estrazione delle
-// parti in colonne): lunga per costruzione, uno spezzone artificiale
-// peggiorerebbe solo la leggibilita'. I due bracci del parser sono blocchi
-// completi: `map_or_else` con closure di queste dimensioni nuocerebbe.
+// Sequenza lineare, parsing poi estrazione: lunga per costruzione. I due
+// bracci del parser sono blocchi completi, troppo grandi per `map_or_else`.
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
@@ -359,15 +356,11 @@ pub struct Limit {
     pub offset: u64,
 }
 
-/// Prime `n` righe dopo `offset` (estensione v1.1). Schema invariato, ordine
-/// delle righe preservato (slicing puro, zero-copy sui dati Arrow).
+/// Prime `n` righe dopo `offset`.
 ///
-/// Semantica per-batch: come tutte le op `Streaming` del profilo, il kernel
-/// opera sul singolo `RecordBatch` che riceve e non mantiene stato
-/// inter-batch; su uno stream di piu' batch l'executor applica l'operazione
-/// a ciascun batch (stesso modello di `filter`/`distinct`). Se in futuro
-/// servisse un limite globale sull'intero stream servira' un operatore con
-/// stato nel layer engine, non un kernel puro.
+/// Schema e ordine invariati (slicing zero-copy). Semantica per-batch, come
+/// ogni op `Streaming`: nessuno stato fra batch, quindi su uno stream il
+/// limite vale per ciascun batch, non per l'intero stream.
 ///
 /// # Errors
 ///

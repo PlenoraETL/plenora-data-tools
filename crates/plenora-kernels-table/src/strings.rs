@@ -156,19 +156,12 @@ pub struct StringExtract {
     pub extract_all: bool,
 }
 
-// Fast path `string_extract`. La regex e' compilata una sola volta per
-// chiamata; qui si eliminano i costi che restano per riga:
-// - gruppi nominati: una sola ricerca per riga (prima una per gruppo) con
-//   `CaptureLocations` riusato, e scrittura delle slice direttamente negli
-//   `StringBuilder` senza `String` intermedie;
-// - gruppo singolo/intero match: stessa ricerca con locations riusate,
-//   nessuna allocazione per riga;
-// - `extract_all`: `captures_iter` invariato (gestisce l'avanzamento dei
-//   match vuoti per code point Unicode) ma l'accumulo avviene in uno scratch
-//   riusato invece di `Vec<&str>` + `join`.
-// Semantica byte-identica: null -> null, nessun match -> null, gruppo non
-// partecipante -> null, stessi errori (pattern oltre max_regex_bytes, regex
-// non valida, nomi di output non validi nello stesso ordine).
+// Fast path `string_extract`: una ricerca per riga con `CaptureLocations`
+// riusato e slice scritte direttamente negli `StringBuilder`; `extract_all`
+// usa `captures_iter` (avanzamento dei match vuoti per code point) con uno
+// scratch riusato. Semantica byte-identica al percorso generico: null,
+// nessun match e gruppo non partecipante danno null; stessi errori nello
+// stesso ordine.
 
 fn utf8_data_len(values: &StringArray) -> usize {
     let offsets = values.offsets();

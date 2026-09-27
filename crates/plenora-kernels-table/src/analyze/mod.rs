@@ -1,43 +1,27 @@
 //! Inferenza a secco del `DataContract` di output per le operazioni
 //! `table.*` del catalogo (architettura.md e 6.1, architettura.md#planner-ed-executor).
 //!
-//! [`analyze_table_contract`] deserializza la config tipizzata dell'operazione
-//! (fail-closed: config non valida -> errore `InvalidPlan` puntuale), replica le
-//! validazioni statiche del kernel (esistenza colonne, vincoli di tipo,
-//! parametri) e inferisce il contratto di output: schema Arrow, propagazione
-//! della colonna geometrica (D16) e proprietà (`sorted_by`, `row_count`) con
-//! provenienza e scope (D25).
+//! [`analyze_table_contract`] deserializza la config (fail-closed: config non
+//! valida -> `InvalidPlan`), replica le validazioni statiche del kernel e
+//! inferisce il contratto di output: schema Arrow, colonna geometrica (D16) e
+//! proprieta' (`sorted_by`, `row_count`) con provenienza e scope (D25).
 //!
-//! Regole di propagazione (D16): una rinomina preserva il `FieldId`, una
-//! colonna derivata ne riceve uno nuovo dal [`FieldAllocator`]. La colonna
-//! geometrica sopravvive solo se la colonna e' propagata inalterata (stesso
-//! tipo, valori passthrough): una sovrascrittura in place (semantica
-//! `replace_or_append`) produce una colonna derivata senza metadati
-//! `geoarrow.wkb`, quindi il contratto diventa tabellare.
+//! D16: una rinomina preserva il `FieldId`, una colonna derivata ne riceve uno
+//! nuovo dal [`FieldAllocator`]; la geometria sopravvive solo se la colonna e'
+//! propagata inalterata (una sovrascrittura `replace_or_append` la rende
+//! tabellare).
 //!
-//! Proprieta': v1 deliberatamente conservativa. `sorted_by` e' `Proven` in
-//! output solo per le op blocking che riordinano l'intero stream (`sort`,
-//! `dedup_advanced`/`rolling_window`/`window_function` con `order_column`);
-//! le op che preservano l'ordine delle righe propagano la proprieta' di
-//! input inalterata; tutte le altre la eliminano. `row_count` e' propagato
-//! solo quando il numero di righe e' esatto (op 1:1, `concat`, `cross_join`,
-//! `melt`, `asof_join`, `reconcile`), mai inventato.
+//! Proprieta' conservative: `sorted_by` e' `Proven` solo dopo le op che
+//! riordinano l'intero stream, si propaga dalle op che preservano l'ordine e
+//! si elimina altrove; `row_count` si propaga solo quando e' esatto.
 //!
-//! Op con schema dipendente dai dati (non inferibile a secco):
-//! `table.pivot`, `table.transpose` e `table.flatten_json` senza
-//! `output_columns` esplicito falliscono con `Unsupported` esplicito —
-//! meglio fallire in validazione che indovinare uno schema sbagliato.
+//! Le op con schema dipendente dai dati (`table.pivot`, `table.transpose`,
+//! `table.flatten_json` senza `output_columns`) falliscono con `Unsupported`.
 //!
-//! Lineage dei metadata Arrow (R2.4, plenora-contracts v2.0-rc10 par. 2): i
-//! metadata dello schema di input attraversano sempre lo schema di output;
-//! per le op a due sorgenti (join e varianti, `union_distinct`, `table_diff`)
-//! vale la merge-policy — chiave su una sola sorgente o con valore identico
-//! copiata, valori diversi -> errore `InvalidPlan` (mai precedenza implicita).
-//! I metadata di campo seguono le classi R2.4: identity/type-preserving ->
-//! copiati dal campo sorgente, colonne derivate -> non ereditati. Le chiavi
-//! canoniche `plenora.*` non sono mai emesse qui (emissione centralizzata
-//! in `executor.rs::canonical_output_schema`): il compito e' solo non
-//! perdere quelle esistenti.
+//! Metadata Arrow (R2.4): quelli di schema attraversano l'output, con la
+//! merge-policy di `merge_metadata_maps` per le op a due sorgenti; quelli di
+//! campo seguono le classi R2.4. Le chiavi `plenora.*` si emettono solo in
+//! `executor.rs::canonical_output_schema`: qui non si perdono quelle esistenti.
 
 // Firma uniforme degli analyzer per-op: il dispatch passa l'allocatore di
 // FieldId a ogni operazione, anche a quelle (assert, gate, join) che non
@@ -116,7 +100,7 @@ use self::strings::{
 /// - `InvalidPlan`: config non valida, arieta' errata, colonne mancanti,
 ///   vincoli di tipo o parametri violati, collisioni di naming;
 /// - `Schema`: il contratto inferito viola le regole strutturali v1 (D16).
-// Un braccio per operazione: la lunghezza e' intrinseca al dispatch su 71 op.
+// Un braccio per operazione: la lunghezza e' intrinseca al dispatch.
 #[allow(clippy::too_many_lines)]
 pub fn analyze_table_contract(
     op: &str,

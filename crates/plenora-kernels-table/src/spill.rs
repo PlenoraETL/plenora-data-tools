@@ -232,7 +232,7 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
     let mut key = Vec::new();
     while read_record(&mut reader, max_record_bytes(limits), &mut key)?.is_some() {
         // Una sola hash per chiave (hot path minimale): accounting e inserimento nel ramo
-        // "chiave nuova", stessa semantica del contains + insert originale.
+        // "chiave nuova", stessa semantica di contains + insert.
         if keys.insert(key.as_slice().into()) {
             estimated = estimated
                 .checked_add(key.len().saturating_add(RECORD_OVERHEAD_ESTIMATE))
@@ -408,25 +408,18 @@ pub fn execute_set_operation(
 // Spill generalizzato a righe complete (architettura.md#memoria "Spill
 // selettivo"): sort, distinct e hash aggregation.
 //
-// Formato su disco: Arrow IPC *stream* per partizione/run. Scelta rispetto a
-// un formato custom di record binari: serializzazione gia' collaudata,
-// nessun parser binario da mantenere, streaming nativo batch-per-batch (il
-// lettore non carica mai l'intera partizione) e schema autodescrittivo
-// (nullability e metadata Arrow preservati). L'overhead di framing per batch
-// e' irrilevante a queste dimensioni di chunk: nessuna controindicazione
-// forte, si usa IPC.
+// Formato su disco: Arrow IPC *stream* per partizione/run, letto batch per
+// batch (mai l'intera partizione) e autodescrittivo (nullability e metadata
+// preservati), senza un parser binario proprio da mantenere.
 //
-// Il partizionamento hash riusa `partition` (`KeyHasher` sui byte di chiave di
-// `KeyColumn`, gli stessi di `row_key`): chiavi uguali finiscono sempre nella
-// stessa partizione, quindi gruppi e duplicati non attraversano mai le
-// partizioni e l'aggregazione/distinct per partizione e' esatta.
+// Il partizionamento hash riusa `partition` sui byte di chiave di `row_key`:
+// chiavi uguali finiscono nella stessa partizione, quindi gruppi e duplicati
+// non la attraversano e aggregazione/distinct per partizione sono esatti.
 //
-// Integrazione con il governor (architettura.md#memoria): la directory temporanea puo'
-// venire dal chiamante (`RowSpillWorkspace::with_directory`), pensata per il
-// `TempStore` condiviso per execution_id di plenora-engine: kernels-table
-// resta senza dipendenze da engine e riceve solo path + quota. Con directory
-// esterna la rimozione dei file resta a questo modulo (`cleanup`/`Drop`), la
-// directory stessa appartiene al chiamante.
+// La directory temporanea puo' venire dal chiamante
+// (`RowSpillWorkspace::with_directory`, il `TempStore` di plenora-engine),
+// cosi' kernels-table non dipende da engine. I file li rimuove questo modulo
+// (`cleanup`/`Drop`), la directory resta del chiamante.
 // ---------------------------------------------------------------------------
 
 /// Colonna tecnica con l'indice di riga originale, aggiunta all'input prima
@@ -496,16 +489,12 @@ pub struct RowSpillWorkspace {
     files_created: usize,
     bytes_written: Rc<Cell<u64>>,
     bytes_read: Rc<Cell<u64>>,
-    /// Vero se un contatore ha raggiunto il fondo scala. Vive nello stato
-    /// CONDIVISO perche' a saturare sono i writer e i reader conteggiati, non
-    /// il workspace. Tenendolo altrove, `SpillMetrics::saturated`
-    /// resterebbe `false` con `bytes_written` gia' a `u64::MAX`.
+    /// Vero se un contatore ha raggiunto il fondo scala.
     ///
-    /// Sono DUE stati distinti perche' hanno conseguenze diverse: la
-    /// saturazione dei byte SCRITTI invalida la quota (`check_quota` non puo'
-    /// piu' decidere), quella dei byte letti e del numero di file e' solo
-    /// osservabilita' degradata. Con un flag solo, un contatore di lettura a
-    /// fondo scala avrebbe chiuso la quota con una diagnosi falsa.
+    /// Sta nello stato CONDIVISO perche' a saturare sono i writer e i reader,
+    /// non il workspace. Due flag perche' le conseguenze differiscono: i byte
+    /// SCRITTI saturi invalidano la quota (`check_quota` non puo' piu'
+    /// decidere), letture e numero di file degradano solo l'osservabilita'.
     scritti_saturi: Rc<Cell<bool>>,
     osservabilita_satura: Rc<Cell<bool>>,
     max_temp_bytes: u64,
@@ -581,15 +570,10 @@ impl RowSpillWorkspace {
     /// `Contract`, stessa forma dello spill set-op.
     fn check_quota(&self) -> Result<()> {
         let written = self.bytes_written.get();
-        // Con `max_temp_bytes == u64::MAX` la saturazione porta `written` a
-        // `u64::MAX`: il confronto `written > max` e' allora FALSO e la quota
-        // resterebbe aperta proprio dopo aver perso il conto. La saturazione
-        // e' quindi essa stessa una violazione: da quel momento non si sa
-        // piu' quanto e' stato scritto, e un budget non misurabile non e' un
-        // budget.
-        // SOLO i byte scritti: la saturazione di un contatore di lettura o
-        // del numero di file degrada l'osservabilita', non la quota, e
-        // chiudere per quella sarebbe una diagnosi falsa.
+        // La saturazione dei byte scritti e' essa stessa una violazione: con
+        // `max_temp_bytes == u64::MAX` il confronto `written > max` sarebbe
+        // FALSO e la quota resterebbe aperta dopo aver perso il conto. Gli
+        // altri contatori degradano solo l'osservabilita', non la quota.
         if self.scritti_saturi.get() {
             return Err(PlenoraError::ResourceLimit(
                 "contatore dei byte scritti in spill saturo: quota non piu' verificabile".into(),
@@ -1557,7 +1541,7 @@ mod tests {
 
     #[test]
     fn spilled_sort_orders_i64_and_u64_exactly_across_runs() {
-        // Regressione (bug 6/7) nel merge k-way: la coppia 2^53 / 2^53+1
+        // Merge k-way: la coppia 2^53 / 2^53+1
         // (stesso double) sta in run diverse e UInt64 non deve cadere nel
         // confronto testuale ("10" < "9").
         let big: i64 = 1 << 53;

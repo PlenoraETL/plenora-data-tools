@@ -23,13 +23,10 @@ use super::sort::default_true;
 
 /// Cardinalita' di un gruppo come `i64`, in modo **fallibile**.
 ///
-/// La colonna `count` e' dichiarata non-nullable: convertire con
-/// `i64::try_from(..).ok()` trasformerebbe un fallimento di conversione in
-/// un `null`, cioe' in una violazione silenziosa dello schema appena
-/// dichiarato. Il caso e' irraggiungibile sulle piattaforme correnti — non
-/// esiste un `Vec` con piu' di `i64::MAX` elementi — ma «irraggiungibile»
-/// non e' «esatto per costruzione», e la stessa forma vive su due percorsi
-/// di aggregazione. Qui la conversione o riesce o produce un errore esplicito.
+/// La colonna `count` e' non-nullable: un `.ok()` renderebbe `null` un
+/// fallimento di conversione, violando in silenzio lo schema. Il caso e'
+/// irraggiungibile sulle piattaforme correnti, ma la conversione o riesce o
+/// produce un errore esplicito.
 ///
 /// # Errors
 ///
@@ -99,13 +96,11 @@ pub struct Aggregate {
     pub aggregations: Vec<Aggregation>,
 }
 
-/// Riduzione numerica di un gruppo: logica IDENTICA al percorso generico
-/// originale (stesso ordine di somma, `total_cmp` per distinct/quantile,
-/// null esclusi o gruppo nullo secondo `skip_null`).
-/// Riduzione Sum/Avg/Min/Max/Variance/Stddev senza materializzare il
-/// gruppo (hot path minimale): stesse operazioni f64 nello stesso ordine del percorso
-/// materializzato (`values.iter().sum()`, due passate per la varianza) —
-/// risultato bit-identico, nessuna seconda allocazione per gruppo.
+/// Riduzione Sum/Avg/Min/Max/Variance/Stddev di un gruppo senza materializzarlo.
+///
+/// Stesse operazioni f64 nello stesso ordine del percorso materializzato
+/// (`values.iter().sum()`, due passate per la varianza): risultato
+/// bit-identico.
 fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> Result<Option<f64>> {
     let mut len = 0_usize;
     // Inizializza a -0.0: `Iterator::sum` sui float in std fa fold da -0.0
@@ -273,12 +268,9 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 ///   schema; in piu' gli errori di `scalar_as_string`/`scalar_as_f64_rounded`
 ///   (tipi fuori dal fast path), `select_rows` e `replace_or_append`.
 ///
-/// Un intero oltre 2^53 **non** e' un errore nelle aggregazioni numeriche —
-/// quelle il cui risultato e' un `Float64` per contratto: li' la conversione
-/// arrotonda
+/// Un intero oltre 2^53 **non** e' un errore nelle aggregazioni a risultato
+/// `Float64`: li' la conversione arrotonda
 /// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-/// Le altre aggregazioni non attraversano quella conversione e rendono il
-/// proprio tipo.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
     let group_indices = config
         .group_by

@@ -107,16 +107,10 @@ const fn default_target() -> TargetType {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path tipizzati.
-//
-// fill_na: il percorso generico materializza `Vec<Option<T>>` con un clone
-// per riga (stringhe incluse) e ricostruisce l'array; qui si lavora sui
-// valori nativi Arrow: buffer valori clonato + scrittura dei soli slot nulli
-// (method=value), una passata per ffill/bfill, e copia dell'Arc quando
-// l'operazione e' l'identita' (nessun null, o fill con `null`). Semantica
-// IDENTICA all'originale: stessi errori per valori di fill non validi, stesso
-// errore Schema per i tipi non coperti (UInt64 incluso), null in testa (ffill)
-// o in coda (bfill) che restano null.
+// Fast path tipizzati di `fill_na`: lavorano sui valori nativi Arrow e
+// copiano l'`Arc` quando l'operazione e' l'identita'. Semantica identica al
+// generico: stessi errori, stessi tipi rifiutati (UInt64 incluso), null in
+// testa (ffill) o in coda (bfill) che restano null.
 // ---------------------------------------------------------------------------
 
 fn utf8_data_len(values: &StringArray) -> usize {
@@ -367,13 +361,9 @@ pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path per `table.coalesce`: il kernel vive in quality.rs, che chiama
-// `coalesce_fast` e ricade sul generico concat+take quando torna `None`.
-// Per ogni riga vince il primo valore non nullo nell'ordine delle colonne,
-// come il `position` + `take` del generico; se la prima colonna non ha null
-// l'output e' la colonna stessa (take con indici tutti validi e' l'identita').
-// Coperti: Int64, Float64, UInt64, Boolean, Utf8; gli altri tipi vanno al
-// generico. Null handling e ordine colonne identici all'originale.
+// Fast path per `table.coalesce`: quality.rs chiama `coalesce_fast` e ricade
+// sul generico concat+take quando torna `None`. Per ogni riga vince il primo
+// valore non nullo nell'ordine delle colonne, come nel generico.
 // ---------------------------------------------------------------------------
 
 fn coalesce_primitive<T>(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
@@ -618,16 +608,12 @@ fn source_strings(source: &ArrayRef) -> Result<Vec<Option<String>>> {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path per `table.type_cast`: il percorso generico converte ogni riga in
-// `String` con `scalar_as_string` (catena di downcast + allocazione per riga)
-// e poi la riparsa. Qui il downcast e' fatto una volta sola e i cast numerici
-// avvengono sui valori nativi; le combinazioni non coperte (sorgenti Date32,
-// Timestamp, Decimal128, Binary, Dictionary, e target data/decimal da sorgenti
-// numeriche) ricadono su `type_cast_generic`, che resta anche l'oracolo dei
-// test di equivalenza. Semantica byte-identica: `coerce` -> null, `raise` ->
-// errore Schema sulla PRIMA riga fallita, `ignore` -> errore Contract; i cast
-// da f64 riproducono `to_string().trim().parse()` (Display di f64 non usa
-// notazione esponenziale).
+// Fast path per `table.type_cast`: downcast una volta sola e cast numerici
+// sui valori nativi. Le combinazioni non coperte ricadono su
+// `type_cast_generic`, che e' anche l'oracolo dei test di equivalenza; la
+// semantica e' byte-identica. I cast da f64 riproducono
+// `to_string().trim().parse()` (il `Display` di f64 non usa notazione
+// esponenziale).
 // ---------------------------------------------------------------------------
 
 /// `to_string(value).trim().parse::<i64>()` del generico su valori nativi.
@@ -740,9 +726,8 @@ fn cast_to_str(source: &ArrayRef) -> Option<ArrayRef> {
             }
         }
     } else {
-        // Ultimo tipo della catena: un downcast fallito qui significa tipo
-        // non gestito, ed e' lo stesso `None` di prima — scritto con `?`
-        // invece che con un ramo `else` che ritorna.
+        // Ultimo tipo della catena: un downcast fallito significa tipo non
+        // gestito, quindi `None` via `?`.
         let values = source.as_any().downcast_ref::<BooleanArray>()?;
         for row in 0..len {
             if values.is_null(row) {
@@ -814,21 +799,10 @@ fn cast_to_int(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>
 ///
 /// # Arrotondamento dichiarato
 ///
-/// `cast(to: "float")` e' l'operazione con cui l'utente CHIEDE un `Float64`:
-/// l'arrotondamento al double piu' vicino e' la sua semantica, non un
-/// difetto. Un `i64`/`u64` oltre 2^53 perde quindi le cifre basse, come in
-/// qualunque cast a virgola mobile.
-///
-/// Non e' l'unico punto in cui la conversione intero -> f64 e' volutamente
-/// lossy: lo sono anche le operazioni il cui risultato e' un `Float64` **per
-/// contratto** — aggregazioni, finestre, pivot numerico
-/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-/// `exact_f64_from_*` (esatta o errore) resta la regola dove il double e' un
-/// passaggio intermedio o partecipa a una decisione, come la chiave `on` di
-/// `asof_join`.
-///
-/// La deroga e' qui e non implicita: i cast espliciti sotto non fingono un
-/// controllo di rappresentabilita' che non c'e'.
+/// `cast(to: "float")` chiede un `Float64`: l'arrotondamento al double piu'
+/// vicino e' la sua semantica, e un `i64`/`u64` oltre 2^53 perde le cifre
+/// basse (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+/// Dove il double partecipa a una decisione vale `exact_f64_from_*`.
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: e' la semantica di `cast(to: "float")`.
 fn cast_to_float(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione float fallita";
@@ -1347,7 +1321,7 @@ fn string_cast_rejection(value: &str, config: &TypeCast) -> Option<&'static str>
     })
 }
 
-/// Percorso generico originale (conversione scalare per riga): fallback per le
+/// Percorso generico (conversione scalare per riga): fallback per le
 /// combinazioni non coperte dal fast path e oracolo dei test di equivalenza.
 #[allow(clippy::too_many_lines)] // One exhaustive dispatcher keeps all cast policies auditable.
 fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {

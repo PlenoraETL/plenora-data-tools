@@ -54,13 +54,11 @@ fn default_value() -> String {
 // ---------------------------------------------------------------------------
 // Fast path di `melt`/`pivot`.
 //
-// `TextColumn` e `Float64Source` (quest'ultimo condiviso col resto del
-// crate) preparano una sola volta il downcast Arrow per colonna e iterano sui
-// valori nativi, producendo gli STESSI byte dei
-// percorsi scalari originali (`scalar_as_string` / `scalar_as_f64_rounded`):
-// stesso formato Display per numerici e booleani (NaN -> "NaN",
-// -0.0 -> "-0" distinto da "0"), stessi null, stessi errori. I tipi fuori
-// dal fast path ricadono sul percorso generico, invariato.
+// `TextColumn` e `Float64Source` preparano una sola volta il downcast Arrow
+// per colonna e producono gli STESSI byte dei percorsi scalari
+// (`scalar_as_string` / `scalar_as_f64_rounded`): stesso Display (NaN ->
+// "NaN", -0.0 -> "-0" distinto da "0"), stessi null, stessi errori. Gli altri
+// tipi ricadono sul percorso generico.
 // ---------------------------------------------------------------------------
 
 /// Sorgente testuale tipizzata per `melt` (policy string) e `pivot`
@@ -194,8 +192,7 @@ impl<'a> PivotKeyColumn<'a> {
 ///
 /// Punto d'ingresso unico per il kernel e per l'analisi del contratto: se le
 /// due parti risolvessero i nomi con algoritmi separati, il contratto
-/// dichiarato e lo schema prodotto potrebbero divergere. E' gia' successo con
-/// una copia dell'algoritmo per ciascuna.
+/// dichiarato e lo schema prodotto potrebbero divergere.
 ///
 /// # Errors
 ///
@@ -231,9 +228,8 @@ pub fn resolve_melt_names<'a>(
 /// - `ResourceLimit`: overflow o righe di output oltre `max_rows`, stima
 ///   dell'output oltre `max_governed_memory_bytes`, valore testuale oltre
 ///   `max_string_bytes`.
-// Pipeline lineare wide->long (preparazione, indici, take sulle colonne id,
-// costruzione delle colonne variable/value con fast path per tipo): lunga
-// per costruzione, uno spezzone artificiale peggiorerebbe la leggibilita'.
+// Pipeline lineare wide->long: lunga per costruzione, spezzarla peggiora la
+// leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<RecordBatch> {
     let id_indices = config
@@ -257,24 +253,15 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     }
 
     // ---------------------------------------------------------------------
-    // PREPARAZIONE. Tutto cio' che si decide guardando SOLO configurazione e
-    // schema si decide qui, prima di ogni controllo di risorsa e prima delle
-    // allocazioni PROPORZIONALI ai dati o all'output — gli indici di
-    // ripetizione, i `take`, la colonna dei nomi. Non «prima di qualunque
-    // allocazione»: gli indici delle colonne, l'insieme dei nomi occupati e
-    // le stringhe dei nomi risolti sono gia' stati allocati, e sono
-    // proporzionali allo SCHEMA, non alle righe.
+    // PREPARAZIONE. Cio' che dipende SOLO da configurazione e schema si
+    // decide qui, prima dei controlli di risorsa e delle allocazioni
+    // proporzionali alle righe o all'output (indici di ripetizione, `take`,
+    // colonna dei nomi); quanto gia' allocato e' proporzionale allo schema.
     //
-    // L'ordine conta due volte:
-    //
-    // 1. un piano invalido deve restare `invalid_plan` QUALUNQUE sia il
-    //    budget. Mettendo il rifiuto delle colonne eterogenee con
-    //    `type_policy = "reject"` in fondo, dopo il tetto sulle righe e
-    //    dopo la stima, con un budget stretto uscirebbe prima un
-    //    `resource_limit`, e chi lo legge andrebbe ad alzare un budget per
-    //    un piano che non sarebbe comunque eseguibile;
-    // 2. rifiutare dopo aver allocato costa la memoria che il rifiuto deve
-    //    risparmiare.
+    // Due ragioni: un piano invalido resta `invalid_plan` qualunque sia il
+    // budget, invece di uscire come `resource_limit` e far alzare un budget
+    // per un piano comunque non eseguibile; e rifiutare dopo aver allocato
+    // costa la memoria che il rifiuto deve risparmiare.
     let tipo_valore = batch.column(value_indices[0]).data_type().clone();
     let omogeneo = value_indices
         .iter()
@@ -339,17 +326,12 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
                 )
             })
         })?;
-    // La larghezza della colonna `value` dipende dal PERCORSO. Con colonne
-    // omogenee l'output conserva il tipo e la larghezza e' quella misurata;
-    // con colonne eterogenee e `type_policy = "string"` i valori vengono
-    // CONVERTITI IN TESTO, e la rappresentazione decimale puo' essere molto
-    // piu' larga di quella binaria — un `Int64` da otto byte diventa fino a
-    // venti caratteri. E' memoria del risultato, non un temporaneo: il
-    // modello deve conoscerla, altrimenti sottostima proprio il caso peggiore.
-    //
-    // `tipo_valore` e `omogeneo` sono gia' stati decisi in preparazione: qui
-    // si riusano, cosi' la scelta del percorso e quella della stima non
-    // possono divergere.
+    // La larghezza di `value` dipende dal percorso: con colonne omogenee e'
+    // quella misurata; con `type_policy = "string"` i valori diventano testo,
+    // che puo' essere molto piu' largo (un `Int64` da otto byte fino a venti
+    // caratteri). E' memoria del risultato: ignorarla sottostima proprio il
+    // caso peggiore. `tipo_valore` e `omogeneo` vengono dalla preparazione,
+    // cosi' percorso e stima non possono divergere.
     let byte_valore = value_indices
         .iter()
         .map(|index| {
@@ -433,7 +415,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     } else if matches!(config.type_policy, HeterogeneousTypePolicy::String) {
         // Fast path: downcast una volta per colonna e loop tipizzato sulle
         // righe; stessi byte, stessi null, stesso ordine di scansione e
-        // stesso controllo max_string_bytes del percorso scalare originale.
+        // stesso controllo max_string_bytes del percorso scalare.
         let mut builder = StringBuilder::with_capacity(
             output_rows,
             output_rows.saturating_mul(8).min(64 * 1024 * 1024),
@@ -658,9 +640,7 @@ fn pivot_column(
 /// `pivot` producono un `Float64` per contratto, quindi la conversione
 /// arrotonda
 /// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-// Pipeline lineare (una passata di raggruppamento, ordinamento di chiavi e
-// pivot, take sulle colonne indice, materializzazione delle colonne pivot):
-// lunga per costruzione, uno spezzone artificiale peggiorerebbe la
+// Pipeline lineare: lunga per costruzione, spezzarla peggiora la
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<RecordBatch> {
@@ -676,14 +656,11 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         .collect::<Result<Vec<_>>>()?;
     let pivot_index = column_index(batch, &config.column)?;
     let value_index = column_index(batch, &config.value_col)?;
-    // Fast path: UNA passata sulle
-    // righe (il percorso generico ne fa due, ricalcolando le chiavi
-    // composte riga per riga), con chiavi scritte in un buffer riusato e
-    // gruppi di celle indicizzati dagli interi (chiave, pivot) invece che da
-    // stringhe formattate ad ogni lookup. Ordini di output identici:
-    // chiavi e pivot ordinati lessicograficamente come nel BTreeMap del
-    // percorso generico, righe di gruppo in ordine crescente,
-    // rappresentante = prima riga incontrata per chiave.
+    // Fast path: UNA passata sulle righe (il percorso generico ne fa due),
+    // chiavi in un buffer riusato e celle indicizzate dagli interi
+    // (chiave, pivot). Ordini di output identici al generico: chiavi e pivot
+    // in ordine lessicografico, righe di gruppo crescenti, rappresentante =
+    // prima riga incontrata per chiave.
     let key_columns = index_indices
         .iter()
         .map(|index| PivotKeyColumn::new(batch.column(*index)))
@@ -805,9 +782,8 @@ pub struct Transpose {
 ///   eterogenee senza `type_policy='string'`, valore testuale oltre
 ///   `max_string_bytes`, indice oltre u64, nome di colonna di output non
 ///   valido.
-// Pipeline lineare (schema di output, fast path omogeneo via concat+take o
-// ripiego testuale, una colonna per riga): lunga per costruzione, uno
-// spezzone artificiale peggiorerebbe la leggibilita'.
+// Pipeline lineare: lunga per costruzione, spezzarla peggiora la
+// leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Result<RecordBatch> {
     if batch.num_rows() == 0 {
@@ -934,16 +910,13 @@ pub struct Explode {
     pub empty_policy: EmptyListPolicy,
 }
 
-/// Come [`select_rows`], ma la colonna a `skip_index` non viene presa: al suo
-/// posto un placeholder nullo economico, stessa lunghezza e stesso tipo.
+/// Come [`select_rows`], ma la colonna a `skip_index` non viene presa.
 ///
-/// Usata SOLO da [`explode`] quando la colonna sorgente sta per essere
-/// sostituita due righe piu' sotto da `replace_or_append`: un `take` su di
-/// essa con gli indici ripetuti di `explode` — poche righe, liste lunghe —
-/// copierebbe l'intera lista sorgente per OGNI riga di output (O(N^2)
-/// elementi), scartati un istante dopo. Non esportata: `select_rows` resta
-/// l'unica primitiva condivisa dagli altri kernel, che non hanno questa forma
-/// degenere (molte righe, liste corte).
+/// Al suo posto va un placeholder nullo di pari lunghezza e tipo. Serve a
+/// [`explode`] quando `replace_or_append` sta per sostituire la colonna
+/// sorgente: un `take` con gli indici ripetuti di `explode` (poche righe,
+/// liste lunghe) copierebbe l'intera lista per OGNI riga di output, O(N^2)
+/// elementi scartati subito dopo.
 fn select_rows_except(
     batch: &RecordBatch,
     rows: &[usize],
@@ -1029,15 +1002,10 @@ pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result
             ));
         }
     }
-    // Quando `output_name` e' lo stesso nome della colonna sorgente,
-    // `replace_or_append` la SOSTITUISCE due righe piu' sotto: prenderla con
-    // `select_rows` sarebbe una `take` sprecata sulla `ListArray` sorgente,
-    // O(N^2) nel caso degenere (poche righe, liste lunghe) perche' ogni
-    // indice di output ripetuto ricopia l'intera lista della riga sorgente.
-    // Quando invece `output_column` e' un nome NUOVO, la colonna sorgente
-    // resta nell'output (ripetuta per riga, non sostituita — vedi
-    // `analyze_explode`, che la mantiene con `analyze_append`): li' serve
-    // davvero, e si passa dal percorso normale.
+    // Se l'output sostituisce la colonna sorgente, prenderla sarebbe un
+    // `take` sprecato e O(N^2): vedi `select_rows_except`. Con un
+    // `output_column` NUOVO la sorgente resta nell'output (vedi
+    // `analyze_explode`) e passa dal percorso normale.
     let repeated = if output_name == config.column {
         select_rows_except(batch, &rows, index)?
     } else {
@@ -1104,14 +1072,10 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
         fields.push(field.as_ref().clone());
         columns.push(batch.column(position).clone());
     }
-    // L'indice di riga si converte in modo FALLIBILE.
-    //
-    // `u32::try_from(row).ok()` renderebbe `None` oltre `u32::MAX`, e `None`
-    // in un array di indici e' un indice NULLO: i figli di una struct non
-    // nulla sarebbero sostituiti da null senza che nulla lo segnali.
-    // I limiti di riga sono `u64` e niente vincola un batch a `u32::MAX`
-    // righe, quindi il caso non e' escluso per costruzione. E' la stessa
-    // classe della conversione silenziosa dei conteggi di gruppo.
+    // L'indice di riga si converte in modo FALLIBILE: `u32::try_from(row).ok()`
+    // darebbe `None` oltre `u32::MAX`, cioe' un indice NULLO, e i figli di una
+    // struct non nulla diventerebbero null in silenzio. Niente vincola un
+    // batch a `u32::MAX` righe.
     let mut parent_indices = Vec::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
         if structure.is_null(row) {
@@ -1469,8 +1433,7 @@ pub fn table_diff(
             DataType::Utf8,
             selector == 1 || selector == 2,
         ));
-        // StringBuilder diretto: stessi valori e stessi null della costruzione
-        // originale via Vec<Option<String>>, senza un clone di String per riga.
+        // StringBuilder diretto: nessun clone di String per riga.
         let mut builder = StringBuilder::with_capacity(
             rows.len(),
             rows.len().saturating_mul(8).min(64 * 1024 * 1024),
@@ -1503,9 +1466,8 @@ mod tests {
     // -------------------------------------------------------------------
 
     use super::*;
-    // L'oracolo qui sotto ricalcola il percorso generico originale, e quello
-    // usa `scalar_as_f64_rounded` direttamente: la produzione ora ci arriva
-    // tramite `Float64Source`, quindi l'importazione serve solo qui.
+    // L'oracolo qui sotto usa `scalar_as_f64_rounded` direttamente; la
+    // produzione ci arriva tramite `Float64Source`.
     use crate::scalar_as_f64_rounded;
     use std::collections::BTreeSet;
 
@@ -3092,16 +3054,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Regressione: `explode` su un batch a riga singola con una lista lunga
-    // non materializza la colonna sorgente in `select_rows` (O(N^2):
-    // `take_list` di arrow copierebbe l'intera lista per ogni riga di output
-    // quando gli indici ripetuti puntano tutti alla stessa riga sorgente —
-    // a N=10 000 su VM reale l'intermedio scartato e' 818 MB e causa un OOM
-    // del dominio isolato, vedi errori-e-limiti.md). A N=50 000 quel
-    // percorso richiederebbe ~2.5*10^9 elementi Int64 (~20 GB), impraticabile
-    // in un test unitario: qui completa in tempo trascurabile e produce
-    // l'output corretto, perche' `select_rows_except` sostituisce quella
-    // colonna con un placeholder nullo economico invece di materializzarla.
+    // `explode` su un batch a riga singola con una lista lunga non
+    // materializza la colonna sorgente (vedi `select_rows_except` ed
+    // errori-e-limiti.md): il percorso O(N^2) sarebbe impraticabile alla N
+    // del test, che invece completa subito con l'output corretto.
     // -------------------------------------------------------------------
 
     #[test]

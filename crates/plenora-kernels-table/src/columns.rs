@@ -44,9 +44,8 @@ pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordB
         fields,
         batch.schema().metadata().clone(),
     ));
-    // La cardinalita' e' dichiarata dal costruttore condiviso: rifarla qui
-    // sarebbe una seconda copia della stessa cura, e una copia puo'
-    // divergere.
+    // La cardinalita' la dichiara il costruttore condiviso, non una copia
+    // locale che potrebbe divergere.
     crate::batch_with_rows(schema, columns, batch.num_rows())
 }
 
@@ -56,7 +55,7 @@ pub struct SelectColumns {
     pub columns: Vec<String>,
 }
 
-/// Proiezione positiva (estensione v1.1): output = le colonne elencate,
+/// Proiezione positiva: output = le colonne elencate,
 /// nell'ordine dato.
 ///
 /// Zero-copy: gli array Arrow sono riusati (Arc clone), nessuna copia
@@ -100,7 +99,7 @@ pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<Rec
 }
 
 // ---------------------------------------------------------------------------
-// table.align_schema (estensione v1.2)
+// table.align_schema
 // ---------------------------------------------------------------------------
 
 /// Tipo dichiarato di `align_schema`: set chiuso di nomi, nessuna sintassi
@@ -332,7 +331,7 @@ pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
     align_default_column(value, align_type, 1).map(|_| ())
 }
 
-/// Allinea lo schema dell'input all'elenco dichiarato (estensione v1.2).
+/// Allinea lo schema dell'input all'elenco dichiarato.
 ///
 /// Riordina/proietta secondo `columns`; una colonna assente e' aggiunta
 /// come colonna di null (o riempita col `default` scalare, non nullable);
@@ -924,7 +923,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // table.align_schema (estensione v1.2)
+    // table.align_schema
     // -------------------------------------------------------------------
 
     fn align_fixture() -> RecordBatch {

@@ -16,17 +16,14 @@ use crate::scalar_as_string;
 // ---------------------------------------------------------------------------
 // Fast path di `table.aggregate`.
 //
-// Tre interventi, semantica byte-identica al percorso generico:
-// 1. chiavi di gruppo scritte da formattatori tipizzati (stessi byte di
-//    `row_key`, nessuna conversione scalare ripetuta ne' stringhe intermedie)
-//    e raggruppamento HashMap + ordinamento finale delle chiavi (stesso
-//    ordine del BTreeMap: lessicografico sui byte della chiave);
-// 2. aggregazioni numeriche su valori nativi Arrow (Int64/UInt64/Float64)
-//    con la stessa sequenza di operazioni del generico (stesso ordine di
-//    somma, `total_cmp` per distinct/quantile, null esclusi o gruppo nullo
-//    secondo `skip_null`); gli altri tipi ricadono su `scalar_as_f64_rounded`;
-// 3. nunique/concat su Utf8 con valori presi in prestito (nessuna copia);
-//    gli altri tipi ricadono su `scalar_as_string`.
+// Semantica byte-identica al percorso generico:
+// 1. chiavi di gruppo da formattatori tipizzati (stessi byte di `row_key`),
+//    HashMap + ordinamento finale delle chiavi (stesso ordine del BTreeMap);
+// 2. aggregazioni numeriche su valori nativi Int64/UInt64/Float64 con la
+//    stessa sequenza di operazioni del generico; gli altri tipi ricadono su
+//    `scalar_as_f64_rounded`;
+// 3. nunique/concat su Utf8 senza copie; gli altri tipi ricadono su
+//    `scalar_as_string`.
 // ---------------------------------------------------------------------------
 
 /// Colonna di group-by con formattatore tipizzato: produce gli stessi byte
@@ -411,12 +408,9 @@ type KeyPartitions<'a> = Vec<(Option<Cow<'a, str>>, Vec<usize>)>;
 /// Partizioni di `window_function`/`rolling_window`.
 ///
 /// Righe raggruppate per la chiave testuale della colonna di partizione
-/// (`TextSource`: Utf8 preso in prestito, nessuna `String` per riga;
-/// `scalar_as_string` per gli altri tipi), hash FxHash+splitmix64
-/// (`KeyHasher`) invece di un `BTreeMap` `SipHash`. Le partizioni sono
-/// restituite nello STESSO ordine in cui le renderebbe un `BTreeMap`
-/// (chiave `Option<String>` crescente): gli errori per partizione emergono
-/// nello stesso ordine e il comportamento resta deterministico.
+/// (`TextSource`) con `KeyHasher`. Le partizioni escono nell'ordine di un
+/// `BTreeMap` (chiave `Option<String>` crescente): gli errori per partizione
+/// emergono in ordine deterministico.
 pub(in crate::aggregation) fn build_partitions(
     batch: &RecordBatch,
     group: Option<usize>,

@@ -83,8 +83,7 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
 /// # Errors
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto,
-///   valore non rappresentabile come testo
-///   (come `scalar_as_string`);
+///   valore non rappresentabile come testo (come `scalar_as_string`);
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
 ///   diagnostics;
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
@@ -182,8 +181,8 @@ fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
 /// # Errors
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, valore oltre
-///   `u64` nel framing, valore non
-///   rappresentabile come testo (come `scalar_as_string`);
+///   `u64` nel framing, valore non rappresentabile come testo (come
+///   `scalar_as_string`);
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
 ///   diagnostics;
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
@@ -295,9 +294,8 @@ fn framed_vec(message: &mut Vec<u8>, value: &[u8], op: &str) -> Result<()> {
 
 /// Esadecimale minuscolo in coda a `hex`, byte per byte.
 ///
-/// Identico al formato `{:x}` dei digest md5/sha2 e al
-/// `write!(hex, "{byte:02x}")` originale, senza passare per il machinery di
-/// formattazione a ogni byte.
+/// Identico al formato `{:x}` dei digest md5/sha2 e a
+/// `write!(hex, "{byte:02x}")`, senza il machinery di formattazione per byte.
 fn push_hex(hex: &mut String, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     hex.reserve(bytes.len() * 2);
@@ -399,7 +397,7 @@ fn with_cell_value<R>(
     }
 }
 
-/// Codifica canonica di una riga (estensione v1.1), byte esatti:
+/// Codifica canonica di una riga, byte esatti:
 ///
 /// - separatore di dominio `b"plenora-fingerprint-v1\0"`;
 /// - per ogni colonna, nell'ordine di config (o dello schema se omessa):
@@ -416,13 +414,9 @@ fn fingerprint_rows<D: Digest>(
     names: &[String],
     indices: &[usize],
 ) -> Result<StringArray> {
-    // Framing costante per colonna (`framed(nome)` || `framed(tipo Arrow)`)
-    // e accesso tipizzato ai valori: precomputati UNA volta per batch invece
-    // che a ogni cella: `data_type().to_string()` alloca una String per
-    // cella. Il messaggio di ogni riga e' accumulato in un buffer riusato e
-    // assorbito con un solo `update`; l'hex e' scritto in un buffer riusato
-    // e l'output costruito con StringBuilder presized (niente una String
-    // heap per riga). Il byte stream per riga resta quello dell'encoding
+    // Framing per colonna e accesso tipizzato precomputati una volta per
+    // batch (`data_type().to_string()` alloca); messaggio e hex in buffer
+    // riusati, un solo `update` per riga. Il byte stream e' l'encoding
     // canonico documentato sopra.
     let mut headers = Vec::with_capacity(names.len());
     let mut accesses = Vec::with_capacity(names.len());
@@ -522,7 +516,7 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
 }
 
 // ---------------------------------------------------------------------------
-// table.hmac_sha256 (estensione v1.2)
+// table.hmac_sha256
 // ---------------------------------------------------------------------------
 
 /// Politica sui null per `hmac_sha256`.
@@ -662,8 +656,7 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
     // mantengono l'output storico dichiarato, nessun pre-rifiuto.
     let (inner_base, outer_base) = hmac_sha256_states(&key);
     // Framing costante per colonna e accesso tipizzato ai valori,
-    // precomputati una volta per batch come in `fingerprint_rows`: il
-    // messaggio per riga e' byte-identico alla versione originale.
+    // precomputati una volta per batch come in `fingerprint_rows`.
     let mut headers = Vec::with_capacity(config.columns.len());
     let mut accesses = Vec::with_capacity(config.columns.len());
     for (name, index) in config.columns.iter().zip(&indices) {
@@ -774,8 +767,7 @@ pub struct MaskData {
 /// iniziali ed `end` finali.
 ///
 /// Lavora su indici di byte (via `char_indices`) senza materializzare un
-/// `Vec<char>`: stessi byte in output della versione originale (Unicode
-/// incluso), stessa condizione di ritorno anticipato.
+/// `Vec<char>`; l'oracolo nei test e' `mask_middle_reference`.
 fn mask_middle(value: &str, start: usize, end: usize, mask: char) -> String {
     let char_count = value.chars().count();
     if char_count <= start.saturating_add(end) {
@@ -877,11 +869,9 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
         };
         validate_output_name(&output)?;
         let column = result.column(index).clone();
-        // Fast path Utf8: valori presi in
-        // prestito dallo StringArray senza `scalar_as_string` per riga e
-        // output costruito con StringBuilder. Stessi byte, stessi null,
-        // stessi errori per riga; gli altri tipi ricadono sul percorso
-        // scalare originale, invariato.
+        // Fast path Utf8: valori in prestito dallo `StringArray`, senza
+        // `scalar_as_string` per riga. Stessi byte, null ed errori del
+        // percorso scalare, su cui ricadono gli altri tipi.
         let values = if let Some(strings) = column.as_any().downcast_ref::<StringArray>() {
             let mut builder = StringBuilder::with_capacity(
                 result.num_rows(),
@@ -912,9 +902,8 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
 #[cfg(test)]
 mod tests {
     // -------------------------------------------------------------------
-    // Test-oracolo di `mask_data`: le
-    // implementazioni di riferimento di `mask_middle`/`mask`/`mask_data`
-    // stanno qui sotto, indipendenti dal percorso ottimizzato.
+    // Test-oracolo di `mask_data`: implementazioni di riferimento di
+    // `mask_middle`/`mask`/`mask_data`, indipendenti dal percorso ottimizzato.
     // -------------------------------------------------------------------
 
     use super::*;
@@ -1221,9 +1210,8 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Test di `stable_fingerprint` (estensione v1.1): known-answer calcolata
-    // a mano sull'encoding canonico documentato nel kernel, piu' sensibilita'
-    // e determinismo.
+    // Test di `stable_fingerprint`: known-answer sull'encoding canonico,
+    // sensibilita' e determinismo.
     // -------------------------------------------------------------------
 
     fn fingerprint_fixture() -> RecordBatch {
@@ -1351,9 +1339,8 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Test di `hmac_sha256` (estensione v1.2): known-answer RFC 2104
-    // calcolate esternamente sul framing canonico documentato nel kernel,
-    // null policy, e la garanzia che la chiave non compaia MAI negli errori.
+    // Test di `hmac_sha256`: known-answer RFC 2104 sul framing canonico, null
+    // policy, e la chiave che non compare mai negli errori.
     // -------------------------------------------------------------------
 
     fn hmac_fixture() -> RecordBatch {
@@ -1732,12 +1719,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Test-oracolo di `stable_fingerprint` e `hmac_sha256`: le
-    // implementazioni di riferimento stanno qui sotto, indipendenti dal
-    // percorso ottimizzato, e i digest sono confrontati
-    // riga per riga su una fixture con null, NaN, -0.0, unicode, tipi su
-    // percorso tipizzato e su percorso scalare, tutte le colonne e subset,
-    // entrambi gli algoritmi e tutte le null policy.
+    // Test-oracolo di `stable_fingerprint` e `hmac_sha256`: implementazioni
+    // di riferimento indipendenti dal percorso ottimizzato, digest confrontati
+    // riga per riga su una fixture con null, NaN, -0.0, unicode e tipi su
+    // entrambi i percorsi.
     // -------------------------------------------------------------------
 
     /// Oracolo indipendente di `framed_digest`.

@@ -307,7 +307,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Test-oracolo di `top_n` (estensione v1.1): l'oracolo e' la coppia
+    // Test-oracolo di `top_n`: l'oracolo e' la coppia
     // `sort` + slice delle prime n posizioni, eseguita sul kernel `sort`
     // gia' validato. Il confronto e' sull'intero RecordBatch (schema,
     // valori, null mask), non solo sugli id.

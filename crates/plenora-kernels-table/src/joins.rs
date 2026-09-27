@@ -33,16 +33,13 @@ fn key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<Stri
 }
 
 // ---------------------------------------------------------------------------
-// Fast path di `join`/`semi_join`/`anti_join` (ottimizzazione kernel, terzo
-// batch): chiavi tipizzate su valori nativi Arrow (Int64/UInt64/Float64/
-// Boolean/Utf8, stringhe prese in prestito) al posto delle chiavi stringa di
-// `key`, e hash FxHash-style al posto di SipHash. Semantica byte-identica al
-// percorso generico: stessi match (ogni NaN matcha ogni NaN, perche'
-// `f64::to_string` produce "NaN" per tutti; -0.0 distinto da 0.0, perche'
-// produce "-0" vs "0"), null nella chiave che non matchano mai, stesso ordine
-// di output (righe sinistre in ordine, match destri in ordine di riga, destri
-// non matchati in coda), stessi errori. I tipi di chiave fuori dal fast path
-// ricadono sul percorso generico a chiavi stringa.
+// Fast path di `join`/`semi_join`/`anti_join`: chiavi tipizzate sui valori
+// nativi Arrow al posto delle chiavi stringa di `key`, hash FxHash-style al
+// posto di SipHash. Semantica byte-identica al percorso generico: ogni NaN
+// matcha ogni NaN ("NaN" per tutti), -0.0 distinto da 0.0 ("-0" vs "0"),
+// null nella chiave mai in match, stesso ordine di output (sinistre in
+// ordine, match destri per riga, destri non matchati in coda), stessi
+// errori. Gli altri tipi di chiave ricadono sul percorso generico.
 // ---------------------------------------------------------------------------
 
 /// Chiave nativa di una colonna di join: uguaglianza identica alla chiave
@@ -478,20 +475,12 @@ fn join_rows_fast(
 
 /// Probe del fast path in DUE FASI: prima si conta, poi si riempie.
 ///
-/// In un solo passo ogni chunk accumulerebbe le proprie coppie in vettori
-/// locali e verificherebbe `max_rows` sul PROPRIO conteggio: molti chunk
-/// singolarmente sotto soglia danno pero' un totale enormemente sopra, e il
-/// controllo globale arriverebbe solo dopo la concatenazione — a coppie
-/// gia' materializzate. Sarebbe una verifica a valle dell'allocazione che
-/// deve impedire.
-///
-/// La fase di conteggio non materializza niente, il totale si somma in
-/// aritmetica controllata e `max_rows` si applica PRIMA di allocare. La
-/// fase di riempimento scrive poi in un'unica allocazione esatta, per
-/// offset di prefisso, senza vettori intermedi ne' concatenazione finale.
-///
-/// L'ordine dell'output resta quello sequenziale: i chunk coprono intervalli
-/// contigui di righe sinistre e ciascuno scrive nel proprio segmento.
+/// Il conteggio non materializza niente: il totale si somma in aritmetica
+/// controllata e `max_rows` si applica PRIMA di allocare. In un solo passo
+/// ogni chunk verificherebbe solo il PROPRIO conteggio, e il totale globale
+/// arriverebbe a coppie gia' materializzate. Il riempimento scrive in
+/// un'unica allocazione esatta per offset di prefisso; i chunk coprono
+/// intervalli contigui di righe sinistre, quindi l'ordine resta sequenziale.
 fn join_rows_fast_inner<'a>(
     config: &Join,
     limits: &Limits,
@@ -646,8 +635,7 @@ impl<'a> RightMap<'a> {
 }
 
 /// Primo passo del probe: quante coppie produce un intervallo di righe
-/// sinistre,
-/// senza materializzarne nessuna.
+/// sinistre, senza materializzarne nessuna.
 ///
 /// Deve restare l'esatto specchio di [`fill_range`]: stessa condizione di
 /// match, stesso ramo per le righe sinistre senza match. Se le due divergono
@@ -1096,8 +1084,7 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
     Ok(fields)
 }
 
-/// Concatenazione N-aria per NOME colonna, non per posizione (estensione
-/// v1.2).
+/// Concatenazione N-aria per NOME colonna, non per posizione.
 ///
 /// Per ogni colonna dello schema unione tutte le righe di tutti gli input,
 /// nell'ordine degli input; gli input senza quella colonna contribuiscono
@@ -1146,17 +1133,11 @@ pub fn concat_by_name(
         )));
     }
 
-    // MODELLO: l'output ha lo schema UNIONE, quindi puo' avere colonne che
-    // nessun input misurato possiede — per gli input che non ce l'hanno viene
-    // materializzata una colonna di null lunga quanto le loro righe, che
-    // occupa memoria. La stima si costruisce quindi PER CAMPO DELLO SCHEMA DI
-    // USCITA: per ciascuno, la larghezza massima osservata fra gli input che
-    // lo hanno, e il pavimento del tipo per quelli che non lo hanno o che non
-    // hanno righe da misurare.
-    //
-    // Misurare i soli input e prendere il massimo fra le loro larghezze
-    // TOTALI darebbe zero a un input vuoto che porta venti colonne nello
-    // schema di uscita — cioe' proprio nel caso peggiore.
+    // MODELLO per campo dello schema UNIONE: gli input privi di una colonna
+    // contribuiscono una colonna di null che occupa memoria. Per ogni campo,
+    // la larghezza massima osservata fra gli input che lo hanno, altrimenti
+    // il pavimento del tipo. Il massimo delle larghezze totali degli input
+    // darebbe zero a un input vuoto con molte colonne: il caso peggiore.
     let byte_per_riga = fields
         .iter()
         .map(|field| {
@@ -1236,20 +1217,13 @@ pub fn cross_join(
             "cross_join supera max_rows".into(),
         ));
     }
-    // Preventivo, non consuntivo: `rows` e' esatto (prodotto delle due
-    // cardinalita') e qui non e' stato ancora allocato nulla. E' il punto in
-    // cui `max_governed_memory_bytes` puo' ancora impedire l'allocazione invece di
-    // constatarla.
+    // Preventivo: `rows` e' esatto e non e' stato allocato nulla, quindi
+    // `max_governed_memory_bytes` puo' ancora impedire l'allocazione.
     //
-    // MODELLO della riga di output. Ogni riga del prodotto cartesiano
-    // affianca una riga sinistra E una destra: i byte si SOMMANO. Prendere
-    // il massimo fra i due lati e' il modello di un impilamento, e
-    // sottostima di quasi meta' un affiancamento.
-    //
-    // Ai buffer del risultato vanno aggiunti i due vettori di indici che
-    // questa funzione costruisce PRIMA di chiamare `combine_horizontal`: sono
-    // lunghi quanto l'output e non fanno parte di alcun batch, quindi nessuna
-    // misura su `left`/`right` li vedrebbe.
+    // Ogni riga di output affianca una riga sinistra E una destra: i byte si
+    // SOMMANO (il massimo modellerebbe un impilamento). Si aggiungono i due
+    // vettori di indici costruiti prima di `combine_horizontal`, lunghi
+    // quanto l'output e invisibili a ogni misura su `left`/`right`.
     let indici_per_riga = 2 * std::mem::size_of::<Option<usize>>();
     // Somma CONTROLLATA: una stima saturata a `usize::MAX` passerebbe il
     // confronto con un budget anch'esso a fondo scala, cioe' autorizzerebbe
@@ -1496,11 +1470,9 @@ pub struct AsOfJoin {
 /// Stessa conversione di `scalar_as_f64`: un Int64 senza `f64` esatto e' un
 /// errore `Schema` (mai arrotondato), null in ingresso -> null in uscita.
 ///
-/// La verifica e' `exact_f64_from_i64`, non `to_f64()`: quest'ultimo non
-/// fallisce mai e arrotonda in silenzio. Su una chiave `on` di
-/// `asof_join` l'arrotondamento e' particolarmente dannoso — due istanti
-/// distinti diventano lo stesso valore, i gruppi collassano e la ricerca del
-/// candidato piu' vicino sceglie la riga sbagliata.
+/// La verifica e' `exact_f64_from_i64`, non `to_f64()`, che arrotonda in
+/// silenzio: due istanti distinti diventerebbero uguali e la ricerca del
+/// candidato piu' vicino sceglierebbe la riga sbagliata.
 fn asof_on_value(array: &dyn Array, row: usize) -> Result<Option<f64>> {
     if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
         return values

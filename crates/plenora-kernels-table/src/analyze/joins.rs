@@ -201,7 +201,7 @@ pub(in crate::analyze) fn analyze_join(
     finish(schema, geometry, active, ContractProperties::default())
 }
 
-/// `table.fuzzy_join` (estensione v1.3): replica le validazioni statiche del
+/// `table.fuzzy_join`: replica le validazioni statiche del
 /// kernel (`fuzzy::validate_config`, chiavi Utf8 esistenti) e inferisce lo
 /// schema del join Manipola con la chiave destra INCLUSA (suffisso `_R`,
 /// nel fuzzy le due chiavi differiscono) piu' la colonna score Float64 in

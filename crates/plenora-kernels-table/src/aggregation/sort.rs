@@ -30,13 +30,9 @@ pub(in crate::aggregation) const fn default_true() -> bool {
 // ---------------------------------------------------------------------------
 // Comparatori tipizzati di `table.sort`.
 //
-// Per i tipi Arrow principali (Int64, UInt64, Float64, Utf8, Boolean) il
-// confronto avviene sui valori nativi, senza conversione scalare ad ogni
-// confronto; la semantica e' IDENTICA a `compare_at`/`compare_cells_typed`
-// (null dopo i valori in ascendente, `i64::cmp`/`u64::cmp` esatti per gli
-// interi — nessuna perdita di precisione oltre 2^53 — `total_cmp` per i
-// Float64, confronto testuale "false" < "true" per i booleani). Gli altri
-// tipi ricadono su `compare_at`, invariato.
+// Confronto sui valori nativi per i tipi Arrow principali, con semantica
+// IDENTICA a `compare_cells_typed` (interi esatti oltre 2^53, `total_cmp`
+// per i Float64). Gli altri tipi ricadono su `compare_at`.
 // ---------------------------------------------------------------------------
 
 enum ColumnComparator {
@@ -112,14 +108,9 @@ fn compare_nullable<A: Array>(
 
 /// Prevalidazione deterministica delle colonne di ordinamento.
 ///
-/// Percorre le colonne nell'ordine dichiarato dal piano: il primo errore e'
-/// quindi sempre lo stesso, a prescindere da come il sort verra' eseguito.
-///
-/// Senza questa passata l'errore nascerebbe DENTRO il comparatore, e in
-/// `par_sort_by` quale confronto fallisca per primo dipende da come Rayon
-/// spezza il lavoro fra i thread: con piu' celle non valide, identita' e
-/// messaggio dell'errore cambierebbero fra esecuzioni sullo stesso input —
-/// violazione di architettura.md#determinismo, che impone errori deterministici.
+/// Percorre le colonne nell'ordine del piano, cosi' il primo errore e'
+/// sempre lo stesso. Dentro `par_sort_by` quale confronto fallisca per primo
+/// dipende da come Rayon divide il lavoro (architettura.md#determinismo).
 fn prevalidate_sort_columns(batch: &RecordBatch, indices: &[usize]) -> Result<()> {
     for index in indices {
         validate_sortable(batch.column(*index), batch.num_rows())?;
@@ -208,15 +199,12 @@ pub struct TopN {
     pub descending: bool,
 }
 
-/// Prime `n` righe secondo l'ordinamento di `sort` (estensione v1.1).
+/// Prime `n` righe secondo l'ordinamento di `sort`.
 ///
-/// Stessa semantica null (null in coda in ascendente), `total_cmp` sui
-/// numerici e stabilita' (spareggio sull'indice originale). L'output e'
-/// identico a `sort` seguito da `limit(n)`, ma con `n << righe` evita il
-/// sort completo: `select_nth_unstable_by` partiziona gli indici in O(righe)
-/// e solo i primi `n` selezionati vengono ordinati. Il confronto include lo
-/// spareggio sull'indice, quindi e' un ordine totale e la permutazione
-/// finale coincide esattamente con quella dello stable sort completo.
+/// Output identico a `sort` seguito da `limit(n)`: `select_nth_unstable_by`
+/// partiziona in O(righe) e ordina solo i primi `n`. Lo spareggio
+/// sull'indice originale rende l'ordine totale, quindi la permutazione
+/// coincide con quella dello stable sort completo.
 ///
 /// # Errors
 ///
@@ -325,14 +313,10 @@ pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
             .map(|name| column_index(batch, name))
             .collect::<Result<Vec<_>>>()?
     };
-    // Una sola passata sulle righe: chiave con gli stessi byte di `row_key`
-    // (formattatori tipizzati di `KeyColumn`) scritta in un buffer riusato,
-    // hash FxHash+splitmix64 (`KeyHasher`) al posto di SipHash. Il percorso
-    // generico materializzerebbe una `String` per riga piu' tre mappe
-    // SipHash; qui c'e' una sola mappa chiave -> statistiche (prima/ultima
-    // occorrenza, conteggio).
-    // Le righe in uscita restano in ordine crescente di indice per ogni
-    // variante di `keep`, esattamente come il filtro sull'indice originale.
+    // Una sola passata: chiave con gli stessi byte di `row_key` in un buffer
+    // riusato, una mappa chiave -> statistiche con `KeyHasher`. Le righe in
+    // uscita restano in ordine crescente di indice per ogni variante di
+    // `keep`.
     let key_columns = indices
         .iter()
         .map(|index| KeyColumn::new(batch.column(*index)))

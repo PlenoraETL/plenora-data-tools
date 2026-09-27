@@ -133,16 +133,12 @@ fn has_null(batch: &RecordBatch, indices: &[usize], row: usize) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path delle chiavi di riga (`reconcile`,
-// `assert_foreign_key`).
+// Fast path delle chiavi di riga (`reconcile`, `assert_foreign_key`).
 //
-// `RowKeyEncoder` prepara una sola volta il tag di tipo per colonna e itera
-// sui valori nativi, scrivendo in un buffer riusato gli STESSI byte di
-// `quality::key_for_row` (che resta invariata come oracolo dei test):
-// prefisso `len(tipo)+tipo`, marcatore null 0/1, `len(valore)+valore` con il
-// valore formattato come `scalar_as_string` (stesso Display per numerici e
-// booleani, NaN -> "NaN", -0.0 -> "-0"). I tipi fuori dal fast path ricadono
-// sul percorso scalare generico, con gli stessi errori.
+// `RowKeyEncoder` scrive in un buffer riusato gli stessi byte di
+// `quality::key_for_row`, che nei test fa da oracolo; il tag di tipo e'
+// preparato una volta per colonna. I tipi fuori dal fast path ricadono sul
+// percorso scalare generico, con gli stessi errori.
 // ---------------------------------------------------------------------------
 
 /// Colonna di chiave tipizzata per `RowKeyEncoder`.
@@ -500,7 +496,7 @@ pub fn reconcile(
 }
 
 // ---------------------------------------------------------------------------
-// table.validate_rules (estensione v1.2)
+// table.validate_rules
 // ---------------------------------------------------------------------------
 
 /// Operatore di una regola di validazione: sottoinsieme degli operatori di
@@ -620,9 +616,7 @@ pub const fn is_rule_comparable(data_type: &DataType) -> bool {
 /// Ogni errore di configurazione (colonna mancante, tipo incompatibile con
 /// l'operatore, valore atteso non parsabile, regex invalida) esce QUI, prima
 /// di leggere una sola riga di dati.
-// Dispatcher esaustivo per operatore di regola: i controlli statici di ogni
-// caso restano adiacenti in un solo corpo (la lunghezza e' nei casi, non
-// nella complessita' logica).
+// Dispatcher esaustivo per operatore: la lunghezza e' nei casi, non nella logica.
 #[allow(clippy::too_many_lines)]
 fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<CompiledRule>> {
     if config.rules.is_empty() {
@@ -779,13 +773,11 @@ const fn rule_ordered(ordering: Option<Ordering>, operator: RuleOperator) -> Opt
 
 /// Esito del confronto fra una cella e l'estremo di una regola.
 ///
-/// La distinzione fra `Undefined` e `Invalid` e' il punto di questo tipo. Un
-/// confronto NON DEFINITO (un solo lato NaN) segue la semantica IEEE: `ne`
-/// resta vero. Una cella NON INTERPRETABILE — errore di conversione, estremo
-/// assente — fa invece fallire la regola per OGNI operatore, `ne` compreso.
-/// Appiattendo i due casi su un solo `equal = false`, `ne` passerebbe
-/// proprio sui valori che il kernel non e' riuscito a leggere: l'opposto di
-/// quanto la regola documenta.
+/// Un confronto non definito (`Undefined`, un solo lato NaN) segue IEEE: `ne`
+/// resta vero. Una cella non interpretabile (`Invalid`: errore di
+/// conversione, estremo assente) fa fallire la regola per ogni operatore,
+/// `ne` compreso; con un solo `equal = false` `ne` passerebbe proprio sui
+/// valori illeggibili.
 #[derive(Clone, Copy)]
 enum RuleComparison {
     /// Ordine definito fra cella ed estremo.
@@ -948,7 +940,7 @@ fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEva
     Ok((valid, errors, warnings))
 }
 
-/// Valida le righe contro un set di regole dichiarative (estensione v1.2).
+/// Valida le righe contro un set di regole dichiarative.
 ///
 /// NON fallisce mai sui dati: `annotate` aggiunge `_valid` (Boolean, false
 /// se almeno una regola error e' fallita), `_errors` e `_warnings` (nomi
@@ -1518,7 +1510,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // table.validate_rules (estensione v1.2)
+    // table.validate_rules
     // -------------------------------------------------------------------
 
     fn rules_batch() -> RecordBatch {
