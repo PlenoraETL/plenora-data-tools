@@ -1,7 +1,8 @@
 # Stato e roadmap
 
 Solo il **lavoro ancora aperto**. Quello che è fatto sta nel codice, nei test
-e negli altri documenti; qui c'è ciò che manca, in ordine.
+e negli altri documenti — ciò che il codice dichiara oggi, generato da lì, è in
+[`STATO.md`](STATO.md); qui c'è ciò che manca, in ordine.
 
 ## Vincoli noti della Fase 4
 

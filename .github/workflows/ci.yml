@@ -527,14 +527,23 @@ jobs:
       - name: Copia il repository fuori dal worktree
         run: cp -a "$GITHUB_WORKSPACE" "$RUNNER_TEMP/doc-check"
 
-      # Il gate documentale copre superficie, collegamenti, riferimenti
-      # morti, allineamento catalogo/operazioni, divergenza del generato e
-      # artefatti tracciati. Gira sulla COPIA, come la rigenerazione.
-      - name: Superficie, collegamenti e documento generato
+      # Il gate documentale copre collegamenti, puntatori, allineamento
+      # catalogo/operazioni, divergenza del generato e artefatti tracciati.
+      # Gira sulla COPIA, come la rigenerazione.
+      - name: Collegamenti, puntatori e documento generato
         working-directory: ${{ runner.temp }}/doc-check
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/verifica_documentazione.py
+
+      # docs/STATO.md e' generato dal codice: versione, formati, catalogo,
+      # comandi, feature, job, gate, target fuzz e test. Una modifica che ne
+      # cambia uno senza rigenerarlo fallisce qui.
+      - name: Stato generato allineato al codice
+        working-directory: ${{ runner.temp }}/doc-check
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/genera_stato.py --check
 
       # I siti di allocazione e prenotazione descritti in
       # docs/errori-e-limiti.md devono esistere ancora nella forma descritta.

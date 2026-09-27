@@ -143,6 +143,10 @@ cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc
 # senza diario, collegamenti dei documenti, e gli altri `scripts/verifica_*.py`
 for g in scripts/verifica_*.py; do python "$g" || break; done
 
+# docs/STATO.md e' generato dal codice: si rigenera dopo una modifica che lo
+# tocca, e la CI pretende che sia allineato
+python scripts/genera_stato.py --check
+
 # coverage (le soglie sono quelle della CI) e smoke del fuzzing
 scripts/coverage.sh
 scripts/fuzz-smoke.sh
@@ -161,6 +165,7 @@ sudo scripts/qualifica_profilo_isolato.sh <binario> <generatore>
 
 | documento | contenuto |
 |---|---|
+| [`docs/STATO.md`](docs/STATO.md) | che cosa il codice dichiara oggi: versioni, catalogo, comandi, feature, gate, test — generato dal codice |
 | [`docs/architettura.md`](docs/architettura.md) | crate, flusso planner/executor/kernel, determinismo, memoria, backend |
 | [`docs/piano-v5.md`](docs/piano-v5.md) | schema canonico, contratti, identità, migrazione dalla v4 |
 | [`docs/cli.md`](docs/cli.md) | comandi, binding degli input, formati, canali, exit code |
