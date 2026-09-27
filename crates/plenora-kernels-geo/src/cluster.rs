@@ -381,10 +381,15 @@ pub fn dbscan(
     dbscan_nullable(&geometries, eps, min_points)
 }
 
+/// `Internal` se la colpa non e' del piano: un'invariante saltata o una
+/// validazione che non ha concluso. Il resto e' `InvalidPlan`.
 fn cluster_error(error: &ClusterError) -> PlenoraError {
     match error {
         ClusterError::InternalInvariant(reason) => {
             PlenoraError::Internal(format!("geo.cluster_dbscan: {reason}"))
+        }
+        ClusterError::ValidazioneNonConclusa(_) => {
+            PlenoraError::Internal(format!("geo.cluster_dbscan: {error}"))
         }
         other => PlenoraError::InvalidPlan(format!("geo.cluster_dbscan: {other}")),
     }
@@ -696,6 +701,12 @@ mod tests {
     fn internal_cache_invariant_is_never_reported_as_invalid_input() {
         let mapped = cluster_error(&ClusterError::InternalInvariant("cache assente"));
         assert!(matches!(mapped, PlenoraError::Internal(_)));
+    }
+
+    #[test]
+    fn una_validazione_non_conclusa_non_accusa_il_piano() {
+        let mapped = cluster_error(&ClusterError::ValidazioneNonConclusa("forma"));
+        assert!(matches!(mapped, PlenoraError::Internal(_)), "{mapped}");
     }
 
     #[test]
