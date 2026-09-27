@@ -23,13 +23,12 @@ use std::path::Path;
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
 use plenora_core::arrow::schema::SchemaRef;
-use plenora_core::panic_policy::barriera_di_dipendenza;
+use plenora_core::panic_policy::{barriera_di_dipendenza, forma_payload};
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 
 use crate::geo_transport::error::ArrowTransportError;
 use crate::geo_transport::ipc::{
-    descrivi_panico, valida_file_e_rendi_footer, validate_ipc_file_framing,
-    validate_ipc_stream_framing, SeekSource,
+    valida_file_e_rendi_footer, validate_ipc_file_framing, validate_ipc_stream_framing, SeekSource,
 };
 pub use crate::geo_transport::ipc::{IpcLimits, DEFAULT_MAX_BODY_BYTES, MAX_TOTAL_IPC_MESSAGES};
 
@@ -225,7 +224,7 @@ fn guarded<T, F: FnOnce() -> Result<T>>(build: F) -> Result<T> {
         Ok(esito) => esito,
         Err(panico) => Err(PlenoraError::DataMapping(format!(
             "arrow-ipc in panico sullo schema della sorgente: {}",
-            descrivi_panico(&panico)
+            forma_payload(panico.as_ref())
         ))
         .with_phase(ErrorPhase::Read)),
     }
@@ -284,7 +283,7 @@ impl Iterator for BoundaryBatches {
                 self.poisoned = true;
                 Some(Err(PlenoraError::DataMapping(format!(
                     "arrow-ipc in panico leggendo un batch della sorgente: {}",
-                    descrivi_panico(&panico)
+                    forma_payload(panico.as_ref())
                 ))
                 .with_phase(ErrorPhase::Read)))
             }

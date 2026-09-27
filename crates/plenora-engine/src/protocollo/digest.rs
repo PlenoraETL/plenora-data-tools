@@ -29,6 +29,31 @@ pub const ALGORITMO_DIGEST: &str = "sha256";
 
 use crate::esadecimale32::{self, DaEsadecimale32, Esadecimale32, FormaNonValida};
 
+/// Lo SHA-256 di tutto cio' che `lettore` rende, a blocchi di `blocco` byte.
+///
+/// La memoria non cresce col file. Aprire la sorgente e dare un nome agli
+/// errori resta al chiamante, che sa che cosa sta leggendo.
+///
+/// # Errors
+///
+/// L'errore di `read`, invariato.
+pub fn sha256_da_lettore(
+    lettore: &mut impl std::io::Read,
+    blocco: usize,
+) -> std::io::Result<Esadecimale32> {
+    use sha2::{Digest as _, Sha256};
+
+    let mut digestore = Sha256::new();
+    let mut buffer = vec![0_u8; blocco];
+    loop {
+        let quanti = lettore.read(&mut buffer)?;
+        if quanti == 0 {
+            return Ok(Esadecimale32::dai_byte(digestore.finalize().into()));
+        }
+        digestore.update(&buffer[..quanti]);
+    }
+}
+
 /// Byte di un digest SHA-256: **32**, e l'autorita' e' quella della primitiva.
 pub const DIGEST_BYTES: usize = esadecimale32::BYTE;
 
