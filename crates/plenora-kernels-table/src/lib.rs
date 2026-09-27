@@ -907,6 +907,66 @@ pub fn scalar_as_f64_rounded(array: &dyn Array, row: usize) -> Result<Option<f64
     scalar_as_f64(array, row)
 }
 
+/// Valore scalare della riga come coppia: il double di
+/// [`scalar_as_f64_rounded`], per il calcolo, e il valore esatto del tipo
+/// nativo, per decidere.
+///
+/// Serve alle operazioni che calcolano in `Float64` per contratto ma
+/// **decidono** anche (classi di `table.bin`, distinti degli aggregati): la
+/// decisione passa dal valore esatto, il calcolo dal double. Il testo si legge
+/// come [`scalar_as_f64_rounded`] (spazi tolti, virgola decimale) e il suo
+/// valore esatto e' quello di [`NumericBound::parse`], o il double se il
+/// testo e' una forma che solo `f64` accetta (`inf`, `NaN`).
+///
+/// # Errors
+///
+/// Come [`scalar_as_f64_rounded`]; `Internal` per un tipo che quella
+/// conversione accetta e qui non ha un valore esatto.
+pub fn scalar_as_numero(array: &dyn Array, row: usize) -> Result<Option<(f64, NumericBound)>> {
+    let Some(valore) = scalar_as_f64_rounded(array, row)? else {
+        return Ok(None);
+    };
+    let any = array.as_any();
+    let esatto = if let Some(values) = any.downcast_ref::<Int64Array>() {
+        NumericBound::I64(values.value(row))
+    } else if let Some(values) = any.downcast_ref::<UInt64Array>() {
+        NumericBound::U64(values.value(row))
+    } else if let Some(values) = any.downcast_ref::<TimestampMillisecondArray>() {
+        NumericBound::I64(values.value(row))
+    } else if let Some(values) = any.downcast_ref::<Date32Array>() {
+        NumericBound::I64(i64::from(values.value(row)))
+    } else if let Some(values) = any.downcast_ref::<Float64Array>() {
+        NumericBound::F64(values.value(row))
+    } else if let Some(values) = any.downcast_ref::<Decimal128Array>() {
+        let DataType::Decimal128(_, scale) = values.data_type() else {
+            return Err(PlenoraError::Schema("decimal128 incoerente".into()));
+        };
+        NumericBound::Decimal {
+            unscaled: values.value(row),
+            scale: *scale,
+        }
+    } else if let Some(values) = any.downcast_ref::<StringArray>() {
+        NumericBound::parse(&values.value(row).trim().replace(',', "."))
+            .unwrap_or(NumericBound::F64(valore))
+    } else {
+        return Err(PlenoraError::Internal(
+            "tipo numerico senza valore esatto".into(),
+        ));
+    };
+    Ok(Some((valore, esatto)))
+}
+
+/// Ordine totale sul valore esatto, per deduplicare e ordinare.
+///
+/// [`compare_bounds`], con NaN dopo ogni numero e uguale a se stesso: senza
+/// questo NaN non sarebbe confrontabile e l'ordine non sarebbe totale. Lo zero
+/// negativo e' uguale allo zero.
+#[must_use]
+pub fn ordine_esatto(sinistra: NumericBound, destra: NumericBound) -> Ordering {
+    let nan = |bound: NumericBound| matches!(bound, NumericBound::F64(value) if value.is_nan());
+    compare_bounds(sinistra, destra).unwrap_or_else(|| nan(sinistra).cmp(&nan(destra)))
+}
+
 // ---------------------------------------------------------------------------
 // Confronti scalari tipizzati (filtri, regole di governance, assert_range).
 //

@@ -657,19 +657,42 @@ mod tests {
                             let raw = rows
                                 .iter()
                                 .map(|row| {
-                                    scalar_as_f64_rounded(batch.column(index).as_ref(), *row)
+                                    crate::scalar_as_numero(batch.column(index).as_ref(), *row)
                                 })
                                 .collect::<Result<Vec<_>>>()?;
                             if !aggregation.skip_null && raw.iter().any(Option::is_none) {
                                 return Ok(None);
                             }
-                            let mut values = raw.into_iter().flatten().collect::<Vec<_>>();
+                            let mut numeri = raw.into_iter().flatten().collect::<Vec<_>>();
                             if aggregation.distinct {
-                                values.sort_by(f64::total_cmp);
-                                values.dedup_by(|left, right| {
-                                    left.total_cmp(right) == Ordering::Equal
-                                });
+                                // Distinti sul valore esatto, per confronto a
+                                // coppie; poi l'ordine del percorso principale,
+                                // da cui dipende la somma in f64.
+                                let float64 = batch.column(index).data_type() == &DataType::Float64;
+                                let uguali = |a: &(f64, crate::NumericBound),
+                                              b: &(f64, crate::NumericBound)| {
+                                    if float64 {
+                                        a.0.total_cmp(&b.0)
+                                    } else {
+                                        crate::ordine_esatto(a.1, b.1)
+                                    }
+                                };
+                                let mut distinti: Vec<(f64, crate::NumericBound)> = Vec::new();
+                                for numero in numeri {
+                                    if !distinti
+                                        .iter()
+                                        .any(|visto| uguali(visto, &numero) == Ordering::Equal)
+                                    {
+                                        distinti.push(numero);
+                                    }
+                                }
+                                distinti.sort_by(uguali);
+                                numeri = distinti;
                             }
+                            let mut values = numeri
+                                .into_iter()
+                                .map(|(valore, _)| valore)
+                                .collect::<Vec<_>>();
                             if values.is_empty() {
                                 return Ok(None);
                             }
@@ -940,6 +963,50 @@ mod tests {
         assert!(
             message.contains("richiede il parametro quantile"),
             "messaggio inatteso: {message}"
+        );
+    }
+
+    /// Due interi oltre 2^53 con lo stesso double sono due valori distinti:
+    /// la varianza campionaria di due valori e' definita (0 sul double),
+    /// quella di un valore solo no.
+    #[test]
+    fn distinct_deduplica_sul_valore_esatto() {
+        let base = 1_i64 << 53;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("g", DataType::Int64, false),
+                Field::new("n", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 1, 1])),
+                Arc::new(Int64Array::from(vec![
+                    Some(base),
+                    Some(base + 1),
+                    Some(base),
+                ])),
+            ],
+        )
+        .expect("fixture");
+        let config = Aggregate {
+            group_by: vec!["g".into()],
+            aggregations: vec![Aggregation {
+                distinct: true,
+                alias: "d_var".into(),
+                ..agg("n", AggFunction::Variance)
+            }],
+        };
+        assert_aggregate_parity(&batch, &config);
+        let risultato = aggregate(&batch, &config).expect("aggregate");
+        let varianza = risultato
+            .column_by_name("d_var")
+            .expect("d_var")
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("f64")
+            .clone();
+        assert!(
+            !varianza.is_null(0),
+            "due valori distinti: la varianza campionaria e' definita"
         );
     }
 

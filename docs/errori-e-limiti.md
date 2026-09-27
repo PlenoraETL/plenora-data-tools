@@ -640,8 +640,9 @@ d'origine di colonne e letterali, non sul loro double. Un operando prodotto da
 un calcolo (aritmetica, `round`, `floor`, `ceil`, `power`) vale il proprio
 double, che è il risultato dichiarato di quel calcolo; `negate` e `abs`
 restano esatti, e rifiutano un `Decimal128` il cui opposto non sta in `i128`.
-Due percorsi decisionali hanno ancora la proprietà: vedi
-[la voce che li dichiara](#tablebin-e-gli-aggregati-distinct-decidono-su-valori-arrotondati).
+Allo stesso modo `table.bin` assegna la classe e gli aggregati con
+`distinct` deduplicano sul valore esatto (`scalar_as_numero`), mentre bordi e
+riduzioni restano sul double.
 
 Non è una deroga con rientro: è la semantica dichiarata di quelle operazioni.
 
@@ -675,23 +676,24 @@ senza errore.
 Nessuna delle due è una modifica locale: la prima cambia `Value` per tutto il
 workspace.
 
-### `table.bin` e gli aggregati `distinct` decidono su valori arrotondati
+### Il testo numerico in notazione esponenziale si legge come double
 
-**La regola.** `table.bin` assegna la classe confrontando con i bordi il
-double della colonna (`scalar_as_f64_rounded`), e gli aggregati numerici con
-`distinct` deduplicano i double (`Float64Source`). Un `Int64` oltre 2^53 o un
-`Decimal128` frazionario possono finire nella classe accanto, o essere contati
-come un solo valore distinto.
+**La regola.** Una cella `Utf8` interpretata come numero si legge esatta con
+`NumericBound::parse` quando è un intero o un decimale posizionale fino a 38
+cifre significative; ogni altra forma che `f64` accetta (`9007199254740993e0`,
+`inf`, `NaN`, un decimale più lungo) diventa il suo double.
 
-**L'ambito.** `table.bin` e le funzioni numeriche di `table.aggregate` con
-`distinct`, compreso l'oracolo di riferimento degli aggregati.
+**L'ambito.** Le decisioni sul testo numerico: le classi di `table.bin`, i
+distinti degli aggregati e i confronti con un letterale (`scalar_compare`:
+filtri e regole di governance su colonne `Utf8`).
 
-**Il pericolo che questo dichiara.** Una classe o un conteggio di distinti
-sbagliati, senza errore.
+**Il pericolo che questo dichiara.** Due testi numerici in notazione
+esponenziale che differiscono oltre la precisione di un double contano come lo
+stesso valore, senza errore.
 
-**La condizione di rientro.** Confrontare e deduplicare sul valore esatto,
-come fanno i confronti di `table.expression`; la correzione segue questa
-voce e la toglie.
+**La condizione di rientro.** Un parser esatto per la notazione esponenziale
+(mantissa decimale e esponente in scala), oppure il rifiuto esplicito di quelle
+forme dove il valore serve a decidere.
 
 ### Le funzioni di rango non accettano colonne testuali
 
