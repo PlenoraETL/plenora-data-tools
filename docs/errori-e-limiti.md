@@ -138,83 +138,43 @@ sono, invece di scoprirlo aspettando.
 
 ### Il percorso isolato usa un altro meccanismo, non lo stesso handler
 
-`run` sul percorso **isolato** (`PR-12`, `isolamento::esecuzione_isolata`,
-solo Linux) non installa l'handler Ctrl-C di sopra: quello (`ctrlc::
-set_handler`) fa nascere un thread che vive per tutta la vita del processo, e
-quel thread farebbe fallire `isolamento::canale::accerta_monothread` — che
-accerta un solo task, adesso, subito prima di rendere i descrittori
-ereditabili — a **entrambe** le finestre di spawn (worker e verificatore),
-non solo alla prima. Il percorso isolato installa invece
-`signal_hook::flag::register`/`register_conditional_shutdown`
-(`crate::installa_gestore_segnale_isolato` in `plenora-cli`): non fanno
-nascere alcun thread (verificato leggendo il sorgente della dipendenza, fino
-alla `sigaction` grezza — non assunto dal nome), scrivono direttamente il
-bit che `CancellationToken::is_cancelled` gia' legge
-(`CancellationToken::condividi_flag`). La registrazione e' unica per tutta la
-vita del processo, quindi copre la fase worker, la transizione fra le due
-fasi e la fase verificatore senza differenze fra le tre — non c'e'
-un'installazione per finestra da ripetere o da perdere. L'`unsafe` che la
-dipendenza contiene (`signal-hook-registry`, attorno alla `sigaction` grezza)
-resta dentro la dipendenza: non e' scritto nel workspace, dove `unsafe_code =
-"forbid"` resta invariato.
+**La regola.** `run` sul percorso isolato (`isolamento::esecuzione_isolata`,
+solo Linux) non installa l'handler di `ctrlc`: farebbe nascere un thread per
+tutta la vita del processo, e `isolamento::canale::accerta_monothread`, che
+pretende un task solo prima di rendere ereditabili i descrittori, fallirebbe a
+entrambe le finestre di spawn. Registra invece
+`signal_hook::flag::register` e `register_conditional_shutdown`
+(`installa_gestore_segnale_isolato` in `plenora-cli`), che non creano thread e
+scrivono il bit che `CancellationToken::is_cancelled` già legge
+(`CancellationToken::condividi_flag`). La registrazione è una sola per tutta la
+vita del processo: copre fase worker, transizione e fase verificatore allo
+stesso modo. L'`unsafe` attorno alla `sigaction` resta nella dipendenza; nel
+workspace `unsafe_code = "forbid"` non cambia.
 
-**La transizione ha due controlli sincroni propri, non solo l'attesa del
-prossimo confine cooperativo di `conduci_isolato`.** Fra la distruzione del
-dominio del worker e la nascita di quello del verificatore non gira nessuna
-sorveglianza che osservi il token da sola: un controllo esplicito precede la
-creazione del secondo dominio, e un secondo precede il suo spawn
-(`esecuzione_isolata.rs`, `dialoga_con_verificatore`). Un terzo controllo,
-subito dopo lo spawn, chiude la finestra che nessuno dei due precedenti puo'
-chiudere del tutto — il segnale puo' arrivare esattamente fra il controllo e
-la `spawn()` vera: se il verificatore e' gia' nato quando la cancellazione si
-osserva, viene terminato e raccolto subito (`isolamento::prova::chiudi`, lo
-stesso meccanismo gia' usato dalle righe accanto per gli altri fallimenti
-precoci del dialogo), non lasciato vivo ne' zombie. Qualificato dal vero,
-con segnali reali e nessuna simulazione: tutte e tre le finestre rifiutano
-senza pubblicare, e il conteggio dei task del coordinatore
-(`/proc/<pid>/task`) e' risultato **1** a ogni finestra di spawn osservata.
+La transizione fra i due domini, dove nessuna sorveglianza osserva il token da
+sola, ha tre controlli propri in `esecuzione_isolata.rs`: prima di creare il
+dominio del verificatore, prima dello spawn, e subito dopo — se il verificatore
+è già nato quando la cancellazione si osserva, viene terminato e raccolto. La
+cancellazione singola esce `cancelled`, exit **130**, come sul percorso non
+isolato; qualificata con segnali reali sulle tre finestre, senza pubblicazione
+né residui.
 
-**Differenze dichiarate, non equivalenza presunta, rispetto all'handler del
-percorso non isolato:**
+**Che cosa è diverso, e va detto.**
 
-- **Nessun messaggio interattivo sul primo Ctrl-C**: `flag::register` scrive
-  solo un `AtomicBool`, senza un punto per stampare — il messaggio "ctrl-c:
-  annullamento in corso..." non compare sul percorso isolato.
-- **Nessun messaggio sul secondo Ctrl-C**: `register_conditional_shutdown`
-  esce con `signal_hook::low_level::exit`, async-signal-safe per
-  costruzione — non c'e' un "dopo" in cui stampare "secondo ctrl-c: uscita
-  forzata".
-- **Il secondo Ctrl-C esce con lo stesso codice (130) ma senza garanzia di
-  cleanup**: `low_level::exit` salta `atexit` e ogni `Drop` — proprieta' che
-  il percorso non isolato condivide gia' (`std::process::exit` nel thread di
-  `ctrlc` salta ugualmente l'unwinding), ma qui osservata direttamente: in
-  una qualificazione dal vivo, un secondo Ctrl-C durante la fase worker ha
-  lasciato vivo il processo worker gia' avviato (ancora in esecuzione dopo
-  l'uscita del coordinatore) e il suo dominio cgroup2 non rimosso. Nessun
-  dato sensibile ne' output pubblicato — la barriera di
-  `verifica_poi_pubblica` resta a monte di questo — ma non "pulito" nel senso
-  in cui lo e' una cancellazione singola.
-**L'exit code della cancellazione singola sul percorso isolato e' 130
-(`cancelled`), come sul percorso non isolato.** Una prima versione di questo
-lavoro classificava `EsitoClassificato::Cancellato` — e i tre controlli
-sincroni della transizione — come `PlenoraError::Internal` (exit 70): non era
-una scelta dichiarata, era un difetto del contratto di questa PR, corretto
-prima che il lavoro si considerasse concluso. `isolamento::macchina::
-interpreta_classificato` rende ora `PlenoraError::Cancelled` per
-`EsitoClassificato::Cancellato` — stessa categoria (`cancelled`) e stesso
-`EXIT_CANCELLED` (130) del percorso non isolato — e i tre controlli sincroni
-della transizione (`esecuzione_isolata.rs`) fanno lo stesso, con `node`
-(`"worker"`/`"verificatore"`) e `operation` (`"dominio isolato"`/`"creazione
-dominio"`/`"spawn"`) che descrivono dove la cancellazione e' stata osservata
-— non un nodo del DAG, che qui non esiste — e nessun `execution_id` (stringa
-vuota, omessa dal contesto reso). La precedenza degli altri esiti
-(`LimiteAttribuito`, `Timeout`, `PressioneNonAttribuita`,
-`EvidenzaNonUtilizzabile`, l'esito dichiarato dal worker,
-`TerminazioneAmbigua`) non e' toccata: solo il tipo di errore che il ramo
-`Cancellato` produce e' cambiato, non la logica che decide quale ramo vince.
-Verificato dal vero (`plenora-cli run`, segnali reali) su tutte e tre le
-finestre — fase worker, transizione, fase verificatore — con categoria
-`cancelled`, exit 130, nessuna pubblicazione e nessun residuo in ciascuna.
+- Nessun messaggio sul primo né sul secondo Ctrl-C: `flag::register` scrive
+  solo un `AtomicBool`, e l'uscita del secondo è async-signal-safe, senza un
+  «dopo» in cui stampare.
+- **Il secondo Ctrl-C esce 130 senza pulizia.** `signal_hook::low_level::exit`
+  salta `atexit` e ogni `Drop`: osservato dal vivo, un secondo Ctrl-C durante
+  la fase worker lascia **vivo il worker** e **il suo dominio cgroup** non
+  rimosso. Nessun output è pubblicato — la barriera di `verifica_poi_pubblica`
+  sta a monte — ma la macchina resta con un processo e un cgroup da togliere.
+
+**Il pericolo.** Chi usa il secondo Ctrl-C come «esci subito» sul profilo
+isolato lascia residui che nessuno raccoglie.
+
+**La condizione di rientro.** Un'uscita forzata che termini il dominio con
+`cgroup.kill` prima di uscire, restando async-signal-safe.
 
 ## Panic policy
 
@@ -1095,83 +1055,6 @@ che lo supera e la verifica, con un test, che i massimi serializzati stiano
 ancora sotto `MAX_PROTOCOL_FRAME_BYTES`; quei massimi usano caratteri che JSON
 espande in `\uXXXX`, o l'espansione degli escape non verrebbe esercitata.
 Renderli configurabili è fuori discussione finché il canale resta interno.
-
-### Il verificatore ha un incarico proprio: `IncaricoVerifica`, `EsitoVerificaSulFilo` e il terzo descrittore
-
-Con la topologia a due domini (`isolamento.md#2-quater-topologia-chi-osserva-chi`) i tipi di messaggio
-sono **otto**, non sei: `incarico_verifica` — diciassette caratteri,
-`INVOLUCRO_BYTES` lo usa come nome più lungo al posto di `progresso` — ed
-`esito_verifica`. `MAX_PROTOCOL_FRAME_BYTES` resta comunque dominato
-dall'`Incarico`, che porta la lista di ingressi che né `IncaricoVerifica` né
-`EsitoVerificaSulFilo` hanno.
-
-**Che cosa porta l'incarico, e perché proprio questo.** `IncaricoVerifica`
-(`protocollo::messaggi::IncaricoVerifica`) ha quattro campi — il fingerprint
-del contratto atteso, il digest atteso, i conteggi attesi, il budget di
-memoria governata — e nessuno di più: non il piano, non gli ingressi, non un
-percorso. Il `commit_token` non c'è: è già stato trasmesso e accettato nel
-`Saluto` (§4.3), e ripeterlo in un secondo messaggio darebbe due autorità
-sulla stessa cosa. Il tetto di memoria viaggia come `u64` singolo — lo stesso
-input che `ipc_boundary::limits_from_memory_budget` già riceve nel percorso
-in-process — e non come `IpcLimits` già derivato: un solo numero che i due
-lati riducono allo stesso modo introduce meno stato duplicato che
-trasportare l'intera struttura.
-
-Il campo `digest_atteso` porta gli stessi due tetti del `digest_artefatto` di
-`EsitoWorkerSulFilo::Successo` (`MAX_IDENTIFICATORE_BYTES` sull'algoritmo,
-`MAX_DIGEST_BYTES` sul valore): è la stessa forma, per lo stesso motivo —
-`algoritmo` è un campo sciolto accanto al valore, quindi non ha la forma
-canonica di un tipo dedicato. `contract_fingerprint_atteso` non ha invece un
-tetto da applicare: è un `DigestSha256`, e la forma canonica è del tipo.
-
-**Perché l'esito del verificatore è un tipo distinto, e non un riuso di
-`EsitoWorkerSulFilo`.** Un `Corpo::Esito` dichiara «ho eseguito il piano»; un
-`Corpo::EsitoVerifica` dichiara «ho riconfermato questo digest e questi
-conteggi» — non ha eseguito niente, ha riletto. Le due affermazioni non sono
-la stessa cosa anche quando la forma coincide (successo con digest e
-conteggi, errore tipizzato a quattro assi, panic), e portarle sullo stesso
-tipo di filo renderebbe quella distinzione invisibile a chi legge il
-protocollo — lo stesso principio per cui `Incarico` e `IncaricoVerifica`
-restano due messaggi anche se quasi sovrapponibili nella forma.
-`EsitoVerificaSulFilo` (`protocollo::messaggi::EsitoVerificaSulFilo`) porta
-quindi le stesse tre varianti di `EsitoWorkerSulFilo` — `Successo`, `Errore`,
-`Panic` — con gli stessi tetti (condivisi via `limita_digest_artefatto` e
-`limita_errore_sul_filo` in `codifica.rs`, per non duplicare il giudizio),
-ma è un tipo Rust diverso sotto un tag di messaggio diverso
-(`Corpo::EsitoVerifica`, `TipoMessaggio::EsitoVerifica`).
-
-La macchina a stati del coordinatore (`isolamento::macchina`) resta **una
-sola** per i due dialoghi: `Registro` porta un campo `ruolo: Ruolo`
-(`Ruolo::Worker` o `Ruolo::Verificatore`), e `Registro::messaggio` accetta
-come esito che chiude il dialogo **solo** il corpo che corrisponde al ruolo
-— un `Corpo::EsitoVerifica` arrivato durante un dialogo con un worker (o
-viceversa) non chiude la conversazione: finisce contato come messaggio fuori
-posto, esattamente come un `Saluto` o un `Incarico` arrivati lì per errore.
-Lo stesso giudizio si applica un livello più a monte, in
-`produttori::fine_del_canale`, che già a quel punto smette di trattare come
-"esito valido" un corpo che non è quello atteso per il ruolo — così un
-messaggio del tipo sbagliato non arriva nemmeno alla coda come un possibile
-esito.
-
-**Il terzo descrittore.** Lo spawner rendeva ereditabili esattamente due
-descrittori — le due pipe del canale — per ogni worker. Con il verificatore
-se ne aggiunge un terzo, opzionale: l'artefatto, aperto in sola lettura dal
-coordinatore **prima** che il verificatore nasca. `RichiestaSpawner` lo porta
-come nono argomento (`VERSIONE_RICHIESTA` passa da `plenora-spawner-2` a
-`plenora-spawner-3`), con `-1` per «assente» — la stessa forma canonica degli
-altri descrittori (`isolamento::descrittore_canonico`), mai un `Option`
-serializzato a mano. Quando è assente (l'avvio di un worker ordinario) lo
-spawner non tocca il terzo passo del 4-bis: nessun descrittore in meno di
-rigore, semplicemente nessun descrittore da cedere.
-
-Il controllo che lo spawner applica non è quello delle pipe:
-`canale::accerta_artefatto` pretende un **file regolare**, non una FIFO, ma
-riusa esattamente lo stesso accertamento in due tempi delle pipe —
-`numero_ammissibile`, `flag_di`/`verso_dai_flag` per il verso (sempre
-`Verso::Lettura`), e dopo la riapertura da `/proc/self/fd/N` lo stesso
-confronto d'impronta `(dispositivo, inode)` di `accerta_adozione`. Nessun
-controllo «è una FIFO» — sarebbe falso per un file regolare — e nessun
-abbassamento di rigore sulle altre tre prove.
 
 ### Moduli compilati solo sotto `test` e `internals`
 

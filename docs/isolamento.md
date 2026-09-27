@@ -978,6 +978,41 @@ difesa contro entrambi.
 
 ---
 
+### 4.3-bis Messaggi del verificatore
+
+Con la topologia a due domini ([§2-quater](#2-quater-topologia-chi-osserva-chi))
+il verificatore ha due messaggi propri, e un descrittore in più.
+
+| messaggio | direzione | contenuto |
+|---|---|---|
+| `IncaricoVerifica` | supervisore → verificatore | fingerprint del contratto atteso, digest atteso, conteggi attesi, budget di memoria governata come `u64` singolo |
+| `EsitoVerifica` (`EsitoVerificaSulFilo`) | verificatore → supervisore | `Successo` con digest e conteggi riconfermati, `Errore` tipizzato a quattro assi, oppure `Panic` con la sola forma |
+
+L'incarico non porta il piano, gli ingressi o un percorso, e nemmeno il
+`commit_token`, che sta solo nel `Saluto`: due autorità sulla stessa cosa
+divergono. Il budget viaggia come il numero che
+`ipc_boundary::limits_from_memory_budget` riceve già in-process, non come
+`IpcLimits` derivato: un numero ridotto allo stesso modo dai due lati porta meno
+stato duplicato.
+
+L'esito è un tipo distinto da `EsitoWorkerSulFilo` anche dove la forma
+coincide: «ho eseguito il piano» e «ho riletto e riconfermato» non sono la
+stessa affermazione. I tetti sono gli stessi, e li applica una funzione sola
+(`limita_digest_artefatto`, `limita_errore_sul_filo`).
+
+La macchina a stati del coordinatore resta una per i due dialoghi: `Registro`
+porta un `Ruolo`, e un esito che non è quello del ruolo non chiude il dialogo —
+conta come messaggio fuori posto, e già `produttori::fine_del_canale` non lo
+tratta come esito.
+
+**Il terzo descrittore.** L'artefatto, aperto in sola lettura dal coordinatore
+**prima** che il verificatore nasca, entra nella `RichiestaSpawner` come
+argomento opzionale nella forma canonica dei descrittori
+(`isolamento::descrittore_canonico`), `-1` se assente. Lo spawner lo accerta
+con `canale::accerta_artefatto`: un **file regolare**, in lettura, e dopo la
+riapertura da `/proc/self/fd/N` la stessa impronta `(dispositivo, inode)`
+delle pipe.
+
 ### 4.4 Forma sul filo
 
 Un frame è un prefisso di lunghezza `u32` **big-endian** seguito da JSON UTF-8
