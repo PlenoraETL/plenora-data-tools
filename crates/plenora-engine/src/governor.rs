@@ -1,32 +1,18 @@
 //! Governor della memoria del piano e batch governati.
 //!
-//! Il budget, che cosa comprende e dove la garanzia si ferma sono in
-//! architettura.md#memoria e in errori-e-limiti.md#memoria-governata.
+//! Budget, perimetro e limiti della garanzia: architettura.md#memoria ed
+//! errori-e-limiti.md#memoria-governata.
 //!
-//! Perimetro di `max_governed_memory_bytes`: la memoria Arrow governata dall'engine —
-//! i batch che attraversano gli archi del DAG e le materializzazioni
-//! intermedie dei segmenti blocking. Il conteggio avviene **ai confini di
-//! batch**, mai per riga, e il governor non percorre mai ricorsivamente i
-//! batch: i byte di un lease sono fissati all'acquisizione e nessun nodo li
-//! riconta (overhead architettura.md#memoria).
+//! Il conteggio avviene **ai confini di batch**, mai per riga: i byte di un
+//! lease sono fissati all'acquisizione e nessun nodo li riconta. Ogni batch
+//! viaggia in un [`GovernedBatch`] con il suo [`MemoryLease`]
+//! reference-counted, condiviso al fan-out e rilasciato al `Drop`
+//! dell'ultimo riferimento: la quota si conta una volta sola.
 //!
-//! Ownership: ogni batch viaggia in un [`GovernedBatch`] con il suo
-//! [`MemoryLease`] — reference-counted (`Arc` interno), condiviso al fan-out
-//! (tee) e rilasciato al `Drop` dell'ultimo riferimento. La quota di un
-//! batch e' contata **una sola volta**, all'ingresso dell'arco; i cloni del
-//! tee condividono il lease senza mai duplicare il conteggio.
-//!
-//! Protocollo di reservation a tre vie ([`ReservationResult`], architettura.md#memoria):
-//! l'esecuzione fra i nodi e' seriale e il governor emette solo
-//! `Granted` — vedi [`MemoryGovernor::try_reserve`] per la regola v1 e il
-//! perche' gli altri due esiti non sono attuabili in seriale.
-//!
-//! Spill: `sort`/`distinct`/`aggregate` hanno una variante
-//! spilled cablata nell'executor, ma l'attivazione e' **PREVENTIVA** ai punti
-//! di dispatch (soglia stimata "byte input > `max_governed_memory_bytes`", architettura.md#memoria
-//! "attivazione prima dell'esaurimento"), NON guidata da una reservation
-//! fallita: `MustSpill` resta non emesso in v1 — il re-scheduling su
-//! reservation fallita richiede il planner che riprova (M3).
+//! Il runtime seriale emette solo `Granted` (vedi
+//! [`MemoryGovernor::try_reserve`]). Lo spill di `sort`/`distinct`/`aggregate`
+//! si attiva preventivamente al dispatch su soglia stimata, non da una
+//! reservation fallita; il re-scheduling richiede il planner che riprova (M3).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,15 +34,12 @@ pub enum ReservationResult {
     /// La quota potrebbe liberarsi dopo un progresso globale del piano: il
     /// ramo richiedente (che per invariante architettura.md#memoria non trattiene risorse)
     /// puo' essere sospeso e riprovare, senza busy-waiting. Richiede uno
-    /// scheduler con rami sospendibili: esiste nell'API per il runtime
-    /// parallelo (M3) ma non e' MAI emesso dalla v1 seriale.
+    /// scheduler con rami sospendibili (M3): il runtime seriale non lo emette.
     RetryAfterProgress,
     /// Il richiedente ha una strategia di spill e deve attivarla (preferita
-    /// a nuova quota, architettura.md#memoria). Resta MAI emesso in v1: lo spill selettivo
-    /// esiste (sort/distinct/aggregate spilled) ma la sua
-    /// attivazione e' PREVENTIVA ai punti di dispatch, su soglia stimata —
-    /// non su reservation fallita. Emetterlo richiede il planner che
-    /// riprova il nodo con una strategia diversa (re-scheduling, M3).
+    /// a nuova quota, architettura.md#memoria). Non e' mai emesso: lo spill di
+    /// sort/distinct/aggregate si attiva preventivamente al dispatch, su soglia
+    /// stimata; emetterlo richiede il planner che riprova il nodo (M3).
     MustSpill,
 }
 
@@ -140,20 +123,10 @@ impl MemoryLease {
 
 /// Contabilita' del governor, tutta sotto **un solo** lock.
 ///
-/// # Perche' un lock e non atomici separati
-///
-/// I contatori non sono indipendenti: `reserved`, `live` e `births`
-/// descrivono lo stesso fatto — quali lease esistono e quanto trattengono.
-/// Tenerli in atomici distinti li rende aggiornabili solo uno alla volta, e
-/// uno snapshot che li legge separatamente puo' cadere in mezzo: byte gia'
-/// contati e lease non ancora, o viceversa. Non e' un problema in v1 seriale,
-/// ma lo snapshot e' osservabilita' e l'osservabilita' incoerente e' peggio
-/// di quella assente.
-///
-/// Sotto un lock unico ogni acquisizione, ogni rilascio e ogni snapshot sono
-/// **linearizzabili**: chi legge vede uno stato che e' realmente esistito. Il
-/// costo e' un mutex per lease — cioe' per batch, mai per riga — e il
-/// percorso lo prende comunque, per registrare la nascita del lease.
+/// `reserved`, `live` e `births` descrivono lo stesso fatto: in atomici
+/// separati uno snapshot potrebbe cadere fra due aggiornamenti. Sotto un lock
+/// unico acquisizioni, rilasci e snapshot sono linearizzabili, al costo di un
+/// mutex per lease (cioe' per batch).
 #[derive(Debug)]
 struct Contabilita {
     reserved: u64,
@@ -245,12 +218,9 @@ impl MemoryGovernor {
 
     /// Eta' del lease piu' vecchio (`None` se non ci sono lease vivi).
     ///
-    /// Il piu' vecchio e' quello con l'**istante minimo**, non quello con
-    /// l'id minore. Con la contabilita' sotto un lock unico i due ordini oggi
-    /// **non possono divergere**: id e istante sono assegnati nella stessa
-    /// sezione critica, nell'ordine. Il minimo degli istanti non corregge
-    /// quindi un caso raggiungibile — esprime la semantica giusta, e regge se
-    /// un domani l'assegnazione dell'id uscisse dal lock.
+    /// Il piu' vecchio e' quello con l'**istante minimo**, non con l'id minore:
+    /// sotto il lock unico i due ordini coincidono, ma il minimo degli istanti
+    /// e' la semantica giusta e regge anche se l'id uscisse dal lock.
     #[must_use]
     pub fn oldest_lease_age(&self) -> Option<Duration> {
         self.shared
@@ -301,18 +271,11 @@ impl MemoryGovernor {
 
     /// Reservation a tre vie (architettura.md#memoria).
     ///
-    /// Regola v1 (seriale): l'acquisizione e' **immediata** —
-    /// `Granted` se il budget residuo copre `bytes`. Se la quota manca,
-    /// l'architettura.md#memoria prescriverebbe `RetryAfterProgress` (sospensione del ramo
-    /// e retry dopo un progresso globale) o `MustSpill` (strategia di spill
-    /// preferita): in seriale NESSUNO dei due esiti e' attuabile — non
-    /// esiste uno scheduler che sospenda i rami (M3) ne' un planner che
-    /// riprovi il nodo con lo spill (M3; lo spill e' attivato
-    /// PREVENTIVAMENTE al dispatch, su soglia stimata, non da qui) — quindi
-    /// resta l'unico esito residuo dell'architettura.md#memoria, il fail-fast "nessuna
-    /// strategia sicura disponibile".
-    /// Per questo `RetryAfterProgress` e `MustSpill` esistono nell'API ma
-    /// non sono MAI emessi da questa implementazione.
+    /// Nel runtime seriale l'acquisizione e' **immediata**: `Granted` se il
+    /// budget residuo copre `bytes`, altrimenti fail-fast. `RetryAfterProgress`
+    /// e `MustSpill` richiederebbero uno scheduler che sospenda i rami o un
+    /// planner che riprovi con lo spill (M3): esistono nell'API ma non sono mai
+    /// emessi.
     ///
     /// # Errors
     ///
@@ -340,50 +303,19 @@ impl MemoryGovernor {
 
     /// **Permesso atomico**: verifica e prenota in UNA sola operazione.
     ///
-    /// E' il primitivo su cui poggia tutto il resto — `try_reserve` e
-    /// `reserve` ne sono involucri — e l'unico punto del crate in cui la
-    /// quota viene presa.
-    ///
-    /// # Perche' esiste
-    ///
-    /// Leggere un contatore e poi prenotare in base a quella lettura e' due
-    /// operazioni: fra le due un altro richiedente puo' inserirsi, e la
-    /// decisione risulta presa su uno stato gia' superato. In v1 seriale la
-    /// finestra non si apre, ma la forma e' sbagliata e con uno scheduler
-    /// parallelo diventerebbe un TOCTOU silenzioso. Qui verifica e
-    /// prenotazione avvengono nella stessa sezione critica.
-    ///
-    /// # I tre esiti sono distinti, e devono restarlo
+    /// E' l'unico punto del crate in cui la quota viene presa (`try_reserve` e
+    /// `reserve` ne sono involucri): verifica e prenotazione nella stessa
+    /// sezione critica, senza TOCTOU.
     ///
     /// - `Ok(Some(permesso))`: quota concessa;
-    /// - `Ok(None)`: **il budget non basta**. Non e' un errore, e' una
-    ///   decisione: chi ha un'alternativa — per esempio passare al disco —
-    ///   non deve costruire e poi scartare un errore;
-    /// - `Err(Internal)`: **la contabilita' e' incoerente**. Un diniego di
-    ///   budget e un errore interno non vanno confusi: il primo dipende dal
-    ///   piano e dai limiti, il secondo e' un'invariante nostra rotta, e
-    ///   trattarli allo stesso modo farebbe cercare la causa nel posto
-    ///   sbagliato.
+    /// - `Ok(None)`: il budget non basta. E' una decisione, non un errore: chi
+    ///   ha un'alternativa (il disco) non costruisce e scarta un errore;
+    /// - `Err(Internal)`: la contabilita' e' incoerente, un'invariante nostra.
     ///
-    /// # Proprieta'
-    ///
-    /// - **aritmetica controllata ovunque**: byte, contatore dei lease vivi e
-    ///   generatore di id passano tutti da `checked_add`/`checked_sub`. Un
-    ///   superamento non avvolge mai in silenzio: marca la contabilita' come
-    ///   corrotta e da quel momento ogni richiesta fallisce (fail-closed);
-    /// - **nessuna prenotazione parziale**: le mutazioni avvengono in una
-    ///   sola sezione critica, e se una qualsiasi non e' rappresentabile
-    ///   nessuna viene pubblicata;
-    /// - **rilascio esatto**: la quota torna al governor al `Drop` dell'ultimo
-    ///   riferimento, quindi anche lungo un unwind da errore o da
-    ///   cancellazione. Il doppio rilascio e' impossibile per costruzione: non
-    ///   esiste alcun metodo che rilasci, esiste solo il `Drop`;
-    /// - **`bytes == 0`** e' un permesso valido a costo zero: semplifica i
-    ///   chiamanti la cui dimensione calcolata puo' risultare nulla.
-    ///
-    /// Il permesso va **tenuto**: scartarlo lo rilascia immediatamente e la
-    /// quota torna disponibile, che e' quasi sempre il contrario di quello
-    /// che chi lo ha chiesto vuole. Da qui `#[must_use]`.
+    /// Aritmetica controllata ovunque (un superamento marca la contabilita'
+    /// corrotta, e da li' ogni richiesta fallisce); nessuna prenotazione
+    /// parziale; rilascio esatto al `Drop`, unico modo di rilasciare. Un
+    /// permesso scartato rilascia subito la quota: da qui `#[must_use]`.
     ///
     /// # Errors
     ///
@@ -427,14 +359,9 @@ impl MemoryGovernor {
                 ));
             };
             let id = stato.next_id;
-            // Biiezione `live == births.len()`: un id gia' presente
-            // significherebbe due lease con la stessa identita', e la mappa
-            // ne perderebbe uno senza che nessun contatore se ne accorga.
-            //
-            // Il controllo sta PRIMA di ogni mutazione: verificarlo dopo aver
-            // scritto `reserved` lascerebbe byte prenotati su una richiesta
-            // fallita — una prenotazione parziale, cioe' esattamente cio' che
-            // questo primitivo promette di non produrre.
+            // Biiezione `live == births.len()`: un id gia' presente farebbe
+            // perdere un lease alla mappa. Il controllo precede ogni
+            // mutazione, per non lasciare una prenotazione parziale.
             if stato.births.contains_key(&id) {
                 stato.corrotta = Some("id di lease duplicato");
                 drop(stato);
@@ -446,13 +373,11 @@ impl MemoryGovernor {
             stato.live = live;
             stato.next_id = next_id;
             stato.births.insert(id, created);
-            // Biiezione `live == births.len()` verificata SEMPRE e in modo
-            // fallibile. Un `debug_assert_eq!` qui sarebbe una primitiva di
-            // panico nel codice di produzione (errori-e-limiti.md#panic-policy)
-            // nel punto peggiore: il panico partirebbe con il mutex tenuto e
-            // a mutazioni gia' scritte, lasciando la contabilita' avvelenata
-            // e non dichiarata corrotta. Se l'invariante cade, lo stato viene
-            // marcato corrotto PRIMA di tornare osservabile.
+            // Biiezione `live == births.len()` verificata sempre e in modo
+            // fallibile: un panico qui (errori-e-limiti.md#panic-policy)
+            // partirebbe col mutex tenuto e a mutazioni scritte. Se
+            // l'invariante cade, lo stato si marca corrotto prima di tornare
+            // osservabile.
             if u64::try_from(stato.births.len()) != Ok(stato.live) {
                 stato.corrotta = Some("biiezione fra lease vivi e nascite registrate violata");
                 drop(stato);
@@ -480,8 +405,8 @@ impl MemoryGovernor {
         }))
     }
 
-    /// Acquisizione v1: il lease, o l'errore fail-fast (regola in
-    /// [`Self::try_reserve`]).
+    /// Acquisizione nel runtime seriale: il lease, o l'errore fail-fast
+    /// (regola in [`Self::try_reserve`]).
     ///
     /// # Errors
     ///
@@ -489,11 +414,9 @@ impl MemoryGovernor {
     pub fn reserve(&self, bytes: u64, owner: &str) -> Result<MemoryLease> {
         match self.try_reserve(bytes, owner)? {
             ReservationResult::Granted(lease) => Ok(lease),
-            // Ramo DIFENSIVO: la v1 non emette mai questi esiti (vedi
-            // `try_reserve`). Se ci arrivasse, sarebbe un'invariante nostra
-            // rotta — non un piano sbagliato e non un budget esaurito.
-            // `Internal` lo dice; `InvalidPlan` manderebbe chi legge a
-            // cercare un errore nel proprio piano.
+            // Ramo difensivo: il runtime seriale non emette questi esiti (vedi
+            // `try_reserve`). Arrivarci e' un'invariante nostra rotta:
+            // `Internal`, non `InvalidPlan`.
             ReservationResult::RetryAfterProgress | ReservationResult::MustSpill => {
                 Err(PlenoraError::Internal(format!(
                     "max_governed_memory_bytes: esito di reservation non attuabile in v1 per `{owner}`"
@@ -552,23 +475,11 @@ fn contabilita_corrotta(motivo: &str, owner: &str) -> PlenoraError {
 /// Quota ottenuta con [`MemoryGovernor::permesso`]: verificata e prenotata in
 /// una sola operazione.
 ///
-/// Un permesso **trattiene davvero** la quota finche' vive. E' questa la
-/// differenza rispetto a leggere un contatore e decidere: fra la decisione e
-/// l'uso nessun altro puo' prendere quei byte, perche' sono gia' presi.
-///
-/// Tre destini, tutti espliciti:
-///
-/// - [`MemoryPermit::in_lease`] lo converte nel lease definitivo, **senza
-///   nuova prenotazione**: la quota e' la stessa, cambia solo il nome di chi
-///   la tiene;
-/// - [`MemoryPermit::ritaglia`] ne ricava un lease piu' piccolo restituendo
-///   subito la differenza — per chi prenota un maggiorante prima di conoscere
-///   la dimensione esatta;
-/// - il `Drop` restituisce tutto, anche lungo un unwind.
-///
-/// Non e' `Clone`: un permesso e' un diritto esclusivo su una quota, e
-/// duplicarlo significherebbe raddoppiarne l'uso senza raddoppiarne il
-/// conteggio.
+/// Trattiene davvero la quota finche' vive. [`MemoryPermit::in_lease`] la
+/// converte nel lease definitivo senza nuova prenotazione;
+/// [`MemoryPermit::ritaglia`] ne ricava un lease piu' piccolo restituendo la
+/// differenza; il `Drop` restituisce tutto. Non e' `Clone`: e' un diritto
+/// esclusivo.
 #[derive(Debug)]
 pub struct MemoryPermit {
     lease: MemoryLease,
@@ -604,34 +515,17 @@ impl MemoryPermit {
     /// Riduce il permesso a `bytes` e lo consegna come lease, restituendo
     /// subito la differenza al governor.
     ///
-    /// Serve a chi deve prenotare un **maggiorante** prima di conoscere la
-    /// dimensione esatta — perche' la conoscera' solo dopo aver eseguito il
-    /// lavoro — e non puo' rilasciare e riprenotare: fra i due momenti la
-    /// quota potrebbe sparire, ed e' esattamente la finestra che il permesso
-    /// esiste per chiudere.
-    ///
-    /// La quota non viene mai ri-prenotata: si abbassa il conteggio dello
-    /// stesso lease e si restituisce solo il resto. L'ordine — prima
-    /// abbassare cio' che il lease dichiara, poi restituire il resto — fa si'
-    /// che il contatore del governor sia in ogni istante **maggiore o uguale**
-    /// a quanto i lease vivi dichiarano: mai il contrario.
+    /// Per chi prenota un maggiorante prima di conoscere la dimensione esatta,
+    /// senza rilasciare e riprenotare. Prima si abbassa cio' che il lease
+    /// dichiara, poi si restituisce il resto: il contatore del governor resta
+    /// sempre maggiore o uguale a quanto i lease vivi dichiarano.
     ///
     /// # Errors
     ///
-    /// `PlenoraError::Internal` in due casi, entrambi invarianti nostre rotte
-    /// e non condizioni del piano:
-    ///
-    /// - `bytes` **eccede il permesso**. Significa che il maggiorante con cui
-    ///   il chiamante ha prenotato e' sbagliato. Non esiste un ripiego
-    ///   corretto: rilasciare e riprenotare riaprirebbe esattamente la
-    ///   finestra che il permesso esiste per chiudere, quindi si fallisce;
-    /// - la **contabilita' e' gia' corrotta**. Nessuna trasformazione di un
-    ///   permesso puo' riuscire su un governor che non sa piu' quanto
-    ///   trattiene.
-    ///
-    /// In entrambi i casi il permesso — preso **per valore** — viene
-    /// distrutto e la quota torna subito al governor: nulla resta appeso a un
-    /// permesso che nessuno tiene piu'.
+    /// `PlenoraError::Internal`, invariante nostra rotta, se `bytes` eccede il
+    /// permesso (il maggiorante era sbagliato, e riprenotare riaprirebbe la
+    /// finestra) o se la contabilita' e' gia' corrotta. In entrambi i casi il
+    /// permesso viene distrutto e la quota torna al governor.
     pub fn ritaglia(self, bytes: u64) -> Result<MemoryLease> {
         let trattenuti = self.lease.bytes();
         let owner = self.lease.owner().to_owned();
@@ -685,29 +579,18 @@ pub struct MemoryMetrics {
     /// `true` se la contabilita' del governor e' stata marcata **incoerente**
     /// in qualunque momento dell'esecuzione.
     ///
-    /// Quando e' `true` gli altri campi di questa struttura **non sono
-    /// attendibili**: descrivono contatori che hanno smesso di corrispondere
-    /// ai lease vivi. `Output::metrics()` e' pubblica e puo' essere letta a
-    /// meta' stream, quando l'errore non e' ancora stato consegnato al
-    /// chiamante: senza questo campo mostrerebbe numeri apparentemente sani.
-    ///
-    /// Le cause sono tutte invarianti interne rotte — mai condizioni del
-    /// piano: rilascio di quota mai acquisita, id di lease duplicato, nascita
-    /// mancante al rilascio, esaurimento dei contatori di servizio.
+    /// Quando e' `true` gli altri campi non sono attendibili: serve a chi legge
+    /// `Output::metrics()` a meta' stream, prima che l'errore arrivi. Le cause
+    /// sono sempre invarianti interne rotte, mai condizioni del piano.
     pub accounting_corrupted: bool,
 }
 
 /// Batch che attraversa il DAG con la sua quota di memoria e la sua sequenza
 /// logica (ownership architettura.md#memoria, ordine logico architettura.md#determinismo).
 ///
-/// Il wrapper esiste solo AI CONFINI dell'engine (archi, tee,
-/// materializzazioni blocking): i kernel restano su `RecordBatch` puro — il
-/// batch si spacca in ingresso al segmento e si ricompone in uscita con un
-/// lease nuovo (byte dell'output) e la sequenza propagata o riassegnata.
-///
-/// `Clone` condivide i buffer Arrow e il lease (entrambi reference-counted):
-/// il tee di fan-out clona il `GovernedBatch` e la quota resta contata UNA
-/// volta fino al rilascio dell'ultimo riferimento.
+/// Esiste solo ai confini dell'engine (archi, tee, materializzazioni
+/// blocking): i kernel restano su `RecordBatch` puro. `Clone` condivide
+/// buffer e lease, quindi la quota del fan-out resta contata una volta.
 #[derive(Clone, Debug)]
 pub struct GovernedBatch {
     /// Il batch Arrow vero e proprio.
@@ -825,8 +708,8 @@ mod tests {
 
     #[test]
     fn try_reserve_emits_only_granted_in_serial_v1() {
-        // Regola v1 documentata su `try_reserve`: l'unico esito emesso e'
-        // `Granted`; RetryAfterProgress/MustSpill esistono nell'API per M3+.
+        // Nel runtime seriale l'unico esito emesso e' `Granted` (vedi
+        // `try_reserve`).
         let governor = MemoryGovernor::new(10);
         match governor.try_reserve(10, "nodo").expect("quota piena") {
             ReservationResult::Granted(lease) => {
@@ -1291,13 +1174,8 @@ mod tests {
 
     #[test]
     fn snapshot_coerente_sotto_acquisizioni_concorrenti() {
-        // Linearizzabilita': ogni snapshot deve descrivere uno stato
-        // realmente esistito. Con contatori separati si potrebbe osservare
-        // `live_leases > 0` e nessuna nascita registrata — o il contrario —
-        // perche' i due aggiornamenti non sarebbero simultanei.
-        //
-        // Deterministico nel senso che conta: nessun `sleep`, nessuna
-        // dipendenza da un ordine. Le invarianti valgono a OGNI lettura,
+        // Linearizzabilita': ogni snapshot descrive uno stato realmente
+        // esistito. Nessun `sleep`: le invarianti valgono a ogni lettura,
         // qualunque intreccio si realizzi.
         use std::sync::atomic::AtomicBool;
         use std::sync::Barrier;

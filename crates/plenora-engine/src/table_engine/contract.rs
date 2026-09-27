@@ -71,27 +71,15 @@ pub struct Plan {
 
 /// Il blocco `limits` del formato lineare **v1**, sul filo.
 ///
-/// Il budget di memoria della libreria si chiama `max_governed_memory_bytes`
-/// (errori-e-limiti.md#memoria-governata), ed e' il nome che porta il tipo Rust
-/// [`Limits`]. Il formato v1 **no**: e' un formato
-/// pubblicato, distinguibile dagli altri proprio da `schema_version: 1`, e un
-/// piano gia' scritto non cambia perche' noi abbiamo cambiato idea sul nome.
-/// Riscriverlo retroattivamente sarebbe stato peggio di un alias: un alias
-/// almeno non rompe nulla.
+/// Il tipo Rust [`Limits`] usa `max_governed_memory_bytes`
+/// (errori-e-limiti.md#memoria-governata); il formato v1 e' pubblicato e un
+/// piano gia' scritto non cambia nome. Questa struttura privata e' una
+/// traduzione, non un alias: vale solo dentro `schema_version: 1`, e
+/// `deny_unknown_fields` rifiuta qui il nome della v5 come la v5 rifiuta quello
+/// della v1.
 ///
-/// Questa struttura e' **privata** e serve solo alla (de)serializzazione di
-/// [`Plan`]. Non e' un alias, ed e' una cosa diversa in due modi che contano:
-///
-/// - vale **solo** dentro `schema_version: 1`, non nel formato canonico;
-/// - `deny_unknown_fields` fa si' che il nome della v5 **non** sia accettato
-///   qui. Un piano v1 che scrive `max_governed_memory_bytes` e' rifiutato,
-///   esattamente come un piano v5 che scrive il nome della v1. Nessuno dei
-///   due nomi funziona in entrambi i posti: e' questo che distingue una
-///   traduzione da un alias.
-///
-/// La conversione e' per campi, non per chiavi: se qualcuno aggiunge un
-/// limite a [`Limits`], questi letterali smettono di compilare. Un campo
-/// nuovo dimenticato qui sparirebbe in silenzio dal formato v1.
+/// La conversione e' per campi: un limite nuovo in [`Limits`] fa smettere di
+/// compilare questi letterali, invece di sparire in silenzio dal formato v1.
 mod limiti_v1 {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -193,7 +181,7 @@ mod limiti_v1 {
 pub struct ValidatedPlan {
     limits: Limits,
     steps: Vec<Step>,
-    /// Config tipizzate dei passi, allineate per indice a `steps` (configurazioni preparate, hot path minimale):
+    /// Config tipizzate dei passi, allineate per indice a `steps`:
     /// deserializzate una volta in `Plan::validate`, mai nel percorso per
     /// batch. `Arc` per clonare il piano senza ri-allocare le config.
     prepared: std::sync::Arc<[super::executor::PreparedStep]>,
@@ -272,9 +260,9 @@ impl Plan {
             })?;
         }
 
-        // configurazioni preparate, hot path minimale: la config di ogni passo e' deserializzata nella sua forma
-        // tipizzata UNA VOLTA qui; l'esecuzione per batch usa solo queste
-        // (irraggiungibile un fallimento: stessa validazione di cui sopra).
+        // La config di ogni passo e' deserializzata nella sua forma tipizzata
+        // una volta qui; l'esecuzione per batch usa solo queste (il fallimento
+        // e' irraggiungibile: stessa validazione di cui sopra).
         let prepared = self
             .steps
             .iter()
@@ -297,23 +285,14 @@ impl ValidatedPlan {
 
     /// Copia del piano con `max_governed_memory_bytes` **ridotto** al valore indicato.
     ///
-    /// Serve al percorso legacy della CLI, dove `max_governed_memory_bytes` deve
-    /// essere un tetto GLOBALE del piano e non il tetto di ogni singola
-    /// fase: caricato un input, la memoria che quell'input trattiene non e'
-    /// piu' disponibile per l'esecuzione, e i kernel — che consultano
-    /// `limits.max_governed_memory_bytes` per le proprie tabelle di lavoro — devono
-    /// vedere cio' che RESTA, non il budget iniziale.
-    ///
-    /// Il budget puo' solo scendere: passare un valore maggiore di quello
-    /// corrente lo lascia invariato, cosi' la funzione non puo' essere usata
-    /// per allargare un limite dichiarato nel piano.
+    /// Nel percorso legacy della CLI il budget e' un tetto globale del piano:
+    /// la memoria trattenuta da un input caricato non e' piu' disponibile, e i
+    /// kernel devono vedere cio' che resta. Il budget puo' solo scendere.
     ///
     /// # Errors
     ///
-    /// [`PlenoraError::ResourceLimit`] se il budget residuo e' zero: un piano
-    /// con `max_governed_memory_bytes = 0` non e' valido (`validate_limits`), e la
-    /// condizione «non resta memoria» e' un limite di risorsa, non un piano
-    /// sbagliato.
+    /// [`PlenoraError::ResourceLimit`] se il budget residuo e' zero: «non
+    /// resta memoria» e' un limite di risorsa, non un piano sbagliato.
     pub fn with_memory_budget(&self, bytes: usize) -> Result<Self> {
         if bytes == 0 {
             return Err(PlenoraError::ResourceLimit(

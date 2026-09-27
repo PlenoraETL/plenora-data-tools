@@ -31,13 +31,9 @@ fn il_ritardo_massimo_passa_intero() {
 ///
 /// # Che cosa esclude
 ///
-/// La saturazione. Saturando, questo valore e quello del caso precedente
-/// arriverebbero sul filo **identici**: due domini diversi, un messaggio solo, e
-/// chi legge senza modo di sapere quale sia passato. E' la perdita che non lascia
-/// traccia, cioe' quella che nessun controllo a valle puo' riprendere.
-///
-/// I due casi vanno letti insieme: il primo da solo passerebbe anche saturando,
-/// il secondo da solo passerebbe anche rifiutando tutto.
+/// La saturazione: questo valore e quello del caso precedente arriverebbero
+/// sul filo **identici**. I due casi si leggono insieme: il primo passerebbe
+/// anche saturando, il secondo anche rifiutando tutto.
 #[test]
 fn un_millisecondo_oltre_il_massimo_viene_rifiutato() {
     let oltre = RetryDisposition::After(Duration::from_millis(u64::MAX) + Duration::from_millis(1));
@@ -54,10 +50,8 @@ fn un_millisecondo_oltre_il_massimo_viene_rifiutato() {
 ///
 /// # Che cosa esclude
 ///
-/// Che i due casi qui sopra restino veri mentre la proprieta' che li lega cade.
-/// E' la proprieta' vera — due domini distinti restano distinti — e la si scrive
-/// perche' un giorno qualcuno potrebbe «aggiustare» il rifiuto in un valore
-/// sentinella, superando entrambi i casi precedenti e riaprendo la perdita.
+/// Che i due casi qui sopra restino veri mentre la proprieta' che li lega
+/// cade, per esempio con un valore sentinella al posto del rifiuto.
 #[test]
 fn il_massimo_e_l_oltre_restano_distinguibili() {
     let massimo = ritentativo_sul_filo(RetryDisposition::After(Duration::from_millis(u64::MAX)));
@@ -117,18 +111,12 @@ fn un_errore_ordinario_conserva_i_propri_assi() {
 ///
 /// # Che cosa esclude
 ///
-/// Che il rifiuto zittisca il worker, o che lo faccia mentire. Il messaggio deve
-/// nominare **sia** la ragione del rifiuto **sia** l'errore che si stava
-/// riportando; categoria e ritentativo devono parlare di *questo* errore —
-/// `Internal`, `Never` — e non di quello arrivato, che porta una categoria
-/// diversa apposta.
+/// Che il rifiuto zittisca il worker o lo faccia mentire: il messaggio nomina
+/// **sia** il rifiuto **sia** l'errore riportato, e categoria e ritentativo
+/// (`Internal`, `Never`) parlano di *questo* errore.
 ///
-/// # Perche' si chiama la composizione e non `errore_dichiarabile`
-///
-/// Perche' oggi nessun `PlenoraError` produce `After`, quindi il ramo della
-/// guardia non si raggiunge da li'. Cio' che si puo' provare — e che conta — e'
-/// **che cosa dice** la guardia quando tocca a lei, e quella e' una funzione con
-/// due parametri.
+/// Si chiama la composizione e non `errore_dichiarabile` perche' oggi nessun
+/// `PlenoraError` produce `After`.
 #[test]
 fn la_guardia_porta_il_rifiuto_e_l_originale() {
     let originale = PlenoraError::Protocol("il lavoro non e' andato".to_owned());

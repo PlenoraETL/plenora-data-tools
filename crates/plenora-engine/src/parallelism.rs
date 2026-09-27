@@ -1,48 +1,18 @@
 //! Applicazione effettiva di `max_parallelism`.
 //!
-//! # Il problema
+//! I kernel paralleli usano il pool Rayon **globale**, che si dimensiona sui
+//! core logici: senza configurarlo, `max_parallelism` non sarebbe un tetto. Il
+//! tetto si applica quindi dimensionando il pool globale, una volta, prima
+//! dell'esecuzione. Un pool dedicato con `ThreadPool::install` non e'
+//! praticabile: richiede una chiusura `Send`, e lo stato dell'executor e'
+//! thread-locale (`Rc<ExecutionPlan>`).
 //!
-//! `Limits::max_parallelism` sarebbe configurabile senza vincolare nulla: i
-//! kernel paralleli (`joins`, `aggregation::sort`, `arrow_adapter`,
-//! `spatial_join`, il trasporto geo) usano tutti il pool Rayon **globale**,
-//! che si dimensiona da solo sul numero di core logici. Senza configurare
-//! quel pool il limite sarebbe una promessa di risorsa, non un tetto: un
-//! piano che dichiara `max_parallelism: 2` occuperebbe comunque tutti i core
-//! della macchina.
-//!
-//! # La scelta
-//!
-//! Il tetto si applica dimensionando il pool globale del processo, una volta
-//! sola, prima che l'esecuzione cominci. E' l'unica leva che copre TUTTI i
-//! percorsi paralleli insieme, compresi quelli dentro i crate kernel che non
-//! conoscono i limiti del piano.
-//!
-//! L'alternativa — un pool dedicato e `ThreadPool::install` attorno a ogni
-//! dispatch — non e' praticabile qui: `install` richiede che la chiusura sia
-//! `Send`, mentre lo stato dell'executor e' volutamente thread-locale
-//! (`Rc<ExecutionPlan>`, stream a pull sul thread chiamante). Renderlo `Send`
-//! per poterlo spedire in un pool sarebbe un cambiamento di architettura, non
-//! un'applicazione di limiti.
-//!
-//! # Conseguenze dichiarate
-//!
-//! - la configurazione e' **di processo** e vale per tutte le esecuzioni di
-//!   quel processo. La applicano sia la CLI, prima di aprire gli input, sia
-//!   `execute`, perche' altrimenti il limite resterebbe inapplicato per chi
-//!   incorpora l'engine come libreria;
-//! - e' **idempotente** sullo stesso valore e **fallisce** su un valore
-//!   diverso: un secondo piano che chiede un tetto differente non puo' essere
-//!   onorato, e fingere il contrario sarebbe peggio che rifiutare;
-//! - `max_parallelism = 0` significa «numero di core logici», cioe' il
-//!   default di Rayon. NON e' un no-op: il pool globale puo' essere gia'
-//!   stato costruito da chi incorpora l'engine, con un grado qualunque, e in
-//!   quel caso il piano girerebbe su un pool diverso da quello che ha
-//!   chiesto. Lo zero interroga quindi Rayon — costruendo il pool di default
-//!   se non esiste — e rifiuta se il grado effettivo non e' quello dei core
-//!   logici. Quando il numero di core logici non e' conoscibile
-//!   (`available_parallelism` fallisce) lo zero e' RIFIUTATO, e prima di
-//!   costruire alcunche': un limite che non si puo' dimostrare rispettato non
-//!   e' un limite.
+//! - La configurazione e' **di processo**; la applicano sia la CLI sia
+//!   `execute`, per chi incorpora l'engine come libreria.
+//! - E' idempotente sullo stesso valore e fallisce su un valore diverso.
+//! - `0` significa «numero di core logici» e si verifica sul pool vero, che
+//!   chi incorpora l'engine puo' aver gia' costruito; se i core logici non
+//!   sono conoscibili lo zero si rifiuta.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -50,12 +20,9 @@ use plenora_core::{PlenoraError, Result};
 
 /// Grado di parallelismo con cui il pool globale e' stato configurato.
 ///
-/// E' un `Mutex` e non un `OnceLock` perche' il controllo e l'impostazione
-/// devono essere un'unica sezione critica: con `OnceLock::get` seguito da
-/// `build_global` due chiamate concorrenti con lo STESSO grado vedono
-/// entrambe lo stato vuoto, una configura il pool e l'altra fallisce su
-/// `build_global` — un errore spurio proprio nel caso che deve essere
-/// idempotente.
+/// Un `Mutex` e non un `OnceLock`: controllo e impostazione sono una sezione
+/// critica sola, o due chiamate concorrenti con lo stesso grado darebbero un
+/// errore spurio su `build_global`.
 static CONFIGURED: Mutex<Option<u32>> = Mutex::new(None);
 
 /// Applica `max_parallelism` al pool Rayon del processo.
@@ -72,16 +39,10 @@ pub fn configure(max_parallelism: u32) -> Result<()> {
     // Sezione critica unica: controllo e impostazione non si separano.
     let mut configured = CONFIGURED.lock().unwrap_or_else(PoisonError::into_inner);
     if max_parallelism == 0 {
-        // `0` significa «numero di core logici». Non basta consultare il
-        // registro di questo modulo: il pool globale di Rayon puo' essere
-        // stato costruito da CHI INCORPORA l'engine, con un numero di thread
-        // qualunque, e in quel caso `CONFIGURED` e' `None` mentre il piano
-        // gira su un pool che non e' quello che ha chiesto.
-        //
-        // I core logici si leggono PRIMA di toccare Rayon: se non sono
-        // conoscibili non c'e' modo di dimostrare che `0` sia rispettato, e
-        // un limite indimostrabile si rifiuta invece di accettarlo — senza
-        // aver nel frattempo costruito un pool che non si sa validare.
+        // `CONFIGURED` puo' essere `None` mentre il pool globale e' gia' stato
+        // costruito da chi incorpora l'engine. I core logici si leggono prima
+        // di toccare Rayon: se non sono conoscibili, `0` si rifiuta senza aver
+        // costruito un pool che non si sa validare.
         let logici = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .map_err(|error| {
@@ -166,11 +127,9 @@ mod tests {
 
     #[test]
     fn zero_esige_che_il_pool_del_processo_sia_quello_di_default() {
-        // Lo zero non e' piu' un no-op: verifica il pool VERO. Il test non
-        // puo' sapere in che ordine gira rispetto agli altri di questo
-        // binario, quindi asserisce l'invariante — `0` passa se e solo se il
-        // pool del processo ha esattamente il numero di core logici — invece
-        // di un esito fisso. Nessun ramo esce senza asserire.
+        // Lo zero verifica il pool vero, e l'ordine rispetto agli altri test
+        // del binario non e' noto: si asserisce l'invariante (`0` passa se e
+        // solo se il pool ha esattamente i core logici), non un esito fisso.
         let esito = configure(0);
         // Dopo la chiamata il pool esiste di sicuro: `current_num_threads`
         // lo costruisce se manca.
@@ -201,12 +160,9 @@ mod tests {
 
     #[test]
     fn la_configurazione_e_idempotente_e_rifiuta_un_grado_diverso() {
-        // Un solo grado per processo. Il test NON esce anticipatamente su
-        // fallimento: uscire "verde" senza aver verificato nulla e' il modo
-        // in cui un gate smette di essere un gate. Il pool globale puo' essere
-        // gia' stato costruito da Rayon stesso, se un altro test del binario
-        // ha usato un iteratore parallelo prima di questo. Entrambi i rami
-        // sono verificati: nessuno esce silenziosamente senza asserire.
+        // Un solo grado per processo, e il pool globale puo' essere gia'
+        // costruito da un altro test del binario: entrambi i rami asseriscono,
+        // nessuno esce verde senza verificare.
         if configure(2).is_ok() {
             assert_eq!(configured(), Some(2), "il grado applicato va registrato");
             // Idempotenza sullo stesso grado.

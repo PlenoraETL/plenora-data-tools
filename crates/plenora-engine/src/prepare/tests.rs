@@ -289,7 +289,7 @@ fn unknown_statistics_are_the_conservative_default() {
         RuntimeStatistic::Unknown
     );
 
-    // Statistiche Known: registrate nel piano, nessuna scelta fisica v1
+    // Statistiche Known: registrate nel piano, nessuna scelta fisica
     // dipende da esse (architettura.md#planner-ed-executor).
     let mut runtime = RuntimeContext::default();
     runtime.statistics.insert(
@@ -839,15 +839,13 @@ fn reproject_joins_fusion_groups() {
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch fail-closed e rivalidazione fisica delle estensioni geo (configurazioni preparate)
+// Dispatch fail-closed e rivalidazione fisica delle estensioni geo
 // ---------------------------------------------------------------------------
 //
-// `planner::validate` (via `analyze`) pre-valida le config; le
-// rivalidazioni di `prepare` sono difesa in profondita': qui sono esercitate
-// chiamando direttamente le funzioni interne con contratti da fixture, per
-// verificare che il secondo livello resti fail-closed anche se il primo si
-// allenta. I comportamenti verificati sono quelli del perimetro documentato
-// (dispatch v1, limiti del kernel, coerenza dei contratti).
+// Le rivalidazioni di `prepare` sono difesa in profondita' rispetto a
+// `planner::validate`: si chiamano direttamente, con contratti da fixture,
+// per verificare che restino fail-closed anche se il primo livello si
+// allenta.
 
 /// POINT (2 3), little-endian OGC WKB, in esadecimale (convenzione D16).
 const POINT_HEX: &str = "010100000000000000000000400000000000000840";
@@ -871,9 +869,8 @@ fn descriptor_of(op: &str) -> &'static plenora_core::catalog::OperationDescripto
 
 #[test]
 fn nary_concat_over_two_inputs_is_rejected_fail_closed() {
-    // `table.concat` e' NAry: il planner accetta piu' di due input, ma
-    // l'executor v1 ne supporta solo due — il rifiuto arriva in `prepare`
-    // (fail-closed a secco), mai a meta' esecuzione.
+    // `table.concat` e' NAry: il planner accetta piu' di due input,
+    // l'executor ne supporta due, e il rifiuto arriva in `prepare`.
     let graph = validate(
         &json!({
             "schema_version": 5,
@@ -1344,15 +1341,10 @@ fn geo_binary_caps_follow_edge_position_and_plan_limits() {
 
 #[test]
 fn limiti_fuori_dominio_sono_rifiutati_prima_del_prepare() {
-    // `max_output_rows = 0` descrive un piano che non puo' emettere nulla.
-    // `Limits::validate` lo rifiuta all'ingresso del planner, per TUTTI i
-    // piani — geo compresi, che il preparer tabellare non attraversano.
-    //
-    // Lasciandolo passare, a intercettarlo sarebbe la rivalidazione fisica
-    // dei parametri della coppia in `prepare` (`max_pairs > 0`), con un
-    // messaggio che parla del kernel invece che del limite. Quella
-    // rivalidazione resta come difesa in profondita': non e' raggiungibile da
-    // un piano, ed e' il verso giusto.
+    // `max_output_rows = 0` lo rifiuta `Limits::validate` all'ingresso del
+    // planner, per tutti i piani. La rivalidazione dei parametri della coppia
+    // in `prepare` resta come difesa in profondita', non raggiungibile da un
+    // piano.
     let error = validate(
         &json!({
             "schema_version": 5,

@@ -1,46 +1,22 @@
 //! Engine tabellare: contratto del piano, validazione fail-closed ed
 //! esecuzione della catena di kernel su `RecordBatch`.
 //!
-//! Superficie a compatibilita' congelata — messaggi ed esiti sono quelli
-//! che chi invoca questo percorso si aspetta:
+//! Superficie a compatibilita' congelata: messaggi ed esiti sono quelli che
+//! i piani legacy si aspettano.
 //!
-//! - `Plan`/`Step`/`ValidatedPlan` e la validazione del contratto
-//!   (`schema_version`, limiti, regola "catena binaria = 1 step", config
-//!   fail-closed per le 66 operazioni tabellari);
-//! - `execute_batch` ed `execute_binary` con normalizzazione
-//!   `LargeUtf8 -> Utf8` e rimozione dei metadata `pandas`.
+//! - gli errori sono [`plenora_core::PlenoraError`] (`Step { index, .. }`
+//!   diventa `Step { node: index.to_string(), .. }`);
+//! - `Limits` e' [`plenora_kernels_table::Limits`]; la validazione dei valori
+//!   resta qui (`validate_limits`);
+//! - gli id "nudi" dei piani legacy si risolvono con
+//!   [`plenora_core::catalog::find_operation`] filtrando su `Family::Table`,
+//!   cosi' un id geo resta "operazione sconosciuta"; gli id `table.*` sono
+//!   accettati e ricondotti al nome nudo ([`dispatch_name`]).
 //!
-//! Adattamenti rispetto al sorgente (nessuno dei quali cambia il
-//! comportamento sui piani legacy):
-//!
-//! - gli errori `EngineError` sono mappati su [`plenora_core::PlenoraError`]
-//!   (la variante `Step { index, .. }` diventa `Step { node: index
-//!   .to_string(), .. }`; i messaggi Display seguono il formato inglese di
-//!   `PlenoraError`);
-//! - `Limits` NON e' duplicato: e' riusato [`plenora_kernels_table::Limits`],
-//!   struct identica a quella storica di `contract.rs` (stessi campi, stessi
-//!   default, stessi attributi serde) gia' usata dai kernel. La validazione
-//!   dei valori resta qui (`validate_limits`);
-//! - gli id operazione "nudi" dei piani legacy (es. `filter`) sono risolti
-//!   verso il catalogo unificato con
-//!   [`plenora_core::catalog::find_operation`] (che copre anche gli alias
-//!   storici) e filtrati su `Family::Table`: gli id geo restano "operazione
-//!   sconosciuta" esattamente come nel catalogo storico di nogeo. Gli id
-//!   canonici `table.*` sono accettati come superset e ricondotti al nome
-//!   nudo prima del dispatch ([`dispatch_name`]);
-//! - `inputs == 2` del catalogo storico corrisponde ad `arity != Unary`
-//!   (11 `BinaryOrdered` + `concat` `NAry`); `execution != Streaming`
-//!   corrisponde a `execution_class != Streaming`.
-//!
-//! L'unificazione con il trasporto geo avviene nel DAG, non qui.
-//!
-//! Spill generalizzato (architettura.md#memoria): selezione preventiva dello spill per
-//! `sort`/`distinct`/`aggregate` — sopra la soglia deterministica "byte
-//! stimati dell'input > `max_governed_memory_bytes`" (la stessa del set-op spilled) il
-//! passo usa la variante `*_spilled` di `plenora_kernels_table::spill`.
-//! [`execute_batch_with_spill`] permette al chiamante (l'executor del DAG) di
-//! instradare i file di spill nella directory condivisa del `TempStore`
-//! dell'esecuzione e di raccogliere le metriche (`SpillMetrics`).
+//! Spill (architettura.md#memoria): `sort`/`distinct`/`aggregate` passano
+//! alla variante `*_spilled` quando i byte stimati dell'input superano
+//! `max_governed_memory_bytes`; [`execute_batch_with_spill`] instrada i file
+//! nella directory del `TempStore` e raccoglie le `SpillMetrics`.
 
 mod contract;
 mod executor;

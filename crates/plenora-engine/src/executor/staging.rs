@@ -1,15 +1,10 @@
 //! Staging degli input: materializzazione su disco quando la memoria non basta.
 //!
-//! Un input che non entra nel budget non viene rifiutato: viene messo da parte
-//! su file e riletto. `CountingFile` conta i byte mentre li scrive, cosi' il
-//! limite di disco e' un tetto vero e non una stima.
-//!
-//! # La validazione e' atomica per un motivo
-//!
-//! `atomic_input_validation_stream` valida TUTTI i batch prima di lasciarne
-//! passare uno. Validare in streaming sarebbe piu' economico, ma pubblicherebbe
-//! righe valide di un input che si scoprira' invalido tre batch dopo — e a quel
-//! punto l'output parziale e' gia' uscito.
+//! Un input che non entra nel budget e' messo da parte su file e riletto;
+//! `CountingFile` conta i byte scritti, cosi' il limite di disco e' un tetto
+//! vero. `atomic_input_validation_stream` valida TUTTI i batch prima di
+//! lasciarne passare uno, perche' validare in streaming pubblicherebbe righe
+//! di un input che si scopre invalido piu' avanti.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -153,24 +148,15 @@ pub(super) fn compact_staged_batch(batch: &RecordBatch) -> Result<RecordBatch> {
     plenora_core::batch_with_rows(batch.schema(), columns, batch.num_rows())
 }
 
-/// Validazione atomica dell'input geometrico (D8) con memoria BOUNDED:
-/// i batch accettati sono staged su IPC entro la quota `max_temp_bytes`
-/// dichiarata dal piano e il lease governor e' rilasciato subito; solo a
-/// validazione completata senza rifiuti i batch sono riletti uno alla
-/// volta, con lease ri-riservato per batch e stessa sequenza logica.
-/// Invarianti R9.9 preservate: nessun accepted esce prima della validazione
-/// completa; un rifiuto row-scoped (anche tardivo) produce il report
-/// completo mergiato e zero accepted; un errore non row-scoped propaga
-/// fail-closed con la diagnostica parziale dichiarata. Un errore di I/O in
-/// replay e' una failure infrastrutturale (accepted parziali possibili,
-/// come ogni failure mid-stream): non e' un rifiuto di righe.
-///
-/// Nota quota: lo staging degli input, lo staging degli output accettati
-/// dei segmenti row-diagnostics e gli spill degli operatori misurano
-/// ciascuno la propria scrittura contro `max_temp_bytes`; la somma su
-/// disco puo' superare la quota (v1, contabilita' separate).
 /// Esito della fase di staging dell'input gate: errore terminale (eventuale
 /// assenza di batch staged -> stream vuoto) oppure replay dal file staged.
+///
+/// La validazione atomica dell'input geometrico (D8) mette su IPC i batch
+/// accettati entro `max_temp_bytes` e li rilegge solo a validazione completa
+/// senza rifiuti (R9.9): un rifiuto row-scoped produce il report completo e
+/// zero accepted; un errore di I/O in replay e' una failure infrastrutturale,
+/// non un rifiuto di righe. Staging e spill misurano ciascuno la propria
+/// scrittura contro `max_temp_bytes`, quindi la somma su disco puo' superarla.
 pub(super) enum StagingOutcome {
     Terminal(Option<PlenoraError>),
     Replay(StagedReplay),
@@ -185,38 +171,18 @@ pub(super) enum StagingOutcome {
 /// memoria**, con passaggio definitivo su disco quando il budget non basta
 /// piu' (architettura.md#memoria, staging memory-first).
 ///
-/// # Perche' esiste
+/// La barriera R9.9 chiede solo che nessun accepted esca prima della fine
+/// della scansione; trattenere i batch governati la soddisfa senza il giro
+/// IPC su disco.
 ///
-/// La barriera R9.9 — nessun accepted pubblicato prima che la scansione sia
-/// completa — non richiede il disco: richiede solo che nulla esca prima della
-/// fine. Trattenere i batch gia' governati la soddisfa allo stesso modo, e
-/// risparmia per ogni riga una serializzazione IPC, una scrittura, una
-/// rilettura, una decodifica e una copia `take`.
-///
-/// # Perche' non puo' trasformare un input eseguibile in un `ResourceLimit`
-///
-/// Durante una passata della catena i lease vivi sono al piu' due: quello
-/// del batch d'ingresso e quello dell'uscita (`run_streaming_chain` acquisisce
-/// il secondo prima di rilasciare il primo). Quindi:
-///
-/// - **su disco** il picco della passata `k` e' `input_k + output_k`;
-/// - **in memoria** e' `trattenuti + input_k + output_k`.
-///
-/// Si entra nella passata `k` in modalita' memoria **solo se**
-/// `trattenuti + input_k + max_batch_bytes <= budget`, dove `input_k` e' la
-/// dimensione REALE del batch gia' prelevato e `max_batch_bytes` e' il tetto
-/// duro del piano (tetto in byte per batch). Ogni batch di output attraversa il wrapper d'uscita,
-/// che applica lo stesso tetto: `output_k > max_batch_bytes` fa fallire il
-/// piano **in entrambe le modalita'**. Per un piano eseguibile vale quindi
-/// `output_k <= max_batch_bytes`, e il picco in memoria non supera il
-/// budget.
-///
-/// La soglia e' **derivata dai limiti del piano e dai lease effettivamente
-/// vivi**: nessuna percentuale scelta a mano, nessuna decisione temporale,
-/// nessuna dipendenza dall'ordine di arrivo.
-// La variante `Disco` porta writer e handle del file: piu' grande di una
-// `VecDeque`, ma esiste al massimo una volta per segmento e boxarla
-// aggiungerebbe un'indirezione sul percorso caldo dello staging.
+/// In una passata i lease vivi sono al piu' input e output, quindi il picco in
+/// memoria e' `trattenuti + input_k + output_k`. Si resta in memoria solo se
+/// `trattenuti + input_k + max_batch_bytes <= budget`; il wrapper d'uscita
+/// fa fallire in entrambe le modalita' un `output_k > max_batch_bytes`, quindi
+/// un piano eseguibile non supera il budget e non diventa un `ResourceLimit`.
+/// La soglia deriva dai limiti del piano e dai lease vivi, non dal tempo.
+// `Disco` e' piu' grande di una `VecDeque`, ma esiste al massimo una volta per
+// segmento e boxarla aggiungerebbe un'indirezione sul percorso caldo.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum StagingAccepted {
     /// Batch trattenuti in ordine, lease vivi.

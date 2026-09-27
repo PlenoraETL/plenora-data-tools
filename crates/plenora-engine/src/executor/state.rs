@@ -3,21 +3,10 @@
 //! Contatori dei limiti effettivi, metriche per nodo e per segmento, governor
 //! della memoria, store temporaneo, heartbeat.
 //!
-//! # Perche' `Rc`/`RefCell` e non `Arc`/`Mutex`
-//!
-//! L'esecuzione fra i nodi del DAG e' **seriale**: il parallelismo vive
-//! dentro i kernel, non fra loro. Uno stato thread-locale e' quindi corretto
-//! per costruzione, e costa meno di una sincronizzazione che nessuno userebbe.
-//! Quando M3 introdurra' lo scheduler parallelo questo e' il primo punto da
-//! rivedere — ed e' scritto qui perche' si veda subito, invece di scoprirlo
-//! quando il compilatore si lamentera' di `Send`.
-//!
-//! # L'heartbeat
-//!
-//! Un fallimento isolato non ferma l'esecuzione: il disco puo' avere un
-//! singhiozzo. Un fallimento che dura cinque minuti si', perche' a quel punto
-//! non stiamo piu' sorvegliando nulla e proseguire significherebbe promettere
-//! una garanzia che non abbiamo piu'.
+//! `Rc`/`RefCell` e non `Arc`/`Mutex` perche' l'esecuzione fra i nodi e'
+//! **seriale**: e' il primo punto da rivedere con lo scheduler parallelo (M3).
+//! Un fallimento isolato dell'heartbeat e' tollerato; uno persistente ferma
+//! l'esecuzione ([`HEARTBEAT_MAX_FAILURE`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -97,22 +86,17 @@ pub(super) const HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(1);
 /// Per quanto si tollera che l'heartbeat fallisca **di seguito** prima di
 /// interrompere l'esecuzione (errori-e-limiti.md).
 ///
-/// Cinque minuti: lo stesso ordine di grandezza della grazia che lo
-/// scavenging concede prima di dare retta al PID, e tre ordini di grandezza
-/// sotto il TTL di default. Abbastanza da attraversare un guasto transitorio
-/// del filesystem, abbastanza poco da accorgersi di uno permanente molto
-/// prima che la directory diventi raccoglibile.
+/// Stesso ordine di grandezza della grazia dello scavenging prima di dare
+/// retta al PID, e molto sotto il TTL di default: attraversa un guasto
+/// transitorio e si accorge di uno permanente prima che la directory diventi
+/// raccoglibile.
 pub(super) const HEARTBEAT_MAX_FAILURE: Duration = Duration::from_secs(300);
 
 /// Aggiunge il contesto strutturale al testo di un errore.
 ///
-/// Separata da `ExecState::with_diagnostics` per poter essere verificata
-/// **insieme** a `with_execution_id`: e' la SEQUENZA delle due a poter
-/// perdere il dettaglio, e un test che costruisse a mano lo stato gia'
-/// corretto non proverebbe nulla.
-///
-/// Il dettaglio e' contesto STRUTTURALE — indice di batch, riga, colonna —
-/// mai un valore.
+/// Separata da `ExecState::with_diagnostics` per verificarla insieme a
+/// `with_execution_id`, perche' e' la sequenza delle due a poter perdere il
+/// dettaglio. Il dettaglio e' contesto STRUTTURALE, mai un valore.
 pub(super) fn arricchisci_con_dettaglio(error: PlenoraError, detail: &str) -> PlenoraError {
     let suffix = format!(" [{detail}]");
     match error {
@@ -128,17 +112,10 @@ pub(super) fn arricchisci_con_dettaglio(error: PlenoraError, detail: &str) -> Pl
             reason: format!("{reason}{suffix}"),
         },
         PlenoraError::InvalidPlan(reason) => PlenoraError::InvalidPlan(format!("{reason}{suffix}")),
-        // Da quando la propagazione conserva la categoria, il contesto del
-        // passo viaggia in `Replayed` invece che in `Execution`: se
-        // l'arricchimento non seguisse anche quell'involucro, attivare
-        // `diagnostics` non aggiungerebbe piu' nulla.
-        //
-        // Si scrive in ENTRAMBI i campi. Per le categorie `Execution` e
-        // `Cancelled`, `with_execution_id` RIGENERA il messaggio da
-        // `execution_reason` per inserirvi l'id: un suffisso che vivesse solo
-        // nel messaggio verrebbe cancellato dalla chiamata immediatamente
-        // successiva, e la diagnostica risulterebbe attiva senza aggiungere
-        // nulla. Scrivendo in entrambi, le due operazioni commutano.
+        // Il contesto del passo viaggia anche in `Replayed`. Si scrive in
+        // ENTRAMBI i campi perche' `with_execution_id` rigenera il messaggio di
+        // `Execution`/`Cancelled` da `execution_reason`: cosi' le due
+        // operazioni commutano.
         PlenoraError::Replayed(mut replayed) => {
             replayed.message = format!("{}{suffix}", replayed.message);
             if let Some(reason) = replayed.execution_reason.take() {
@@ -268,11 +245,8 @@ impl ExecState {
     /// Accumula le righe prodotte da un nodo senza clonare la chiave dopo il
     /// primo batch. Il conteggio input viene aggiornato da `check_expansion`.
     ///
-    /// La somma e' SATURANTE, non avvolgente: questi contatori decidono se un
-    /// limite e' superato, e un contatore che avvolge riaprirebbe il limite
-    /// (in release) o farebbe abortire l'esecuzione (in debug, con
-    /// `overflow-checks`). Saturare tiene il conteggio nel verso giusto — piu'
-    /// alto, quindi piu' restrittivo.
+    /// La somma e' SATURANTE: un contatore che avvolge riaprirebbe il limite,
+    /// mentre saturare lo tiene nel verso piu' restrittivo.
     pub(super) fn add_node_rows_out(&self, node_id: &str, rows_out: u64) {
         let mut rows = self.node_rows.borrow_mut();
         if let Some(entry) = rows.get_mut(node_id) {
@@ -333,15 +307,10 @@ impl ExecState {
 
     /// Interrompe l'esecuzione se l'heartbeat fallisce da troppo tempo.
     ///
-    /// Il singolo fallimento resta tollerato — una `write` puo' fallire per
-    /// una ragione transitoria e fermare per questo un'esecuzione lunga
-    /// sarebbe sproporzionato. Un fallimento **persistente** e' un'altra
-    /// cosa: il timestamp nel lock smette di avanzare, e superato il TTL lo
-    /// scavenging di un altro avvio puo' considerare orfana la directory di
-    /// questa esecuzione e cancellargliela sotto — con dentro lo spill.
-    /// Proseguire in silenzio sarebbe una failure silenziosa, che questo
-    /// progetto non ammette: la tolleranza e' limitata, dichiarata e
-    /// scaduta la quale l'errore e' esplicito.
+    /// Il singolo fallimento e' tollerato. Uno persistente ferma il timestamp
+    /// del lock, e superato il TTL lo scavenging di un altro avvio potrebbe
+    /// cancellare la directory di questa esecuzione, spill compreso: la
+    /// tolleranza e' limitata e poi l'errore e' esplicito.
     ///
     /// # Errors
     ///

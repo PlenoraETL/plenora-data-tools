@@ -1,147 +1,38 @@
 //! Executor del DAG — `execute`.
 //!
-//! Vincoli che governano questo modulo: streaming reale, hot path minimale,
-//! materializzazione minima, e osservabilita' per nodo anche dentro ai
-//! segmenti fusi (architettura.md#planner-ed-executor).
+//! Vincoli: streaming reale, hot path minimale, materializzazione minima,
+//! osservabilita' per nodo anche nei segmenti fusi
+//! (architettura.md#planner-ed-executor).
 //!
-//! [`execute`] accetta solo un [`ValidatedGraph`] (type-state: nessun
-//! percorso non validato raggiunge l'esecuzione), svolge internamente
-//! `prepare` + `execute_physical` (architettura.md#planner-ed-executor) e restituisce un [`Output`] a
-//! **pull**: i batch finali sono uno stream lazy, l'input e' consumato
-//! batch-per-batch man mano che il chiamante tira l'output (streaming reale: una
-//! pipeline streaming non materializza l'intera tabella).
+//! [`execute`] accetta solo un [`ValidatedGraph`] (type-state), svolge
+//! `prepare` + `execute_physical` e restituisce un [`Output`] a **pull**:
+//! l'input e' consumato batch per batch man mano che il chiamante tira
+//! l'output. L'esecuzione e' seriale (`SerialFused`), per questo lo stream usa
+//! `Rc`/`RefCell` e [`Output`] non e' `Send`.
 //!
-//! Esecuzione v1: **seriale** ovunque (`SerialFused`); il parallelismo
-//! resta da fare (M3), lo spill c'e' solo per i kernel che lo prevedono.
-//! Il governor della memoria, la cancellazione cooperativa e gli errori
-//! arricchiti sono invece attivi (vedi sotto). Per questo lo stream usa
-//! `Rc`/`RefCell` e
-//! [`Output`] non e' `Send`: e' una scelta documentata, non un limite
-//! nascosto.
+//! - cancellazione cooperativa ai soli confini dell'executor, secondo il
+//!   `CancellationBehavior` di catalogo; i kernel non vedono il token
+//!   (errori-e-limiti.md#cancellazione);
+//! - ogni `execute` ha un `execution_id` riportato negli errori e nel lock del
+//!   [`crate::temp_store::TempStore`], creato **fail-closed**; la modalita'
+//!   diagnostica aggiunge contesto strutturale, MAI valori (errori-e-limiti.md);
+//! - i batch attraversano gli archi come [`GovernedBatch`] (batch, [`MemoryLease`]
+//!   e [`BatchSequence`]): quota contata UNA
+//!   volta per batch all'ingresso dell'arco e condivisa al fan-out, sequenza
+//!   logica assegnata sugli input, propagata 1:1 negli streaming e riassegnata
+//!   nei blocking (architettura.md#memoria, architettura.md#determinismo);
+//! - ogni arco e' un [`EdgeShared`]: pass-through con un consumatore, tee che
+//!   condivide i batch immutabili con piu' consumatori (D9);
+//! - validazione WKB per cella sugli input prima del primo nodo (D8) e limiti
+//!   effettivi del piano per input, arco, nodo, batch e cella;
+//! - dispatch dei nodi `table.*` via [`crate::table_engine`];
+//! - nessun output parziale: il publish e' atomico e avviene solo a stream
+//!   completato; un errore a meta' stream lascia consultabili le metriche.
 //!
-//! Cancellazione cooperativa (errori-e-limiti.md#cancellazione):
-//! il chiamante passa un
-//! [`crate::cancellation::CancellationToken`] nel [`RuntimeContext`] e lo
-//! cancella dall'esterno (es. handler Ctrl-C della CLI). I check sono solo
-//! ai confini dell'executor — tra batch nelle catene streaming, tra kernel,
-//! durante il drenaggio dei segmenti blocking e sull'output del piano — e
-//! onorano il `CancellationBehavior` dichiarato in catalogo: `Cooperative`
-//! (check a ogni batch), `BoundaryOnly` (check tra kernel/a fine kernel e
-//! durante il drenaggio), `NonInterruptible` (mai: l'op completa; i confini
-//! di piano a valle restano attivi — nessuna nuova attivita' dopo la
-//! cancellazione, publish compreso). I kernel NON vedono il token (il
-//! passaggio e' M3). Al cancel l'errore e' `PlenoraError::Cancelled` con
-//! `node`/`operation`/`execution_id`; nessun output e' pubblicato (publish
-//! atomico) e le metriche parziali restano osservabili iterando [`Output`]
-//! manualmente e chiamando [`Output::metrics`] dopo l'errore (i metodi di
-//! comodo `collect_batches`/`write_ipc_file_with_profile` consumano l'`Output`: con
-//! loro le metriche al punto di cancel vanno perse, limite v1 documentato).
-//!
-//! Errori arricchiti (errori-e-limiti.md): ogni `execute` genera un
-//! `execution_id` (UUID v4 — dipendenza `uuid` gia' pinnata nel workspace,
-//! nessuna versione nuova) riportato negli errori `Execution`/`Cancelled` e nel
-//! lock del [`crate::temp_store::TempStore`]; `PlenoraError` espone
-//! `category()` (poi `phase()`, `remote_effect()` e `retry_disposition()` —
-//! gli assi §9; R9.7 non ammette un booleano `retryable()`). La modalita'
-//! diagnostica opt-in
-//! (`RuntimeContext::diagnostics`, solo per input fidati) aggiunge alla
-//! motivazione contesto strutturale — indice di batch, riga, colonna dove
-//! disponibile — MAI valori; a flag spento i messaggi sono invariati.
-//!
-//! `TempStore` (errori-e-limiti.md): `execute` esegue lo scavenging
-//! best-effort delle directory orfane all'avvio (sulla radice configurata,
-//! default temp di sistema) e crea lo store dell'esecuzione **fail-closed**
-//! (decisione documentata: niente degrado a tempdir semplice — lo store e'
-//! la difesa strutturale contro i crash non intercettabili e lo spill
-//! ci scrivera'; se non e' creabile l'esecuzione fallisce prima di toccare
-//! i dati). L'heartbeat e' scritto al punto centrale (ogni batch processato
-//! passa dal conteggio metriche) con throttle di
-//! [`HEARTBEAT_MIN_INTERVAL`]; il cleanup e' RAII al `Drop` dello stato.
-//!
-//! Governor della memoria — resource accounting (architettura.md#memoria) e sequenza logica
-//! (architettura.md#determinismo): i batch attraversano gli archi come [`GovernedBatch`]
-//! (batch, [`MemoryLease`] e [`BatchSequence`]). La quota `max_governed_memory_bytes`
-//! e' contata UNA volta per batch all'ingresso dell'arco e condivisa
-//! reference-counted al fan-out; i kernel restano su `RecordBatch` puro — il
-//! wrapper si spacca in ingresso al segmento e si ricompone in uscita. La
-//! sequenza e' assegnata sugli input (partizione 0, contatore per input),
-//! propagata 1:1 negli streaming e riassegnata deterministicamente nei
-//! blocking (regola in [`run_blocking`]). In seriale la reservation e'
-//! immediata: quota disponibile o errore `InvalidPlan` fail-fast (regola v1 in
-//! [`crate::governor::MemoryGovernor::try_reserve`]).
-//!
-//! Struttura fisica:
-//!
-//! - ogni arco del DAG e' un canale condiviso ([`EdgeShared`]): un solo
-//!   consumatore = pass-through puro; piu' consumatori (fan-out, D9) =
-//!   tee che condivide i `RecordBatch` immutabili senza copie di buffer e
-//!   rilascia ciascun batch quando tutti i consumatori lo hanno letto
-//!   (rilascio al last consumer). Il tee bufferizza [`GovernedBatch`]: il lease e' condiviso (clone
-//!   `Arc`) tra i consumatori, la quota resta contata una sola volta e torna
-//!   al governor con `release_consumed` + `Drop` dell'ultimo riferimento.
-//!   In esecuzione seriale i consumatori drenano in sequenza, quindi
-//!   il tee coincide con la materializzazione conservativa di D9;
-//! - `LinearStreaming`/`GeoFused`: il batch attraversa la catena di kernel
-//!   senza code ne' materializzazioni (segmenti lineari senza code). Nei segmenti `GeoFused` i run di
-//!   kernel fondibili annotati da `prepare` (campo `fusion_group`) sono
-//!   eseguiti col runner fuso di architettura.md#geometrie — un decode/encode per gruppo su
-//!   ogni batch, con errori/metriche/cancellazione per nodo preservati e
-//!   fallback strumentato al percorso nodo-per-nodo a reservation governor
-//!   fallita (D12.6/D12.7);
-//! - `Blocking`/`BinaryBlocking`: alla prima pull drenano gli input del
-//!   segmento (materializzazione prevista dal piano, materializzazione minima), concatenano ed
-//!   eseguono il kernel una sola volta;
-//! - dispatch nodi: `table.*` via [`crate::table_engine`] (`execute_batch`
-//!   per gli unari, `execute_binary` per i binari, con la config gia'
-//!   validata in `prepare`); `geo.*` 1:1 in place via
-//!   [`crate::geo_transport::transport::transform_batches`]; le misure geo
-//!   "add column" (`geo.area` ecc.) via dispatch dedicato sui kernel
-//!   `plenora_kernels_geo::operations` (la semantica v4 aggiunge una
-//!   colonna, il trasporto legacy la sostituirebbe); le estensioni geo
-//!   v1.1-v1.3 via gli adapter Arrow di `plenora_kernels_geo`
-//!   (`extensions`/`extensions2`/`extensions3`/`cluster`): streaming per
-//!   batch (`from_wkt`, `geometry_accessors`, `line_locate_point`, `snap`,
-//!   `subdivide` come espansione 1:N con `__parent_index`), blocking su
-//!   input materializzato (`collect` con raggruppamento per chiavi
-//!   nell'engine, `generate_grid`, `coverage_validate`, `shared_paths`,
-//!   `cluster_dbscan`);
-//! - validazione dinamica in lettura (D8): WKB strutturale per cella sugli
-//!   input con geometria, tramite
-//!   [`plenora_kernels_geo::validate_wkb_contract`], prima che i dati
-//!   raggiungano il primo nodo;
-//! - limiti effettivi del piano: `max_input_rows` per input,
-//!   `max_rows_per_edge` per arco intermedio, `max_output_rows`,
-//!   `max_expansion_factor` per nodo (base: input per gli unari; per i
-//!   binari calcolate tutte le metriche [`JoinExpansion`] e applicato il
-//!   vincolo vincolante dichiarato in catalogo, errori-e-limiti.md; le op `WholeToMany`
-//!   generative/diagnostiche sono esenti — esenzione dichiarata in
-//!   catalogo, la base input e' un trigger, insensata come denominatore),
-//!   `max_batches` per arco, `max_wkb_cell_bytes` per cella,
-//!   `max_payload_bytes` cumulati per input, `max_geometry_depth` per
-//!   annidamento WKB, `max_batch_bytes` per batch (tetto in byte per batch, tetto duro, applicato
-//!   anche al batch concatenato dei segmenti blocking);
-//! - nessun output parziale: [`Output::write_ipc_file_with_profile`] scrive via
-//!   [`crate::geo_transport::publish::publish_with_profile`] (tempfile +
-//!   persist no-clobber solo a stream completato con successo);
-//! - metriche per nodo logico e per segmento (osservabilita' per nodo), prefilled per tutti i
-//!   nodi del piano e aggiornate batch per batch.
-//!
-//! Errore a meta' stream: il batch in errore propaga `Err` nello stream di
-//! output; niente viene pubblicato (il tempfile e' eliminato da
-//! `publish_with_profile`) e le metriche restano consultabili fino al punto di
-//! fallimento.
-//!
-//! Panic dei kernel (errori-e-limiti.md#panic-policy): intercettati con `catch_unwind` al punto di
-//! dispatch — [`run_kernel`] per i kernel unari (streaming e blocking) e la
-//! chiamata `execute_binary` per i segmenti binari, il livello piu' interno
-//! che conserva l'attribuzione di nodo — e convertiti in
-//! `PlenoraError::Execution { node, operation, .. }` con il solo messaggio del
-//! panic, mai dati dei batch (regola di error.rs). L'errore propaga come
-//! qualunque altro: il publish atomico non e' raggiunto (nessun publish
-//! dopo panic) e il cleanup (tempfile, buffer degli archi) avviene comunque
-//! via `Drop`. I confini `UnwindSafe` dichiarati per il DAG parallelo
-//! (worker, cancellazione globale, spill) valgono soltanto quando esistera'
-//! uno scheduler che li attraversi (M3).
+//! I panic dei kernel sono intercettati con `catch_unwind` al punto di
+//! dispatch ([`run_kernel`], `execute_binary`) e convertiti in
+//! `PlenoraError::Execution` con il solo messaggio del panic
+//! (errori-e-limiti.md#panic-policy).
 
 mod blocking;
 mod diagnostics;
@@ -254,24 +145,18 @@ use input::BatchStream;
 // Output
 // ---------------------------------------------------------------------------
 
-/// `execute` (architettura.md, architettura.md#planner-ed-executor): accetta solo il
-/// prodotto di [`crate::planner::validate`] (type-state), esegue
-/// internamente `prepare` + `execute_physical`.
+/// Esegue un grafo validato (architettura.md#planner-ed-executor).
 ///
-/// All'ingresso l'identita' piano-v5.md#identita-e-fingerprint del grafo e' riverificata contro l'ambiente
-/// corrente ([`check_compatibility`]: catalogo, versioni engine/Arrow,
-/// capability): l'executor rifiuta su qualunque mismatch, mai procedere alla
-/// cieca. Nella v1 il grafo e' validato e usato nello stesso processo, quindi
-/// il check e' parzialmente ridondante, ma il costo e' irrilevante (grafo in
-/// memoria) e la porta resta chiusa per il riuso futuro.
+/// Accetta solo il prodotto di [`crate::planner::validate`] (type-state) e
+/// riverifica all'ingresso l'identita' del grafo contro l'ambiente corrente
+/// ([`check_compatibility`], piano-v5.md#identita-e-fingerprint): su qualunque
+/// mismatch rifiuta.
 ///
-/// I nomi e gli schemi degli input sono verificati contro i contratti
-/// validati prima di costruire lo stream (fail-closed); l'esecuzione vera e
-/// propria resta lazy: parte alla prima pull dell'[`Output`]. Il fingerprint
-/// completo dei contratti di input ([`crate::planner::check_input_compatibility`],
-/// che copre geometria e CRS) resta al chiamante, che dispone dei
-/// `DataContract` letti dagli header IPC: qui gli input arrivano come soli
-/// schemi Arrow.
+/// Nomi e schemi degli input sono verificati contro i contratti validati prima
+/// di costruire lo stream (fail-closed); l'esecuzione parte alla prima pull
+/// dell'[`Output`]. Il fingerprint completo dei contratti di input
+/// ([`crate::planner::check_input_compatibility`], geometria e CRS) resta al
+/// chiamante, che dispone dei `DataContract` letti dagli header IPC.
 ///
 /// # Errors
 ///
@@ -283,19 +168,11 @@ use input::BatchStream;
 ///   (fail-closed errori-e-limiti.md, vedi l'header del modulo).
 #[allow(clippy::needless_pass_by_value)] // Firma per valore voluta da architettura.md#planner-ed-executor.
 pub fn execute(graph: &ValidatedGraph, inputs: Inputs, runtime: RuntimeContext) -> Result<Output> {
-    // `PR-12`: un piano che richiede il profilo isolato non deve MAI
-    // ricadere qui, sul percorso in-process — ne' in silenzio ne' per
-    // omissione. Il chiamante di produzione che serve davvero la richiesta e'
-    // `isolamento::esecuzione_isolata::esegui_isolato`, non questa funzione:
-    // prepara il dominio, avvia il worker confinato, e SOLO ALL'INTERNO di
-    // quel dominio il worker rivalida lo stesso piano e chiama `execute` su
-    // se stesso (`runtime.gia_confinato = Some(Confinamento::interno())`,
-    // sotto — un tipo non costruibile fuori dal crate, non un `bool`). Chi
-    // arriva qui con una richiesta di isolamento non ancora servita —
-    // chiamando `execute` direttamente invece del percorso isolato, o su una
-    // piattaforma/con una politica dell'host che non la autorizzano — trova
-    // un rifiuto esplicito, PRIMA di `check_compatibility` e di ogni tocco
-    // ai dati.
+    // Un piano che richiede il profilo isolato non ricade MAI sul percorso
+    // in-process. Lo serve `isolamento::esecuzione_isolata::esegui_isolato`,
+    // il cui worker confinato chiama `execute` con `runtime.gia_confinato`
+    // valorizzato (tipo non costruibile fuori dal crate); ogni altro arrivo
+    // qui e' rifiutato prima di `check_compatibility` e di ogni tocco ai dati.
     if let Some(richiesto_byte) = graph
         .plan()
         .max_domain_memory_bytes()
@@ -450,15 +327,10 @@ fn execute_physical(
         // `NonInterruptible` (nessuna nuova attivita' dopo la cancellazione:
         // consegnare/pubblicare e' nuova attivita').
         output_state.check_cancellation_point(&output_edge, "output")?;
-        // Heartbeat al confine COMUNE a ogni percorso.
-        //
-        // I tre `run_*` non bastano: un piano pass-through (`nodes: []`) non
-        // ne attraversa nessuno — l'output e' direttamente lo stream
-        // dell'input — quindi non rinnoverebbe mai il lock e non
-        // inizializzerebbe nemmeno il conteggio dei fallimenti, rendendo
-        // inefficace qualunque controllo finale. Un pass-through geometrico
-        // usa staging temporaneo, e su un'esecuzione lunga se lo vedrebbe
-        // classificare orfano. Qui passa ogni batch di ogni piano.
+        // Heartbeat al confine comune a ogni percorso: un piano pass-through
+        // (`nodes: []`) non attraversa nessun `run_*`, e senza questo punto
+        // il suo lock non sarebbe mai rinnovato e lo staging di un
+        // pass-through geometrico lungo verrebbe classificato orfano.
         output_state.heartbeat();
         output_state.verifica_heartbeat()?;
         let batch = &governed.batch;
@@ -538,17 +410,12 @@ impl Network {
     ///
     /// Confine di lettura (BLOCK-03): gli errori della sorgente e della
     /// coerenza per-batch dello schema sono taggati [`ErrorPhase::Read`].
+    /// Qui ogni batch riceve il lease di memoria (architettura.md#memoria) e
+    /// la sequenza logica (architettura.md#determinismo: nome dell'input,
+    /// partizione 0, contatore seriale per input).
     ///
-    /// Punto di ingresso nel perimetro governato: qui ogni batch riceve il
-    /// lease di memoria (architettura.md#memoria, quota contata UNA volta per arco) e la
-    /// sequenza logica (architettura.md#determinismo: `source_node` = nome dell'input,
-    /// `input_partition` = 0 — nessun ramo parallelo della sorgente in v1 —
-    /// `sequence_number` = contatore seriale per input).
-    ///
-    /// Errori `Internal` sulle invarianti di costruzione della rete
-    /// (reader/contratto dell'input presenti per il dispatch del chiamante,
-    /// colonna geometria nello schema del contratto): il caso "impossibile"
-    /// e' un errore esplicito, mai un panic (R6).
+    /// Le invarianti di costruzione della rete violate danno errore
+    /// `Internal`, mai un panic (R6).
     // Costruzione lineare della rete per arco: lunga per costruzione.
     #[allow(clippy::too_many_lines)]
     fn input_stream(&mut self, edge: &str) -> Result<BatchStream> {
@@ -636,14 +503,10 @@ impl Network {
                 }
                 let entry = &counts[&edge_name];
                 let limits = &state.plan.limits();
-                // Fase `Read` per tutti e tre: questi tetti scattano mentre
-                // si LEGGE la sorgente, allo stesso confine dei tetti del
-                // trasporto (`ipc_boundary::read_error`). Per derivazione di
-                // variante uscirebbero come `Validate`, e al medesimo confine
-                // due limiti sulla stessa lettura dichiarerebbero fasi
-                // diverse: un tetto di byte direbbe «lettura», un tetto di
-                // righe direbbe «validazione». Il tag esplicito vince sulla
-                // derivazione, come stabilito in piano-v5.md#contratti-di-input.
+                // Fase `Read` esplicita per tutti e tre: scattano mentre si
+                // legge la sorgente, allo stesso confine dei tetti del
+                // trasporto, e la derivazione per variante darebbe `Validate`
+                // (piano-v5.md#contratti-di-input).
                 if entry.0 > limits.rows.max_input_rows {
                     return Err(PlenoraError::ResourceLimit(format!(
                         "max_input_rows superato sull'input `{edge_name}`: {} righe > {}",
@@ -666,15 +529,10 @@ impl Network {
                     .with_phase(ErrorPhase::Read));
                 }
             }
-            // architettura.md#memoria: reservation immediata (v1 seriale — regola in
-            // `MemoryGovernor::try_reserve`); i limiti per input sopra sono
-            // gia' passati, quindi qui il fallimento e' solo per budget
-            // globale esaurito.
-            //
-            // Fase `Read` come i tre tetti qui sopra: e' lo stesso confine e
-            // lo stesso istante. Senza il tag la derivazione della variante
-            // direbbe `Write`, e due limiti sulla stessa lettura
-            // dichiarerebbero di nuovo fasi diverse.
+            // architettura.md#memoria: reservation immediata; i limiti per
+            // input sono gia' passati, quindi qui il fallimento e' solo per
+            // budget globale esaurito. Fase `Read` esplicita, come i tetti
+            // qui sopra (la derivazione direbbe `Write`).
             let lease = state
                 .governor
                 .reserve(bytes, &edge_name)
@@ -735,16 +593,11 @@ impl Network {
                             "segmento blocking senza kernel: invariante del planner violata".into(),
                         )
                     })?;
-                    // architettura.md#memoria (spill generalizzato): verso un kernel spill-capable
-                    // la quota governor dei batch drenati e' rilasciata
-                    // subito. La soglia di attivazione dello spill ha la
-                    // stessa grandezza del budget (byte stimati dell'input vs
-                    // `max_governed_memory_bytes`): trattenere i lease renderebbe lo
-                    // spill irraggiungibile (fail-fast al drenaggio, prima
-                    // del dispatch). La memoria di lavoro dell'operatore e'
-                    // auto-limitata dallo spill su disco; approssimazione v1:
-                    // la materializzazione dell'input resta in RAM (lo spill
-                    // in streaming durante il drenaggio non e' implementato).
+                    // architettura.md#memoria: verso un kernel spill-capable la
+                    // quota dei batch drenati e' rilasciata subito, perche' la
+                    // soglia dello spill si misura sullo stesso budget e
+                    // trattenere i lease la renderebbe irraggiungibile. La
+                    // materializzazione dell'input resta in RAM.
                     let spill_capable = spill_capable_unary(kernel);
                     // errori-e-limiti.md#cancellazione: drenaggio dell'input — check a ogni
                     // confine di batch, onorando il behavior del kernel che
@@ -959,16 +812,13 @@ pub(super) fn record_kernel_metrics(
 // Esecuzione dei kernel
 // ---------------------------------------------------------------------------
 
-/// Sequenza logica riassegnata all'output di un segmento blocking
-/// (architettura.md#determinismo): la cardinalita' cambia (concatenazione + kernel una tantum),
-/// quindi la sequenza degli input non e' propagabile 1:1.
+/// Sequenza logica dell'output di un segmento blocking
+/// (architettura.md#determinismo).
 ///
-/// Regola v1 — deterministica, per ordine di scansione seriale: il segmento
-/// blocking emette UN batch per esecuzione (per i binari il contenuto
-/// dipende dalla scansione left-then-right, anch'essa seriale), quindi la
-/// sequenza e' sempre `source_node` = nodo del kernel, `input_partition` =
-/// 0, `sequence_number` = 0. Oggi nessun consumatore riordina: la sequenza
-/// e' osservabilita' e predisposizione per il collect indicizzato di M3.
+/// La cardinalita' cambia, quindi la sequenza degli input non si propaga 1:1.
+/// Il segmento emette UN batch per esecuzione, in ordine di scansione seriale
+/// (left-then-right per i binari): la sequenza e' sempre nodo del kernel,
+/// partizione 0, numero 0.
 pub(super) fn blocking_output_sequence(kernel: &PreparedKernel) -> BatchSequence {
     BatchSequence {
         source_node: kernel.node_id.clone(),

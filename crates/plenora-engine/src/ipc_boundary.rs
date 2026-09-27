@@ -1,46 +1,19 @@
 //! Confine unico di lettura Arrow IPC per gli ingressi non fidati.
 //!
-//! # Perche' esiste
+//! `arrow-ipc` 59.2.0 ha due esposizioni su input ostile, raggiungibili dal
+//! primo byte: **panico** in `convert::fb_to_schema`, chiamata da ogni
+//! lettore anche dalle API `try_*` (apache/arrow-rs#10575), e **allocazione
+//! ostile** da conteggi flatbuffer senza tetto, da cui `catch_unwind` non
+//! protegge. La difesa e' pre-validare framing e limiti prima che arrow veda
+//! i byte, e chiamare arrow dentro una barriera anti-panico. Tutti gli
+//! ingressi file/stream/CLI passano di qui.
 //!
-//! `arrow-ipc` 59.2.0 ha due esposizioni note su input ostile, entrambe
-//! raggiungibili dal primo byte letto:
-//!
-//! 1. **panico** — `convert::fb_to_schema` scarta con `unwrap()` il campo
-//!    opzionale `fields` e contiene una ventina fra `panic!` e
-//!    `unimplemented!` sui valori di enum che non riconosce. Ogni lettore la
-//!    chiama. Le API che la avvolgono si chiamano `try_*` ma sono fallibili
-//!    solo sul parsing esterno: appena ottengono lo schema fanno
-//!    `.map(fb_to_schema)`. Segnalato a monte: apache/arrow-rs#10575.
-//! 2. **allocazione ostile** — i metadati flatbuffer dichiarano conteggi di
-//!    vettori e stringhe che arrow alloca con `Vec::with_capacity` senza un
-//!    tetto proprio. `catch_unwind` non protegge da un OOM: l'unica difesa e'
-//!    pre-validare il framing e i limiti PRIMA che arrow veda i byte.
-//!
-//! Il trasporto geo ha entrambe le difese sul proprio payload in memoria
-//! ([`crate::geo_transport::ipc::decode_ipc`]), ma non basta: aprendo
-//! `FileReader` e `StreamReader` direttamente — come farebbero
-//! `Input::read_ipc_file` / `read_ipc_stream` dell'executor e la discovery
-//! dello schema della CLI — la barriera sarebbe scavalcata. Questo modulo e'
-//! l'unico lettore di confine: tutti gli ingressi file/stream/CLI passano di
-//! qui.
-//!
-//! # Cosa NON copre
-//!
-//! I file di spill e i temp store dell'esecuzione sono prodotti da noi, nella
-//! directory isolata dell'`execution_id`, e non sono ingressi non fidati: non
-//! passano da questa barriera, che imporrebbe una scansione in piu' su ogni
-//! round di merge senza aggiungere garanzie.
-//!
-//! Non copre nemmeno la MUTAZIONE IN PLACE dell'ingresso durante la lettura.
-//! La pre-validazione e' un time-of-check e la lettura di arrow un
-//! time-of-use: fra i due c'e' una finestra. Il confine la restringe usando
-//! un solo handle aperto una volta ([`validated_handle`] restituisce il file
-//! riavvolto, mai il percorso), il che esclude la sostituzione del path —
-//! rename, symlink swap, ricreazione — ma non uno scrittore concorrente sullo
-//! stesso inode. In quel caso resta attiva la barriera
-//! anti-panico e decade il tetto sulle allocazioni, che vale solo sui byte
-//! effettivamente controllati. La condizione e' dichiarata in errori-e-limiti.md#limiti-dichiarati
-//! (`docs/errori-e-limiti.md`) con il requisito operativo corrispondente.
+//! Non copre i file di spill e i temp store, prodotti da noi. Non copre la
+//! mutazione in place dell'ingresso durante la lettura: un solo handle
+//! ([`validated_handle`] rende il file riavvolto, mai il percorso) esclude la
+//! sostituzione del path ma non uno scrittore concorrente sullo stesso inode,
+//! e in quel caso decade il tetto sulle allocazioni. Dichiarato in
+//! errori-e-limiti.md#limiti-dichiarati.
 
 use std::fs::File;
 use std::io::Read as _;
@@ -72,29 +45,14 @@ pub enum IpcFormat {
 /// Traduce un errore del validatore di confine in `PlenoraError`, taggato
 /// [`ErrorPhase::Read`]: nasce leggendo la sorgente (BLOCK-03).
 ///
-/// I tetti di RISORSA del confine — metadati, body, numero di messaggi e di
-/// record batch, complessita' dello schema, dimensione dello stream — sono
-/// limiti, non dati malformati: escono come [`PlenoraError::ResourceLimit`],
-/// che e' la categoria su cui il chiamante decide di rilanciare con piu'
-/// budget. Farli uscire tutti come `data_mapping` li renderebbe
-/// indistinguibili da un file corrotto. Il framing malformato resta
-/// `data_mapping`: li' il file e' davvero rotto.
-///
-/// La fase resta `Read` per entrambi: il tag del confine vince sulla
-/// derivazione per variante, e questi errori nascono leggendo.
+/// I tetti di risorsa del confine escono come [`PlenoraError::ResourceLimit`],
+/// su cui il chiamante decide di rilanciare con piu' budget; il framing
+/// malformato resta `data_mapping`, perche' li' il file e' davvero rotto.
 pub(crate) fn read_error(error: ArrowTransportError) -> PlenoraError {
-    // Il tag di fase si applica **una volta sola**, qui.
-    //
-    // Applicandolo dentro la traduzione, il ramo ricorsivo della
-    // diagnostica ne produrrebbe due annidati:
-    //
-    //     Tagged(Read) -> RowDiagnostics -> Tagged(Read) -> ResourceLimit
-    //
-    // `with_phase` evita di riavvolgere un errore gia' `Tagged`, ma dopo
-    // `with_row_diagnostics` l'esterno non e' piu' `Tagged`, quindi quella
-    // difesa non scatterebbe. Categoria, fase e payload resterebbero
-    // corretti — nessun test se ne accorgerebbe — ma la proprieta' che
-    // `with_phase` dichiara, niente tag annidati, sarebbe violata.
+    // Il tag di fase si applica **una volta sola**, qui: dentro la
+    // traduzione, il ramo ricorsivo della diagnostica produrrebbe tag
+    // annidati (`with_phase` non riavvolge un `Tagged`, ma dopo
+    // `with_row_diagnostics` l'esterno non lo e' piu').
     traduci_errore_di_lettura(error).with_phase(ErrorPhase::Read)
 }
 
@@ -114,12 +72,8 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
     match error {
         // --- I/O: la causa si conserva, non si stampa ----------------------
         //
-        // Classificarlo `DataMapping` direbbe «il file e' rotto» e ne
-        // terrebbe solo il testo: un disco che non risponde durante `read_at`
-        // o `rewind` diventerebbe un file corrotto, e manderebbe chi legge a
-        // cercare un difetto nei dati. Consumare l'errore invece di prenderlo
-        // a prestito e' cio' che permette di preservare lo `std::io::Error`
-        // originale.
+        // Come `DataMapping`, un disco che non risponde passerebbe per un file
+        // corrotto. Consumare l'errore conserva lo `std::io::Error` originale.
         E::Io(io) => PlenoraError::Io(io),
 
         // --- Limiti: il file c'e' ed e' piu' grande di quanto ammettiamo ---
@@ -177,18 +131,10 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
 
         // --- Impossibili dal validatore IPC: difetto NOSTRO ----------------
         //
-        // Parametri di operazione, kernel, join, backend: nascono ESEGUENDO, e
-        // questa funzione traduce solo gli errori del lettore di confine.
-        //
-        // Lasciarle in `DataMapping` «per non cambiare comportamento su un
-        // percorso che non dovrebbe esistere» sarebbe la stessa classe di
-        // difetto che si evita su `Io`: una causa interna attribuita ai dati.
-        // Non e' compatibilita' — e' una diagnosi falsa conservata proprio
-        // dove il codice dichiara che non puo' succedere.
-        //
-        // Il testo e' **statico**: non porta nulla dell'errore originale,
-        // perche' `Internal` dice «difetto nostro» e il messaggio nomina il
-        // punto, mai il dato (`errori-e-limiti.md`).
+        // Parametri di operazione, kernel, join, backend nascono eseguendo, e
+        // qui si traducono solo errori del lettore di confine: `DataMapping`
+        // attribuirebbe ai dati una causa interna. Il testo e' statico e
+        // nomina il punto, mai il dato (`errori-e-limiti.md`).
         E::MissingParameter { .. }
         | E::UnexpectedParameter { .. }
         | E::InvalidParameter { .. }
@@ -213,14 +159,8 @@ fn traduci_errore_di_lettura(error: ArrowTransportError) -> PlenoraError {
 
         // --- Diagnostica di riga: si classifica la causa e si RIATTACCA ----
         //
-        // La categoria appartiene alla causa, non all'involucro — ma
-        // ricorrere **scartando** `diagnostics` salverebbe la categoria e non
-        // il payload, cioe' perderebbe in silenzio l'informazione piu'
-        // specifica che l'errore porta.
-        //
-        // Riattaccarla costa una riga ed e' corretto comunque, che questo ramo
-        // sia raggiungibile o no dal confine — e non obbliga a decidere una
-        // raggiungibilita' che nessuno puo' osservare da qui.
+        // La categoria appartiene alla causa; scartare `diagnostics`
+        // perderebbe in silenzio il payload piu' specifico.
         E::RowDiagnostics {
             source,
             diagnostics,
@@ -359,8 +299,7 @@ impl Iterator for BoundaryBatches {
 ///
 /// # Errors
 ///
-/// Tutti taggati [`ErrorPhase::Read`], e distinti per categoria — la
-/// distinzione conta, perche' dice a chi legge dove guardare:
+/// Tutti taggati [`ErrorPhase::Read`], distinti per categoria:
 ///
 /// | categoria | quando |
 /// |---|---|
@@ -404,24 +343,12 @@ pub fn open_with_format(
 /// Un artefatto Arrow IPC **file format** il cui framing e' stato convalidato,
 /// ancora aperto sullo stesso handle.
 ///
-/// # Che cosa il tipo garantisce
-///
-/// Che non esista un modo di averne uno **senza essere passati dalla
-/// convalida**: il campo e' privato, non c'e' costruttore, e l'unica funzione
-/// che ne rende uno e' [`convalida_artefatto`], che il framing lo verifica.
-/// Non e' un wrapper nominalmente «validato» — quello sarebbe una promessa
-/// scritta nella doc e non nel tipo — e' l'uscita della verifica.
-///
-/// Ne segue che il resto del percorso non puo' sbagliare handle: digest e
-/// consegna ad arrow prendono **questo**, e riferiscono per costruzione allo
-/// stesso file che e' stato convalidato.
-///
-/// Resta la non-garanzia dichiarata altrove: un handle aperto difende dalla
-/// **sostituzione** del percorso, non dalla **mutazione in place** dei byte.
-// Senza `cfg`: i chiamanti di produzione sono `pubblicazione::risolvi_commit`,
-// che apre la destinazione **una volta sola** e ne percorre i corpi, e il
-// verificatore del profilo isolato, che ne usa anche i metodi di duplicazione e
-// misura.
+/// Campo privato e nessun costruttore: l'unica funzione che ne rende uno e'
+/// [`convalida_artefatto`] (con le sue varianti), quindi digest e consegna ad
+/// arrow riferiscono per costruzione al file convalidato. Difende dalla
+/// sostituzione del percorso, non dalla mutazione in place dei byte.
+// Senza `cfg`: lo usano `pubblicazione::risolvi_commit` e il verificatore del
+// profilo isolato.
 pub(crate) struct ArtefattoConvalidato {
     // Un campo solo, e non anche i byte totali: quelli la sorgente li conosce
     // gia' — glieli si passa costruendola — e tenerne una seconda copia qui
@@ -433,17 +360,9 @@ pub(crate) struct ArtefattoConvalidato {
 impl ArtefattoConvalidato {
     /// Un secondo handle sullo **stesso** file gia' aperto.
     ///
-    /// # Perche' un duplicato e non una riapertura
-    ///
-    /// Perche' riaprire per percorso apre una finestra: fra la verifica e cio'
-    /// che viene dopo qualcuno potrebbe mettere un file diverso a quel nome, e
-    /// il secondo handle guarderebbe un artefatto che nessuno ha verificato.
-    /// `try_clone` duplica il descrittore, non il nome: i due handle guardano la
-    /// stessa apertura, e non c'e' istante in cui il percorso venga risolto una
-    /// seconda volta.
-    ///
-    /// Serve perche' [`Self::in_batches`] **consuma** l'artefatto: chi deve
-    /// ancora leggerne i byte dopo i passi 6-8 prende il duplicato prima.
+    /// `try_clone` duplica il descrittore, non il nome: riaprire per percorso
+    /// potrebbe trovare un file diverso. Serve perche' [`Self::in_batches`]
+    /// consuma l'artefatto.
     ///
     /// # Errors
     ///
@@ -461,18 +380,9 @@ impl ArtefattoConvalidato {
 
     /// Quanti byte ha il file **adesso**, chiesti al descrittore aperto.
     ///
-    /// # Perche' non basta [`Self::byte_totali`]
-    ///
-    /// Perche' quello e' il valore misurato **all'apertura**, e chiunque lo
-    /// confronti con un numero derivato dalla stessa apertura confronta due
-    /// copie di una misura sola: un controllo che non puo' fallire. Un handle
-    /// aperto difende dalla **sostituzione** del percorso, non dalla
-    /// **mutazione in place** dei byte — e' la non-garanzia gia' dichiarata —
-    /// quindi fra la verifica e cio' che viene dopo la lunghezza puo' davvero
-    /// cambiare, ed e' l'unica cosa che un secondo controllo puo' scoprire.
-    ///
-    /// Si interroga il **descrittore**, non il percorso: chiedere al nome
-    /// aprirebbe la finestra che l'handle esiste per chiudere.
+    /// [`Self::byte_totali`] e' la misura dell'apertura: confrontarla con
+    /// un'altra derivata dalla stessa apertura non puo' fallire. Questa scopre
+    /// la mutazione in place avvenuta dopo, senza risolvere il percorso.
     ///
     /// # Errors
     ///
@@ -503,9 +413,7 @@ impl ArtefattoConvalidato {
 
     /// Riavvolge e consegna i batch ad arrow, dentro la barriera anti-panico.
     ///
-    /// Il riavvolgimento avviene qui e non a carico del chiamante: dimenticarlo
-    /// darebbe ad arrow un handle a meta' file, e non e' un errore che si
-    /// debba poter fare.
+    /// Il riavvolgimento sta qui, non a carico del chiamante.
     ///
     /// # Errors
     ///
@@ -530,16 +438,9 @@ impl ArtefattoConvalidato {
 /// Apre un artefatto, ne convalida il framing e ne estrae la chiave richiesta
 /// dai custom metadata del footer, **in una traversata sola**.
 ///
-/// E' l'unico costruttore di [`ArtefattoConvalidato`], ed e' cio' che rende
-/// quel tipo una prova invece di un'etichetta.
-///
-/// # Perche' non basta [`open`]
-///
-/// Quella riapre per percorso a ogni passo. Il verificatore deve riferire
-/// framing, estrazione del token, digest e consegna ad arrow **allo stesso
-/// handle**: fra due aperture, il percorso puo' puntare altrove.
-///
-/// Resta **`pub(crate)`**: la superficie pubblica del confine non cambia.
+/// E' il costruttore di [`ArtefattoConvalidato`]. A differenza di [`open`],
+/// che riapre per percorso a ogni passo, tiene framing, token, digest e
+/// consegna ad arrow sullo stesso handle.
 ///
 /// # Errors
 ///
@@ -562,18 +463,9 @@ pub(crate) fn convalida_artefatto(
 /// Perche' l'apertura convalidata non e' riuscita, **prima** che qualcuno la
 /// appiattisca in un [`PlenoraError`].
 ///
-/// # Perche' esiste
-///
-/// Perche' due chiamanti vogliono cose diverse dallo stesso fallimento. Il
-/// verificatore vuole un errore del progetto, e lo ottiene da
-/// [`convalida_artefatto`]. Chi osserva una destinazione vuole invece sapere
-/// **quale** genere di rifiuto e' stato — sigillo assente, sigillo non
-/// corrispondente, tetto superato, footer rifiutato — perche' le decisioni che
-/// ne seguono sono diverse, e `read_error` quelle distinzioni le perde tutte in
-/// una categoria sola.
-///
-/// Non e' una variante d'errore nuova del progetto: e' il rifiuto **prima**
-/// della traduzione, e vive dentro questo crate.
+/// Chi osserva una destinazione deve distinguere sigillo assente, sigillo non
+/// corrispondente, tetto superato e footer rifiutato, che `read_error`
+/// riunisce in una categoria sola.
 pub(crate) enum CausaDiApertura {
     /// Il file non si e' aperto o non si e' lasciato misurare.
     Io(std::io::Error),
@@ -583,9 +475,8 @@ pub(crate) enum CausaDiApertura {
 
 /// Come [`convalida_artefatto`], ma conserva la causa invece di tradurla.
 ///
-/// Una sola apertura, un solo handle: chi ne ha bisogno per leggere oltre il
-/// footer riceve l'artefatto gia' convalidato e non deve riaprire il percorso —
-/// riaprirlo darebbe due risposte su due file potenzialmente diversi.
+/// Rende l'artefatto gia' convalidato, cosi' chi legge oltre il footer non
+/// riapre il percorso.
 ///
 /// # Errors
 ///
@@ -602,25 +493,15 @@ pub(crate) fn convalida_artefatto_con_causa(
 /// Come [`convalida_artefatto_con_causa`], ma da un handle **gia' aperto**
 /// invece che da un percorso.
 ///
-/// # Perche' esiste
-///
-/// Nella topologia a due domini (`isolamento.md#2-quater-topologia-chi-osserva-chi`) il verificatore
-/// riceve l'artefatto come descrittore gia' aperto in sola lettura dal
-/// coordinatore — mai un percorso — perche' un percorso e' proprio cio' che
-/// [`NG-9`](../../../docs/isolamento.md) dichiara insufficiente: passare un
-/// handle toglie un modo di *scoprire* la destinazione, non revoca l'autorita'
-/// di chi lo riceve, e qui la destinazione non gli viene comunque mai detta.
-///
-/// La parte comune con [`convalida_artefatto_con_causa`] e' tutto cio' che
-/// viene **dopo** l'apertura: misurare, avvolgere in una sorgente posizionale,
-/// convalidare framing ed estrarre la chiave. Fattorizzarla qui evita due
-/// copie della stessa traversata che una PR futura potrebbe far divergere.
+/// Il verificatore (`isolamento.md#2-quater-topologia-chi-osserva-chi`) riceve
+/// l'artefatto come descrittore aperto in sola lettura, mai come percorso
+/// ([`NG-9`](../../../docs/isolamento.md)). Tutto cio' che segue l'apertura e'
+/// condiviso con [`convalida_artefatto_con_causa`].
 ///
 /// # Errors
 ///
 /// [`CausaDiApertura`], come [`convalida_artefatto_con_causa`] meno gli
-/// errori di apertura per percorso — qui l'handle e' gia' in mano al
-/// chiamante.
+/// errori di apertura per percorso.
 pub(crate) fn convalida_handle_con_causa(
     file: File,
     limits: &IpcLimits,
@@ -658,32 +539,12 @@ pub(crate) fn convalida_handle_artefatto(
 /// Avvolge un handle **gia' accertato altrove** in un [`ArtefattoConvalidato`],
 /// senza rifare la traversata del framing.
 ///
-/// # Perche' esiste, e perche' non e' una scorciatoia sulla verifica
-///
-/// Nella topologia a due domini la verifica vera — passi 3-8-bis, framing,
-/// digest, contratto, conteggi, token — avviene nel dominio del
-/// **verificatore**, su un handle indipendente. Il coordinatore non deve
-/// rileggere e riparsare Arrow: e' esattamente il lavoro che la §2-ter vuole
-/// fuori dal suo processo. Questa funzione costruisce percio' un
-/// `ArtefattoConvalidato` dal **proprio** handle del coordinatore — aperto
-/// prima ancora che il verificatore nascesse — con i soli byte totali
-/// misurati all'apertura, e nessuna pretesa che questo handle sia stato
-/// esso stesso validato.
-///
-/// Non e' una porta che permette di pubblicare un file non verificato: la
-/// prova (`ArtefattoVerificato`) si costruisce **solo** dopo che il dialogo
-/// col verificatore ha raggiunto la barriera di successo
-/// (`isolamento::esecuzione_isolata`), e il passo 9
-/// (`pubblicazione::copia_accertando`) rimisura comunque il file **ora**
-/// (`ArtefattoConvalidato::misura_ora`) e ricalcola il digest **sui byte
-/// effettivamente copiati** prima del commit point — quindi una divergenza
-/// fra questo handle e l'artefatto che il verificatore ha davvero controllato
-/// (un file sostituito, troncato o esteso nel frattempo) resta rilevata li',
-/// non qui.
-///
-/// `pub(crate)`: il solo chiamante e' il chiamante di produzione a due
-/// domini; nessun'altra superficie deve poter costruire un
-/// `ArtefattoConvalidato` senza passare dal framing.
+/// Nella topologia a due domini la verifica vera avviene nel dominio del
+/// verificatore; il coordinatore non riparsa Arrow (§2-ter). Non e' una porta
+/// verso la pubblicazione di un file non verificato: `ArtefattoVerificato`
+/// nasce solo dopo la barriera di successo col verificatore, e il passo 9
+/// rimisura il file e ricalcola il digest sui byte copiati. `pub(crate)`, con
+/// il solo chiamante di produzione a due domini.
 pub(crate) const fn artefatto_gia_accertato(file: File, byte_totali: u64) -> ArtefattoConvalidato {
     ArtefattoConvalidato {
         sorgente: crate::geo_transport::ipc::SeekSource::new(file, byte_totali),
@@ -704,20 +565,11 @@ pub fn open(path: &Path, limits: &IpcLimits) -> Result<(SchemaRef, BoundaryBatch
 /// pre-validato, schema letto dentro la barriera, e **nessun dato decodificato**
 /// — ne' righe ne' dizionari.
 ///
-/// # Perche' il file format non passa da `FileReader`
-///
-/// Perche' `FileReader::try_new` decodifica **tutti** i dizionari prima di
-/// rendere lo schema: fino a `max_retained_dictionary_body_bytes` di valori
-/// per ingresso, allocati da chi vuole soltanto sapere che forma hanno le
-/// colonne. Sul profilo isolato chi lo chiede e' il coordinatore, che non ha
-/// un dominio: sono allocazioni che dipendono dai dati e precedono
-/// l'autorizzazione (`F4-5`).
-///
-/// Lo schema di un file sta nel footer, e il footer l'ha gia' letto la
-/// convalida: [`schema_dal_footer`] lo ricava da **quei** byte, con gli stessi
-/// controlli che fa `FileReaderBuilder::build` prima dei dizionari. Lo stream
-/// format non ha il problema: `StreamReader::try_new` legge il solo messaggio
-/// di schema, e i dizionari arrivano con i batch.
+/// Il file format non passa da `FileReader`, che decodifica tutti i
+/// dizionari prima di rendere lo schema: sul profilo isolato sarebbero
+/// allocazioni del coordinatore che precedono l'autorizzazione (`F4-5`).
+/// [`schema_dal_footer`] lo ricava dal footer gia' convalidato. Lo stream
+/// format legge il solo messaggio di schema.
 ///
 /// # Errors
 ///
@@ -744,15 +596,10 @@ pub fn header_schema(path: &Path, limits: &IpcLimits) -> Result<SchemaRef> {
 
 /// Lo schema dai byte di un footer **gia' convalidato**.
 ///
-/// Ripete, nello stesso ordine, cio' che `FileReaderBuilder::build` di
-/// `arrow-ipc` 59.2.0 fa prima di toccare i dizionari: verifica `FlatBuffer` con
-/// le opzioni di default, vettore dei record batch presente (anche vuoto),
-/// schema presente, endianness del sistema. Dove arrow fa `unwrap()` sullo
-/// schema assente, qui c'e' un errore; `fb_to_schema`, che
-/// puo' andare in panico, gira dentro la barriera di chi chiama.
-///
-/// I messaggi non riportano i byte del footer ne' il testo del verificatore:
-/// sono fatti dell'ingresso, non del difetto.
+/// Ripete, nello stesso ordine, i controlli di `FileReaderBuilder::build` di
+/// `arrow-ipc` 59.2.0 che precedono i dizionari; dove arrow fa `unwrap()` sullo
+/// schema assente, qui c'e' un errore. `fb_to_schema` gira dentro la barriera
+/// di chi chiama. I messaggi non riportano byte del footer.
 fn schema_dal_footer(footer: &[u8]) -> Result<SchemaRef> {
     let illeggibile = |motivo: &str| {
         PlenoraError::DataMapping(format!("footer IPC non utilizzabile: {motivo}"))
@@ -780,17 +627,11 @@ fn schema_dal_footer(footer: &[u8]) -> Result<SchemaRef> {
 
 /// Limiti del confine derivati dai limiti effettivi del piano.
 ///
-/// Il tetto sul body e' il PIU' STRETTO fra i limiti che il batch dovra'
-/// rispettare comunque: `max_batch_bytes` (con cui l'executor misura il batch
-/// risultante), `max_governed_memory_bytes` (il budget del governor) e
-/// `max_payload_bytes`. Derivarlo dal solo `max_batch_bytes` lascerebbe
-/// arrow allocare fino al tetto di default del body (64 MiB) anche con un
-/// budget di memoria di 1 MiB, e il governor interverrebbe solo dopo la
-/// materializzazione — cioe' dopo l'allocazione che il tetto deve impedire.
-///
-/// `max_batches` e' il limite semantico dei RECORD BATCH, non dei messaggi:
-/// lo schema e i `DictionaryBatch` hanno il proprio tetto, altrimenti un
-/// piano con `max_batches = 1` rifiuterebbe qualunque stream non vuoto.
+/// Il tetto sul body e' il piu' stretto fra `max_batch_bytes`,
+/// `max_governed_memory_bytes` e `max_payload_bytes`: il governor interviene
+/// solo dopo la materializzazione, cioe' dopo l'allocazione da impedire.
+/// `max_batches` limita i record batch, non i messaggi: schema e
+/// `DictionaryBatch` hanno un tetto proprio.
 #[must_use]
 pub fn limits_from_plan(
     limits: &plenora_core::limits::Limits,
@@ -802,11 +643,8 @@ pub fn limits_from_plan(
         .min(limits.max_governed_memory_bytes)
         .min(limits.max_payload_bytes);
     IpcLimits {
-        // Anche i METADATI sono un'allocazione, e arrow li alloca prima di
-        // qualunque batch: lasciarli al default significherebbe permettere
-        // 16 MiB di metadati sotto un budget di memoria di 1 MiB — cioe'
-        // sforare il budget prima ancora di leggere una riga. Il tetto e' il piu'
-        // stretto fra il default e il budget effettivo.
+        // Anche i metadati sono un'allocazione, precedente a qualunque batch:
+        // il tetto e' il piu' stretto fra il default e il budget effettivo.
         max_metadata_bytes: usize::try_from(
             u64::try_from(default.max_metadata_bytes)
                 .unwrap_or(u64::MAX)

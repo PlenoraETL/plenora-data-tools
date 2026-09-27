@@ -21,13 +21,10 @@ use super::transport::{
 /// puo' superare `usize` su piattaforme a 32 bit e gli offset non vanno mai
 /// troncati.
 ///
-/// Fallisce in overflow invece di saturare. `saturating_add(7) & !7` sembra
-/// prudente ed e' il contrario: vicino a `u64::MAX` la somma satura su
-/// `u64::MAX` e il mascheramento la riporta **sotto** il valore di partenza —
-/// l'offset allineato risulterebbe minore di quello da allineare, e la
-/// monotonicita' su cui poggia l'avanzamento del parsing cadrebbe in silenzio.
-/// Con `checked_add` un offset che non e' allineabile a 64 bit e' un
-/// messaggio malformato, cioe' un errore di framing esplicito.
+/// Fallisce in overflow invece di saturare: vicino a `u64::MAX` una somma
+/// saturata e mascherata tornerebbe **sotto** il valore di partenza e
+/// romperebbe in silenzio la monotonicita' del parsing. Un offset non
+/// allineabile e' un errore di framing esplicito.
 const fn align8_u64(value: u64) -> Option<u64> {
     match value.checked_add(7) {
         Some(somma) => Some(somma & !7),
@@ -67,24 +64,19 @@ fn to_u64(value: usize) -> Result<u64, ArrowTransportError> {
 
 // --- Validazione strutturale dei metadati flatbuffer `Message` -------------
 //
-// arrow-format alloca `Vec::with_capacity(count)` per vettori e stringhe
-// dichiarati nei metadati senza un tetto proprio: un payload malevolo puo'
-// indurre allocazioni enormi (OOM, trovato via fuzzing). Questo validatore
-// percorre la struttura `Message`/`Schema`/`RecordBatch` dello standard IPC
-// e verifica che ogni vettore, stringa e buffer stia dentro i byte
-// disponibili, prima che arrow-rs veda i metadati. Non e' un parser
-// completo: copre solo la struttura che puo' allocare.
+// arrow-format alloca `Vec::with_capacity(count)` per i vettori dichiarati
+// nei metadati senza un tetto proprio (OOM). Questo validatore verifica che
+// ogni vettore, stringa e buffer di `Message`/`Schema`/`RecordBatch` stia
+// nei byte disponibili prima che arrow-rs veda i metadati. Copre solo la
+// struttura che puo' allocare.
 
 const MAX_FLATBUFFER_DEPTH: usize = 64;
 
 /// Nodi totali (campi, figli compresi) ammessi in uno Schema IPC.
 ///
-/// `MAX_COLUMNS` limita i soli campi di primo livello, e senza questo tetto
-/// i vettori `children` sarebbero percorsi senza alcuno. Milioni di figli stanno
-/// comodamente dentro il tetto sui metadati, e un `FlatBuffer` costruito a mano
-/// puo' far puntare piu' entry allo STESSO sottoalbero — il validatore lo
-/// visiterebbe una volta per riferimento, con crescita esponenziale fino alla
-/// profondita' 64, e arrow espanderebbe poi lo stesso schema.
+/// `MAX_COLUMNS` limita i soli campi di primo livello; questo tetto copre i
+/// vettori `children`, che un `FlatBuffer` costruito a mano puo' far puntare
+/// allo stesso sottoalbero con crescita esponenziale.
 const MAX_SCHEMA_NODES: usize = 64 * 1024;
 
 /// Budget di visita di uno Schema: conta i nodi e rifiuta i sottoalberi
@@ -123,12 +115,8 @@ impl SchemaBudget {
 /// Somma di posizioni dentro il buffer.
 ///
 /// Gli addendi arrivano dal file: un traboccamento e' un riferimento
-/// malformato, non un indirizzo. Sommare senza controllo lo farebbe rientrare
-/// nel buffer da capo — in release — e in debug farebbe panicare il confine
-/// che esiste per non panicare.
-///
-/// Aritmetica totale **localmente**, anche dove il chiamante ha gia' provato
-/// il confine: la garanzia altrui vale finche' resta dove sta.
+/// malformato. Il controllo resta locale anche dove il chiamante ha gia'
+/// provato il confine.
 fn fb_somma(a: usize, b: usize) -> Result<usize, ArrowTransportError> {
     a.checked_add(b).ok_or(ArrowTransportError::IpcTruncated)
 }
@@ -144,11 +132,8 @@ fn fb_prodotto(indice: usize, dimensione: usize) -> Result<usize, ArrowTransport
 
 /// Le quattro letture little-endian dal buffer flatbuffer.
 ///
-/// Cambia la larghezza, non la regola: ogni posizione fuori dal buffer e' un
-/// troncamento, mai un valore inventato. La fine dell'intervallo passa da
-/// [`fb_somma`] perche' `pos` arriva dal file, quindi `pos + larghezza` puo'
-/// traboccare — e una lettura che panica al posto di rifiutare non e' un
-/// confine.
+/// Ogni posizione fuori dal buffer e' un troncamento. La fine dell'intervallo
+/// passa da [`fb_somma`] perche' `pos` arriva dal file e puo' traboccare.
 macro_rules! lettura_le {
     ($nome:ident, $tipo:ty, $byte:literal) => {
         fn $nome(buf: &[u8], pos: usize) -> Result<$tipo, ArrowTransportError> {
@@ -215,12 +200,8 @@ fn fb_field(
 
 /// Posizione assoluta di un campo indiretto (tabella, vettore, stringa).
 ///
-/// La somma con `relative` resta controllata anche se su un bersaglio a 64 bit
-/// non puo' traboccare — `relative` viene da un `u32` e `campo` sta nel buffer
-/// — e nessun test puo' quindi vederla fallire li'. A 32 bit invece i due
-/// addendi ci arrivano vicini, ed e' l'unico controllo che li separa: toglierlo
-/// perche' «la suite resta verde» significherebbe fidarsi della larghezza di
-/// `usize` del bersaglio in cui si e' provato.
+/// La somma con `relative` resta controllata: a 64 bit non trabocca, ma a
+/// 32 bit e' l'unico controllo che separa i due addendi dall'overflow.
 fn fb_indirect(buf: &[u8], table: usize, offset: usize) -> Result<usize, ArrowTransportError> {
     let campo = fb_somma(table, offset)?;
     let relative = fb_u32(buf, campo)? as usize;
@@ -247,13 +228,9 @@ fn fb_vector(buf: &[u8], pos: usize, elem_size: usize) -> Result<usize, ArrowTra
 
 /// Stringa flatbuffer (vettore di byte con terminatore), e i suoi byte.
 ///
-/// Chi valida soltanto i confini scarta il risultato; chi deve guardare il
-/// contenuto — una chiave da confrontare, una lunghezza da misurare — lo usa.
-/// Una funzione sola, quindi un solo posto dove il controllo dei confini puo'
-/// sbagliare.
-///
-/// [`fb_vector`] ha gia' provato che `pos + 4 + count` stia nel buffer; la
-/// costruzione dell'intervallo resta comunque controllata.
+/// Un solo posto per il controllo dei confini, sia per chi valida soltanto
+/// sia per chi legge il contenuto. L'intervallo resta controllato anche se
+/// [`fb_vector`] l'ha gia' provato.
 fn fb_string(buf: &[u8], pos: usize) -> Result<&[u8], ArrowTransportError> {
     let count = fb_vector(buf, pos, 1)?;
     let inizio = fb_somma(pos, 4)?;
@@ -267,29 +244,16 @@ fn fb_string(buf: &[u8], pos: usize) -> Result<&[u8], ArrowTransportError> {
 
 /// Valida UNA coppia di custom metadata e **restituisce** chiave e valore.
 ///
-/// # Perche' restituisce invece di scartare
+/// Restituisce le stringhe perche' i duplicati sono una proprieta'
+/// dell'insieme, controllata in [`fb_custom_metadata`].
 ///
-/// Validare e buttare via non basterebbe, e non potrebbe: i duplicati sono
-/// una proprieta' dell'INSIEME, e chi vede un elemento per volta non li
-/// vedra' mai. Restituire le due stringhe sposta il controllo dove c'e'
-/// l'informazione per farlo ([`fb_custom_metadata`]).
-///
-/// # Che cosa rifiuta, e perche' non e' pedanteria
-///
-/// Chiave e valore **assenti** sono un rifiuto, non un salto: trattando
-/// l'offset zero come «niente da validare» si proseguirebbe. `arrow-ipc`
-/// legge pero' i custom metadata del FOOTER con `key().unwrap()` e
-/// `value().unwrap()`, quindi una voce senza chiave o senza valore
-/// raggiungerebbe una primitiva di panic dentro la dipendenza — esattamente
-/// cio' che questo confine esiste per impedire. Il percorso dello SCHEMA e'
-/// invece difensivo (`if let`), e questo rende una lacuna del genere
-/// invisibile finche' nessuno legge il footer.
+/// Chiave e valore **assenti** sono un rifiuto: `arrow-ipc` legge i custom
+/// metadata del footer con `key().unwrap()` e `value().unwrap()`, quindi una
+/// voce incompleta arriverebbe a un panic dentro la dipendenza.
 fn fb_key_value(buf: &[u8], table: usize) -> Result<(&str, &str), ArrowTransportError> {
     /// Che cosa pretendere da uno dei due campi di una coppia.
     ///
-    /// Chiave e valore hanno tetti, diagnosi ed esiti diversi: fonderli in un
-    /// ciclo con `if index == 0` li renderebbe due validazioni travestite da
-    /// una, con due rami irraggiungibili per convincere il compilatore.
+    /// Chiave e valore hanno tetti e diagnosi diversi.
     struct Attesa {
         indice: usize,
         limite: usize,
@@ -352,29 +316,18 @@ fn fb_key_value(buf: &[u8], table: usize) -> Result<(&str, &str), ArrowTransport
 /// Valida una collezione di custom metadata: conteggio, forma di ogni coppia,
 /// unicita' delle chiavi.
 ///
-/// # Chi controlla che cosa
-///
-/// [`fb_key_value`] valida **una** coppia; qui si vede l'intera collezione,
-/// quindi qui stanno il tetto sul conteggio — applicato PRIMA del ciclo, cioe'
-/// prima di qualunque allocazione proporzionale — e il rifiuto dei duplicati.
-///
-/// # Chiavi sconosciute
-///
-/// Accettate e ignorate. Questo confine valida la **forma**, non il
-/// vocabolario: rifiutare le chiavi altrui romperebbe l'interoperabilita' con
-/// qualunque produttore Arrow che aggiunga le proprie, e non renderebbe
-/// nessuno piu' sicuro.
+/// Il tetto sul conteggio si applica prima di qualunque allocazione
+/// proporzionale. Le chiavi sconosciute sono accettate: si valida la
+/// **forma**, non il vocabolario, per non rompere l'interoperabilita'.
 fn fb_custom_metadata(buf: &[u8], table: usize, offset: usize) -> Result<(), ArrowTransportError> {
     fb_custom_metadata_estraendo(buf, table, offset, None).map(|_| ())
 }
 
 /// Come [`fb_custom_metadata`], ma **rende** il valore di una chiave cercata.
 ///
-/// Una funzione sola e non due: l'estrazione deve passare per la stessa
-/// traversata che convalida, altrimenti esisterebbero due modi di leggere il
-/// footer e solo uno sarebbe rinforzato. E' esattamente il motivo per cui il
-/// `commit_token` **non** si legge da `FileReader::custom_metadata`: quella e'
-/// una terza strada, che di questi controlli non ne fa nessuno.
+/// L'estrazione passa per la stessa traversata che convalida: per questo il
+/// `commit_token` non si legge da `FileReader::custom_metadata`, che non fa
+/// questi controlli.
 fn fb_custom_metadata_estraendo<'a>(
     buf: &'a [u8],
     table: usize,
@@ -511,19 +464,10 @@ fn fb_record_batch(buf: &[u8], table: usize, body_len: usize) -> Result<(), Arro
     let compression = fb_field(buf, vtable, vtable_len, 3)?;
     if compression != 0 {
         fb_table(buf, fb_indirect(buf, table, compression)?)?;
-        // Con `bodyCompression` la dimensione che arrow allochera' NON e' il
-        // `bodyLength` del messaggio ma la somma delle lunghezze decompresse,
-        // dichiarate nei prefissi a 8 byte dei singoli buffer — dentro il
-        // body, cioe' proprio la regione che la pre-validazione non legge.
-        // Un tetto sul body compresso non limiterebbe quindi nulla, e
-        // fidarsi dei prefissi dichiarati sarebbe lo stesso schema
-        // "lunghezza dichiarata" da cui il confine difende.
-        //
-        // Il confine rifiuta quindi la classe intera: i writer di questo
-        // progetto non emettono mai IPC compresso (le `IpcWriteOptions` di
-        // default non comprimono), quindi non rifiuta nulla di nostro, e per
-        // un input esterno un rifiuto esplicito e' meglio di
-        // un'allocazione non misurata.
+        // Con `bodyCompression` arrow alloca le lunghezze decompresse
+        // dichiarate dentro il body, che la pre-validazione non legge: un
+        // tetto sul body compresso non limiterebbe nulla. Si rifiuta la
+        // classe intera; i writer del progetto non comprimono.
         return Err(ArrowTransportError::IpcUnsupportedFeature(
             "body compresso (bodyCompression)",
         ));
@@ -601,12 +545,9 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
     } else {
         Some(fb_indirect(metadata, table, header_offset)?)
     };
-    // `bodyLength` si legge PRIMA di validare l'header: e' il solo metro con
-    // cui verificare i buffer, sia di un RecordBatch sia del RecordBatch
-    // interno a un DictionaryBatch. Validare il dictionary contro
-    // `metadata.len()` userebbe la lunghezza dei METADATI, che con il body non
-    // ha alcun rapporto: rifiuterebbe dictionary legittime con metadati corti
-    // e accetterebbe buffer ben oltre il body dichiarato.
+    // `bodyLength` si legge PRIMA di validare l'header: e' il solo metro per
+    // i buffer, sia di un RecordBatch sia di quello interno a un
+    // DictionaryBatch (`metadata.len()` non ha rapporto con il body).
     let body_len_offset = fb_field(metadata, vtable, vtable_len, 3)?;
     let body_len = if body_len_offset == 0 {
         0
@@ -619,27 +560,14 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
     };
 
     // Il tipo e la presenza dell'header si decidono INSIEME, in un match
-    // solo.
-    //
-    // Un header assente non e' un messaggio piu' semplice: e' un messaggio che
-    // salta ogni controllo di questa funzione e arriva ad arrow, che lo legge
-    // con `unwrap()` — `header_as_schema()`,
-    // `header_as_dictionary_batch()`, `header_as_record_batch()`.
-    //
-    // Diviso in due — un `if` sulla presenza e un `match` sul tipo — resta
-    // scoperta la combinazione che nessuno dei due guarda: un tipo non
-    // supportato **senza** header non entra nel primo, perche' il primo
-    // pretende l'header solo per i tipi noti, e non entra nel secondo, perche'
-    // il secondo gira solo quando l'header c'e'. Passa in mezzo. Un match
-    // sulla coppia non ha un «in mezzo»: ogni combinazione ha il suo ramo, e
-    // il compilatore pretende che ci siano tutti.
+    // solo: ogni combinazione ha il suo ramo e nessuna passa in mezzo. Un
+    // header assente arriverebbe ad arrow, che lo legge con `unwrap()`
+    // (`header_as_schema()`, `header_as_dictionary_batch()`,
+    // `header_as_record_batch()`).
     match (header_type, header_table) {
         (1, Some(header_table)) => {
-            // Un messaggio Schema non ha corpo: il writer di arrow emette
-            // sempre `bodyLength` zero. Uno diverso da zero non descrive
-            // niente, e `StreamReader::try_new` lo alloca e lo legge prima di
-            // guardare il tipo del messaggio — fino a `max_body_bytes`, per
-            // chi vuole soltanto lo schema.
+            // Un messaggio Schema non ha corpo; uno dichiarato verrebbe
+            // allocato da `StreamReader::try_new` prima di guardare il tipo.
             if body_len != 0 {
                 return Err(ArrowTransportError::IpcSchemaInvalid(
                     "un messaggio Schema dichiara un corpo",
@@ -652,28 +580,14 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
             // 1, isDelta al campo 2.
             let (dict_vtable, dict_vtable_len) = fb_table(metadata, header_table)?;
 
-            // Un dizionario DELTA non e' governato dal tetto cumulativo.
-            //
-            // Il tetto somma i `bodyLength` dichiarati, e su un delta
-            // arrow non tiene quel body: concatena il dizionario
-            // precedente con il nuovo in un buffer ulteriore, mentre
-            // entrambi gli originali sono ancora vivi. Il picco si
-            // avvicina al doppio della somma, e la formula della memoria
-            // trattenuta — quella di `verifica.rs` e di
-            // isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite — diventerebbe falsa senza che niente
-            // lo segnali.
-            //
-            // Si rifiutano invece di rialzare il tetto, ed e' una
-            // DEVIAZIONE dal formato, non una pulizia: un dizionario delta e'
-            // un ingresso Arrow stream perfettamente valido, e questo confine
-            // lo esclude deliberatamente. Cio' che si perde e' un ingresso
-            // legittimo che nessuno dei nostri produttori genera — il
-            // `FileWriter` non ne emette — quindi il costo oggi e' nullo, ma
-            // il costo esiste.
-            //
-            // Il giorno in cui servisse leggerli, il rientro non e' «alzare
-            // il tetto»: e' rifarlo sul picco della concatenazione, non sulla
-            // somma dei body.
+            // DEVIAZIONE dal formato: i dizionari delta si rifiutano. Arrow
+            // concatena precedente e nuovo in un buffer ulteriore, il picco
+            // si avvicina al doppio della somma dei `bodyLength` e la formula
+            // della memoria trattenuta (`verifica.rs`,
+            // isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite)
+            // diventerebbe falsa. Nessun nostro produttore li emette.
+            // Rientro: rifare il tetto sul picco della concatenazione, non
+            // sulla somma dei body.
             let is_delta = fb_field(metadata, dict_vtable, dict_vtable_len, 2)?;
             if is_delta != 0 {
                 let posizione = fb_somma(header_table, is_delta)?;
@@ -688,10 +602,7 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
             }
 
             // `data` e' obbligatorio: `read_dictionary` lo legge con
-            // `batch.data().unwrap()`, quindi un DictionaryBatch che non
-            // ce l'ha fa panicare arrow invece di rendere un errore. La
-            // barriera anti-panico lo tradurrebbe, ma un panico attraversato
-            // e' comunque uno stato che non vogliamo raggiungere.
+            // `batch.data().unwrap()`.
             let data = fb_field(metadata, dict_vtable, dict_vtable_len, 1)?;
             if data == 0 {
                 return Err(ArrowTransportError::IpcSchemaInvalid(
@@ -702,32 +613,18 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
             fb_record_batch(metadata, batch, body_len)?;
         }
         (3, Some(header_table)) => fb_record_batch(metadata, header_table, body_len)?,
-        // Zero e' `MessageHeader::NONE`, non un Tensor: e' un messaggio che
-        // non porta contenuto, e arrow lo attraversa senza fare niente. Non
-        // c'e' niente da validare e non c'e' niente da rifiutare.
-        //
-        // Rifiutarlo sarebbe una deviazione in piu' dal formato, e presa per
-        // effetto collaterale della forma del match invece che per decisione:
-        // il ramo esiste per dire che l'assenza qui e' legittima, non per
-        // dimenticanza.
+        // `MessageHeader::NONE`: un messaggio senza contenuto, legittimo per
+        // il formato, che arrow attraversa senza fare niente.
         (0, None) => {}
-        // NONE che pero' un header ce l'ha: il tipo dichiara «nessun
-        // contenuto» e il messaggio ne porta uno. Non e' un no-op, e' una
-        // dichiarazione che contraddice se stessa.
+        // NONE con un header: una dichiarazione che contraddice se stessa.
         (0, Some(_)) => {
             return Err(ArrowTransportError::IpcSchemaInvalid(
                 "messaggio IPC di tipo NONE con un header",
             ))
         }
-        // Il tipo si rifiuta PRIMA di guardare l'header: che un Tensor porti o
-        // no il suo header non cambia che non lo sappiamo leggere, e dire
-        // «senza header» di un messaggio che comunque rifiuteremmo manderebbe
-        // chi legge a cercare la cosa sbagliata.
-        //
-        // Il messaggio non nomina Tensor e SparseTensor: sono il 4 e il 5, ma
-        // questo ramo prende anche il 6 e oltre, che nel formato non
-        // significano ancora niente. Nominarli sarebbe falso su tutto il resto
-        // del ramo.
+        // Il tipo si rifiuta PRIMA di guardare l'header, cosi' la diagnosi
+        // nomina la causa vera. Il messaggio non nomina Tensor e SparseTensor
+        // perche' il ramo prende anche i valori non assegnati dal formato.
         (4.., _) => {
             return Err(ArrowTransportError::Arrow(
                 "tipo di header IPC non supportato".to_owned(),
@@ -749,12 +646,10 @@ fn validate_ipc_message_metadata(metadata: &[u8]) -> Result<(usize, u8), ArrowTr
 
 /// Sorgente di byte su cui gira la pre-validazione del framing IPC.
 ///
-/// La stessa procedura serve due ingressi con vincoli di memoria opposti: il
-/// payload del trasporto, che e' gia' interamente in memoria, e i file aperti
-/// dagli ingressi pubblici, che NON vanno caricati per intero. Leggere per
-/// offset e' quindi l'unica interfaccia comune possibile: si materializzano
-/// solo i metadati di ogni messaggio — tetto [`MAX_IPC_METADATA_BYTES`],
-/// verificato PRIMA della lettura — e il body si salta per offset.
+/// Serve sia il payload gia' in memoria sia i file, che NON vanno caricati
+/// per intero: si materializzano solo i metadati di ogni messaggio (tetto
+/// [`MAX_IPC_METADATA_BYTES`], verificato PRIMA della lettura) e il body si
+/// salta per offset.
 pub trait IpcSource {
     /// Byte totali disponibili nella sorgente.
     fn total_len(&self) -> u64;
@@ -873,29 +768,12 @@ pub enum EndOfData {
 
 /// Limiti che il confine applica PRIMA che arrow allochi.
 ///
-/// Esistono perche' i limiti del piano arrivano troppo tardi:
-/// `max_batch_bytes` misura un `RecordBatch` gia' materializzato, cioe' dopo
-/// l'allocazione che dovrebbe impedire. Questi si applicano sulle lunghezze
-/// DICHIARATE, prima che una sola pagina venga allocata.
+/// `max_batch_bytes` del piano misura un `RecordBatch` gia' materializzato;
+/// questi si applicano sulle lunghezze DICHIARATE, prima dell'allocazione.
 #[derive(Debug, Clone, Copy)]
-// Costruibile solo con `..Default::default()` da fuori dal crate.
-//
-// # Che cosa si perde, una volta sola
-//
-// Il `struct literal` esaustivo da fuori. Oggi nessuno lo scrive — il
-// workspace non e' pubblicato e l'unico consumatore esterno al modulo usa
-// `IpcLimits::default()` — quindi il costo effettivo e' zero, e il costo
-// dichiarato e' comunque una volta sola.
-//
-// # Che cosa si guadagna, per sempre
-//
-// Che aggiungere un limite smetta di essere una rottura. Questo confine ha
-// gia' quattro tetti e ne guadagna un quinto: il prossimo non deve riaprire la
-// stessa discussione, ne' costringere a scegliere fra proteggere una risorsa e
-// non rompere un'API.
-//
-// Il campo che ha reso necessaria la decisione e' `max_retained_dictionary_body_bytes`,
-// ed e' registrato in errori-e-limiti.md#il-tetto-cumulativo-sui-dizionari.
+// `non_exhaustive`: da fuori dal crate si costruisce solo con
+// `..Default::default()`, cosi' aggiungere un limite non rompe l'API.
+// Vedi errori-e-limiti.md#il-tetto-cumulativo-sui-dizionari.
 #[non_exhaustive]
 pub struct IpcLimits {
     /// Tetto sui metadati di un singolo messaggio (e sul footer del file).
@@ -909,25 +787,15 @@ pub struct IpcLimits {
     pub max_record_batches: usize,
     /// Numero massimo di messaggi TOTALI, dati e ausiliari.
     ///
-    /// Uno stream con un solo record batch contiene almeno lo schema e il
-    /// batch, e con le colonne dictionary anche un `DictionaryBatch` per
-    /// campo: confondere i due conteggi — assegnando `max_messages =
-    /// max_batches` — rifiuterebbe qualunque stream non vuoto con
-    /// `max_batches = 1`.
+    /// Distinto da `max_record_batches`: uno stream con un batch contiene
+    /// anche lo schema ed eventuali `DictionaryBatch`.
     pub max_messages: usize,
     /// Tetto sulla **somma** dei body dei dizionari.
     ///
-    /// E' l'unico tetto cumulativo del confine, e serve perche' i dizionari
-    /// sono l'unica cosa che il lettore trattiene tutta insieme: `FileReader`
-    /// li decodifica dentro `try_new` e li tiene per l'intera scansione, e uno
-    /// `StreamReader` accumula quelli che incontra. Il tetto per singolo body
-    /// non li governa — mille dizionari da un megabyte lo rispettano tutti e
-    /// insieme trattengono un gigabyte.
-    ///
-    /// Sta qui, fra i limiti del confine, e non come parametro di un
-    /// chiamante: un tetto che protegge un percorso solo lascia scoperti gli
-    /// altri lettori dello stesso formato, e la classe del difetto resterebbe
-    /// aperta.
+    /// I dizionari sono l'unica cosa che il lettore trattiene tutta insieme
+    /// (`FileReader` li decodifica in `try_new`, `StreamReader` li accumula),
+    /// quindi il tetto per singolo body non li governa. Sta fra i limiti del
+    /// confine per proteggere tutti i lettori, non un percorso solo.
     pub max_retained_dictionary_body_bytes: u64,
 }
 
@@ -948,13 +816,10 @@ impl Default for IpcLimits {
 impl IpcLimits {
     /// Profilo del payload del trasporto v3.
     ///
-    /// Il trasporto ha limiti PROPRI e gia' dichiarati — l'envelope porta la
-    /// lunghezza del payload, `MAX_CELL_BYTES` limita la singola cella WKB —
-    /// e un batch con una cella al massimo consentito ha per costruzione un
-    /// body maggiore del tetto per-batch degli ingressi file. Applicare qui
-    /// il profilo stretto trasformerebbe un `CellTooLarge` diagnostico in un
-    /// generico "body troppo grande", peggiorando l'errore senza aggiungere
-    /// protezione: il tetto vero e' `MAX_STREAM_BYTES`.
+    /// Il trasporto ha limiti propri (lunghezza nell'envelope,
+    /// `MAX_CELL_BYTES`): il profilo stretto trasformerebbe un `CellTooLarge`
+    /// in un generico "body troppo grande". Il tetto vero e'
+    /// `MAX_STREAM_BYTES`.
     #[must_use]
     pub const fn transport() -> Self {
         Self {
@@ -974,12 +839,10 @@ impl IpcLimits {
 /// (64 MiB), che e' il limite con cui l'executor misura il batch risultante.
 pub const DEFAULT_MAX_BODY_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Massimale assoluto sulla somma dei body dei dizionari trattenuti: 64 MiB.
+/// Massimale assoluto sulla somma dei body dei dizionari trattenuti.
 ///
-/// Stesso ordine di grandezza di un singolo body, e non un suo multiplo: i
-/// dizionari restano vivi tutti insieme per l'intera scansione, mentre di
-/// record batch ne vive uno per volta. Un tetto piu' largo qui costerebbe piu'
-/// del tetto per-batch pur sembrando simile.
+/// Stesso ordine di grandezza di un singolo body, non un suo multiplo: i
+/// dizionari restano vivi tutti insieme, i record batch uno per volta.
 pub const MAX_RETAINED_DICTIONARY_BODY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Tetto sui messaggi TOTALI di uno stream: i record batch piu' lo schema e i
@@ -1004,17 +867,9 @@ fn validate_framing_region<S: IpcSource + ?Sized>(
     let mut offset = start;
     let mut messages = 0_usize;
     let mut record_batches = 0_usize;
-    // La somma dei body dei dizionari incontrati.
-    //
-    // E' l'unico accumulatore della traversata, e c'e' perche' i dizionari
-    // sono l'unica cosa che il lettore trattiene tutta insieme: di record
-    // batch ne vive uno per volta, di dizionari vivono tutti. Il tetto per
-    // singolo body non li governa.
-    //
-    // Sta QUI, nella traversata comune, e non nel solo percorso che legge il
-    // footer: e' la traversata che tutti i lettori ostili attraversano —
-    // stream e file, ingressi pubblici e verifica dell'artefatto — e un tetto
-    // applicato a valle ne proteggerebbe uno lasciando aperti gli altri.
+    // La somma dei body dei dizionari incontrati (vedi
+    // `IpcLimits::max_retained_dictionary_body_bytes`). Sta nella traversata
+    // comune a stream e file perche' la attraversano tutti i lettori.
     let mut dizionari_trattenuti = 0_u64;
     loop {
         if offset >= end_limit {
@@ -1038,10 +893,8 @@ fn validate_framing_region<S: IpcSource + ?Sized>(
             (prefix as usize, 4_u64)
         };
         if metadata_len == 0 {
-            // Fine stream: il marcatore deve CHIUDERE la regione. Uscire qui
-            // senza guardare cosa segue lascerebbe passare byte e messaggi
-            // interi dopo l'EOS — validati da nessuno e ignorati dal reader,
-            // che e' esattamente la forma dello smuggling.
+            // Fine stream: il marcatore deve CHIUDERE la regione, altrimenti
+            // byte non validati dopo l'EOS passerebbero (smuggling).
             let after = offset
                 .checked_add(header)
                 .ok_or(ArrowTransportError::IpcTruncated)?;
@@ -1070,17 +923,9 @@ fn validate_framing_region<S: IpcSource + ?Sized>(
         }
         if header_type == IPC_HEADER_DICTIONARY_BATCH {
             // Somma controllata: il trabocco e' un rifiuto, mai una
-            // saturazione. Saturare direbbe «il tetto e' rispettato» a un
-            // ingresso che ha dichiarato piu' di quanto un `u64` rappresenti.
-            //
-            // L'errore e' `IpcTruncated` e non `IpcFooterInvalid`: qui si sta
-            // percorrendo la REGIONE DEI MESSAGGI, e un footer puo' non
-            // esserci affatto — lo stream non ne ha uno. Nominare una
-            // struttura assente manderebbe chi legge a cercarla. Il conteggio
-            // sui blocchi del footer, che il footer ce l'ha per definizione,
-            // rende invece `IpcFooterInvalid`: due percorsi, due errori, e
-            // nessuno dei due porta un numero, perche' una somma che trabocca
-            // non ne ha uno onesto.
+            // saturazione. `IpcTruncated` e non `IpcFooterInvalid` perche'
+            // qui si percorre la regione dei messaggi, e lo stream non ha
+            // footer.
             dizionari_trattenuti = dizionari_trattenuti
                 .checked_add(body_len)
                 .ok_or(ArrowTransportError::IpcTruncated)?;
@@ -1122,15 +967,10 @@ fn validate_message_at<S: IpcSource + ?Sized>(
     let metadata_start = offset
         .checked_add(header)
         .ok_or(ArrowTransportError::IpcTruncated)?;
-    // Una lunghezza DICHIARATA che non e' nemmeno contenuta nella sorgente
-    // descrive un file ROTTO, non un file troppo grande: nessuno supera un
-    // budget con byte che non esistono. La verifica di disponibilita' viene
-    // quindi prima del tetto, altrimenti diciannove byte di spazzatura — i
-    // cui primi quattro si leggono come una lunghezza enorme — uscirebbero
-    // come `resource_limit`, cioe' «rilancia con piu' budget» per un file che non
-    // e' un file IPC. E' pura aritmetica su `end_limit`: nessun byte viene
-    // letto prima del tetto, quindi la proprieta' di non materializzare una
-    // finestra arbitraria resta intatta.
+    // Una lunghezza dichiarata oltre la sorgente descrive un file ROTTO, non
+    // troppo grande: la disponibilita' si verifica prima del tetto, perche'
+    // la spazzatura non esca come `resource_limit`. E' pura aritmetica su
+    // `end_limit`: nessun byte e' letto prima del tetto.
     let metadata_end = metadata_start
         .checked_add(to_u64(metadata_len)?)
         .ok_or(ArrowTransportError::IpcTruncated)?;
@@ -1158,10 +998,8 @@ fn validate_message_at<S: IpcSource + ?Sized>(
     if fine > end_limit {
         return Err(ArrowTransportError::IpcTruncated);
     }
-    // Il tetto sul body si applica alla lunghezza DICHIARATA, cioe' prima che
-    // arrow legga un solo byte del corpo. `max_batch_bytes` dell'executor
-    // misura invece il `RecordBatch` gia' costruito: troppo tardi per
-    // impedire l'allocazione che dovrebbe limitare.
+    // Il tetto sul body si applica alla lunghezza DICHIARATA, prima che arrow
+    // legga un byte del corpo.
     if body_len > limits.max_body_bytes {
         return Err(ArrowTransportError::IpcBodyTooLarge {
             declared: body_len,
@@ -1285,17 +1123,11 @@ fn fb_footer_blocks(
 
 /// Pre-validazione del **file format** IPC, guidata dal FOOTER.
 ///
-/// `FileReader` non percorre i messaggi in sequenza: legge il footer e salta
-/// direttamente agli `offset` dei suoi blocchi. Una scansione sequenziale che
-/// si ferma al primo EOS valida quindi una regione che arrow potrebbe non
-/// leggere mai, e lascia non validata quella che leggera' davvero: basterebbe
-/// un footer che punti altrove per aggirare l'intero confine.
-///
-/// La validazione segue percio' la stessa mappa di arrow — magic, trailer,
-/// footer, blocchi — e per ogni blocco verifica offset, allineamento,
-/// lunghezze dichiarate, contenimento nella regione dati e non
-/// sovrapposizione con gli altri blocchi, poi valida il messaggio che ci
-/// trova. Lo schema dentro il footer e' percorso come quello di un messaggio.
+/// `FileReader` salta direttamente agli `offset` dei blocchi del footer, quindi
+/// una scansione sequenziale validerebbe la regione sbagliata. La validazione
+/// segue la stessa mappa di arrow (magic, trailer, footer, blocchi) e per ogni
+/// blocco verifica offset, allineamento, lunghezze, contenimento e non
+/// sovrapposizione, poi il messaggio che ci trova.
 ///
 /// # Errors
 ///
@@ -1313,38 +1145,18 @@ pub fn validate_ipc_file_framing<S: IpcSource + ?Sized>(
 /// Convalida il file **e** rende il valore di una chiave dei custom metadata
 /// del footer.
 ///
-/// E' la stessa funzione di [`validate_ipc_file_framing`], non una seconda
-/// lettura: il valore esce dalla traversata rinforzata, quindi non esiste un
-/// modo di ottenerlo saltando i controlli. Leggere il token con
-/// `FileReader::custom_metadata` aprirebbe invece una terza strada nel
-/// footer, e quella non e' rinforzata.
+/// Il valore esce dalla stessa traversata rinforzata di
+/// [`validate_ipc_file_framing`]; `FileReader::custom_metadata` non lo e'.
+///
+/// Il tetto cumulativo sui dizionari di [`IpcLimits`] si applica **sempre**,
+/// sui `bodyLength` dichiarati nei blocchi del footer, cioe' quelli che arrow
+/// leggera' davvero, prima che ne decodifichi uno.
 ///
 /// # Errors
 ///
-/// Come [`validate_ipc_file_framing`].
-/// # Il tetto cumulativo sui dizionari
-///
-/// Si applica **sempre**, e viene da [`IpcLimits`]: e' un limite del confine,
-/// non una richiesta di un chiamante.
-///
-/// `FileReader` decodifica **tutti** i dizionari dentro `try_new` e li
-/// trattiene per l'intera scansione: sono l'unica ritenzione che non e'
-/// funzione ne' dello schema ne' del batch corrente, e il tetto per singolo
-/// body non li governa perche' e' la loro SOMMA a restare viva.
-///
-/// Il controllo e' sui `bodyLength` **dichiarati nel footer**, quindi cade
-/// prima che arrow ne decodifichi uno: e' l'unico punto in cui rifiutare costa
-/// zero allocazioni. Ed e' complementare all'accumulo che la traversata dei
-/// messaggi fa gia': quello vede i dizionari che incontra percorrendo la
-/// regione, questo vede i blocchi che **arrow leggera' davvero**, che sono
-/// quelli del footer.
-///
-/// # Errors
-///
+/// Come [`validate_ipc_file_framing`];
 /// [`ArrowTransportError::IpcRetainedDictionariesTooLarge`] se la somma supera
-/// il tetto, e [`ArrowTransportError::IpcFooterInvalid`] se la somma
-/// **trabocca**: sono due fatti diversi, e riusare il primo costringerebbe a
-/// riportare una somma che non esiste.
+/// il tetto, [`ArrowTransportError::IpcFooterInvalid`] se la somma trabocca.
 pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
     source: &mut S,
     limits: &IpcLimits,
@@ -1355,13 +1167,9 @@ pub fn valida_file_ed_estrai<S: IpcSource + ?Sized>(
 
 /// Convalida il file **e** rende i byte del footer che la convalida ha letto.
 ///
-/// # Perche' i byte e non un secondo accesso al file
-///
-/// Perche' sono gli stessi byte che la traversata rinforzata ha percorso, letti
-/// una volta sola entro `max_metadata_bytes`. Rileggerli dal file — come fa
-/// `FileReader`, che riprende la lunghezza dal trailer — riaprirebbe la
-/// finestra fra la convalida e la lettura: un file cambiato sul posto nel
-/// frattempo dichiarerebbe un footer che nessun tetto ha visto.
+/// Sono gli stessi byte che la traversata ha percorso: rileggerli dal file
+/// riaprirebbe la finestra fra convalida e lettura, e un file cambiato sul
+/// posto dichiarerebbe un footer che nessun tetto ha visto.
 ///
 /// # Errors
 ///
@@ -1438,23 +1246,14 @@ fn valida_file<S: IpcSource + ?Sized>(
     // Il valore si copia **prima** di continuare: `footer` e' un buffer locale
     // e `trovato` lo presta.
     let trovato = trovato.map(str::to_owned);
-    // **Prima si valida, poi si limita**, e l'ordine e' una decisione.
-    //
-    // Un blocco troncato, disallineato o che esce dalla regione dati e' un file
-    // **rotto**: dichiara lunghezze che non descrivono niente. Sommarne i
-    // `bodyLength` prima di sapere che quei blocchi esistano davvero
-    // classificherebbe un file rotto come `ResourceLimit` — «hai chiesto troppo»
-    // invece di «questo non e' un artefatto» — e manderebbe chi legge ad alzare
-    // un tetto per un file che nessun tetto puo' salvare.
+    // **Prima si valida, poi si limita**: un file con blocchi incoerenti e'
+    // rotto, e non deve uscire come `ResourceLimit`.
     validate_footer_blocks(source, &blocks, footer_start, limits)?;
     {
         let tetto = limits.max_retained_dictionary_body_bytes;
-        // `get` che ripiega su una fetta vuota sarebbe **fail-open**: un
-        // indice incoerente disattiverebbe il tetto invece di fermare la
-        // lettura, ed e' il modo di non applicare un limite che nessuno nota.
-        // L'incoerenza e' impossibile per costruzione — `dizionari` viene da
-        // `blocks.len()` prima del secondo campo — quindi qui e' un difetto
-        // nostro, non un file malformato.
+        // Nessun ripiego su una fetta vuota, che disattiverebbe il tetto
+        // (fail-open). L'incoerenza e' impossibile per costruzione, quindi e'
+        // un errore interno.
         let dizionari = blocks
             .get(..dizionari)
             .ok_or(ArrowTransportError::Internal(
@@ -1468,10 +1267,7 @@ fn valida_file<S: IpcSource + ?Sized>(
 /// Percorre il footer: lo Schema (che `fb_to_schema` leggera') e i vettori di
 /// `Block` dei dizionari e dei record batch.
 ///
-/// **Solo sotto test.** Da quando la convalida estrae anche un custom metadata,
-/// il percorso di produzione passa tutto per [`parse_footer_estraendo`] e questa
-/// resta la forma breve per i test che dei soli blocchi hanno bisogno. Il `cfg`
-/// lo dichiara invece di lasciare che un `dead_code` lo dica peggio.
+/// **Solo sotto test**: la produzione passa per [`parse_footer_estraendo`].
 #[cfg(test)]
 fn parse_footer(
     footer: &[u8],
@@ -1490,12 +1286,8 @@ fn parse_footer_estraendo<'a>(
 ) -> Result<(Vec<FooterBlock>, usize, Option<&'a str>), ArrowTransportError> {
     let root = fb_u32(footer, 0)? as usize;
     let (vtable, vtable_len) = fb_table(footer, root)?;
-    // Campo 1: lo Schema del footer, OBBLIGATORIO.
-    //
-    // Stessa classe dei custom metadata: `arrow-ipc` lo legge con
-    // `footer.schema().unwrap()`, quindi un footer che non lo porta panica
-    // dentro la dipendenza. Il writer lo emette sempre, quindi pretenderlo
-    // non rifiuta nessun file legittimo.
+    // Campo 1: lo Schema del footer, OBBLIGATORIO: `arrow-ipc` lo legge con
+    // `footer.schema().unwrap()`.
     let schema_offset = fb_field(footer, vtable, vtable_len, 1)?;
     if schema_offset == 0 {
         return Err(ArrowTransportError::IpcFooterInvalid("schema assente"));
@@ -1504,19 +1296,13 @@ fn parse_footer_estraendo<'a>(
     let mut blocks: Vec<FooterBlock> = Vec::new();
     // Campo 2: dizionari. Campo 3: record batch. Arrow legge entrambi.
     //
-    // I due campi confluiscono in un vettore solo perche' la validazione dei
-    // blocchi e' identica per entrambi. Il CONFINE fra i due si conserva
-    // pero' come indice: i dizionari sono `blocks[..dizionari]`, e servono
-    // distinti al verificatore, che ha un tetto cumulativo sui loro body e
-    // non ne ha uno sui record batch (§2-ter).
+    // Un vettore solo, con il confine conservato come indice: i dizionari
+    // sono `blocks[..dizionari]`, soggetti al tetto cumulativo (§2-ter).
     fb_footer_blocks(footer, root, vtable, vtable_len, 2, &mut blocks, limits)?;
     let dizionari = blocks.len();
     fb_footer_blocks(footer, root, vtable, vtable_len, 3, &mut blocks, limits)?;
-    // Campo 4: custom metadata del footer. Arrow li legge, e li legge con
-    // `key().unwrap()` / `value().unwrap()`: una voce senza chiave o senza
-    // valore panica dentro la dipendenza. Senza questa riga il campo non
-    // sarebbe percorso affatto: non lo leggerebbe nessuno, quindi nessuno lo
-    // vedrebbe.
+    // Campo 4: custom metadata del footer, che arrow legge con
+    // `key().unwrap()` / `value().unwrap()`.
     let custom = fb_field(footer, vtable, vtable_len, 4)?;
     let trovato = fb_custom_metadata_estraendo(footer, root, custom, cercata)?;
     Ok((blocks, dizionari, trovato))
@@ -1524,27 +1310,9 @@ fn parse_footer_estraendo<'a>(
 
 /// Somma controllata dei body dei blocchi dizionario, contro il tetto.
 ///
-/// # Perche' la somma e non il massimo
-///
-/// `FileReader` decodifica **tutti** i dizionari all'apertura e li trattiene
-/// per l'intera scansione: e' la loro somma a restare viva, non il piu' grande.
-/// Il tetto per singolo body non la governa — mille dizionari da un megabyte lo
-/// rispettano tutti e trattengono un gigabyte.
-///
-/// # Perche' l'overflow e' un rifiuto e non una saturazione
-///
-/// Un `saturating_add` confronterebbe col tetto un numero che non e' piu' la
-/// somma: direbbe «troppo grande» per una ragione diversa da quella vera, e su
-/// un tetto pari a `u64::MAX` direbbe «accettabile» per un insieme che non lo
-/// e'.
-///
-/// # Perche' l'overflow ha un errore proprio
-///
-/// Perche' non esiste una somma da riportare. Riusare l'errore del tetto
-/// costringerebbe a metterci un numero — il tetto, `u64::MAX`, qualunque cosa —
-/// e quel numero sarebbe **inventato**: direbbe a chi legge «hai dichiarato
-/// tanto» quando cio' che e' successo e' che la dichiarazione non e'
-/// sommabile. Sono due fatti diversi e hanno due errori diversi.
+/// La somma e non il massimo, perche' `FileReader` trattiene tutti i
+/// dizionari insieme. L'overflow e' un rifiuto con errore proprio: una somma
+/// saturata non e' la somma, e non c'e' un numero onesto da riportare.
 ///
 /// # Errors
 ///
@@ -1614,14 +1382,9 @@ fn validate_footer_blocks<S: IpcSource + ?Sized>(
                 limit: limits.max_body_bytes,
             });
         }
-        // Il tetto semantico sui RECORD BATCH vale anche qui. Nel file
-        // format i blocchi di dizionari e di record batch confluiscono in un
-        // vettore solo, e fermarsi a `max_messages` non applicherebbe
-        // `max_batches` del piano: un file con cento batch e un piano che ne
-        // ammette uno supererebbe il confine, e sarebbe fermato solo dopo la
-        // materializzazione del secondo. Si conta per TIPO DI HEADER letto
-        // dal messaggio, non per campo del footer: e' lo stesso criterio del
-        // percorso stream, quindi i due non possono divergere.
+        // Il tetto semantico sui RECORD BATCH vale anche qui, oltre a
+        // `max_messages`. Si conta per TIPO DI HEADER letto dal messaggio,
+        // lo stesso criterio del percorso stream.
         if validate_footer_block(source, *block, footer_start, limits)? == IPC_HEADER_RECORD_BATCH {
             record_batches = record_batches.saturating_add(1);
             if record_batches > limits.max_record_batches {
@@ -1633,10 +1396,8 @@ fn validate_footer_blocks<S: IpcSource + ?Sized>(
         }
     }
 
-    // Blocchi sovrapposti: arrow leggerebbe la stessa regione come due
-    // messaggi diversi. Nessun produttore onesto li emette, e accettarli
-    // significherebbe validare una regione con un'interpretazione e lasciarla
-    // usare con un'altra.
+    // Blocchi sovrapposti: la stessa regione, validata con
+    // un'interpretazione, sarebbe letta con un'altra.
     let mut ordered: Vec<(u64, u64)> = blocks
         .iter()
         .map(|block| block.end().map(|end| (block.offset, end)))
@@ -1681,17 +1442,10 @@ fn validate_footer_block<S: IpcSource + ?Sized>(
             "blocco che punta a un marcatore di fine stream",
         ));
     }
-    // Le due lunghezze devono COINCIDERE, non solo starci dentro.
-    //
-    // Arrow legge il blocco usando `metaDataLength` e `bodyLength` del Block,
-    // NON le lunghezze del prefisso: con la relazione `<=` un file potrebbe
-    // dichiarare un prefisso piccolo — che il validatore limita — e un
-    // `Block.metaDataLength` enorme, che arrow leggerebbe e allocherebbe. Il
-    // tetto varrebbe su un numero diverso da quello effettivamente usato.
-    //
-    // Per la specifica del formato incapsulato `metaDataLength` comprende il
-    // prefisso e il padding a 8 byte, quindi l'uguaglianza esatta e'
-    // `align8(prefisso + metadata_len)`.
+    // Le due lunghezze devono COINCIDERE: arrow usa `metaDataLength` e
+    // `bodyLength` del Block, non quelle del prefisso, e il tetto deve valere
+    // sul numero usato. `metaDataLength` comprende prefisso e padding, quindi
+    // l'uguaglianza e' `align8(prefisso + metadata_len)`.
     let declared = header
         .checked_add(to_u64(metadata_len)?)
         .and_then(align8_u64)
@@ -1728,47 +1482,21 @@ fn validate_footer_block<S: IpcSource + ?Sized>(
 /// limiti di risorse.
 pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
     validate_ipc_framing(payload)?;
-    // `arrow-ipc` 59.2.0 va in panico dentro `convert::fb_to_schema` su schemi
-    // che il decoder FlatBuffer accetta: `fields` e' opzionale e viene scartato
-    // con `unwrap()` (convert.rs:198), e la conversione dei tipi ha una
-    // ventina fra `panic!` e `unimplemented!` sui valori di enum che non
-    // riconosce. Ogni reader chiama quella funzione. Le API che la avvolgono
-    // si chiamano `try_*` ma sono fallibili solo sul parsing esterno: appena
-    // ottengono lo schema fanno `.map(fb_to_schema)`. Non esiste quindi un
-    // percorso per leggere Arrow IPC che non possa abortire il processo su
-    // input ostile.
+    // Barriera di dipendenza: `arrow-ipc` va in panico dentro
+    // `convert::fb_to_schema` su schemi che il decoder FlatBuffer accetta, e
+    // ogni reader la chiama. Rientro: rimuoverla quando apache/arrow-rs#10575
+    // e' chiusa e il pin di arrow rende fallibile la conversione.
     //
-    // Segnalato a monte: apache/arrow-rs#10575. Questa barriera va rimossa
-    // quando quella issue e' chiusa e il pin di arrow sale a una versione che
-    // rende fallibile la conversione dello schema.
+    // Sta qui perche' e' l'unico ingresso di `&[u8]` non fidati; piu' in alto
+    // nasconderebbe panici di codice nostro. Unwind safety: il payload e'
+    // immutabile e lo stato parziale si scarta con l'`Err`.
     //
-    // Il confine e' qui perche' e' l'unico punto in cui `&[u8]` non fidati
-    // entrano nel trasporto: catturare piu' in profondita' significherebbe
-    // sparpagliare `catch_unwind` sui call site, piu' in alto significherebbe
-    // avvolgere anche codice nostro, dove un panico e' un difetto da non
-    // nascondere.
-    //
-    // Correttezza dell'unwind safety: il payload e' un `&[u8]` immutabile e
-    // tutto lo stato costruito qui dentro viene scartato se il panico avviene,
-    // perche' la funzione ritorna `Err` e non espone nulla di parzialmente
-    // costruito. Nessun invariante osservabile puo' restare rotto.
-    //
-    // Nota sull'hook globale: questa barriera converte il panico in errore,
-    // ma NON impedisce all'hook di processo di averlo gia' stampato su
-    // stderr — l'hook di `std` corre prima dell'unwinding e pubblica il
-    // payload tale e quale, cioe' potenzialmente dati della riga. Una
-    // libreria non puo' sostituire l'hook di nascosto (romperebbe quello di
-    // chi la ospita), quindi la politica e' esplicita e vive in
-    // `plenora_core::panic_policy`: la CLI installa `Silent`, un embedder —
-    // il binding PyO3 compreso — deve installare `Sanitized`. Chi non
-    // installa nulla resta con l'hook di `std`: residuo dichiarato in
-    // docs/errori-e-limiti.md.
-    //
-    // E' una barriera di dipendenza: il fuzz target `arrow_transform` ne
-    // tollera il panico (errori-e-limiti.md#panici-attesi-nel-fuzzing) e
-    // interrompe su ogni altro. La verifica il modulo `barriera_antipanico` in
-    // fondo a questo file, con un input costruito apposta: uno stream con una
-    // colonna `List` a cui viene tolto il campo `children`.
+    // L'hook di processo stampa comunque il panico: la politica e' in
+    // `plenora_core::panic_policy` (la CLI installa `Silent`, un embedder
+    // `Sanitized`), residuo dichiarato in docs/errori-e-limiti.md. Il fuzz
+    // target `arrow_transform` ne tollera il panico
+    // (errori-e-limiti.md#panici-attesi-nel-fuzzing); la verifica e' il
+    // modulo `barriera_antipanico` in fondo al file.
     let esito =
         plenora_core::panic_policy::barriera_di_dipendenza(std::panic::AssertUnwindSafe(|| {
             decode_ipc_unguarded(payload)
@@ -1783,21 +1511,14 @@ pub fn decode_ipc(payload: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), Arrow
 
 /// Descrizione PUBBLICA e sanitizzata del payload di un panico.
 ///
-/// Il testo di un panico non e' controllato da noi: un `assert_eq!` dentro
-/// arrow — o dentro qualunque dipendenza — puo' includere nel messaggio i
-/// VALORI che ha confrontato, cioe' dati della riga. Pubblicarlo in un errore
-/// viola la regola «errori senza dati» del progetto e puo' esfiltrare
-/// contenuto dell'input in un log.
-///
-/// Si riporta quindi solo la FORMA del payload, che e' una proprieta' del
-/// panico e non del dato: utile a distinguere un panico con messaggio da uno
-/// senza, inutile a chi volesse leggerne il contenuto.
+/// Il testo di un panico di una dipendenza puo' contenere dati della riga
+/// (regola «errori senza dati»): si riporta solo la FORMA del payload.
 #[must_use]
 pub fn descrivi_panico(panico: &Box<dyn std::any::Any + Send>) -> &'static str {
     plenora_core::panic_policy::forma_payload(panico.as_ref())
 }
 
-/// Corpo storico di [`decode_ipc`], senza la rete di protezione.
+/// Corpo di [`decode_ipc`], senza la barriera antipanico.
 fn decode_ipc_unguarded(
     payload: &[u8],
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
@@ -1893,7 +1614,7 @@ pub fn encode_ipc_file(
 }
 
 // ---------------------------------------------------------------------------
-// Custom metadata: i dodici casi strutturali del confine.
+// Custom metadata: i casi strutturali del confine.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1936,10 +1657,7 @@ mod custom_metadata {
     fn costruisci(coppie: &[(Campo<'_>, Campo<'_>)]) -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
         // Riempimento: il campo vive all'offset 4, perche' l'offset zero
-        // significa «campo assente» e la validazione tornerebbe Ok senza
-        // guardare niente. Con l'offset a zero i tre casi positivi
-        // passerebbero a vuoto: sono i dieci negativi a rendere visibile la
-        // differenza.
+        // significa «campo assente» e i casi positivi passerebbero a vuoto.
         buf.extend_from_slice(&0_u32.to_le_bytes());
         buf.extend_from_slice(&4_u32.to_le_bytes());
         let n = u32::try_from(coppie.len()).expect("conteggio entro u32");
@@ -1994,11 +1712,7 @@ mod custom_metadata {
 
     /// Come [`valida`], ma passando dalla variante che **estrae**.
     ///
-    /// La duplicazione di superficie e' voluta: la variante estraente e' una
-    /// seconda porta sullo stesso corridoio, e i controlli vanno provati
-    /// attraverso entrambe. Un'estrazione che li saltasse renderebbe
-    /// raggiungibile senza convalida esattamente il valore piu' autoritativo
-    /// del footer.
+    /// I controlli vanno provati attraverso entrambe le varianti.
     fn estrai(
         coppie: &[(Campo<'_>, Campo<'_>)],
         cercata: &str,
@@ -2205,20 +1919,10 @@ mod custom_metadata {
 // Il campo 4 del footer, attraversato per davvero.
 // ---------------------------------------------------------------------------
 
-/// I test diretti su `fb_custom_metadata` non dimostrano che `parse_footer` lo
-/// **chiami**: resterebbero verdi anche scollegando il campo 4. Questi
-/// costruiscono un file Arrow IPC vero con `FileWriter`, gli mettono custom
-/// metadata nel footer con `write_metadata`, e passano dal validatore
-/// pubblico.
-///
-/// I casi di forma — chiave assente, duplicati — non sono costruibili con
-/// `FileWriter`, che scrive una mappa e non produce voci malformate: restano
-/// ai test diretti. I casi di **tetto** invece si costruiscono, e sono quelli
-/// che dimostrano il collegamento.
-///
-/// La prova e' stata fatta: scollegando il campo 4 da `parse_footer`, tre di
-/// questi test diventano rossi e i tredici diretti restano verdi. E' la
-/// ragione per cui esistono.
+/// Dimostrano che `parse_footer` **chiama** la validazione del campo 4, cosa
+/// che i test diretti non vedono: file veri scritti con `FileWriter` e
+/// `write_metadata`, attraverso il validatore pubblico. `FileWriter` non
+/// produce voci malformate, quindi qui ci sono solo i casi di tetto.
 #[cfg(test)]
 mod footer_end_to_end {
     use plenora_core::arrow::array::{Int32Array, RecordBatch};
@@ -2316,8 +2020,8 @@ mod footer_end_to_end {
 }
 
 // ---------------------------------------------------------------------------
-// I tre fratelli della stessa classe: campi che arrow dereferenzia con
-// `unwrap` e che un confine distratto tratterebbe come opzionali.
+// Campi che arrow dereferenzia con `unwrap` pur essendo opzionali nel
+// formato.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -2328,13 +2032,8 @@ mod campi_pretesi {
 
     /// Costruisce una tabella flatbuffer con i soli slot indicati.
     ///
-    /// `slot[i] == None` significa campo **assente**, che e' precisamente il
-    /// caso che questi test devono produrre: presente-con-valore-zero e
-    /// assente sono cose diverse, e solo la seconda fa panicare arrow.
-    ///
-    /// Torna `(buf, posizione della tabella)`. La tabella e' vuota — nessuno
-    /// slot punta a niente — perche' ai tre controlli sotto esame basta
-    /// l'assenza.
+    /// `slot[i] == None` significa campo **assente**, il caso che fa panicare
+    /// arrow. Torna `(buf, posizione della tabella)`; la tabella e' vuota.
     fn tabella_con_slot(slot: &[Option<u16>]) -> (Vec<u8>, usize) {
         let mut buf: Vec<u8> = vec![0; 4];
         let vtable = buf.len();
@@ -2441,17 +2140,11 @@ mod campi_pretesi {
 // La barriera anti-panico, con una prova sua.
 // ---------------------------------------------------------------------------
 
-/// Il confine pretende esplicitamente i quattro campi che `arrow-ipc`
-/// dereferenzia con `unwrap` pur trattandoli come opzionali. Cosi' facendo
-/// toglie copertura alla barriera: l'artefatto di fuzz che l'avrebbe
-/// esercitata e' rifiutato prima, in modo strutturato.
-///
-/// La barriera resta pero' necessaria, perche' un quinto punto e' aperto:
-/// `convert.rs` pretende i figli dei tipi annidati e ha una ventina fra
-/// `panic!` e `unimplemented!` sui codici di tipo
+/// Il confine pretende i campi che `arrow-ipc` dereferenzia con `unwrap`, ma
+/// la barriera resta necessaria: `convert.rs` pretende i figli dei tipi
+/// annidati e panica sui codici di tipo che non riconosce
 /// ([`errori-e-limiti.md`](../../../../docs/errori-e-limiti.md)). Questo
-/// modulo costruisce esattamente quel caso, partendo da uno stream Arrow
-/// **vero**.
+/// modulo costruisce quel caso partendo da uno stream Arrow **vero**.
 #[cfg(test)]
 mod barriera_antipanico {
     use std::sync::Arc;
@@ -2547,14 +2240,9 @@ mod barriera_antipanico {
         payload
     }
 
-    /// # Nota sull'hook di panico
-    ///
-    /// Questo test **non** sostituisce l'hook del processo. Il panico di
-    /// `arrow-ipc` finisce quindi su stderr, e l'output della suite contiene
-    /// una traccia che sembra un fallimento senza esserlo: e' il prezzo, ed e'
-    /// preferibile a mutare stato globale mentre gli altri test girano in
-    /// parallelo — l'hook e' del processo, non del test, e toglierlo lo
-    /// toglierebbe anche a chi non c'entra.
+    /// Il test **non** sostituisce l'hook del processo, condiviso con i test
+    /// in parallelo: il panico di `arrow-ipc` finisce su stderr senza essere
+    /// un fallimento.
     #[test]
     fn un_list_senza_children_esce_come_errore_invece_di_abbattere_il_processo() {
         let ostile = togli_children(stream_con_colonna_list());
@@ -2568,10 +2256,8 @@ mod barriera_antipanico {
 
 /// Le posizioni che farebbero traboccare una somma non controllata.
 ///
-/// `pos` arriva dal file: `pos + larghezza` puo' uscire da `usize`. Senza
-/// controllo la somma rientrerebbe da capo nel buffer in release, e in debug
-/// farebbe panicare proprio il confine che esiste per non panicare. Qui si
-/// pretende `IpcTruncated`, che e' cio' che la macro promette.
+/// `pos` arriva dal file e `pos + larghezza` puo' uscire da `usize`: si
+/// pretende `IpcTruncated`, mai un panico.
 #[cfg(test)]
 mod somme_al_limite {
     use super::{
@@ -2648,11 +2334,8 @@ mod somme_al_limite {
 /// Il tetto cumulativo sui body dei dizionari: l'aritmetica, provata sui
 /// blocchi invece che su un file.
 ///
-/// Il caso che conta — la somma che trabocca — non e' costruibile con un
-/// artefatto reale: servirebbero tre blocchi da `i64::MAX` byte dichiarati, e
-/// nessun writer li produce. Provarlo qui, dove i blocchi si costruiscono a
-/// mano, e' l'unico modo di esercitarlo davvero invece di dichiararlo
-/// irraggiungibile.
+/// La somma che trabocca non e' costruibile con un artefatto reale: qui i
+/// blocchi si costruiscono a mano.
 #[cfg(test)]
 mod tetto_dizionari {
     use std::sync::Arc;
@@ -2784,22 +2467,9 @@ mod tetto_dizionari {
 
     /// Un `DictionaryBatch` **delta** e' rifiutato in prevalidazione.
     ///
-    /// # Perche' non basta il tetto
-    ///
-    /// Il tetto cumulativo somma i `bodyLength` dichiarati, e su un delta
-    /// quella somma non descrive cio' che resta vivo: arrow concatena il
-    /// dizionario precedente con il nuovo in un buffer ulteriore, mentre
-    /// entrambi gli originali sono ancora allocati. Il picco si avvicina al
-    /// **doppio** della somma, e la formula della memoria trattenuta —
-    /// `verifica.rs`, isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite — sarebbe falsa proprio quando il
-    /// tetto dice che va tutto bene.
-    ///
-    /// # Perche' il caso discrimina
-    ///
-    /// Lo stesso messaggio con `isDelta` a **false** deve passare. Senza quella
-    /// meta', un rifiuto per qualunque altra ragione — un flatbuffer malformato
-    /// dalla manipolazione, per dire — farebbe passare il test senza che il
-    /// controllo esista.
+    /// Il tetto cumulativo non basta: su un delta il picco si avvicina al
+    /// doppio della somma (vedi `validate_ipc_message_metadata`). Discrimina:
+    /// lo stesso messaggio con `isDelta` a **false** deve passare.
     #[test]
     fn un_dictionary_delta_e_rifiutato_e_uno_normale_no() {
         for (delta, atteso_rifiuto) in [(0_u8, false), (1_u8, true)] {
@@ -2831,19 +2501,9 @@ mod tetto_dizionari {
     /// Un messaggio che dichiara `header_type` e **non porta l'header** e'
     /// rifiutato.
     ///
-    /// # Perche' e' un caso a se'
-    ///
-    /// I controlli su `data` e su `isDelta` stanno dentro il ramo che l'header
-    /// ce l'ha. Un messaggio senza header non li attraversa nemmeno: passa la
-    /// prevalidazione intatto e arriva ad arrow, che legge
-    /// `header_as_dictionary_batch()` con `unwrap()`. Il tipo dichiarato basta
-    /// a scegliere il percorso; l'header no.
-    ///
-    /// # Perche' discrimina
-    ///
-    /// Lo stesso messaggio **con** l'header passa, e il caso vale per tutti e
-    /// tre i tipi che sappiamo leggere: dichiararne uno e ometterlo e' la
-    /// stessa manovra qualunque sia il numero.
+    /// Senza header il messaggio non attraversa i controlli su `data` e
+    /// `isDelta` e arriva ad arrow, che legge `header_as_dictionary_batch()`
+    /// con `unwrap()`. Discrimina: lo stesso messaggio **con** l'header passa.
     #[test]
     fn un_messaggio_senza_header_e_rifiutato() {
         let esito = validate_ipc_message_metadata(&messaggio_dictionary_con(Some(0), true, false));
@@ -2863,13 +2523,8 @@ mod tetto_dizionari {
 
     /// `MessageHeader::NONE` senza header e' un messaggio vuoto, e passa.
     ///
-    /// Arrow lo attraversa senza fare niente, e il confine fa lo stesso:
-    /// rifiutarlo sarebbe una deviazione dal formato in piu', decisa da
-    /// nessuno e presa per effetto collaterale della forma del `match`.
-    ///
-    /// Con un header, invece, no: il tipo dichiara «nessun contenuto» e il
-    /// messaggio ne porta uno. La meta' che rifiuta e' anche cio' che
-    /// distingue questo caso da «tutto passa».
+    /// Con un header, invece, e' rifiutato: il tipo dichiara «nessun
+    /// contenuto» e il messaggio ne porta uno.
     #[test]
     fn il_tipo_none_e_un_messaggio_vuoto_solo_se_e_davvero_vuoto() {
         let esito = validate_ipc_message_metadata(&messaggio_con_tipo(0, false));
@@ -2890,19 +2545,9 @@ mod tetto_dizionari {
     /// Un tipo **non supportato** senza header non passa in mezzo ai due
     /// controlli.
     ///
-    /// # La combinazione che due controlli separati lasciano scoperta
-    ///
-    /// Con un `if` sulla presenza dell'header e un `match` sul tipo, un
-    /// `header_type` ignoto e un header assente non entrano ne' nell'uno —
-    /// che l'header lo pretende solo per i tipi noti — ne' nell'altro, che
-    /// gira solo quando l'header c'e'. Il messaggio attraversa la
-    /// prevalidazione intatto. Il match sulla coppia non ha un «in mezzo».
-    ///
-    /// # Perche' l'errore e' quello del tipo e non quello dell'header
-    ///
-    /// Perche' il tipo si rifiuta comunque: che un Tensor porti o no il suo
-    /// header non cambia che non lo sappiamo leggere, e dire «senza header»
-    /// manderebbe chi legge a cercare la cosa sbagliata.
+    /// E' la combinazione che un `if` sulla presenza e un `match` sul tipo
+    /// separati lascerebbero scoperta. L'errore e' quello del tipo, che si
+    /// rifiuta comunque.
     #[test]
     fn un_tipo_non_supportato_senza_header_e_rifiutato() {
         // Zero non e' qui: e' `MessageHeader::NONE`, che ha il suo caso.
@@ -2920,13 +2565,9 @@ mod tetto_dizionari {
     /// Un `DictionaryBatch` senza `data` e' rifiutato prima di arrivare ad
     /// arrow.
     ///
-    /// `read_dictionary` lo legge con `batch.data().unwrap()`: senza questo
-    /// controllo il messaggio farebbe panicare la dipendenza. La barriera
-    /// anti-panico lo tradurrebbe in errore, ma un panico attraversato resta
-    /// uno stato che non vogliamo raggiungere — e la barriera e' l'ultima
-    /// difesa, non la prima.
-    ///
-    /// Discrimina per costruzione: lo stesso messaggio **con** `data` passa.
+    /// `read_dictionary` lo legge con `batch.data().unwrap()`; la barriera
+    /// anti-panico e' l'ultima difesa, non la prima. Discrimina: lo stesso
+    /// messaggio **con** `data` passa.
     #[test]
     fn un_dictionary_batch_senza_data_e_rifiutato() {
         let esito = validate_ipc_message_metadata(&messaggio_dictionary(Some(0), false));
@@ -2946,18 +2587,10 @@ mod tetto_dizionari {
 
     /// Costruisce i metadati di un messaggio `DictionaryBatch`, byte per byte.
     ///
-    /// A mano e non con `FileWriter`: arrow non emette ne' delta ne' messaggi
-    /// senza `data`, quindi i due casi che qui contano non sono producibili
-    /// dallo scrittore. E' lo stesso idioma di
-    /// `dictionary_senza_index_type_respinto`, per la stessa ragione.
-    ///
-    /// `delta`: `None` = slot assente, `Some(v)` = slot presente col valore.
-    /// `con_data`: se lo slot `data` punta al `RecordBatch` interno.
-    /// `con_header`: se lo slot `header` del Message punta alla tabella.
-    ///
-    /// Assente e presente-a-zero non sono la stessa cosa, ed e' precisamente
-    /// la differenza che i casi devono poter esprimere: `isDelta` assente vale
-    /// `false` e deve passare, `data` assente fa panicare arrow.
+    /// A mano perche' arrow non emette ne' delta ne' messaggi senza `data`.
+    /// `delta`: `None` = slot assente (vale `false`), `Some(v)` = slot
+    /// presente col valore. `con_data`: se lo slot `data` punta al
+    /// `RecordBatch` interno.
     fn messaggio_dictionary(delta: Option<u8>, con_data: bool) -> Vec<u8> {
         messaggio_con(2, delta, con_data, true)
     }
@@ -3042,11 +2675,7 @@ mod tetto_dizionari {
 
     /// Un messaggio Schema con un corpo e' rifiutato prima di arrow.
     ///
-    /// `StreamReader::try_new` alloca e legge il corpo del primo messaggio
-    /// prima di guardarne il tipo, quindi uno Schema che dichiara `bodyLength`
-    /// farebbe allocare, a chi vuole soltanto lo schema, fino a
-    /// `max_body_bytes`. Il writer di arrow emette sempre zero.
-    ///
+    /// `StreamReader::try_new` alloca il corpo prima di guardare il tipo.
     /// Discrimina: lo stesso messaggio con corpo zero passa.
     #[test]
     fn uno_schema_con_un_corpo_e_rifiutato() {
@@ -3126,15 +2755,10 @@ mod tetto_dizionari {
     /// La convalida dei blocchi **precede** il tetto cumulativo, e il caso lo
     /// **discrimina**.
     ///
-    /// L'artefatto ha un dizionario vero, quindi la somma dei body non e' zero
-    /// e un tetto a zero la supererebbe. Il difetto iniettato — il `bodyLength`
-    /// del blocco dizionario portato oltre la regione dati — e' rilevato da
-    /// `validate_footer_blocks` e **non** dal parsing, che i body non li
-    /// guarda.
-    ///
-    /// Ne segue che l'errore dice quale dei due controlli e' corso per primo:
-    /// col tetto davanti sarebbe `IpcRetainedDictionariesTooLarge`, con la
-    /// convalida davanti e' `IpcFooterInvalid`.
+    /// Il `bodyLength` del dizionario portato oltre la regione dati e' rilevato
+    /// da `validate_footer_blocks`, e con un tetto a zero l'errore dice quale
+    /// controllo corre per primo: `IpcFooterInvalid`, non
+    /// `IpcRetainedDictionariesTooLarge`.
     #[test]
     fn il_framing_invalido_vince_sul_tetto_dei_dizionari() {
         let mut byte = artefatto_con_dizionario();
@@ -3165,9 +2789,8 @@ mod tetto_dizionari {
     /// Lo stesso artefatto **senza** il difetto: qui il tetto tocca a lui, e
     /// con un tetto a zero deve essere lui a rifiutare.
     ///
-    /// E' la meta' che dimostra che il caso qui sopra non passa per un motivo
-    /// diverso dall'ordine: senza, un artefatto sempre rotto lo farebbe passare
-    /// comunque.
+    /// Dimostra che il caso qui sopra dipende dall'ordine e non da un
+    /// artefatto sempre rotto.
     #[test]
     fn senza_difetti_di_framing_il_tetto_dei_dizionari_rifiuta() {
         let byte = artefatto_con_dizionario();
@@ -3195,13 +2818,8 @@ mod tetto_dizionari {
         // loro somma e' `u64::MAX - 1`.
         let massimo = u64::try_from(i64::MAX).expect("i64::MAX entra in u64");
         let dizionari = [blocco(massimo), blocco(massimo), blocco(massimo)];
-        // Il tetto e' `u64::MAX`: con una saturazione la somma diventerebbe
-        // `u64::MAX`, non supererebbe il tetto, e l'insieme verrebbe
-        // ACCETTATO. E' il caso che distingue il rifiuto dalla saturazione.
-        //
-        // L'errore e' quello del footer e **non** quello del tetto: non c'e'
-        // una somma da dichiarare, e riusare il secondo obbligherebbe a
-        // inventarne una.
+        // Tetto `u64::MAX`: una saturazione ACCETTEREBBE l'insieme. L'errore
+        // e' quello del footer, perche' non c'e' una somma da dichiarare.
         let esito = verifica_tetto_dizionari(&dizionari, u64::MAX);
         assert!(matches!(
             esito,

@@ -112,10 +112,9 @@ pub(in crate::geo_transport) fn geometry_column_index(
 /// Metadato `GeoArrow` `geo` con la chiave `crs`: PROJJSON se la definizione e'
 /// gia' un oggetto JSON, altrimenti la forma authority:code come stringa.
 ///
-/// Casa unica del formato: l'assemblaggio JSON e' unico in
-/// [`plenora_kernels_geo::arrow_adapter::geo_metadata_json`] (stesso output
-/// byte-per-byte); qui restano solo le validazioni con le varianti
-/// d'errore strutturate del trasporto.
+/// L'assemblaggio JSON e' unico in
+/// [`plenora_kernels_geo::arrow_adapter::geo_metadata_json`]; qui restano le
+/// validazioni con le varianti d'errore strutturate del trasporto.
 pub(in crate::geo_transport) fn geo_metadata_json(
     crs: &str,
 ) -> Result<String, ArrowTransportError> {
@@ -133,22 +132,15 @@ pub(in crate::geo_transport) fn geometry_output_field(
     name: &str,
     crs: &str,
 ) -> Result<Field, ArrowTransportError> {
-    // Validazione CRS con le varianti strutturate del trasporto; la
-    // costruzione del campo (metadati geoarrow.wkb + geo.crs +
-    // geo.dimensions) e' unica in `arrow_adapter`.
-    // BLOCK-06: il blocco canonico `plenora.geometry.*` NON e' aggiunto qui
-    // ma nel post-processo centrale `canonical_legacy_output` (entry point
-    // `transform_arrow`/`pair_arrow`), che copre anche i campi propagati
-    // invariati dalle op pass-through.
+    // Validazione CRS con le varianti strutturate del trasporto; il campo si
+    // costruisce in `arrow_adapter`. Il blocco canonico `plenora.geometry.*`
+    // (BLOCK-06) si aggiunge in `canonical_legacy_output`, che copre anche i
+    // campi propagati dalle op pass-through.
     geo_metadata_json(crs)?;
-    // La dimensionalita' dichiarata e' Xy ESPLICITO, non un default
-    // silenzioso — ogni output di questo trasporto e' prodotto decodificando
-    // in `Geometry<f64>` e ricodificando `to_wkb(CoordDimensions::xy())`,
-    // quindi le celle sono sempre WKB 2D; gli input Z/M sono rifiutati a
-    // compile-plan (`analyze_geo_contract`) prima di arrivare qui.
-    // Per lo stesso motivo l'encoding e' `None` — le celle ricodificate
-    // sono WKB ISO XY e la chiave `encoding` e' omessa (mai ereditata
-    // dall'input, fingerprint invariato).
+    // Dimensionalita' Xy ESPLICITA ed encoding `None`: ogni output e'
+    // ricodificato con `to_wkb(CoordDimensions::xy())`, quindi WKB ISO 2D;
+    // gli input Z/M sono rifiutati a compile-plan (`analyze_geo_contract`).
+    // La chiave `encoding` non e' mai ereditata dall'input.
     plenora_kernels_geo::arrow_adapter::geometry_output_field_with_encoding(
         name,
         crs,
@@ -166,30 +158,23 @@ pub(in crate::geo_transport) fn geometry_output_field(
 
 /// Campo di output arricchito del blocco canonico R2.2 (BLOCK-06).
 ///
-/// Regole (stesse del post-processo v4 `canonical_output_schema`):
+/// Regole (stesse di `canonical_output_schema` nel percorso v4):
 ///
-/// - solo i campi con estensione `geoarrow.wkb` sono colonne geometriche:
-///   ogni altro campo e' restituito invariato;
-/// - le chiavi canoniche gia' presenti sono conservate; quelle obbligatorie
-///   mancanti sono completate dalle autorita' locali (estensione WKB e tipi
-///   osservati nei batch), senza sovrascrivere dichiarazioni di lineage;
-/// - altrimenti il blocco e' derivato dal metadato legacy `geo` del campo
-///   stesso (la dichiarazione che il trasporto ha sempre emesso/propagato):
-///   `geo.crs` → stato `resolved` con la stessa definizione (forma v4,
-///   [`canonical_geometry_metadata_for_resolved_definition`]), `geo.dimensions`
-///   → `dimensions` (assente → `unknown`, R3.4: i campi pass-through non
-///   ricodificano le celle, dichiarare `xy` sarebbe inventare),
+/// - solo i campi con estensione `geoarrow.wkb` sono colonne geometriche;
+/// - le chiavi canoniche presenti si conservano, le obbligatorie mancanti si
+///   completano dalle autorita' locali senza sovrascrivere il lineage;
+/// - altrimenti il blocco deriva dal metadato legacy `geo` del campo:
+///   `geo.crs` → `resolved` in forma v4
+///   ([`canonical_geometry_metadata_for_resolved_definition`]),
+///   `geo.dimensions` → `dimensions` (assente → `unknown`, R3.4),
 ///   `geo.encoding` → `encoding` solo se dichiarato (R5.2);
-/// - nessuna dichiarazione CRS (`geo.crs` assente o vuota) →
-///   `crs_resolution = missing` senza chiavi CRS (R4.6.3/R4.6.4: lo stato
-///   mancante si propaga invariato, mai un CRS inventato — R4.4);
-/// - i tipi sono derivati dai byte d'output: `exact` per un solo tipo,
-///   `mixed` per piu' tipi e `unresolved` senza elenco se non esistono celle
-///   non-null da osservare (R3.4.1).
+/// - senza `geo.crs` → `crs_resolution = missing`, mai un CRS inventato
+///   (R4.4, R4.6.3/R4.6.4);
+/// - i tipi derivano dai byte d'output: `exact`, `mixed`, oppure
+///   `unresolved` senza celle non-null (R3.4.1).
 ///
-/// La derivazione non introduce rifiuti nuovi sui metadati di lineage: un
-/// `geo` malformato resta propagato com'e' (la sua lettura fail-closed e'
-/// della discovery v4, non del trasporto legacy).
+/// Un `geo` malformato resta propagato com'e': la lettura fail-closed e'
+/// della discovery v4, non del trasporto legacy.
 fn merge_canonical_geometry_types(
     metadata: &mut std::collections::HashMap<String, String>,
     observed: &GeometryTypesProperty,
@@ -359,17 +344,14 @@ fn observed_geometry_types(
 }
 
 /// Post-processo CENTRALE della doppia emissione BLOCK-06 sugli output del
-/// trasporto legacy: arricchisce ogni campo geometria del blocco canonico
-/// R2.2 ([`canonical_legacy_field`]) e aggiunge la versione di protocollo
-/// R2.5 (`plenora.contract.version`) ai metadati dello schema, poi riveste i
-/// batch col nuovo schema (stesso schema dei batch, mai solo dell'header —
-/// come `canonical_output_schema` nel percorso v4).
+/// trasporto legacy: blocco canonico R2.2 su ogni campo geometria
+/// ([`canonical_legacy_field`]) e versione di protocollo R2.5
+/// (`plenora.contract.version`) nei metadati dello schema, poi i batch si
+/// rivestono col nuovo schema.
 ///
-/// Punto unico di applicazione: gli entry point `transform_arrow` e
-/// `pair_arrow`, subito prima di `encode_ipc`. Un output senza colonne
-/// geometriche canoniche (lineage di coppie, `lineage_schema`) e'
-/// restituito invariato, versione compresa (R2.5: la versione accompagna le
-/// chiavi canoniche, mai da sola).
+/// Si applica in `transform_arrow` e `pair_arrow`, prima di `encode_ipc`. Un
+/// output senza colonne geometriche canoniche resta invariato, versione
+/// compresa (R2.5: la versione accompagna le chiavi canoniche).
 ///
 /// # Errors
 ///
@@ -516,14 +498,10 @@ enum ResolvedTransform {
     },
 }
 
-/// L'operazione ammette input OGC-invalido in ingresso? Solo `make_valid`
-/// (architettura.md#geometrie D12.4): nel percorso non fuso il suo "decode" e' il
-/// SOLO gate strutturale di `make_valid_wkb` (`validate_wkb_contract`,
-/// nessun check OGC — l'input invalido e' esattamente cio' che l'operazione
-/// ripara). Il runner fuso riproduce la stessa semantica: decode iniziale
-/// del gruppo (se `make_valid` lo apre) e validazione inter-passo davanti a
-/// un nodo `make_valid` sono SOLO strutturali, mai OGC. Eccezione speculare
-/// a `geometry_diagnostics` (che valuta la validita' come dato).
+/// L'operazione ammette input OGC-invalido? Solo `make_valid`
+/// (architettura.md#geometrie D12.4): il suo decode e' il solo gate
+/// strutturale di `validate_wkb_contract`, sia nel percorso non fuso sia
+/// nel runner fuso, perche' l'input invalido e' cio' che ripara.
 const fn accepts_ogc_invalid_input(params: &TransformArrowSchema) -> bool {
     matches!(params.operation, ArrowOperation::MakeValid)
 }
@@ -535,10 +513,9 @@ const fn accepts_ogc_invalid_input(params: &TransformArrowSchema) -> bool {
 ///
 /// Come il braccio corrispondente di `transform_cells` per la parte
 /// parametri; `ArrowTransportError::Internal` per operazioni fuori dal
-/// perimetro fondibile (mai raggiungibile: i gruppi sono annotati da
-/// `prepare` solo sulle op del perimetro architettura.md#geometrie — difesa in profondita',
-/// non un caso d'uso). A feature spenta `make_valid`/`reproject` danno
-/// `BackendUnavailable` esattamente come i bracci non fusi (D12.6).
+/// perimetro fondibile (difesa in profondita': `prepare` annota solo op del
+/// perimetro). A feature spenta `make_valid`/`reproject` danno
+/// `BackendUnavailable` come i bracci non fusi (D12.6).
 fn resolve_transform(
     params: &TransformArrowSchema,
 ) -> Result<ResolvedTransform, ArrowTransportError> {
@@ -641,24 +618,15 @@ fn resolve_transform(
 }
 
 /// Applica una trasformazione fondibile a UNA geometria decodificata
-/// (architettura.md#geometrie): gli stessi kernel dei bracci di `transform_cells`, chiamati
-/// con gli stessi argomenti — usata sia dal percorso nodo-per-nodo sia dal
-/// runner fuso, perche' il dispatch per singolo kernel resti unico. `None`
-/// per gli output vuoti ammessi (`point_on_surface` di geometria vuota), che
-/// diventano celle null come nel percorso non fuso.
+/// (architettura.md#geometrie), con gli stessi kernel e argomenti dei bracci
+/// di `transform_cells`: il dispatch per singolo kernel resta unico fra
+/// percorso nodo-per-nodo e runner fuso. `None` per gli output vuoti ammessi,
+/// che diventano celle null.
 ///
-/// La geometria in ingresso e' SEMPRE gia' validata OGC (per costruzione:
-/// `geometry_from_wkb` al decode per-cella, ovvero decode iniziale +
-/// validazione inter-passo `check_geometry_valid` nel runner fuso —
-/// l'unica eccezione e' `make_valid`, che ammette input invalido per
-/// contratto e non ha gate): per questo i kernel con gate di ingresso nel
-/// perimetro dello scoping binari sono chiamati nelle varianti
-/// `*_validated` (R0.1), mentre i restanti kernel mantengono il proprio
-/// gate (fuori perimetro, nessuna inferenza).
-///
-/// Per il profilo A l'applicazione include la pipeline di validazione
-/// canonica di `transform_wkb` (OGC in uscita, limite 64 MiB, strutturale):
-/// gli errori sono gia' completi e attribuiti al kernel che la invoca.
+/// La geometria in ingresso e' SEMPRE gia' validata OGC (salvo `make_valid`),
+/// per questo i kernel del perimetro si chiamano nelle varianti `*_validated`
+/// (R0.1); gli altri mantengono il proprio gate. Per il profilo A include la
+/// pipeline canonica di `transform_wkb`.
 ///
 /// # Errors
 ///
@@ -900,12 +868,10 @@ fn cell_diagnostics_report(rows: &std::collections::BTreeMap<u64, &'static str>)
 }
 
 /// Braccio condiviso delle trasformazioni 1:1 fondibili di profilo B
-/// (architettura.md#geometrie): i parametri sono risolti UNA volta ([`resolve_transform`],
-/// stessi errori e stessa posizione dei bracci storici), poi per cella
-/// decode -> kernel ([`apply_transform_cell`]) -> encode, con il primo
-/// errore in ordine di riga (pattern di `map_nullable`). Comportamento
-/// identico ai bracci per-operazione che sostituisce: stesse chiamate,
-/// stesso ordine.
+/// (architettura.md#geometrie): parametri risolti UNA volta
+/// ([`resolve_transform`]), poi per cella decode -> kernel
+/// ([`apply_transform_cell`]) -> encode, con il primo errore in ordine di
+/// riga (come `map_nullable`).
 fn transform_cells_fusible(
     params: &TransformArrowSchema,
     cells: &BinaryArray,
@@ -1362,13 +1328,10 @@ pub enum FusedStepError {
         /// L'errore vero e proprio.
         error: ArrowTransportError,
     },
-    /// Errore della misura terminale del gruppo (architettura.md#geometrie): il percorso
-    /// non fuso delle misure (`geo_measure_batch` nell'executor) NON transita
-    /// da `ArrowTransportError` — il decode e' `decode_geometry_cell` chiuso
-    /// direttamente da `step_error` e il kernel e' chiuso in `InvalidPlan`
-    /// dal display dell'`OperationError`. La variante porta quindi il
-    /// `PlenoraError` gia' nella forma del percorso non fuso: l'executor lo
-    /// chiude con `step_error` al nodo misura, senza wrap aggiuntivi.
+    /// Errore della misura terminale del gruppo (architettura.md#geometrie):
+    /// il percorso non fuso delle misure non transita da
+    /// `ArrowTransportError`, quindi la variante porta il `PlenoraError` gia'
+    /// in quella forma, che l'executor chiude con `step_error` al nodo misura.
     Measure {
         /// Indice del nodo misura nel gruppo (l'ultimo membro).
         index: usize,
@@ -1423,54 +1386,30 @@ struct FusedCells {
 }
 
 /// Esegue un gruppo di trasformazioni 1:1 fondibili su una colonna WKB con
-/// UN decode e UN encode per batch (architettura.md#geometrie D12.1): la forma decodificata
-/// vive solo per la durata del gruppo sul singolo batch. Struttura
-/// kernel-esterno/celle-interno: attribuzione errori esatta per kernel,
-/// cancellazione per kernel (via `control`, stessa granularita' per batch
-/// del percorso non fuso) e `catch_unwind` per kernel (l'executor sa quale
-/// kernel e' in corso dall'ultimo `control` ritornato).
+/// UN decode e UN encode per batch (architettura.md#geometrie D12.1).
+/// Kernel-esterno/celle-interno: attribuzione errori, cancellazione e
+/// `catch_unwind` sono per kernel.
 ///
-/// Tabella di attribuzione (D12.3/D12.4), per kernel i del gruppo:
+/// Attribuzione (D12.3/D12.4), per kernel i del gruppo:
 ///
 /// - errore del kernel -> kernel i;
-/// - output oltre `MAX_CELL_BYTES` (misura ESATTA via `wkb_size_xy`,
-///   nessuna serializzazione) -> `CellTooLarge` al kernel i — riproduce il
-///   check di `encode_geometry`;
-/// - profilo A (`centroid`/`convex_hull`/`envelope`): la pipeline canonica
-///   e' dentro `apply_transform_cell` (`transform_geometry_canonical`: OGC
-///   in uscita, limite 64 MiB e validazione strutturale, come
-///   `transform_wkb`) -> kernel i;
-/// - profilo B con un kernel i+1 nel gruppo: `validate_geometry_structural`
-///   poi `check_geometry_valid` (il fallimento del decode del nodo
-///   successivo, nell'ordine di `geometry_from_wkb`) -> kernel i+1.
-///   ECCEZIONE (D12.4): se il kernel i+1 e' `make_valid` il check
-///   OGC e' OMESSO — nel percorso non fuso quel nodo legge l'input col solo
-///   gate strutturale di `make_valid_wkb` (l'OGC-invalido e' cio' che
-///   ripara); la validazione strutturale resta;
-/// - profilo B sull'ULTIMO kernel SENZA misura terminale: NESSUNA
-///   validazione extra — nel percorso non fuso l'output esce dopo
-///   `encode_geometry` senza altra validazione e decodera' chi consuma;
-/// - con misura terminale: la validazione del "decode" prima della
-///   misura (strutturale, poi OGC) e' nel passo della misura -> nodo misura
-///   (variante [`FusedStepError::Measure`], mai `ArrowTransportError`: il
-///   ramo non fuso delle misure non la attraversa).
+/// - output oltre `MAX_CELL_BYTES` (misura esatta via `wkb_size_xy`) ->
+///   `CellTooLarge` al kernel i, come `encode_geometry`;
+/// - profilo A: pipeline canonica dentro `apply_transform_cell` -> kernel i;
+/// - profilo B con un kernel i+1: validazione strutturale poi OGC -> kernel
+///   i+1; se i+1 e' `make_valid` l'OGC e' OMESSO (D12.4);
+/// - profilo B sull'ULTIMO kernel senza misura: nessuna validazione extra;
+/// - con misura terminale: la validazione pre-misura e' del nodo misura
+///   ([`FusedStepError::Measure`]).
 ///
-/// Il decode iniziale (con il check `MAX_CELL_BYTES` sull'input, pattern di
-/// `map_nullable`) e' attribuito al primo kernel del gruppo, l'encode finale
-/// all'ultimo — come nel percorso non fuso. ECCEZIONE (D12.4): se il
-/// PRIMO kernel e' `make_valid` il decode iniziale e' SOLO strutturale
-/// (`wkb_decoder::decode_validated`, la stessa camminata validante senza il
-/// check OGC) — nel percorso non fuso quel nodo non chiama affatto
-/// `geometry_from_wkb` sull'input.
+/// Il decode iniziale e' attribuito al primo kernel, l'encode finale
+/// all'ultimo; se il PRIMO kernel e' `make_valid` il decode iniziale e' solo
+/// strutturale (D12.4).
 ///
-/// `control` e' invocato con l'indice del kernel PRIMA di ogni passo — la
-/// misura terminale inclusa, con indice `group.len()` (il nodo misura e'
-/// l'ultimo membro del gruppo): e' il punto di cancellazione cooperativa
-/// dell'executor (errore `Control`) e il suo marker del kernel in corso per
-/// l'attribuzione dei panic. La cancellazione resta TRA i kernel, mai dentro
-/// — compatibile per costruzione col `NonInterruptible` di
-/// `make_valid`/`reproject`: il callback dell'executor onora il
-/// behavior di catalogo del nodo, come il check del loop non fuso.
+/// `control` riceve l'indice del kernel PRIMA di ogni passo, misura inclusa
+/// (indice `group.len()`): e' il punto di cancellazione cooperativa e il
+/// marker per l'attribuzione dei panic. La cancellazione resta TRA i kernel,
+/// compatibile col `NonInterruptible` di `make_valid`/`reproject`.
 ///
 /// # Errors
 ///
@@ -1569,15 +1508,11 @@ fn transform_cells_fused(
 }
 
 /// Un kernel del gruppo su tutte le celle decodificate: rayon con collect
-/// indicizzato (architettura.md#determinismo), poi raccolta COMPLETA dei fallimenti per riga
-/// (R9.9): gli errori del kernel sono attribuiti al kernel stesso, quelli
-/// della validazione inter-passo al kernel successivo — il kernel ha la
-/// precedenza (nel percorso non fuso il suo nodo fallirebbe prima, col suo
-/// report completo, e il successivo non partirebbe mai). La tabella di
-/// attribuzione e' quella di [`transform_cells_fused`].
-/// `successor_accepts_ogc_invalid` e' vero solo quando il kernel successivo
-/// e' `make_valid` (D12.4): la validazione inter-passo resta
-/// strutturale ma omette il check OGC.
+/// indicizzato (architettura.md#determinismo), poi raccolta COMPLETA dei
+/// fallimenti per riga (R9.9). Gli errori del kernel hanno la precedenza su
+/// quelli della validazione inter-passo, attribuiti al successivo; tabella
+/// in [`transform_cells_fused`]. `successor_accepts_ogc_invalid` e' vero
+/// solo se il successivo e' `make_valid` (D12.4).
 fn apply_fused_kernel(
     resolved: &ResolvedTransform,
     geometries: &mut [Option<Geometry<f64>>],
@@ -1667,16 +1602,13 @@ enum FusedCellFailure {
     Successor(ArrowTransportError),
 }
 
-/// Misura terminale di un gruppo fuso sulle geometrie decodificate
-/// (architettura.md#geometrie); `index` e' l'indice del nodo misura nel gruppo (numero di
-/// trasformazioni). Per cella, nell'ordine del percorso non fuso
-/// (`geo_measure_batch`): validazione del "decode" (strutturale, poi OGC —
-/// l'ordine di `geometry_from_wkb`, profilo B di D12.4) poi kernel scalare;
-/// null-in -> null-out senza validazione ne' kernel, come il ramo non fuso.
+/// Misura terminale di un gruppo fuso (architettura.md#geometrie); `index`
+/// e' l'indice del nodo misura nel gruppo. Per cella, come
+/// `geo_measure_batch`: validazione strutturale, poi OGC (D12.4 profilo B),
+/// poi kernel scalare; null-in -> null-out.
 ///
-/// Il check `MAX_CELL_BYTES` input-side del decode non fuso non e'
-/// riprodotto: irraggiungibile (l'encode del nodo a monte scatta prima —
-/// stessa classe del check input-side dei nodi interni, D12.3).
+/// Il check `MAX_CELL_BYTES` input-side non e' riprodotto: l'encode del nodo
+/// a monte scatta prima (D12.3).
 ///
 /// # Errors
 ///
@@ -1725,15 +1657,11 @@ fn measure_cells<T: Send>(
             let Some(geometry) = slot.as_ref() else {
                 return Ok(None);
             };
-            // Validazione inter-passo prima della misura (D12.4 profilo B):
-            // l'intermedio invalido fallirebbe al decode del nodo misura
-            // (strutturale, poi OGC — l'ordine di `geometry_from_wkb`) ->
-            // attribuzione al nodo misura, con il `PlenoraError` grezzo del
-            // ramo non fuso: `check_geometry_valid` gia' distingue
-            // `Internal` (validazione interrotta) da `InvalidPlan`
-            // (geometria davvero invalida), quindi qui basta leggerne la
-            // categoria — mai riscrivere il testo, o il caso che confronta
-            // i due percorsi byte-per-byte diverge.
+            // Validazione pre-misura (D12.4 profilo B), attribuita al nodo
+            // misura col `PlenoraError` grezzo del ramo non fuso:
+            // `check_geometry_valid` distingue gia' `Internal` da
+            // `InvalidPlan`. Il testo non si riscrive, o il confronto
+            // byte-per-byte fra i due percorsi diverge.
             validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
                 .and_then(|()| check_geometry_valid(geometry))
                 .map_err(|error| MeasureCellFailure {
@@ -1770,17 +1698,13 @@ fn measure_cells<T: Send>(
     })
 }
 
-/// Causa di riga per un `PlenoraError` gia' nella sua forma finale: `None`
-/// per categoria `Internal` (validazione interrotta, mai un difetto della
-/// riga — stessa nozione di [`cell_failure_cause`]/`e_interna` sul percorso
-/// di trasformazione, qui sul `PlenoraError` invece che sull'involucro
-/// `ArrowTransportError`), altrimenti la causa ordinaria del sito.
+/// Causa di riga per un `PlenoraError` gia' nella forma finale: `None` per
+/// categoria `Internal` (validazione interrotta, mai un difetto della riga,
+/// come [`cell_failure_cause`]), altrimenti la causa ordinaria del sito.
 ///
-/// `pub`: condivisa con `executor::blocking::geo_measure_batch`, la stessa
-/// decisione duplicata sul percorso non fuso — due copie divergerebbero,
-/// come gia' successo altrove in questo file. Il modulo `unary` e' gia'
-/// `pub(crate)`, quindi la visibilita' effettiva resta al crate
-/// (`redundant_pub_crate` di clippy pretende `pub`, non `pub(crate)`, qui).
+/// `pub` perche' condivisa con `executor::blocking::geo_measure_batch`: due
+/// copie divergerebbero. La visibilita' effettiva resta al crate
+/// (`redundant_pub_crate` pretende `pub`).
 pub fn causa_di_riga(error: &PlenoraError, ordinaria: &'static str) -> Option<&'static str> {
     if error.category() == plenora_core::ErrorCategory::Internal {
         None
@@ -1813,15 +1737,10 @@ struct MeasureCellFailure {
 }
 
 /// Chiude i fallimenti per riga della misura terminale: report completo
-/// allegato all'errore della prima riga difettosa (forma del percorso non
-/// fuso, `PlenoraError`) — stessa semantica short-circuit di
-/// `collect_cell_failures`: una sola validazione interrotta tra i
-/// fallimenti fa propagare quell'errore grezzo, senza diagnostica di riga,
-/// perche' mescolarla con celle davvero invalide misattribuirebbe le altre.
-///
-/// `pub`: condivisa con `executor::blocking::misura_colonna`, cosi' la
-/// precedenza fra ordinario e interrotto e' la STESSA funzione sui due
-/// percorsi — non due copie da tenere allineate a mano.
+/// allegato all'errore della prima riga difettosa. Come
+/// `collect_cell_failures`, una validazione interrotta fa propagare
+/// quell'errore grezzo senza diagnostica di riga, per non misattribuire le
+/// altre righe. `pub`: condivisa con `executor::blocking::misura_colonna`.
 pub fn collect_measure_failures(
     failures: Vec<(u64, Option<&'static str>, PlenoraError)>,
 ) -> PlenoraError {
@@ -1841,24 +1760,14 @@ pub fn collect_measure_failures(
     first.with_row_diagnostics(cell_diagnostics_report(&rows))
 }
 
-/// Batch trasformato da un gruppo fuso, con l'handle prepared del PRIMO
-/// kernel del gruppo (architettura.md#geometrie) per la validazione della colonna di input
-/// (tipo Binary + metadati geoarrow, attribuita al primo nodo come nel
-/// percorso non fuso) e l'handle dell'ULTIMA trasformazione per lo schema
-/// di output: con `reproject` nel gruppo il CRS del campo geometria
-/// cambia a meta' catena e lo schema di confine e' quello dell'ultimo nodo
-/// — per trasformazioni e misure (CRS invariato lungo il gruppo) coincide
-///   con quello
-/// del primo kernel, perche' la ricostruzione canonica del campo dipende
-/// solo da (nome colonna, CRS di output) e gli altri campi passano
-/// invariati.
+/// Batch trasformato da un gruppo fuso (architettura.md#geometrie): l'handle
+/// del PRIMO kernel valida la colonna di input, quello dell'ULTIMA
+/// trasformazione da' lo schema di output, perche' con `reproject` il CRS
+/// cambia a meta' catena.
 ///
-/// Misura terminale: con `terminal` il runner applica il kernel scalare
-/// sulla forma decodificata dell'ultimo passo e appende la colonna misura in
-/// coda — la STESSA sequenza del percorso non fuso (`one_to_one_batch_prepared`
-/// dell'ultima trasformazione, poi `append_output_column` del nodo misura):
-/// la colonna geometria SOPRAVVIVE (ri-encodata una sola volta) e il batch
-/// finale e' costruito sullo schema del contratto del nodo misura.
+/// Con `terminal` il runner applica la misura sull'ultima forma decodificata
+/// e appende la colonna in coda, come il percorso non fuso: la colonna
+/// geometria SOPRAVVIVE e il batch finale usa lo schema del nodo misura.
 ///
 /// # Errors
 ///
@@ -1987,13 +1896,12 @@ fn attach_partial_report(
 /// GeoArrow-WKB, Float64, `UInt64`, Utf8 oppure quattro colonne Float64 per
 /// `bounds`); tutte le altre colonne passano invariate; i null sono preservati.
 ///
-/// Fallimenti row-scoped (R9.9): TUTTI i batch sono scansionati, i report
-/// batch-locali sono aggregati con offset sorgente assoluti (checked) in un
-/// unico report completo allegato all'errore della prima riga invalida; un
-/// errore tardivo non row-scoped propaga l'errore reale fail-closed con il
-/// report accumulato declassato a `Partial` ([`attach_partial_report`]),
-/// mai la perdita silenziosa della diagnostica gia' osservata.
-/// In caso di rifiuto nessun batch di output e' pubblicato.
+/// Fallimenti row-scoped (R9.9): TUTTI i batch sono scansionati e i report
+/// aggregati con offset assoluti in un unico report allegato all'errore
+/// della prima riga invalida. Un errore tardivo non row-scoped propaga
+/// l'errore reale col report declassato a `Partial`
+/// ([`attach_partial_report`]). In caso di rifiuto nessun batch e'
+/// pubblicato.
 fn one_to_one_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -2737,16 +2645,12 @@ fn numeric_values(
     }
 }
 
-/// `from_coords` (1:1 senza colonna geometria in input): due colonne
-/// numeriche (default `x`/`y`) producono una colonna geometria Point
-/// aggiunta in coda; null in x o y -> geometria null; coordinate non finite
-/// o intere oltre 2^53 sono difetti row-scoped: raccolta completa su tutti
-/// i batch (indice sorgente assoluto zero-based) e rifiuto fail-closed con
-/// diagnostica `plenora-row-diagnostics-v1`, mai valori nei messaggi.
-/// Un errore tardivo non row-scoped propaga l'errore reale con il report
-/// delle rejection gia' osservate declassato a `Partial`
-/// ([`attach_partial_coordinate_report`]), mai la perdita silenziosa.
-/// Tutte le colonne di input passano invariate.
+/// `from_coords`: due colonne numeriche (default `x`/`y`) producono una
+/// colonna geometria Point in coda; null in x o y -> geometria null.
+/// Coordinate non finite o intere oltre 2^53 sono difetti row-scoped:
+/// raccolta completa, rifiuto fail-closed con `plenora-row-diagnostics-v1`,
+/// mai valori nei messaggi. Un errore tardivo non row-scoped propaga col
+/// report declassato a `Partial` ([`attach_partial_coordinate_report`]).
 // Sequenza lineare di raccolta per batch: lunga per costruzione (R9.9).
 #[allow(clippy::too_many_lines)]
 fn from_coords_batches(
@@ -3030,8 +2934,8 @@ pub fn transform_arrow(
     transform_arrow_with_format(reader, writer, schema, ArrowOutputFormat::PlnGeo3)
 }
 
-/// Variante pubblica con formato d'output esplicito; il wrapper storico
-/// [`transform_arrow`] conserva PLNGEO3 come default.
+/// Variante pubblica con formato d'output esplicito; [`transform_arrow`]
+/// conserva PLNGEO3 come default.
 ///
 /// # Errors
 ///
@@ -3181,23 +3085,14 @@ mod tests {
         geometry.to_wkb(CoordDimensions::xy()).expect("fixture wkb")
     }
 
-    /// **Percorso unary, senza pubblicazione parziale**: due celle valide,
-    /// un kernel sintetico che fallisce sulla seconda con l'errore reale
-    /// della migrazione WKT (`OperationError::WktSerialization`, diff 3/4
-    /// del candidato memory-lab). Sintetico di proposito, non
-    /// `operations::to_wkt` vero: il decoder WKB di questo prodotto rifiuta
-    /// ogni poligono vuoto prima che un kernel lo veda
-    /// (`geometry_contract.rs::check_ring`, provato in
-    /// `executor::blocking::tests`), quindi non esiste un payload WKB che
-    /// faccia scattare l'errore per davvero su questo percorso — qui si
-    /// prova la garanzia della raccolta (`map_nullable`), non la
-    /// raggiungibilita' del difetto specifico.
+    /// **Percorso unary, senza pubblicazione parziale**: la seconda cella
+    /// fallisce con `OperationError::WktSerialization` da un kernel
+    /// sintetico, perche' il decoder WKB rifiuta ogni poligono vuoto prima
+    /// del kernel (`geometry_contract.rs::check_ring`). Si prova la raccolta
+    /// (`map_nullable`), non la raggiungibilita' del difetto.
     ///
-    /// La prima cella calcola un valore reale (per dimostrare che VIENE
-    /// calcolato, non solo che potrebbe esserlo) ma non deve MAI comparire
-    /// nell'esito: `map_nullable` raccoglie tutte le righe prima di
-    /// decidere, e con un fallimento decide `Err`, mai un vettore con la
-    /// prima cella valorizzata e la seconda `None`.
+    /// La prima cella calcola un valore reale che non deve MAI comparire
+    /// nell'esito: con un fallimento `map_nullable` decide `Err`.
     #[test]
     fn map_nullable_su_wkt_serialization_non_pubblica_la_cella_valida() {
         let valida = wkb(&Geometry::Point(Point::new(1.0, 2.0)));
@@ -3327,11 +3222,9 @@ mod tests {
     /// **Una validazione interrotta non e' un fallimento attribuibile alla
     /// riga.**
     ///
-    /// `cell_failure_cause` decide se un fallimento entri nella diagnostica
-    /// row-scoped. Un esito che non ha concluso, contato fra le celle rotte,
-    /// direbbe che quella riga e' sbagliata — e nessuno lo ha stabilito.
-    /// `None` e' cio' che questa funzione riserva agli errori non attribuibili
-    /// alla riga, e li fa propagare fail-closed.
+    /// Un esito che non ha concluso, contato fra le celle rotte, direbbe che
+    /// la riga e' sbagliata senza che nessuno lo abbia stabilito: `None` lo
+    /// fa propagare fail-closed.
     #[test]
     fn una_validazione_interrotta_non_e_attribuibile_alla_riga() {
         use plenora_kernels_geo::operations::OperationError;
@@ -3360,19 +3253,12 @@ mod tests {
         );
     }
 
-    /// Prova del solo classificatore `causa_di_riga`: decide sulla categoria
-    /// del `PlenoraError` gia' costruito, non sul sito che l'ha prodotto —
-    /// verificato qui chiamandolo direttamente sulle due categorie, senza
-    /// passare da `geo`.
+    /// Prova del solo classificatore `causa_di_riga`, chiamato direttamente
+    /// sulle due categorie.
     ///
-    /// **Non** prova il collegamento dalla validazione preliminare
-    /// (`check_geometry_valid`/`validate_geometry_structural`) a questa
-    /// funzione dentro `measure_cells`: quel collegamento e' letto nel
-    /// sorgente (`check_geometry_valid` distingue gia' `Internal` da
-    /// `InvalidPlan`), non eseguito da un test, perche' iniettare
-    /// un'interruzione reale li' richiederebbe lo stesso panico di
-    /// `check_validation` usato dalle prove 1/2/3 sul contenimento — prove
-    /// tuttora in parte da progettare, non un meccanismo gia' disponibile.
+    /// **Non** prova il collegamento dentro `measure_cells` dalla validazione
+    /// preliminare: iniettare li' un'interruzione reale richiederebbe un
+    /// meccanismo di panico non ancora disponibile.
     #[test]
     fn causa_di_riga_riconosce_l_interruzione_dalla_categoria_non_dal_sito() {
         assert_eq!(
@@ -3394,16 +3280,11 @@ mod tests {
     }
 
     /// **Percorso fuso: anche qui l'anello orfano non arriva al kernel.**
-    /// `measure_cells` prende `Geometry` gia' in memoria — niente giro per
-    /// WKB fra un passo fuso e il successivo — ma la validazione
-    /// inter-passo (`validate_geometry_structural` + `check_geometry_valid`,
-    /// righe sopra questa) applica la STESSA regola del decoder WKB
-    /// (`geometry_contract.rs::check_ring`, ≥4 coordinate per anello,
-    /// esterno compreso): rifiuta l'anello orfano prima che `operations::
-    /// to_wkt` — qui il kernel VERO, non sintetico — lo veda. Prova diretta,
-    /// non dedotta: se in futuro quella validazione cambiasse e lasciasse
-    /// passare l'orfano, questo caso lo mostrerebbe fallendo per il motivo
-    /// sbagliato (l'assert sul testo dell'errore), non tacendo.
+    ///
+    /// La validazione inter-passo applica la STESSA regola del decoder WKB
+    /// (`geometry_contract.rs::check_ring`) e rifiuta l'anello prima che il
+    /// kernel VERO `operations::to_wkt` lo veda. Se la regola cambiasse, il
+    /// caso fallirebbe sull'assert del testo dell'errore.
     #[test]
     fn measure_cells_reale_rifiuta_anello_orfano_prima_del_kernel() {
         let valida = Geometry::Point(Point::new(1.0, 2.0));
@@ -3451,14 +3332,12 @@ mod tests {
         assert!(error.to_string().contains("serializzazione WKT fallita"));
     }
 
-    /// **Riga valida seguita da errore, sul ciclo di raccolta REALE
-    /// (`measure_cells`), non su una sola geometria.** Riga 0 calcola un WKT
-    /// vero col kernel reale (`to_wkt`), riga 1 fallisce con
-    /// `WktSerialization` per identita' per indirizzo — stesso idioma di
-    /// `ordinario_poi_interrotta_non_vince_l_ordinario`, non per ordine di
-    /// `par_iter`. Sintetico di proposito e tenuta separata dal rifiuto
-    /// strutturale reale (`measure_cells_reale_rifiuta_anello_orfano_...`,
-    /// sopra): quella prova la raggiungibilita', questa prova la raccolta.
+    /// **Riga valida seguita da errore, sul ciclo REALE (`measure_cells`).**
+    ///
+    /// Riga 1 fallisce con `WktSerialization` scelta per identita' per
+    /// indirizzo, non per ordine di `par_iter`. Il rifiuto strutturale reale
+    /// sta nel caso sopra: quello prova la raggiungibilita', questo la
+    /// raccolta.
     #[test]
     fn measure_cells_riga_valida_poi_wkt_serialization_non_pubblica_nulla() {
         let ordinaria = Geometry::Point(Point::new(1.0, 2.0));
@@ -3500,17 +3379,10 @@ mod tests {
     /// **`measure_cells` non deve appiattire una validazione interrotta in
     /// `InvalidPlan`, ne' contarla nella diagnostica di riga.**
     ///
-    /// Regressione mirata (non passa dall'executor: prova solo questo
-    /// componente, come la sua controparte sul classificatore sopra).
-    ///
-    /// Il kernel sintetico individua la riga da far fallire per **identita'
-    /// per indirizzo** dello slot in `geometries` (`std::ptr::eq` su un
-    /// riferimento preso in prestito per tutta la chiamata — gli elementi
-    /// dello slice non si spostano), mai per ordine di chiamata —
-    /// `measure_cells` itera con `par_iter`, quindi «seconda chiamata» non
-    /// e' «riga 1» — ne' per un valore di coordinata speciale. Restituisce
-    /// direttamente `OperationError::ValidazioneNonConclusa`: nessun panico
-    /// qui, la barriera e la sua conversione sono provate separatamente.
+    /// Regressione mirata sul solo componente. Il kernel sintetico sceglie la
+    /// riga per **identita' per indirizzo** dello slot (`std::ptr::eq`), mai
+    /// per ordine di chiamata, perche' `measure_cells` usa `par_iter`. Rende
+    /// direttamente `OperationError::ValidazioneNonConclusa`, senza panico.
     #[test]
     fn measure_cells_non_appiattisce_la_validazione_interrotta() {
         let ordinaria = Geometry::Point(Point::new(1.0, 2.0));
@@ -3721,11 +3593,9 @@ mod tests {
     /// ingresso invalido in ogni profilo — stessa correzione della
     /// controparte non fusa (`transport.rs::il_reperto_e_un_ingresso_invalido_in_ogni_profilo`).**
     ///
-    /// I due percorsi hanno chiamanti distinti, e una decisione duplicata
-    /// diverge: il caso non fuso da solo lascerebbe scoperto questo. Senza
-    /// il diff 1 l'attesa dipende dal profilo (`debug_assert!` di `geo`);
-    /// col segno corretto di `orient2d`, `geo` conclude sempre — misurato
-    /// qui, non dedotto.
+    /// Una decisione duplicata su due chiamanti diverge, quindi serve anche
+    /// il caso fuso. Senza il diff 1 l'attesa dipende dal profilo
+    /// (`debug_assert!` di `geo`); col segno corretto di `orient2d` conclude.
     #[test]
     fn il_percorso_fuso_rende_il_reperto_un_ingresso_invalido_in_ogni_profilo() {
         let centroid = fused_params(ArrowOperation::Centroid);
@@ -4031,14 +3901,11 @@ mod tests {
         assert!(fused_wkt[4].is_none(), "null-in -> null-out sulla misura");
     }
 
-    /// Validazione pre-misura (D12.4 profilo B -> nodo misura): un intermedio
-    /// OGC-invalido fallirebbe al decode del nodo misura nel percorso non
-    /// fuso — il runner fuso lo rifiuta con la STESSA variante e lo STESSO
-    /// messaggio di `check_geometry_valid` (nessun transito da
-    /// `ArrowTransportError`, come `decode_geometry_cell` +
-    /// `step_error`). Difesa in profondita': le op fondibili non producono
-    /// intermedi invalidi, quindi il trigger e' diretto su
-    /// `apply_fused_measure` (stesso stato dei casi (d2)/(e) dell'oracolo).
+    /// Validazione pre-misura (D12.4 profilo B -> nodo misura): il runner
+    /// fuso rifiuta un intermedio OGC-invalido con la STESSA variante e lo
+    /// STESSO messaggio di `check_geometry_valid`. Le op fondibili non
+    /// producono intermedi invalidi, quindi il trigger e' diretto su
+    /// `apply_fused_measure`.
     #[test]
     fn measure_validation_error_is_attributed_to_the_measure_node() {
         let bowtie = Geometry::Polygon(polygon![

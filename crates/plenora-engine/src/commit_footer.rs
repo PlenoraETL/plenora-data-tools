@@ -1,56 +1,21 @@
 //! Il `commit_token` nel footer di un artefatto Arrow IPC.
 //!
-//! # Che cosa e', e soprattutto che cosa non e'
+//! Il token e' l'**identita' del tentativo**: correla artefatto, `Saluto` e
+//! verifica (`isolamento.md`, passo 8-bis). **Non e' una credenziale**: niente
+//! firma, MAC o chiave, chiunque scriva un file Arrow IPC puo' metterci il
+//! token che vuole. Dice quale tentativo *dichiara* di aver prodotto il file.
 //!
-//! Il token e' l'**identita' del tentativo**: dice di quale esecuzione questo
-//! file e' il prodotto, e serve a correlare artefatto, `Saluto` e verifica
-//! (`isolamento.md`, passo 8-bis). E' un ingresso dell'esecuzione, scelto dal
-//! chiamante prima dell'invocazione come il percorso di destinazione.
+//! Da non confondere con il marcatore durevole del footer (il file e' finito)
+//! e con il digest dell'artefatto, trasmesso nell'`Esito`, l'unico dei tre che
+//! dica qualcosa sul contenuto.
 //!
-//! **Non e' una credenziale e non prova nulla sull'autenticita' del file.**
-//! Non c'e' firma, non c'e' MAC, non c'e' chiave: chiunque sappia scrivere un
-//! file Arrow IPC puo' metterci dentro il token che vuole. Chi legge il token
-//! impara **quale tentativo dichiara** di aver prodotto il file, non che quel
-//! tentativo lo abbia prodotto davvero, e nemmeno chi fosse autorizzato a
-//! farlo. Trattarlo come una prova sarebbe il difetto peggiore che possa
-//! nascere qui: una guardia che sembra proteggere e non protegge.
-//!
-//! # Tre cose diverse nello stesso file, da non confondere
-//!
-//! - il **marcatore durevole** del footer, scritto da `FileWriter::finish`, e'
-//!   cio' che il framing rinforzato verifica: dice che il file e' finito;
-//! - il `commit_token`, che dice di quale tentativo il file e' il prodotto;
-//! - il **digest dell'artefatto**, calcolato sull'intero file finalizzato e
-//!   trasmesso nell'`Esito`: scriverlo dentro il file che copre sarebbe
-//!   autoreferenziale. E' l'unico dei tre che dica qualcosa sul **contenuto**.
-//!
-//! # Scrittura: prima di `finish`, e solo se c'e' un token
-//!
-//! Senza token **non si scrive nulla**, nemmeno una chiave vuota. E' la
-//! ragione per cui gli artefatti prodotti in-process restano byte per byte
-//! quelli di prima: la presenza del token e' l'unica differenza, e quando non
-//! c'e' non c'e' proprio.
-//!
-//! # Lettura: dalla traversata rinforzata, mai da `FileReader`
-//!
-//! `FileReader::custom_metadata` sarebbe una terza strada nel footer, e dei
-//! controlli della traversata rinforzata — allocazione limitata, chiavi e
-//! valori presenti, duplicati rifiutati — non ne farebbe nessuno. Qui si passa da
-//! [`valida_file_ed_estrai`](crate::geo_transport::ipc::valida_file_ed_estrai),
-//! che convalida **e** estrae nello stesso passaggio.
-//!
-//! # Assente, canonico, non canonico
-//!
-//! - **assente**: legittimo. Un artefatto ordinario non ha un token, e
-//!   pretenderlo renderebbe illeggibile tutto cio' che esiste gia';
-//! - **canonico**: accettato;
-//! - **presente ma non canonico**: rifiutato sempre, in ogni percorso. Non si
-//!   normalizza e non si ignora — un token che non e' quello che diciamo di
-//!   scrivere e' un artefatto di cui non sappiamo dire a quale tentativo
-//!   appartenga — e un token che non e' canonico non e' un token.
-//!
-//! Che il token sia **obbligatorio** e' una proprieta' del percorso isolato,
-//! non di questa funzione: qui si dice cosa c'e', non se debba esserci.
+//! Senza token non si scrive nulla, nemmeno una chiave vuota. La lettura passa
+//! dalla traversata rinforzata
+//! ([`valida_file_ed_estrai`](crate::geo_transport::ipc::valida_file_ed_estrai)),
+//! mai da `FileReader::custom_metadata`, che ne salterebbe i controlli. Un
+//! token assente e' legittimo; presente ma non canonico si rifiuta sempre.
+//! Che sia obbligatorio e' una proprieta' del percorso isolato, non di questo
+//! modulo.
 
 use std::io::Write;
 
@@ -71,25 +36,16 @@ use crate::geo_transport::ipc::{valida_file_ed_estrai, IpcLimits, IpcSource};
 
 /// Interpreta il testo trovato sotto la chiave del token.
 ///
-/// # Perche' e' una funzione e non due righe ripetute
-///
-/// Ha due chiamanti che arrivano da strade diverse — chi traversa il footer
-/// solo per il token, e il verificatore che lo estrae durante la propria
-/// traversata — e la regola che applica e' la stessa: un token presente ma non
-/// canonico si **rifiuta**, sempre, in ogni percorso. Scritta due volte, la
-/// regola avrebbe avuto due occasioni di cambiare in una sola.
+/// Un punto solo per la regola (presente ma non canonico si rifiuta) condivisa
+/// dai due chiamanti: la traversata del solo token e il verificatore.
 ///
 /// # Errors
 ///
 /// [`ArrowTransportError::IpcMetadataInvalid`] se il testo non e' canonico. Il
-/// messaggio e' un `&'static str`, quindi **non puo'** portare il valore: non
-/// e' una disciplina da ricordare, e' il tipo che non lo consente.
-// Senza `cfg`, e non per distrazione: `pubblicazione::risolvi_commit` la chiama
-// da codice di produzione, quindi la condizione del registro — nessun chiamante
-// di produzione — non vale per lei. `leggi_commit_token`, che le sta accanto,
-// resta sotto `cfg(test)`: la sua traversata non ha ancora un chiamante.
-//
-// Il registro dei moduli che restano sotto `cfg` sta in
+/// messaggio e' un `&'static str`, quindi il tipo non consente di portare il
+/// valore.
+// Senza `cfg`: `pubblicazione::risolvi_commit` la chiama da codice di
+// produzione. Registro:
 // errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 pub fn interpreta_commit_token(testo: &str) -> Result<CommitToken, ArrowTransportError> {
     CommitToken::da_esadecimale(testo).map_err(|_| {
@@ -101,14 +57,9 @@ pub fn interpreta_commit_token(testo: &str) -> Result<CommitToken, ArrowTranspor
 
 /// Scrive il `commit_token` nel footer, se c'e'.
 ///
-/// Va chiamata **prima** di `FileWriter::finish`: dopo, il footer e' gia'
-/// stato emesso e la chiamata non avrebbe effetto — silenziosamente, che e' il
-/// modo peggiore di non funzionare.
-///
-/// Non rende un `Result`, e non per brevita': `write_metadata` accumula in una
-/// mappa e non puo' fallire. Un `Result` che non porta mai un errore invita a
-/// scrivere una gestione che non serve, e a credere che il fallimento sia
-/// stato considerato.
+/// Va chiamata **prima** di `FileWriter::finish`: dopo, la chiamata non avrebbe
+/// effetto, in silenzio. Non rende un `Result` perche' `write_metadata`
+/// accumula in una mappa e non puo' fallire.
 pub fn scrivi_commit_token<W: Write>(scrittore: &mut FileWriter<W>, token: Option<&CommitToken>) {
     let Some(token) = token else {
         // Nessuna chiave, nessun valore, nessun byte: e' cio' che rende gli
@@ -127,23 +78,11 @@ pub fn scrivi_commit_token<W: Write>(scrittore: &mut FileWriter<W>, token: Optio
 ///
 /// - gli errori del framing, perche' la lettura passa dalla convalida;
 /// - [`ArrowTransportError::IpcMetadataInvalid`] se il token c'e' ma non e'
-///   canonico. Il messaggio e' un `&'static str`, quindi **non puo'** portare
-///   il valore: non e' una disciplina da ricordare, e' il tipo che non lo
-///   consente.
+///   canonico (il messaggio e' un `&'static str` e non porta il valore).
 ///
-/// # Perche' e' dietro un `cfg`
-///
-/// Non ha un chiamante di produzione, e **il verificatore non lo e'**:
-/// deve riferire framing, token, digest e consegna ad arrow **a un solo
-/// handle**, mentre questa funzione fa una traversata propria. Chiamarla
-/// significherebbe convalidare due volte, con una finestra in mezzo. Il
-/// lettore reale del token e' quindi la sequenza di verifica e publish.
-///
-/// Cio' che i due condividono e' l'unica parte che avrebbe potuto divergere —
-/// l'interpretazione del testo trovato — ed e' in
-/// [`interpreta_commit_token`].
-///
-/// Regola, perimetro e condizione di rientro stanno in
+/// Dietro `cfg(test)`: il verificatore non la usa perche' deve riferire
+/// framing, token e digest a un solo handle, senza una seconda traversata.
+/// Cio' che condividono sta in [`interpreta_commit_token`]. Registro:
 /// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[cfg(test)]
 pub fn leggi_commit_token<S: IpcSource + ?Sized>(

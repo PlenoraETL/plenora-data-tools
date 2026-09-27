@@ -6,20 +6,10 @@ use super::{risolvi, Risolutore, VERSIONE};
 
 /// **I due `cfg` dicono la stessa cosa.**
 ///
-/// # Perche' e' il caso che conta
-///
-/// Perche' e' l'unico che si accorge di una divergenza. L'identita' viene dal
-/// selettore, la funzione dalla scelta del simbolo: sono due direttive, e chi
-/// ne modificasse una sola avrebbe un programma che risolve i CRS con
-/// un'implementazione e li **descrive** con un'altra.
-///
-/// Il difetto non somiglierebbe a un errore. Somiglierebbe a un handshake che
-/// rifiuta un worker corretto — o che accetta un worker che risolve
-/// diversamente dal supervisore, che e' peggio.
-///
-/// Il comportamento si guarda su una definizione **valida**: una malformata
-/// verrebbe rifiutata testualmente da entrambe le implementazioni, e il caso
-/// misurerebbe la validazione invece del backend.
+/// L'identita' viene dal selettore, la funzione dalla scelta del simbolo: chi
+/// ne modificasse una sola avrebbe un programma che risolve i CRS in un modo e
+/// li descrive in un altro. Si usa una definizione **valida**, perche' una
+/// malformata misurerebbe la validazione invece del backend.
 #[test]
 fn l_identita_dichiarata_e_la_funzione_concordano() {
     let scelto = Risolutore::di_questa_build();
@@ -65,10 +55,7 @@ fn le_identita_sono_distinte_e_non_vuote() {
 
 /// **Solo la build senza backend sa inventariare il proprio ambiente.**
 ///
-/// E' il limite dichiarato di `PR-9`, e sta in un caso perche' altrimenti
-/// sarebbe una frase in un documento: con PROJ non esiste una radice
-/// esclusiva, immutabile e inventariabile, quindi non c'e' un insieme di cui
-/// dire «e' tutto, e non cambia».
+/// Con PROJ non esiste una radice esclusiva, immutabile e inventariabile.
 #[test]
 fn l_ambiente_e_inventariabile_solo_senza_backend() {
     assert!(Risolutore::SenzaBackend.ambiente_inventariabile());

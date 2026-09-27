@@ -938,8 +938,8 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
         .fields()
         .iter()
         .any(|field| field.data_type() == &DataType::LargeUtf8);
-    // Test prima del clone della mappa (hot path minimale): la copia dei metadata serve
-    // solo se c'e' davvero una voce da rimuovere.
+    // Il test precede il clone della mappa: la copia dei metadata serve solo
+    // se c'e' davvero una voce da rimuovere.
     let has_pandas_metadata = batch.schema().metadata().contains_key("pandas");
     if !has_large_utf8 && !has_pandas_metadata {
         return Ok(batch.clone());
@@ -985,14 +985,12 @@ fn normalize_large_utf8(batch: &RecordBatch) -> Result<RecordBatch> {
     )
 }
 
-/// Config tipizzata di un passo tabellare (configurazioni preparate, hot path minimale): deserializzata UNA VOLTA
-/// in `Plan::validate` e riusata da ogni batch — niente JSON nel percorso
-/// caldo. Ogni variante e' `Box`ata: le config hanno dimensioni molto
-/// eterogenee e l'allocazione avviene una sola volta a monte dello stream.
+/// Config tipizzata di un passo tabellare.
 ///
-/// Il dispatch resta quello esistente, per nome di operazione: `prepare_step`
-/// mappa il nome sulla variante (stessa tabella di `validate_step_contract`),
-/// `execute_step`/`execute_binary` fanno match sulla variante senza parsing.
+/// Deserializzata una volta in `Plan::validate` e riusata da ogni batch:
+/// niente JSON nel percorso caldo. Le varianti sono `Box`ate perche' le config
+/// hanno dimensioni molto eterogenee. `prepare_step` mappa il nome sulla
+/// variante (stessa tabella di `validate_step_contract`).
 #[derive(Debug)]
 pub enum PreparedStep {
     /// `drop_columns`.
@@ -1219,9 +1217,10 @@ impl PreparedStep {
     }
 }
 
-/// Deserializza la config di un passo nella sua forma tipizzata (configurazioni preparate, hot path minimale).
-/// Chiamata una sola volta per passo da `Plan::validate`, mai per batch;
-/// il dispatch per nome e' lo stesso di `validate_step_contract`.
+/// Deserializza la config di un passo nella sua forma tipizzata.
+///
+/// Chiamata una volta per passo da `Plan::validate`, mai per batch; il
+/// dispatch per nome e' lo stesso di `validate_step_contract`.
 ///
 /// # Errors
 ///
@@ -1501,17 +1500,12 @@ pub fn execute_complete_batch(batch: RecordBatch, plan: &ValidatedPlan) -> Resul
 }
 
 /// Come [`execute_batch`], ma con la directory di spill decisa dal
-/// chiamante (architettura.md#memoria, spill generalizzato).
+/// chiamante (architettura.md#memoria).
 ///
-/// `Some(dir)` instrada i file di spill di
-/// `sort`/`distinct`/`aggregate` nella directory condivisa dell'esecuzione
-/// (il `TempStore` di plenora-engine — creata se manca, mai rimossa da qui;
-/// i file di spill sono comunque ripuliti a fine operazione), `None`
-/// corrisponde al comportamento storico (tempdir posseduta per operazione).
-///
-/// Restituisce anche le metriche di spill aggregate sulla catena (byte
-/// scritti/letti e file materializzati): azzerate se nessun passo ha
-/// spillato.
+/// `Some(dir)` instrada i file di spill di `sort`/`distinct`/`aggregate` nella
+/// directory condivisa dell'esecuzione (creata se manca, mai rimossa da qui);
+/// `None` usa una tempdir posseduta per operazione. Restituisce anche le
+/// metriche di spill aggregate sulla catena.
 ///
 /// # Errors
 ///
@@ -1538,22 +1532,13 @@ pub(crate) fn execute_batch_with_spill_row_diagnostics(
     execute_batch_with_spill_impl(batch, plan, spill_dir, true)
 }
 
-/// Contesto del passo per il percorso LEGACY (piani `schema_version <= 3`).
+/// Contesto del passo per il percorso legacy (piani `schema_version <= 3`).
 ///
-/// L'equivalente DAG e' `executor::step_error`. Qui vale la stessa regola: un
-/// errore che porta una CATEGORIA da preservare non viene avvolto in
-/// `Execution`, perche' l'involucro la sostituirebbe con `execution` e
-/// l'exit code 6. Con un avvolgimento incondizionato un limite di risorsa
-/// alzato da un kernel uscirebbe dal percorso legacy come `execution` mentre
-/// il percorso DAG lo conserva: la stessa esecuzione darebbe due categorie
-/// diverse a seconda della versione del piano.
-///
-/// Le categorie preservate sono quelle su cui il chiamante DECIDE in modo
-/// diverso da «il passo e' fallito»: `ResourceLimit` (rilancia con piu'
-/// budget, exit 4), `Internal` (un'invariante NOSTRA e' rotta: exit 70, ed e'
-/// un difetto da segnalare a noi) e `Cancelled` (nessuna decisione: e' stato
-/// lui a fermare). Il contesto — indice del passo e operazione — non va
-/// perso: viaggia in `Replayed`, che porta categoria e attribuzione insieme.
+/// Stessa regola di `executor::step_error`: un errore con una categoria da
+/// preservare non si avvolge in `Execution`, o la stessa esecuzione darebbe
+/// categorie diverse a seconda della versione del piano. Preservate:
+/// `ResourceLimit` (exit 4), `Internal` (exit 70) e `Cancelled`. Indice del
+/// passo e operazione viaggiano in `Replayed`.
 fn legacy_step_error(error: &PlenoraError, index: usize, operation: &str) -> PlenoraError {
     let categoria = error.category();
     if crate::error_propagation::categoria_preservata(categoria) {
@@ -1647,12 +1632,9 @@ pub fn execute_binary(
         PreparedStep::UnionDistinct(_) | PreparedStep::Intersect(_) | PreparedStep::Except(_)
     ) && spill::should_spill(&left, &right, plan.limits())
     {
-        // NOTA (spill generalizzato): il set-op spilled usa ancora una tempdir
-        // posseduta interna a `execute_set_operation` — kernels-table non
-        // espone una variante `*_in` con workspace del chiamante per i
-        // set-op, quindi questo percorso NON transita dalla directory
-        // condivisa del `TempStore` (diversamente da sort/distinct/
-        // aggregate, cfr. `execute_batch_with_spill`).
+        // Il set-op spilled usa una tempdir interna a `execute_set_operation`:
+        // kernels-table non espone una variante `*_in` per i set-op, quindi
+        // questo percorso non passa dalla directory condivisa del `TempStore`.
         let output = spill::execute_set_operation(prepared.name(), &left, &right, plan.limits())?;
         validate_batch(&output, plan.limits(), &mut names_validated)?;
         return Ok(output);

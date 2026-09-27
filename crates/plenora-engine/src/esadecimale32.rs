@@ -1,26 +1,14 @@
 //! Trentadue byte in forma esadecimale minuscola: la **rappresentazione**,
 //! senza semantica.
 //!
-//! Una rappresentazione condivisa, due semantiche distinte: il `commit_token`
-//! identifica un tentativo, il digest SHA-256 identifica un contenuto. La
-//! forma che hanno in comune vive qui, e la regola che la definisce esiste in
-//! un punto solo — due copie sarebbero due occasioni di correggerne una sola.
+//! La condividono il `commit_token` (identifica un tentativo) e il digest
+//! SHA-256 (identifica un contenuto): la regola di forma esiste in un punto
+//! solo.
 //!
-//! I due tipi restano distinti perche' cio' che li distingue **non e' la
-//! forma**.
-//!
-//! # Che cosa questo modulo deliberatamente non ha
-//!
-//! Nessun `Debug` e nessun `Display`. Sarebbero una politica, e la politica e'
-//! esattamente il punto in cui i due tipi divergono: un digest si mostra,
-//! perche' vedere due digest affiancati e' come si diagnostica un disaccordo;
-//! un token non compare mai, in nessuna forma. Dare qui una politica
-//! significherebbe imporla a entrambi, e la piu' comoda — mostrare — e' quella
-//! che un giorno mette il token in un log.
-//!
-//! Per la stessa ragione l'errore di forma di questo modulo **non esce**: ogni
-//! wrapper lo traduce nel proprio, che e' il tipo che i suoi chiamanti
-//! conoscono.
+//! Nessun `Debug` e nessun `Display`: la politica di visualizzazione e' cio'
+//! in cui i due tipi divergono (un digest si mostra, un token mai). Per la
+//! stessa ragione l'errore di forma non esce: ogni wrapper lo traduce nel
+//! proprio.
 
 use std::fmt;
 
@@ -38,16 +26,11 @@ pub const CARATTERI: usize = BYTE * 2;
 
 /// Perche' un testo non e' trentadue byte esadecimali minuscoli.
 ///
-/// **Non porta il valore**, e nemmeno un frammento: su un canale ostile il
-/// testo che ha fallito la conversione lo sceglie l'altro capo, e un errore
-/// che lo copia e' un modo di far scrivere nel log di chi indaga. La posizione
-/// c'e', perche' e' struttura e non contenuto.
+/// **Non porta il valore**, nemmeno un frammento: su un canale ostile quel
+/// testo lo sceglie l'altro capo. La posizione c'e', perche' e' struttura.
 ///
-/// Le tre varianti sono quelle che i wrapper devono poter distinguere: il
-/// `commit_token` tratta la maiuscola come un errore **suo** — `A` non e'
-/// spazzatura, e' la grafia sbagliata di un valore che potrebbe essere giusto
-/// — mentre il digest le riunisce. Un difetto meno dettagliato di cosi'
-/// costringerebbe il primo a rinunciare a una distinzione che ha in API.
+/// Le varianti servono ai wrapper: il `commit_token` tratta la maiuscola come
+/// errore suo, il digest le riunisce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormaNonValida {
     /// La lunghezza non e' quella richiesta, **in byte**.
@@ -112,12 +95,9 @@ impl Esadecimale32 {
 
     /// Costruisce dai byte grezzi.
     ///
-    /// Non valida nulla, e non ha nulla da validare: ogni sequenza di
-    /// [`BYTE`] byte ha una e una sola forma canonica, che
-    /// [`in_esadecimale`](Self::in_esadecimale) ricostruisce. Serve a chi il
-    /// valore lo **calcola** invece di riceverlo come testo — l'uscita di uno
-    /// SHA-256, per esempio — e che altrimenti dovrebbe formattarlo a mano per
-    /// poi rifarlo interpretare, con due grafie possibili al posto di una.
+    /// Non valida nulla: ogni sequenza di [`BYTE`] byte ha una sola forma
+    /// canonica. Serve a chi il valore lo calcola (l'uscita di uno SHA-256)
+    /// invece di riceverlo come testo.
     pub const fn dai_byte(byte: [u8; BYTE]) -> Self {
         Self { byte }
     }
@@ -207,16 +187,12 @@ fn non_testuale<T: DaEsadecimale32, E: de::Error>() -> E {
 }
 
 /// I metodi che rifiutano e basta esistono perche' i default del `Visitor`
-/// costruiscono `Unexpected` **dal valore ricevuto**, e tre delle sue varianti
-/// lo stampano: `Bool`, `Signed`/`Unsigned`, `Float`. Verificato una variante
-/// alla volta: `null`, sequenze e mappe non portano nulla, `Bytes` dice «byte
-/// array», e `char` ricade su `visit_str`, dove il testo entra nella
-/// validazione vera, che non lo copia.
+/// costruiscono `Unexpected` dal valore ricevuto, e `Bool`,
+/// `Signed`/`Unsigned`, `Float` lo stampano.
 ///
-/// I due a 128 bit non ricadono sui precedenti e il loro default nomina il
-/// tipo invece del valore. Sono coperti lo stesso: quel default appartiene a
-/// una dipendenza, e la riservatezza non puo' dipendere da come una libreria
-/// formatta un messaggio.
+/// I due a 128 bit sono coperti anche se il loro default nomina solo il tipo:
+/// la riservatezza non puo' dipendere da come una dipendenza formatta un
+/// messaggio.
 impl<T: DaEsadecimale32> de::Visitor<'_> for Visitatore<T> {
     type Value = T;
 

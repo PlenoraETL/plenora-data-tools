@@ -12,18 +12,10 @@ use super::transport::{ENVELOPE_MAGIC, ENVELOPE_TRAILER_MAGIC};
 
 /// Buffer di lettura del payload: **fisso, piccolo e riusato**.
 ///
-/// Non e' un tetto sul payload — quello e' [`MAX_STREAM_BYTES`] — ed e' la
-/// ragione per cui e' piccolo: dimensiona una `read`, non un risultato. Un
-/// buffer grande quanto un chunk andrebbe allocato e azzerato **prima** di
-/// sapere se quei byte esistano, e sedici byte di header con una lunghezza
-/// dichiarata qualsiasi basterebbero a farne toccare milioni.
-///
-/// 16 KiB e' il piu' grande che il progetto ammetta sullo stack — oltre,
-/// `clippy::large_stack_arrays` lo rifiuta — ed e' gia' ben oltre la taglia
-/// dove il costo per byte di una `read` smette di migliorare. Sullo stack e
-/// non nello heap perche' cosi' non chiede niente all'allocatore, che e'
-/// proprio la risorsa che un buffer dimensionato sul dichiarato
-/// sovraccaricherebbe.
+/// Dimensiona una `read`, non il payload (il tetto e' [`MAX_STREAM_BYTES`]):
+/// un buffer grande quanto un chunk andrebbe allocato e azzerato prima di
+/// sapere se quei byte esistano. Sta sullo stack, al limite ammesso da
+/// `clippy::large_stack_arrays`, per non chiedere nulla all'allocatore.
 const BUFFER_LETTURA_BYTES: usize = 16 * 1024;
 
 /// Lettore dell'envelope v3 con hasher incrementale, nello stile di
@@ -64,16 +56,10 @@ impl<R: Read> EnvelopeReader<R> {
     ///
     /// # La memoria cresce con i byte letti, non con quelli dichiarati
     ///
-    /// Il payload si accumula **solo** con i byte che una `read` ha davvero
-    /// reso. `payload_len` viene dall'ingresso: fidarsene per dimensionare
-    /// un'allocazione significa lasciare che sia l'ingresso a decidere quanta
-    /// memoria si tocca, e il tetto di [`MAX_STREAM_BYTES`] governa quanto
-    /// l'ingresso puo' **dichiarare**, non quanto noi allochiamo subito.
-    ///
-    /// Ne segue che non si usa ne' `with_capacity(payload_len)` ne' un buffer
-    /// temporaneo grande quanto un chunk: entrambi rimetterebbero
-    /// l'amplificazione: pochi byte di ingresso, molti megabyte allocati e
-    /// azzerati. Il buffer e' **fisso, piccolo e riusato** a ogni giro.
+    /// `payload_len` viene dall'ingresso e non dimensiona allocazioni: niente
+    /// `with_capacity(payload_len)` ne' buffer grandi quanto un chunk, che
+    /// farebbero allocare molti megabyte a fronte di pochi byte di ingresso.
+    /// [`MAX_STREAM_BYTES`] limita quanto l'ingresso puo' dichiarare.
     ///
     /// # Errors
     ///
@@ -116,19 +102,11 @@ impl<R: Read> EnvelopeReader<R> {
             }
             if letti > vuole {
                 // `Read::read` promette di non rendere piu' byte della fetta
-                // che ha ricevuto. La promessa e' del `Read`, non del tipo, e
-                // un implementatore rotto la viola.
-                //
-                // Non si tronca e non si prosegue: accodare la fetta intera
-                // farebbe entrare nel payload — e nel digest — byte che
-                // nessuno ha scritto, cioe' un risultato sbagliato al posto di
-                // un errore.
-                //
-                // `Io` e non `Internal`: `Internal` nomina un difetto del
-                // trasporto, e qui il trasporto fa la cosa giusta — e' il
-                // `Read` che gli e' stato dato a rompere il proprio contratto.
-                // Stessa lettura e stesso messaggio del lettore dei frame; il
-                // messaggio e' costante e non porta ne' taglie ne' contenuti.
+                // ricevuta, ma un implementatore rotto puo' violarlo. Accodare
+                // la fetta farebbe entrare nel payload e nel digest byte che
+                // nessuno ha scritto: si rifiuta. `Io` e non `Internal`, perche'
+                // a rompere il contratto e' il `Read` ricevuto; messaggio
+                // costante, senza taglie ne' contenuti.
                 return Err(ArrowTransportError::Io(std::io::Error::other(
                     "il lettore ha reso piu' byte della finestra richiesta",
                 )));
@@ -228,13 +206,9 @@ impl<W: Write> EnvelopeWriter<W> {
 
 /// Le taglie che il lettore chiede a `read`.
 ///
-/// **Che cosa misurano, e che cosa no.** Osservano la lunghezza delle slice
-/// passate a `Read::read`, non l'heap: non contano byte allocati e non
-/// userebbero un allocatore strumentato per farlo. Sono validi contro la
-/// regressione specifica — un buffer dimensionato sul valore dichiarato
-/// dall'ingresso — perche' quella si manifesta per intero nella taglia
-/// richiesta. Chiamarli misure dell'allocazione sarebbe dire piu' di quanto
-/// facciano.
+/// Osservano la lunghezza delle slice passate a `Read::read`, non l'heap: la
+/// regressione che cercano (un buffer dimensionato sul valore dichiarato)
+/// si vede per intero nella taglia richiesta.
 #[cfg(test)]
 mod taglie_delle_letture_richieste {
     use std::io::Read;
@@ -449,15 +423,10 @@ mod letture_parziali_e_interruzioni {
 
 /// Un `Read` che viola il proprio contratto non produce byte validi.
 ///
-/// `Read::read` promette di non rendere piu' byte della fetta ricevuta. Non
-/// e' una promessa che il tipo garantisce: un implementatore rotto — o un
-/// wrapper scritto male a valle — puo' dichiarare di aver riempito piu' di
-/// quanto gli e' stato dato.
-///
-/// Troncare quella dichiarazione e proseguire sarebbe la scelta comoda, e
-/// sarebbe la scelta sbagliata: farebbe entrare nel payload e nel digest byte
-/// che nessuno ha scritto, cioe' un risultato **sbagliato** al posto di un
-/// errore. I due lettori si fermano, e questi casi lo pretendono.
+/// `Read::read` promette di non rendere piu' byte della fetta ricevuta, ma
+/// il tipo non lo garantisce. Troncare e proseguire farebbe entrare nel
+/// payload e nel digest byte che nessuno ha scritto: i due lettori si
+/// fermano, e questi casi lo pretendono.
 #[cfg(test)]
 mod un_read_scorretto_non_passa_per_valido {
     use std::io::Read;

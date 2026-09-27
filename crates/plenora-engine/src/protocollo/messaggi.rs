@@ -1,51 +1,20 @@
-//! I otto messaggi del protocollo, come **forma serializzata**.
+//! I messaggi del protocollo, come **forma serializzata**.
 //!
 //! `deny_unknown_fields` a ogni livello, nessun `serde_json::Value`, nessuna
-//! mappa aperta, nessun campo d'estensione. Cio' che non e' riconosciuto e'
-//! un errore: e' la regola che trasforma un'estensione futura in un guasto
-//! **presente e visibile**, invece che in un silenzio.
+//! mappa aperta: cio' che non e' riconosciuto e' un errore **visibile**, non
+//! un silenzio.
 //!
-//! # L'unico campo non tipizzato, e perche' non e' un'eccezione alla regola
+//! [`Incarico::piano_canonico`] e' l'unico campo non tipizzato, perche' il
+//! piano ha validatore, versione e hash propri. E' [`RawValue`], JSON
+//! **grezzo**: una sola serializzazione, misurata e spedita, senza riscrivere
+//! i numeri su cui e' calcolato il `plan_hash` ne' collassare chiavi
+//! duplicate. Che sia un piano con l'hash [`Incarico::plan_hash_atteso`] lo
+//! verifica il worker.
 //!
-//! [`Incarico::piano_canonico`] non ha una forma dichiarata qui. La regola che
-//! vieta `serde_json::Value` vieta i **punti d'estensione aperti**: un campo
-//! in cui struttura sconosciuta entra in un *messaggio* e ci resta senza che
-//! nessuno la guardi. Il piano non e' struttura del protocollo — ha un
-//! validatore proprio, una versione propria e un hash proprio, e il protocollo
-//! non e' l'autorita' che lo interpreta.
-//!
-//! Il campo e' quindi [`RawValue`]: JSON **grezzo, non parsato**. La differenza
-//! con `Value` non e' stilistica.
-//!
-//! - `Value` avrebbe fatto due serializzazioni — una misurata contro il tetto,
-//!   un'altra spedita — e nulla avrebbe garantito che fossero gli stessi byte.
-//!   `RawValue` ne ha una sola: quella che si misura e' quella che parte.
-//! - `Value` avrebbe riparsato ogni numero in `f64`/`i64` e riemesso la propria
-//!   forma, cioe' avrebbe potuto **riscrivere** il testo su cui il `plan_hash`
-//!   e' stato calcolato.
-//! - `Value` avrebbe collassato in silenzio le chiavi duplicate interne al
-//!   piano («vince l'ultima»).
-//!
-//! Cio' che `RawValue` **non** fa e' validare: garantisce solo che il testo sia
-//! JSON sintatticamente valido. Che sia un piano, che sia della versione
-//! giusta, che il suo hash sia [`Incarico::plan_hash_atteso`] — sono verifiche
-//! del worker, ed e' li' che devono stare.
-//!
-//! # Che cosa NON e' qui
-//!
-//! La **semantica**. Questo modulo sa dire «questo non e' un `Saluto` ben
-//! formato»; non sa dire «questo `Saluto` viene dal binario sbagliato». Che
-//! il digest sia quello giusto, che il resolver sia compatibile, che le
-//! capability bastino, che il `commit_token` sia quello che finira' nel
-//! footer — appartengono al supervisore.
-//!
-//! # Il worker non conclude per il supervisore
-//!
+//! La **semantica** (digest, resolver, capability) appartiene al supervisore.
 //! Sul filo viaggia la proiezione di [`EsitoWorker`], non l'esito
-//! classificato: quello nasce nel supervisore combinando esito del worker,
-//! timeout, cancellazione ed evidenza del sistema operativo. Un worker che
-//! dichiarasse `ResourceLimit` starebbe affermando un'evidenza cgroup che non
-//! ha letto.
+//! classificato, che nasce nel supervisore con l'evidenza del sistema
+//! operativo.
 
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -55,27 +24,18 @@ use crate::commit_token::CommitToken;
 
 /// Versione del protocollo.
 ///
-/// Sta **solo** nell'involucro di ogni frame. `Saluto` e `Risposta` non ne
-/// portano una seconda copia: due rappresentazioni della stessa cosa sono due
-/// cose che possono divergere, e la domanda «quale delle due vale» non ha una
-/// risposta buona.
+/// Sta **solo** nell'involucro di ogni frame: `Saluto` e `Risposta` non ne
+/// portano una seconda copia che possa divergere.
 pub const VERSIONE_PROTOCOLLO: u16 = 1;
 
 /// Genera **insieme** l'enum, il suo nome sul filo e l'insieme di tutte le sue
 /// varianti.
 ///
-/// Serve a togliere di mezzo una classe di difetto, non a scrivere meno: una
-/// tabella di prova scritta a mano accanto all'enum **enumera se stessa**.
-/// Aggiungere una variante la lascia invariata, e il test resta verde
-/// affermando che tutte le varianti hanno il nome giusto — su un insieme che
-/// non le contiene tutte.
-///
-/// Qui la lista e' una sola. Una variante non puo' esistere senza un nome sul
-/// filo (la macro lo pretende) e senza comparire in [`TUTTE`](Self::TUTTE).
-///
-/// Cio' che la macro **non** garantisce, e che i test devono ancora provare:
-/// che i nomi siano distinti, e che ciascuno rilegga la propria variante e non
-/// quella di un altro.
+/// Una tabella di prova scritta a mano accanto all'enum enumera se stessa: una
+/// variante nuova ne resterebbe fuori a test verde. Qui la lista e' una sola,
+/// e ogni variante ha un nome sul filo e compare in [`TUTTE`](Self::TUTTE).
+/// Che i nomi siano distinti e rileggano la propria variante lo provano i
+/// test.
 macro_rules! enum_sul_filo {
     (
         $(#[$attributo:meta])*
@@ -95,13 +55,10 @@ macro_rules! enum_sul_filo {
         impl $nome {
             /// Ogni variante col proprio nome sul filo.
             ///
-            /// Generata dalla stessa lista che genera le varianti: le due non
-            /// possono divergere.
-            /// Esiste per essere **enumerata**, e la enumerano i casi che
-            /// attraversano ogni variante. La produzione converte una variante
-            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
-            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
-            /// largo dichiarerebbe un chiamante che non esiste.
+            /// Generata dalla stessa lista che genera le varianti.
+            ///
+            /// Solo `cfg(test)`: la enumerano i casi che attraversano ogni
+            /// variante; la produzione ne converte una per volta.
             #[cfg(test)]
             pub const TUTTE: &'static [(Self, &'static str)] = &[
                 $( (Self::$variante, $filo), )+
@@ -113,25 +70,14 @@ macro_rules! enum_sul_filo {
 /// Come [`enum_sul_filo!`], ma per gli enum **con tag interno**, le cui
 /// varianti possono avere campi.
 ///
-/// Due regole, scelte dal fatto che i campi portino o no un valore
-/// rappresentativo:
+/// **Con** `= valore` genera anche `TUTTE`, un campione per variante
+/// costruito dal compilatore; **senza** (campioni non costanti, come un
+/// `DigestArtefatto` con `String`) genera i soli `NOMI`, che bastano perche'
+/// il test pretenda un caso per ciascuna variante.
 ///
-/// - **con** `= valore` genera anche `TUTTE`, cioe' un campione per variante
-///   col proprio nome sul filo;
-/// - **senza**, genera i soli `NOMI`.
-///
-/// La differenza esiste perche' non tutti i campioni sono costruibili in
-/// contesto costante: un `DigestArtefatto` porta `String`. Dove il campione
-/// c'e' la prova e' piu' forte — il valore lo costruisce il compilatore, e
-/// deve combaciare con la forma della variante; dove non c'e', `NOMI` basta
-/// comunque a rendere **impossibile** che una variante resti fuori dalle
-/// prove, perche' il test itera i nomi generati e pretende un caso per
-/// ciascuno.
-///
-/// Le graffe sono obbligatorie anche per le varianti senza campi
-/// (`Never {}`), e non e' un vezzo di sintassi: in un enum con tag interno
-/// `deny_unknown_fields` **non copre le varianti unitarie**. La macro rende
-/// quella forma non scrivibile.
+/// Le graffe sono obbligatorie anche senza campi (`Never {}`): in un enum con
+/// tag interno `deny_unknown_fields` **non copre le varianti unitarie**, e la
+/// macro rende quella forma non scrivibile.
 macro_rules! enum_con_tag_sul_filo {
     (
         $(#[$attributo:meta])*
@@ -154,20 +100,16 @@ macro_rules! enum_con_tag_sul_filo {
 
         impl $nome {
             /// I nomi sul filo, generati con le varianti.
-            /// Esiste per essere **enumerata**, e la enumerano i casi che
-            /// attraversano ogni variante. La produzione converte una variante
-            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
-            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
-            /// largo dichiarerebbe un chiamante che non esiste.
+            ///
+            /// Solo `cfg(test)`: la enumerano i casi che attraversano ogni
+            /// variante; la produzione ne converte una per volta.
             #[cfg(test)]
             pub const NOMI: &'static [&'static str] = &[ $( $filo ),+ ];
 
             /// Un campione per variante, col proprio nome sul filo.
-            /// Esiste per essere **enumerata**, e la enumerano i casi che
-            /// attraversano ogni variante. La produzione converte una variante
-            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
-            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
-            /// largo dichiarerebbe un chiamante che non esiste.
+            ///
+            /// Solo `cfg(test)`: la enumerano i casi che attraversano ogni
+            /// variante; la produzione ne converte una per volta.
             #[cfg(test)]
             pub const TUTTE: &'static [(Self, &'static str)] = &[
                 $( (Self::$variante { $( $campo : $campione ),* }, $filo), )+
@@ -195,11 +137,9 @@ macro_rules! enum_con_tag_sul_filo {
 
         impl $nome {
             /// I nomi sul filo, generati con le varianti.
-            /// Esiste per essere **enumerata**, e la enumerano i casi che
-            /// attraversano ogni variante. La produzione converte una variante
-            /// per volta e non ha bisogno dell'elenco: `cfg(test)` e non
-            /// `internals`, perche' nemmeno la facciata lo usa e un `cfg` piu'
-            /// largo dichiarerebbe un chiamante che non esiste.
+            ///
+            /// Solo `cfg(test)`: la enumerano i casi che attraversano ogni
+            /// variante; la produzione ne converte una per volta.
             #[cfg(test)]
             pub const NOMI: &'static [&'static str] = &[ $( $filo ),+ ];
         }
@@ -344,9 +284,7 @@ enum_sul_filo! {
 ///
 /// Il contratto completo non viaggia: il worker rilegge lo schema dal file,
 /// ricostruisce il contratto con l'autorita' condivisa e confronta il
-/// fingerprint. Trasportarlo avrebbe richiesto un codec reversibile del
-/// `DataContract` che oggi non esiste, e avrebbe fatto fidare il worker di
-/// una descrizione altrui invece che del file che sta per leggere.
+/// fingerprint, invece di fidarsi di una descrizione altrui.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DescrittoreIngresso {
@@ -400,37 +338,22 @@ impl Eq for Incarico {}
 /// L'incarico del **verificatore**: che cosa l'artefatto deve risultare, e
 /// quanto gli e' concesso di trattenere per accertarlo.
 ///
-/// # Perche' un messaggio distinto, e non un secondo `Incarico`
+/// # Perche' un messaggio distinto
 ///
-/// Perche' il verificatore non esegue un piano: non riceve mai
-/// `piano_canonico` ne' `ingressi`, per lo stesso principio di `GA-5` che
-/// tiene il worker all'oscuro della destinazione — qui va oltre, perche' il
-/// verificatore non deve poter dedurre nemmeno **da dove** l'artefatto viene
-/// ne' **quale piano** lo ha prodotto. Riusare `Incarico` con campi opzionali
-/// avrebbe reso rappresentabile uno stato — un `Incarico` senza piano — che
-/// non deve poter esistere, e un lettore del tipo non avrebbe potuto
-/// distinguere «il campo manca in questo messaggio» da «il campo e' stato
-/// omesso per errore».
+/// Il verificatore non esegue un piano: non riceve `piano_canonico` ne'
+/// `ingressi` (`GA-5`), e non deve poter dedurre da dove l'artefatto viene ne'
+/// quale piano lo ha prodotto. Un `Incarico` con campi opzionali renderebbe
+/// rappresentabile un `Incarico` senza piano.
 ///
-/// # Che cosa porta, e perche' e' esattamente questo
+/// # Che cosa porta
 ///
-/// I quattro elementi di cui parla
-/// `isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite`: il fingerprint del
-/// contratto atteso, il digest atteso, i conteggi attesi e il tetto di
-/// memoria da cui derivare `IpcLimits` — sempre gli stessi quattro che
-/// [`AtteseVerifica`](crate::verifica::AtteseVerifica) porta gia' in
-/// processo, qui nella loro forma sul filo. Il `commit_token` **non** c'e':
-/// e' gia' stato trasmesso e accettato nel `Saluto`, e ripeterlo qui
-/// darebbe due autorita' sulla stessa cosa (`§4.3`).
-///
-/// Il tetto di memoria viaggia come **valore singolo**
-/// (`budget_memoria_governata_bytes`), non come `IpcLimits` gia' derivato:
-/// `IpcLimits` ha piu' campi di quanti questo confronto ne usi, e il
-/// verificatore li deriva da se' con la stessa funzione pura
-/// (`ipc_boundary::limits_from_memory_budget`) che il coordinatore
-/// userebbe. Trasportare un solo numero, che i due lati riducono allo
-/// stesso modo, introduce meno stato duplicato che trasportare l'intera
-/// struttura derivata.
+/// Gli elementi di
+/// `isolamento.md#2-ter-la-verifica-non-può-stare-fuori-dal-limite`, gli
+/// stessi di [`AtteseVerifica`](crate::verifica::AtteseVerifica) in processo.
+/// Il `commit_token` **non** c'e': e' gia' nel `Saluto` (`§4.3`). Il tetto di
+/// memoria viaggia come valore singolo, da cui il verificatore deriva
+/// `IpcLimits` con la stessa funzione pura
+/// (`ipc_boundary::limits_from_memory_budget`) del coordinatore.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IncaricoVerifica {
@@ -470,25 +393,12 @@ pub struct Risposta {
 ///
 /// # I contatori sono **totali**, non incrementi
 ///
-/// Ogni `Progresso` dichiara quanto si e' fatto **fin li'**, non quanto si e'
-/// fatto dall'ultimo rapporto. I tre assi sono quindi **non decrescenti**: un
-/// valore piu' piccolo del precedente non e' un rapporto strano, e' una
-/// violazione del protocollo.
-///
-/// # Perche' totali e non incrementi
-///
-/// Perche' gli incrementi si sommano, e una somma su `u64` puo' traboccare. Le
-/// due vie d'uscita da un traboccamento sono entrambe cattive: saturare rende
-/// `u64::MAX` indistinguibile da un conteggio esatto pari a `u64::MAX` — una
-/// perdita **silenziosa**, che e' la peggiore — e andare in panico mette il
-/// supervisore in ginocchio per un numero che il worker ha scelto.
-///
-/// Con i totali non c'e' niente da sommare: chi riceve **conserva l'ultimo**, e
-/// l'unica aritmetica e' un confronto. Un rapporto perso non falsa il conto, e
-/// un rapporto ripetuto nemmeno.
-///
-/// La dichiarazione sta qui e in `isolamento.md`, perche' un contratto non
-/// scritto lo si scopre quando due lati lo interpretano diversamente.
+/// Ogni `Progresso` dichiara quanto si e' fatto **fin li'**: i tre assi sono
+/// **non decrescenti**, e un valore piu' piccolo del precedente e' una
+/// violazione del protocollo. Chi riceve conserva l'ultimo e non somma:
+/// nessun traboccamento su `u64` da saturare o da cui andare in panico, e un
+/// rapporto perso o ripetuto non falsa il conto. Il contratto e' scritto
+/// anche in `isolamento.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Progresso {
@@ -561,17 +471,12 @@ enum_con_tag_sul_filo! {
     /// una disposizione che non lo prevede direbbe al chiamante di riprovare piu'
     /// tardi senza che nulla glielo abbia concesso.
     ///
-    /// # Perche' le varianti senza campi sono scritte `Never {}`
+    /// # Perche' `Never {}`
     ///
-    /// In un enum con tag interno, `deny_unknown_fields` **non ha effetto sulle
-    /// varianti unitarie**: `serde` le riconosce dal tag e ignora il resto
-    /// dell'oggetto. Scritto `Never`, questo tipo accetterebbe
-    /// `{"kind":"never","delay_ms":10}` e butterebbe via `delay_ms` in silenzio —
-    /// cioe' esattamente la cosa che `deny_unknown_fields` esiste per impedire.
-    ///
-    /// La forma `Never {}` e' una variante di struttura con zero campi: sul filo
-    /// e' identica (`{"kind":"never"}`), ma la deserializzazione passa per un
-    /// visitor di struttura, e li' `deny_unknown_fields` vale davvero.
+    /// In un enum con tag interno `deny_unknown_fields` **non ha effetto sulle
+    /// varianti unitarie**: `Never` accetterebbe `{"kind":"never","delay_ms":10}`
+    /// scartando `delay_ms`. `Never {}` e' identica sul filo ma passa per un
+    /// visitor di struttura, dove `deny_unknown_fields` vale.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     RetrySulFilo, tag = "kind" {
         Never {} => "never",
@@ -642,26 +547,15 @@ enum_sul_filo! {
 
 /// I conteggi che il worker dichiara sull'artefatto prodotto.
 ///
-/// # Perche' sono nel `Successo` e non altrove
+/// # Perche' sono nel `Successo`
 ///
-/// Il passo 8 della verifica (§7 di `isolamento.md`) confronta «i conteggi
-/// dichiarati nell'`Esito`» con quelli osservati rileggendo l'artefatto. Senza
-/// questi campi quel passo non avrebbe un termine di paragone: un `Successo`
-/// che portasse il solo digest lascerebbe la sequenza normativa a citare un
-/// dato che non viaggia.
+/// Sono il termine di paragone del passo 8 della verifica (§7 di
+/// `isolamento.md`). Il digest non li sostituisce: un worker fermo a meta' che
+/// finalizzasse comunque produrrebbe un artefatto integro e **incompleto**.
 ///
-/// Un digest uguale non li sostituisce. Dice che il file e' quel file, non che
-/// contenga cio' che il worker crede di aver scritto: un worker che si
-/// fermasse a meta' e finalizzasse comunque produrrebbe un artefatto integro
-/// e **incompleto**, e il digest non avrebbe nulla da obiettare.
-///
-/// # Perche' due e non tre
-///
-/// `Progresso` porta anche `nodi_completati`, e qui non c'e'. Non e' una
-/// dimenticanza: rileggendo un file Arrow IPC si osservano righe e batch, non
-/// quanti nodi del piano li hanno prodotti. Dichiarare un numero che il
-/// verificatore non puo' confrontare significherebbe chiedergli di crederci —
-/// ed e' esattamente cio' che questo passo esiste per non fare.
+/// Non c'e' `nodi_completati`, a differenza di `Progresso`: rileggendo un file
+/// Arrow IPC si osservano righe e batch, non nodi, e il verificatore non
+/// potrebbe confrontarlo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConteggiDichiarati {
@@ -708,22 +602,11 @@ enum_con_tag_sul_filo! {
 enum_con_tag_sul_filo! {
     /// L'esito che il **verificatore** dichiara di se'.
     ///
-    /// # Perche' un tipo distinto da `EsitoWorkerSulFilo`, e non un alias
-    ///
-    /// Perche' le due cose non affermano la stessa domanda, anche se hanno la
-    /// stessa forma. Un `EsitoWorkerSulFilo::Successo` dice «ho eseguito il
-    /// piano e ho scritto questo»; un `EsitoVerificaSulFilo::Successo` dice
-    /// «ho riconfermato che l'artefatto e' questo» — non ha eseguito niente,
-    /// ha riletto. Sovrapporli sullo stesso tipo di filo renderebbe quella
-    /// distinzione invisibile a chi legge il protocollo, esattamente come
-    /// `Incarico` e `IncaricoVerifica` restano due messaggi distinti pur
-    /// condividendo quasi la stessa forma (§4.3): il tipo sul filo e' parte
-    /// del significato, non solo la sua rappresentazione.
-    ///
-    /// La macchina a stati del supervisore (`isolamento::macchina`) resta
-    /// **una sola**: riconosce quale dei due corpi chiude il dialogo secondo
-    /// il ruolo di chi le parla (`macchina::Ruolo`), non confondendo mai
-    /// l'uno per l'altro.
+    /// Tipo distinto da `EsitoWorkerSulFilo` pur con la stessa forma: questo
+    /// dice «ho riconfermato che l'artefatto e' questo», non «ho eseguito il
+    /// piano» (§4.3, come `Incarico` e `IncaricoVerifica`). La macchina del
+    /// supervisore (`isolamento::macchina`) resta una sola e riconosce il
+    /// corpo che chiude il dialogo secondo `macchina::Ruolo`.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     EsitoVerificaSulFilo, tag = "esito" {
         /// Il verificatore ha riconfermato l'artefatto: digest e conteggi
@@ -743,17 +626,10 @@ enum_con_tag_sul_filo! {
 ///
 /// # Serializza, non deserializza
 ///
-/// `untagged` qui vale **solo in scrittura**, dove significa «emetti il corpo
-/// nudo, senza una seconda etichetta»: il tipo lo dichiara gia'
-/// [`Frame::tipo`], e ripeterlo darebbe due autorita' sulla stessa domanda.
-///
-/// In lettura questo tipo non ha `Deserialize`, ed e' deliberato. `untagged`
-/// deserializza **provando le varianti a turno**: il tipo dichiarato non
-/// verrebbe usato per scegliere, ma solo confrontato dopo, e un corpo
-/// etichettato male passerebbe il parser per essere respinto altrove. Il
-/// decoder invece legge `tipo` **prima** e deserializza il corpo in quel tipo
-/// e basta — cosi' l'incoerenza e' un errore di forma, non un controllo che
-/// qualcuno puo' dimenticare di scrivere.
+/// `untagged` vale **solo in scrittura**: emette il corpo nudo, perche' il
+/// tipo lo dichiara gia' [`Frame::tipo`]. In lettura `untagged` proverebbe le
+/// varianti a turno; il decoder invece legge `tipo` **prima** e deserializza
+/// il corpo in quel tipo, cosi' l'incoerenza e' un errore di forma.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum Corpo {
@@ -769,23 +645,16 @@ pub enum Corpo {
 
 /// L'involucro di ogni frame.
 ///
-/// # Una sola autorita', e non per disciplina
+/// # Una sola autorita'
 ///
-/// Il frame porta **solo il corpo**. La versione e' fissata internamente e il
-/// tipo e' [derivato](Self::tipo) dal corpo: nessuno dei due e' un campo che
-/// si possa impostare.
-///
-/// Tenendoli come campi pubblici indipendenti, il codificatore potrebbe
-/// emettere un frame che il decoder rifiuta — una versione `2`, o un
-/// `tipo: "saluto"` con dentro un `Annulla`. Nessuna verifica in `codifica`
-/// li *eliminerebbe*: li intercetterebbe soltanto, cioe' li sposterebbe da
-/// «impossibile» a «controllato».
+/// Il frame porta **solo il corpo**: la versione e' fissata e il tipo e'
+/// [derivato](Self::tipo) dal corpo, cosi' il codificatore non puo' emettere
+/// una versione `2` o un `tipo: "saluto"` con dentro un `Annulla`.
 ///
 /// # Solo `Serialize`
 ///
-/// Si legge con `codifica::decodifica`, non con un derive: la direzione
-/// filo → struttura e' una funzione che controlla, non una conversione che
-/// riesce.
+/// Si legge con `codifica::decodifica`: la direzione filo → struttura e' una
+/// funzione che controlla, non una conversione che riesce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     corpo: Corpo,

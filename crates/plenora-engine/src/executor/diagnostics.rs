@@ -1,16 +1,9 @@
 //! Diagnostica di riga: dire QUALE riga, senza dire che cosa contiene.
 //!
-//! Quando un'operazione scarta righe, il chiamante ha diritto di sapere quante e
-//! quali — per indice, mai per contenuto. E' la stessa disciplina degli errori
-//! senza dati applicata a una superficie piu' insidiosa: un esempio di riga
-//! scartata e' utilissimo da avere nei log, ed e' esattamente cio' che non deve
-//! finirci.
-//!
-//! # Completezza dichiarata
-//!
-//! `RowDiagnosticsCompleteness` esiste perche' un elenco troncato che non dice
-//! di esserlo e' peggio di nessun elenco: chi lo legge conclude che le righe
-//! scartate sono quelle e basta.
+//! Le righe scartate si riportano per indice, mai per contenuto: la stessa
+//! disciplina degli errori senza dati. `RowDiagnosticsCompleteness` dichiara
+//! se l'elenco e' troncato, perche' un elenco troncato che non lo dice fa
+//! credere che le righe scartate siano solo quelle.
 
 use std::rc::Rc;
 
@@ -91,24 +84,14 @@ pub(super) fn segment_emits_row_diagnostics(plan: &ExecutionPlan, segment_index:
 
 /// Permesso a eseguire la prossima passata **trattenendo** cio' che c'e' gia'.
 ///
-/// Non e' una verifica seguita da una prenotazione: e' **una sola
-/// operazione**. Si chiede al governor un permesso per `max_batch_bytes` —
-/// il tetto duro per batch (tetto in byte per batch), che il wrapper d'uscita applica a ogni
-/// batch di output ed e' quindi un maggiorante valido dell'unica prenotazione
-/// che la passata aggiunge. Se il permesso e' concesso, quella quota e'
-/// **gia' nostra**: la passata puo' ritagliarne l'output senza che nessun
-/// altro possa infilarsi nel mezzo, oggi che l'esecuzione e' seriale come
-/// domani che non lo sara'.
+/// Verifica e prenotazione sono una sola operazione: si chiede al governor
+/// `max_batch_bytes`, il tetto duro che il wrapper d'uscita applica a ogni
+/// batch e quindi maggiorante dell'unica prenotazione che la passata aggiunge.
+/// Concesso il permesso, nessun altro puo' infilarsi nel mezzo.
 ///
-/// `None` significa "non c'e' spazio per un'altra passata trattenendo": si
-/// passa al disco. Non e' un errore ed e' fail-closed — un permesso negato
-/// sceglie sempre la modalita' col picco piu' basso.
-///
-/// In modalita' disco non si chiede nulla: il passaggio e' definitivo.
-///
-/// Un ingresso **senza lease** non e' contabilizzato dal governor: la
-/// decisione poggerebbe su un totale che non comprende i byte in arrivo, e si
-/// va su disco.
+/// `None` significa "si passa al disco": non e' un errore ed e' fail-closed,
+/// perche' sceglie la modalita' col picco piu' basso. In modalita' disco non si
+/// chiede nulla, e un ingresso senza lease va su disco.
 ///
 /// # Errors
 ///

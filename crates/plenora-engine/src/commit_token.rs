@@ -1,43 +1,19 @@
 //! Il `commit_token`: un tipo **chiuso**, non una stringa che sembra un token.
 //!
-//! # Perche' e' un tipo e non un `String`
+//! Il token attraversa quattro confini (chiamante, handshake, writer del
+//! footer, verificatore); il controllo sta in un punto solo,
+//! [`CommitToken::da_esadecimale`], e non esiste un [`CommitToken`] non
+//! valido.
 //!
-//! Il token attraversa quattro confini — il chiamante che lo fornisce,
-//! l'handshake che lo trasmette, il writer che lo scrive nel footer, il
-//! verificatore che lo rilegge — e a ognuno di quei confini una `String`
-//! avrebbe richiesto lo **stesso** controllo, scritto da capo. Quattro copie
-//! di un controllo sono quattro occasioni di scriverne una sbagliata, o di
-//! dimenticarne una.
+//! Forma canonica: 64 caratteri esadecimali **minuscoli**. Le maiuscole si
+//! rifiutano perche' il footer si confronta byte per byte, e due grafie dello
+//! stesso valore darebbero due artefatti diversi. La rappresentazione viene
+//! da [`crate::esadecimale32`], condivisa col digest; significato ed errore
+//! restano qui.
 //!
-//! Qui il controllo sta in un punto solo: [`CommitToken::da_esadecimale`]. Chi
-//! ha un [`CommitToken`] in mano non ha bisogno di validarlo, perche' non
-//! esiste un `CommitToken` non valido.
-//!
-//! # La forma canonica
-//!
-//! Esattamente 64 caratteri esadecimali **minuscoli**: la forma testuale di
-//! 32 byte. Le maiuscole non sono una variante accettabile ma un rifiuto, e
-//! non per pedanteria — il token finisce in un footer che viene confrontato
-//! byte per byte, e due grafie dello stesso valore darebbero due artefatti
-//! diversi per lo stesso commit.
-//!
-//! La rappresentazione e la sua lettura vengono da [`crate::esadecimale32`],
-//! condivise col digest del protocollo, che ha la stessa forma. **Cio' che non
-//! e' condiviso e' tutto il resto**: il significato, l'errore, e la regola qui
-//! sotto.
-//!
-//! # Il valore non compare mai
-//!
-//! `Debug` e `Display` non lo mostrano, e nessun errore di questo modulo lo
-//! contiene. La regola e' generale e non riguarda un potere del token: un
-//! valore che l'altro capo del canale controlla non si copia nei log, perche'
-//! il log lo conserva e lo diffonde insieme al motivo per cui qualcuno lo
-//! stava guardando. E' anche la ragione per cui la primitiva condivisa non ha
-//! ne' `Debug` ne' `Display`: averli la' avrebbe imposto una politica a chi
-//! non la vuole.
-//!
-//! La serializzazione invece lo emette, e l'asimmetria e' voluta: sul filo
-//! serve, in un log no.
+//! Il valore non compare mai: `Debug`, `Display` ed errori non lo mostrano,
+//! perche' un valore che l'altro capo controlla non si copia nei log. La
+//! serializzazione invece lo emette: sul filo serve.
 
 use std::fmt;
 
@@ -62,12 +38,8 @@ pub const CHIAVE_FOOTER_COMMIT_TOKEN: &str = "plenora.commit.token";
 pub enum FormaTokenNonValida {
     /// La lunghezza non e' quella richiesta.
     ///
-    /// **In byte**, cioe' nella stessa misura che decide il rifiuto. Contarli
-    /// in caratteri per il solo messaggio produce un assurdo: su 64 caratteri
-    /// di cui alcuni multibyte uscirebbe «attesi 64, trovati 64», un rifiuto
-    /// che si smentisce da solo e manda a cercare il difetto altrove. Sulla
-    /// forma canonica, che e' ASCII, le due misure coincidono; divergono
-    /// esattamente nel caso in cui il messaggio serve.
+    /// Contata **in byte**, la misura che decide il rifiuto: in caratteri, un
+    /// testo multibyte darebbe «attesi 64, trovati 64».
     LunghezzaErrata {
         /// Byte attesi.
         attesi: usize,
@@ -128,10 +100,6 @@ impl CommitToken {
     ///
     /// [`FormaTokenNonValida`] se il testo non e' esattamente **64** caratteri
     /// esadecimali minuscoli.
-    ///
-    /// Il numero e' scritto e non collegato: la costante che lo definisce sta
-    /// nella rappresentazione condivisa, che e' privata, e un link da una doc
-    /// pubblica a un simbolo privato non si risolve.
     pub fn da_esadecimale(testo: &str) -> Result<Self, FormaTokenNonValida> {
         Esadecimale32::da_esadecimale(testo)
             .map(Self)

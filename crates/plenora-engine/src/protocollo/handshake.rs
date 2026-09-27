@@ -1,41 +1,24 @@
 //! L'handshake: **macchina a stati pura**, senza processi ne' canali.
 //!
-//! # Che cosa rende impossibile, e cosa rifiuta
+//! # Impossibili e rifiutati
 //!
-//! La distinzione conta, perche' sono due garanzie di forza diversa.
+//! **Impossibili**, non compilano: riusare uno stato concluso (ogni
+//! transizione **consuma** `self`) e chiedere un `Incarico` prima
+//! dell'accordo (il metodo sta su [`WorkerAccordato`], che nasce solo dalla
+//! verifica riuscita).
 //!
-//! **Impossibili** — non compilano:
+//! **Rifiutati esplicitamente**, perche' arrivano dal filo e nessun tipo puo'
+//! impedirli: messaggi nella direzione sbagliata o fuori sequenza, compreso
+//! un `Incarico` prima dell'accordo.
 //!
-//! - riusare uno stato concluso: ogni transizione **consuma** `self`, quindi
-//!   un supervisore che ha gia' ricevuto la `Risposta` non esiste piu';
-//! - chiedere un `Incarico` prima dell'accordo: il metodo sta su
-//!   [`WorkerAccordato`], che nasce solo dalla verifica riuscita.
+//! # Il confronto
 //!
-//! **Rifiutati esplicitamente** — perche' arrivano dal filo e nessun tipo puo'
-//! impedirli:
+//! Risorse, backend e capability sono **insiemi**: lo stesso ambiente
+//! elencato in ordine diverso si accorda. I duplicati si **rifiutano**, non si
+//! riducono: sceglierne uno sarebbe arbitrario.
 //!
-//! - una `Risposta` che arriva al posto del `Saluto`, o viceversa;
-//! - un messaggio nella direzione sbagliata;
-//! - un `Incarico` prima che l'accordo sia concluso;
-//! - qualunque altro tipo fuori sequenza.
-//!
-//! # Il confronto e' esatto, e la rappresentazione e' canonica
-//!
-//! Risorse, backend e capability sono **insiemi**, non liste: due handshake
-//! che elencano le stesse risorse in ordine diverso descrivono lo stesso
-//! ambiente e devono accordarsi. Un confronto posizionale li avrebbe fatti
-//! divergere per un dettaglio di costruzione, e — peggio — avrebbe reso
-//! l'esito dipendente dall'ordine in cui qualcuno ha riempito un `Vec`.
-//!
-//! I duplicati invece si **rifiutano**, non si riducono: due risorse con lo
-//! stesso nome sono un'ambiguita' su quale verra' aperta, e sceglierne una e'
-//! sceglierla arbitrariamente.
-//!
-//! # Che cosa NON c'e'
-//!
-//! Nessun processo, nessun pipe, nessuna scoperta dell'ambiente della
-//! macchina. La descrizione locale **arriva**: qui si verifica che due
-//! descrizioni concordino, non si va a vedere com'e' fatto l'host.
+//! La descrizione locale **arriva** da fuori: qui si verifica che due
+//! descrizioni concordino, senza processi, pipe o scoperta dell'host.
 
 use plenora_core::{PlenoraError, Result};
 
@@ -75,16 +58,11 @@ pub const fn limiti_correnti() -> LimitiDichiarati {
 
 /// Cio' che i due lati devono **rispecchiare identico**.
 ///
-/// Una sola, condivisa: un tipo per lato avrebbe significato due elenchi di
-/// campi da tenere allineati a mano, e il giorno che uno dei due ne acquista
-/// uno il disallineamento non lo dice nessuno — l'handshake confronta cio' che
-/// i due tipi hanno in comune, e cio' che non ce l'hanno smette
+/// Un tipo solo per i due lati: con due, un campo aggiunto a uno smetterebbe
 /// silenziosamente di essere confrontato.
 ///
-/// **Non** viene scoperta qui: e' uno snapshot tipizzato che arriva da fuori.
-/// La scoperta dell'ambiente della macchina e' un'altra cosa e un'altra PR;
-/// mescolarla con la verifica avrebbe reso impossibile provare la verifica
-/// senza una macchina vera sotto.
+/// **Non** viene scoperta qui: e' uno snapshot tipizzato che arriva da fuori,
+/// cosi' la verifica si prova senza una macchina vera sotto.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Descrizione {
     /// Identita' dell'eseguibile.
@@ -99,9 +77,7 @@ pub struct Descrizione {
 /// capability che **offre**.
 ///
 /// Le capability stanno qui e non in [`Descrizione`] perche' sono l'unico asse
-/// asimmetrico: il worker le offre, il supervisore le richiede, e i due
-/// insiemi non hanno lo stesso significato. Metterle nel tipo comune avrebbe
-/// dato al supervisore un campo da riempire che nessuno guarda.
+/// asimmetrico: il worker le offre, il supervisore le richiede.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescrizioneLocale {
     /// Cio' che il supervisore deve rispecchiare.
@@ -133,16 +109,9 @@ pub struct AtteseSupervisore {
 
 /// Un ambiente **gia'** ordinato e senza ripetizioni.
 ///
-/// L'invariante e' del tipo, non di chi lo usa: si entra solo da
-/// [`AmbienteCanonico::da`], che ordina e rifiuta. Da qui in poi il confronto
-/// e' l'uguaglianza, e non c'e' spazio perche' due descrizioni equivalenti
-/// risultino diverse.
-///
-/// La riduzione avviene **una volta**, alla costruzione dello stato, e non
-/// dentro ogni confronto su un clone: farla li' costerebbe due ordinamenti e
-/// due copie per handshake, butterebbe via la forma ridotta subito dopo, e
-/// lascerebbe viaggiare quella d'origine. Cosi' invece la forma canonica e'
-/// anche quella che viene spedita.
+/// Si entra solo da [`AmbienteCanonico::da`], che ordina e rifiuta: da qui in
+/// poi il confronto e' l'uguaglianza. La riduzione avviene **una volta**, alla
+/// costruzione dello stato, e la forma canonica e' anche quella spedita.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AmbienteCanonico(Ambiente);
 
@@ -222,10 +191,9 @@ impl DescrizioneCanonica {
 
 /// Le capability in forma canonica: verificate, ordinate, senza ripetizioni.
 ///
-/// **Consuma** l'elenco. La verifica e' la stessa per quelle offerte e per
-/// quelle richieste: un nome vuoto non e' offribile ne' richiedibile, e un
-/// elenco piu' lungo di quanto una `Risposta` ne ammetta e' un'attesa che
-/// nessun worker conforme puo' soddisfare.
+/// **Consuma** l'elenco. Stessa verifica per offerte e richieste: un nome
+/// vuoto, o un elenco oltre cio' che una `Risposta` ammette, non si puo'
+/// soddisfare.
 fn capability_canoniche(mut capability: Vec<String>, lato: &str) -> Result<Vec<String>> {
     super::codifica::verifica_capability(&capability)?;
     capability.sort();
@@ -235,15 +203,9 @@ fn capability_canoniche(mut capability: Vec<String>, lato: &str) -> Result<Vec<S
 
 /// Due voci con lo stesso nome sono un'ambiguita', non una ridondanza.
 ///
-/// Il nome e' l'identita' con cui la risorsa verra' cercata: se ne esistono
-/// due, «quale si apre» non ha una risposta, e ridurle a una sceglierebbe al
-/// posto di chi ha costruito l'ambiente.
-///
-/// Pretende l'elenco **gia' ordinato**, e li' i ripetuti sono adiacenti: un
-/// secondo insieme costruito apposta direbbe la stessa cosa allocando. Il
-/// conteggio dei distinti resta esatto proprio perche' l'ordine lo garantisce
-/// — `voci - ripetuti` e' vero solo su un elenco ordinato, ed e' il motivo per
-/// cui questa funzione non si puo' chiamare prima di aver ordinato.
+/// Ridurle a una sceglierebbe quale aprire al posto di chi ha costruito
+/// l'ambiente. Pretende l'elenco **gia' ordinato**: i ripetuti sono adiacenti,
+/// e il conteggio dei distinti (`voci - ripetuti`) e' esatto solo cosi'.
 fn rifiuta_nomi_ripetuti<T>(
     ordinati: &[T],
     nome: impl Fn(&T) -> &str,
@@ -307,11 +269,9 @@ fn confronta_resolver(atteso: &IdentitaResolver, ricevuto: &IdentitaResolver) ->
 }
 
 fn confronta_ambiente(atteso: &AmbienteCanonico, ricevuto: &AmbienteCanonico) -> Result<()> {
-    // Nessun ordinamento e nessun clone: le due forme sono gia' canoniche,
-    // e ridurle qui significherebbe rifarlo a ogni confronto su copie che
-    // vengono buttate via subito dopo. `acquisizione_dinamica` non si
-    // ricontrolla per la stessa ragione: un ambiente che la dichiara non
-    // diventa mai un `AmbienteCanonico`.
+    // Le due forme sono gia' canoniche: niente ordinamento ne' clone.
+    // `acquisizione_dinamica` non si ricontrolla: un ambiente che la dichiara
+    // non diventa mai un `AmbienteCanonico`.
     let atteso = atteso.come_ambiente();
     let ricevuto = ricevuto.come_ambiente();
 
@@ -341,12 +301,9 @@ fn confronta_ambiente(atteso: &AmbienteCanonico, ricevuto: &AmbienteCanonico) ->
 
 /// Le capability richieste devono esserci **tutte**.
 ///
-/// Non uguaglianza: un worker che ne offre di piu' va benissimo. Cio' che non
-/// va bene e' che ne manchi una, perche' l'incarico la userebbe.
-///
-/// Entrambi gli elenchi arrivano **gia' ordinati**, quindi l'appartenenza si
-/// decide con una scansione parallela invece che costruendo un insieme:
-/// l'insieme sarebbe una terza copia dei nomi, e i nomi vengono dal filo.
+/// Non uguaglianza: un worker puo' offrirne di piu'. Gli elenchi arrivano
+/// **gia' ordinati**, quindi basta una scansione parallela, senza una terza
+/// copia dei nomi che vengono dal filo.
 // Lato supervisore: lo raggiunge il chiamante di produzione del profilo isolato
 // (`isolamento::esecuzione_isolata`), oltre ai casi e al percorso di
 // qualificazione.
@@ -478,11 +435,8 @@ impl SupervisoreInAttesa {
     /// I limiti non sono un parametro: vengono da [`limiti_correnti`], cosi'
     /// nessuno puo' dichiararne di diversi da quelli che applica.
     ///
-    /// Il `Saluto` porta la descrizione **canonica**, non quella d'origine:
-    /// due supervisori che dichiarano lo stesso ambiente con gli insiemi in
-    /// ordine diverso emettono percio' lo stesso frame, byte per byte.
-    /// Spedire la forma d'origine e confrontare quella ridotta avrebbe reso il
-    /// frame dipendente dall'ordine in cui qualcuno ha riempito un `Vec`.
+    /// Il `Saluto` porta la descrizione **canonica**: lo stesso ambiente
+    /// dichiarato in ordine diverso produce lo stesso frame, byte per byte.
     ///
     /// # Errors
     ///
@@ -491,8 +445,7 @@ impl SupervisoreInAttesa {
     /// fra risorse, backend o capability **richieste**, oppure acquisizione
     /// dinamica dichiarata.
     ///
-    /// Le capability offerte non compaiono, e non per omissione: il
-    /// supervisore non ne offre, e [`AtteseSupervisore`] non gliele fa
+    /// Le capability offerte non compaiono: [`AtteseSupervisore`] non le fa
     /// dichiarare.
     pub fn nuovo(attese: AtteseSupervisore) -> Result<Self> {
         // La propria descrizione si valida e si riduce **prima** di spedirla,
@@ -551,14 +504,10 @@ impl SupervisoreInAttesa {
             capability,
         } = *risposta;
 
-        // La **forma** prima del confronto, e non perche' il decoder l'abbia
-        // gia' applicata: un `Frame` si costruisce anche in processo, senza
-        // passare da `decodifica`. Un campo malformato confrontato per primo
-        // esce come «non coincide», che manda a cercare un disaccordo dove
-        // c'e' un valore che non e' un valore.
-        //
-        // La riduzione consuma cio' che e' arrivato: il frame e' gia' stato
-        // esaurito, quindi non c'e' niente da clonare.
+        // La **forma** prima del confronto: un `Frame` si costruisce anche in
+        // processo, senza `decodifica`, e un campo malformato confrontato per
+        // primo uscirebbe come «non coincide». La riduzione consuma cio' che
+        // e' arrivato, senza clonare.
         let ricevuta = DescrizioneCanonica::da(
             Descrizione {
                 artefatto,
@@ -583,17 +532,14 @@ impl SupervisoreInAttesa {
 
 /// L'accordo concluso.
 ///
-/// Esiste **solo** come risultato di una verifica riuscita: non c'e' un
-/// costruttore che lo produca altrimenti, quindi non si puo' avere in mano
-/// senza aver fatto l'handshake — averlo in mano e' gia' la prova che le due
-/// descrizioni concordano (`isolamento::prova::dialoga`, che scarta
-/// l'accordo stesso una volta ottenuto).
+/// Esiste **solo** come risultato di una verifica riuscita: averlo in mano e'
+/// la prova che le due descrizioni concordano.
 ///
-/// La struttura la produce il chiamante di produzione
-/// (`isolamento::esecuzione_isolata`), oltre ai casi e al percorso di
-/// qualificazione. Il campo `commit_token` resta sotto `internals`: la
+/// Lo produce `isolamento::esecuzione_isolata`, oltre ai casi e al percorso
+/// di qualificazione. Il campo `commit_token` resta sotto `internals`: la
 /// produzione consegna al verificatore la propria copia del token, e questa
-/// la leggono solo i casi — vedi errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+/// la leggono solo i casi — vedi
+/// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 #[derive(Debug)]
 pub struct HandshakeAccettato {
     #[cfg(any(test, feature = "internals"))]
@@ -639,13 +585,9 @@ impl WorkerInAttesa {
     /// Riceve un frame; se e' il `Saluto` e concorda, produce la `Risposta` e
     /// lo stato accordato.
     ///
-    /// Un `Incarico` che arrivi qui e' rifiutato **esplicitamente**: e' il
-    /// caso «incarico prima dell'accordo», e va detto con quel nome invece di
-    /// somigliare a un messaggio malformato.
-    ///
-    /// La `Risposta` porta la forma **canonica**, come il `Saluto`: due worker
-    /// che descrivono lo stesso ambiente in ordine diverso rispondono con lo
-    /// stesso frame.
+    /// Un `Incarico` che arrivi qui e' rifiutato **esplicitamente** come
+    /// «incarico prima dell'accordo». La `Risposta` porta la forma
+    /// **canonica**, come il `Saluto`.
     ///
     /// # Errors
     ///
@@ -717,17 +659,12 @@ pub struct WorkerAccordato {
 impl WorkerAccordato {
     /// Il token accettato nel `Saluto`.
     ///
-    /// # Perche' non e' l'unica via
-    ///
-    /// Chi esegue un piano il token non lo prende da qui: glielo consegna
-    /// [`Self::ricevi_incarico`], insieme all'incarico e nello stesso momento.
-    /// Questa e' una **seconda porta** sullo stesso valore, e serve a due
-    /// generi di chiamanti: i casi che confrontano i due lati dell'accordo
-    /// prima che un incarico esista, e il verificatore
-    /// (`isolamento::verificatore`), che non riceve mai un `Incarico` — la
-    /// sua fase e' [`Self::ricevi_incarico_verifica`], che porta il token
-    /// nella propria firma per lo stesso motivo per cui `ricevi_incarico` lo
-    /// fa.
+    /// Chi esegue un piano riceve il token da [`Self::ricevi_incarico`],
+    /// insieme all'incarico. Questa seconda porta serve ai casi che
+    /// confrontano i due lati prima che un incarico esista, e al verificatore
+    /// (`isolamento::verificatore`), che non riceve mai un `Incarico`: la sua
+    /// fase e' [`Self::ricevi_incarico_verifica`], che porta il token nella
+    /// propria firma.
     #[must_use]
     pub const fn commit_token(&self) -> &CommitToken {
         &self.commit_token
@@ -740,10 +677,9 @@ impl WorkerAccordato {
     /// # Errors
     ///
     /// [`PlenoraError::Protocol`] per direzione sbagliata o tipo fuori
-    /// sequenza. L'handshake **non** verifica il contenuto dell'incarico: il
-    /// piano, il suo hash e i contratti d'ingresso li verifica chi lo esegue,
-    /// perche' verificarli qui vorrebbe dire farlo due volte e in due modi che
-    /// possono divergere.
+    /// sequenza. L'handshake **non** verifica il contenuto dell'incarico:
+    /// piano, hash e contratti d'ingresso li verifica chi lo esegue, una volta
+    /// sola.
     pub fn ricevi_incarico(self, frame: Frame) -> Result<(Incarico, CommitToken)> {
         verifica_direzione(&frame, super::messaggi::Direzione::VersoWorker)?;
         let tipo = frame.tipo();

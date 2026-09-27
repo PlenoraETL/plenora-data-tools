@@ -1,16 +1,10 @@
 //! Fusione dei gruppi geo: piu' kernel, una decodifica sola.
 //!
-//! Decodificare il WKB e' il costo dominante di una catena geo. Se piu'
-//! operazioni consecutive lavorano sulla stessa geometria, decodificarla una
-//! volta e riusarla vale piu' di qualunque altra ottimizzazione del percorso.
-//!
-//! # Il fallback non e' mai silenzioso
-//!
-//! Se il governor rifiuta la reservation per la memoria decodificata, il
-//! gruppo ricade sul percorso non fuso — stesso risultato, scelta fisica
-//! diversa — e il fatto viene CONTATO in `geo_fusion_fallbacks` (decisione
-//! D12.7). Una pressione di memoria ricorrente diventa cosi' un numero
-//! osservabile invece di un rallentamento inspiegabile.
+//! Decodificare il WKB e' il costo dominante di una catena geo, quindi le
+//! operazioni consecutive sulla stessa geometria la decodificano una volta.
+//! Se il governor rifiuta la reservation per la memoria decodificata il gruppo
+//! ricade sul percorso non fuso, con lo stesso risultato, e il fatto e'
+//! contato in `geo_fusion_fallbacks` (D12.7).
 
 use crate::geo_transport::pair::preflight_decoded_bytes;
 use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
@@ -105,14 +99,12 @@ pub(super) struct FusedAttempt<'a> {
 }
 
 impl FusedAttempt<'_> {
-    /// Contabilita' dei kernel COMPLETATI del gruppo (architettura.md#geometrie D12.6):
-    /// stessa sequenza del loop non fuso — righe per nodo, espansione,
-    /// limiti d'arco, metriche per kernel — per i primi `completed` kernel.
-    /// Sugli archi interni fusi il batch non e' materializzato: conteggi
-    /// righe/batch esatti (1:1), niente tetto byte (D12.8, deroga errori-e-limiti.md#limiti-dichiarati);
-    /// il batch materiale esiste solo a gruppo completato (ultimo kernel).
-    /// I byte ai confini interni fusi sono zero: i buffer Arrow intermedi
-    /// non esistono (metriche per nodo, non reservation).
+    /// Contabilita' dei kernel COMPLETATI del gruppo (architettura.md#geometrie D12.6).
+    ///
+    /// Stessa sequenza del loop non fuso per i primi `completed` kernel. Sugli
+    /// archi interni fusi i conteggi righe/batch sono esatti e i byte zero,
+    /// senza tetto byte (D12.8, errori-e-limiti.md#limiti-dichiarati): il
+    /// batch materiale esiste solo a gruppo completato.
     ///
     /// # Errors
     ///
@@ -174,28 +166,18 @@ impl FusedAttempt<'_> {
     }
 }
 
-/// Tentativo di esecuzione FUSA di un gruppo geo su un batch (architettura.md#geometrie):
-/// reservation dei byte decodificati sul governor (D12.7) e, a concessione
-/// avvenuta, runner fuso con un solo decode/encode. Restituisce `true` se il
-/// gruppo e' stato eseguito (batch e byte al confine aggiornati); `false` se
-/// si e' ricaduti sul percorso non fuso per QUESTO batch — reservation
-/// fallita, metrica dedicata registrata, batch invariato: nessun errore
-/// nuovo, il loop standard produce l'esito identico.
+/// Tentativo di esecuzione FUSA di un gruppo geo su un batch (architettura.md#geometrie).
 ///
-/// Un gruppo e' un run di trasformazioni `TransformInPlace` (>= 1) piu' UNA
-/// misura terminale opzionale in coda (capability `TerminalMeasure`):
-/// la misura consuma la forma decodificata dell'ultimo passo e appende la
-/// colonna scalare (semantica v4 "add column" — la colonna geometria
-/// sopravvive e viene ri-encodata una sola volta al confine). La reservation
-/// D12.7 non cambia: copre i byte decodificati della colonna geometria e
-/// l'output scalare e' nel lease di uscita del segmento, come senza misura.
+/// Riserva i byte decodificati sul governor (D12.7) e, se concessi, esegue il
+/// runner fuso con un solo decode/encode. `false` significa ricaduta sul
+/// percorso non fuso per questo batch: metrica registrata, batch invariato,
+/// nessun errore nuovo.
 ///
-/// Errori e osservabilita' per nodo (D12.6): righe 1:1 e metriche per ogni
-/// kernel del gruppo, `check_cancellation` tra un kernel e l'altro (errore
-/// `Cancelled` attribuito al kernel in corso, come il check del loop),
-/// errori di cella via `step_error` al kernel che li ha prodotti (tabella di
-/// attribuzione del runner fuso), `catch_unwind` sul gruppo con attribuzione
-/// al kernel in corso (stesso pattern di `run_kernel`).
+/// Un gruppo e' un run di `TransformInPlace` piu' una misura terminale
+/// opzionale (`TerminalMeasure`) che appende la colonna scalare; la
+/// reservation copre comunque solo la colonna geometria. Errori, metriche e
+/// cancellazione restano per nodo (D12.6), e il `catch_unwind` attribuisce il
+/// panic al kernel in corso, come `run_kernel`.
 ///
 /// # Errors
 ///
@@ -268,14 +250,10 @@ pub(super) fn try_run_fused_group(
     let prepared = state
         .one_to_one_prepared(&kernels[0], &batch.schema(), params[0])
         .map_err(|error| state.with_diagnostics(error, batch_detail))?;
-    // architettura.md#geometrie D12.5: lo schema di output del gruppo e' quello dell'ULTIMA
-    // trasformazione — con `reproject` nel gruppo il CRS del campo geometria
-    // cambia a meta' catena. La ricostruzione canonica del campo dipende
-    // solo da (nome, CRS di output) e gli altri campi passano invariati,
-    // quindi l'handle risolto sullo schema del batch e' IDENTICO a quello
-    // che il percorso non fuso risolverebbe sullo schema intermedio; per le
-    // op di trasformazione o di misura (CRS invariato) coincide con
-    // l'handle del primo kernel.
+    // architettura.md#geometrie D12.5: lo schema di output del gruppo e'
+    // quello dell'ULTIMA trasformazione (con `reproject` il CRS cambia a meta'
+    // catena). L'handle dipende solo da nome e CRS di output, quindi coincide
+    // con quello che il percorso non fuso risolverebbe.
     let last_transform = transforms.len() - 1;
     let output_prepared = state
         .one_to_one_prepared(

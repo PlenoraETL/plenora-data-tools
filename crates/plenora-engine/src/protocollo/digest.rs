@@ -1,34 +1,18 @@
 //! Un digest SHA-256 sul filo: **un tipo**, non una stringa che sembra un
 //! digest.
 //!
-//! # Perche' non basta un controllo in `codifica`
-//!
-//! Quattro campi del protocollo portano l'uscita testuale di uno SHA-256 —
-//! l'identita' dell'artefatto, il digest dell'insieme delle risorse, il
-//! `plan_hash_atteso` e il fingerprint del contratto d'ingresso. Con una
-//! `String` la loro forma dipenderebbe da un controllo scritto altrove:
-//! quattro chiamate che qualcuno puo' dimenticare di aggiungere al quinto
-//! campo.
-//!
-//! Qui la forma e' del tipo. Non esiste un `DigestSha256` non canonico, quindi
-//! non c'e' un controllo da ricordare: c'e' un costruttore che rifiuta.
+//! Con una `String` la forma di ogni campo digest dipenderebbe da un
+//! controllo scritto altrove, da ricordare a ogni campo nuovo. Qui la forma e'
+//! del tipo: non esiste un `DigestSha256` non canonico, c'e' un costruttore
+//! che rifiuta.
 //!
 //! # Perche' resta distinto da `CommitToken`
 //!
-//! La rappresentazione e' **la stessa**, e infatti e' condivisa:
-//! [`crate::esadecimale32`] tiene i 32 byte, il parsing, la forma canonica e
-//! la lettura sanificata. Cio' che i due tipi non condividono e' quel che li
-//! rende due tipi:
-//!
-//! - un digest e' l'identita' di un contenuto, e va **confrontato**: `Debug` e
-//!   `Display` lo mostrano, perche' vedere due digest diversi affiancati e'
-//!   il modo in cui si diagnostica un disaccordo;
-//! - un `commit_token` identifica un **tentativo**, e non compare mai: ne'
-//!   in `Debug`, ne' in `Display`, ne' in un errore.
-//!
-//! La primitiva condivisa non ha percio' ne' `Debug` ne' `Display`: darglieli
-//! avrebbe imposto una politica a entrambi, e la piu' comoda — mostrare — e'
-//! quella che un giorno mette il token in un log.
+//! La rappresentazione e' condivisa in [`crate::esadecimale32`]. La politica
+//! di visualizzazione no: un digest e' l'identita' di un contenuto e si
+//! **mostra**, per confrontarlo; un `commit_token` identifica un tentativo e
+//! non compare mai. Per questo la primitiva condivisa non ha ne' `Debug` ne'
+//! `Display`.
 
 use std::fmt;
 
@@ -36,20 +20,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// L'unico algoritmo di digest ammesso in v1.
 ///
-/// # Perche' sta col tipo e non col verificatore
-///
-/// Perche' e' cio' su cui i due lati si accordano, e i due lati sono due: chi
-/// **dichiara** l'algoritmo scrivendo l'artefatto e chi lo **pretende**
-/// rileggendolo. Tenerla dal solo lato che verifica la renderebbe irraggiungibile
-/// dall'altro — il verificatore si compila sotto `test` e `internals` — e la
-/// scorciatoia sarebbe riscriverne il valore nel worker: due stringhe uguali per
-/// coincidenza, libere di smettere di esserlo.
-///
-/// Il campo `algoritmo` di [`super::messaggi::DigestArtefatto`] resta una
-/// stringa sul filo — la forma del messaggio non cambia — ed e' qui che la
-/// coerenza si impone. Ammetterne un secondo richiede una PR esplicita: il
-/// valore canonico, la sua lunghezza e il tipo che lo rappresenta cambierebbero
-/// insieme.
+/// Sta col tipo, non col verificatore (compilato solo sotto `test` e
+/// `internals`), perche' la usano entrambi i lati: chi dichiara l'algoritmo
+/// scrivendo l'artefatto e chi lo pretende rileggendolo. Il campo `algoritmo`
+/// di [`super::messaggi::DigestArtefatto`] resta una stringa sul filo; la
+/// coerenza si impone qui. Un secondo algoritmo cambia insieme valore
+/// canonico, lunghezza e tipo.
 pub const ALGORITMO_DIGEST: &str = "sha256";
 
 use crate::esadecimale32::{self, DaEsadecimale32, Esadecimale32, FormaNonValida};
@@ -59,10 +35,9 @@ pub const DIGEST_BYTES: usize = esadecimale32::BYTE;
 
 /// Perche' un testo non e' un digest.
 ///
-/// **Non porta il valore.** Non perche' un digest sia segreto — non lo e' — ma
-/// perche' su questo canale il testo che ha fallito la conversione lo sceglie
-/// l'altro capo, e un errore che lo copia e' un modo di far scrivere nel log
-/// di chi indaga. La posizione c'e', perche' e' struttura.
+/// **Non porta il valore**: il testo rifiutato lo sceglie l'altro capo, e
+/// copiarlo gli farebbe scrivere nel log di chi indaga. La posizione c'e',
+/// perche' e' struttura.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FormaDigestNonValida {
@@ -75,10 +50,8 @@ pub enum FormaDigestNonValida {
     },
     /// Un carattere non e' esadecimale minuscolo.
     ///
-    /// Una variante sola dove il `commit_token` ne ha due: qui la maiuscola e
-    /// la spazzatura portano alla stessa azione — riscrivere il campo — mentre
-    /// per il token la distinzione dice a chi legge che il valore puo'
-    /// essere giusto e la grafia no.
+    /// Una variante sola, dove il `commit_token` ne ha due: qui maiuscola e
+    /// spazzatura portano alla stessa azione, riscrivere il campo.
     NonEsadecimaleMinuscolo {
         /// Posizione, in byte dall'inizio.
         posizione: usize,
@@ -150,10 +123,8 @@ impl DaEsadecimale32 for DigestSha256 {
 
 /// Mostra il valore, a differenza di `CommitToken`.
 ///
-/// Un digest e' l'identita' di un contenuto e serve **confrontarlo**: due
-/// digest diversi affiancati sono la diagnosi di un disaccordo. La scelta e'
-/// scritta e non ereditata da un `derive`, perche' e' meta' della ragione per
-/// cui questo tipo esiste separato.
+/// Due digest diversi affiancati sono la diagnosi di un disaccordo. E' scritto
+/// a mano, non con `derive`, perche' e' la politica che distingue i due tipi.
 impl fmt::Debug for DigestSha256 {
     fn fmt(&self, formattatore: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formattatore, "DigestSha256({})", self.in_esadecimale())

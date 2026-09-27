@@ -1,58 +1,22 @@
 //! Il dominio di isolamento: si costruisce, si rilegge, e se non regge non si
 //! parte.
 //!
-//! # Che cosa c'e' qui, e che cosa no
+//! Qui nasce il dominio, non chi lo usa: `PreparaIsolamento` e' il primo nodo
+//! della macchina a stati del supervisore (isolamento.md#31-supervisore).
 //!
-//! Qui nasce **il dominio**, non chi lo usa. `PreparaIsolamento` e' il primo
-//! nodo della macchina a stati del supervisore
-//! (isolamento.md#31-supervisore): questo modulo porta la sola cosa che
-//! supervisore e worker presuppongono entrambi — un dominio che il worker non
-//! potra' toccare, oppure il rifiuto di partire.
-//!
-//! # Perche' prima dello spawn, e non dopo
-//!
-//! `F4-1` e `GA-7`: il limite e' in vigore **prima che esista un processo da
-//! limitare**. Applicare un tetto a un processo gia' partito lascia fra la
-//! partenza e l'applicazione una finestra in cui il tetto non c'e', e in quella
-//! finestra il worker puo' allocare quanto vuole.
-//!
-//! # Scrivere non e' configurare
-//!
-//! Ogni proprieta' su cui poggia l'attribuzione e' una **scrittura su un file**
-//! che puo' fallire in silenzio, essere ignorata da un kernel diverso, o essere
-//! sovrascritta da qualcun altro. Il preflight le scrive e **le rilegge**, e il
-//! profilo isolato non parte se una sola diverge
-//! (isolamento.md#9-bis-preflight-del-dominio-scrivere-non-e-configurare).
-//!
-//! # L'ordine dei passi e' esso stesso una garanzia
-//!
-//! Prima si accerta **dove** si sta per scrivere — che il percorso si risolva,
-//! che stia sotto il control plane, che il filesystem sia davvero `cgroup2` —
-//! e poi **chi** potrebbe disfarlo. Solo allora si scrive.
-//!
-//! Il contrario sembra equivalente e non lo e': un preflight che modifica
-//! quattro file e scopre alla fine che il percorso non e' quello atteso non
-//! puo' piu' riportarli allo stato di partenza, e ha toccato una gerarchia di
-//! cui non sa niente.
-//!
-//! # Possedere non e' solo essere qualcuno
-//!
-//! Il giudizio sul possesso non guarda il solo dominio. Per **uscire** dal
-//! dominio non si scrive il proprio `cgroup.procs` — li' ci si e' gia' — si
-//! scrive quello di un altro cgroup: il padre, un fratello. Il possesso si
-//! giudica quindi su ogni antenato fino alla radice del control plane.
-//!
-//! # Perche' un trait invece del filesystem
-//!
-//! Perche' meta' di cio' che va provato non ha bisogno di privilegi: l'ordine
-//! delle operazioni, il comportamento su ogni rilettura divergente, il
-//! parsing, e il giudizio su proprietario e permessi. Quella meta' si prova su
-//! una superficie controllata, ovunque.
-//!
-//! L'altra meta' — che le scritture arrivino davvero al kernel, e che un
-//! worker senza autorita' non possa disfarle — non e' simulabile, e si prova
-//! solo su una gerarchia vera. Le due prove non si sostituiscono: la prima dice
-//! che la procedura e' giusta, la seconda che l'ambiente la onora.
+//! - Il limite e' in vigore **prima** che esista un processo da limitare
+//!   (`F4-1`, `GA-7`): applicarlo dopo lascia una finestra senza tetto.
+//! - Ogni proprieta' si scrive e **si rilegge**, e il profilo isolato non parte
+//!   se una sola diverge
+//!   (isolamento.md#9-bis-preflight-del-dominio-scrivere-non-e-configurare).
+//! - Prima si accerta **dove** si scrive (percorso, control plane, `cgroup2`)
+//!   e **chi** potrebbe disfarlo, poi si scrive: un preflight che scopre a
+//!   meta' di essere nel posto sbagliato non puo' piu' tornare indietro.
+//! - Il possesso si giudica su ogni antenato fino alla radice del control
+//!   plane, perche' si evade scrivendo il `cgroup.procs` di un altro cgroup.
+//! - Il trait `SuperficieDominio` prova ovunque ordine, riletture, parsing e
+//!   giudizio sui permessi; che il kernel onori le scritture si prova solo su
+//!   una gerarchia vera.
 
 use std::path::{Path, PathBuf};
 
@@ -66,11 +30,11 @@ use plenora_core::error::{ErrorPhase, PlenoraError, Result};
 pub mod attivazione;
 #[cfg(target_os = "linux")]
 mod canale;
+#[cfg(target_os = "linux")]
+mod dominio;
 // Il chiamante di produzione (`PR-12`): collega dominio, spawner,
 // protocollo, verifica e pubblicazione per una richiesta reale. Di Linux
 // soltanto, come il dominio che prepara.
-#[cfg(target_os = "linux")]
-mod dominio;
 #[cfg(target_os = "linux")]
 pub mod esecuzione_isolata;
 // La guardia sul figlio non ha niente di Linux: `std::process::Child` esiste
@@ -80,49 +44,26 @@ pub mod esecuzione_isolata;
 mod figlio;
 #[cfg(target_os = "linux")]
 mod identita;
-// La macchina a stati non ha niente di Linux: e' una riduzione di fatti, e i
-// suoi casi girano ovunque.
-//
-// **Condizione di rientro.** Il `cfg` cade quando il supervisore viene
-// **davvero attivato** — cioe' quando una policy lo sceglie e un worker reale
-// gli parla — non quando diventa `pub`. Rendere pubblica una funzione che
-// nessuno chiama toglie l'avviso di codice morto senza togliere il codice
-// morto: e' la scorciatoia che il registro vieta, e la vieta perche' sposta il
-// problema dal compilatore a chi legge.
-//
-// Il worker reale di `PR-9` porta il **peer**, non il chiamante. Da quel
-// momento dall'altro capo del filo c'e' un processo vero invece di una
-// finzione — e' cio' che serve per provare la macchina end-to-end — ma il
-// supervisore continua a non essere chiamato da nessuno in produzione: chi lo
-// chiamera' e' la policy che lo sceglie, con `PR-12`. Confondere le due cose
-// farebbe cadere questo `cfg` una PR troppo presto, e l'unico modo di zittire
-// l'avviso che ne seguirebbe sarebbe rendere pubblico cio' che nessuno usa.
+// La lettura fermabile serve a chiunque ascolti un canale senza poter restare
+// fermo dentro una `read`: il supervisore e anche il worker, che deve sentire
+// un `Annulla` mentre lavora.
 #[cfg(target_os = "linux")]
 mod lettura;
 // La macchina a stati del supervisore: fatti in una coda, un solo giudice.
 //
-// Niente `cfg` di perimetro: il chiamante di produzione e'
-// `isolamento::esecuzione_isolata::esegui_isolato`, tramite
-// `macchina::conduci_isolato`. E nemmeno un `cfg` di piattaforma sul modulo
-// intero: il **giudizio** su cio' che attraversa il confine e' una regola e
-// si prova ovunque, mentre cio' che tocca i descrittori e i file del dominio
-// e' di Linux e lo dichiara sui singoli elementi. Un `cfg` sul modulo
-// direbbe che tutto e' di Linux, e non e' vero.
+// Niente `cfg` sul modulo: il chiamante di produzione e'
+// `esecuzione_isolata::esegui_isolato` tramite `macchina::conduci_isolato`, e
+// il giudizio su cio' che attraversa il confine si prova ovunque. Cio' che
+// tocca descrittori e file del dominio e' di Linux e lo dichiara sui singoli
+// elementi.
 mod macchina;
-// La lettura fermabile non e' del supervisore: e' di **chiunque** debba
-// ascoltare un canale senza restare fermo dentro una `read` per sempre. Il
-// worker ha la stessa necessita' — deve poter ascoltare un `Annulla` mentre
-// lavora, e poi smettere — e tenerla dentro `macchina`, che si compila solo
-// sotto `test` e `internals`, l'avrebbe resa irraggiungibile dalla produzione:
-// la scorciatoia sarebbe stata scriverne una seconda.
 #[cfg(all(target_os = "linux", qualificazione_isolamento))]
 pub mod qualificazione;
 mod sorgente;
-// Il percorso che fa percorrere a un worker **reale** la sequenza intera.
-// `PR-12`: il lato supervisore dell'handshake ha ora un chiamante di
-// produzione (`esecuzione_isolata`), che riusa `dialoga`/`chiudi`/
-// `supervisore_per` invece di duplicarli — restano di Linux soltanto, come
-// il dominio.
+// Il percorso che fa percorrere a un worker **reale** la sequenza intera. Il
+// chiamante di produzione (`esecuzione_isolata`) ne riusa `supervisore_per`,
+// `digest_dell_immagine`, `scrivi`, `chiudi` e `con_la_pulizia`; `dialoga` resta
+// della qualificazione. Di Linux soltanto, come il dominio.
 #[cfg(target_os = "linux")]
 pub mod prova;
 #[cfg(target_os = "linux")]
@@ -201,19 +142,10 @@ const FILE_DEL_DOMINIO: [&str; 5] = [
 /// alla radice del control plane, ciascuno con la propria directory e il
 /// proprio `cgroup.procs`.
 ///
-/// # Perche' non basta il `cgroup.procs` del dominio
-///
-/// Perche' non e' quello con cui si evade. Scrivere il proprio pid nel
-/// `cgroup.procs` **del dominio corrente** non porta da nessuna parte: ci si e'
-/// gia'. Per uscire si scrive nel `cgroup.procs` di un **altro** cgroup — il
-/// padre, un fratello — e quella scrittura non tocca nessuno dei file del
-/// dominio.
-///
-/// La directory di un antenato conta per la stessa ragione: chi la puo'
-/// scrivere ci crea dentro un cgroup nuovo e ci si sposta.
-///
-/// La catena si ferma alla radice del control plane, inclusa: sopra c'e'
-/// l'amministrazione della macchina, che non e' cosa nostra da giudicare.
+/// Si evade scrivendo il `cgroup.procs` di un **altro** cgroup (il padre, un
+/// fratello), o creando un cgroup nuovo in una directory scrivibile: il solo
+/// dominio non basta. La catena si ferma alla radice del control plane,
+/// inclusa: sopra c'e' l'amministrazione della macchina.
 fn bersagli_del_possesso(dominio: &Path, radice: &Path) -> Vec<PathBuf> {
     let mut bersagli = vec![dominio.to_path_buf()];
     for file in FILE_DEL_DOMINIO {
@@ -261,28 +193,15 @@ struct ProprietaFile {
 impl ProprietaFile {
     /// Se un worker con quella identita' **potrebbe** scrivere questo file.
     ///
-    /// # Perche' il bit di gruppo si rifiuta sempre, GID a parte
+    /// Il bit di scrittura del gruppo si rifiuta sempre, GID a parte: su un
+    /// filesystem con ACL e' la **mask della classe ACL**, e una voce
+    /// `user:<worker>:rw` varrebbe anche con un GID estraneo. Rifiutare invece
+    /// di interpretare le ACL come il kernel costa qualche rifiuto su gerarchie
+    /// che non useremmo comunque. La regola si allenta solo con una prova che
+    /// `cgroup2`, nell'ambiente qualificato, non supporti ACL nominative.
     ///
-    /// Su un filesystem con ACL i bit di gruppo non sono «il gruppo
-    /// proprietario»: sono la **mask della classe ACL**, cioe' il tetto dei
-    /// permessi di ogni voce nominativa. Un file con `g+w` e un GID che col
-    /// worker non c'entra puo' portare una ACL `user:<worker>:rw`, e quella
-    /// ACL vale.
-    ///
-    /// Leggerle per escluderlo significherebbe interrogarle su ogni file e
-    /// fidarsi di averle interpretate come il kernel; guardare la sola mask e
-    /// rifiutare costa qualche rifiuto in piu' su gerarchie che non useremmo
-    /// comunque.
-    ///
-    /// Resta un'alternativa, e va nominata perche' e' quella che allenterebbe
-    /// la regola: una prova esplicita che nell'ambiente qualificato `cgroup2`
-    /// non supporti ACL nominative. Finche' quella prova non c'e', vale questa.
-    ///
-    /// # Che cosa resta ammesso
-    ///
-    /// Il bit del proprietario, e solo quando il proprietario **non e'** il
-    /// worker: e' il caso normale di una gerarchia che il control plane
-    /// possiede e amministra.
+    /// Resta ammesso il bit del proprietario, quando il proprietario **non
+    /// e'** il worker: il caso normale di una gerarchia del control plane.
     const fn scrivibile_da(self, worker: IdentitaWorker) -> bool {
         if self.mode & 0o022 != 0 {
             return true;
@@ -322,36 +241,22 @@ struct Montaggio {
     dispositivo: String,
 }
 
-// # Perche' questo modulo non porta un `cfg` di perimetro
-//
-// Tutto cio' che sta qui ha un chiamante di produzione: il dispatch anticipato
-// dello spawner raggiunge cio' che sta fra `dal_confine` e la `exec`, e il
-// supervisore del profilo isolato (`esecuzione_isolata`) raggiunge la
-// preparazione del dominio, il token, la transizione, l'avvio e il giudizio
-// sull'immagine da rieseguire. Cio' che resta sotto `cfg` altrove lo dichiara
-// elemento per elemento, e si verifica togliendo i `cfg` e costruendo senza
-// `internals` con `-D dead-code`.
+// Nessun `cfg` di perimetro: tutto cio' che sta qui ha un chiamante di
+// produzione (dispatch anticipato dello spawner, `esecuzione_isolata`). Cio'
+// che resta sotto `cfg` altrove lo dichiara elemento per elemento; si
+// verifica togliendo i `cfg` e costruendo senza `internals` con `-D dead-code`.
 //
 // Registro: errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
 
 /// Cio' che una superficie puo' non riuscire a fare.
 ///
-/// Non e' un `PlenoraError`: il difetto qui e' meccanico, e diventa
-/// `IsolationUnavailable` solo quando il preflight decide che rende il dominio
-/// inservibile. Tenerli separati impedisce a una superficie di decidere al
-/// posto del preflight.
+/// Non e' un `PlenoraError`: il difetto e' meccanico, e diventa
+/// `IsolationUnavailable` solo quando il preflight lo decide. Tenerli separati
+/// impedisce a una superficie di decidere al posto del preflight.
 ///
-/// # Perche' porta l'`ErrorKind` e non solo un testo
-///
-/// Perche' un chiamante deve poter distinguere «il file non c'e'» da «il file
-/// non si legge», e quelle due cose hanno conseguenze opposte: la prima e'
-/// un'assenza, che non concede autorita' a nessuno; la seconda e' un dubbio, e
-/// un dubbio si rifiuta.
-///
-/// Ricavare la distinzione dal **testo** — cercare `os error 2` nel `Display`
-/// — la farebbe dipendere da come il sistema formatta i propri errori, cioe'
-/// da qualcosa che nessuno ha promesso e che una locale diversa cambia. Il
-/// tipo la porta invece per costruzione.
+/// Porta l'`ErrorKind` perche' «il file non c'e'» (un'assenza, che non
+/// concede autorita') e «il file non si legge» (un dubbio, che si rifiuta)
+/// hanno conseguenze opposte, e ricavarli dal testo dipenderebbe dalla locale.
 #[derive(Debug)]
 enum DifettoSuperficie {
     /// La scrittura non e' riuscita.
@@ -416,10 +321,9 @@ type Esito<T> = std::result::Result<T, DifettoSuperficie>;
 trait SuperficieDominio {
     /// Il dominio, in forma **canonica**.
     ///
-    /// Canonica perche' ogni confronto successivo — il montaggio che lo
-    /// contiene, gli antenati fino alla radice — si fa per prefisso, e un `..`
-    /// o un link simbolico nel mezzo renderebbe quel confronto una domanda su
-    /// un percorso diverso da quello a cui si scrive.
+    /// Ogni confronto successivo (montaggio, antenati) si fa per prefisso: un
+    /// `..` o un link simbolico lo farebbe su un percorso diverso da quello a
+    /// cui si scrive.
     ///
     /// # Errors
     ///
@@ -484,23 +388,12 @@ trait SuperficieDominio {
 /// Cio' che il preflight ha accertato, e **l'unica** via per avviare qualcosa
 /// dentro il dominio.
 ///
-/// # Perche' un token e non un insieme di dati
-///
-/// Perche' il preflight accerta una **combinazione**: che *quel* dominio
-/// canonico stia sotto *quella* radice, su *quel* montaggio, con *quei*
-/// namespace, e che *quella* identita' del worker non possa disfarlo. Nessuna
-/// di quelle affermazioni vale da sola.
-///
-/// Se lo spawner ricevesse gli stessi dati come campi indipendenti, un
-/// chiamante potrebbe verificarne una combinazione ed eseguirne un'altra —
-/// preparare il dominio A e avviare il worker in B, o con un UID che nessuno
-/// ha giudicato contro i permessi di A. Il tipo lo impedisce: si costruisce
-/// **solo** dentro [`prepara_dominio`], non ha costruttore ne' campi
-/// ricombinabili, e lo spawner lo consuma invece di ricevere le parti.
-///
-/// Non e' un booleano: un preflight riuscito ha **osservato** delle cose, e
-/// alcune servono allo spawner o a chi legge l'evidenza dopo. Ridurle a «e'
-/// andata bene» le butterebbe via nel momento in cui costano meno.
+/// Il preflight accerta una **combinazione** (quel dominio, sotto quella
+/// radice, su quel montaggio, con quei namespace, contro quell'identita'), e
+/// campi indipendenti permetterebbero di verificarne una ed eseguirne
+/// un'altra. Si costruisce **solo** dentro [`prepara_dominio`], non ha campi
+/// ricombinabili, e lo spawner lo consuma. Non e' un booleano: porta cio' che
+/// il preflight ha osservato, che serve allo spawner e all'evidenza.
 #[derive(Debug, PartialEq, Eq)]
 struct DominioPreparato {
     /// Il dominio, **canonico**: e' su questo che si scrive, e non sul
@@ -517,60 +410,33 @@ struct DominioPreparato {
     montaggio: Montaggio,
     /// I namespace del processo che ha preparato il dominio.
     ///
-    /// Lo spawner li pretende **identici** ai propri prima della `exec`: nasce
-    /// dal supervisore e li eredita, quindi una differenza significa che nel
-    /// mezzo qualcuno ha fatto una `unshare`.
+    /// Lo spawner li pretende **identici** ai propri prima della `exec`: li
+    /// eredita dal supervisore, quindi una differenza significa una `unshare`
+    /// nel mezzo.
     ///
-    /// Che cosa cambia una `unshare` di `user`: non che le capability
-    /// spariscano dalla maschera — dentro il namespace nuovo ci sono, e la
-    /// maschera le mostra — ma **rispetto a quale namespace** capability e
-    /// proprieta' dei file hanno significato. Un UID che li' non ha autorita'
-    /// puo' averla su file mappati diversamente.
-    ///
-    /// Questo controllo dice che nel momento della `exec` il namespace e'
-    /// quello giusto. Non impedisce al worker di fare `unshare` **dopo**, e sarebbe falso
-    /// dire che `no_new_privs` lo impedisca: `no_new_privs` vieta di acquisire
-    /// privilegi attraverso una `execve` — setuid, capability di file — e non
-    /// tocca `unshare`. Un processo non privilegiato che crea uno user
-    /// namespace, dove la policy del kernel lo consente, lo crea anche con
-    /// `no_new_privs = 1`, e dentro quel namespace ha capability piene.
-    ///
-    /// La prova ostile non deve quindi pretendere che la `unshare` fallisca.
-    /// Deve accettare **due** esiti, ed entrambi sono un successo:
-    ///
-    /// - la `unshare` e' rifiutata dalla policy dell'host;
-    /// - la `unshare` riesce, il namespace cambia e nel figlio ci sono
-    ///   capability, ma riscrivere il control plane e uscire dal dominio
-    ///   restano impossibili, e lo stato resta invariato.
-    ///
-    /// Il secondo e' quello che conta, perche' e' quello che dice **perche'**
-    /// regge: non un flag, ma il fatto che i file della gerarchia appartengono
-    /// a un UID che nel namespace nuovo non e' mappato, e che il dominio e'
-    /// sigillato. Le capability di uno user namespace valgono sugli oggetti di
-    /// quel namespace, non su quelli del padre.
+    /// Il controllo vale al momento della `exec`, non dopo: `no_new_privs` non
+    /// vieta `unshare`, e un worker puo' creare uno user namespace con
+    /// capability piene dove la policy del kernel lo consente. La prova ostile
+    /// accetta quindi due esiti: `unshare` rifiutata dall'host, oppure riuscita
+    /// ma senza poter riscrivere il control plane ne' uscire dal dominio,
+    /// perche' i file della gerarchia appartengono a un UID non mappato nel
+    /// namespace nuovo e il dominio e' sigillato.
     namespace_attesi: Vec<(String, String)>,
     /// Se fra le opzioni di superblocco c'e' `memory_localevents`.
     ///
     /// **Registrato, non rifiutato.** L'opzione rende non gerarchico anche
-    /// `memory.events`, cioe' toglie una delle tre fonti di evidenza. Ma con il
-    /// dominio sigillato non ci sono discendenti, quindi locale e gerarchico
-    /// coincidono — e la conclusione **dipende dal sigillo**, che e' a sua volta
-    /// una scrittura riletta. Se il sigillo non si stabilisce il profilo non
-    /// parte comunque, e il caso non si presenta.
-    ///
-    /// Quel caso non e' pero' mai stato misurato: la gerarchia su cui il
-    /// prototipo gira non ha `memory_localevents`, quindi la conclusione e' un
-    /// ragionamento e non un'osservazione. Per questo il valore si registra.
+    /// `memory.events`, ma con il dominio sigillato non ci sono discendenti e
+    /// locale e gerarchico coincidono. La conclusione dipende dal sigillo ed e'
+    /// un ragionamento, non un'osservazione: il caso non e' mai stato misurato,
+    /// per questo il valore si registra.
     eventi_locali: bool,
 }
 
 /// Dove sta il dominio e chi puo' toccarlo.
 ///
-/// E' la parte che il supervisore e lo spawner accertano **allo stesso modo**:
-/// stesso ordine, stesse condizioni, stesse ragioni di rifiuto. Tenerla in un
-/// posto solo e' l'unica forma in cui «lo spawner rivalida» significa davvero
-/// che rivalida *quello*: due copie divergono, e la seconda a divergere e'
-/// sempre quella che non si sta guardando.
+/// Supervisore e spawner lo accertano con questa sola funzione: stesso
+/// ordine, stesse condizioni, stesse ragioni di rifiuto. Due copie
+/// divergerebbero.
 ///
 /// # Errors
 ///
@@ -709,30 +575,13 @@ pub(super) fn prepara_dominio<S: SuperficieDominio>(
 
 /// Un descrittore letto dalla riga di comando, in **forma canonica**.
 ///
-/// # Perche' una forma sola e non tutte quelle che `parse` accetta
+/// Il solo produttore e' il supervisore, che scrive `i32::to_string()`: ogni
+/// altra forma che `str::parse` accetterebbe (`+3`, `03`, `-0`, `-01`) non
+/// viene da lui, e si rifiuta. Gli spazi li rifiuta gia' `parse`.
 ///
-/// Perche' il produttore e' uno solo — il supervisore, che scrive
-/// `i32::to_string()` — e accettare piu' forme della sua significa accettare
-/// scritture che quel produttore non emette mai. Da dove verrebbero, allora?
-/// Da qualcun altro. E un ingresso che il produttore dichiarato non produce e'
-/// esattamente cio' che un confine deve rifiutare.
-///
-/// Le forme che `str::parse` accetterebbe e qui sono rifiutate:
-///
-/// | forma | perche' no |
-/// |---|---|
-/// | `+3` | il segno positivo non compare mai in `to_string()` |
-/// | `03` | uno zero iniziale non compare mai |
-/// | `-0` | la forma canonica di zero e' `0` |
-/// | `-01` | uno zero iniziale, di nuovo |
-/// | ` 3` o `3 ` | `parse` rifiuta gia' gli spazi, e qui non si tolgono |
-///
-/// # Che cosa **non** decide
-///
-/// Se il numero vada bene. `-1` ha forma canonica ed e' un valore che il
-/// supervisore non emette: lo rifiuta [`canale::numero_ammissibile`], con la ragione
-/// giusta — «non e' un descrittore» invece di «non e' un numero». Le due
-/// domande sono diverse e i due messaggi mandano in due posti diversi.
+/// Non decide se il numero vada bene: `-1` ha forma canonica e lo rifiuta
+/// [`canale::numero_ammissibile`], con la ragione giusta («non e' un
+/// descrittore», non «non e' un numero»).
 ///
 /// # Errors
 ///
@@ -757,20 +606,10 @@ fn descrittore_canonico(testo: &str) -> std::result::Result<i32, String> {
 
 /// Il prefisso che marca il **namespace riservato** dello spawner.
 ///
-/// # Perche' serve un namespace e non la sola versione
-///
-/// Perche' un `argv[1]` che comincia cosi' dichiara un'intenzione: «questo
-/// processo e' uno spawner». Se il riconoscimento guardasse solo la versione
-/// esatta, una versione **diversa** — piu' vecchia, piu' nuova, o scritta male
-/// — non verrebbe riconosciuta affatto, e cadrebbe nel parser degli argomenti
-/// della CLI, che si lamenterebbe di un comando sconosciuto.
-///
-/// Sarebbe la diagnosi sbagliata su un fatto grave: un supervisore che parla
-/// una versione che questo binario non conosce, e che si vedrebbe rispondere
-/// «comando sconosciuto» invece di «versione non supportata».
-///
-/// Chi entra in questo namespace, quindi, **non torna indietro**: o e' la
-/// versione supportata, o e' un rifiuto che la nomina.
+/// Chi entra nel namespace non torna indietro: o porta la versione
+/// supportata, o riceve un rifiuto che la nomina. Riconoscere solo la
+/// versione esatta farebbe cadere una versione diversa nel parser della CLI,
+/// con la diagnosi sbagliata («comando sconosciuto»).
 const PREFISSO_RISERVATO: &str = "plenora-spawner-";
 
 /// Il prefisso che marca il **namespace riservato** del worker.
@@ -811,16 +650,10 @@ const VERSIONE_VERIFICATORE: &str = "plenora-verificatore-1";
 
 /// La versione della richiesta che attraversa il confine.
 ///
-/// Cambia quando cambiano i campi o il loro significato. Lo spawner rifiuta
-/// tutto cio' che non porta **esattamente** questa stringa: un supervisore e
-/// uno spawner di versioni diverse non sono lo stesso programma, e
-/// interpretare gli argomenti dell'altro significherebbe indovinare.
-///
-/// La `2` porta i due descrittori delle pipe, che la `1` non aveva. La `3`
-/// porta un **terzo** descrittore opzionale — l'artefatto che il
-/// verificatore riapre in sola lettura — con `-1` per «assente»: un worker
-/// ordinario non ne cede uno, e la forma resta la stessa richiesta con un
-/// campo in piu', non due richieste diverse.
+/// Cambia quando cambiano i campi o il loro significato; lo spawner rifiuta
+/// tutto cio' che non porta **esattamente** questa stringa. Il terzo
+/// descrittore, opzionale, e' l'artefatto che il verificatore riapre in sola
+/// lettura, con `-1` per «assente».
 const VERSIONE_RICHIESTA: &str = "plenora-spawner-3";
 
 /// Che cosa dice il primo argomento, per la modalita' che si sta cercando.
@@ -837,36 +670,18 @@ enum Riconoscimento {
     Supportata,
     /// E' del namespace riservato ma non e' la versione supportata.
     ///
-    /// # Perche' non porta la stringa trovata
-    ///
-    /// Perche' quella stringa e' `argv` — contenuto che il chiamante sceglie —
-    /// e riprodurla in un messaggio significherebbe copiare un ingresso
-    /// arbitrario in un errore che finisce nei log: puo' contenere ritorni a
-    /// capo che spezzano una riga di log in due, o byte che non sono UTF-8.
-    ///
-    /// E non servirebbe alla diagnosi. Chi ha scritto quella riga sa che cosa
-    /// ha scritto; cio' che non sa e' **quale versione serve**, ed e' l'unica
-    /// cosa che il rifiuto deve dire.
-    ///
-    /// La variante non porta nemmeno una copia: clonare l'argomento sarebbe
-    /// amplificazione di un ingresso non fidato prima ancora che esista un
-    /// dominio a governarla.
+    /// Non porta la stringa trovata, nemmeno in copia: e' `argv`, un ingresso
+    /// arbitrario (ritorni a capo, byte non UTF-8) che non deve finire nei log.
+    /// Alla diagnosi serve la versione attesa, non quella trovata.
     VersioneNonSupportata,
 }
 
 /// Che cosa dice `argv[1]` rispetto a una modalita'.
 ///
-/// E' una funzione pura e **multipiattaforma**: il riconoscimento e' una
-/// regola, non un fatto dell'ambiente, e provarla solo dove le modalita' girano
-/// significherebbe non provarla dove qualcuno potrebbe cambiarla.
-///
-/// # Perche' una funzione sola per due modalita'
-///
-/// Perche' la regola e' una: namespace riservato, versione esatta, e un rifiuto
-/// che nomina la versione attesa invece di cadere nel parser della CLI. Due
-/// copie sarebbero due occasioni di divergere, e il giorno che una cambia un
-/// processo si riconoscerebbe secondo l'una e non secondo l'altra — con la
-/// diagnosi sbagliata proprio nel caso in cui la diagnosi conta.
+/// Funzione pura e **multipiattaforma**: il riconoscimento e' una regola e si
+/// prova ovunque. Una sola per tutte le modalita' (namespace riservato,
+/// versione esatta, rifiuto che nomina la versione attesa), perche' due copie
+/// divergerebbero.
 fn riconosci_modalita(
     primo: Option<&std::ffi::OsString>,
     prefisso: &str,
@@ -889,27 +704,14 @@ fn riconosci_modalita(
 
 /// Quello che attraversa il confine fra supervisore e spawner.
 ///
-/// # Perche' una richiesta e non una prova
+/// E' una **richiesta**, non una prova: [`DominioPreparato`] non attraversa
+/// un confine di processo, e uno spawner che credesse al mittente non
+/// aggiungerebbe garanzie. Dice solo **su che cosa** lavorare (dominio,
+/// radice, identita', tetto); lo spawner rivalida tutto da se'.
 ///
-/// [`DominioPreparato`] e' un valore Rust in memoria: non attraversa un
-/// confine di processo, e non c'e' modo di trasmetterlo. Cio' che passa e'
-/// **una richiesta**, ed e' una differenza di sostanza, non di forma: una
-/// prova sarebbe qualcosa che lo spawner accetta per buona, e uno spawner che
-/// crede a cio' che gli viene detto non aggiunge nessuna garanzia a quella del
-/// mittente.
-///
-/// La richiesta dice quindi soltanto **su che cosa** lavorare — quale dominio,
-/// quale radice, quale identita', quale tetto — e non contiene nessuna
-/// affermazione del tipo «e' gia' stato verificato». Lo spawner rivalida tutto
-/// da se': ambiente, percorsi, montaggio, permessi, namespace e i quattro
-/// controlli.
-///
-/// # Perche' e' limitata
-///
-/// Perche' ogni campo in piu' e' una cosa in piu' di cui lo spawner potrebbe
-/// fidarsi. Il montaggio non passa: lo spawner lo ritrova. I namespace non
-/// passano: lo spawner li confronta con quelli del **proprio padre**, che e'
-/// un fatto che nessun argomento puo' falsificare.
+/// E' limitata perche' ogni campo e' una cosa di cui lo spawner potrebbe
+/// fidarsi: il montaggio lo ritrova, i namespace li confronta con quelli del
+/// proprio padre.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RichiestaSpawner {
     dominio: PathBuf,
@@ -929,15 +731,11 @@ struct RichiestaSpawner {
     /// supervisore.
     worker_scrive: i32,
     /// Il descrittore dell'artefatto, aperto in sola lettura dal
-    /// coordinatore, che il **verificatore** riapre — `-1` quando non c'e'
-    /// nessun artefatto da cedere, cioe' per ogni avvio del worker ordinario.
+    /// coordinatore, che il **verificatore** riapre.
     ///
-    /// Non e' un `Option<i32>` reso a mano sul filo degli argomenti: `-1` e'
-    /// la stessa forma canonica di un descrittore negativo che
-    /// [`descrittore_canonico`] gia' accetta per gli altri due, e tenerlo
-    /// nello stesso tipo dice che e' lo stesso genere di cosa — un numero
-    /// che lo spawner rivalida, non un'affermazione che gli si chiede di
-    /// credere.
+    /// `-1` quando non c'e' artefatto, cioe' per ogni worker ordinario: la
+    /// stessa forma canonica che [`descrittore_canonico`] accetta per gli
+    /// altri due, e che lo spawner rivalida.
     artefatto_lettura: i32,
 }
 
@@ -963,12 +761,9 @@ impl RichiestaSpawner {
 
     /// La richiesta letta dagli argomenti, fail-closed.
     ///
-    /// # Che cosa si rifiuta
-    ///
-    /// Un numero di argomenti diverso, una versione diversa, un numero che non
-    /// si interpreta, un percorso relativo. Nessuna di queste forme ha una
-    /// lettura di ripiego: un argomento in piu' o in meno significa che chi
-    /// scrive e chi legge non sono d'accordo su che cosa sia una richiesta.
+    /// Si rifiutano un numero di argomenti diverso, una versione diversa, un
+    /// numero che non si interpreta, un percorso relativo: nessuna forma ha
+    /// una lettura di ripiego.
     ///
     /// # Errors
     ///
@@ -996,23 +791,13 @@ impl RichiestaSpawner {
                 .and_then(|testo| testo.parse().ok())
                 .ok_or_else(|| format!("{nome} non e' un numero"))
         };
-        // Assoluto **secondo POSIX**, cioe' con lo slash iniziale, e non
-        // secondo `Path::is_absolute`: quest'ultimo risponde secondo la
-        // piattaforma su cui il codice gira, e su Windows direbbe che
-        // `/sys/fs/cgroup` non e' assoluto. Il percorso di cui si parla qui e'
-        // sempre e solo un percorso di gerarchia `cgroup2`, che e' un oggetto
-        // Linux: chiedere alla piattaforma ospite come si scrivono i percorsi
-        // farebbe dipendere il giudizio da dove il caso viene compilato invece
-        // che da che cosa il percorso e'.
+        // Assoluto **secondo POSIX** (slash iniziale), non secondo
+        // `Path::is_absolute`, che su Windows direbbe non assoluto
+        // `/sys/fs/cgroup`: il percorso e' sempre di una gerarchia `cgroup2`.
         //
-        // Lo slash si cerca nei **byte**. Un percorso Linux e' una sequenza di
-        // byte senza `/` e senza `NUL`, e non e' tenuto a essere UTF-8:
-        // passare per `to_str()` rifiuterebbe un dominio valido solo perche'
-        // il suo nome non si decodifica, che e' una restrizione che nessuno ha
-        // dichiarato e che il parser di `mountinfo` — che i byte li conserva —
-        // non applica. `as_encoded_bytes` e' definito come un sovrainsieme di
-        // UTF-8 in cui i byte ASCII rappresentano se stessi, quindi cercarci
-        // uno `/` iniziale e' esatto su ogni piattaforma.
+        // Lo slash si cerca nei **byte**: un percorso Linux non e' tenuto a
+        // essere UTF-8, e `as_encoded_bytes` rappresenta i byte ASCII come se
+        // stessi, quindi il controllo e' esatto su ogni piattaforma.
         let dominio = PathBuf::from(dominio);
         let radice = PathBuf::from(radice);
         for (nome, percorso) in [("il dominio", &dominio), ("la radice", &radice)] {
@@ -1058,29 +843,13 @@ impl RichiestaSpawner {
 
 /// Cio' che il preflight ha **osservato**, e che vale dopo la transizione.
 ///
-/// # Perche' e' separata dal token
+/// E' separata dal token perche' le vite sono opposte: il token e'
+/// **lineare** (si consuma una volta, e impedisce due spawner sullo stesso
+/// dominio), l'evidenza e' duplicabile e persistente e deve sopravvivere
+/// proprio al caso riuscito. Fra le osservazioni c'e' `memory_localevents`,
+/// che il contratto promette registrato insieme al sigillo.
 ///
-/// Perche' le due cose hanno vite opposte, e tenerle in un oggetto solo obbliga
-/// a scegliere quale delle due sacrificare.
-///
-/// Il token e' **lineare**: esiste una volta, si consuma una volta, e la sua
-/// unicita' e' cio' che impedisce di avviare due spawner sullo stesso dominio.
-/// Se portasse anche l'evidenza, consumarlo la butterebbe via — ed e'
-/// esattamente nel caso riuscito, cioe' quando c'e' qualcosa da riportare, che
-/// andrebbe persa.
-///
-/// L'evidenza e' invece **duplicabile e persistente**: si registra, si scrive
-/// in un rapporto, si confronta con quella di un'altra macchina. Fra le sue
-/// osservazioni c'e' `memory_localevents`, che il contratto promette registrato
-/// insieme al sigillo: una promessa che non sopravvivesse alla transizione
-/// riuscita sarebbe mantenuta solo quando non serve.
-///
-/// # Perche' non attraversa il confine
-///
-/// Perche' non e' una prova. Lo spawner rivalida tutto da se' e non guarda
-/// niente di quanto sta qui: trasmetterla lo inviterebbe a crederci, e uno
-/// spawner che crede a cio' che gli viene detto non aggiunge nessuna garanzia a
-/// quella del mittente.
+/// Non attraversa il confine: lo spawner rivalida da se' e non deve crederci.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EvidenzaPreflight {
     /// Il dominio canonico su cui il preflight ha scritto.
@@ -1101,21 +870,10 @@ struct EvidenzaPreflight {
 
 /// I numeri dei due estremi destinati al worker, **gia' verificati**.
 ///
-/// # Perche' un tipo e non due `i32`
-///
-/// Perche' due interi si scambiano d'ordine senza che niente protesti, e uno
-/// scambio manderebbe al worker il descrittore di lettura come se fosse quello
-/// di scrittura. Qui i due campi hanno un nome.
-///
-/// # Perche' non ha un costruttore aperto
-///
-/// Perche' il nome dice una proprieta' — sono due estremi di due pipe distinte,
-/// nei versi giusti — e una struct che chiunque possa riempire con due interi
-/// direbbe quella proprieta' senza averla. L'unico modo di ottenerne uno e'
-/// [`canale::accerta_coppia`], che quella proprieta' la **guarda**.
-///
-/// Cosi' «rivalidato» non e' una parola nel commento di chi lo costruisce: e'
-/// cio' che il tipo significa, e chi lo riceve non deve chiedersi da dove venga.
+/// I due campi hanno un nome perche' due `i32` si scambiano senza che niente
+/// protesti. Non c'e' costruttore aperto: l'unico modo di ottenerne uno e'
+/// [`canale::accerta_coppia`], che guarda che siano due estremi di due pipe
+/// distinte, nei versi giusti.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NumeriDelCanale {
     legge: i32,
@@ -1125,17 +883,10 @@ struct NumeriDelCanale {
 impl NumeriDelCanale {
     /// I due numeri nella forma che la variabile del canale porta.
     ///
-    /// # Perche' sta qui e non dove serve
-    ///
-    /// Perche' e' la meta' che scrive di cio' che il worker legge, e le due
-    /// meta' devono conoscere **una** forma. Scriverla nel chiamante darebbe
-    /// due grafie della stessa convenzione, e la prima a cambiare romperebbe la
-    /// seconda in silenzio: il worker rifiuterebbe una variabile
-    /// sintatticamente corretta per la sua vecchia regola.
-    ///
-    /// La forma e' quella canonica che il worker pretende — decimale, senza
-    /// segno, senza zeri davanti — e la garantisce `Display` di `i32` su valori
-    /// che sono descrittori validi.
+    /// Sta qui perche' e' la meta' che scrive cio' che il worker legge, e le
+    /// due meta' devono conoscere **una** forma. E' quella canonica che il
+    /// worker pretende (decimale, senza segno, senza zeri davanti), garantita
+    /// da `Display` di `i32` su descrittori validi.
     fn in_variabile(self) -> std::ffi::OsString {
         std::ffi::OsString::from(format!(
             "{}{}{}",
@@ -1147,29 +898,11 @@ impl NumeriDelCanale {
 }
 
 impl DominioPreparato {
-    /// Smonta il token nelle sue due meta': la richiesta e l'evidenza.
-    ///
-    /// Consuma: il preflight prepara **un** dominio e ne avvia **uno** spawner,
-    /// e un token riusabile permetterebbe di avviarne due sullo stesso dominio
-    /// — il secondo dei quali troverebbe la quiescenza gia' rotta dal primo, ma
-    /// solo per caso.
-    ///
-    /// L'evidenza esce di qui perche' il chiamante la tenga: e' l'unico momento
-    /// in cui esiste, e dopo la transizione non c'e' piu' modo di ricostruirla.
-    ///
-    /// # Perche' vuole il canale
-    ///
-    /// Perche' la richiesta porta i numeri dei due estremi del worker, e senza
-    /// il canale non ci sarebbero: una richiesta costruita prima e riempita
-    /// dopo renderebbe rappresentabile una richiesta senza canale. Il tipo
-    /// impedisce di scriverla.
     /// Solo l'evidenza, per il cammino in cui il canale **non si e' aperto**.
     ///
-    /// Non esiste una richiesta con descrittori finti: senza canale non c'e'
-    /// niente da chiedere, e inventarne i numeri renderebbe rappresentabile una
-    /// richiesta che nomina estremi che non esistono. Cio' che serve, li', e'
-    /// l'evidenza — perche' il dominio e' gia' configurato e qualcuno deve
-    /// smontarlo.
+    /// Senza canale non c'e' richiesta da fare, e inventarne i descrittori la
+    /// renderebbe rappresentabile. Serve l'evidenza, perche' il dominio e' gia'
+    /// configurato e qualcuno deve smontarlo.
     fn solo_evidenza(self) -> EvidenzaPreflight {
         EvidenzaPreflight {
             dominio: self.dominio,
@@ -1182,15 +915,17 @@ impl DominioPreparato {
         }
     }
 
-    /// # Il terzo descrittore
+    /// Smonta il token nelle sue due meta': la richiesta e l'evidenza.
     ///
-    /// `artefatto_lettura` e' l'handle del coordinatore sull'artefatto, gia'
-    /// aperto in sola lettura, quando questa transizione avvia un
-    /// **verificatore**: `None` per ogni avvio del worker ordinario, mai un
-    /// valore indovinato. Il numero grezzo — non l'handle — e' cio' che
-    /// attraversa il confine: lo stesso principio dei due estremi del
-    /// canale, che passano come numeri e vengono **rivalidati** dallo
-    /// spawner, mai creduti.
+    /// Consuma: un token riusabile permetterebbe due spawner sullo stesso
+    /// dominio. L'evidenza esce qui perche' dopo la transizione non si
+    /// ricostruisce. Vuole il canale perche' la richiesta ne porta i numeri, e
+    /// una richiesta senza canale non deve essere rappresentabile.
+    ///
+    /// `artefatto_lettura` e' l'handle del coordinatore sull'artefatto, aperto
+    /// in sola lettura, quando si avvia un **verificatore**; `None` per ogni
+    /// worker ordinario. Attraversa il confine il numero grezzo, che lo
+    /// spawner rivalida come i due estremi del canale.
     fn consuma(
         self,
         canale: NumeriDelCanale,
@@ -1221,53 +956,27 @@ impl DominioPreparato {
 
 /// Se il binario che lo spawner sta per rieseguire e' ammissibile.
 ///
-/// # Perche' il chiamante non lo sceglie
+/// Il chiamante non sceglie il binario: un percorso esterno avvierebbe
+/// qualunque programma fuori dal dominio, con un `Child` indistinguibile da
+/// quello di una transizione riuscita. Si riesegue il binario **in
+/// esecuzione**; qui sta la regola, che si prova ovunque, separata dalla
+/// lettura.
 ///
-/// Perche' un percorso che arriva dall'esterno rende falso tutto cio' che il
-/// preflight promette: `/bin/true`, o direttamente il worker, verrebbero
-/// avviati come figli ordinari — **fuori** dal dominio, con l'identita' del
-/// supervisore e senza nessuno dei sette passi — e il chiamante avrebbe in mano
-/// un `Child` indistinguibile da quello di una transizione riuscita.
+/// `percorso` e' il bersaglio di `/proc/self/exe`, cioe' un nome: serve a
+/// nominare e a riconoscere l'immagine rimossa. `regolare` e `proprieta`
+/// descrivono l'**inode in esecuzione**. L'avvio usa `/proc/self/exe`, che il
+/// kernel lega all'immagine del processo: fra giudizio e `exec` non c'e'
+/// risoluzione da rifare, quindi nessuna `rename` si infila nel mezzo.
 ///
-/// Il binario e' quindi quello **in esecuzione**, letto dal kernel e non da un
-/// argomento. Questa funzione decide se quel binario si puo' rieseguire; e' qui,
-/// separata dalla lettura, perche' la regola si prova ovunque mentre la lettura
-/// no.
+/// Le tre condizioni:
 ///
-/// # Si giudica un nome, ma non si esegue un nome
-///
-/// I due argomenti vengono da due posti diversi, e non e' un caso. `percorso` e'
-/// il **bersaglio** di `/proc/self/exe`, cioe' un nome, e serve solo a dire di
-/// che cosa si sta parlando e a riconoscere l'immagine rimossa. `regolare` e
-/// `proprieta` descrivono invece l'**inode in esecuzione**, interrogato
-/// attraverso `/proc/self/exe` e non attraverso quel nome.
-///
-/// La distinzione decide l'esito. Un nome si puo' sostituire fra il momento in
-/// cui lo si guarda e quello in cui lo si esegue — e' una `rename`, ed e'
-/// atomica — e un controllo fatto sul nome direbbe allora una cosa vera su un
-/// file e ne eseguirebbe un altro. Per questo l'avvio non usa il nome: usa
-/// `/proc/self/exe`, che il kernel tiene legato all'immagine di questo
-/// processo. Fra il giudizio e la `exec` non c'e' nessuna finestra perche' non
-/// c'e' nessuna risoluzione da rifare.
-///
-/// # Le tre condizioni, e perche' ciascuna
-///
-/// - **non e' stata rimossa**: su Linux il bersaglio di `/proc/self/exe` porta
-///   il suffisso ` (deleted)` quando il file e' stato rimosso o sostituito
-///   sotto il processo. Eseguire `/proc/self/exe` darebbe comunque l'immagine
-///   giusta — e' proprio cio' che quel collegamento garantisce — quindi il
-///   rifiuto non serve a evitare di eseguire un binario altrui. Serve a non
-///   proseguire quando il control plane in esecuzione e quello su disco sono
-///   due programmi diversi, che e' uno stato che nessuno ha dichiarato;
-/// - **e' un file regolare**: una directory, un socket o un dispositivo non si
-///   eseguono, e trattarli come eseguibili significa non aver guardato;
-/// - **il worker non lo puo' riscrivere**: e' la condizione che conta. Un
-///   binario dello spawner che il worker puo' modificare rende l'intera
-///   separazione di privilegio una formalita', perche' il prossimo avvio
-///   eseguirebbe cio' che il worker ci ha messo dentro. Il giudizio e' lo
-///   stesso, conservativo, che vale sui file della gerarchia, e vale
-///   sull'inode: un `mode` letto dal nome descriverebbe di nuovo un file che
-///   potrebbe non essere questo.
+/// - **non e' stata rimossa** (suffisso ` (deleted)`): l'immagine eseguita
+///   sarebbe comunque giusta, ma control plane in esecuzione e su disco
+///   sarebbero due programmi diversi, uno stato che nessuno ha dichiarato;
+/// - **e' un file regolare**;
+/// - **il worker non la puo' riscrivere**: altrimenti il prossimo avvio
+///   eseguirebbe cio' che il worker ci ha messo. Il giudizio e' quello
+///   conservativo dei file della gerarchia, sull'inode.
 ///
 /// # Errors
 ///
@@ -1329,52 +1038,29 @@ struct TransizioneRiuscita {
 
 /// L'avvio fallito: la causa, e cio' che il preflight ha osservato.
 ///
-/// # Perche' l'evidenza sta anche qui
+/// Porta l'evidenza perche' il dominio e' **gia' configurato** e resta li':
+/// chi lo smonta deve sapere quale sia. Nel caso riuscito l'evidenza serve al
+/// rapporto, qui alla pulizia.
 ///
-/// Perche' quando l'avvio fallisce il dominio e' **gia' configurato**: il
-/// preflight ha scritto e riletto i quattro controlli su una gerarchia vera, e
-/// quel dominio resta li'. Chi deve smontarlo ha bisogno di sapere quale sia, e
-/// un errore che dicesse solo «non e' partito» lascerebbe dietro di se' un
-/// cgroup con un tetto, un sigillo e nessuno che lo rimuova.
-///
-/// E' l'esatto contrario del caso riuscito, dove l'evidenza serve al rapporto:
-/// qui serve alla pulizia. Sono due usi diversi della stessa osservazione, e
-/// nessuno dei due sopravvive se l'evidenza vive in un ramo solo.
-///
-/// # Perche' non c'e' una conversione verso `PlenoraError`
-///
-/// Perche' esisterebbe per essere usata con `?`, e ogni `?` su questo tipo
-/// butterebbe via l'evidenza in silenzio — cioe' rifarebbe esattamente il
-/// difetto che questo tipo esiste per chiudere. Chi vuole l'errore lo prende
-/// da `causa`, e in quel momento ha l'evidenza in mano.
+/// Non c'e' conversione verso `PlenoraError`: ogni `?` butterebbe via
+/// l'evidenza in silenzio. Chi vuole l'errore lo prende da `causa`.
 #[derive(Debug)]
 struct TransizioneFallita {
     causa: PlenoraError,
     evidenza: EvidenzaPreflight,
     /// Che cosa va storto **mentre si chiude**, se qualcosa.
     ///
-    /// # Perche' accanto alla causa e non al suo posto
-    ///
-    /// Perche' sono due fatti diversi e servono a due persone diverse. La causa
-    /// dice perche' la transizione non e' avvenuta; il difetto di pulizia dice
-    /// che cosa e' rimasto in giro. Sostituire il primo col secondo — o
-    /// tenerne uno solo — vorrebbe dire scegliere per chi legge quale dei due
-    /// gli interessa, e la risposta e' entrambi: il primo per capire, il
-    /// secondo per rimediare.
-    ///
-    /// `None` quando la chiusura e' andata: non e' l'assenza di informazione,
-    /// e' l'informazione che non c'e' niente da rimediare.
+    /// Sta accanto alla causa, non al suo posto: la causa serve a capire, il
+    /// difetto di pulizia a rimediare. `None` dice che non c'e' niente da
+    /// rimediare.
     difetto_di_pulizia: Option<String>,
 }
 
 /// Un tentativo che non e' riuscito: perche', e che cosa resta.
 ///
-/// # Perche' due campi e non uno
-///
-/// Perche' un fallimento **dopo** lo `spawn` ha due facce: la ragione per cui
-/// la transizione non avviene, e l'esito della chiusura del figlio che a quel
-/// punto esiste gia'. Comprimerle in un errore solo obbligherebbe a sceglierne
-/// una, e la scelta sarebbe sbagliata in entrambi i versi.
+/// Un fallimento **dopo** lo `spawn` ha due facce: la ragione per cui la
+/// transizione non avviene, e l'esito della chiusura del figlio che esiste
+/// gia'. Nessuna delle due si puo' sacrificare.
 #[derive(Debug)]
 struct TentativoFallito {
     causa: PlenoraError,
@@ -1400,31 +1086,16 @@ impl From<PlenoraError> for Box<TentativoFallito> {
 
 /// I due esiti dell'avvio, costruiti dallo stesso posto.
 ///
-/// # Perche' e' una funzione a se', e sta qui
-///
-/// Perche' e' l'unica parte dell'avvio che non tocca ne' il filesystem ne' un
-/// processo: prende cio' che il tentativo ha reso e cio' che il preflight ha
-/// osservato, e li mette insieme. Separarla rende il ramo fallito **provabile
-/// senza ambiente** — un caso deterministico le passa un errore e guarda che
-/// l'evidenza esca intera — e sta nell'orchestrazione, non nello spawner,
-/// perche' non ha niente di Linux e i casi che la esercitano girano ovunque.
-///
-/// Che il ramo fallito si raggiunga in un caso non vuol dire che si possa
-/// raggiungere saltando i controlli: quelli stanno in `tenta`, che questa
-/// funzione non chiama e che nessun parametro sostituisce.
-///
-/// # Perche' e' generica sull'esito riuscito
-///
-/// Perche' non lo guarda. La sua regola e' come si compone un fallimento, e
-/// vale uguale qualunque cosa il tentativo renda: il parametro lo dice, e
-/// impedisce a questa funzione di cominciare un domani a toccare il figlio.
+/// Non tocca ne' filesystem ne' processi: il ramo fallito si prova ovunque,
+/// senza ambiente. I controlli stanno in `tenta`, che questa funzione non
+/// chiama e che nessun parametro sostituisce. E' generica sull'esito riuscito
+/// perche' non lo guarda.
 ///
 /// # Errors
 ///
-/// [`TransizioneFallita`], che porta la causa **e** l'evidenza. E' in un `Box`
-/// perche' porta tutto cio' che il preflight ha osservato — percorsi, montaggio,
-/// namespace — ed e' quindi molto piu' grande dell'esito riuscito: senza,
-/// **ogni** chiamata pagherebbe in pila la dimensione del ramo raro.
+/// [`TransizioneFallita`], che porta la causa **e** l'evidenza. Sta in un
+/// `Box` perche' e' molto piu' grande dell'esito riuscito, che altrimenti
+/// pagherebbe in pila la dimensione del ramo raro.
 fn esito<T>(
     tentativo: std::result::Result<T, Box<TentativoFallito>>,
     evidenza: EvidenzaPreflight,
@@ -1441,14 +1112,9 @@ fn esito<T>(
 
 /// Cio' che lo spawner ha **rivalidato da se'**.
 ///
-/// Non e' [`DominioPreparato`] letto da un argomento: e' il risultato di aver
-/// riguardato tutto — percorsi, montaggio, permessi, namespace e i quattro
-/// controlli — dentro il processo che poi eseguira'. La richiesta dice su che
-/// cosa guardare; questo tipo dice che si e' guardato.
-///
-/// Niente `Clone`: si consuma nel momento in cui lo spawner entra nel dominio,
-/// e averne due copie vorrebbe dire poter entrare due volte in cio' che e'
-/// stato verificato una volta sola.
+/// E' il risultato di aver riguardato percorsi, montaggio, permessi,
+/// namespace e i quattro controlli dentro il processo che poi eseguira'.
+/// Niente `Clone`: si consuma entrando nel dominio, una volta sola.
 #[derive(Debug, PartialEq, Eq)]
 struct DominioRivalidato {
     dominio: PathBuf,
@@ -1460,27 +1126,11 @@ struct DominioRivalidato {
 
 /// Rivalida il dominio dentro lo spawner, senza scrivere niente.
 ///
-/// # Perche' rilegge invece di fidarsi
-///
-/// Perche' fra il preflight del supervisore e questo momento e' passato uno
-/// `spawn`, e in quel tempo la gerarchia puo' essere cambiata: qualcuno puo'
-/// aver riscritto un controllo, cambiato i permessi, spostato un mount. Un
-/// programma che eseguisse sulla parola del proprio chiamante non
-/// aggiungerebbe nessuna garanzia a quelle del chiamante.
-///
-/// # Perche' non riscrive
-///
-/// Perche' il limite deve essere **gia'** in vigore quando lo spawner nasce
-/// (`F4-1`, `GA-7`): scriverlo qui significherebbe che fra la nascita del
-/// processo e l'applicazione del tetto c'e' una finestra. Il supervisore
-/// scrive, lo spawner controlla. Spostare le scritture qui cambierebbe la
-/// macchina a stati, ed e' una decisione che non si prende di straforo.
-///
-/// # I namespace si confrontano col **padre**
-///
-/// Non con un valore che arriva dalla richiesta, che sarebbe di nuovo fidarsi:
-/// col processo che ci ha generato, letto da `/proc`. Se differiscono, fra lo
-/// `spawn` e questo momento qualcuno ha fatto una `unshare`.
+/// Rilegge perche' fra preflight e `spawn` la gerarchia puo' essere cambiata.
+/// Non riscrive perche' il limite deve essere **gia'** in vigore quando lo
+/// spawner nasce (`F4-1`, `GA-7`): il supervisore scrive, lo spawner
+/// controlla. I namespace si confrontano col **padre**, letto da `/proc`, non
+/// con un valore della richiesta.
 ///
 /// # Errors
 ///
@@ -1544,14 +1194,9 @@ fn rivalida<S: SuperficieDominio>(
 
 /// Che cosa il confine ha deciso di questo processo.
 ///
-/// # Perche' tre e non due
-///
-/// Perche' un `Option<PlenoraError>` ne sa dire soltanto due — «non e' la mia
-/// modalita'» e «e' la mia, ed e' fallita» — e il worker ha un terzo esito:
-/// esegue l'incarico, dichiara com'e' andata, e ha finito. Rappresentarlo come
-/// `None` lo confonderebbe con «non e' la mia modalita'», e il processo
-/// proseguirebbe fino al parser della CLI, che gli risponderebbe «comando
-/// sconosciuto» **dopo** un'esecuzione riuscita.
+/// Tre esiti e non due: il worker esegue, dichiara com'e' andata e ha finito.
+/// Con un `Option` quel caso si confonderebbe con «non e' la mia modalita'»,
+/// e il processo arriverebbe al parser della CLI dopo un'esecuzione riuscita.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub enum DalConfine {
@@ -1569,17 +1214,13 @@ pub enum DalConfine {
 
 /// L'ingresso dello spawner, quando la riga di comando dice che lo e'.
 ///
-/// # Perche' il riconoscimento sta qui e non nel chiamante
-///
-/// Perche' il chiamante non deve conoscere la stringa. Se la conoscesse, la
-/// scriverebbe: due copie di una versione sono due versioni che possono
-/// divergere, e il giorno che una cambia il programma si riconoscerebbe
-/// spawner secondo una e non secondo l'altra.
+/// Il riconoscimento sta qui perche' il chiamante non deve conoscere la
+/// stringa della versione.
 ///
 /// # Errors
 ///
-/// `Some` col motivo se questo processo e' uno spawner e la sequenza non
-/// regge; `None` se non lo e'.
+/// [`DalConfine::Fallita`] col motivo se questo processo e' uno spawner e la
+/// sequenza non regge; [`DalConfine::AltroComando`] se non lo e'.
 #[cfg(target_os = "linux")]
 pub(crate) fn dal_confine_se_spawner(argomenti: &[std::ffi::OsString]) -> DalConfine {
     match riconosci_modalita(argomenti.get(1), PREFISSO_RISERVATO, VERSIONE_RICHIESTA) {
@@ -1602,28 +1243,10 @@ pub(crate) fn dal_confine_se_spawner(argomenti: &[std::ffi::OsString]) -> DalCon
 
 /// Se questo processo e' un **worker**, lo porta fin dove il worker arriva.
 ///
-/// # Dove va chiamata, e perche' subito dopo lo spawner
-///
-/// Nello stesso punto del dispatch dello spawner, e subito dopo: sono due
-/// modalita' dello stesso eseguibile, e il primo argomento ne sceglie una. Un
-/// processo che arriva qui e' gia' stato scartato dallo spawner, quindi
-/// l'ordine fra i due non cambia niente — ma **l'ordine rispetto al parser
-/// della CLI si'**: entrambe devono venire prima, o una riga del namespace
-/// riservato finirebbe nel parser degli argomenti e si sentirebbe rispondere
-/// «comando sconosciuto».
-///
-/// # Che cosa rende
-///
-/// `None` se `argv[1]` non e' del namespace del worker: il chiamante prosegue.
-///
-/// `Some(errore)` sempre, quando la riga e' del namespace del worker. Oggi non
-/// esiste un caso riuscito: il worker accerta i propri estremi e poi **rifiuta
-/// dichiarando** che l'accordo con il supervisore non c'e' ancora.
-///
-/// La firma resta un `Option` perche' il caso «non e' un worker» c'e' e vale
-/// `None`, e perche' quando l'accordo arrivera' il caso riuscito non tornera'
-/// affatto — il worker fara' il proprio lavoro e il processo uscira'. Fino ad
-/// allora questa nota dice cio' che accade, non cio' che accadra'.
+/// Va chiamata nello stesso punto del dispatch dello spawner, e comunque
+/// prima del parser della CLI: altrimenti una riga del namespace riservato
+/// riceverebbe «comando sconosciuto». Rende [`DalConfine::AltroComando`] se
+/// `argv[1]` non e' del namespace del worker.
 ///
 /// # Errors
 ///
@@ -1646,11 +1269,9 @@ pub(crate) fn dal_confine_se_worker(argomenti: &[std::ffi::OsString]) -> DalConf
 
 /// Se questo processo e' un **verificatore**, lo porta fin dove arriva.
 ///
-/// Stessa disciplina di [`dal_confine_se_worker`], sullo stesso namespace
-/// riservato distinto ([`PREFISSO_VERIFICATORE`]): un `argv[1]` che comincia
-/// cosi' dichiara «questo processo rilegge un artefatto», mai «questo
-/// processo esegue un piano» — le due autorita' restano visibili gia' dal
-/// dispatch, non solo dal codice che segue.
+/// Stessa disciplina di [`dal_confine_se_worker`], su un namespace riservato
+/// distinto ([`PREFISSO_VERIFICATORE`]): le due autorita' («rilegge un
+/// artefatto», «esegue un piano») restano visibili gia' dal dispatch.
 ///
 /// # Errors
 ///
@@ -1677,21 +1298,11 @@ pub(crate) fn dal_confine_se_verificatore(argomenti: &[std::ffi::OsString]) -> D
 
 /// Se il dominio e' popolato, secondo `cgroup.events`.
 ///
-/// # Perche' non basta trovare il campo
-///
-/// Il file ha una forma semplice — `chiave valore`, una coppia per riga — e
-/// proprio per questo un parser indulgente ci passa sopra senza accorgersi di
-/// niente. Le forme ambigue vanno rifiutate tutte, perche' nessuna ha una
-/// lettura ovvia e sceglierne una significa **inventare** il valore su cui poi
-/// si decide se partire:
-///
-/// - **assente**: senza il segnale la barriera di quiescenza non e'
-///   implementabile;
-/// - **duplicato**: due righe, due valori possibili. Prendere la prima o
-///   l'ultima e' una convenzione che nessuno ha dichiarato, e su un file di
-///   kernel una duplicazione dice che quel file non e' quello che crediamo;
-/// - **non numerico** o **fuori da `{0, 1}`**: il campo e' un booleano, e un
-///   terzo valore significa che il formato e' cambiato sotto di noi.
+/// Le forme ambigue si rifiutano tutte, perche' sceglierne una lettura
+/// inventerebbe il valore su cui si decide se partire: campo **assente**
+/// (senza segnale la barriera di quiescenza non si implementa),
+/// **duplicato**, **non numerico** o **fuori da `{0, 1}`** (il formato e'
+/// cambiato sotto di noi).
 ///
 /// # Errors
 ///

@@ -1,12 +1,8 @@
 //! La catena streaming: batch dentro, batch fuori, senza materializzare.
 //!
-//! E' il percorso normale. Ogni kernel 1:1 riceve un batch e ne produce uno,
-//! e la catena si compone come una pipeline di iteratori pigri: nessun nodo
-//! trattiene piu' di un batch alla volta, e la memoria non cresce con la
-//! dimensione dell'input.
-//!
-//! Quando un nodo della catena e' blocking, la catena si interrompe li': il
-//! percorso bloccante e' in [`super::blocking`].
+//! Ogni kernel 1:1 riceve un batch e ne produce uno, come una pipeline di
+//! iteratori pigri: la memoria non cresce con l'input. Un nodo blocking
+//! interrompe la catena ([`super::blocking`]).
 
 use crate::geo_transport::pair::preflight_decoded_bytes;
 use crate::geo_transport::transport::{one_to_one_batch_prepared, TransformArrowSchema};
@@ -50,17 +46,14 @@ use super::{
     step_error, try_run_fused_group,
 };
 
-/// Catena streaming (segmenti lineari senza code): il batch attraversa i kernel in sequenza senza
+/// Catena streaming: il batch attraversa i kernel in sequenza senza
 /// materializzazione; limiti per arco ed espansione dopo ogni kernel.
 ///
-/// Confine architettura.md#memoria e #determinismo: il wrapper si spacca in ingresso (i kernel
-/// restano su `RecordBatch` puro) e si ricompone in uscita — lease NUOVO
-/// sui byte dell'output, acquisito PRIMA di rilasciare quello di input (mai
-/// sotto-conteggio al confine: il picco reale del kernel e' input+output),
-/// e sequenza propagata 1:1. Ogni kernel streaming della v1 e'
-/// batch-in/batch-out — anche le espansioni 1:N per batch come
-/// `geo.subdivide` — quindi la propagazione 1:1 e' esatta a granularita' di
-/// batch.
+/// Confine architettura.md#memoria e #determinismo: il lease NUOVO
+/// dell'output e' acquisito PRIMA di rilasciare quello di input (il picco
+/// reale del kernel e' input+output), e la sequenza si propaga 1:1, esatta
+/// perche' ogni kernel streaming e' batch-in/batch-out, espansioni 1:N come
+/// `geo.subdivide` comprese.
 pub(super) fn run_streaming_chain(
     plan: &Rc<ExecutionPlan>,
     segment_index: usize,
@@ -173,21 +166,11 @@ pub(super) fn run_streaming_chain(
         drop(input_lease);
         return Ok(GovernedBatch::new(batch, None, seq));
     }
-    // Ricomposizione: quota dell'output acquisita prima di rilasciare
-    // l'input (mai sotto-conteggio al confine, architettura.md#memoria).
-    //
-    // Se il chiamante ha gia' un permesso, l'output si RITAGLIA da quello:
-    // la quota e' gia' sua, e riprenotarla aprirebbe la finestra che il
-    // permesso esiste per chiudere. Il permesso e' un maggiorante
-    // (`max_batch_bytes`, che il wrapper d'uscita applica a ogni batch di
-    // output), quindi il ritaglio riesce per ogni output che il piano
-    // potrebbe pubblicare.
-    //
-    // **Nessun ripiego su una nuova prenotazione.** Un ritaglio fallito
-    // significa che il maggiorante e' sbagliato, cioe' un'invariante nostra
-    // rotta: rilasciare e riprenotare la nasconderebbe e reintrodurrebbe
-    // proprio la finestra che il permesso esiste per chiudere. Si propaga
-    // l'errore.
+    // Quota dell'output acquisita prima di rilasciare l'input
+    // (architettura.md#memoria). Con un permesso l'output si RITAGLIA da
+    // quello, che e' un maggiorante (`max_batch_bytes`); un ritaglio fallito
+    // e' un'invariante rotta e si propaga, senza ripiegare su una nuova
+    // prenotazione che riaprirebbe la finestra chiusa dal permesso.
     let output_lease = match permesso {
         Some(permesso) => permesso.ritaglia(bytes_at_boundary)?,
         None => state

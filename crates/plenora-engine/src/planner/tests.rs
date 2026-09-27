@@ -346,8 +346,8 @@ fn row_diagnostics_keep_observable_provenance_through_schema_only_nodes() {
 
 #[test]
 fn contract_canonical_serializes_dimensions_as_icd_strings() {
-    // Il fingerprint dei contratti Xy non cambia — "dimensions" resta
-    // la stringa "xy" prodotta anche dalla serializzazione precedente.
+    // Il fingerprint dei contratti Xy e' stabile: "dimensions" resta la
+    // stringa "xy".
     let canonical = contract_canonical(&geo_contract(0));
     assert_eq!(canonical["geometries"][0]["dimensions"], json!("xy"));
 
@@ -368,8 +368,8 @@ fn contract_canonical_serializes_dimensions_as_icd_strings() {
 
 #[test]
 fn contract_canonical_omits_encoding_unless_declared() {
-    // Un contratto Xy senza encoding produce ESATTAMENTE lo stesso
-    // JSON di prima (chiave assente, non null) — fingerprint invariato.
+    // Un contratto Xy senza encoding non ha la chiave (assente, non null):
+    // fingerprint invariato.
     let without = contract_canonical(&geo_contract(0));
     let geometry = &without["geometries"][0];
     assert!(geometry.get("encoding").is_none());
@@ -1515,15 +1515,12 @@ fn input_geometry_names_are_not_bound_in_the_field_allocator() {
 const CATALOG_SNAPSHOT_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/tests/catalog_snapshot.snap");
 
-/// Contenuto canonico dello snapshot: i descrittori di TUTTE le op del
-/// catalogo in ordine stabile (per id, lo stesso ordine che
-/// [`catalog_fingerprint`] richiede al chiamante), JSON pretty-printed
-/// a chiavi ordinate per un diff leggibile in review.
+/// Contenuto canonico dello snapshot: i descrittori di tutte le op del
+/// catalogo, per id, in JSON pretty-printed a chiavi ordinate.
 ///
-/// La forma e' un SUPERINSIEME di [`descriptor_canonical`]: architettura.md#geometrie D12.2
-/// (decisione deliberata) tiene `geo_fusion` FUORI dal fingerprint
-/// (capability fisica, non semantica) ma DENTRO lo snapshot — ogni cambio di
-/// fondibilita' resta un diff esplicito in PR.
+/// E' un superinsieme di [`descriptor_canonical`]: `geo_fusion` e' fuori dal
+/// fingerprint ma dentro lo snapshot (architettura.md#geometrie D12.2), cosi'
+/// ogni cambio di fondibilita' resta un diff esplicito.
 fn catalog_snapshot_content() -> String {
     let mut descriptors: Vec<&OperationDescriptor> = CATALOG.iter().collect();
     descriptors.sort_by(|left, right| left.id.cmp(right.id));
@@ -1549,9 +1546,7 @@ fn catalog_snapshot_content() -> String {
 /// Snapshot test del catalogo (piano-v5.md#identita-e-fingerprint): il catalogo reale deve coincidere
 /// con lo snapshot committato `crates/plenora-engine/tests/catalog_snapshot.snap`.
 ///
-/// Qualunque PR che cambi un descrittore (campi, versioni per-componente,
-/// vincoli di espansione, maturity, ...) mostra il diff dello snapshot in
-/// review; un cambiamento NON intenzionale fallisce qui.
+/// Un cambiamento non intenzionale di un descrittore fallisce qui.
 ///
 /// Rigenerazione dopo un cambiamento intenzionale del catalogo:
 ///
@@ -1664,9 +1659,8 @@ fn il_plan_hash_e_separato_per_dominio_e_invalida_gli_hash_di_prima() {
     .expect("piano valido");
     let canonico = serde_json::to_vec(&graph.plan().canonical_json()).expect("canonico");
 
-    // Senza dominio la regola sarebbe SHA256(canonical_json). Se il
-    // `plan_hash` coincidesse con quella, un consumatore che ha in cache un
-    // hash prodotto prima della v5 potrebbe ritrovarselo valido.
+    // Senza dominio la regola sarebbe SHA256(canonical_json): il `plan_hash`
+    // non deve coincidere con quella.
     let senza_dominio = esadecimale(Sha256::digest(&canonico).into());
     assert_ne!(graph.plan_hash().to_hex(), senza_dominio);
 

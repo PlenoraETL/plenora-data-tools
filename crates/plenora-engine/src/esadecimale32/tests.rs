@@ -1,13 +1,8 @@
 //! Prove della rappresentazione condivisa.
 //!
-//! Qui sta la **conformita' di forma**: cosa si accetta, cosa si rifiuta, e
-//! che nessun rifiuto copi il testo che lo ha causato. Vale per entrambi i
-//! wrapper perche' e' l'unico codice che entrambi eseguono.
-//!
-//! Restano nei due wrapper, e non qui, gli oracoli su cio' che li distingue:
-//! la politica di visualizzazione e la traduzione del difetto nel proprio
-//! errore. Metterli qui li avrebbe uniti, che e' esattamente la cosa che il
-//! tipo separato esiste per impedire.
+//! Qui sta la conformita' di forma (accettazione, rifiuti, nessun rifiuto che
+//! copi il testo), comune ai due wrapper. Gli oracoli su cio' che li
+//! distingue restano nei wrapper.
 
 use serde::de::Visitor as _;
 
@@ -56,14 +51,9 @@ fn lo_stesso_testo_da_lo_stesso_valore_e_la_stessa_forma() {
 
 /// I trentadue byte sono **quelli attesi**, contro un vettore noto.
 ///
-/// Confrontare due risultati dello stesso percorso e poi la forma ricostruita
-/// prova la coerenza interna, non la correttezza: una trasformazione sbagliata
-/// ma coerente — i byte scambiati a coppie, per dire — supererebbe entrambi i
-/// confronti e renderebbe pure la stessa stringa. Qui si guardano i byte, che
-/// e' possibile perche' il modulo di prova e' figlio di quello che li tiene.
-///
-/// Sorveglia anche `Ord` e `Hash`, che ordinano e dispongono **per byte**: una
-/// permutazione interna li cambierebbe senza cambiare nulla di visibile.
+/// Un confronto fra due risultati dello stesso percorso proverebbe solo la
+/// coerenza: una permutazione dei byte la supera. Sorveglia anche `Ord` e
+/// `Hash`, che lavorano per byte.
 #[test]
 fn i_byte_sono_quelli_del_vettore_noto() {
     // 00 01 02 … 1f: ogni byte diverso e in ordine, cosi' una permutazione si
