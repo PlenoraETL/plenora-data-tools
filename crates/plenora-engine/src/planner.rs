@@ -205,7 +205,7 @@ macro_rules! impl_hash_newtype {
             /// Rappresentazione esadecimale minuscola.
             #[must_use]
             pub fn to_hex(&self) -> String {
-                self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+                plenora_core::esadecimale::esadecimale(&self.0)
             }
         }
 

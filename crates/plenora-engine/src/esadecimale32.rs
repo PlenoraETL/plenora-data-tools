@@ -104,13 +104,7 @@ impl Esadecimale32 {
 
     /// La forma canonica: [`CARATTERI`] caratteri esadecimali minuscoli.
     pub fn in_esadecimale(&self) -> String {
-        const CIFRE: &[u8; 16] = b"0123456789abcdef";
-        let mut fuori = String::with_capacity(CARATTERI);
-        for grezzo in self.byte {
-            fuori.push(char::from(CIFRE[usize::from(grezzo >> 4)]));
-            fuori.push(char::from(CIFRE[usize::from(grezzo & 0x0F)]));
-        }
-        fuori
+        plenora_core::esadecimale::esadecimale(&self.byte)
     }
 
     /// Emette la forma canonica.

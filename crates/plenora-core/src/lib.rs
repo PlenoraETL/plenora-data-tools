@@ -19,6 +19,7 @@ pub mod contract;
 pub mod crs;
 pub mod diagnostics;
 pub mod error;
+pub mod esadecimale;
 pub mod json;
 pub mod limits;
 

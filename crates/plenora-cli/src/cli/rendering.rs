@@ -9,22 +9,9 @@
 use plenora_core::catalog::{OperationDescriptor, CATALOG};
 use plenora_core::contract::{ContractCrs, DataContract};
 
-/// Digest esadecimale minuscolo, senza primitive di panic (gate R6).
-///
-/// La formattazione su `String` non puo' fallire, ma `write!` restituisce
-/// comunque un `Result` che andrebbe scartato con `expect`. La tabella dei
-/// nibble e' indicizzata da un valore provabilmente in `0..16` (shift e
-/// maschera su `u8`): esatta per costruzione, nessun `Result` da gestire.
+/// Digest esadecimale minuscolo.
 pub fn hex_digest(digest: &[u8; 32]) -> String {
-    const NIBBLE: [char; 16] = [
-        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
-    ];
-    let mut output = String::with_capacity(64);
-    for &byte in digest {
-        output.push(NIBBLE[usize::from(byte >> 4)]);
-        output.push(NIBBLE[usize::from(byte & 0x0f)]);
-    }
-    output
+    plenora_core::esadecimale::esadecimale(digest)
 }
 
 pub fn descriptor_json(descriptor: &OperationDescriptor) -> serde_json::Value {
