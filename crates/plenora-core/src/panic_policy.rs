@@ -93,20 +93,50 @@ pub fn riga_sanitizzata(info: &PanicHookInfo<'_>) -> String {
     )
 }
 
-/// Descrizione della FORMA del payload di un panico.
+/// La FORMA del payload di un panico, senza il contenuto.
 ///
 /// Distingue i tre casi che `std` puo' produrre senza leggere il contenuto di
-/// nessuno di essi. E' la stessa nozione usata dalle barriere del trasporto e
-/// della CLI: qui vive la versione condivisa.
+/// nessuno di essi. E' la nozione unica usata dalle barriere del trasporto,
+/// della CLI e dell'isolamento: chi la traduce (sul filo, nel dominio) fa un
+/// `match` esaustivo su questo enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormaPayload {
+    /// `panic!("letterale")`: un `&'static str`.
+    Statico,
+    /// `panic!("{}", valore)`: una `String`.
+    Dinamico,
+    /// `std::panic::panic_any` con un altro tipo.
+    NonTestuale,
+}
+
+impl FormaPayload {
+    /// La forma di un payload, letta dal tipo e mai dal contenuto.
+    #[must_use]
+    pub fn di(payload: &(dyn std::any::Any + Send)) -> Self {
+        if payload.is::<&'static str>() {
+            Self::Statico
+        } else if payload.is::<String>() {
+            Self::Dinamico
+        } else {
+            Self::NonTestuale
+        }
+    }
+
+    /// Il testo pubblico della forma.
+    #[must_use]
+    pub const fn descrizione(self) -> &'static str {
+        match self {
+            Self::Statico => "payload statico (contenuto non pubblicato)",
+            Self::Dinamico => "payload dinamico (contenuto non pubblicato)",
+            Self::NonTestuale => "payload non testuale",
+        }
+    }
+}
+
+/// Descrizione della FORMA del payload di un panico ([`FormaPayload`]).
 #[must_use]
 pub fn forma_payload(payload: &(dyn std::any::Any + Send)) -> &'static str {
-    if payload.is::<&'static str>() {
-        "payload statico (contenuto non pubblicato)"
-    } else if payload.is::<String>() {
-        "payload dinamico (contenuto non pubblicato)"
-    } else {
-        "payload non testuale"
-    }
+    FormaPayload::di(payload).descrizione()
 }
 
 std::thread_local! {

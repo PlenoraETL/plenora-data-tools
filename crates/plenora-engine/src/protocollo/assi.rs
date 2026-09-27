@@ -106,25 +106,17 @@ fn dichiarabile_dal_rifiuto(errore: &PlenoraError, rifiuto: &PlenoraError) -> Er
 
 /// La forma di un payload di panico, dal dominio al filo.
 ///
-/// L'autorita' della classificazione e' `plenora_core::panic_policy::forma_payload`:
-/// invece di riscriverla con tre `is::<T>()`, si confronta cio' che dice del
-/// payload vero con cio' che dice di un rappresentante di ciascuna forma, come
-/// fa `isolamento::macchina` nel verso opposto.
-///
-/// Esce solo **una variante di un enum chiuso**, senza byte del
-/// payload.
+/// L'autorita' della classificazione e' `plenora_core::panic_policy::FormaPayload`;
+/// qui la si traduce con un `match` esaustivo. Esce solo **una variante di un
+/// enum chiuso**, senza byte del payload.
 #[must_use]
 pub fn forma_sul_filo(payload: &(dyn std::any::Any + Send)) -> FormaPanicSulFilo {
-    use plenora_core::panic_policy::forma_payload;
+    use plenora_core::panic_policy::FormaPayload;
 
-    let letta = forma_payload(payload);
-    let statico: &'static str = "";
-    if letta == forma_payload(&statico) {
-        FormaPanicSulFilo::Statico
-    } else if letta == forma_payload(&String::new()) {
-        FormaPanicSulFilo::Dinamico
-    } else {
-        FormaPanicSulFilo::NonTestuale
+    match FormaPayload::di(payload) {
+        FormaPayload::Statico => FormaPanicSulFilo::Statico,
+        FormaPayload::Dinamico => FormaPanicSulFilo::Dinamico,
+        FormaPayload::NonTestuale => FormaPanicSulFilo::NonTestuale,
     }
 }
 
