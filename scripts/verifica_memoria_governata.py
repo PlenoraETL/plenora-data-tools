@@ -11,6 +11,17 @@ Questo script non conta le righe, che cambiano al primo refactor: verifica che
 ogni sito descritto esista ancora **nella forma in cui e' descritto**, e che i
 pattern che sono stati eliminati non riappaiano. Esce 1 al primo scostamento.
 
+Tiene solo cio' che un test non fissa: l'ordine fra allocazione e prenotazione
+dei siti che il documento dichiara «dopo», e i pattern eliminati
+dell'esecutore. I comportamenti del governor e della consegna li fissano i test
+di `governor.rs` (permesso, ritaglio, collisione di id, nascita mancante, eta'
+del lease piu' vecchio, snapshot, contatori esauriti, `verifica_salute`) e di
+`executor/tests.rs` (`iterator_pubblico_intercetta_la_contabilita_corrotta`,
+`iterator_corrotto_a_meta_stream_emette_una_sola_volta`,
+`metriche_parziali_dichiarano_la_contabilita_corrotta`,
+`collect_batches_e_publish_restano_protetti`): un'ancora testuale li
+duplicherebbe, e un test verifica che cosa succede, non come e' scritto.
+
     python scripts/verifica_memoria_governata.py
 """
 import io
@@ -26,7 +37,6 @@ GEO = 'crates/plenora-engine/src/executor/geo.rs'
 BLOCKING = 'crates/plenora-engine/src/executor/blocking.rs'
 FUSIONE = 'crates/plenora-engine/src/executor/fusion.rs'
 STREAMING = 'crates/plenora-engine/src/executor/streaming.rs'
-GOVERNOR = 'crates/plenora-engine/src/governor.rs'
 
 # (file, frammento, che cosa dimostra la sua presenza)
 ANCORE = [
@@ -57,33 +67,6 @@ ANCORE = [
     (STAGING,
      'match replay.reader.next()',
      'replay dello staging: la decodifica precede la ri-riserva'),
-    (GOVERNOR,
-     'pub fn permesso(&self, bytes: u64, owner: &str) -> Result<Option<MemoryPermit>>',
-     'il permesso atomico esiste, ed e\' il primitivo'),
-    (GOVERNOR,
-     'stato: Mutex<Contabilita>',
-     'la contabilita\' sta sotto un lock unico: snapshot linearizzabile'),
-    (GOVERNOR,
-     'births.values().min().map(Instant::elapsed)',
-     'il lease piu\' vecchio si sceglie per istante minimo, non per id'),
-    (GOVERNOR,
-     'pub fn ritaglia(self, bytes: u64) -> Result<MemoryLease>',
-     'il ritaglio e\' fallibile: nessun ripiego su una nuova prenotazione'),
-    (GOVERNOR,
-     'pub fn in_lease(self) -> Result<MemoryLease>',
-     'nessuna trasformazione del permesso riesce su governor corrotto'),
-    (GOVERNOR,
-     'pub fn verifica_salute(&self, owner: &str) -> Result<()>',
-     'il cancello prima di dichiarare conclusa un\'esecuzione'),
-    (GOVERNOR,
-     'if stato.births.contains_key(&id)',
-     'la collisione di id si verifica PRIMA di mutare: mai prenotazioni parziali'),
-    (GOVERNOR,
-     'if stato.births.remove(&self.id).is_none()',
-     'una nascita mancante al rilascio marca la contabilita\''),
-    (USCITA,
-     'self.state.governor.verifica_salute("output")?;',
-     'la consegna dell\'output passa dal controllo di salute'),
     (STREAMING,
      'permesso.ritaglia(bytes_at_boundary)?',
      'l\'uscita si ritaglia, e un ritaglio fallito propaga invece di ripiegare'),
@@ -94,12 +77,6 @@ ANCORE = [
      'Il terminale riporta ora anche un heartbeat fermo da oltre la '
      'tolleranza, che renderebbe la directory raccoglibile mentre lo '
      'stream si chiude dichiarando successo'),
-    (USCITA,
-     'if self.esaurito {',
-     'lo stato terminale impedisce di ripetere l\'errore a ogni chiamata'),
-    (GOVERNOR,
-     'pub accounting_corrupted: bool',
-     'la corruzione e\' visibile nelle metriche parziali, che sono pubbliche'),
 ]
 
 # Frammenti che NON devono ricomparire: sono i pattern che questo blocco ha
@@ -111,16 +88,6 @@ VIETATI = [
     (ESECUTORE,
      'accepted.trattenuti()',
      'il contatore locale dei byte trattenuti e\' stato eliminato'),
-    (GOVERNOR,
-     'births.values().next()',
-     'sceglieva il lease per id minore invece che per istante minimo: '
-     'sotto concorrenza l\'id e\' assegnato prima della lettura dell\'orologio'),
-    (GOVERNOR,
-     'live_leases.fetch_add',
-     'incremento non controllato del contatore dei lease vivi'),
-    (GOVERNOR,
-     'next_lease_id.fetch_add',
-     'incremento non controllato del generatore di id'),
     (ESECUTORE,
      'Some(lease) => lease,',
      'era il ripiego da ritaglio fallito a nuova reserve: riapriva il TOCTOU '
