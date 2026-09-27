@@ -1053,108 +1053,48 @@ troncamento esiste anche perché quella scelta resti rivedibile.
 
 **La regola.** Ogni frame del protocollo supervisore/worker è un prefisso di
 lunghezza `u32` big-endian seguito da JSON UTF-8 compatto. Nessun tetto è
-configurabile e nessuno viaggia come valore modificabile: un protocollo
-interno con limiti negoziabili è un protocollo con una superficie d'attacco
-negoziabile.
+configurabile né viaggia come valore modificabile: un protocollo interno con
+limiti negoziabili ha una superficie d'attacco negoziabile. I limiti
+elementari — lunghezze di percorsi e identificatori, numero di ingressi, di
+capability, di esempi, di messaggi — sono costanti in
+`plenora_engine::protocollo::limiti`, dove sta il loro valore;
+`MAX_PROTOCOL_FRAME_BYTES` ne è **derivato** con aritmetica `checked` e un
+involucro JSON contato carattere per carattere, e sta accanto a chi lo applica
+(`protocollo::codifica`). È un maggiorante: nessun frame valido lo raggiunge.
 
-I tetti sono di due specie, e vivono in posti diversi perché sono cose
-diverse:
+**Il perimetro.** Solo il canale fra supervisore e worker isolato: non tocca
+`PlanLimits`, il confine IPC dei dati, né ciò che il motore accetta in-process.
 
-- i **limiti elementari** — quanto è lungo un percorso, quanti ingressi,
-  quanti esempi — sono costanti scelte, e stanno in
-  `plenora_engine::protocollo::limiti`;
-- `MAX_PROTOCOL_FRAME_BYTES` è invece **derivato** da quelli con aritmetica
-  `checked`, e sta accanto al codice che lo applica, in
-  `plenora_engine::protocollo::codifica`. Non è una scelta: è una
-  conseguenza, e metterlo fra le scelte inviterebbe a modificarlo
-  direttamente.
+**Il pericolo che copre.** Il decoder legge byte scritti da un altro processo.
+Due presidi distinti: in lettura, `protocollo::lettore` decide con
+`lunghezza_dichiarata` sui soli quattro byte del prefisso, **prima** di
+allocare; in scrittura il writer si ferma appena supera il tetto, invece di
+costruire un buffer illimitato e misurarlo dopo.
 
-| Costante | Valore | Che cosa limita |
-|---|---|---|
-| `MAX_PROTOCOL_FRAME_BYTES` | derivato | byte del payload di un frame, prefisso escluso |
-| `MAX_PIANO_CANONICO_BYTES` | 64 MiB | forma canonica del piano dentro l'`Incarico` |
-| `MAX_INGRESSI` | 16 | descrittori d'ingresso per `Incarico` |
-| `MAX_IDENTIFICATORE_BYTES` | 256 | byte decodificati di un identificatore |
-| `MAX_PERCORSO_BYTES` | 4096 | byte decodificati di un percorso |
-| `MAX_DIGEST_BYTES` | 64, **derivato** | i caratteri della forma esadecimale di uno SHA-256, cioè `DIGEST_BYTES * 2`. Non è un tetto: la forma pretende esattamente questa lunghezza, e a garantirla è il **tipo** `DigestSha256`, non un controllo |
-| `MAX_VERSIONE_BYTES` | 64 | byte decodificati di una versione dichiarata |
-| `MAX_CAPABILITY` | 32 | capability dichiarate in `Risposta` |
-| `MAX_RISORSE` | 64 | risorse risolte elencate nell'handshake |
-| `MAX_BACKEND_DINAMICI` | 16 | backend collegati dinamicamente |
-| `MAX_MOTIVO_BYTES` | 1024 | byte decodificati del motivo di un `Annulla` |
-| `MAX_MESSAGGIO_BYTES` | 4096 | byte decodificati del messaggio sanificato |
-| `MAX_CONTEGGI_DIAGNOSTICA` | 64 | voci di conteggio nella diagnostica di riga |
-| `MAX_CHIAVE_CONTEGGIO_BYTES` | 128 | byte decodificati di una chiave di conteggio |
-| `MAX_ESEMPI_DIAGNOSTICA` | 32 | esempi portati dalla diagnostica |
-| `MAX_ESEMPIO_BYTES` | 512 | byte decodificati di un esempio |
-| `MAX_PROGRESSO` | 1024 | quota totale di emissione dei messaggi di progresso |
-| `MAX_MESSAGGI_VERSO_WORKER` | 3 | messaggi ammessi verso il worker |
-| `MAX_MESSAGGI_VERSO_SUPERVISORE` | 2 + `MAX_PROGRESSO` | messaggi ammessi verso il supervisore |
+**Che cosa non garantisce.** `MAX_PIANO_CANONICO_BYTES` è un limite di
+**policy**, non un massimo dimostrato: `examples/calibra_canonico.rs` misura il
+rapporto fra testo e forma canonica su piani costruiti per massimizzarlo, ed
+esce non-zero se la proiezione sul tetto di `PlanLimits::default()` lo supera;
+nessun insieme finito di piani fissa quel rapporto per tutti i documenti. Il
+presidio è il writer limitato, non il numero.
 
-`MAX_PROTOCOL_FRAME_BYTES` non è un numero scelto: è derivato con aritmetica
-`checked` dai tetti qui sopra e da un involucro JSON **contato carattere per
-carattere**. È un **maggiorante**, non una misura — nessun frame
-strutturalmente valido lo raggiunge, e questo è il verso giusto.
+**La conseguenza.** `max_plan_json_bytes`, `max_inputs` e `max_identifier_bytes`
+di `PlanLimits` sono default ampliabili dalla policy di chi esegue, questi tetti
+no: un piano valido sotto una policy più larga può essere **non isolabile**, e
+riceve `Unsupported` in validazione (`isolamento::attivazione`), mai un errore
+di serializzazione.
 
-**Il perimetro.** Solo il canale fra supervisore e worker isolato. Questi tetti
-non toccano `PlanLimits`, non toccano il confine IPC dei dati, e non
-descrivono ciò che il motore accetta in-process.
+**Il modulo non è pubblico, nemmeno sotto feature.** Il fuzzer e la sonda di
+calibrazione passano da `plenora_engine::interni`, una facciata instabile e
+non-production che espone un verdetto e una costante, non i tipi del
+protocollo: un modulo pubblico sotto una feature che il fuzzer attiva sarebbe
+API pubblica.
 
-**Il pericolo che copre.** Il decoder legge byte scritti da un altro processo:
-è la superficie d'attacco più diretta del sistema. Due presidi, e sono
-distinti:
-
-- il tetto sulla lunghezza si applica **prima di allocare**. Un frame che
-  dichiara un gigabyte viene rifiutato con quattro byte in mano, non dopo aver
-  riservato lo spazio che si voleva negare. Va detto fin dove arriva questa
-  garanzia: `decodifica` riceve una slice, quindi quando viene chiamata i byte
-  del payload *qualcuno li ha già letti*. Il presidio utilizzabile contro un
-  pipe è `lunghezza_dichiarata`, che decide sui soli quattro byte del prefisso
-  e che `decodifica` usa a sua volta — un solo confronto, non due che possono
-  divergere. Il lettore che se ne serve è di `PR-5`; fino ad allora la
-  garanzia esiste come predicato provato, non come lettura limitata;
-- in scrittura il writer **si ferma** appena supera il tetto, invece di
-  costruire un buffer illimitato e misurarlo dopo. Misurare dopo significa aver
-  già allocato ciò che si voleva rifiutare.
-
-**Che cosa questo NON garantisce, e va detto.** `MAX_PIANO_CANONICO_BYTES` è un
-limite di **policy**, non un massimo dimostrato.
-`examples/calibra_canonico.rs` misura il rapporto fra testo e forma canonica su
-piani costruiti per massimizzarlo e proietta il caso peggiore osservato sul
-tetto di `PlanLimits::default()`; il margine risultante è dichiarato dalla
-sonda stessa, che esce non-zero se la proiezione supera il limite. Nessun
-insieme finito di piani fissa quel rapporto per **tutti** i documenti validi:
-il presidio è il writer limitato, non il numero.
-
-**La conseguenza che va detta e non scoperta.** Questi sono tetti del **profilo
-isolato**, mentre `max_plan_json_bytes`, `max_inputs` e `max_identifier_bytes`
-di `PlanLimits` sono **default ampliabili** dalla policy di chi esegue. Ne
-segue che un piano valido sotto una policy più larga può essere **non
-isolabile**. Deve ricevere un rifiuto esplicito che lo dica — non un errore di
-serializzazione, che direbbe «il messaggio non si scrive» al posto di «questo
-piano non si può isolare». La selezione del profilo è `PR-12`
-(`isolamento::attivazione`): la presenza di `max_domain_memory_bytes`
-costituisce la richiesta, `verifica_piattaforma` la giudica in validazione, e
-un piano non isolabile su quella piattaforma riceve `Unsupported` — mai un
-errore di serializzazione.
-
-**Il modulo non è pubblico, e non lo diventa sotto feature.** Il crate `fuzz/`
-e la sonda di calibrazione stanno fuori dal crate e non possono raggiungere un
-modulo privato; passano da `plenora_engine::interni`, una facciata
-**instabile e non-production** che espone un verdetto e una costante, non i
-tipi del protocollo. Una prima stesura esponeva `pub mod protocollo` sotto la
-stessa feature: era API pubblica a tutti gli effetti quando la feature era
-attiva, e il crate `fuzz/` è precisamente un consumatore che la attiva.
-«Privato tranne che per chi lo usa» non è privato.
-
-**La condizione di rientro.** Alzare un tetto richiede: la misura che mostra il
-caso reale che lo supera, il ricalcolo di `MAX_PROTOCOL_FRAME_BYTES` (che è
-derivato, quindi si aggiorna da sé), e la verifica che i sei massimi
-serializzati continuino a starci sotto — che è un test, non un controllo a
-mano. Quei massimi vanno costruiti con caratteri che JSON **espande** in `\uXXXX`: con stringhe ASCII il frame massimo resta a un sesto della
-taglia che il tetto gli concede, e l'espansione degli escape non viene mai
-esercitata. Renderli configurabili è fuori discussione finché il canale resta
-interno.
+**La condizione di rientro.** Alzare un tetto richiede la misura del caso reale
+che lo supera e la verifica, con un test, che i massimi serializzati stiano
+ancora sotto `MAX_PROTOCOL_FRAME_BYTES`; quei massimi usano caratteri che JSON
+espande in `\uXXXX`, o l'espansione degli escape non verrebbe esercitata.
+Renderli configurabili è fuori discussione finché il canale resta interno.
 
 ### Il verificatore ha un incarico proprio: `IncaricoVerifica`, `EsitoVerificaSulFilo` e il terzo descrittore
 
@@ -1679,165 +1619,62 @@ geometria e non tronchi al NUL.
 
 **La regola.** Nessun sito di `plenora-kernels-geo` chiama `check_validation` di
 `geo` direttamente: tutti passano da `ValidazioneProtetta::validazione_protetta`,
-che cattura il panico e lo rende un errore. Allo stesso modo i calcoli che
-passano da `relate` su geometrie già validate — `point_on_surface`, i predicati
-spaziali, il predicato esatto dello spatial join — girano dentro
-`calcolo_protetto`, che rende `CalcoloNonConcluso` con la forma del payload.
-Entrambe sono [barriere di dipendenza](#panici-attesi-nel-fuzzing).
+che cattura il panico e lo rende un errore. I calcoli che passano da `relate` su
+geometrie già validate — `point_on_surface`, i predicati spaziali, il predicato
+esatto dello spatial join — girano dentro `calcolo_protetto`, che rende
+`CalcoloNonConcluso`. Entrambe sono
+[barriere di dipendenza](#panici-attesi-nel-fuzzing), e sono condivise: una
+barriera per sito è una barriera che qualcuno dimentica.
 
-**Perché.** `check_validation` può andare in **panico** invece di rendere un
-errore: la sua `relate` costruisce un grafo topologico in virgola mobile e chiama
-`panic!` quando due conclusioni sullo stesso punto si contraddicono. Un panico
-dentro una libreria che riceve byte da fuori non è una diagnosi: è la fine del
-processo.
+**Perché.** La `relate` di `geo` costruisce un grafo topologico in virgola
+mobile e va in `panic!` quando due conclusioni sullo stesso punto si
+contraddicono. Il panico noto è un `debug_assert!`
+(`edge_end_bundle_star.rs:116`), assente nel profilo `release`, dove quei casi
+diventano un rifiuto ordinario; ma venti righe sotto
+`assert!(left_position.is_some(), "found single null side")` è attivo anche in
+`release`, e quello la barriera lo copre davvero. Il difetto a monte è una
+precondizione: il guardiano guarda un operando solo, mentre il conflitto nasce
+dalla coppia. `geo 0.33.1` è l'ultima versione pubblicata.
 
-**Dove il panico esiste, esattamente.** Il panico dei reperti è un
-**`debug_assert!`** (`edge_end_bundle_star.rs:116`), quindi vive solo dove le
-asserzioni di debug sono attive: la batteria e il target del fuzz. Il profilo
-`release` di questo progetto attiva `overflow-checks` ma **non**
-`debug-assertions`, e lì `geo` conclude regolarmente — i due reperti diventano
-`ElementsOverlaps(1, 2)`, cioè un rifiuto ordinario. Misurato: gli stessi casi
-sono verdi in entrambi i profili con attese diverse, e la variabile decisiva è
-isolata (`--release` con `-C debug-assertions=on` panica di nuovo).
+**Che cosa la barriera non copre.**
 
-Non ne segue che la barriera sia superflua in produzione. Nella stessa funzione,
-venti righe più sotto, `assert!(left_position.is_some(), "found single null
-side")` **non** è condizionato dalle asserzioni di debug: un secondo cammino di
-panico resta attivo in `release`, e quello la barriera lo copre davvero.
+- **Il canale `log`.** `geo` pubblica coordinate dell'ingresso con `warn!` e
+  `debug!` non condizionati dalle asserzioni di debug: con un logger a livello
+  `DEBUG`, anche in `release`, escono dati dell'ingresso. Chi ospita il crate e
+  installa un logger deve saperlo.
+- **L'hook di panico di `std`**, che stampa il payload **prima** che
+  `catch_unwind` lo veda: chi ospita il crate installa la politica sanitizzata
+  di `plenora_core::panic_policy`.
 
-**Il difetto a monte è una precondizione, non l'algoritmo.** Il guardiano di quel
-`debug_assert!` chiede se la geometria sia valida, ma `propagate_side_labels`
-riceve **un solo** operando: entrambi i reperti sono `MultiPolygon` di tre
-poligoni in cui il conflitto nasce dalla *coppia* — relazionare il poligono 1,
-valido, con il 2, invalido. Il guardiano guarda il primo, non vede il secondo, e
-asserisce. Che sia una precondizione sbagliata e non un errore di calcolo lo
-mostra l'asimmetria: la stessa coppia nell'ordine invertito **non** panica e
-rende `InvalidPolygon(SelfIntersection)`. Nulla di ciò dimostra che l'algoritmo
-numerico sia corretto — dimostra che qui non è lui a essere in causa.
+**Che cosa porta l'errore.** La *forma* del payload, mai il contenuto: il
+messaggio di `geo` nomina le coordinate. E la barriera non è un filtro sui
+numeri: rifiutare una classe di magnitudini respingerebbe geometrie valide senza
+chiudere il difetto, che nasce dalla precisione su punti molto vicini.
 
-`geo 0.33.1` è l'ultima versione pubblicata: non c'è un aggiornamento che lo
-chiuda. Una proposta di correzione è conservata fuori dall'albero, con base e
-impronta esatte, e **non è applicata**: il prodotto consuma `geo` dal registro,
-immutato.
-
-**Il canale `log` non è governato.** `geo` pubblica coordinate dell'ingresso
-anche fuori dal panico: il ramo alternativo all'asserzione è un `warn!` con lo
-stesso messaggio, e i `debug!` alle righe 83, 154 e 210 — **non** condizionati
-dalle asserzioni di debug, quindi presenti anche in `release` — stampano l'intera
-struttura topologica. Misurato con un logger a livello `DEBUG`: 49 righe con dati
-dell'ingresso su 54, in `release`. `panic_policy` non copre questo canale, e
-nemmeno la barriera: chi ospita il crate e installa un logger deve saperlo.
-
-**Perché condivisa.** I siti sono quarantaquattro. Una barriera per sito è una
-barriera che qualcuno dimenticherà; passando tutti dallo stesso metodo la difesa
-è una sola e si sposta con lei.
-
-**Che cosa non porta l'errore.** Il contenuto del payload. Il messaggio di `geo`
-nomina le **coordinate** che hanno provocato la contraddizione, cioè dati
-dell'ingresso: si pubblica la *forma* del payload, con la stessa nozione
-condivisa delle altre barriere.
-
-**La barriera da sola non basta.** L'hook di panico installato da `std` stampa il
-payload **prima** che `catch_unwind` lo veda: catturare il panico non impedisce
-all'hook di averlo già pubblicato. Chi ospita questo crate deve installare la
-politica sanitizzata di `plenora_core::panic_policy` — è la ragione per cui
-quella politica esiste.
-
-**Che cosa la barriera non è.** Un filtro sui numeri. Delle quattro coordinate
-che i due panici nominano, **tre sono normali** e una sola è subnormale:
-rifiutare una classe di magnitudini respingerebbe geometrie valide senza chiudere
-il difetto, che nasce dalla precisione della virgola mobile su punti molto
-vicini. Una geometria valida con coordinate minuscole continua a essere accettata,
-e un caso lo fissa.
-
-**La distinzione vale fino all'errore finale, non solo all'origine.** Un tipo che
-separa i due casi non serve a nulla se un chiamante li riunisce dopo. I punti
-dove la distinzione moriva, e che ora la conservano:
-
-- il trasporto — un `PlenoraError::Internal` cadeva nel ramo generico di
-  `From<PlenoraError> for ArrowTransportError` e diventava `Arrow(String)`; ora
-  esiste `ArrowTransportError::Interno`;
-- i due passi dell'executor, **fuso e non fuso**, che riscrivevano ogni
-  fallimento come `InvalidPlan`; ora chiedono entrambi
-  `ArrowTransportError::errore_del_passo`, che decide dalla variante — una
-  decisione sola per due chiamanti, perché due copie divergono;
-- l'adapter di colonna `geo.from_wkt`, che contava la validazione interrotta fra
-  le celle invalide e rendeva `DataMapping`; ora esce con `Internal` invece di
-  accusare una riga;
-- le due porte di `analyze` e il preflight dei piani, che scartavano l'errore
-  per dire «parametro non decodificabile» o «nodo non decodificabile»;
-- i due percorsi della misura terminale — `measure_cells` (fuso) e
-  `geo_measure_batch` (non fuso), per `geo.area`, `geo.length`,
-  `geo.perimeter`, `geo.vertex_count`, `geo.to_wkt` — che appiattivano ogni
-  fallimento del kernel scalare in `InvalidPlan` indipendentemente dalla
-  categoria sotto, sia alla decodifica della cella sia dentro il kernel; ora
-  condividono `causa_di_riga` ed `esito_kernel`, la stessa decisione per i
-  due percorsi.
-
-La regola: **chi converte l'errore della validazione guarda la categoria di
-sotto**, e non riattribuisce a chi ha scritto l'ingresso un difetto che nessuno
-gli ha dimostrato.
+**La distinzione vale fino all'errore finale.** Chi converte l'errore della
+validazione guarda la categoria di sotto, e non attribuisce all'ingresso un
+difetto che nessuno ha dimostrato: una validazione o un calcolo non conclusi
+sono `Internal`, mai `InvalidPlan` o `DataMapping`. La decisione vive in un
+punto per strada — `ArrowTransportError::errore_del_passo` per i passi
+dell'executor, fuso e non fuso; `causa_di_riga` ed `esito_kernel` per la
+misura; `ArrowTransportError::Interno` per il trasporto — perché due copie
+divergono.
 
 **Precedenza quando un batch porta più fallimenti.** Un `Internal` prevale su
-qualunque fallimento ordinario dello stesso batch e propaga **senza
-diagnostica di riga**: mescolarlo alle celle davvero invalide misattribuirebbe
-le altre come se fossero dati sbagliati, quando nessuno lo ha dimostrato. Fra
-più `Internal` nello stesso batch resta il primo in **ordine logico di riga**,
-non quello che l'esecuzione ha calcolato per primo — il percorso fuso itera in
-parallelo, quindi l'ordine di calcolo non è l'ordine di riga. La regola è
-condivisa fra trasformazione (`collect_cell_failures`) e misura
-(`collect_measure_failures`): una decisione sola, non una per percorso.
+ogni fallimento ordinario dello stesso batch e propaga **senza** diagnostica di
+riga; fra più `Internal` resta il primo in ordine logico di riga, non di
+calcolo. La regola è una sola per trasformazione (`collect_cell_failures`) e
+misura (`collect_measure_failures`).
 
-**Dentro il fuzz.** La barriera è una
-[barriera di dipendenza](#panici-attesi-nel-fuzzing): l'hook comune dei target
-tollera il panico di `check_validation` che vi nasce, e continua a interrompere
-su ogni altro. Il riferimento di `wkb_contract` chiama `geo` direttamente,
-dentro una barriera propria, e non la difesa che sorveglia.
+**Dentro il fuzz**, l'hook comune dei target tollera il panico che nasce nella
+barriera e interrompe su ogni altro. I reperti stanno nei **test versionati**,
+con i byte in chiaro (`crates/plenora-kernels-geo/tests/barriera_validazione.rs`,
+e il modulo `barriera_privacy_processo` dei test di `src/lib.rs` per ciò che
+esce su stderr): `fuzz/corpus` è ignorato da Git e non è una regressione.
 
-**Dove vivono i reperti.** Nei **test versionati**, con i byte in chiaro:
-`tests/barriera_validazione.rs` e `tests/barriera_privacy_processo.rs`. Le copie
-in `fuzz/corpus/wkb_contract/` sono comode in locale ma `fuzz/corpus` è ignorato
-da Git: **non garantiscono** che i reperti raggiungano la campagna remota. Le due
-cose non vanno confuse — solo la prima è una regressione.
-
-**Ambito.** `plenora-kernels-geo`, ogni validazione OGC.
+**Ambito.** `plenora-kernels-geo`, ogni validazione OGC e ogni `relate`.
 **Condizione di rientro.** Il giorno che `geo` non abbia più cammini di panico
-raggiungibili da byte esterni: sia il `debug_assert!` dal guardiano incompleto,
-sia il `found single null side`, che è attivo anche in `release`.
-
-### DIFETTO APERTO: `wkt` panica su un multi con una geometria vuota
-
-**Non è un limite deliberato**, ed è per questo che non sta fra i
-[limiti dichiarati](#limiti-dichiarati): è un difetto noto, non presidiato, e
-registrato qui perché chi legge la barriera OGC non concluda che sia coperto.
-
-**Non lo è.** La barriera cattura i panici della *validazione*; questo avviene
-dopo, nella **serializzazione**.
-
-**Che cosa succede.** `wkt 0.14.0`, `src/to_wkt/geo_trait_impl.rs:242`, scarta
-con `unwrap()` l'`exterior()` del primo poligono di un `MultiPolygon`. Per un
-poligono vuoto quell'`Option` è `None`.
-
-**Raggiungibile dalla produzione, e in `release`.** Misurato su
-`plenora_kernels_geo::operations::to_wkt`, la porta dell'operazione di catalogo
-`geo.to_wkt`: la validazione OGC **accetta** le geometrie vuote — sono valide
-per OGC — quindi non ferma l'ingresso, e l'encoder panica subito dopo. L'`unwrap()`
-non è condizionato da `cfg(debug_assertions)`: vale in entrambi i profili.
-
-Non è quindi della stessa classe del panico di `geo` descritto sopra, che è un
-`debug_assert!` assente in `release`.
-
-**Ingresso minimo**, ridotto e verificato nei due versi: un `MultiPolygon` che
-contiene un poligono vuoto panica; il poligono vuoto da solo no.
-
-**Ambito.** Ogni cammino che serializzi in WKT una geometria multi che può
-contenere parti vuote. Non è stato censito quali altri cammini lo raggiungano.
-
-**Condizione di rientro.** Il giorno che `wkt` renda un errore invece di
-scartare quell'`Option`, o che la serializzazione stia dietro una barriera.
-
-Il reperto è passato a `plenora-memory-lab` con encoder, versione, punto di
-panico, ingresso minimo e misure per profilo.
+raggiungibili da byte esterni, e che i suoi `log` non pubblichino coordinate.
 
 ### Semplificazione RDP e scale numeriche miste
 
@@ -2270,120 +2107,42 @@ terminazione da fuori.
 
 ### I quattro tempi del supervisore
 
-Sono il margine di cortesia, l'attesa della quiescenza, il tetto del drenaggio e
-l'arresto del lettore. Tutti e quattro sono limiti **governati**: costanti
-nominate nel codice, motivate lì, e registrate qui con regola, perimetro e
-condizione di rientro.
+Sono limiti **governati**: costanti nominate e motivate nel codice, dove sta il
+loro valore. Nessuno è una stima di quanto ci vuole: i primi tre segnano il
+punto oltre il quale aspettare smette di essere un'attesa, il quarto è il passo
+con cui si guarda un interruttore.
 
-Nessuno di essi è una stima di quanto ci vuole. I primi tre sono il punto oltre
-il quale continuare ad aspettare smette di essere un'attesa; il quarto non è
-un'attesa affatto, ma il passo con cui si guarda l'interruttore.
+| tempo | costante | che cosa separa | allo scadere | rientro |
+|---|---|---|---|---|
+| margine di cortesia | `MARGINE_DI_CORTESIA` | «ci ha messo un momento» da «non è successo», fra la decisione di chiudere (tempo scaduto, cancellazione) e la quiescenza | si forza con `cgroup.kill`, e ciò che non muore è un fatto da riportare | nessuno previsto |
+| attesa della quiescenza | `ATTESA_DELLA_QUIESCENZA` | l'effetto di `cgroup.kill` dalla sua richiesta: l'evidenza di un dominio non vuoto è la fotografia di qualcosa che si muove (il prototipo ha visto l'OOM arrivare dopo la `wait`) | l'evidenza **non si legge** e la barriera si dichiara incompleta | una notifica di svuotamento attendibile dal kernel |
+| drenaggio della coda | `TETTO_DEL_DRENAGGIO` | una chiusura che finisce da una chiusura sbagliata (una sorgente non terminabile, una bocchetta dimenticata), che altrimenti aspetterebbe per sempre | i fatti già drenati restano nel rapporto, accanto al difetto | nessuno previsto |
 
-**1. Il margine di cortesia dopo la decisione di chiudere: 2 secondi**
-(`MARGINE_DI_CORTESIA`). Fra la decisione di chiudere — un tempo scaduto, una
-cancellazione — e la quiescenza del dominio c'è del lavoro vero: il segnale
-arriva, i processi muoiono, il cgroup si svuota. Chiudere a zero riporterebbe
-«non quiescente» su domini che lo diventano un istante dopo, e quella riga
-manderebbe a cercare un residuo che non c'è.
+Il drenaggio si ferma solo su `Disconnected`, mai su un istante vuoto: un
+produttore vivo può ancora accodare, e i fatti dell'ultimo istante sono quelli
+che dicono com'è finita. La sua scadenza è **assoluta** — non riparte a ogni
+fatto, o un produttore che invia poco prima di ogni scadenza lo terrebbe aperto
+— e si calcola con `checked_add`: un'impossibilità si osserva, non si presume.
 
-Non è però un'attesa: se il dominio non si svuota, non si svuoterà guardandolo
-più a lungo — c'è qualcosa che non muore, ed è un fatto da riportare. Il margine
-separa «ci ha messo un momento» da «non è successo». *Rientro:* nessuno
-previsto.
+**L'arresto del lettore.** Un lettore fermo dentro una `read` non si sveglia
+perché altrove cade un mandante: il descrittore è non bloccante e la lettura
+passa da un adattatore che guarda un interruttore.
 
-**2. L'attesa della quiescenza dopo la forzatura: 500 millisecondi**
-(`ATTESA_DELLA_QUIESCENZA`). Non è il margine di cortesia con un altro nome: il
-margine si concede **prima** di forzare, a un worker che può ancora scegliere
-come chiudere; questa è il ritardo fra `cgroup.kill` e il suo effetto, e non è
-concessa a nessuno.
+- **Garantito:** l'interruttore si guarda prima di ogni lettura e di ogni
+  attesa, anche dopo un `Interrupted`; l'adattatore non chiede mai un'attesa più
+  lunga di `PASSO_DI_ATTESA`; dopo `INTERRUZIONI_PRIMA_DEL_RESPIRO`
+  interruzioni consecutive chiede un passo, così una sorgente che interrompe
+  sempre non occupa un core. Un caso lo prova contando i giri, non l'orologio.
+- **Non garantito:** un limite di tempo reale. `sleep` promette di non
+  risvegliarsi prima, non di non risvegliarsi dopo, e senza uno scheduler
+  real-time decide il kernel. Chi vuole un tetto sull'orologio lo prende più in
+  alto — un timeout, un `SIGKILL`.
+- **Solo qualificazione:** la soglia ambientale dei casi sta sotto `cfg(test)`,
+  perché una costante pubblica prima o poi si legge come una promessa. Se il
+  caso che la usa fallisce, la prima ipotesi è la macchina.
 
-Serve perché l'evidenza di un dominio non ancora vuoto è la fotografia di
-qualcosa che si muove. Il prototipo lo ha misurato: al ritorno della `wait`
-l'evidenza di OOM valeva zero, e duecento millisecondi dopo valeva uno. Senza
-questa attesa la stessa esecuzione diventerebbe `Timeout` oppure
-`LimiteAttribuito` secondo quando il kernel ha consegnato l'evento — e la
-differenza non starebbe nel worker.
-
-Mezzo secondo è il doppio abbondante di ciò che il prototipo ha visto, e non è
-una promessa che basti sempre. Se non basta, il dominio resta non quiescente,
-l'evidenza **non si legge**, e la conclusione dichiara la barriera incompleta:
-per un'osservazione che non si è potuta fare, dirlo è l'esito giusto.
-*Rientro:* se un giorno il kernel offrisse una notifica di svuotamento
-attendibile invece di un contatore da rileggere, l'attesa scomparirebbe con
-essa.
-
-**3. Il drenaggio della coda dei fatti: 30 secondi** (`TETTO_DEL_DRENAGGIO`).
-Alla chiusura il supervisore lascia cadere tutte le bocchette e drena finché il
-canale non dice `Disconnected` — mai fermandosi su un istante vuoto, perché fra
-la domanda e la risposta un produttore vivo può ancora accodare, e i fatti
-dell'ultimo istante sono quelli che raccontano com'è finita.
-
-Se però una delle condizioni di chiusura non è stata rispettata — una sorgente
-bloccante non resa terminabile, una bocchetta dimenticata — quell'attesa non
-finirebbe mai, e un supervisore appeso è il peggiore degli esiti: non conclude,
-non riporta, e non si distingue da uno che sta lavorando. Il tetto trasforma
-l'attesa infinita in un **difetto detto**.
-
-La scadenza è **assoluta e monotona**: si calcola una volta e non riparte
-quando arriva un fatto. Si calcola con `checked_add` e non con `+`: la somma di
-un istante e una durata può andare in overflow, e l'operatore in quel caso va in
-panico — un panico dentro la chiusura del supervisore sarebbe il posto peggiore
-in cui scoprirlo. Con trenta secondi non accade su nessuna macchina reale, ma
-un'impossibilità va **osservata** e non presunta: se accadesse, si drena ciò che
-c'è già e lo si dichiara. Con una scadenza che si rinnova a ogni consegna, un
-produttore che invia poco prima di ogni scadenza terrebbe aperto il drenaggio
-per sempre. Allo scadere, i fatti già drenati **restano nel rapporto** insieme
-al difetto: ciò che si è sentito prima di rinunciare è evidenza quanto la
-rinuncia. *Rientro:* nessuno previsto; il tetto scompare solo se la chiusura
-diventa impossibile da sbagliare.
-
-**4. L'arresto del lettore: tre cose diverse, e vanno tenute separate.** Un
-lettore fermo dentro una `read` non si sveglia perché qualcuno altrove lascia
-cadere un mandante. Il descrittore va quindi in modalità non bloccante e la
-lettura passa da un adattatore che aspetta a piccoli passi guardando un
-interruttore. Ciò che si può dire di quel meccanismo sono tre affermazioni, e
-solo la prima è una garanzia.
-
-*Le proprietà implementative*, vere sempre, e sono due — nessuna delle quali
-dice quanto dura un giro. Primo: l'interruttore viene guardato **prima di ogni
-nuova lettura e prima di ogni attesa**, e non esiste cammino in cui la lettura
-riparta senza averlo guardato, nemmeno dopo un `Interrupted`. Secondo:
-l'adattatore **non chiede mai volontariamente** un'attesa più lunga di un passo
-(`PASSO_DI_ATTESA`, 10 ms).
-
-Entrambe le garantisce il codice, e le prova un caso che non guarda l'orologio:
-con il freno già tirato la sorgente non viene interrogata nemmeno una volta.
-Scrivere invece «ogni giro dura al più un passo» sarebbe **falso**: `sleep`
-promette che l'attesa non sia più breve di quanto si chiede, non che non sia più
-lunga, e fra la richiesta e il risveglio ci sono lo scheduler e le chiamate di
-sistema.
-
-*Il presidio contro il giro a vuoto.* Il freno dà una via d'uscita, non un
-limite al consumo: una sorgente che rende `Interrupted` senza fermarsi mai
-occuperebbe un core a non fare niente finché qualcuno non frena. Dopo sedici
-interruzioni consecutive (`INTERRUZIONI_PRIMA_DEL_RESPIRO`) l'adattatore chiede
-un passo di attesa, continuando a guardare il freno a ogni giro. Il contatore
-riparte a ogni esito diverso, così i segnali sporadici — quelli veri — non
-pagano nulla.
-
-*La non-garanzia*, che va detta perché non si deduca il contrario: **nessun
-limite di tempo reale**. Fra il momento in cui l'interruttore cambia e il
-momento in cui il processo torna sulla CPU passa quanto il kernel decide, e
-senza uno scheduler real-time nessun numero scritto nel codice lo impedisce. Chi
-ha bisogno di un tetto sull'orologio da parete deve prenderlo altrove — un
-timeout di livello più alto, o un `SIGKILL` — non da qui.
-
-*La soglia di qualificazione ambientale*: 200 ms, misurati su una macchina che
-non è in ginocchio. È un attrezzo dei casi e **non un contratto**: vive sotto
-`cfg(test)` proprio perché una costante pubblica prima o poi si legge come una
-promessa, e chi la leggesse così lo farebbe in buona fede.
-
-Il caso che la usa appartiene al perimetro di qualificazione dell'ambiente, non
-alla prova di correttezza: se fallisse, la prima ipotesi da verificare è lo
-stato della macchina. La correttezza — che il freno venga guardato — è provata
-altrove, contando i giri invece del tempo. *Rientro:* un modo
-sicuro di interrompere una lettura bloccante senza sondaggio; toglierebbe il
-passo, la soglia e questa distinzione insieme.
+*Rientro:* un modo sicuro di interrompere una lettura bloccante senza
+sondaggio, che toglierebbe il passo, la soglia e questa distinzione insieme.
 
 ### La diagnostica di riga non attraversa il confine del worker
 
