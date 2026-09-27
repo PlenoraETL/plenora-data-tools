@@ -235,8 +235,14 @@ fn un_dominio_che_non_si_svuota_nemmeno_col_kill_e_un_errore_interno() {
 /// Il kernel finto: svuota il dominio quando compare `cgroup.kill`.
 fn svuota_al_kill(dominio: &Path) -> std::thread::JoinHandle<()> {
     let dominio = dominio.to_path_buf();
+    // Una scadenza ampia, non un numero di giri: il codice sotto test aspetta
+    // la quiescenza prima di scrivere `cgroup.kill`, e su una macchina carica
+    // fra l'avvio di questo thread e la scrittura passano secondi. Un kernel
+    // finto che si arrende prima lascia il dominio popolato, e il test
+    // fallisce per una corsa, non per un difetto.
+    let scadenza = std::time::Instant::now() + std::time::Duration::from_secs(60);
     std::thread::spawn(move || {
-        for _ in 0..400 {
+        while std::time::Instant::now() < scadenza {
             if dominio.join("cgroup.kill").try_exists().expect("stat") {
                 popolato(&dominio, false);
                 return;
