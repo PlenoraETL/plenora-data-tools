@@ -199,16 +199,23 @@ pub fn sniff_format(path: &Path) -> Result<IpcFormat> {
     sniffed.map_err(|error| error.with_phase(ErrorPhase::Read))
 }
 
+/// Un errore di I/O del confine, in fase di lettura.
+fn io_in_lettura(error: std::io::Error) -> PlenoraError {
+    PlenoraError::Io(error).with_phase(ErrorPhase::Read)
+}
+
+/// Apre `path` e ne misura la lunghezza: la sorgente dei validatori di
+/// framing.
+fn sorgente_misurata(path: &Path) -> Result<SeekSource<File>> {
+    let file = File::open(path).map_err(io_in_lettura)?;
+    let total_len = file.metadata().map_err(io_in_lettura)?.len();
+    Ok(SeekSource::new(file, total_len))
+}
+
 /// Apre il file, ne pre-valida il framing secondo il formato e restituisce
 /// l'handle riportato all'inizio, pronto per arrow.
 fn validated_handle(path: &Path, format: IpcFormat, limits: &IpcLimits) -> Result<File> {
-    let file =
-        File::open(path).map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?;
-    let total_len = file
-        .metadata()
-        .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?
-        .len();
-    let mut source = SeekSource::new(file, total_len);
+    let mut source = sorgente_misurata(path)?;
     match format {
         IpcFormat::File => validate_ipc_file_framing(&mut source, limits),
         IpcFormat::Stream => validate_ipc_stream_framing(&mut source, limits),
@@ -365,11 +372,7 @@ impl ArtefattoConvalidato {
     ///
     /// [`PlenoraError::Io`] se il descrittore non si duplica.
     pub(crate) fn duplica(&self) -> Result<Self> {
-        let copia = self
-            .sorgente
-            .lettore()
-            .try_clone()
-            .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))?;
+        let copia = self.sorgente.lettore().try_clone().map_err(io_in_lettura)?;
         Ok(Self {
             sorgente: crate::geo_transport::ipc::SeekSource::new(copia, self.byte_totali()),
         })
@@ -389,7 +392,7 @@ impl ArtefattoConvalidato {
             .lettore()
             .metadata()
             .map(|metadati| metadati.len())
-            .map_err(|errore| PlenoraError::Io(errore).with_phase(ErrorPhase::Read))
+            .map_err(io_in_lettura)
     }
 
     /// I byte del file, misurati all'apertura.
@@ -451,10 +454,7 @@ pub(crate) fn convalida_artefatto(
     limits: &IpcLimits,
     chiave: &str,
 ) -> Result<(Option<String>, ArtefattoConvalidato)> {
-    convalida_artefatto_con_causa(percorso, limits, chiave).map_err(|causa| match causa {
-        CausaDiApertura::Io(errore) => PlenoraError::Io(errore).with_phase(ErrorPhase::Read),
-        CausaDiApertura::Confine(causa) => read_error(causa),
-    })
+    convalida_artefatto_con_causa(percorso, limits, chiave).map_err(CausaDiApertura::tradotta)
 }
 
 /// Perche' l'apertura convalidata non e' riuscita, **prima** che qualcuno la
@@ -469,6 +469,16 @@ pub(crate) enum CausaDiApertura {
     Io(std::io::Error),
     /// Il confine ostile ha rifiutato il contenuto.
     Confine(crate::geo_transport::error::ArrowTransportError),
+}
+
+impl CausaDiApertura {
+    /// L'errore del progetto: `Io` o l'errore del confine, in fase di lettura.
+    fn tradotta(self) -> PlenoraError {
+        match self {
+            Self::Io(errore) => io_in_lettura(errore),
+            Self::Confine(causa) => read_error(causa),
+        }
+    }
 }
 
 /// Come [`convalida_artefatto`], ma conserva la causa invece di tradurla.
@@ -528,10 +538,7 @@ pub(crate) fn convalida_handle_artefatto(
     limits: &IpcLimits,
     chiave: &str,
 ) -> Result<(Option<String>, ArtefattoConvalidato)> {
-    convalida_handle_con_causa(file, limits, chiave).map_err(|causa| match causa {
-        CausaDiApertura::Io(errore) => PlenoraError::Io(errore).with_phase(ErrorPhase::Read),
-        CausaDiApertura::Confine(causa) => read_error(causa),
-    })
+    convalida_handle_con_causa(file, limits, chiave).map_err(CausaDiApertura::tradotta)
 }
 
 /// Avvolge un handle **gia' accertato altrove** in un [`ArtefattoConvalidato`],
@@ -575,13 +582,7 @@ pub fn open(path: &Path, limits: &IpcLimits) -> Result<(SchemaRef, BoundaryBatch
 pub fn header_schema(path: &Path, limits: &IpcLimits) -> Result<SchemaRef> {
     match sniff_format(path)? {
         IpcFormat::File => {
-            let file = File::open(path)
-                .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?;
-            let total_len = file
-                .metadata()
-                .map_err(|error| PlenoraError::Io(error).with_phase(ErrorPhase::Read))?
-                .len();
-            let mut source = SeekSource::new(file, total_len);
+            let mut source = sorgente_misurata(path)?;
             let footer = valida_file_e_rendi_footer(&mut source, limits).map_err(read_error)?;
             guarded(|| schema_dal_footer(&footer))
         }
