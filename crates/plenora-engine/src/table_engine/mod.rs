@@ -4,8 +4,8 @@
 //! Superficie a compatibilita' congelata: messaggi ed esiti sono quelli che
 //! i piani legacy si aspettano.
 //!
-//! - gli errori sono [`plenora_core::PlenoraError`] (`Step { index, .. }`
-//!   diventa `Step { node: index.to_string(), .. }`);
+//! - gli errori sono [`plenora_core::PlenoraError`]; l'indice del passo
+//!   diventa il nodo (`node: index.to_string()`);
 //! - `Limits` e' [`plenora_kernels_table::Limits`]; la validazione dei valori
 //!   resta qui (`validate_limits`);
 //! - gli id "nudi" dei piani legacy si risolvono con

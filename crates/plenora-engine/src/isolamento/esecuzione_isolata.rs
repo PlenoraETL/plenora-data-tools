@@ -573,7 +573,8 @@ impl FallimentoDellHandshake {
 /// Il dominio del worker: esecuzione, artefatto scritto sul temporaneo, e
 /// **nient'altro**.
 ///
-/// Non verifica e non pubblica: sono passi del dominio del verificatore. Rende
+/// Non verifica e non pubblica: la verifica e' del dominio del verificatore,
+/// la pubblicazione di `verifica_poi_pubblica`, solo dopo la verifica. Rende
 /// la `TempDir` (viva finche' il verificatore non ha letto `temporaneo`), il
 /// percorso del temporaneo, il contratto d'uscita, il `commit_token` e il
 /// digest e i conteggi **dichiarati** dal worker.

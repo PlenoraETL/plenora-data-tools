@@ -44,9 +44,7 @@ pub mod esecuzione_isolata;
 mod figlio;
 #[cfg(target_os = "linux")]
 mod identita;
-// La lettura fermabile serve a chiunque ascolti un canale senza poter restare
-// fermo dentro una `read`: il supervisore e anche il worker, che deve sentire
-// un `Annulla` mentre lavora.
+// Letture di `/proc` e `cgroup2` con un tetto nostro sulla taglia.
 #[cfg(target_os = "linux")]
 mod lettura;
 // La macchina a stati del supervisore: fatti in una coda, un solo giudice.
@@ -59,6 +57,9 @@ mod lettura;
 mod macchina;
 #[cfg(all(target_os = "linux", qualificazione_isolamento))]
 pub mod qualificazione;
+// La lettura fermabile serve a chiunque ascolti un canale senza poter restare
+// fermo dentro una `read`: il supervisore e anche il worker, che deve sentire
+// un `Annulla` mentre lavora.
 mod sorgente;
 // Il percorso che fa percorrere a un worker **reale** la sequenza intera. Il
 // chiamante di produzione (`esecuzione_isolata`) ne riusa `supervisore_per`,

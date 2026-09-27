@@ -852,7 +852,7 @@ mod tests {
     }
 
     // Z/M/ZM, streaming e round-trip non si esercitano qui: il confine WKB
-    // (`geometry_contract::geometry_from_wkb`) rifiuta ogni payload Z/M/ZM, e
+    // (`crate::geometry_from_wkb`) rifiuta ogni payload Z/M/ZM, e
     // `to_wkt` espone solo la firma a `String`. Quei casi li copre la suite
     // upstream di `wkt` (`vendor/wkt-0.14.0-v2`).
 

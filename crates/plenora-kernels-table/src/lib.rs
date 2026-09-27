@@ -1076,8 +1076,8 @@ pub fn compare_u64(actual: u64, bound: NumericBound) -> Option<Ordering> {
 /// oltre; con bound `F64` vale `partial_cmp` (NaN -> `None`).
 ///
 /// Con bound `Decimal` il confronto e' razionale esatto: la soglia scritta
-/// non viene arrotondata (`1e-1 > 0.100000000000000001` e' falso, non
-/// uguale).
+/// non viene arrotondata: una colonna a `1e-1` e' maggiore di
+/// `0.100000000000000001`, che convertito a double le sarebbe uguale.
 pub fn compare_f64(actual: f64, bound: NumericBound) -> Option<Ordering> {
     match bound {
         NumericBound::I64(expected) => compare_i64_f64(expected, actual).map(Ordering::reverse),

@@ -31,8 +31,8 @@
 //!
 //! I panic dei kernel sono intercettati con `catch_unwind` al punto di
 //! dispatch ([`run_kernel`], `execute_binary`) e convertiti in
-//! `PlenoraError::Execution` con il solo messaggio del panic
-//! (errori-e-limiti.md#panic-policy).
+//! `PlenoraError::Internal` con la sola forma del payload, mai il testo del
+//! panic (errori-e-limiti.md#panic-policy).
 
 mod blocking;
 mod diagnostics;

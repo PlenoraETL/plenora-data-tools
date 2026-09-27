@@ -89,7 +89,7 @@ fn json_text(value: &serde_json::Value) -> String {
 /// Il parse avviene alla prima valutazione di riga e il risultato, successo
 /// o errore, vale per tutte le successive: il punto di errore e' lo stesso
 /// del parse per riga. `PlenoraError` non e' `Clone`, quindi la cella
-/// conserva il messaggio e ricostruisce la variante `Contract`.
+/// conserva il messaggio e ricostruisce la variante `InvalidPlan`.
 struct PreparedCondition {
     operator: Operator,
     /// `json_text` del valore di configurazione, calcolato al costruttore.

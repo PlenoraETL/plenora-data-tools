@@ -20,9 +20,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// L'unico algoritmo di digest ammesso in v1.
 ///
-/// Sta col tipo, non col verificatore (compilato solo sotto `test` e
-/// `internals`), perche' la usano entrambi i lati: chi dichiara l'algoritmo
-/// scrivendo l'artefatto e chi lo pretende rileggendolo. Il campo `algoritmo`
+/// Sta col tipo, non col verificatore, perche' la usano entrambi i lati: chi
+/// dichiara l'algoritmo scrivendo l'artefatto e chi lo pretende rileggendolo. Il campo `algoritmo`
 /// di [`super::messaggi::DigestArtefatto`] resta una stringa sul filo; la
 /// coerenza si impone qui. Un secondo algoritmo cambia insieme valore
 /// canonico, lunghezza e tipo.

@@ -49,10 +49,8 @@ pub enum IpcFormat {
 /// su cui il chiamante decide di rilanciare con piu' budget; il framing
 /// malformato resta `data_mapping`, perche' li' il file e' davvero rotto.
 pub(crate) fn read_error(error: ArrowTransportError) -> PlenoraError {
-    // Il tag di fase si applica **una volta sola**, qui: dentro la
-    // traduzione, il ramo ricorsivo della diagnostica produrrebbe tag
-    // annidati (`with_phase` non riavvolge un `Tagged`, ma dopo
-    // `with_row_diagnostics` l'esterno non lo e' piu').
+    // Il tag di fase si applica una volta sola, qui, sull'esito della
+    // traduzione.
     traduci_errore_di_lettura(error).with_phase(ErrorPhase::Read)
 }
 
@@ -439,8 +437,8 @@ impl ArtefattoConvalidato {
 /// dai custom metadata del footer, **in una traversata sola**.
 ///
 /// E' il costruttore di [`ArtefattoConvalidato`]. A differenza di [`open`],
-/// che riapre per percorso a ogni passo, tiene framing, token, digest e
-/// consegna ad arrow sullo stesso handle.
+/// che riapre per percorso dopo aver riconosciuto il formato, tiene framing,
+/// token, digest e consegna ad arrow sullo stesso handle.
 ///
 /// # Errors
 ///
@@ -464,8 +462,9 @@ pub(crate) fn convalida_artefatto(
 /// appiattisca in un [`PlenoraError`].
 ///
 /// Chi osserva una destinazione deve distinguere sigillo assente, sigillo non
-/// corrispondente, tetto superato e footer rifiutato, che `read_error`
-/// riunisce in una categoria sola.
+/// corrispondente, tetto superato e footer rifiutato; `read_error` ne conserva
+/// solo la categoria, e per esempio footer e framing finiscono entrambi in
+/// `DataMapping`.
 pub(crate) enum CausaDiApertura {
     /// Il file non si e' aperto o non si e' lasciato misurare.
     Io(std::io::Error),

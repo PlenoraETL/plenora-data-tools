@@ -868,8 +868,9 @@ impl std::str::FromStr for GeometryPrecision {
 ///   piano l'incoerenza si propaga (R4.6.3) e arriva al bordo di scrittura con
 ///   le dichiarazioni originali (R4.6.4): per questo la variante porta
 ///   `crs_id` e `definition` col suo formato (R4.3). Lo `srid` viaggia come
-///   lineage nei metadati (R2.4). Invariante della discovery: almeno uno fra
-///   `crs_id` e `definition` e' presente (R4.1);
+///   lineage nei metadati (R2.4). La discovery la costruisce solo con almeno
+///   una rappresentazione dichiarata fra `crs_id`, `definition` e `srid`
+///   (R4.1, R4.3.1): col solo `srid` i due campi sono assenti;
 /// - [`ContractCrs::Missing`]: nessun CRS dichiarato. Si propaga negli
 ///   output (`plenora.geometry.crs_resolution = missing`) e ferma solo le op
 ///   con un `CrsRequirement`, in analyze.
@@ -1389,7 +1390,7 @@ fn validate_declared_types(
     // Lo stato di risoluzione del CRS non si confronta qui: il contratto puo'
     // divergere legittimamente dai metadati in entrambe le direzioni (la
     // discovery declassa un `resolved` con chiavi in conflitto; una
-    // decisione di piano, R4.6.3, risolve un `missing`). La coerenza del CRS
+    // decisione di piano, R4.6.3, risolve un `declared_unresolved`). La coerenza del CRS
     // la decidono discovery e risoluzione per precedenza.
     //
     // Tipi geometrici: il confronto scatta solo con entrambi i lati presenti,

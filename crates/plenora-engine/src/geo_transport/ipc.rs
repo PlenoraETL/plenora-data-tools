@@ -771,8 +771,8 @@ pub enum EndOfData {
 /// `max_batch_bytes` del piano misura un `RecordBatch` gia' materializzato;
 /// questi si applicano sulle lunghezze DICHIARATE, prima dell'allocazione.
 #[derive(Debug, Clone, Copy)]
-// `non_exhaustive`: da fuori dal crate si costruisce solo con
-// `..Default::default()`, cosi' aggiungere un limite non rompe l'API.
+// `non_exhaustive`: da fuori dal crate si parte da `IpcLimits::default()` e
+// si assegnano i campi, cosi' aggiungere un limite non rompe l'API.
 // Vedi errori-e-limiti.md#il-tetto-cumulativo-sui-dizionari.
 #[non_exhaustive]
 pub struct IpcLimits {

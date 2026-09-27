@@ -111,8 +111,7 @@ fn dichiarabile_dal_rifiuto(errore: &PlenoraError, rifiuto: &PlenoraError) -> Er
 /// payload vero con cio' che dice di un rappresentante di ciascuna forma, come
 /// fa `isolamento::macchina` nel verso opposto.
 ///
-/// Non passa da `FormaDelPayload`, che si compila solo sotto `test` e
-/// `internals`. Esce solo **una variante di un enum chiuso**, senza byte del
+/// Esce solo **una variante di un enum chiuso**, senza byte del
 /// payload.
 #[must_use]
 pub fn forma_sul_filo(payload: &(dyn std::any::Any + Send)) -> FormaPanicSulFilo {

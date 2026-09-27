@@ -3087,8 +3087,8 @@ mod tests {
 
     /// **Percorso unary, senza pubblicazione parziale**: la seconda cella
     /// fallisce con `OperationError::WktSerialization` da un kernel
-    /// sintetico, perche' il decoder WKB rifiuta ogni poligono vuoto prima
-    /// del kernel (`geometry_contract.rs::check_ring`). Si prova la raccolta
+    /// sintetico, perche' la decodifica della cella rifiuta ogni poligono vuoto
+    /// prima del kernel (`geometry_contract.rs::check_ring`). Si prova la raccolta
     /// (`map_nullable`), non la raggiungibilita' del difetto.
     ///
     /// La prima cella calcola un valore reale che non deve MAI comparire

@@ -63,8 +63,8 @@ use super::{
 /// (errori-e-limiti.md#panic-policy).
 ///
 /// Il panic e' intercettato qui, il livello piu' interno che conserva
-/// l'attribuzione di nodo, e convertito in errore `Execution` con il solo
-/// messaggio ([`panic_step_error`]); l'errore ferma lo stream, quindi il
+/// l'attribuzione di nodo, e convertito in errore `Internal` con la sola
+/// forma del payload ([`panic_step_error`]); l'errore ferma lo stream, quindi il
 /// publish non e' raggiunto. `AssertUnwindSafe` regge perche' l'esecuzione e'
 /// seriale, batch e config sono proprieta' esclusiva della chiamata e uno
 /// stato del kernel lasciato incoerente non e' mai riusato.
