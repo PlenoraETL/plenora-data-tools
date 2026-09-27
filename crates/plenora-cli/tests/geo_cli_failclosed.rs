@@ -120,14 +120,18 @@ fn self_test_writes_a_valid_control_frame_and_never_overwrites() {
     assert!(reader.next_frame().expect("fine").is_none());
 
     // Fail-closed: un secondo self-test sullo stesso percorso non
-    // sovrascrive (create_new), il contenuto resta intatto.
+    // sovrascrive, il contenuto resta intatto, e la destinazione occupata e'
+    // `conflict`, fase `commit`, exit 5, come nella pubblicazione.
     let before = std::fs::read(&output).expect("lettura");
     let second = cli()
         .args(["self-test", "--output"])
         .arg(&output)
         .output()
         .expect("secondo self-test");
-    assert!(!second.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&second.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "conflict");
+    assert_eq!(envelope["error"]["phase"], "commit");
+    assert_eq!(second.status.code(), Some(5), "conflict -> 5");
     assert_eq!(std::fs::read(&output).expect("lettura"), before);
 }
 

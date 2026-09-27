@@ -1,7 +1,7 @@
 //! Kernel di `geo.coverage_validate` e `geo.shared_paths`, con semantica di
 //! riferimento `PostGIS` (`ST_SharedPaths`, validazione di coperture).
 //!
-//! Kernel puri su `geo::Geometry<f64>` che rendono [`ExtensionV3Error`], piu'
+//! Kernel puri su `geo::Geometry<f64>` che rendono [`ExtensionError`], piu'
 //! gli adapter di colonna (`coverage_validate_rows`, `shared_paths_rows`) che
 //! lo mappano su [`PlenoraError`] preservando i messaggi.
 //!
@@ -25,74 +25,24 @@ use geo::{
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::PlenoraError;
 use rstar::{RTree, RTreeObject, AABB};
-use thiserror::Error;
 
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
+use crate::extensions::{check_tolerance, invalid_parameter, u64_len, ExtensionError};
+use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
 
 /// Default di `max_issues` per `geo.coverage_validate`.
 pub const DEFAULT_MAX_ISSUES: usize = 1_000;
 
-#[derive(Debug, Error)]
-pub enum ExtensionV3Error {
-    #[error("parametro {name} non valido: {reason}")]
-    InvalidParameter {
-        name: &'static str,
-        reason: &'static str,
-    },
-    #[error("geometria {index} non poligonale ({found}): attesa Polygon/MultiPolygon")]
-    UnsupportedGeometry { index: usize, found: &'static str },
-    #[error("geometria {index} non valida: {reason}")]
-    InvalidGeometry { index: usize, reason: String },
-    #[error("geometria {index} contiene coordinate NaN o infinite")]
-    NonFiniteCoordinate { index: usize },
-    #[error("geometria prodotta non valida: {0}")]
-    InvalidOutput(String),
-    #[error("conteggio non rappresentabile come uint64")]
-    IndexOverflow,
-    #[error("issues di copertura oltre il limite {limit}")]
-    IssueLimit { limit: u64 },
-    /// Invariante interna violata (R6: errore propagato, mai panic).
-    #[error("internal error: {0}")]
-    Internal(&'static str),
-    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
-    ///
-    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
-    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
-    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
-    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
-    ValidazioneNonConclusa(&'static str),
-}
-
-const fn invalid_parameter(name: &'static str, reason: &'static str) -> ExtensionV3Error {
-    ExtensionV3Error::InvalidParameter { name, reason }
-}
-
-fn check_tolerance(tolerance: f64) -> Result<(), ExtensionV3Error> {
-    if !tolerance.is_finite() || tolerance < 0.0 {
-        return Err(invalid_parameter(
-            "tolerance",
-            "deve essere finita e non negativa",
-        ));
-    }
-    Ok(())
-}
-
-fn check_max_issues(max_issues: usize) -> Result<u64, ExtensionV3Error> {
+fn check_max_issues(max_issues: usize) -> Result<u64, ExtensionError> {
     if max_issues == 0 {
         return Err(invalid_parameter(
             "max_issues",
             "deve essere maggiore di zero",
         ));
     }
-    u64::try_from(max_issues).map_err(|_| ExtensionV3Error::IndexOverflow)
+    u64::try_from(max_issues).map_err(|_| ExtensionError::IndexOverflow)
 }
-
-fn u64_index(index: usize) -> Result<u64, ExtensionV3Error> {
-    u64::try_from(index).map_err(|_| ExtensionV3Error::IndexOverflow)
-}
-
-use crate::geometry_type_name as geometry_name;
-use crate::ValidazioneProtetta as _;
 
 /// Elemento di copertura preparato: multipoligono validato + envelope.
 struct CoverageElement {
@@ -119,27 +69,27 @@ impl RTreeObject for IndexedEnvelope {
 fn prepare_element(
     geometry: &Geometry<f64>,
     index: usize,
-) -> Result<Option<CoverageElement>, ExtensionV3Error> {
+) -> Result<Option<CoverageElement>, ExtensionError> {
     if geometry
         .coords_iter()
         .any(|coordinate| !coordinate.x.is_finite() || !coordinate.y.is_finite())
     {
-        return Err(ExtensionV3Error::NonFiniteCoordinate { index });
+        return Err(ExtensionError::NonFiniteCoordinate { index });
     }
     geometry.validazione_protetta().map_err(|esito| {
         esito.separa(
-            |ragione| ExtensionV3Error::InvalidGeometry {
+            |ragione| ExtensionError::InvalidGeometry {
                 index,
                 reason: ragione.to_string(),
             },
-            ExtensionV3Error::ValidazioneNonConclusa,
+            ExtensionError::ValidazioneNonConclusa,
         )
     })?;
     let polygons = match geometry {
         Geometry::Polygon(polygon) => MultiPolygon::new(vec![polygon.clone()]),
         Geometry::MultiPolygon(polygons) => polygons.clone(),
         other => {
-            return Err(ExtensionV3Error::UnsupportedGeometry {
+            return Err(ExtensionError::UnsupportedGeometry {
                 index,
                 found: geometry_name(other),
             })
@@ -156,7 +106,7 @@ fn prepare_element(
 
 fn prepare_elements(
     geometries: &[Option<Geometry<f64>>],
-) -> Result<(Vec<Option<CoverageElement>>, RTree<IndexedEnvelope>), ExtensionV3Error> {
+) -> Result<(Vec<Option<CoverageElement>>, RTree<IndexedEnvelope>), ExtensionError> {
     let mut elements = Vec::with_capacity(geometries.len());
     let mut envelopes = Vec::with_capacity(geometries.len());
     for (index, geometry) in geometries.iter().enumerate() {
@@ -232,22 +182,22 @@ pub struct CoverageIssue {
 /// Normalizza l'intersezione di due multipoligoni: Polygon se singola
 /// componente, `MultiPolygon` altrimenti. Precondizione: intersezione non
 /// vuota (area positiva). Validata (fail-closed).
-fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, ExtensionV3Error> {
+fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, ExtensionError> {
     let geometry = if intersection.0.len() == 1 {
         Geometry::Polygon(
             intersection
                 .0
                 .into_iter()
                 .next()
-                .ok_or(ExtensionV3Error::Internal("una componente"))?,
+                .ok_or(ExtensionError::Internal("una componente"))?,
         )
     } else {
         Geometry::MultiPolygon(intersection)
     };
     geometry.validazione_protetta().map_err(|esito| {
         esito.separa(
-            |ragione| ExtensionV3Error::InvalidOutput(ragione.to_string()),
-            ExtensionV3Error::ValidazioneNonConclusa,
+            |ragione| ExtensionError::InvalidOutput(ragione.to_string()),
+            ExtensionError::ValidazioneNonConclusa,
         )
     })?;
     Ok(geometry)
@@ -258,27 +208,27 @@ fn coverage_validate_elements(
     tree: &RTree<IndexedEnvelope>,
     tolerance: f64,
     max_issues: u64,
-) -> Result<Vec<CoverageIssue>, ExtensionV3Error> {
+) -> Result<Vec<CoverageIssue>, ExtensionError> {
     let mut issues = Vec::new();
     for (a, b) in candidate_pairs(elements, tree) {
         let left = &elements[a]
             .as_ref()
-            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .ok_or(ExtensionError::Internal("coppia indicizzata"))?
             .polygons;
         let right = &elements[b]
             .as_ref()
-            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .ok_or(ExtensionError::Internal("coppia indicizzata"))?
             .polygons;
         let intersection = left.intersection(right);
         let area = intersection.unsigned_area();
         if area > tolerance {
-            if u64_index(issues.len())? >= max_issues {
-                return Err(ExtensionV3Error::IssueLimit { limit: max_issues });
+            if u64_len(issues.len())? >= max_issues {
+                return Err(ExtensionError::IssueLimit { limit: max_issues });
             }
             issues.push(CoverageIssue {
                 issue_type: CoverageIssueType::Overlap,
-                index_a: u64_index(a)?,
-                index_b: u64_index(b)?,
+                index_a: u64_len(a)?,
+                index_b: u64_len(b)?,
                 area,
                 geometry: overlap_geometry(intersection)?,
             });
@@ -310,7 +260,7 @@ pub fn coverage_validate(
     geometries: &[Geometry<f64>],
     tolerance: f64,
     max_issues: usize,
-) -> Result<Vec<CoverageIssue>, ExtensionV3Error> {
+) -> Result<Vec<CoverageIssue>, ExtensionError> {
     let refs: Vec<Option<Geometry<f64>>> = geometries.iter().cloned().map(Some).collect();
     coverage_validate_nullable(&refs, tolerance, max_issues)
 }
@@ -326,27 +276,15 @@ pub fn coverage_validate_nullable(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
     max_issues: usize,
-) -> Result<Vec<CoverageIssue>, ExtensionV3Error> {
+) -> Result<Vec<CoverageIssue>, ExtensionError> {
     check_tolerance(tolerance)?;
     let max_issues = check_max_issues(max_issues)?;
     let (elements, tree) = prepare_elements(geometries)?;
     coverage_validate_elements(&elements, &tree, tolerance, max_issues)
 }
 
-/// L'errore di un'estensione v3 nella categoria giusta: `Internal` se la
-/// validazione non ha concluso o un'invariante e' saltata, `InvalidPlan`
-/// altrimenti. Stessa regola di `extensions2::errore_v2`.
-fn errore_v3(operazione: &str, error: &ExtensionV3Error) -> PlenoraError {
-    match error {
-        ExtensionV3Error::Internal(_) | ExtensionV3Error::ValidazioneNonConclusa(_) => {
-            PlenoraError::Internal(format!("{operazione}: {error}"))
-        }
-        _ => PlenoraError::InvalidPlan(format!("{operazione}: {error}")),
-    }
-}
-
-fn coverage_error(error: &ExtensionV3Error) -> PlenoraError {
-    errore_v3("geo.coverage_validate", error)
+fn coverage_error(error: &ExtensionError) -> PlenoraError {
+    error.del_passo("geo.coverage_validate")
 }
 
 /// Riga di output di `geo.coverage_validate` con geometria codificata WKB
@@ -367,7 +305,7 @@ pub struct CoverageIssueRow {
 ///
 /// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
 ///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
-///   `ExtensionV3Error` mappati preservando il messaggio) o la codifica WKB
+///   `ExtensionError` mappati preservando il messaggio) o la codifica WKB
 ///   di una issue fallisce.
 /// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
 ///   preservabili nel protocollo 2D.
@@ -483,7 +421,7 @@ pub fn shared_paths(
     geometries: &[Geometry<f64>],
     tolerance: f64,
     min_length: f64,
-) -> Result<Vec<SharedPath>, ExtensionV3Error> {
+) -> Result<Vec<SharedPath>, ExtensionError> {
     let refs: Vec<Option<Geometry<f64>>> = geometries.iter().cloned().map(Some).collect();
     shared_paths_nullable(&refs, tolerance, min_length)
 }
@@ -499,7 +437,7 @@ pub fn shared_paths_nullable(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
     min_length: f64,
-) -> Result<Vec<SharedPath>, ExtensionV3Error> {
+) -> Result<Vec<SharedPath>, ExtensionError> {
     check_tolerance(tolerance)?;
     if !min_length.is_finite() || min_length < 0.0 {
         return Err(invalid_parameter(
@@ -512,11 +450,11 @@ pub fn shared_paths_nullable(
     for (a, b) in candidate_pairs(&elements, &tree) {
         let left = &elements[a]
             .as_ref()
-            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .ok_or(ExtensionError::Internal("coppia indicizzata"))?
             .polygons;
         let right = &elements[b]
             .as_ref()
-            .ok_or(ExtensionV3Error::Internal("coppia indicizzata"))?
+            .ok_or(ExtensionError::Internal("coppia indicizzata"))?
             .polygons;
         let segments = shared_boundary_segments(left, right, tolerance);
         let shared_length: f64 = segments.iter().map(segment_length).sum();
@@ -536,13 +474,13 @@ pub fn shared_paths_nullable(
         };
         geometry.validazione_protetta().map_err(|esito| {
             esito.separa(
-                |ragione| ExtensionV3Error::InvalidOutput(ragione.to_string()),
-                ExtensionV3Error::ValidazioneNonConclusa,
+                |ragione| ExtensionError::InvalidOutput(ragione.to_string()),
+                ExtensionError::ValidazioneNonConclusa,
             )
         })?;
         paths.push(SharedPath {
-            index_a: u64_index(a)?,
-            index_b: u64_index(b)?,
+            index_a: u64_len(a)?,
+            index_b: u64_len(b)?,
             shared_length,
             geometry,
         });
@@ -550,8 +488,8 @@ pub fn shared_paths_nullable(
     Ok(paths)
 }
 
-fn shared_paths_error(error: &ExtensionV3Error) -> PlenoraError {
-    errore_v3("geo.shared_paths", error)
+fn shared_paths_error(error: &ExtensionError) -> PlenoraError {
+    error.del_passo("geo.shared_paths")
 }
 
 /// Riga di output di `geo.shared_paths` con geometria codificata WKB.
@@ -571,7 +509,7 @@ pub struct SharedPathRow {
 ///
 /// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
 ///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
-///   `ExtensionV3Error` mappati preservando il messaggio) o la codifica WKB
+///   `ExtensionError` mappati preservando il messaggio) o la codifica WKB
 ///   di un tratto fallisce.
 /// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
 ///   preservabili nel protocollo 2D.
@@ -613,13 +551,13 @@ mod tests {
 
         for adapter in [coverage_error, shared_paths_error] {
             for interno in [
-                ExtensionV3Error::Internal("forma"),
-                ExtensionV3Error::ValidazioneNonConclusa("forma"),
+                ExtensionError::Internal("forma"),
+                ExtensionError::ValidazioneNonConclusa("forma"),
             ] {
                 let errore = adapter(&interno);
                 assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
             }
-            let del_piano = adapter(&ExtensionV3Error::IndexOverflow);
+            let del_piano = adapter(&ExtensionError::IndexOverflow);
             assert_eq!(
                 del_piano.category(),
                 ErrorCategory::InvalidPlan,
@@ -744,11 +682,11 @@ mod tests {
         );
         assert!(matches!(
             coverage_validate(&inputs, 0.0, 2),
-            Err(ExtensionV3Error::IssueLimit { limit: 2 })
+            Err(ExtensionError::IssueLimit { limit: 2 })
         ));
         assert!(matches!(
             coverage_validate(&inputs, 0.0, 0),
-            Err(ExtensionV3Error::InvalidParameter {
+            Err(ExtensionError::InvalidParameter {
                 name: "max_issues",
                 ..
             })
@@ -760,7 +698,7 @@ mod tests {
         let point = vec![Geometry::Point(Point::new(0.0, 0.0))];
         assert!(matches!(
             coverage_validate(&point, 0.0, DEFAULT_MAX_ISSUES),
-            Err(ExtensionV3Error::UnsupportedGeometry {
+            Err(ExtensionError::UnsupportedGeometry {
                 index: 0,
                 found: "Point"
             })
@@ -772,12 +710,12 @@ mod tests {
         ])];
         assert!(matches!(
             coverage_validate(&bowtie, 0.0, DEFAULT_MAX_ISSUES),
-            Err(ExtensionV3Error::InvalidGeometry { index: 0, .. })
+            Err(ExtensionError::InvalidGeometry { index: 0, .. })
         ));
         let nan = vec![Geometry::Point(Point::new(f64::NAN, 0.0))];
         assert!(matches!(
             coverage_validate(&nan, 0.0, DEFAULT_MAX_ISSUES),
-            Err(ExtensionV3Error::NonFiniteCoordinate { index: 0 })
+            Err(ExtensionError::NonFiniteCoordinate { index: 0 })
         ));
     }
 
@@ -932,7 +870,7 @@ mod tests {
         let point = vec![Geometry::Point(Point::new(0.0, 0.0))];
         assert!(matches!(
             shared_paths(&point, 0.0, 0.0),
-            Err(ExtensionV3Error::UnsupportedGeometry { .. })
+            Err(ExtensionError::UnsupportedGeometry { .. })
         ));
 
         let inputs = vec![

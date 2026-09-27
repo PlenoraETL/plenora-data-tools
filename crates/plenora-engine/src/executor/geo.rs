@@ -125,7 +125,7 @@ pub(super) fn geo_accessors_batch(
         let geometry =
             decode_geometry_cell(cells.value(row)).map_err(|error| step_error(kernel, error))?;
         let values = plenora_kernels_geo::extensions::geometry_accessors(&geometry)
-            .map_err(|error| step_error(kernel, errore_di_estensione(error)))?;
+            .map_err(|error| step_error(kernel, errore_di_estensione(&error)))?;
         accessors.push(Some(values));
     }
     let mut produced: Vec<ArrayRef> = Vec::with_capacity(columns.len());
@@ -204,7 +204,7 @@ pub(super) fn geo_line_locate_point_batch(
         let geometry =
             decode_geometry_cell(cells.value(row)).map_err(|error| step_error(kernel, error))?;
         let fraction = plenora_kernels_geo::extensions::line_locate_point(&geometry, point)
-            .map_err(|error| step_error(kernel, errore_di_estensione(error)))?;
+            .map_err(|error| step_error(kernel, errore_di_estensione(&error)))?;
         values.push(fraction);
     }
     append_output_column(
@@ -330,7 +330,7 @@ pub(super) fn geo_collect_batch(
         let group: Vec<Option<geo::Geometry<f64>>> =
             rows.iter().map(|&row| geometries[row].clone()).collect();
         let geometry = plenora_kernels_geo::extensions::collect_geometries(&group)
-            .map_err(|error| step_error(kernel, errore_di_estensione(error)))?;
+            .map_err(|error| step_error(kernel, errore_di_estensione(&error)))?;
         collected.push(match &geometry {
             Some(geometry) => Some(
                 plenora_kernels_geo::arrow_adapter::encode_geometry(geometry)
@@ -828,15 +828,15 @@ pub(super) fn execute_geo_binary(
     }
 }
 
-/// L'errore di un'estensione geo nella categoria giusta: `Internal` se la
-/// validazione non ha concluso o un'invariante e' saltata, `InvalidPlan`
-/// altrimenti. `ExtensionError` non passa dal trasporto, quindi la decisione
-/// si scrive qui, con la stessa regola di [`errore_di_coppia`].
-fn errore_di_estensione(errore: plenora_kernels_geo::extensions::ExtensionError) -> PlenoraError {
-    use plenora_kernels_geo::extensions::ExtensionError as E;
-    match errore {
-        E::ValidazioneNonConclusa(_) | E::Internal(_) => PlenoraError::Internal(errore.to_string()),
-        altro => PlenoraError::InvalidPlan(altro.to_string()),
+/// L'errore di un'estensione geo nella categoria giusta, con la regola di
+/// `ExtensionError::e_interna`. `ExtensionError` non passa dal trasporto, e
+/// qui il messaggio resta senza il nome dell'operazione: nodo e operazione li
+/// aggiunge `step_error`.
+fn errore_di_estensione(errore: &plenora_kernels_geo::extensions::ExtensionError) -> PlenoraError {
+    if errore.e_interna() {
+        PlenoraError::Internal(errore.to_string())
+    } else {
+        PlenoraError::InvalidPlan(errore.to_string())
     }
 }
 
@@ -887,13 +887,13 @@ mod prove_dell_errore_di_coppia {
         use plenora_kernels_geo::extensions::ExtensionError;
 
         for errore in [
-            super::errore_di_estensione(ExtensionError::ValidazioneNonConclusa("forma")),
-            super::errore_di_estensione(ExtensionError::Internal("forma")),
+            super::errore_di_estensione(&ExtensionError::ValidazioneNonConclusa("forma")),
+            super::errore_di_estensione(&ExtensionError::Internal("forma")),
         ] {
             assert_eq!(errore.category(), ErrorCategory::Internal, "{errore}");
         }
         let del_piano =
-            super::errore_di_estensione(ExtensionError::InvalidInput("anello aperto".to_owned()));
+            super::errore_di_estensione(&ExtensionError::InvalidInput("anello aperto".to_owned()));
         assert_eq!(
             del_piano.category(),
             ErrorCategory::InvalidPlan,
