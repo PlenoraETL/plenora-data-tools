@@ -1,11 +1,6 @@
-//! Regressioni del formato v6.
-//!
-//! In un file proprio e non in un modulo `#[cfg(test)]` in linea: il gate
-//! `verifica_nome_budget_memoria` e' esplicito nel non esentare i moduli in
-//! linea, perche' «un nome che rientra da un modulo di test in linea rientra
-//! comunque nel file sbagliato». Qui c'e' bisogno di nominare
-//! `max_memory_bytes` — il nome della v4 — per verificare che la v6 lo
-//! rifiuti, e questo e' il posto dove farlo senza aggirare la regola.
+//! Regressioni del formato v6, compreso il rifiuto di `max_memory_bytes`: il
+//! nome della v4 non ha alias nella v6
+//! (errori-e-limiti.md#memoria-governata).
 
 use super::{PlanV6, PLAN_SCHEMA_VERSION_V6};
 use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V5};
