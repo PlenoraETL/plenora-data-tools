@@ -5,12 +5,13 @@ use std::sync::Arc;
 use chrono::{Datelike, NaiveDate};
 use serde_json::Value;
 
+use super::scalar::{confronta_numeri, numero_del_letterale, numero_della_cella, Numero};
 use super::static_type::Kind;
 use super::temporal::{literal_unit, trunc_date32_days, trunc_timestamp_ms_value, TruncUnit};
 use super::{BinaryOperator, Expression, ExpressionTransform, Function, UnaryOperator};
 use crate::{
-    column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string,
-    DIVISION_BY_ZERO_MESSAGE, NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
+    column_index, replace_or_append, scalar_as_string, NumericBound, DIVISION_BY_ZERO_MESSAGE,
+    NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
 };
 use plenora_core::arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float64Array, Int64Array,
@@ -30,7 +31,8 @@ use plenora_core::{PlenoraError, Result};
 //   rilascia l'errore solo quando il nodo viene valutato);
 // - numeri non finiti in colonna rifiutati, risultati aritmetici non finiti
 //   rifiutati, divisione per zero (`-0.0 == 0.0` incluso);
-// - confronti numerici via `total_cmp` (NaN ordinato, -0.0 < 0.0);
+// - confronti numerici esatti sul valore d'origine (`confronta_numeri`,
+//   -0.0 == 0.0);
 // - colonne di tipo non coperto (o array incoerente con lo schema) usano lo
 //   stesso codice del generico riga per riga (`FastColumn::Other`).
 // ---------------------------------------------------------------------------
@@ -39,7 +41,7 @@ use plenora_core::{PlenoraError, Result};
 #[derive(Clone, Copy)]
 enum FastLiteral<'a> {
     Null,
-    Number(f64),
+    Number(Numero),
     Boolean(bool),
     Text(&'a str),
 }
@@ -76,7 +78,7 @@ impl LazyError {
 #[derive(Clone)]
 enum FastValue<'a> {
     Null,
-    Number(f64),
+    Number(Numero),
     Boolean(bool),
     Text(Cow<'a, str>),
     /// Data nativa (giorni dall'epoca): prodotta solo da `date_trunc`.
@@ -93,8 +95,8 @@ enum FastColumn<'a> {
     U64(&'a UInt64Array),
     Date32(&'a Date32Array),
     TimestampMs(&'a TimestampMillisecondArray),
-    /// Array decimale e fattore di scala precomputato (`10^scale`).
-    Decimal128(&'a Decimal128Array, f64),
+    /// Array decimale, fattore di scala precomputato (`10^scale`) e scala.
+    Decimal128(&'a Decimal128Array, f64, i8),
     Str(&'a StringArray),
     /// Tipo non coperto o array incoerente con lo schema: stessa logica del
     /// generico riga per riga (errori di conversione inclusi).
@@ -148,7 +150,7 @@ impl<'a> FastColumn<'a> {
             DataType::Decimal128(_, scale) => any
                 .downcast_ref::<Decimal128Array>()
                 .map_or(Self::Other(array), |values| {
-                    Self::Decimal128(values, 10_f64.powi(i32::from(*scale)))
+                    Self::Decimal128(values, 10_f64.powi(i32::from(*scale)), *scale)
                 }),
             DataType::Utf8 => any
                 .downcast_ref::<StringArray>()
@@ -168,38 +170,43 @@ impl<'a> FastColumn<'a> {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(values.value(row))
+                    let value = values.value(row);
+                    finite_number(value, NumericBound::F64(value))
                 }
             }
             Self::I64(values) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(integer_rounded(values.value(row)))
+                    let value = values.value(row);
+                    finite_number(integer_rounded(value), NumericBound::I64(value))
                 }
             }
             Self::U64(values) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(unsigned_rounded(values.value(row)))
+                    let value = values.value(row);
+                    finite_number(unsigned_rounded(value), NumericBound::U64(value))
                 }
             }
             Self::Date32(values) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(f64::from(values.value(row)))
+                    let value = values.value(row);
+                    finite_number(f64::from(value), NumericBound::I64(i64::from(value)))
                 }
             }
             Self::TimestampMs(values) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    finite_number(integer_rounded(values.value(row)))
+                    let value = values.value(row);
+                    finite_number(integer_rounded(value), NumericBound::I64(value))
                 }
             }
-            Self::Decimal128(values, factor) => {
+            Self::Decimal128(values, factor, scale) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
@@ -208,7 +215,14 @@ impl<'a> FastColumn<'a> {
                     // frazionario non ha un double esatto. Verificare il solo
                     // `unscaled` dichiarerebbe un'esattezza che la
                     // divisione non ha.
-                    finite_number(decimal_rounded(values.value(row), *factor))
+                    let unscaled = values.value(row);
+                    finite_number(
+                        decimal_rounded(unscaled, *factor),
+                        NumericBound::Decimal {
+                            unscaled,
+                            scale: *scale,
+                        },
+                    )
                 }
             }
             Self::Str(values) => Ok(if values.is_null(row) {
@@ -222,9 +236,9 @@ impl<'a> FastColumn<'a> {
 }
 
 /// Controllo di finitezza del ramo numerico di `column`.
-fn finite_number(value: f64) -> Result<FastValue<'static>> {
-    if value.is_finite() {
-        Ok(FastValue::Number(value))
+fn finite_number(valore: f64, esatto: NumericBound) -> Result<FastValue<'static>> {
+    if valore.is_finite() {
+        Ok(FastValue::Number(Numero { valore, esatto }))
     } else {
         Err(PlenoraError::Schema(NON_FINITE_INPUT_MESSAGE.into()))
     }
@@ -252,8 +266,9 @@ fn other_column(array: &ArrayRef, row: usize) -> Result<FastValue<'static>> {
             | DataType::Date32
             | DataType::Timestamp(_, _)
     ) {
-        return scalar_as_f64_rounded(array.as_ref(), row)?
-            .map_or_else(|| Ok(FastValue::Null), finite_number);
+        return Ok(
+            numero_della_cella(array.as_ref(), row)?.map_or(FastValue::Null, FastValue::Number)
+        );
     }
     Ok(scalar_as_string(array.as_ref(), row)?.map_or_else(
         || FastValue::Null,
@@ -274,6 +289,11 @@ fn fast_boolean(value: &FastValue<'_>, context: &str) -> Result<Option<bool>> {
 
 /// Equivalente di `number` su `FastValue`.
 fn fast_number(value: &FastValue<'_>, context: &str) -> Result<Option<f64>> {
+    Ok(fast_numero(value, context)?.map(|numero| numero.valore))
+}
+
+/// Equivalente di `numero` su `FastValue`.
+fn fast_numero(value: &FastValue<'_>, context: &str) -> Result<Option<Numero>> {
     match value {
         FastValue::Null => Ok(None),
         FastValue::Number(value) => Ok(Some(*value)),
@@ -296,7 +316,9 @@ fn fast_text<'a>(value: &'a FastValue<'_>, context: &str) -> Result<Option<&'a s
 fn fast_compare(left: &FastValue<'_>, right: &FastValue<'_>) -> Result<Option<Ordering>> {
     match (left, right) {
         (FastValue::Null, _) | (_, FastValue::Null) => Ok(None),
-        (FastValue::Number(left), FastValue::Number(right)) => Ok(Some(left.total_cmp(right))),
+        (FastValue::Number(left), FastValue::Number(right)) => {
+            confronta_numeri(*left, *right).map(Some)
+        }
         (FastValue::Text(left), FastValue::Text(right)) => Ok(Some(left.cmp(right))),
         (FastValue::Boolean(left), FastValue::Boolean(right)) => Ok(Some(left.cmp(right))),
         (FastValue::Date32(left), FastValue::Date32(right)) => Ok(Some(left.cmp(right))),
@@ -334,7 +356,7 @@ fn fast_arithmetic<'a>(
         }
     };
     if value.is_finite() {
-        Ok(FastValue::Number(value))
+        Ok(FastValue::Number(Numero::double(value)))
     } else {
         Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
     }
@@ -449,16 +471,16 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 Function::Lower => FastValue::Text(Cow::Owned(value.to_lowercase())),
                 Function::Upper => FastValue::Text(Cow::Owned(value.to_uppercase())),
                 Function::Trim => FastValue::Text(Cow::Owned(value.trim().to_owned())),
-                Function::Length => FastValue::Number(
+                Function::Length => FastValue::Number(Numero::double(
                     u32::try_from(value.chars().count())
                         .map(f64::from)
                         .map_err(|_| PlenoraError::ResourceLimit("testo troppo lungo".into()))?,
-                ),
+                )),
                 Function::Year => {
                     let date =
                         NaiveDate::parse_from_str(value.get(..10).unwrap_or(value), "%Y-%m-%d")
                             .map_err(|_| PlenoraError::Schema("year: data non valida".into()))?;
-                    FastValue::Number(f64::from(date.year()))
+                    FastValue::Number(Numero::double(f64::from(date.year())))
                 }
                 _ => {
                     return Err(PlenoraError::Internal(
@@ -503,12 +525,12 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
         }
         Function::Abs | Function::Round => {
             exact_args_fast(&args, 1, "funzione numerica")?;
-            let Some(value) = fast_number(&args[0], "funzione numerica")? else {
+            let Some(value) = fast_numero(&args[0], "funzione numerica")? else {
                 return Ok(FastValue::Null);
             };
             Ok(FastValue::Number(match name {
-                Function::Abs => value.abs(),
-                Function::Round => value.round(),
+                Function::Abs => value.assoluto(),
+                Function::Round => Numero::double(value.valore.round()),
                 _ => {
                     return Err(PlenoraError::Internal(
                         "il ramo numerico ammette solo abs/round".into(),
@@ -522,8 +544,8 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
                 return Ok(FastValue::Null);
             };
             Ok(FastValue::Number(match name {
-                Function::Floor => value.floor(),
-                Function::Ceil => value.ceil(),
+                Function::Floor => Numero::double(value.floor()),
+                Function::Ceil => Numero::double(value.ceil()),
                 _ => {
                     return Err(PlenoraError::Internal(
                         "il ramo numerico ammette solo floor/ceil".into(),
@@ -541,7 +563,7 @@ fn fast_function(name: Function, args: Vec<FastValue<'_>>) -> Result<FastValue<'
             };
             let value = base.powf(exponent);
             if value.is_finite() {
-                Ok(FastValue::Number(value))
+                Ok(FastValue::Number(Numero::double(value)))
             } else {
                 Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
             }
@@ -715,13 +737,10 @@ fn compile_literal(value: &Value) -> FastNode<'_> {
     match value {
         Value::Null => FastNode::Literal(FastLiteral::Null),
         Value::Bool(value) => FastNode::Literal(FastLiteral::Boolean(*value)),
-        Value::Number(value) => value
-            .as_f64()
-            .filter(|value| value.is_finite())
-            .map_or_else(
-                || FastNode::Error(LazyError::InvalidPlan("literal numerico non finito".into())),
-                |value| FastNode::Literal(FastLiteral::Number(value)),
-            ),
+        Value::Number(value) => numero_del_letterale(value).map_or_else(
+            |_| FastNode::Error(LazyError::InvalidPlan("literal numerico non finito".into())),
+            |value| FastNode::Literal(FastLiteral::Number(value)),
+        ),
         Value::String(value) => FastNode::Literal(FastLiteral::Text(value.as_str())),
         Value::Array(_) | Value::Object(_) => FastNode::Error(LazyError::InvalidPlan(
             "literal expression deve essere scalare".into(),
@@ -900,8 +919,8 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                 UnaryOperator::IsNotNull => FastValue::Boolean(!matches!(value, FastValue::Null)),
                 UnaryOperator::Not => fast_boolean(&value, "not")?
                     .map_or(FastValue::Null, |value| FastValue::Boolean(!value)),
-                UnaryOperator::Negate => fast_number(&value, "negate")?
-                    .map_or(FastValue::Null, |value| FastValue::Number(-value)),
+                UnaryOperator::Negate => fast_numero(&value, "negate")?
+                    .map_or(FastValue::Null, |value| FastValue::Number(value.opposto())),
             })
         }
         FastNode::Binary { op, left, right } => {

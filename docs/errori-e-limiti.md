@@ -634,13 +634,43 @@ operazioni il cui risultato è un `Float64` per contratto: lì il double è il
 tipo del risultato, non un passaggio intermedio, e pretendere l'esattezza
 rifiuterebbe input legittimi. Un valore oltre 2^53, o un decimal frazionario,
 perde precisione senza errore. Nessun percorso decisionale ha questa
-proprietà.
+proprietà: in `table.expression` i confronti (`equal`…`less_equal`,
+`between`, `in`, `null_if`, `greatest`/`least`) decidono sul valore esatto
+d'origine di colonne e letterali, non sul loro double. Un operando prodotto da
+un calcolo (aritmetica, `round`, `floor`, `ceil`, `power`) vale il proprio
+double, che è il risultato dichiarato di quel calcolo; `negate` e `abs`
+restano esatti.
 
 Non è una deroga con rientro: è la semantica dichiarata di quelle operazioni.
 
 Il contro-esempio sta nella stessa famiglia: le funzioni di **rango**
 (`rank`, `dense_rank`, `percent_rank`, `cume_dist`) producono un `Float64` ma
 **ordinano**, quindi non convertono — confrontano il dominio originale.
+
+### Un letterale numerico JSON vale il double che il parser ne ricava
+
+**La regola.** I letterali numerici del piano passano da `serde_json`, che
+senza la feature `arbitrary_precision` conserva esatti gli interi in gamma
+`i64`/`u64` e rende ogni altro numero come `f64`. Chi confronta un letterale
+(`table.filter`, `table.conditional`, `table.expression` e le regole di
+governance) ne legge il testo più corto che
+rappresenta quel double: `0.1` resta il decimale 0,1, ma un letterale scritto
+con più cifre significative di un double, come `0.100000000000000001`, o un
+intero oltre `u64`, arriva già arrotondato.
+
+**L'ambito.** I letterali **numerici** JSON dei piani. Un valore scritto come
+stringa dove l'operazione accetta il testo (`table.filter`) è letto esatto
+dal proprio testo; le colonne sono sempre lette esatte.
+
+**Il pericolo che questo dichiara.** Un confronto con un letterale scritto
+oltre la precisione di un double decide su un valore vicino a quello scritto,
+senza errore.
+
+**La condizione di rientro.** Leggere i numeri del piano dal loro testo:
+`arbitrary_precision` di `serde_json`, oppure il testo grezzo dei letterali
+(`RawValue`), con la verifica che l'hash canonico del piano non cambi.
+Nessuna delle due è una modifica locale: la prima cambia `Value` per tutto il
+workspace.
 
 ### Le funzioni di rango non accettano colonne testuali
 
