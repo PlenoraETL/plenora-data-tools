@@ -419,7 +419,7 @@ mod tests {
             "less",
             "less_equal",
         ] {
-            // Numeri: include -0.0 vs 0.0 (total_cmp: -0.0 < 0.0).
+            // Numeri: include -0.0 vs 0.0 (confronto esatto: uguali).
             assert_equivalent(&batch, bin(op, col("n"), lit(json!(0.0))), None);
             assert_equivalent(&batch, bin(op, col("n"), col("i")), None);
             // Testi e booleani.
@@ -771,7 +771,7 @@ mod tests {
             func("in", vec![col("s"), lit(json!("ab"))]),
             func("in", vec![col("s"), lit(json!([[1]]))]),
             func("in", vec![col("s")]),
-            // greatest/least: N-ari, null propagato, total_cmp su -0.0.
+            // greatest/least: N-ari, null propagato, -0.0 uguale a 0.0.
             func("greatest", vec![col("n"), lit(json!(2.0)), col("i")]),
             func("least", vec![col("n"), lit(json!(2.0)), col("i")]),
             func("greatest", vec![lit(json!(-0.0)), lit(json!(0.0))]),
@@ -1077,5 +1077,322 @@ mod tests {
             None,
         );
         validate(&good, 100).expect("in valido");
+    }
+
+    /// Colonne i cui valori un double non distingue: interi oltre 2^53,
+    /// decimali frazionari, gli estremi di `i64`/`u64` e lo zero negativo.
+    fn fixture_esatta() -> RecordBatch {
+        use plenora_core::arrow::array::Decimal128Array;
+        let decimali = Decimal128Array::from(vec![Some(10_i128), Some(10), Some(-5), Some(0)])
+            .with_precision_and_scale(38, 2)
+            .expect("decimal128");
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("i", DataType::Int64, true),
+                Field::new("u", DataType::UInt64, true),
+                Field::new("dec", DataType::Decimal128(38, 2), true),
+                Field::new("f", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![
+                    Some((1_i64 << 53) + 1),
+                    Some(i64::MAX),
+                    Some(i64::MIN),
+                    Some(-((1_i64 << 53) + 1)),
+                ])),
+                Arc::new(UInt64Array::from(vec![
+                    Some((1_u64 << 53) + 1),
+                    Some(u64::MAX),
+                    Some(0),
+                    Some(1_u64 << 63),
+                ])),
+                Arc::new(decimali),
+                Arc::new(Float64Array::from(vec![
+                    Some(0.1),
+                    Some(9_007_199_254_740_992.0),
+                    Some(-0.0),
+                    Some(0.0),
+                ])),
+            ],
+        )
+        .expect("fixture esatta")
+    }
+
+    /// Gli esiti di un'espressione booleana, dal percorso generico e dal fast
+    /// path, che devono coincidere.
+    fn booleani(batch: &RecordBatch, expression: Value) -> Vec<Option<bool>> {
+        assert_equivalent(batch, expression.clone(), None);
+        let config = config(expression, None);
+        let risultato = expression_generic(batch, &config).expect("espressione valida");
+        let colonna = risultato
+            .column_by_name("out")
+            .expect("out")
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("booleani")
+            .clone();
+        (0..colonna.len())
+            .map(|riga| (!colonna.is_null(riga)).then(|| colonna.value(riga)))
+            .collect()
+    }
+
+    #[test]
+    fn i_confronti_decidono_sul_valore_esatto() {
+        let batch = fixture_esatta();
+        // 2^53 + 1 non e' 2^53, anche se il double dei due e' lo stesso.
+        assert_eq!(
+            booleani(
+                &batch,
+                bin("equal", col("i"), lit(json!(9_007_199_254_740_992_i64)))
+            )[0],
+            Some(false)
+        );
+        assert_eq!(
+            booleani(
+                &batch,
+                bin("greater", col("i"), lit(json!(9_007_199_254_740_992_i64)))
+            )[0],
+            Some(true)
+        );
+        assert_eq!(
+            booleani(&batch, bin("equal", col("u"), col("i")))[0],
+            Some(true),
+            "stesso intero in Int64 e UInt64"
+        );
+        // i64::MAX e u64::MAX contro il double 2^63 e 2^64 in cui arrotondano.
+        assert_eq!(
+            booleani(
+                &batch,
+                bin("less", col("i"), lit(json!(9_223_372_036_854_775_808_f64)))
+            )[1],
+            Some(true)
+        );
+        assert_eq!(
+            booleani(&batch, bin("equal", col("u"), lit(json!(u64::MAX))))[1],
+            Some(true)
+        );
+        // Un intero oltre 2^53 contro un Float64: il double 2^53 e' minore.
+        assert_eq!(
+            booleani(&batch, bin("greater", col("i"), col("f")))[0],
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn un_letterale_decimale_vale_come_e_scritto() {
+        let batch = fixture_esatta();
+        // Decimal128 0.10 e il letterale 0.1: stesso valore, come in table.filter.
+        assert_eq!(
+            booleani(&batch, bin("equal", col("dec"), lit(json!(0.1))))[0],
+            Some(true)
+        );
+        // Il double 0.1 e' 0.1000000000000000055…: maggiore del decimale 0,1.
+        assert_eq!(
+            booleani(&batch, bin("greater", col("f"), lit(json!(0.1))))[0],
+            Some(true)
+        );
+        assert_eq!(
+            booleani(&batch, bin("equal", col("f"), col("dec")))[0],
+            Some(false)
+        );
+        // Lo zero negativo e' zero.
+        assert_eq!(
+            booleani(&batch, bin("equal", col("f"), lit(json!(0.0))))[2..],
+            [Some(true), Some(true)]
+        );
+    }
+
+    #[test]
+    fn negate_e_abs_restano_esatti() {
+        let batch = fixture_esatta();
+        // -(2^53 + 1) e' l'opposto esatto, e |i64::MIN| e' 2^63.
+        assert_eq!(
+            booleani(&batch, bin("equal", un("negate", col("i")), col("i")))[..],
+            [Some(false), Some(false), Some(false), Some(false)]
+        );
+        assert_eq!(
+            booleani(
+                &batch,
+                bin(
+                    "equal",
+                    un("negate", col("i")),
+                    lit(json!(-9_007_199_254_740_993_i64))
+                )
+            )[0],
+            Some(true)
+        );
+        assert_eq!(
+            booleani(
+                &batch,
+                bin(
+                    "equal",
+                    func("abs", vec![col("i")]),
+                    lit(json!(9_223_372_036_854_775_808_u64))
+                )
+            )[2],
+            Some(true)
+        );
+        assert_eq!(
+            booleani(&batch, bin("equal", func("abs", vec![col("i")]), col("u")))[0],
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn oracle_confronti_esatti() {
+        let batch = fixture_esatta();
+        let operandi = [
+            col("i"),
+            col("u"),
+            col("dec"),
+            col("f"),
+            un("negate", col("i")),
+            func("abs", vec![col("dec")]),
+            bin("add", col("i"), lit(json!(0))),
+            lit(json!(0.1)),
+            lit(json!(9_007_199_254_740_993_i64)),
+            lit(json!(u64::MAX)),
+            lit(json!(-0.0)),
+        ];
+        for op in [
+            "equal",
+            "not_equal",
+            "greater",
+            "greater_equal",
+            "less",
+            "less_equal",
+        ] {
+            for sinistro in &operandi {
+                for destro in &operandi {
+                    assert_equivalent(&batch, bin(op, sinistro.clone(), destro.clone()), None);
+                }
+            }
+        }
+        for nome in ["greatest", "least"] {
+            assert_equivalent(&batch, func(nome, operandi.to_vec()), None);
+        }
+        assert_equivalent(
+            &batch,
+            func("between", vec![col("i"), col("f"), col("u")]),
+            None,
+        );
+        assert_equivalent(
+            &batch,
+            func("null_if", vec![col("dec"), lit(json!(0.1))]),
+            None,
+        );
+    }
+
+    /// Scala negativa, timestamp oltre 2^53, e un `Decimal128` a `i128::MIN`
+    /// (fuori da ogni precisione, ma Arrow non verifica i valori).
+    fn fixture_estremi() -> RecordBatch {
+        use plenora_core::arrow::array::{Decimal128Array, TimestampMillisecondArray};
+        let scala_negativa = Decimal128Array::from(vec![Some(5_i128), Some(-3)])
+            .with_precision_and_scale(10, -2)
+            .expect("decimal128 a scala negativa");
+        let minimo = Decimal128Array::from(vec![Some(i128::MIN), Some(1)])
+            .with_precision_and_scale(38, 0)
+            .expect("decimal128");
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("neg", DataType::Decimal128(10, -2), true),
+                Field::new("min", DataType::Decimal128(38, 0), true),
+                Field::new(
+                    "ts",
+                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                    true,
+                ),
+                Field::new("i", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(scala_negativa),
+                Arc::new(minimo),
+                Arc::new(
+                    TimestampMillisecondArray::from(vec![Some((1_i64 << 53) + 1), Some(0)])
+                        .with_timezone("UTC"),
+                ),
+                Arc::new(Int64Array::from(vec![Some((1_i64 << 53) + 1), Some(-1)])),
+            ],
+        )
+        .expect("fixture estremi")
+    }
+
+    #[test]
+    fn scale_negative_esponenziali_e_timestamp_restano_esatti() {
+        let batch = fixture_estremi();
+        // 5 * 10^2 = 500.
+        assert_eq!(
+            booleani(&batch, bin("equal", col("neg"), lit(json!(500))))[..],
+            [Some(true), Some(false)]
+        );
+        // Un timestamp oltre 2^53 non e' il suo vicino.
+        assert_eq!(
+            booleani(
+                &batch,
+                bin("equal", col("ts"), lit(json!(9_007_199_254_740_992_i64)))
+            )[0],
+            Some(false)
+        );
+        assert_eq!(
+            booleani(&batch, bin("equal", col("ts"), col("i")))[0],
+            Some(true)
+        );
+        // La notazione esponenziale resta un double: 1e300 supera ogni i64.
+        assert_eq!(
+            booleani(&batch, bin("less", col("i"), lit(json!(1e300))))[..],
+            [Some(true), Some(true)]
+        );
+        assert_eq!(
+            booleani(&batch, bin("greater", col("i"), lit(json!(1e-7))))[..],
+            [Some(true), Some(false)]
+        );
+    }
+
+    #[test]
+    fn in_coalesce_e_case_portano_il_valore_esatto() {
+        let batch = fixture_estremi();
+        assert_eq!(
+            booleani(
+                &batch,
+                func(
+                    "in",
+                    vec![col("i"), lit(json!([9_007_199_254_740_992_i64]))]
+                )
+            )[0],
+            Some(false)
+        );
+        assert_eq!(
+            booleani(
+                &batch,
+                bin(
+                    "equal",
+                    func("coalesce", vec![col("i")]),
+                    lit(json!(9_007_199_254_740_993_i64))
+                )
+            )[0],
+            Some(true)
+        );
+        assert_eq!(
+            booleani(
+                &batch,
+                bin(
+                    "equal",
+                    case(vec![(lit(json!(true)), col("i"))], lit(json!(0))),
+                    lit(json!(9_007_199_254_740_992_i64))
+                )
+            )[0],
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn l_opposto_di_un_decimale_fuori_dominio_e_un_errore() {
+        let batch = fixture_estremi();
+        for espressione in [un("negate", col("min")), func("abs", vec![col("min")])] {
+            assert_equivalent(&batch, espressione.clone(), None);
+            let config = config(espressione, None);
+            let errore = expression_generic(&batch, &config).expect_err("fuori dominio");
+            assert!(matches!(errore, PlenoraError::Schema(_)), "{errore}");
+        }
     }
 }

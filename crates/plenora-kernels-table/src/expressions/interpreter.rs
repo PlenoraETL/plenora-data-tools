@@ -5,7 +5,9 @@ use chrono::{Datelike, NaiveDate};
 use serde_json::Value;
 
 use super::fast::FastProgram;
-use super::scalar::{binary, boolean, column, compare, literal, number, text, Scalar};
+use super::scalar::{
+    binary, boolean, column, compare, literal, number, numero, text, Numero, Scalar,
+};
 use super::static_type::{self, Kind};
 use super::temporal::{date_trunc_generic, in_generic, literal_unit};
 use super::{Expression, ExpressionTransform, Function, UnaryOperator};
@@ -59,16 +61,16 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 Function::Lower => Scalar::Text(value.to_lowercase()),
                 Function::Upper => Scalar::Text(value.to_uppercase()),
                 Function::Trim => Scalar::Text(value.trim().to_owned()),
-                Function::Length => Scalar::Number(
+                Function::Length => Scalar::Number(Numero::double(
                     u32::try_from(value.chars().count())
                         .map(f64::from)
                         .map_err(|_| PlenoraError::ResourceLimit("testo troppo lungo".into()))?,
-                ),
+                )),
                 Function::Year => {
                     let date =
                         NaiveDate::parse_from_str(value.get(..10).unwrap_or(&value), "%Y-%m-%d")
                             .map_err(|_| PlenoraError::Schema("year: data non valida".into()))?;
-                    Scalar::Number(f64::from(date.year()))
+                    Scalar::Number(Numero::double(f64::from(date.year())))
                 }
                 _ => {
                     return Err(PlenoraError::Internal(
@@ -113,12 +115,12 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
         }
         Function::Abs | Function::Round => {
             exact_args(&args, 1, "funzione numerica")?;
-            let Some(value) = number(&args[0], "funzione numerica")? else {
+            let Some(value) = numero(&args[0], "funzione numerica")? else {
                 return Ok(Scalar::Null);
             };
             Ok(Scalar::Number(match name {
-                Function::Abs => value.abs(),
-                Function::Round => value.round(),
+                Function::Abs => value.assoluto()?,
+                Function::Round => Numero::double(value.valore.round()),
                 _ => {
                     return Err(PlenoraError::Internal(
                         "il ramo numerico ammette solo abs/round".into(),
@@ -132,8 +134,8 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
                 return Ok(Scalar::Null);
             };
             Ok(Scalar::Number(match name {
-                Function::Floor => value.floor(),
-                Function::Ceil => value.ceil(),
+                Function::Floor => Numero::double(value.floor()),
+                Function::Ceil => Numero::double(value.ceil()),
                 _ => {
                     return Err(PlenoraError::Internal(
                         "il ramo numerico ammette solo floor/ceil".into(),
@@ -150,7 +152,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             };
             let value = base.powf(exponent);
             if value.is_finite() {
-                Ok(Scalar::Number(value))
+                Ok(Scalar::Number(Numero::double(value)))
             } else {
                 Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
             }
@@ -271,9 +273,10 @@ pub fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Res
                 UnaryOperator::Not => {
                     boolean(&value, "not")?.map_or(Scalar::Null, |value| Scalar::Boolean(!value))
                 }
-                UnaryOperator::Negate => {
-                    number(&value, "negate")?.map_or(Scalar::Null, |value| Scalar::Number(-value))
-                }
+                UnaryOperator::Negate => match numero(&value, "negate")? {
+                    Some(value) => Scalar::Number(value.opposto()?),
+                    None => Scalar::Null,
+                },
             })
         }
         Expression::Binary { op, left, right } => binary(
