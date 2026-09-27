@@ -99,7 +99,12 @@ fn self_test_writes_a_valid_control_frame_and_never_overwrites() {
         .output()
         .expect("self-test");
     assert!(result.status.success(), "stdout: {}", stdout_of(&result));
-    assert!(String::from_utf8_lossy(&result.stdout).contains("\"ok\""));
+    let documento: serde_json::Value = serde_json::from_slice(&result.stdout).expect("stdout JSON");
+    assert_eq!(documento["status"], "ok");
+    assert_eq!(
+        documento["output"],
+        output.to_str().expect("percorso UTF-8")
+    );
 
     // Il frame di controllo e' un WKB v2 leggibile: una riga, POINT (2 3)
     // (centroide del punto di controllo, come nel sorgente).

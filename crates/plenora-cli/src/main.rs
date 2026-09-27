@@ -39,7 +39,7 @@ use serde_json::Value;
 
 mod cli;
 
-use cli::args::{help_text, reject_unknown_flags, subcommand_help_text};
+use cli::args::{help_text, reject_unknown_flags, subcommand_help_text, superficie};
 use cli::commands::catalog::{capabilities_command, catalog_command};
 use cli::commands::describe::describe_command;
 use cli::commands::legacy::{
@@ -794,6 +794,12 @@ pub(crate) fn run_with_args(args: &[String]) -> Result<(), Box<dyn Error>> {
     // pubblica nulla.
     if let Some(comando) = args.first() {
         reject_unknown_flags(comando, args)?;
+        // Il formato si controlla qui, in un punto solo, per ogni comando
+        // della superficie: un comando senza resa markdown che dimenticasse
+        // il controllo accetterebbe il flag e lo disattenderebbe.
+        if superficie(comando).is_some_and(|comando| !comando.ha_resa_markdown()) {
+            OutputFormat::require_json(comando)?;
+        }
     }
     if args
         .get(1)

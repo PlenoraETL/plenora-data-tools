@@ -1164,3 +1164,35 @@ fn scrivi_input_melt(path: &Path, righe: i64) {
     writer.write(&record).expect("write");
     writer.finish().expect("finish");
 }
+
+#[test]
+fn markdown_si_rifiuta_su_ogni_comando_senza_resa_leggibile() {
+    // Il controllo sta nel dispatch, prima del comando: vale anche senza
+    // argomenti, e un comando nuovo senza resa markdown lo eredita dalla
+    // superficie invece di doverselo ricordare.
+    let leggibili = ["catalog", "capabilities", "describe", "inspect-dataset"];
+    for comando in COMANDI.iter().chain(std::iter::once(&"self-test")) {
+        if leggibili.contains(comando) {
+            continue;
+        }
+        let output = esegui(&["--format", "markdown", comando]);
+        assert_eq!(output.status.code(), Some(2), "{comando}");
+        let envelope = envelope_di(&output, comando);
+        assert!(
+            envelope["error"]["message"].as_str().is_some_and(
+                |message| message.contains(&format!("non e' disponibile per `{comando}`"))
+            ),
+            "{comando}: {envelope}"
+        );
+    }
+}
+
+#[test]
+fn self_test_emette_un_documento_json() {
+    let output = esegui(&["self-test"]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let documento: Value = serde_json::from_slice(&output.stdout).expect("stdout JSON");
+    assert_eq!(documento["status"], "ok");
+    assert!(documento["operations"].as_u64().is_some_and(|n| n > 0));
+}

@@ -25,7 +25,7 @@ use crate::installa_gestore_segnale_isolato;
 use crate::{
     campi_della_pubblicazione, contract, contract_error_missing, has_flag, install_ctrlc_handler,
     metrics_json, optional_value_after, read_control_plan_text, run_pipeline, testo_piano_dag,
-    value_after, OutputFormat, PlanInputsProbe,
+    value_after, PlanInputsProbe,
 };
 
 /// `run` di un piano DAG: esecuzione DAG e pubblicazione atomica dell'output,
@@ -281,7 +281,6 @@ pub fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), Plenora
 /// Dispatch di `run`: DAG se il piano dichiara `schema_version` >= 4,
 /// pipeline tabellare legacy altrimenti (comportamento invariato).
 pub fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
-    OutputFormat::require_json("run")?;
     let plan_path = value_after(args, "--plan")?;
     let output_path = value_after(args, "--output")?;
     let plan_text = read_control_plan_text(Path::new(&plan_path))?;
@@ -302,14 +301,14 @@ pub fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     }
     reject_legacy_row_diagnostics_plan(&plan_text)?;
     let esito = run_pipeline(
-        &plan_path,
+        &plan_text,
         &value_after(args, "--input")?,
         optional_value_after(args, "--right")?.as_deref(),
         &output_path,
     )?;
     // Il ramo legacy emette un documento di successo, come il ramo DAG: senza,
     // l'avvertenza di pulizia non avrebbe dove uscire. Il formato e' gia' JSON
-    // per contratto (`OutputFormat::require_json`).
+    // per contratto (`OutputFormat::require_json` nel dispatch).
     let mut documento = serde_json::Map::new();
     documento.insert(
         "status".to_owned(),

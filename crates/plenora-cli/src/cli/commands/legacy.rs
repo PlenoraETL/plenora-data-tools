@@ -180,15 +180,20 @@ fn publish_one(
     Ok(esito)
 }
 
+/// Esegue un piano legacy dal suo testo, gia' letto dal chiamante.
+///
+/// Il testo e' quello su cui il chiamante ha deciso il ramo e applicato i
+/// controlli: rileggerlo dal file eseguirebbe un documento che nessuno ha
+/// controllato, se il file cambiasse fra le due letture.
 pub fn run_pipeline(
-    plan_path: &Path,
+    plan_text: &str,
     input_path: &Path,
     right_path: Option<&Path>,
     output_path: &Path,
 ) -> Result<EsitoDellaPubblicazione, PlenoraError> {
     // Prima del lavoro, con la stessa classe della pubblicazione.
     verifica_destinazione_libera(output_path)?;
-    let plan: Plan = read_control_json(plan_path)?;
+    let plan: Plan = serde_json::from_str(plan_text)?;
     let plan = plan.validate()?;
     if plan.requires_secondary() || plan.requires_blocking() {
         // Contabilita' globale del budget: il secondo lato riceve cio' che
@@ -661,12 +666,19 @@ pub fn write_self_test(path: &Path) -> Result<(), Box<dyn Error>> {
 // Quoting Debug intenzionale nel ramo geo: produce la stringa JSON del
 // percorso (virgolette ed escape); il `.display()` suggerito da clippy
 // cambierebbe l'output del comando (contratto CLI).
-#[allow(clippy::unnecessary_debug_formatting)]
 pub fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     if let Some(output) = optional_value_after(args, "--output")? {
+        // Il percorso va nel documento di successo, quindi deve essere testo:
+        // si controlla prima di scrivere, per non lasciare un file pubblicato
+        // dietro un errore. Il `{:?}` di Rust non e' JSON (un carattere di
+        // controllo diventerebbe una sequenza che nessun parser accetta).
+        let testo = output
+            .to_str()
+            .ok_or_else(|| contract("self-test: il percorso di --output non e' UTF-8"))?
+            .to_owned();
         // Variante geo del sorgente: scrive un frame WKB v2 di controllo.
         write_self_test(&output)?;
-        println!("{{\"status\":\"ok\",\"output\":{output:?}}}");
+        println!("{}", serde_json::json!({"status": "ok", "output": testo}));
         return Ok(());
     }
     // Variante nogeo del sorgente: integrita' del catalogo.
@@ -675,6 +687,11 @@ pub fn self_test_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     if unique.len() != CATALOG.len() {
         return Err(contract("catalogo non integro").into());
     }
-    println!("ok: {} operazioni catalogate", CATALOG.len());
+    // Il successo e' un documento JSON come per ogni altro comando: una riga
+    // di testo qui romperebbe chi legge stdout come JSON.
+    println!(
+        "{}",
+        serde_json::json!({"status": "ok", "operations": CATALOG.len()})
+    );
     Ok(())
 }
