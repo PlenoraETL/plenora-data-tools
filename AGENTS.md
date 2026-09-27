@@ -1,132 +1,69 @@
-# Standard di lavoro — plenora-data-tools
+# AGENTS.md
 
-**Direttiva permanente (2026-07-27, dal maintainer): questo progetto va
-trattato come una libreria safety-critical.** Ogni modifica — umana o di
-agente — segue queste regole. Non sono opzionali.
+Il documento che si legge per primo. Non descrive il repository — quello lo fa
+il repository — ma dice **che cosa non è negoziabile** e **dove sta il resto**.
 
-## Regole
+## Le regole che non cambiano
 
-1. **Niente failure silenziose.** Un risultato sbagliato è sempre peggio di
-   un errore. Ordinamenti, confronti, conversioni numeriche e formati dati
-   devono essere esatti per costruzione, non "di solito giusti". Se un caso
-   limite non è gestibile, si rifiuta l'input con errore esplicito.
-2. **I test verdi non bastano.** Ogni modifica a logica critica (contabilità,
-   comparatori, serializzazione, concorrenza) richiede revisione del diff da
-   parte di un secondo lettore (umano o coordinatore), non solo la sintesi di
-   chi ha scritto il codice.
-3. **Ogni bug è una classe.** Trovato un bug, si cerca la stessa classe in
-   tutto il codebase prima di dichiarare chiusa la fix (esempio: comparatore
-   Int64 via f64 trovato in review 2026-07-27 — tre siti, una classe).
-4. **Deviazioni esplicite.** Ogni scostamento dai contratti documentati o
-   dagli invarianti va scritto nel codice **e** nel registro dei limiti
-   (`docs/errori-e-limiti.md`), con regola, ambito, hazard e condizione di
-   rientro. Una garanzia indebolita va dichiarata come tale.
-5. **Determinismo testato.** architettura.md#determinismo: stesso input → stesso output, sempre.
-   Ordine logico (BatchSequence), mai temporale. Le ottimizzazioni si
-   verificano con oracoli contro il percorso generico.
-6. **Nessun `unsafe`** nel workspace (lint attivo). Nessuna dipendenza nuova
-   senza motivazione documentata; pin esatti delle versioni.
-7. **Suite completa prima del commit**: `cargo test --workspace
-   --no-fail-fast` (container `rust:1.98`, **con `--init`**). CI su
-   Linux+Windows deve restare verde.
+Questo progetto si tratta come una libreria safety-critical (direttiva del
+maintainer, 2026-07-27). Sono policy, non fatti del codice, e questo è l'unico
+posto in cui sono scritte.
 
-   `--init` non è un dettaglio: i test di `isolamento::figlio` verificano che
-   un figlio terminato non resti, e lo fanno leggendo `/proc/<pid>/comm`
-   perché un pid libero può tornare in uso. Un processo **zombie** conserva
-   quella voce, quindi il controllo lo vede ancora. Senza `--init` il PID 1
-   del container è `cargo`, che non miete gli orfani reparentati su di sé, e
-   due casi falliscono con «il figlio N è sopravvissuto». Con `--init` il
-   PID 1 è un reaper e la voce sparisce. È una dipendenza dall'ambiente, non
-   un difetto del codice: la stessa suite passa nativamente.
-8. **Errori senza dati.** Mai valori di righe/colonne nei messaggi di errore
-   (regola di `plenora-core/src/error.rs`), neanche in modalità diagnostica.
+1. **Niente failure silenziose.** Un risultato sbagliato è sempre peggio di un
+   errore. Ordinamenti, confronti, conversioni numeriche e formati dati sono
+   esatti per costruzione; un caso limite non gestibile si rifiuta con un
+   errore esplicito.
+2. **I test verdi non bastano.** Una modifica a logica critica — contabilità,
+   comparatori, serializzazione, concorrenza — si rilegge da un
+   secondo lettore, non solo nella sintesi di chi l'ha scritta.
+3. **Ogni bug è una classe.** Trovato un difetto, si cerca la stessa classe in
+   tutto il codebase prima di chiudere la correzione.
+4. **Deviazioni esplicite.** Uno scostamento da un contratto o da un
+   invariante si scrive nel codice **e** in
+   [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md), con regola, ambito,
+   hazard e condizione di rientro. Una garanzia indebolita si dichiara come
+   tale.
+5. **Determinismo testato**
+   ([`architettura.md#determinismo`](docs/architettura.md#determinismo)):
+   stesso input, stesso output. Ordine logico (`BatchSequence`), mai
+   temporale; un'ottimizzazione si verifica con un oracolo contro il percorso
+   generico.
+6. **Nessun `unsafe`** nel workspace. Nessuna dipendenza nuova senza una
+   motivazione documentata; versioni pinnate esatte.
+7. **Suite completa prima del commit**, e CI verde su Linux e Windows. I
+   comandi sono nel [`README.md`](README.md#cosa-fa-girare-le-prove).
+8. **Errori senza dati.** Mai valori di righe o colonne nei messaggi d'errore,
+   nemmeno in diagnostica (regola di `plenora-core/src/error.rs`).
 
-## Riferimenti
+## Dove sta il resto
 
-La superficie documentale è **chiusa**: `README.md`, `AGENTS.md` e i nove
-documenti sotto `docs/`. Non se ne aggiungono altri senza aggiornare
-l'allowlist di `scripts/verifica_documentazione.py`, che li presidia insieme
-ai collegamenti interni. L'autorità del conteggio è quella allowlist, non
-questo elenco: se i due divergono, ha ragione lo script.
+| serve | sta in |
+| --- | --- |
+| che cosa manca, in ordine | [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) — autorità unica sullo stato |
+| dove le garanzie si fermano | [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) — il registro dei limiti |
+| crate, flusso, determinismo, memoria, backend | [`docs/architettura.md`](docs/architettura.md) |
+| il formato del piano | [`docs/piano-v5.md`](docs/piano-v5.md) |
+| comandi, canali, exit code | [`docs/cli.md`](docs/cli.md) |
+| le operazioni | [`docs/operazioni.md`](docs/operazioni.md) — generato con `python docs/_build/assemble.py`, non si modifica a mano |
+| gate, piattaforme, procedura di rilascio | [`docs/release.md`](docs/release.md) |
+| il profilo isolato | [`docs/isolamento.md`](docs/isolamento.md), con le misure dei prototipi in [`docs/prototipi-isolamento.md`](docs/prototipi-isolamento.md) |
+| il catalogo delle operazioni | lo snapshot `crates/plenora-engine/tests/catalog_snapshot.snap`: ogni cambio è esplicito in PR |
+| come si costruisce e che cosa si esegue | [`README.md`](README.md) |
+| perché una decisione è stata presa | `git log` |
 
-- [`docs/architettura.md`](docs/architettura.md) — crate, flusso, determinismo,
-  memoria, backend.
-- [`docs/piano-v5.md`](docs/piano-v5.md) — formato del piano, contratti,
-  identità, migrazione.
-- [`docs/cli.md`](docs/cli.md) — comandi, canali, exit code.
-- [`docs/operazioni.md`](docs/operazioni.md) — **generato**: non si modifica a
-  mano, si rigenera con `python docs/_build/assemble.py`.
-- [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) — tassonomia, privacy,
-  e il **registro dei limiti dichiarati**: ogni limite con regola, ambito,
-  hazard e condizione di rientro. È l'unico punto di raccolta.
-- [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) — solo il lavoro aperto,
-  ed è l'**autorità unica sullo stato di avanzamento**: nessun altro documento
-  dichiara che cosa è entrato e che cosa manca, gli altri vi rimandano.
-- [`docs/release.md`](docs/release.md) — gate, piattaforme, procedura.
-- [`docs/isolamento.md`](docs/isolamento.md) — progetto tecnico della fase 4:
-  garanzie e non-garanzie, macchine a stati, protocollo, verifica, PR.
-- [`docs/prototipi-isolamento.md`](docs/prototipi-isolamento.md) — misure ed
-  esito dei prototipi di isolamento; i grezzi stanno in `prototipi/misure/`.
-- Catalogo operazioni: snapshot test
-  (`crates/plenora-engine/tests/catalog_snapshot.snap`) — ogni cambio di
-  catalogo è esplicito in PR.
+La superficie documentale è **chiusa**: un Markdown nuovo entra solo
+aggiornando l'allowlist di `scripts/verifica_documentazione.py`, che è
+l'autorità sul conteggio.
 
-## Build e test
+## Prima di dire «fatto»
 
-```sh
-# test completi (container, toolchain del progetto)
-# `--init`: senza, il PID 1 e' `cargo` e non miete gli orfani; i test di
-# `isolamento::figlio` leggono /proc/<pid>/comm e uno zombie li fa fallire.
-docker run --rm --init -v $PWD:/work -w /work rust:1.98 cargo test --workspace --no-fail-fast
-# gate R6 (identico alla CI, bloccante): nessuna primitiva di panic nel
-# codice di produzione — lib di tutti i crate + bin della CLI.
-# MAI aggiungere --cap-lints=warn: cappera' anche i -D espliciti (li
-# declassa a warn) e il gate smette di bloccare — regressione trovata il
-# 2026-07-29, 27 siti accumulati mentre il gate era inefficace.
-cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table \
-  -p plenora-kernels-geo -p plenora-cli --lib --bins --locked -- -D unsafe-code \
-  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
-  -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
-# stesso gate sul perimetro feature-gated (rami geos/proj, non compilati
-# dal comando sopra): richiede cmake + sqlite3, vedi architettura.md#geometrie.
-cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
-  --lib --bins --locked --features full-backends -- -D unsafe-code \
-  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
-  -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
-# gli altri due passi feature-gated del job `backends`, che qui mancavano: il
-# comando sopra copre `--lib --bins`, quindi il codice di TEST dietro
-# `cfg(feature = "geos-backend")`/`"proj-backend"` non veniva compilato in
-# locale. Un import caduto in un file di test e' arrivato cosi' fino alla CI.
-cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
-  --all-targets --locked --features full-backends
-cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
-  --locked --features full-backends
-# gate assert (bloccante, identico alla CI): le macro `assert!`/`assert_eq!`/
-# `debug_assert*` sono primitive di panic che clippy non sa nominare, quindi
-# il gate R6 non le vede. Perimetro identico: crates/*/src meno il codice di
-# test.
-python scripts/verifica_assenza_assert.py
-# gate pin delle action (bloccante): ogni `uses:` dei workflow riferisce una
-# SHA completa con il commento della versione. Tag e rami sono mobili.
-python scripts/verifica_pin_workflow.py
-# gate commenti (bloccante): i commenti dicono il presente. Niente marcatori
-# anonimi, tappe, giri di review, stesure precedenti o difetti raccontati
-# all'imperfetto; la spiegazione tecnica resta, al controfattuale presente.
-# Le date passano solo dove fissano un pin o un atto normativo.
-python scripts/verifica_commenti.py
-# gate di coverage (soglie identiche alla CI: lines 90/functions 85/regions 89)
-scripts/coverage.sh
-# fuzzing: CI notturna (.github/workflows/fuzz.yml); smoke locale:
-scripts/fuzz-smoke.sh
-# gate ostile dell'isolamento Linux (F4-15). NON e' un passo di CI, e non
-# perche' se ne sia dimenticato qualcuno: vuole root e una gerarchia cgroup v2
-# con sottoalbero delegato, e il verde autoritativo arriva solo da una VM Linux
-# dedicata. Il runner condiviso della CI non e' quella macchina, e farcelo
-# girare darebbe un verde che non parla di isolamento. Fallisce quando un
-# prerequisito manca, invece di saltare.
-sudo scripts/verifica_isolamento_linux.sh [directory-evidenza]
-# gate clippy anche per il target Windows (la CI gira su Linux+Windows e
-# il codice cfg(windows)/cfg(not(unix)) non compila nel container Linux):
-rustup target add x86_64-pc-windows-msvc
-cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc
-```
+I comandi stanno nel [`README.md`](README.md#cosa-fa-girare-le-prove) e nei
+workflow sotto `.github/workflows/`: sono la fonte, e ricopiarli qui li farebbe
+divergere al primo cambiamento. Ciò che questo documento aggiunge è l'ordine di
+lettura del risultato:
+
+- i gate della CI devono essere verdi su Linux **e** Windows;
+- il verde autoritativo dell'isolamento arriva solo dalla VM Linux dedicata,
+  con cgroup v2 e sottoalbero delegato: un container non lo prova;
+- se un gate non è stato eseguito, si dice che non è stato eseguito. Un gate
+  saltato non è un gate passato.

@@ -193,6 +193,19 @@ prima dell'esecuzione, non a metà.
 Sul percorso lineare le row diagnostics non esistono: quelle operazioni
 richiedono un piano DAG.
 
+## Oracoli di equivalenza
+
+Cinque oracoli sorvegliano che un cambiamento strutturale non cambi niente di
+osservabile; un cambiamento voluto li aggiorna in modo esplicito, nella PR.
+
+| oracolo | che cosa fissa |
+|---|---|
+| `catalog_snapshot.snap` | i descrittori del catalogo, campo per campo |
+| `oracoli_identita.snap` | `plan_hash` e fingerprint di un insieme di piani, col JSON canonico accanto |
+| `oracolo_superficie_cli.snap` | stdout, stderr ed exit code di un insieme di invocazioni, byte per byte; un modello con un marcatore per i backend, perché la superficie dipende dalle feature |
+| `oracolo_metriche.snap` | righe, batch e spill per nodo, esclusi i tempi |
+| `oracolo_round_trip_contratto.rs` | contratto → schema → contratto, e la convergenza in un giro |
+
 ## Riferimenti normativi esterni
 
 Il codice cita due sistemi di identificatori che **non sono definiti in questo

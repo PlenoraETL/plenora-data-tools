@@ -5,9 +5,8 @@ tabellare e geografica. Valida integralmente il piano e i contratti **prima**
 dell'esecuzione, applica limiti di risorsa e pubblica gli output in modo
 atomico.
 
-> Versione workspace: `1.0.3`. Il progetto **non è ancora rilasciabile in
-> produzione**: la ragione, e che cosa manca, sono in
-> [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md).
+> Il progetto **non è ancora rilasciabile in produzione**: la ragione, e che
+> cosa manca, sono in [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md).
 
 ## Installazione
 
@@ -105,6 +104,59 @@ I/O e affini, `6` esecuzione, `70` interno, `130` cancellato).
 errore porta ciò che serve a diagnosticare, non ciò che serve a ricostruire i
 dati.
 
+## Cosa fa girare le prove
+
+La fonte sono i workflow sotto `.github/workflows/`; questi sono gli stessi
+comandi, da eseguire in locale prima di un commit. Toolchain e container:
+`rust:1.98`.
+
+```sh
+# suite completa. `--init` non e' un dettaglio: senza, il PID 1 del container
+# e' `cargo`, che non miete gli orfani, e i test di `isolamento::figlio` vedono
+# uno zombie come un figlio sopravvissuto.
+docker run --rm --init -v $PWD:/work -w /work rust:1.98 cargo test --workspace --no-fail-fast
+
+# gate R6: nessuna primitiva di panic nel codice di produzione. Mai
+# `--cap-lints=warn`: declasserebbe anche i -D espliciti, e il gate smetterebbe
+# di bloccare.
+cargo clippy -p plenora-core -p plenora-engine -p plenora-kernels-table \
+  -p plenora-kernels-geo -p plenora-cli --lib --bins --locked -- -D unsafe-code \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
+  -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+
+# lo stesso sul perimetro con i backend nativi (serve cmake + sqlite3), e i
+# test e il clippy di quel perimetro, che il comando sopra non compila
+cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
+  --lib --bins --locked --features full-backends -- -D unsafe-code \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
+  -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+cargo clippy -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
+  --all-targets --locked --features full-backends
+cargo test -p plenora-kernels-geo -p plenora-engine -p plenora-cli \
+  --locked --features full-backends
+
+# clippy anche per Windows: il codice cfg(windows) non compila nel container
+rustup target add x86_64-pc-windows-msvc
+cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc
+
+# i gate Python: assert nel codice di produzione, pin delle action, commenti al
+# presente, superficie documentale, e gli altri `scripts/verifica_*.py`
+for g in scripts/verifica_*.py; do python "$g" || break; done
+
+# coverage (le soglie sono quelle della CI) e smoke del fuzzing
+scripts/coverage.sh
+scripts/fuzz-smoke.sh
+```
+
+Il gate ostile dell'isolamento non è un passo di CI: vuole root e cgroup v2
+con sottoalbero delegato, e il verde che conta arriva solo dalla VM Linux
+dedicata. Fallisce quando un prerequisito manca, invece di saltare.
+
+```sh
+sudo scripts/verifica_isolamento_linux.sh <directory-evidenza-nuova>
+sudo scripts/qualifica_profilo_isolato.sh <binario> <generatore>
+```
+
 ## Documentazione
 
 | documento | contenuto |
@@ -112,7 +164,7 @@ dati.
 | [`docs/architettura.md`](docs/architettura.md) | crate, flusso planner/executor/kernel, determinismo, memoria, backend |
 | [`docs/piano-v5.md`](docs/piano-v5.md) | schema canonico, contratti, identità, migrazione dalla v4 |
 | [`docs/cli.md`](docs/cli.md) | comandi, binding degli input, formati, canali, exit code |
-| [`docs/operazioni.md`](docs/operazioni.md) | riferimento completo delle 146 operazioni, generato dal codice |
+| [`docs/operazioni.md`](docs/operazioni.md) | riferimento completo delle operazioni, generato dal codice |
 | [`docs/errori-e-limiti.md`](docs/errori-e-limiti.md) | tassonomia, privacy, cancellazione, panic policy, **e i limiti non coperti** |
 | [`docs/stato-e-roadmap.md`](docs/stato-e-roadmap.md) | che cosa manca, in ordine — **autorità unica sullo stato di avanzamento** |
 | [`docs/release.md`](docs/release.md) | gate, piattaforme, packaging, procedura |
