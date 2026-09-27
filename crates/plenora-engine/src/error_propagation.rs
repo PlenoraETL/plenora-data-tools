@@ -31,8 +31,9 @@ pub const fn categoria_preservata(categoria: ErrorCategory) -> bool {
 /// L'unica costruzione, per l'executor DAG e per il percorso legacy: due copie
 /// divergerebbero, e la stessa esecuzione darebbe errori diversi a seconda
 /// della versione del piano. Le row diagnostics restano sull'errore esterno.
-/// Un errore gia' `Execution` conserva la propria `reason`, senza annidare il
-/// testo del contesto precedente. L'`execution_id` resta vuoto: lo riempie il
+/// Un `Execution` nudo conserva la propria `reason`, senza annidare il testo
+/// del contesto precedente; avvolto (`Tagged`, `Replayed`) ne porta il testo
+/// intero. L'`execution_id` resta vuoto: lo riempie il
 /// confine di uscita dell'executor, e il percorso legacy non ne ha.
 pub fn con_contesto_del_passo(
     error: PlenoraError,
@@ -84,6 +85,11 @@ mod tests {
         );
         assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
         assert_eq!(errore.execution_location(), Some(("3", "sort", None)));
+        let originale = PlenoraError::ResourceLimit("tetto".to_owned());
+        assert_eq!(errore.to_string(), originale.to_string());
+        assert_eq!(errore.phase(), originale.phase());
+        assert_eq!(errore.retry_disposition(), originale.retry_disposition());
+        assert_eq!(errore.remote_effect(), originale.remote_effect());
     }
 
     #[test]
@@ -97,7 +103,13 @@ mod tests {
             reason: "motivo".to_owned(),
         };
         let errore = con_contesto_del_passo(interno, "2".to_owned(), "sort".to_owned());
-        let PlenoraError::Execution { node, operation, reason, .. } = &errore else {
+        let PlenoraError::Execution {
+            node,
+            operation,
+            reason,
+            ..
+        } = &errore
+        else {
             panic!("atteso Execution, ottenuto {errore:?}");
         };
         assert_eq!((node.as_str(), operation.as_str()), ("2", "sort"));

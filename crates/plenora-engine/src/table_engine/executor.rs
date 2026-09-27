@@ -1534,11 +1534,7 @@ pub(crate) fn execute_batch_with_spill_row_diagnostics(
 /// Contesto del passo per il percorso legacy (piani `schema_version <= 3`):
 /// la stessa costruzione dell'executor DAG, con l'indice del passo come nodo.
 fn legacy_step_error(error: PlenoraError, index: usize, operation: &str) -> PlenoraError {
-    crate::error_propagation::con_contesto_del_passo(
-        error,
-        index.to_string(),
-        operation.to_owned(),
-    )
+    crate::error_propagation::con_contesto_del_passo(error, index.to_string(), operation.to_owned())
 }
 
 fn execute_batch_with_spill_impl(
