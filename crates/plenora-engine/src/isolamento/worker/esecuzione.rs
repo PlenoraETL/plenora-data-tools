@@ -31,13 +31,6 @@ use crate::protocollo::messaggi::{
 
 use super::Result;
 
-/// Byte letti per volta nel digest dell'artefatto.
-///
-/// Costante e piccola, per la stessa ragione del passo 5-bis: e' cio' che rende
-/// il digest a memoria costante invece che proporzionale alla dimensione
-/// dell'artefatto.
-const BLOCCO_DIGEST: usize = 64 * 1024;
-
 /// Esegue l'incarico e rende cio' che l'`Esito` dichiara.
 ///
 /// L'osservatore del progresso riceve i totali dopo ogni batch scritto, e il
@@ -254,12 +247,11 @@ fn digest_dell_artefatto(percorso: &Path) -> Result<DigestArtefatto> {
             .con_contesto("l'artefatto appena scritto non si rilegge per il digest")
             .with_phase(ErrorPhase::Read)
     })?;
-    let digest = crate::protocollo::digest::sha256_da_lettore(&mut artefatto, BLOCCO_DIGEST)
-        .map_err(|causa| {
-            PlenoraError::Io(causa)
-                .con_contesto("l'artefatto non si legge per il digest")
-                .with_phase(ErrorPhase::Read)
-        })?;
+    let digest = crate::protocollo::digest::sha256_da_lettore(&mut artefatto).map_err(|causa| {
+        PlenoraError::Io(causa)
+            .con_contesto("l'artefatto non si legge per il digest")
+            .with_phase(ErrorPhase::Read)
+    })?;
     Ok(DigestArtefatto {
         algoritmo: ALGORITMO_DIGEST.to_owned(),
         valore: digest.in_esadecimale(),

@@ -849,7 +849,7 @@ pub(super) fn digest_dell_immagine(percorso: &Path) -> Result<String> {
             &format!("l'immagine {} non si apre: {causa}", percorso.display()),
         )
     })?;
-    crate::protocollo::digest::sha256_da_lettore(&mut file, 64 * 1024)
+    crate::protocollo::digest::sha256_da_lettore(&mut file)
         .map(|digest| digest.in_esadecimale())
         .map_err(|causa| non_disponibile("prova", &format!("l'immagine non si legge: {causa}")))
 }
