@@ -286,6 +286,40 @@ fn attribuzione(error: &PlenoraError) -> (String, String, String) {
     }
 }
 
+/// Il panico di un kernel arriva come difetto **nostro**, attribuito al nodo e
+/// all'operazione e senza il testo del panico, che puo' contenere dati.
+///
+/// Categoria `Internal` (exit 70), non `execution` (exit 6) e non
+/// `invalid_plan` (exit 2, che accuserebbe il piano di chi ci chiama). Nodo e
+/// operazione si leggono dai campi, con [`attribuzione`]. `caso` apre ogni
+/// messaggio, per distinguere le varianti di una stessa prova.
+fn assert_panico_attribuito(
+    error: &PlenoraError,
+    nodo_atteso: &str,
+    operazione_attesa: &str,
+    caso: &str,
+) {
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::Internal,
+        "{caso}un panico di kernel e' un difetto interno: {error}"
+    );
+    let (nodo, operazione, reason) = attribuzione(error);
+    assert_eq!(nodo, nodo_atteso, "{caso}attribuzione al nodo in panic");
+    assert_eq!(
+        operazione, operazione_attesa,
+        "{caso}attribuzione all'operazione"
+    );
+    assert!(
+        !reason.contains("panic di test iniettato"),
+        "{caso}il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
+    );
+    assert!(
+        reason.contains("panic nel kernel"),
+        "{caso}il motivo dichiara comunque che si tratta di un panic: {reason}"
+    );
+}
+
 #[test]
 fn il_dettaglio_diagnostico_sopravvive_all_assegnazione_dell_execution_id() {
     // `with_execution_id` RIGENERA il messaggio da `execution_reason` per
@@ -387,13 +421,28 @@ fn diagnostic_merge_overflow_is_transactional_and_preserves_partial_report() {
     assert_eq!(report.validate_for_emission(), Ok(()));
 }
 
-#[test]
-fn type_cast_collects_complete_row_diagnostics_across_input_batches() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
+/// Schema a una sola colonna Utf8 `effective_date`, con la nullabilita' data.
+fn effective_date_schema(nullable: bool) -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new(
         "effective_date",
         DataType::Utf8,
-        true,
-    )]));
+        nullable,
+    )]))
+}
+
+/// Il piano a un nodo `cast` di `table.type_cast`, con la configurazione data.
+fn cast_plan(config: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "schema_version": 5,
+        "inputs": ["main"],
+        "nodes": [{"id": "cast", "op": "table.type_cast", "in": ["main"], "config": config}],
+        "output": "cast"
+    })
+}
+
+#[test]
+fn type_cast_collects_complete_row_diagnostics_across_input_batches() {
+    let schema = effective_date_schema(true);
     let make_batch = |rows: usize, invalid_row: usize| {
         let values = (0..rows)
             .map(|row| {
@@ -601,11 +650,7 @@ fn expression_collects_complete_row_diagnostics_across_input_batches() {
 
 #[test]
 fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        false,
-    )]));
+    let schema = effective_date_schema(false);
     let batch = |values: Vec<&str>| {
         RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(values))])
             .expect("batch date")
@@ -614,17 +659,7 @@ fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
         batch(vec!["2026-08-01", "2026-08-02"]),
         batch(vec!["not-a-date"]),
     ];
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {"column": "effective_date", "target_type": "date32"}
-        }],
-        "output": "cast"
-    });
+    let plan = cast_plan(&json!({"column": "effective_date", "target_type": "date32"}));
     let make_output = || {
         run(
             &plan,
@@ -658,11 +693,7 @@ fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
 
 #[test]
 fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(StringArray::from(vec![
@@ -681,21 +712,11 @@ fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
         vec![Ok(batch), Err(interrupted)].into_iter(),
     );
     let inputs = single_input_from("main", input);
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {
-                "column": "effective_date",
-                "target_type": "date32",
-                "errors": "coerce"
-            }
-        }],
-        "output": "cast"
-    });
+    let plan = cast_plan(&json!({
+        "column": "effective_date",
+        "target_type": "date32",
+        "errors": "coerce"
+    }));
     let output = run(
         &plan,
         inputs,
@@ -726,11 +747,7 @@ fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
     // lease rilasciato per batch, ri-riserva al replay dopo lo scan
     // completo. Trattenendoli in RAM con i lease vivi fino a fine scan,
     // questo stream valido verrebbe rifiutato per «budget esaurito».
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let make_batch = || {
         RecordBatch::try_new(
             schema.clone(),
@@ -741,22 +758,13 @@ fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
         .expect("batch valido")
     };
     let plan_with = |max_governed_memory_bytes: u64| {
-        json!({
-            "schema_version": 5,
-            "inputs": ["main"],
-            "limits": {"max_governed_memory_bytes": max_governed_memory_bytes},
-            "nodes": [{
-                "id": "cast",
-                "op": "table.type_cast",
-                "in": ["main"],
-                "config": {
-                    "column": "effective_date",
-                    "target_type": "date32",
-                    "errors": "coerce"
-                }
-            }],
-            "output": "cast"
-        })
+        let mut plan = cast_plan(&json!({
+            "column": "effective_date",
+            "target_type": "date32",
+            "errors": "coerce"
+        }));
+        plan["limits"] = json!({"max_governed_memory_bytes": max_governed_memory_bytes});
+        plan
     };
     let contract = [("main".to_owned(), DataContract::tabular(schema.clone()))];
     // Sonda: byte governati di un batch di input e del suo output (le
@@ -804,11 +812,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
     // Rejection tardiva con staging: gli accepted staged sono scartati
     // (nessun batch pubblicato), il drenaggio continua per i conteggi
     // completi e gli indici restano assoluti sull'input originale.
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let batch_of = |rows: &[Option<&str>]| {
         RecordBatch::try_new(
             schema.clone(),
@@ -816,17 +820,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
         )
         .expect("batch")
     };
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {"column": "effective_date", "target_type": "date32"}
-        }],
-        "output": "cast"
-    });
+    let plan = cast_plan(&json!({"column": "effective_date", "target_type": "date32"}));
     let make_output = || {
         run(
             &plan,
@@ -871,11 +865,7 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
     // Fail-closed: stream VALIDO la cui staging IPC supera la quota
     // `max_temp_bytes` -> errore esplicito, zero accepted pubblicati,
     // nessun artefatto scrivibile via write_ipc_file_with_profile.
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let make_batch = || {
         RecordBatch::try_new(
             schema.clone(),
@@ -886,25 +876,15 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
         )
         .expect("batch valido")
     };
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        // `max_governed_memory_bytes` basso forza la modalita' DISCO fin dal primo
-        // batch (architettura.md#memoria, staging memory-first: si resta in memoria solo finche'
-        // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
-        // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
-        // quota temporanea non verrebbe nemmeno interrogata. Doverlo
-        // dichiarare e' cio' che rende visibile quale sia la modalita'
-        // predefinita: la memoria.
-        "limits": {"max_temp_bytes": 1, "max_governed_memory_bytes": 1_048_576},
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {"column": "effective_date", "target_type": "date32"}
-        }],
-        "output": "cast"
-    });
+    let mut plan = cast_plan(&json!({"column": "effective_date", "target_type": "date32"}));
+    // `max_governed_memory_bytes` basso forza la modalita' DISCO fin dal primo
+    // batch (architettura.md#memoria, staging memory-first: si resta in memoria solo finche'
+    // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
+    // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
+    // quota temporanea non verrebbe nemmeno interrogata. Doverlo
+    // dichiarare e' cio' che rende visibile quale sia la modalita'
+    // predefinita: la memoria.
+    plan["limits"] = json!({"max_temp_bytes": 1, "max_governed_memory_bytes": 1_048_576});
     let make_output = || {
         run(
             &plan,
@@ -4019,28 +3999,7 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    // Un panico dentro un kernel e' un difetto NOSTRO: categoria `Internal`
-    // (exit 70), non `execution` (exit 6) e non `invalid_plan` (exit 2, che
-    // accuserebbe il piano di chi ci chiama).
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    let (node, operation, reason) = attribuzione(&error);
-    assert_eq!(
-        node, "boom_stream",
-        "attribuzione al nodo che e' andato in panic"
-    );
-    assert_eq!(operation, "table.filter", "attribuzione all'operazione");
-    assert!(
-        !reason.contains("panic di test iniettato"),
-        "il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
-    );
-    assert!(
-        reason.contains("panic nel kernel"),
-        "il motivo dichiara comunque che si tratta di un panic: {reason}"
-    );
+    assert_panico_attribuito(&error, "boom_stream", "table.filter", "");
 }
 
 #[test]
@@ -4060,28 +4019,9 @@ fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    // Un panico dentro un kernel e' un difetto NOSTRO: categoria
-    // `Internal` (exit 70), non `execution` (exit 6) e non
-    // `invalid_plan` (exit 2, che accuserebbe il piano di chi ci
-    // chiama). Il contesto del passo resta: e' il motivo per cui il
-    // propagatore usa `Replayed` invece di lasciar passare l'errore
-    // nudo.
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    // Nodo e operazione viaggiano nel testo del `Replayed`: e' il portatore
-    // di categoria PIU' attribuzione, e non espone accessori tipizzati.
-    let (node, operation, reason) = attribuzione(&error);
-    {
-        assert_eq!(node, "boom_block", "attribuzione al nodo");
-        assert_eq!(operation, "table.aggregate", "attribuzione all'operazione");
-        assert!(
-            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
-            "il testo del panic non va pubblicato: {reason}"
-        );
-    }
+    // Il contesto del passo resta: e' il motivo per cui il propagatore usa
+    // `Replayed` invece di lasciar passare l'errore nudo.
+    assert_panico_attribuito(&error, "boom_block", "table.aggregate", "");
 }
 
 #[test]
@@ -4115,31 +4055,8 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    // Un panico dentro un kernel e' un difetto NOSTRO: categoria
-    // `Internal` (exit 70), non `execution` (exit 6) e non
-    // `invalid_plan` (exit 2, che accuserebbe il piano di chi ci
-    // chiama). Il contesto del passo resta: e' il motivo per cui il
-    // propagatore usa `Replayed` invece di lasciar passare l'errore
-    // nudo.
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    // Nodo e operazione viaggiano nel testo del `Replayed`: e' il portatore
-    // di categoria PIU' attribuzione, e non espone accessori tipizzati.
-    let (node, operation, reason) = attribuzione(&error);
-    {
-        assert_eq!(
-            node, "boom_join",
-            "attribuzione anche per i segmenti BinaryBlocking"
-        );
-        assert_eq!(operation, "table.join", "attribuzione all'operazione");
-        assert!(
-            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
-            "il testo del panic non va pubblicato: {reason}"
-        );
-    }
+    // Il contesto del passo resta anche per i segmenti `BinaryBlocking`.
+    assert_panico_attribuito(&error, "boom_join", "table.join", "BinaryBlocking: ");
 }
 
 #[test]
@@ -4305,11 +4222,7 @@ fn cancel_between_batches_in_streaming_chain() {
 
 #[test]
 fn cancellation_after_rejection_prevails_with_partial_diagnostics() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        false,
-    )]));
+    let schema = effective_date_schema(false);
     let invalid = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(StringArray::from(vec!["not-a-date"]))],
@@ -5060,19 +4973,8 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
     // **entrato**, e resta contato. E' la promessa scritta su `geo_fusion_groups_started`,
     // e senza questo caso resterebbe soltanto scritta.
     assert_gruppi_avviati(&fused_metrics, &plain_metrics, 1);
-    for (label, error) in [("fuso", &fused_error), ("non fuso", &plain_error)] {
-        let (node, operation, reason) = attribuzione(error);
-        assert_eq!(
-            error.category(),
-            plenora_core::ErrorCategory::Internal,
-            "{label}: un panico di kernel e' un difetto interno: {error}"
-        );
-        assert_eq!(node, "g_s", "{label}: attribuzione al nodo in panic");
-        assert_eq!(operation, "geo.simplify", "{label}: operazione");
-        assert!(
-            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
-            "{label}: il testo del panic non va pubblicato: {reason}"
-        );
+    for (label, error) in [("fuso: ", &fused_error), ("non fuso: ", &plain_error)] {
+        assert_panico_attribuito(error, "g_s", "geo.simplify", label);
     }
 }
 
@@ -5655,22 +5557,7 @@ fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
     .expect("execute")
     .collect_batches()
     .expect_err("panic convertito in errore");
-    let (node, operation, reason) = attribuzione(&error);
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    assert_eq!(node, "gb_panic", "attribuzione al nodo in panic");
-    assert_eq!(operation, "geo.sjoin", "attribuzione all'operazione");
-    assert!(
-        !reason.contains("panic di test iniettato"),
-        "il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
-    );
-    assert!(
-        reason.contains("panic nel kernel"),
-        "il motivo dichiara comunque che si tratta di un panic: {reason}"
-    );
+    assert_panico_attribuito(&error, "gb_panic", "geo.sjoin", "");
     assert_eq!(
         error.phase(),
         ErrorPhase::Write,
