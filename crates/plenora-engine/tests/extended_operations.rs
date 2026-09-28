@@ -249,14 +249,42 @@ fn pair() -> (RecordBatch, RecordBatch) {
     (left, right)
 }
 
-/// Semi e anti join: `semi_and_anti_form_a_stable_partition` in
-/// `extended_properties.rs`.
 #[test]
-fn asof_join_has_stable_cardinality() {
+fn membership_and_asof_joins_have_stable_cardinality() {
     let (left, right) = pair();
+    let semi = execute_binary(
+        &left,
+        &right,
+        &plan("semi_join", json!({"left_keys":["id"],"right_keys":["id"]})),
+    )
+    .expect("semi");
+    let anti = execute_binary(
+        &left,
+        &right,
+        &plan("anti_join", json!({"left_keys":["id"],"right_keys":["id"]})),
+    )
+    .expect("anti");
+    assert_eq!((semi.num_rows(), anti.num_rows()), (3, 1));
     let asof = execute_binary(&left, &right, &plan("asof_join", json!({"left_on":"time","right_on":"time","direction":"backward","tolerance":2.0,"allow_exact":true}))).expect("asof");
     assert_eq!(asof.num_rows(), left.num_rows());
     assert!(asof.column_by_name("label").expect("label").is_null(0));
+}
+
+#[test]
+fn set_operations_are_distinct_and_stable() {
+    let (left, right) = set_pair();
+    let union = execute_binary(&left, &right, &plan("union_distinct", json!({}))).expect("union");
+    let intersection =
+        execute_binary(&left, &right, &plan("intersect", json!({}))).expect("intersect");
+    let difference = execute_binary(&left, &right, &plan("except", json!({}))).expect("except");
+    assert_eq!(
+        (
+            union.num_rows(),
+            intersection.num_rows(),
+            difference.num_rows()
+        ),
+        (4, 2, 1)
+    );
 }
 
 fn set_pair() -> (RecordBatch, RecordBatch) {

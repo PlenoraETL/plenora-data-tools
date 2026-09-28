@@ -1068,10 +1068,18 @@ fn set_batch(values: &[i64]) -> RecordBatch {
     .expect("set batch")
 }
 
-/// L'identita' fra percorso spilled e in memoria e' in
-/// `forced_spill_matches_the_in_memory_set_contract` (`extended_properties.rs`).
+fn int_values(batch: &RecordBatch) -> Vec<i64> {
+    batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("ints")
+        .values()
+        .to_vec()
+}
+
 #[test]
-fn disk_spill_is_quota_bounded() {
+fn disk_spill_is_semantically_identical_ordered_and_quota_bounded() {
     let left_values = (0..400)
         .map(|value| i64::from(value % 173))
         .collect::<Vec<_>>();
@@ -1080,6 +1088,23 @@ fn disk_spill_is_quota_bounded() {
         .collect::<Vec<_>>();
     let left = set_batch(&left_values);
     let right = set_batch(&right_values);
+    for operation in ["union_distinct", "intersect", "except"] {
+        let in_memory = execute_binary(
+            &left,
+            &right,
+            &plan(operation, json!({}), Limits::default()),
+        )
+        .expect("in memory");
+        let spill_limits = Limits {
+            max_governed_memory_bytes: 2_048,
+            spill_partitions: 64,
+            ..Limits::default()
+        };
+        let spilled = execute_binary(&left, &right, &plan(operation, json!({}), spill_limits))
+            .unwrap_or_else(|error| panic!("{operation}: {error}"));
+        assert_eq!(int_values(&spilled), int_values(&in_memory), "{operation}");
+    }
+
     let quota = Limits {
         max_governed_memory_bytes: 2_048,
         max_temp_bytes: 32,

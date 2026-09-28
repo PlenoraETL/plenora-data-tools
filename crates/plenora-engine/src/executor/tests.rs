@@ -6252,6 +6252,20 @@ fn staging_dictionary_e_nested() {
 }
 
 #[test]
+fn staging_picco_governato_memoria_non_supera_il_budget() {
+    // Il punto delicato: trattenere i lease NON deve far superare il budget.
+    for forza_disco in [false, true] {
+        let (_, metriche) = staging_esegui(forza_disco).expect("esecuzione");
+        assert!(
+            metriche.memory.peak_reserved_bytes <= metriche.memory.budget_bytes,
+            "picco {} oltre il budget {} (forza_disco={forza_disco})",
+            metriche.memory.peak_reserved_bytes,
+            metriche.memory.budget_bytes
+        );
+    }
+}
+
+#[test]
 fn staging_budget_stretto_non_regredisce_a_resource_limit() {
     // Il rischio dichiarato dello staging memory-first: trattenere i lease
     // puo' trasformare un input eseguibile in un falso `ResourceLimit`. La

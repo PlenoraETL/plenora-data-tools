@@ -4162,4 +4162,35 @@ mod tests {
             FusedStepError::Measure { .. } => panic!("atteso errore di kernel, trovato Measure"),
         }
     }
+
+    /// Righe difettose nel percorso non fuso (`transform_cells`): la
+    /// diagnostica row-scoped e' completa (conteggi esatti su tutte le
+    /// righe, esempi bounded, indici batch-locali zero-based) e l'errore
+    /// primario resta quello della prima riga difettosa.
+    #[test]
+    fn transform_cells_reports_complete_row_diagnostics() {
+        let params = fused_params(ArrowOperation::Centroid);
+        let cells = cells_array(&[
+            Some(wkb(&Geometry::Point(Point::new(0.0, 0.0)))),
+            Some(vec![0x01, 0x09, 0x00]), // WKB troncato
+            None,
+            Some(vec![0x02]), // endian flag invalida
+        ]);
+        let Err(error) = transform_cells(&params, &cells) else {
+            panic!("celle malformate accettate");
+        };
+        let report = error.row_diagnostics().expect("diagnostica row-scoped");
+        assert_eq!(report.observed_total, 2);
+        assert_eq!(report.total, Some(2));
+        assert_eq!(report.counts["geometry.invalid_wkb"], 2);
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(report.validate_for_emission().is_ok());
+    }
 }
