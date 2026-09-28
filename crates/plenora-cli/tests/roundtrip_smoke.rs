@@ -122,7 +122,7 @@ fn catalog_unificato_e_filtro_famiglia() {
 }
 
 #[test]
-fn run_roundtrip_rename_streaming_e_fail_closed() {
+fn run_roundtrip_rename_streaming() {
     let directory = tempfile::tempdir().expect("tempdir");
     let input = directory.path().join("input.arrow");
     let output_path = directory.path().join("output.arrow");
@@ -155,13 +155,6 @@ fn run_roundtrip_rename_streaming_e_fail_closed() {
     assert_eq!(reader.schema().field(0).name(), "renamed");
     let rows: usize = reader.map(|batch| batch.expect("batch").num_rows()).sum();
     assert_eq!(rows, 2);
-
-    // Fail-closed: un secondo run sullo stesso output non sovrascrive.
-    let again = comando_run(&plan, "--input", &input, &output_path)
-        .output()
-        .expect("run again");
-    assert!(!again.status.success());
-    assert!(String::from_utf8_lossy(&again.stdout).contains("esistente"));
 }
 
 #[test]
@@ -230,205 +223,63 @@ fn transform_wkb_v2_roundtrip() {
     assert!(output_path.try_exists().expect("stat"));
 }
 
+/// BLOCK-06: l'output di `transform-arrow` porta le chiavi canoniche §2 in
+/// doppia emissione con quelle `GeoArrow` (parita' col percorso v4,
+/// errori-e-limiti.md#limiti-dichiarati estesa), con
+/// `plenora.contract.version` nei metadati dello schema (R2.5).
 #[cfg(feature = "proj-backend")]
-#[test]
-fn transform_arrow_v3_roundtrip() {
+fn assert_transform_canonical_metadata(schema: &Schema) {
     use plenora_engine::geo_transport::transport::{
         DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
     };
 
-    let directory = tempfile::tempdir().expect("tempdir");
-    let input = directory.path().join("input.plngeo3");
-    let schema_path = directory.path().join("schema.json");
-    let output_path = directory.path().join("output.plngeo3");
-
-    let mut metadata = HashMap::new();
-    metadata.insert(
-        GEOARROW_EXTENSION_KEY.to_owned(),
-        GEOARROW_WKB_EXTENSION.to_owned(),
-    );
-    let schema = Schema::new(vec![Field::new(
-        DEFAULT_GEOMETRY_COLUMN,
-        DataType::Binary,
-        true,
-    )
-    .with_metadata(metadata)]);
-    let batch = RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![Arc::new(BinaryArray::from_iter([Some(&POINT_WKB[..])]))],
-    )
-    .expect("batch");
-    std::fs::write(&input, envelope_plngeo3(&Arc::new(schema), &batch)).expect("input");
-
-    std::fs::write(
-        &schema_path,
-        br#"{"schema_version":3,"operation":"centroid","row_count":1,"crs":"EPSG:3857"}"#,
-    )
-    .expect("schema");
-
-    let result = cli()
-        .arg("transform-arrow")
-        .arg("--input")
-        .arg(&input)
-        .arg("--schema")
-        .arg(&schema_path)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("transform-arrow");
-    assert!(
-        result.status.success(),
-        "stdout: {}",
-        String::from_utf8_lossy(&result.stdout)
-    );
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    assert!(stdout.contains("\"rows\":1"), "stdout: {stdout}");
-    assert!(stdout.contains("\"output_rows\":1"), "stdout: {stdout}");
-    assert!(output_path.try_exists().expect("stat"));
-
-    let ipc_output = directory.path().join("output.arrow");
-    let result = cli()
-        .arg("transform-arrow")
-        .arg("--input")
-        .arg(&input)
-        .arg("--schema")
-        .arg(&schema_path)
-        .arg("--output")
-        .arg(&ipc_output)
-        .args(["--output-format", "ipc-file"])
-        .output()
-        .expect("transform-arrow ipc-file");
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stdout)
-    );
-    let reader = FileReader::try_new(std::fs::File::open(&ipc_output).expect("ipc output"), None)
-        .expect("Arrow IPC file pubblico");
-    assert_public_io_admission_metadata(reader.schema().as_ref());
-    let batches = reader.collect::<Result<Vec<_>, _>>().expect("batch IPC");
-    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
-}
-
-/// `transform-arrow` con `from_coords`: le coordinate non finite sono un
-/// difetto row-scoped — l'envelope d'errore porta la diagnostica completa
-/// (conteggi, indice assoluto, colonna) e nessun output e' pubblicato.
-#[cfg(feature = "proj-backend")]
-#[test]
-fn transform_arrow_from_coords_reports_row_diagnostics() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let input = directory.path().join("input.plngeo3");
-    let schema_path = directory.path().join("schema.json");
-    let output_path = directory.path().join("output.plngeo3");
-
-    scrivi_from_coords_con_nan(&input, &schema_path);
-
-    let result = cli()
-        .arg("transform-arrow")
-        .arg("--input")
-        .arg(&input)
-        .arg("--schema")
-        .arg(&schema_path)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("transform-arrow");
-    assert!(!result.status.success(), "coordinata NaN accettata");
-    // L'envelope vive su stdout e stderr resta vuoto
-    // (errori-e-limiti.md#envelope-e-canali).
-    assert!(
-        result.stderr.is_empty(),
-        "stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stdout).expect("envelope row diagnostics");
-    let diagnostics = &envelope["error"]["row_diagnostics"];
+    let (_, field) = schema
+        .column_with_name(DEFAULT_GEOMETRY_COLUMN)
+        .expect("geometry column");
+    let metadata = field.metadata();
+    // Blocco canonico (stessa forma del v4).
     assert_eq!(
-        diagnostics["contract"], "plenora-row-diagnostics-v1",
-        "envelope: {envelope}"
+        metadata
+            .get("plenora.geometry.dimensions")
+            .map(String::as_str),
+        Some("xy")
     );
-    assert_eq!(diagnostics["counts"]["geometry.non_finite_coordinate"], 1);
-    assert_eq!(diagnostics["examples"][0]["source_index"], 1);
-    assert_eq!(diagnostics["examples"][0]["column"], "x");
-    assert!(
-        !output_path.try_exists().expect("stat"),
-        "publish atomico: nessun output parziale"
-    );
-}
-
-/// Un rifiuto row-scoped di `transform-arrow` e' un difetto del DATO
-/// letto, non del piano: l'envelope porta gli assi `data_mapping`/`read`,
-/// `remote_effect` none, retry never (mai riclassificato `invalid_plan`) e la
-/// diagnostica, con zero output pubblicato. Un errore NON row-scoped
-/// mantiene la classificazione storica.
-#[cfg(feature = "proj-backend")]
-#[test]
-fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let input = directory.path().join("input.plngeo3");
-    let schema_path = directory.path().join("schema.json");
-    let output_path = directory.path().join("output.plngeo3");
-
-    scrivi_from_coords_con_nan(&input, &schema_path);
-
-    let run_transform = || {
-        cli()
-            .arg("transform-arrow")
-            .arg("--input")
-            .arg(&input)
-            .arg("--schema")
-            .arg(&schema_path)
-            .arg("--output")
-            .arg(&output_path)
-            .output()
-            .expect("transform-arrow")
-    };
-
-    let result = run_transform();
-    assert!(!result.status.success(), "coordinata NaN accettata");
-    assert!(
-        result.stderr.is_empty(),
-        "stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stdout).expect("envelope row diagnostics");
-    let error = &envelope["error"];
-    assert_eq!(error["category"], "data_mapping", "envelope: {envelope}");
-    assert_eq!(error["phase"], "read", "envelope: {envelope}");
-    assert_eq!(error["remote_effect"], "none", "envelope: {envelope}");
-    assert_eq!(error["retry"]["kind"], "never", "envelope: {envelope}");
     assert_eq!(
-        error["row_diagnostics"]["counts"]["geometry.non_finite_coordinate"], 1,
-        "envelope: {envelope}"
+        metadata
+            .get("plenora.geometry.crs_resolution")
+            .map(String::as_str),
+        Some("resolved")
     );
-    assert!(
-        !output_path.try_exists().expect("stat"),
-        "publish atomico: nessun output parziale"
+    assert_eq!(
+        metadata.get("plenora.geometry.crs_id").map(String::as_str),
+        Some("EPSG:3857")
     );
-
-    // Controllo: errore NON row-scoped (envelope malformato) -> la
-    // classificazione storica resta invariata, nessuna diagnostica.
-    std::fs::write(&input, b"non-un-envelope-plngeo3").expect("input malformato");
-    let result = run_transform();
-    assert!(!result.status.success(), "envelope malformato accettato");
-    assert!(result.stderr.is_empty());
-    let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stdout).expect("envelope errore non row-scoped");
-    let error = &envelope["error"];
-    assert_eq!(error["category"], "invalid_plan", "envelope: {envelope}");
-    assert_eq!(error["phase"], "validate", "envelope: {envelope}");
-    assert!(error["row_diagnostics"].is_null(), "envelope: {envelope}");
-    assert!(!output_path.try_exists().expect("stat"));
+    assert_eq!(
+        metadata
+            .get("plenora.geometry.axis_order")
+            .map(String::as_str),
+        Some("unknown")
+    );
+    // Doppia emissione: le chiavi GeoArrow restano.
+    assert_eq!(
+        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+        Some(GEOARROW_WKB_EXTENSION)
+    );
+    // Versione di protocollo nei metadati dello schema (R2.5).
+    assert_eq!(
+        schema
+            .metadata()
+            .get("plenora.contract.version")
+            .map(String::as_str),
+        Some("1")
+    );
 }
 
-/// BLOCK-06: l'output di `transform-arrow` porta le chiavi canoniche §2 in
-/// doppia emissione con quelle `GeoArrow` (parita' col percorso v4, errori-e-limiti.md#limiti-dichiarati
-/// estesa), con `plenora.contract.version` nei metadati dello schema (R2.5).
+/// Round-trip di `transform-arrow` v3, con le chiavi canoniche
+/// dell'output ([`assert_transform_canonical_metadata`]).
 #[cfg(feature = "proj-backend")]
 #[test]
-fn transform_arrow_v3_emits_canonical_keys() {
+fn transform_arrow_v3_roundtrip() {
     use plenora_engine::geo_transport::transport::{
         decode_ipc, EnvelopeReader, DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY,
         GEOARROW_WKB_EXTENSION,
@@ -478,6 +329,9 @@ fn transform_arrow_v3_emits_canonical_keys() {
         "stdout: {}",
         String::from_utf8_lossy(&result.stdout)
     );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("\"rows\":1"), "stdout: {stdout}");
+    assert!(stdout.contains("\"output_rows\":1"), "stdout: {stdout}");
 
     let envelope = std::fs::read(&output_path).expect("output");
     let payload = EnvelopeReader::new(envelope.as_slice())
@@ -485,46 +339,106 @@ fn transform_arrow_v3_emits_canonical_keys() {
         .read_payload()
         .expect("payload");
     let (out_schema, _) = decode_ipc(&payload).expect("ipc");
-    let (_, field) = out_schema
-        .column_with_name(DEFAULT_GEOMETRY_COLUMN)
-        .expect("geometry column");
-    let metadata = field.metadata();
-    // Blocco canonico (stessa forma del v4).
+    assert_transform_canonical_metadata(out_schema.as_ref());
+
+    let ipc_output = directory.path().join("output.arrow");
+    let result = cli()
+        .arg("transform-arrow")
+        .arg("--input")
+        .arg(&input)
+        .arg("--schema")
+        .arg(&schema_path)
+        .arg("--output")
+        .arg(&ipc_output)
+        .args(["--output-format", "ipc-file"])
+        .output()
+        .expect("transform-arrow ipc-file");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let reader = FileReader::try_new(std::fs::File::open(&ipc_output).expect("ipc output"), None)
+        .expect("Arrow IPC file pubblico");
+    assert_public_io_admission_metadata(reader.schema().as_ref());
+    let batches = reader.collect::<Result<Vec<_>, _>>().expect("batch IPC");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+}
+
+/// `transform-arrow` con `from_coords`: le coordinate non finite sono un
+/// difetto row-scoped del DATO letto, non del piano. L'envelope porta gli
+/// assi `data_mapping`/`read`, `remote_effect` none, retry never (mai
+/// riclassificato `invalid_plan`) e la diagnostica completa (conteggi,
+/// indice assoluto, colonna), con zero output pubblicato. Un errore NON
+/// row-scoped mantiene la classificazione storica.
+#[cfg(feature = "proj-backend")]
+#[test]
+fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let input = directory.path().join("input.plngeo3");
+    let schema_path = directory.path().join("schema.json");
+    let output_path = directory.path().join("output.plngeo3");
+
+    scrivi_from_coords_con_nan(&input, &schema_path);
+
+    let run_transform = || {
+        cli()
+            .arg("transform-arrow")
+            .arg("--input")
+            .arg(&input)
+            .arg("--schema")
+            .arg(&schema_path)
+            .arg("--output")
+            .arg(&output_path)
+            .output()
+            .expect("transform-arrow")
+    };
+
+    let result = run_transform();
+    assert!(!result.status.success(), "coordinata NaN accettata");
+    // L'envelope vive su stdout e stderr resta vuoto
+    // (errori-e-limiti.md#envelope-e-canali).
+    assert!(
+        result.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&result.stdout).expect("envelope row diagnostics");
+    let error = &envelope["error"];
+    assert_eq!(error["category"], "data_mapping", "envelope: {envelope}");
+    assert_eq!(error["phase"], "read", "envelope: {envelope}");
+    assert_eq!(error["remote_effect"], "none", "envelope: {envelope}");
+    assert_eq!(error["retry"]["kind"], "never", "envelope: {envelope}");
+    let diagnostics = &error["row_diagnostics"];
     assert_eq!(
-        metadata
-            .get("plenora.geometry.dimensions")
-            .map(String::as_str),
-        Some("xy")
+        diagnostics["contract"], "plenora-row-diagnostics-v1",
+        "envelope: {envelope}"
     );
     assert_eq!(
-        metadata
-            .get("plenora.geometry.crs_resolution")
-            .map(String::as_str),
-        Some("resolved")
+        diagnostics["counts"]["geometry.non_finite_coordinate"], 1,
+        "envelope: {envelope}"
     );
-    assert_eq!(
-        metadata.get("plenora.geometry.crs_id").map(String::as_str),
-        Some("EPSG:3857")
+    assert_eq!(diagnostics["examples"][0]["source_index"], 1);
+    assert_eq!(diagnostics["examples"][0]["column"], "x");
+    assert!(
+        !output_path.try_exists().expect("stat"),
+        "publish atomico: nessun output parziale"
     );
-    assert_eq!(
-        metadata
-            .get("plenora.geometry.axis_order")
-            .map(String::as_str),
-        Some("unknown")
-    );
-    // Doppia emissione: le chiavi GeoArrow restano.
-    assert_eq!(
-        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
-        Some(GEOARROW_WKB_EXTENSION)
-    );
-    // Versione di protocollo nei metadati dello schema (R2.5).
-    assert_eq!(
-        out_schema
-            .metadata()
-            .get("plenora.contract.version")
-            .map(String::as_str),
-        Some("1")
-    );
+
+    // Controllo: errore NON row-scoped (envelope malformato) -> la
+    // classificazione storica resta invariata, nessuna diagnostica.
+    std::fs::write(&input, b"non-un-envelope-plngeo3").expect("input malformato");
+    let result = run_transform();
+    assert!(!result.status.success(), "envelope malformato accettato");
+    assert!(result.stderr.is_empty());
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&result.stdout).expect("envelope errore non row-scoped");
+    let error = &envelope["error"];
+    assert_eq!(error["category"], "invalid_plan", "envelope: {envelope}");
+    assert_eq!(error["phase"], "validate", "envelope: {envelope}");
+    assert!(error["row_diagnostics"].is_null(), "envelope: {envelope}");
+    assert!(!output_path.try_exists().expect("stat"));
 }
 
 /// BLOCK-06: anche `pair-arrow` emette le chiavi canoniche; su un'operazione

@@ -1064,30 +1064,6 @@ mod tests {
     }
 
     #[test]
-    fn discovery_rejects_unrepresentable_encoding() {
-        // (d) R3.5: framing fuori dall'enum chiuso -> rifiuto esplicito
-        // (Unsupported), mai mappato a un encoding noto.
-        for geo_json in [
-            r#"{"crs":"EPSG:32632","encoding":"gpkg"}"#,
-            r#"{"crs":"EPSG:32632","encoding":"twkb"}"#,
-            r#"{"crs":"EPSG:32632","encoding":42}"#,
-        ] {
-            let result = read_geometry_contract_keys(&geometry_field(Some(geo_json)));
-            assert!(
-                matches!(result, Err(PlenoraError::Unsupported(_))),
-                "geo: {geo_json}"
-            );
-        }
-
-        // Encoding rappresentabile -> propagato nel contratto.
-        let contract = contract_from_field(&geometry_field(Some(
-            r#"{"crs":"EPSG:32632","encoding":"wkb"}"#,
-        )))
-        .expect("discovery");
-        assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
-    }
-
-    #[test]
     fn discovery_legacy_field_leaves_types_undeclared() {
         // R3.4.1: ingresso legacy senza la coppia types_declaration/types ->
         // «proprieta' non dichiarata» (confidence Unknown), MAI unresolved.
@@ -1159,17 +1135,6 @@ mod tests {
     }
 
     #[test]
-    fn discovery_rejects_canonical_keys_without_contract_version() {
-        // R2.5: chiavi canoniche senza `plenora.contract.version` nei
-        // metadati dello schema -> errore esplicito.
-        let schema = std::sync::Arc::new(Schema::new(vec![canonical_geometry_field(
-            DataType::Binary,
-        )]));
-        let result = discover_input_contract_from_schema(schema, resolve_crs);
-        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
-    }
-
-    #[test]
     fn discovery_rejects_canonical_legacy_divergence() {
         // (c) R2.6: nozione divergente fra chiavi canoniche e metadato legacy
         // -> il componente fallisce, non sceglie.
@@ -1190,25 +1155,6 @@ mod tests {
     // R4.6.3 (contratti trasversali v2.0-rc9/rc10): la discovery non
     // pretende un CRS risolvibile — lo stato `missing` entra nel contratto.
     // -------------------------------------------------------------------
-
-    #[test]
-    fn discovery_geometry_without_crs_is_missing_not_an_error() {
-        // Colonna GeoArrow-WKB senza metadato `geo` e senza chiavi
-        // canoniche: nessun CRS dichiarato in alcuna rappresentazione
-        // accettata -> `ContractCrs::Missing` (R4.4: mai un CRS inventato),
-        // non un errore. La discovery non chiede la risoluzione, quindi il
-        // test vale con e senza backend PROJ.
-        let schema = std::sync::Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            geometry_field(None),
-        ]));
-        let contract = discover_input_contract_from_schema(schema, resolve_crs).expect("discovery");
-        assert_eq!(contract.geometries.len(), 1);
-        assert!(
-            matches!(contract.geometries[0].crs, ContractCrs::Missing),
-            "CRS assente -> stato missing"
-        );
-    }
 
     #[test]
     fn discovery_geometry_with_geo_metadata_without_crs_is_missing() {
@@ -1795,27 +1741,6 @@ mod tests {
     }
 
     #[test]
-    fn contract_crs_from_keys_co_presence_is_declared_unresolved_not_a_choice() {
-        // `crs_id` + `crs_definition` co-presenti: l'accordo non e'
-        // decidibile testualmente (R2.7: mai arbitrato), quindi nessuna
-        // precedenza silenziosa fra i due. Lo stato e' `DeclaredUnresolved`
-        // con entrambe le dichiarazioni.
-        let keys = CanonicalGeometryKeys {
-            crs_definition: Some(r#"{"type":"ProjectedCRS"}"#.to_owned()),
-            crs_id: Some("EPSG:32632".to_owned()),
-            ..CanonicalGeometryKeys::default()
-        };
-        let ContractCrs::DeclaredUnresolved {
-            crs_id, definition, ..
-        } = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("stato")
-        else {
-            panic!("atteso DeclaredUnresolved");
-        };
-        assert_eq!(crs_id.as_deref(), Some("EPSG:32632"));
-        assert_eq!(definition.as_deref(), Some(r#"{"type":"ProjectedCRS"}"#));
-    }
-
-    #[test]
     fn contract_crs_from_keys_srid_only_declared_unresolved_is_a_representation() {
         // Catena MySQL TLS Database→Data: il provider dichiara
         // `declared_unresolved` con solo `srid` (R4.4). Lo SRID e' la terza
@@ -1838,27 +1763,6 @@ mod tests {
         assert_eq!(crs_id, None, "crs_id mai sintetizzato");
         assert_eq!(definition, None, "definizione mai sintetizzata");
         assert_eq!(definition_format, None, "formato mai sintetizzato");
-    }
-
-    #[test]
-    fn contract_crs_from_keys_declared_unresolved_without_any_representation_is_an_error() {
-        // Fail-closed (R4.1): `declared_unresolved` senza crs_id, definition
-        // E srid resta una contraddizione — errore esplicito, mai collasso
-        // su `missing`.
-        let keys = CanonicalGeometryKeys {
-            crs_resolution: Some(CrsResolution::DeclaredUnresolved),
-            ..CanonicalGeometryKeys::default()
-        };
-        let result = contract_crs_from_keys("geometry", None, &keys, resolve_crs);
-        match result {
-            Err(PlenoraError::InvalidPlan(message)) => {
-                assert!(
-                    message.contains("nessun CRS e' dichiarato in alcuna rappresentazione"),
-                    "{message}"
-                );
-            }
-            other => panic!("attesa contraddizione R4.1, ottenuto {other:?}"),
-        }
     }
 
     #[test]

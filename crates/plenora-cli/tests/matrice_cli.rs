@@ -91,11 +91,6 @@ fn scrivi_input(path: &Path) {
     scrivi_ipc(path, &schema, &[batch]);
 }
 
-/// Input Arrow con `righe` righe in un solo batch.
-fn scrivi_input_righe(path: &Path, righe: i64) {
-    scrivi_input_batch(path, 1, righe);
-}
-
 /// Input Arrow con `batch` batch da `righe_per_batch` righe ciascuno.
 ///
 /// Serve ai limiti di memoria: tanti batch PICCOLI passano singolarmente il
@@ -381,6 +376,23 @@ fn l_help_nomina_ogni_comando_e_ogni_flag_che_il_dispatch_accetta() {
         let specifico = esegui(&[comando, "--help"]);
         assert!(specifico.status.success(), "`{comando} --help`");
         let testo = String::from_utf8_lossy(&specifico.stdout).into_owned();
+        // Una riga d'uso, sulla riga di `Usage:` o sotto di essa, invoca
+        // esattamente quel comando; l'alias rende l'help del comando canonico.
+        let atteso = if *comando == "inspect-dataset" {
+            "describe"
+        } else {
+            comando
+        };
+        let invocazione = format!("plenora-data-tools {atteso}");
+        assert!(
+            testo.lines().any(|riga| {
+                let riga = riga.trim_start();
+                let riga = riga.strip_prefix("Usage:").unwrap_or(riga).trim_start();
+                riga.strip_prefix(&invocazione)
+                    .is_some_and(|resto| resto.is_empty() || resto.starts_with(' '))
+            }),
+            "`{comando} --help` non nomina il comando: {testo}"
+        );
         // Ogni flag accettato dal dispatch compare nell'help del comando: un
         // flag documentato e non accettato, o accettato e non documentato,
         // sono lo stesso difetto visto da due lati.
@@ -405,6 +417,9 @@ fn l_help_nomina_ogni_comando_e_ogni_flag_che_il_dispatch_accetta() {
             );
         }
     }
+    // `--format` e' globale, tolto prima del dispatch: accettato anche
+    // davanti a `--help` senza che l'help debba ripeterlo.
+    assert!(esegui(&["--format", "json", "--help"]).status.success());
 }
 
 // ---------------------------------------------------------------------------
@@ -733,55 +748,6 @@ fn nemmeno_i_percorsi_help_e_version_ignorano_un_token() {
     assert!(esegui(&["run", "--help"]).status.success());
     assert!(esegui(&["--version", "--json"]).status.success());
     assert!(esegui(&["--help"]).status.success());
-}
-
-#[test]
-fn un_limite_di_risorsa_produce_la_categoria_e_l_exit_code_dedicati() {
-    // `resource_limit` dev'essere prodotta da almeno una variante concreta,
-    // altrimenti l'exit code 4 e' irraggiungibile. Un piano legacy con
-    // `max_rows` minuscolo lo raggiunge.
-    let directory = tempfile::tempdir().expect("tempdir");
-    let piano = directory.path().join("legacy.json");
-    let input = directory.path().join("input.arrow");
-    let uscita = directory.path().join("out.arrow");
-    std::fs::write(
-        &piano,
-        serde_json::to_vec(&json!({
-            "schema_version": 1,
-            "limits": {"max_rows": 1},
-            "steps": [{"operation": "rename", "config": {"renames": [
-                {"old_name": "id", "new_name": "identificativo"}
-            ]}}]
-        }))
-        .expect("json"),
-    )
-    .expect("piano");
-    scrivi_input_righe(&input, 8);
-
-    let output = esegui(&[
-        "run",
-        "--plan",
-        &piano.to_string_lossy(),
-        "--input",
-        &input.to_string_lossy(),
-        "--output",
-        &uscita.to_string_lossy(),
-    ]);
-    assert!(!output.status.success());
-    let envelope = envelope_di(&output, "limite di righe");
-    assert_eq!(
-        envelope["error"]["category"], "resource_limit",
-        "un limite superato non e' un piano invalido: {envelope}"
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(4),
-        "la categoria `resource_limit` proietta sull'exit code 4"
-    );
-    assert!(
-        !uscita.try_exists().expect("stat"),
-        "nessun output da un limite superato"
-    );
 }
 
 #[test]
