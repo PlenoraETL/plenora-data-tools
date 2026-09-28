@@ -337,6 +337,49 @@ pub struct TransformArrowSchema {
 impl TransformArrowSchema {
     pub const VERSION: u32 = 3;
 
+    /// Per i test: versione corrente, `operation`, zero righe e ogni
+    /// parametro opzionale assente. Un campo nuovo si aggiunge qui, non in
+    /// ogni test che costruisce uno schema.
+    #[cfg(test)]
+    pub(crate) const fn vuoto(operation: ArrowOperation) -> Self {
+        Self {
+            schema_version: Self::VERSION,
+            operation,
+            row_count: 0,
+            crs: None,
+            geometry_column: None,
+            distance: None,
+            cap: None,
+            tolerance: None,
+            simplify_policy: None,
+            target_crs: None,
+            max_output_rows: None,
+            max_points: None,
+            x_column: None,
+            y_column: None,
+            snap_tolerance: None,
+            remove_overlaps: None,
+            fill_gaps: None,
+            coefficients: None,
+            x_offset: None,
+            y_offset: None,
+            x_factor: None,
+            y_factor: None,
+            degrees: None,
+            x_origin: None,
+            y_origin: None,
+            concavity: None,
+            length_threshold: None,
+            max_segment_length: None,
+            grid_size: None,
+            start_ratio: None,
+            end_ratio: None,
+            ratio: None,
+            node_input: None,
+            require_complete: None,
+        }
+    }
+
     #[must_use]
     pub fn geometry_column(&self) -> &str {
         self.geometry_column
@@ -850,42 +893,7 @@ mod tests {
     /// Schema base valido per `operation`: tutti i parametri opzionali
     /// assenti; i singoli test attivano solo quelli rilevanti.
     fn base(operation: ArrowOperation) -> TransformArrowSchema {
-        TransformArrowSchema {
-            schema_version: TransformArrowSchema::VERSION,
-            operation,
-            row_count: 0,
-            crs: None,
-            geometry_column: None,
-            distance: None,
-            cap: None,
-            tolerance: None,
-            simplify_policy: None,
-            target_crs: None,
-            max_output_rows: None,
-            max_points: None,
-            x_column: None,
-            y_column: None,
-            snap_tolerance: None,
-            remove_overlaps: None,
-            fill_gaps: None,
-            coefficients: None,
-            x_offset: None,
-            y_offset: None,
-            x_factor: None,
-            y_factor: None,
-            degrees: None,
-            x_origin: None,
-            y_origin: None,
-            concavity: None,
-            length_threshold: None,
-            max_segment_length: None,
-            grid_size: None,
-            start_ratio: None,
-            end_ratio: None,
-            ratio: None,
-            node_input: None,
-            require_complete: None,
-        }
+        TransformArrowSchema::vuoto(operation)
     }
 
     #[test]

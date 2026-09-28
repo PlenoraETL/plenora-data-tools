@@ -2985,8 +2985,33 @@ pub fn transform_arrow_with_format(
     }
 
     let (output_schema, output_batches) = transform_batches(&input_schema, &batches, schema)?;
-    // BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
-    // errori-e-limiti.md#limiti-dichiarati estesa) — post-processo centrale prima della codifica IPC.
+    let (output_rows, checksum) =
+        scrivi_output(writer, output_schema, output_batches, output_format)?;
+    Ok(TransformArrowSummary {
+        rows,
+        output_rows,
+        checksum,
+    })
+}
+
+/// La coda comune di `transform-arrow` e `pair-arrow`: chiavi canoniche,
+/// codifica nel formato chiesto, scrittura. Rende le righe scritte e il
+/// checksum del payload.
+///
+/// BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
+/// errori-e-limiti.md#limiti-dichiarati estesa), come post-processo centrale
+/// prima della codifica IPC.
+///
+/// # Errors
+///
+/// Come `canonical_legacy_output`, `encode_ipc`/`encode_ipc_file` e la
+/// scrittura.
+pub(super) fn scrivi_output(
+    mut writer: impl Write,
+    output_schema: SchemaRef,
+    output_batches: Vec<RecordBatch>,
+    output_format: ArrowOutputFormat,
+) -> Result<(u64, [u8; 32]), ArrowTransportError> {
     let (output_schema, output_batches) = canonical_legacy_output(output_schema, output_batches)?;
     let output_rows: u64 = output_batches
         .iter()
@@ -3005,11 +3030,7 @@ pub fn transform_arrow_with_format(
             Sha256::digest(&output_payload).into()
         }
     };
-    Ok(TransformArrowSummary {
-        rows,
-        output_rows,
-        checksum,
-    })
+    Ok((output_rows, checksum))
 }
 
 // ---------------------------------------------------------------------------
@@ -3118,40 +3139,9 @@ mod tests {
     /// Parametri di una trasformazione 1:1 (tutti i default, CRS fissato).
     fn fused_params(operation: ArrowOperation) -> TransformArrowSchema {
         TransformArrowSchema {
-            schema_version: TransformArrowSchema::VERSION,
-            operation,
-            row_count: 0,
             crs: Some("EPSG:32632".to_owned()),
             geometry_column: Some("geom".to_owned()),
-            distance: None,
-            cap: None,
-            tolerance: None,
-            simplify_policy: None,
-            target_crs: None,
-            max_output_rows: None,
-            max_points: None,
-            x_column: None,
-            y_column: None,
-            snap_tolerance: None,
-            remove_overlaps: None,
-            fill_gaps: None,
-            coefficients: None,
-            x_offset: None,
-            y_offset: None,
-            x_factor: None,
-            y_factor: None,
-            degrees: None,
-            x_origin: None,
-            y_origin: None,
-            concavity: None,
-            length_threshold: None,
-            max_segment_length: None,
-            grid_size: None,
-            start_ratio: None,
-            end_ratio: None,
-            ratio: None,
-            node_input: None,
-            require_complete: None,
+            ..TransformArrowSchema::vuoto(operation)
         }
     }
 

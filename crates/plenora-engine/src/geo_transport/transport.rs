@@ -235,40 +235,9 @@ mod tests {
 
     fn arrow_schema(row_count: u64, operation: ArrowOperation) -> TransformArrowSchema {
         TransformArrowSchema {
-            schema_version: TransformArrowSchema::VERSION,
-            operation,
             row_count,
             crs: Some(CRS.to_owned()),
-            geometry_column: None,
-            distance: None,
-            cap: None,
-            tolerance: None,
-            simplify_policy: None,
-            target_crs: None,
-            max_output_rows: None,
-            max_points: None,
-            x_column: None,
-            y_column: None,
-            snap_tolerance: None,
-            remove_overlaps: None,
-            fill_gaps: None,
-            coefficients: None,
-            x_offset: None,
-            y_offset: None,
-            x_factor: None,
-            y_factor: None,
-            degrees: None,
-            x_origin: None,
-            y_origin: None,
-            concavity: None,
-            length_threshold: None,
-            max_segment_length: None,
-            grid_size: None,
-            start_ratio: None,
-            end_ratio: None,
-            ratio: None,
-            node_input: None,
-            require_complete: None,
+            ..TransformArrowSchema::vuoto(operation)
         }
     }
 
