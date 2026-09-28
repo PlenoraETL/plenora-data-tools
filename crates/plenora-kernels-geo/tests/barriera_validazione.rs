@@ -152,14 +152,21 @@ fn una_geometria_invalida_resta_un_ingresso_invalido() {
     );
 }
 
-/// **Nessuno dei due esiti pubblica il testo della dipendenza.**
+/// **Il rifiuto di un ingresso invalido non pubblica il testo della
+/// dipendenza.**
 ///
 /// Non si verifica l'assenza di qualche frammento di coordinata — un elenco di
 /// frammenti prova solo che quei frammenti non ci sono. Si verifica che il
-/// testo reso appartenga al **vocabolario nostro**: una ragione controllata per
-/// la geometria invalida, la forma del payload per la validazione interrotta.
+/// testo reso appartenga al **vocabolario nostro**: una ragione controllata,
+/// sul reperto e sulla farfalla, che col candidato esatto concludono entrambi
+/// come ingresso invalido.
+///
+/// L'altro esito, la validazione interrotta, da qui non si raggiunge: nessun
+/// reperto la provoca piu'. Si verifica dall'interno del crate, con
+/// `EsitoValidazione::NonConclusa` costruito a mano nei test dei moduli e con
+/// il panico sintetico del modulo `barriera_privacy_processo` di `src/lib.rs`.
 #[test]
-fn nessun_esito_pubblica_il_testo_della_dipendenza() {
+fn il_rifiuto_di_un_ingresso_invalido_non_pubblica_il_testo_della_dipendenza() {
     // 1. Il reperto. Col candidato esatto conclude in ogni profilo — vedi
     //    `i_reperti_geo_sono_un_ingresso_invalido_in_ogni_profilo` — quindi
     //    la ragione appartiene sempre al vocabolario controllato, non piu'
