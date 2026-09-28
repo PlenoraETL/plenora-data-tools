@@ -3073,9 +3073,9 @@ mod tests {
     }
 
     #[test]
-    fn la_ridistribuzione_rifiuta_posizioni_fuori_ordine_o_oltre_le_righe() {
+    fn la_ridistribuzione_rifiuta_posizioni_fuori_ordine_doppie_o_oltre_le_righe() {
         let (batches, schema) = righe_per_la_ridistribuzione();
-        for posizioni in [[2_u64, 0], [0, 3]] {
+        for posizioni in [[2_u64, 0], [0, 3], [1, 1]] {
             assert!(matches!(
                 geometrie_sulle_righe(&batches, 1, &schema, &posizioni, &[None, None]),
                 Err(ArrowTransportError::Internal(_))

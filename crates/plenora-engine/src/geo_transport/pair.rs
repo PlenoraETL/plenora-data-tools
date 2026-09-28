@@ -1093,10 +1093,18 @@ pub fn pair_arrow_with_format(
                     limit,
                 });
             }
-            let values: Vec<Option<u64>> = counts
+            // Un conteggio per poligono, verificato prima di accoppiarli: un
+            // conteggio in piu' andrebbe in panico sull'indice, uno in meno
+            // lascerebbe senza valore l'ultima riga.
+            if counts.len() != left.len() {
+                return Err(ArrowTransportError::Internal(
+                    "il kernel non ha reso un conteggio per ogni riga di left",
+                ));
+            }
+            let values: Vec<Option<u64>> = left
                 .iter()
-                .enumerate()
-                .map(|(index, count)| left[index].as_ref().map(|_| *count))
+                .zip(&counts)
+                .map(|(poligono, count)| poligono.as_ref().map(|_| *count))
                 .collect();
             append_column_batches(
                 &left_schema,
@@ -1461,11 +1469,38 @@ mod tests {
 
     #[test]
     fn una_geometria_sostituita_esige_un_valore_per_riga_di_left() {
-        let (_, batches) = left_di(&[2, 1]);
-        assert!(matches!(
-            un_valore_per_riga(&batches, 2),
-            Err(ArrowTransportError::Internal(_))
-        ));
-        assert!(un_valore_per_riga(&batches, 3).is_ok());
+        // Un campo geometria con i metadati GeoArrow, come quelli che il
+        // trasporto accetta in ingresso.
+        let schema = std::sync::Arc::new(Schema::new(vec![geometry_output_field(
+            "geometry",
+            "EPSG:4326",
+        )
+        .unwrap()]));
+        let batches: Vec<RecordBatch> = [2_usize, 1]
+            .iter()
+            .map(|&n| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![std::sync::Arc::new(BinaryArray::from(vec![
+                        None::<&[u8]>;
+                        n
+                    ]))],
+                )
+                .unwrap()
+            })
+            .collect();
+        for valori in [vec![None; 2], vec![None; 4]] {
+            assert!(matches!(
+                replace_geometry_batches(&schema, &batches, "geometry", "EPSG:4326", &valori),
+                Err(ArrowTransportError::Internal(_))
+            ));
+        }
+        let (_, uscita) =
+            replace_geometry_batches(&schema, &batches, "geometry", "EPSG:4326", &vec![None; 3])
+                .unwrap();
+        assert_eq!(
+            uscita.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+            [2, 1]
+        );
     }
 }
