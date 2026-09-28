@@ -25,13 +25,18 @@ fn validate_plan(plan: &serde_json::Value, contract: DataContract) -> ValidatedG
     validate(&plan.to_string(), &[("main".to_owned(), contract)]).expect("piano valido")
 }
 
+/// [`validate_plan`] seguito da `prepare` col contesto di default.
+fn prepared_plan(plan: &serde_json::Value, contract: DataContract) -> ExecutionPlan {
+    prepare(&validate_plan(plan, contract), &RuntimeContext::default()).expect("prepare")
+}
+
 // ---------------------------------------------------------------------------
 // Scomposizione in segmenti
 // ---------------------------------------------------------------------------
 
 #[test]
 fn linear_table_chain_fuses_into_one_streaming_segment() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -47,7 +52,6 @@ fn linear_table_chain_fuses_into_one_streaming_segment() {
         }),
         table_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     assert_eq!(plan.segments().len(), 2);
     let streaming = &plan.segments()[0];
@@ -198,7 +202,7 @@ fn fan_out_breaks_fusion_and_marks_materialization() {
 
 #[test]
 fn pass_through_plan_prepares_without_segments() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -207,7 +211,6 @@ fn pass_through_plan_prepares_without_segments() {
         }),
         table_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
     assert!(plan.segments().is_empty());
     assert_eq!(plan.output_edge(), "main");
     assert_eq!(
@@ -291,7 +294,7 @@ const POINT_WKB_HEX: &str = "010100000000000000000000000000000000000000";
 
 #[test]
 fn streaming_geo_extensions_fuse_with_their_roles() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -306,7 +309,6 @@ fn streaming_geo_extensions_fuse_with_their_roles() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     assert_eq!(plan.segments().len(), 1);
     let segment = &plan.segments()[0];
@@ -348,7 +350,7 @@ fn streaming_geo_extensions_fuse_with_their_roles() {
 
 #[test]
 fn line_locate_point_prepares_typed_point_and_output_column() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -360,7 +362,6 @@ fn line_locate_point_prepares_typed_point_and_output_column() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     let segment = &plan.segments()[0];
     assert_eq!(segment.mode, SegmentMode::GeoFused);
@@ -461,7 +462,7 @@ fn fuzzy_join_prepares_as_binary_blocking() {
 
 #[test]
 fn top_n_prepares_as_blocking_table_unary() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -473,7 +474,6 @@ fn top_n_prepares_as_blocking_table_unary() {
         }),
         table_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
     assert_eq!(plan.segments()[0].mode, SegmentMode::Blocking);
     assert!(
         matches!(
@@ -571,8 +571,7 @@ fn fusion_groups(plan: &ExecutionPlan) -> Vec<Option<u32>> {
 
 #[test]
 fn fusible_geo_runs_form_one_fusion_group() {
-    let graph = validate_plan(&fusible_chain_plan(), geo_contract());
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
+    let plan = prepared_plan(&fusible_chain_plan(), geo_contract());
 
     // Kill switch registrato nel piano (D12.9) e capability risolta per
     // kernel come `cancellation_behavior` (D12.2).
@@ -590,7 +589,7 @@ fn fusible_geo_runs_form_one_fusion_group() {
 
 #[test]
 fn non_fusible_kernel_breaks_the_fusion_run() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -606,7 +605,6 @@ fn non_fusible_kernel_breaks_the_fusion_run() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     // Un kernel non fondibile (`geo.line_substring`, NotFusible) spezza il
     // run: buffer resta solo (run < 2, nessun gruppo), simplify+translate
@@ -616,7 +614,7 @@ fn non_fusible_kernel_breaks_the_fusion_run() {
 
 #[test]
 fn transforms_and_terminal_measure_form_one_fusion_group() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -629,7 +627,6 @@ fn transforms_and_terminal_measure_form_one_fusion_group() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     // La misura terminale (`geo.area`, capability TerminalMeasure)
     // chiude il run di transform ed entra nel gruppo come ultimo membro.
@@ -647,7 +644,7 @@ fn transforms_and_terminal_measure_form_one_fusion_group() {
 
 #[test]
 fn single_transform_plus_terminal_measure_forms_a_group_of_two() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -660,7 +657,6 @@ fn single_transform_plus_terminal_measure_forms_a_group_of_two() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     // Con la misura in coda basta UN transform (gruppo di due nodi).
     assert_eq!(fusion_groups(&plan), vec![Some(0), Some(0)]);
@@ -668,7 +664,7 @@ fn single_transform_plus_terminal_measure_forms_a_group_of_two() {
 
 #[test]
 fn lone_terminal_measure_forms_no_group() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -679,7 +675,6 @@ fn lone_terminal_measure_forms_no_group() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     // Una misura da sola non forma mai gruppo: non c'e' nulla da fondere,
     // resta sul percorso nodo-per-nodo.
@@ -688,7 +683,7 @@ fn lone_terminal_measure_forms_no_group() {
 
 #[test]
 fn terminal_measure_closes_but_does_not_extend_the_run() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -704,7 +699,6 @@ fn terminal_measure_closes_but_does_not_extend_the_run() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     // UNA sola misura per gruppo e solo in coda: la seconda misura non
     // entra nel gruppo di translate+area; simplify+rotate formano un nuovo
@@ -738,7 +732,7 @@ fn geo_fusion_kill_switch_disables_groups() {
 #[cfg(feature = "geos-backend")]
 #[test]
 fn make_valid_joins_fusion_groups() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -752,7 +746,6 @@ fn make_valid_joins_fusion_groups() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     let kernels = &plan.segments()[0].kernels;
     assert_eq!(
@@ -769,7 +762,7 @@ fn make_valid_joins_fusion_groups() {
 #[cfg(feature = "proj-backend")]
 #[test]
 fn reproject_joins_fusion_groups() {
-    let graph = validate_plan(
+    let plan = prepared_plan(
         &json!({
             "schema_version": 5,
             "inputs": ["main"],
@@ -783,7 +776,6 @@ fn reproject_joins_fusion_groups() {
         }),
         geo_contract(),
     );
-    let plan = prepare(&graph, &RuntimeContext::default()).expect("prepare");
 
     let kernels = &plan.segments()[0].kernels;
     assert_eq!(
