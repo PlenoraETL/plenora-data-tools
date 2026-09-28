@@ -1464,7 +1464,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     use crate::aggregation::{AggFunction, Aggregate, Aggregation};
-    use plenora_core::arrow::array::{Float64Array, Int64Array, StringArray};
+    use plenora_core::arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
     use plenora_core::arrow::schema::{Field, Schema};
 
     fn spill_test_limits(max_governed_memory_bytes: usize) -> Limits {
@@ -1604,6 +1604,174 @@ mod tests {
         assert_eq!(spilled, aggregation::sort(&batch, &config).expect("sort"));
     }
 
+    /// `rows` righe deterministiche con molti pareggi, null su ogni chiave,
+    /// NaN di entrambi i segni, zeri con segno, infiniti e un `id` che rende
+    /// leggibile ogni permutazione sbagliata.
+    fn sort_keys_fixture(rows: usize) -> RecordBatch {
+        const FLOATS: [Option<f64>; 10] = [
+            Some(f64::NAN),
+            Some(-0.0),
+            Some(0.0),
+            Some(1.5),
+            None,
+            Some(-2.25),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(-f64::NAN),
+            Some(3.0),
+        ];
+        const TEXTS: [Option<&str>; 6] = [
+            Some("alfa"),
+            Some("beta"),
+            Some(""),
+            None,
+            Some("Zeta"),
+            Some("\u{e4}"),
+        ];
+        let ints = (0..rows)
+            .map(|row| {
+                (row % 11 != 0).then(|| i64::try_from((row * 7_919) % 37).expect("i64") - 18)
+            })
+            .collect::<Vec<_>>();
+        let unsigned = (0..rows)
+            .map(|row| (row % 13 != 0).then(|| u64::try_from((row * 104_729) % 23).expect("u64")))
+            .collect::<Vec<_>>();
+        let floats = (0..rows)
+            .map(|row| FLOATS[(row * 31) % FLOATS.len()])
+            .collect::<Vec<_>>();
+        let texts = (0..rows)
+            .map(|row| TEXTS[(row * 13 + row / 7) % TEXTS.len()])
+            .collect::<Vec<_>>();
+        let flags = (0..rows)
+            .map(|row| (row % 5 != 0).then_some(row % 3 == 0))
+            .collect::<Vec<_>>();
+        let ids = (0..rows)
+            .map(|row| i64::try_from(row).expect("id"))
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("k_int", DataType::Int64, true),
+                Field::new("k_u64", DataType::UInt64, true),
+                Field::new("k_float", DataType::Float64, true),
+                Field::new("k_text", DataType::Utf8, true),
+                Field::new("k_bool", DataType::Boolean, true),
+                Field::new("id", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(ints)),
+                Arc::new(UInt64Array::from(unsigned)),
+                Arc::new(Float64Array::from(floats)),
+                Arc::new(StringArray::from(texts)),
+                Arc::new(BooleanArray::from(flags)),
+                Arc::new(Int64Array::from(ids)),
+            ],
+        )
+        .expect("fixture chiavi di sort")
+    }
+
+    /// Limiti che producono run di esattamente `run_rows` righe su `batch`
+    /// (inverso di `sort_run_rows`).
+    fn limits_for_run_rows(batch: &RecordBatch, run_rows: usize) -> Limits {
+        let per_row = (estimated_batch_bytes(batch) / batch.num_rows()).max(1);
+        let limits = spill_test_limits(per_row * 4 * run_rows);
+        assert_eq!(sort_run_rows(batch, &limits), run_rows, "budget di test");
+        limits
+    }
+
+    /// Oracolo: il sort spilled coincide bit a bit con `sort` in memoria.
+    fn assert_spilled_sort_is_in_memory_sort(batch: &RecordBatch, run_rows: usize) {
+        let limits = limits_for_run_rows(batch, run_rows);
+        let key_sets: [&[&str]; 9] = [
+            &["k_int"],
+            &["k_u64"],
+            &["k_float"],
+            &["k_text"],
+            &["k_bool"],
+            &["k_int", "k_text"],
+            &["k_float", "k_int"],
+            &["k_bool", "k_float", "k_u64"],
+            &["k_text", "k_float", "k_int"],
+        ];
+        for columns in key_sets {
+            for ascending in [true, false] {
+                let config = Sort {
+                    columns: columns.iter().map(|name| (*name).to_string()).collect(),
+                    ascending,
+                };
+                let expected = aggregation::sort(batch, &config).expect("sort in memoria");
+                let (spilled, metrics) =
+                    sort_spilled(batch, &config, &limits).expect("sort spilled");
+                assert!(metrics.files > 1, "attese piu' run: {metrics:?}");
+                assert_eq!(
+                    spilled.schema(),
+                    batch.schema(),
+                    "nessuna colonna tecnica nell'output"
+                );
+                assert_eq!(
+                    spilled, expected,
+                    "run di {run_rows} righe, config {config:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spilled_sort_with_multi_row_runs_is_the_in_memory_sort() {
+        // Run di piu' righe: la posizione dentro la run ordinata non e'
+        // l'indice originale della riga. Run corte, medie e una sola run
+        // quasi intera, con l'ultima run piu' corta delle altre. Le run
+        // cortissime restano su input piccoli: ogni run e' un file, e il
+        // merge a scansione lineare costa righe per run aperte.
+        for (rows, run_rows) in [(120, 2), (200, 3), (1_000, 17), (1_000, 250), (1_000, 999)] {
+            assert_spilled_sort_is_in_memory_sort(&sort_keys_fixture(rows), run_rows);
+        }
+    }
+
+    #[test]
+    fn spilled_sort_with_runs_spanning_several_ipc_chunks_is_the_in_memory_sort() {
+        // Run oltre `SPILL_CHUNK_ROWS`: ogni run e' scritta e riletta in piu'
+        // chunk IPC, e l'indice deve restare corretto oltre il confine.
+        let run_rows = SPILL_CHUNK_ROWS + 800;
+        let rows = 2 * run_rows + 1_000;
+        let batch = sort_keys_fixture(rows);
+        let limits = limits_for_run_rows(&batch, run_rows);
+        for (columns, ascending) in [
+            (vec!["k_int".to_string()], true),
+            (vec!["k_float".to_string(), "k_text".to_string()], false),
+        ] {
+            let config = Sort { columns, ascending };
+            let expected = aggregation::sort(&batch, &config).expect("sort in memoria");
+            let (spilled, metrics) = sort_spilled(&batch, &config, &limits).expect("sort spilled");
+            assert_eq!(metrics.files, 3, "tre run: {metrics:?}");
+            assert_eq!(spilled, expected, "config {config:?}");
+        }
+    }
+
+    #[test]
+    fn spilled_sort_ignores_a_user_column_named_like_the_spill_ordinal() {
+        // Il sort non riserva nomi: una colonna dell'utente con il nome della
+        // colonna tecnica resta dato, e l'indice originale non la legge ne'
+        // la sostituisce.
+        let batch = sort_keys_fixture(300);
+        let mut fields = batch.schema().fields().iter().cloned().collect::<Vec<_>>();
+        fields.push(Arc::new(Field::new(
+            SPILL_ORDINAL_COLUMN,
+            DataType::UInt64,
+            false,
+        )));
+        let mut columns = batch.columns().to_vec();
+        columns.push(Arc::new(UInt64Array::from(vec![7_u64; 300])));
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).expect("batch");
+        let limits = limits_for_run_rows(&batch, 40);
+        let config = Sort {
+            columns: vec!["k_text".to_string(), "k_int".to_string()],
+            ascending: false,
+        };
+        let expected = aggregation::sort(&batch, &config).expect("sort in memoria");
+        let (spilled, _) = sort_spilled(&batch, &config, &limits).expect("sort spilled");
+        assert_eq!(spilled, expected);
+    }
+
     #[test]
     fn spilled_distinct_matches_in_memory() {
         let batch = rows_fixture();
@@ -1687,6 +1855,64 @@ mod tests {
         let expected = aggregation::aggregate(&batch, &config).expect("conteggio in memoria");
         let (spilled, _) = aggregate_spilled(&batch, &config, &limits).expect("conteggio spilled");
         assert_eq!(spilled, expected);
+    }
+
+    #[test]
+    fn spilled_distinct_and_aggregate_with_multi_row_partitions_match_in_memory() {
+        // Stessa classe del sort: ogni partizione contiene molte righe in un
+        // ordine diverso da quello dell'input. `distinct` deve emettere gli
+        // indici originali (colonna ordinale), `aggregate` deve vedere le
+        // righe di ogni gruppo nell'ordine d'ingresso (first/last/concat e
+        // somme Float64 dipendono dall'ordine).
+        let batch = sort_keys_fixture(1_000);
+        let limits = spill_test_limits(1 << 20);
+        let key_sets: [&[&str]; 5] = [
+            &[],
+            &["k_int"],
+            &["k_float"],
+            &["k_text", "k_bool"],
+            &["k_u64", "k_float", "k_text"],
+        ];
+        for subset in key_sets {
+            for keep in [Keep::First, Keep::Last, Keep::False] {
+                let config = Distinct {
+                    subset: subset.iter().map(|name| (*name).to_string()).collect(),
+                    keep,
+                };
+                let expected = aggregation::distinct(&batch, &config).expect("distinct");
+                let (spilled, _) =
+                    distinct_spilled(&batch, &config, &limits).expect("distinct spilled");
+                assert_eq!(spilled, expected, "config {config:?}");
+            }
+        }
+        let aggregation = |column: &str, function: AggFunction, alias: &str| Aggregation {
+            column: column.to_string(),
+            function,
+            separator: "|".into(),
+            distinct: false,
+            skip_null: true,
+            alias: alias.to_string(),
+            quantile: None,
+            ddof: 1,
+        };
+        for group_by in key_sets.iter().skip(1) {
+            let config = Aggregate {
+                group_by: group_by.iter().map(|name| (*name).to_string()).collect(),
+                aggregations: vec![
+                    aggregation("id", AggFunction::First, "id_first"),
+                    aggregation("id", AggFunction::Last, "id_last"),
+                    aggregation("id", AggFunction::Concat, "id_concat"),
+                    aggregation("k_text", AggFunction::Concat, "testi"),
+                    aggregation("k_float", AggFunction::Sum, "somma"),
+                    aggregation("k_float", AggFunction::Mean, "media"),
+                    aggregation("k_int", AggFunction::Count, "conta"),
+                ],
+            };
+            let expected = aggregation::aggregate(&batch, &config).expect("aggregate");
+            let (spilled, _) =
+                aggregate_spilled(&batch, &config, &limits).expect("aggregate spilled");
+            assert_eq!(spilled, expected, "group_by {group_by:?}");
+        }
     }
 
     #[test]
