@@ -1021,25 +1021,9 @@ mod tests {
         }
     }
 
-    /// Componente vuoto accanto a uno ordinario, passato a `buffer`.
-    ///
-    /// L'offset planare passa da `i_shape` (`vendor/i_shape-1.18.0-buffer`),
-    /// che da' area zero a un percorso vuoto prima di accedere all'ultimo
-    /// vertice.
-    #[test]
-    fn buffer_su_multipolygon_con_componente_vuoto_non_panica() {
-        let vuoto = geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
-        let geometria = Geometry::MultiPolygon(MultiPolygon::new(vec![quadrato_4x4(), vuoto]));
-        let senza_vuoti = Geometry::MultiPolygon(MultiPolygon::new(vec![quadrato_4x4()]));
-
-        // `distance` negativa, nulla e positiva (offset interno/esterno):
-        // l'esito e' quello della geometria senza il vuoto.
-        assert_buffer_come_senza_vuoti(&geometria, &senza_vuoti, "vuoto in coda");
-    }
-
     /// "Tutti-vuoti": nessun componente ordinario a fare da controllo, ogni
-    /// elemento del `MultiPolygon` e' vuoto. Distinto dal caso sopra (un
-    /// vuoto accanto a un ordinario): qui non c'e' alcun percorso non-vuoto
+    /// elemento del `MultiPolygon` e' vuoto. Distinto dal caso di un vuoto
+    /// accanto a un ordinario (sotto): qui non c'e' alcun percorso non-vuoto
     /// che possa mascherare un problema sui vuoti.
     #[test]
     fn buffer_su_multipolygon_con_tutti_i_componenti_vuoti_non_panica() {
@@ -1059,16 +1043,24 @@ mod tests {
         assert_buffer_vuoto(&geometria, "zero componenti");
     }
 
-    /// Il vuoto all'inizio o in mezzo, non solo in coda: l'esito non dipende
-    /// dalla sua posizione.
+    /// Componente vuoto accanto a uno ordinario, passato a `buffer`: in coda,
+    /// all'inizio o in mezzo, l'esito non dipende dalla sua posizione.
+    ///
+    /// L'offset planare passa da `i_shape` (`vendor/i_shape-1.18.0-buffer`),
+    /// che da' area zero a un percorso vuoto prima di accedere all'ultimo
+    /// vertice.
     #[test]
     fn buffer_su_multipolygon_con_vuoto_in_diverse_posizioni_non_panica() {
         let ordinario = quadrato_4x4;
         let ordinario2 = || rect_polygon(10.0, 0.0, 14.0, 4.0);
         let vuoto = || geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
 
-        let vuoto_iniziale = Geometry::MultiPolygon(MultiPolygon::new(vec![vuoto(), ordinario()]));
+        // `distance` negativa, nulla e positiva (offset interno/esterno):
+        // l'esito e' quello della geometria senza il vuoto.
         let solo_ordinario = Geometry::MultiPolygon(MultiPolygon::new(vec![ordinario()]));
+        let vuoto_in_coda = Geometry::MultiPolygon(MultiPolygon::new(vec![ordinario(), vuoto()]));
+        assert_buffer_come_senza_vuoti(&vuoto_in_coda, &solo_ordinario, "vuoto in coda");
+        let vuoto_iniziale = Geometry::MultiPolygon(MultiPolygon::new(vec![vuoto(), ordinario()]));
         assert_buffer_come_senza_vuoti(&vuoto_iniziale, &solo_ordinario, "vuoto iniziale");
 
         // Componenti DISTINTI e non sovrapposti: due copie dello stesso

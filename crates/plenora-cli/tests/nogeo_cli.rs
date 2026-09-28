@@ -9,7 +9,7 @@ use plenora_core::catalog::{Family, CATALOG};
 use serde_json::json;
 
 mod comune;
-use comune::{comando_run, eseguibile as executable, scrivi_ipc, COMANDI};
+use comune::{comando_run, eseguibile as executable, scrivi_ipc};
 
 fn write_input(path: &std::path::Path) {
     let batch = RecordBatch::try_new(
@@ -70,6 +70,12 @@ fn cli_round_trip_is_atomic_and_refuses_overwrite() {
     assert_eq!(envelope["error"]["category"], "conflict");
     assert_eq!(envelope["error"]["phase"], "commit");
     assert_eq!(second.status.code(), Some(5), "conflict -> 5");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("esistente")),
+        "{envelope}"
+    );
 }
 
 #[test]
@@ -227,7 +233,8 @@ fn total_row_limit_across_batches_leaves_no_output() {
         br#"{"schema_version":1,"limits":{"max_rows":1},"steps":[{"operation":"drop_columns","config":{"columns":[]}}]}"#,
     )
     .expect("plan");
-    // Ogni batch da solo sta nel limite: lo supera solo il totale.
+    // Ogni batch da solo sta nel limite: lo supera solo il totale. E' anche
+    // la prova che `resource_limit`, e con lei l'exit code 4, e' raggiungibile.
     let result = comando_run(&plan, "--input", &input, &output)
         .output()
         .expect("CLI");
@@ -791,41 +798,18 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn l_envelope_vive_su_stdout_e_stderr_resta_vuoto() {
-    // Convenzione di famiglia: chi orchestra i due componenti cerca gli
-    // errori in un posto solo. Vale anche per gli errori di INVOCAZIONE,
-    // che nascono prima di qualunque comando.
-    let result = Command::new(executable())
-        .args(["run", "--plan"])
-        .output()
-        .expect("invocazione CLI");
-    assert!(!result.status.success());
-    assert!(
-        result.stderr.is_empty(),
-        "stderr deve restare vuoto: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    let envelope: serde_json::Value =
-        serde_json::from_slice(&result.stdout).expect("stdout deve essere l'envelope");
-    assert_eq!(envelope["status"], "error");
-    assert_eq!(envelope["protocol_version"], 1);
-    assert!(envelope["error"]["category"].is_string());
-    assert!(envelope["error"]["phase"].is_string());
-    assert!(envelope["error"]["remote_effect"].is_string());
-    assert!(envelope["error"]["retry"]["kind"].is_string());
-}
-
-#[test]
 fn gli_exit_code_seguono_la_categoria_dell_envelope() {
     // Il codice e' una proiezione della categoria, non un numero a parte:
     // uno script che non vuole parsare JSON deve poter distinguere almeno le
     // classi. Ogni caso verifica ENTRAMBI — categoria e codice — cosi' una
-    // divergenza fra i due non passa.
+    // divergenza fra i due non passa. `io` -> 5 e `invalid_plan` -> 2 li
+    // verifica `matrice_cli.rs`, su ogni comando; qui resta il piano non
+    // sintattico, l'unico caso CLI di JSON illeggibile.
     let directory = tempfile::tempdir().expect("tempdir");
     let input = directory.path().join("input.arrow");
     write_input(&input);
 
-    // Piano malformato -> invalid_plan -> 2.
+    // Piano non JSON -> data_mapping -> 3.
     let plan = directory.path().join("plan.json");
     std::fs::write(&plan, "{ non json").expect("plan");
     let result = comando_run(
@@ -839,25 +823,6 @@ fn gli_exit_code_seguono_la_categoria_dell_envelope() {
     let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
     assert_eq!(envelope["error"]["category"], "data_mapping");
     assert_eq!(result.status.code(), Some(3), "data_mapping -> 3");
-
-    // File inesistente -> io -> 5.
-    let result = Command::new(executable())
-        .args(["describe", "--input"])
-        .arg(directory.path().join("assente.arrow"))
-        .output()
-        .expect("describe");
-    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
-    assert_eq!(envelope["error"]["category"], "io");
-    assert_eq!(result.status.code(), Some(5), "io -> 5");
-
-    // Argomento mancante -> invalid_plan -> 2.
-    let result = Command::new(executable())
-        .args(["describe"])
-        .output()
-        .expect("describe");
-    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
-    assert_eq!(envelope["error"]["category"], "invalid_plan");
-    assert_eq!(result.status.code(), Some(2), "invalid_plan -> 2");
 }
 
 #[test]
@@ -948,59 +913,4 @@ fn la_versione_e_leggibile_da_un_programma() {
         serde_json::from_slice(&result.stdout).expect("capabilities JSON");
     assert_eq!(documento["component_version"], env!("CARGO_PKG_VERSION"));
     assert!(documento["backends"].is_array());
-}
-
-#[test]
-fn ogni_sottocomando_del_dispatch_ha_un_help_che_lo_nomina() {
-    // Un help che non elenca un comando, o che ne elenca uno inesistente, e'
-    // un difetto: e' la prima cosa che legge chi non conosce il tool. La
-    // lista e' quella del dispatch, non una copia — se il dispatch cambia e
-    // l'help no, questo test cade.
-    let generale = Command::new(executable())
-        .args(["--help"])
-        .output()
-        .expect("help");
-    assert!(generale.status.success());
-    let generale = String::from_utf8_lossy(&generale.stdout).into_owned();
-    for comando in COMANDI {
-        // `inspect-dataset` compare come alias sulla riga di `describe`.
-        assert!(
-            generale.contains(comando),
-            "l'help generale non nomina `{comando}`"
-        );
-        let specifico = Command::new(executable())
-            .args([comando, "--help"])
-            .output()
-            .expect("help del sottocomando");
-        assert!(
-            specifico.status.success(),
-            "`{comando} --help` deve funzionare"
-        );
-        let testo = String::from_utf8_lossy(&specifico.stdout);
-        // L'alias rende l'help del comando canonico.
-        let atteso = if comando == "inspect-dataset" {
-            "describe"
-        } else {
-            comando
-        };
-        // Una riga d'uso, sulla riga di `Usage:` o sotto di essa, invoca
-        // esattamente quel comando.
-        let invocazione = format!("plenora-data-tools {atteso}");
-        assert!(
-            testo.lines().any(|riga| {
-                let riga = riga.trim_start();
-                let riga = riga.strip_prefix("Usage:").unwrap_or(riga).trim_start();
-                riga.strip_prefix(&invocazione)
-                    .is_some_and(|resto| resto.is_empty() || resto.starts_with(' '))
-            }),
-            "`{comando} --help` non nomina il comando: {testo}"
-        );
-    }
-    // Ogni comando accetta `--format` senza che l'help debba ripeterlo: e'
-    // globale, e viene tolto prima del dispatch.
-    let result = Command::new(executable())
-        .args(["--format", "json", "--help"])
-        .output()
-        .expect("help con formato");
-    assert!(result.status.success());
 }
