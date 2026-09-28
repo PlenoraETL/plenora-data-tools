@@ -30,7 +30,9 @@ use super::produttori::{Difetto, Osservatore};
 /// [`EvidenzaDiLimite`] non li distingue, tutti dicono che il numero non e'
 /// un'osservazione su cui contare.
 fn contatore(testo: &str, chiave: &str) -> Option<u64> {
-    let mut trovato = None;
+    // Presenza e valore si tengono separati: un primo valore illeggibile non
+    // deve lasciare «non trovato» e far passare per unico il doppione dopo.
+    let mut trovato: Option<&str> = None;
     for riga in testo.lines() {
         let (nome, valore) = riga.split_once(' ')?;
         if nome.trim() != chiave {
@@ -42,9 +44,9 @@ fn contatore(testo: &str, chiave: &str) -> Option<u64> {
             // `cgroup.events`.
             return None;
         }
-        trovato = valore.trim().parse().ok();
+        trovato = Some(valore.trim());
     }
-    trovato
+    trovato?.parse().ok()
 }
 
 fn leggi_contatore(percorso: &Path, chiave: &str) -> Option<u64> {
@@ -109,7 +111,15 @@ impl TerminaDominio {
 
 impl Terminatore for TerminaDominio {
     fn termina(&mut self) -> std::result::Result<(), String> {
-        std::fs::write(self.dominio.join("cgroup.kill"), "1")
+        use std::io::Write as _;
+        // Si apre, non si crea, come i controlli di `dominio.rs`: su una
+        // directory che non e' un cgroup `fs::write` creerebbe un file
+        // qualunque, e la terminazione riuscirebbe senza aver terminato
+        // niente.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(self.dominio.join("cgroup.kill"))
+            .and_then(|mut file| file.write_all(b"1"))
             .map_err(|causa| format!("cgroup.kill: {causa}"))
     }
 }

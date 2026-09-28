@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
+use plenora_core::catalog::{CrsRequirement, OperationDescriptor};
 use plenora_core::contract::{
     ContractProperties, ContractProperty, DataContract, GeometryColumnContract, GeometryDimensions,
     GeometryEncoding, GeometryTypesProperty, PropertyConfidence, PropertyScope,
@@ -55,6 +56,18 @@ pub(in crate::analyze) fn parse_config<T: serde::de::DeserializeOwned>(
 ) -> Result<T> {
     serde_json::from_value(config.clone())
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: config non valida: {error}")))
+}
+
+/// Il `crs_requirement` dichiarato dal catalogo per l'op; la sua assenza e'
+/// un piano non valido, mai un requisito implicito. `op` e' il nome che il
+/// messaggio riporta.
+pub(in crate::analyze) fn crs_requirement(
+    op: &str,
+    descriptor: &OperationDescriptor,
+) -> Result<CrsRequirement> {
+    descriptor.crs_requirement.ok_or_else(|| {
+        PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
+    })
 }
 
 pub(in crate::analyze) fn ensure_finite(op: &str, name: &'static str, value: f64) -> Result<()> {

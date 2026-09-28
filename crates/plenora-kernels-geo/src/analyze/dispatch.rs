@@ -19,9 +19,9 @@ use super::config::{
     SimplifyConfig, SnapToGridConfig, SplitConfig, TranslateConfig, VoronoiConfig,
 };
 use super::helpers::{
-    ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive, ensure_ratio,
-    invalid_param, merge_schema_metadata, output_fields, output_name, parse_config, rebuild,
-    require_identifiable_geometry, require_xy_dimensions, short_id, single_geometry,
+    crs_requirement, ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive,
+    ensure_ratio, invalid_param, merge_schema_metadata, output_fields, output_name, parse_config,
+    rebuild, require_identifiable_geometry, require_xy_dimensions, short_id, single_geometry,
     validate_other_wkb, with_geometry_types, with_schema_metadata,
 };
 use super::measures::{
@@ -263,9 +263,7 @@ pub(in crate::analyze) fn analyze_unary(
     // Ogni op unaria che consuma una geometria la decodifica in XY —
     // dimensionalita' diversa rifiutata a compile-plan (mai a meta' stream).
     require_xy_dimensions(op, geometry)?;
-    let requirement = descriptor.crs_requirement.ok_or_else(|| {
-        PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
-    })?;
+    let requirement = crs_requirement(op, descriptor)?;
     match op {
         // Trasformazioni 1:1 in place: schema e FieldId invariati; le op
         // che CAMBIANO il tipo geometrico dichiarano i tipi dell'output
@@ -453,9 +451,7 @@ pub(in crate::analyze) fn analyze_binary(
     // Come per le unarie: entrambi gli operandi devono essere XY.
     require_xy_dimensions(op, left_geometry)?;
     require_xy_dimensions(op, right_geometry)?;
-    let requirement = descriptor.crs_requirement.ok_or_else(|| {
-        PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
-    })?;
+    let requirement = crs_requirement(op, descriptor)?;
     validate_requirement(
         requirement,
         &[
