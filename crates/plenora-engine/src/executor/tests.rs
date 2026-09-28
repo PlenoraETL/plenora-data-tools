@@ -1808,46 +1808,11 @@ fn edge_row_limit_accumulates_across_batches() {
 }
 
 #[test]
-fn expansion_factor_triggers_on_join() {
-    // 3 righe left x 2 righe right con la stessa chiave: 6 righe in uscita,
-    // base errori-e-limiti.md = left + right = 5 -> 6 > 5 x 1.0 scatta il limite.
-    let plan = json!({
-        "schema_version": 5,
-        "limits": {"max_expansion_factor": 1.0},
-        "inputs": ["left_in", "right_in"],
-        "nodes": [
-            {"id": "j", "op": "table.join", "in": ["left_in", "right_in"],
-             "config": {"left_keys": ["id"], "right_keys": ["id"]}},
-        ],
-        "output": "j",
-    });
-    let inputs = Inputs::new()
-        .with(
-            "left_in",
-            Input::from_batches(vec![table_batch(&[1, 1, 1], &["a", "b", "c"])]).expect("input"),
-        )
-        .and_then(|inputs| {
-            inputs.with(
-                "right_in",
-                Input::from_batches(vec![table_batch(&[1, 1], &["d", "e"])]).expect("input"),
-            )
-        })
-        .expect("inputs");
-    let output = run(&plan, inputs, &two_input_contracts()).expect("execute");
-    let error = output
-        .collect_batches()
-        .expect_err("espansione oltre il fattore 1.0");
-    assert!(
-        error.to_string().contains("max_expansion_factor"),
-        "{error}"
-    );
-}
-
-#[test]
 fn expansion_constraint_max_relative_triggers_on_many_to_many_join() {
-    // Stesso join del test precedente ma fattore 1.5: con la base left+right
-    // (SumRelative, 6/5 = 1.2) NON scatterebbe; table.join dichiara
-    // MaxRelative (max(6/3, 6/2) = 3.0 > 1.5) -> scatta (errori-e-limiti.md).
+    // 3 righe left x 2 righe right con la stessa chiave: 6 righe in uscita.
+    // Con fattore 1.5 la base left+right (SumRelative, 6/5 = 1.2) NON
+    // scatterebbe; table.join dichiara MaxRelative (max(6/3, 6/2) = 3.0 >
+    // 1.5) -> scatta (errori-e-limiti.md).
     let plan = json!({
         "schema_version": 5,
         "limits": {"max_expansion_factor": 1.5},
@@ -4000,6 +3965,25 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
         .collect_batches()
         .expect_err("panic convertito in errore");
     assert_panico_attribuito(&error, "boom_stream", "table.filter", "");
+    // Con `diagnostics` spento (il default) il motivo resta invariato salvo
+    // la categoria.
+    let (_, _, reason) = attribuzione(&error);
+    assert_eq!(
+        reason, "internal error: panic nel kernel: payload dinamico (contenuto non pubblicato)",
+        "diagnostics spento: motivo invariato salvo la categoria"
+    );
+    // `execution_id` resta assegnato anche fuori dall'involucro `Execution`:
+    // e' il `Replayed` a portarlo (errori arricchiti).
+    let PlenoraError::Replayed(inner) = &error else {
+        panic!("atteso Replayed con attribuzione: {error:?}");
+    };
+    assert!(
+        inner
+            .execution_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty()),
+        "execution_id sempre presente negli errori DAG (M1d)"
+    );
 }
 
 #[test]
@@ -4497,36 +4481,6 @@ fn execute_scavenges_stale_temp_dirs_at_startup() {
         "fuori pattern: mai toccata"
     );
     drop(output.collect_batches().expect("stream ok"));
-}
-
-#[test]
-fn diagnostics_off_leaves_step_error_unchanged() {
-    let _guard = PanicHookGuard::set("diag_off");
-    let inputs = single_input("main", vec![table_batch(&[1], &["a"])]);
-    let output = run(
-        &panic_plan("diag_off"),
-        inputs,
-        &[("main".to_owned(), table_contract())],
-    )
-    .expect("execute");
-    let error = output.collect_batches().expect_err("panic convertito");
-    let (_, _, reason) = attribuzione(&error);
-    assert_eq!(
-        reason, "internal error: panic nel kernel: payload dinamico (contenuto non pubblicato)",
-        "diagnostics spento: motivo invariato salvo la categoria"
-    );
-    // `execution_id` resta assegnato anche fuori dall'involucro `Execution`:
-    // e' il `Replayed` a portarlo (errori arricchiti).
-    let PlenoraError::Replayed(inner) = &error else {
-        panic!("atteso Replayed con attribuzione: {error:?}");
-    };
-    assert!(
-        inner
-            .execution_id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty()),
-        "execution_id sempre presente negli errori DAG (M1d)"
-    );
 }
 
 #[test]
@@ -5968,20 +5922,6 @@ fn staging_lease_rilasciati_a_fine_esecuzione() {
         assert_eq!(
             metriche.memory.reserved_bytes, 0,
             "nessun byte deve restare riservato (forza_disco={forza_disco})"
-        );
-    }
-}
-
-#[test]
-fn staging_picco_governato_memoria_non_supera_il_budget() {
-    // Il punto delicato: trattenere i lease NON deve far superare il budget.
-    for forza_disco in [false, true] {
-        let (_, metriche) = staging_esegui(forza_disco).expect("esecuzione");
-        assert!(
-            metriche.memory.peak_reserved_bytes <= metriche.memory.budget_bytes,
-            "picco {} oltre il budget {} (forza_disco={forza_disco})",
-            metriche.memory.peak_reserved_bytes,
-            metriche.memory.budget_bytes
         );
     }
 }

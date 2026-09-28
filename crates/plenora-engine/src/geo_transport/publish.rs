@@ -667,12 +667,6 @@ mod tests {
     // -- Classificazione degli errori di persist ----------------------------
 
     #[test]
-    fn already_exists_is_never_retryable() {
-        let error = io::Error::from(ErrorKind::AlreadyExists);
-        assert!(!retryable_persist_error(&error));
-    }
-
-    #[test]
     fn windows_share_lock_codes_are_retryable() {
         // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
         for code in [5, 32, 33] {
@@ -681,10 +675,16 @@ mod tests {
     }
 
     #[test]
-    fn other_errors_are_not_retryable() {
-        // EACCES (13) su Unix: accesso negato permanente, non transitorio.
-        assert!(!retryable_persist_error(&io::Error::from_raw_os_error(13)));
-        assert!(!retryable_persist_error(&io::Error::other("generico")));
+    fn already_exists_and_other_errors_are_not_retryable() {
+        for error in [
+            // Mai: la destinazione esiste, riprovare non la fa sparire.
+            io::Error::from(ErrorKind::AlreadyExists),
+            // EACCES (13) su Unix: accesso negato permanente, non transitorio.
+            io::Error::from_raw_os_error(13),
+            io::Error::other("generico"),
+        ] {
+            assert!(!retryable_persist_error(&error), "{error:?}");
+        }
     }
 
     // -- Retry con backoff (punto di iniezione) -----------------------------
@@ -717,25 +717,20 @@ mod tests {
     }
 
     #[test]
-    fn persist_does_not_retry_already_exists() {
-        let attempts = AtomicU32::new(0);
-        let result = persist_with_retry(|| {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            Err(io::Error::from(ErrorKind::AlreadyExists))
-        });
-        assert!(result.is_err());
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn persist_does_not_retry_non_transient_errors() {
-        let attempts = AtomicU32::new(0);
-        let result = persist_with_retry(|| {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            Err(io::Error::from_raw_os_error(13)) // EACCES: non transitorio
-        });
-        assert!(result.is_err());
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    fn persist_does_not_retry_already_exists_nor_non_transient_errors() {
+        let casi: [fn() -> io::Error; 2] = [
+            || io::Error::from(ErrorKind::AlreadyExists),
+            || io::Error::from_raw_os_error(13), // EACCES: non transitorio
+        ];
+        for errore in casi {
+            let attempts = AtomicU32::new(0);
+            let result = persist_with_retry(|| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err(errore())
+            });
+            assert!(result.is_err());
+            assert_eq!(attempts.load(Ordering::SeqCst), 1, "{:?}", errore());
+        }
     }
 
     // -- Profili di publish ---------------------------------------------------

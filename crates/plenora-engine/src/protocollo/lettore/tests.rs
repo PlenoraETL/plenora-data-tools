@@ -100,16 +100,23 @@ fn un_frame_intero_si_legge() {
 ///
 /// `Read` puo' rendere meno byte di quanti gliene se ne chiedano, e un lettore
 /// che non lo gestisse funzionerebbe in memoria e fallirebbe su un pipe.
+///
+/// Il frame riassemblato e' identico a quello scritto: e' la proprieta' che
+/// l'aritmetica del buffer puo' rompere. Il numero di allocazioni non e'
+/// osservabile da qui, e il nome non lo promette; la fallibilita' sta nella
+/// firma di `try_reserve_exact`.
 #[test]
 fn una_sorgente_a_morsi_si_legge_lo_stesso() {
-    let byte = codifica(&annulla("timeout")).expect("codifica");
-    for morso in [1_usize, 2, 3, 5] {
-        let mut spia = Spia::a_morsi(byte.clone(), morso);
-        let letto = leggi_frame(&mut spia)
-            .expect("lettura")
-            .expect("un frame c'e'");
-        assert_eq!(letto, annulla("timeout"), "morso da {morso} byte");
-        assert_eq!(spia.consegnati, byte.len());
+    for motivo in ["timeout", "un motivo abbastanza lungo da non essere banale"] {
+        let byte = codifica(&annulla(motivo)).expect("codifica");
+        for morso in [1_usize, 2, 3, 5, 7] {
+            let mut spia = Spia::a_morsi(byte.clone(), morso);
+            let letto = leggi_frame(&mut spia)
+                .expect("lettura")
+                .expect("un frame c'e'");
+            assert_eq!(letto, annulla(motivo), "morso da {morso} byte");
+            assert_eq!(spia.consegnati, byte.len());
+        }
     }
 }
 
@@ -295,25 +302,6 @@ fn una_interruzione_non_fa_fallire_la_lettura() {
         .expect("l'interruzione non e' un guasto")
         .expect("un frame c'e'");
     assert_eq!(letto, annulla("timeout"));
-}
-
-/// Il frame riassemblato e' identico a quello scritto, anche a morsi minuscoli.
-///
-/// Prefisso e payload tornano un frame uguale anche quando la sorgente li
-/// consegna tre byte per volta: e' la proprieta' che l'aritmetica del buffer
-/// puo' rompere. Il numero di allocazioni non e' osservabile da qui, e il
-/// nome non lo promette; la fallibilita' sta nella firma di
-/// `try_reserve_exact`.
-#[test]
-fn il_frame_riassemblato_e_identico_a_quello_scritto() {
-    let atteso = annulla("un motivo abbastanza lungo da non essere banale");
-    let byte = codifica(&atteso).expect("codifica");
-    let mut spia = Spia::a_morsi(byte.clone(), 7);
-    let letto = leggi_frame(&mut spia)
-        .expect("lettura")
-        .expect("un frame c'e'");
-    assert_eq!(letto, atteso);
-    assert_eq!(spia.consegnati, byte.len());
 }
 
 /// Una lunghezza che non sta in `usize` col prefisso davanti e' un errore

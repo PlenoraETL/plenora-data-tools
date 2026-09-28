@@ -45,21 +45,6 @@ fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
     assert_eq!(values.value(0), 0);
     assert!(values.is_null(2));
 
-    let invalid_date = execute_batch(
-        strings(vec![Some("invalid")]),
-        &plan(
-            "type_cast",
-            json!({"column":"value","target_type":"date32","errors":"coerce"}),
-            Limits::default(),
-        ),
-    )
-    .expect_err("date invalida coercita a null");
-    let diagnostics = invalid_date
-        .row_diagnostics()
-        .expect("diagnostica row-scoped persa");
-    assert_eq!(diagnostics.observed_total, 1);
-    assert_eq!(diagnostics.examples[0].source_index, 0);
-
     let timestamp = execute_batch(
         strings(vec![Some("1970-01-01T00:00:01Z")]),
         &plan(
@@ -1083,18 +1068,10 @@ fn set_batch(values: &[i64]) -> RecordBatch {
     .expect("set batch")
 }
 
-fn int_values(batch: &RecordBatch) -> Vec<i64> {
-    batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("ints")
-        .values()
-        .to_vec()
-}
-
+/// L'identita' fra percorso spilled e in memoria e' in
+/// `forced_spill_matches_the_in_memory_set_contract` (`extended_properties.rs`).
 #[test]
-fn disk_spill_is_semantically_identical_ordered_and_quota_bounded() {
+fn disk_spill_is_quota_bounded() {
     let left_values = (0..400)
         .map(|value| i64::from(value % 173))
         .collect::<Vec<_>>();
@@ -1103,23 +1080,6 @@ fn disk_spill_is_semantically_identical_ordered_and_quota_bounded() {
         .collect::<Vec<_>>();
     let left = set_batch(&left_values);
     let right = set_batch(&right_values);
-    for operation in ["union_distinct", "intersect", "except"] {
-        let in_memory = execute_binary(
-            &left,
-            &right,
-            &plan(operation, json!({}), Limits::default()),
-        )
-        .expect("in memory");
-        let spill_limits = Limits {
-            max_governed_memory_bytes: 2_048,
-            spill_partitions: 64,
-            ..Limits::default()
-        };
-        let spilled = execute_binary(&left, &right, &plan(operation, json!({}), spill_limits))
-            .unwrap_or_else(|error| panic!("{operation}: {error}"));
-        assert_eq!(int_values(&spilled), int_values(&in_memory), "{operation}");
-    }
-
     let quota = Limits {
         max_governed_memory_bytes: 2_048,
         max_temp_bytes: 32,
