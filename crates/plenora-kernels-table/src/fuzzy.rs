@@ -627,16 +627,8 @@ pub fn fuzzy_join(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::nullable_batch as batch;
     use plenora_core::arrow::array::{Array, ArrayRef, Int64Array, StringArray};
-
-    fn batch(pairs: Vec<(&str, ArrayRef)>) -> RecordBatch {
-        let fields = pairs
-            .iter()
-            .map(|(name, column)| Field::new(*name, column.data_type().clone(), true))
-            .collect::<Vec<_>>();
-        let columns = pairs.into_iter().map(|(_, column)| column).collect();
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).expect("batch di test")
-    }
 
     fn utf8_column_of(values: &[Option<&str>]) -> ArrayRef {
         Arc::new(StringArray::from(values.to_vec()))

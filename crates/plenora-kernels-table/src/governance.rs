@@ -1046,6 +1046,7 @@ mod tests {
 
     use super::*;
     use crate::quality::key_for_row;
+    use crate::test_support::batch_from_fields as batch_of;
     use plenora_core::arrow::array::{
         BinaryArray, Date32Array, Decimal128Array, TimestampMillisecondArray,
     };
@@ -1218,10 +1219,6 @@ mod tests {
             }
         }
         Ok(left.clone())
-    }
-
-    fn batch_of(fields: Vec<Field>, columns: Vec<ArrayRef>) -> RecordBatch {
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).expect("fixture")
     }
 
     /// Fixture con chiavi composite su tipi misti (int64 + utf8 nullable)

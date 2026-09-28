@@ -69,6 +69,7 @@ mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
 
     use super::*;
+    use crate::test_support::{assert_batches_identical, single_column_batch};
 
     /// Oracolo indipendente: permutazione attesa per una colonna Float64
     /// (null dopo i valori, `total_cmp`, stabile sull'indice originale).
@@ -213,19 +214,12 @@ mod tests {
         );
         assert_eq!(sorted, vec![1, 0, 3, 2]); // "a" < "b", null in coda
 
-        let large = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "c",
-                DataType::LargeUtf8,
-                true,
-            )])),
-            vec![Arc::new(LargeStringArray::from(vec![
-                Some("b"),
-                Some("a"),
-                None,
-            ]))],
-        )
-        .expect("fixture");
+        let large = single_column_batch(
+            "c",
+            Arc::new(LargeStringArray::from(vec![Some("b"), Some("a"), None])),
+            DataType::LargeUtf8,
+            true,
+        );
         // LargeUtf8 non e' nel profilo scalare: confrontando due valori non
         // nulli il percorso generico fallisce, errore di schema invariato.
         assert!(sort(
@@ -240,15 +234,12 @@ mod tests {
 
     #[test]
     fn sort_empty_single_row_and_mixed_columns() {
-        let empty = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "num",
-                DataType::Float64,
-                false,
-            )])),
-            vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],
-        )
-        .expect("empty fixture");
+        let empty = single_column_batch(
+            "num",
+            Arc::new(Float64Array::from(Vec::<f64>::new())),
+            DataType::Float64,
+            false,
+        );
         assert_eq!(
             sort(
                 &empty,
@@ -466,15 +457,12 @@ mod tests {
         )
         .is_err());
         // Tipo non confrontabile (LargeUtf8): stesso errore di `sort`.
-        let large = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "c",
-                DataType::LargeUtf8,
-                true,
-            )])),
-            vec![Arc::new(LargeStringArray::from(vec![Some("b"), Some("a")]))],
-        )
-        .expect("fixture");
+        let large = single_column_batch(
+            "c",
+            Arc::new(LargeStringArray::from(vec![Some("b"), Some("a")])),
+            DataType::LargeUtf8,
+            true,
+        );
         assert!(top_n(
             &large,
             &TopN {
@@ -788,101 +776,6 @@ mod tests {
             }
         }
         Ok(result)
-    }
-
-    /// Confronto rigoroso: schema (nomi, tipi, nullabilita'), numero righe,
-    /// maschera null e valori (bit a bit per i Float64, NaN incluso).
-    fn assert_batches_identical(fast: &RecordBatch, reference: &RecordBatch) {
-        assert_eq!(fast.num_rows(), reference.num_rows(), "righe");
-        assert_eq!(fast.num_columns(), reference.num_columns(), "colonne");
-        let fast_schema = fast.schema();
-        let reference_schema = reference.schema();
-        for index in 0..fast.num_columns() {
-            let fast_field = fast_schema.field(index);
-            let reference_field = reference_schema.field(index);
-            assert_eq!(
-                fast_field.name(),
-                reference_field.name(),
-                "nome colonna {index}"
-            );
-            assert_eq!(
-                fast_field.data_type(),
-                reference_field.data_type(),
-                "tipo colonna {}",
-                fast_field.name()
-            );
-            assert_eq!(
-                fast_field.is_nullable(),
-                reference_field.is_nullable(),
-                "nullabilita' colonna {}",
-                fast_field.name()
-            );
-            let fast_column = fast.column(index);
-            let reference_column = reference.column(index);
-            for row in 0..fast.num_rows() {
-                assert_eq!(
-                    fast_column.is_null(row),
-                    reference_column.is_null(row),
-                    "null riga {row} colonna {}",
-                    fast_field.name()
-                );
-            }
-            match fast_field.data_type() {
-                DataType::Float64 => {
-                    let fast_values = fast_column
-                        .as_any()
-                        .downcast_ref::<Float64Array>()
-                        .expect("float64");
-                    let reference_values = reference_column
-                        .as_any()
-                        .downcast_ref::<Float64Array>()
-                        .expect("float64");
-                    for row in 0..fast.num_rows() {
-                        if !fast_values.is_null(row) {
-                            assert_eq!(
-                                fast_values.value(row).to_bits(),
-                                reference_values.value(row).to_bits(),
-                                "bits riga {row} colonna {}",
-                                fast_field.name()
-                            );
-                        }
-                    }
-                }
-                DataType::Int64 => {
-                    let fast_values = fast_column
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .expect("int64");
-                    let reference_values = reference_column
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .expect("int64");
-                    for row in 0..fast.num_rows() {
-                        if !fast_values.is_null(row) {
-                            assert_eq!(
-                                fast_values.value(row),
-                                reference_values.value(row),
-                                "valore riga {row} colonna {}",
-                                fast_field.name()
-                            );
-                        }
-                    }
-                }
-                _ => {
-                    // Chiavi di gruppo di altri tipi (Utf8, UInt64, Boolean,
-                    // Date32, ...): confronto sulla forma scalare, che per
-                    // questi tipi e' iniettiva sui valori.
-                    for row in 0..fast.num_rows() {
-                        assert_eq!(
-                            scalar_as_string(fast_column.as_ref(), row).expect("scalare"),
-                            scalar_as_string(reference_column.as_ref(), row).expect("scalare"),
-                            "valore riga {row} colonna {}",
-                            fast_field.name()
-                        );
-                    }
-                }
-            }
-        }
     }
 
     /// Esegue fast path e riferimento e verifica l'uguaglianza esatta;
@@ -2211,15 +2104,12 @@ mod tests {
     fn distinct_preserves_errors() {
         // Colonna LargeUtf8 nel subset: il profilo scalare fallisce allo
         // stesso modo nel riferimento.
-        let large = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "c",
-                DataType::LargeUtf8,
-                true,
-            )])),
-            vec![Arc::new(LargeStringArray::from(vec![Some("a"), Some("b")]))],
-        )
-        .expect("fixture large utf8");
+        let large = single_column_batch(
+            "c",
+            Arc::new(LargeStringArray::from(vec![Some("a"), Some("b")])),
+            DataType::LargeUtf8,
+            true,
+        );
         let config = Distinct {
             subset: vec![],
             keep: Keep::First,
@@ -2709,11 +2599,12 @@ mod tests {
         // `compare_at` (percorso `ColumnComparator::Generic`) delega allo
         // stesso comparatore tipizzato unico: UInt64 resta numerico anche
         // fuori dal fast path tipizzato.
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("u", DataType::UInt64, false)])),
-            vec![Arc::new(UInt64Array::from(vec![9_u64, 10]))],
-        )
-        .expect("fixture");
+        let batch = single_column_batch(
+            "u",
+            Arc::new(UInt64Array::from(vec![9_u64, 10])),
+            DataType::UInt64,
+            false,
+        );
         assert_eq!(compare_at(&batch, 0, 0, 1).expect("cmp"), Ordering::Less);
         assert_eq!(compare_at(&batch, 0, 1, 0).expect("cmp"), Ordering::Greater);
     }

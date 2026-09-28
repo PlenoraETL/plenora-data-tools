@@ -473,6 +473,7 @@ mod tests {
     use plenora_core::arrow::schema::{DataType, Field};
 
     use super::*;
+    use crate::test_support::{assert_batches_identical, single_column_batch};
 
     // -----------------------------------------------------------------------
     // Oracolo: implementazione di riferimento indipendente
@@ -556,48 +557,6 @@ mod tests {
         let right = oracle_right_keys(right)?;
         let rows = oracle_unique_rows(left, |key| !right.contains(key))?;
         select_rows(left, &rows)
-    }
-
-    /// Confronto rigoroso: schema (nomi, tipi, nullability, metadata) e
-    /// buffer di ogni colonna bit a bit (valori, null, bit f64, ordine).
-    fn assert_batches_identical(expected: &RecordBatch, actual: &RecordBatch) {
-        let expected_schema = expected.schema();
-        let actual_schema = actual.schema();
-        assert_eq!(
-            expected_schema.fields().len(),
-            actual_schema.fields().len(),
-            "numero di colonne diverso"
-        );
-        for (expected_field, actual_field) in
-            expected_schema.fields().iter().zip(actual_schema.fields())
-        {
-            assert_eq!(expected_field.name(), actual_field.name(), "nome colonna");
-            assert_eq!(
-                expected_field.data_type(),
-                actual_field.data_type(),
-                "tipo colonna {}",
-                expected_field.name()
-            );
-            assert_eq!(
-                expected_field.is_nullable(),
-                actual_field.is_nullable(),
-                "nullability colonna {}",
-                expected_field.name()
-            );
-        }
-        assert_eq!(
-            expected_schema.metadata(),
-            actual_schema.metadata(),
-            "metadata schema"
-        );
-        assert_eq!(expected.num_rows(), actual.num_rows(), "numero righe");
-        for (expected_column, actual_column) in expected.columns().iter().zip(actual.columns()) {
-            assert_eq!(
-                expected_column.to_data(),
-                actual_column.to_data(),
-                "buffer colonna non identici"
-            );
-        }
     }
 
     /// Fixture multi-tipo con casi limite: null in ogni colonna, stringhe
@@ -923,13 +882,15 @@ mod tests {
         }
 
         // Tipo non supportato (Int32): stesso errore nei due percorsi.
-        let unsupported = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)])),
-            vec![Arc::new(plenora_core::arrow::array::Int32Array::from(
-                vec![Some(1), None],
-            ))],
-        )
-        .expect("fixture int32");
+        let unsupported = single_column_batch(
+            "k",
+            Arc::new(plenora_core::arrow::array::Int32Array::from(vec![
+                Some(1),
+                None,
+            ])),
+            DataType::Int32,
+            true,
+        );
         for (name, oracle, fast) in [
             (
                 "union_distinct",
