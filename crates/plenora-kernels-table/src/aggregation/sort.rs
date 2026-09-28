@@ -139,6 +139,20 @@ fn comparator_after_prevalidation() -> PlenoraError {
 ///   ordinabile (prevalidazione deterministica), piu' gli errori di
 ///   `select_rows`.
 pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
+    select_rows(batch, &sort_permutation(batch, config)?)
+}
+
+/// Permutazione stabile di `sort`: l'i-esimo elemento e' l'indice, in
+/// `batch`, della riga che `sort` mette in posizione i.
+///
+/// E' la stessa permutazione che `sort` applica, esposta al crate perche'
+/// lo spill ordina le run con lo stesso comparatore e conserva, per ogni
+/// riga della run, l'indice originale.
+///
+/// # Errors
+///
+/// Come [`sort`], esclusi gli errori di `select_rows`.
+pub fn sort_permutation(batch: &RecordBatch, config: &Sort) -> Result<Vec<usize>> {
     // Sotto soglia il merge sort parallelo di rayon non ripaga l'overhead;
     // entrambi i percorsi sono stabili, quindi la permutazione e' identica.
     const PARALLEL_THRESHOLD: usize = 32_768;
@@ -187,7 +201,7 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
     if unexpected.load(AtomicOrdering::Relaxed) {
         return Err(comparator_after_prevalidation());
     }
-    select_rows(batch, &rows)
+    Ok(rows)
 }
 
 #[derive(Debug, Deserialize)]

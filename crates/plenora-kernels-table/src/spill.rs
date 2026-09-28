@@ -12,7 +12,7 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{Array, RecordBatch, UInt64Array};
 use plenora_core::arrow::ipc::reader::StreamReader;
 use plenora_core::arrow::ipc::writer::StreamWriter;
-use plenora_core::arrow::schema::DataType;
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::arrow::select::concat::concat_batches;
 use tempfile::TempDir;
 
@@ -424,7 +424,9 @@ pub fn execute_set_operation(
 
 /// Colonna tecnica con l'indice di riga originale, aggiunta all'input prima
 /// dello spill di `distinct` (il partizionamento disperde l'ordine di
-/// arrivo, necessario per `keep=first`/`last`).
+/// arrivo, necessario per `keep=first`/`last`) e in coda a ogni run del sort
+/// (l'ordinamento della run disperde la posizione, necessaria a
+/// `select_rows` sull'input).
 const SPILL_ORDINAL_COLUMN: &str = "__plenora_spill_ordinal";
 
 /// Righe per chunk IPC: il lettore streaming tiene in memoria un chunk alla
@@ -1087,41 +1089,54 @@ pub fn aggregate_spilled_in(
     Ok((output, workspace.metrics()))
 }
 
-/// Righe per run dell'external merge sort: un quarto del budget memoria
-/// diviso per la stima byte/riga (una run ordinata occupa batch sorgente,
-/// permutazione e copia ordinata), almeno una riga.
+/// Byte per riga che una run aggiunge ai dati: l'indice della permutazione
+/// (`usize`) e la colonna ordinale (`UInt64`). Non dipendono dalla larghezza
+/// della riga, e su righe strette pesano piu' dei dati stessi.
+const BYTE_TECNICI_PER_RIGA: usize = std::mem::size_of::<usize>() + std::mem::size_of::<u64>();
+
+/// Righe per run dell'external merge sort, almeno una. Una run ordinata
+/// occupa la fetta sorgente, la copia ordinata e la colonna ordinale: il
+/// fattore quattro sui dati copre le copie, e i byte tecnici per riga si
+/// aggiungono a parte, perche' un fattore sulla sola stima dei dati non li
+/// copre quando la riga e' stretta.
 fn sort_run_rows(batch: &RecordBatch, limits: &Limits) -> usize {
     let bytes = estimated_batch_bytes(batch).max(1);
     let per_row = (bytes / batch.num_rows().max(1)).max(1);
-    (limits.max_governed_memory_bytes / 4 / per_row).max(1)
+    let per_row_con_tecnici = per_row
+        .saturating_mul(4)
+        .saturating_add(BYTE_TECNICI_PER_RIGA);
+    (limits.max_governed_memory_bytes / per_row_con_tecnici).max(1)
 }
 
 /// Cursore di streaming su una run IPC ordinata: tiene in memoria un solo
-/// chunk alla volta; `base` e' l'indice globale (nel batch di input) della
-/// prima riga del chunk corrente.
+/// chunk alla volta.
+///
+/// Ogni riga della run porta nell'ultima colonna (`ordinal_column`) il
+/// proprio indice nel batch di input. La posizione della riga dentro la run
+/// NON e' quell'indice: la run e' ordinata, quindi le righe hanno cambiato
+/// posto rispetto alla fetta d'input da cui vengono.
 struct RunCursor {
     reader: StreamReader<CountingReader>,
     current: Option<RecordBatch>,
     row: usize,
-    base: usize,
+    ordinal_column: usize,
 }
 
 impl RunCursor {
-    fn open(workspace: &RowSpillWorkspace, path: &Path, base: usize) -> Result<Self> {
+    fn open(workspace: &RowSpillWorkspace, path: &Path, ordinal_column: usize) -> Result<Self> {
         let reader =
             CountingReader::open(path, &workspace.bytes_read, &workspace.osservabilita_satura)?;
         let mut cursor = Self {
             reader: StreamReader::try_new(reader, None)?,
             current: None,
             row: 0,
-            base,
+            ordinal_column,
         };
         cursor.next_chunk()?;
         Ok(cursor)
     }
 
     fn next_chunk(&mut self) -> Result<()> {
-        self.base += self.current.as_ref().map_or(0, RecordBatch::num_rows);
         self.current = self.reader.next().transpose()?;
         self.row = 0;
         Ok(())
@@ -1140,9 +1155,104 @@ impl RunCursor {
         Ok(())
     }
 
-    const fn global_index(&self) -> usize {
-        self.base + self.row
+    /// Indice nel batch di input della riga corrente, letto dalla colonna
+    /// ordinale scritta con la run.
+    ///
+    /// Il file e' nostro: una colonna mancante, di tipo diverso, nulla o non
+    /// rappresentabile e' un'invariante violata (`Internal`), mai un indice
+    /// da indovinare.
+    fn original_index(&self) -> Result<usize> {
+        let chunk = self
+            .current
+            .as_ref()
+            .ok_or_else(|| PlenoraError::Internal("cursore spill esaurito".into()))?;
+        if self.ordinal_column >= chunk.num_columns() {
+            return Err(PlenoraError::Internal(
+                "run di sort senza colonna ordinale".into(),
+            ));
+        }
+        let ordinals = chunk
+            .column(self.ordinal_column)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                PlenoraError::Internal("colonna ordinale della run di tipo inatteso".into())
+            })?;
+        if self.row >= ordinals.len() || ordinals.is_null(self.row) {
+            return Err(PlenoraError::Internal("ordinale della run assente".into()));
+        }
+        usize::try_from(ordinals.value(self.row))
+            .map_err(|_| PlenoraError::Internal("ordinale della run non rappresentabile".into()))
     }
+}
+
+/// Run ordinata di `sort_spilled_in`: la fetta `[start, start + length)`
+/// dell'input riordinata con la permutazione stabile di `sort`, piu' una
+/// colonna `UInt64` in coda con l'indice ORIGINALE di ogni riga.
+///
+/// La colonna e' letta per posizione (l'ultima), mai per nome: una colonna
+/// dell'utente con lo stesso nome resta un dato qualsiasi. Non raggiunge
+/// l'output, che `select_rows` ricostruisce dall'input.
+fn sorted_run_with_ordinals(
+    batch: &RecordBatch,
+    start: usize,
+    length: usize,
+    config: &Sort,
+) -> Result<RecordBatch> {
+    let slice = batch.slice(start, length);
+    let permutation = aggregation::sort_permutation(&slice, config)?;
+    let ordinals = permutation
+        .iter()
+        .map(|position| {
+            start
+                .checked_add(*position)
+                .and_then(|index| u64::try_from(index).ok())
+                .ok_or_else(|| PlenoraError::ResourceLimit("ordinal spill oltre u64".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let sorted = select_rows(&slice, &permutation)?;
+    let mut fields = sorted.schema().fields().iter().cloned().collect::<Vec<_>>();
+    fields.push(Arc::new(Field::new(
+        SPILL_ORDINAL_COLUMN,
+        DataType::UInt64,
+        false,
+    )));
+    let mut columns = sorted.columns().to_vec();
+    columns.push(Arc::new(UInt64Array::from(ordinals)));
+    crate::batch_with_rows(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            sorted.schema().metadata().clone(),
+        )),
+        columns,
+        sorted.num_rows(),
+    )
+}
+
+/// La permutazione del merge e' una biiezione su `0..rows`: ogni riga
+/// dell'input compare una e una sola volta.
+///
+/// E' la garanzia che rende `select_rows` corretto per costruzione; un
+/// indice ripetuto o mancante e' un difetto nostro (`Internal`) e non deve
+/// diventare un output plausibile ma sbagliato.
+fn check_permutation(permutation: &[usize], rows: usize) -> Result<()> {
+    if permutation.len() != rows {
+        return Err(PlenoraError::Internal(
+            "merge dello spill: righe emesse diverse dall'input".into(),
+        ));
+    }
+    let mut seen = vec![false; rows];
+    for index in permutation {
+        match seen.get_mut(*index) {
+            Some(slot) if !*slot => *slot = true,
+            _ => {
+                return Err(PlenoraError::Internal(
+                    "merge dello spill: indice di riga ripetuto o fuori input".into(),
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Confronto tra celle di batch diversi (merge k-way).
@@ -1171,10 +1281,11 @@ fn compare_cells(challenger: &RunCursor, champion: &RunCursor, column: usize) ->
 /// `table.sort` con spill (architettura.md#memoria): external merge sort.
 ///
 /// L'input e' affettato in run dimensionate su `max_governed_memory_bytes`, ogni run
-/// e' ordinata in memoria con `sort` e spillata su IPC; il merge k-way in
-/// streaming (un chunk per run alla volta) produce la permutazione globale e
-/// l'output e' ricostruito con `select_rows` sull'input. A parita' di chiavi
-/// vince l'indice globale minore (stabilita'): output identico a `sort`.
+/// e' ordinata in memoria con la permutazione stabile di `sort` e spillata
+/// su IPC insieme all'indice originale di ogni riga; il merge k-way in
+/// streaming (un chunk per run alla volta) emette quegli indici, e l'output
+/// e' ricostruito con `select_rows` sull'input. A parita' di chiavi vince
+/// l'indice originale minore (stabilita'): output identico a `sort`.
 ///
 /// # Errors
 ///
@@ -1198,7 +1309,11 @@ pub fn sort_spilled(
 ///   `sort`/`select_rows`;
 /// - `InvalidPlan`: nessuna colonna di sort, confronto tra celle fallito
 ///   (`compare_cells_typed`);
-/// - `ResourceLimit`: quota `max_temp_bytes` superata;
+/// - `ResourceLimit`: quota `max_temp_bytes` superata, indice di riga oltre
+///   `u64`;
+/// - `Internal`: run illeggibile come l'abbiamo scritta (colonna ordinale
+///   assente, nulla o non rappresentabile) o permutazione del merge che non
+///   copre l'input esattamente una volta;
 /// - `Io`: errori sui file di spill (creazione, scrittura/lettura IPC,
 ///   pulizia).
 ///
@@ -1221,24 +1336,23 @@ pub fn sort_spilled_in(
         return Ok((aggregation::sort(batch, config)?, SpillMetrics::default()));
     }
     let run_rows = sort_run_rows(batch, limits);
+    let ordinal_column = batch.num_columns();
     let mut run_paths = Vec::new();
-    let mut run_bases = Vec::new();
     let mut start = 0;
     while start < batch.num_rows() {
         let length = run_rows.min(batch.num_rows() - start);
-        let sorted = aggregation::sort(&batch.slice(start, length), config)?;
+        let run = sorted_run_with_ordinals(batch, start, length, config)?;
         let path = workspace
             .directory()
             .join(format!("sort-run-{:04}.ipc", run_paths.len()));
         workspace.register(path.clone());
-        write_ipc_chunks(workspace, &path, &sorted)?;
+        write_ipc_chunks(workspace, &path, &run)?;
         run_paths.push(path);
-        run_bases.push(start);
         start += length;
     }
     let mut cursors = Vec::new();
-    for (path, base) in run_paths.iter().zip(&run_bases) {
-        cursors.push(RunCursor::open(workspace, path, *base)?);
+    for path in &run_paths {
+        cursors.push(RunCursor::open(workspace, path, ordinal_column)?);
     }
     // Merge k-way a scansione lineare: il numero di run e' piccolo (una per
     // fetta di budget memoria) e il confronto fallibile resta propagabile
@@ -1264,9 +1378,15 @@ pub fn sort_spilled_in(
             if !config.ascending {
                 ordering = ordering.reverse();
             }
-            // A parita' resta il campione: i cursori sono scanditi in ordine
-            // di run (offset globali crescenti), quindi vince l'indice
-            // globale minore, come lo spareggio stabile di `sort`.
+            // A parita' di chiavi vince l'indice originale minore, come lo
+            // spareggio stabile di `sort` (anche in discendente: lo
+            // spareggio non si rovescia). Il confronto e' esplicito sugli
+            // ordinali, non affidato all'ordine di scansione dei cursori.
+            if ordering == Ordering::Equal {
+                ordering = cursors[index]
+                    .original_index()?
+                    .cmp(&cursors[champion].original_index()?);
+            }
             if ordering == Ordering::Less {
                 best = Some(index);
             }
@@ -1274,10 +1394,11 @@ pub fn sort_spilled_in(
         let Some(champion) = best else {
             break;
         };
-        permutation.push(cursors[champion].global_index());
+        permutation.push(cursors[champion].original_index()?);
         cursors[champion].advance()?;
     }
     drop(cursors);
+    check_permutation(&permutation, batch.num_rows())?;
     let output = select_rows(batch, &permutation)?;
     workspace.cleanup()?;
     Ok((output, workspace.metrics()))
@@ -1286,6 +1407,29 @@ pub fn sort_spilled_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn le_run_del_sort_contano_i_byte_tecnici_anche_su_righe_strette() {
+        // Una colonna Boolean stima meno di un byte per riga: senza i byte
+        // tecnici, 64 KiB ammetterebbero 16384 righe per run, i cui soli
+        // ordinali occupano 128 KiB.
+        let colonna: plenora_core::arrow::array::ArrayRef =
+            Arc::new(plenora_core::arrow::array::BooleanArray::from(vec![
+                true;
+                100_000
+            ]));
+        let batch = RecordBatch::try_from_iter([("b", colonna)]).unwrap();
+        let limits = Limits {
+            max_governed_memory_bytes: 65_536,
+            ..Limits::default()
+        };
+        let righe = sort_run_rows(&batch, &limits);
+        assert!(righe * BYTE_TECNICI_PER_RIGA <= limits.max_governed_memory_bytes);
+        assert!(
+            righe > 1,
+            "il budget deve ancora ammettere run di piu' righe"
+        );
+    }
 
     #[test]
     fn i_contatori_dello_spill_dichiarano_la_saturazione_e_non_riaprono_la_quota() {
@@ -1464,8 +1608,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     use crate::aggregation::{AggFunction, Aggregate, Aggregation};
-    use plenora_core::arrow::array::{Float64Array, Int64Array, StringArray};
-    use plenora_core::arrow::schema::{Field, Schema};
+    use plenora_core::arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
 
     fn spill_test_limits(max_governed_memory_bytes: usize) -> Limits {
         Limits {
@@ -1604,6 +1747,230 @@ mod tests {
         assert_eq!(spilled, aggregation::sort(&batch, &config).expect("sort"));
     }
 
+    /// `rows` righe deterministiche con molti pareggi, null su ogni chiave,
+    /// NaN di entrambi i segni, zeri con segno, infiniti e un `id` che rende
+    /// leggibile ogni permutazione sbagliata.
+    fn sort_keys_fixture(rows: usize) -> RecordBatch {
+        const FLOATS: [Option<f64>; 10] = [
+            Some(f64::NAN),
+            Some(-0.0),
+            Some(0.0),
+            Some(1.5),
+            None,
+            Some(-2.25),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(-f64::NAN),
+            Some(3.0),
+        ];
+        const TEXTS: [Option<&str>; 6] = [
+            Some("alfa"),
+            Some("beta"),
+            Some(""),
+            None,
+            Some("Zeta"),
+            Some("\u{e4}"),
+        ];
+        let ints = (0..rows)
+            .map(|row| {
+                (row % 11 != 0).then(|| i64::try_from((row * 7_919) % 37).expect("i64") - 18)
+            })
+            .collect::<Vec<_>>();
+        let unsigned = (0..rows)
+            .map(|row| (row % 13 != 0).then(|| u64::try_from((row * 104_729) % 23).expect("u64")))
+            .collect::<Vec<_>>();
+        let floats = (0..rows)
+            .map(|row| FLOATS[(row * 31) % FLOATS.len()])
+            .collect::<Vec<_>>();
+        let texts = (0..rows)
+            .map(|row| TEXTS[(row * 13 + row / 7) % TEXTS.len()])
+            .collect::<Vec<_>>();
+        let flags = (0..rows)
+            .map(|row| (row % 5 != 0).then_some(row % 3 == 0))
+            .collect::<Vec<_>>();
+        let ids = (0..rows)
+            .map(|row| i64::try_from(row).expect("id"))
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("k_int", DataType::Int64, true),
+                Field::new("k_u64", DataType::UInt64, true),
+                Field::new("k_float", DataType::Float64, true),
+                Field::new("k_text", DataType::Utf8, true),
+                Field::new("k_bool", DataType::Boolean, true),
+                Field::new("id", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(ints)),
+                Arc::new(UInt64Array::from(unsigned)),
+                Arc::new(Float64Array::from(floats)),
+                Arc::new(StringArray::from(texts)),
+                Arc::new(BooleanArray::from(flags)),
+                Arc::new(Int64Array::from(ids)),
+            ],
+        )
+        .expect("fixture chiavi di sort")
+    }
+
+    /// Limiti che producono run di esattamente `run_rows` righe su `batch`
+    /// (inverso di `sort_run_rows`).
+    fn limits_for_run_rows(batch: &RecordBatch, run_rows: usize) -> Limits {
+        let per_row = (estimated_batch_bytes(batch) / batch.num_rows()).max(1);
+        let limits = spill_test_limits((per_row * 4 + BYTE_TECNICI_PER_RIGA) * run_rows);
+        assert_eq!(sort_run_rows(batch, &limits), run_rows, "budget di test");
+        limits
+    }
+
+    /// Oracolo: il sort spilled coincide bit a bit con `sort` in memoria.
+    fn assert_spilled_sort_is_in_memory_sort(batch: &RecordBatch, run_rows: usize) {
+        let limits = limits_for_run_rows(batch, run_rows);
+        let key_sets: [&[&str]; 9] = [
+            &["k_int"],
+            &["k_u64"],
+            &["k_float"],
+            &["k_text"],
+            &["k_bool"],
+            &["k_int", "k_text"],
+            &["k_float", "k_int"],
+            &["k_bool", "k_float", "k_u64"],
+            &["k_text", "k_float", "k_int"],
+        ];
+        for columns in key_sets {
+            for ascending in [true, false] {
+                let config = Sort {
+                    columns: columns.iter().map(|name| (*name).to_string()).collect(),
+                    ascending,
+                };
+                let expected = aggregation::sort(batch, &config).expect("sort in memoria");
+                let (spilled, metrics) =
+                    sort_spilled(batch, &config, &limits).expect("sort spilled");
+                assert!(metrics.files > 1, "attese piu' run: {metrics:?}");
+                assert_eq!(
+                    spilled.schema(),
+                    batch.schema(),
+                    "nessuna colonna tecnica nell'output"
+                );
+                assert_eq!(
+                    spilled, expected,
+                    "run di {run_rows} righe, config {config:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spilled_sort_with_multi_row_runs_is_the_in_memory_sort() {
+        // Run di piu' righe: la posizione dentro la run ordinata non e'
+        // l'indice originale della riga. Run corte, medie e una sola run
+        // quasi intera, con l'ultima run piu' corta delle altre. Le run
+        // cortissime restano su input piccoli: ogni run e' un file, e il
+        // merge a scansione lineare costa righe per run aperte.
+        for (rows, run_rows) in [(120, 2), (200, 3), (1_000, 17), (1_000, 250), (1_000, 999)] {
+            assert_spilled_sort_is_in_memory_sort(&sort_keys_fixture(rows), run_rows);
+        }
+    }
+
+    #[test]
+    fn spilled_sort_with_runs_spanning_several_ipc_chunks_is_the_in_memory_sort() {
+        // Run oltre `SPILL_CHUNK_ROWS`: ogni run e' scritta e riletta in piu'
+        // chunk IPC, e l'indice deve restare corretto oltre il confine.
+        let run_rows = SPILL_CHUNK_ROWS + 800;
+        let rows = 2 * run_rows + 1_000;
+        let batch = sort_keys_fixture(rows);
+        let limits = limits_for_run_rows(&batch, run_rows);
+        for (columns, ascending) in [
+            (vec!["k_int".to_string()], true),
+            (vec!["k_float".to_string(), "k_text".to_string()], false),
+        ] {
+            let config = Sort { columns, ascending };
+            let expected = aggregation::sort(&batch, &config).expect("sort in memoria");
+            let (spilled, metrics) = sort_spilled(&batch, &config, &limits).expect("sort spilled");
+            assert_eq!(metrics.files, 3, "tre run: {metrics:?}");
+            assert_eq!(spilled, expected, "config {config:?}");
+        }
+    }
+
+    #[test]
+    fn the_merge_permutation_must_cover_the_input_exactly_once() {
+        assert!(check_permutation(&[], 0).is_ok());
+        assert!(check_permutation(&[2, 0, 1], 3).is_ok());
+        for (permutation, rows) in [
+            (vec![0, 1], 3),
+            (vec![0, 1, 2, 3], 3),
+            (vec![0, 0, 2], 3),
+            (vec![0, 1, 3], 3),
+        ] {
+            let error = check_permutation(&permutation, rows).expect_err("permutazione rotta");
+            assert!(
+                matches!(error, PlenoraError::Internal(_)),
+                "{permutation:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_without_a_readable_ordinal_fails_closed() {
+        // Il cursore legge l'indice originale dal file che abbiamo scritto:
+        // colonna assente, di tipo diverso o nulla e' un'invariante rotta,
+        // mai un indice ricostruito dalla posizione.
+        let schema = |data_type: DataType, nullable: bool| {
+            Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Int64, false),
+                Field::new(SPILL_ORDINAL_COLUMN, data_type, nullable),
+            ]))
+        };
+        let keys = Arc::new(Int64Array::from(vec![1_i64, 2]));
+        let runs = [
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)])),
+                vec![keys.clone()],
+            ),
+            RecordBatch::try_new(
+                schema(DataType::Int64, false),
+                vec![keys.clone(), Arc::new(Int64Array::from(vec![0_i64, 1]))],
+            ),
+            RecordBatch::try_new(
+                schema(DataType::UInt64, true),
+                vec![keys, Arc::new(UInt64Array::from(vec![None, Some(1)]))],
+            ),
+        ];
+        let mut workspace = RowSpillWorkspace::new(1 << 20).expect("workspace");
+        for (index, run) in runs.into_iter().enumerate() {
+            let run = run.expect("run di prova");
+            let path = workspace.directory().join(format!("run-rotta-{index}.ipc"));
+            workspace.register(path.clone());
+            write_ipc_chunks(&workspace, &path, &run).expect("scrittura");
+            let cursor = RunCursor::open(&workspace, &path, 1).expect("apertura");
+            let error = cursor.original_index().expect_err("ordinale illeggibile");
+            assert!(matches!(error, PlenoraError::Internal(_)), "{error}");
+        }
+    }
+
+    #[test]
+    fn spilled_sort_ignores_a_user_column_named_like_the_spill_ordinal() {
+        // Il sort non riserva nomi: una colonna dell'utente con il nome della
+        // colonna tecnica resta dato, e l'indice originale non la legge ne'
+        // la sostituisce.
+        let batch = sort_keys_fixture(300);
+        let mut fields = batch.schema().fields().iter().cloned().collect::<Vec<_>>();
+        fields.push(Arc::new(Field::new(
+            SPILL_ORDINAL_COLUMN,
+            DataType::UInt64,
+            false,
+        )));
+        let mut columns = batch.columns().to_vec();
+        columns.push(Arc::new(UInt64Array::from(vec![7_u64; 300])));
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).expect("batch");
+        let limits = limits_for_run_rows(&batch, 40);
+        let config = Sort {
+            columns: vec!["k_text".to_string(), "k_int".to_string()],
+            ascending: false,
+        };
+        let expected = aggregation::sort(&batch, &config).expect("sort in memoria");
+        let (spilled, _) = sort_spilled(&batch, &config, &limits).expect("sort spilled");
+        assert_eq!(spilled, expected);
+    }
+
     #[test]
     fn spilled_distinct_matches_in_memory() {
         let batch = rows_fixture();
@@ -1687,6 +2054,64 @@ mod tests {
         let expected = aggregation::aggregate(&batch, &config).expect("conteggio in memoria");
         let (spilled, _) = aggregate_spilled(&batch, &config, &limits).expect("conteggio spilled");
         assert_eq!(spilled, expected);
+    }
+
+    #[test]
+    fn spilled_distinct_and_aggregate_with_multi_row_partitions_match_in_memory() {
+        // Stessa classe del sort: ogni partizione contiene molte righe in un
+        // ordine diverso da quello dell'input. `distinct` deve emettere gli
+        // indici originali (colonna ordinale), `aggregate` deve vedere le
+        // righe di ogni gruppo nell'ordine d'ingresso (first/last/concat e
+        // somme Float64 dipendono dall'ordine).
+        let batch = sort_keys_fixture(1_000);
+        let limits = spill_test_limits(1 << 20);
+        let key_sets: [&[&str]; 5] = [
+            &[],
+            &["k_int"],
+            &["k_float"],
+            &["k_text", "k_bool"],
+            &["k_u64", "k_float", "k_text"],
+        ];
+        for subset in key_sets {
+            for keep in [Keep::First, Keep::Last, Keep::False] {
+                let config = Distinct {
+                    subset: subset.iter().map(|name| (*name).to_string()).collect(),
+                    keep,
+                };
+                let expected = aggregation::distinct(&batch, &config).expect("distinct");
+                let (spilled, _) =
+                    distinct_spilled(&batch, &config, &limits).expect("distinct spilled");
+                assert_eq!(spilled, expected, "config {config:?}");
+            }
+        }
+        let aggregation = |column: &str, function: AggFunction, alias: &str| Aggregation {
+            column: column.to_string(),
+            function,
+            separator: "|".into(),
+            distinct: false,
+            skip_null: true,
+            alias: alias.to_string(),
+            quantile: None,
+            ddof: 1,
+        };
+        for group_by in key_sets.iter().skip(1) {
+            let config = Aggregate {
+                group_by: group_by.iter().map(|name| (*name).to_string()).collect(),
+                aggregations: vec![
+                    aggregation("id", AggFunction::First, "id_first"),
+                    aggregation("id", AggFunction::Last, "id_last"),
+                    aggregation("id", AggFunction::Concat, "id_concat"),
+                    aggregation("k_text", AggFunction::Concat, "testi"),
+                    aggregation("k_float", AggFunction::Sum, "somma"),
+                    aggregation("k_float", AggFunction::Mean, "media"),
+                    aggregation("k_int", AggFunction::Count, "conta"),
+                ],
+            };
+            let expected = aggregation::aggregate(&batch, &config).expect("aggregate");
+            let (spilled, _) =
+                aggregate_spilled(&batch, &config, &limits).expect("aggregate spilled");
+            assert_eq!(spilled, expected, "group_by {group_by:?}");
+        }
     }
 
     #[test]
