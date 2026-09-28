@@ -1360,9 +1360,15 @@ mod tests {
 
     /// Oracolo comune degli enum di `enum_icd!`: per ogni variante di `ALL`,
     /// `Display` e serializzazione serde (`rename_all`, scritta a parte dalla
-    /// macro) coincidono con `as_str`, e serde e `FromStr` fanno roundtrip.
-    fn assert_forma_icd<T>(all: &[T], as_str: fn(T) -> &'static str)
-    where
+    /// macro) coincidono con `as_str`, e serde e `FromStr` fanno roundtrip;
+    /// ogni forma di `rifiutate` e' respinta da `FromStr` con `errore`. I
+    /// messaggi nominano il tipo, perche' un solo test li percorre tutti.
+    fn assert_forma_icd<T>(
+        all: &[T],
+        as_str: fn(T) -> &'static str,
+        rifiutate: &[&str],
+        errore: T::Err,
+    ) where
         T: Copy
             + std::fmt::Debug
             + std::fmt::Display
@@ -1370,17 +1376,90 @@ mod tests {
             + Serialize
             + serde::de::DeserializeOwned
             + std::str::FromStr,
+        T::Err: Copy + std::fmt::Debug + PartialEq,
     {
-        assert!(!all.is_empty());
+        let tipo = std::any::type_name::<T>();
+        assert!(!all.is_empty(), "{tipo}: ALL vuoto");
         for &value in all {
             let text = as_str(value);
-            assert_eq!(value.to_string(), text);
-            let serialized = serde_json::to_string(&value).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: T = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, value);
-            assert_eq!(text.parse::<T>().ok(), Some(value));
+            assert_eq!(value.to_string(), text, "{tipo}: Display");
+            let serialized = serde_json::to_string(&value)
+                .unwrap_or_else(|errore| panic!("{tipo}: serializzazione: {errore}"));
+            assert_eq!(serialized, format!("\"{text}\""), "{tipo}: serde");
+            let parsed: T = serde_json::from_str(&serialized)
+                .unwrap_or_else(|errore| panic!("{tipo}: deserializzazione: {errore}"));
+            assert_eq!(parsed, value, "{tipo}: roundtrip serde");
+            assert_eq!(text.parse::<T>().ok(), Some(value), "{tipo}: FromStr");
         }
+        for &value in rifiutate {
+            assert_eq!(value.parse::<T>(), Err(errore), "{tipo}: {value:?}");
+        }
+    }
+
+    /// Nove enum di `enum_icd!` in una tabella. I rifiuti di
+    /// `GeometryDimensions`, `GeometryEncoding` e `GeometryType` stanno nei
+    /// test dedicati sotto, con le norme che li motivano.
+    #[test]
+    fn gli_enum_icd_fanno_roundtrip_e_rifiutano_le_forme_non_canoniche() {
+        assert_forma_icd(
+            GeometryDimensions::ALL,
+            GeometryDimensions::as_str,
+            &[],
+            UnknownGeometryDimensions,
+        );
+        assert_forma_icd(
+            GeometryEncoding::ALL,
+            GeometryEncoding::as_str,
+            &[],
+            UnknownGeometryEncoding,
+        );
+        assert_forma_icd(
+            GeometryType::ALL,
+            GeometryType::as_str,
+            &[],
+            UnknownGeometryType,
+        );
+        assert_forma_icd(
+            TypesDeclaration::ALL,
+            TypesDeclaration::as_str,
+            &["Exact", "EXACT", "un_resolved", "", "unknown"],
+            UnknownTypesDeclaration,
+        );
+        assert_forma_icd(
+            AxisOrder::ALL,
+            AxisOrder::as_str,
+            &["lonlat", "LON_LAT", "lon lat", "", "xy"],
+            UnknownAxisOrder,
+        );
+        assert_forma_icd(
+            CrsResolution::ALL,
+            CrsResolution::as_str,
+            &[
+                "declaredunresolved",
+                "DECLARED_UNRESOLVED",
+                "",
+                "unresolved",
+            ],
+            UnknownCrsResolution,
+        );
+        assert_forma_icd(
+            CrsDefinitionFormat::ALL,
+            CrsDefinitionFormat::as_str,
+            &["WKT", "wkt1", "proj_json", "", "wkt 2"],
+            UnknownCrsDefinitionFormat,
+        );
+        assert_forma_icd(
+            SpatialSemantics::ALL,
+            SpatialSemantics::as_str,
+            &["Geometry", "GEOGRAPHY", "geo", ""],
+            UnknownSpatialSemantics,
+        );
+        assert_forma_icd(
+            GeometryPrecision::ALL,
+            GeometryPrecision::as_str,
+            &["f64", "FLOAT64", "float_64", "double", ""],
+            UnknownGeometryPrecision,
+        );
     }
 
     /// Elenco «ammessi» atteso: le forme di `ALL` separate da `, `.
@@ -1449,11 +1528,6 @@ mod tests {
     }
 
     #[test]
-    fn geometry_dimensions_serde_roundtrip_icd_lowercase() {
-        assert_forma_icd(GeometryDimensions::ALL, GeometryDimensions::as_str);
-    }
-
-    #[test]
     fn geometry_dimensions_from_str_rejects_unrecognized_values() {
         // Mai default silenziosi: neppure maiuscole o vuoto (R3.4).
         for value in ["XY", "XYZ ", "", "2d", "xyzm "] {
@@ -1472,11 +1546,6 @@ mod tests {
         assert_eq!(GeometryDimensions::Xyzm.coordinate_stride(), Some(32));
         // Unknown: nessuno stride garantito (R3.4).
         assert_eq!(GeometryDimensions::Unknown.coordinate_stride(), None);
-    }
-
-    #[test]
-    fn geometry_encoding_serde_roundtrip_icd_lowercase() {
-        assert_forma_icd(GeometryEncoding::ALL, GeometryEncoding::as_str);
     }
 
     #[test]
@@ -1511,17 +1580,6 @@ mod tests {
     ];
 
     #[test]
-    fn geometry_type_serde_roundtrip_icd_lowercase_no_separator() {
-        assert_forma_icd(GeometryType::ALL, GeometryType::as_str);
-        // `ALL` segue l'ordine canonico di §3.1, oracolo scritto a parte.
-        assert_eq!(GeometryType::ALL.len(), CANONICAL_TYPES.len());
-        for (&geometry_type, (expected, text)) in GeometryType::ALL.iter().zip(CANONICAL_TYPES) {
-            assert_eq!(geometry_type, expected);
-            assert_eq!(geometry_type.as_str(), text);
-        }
-    }
-
-    #[test]
     fn geometry_type_ord_matches_canonical_r31_declaration_order() {
         // L'ordine di dichiarazione delle varianti E' l'ordine canonico di
         // §3.1: `Ord` (deriva dall'ordine di dichiarazione) e la
@@ -1545,6 +1603,12 @@ mod tests {
         );
         for pair in CANONICAL_TYPES.windows(2) {
             assert!(pair[0].0 < pair[1].0);
+        }
+        // `ALL` segue l'ordine canonico di §3.1, oracolo scritto a parte.
+        assert_eq!(GeometryType::ALL.len(), CANONICAL_TYPES.len());
+        for (&geometry_type, (expected, text)) in GeometryType::ALL.iter().zip(CANONICAL_TYPES) {
+            assert_eq!(geometry_type, expected);
+            assert_eq!(geometry_type.as_str(), text);
         }
     }
 
@@ -1594,17 +1658,6 @@ mod tests {
         // None: il rifiuto esplicito spetta al chiamante (R3.2).
         for code in [0, 13, 14, 18, 99, 1001] {
             assert_eq!(GeometryType::from_wkb_base_type(code), None);
-        }
-    }
-
-    #[test]
-    fn types_declaration_serde_roundtrip_icd_lowercase() {
-        assert_forma_icd(TypesDeclaration::ALL, TypesDeclaration::as_str);
-        for value in ["Exact", "EXACT", "un_resolved", "", "unknown"] {
-            assert_eq!(
-                value.parse::<TypesDeclaration>(),
-                Err(UnknownTypesDeclaration)
-            );
         }
     }
 
@@ -1721,60 +1774,6 @@ mod tests {
             GeometryTypesProperty::from_canonical_list(TypesDeclaration::Exact, "polygon,point"),
             Err(GeometryTypesPropertyError::NonCanonicalOrder)
         );
-    }
-
-    #[test]
-    fn axis_order_serde_roundtrip_icd() {
-        assert_forma_icd(AxisOrder::ALL, AxisOrder::as_str);
-        for value in ["lonlat", "LON_LAT", "lon lat", "", "xy"] {
-            assert_eq!(value.parse::<AxisOrder>(), Err(UnknownAxisOrder));
-        }
-    }
-
-    #[test]
-    fn crs_resolution_serde_roundtrip_icd() {
-        assert_forma_icd(CrsResolution::ALL, CrsResolution::as_str);
-        for value in [
-            "declaredunresolved",
-            "DECLARED_UNRESOLVED",
-            "",
-            "unresolved",
-        ] {
-            assert_eq!(value.parse::<CrsResolution>(), Err(UnknownCrsResolution));
-        }
-    }
-
-    #[test]
-    fn crs_definition_format_serde_roundtrip_icd() {
-        assert_forma_icd(CrsDefinitionFormat::ALL, CrsDefinitionFormat::as_str);
-        for value in ["WKT", "wkt1", "proj_json", "", "wkt 2"] {
-            assert_eq!(
-                value.parse::<CrsDefinitionFormat>(),
-                Err(UnknownCrsDefinitionFormat)
-            );
-        }
-    }
-
-    #[test]
-    fn spatial_semantics_serde_roundtrip_icd() {
-        assert_forma_icd(SpatialSemantics::ALL, SpatialSemantics::as_str);
-        for value in ["Geometry", "GEOGRAPHY", "geo", ""] {
-            assert_eq!(
-                value.parse::<SpatialSemantics>(),
-                Err(UnknownSpatialSemantics)
-            );
-        }
-    }
-
-    #[test]
-    fn geometry_precision_serde_roundtrip_icd() {
-        assert_forma_icd(GeometryPrecision::ALL, GeometryPrecision::as_str);
-        for value in ["f64", "FLOAT64", "float_64", "double", ""] {
-            assert_eq!(
-                value.parse::<GeometryPrecision>(),
-                Err(UnknownGeometryPrecision)
-            );
-        }
     }
 
     #[test]

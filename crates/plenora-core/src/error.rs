@@ -1777,8 +1777,10 @@ mod tests {
     fn l_elenco_completo_e_coerente_con_gli_indici_e_i_nomi() {
         // Che `ALL` contenga tutte le varianti lo garantisce la macro
         // `categorie_errore`. Qui si verifica cio' che la macro non
-        // garantisce: che gli indici siano le posizioni reali e che i nomi
-        // stabili siano distinti.
+        // garantisce: che gli indici siano le posizioni reali. Che i nomi
+        // stabili siano distinti lo provano il giro di `from_stable_name`
+        // qui sotto e la tabella scritta a mano di
+        // `i_nomi_stabili_sono_quelli_dichiarati_e_la_tabella_li_copre_tutti`.
         for (posizione, categoria) in ErrorCategory::ALL.iter().enumerate() {
             assert_eq!(
                 categoria.index(),
@@ -1787,13 +1789,6 @@ mod tests {
                 categoria.index()
             );
         }
-        let nomi: std::collections::BTreeSet<&str> =
-            ErrorCategory::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(
-            nomi.len(),
-            ErrorCategory::ALL.len(),
-            "due categorie condividono lo stesso nome stabile"
-        );
         // Il conteggio e' un'informazione, non un presidio. L'exit code si
         // assegna per forza (`exit_code_di` nella CLI fa un `match`
         // esaustivo); la tabella di `docs/cli.md` invece va aggiornata a mano.

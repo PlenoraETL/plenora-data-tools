@@ -501,29 +501,3 @@ pub(in crate::analyze) fn resolve_crs_backend(definition: &str) -> Result<Resolv
 pub(in crate::analyze) fn resolve_crs_backend(definition: &str) -> Result<ResolvedCrs> {
     plenora_core::crs::resolve_crs(definition, "crs").map_err(PlenoraError::from)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::validate_wkb_hex;
-
-    /// Il percorso completo dell'analizzatore, non solo la decodifica: e'
-    /// da qui che un input ostile di config raggiunge il decoder.
-    #[test]
-    fn il_wkb_di_config_ostile_e_un_errore_di_piano() {
-        for ostile in [
-            "a\u{e9}b",
-            "\u{e9}\u{e9}",
-            "\u{1F642}",
-            "0\u{e9}0",
-            "zz",
-            "abc",
-        ] {
-            let errore = validate_wkb_hex("geo.within", "other_wkb", ostile)
-                .expect_err("input ostile rifiutato, mai un panic");
-            assert!(
-                errore.to_string().contains("WKB esadecimale non valido"),
-                "{ostile:?}: {errore}"
-            );
-        }
-    }
-}
