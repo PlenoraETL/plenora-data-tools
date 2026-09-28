@@ -539,7 +539,8 @@ mod tests {
                 } else {
                     let value = reference_normalize(input.value(row), &config.operations);
                     if value.len() > limits.max_string_bytes {
-                        return Err(PlenoraError::InvalidPlan(
+                        // Limite di risorsa, come documentato dal kernel.
+                        return Err(PlenoraError::ResourceLimit(
                             "text_normalize supera max_string_bytes".into(),
                         ));
                     }
@@ -812,14 +813,14 @@ mod tests {
                 operations: operation,
                 overwrite: index % 2 == 0,
             };
-            let fast = text_normalize(&unicode_batch, &config, &Limits::default());
-            let reference = reference_text_normalize(&unicode_batch, &config, &Limits::default());
-            match (fast, reference) {
-                (Ok(fast), Ok(reference)) => assert_eq!(fast, reference),
-                (fast, reference) => assert_eq!(fast.is_err(), reference.is_err()),
-            }
+            // Input tutto valido: l'unico esito accettato e' lo stesso batch.
+            let fast = text_normalize(&unicode_batch, &config, &Limits::default())
+                .expect("fast path rifiuta input valido");
+            let reference = reference_text_normalize(&unicode_batch, &config, &Limits::default())
+                .expect("riferimento rifiuta input valido");
+            assert_eq!(fast, reference);
         }
-        // max_string_bytes: stesso errore del riferimento.
+        // max_string_bytes: stesso errore del riferimento, non solo un errore.
         let tiny = Limits {
             max_string_bytes: 2,
             ..Limits::default()
@@ -829,8 +830,16 @@ mod tests {
             operations: NormalizeOperation::Full,
             overwrite: true,
         };
-        assert!(text_normalize(&unicode_batch, &config, &tiny).is_err());
-        assert!(reference_text_normalize(&unicode_batch, &config, &tiny).is_err());
+        let fast = text_normalize(&unicode_batch, &config, &tiny)
+            .expect_err("fast path oltre max_string_bytes");
+        let reference = reference_text_normalize(&unicode_batch, &config, &tiny)
+            .expect_err("riferimento oltre max_string_bytes");
+        assert_eq!(fast.category(), reference.category());
+        assert_eq!(fast.to_string(), reference.to_string());
+        assert!(
+            matches!(fast, PlenoraError::ResourceLimit(_)),
+            "attesa ResourceLimit: {fast}"
+        );
     }
 
     fn batch() -> RecordBatch {

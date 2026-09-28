@@ -574,8 +574,17 @@ mod tests {
     use super::*;
 
     /// Percorso generico, indipendente dai fast path: riferimento per
-    /// l'equivalenza
-    /// semantica del fast path.
+    /// l'equivalenza semantica del fast path.
+    ///
+    /// Che cosa garantisce: che i loop nativi del fast path (downcast unico,
+    /// `rows_where`) selezionino le stesse righe del percorso per riga, e che
+    /// i rifiuti coincidano parola per parola.
+    /// Che cosa NON garantisce: condivide con la produzione `evaluate`,
+    /// `PreparedCondition`, `NumericBound::parse` e i comparatori
+    /// `compare_i64`/`compare_u64`/`compare_f64`; un difetto li' colpirebbe
+    /// entrambi. Li coprono i risultati scritti a mano di
+    /// `filter_hand_written_boundaries` e i messaggi esatti dei letterali
+    /// non validi.
     fn generic_filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;
         let array = batch.column(index);
@@ -614,7 +623,17 @@ mod tests {
         let generic = generic_filter(batch, &config);
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
-            (fast, generic) => assert_eq!(fast.is_err(), generic.is_err()),
+            // Stesso rifiuto, non solo un rifiuto: categoria e messaggio.
+            (Err(fast), Err(generic)) => {
+                assert_eq!(fast.category(), generic.category());
+                assert_eq!(fast.to_string(), generic.to_string());
+                assert_eq!(fast.row_diagnostics(), generic.row_diagnostics());
+            }
+            (fast, generic) => panic!(
+                "fast e generico divergono: fast ok={}, generico ok={}",
+                fast.is_ok(),
+                generic.is_ok()
+            ),
         }
     }
 
@@ -679,6 +698,97 @@ mod tests {
     }
 
     #[test]
+    fn filter_hand_written_boundaries() {
+        // Righe attese scritte a mano, indipendenti dai comparatori.
+        let ints = single_column_batch(
+            Arc::new(Int64Array::from(vec![
+                Some(i64::MIN),
+                Some(-1),
+                Some(0),
+                None,
+                Some(9_007_199_254_740_993),
+                Some(i64::MAX),
+            ])),
+            DataType::Int64,
+            true,
+        );
+        let righe_intere = |operator: Operator, value: serde_json::Value| {
+            let output = filter(&ints, &config(operator, value)).expect("filter");
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64")
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        // Oltre 2^53 il confronto e' esatto: 2^53 + 1 > 2^53.
+        assert_eq!(
+            righe_intere(Operator::Gt, json!(9_007_199_254_740_992_i64)),
+            vec![Some(9_007_199_254_740_993), Some(i64::MAX)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Eq, json!(9_007_199_254_740_992_i64)),
+            Vec::<Option<i64>>::new()
+        );
+        assert_eq!(
+            righe_intere(Operator::Ge, json!(i64::MAX)),
+            vec![Some(i64::MAX)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Le, json!(i64::MIN)),
+            vec![Some(i64::MIN)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Lt, json!(i64::MIN)),
+            Vec::<Option<i64>>::new()
+        );
+        // `between` inclusivo su entrambi gli estremi; null mai selezionato.
+        assert_eq!(
+            righe_intere(Operator::Between, json!("-1,0")),
+            vec![Some(-1), Some(0)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Ne, json!(0)),
+            vec![
+                Some(i64::MIN),
+                Some(-1),
+                Some(9_007_199_254_740_993),
+                Some(i64::MAX)
+            ]
+        );
+
+        let uints = single_column_batch(
+            Arc::new(UInt64Array::from(vec![
+                Some(0),
+                Some(u64::MAX - 1),
+                Some(u64::MAX),
+            ])),
+            DataType::UInt64,
+            true,
+        );
+        let righe_naturali = |operator: Operator, value: serde_json::Value| {
+            let output = filter(&uints, &config(operator, value)).expect("filter");
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("uint64")
+                .values()
+                .to_vec()
+        };
+        assert_eq!(
+            righe_naturali(Operator::Gt, json!(u64::MAX - 1)),
+            vec![u64::MAX]
+        );
+        assert_eq!(righe_naturali(Operator::Lt, json!(-1)), Vec::<u64>::new());
+        assert_eq!(
+            righe_naturali(Operator::Ge, json!(-1)),
+            vec![0, u64::MAX - 1, u64::MAX]
+        );
+    }
+
+    #[test]
     fn fast_path_matches_generic_on_int64_and_uint64() {
         let ints = single_column_batch(
             Arc::new(Int64Array::from(vec![
@@ -713,6 +823,30 @@ mod tests {
         // Ordinati: numerici anche su UInt64 (ramo f64 del generico).
         assert_equivalent(&uints, Operator::Gt, json!(9));
         assert_equivalent(&uints, Operator::Le, json!(10));
+
+        // Letterali non validi: il rifiuto del fast path e' lo stesso del
+        // generico, parola per parola.
+        for batch in [&ints, &uints] {
+            for operator in [Operator::Gt, Operator::Ge, Operator::Lt, Operator::Le] {
+                assert_equivalent(batch, operator.clone(), json!("x"));
+                let error =
+                    filter(batch, &config(operator, json!("x"))).expect_err("letterale accettato");
+                assert_eq!(
+                    error.to_string(),
+                    "contract violation: confronto ordinato richiede un valore numerico"
+                );
+            }
+            for (bounds, message) in [
+                ("10", "between richiede min,max"),
+                ("x,10", "min between non valido"),
+                ("0,x", "max between non valido"),
+            ] {
+                assert_equivalent(batch, Operator::Between, json!(bounds));
+                let error = filter(batch, &config(Operator::Between, json!(bounds)))
+                    .expect_err("estremi accettati");
+                assert_eq!(error.to_string(), format!("contract violation: {message}"));
+            }
+        }
     }
 
     #[test]

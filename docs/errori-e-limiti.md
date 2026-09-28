@@ -729,6 +729,34 @@ dagli stessi oracoli letterali che oggi coprono gli interi nativi. Finché quel
 comparatore non c'è, la restrizione resta: non è una scelta di comodo, è
 l'assenza di un'aritmetica.
 
+### I token `invalid` e `ambiguous` delle operazioni temporali sono accettati e disattesi
+
+**Regola violata.** Un parametro di configurazione accettato deve avere
+effetto. Qui non lo ha: `invalid` (`null` o `error`) e `ambiguous` (`error`,
+`null`, `earliest` o `latest`) si deserializzano senza errore, ma il kernel non
+li legge.
+
+**Ambito.** `table.date_format`, `table.date_add`, `table.date_diff`,
+`table.timezone_convert` e `table.date_extract`; il token `invalid` in tutte e
+cinque, il token `ambiguous` in `timezone_convert`. Qualunque valore dei due
+token produce lo stesso comportamento: una riga non parsabile, fuori range o
+con un'ora locale ambigua o inesistente rifiuta il batch con diagnostica
+row-scoped (`conversion.invalid_datetime`, `conversion.datetime_range`,
+`conversion.ambiguous_local_time`, `conversion.nonexistent_local_time`). Mai
+un null sintetico, mai una scelta implicita fra le due ore ambigue.
+
+**Hazard.** Un piano scritto per la semantica precedente — `invalid: null`
+per ottenere null sulle righe cattive, `ambiguous: earliest` o `latest` per
+far scegliere l'ora — è accettato in analisi e riceve in esecuzione un
+rifiuto invece del null o dell'ora scelta. La garanzia è più forte, non più
+debole: nessun dato sbagliato esce. Ma il piano non fa più ciò che dichiara,
+e l'analisi non lo segnala.
+
+**Condizione di rientro.** Una delle due: una versione del piano che tolga i
+token e li rifiuti in analisi, oppure il ripristino della loro semantica con
+un contratto esplicito su che cosa entra nella diagnostica quando una riga è
+resa null o risolta per scelta.
+
 ### Row diagnostics: le collettive di solo trasporto
 
 Le operazioni collettive e one-to-many del solo trasporto non raccolgono
