@@ -127,6 +127,14 @@ fn with_geom_metadata(contract: &mut DataContract, coppie: &[(&str, &str)]) {
     contract.schema = Arc::new(Schema::new(fields));
 }
 
+/// Il valore di `key` nei metadati, come `&str`.
+fn chiave<'a>(
+    metadata: &'a std::collections::HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    metadata.get(key).map(String::as_str)
+}
+
 fn output_rows(output: Output) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
     output.collect_batches()
 }
@@ -2042,46 +2050,35 @@ fn canonical_output_schema_merges_canonical_keys_idempotently() {
     let contract = geo_contract();
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     assert_eq!(
-        merged
-            .metadata()
-            .get(PLENORA_CONTRACT_VERSION_KEY)
-            .map(String::as_str),
+        chiave(merged.metadata(), PLENORA_CONTRACT_VERSION_KEY),
         Some("1"),
         "R2.5: la versione accompagna le chiavi canoniche"
     );
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_DIMENSIONS_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_DIMENSIONS_KEY),
         Some("xy")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632")
     );
     // `GeometryMetadataDetails::default()`: axis_order obbligatorio con CRS
     // -> valore canonico `unknown` (mai inventato), encoding e types non
     // dichiarati dal contratto -> chiavi assenti (R5.2).
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("unknown")
     );
     assert!(!metadata.contains_key(PLENORA_GEOMETRY_ENCODING_KEY));
     assert!(!metadata.contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY));
     // Le chiavi GeoArrow legacy RESTANO (R2.6: coesistenza coerente).
     assert_eq!(
-        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+        chiave(metadata, GEOARROW_EXTENSION_KEY),
         Some(GEOARROW_WKB_EXTENSION)
     );
     assert!(metadata.contains_key(GEO_METADATA_KEY));
@@ -2143,19 +2140,12 @@ fn canonical_output_schema_normalizes_axis_order_and_deduces_srid() {
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("lon_lat")
     );
+    assert_eq!(chiave(metadata, PLENORA_GEOMETRY_SRID_KEY), Some("4326"));
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
-        Some("4326")
-    );
-    assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:4326")
     );
 }
@@ -2178,14 +2168,12 @@ fn canonical_output_schema_lineage_wins_over_authority_deduction() {
     let merged = canonical_output_schema(&contract).expect("lineage preservata, nessun R2.6");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("easting_northing"),
         "la lineage presente vince sulla deduzione"
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("32632"),
         "la lineage presente vince sulla deduzione"
     );
@@ -2243,27 +2231,21 @@ fn canonical_output_schema_passthrough_wkt_definition_is_idempotent() {
     let merged = canonical_output_schema(&contract).expect("passthrough WKT idempotente");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_DEFINITION_KEY),
         Some(MONTE_MARIO_WKT),
         "definizione WKT preservata byte-per-byte"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY),
         Some("wkt")
     );
     assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY), None);
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("easting_northing")
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("3003"),
         "srid dedotto dall'autorita' riempie l'assente"
     );
@@ -2317,21 +2299,17 @@ fn canonical_output_schema_corrects_false_resolved_into_declared_unresolved() {
     let merged = canonical_output_schema(&contract).expect("correzione dichiarata");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("declared_unresolved"),
         "l'incoerenza e' dichiarata, non silenziata"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:4326"),
         "dichiarazione originale preservata"
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("3003"),
         "srid di lineage preservato"
     );
@@ -2375,15 +2353,11 @@ fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
     let merged = canonical_output_schema(&contract).expect("decisione applicata");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632"),
         "il CRS deciso sostituisce la dichiarazione della sorgente"
     );
@@ -2414,15 +2388,10 @@ fn canonical_output_schema_emits_rewritten_types_from_contract() {
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
         Some("exact")
     );
-    assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
-        Some("point")
-    );
+    assert_eq!(chiave(metadata, PLENORA_GEOMETRY_TYPES_KEY), Some("point"));
 }
 
 #[test]
@@ -2513,20 +2482,13 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
     let out_schema = reader.schema();
     let metadata = out_schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
         Some("exact"),
         "i tipi dell'output sono quelli dell'operazione, non dell'input"
     );
+    assert_eq!(chiave(metadata, PLENORA_GEOMETRY_TYPES_KEY), Some("point"));
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
-        Some("point")
-    );
-    assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632"),
         "CRS preservato dal centroid"
     );
@@ -2600,29 +2562,23 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
     let out_schema = reader.schema();
     let metadata = out_schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:4326"),
         "il CRS emesso e' il target, non la sorgente"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("4326"),
         "srid del TARGET dedotto dalla definizione d'autorita' (emendamento 2026-07-31: \
          la strip rimuove la chiave ereditata e la deduzione riempie l'assente — \
          non lo srid della sorgente)"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("lon_lat"),
         "l'ordine descrive le coordinate GIS normalizzate prodotte dal backend, non gli assi authority"
     );
@@ -2649,35 +2605,24 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
         FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
     let schema = reader.schema();
     assert_eq!(
-        schema
-            .metadata()
-            .get(PLENORA_CONTRACT_VERSION_KEY)
-            .map(String::as_str),
+        chiave(schema.metadata(), PLENORA_CONTRACT_VERSION_KEY),
         Some("1")
     );
     let metadata = schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_DIMENSIONS_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_DIMENSIONS_KEY),
         Some("xy")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("unknown")
     );
     // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non ha
@@ -2685,7 +2630,7 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
     assert!(!metadata.contains_key(PLENORA_FIELD_ID_KEY));
     // Coesistenza R2.6: le chiavi GeoArrow legacy non sono rimosse.
     assert_eq!(
-        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+        chiave(metadata, GEOARROW_EXTENSION_KEY),
         Some(GEOARROW_WKB_EXTENSION)
     );
     assert!(metadata.contains_key(GEO_METADATA_KEY));
@@ -3490,24 +3435,15 @@ fn geometry_producers_publish_mandatory_encoding_and_types_metadata() {
             .field_with_name("geometry")
             .expect("campo geometry pubblico");
         assert_eq!(
-            field
-                .metadata()
-                .get(PLENORA_GEOMETRY_ENCODING_KEY)
-                .map(String::as_str),
+            chiave(field.metadata(), PLENORA_GEOMETRY_ENCODING_KEY),
             Some("wkb")
         );
         assert_eq!(
-            field
-                .metadata()
-                .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
-                .map(String::as_str),
+            chiave(field.metadata(), PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
             Some(declaration)
         );
         assert_eq!(
-            field
-                .metadata()
-                .get(PLENORA_GEOMETRY_TYPES_KEY)
-                .map(String::as_str),
+            chiave(field.metadata(), PLENORA_GEOMETRY_TYPES_KEY),
             Some(types)
         );
         let (batches, _) = output.collect_batches().expect("output leggibile");
