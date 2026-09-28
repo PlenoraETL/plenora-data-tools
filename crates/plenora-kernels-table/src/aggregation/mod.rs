@@ -24,6 +24,7 @@ pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
 pub(crate) use crate::hashing::KeyHasher;
 pub use compare::{compare_cells_typed, is_sortable, validate_sortable};
 pub(crate) use grouping::KeyColumn;
+pub(crate) use sort::sort_permutation;
 pub use sort::{dedup_advanced, distinct, sort, top_n, DedupAdvanced, Distinct, Keep, Sort, TopN};
 pub use window::{
     rolling_window, window_function, RollingKind, RollingWindow, WindowFunction, WindowKind,
