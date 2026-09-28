@@ -1,0 +1,37 @@
+--- a/src/float/int_area.rs
++++ b/src/float/int_area.rs
+@@ -3,7 +3,7 @@
+ use i_float::float::number::FloatNumber;
+ 
+ pub trait IntArea<P: FloatPointCompatible<T>, T: FloatNumber> {
+-    /// The area of the `Path`.
++    /// The area of the `Path`. An empty path has zero area.
+     /// - Returns: A positive double area if path is clockwise and negative double area otherwise.
+     fn unsafe_int_area(&self, adapter: &FloatPointAdapter<P, T>) -> i64;
+ }
+@@ -11,6 +11,10 @@
+ impl<P: FloatPointCompatible<T>, T: FloatNumber> IntArea<P, T> for [P] {
+     fn unsafe_int_area(&self, adapter: &FloatPointAdapter<P, T>) -> i64 {
+         let n = self.len();
++        // The empty boundary contributes no terms to the area sum.
++        if n == 0 {
++            return 0;
++        }
+         let mut p0 = adapter.float_to_int(&self[n - 1]);
+         let mut area: i64 = 0;
+ 
+@@ -33,6 +37,14 @@
+     use i_float::adapter::FloatPointAdapter;
+ 
+     #[test]
++    fn empty_path_has_zero_area() {
++        let bounds = [[-1f64, -1f64], [1f64, 1f64]];
++        let adapter = FloatPointAdapter::with_iter(bounds.iter());
++        let empty: [[f64; 2]; 0] = [];
++        assert_eq!(empty.unsafe_int_area(&adapter), 0);
++    }
++
++    #[test]
+     fn test_0() {
+         let square = path![[-1f32, -1f32], [1f32, -1f32], [1f32, 1f32], [-1f32, 1f32],];
+         let adapter = FloatPointAdapter::with_iter(square.iter());

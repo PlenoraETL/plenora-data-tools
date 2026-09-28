@@ -1,0 +1,4 @@
+# I file di testo restano LF anche al checkout su Windows.
+* text=auto eol=lf
+# I reperti WKB sono byte, non testo: nessuna conversione di fine riga.
+*.wkb binary

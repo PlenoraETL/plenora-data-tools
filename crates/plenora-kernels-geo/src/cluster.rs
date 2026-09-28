@@ -1,0 +1,840 @@
+//! Kernel di clustering spaziale per densita' (`geo.cluster_dbscan`).
+//!
+//! Kernel puro su `geo::Point<f64>` piu' l'adapter di colonna
+//! (`dbscan_column`) che mappa gli errori su [`PlenoraError`] preservando i
+//! messaggi.
+//!
+//! - **Solo Point**: ogni altro tipo e' rifiutato (fail-closed). Niente
+//!   centroide dei poligoni: non rappresenta la loro densita' spaziale.
+//! - **DBSCAN standard**: un punto e' `core` se il suo eps-vicinato (distanza
+//!   `<= eps`, punto stesso incluso) contiene almeno `min_points` punti; i
+//!   cluster sono le componenti connesse per densita' dei core; `cluster_id`
+//!   `UInt64` `0..k-1`, `null` per i noise mai assegnati. Un border
+//!   raggiungibile da due cluster va al primo che lo raggiunge.
+//! - **Vicinato via R-tree** (`rstar`): range query di raggio `eps`, nessuna
+//!   scansione O(n²).
+//! - **Determinismo**: visita per indice di riga crescente, vicini ordinati
+//!   per indice, espansione FIFO, cluster numerati in ordine di scoperta;
+//!   nessuna iterazione su hash map.
+//! - Geometria **null**: etichetta null (non noise), posizione conservata.
+//! - `eps` finito e `> 0` in unita' di mappa (requisito `Projected`),
+//!   `min_points >= 1`.
+//!
+//! Calcolo globale, quindi classe `Blocking`; output `OneToOne`. Gli errori
+//! del kernel puro usano [`ClusterError`].
+
+use std::collections::{HashMap, VecDeque};
+
+use geo::{CoordsIter, Geometry, Point};
+use plenora_core::arrow::array::BinaryArray;
+use plenora_core::PlenoraError;
+use rstar::{PointDistance, RTree, RTreeObject, AABB};
+use thiserror::Error;
+
+use crate::arrow_adapter::{decode_geometry_cell, map_nullable};
+
+#[derive(Debug, Error)]
+pub enum ClusterError {
+    #[error("parametro {name} non valido: {reason}")]
+    InvalidParameter {
+        name: &'static str,
+        reason: &'static str,
+    },
+    #[error("geometria {index} non puntuale ({found}): attesa Point")]
+    UnsupportedGeometry { index: usize, found: &'static str },
+    #[error("geometria {index} non valida: {reason}")]
+    InvalidGeometry { index: usize, reason: String },
+    #[error("geometria {index} contiene coordinate NaN o infinite")]
+    NonFiniteCoordinate { index: usize },
+    #[error("conteggio non rappresentabile come uint64")]
+    IndexOverflow,
+    #[error("invariante interna DBSCAN violata: {0}")]
+    InternalInvariant(&'static str),
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
+}
+
+const fn invalid_parameter(name: &'static str, reason: &'static str) -> ClusterError {
+    ClusterError::InvalidParameter { name, reason }
+}
+
+fn check_eps(eps: f64) -> Result<(), ClusterError> {
+    if !eps.is_finite() || eps <= 0.0 {
+        return Err(invalid_parameter(
+            "eps",
+            "deve essere finito e maggiore di zero",
+        ));
+    }
+    Ok(())
+}
+
+const fn check_min_points(min_points: usize) -> Result<(), ClusterError> {
+    if min_points < 1 {
+        return Err(invalid_parameter("min_points", "deve essere almeno 1"));
+    }
+    Ok(())
+}
+
+use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
+
+/// Punto indicizzato per l'R-tree: la posizione originale viaggia con
+/// l'elemento, cosi' le liste di vicini si riordinano per indice.
+#[derive(Clone, Copy)]
+struct IndexedPoint {
+    index: usize,
+    coords: [f64; 2],
+}
+
+impl RTreeObject for IndexedPoint {
+    type Envelope = AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        AABB::from_point(self.coords)
+    }
+}
+
+impl PointDistance for IndexedPoint {
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
+    fn distance_2(&self, point: &[f64; 2]) -> f64 {
+        let dx = self.coords[0] - point[0];
+        let dy = self.coords[1] - point[1];
+        dx * dx + dy * dy
+    }
+}
+
+/// Chiave bitwise delle coordinate. `-0.0` e `0.0` rappresentano lo stesso
+/// punto euclideo e vengono quindi canonicalizzati nello stesso gruppo.
+fn coordinate_key(coords: [f64; 2]) -> (u64, u64) {
+    let bits = |value: f64| if value == 0.0 { 0 } else { value.to_bits() };
+    (bits(coords[0]), bits(coords[1]))
+}
+
+fn coordinate_groups(points: &[[f64; 2]]) -> (Vec<usize>, Vec<usize>) {
+    // Gli indici dei gruppi seguono la prima occorrenza nella colonna; la
+    // HashMap serve solo per lookup e non viene mai iterata, preservando il
+    // determinismo delle label.
+    let mut group_by_coordinate = HashMap::new();
+    let mut group_of_point = Vec::with_capacity(points.len());
+    let mut representatives = Vec::new();
+    for (index, &coords) in points.iter().enumerate() {
+        let key = coordinate_key(coords);
+        let group = if let Some(&group) = group_by_coordinate.get(&key) {
+            group
+        } else {
+            let group = representatives.len();
+            group_by_coordinate.insert(key, group);
+            representatives.push(index);
+            group
+        };
+        group_of_point.push(group);
+    }
+    (group_of_point, representatives)
+}
+
+#[derive(Clone, Copy)]
+enum NeighborhoodClass {
+    Core,
+    NonCore,
+}
+
+#[derive(Clone, Copy)]
+struct NeighborhoodParameters {
+    radius_2: f64,
+    min_points: usize,
+}
+
+fn load_core_neighbors(
+    tree: &RTree<IndexedPoint>,
+    points: &[[f64; 2]],
+    parameters: NeighborhoodParameters,
+    representatives: &[usize],
+    group: usize,
+    cache: &mut [Option<NeighborhoodClass>],
+    range_queries: &mut usize,
+) -> Result<Option<Vec<usize>>, ClusterError> {
+    match cache[group] {
+        Some(NeighborhoodClass::NonCore) => return Ok(None),
+        Some(NeighborhoodClass::Core) => {
+            return Err(ClusterError::InternalInvariant(
+                "vicinato core richiesto piu' di una volta",
+            ));
+        }
+        None => {}
+    }
+    let representative = representatives[group];
+    let mut found: Vec<usize> = tree
+        .locate_within_distance(points[representative], parameters.radius_2)
+        .map(|element| element.index)
+        .collect();
+    found.sort_unstable();
+    *range_queries += 1;
+    if found.len() < parameters.min_points {
+        cache[group] = Some(NeighborhoodClass::NonCore);
+        Ok(None)
+    } else {
+        cache[group] = Some(NeighborhoodClass::Core);
+        Ok(Some(found))
+    }
+}
+
+/// DBSCAN su punti gia' validati. Restituisce anche il numero di range query
+/// R-tree, usato dal regression test per impedire la riespansione quadratica
+/// di coordinate duplicate.
+fn dbscan_core_with_query_count(
+    points: &[[f64; 2]],
+    eps: f64,
+    min_points: usize,
+) -> Result<(Vec<Option<u64>>, usize, usize), ClusterError> {
+    let tree = RTree::bulk_load(
+        points
+            .iter()
+            .enumerate()
+            .map(|(index, &coords)| IndexedPoint { index, coords })
+            .collect(),
+    );
+    let neighborhood_parameters = NeighborhoodParameters {
+        radius_2: eps * eps,
+        min_points,
+    };
+
+    let (group_of_point, representatives) = coordinate_groups(points);
+
+    let mut neighborhood_class = vec![None; representatives.len()];
+    let mut range_queries = 0;
+    let mut peak_retained_neighbor_indices = 0;
+
+    let mut labels = vec![None; points.len()];
+    let mut visited = vec![false; points.len()];
+    let mut queued = vec![false; points.len()];
+    let mut expanded_group = vec![false; representatives.len()];
+    let mut next_cluster = 0_u64;
+    for index in 0..points.len() {
+        if visited[index] {
+            continue;
+        }
+        visited[index] = true;
+        let group = group_of_point[index];
+        let Some(seed) = load_core_neighbors(
+            &tree,
+            points,
+            neighborhood_parameters,
+            &representatives,
+            group,
+            &mut neighborhood_class,
+            &mut range_queries,
+        )?
+        else {
+            continue; // noise provvisorio: puo' diventare border
+        };
+        peak_retained_neighbor_indices = peak_retained_neighbor_indices.max(seed.len());
+        let cluster = next_cluster;
+        next_cluster = next_cluster
+            .checked_add(1)
+            .ok_or(ClusterError::IndexOverflow)?;
+        labels[index] = Some(cluster);
+        queued[index] = true;
+        expanded_group[group] = true;
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        for &member in &seed {
+            if member != index {
+                queued[member] = true;
+                queue.push_back(member);
+            }
+        }
+        while let Some(member) = queue.pop_front() {
+            if !visited[member] {
+                visited[member] = true;
+                let member_group = group_of_point[member];
+                if !expanded_group[member_group] {
+                    let expanded = load_core_neighbors(
+                        &tree,
+                        points,
+                        neighborhood_parameters,
+                        &representatives,
+                        member_group,
+                        &mut neighborhood_class,
+                        &mut range_queries,
+                    )?;
+                    if let Some(expanded) = expanded {
+                        peak_retained_neighbor_indices =
+                            peak_retained_neighbor_indices.max(expanded.len());
+                        for &reach in &expanded {
+                            if !queued[reach] {
+                                queued[reach] = true;
+                                queue.push_back(reach);
+                            }
+                        }
+                    }
+                    expanded_group[member_group] = true;
+                }
+            }
+            if labels[member].is_none() {
+                labels[member] = Some(cluster);
+            }
+        }
+    }
+    Ok((labels, range_queries, peak_retained_neighbor_indices))
+}
+
+/// DBSCAN su punti gia' validati. Deterministico: visita per indice di riga,
+/// vicini ordinati per indice, cluster numerati in ordine di scoperta.
+fn dbscan_core(
+    points: &[[f64; 2]],
+    eps: f64,
+    min_points: usize,
+) -> Result<Vec<Option<u64>>, ClusterError> {
+    dbscan_core_with_query_count(points, eps, min_points).map(|(labels, _, _)| labels)
+}
+
+/// Punti preparati per il clustering: riga di origine per punto e
+/// coordinate `[x, y]` dei punti validi.
+type PreparedPoints = (Vec<Option<usize>>, Vec<[f64; 2]>);
+
+/// Estrae e valida i punti dalle geometrie nullable: solo Point con
+/// coordinate finite e geometria valida; i `None` non partecipano.
+fn prepare_points(geometries: &[Option<Geometry<f64>>]) -> Result<PreparedPoints, ClusterError> {
+    let mut row_of_point = Vec::with_capacity(geometries.len());
+    let mut points = Vec::with_capacity(geometries.len());
+    for (index, geometry) in geometries.iter().enumerate() {
+        let Some(geometry) = geometry else {
+            row_of_point.push(None);
+            continue;
+        };
+        if geometry
+            .coords_iter()
+            .any(|coordinate| !coordinate.x.is_finite() || !coordinate.y.is_finite())
+        {
+            return Err(ClusterError::NonFiniteCoordinate { index });
+        }
+        geometry.validazione_protetta().map_err(|esito| {
+            esito.separa(
+                |ragione| ClusterError::InvalidGeometry {
+                    index,
+                    reason: ragione.to_string(),
+                },
+                ClusterError::ValidazioneNonConclusa,
+            )
+        })?;
+        let Geometry::Point(point) = geometry else {
+            return Err(ClusterError::UnsupportedGeometry {
+                index,
+                found: geometry_name(geometry),
+            });
+        };
+        row_of_point.push(Some(points.len()));
+        points.push([point.x(), point.y()]);
+    }
+    Ok((row_of_point, points))
+}
+
+/// Clustering DBSCAN di una colonna di geometrie puntuali: un'etichetta per
+/// riga (allineata all'input), `None` per noise e per le geometrie null.
+///
+/// # Errors
+///
+/// - `InvalidParameter`: `eps` non finito o `<= 0`, oppure `min_points` < 1.
+/// - `NonFiniteCoordinate`: una geometria ha coordinate NaN o infinite.
+/// - `InvalidGeometry`: una geometria non supera la validazione OGC.
+/// - `UnsupportedGeometry`: una geometria non e' puntuale (attesa `Point`).
+/// - `IndexOverflow`: guardia interna sul numero di cluster (non
+///   raggiungibile: i cluster sono al piu' quanti i punti in input).
+/// - `InternalInvariant`: cache di vicinato incoerente (guardia fail-closed).
+pub fn dbscan_nullable(
+    geometries: &[Option<Geometry<f64>>],
+    eps: f64,
+    min_points: usize,
+) -> Result<Vec<Option<u64>>, ClusterError> {
+    check_eps(eps)?;
+    check_min_points(min_points)?;
+    let (row_of_point, points) = prepare_points(geometries)?;
+    let point_labels = dbscan_core(&points, eps, min_points)?;
+    // Un'etichetta per punto, prima di riportarle alle righe: una in piu'
+    // sparirebbe, una in meno andrebbe in panico sull'indice.
+    if point_labels.len() != points.len() {
+        return Err(ClusterError::InternalInvariant(
+            "etichette in numero diverso dai punti",
+        ));
+    }
+    Ok(row_of_point
+        .iter()
+        .map(|slot| slot.and_then(|point| point_labels[point]))
+        .collect())
+}
+
+/// Clustering DBSCAN di punti (shortcut non nullable).
+///
+/// # Errors
+///
+/// Come [`dbscan_nullable`]; con input puntuale `UnsupportedGeometry` non
+/// scatta mai.
+pub fn dbscan(
+    points: &[Point<f64>],
+    eps: f64,
+    min_points: usize,
+) -> Result<Vec<Option<u64>>, ClusterError> {
+    let geometries: Vec<Option<Geometry<f64>>> = points
+        .iter()
+        .map(|point| Some(Geometry::Point(*point)))
+        .collect();
+    dbscan_nullable(&geometries, eps, min_points)
+}
+
+/// `Internal` se la colpa non e' del piano: un'invariante saltata o una
+/// validazione che non ha concluso. Il resto e' `InvalidPlan`.
+fn cluster_error(error: &ClusterError) -> PlenoraError {
+    match error {
+        ClusterError::InternalInvariant(reason) => {
+            PlenoraError::Internal(format!("geo.cluster_dbscan: {reason}"))
+        }
+        ClusterError::ValidazioneNonConclusa(_) => {
+            PlenoraError::Internal(format!("geo.cluster_dbscan: {error}"))
+        }
+        other => PlenoraError::InvalidPlan(format!("geo.cluster_dbscan: {other}")),
+    }
+}
+
+/// Adapter di colonna per `geo.cluster_dbscan`: un'etichetta `UInt64`
+/// nullable per riga (null = noise o geometria null), nello stesso ordine
+/// delle righe di input.
+///
+/// Decodifica le celle WKB non-null ed esegue il clustering globale.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` per parametri non validi (`eps`, `min_points`)
+/// e per geometrie non puntuali, non valide o con coordinate non finite; in
+/// piu' gli errori di decode delle celle WKB non-null (come
+/// [`decode_geometry_cell`], incluse le varianti `PlenoraError::InvalidPlan` e
+/// `PlenoraError::Unsupported` del contratto WKB).
+pub fn dbscan_column(
+    cells: &BinaryArray,
+    eps: f64,
+    min_points: usize,
+) -> Result<Vec<Option<u64>>, PlenoraError> {
+    check_eps(eps).map_err(|error| cluster_error(&error))?;
+    check_min_points(min_points).map_err(|error| cluster_error(&error))?;
+    let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
+    dbscan_nullable(&geometries, eps, min_points).map_err(|error| cluster_error(&error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{to_wkb, wkb_column_with};
+    use plenora_core::arrow::array::BinaryArray;
+
+    fn points(coords: &[(f64, f64)]) -> Vec<Point<f64>> {
+        coords.iter().map(|&(x, y)| Point::new(x, y)).collect()
+    }
+
+    // L'oracle replica intenzionalmente l'aritmetica non-FMA del kernel per
+    // confrontare la semantica di bordo bit-esatta.
+    #[allow(clippy::suboptimal_flops)]
+    fn dbscan_bruteforce_reference(
+        points: &[[f64; 2]],
+        eps: f64,
+        min_points: usize,
+    ) -> Vec<Option<u64>> {
+        let radius_2 = eps * eps;
+        let neighbors = |index: usize| -> Vec<usize> {
+            points
+                .iter()
+                .enumerate()
+                .filter_map(|(other, coords)| {
+                    let dx = points[index][0] - coords[0];
+                    let dy = points[index][1] - coords[1];
+                    (dx * dx + dy * dy <= radius_2).then_some(other)
+                })
+                .collect()
+        };
+        let mut labels = vec![None; points.len()];
+        let mut visited = vec![false; points.len()];
+        let mut queued = vec![false; points.len()];
+        let mut next_cluster = 0_u64;
+        for index in 0..points.len() {
+            if visited[index] {
+                continue;
+            }
+            visited[index] = true;
+            let seed = neighbors(index);
+            if seed.len() < min_points {
+                continue;
+            }
+            let cluster = next_cluster;
+            next_cluster += 1;
+            labels[index] = Some(cluster);
+            queued[index] = true;
+            let mut queue = VecDeque::new();
+            for &member in &seed {
+                if member != index {
+                    queued[member] = true;
+                    queue.push_back(member);
+                }
+            }
+            while let Some(member) = queue.pop_front() {
+                if !visited[member] {
+                    visited[member] = true;
+                    let expanded = neighbors(member);
+                    if expanded.len() >= min_points {
+                        for reach in expanded {
+                            if !queued[reach] {
+                                queued[reach] = true;
+                                queue.push_back(reach);
+                            }
+                        }
+                    }
+                }
+                if labels[member].is_none() {
+                    labels[member] = Some(cluster);
+                }
+            }
+        }
+        labels
+    }
+
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
+    // fusa e' il contratto numerico.
+    #[allow(clippy::suboptimal_flops)]
+    fn cloud(center: (f64, f64), count: usize) -> Vec<(f64, f64)> {
+        // Griglia densa deterministica attorno al centro (passo 0.1).
+        // count <= 100_000 nelle fixture: esatto in f64 (< 2^52) e la sua
+        // radice rientra in usize; conversioni senza perdita qui.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let side = (count as f64).sqrt().ceil() as usize;
+        (0..count)
+            .map(|index| {
+                // index < count <= 100_000 (fixture): esatto in f64.
+                #[allow(clippy::cast_precision_loss)]
+                let column = (index % side) as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let row = (index / side) as f64;
+                (center.0 + column * 0.1, center.1 + row * 0.1)
+            })
+            .collect()
+    }
+
+    fn wkb_column(geometries: &[Option<Geometry<f64>>]) -> BinaryArray {
+        wkb_column_with(geometries, to_wkb)
+    }
+
+    // --- kernel puro ---------------------------------------------------------
+
+    #[test]
+    fn two_separated_clouds_and_an_outlier_make_two_clusters_plus_noise() {
+        let mut coords = cloud((0.0, 0.0), 25);
+        coords.extend(cloud((100.0, 100.0), 25));
+        coords.push((50.0, 50.0)); // outlier isolato
+        let labels = dbscan(&points(&coords), 0.5, 3).expect("dbscan");
+        assert_eq!(labels.len(), 51);
+        // Prima nuvola -> cluster 0 (ordine di scoperta per indice di riga).
+        assert!(labels[..25].iter().all(|label| *label == Some(0)));
+        // Seconda nuvola -> cluster 1.
+        assert!(labels[25..50].iter().all(|label| *label == Some(1)));
+        // Outlier -> noise (null).
+        assert_eq!(labels[50], None);
+    }
+
+    #[test]
+    fn density_connected_chain_is_one_cluster() {
+        // Catena di punti a passo 1.0 (< eps): ogni punto ha 1-2 vicini, con
+        // min_points 2 i punti interni sono core e la catena si salda.
+        let coords: Vec<(f64, f64)> = (0..20).map(|index| (f64::from(index), 0.0)).collect();
+        let labels = dbscan(&points(&coords), 1.5, 2).expect("dbscan");
+        assert!(
+            labels.iter().all(|label| *label == Some(0)),
+            "catena non saldata: {labels:?}"
+        );
+        // Due catene separate: i cluster seguono l'ordine di riga.
+        let mut two = coords;
+        two.extend((0..20).map(|index| (100.0 + f64::from(index), 0.0)));
+        let labels = dbscan(&points(&two), 1.5, 2).expect("dbscan");
+        assert!(labels[..20].iter().all(|label| *label == Some(0)));
+        assert!(labels[20..].iter().all(|label| *label == Some(1)));
+    }
+
+    #[test]
+    fn min_points_boundaries_core_border_noise() {
+        // Tre punti allineati a passo 1: A(0) B(1) C(2), eps 1.0.
+        // min_points = 3: B e' core (A,B,C), A e C border -> un solo cluster.
+        let coords = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)];
+        let labels = dbscan(&points(&coords), 1.0, 3).expect("dbscan");
+        assert_eq!(labels, vec![Some(0), Some(0), Some(0)]);
+        // min_points = 4: nessun core (vicinati da 2-3 punti) -> tutto noise.
+        let labels = dbscan(&points(&coords), 1.0, 4).expect("dbscan");
+        assert_eq!(labels, vec![None, None, None]);
+        // min_points = 1: ogni punto e' core; i lontani sono cluster singoli.
+        let spread = [(0.0, 0.0), (10.0, 0.0)];
+        let labels = dbscan(&points(&spread), 1.0, 1).expect("dbscan");
+        assert_eq!(labels, vec![Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn duplicate_points_count_towards_the_neighborhood() {
+        // Tre duplicati esatti: distanza 0, vicinato da 3 -> core.
+        let coords = [(5.0, 5.0), (5.0, 5.0), (5.0, 5.0)];
+        let labels = dbscan(&points(&coords), 0.5, 3).expect("dbscan");
+        assert_eq!(labels, vec![Some(0), Some(0), Some(0)]);
+    }
+
+    #[test]
+    fn duplicate_heavy_input_queries_each_unique_coordinate_once() {
+        let unique = [(0.0, 0.0), (2.0, 2.0), (4.0, 0.0), (1.0, 3.0)];
+        let coords: Vec<[f64; 2]> = (0..100_000)
+            .map(|index| unique[index % unique.len()].into())
+            .collect();
+
+        let (labels, range_queries, _) =
+            dbscan_core_with_query_count(&coords, 3.0, 2).expect("dbscan");
+
+        assert!(labels.iter().all(|label| *label == Some(0)));
+        assert_eq!(range_queries, unique.len());
+    }
+
+    #[test]
+    fn non_core_neighborhoods_do_not_accumulate_quadratic_memory() {
+        let coords: Vec<[f64; 2]> = (0..256)
+            .map(|index| [f64::from(index) / 1_000.0, 0.0])
+            .collect();
+
+        let (labels, range_queries, peak_retained_neighbor_indices) =
+            dbscan_core_with_query_count(&coords, 1.0, coords.len() + 1).expect("dbscan");
+
+        assert!(labels.iter().all(Option::is_none));
+        assert_eq!(range_queries, coords.len());
+        assert!(
+            peak_retained_neighbor_indices <= coords.len(),
+            "picco quadratico: {peak_retained_neighbor_indices} indici per {} punti",
+            coords.len()
+        );
+    }
+
+    #[test]
+    fn optimized_duplicate_handling_matches_bruteforce_row_order_semantics() {
+        let coordinate_pool = [
+            [0.0, 0.0],
+            [-0.0, 0.0],
+            [1.0, 0.0],
+            [2.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [2.0, 1.0],
+            [10.0, 10.0],
+        ];
+        for seed in 0..64_u64 {
+            let mut state = seed.wrapping_add(1);
+            let coords: Vec<[f64; 2]> = (0..48)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    let pool_len = u64::try_from(coordinate_pool.len()).expect("pool piccolo");
+                    let pool_index =
+                        usize::try_from(state % pool_len).expect("indice ridotto al pool");
+                    coordinate_pool[pool_index]
+                })
+                .collect();
+            for eps in [0.5, 1.0, 1.5, 3.0] {
+                for min_points in 1..=6 {
+                    let expected = dbscan_bruteforce_reference(&coords, eps, min_points);
+                    let actual = dbscan_core(&coords, eps, min_points).expect("dbscan");
+                    assert_eq!(actual, expected, "seed={seed}, eps={eps}, min={min_points}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_and_single_point_inputs() {
+        assert_eq!(dbscan(&[], 1.0, 2).expect("dbscan"), Vec::new());
+        // Un punto solo con min_points 2 non ha vicinato sufficiente.
+        let single = points(&[(1.0, 1.0)]);
+        assert_eq!(dbscan(&single, 1.0, 2).expect("dbscan"), vec![None]);
+        // Con min_points 1 e' un cluster di un elemento.
+        assert_eq!(dbscan(&single, 1.0, 1).expect("dbscan"), vec![Some(0)]);
+    }
+
+    #[test]
+    fn double_execution_gives_identical_labels() {
+        let mut coords = cloud((0.0, 0.0), 40);
+        coords.extend(cloud((50.0, 50.0), 40));
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
+        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
+        // fusa e' il contratto numerico.
+        #[allow(clippy::suboptimal_flops)]
+        coords.extend((0..10).map(|index| (200.0 + f64::from(index) * 7.0, -30.0)));
+        let first = dbscan(&points(&coords), 0.5, 4).expect("prima");
+        let second = dbscan(&points(&coords), 0.5, 4).expect("seconda");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn huge_eps_merges_everything_into_one_cluster() {
+        let mut coords = cloud((0.0, 0.0), 10);
+        coords.extend(cloud((1_000.0, 1_000.0), 10));
+        let labels = dbscan(&points(&coords), 1e12, 3).expect("dbscan");
+        assert!(labels.iter().all(|label| *label == Some(0)));
+    }
+
+    #[test]
+    fn tiny_eps_makes_everything_noise() {
+        let coords = cloud((0.0, 0.0), 10);
+        let labels = dbscan(&points(&coords), 1e-9, 2).expect("dbscan");
+        assert!(labels.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn internal_cache_invariant_is_never_reported_as_invalid_input() {
+        let mapped = cluster_error(&ClusterError::InternalInvariant("cache assente"));
+        assert!(matches!(mapped, PlenoraError::Internal(_)));
+    }
+
+    #[test]
+    fn una_validazione_non_conclusa_non_accusa_il_piano() {
+        let mapped = cluster_error(&ClusterError::ValidazioneNonConclusa("forma"));
+        assert!(matches!(mapped, PlenoraError::Internal(_)), "{mapped}");
+    }
+
+    #[test]
+    fn invalid_parameters_are_rejected() {
+        let single = points(&[(0.0, 0.0)]);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(matches!(
+                dbscan(&single, bad, 2),
+                Err(ClusterError::InvalidParameter { name: "eps", .. })
+            ));
+        }
+        assert!(matches!(
+            dbscan(&single, 1.0, 0),
+            Err(ClusterError::InvalidParameter {
+                name: "min_points",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn non_point_geometries_are_rejected() {
+        let geometries: Vec<Option<Geometry<f64>>> = vec![
+            Some(Geometry::Point(Point::new(0.0, 0.0))),
+            Some(Geometry::LineString(geo::LineString::from(vec![
+                (0.0, 0.0),
+                (1.0, 1.0),
+            ]))),
+        ];
+        assert!(matches!(
+            dbscan_nullable(&geometries, 1.0, 2),
+            Err(ClusterError::UnsupportedGeometry {
+                index: 1,
+                found: "LineString"
+            })
+        ));
+    }
+
+    #[test]
+    fn null_geometries_get_null_labels_without_participating() {
+        // Due punti densi + un null in mezzo: il null non sposta gli indici.
+        let geometries: Vec<Option<Geometry<f64>>> = vec![
+            Some(Geometry::Point(Point::new(0.0, 0.0))),
+            None,
+            Some(Geometry::Point(Point::new(0.1, 0.0))),
+        ];
+        let labels = dbscan_nullable(&geometries, 0.5, 2).expect("dbscan");
+        assert_eq!(labels, vec![Some(0), None, Some(0)]);
+    }
+
+    // --- adapter di colonna --------------------------------------------------
+
+    #[test]
+    fn dbscan_column_labels_rows_and_preserves_nulls() {
+        let mut geometries: Vec<Option<Geometry<f64>>> = cloud((0.0, 0.0), 9)
+            .iter()
+            .map(|&(x, y)| Some(Geometry::Point(Point::new(x, y))))
+            .collect();
+        geometries.push(None);
+        geometries.push(Some(Geometry::Point(Point::new(500.0, 500.0))));
+        let cells = wkb_column(&geometries);
+        let labels = dbscan_column(&cells, 0.5, 3).expect("colonna");
+        assert_eq!(labels.len(), 11);
+        assert!(labels[..9].iter().all(|label| *label == Some(0)));
+        assert_eq!(labels[9], None, "geometria null -> null");
+        assert_eq!(labels[10], None, "outlier -> noise");
+        assert!(dbscan_column(&cells, 0.0, 3).is_err());
+        assert!(dbscan_column(&cells, 0.5, 0).is_err());
+    }
+
+    #[test]
+    fn dbscan_column_rejects_non_point_cells() {
+        let line = Geometry::LineString(geo::LineString::from(vec![(0.0, 0.0), (1.0, 1.0)]));
+        let cells = wkb_column(&[Some(line)]);
+        assert!(matches!(
+            dbscan_column(&cells, 1.0, 2),
+            Err(PlenoraError::InvalidPlan(message))
+                if message.contains("geo.cluster_dbscan") && message.contains("LineString")
+        ));
+    }
+
+    // --- micro-benchmark (esplicito: cargo test -- --ignored) ----------------
+
+    /// 100k punti: due nuvole dense su griglia + dispersione deterministica;
+    /// stampa tempo e peak RSS (`VmHWM`, Linux). Esecuzione manuale.
+    #[test]
+    #[ignore = "micro-benchmark manuale"]
+    fn dbscan_100k_benchmark() {
+        let mut coords = cloud((0.0, 0.0), 50_000);
+        coords.extend(cloud((1_000.0, 1_000.0), 49_000));
+        // 1000 punti sparsi con un LCG deterministico.
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        for _ in 0..1_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            // state >> 11 e' < 2^53 e (1 << 53) == 2^53: entrambi esatti in
+            // f64; schema standard per un double uniforme in [0, 1).
+            #[allow(clippy::cast_precision_loss)]
+            let x = (state >> 11) as f64 / (1u64 << 53) as f64 * 2_000.0;
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            #[allow(clippy::cast_precision_loss)]
+            let y = (state >> 11) as f64 / (1u64 << 53) as f64 * 2_000.0;
+            coords.push((x, y));
+        }
+        assert_eq!(coords.len(), 100_000);
+        let fixture = points(&coords);
+        let start = std::time::Instant::now();
+        let labels = dbscan(&fixture, 0.5, 4).expect("dbscan");
+        let elapsed = start.elapsed();
+        let clusters = labels
+            .iter()
+            .filter_map(|label| *label)
+            .max()
+            .map_or(0, |max| max + 1);
+        let noise = labels.iter().filter(|label| label.is_none()).count();
+        let peak_rss = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|line| line.starts_with("VmHWM"))
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "VmHWM non disponibile".to_owned());
+        eprintln!(
+            "dbscan 100k punti: {elapsed:?}, {clusters} cluster, {noise} noise, peak RSS: {peak_rss}"
+        );
+    }
+}

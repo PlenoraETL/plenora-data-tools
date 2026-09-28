@@ -1,0 +1,128 @@
+--- a/src/algorithm/relate/relate_operation.rs
++++ b/src/algorithm/relate/relate_operation.rs
+@@ -139,10 +139,7 @@
+         self.label_isolated_edges(&graph_a, &graph_b, 1);
+         self.label_isolated_edges(&graph_b, &graph_a, 0);
+ 
+-        debug!(
+-            "before update_intersection_matrix: {:?}",
+-            &intersection_matrix
+-        );
++        debug!("geo.relate.relate_operation.0");
+         self.update_intersection_matrix(labeled_node_edges, &mut intersection_matrix);
+ 
+         intersection_matrix
+@@ -289,16 +286,11 @@
+         labeled_node_edges: Vec<(CoordNode<F>, LabeledEdgeEndBundleStar<F>)>,
+         intersection_matrix: &mut IntersectionMatrix,
+     ) {
+-        debug!("before updated_intersection_matrix(isolated_edges): {intersection_matrix:?}",);
++        debug!("geo.relate.relate_operation.1");
+         for isolated_edge in &self.isolated_edges {
+             let edge = isolated_edge.borrow();
+             Edge::<F>::update_intersection_matrix(edge.label(), intersection_matrix);
+-            debug!(
+-                "after isolated_edge update_intersection_matrix: {:?}, (isolated_edge: {:?}, label: {:?})",
+-                intersection_matrix,
+-                edge,
+-                edge.label()
+-            );
++            debug!("geo.relate.relate_operation.2");
+         }
+ 
+         for (node, edges) in labeled_node_edges.iter() {
+--- a/src/algorithm/relate/geomgraph/edge_end_bundle_star.rs
++++ b/src/algorithm/relate/geomgraph/edge_end_bundle_star.rs
+@@ -80,7 +80,7 @@
+                 }
+             }
+         }
+-        debug!("edge_end_bundle_star: {self:?}");
++        debug!("geo.relate.edge_end_bundle_star.0");
+     }
+ 
+     fn propagate_side_labels(&mut self, geom_index: usize, _geometry_graph: &GeometryGraph<F>) {
+@@ -121,12 +121,7 @@
+                                 current_position
+                             );
+                         } else {
+-                            warn!(
+-                                "topology position conflict with coordinate — this can happen with invalid geometries. coordinate: {:?}, right_location: {:?}, current_location: {:?}",
+-                                edge_ends.coordinate(),
+-                                right_position,
+-                                current_position
+-                            );
++                            warn!("geo.relate.edge_end_bundle_star.1");
+                         }
+                     }
+                     assert!(left_position.is_some(), "found single null side");
+@@ -151,9 +146,7 @@
+     pub fn update_intersection_matrix(&self, intersection_matrix: &mut IntersectionMatrix) {
+         for edge_end_bundle in self.edge_end_bundles_iter() {
+             edge_end_bundle.update_intersection_matrix(intersection_matrix);
+-            debug!(
+-                "updated intersection_matrix: {intersection_matrix:?} from edge_end_bundle: {edge_end_bundle:?}"
+-            );
++            debug!("geo.relate.edge_end_bundle_star.2");
+         }
+     }
+ }
+@@ -207,7 +200,7 @@
+         graph_a: &GeometryGraph<F>,
+         graph_b: &GeometryGraph<F>,
+     ) -> LabeledEdgeEndBundleStar<F> {
+-        debug!("edge_end_bundle_star: {self:?}");
++        debug!("geo.relate.edge_end_bundle_star.3");
+         let labeled_edges = self
+             .edge_map
+             .into_values()
+--- a/src/algorithm/relate/geomgraph/geometry_graph.rs
++++ b/src/algorithm/relate/geomgraph/geometry_graph.rs
+@@ -231,7 +231,7 @@
+             // TODO: we could return an Err here, but this has ramifications for how we can
+             // use this code in other operations - do we want all our methods, like `contains` to
+             // return a Result?
+-            warn!("encountered invalid ring, which has undefined results");
++            warn!("geo.relate.geometry_graph.0");
+         }
+         let first_point = coords[0];
+ 
+@@ -240,7 +240,7 @@
+             Some(WindingOrder::Clockwise) => (cw_left, cw_right),
+             Some(WindingOrder::CounterClockwise) => (cw_right, cw_left),
+             None => {
+-                warn!("polygon had no winding order. Results are undefined.");
++                warn!("geo.relate.geometry_graph.1");
+                 (cw_left, cw_right)
+             }
+         };
+@@ -281,7 +281,7 @@
+         }
+ 
+         if coords.len() < 2 {
+-            warn!("Treating invalid linestring as point, which has undefined results");
++            warn!("geo.relate.geometry_graph.2");
+             self.add_point(&coords[0].into());
+             return;
+         }
+--- a/src/algorithm/relate/geomgraph/node.rs
++++ b/src/algorithm/relate/geomgraph/node.rs
+@@ -67,6 +67,6 @@
+             self.label.on_position(1),
+             Dimensions::ZeroDimensional,
+         );
+-        debug!("updated intersection_matrix: {intersection_matrix:?} from node: {self:?}");
++        debug!("geo.relate.node.0");
+     }
+ }
+--- a/src/algorithm/relate/geomgraph/topology_position.rs
++++ b/src/algorithm/relate/geomgraph/topology_position.rs
+@@ -184,7 +184,7 @@
+     pub fn set_locations(&mut self, new_on: CoordPos, new_left: CoordPos, new_right: CoordPos) {
+         match self {
+             Self::LineOrPoint { .. } => {
+-                error!("invalid assignment dimensions for {self:?}");
++                error!("geo.relate.topology_position.0");
+                 debug_assert!(false, "invalid assignment dimensions for {self:?}");
+             }
+             Self::Area { on, left, right } => {

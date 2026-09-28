@@ -1,0 +1,9 @@
+# Le quattro patch qui sono copie esatte dei file congelati dal laboratorio
+# (handoff-final-20260909/manifest.json elenca il loro sha256, calcolato sui
+# byte CRLF cosi' come prodotti). La regola di repository `* text=auto
+# eol=lf` (vedi .gitattributes alla radice) le riscriverebbe in LF al
+# prossimo tocco, cambiandone il digest rispetto al manifesto firmato dal
+# laboratorio — un'identita' diversa da quella che questa cartella dichiara
+# di conservare. `-text` le esclude dalla normalizzazione automatica: restano
+# diffabili come testo, ma i byte non si muovono.
+*.patch -text

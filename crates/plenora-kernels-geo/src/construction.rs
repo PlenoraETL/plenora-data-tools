@@ -1,0 +1,374 @@
+//! Geometry construction kernels. Grouping and ordering columns are handled
+//! by the future Arrow adapter; these functions operate on one ordered group.
+
+use geo::{Geometry, LineString, Point, Polygon};
+use std::str::FromStr as _;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ConstructionError {
+    #[error("coordinata {name} non finita")]
+    NonFiniteCoordinate { name: &'static str },
+    #[error("atteso Point alla posizione {index}, ricevuto {geometry_type}")]
+    ExpectedPoint {
+        index: usize,
+        geometry_type: &'static str,
+    },
+    #[error("geometria costruita non valida: {0}")]
+    InvalidOutput(String),
+    #[error("WKT non valido: {0}")]
+    InvalidWkt(String),
+    #[error("WKT con SRID o dimensioni Z/M non supportato dal contratto XY")]
+    UnsupportedWktDimension,
+    /// La validazione OGC non ha concluso: `geo` si e' interrotta.
+    ///
+    /// **Non** e' una geometria invalida. Nessuno ha dimostrato che l'ingresso
+    /// sia sbagliato, e accusarlo manderebbe chi legge a correggere un errore
+    /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
+    #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
+    ValidazioneNonConclusa(&'static str),
+}
+
+use crate::geometry_type_name as geometry_name;
+use crate::ValidazioneProtetta as _;
+
+/// Costruisce un `Point` da longitudine e latitudine.
+///
+/// # Errors
+///
+/// `ConstructionError::NonFiniteCoordinate` se `lon` o `lat` e' NaN o
+/// infinita.
+pub fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, ConstructionError> {
+    if !lon.is_finite() {
+        return Err(ConstructionError::NonFiniteCoordinate { name: "lon" });
+    }
+    if !lat.is_finite() {
+        return Err(ConstructionError::NonFiniteCoordinate { name: "lat" });
+    }
+    Ok(Geometry::Point(Point::new(lon, lat)))
+}
+
+/// Decodifica una geometria dal testo WKT (solo XY, senza SRID).
+///
+/// # Errors
+///
+/// - `ConstructionError::InvalidWkt`: testo oltre il limite di 64 MiB o
+///   parsing WKT fallito;
+/// - `ConstructionError::UnsupportedWktDimension`: il testo dichiara uno
+///   SRID (`SRID=...`) o dimensioni Z/M/ZM, non supportate dal contratto
+///   XY;
+/// - `ConstructionError::InvalidOutput`: la geometria decodificata non
+///   supera la validazione OGC.
+pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError> {
+    const MAX_WKT_BYTES: usize = 64 * 1024 * 1024;
+    if value.len() > MAX_WKT_BYTES {
+        return Err(ConstructionError::InvalidWkt(
+            "testo oltre il limite di 64 MiB".to_owned(),
+        ));
+    }
+    // Riconoscimento del tipo senza allocare: si ispeziona solo il testo
+    // prima del primo `(`, dove stanno il type name OGC e l'eventuale
+    // suffisso dimensionale. I token cercati ("SRID=", "Z", "M", "ZM") sono
+    // ASCII, quindi il confronto ASCII case-insensitive e' esatto su ogni
+    // input, inclusi prefissi malformati o arbitrariamente lunghi.
+    let head = value.trim_start();
+    let prefix_end = head.find('(').unwrap_or(head.len());
+    let prefix = &head[..prefix_end];
+    let srid = head
+        .get(..5)
+        .is_some_and(|start| start.eq_ignore_ascii_case("SRID="));
+    let dimensional = prefix.split_whitespace().skip(1).any(|token| {
+        ["Z", "M", "ZM"]
+            .iter()
+            .any(|suffix| token.eq_ignore_ascii_case(suffix))
+    });
+    if srid || dimensional {
+        return Err(ConstructionError::UnsupportedWktDimension);
+    }
+    // Il tokenizer di `wkt` 0.14 tratta `\0` come fine dell'ingresso: cio'
+    // che segue sparirebbe senza errore.
+    if value.contains('\0') {
+        return Err(ConstructionError::InvalidWkt(
+            "carattere NUL nel testo".to_owned(),
+        ));
+    }
+    if coda_dopo_la_geometria(value) {
+        return Err(ConstructionError::InvalidWkt(
+            "testo dopo la fine della geometria".to_owned(),
+        ));
+    }
+    // Prima la forma di `wkt`, poi `geo`: la conversione in `geo_types`
+    // conserva solo x e y, quindi una Z o una M che il prefisso non mostra —
+    // `POINTZ(1 2 3)`, o un componente annidato `GEOMETRYCOLLECTION(POINT Z
+    // (1 2 3))` — sparirebbe senza errore. La dimensione si legge da ogni nodo.
+    let analizzato = wkt::Wkt::<f64>::from_str(value)
+        .map_err(|error| ConstructionError::InvalidWkt(error.to_owned()))?;
+    if non_solo_xy(&analizzato) {
+        return Err(ConstructionError::UnsupportedWktDimension);
+    }
+    let geometry = Geometry::<f64>::try_from(analizzato)
+        .map_err(|error| ConstructionError::InvalidWkt(error.to_string()))?;
+    geometry.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+            ConstructionError::ValidazioneNonConclusa,
+        )
+    })?;
+    Ok(geometry)
+}
+
+/// Se un nodo della geometria dichiara una dimensione diversa da XY.
+///
+/// Ricorsivo sulle collezioni: la dimensione della collezione e' quella della
+/// sua intestazione, e un componente puo' dichiararne un'altra.
+fn non_solo_xy(geometria: &wkt::Wkt<f64>) -> bool {
+    if geometria.dimension() != wkt::types::Dimension::XY {
+        return true;
+    }
+    match geometria {
+        wkt::Wkt::GeometryCollection(collezione) => collezione.geometries().iter().any(non_solo_xy),
+        _ => false,
+    }
+}
+
+/// Lo spazio bianco secondo il tokenizer di `wkt` 0.14: questi quattro e basta.
+const fn spazio_wkt(carattere: char) -> bool {
+    matches!(carattere, ' ' | '\n' | '\r' | '\t')
+}
+
+/// Se il testo ha qualcosa **dopo** la fine della geometria di primo livello.
+///
+/// # Perche' serve
+///
+/// Perche' il parser di `wkt` 0.14 si ferma alla fine della geometria e non
+/// guarda il resto: `POINT(1 2) garbage` e `POINT(1 2))` diventano `POINT(1 2)`
+/// senza errore. Un testo che dice di piu' di quel che viene letto e'
+/// malformato, e accettarlo vorrebbe dire scartarne una parte in silenzio.
+///
+/// # Perche' e' esatto
+///
+/// Il WKT non ha stringhe ne' commenti: le parentesi sono solo strutturali, e
+/// la geometria di primo livello finisce alla parentesi che chiude la prima
+/// aperta, oppure alla parola `EMPTY` quando questa precede ogni parentesi.
+/// Un testo senza chiusura lo rifiuta gia' il parser, e qui non si giudica.
+fn coda_dopo_la_geometria(testo: &str) -> bool {
+    // Il primo segno di struttura, con gli stessi delimitatori con cui il
+    // tokenizer chiude una parola: `EMPTY)` e `EMPTY,resto` sono la parola
+    // `EMPTY` seguita da un segno, non una parola sola.
+    let primo_segno = testo.find(['(', ')', ',']);
+    let prima_del_segno = &testo[..primo_segno.unwrap_or(testo.len())];
+    let parole: Vec<&str> = prima_del_segno
+        .split(spazio_wkt)
+        .filter(|parola| !parola.is_empty())
+        .collect();
+    if let Some(vuota) = parole
+        .iter()
+        .position(|parola| parola.eq_ignore_ascii_case("EMPTY"))
+    {
+        // `TIPO EMPTY`: dopo `EMPTY` non deve esserci nient'altro, segni
+        // compresi.
+        return vuota + 1 < parole.len() || primo_segno.is_some();
+    }
+    // Senza `EMPTY` la geometria comincia con una parentesi aperta; un segno
+    // diverso lo rifiuta il parser, e qui non si giudica.
+    let Some(apertura) = primo_segno.filter(|&posizione| testo[posizione..].starts_with('('))
+    else {
+        return false;
+    };
+    let mut profondita = 0_usize;
+    for (posizione, carattere) in testo[apertura..].char_indices() {
+        match carattere {
+            '(' => profondita += 1,
+            ')' => {
+                profondita = profondita.saturating_sub(1);
+                if profondita == 0 {
+                    let resto = &testo[apertura + posizione + 1..];
+                    return !resto.chars().all(spazio_wkt);
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn collect_points(
+    geometries: &[Option<Geometry<f64>>],
+) -> Result<Vec<Point<f64>>, ConstructionError> {
+    geometries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, geometry)| geometry.as_ref().map(|geometry| (index, geometry)))
+        .map(|(index, geometry)| match geometry {
+            Geometry::Point(point) => Ok(*point),
+            value => Err(ConstructionError::ExpectedPoint {
+                index,
+                geometry_type: geometry_name(value),
+            }),
+        })
+        .collect()
+}
+
+/// Costruisce una `LineString` dai punti del gruppo ordinato.
+///
+/// Le righe `None` sono ignorate; con meno di due punti utili il risultato
+/// e' `None` (gruppo omesso, non un errore).
+///
+/// # Errors
+///
+/// - `ConstructionError::ExpectedPoint`: una geometria non nulla non e' un
+///   `Point`;
+/// - `ConstructionError::InvalidOutput`: la linea costruita non supera la
+///   validazione OGC.
+pub fn line_from_ordered_points(
+    geometries: &[Option<Geometry<f64>>],
+) -> Result<Option<Geometry<f64>>, ConstructionError> {
+    let points = collect_points(geometries)?;
+    if points.len() < 2 {
+        return Ok(None);
+    }
+    let line = Geometry::LineString(LineString::new(
+        points.into_iter().map(|point| point.0).collect(),
+    ));
+    line.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+            ConstructionError::ValidazioneNonConclusa,
+        )
+    })?;
+    Ok(Some(line))
+}
+
+/// Costruisce un `Polygon` (anello esterno senza buchi) dai punti del
+/// gruppo ordinato.
+///
+/// Le righe `None` sono ignorate; con meno di tre punti utili il risultato
+/// e' `None` (gruppo omesso, non un errore).
+///
+/// # Errors
+///
+/// - `ConstructionError::ExpectedPoint`: una geometria non nulla non e' un
+///   `Point`;
+/// - `ConstructionError::InvalidOutput`: il poligono costruito non supera
+///   la validazione OGC (es. auto-intersezione).
+pub fn polygon_from_ordered_points(
+    geometries: &[Option<Geometry<f64>>],
+) -> Result<Option<Geometry<f64>>, ConstructionError> {
+    let points = collect_points(geometries)?;
+    if points.len() < 3 {
+        return Ok(None);
+    }
+    let polygon = Geometry::Polygon(Polygon::new(
+        LineString::new(points.into_iter().map(|point| point.0).collect()),
+        Vec::new(),
+    ));
+    polygon.validazione_protetta().map_err(|esito| {
+        esito.separa(
+            |ragione| ConstructionError::InvalidOutput(ragione.to_string()),
+            ConstructionError::ValidazioneNonConclusa,
+        )
+    })?;
+    Ok(Some(polygon))
+}
+
+#[cfg(test)]
+// Confronti float esatti intenzionali: le fixture sono costruite per
+// produrre valori esatti (coordinate note, round-trip bit-esatti); il
+// confronto per bit e' il contratto verificato, non un'approssimazione.
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+    use crate::test_support::some_point as point;
+    use geo::{Area, CoordsIter};
+
+    #[test]
+    fn creates_point_line_and_polygon_with_strict_validation() {
+        assert_eq!(
+            point_from_lon_lat(12.0, 41.0).unwrap(),
+            point(12.0, 41.0).unwrap()
+        );
+        assert!(point_from_lon_lat(f64::NAN, 41.0).is_err());
+
+        let points = vec![point(0.0, 0.0), None, point(2.0, 0.0), point(2.0, 2.0)];
+        let line = line_from_ordered_points(&points).unwrap().unwrap();
+        assert_eq!(line.coords_count(), 3);
+        let polygon = polygon_from_ordered_points(&points).unwrap().unwrap();
+        assert_eq!(polygon.coords_count(), 4);
+        assert_eq!(polygon.unsigned_area(), 2.0);
+
+        assert_eq!(
+            geometry_from_wkt("POINT(12 41)").unwrap(),
+            Geometry::Point(Point::new(12.0, 41.0))
+        );
+        assert!(matches!(
+            geometry_from_wkt("POINT Z (12 41 3)"),
+            Err(ConstructionError::UnsupportedWktDimension)
+        ));
+        assert!(geometry_from_wkt("POINT (12 41 3)").is_err());
+        assert!(geometry_from_wkt("SRID=4326;POINT (12 41)").is_err());
+    }
+
+    #[test]
+    fn insufficient_points_are_omitted_like_manipola_groups() {
+        assert!(line_from_ordered_points(&[point(0.0, 0.0)])
+            .unwrap()
+            .is_none());
+        assert!(
+            polygon_from_ordered_points(&[point(0.0, 0.0), point(1.0, 0.0)])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_geometry_type_and_self_intersection() {
+        let wrong = vec![Some(Geometry::LineString(LineString::new(vec![
+            (0.0, 0.0).into(),
+            (1.0, 1.0).into(),
+        ])))];
+        assert!(matches!(
+            line_from_ordered_points(&wrong),
+            Err(ConstructionError::ExpectedPoint { index: 0, .. })
+        ));
+
+        let bow_tie = vec![
+            point(0.0, 0.0),
+            point(2.0, 2.0),
+            point(0.0, 2.0),
+            point(2.0, 0.0),
+        ];
+        assert!(matches!(
+            polygon_from_ordered_points(&bow_tie),
+            Err(ConstructionError::InvalidOutput(_))
+        ));
+        assert!(matches!(
+            point_from_lon_lat(1.0, f64::INFINITY),
+            Err(ConstructionError::NonFiniteCoordinate { name: "lat" })
+        ));
+        let too_long = " ".repeat(64 * 1024 * 1024 + 1);
+        assert!(matches!(
+            geometry_from_wkt(&too_long),
+            Err(ConstructionError::InvalidWkt(_))
+        ));
+        let variants = vec![
+            Geometry::Line(geo::Line::new((0.0, 0.0), (1.0, 1.0))),
+            Geometry::Polygon(geo::Rect::new((0.0, 0.0), (1.0, 1.0)).to_polygon()),
+            Geometry::MultiPoint(vec![Point::new(0.0, 0.0)].into()),
+            Geometry::MultiLineString(geo::MultiLineString::new(Vec::new())),
+            Geometry::MultiPolygon(geo::MultiPolygon::new(Vec::new())),
+            Geometry::GeometryCollection(Vec::<Geometry<f64>>::new().into()),
+            Geometry::Rect(geo::Rect::new((0.0, 0.0), (1.0, 1.0))),
+            Geometry::Triangle(geo::Triangle::new(
+                geo::Coord { x: 0.0, y: 0.0 },
+                geo::Coord { x: 1.0, y: 0.0 },
+                geo::Coord { x: 0.0, y: 1.0 },
+            )),
+        ];
+        for variant in variants {
+            assert!(matches!(
+                line_from_ordered_points(&[Some(variant)]),
+                Err(ConstructionError::ExpectedPoint { .. })
+            ));
+        }
+    }
+}

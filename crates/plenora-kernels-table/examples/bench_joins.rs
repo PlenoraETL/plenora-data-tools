@@ -1,0 +1,207 @@
+//! Benchmark autonomo per i kernel `table.join`, `table.semi_join` e
+//! `table.anti_join`.
+//!
+//! Fixture deterministica (seed logico 42, LCG): tabella sinistra con chiave
+//! `k` (Int64/UInt64/Float64/Utf8 a seconda dello scenario) piu' payload
+//! `lv` int64 e `lt` utf8, tabella destra con chiave `k` e payload `rv`.
+//!
+//! Uso: `bench_joins <left_rows> <right_rows> <repetitions>`
+//! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
+//! peak RSS (`VmHWM` da `/proc/self/status`).
+
+#[path = "comune/mod.rs"]
+mod comune;
+
+use comune::lcg::Lcg;
+
+use comune::run_scenario;
+
+use std::sync::Arc;
+
+use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
+use plenora_kernels_table::joins::{anti_join, join, semi_join, Join, JoinHow, MembershipJoin};
+use plenora_kernels_table::Limits;
+
+fn left_table(rows: usize, keys: ArrayRef) -> RecordBatch {
+    let payload = (0..rows)
+        .map(|row| i64::try_from(row).ok())
+        .collect::<Vec<_>>();
+    let tags = (0..rows)
+        .map(|row| format!("t{}", row % 97))
+        .collect::<Vec<_>>();
+    RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("k", keys.data_type().clone(), false),
+            Field::new("lv", DataType::Int64, false),
+            Field::new("lt", DataType::Utf8, false),
+        ])),
+        vec![
+            keys,
+            Arc::new(Int64Array::from(payload)),
+            Arc::new(StringArray::from(tags)),
+        ],
+    )
+    .expect("fixture sinistra")
+}
+
+fn right_table(rows: usize, keys: ArrayRef) -> RecordBatch {
+    let payload = (0..rows)
+        .map(|row| i64::try_from(row).ok())
+        .collect::<Vec<_>>();
+    RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("k", keys.data_type().clone(), false),
+            Field::new("rv", DataType::Int64, false),
+        ])),
+        vec![keys, Arc::new(Int64Array::from(payload))],
+    )
+    .expect("fixture destra")
+}
+
+fn int64_keys(rows: usize, key_space: u64) -> ArrayRef {
+    let mut rng = Lcg::seeded();
+    let keys = (0..rows)
+        .map(|_| i64::try_from(rng.below(key_space)).ok())
+        .collect::<Vec<_>>();
+    Arc::new(Int64Array::from(keys))
+}
+
+fn utf8_keys(rows: usize, key_space: u64) -> ArrayRef {
+    let mut rng = Lcg::seeded();
+    let keys = (0..rows)
+        .map(|_| format!("k{:07}", rng.below(key_space)))
+        .collect::<Vec<_>>();
+    Arc::new(StringArray::from(keys))
+}
+
+fn float64_keys(rows: usize, key_space: u64) -> ArrayRef {
+    let mut rng = Lcg::seeded();
+    let keys = (0..rows)
+        .map(|_| {
+            #[allow(clippy::cast_precision_loss)]
+            Some((rng.below(key_space) as f64) + 0.5)
+        })
+        .collect::<Vec<_>>();
+    Arc::new(Float64Array::from(keys))
+}
+
+fn join_config(how: JoinHow) -> Join {
+    Join {
+        left_keys: vec!["k".into()],
+        right_keys: vec!["k".into()],
+        how,
+    }
+}
+
+fn membership_config() -> MembershipJoin {
+    MembershipJoin {
+        left_keys: vec!["k".into()],
+        right_keys: vec!["k".into()],
+    }
+}
+
+fn limits() -> Limits {
+    Limits {
+        max_rows: 1_000_000_000,
+        ..Limits::default()
+    }
+}
+
+fn main() {
+    let left_rows: usize = std::env::args()
+        .nth(1)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(10_000_000);
+    let right_rows: usize = std::env::args()
+        .nth(2)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1_000_000);
+    let repetitions: usize = std::env::args()
+        .nth(3)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3);
+    assert!(left_rows > 0 && right_rows > 0 && repetitions > 0);
+    let limits = limits();
+
+    // Chiavi int64 a bassa duplicazione: destra univoca 0..right_rows,
+    // sinistra uniforme su uno spazio il 25% piu' ampio (~80% di match).
+    let key_space = u64::try_from(right_rows).expect("right_rows") * 5 / 4;
+    let left_i64 = left_table(left_rows, int64_keys(left_rows, key_space));
+    let right_i64 = right_table(
+        right_rows,
+        Arc::new(Int64Array::from(
+            (0..right_rows)
+                .map(|row| i64::try_from(row).ok())
+                .collect::<Vec<_>>(),
+        )),
+    );
+
+    run_scenario("join_inner_int64", left_rows, repetitions, || {
+        join(&left_i64, &right_i64, &join_config(JoinHow::Inner), &limits).expect("join inner")
+    });
+    run_scenario("join_left_int64", left_rows, repetitions, || {
+        join(&left_i64, &right_i64, &join_config(JoinHow::Left), &limits).expect("join left")
+    });
+    run_scenario("semi_join_int64", left_rows, repetitions, || {
+        semi_join(&left_i64, &right_i64, &membership_config()).expect("semi join")
+    });
+    run_scenario("anti_join_int64", left_rows, repetitions, || {
+        anti_join(&left_i64, &right_i64, &membership_config()).expect("anti join")
+    });
+
+    // Chiavi int64 ad alta duplicazione: 10_000 chiavi distinte, destra
+    // piccola e univoca (output = left_rows righe).
+    let left_dup = left_table(left_rows, int64_keys(left_rows, 10_000));
+    let right_dup = right_table(
+        10_000,
+        Arc::new(Int64Array::from(
+            (0..10_000_i64).map(Some).collect::<Vec<_>>(),
+        )),
+    );
+    run_scenario("join_inner_int64_highdup", left_rows, repetitions, || {
+        join(&left_dup, &right_dup, &join_config(JoinHow::Inner), &limits).expect("join highdup")
+    });
+
+    // Chiavi utf8 e float64, stessa distribuzione della bassa duplicazione.
+    let left_utf8 = left_table(left_rows, utf8_keys(left_rows, key_space));
+    let right_utf8 = right_table(
+        right_rows,
+        Arc::new(StringArray::from(
+            (0..right_rows)
+                .map(|row| format!("k{row:07}"))
+                .collect::<Vec<_>>(),
+        )),
+    );
+    run_scenario("join_inner_utf8", left_rows, repetitions, || {
+        join(
+            &left_utf8,
+            &right_utf8,
+            &join_config(JoinHow::Inner),
+            &limits,
+        )
+        .expect("join utf8")
+    });
+
+    let left_float64 = left_table(left_rows, float64_keys(left_rows, key_space));
+    let right_float64 = right_table(
+        right_rows,
+        Arc::new(Float64Array::from(
+            (0..right_rows)
+                .map(|row| {
+                    #[allow(clippy::cast_precision_loss)]
+                    Some(row as f64 + 0.5)
+                })
+                .collect::<Vec<_>>(),
+        )),
+    );
+    run_scenario("join_inner_float64", left_rows, repetitions, || {
+        join(
+            &left_float64,
+            &right_float64,
+            &join_config(JoinHow::Inner),
+            &limits,
+        )
+        .expect("join float64")
+    });
+}

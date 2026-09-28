@@ -1,0 +1,83 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/plenora-core",
+    "crates/plenora-kernels-table",
+    "crates/plenora-kernels-geo",
+]
+# Sorgenti vendorizzate per [patch.crates-io] (vedi sotto): raggiunte solo da
+# [patch], mai membri del workspace.
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+
+# Unico punto di versione delle dipendenze. Pin esatti, identici a
+# plenora-data-tools@190c493 per le dipendenze che i kernel usano; i backend
+# nativi (geos, proj) e le dipendenze di engine/CLI/isolamento non ci sono.
+[workspace.dependencies]
+# Arrow =59.2.0.
+arrow-array = "=59.2.0"
+arrow-schema = "=59.2.0"
+arrow-ipc = "=59.2.0"
+arrow-select = "=59.2.0"
+# Geometrie
+geo = "=0.33.1"
+geozero = { version = "=0.15.1", default-features = false, features = ["with-geo", "with-wkb"] }
+wkt = "=0.14.0"
+rayon = "=1.12.0"
+rstar = "=0.12.2"
+# Dev-dependency di plenora-kernels-geo (probe privacy sul logging di
+# `relate`): transitiva di `geo`/`geozero`, pinnata perche' il test la usa
+# direttamente.
+log = "=0.4.33"
+# Comuni
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["raw_value"] }
+thiserror = "=2.0.20"
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+chrono-tz = "=0.10.4"
+regex = "=1.13.1"
+unicode-normalization = "=0.1.25"
+num-traits = "=0.2.19"
+md-5 = "=0.11.0"
+sha2 = "=0.11.0"
+uuid = { version = "=1.25.0", features = ["v4"] }
+tempfile = "=3.27.0"
+# Dev
+proptest = "=1.11.0"
+
+# Crate interni
+plenora-core = { path = "crates/plenora-core" }
+plenora-kernels-table = { path = "crates/plenora-kernels-table" }
+plenora-kernels-geo = { path = "crates/plenora-kernels-geo" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+# Un refuso di `cfg` non rompe la build: spegne silenziosamente il codice.
+unexpected_cfgs = "deny"
+
+# Tutti i gruppi sono deny e il codebase passa con zero warning; ogni
+# deviazione voluta e' un `#[allow]` mirato e motivato nel codice. Il gate
+# anti-panic resta un passo dedicato con lint espliciti (vedi AGENTS.md).
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
+# Overflow aritmetico = panico dichiarato anche in release, mai un valore
+# avvolto in silenzio.
+overflow-checks = true
+
+# Copie vendorizzate (provenienza: vendor/*/PROVENANCE.md, patch in patches/).
+[patch.crates-io]
+geo = { path = "vendor/geo-0.33.1-exact-filtered" } # diff 1 + diff 2 + filtro veloce (PROVENANCE-FILTRO-SPERIMENTALE.md)
+wkt = { path = "vendor/wkt-0.14.0-v2" }          # diff 3 (componenti vuoti, InteriorWithoutExterior, try_wkt_string)
+i_shape = { path = "vendor/i_shape-1.18.0-buffer" } # diff 5 (area zero su path vuoto), transitiva

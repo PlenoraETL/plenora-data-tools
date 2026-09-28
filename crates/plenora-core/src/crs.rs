@@ -1,0 +1,994 @@
+//! Contratto CRS fail-closed per gli adapter pubblici.
+//!
+//! Le sole coordinate non identificano un CRS: il chiamante fornisce una
+//! definizione, che va risolta prima che un kernel spaziale giri. Qui vive il
+//! contratto indipendente dal backend. In questo workspace (Rust puro) non
+//! c'e' risoluzione PROJ: [`resolve_crs`] fallisce sempre chiuso, e un
+//! [`ResolvedCrs`] entra solo gia' risolto dal chiamante.
+
+use std::fmt;
+
+use crate::catalog::CrsRequirement;
+use crate::contract::AxisOrder;
+use crate::error::PlenoraError;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use thiserror::Error;
+
+pub const MAX_CRS_DEFINITION_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrsKind {
+    Geographic,
+    Projected,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedCrs {
+    definition: String,
+    canonical: Value,
+    kind: CrsKind,
+    horizontal_unit_to_metre: Option<f64>,
+}
+
+impl ResolvedCrs {
+    /// Costruisce un CRS gia' risolto e verificato.
+    ///
+    /// Riservato ai backend di risoluzione e ai test: il contratto resta che
+    /// solo una risoluzione verificata puo' produrre questi valori. Il
+    /// risolutore PROJ di plenora-data-tools non e' in questo workspace.
+    #[must_use]
+    pub const fn from_resolved_parts(
+        definition: String,
+        canonical: Value,
+        kind: CrsKind,
+        horizontal_unit_to_metre: Option<f64>,
+    ) -> Self {
+        Self {
+            definition,
+            canonical,
+            kind,
+            horizontal_unit_to_metre,
+        }
+    }
+
+    #[must_use]
+    pub fn definition(&self) -> &str {
+        &self.definition
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> CrsKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn horizontal_unit_to_metre(&self) -> Option<f64> {
+        self.horizontal_unit_to_metre
+    }
+
+    #[must_use]
+    pub fn semantically_equals(&self, other: &Self) -> bool {
+        self.canonical == other.canonical
+    }
+
+    /// Nodo CRS da cui dedurre identita', assi e autorita'. Un `BoundCRS`
+    /// conserva l'operazione nel canonical completo, ma queste proprieta'
+    /// appartengono al suo `source_crs`.
+    fn identity_canonical(&self) -> Option<&Value> {
+        if self.canonical.get("type").and_then(Value::as_str) == Some("BoundCRS") {
+            self.canonical.get("source_crs")
+        } else {
+            Some(&self.canonical)
+        }
+    }
+
+    /// Ordine degli assi dedotto dalla definizione canonica d'autorita'
+    /// (piano-v5.md#contratti-di-input, emendamento 2026-07-31).
+    ///
+    /// Combina le direzioni dei primi due assi di `coordinate_system` nel
+    /// PROJJSON con il `kind`, senza tabelle di CRS: per esempio geographic
+    /// (north,east) da' [`AxisOrder::LatLon`], projected (east,north)
+    /// [`AxisOrder::EastingNorthing`]. Meno di due assi da' `None`; due
+    /// direzioni fuori dalle quattro combinazioni canoniche danno
+    /// [`AxisOrder::Other`].
+    #[must_use]
+    pub fn authority_axis_order(&self) -> Option<AxisOrder> {
+        let axes = self
+            .identity_canonical()?
+            .get("coordinate_system")?
+            .get("axis")?
+            .as_array()?;
+        let first = axes.first()?.get("direction")?.as_str()?;
+        let second = axes.get(1)?.get("direction")?.as_str()?;
+        match (self.kind, first, second) {
+            (CrsKind::Geographic, "north", "east") => Some(AxisOrder::LatLon),
+            (CrsKind::Geographic, "east", "north") => Some(AxisOrder::LonLat),
+            (CrsKind::Projected, "east", "north") => Some(AxisOrder::EastingNorthing),
+            (CrsKind::Projected, "north", "east") => Some(AxisOrder::NorthingEasting),
+            _ => Some(AxisOrder::Other),
+        }
+    }
+
+    /// Ordine delle coordinate prodotto dalle pipeline PROJ normalizzate per
+    /// visualizzazione GIS, distinto dall'ordine nativo dell'autorita'.
+    ///
+    /// `proj_backend` usa `Proj::new_known_crs` e produce sempre x/y
+    /// normalizzato (lon/lat o easting/northing): descrive i byte di output;
+    /// [`Self::authority_axis_order`] resta il metadato della definizione.
+    #[must_use]
+    pub const fn normalized_gis_axis_order(&self) -> AxisOrder {
+        match self.kind {
+            CrsKind::Geographic => AxisOrder::LonLat,
+            CrsKind::Projected => AxisOrder::EastingNorthing,
+        }
+    }
+
+    /// SRID dedotto dalla definizione canonica d'autorita' (piano-v5.md#contratti-di-input,
+    /// emendamento 2026-07-31).
+    ///
+    /// `id.code` numerico (numero o stringa numerica) quando `id.authority` e'
+    /// una stringa. Codice non numerico, oltre `u32` o `id` assente danno
+    /// `None`: lo `srid` resta non emesso (chiave opzionale R5.2), mai
+    /// indovinato.
+    #[must_use]
+    pub fn authority_srid(&self) -> Option<u32> {
+        self.authority_identifier().map(|(_, code)| code)
+    }
+
+    /// Coppia autorita' e codice numerico della definizione canonica.
+    ///
+    /// Serve ai confronti di coerenza tra rappresentazioni: il solo codice
+    /// numerico non identifica un CRS senza la sua autorita'.
+    #[must_use]
+    pub fn authority_identifier(&self) -> Option<(&str, u32)> {
+        let id = self.identity_canonical()?.get("id")?;
+        let authority = id.get("authority")?.as_str()?;
+        let code = match id.get("code")? {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.parse::<u64>().ok(),
+            _ => None,
+        }?;
+        Some((authority, u32::try_from(code).ok()?))
+    }
+}
+
+/// SRID da un identificatore testuale `authority:code` (es. `EPSG:4326`).
+///
+/// Serve al trasporto legacy, che porta la sola definizione senza un
+/// [`ResolvedCrs`] (piano-v5.md#contratti-di-input, emendamento 2026-07-31).
+/// Ogni altra forma (parti vuote, codice non numerico, oltre `u32`) da'
+/// `None`, mai un valore indovinato. E' l'unica fonte di questo parsing.
+#[must_use]
+pub fn authority_code_srid(crs_id: &str) -> Option<u32> {
+    let (authority, code) = crs_id.rsplit_once(':')?;
+    if authority.is_empty() || code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    code.parse().ok()
+}
+
+/// Coppia `authority:code` semplice, con codice numerico.
+///
+/// Le forme multi-segmento come gli URN non vengono reinterpretate: il
+/// chiamante che dispone di PROJ puo' risolverle semanticamente.
+#[must_use]
+pub fn authority_code_identifier(crs_id: &str) -> Option<(&str, u32)> {
+    let (authority, code) = crs_id.rsplit_once(':')?;
+    if authority.is_empty()
+        || authority.contains(':')
+        || code.is_empty()
+        || !code.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((authority, code.parse().ok()?))
+}
+
+/// Forma testuale di una definizione CRS (piano-v5.md#contratti-di-input,
+/// emendamento 2026-07-31, classe B, emissione).
+///
+/// Classifica la sola stringa, senza backend: sceglie per il blocco canonico
+/// R2.2 fra `crs_id` e `crs_definition`+`crs_definition_format`, come
+/// passthrough idempotente della lineage, mai una riscrittura.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DefinitionForm {
+    /// Identificatore d'autorita': UNA SOLA coppia `auth:code` senza spazi,
+    /// entrambe le parti non vuote e codice qualunque (anche non numerico —
+    /// `OGC:CRS84` e' un identificatore valido; la numerita' conta solo per
+    /// lo `srid`, [`authority_code_srid`]). Cattura per costruzione anche
+    /// gli URN OGC (`urn:ogc:def:crs:...`): la coppia e' valutata
+    /// sull'ULTIMO `:` (rsplit), come in [`authority_code_srid`].
+    AuthorityCode,
+    /// Oggetto JSON (PROJJSON): stesso sniff dell'emissione storica (il
+    /// testo si analizza come JSON e produce un oggetto).
+    Projjson,
+    /// WKT1: inizia (dopo trim) con una parola chiave WKT1 seguita da `[` o
+    /// `(` (`PROJCS`, `GEOGCS`, `COMPD_CS`, `GEOCCS`, `VERT_CS`, `LOCAL_CS`,
+    /// `FITTED_CS`).
+    Wkt,
+    /// WKT2: come sopra con parole chiave WKT2 corte e alias long-form
+    /// (`PROJCRS`/`PROJECTEDCRS`, `GEODCRS`/`GEODETICCRS`,
+    /// `GEOGCRS`/`GEOGRAPHICCRS`, `VERTCRS`/`VERTICALCRS`,
+    /// `ENGCRS`/`ENGINEERINGCRS`) e le altre radici esplicitamente elencate
+    /// in [`WKT2_KEYWORDS`].
+    Wkt2,
+    /// Qualunque altra forma (es. proj-string `+proj=...`): in emissione
+    /// conserva il comportamento storico (`crs_id`) — limite documentato
+    /// preesistente: la tabella §2 non ha un formato proj.
+    Other,
+}
+
+/// Parole chiave WKT1 riconosciute da [`definition_form`] (seguite da `[` o
+/// `(`).
+const WKT1_KEYWORDS: [&str; 7] = [
+    "PROJCS",
+    "GEOGCS",
+    "COMPD_CS",
+    "GEOCCS",
+    "VERT_CS",
+    "LOCAL_CS",
+    "FITTED_CS",
+];
+
+/// Parole chiave CRS top-level WKT2 riconosciute da [`definition_form`]
+/// (seguite da `[` o `(`).
+const WKT2_KEYWORDS: [&str; 15] = [
+    "PROJCRS",
+    "PROJECTEDCRS",
+    "DERIVEDPROJCRS",
+    "GEODCRS",
+    "GEODETICCRS",
+    "GEOGCRS",
+    "GEOGRAPHICCRS",
+    "BOUNDCRS",
+    "VERTCRS",
+    "VERTICALCRS",
+    "ENGCRS",
+    "ENGINEERINGCRS",
+    "PARAMETRICCRS",
+    "TIMECRS",
+    "COMPOUNDCRS",
+];
+
+/// La stringa (gia' trimmata a sinistra) inizia con una parola chiave WKT
+/// seguita da `[` o `(` — il delimitatore rende il riconoscimento
+/// strutturale, non lessicale (nessun falso positivo su identificatori
+/// omonimi).
+fn starts_with_wkt_keyword(trimmed: &str, keywords: &[&str]) -> bool {
+    let Some(delimiter) = trimmed.find(['[', '(']) else {
+        return false;
+    };
+    let candidate = trimmed[..delimiter].trim_end();
+    keywords
+        .iter()
+        .any(|keyword| candidate.eq_ignore_ascii_case(keyword))
+}
+
+/// Classifica una definizione CRS testuale (vedi [`DefinitionForm`]).
+///
+/// Funzione pura della stringa: nessun backend, mai un errore — le forme
+/// non riconosciute cadono in [`DefinitionForm::Other`], che preserva il
+/// comportamento storico.
+#[must_use]
+pub fn definition_form(definition: &str) -> DefinitionForm {
+    if let Ok(value) = serde_json::from_str::<Value>(definition) {
+        return if value.is_object() {
+            DefinitionForm::Projjson
+        } else {
+            DefinitionForm::Other
+        };
+    }
+    let trimmed = definition.trim_start();
+    if starts_with_wkt_keyword(trimmed, &WKT2_KEYWORDS) {
+        return DefinitionForm::Wkt2;
+    }
+    if starts_with_wkt_keyword(trimmed, &WKT1_KEYWORDS) {
+        return DefinitionForm::Wkt;
+    }
+    if !trimmed.contains(char::is_whitespace)
+        && trimmed
+            .rsplit_once(':')
+            .is_some_and(|(authority, code)| !authority.is_empty() && !code.is_empty())
+    {
+        return DefinitionForm::AuthorityCode;
+    }
+    DefinitionForm::Other
+}
+
+/// Motivo strutturale di una violazione del dominio geografico.
+///
+/// Nomina l'asse e la natura del difetto, **mai il valore**: la coordinata e'
+/// un dato di cella e non puo' comparire in un messaggio d'errore
+/// (errori-e-limiti.md#privacy-dei-messaggi). Chi diagnostica ha comunque
+/// l'informazione che serve — quale asse, e se il difetto e' un valore non
+/// finito o un valore fuori intervallo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateDomainViolation {
+    /// Almeno una delle due componenti non e' finita (NaN o infinito).
+    NonFinite,
+    /// Longitudine fuori da `-180..=180`.
+    LongitudeOutOfRange,
+    /// Latitudine fuori da `-90..=90`.
+    LatitudeOutOfRange,
+}
+
+impl fmt::Display for CoordinateDomainViolation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let testo = match self {
+            Self::NonFinite => "coordinata non finita",
+            Self::LongitudeOutOfRange => "longitudine fuori da -180..=180",
+            Self::LatitudeOutOfRange => "latitudine fuori da -90..=90",
+        };
+        formatter.write_str(testo)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum CrsError {
+    #[error("CRS_REQUIRED: {name} e' obbligatorio")]
+    Required { name: &'static str },
+    #[error("CRS_INVALID: {name}: {reason}")]
+    InvalidDefinition { name: &'static str, reason: String },
+    #[error("CRS_BACKEND_UNAVAILABLE: la validazione CRS richiede il backend PROJ")]
+    BackendUnavailable,
+    #[error("CRS_TYPE_UNSUPPORTED: tipo PROJJSON {0} non supportato")]
+    UnsupportedType(String),
+    #[error(
+        "LINEAR_UNIT_REQUIRED: il CRS proiettato non dichiara un'unita' lineare orizzontale valida"
+    )]
+    MissingLinearUnit,
+    #[error("PROJECTED_CRS_REQUIRED: ricevuto CRS {actual:?}")]
+    ProjectedRequired { actual: CrsKind },
+    #[error("GEOGRAPHIC_CRS_REQUIRED: ricevuto CRS {actual:?}")]
+    GeographicRequired { actual: CrsKind },
+    #[error("CRS_MISMATCH: gli input non usano lo stesso CRS")]
+    Mismatch,
+    #[error("COORDINATE_OUT_OF_CRS_DOMAIN: {violation}")]
+    CoordinateOutOfDomain {
+        violation: CoordinateDomainViolation,
+    },
+    #[error("CRS_CONTRACT_INVALID: {0}")]
+    InvalidContract(&'static str),
+}
+
+impl From<CrsError> for PlenoraError {
+    fn from(error: CrsError) -> Self {
+        Self::Crs(error.to_string())
+    }
+}
+
+/// Definizione CRS obbligatoria e testualmente valida.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::Required`] se la definizione manca o e' vuota e
+/// [`CrsError::InvalidDefinition`] se supera [`MAX_CRS_DEFINITION_BYTES`] o
+/// contiene NUL.
+pub fn required_definition<'a>(
+    value: Option<&'a str>,
+    name: &'static str,
+) -> Result<&'a str, CrsError> {
+    let value = value.ok_or(CrsError::Required { name })?;
+    validate_definition_text(value, name)?;
+    Ok(value)
+}
+
+fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsError> {
+    if value.trim().is_empty() {
+        return Err(CrsError::Required { name });
+    }
+    if value.len() > MAX_CRS_DEFINITION_BYTES {
+        return Err(CrsError::InvalidDefinition {
+            name,
+            reason: format!(
+                "oltre il limite di {MAX_CRS_DEFINITION_BYTES} byte: {}",
+                value.len()
+            ),
+        });
+    }
+    if value.contains('\0') {
+        return Err(CrsError::InvalidDefinition {
+            name,
+            reason: "contiene NUL".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Risoluzione fail-closed senza backend PROJ.
+///
+/// Non c'e' backend PROJ in questo workspace: nessuna dichiarazione non
+/// verificata e' accettata.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::Required`] o [`CrsError::InvalidDefinition`] per
+/// definizioni testualmente invalide; senza backend PROJ restituisce sempre
+/// [`CrsError::BackendUnavailable`] dopo la validazione testuale.
+pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, CrsError> {
+    validate_definition_text(definition, name)?;
+    Err(CrsError::BackendUnavailable)
+}
+
+/// Verifica il requisito CRS del catalogo sugli input risolti.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::InvalidContract`] se il contratto e' violato
+/// (nessun input, numero di CRS errato per `Reprojection`),
+/// [`CrsError::ProjectedRequired`]/[`CrsError::GeographicRequired`] per il
+/// tipo richiesto, [`CrsError::MissingLinearUnit`] se un CRS proiettato non
+/// dichiara un'unita' lineare valida e [`CrsError::Mismatch`] se gli input
+/// di `SameProjected` non sono semanticamente uguali.
+pub fn validate_requirement(
+    requirement: CrsRequirement,
+    inputs: &[&ResolvedCrs],
+) -> Result<(), CrsError> {
+    if inputs.is_empty() {
+        return Err(CrsError::InvalidContract("nessun CRS di input"));
+    }
+    match requirement {
+        CrsRequirement::Known => Ok(()),
+        CrsRequirement::Projected => inputs.iter().try_for_each(|crs| ensure_projected(crs)),
+        CrsRequirement::Geographic => inputs.iter().try_for_each(|crs| ensure_geographic(crs)),
+        CrsRequirement::SameProjected => {
+            inputs.iter().try_for_each(|crs| ensure_projected(crs))?;
+            if inputs[1..]
+                .iter()
+                .any(|crs| !inputs[0].semantically_equals(crs))
+            {
+                return Err(CrsError::Mismatch);
+            }
+            Ok(())
+        }
+        CrsRequirement::Reprojection => {
+            if inputs.len() != 2 {
+                return Err(CrsError::InvalidContract(
+                    "reprojection richiede CRS sorgente e destinazione",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn ensure_projected(crs: &ResolvedCrs) -> Result<(), CrsError> {
+    if crs.kind != CrsKind::Projected {
+        return Err(CrsError::ProjectedRequired { actual: crs.kind });
+    }
+    if !matches!(crs.horizontal_unit_to_metre, Some(unit) if unit.is_finite() && unit > 0.0) {
+        return Err(CrsError::MissingLinearUnit);
+    }
+    Ok(())
+}
+
+fn ensure_geographic(crs: &ResolvedCrs) -> Result<(), CrsError> {
+    if crs.kind != CrsKind::Geographic {
+        return Err(CrsError::GeographicRequired { actual: crs.kind });
+    }
+    Ok(())
+}
+
+/// Verifica il dominio delle coordinate di un input geografico.
+///
+/// Presuppone l'ordine GIS normalizzato (x=longitudine, y=latitudine) e va
+/// chiamata su ogni input geografico dopo la decodifica WKB, prima dei kernel.
+///
+/// Lavora su coordinate `(x, y)` perche' `plenora-core` non dipende da `geo`;
+/// `plenora_kernels_geo::crs::validate_geometry_domain` e' il wrapper su
+/// `geo::Geometry` e delega qui.
+///
+/// # Errors
+///
+/// Restituisce [`CrsError::CoordinateOutOfDomain`] alla prima coordinata non
+/// finita o fuori dal dominio longitude/latitude di un CRS geografico; per un
+/// CRS proiettato non fallisce mai.
+pub fn validate_geometry_domain(
+    coordinates: impl Iterator<Item = (f64, f64)>,
+    crs: &ResolvedCrs,
+) -> Result<(), CrsError> {
+    if crs.kind != CrsKind::Geographic {
+        return Ok(());
+    }
+    for (x, y) in coordinates {
+        // Il motivo e' strutturale, non numerico: nomina l'asse e la natura
+        // del difetto senza riportare la coordinata, che e' un dato di cella.
+        let violation = if !x.is_finite() || !y.is_finite() {
+            Some(CoordinateDomainViolation::NonFinite)
+        } else if !(-180.0..=180.0).contains(&x) {
+            Some(CoordinateDomainViolation::LongitudeOutOfRange)
+        } else if !(-90.0..=90.0).contains(&y) {
+            Some(CoordinateDomainViolation::LatitudeOutOfRange)
+        } else {
+            None
+        };
+        if let Some(violation) = violation {
+            return Err(CrsError::CoordinateOutOfDomain { violation });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn geographic() -> ResolvedCrs {
+        ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            serde_json::json!({"type": "GeographicCRS", "name": "WGS 84"}),
+            CrsKind::Geographic,
+            None,
+        )
+    }
+
+    fn projected_crs(definition: &str, name: &str) -> ResolvedCrs {
+        ResolvedCrs::from_resolved_parts(
+            definition.to_owned(),
+            serde_json::json!({"type": "ProjectedCRS", "name": name}),
+            CrsKind::Projected,
+            Some(1.0),
+        )
+    }
+
+    #[test]
+    fn missing_empty_nul_and_oversized_definitions_fail_closed() {
+        assert!(matches!(
+            required_definition(None, "crs"),
+            Err(CrsError::Required { .. })
+        ));
+        assert!(matches!(
+            required_definition(Some("  "), "crs"),
+            Err(CrsError::Required { .. })
+        ));
+        let with_nul = ["EPSG:", "\0", "4326"].concat();
+        assert!(matches!(
+            required_definition(Some(&with_nul), "crs"),
+            Err(CrsError::InvalidDefinition { .. })
+        ));
+        let oversized = "X".repeat(MAX_CRS_DEFINITION_BYTES + 1);
+        assert!(matches!(
+            required_definition(Some(&oversized), "crs"),
+            Err(CrsError::InvalidDefinition { .. })
+        ));
+    }
+
+    #[test]
+    fn missing_backend_never_trusts_an_unverified_declaration() {
+        assert!(matches!(
+            resolve_crs("EPSG:3857", "crs"),
+            Err(CrsError::BackendUnavailable)
+        ));
+    }
+
+    #[test]
+    fn requirements_and_semantic_crs_equality_are_fail_closed() {
+        let geographic = geographic();
+        let projected = projected_crs("EPSG:3857", "WGS 84 / Pseudo-Mercator");
+        let projected_alias = projected_crs("epsg:3857", "WGS 84 / Pseudo-Mercator");
+        let different = projected_crs("EPSG:32632", "WGS 84 / UTM zone 32N");
+
+        assert!(matches!(
+            validate_requirement(CrsRequirement::Projected, &[&geographic]),
+            Err(CrsError::ProjectedRequired { .. })
+        ));
+        validate_requirement(CrsRequirement::Geographic, &[&geographic]).unwrap();
+        validate_requirement(
+            CrsRequirement::SameProjected,
+            &[&projected, &projected_alias],
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_requirement(CrsRequirement::SameProjected, &[&projected, &different]),
+            Err(CrsError::Mismatch)
+        ));
+        assert!(validate_requirement(CrsRequirement::Reprojection, &[&geographic]).is_err());
+
+        assert_eq!(projected.definition(), "EPSG:3857");
+        validate_requirement(CrsRequirement::Known, &[&geographic]).unwrap();
+        validate_requirement(CrsRequirement::Projected, &[&projected]).unwrap();
+        validate_requirement(CrsRequirement::Reprojection, &[&geographic, &projected]).unwrap();
+        assert!(matches!(
+            validate_requirement(CrsRequirement::Known, &[]),
+            Err(CrsError::InvalidContract(_))
+        ));
+        assert!(matches!(
+            validate_requirement(CrsRequirement::Geographic, &[&projected]),
+            Err(CrsError::GeographicRequired { .. })
+        ));
+        validate_geometry_domain([(f64::INFINITY, f64::NEG_INFINITY)].into_iter(), &projected)
+            .unwrap();
+
+        let missing_unit = ResolvedCrs::from_resolved_parts(
+            "EPSG:3857".to_owned(),
+            serde_json::json!({"type": "ProjectedCRS"}),
+            CrsKind::Projected,
+            None,
+        );
+        assert!(matches!(
+            validate_requirement(CrsRequirement::Projected, &[&missing_unit]),
+            Err(CrsError::MissingLinearUnit)
+        ));
+    }
+
+    #[test]
+    fn geographic_domain_checks_normalized_longitude_latitude() {
+        let geographic = geographic();
+        validate_geometry_domain([(-180.0, -90.0), (180.0, 90.0)].into_iter(), &geographic)
+            .unwrap();
+        assert!(matches!(
+            validate_geometry_domain([(181.0, 0.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain { .. })
+        ));
+        assert!(matches!(
+            validate_geometry_domain([(0.0, 91.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain { .. })
+        ));
+        assert!(matches!(
+            validate_geometry_domain([(f64::NAN, 0.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain { .. })
+        ));
+    }
+
+    /// Sentinella di privacy: la coordinata che ha violato il dominio e' un
+    /// dato di cella e non deve comparire in nessuna forma del messaggio,
+    /// ne' nella variante CRS ne' nell'errore unificato che la avvolge
+    /// (errori-e-limiti.md#privacy-dei-messaggi).
+    #[test]
+    fn il_messaggio_di_dominio_non_riporta_la_coordinata() {
+        let geographic = geographic();
+        // Valori riconoscibili: se sopravvivono, si vedono.
+        let sentinelle = [[181.5, 0.25], [0.5, 91.75], [1234.5, 5678.25]];
+        for coppia in sentinelle {
+            let errore =
+                validate_geometry_domain([(coppia[0], coppia[1])].into_iter(), &geographic)
+                    .expect_err("coordinata fuori dominio");
+            let testo = errore.to_string();
+            let unificato = PlenoraError::from(errore).to_string();
+            for numero in coppia {
+                // Le cifre della coordinata, in qualunque forma stampata.
+                for forma in [format!("{numero}"), format!("{numero:?}")] {
+                    assert!(!testo.contains(&forma), "coordinata nel testo: {testo}");
+                    assert!(
+                        !unificato.contains(&forma),
+                        "coordinata nell'errore unificato: {unificato}"
+                    );
+                }
+            }
+            assert!(testo.contains("COORDINATE_OUT_OF_CRS_DOMAIN"), "{testo}");
+        }
+        // Il motivo strutturale resta, e distingue i tre casi.
+        assert!(matches!(
+            validate_geometry_domain([(f64::NAN, 0.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain {
+                violation: CoordinateDomainViolation::NonFinite
+            })
+        ));
+        assert!(matches!(
+            validate_geometry_domain([(181.0, 0.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain {
+                violation: CoordinateDomainViolation::LongitudeOutOfRange
+            })
+        ));
+        assert!(matches!(
+            validate_geometry_domain([(0.0, 91.0)].into_iter(), &geographic),
+            Err(CrsError::CoordinateOutOfDomain {
+                violation: CoordinateDomainViolation::LatitudeOutOfRange
+            })
+        ));
+    }
+
+    #[test]
+    fn crs_error_maps_into_plenora_error_crs_variant() {
+        let error = PlenoraError::from(CrsError::BackendUnavailable);
+        assert!(matches!(error, PlenoraError::Crs(_)));
+        assert!(error.to_string().contains("CRS_BACKEND_UNAVAILABLE"));
+    }
+
+    // --- Deduzione axis_order/srid dalla definizione canonica (piano-v5.md#contratti-di-input,
+    // emendamento 2026-07-31) ---------------------------------------------
+
+    #[test]
+    fn authority_axis_order_and_srid_from_realistic_epsg_4326() {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            serde_json::json!({
+                "type": "GeographicCRS",
+                "name": "WGS 84",
+                "datum": {"type": "GeodeticReferenceFrame", "name": "World Geodetic System 1984"},
+                "coordinate_system": {
+                    "subtype": "ellipsoidal",
+                    "axis": [
+                        {"name": "Geodetic latitude", "abbreviation": "Lat",
+                         "direction": "north", "unit": "degree"},
+                        {"name": "Geodetic longitude", "abbreviation": "Lon",
+                         "direction": "east", "unit": "degree"},
+                    ],
+                },
+                "id": {"authority": "EPSG", "code": 4326},
+            }),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::LatLon));
+        assert_eq!(crs.authority_srid(), Some(4326));
+    }
+
+    #[test]
+    fn authority_axis_order_lon_lat_and_no_srid_for_ogc_crs84() {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "OGC:CRS84".to_owned(),
+            serde_json::json!({
+                "type": "GeographicCRS",
+                "name": "WGS 84 (CRS84)",
+                "coordinate_system": {
+                    "subtype": "ellipsoidal",
+                    "axis": [
+                        {"name": "Geodetic longitude", "abbreviation": "Lon",
+                         "direction": "east", "unit": "degree"},
+                        {"name": "Geodetic latitude", "abbreviation": "Lat",
+                         "direction": "north", "unit": "degree"},
+                    ],
+                },
+                "id": {"authority": "OGC", "code": "CRS84"},
+            }),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::LonLat));
+        // Codice non numerico: nessuno srid (mai indovinare).
+        assert_eq!(crs.authority_srid(), None);
+    }
+
+    #[test]
+    fn authority_axis_order_and_srid_from_realistic_epsg_32632() {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "EPSG:32632".to_owned(),
+            serde_json::json!({
+                "type": "ProjectedCRS",
+                "name": "WGS 84 / UTM zone 32N",
+                "coordinate_system": {
+                    "subtype": "Cartesian",
+                    "axis": [
+                        {"name": "Easting", "abbreviation": "E",
+                         "direction": "east", "unit": "metre"},
+                        {"name": "Northing", "abbreviation": "N",
+                         "direction": "north", "unit": "metre"},
+                    ],
+                },
+                "id": {"authority": "EPSG", "code": 32632},
+            }),
+            CrsKind::Projected,
+            Some(1.0),
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::EastingNorthing));
+        assert_eq!(crs.authority_srid(), Some(32632));
+    }
+
+    #[test]
+    fn authority_deduction_without_id_keeps_axes_and_drops_srid() {
+        // CRS custom (nessun `id`): gli assi si deducono comunque dalla
+        // definizione, lo srid no — e la combinazione projected
+        // (north,east) mappa su NorthingEasting.
+        let crs = ResolvedCrs::from_resolved_parts(
+            "CUSTOM:local-grid".to_owned(),
+            serde_json::json!({
+                "type": "ProjectedCRS",
+                "name": "Local grid",
+                "coordinate_system": {
+                    "subtype": "Cartesian",
+                    "axis": [
+                        {"name": "Northing", "abbreviation": "N",
+                         "direction": "north", "unit": "metre"},
+                        {"name": "Easting", "abbreviation": "E",
+                         "direction": "east", "unit": "metre"},
+                    ],
+                },
+            }),
+            CrsKind::Projected,
+            Some(1.0),
+        );
+        assert_eq!(crs.authority_axis_order(), Some(AxisOrder::NorthingEasting));
+        assert_eq!(crs.authority_srid(), None);
+    }
+
+    #[test]
+    fn authority_deduction_distinguishes_missing_and_other_axis_order() {
+        // Stub senza `coordinate_system` (la forma dei fixture storici):
+        // nessuna deduzione — l'emissione resta onesta con `unknown`.
+        let crs = ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            serde_json::json!({"type": "GeographicCRS", "name": "WGS 84"}),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(crs.authority_axis_order(), None);
+        assert_eq!(crs.authority_srid(), None);
+        // Un solo asse non permette alcuna deduzione.
+        let one_axis = ResolvedCrs::from_resolved_parts(
+            "EPSG:4326".to_owned(),
+            serde_json::json!({
+                "type": "GeographicCRS",
+                "coordinate_system": {"subtype": "ellipsoidal", "axis": [
+                    {"name": "Geodetic latitude", "direction": "north", "unit": "degree"},
+                ]},
+            }),
+            CrsKind::Geographic,
+            None,
+        );
+        assert_eq!(one_axis.authority_axis_order(), None);
+        // Due direzioni presenti ma fuori dalle quattro combinazioni
+        // canoniche sono un ordine noto non canonico: `other`, non
+        // `unknown` (R4.2/R4.3.3).
+        let non_canonical = ResolvedCrs::from_resolved_parts(
+            "EPSG:32632".to_owned(),
+            serde_json::json!({
+                "type": "ProjectedCRS",
+                "coordinate_system": {"subtype": "Cartesian", "axis": [
+                    {"name": "Up", "direction": "up", "unit": "metre"},
+                    {"name": "Easting", "direction": "east", "unit": "metre"},
+                ]},
+            }),
+            CrsKind::Projected,
+            Some(1.0),
+        );
+        assert_eq!(non_canonical.authority_axis_order(), Some(AxisOrder::Other));
+    }
+
+    #[test]
+    fn authority_code_srid_parses_only_numeric_authority_code() {
+        assert_eq!(authority_code_srid("EPSG:4326"), Some(4326));
+        assert_eq!(authority_code_srid("OGC:CRS84"), None);
+        assert_eq!(authority_code_srid(":4326"), None);
+        assert_eq!(authority_code_srid("EPSG:"), None);
+        assert_eq!(authority_code_srid("EPSG"), None);
+        assert_eq!(authority_code_srid("EPSG:4326.0"), None);
+        assert_eq!(authority_code_srid("EPSG:99999999999999999999"), None);
+        assert_eq!(authority_code_identifier("EPSG:4326"), Some(("EPSG", 4326)));
+        assert_eq!(authority_code_identifier("epsg:4326"), Some(("epsg", 4326)));
+        assert_eq!(authority_code_identifier("FOO:3003"), Some(("FOO", 3003)));
+        assert_eq!(
+            authority_code_identifier("urn:ogc:def:crs:EPSG::4326"),
+            None
+        );
+    }
+
+    #[test]
+    fn definition_form_recognizes_parenthesized_wkt() {
+        // ISO 19162 ammette sia parentesi quadre sia tonde come delimitatori
+        // WKT: una definizione valida non deve degradare a `crs_id`.
+        assert_eq!(
+            definition_form(r#"GEOGCS("WGS 84",DATUM("WGS_1984"))"#),
+            DefinitionForm::Wkt
+        );
+        assert_eq!(
+            definition_form(r#"GEODCRS("WGS 84",DATUM("World Geodetic System 1984"))"#),
+            DefinitionForm::Wkt2
+        );
+    }
+
+    #[test]
+    fn definition_form_recognizes_all_supported_wkt_root_aliases_and_delimiters() {
+        let wkt1 = [
+            "PROJCS",
+            "GEOGCS",
+            "COMPD_CS",
+            "GEOCCS",
+            "VERT_CS",
+            "LOCAL_CS",
+            "FITTED_CS",
+        ];
+        let wkt2 = [
+            "PROJCRS",
+            "PROJECTEDCRS",
+            "DERIVEDPROJCRS",
+            "GEODCRS",
+            "GEODETICCRS",
+            "GEOGCRS",
+            "GEOGRAPHICCRS",
+            "BOUNDCRS",
+            "VERTCRS",
+            "VERTICALCRS",
+            "ENGCRS",
+            "ENGINEERINGCRS",
+            "PARAMETRICCRS",
+            "TIMECRS",
+            "COMPOUNDCRS",
+        ];
+        for delimiter in ['[', '('] {
+            let closing = if delimiter == '[' { ']' } else { ')' };
+            for root in wkt1 {
+                let definition = format!("{root}{delimiter}\"test\"{closing}");
+                assert_eq!(
+                    definition_form(&definition),
+                    DefinitionForm::Wkt,
+                    "{definition}"
+                );
+            }
+            for root in wkt2 {
+                let definition = format!("{root}{delimiter}\"test\"{closing}");
+                assert_eq!(
+                    definition_form(&definition),
+                    DefinitionForm::Wkt2,
+                    "{definition}"
+                );
+            }
+        }
+
+        for invalid in ["GEODETICCRSISH[\"test\"]", "FITTED_CS_EXTRA(\"test\")"] {
+            assert_eq!(definition_form(invalid), DefinitionForm::Other, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn definition_form_classifies_authority_code_projjson_wkt_and_other() {
+        // AuthorityCode: codice numerico e non (OGC:CRS84 e' un
+        // identificatore valido), URN OGC catturati per costruzione.
+        assert_eq!(definition_form("EPSG:4326"), DefinitionForm::AuthorityCode);
+        assert_eq!(definition_form("OGC:CRS84"), DefinitionForm::AuthorityCode);
+        assert_eq!(
+            definition_form("urn:ogc:def:crs:OGC:1.3:CRS84"),
+            DefinitionForm::AuthorityCode
+        );
+        // PROJJSON: oggetto JSON (come lo sniff storico dell'emissione).
+        assert_eq!(
+            definition_form(r#"{"type":"GeographicCRS","name":"WGS 84"}"#),
+            DefinitionForm::Projjson
+        );
+        // WKT1 (Monte Mario, la forma del caso owner) e WKT2.
+        assert_eq!(
+            definition_form(r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario"]]"#),
+            DefinitionForm::Wkt
+        );
+        assert_eq!(
+            definition_form(r#"  GEOGCS["Monte Mario",DATUM["Monte_Mario"]]"#),
+            DefinitionForm::Wkt,
+            "il trim a sinistra non cambia la classifica"
+        );
+        assert_eq!(
+            definition_form(r#"PROJCRS["WGS 84 / UTM zone 32N",BASEGEOGCRS["WGS 84"]]"#),
+            DefinitionForm::Wkt2
+        );
+        assert_eq!(
+            definition_form(r#"GEODCRS["WGS 84",DATUM["World Geodetic System 1984"]]"#),
+            DefinitionForm::Wkt2
+        );
+        assert_eq!(
+            definition_form(r#"projcs["lowercase"]"#),
+            DefinitionForm::Wkt
+        );
+        assert_eq!(
+            definition_form(r#"GeOdCrS["mixed case"]"#),
+            DefinitionForm::Wkt2
+        );
+        for definition in [
+            r#"COMPOUNDCRS["compound"]"#,
+            r#"PARAMETRICCRS["parametric"]"#,
+            r#"TIMECRS["temporal"]"#,
+            r#"DERIVEDPROJCRS["derived"]"#,
+        ] {
+            assert_eq!(
+                definition_form(definition),
+                DefinitionForm::Wkt2,
+                "{definition}"
+            );
+        }
+        // proj-string e forme degeneri: Other (comportamento storico,
+        // `crs_id` — la tabella §2 non ha formato proj).
+        assert_eq!(
+            definition_form("+proj=longlat +datum=WGS84 +no_defs"),
+            DefinitionForm::Other
+        );
+        assert_eq!(definition_form(""), DefinitionForm::Other);
+        assert_eq!(definition_form("EPSG:"), DefinitionForm::Other);
+        assert_eq!(definition_form(":4326"), DefinitionForm::Other);
+        assert_eq!(definition_form("EPSG"), DefinitionForm::Other);
+        assert_eq!(definition_form("EPSG: 4326"), DefinitionForm::Other);
+        assert_eq!(definition_form("not a crs at all"), DefinitionForm::Other);
+        // Un JSON non-oggetto non e' PROJJSON ne' un identificatore; una keyword senza `[` non e' WKT.
+        assert_eq!(definition_form(r#""EPSG:4326""#), DefinitionForm::Other);
+        assert_eq!(definition_form("PROJCS"), DefinitionForm::Other);
+    }
+}

@@ -1,0 +1,6 @@
+/target
+target-*/
+**/*.rs.bk
+# Scratch di lavoro e impostazioni locali: mai committati.
+/.agent-temp/
+/.claude/
