@@ -152,6 +152,38 @@ pub(in crate::analyze) fn analyze_reproject(
     )
 }
 
+/// I produttori creano la colonna geometria: un input che ne ha gia' una si
+/// rifiuta.
+fn require_no_geometry(op: &str, input: &DataContract) -> Result<()> {
+    if !input.geometries.is_empty() {
+        return Err(PlenoraError::Schema(format!(
+            "{op}: l'input ha gia' una colonna geometria"
+        )));
+    }
+    Ok(())
+}
+
+/// Il CRS di un produttore: quello della config `crs` se presente,
+/// altrimenti quello di piano, altrimenti errore `Crs`; poi il requisito del
+/// catalogo.
+fn producer_crs(
+    op: &str,
+    definition: Option<&str>,
+    plan_crs: Option<&ResolvedCrs>,
+    requirement: CrsRequirement,
+) -> Result<ResolvedCrs> {
+    let crs = match definition {
+        Some(definition) => resolve_definition(definition, plan_crs)?,
+        None => plan_crs.cloned().ok_or_else(|| {
+            PlenoraError::Crs(format!(
+                "{op}: CRS obbligatorio (config `crs` o CRS di piano)"
+            ))
+        })?,
+    };
+    validate_requirement(requirement, &[&crs])?;
+    Ok(crs)
+}
+
 /// `from_coords`: nessuna geometria in input; due colonne numeriche
 /// (`Float64`/`Int64`) producono la colonna geometria (nuovo `FieldId`,
 /// `nullable=false`), CRS da config o di piano.
@@ -164,11 +196,7 @@ pub(in crate::analyze) fn analyze_from_coords(
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: FromCoordsConfig = parse_config(op, config)?;
-    if !input.geometries.is_empty() {
-        return Err(PlenoraError::Schema(format!(
-            "{op}: l'input ha gia' una colonna geometria"
-        )));
-    }
+    require_no_geometry(op, input)?;
     let x_column = parsed.x_column.as_deref().unwrap_or(DEFAULT_X_COLUMN);
     let y_column = parsed.y_column.as_deref().unwrap_or(DEFAULT_Y_COLUMN);
     let name = parsed
@@ -196,15 +224,7 @@ pub(in crate::analyze) fn analyze_from_coords(
             "non deve essere vuoto",
         ));
     }
-    let crs = match &parsed.crs {
-        Some(definition) => resolve_definition(definition, plan_crs)?,
-        None => plan_crs.cloned().ok_or_else(|| {
-            PlenoraError::Crs(format!(
-                "{op}: CRS obbligatorio (config `crs` o CRS di piano)"
-            ))
-        })?,
-    };
-    validate_requirement(requirement, &[&crs])?;
+    let crs = producer_crs(op, parsed.crs.as_deref(), plan_crs, requirement)?;
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
     fields.push(new_geometry_field(
@@ -250,11 +270,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
 ) -> Result<DataContract> {
     let parsed: FromWktConfig = parse_config(op, config)?;
     let _ = &parsed.on_error;
-    if !input.geometries.is_empty() {
-        return Err(PlenoraError::Schema(format!(
-            "{op}: l'input ha gia' una colonna geometria"
-        )));
-    }
+    require_no_geometry(op, input)?;
     if !ensure_name(&parsed.wkt_column) {
         return Err(invalid_param(op, "wkt_column", "non deve essere vuoto"));
     }
@@ -281,15 +297,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
     if !ensure_name(name) {
         return Err(invalid_param(op, "output_column", "non deve essere vuoto"));
     }
-    let crs = match &parsed.crs {
-        Some(definition) => resolve_definition(definition, plan_crs)?,
-        None => plan_crs.cloned().ok_or_else(|| {
-            PlenoraError::Crs(format!(
-                "{op}: CRS obbligatorio (config `crs` o CRS di piano)"
-            ))
-        })?,
-    };
-    validate_requirement(requirement, &[&crs])?;
+    let crs = producer_crs(op, parsed.crs.as_deref(), plan_crs, requirement)?;
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
     fields.push(new_geometry_field(
@@ -394,11 +402,7 @@ pub(in crate::analyze) fn analyze_generate_grid(
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: GenerateGridConfig = parse_config(op, config)?;
-    if !input.geometries.is_empty() {
-        return Err(PlenoraError::Schema(format!(
-            "{op}: l'input ha gia' una colonna geometria"
-        )));
-    }
+    require_no_geometry(op, input)?;
     let extent = crate::extensions2::GridExtent::new(
         parsed.extent.xmin,
         parsed.extent.ymin,
@@ -411,15 +415,7 @@ pub(in crate::analyze) fn analyze_generate_grid(
         .unwrap_or(crate::extensions2::GridShape::Square);
     let cells = crate::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
-    let crs = match &parsed.crs {
-        Some(definition) => resolve_definition(definition, plan_crs)?,
-        None => plan_crs.cloned().ok_or_else(|| {
-            PlenoraError::Crs(format!(
-                "{op}: CRS obbligatorio (config `crs` o CRS di piano)"
-            ))
-        })?,
-    };
-    validate_requirement(requirement, &[&crs])?;
+    let crs = producer_crs(op, parsed.crs.as_deref(), plan_crs, requirement)?;
     let mut fields = vec![new_geometry_field(
         DEFAULT_GEOMETRY_COLUMN,
         &crs,
