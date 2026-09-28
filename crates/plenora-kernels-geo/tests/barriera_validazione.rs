@@ -1,9 +1,10 @@
 //! I due reperti che `fuzz wkb_contract` ha trovato, e cio' che la barriera
 //! deve garantire.
 //!
-//! # Perche' i byte stanno qui per intero
+//! # Perche' i byte stanno per intero in `tests/fixtures/`
 //!
-//! Perche' sono la prova. Un caso che li ricostruisse da una descrizione
+//! Perche' sono la prova, e un solo file per reperto la tiene uguale per tutti
+//! i casi che la leggono. Un caso che li ricostruisse da una descrizione
 //! proverebbe che la descrizione e' sbagliata quanto il codice; ridurli a un
 //! caso «equivalente» scritto a mano vorrebbe dire scegliere che cosa conta,
 //! che e' la scelta che il fuzzer ha smentito.
@@ -53,31 +54,9 @@ use plenora_core::ErrorCategory;
 use plenora_kernels_geo::geometry_from_wkb;
 
 /// Il reperto della campagna schedulata del 5 settembre 2026.
-const REPERTO_A: &[u8] = &[
-    1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
-    1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
-    116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
-    0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
-    255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
-    0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-];
+const REPERTO_A: &[u8] = include_bytes!("fixtures/reperto_a.wkb");
 /// Il reperto della campagna schedulata del 4 settembre 2026.
-const REPERTO_B: &[u8] = &[
-    0, 0, 0, 0, 6, 0, 0, 0, 3, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 8, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 210, 210, 210, 210, 122, 210, 210, 210, 210, 210, 210, 210, 1, 1, 4, 255, 1,
-    1, 1, 1, 1, 1, 1, 255, 254, 254, 254, 254, 254, 254, 250, 1, 1, 1, 1, 42, 1, 1, 1, 1, 1, 1, 0,
-    0, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 64, 1, 1, 1, 1, 1, 1, 1, 65, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 8, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 128, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 1, 1, 1,
-    1, 1, 129, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 255, 254,
-    254, 254, 254, 254, 254, 250, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 50, 0, 0, 0, 0, 0, 4, 1, 1,
-    1, 1, 0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 0,
-];
+const REPERTO_B: &[u8] = include_bytes!("fixtures/reperto_b.wkb");
 
 /// **Col candidato esatto, entrambi i reperti sono un ingresso invalido — in
 /// ogni profilo.**
