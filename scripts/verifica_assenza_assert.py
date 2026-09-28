@@ -78,7 +78,12 @@ PRIMA_DI_ATTRIBUTO = ';{}]'
 # altro: cercare la sottosequenza ovunque farebbe scambiare per
 # dichiarazione di modulo anche `register!(mod vittima;)`, e un file di
 # produzione finirebbe nell'insieme escluso senza essere mai esaminato.
-MOD_SU_FILE = re.compile(r'^\s*(?:pub\s+(?:\([^)]*\)\s*)?)?mod\s+([A-Za-z0-9_]+)\s*$')
+#
+# La visibilita' si scrive attaccata o staccata: `pub(crate) mod x;` e
+# `pub (crate) mod x;` sono la stessa dichiarazione, e una forma non
+# riconosciuta lascerebbe un modulo di test fra i file di produzione.
+MOD_SU_FILE = re.compile(
+    r'^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z0-9_]+)\s*$')
 
 
 def ripulisci(sorgente):
@@ -508,6 +513,16 @@ def autoverifica_esclusione_file():
             '#[cfg(test)]\n// commento\n#[allow(deprecated)]\nmod tests;\n'):
         raise SystemExit(
             'autoverifica fallita: modulo di test con attributi non escluso')
+    for visibilita in ('pub', 'pub(crate)', 'pub (crate)', 'pub(super)',
+                       'pub(in crate::x)'):
+        if atteso not in esclusi('#[cfg(test)]\n%s mod tests;\n' % visibilita):
+            raise SystemExit(
+                'autoverifica fallita: modulo di test dichiarato %s non '
+                'escluso' % visibilita)
+    if esclusi('#[cfg(test)]\npubcrate mod tests;\n'):
+        raise SystemExit(
+            'autoverifica fallita: una visibilita\' inesistente e\' stata '
+            'presa per una dichiarazione di modulo')
     # Dichiarazione FINTA dentro una macro: non governa nulla, e il file
     # omonimo resta codice di produzione da esaminare.
     vittima = os.path.join(RADICE, 'crates', 'x', 'src', 'vittima.rs')
