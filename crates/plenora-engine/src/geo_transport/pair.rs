@@ -821,7 +821,7 @@ pub fn pair_arrow(
 pub fn pair_arrow_with_format(
     left_reader: impl Read,
     right_reader: impl Read,
-    mut writer: impl Write,
+    writer: impl Write,
     schema: &PairArrowSchema,
     output_format: ArrowOutputFormat,
 ) -> Result<PairArrowSummary, ArrowTransportError> {
