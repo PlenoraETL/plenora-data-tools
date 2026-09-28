@@ -374,6 +374,40 @@ fn run_ok(
         .expect("stream ok")
 }
 
+/// Oracolo sul successo: i due percorsi producono gli stessi batch, il
+/// gruppo entra davvero nel runner fuso (due volte, per tutte le fixture che
+/// lo usano) e per ogni nodo di `nodes` le righe in entrata e in uscita
+/// coincidono. `messaggio` accompagna il confronto dei batch, `prefisso` quello
+/// delle righe. Restituisce i batch del percorso fuso.
+fn assert_oracle_ok(
+    case: &str,
+    plan: &Value,
+    fixture: &dyn Fn() -> Vec<RecordBatch>,
+    messaggio: &str,
+    nodes: &[&str],
+    prefisso: &str,
+) -> Vec<RecordBatch> {
+    let (fused_batches, fused_metrics) = run_ok(plan, fixture(), true);
+    let (plain_batches, plain_metrics) = run_ok(plan, fixture(), false);
+    assert_percorsi(
+        case,
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 2 },
+    );
+    assert_eq!(fused_batches, plain_batches, "{messaggio}");
+    for node in nodes {
+        let fused_node = &fused_metrics.nodes[*node];
+        let plain_node = &plain_metrics.nodes[*node];
+        assert_eq!(
+            (fused_node.rows_in, fused_node.rows_out),
+            (plain_node.rows_in, plain_node.rows_out),
+            "{prefisso}{node}: righe 1:1 in A/B"
+        );
+    }
+    fused_batches
+}
+
 // ---------------------------------------------------------------------------
 // (a) Percorso felice multi-tipo
 // ---------------------------------------------------------------------------
@@ -488,27 +522,14 @@ fn multi_type_batches() -> Vec<RecordBatch> {
 fn a_happy_path_multi_type_byte_per_byte() {
     let plan = happy_path_plan();
     assert_group_formation(&plan, &["t", "d", "r", "s", "k", "e"]);
-    let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
-    let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_percorsi(
+    assert_oracle_ok(
         "a_happy_path_multi_type_byte_per_byte",
-        &fused_metrics,
-        &plain_metrics,
-        Origine::RunnerFuso { gruppi: 2 },
+        &plan,
+        &multi_type_batches,
+        "output fuso diverso dal non fuso",
+        &["t", "d", "r", "s", "k", "e"],
+        "",
     );
-    assert_eq!(
-        fused_batches, plain_batches,
-        "output fuso diverso dal non fuso"
-    );
-    for node in ["t", "d", "r", "s", "k", "e"] {
-        let fused_node = &fused_metrics.nodes[node];
-        let plain_node = &plain_metrics.nodes[node];
-        assert_eq!(
-            (fused_node.rows_in, fused_node.rows_out),
-            (plain_node.rows_in, plain_node.rows_out),
-            "{node}: righe 1:1 in A/B"
-        );
-    }
 }
 
 /// Identita' contratto/schema con fusione on/off (D12.5): la fusione non puo'
@@ -1140,27 +1161,14 @@ fn happy_path_terminal_measure_byte_per_byte() {
         ("misura-to_wkt", terminal_to_wkt_plan(), vec!["t", "w"]),
     ] {
         assert_group_formation(&plan, &nodes);
-        let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
-        let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-        assert_percorsi(
+        let fused_batches = assert_oracle_ok(
             case,
-            &fused_metrics,
-            &plain_metrics,
-            Origine::RunnerFuso { gruppi: 2 },
+            &plan,
+            &multi_type_batches,
+            &format!("{case}: output fuso diverso dal non fuso"),
+            &nodes,
+            &format!("{case}: "),
         );
-        assert_eq!(
-            fused_batches, plain_batches,
-            "{case}: output fuso diverso dal non fuso"
-        );
-        for node in &nodes {
-            let fused_node = &fused_metrics.nodes[*node];
-            let plain_node = &plain_metrics.nodes[*node];
-            assert_eq!(
-                (fused_node.rows_in, fused_node.rows_out),
-                (plain_node.rows_in, plain_node.rows_out),
-                "{case}: {node}: righe 1:1 in A/B"
-            );
-        }
         // La colonna geometria sopravvive (indice 1, Binary) e la misura
         // (indice 2) e' null esattamente dove la geometria e' null (riga 4
         // del batch 0 della fixture multi-tipo).
@@ -1364,27 +1372,14 @@ fn ogc_invalid_input_to_make_valid_repaired_identically() {
 
     let plan = make_valid_first_plan();
     assert_group_formation(&plan, &["mv", "t"]);
-    let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
-    let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
-    assert_percorsi(
+    let fused_batches = assert_oracle_ok(
         "ogc_invalid_input_to_make_valid_repaired_identically",
-        &fused_metrics,
-        &plain_metrics,
-        Origine::RunnerFuso { gruppi: 2 },
+        &plan,
+        &invalid_then_valid_batches,
+        "make_valid-in-testa: riparazione diversa tra i percorsi",
+        &["mv", "t"],
+        "make_valid-in-testa: ",
     );
-    assert_eq!(
-        fused_batches, plain_batches,
-        "make_valid-in-testa: riparazione diversa tra i percorsi"
-    );
-    for node in ["mv", "t"] {
-        let fused_node = &fused_metrics.nodes[node];
-        let plain_node = &plain_metrics.nodes[node];
-        assert_eq!(
-            (fused_node.rows_in, fused_node.rows_out),
-            (plain_node.rows_in, plain_node.rows_out),
-            "make_valid-in-testa: {node}: righe 1:1 in A/B"
-        );
-    }
     // Nessuna cella null persa/guadagnata (riga 3 del primo batch) e output
     // riparato OGC-valido su tutte le celle.
     let first = fused_batches[0]
@@ -1424,17 +1419,13 @@ fn make_valid_then_measure_boundary_bytes_match() {
         "output": "a",
     });
     assert_group_formation(&plan, &["mv", "a"]);
-    let (fused_batches, fused_metrics) = run_ok(&plan, invalid_then_valid_batches(), true);
-    let (plain_batches, plain_metrics) = run_ok(&plan, invalid_then_valid_batches(), false);
-    assert_percorsi(
+    assert_oracle_ok(
         "make_valid_then_measure_boundary_bytes_match",
-        &fused_metrics,
-        &plain_metrics,
-        Origine::RunnerFuso { gruppi: 2 },
-    );
-    assert_eq!(
-        fused_batches, plain_batches,
-        "make_valid-poi-misura: byte di confine o misura diversi tra i percorsi"
+        &plan,
+        &invalid_then_valid_batches,
+        "make_valid-poi-misura: byte di confine o misura diversi tra i percorsi",
+        &[],
+        "",
     );
 }
 
@@ -1448,27 +1439,14 @@ fn make_valid_then_measure_boundary_bytes_match() {
 fn reproject_chain_byte_per_byte_with_target_crs_schema() {
     let plan = reproject_chain_plan();
     assert_group_formation(&plan, &["p", "t"]);
-    let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
-    let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_percorsi(
+    let fused_batches = assert_oracle_ok(
         "reproject_chain_byte_per_byte_with_target_crs_schema",
-        &fused_metrics,
-        &plain_metrics,
-        Origine::RunnerFuso { gruppi: 2 },
+        &plan,
+        &multi_type_batches,
+        "reproject-in-catena: output fuso diverso dal non fuso",
+        &["p", "t"],
+        "reproject-in-catena: ",
     );
-    assert_eq!(
-        fused_batches, plain_batches,
-        "reproject-in-catena: output fuso diverso dal non fuso"
-    );
-    for node in ["p", "t"] {
-        let fused_node = &fused_metrics.nodes[node];
-        let plain_node = &plain_metrics.nodes[node];
-        assert_eq!(
-            (fused_node.rows_in, fused_node.rows_out),
-            (plain_node.rows_in, plain_node.rows_out),
-            "reproject-in-catena: {node}: righe 1:1 in A/B"
-        );
-    }
     let metadata = format!("{:?}", fused_batches[0].schema().field(1).metadata());
     assert!(
         metadata.contains("EPSG:3857"),
@@ -1484,17 +1462,13 @@ fn reproject_chain_byte_per_byte_with_target_crs_schema() {
 fn reproject_to_geographic_with_terminal_measure() {
     let plan = reproject_geographic_measure_plan();
     assert_group_formation(&plan, &["p", "w"]);
-    let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
-    let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_percorsi(
+    let fused_batches = assert_oracle_ok(
         "reproject_to_geographic_with_terminal_measure",
-        &fused_metrics,
-        &plain_metrics,
-        Origine::RunnerFuso { gruppi: 2 },
-    );
-    assert_eq!(
-        fused_batches, plain_batches,
-        "reproject-geografico: output fuso diverso dal non fuso"
+        &plan,
+        &multi_type_batches,
+        "reproject-geografico: output fuso diverso dal non fuso",
+        &[],
+        "",
     );
     let metadata = format!("{:?}", fused_batches[0].schema().field(1).metadata());
     assert!(
@@ -1512,27 +1486,14 @@ fn reproject_to_geographic_with_terminal_measure() {
 fn make_valid_mid_chain_byte_per_byte() {
     let plan = make_valid_mid_chain_plan();
     assert_group_formation(&plan, &["t", "mv", "r"]);
-    let (fused_batches, fused_metrics) = run_ok(&plan, multi_type_batches(), true);
-    let (plain_batches, plain_metrics) = run_ok(&plan, multi_type_batches(), false);
-    assert_percorsi(
+    assert_oracle_ok(
         "make_valid_mid_chain_byte_per_byte",
-        &fused_metrics,
-        &plain_metrics,
-        Origine::RunnerFuso { gruppi: 2 },
+        &plan,
+        &multi_type_batches,
+        "make_valid-a-meta-catena: output fuso diverso dal non fuso",
+        &["t", "mv", "r"],
+        "make_valid-a-meta-catena: ",
     );
-    assert_eq!(
-        fused_batches, plain_batches,
-        "make_valid-a-meta-catena: output fuso diverso dal non fuso"
-    );
-    for node in ["t", "mv", "r"] {
-        let fused_node = &fused_metrics.nodes[node];
-        let plain_node = &plain_metrics.nodes[node];
-        assert_eq!(
-            (fused_node.rows_in, fused_node.rows_out),
-            (plain_node.rows_in, plain_node.rows_out),
-            "make_valid-a-meta-catena: {node}: righe 1:1 in A/B"
-        );
-    }
 }
 
 /// (d) architettura.md#geometrie D12.6: con input geometrico la validazione WKB atomica drena
@@ -1657,20 +1618,6 @@ const REPERTO_VALIDAZIONE: &[u8] = &[
     0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
-fn validazione_interrotta_plan() -> Value {
-    json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [
-            {"id": "t", "op": "geo.translate", "in": ["main"],
-             "config": {"x_offset": 1.0, "y_offset": 1.0}},
-            {"id": "s", "op": "geo.simplify", "in": ["t"], "config": {"tolerance": 0.01}},
-            {"id": "e", "op": "geo.envelope", "in": ["s"], "config": {}},
-        ],
-        "output": "e",
-    })
-}
-
 fn validazione_interrotta_batches() -> Vec<RecordBatch> {
     vec![geo_batch(&[0], &[Some(REPERTO_VALIDAZIONE.to_vec())])]
 }
@@ -1696,7 +1643,9 @@ fn validazione_interrotta_batches() -> Vec<RecordBatch> {
 /// dati, non della forma del piano.
 #[test]
 fn una_validazione_interrotta_non_e_colpa_del_piano_nei_due_percorsi() {
-    let plan = validazione_interrotta_plan();
+    // La catena di (c): tre nodi fondibili, con il reperto al posto del WKB
+    // malformato.
+    let plan = malformed_input_plan();
     let signature = assert_oracle_error(
         "validazione-interrotta",
         &plan,
