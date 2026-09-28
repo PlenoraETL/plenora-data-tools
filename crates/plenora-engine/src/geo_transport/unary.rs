@@ -2214,32 +2214,62 @@ fn voronoi_batches(
     output_fields[geometry_index] = geometry_output_field(geometry_column, output_crs)?;
     let output_schema = Schema::new_with_metadata(output_fields, schema.metadata().clone());
 
+    let output_schema = std::sync::Arc::new(output_schema);
+    let output_batches = geometrie_sulle_righe(
+        batches,
+        geometry_index,
+        &output_schema,
+        &positions,
+        &encoded.into_iter().map(Some).collect::<Vec<_>>(),
+    )?;
+    Ok((output_schema, output_batches))
+}
+
+/// Ridistribuisce sulle righe i risultati di un kernel che ha lavorato sui
+/// soli valori non null: `risultati[i]` va alla riga globale `posizioni[i]`,
+/// ogni altra riga resta null. Gli attributi restano quelli di `batches`.
+///
+/// Il kernel deve rendere un risultato per posizione, e le posizioni devono
+/// essere crescenti e dentro le righe: altrimenti un risultato in piu'
+/// sparirebbe in silenzio, e uno in meno lascerebbe una riga senza il suo.
+/// Una violazione e' un difetto nostro, non dell'input: `Internal`.
+pub(super) fn geometrie_sulle_righe(
+    batches: &[RecordBatch],
+    geometry_index: usize,
+    output_schema: &SchemaRef,
+    posizioni: &[u64],
+    risultati: &[Option<Vec<u8>>],
+) -> Result<Vec<RecordBatch>, ArrowTransportError> {
+    if risultati.len() != posizioni.len() {
+        return Err(ArrowTransportError::Internal(
+            "il kernel non ha reso un risultato per ogni riga non nulla",
+        ));
+    }
+    let mut attesi = posizioni.iter().zip(risultati).peekable();
     let mut output_batches = Vec::with_capacity(batches.len());
-    let mut cursor = 0_usize;
     let mut row_offset = 0_u64;
     for batch in batches {
         let mut values: Vec<Option<&[u8]>> = Vec::with_capacity(batch.num_rows());
         for row in 0..batch.num_rows() as u64 {
-            if cursor < positions.len() && positions[cursor] == row_offset + row {
-                values.push(Some(encoded[cursor].as_slice()));
-                cursor += 1;
-            } else {
-                values.push(None);
+            match attesi.next_if(|(posizione, _)| **posizione == row_offset + row) {
+                Some((_, valore)) => values.push(valore.as_deref()),
+                None => values.push(None),
             }
         }
         row_offset += batch.num_rows() as u64;
         let mut columns = batch.columns().to_vec();
         columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(values));
         output_batches.push(
-            plenora_core::batch_with_rows(
-                std::sync::Arc::new(output_schema.clone()),
-                columns,
-                batch.num_rows(),
-            )
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
+            plenora_core::batch_with_rows(output_schema.clone(), columns, batch.num_rows())
+                .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
         );
     }
-    Ok((std::sync::Arc::new(output_schema), output_batches))
+    if attesi.next().is_some() {
+        return Err(ArrowTransportError::Internal(
+            "posizioni dei risultati non crescenti o oltre le righe",
+        ));
+    }
+    Ok(output_batches)
 }
 
 /// `clean_topology` (collettiva): cleanup ordinato dell'intera tabella
@@ -2306,32 +2336,15 @@ fn clean_topology_batches(
     output_fields[geometry_index] = geometry_output_field(geometry_column, output_crs)?;
     let output_schema = Schema::new_with_metadata(output_fields, schema.metadata().clone());
 
-    let mut output_batches = Vec::with_capacity(batches.len());
-    let mut cursor = 0_usize;
-    let mut row_offset = 0_u64;
-    for batch in batches {
-        let mut values: Vec<Option<&[u8]>> = Vec::with_capacity(batch.num_rows());
-        for row in 0..batch.num_rows() as u64 {
-            if cursor < positions.len() && positions[cursor] == row_offset + row {
-                values.push(encoded[cursor].as_deref());
-                cursor += 1;
-            } else {
-                values.push(None);
-            }
-        }
-        row_offset += batch.num_rows() as u64;
-        let mut columns = batch.columns().to_vec();
-        columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(values));
-        output_batches.push(
-            plenora_core::batch_with_rows(
-                std::sync::Arc::new(output_schema.clone()),
-                columns,
-                batch.num_rows(),
-            )
-            .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
-        );
-    }
-    Ok((std::sync::Arc::new(output_schema), output_batches))
+    let output_schema = std::sync::Arc::new(output_schema);
+    let output_batches = geometrie_sulle_righe(
+        batches,
+        geometry_index,
+        &output_schema,
+        &positions,
+        &encoded,
+    )?;
+    Ok((output_schema, output_batches))
 }
 
 /// `geometry_diagnostics` (1:1 struct): la colonna geometria e' sostituita
@@ -3008,6 +3021,67 @@ mod tests {
     use geo::{line_string, polygon, LineString, MultiPoint, Point};
 
     use super::*;
+
+    /// Due batch da 2 e 1 righe, attributo `id` e geometria nulla.
+    fn righe_per_la_ridistribuzione() -> (Vec<RecordBatch>, SchemaRef) {
+        let schema = std::sync::Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt64, false),
+            Field::new("geometry", DataType::Binary, true),
+        ]));
+        let batch = |ids: Vec<u64>| {
+            let n = ids.len();
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    std::sync::Arc::new(UInt64Array::from(ids)),
+                    std::sync::Arc::new(BinaryArray::from(vec![None::<&[u8]>; n])),
+                ],
+            )
+            .unwrap()
+        };
+        (vec![batch(vec![0, 1]), batch(vec![2])], schema)
+    }
+
+    #[test]
+    fn la_ridistribuzione_mette_ogni_risultato_alla_sua_riga() {
+        let (batches, schema) = righe_per_la_ridistribuzione();
+        let uscita =
+            geometrie_sulle_righe(&batches, 1, &schema, &[0, 2], &[Some(vec![7]), None]).unwrap();
+        let colonna = |indice: usize| {
+            uscita[indice]
+                .column(1)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .unwrap()
+                .iter()
+                .map(|valore| valore.map(<[u8]>::to_vec))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(colonna(0), vec![Some(vec![7]), None]);
+        assert_eq!(colonna(1), vec![None]);
+    }
+
+    #[test]
+    fn la_ridistribuzione_rifiuta_risultati_in_piu_o_in_meno() {
+        let (batches, schema) = righe_per_la_ridistribuzione();
+        for risultati in [vec![Some(vec![1])], vec![Some(vec![1]), None, None]] {
+            assert!(matches!(
+                geometrie_sulle_righe(&batches, 1, &schema, &[0, 2], &risultati),
+                Err(ArrowTransportError::Internal(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn la_ridistribuzione_rifiuta_posizioni_fuori_ordine_o_oltre_le_righe() {
+        let (batches, schema) = righe_per_la_ridistribuzione();
+        for posizioni in [[2_u64, 0], [0, 3]] {
+            assert!(matches!(
+                geometrie_sulle_righe(&batches, 1, &schema, &posizioni, &[None, None]),
+                Err(ArrowTransportError::Internal(_))
+            ));
+        }
+    }
 
     #[test]
     fn simplify_rifiuto_numerico_non_pubblica_riga_valida_e_non_accusa_input() {

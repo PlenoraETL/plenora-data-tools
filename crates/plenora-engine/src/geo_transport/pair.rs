@@ -48,7 +48,8 @@ use super::transport::{
 use super::unary::geometry_type_name;
 use super::unary::{
     batch_geometry_cells, canonical_legacy_output, encode_geometry, expect_line_string,
-    expect_point, geometry_column_index, geometry_output_field, spatial_predicate_name,
+    expect_point, geometrie_sulle_righe, geometry_column_index, geometry_output_field,
+    spatial_predicate_name,
 };
 
 // --- Forma binary + lineage -----------------------------------------------
@@ -663,6 +664,32 @@ enum AppendedColumn {
     Float64(Vec<Option<f64>>),
 }
 
+impl AppendedColumn {
+    const fn len(&self) -> usize {
+        match self {
+            Self::Boolean(values) => values.len(),
+            Self::UInt64(values) => values.len(),
+            Self::Float64(values) => values.len(),
+        }
+    }
+}
+
+/// Un valore per riga di left: ne' uno in piu', che sparirebbe in silenzio,
+/// ne' uno in meno, che lascerebbe una riga senza il suo. Una violazione e'
+/// un difetto nostro, non dell'input: `Internal`.
+fn un_valore_per_riga(
+    left_batches: &[RecordBatch],
+    valori: usize,
+) -> Result<(), ArrowTransportError> {
+    let righe: usize = left_batches.iter().map(RecordBatch::num_rows).sum();
+    if righe != valori {
+        return Err(ArrowTransportError::Internal(
+            "il kernel non ha reso un valore per ogni riga di left",
+        ));
+    }
+    Ok(())
+}
+
 /// Accoda una colonna scalare alle colonne left preservando i batch.
 fn append_column_batches(
     left_schema: &SchemaRef,
@@ -670,6 +697,7 @@ fn append_column_batches(
     field: Field,
     values: &AppendedColumn,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
+    un_valore_per_riga(left_batches, values.len())?;
     let mut output_fields: Vec<Field> = left_schema
         .fields()
         .iter()
@@ -714,6 +742,7 @@ fn replace_geometry_batches(
     output_crs: &str,
     values: &[Option<Vec<u8>>],
 ) -> Result<(SchemaRef, Vec<RecordBatch>), ArrowTransportError> {
+    un_valore_per_riga(left_batches, values.len())?;
     let geometry_index = geometry_column_index(left_schema, geometry_column)?;
     let mut output_fields: Vec<Field> = left_schema
         .fields()
@@ -861,30 +890,12 @@ pub fn pair_arrow_with_format(
                 });
             }
             // Output allineato a left: colonne invariate, `distance` in coda.
-            let mut output_fields: Vec<Field> = left_schema
-                .fields()
-                .iter()
-                .map(|field| field.as_ref().clone())
-                .collect();
-            output_fields.push(Field::new(DISTANCE_COLUMN, DataType::Float64, true));
-            let out_schema = std::sync::Arc::new(Schema::new_with_metadata(
-                output_fields,
-                left_schema.metadata().clone(),
-            ));
-            let mut out_batches = Vec::with_capacity(left_batches.len());
-            let mut offset = 0_usize;
-            for batch in &left_batches {
-                let values: Vec<Option<f64>> =
-                    distances[offset..offset + batch.num_rows()].to_vec();
-                offset += batch.num_rows();
-                let mut columns = batch.columns().to_vec();
-                columns.push(std::sync::Arc::new(Float64Array::from(values)));
-                out_batches.push(
-                    plenora_core::batch_with_rows(out_schema.clone(), columns, batch.num_rows())
-                        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
-                );
-            }
-            (out_schema, out_batches)
+            append_column_batches(
+                &left_schema,
+                &left_batches,
+                Field::new(DISTANCE_COLUMN, DataType::Float64, true),
+                &AppendedColumn::Float64(distances),
+            )?
         }
         PairOperation::Nearest => {
             let matches = nearest_matches_validated(
@@ -948,27 +959,13 @@ pub fn pair_arrow_with_format(
             for geometry in &clipped {
                 encoded.push(geometry.as_ref().map(encode_geometry).transpose()?);
             }
-            let mut out_batches = Vec::with_capacity(left_batches.len());
-            let mut cursor = 0_usize;
-            let mut row_offset = 0_u64;
-            for batch in &left_batches {
-                let mut values: Vec<Option<&[u8]>> = Vec::with_capacity(batch.num_rows());
-                for row in 0..batch.num_rows() as u64 {
-                    if cursor < positions.len() && positions[cursor] == row_offset + row {
-                        values.push(encoded[cursor].as_deref());
-                        cursor += 1;
-                    } else {
-                        values.push(None);
-                    }
-                }
-                row_offset += batch.num_rows() as u64;
-                let mut columns = batch.columns().to_vec();
-                columns[geometry_index] = std::sync::Arc::new(BinaryArray::from_iter(values));
-                out_batches.push(
-                    plenora_core::batch_with_rows(out_schema.clone(), columns, batch.num_rows())
-                        .map_err(|error| ArrowTransportError::Arrow(error.to_string()))?,
-                );
-            }
+            let out_batches = geometrie_sulle_righe(
+                &left_batches,
+                geometry_index,
+                &out_schema,
+                &positions,
+                &encoded,
+            )?;
             (out_schema, out_batches)
         }
         PairOperation::Overlay => {
@@ -1417,4 +1414,58 @@ pub fn pair_arrow_with_format(
         output_rows,
         checksum,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn left_di(righe: &[usize]) -> (SchemaRef, Vec<RecordBatch>) {
+        let schema =
+            std::sync::Arc::new(Schema::new(vec![Field::new("id", DataType::UInt64, false)]));
+        let batches = righe
+            .iter()
+            .map(|&n| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![std::sync::Arc::new(UInt64Array::from(vec![0_u64; n]))],
+                )
+                .unwrap()
+            })
+            .collect();
+        (schema, batches)
+    }
+
+    #[test]
+    fn una_colonna_accodata_esige_un_valore_per_riga_di_left() {
+        let (schema, batches) = left_di(&[2, 1]);
+        let campo = || Field::new("d", DataType::Float64, true);
+        for valori in [vec![Some(1.0); 2], vec![Some(1.0); 4]] {
+            assert!(matches!(
+                append_column_batches(&schema, &batches, campo(), &AppendedColumn::Float64(valori)),
+                Err(ArrowTransportError::Internal(_))
+            ));
+        }
+        let (_, uscita) = append_column_batches(
+            &schema,
+            &batches,
+            campo(),
+            &AppendedColumn::Float64(vec![Some(1.0), None, Some(3.0)]),
+        )
+        .unwrap();
+        assert_eq!(
+            uscita.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+            [2, 1]
+        );
+    }
+
+    #[test]
+    fn una_geometria_sostituita_esige_un_valore_per_riga_di_left() {
+        let (_, batches) = left_di(&[2, 1]);
+        assert!(matches!(
+            un_valore_per_riga(&batches, 2),
+            Err(ArrowTransportError::Internal(_))
+        ));
+        assert!(un_valore_per_riga(&batches, 3).is_ok());
+    }
 }
