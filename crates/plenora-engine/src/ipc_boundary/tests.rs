@@ -18,12 +18,18 @@ fn batch() -> RecordBatch {
         .expect("batch valido")
 }
 
-fn write_file_format(path: &std::path::Path) {
-    let batch = batch();
+/// Scrive i batch in file format, con lo schema del primo.
+fn scrivi_file(path: &std::path::Path, batches: &[&RecordBatch]) {
     let file = fs::File::create(path).expect("create");
-    let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
-    writer.write(&batch).expect("write");
+    let mut writer = FileWriter::try_new(file, &batches[0].schema()).expect("writer");
+    for batch in batches {
+        writer.write(batch).expect("write");
+    }
     writer.finish().expect("finish");
+}
+
+fn write_file_format(path: &std::path::Path) {
+    scrivi_file(path, &[&batch()]);
 }
 
 fn write_stream_format(path: &std::path::Path) {
@@ -64,11 +70,7 @@ fn il_confine_accetta_file_multi_batch_con_dizionari() {
     let path = directory.path().join("dizionari.arrow");
     let primo = dictionary_batch(&[0, 1]);
     let secondo = dictionary_batch(&[2, 0]);
-    let file = fs::File::create(&path).expect("create");
-    let mut writer = FileWriter::try_new(file, &primo.schema()).expect("writer");
-    writer.write(&primo).expect("write");
-    writer.write(&secondo).expect("write");
-    writer.finish().expect("finish");
+    scrivi_file(&path, &[&primo, &secondo]);
 
     let (schema, batches) = open(&path, &IpcLimits::default()).expect("apertura multi-batch");
     assert_eq!(schema.fields().len(), 1);
@@ -242,11 +244,7 @@ fn il_confine_rifiuta_un_footer_con_blocchi_sovrapposti() {
     let directory = tempfile::tempdir().expect("tempdir");
     let valido = directory.path().join("due-batch.arrow");
     let batch = batch();
-    let file = fs::File::create(&valido).expect("create");
-    let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
-    writer.write(&batch).expect("write");
-    writer.write(&batch).expect("write");
-    writer.finish().expect("finish");
+    scrivi_file(&valido, &[&batch, &batch]);
 
     let mut bytes = fs::read(&valido).expect("read");
     let primo = find_footer_block(&bytes);
@@ -273,11 +271,7 @@ fn il_confine_applica_i_tetti_su_body_e_numero_di_messaggi() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join("limiti.arrow");
     let batch = batch();
-    let file = fs::File::create(&path).expect("create");
-    let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
-    writer.write(&batch).expect("write");
-    writer.write(&batch).expect("write");
-    writer.finish().expect("finish");
+    scrivi_file(&path, &[&batch, &batch]);
 
     let body_stretto = IpcLimits {
         max_body_bytes: 1,
@@ -378,12 +372,7 @@ fn il_confine_applica_il_tetto_sui_record_batch_anche_al_file_format() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join("tre-batch.arrow");
     let batch = batch();
-    let file = fs::File::create(&path).expect("create");
-    let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
-    for _ in 0..3 {
-        writer.write(&batch).expect("write");
-    }
-    writer.finish().expect("finish");
+    scrivi_file(&path, &[&batch, &batch, &batch]);
 
     let stretto = IpcLimits {
         max_record_batches: 2,
@@ -411,11 +400,7 @@ fn il_confine_applica_il_tetto_sui_record_batch_anche_al_file_format() {
     let con_dizionari = directory.path().join("dizionari-due.arrow");
     let primo = dictionary_batch(&[0, 1]);
     let secondo = dictionary_batch(&[2, 0]);
-    let file = fs::File::create(&con_dizionari).expect("create");
-    let mut writer = FileWriter::try_new(file, &primo.schema()).expect("writer");
-    writer.write(&primo).expect("write");
-    writer.write(&secondo).expect("write");
-    writer.finish().expect("finish");
+    scrivi_file(&con_dizionari, &[&primo, &secondo]);
     let due = IpcLimits {
         max_record_batches: 2,
         ..IpcLimits::default()
@@ -482,17 +467,11 @@ fn scrivi(
     formato: IpcFormat,
 ) -> std::path::PathBuf {
     let percorso = directory.join(nome);
-    let file = fs::File::create(&percorso).expect("create");
     match formato {
-        IpcFormat::File => {
-            let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
-            writer.write(batch).expect("write");
-            writer.finish().expect("finish");
-        }
+        IpcFormat::File => scrivi_file(&percorso, &[batch]),
         IpcFormat::Stream => {
-            let mut writer =
-                plenora_core::arrow::ipc::writer::StreamWriter::try_new(file, &batch.schema())
-                    .expect("writer");
+            let file = fs::File::create(&percorso).expect("create");
+            let mut writer = StreamWriter::try_new(file, &batch.schema()).expect("writer");
             writer.write(batch).expect("write");
             writer.finish().expect("finish");
         }
@@ -914,10 +893,7 @@ fn scrivi_file_con_dizionario(path: &std::path::Path, valore: &str) {
         false,
     )]));
     let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).expect("batch valido");
-    let file = fs::File::create(path).expect("create");
-    let mut writer = FileWriter::try_new(file, &batch.schema()).expect("writer");
-    writer.write(&batch).expect("write");
-    writer.finish().expect("finish");
+    scrivi_file(path, &[&batch]);
 }
 
 /// `header_schema` non decodifica i dizionari (`F4-5`): un dizionario i cui
@@ -982,10 +958,7 @@ fn lo_schema_dal_footer_coincide_con_quello_di_file_reader() {
             vec![Arc::new(Int64Array::from(vec![7_i64]))],
         )
         .expect("batch valido");
-        let file = fs::File::create(&con_metadati).expect("create");
-        let mut writer = FileWriter::try_new(file, &schema).expect("writer");
-        writer.write(&batch).expect("write");
-        writer.finish().expect("finish");
+        scrivi_file(&con_metadati, &[&batch]);
     }
 
     for path in [&semplice, &con_dizionario, &con_metadati] {
