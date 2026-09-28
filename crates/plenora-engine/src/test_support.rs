@@ -8,6 +8,8 @@
 use std::io::Read;
 use std::sync::Arc;
 
+use ::geo::{polygon, Geometry};
+use geozero::{CoordDimensions, ToWkb};
 use serde_json::json;
 
 use plenora_core::arrow::array::{
@@ -97,6 +99,59 @@ pub fn geo_contract_con(schema: SchemaRef, field_id: u32, crs: ContractCrs) -> D
     )
     .expect("contratto fixture valido")
 }
+
+// ---------------------------------------------------------------------------
+// Piani
+// ---------------------------------------------------------------------------
+
+/// Il piano a un solo `table.filter` nella versione dichiarata, con il blocco
+/// `limits` del chiamante: la forma su cui le prove di migrazione e di
+/// formato confrontano le versioni.
+pub fn piano_con_limiti(versione: u16, limiti: &serde_json::Value) -> String {
+    json!({
+        "schema_version": versione,
+        "inputs": ["main"],
+        "limits": limiti,
+        "nodes": [
+            {"id": "a", "op": "table.filter", "in": ["main"], "config": {}}
+        ],
+        "output": "a"
+    })
+    .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Geometrie
+// ---------------------------------------------------------------------------
+
+/// Il quadrato di lato `side` con l'angolo in basso a sinistra nell'origine
+/// data, in WKB a due dimensioni.
+pub fn square_wkb(origin_x: f64, origin_y: f64, side: f64) -> Vec<u8> {
+    Geometry::Polygon(polygon![
+        (x: origin_x, y: origin_y),
+        (x: origin_x + side, y: origin_y),
+        (x: origin_x + side, y: origin_y + side),
+        (x: origin_x, y: origin_y + side),
+        (x: origin_x, y: origin_y),
+    ])
+    .to_wkb(CoordDimensions::xy())
+    .expect("wkb fixture")
+}
+
+/// Il reperto del 5 settembre 2026: fa panicare la validazione OGC di `geo`
+/// dove le asserzioni di debug sono attive. Lo usano il percorso non fuso
+/// (`transport.rs`) e quello fuso (`unary.rs`).
+pub const REPERTO_VALIDAZIONE: &[u8] = &[
+    1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
+    1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
+    116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
+    0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
+    255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
+    0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
 
 // ---------------------------------------------------------------------------
 // Lettura dei batch

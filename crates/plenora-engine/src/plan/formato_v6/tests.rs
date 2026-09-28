@@ -6,20 +6,9 @@
 
 use super::{PlanV6, PLAN_SCHEMA_VERSION_V6};
 use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V5};
+use crate::test_support::piano_con_limiti as piano;
 use plenora_core::limits::PlanLimits;
 use serde_json::json;
-
-/// Lo stesso piano nelle due versioni, con i limiti che si vogliono.
-fn piano(versione: u16, limiti: &serde_json::Value) -> String {
-    json!({
-        "schema_version": versione,
-        "limits": limiti,
-        "inputs": ["main"],
-        "nodes": [{"id": "a", "op": "table.filter", "in": ["main"], "config": {}}],
-        "output": "a",
-    })
-    .to_string()
-}
 
 #[test]
 fn un_piano_v6_e_accettato() {

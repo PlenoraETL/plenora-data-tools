@@ -148,7 +148,7 @@ use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
 mod tests {
     use super::super::unary::{geo_metadata_json, geometry_output_field};
     use super::*;
-    use crate::test_support::ColonnaTipizzata;
+    use crate::test_support::{ColonnaTipizzata, REPERTO_VALIDAZIONE};
     use geo::{line_string, polygon, Area, CoordsIter, Geometry, Point};
     use plenora_core::arrow::array::Int64Array;
     use plenora_core::diagnostics::RowDiagnosticsCompleteness;
@@ -159,13 +159,7 @@ mod tests {
     const CRS: &str = "EPSG:3857";
 
     fn square_wkb(size: f64) -> Vec<u8> {
-        Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: size, y: 0.0),
-            (x: size, y: size), (x: 0.0, y: size),
-            (x: 0.0, y: 0.0),
-        ])
-        .to_wkb(CoordDimensions::xy())
-        .expect("fixture WKB")
+        crate::test_support::square_wkb(0.0, 0.0, size)
     }
 
     fn line_wkb() -> Vec<u8> {
@@ -261,21 +255,6 @@ mod tests {
         let index = schema.index_of(column).expect("colonna output");
         (schema, batches.into_iter().next().expect("batch"), index)
     }
-
-    /// Il reperto del 5 settembre 2026: fa panicare la validazione OGC di
-    /// `geo` dove le asserzioni di debug sono attive.
-    const REPERTO_VALIDAZIONE: &[u8] = &[
-        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0,
-        1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4,
-        0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0,
-        6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
 
     /// **Con il candidato esatto (BOZZA NON ADOTTATA, Cargo.toml), il
     /// reperto e' un ingresso invalido in ogni profilo, non una validazione

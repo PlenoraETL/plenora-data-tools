@@ -39,8 +39,8 @@ use plenora_kernels_geo::arrow_adapter::{
 use super::*;
 use crate::planner::validate;
 use crate::test_support::{
-    geo_contract_con, projected_crs, run, single_input, table_batch, table_contract, table_schema,
-    ColonnaTipizzata,
+    geo_contract_con, projected_crs, run, single_input, square_wkb, table_batch, table_contract,
+    table_schema, ColonnaTipizzata,
 };
 
 // ---------------------------------------------------------------------------
@@ -4861,18 +4861,6 @@ fn geo_fusion_chain_plan() -> serde_json::Value {
         ],
         "output": "c",
     })
-}
-
-fn square_wkb(origin_x: f64, origin_y: f64, side: f64) -> Vec<u8> {
-    Geometry::Polygon(polygon![
-        (x: origin_x, y: origin_y),
-        (x: origin_x + side, y: origin_y),
-        (x: origin_x + side, y: origin_y + side),
-        (x: origin_x, y: origin_y + side),
-        (x: origin_x, y: origin_y),
-    ])
-    .to_wkb(CoordDimensions::xy())
-    .expect("wkb fixture")
 }
 
 fn run_geo_fusion(
