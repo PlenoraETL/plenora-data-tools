@@ -188,7 +188,7 @@ fn transform_rejects_stdout_output_and_unsupported_schema_version() {
 }
 
 #[test]
-fn transform_requires_a_crs_and_fails_closed_without_backend() {
+fn transform_requires_a_crs() {
     let directory = tempfile::tempdir().expect("tempdir");
     let schema = directory.path().join("schema.json");
     let output = directory.path().join("output.bin");
@@ -207,20 +207,86 @@ fn transform_requires_a_crs_and_fails_closed_without_backend() {
         stdout_of(&result)
     );
     assert!(!output.try_exists().expect("stat"));
+}
 
-    // CRS dichiarato ma nessun backend PROJ compilato: la dichiarazione non
-    // viene creduta — fail-closed, mai validazione ottimistica.
+/// Un CRS dichiarato senza backend PROJ compilato non viene creduto:
+/// fail-closed, mai validazione ottimistica.
+///
+/// Gli input esistono, perche' il rifiuto non possa venire dalla loro
+/// apertura; con PROJ il CRS si risolve e il caso non esiste.
+#[cfg(not(feature = "proj-backend"))]
+fn assert_crs_senza_backend(result: &std::process::Output, output: &std::path::Path) {
+    assert!(!result.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "crs", "{envelope}");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("CRS_BACKEND_UNAVAILABLE")),
+        "{envelope}"
+    );
+    assert_eq!(result.status.code(), Some(3), "{envelope}");
+    assert!(
+        !output.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
+}
+
+/// Un file d'ingresso che esiste, vuoto come dichiara `row_count: 0`.
+#[cfg(not(feature = "proj-backend"))]
+fn ingresso_vuoto(directory: &std::path::Path, nome: &str) -> String {
+    let percorso = directory.join(nome);
+    std::fs::write(&percorso, b"").expect("ingresso");
+    percorso.to_str().expect("percorso UTF-8").to_owned()
+}
+
+#[cfg(not(feature = "proj-backend"))]
+#[test]
+fn transform_with_declared_crs_fails_closed_without_backend() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let schema = directory.path().join("schema.json");
+    let output = directory.path().join("output.bin");
+    let input = ingresso_vuoto(directory.path(), "input.bin");
     std::fs::write(
         &schema,
         br#"{"schema_version":2,"operation":"centroid","row_count":0,"crs":"EPSG:32632"}"#,
     )
     .expect("schema");
-    let result = cli_transform("transform", "input.bin", &schema, &output);
-    assert!(!result.status.success());
-    assert!(
-        !output.try_exists().expect("stat"),
-        "nessun output parziale"
-    );
+    let result = cli_transform("transform", &input, &schema, &output);
+    assert_crs_senza_backend(&result, &output);
+}
+
+#[cfg(not(feature = "proj-backend"))]
+#[test]
+fn transform_arrow_with_declared_crs_fails_closed_without_backend() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let schema = directory.path().join("schema.json");
+    let output = directory.path().join("output.plngeo3");
+    let input = ingresso_vuoto(directory.path(), "input.plngeo3");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":3,"operation":"centroid","row_count":0,"crs":"EPSG:32632"}"#,
+    )
+    .expect("schema");
+    let result = cli_transform("transform-arrow", &input, &schema, &output);
+    assert_crs_senza_backend(&result, &output);
+}
+
+#[cfg(not(feature = "proj-backend"))]
+#[test]
+fn pair_arrow_with_declared_crs_fails_closed_without_backend() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let schema = directory.path().join("schema.json");
+    let output = directory.path().join("pairs.bin");
+    let sinistra = ingresso_vuoto(directory.path(), "left.bin");
+    let destra = ingresso_vuoto(directory.path(), "right.bin");
+    std::fs::write(
+        &schema,
+        br#"{"schema_version":3,"operation":"sjoin","left_row_count":0,"right_row_count":0,"predicate":"intersects","max_pairs":10,"left_crs":"EPSG:32632","right_crs":"EPSG:32632"}"#,
+    )
+    .expect("schema");
+    let result = cli_pair_arrow(&sinistra, &destra, &schema, &output);
+    assert_crs_senza_backend(&result, &output);
 }
 
 #[test]
@@ -277,16 +343,6 @@ fn transform_arrow_rejects_unsupported_version_and_missing_crs() {
         stdout_of(&result)
     );
     assert!(!output.try_exists().expect("stat"));
-
-    // CRS dichiarato senza backend: fail-closed.
-    std::fs::write(
-        &schema,
-        br#"{"schema_version":3,"operation":"centroid","row_count":0,"crs":"EPSG:32632"}"#,
-    )
-    .expect("schema");
-    let result = cli_transform("transform-arrow", "input.plngeo3", &schema, &output);
-    assert!(!result.status.success());
-    assert!(!output.try_exists().expect("stat"));
 }
 
 #[test]
@@ -339,16 +395,6 @@ fn pair_arrow_requires_file_paths_valid_version_and_crs() {
         "stdout: {}",
         stdout_of(&result)
     );
-    assert!(!output.try_exists().expect("stat"));
-
-    // CRS dichiarati senza backend: fail-closed.
-    std::fs::write(
-        &schema,
-        br#"{"schema_version":3,"operation":"sjoin","left_row_count":0,"right_row_count":0,"predicate":"intersects","max_pairs":10,"left_crs":"EPSG:32632","right_crs":"EPSG:32632"}"#,
-    )
-    .expect("schema");
-    let result = cli_pair_arrow("left.bin", "right.bin", &schema, &output);
-    assert!(!result.status.success());
     assert!(!output.try_exists().expect("stat"));
 }
 

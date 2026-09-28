@@ -236,7 +236,7 @@ mod tests {
         GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
     };
     use plenora_core::crs::{CrsKind, ResolvedCrs};
-    use plenora_core::{PlenoraError, Result};
+    use plenora_core::{ErrorCategory, PlenoraError, Result};
     use serde_json::{json, Value};
 
     use super::helpers::short_id;
@@ -352,52 +352,92 @@ mod tests {
     /// Non esplora: ripete un elenco scritto a mano sul percorso
     /// `analyze_geo_contract` -> `validate_wkb_hex`, per ogni operazione che
     /// accetta un WKB da configurazione, dove la campagna libFuzzer non e'
-    /// eseguibile (release.md#fuzzing).
+    /// eseguibile (release.md#fuzzing). Ogni caso deve arrivare davvero a
+    /// `validate_wkb_hex`: il controllo con un WKB valido prova che il resto
+    /// della config e l'input passano, e l'errore atteso e' quello del
+    /// decoder, non di un controllo precedente.
     #[test]
     fn nessun_wkb_di_config_ostile_manda_in_panic_l_analisi() {
-        let ostili = [
-            // Lunghezza pari in byte, taglio dentro `\u{e9}`.
+        // Lunghezza pari in byte con taglio dentro un carattere, lunghezza
+        // dispari, cifre non esadecimali, vuoto: rifiutati dalla decodifica.
+        let non_esadecimali = [
             "a\u{e9}b",
             "\u{e9}\u{e9}",
             "0\u{e9}0",
             "\u{1F642}",
             "\u{1F642}\u{1F642}",
             "ab\u{e9}",
-            // Lunghezza dispari, cifre non esadecimali, vuoto.
             "",
             "0",
             "abc",
             "zz",
             "0g",
             "\u{0}\u{0}",
-            // Esadecimale ben formato ma non un WKB valido.
-            "00",
-            "ffffffff",
         ];
-        // Ogni operazione che legge un WKB dalla configurazione.
-        let parametri: [(&str, &str); 3] = [
-            ("geo.within", "other_wkb"),
-            ("geo.line_locate_point", "point_wkb"),
-            ("geo.snap", "reference_wkb"),
+        // Esadecimale ben formato ma non un WKB valido: rifiutato dalla
+        // validazione strutturale.
+        let non_wkb = ["00", "ffffffff"];
+        // Ogni operazione che legge un WKB dalla configurazione, con gli
+        // altri parametri obbligatori validi.
+        let mut parametri: Vec<(&str, &str, Value)> = vec![
+            ("geo.distance", "other_wkb", json!({})),
+            ("geo.hausdorff_distance", "other_wkb", json!({})),
+            ("geo.frechet_distance", "other_wkb", json!({})),
+            ("geo.haversine_distance", "other_wkb", json!({})),
+            ("geo.geodesic_distance", "other_wkb", json!({})),
+            ("geo.bearing", "other_wkb", json!({})),
+            ("geo.split", "other_wkb", json!({})),
+            ("geo.line_locate_point", "point_wkb", json!({})),
+            ("geo.snap", "reference_wkb", json!({"tolerance": 0.5})),
         ];
+        for predicato in [
+            "geo.predicate_intersects",
+            "geo.predicate_disjoint",
+            "geo.predicate_contains",
+            "geo.predicate_within",
+            "geo.predicate_equals_topo",
+            "geo.predicate_covers",
+            "geo.predicate_covered_by",
+            "geo.predicate_contains_properly",
+            "geo.predicate_touches",
+            "geo.predicate_crosses",
+            "geo.predicate_overlaps",
+        ] {
+            parametri.push((predicato, "other_wkb", json!({})));
+        }
 
-        for (op, parametro) in parametri {
-            for ostile in ostili {
-                let mut config = serde_json::Map::new();
-                config.insert(parametro.to_owned(), Value::String(ostile.to_owned()));
-                // `snap` ha un secondo parametro obbligatorio.
-                config.insert("tolerance".to_owned(), json!(0.5));
-                let esito = analyze_geo_contract(
-                    op,
-                    &[geo_contract(projected_crs())],
-                    &Value::Object(config),
-                    None,
-                    &mut FieldAllocator::new(100),
-                );
-                // L'esito puo' essere Ok o Err a seconda dell'operazione e
-                // del parametro: l'invariante e' che NON si arrivi mai a un
-                // panic, cioe' che questa riga venga raggiunta.
-                let _ = esito;
+        let analizza = |op: &str, parametro: &str, base: &Value, wkb: &str| {
+            let mut config = base.as_object().expect("config oggetto").clone();
+            config.insert(parametro.to_owned(), Value::String(wkb.to_owned()));
+            analyze_geo_contract(
+                op,
+                &[geo_contract(input_crs_for(op))],
+                &Value::Object(config),
+                None,
+                &mut FieldAllocator::new(100),
+            )
+        };
+
+        for (op, parametro, base) in &parametri {
+            analizza(op, parametro, base, &point_wkb_hex())
+                .unwrap_or_else(|errore| panic!("{op}: controllo con WKB valido: {errore}"));
+
+            let atteso =
+                format!("{op}: parametro `{parametro}` non valido: WKB esadecimale non valido");
+            for ostile in non_esadecimali {
+                match analizza(op, parametro, base, ostile) {
+                    Err(PlenoraError::InvalidPlan(messaggio)) if messaggio == atteso => {}
+                    esito => panic!("{op} con {ostile:?}: atteso «{atteso}», ottenuto {esito:?}"),
+                }
+            }
+            for ostile in non_wkb {
+                match analizza(op, parametro, base, ostile) {
+                    Err(PlenoraError::InvalidPlan(messaggio))
+                        if messaggio.starts_with("struttura WKB non valida: ") => {}
+                    esito => panic!(
+                        "{op} con {ostile:?}: atteso un rifiuto strutturale, ottenuto {esito:?}"
+                    ),
+                }
             }
         }
     }
@@ -1139,16 +1179,10 @@ mod tests {
                         "{}: CRS dell'input",
                         case.op
                     );
-                    assert!(
-                        output.properties.sorted_by.is_none(),
-                        "{}: proprieta' azzerate",
-                        case.op
-                    );
-                    assert!(
-                        output.properties.row_count.is_none(),
-                        "{}: proprieta' azzerate",
-                        case.op
-                    );
+                    // L'azzeramento delle proprieta' non si prova qui:
+                    // l'input della tabella non ne dichiara. Lo prova
+                    // `coverage_ops_allocate_a_fresh_geometry_and_require_projected_crs`
+                    // su un input che le dichiara.
                 }
                 Expect::Reprojected => {
                     assert_eq!(
@@ -1565,78 +1599,273 @@ mod tests {
     // Validazione config fail-closed.
     // -----------------------------------------------------------------------
 
+    /// Ogni config invalida si ferma al SUO controllo: categoria attesa e
+    /// frammento che identifica la guardia (`{op}: ...`), non un errore
+    /// qualunque. I produttori (`generate_grid`) ricevono un input tabellare:
+    /// con una geometria in ingresso si fermerebbero prima, al rifiuto
+    /// dell'input, e i controlli sulla config non sarebbero raggiunti.
     #[test]
+    // Tabella di fixture: la lunghezza e' data dall'elenco delle config
+    // invalide con il loro esito atteso, non da logica da spezzare.
+    #[allow(clippy::too_many_lines)]
     fn configs_are_strictly_validated() {
-        let inputs = [geo_contract(projected_crs())];
-        let bad_configs: [(&str, Value); 40] = [
-            ("geo.buffer", json!({})),                            // distance mancante
-            ("geo.buffer", json!({"distance": 1.0, "bogus": 1})), // campo sconosciuto
-            ("geo.buffer", json!({"distance": "molto"})),         // tipo errato
-            ("geo.simplify", json!({"tolerance": -1.0})),
-            ("geo.affine_transform", json!({"coefficients": [1.0, 2.0]})),
-            ("geo.translate", json!({"x_offset": 1.0})), // y_offset mancante
-            ("geo.concave_hull", json!({"concavity": 0.0})),
-            ("geo.densify", json!({"max_segment_length": 0.0})),
-            ("geo.snap_to_grid", json!({"grid_size": -1.0})),
+        let geometrico = [geo_contract(projected_crs())];
+        let tabellare = [tabular_contract()];
+        let bad_configs: [(&str, Value, ErrorCategory, &str); 40] = [
+            (
+                "geo.buffer",
+                json!({}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `distance`",
+            ),
+            (
+                "geo.buffer",
+                json!({"distance": 1.0, "bogus": 1}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: unknown field `bogus`",
+            ),
+            (
+                "geo.buffer",
+                json!({"distance": "molto"}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: invalid type",
+            ),
+            (
+                "geo.simplify",
+                json!({"tolerance": -1.0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `tolerance` non valido: deve essere non negativo",
+            ),
+            (
+                "geo.affine_transform",
+                json!({"coefficients": [1.0, 2.0]}),
+                ErrorCategory::InvalidPlan,
+                "parametro `coefficients` non valido: devono essere esattamente 6 coefficienti",
+            ),
+            (
+                "geo.translate",
+                json!({"x_offset": 1.0}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `y_offset`",
+            ),
+            (
+                "geo.concave_hull",
+                json!({"concavity": 0.0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `concavity` non valido: deve essere maggiore di zero",
+            ),
+            (
+                "geo.densify",
+                json!({"max_segment_length": 0.0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `max_segment_length` non valido: deve essere maggiore di zero",
+            ),
+            (
+                "geo.snap_to_grid",
+                json!({"grid_size": -1.0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `grid_size` non valido: deve essere maggiore di zero",
+            ),
             (
                 "geo.line_substring",
                 json!({"start_ratio": 0.9, "end_ratio": 0.1}),
+                ErrorCategory::InvalidPlan,
+                "parametro `start_ratio/end_ratio` non valido: start_ratio non puo superare end_ratio",
             ),
-            ("geo.line_interpolate_point", json!({"ratio": 1.5})),
-            ("geo.clean_topology", json!({})), // snap_tolerance mancante
-            ("geo.voronoi", json!({"max_points": 1})),
-            ("geo.distance", json!({"other_wkb": "zz"})), // hex non valido
-            ("geo.geometry_accessors", json!({"fields": []})), // selezione vuota
+            (
+                "geo.line_interpolate_point",
+                json!({"ratio": 1.5}),
+                ErrorCategory::InvalidPlan,
+                "parametro `ratio` non valido: deve essere finito e compreso tra zero e uno",
+            ),
+            (
+                "geo.clean_topology",
+                json!({}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `snap_tolerance`",
+            ),
+            (
+                "geo.voronoi",
+                json!({"max_points": 1}),
+                ErrorCategory::InvalidPlan,
+                "parametro `max_points` non valido: deve essere almeno 2",
+            ),
+            (
+                "geo.distance",
+                json!({"other_wkb": "zz"}),
+                ErrorCategory::InvalidPlan,
+                "parametro `other_wkb` non valido: WKB esadecimale non valido",
+            ),
+            (
+                "geo.geometry_accessors",
+                json!({"fields": []}),
+                ErrorCategory::InvalidPlan,
+                "parametro `fields` non valido: non deve essere vuoto",
+            ),
             (
                 "geo.geometry_accessors",
                 json!({"fields": ["geometry_type", "geometry_type"]}),
+                ErrorCategory::InvalidPlan,
+                "parametro `fields` non valido: campi duplicati",
             ),
-            ("geo.geometry_accessors", json!({"fields": ["bogus"]})), // campo sconosciuto
-            ("geo.collect", json!({"group_by": []})),                 // nessuna chiave
-            ("geo.collect", json!({"group_by": ["assente"]})),        // chiave non in schema
-            ("geo.collect", json!({"group_by": ["geometry"]})),       // geometria come chiave
-            ("geo.line_locate_point", json!({})),                     // point_wkb mancante
-            ("geo.line_locate_point", json!({"point_wkb": "zz"})),    // hex non valido
-            ("geo.generate_grid", json!({})),                         // extent mancante
+            (
+                "geo.geometry_accessors",
+                json!({"fields": ["bogus"]}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: unknown variant `bogus`",
+            ),
+            (
+                "geo.collect",
+                json!({"group_by": []}),
+                ErrorCategory::InvalidPlan,
+                "parametro `group_by` non valido: non deve essere vuoto",
+            ),
+            (
+                "geo.collect",
+                json!({"group_by": ["assente"]}),
+                ErrorCategory::Schema,
+                "colonna `assente` assente dallo schema",
+            ),
+            (
+                "geo.collect",
+                json!({"group_by": ["geometry"]}),
+                ErrorCategory::InvalidPlan,
+                "parametro `group_by` non valido: la colonna geometria non puo' essere chiave di gruppo",
+            ),
+            (
+                "geo.line_locate_point",
+                json!({}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `point_wkb`",
+            ),
+            (
+                "geo.line_locate_point",
+                json!({"point_wkb": "zz"}),
+                ErrorCategory::InvalidPlan,
+                "parametro `point_wkb` non valido: WKB esadecimale non valido",
+            ),
+            (
+                "geo.generate_grid",
+                json!({}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `extent`",
+            ),
             (
                 "geo.generate_grid",
                 json!({"extent": {"xmin": 5.0, "ymin": 0.0, "xmax": 5.0, "ymax": 1.0}, "cell_size": 1.0}),
-            ), // extent degenere
+                ErrorCategory::InvalidPlan,
+                "parametro extent non valido: xmax deve essere maggiore di xmin",
+            ),
             (
                 "geo.generate_grid",
                 json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 0.0}),
-            ), // cell_size nulla
+                ErrorCategory::InvalidPlan,
+                "parametro cell_size non valido: deve essere finito e maggiore di zero",
+            ),
             (
                 "geo.generate_grid",
                 json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "shape": "triangle"}),
-            ), // forma sconosciuta
+                ErrorCategory::InvalidPlan,
+                "config non valida: unknown variant `triangle`",
+            ),
             (
                 "geo.generate_grid",
                 json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "bogus": 1}),
-            ), // campo sconosciuto
-            ("geo.subdivide", json!({})),                             // max_vertices mancante
-            ("geo.subdivide", json!({"max_vertices": 3})),            // sotto il minimo 4
-            ("geo.snap", json!({"tolerance": 0.5})),                  // reference_wkb mancante
+                ErrorCategory::InvalidPlan,
+                "config non valida: unknown field `bogus`",
+            ),
+            (
+                "geo.subdivide",
+                json!({}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `max_vertices`",
+            ),
+            (
+                "geo.subdivide",
+                json!({"max_vertices": 3}),
+                ErrorCategory::InvalidPlan,
+                "parametro `max_vertices` non valido: deve essere almeno 4",
+            ),
+            (
+                "geo.snap",
+                json!({"tolerance": 0.5}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `reference_wkb`",
+            ),
             (
                 "geo.snap",
                 json!({"reference_wkb": point_wkb_hex(), "tolerance": -1.0}),
-            ), // tolleranza negativa
-            ("geo.coverage_validate", json!({"tolerance": -1.0})),    // tolleranza negativa
-            ("geo.coverage_validate", json!({"max_issues": 0})),      // limite nullo
-            ("geo.coverage_validate", json!({"bogus": 1})),           // campo sconosciuto
-            ("geo.shared_paths", json!({"min_length": -1.0})),        // lunghezza negativa
-            ("geo.shared_paths", json!({"tolerance": 1.0, "bogus": true})), // campo sconosciuto
-            ("geo.cluster_dbscan", json!({"min_points": 3})),         // eps mancante
-            ("geo.cluster_dbscan", json!({"eps": 0.0, "min_points": 3})), // eps nulla
-            ("geo.cluster_dbscan", json!({"eps": 1.0, "min_points": 0})), // min_points nullo
+                ErrorCategory::InvalidPlan,
+                "parametro `tolerance` non valido: deve essere non negativo",
+            ),
+            (
+                "geo.coverage_validate",
+                json!({"tolerance": -1.0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `tolerance` non valido: deve essere non negativo",
+            ),
+            (
+                "geo.coverage_validate",
+                json!({"max_issues": 0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `max_issues` non valido: deve essere maggiore di zero",
+            ),
+            (
+                "geo.coverage_validate",
+                json!({"bogus": 1}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: unknown field `bogus`",
+            ),
+            (
+                "geo.shared_paths",
+                json!({"min_length": -1.0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `min_length` non valido: deve essere non negativo",
+            ),
+            (
+                "geo.shared_paths",
+                json!({"tolerance": 1.0, "bogus": true}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: unknown field `bogus`",
+            ),
+            (
+                "geo.cluster_dbscan",
+                json!({"min_points": 3}),
+                ErrorCategory::InvalidPlan,
+                "config non valida: missing field `eps`",
+            ),
+            (
+                "geo.cluster_dbscan",
+                json!({"eps": 0.0, "min_points": 3}),
+                ErrorCategory::InvalidPlan,
+                "parametro `eps` non valido: deve essere maggiore di zero",
+            ),
+            (
+                "geo.cluster_dbscan",
+                json!({"eps": 1.0, "min_points": 0}),
+                ErrorCategory::InvalidPlan,
+                "parametro `min_points` non valido: deve essere almeno 1",
+            ),
             (
                 "geo.cluster_dbscan",
                 json!({"eps": 1.0, "min_points": 3, "bogus": 1}),
-            ), // campo sconosciuto
+                ErrorCategory::InvalidPlan,
+                "config non valida: unknown field `bogus`",
+            ),
         ];
-        for (op, config) in bad_configs {
-            let result = analyze_one(op, &inputs, &config, None);
-            assert!(result.is_err(), "{op} con config {config}: accettata");
+        for (op, config, categoria, frammento) in bad_configs {
+            let inputs: &[DataContract] = if op == "geo.generate_grid" {
+                &tabellare
+            } else {
+                &geometrico
+            };
+            let errore = analyze_one(op, inputs, &config, None)
+                .expect_err(&format!("{op} con config {config}: accettata"));
+            let atteso = format!("{op}: {frammento}");
+            assert!(
+                errore.category() == categoria && errore.to_string().contains(&atteso),
+                "{op} con config {config}: atteso {categoria:?} con «{atteso}», ottenuto {errore:?}"
+            );
         }
 
         // other_wkb esadecimale ma con byte residui dopo la geometria.
@@ -1644,30 +1873,69 @@ mod tests {
         trailing.push_str("00");
         let result = analyze_one(
             "geo.distance",
-            &inputs,
+            &geometrico,
             &json!({"other_wkb": trailing}),
             None,
         );
-        assert!(result.is_err(), "WKB con byte residui accettato");
+        assert!(
+            matches!(
+                &result,
+                Err(PlenoraError::InvalidPlan(messaggio))
+                    if messaggio == "struttura WKB non valida: byte residui dopo la geometria"
+            ),
+            "WKB con byte residui: {result:?}"
+        );
 
         // Config non oggetto.
-        let result = analyze_one("geo.centroid", &inputs, &json!("centroid"), None);
-        assert!(result.is_err());
+        let result = analyze_one("geo.centroid", &geometrico, &json!("centroid"), None);
+        assert!(
+            matches!(
+                &result,
+                Err(PlenoraError::InvalidPlan(messaggio))
+                    if messaggio.starts_with("geo.centroid: config non valida: ")
+            ),
+            "config non oggetto: {result:?}"
+        );
     }
 
     #[test]
     fn binary_configs_are_strictly_validated() {
         let inputs = [geo_contract(projected_crs()), geo_contract(projected_crs())];
-        let bad_configs: [(&str, Value); 5] = [
-            ("geo.sjoin", json!({})),                    // predicate mancante
-            ("geo.sjoin", json!({"predicate": "nope"})), // predicato sconosciuto
-            ("geo.overlay", json!({})),                  // mode mancante
-            ("geo.overlay", json!({"mode": "intersection", "x": 1})),
-            ("geo.nearest", json!({"max_distance": -1.0})),
+        // Come per le unarie: ogni config si ferma al proprio controllo.
+        let bad_configs: [(&str, Value, &str); 5] = [
+            (
+                "geo.sjoin",
+                json!({}),
+                "config non valida: missing field `predicate`",
+            ),
+            (
+                "geo.sjoin",
+                json!({"predicate": "nope"}),
+                "config non valida: unknown variant `nope`",
+            ),
+            (
+                "geo.overlay",
+                json!({}),
+                "config non valida: missing field `mode`",
+            ),
+            (
+                "geo.overlay",
+                json!({"mode": "intersection", "x": 1}),
+                "config non valida: unknown field `x`",
+            ),
+            (
+                "geo.nearest",
+                json!({"max_distance": -1.0}),
+                "parametro `max_distance` non valido: deve essere non negativo",
+            ),
         ];
-        for (op, config) in bad_configs {
+        for (op, config, frammento) in bad_configs {
             let result = analyze_one(op, &inputs, &config, None);
-            assert!(result.is_err(), "{op} con config {config}: accettata");
+            let atteso = format!("{op}: {frammento}");
+            assert!(
+                matches!(&result, Err(PlenoraError::InvalidPlan(messaggio)) if messaggio.starts_with(&atteso)),
+                "{op} con config {config}: atteso «{atteso}», ottenuto {result:?}"
+            );
         }
     }
 
@@ -2160,6 +2428,10 @@ mod tests {
         assert_eq!(signatures(&output), expected);
         assert_eq!(output.geometries[0].field_id, FieldId(7));
         assert_eq!(allocator.peek(), FieldId(8));
+        // Anche qui l'input dichiara ordinamento e conteggio: non valgono
+        // per le righe nuove.
+        assert!(output.properties.sorted_by.is_none());
+        assert!(output.properties.row_count.is_none());
 
         // SameProjected: input geografico rifiutato da entrambe.
         let geographic = [geo_contract(geographic_crs())];

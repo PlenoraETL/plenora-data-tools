@@ -40,7 +40,7 @@ use plenora_core::contract::{
     ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
     GeometryDimensions,
 };
-use plenora_core::crs::{resolve_crs, CrsKind, ResolvedCrs};
+use plenora_core::crs::resolve_crs;
 
 /// Forma confrontabile di un [`ContractCrs`].
 ///
@@ -83,15 +83,6 @@ fn contratto(crs: ContractCrs, dimensioni: GeometryDimensions) -> DataContract {
         ContractProperties::default(),
     )
     .expect("contratto coerente con lo schema")
-}
-
-fn crs_proiettato() -> ContractCrs {
-    ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
-        "EPSG:32632".to_owned(),
-        serde_json::json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
-        CrsKind::Projected,
-        Some(1.0),
-    ))
 }
 
 /// I casi che il round-trip puo' attraversare **senza backend PROJ**.

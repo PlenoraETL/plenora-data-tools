@@ -733,8 +733,29 @@ mod tests {
 
     #[test]
     fn rc17_rejects_examples_exceeding_observed_or_cause_count() {
-        let invalid = report(1, vec![example(0), example(1)]);
-        assert!(invalid.validate_for_emission().is_err());
+        // Piu' esempi che righe osservate: si ferma al limite complessivo.
+        let oltre_osservate = report(1, vec![example(0), example(1)]);
+        assert_eq!(
+            oltre_osservate.validate_for_emission(),
+            Err("limite esempi superato")
+        );
+
+        // Totale coerente, ma una causa ha piu' esempi del proprio conteggio:
+        // due cause da uno, entrambi gli esempi sulla prima.
+        let mut oltre_causa = report(2, vec![example(0), example(1)]);
+        oltre_causa.counts = BTreeMap::from([
+            ("conversion.invalid_date".to_owned(), 1),
+            ("conversion.invalid_number".to_owned(), 1),
+        ]);
+        assert_eq!(
+            oltre_causa.validate_for_emission(),
+            Err("esempi eccedono il conteggio causa")
+        );
+
+        // Controllo: gli stessi conteggi con un esempio per causa passano.
+        let mut per_causa = oltre_causa;
+        per_causa.examples[1].cause = "conversion.invalid_number".to_owned();
+        assert_eq!(per_causa.validate_for_emission(), Ok(()));
     }
 
     #[test]

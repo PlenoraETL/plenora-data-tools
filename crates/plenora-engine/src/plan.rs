@@ -678,7 +678,7 @@ impl PlanV5 {
         // avverrebbe prima della validazione e prima del `plan_hash` — due
         // testi diversi con lo stesso piano canonico e lo stesso hash.
         plenora_core::json::ensure_no_duplicate_keys(json_text)?;
-        let plan: Self = serde_json::from_str(json_text)?;
+        let plan: Self = plenora_core::json::documento_di_controllo(json_text)?;
         // La v5 pretende la propria versione, e anche `validate_structure`
         // la pretende: un `PlanV5` dichiara 5 ovunque, compreso qui dentro.
         // Il controllo e' doppio di proposito — questo dice «il documento non

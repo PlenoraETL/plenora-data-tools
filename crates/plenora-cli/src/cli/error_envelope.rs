@@ -110,6 +110,21 @@ pub fn emetti_e_codice(envelope: &serde_json::Value) -> i32 {
     codice
 }
 
+/// Asse `retry` dell'envelope, nella forma taggata.
+///
+/// Forma fissata in `conformance/components.json`
+/// (`required_capability_shared`): `{"kind": ...}` e, solo per
+/// `after(durata)`, `"delay_ms"` — altrimenti il chiamante saprebbe DI riprovare piu' tardi
+/// senza sapere QUANDO (R9.2/R9.7).
+pub fn retry_json(disposition: RetryDisposition) -> serde_json::Value {
+    let mut retry = serde_json::json!({ "kind": disposition.as_str() });
+    if let Some(delay) = disposition.delay() {
+        retry["delay_ms"] =
+            serde_json::Value::from(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX));
+    }
+    retry
+}
+
 /// Envelope d'errore a quattro assi (R9.1, `protocol_version` 1).
 ///
 /// Una riga JSON su stdout con categoria, fase, effetto remoto e
@@ -184,15 +199,7 @@ pub fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_j
     );
     let (category, phase, remote_effect) =
         (category.as_str(), phase.as_str(), remote_effect.as_str());
-    // Forma taggata fissata in conformance/components.json
-    // (required_capability_shared): {"kind": ...} e, solo per
-    // `after(durata)`, "delay_ms" — altrimenti il chiamante saprebbe DI
-    // riprovare piu' tardi senza sapere QUANDO (R9.2/R9.7).
-    let mut retry = serde_json::json!({ "kind": disposition.as_str() });
-    if let Some(delay) = disposition.delay() {
-        retry["delay_ms"] =
-            serde_json::Value::from(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX));
-    }
+    let retry = retry_json(disposition);
     let message = if cancelled {
         format!("esecuzione annullata: {error}")
     } else {

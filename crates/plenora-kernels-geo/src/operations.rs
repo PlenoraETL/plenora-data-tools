@@ -977,6 +977,61 @@ mod tests {
         );
     }
 
+    /// Il quadrato 4x4 dei test sul buffer con componenti vuoti.
+    fn quadrato_4x4() -> geo::Polygon<f64> {
+        polygon![
+            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
+            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
+            (x: 0.0, y: 0.0),
+        ]
+    }
+
+    /// Il buffer con componenti vuoti riesce e coincide con quello della
+    /// stessa geometria senza vuoti (oracolo): i vuoti non aggiungono ne'
+    /// tolgono area. Sul quadrato 4x4 le aree hanno anche un valore atteso:
+    /// 4 verso l'interno, 16 a distanza nulla, tra 32 e 32 + pi verso
+    /// l'esterno (quattro fasce laterali piu' gli spigoli arrotondati,
+    /// approssimati da poligoni inscritti).
+    fn assert_buffer_come_senza_vuoti(
+        con_vuoti: &Geometry<f64>,
+        senza_vuoti: &Geometry<f64>,
+        caso: &str,
+    ) {
+        for (distance, aree) in [
+            (-1.0, 4.0..=4.0),
+            (0.0, 16.0..=16.0),
+            (1.0, 32.0..=32.0 + std::f64::consts::PI),
+        ] {
+            let risultato = buffer(con_vuoti, distance).unwrap_or_else(|errore| {
+                panic!("{caso}, distanza {distance}: buffer rifiutato: {errore}")
+            });
+            let oracolo = buffer(senza_vuoti, distance).unwrap_or_else(|errore| {
+                panic!("{caso}, distanza {distance}: oracolo rifiutato: {errore}")
+            });
+            assert_eq!(risultato, oracolo, "{caso}, distanza {distance}");
+            let area = risultato.unsigned_area();
+            assert!(
+                aree.contains(&area),
+                "{caso}, distanza {distance}: area {area} fuori da {aree:?}"
+            );
+        }
+    }
+
+    /// Solo vuoti: il buffer riesce e da' il `MultiPolygon` vuoto, a ogni
+    /// distanza.
+    fn assert_buffer_vuoto(geometria: &Geometry<f64>, caso: &str) {
+        for distance in [-1.0, 0.0, 1.0] {
+            let risultato = buffer(geometria, distance).unwrap_or_else(|errore| {
+                panic!("{caso}, distanza {distance}: buffer rifiutato: {errore}")
+            });
+            assert_eq!(
+                risultato,
+                Geometry::MultiPolygon(MultiPolygon::new(Vec::new())),
+                "{caso}, distanza {distance}"
+            );
+        }
+    }
+
     /// Componente vuoto accanto a uno ordinario, passato a `buffer`.
     ///
     /// L'offset planare passa da `i_shape` (`vendor/i_shape-1.18.0-buffer`),
@@ -984,20 +1039,13 @@ mod tests {
     /// vertice.
     #[test]
     fn buffer_su_multipolygon_con_componente_vuoto_non_panica() {
-        let ordinario = polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-            (x: 0.0, y: 0.0),
-        ];
         let vuoto = geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
-        let geometria = Geometry::MultiPolygon(MultiPolygon::new(vec![ordinario, vuoto]));
+        let geometria = Geometry::MultiPolygon(MultiPolygon::new(vec![quadrato_4x4(), vuoto]));
+        let senza_vuoti = Geometry::MultiPolygon(MultiPolygon::new(vec![quadrato_4x4()]));
 
-        // Non importa se l'esito e' un buffer valido o un errore controllato:
-        // importa che non panichi. `distance` positiva e negativa (offset
-        // interno/esterno).
-        for distance in [-1.0, 0.0, 1.0] {
-            let _ = buffer(&geometria, distance);
-        }
+        // `distance` negativa, nulla e positiva (offset interno/esterno):
+        // l'esito e' quello della geometria senza il vuoto.
+        assert_buffer_come_senza_vuoti(&geometria, &senza_vuoti, "vuoto in coda");
     }
 
     /// "Tutti-vuoti": nessun componente ordinario a fare da controllo, ogni
@@ -1009,9 +1057,7 @@ mod tests {
         let vuoto = || geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
         let geometria = Geometry::MultiPolygon(MultiPolygon::new(vec![vuoto(), vuoto(), vuoto()]));
 
-        for distance in [-1.0, 0.0, 1.0] {
-            let _ = buffer(&geometria, distance);
-        }
+        assert_buffer_vuoto(&geometria, "tutti vuoti");
     }
 
     /// Geometria interamente vuota, zero componenti: non un componente
@@ -1021,22 +1067,14 @@ mod tests {
     fn buffer_su_multipolygon_a_zero_componenti_non_panica() {
         let geometria = Geometry::MultiPolygon(MultiPolygon::new(Vec::new()));
 
-        for distance in [-1.0, 0.0, 1.0] {
-            let _ = buffer(&geometria, distance);
-        }
+        assert_buffer_vuoto(&geometria, "zero componenti");
     }
 
     /// Il vuoto all'inizio o in mezzo, non solo in coda: l'esito non dipende
     /// dalla sua posizione.
     #[test]
     fn buffer_su_multipolygon_con_vuoto_in_diverse_posizioni_non_panica() {
-        let ordinario = || {
-            polygon![
-                (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-                (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-                (x: 0.0, y: 0.0),
-            ]
-        };
+        let ordinario = quadrato_4x4;
         let ordinario2 = || {
             polygon![
                 (x: 10.0, y: 0.0), (x: 14.0, y: 0.0),
@@ -1047,9 +1085,8 @@ mod tests {
         let vuoto = || geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
 
         let vuoto_iniziale = Geometry::MultiPolygon(MultiPolygon::new(vec![vuoto(), ordinario()]));
-        for distance in [-1.0, 0.0, 1.0] {
-            let _ = buffer(&vuoto_iniziale, distance);
-        }
+        let solo_ordinario = Geometry::MultiPolygon(MultiPolygon::new(vec![ordinario()]));
+        assert_buffer_come_senza_vuoti(&vuoto_iniziale, &solo_ordinario, "vuoto iniziale");
 
         // Componenti DISTINTI e non sovrapposti: due copie dello stesso
         // quadrato sarebbero un `MultiPolygon` invalido, rifiutato prima del
@@ -1074,26 +1111,21 @@ mod tests {
     /// `GeometryCollection` itera i propri membri e delega a ciascuno.
     #[test]
     fn buffer_su_geometrycollection_con_componente_vuoto_non_panica() {
-        let ordinario = polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-            (x: 0.0, y: 0.0),
-        ];
         let vuoto = geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
-        let multipolygon_con_vuoto = MultiPolygon::new(vec![ordinario, vuoto]);
+        let multipolygon_con_vuoto = MultiPolygon::new(vec![quadrato_4x4(), vuoto]);
         let geometria = Geometry::GeometryCollection(GeometryCollection::new_from(vec![
             Geometry::MultiPolygon(multipolygon_con_vuoto),
         ]));
+        let senza_vuoti = Geometry::MultiPolygon(MultiPolygon::new(vec![quadrato_4x4()]));
 
-        for distance in [-1.0, 0.0, 1.0] {
-            let _ = buffer(&geometria, distance);
-        }
+        assert_buffer_come_senza_vuoti(&geometria, &senza_vuoti, "collection con vuoto");
     }
 
     /// Controllo: senza vuoti il buffer riesce alle stesse tre distanze.
     ///
-    /// Le prove sopra verificano solo l'assenza di panico. La soglia su
-    /// area > 0 non dipende dall'implementazione dell'offset planare.
+    /// Il caso di base degli oracoli sopra, fuori da ogni `MultiPolygon`. La
+    /// soglia su area > 0 non dipende dall'implementazione dell'offset
+    /// planare.
     #[test]
     fn buffer_su_poligono_ordinario_senza_vuoti_riesce_alle_stesse_distanze() {
         let ordinario = Geometry::Polygon(polygon![

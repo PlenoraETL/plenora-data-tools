@@ -865,10 +865,10 @@ fn effective_limits_combine_plan_overrides_and_defaults() {
 fn unsupported_and_error_variants_are_puntuali() {
     // Operazione sconosciuta -> Contract; JSON malformato -> Json.
     let malformed = "{ not json".to_owned() + &"x".repeat(8);
-    assert!(matches!(
-        PlanV5::parse_default(&malformed),
-        Err(PlenoraError::DataMapping(_))
-    ));
+    let errore = PlanV5::parse_default(&malformed).expect_err("json malformato");
+    // Un piano malformato e' un rifiuto in validazione, non in scrittura.
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
+    assert!(matches!(errore.untag(), PlenoraError::DataMapping(_)));
     let unknown = json!({
         "schema_version": 5, "inputs": ["main"], "output": "a",
         "nodes": [{"id": "a", "op": "nope", "in": ["main"], "config": {}}]
