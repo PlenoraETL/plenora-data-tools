@@ -25,6 +25,94 @@ use crate::arrow::SchemaRef;
 use crate::crs::ResolvedCrs;
 use crate::error::{PlenoraError, Result};
 
+/// Genera un enum ICD a forma testuale chiusa: l'enum con i suoi attributi
+/// (derive e `serde` compresi, passati cosi' come sono), `as_str`,
+/// `Display`, l'elenco `ALL`, l'errore di parsing e `FromStr`.
+///
+/// Varianti, forme testuali ed elenco «ammessi» del messaggio d'errore
+/// nascono dalla stessa lista: un valore nuovo non puo' mancare dal
+/// parsing ne' dal messaggio. La concordanza di `as_str` con `rename_all`
+/// di `serde` non si ricava dalla macro: la verificano i test per ogni
+/// variante di `ALL`.
+///
+/// Il messaggio d'errore e' `"<descrizione> (<ammessi>: <forme>)"`:
+/// descrizione e parola «ammessi» sono parametri perche' l'accordo di
+/// genere dipende dal nome. Il messaggio non riporta mai l'input (regola
+/// «errori senza dati» di `plenora-core`).
+macro_rules! enum_icd {
+    (
+        $(#[$meta_enum:meta])*
+        $nome_enum:ident,
+        errore $nome_errore:ident = $descrizione:literal,
+        $ammessi:literal {
+            $(
+                $(#[$attributo:meta])*
+                $variante:ident => $forma:literal
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$meta_enum])*
+        pub enum $nome_enum {
+            $(
+                $(#[$attributo])*
+                $variante,
+            )+
+        }
+
+        impl $nome_enum {
+            /// Tutte le varianti, in ordine di dichiarazione.
+            pub const ALL: &'static [Self] = &[$(Self::$variante),+];
+
+            /// Forma testuale ICD. Coincide con la serializzazione serde.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variante => $forma,)+
+                }
+            }
+        }
+
+        impl fmt::Display for $nome_enum {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(self.as_str())
+            }
+        }
+
+        #[doc = concat!(
+            "Errore di parsing di [`",
+            stringify!($nome_enum),
+            "`]: valore non riconosciuto.",
+        )]
+        ///
+        /// Il messaggio elenca i valori ammessi e non riporta l'input (regola
+        /// «errori senza dati» di `plenora-core`).
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub struct $nome_errore;
+
+        impl fmt::Display for $nome_errore {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(enum_icd!(@messaggio $descrizione, $ammessi; $($forma),+))
+            }
+        }
+
+        impl std::error::Error for $nome_errore {}
+
+        impl std::str::FromStr for $nome_enum {
+            type Err = $nome_errore;
+
+            fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+                match value {
+                    $($forma => Ok(Self::$variante),)+
+                    _ => Err($nome_errore),
+                }
+            }
+        }
+    };
+    (@messaggio $descrizione:literal, $ammessi:literal; $prima:literal $(, $altra:literal)*) => {
+        concat!($descrizione, " (", $ammessi, ": ", $prima, $(", ", $altra,)* ")")
+    };
+}
+
 /// Identità logica stabile di una colonna nel grafo (decisione D16).
 ///
 /// Namespace globale del grafo: gli ID sono assegnati dal planner dopo aver
@@ -41,38 +129,29 @@ impl fmt::Display for FieldId {
     }
 }
 
-/// Dimensionalità delle geometrie di una colonna (ICD §3.3).
-///
-/// Il contratto rappresenta e propaga la dimensionalita', non la elabora.
-///
-/// `Unknown` significa «byte preservati, dimensionalita' non risolta» e non
-/// va mai mappato a [`GeometryDimensions::Xy`] (R3.4): nasconderebbe
-/// geometrie Z/M dietro un contratto 2D.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GeometryDimensions {
-    Xy,
-    Xyz,
-    Xym,
-    Xyzm,
-    /// Byte preservati, dimensionalità non risolta: mai mappare a `Xy` (R3.4).
-    Unknown,
+enum_icd! {
+    /// Dimensionalità delle geometrie di una colonna (ICD §3.3).
+    ///
+    /// Il contratto rappresenta e propaga la dimensionalita', non la elabora.
+    ///
+    /// `Unknown` significa «byte preservati, dimensionalita' non risolta» e non
+    /// va mai mappato a [`GeometryDimensions::Xy`] (R3.4): nasconderebbe
+    /// geometrie Z/M dietro un contratto 2D.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    GeometryDimensions,
+    errore UnknownGeometryDimensions = "dimensionalita' geometria non riconosciuta",
+    "ammesse" {
+        Xy => "xy",
+        Xyz => "xyz",
+        Xym => "xym",
+        Xyzm => "xyzm",
+        /// Byte preservati, dimensionalità non risolta: mai mappare a `Xy` (R3.4).
+        Unknown => "unknown",
+    }
 }
 
 impl GeometryDimensions {
-    /// Forma testuale ICD (minuscola): `"xy"`, `"xyz"`, `"xym"`, `"xyzm"`,
-    /// `"unknown"`. Coincide con la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Xy => "xy",
-            Self::Xyz => "xyz",
-            Self::Xym => "xym",
-            Self::Xyzm => "xyzm",
-            Self::Unknown => "unknown",
-        }
-    }
-
     /// Byte per coordinata interleaved (`f64`), se garantiti: `Xy` = 16,
     /// `Xyz`/`Xym` = 24, `Xyzm` = 32.
     ///
@@ -90,159 +169,60 @@ impl GeometryDimensions {
     }
 }
 
-impl fmt::Display for GeometryDimensions {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+enum_icd! {
+    /// Framing binario delle celle geometria (ICD §3.3, regola R3.5: enum
+    /// chiuso).
+    ///
+    /// Solo WKB ISO ed EWKB (`PostGIS`, con SRID/flag Z/M): altri framing
+    /// (`GeoPackage`, TWKB, …) la discovery li rifiuta, mai mappati a un encoding
+    /// noto.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    GeometryEncoding,
+    errore UnknownGeometryEncoding = "encoding geometria non riconosciuto",
+    "ammessi" {
+        Wkb => "wkb",
+        Ewkb => "ewkb",
     }
 }
 
-/// Errore di parsing di [`GeometryDimensions`]: valore non riconosciuto.
-///
-/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
-/// «errori senza dati» di `plenora-core`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownGeometryDimensions;
-
-impl fmt::Display for UnknownGeometryDimensions {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(
-            "dimensionalita' geometria non riconosciuta (ammesse: xy, xyz, xym, xyzm, unknown)",
-        )
+enum_icd! {
+    /// Tipo geometrico canonico di una colonna (ICD §3.1, regola R3.1).
+    ///
+    /// Serializzati in minuscolo senza separatore (`linestring`), come i sistemi
+    /// esterni (`PostGIS`, `GeoPackage`, WKT): ai confini non serve traduzione.
+    /// Un componente puo' supportarne un sottoinsieme, ma rifiuta esplicitamente
+    /// gli altri (R3.2).
+    ///
+    /// INVARIANTE: l'ordine delle varianti e' l'ordine canonico di §3.1. `Ord`
+    /// ne deriva e la serializzazione canonica delle liste di tipi (R3.4.1,
+    /// [`GeometryTypesProperty`]) ne dipende: non riordinare le varianti.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    GeometryType,
+    errore UnknownGeometryType = "tipo geometrico non riconosciuto",
+    "ammessi" {
+        Point => "point",
+        LineString => "linestring",
+        Polygon => "polygon",
+        MultiPoint => "multipoint",
+        MultiLineString => "multilinestring",
+        MultiPolygon => "multipolygon",
+        GeometryCollection => "geometrycollection",
+        CircularString => "circularstring",
+        CompoundCurve => "compoundcurve",
+        CurvePolygon => "curvepolygon",
+        MultiCurve => "multicurve",
+        MultiSurface => "multisurface",
+        PolyhedralSurface => "polyhedralsurface",
+        Tin => "tin",
+        Triangle => "triangle",
+        /// Tipo non risolto (R3.1): mai degradato a un tipo noto.
+        Unknown => "unknown",
     }
-}
-
-impl std::error::Error for UnknownGeometryDimensions {}
-
-impl std::str::FromStr for GeometryDimensions {
-    type Err = UnknownGeometryDimensions;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "xy" => Ok(Self::Xy),
-            "xyz" => Ok(Self::Xyz),
-            "xym" => Ok(Self::Xym),
-            "xyzm" => Ok(Self::Xyzm),
-            "unknown" => Ok(Self::Unknown),
-            _ => Err(UnknownGeometryDimensions),
-        }
-    }
-}
-
-/// Framing binario delle celle geometria (ICD §3.3, regola R3.5: enum
-/// chiuso).
-///
-/// Solo WKB ISO ed EWKB (`PostGIS`, con SRID/flag Z/M): altri framing
-/// (`GeoPackage`, TWKB, …) la discovery li rifiuta, mai mappati a un encoding
-/// noto.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GeometryEncoding {
-    Wkb,
-    Ewkb,
-}
-
-impl GeometryEncoding {
-    /// Forma testuale ICD (minuscola): `"wkb"`, `"ewkb"`. Coincide con la
-    /// serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Wkb => "wkb",
-            Self::Ewkb => "ewkb",
-        }
-    }
-}
-
-impl fmt::Display for GeometryEncoding {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Errore di parsing di [`GeometryEncoding`]: valore non riconosciuto.
-///
-/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
-/// «errori senza dati» di `plenora-core`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownGeometryEncoding;
-
-impl fmt::Display for UnknownGeometryEncoding {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("encoding geometria non riconosciuto (ammessi: wkb, ewkb)")
-    }
-}
-
-impl std::error::Error for UnknownGeometryEncoding {}
-
-impl std::str::FromStr for GeometryEncoding {
-    type Err = UnknownGeometryEncoding;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "wkb" => Ok(Self::Wkb),
-            "ewkb" => Ok(Self::Ewkb),
-            _ => Err(UnknownGeometryEncoding),
-        }
-    }
-}
-
-/// Tipo geometrico canonico di una colonna (ICD §3.1, regola R3.1).
-///
-/// Serializzati in minuscolo senza separatore (`linestring`), come i sistemi
-/// esterni (`PostGIS`, `GeoPackage`, WKT): ai confini non serve traduzione.
-/// Un componente puo' supportarne un sottoinsieme, ma rifiuta esplicitamente
-/// gli altri (R3.2).
-///
-/// INVARIANTE: l'ordine delle varianti e' l'ordine canonico di §3.1. `Ord`
-/// ne deriva e la serializzazione canonica delle liste di tipi (R3.4.1,
-/// [`GeometryTypesProperty`]) ne dipende: non riordinare le varianti.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GeometryType {
-    Point,
-    LineString,
-    Polygon,
-    MultiPoint,
-    MultiLineString,
-    MultiPolygon,
-    GeometryCollection,
-    CircularString,
-    CompoundCurve,
-    CurvePolygon,
-    MultiCurve,
-    MultiSurface,
-    PolyhedralSurface,
-    Tin,
-    Triangle,
-    /// Tipo non risolto (R3.1): mai degradato a un tipo noto.
-    Unknown,
 }
 
 impl GeometryType {
-    /// Forma testuale ICD (minuscola senza separatore, R3.1). Coincide con
-    /// la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Point => "point",
-            Self::LineString => "linestring",
-            Self::Polygon => "polygon",
-            Self::MultiPoint => "multipoint",
-            Self::MultiLineString => "multilinestring",
-            Self::MultiPolygon => "multipolygon",
-            Self::GeometryCollection => "geometrycollection",
-            Self::CircularString => "circularstring",
-            Self::CompoundCurve => "compoundcurve",
-            Self::CurvePolygon => "curvepolygon",
-            Self::MultiCurve => "multicurve",
-            Self::MultiSurface => "multisurface",
-            Self::PolyhedralSurface => "polyhedralsurface",
-            Self::Tin => "tin",
-            Self::Triangle => "triangle",
-            Self::Unknown => "unknown",
-        }
-    }
-
     /// Mappa il type code WKB base ISO (senza la serie dimensionale 1000+
     /// ne' i flag EWKB, gia' estratti dal chiamante) al tipo canonico.
     ///
@@ -272,119 +252,26 @@ impl GeometryType {
     }
 }
 
-impl fmt::Display for GeometryType {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Errore di parsing di [`GeometryType`]: valore non riconosciuto.
-///
-/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
-/// «errori senza dati» di `plenora-core`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownGeometryType;
-
-impl fmt::Display for UnknownGeometryType {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(
-            "tipo geometrico non riconosciuto (ammessi: point, linestring, polygon, multipoint, multilinestring, multipolygon, geometrycollection, circularstring, compoundcurve, curvepolygon, multicurve, multisurface, polyhedralsurface, tin, triangle, unknown)",
-        )
-    }
-}
-
-impl std::error::Error for UnknownGeometryType {}
-
-impl std::str::FromStr for GeometryType {
-    type Err = UnknownGeometryType;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "point" => Ok(Self::Point),
-            "linestring" => Ok(Self::LineString),
-            "polygon" => Ok(Self::Polygon),
-            "multipoint" => Ok(Self::MultiPoint),
-            "multilinestring" => Ok(Self::MultiLineString),
-            "multipolygon" => Ok(Self::MultiPolygon),
-            "geometrycollection" => Ok(Self::GeometryCollection),
-            "circularstring" => Ok(Self::CircularString),
-            "compoundcurve" => Ok(Self::CompoundCurve),
-            "curvepolygon" => Ok(Self::CurvePolygon),
-            "multicurve" => Ok(Self::MultiCurve),
-            "multisurface" => Ok(Self::MultiSurface),
-            "polyhedralsurface" => Ok(Self::PolyhedralSurface),
-            "tin" => Ok(Self::Tin),
-            "triangle" => Ok(Self::Triangle),
-            "unknown" => Ok(Self::Unknown),
-            _ => Err(UnknownGeometryType),
-        }
-    }
-}
-
-/// Stato di dichiarazione dei tipi geometrici di una colonna (ICD R3.4.1,
-/// chiave canonica `plenora.geometry.types_declaration`).
-///
-/// `Mixed` significa tipi diversi **per dichiarazione** (per esempio una
-/// colonna `PostGIS` `geometry` senza vincolo): e' informazione, non
-/// ignoranza. `Unresolved` significa byte non ispezionati e nessuna
-/// dichiarazione.
-///
-/// R3.4.1 vieta le conversioni `mixed` ↔ `unresolved`. Un input legacy senza
-/// le chiavi `types`/`types_declaration` non e' `Unresolved` ma «proprieta'
-/// non dichiarata»: si preserva o si normalizza con un `LossReport`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TypesDeclaration {
-    Exact,
-    Mixed,
-    Unresolved,
-}
-
-impl TypesDeclaration {
-    /// Forma testuale ICD (minuscola): `"exact"`, `"mixed"`,
-    /// `"unresolved"`. Coincide con la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Exact => "exact",
-            Self::Mixed => "mixed",
-            Self::Unresolved => "unresolved",
-        }
-    }
-}
-
-impl fmt::Display for TypesDeclaration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Errore di parsing di [`TypesDeclaration`]: valore non riconosciuto.
-///
-/// Il messaggio elenca i valori ammessi e non riporta l'input (regola
-/// «errori senza dati» di `plenora-core`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownTypesDeclaration;
-
-impl fmt::Display for UnknownTypesDeclaration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .write_str("types_declaration non riconosciuta (ammesse: exact, mixed, unresolved)")
-    }
-}
-
-impl std::error::Error for UnknownTypesDeclaration {}
-
-impl std::str::FromStr for TypesDeclaration {
-    type Err = UnknownTypesDeclaration;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "exact" => Ok(Self::Exact),
-            "mixed" => Ok(Self::Mixed),
-            "unresolved" => Ok(Self::Unresolved),
-            _ => Err(UnknownTypesDeclaration),
-        }
+enum_icd! {
+    /// Stato di dichiarazione dei tipi geometrici di una colonna (ICD R3.4.1,
+    /// chiave canonica `plenora.geometry.types_declaration`).
+    ///
+    /// `Mixed` significa tipi diversi **per dichiarazione** (per esempio una
+    /// colonna `PostGIS` `geometry` senza vincolo): e' informazione, non
+    /// ignoranza. `Unresolved` significa byte non ispezionati e nessuna
+    /// dichiarazione.
+    ///
+    /// R3.4.1 vieta le conversioni `mixed` ↔ `unresolved`. Un input legacy senza
+    /// le chiavi `types`/`types_declaration` non e' `Unresolved` ma «proprieta'
+    /// non dichiarata»: si preserva o si normalizza con un `LossReport`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    TypesDeclaration,
+    errore UnknownTypesDeclaration = "types_declaration non riconosciuta",
+    "ammesse" {
+        Exact => "exact",
+        Mixed => "mixed",
+        Unresolved => "unresolved",
     }
 }
 
@@ -567,289 +454,79 @@ impl GeometryTypesProperty {
     }
 }
 
-/// Ordine degli assi del CRS (chiave canonica `plenora.geometry.axis_order`,
-/// tabella R2.2). Serializzazione ICD minuscola con `_`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AxisOrder {
-    LonLat,
-    LatLon,
-    EastingNorthing,
-    NorthingEasting,
-    Other,
-    Unknown,
-}
-
-impl AxisOrder {
-    /// Forma testuale ICD. Coincide con la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LonLat => "lon_lat",
-            Self::LatLon => "lat_lon",
-            Self::EastingNorthing => "easting_northing",
-            Self::NorthingEasting => "northing_easting",
-            Self::Other => "other",
-            Self::Unknown => "unknown",
-        }
+enum_icd! {
+    /// Ordine degli assi del CRS (chiave canonica `plenora.geometry.axis_order`,
+    /// tabella R2.2). Serializzazione ICD minuscola con `_`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    AxisOrder,
+    errore UnknownAxisOrder = "ordine assi non riconosciuto",
+    "ammessi" {
+        LonLat => "lon_lat",
+        LatLon => "lat_lon",
+        EastingNorthing => "easting_northing",
+        NorthingEasting => "northing_easting",
+        Other => "other",
+        Unknown => "unknown",
     }
 }
 
-impl fmt::Display for AxisOrder {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+enum_icd! {
+    /// Stato di risoluzione del CRS (chiave canonica
+    /// `plenora.geometry.crs_resolution`, tabella R2.2). Serializzazione ICD
+    /// minuscola con `_`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    CrsResolution,
+    errore UnknownCrsResolution = "risoluzione CRS non riconosciuta",
+    "ammesse" {
+        Resolved => "resolved",
+        DeclaredUnresolved => "declared_unresolved",
+        Missing => "missing",
     }
 }
 
-/// Errore di parsing di [`AxisOrder`]: valore non riconosciuto (nessun dato
-/// nel messaggio, regola «errori senza dati»).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownAxisOrder;
-
-impl fmt::Display for UnknownAxisOrder {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(
-            "ordine assi non riconosciuto (ammessi: lon_lat, lat_lon, easting_northing, northing_easting, other, unknown)",
-        )
+enum_icd! {
+    /// Formato testuale della definizione CRS (chiave canonica
+    /// `plenora.geometry.crs_definition_format`, tabella R2.2).
+    /// Serializzazione ICD minuscola.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    CrsDefinitionFormat,
+    errore UnknownCrsDefinitionFormat = "formato definizione CRS non riconosciuto",
+    "ammessi" {
+        Wkt => "wkt",
+        Wkt2 => "wkt2",
+        Projjson => "projjson",
     }
 }
 
-impl std::error::Error for UnknownAxisOrder {}
-
-impl std::str::FromStr for AxisOrder {
-    type Err = UnknownAxisOrder;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "lon_lat" => Ok(Self::LonLat),
-            "lat_lon" => Ok(Self::LatLon),
-            "easting_northing" => Ok(Self::EastingNorthing),
-            "northing_easting" => Ok(Self::NorthingEasting),
-            "other" => Ok(Self::Other),
-            "unknown" => Ok(Self::Unknown),
-            _ => Err(UnknownAxisOrder),
-        }
+enum_icd! {
+    /// Semantica spaziale della colonna (chiave canonica
+    /// `plenora.geometry.spatial_semantics`, tabella R2.2). Serializzazione ICD
+    /// minuscola.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    SpatialSemantics,
+    errore UnknownSpatialSemantics = "semantica spaziale non riconosciuta",
+    "ammesse" {
+        Geometry => "geometry",
+        Geography => "geography",
     }
 }
 
-/// Stato di risoluzione del CRS (chiave canonica
-/// `plenora.geometry.crs_resolution`, tabella R2.2). Serializzazione ICD
-/// minuscola con `_`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CrsResolution {
-    Resolved,
-    DeclaredUnresolved,
-    Missing,
-}
-
-impl CrsResolution {
-    /// Forma testuale ICD. Coincide con la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Resolved => "resolved",
-            Self::DeclaredUnresolved => "declared_unresolved",
-            Self::Missing => "missing",
-        }
-    }
-}
-
-impl fmt::Display for CrsResolution {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Errore di parsing di [`CrsResolution`]: valore non riconosciuto (nessun
-/// dato nel messaggio, regola «errori senza dati»).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownCrsResolution;
-
-impl fmt::Display for UnknownCrsResolution {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(
-            "risoluzione CRS non riconosciuta (ammesse: resolved, declared_unresolved, missing)",
-        )
-    }
-}
-
-impl std::error::Error for UnknownCrsResolution {}
-
-impl std::str::FromStr for CrsResolution {
-    type Err = UnknownCrsResolution;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "resolved" => Ok(Self::Resolved),
-            "declared_unresolved" => Ok(Self::DeclaredUnresolved),
-            "missing" => Ok(Self::Missing),
-            _ => Err(UnknownCrsResolution),
-        }
-    }
-}
-
-/// Formato testuale della definizione CRS (chiave canonica
-/// `plenora.geometry.crs_definition_format`, tabella R2.2).
-/// Serializzazione ICD minuscola.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CrsDefinitionFormat {
-    Wkt,
-    Wkt2,
-    Projjson,
-}
-
-impl CrsDefinitionFormat {
-    /// Forma testuale ICD. Coincide con la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Wkt => "wkt",
-            Self::Wkt2 => "wkt2",
-            Self::Projjson => "projjson",
-        }
-    }
-}
-
-impl fmt::Display for CrsDefinitionFormat {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Errore di parsing di [`CrsDefinitionFormat`]: valore non riconosciuto
-/// (nessun dato nel messaggio, regola «errori senza dati»).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownCrsDefinitionFormat;
-
-impl fmt::Display for UnknownCrsDefinitionFormat {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .write_str("formato definizione CRS non riconosciuto (ammessi: wkt, wkt2, projjson)")
-    }
-}
-
-impl std::error::Error for UnknownCrsDefinitionFormat {}
-
-impl std::str::FromStr for CrsDefinitionFormat {
-    type Err = UnknownCrsDefinitionFormat;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "wkt" => Ok(Self::Wkt),
-            "wkt2" => Ok(Self::Wkt2),
-            "projjson" => Ok(Self::Projjson),
-            _ => Err(UnknownCrsDefinitionFormat),
-        }
-    }
-}
-
-/// Semantica spaziale della colonna (chiave canonica
-/// `plenora.geometry.spatial_semantics`, tabella R2.2). Serializzazione ICD
-/// minuscola.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SpatialSemantics {
-    Geometry,
-    Geography,
-}
-
-impl SpatialSemantics {
-    /// Forma testuale ICD. Coincide con la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Geometry => "geometry",
-            Self::Geography => "geography",
-        }
-    }
-}
-
-impl fmt::Display for SpatialSemantics {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Errore di parsing di [`SpatialSemantics`]: valore non riconosciuto
-/// (nessun dato nel messaggio, regola «errori senza dati»).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownSpatialSemantics;
-
-impl fmt::Display for UnknownSpatialSemantics {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("semantica spaziale non riconosciuta (ammesse: geometry, geography)")
-    }
-}
-
-impl std::error::Error for UnknownSpatialSemantics {}
-
-impl std::str::FromStr for SpatialSemantics {
-    type Err = UnknownSpatialSemantics;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "geometry" => Ok(Self::Geometry),
-            "geography" => Ok(Self::Geography),
-            _ => Err(UnknownSpatialSemantics),
-        }
-    }
-}
-
-/// Precisione delle coordinate (chiave canonica
-/// `plenora.geometry.precision`, tabella R2.2). Serializzazione ICD
-/// minuscola.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GeometryPrecision {
-    Float64,
-    Float32,
-    Native,
-}
-
-impl GeometryPrecision {
-    /// Forma testuale ICD. Coincide con la serializzazione serde.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Float64 => "float64",
-            Self::Float32 => "float32",
-            Self::Native => "native",
-        }
-    }
-}
-
-impl fmt::Display for GeometryPrecision {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Errore di parsing di [`GeometryPrecision`]: valore non riconosciuto
-/// (nessun dato nel messaggio, regola «errori senza dati»).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownGeometryPrecision;
-
-impl fmt::Display for UnknownGeometryPrecision {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .write_str("precisione geometria non riconosciuta (ammesse: float64, float32, native)")
-    }
-}
-
-impl std::error::Error for UnknownGeometryPrecision {}
-
-impl std::str::FromStr for GeometryPrecision {
-    type Err = UnknownGeometryPrecision;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "float64" => Ok(Self::Float64),
-            "float32" => Ok(Self::Float32),
-            "native" => Ok(Self::Native),
-            _ => Err(UnknownGeometryPrecision),
-        }
+enum_icd! {
+    /// Precisione delle coordinate (chiave canonica
+    /// `plenora.geometry.precision`, tabella R2.2). Serializzazione ICD
+    /// minuscola.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    GeometryPrecision,
+    errore UnknownGeometryPrecision = "precisione geometria non riconosciuta",
+    "ammesse" {
+        Float64 => "float64",
+        Float32 => "float32",
+        Native => "native",
     }
 }
 
@@ -1681,24 +1358,99 @@ mod tests {
         );
     }
 
+    /// Oracolo comune degli enum di `enum_icd!`: per ogni variante di `ALL`,
+    /// `Display` e serializzazione serde (`rename_all`, scritta a parte dalla
+    /// macro) coincidono con `as_str`, e serde e `FromStr` fanno roundtrip.
+    fn assert_forma_icd<T>(all: &[T], as_str: fn(T) -> &'static str)
+    where
+        T: Copy
+            + std::fmt::Debug
+            + std::fmt::Display
+            + PartialEq
+            + Serialize
+            + serde::de::DeserializeOwned
+            + std::str::FromStr,
+    {
+        assert!(!all.is_empty());
+        for &value in all {
+            let text = as_str(value);
+            assert_eq!(value.to_string(), text);
+            let serialized = serde_json::to_string(&value).unwrap();
+            assert_eq!(serialized, format!("\"{text}\""));
+            let parsed: T = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, value);
+            assert_eq!(text.parse::<T>().ok(), Some(value));
+        }
+    }
+
+    /// Elenco «ammessi» atteso: le forme di `ALL` separate da `, `.
+    fn elenco_forme<T: Copy>(all: &[T], as_str: fn(T) -> &'static str) -> String {
+        all.iter()
+            .map(|&value| as_str(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    #[test]
+    fn enum_icd_error_messages_derive_the_admitted_forms() {
+        // Testi scritti a mano, identici byte per byte a quelli precedenti
+        // la macro: l'elenco e' derivato, il testo osservabile non cambia.
+        let cases = [
+            (
+                UnknownGeometryDimensions.to_string(),
+                "dimensionalita' geometria non riconosciuta (ammesse: xy, xyz, xym, xyzm, unknown)",
+                elenco_forme(GeometryDimensions::ALL, GeometryDimensions::as_str),
+            ),
+            (
+                UnknownGeometryEncoding.to_string(),
+                "encoding geometria non riconosciuto (ammessi: wkb, ewkb)",
+                elenco_forme(GeometryEncoding::ALL, GeometryEncoding::as_str),
+            ),
+            (
+                UnknownGeometryType.to_string(),
+                "tipo geometrico non riconosciuto (ammessi: point, linestring, polygon, multipoint, multilinestring, multipolygon, geometrycollection, circularstring, compoundcurve, curvepolygon, multicurve, multisurface, polyhedralsurface, tin, triangle, unknown)",
+                elenco_forme(GeometryType::ALL, GeometryType::as_str),
+            ),
+            (
+                UnknownTypesDeclaration.to_string(),
+                "types_declaration non riconosciuta (ammesse: exact, mixed, unresolved)",
+                elenco_forme(TypesDeclaration::ALL, TypesDeclaration::as_str),
+            ),
+            (
+                UnknownAxisOrder.to_string(),
+                "ordine assi non riconosciuto (ammessi: lon_lat, lat_lon, easting_northing, northing_easting, other, unknown)",
+                elenco_forme(AxisOrder::ALL, AxisOrder::as_str),
+            ),
+            (
+                UnknownCrsResolution.to_string(),
+                "risoluzione CRS non riconosciuta (ammesse: resolved, declared_unresolved, missing)",
+                elenco_forme(CrsResolution::ALL, CrsResolution::as_str),
+            ),
+            (
+                UnknownCrsDefinitionFormat.to_string(),
+                "formato definizione CRS non riconosciuto (ammessi: wkt, wkt2, projjson)",
+                elenco_forme(CrsDefinitionFormat::ALL, CrsDefinitionFormat::as_str),
+            ),
+            (
+                UnknownSpatialSemantics.to_string(),
+                "semantica spaziale non riconosciuta (ammesse: geometry, geography)",
+                elenco_forme(SpatialSemantics::ALL, SpatialSemantics::as_str),
+            ),
+            (
+                UnknownGeometryPrecision.to_string(),
+                "precisione geometria non riconosciuta (ammesse: float64, float32, native)",
+                elenco_forme(GeometryPrecision::ALL, GeometryPrecision::as_str),
+            ),
+        ];
+        for (message, expected, forms) in cases {
+            assert_eq!(message, expected);
+            assert!(message.ends_with(&format!(": {forms})")), "{message}");
+        }
+    }
+
     #[test]
     fn geometry_dimensions_serde_roundtrip_icd_lowercase() {
-        let cases = [
-            (GeometryDimensions::Xy, "xy"),
-            (GeometryDimensions::Xyz, "xyz"),
-            (GeometryDimensions::Xym, "xym"),
-            (GeometryDimensions::Xyzm, "xyzm"),
-            (GeometryDimensions::Unknown, "unknown"),
-        ];
-        for (dimensions, text) in cases {
-            assert_eq!(dimensions.as_str(), text);
-            assert_eq!(dimensions.to_string(), text);
-            let serialized = serde_json::to_string(&dimensions).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: GeometryDimensions = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, dimensions);
-            assert_eq!(text.parse::<GeometryDimensions>(), Ok(dimensions));
-        }
+        assert_forma_icd(GeometryDimensions::ALL, GeometryDimensions::as_str);
     }
 
     #[test]
@@ -1724,19 +1476,7 @@ mod tests {
 
     #[test]
     fn geometry_encoding_serde_roundtrip_icd_lowercase() {
-        let cases = [
-            (GeometryEncoding::Wkb, "wkb"),
-            (GeometryEncoding::Ewkb, "ewkb"),
-        ];
-        for (encoding, text) in cases {
-            assert_eq!(encoding.as_str(), text);
-            assert_eq!(encoding.to_string(), text);
-            let serialized = serde_json::to_string(&encoding).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: GeometryEncoding = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, encoding);
-            assert_eq!(text.parse::<GeometryEncoding>(), Ok(encoding));
-        }
+        assert_forma_icd(GeometryEncoding::ALL, GeometryEncoding::as_str);
     }
 
     #[test]
@@ -1772,14 +1512,12 @@ mod tests {
 
     #[test]
     fn geometry_type_serde_roundtrip_icd_lowercase_no_separator() {
-        for (geometry_type, text) in CANONICAL_TYPES {
+        assert_forma_icd(GeometryType::ALL, GeometryType::as_str);
+        // `ALL` segue l'ordine canonico di §3.1, oracolo scritto a parte.
+        assert_eq!(GeometryType::ALL.len(), CANONICAL_TYPES.len());
+        for (&geometry_type, (expected, text)) in GeometryType::ALL.iter().zip(CANONICAL_TYPES) {
+            assert_eq!(geometry_type, expected);
             assert_eq!(geometry_type.as_str(), text);
-            assert_eq!(geometry_type.to_string(), text);
-            let serialized = serde_json::to_string(&geometry_type).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: GeometryType = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, geometry_type);
-            assert_eq!(text.parse::<GeometryType>(), Ok(geometry_type));
         }
     }
 
@@ -1861,20 +1599,7 @@ mod tests {
 
     #[test]
     fn types_declaration_serde_roundtrip_icd_lowercase() {
-        let cases = [
-            (TypesDeclaration::Exact, "exact"),
-            (TypesDeclaration::Mixed, "mixed"),
-            (TypesDeclaration::Unresolved, "unresolved"),
-        ];
-        for (declaration, text) in cases {
-            assert_eq!(declaration.as_str(), text);
-            assert_eq!(declaration.to_string(), text);
-            let serialized = serde_json::to_string(&declaration).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: TypesDeclaration = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, declaration);
-            assert_eq!(text.parse::<TypesDeclaration>(), Ok(declaration));
-        }
+        assert_forma_icd(TypesDeclaration::ALL, TypesDeclaration::as_str);
         for value in ["Exact", "EXACT", "un_resolved", "", "unknown"] {
             assert_eq!(
                 value.parse::<TypesDeclaration>(),
@@ -2000,23 +1725,7 @@ mod tests {
 
     #[test]
     fn axis_order_serde_roundtrip_icd() {
-        let cases = [
-            (AxisOrder::LonLat, "lon_lat"),
-            (AxisOrder::LatLon, "lat_lon"),
-            (AxisOrder::EastingNorthing, "easting_northing"),
-            (AxisOrder::NorthingEasting, "northing_easting"),
-            (AxisOrder::Other, "other"),
-            (AxisOrder::Unknown, "unknown"),
-        ];
-        for (axis_order, text) in cases {
-            assert_eq!(axis_order.as_str(), text);
-            assert_eq!(axis_order.to_string(), text);
-            let serialized = serde_json::to_string(&axis_order).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: AxisOrder = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, axis_order);
-            assert_eq!(text.parse::<AxisOrder>(), Ok(axis_order));
-        }
+        assert_forma_icd(AxisOrder::ALL, AxisOrder::as_str);
         for value in ["lonlat", "LON_LAT", "lon lat", "", "xy"] {
             assert_eq!(value.parse::<AxisOrder>(), Err(UnknownAxisOrder));
         }
@@ -2024,20 +1733,7 @@ mod tests {
 
     #[test]
     fn crs_resolution_serde_roundtrip_icd() {
-        let cases = [
-            (CrsResolution::Resolved, "resolved"),
-            (CrsResolution::DeclaredUnresolved, "declared_unresolved"),
-            (CrsResolution::Missing, "missing"),
-        ];
-        for (resolution, text) in cases {
-            assert_eq!(resolution.as_str(), text);
-            assert_eq!(resolution.to_string(), text);
-            let serialized = serde_json::to_string(&resolution).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: CrsResolution = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, resolution);
-            assert_eq!(text.parse::<CrsResolution>(), Ok(resolution));
-        }
+        assert_forma_icd(CrsResolution::ALL, CrsResolution::as_str);
         for value in [
             "declaredunresolved",
             "DECLARED_UNRESOLVED",
@@ -2050,20 +1746,7 @@ mod tests {
 
     #[test]
     fn crs_definition_format_serde_roundtrip_icd() {
-        let cases = [
-            (CrsDefinitionFormat::Wkt, "wkt"),
-            (CrsDefinitionFormat::Wkt2, "wkt2"),
-            (CrsDefinitionFormat::Projjson, "projjson"),
-        ];
-        for (format, text) in cases {
-            assert_eq!(format.as_str(), text);
-            assert_eq!(format.to_string(), text);
-            let serialized = serde_json::to_string(&format).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: CrsDefinitionFormat = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, format);
-            assert_eq!(text.parse::<CrsDefinitionFormat>(), Ok(format));
-        }
+        assert_forma_icd(CrsDefinitionFormat::ALL, CrsDefinitionFormat::as_str);
         for value in ["WKT", "wkt1", "proj_json", "", "wkt 2"] {
             assert_eq!(
                 value.parse::<CrsDefinitionFormat>(),
@@ -2074,19 +1757,7 @@ mod tests {
 
     #[test]
     fn spatial_semantics_serde_roundtrip_icd() {
-        let cases = [
-            (SpatialSemantics::Geometry, "geometry"),
-            (SpatialSemantics::Geography, "geography"),
-        ];
-        for (semantics, text) in cases {
-            assert_eq!(semantics.as_str(), text);
-            assert_eq!(semantics.to_string(), text);
-            let serialized = serde_json::to_string(&semantics).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: SpatialSemantics = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, semantics);
-            assert_eq!(text.parse::<SpatialSemantics>(), Ok(semantics));
-        }
+        assert_forma_icd(SpatialSemantics::ALL, SpatialSemantics::as_str);
         for value in ["Geometry", "GEOGRAPHY", "geo", ""] {
             assert_eq!(
                 value.parse::<SpatialSemantics>(),
@@ -2097,20 +1768,7 @@ mod tests {
 
     #[test]
     fn geometry_precision_serde_roundtrip_icd() {
-        let cases = [
-            (GeometryPrecision::Float64, "float64"),
-            (GeometryPrecision::Float32, "float32"),
-            (GeometryPrecision::Native, "native"),
-        ];
-        for (precision, text) in cases {
-            assert_eq!(precision.as_str(), text);
-            assert_eq!(precision.to_string(), text);
-            let serialized = serde_json::to_string(&precision).unwrap();
-            assert_eq!(serialized, format!("\"{text}\""));
-            let parsed: GeometryPrecision = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed, precision);
-            assert_eq!(text.parse::<GeometryPrecision>(), Ok(precision));
-        }
+        assert_forma_icd(GeometryPrecision::ALL, GeometryPrecision::as_str);
         for value in ["f64", "FLOAT64", "float_64", "double", ""] {
             assert_eq!(
                 value.parse::<GeometryPrecision>(),
