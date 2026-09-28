@@ -4,35 +4,16 @@
 //! Complementare a `roundtrip_smoke.rs` e `xyzm_roundtrip_cli.rs`, che
 //! coprono i round-trip con i backend compilati.
 
-use std::process::Command;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{Int64Array, RecordBatch};
 use plenora_core::arrow::ipc::reader::FileReader;
-use plenora_core::arrow::ipc::writer::FileWriter;
-use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_engine::geo_transport::protocol::{Frame, FrameReader};
 use serde_json::json;
 
-fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plenora-data-tools"))
-}
-
-fn table_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, true),
-    ]))
-}
-
-fn write_ipc(path: &std::path::Path, schema: &SchemaRef, batches: &[RecordBatch]) {
-    let file = std::fs::File::create(path).expect("create input");
-    let mut writer = FileWriter::try_new(file, schema).expect("writer");
-    for batch in batches {
-        writer.write(batch).expect("write batch");
-    }
-    writer.finish().expect("finish");
-}
+mod comune;
+use comune::{cli, comando_run, scrivi_ipc, write_table_fixture};
 
 /// L'envelope d'errore viaggia su STDOUT (stderr resta vuoto), come in
 /// `plenora-database-tools`.
@@ -547,34 +528,9 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
     assert!(!output.try_exists().expect("stat"));
 
     // `--input` singolo: equivalente a `--inputs` per un piano a un input.
-    let document = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
-             "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "r", "op": "table.rename", "in": ["f"],
-             "config": {"renames": [{"old_name": "name", "new_name": "label"}]}},
-        ],
-        "output": "r",
-    });
-    std::fs::write(&plan, serde_json::to_vec(&document).expect("json")).expect("plan");
-    let batch = RecordBatch::try_new(
-        table_schema(),
-        vec![
-            Arc::new(Int64Array::from(vec![0, 1, 2])),
-            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-        ],
-    )
-    .expect("batch");
-    write_ipc(&input, &table_schema(), &[batch]);
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    // La fixture riscrive `plan.json` e `input.arrow` negli stessi percorsi.
+    write_table_fixture(directory.path());
+    let result = comando_run(&plan, "--input", &input, &output)
         .output()
         .expect("run");
     assert!(result.status.success(), "stdout: {}", stdout_of(&result));
@@ -600,7 +556,7 @@ fn blocking_plan_over_max_rows_fails_before_any_publication() {
         vec![Arc::new(Int64Array::from(vec![2, 1]))],
     )
     .expect("batch");
-    write_ipc(&input, &schema, &[batch]);
+    scrivi_ipc(&input, &schema, &[batch]);
     std::fs::write(
         &plan,
         br#"{"schema_version":1,"limits":{"max_rows":1},"steps":[{"operation":"sort","config":{"columns":["id"],"ascending":true}}]}"#,
@@ -609,13 +565,7 @@ fn blocking_plan_over_max_rows_fails_before_any_publication() {
 
     // Il piano blocking materializza l'input: il limite righe scatta in
     // lettura, prima di qualunque scrittura.
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    let result = comando_run(&plan, "--input", &input, &output)
         .output()
         .expect("run");
     assert!(!result.status.success());

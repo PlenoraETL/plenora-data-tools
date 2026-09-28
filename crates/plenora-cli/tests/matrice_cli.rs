@@ -15,33 +15,15 @@
 //! qui si verificano, non si ridiscutono.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Int64Array, RecordBatch};
-use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde_json::{json, Value};
 
-const fn executable() -> &'static str {
-    env!("CARGO_BIN_EXE_plenora-data-tools")
-}
-
-/// Tutti i sottocomandi del dispatch. `inspect-dataset` e' l'alias di
-/// `describe` e va verificato come gli altri: un alias non controllato e' una
-/// superficie non controllata.
-const COMANDI: [&str; 10] = [
-    "catalog",
-    "describe",
-    "inspect-dataset",
-    "validate",
-    "run",
-    "capabilities",
-    "transform",
-    "spatial-join",
-    "transform-arrow",
-    "pair-arrow",
-];
+mod comune;
+use comune::{cli, filter_only_plan, scrivi_ipc, COMANDI};
 
 /// Comandi che accettano almeno un argomento obbligatorio: invocarli nudi
 /// deve fallire, non fare qualcosa a caso.
@@ -57,10 +39,7 @@ const COMANDI_CON_ARGOMENTI: [&str; 8] = [
 ];
 
 fn esegui(args: &[&str]) -> Output {
-    Command::new(executable())
-        .args(args)
-        .output()
-        .expect("invocazione CLI")
+    cli().args(args).output().expect("invocazione CLI")
 }
 
 /// L'unico documento emesso sul canale previsto.
@@ -109,10 +88,7 @@ fn scrivi_input(path: &Path) {
         vec![Arc::new(Int64Array::from(vec![1_i64]))],
     )
     .expect("batch");
-    let file = std::fs::File::create(path).expect("create");
-    let mut writer = FileWriter::try_new(file, &schema).expect("writer");
-    writer.write(&batch).expect("write");
-    writer.finish().expect("finish");
+    scrivi_ipc(path, &schema, &[batch]);
 }
 
 /// Input Arrow con `righe` righe in un solo batch.
@@ -127,27 +103,19 @@ fn scrivi_input_righe(path: &Path, righe: i64) {
 /// esattamente il caso che la contabilita' globale deve intercettare.
 fn scrivi_input_batch(path: &Path, batch: usize, righe_per_batch: i64) {
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    let file = std::fs::File::create(path).expect("create");
-    let mut writer = FileWriter::try_new(file, &schema).expect("writer");
-    for indice in 0..batch {
-        let base = i64::try_from(indice).expect("indice") * righe_per_batch;
-        let valori: Vec<i64> = (base..base + righe_per_batch).collect();
-        let record = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(valori))])
-            .expect("batch");
-        writer.write(&record).expect("write");
-    }
-    writer.finish().expect("finish");
+    let record: Vec<RecordBatch> = (0..batch)
+        .map(|indice| {
+            let base = i64::try_from(indice).expect("indice") * righe_per_batch;
+            let valori: Vec<i64> = (base..base + righe_per_batch).collect();
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(valori))])
+                .expect("batch")
+        })
+        .collect();
+    scrivi_ipc(path, &schema, &record);
 }
 
 fn scrivi_piano(path: &Path) {
-    let piano = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{"id": "f", "op": "table.filter", "in": ["main"],
-                   "config": {"column": "id", "operator": ">", "value": 0}}],
-        "output": "f",
-    });
-    std::fs::write(path, serde_json::to_vec(&piano).expect("json")).expect("piano");
+    comune::scrivi_piano(path, &filter_only_plan());
 }
 
 // ---------------------------------------------------------------------------
@@ -1198,11 +1166,9 @@ fn scrivi_input_melt(path: &Path, righe: i64) {
         Field::new("a", DataType::Int64, true),
         Field::new("b", DataType::Int64, true),
     ]));
-    let file = std::fs::File::create(path).expect("create");
-    let mut writer = FileWriter::try_new(file, &schema).expect("writer");
     let valori: Vec<i64> = (0..righe).collect();
     let record = RecordBatch::try_new(
-        schema,
+        schema.clone(),
         vec![
             Arc::new(Int64Array::from(valori.clone())),
             Arc::new(Int64Array::from(valori.clone())),
@@ -1210,8 +1176,7 @@ fn scrivi_input_melt(path: &Path, righe: i64) {
         ],
     )
     .expect("batch");
-    writer.write(&record).expect("write");
-    writer.finish().expect("finish");
+    scrivi_ipc(path, &schema, &[record]);
 }
 
 #[test]

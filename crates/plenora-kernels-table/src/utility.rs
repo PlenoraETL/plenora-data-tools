@@ -418,6 +418,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::{assert_same_outcome as assert_equivalent, single_column_batch};
 
     /// Percorso generico, indipendente dal fast path: riferimento per
     /// l'equivalenza semantica (oracolo) del fast path di `date_extract`.
@@ -516,11 +517,12 @@ mod tests {
     }
 
     fn utf8_batch(values: Vec<Option<&str>>) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("ts", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(values))],
+        single_column_batch(
+            "ts",
+            Arc::new(StringArray::from(values)),
+            DataType::Utf8,
+            true,
         )
-        .expect("fixture")
     }
 
     /// Equivalenza fast/generico dove entrambi devono riuscire: il confronto
@@ -529,24 +531,6 @@ mod tests {
         let fast = fast.expect("fast path rifiuta valori validi");
         let generic = generic.expect("oracolo generico rifiuta valori validi");
         assert_eq!(fast, generic);
-    }
-
-    /// Equivalenza fast/generico su qualunque esito: stessi batch, oppure
-    /// stessa categoria, stesso messaggio e stessa diagnostica row-scoped.
-    fn assert_equivalent(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
-        match (fast, generic) {
-            (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
-            (Err(fast), Err(generic)) => {
-                assert_eq!(fast.category(), generic.category());
-                assert_eq!(fast.to_string(), generic.to_string());
-                assert_eq!(fast.row_diagnostics(), generic.row_diagnostics());
-            }
-            (fast, generic) => panic!(
-                "fast e generico divergono: fast ok={}, generico ok={}",
-                fast.is_ok(),
-                generic.is_ok()
-            ),
-        }
     }
 
     /// Rifiuto row-scoped atteso: esattamente `rows`, causa
@@ -577,16 +561,17 @@ mod tests {
 
     #[test]
     fn date_extract_rejects_every_invalid_source_row() {
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("ts", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![
+        let batch = single_column_batch(
+            "ts",
+            Arc::new(StringArray::from(vec![
                 Some("2024-01-15"),
                 Some("2024-13-01"),
                 None,
                 Some("non una data"),
-            ]))],
-        )
-        .expect("fixture");
+            ])),
+            DataType::Utf8,
+            true,
+        );
         let error = date_extract(
             &batch,
             &DateExtract {

@@ -112,6 +112,12 @@ use plenora_core::crs::resolve_crs;
 #[cfg(all(test, feature = "proj-backend"))]
 use plenora_kernels_geo::crs::resolve_crs;
 
+// Le costanti di fixture dei test sono quelle dei test di integrazione: un
+// file solo, incluso da entrambi.
+#[cfg(test)]
+#[path = "../tests/comune/costanti.rs"]
+mod costanti_di_prova;
+
 // ---------------------------------------------------------------------------
 // Helper comuni
 // ---------------------------------------------------------------------------
@@ -487,6 +493,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::costanti_di_prova::{MONTE_MARIO_WKT, POINT_WKB};
 
     /// Envelope §9: gli assi di un `PlenoraError` arrivano in uscita
     /// espliciti (R9.2), il contesto DAG solo quando presente.
@@ -714,19 +721,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn error_envelope_preserves_optional_row_diagnostics() {
-        let mut counts = std::collections::BTreeMap::new();
-        counts.insert("conversion.invalid_date".to_owned(), 1);
-        let report = plenora_core::diagnostics::RowDiagnostics {
+    /// Diagnostica row-scoped di una data rifiutata alla riga sorgente 4.
+    /// Completezza, totale e limiti di conoscenza sono i punti in cui i casi
+    /// differiscono, e restano parametri.
+    fn report_data_rifiutata(
+        completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness,
+        total: Option<u64>,
+        knowledge_limits: Option<Vec<String>>,
+    ) -> plenora_core::diagnostics::RowDiagnostics {
+        plenora_core::diagnostics::RowDiagnostics {
             contract: plenora_core::diagnostics::ROW_DIAGNOSTICS_CONTRACT.to_owned(),
             scope: plenora_core::diagnostics::RowDiagnosticScope::Read,
             index_basis: plenora_core::diagnostics::ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
-            completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete,
-            knowledge_limits: None,
-            total: Some(1),
+            completeness,
+            knowledge_limits,
+            total,
             observed_total: 1,
-            counts,
+            counts: std::collections::BTreeMap::from([("conversion.invalid_date".to_owned(), 1)]),
             examples_limit: 10,
             examples_truncated: false,
             examples: vec![plenora_core::diagnostics::RowDiagnosticExample {
@@ -739,7 +750,16 @@ mod tests {
             input_total: None,
             diagnostic_state_counts: None,
             write_outcome: None,
-        };
+        }
+    }
+
+    #[test]
+    fn error_envelope_preserves_optional_row_diagnostics() {
+        let report = report_data_rifiutata(
+            plenora_core::diagnostics::RowDiagnosticsCompleteness::Complete,
+            Some(1),
+            None,
+        );
         let error = PlenoraError::DataMapping("conversione data rifiutata".to_owned())
             .with_phase(ErrorPhase::Read)
             .with_row_diagnostics(report.clone());
@@ -909,28 +929,11 @@ mod tests {
         );
         assert_eq!(envelope["error"]["context"]["execution_id"], "exec-9");
 
-        let wrapped = error.with_row_diagnostics(plenora_core::diagnostics::RowDiagnostics {
-            contract: plenora_core::diagnostics::ROW_DIAGNOSTICS_CONTRACT.to_owned(),
-            scope: plenora_core::diagnostics::RowDiagnosticScope::Read,
-            index_basis: plenora_core::diagnostics::ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
-            completeness: plenora_core::diagnostics::RowDiagnosticsCompleteness::Partial,
-            observed_total: 1,
-            total: None,
-            input_total: None,
-            counts: std::collections::BTreeMap::from([("conversion.invalid_date".to_owned(), 1)]),
-            examples_limit: 10,
-            examples_truncated: false,
-            examples: vec![plenora_core::diagnostics::RowDiagnosticExample {
-                source_index: 4,
-                cause: "conversion.invalid_date".to_owned(),
-                column: Some("effective_date".to_owned()),
-                key: None,
-                write_state: None,
-            }],
-            knowledge_limits: Some(vec!["data_tools.processing_interrupted".to_owned()]),
-            diagnostic_state_counts: None,
-            write_outcome: None,
-        });
+        let wrapped = error.with_row_diagnostics(report_data_rifiutata(
+            plenora_core::diagnostics::RowDiagnosticsCompleteness::Partial,
+            None,
+            Some(vec!["data_tools.processing_interrupted".to_owned()]),
+        ));
         assert!(wrapped.is_cancelled(), "exit code deve restare 130");
         let wrapped_envelope = error_envelope(&wrapped, wrapped.is_cancelled());
         assert_eq!(wrapped_envelope["error"]["category"], "cancelled");
@@ -966,27 +969,29 @@ mod tests {
 
     /// Campo geometria con SOLE chiavi canoniche (niente `GeoArrow` legacy).
     fn canonical_geometry_field(data_type: DataType) -> Field {
-        let metadata = std::collections::HashMap::from([
+        canonical_field(
+            data_type,
+            &[
+                (PLENORA_GEOMETRY_DIMENSIONS_KEY, "xyz"),
+                (PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, "exact"),
+                (PLENORA_GEOMETRY_TYPES_KEY, "point"),
+                (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+                (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
+                (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+            ],
+        )
+    }
+
+    /// Campo `geometry` del tipo dato con `encoding = wkb`, `dimensions = xy`
+    /// e poi le coppie date, che prevalgono sulle due di base.
+    fn canonical_field(data_type: DataType, pairs: &[(&str, &str)]) -> Field {
+        let mut metadata = std::collections::HashMap::from([
             (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
-            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned()),
-            (
-                PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
-                "exact".to_owned(),
-            ),
-            (PLENORA_GEOMETRY_TYPES_KEY.to_owned(), "point".to_owned()),
-            (
-                PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-                "resolved".to_owned(),
-            ),
-            (
-                PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
-                "EPSG:32632".to_owned(),
-            ),
-            (
-                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-                "unknown".to_owned(),
-            ),
+            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
         ]);
+        for (key, value) in pairs {
+            metadata.insert((*key).to_owned(), (*value).to_owned());
+        }
         Field::new("geometry", data_type, true).with_metadata(metadata)
     }
 
@@ -1280,14 +1285,27 @@ mod tests {
     /// Campo geometria canonico con le chiavi date (helper delle fixture
     /// CRS: schema con versione R2.5, colonna `id` + `geometry`).
     fn canonical_crs_field(pairs: &[(&str, &str)]) -> Field {
-        let mut metadata = std::collections::HashMap::from([
-            (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
-            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
-        ]);
-        for (key, value) in pairs {
-            metadata.insert((*key).to_owned(), (*value).to_owned());
-        }
-        Field::new("geometry", DataType::Binary, true).with_metadata(metadata)
+        canonical_field(DataType::Binary, pairs)
+    }
+
+    /// Le parti di uno stato `DeclaredUnresolved`; ogni altro stato e' un
+    /// fallimento del caso, con lo stato trovato nel messaggio.
+    fn declared_unresolved_parts(
+        crs: &ContractCrs,
+    ) -> (Option<&str>, Option<&str>, Option<&'static str>) {
+        let ContractCrs::DeclaredUnresolved {
+            crs_id,
+            definition,
+            definition_format,
+        } = crs
+        else {
+            panic!("atteso DeclaredUnresolved: {crs:?}");
+        };
+        (
+            crs_id.as_deref(),
+            definition.as_deref(),
+            definition_format.map(plenora_core::contract::CrsDefinitionFormat::as_str),
+        )
     }
 
     #[test]
@@ -1304,17 +1322,9 @@ mod tests {
         ]);
         let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect("discovery");
-        let ContractCrs::DeclaredUnresolved {
-            crs_id, definition, ..
-        } = &contract.geometries[0].crs
-        else {
-            panic!(
-                "atteso DeclaredUnresolved: {:?}",
-                contract.geometries[0].crs
-            );
-        };
-        assert_eq!(crs_id.as_deref(), Some("EPSG:32632"));
-        assert_eq!(definition, &None);
+        let (crs_id, definition, _) = declared_unresolved_parts(&contract.geometries[0].crs);
+        assert_eq!(crs_id, Some("EPSG:32632"));
+        assert_eq!(definition, None);
         assert_eq!(
             contract.geometries[0].crs.resolution(),
             CrsResolution::DeclaredUnresolved
@@ -1334,17 +1344,9 @@ mod tests {
         ]);
         let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect("discovery");
-        let ContractCrs::DeclaredUnresolved {
-            crs_id, definition, ..
-        } = &contract.geometries[0].crs
-        else {
-            panic!(
-                "atteso DeclaredUnresolved: {:?}",
-                contract.geometries[0].crs
-            );
-        };
-        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
-        assert_eq!(definition, &None);
+        let (crs_id, definition, _) = declared_unresolved_parts(&contract.geometries[0].crs);
+        assert_eq!(crs_id, Some("EPSG:4326"));
+        assert_eq!(definition, None);
     }
 
     #[test]
@@ -1359,17 +1361,9 @@ mod tests {
         ]);
         let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect("discovery");
-        let ContractCrs::DeclaredUnresolved {
-            crs_id, definition, ..
-        } = &contract.geometries[0].crs
-        else {
-            panic!(
-                "atteso DeclaredUnresolved: {:?}",
-                contract.geometries[0].crs
-            );
-        };
-        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
-        assert_eq!(definition, &None);
+        let (crs_id, definition, _) = declared_unresolved_parts(&contract.geometries[0].crs);
+        assert_eq!(crs_id, Some("EPSG:4326"));
+        assert_eq!(definition, None);
     }
 
     #[test]
@@ -1390,23 +1384,11 @@ mod tests {
         ]);
         let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect("discovery");
-        let ContractCrs::DeclaredUnresolved {
-            crs_id,
-            definition,
-            definition_format,
-        } = &contract.geometries[0].crs
-        else {
-            panic!(
-                "atteso DeclaredUnresolved: {:?}",
-                contract.geometries[0].crs
-            );
-        };
-        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
-        assert_eq!(definition.as_deref(), Some(r#"{"type":"GeographicCRS"}"#));
-        assert_eq!(
-            definition_format.map(plenora_core::contract::CrsDefinitionFormat::as_str),
-            Some("projjson")
-        );
+        let (crs_id, definition, definition_format) =
+            declared_unresolved_parts(&contract.geometries[0].crs);
+        assert_eq!(crs_id, Some("EPSG:4326"));
+        assert_eq!(definition, Some(r#"{"type":"GeographicCRS"}"#));
+        assert_eq!(definition_format, Some("projjson"));
     }
 
     // -------------------------------------------------------------------
@@ -1414,36 +1396,16 @@ mod tests {
     // rappresentazione — risoluzione + verifica di coerenza decidibile.
     // -------------------------------------------------------------------
 
-    /// WKT1 realistico di Monte Mario / Italy zone 1 con `AUTHORITY` e
-    /// `TOWGS84` (EPSG:3003): la forma dello shapefile catastale owner.
-    const MONTE_MARIO_WKT: &str = concat!(
-        r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
-        r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297],"#,
-        r#"TOWGS84[-104.1,-49.1,-9.9,0.971,-2.917,0.714,-11.68]],"#,
-        r#"PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],"#,
-        r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],"#,
-        r#"PARAMETER["central_meridian",9],PARAMETER["scale_factor",0.9996],"#,
-        r#"PARAMETER["false_easting",1500000],PARAMETER["false_northing",0],"#,
-        r#"UNIT["metre",1],AXIS["Easting",EAST],AXIS["Northing",NORTH],"#,
-        r#"AUTHORITY["EPSG","3003"]]"#
-    );
-
-    /// Coppie canoniche del caso owner: `resolved` dichiarato, doppia
+    /// Campo canonico del caso owner: `resolved` dichiarato, doppia
     /// rappresentazione (`crs_id` + definizione WKT) con formato `wkt`.
-    fn monte_mario_resolved_pairs(crs_id: &str) -> Vec<(&'static str, String)> {
-        vec![
-            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved".to_owned()),
-            (PLENORA_GEOMETRY_CRS_ID_KEY, crs_id.to_owned()),
-            (
-                PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
-                MONTE_MARIO_WKT.to_owned(),
-            ),
-            (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt".to_owned()),
-            (
-                PLENORA_GEOMETRY_AXIS_ORDER_KEY,
-                "easting_northing".to_owned(),
-            ),
-        ]
+    fn monte_mario_field(crs_id: &str) -> Field {
+        canonical_crs_field(&[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, crs_id),
+            (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, MONTE_MARIO_WKT),
+            (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing"),
+        ])
     }
 
     #[cfg(feature = "proj-backend")]
@@ -1453,12 +1415,7 @@ mod tests {
         // coerente. La (2a) NON rovescia la dichiarazione: il WKT risolve
         // contro PROJ e la verifica di coerenza (crs_id 3003 == srid del
         // canonical) conferma — `Resolved`, con `authority_srid` 3003.
-        let pairs = monte_mario_resolved_pairs("EPSG:3003");
-        let pairs_ref: Vec<(&str, &str)> = pairs
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
-        let field = canonical_crs_field(&pairs_ref);
+        let field = monte_mario_field("EPSG:3003");
         let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect("discovery");
         let ContractCrs::Resolved(resolved) = &contract.geometries[0].crs else {
@@ -1474,42 +1431,20 @@ mod tests {
         // confronto decidibile smentisce il `resolved` dichiarato —
         // `DeclaredUnresolved` con le dichiarazioni ORIGINALI preservate
         // (non passa e nulla si perde).
-        let pairs = monte_mario_resolved_pairs("EPSG:4326");
-        let pairs_ref: Vec<(&str, &str)> = pairs
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
-        let field = canonical_crs_field(&pairs_ref);
+        let field = monte_mario_field("EPSG:4326");
         let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect("discovery");
-        let ContractCrs::DeclaredUnresolved {
-            crs_id,
-            definition,
-            definition_format,
-        } = &contract.geometries[0].crs
-        else {
-            panic!(
-                "atteso DeclaredUnresolved: {:?}",
-                contract.geometries[0].crs
-            );
-        };
-        assert_eq!(crs_id.as_deref(), Some("EPSG:4326"));
-        assert_eq!(definition.as_deref(), Some(MONTE_MARIO_WKT));
-        assert_eq!(
-            definition_format.map(plenora_core::contract::CrsDefinitionFormat::as_str),
-            Some("wkt")
-        );
+        let (crs_id, definition, definition_format) =
+            declared_unresolved_parts(&contract.geometries[0].crs);
+        assert_eq!(crs_id, Some("EPSG:4326"));
+        assert_eq!(definition, Some(MONTE_MARIO_WKT));
+        assert_eq!(definition_format, Some("wkt"));
     }
 
     #[cfg(feature = "proj-backend")]
     #[test]
     fn discovery_resolved_with_same_code_but_different_authority_stays_unresolved() {
-        let pairs = monte_mario_resolved_pairs("FOO:3003");
-        let pairs_ref: Vec<(&str, &str)> = pairs
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
-        let field = canonical_crs_field(&pairs_ref);
+        let field = monte_mario_field("FOO:3003");
         let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
             .expect("discovery");
         assert!(
@@ -1530,12 +1465,7 @@ mod tests {
         // dichiarazione si onora con la regola (3), quindi la risoluzione
         // impossibile fallisce con errore `Crs` — coerente con quel che fa un
         // `resolved` a rappresentazione singola.
-        let pairs = monte_mario_resolved_pairs("EPSG:3003");
-        let pairs_ref: Vec<(&str, &str)> = pairs
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
-        let field = canonical_crs_field(&pairs_ref);
+        let field = monte_mario_field("EPSG:3003");
         let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
         assert!(
             matches!(result, Err(PlenoraError::Crs(_))),
@@ -1594,15 +1524,7 @@ mod tests {
             metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "99999".to_owned());
         }
         let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
-        let geometry = GeometryColumnContract {
-            field_id: FieldId(0),
-            name: "geometry".to_owned(),
-            crs,
-            dimensions: GeometryDimensions::Xy,
-            encoding: Some(GeometryEncoding::Wkb),
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        };
+        let geometry = geometry_contract(crs, GeometryDimensions::Xy, Some(GeometryEncoding::Wkb));
         DataContract::new(
             schema_v1(vec![field]),
             vec![geometry],
@@ -1610,6 +1532,24 @@ mod tests {
             ContractProperties::default(),
         )
         .expect("contratto fixture valido")
+    }
+
+    /// Contratto della colonna `geometry` al campo 0, nullable e con i tipi
+    /// non dichiarati; CRS, dimensioni ed encoding sono del caso.
+    fn geometry_contract(
+        crs: ContractCrs,
+        dimensions: GeometryDimensions,
+        encoding: Option<GeometryEncoding>,
+    ) -> GeometryColumnContract {
+        GeometryColumnContract {
+            field_id: FieldId(0),
+            name: "geometry".to_owned(),
+            crs,
+            dimensions,
+            encoding,
+            nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
+        }
     }
 
     fn declared_unresolved_state() -> ContractCrs {
@@ -1620,15 +1560,20 @@ mod tests {
         }
     }
 
-    fn decisions_probe(definition: &str) -> PlanInputsProbe {
+    /// Sonda del piano con gli input e le decisioni CRS dati, senza limiti.
+    fn probe(inputs: &[&str], crs_decisions: &[(&str, &str)]) -> PlanInputsProbe {
         PlanInputsProbe {
-            inputs: vec!["main".to_owned()],
-            crs_decisions: std::collections::BTreeMap::from([(
-                "main".to_owned(),
-                definition.to_owned(),
-            )]),
+            inputs: inputs.iter().map(ToString::to_string).collect(),
+            crs_decisions: crs_decisions
+                .iter()
+                .map(|(input, definition)| ((*input).to_owned(), (*definition).to_owned()))
+                .collect(),
             limits: None,
         }
+    }
+
+    fn decisions_probe(definition: &str) -> PlanInputsProbe {
+        probe(&["main"], &[("main", definition)])
     }
 
     #[test]
@@ -1637,15 +1582,11 @@ mod tests {
             "main".to_owned(),
             contract_with_crs_state(declared_unresolved_state()),
         )];
-        let probe = PlanInputsProbe {
-            inputs: vec!["main".to_owned()],
-            crs_decisions: std::collections::BTreeMap::from([(
-                "other".to_owned(),
-                "EPSG:32632".to_owned(),
-            )]),
-            limits: None,
-        };
-        let error = apply_crs_decisions(&probe, &mut contracts).expect_err("input ignoto");
+        let error = apply_crs_decisions(
+            &probe(&["main"], &[("other", "EPSG:32632")]),
+            &mut contracts,
+        )
+        .expect_err("input ignoto");
         assert!(error.to_string().contains("crs_decisions"), "{error}");
     }
 
@@ -2013,15 +1954,11 @@ mod tests {
         )]));
         let contract = DataContract::new(
             schema,
-            vec![GeometryColumnContract {
-                field_id: FieldId(0),
-                name: "geometry".to_owned(),
-                crs: ContractCrs::Resolved(projected_crs()),
-                dimensions: GeometryDimensions::Xy,
-                encoding: None,
-                nullable: true,
-                types: GeometryColumnContract::undeclared_types(),
-            }],
+            vec![geometry_contract(
+                ContractCrs::Resolved(projected_crs()),
+                GeometryDimensions::Xy,
+                None,
+            )],
             Some(FieldId(0)),
             ContractProperties::default(),
         )
@@ -2040,15 +1977,11 @@ mod tests {
         ]));
         let contract = DataContract::new(
             schema,
-            vec![GeometryColumnContract {
-                field_id: FieldId(0),
-                name: "geometry".to_owned(),
-                crs: ContractCrs::Missing,
-                dimensions: GeometryDimensions::Unknown,
-                encoding: None,
-                nullable: true,
-                types: GeometryColumnContract::undeclared_types(),
-            }],
+            vec![geometry_contract(
+                ContractCrs::Missing,
+                GeometryDimensions::Unknown,
+                None,
+            )],
             Some(FieldId(0)),
             ContractProperties::default(),
         )
@@ -2133,10 +2066,13 @@ mod tests {
         }
     }
 
+    /// La riga di comando come la vede il parser.
+    fn argv(args: &[&str]) -> Vec<String> {
+        args.iter().map(ToString::to_string).collect()
+    }
+
     #[test]
     fn v4_input_paths_combines_single_and_multiple_flags() {
-        let argv =
-            |args: &[&str]| -> Vec<String> { args.iter().map(ToString::to_string).collect() };
         let posizionali = |args: &[&str]| match v4_inputs(&argv(args)).expect("inputs") {
             DagInputs::Positional(paths) => paths,
             DagInputs::Named(_) => panic!("attesa forma posizionale"),
@@ -2159,8 +2095,6 @@ mod tests {
 
     #[test]
     fn la_forma_nominale_lega_ogni_input_al_suo_nome() {
-        let argv =
-            |args: &[&str]| -> Vec<String> { args.iter().map(ToString::to_string).collect() };
         let inputs = v4_inputs(&argv(&[
             "run",
             "--input",
@@ -2182,11 +2116,7 @@ mod tests {
         // L'ordine restituito e' quello del PIANO, non della riga di comando:
         // e' il punto del difetto — con la forma posizionale questi due file
         // sarebbero finiti sugli input sbagliati.
-        let probe = PlanInputsProbe {
-            inputs: vec!["sinistra".to_owned(), "destra".to_owned()],
-            crs_decisions: std::collections::BTreeMap::new(),
-            limits: None,
-        };
+        let probe = probe(&["sinistra", "destra"], &[]);
         assert_eq!(
             pair_v4_inputs(&probe, &inputs).expect("accoppiamento"),
             vec![
@@ -2253,11 +2183,6 @@ mod tests {
     // (i comandi che li invocano richiedono la risoluzione CRS — feature
     // `proj-backend`; il framing e la trasformazione no)
     // -------------------------------------------------------------------
-
-    /// POINT (2 3), little-endian OGC WKB.
-    const POINT_WKB: [u8; 21] = [
-        1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 8, 64,
-    ];
 
     /// Scrive `frames` (con null) in framing WKB v2 e restituisce i byte.
     fn framed_v2(frames: &[Option<&[u8]>]) -> Vec<u8> {

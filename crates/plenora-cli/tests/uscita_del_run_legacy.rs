@@ -28,35 +28,27 @@
 //! il codice si comporta **correttamente**. Cio' che deve valere ovunque e' che
 //! il campo ci sia e dica il proprio stato.
 
-use std::process::Command;
+use std::sync::Arc;
+
+use plenora_core::arrow::array::{RecordBatch, StringArray};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
+
+mod comune;
+use comune::{comando_run, scrivi_ipc};
 
 /// Il piano legacy piu' piccolo che produca un output: nessun passo geo,
 /// nessuna feature, cosi' il caso gira ovunque gira la CLI.
 const PIANO_LEGACY: &[u8] = br#"{"schema_version":1,"steps":[{"operation":"rename","config":{"renames":[{"old_name":"valore","new_name":"rinominato"}]}}]}"#;
 
-fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plenora-data-tools"))
-}
-
 /// Scrive un ingresso Arrow IPC minimo.
 fn scrivi_ingresso(percorso: &std::path::Path) {
-    use std::sync::Arc;
-
-    use plenora_core::arrow::array::{RecordBatch, StringArray};
-    use plenora_core::arrow::ipc::writer::FileWriter;
-    use plenora_core::arrow::schema::{DataType, Field, Schema};
-
     let schema = Schema::new(vec![Field::new("valore", DataType::Utf8, true)]);
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![Arc::new(StringArray::from(vec![Some("a"), Some("b")]))],
     )
     .expect("il batch di prova si costruisce");
-    let file = std::fs::File::create(percorso).expect("l'ingresso si crea");
-    let mut scrittore =
-        FileWriter::try_new(file, &Arc::new(schema)).expect("il writer si costruisce");
-    scrittore.write(&batch).expect("scrittura");
-    scrittore.finish().expect("chiusura");
+    scrivi_ipc(percorso, &schema, &[batch]);
 }
 
 /// **Il ramo legacy di `run` stampa il documento con l'esito.**
@@ -69,13 +61,7 @@ fn il_run_legacy_stampa_l_esito_della_pubblicazione() {
     std::fs::write(&piano, PIANO_LEGACY).expect("il piano si scrive");
     scrivi_ingresso(&ingresso);
 
-    let esito = cli()
-        .args(["run", "--plan"])
-        .arg(&piano)
-        .arg("--input")
-        .arg(&ingresso)
-        .arg("--output")
-        .arg(&uscita)
+    let esito = comando_run(&piano, "--input", &ingresso, &uscita)
         .output()
         .expect("il comando parte");
 

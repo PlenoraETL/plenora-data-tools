@@ -572,6 +572,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::{assert_same_outcome, single_column_batch};
 
     /// Percorso generico, indipendente dai fast path: riferimento per
     /// l'equivalenza semantica del fast path.
@@ -599,14 +600,6 @@ mod tests {
         select_rows(batch, &rows)
     }
 
-    fn single_column_batch(column: ArrayRef, data_type: DataType, nullable: bool) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("c", data_type, nullable)])),
-            vec![column],
-        )
-        .expect("fixture")
-    }
-
     fn config(operator: Operator, value: serde_json::Value) -> Filter {
         Filter {
             column: "c".into(),
@@ -619,27 +612,13 @@ mod tests {
     /// di operatori e valori.
     fn assert_equivalent(batch: &RecordBatch, operator: Operator, value: serde_json::Value) {
         let config = config(operator, value);
-        let fast = filter(batch, &config);
-        let generic = generic_filter(batch, &config);
-        match (fast, generic) {
-            (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
-            // Stesso rifiuto, non solo un rifiuto: categoria e messaggio.
-            (Err(fast), Err(generic)) => {
-                assert_eq!(fast.category(), generic.category());
-                assert_eq!(fast.to_string(), generic.to_string());
-                assert_eq!(fast.row_diagnostics(), generic.row_diagnostics());
-            }
-            (fast, generic) => panic!(
-                "fast e generico divergono: fast ok={}, generico ok={}",
-                fast.is_ok(),
-                generic.is_ok()
-            ),
-        }
+        assert_same_outcome(filter(batch, &config), generic_filter(batch, &config));
     }
 
     #[test]
     fn fast_path_matches_generic_on_float64_edge_values() {
         let batch = single_column_batch(
+            "c",
             Arc::new(Float64Array::from(vec![
                 Some(1.0),
                 Some(f64::NAN),
@@ -681,6 +660,7 @@ mod tests {
     #[test]
     fn signed_zero_equality_and_nan_match_are_exact() {
         let batch = single_column_batch(
+            "c",
             Arc::new(Float64Array::from(vec![
                 Some(-0.0),
                 Some(f64::NAN),
@@ -701,6 +681,7 @@ mod tests {
     fn filter_hand_written_boundaries() {
         // Righe attese scritte a mano, indipendenti dai comparatori.
         let ints = single_column_batch(
+            "c",
             Arc::new(Int64Array::from(vec![
                 Some(i64::MIN),
                 Some(-1),
@@ -759,6 +740,7 @@ mod tests {
         );
 
         let uints = single_column_batch(
+            "c",
             Arc::new(UInt64Array::from(vec![
                 Some(0),
                 Some(u64::MAX - 1),
@@ -791,6 +773,7 @@ mod tests {
     #[test]
     fn fast_path_matches_generic_on_int64_and_uint64() {
         let ints = single_column_batch(
+            "c",
             Arc::new(Int64Array::from(vec![
                 Some(i64::MIN),
                 Some(-1),
@@ -811,6 +794,7 @@ mod tests {
         assert_equivalent(&ints, Operator::Between, json!("-10, 10"));
 
         let uints = single_column_batch(
+            "c",
             Arc::new(UInt64Array::from(vec![Some(10), Some(9), None, Some(42)])),
             DataType::UInt64,
             true,
@@ -852,6 +836,7 @@ mod tests {
     #[test]
     fn fast_path_matches_generic_on_utf8_and_boolean() {
         let strings = single_column_batch(
+            "c",
             Arc::new(StringArray::from(vec![
                 Some("Alpha"),
                 Some("beta"),
@@ -869,6 +854,7 @@ mod tests {
         assert_equivalent(&strings, Operator::Endswith, json!("TA"));
 
         let booleans = single_column_batch(
+            "c",
             Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
             DataType::Boolean,
             true,
@@ -882,6 +868,7 @@ mod tests {
     #[test]
     fn null_handling_is_identical_across_operators() {
         let batch = single_column_batch(
+            "c",
             Arc::new(Int64Array::from(vec![None, Some(1), None])),
             DataType::Int64,
             true,
@@ -902,6 +889,7 @@ mod tests {
         let values = StringArray::from(vec!["a", "b"]);
         let dictionary = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
         let batch = single_column_batch(
+            "c",
             Arc::new(dictionary),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
@@ -916,6 +904,7 @@ mod tests {
     #[test]
     fn large_utf8_keeps_the_generic_error_on_comparison() {
         let batch = single_column_batch(
+            "c",
             Arc::new(LargeStringArray::from(vec![Some("a"), None])),
             DataType::LargeUtf8,
             true,
@@ -931,6 +920,7 @@ mod tests {
     #[test]
     fn empty_and_single_row_inputs() {
         let empty = single_column_batch(
+            "c",
             Arc::new(Int64Array::from(Vec::<Option<i64>>::new())),
             DataType::Int64,
             true,
@@ -942,6 +932,7 @@ mod tests {
             0
         );
         let single = single_column_batch(
+            "c",
             Arc::new(Int64Array::from(vec![Some(1)])),
             DataType::Int64,
             true,
@@ -959,6 +950,7 @@ mod tests {
         // Classe "confronti via f64": 2^53 e 2^53+1 collassano sullo stesso
         // double; eq/ordine/between devono restare esatti (fast e generico).
         let batch = single_column_batch(
+            "c",
             Arc::new(Int64Array::from(vec![
                 Some(9_007_199_254_740_992), // 2^53
                 Some(9_007_199_254_740_993), // 2^53 + 1
@@ -1024,6 +1016,7 @@ mod tests {
         // Ordine numerico (9 < 10), non testuale ("10" < "9"), e nessun
         // collasso oltre 2^53: u64::MAX-1 e u64::MAX sono lo stesso double.
         let batch = single_column_batch(
+            "c",
             Arc::new(UInt64Array::from(vec![
                 Some(10),
                 Some(9),
@@ -1072,6 +1065,7 @@ mod tests {
         // Letterale intero oltre 2^53 contro colonna Float64: il double
         // 9007199254740992.0 NON e' uguale all'intero 9007199254740993.
         let batch = single_column_batch(
+            "c",
             Arc::new(Float64Array::from(vec![
                 Some(9_007_199_254_740_992.0),
                 None,

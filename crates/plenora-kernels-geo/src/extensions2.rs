@@ -710,7 +710,8 @@ pub fn snap_column(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use geo::{line_string, polygon, GeometryCollection, MultiLineString, Point};
+    use crate::test_support::{assert_close, rect};
+    use geo::{line_string, GeometryCollection, MultiLineString, Point};
     use geozero::{CoordDimensions, ToWkb};
 
     /// Gli adapter v2 non accusano il piano di cio' che non ha concluso.
@@ -744,13 +745,6 @@ mod tests {
             .coords_iter()
             .map(|coordinate| (coordinate.x, coordinate.y))
             .collect()
-    }
-
-    fn assert_close(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() < 1e-9,
-            "atteso {expected}, ottenuto {actual}"
-        );
     }
 
     // --- geo.generate_grid ---------------------------------------------------
@@ -901,10 +895,7 @@ mod tests {
 
     #[test]
     fn subdivide_passes_small_geometries_through_unchanged() {
-        let square = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0), (x: 4.0, y: 4.0),
-            (x: 0.0, y: 4.0), (x: 0.0, y: 0.0),
-        ]);
+        let square = rect(0.0, 0.0, 4.0, 4.0);
         assert_eq!(subdivide(&square, 8).unwrap(), vec![square.clone()]);
         // Soglia esatta: vertici == max_vertices, nessuna divisione.
         assert_eq!(subdivide(&square, 5).unwrap(), vec![square]);
@@ -1176,16 +1167,8 @@ mod tests {
     #[test]
     fn snap_snaps_polygon_rings_and_preserves_multipart_types() {
         // Quadrato leggermente sbilanciato verso il riferimento.
-        let input = Geometry::Polygon(polygon![
-            (x: 0.05, y: 0.05), (x: 10.05, y: 0.05),
-            (x: 10.05, y: 10.0), (x: 0.05, y: 10.0),
-            (x: 0.05, y: 0.05),
-        ]);
-        let reference = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 10.0, y: 0.0),
-            (x: 10.0, y: 10.0), (x: 0.0, y: 10.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let input = rect(0.05, 0.05, 10.05, 10.0);
+        let reference = rect(0.0, 0.0, 10.0, 10.0);
         let snapped = snap(&input, &reference, 0.2).expect("snap");
         assert!(matches!(snapped, Geometry::Polygon(_)));
         assert_eq!(

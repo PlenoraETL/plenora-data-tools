@@ -223,7 +223,6 @@ pub fn analyze_geo_contract(
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
-    use std::fmt::Write as _;
     use std::sync::Arc;
 
     use geo::{Geometry, Point};
@@ -236,6 +235,7 @@ mod tests {
         GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
     };
     use plenora_core::crs::{CrsKind, ResolvedCrs};
+    use plenora_core::esadecimale::esadecimale;
     use plenora_core::{ErrorCategory, PlenoraError, Result};
     use serde_json::{json, Value};
 
@@ -298,17 +298,15 @@ mod tests {
         Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(metadata)
     }
 
-    fn geo_contract(crs: ResolvedCrs) -> DataContract {
+    /// Contratto con la colonna geometria `FieldId(2)`, XY, nullable e senza
+    /// tipi dichiarati; i campi e il CRS sono del chiamante.
+    fn contract_with_geometry(fields: Vec<Field>, crs: ContractCrs) -> DataContract {
         DataContract::new(
-            Arc::new(Schema::new(vec![
-                Field::new("id", DataType::Int64, false),
-                Field::new("label", DataType::Utf8, true),
-                geometry_arrow_field(),
-            ])),
+            Arc::new(Schema::new(fields)),
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
                 name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs: ContractCrs::Resolved(crs),
+                crs,
                 dimensions: GeometryDimensions::Xy,
                 encoding: None,
                 nullable: true,
@@ -318,6 +316,48 @@ mod tests {
             ContractProperties::default(),
         )
         .expect("contratto geometrico valido")
+    }
+
+    fn geo_contract(crs: ResolvedCrs) -> DataContract {
+        contract_with_geometry(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("label", DataType::Utf8, true),
+                geometry_arrow_field(),
+            ],
+            ContractCrs::Resolved(crs),
+        )
+    }
+
+    /// Il contratto con i metadati del campo geometria modificati da
+    /// `modifica`, gli altri campi invariati. `conserva_metadati_schema`
+    /// dice se lo schema ricostruito tiene i metadati di schema o nasce
+    /// senza: i chiamanti fanno l'una e l'altra cosa, e la scelta resta loro.
+    fn with_geometry_field_metadata(
+        mut contract: DataContract,
+        conserva_metadati_schema: bool,
+        modifica: impl Fn(&mut HashMap<String, String>),
+    ) -> DataContract {
+        let fields: Vec<Field> = contract
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name() == DEFAULT_GEOMETRY_COLUMN {
+                    let mut metadata = field.metadata().clone();
+                    modifica(&mut metadata);
+                    field.as_ref().clone().with_metadata(metadata)
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        contract.schema = Arc::new(if conserva_metadati_schema {
+            Schema::new_with_metadata(fields, contract.schema.metadata().clone())
+        } else {
+            Schema::new(fields)
+        });
+        contract
     }
 
     fn tabular_contract() -> DataContract {
@@ -339,11 +379,7 @@ mod tests {
         let wkb = Geometry::Point(Point::new(1.0, 2.0))
             .to_wkb(CoordDimensions::xy())
             .expect("encode punto");
-        // `write!` su `String` e' infallibile: l'`fmt::Result` non puo' essere Err.
-        wkb.iter().fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+        esadecimale(&wkb)
     }
 
     /// Replay deterministico dell'invariante di `fuzz_targets/analyze_geo.rs`
@@ -2085,25 +2121,14 @@ mod tests {
         );
 
         // Collisione con una colonna esistente: fail-closed.
-        let with_accessor_column = DataContract::new(
-            Arc::new(Schema::new(vec![
+        let with_accessor_column = contract_with_geometry(
+            vec![
                 Field::new("id", DataType::Int64, false),
                 Field::new("geometry_type", DataType::Utf8, true),
                 geometry_arrow_field(),
-            ])),
-            vec![GeometryColumnContract {
-                field_id: FieldId(2),
-                name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs: ContractCrs::Resolved(projected_crs()),
-                dimensions: GeometryDimensions::Xy,
-                encoding: None,
-                nullable: true,
-                types: GeometryColumnContract::undeclared_types(),
-            }],
-            Some(FieldId(2)),
-            ContractProperties::default(),
-        )
-        .expect("contratto valido");
+            ],
+            ContractCrs::Resolved(projected_crs()),
+        );
         assert!(analyze_one(
             "geo.geometry_accessors",
             &[with_accessor_column],
@@ -2197,11 +2222,7 @@ mod tests {
         ]))
         .to_wkb(CoordDimensions::xy())
         .expect("encode linea");
-        // `write!` su `String` e' infallibile: l'`fmt::Result` non puo' essere Err.
-        let line_hex = line.iter().fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        });
+        let line_hex = esadecimale(&line);
         let result = analyze_one(
             "geo.line_locate_point",
             &inputs,
@@ -2452,26 +2473,14 @@ mod tests {
         assert!(matches!(result, Err(PlenoraError::Schema(_))));
 
         // Default `wkt` che collide con una colonna esistente.
-        let mut fields = vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new(WKT_COLUMN, DataType::Utf8, true),
-            geometry_arrow_field(),
-        ];
-        let with_wkt = DataContract::new(
-            Arc::new(Schema::new(std::mem::take(&mut fields))),
-            vec![GeometryColumnContract {
-                field_id: FieldId(2),
-                name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs: ContractCrs::Resolved(projected_crs()),
-                dimensions: GeometryDimensions::Xy,
-                encoding: None,
-                nullable: true,
-                types: GeometryColumnContract::undeclared_types(),
-            }],
-            Some(FieldId(2)),
-            ContractProperties::default(),
-        )
-        .expect("contratto valido");
+        let with_wkt = contract_with_geometry(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new(WKT_COLUMN, DataType::Utf8, true),
+                geometry_arrow_field(),
+            ],
+            ContractCrs::Resolved(projected_crs()),
+        );
         let result = analyze_one("geo.to_wkt", &[with_wkt], &json!({}), None);
         assert!(matches!(result, Err(PlenoraError::Schema(_))));
 
@@ -2737,24 +2746,12 @@ mod tests {
         // R2.4 identity-preserving sul campo geometria che sopravvive
         // invariato: TUTTI i metadati del campo sorgente (chiave canonica
         // `plenora.*` gia' presente e chiave esterna) sono conservati.
-        let mut contract = geo_contract(projected_crs());
-        let fields: Vec<Field> = contract
-            .schema
-            .fields()
-            .iter()
-            .map(|field| {
-                if field.name() == DEFAULT_GEOMETRY_COLUMN {
-                    let mut metadata = field.metadata().clone();
-                    metadata.insert("plenora.geometry.encoding".to_owned(), "wkb".to_owned());
-                    metadata.insert("driver.native".to_owned(), "kept".to_owned());
-                    Field::new(field.name(), field.data_type().clone(), field.is_nullable())
-                        .with_metadata(metadata)
-                } else {
-                    field.as_ref().clone()
-                }
-            })
-            .collect();
-        contract.schema = Arc::new(Schema::new(fields));
+        // Schema ricostruito senza i metadati di schema.
+        let contract =
+            with_geometry_field_metadata(geo_contract(projected_crs()), false, |metadata| {
+                metadata.insert("plenora.geometry.encoding".to_owned(), "wkb".to_owned());
+                metadata.insert("driver.native".to_owned(), "kept".to_owned());
+            });
         let expected = contract
             .schema
             .field_with_name(DEFAULT_GEOMETRY_COLUMN)
@@ -2788,24 +2785,13 @@ mod tests {
 
     /// Contratto con geometria SENZA CRS dichiarato (`ContractCrs::Missing`).
     fn geo_contract_missing_crs() -> DataContract {
-        DataContract::new(
-            Arc::new(Schema::new(vec![
+        contract_with_geometry(
+            vec![
                 Field::new("id", DataType::Int64, false),
                 extension_only_geometry_field(),
-            ])),
-            vec![GeometryColumnContract {
-                field_id: FieldId(2),
-                name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs: ContractCrs::Missing,
-                dimensions: GeometryDimensions::Xy,
-                encoding: None,
-                nullable: true,
-                types: GeometryColumnContract::undeclared_types(),
-            }],
-            Some(FieldId(2)),
-            ContractProperties::default(),
+            ],
+            ContractCrs::Missing,
         )
-        .expect("contratto geometrico valido")
     }
 
     #[test]
@@ -2868,28 +2854,17 @@ mod tests {
     /// Contratto con geometria a CRS dichiarato non risolto
     /// (`ContractCrs::DeclaredUnresolved`, R4.6.3).
     fn geo_contract_declared_unresolved_crs() -> DataContract {
-        DataContract::new(
-            Arc::new(Schema::new(vec![
+        contract_with_geometry(
+            vec![
                 Field::new("id", DataType::Int64, false),
                 extension_only_geometry_field(),
-            ])),
-            vec![GeometryColumnContract {
-                field_id: FieldId(2),
-                name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
-                crs: ContractCrs::DeclaredUnresolved {
-                    crs_id: Some("EPSG:99999".to_owned()),
-                    definition: None,
-                    definition_format: None,
-                },
-                dimensions: GeometryDimensions::Xy,
-                encoding: None,
-                nullable: true,
-                types: GeometryColumnContract::undeclared_types(),
-            }],
-            Some(FieldId(2)),
-            ContractProperties::default(),
+            ],
+            ContractCrs::DeclaredUnresolved {
+                crs_id: Some("EPSG:99999".to_owned()),
+                definition: None,
+                definition_format: None,
+            },
         )
-        .expect("contratto geometrico valido")
     }
 
     #[test]
@@ -3043,29 +3018,13 @@ mod tests {
             ),
             PropertyScope::Schema,
         );
-        let fields: Vec<Field> = contract
-            .schema
-            .fields()
-            .iter()
-            .map(|field| {
-                if field.name() == DEFAULT_GEOMETRY_COLUMN {
-                    let mut metadata = field.metadata().clone();
-                    metadata.insert(
-                        PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
-                        "exact".to_owned(),
-                    );
-                    metadata.insert(PLENORA_GEOMETRY_TYPES_KEY.to_owned(), "polygon".to_owned());
-                    field.as_ref().clone().with_metadata(metadata)
-                } else {
-                    field.as_ref().clone()
-                }
-            })
-            .collect();
-        contract.schema = Arc::new(Schema::new_with_metadata(
-            fields,
-            contract.schema.metadata().clone(),
-        ));
-        contract
+        with_geometry_field_metadata(contract, true, |metadata| {
+            metadata.insert(
+                PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
+                "exact".to_owned(),
+            );
+            metadata.insert(PLENORA_GEOMETRY_TYPES_KEY.to_owned(), "polygon".to_owned());
+        })
     }
 
     #[test]
@@ -3181,38 +3140,21 @@ mod tests {
     /// Contratto con le chiavi canoniche CRS sul campo (oltre all'estensione
     /// e al `geo` legacy), come prodotto dalla discovery.
     fn geo_contract_with_canonical_crs_keys() -> DataContract {
-        let mut contract = geo_contract(projected_crs());
-        let fields: Vec<Field> = contract
-            .schema
-            .fields()
-            .iter()
-            .map(|field| {
-                if field.name() == DEFAULT_GEOMETRY_COLUMN {
-                    let mut metadata = field.metadata().clone();
-                    metadata.insert(
-                        PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-                        "resolved".to_owned(),
-                    );
-                    metadata.insert(
-                        PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
-                        "EPSG:32632".to_owned(),
-                    );
-                    metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
-                    metadata.insert(
-                        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-                        "easting_northing".to_owned(),
-                    );
-                    field.as_ref().clone().with_metadata(metadata)
-                } else {
-                    field.as_ref().clone()
-                }
-            })
-            .collect();
-        contract.schema = Arc::new(Schema::new_with_metadata(
-            fields,
-            contract.schema.metadata().clone(),
-        ));
-        contract
+        with_geometry_field_metadata(geo_contract(projected_crs()), true, |metadata| {
+            metadata.insert(
+                PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                "resolved".to_owned(),
+            );
+            metadata.insert(
+                PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
+                "EPSG:32632".to_owned(),
+            );
+            metadata.insert(PLENORA_GEOMETRY_SRID_KEY.to_owned(), "32632".to_owned());
+            metadata.insert(
+                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                "easting_northing".to_owned(),
+            );
+        })
     }
 
     #[test]
@@ -3273,39 +3215,22 @@ mod tests {
     /// l'ordine nativo dell'autorita'.
     fn geo_contract_with_declared_axis_order(crs: ResolvedCrs, axis_order: &str) -> DataContract {
         let definition = crs.definition().to_owned();
-        let mut contract = geo_contract(crs);
-        let fields: Vec<Field> = contract
-            .schema
-            .fields()
-            .iter()
-            .map(|field| {
-                if field.name() == DEFAULT_GEOMETRY_COLUMN {
-                    let mut metadata = field.metadata().clone();
-                    metadata.insert(
-                        GEO_METADATA_KEY.to_owned(),
-                        geo_metadata_json_with_dimensions(&definition, GeometryDimensions::Xy)
-                            .expect("geo metadata"),
-                    );
-                    metadata.insert(
-                        PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-                        "resolved".to_owned(),
-                    );
-                    metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.clone());
-                    metadata.insert(
-                        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-                        axis_order.to_owned(),
-                    );
-                    field.as_ref().clone().with_metadata(metadata)
-                } else {
-                    field.as_ref().clone()
-                }
-            })
-            .collect();
-        contract.schema = Arc::new(Schema::new_with_metadata(
-            fields,
-            contract.schema.metadata().clone(),
-        ));
-        contract
+        with_geometry_field_metadata(geo_contract(crs), true, |metadata| {
+            metadata.insert(
+                GEO_METADATA_KEY.to_owned(),
+                geo_metadata_json_with_dimensions(&definition, GeometryDimensions::Xy)
+                    .expect("geo metadata"),
+            );
+            metadata.insert(
+                PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
+                "resolved".to_owned(),
+            );
+            metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), definition.clone());
+            metadata.insert(
+                PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                axis_order.to_owned(),
+            );
+        })
     }
 
     #[test]
@@ -3433,29 +3358,14 @@ mod tests {
             CrsKind::Geographic,
             None,
         );
-        let mut input = geo_contract(crs);
+        let input = geo_contract(crs);
         let canonical = canonical_geometry_metadata(
             input.active_geometry_column().expect("geometria"),
             &GeometryMetadataDetails::default(),
         );
-        let fields: Vec<Field> = input
-            .schema
-            .fields()
-            .iter()
-            .map(|field| {
-                if field.name() == DEFAULT_GEOMETRY_COLUMN {
-                    let mut metadata = field.metadata().clone();
-                    metadata.extend(canonical.clone());
-                    field.as_ref().clone().with_metadata(metadata)
-                } else {
-                    field.as_ref().clone()
-                }
-            })
-            .collect();
-        input.schema = Arc::new(Schema::new_with_metadata(
-            fields,
-            input.schema.metadata().clone(),
-        ));
+        let input = with_geometry_field_metadata(input, true, |metadata| {
+            metadata.extend(canonical.clone());
+        });
 
         analyze_one(
             "geo.reproject",

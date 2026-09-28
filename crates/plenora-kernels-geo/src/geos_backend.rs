@@ -569,17 +569,12 @@ pub fn split_polygon_by_linework(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{bowtie, rect, rect_polygon};
     use geo::{line_string, polygon, Area, Geometry};
     use geozero::{CoordDimensions, ToWkb};
 
     fn bow_tie_wkb() -> Vec<u8> {
-        Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ])
-        .to_wkb(CoordDimensions::xy())
-        .unwrap()
+        bowtie().to_wkb(CoordDimensions::xy()).unwrap()
     }
 
     #[test]
@@ -595,13 +590,9 @@ mod tests {
 
     #[test]
     fn valid_input_is_returned_byte_for_byte() {
-        let input = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ])
-        .to_wkb(CoordDimensions::xy())
-        .unwrap();
+        let input = rect(0.0, 0.0, 2.0, 2.0)
+            .to_wkb(CoordDimensions::xy())
+            .unwrap();
         assert_eq!(
             make_valid_wkb(&input, RepairMethod::Structure, false).unwrap(),
             input
@@ -653,11 +644,7 @@ mod tests {
 
     #[test]
     fn polygon_split_conserves_area_and_ignores_outside_faces() {
-        let source = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 10.0, y: 0.0),
-            (x: 10.0, y: 10.0), (x: 0.0, y: 10.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let source = rect(0.0, 0.0, 10.0, 10.0);
         let splitter = Geometry::MultiLineString(geo::MultiLineString(vec![
             line_string![(x: 5.0, y: -1.0), (x: 5.0, y: 11.0)],
             line_string![(x: 20.0, y: 20.0), (x: 22.0, y: 20.0),
@@ -703,16 +690,8 @@ mod tests {
         assert!((pieces.iter().map(Area::unsigned_area).sum::<f64>() - 96.0).abs() < 1e-12);
 
         let source = Geometry::MultiPolygon(geo::MultiPolygon(vec![
-            polygon![
-                (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-                (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-                (x: 0.0, y: 0.0)
-            ],
-            polygon![
-                (x: 4.0, y: 0.0), (x: 6.0, y: 0.0),
-                (x: 6.0, y: 2.0), (x: 4.0, y: 2.0),
-                (x: 4.0, y: 0.0)
-            ],
+            rect_polygon(0.0, 0.0, 2.0, 2.0),
+            rect_polygon(4.0, 0.0, 6.0, 2.0),
         ]));
         let cutter = Geometry::LineString(line_string![(x: -1.0, y: 1.0), (x: 7.0, y: 1.0)]);
         let pieces = split_polygon_by_linework(&source, &cutter, 100, 10_000, 10, 100).unwrap();
@@ -730,11 +709,7 @@ mod tests {
         let invalid_types = vec![
             Geometry::Point(geo::Point::new(0.0, 0.0)),
             Geometry::MultiPoint(vec![geo::Point::new(0.0, 0.0)].into()),
-            Geometry::Polygon(polygon![
-                (x: 0.0, y: 0.0), (x: 1.0, y: 0.0),
-                (x: 1.0, y: 1.0), (x: 0.0, y: 1.0),
-                (x: 0.0, y: 0.0)
-            ]),
+            rect(0.0, 0.0, 1.0, 1.0),
             Geometry::Rect(geo::Rect::new((0.0, 0.0), (1.0, 1.0))),
             Geometry::Triangle(geo::Triangle::new(
                 geo::Coord { x: 0.0, y: 0.0 },
@@ -773,11 +748,7 @@ mod tests {
             1
         );
 
-        let source = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0)
-        ]);
+        let source = rect(0.0, 0.0, 2.0, 2.0);
         assert_eq!(
             split_polygon_by_linework(&source, &empty, 100, 1_000, 10, 100)
                 .unwrap()
@@ -806,11 +777,7 @@ mod tests {
             "risultato diverso tra forma decodificata e WKB"
         );
         // Input gia' valido: passthrough (stessa geometria in uscita).
-        let valid = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let valid = rect(0.0, 0.0, 2.0, 2.0);
         assert_eq!(
             make_valid_geometry(&valid, RepairMethod::Linework, true).expect("passthrough"),
             valid

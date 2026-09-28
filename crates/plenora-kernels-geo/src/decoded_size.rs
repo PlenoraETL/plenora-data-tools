@@ -186,14 +186,13 @@ fn decoded_size_geometry(
 
 #[cfg(test)]
 mod tests {
-    use geo::{
-        Coord, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
-        Polygon,
-    };
-    use geozero::{CoordDimensions, ToWkb};
+    use geo::{Coord, GeometryCollection, LineString, MultiPolygon, Point, Polygon};
 
     use super::*;
     use crate::geometry_from_wkb;
+    use crate::test_support::{
+        linestring_wkb_le, point_wkb_le, push_count, push_header, to_wkb, valid_corpus,
+    };
 
     /// Le costanti della formula SONO i `size_of` del layout fisico: se il
     /// layout di `geo` cambia, questo test fallisce prima di qualunque
@@ -254,99 +253,19 @@ mod tests {
         exterior + interiors_buffer + interiors
     }
 
-    fn to_wkb(geometry: &Geometry<f64>) -> Vec<u8> {
-        geometry
-            .to_wkb(CoordDimensions::xy())
-            .expect("encode fixture")
-    }
-
-    /// Corpus multi-tipo (stessa batteria di `geometry_contract`): punti,
-    /// linee, poligoni con e senza buchi, multi-*, collection annidate,
-    /// vuote.
+    /// Corpus multi-tipo (`test_support::valid_corpus`) con la multipolygon
+    /// di due triangoli, propria di questo modulo.
     fn corpus() -> Vec<(&'static str, Geometry<f64>)> {
-        let triangle = Geometry::Polygon(Polygon::new(
-            LineString::from(vec![(0.0, 0.0), (4.0, 0.0), (2.0, 3.0), (0.0, 0.0)]),
-            Vec::new(),
-        ));
-        let holed = Geometry::Polygon(Polygon::new(
-            LineString::from(vec![
-                (0.0, 0.0),
-                (10.0, 0.0),
-                (10.0, 10.0),
-                (0.0, 10.0),
-                (0.0, 0.0),
-            ]),
-            vec![LineString::from(vec![
-                (2.0, 2.0),
-                (4.0, 2.0),
-                (2.0, 4.0),
-                (2.0, 2.0),
-            ])],
-        ));
-        vec![
-            ("point", Geometry::Point(Point::new(1.5, -2.5))),
-            (
-                "linestring",
-                Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0), (2.0, 0.5)])),
+        valid_corpus(MultiPolygon::new(vec![
+            Polygon::new(
+                LineString::from(vec![(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 0.0)]),
+                Vec::new(),
             ),
-            (
-                "linestring vuota",
-                Geometry::LineString(LineString::from(Vec::<(f64, f64)>::new())),
+            Polygon::new(
+                LineString::from(vec![(10.0, 10.0), (17.0, 10.0), (17.0, 17.0), (10.0, 10.0)]),
+                Vec::new(),
             ),
-            ("polygon semplice", triangle.clone()),
-            ("polygon con buco", holed.clone()),
-            (
-                "multipoint",
-                Geometry::MultiPoint(MultiPoint::new(vec![
-                    Point::new(0.0, 0.0),
-                    Point::new(3.0, 4.0),
-                ])),
-            ),
-            (
-                "multipoint vuota",
-                Geometry::MultiPoint(MultiPoint::new(Vec::new())),
-            ),
-            (
-                "multilinestring",
-                Geometry::MultiLineString(MultiLineString::new(vec![
-                    LineString::from(vec![(0.0, 0.0), (1.0, 1.0)]),
-                    LineString::from(vec![(2.0, 2.0), (3.0, 3.0), (4.0, 2.0)]),
-                ])),
-            ),
-            (
-                "multipolygon",
-                Geometry::MultiPolygon(MultiPolygon::new(vec![
-                    Polygon::new(
-                        LineString::from(vec![(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 0.0)]),
-                        Vec::new(),
-                    ),
-                    Polygon::new(
-                        LineString::from(vec![
-                            (10.0, 10.0),
-                            (17.0, 10.0),
-                            (17.0, 17.0),
-                            (10.0, 10.0),
-                        ]),
-                        Vec::new(),
-                    ),
-                ])),
-            ),
-            (
-                "collection annidata",
-                Geometry::GeometryCollection(GeometryCollection::new_from(vec![
-                    Geometry::Point(Point::new(0.0, 0.0)),
-                    Geometry::GeometryCollection(GeometryCollection::new_from(vec![
-                        Geometry::LineString(LineString::from(vec![(0.0, 0.0), (5.0, 5.0)])),
-                        triangle,
-                    ])),
-                    holed,
-                ])),
-            ),
-            (
-                "collection vuota",
-                Geometry::GeometryCollection(GeometryCollection::new_from(Vec::new())),
-            ),
-        ]
+        ]))
     }
 
     /// Conservativita' (architettura.md#geometrie D14.4, ruolo del test errori-e-limiti.md#limiti-dichiarati): su tutto il
@@ -390,10 +309,7 @@ mod tests {
     /// decode le rifiuta — l'errore canonico resta del decoder.
     #[test]
     fn non_finite_coordinates_are_sized_and_left_to_the_decoder() {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&1_u32.to_le_bytes());
-        payload.extend_from_slice(&f64::NAN.to_le_bytes());
-        payload.extend_from_slice(&0.0_f64.to_le_bytes());
+        let payload = point_wkb_le(f64::NAN, 0.0);
         assert_eq!(decoded_size_xy(&payload).expect("preflight"), 0);
         assert!(geometry_from_wkb(&payload).is_err());
     }
@@ -407,29 +323,21 @@ mod tests {
             Vec::new(), // byte mancante
             vec![1, 2], // type code troncato
             vec![2],    // byte order non valido
-            {
-                // linestring da una coordinata
-                let mut p = vec![1_u8];
-                p.extend_from_slice(&2_u32.to_le_bytes());
-                p.extend_from_slice(&1_u32.to_le_bytes());
-                p.extend_from_slice(&[0_u8; 16]);
-                p
-            },
+            // linestring da una coordinata
+            linestring_wkb_le(&[(0.0, 0.0)]),
             {
                 // conteggio oltre i byte disponibili
-                let mut p = vec![1_u8];
-                p.extend_from_slice(&2_u32.to_le_bytes());
-                p.extend_from_slice(&1_000_u32.to_le_bytes());
+                let mut p = Vec::new();
+                push_header(&mut p, 2);
+                push_count(&mut p, 1_000);
                 p
             },
             {
-                // figlio incompatibile in multipoint (una linestring)
-                let mut p = vec![1_u8];
-                p.extend_from_slice(&4_u32.to_le_bytes());
-                p.extend_from_slice(&1_u32.to_le_bytes());
-                p.extend_from_slice(&[1_u8]);
-                p.extend_from_slice(&2_u32.to_le_bytes());
-                p.extend_from_slice(&0_u32.to_le_bytes());
+                // figlio incompatibile in multipoint (una linestring vuota)
+                let mut p = Vec::new();
+                push_header(&mut p, 4);
+                push_count(&mut p, 1);
+                p.extend(linestring_wkb_le(&[]));
                 p
             },
         ];

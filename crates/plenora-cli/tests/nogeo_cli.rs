@@ -4,14 +4,12 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::ipc::reader::FileReader;
-use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::catalog::{Family, CATALOG};
 use serde_json::json;
 
-const fn executable() -> &'static str {
-    env!("CARGO_BIN_EXE_plenora-data-tools")
-}
+mod comune;
+use comune::{comando_run, eseguibile as executable, scrivi_ipc, COMANDI};
 
 fn write_input(path: &std::path::Path) {
     let batch = RecordBatch::try_new(
@@ -19,19 +17,7 @@ fn write_input(path: &std::path::Path) {
         vec![Arc::new(StringArray::from(vec![Some("Été"), None]))],
     )
     .expect("fixture");
-    let mut file = File::create(path).expect("create input");
-    let mut writer = FileWriter::try_new(&mut file, &batch.schema()).expect("writer");
-    writer.write(&batch).expect("write batch");
-    writer.finish().expect("finish input");
-}
-
-fn write_batches(path: &std::path::Path, batches: &[RecordBatch], schema: &Schema) {
-    let mut file = File::create(path).expect("create input");
-    let mut writer = FileWriter::try_new(&mut file, schema).expect("writer");
-    for batch in batches {
-        writer.write(batch).expect("write batch");
-    }
-    writer.finish().expect("finish input");
+    scrivi_ipc(path, &batch.schema(), &[batch]);
 }
 
 #[test]
@@ -58,13 +44,7 @@ fn cli_round_trip_is_atomic_and_refuses_overwrite() {
     )
     .expect("write plan");
 
-    let status = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    let status = comando_run(&plan, "--input", &input, &output)
         .status()
         .expect("run CLI");
     assert!(status.success());
@@ -81,13 +61,7 @@ fn cli_round_trip_is_atomic_and_refuses_overwrite() {
     assert_eq!(values.value(0), "ete");
     assert!(values.is_null(1));
 
-    let second = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    let second = comando_run(&plan, "--input", &input, &output)
         .output()
         .expect("second CLI run");
     // Destinazione occupata: `conflict`, exit 5, come la pubblicazione
@@ -116,15 +90,14 @@ fn invalid_plan_is_rejected_before_input_is_opened() {
     )
     .expect("write plan");
 
-    let result = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(directory.path().join("missing.arrow"))
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .expect("run CLI");
+    let result = comando_run(
+        &plan,
+        "--input",
+        &directory.path().join("missing.arrow"),
+        &output,
+    )
+    .output()
+    .expect("run CLI");
     assert!(!result.status.success());
     assert!(!output.try_exists().expect("stat"));
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -194,19 +167,13 @@ fn empty_ipc_file_is_transformed_and_published() {
     let output = directory.path().join("output.arrow");
     let plan = directory.path().join("plan.json");
     let schema = Schema::new(vec![Field::new("value", DataType::Utf8, true)]);
-    write_batches(&input, &[], &schema);
+    scrivi_ipc(&input, &schema, &[]);
     std::fs::write(
         &plan,
         br#"{"schema_version":1,"steps":[{"operation":"rename","config":{"renames":[{"old_name":"value","new_name":"renamed"}]}}]}"#,
     )
     .expect("plan");
-    let status = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    let status = comando_run(&plan, "--input", &input, &output)
         .status()
         .expect("CLI");
     assert!(status.success());
@@ -221,20 +188,14 @@ fn empty_ipc_file_is_safe_for_a_blocking_plan() {
     let output = directory.path().join("output.arrow");
     let plan = directory.path().join("plan.json");
     let schema = Schema::new(vec![Field::new("id", DataType::Int64, true)]);
-    write_batches(&input, &[], &schema);
+    scrivi_ipc(&input, &schema, &[]);
     std::fs::write(
         &plan,
         br#"{"schema_version":1,"steps":[{"operation":"sort","config":{"columns":["id"],"ascending":true}}]}"#,
     )
     .expect("plan");
 
-    let status = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    let status = comando_run(&plan, "--input", &input, &output)
         .status()
         .expect("CLI");
     assert!(status.success());
@@ -260,20 +221,14 @@ fn total_row_limit_across_batches_leaves_no_output() {
         vec![Arc::new(StringArray::from(vec![Some("b")]))],
     )
     .expect("second");
-    write_batches(&input, &[first, second], schema.as_ref());
+    scrivi_ipc(&input, schema.as_ref(), &[first, second]);
     std::fs::write(
         &plan,
         br#"{"schema_version":1,"limits":{"max_rows":1},"steps":[{"operation":"drop_columns","config":{"columns":[]}}]}"#,
     )
     .expect("plan");
     // Ogni batch da solo sta nel limite: lo supera solo il totale.
-    let result = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    let result = comando_run(&plan, "--input", &input, &output)
         .output()
         .expect("CLI");
     let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
@@ -304,13 +259,7 @@ fn run_legacy_fallito(
         br#"{"schema_version":1,"steps":[{"operation":"drop_columns","config":{"columns":[]}}]}"#,
     )
     .expect("plan");
-    let result = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(input)
-        .arg("--output")
-        .arg(output)
+    let result = comando_run(&plan, "--input", input, output)
         .output()
         .expect("CLI");
     assert!(!result.status.success());
@@ -379,15 +328,9 @@ fn blocking_plan_combines_batches_before_sorting() {
         )
         .expect("second"),
     ];
-    write_batches(&input, &batches, schema.as_ref());
+    scrivi_ipc(&input, schema.as_ref(), &batches);
     std::fs::write(&plan, br#"{"schema_version":1,"steps":[{"operation":"sort","config":{"columns":["id"],"ascending":true}}]}"#).expect("plan");
-    assert!(Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    assert!(comando_run(&plan, "--input", &input, &output)
         .status()
         .expect("CLI")
         .success());
@@ -423,16 +366,10 @@ fn binary_plan_requires_right_and_publishes_join_atomically() {
         vec![Arc::new(Int64Array::from(vec![2, 3]))],
     )
     .expect("right");
-    write_batches(&left, &[left_batch], schema.as_ref());
-    write_batches(&right, &[right_batch], schema.as_ref());
+    scrivi_ipc(&left, schema.as_ref(), &[left_batch]);
+    scrivi_ipc(&right, schema.as_ref(), &[right_batch]);
     std::fs::write(&plan, br#"{"schema_version":1,"steps":[{"operation":"join","config":{"left_keys":["id"],"right_keys":["id"],"how":"outer"}}]}"#).expect("plan");
-    let missing = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&left)
-        .arg("--output")
-        .arg(&missing_output)
+    let missing = comando_run(&plan, "--input", &left, &missing_output)
         .output()
         .expect("missing right");
     assert!(!missing.status.success());
@@ -477,19 +414,13 @@ fn streaming_multiple_batches_reuses_writer_and_preserves_schema() {
         )
         .expect("second"),
     ];
-    write_batches(&input, &batches, schema.as_ref());
+    scrivi_ipc(&input, schema.as_ref(), &batches);
     std::fs::write(
         &plan,
         br#"{"schema_version":1,"steps":[{"operation":"string_length","config":{"column":"value","output_column":"length"}}]}"#,
     )
     .expect("plan");
-    assert!(Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    assert!(comando_run(&plan, "--input", &input, &output)
         .status()
         .expect("CLI")
         .success());
@@ -499,16 +430,15 @@ fn streaming_multiple_batches_reuses_writer_and_preserves_schema() {
         .sum::<usize>();
     assert_eq!(rows, 2);
 
-    let missing_right_value = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(directory.path().join("unused.arrow"))
-        .arg("--right")
-        .status()
-        .expect("missing right value");
+    let missing_right_value = comando_run(
+        &plan,
+        "--input",
+        &input,
+        &directory.path().join("unused.arrow"),
+    )
+    .arg("--right")
+    .status()
+    .expect("missing right value");
     assert!(!missing_right_value.success());
 }
 
@@ -522,15 +452,14 @@ fn valid_blocking_plan_reports_missing_input_without_publication() {
         br#"{"schema_version":1,"steps":[{"operation":"sort","config":{"columns":["id"]}}]}"#,
     )
     .expect("plan");
-    let status = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(directory.path().join("missing.arrow"))
-        .arg("--output")
-        .arg(&output)
-        .status()
-        .expect("CLI");
+    let status = comando_run(
+        &plan,
+        "--input",
+        &directory.path().join("missing.arrow"),
+        &output,
+    )
+    .status()
+    .expect("CLI");
     assert!(!status.success());
     assert!(!output.try_exists().expect("stat"));
 }
@@ -591,7 +520,7 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
         ]))],
     )
     .expect("fixture");
-    write_batches(&input, &[batch], &schema);
+    scrivi_ipc(&input, &schema, &[batch]);
     std::fs::write(
         &plan,
         serde_json::to_vec(&json!({
@@ -606,14 +535,7 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
         .expect("json"),
     )
     .expect("write plan");
-    let result = Command::new(executable())
-        .arg("run")
-        .arg("--plan")
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output)
+    let result = comando_run(&plan, "--input", &input, &output)
         .output()
         .expect("run legacy blocking");
     assert!(
@@ -704,7 +626,7 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
         let input = directory.path().join("input.arrow");
         let output = directory.path().join("output.arrow");
         let plan = directory.path().join("plan.json");
-        write_batches(&input, std::slice::from_ref(&batch), &schema);
+        scrivi_ipc(&input, &schema, std::slice::from_ref(&batch));
         std::fs::write(
             &plan,
             serde_json::to_vec(&json!({
@@ -717,14 +639,7 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
             .expect("json"),
         )
         .expect("write plan");
-        let result = Command::new(executable())
-            .arg("run")
-            .arg("--plan")
-            .arg(&plan)
-            .arg("--input")
-            .arg(&input)
-            .arg("--output")
-            .arg(&output)
+        let result = comando_run(&plan, "--input", &input, &output)
             .output()
             .expect("run legacy formula/expression");
         let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
@@ -812,7 +727,7 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
             let input = directory.path().join("input.arrow");
             let output = directory.path().join("output.arrow");
             let plan = directory.path().join("plan.json");
-            write_batches(&input, std::slice::from_ref(&batch), &schema);
+            scrivi_ipc(&input, &schema, std::slice::from_ref(&batch));
             std::fs::write(
                 &plan,
                 serde_json::to_vec(&json!({
@@ -825,14 +740,7 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
                 .expect("json"),
             )
             .expect("write plan");
-            let result = Command::new(executable())
-                .arg("run")
-                .arg("--plan")
-                .arg(&plan)
-                .arg("--input")
-                .arg(&input)
-                .arg("--output")
-                .arg(&output)
+            let result = comando_run(&plan, "--input", &input, &output)
                 .output()
                 .expect("run legacy gate probe");
             let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
@@ -920,15 +828,14 @@ fn gli_exit_code_seguono_la_categoria_dell_envelope() {
     // Piano malformato -> invalid_plan -> 2.
     let plan = directory.path().join("plan.json");
     std::fs::write(&plan, "{ non json").expect("plan");
-    let result = Command::new(executable())
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(directory.path().join("out.arrow"))
-        .output()
-        .expect("run");
+    let result = comando_run(
+        &plan,
+        "--input",
+        &input,
+        &directory.path().join("out.arrow"),
+    )
+    .output()
+    .expect("run");
     let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
     assert_eq!(envelope["error"]["category"], "data_mapping");
     assert_eq!(result.status.code(), Some(3), "data_mapping -> 3");
@@ -1049,18 +956,6 @@ fn ogni_sottocomando_del_dispatch_ha_un_help_che_lo_nomina() {
     // un difetto: e' la prima cosa che legge chi non conosce il tool. La
     // lista e' quella del dispatch, non una copia — se il dispatch cambia e
     // l'help no, questo test cade.
-    const COMANDI: [&str; 10] = [
-        "catalog",
-        "describe",
-        "inspect-dataset",
-        "validate",
-        "run",
-        "capabilities",
-        "transform",
-        "spatial-join",
-        "transform-arrow",
-        "pair-arrow",
-    ];
     let generale = Command::new(executable())
         .args(["--help"])
         .output()

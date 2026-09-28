@@ -623,9 +623,10 @@ fn clean_valid_polygon_topology_impl(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::test_support::{bowtie, rect};
     use geo::{
-        line_string, polygon, Area, GeometryCollection, Line, MultiLineString, MultiPoint, Point,
-        Rect, Triangle,
+        line_string, Area, GeometryCollection, Line, MultiLineString, MultiPoint, Point, Rect,
+        Triangle,
     };
     use proptest::prelude::*;
 
@@ -691,11 +692,7 @@ mod tests {
     }
 
     fn square(x: f64, y: f64, size: f64) -> Geometry<f64> {
-        Geometry::Polygon(polygon![
-            (x: x, y: y), (x: x + size, y: y),
-            (x: x + size, y: y + size), (x: x, y: y + size),
-            (x: x, y: y),
-        ])
+        rect(x, y, x + size, y + size)
     }
 
     #[test]
@@ -973,11 +970,7 @@ mod tests {
         // in ingresso, la variante validated no. Gli errori ammessi sono solo
         // quelli dei gate di output (`InvalidGeometry`) e di tipo: nessun
         // panic.
-        let bowtie = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let bowtie = bowtie();
         let valid = square(0.0, 0.0, 2.0);
         assert!(matches!(
             boolean_operation(&bowtie, &valid, BooleanOperation::Intersection),

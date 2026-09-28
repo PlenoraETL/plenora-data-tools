@@ -429,7 +429,7 @@ pub fn dbscan_column(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geozero::{CoordDimensions, ToWkb};
+    use crate::test_support::{to_wkb, wkb_column_with};
     use plenora_core::arrow::array::BinaryArray;
 
     fn points(coords: &[(f64, f64)]) -> Vec<Point<f64>> {
@@ -528,15 +528,7 @@ mod tests {
     }
 
     fn wkb_column(geometries: &[Option<Geometry<f64>>]) -> BinaryArray {
-        let cells: Vec<Option<Vec<u8>>> = geometries
-            .iter()
-            .map(|geometry| {
-                geometry
-                    .as_ref()
-                    .map(|geometry| geometry.to_wkb(CoordDimensions::xy()).expect("encode"))
-            })
-            .collect();
-        cells.iter().map(|cell| cell.as_deref()).collect()
+        wkb_column_with(geometries, to_wkb)
     }
 
     // --- kernel puro ---------------------------------------------------------

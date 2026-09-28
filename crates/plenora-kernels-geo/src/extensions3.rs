@@ -541,6 +541,8 @@ pub fn shared_paths_rows(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::test_support::rect as rectangle;
+    use crate::test_support::{assert_close, bowtie, wkb_column_with};
     use geo::{polygon, MultiPolygon as GeoMultiPolygon, Point};
     use plenora_core::arrow::array::BinaryArray as ArrowBinaryArray;
 
@@ -566,34 +568,9 @@ mod tests {
         }
     }
 
-    fn rectangle(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Geometry<f64> {
-        Geometry::Polygon(polygon![
-            (x: xmin, y: ymin), (x: xmax, y: ymin),
-            (x: xmax, y: ymax), (x: xmin, y: ymax),
-            (x: xmin, y: ymin),
-        ])
-    }
-
-    fn assert_close(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() < 1e-9,
-            "atteso {expected}, ottenuto {actual}"
-        );
-    }
-
+    /// Celle codificate con `encode_geometry`, il limite per cella compreso.
     fn wkb_cells(geometries: &[Option<Geometry<f64>>]) -> ArrowBinaryArray {
-        let encoded: Vec<Option<Vec<u8>>> = geometries
-            .iter()
-            .map(|geometry| {
-                geometry
-                    .as_ref()
-                    .map(|g| encode_geometry(g).expect("encode"))
-            })
-            .collect();
-        encoded
-            .iter()
-            .map(|cell| cell.as_deref())
-            .collect::<ArrowBinaryArray>()
+        wkb_column_with(geometries, |g| encode_geometry(g).expect("encode"))
     }
 
     // --- geo.coverage_validate ---------------------------------------------
@@ -703,11 +680,7 @@ mod tests {
                 found: "Point"
             })
         ));
-        let bowtie = vec![Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ])];
+        let bowtie = vec![bowtie()];
         assert!(matches!(
             coverage_validate(&bowtie, 0.0, DEFAULT_MAX_ISSUES),
             Err(ExtensionError::InvalidGeometry { index: 0, .. })

@@ -37,6 +37,8 @@ pub mod predicates;
 #[cfg(feature = "proj-backend")]
 pub mod proj_backend;
 pub mod spatial_join;
+#[cfg(test)]
+mod test_support;
 pub mod topology;
 pub mod wkb_decoder;
 
@@ -1102,6 +1104,10 @@ pub fn transform_geometry_canonical(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{
+        multipolygon_wkb_le, point_wkb_le, polygon_wkb_le, push_coordinate, push_count,
+        push_header, rect,
+    };
     use geo::{line_string, polygon, Area};
     use proptest::prelude::*;
 
@@ -1210,13 +1216,7 @@ mod tests {
 
     #[test]
     fn centroid_transforms_polygon_to_expected_point() {
-        let input = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0),
-            (x: 4.0, y: 0.0),
-            (x: 4.0, y: 2.0),
-            (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let input = rect(0.0, 0.0, 4.0, 2.0);
         let result = round_trip(Operation::Centroid, &input);
         assert_eq!(result, Geometry::Point(Point::new(2.0, 1.0)));
     }
@@ -1262,19 +1262,15 @@ mod tests {
 
     #[test]
     fn rejects_non_finite_and_dimensional_wkb() {
-        let mut nan_point = vec![1_u8, 1, 0, 0, 0];
-        nan_point.extend_from_slice(&f64::NAN.to_le_bytes());
-        nan_point.extend_from_slice(&1.0_f64.to_le_bytes());
+        let nan_point = point_wkb_le(f64::NAN, 1.0);
         assert!(is_contract_error(
             &geometry_from_wkb(&nan_point),
             "WKB contiene coordinate NaN o infinite"
         ));
 
-        let mut z_point = vec![1_u8];
-        z_point.extend_from_slice(&1001_u32.to_le_bytes());
-        z_point.extend_from_slice(&1.0_f64.to_le_bytes());
-        z_point.extend_from_slice(&2.0_f64.to_le_bytes());
-        z_point.extend_from_slice(&3.0_f64.to_le_bytes());
+        let mut z_point = Vec::new();
+        push_header(&mut z_point, 1001);
+        push_coordinate(&mut z_point, 1.0, 2.0, &[3.0]);
         assert!(matches!(
             geometry_from_wkb(&z_point),
             Err(PlenoraError::Unsupported(message))
@@ -1284,14 +1280,11 @@ mod tests {
 
     #[test]
     fn rejects_dimensional_wkb_hidden_in_collection() {
-        let mut collection = vec![1_u8];
-        collection.extend_from_slice(&7_u32.to_le_bytes());
-        collection.extend_from_slice(&1_u32.to_le_bytes());
-        collection.push(1_u8);
-        collection.extend_from_slice(&1001_u32.to_le_bytes());
-        collection.extend_from_slice(&1.0_f64.to_le_bytes());
-        collection.extend_from_slice(&2.0_f64.to_le_bytes());
-        collection.extend_from_slice(&3.0_f64.to_le_bytes());
+        let mut collection = Vec::new();
+        push_header(&mut collection, 7);
+        push_count(&mut collection, 1);
+        push_header(&mut collection, 1001);
+        push_coordinate(&mut collection, 1.0, 2.0, &[3.0]);
         assert!(matches!(
             geometry_from_wkb(&collection),
             Err(PlenoraError::Unsupported(message))
@@ -1301,27 +1294,13 @@ mod tests {
 
     #[test]
     fn rejects_unclosed_or_too_short_polygon_rings() {
-        let mut polygon = vec![1_u8];
-        polygon.extend_from_slice(&3_u32.to_le_bytes());
-        polygon.extend_from_slice(&1_u32.to_le_bytes());
-        polygon.extend_from_slice(&4_u32.to_le_bytes());
-        for (x, y) in [(0.0_f64, 0.0_f64), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
-            polygon.extend_from_slice(&x.to_le_bytes());
-            polygon.extend_from_slice(&y.to_le_bytes());
-        }
+        let polygon = polygon_wkb_le(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]);
         assert!(is_contract_error(
             &geometry_from_wkb(&polygon),
             "struttura WKB non valida: anello poligonale non chiuso"
         ));
 
-        let mut short = vec![1_u8];
-        short.extend_from_slice(&3_u32.to_le_bytes());
-        short.extend_from_slice(&1_u32.to_le_bytes());
-        short.extend_from_slice(&3_u32.to_le_bytes());
-        for _ in 0..3 {
-            short.extend_from_slice(&0.0_f64.to_le_bytes());
-            short.extend_from_slice(&0.0_f64.to_le_bytes());
-        }
+        let short = polygon_wkb_le(&[(0.0, 0.0); 3]);
         assert!(is_contract_error(
             &geometry_from_wkb(&short),
             "struttura WKB non valida: anello poligonale con meno di quattro coordinate"
@@ -1341,31 +1320,12 @@ mod tests {
         // Due quadrati sovrapposti come membri 0 e 1 di una MultiPolygon:
         // "indices 0 and 1" e' la coppia che il testo grezzo di `geo`
         // interpolerebbe.
-        fn quadrato_wkb(x0: f64, y0: f64, lato: f64) -> Vec<u8> {
-            let mut wkb = vec![1_u8];
-            wkb.extend_from_slice(&3_u32.to_le_bytes()); // Polygon
-            wkb.extend_from_slice(&1_u32.to_le_bytes()); // 1 anello
-            wkb.extend_from_slice(&5_u32.to_le_bytes()); // 5 punti (chiuso)
-            for (x, y) in [
-                (x0, y0),
-                (x0 + lato, y0),
-                (x0 + lato, y0 + lato),
-                (x0, y0 + lato),
-                (x0, y0),
-            ] {
-                wkb.extend_from_slice(&x.to_le_bytes());
-                wkb.extend_from_slice(&y.to_le_bytes());
-            }
-            wkb
-        }
-        let quadrato_a = quadrato_wkb(0.0, 0.0, 2.0); // (0,0)-(2,2)
-        let quadrato_b = quadrato_wkb(1.0, 1.0, 2.0); // (1,1)-(3,3), sovrapposto ad A
-
-        let mut multipoly = vec![1_u8];
-        multipoly.extend_from_slice(&6_u32.to_le_bytes()); // MultiPolygon
-        multipoly.extend_from_slice(&2_u32.to_le_bytes()); // 2 membri
-        multipoly.extend_from_slice(&quadrato_a);
-        multipoly.extend_from_slice(&quadrato_b);
+        let quadrato_a =
+            polygon_wkb_le(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]);
+        // (1,1)-(3,3), sovrapposto ad A
+        let quadrato_b =
+            polygon_wkb_le(&[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0), (1.0, 1.0)]);
+        let multipoly = multipolygon_wkb_le(&[quadrato_a, quadrato_b]);
 
         let errore = geometry_from_wkb(&multipoly)
             .expect_err("due poligoni sovrapposti in una MultiPolygon non sono validi")
@@ -1411,8 +1371,8 @@ mod tests {
             "struttura WKB non valida: byte residui dopo la geometria"
         ));
 
-        let mut unsupported = vec![1_u8];
-        unsupported.extend_from_slice(&99_u32.to_le_bytes());
+        let mut unsupported = Vec::new();
+        push_header(&mut unsupported, 99);
         assert!(is_contract_error(
             &geometry_from_wkb(&unsupported),
             "struttura WKB non valida: tipo geometria non supportato"
@@ -1438,9 +1398,9 @@ mod tests {
         }
 
         for parent_type in [4_u32, 5, 6] {
-            let mut payload = vec![1_u8];
-            payload.extend_from_slice(&parent_type.to_le_bytes());
-            payload.extend_from_slice(&1_u32.to_le_bytes());
+            let mut payload = Vec::new();
+            push_header(&mut payload, parent_type);
+            push_count(&mut payload, 1);
             let wrong_child = if parent_type == 4 {
                 Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)])
             } else {
@@ -1474,23 +1434,7 @@ mod tests {
         assert!(validate_wkb_contract(&payload).is_ok());
     }
 
-    // ---- Fixture e test stride-aware ----
-
-    /// Header little-endian di una geometria con il type code dato.
-    fn push_header(payload: &mut Vec<u8>, raw_type: u32) {
-        payload.push(1_u8);
-        payload.extend_from_slice(&raw_type.to_le_bytes());
-    }
-
-    /// Coordinata con X, Y e le ordinate extra (Z e/o M, nell'ordine del
-    /// type code): lo stride e' 16 + 8 * `extra.len()`.
-    fn push_coordinate(payload: &mut Vec<u8>, x: f64, y: f64, extra: &[f64]) {
-        payload.extend_from_slice(&x.to_le_bytes());
-        payload.extend_from_slice(&y.to_le_bytes());
-        for value in extra {
-            payload.extend_from_slice(&value.to_le_bytes());
-        }
-    }
+    // ---- Test stride-aware (fixture in `test_support`) ----
 
     #[test]
     fn dimensional_wkb_validates_with_matching_expected_dimensions() {
@@ -1537,7 +1481,7 @@ mod tests {
         // LineString ZM con due coordinate.
         let mut line = Vec::new();
         push_header(&mut line, 3002);
-        line.extend_from_slice(&2_u32.to_le_bytes());
+        push_count(&mut line, 2);
         push_coordinate(&mut line, 0.0, 0.0, &[5.0, 9.0]);
         push_coordinate(&mut line, 1.0, 1.0, &[6.0, 10.0]);
         assert!(validate_wkb_contract_for_dimensions(&line, GeometryDimensions::Xyzm).is_ok());
@@ -1545,12 +1489,12 @@ mod tests {
         // Poligono Z con anello esterno e un buco.
         let mut polygon = Vec::new();
         push_header(&mut polygon, 1003);
-        polygon.extend_from_slice(&2_u32.to_le_bytes());
-        polygon.extend_from_slice(&4_u32.to_le_bytes());
+        push_count(&mut polygon, 2);
+        push_count(&mut polygon, 4);
         for (x, y) in [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0)] {
             push_coordinate(&mut polygon, x, y, &[1.0]);
         }
-        polygon.extend_from_slice(&4_u32.to_le_bytes());
+        push_count(&mut polygon, 4);
         for (x, y) in [(1.0, 1.0), (2.0, 1.0), (1.0, 2.0), (1.0, 1.0)] {
             push_coordinate(&mut polygon, x, y, &[2.0]);
         }
@@ -1559,9 +1503,9 @@ mod tests {
         // Collection annidata ZM: GC(MultiPoint ZM, Point ZM).
         let mut collection = Vec::new();
         push_header(&mut collection, 3007);
-        collection.extend_from_slice(&2_u32.to_le_bytes());
+        push_count(&mut collection, 2);
         push_header(&mut collection, 3004);
-        collection.extend_from_slice(&1_u32.to_le_bytes());
+        push_count(&mut collection, 1);
         push_header(&mut collection, 3001);
         push_coordinate(&mut collection, 3.0, 4.0, &[5.0, 6.0]);
         push_header(&mut collection, 3001);
@@ -1638,7 +1582,7 @@ mod tests {
         // validatore non deve desincronizzarsi: rifiuta.
         let mut line = Vec::new();
         push_header(&mut line, 1002);
-        line.extend_from_slice(&3_u32.to_le_bytes());
+        push_count(&mut line, 3);
         push_coordinate(&mut line, 0.0, 0.0, &[1.0]);
         push_coordinate(&mut line, 1.0, 1.0, &[2.0]);
         assert!(matches!(
@@ -1780,9 +1724,9 @@ mod tests {
         // GC(GC(Point ZM)): il punto e' a profondita' 2.
         let mut outer = Vec::new();
         push_header(&mut outer, 3007);
-        outer.extend_from_slice(&1_u32.to_le_bytes());
+        push_count(&mut outer, 1);
         push_header(&mut outer, 3007);
-        outer.extend_from_slice(&1_u32.to_le_bytes());
+        push_count(&mut outer, 1);
         push_header(&mut outer, 3001);
         push_coordinate(&mut outer, 1.0, 2.0, &[3.0, 4.0]);
         assert!(validate_wkb_contract_for_dimensions_with_depth(
@@ -1806,7 +1750,7 @@ mod tests {
         // ogni geometria; una collection puo' mescolare dimensionalita'.
         let mut collection = Vec::new();
         push_header(&mut collection, 7);
-        collection.extend_from_slice(&3_u32.to_le_bytes());
+        push_count(&mut collection, 3);
         push_header(&mut collection, 1);
         push_coordinate(&mut collection, 1.0, 2.0, &[]);
         push_header(&mut collection, 1001);
@@ -1839,8 +1783,8 @@ mod tests {
         // Z non e' letta: le ordinate extra non sono elaborate.
         let mut polygon = Vec::new();
         push_header(&mut polygon, 1003);
-        polygon.extend_from_slice(&1_u32.to_le_bytes());
-        polygon.extend_from_slice(&4_u32.to_le_bytes());
+        push_count(&mut polygon, 1);
+        push_count(&mut polygon, 4);
         push_coordinate(&mut polygon, 0.0, 0.0, &[1.0]);
         push_coordinate(&mut polygon, 4.0, 0.0, &[2.0]);
         push_coordinate(&mut polygon, 4.0, 4.0, &[3.0]);
@@ -1849,8 +1793,8 @@ mod tests {
         // Anello non chiuso in X/Y: rifiutato anche con Z coerenti.
         let mut open = Vec::new();
         push_header(&mut open, 1003);
-        open.extend_from_slice(&1_u32.to_le_bytes());
-        open.extend_from_slice(&4_u32.to_le_bytes());
+        push_count(&mut open, 1);
+        push_count(&mut open, 4);
         push_coordinate(&mut open, 0.0, 0.0, &[1.0]);
         push_coordinate(&mut open, 4.0, 0.0, &[1.0]);
         push_coordinate(&mut open, 4.0, 4.0, &[1.0]);
@@ -1897,11 +1841,7 @@ mod tests {
         fn single_byte_mutations_of_valid_wkb_never_escape_the_contract(
             index in any::<usize>(), replacement in any::<u8>()
         ) {
-            let mut payload = Geometry::Polygon(polygon![
-                (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-                (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-                (x: 0.0, y: 0.0),
-            ]).to_wkb(CoordDimensions::xy()).unwrap();
+            let mut payload = rect(0.0, 0.0, 4.0, 4.0).to_wkb(CoordDimensions::xy()).unwrap();
             let position = index % payload.len();
             payload[position] = replacement;
             if let Ok(geometry) = geometry_from_wkb(&payload) {
@@ -1910,6 +1850,27 @@ mod tests {
                 prop_assert!(validate_wkb_contract(&encoded).is_ok());
             }
         }
+    }
+
+    /// Rilancia questo binario di test sul solo `nome_test`, con
+    /// `variabile=valore` nell'ambiente: e' il ramo figlio dei casi a
+    /// sottoprocesso qui sotto.
+    fn esegui_figlio_di_test(
+        nome_test: &str,
+        variabile: &str,
+        valore: &str,
+    ) -> std::process::Output {
+        let ese = std::env::current_exe().expect("current_exe");
+        std::process::Command::new(ese)
+            .arg("--exact")
+            .arg(nome_test)
+            // Senza `--nocapture` la libreria di test intercetta lo
+            // stderr del thread, e l'hook di `std` scriverebbe nel suo
+            // buffer invece che sul canale reale.
+            .arg("--nocapture")
+            .env(variabile, valore)
+            .output()
+            .expect("il figlio parte")
     }
 
     /// Che cosa esce davvero da **stderr** quando `validazione_protetta`
@@ -1924,7 +1885,6 @@ mod tests {
     /// l'hook e' stato globale e legherebbe gli altri test a questo.
     mod barriera_privacy_processo {
         use crate::ValidazioneProtetta as _;
-        use std::process::Command;
 
         const VARIABILE: &str = "PLENORA_TEST_BARRIERA_PRIVACY";
 
@@ -1938,17 +1898,11 @@ mod tests {
         }
 
         fn esegui_figlio(politica: &str) -> Uscita {
-            let ese = std::env::current_exe().expect("current_exe");
-            let uscita = Command::new(ese)
-                .arg("--exact")
-                .arg("tests::barriera_privacy_processo::il_ramo_figlio_non_e_un_test_vero")
-                // Senza `--nocapture` la libreria di test intercetta lo
-                // stderr del thread, e l'hook di `std` scriverebbe nel suo
-                // buffer invece che sul canale reale.
-                .arg("--nocapture")
-                .env(VARIABILE, politica)
-                .output()
-                .expect("il figlio parte");
+            let uscita = super::esegui_figlio_di_test(
+                "tests::barriera_privacy_processo::il_ramo_figlio_non_e_un_test_vero",
+                VARIABILE,
+                politica,
+            );
             Uscita {
                 stderr: String::from_utf8_lossy(&uscita.stderr).into_owned(),
                 riuscita: uscita.status.success(),
@@ -2086,7 +2040,6 @@ mod tests {
     /// processo.
     mod prova_logging_relate {
         use geo::{LineString, Polygon, Relate};
-        use std::process::Command;
         use std::sync::Mutex;
 
         const VARIABILE: &str = "PLENORA_TEST_LOGGING_RELATE";
@@ -2125,18 +2078,20 @@ mod tests {
 
         static LOGGER: Collector = Collector(Mutex::new(Vec::new()));
 
-        fn esegui_figlio() -> (bool, String) {
-            let ese = std::env::current_exe().expect("current_exe");
-            let uscita = Command::new(ese)
-                .arg("--exact")
-                .arg("tests::prova_logging_relate::il_ramo_figlio_non_e_un_test_vero")
-                .arg("--nocapture")
-                .env(VARIABILE, "1")
-                .output()
-                .expect("il figlio parte");
+        /// Esito e stdout del figlio su `nome_test`.
+        fn esegui_figlio_con(nome_test: &str, variabile: &str, valore: &str) -> (bool, String) {
+            let uscita = super::esegui_figlio_di_test(nome_test, variabile, valore);
             (
                 uscita.status.success(),
                 String::from_utf8_lossy(&uscita.stdout).into_owned(),
+            )
+        }
+
+        fn esegui_figlio() -> (bool, String) {
+            esegui_figlio_con(
+                "tests::prova_logging_relate::il_ramo_figlio_non_e_un_test_vero",
+                VARIABILE,
+                "1",
             )
         }
 
@@ -2237,32 +2192,8 @@ mod tests {
         // grezza (`geozero`), perche' il bersaglio e' `check_validation` di
         // `geo` e non il cancello strutturale. Verdetti e conteggi vengono da
         // `privacy-{debug,release}-{original,reduced}-{A,B}.stdout`.
-        const REPERTO_ORIGINALE_A: &[u8] = &[
-            1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64,
-            64, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212,
-            0, 0, 0, 4, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-            3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 0, 0, 1, 0, 0, 0, 7, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0, 0, 8, 116, 116, 116,
-            116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
-        const REPERTO_ORIGINALE_B: &[u8] = &[
-            0, 0, 0, 0, 6, 0, 0, 0, 3, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0,
-            0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1,
-            0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 210, 210, 210, 210, 122, 210, 210, 210, 210, 210,
-            210, 210, 1, 1, 4, 255, 1, 1, 1, 1, 1, 1, 1, 255, 254, 254, 254, 254, 254, 254, 250, 1,
-            1, 1, 1, 42, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 64,
-            1, 1, 1, 1, 1, 1, 1, 65, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-            0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-            0, 0, 0, 0, 128, 0, 4, 1, 1, 1, 1, 0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 129, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 255, 254, 254, 254, 254, 254,
-            254, 250, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 50, 0, 0, 0, 0, 0, 4, 1, 1, 1, 1, 0, 8,
-            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 0,
-        ];
+        const REPERTO_ORIGINALE_A: &[u8] = include_bytes!("../tests/fixtures/reperto_a.wkb");
+        const REPERTO_ORIGINALE_B: &[u8] = include_bytes!("../tests/fixtures/reperto_b.wkb");
         const REPERTO_RIDOTTO_A: &[u8] = &[
             1, 6, 0, 0, 0, 2, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -2285,17 +2216,10 @@ mod tests {
         const VARIABILE_REPERTO: &str = "PLENORA_TEST_LOGGING_REPERTO";
 
         fn esegui_figlio_reperto(reperto: &str) -> (bool, String) {
-            let ese = std::env::current_exe().expect("current_exe");
-            let uscita = Command::new(ese)
-                .arg("--exact")
-                .arg("tests::prova_logging_relate::il_ramo_figlio_reperto_non_e_un_test_vero")
-                .arg("--nocapture")
-                .env(VARIABILE_REPERTO, reperto)
-                .output()
-                .expect("il figlio parte");
-            (
-                uscita.status.success(),
-                String::from_utf8_lossy(&uscita.stdout).into_owned(),
+            esegui_figlio_con(
+                "tests::prova_logging_relate::il_ramo_figlio_reperto_non_e_un_test_vero",
+                VARIABILE_REPERTO,
+                reperto,
             )
         }
 

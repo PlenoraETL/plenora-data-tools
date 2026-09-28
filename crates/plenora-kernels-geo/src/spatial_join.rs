@@ -315,7 +315,8 @@ fn spatial_join_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{line_string, polygon, Point};
+    use crate::test_support::{bowtie, rect};
+    use geo::{line_string, Point};
     use proptest::prelude::*;
 
     fn brute_force(
@@ -343,11 +344,7 @@ mod tests {
         let y = f64::from(y);
         let width = f64::from(width.max(1));
         let height = f64::from(height.max(1));
-        Geometry::Polygon(polygon![
-            (x: x, y: y), (x: x + width, y: y),
-            (x: x + width, y: y + height), (x: x, y: y + height),
-            (x: x, y: y),
-        ])
+        rect(x, y, x + width, y + height)
     }
 
     #[test]
@@ -357,11 +354,7 @@ mod tests {
             Geometry::Point(Point::new(0.5, 0.5)),
         ];
         let right = vec![
-            Geometry::Polygon(polygon![
-                (x: 0.0, y: 0.0), (x: 1.0, y: 0.0),
-                (x: 1.0, y: 1.0), (x: 0.0, y: 1.0),
-                (x: 0.0, y: 0.0),
-            ]),
+            rect(0.0, 0.0, 1.0, 1.0),
             Geometry::LineString(line_string![(x: 0.0, y: 2.0), (x: 3.0, y: 2.0)]),
         ];
         assert_eq!(
@@ -375,11 +368,7 @@ mod tests {
 
     #[test]
     fn contains_and_within_have_explicit_direction() {
-        let area = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let area = rect(0.0, 0.0, 2.0, 2.0);
         let point = Geometry::Point(Point::new(1.0, 1.0));
         assert_eq!(
             spatial_join(
@@ -454,11 +443,7 @@ mod tests {
     #[test]
     fn invalid_topology_and_empty_geometries_are_handled_on_both_sides() {
         let valid = Geometry::Point(Point::new(0.0, 0.0));
-        let invalid = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let invalid = bowtie();
         assert!(matches!(
             spatial_join(
                 std::slice::from_ref(&invalid),
@@ -563,11 +548,7 @@ mod tests {
         // accettare geometrie invalide in produzione: il percorso gated
         // rifiuta il bowtie (gate intatto), la variante validated lo prende
         // perche' la precondizione e' del chiamante — qui violata ad arte.
-        let bowtie = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let bowtie = bowtie();
         let valid = Geometry::Point(Point::new(1.0, 1.0));
         assert!(matches!(
             spatial_join(

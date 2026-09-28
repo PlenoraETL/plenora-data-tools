@@ -1501,6 +1501,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+    use crate::test_support::nullable_batch as batch_of;
 
     // ------------------------------------------------------------------
     // Oracolo indipendente di fill_na (Vec<Option<T>> riga per riga +
@@ -2353,19 +2354,6 @@ mod tests {
     // ------------------------------------------------------------------
     // coalesce
     // ------------------------------------------------------------------
-
-    fn batch_of(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(
-                columns
-                    .iter()
-                    .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
-                    .collect::<Vec<_>>(),
-            )),
-            columns.into_iter().map(|(_, array)| array).collect(),
-        )
-        .expect("batch")
-    }
 
     fn assert_coalesce_equiv(columns: Vec<(&str, ArrayRef)>) {
         let batch = batch_of(columns);

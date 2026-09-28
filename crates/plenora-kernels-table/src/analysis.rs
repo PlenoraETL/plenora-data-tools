@@ -1120,6 +1120,7 @@ mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
 
     use super::*;
+    use crate::test_support::single_column_batch;
 
     // ------------------------------------------------------------------
     // Oracoli: implementazioni di riferimento indipendenti per i
@@ -1666,11 +1667,12 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn docs_batch(docs: Vec<Option<&str>>) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("doc", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(docs))],
+        single_column_batch(
+            "doc",
+            Arc::new(StringArray::from(docs)),
+            DataType::Utf8,
+            true,
         )
-        .expect("batch json")
     }
 
     fn flatten_config(max_level: usize, output_columns: Vec<String>) -> FlattenJson {
@@ -1852,15 +1854,12 @@ mod tests {
         );
         // colonna non utf8 (f64): scalar_as_string la rende testo,
         // il parsing fallisce e la riga e' vuota in entrambe le versioni
-        let floats = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "doc",
-                DataType::Float64,
-                true,
-            )])),
-            vec![Arc::new(Float64Array::from(vec![Some(1.5), None]))],
-        )
-        .expect("batch f64");
+        let floats = single_column_batch(
+            "doc",
+            Arc::new(Float64Array::from(vec![Some(1.5), None])),
+            DataType::Float64,
+            true,
+        );
         assert_flatten_equiv(&floats, &flatten_config(1, vec![]), &limits);
     }
 
