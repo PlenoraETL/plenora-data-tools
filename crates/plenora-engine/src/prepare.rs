@@ -1467,7 +1467,8 @@ fn prepare_geo_binary(
     let max_comparisons = input_ceiling.saturating_mul(input_ceiling);
     let (predicate, max_distance, values) = match operation {
         PairOperation::SJoin => {
-            let parsed: GeoSJoinConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoSJoinConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             (
                 Some(parsed.predicate),
                 None,
@@ -1479,7 +1480,8 @@ fn prepare_geo_binary(
             )
         }
         PairOperation::Nearest => {
-            let parsed: GeoNearestConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoNearestConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             (
                 None,
                 parsed.max_distance,
@@ -1492,7 +1494,8 @@ fn prepare_geo_binary(
             )
         }
         PairOperation::Within | PairOperation::CountPointsInPolygons => {
-            let parsed: GeoBinaryOutputColumnConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoBinaryOutputColumnConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             // `output_column` e' semantica di contratto: gia' applicata dal
             // planner, niente da risolvere a runtime (lo schema di output
             // e' quello del contratto, fonte unica di verita').
@@ -1635,7 +1638,8 @@ fn prepare_geo(
 ) -> Result<(PreparedConfig, GeoRole)> {
     let input_contract = &input_contracts[0];
     if let Some(operation) = geo_transform_operation(descriptor.id) {
-        let parsed: GeoTransformConfig = serde_json::from_value(node.config.clone())?;
+        let parsed: GeoTransformConfig =
+            plenora_core::json::valore_di_controllo(node.config.clone())?;
         let geometry = input_contract.active_geometry_column().ok_or_else(|| {
             PlenoraError::Internal("geometria attiva verificata in validazione".to_owned())
         })?;
@@ -1705,7 +1709,8 @@ fn prepare_geo(
         _ => None,
     };
     if let Some(measure) = measure {
-        let parsed: GeoMeasureConfig = serde_json::from_value(node.config.clone())?;
+        let parsed: GeoMeasureConfig =
+            plenora_core::json::valore_di_controllo(node.config.clone())?;
         let output_column = measure_output_column(
             &node.id,
             input_contract,
@@ -1767,7 +1772,8 @@ fn prepare_geo_extension(
 ) -> Result<Option<(PreparedConfig, GeoRole)>> {
     let prepared = match descrittore_tipizzato(descriptor)? {
         OperationId::GeoFromWkt => {
-            let parsed: GeoFromWktConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoFromWktConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             // `output_column` e `crs` sono semantica di contratto (nome e CRS
             // della colonna prodotta): gia' applicati dal planner.
             let _ = (&parsed.output_column, &parsed.crs);
@@ -1789,7 +1795,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoGeometryAccessors => {
-            let parsed: GeoAccessorsConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoAccessorsConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             let prefix = parsed.output_prefix.as_deref().unwrap_or("");
             let selected: Vec<AccessorKind> = match &parsed.fields {
                 None => AccessorKind::ALL.to_vec(),
@@ -1835,7 +1842,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoLineLocatePoint => {
-            let parsed: GeoLineLocatePointConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoLineLocatePointConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             let Geometry::Point(point) = decode_wkb_hex(&node.id, "point_wkb", &parsed.point_wkb)?
             else {
                 return Err(PlenoraError::InvalidPlan(format!(
@@ -1858,7 +1866,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoSubdivide => {
-            let parsed: GeoSubdivideConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoSubdivideConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             // `output_column` e' semantica di contratto (rinomina in place):
             // gia' applicata dal planner, niente da fare a runtime.
             let _ = &parsed.output_column;
@@ -1876,7 +1885,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoSnap => {
-            let parsed: GeoSnapConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoSnapConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             let reference = decode_wkb_hex(&node.id, "reference_wkb", &parsed.reference_wkb)?;
             if !parsed.tolerance.is_finite() || parsed.tolerance < 0.0 {
                 return Err(PlenoraError::InvalidPlan(format!(
@@ -1893,7 +1903,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoCollect => {
-            let parsed: GeoCollectConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoCollectConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             let mut indices: Vec<usize> = Vec::with_capacity(parsed.group_by.len());
             for name in &parsed.group_by {
                 let (index, _) = input_contract
@@ -1915,7 +1926,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoGenerateGrid => {
-            let parsed: GeoGenerateGridConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoGenerateGridConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             // `crs` e `include_centroid` sono semantica di contratto (CRS e
             // colonne dell'output): gia' applicati dal planner.
             let _ = (&parsed.crs, &parsed.include_centroid);
@@ -1942,7 +1954,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoCoverageValidate => {
-            let parsed: GeoCoverageValidateConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoCoverageValidateConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             let tolerance = parsed.tolerance.unwrap_or(0.0);
             if !tolerance.is_finite() || tolerance < 0.0 {
                 return Err(PlenoraError::InvalidPlan(format!(
@@ -1961,7 +1974,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoSharedPaths => {
-            let parsed: GeoSharedPathsConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoSharedPathsConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             let tolerance = parsed.tolerance.unwrap_or(0.0);
             let min_length = parsed.min_length.unwrap_or(0.0);
             for (name, value) in [("tolerance", tolerance), ("min_length", min_length)] {
@@ -1981,7 +1995,8 @@ fn prepare_geo_extension(
             )
         }
         OperationId::GeoClusterDbscan => {
-            let parsed: GeoClusterDbscanConfig = serde_json::from_value(node.config.clone())?;
+            let parsed: GeoClusterDbscanConfig =
+                plenora_core::json::valore_di_controllo(node.config.clone())?;
             if !parsed.eps.is_finite() || parsed.eps <= 0.0 {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "nodo `{}`: eps deve essere finito e maggiore di zero",

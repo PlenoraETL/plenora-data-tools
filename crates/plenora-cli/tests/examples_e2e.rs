@@ -164,15 +164,19 @@ fn e1_filtro_e_ordinamento_riproduce_l_output_atteso() {
         String::from_utf8_lossy(&esecuzione.stdout)
     );
     let metriche: Value = serde_json::from_slice(&esecuzione.stdout).expect("run emette JSON");
-    assert!(
-        metriche.get("metrics").is_some() || metriche.get("output_rows").is_some(),
-        "run deve stampare le metriche: {metriche}"
+    let atteso = leggi_json(&esempio.join("atteso/output.json"));
+    let righe_attese = atteso.as_array().expect("righe attese").len();
+    assert_eq!(metriche["status"], "ok", "{metriche}");
+    assert_eq!(
+        metriche["output_rows"].as_u64(),
+        u64::try_from(righe_attese).ok(),
+        "run deve stampare le metriche dell'output: {metriche}"
     );
 
     // 4. L'output e' esattamente quello committato in `atteso/`.
     assert_eq!(
         arrow_come_json(&output),
-        leggi_json(&esempio.join("atteso/output.json")),
+        atteso,
         "l'esempio non riproduce piu' il proprio output atteso"
     );
 }

@@ -200,14 +200,14 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
 
     let run = run_cli(&plan, &input, &output_path);
     assert!(!run.status.success(), "input XYZ accettato da geo.buffer");
-    let stderr = String::from_utf8_lossy(&run.stdout);
+    let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(
-        stderr.contains("geo.buffer"),
-        "l'errore cita l'op: {stderr}"
+        stdout.contains("geo.buffer"),
+        "l'errore cita l'op: {stdout}"
     );
     assert!(
-        stderr.contains("xyz"),
-        "l'errore cita la dimensionalita': {stderr}"
+        stdout.contains("xyz"),
+        "l'errore cita la dimensionalita': {stdout}"
     );
     assert!(
         !output_path.try_exists().expect("stat"),

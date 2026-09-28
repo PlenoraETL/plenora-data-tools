@@ -233,7 +233,7 @@ impl PlanV6 {
         // duplicate con «vince l'ultima», e la risoluzione avverrebbe prima
         // della validazione e prima del `plan_hash`.
         plenora_core::json::ensure_no_duplicate_keys(json_text)?;
-        let piano: Self = serde_json::from_str(json_text)?;
+        let piano: Self = plenora_core::json::documento_di_controllo(json_text)?;
         if piano.schema_version != PLAN_SCHEMA_VERSION_V6 {
             return Err(contract_error(format!(
                 "schema_version {} non e' un piano v6",
