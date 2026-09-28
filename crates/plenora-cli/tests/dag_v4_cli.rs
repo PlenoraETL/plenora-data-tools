@@ -2747,7 +2747,6 @@ fn un_blocco_limits_malformato_lo_giudica_il_planner() {
 /// `validate`, come per lo stesso rifiuto nella sonda della CLI
 /// (`da_testo_di_controllo`).
 #[test]
-#[ignore = "difetto: il JSON del piano rifiutato da planner::validate esce con fase write"]
 fn un_blocco_limits_malformato_e_un_rifiuto_in_validazione() {
     for (limiti, _, documento) in envelope_dei_limits_malformati() {
         assert_eq!(
