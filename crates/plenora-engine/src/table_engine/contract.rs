@@ -32,7 +32,19 @@ pub fn dispatch_name(operation: &str) -> &str {
 
 /// Validazione dei valori dei limiti. Vive qui, e non accanto a [`Limits`],
 /// perche' quella struct sta in `plenora-kernels-table`.
+///
+/// Non delega a [`plenora_core::limits::Limits::validate`] perche' i due tipi non
+/// hanno gli stessi campi: sui campi che condividono (`max_rows` e
+/// `max_input_rows` per la mappatura di `prepare`) le regole sono le stesse,
+/// e l'intervallo di `spill_partitions` viene dalle costanti del core, cosi'
+/// non possono divergere. Il messaggio resta quello della superficie
+/// congelata, che non nomina il limite.
 fn validate_limits(limits: &Limits) -> Result<()> {
+    let minimo = plenora_core::limits::Limits::MIN_SPILL_PARTITIONS;
+    let massimo = plenora_core::limits::Limits::MAX_SPILL_PARTITIONS;
+    // Un valore che non entra in `u32` e' comunque sopra il massimo.
+    let partizioni_ammesse = u32::try_from(limits.spill_partitions)
+        .is_ok_and(|partizioni| (minimo..=massimo).contains(&partizioni));
     if limits.max_rows == 0
         || limits.max_columns == 0
         || limits.max_string_bytes == 0
@@ -40,12 +52,11 @@ fn validate_limits(limits: &Limits) -> Result<()> {
         || limits.max_split_columns == 0
         || limits.max_governed_memory_bytes == 0
         || limits.max_temp_bytes == 0
-        || limits.spill_partitions < 2
-        || limits.spill_partitions > 4_096
+        || !partizioni_ammesse
     {
-        return Err(PlenoraError::InvalidPlan(
-            "limiti nulli o spill_partitions fuori 2..=4096".into(),
-        ));
+        return Err(PlenoraError::InvalidPlan(format!(
+            "limiti nulli o spill_partitions fuori {minimo}..={massimo}"
+        )));
     }
     Ok(())
 }
@@ -393,6 +404,118 @@ mod tests {
             }
             Err(altro) => panic!("atteso InvalidPlan per `{guardia}`, ottenuto {altro:?}"),
             Ok(_) => panic!("piano accettato, atteso il rifiuto di `{guardia}`"),
+        }
+    }
+
+    /// **I due validatori dei limiti danno lo stesso verdetto sui campi che
+    /// condividono**: questo e `plenora_core::limits::Limits::validate`.
+    ///
+    /// I tipi sono diversi, quindi uno non puo' delegare all'altro; ma lo
+    /// stesso limite fuori dominio, scritto nel piano legacy o nel piano v5,
+    /// deve essere rifiutato da entrambi con la stessa categoria, e lo stesso
+    /// valore di confine accettato da entrambi. `max_rows` sta con
+    /// `max_input_rows` perche' e' da li' che `prepare` lo deriva.
+    #[test]
+    fn i_due_validatori_concordano_sui_limiti_condivisi() {
+        type Legacy = fn(&mut Limits);
+        type Core = fn(&mut plenora_core::limits::Limits);
+        let rifiutati: [(&str, Legacy, Core); 8] = [
+            (
+                "max_rows",
+                |l| l.max_rows = 0,
+                |l| l.rows.max_input_rows = 0,
+            ),
+            (
+                "max_string_bytes",
+                |l| l.max_string_bytes = 0,
+                |l| l.max_string_bytes = 0,
+            ),
+            (
+                "max_regex_bytes",
+                |l| l.max_regex_bytes = 0,
+                |l| l.max_regex_bytes = 0,
+            ),
+            (
+                "max_governed_memory_bytes",
+                |l| l.max_governed_memory_bytes = 0,
+                |l| l.max_governed_memory_bytes = 0,
+            ),
+            (
+                "max_temp_bytes",
+                |l| l.max_temp_bytes = 0,
+                |l| l.max_temp_bytes = 0,
+            ),
+            (
+                "spill_partitions = 0",
+                |l| l.spill_partitions = 0,
+                |l| l.spill_partitions = 0,
+            ),
+            (
+                "spill_partitions = 1",
+                |l| l.spill_partitions = 1,
+                |l| l.spill_partitions = 1,
+            ),
+            (
+                "spill_partitions = 4097",
+                |l| l.spill_partitions = 4_097,
+                |l| l.spill_partitions = 4_097,
+            ),
+        ];
+        for (nome, legacy, core) in rifiutati {
+            let mut limiti_legacy = Limits::default();
+            legacy(&mut limiti_legacy);
+            let mut limiti_core = plenora_core::limits::Limits::default();
+            core(&mut limiti_core);
+            assert!(
+                matches!(
+                    validate_limits(&limiti_legacy),
+                    Err(PlenoraError::InvalidPlan(_))
+                ),
+                "{nome}: il validatore legacy non lo rifiuta come InvalidPlan"
+            );
+            assert!(
+                matches!(limiti_core.validate(), Err(PlenoraError::InvalidPlan(_))),
+                "{nome}: il validatore del core non lo rifiuta come InvalidPlan"
+            );
+        }
+
+        // I confini dell'intervallo sono ammessi da entrambi.
+        for (partizioni_legacy, partizioni) in [(2_usize, 2_u32), (4_096, 4_096)] {
+            let limiti_legacy = Limits {
+                spill_partitions: partizioni_legacy,
+                ..Limits::default()
+            };
+            let limiti_core = plenora_core::limits::Limits {
+                spill_partitions: partizioni,
+                ..plenora_core::limits::Limits::default()
+            };
+            assert!(validate_limits(&limiti_legacy).is_ok(), "{partizioni}");
+            assert!(limiti_core.validate().is_ok(), "{partizioni}");
+        }
+        assert!(validate_limits(&Limits::default()).is_ok());
+        assert!(plenora_core::limits::Limits::default().validate().is_ok());
+
+        // Oltre `u32` il valore legacy e' sopra il massimo, non avvolto.
+        let enorme = Limits {
+            spill_partitions: usize::MAX,
+            ..Limits::default()
+        };
+        assert!(validate_limits(&enorme).is_err());
+    }
+
+    /// Il messaggio del rifiuto legacy e' superficie congelata: l'intervallo
+    /// viene dalle costanti del core, ma il testo resta quello di sempre.
+    #[test]
+    fn il_messaggio_legacy_dei_limiti_resta_quello_congelato() {
+        let limiti = Limits {
+            spill_partitions: 1,
+            ..Limits::default()
+        };
+        match validate_limits(&limiti) {
+            Err(PlenoraError::InvalidPlan(motivo)) => {
+                assert_eq!(motivo, "limiti nulli o spill_partitions fuori 2..=4096");
+            }
+            altro => panic!("atteso InvalidPlan, ottenuto {altro:?}"),
         }
     }
 
