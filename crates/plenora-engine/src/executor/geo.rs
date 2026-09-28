@@ -802,10 +802,18 @@ pub(super) fn execute_geo_binary(
                 geo_plan.max_pairs,
             )
             .map_err(errore_di_coppia)?;
-            let values: Vec<Option<u64>> = counts
+            // Un conteggio per poligono, verificato prima di accoppiarli: un
+            // conteggio in piu' andrebbe in panico sull'indice, uno in meno
+            // lascerebbe senza valore l'ultima riga.
+            if counts.len() != left_geometries.len() {
+                return Err(PlenoraError::Internal(
+                    "il kernel non ha reso un conteggio per ogni riga di left".into(),
+                ));
+            }
+            let values: Vec<Option<u64>> = left_geometries
                 .iter()
-                .enumerate()
-                .map(|(index, count)| left_geometries[index].as_ref().map(|_| *count))
+                .zip(&counts)
+                .map(|(poligono, count)| poligono.as_ref().map(|_| *count))
                 .collect();
             let mut columns = left.columns().to_vec();
             columns.push(std::sync::Arc::new(UInt64Array::from(values)));

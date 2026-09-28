@@ -9,6 +9,14 @@ limite gestibile, un limite taciuto è una sorpresa.
 Ogni errore esce come **envelope JSON su stdout**, una riga, `protocol_version
 1`. **stderr resta vuoto.**
 
+Limite: se stdout non accetta la scrittura (chiuso, pieno), l'envelope non
+esce o esce a metà. Ambito: i comandi della CLI, non le modalità riservate
+dello spawner, del worker e del verificatore. Hazard: chi legge stdout non ha
+un documento, o ne ha uno troncato. La CLI esce allora con `70`, qualunque
+sia la categoria, e stderr resta vuoto. Rientro: nessuno, finché il canale è
+stdout; un chiamante che vede `70` senza un documento intero sa che l'errore
+vero non è arrivato.
+
 ```json
 {"status":"error","protocol_version":1,
  "error":{"category":"invalid_plan","phase":"validate","remote_effect":"none",

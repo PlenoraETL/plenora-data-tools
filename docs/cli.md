@@ -103,6 +103,13 @@ Proiezione della categoria dell'errore.
 | `70` | `internal`, e ogni categoria non riconosciuta |
 | `130` | `cancelled` (128 + SIGINT) |
 
+Se l'envelope non si riesce a scrivere su stdout (stdout chiuso o pieno),
+l'uscita è `70` qualunque sia la categoria: il codice della categoria
+dichiarerebbe un errore che nessuno può leggere. È un'eccezione alla garanzia
+dell'envelope, dichiarata in
+[`errori-e-limiti.md`](errori-e-limiti.md#envelope-e-canali). Le modalità
+riservate dello spawner, del worker e del verificatore non passano da qui.
+
 Sono una **convenzione di questo componente**, dichiarata come divergenza
 rispetto ai componenti gemelli, non un allineamento.
 

@@ -35,7 +35,11 @@ use cli::commands::legacy::{
 };
 use cli::commands::run::{run_command, DagInputs};
 use cli::commands::validate::validate_command;
-use cli::error_envelope::{emetti_e_codice, emit_error_envelope, error_envelope};
+use cli::error_envelope::{emetti_e_codice, error_envelope};
+// Il dispatch delle modalita' riservate emette da se': solo su Linux, e nei
+// casi.
+#[cfg(any(test, target_os = "linux"))]
+use cli::error_envelope::emit_error_envelope;
 use cli::process::esegui_processo;
 use cli::rendering::{hex_digest, version_json};
 

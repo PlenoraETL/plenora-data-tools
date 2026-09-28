@@ -96,6 +96,20 @@ pub const fn exit_code_di(categoria: ErrorCategory) -> i32 {
     }
 }
 
+/// Emette l'envelope su stdout e rende l'exit code del processo.
+///
+/// Se l'envelope non esce, il chiamante non vede nessun documento: l'exit
+/// code della categoria dichiarerebbe un errore che nessuno puo' leggere, e
+/// si rende [`EXIT_INTERNO`]. E' un limite dichiarato della garanzia
+/// dell'envelope (errori-e-limiti.md#envelope-e-canali).
+pub fn emetti_e_codice(envelope: &serde_json::Value) -> i32 {
+    let codice = error_exit_code(envelope);
+    if emit_error_envelope(std::io::stdout().lock(), envelope).is_err() {
+        return EXIT_INTERNO;
+    }
+    codice
+}
+
 /// Envelope d'errore a quattro assi (R9.1, `protocol_version` 1).
 ///
 /// Una riga JSON su stdout con categoria, fase, effetto remoto e
@@ -108,19 +122,6 @@ pub const fn exit_code_di(categoria: ErrorCategory) -> i32 {
 /// `io`/`read`/`none`/`safe`; parse JSON del piano ->
 /// `data_mapping`/`validate`/`none`/`never`; altro ->
 /// `internal`/`validate`/`none`/`never`.
-/// Emette l'envelope su stdout e rende l'exit code del processo.
-///
-/// Se l'envelope non esce, il chiamante non vede nessun documento: l'exit
-/// code della categoria dichiarerebbe un errore che nessuno puo' leggere, e
-/// si rende [`EXIT_INTERNO`].
-pub fn emetti_e_codice(envelope: &serde_json::Value) -> i32 {
-    let codice = error_exit_code(envelope);
-    if emit_error_envelope(std::io::stdout().lock(), envelope).is_err() {
-        return EXIT_INTERNO;
-    }
-    codice
-}
-
 pub fn error_envelope(error: &(dyn Error + 'static), cancelled: bool) -> serde_json::Value {
     let plenora_error = error.downcast_ref::<PlenoraError>();
     let public_transport_parameter_error =
