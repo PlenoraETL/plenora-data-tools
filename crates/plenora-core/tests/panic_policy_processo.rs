@@ -42,10 +42,49 @@ fn ramo_figlio(politica: &str) -> ! {
         // controllo che dimostra che il difetto esiste davvero.
         _ => {}
     }
+    // Il segnale che il padre cerca: il figlio e' arrivato fin qui con la
+    // politica installata, e l'unica istruzione che segue e' il panico.
+    println!("{MARCATORE}");
     panic!("panico simulato con {SEGRETO} nel messaggio");
 }
 
-fn esegui_figlio(politica: &str) -> (String, String) {
+/// Riga che il figlio stampa su stdout subito prima del panico.
+const MARCATORE: &str = "figlio: politica installata, panico in arrivo";
+
+/// Esito del figlio: i due canali e lo stato d'uscita.
+struct Uscita {
+    stdout: String,
+    stderr: String,
+    stato: std::process::ExitStatus,
+}
+
+impl Uscita {
+    /// I canali di un figlio che e' davvero partito ed e' davvero andato in
+    /// panico dove previsto. Un figlio che non parte, che non trova il test
+    /// o che esce prima del `panic!` stamperebbe un stderr senza il segreto
+    /// e assolverebbe qualunque politica: qui si rifiuta.
+    ///
+    /// La prova e' in tre parti: il marcatore stampato subito prima del
+    /// panico, esattamente un test fallito nel riepilogo di libtest, e il
+    /// codice d'uscita 101 con cui libtest chiude una corsa con fallimenti.
+    fn di_un_figlio_andato_in_panico(&self, politica: &str) -> (&str, &str) {
+        assert!(
+            self.stdout.contains(MARCATORE)
+                && self
+                    .stdout
+                    .contains("test result: FAILED. 0 passed; 1 failed")
+                && self.stato.code() == Some(101),
+            "il figlio «{politica}» non e' andato in panico dove previsto ({}); \
+             qualunque cosa abbia stampato non dimostra niente:\nstdout: {}\nstderr: {}",
+            self.stato,
+            self.stdout,
+            self.stderr
+        );
+        (&self.stdout, &self.stderr)
+    }
+}
+
+fn esegui_figlio(politica: &str) -> Uscita {
     let exe = std::env::current_exe().expect("current_exe");
     let output = Command::new(exe)
         .arg("--exact")
@@ -60,10 +99,11 @@ fn esegui_figlio(politica: &str) -> (String, String) {
         .env(VARIABILE, politica)
         .output()
         .expect("il figlio deve partire");
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
+    Uscita {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stato: output.status,
+    }
 }
 
 /// Punto d'ingresso del figlio. Non e' un test: se la variabile non c'e',
@@ -80,7 +120,8 @@ fn l_hook_di_default_pubblica_il_payload_del_panico() {
     // Premessa del difetto. Se un giorno `std` smettesse di stampare il
     // payload, questo test fallirebbe e ci direbbe che la politica non serve
     // piu': e' informazione utile, non un falso allarme.
-    let (_, stderr) = esegui_figlio("default");
+    let uscita = esegui_figlio("default");
+    let (_, stderr) = uscita.di_un_figlio_andato_in_panico("default");
     assert!(
         stderr.contains(SEGRETO),
         "premessa: senza politica il payload finisce su stderr; stderr: {stderr}"
@@ -89,7 +130,8 @@ fn l_hook_di_default_pubblica_il_payload_del_panico() {
 
 #[test]
 fn la_politica_silent_non_pubblica_nulla() {
-    let (stdout, stderr) = esegui_figlio("silent");
+    let uscita = esegui_figlio("silent");
+    let (stdout, stderr) = uscita.di_un_figlio_andato_in_panico("silent");
     assert!(
         !stderr.contains(SEGRETO),
         "il payload non deve comparire su stderr; stderr: {stderr}"
@@ -99,7 +141,8 @@ fn la_politica_silent_non_pubblica_nulla() {
 
 #[test]
 fn la_politica_sanitized_pubblica_la_forma_ma_non_il_contenuto() {
-    let (stdout, stderr) = esegui_figlio("sanitized");
+    let uscita = esegui_figlio("sanitized");
+    let (stdout, stderr) = uscita.di_un_figlio_andato_in_panico("sanitized");
     assert!(
         !stderr.contains(SEGRETO) && !stdout.contains(SEGRETO),
         "il payload non deve comparire su nessun canale; stderr: {stderr}"
@@ -127,7 +170,8 @@ fn la_politica_non_sopravvive_a_un_set_hook_di_terze_parti() {
     // smentirebbe — o, se davvero lo diventasse, fallirebbe e chiederebbe di
     // aggiornare la documentazione. In entrambi i casi il documento e il
     // codice restano allineati.
-    let (_, stderr) = esegui_figlio("scavalcata");
+    let uscita = esegui_figlio("scavalcata");
+    let (_, stderr) = uscita.di_un_figlio_andato_in_panico("scavalcata");
     assert!(
         stderr.contains(SEGRETO),
         "il limite dichiarato e' reale: un hook di terze parti installato dopo il nostro \
