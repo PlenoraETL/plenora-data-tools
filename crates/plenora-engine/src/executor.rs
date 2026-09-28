@@ -709,7 +709,7 @@ pub(super) struct GeoBinaryStepError {
 /// contesto **preservando la categoria** (D14.5.1); la fase `Read`
 /// del decode e' taggata al confine (`Write` e' gia' la fase derivata di
 /// `Execution`, D14.5.4); side/riga solo come dettaglio diagnostico opt-in.
-pub(super) fn geo_binary_step_error(
+fn geo_binary_step_error(
     state: &ExecState,
     kernel: &PreparedKernel,
     carrier: GeoBinaryStepError,
@@ -738,7 +738,7 @@ pub(super) fn geo_binary_step_error(
 /// (osservabilita' per nodo; architettura.md#memoria: il governor non riconta — questi conteggi sono metriche,
 /// non reservation).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn record_kernel_metrics(
+fn record_kernel_metrics(
     state: &ExecState,
     segment: &PhysicalSegment,
     kernel: &PreparedKernel,

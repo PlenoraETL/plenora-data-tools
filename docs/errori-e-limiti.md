@@ -1155,6 +1155,7 @@ far tacere `dead_code`: allargherebbe la superficie invece di deciderla.
 | la forma breve di `geo_transport::ipc::parse_footer` | `test` | la produzione passa tutta per `parse_footer_estraendo` |
 | gli inventari `TUTTE` e `NOMI` dei messaggi del protocollo | `test` | servono ai casi che attraversano ogni variante; la produzione converte una variante per volta |
 | il campo `commit_token` di `HandshakeAccettato`, con la copia in `SupervisoreInAttesa` | `any(test, internals)` | la produzione tiene la **propria** copia del token (`esecuzione_isolata`) e la consegna al verificatore; questa la leggono solo i casi |
+| `WorkerAccordato::commit_token` | `test` | worker e verificatore ricevono il token da `ricevi_incarico` e `ricevi_incarico_verifica`, insieme all'incarico; l'accessore lo leggono solo i casi dell'handshake |
 | `Registro::concluso` e `quattro_fatti_positivi`, `Coda::terminale`, `rimasti` e `chiudi_e_drena` | `any(test, internals)` | introspezione dei casi; il giudizio vero è `classifica`, la conduzione vera `si_puo_smettere_di_ascoltare` e `chiudi_e_drena_entro` |
 
 Il braccio `internals` c'è dove la facciata `interni` porta il fuzzer; sugli

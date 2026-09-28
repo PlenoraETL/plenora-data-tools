@@ -16,7 +16,7 @@
 //! «comando sconosciuto» da un supervisore che aspetta un saluto.
 
 mod comune;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use comune::ricaduta_nel_parser;
 
 /// La variabile del canale, che questi casi tolgono di mezzo.
@@ -24,6 +24,7 @@ use comune::ricaduta_nel_parser;
 /// Sta scritta qui e non presa dal motore: e' un contratto fra due processi, e
 /// un caso che la leggesse dalla stessa costante del codice non si accorgerebbe
 /// se quel nome cambiasse.
+#[cfg(target_os = "linux")]
 const VARIABILE: &str = "PLENORA_CANALE";
 
 /// Che cosa il binario ha scritto, unito (vedi [`comune::esegui`]).
@@ -31,6 +32,7 @@ const VARIABILE: &str = "PLENORA_CANALE";
 /// La variabile del canale viene **tolta** dall'ambiente del figlio: questi
 /// casi provano il cammino in cui non c'e', e l'ambiente del runner potrebbe
 /// averla per conto suo.
+#[cfg(target_os = "linux")]
 fn esegui(argomenti: &[&str]) -> (i32, String) {
     comune::esegui(argomenti, Some(VARIABILE))
 }

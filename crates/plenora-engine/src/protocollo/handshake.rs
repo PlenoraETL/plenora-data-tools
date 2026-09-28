@@ -660,11 +660,12 @@ impl WorkerAccordato {
     /// Il token accettato nel `Saluto`.
     ///
     /// Chi esegue un piano riceve il token da [`Self::ricevi_incarico`],
-    /// insieme all'incarico. Questa seconda porta serve ai casi che
-    /// confrontano i due lati prima che un incarico esista, e al verificatore
-    /// (`isolamento::verificatore`), che non riceve mai un `Incarico`: la sua
-    /// fase e' [`Self::ricevi_incarico_verifica`], che porta il token nella
-    /// propria firma.
+    /// insieme all'incarico; il verificatore (`isolamento::verificatore`) da
+    /// [`Self::ricevi_incarico_verifica`], che lo porta nella propria firma.
+    /// Questa seconda porta serve solo ai casi che confrontano i due lati
+    /// prima che un incarico esista, e per questo e' sotto `test` — vedi
+    /// errori-e-limiti.md#moduli-compilati-solo-sotto-test-e-internals.
+    #[cfg(test)]
     #[must_use]
     pub const fn commit_token(&self) -> &CommitToken {
         &self.commit_token
