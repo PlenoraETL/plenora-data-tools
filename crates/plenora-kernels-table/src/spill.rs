@@ -1089,13 +1089,23 @@ pub fn aggregate_spilled_in(
     Ok((output, workspace.metrics()))
 }
 
-/// Righe per run dell'external merge sort: un quarto del budget memoria
-/// diviso per la stima byte/riga (una run ordinata occupa batch sorgente,
-/// permutazione e copia ordinata), almeno una riga.
+/// Byte per riga che una run aggiunge ai dati: l'indice della permutazione
+/// (`usize`) e la colonna ordinale (`UInt64`). Non dipendono dalla larghezza
+/// della riga, e su righe strette pesano piu' dei dati stessi.
+const BYTE_TECNICI_PER_RIGA: usize = std::mem::size_of::<usize>() + std::mem::size_of::<u64>();
+
+/// Righe per run dell'external merge sort, almeno una. Una run ordinata
+/// occupa la fetta sorgente, la copia ordinata e la colonna ordinale: il
+/// fattore quattro sui dati copre le copie, e i byte tecnici per riga si
+/// aggiungono a parte, perche' un fattore sulla sola stima dei dati non li
+/// copre quando la riga e' stretta.
 fn sort_run_rows(batch: &RecordBatch, limits: &Limits) -> usize {
     let bytes = estimated_batch_bytes(batch).max(1);
     let per_row = (bytes / batch.num_rows().max(1)).max(1);
-    (limits.max_governed_memory_bytes / 4 / per_row).max(1)
+    let per_row_con_tecnici = per_row
+        .saturating_mul(4)
+        .saturating_add(BYTE_TECNICI_PER_RIGA);
+    (limits.max_governed_memory_bytes / per_row_con_tecnici).max(1)
 }
 
 /// Cursore di streaming su una run IPC ordinata: tiene in memoria un solo
@@ -1397,6 +1407,29 @@ pub fn sort_spilled_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn le_run_del_sort_contano_i_byte_tecnici_anche_su_righe_strette() {
+        // Una colonna Boolean stima meno di un byte per riga: senza i byte
+        // tecnici, 64 KiB ammetterebbero 16384 righe per run, i cui soli
+        // ordinali occupano 128 KiB.
+        let colonna: plenora_core::arrow::array::ArrayRef =
+            Arc::new(plenora_core::arrow::array::BooleanArray::from(vec![
+                true;
+                100_000
+            ]));
+        let batch = RecordBatch::try_from_iter([("b", colonna)]).unwrap();
+        let limits = Limits {
+            max_governed_memory_bytes: 65_536,
+            ..Limits::default()
+        };
+        let righe = sort_run_rows(&batch, &limits);
+        assert!(righe * BYTE_TECNICI_PER_RIGA <= limits.max_governed_memory_bytes);
+        assert!(
+            righe > 1,
+            "il budget deve ancora ammettere run di piu' righe"
+        );
+    }
 
     #[test]
     fn i_contatori_dello_spill_dichiarano_la_saturazione_e_non_riaprono_la_quota() {
@@ -1783,7 +1816,7 @@ mod tests {
     /// (inverso di `sort_run_rows`).
     fn limits_for_run_rows(batch: &RecordBatch, run_rows: usize) -> Limits {
         let per_row = (estimated_batch_bytes(batch) / batch.num_rows()).max(1);
-        let limits = spill_test_limits(per_row * 4 * run_rows);
+        let limits = spill_test_limits((per_row * 4 + BYTE_TECNICI_PER_RIGA) * run_rows);
         assert_eq!(sort_run_rows(batch, &limits), run_rows, "budget di test");
         limits
     }
