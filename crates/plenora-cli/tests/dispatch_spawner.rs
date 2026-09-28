@@ -16,23 +16,14 @@
 //! Qui si prova la meta' che si puo' provare ovunque: che una riga del
 //! namespace riservato **non torni mai** al parser degli argomenti.
 
-use std::process::Command;
-
 mod comune;
-use comune::eseguibile;
 #[cfg(unix)]
 use comune::ricaduta_nel_parser;
 
-/// Che cosa il binario ha scritto, unito: l'envelope va su stdout, ma un
-/// messaggio che finisse su stderr non deve sfuggire al caso.
+/// Che cosa il binario ha scritto, unito (vedi [`comune::esegui`]), con
+/// l'ambiente del runner intatto.
 fn esegui(argomenti: &[&str]) -> (i32, String) {
-    let uscita = Command::new(eseguibile())
-        .args(argomenti)
-        .output()
-        .expect("il binario si esegue");
-    let mut testo = String::from_utf8_lossy(&uscita.stdout).into_owned();
-    testo.push_str(&String::from_utf8_lossy(&uscita.stderr));
-    (uscita.status.code().unwrap_or(-1), testo)
+    comune::esegui(argomenti, None)
 }
 
 /// Un comando ordinario resta quello di sempre.

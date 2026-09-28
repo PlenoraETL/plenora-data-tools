@@ -8,27 +8,59 @@
 
 #[cfg(feature = "proj-backend")]
 use std::collections::HashMap;
-use std::process::Command;
 use std::sync::Arc;
 
 #[cfg(feature = "proj-backend")]
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::arrow::array::{RecordBatch, StringArray};
 use plenora_core::arrow::ipc::reader::FileReader;
-use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 
-fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plenora-data-tools"))
+mod comune;
+#[cfg(feature = "proj-backend")]
+use comune::costanti::POINT_WKB;
+use comune::{cli, comando_run, scrivi_ipc};
+
+/// L'envelope `plngeo3` di `batch`: il payload IPC di `transform-arrow` e
+/// `pair-arrow`.
+#[cfg(feature = "proj-backend")]
+fn envelope_plngeo3(
+    schema: &plenora_core::arrow::schema::SchemaRef,
+    batch: &RecordBatch,
+) -> Vec<u8> {
+    use plenora_engine::geo_transport::transport::{encode_ipc, EnvelopeWriter};
+
+    let payload = encode_ipc(schema, std::slice::from_ref(batch)).expect("encode");
+    let mut writer = EnvelopeWriter::new(Vec::new(), payload.len() as u64).expect("writer");
+    writer.write_payload(&payload).expect("payload");
+    writer.finish().expect("finish").0
 }
 
-fn write_ipc(path: &std::path::Path, schema: &Schema, batches: &[RecordBatch]) {
-    let file = std::fs::File::create(path).expect("create input");
-    let mut writer = FileWriter::try_new(file, &Arc::new(schema.clone())).expect("writer");
-    for batch in batches {
-        writer.write(batch).expect("write batch");
-    }
-    writer.finish().expect("finish");
+/// L'ingresso di `from_coords` con una coordinata `x` NaN alla riga 1, e il
+/// suo schema di trasporto (due righe, EPSG:3857).
+#[cfg(feature = "proj-backend")]
+fn scrivi_from_coords_con_nan(input: &std::path::Path, schema_path: &std::path::Path) {
+    use plenora_core::arrow::array::Float64Array;
+
+    let schema = Schema::new(vec![
+        Field::new("x", DataType::Float64, true),
+        Field::new("y", DataType::Float64, true),
+    ]);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Float64Array::from(vec![Some(1.0), Some(f64::NAN)])),
+            Arc::new(Float64Array::from(vec![Some(2.0), Some(4.0)])),
+        ],
+    )
+    .expect("batch");
+    std::fs::write(input, envelope_plngeo3(&Arc::new(schema), &batch)).expect("input");
+
+    std::fs::write(
+        schema_path,
+        br#"{"schema_version":3,"operation":"from_coords","row_count":2,"crs":"EPSG:3857"}"#,
+    )
+    .expect("schema");
 }
 
 #[cfg(feature = "proj-backend")]
@@ -102,20 +134,14 @@ fn run_roundtrip_rename_streaming_e_fail_closed() {
         vec![Arc::new(StringArray::from(vec![Some("a"), Some("b")]))],
     )
     .expect("batch");
-    write_ipc(&input, &schema, &[batch]);
+    scrivi_ipc(&input, &schema, &[batch]);
     std::fs::write(
         &plan,
         br#"{"schema_version":1,"steps":[{"operation":"rename","config":{"renames":[{"old_name":"value","new_name":"renamed"}]}}]}"#,
     )
     .expect("plan");
 
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
+    let result = comando_run(&plan, "--input", &input, &output_path)
         .output()
         .expect("run");
     assert!(
@@ -131,13 +157,7 @@ fn run_roundtrip_rename_streaming_e_fail_closed() {
     assert_eq!(rows, 2);
 
     // Fail-closed: un secondo run sullo stesso output non sovrascrive.
-    let again = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
+    let again = comando_run(&plan, "--input", &input, &output_path)
         .output()
         .expect("run again");
     assert!(!again.status.success());
@@ -169,12 +189,6 @@ fn validate_stampa_il_riepilogo_del_piano() {
     assert_eq!(parsed["status"], "ok");
     assert_eq!(parsed["steps"], 1);
 }
-
-/// POINT (2 3), little-endian OGC WKB (come `write_self_test` del sorgente).
-#[cfg(feature = "proj-backend")]
-const POINT_WKB: [u8; 21] = [
-    1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 8, 64,
-];
 
 #[cfg(feature = "proj-backend")]
 #[test]
@@ -220,8 +234,7 @@ fn transform_wkb_v2_roundtrip() {
 #[test]
 fn transform_arrow_v3_roundtrip() {
     use plenora_engine::geo_transport::transport::{
-        encode_ipc, EnvelopeWriter, DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY,
-        GEOARROW_WKB_EXTENSION,
+        DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
     };
 
     let directory = tempfile::tempdir().expect("tempdir");
@@ -245,12 +258,7 @@ fn transform_arrow_v3_roundtrip() {
         vec![Arc::new(BinaryArray::from_iter([Some(&POINT_WKB[..])]))],
     )
     .expect("batch");
-    let schema_ref = Arc::new(schema);
-    let payload = encode_ipc(&schema_ref, std::slice::from_ref(&batch)).expect("encode");
-    let mut writer = EnvelopeWriter::new(Vec::new(), payload.len() as u64).expect("writer");
-    writer.write_payload(&payload).expect("payload");
-    let envelope = writer.finish().expect("finish").0;
-    std::fs::write(&input, envelope).expect("input");
+    std::fs::write(&input, envelope_plngeo3(&Arc::new(schema), &batch)).expect("input");
 
     std::fs::write(
         &schema_path,
@@ -308,38 +316,12 @@ fn transform_arrow_v3_roundtrip() {
 #[cfg(feature = "proj-backend")]
 #[test]
 fn transform_arrow_from_coords_reports_row_diagnostics() {
-    use plenora_core::arrow::array::Float64Array;
-    use plenora_engine::geo_transport::transport::{encode_ipc, EnvelopeWriter};
-
     let directory = tempfile::tempdir().expect("tempdir");
     let input = directory.path().join("input.plngeo3");
     let schema_path = directory.path().join("schema.json");
     let output_path = directory.path().join("output.plngeo3");
 
-    let schema = Schema::new(vec![
-        Field::new("x", DataType::Float64, true),
-        Field::new("y", DataType::Float64, true),
-    ]);
-    let batch = RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![
-            Arc::new(Float64Array::from(vec![Some(1.0), Some(f64::NAN)])),
-            Arc::new(Float64Array::from(vec![Some(2.0), Some(4.0)])),
-        ],
-    )
-    .expect("batch");
-    let schema_ref = Arc::new(schema);
-    let payload = encode_ipc(&schema_ref, std::slice::from_ref(&batch)).expect("encode");
-    let mut writer = EnvelopeWriter::new(Vec::new(), payload.len() as u64).expect("writer");
-    writer.write_payload(&payload).expect("payload");
-    let envelope = writer.finish().expect("finish").0;
-    std::fs::write(&input, envelope).expect("input");
-
-    std::fs::write(
-        &schema_path,
-        br#"{"schema_version":3,"operation":"from_coords","row_count":2,"crs":"EPSG:3857"}"#,
-    )
-    .expect("schema");
+    scrivi_from_coords_con_nan(&input, &schema_path);
 
     let result = cli()
         .arg("transform-arrow")
@@ -383,38 +365,12 @@ fn transform_arrow_from_coords_reports_row_diagnostics() {
 #[cfg(feature = "proj-backend")]
 #[test]
 fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
-    use plenora_core::arrow::array::Float64Array;
-    use plenora_engine::geo_transport::transport::{encode_ipc, EnvelopeWriter};
-
     let directory = tempfile::tempdir().expect("tempdir");
     let input = directory.path().join("input.plngeo3");
     let schema_path = directory.path().join("schema.json");
     let output_path = directory.path().join("output.plngeo3");
 
-    let schema = Schema::new(vec![
-        Field::new("x", DataType::Float64, true),
-        Field::new("y", DataType::Float64, true),
-    ]);
-    let batch = RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![
-            Arc::new(Float64Array::from(vec![Some(1.0), Some(f64::NAN)])),
-            Arc::new(Float64Array::from(vec![Some(2.0), Some(4.0)])),
-        ],
-    )
-    .expect("batch");
-    let schema_ref = Arc::new(schema);
-    let payload = encode_ipc(&schema_ref, std::slice::from_ref(&batch)).expect("encode");
-    let mut writer = EnvelopeWriter::new(Vec::new(), payload.len() as u64).expect("writer");
-    writer.write_payload(&payload).expect("payload");
-    let envelope = writer.finish().expect("finish").0;
-    std::fs::write(&input, envelope).expect("input");
-
-    std::fs::write(
-        &schema_path,
-        br#"{"schema_version":3,"operation":"from_coords","row_count":2,"crs":"EPSG:3857"}"#,
-    )
-    .expect("schema");
+    scrivi_from_coords_con_nan(&input, &schema_path);
 
     let run_transform = || {
         cli()
@@ -474,8 +430,8 @@ fn transform_arrow_row_diagnostics_error_axes_are_data_mapping() {
 #[test]
 fn transform_arrow_v3_emits_canonical_keys() {
     use plenora_engine::geo_transport::transport::{
-        decode_ipc, encode_ipc, EnvelopeReader, EnvelopeWriter, DEFAULT_GEOMETRY_COLUMN,
-        GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
+        decode_ipc, EnvelopeReader, DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY,
+        GEOARROW_WKB_EXTENSION,
     };
 
     let directory = tempfile::tempdir().expect("tempdir");
@@ -499,12 +455,7 @@ fn transform_arrow_v3_emits_canonical_keys() {
         vec![Arc::new(BinaryArray::from_iter([Some(&POINT_WKB[..])]))],
     )
     .expect("batch");
-    let schema_ref = Arc::new(schema);
-    let payload = encode_ipc(&schema_ref, std::slice::from_ref(&batch)).expect("encode");
-    let mut writer = EnvelopeWriter::new(Vec::new(), payload.len() as u64).expect("writer");
-    writer.write_payload(&payload).expect("payload");
-    let envelope = writer.finish().expect("finish").0;
-    std::fs::write(&input, envelope).expect("input");
+    std::fs::write(&input, envelope_plngeo3(&Arc::new(schema), &batch)).expect("input");
 
     std::fs::write(
         &schema_path,
@@ -616,8 +567,8 @@ fn assert_pair_transport_metadata(schema: &Schema) {
 #[test]
 fn pair_arrow_v3_emits_canonical_keys() {
     use plenora_engine::geo_transport::transport::{
-        decode_ipc, encode_ipc, EnvelopeReader, EnvelopeWriter, DEFAULT_GEOMETRY_COLUMN,
-        GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
+        decode_ipc, EnvelopeReader, DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY,
+        GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
     };
 
     let directory = tempfile::tempdir().expect("tempdir");
@@ -647,10 +598,7 @@ fn pair_arrow_v3_emits_canonical_keys() {
         vec![Arc::new(BinaryArray::from_iter([Some(&POINT_WKB[..])]))],
     )
     .expect("batch");
-    let payload = encode_ipc(&schema_ref, std::slice::from_ref(&batch)).expect("encode");
-    let mut writer = EnvelopeWriter::new(Vec::new(), payload.len() as u64).expect("writer");
-    writer.write_payload(&payload).expect("payload");
-    let envelope = writer.finish().expect("finish").0;
+    let envelope = envelope_plngeo3(&schema_ref, &batch);
     std::fs::write(&left_path, &envelope).expect("left");
     std::fs::write(&right_path, &envelope).expect("right");
 
