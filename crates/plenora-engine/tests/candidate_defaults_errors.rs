@@ -754,6 +754,74 @@ fn blocking_schema_collision_and_output_limits_fail_closed() {
 }
 
 #[test]
+fn transpose_output_limits_are_reached_after_valid_inputs() {
+    // I due tetti d'uscita del transpose, ciascuno con un ingresso che sta
+    // nei limiti: le righe diventano colonne (piu' quella dei nomi) e le
+    // colonne diventano righe.
+    let transpose = |max_rows: usize, max_columns: usize| {
+        Plan {
+            schema_version: 1,
+            limits: Limits {
+                max_rows,
+                max_columns,
+                ..Limits::default()
+            },
+            steps: vec![Step {
+                operation: "transpose".into(),
+                config: json!({"id_column":null,"output_columns":[]}),
+            }],
+        }
+        .validate()
+        .expect("transpose plan")
+    };
+    let numbers = |columns: usize, rows: usize| {
+        let fields = (0..columns)
+            .map(|index| Field::new(format!("c{index}"), DataType::Int64, false))
+            .collect::<Vec<_>>();
+        let arrays = (0..columns)
+            .map(|_| {
+                Arc::new(Int64Array::from(
+                    (0..rows)
+                        .map(|row| i64::try_from(row).expect("poche righe"))
+                        .collect::<Vec<_>>(),
+                )) as plenora_core::arrow::array::ArrayRef
+            })
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).expect("numbers")
+    };
+    // Due colonne e tre righe stanno in `max_columns: 3`; l'uscita ha
+    // 3 + 1 = 4 colonne.
+    let error = execute_batch(numbers(2, 3), &transpose(6, 3))
+        .expect_err("transpose oltre max_columns in uscita");
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("transpose supera i limiti"),
+        "il rifiuto deve venire dal tetto d'uscita, non dall'ingresso: {error}"
+    );
+    // Tre colonne e una riga stanno in `max_rows: 2`; l'uscita ha tre righe.
+    let error = execute_batch(numbers(3, 1), &transpose(2, 6))
+        .expect_err("transpose oltre max_rows in uscita");
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("transpose supera i limiti"),
+        "il rifiuto deve venire dal tetto d'uscita, non dall'ingresso: {error}"
+    );
+    // Il confine: 3 + 1 colonne in `max_columns: 4` e tre righe in
+    // `max_rows: 3` passano.
+    let transposed = execute_batch(numbers(3, 3), &transpose(3, 4)).expect("transpose al confine");
+    assert_eq!(transposed.num_rows(), 3);
+    assert_eq!(transposed.num_columns(), 4);
+}
+
+#[test]
 fn analysis_and_reshape_post_input_limits_are_exercised() {
     let three = batch();
     let columns_limit = Limits {
@@ -809,22 +877,6 @@ fn analysis_and_reshape_post_input_limits_are_exercised() {
         .num_rows(),
         0
     );
-    let transpose_limits = Limits {
-        max_rows: 6,
-        max_columns: 3,
-        ..Limits::default()
-    };
-    let transpose = Plan {
-        schema_version: 1,
-        limits: transpose_limits,
-        steps: vec![Step {
-            operation: "transpose".into(),
-            config: json!({"id_column":null,"output_columns":[]}),
-        }],
-    }
-    .validate()
-    .expect("transpose plan");
-    assert!(execute_batch(three.clone(), &transpose).is_err());
 
     assert!(execute_binary(
         &three,

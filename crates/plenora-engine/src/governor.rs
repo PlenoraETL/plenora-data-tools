@@ -722,21 +722,6 @@ mod tests {
     }
 
     #[test]
-    fn oldest_lease_age_tracks_live_leases() {
-        let governor = MemoryGovernor::new(1_000);
-        assert!(governor.oldest_lease_age().is_none());
-        let first = governor.reserve(100, "primo").expect("quota");
-        let second = governor.reserve(100, "secondo").expect("quota");
-        let oldest = governor.oldest_lease_age().expect("due lease vivi");
-        assert!(oldest <= first.age(), "il piu' vecchio e' il primo");
-        drop(first);
-        let remaining = governor.oldest_lease_age().expect("un lease vivo");
-        assert!(remaining <= second.age());
-        drop(second);
-        assert!(governor.oldest_lease_age().is_none());
-    }
-
-    #[test]
     fn snapshot_reports_observability_fields() {
         let governor = MemoryGovernor::new(512);
         let lease = governor.reserve(128, "nodo").expect("quota");
@@ -1021,14 +1006,43 @@ mod tests {
 
     #[test]
     fn try_reserve_e_reserve_passano_dal_permesso() {
-        // Non due contabilita': `reserve` e' un involucro, e i suoi effetti
-        // sui contatori sono quelli del permesso.
+        // Non due contabilita': `try_reserve` e `reserve` sono involucri del
+        // permesso, e cio' che prende l'uno lo vedono gli altri due. Ogni
+        // passo alterna la porta d'ingresso sulla stessa quota.
         let governor = MemoryGovernor::new(100);
-        let lease = governor.reserve(100, "tutto").expect("limite esatto");
-        assert_eq!(governor.reserved_bytes(), 100);
-        let errore = governor.reserve(1, "oltre").expect_err("budget esaurito");
+        let ReservationResult::Granted(primo) = governor
+            .try_reserve(60, "try_reserve")
+            .expect("entro budget")
+        else {
+            panic!("la v1 seriale concede o rifiuta, non rimanda");
+        };
+        assert_eq!(primo.bytes(), 60);
+        assert_eq!(governor.reserved_bytes(), 60);
+        assert_eq!(governor.live_leases(), 1);
+
+        // Il permesso vede la quota presa da `try_reserve`: 41 byte non ci
+        // stanno, 40 si'.
         assert!(
-            matches!(errore, PlenoraError::ResourceLimit(_)),
+            concesso(&governor, 41, "permesso").is_none(),
+            "il permesso ignora la quota presa da try_reserve"
+        );
+        let permesso = concesso(&governor, 40, "permesso").expect("limite esatto");
+        assert_eq!(governor.reserved_bytes(), 100);
+
+        // Budget pieno: le due porte rifiutano allo stesso modo, e nessuna
+        // delle due sposta i contatori.
+        let errore = governor
+            .try_reserve(1, "oltre")
+            .expect_err("budget esaurito per try_reserve");
+        assert!(
+            matches!(errore, PlenoraError::ResourceLimit(ref motivo) if motivo.contains("max_governed_memory_bytes")),
+            "errore atteso ResourceLimit: {errore:?}"
+        );
+        let errore = governor
+            .reserve(1, "oltre")
+            .expect_err("budget esaurito per reserve");
+        assert!(
+            matches!(errore, PlenoraError::ResourceLimit(ref motivo) if motivo.contains("max_governed_memory_bytes")),
             "errore atteso ResourceLimit: {errore:?}"
         );
         assert_eq!(
@@ -1036,8 +1050,24 @@ mod tests {
             100,
             "il rifiuto non sposta il contatore"
         );
-        drop(lease);
+        assert_eq!(governor.live_leases(), 2);
+
+        // Il rilascio di `try_reserve` libera quota per `reserve`, e quello
+        // del permesso per `try_reserve`.
+        drop(primo);
+        let secondo = governor.reserve(60, "reserve").expect("quota liberata");
+        drop(permesso);
+        assert!(
+            matches!(
+                governor.try_reserve(40, "try_reserve"),
+                Ok(ReservationResult::Granted(ref lease)) if lease.bytes() == 40
+            ),
+            "la quota del permesso rilasciato non torna a try_reserve"
+        );
+        drop(secondo);
         assert_eq!(governor.reserved_bytes(), 0);
+        assert_eq!(governor.live_leases(), 0);
+        assert_eq!(governor.peak_reserved_bytes(), 100);
     }
 
     // -----------------------------------------------------------------
@@ -1052,6 +1082,10 @@ mod tests {
         // vecchio" senza dipendere da un ritardo che su una macchina carica
         // puo' non essere quello che il test crede.
         let governor = MemoryGovernor::new(1_000);
+        assert!(
+            governor.oldest_lease_age().is_none(),
+            "nessun lease, nessuna eta'"
+        );
         let lease: Vec<MemoryLease> = (0..8)
             .map(|indice| {
                 in_lease(

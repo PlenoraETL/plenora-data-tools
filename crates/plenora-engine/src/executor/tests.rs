@@ -125,10 +125,9 @@ fn run(
 }
 
 /// `Inputs` SENZA contratto: il percorso permissivo, deprecato ma ancora
-/// supportato e quindi ancora da testare. Il `allow` sta qui, una volta sola,
-/// invece di essere sparso su ogni test: quando la deprecazione diventera'
-/// rimozione, questo e' l'unico punto da cancellare.
-#[allow(deprecated)]
+/// supportato e quindi ancora da testare. L'`allow(deprecated)` sta sulla
+/// dichiarazione del modulo, in `executor.rs`, e copre anche i test che
+/// chiamano `Inputs::with` direttamente.
 fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
     Inputs::new()
         .with(name, Input::from_batches(batches).expect("input non vuoto"))
@@ -136,7 +135,6 @@ fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
 }
 
 /// Come [`single_input`], per i test che hanno gia' un [`Input`] costruito.
-#[allow(deprecated)]
 fn single_input_from(name: &str, input: Input) -> Inputs {
     Inputs::new().with(name, input).expect("input unico")
 }
@@ -4049,6 +4047,11 @@ fn blocking_concat_error_is_attributed_to_the_node() {
     let (node, operation, reason) = attribuzione(&error);
     assert_eq!(node, "g", "attribuzione al nodo");
     assert_eq!(operation, "table.aggregate", "attribuzione all'operazione");
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::DataMapping,
+        "la categoria dell'errore Arrow e' sostituita: {error:?}"
+    );
     assert!(reason.contains("arrow"), "{reason}");
 }
 
@@ -6181,81 +6184,60 @@ fn staging_ordine_e_sequenza_logica_preservati() {
 }
 
 #[test]
-fn staging_rejection_tardiva_non_pubblica_nulla_in_memoria() {
-    // Il terzo batch contiene un valore che la formula non sa valutare: la
-    // rejection arriva DOPO che due batch sono gia' stati accettati e
-    // trattenuti in memoria. Nessuno dei due deve uscire.
-    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, true)]));
-    let buono = |base: i64| {
-        RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringArray::from(vec![
-                Some(base.to_string()),
-                Some((base + 1).to_string()),
-            ])) as ArrayRef],
-        )
-        .expect("batch valido")
-    };
-    let cattivo = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(StringArray::from(vec![Some("non-un-numero".to_owned())])) as ArrayRef],
-    )
-    .expect("batch con riga non valutabile");
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{
-            "id": "c",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {"column": "v", "target_type": "int"}
-        }],
-        "output": "c"
-    });
-    let contratti = [(
-        "main".to_owned(),
-        DataContract::tabular(Arc::clone(&schema)),
-    )];
-    let output = run(
-        &plan,
-        single_input("main", vec![buono(0), buono(10), cattivo]),
-        &contratti,
-    )
-    .expect("execute lazy");
-    let esito = output.collect_batches();
-    assert!(
-        esito.is_err(),
-        "una rejection tardiva non deve pubblicare accepted"
-    );
-}
-
-#[test]
 fn staging_cancellazione_dopo_accepted_trattenuti_non_pubblica_nulla() {
+    // Il token si cancella quando la sorgente e' gia' esaurita: tutti e
+    // quattro i batch sono passati dalla catena e sono trattenuti in memoria
+    // (budget predefinito, modalita' memoria). La cancellazione e' osservata
+    // al confine di fine scansione, e i trattenuti non devono uscire.
     let token = CancellationToken::new();
+    let cancella = token.clone();
+    let mut sorgente = staging_batches().into_iter();
+    let input = Input::from_iter(
+        staging_schema(),
+        std::iter::from_fn(move || {
+            let prossimo = sorgente.next();
+            if prossimo.is_none() {
+                cancella.cancel();
+            }
+            prossimo.map(Ok)
+        }),
+    );
     let runtime = RuntimeContext {
-        cancellation: token.clone(),
+        cancellation: token,
         ..RuntimeContext::default()
     };
     let graph =
         validate(&staging_plan(false).to_string(), &staging_contratti()).expect("piano valido");
-    // Cancellato PRIMA di drenare: la scansione si ferma al confine
-    // cooperativo e i trattenuti muoiono con la coda.
-    token.cancel();
-    let output = execute(&graph, single_input("main", staging_batches()), runtime);
-    let esito = output.and_then(Output::collect_batches);
-    assert!(
-        esito.is_err(),
-        "la cancellazione non deve pubblicare accepted"
+    let mut output =
+        execute(&graph, single_input_from("main", input), runtime).expect("execute lazy");
+    let errore = output
+        .next()
+        .expect("un terminale")
+        .expect_err("la cancellazione non deve pubblicare accepted");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::Cancelled,
+        "categoria attesa Cancelled: {errore:?}"
     );
+    assert!(output.next().is_none(), "nulla dopo il terminale");
+    let metriche = output.metrics();
+    assert_eq!(
+        metriche.nodes["f"].rows_out, 12,
+        "i quattro batch devono aver attraversato la catena prima della cancellazione"
+    );
+    assert_eq!(metriche.output_batches, 0, "nessun accepted pubblicato");
+    assert_eq!(metriche.output_rows, 0, "nessun accepted pubblicato");
 }
 
 #[test]
 fn staging_soglia_esatta_e_attraversamento() {
     // La soglia e' `trattenuti + input + max_batch_bytes <= budget`, tutta
-    // derivata dal piano. Qui si verifica il comportamento ai due lati:
-    // con budget ampio si resta in memoria (nessun file temporaneo puo'
-    // essere scritto, quindi `max_temp_bytes: 1` non disturba); con budget
-    // stretto si passa a disco e quella stessa quota fa fallire.
+    // derivata dal piano e dai lease vivi. La passata piu' esigente e'
+    // l'ultima, e il suo permesso fissa il picco del governor: con budget
+    // ampio si misura quel picco, poi lo si usa come budget. Al picco esatto
+    // ogni passata sta in memoria (nessun file temporaneo, quindi
+    // `max_temp_bytes: 1` non disturba); un byte sotto, l'ultima passata non
+    // ci sta, si passa a disco e quella stessa quota fa fallire.
     let piano = |memoria: u64| {
         json!({
             "schema_version": 5,
@@ -6270,32 +6252,43 @@ fn staging_soglia_esatta_e_attraversamento() {
             "output": "f"
         })
     };
-    // Sopra la soglia: memoria, quindi nessuna scrittura temporanea.
-    let ampio = output_rows(
-        run(
-            &piano(512 * 1024 * 1024),
-            single_input("main", staging_batches()),
-            &staging_contratti(),
+    let esegui = |memoria: u64| {
+        output_rows(
+            run(
+                &piano(memoria),
+                single_input("main", staging_batches()),
+                &staging_contratti(),
+            )
+            .expect("execute"),
         )
-        .expect("execute"),
+    };
+    let (trattenuti, ampio) =
+        esegui(512 * 1024 * 1024).expect("con budget ampio si resta in memoria");
+    let picco = ampio.memory.peak_reserved_bytes;
+    // Il picco ricostruito dalla formula, fuori dal governor: i primi tre
+    // output trattenuti, il quarto ingresso e il permesso di
+    // `max_batch_bytes` per il suo output.
+    let byte = |batch: &RecordBatch| u64::try_from(batch.get_array_memory_size()).expect("u64");
+    let tetto_batch =
+        u64::try_from(RuntimeContext::default().batch_target.max_batch_bytes).expect("u64");
+    let atteso =
+        trattenuti[..3].iter().map(byte).sum::<u64>() + byte(&staging_batches()[3]) + tetto_batch;
+    assert_eq!(
+        picco, atteso,
+        "il picco e' `trattenuti + input + max_batch_bytes` dell'ultima passata"
     );
+
+    // Sul confine: ogni passata sta in memoria, e il picco e' lo stesso.
+    let (batches, esatto) = esegui(picco)
+        .unwrap_or_else(|errore| panic!("al budget esatto la soglia e' `<=`, non `<`: {errore}"));
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 12);
+    assert_eq!(esatto.memory.peak_reserved_bytes, picco);
+
+    // Un byte sotto: l'ultima passata non ci sta, si passa a disco e la quota
+    // temporanea di 1 byte fa fallire.
+    let errore = esegui(picco - 1).expect_err("sotto soglia si passa a disco e la quota fallisce");
     assert!(
-        ampio.is_ok(),
-        "con budget ampio non si deve toccare la quota temporanea: {:?}",
-        ampio.err()
-    );
-    // Sotto la soglia: disco, e la quota temporanea di 1 byte fa fallire.
-    let stretto = output_rows(
-        run(
-            &piano(1_048_576),
-            single_input("main", staging_batches()),
-            &staging_contratti(),
-        )
-        .expect("execute"),
-    );
-    let errore = stretto.expect_err("sotto soglia si passa a disco e la quota fallisce");
-    assert!(
-        errore.to_string().contains("staging"),
+        errore.to_string().contains("staging output"),
         "errore atteso di staging: {errore}"
     );
 }
@@ -6394,8 +6387,9 @@ fn staging_output_consumato_da_un_segmento_successivo() {
 
 #[test]
 fn staging_zero_colonne_e_batch_vuoti() {
-    // Un batch senza righe attraversa comunque la barriera: le due modalita'
-    // devono concordare anche su questo caso degenere.
+    // Due casi degeneri che attraversano comunque la barriera, e su cui le
+    // due modalita' devono concordare: batch senza righe fra batch pieni, e
+    // un input senza colonne ma con righe (legittimo in Arrow).
     let vuoto = RecordBatch::new_empty(staging_schema());
     let esegui = |forza_disco: bool| {
         output_rows(
@@ -6411,8 +6405,63 @@ fn staging_zero_colonne_e_batch_vuoti() {
     let (memoria, mm) = esegui(false);
     let (disco, md) = esegui(true);
     assert_eq!(staging_ipc(&memoria), staging_ipc(&disco));
+    assert_eq!(mm.output_rows, 3);
     assert_eq!(mm.output_rows, md.output_rows);
     assert_eq!(mm.output_batches, md.output_batches);
+
+    // Zero colonne dall'ingresso alla barriera: la formula non legge colonne
+    // e la sua colonna nuova e' tolta subito dopo, nello stesso segmento,
+    // quindi i batch trattenuti (in memoria) o scritti e riletti (su disco)
+    // non hanno colonne ma hanno righe.
+    let senza_colonne = Arc::new(Schema::empty());
+    let righe = |n: usize| {
+        plenora_core::batch_with_rows(Arc::clone(&senza_colonne), vec![], n)
+            .expect("batch a zero colonne")
+    };
+    let piano = |forza_disco: bool| {
+        let mut piano = staging_plan(forza_disco);
+        piano["nodes"] = json!([
+            {"id": "f", "op": "table.formula", "in": ["main"],
+             "config": {"new_column": "uno", "formula": "1"}},
+            {"id": "d", "op": "table.drop_columns", "in": ["f"],
+             "config": {"columns": ["uno"]}}
+        ]);
+        piano["output"] = json!("d");
+        piano
+    };
+    let contratti = [(
+        "main".to_owned(),
+        DataContract::tabular(Arc::clone(&senza_colonne)),
+    )];
+    let esegui = |forza_disco: bool| {
+        output_rows(
+            run(
+                &piano(forza_disco),
+                single_input("main", vec![righe(2), righe(0), righe(3)]),
+                &contratti,
+            )
+            .expect("execute"),
+        )
+        .expect("raccolta")
+    };
+    let (memoria, mm) = esegui(false);
+    let (disco, md) = esegui(true);
+    assert_eq!(staging_ipc(&memoria), staging_ipc(&disco));
+    assert_eq!(mm.output_rows, 5);
+    assert_eq!(mm.output_rows, md.output_rows);
+    assert_eq!(mm.output_batches, md.output_batches);
+    assert!(
+        memoria
+            .iter()
+            .chain(&disco)
+            .all(|batch| batch.num_columns() == 0),
+        "l'output non ha colonne in nessuna delle due modalita'"
+    );
+    assert_eq!(
+        disco.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        5,
+        "le righe dei batch senza colonne sopravvivono al giro su disco"
+    );
 }
 
 #[test]

@@ -69,7 +69,9 @@
 //!    derivazione di variante (`PlenoraError::phase`): la cancellazione non
 //!    e' taggata di fase ai confini dell'executor.
 
+use std::cell::Cell;
 use std::io::Cursor;
+use std::rc::Rc;
 
 use geo::{polygon, Geometry, LineString, MultiLineString, Polygon};
 use plenora_core::arrow::array::{
@@ -1179,6 +1181,40 @@ fn oversized_runtime() -> RuntimeContext {
     }
 }
 
+/// I due input di (c), con un contatore dei batch tirati per lato.
+///
+/// L'errore d'arco non nomina il lato (vedi `assert_cell_too_large`): quale
+/// lato ha rifiutato si legge da quanto l'executor ha tirato da ciascuno.
+// Percorso permissivo (`Inputs::with`), come `two_geo_inputs`.
+#[allow(deprecated)]
+fn two_counted_geo_inputs(
+    left: Vec<RecordBatch>,
+    right: Vec<RecordBatch>,
+) -> (Inputs, Rc<Cell<usize>>, Rc<Cell<usize>>) {
+    let contato = |batches: Vec<RecordBatch>| {
+        let tirati = Rc::new(Cell::new(0_usize));
+        let contatore = Rc::clone(&tirati);
+        let mut batches = batches.into_iter();
+        let input = Input::from_iter(
+            geo_schema(),
+            std::iter::from_fn(move || {
+                let batch = batches.next()?;
+                contatore.set(contatore.get() + 1);
+                Some(Ok(batch))
+            }),
+        );
+        (input, tirati)
+    };
+    let (left, tirati_left) = contato(left);
+    let (right, tirati_right) = contato(right);
+    let inputs = Inputs::new()
+        .with("left_in", left)
+        .expect("input left")
+        .with("right_in", right)
+        .expect("input right");
+    (inputs, tirati_left, tirati_right)
+}
+
 /// (c) Cella oltre `MAX_CELL_BYTES` su un lato (fixture a batch singolo per
 /// lato: riga 0). Divergenza dalla lettera del caso (punto 3 dell'header):
 /// nel v4 la cella NON raggiunge mai il gate del nodo — la validazione
@@ -1189,7 +1225,13 @@ fn oversized_runtime() -> RuntimeContext {
 /// la misura esatta in byte. Entrambi fail-closed sulla stessa cella alla
 /// stessa soglia per-cella di 64 MiB — asserzioni separate per lato, mai un
 /// confronto campo-per-campo.
-fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBatch>, _side: &str) {
+///
+/// Il lato che rifiuta NON e' nell'errore v4: variante, motivo e diagnostica
+/// sono identici per left e right (nessun nome d'arco, colonna `geom` in
+/// entrambi). Lo si prova dal drenaggio: gli archi si leggono left poi
+/// right, quindi un rifiuto di left non tira mai right, e un rifiuto di
+/// right arriva dopo aver letto left per intero.
+fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBatch>, side: &str) {
     let v3_error = run_v3(&v3_sjoin_schema(1, 1), &left, &right)
         .expect_err("c: atteso CellTooLarge nel trasporto v3");
     let ArrowTransportError::CellTooLarge(cell_bytes) = v3_error else {
@@ -1200,17 +1242,37 @@ fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBa
         "{case}: la fixture supera davvero il limite"
     );
 
+    let (inputs, tirati_left, tirati_right) = two_counted_geo_inputs(left, right);
     let mut output = execute(
         &graph(&binary_plan(
             "geo.sjoin",
             &json!({"predicate": "intersects"}),
         )),
-        two_geo_inputs(left, right),
+        inputs,
         oversized_runtime(),
     )
     .expect("execute");
     let v4_error = first_stream_error(&mut output)
         .expect("c: atteso il rifiuto perimetrale d'arco, stream riuscito");
+    match side {
+        "left" => {
+            assert_eq!(tirati_left.get(), 1, "{case}: left letto");
+            assert_eq!(
+                tirati_right.get(),
+                0,
+                "{case}: il rifiuto viene da left, e right non e' mai letto"
+            );
+        }
+        "right" => {
+            assert_eq!(tirati_left.get(), 1, "{case}: left letto per intero");
+            assert_eq!(
+                tirati_right.get(),
+                1,
+                "{case}: il rifiuto viene da right, dopo left"
+            );
+        }
+        other => panic!("{case}: lato sconosciuto {other}"),
+    }
     let signature = error_signature(&v4_error);
     assert_eq!(
         signature.variant, "DataMapping",
@@ -1231,6 +1293,18 @@ fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBa
         signature.reason, "righe non conformi al contratto di trasformazione",
         "{case} v4: dettagli row-scoped solo nella diagnostica strutturata"
     );
+    // La causa distingue la guardia per-cella dalla validazione WKB che
+    // viene dopo: senza la prima, la seconda rifiuterebbe comunque la cella
+    // oversize, ma come `geometry.invalid_wkb`, con gli stessi assi.
+    let report = v4_error
+        .row_diagnostics()
+        .unwrap_or_else(|| panic!("{case} v4: diagnostica row-scoped"));
+    assert_eq!(
+        report.counts.get("geometry.cell_too_large"),
+        Some(&1),
+        "{case} v4: causa per-cella"
+    );
+    assert_eq!(report.counts.len(), 1, "{case} v4: nessun'altra causa");
 }
 
 /// (c) Cella oversize su LEFT.

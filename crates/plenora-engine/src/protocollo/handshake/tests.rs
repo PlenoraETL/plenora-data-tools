@@ -590,34 +590,43 @@ fn un_tipo_fuori_sequenza_e_rifiutato() {
 ///
 /// Il test qui sotto prova un'altra cosa: due handshake distinti non
 /// condividono stato.
+///
+/// I due giri hanno token **diversi** e si intrecciano passo per passo: con
+/// lo stesso token, uno stato condiviso darebbe lo stesso risultato di due
+/// stati separati, e il test non potrebbe fallire.
 #[test]
 fn due_handshake_distinti_non_si_influenzano() {
-    let (primo, _) = giro_nominale();
-    let (secondo, _) = giro_nominale();
-    assert_eq!(primo.commit_token(), secondo.commit_token());
+    const ALTRO: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    let attese_con = |esadecimale: &str| AtteseSupervisore {
+        commit_token: CommitToken::da_esadecimale(esadecimale).expect("canonico"),
+        ..attese()
+    };
+    let supervisore_a = SupervisoreInAttesa::nuovo(attese_con(TOKEN)).expect("coerenti");
+    let supervisore_b = SupervisoreInAttesa::nuovo(attese_con(ALTRO)).expect("coerenti");
+    let saluto_a = Frame::nuovo(Corpo::Saluto(Box::new(supervisore_a.saluto().clone())));
+    let saluto_b = Frame::nuovo(Corpo::Saluto(Box::new(supervisore_b.saluto().clone())));
+
+    let worker_a = WorkerInAttesa::nuovo(locale()).expect("coerente");
+    let worker_b = WorkerInAttesa::nuovo(locale()).expect("coerente");
+    let (risposta_b, accordato_b) = worker_b.ricevi(saluto_b).expect("il worker B accetta");
+    let (risposta_a, accordato_a) = worker_a.ricevi(saluto_a).expect("il worker A accetta");
+
+    let accettato_b = supervisore_b
+        .ricevi(Frame::nuovo(Corpo::Risposta(Box::new(risposta_b))))
+        .expect("il supervisore B accetta");
+    let accettato_a = supervisore_a
+        .ricevi(Frame::nuovo(Corpo::Risposta(Box::new(risposta_a))))
+        .expect("il supervisore A accetta");
+
+    assert_eq!(accettato_a.commit_token().in_esadecimale(), TOKEN);
+    assert_eq!(accordato_a.commit_token().in_esadecimale(), TOKEN);
+    assert_eq!(accettato_b.commit_token().in_esadecimale(), ALTRO);
+    assert_eq!(accordato_b.commit_token().in_esadecimale(), ALTRO);
 }
 
-/// La versione del protocollo non e' un asse da confrontare qui, ed e' giusto
-/// cosi'.
-///
-/// Il frame la deriva dalla costante e il decoder rifiuta ogni altra: un
-/// confronto qui non potrebbe fallire. Si prova invece che un frame di
-/// versione diversa **non arriva mai** all'handshake.
-#[test]
-fn un_frame_di_versione_diversa_non_arriva_all_handshake() {
-    use crate::protocollo::codifica::decodifica;
-
-    let corpo = r#"{"motivo":"x"}"#;
-    let testo = format!(r#"{{"protocol_version":2,"tipo":"annulla","corpo":{corpo}}}"#);
-    let mut byte = u32::try_from(testo.len())
-        .expect("corto")
-        .to_be_bytes()
-        .to_vec();
-    byte.extend_from_slice(testo.as_bytes());
-
-    let errore = decodifica(&byte).expect_err("versione ignota");
-    assert!(errore.to_string().contains("non riconosciuta"), "{errore}");
-}
+// La versione del protocollo non e' un asse dell'handshake: il frame la
+// deriva dalla costante e il decoder rifiuta ogni altra prima che un frame
+// arrivi qui (`protocollo/tests.rs`, `una_versione_sconosciuta_e_un_errore`).
 
 // ---------------------------------------------------------------------------
 // Riservatezza: nessun errore riporta cio' che e' arrivato dal filo

@@ -880,7 +880,7 @@ fn e_ogc_invalid_mid_chain_attributed_to_producer() {
 }
 
 // ---------------------------------------------------------------------------
-// (f) Cancellazione a meta' gruppo
+// (f) Cancellazione mentre lo stream scorre
 // ---------------------------------------------------------------------------
 
 /// Input geo lazy che cancella il token quando l'executor tira il batch
@@ -908,6 +908,18 @@ impl Iterator for CancellingGeoInput {
     }
 }
 
+/// Dove si attiva il token.
+#[derive(Clone, Copy)]
+enum Attivazione {
+    /// Dal lettore, al secondo batch tirato: la validazione WKB atomica
+    /// dell'input drena tutto prima del gruppo, e osserva il token a `main`.
+    DalLettore,
+    /// Dal consumatore, dopo il primo batch di output: il gate d'ingresso e'
+    /// superato e il segmento ha gia' portato tutti i batch attraverso il
+    /// gruppo, quindi il token e' osservato alla consegna dell'output.
+    DopoIlPrimoOutput,
+}
+
 // Percorso permissivo (`Inputs::with`), deprecato ma ancora supportato:
 // questi oracoli non dichiarano contratti e ne coprono il comportamento.
 #[allow(deprecated)]
@@ -915,23 +927,36 @@ fn run_cancellation(
     plan: &Value,
     batches: Vec<RecordBatch>,
     geo_fusion: bool,
+    attivazione: Attivazione,
 ) -> (PlenoraError, ExecutionMetrics) {
     let token = CancellationToken::new();
+    let cancel_after = match attivazione {
+        Attivazione::DalLettore => 1,
+        Attivazione::DopoIlPrimoOutput => usize::MAX,
+    };
     let input = Input::from_iter(
         geo_schema(),
         CancellingGeoInput {
             batches: batches.into_iter(),
             pulled: 0,
-            cancel_after: 1,
+            cancel_after,
             token: token.clone(),
         },
     );
     let inputs = Inputs::new().with("main", input).expect("input unico");
     let runtime = RuntimeContext {
-        cancellation: token,
+        cancellation: token.clone(),
         ..runtime(geo_fusion)
     };
     let mut output = execute(&graph(plan), inputs, runtime).expect("execute");
+    if matches!(attivazione, Attivazione::DopoIlPrimoOutput) {
+        let primo = output
+            .next()
+            .expect("un primo batch")
+            .expect("il primo batch attraversa il gruppo prima della cancellazione");
+        assert_eq!(primo.num_rows(), 2, "il primo batch e' uscito intero");
+        token.cancel();
+    }
     let error = first_stream_error(&mut output).expect("atteso Cancelled, lo stream e' terminato");
     (error, output.metrics())
 }
@@ -951,41 +976,107 @@ fn cancellation_batches() -> Vec<RecordBatch> {
         .collect()
 }
 
-/// (f) architettura.md#geometrie: token attivato mentre lo stream scorre (dal secondo batch in
-/// poi) -> `Cancelled` con la stessa attribuzione nei due percorsi. Il check
-/// cooperativo osserva il token al confine del primo kernel del gruppo sul
-/// batch in corso: il nodo e' `t` in entrambi i percorsi. La cancellazione
-/// osservabile esattamente TRA due kernel dello stesso batch non e'
-/// iniettabile dall'esterno senza un hook dedicato (vedi report, caso (g)).
+/// (f) architettura.md#geometrie: token attivato mentre lo stream scorre ->
+/// `Cancelled` con la stessa firma nei due percorsi, nei due punti che un
+/// chiamante esterno puo' raggiungere.
+///
+/// - Dal lettore: la validazione WKB atomica drena l'input prima del gruppo,
+///   quindi la cancellazione e' osservata a `main` e il runner fuso non parte.
+/// - Dal consumatore, dopo il primo batch di output: il segmento ha gia'
+///   portato i tre batch attraverso il gruppo — tre ingressi nel runner fuso —
+///   e la cancellazione e' osservata alla consegna dell'output, sul nodo `e`.
+///
+/// La cancellazione DENTRO il gruppo, fra due kernel dello stesso batch, non
+/// e' raggiungibile da qui: prima del gruppo c'e' il gate che drena l'input,
+/// dopo c'e' la consegna che drena il segmento. La prova e' a livello di
+/// runner (`unary.rs`,
+/// `fused_control_observes_cancellation_after_non_interruptible_make_valid`),
+/// con un hook dedicato per il caso (g).
 #[test]
-fn f_cancellation_mid_group_same_node() {
+fn f_cancellation_same_signature_at_reachable_points() {
     let plan = malformed_input_plan();
     assert_group_formation(&plan, &["t", "s", "e"]);
-    let (fused_error, fused_metrics) = run_cancellation(&plan, cancellation_batches(), true);
-    let (plain_error, plain_metrics) = run_cancellation(&plan, cancellation_batches(), false);
-    // Il runner fuso **non** viene raggiunto, e non e' un difetto: il token e'
-    // gia' attivo quando il primo batch arriva al confine, e la cancellazione
-    // e' osservata li'. I due percorsi eseguono quindi lo stesso codice, e cio'
-    // che questo caso prova e' l'**attribuzione** — nodo `t` in entrambi —
-    // non la parita' fra due implementazioni.
+
+    let (fused_error, fused_metrics) =
+        run_cancellation(&plan, cancellation_batches(), true, Attivazione::DalLettore);
+    let (plain_error, plain_metrics) = run_cancellation(
+        &plan,
+        cancellation_batches(),
+        false,
+        Attivazione::DalLettore,
+    );
     assert_percorsi(
-        "f",
+        "f-lettore",
         &fused_metrics,
         &plain_metrics,
         Origine::PrimaDellaFusione,
     );
     let signature = error_signature(&fused_error);
-    assert_eq!(signature.variant, "Cancelled", "f: variante Cancelled");
+    assert_eq!(
+        signature.variant, "Cancelled",
+        "f-lettore: variante Cancelled"
+    );
     assert_eq!(
         signature.node.as_deref(),
         Some("main"),
-        "f: validazione input atomica"
+        "f-lettore: validazione input atomica"
     );
-    assert_eq!(signature.category, ErrorCategory::Cancelled, "f: categoria");
+    assert_eq!(
+        signature.category,
+        ErrorCategory::Cancelled,
+        "f-lettore: categoria"
+    );
     assert_eq!(
         signature,
         error_signature(&plain_error),
-        "f: errore diverso tra i percorsi\n  fuso:     {fused_error}\n  non fuso: {plain_error}"
+        "f-lettore: errore diverso tra i percorsi\n  fuso:     {fused_error}\n  non fuso: {plain_error}"
+    );
+
+    let (fused_error, fused_metrics) = run_cancellation(
+        &plan,
+        cancellation_batches(),
+        true,
+        Attivazione::DopoIlPrimoOutput,
+    );
+    let (plain_error, plain_metrics) = run_cancellation(
+        &plan,
+        cancellation_batches(),
+        false,
+        Attivazione::DopoIlPrimoOutput,
+    );
+    // Tre ingressi nel runner fuso: la consegna drena il segmento prima di
+    // rendere il primo batch, quindi il confronto e' fra due implementazioni
+    // che hanno girato davvero.
+    assert_percorsi(
+        "f-consegna",
+        &fused_metrics,
+        &plain_metrics,
+        Origine::RunnerFuso { gruppi: 3 },
+    );
+    let signature = error_signature(&fused_error);
+    assert_eq!(
+        signature.variant, "Cancelled",
+        "f-consegna: variante Cancelled"
+    );
+    assert_eq!(
+        signature.node.as_deref(),
+        Some("e"),
+        "f-consegna: ultimo nodo del segmento"
+    );
+    assert_eq!(
+        signature.operation.as_deref(),
+        Some("output"),
+        "f-consegna: osservata alla consegna"
+    );
+    assert_eq!(
+        signature.category,
+        ErrorCategory::Cancelled,
+        "f-consegna: categoria"
+    );
+    assert_eq!(
+        signature,
+        error_signature(&plain_error),
+        "f-consegna: errore diverso tra i percorsi\n  fuso:     {fused_error}\n  non fuso: {plain_error}"
     );
 }
 
@@ -1465,8 +1556,14 @@ fn cancellation_with_non_interruptible_make_valid_same_node() {
         "output": "r",
     });
     assert_group_formation(&plan, &["mv", "t", "r"]);
-    let (fused_error, fused_metrics) = run_cancellation(&plan, cancellation_batches(), true);
-    let (plain_error, plain_metrics) = run_cancellation(&plan, cancellation_batches(), false);
+    let (fused_error, fused_metrics) =
+        run_cancellation(&plan, cancellation_batches(), true, Attivazione::DalLettore);
+    let (plain_error, plain_metrics) = run_cancellation(
+        &plan,
+        cancellation_batches(),
+        false,
+        Attivazione::DalLettore,
+    );
     // Zero ingressi e' cio' che la doc qui sopra prevede: la cancellazione e'
     // osservata a `main`, prima che il gruppo parta. Dichiararlo rende la
     // previsione verificabile invece che soltanto scritta.

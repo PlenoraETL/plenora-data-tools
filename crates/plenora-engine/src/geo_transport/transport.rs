@@ -860,11 +860,19 @@ mod tests {
 
     #[test]
     fn buffer_honours_distance_cap_and_validates_parameters() {
-        let square = square_wkb(2.0);
-        let (fixture_schema, batch) = fixture_batch(&[Some(&square)]);
+        // Il cap agisce solo sulle estremita' di una linea: un segmento
+        // (0,0)-(4,0) con distanza 1 da' tre forme diverse. Flat e' il
+        // rettangolo 4x2 (area 8, x in [0,4]); Square lo prolunga di 1 ai due
+        // capi (6x2, area 12, x in [-1,5]); Round aggiunge due semicerchi
+        // approssimati da poligoni inscritti, quindi un'area fra 8 + 3 e
+        // 8 + pi greco, e x appena dentro [-1,5].
+        let segment = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 4.0, y: 0.0)])
+            .to_wkb(CoordDimensions::xy())
+            .expect("fixture WKB");
+        let (fixture_schema, batch) = fixture_batch(&[Some(&segment)]);
         let input = envelope_bytes(&fixture_schema, std::slice::from_ref(&batch));
 
-        for cap in [BufferCap::Round, BufferCap::Flat, BufferCap::Square] {
+        let buffered = |cap: BufferCap| {
             let schema = TransformArrowSchema {
                 distance: Some(1.0),
                 cap: Some(cap),
@@ -877,11 +885,59 @@ mod tests {
                 .as_any()
                 .downcast_ref::<BinaryArray>()
                 .unwrap();
-            let buffered = geometry_from_wkb(cells.value(0)).expect("decode");
-            let area = buffered.unsigned_area();
-            // buffer(1) di un quadrato 2x2: fra quadrato espanso (16) e cerchio.
-            assert!(area > 8.0 && area <= 16.0, "cap {cap:?}: area {area}");
-        }
+            let geometry = geometry_from_wkb(cells.value(0)).expect("decode");
+            let bounds = geo::BoundingRect::bounding_rect(&geometry).expect("non vuota");
+            (geometry.unsigned_area(), bounds)
+        };
+        let vicino = |attuale: f64, atteso: f64| (attuale - atteso).abs() < 1e-9;
+
+        let (area, bounds) = buffered(BufferCap::Flat);
+        assert!(vicino(area, 8.0), "flat: area {area}");
+        assert!(
+            vicino(bounds.min().x, 0.0) && vicino(bounds.max().x, 4.0),
+            "flat: nessun prolungamento oltre i capi, {bounds:?}"
+        );
+        assert!(
+            vicino(bounds.min().y, -1.0) && vicino(bounds.max().y, 1.0),
+            "flat: {bounds:?}"
+        );
+
+        let (area, bounds) = buffered(BufferCap::Square);
+        assert!(vicino(area, 12.0), "square: area {area}");
+        assert!(
+            vicino(bounds.min().x, -1.0) && vicino(bounds.max().x, 5.0),
+            "square: prolungamento di 1 ai due capi, {bounds:?}"
+        );
+
+        let (area, bounds) = buffered(BufferCap::Round);
+        assert!(
+            area > 11.0 && area < 8.0 + std::f64::consts::PI,
+            "round: due semicerchi inscritti, area {area}"
+        );
+        assert!(
+            bounds.min().x >= -1.0 - 1e-9
+                && bounds.min().x < -0.99
+                && bounds.max().x <= 5.0 + 1e-9
+                && bounds.max().x > 4.99,
+            "round: i semicerchi inscritti arrivano appena dentro x = -1 e x = 5, {bounds:?}"
+        );
+
+        // Senza `cap` vale il default del kernel, `round`.
+        let schema = TransformArrowSchema {
+            distance: Some(1.0),
+            ..arrow_schema(1, ArrowOperation::Buffer)
+        };
+        let output = run(&schema, &input).expect("buffer di default");
+        let (_, batch, index) = single_cell_output(&output, DEFAULT_GEOMETRY_COLUMN);
+        let cells = batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let default_area = geometry_from_wkb(cells.value(0))
+            .expect("decode")
+            .unsigned_area();
+        assert!(vicino(default_area, area), "default: area {default_area}");
 
         let missing = arrow_schema(1, ArrowOperation::Buffer);
         assert!(matches!(
@@ -3049,6 +3105,30 @@ mod tests {
     }
 
     #[test]
+    fn rotate_turns_vertices_counterclockwise_about_the_origin() {
+        let square = square_wkb(2.0);
+        // Rotazione antioraria attorno all'origine di default (0,0):
+        // (x, y) -> (-y, x). L'area non basta, perche' ogni rotazione la
+        // conserva: si confrontano i vertici, nell'ordine.
+        let schema = TransformArrowSchema {
+            degrees: Some(90.0),
+            ..arrow_schema(1, ArrowOperation::Rotate)
+        };
+        let output = run_single(&schema, &square).expect("rotate");
+        let Geometry::Polygon(rotated) = single_geometry_output(&output) else {
+            panic!("atteso Polygon")
+        };
+        let attesi = [(0.0, 0.0), (0.0, 2.0), (-2.0, 2.0), (-2.0, 0.0), (0.0, 0.0)];
+        assert_eq!(rotated.exterior().0.len(), attesi.len());
+        for (vertice, (x, y)) in rotated.exterior().0.iter().zip(attesi) {
+            assert!(
+                (vertice.x - x).abs() < 1e-12 && (vertice.y - y).abs() < 1e-12,
+                "rotate: vertice {vertice:?}, atteso ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
     fn affine_family_transforms_geometry_and_validates_params() {
         let square = square_wkb(2.0);
 
@@ -3070,13 +3150,6 @@ mod tests {
         };
         let output = run_single(&schema, &square).expect("scale");
         assert!((single_geometry_output(&output).unsigned_area() - 16.0).abs() < 1e-12);
-
-        let schema = TransformArrowSchema {
-            degrees: Some(90.0),
-            ..arrow_schema(1, ArrowOperation::Rotate)
-        };
-        let output = run_single(&schema, &square).expect("rotate");
-        assert!((single_geometry_output(&output).unsigned_area() - 4.0).abs() < 1e-12);
 
         let schema = TransformArrowSchema {
             coefficients: Some(vec![1.0, 0.0, 5.0, 0.0, 1.0, 5.0]),
@@ -3394,19 +3467,34 @@ mod tests {
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
-        let rows = out_batches[0].num_rows();
-        assert!(rows >= 2);
-        assert!(parents.values().iter().all(|&p| p == 0 || p == 2));
-        assert!(parents.values().contains(&0));
-        assert!(parents.values().contains(&2));
+        // Tre punti in posizione generale: un triangolo, area
+        // |3 * 2.5 - 0.5 * 1| / 2 = 3.5. Il quadrato unitario: due
+        // triangoli, qualunque sia la diagonale scelta, di area 0.5
+        // ciascuno. La riga nulla non genera nulla.
+        assert_eq!(out_batches.len(), 1);
+        assert_eq!(parents.values(), &[0, 2, 2]);
         let cells = out_batches[0]
             .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
             .as_any()
             .downcast_ref::<BinaryArray>()
             .unwrap();
-        let first = geometry_from_wkb(cells.value(0)).unwrap();
-        assert!(matches!(first, Geometry::Polygon(_)));
-        assert_eq!(first.coords_count(), 4);
+        for (riga, area_attesa) in [(0, 3.5), (1, 0.5), (2, 0.5)] {
+            let triangle = geometry_from_wkb(cells.value(riga)).unwrap();
+            assert!(
+                matches!(triangle, Geometry::Polygon(_)),
+                "riga {riga}: atteso Polygon"
+            );
+            assert_eq!(
+                triangle.coords_count(),
+                4,
+                "riga {riga}: anello chiuso di 3"
+            );
+            assert!(
+                (triangle.unsigned_area() - area_attesa).abs() < 1e-12,
+                "riga {riga}: area {}",
+                triangle.unsigned_area()
+            );
+        }
 
         let missing = arrow_schema(3, ArrowOperation::Delaunay);
         assert!(matches!(
@@ -3574,7 +3662,16 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(values.value(0) > 0.0);
+        // Hausdorff per vertici (`extended.rs`), su A = (0,0)-(3,0)-(3,4) e
+        // B = (0,1)-(3,5). Il vertice di A piu' lontano dai vertici di B e'
+        // (3,0): sqrt(10) da (0,1), 5 da (3,5). Gli altri distano 1, in
+        // entrambi i versi. Hausdorff = sqrt(10); una distanza dai segmenti,
+        // invece che dai vertici, darebbe 3.
+        assert!(
+            (values.value(0) - 10.0_f64.sqrt()).abs() < 1e-12,
+            "hausdorff: {}",
+            values.value(0)
+        );
         assert!(values.is_null(1));
 
         let schema = PairArrowSchema {
@@ -3588,7 +3685,16 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(values.value(0) > 0.0);
+        // Frechet discreto: gli estremi si accoppiano fra loro (distanza 1
+        // ciascuno), e il vertice (3,0) di A deve accoppiarsi a (0,1)
+        // (sqrt(10)) o a (3,5) (5). Il minimo dei massimi e' sqrt(10): qui
+        // coincide con Hausdorff, e la seconda riga, nulla, resta nulla.
+        assert!(
+            (values.value(0) - 10.0_f64.sqrt()).abs() < 1e-12,
+            "frechet: {}",
+            values.value(0)
+        );
+        assert!(values.is_null(1));
 
         // tipo sbagliato per frechet e limite di lavoro.
         let square = shifted_square_wkb(0.0, 0.0, 1.0);

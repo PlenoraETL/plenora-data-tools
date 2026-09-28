@@ -1027,8 +1027,9 @@ fn il_piano_oltre_il_tetto_e_rifiutato_in_entrambi_i_versi() {
     let uno = ingresso_minimo();
     let al_tetto = piano_di(MAX_PIANO_CANONICO_BYTES);
     assert_eq!(al_tetto.len(), MAX_PIANO_CANONICO_BYTES);
-    codifica(&incarico_con(grezzo(&al_tetto), vec![uno.clone()]))
+    let codificato = codifica(&incarico_con(grezzo(&al_tetto), vec![uno.clone()]))
         .expect("un piano al tetto si codifica");
+    decodifica(&codificato).expect("un piano al tetto si decodifica");
 
     let oltre = piano_di(MAX_PIANO_CANONICO_BYTES + 1);
     let messaggio = codifica(&incarico_con(grezzo(&oltre), vec![uno]))
@@ -1037,6 +1038,17 @@ fn il_piano_oltre_il_tetto_e_rifiutato_in_entrambi_i_versi() {
     assert!(
         messaggio.contains("`piano_canonico` oltre il tetto"),
         "motivo inatteso: {messaggio}"
+    );
+
+    // In lettura: lo stesso frame del tetto, scritto a mano con un byte di
+    // piano in piu'. Il writer non lo emetterebbe, il decoder deve rifiutarlo
+    // per il campo, non per la dimensione del frame, che resta nei limiti.
+    let testo = std::str::from_utf8(&codificato[BYTE_PREFISSO..]).expect("payload UTF-8");
+    assert_eq!(testo.matches(al_tetto.as_str()).count(), 1, "piano unico");
+    let messaggio = rifiuto(&incornicia(&testo.replacen(&al_tetto, &oltre, 1)));
+    assert!(
+        messaggio.contains("`piano_canonico` oltre il tetto"),
+        "piano oltre il tetto accettato in lettura: {messaggio}"
     );
 }
 
