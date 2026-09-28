@@ -107,10 +107,13 @@ fn run_v4_scrive_output_e_metriche_json_su_stdout() {
     let (plan, input) = write_table_fixture(directory.path());
     let output_path = directory.path().join("output.arrow");
 
+    // `cli_run` usa la forma posizionale `--inputs <file>`: con un input
+    // dichiarato non c'e' niente da scambiare, e la forma resta accettata,
+    // come deciso per il rilascio.
     let result = cli_run(&plan, &input, &output_path);
     assert!(
         result.status.success(),
-        "stdout: {}",
+        "un solo input deve restare compatibile: {}",
         String::from_utf8_lossy(&result.stdout)
     );
     let metrics: serde_json::Value = serde_json::from_slice(&result.stdout).expect("JSON metriche");
@@ -137,40 +140,11 @@ fn run_v4_scrive_output_e_metriche_json_su_stdout() {
     assert_eq!(rows, 2);
 }
 
-#[test]
-fn run_v4_senza_inputs_fallisce() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let (plan, _input) = write_table_fixture(directory.path());
-    let output_path = directory.path().join("output.arrow");
-
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .expect("run");
-    assert!(!result.status.success());
-    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
-    assert_eq!(envelope["error"]["category"], "invalid_plan", "{envelope}");
-    assert!(
-        envelope["error"]["message"].as_str().is_some_and(
-            |message| message.contains("dichiara 1 input (main) ma ne sono stati forniti 0")
-        ),
-        "{envelope}"
-    );
-    assert_eq!(result.status.code(), Some(2), "{envelope}");
-    assert!(
-        !output_path.try_exists().expect("stat"),
-        "nessun output parziale"
-    );
-}
-
 /// Envelope §9 (R9.1/R9.2): l'uscita CLI di un errore e' JSON parsabile
 /// con i quattro assi espliciti — categoria, fase, effetto, retry — mai
 /// da dedurre dal messaggio.
 #[test]
-fn errore_cli_emette_envelope_a_quattro_assi() {
+fn run_v4_senza_inputs_fallisce() {
     let directory = tempfile::tempdir().expect("tempdir");
     let (plan, _input) = write_table_fixture(directory.path());
     let output_path = directory.path().join("output.arrow");
@@ -207,6 +181,18 @@ fn errore_cli_emette_envelope_a_quattro_assi() {
         "retry in forma taggata con `kind` testuale: {envelope}"
     );
     assert_eq!(envelope["error"]["remote_effect"], "none");
+    assert_eq!(envelope["error"]["category"], "invalid_plan", "{envelope}");
+    assert!(
+        envelope["error"]["message"].as_str().is_some_and(
+            |message| message.contains("dichiara 1 input (main) ma ne sono stati forniti 0")
+        ),
+        "{envelope}"
+    );
+    assert_eq!(result.status.code(), Some(2), "{envelope}");
+    assert!(
+        !output_path.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
 }
 
 #[test]
@@ -1790,22 +1776,6 @@ fn due_input_invertiti_non_raggiungono_mai_l_esecuzione() {
     // file cambia proprio l'insieme delle righe pubblicate.
     assert_eq!(righe_id(&corretto), vec![1, 2]);
     assert_eq!(righe_id(&scambiato), vec![2, 3]);
-}
-
-#[test]
-fn un_solo_input_resta_compatibile_con_la_forma_posizionale() {
-    // Con un input dichiarato non c'e' niente da scambiare: la forma
-    // posizionale resta accettata, come deciso per il rilascio.
-    let directory = tempfile::tempdir().expect("tempdir");
-    let (plan, input) = write_table_fixture(directory.path());
-    let output_path = directory.path().join("uno.arrow");
-    let esito = cli_run(&plan, &input, &output_path);
-    assert!(
-        esito.status.success(),
-        "un solo input deve restare compatibile: {}",
-        String::from_utf8_lossy(&esito.stdout)
-    );
-    assert!(output_path.try_exists().expect("stat"));
 }
 
 // ---------------------------------------------------------------------------
