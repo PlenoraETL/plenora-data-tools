@@ -98,8 +98,8 @@ Occorrenze di `#[test]` nel sorgente, per crate: un conteggio statico, non l'esi
 | crate | `#[test]` |
 |---|---|
 | `plenora-cli` | 208 |
-| `plenora-core` | 144 |
+| `plenora-core` | 146 |
 | `plenora-engine` | 1309 |
 | `plenora-kernels-geo` | 376 |
 | `plenora-kernels-table` | 412 |
-| **totale** | **2449** |
+| **totale** | **2451** |

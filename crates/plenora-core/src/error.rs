@@ -1374,17 +1374,28 @@ impl PlenoraError {
                 if replayed.execution_id.as_deref().is_none_or(str::is_empty) {
                     replayed.execution_id = Some(execution_id.to_owned());
                     if let (Some(node), Some(operation), Some(reason)) = (
-                        replayed.node.as_deref(),
-                        replayed.operation.as_deref(),
-                        replayed.execution_reason.as_deref(),
+                        replayed.node.clone(),
+                        replayed.operation.clone(),
+                        replayed.execution_reason.clone(),
                     ) {
+                        // Il testo nasce dalla variante nativa: il formato ha
+                        // una sola fonte, l'attributo `#[error]`.
+                        let execution_id = execution_id.to_owned();
                         replayed.message = match replayed.category {
-                            ErrorCategory::Execution => format!(
-                                "step failed at node `{node}` (operation `{operation}`, execution `{execution_id}`): {reason}"
-                            ),
-                            ErrorCategory::Cancelled => format!(
-                                "cancelled at node `{node}` (operation `{operation}`, execution `{execution_id}`): {reason}"
-                            ),
+                            ErrorCategory::Execution => Self::Execution {
+                                node,
+                                operation,
+                                execution_id,
+                                reason,
+                            }
+                            .to_string(),
+                            ErrorCategory::Cancelled => Self::Cancelled {
+                                node,
+                                operation,
+                                execution_id,
+                                reason,
+                            }
+                            .to_string(),
                             _ => replayed.message,
                         };
                     }
@@ -1840,6 +1851,60 @@ mod tests {
                 .contains("[batch_seq=3]"),
             "premessa: la rigenerazione parte da execution_reason"
         );
+    }
+
+    #[test]
+    fn il_messaggio_rigenerato_coincide_con_la_variante_nativa() {
+        // Il testo rigenerato di un `Replayed` e' uguale, byte per byte, a
+        // quello della variante nativa con gli stessi assi: il formato ha una
+        // sola fonte.
+        // Anche con l'id vuoto: la variante nativa lo omette, e cosi' il
+        // rigenerato. Prima il ramo scritto a mano emetteva `execution ``` e
+        // divergeva dal formato nativo.
+        for (category, id) in [
+            (ErrorCategory::Execution, "exec-1"),
+            (ErrorCategory::Cancelled, "exec-1"),
+            (ErrorCategory::Execution, ""),
+            (ErrorCategory::Cancelled, ""),
+        ] {
+            let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
+                category,
+                phase: ErrorPhase::Write,
+                remote_effect: RemoteEffect::None,
+                retry: RetryDisposition::Never,
+                message: "testo precedente".into(),
+                node: Some("n".into()),
+                operation: Some("table.filter".into()),
+                execution_id: None,
+                execution_reason: Some("motivo".into()),
+            }));
+            let (node, operation, execution_id, reason) = (
+                "n".to_owned(),
+                "table.filter".to_owned(),
+                id.to_owned(),
+                "motivo".to_owned(),
+            );
+            let nativo = if category == ErrorCategory::Execution {
+                PlenoraError::Execution {
+                    node,
+                    operation,
+                    execution_id,
+                    reason,
+                }
+            } else {
+                PlenoraError::Cancelled {
+                    node,
+                    operation,
+                    execution_id,
+                    reason,
+                }
+            };
+            assert_eq!(
+                replayed.with_execution_id(id).to_string(),
+                nativo.to_string(),
+                "id {id:?}"
+            );
+        }
     }
 
     #[test]
