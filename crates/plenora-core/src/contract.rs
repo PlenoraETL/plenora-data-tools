@@ -1383,9 +1383,11 @@ mod tests {
         for &value in all {
             let text = as_str(value);
             assert_eq!(value.to_string(), text, "{tipo}: Display");
-            let serialized = serde_json::to_string(&value).unwrap();
+            let serialized = serde_json::to_string(&value)
+                .unwrap_or_else(|errore| panic!("{tipo}: serializzazione: {errore}"));
             assert_eq!(serialized, format!("\"{text}\""), "{tipo}: serde");
-            let parsed: T = serde_json::from_str(&serialized).unwrap();
+            let parsed: T = serde_json::from_str(&serialized)
+                .unwrap_or_else(|errore| panic!("{tipo}: deserializzazione: {errore}"));
             assert_eq!(parsed, value, "{tipo}: roundtrip serde");
             assert_eq!(text.parse::<T>().ok(), Some(value), "{tipo}: FromStr");
         }

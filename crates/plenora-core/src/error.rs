@@ -1638,12 +1638,15 @@ mod tests {
     }
 
     #[test]
-    fn internal_display() {
+    fn internal_display_and_axes() {
         // R6: la variante Internal raccoglie le violazioni di invariante che
-        // altrimenti sarebbero panic. I suoi assi stanno in `campioni`, con
-        // quelli di tutte le altre varianti.
+        // altrimenti sarebbero panic; gli assi sono quelli dichiarati.
         let error = PlenoraError::Internal("stato impossibile".into());
         assert_eq!(error.to_string(), "internal error: stato impossibile");
+        assert_eq!(error.category(), ErrorCategory::Internal);
+        assert_eq!(error.phase(), ErrorPhase::Write);
+        assert_eq!(error.remote_effect(), RemoteEffect::None);
+        assert_eq!(error.retry_disposition(), RetryDisposition::Never);
     }
 
     #[test]
@@ -2502,5 +2505,16 @@ mod tests {
         );
         assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
         assert_eq!(errore.phase(), ErrorPhase::Read);
+    }
+
+    #[test]
+    fn un_solo_tag_anche_applicando_la_fase_piu_volte() {
+        let mut errore =
+            PlenoraError::DataMapping("causa".to_owned()).with_row_diagnostics(diagnostica());
+        for _ in 0..5 {
+            errore = errore.with_phase(ErrorPhase::Read);
+        }
+        assert_eq!(tag_nella_catena(&errore), 1);
+        assert!(errore.row_diagnostics().is_some());
     }
 }
