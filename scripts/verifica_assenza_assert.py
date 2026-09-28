@@ -82,8 +82,12 @@ PRIMA_DI_ATTRIBUTO = ';{}]'
 # La visibilita' si scrive attaccata o staccata: `pub(crate) mod x;` e
 # `pub (crate) mod x;` sono la stessa dichiarazione, e una forma non
 # riconosciuta lascerebbe un modulo di test fra i file di produzione.
+# Solo le visibilita' che Rust ammette (`crate`, `super`, `self`,
+# `in percorso`): una forma sconosciuta non e' riconosciuta, e il file resta
+# fra quelli da esaminare, che e' il verso sicuro.
 MOD_SU_FILE = re.compile(
-    r'^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z0-9_]+)\s*$')
+    r'^\s*(?:pub(?:\s*\(\s*(?:crate|super|self|in\s+[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)\s*\))?\s+)?'
+    r'mod\s+([A-Za-z0-9_]+)\s*$')
 
 
 def ripulisci(sorgente):
@@ -519,10 +523,12 @@ def autoverifica_esclusione_file():
             raise SystemExit(
                 'autoverifica fallita: modulo di test dichiarato %s non '
                 'escluso' % visibilita)
-    if esclusi('#[cfg(test)]\npubcrate mod tests;\n'):
-        raise SystemExit(
-            'autoverifica fallita: una visibilita\' inesistente e\' stata '
-            'presa per una dichiarazione di modulo')
+    for sconosciuta in ('pubcrate', 'pub(nonsense)', 'pub(in crate::(x)',
+                        'pub(crate)mod'):
+        if esclusi('#[cfg(test)]\n%s mod tests;\n' % sconosciuta):
+            raise SystemExit(
+                'autoverifica fallita: la forma %s e\' stata presa per una '
+                'dichiarazione di modulo' % sconosciuta)
     # Dichiarazione FINTA dentro una macro: non governa nulla, e il file
     # omonimo resta codice di produzione da esaminare.
     vittima = os.path.join(RADICE, 'crates', 'x', 'src', 'vittima.rs')
@@ -570,6 +576,21 @@ def autoverifica_esclusione_file():
         raise SystemExit(
             'autoverifica fallita: dichiarazione di produzione semplice non '
             'riconosciuta')
+    # Le stesse visibilita' valgono anche sul lato produzione, e un file
+    # dichiarato sia in test sia in produzione resta di produzione.
+    for visibilita in ('pub(crate)', 'pub (crate)', 'pub(super)',
+                       'pub(in crate::x)'):
+        if condiviso not in produzione('%s mod condiviso;\n' % visibilita):
+            raise SystemExit(
+                'autoverifica fallita: dichiarazione di produzione %s non '
+                'riconosciuta' % visibilita)
+        if condiviso not in produzione(
+                '#[cfg(test)]\n%s mod condiviso;\n'
+                '#[path = "condiviso.rs"]\n%s mod riuso;\n'
+                % (visibilita, visibilita)):
+            raise SystemExit(
+                'autoverifica fallita: un file riusato in produzione con %s '
+                'e\' rimasto escluso' % visibilita)
     # Forme di inclusione che una regex ingenua non vede, tutte Rust valido.
     altre_forme = [
         'mod r#condiviso;\n',
