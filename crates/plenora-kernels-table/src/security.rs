@@ -1147,7 +1147,8 @@ mod tests {
     }
 
     /// Confronto rigoroso: schema (nomi, tipi, nullabilita'), maschera null
-    /// e valori via profilo scalare.
+    /// e valori via profilo scalare; le colonne Float64 si confrontano bit a
+    /// bit, perche' il testo non distingue payload NaN e zeri con segno.
     fn assert_batches_identical(fast: &RecordBatch, reference: &RecordBatch) {
         assert_eq!(fast.num_rows(), reference.num_rows(), "righe");
         assert_eq!(fast.num_columns(), reference.num_columns(), "colonne");
@@ -1177,6 +1178,22 @@ mod tests {
                     reference.column(index).is_null(row),
                     "null riga {row} colonna {index}"
                 );
+                if let (Some(fast_values), Some(reference_values)) = (
+                    fast.column(index).as_any().downcast_ref::<Float64Array>(),
+                    reference
+                        .column(index)
+                        .as_any()
+                        .downcast_ref::<Float64Array>(),
+                ) {
+                    if !fast_values.is_null(row) {
+                        assert_eq!(
+                            fast_values.value(row).to_bits(),
+                            reference_values.value(row).to_bits(),
+                            "bit riga {row} colonna {index}"
+                        );
+                    }
+                    continue;
+                }
                 assert_eq!(
                     scalar_as_string(fast.column(index).as_ref(), row).expect("fast"),
                     scalar_as_string(reference.column(index).as_ref(), row).expect("ref"),
@@ -1578,6 +1595,8 @@ mod tests {
                 Field::new("iban", DataType::Utf8, true),
                 Field::new("text", DataType::Utf8, true),
                 Field::new("num", DataType::Int64, true),
+                // Non mascherata: deve attraversare intatta, bit per bit.
+                Field::new("misura", DataType::Float64, true),
             ])),
             vec![
                 Arc::new(StringArray::from(vec![
@@ -1616,6 +1635,12 @@ mod tests {
                     Some(-7),
                     Some(0),
                 ])),
+                Arc::new(Float64Array::from(vec![
+                    Some(f64::from_bits(0x7ff8_0000_0000_0001)), // NaN con payload
+                    Some(-0.0),
+                    None,
+                    Some(1.5),
+                ])),
             ],
         )
         .expect("fixture");
@@ -1641,6 +1666,23 @@ mod tests {
         let fast = mask_data(&batch, &config).expect("fast");
         let reference = mask_data_reference(&batch, &config).expect("ref");
         assert_batches_identical(&fast, &reference);
+    }
+
+    #[test]
+    #[should_panic(expected = "bit riga 0 colonna 0")]
+    fn il_confronto_distingue_i_payload_nan() {
+        // Due NaN con payload diversi hanno lo stesso testo: il confronto
+        // deve comunque separarli, come le copie di joins.rs e reshape.rs.
+        let batch = |bits: u64| {
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, true)])),
+                vec![Arc::new(Float64Array::from(vec![Some(f64::from_bits(
+                    bits,
+                ))]))],
+            )
+            .expect("fixture")
+        };
+        assert_batches_identical(&batch(0x7ff8_0000_0000_0001), &batch(0x7ff8_0000_0000_0002));
     }
 
     #[test]
