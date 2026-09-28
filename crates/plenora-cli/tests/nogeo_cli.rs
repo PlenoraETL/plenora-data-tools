@@ -587,6 +587,25 @@ fn legacy_blocking_plan_with_row_diagnostics_step_requires_dag_v4() {
         !envelope_text.contains("row_diagnostics"),
         "indici post-sort pubblicati come source_row: {envelope_text}"
     );
+
+    // `validate` predice `run`: lo stesso piano si rifiuta anche li', con la
+    // stessa categoria, invece di essere dichiarato valido.
+    let validato = Command::new(executable())
+        .arg("validate")
+        .arg("--plan")
+        .arg(&plan)
+        .arg("--input")
+        .arg(&input)
+        .output()
+        .expect("validate legacy blocking");
+    assert_eq!(validato.status.code(), result.status.code());
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    let envelope_validate: serde_json::Value =
+        serde_json::from_slice(&validato.stdout).expect("envelope di validate");
+    assert_eq!(
+        envelope_validate["error"]["category"],
+        envelope["error"]["category"]
+    );
 }
 
 // formula ed expression sono row-diagnostics per planner/executor e devono
