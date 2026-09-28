@@ -44,6 +44,9 @@ fn gerarchia() -> (
     let padre = radice.join("padre");
     let dominio = padre.join("dominio");
     std::fs::create_dir_all(&dominio).expect("gerarchia");
+    // Come in cgroupfs, `cgroup.kill` esiste gia' e vuoto: chi termina lo
+    // apre e ci scrive, non lo crea.
+    std::fs::write(dominio.join("cgroup.kill"), "").expect("cgroup.kill");
     (base, radice, padre, dominio)
 }
 
@@ -243,7 +246,8 @@ fn svuota_al_kill(dominio: &Path) -> std::thread::JoinHandle<()> {
     let scadenza = std::time::Instant::now() + std::time::Duration::from_secs(60);
     std::thread::spawn(move || {
         while std::time::Instant::now() < scadenza {
-            if dominio.join("cgroup.kill").try_exists().expect("stat") {
+            let kill = std::fs::read_to_string(dominio.join("cgroup.kill")).expect("cgroup.kill");
+            if kill == "1" {
                 popolato(&dominio, false);
                 return;
             }
@@ -412,4 +416,19 @@ fn il_giudizio_cede_all_oom_attribuito() {
         plenora_core::ErrorCategory::ResourceLimit,
         "{errore}"
     );
+}
+
+/// Su una directory che non e' un cgroup `cgroup.kill` non c'e': terminare
+/// e' un errore, non la creazione di un file qualunque che fa sembrare
+/// riuscita una terminazione mai avvenuta.
+#[test]
+fn senza_cgroup_kill_terminare_e_un_errore_e_non_crea_file() {
+    use super::super::conduzione::Terminatore as _;
+    let base = tempfile::tempdir().expect("tempdir");
+    let mut terminatore = super::TerminaDominio::nuova(base.path().to_path_buf());
+    let errore = terminatore
+        .termina()
+        .expect_err("senza cgroup.kill non si termina");
+    assert!(errore.starts_with("cgroup.kill: "), "{errore}");
+    assert!(!base.path().join("cgroup.kill").try_exists().expect("stat"));
 }

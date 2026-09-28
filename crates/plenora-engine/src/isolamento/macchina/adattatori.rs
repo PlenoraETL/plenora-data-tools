@@ -109,7 +109,15 @@ impl TerminaDominio {
 
 impl Terminatore for TerminaDominio {
     fn termina(&mut self) -> std::result::Result<(), String> {
-        std::fs::write(self.dominio.join("cgroup.kill"), "1")
+        use std::io::Write as _;
+        // Si apre, non si crea, come i controlli di `dominio.rs`: su una
+        // directory che non e' un cgroup `fs::write` creerebbe un file
+        // qualunque, e la terminazione riuscirebbe senza aver terminato
+        // niente.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(self.dominio.join("cgroup.kill"))
+            .and_then(|mut file| file.write_all(b"1"))
             .map_err(|causa| format!("cgroup.kill: {causa}"))
     }
 }
