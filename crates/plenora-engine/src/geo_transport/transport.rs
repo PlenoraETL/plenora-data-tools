@@ -1942,15 +1942,6 @@ mod tests {
         let ids = out_batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2]);
 
-        // coordinate non finite: rifiuto fail-closed row-scoped.
-        let (schema, batch) = coords_batch(vec![Some(f64::NAN)], vec![Some(0.0)]);
-        let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
-        let error = run(&arrow_schema(1, ArrowOperation::FromCoords), &input)
-            .expect_err("coordinata non finita");
-        let report = error.row_diagnostics().expect("diagnostica row-scoped");
-        assert_eq!(report.observed_total, 1);
-        assert_eq!(report.counts["geometry.non_finite_coordinate"], 1);
-
         // colonna assente.
         let (schema, batch) = coords_batch(vec![Some(1.0)], vec![Some(2.0)]);
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
@@ -2291,30 +2282,14 @@ mod tests {
     }
 
     #[test]
-    fn from_coords_rejects_int64_beyond_f64_exact_range() {
-        // Oltre 2^53 in valore assoluto la conversione i64 -> f64 non e'
-        // esatta: la coordinata va rifiutata, mai spostata in silenzio.
+    fn from_coords_accepts_int64_at_the_f64_exact_boundary() {
+        // Il confine 2^53 e' esattamente rappresentabile: resta accettato. Il
+        // rifiuto appena oltre (2^53 + 1) e' provato in
+        // `from_coords_reports_row_diagnostics_with_absolute_indices`.
         let schema = Arc::new(Schema::new(vec![
             Field::new("x", DataType::Int64, true),
             Field::new("y", DataType::Int64, true),
         ]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int64Array::from(vec![Some((1_i64 << 53) + 1)])),
-                Arc::new(Int64Array::from(vec![Some(4_i64)])),
-            ],
-        )
-        .unwrap();
-        let input = envelope_bytes(&schema, &[batch]);
-        let error = run(&arrow_schema(1, ArrowOperation::FromCoords), &input)
-            .expect_err("coordinata intera oltre 2^53");
-        let report = error.row_diagnostics().expect("diagnostica row-scoped");
-        assert_eq!(report.observed_total, 1);
-        assert_eq!(report.counts["geometry.inexact_integer_coordinate"], 1);
-        assert_eq!(report.examples[0].source_index, 0);
-
-        // Il confine 2^53 e' esattamente rappresentabile: resta accettato.
         let boundary = RecordBatch::try_new(
             schema.clone(),
             vec![

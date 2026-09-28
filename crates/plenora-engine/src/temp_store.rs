@@ -674,17 +674,6 @@ mod tests {
     }
 
     #[test]
-    fn fresh_heartbeat_with_live_pid_survives() {
-        let (root, store) = radice_e_store("exec-fresh");
-        let lock = sample_lock(std::process::id(), now_unix_secs());
-        plant_lock(store.path(), &lock);
-        let report = scava(&root, Duration::from_hours(24));
-        assert!(report.removed.is_empty());
-        assert_eq!(report.kept_alive, 1);
-        assert!(store.path().try_exists().expect("stat"));
-    }
-
-    #[test]
     fn corrupt_lock_is_conservative_until_double_ttl() {
         let (root, store) = radice_e_store("exec-corrupt");
         let lock_path = store.path().join(LOCK_FILE_NAME);

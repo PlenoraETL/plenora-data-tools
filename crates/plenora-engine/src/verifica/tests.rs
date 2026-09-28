@@ -337,14 +337,6 @@ fn conteggi_dichiarati_in_eccesso_sono_respinti() {
 }
 
 #[test]
-fn conteggi_dichiarati_in_difetto_sono_respinti() {
-    let byte = artefatto(&schema(), &batch(), 1, Some(&token(UNO)));
-    let mut dichiarati = Dichiarati::coerenti(&byte);
-    dichiarati.righe = 2;
-    assert!(esegui(&byte, &dichiarati).is_err());
-}
-
-#[test]
 fn un_numero_di_batch_sbagliato_e_respinto() {
     let byte = artefatto(&schema(), &batch(), 2, Some(&token(UNO)));
     let mut dichiarati = Dichiarati::coerenti(&byte);

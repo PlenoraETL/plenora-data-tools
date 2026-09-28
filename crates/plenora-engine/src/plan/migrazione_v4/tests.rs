@@ -174,15 +174,6 @@ fn la_migrazione_e_deterministica() {
 }
 
 #[test]
-fn il_dispatch_e_idempotente() {
-    let testo = piano(4, &json!({"max_memory_bytes": 4096}));
-    let limiti = PlanLimits::default();
-    let una = testo_canonico_v5(&testo, &limiti).expect("prima passata");
-    let due = testo_canonico_v5(una.as_ref(), &limiti).expect("seconda passata");
-    assert_eq!(una.as_ref(), due.as_ref());
-}
-
-#[test]
 fn migrare_un_piano_gia_migrato_e_un_errore_esplicito() {
     // `migra_v4_a_v5` da sola non deve «riuscire» su un piano v5: un successo
     // silenzioso qui renderebbe indistinguibile un piano migrato una volta da

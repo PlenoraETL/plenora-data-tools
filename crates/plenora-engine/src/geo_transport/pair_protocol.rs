@@ -147,20 +147,16 @@ mod tests {
         ));
     }
 
+    /// I byte in eccesso dopo il trailer sono in
+    /// `ogni_difetto_della_chiusura_ha_la_propria_variante`.
     #[test]
-    fn rejects_truncation_and_trailing_bytes() {
+    fn rejects_truncation() {
         let encoded = write_pairs(Vec::new(), &[JoinPair { left: 1, right: 2 }])
             .unwrap()
             .0;
         for cut in 1..=40 {
             assert!(read_pairs(&encoded[..encoded.len() - cut]).is_err());
         }
-        let mut extra = encoded;
-        extra.push(0);
-        assert!(matches!(
-            read_pairs(extra.as_slice()),
-            Err(PairProtocolError::TrailingBytes)
-        ));
     }
 
     /// La chiusura di `PLNPAIR1`, un difetto per volta e con la variante

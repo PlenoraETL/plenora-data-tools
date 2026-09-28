@@ -270,19 +270,6 @@ fn membership_and_asof_joins_have_stable_cardinality() {
     assert!(asof.column_by_name("label").expect("label").is_null(0));
 }
 
-fn set_pair() -> (RecordBatch, RecordBatch) {
-    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    (
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int64Array::from(vec![1, 2, 2, 3]))],
-        )
-        .expect("left set"),
-        RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![2, 3, 4]))])
-            .expect("right set"),
-    )
-}
-
 #[test]
 fn set_operations_are_distinct_and_stable() {
     let (left, right) = set_pair();
@@ -298,6 +285,19 @@ fn set_operations_are_distinct_and_stable() {
         ),
         (4, 2, 1)
     );
+}
+
+fn set_pair() -> (RecordBatch, RecordBatch) {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    (
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 2, 3]))],
+        )
+        .expect("left set"),
+        RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![2, 3, 4]))])
+            .expect("right set"),
+    )
 }
 
 #[test]

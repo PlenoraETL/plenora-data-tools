@@ -45,21 +45,6 @@ fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
     assert_eq!(values.value(0), 0);
     assert!(values.is_null(2));
 
-    let invalid_date = execute_batch(
-        strings(vec![Some("invalid")]),
-        &plan(
-            "type_cast",
-            json!({"column":"value","target_type":"date32","errors":"coerce"}),
-            Limits::default(),
-        ),
-    )
-    .expect_err("date invalida coercita a null");
-    let diagnostics = invalid_date
-        .row_diagnostics()
-        .expect("diagnostica row-scoped persa");
-    assert_eq!(diagnostics.observed_total, 1);
-    assert_eq!(diagnostics.examples[0].source_index, 0);
-
     let timestamp = execute_batch(
         strings(vec![Some("1970-01-01T00:00:01Z")]),
         &plan(

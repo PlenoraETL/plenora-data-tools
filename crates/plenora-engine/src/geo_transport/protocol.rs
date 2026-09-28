@@ -374,8 +374,10 @@ mod tests {
         ));
     }
 
+    /// I byte in eccesso dopo il trailer sono in
+    /// `ogni_difetto_della_chiusura_ha_la_propria_variante`.
     #[test]
-    fn truncation_and_extra_bytes_fail_closed() {
+    fn truncation_fails_closed() {
         let stream = valid_stream(&[Some(b"abcdef")]);
         for cut in 1..=40 {
             let truncated = &stream[..stream.len() - cut];
@@ -383,15 +385,6 @@ mod tests {
             let _ = reader.next_frame();
             assert!(reader.next_frame().is_err(), "cut={cut}");
         }
-
-        let mut extra = stream;
-        extra.push(0);
-        let mut reader = FrameReader::new(extra.as_slice(), 1).expect("reader");
-        assert!(reader.next_frame().unwrap().is_some());
-        assert!(matches!(
-            reader.next_frame(),
-            Err(ProtocolError::TrailingBytes)
-        ));
     }
 
     /// Le invarianti che il target fuzz `geo_frame_stream` pretende, applicate

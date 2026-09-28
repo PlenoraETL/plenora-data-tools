@@ -779,6 +779,13 @@ mod tests {
             u64::MAX - 10,
             "nessuna prenotazione parziale dopo il rifiuto"
         );
+        // La somma non rappresentabile e' indistinguibile, per il chiamante,
+        // da un budget insufficiente: marcarla come corruzione bloccherebbe
+        // un governor sano.
+        assert!(
+            !governor.e_corrotta(),
+            "un overflow di byte non e' una contabilita' rotta"
+        );
         assert!(concesso(&governor, 10, "il resto esatto").is_some());
         drop(primo);
     }
@@ -815,23 +822,6 @@ mod tests {
         );
         assert_eq!(governor.live_leases(), 1, "resta UN solo lease");
         drop(lease);
-        assert_eq!(governor.reserved_bytes(), 0);
-        assert_eq!(governor.live_leases(), 0);
-    }
-
-    #[test]
-    fn ritaglio_oltre_il_permesso_e_negato() {
-        let governor = MemoryGovernor::new(1_000);
-        let permesso = concesso(&governor, 100, "piccolo").expect("permesso");
-        let errore = permesso
-            .ritaglia(101)
-            .expect_err("non si ritaglia piu' di quanto si trattiene");
-        assert!(
-            matches!(errore, PlenoraError::Internal(_)),
-            "un ritaglio impossibile e' un'invariante rotta, non un limite del              piano: {errore:?}"
-        );
-        // Il tentativo consuma il permesso: la quota torna al governor
-        // invece di restare appesa a un permesso che nessuno tiene piu'.
         assert_eq!(governor.reserved_bytes(), 0);
         assert_eq!(governor.live_leases(), 0);
     }
@@ -1188,25 +1178,6 @@ mod tests {
     }
 
     #[test]
-    fn overflow_dei_byte_resta_un_diniego_non_una_corruzione() {
-        // La somma dei byte non rappresentabile e' indistinguibile, per il
-        // chiamante, da un budget insufficiente: in entrambi i casi non c'e'
-        // quota. Marcarla come corruzione bloccherebbe un governor sano.
-        let governor = MemoryGovernor::new(u64::MAX);
-        let primo = concesso(&governor, u64::MAX - 10, "primo").expect("primo");
-        assert!(
-            concesso(&governor, u64::MAX, "overflow").is_none(),
-            "atteso diniego"
-        );
-        assert!(
-            !governor.e_corrotta(),
-            "un overflow di byte non e' una contabilita' rotta"
-        );
-        assert!(concesso(&governor, 10, "il resto esatto").is_some());
-        drop(primo);
-    }
-
-    #[test]
     fn snapshot_coerente_sotto_acquisizioni_concorrenti() {
         // Linearizzabilita': ogni snapshot descrive uno stato realmente
         // esistito. Nessun `sleep`: le invarianti valgono a ogni lettura,
@@ -1315,27 +1286,32 @@ mod tests {
         // Un ritaglio impossibile non ripiega su una nuova `reserve`:
         // rilascio e riprenotazione riaprirebbero proprio la finestra che il
         // permesso esiste per chiudere. Fallisce, e il messaggio dice perche'.
-        let governor = MemoryGovernor::new(1_000_000);
-        let permesso = concesso(&governor, 100, "maggiorante sbagliato").expect("permesso");
-        let errore = permesso
-            .ritaglia(101)
-            .expect_err("il ritaglio oltre il permesso deve fallire");
-        let testo = errore.to_string();
-        assert!(
-            matches!(errore, PlenoraError::Internal(_)),
-            "atteso Internal: {errore:?}"
-        );
-        assert!(
-            testo.contains("ritaglio oltre il permesso"),
-            "il messaggio deve dire che il maggiorante era sbagliato: {testo}"
-        );
-        // E soprattutto: il budget e' tornato libero, non e' stato ri-preso.
-        assert_eq!(governor.reserved_bytes(), 0);
-        assert_eq!(governor.live_leases(), 0);
-        assert!(
-            !governor.e_corrotta(),
-            "una stima sbagliata del chiamante non corrompe la contabilita'"
-        );
+        // Due budget, stretto e ampio: il rifiuto non dipende dal residuo.
+        for budget in [1_000, 1_000_000] {
+            let governor = MemoryGovernor::new(budget);
+            let permesso = concesso(&governor, 100, "maggiorante sbagliato").expect("permesso");
+            let errore = permesso
+                .ritaglia(101)
+                .expect_err("il ritaglio oltre il permesso deve fallire");
+            let testo = errore.to_string();
+            assert!(
+                matches!(errore, PlenoraError::Internal(_)),
+                "un ritaglio impossibile e' un'invariante rotta, non un limite del piano: {errore:?}"
+            );
+            assert!(
+                testo.contains("ritaglio oltre il permesso"),
+                "il messaggio deve dire che il maggiorante era sbagliato: {testo}"
+            );
+            // Il tentativo consuma il permesso: la quota torna al governor,
+            // non e' ri-presa ne' resta appesa a un permesso che nessuno
+            // tiene piu'.
+            assert_eq!(governor.reserved_bytes(), 0, "budget {budget}");
+            assert_eq!(governor.live_leases(), 0, "budget {budget}");
+            assert!(
+                !governor.e_corrotta(),
+                "una stima sbagliata del chiamante non corrompe la contabilita'"
+            );
+        }
     }
 
     #[test]

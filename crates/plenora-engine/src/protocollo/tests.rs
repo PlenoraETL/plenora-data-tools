@@ -394,20 +394,8 @@ fn il_prefisso_troncato_e_un_errore() {
     }
 }
 
-#[test]
-fn il_payload_troncato_e_un_errore() {
-    let mut byte = codifica(&annulla()).expect("codifica");
-    byte.pop();
-    assert!(rifiuto(&byte).contains("payload troncato"));
-}
-
-#[test]
-fn i_byte_in_eccesso_dopo_il_frame_sono_un_errore() {
-    let mut byte = codifica(&annulla()).expect("codifica");
-    byte.push(b' ');
-    assert!(rifiuto(&byte).contains("byte in eccesso"));
-}
-
+/// Payload troncato e byte in eccesso: gli stessi due confronti del
+/// decoder, raggiunti col payload intatto e il prefisso che mente.
 #[test]
 fn una_lunghezza_incoerente_e_un_errore() {
     // Il payload e' intatto; e' il prefisso a mentire, in entrambi i versi.
@@ -613,13 +601,20 @@ fn i_conteggi_del_successo_sono_obbligatori() {
     }
 
     // Un campo estraneo dentro i conteggi: la struttura e' chiusa anche li'.
-    let corpo =
-        format!(r#"{{"esito":"successo",{digest},"conteggi":{{"righe":1,"batch":1,"nodi":1}}}}"#);
-    let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
-    assert!(
-        messaggio.contains("forma o tipo non conformi"),
-        "campo estraneo accettato nei conteggi: {messaggio}"
-    );
+    // `nodi_completati` in particolare **non** entra nei conteggi del
+    // `Successo`: rileggendo un file Arrow IPC si osservano righe e batch,
+    // non nodi, e un numero che il verificatore non puo' confrontare gli
+    // chiederebbe di crederci (passo 8).
+    for estraneo in ["nodi", "nodi_completati"] {
+        let corpo = format!(
+            r#"{{"esito":"successo",{digest},"conteggi":{{"righe":1,"batch":1,"{estraneo}":1}}}}"#
+        );
+        let messaggio = rifiuto(&incornicia(&payload("esito", &corpo)));
+        assert!(
+            messaggio.contains("forma o tipo non conformi"),
+            "campo estraneo `{estraneo}` accettato nei conteggi: {messaggio}"
+        );
+    }
 
     // E i valori fuori dominio: sono `u64`.
     for valore in ["-1", "1.5", "18446744073709551616", "null", r#""molte""#] {
@@ -631,24 +626,6 @@ fn i_conteggi_del_successo_sono_obbligatori() {
             "valore `{valore}` accettato come conteggio: {messaggio}"
         );
     }
-}
-
-/// `nodi_completati` **non** entra nei conteggi del `Successo`.
-///
-/// Rileggendo un file Arrow IPC si osservano righe e batch, non nodi: un
-/// numero che il verificatore non puo' confrontare gli chiederebbe di
-/// crederci (passo 8).
-#[test]
-fn i_conteggi_del_successo_non_portano_i_nodi() {
-    let corpo = concat!(
-        r#"{"esito":"successo","digest_artefatto":{"algoritmo":"sha256","valore":"f"},"#,
-        r#""conteggi":{"righe":1,"batch":1,"nodi_completati":1}}"#,
-    );
-    let messaggio = rifiuto(&incornicia(&payload("esito", corpo)));
-    assert!(
-        messaggio.contains("forma o tipo non conformi"),
-        "`nodi_completati` accettato fra i conteggi del successo: {messaggio}"
-    );
 }
 
 #[test]

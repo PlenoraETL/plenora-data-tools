@@ -222,21 +222,6 @@ fn un_resolver_diverso_e_configurazione() {
     );
 }
 
-#[test]
-fn un_digest_dell_insieme_diverso_e_configurazione() {
-    // Un digest **canonico** e diverso: con una forma non canonica il rifiuto
-    // arriverebbe prima, dalla verifica di forma, e questo test proverebbe
-    // quella invece del confronto che dichiara di provare.
-    let mut saluto = saluto_nominale();
-    saluto.ambiente.digest_insieme = digest(&"c".repeat(64));
-    let errore = worker_riceve(saluto).expect_err("insieme diverso");
-    assert_eq!(
-        errore.category(),
-        ErrorCategory::InvalidConfiguration,
-        "{errore}"
-    );
-}
-
 /// `acquisizione_dinamica` deve essere falsa su **entrambi** i lati.
 ///
 /// Con l'acquisizione dinamica il digest dell'insieme e' una fotografia
@@ -724,9 +709,20 @@ fn una_descrizione_vuota_non_si_costruisce_ne_si_accetta() {
 ///
 /// I digest del filo sono `DigestSha256`, che non ha valori non canonici; le
 /// forme rifiutate stanno nelle prove del tipo. Qui resta da provare che due
-/// digest canonici e diversi siano un disaccordo dell'asse giusto.
+/// digest canonici e diversi siano un disaccordo dell'asse giusto, su
+/// entrambi i lati: con una forma non canonica il rifiuto arriverebbe prima,
+/// dalla verifica di forma, invece che dal confronto.
 #[test]
 fn due_digest_canonici_e_diversi_sono_un_disaccordo() {
+    let mut saluto = saluto_nominale();
+    saluto.ambiente.digest_insieme = digest(&"c".repeat(64));
+    let errore = worker_riceve(saluto).expect_err("insieme diverso");
+    assert_eq!(
+        errore.category(),
+        ErrorCategory::InvalidConfiguration,
+        "{errore}"
+    );
+
     let mut risposta = risposta_nominale();
     risposta.ambiente.digest_insieme = digest(&"c".repeat(64));
     let errore = supervisore_riceve(risposta).expect_err("insieme diverso");

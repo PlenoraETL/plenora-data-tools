@@ -33,7 +33,9 @@ fn il_ritardo_massimo_passa_intero() {
 ///
 /// La saturazione: questo valore e quello del caso precedente arriverebbero
 /// sul filo **identici**. I due casi si leggono insieme: il primo passerebbe
-/// anche saturando, il secondo anche rifiutando tutto.
+/// anche saturando, il secondo anche rifiutando tutto. Insieme escludono
+/// anche un valore sentinella al posto del rifiuto: il massimo e l'oltre non
+/// possono avere lo stesso esito.
 #[test]
 fn un_millisecondo_oltre_il_massimo_viene_rifiutato() {
     let oltre = RetryDisposition::After(Duration::from_millis(u64::MAX) + Duration::from_millis(1));
@@ -44,25 +46,6 @@ fn un_millisecondo_oltre_il_massimo_viene_rifiutato() {
         ),
         altro => panic!("oltre il massimo si rifiuta come Internal, non si satura: {altro:?}"),
     }
-}
-
-/// **Il massimo e l'oltre non arrivano sul filo con lo stesso valore.**
-///
-/// # Che cosa esclude
-///
-/// Che i due casi qui sopra restino veri mentre la proprieta' che li lega
-/// cade, per esempio con un valore sentinella al posto del rifiuto.
-#[test]
-fn il_massimo_e_l_oltre_restano_distinguibili() {
-    let massimo = ritentativo_sul_filo(RetryDisposition::After(Duration::from_millis(u64::MAX)));
-    let oltre = ritentativo_sul_filo(RetryDisposition::After(
-        Duration::from_millis(u64::MAX) + Duration::from_millis(1),
-    ));
-    assert_ne!(
-        massimo.ok(),
-        oltre.ok(),
-        "il massimo e cio' che lo supera non possono avere lo stesso esito"
-    );
 }
 
 /// **Le disposizioni senza ritardo passano tutte.**
