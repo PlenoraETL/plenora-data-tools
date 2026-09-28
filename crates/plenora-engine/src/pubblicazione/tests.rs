@@ -4,70 +4,31 @@
 //! passasse dalla pubblicazione per preparare cio' che poi osserva proverebbe
 //! che le due funzioni concordano, non che ciascuna dica il vero.
 
-use std::sync::Arc;
-
-use plenora_core::arrow::array::{RecordBatch, StringArray, UInt64Array};
+use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::ipc::writer::FileWriter;
-use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::DataContract;
-use sha2::{Digest as _, Sha256};
 
 use super::{pubblica, risolvi_commit, OsservazioneDelCommit, PublishProfile, RagioneNonLeggibile};
-use crate::commit_footer::scrivi_commit_token;
 use crate::commit_token::CommitToken;
 use crate::geo_transport::publish::{PublishOutcome, PuliziaDelTemporaneo};
 use crate::protocollo::digest::ALGORITMO_DIGEST;
 use crate::protocollo::messaggi::{ConteggiDichiarati, DigestArtefatto};
+use crate::test_support::{
+    batch_artefatto, schema_artefatto as schema, scrivi_artefatto, sha256_esadecimale as digest_di,
+    token,
+};
 use crate::verifica::{verifica_artefatto, AtteseVerifica};
 
 const NOSTRO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ALTRUI: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
-fn token(testo: &str) -> CommitToken {
-    CommitToken::da_esadecimale(testo).expect("canonico")
-}
-
-fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt64, false),
-        Field::new("nome", DataType::Utf8, true),
-    ]))
-}
-
 fn batch() -> RecordBatch {
-    RecordBatch::try_new(
-        schema(),
-        vec![
-            Arc::new(UInt64Array::from(vec![1_u64, 2, 3])),
-            Arc::new(StringArray::from(vec![Some("alfa"), None, Some("beta")])),
-        ],
-    )
-    .expect("batch valido")
+    batch_artefatto([Some("alfa"), None, Some("beta")])
 }
 
 /// Un artefatto valido, col token dato — o senza, se `None`.
 fn artefatto(tok: Option<&CommitToken>) -> Vec<u8> {
-    let mut byte = Vec::new();
-    {
-        let mut scrittore = FileWriter::try_new(&mut byte, &schema()).expect("writer");
-        scrittore.write(&batch()).expect("batch scritto");
-        scrivi_commit_token(&mut scrittore, tok);
-        scrittore.finish().expect("finish");
-    }
-    byte
-}
-
-fn digest_di(byte: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut hasher = Sha256::new();
-    hasher.update(byte);
-    let esito: [u8; 32] = hasher.finalize().into();
-    let mut testo = String::with_capacity(64);
-    for grezzo in esito {
-        let _ = write!(testo, "{grezzo:02x}");
-    }
-    testo
+    scrivi_artefatto(&schema(), &batch(), 1, tok)
 }
 
 /// Una stanza temporanea, con un file scritto dentro.

@@ -9,6 +9,7 @@
 use serde_json::value::RawValue;
 
 use crate::commit_token::CommitToken;
+use crate::test_support::{digest, incarico_di_prova as incarico, incornicia};
 
 use super::codifica::{
     codifica, decodifica, ScrittoreLimitato, BYTE_PREFISSO, MAX_PROTOCOL_FRAME_BYTES,
@@ -117,15 +118,6 @@ fn token_di_prova() -> CommitToken {
         .expect("canonico")
 }
 
-/// Un digest dalla forma canonica, per le fixture.
-///
-/// I test condividono **il costruttore**, non un valore. Un digest e' ASCII
-/// esadecimale e JSON non lo espande, quindi sui digest il tetto del frame
-/// resta un maggiorante conservativo.
-fn digest(testo: &str) -> DigestSha256 {
-    DigestSha256::da_esadecimale(testo).expect("canonico")
-}
-
 fn artefatto() -> IdentitaArtefatto {
     IdentitaArtefatto {
         digest: digest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -176,20 +168,6 @@ fn saluto() -> Frame {
             max_messaggi_verso_supervisore: 4,
         },
     })))
-}
-
-fn incarico() -> Frame {
-    incarico_con(
-        grezzo(r#"{"schema_version":6}"#),
-        vec![DescrittoreIngresso {
-            nome: "in".to_owned(),
-            percorso: "/d/a.arrow".to_owned(),
-            formato: FormatoIngresso::File,
-            contract_fingerprint_atteso: digest(
-                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-            ),
-        }],
-    )
 }
 
 fn annulla_con(motivo: String) -> Frame {
@@ -550,12 +528,7 @@ fn lo_scrittore_limitato_si_ferma_a_meta_flusso() {
 
 #[test]
 fn un_payload_non_utf8_e_un_errore() {
-    let corpo = [0xFF_u8, 0xFE];
-    let mut byte = u32::try_from(corpo.len())
-        .expect("corto")
-        .to_be_bytes()
-        .to_vec();
-    byte.extend_from_slice(&corpo);
+    let byte = incornicia(&[0xFF_u8, 0xFE]);
     assert!(rifiuto(&byte).contains("non UTF-8"));
 }
 
@@ -563,17 +536,6 @@ fn un_payload_non_utf8_e_un_errore() {
 fn un_json_malformato_e_un_errore() {
     let testo = r#"{"protocol_version":1,"tipo":"annulla","corpo":{"motivo":"x""#;
     assert!(rifiuto(&incornicia(testo)).contains("malformato"));
-}
-
-/// Impacchetta un testo con il prefisso corretto: serve per i casi in cui a
-/// essere sbagliato e' il **contenuto**, non la cornice.
-fn incornicia(testo: &str) -> Vec<u8> {
-    let mut byte = u32::try_from(testo.len())
-        .expect("i casi di prova stanno in u32")
-        .to_be_bytes()
-        .to_vec();
-    byte.extend_from_slice(testo.as_bytes());
-    byte
 }
 
 #[test]

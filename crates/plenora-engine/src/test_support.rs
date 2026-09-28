@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use plenora_core::arrow::array::{Array, ArrayRef, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{
+    Array, ArrayRef, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
+use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
     ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
@@ -18,10 +21,15 @@ use plenora_core::contract::{
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::Result;
+use sha2::{Digest as _, Sha256};
 
+use crate::commit_footer::scrivi_commit_token;
+use crate::commit_token::CommitToken;
 use crate::executor::{execute, Input, Inputs, Output};
 use crate::planner::validate;
 use crate::prepare::RuntimeContext;
+use crate::protocollo::digest::DigestSha256;
+use crate::protocollo::messaggi::{Corpo, DescrittoreIngresso, FormatoIngresso, Frame, Incarico};
 
 // ---------------------------------------------------------------------------
 // Contratti
@@ -108,6 +116,135 @@ impl ColonnaTipizzata for RecordBatch {
             .downcast_ref::<A>()
             .unwrap_or_else(|| panic!("colonna {index}: tipo inatteso"))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Artefatti IPC con il footer del commit
+// ---------------------------------------------------------------------------
+
+/// Il token dalla forma canonica.
+pub fn token(testo: &str) -> CommitToken {
+    CommitToken::da_esadecimale(testo).expect("canonico")
+}
+
+/// Schema degli artefatti: `id` `UInt64` obbligatorio, `nome` `Utf8`
+/// annullabile.
+pub fn schema_artefatto() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt64, false),
+        Field::new("nome", DataType::Utf8, true),
+    ]))
+}
+
+/// Tre righe di [`schema_artefatto`], `id` da 1 a 3, con i nomi dati.
+///
+/// I nomi restano del chiamante: da loro dipende il layout dei byte, e c'e'
+/// chi ne misura gli offset.
+pub fn batch_artefatto(nomi: [Option<&str>; 3]) -> RecordBatch {
+    RecordBatch::try_new(
+        schema_artefatto(),
+        vec![
+            Arc::new(UInt64Array::from(vec![1_u64, 2, 3])),
+            Arc::new(StringArray::from(nomi.to_vec())),
+        ],
+    )
+    .expect("batch valido")
+}
+
+/// Un artefatto in file format: `quanti` copie di `batch` e il token dato,
+/// o nessun token con `None`.
+pub fn scrivi_artefatto(
+    schema: &SchemaRef,
+    batch: &RecordBatch,
+    quanti: usize,
+    tok: Option<&CommitToken>,
+) -> Vec<u8> {
+    let mut byte = Vec::new();
+    {
+        let mut scrittore = FileWriter::try_new(&mut byte, schema).expect("writer");
+        for _ in 0..quanti {
+            scrittore.write(batch).expect("batch scritto");
+        }
+        scrivi_commit_token(&mut scrittore, tok);
+        scrittore.finish().expect("finish");
+    }
+    byte
+}
+
+/// Un artefatto con un solo `batch` e le coppie date nei custom metadata del
+/// footer, al posto del token.
+pub fn scrivi_artefatto_con_metadata(batch: &RecordBatch, coppie: &[(&str, &str)]) -> Vec<u8> {
+    let mut byte = Vec::new();
+    {
+        let mut scrittore = FileWriter::try_new(&mut byte, &batch.schema()).expect("writer");
+        scrittore.write(batch).expect("batch scritto");
+        for (chiave, valore) in coppie {
+            scrittore.write_metadata(*chiave, *valore);
+        }
+        scrittore.finish().expect("finish");
+    }
+    byte
+}
+
+/// Lo SHA-256 dei byte in esadecimale minuscolo, calcolato qui e non dal
+/// codice sotto prova.
+pub fn sha256_esadecimale(byte: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    hasher.update(byte);
+    let esito: [u8; 32] = hasher.finalize().into();
+    let mut testo = String::with_capacity(64);
+    for grezzo in esito {
+        let _ = write!(testo, "{grezzo:02x}");
+    }
+    testo
+}
+
+// ---------------------------------------------------------------------------
+// Protocollo
+// ---------------------------------------------------------------------------
+
+/// Un digest dalla forma canonica, per le fixture.
+///
+/// I test condividono **il costruttore**, non un valore.
+pub fn digest(testo: &str) -> DigestSha256 {
+    DigestSha256::da_esadecimale(testo).expect("canonico")
+}
+
+/// L'`Incarico` nominale delle prove del protocollo: un piano v6 minimo, un
+/// ingresso in file format e l'artefatto temporaneo.
+pub fn incarico_di_prova() -> Frame {
+    Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
+        piano_canonico: serde_json::value::RawValue::from_string(
+            r#"{"schema_version":6}"#.to_owned(),
+        )
+        .expect("JSON valido"),
+        plan_hash_atteso: digest(
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ),
+        ingressi: vec![DescrittoreIngresso {
+            nome: "in".to_owned(),
+            percorso: "/d/a.arrow".to_owned(),
+            formato: FormatoIngresso::File,
+            contract_fingerprint_atteso: digest(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            ),
+        }],
+        artefatto_temporaneo: "/t/out.arrow".to_owned(),
+    })))
+}
+
+/// Il prefisso di lunghezza big-endian seguito dai byte dati: la cornice di un
+/// frame, scritta qui e non dal codificatore sotto prova.
+pub fn incornicia<B: AsRef<[u8]> + ?Sized>(byte: &B) -> Vec<u8> {
+    let byte = byte.as_ref();
+    let mut fuori = u32::try_from(byte.len())
+        .expect("i casi di prova stanno in u32")
+        .to_be_bytes()
+        .to_vec();
+    fuori.extend_from_slice(byte);
+    fuori
 }
 
 // ---------------------------------------------------------------------------
