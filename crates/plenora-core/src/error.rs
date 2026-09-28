@@ -1858,7 +1858,15 @@ mod tests {
         // Il testo rigenerato di un `Replayed` e' uguale, byte per byte, a
         // quello della variante nativa con gli stessi assi: il formato ha una
         // sola fonte.
-        for category in [ErrorCategory::Execution, ErrorCategory::Cancelled] {
+        // Anche con l'id vuoto: la variante nativa lo omette, e cosi' il
+        // rigenerato. Prima il ramo scritto a mano emetteva `execution ``` e
+        // divergeva dal formato nativo.
+        for (category, id) in [
+            (ErrorCategory::Execution, "exec-1"),
+            (ErrorCategory::Cancelled, "exec-1"),
+            (ErrorCategory::Execution, ""),
+            (ErrorCategory::Cancelled, ""),
+        ] {
             let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
                 category,
                 phase: ErrorPhase::Write,
@@ -1873,7 +1881,7 @@ mod tests {
             let (node, operation, execution_id, reason) = (
                 "n".to_owned(),
                 "table.filter".to_owned(),
-                "exec-1".to_owned(),
+                id.to_owned(),
                 "motivo".to_owned(),
             );
             let nativo = if category == ErrorCategory::Execution {
@@ -1892,8 +1900,9 @@ mod tests {
                 }
             };
             assert_eq!(
-                replayed.with_execution_id("exec-1").to_string(),
-                nativo.to_string()
+                replayed.with_execution_id(id).to_string(),
+                nativo.to_string(),
+                "id {id:?}"
             );
         }
     }
