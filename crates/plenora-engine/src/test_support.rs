@@ -5,6 +5,7 @@
 //! suo. Dove due copie differivano, la differenza e' un parametro esplicito e
 //! non una scelta fatta qui.
 
+use std::io::Read;
 use std::sync::Arc;
 
 use serde_json::json;
@@ -106,6 +107,98 @@ impl ColonnaTipizzata for RecordBatch {
             .as_any()
             .downcast_ref::<A>()
             .unwrap_or_else(|| panic!("colonna {index}: tipo inatteso"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sorgenti `Read` finte
+// ---------------------------------------------------------------------------
+
+/// Sorgente che dichiara molto e consegna poco, **e registra ogni richiesta
+/// di lettura**: sono le taglie richieste, non l'esito, a dire se un lettore
+/// ha dimensionato il buffer sul dichiarato.
+pub struct SorgenteTroncata<'a> {
+    byte: &'a [u8],
+    letto: usize,
+    /// La taglia di ogni slice passata a `read`, nell'ordine.
+    pub richieste: Vec<usize>,
+    interrompi_una_volta: bool,
+}
+
+impl<'a> SorgenteTroncata<'a> {
+    /// Consegna `byte` e poi la fine del flusso.
+    pub const fn nuova(byte: &'a [u8]) -> Self {
+        Self {
+            byte,
+            letto: 0,
+            richieste: Vec::new(),
+            interrompi_una_volta: false,
+        }
+    }
+
+    /// Come [`Self::nuova`], ma la prima lettura fallisce con `Interrupted`
+    /// senza essere registrata.
+    pub const fn interrotta_una_volta(byte: &'a [u8]) -> Self {
+        Self {
+            byte,
+            letto: 0,
+            richieste: Vec::new(),
+            interrompi_una_volta: true,
+        }
+    }
+}
+
+impl Read for SorgenteTroncata<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.interrompi_una_volta {
+            self.interrompi_una_volta = false;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "interrotta",
+            ));
+        }
+        self.richieste.push(out.len());
+        let resto = self.byte.len().saturating_sub(self.letto);
+        let quanti = resto.min(out.len());
+        out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
+        self.letto += quanti;
+        Ok(quanti)
+    }
+}
+
+/// Sorgente che serve per intero i primi `onesti` byte, poi mente: dichiara
+/// un byte piu' della fetta senza averla riempita.
+///
+/// `onesti` e' la parte che il lettore legge con `read_exact`, che
+/// rifiuterebbe subito una dichiarazione in eccesso: la bugia deve arrivare
+/// alla prima fetta del payload, e dove cada dipende dal formato.
+pub struct SorgenteBugiarda<'a> {
+    byte: &'a [u8],
+    letto: usize,
+    onesti: usize,
+}
+
+impl<'a> SorgenteBugiarda<'a> {
+    /// Mente dopo i primi `onesti` byte di `byte`.
+    pub const fn nuova(byte: &'a [u8], onesti: usize) -> Self {
+        Self {
+            byte,
+            letto: 0,
+            onesti,
+        }
+    }
+}
+
+impl Read for SorgenteBugiarda<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let resto = self.byte.len().saturating_sub(self.letto);
+        let quanti = resto.min(out.len());
+        out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
+        self.letto += quanti;
+        if self.letto <= self.onesti {
+            return Ok(quanti);
+        }
+        Ok(out.len() + 1)
     }
 }
 

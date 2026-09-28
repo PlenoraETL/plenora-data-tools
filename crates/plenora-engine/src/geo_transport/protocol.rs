@@ -654,35 +654,14 @@ mod tests {
 /// perche' quella si manifesta per intero nella taglia richiesta.
 #[cfg(test)]
 mod taglie_delle_letture_richieste {
-    use std::io::{Error, ErrorKind, Read};
+    use std::io::ErrorKind;
+
+    use crate::test_support::SorgenteTroncata;
 
     use super::{
         framing, Frame, FrameReader, ProtocolError, BUFFER_LETTURA_BYTES, MAX_GEOMETRY_BYTES,
         PROTOCOL_MAGIC,
     };
-
-    /// Sorgente che dichiara molto, consegna poco e registra ogni richiesta.
-    struct SorgenteTroncata<'a> {
-        byte: &'a [u8],
-        letto: usize,
-        richieste: Vec<usize>,
-        interrompi_una_volta: bool,
-    }
-
-    impl Read for SorgenteTroncata<'_> {
-        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-            if self.interrompi_una_volta {
-                self.interrompi_una_volta = false;
-                return Err(Error::new(ErrorKind::Interrupted, "interrotta"));
-            }
-            self.richieste.push(out.len());
-            let resto = self.byte.len().saturating_sub(self.letto);
-            let quanti = resto.min(out.len());
-            out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
-            self.letto += quanti;
-            Ok(quanti)
-        }
-    }
 
     /// Stream con una riga il cui frame dichiara `length` byte e ne porta
     /// `presenti`.
@@ -702,12 +681,7 @@ mod taglie_delle_letture_richieste {
     #[test]
     fn un_frame_dichiarato_al_massimo_non_dimensiona_le_letture() {
         let byte = stream(MAX_GEOMETRY_BYTES, 4);
-        let mut sorgente = SorgenteTroncata {
-            byte: &byte,
-            letto: 0,
-            richieste: Vec::new(),
-            interrompi_una_volta: false,
-        };
+        let mut sorgente = SorgenteTroncata::nuova(&byte);
         let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
         let esito = lettore.next_frame();
 
@@ -727,12 +701,7 @@ mod taglie_delle_letture_richieste {
     #[test]
     fn la_sorgente_che_finisce_prima_e_un_errore() {
         let byte = stream(1024, 8);
-        let mut sorgente = SorgenteTroncata {
-            byte: &byte,
-            letto: 0,
-            richieste: Vec::new(),
-            interrompi_una_volta: false,
-        };
+        let mut sorgente = SorgenteTroncata::nuova(&byte);
         let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
         match lettore.next_frame() {
             Err(ProtocolError::Io(errore)) => {
@@ -752,12 +721,7 @@ mod taglie_delle_letture_richieste {
             scrittore.write_frame(Some(&contenuto)).expect("frame");
             scrittore.finish().expect("finish");
         }
-        let mut sorgente = SorgenteTroncata {
-            byte: &byte,
-            letto: 0,
-            richieste: Vec::new(),
-            interrompi_una_volta: true,
-        };
+        let mut sorgente = SorgenteTroncata::interrotta_una_volta(&byte);
         let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
         match lettore.next_frame().expect("frame valido") {
             Some(Frame::Wkb(letto)) => assert_eq!(letto, contenuto),
@@ -774,30 +738,8 @@ mod taglie_delle_letture_richieste {
 /// sorgente, quindi l'errore e' `Io`, e il messaggio e' costante.
 #[cfg(test)]
 mod un_read_scorretto_non_passa_per_valido {
-    use std::io::Read;
-
     use super::{framing, FrameReader, ProtocolError, PROTOCOL_MAGIC};
-
-    /// Serve header e prefisso di lunghezza per intero, poi mente.
-    struct SorgenteBugiarda<'a> {
-        byte: &'a [u8],
-        letto: usize,
-    }
-
-    impl Read for SorgenteBugiarda<'_> {
-        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-            let resto = self.byte.len().saturating_sub(self.letto);
-            let quanti = resto.min(out.len());
-            out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
-            self.letto += quanti;
-            // Header (16 byte) e prefisso di lunghezza (4) passano da
-            // `read_exact`: la bugia arriva alla prima fetta del payload.
-            if self.letto <= 20 {
-                return Ok(quanti);
-            }
-            Ok(out.len() + 1)
-        }
-    }
+    use crate::test_support::SorgenteBugiarda;
 
     #[test]
     fn il_lettore_dei_frame_si_ferma_invece_di_accodare_byte_mai_scritti() {
@@ -810,10 +752,9 @@ mod un_read_scorretto_non_passa_per_valido {
         );
         byte.extend_from_slice(&contenuto);
 
-        let mut sorgente = SorgenteBugiarda {
-            byte: &byte,
-            letto: 0,
-        };
+        // Header (16 byte) e prefisso di lunghezza (4) passano da
+        // `read_exact`: la bugia arriva alla prima fetta del payload.
+        let mut sorgente = SorgenteBugiarda::nuova(&byte, 20);
         let mut lettore = FrameReader::new(&mut sorgente, 1).expect("header valido");
         match lettore.next_frame() {
             Err(ProtocolError::Io(errore)) => {
