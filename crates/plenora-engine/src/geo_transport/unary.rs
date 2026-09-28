@@ -2996,7 +2996,8 @@ pub fn transform_arrow_with_format(
 
 /// La coda comune di `transform-arrow` e `pair-arrow`: chiavi canoniche,
 /// codifica nel formato chiesto, scrittura. Rende le righe scritte e il
-/// checksum del payload.
+/// checksum di cio' che si e' scritto: header e payload dell'envelope per
+/// `PlnGeo3`, l'intero file IPC per `IpcFile`.
 ///
 /// BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
 /// errori-e-limiti.md#limiti-dichiarati estesa), come post-processo centrale
