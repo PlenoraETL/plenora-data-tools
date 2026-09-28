@@ -47,9 +47,8 @@ use super::transport::{
 #[cfg(feature = "geos-backend")]
 use super::unary::geometry_type_name;
 use super::unary::{
-    batch_geometry_cells, canonical_legacy_output, encode_geometry, expect_line_string,
-    expect_point, geometrie_sulle_righe, geometry_column_index, geometry_output_field,
-    spatial_predicate_name,
+    batch_geometry_cells, encode_geometry, expect_line_string, expect_point, geometrie_sulle_righe,
+    geometry_column_index, geometry_output_field, scrivi_output, spatial_predicate_name,
 };
 
 // --- Forma binary + lineage -----------------------------------------------
@@ -1396,26 +1395,8 @@ pub fn pair_arrow_with_format(
         }
     };
 
-    // BLOCK-06: doppia emissione delle chiavi canoniche §2 (parita' col v4,
-    // errori-e-limiti.md#limiti-dichiarati estesa) — post-processo centrale prima della codifica IPC.
-    let (output_schema, output_batches) = canonical_legacy_output(output_schema, output_batches)?;
-    let output_rows: u64 = output_batches
-        .iter()
-        .map(|batch| batch.num_rows() as u64)
-        .sum();
-    let checksum = match output_format {
-        ArrowOutputFormat::PlnGeo3 => {
-            let output_payload = encode_ipc(&output_schema, &output_batches)?;
-            let mut envelope = EnvelopeWriter::new(writer, output_payload.len() as u64)?;
-            envelope.write_payload(&output_payload)?;
-            envelope.finish()?.1
-        }
-        ArrowOutputFormat::IpcFile => {
-            let output_payload = encode_ipc_file(&output_schema, &output_batches)?;
-            writer.write_all(&output_payload)?;
-            Sha256::digest(&output_payload).into()
-        }
-    };
+    let (output_rows, checksum) =
+        scrivi_output(writer, output_schema, output_batches, output_format)?;
     Ok(PairArrowSummary {
         left_rows,
         right_rows,
