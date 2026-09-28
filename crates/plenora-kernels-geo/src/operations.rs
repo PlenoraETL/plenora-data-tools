@@ -536,6 +536,7 @@ fn line_string_boundary(line: &LineString<f64>) -> Geometry<f64> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::test_support::{rect, rect_polygon};
     use geo::{
         line_string, polygon, Contains, GeometryCollection, Line, MultiPolygon, Point, Rect,
         Triangle,
@@ -543,11 +544,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn rectangle() -> Geometry<f64> {
-        Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-            (x: 4.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ])
+        rect(0.0, 0.0, 4.0, 2.0)
     }
 
     /// Regressione del fuzz target `wkt_operations`.
@@ -777,11 +774,7 @@ mod tests {
         assert_eq!(
             explode(&Geometry::MultiPolygon(MultiPolygon::new(vec![
                 polygon,
-                polygon![
-                    (x: 10.0, y: 0.0), (x: 14.0, y: 0.0),
-                    (x: 14.0, y: 2.0), (x: 10.0, y: 2.0),
-                    (x: 10.0, y: 0.0),
-                ],
+                rect_polygon(10.0, 0.0, 14.0, 2.0),
             ])))
             .unwrap()
             .len(),
@@ -979,11 +972,7 @@ mod tests {
 
     /// Il quadrato 4x4 dei test sul buffer con componenti vuoti.
     fn quadrato_4x4() -> geo::Polygon<f64> {
-        polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-            (x: 0.0, y: 0.0),
-        ]
+        rect_polygon(0.0, 0.0, 4.0, 4.0)
     }
 
     /// Il buffer con componenti vuoti riesce e coincide con quello della
@@ -1075,13 +1064,7 @@ mod tests {
     #[test]
     fn buffer_su_multipolygon_con_vuoto_in_diverse_posizioni_non_panica() {
         let ordinario = quadrato_4x4;
-        let ordinario2 = || {
-            polygon![
-                (x: 10.0, y: 0.0), (x: 14.0, y: 0.0),
-                (x: 14.0, y: 4.0), (x: 10.0, y: 4.0),
-                (x: 10.0, y: 0.0),
-            ]
-        };
+        let ordinario2 = || rect_polygon(10.0, 0.0, 14.0, 4.0);
         let vuoto = || geo::Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
 
         let vuoto_iniziale = Geometry::MultiPolygon(MultiPolygon::new(vec![vuoto(), ordinario()]));
@@ -1128,11 +1111,7 @@ mod tests {
     /// planare.
     #[test]
     fn buffer_su_poligono_ordinario_senza_vuoti_riesce_alle_stesse_distanze() {
-        let ordinario = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let ordinario = rect(0.0, 0.0, 4.0, 4.0);
 
         for distance in [-1.0, 0.0, 1.0] {
             let risultato = buffer(&ordinario, distance).unwrap_or_else(|errore| {
@@ -1157,11 +1136,7 @@ mod tests {
             let y = f64::from(y);
             let width = f64::from(width);
             let height = f64::from(height);
-            let geometry = Geometry::Polygon(polygon![
-                (x: x, y: y), (x: x + width, y: y),
-                (x: x + width, y: y + height), (x: x, y: y + height),
-                (x: x, y: y),
-            ]);
+            let geometry = rect(x, y, x + width, y + height);
             prop_assert_eq!(area(&geometry).unwrap(), width * height);
             prop_assert_eq!(length(&geometry).unwrap(), 2.0 * (width + height));
             prop_assert_eq!(bounds(&geometry).unwrap(), Some([x, y, x + width, y + height]));

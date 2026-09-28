@@ -1143,6 +1143,7 @@ pub fn split_line(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::test_support::rect;
     use geo::{line_string, polygon, Area};
     use proptest::prelude::*;
 
@@ -1164,11 +1165,7 @@ mod tests {
             snap_to_grid(&point, 0.5).unwrap(),
             Geometry::Point(Point::new(1.0, 0.0))
         );
-        let tiny = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 0.1, y: 0.0),
-            (x: 0.1, y: 0.1), (x: 0.0, y: 0.1),
-            (x: 0.0, y: 0.0),
-        ]);
+        let tiny = rect(0.0, 0.0, 0.1, 0.1);
         assert!(snap_to_grid(&tiny, 1.0).is_err());
     }
 
@@ -1224,11 +1221,7 @@ mod tests {
             geodesic_bearing_degrees(Point::new(0.0, 0.0), Point::new(0.0, 2.0)).unwrap(),
             0.0
         );
-        let square = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 1.0, y: 0.0),
-            (x: 1.0, y: 1.0), (x: 0.0, y: 1.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let square = rect(0.0, 0.0, 1.0, 1.0);
         let area = geodesic_area_m2(&square).unwrap();
         assert!(area > 12_000_000_000.0 && area < 13_000_000_000.0);
         let Geometry::Polygon(mut reversed) = square else {
@@ -1465,11 +1458,7 @@ mod tests {
     #[test]
     fn split_supports_polygon_boundaries_collections_zero_length_and_huge_values() {
         let source = line_string![(x: -1.0, y: 1.0), (x: 5.0, y: 1.0)];
-        let polygon = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-            (x: 0.0, y: 0.0)
-        ]);
+        let polygon = rect(0.0, 0.0, 4.0, 4.0);
         let pieces = split_line(&source, &polygon, 0.0, 100, 1_000, 10, 100).unwrap();
         assert_eq!(pieces.len(), 3);
 

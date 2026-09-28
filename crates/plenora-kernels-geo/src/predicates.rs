@@ -137,7 +137,8 @@ fn evaluate_unchecked(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{line_string, polygon, Point};
+    use crate::test_support::{bowtie, rect};
+    use geo::{line_string, Point};
 
     /// **Sintetico attraverso la conversione reale**: `classifica_lato` e' la
     /// stessa funzione che `validate` chiama davvero, non una copia.
@@ -185,11 +186,7 @@ mod tests {
 
     #[test]
     fn de9im_predicates_distinguish_boundary_and_interior() {
-        let area = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let area = rect(0.0, 0.0, 2.0, 2.0);
         let inside = Geometry::Point(Point::new(1.0, 1.0));
         let boundary = Geometry::Point(Point::new(0.0, 1.0));
         assert!(evaluate(&area, &inside, SpatialPredicate::Contains).unwrap());
@@ -226,11 +223,7 @@ mod tests {
             evaluate(&valid, &nan, SpatialPredicate::Intersects),
             Err(PredicateError::NonFiniteCoordinate { side: "right" })
         ));
-        let invalid = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let invalid = bowtie();
         assert!(matches!(
             evaluate(&valid, &invalid, SpatialPredicate::Intersects),
             Err(PredicateError::InvalidGeometry { side: "right", .. })
@@ -239,11 +232,7 @@ mod tests {
 
     #[test]
     fn evaluate_validated_matches_the_gated_path_on_valid_inputs() {
-        let area = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let area = rect(0.0, 0.0, 2.0, 2.0);
         let others = [
             Geometry::Point(Point::new(1.0, 1.0)),
             Geometry::Point(Point::new(0.0, 1.0)),
@@ -279,11 +268,7 @@ mod tests {
         // accettare geometrie invalide in produzione: il percorso gated
         // rifiuta il bowtie (gate intatto), la variante validated lo prende
         // perche' la precondizione e' del chiamante — qui violata ad arte.
-        let bowtie = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let bowtie = bowtie();
         let valid = Geometry::Point(Point::new(1.0, 1.0));
         assert!(matches!(
             evaluate(&bowtie, &valid, SpatialPredicate::Intersects),

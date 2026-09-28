@@ -416,15 +416,12 @@ pub fn geodesic_line_length_m(line: &geo::LineString<f64>) -> Result<f64, Extend
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use geo::{line_string, polygon, Area};
+    use crate::test_support::{bowtie, rect};
+    use geo::{line_string, Area};
 
     #[test]
     fn affine_wrappers_preserve_expected_coordinates_and_area() {
-        let geometry = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 1.0), (x: 0.0, y: 1.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let geometry = rect(0.0, 0.0, 2.0, 1.0);
         let translated = translate(&geometry, 10.0, -5.0).unwrap();
         assert_eq!(translated.unsigned_area(), geometry.unsigned_area());
         let scaled = scale_about(&geometry, 2.0, 3.0, Point::new(0.0, 0.0)).unwrap();
@@ -458,11 +455,7 @@ mod tests {
 
     #[test]
     fn validated_variants_match_the_gated_path_on_valid_inputs() {
-        let geometry = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 1.0), (x: 0.0, y: 1.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let geometry = rect(0.0, 0.0, 2.0, 1.0);
         let line = Geometry::LineString(line_string![
             (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
             (x: 1.5, y: 1.0), (x: 2.0, y: 2.0),
@@ -523,11 +516,7 @@ mod tests {
         // Precondizione violata ad arte: il percorso gated rifiuta il bowtie
         // in ingresso, la variante validated no, ma il gate di output lo
         // rifiuta comunque (la trasformata affine di un bowtie e' un bowtie).
-        let bowtie = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let bowtie = bowtie();
         let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 3.0, y: 3.0)]);
         assert!(matches!(
             hausdorff_distance(&bowtie, &line, 100),

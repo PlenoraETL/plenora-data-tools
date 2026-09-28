@@ -94,25 +94,33 @@ const RAGIONI_NOSTRE: [&str; 7] = [
     "forma non valida non ulteriormente distinta",
 ];
 
-/// Poligono «a farfalla»: l'anello esterno interseca se stesso. Supera la
-/// decodifica strutturale — i byte sono ben formati — e cade sulla sola
-/// validazione OGC, che e' il ramo che questi casi devono raggiungere.
-fn farfalla() -> Vec<u8> {
+/// WKB scritto a mano: little-endian, tipo 3 (Polygon), un anello con i punti
+/// dati. A mano e non con un encoder, perche' cio' che i casi fissano sono i
+/// BYTE che entrano nel confine, non il comportamento di chi li produce.
+fn poligono_wkb_le(anello: &[(f64, f64)]) -> Vec<u8> {
     let mut wkb: Vec<u8> = vec![1];
     wkb.extend_from_slice(&3_u32.to_le_bytes());
     wkb.extend_from_slice(&1_u32.to_le_bytes());
-    wkb.extend_from_slice(&5_u32.to_le_bytes());
-    for (x, y) in [
-        (0.0_f64, 0.0_f64),
-        (10.0, 10.0),
-        (0.0, 10.0),
-        (10.0, 0.0),
-        (0.0, 0.0),
-    ] {
+    let punti = u32::try_from(anello.len()).expect("fixture entro u32");
+    wkb.extend_from_slice(&punti.to_le_bytes());
+    for &(x, y) in anello {
         wkb.extend_from_slice(&x.to_le_bytes());
         wkb.extend_from_slice(&y.to_le_bytes());
     }
     wkb
+}
+
+/// Poligono «a farfalla»: l'anello esterno interseca se stesso. Supera la
+/// decodifica strutturale — i byte sono ben formati — e cade sulla sola
+/// validazione OGC, che e' il ramo che questi casi devono raggiungere.
+fn farfalla() -> Vec<u8> {
+    poligono_wkb_le(&[
+        (0.0, 0.0),
+        (10.0, 10.0),
+        (0.0, 10.0),
+        (10.0, 0.0),
+        (0.0, 0.0),
+    ])
 }
 
 /// **Una geometria davvero invalida resta un ingresso invalido.**
@@ -197,23 +205,13 @@ fn le_geometrie_valide_con_coordinate_minuscole_passano() {
     let minuscolo = 1e-320_f64;
     assert!(minuscolo > 0.0 && minuscolo < f64::MIN_POSITIVE);
 
-    // WKB scritto a mano: little-endian, tipo 3 (Polygon), un anello, cinque
-    // punti. A mano e non con un encoder, perche' cio' che il caso fissa sono i
-    // BYTE che entrano nel confine, non il comportamento di chi li produce.
-    let mut wkb: Vec<u8> = vec![1];
-    wkb.extend_from_slice(&3_u32.to_le_bytes());
-    wkb.extend_from_slice(&1_u32.to_le_bytes());
-    wkb.extend_from_slice(&5_u32.to_le_bytes());
-    for (x, y) in [
+    let wkb = poligono_wkb_le(&[
         (0.0, 0.0),
         (minuscolo, 0.0),
         (minuscolo, minuscolo),
         (0.0, minuscolo),
         (0.0, 0.0),
-    ] {
-        wkb.extend_from_slice(&f64::to_le_bytes(x));
-        wkb.extend_from_slice(&f64::to_le_bytes(y));
-    }
+    ]);
 
     let geometria = geometry_from_wkb(&wkb).expect("un poligono valido resta valido");
     assert!(matches!(geometria, geo::Geometry::Polygon(_)));

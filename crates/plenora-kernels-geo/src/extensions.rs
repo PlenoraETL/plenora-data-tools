@@ -470,6 +470,7 @@ pub fn line_locate_point(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::test_support::rect;
     use geo::{line_string, polygon, GeometryCollection, LineString};
     use plenora_core::arrow::array::Array;
 
@@ -482,11 +483,7 @@ mod tests {
     }
 
     fn square_at(offset: f64) -> Geometry<f64> {
-        Geometry::Polygon(polygon![
-            (x: offset, y: offset), (x: offset + 4.0, y: offset),
-            (x: offset + 4.0, y: offset + 4.0), (x: offset, y: offset + 4.0),
-            (x: offset, y: offset),
-        ])
+        rect(offset, offset, offset + 4.0, offset + 4.0)
     }
 
     // --- geo.from_wkt -------------------------------------------------------

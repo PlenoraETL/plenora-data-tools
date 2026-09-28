@@ -333,6 +333,7 @@ pub fn geo_equals_with_tolerance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::rect;
     use geo::{
         line_string, polygon, GeometryCollection, Line, MultiLineString, MultiPoint, MultiPolygon,
         Point, Rect, Triangle,
@@ -359,13 +360,7 @@ mod tests {
 
     #[test]
     fn anelli_con_orientamento_opposto_richiedono_la_normalizzazione() {
-        let ccw = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0),
-            (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let ccw = rect(0.0, 0.0, 2.0, 2.0);
         assert!(!geo_equals_with_tolerance(&square_cw(), &ccw, EXACT));
         assert!(geo_equals_with_tolerance(&square_cw(), &ccw, NORMALIZED));
     }

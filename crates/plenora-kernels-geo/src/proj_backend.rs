@@ -174,7 +174,8 @@ impl Reprojector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{polygon, Area, Point};
+    use crate::test_support::rect;
+    use geo::{Area, Point};
 
     #[test]
     fn wgs84_web_mercator_roundtrip_is_stable() {
@@ -195,11 +196,7 @@ mod tests {
 
     #[test]
     fn polygon_remains_valid_and_limits_fail_closed() {
-        let polygon = Geometry::Polygon(polygon![
-            (x: 11.0, y: 44.0), (x: 12.0, y: 44.0),
-            (x: 12.0, y: 45.0), (x: 11.0, y: 45.0),
-            (x: 11.0, y: 44.0),
-        ]);
+        let polygon = rect(11.0, 44.0, 12.0, 45.0);
         let projected = reproject_geometry(&polygon, "EPSG:4326", "EPSG:32632", 10).unwrap();
         assert!(projected.unsigned_area() > 8_000_000_000.0);
         assert!(matches!(

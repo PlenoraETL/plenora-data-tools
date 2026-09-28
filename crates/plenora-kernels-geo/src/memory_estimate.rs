@@ -147,6 +147,7 @@ impl DecodedNativeBytesEstimate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::rect;
     use geo::{line_string, polygon, LineString, Point};
 
     /// STIMA nota di un punto: STRUCT + una coordinata XY.
@@ -194,10 +195,7 @@ mod tests {
             + (VEC_OVERHEAD_BYTES + 4 * COORD_XY_BYTES);
         assert_eq!(estimate_geometry_native_bytes(&with_hole), expected);
 
-        let without_hole = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 8.0, y: 0.0), (x: 8.0, y: 8.0),
-            (x: 0.0, y: 8.0), (x: 0.0, y: 0.0),
-        ]);
+        let without_hole = rect(0.0, 0.0, 8.0, 8.0);
         assert!(
             estimate_geometry_native_bytes(&with_hole)
                 > estimate_geometry_native_bytes(&without_hole)

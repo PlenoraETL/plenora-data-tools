@@ -418,23 +418,14 @@ pub fn count_points_in_polygons_validated(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{polygon, Point};
+    use crate::test_support::some_point as point;
+    use crate::test_support::{bowtie, rect};
+    use geo::Point;
 
-    // unnecessary_wraps: l'Option e' il contratto dei fixture (colonne con
-    // righe null), non un possibile fallimento dell'helper.
-    #[allow(clippy::unnecessary_wraps)]
-    fn point(x: f64, y: f64) -> Option<Geometry<f64>> {
-        Some(Geometry::Point(Point::new(x, y)))
-    }
-
-    // Come `point` sopra: l'Option serve a comporre colonne con null.
+    // L'Option serve a comporre colonne con null, come in `some_point`.
     #[allow(clippy::unnecessary_wraps)]
     fn square() -> Option<Geometry<f64>> {
-        Some(Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 0.0),
-            (x: 2.0, y: 2.0), (x: 0.0, y: 2.0),
-            (x: 0.0, y: 0.0),
-        ]))
+        Some(rect(0.0, 0.0, 2.0, 2.0))
     }
 
     #[test]
@@ -453,11 +444,7 @@ mod tests {
 
     #[test]
     fn invalid_topology_is_rejected_on_both_sides_before_distance_work() {
-        let invalid = Some(Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]));
+        let invalid = Some(bowtie());
         assert!(matches!(
             minimum_distances(std::slice::from_ref(&invalid), &[point(0.0, 0.0)], 1),
             Err(AnalysisError::InvalidGeometry { side: "left", .. })
@@ -550,11 +537,7 @@ mod tests {
         // accettare geometrie invalide in produzione: il percorso gated
         // rifiuta il bowtie (gate intatto), la variante validated lo prende
         // perche' la precondizione e' del chiamante — qui violata ad arte.
-        let bowtie = Some(Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-            (x: 0.0, y: 2.0), (x: 2.0, y: 0.0),
-            (x: 0.0, y: 0.0),
-        ]));
+        let bowtie = Some(bowtie());
         assert!(matches!(
             minimum_distances(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10),
             Err(AnalysisError::InvalidGeometry { side: "left", .. })
