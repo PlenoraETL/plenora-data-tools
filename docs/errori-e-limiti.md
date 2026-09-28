@@ -1543,8 +1543,10 @@ era valida per OGC, e il prodotto la trattava come tale solo per il difetto
 sopra.
 
 **Che cosa resta a `geo`.** Le altre forme di non semplicità — un anello che
-tocca se stesso in un vertice non adiacente — le giudica ancora
-`check_validation`, con i suoi limiti.
+tocca se stesso in un vertice non adiacente — le giudica ancora la regola di
+`geo`, con i suoi limiti: eseguita con una ricerca più rapida ma a verdetto
+identico (vedi
+[la ricerca delle auto-intersezioni](#la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 **La condizione di rientro.** Una versione di `geo` la cui ricerca di
 auto-intersezioni veda le sovrapposizioni fra segmenti adiacenti: allora il
@@ -1640,6 +1642,72 @@ esce su stderr): `fuzz/corpus` è ignorato da Git e non è una regressione.
 **Ambito.** `plenora-kernels-geo`, ogni validazione OGC e ogni `relate`.
 **Condizione di rientro.** Il giorno che `geo` non abbia più cammini di panico
 raggiungibili da byte esterni, e che i suoi `log` non pubblichino coordinate.
+
+### La ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
+
+**La regola.** Per `Polygon`, `MultiPolygon`, `GeometryCollection` e
+`Geometry` la barriera non chiama `check_validation` di `geo`: esegue
+`validazione_ogc::ValidazioneOgc::valida_ogc_rapida`, che rifà con le API
+pubbliche di `geo` la stessa sequenza di `visit_validation` di `geo` 0.33.1 —
+stessi controlli, stesso ordine, stessi errori, stessa `relate` — e cambia
+**solo** come si trovano le coppie di segmenti da provare nella ricerca delle
+auto-intersezioni. Gli altri tipi restano a `check_validation`.
+
+**Perché.** `validation::utils::linestring_has_self_intersection` di `geo` è
+un doppio ciclo su tutte le coppie di segmenti: O(n²) chiamate a
+`Line::intersects` per anello, su ogni `geometry_from_wkb` e su ogni
+validazione d'uscita. Misurato in `release` con
+`crates/plenora-kernels-geo/examples/bench_validazione_ogc.rs`: sul cerchio,
+458 µs a 100 vertici e 1,43 s a 10 000. La correzione non sta nel vendor
+perché il vendor è la copia ricostruita del candidato di memory-lab, con la
+provenienza citata (vedi
+[la sezione sul candidato filtrato](#candidato-filtrato-sperimentale-la-regressione-on²-su-buffer-e-validazione-e-il-percorso-rapido-proposto)):
+una patch scritta qui ne cambierebbe la natura.
+
+**Esattezza.** Il predicato per coppia è quello di `geo`, identico:
+`Line::intersects` col `RobustKernel` del vendor, nei due versi, più le due
+esclusioni sugli estremi condivisi. Si scartano soltanto le coppie i cui
+rettangoli chiusi d'ingombro sono disgiunti, con una scansione su un asse
+(segmenti ordinati per estremo minimo, filtro sull'altro asse). Su quelle
+coppie `intersects` è falso per costruzione nel ramo degenere e in quello
+collineare, che rispondono con `point_in_rect`; nel ramo trasversale lo è
+perché il segno di `orient2d` è esatto su ogni `f64` finito. Gli anelli con
+una coordinata non finita passano dal doppio ciclo originale.
+
+**L'oracolo.** `src/validazione_ogc/tests.rs` confronta il predicato con la
+copia letterale della funzione di `geo` su ogni ramo (doppio ciclo, scansione
+su `x`, su `y`, asse di produzione), e la validazione completa con
+`check_validation` e `validation_errors` di `geo` sull'errore intero
+(variante, anello, indici): casi avversari deterministici (punte, tocchi,
+autotangenze, collineari sovrapposti, punti ripetuti, segmenti nulli, zero con
+segno, quasi collineari all'ulp, subnormali, `f64::MAX`, NaN e infiniti), sotto
+simmetrie e scale; 22 008 anelli di un generatore deterministico e 8 000 casi
+proptest. Nessuna divergenza trovata.
+
+**Hazard.** Tre, dichiarati:
+
+- la sequenza è una copia di quella di `geo` 0.33.1: un aggiornamento di `geo`
+  che cambi controlli o ordine non si propaga da solo. L'oracolo lo rileva
+  solo sulle forme che esercita;
+- l'esattezza del filtro dipende dall'esattezza di `orient2d` nel kernel di
+  `geo`: con un kernel non esatto il filtro potrebbe scartare una coppia che il
+  doppio ciclo dichiara intersecante;
+- il caso peggiore resta O(n²): quando molti segmenti lunghi hanno rettangoli
+  sovrapposti su entrambi gli assi, le coppie candidate sono quadratiche come
+  nel doppio ciclo. Il verdetto non cambia, il tempo sì.
+
+**Che cosa non tocca.** I controlli fra anelli (`relate` fra esterno e
+interni, fra interni, fra i poligoni di un `MultiPolygon`) restano quadratici
+nel numero di anelli e di poligoni, come in `geo`: nessun benchmark del
+repository li mostra dominanti.
+
+**Ambito.** `plenora-kernels-geo`, ogni validazione OGC che passa da
+`ValidazioneProtetta`.
+
+**Condizione di rientro.** Una versione di `geo` la cui ricerca delle
+auto-intersezioni sia sub-quadratica con lo stesso verdetto: allora la
+sequenza copiata si toglie, la barriera torna a `check_validation` e l'oracolo
+resta come regressione.
 
 ### `geo.coverage_validate` rileva le sovrapposizioni, non i buchi
 
@@ -2440,6 +2508,14 @@ filtro attivo è minore, ma resta una previsione, non una misura.
 
 **Stato dell'adozione.** Sperimentale. Nessuna sostituzione del candidato
 congelato, commit, push o VM senza autorizzazione esplicita.
+
+**La validazione, dopo.** La parte O(n²) della validazione OGC non è più il
+kernel ma la ricerca delle auto-intersezioni di `geo`, un doppio ciclo sulle
+coppie di segmenti; il prodotto la esegue ora con una scansione a verdetto
+identico (vedi
+[la ricerca delle auto-intersezioni](#la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+Le misure sopra descrivono `check_validation` di `geo`, che resta invariato
+nel vendor.
 
 ### Fallimenti upstream comuni e divergenze GEOS: non risolti da questa integrazione
 

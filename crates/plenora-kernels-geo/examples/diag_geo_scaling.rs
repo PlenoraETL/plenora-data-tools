@@ -15,10 +15,9 @@
 //! build usata per il benchmark dei join, cosi' i numeri sono confrontabili;
 //! debug e' comunque supportato per il confronto di profilo).
 
-use geo::algorithm::validation::Validation;
 use geo::{Geometry, LineString, Polygon};
 use plenora_kernels_geo::operations::{self, SimplifyPolicy};
-use plenora_kernels_geo::{transform_geometry, Operation};
+use plenora_kernels_geo::{check_geometry_valid, transform_geometry, Operation};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -73,13 +72,13 @@ fn main() {
     for n in taglie {
         let poligono = circle_polygon(n);
 
-        // --- SOLA validazione OGC (`check_validation`, la stessa chiamata
-        // dietro `ensure_valid`/`valida_ogc`), senza alcun kernel a valle:
-        // isola il costo del gate d'ingresso comune da quello di ciascuna
-        // operazione, per capire se il costo condiviso da buffer/simplify/
-        // centroid sta li' o nell'algoritmo proprio di ciascuna. ---
+        // --- SOLA validazione OGC (`check_geometry_valid`, cioe' `valida_ogc`
+        // dietro la barriera, lo stesso gate dei kernel), senza alcun kernel
+        // a valle: isola il costo del gate d'ingresso comune da quello di
+        // ciascuna operazione, per capire se il costo condiviso da buffer/
+        // simplify/centroid sta li' o nell'algoritmo proprio di ciascuna. ---
         let validazione_esito = con_tetto(
-            move || circle_polygon(n).check_validation().is_ok(),
+            move || check_geometry_valid(&circle_polygon(n)).is_ok(),
             budget_per_taglia,
         );
         let (validazione_secs, validazione_ok) = match &validazione_esito {
