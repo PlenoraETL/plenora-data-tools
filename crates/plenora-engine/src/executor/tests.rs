@@ -15,9 +15,9 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::ipc::reader::FileReader;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
-    ContractCrs, ContractProperties, ContractProperty, DataContract,
-    GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryType,
-    GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
+    ContractCrs, ContractProperties, ContractProperty, DataContract, GeometryColumnContract,
+    GeometryDimensions, GeometryEncoding, GeometryType, GeometryTypesProperty, PropertyConfidence,
+    PropertyScope, TypesDeclaration,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::diagnostics::RowDiagnosticsCompleteness;

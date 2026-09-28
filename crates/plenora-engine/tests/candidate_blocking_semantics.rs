@@ -2,9 +2,13 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::table_engine::SCHEMA_VERSION;
-use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
-use serde_json::{json, Value};
+use plenora_engine::{execute_batch, execute_binary, Limits};
+use serde_json::json;
+
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::{i64s, piano, plan, plan_with_limits, utf8};
 
 fn unary_fixture() -> RecordBatch {
     RecordBatch::try_new(
@@ -82,41 +86,6 @@ fn right() -> RecordBatch {
     )
 }
 
-fn plan_with_limits(operation: &str, config: Value, limits: Limits) -> ValidatedPlan {
-    Plan {
-        schema_version: SCHEMA_VERSION,
-        limits,
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .unwrap_or_else(|error| panic!("{operation}: {error}"))
-}
-
-fn plan(operation: &str, config: Value) -> ValidatedPlan {
-    plan_with_limits(operation, config, Limits::default())
-}
-
-fn utf8<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
-    batch
-        .column_by_name(name)
-        .expect("column")
-        .as_any()
-        .downcast_ref()
-        .expect("Utf8")
-}
-
-fn i64s<'a>(batch: &'a RecordBatch, name: &str) -> &'a Int64Array {
-    batch
-        .column_by_name(name)
-        .expect("column")
-        .as_any()
-        .downcast_ref()
-        .expect("Int64")
-}
-
 #[test]
 fn melt_transpose_and_all_pivot_aggregations_are_bounded() {
     let input = unary_fixture();
@@ -125,14 +94,11 @@ fn melt_transpose_and_all_pivot_aggregations_are_bounded() {
     assert_eq!(utf8(&melt, "variable").value(0), "num");
     let inferred = execute_batch(input.clone(), &plan("melt", json!({"id_columns":["id","group","kind","num"],"value_columns":[],"var_name":"kind","value_name":"value"}))).expect("melt collision");
     assert!(inferred.column_by_name("kind_1").is_some());
-    assert!(Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "melt".into(),
-            config: json!({"id_columns":[],"value_columns":["num"],"var_name":"x","value_name":"x"})
-        }]
-    }
+    assert!(piano(
+        "melt",
+        json!({"id_columns":[],"value_columns":["num"],"var_name":"x","value_name":"x"}),
+        Limits::default()
+    )
     .validate()
     .is_err());
 

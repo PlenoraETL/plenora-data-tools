@@ -2,9 +2,13 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::table_engine::SCHEMA_VERSION;
-use plenora_engine::{execute_binary, execute_complete_batch as execute_batch, Limits, Plan, Step};
-use serde_json::{json, Value};
+use plenora_engine::{execute_binary, execute_complete_batch as execute_batch};
+use serde_json::json;
+
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::plan;
 
 fn fixture() -> RecordBatch {
     RecordBatch::try_new(
@@ -34,19 +38,6 @@ fn fixture() -> RecordBatch {
         ],
     )
     .expect("fixture")
-}
-
-fn plan(operation: &str, config: Value) -> plenora_engine::ValidatedPlan {
-    Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .unwrap_or_else(|error| panic!("{operation}: {error}"))
 }
 
 #[test]

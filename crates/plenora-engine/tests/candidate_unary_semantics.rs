@@ -4,9 +4,13 @@ use plenora_core::arrow::array::{
     Array, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::table_engine::SCHEMA_VERSION;
-use plenora_engine::{execute_complete_batch as execute_batch, Limits, Plan, Step, ValidatedPlan};
+use plenora_engine::{execute_complete_batch as execute_batch, Limits};
 use serde_json::{json, Value};
+
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::{f64s, i64s, piano, plan, utf8};
 
 fn fixture() -> RecordBatch {
     RecordBatch::try_new(
@@ -74,49 +78,9 @@ fn fixture() -> RecordBatch {
     .expect("valid fixture")
 }
 
-fn plan(operation: &str, config: Value) -> ValidatedPlan {
-    Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .unwrap_or_else(|error| panic!("{operation}: {error}"))
-}
-
 fn run(operation: &str, config: Value) -> RecordBatch {
     execute_batch(fixture(), &plan(operation, config))
         .unwrap_or_else(|error| panic!("{operation}: {error}"))
-}
-
-fn utf8<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
-    batch
-        .column_by_name(name)
-        .expect("column")
-        .as_any()
-        .downcast_ref()
-        .expect("Utf8")
-}
-
-fn i64s<'a>(batch: &'a RecordBatch, name: &str) -> &'a Int64Array {
-    batch
-        .column_by_name(name)
-        .expect("column")
-        .as_any()
-        .downcast_ref()
-        .expect("Int64")
-}
-
-fn f64s<'a>(batch: &'a RecordBatch, name: &str) -> &'a Float64Array {
-    batch
-        .column_by_name(name)
-        .expect("column")
-        .as_any()
-        .downcast_ref()
-        .expect("Float64")
 }
 
 #[test]
@@ -410,24 +374,18 @@ fn aggregation_window_and_formula_variants_have_exact_semantics() {
     assert_eq!(utf8(&text, "label").value(1), "a-2");
     // Divisore LETTERALE zero -> errore di
     // configurazione, rilevato gia' alla validazione del piano.
-    assert!(Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "formula".into(),
-            config: json!({"new_column":"x","formula":"num / 0"})
-        }]
-    }
+    assert!(piano(
+        "formula",
+        json!({"new_column":"x","formula":"num / 0"}),
+        Limits::default()
+    )
     .validate()
     .is_err());
-    assert!(Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "formula".into(),
-            config: json!({"new_column":"x","formula":"(num"})
-        }]
-    }
+    assert!(piano(
+        "formula",
+        json!({"new_column":"x","formula":"(num"}),
+        Limits::default()
+    )
     .validate()
     .is_err());
 }
@@ -505,14 +463,11 @@ fn date_and_hash_ambiguity_policies_are_explicit_and_fail_closed() {
         ),
     )
     .is_err());
-    assert!(Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "date_extract".into(),
-            config: json!({"column":"value","date_format":""}),
-        }],
-    }
+    assert!(piano(
+        "date_extract",
+        json!({"column":"value","date_format":""}),
+        Limits::default()
+    )
     .validate()
     .is_err());
 
@@ -556,14 +511,11 @@ fn date_and_hash_ambiguity_policies_are_explicit_and_fail_closed() {
         max_string_bytes: 1,
         ..Limits::default()
     };
-    assert!(Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: short_strings,
-        steps: vec![Step {
-            operation: "md5_hash".into(),
-            config: json!({"columns":["value"],"null_literal":"xx"}),
-        }],
-    }
+    assert!(piano(
+        "md5_hash",
+        json!({"columns":["value"],"null_literal":"xx"}),
+        short_strings
+    )
     .validate()
     .is_err());
 }
@@ -592,14 +544,11 @@ fn dedup_advanced_respects_descending_priority() {
     )
     .expect("descending dedup");
     assert_eq!(utf8(&output, "label").value(0), "high");
-    assert!(Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "dedup_advanced".into(),
-            config: json!({"subset":["id"],"keep":"first","order_column":null,"ascending":false}),
-        }],
-    }
+    assert!(piano(
+        "dedup_advanced",
+        json!({"subset":["id"],"keep":"first","order_column":null,"ascending":false}),
+        Limits::default()
+    )
     .validate()
     .is_err());
 }

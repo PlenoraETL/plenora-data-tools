@@ -8,9 +8,8 @@ use serde_json::json;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::catalog::{OperationDescriptor, CATALOG};
 use plenora_core::contract::{
-    ContractCrs, ContractProperty, DataContract, FieldId,
-    GeometryDimensions, GeometryEncoding, PropertyConfidence,
-    PropertyScope,
+    ContractCrs, ContractProperty, DataContract, FieldId, GeometryDimensions, GeometryEncoding,
+    PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::PlenoraError;
@@ -19,9 +18,7 @@ use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V4};
 use crate::table_engine;
 
 use super::*;
-use crate::test_support::{
-    geo_contract_con, projected_crs, table_contract, wkb_geo_schema,
-};
+use crate::test_support::{geo_contract_con, projected_crs, table_contract, wkb_geo_schema};
 
 // ---------------------------------------------------------------------------
 // Fixture
