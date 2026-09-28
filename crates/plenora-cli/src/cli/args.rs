@@ -77,12 +77,21 @@ piu' di un input dichiarato e' l'unica forma ammessa.",
 ///
 /// L'unico posto in cui la superficie e' dichiarata: il controllo di §1.4 la
 /// confronta con l'help, il dispatch la usa per rifiutare. `--format` non
-/// compare: e' globale e lo toglie prima `strip_output_format`.
+/// compare fra i flag: e' globale e lo toglie prima `strip_output_format`;
+/// se il comando lo onora lo dice `markdown`.
 pub struct SuperficieComando {
     /// Flag ammessi, compresi quelli senza valore.
     flag: &'static [&'static str],
     /// Flag che possono comparire piu' di una volta.
     ripetibili: &'static [&'static str],
+    /// Il comando ha una resa `--format markdown`; senza, il flag si rifiuta.
+    markdown: bool,
+}
+
+impl SuperficieComando {
+    pub const fn ha_resa_markdown(&self) -> bool {
+        self.markdown
+    }
 }
 
 pub const fn superficie(comando: &str) -> Option<SuperficieComando> {
@@ -90,15 +99,18 @@ pub const fn superficie(comando: &str) -> Option<SuperficieComando> {
         b"catalog" => SuperficieComando {
             flag: &["--family"],
             ripetibili: &[],
+            markdown: true,
         },
         b"describe" | b"inspect-dataset" => SuperficieComando {
             flag: &["--input"],
             ripetibili: &[],
+            markdown: true,
         },
         b"validate" => SuperficieComando {
             flag: &["--plan", "--input", "--inputs", "--no-geo-fusion"],
             // `--input NOME=PERCORSO` si ripete: un input per occorrenza.
             ripetibili: &["--input"],
+            markdown: false,
         },
         b"run" => SuperficieComando {
             flag: &[
@@ -110,22 +122,27 @@ pub const fn superficie(comando: &str) -> Option<SuperficieComando> {
                 "--no-geo-fusion",
             ],
             ripetibili: &["--input"],
+            markdown: false,
         },
         b"capabilities" => SuperficieComando {
             flag: &[],
             ripetibili: &[],
+            markdown: true,
         },
         b"transform" => SuperficieComando {
             flag: &["--input", "--schema", "--output"],
             ripetibili: &[],
+            markdown: false,
         },
         b"spatial-join" => SuperficieComando {
             flag: &["--left", "--right", "--schema", "--output"],
             ripetibili: &[],
+            markdown: false,
         },
         b"transform-arrow" => SuperficieComando {
             flag: &["--input", "--schema", "--output", "--output-format"],
             ripetibili: &[],
+            markdown: false,
         },
         b"pair-arrow" => SuperficieComando {
             flag: &[
@@ -136,10 +153,12 @@ pub const fn superficie(comando: &str) -> Option<SuperficieComando> {
                 "--output-format",
             ],
             ripetibili: &[],
+            markdown: false,
         },
         b"self-test" => SuperficieComando {
             flag: &["--output"],
             ripetibili: &[],
+            markdown: false,
         },
         _ => return None,
     })

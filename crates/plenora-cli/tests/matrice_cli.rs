@@ -1164,3 +1164,71 @@ fn scrivi_input_melt(path: &Path, righe: i64) {
     writer.write(&record).expect("write");
     writer.finish().expect("finish");
 }
+
+#[test]
+fn markdown_si_rifiuta_su_ogni_comando_senza_resa_leggibile() {
+    // Il controllo sta nel dispatch, prima del comando: vale anche senza
+    // argomenti, e un comando nuovo senza resa markdown lo eredita dalla
+    // superficie invece di doverselo ricordare.
+    let leggibili = ["catalog", "capabilities", "describe", "inspect-dataset"];
+    for comando in COMANDI.iter().chain(std::iter::once(&"self-test")) {
+        if leggibili.contains(comando) {
+            continue;
+        }
+        let output = esegui(&["--format", "markdown", comando]);
+        assert_eq!(output.status.code(), Some(2), "{comando}");
+        let envelope = envelope_di(&output, comando);
+        assert!(
+            envelope["error"]["message"].as_str().is_some_and(
+                |message| message.contains(&format!("non e' disponibile per `{comando}`"))
+            ),
+            "{comando}: {envelope}"
+        );
+    }
+}
+
+#[test]
+fn self_test_emette_un_documento_json() {
+    let output = esegui(&["self-test"]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let documento: Value = serde_json::from_slice(&output.stdout).expect("stdout JSON");
+    assert_eq!(documento["status"], "ok");
+    assert!(documento["operations"].as_u64().is_some_and(|n| n > 0));
+}
+
+#[test]
+fn un_piano_legacy_malformato_e_un_rifiuto_in_validazione() {
+    // `DataMapping` senza tag deriverebbe la fase `write`: in `validate` non
+    // si scrive nulla, e in `run` il piano si rifiuta prima di scrivere.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let piano = directory.path().join("piano.json");
+    std::fs::write(&piano, br#"{"schema_version":1,"steps":false}"#).expect("piano");
+    let piano_s = piano.to_str().expect("utf-8");
+    let uscita = directory.path().join("uscita.arrow");
+    let uscita_s = uscita.to_str().expect("utf-8");
+    for args in [
+        vec!["validate", "--plan", piano_s, "--input", "x.arrow"],
+        vec![
+            "run", "--plan", piano_s, "--input", "x.arrow", "--output", uscita_s,
+        ],
+    ] {
+        let output = esegui(&args);
+        let envelope = envelope_di(&output, args[0]);
+        assert_eq!(envelope["error"]["category"], "data_mapping", "{}", args[0]);
+        assert_eq!(envelope["error"]["phase"], "validate", "{}", args[0]);
+    }
+}
+
+#[test]
+fn l_aiuto_non_scavalca_il_rifiuto_del_formato() {
+    // La validazione precede ogni uscita anticipata, help compreso: chiedere
+    // l'aiuto in markdown a un comando che non ha resa markdown e' rifiutato
+    // come ogni altra invocazione di quel comando.
+    let output = esegui(&["--format", "markdown", "run", "--help"]);
+    assert_eq!(output.status.code(), Some(2));
+    envelope_di(&output, "run --help in markdown");
+    assert!(esegui(&["--format", "markdown", "catalog", "--help"])
+        .status
+        .success());
+}

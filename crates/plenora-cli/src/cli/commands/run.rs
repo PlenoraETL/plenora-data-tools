@@ -23,9 +23,9 @@ use crate::cli::contract_discovery::{
 #[cfg(target_os = "linux")]
 use crate::installa_gestore_segnale_isolato;
 use crate::{
-    campi_della_pubblicazione, contract, contract_error_missing, has_flag, install_ctrlc_handler,
-    metrics_json, optional_value_after, read_control_plan_text, run_pipeline, testo_piano_dag,
-    value_after, OutputFormat, PlanInputsProbe,
+    campi_della_pubblicazione, contract, contract_error_missing, da_testo_di_controllo, has_flag,
+    install_ctrlc_handler, metrics_json, optional_value_after, read_control_plan_text,
+    run_pipeline, testo_piano_dag, value_after, PlanInputsProbe,
 };
 
 /// `run` di un piano DAG: esecuzione DAG e pubblicazione atomica dell'output,
@@ -41,7 +41,7 @@ pub fn run_dag(
 ) -> Result<(), Box<dyn Error>> {
     // Prima del lavoro, con la stessa classe della pubblicazione.
     verifica_destinazione_libera(output_path)?;
-    let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
+    let probe: PlanInputsProbe = da_testo_di_controllo(plan_text)?;
     let pairs = pair_v4_inputs(&probe, inputs)?;
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;
@@ -248,7 +248,7 @@ pub fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), Plenora
     // pubblicati non sarebbero `source_row_zero_based`. Si richiede DAG.
     // L'autorita' e' `OperationDescriptor::emits_row_diagnostics`, senza
     // liste locali; la scansione precede la validazione legacy.
-    let document: serde_json::Value = serde_json::from_str(plan_text)?;
+    let document: serde_json::Value = da_testo_di_controllo(plan_text)?;
     let requires_v4 = document
         .get("steps")
         .and_then(serde_json::Value::as_array)
@@ -273,7 +273,7 @@ pub fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), Plenora
             "operazione con diagnostics row-scoped richiede un piano DAG".to_owned(),
         ));
     }
-    let validated: Plan = serde_json::from_str(plan_text)?;
+    let validated: Plan = da_testo_di_controllo(plan_text)?;
     let _ = validated.validate()?;
     Ok(())
 }
@@ -281,7 +281,6 @@ pub fn reject_legacy_row_diagnostics_plan(plan_text: &str) -> Result<(), Plenora
 /// Dispatch di `run`: DAG se il piano dichiara `schema_version` >= 4,
 /// pipeline tabellare legacy altrimenti (comportamento invariato).
 pub fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
-    OutputFormat::require_json("run")?;
     let plan_path = value_after(args, "--plan")?;
     let output_path = value_after(args, "--output")?;
     let plan_text = read_control_plan_text(Path::new(&plan_path))?;
@@ -302,14 +301,14 @@ pub fn run_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     }
     reject_legacy_row_diagnostics_plan(&plan_text)?;
     let esito = run_pipeline(
-        &plan_path,
+        &plan_text,
         &value_after(args, "--input")?,
         optional_value_after(args, "--right")?.as_deref(),
         &output_path,
     )?;
     // Il ramo legacy emette un documento di successo, come il ramo DAG: senza,
     // l'avvertenza di pulizia non avrebbe dove uscire. Il formato e' gia' JSON
-    // per contratto (`OutputFormat::require_json`).
+    // per contratto (`OutputFormat::require_json` nel dispatch).
     let mut documento = serde_json::Map::new();
     documento.insert(
         "status".to_owned(),
