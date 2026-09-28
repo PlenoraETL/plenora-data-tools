@@ -85,6 +85,9 @@ pub mod spill;
 pub mod strings;
 pub mod utility;
 
+#[cfg(test)]
+mod test_support;
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -1588,9 +1591,10 @@ mod tests {
     }
 
     use plenora_core::arrow::array::{Int64Array, StringArray};
-    use plenora_core::arrow::schema::{DataType, Field, Schema};
+    use plenora_core::arrow::schema::DataType;
 
     use super::*;
+    use crate::test_support::single_column_batch;
 
     #[test]
     fn il_default_governato_e_lo_stesso_di_plenora_core() {
@@ -1636,11 +1640,12 @@ mod tests {
     }
 
     fn batch() -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![Some("x"), None]))],
+        single_column_batch(
+            "a",
+            Arc::new(StringArray::from(vec![Some("x"), None])),
+            DataType::Utf8,
+            true,
         )
-        .expect("fixture")
     }
 
     #[test]
@@ -1658,11 +1663,12 @@ mod tests {
         assert!(validate_output_name(&"x".repeat(1_025)).is_err());
         assert!(column_index(&input, "missing").is_err());
 
-        let integers = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)])),
-            vec![Arc::new(Int64Array::from(vec![1]))],
-        )
-        .expect("integers");
+        let integers = single_column_batch(
+            "n",
+            Arc::new(Int64Array::from(vec![1])),
+            DataType::Int64,
+            false,
+        );
         assert!(utf8_column(&integers, "n").is_err());
     }
 

@@ -1070,6 +1070,7 @@ mod tests {
     use plenora_core::arrow::schema::{DataType, Field, Schema};
 
     use super::*;
+    use crate::test_support::single_column_batch;
 
     /// Fixture con null, -0.0, NaN, zero in coda e testi (anche vuoti).
     fn fixture() -> RecordBatch {
@@ -1379,11 +1380,12 @@ mod tests {
             .join(" + ");
         assert_equivalent(&batch, &long);
 
-        let all_null = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)])),
-            vec![Arc::new(Float64Array::from(vec![None, None, None]))],
-        )
-        .expect("all null");
+        let all_null = single_column_batch(
+            "f",
+            Arc::new(Float64Array::from(vec![None, None, None])),
+            DataType::Float64,
+            true,
+        );
         assert_equivalent(&all_null, "f * 2 + 1");
     }
 
@@ -1402,11 +1404,12 @@ mod tests {
         // colonna va risolta anche senza righe. Risolverla solo quando ci
         // sono valori farebbe riuscire sul batch vuoto una formula che
         // nomina una colonna inesistente, e fallire su quello pieno.
-        let empty = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)])),
-            vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],
-        )
-        .expect("empty");
+        let empty = single_column_batch(
+            "f",
+            Arc::new(Float64Array::from(Vec::<f64>::new())),
+            DataType::Float64,
+            true,
+        );
         formula(&empty, &config("missing + 1"))
             .expect_err("colonna assente: il tipo non e' determinabile");
         let output = formula(&empty, &config("f + 1")).expect("zero righe");

@@ -629,6 +629,7 @@ mod tests {
     use plenora_core::diagnostics::RowDiagnosticsCompleteness;
 
     use super::*;
+    use crate::test_support::{assert_same_outcome as assert_equivalent, single_column_batch};
 
     // -----------------------------------------------------------------------
     // Percorsi generici, indipendenti dai fast path: sono l'oracolo della
@@ -811,11 +812,12 @@ mod tests {
     }
 
     fn utf8_batch(values: Vec<Option<&str>>) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("ts", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(values))],
+        single_column_batch(
+            "ts",
+            Arc::new(StringArray::from(values)),
+            DataType::Utf8,
+            true,
         )
-        .expect("fixture")
     }
 
     /// Date limite tutte valide per `%Y-%m-%d %H:%M:%S`: epoch, pre-1970,
@@ -860,24 +862,6 @@ mod tests {
         let fast = fast.expect("fast path rifiuta valori validi");
         let generic = generic.expect("oracolo generico rifiuta valori validi");
         assert_eq!(fast, generic);
-    }
-
-    /// Equivalenza fast/generico su qualunque esito: stessi batch, oppure
-    /// stessa categoria, stesso messaggio e stessa diagnostica row-scoped.
-    fn assert_equivalent(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
-        match (fast, generic) {
-            (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
-            (Err(fast), Err(generic)) => {
-                assert_eq!(fast.category(), generic.category());
-                assert_eq!(fast.to_string(), generic.to_string());
-                assert_eq!(fast.row_diagnostics(), generic.row_diagnostics());
-            }
-            (fast, generic) => panic!(
-                "fast e generico divergono: fast ok={}, generico ok={}",
-                fast.is_ok(),
-                generic.is_ok()
-            ),
-        }
     }
 
     /// Rifiuto row-scoped atteso: righe, cause e colonne esatte.

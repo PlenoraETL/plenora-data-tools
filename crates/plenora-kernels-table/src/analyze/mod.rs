@@ -3586,17 +3586,17 @@ mod tests {
             .unwrap()
         }
 
-        #[allow(clippy::needless_pass_by_value)]
-        fn check_unary(
+        /// Confronta lo schema dedotto da `analyze_table_contract` sugli
+        /// `inputs` con quello prodotto davvero dal kernel.
+        fn check_schema(
             op: &str,
-            batch: &RecordBatch,
-            config: Value,
-            kernel: impl FnOnce(&RecordBatch, &Value) -> Result<RecordBatch>,
+            inputs: &[DataContract],
+            config: &Value,
+            expected: Result<RecordBatch>,
         ) -> DataContract {
-            let expected = kernel(batch, &config).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
-            let input = geo_input(batch);
+            let expected = expected.unwrap_or_else(|e| panic!("kernel {op}: {e}"));
             let analyzed =
-                analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
+                analyze_table_contract(op, inputs, config, &mut FieldAllocator::default())
                     .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
             assert_eq!(
                 signature(&analyzed.schema),
@@ -3607,21 +3607,29 @@ mod tests {
         }
 
         #[allow(clippy::needless_pass_by_value)]
+        fn check_unary(
+            op: &str,
+            batch: &RecordBatch,
+            config: Value,
+            kernel: impl FnOnce(&RecordBatch, &Value) -> Result<RecordBatch>,
+        ) -> DataContract {
+            let expected = kernel(batch, &config);
+            check_schema(op, &[geo_input(batch)], &config, expected)
+        }
+
+        #[allow(clippy::needless_pass_by_value)]
         fn check_unary_plain(
             op: &str,
             batch: &RecordBatch,
             config: Value,
             kernel: impl FnOnce(&RecordBatch, &Value) -> Result<RecordBatch>,
         ) {
-            let expected = kernel(batch, &config).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
-            let input = DataContract::tabular(batch.schema());
-            let analyzed =
-                analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
-                    .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
-            assert_eq!(
-                signature(&analyzed.schema),
-                signature(&expected.schema()),
-                "schema diverso per {op}"
+            let expected = kernel(batch, &config);
+            check_schema(
+                op,
+                &[DataContract::tabular(batch.schema())],
+                &config,
+                expected,
             );
         }
 
@@ -3633,17 +3641,9 @@ mod tests {
             config: Value,
             kernel: impl FnOnce(&RecordBatch, &RecordBatch, &Value) -> Result<RecordBatch>,
         ) {
-            let expected =
-                kernel(left, right, &config).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
+            let expected = kernel(left, right, &config);
             let inputs = [geo_input(left), DataContract::tabular(right.schema())];
-            let analyzed =
-                analyze_table_contract(op, &inputs, &config, &mut FieldAllocator::default())
-                    .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
-            assert_eq!(
-                signature(&analyzed.schema),
-                signature(&expected.schema()),
-                "schema diverso per {op}"
-            );
+            check_schema(op, &inputs, &config, expected);
         }
 
         fn cfg<T: serde::de::DeserializeOwned>(config: &Value) -> T {
