@@ -420,25 +420,34 @@ mod tests {
     use super::*;
 
     /// Percorso generico, indipendente dal fast path: riferimento per
-    /// l'equivalenza
-    /// semantica (oracolo) del fast path di `date_extract`.
+    /// l'equivalenza semantica (oracolo) del fast path di `date_extract`.
+    /// Codifica la semantica corrente: ogni valore non parsabile rifiuta
+    /// l'intero batch con diagnostica row-scoped, qualunque sia il token
+    /// `invalid`; null resta null.
     fn generic_date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;
         let source = batch.column(index);
-        let parsed = (0..batch.num_rows())
-            .map(|row| {
-                let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-                    return Ok(None);
-                };
-                match parse_datetime(&value, config.date_format.as_deref()) {
-                    Some(parsed) => Ok(Some(parsed)),
-                    None if matches!(config.invalid, InvalidDatePolicy::Null) => Ok(None),
-                    None => Err(PlenoraError::InvalidPlan(format!(
-                        "date_extract: valore non valido alla riga {row}"
-                    ))),
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut rejections = Vec::new();
+        let mut parsed = Vec::with_capacity(batch.num_rows());
+        for row in 0..batch.num_rows() {
+            let Some(value) = scalar_as_string(source.as_ref(), row)? else {
+                parsed.push(None);
+                continue;
+            };
+            let value = parse_datetime(&value, config.date_format.as_deref());
+            if value.is_none() {
+                rejections.push(RowRejection {
+                    row,
+                    cause: "conversion.invalid_datetime",
+                    column: Some(&config.column),
+                });
+            }
+            parsed.push(value);
+        }
+        reject_rows(
+            &rejections,
+            "valori temporali rifiutati; consultare row_diagnostics",
+        )?;
         let prefix = if config.prefix.is_empty() {
             format!("{}_", config.column)
         } else {
@@ -500,12 +509,64 @@ mod tests {
         ]
     }
 
+    fn utf8_batch(values: Vec<Option<&str>>) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("ts", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(values))],
+        )
+        .expect("fixture")
+    }
+
+    /// Equivalenza fast/generico dove entrambi devono riuscire: il confronto
+    /// dei batch e' l'unico esito accettato.
+    fn assert_same_output(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
+        let fast = fast.expect("fast path rifiuta valori validi");
+        let generic = generic.expect("oracolo generico rifiuta valori validi");
+        assert_eq!(fast, generic);
+    }
+
+    /// Equivalenza fast/generico su qualunque esito: stessi batch, oppure
+    /// stessa categoria, stesso messaggio e stessa diagnostica row-scoped.
     fn assert_equivalent(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
-            (Err(fast), _) if fast.row_diagnostics().is_some() => {}
-            (fast, generic) => assert_eq!(fast.is_err(), generic.is_err()),
+            (Err(fast), Err(generic)) => {
+                assert_eq!(fast.category(), generic.category());
+                assert_eq!(fast.to_string(), generic.to_string());
+                assert_eq!(fast.row_diagnostics(), generic.row_diagnostics());
+            }
+            (fast, generic) => panic!(
+                "fast e generico divergono: fast ok={}, generico ok={}",
+                fast.is_ok(),
+                generic.is_ok()
+            ),
         }
+    }
+
+    /// Rifiuto row-scoped atteso: esattamente `rows`, causa
+    /// `invalid_datetime` sulla colonna `ts`.
+    fn assert_rejected_rows(result: Result<RecordBatch>, rows: &[u64]) {
+        let error = result.expect_err("righe invalide accettate");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped mancante");
+        assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+        assert_eq!(
+            report.observed_total,
+            u64::try_from(rows.len()).expect("fixture")
+        );
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            rows
+        );
+        assert!(report.examples.iter().all(|example| {
+            example.cause == "conversion.invalid_datetime"
+                && example.column.as_deref() == Some("ts")
+        }));
     }
 
     #[test]
@@ -614,22 +675,23 @@ mod tests {
 
     #[test]
     fn date_extract_fast_path_matches_generic_with_explicit_format() {
-        // Date limite: epoch, pre-1970, bisestile, confine ISO week, date-only.
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("ts", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![
-                Some("1970-01-01 00:00:00"), // epoch, ISO week 1, giovedi'
-                Some("1969-12-31 23:59:59"), // pre-epoch
-                Some("2000-02-29 12:30:45"), // bisestile
-                Some("2021-01-01 06:07:08"), // ISO week 53 del 2020
-                Some("2019-12-30 23:59:59"), // ISO week 1 del 2020
-                Some("2023-02-29 00:00:00"), // inesistente
-                Some("2024-02-29"),          // date-only: fallisce
-                Some(""),
-                None,
-            ]))],
-        )
-        .expect("fixture");
+        // Date limite valide: epoch, pre-1970, bisestile, confine ISO week.
+        let valid = utf8_batch(vec![
+            Some("1970-01-01 00:00:00"), // epoch, ISO week 1, giovedi'
+            Some("1969-12-31 23:59:59"), // pre-epoch
+            Some("2000-02-29 12:30:45"), // bisestile
+            Some("2021-01-01 06:07:08"), // ISO week 53 del 2020
+            Some("2019-12-30 23:59:59"), // ISO week 1 del 2020
+            None,
+        ]);
+        // Righe non parsabili intercalate: 1, 2 e 4.
+        let with_invalid = utf8_batch(vec![
+            Some("1970-01-01 00:00:00"),
+            Some("2023-02-29 00:00:00"), // inesistente
+            Some("2024-02-29"),          // date-only: fallisce
+            None,
+            Some(""),
+        ]);
         for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
             let config = DateExtract {
                 column: "ts".into(),
@@ -638,49 +700,73 @@ mod tests {
                 date_format: Some("%Y-%m-%d %H:%M:%S".into()),
                 invalid,
             };
-            assert_equivalent(
-                date_extract(&batch, &config),
-                generic_date_extract(&batch, &config),
+            assert_same_output(
+                date_extract(&valid, &config),
+                generic_date_extract(&valid, &config),
             );
+            assert_equivalent(
+                date_extract(&with_invalid, &config),
+                generic_date_extract(&with_invalid, &config),
+            );
+            assert_rejected_rows(date_extract(&with_invalid, &config), &[1, 2, 4]);
         }
         // Formato esplicito date-only (fallback `NaiveDate`).
-        let config = DateExtract {
-            column: "ts".into(),
-            parts: all_parts(),
-            prefix: "p_".into(),
-            date_format: Some("%Y-%m-%d".into()),
-            invalid: InvalidDatePolicy::Null,
-        };
-        assert_equivalent(
-            date_extract(&batch, &config),
-            generic_date_extract(&batch, &config),
-        );
+        let dates_only = utf8_batch(vec![
+            Some("1970-01-01"),
+            Some("2000-02-29"),
+            Some("2020-12-31"), // ISO week 53
+            None,
+        ]);
+        let dates_only_invalid = utf8_batch(vec![
+            Some("1970-01-01"),
+            Some("2024-02-29 10:00:00"), // trailing input: fallisce
+            Some("2023-02-29"),
+        ]);
+        for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
+            let config = DateExtract {
+                column: "ts".into(),
+                parts: all_parts(),
+                prefix: "p_".into(),
+                date_format: Some("%Y-%m-%d".into()),
+                invalid,
+            };
+            assert_same_output(
+                date_extract(&dates_only, &config),
+                generic_date_extract(&dates_only, &config),
+            );
+            assert_equivalent(
+                date_extract(&dates_only_invalid, &config),
+                generic_date_extract(&dates_only_invalid, &config),
+            );
+            assert_rejected_rows(date_extract(&dates_only_invalid, &config), &[1, 2]);
+        }
     }
 
     #[test]
     fn date_extract_fast_path_matches_generic_with_default_multi_format() {
-        // Tutti i formati del parser di default, piu' valori non parsabili.
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("ts", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![
-                Some("2024-01-15T10:30:00"),
-                Some("2024-01-15 10:30:00"),
-                Some("15/01/2024 10:30:00"),
-                Some("2024-01-15"),
-                Some("15/01/2024"),
-                Some("15-01-2024"),
-                Some("2024/01/15"),
-                Some("1970-01-01"),
-                Some("1969-12-31 23:59:59"),
-                Some("29/02/2000"),
-                Some("29/02/2023"), // inesistente
-                Some("2024-13-01"), // mese 13
-                Some("non una data"),
-                Some(""),
-                None,
-            ]))],
-        )
-        .expect("fixture");
+        // Tutti i formati del parser di default, solo valori validi.
+        let valid = utf8_batch(vec![
+            Some("2024-01-15T10:30:00"),
+            Some("2024-01-15 10:30:00"),
+            Some("15/01/2024 10:30:00"),
+            Some("2024-01-15"),
+            Some("15/01/2024"),
+            Some("15-01-2024"),
+            Some("2024/01/15"),
+            Some("1970-01-01"),
+            Some("1969-12-31 23:59:59"),
+            Some("29/02/2000"),
+            None,
+        ]);
+        // Valori non parsabili da nessun formato, intercalati: 1, 2, 3 e 5.
+        let with_invalid = utf8_batch(vec![
+            Some("2024-01-15"),
+            Some("29/02/2023"), // inesistente
+            Some("2024-13-01"), // mese 13
+            Some("non una data"),
+            None,
+            Some(""),
+        ]);
         for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
             let config = DateExtract {
                 column: "ts".into(),
@@ -689,10 +775,15 @@ mod tests {
                 date_format: None,
                 invalid,
             };
-            assert_equivalent(
-                date_extract(&batch, &config),
-                generic_date_extract(&batch, &config),
+            assert_same_output(
+                date_extract(&valid, &config),
+                generic_date_extract(&valid, &config),
             );
+            assert_equivalent(
+                date_extract(&with_invalid, &config),
+                generic_date_extract(&with_invalid, &config),
+            );
+            assert_rejected_rows(date_extract(&with_invalid, &config), &[1, 2, 3, 5]);
         }
     }
 }

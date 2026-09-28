@@ -632,20 +632,48 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // Percorsi generici, indipendenti dai fast path: sono l'oracolo della
-    // loro equivalenza semantica.
+    // loro equivalenza semantica. Codificano la semantica corrente: ogni
+    // valore non parsabile, fuori range o con ora locale ambigua/inesistente
+    // rifiuta l'intero batch con diagnostica row-scoped, qualunque sia il
+    // token `invalid`; null resta null.
     // -----------------------------------------------------------------------
+
+    /// Esito per riga dell'oracolo: valore (o null) oppure rifiuto con causa
+    /// e colonna.
+    type RowOutcome<'a, T> = std::result::Result<Option<T>, (&'static str, Option<&'a str>)>;
+
+    /// Chiude l'oracolo: rifiuti row-scoped se ce ne sono, altrimenti i valori.
+    fn collect_or_reject<T>(outcomes: Vec<RowOutcome<'_, T>>) -> Result<Vec<Option<T>>> {
+        let rejections = outcomes
+            .iter()
+            .enumerate()
+            .filter_map(|(row, outcome)| {
+                outcome
+                    .as_ref()
+                    .err()
+                    .map(|&(cause, column)| RowRejection { row, cause, column })
+            })
+            .collect::<Vec<_>>();
+        reject_rows(
+            &rejections,
+            "valori temporali rifiutati; consultare row_diagnostics",
+        )?;
+        Ok(outcomes
+            .into_iter()
+            .map(|outcome| outcome.unwrap_or(None))
+            .collect())
+    }
 
     fn generic_date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;
-        let values = (0..batch.num_rows())
+        let outcomes = (0..batch.num_rows())
             .map(|row| {
                 let Some(value) = scalar_as_string(batch.column(index).as_ref(), row)? else {
-                    return Ok(None);
+                    return Ok(Ok(None));
                 };
-                parse(&value, &config.input_format).map_or_else(
-                    || invalid(&config.invalid, "date_format", row),
-                    |value| Ok(Some(value.format(&config.output_format).to_string())),
-                )
+                Ok(parse(&value, &config.input_format)
+                    .map(|value| Some(value.format(&config.output_format).to_string()))
+                    .ok_or(("conversion.invalid_datetime", Some(config.column.as_str()))))
             })
             .collect::<Result<Vec<_>>>()?;
         replace_or_append(
@@ -653,23 +681,24 @@ mod tests {
             &config.output_column,
             DataType::Utf8,
             true,
-            Arc::new(StringArray::from(values)),
+            Arc::new(StringArray::from(collect_or_reject(outcomes)?)),
         )
     }
 
     fn generic_date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;
-        let values = (0..batch.num_rows())
+        let outcomes = (0..batch.num_rows())
             .map(|row| {
                 let Some(value) = scalar_as_string(batch.column(index).as_ref(), row)? else {
-                    return Ok(None);
+                    return Ok(Ok(None));
                 };
-                let shifted = parse(&value, &config.input_format)
-                    .and_then(|value| shift(value, config.amount, &config.unit));
-                shifted.map_or_else(
-                    || invalid(&config.invalid, "date_add", row),
-                    |value| Ok(Some(value.format(&config.output_format).to_string())),
-                )
+                let column = Some(config.column.as_str());
+                let Some(value) = parse(&value, &config.input_format) else {
+                    return Ok(Err(("conversion.invalid_datetime", column)));
+                };
+                Ok(shift(value, config.amount, &config.unit)
+                    .map(|value| Some(value.format(&config.output_format).to_string()))
+                    .ok_or(("conversion.datetime_range", column)))
             })
             .collect::<Result<Vec<_>>>()?;
         replace_or_append(
@@ -677,10 +706,11 @@ mod tests {
             &config.output_column,
             DataType::Utf8,
             true,
-            Arc::new(StringArray::from(values)),
+            Arc::new(StringArray::from(collect_or_reject(outcomes)?)),
         )
     }
 
+    #[allow(clippy::cast_precision_loss)] // Come `diff_value`: l'output e' Float64.
     fn generic_date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
         let start_index = column_index(batch, &config.start_column)?;
         let end_index = column_index(batch, &config.end_column)?;
@@ -690,21 +720,30 @@ mod tests {
             DiffUnit::Minutes => 60.0,
             DiffUnit::Seconds => 1.0,
         };
-        let values = (0..batch.num_rows())
+        let outcomes = (0..batch.num_rows())
             .map(|row| {
                 let start = scalar_as_string(batch.column(start_index).as_ref(), row)?;
                 let end = scalar_as_string(batch.column(end_index).as_ref(), row)?;
-                let parsed = start
-                    .as_deref()
-                    .and_then(|value| parse(value, &config.input_format))
-                    .zip(
-                        end.as_deref()
-                            .and_then(|value| parse(value, &config.input_format)),
-                    );
-                parsed.map_or_else(
-                    || invalid(&config.invalid, "date_diff", row),
-                    |(start, end)| diff_value(start, end, divisor, row).map(Some),
-                )
+                let (Some(start), Some(end)) = (start, end) else {
+                    return Ok(Ok(None));
+                };
+                let Some(start) = parse(&start, &config.input_format) else {
+                    return Ok(Err((
+                        "conversion.invalid_datetime",
+                        Some(config.start_column.as_str()),
+                    )));
+                };
+                let Some(end) = parse(&end, &config.input_format) else {
+                    return Ok(Err((
+                        "conversion.invalid_datetime",
+                        Some(config.end_column.as_str()),
+                    )));
+                };
+                Ok(end
+                    .signed_duration_since(start)
+                    .num_nanoseconds()
+                    .map(|nanoseconds| Some(nanoseconds as f64 / 1_000_000_000.0 / divisor))
+                    .ok_or(("conversion.datetime_range", None)))
             })
             .collect::<Result<Vec<_>>>()?;
         replace_or_append(
@@ -712,7 +751,7 @@ mod tests {
             &config.output_column,
             DataType::Float64,
             true,
-            Arc::new(Float64Array::from(values)),
+            Arc::new(Float64Array::from(collect_or_reject(outcomes)?)),
         )
     }
 
@@ -729,26 +768,27 @@ mod tests {
             .target_timezone
             .parse()
             .map_err(|_| PlenoraError::InvalidPlan("target_timezone non valida".into()))?;
-        let values = (0..batch.num_rows())
+        let outcomes = (0..batch.num_rows())
             .map(|row| {
                 let Some(value) = scalar_as_string(batch.column(index).as_ref(), row)? else {
-                    return Ok(None);
+                    return Ok(Ok(None));
                 };
+                let column = Some(config.column.as_str());
                 let Some(parsed) = parse(&value, &config.input_format) else {
-                    return invalid(&config.invalid, "timezone_convert", row);
+                    return Ok(Err(("conversion.invalid_datetime", column)));
                 };
-                let localized = localize(source, parsed, &config.ambiguous, row)?;
-                localized.map_or_else(
-                    || invalid(&config.invalid, "timezone_convert", row),
-                    |value| {
-                        Ok(Some(
-                            value
-                                .with_timezone(&target)
-                                .format(&config.output_format)
-                                .to_string(),
-                        ))
-                    },
-                )
+                Ok(match source.from_local_datetime(&parsed) {
+                    LocalResult::Single(value) => Ok(Some(
+                        value
+                            .with_timezone(&target)
+                            .format(&config.output_format)
+                            .to_string(),
+                    )),
+                    LocalResult::Ambiguous(_, _) => {
+                        Err(("conversion.ambiguous_local_time", column))
+                    }
+                    LocalResult::None => Err(("conversion.nonexistent_local_time", column)),
+                })
             })
             .collect::<Result<Vec<_>>>()?;
         replace_or_append(
@@ -756,7 +796,7 @@ mod tests {
             &config.output_column,
             DataType::Utf8,
             true,
-            Arc::new(StringArray::from(values)),
+            Arc::new(StringArray::from(collect_or_reject(outcomes)?)),
         )
     }
 
@@ -768,33 +808,101 @@ mod tests {
         .expect("fixture")
     }
 
-    /// Date limite: epoch, pre-1970, anni bisestili e non, non valida, vuota,
-    /// date-only, estremi di range chrono, transizioni DST Europe/Rome
-    /// (ora inesistente e ora ambigua), null.
-    fn edge_values() -> Vec<Option<&'static str>> {
+    /// Date limite tutte valide per `%Y-%m-%d %H:%M:%S`: epoch, pre-1970,
+    /// anni bisestili e non, transizioni DST Europe/Rome (ora ambigua e ora
+    /// inesistente, valide come naive e rifiutate solo dalla localizzazione
+    /// in Europe/Rome), estremo alto, null.
+    fn valid_edge_values() -> Vec<Option<&'static str>> {
         vec![
             Some("1970-01-01 00:00:00"), // epoch
             Some("1969-12-31 23:59:59"), // pre-epoch
             Some("1900-01-01 00:00:00"),
             Some("2000-02-29 12:30:45"), // bisestile (divisibile per 400)
             Some("2100-02-28 23:59:59"), // 2100 NON bisestile
-            Some("2023-02-29 00:00:00"), // data inesistente
             Some("2024-10-27 02:30:00"), // ambigua Europe/Rome (fine DST)
             Some("2024-03-31 02:30:00"), // inesistente Europe/Rome (inizio DST)
-            Some("2024-02-29"),          // date-only (formato datetime: fallisce)
-            Some(""),                    // vuota
-            Some("non una data"),
             Some("9999-12-31 23:59:59"),
             None,
         ]
     }
 
+    /// Righe di `edge_values_with_invalid` non parsabili con
+    /// `%Y-%m-%d %H:%M:%S`.
+    const INVALID_EDGE_ROWS: [u64; 4] = [1, 3, 5, 7];
+
+    /// Date limite con righe non parsabili intercalate a righe valide e null.
+    fn edge_values_with_invalid() -> Vec<Option<&'static str>> {
+        vec![
+            Some("1970-01-01 00:00:00"),
+            Some("2023-02-29 00:00:00"), // data inesistente
+            Some("2000-02-29 12:30:45"),
+            Some("2024-02-29"), // date-only (formato datetime: fallisce)
+            None,
+            Some(""), // vuota
+            Some("9999-12-31 23:59:59"),
+            Some("non una data"),
+        ]
+    }
+
+    /// Equivalenza fast/generico dove entrambi devono riuscire: il confronto
+    /// dei batch e' l'unico esito accettato.
+    fn assert_same_output(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
+        let fast = fast.expect("fast path rifiuta valori validi");
+        let generic = generic.expect("oracolo generico rifiuta valori validi");
+        assert_eq!(fast, generic);
+    }
+
+    /// Equivalenza fast/generico su qualunque esito: stessi batch, oppure
+    /// stessa categoria, stesso messaggio e stessa diagnostica row-scoped.
     fn assert_equivalent(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
-            (Err(fast), _) if fast.row_diagnostics().is_some() => {}
-            (fast, generic) => assert_eq!(fast.is_err(), generic.is_err()),
+            (Err(fast), Err(generic)) => {
+                assert_eq!(fast.category(), generic.category());
+                assert_eq!(fast.to_string(), generic.to_string());
+                assert_eq!(fast.row_diagnostics(), generic.row_diagnostics());
+            }
+            (fast, generic) => panic!(
+                "fast e generico divergono: fast ok={}, generico ok={}",
+                fast.is_ok(),
+                generic.is_ok()
+            ),
         }
+    }
+
+    /// Rifiuto row-scoped atteso: righe, cause e colonne esatte.
+    fn assert_rejected(result: Result<RecordBatch>, expected: &[(u64, &str, Option<&str>)]) {
+        let error = result.expect_err("righe invalide accettate");
+        let report = error
+            .row_diagnostics()
+            .expect("diagnostica row-scoped mancante");
+        assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+        assert_eq!(
+            report.observed_total,
+            u64::try_from(expected.len()).expect("fixture")
+        );
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| (
+                    example.source_index,
+                    example.cause.as_str(),
+                    example.column.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    /// Righe invalide di `edge_values_with_invalid`, tutte con la stessa causa.
+    fn invalid_edge_rejections(
+        cause: &'static str,
+    ) -> Vec<(u64, &'static str, Option<&'static str>)> {
+        INVALID_EDGE_ROWS
+            .iter()
+            .map(|row| (*row, cause, Some("ts")))
+            .collect()
     }
 
     fn assert_complete_rows(error: &PlenoraError, expected: &[u64], column: &str) {
@@ -913,38 +1021,57 @@ mod tests {
 
     #[test]
     fn date_format_fast_path_matches_generic_on_edge_dates() {
-        let batch = utf8_batch(edge_values());
+        let valid = utf8_batch(valid_edge_values());
+        let with_invalid = utf8_batch(edge_values_with_invalid());
         for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
             let config = format_config(invalid);
+            assert_same_output(
+                date_format(&valid, &config),
+                generic_date_format(&valid, &config),
+            );
             assert_equivalent(
-                date_format(&batch, &config),
-                generic_date_format(&batch, &config),
+                date_format(&with_invalid, &config),
+                generic_date_format(&with_invalid, &config),
+            );
+            assert_rejected(
+                date_format(&with_invalid, &config),
+                &invalid_edge_rejections("conversion.invalid_datetime"),
             );
         }
         // Formato date-only: il fallback `NaiveDate` deve coincidere.
         let dates_only = utf8_batch(vec![
             Some("1970-01-01"),
             Some("2000-02-29"),
+            Some("1900-02-28"),
+            None,
+        ]);
+        let dates_only_invalid = utf8_batch(vec![
+            Some("1970-01-01"),
             Some("2023-02-29"),
             Some("2024-02-29 10:00:00"), // trailing input: fallisce
             None,
         ]);
-        let config = DateFormat {
-            input_format: "%Y-%m-%d".into(),
-            ..format_config(InvalidDatePolicy::Null)
-        };
-        assert_equivalent(
-            date_format(&dates_only, &config),
-            generic_date_format(&dates_only, &config),
-        );
-        let config = DateFormat {
-            input_format: "%Y-%m-%d".into(),
-            ..format_config(InvalidDatePolicy::Error)
-        };
-        assert_equivalent(
-            date_format(&dates_only, &config),
-            generic_date_format(&dates_only, &config),
-        );
+        for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
+            let config = DateFormat {
+                input_format: "%Y-%m-%d".into(),
+                ..format_config(invalid)
+            };
+            assert_same_output(
+                date_format(&dates_only, &config),
+                generic_date_format(&dates_only, &config),
+            );
+            assert_equivalent(
+                date_format(&dates_only_invalid, &config),
+                generic_date_format(&dates_only_invalid, &config),
+            );
+            assert_rejected(
+                date_format(&dates_only_invalid, &config),
+                &[
+                    (1, "conversion.invalid_datetime", Some("ts")),
+                    (2, "conversion.invalid_datetime", Some("ts")),
+                ],
+            );
+        }
     }
 
     fn date_unit(code: u8) -> DateUnit {
@@ -987,14 +1114,10 @@ mod tests {
 
     #[test]
     fn date_add_fast_path_matches_generic_on_all_units() {
-        let batch = utf8_batch(edge_values());
+        let valid = utf8_batch(valid_edge_values());
+        let with_invalid = utf8_batch(edge_values_with_invalid());
         for unit_code in 0..7 {
-            for (amount, error_policy) in [
-                (7, false),
-                (-30, false),
-                (90_061, true),
-                (i64::MAX, false), // overflow delta
-            ] {
+            for (amount, error_policy) in [(7, false), (-30, false), (90_061, true), (0, true)] {
                 let config = DateAdd {
                     column: "ts".into(),
                     input_format: "%Y-%m-%d %H:%M:%S".into(),
@@ -1004,44 +1127,99 @@ mod tests {
                     output_column: "out".into(),
                     invalid: invalid_policy(error_policy),
                 };
-                assert_equivalent(date_add(&batch, &config), generic_date_add(&batch, &config));
+                assert_same_output(date_add(&valid, &config), generic_date_add(&valid, &config));
+                assert_equivalent(
+                    date_add(&with_invalid, &config),
+                    generic_date_add(&with_invalid, &config),
+                );
+                assert_rejected(
+                    date_add(&with_invalid, &config),
+                    &invalid_edge_rejections("conversion.invalid_datetime"),
+                );
             }
+            // Overflow del delta: ogni riga valida e' fuori range, ogni riga
+            // non parsabile resta `invalid_datetime`.
+            let config = DateAdd {
+                column: "ts".into(),
+                input_format: "%Y-%m-%d %H:%M:%S".into(),
+                output_format: "%Y-%m-%d %H:%M:%S".into(),
+                amount: i64::MAX,
+                unit: date_unit(unit_code),
+                output_column: "out".into(),
+                invalid: InvalidDatePolicy::Null,
+            };
+            assert_equivalent(
+                date_add(&with_invalid, &config),
+                generic_date_add(&with_invalid, &config),
+            );
+            assert_rejected(
+                date_add(&with_invalid, &config),
+                &[
+                    (0, "conversion.datetime_range", Some("ts")),
+                    (1, "conversion.invalid_datetime", Some("ts")),
+                    (2, "conversion.datetime_range", Some("ts")),
+                    (3, "conversion.invalid_datetime", Some("ts")),
+                    (5, "conversion.invalid_datetime", Some("ts")),
+                    (6, "conversion.datetime_range", Some("ts")),
+                    (7, "conversion.invalid_datetime", Some("ts")),
+                ],
+            );
         }
     }
 
     #[test]
     fn date_diff_fast_path_matches_generic_including_out_of_scale() {
-        let starts = vec![
-            Some("1970-01-01 00:00:00"),
-            Some("2024-03-31 01:59:59"), // attraversa il cambio DST
-            Some("2024-10-27 03:00:00"),
-            Some("1900-01-01 00:00:00"),
-            Some("2024-02-29 00:00:00"),
-            Some("non una data"),
-            None,
-            Some("1900-01-01 00:00:00"), // ~500 anni: nanosecondi fuori i64
-        ];
-        let ends = vec![
-            Some("1969-12-31 23:59:59"), // differenza negativa
-            Some("2024-03-31 03:00:01"),
-            Some("2024-10-27 01:30:00"),
-            Some("2100-01-01 00:00:00"),
-            Some("2024-02-29 00:00:00"), // zero
-            Some("2024-01-01 00:00:00"),
-            Some("2024-01-01 00:00:00"),
-            Some("2400-01-01 00:00:00"),
-        ];
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("start", DataType::Utf8, true),
-                Field::new("end", DataType::Utf8, true),
-            ])),
+        let pair_batch = |starts: Vec<Option<&str>>, ends: Vec<Option<&str>>| {
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("start", DataType::Utf8, true),
+                    Field::new("end", DataType::Utf8, true),
+                ])),
+                vec![
+                    Arc::new(StringArray::from(starts)),
+                    Arc::new(StringArray::from(ends)),
+                ],
+            )
+            .expect("fixture")
+        };
+        let valid = pair_batch(
             vec![
-                Arc::new(StringArray::from(starts)),
-                Arc::new(StringArray::from(ends)),
+                Some("1970-01-01 00:00:00"),
+                Some("2024-03-31 01:59:59"), // attraversa il cambio DST
+                Some("2024-10-27 03:00:00"),
+                Some("1900-01-01 00:00:00"),
+                Some("2024-02-29 00:00:00"),
+                None,
+                Some("2024-01-01 00:00:00"),
+                Some("1900-01-01 00:00:00"), // ~291 anni: ultimo intervallo in scala
             ],
-        )
-        .expect("fixture");
+            vec![
+                Some("1969-12-31 23:59:59"), // differenza negativa
+                Some("2024-03-31 03:00:01"),
+                Some("2024-10-27 01:30:00"),
+                Some("2100-01-01 00:00:00"),
+                Some("2024-02-29 00:00:00"), // zero
+                Some("2024-01-01 00:00:00"),
+                None,
+                Some("2192-01-01 00:00:00"),
+            ],
+        );
+        let with_invalid = pair_batch(
+            vec![
+                Some("1970-01-01 00:00:00"),
+                Some("non una data"),
+                Some("2024-01-01 00:00:00"),
+                Some("1900-01-01 00:00:00"), // ~500 anni: nanosecondi fuori i64
+                Some("non una data"),        // entrambi invalidi: vince start
+            ],
+            vec![
+                Some("1970-01-02 00:00:00"),
+                Some("2024-01-01 00:00:00"),
+                Some("2023-02-29 00:00:00"),
+                Some("2400-01-01 00:00:00"),
+                Some(""),
+            ],
+        );
         for unit_code in 0..4 {
             for error_policy in [false, true] {
                 let config = DateDiff {
@@ -1052,9 +1230,22 @@ mod tests {
                     output_column: "out".into(),
                     invalid: invalid_policy(error_policy),
                 };
+                assert_same_output(
+                    date_diff(&valid, &config),
+                    generic_date_diff(&valid, &config),
+                );
                 assert_equivalent(
-                    date_diff(&batch, &config),
-                    generic_date_diff(&batch, &config),
+                    date_diff(&with_invalid, &config),
+                    generic_date_diff(&with_invalid, &config),
+                );
+                assert_rejected(
+                    date_diff(&with_invalid, &config),
+                    &[
+                        (1, "conversion.invalid_datetime", Some("start")),
+                        (2, "conversion.invalid_datetime", Some("end")),
+                        (3, "conversion.datetime_range", None),
+                        (4, "conversion.invalid_datetime", Some("start")),
+                    ],
                 );
             }
         }
@@ -1062,7 +1253,13 @@ mod tests {
 
     #[test]
     fn timezone_convert_fast_path_matches_generic_on_dst_transitions() {
-        let batch = utf8_batch(edge_values());
+        // In Europe/Rome le righe 5 (ambigua) e 6 (inesistente) di
+        // `valid_edge_values` sono rifiutate: il confronto `Ok` usa le altre.
+        let mut rome_valid = valid_edge_values();
+        rome_valid.drain(5..7);
+        let rome_valid = utf8_batch(rome_valid);
+        let batch = utf8_batch(valid_edge_values());
+        let with_invalid = utf8_batch(edge_values_with_invalid());
         for ambiguous_code in 0..4 {
             for error_policy in [false, true] {
                 let config = TimezoneConvert {
@@ -1075,13 +1272,33 @@ mod tests {
                     invalid: invalid_policy(error_policy),
                     ambiguous: ambiguous_policy(ambiguous_code),
                 };
+                assert_same_output(
+                    timezone_convert(&rome_valid, &config),
+                    generic_timezone_convert(&rome_valid, &config),
+                );
                 assert_equivalent(
                     timezone_convert(&batch, &config),
                     generic_timezone_convert(&batch, &config),
                 );
+                assert_rejected(
+                    timezone_convert(&batch, &config),
+                    &[
+                        (5, "conversion.ambiguous_local_time", Some("ts")),
+                        (6, "conversion.nonexistent_local_time", Some("ts")),
+                    ],
+                );
+                assert_equivalent(
+                    timezone_convert(&with_invalid, &config),
+                    generic_timezone_convert(&with_invalid, &config),
+                );
+                assert_rejected(
+                    timezone_convert(&with_invalid, &config),
+                    &invalid_edge_rejections("conversion.invalid_datetime"),
+                );
             }
         }
-        // Coppia di timezone senza DST e con DST diversa.
+        // Coppia di timezone con DST diverse: le transizioni di Europe/Rome
+        // sono ore ordinarie in America/New_York, quindi tutte valide.
         let config = TimezoneConvert {
             column: "ts".into(),
             input_format: "%Y-%m-%d %H:%M:%S".into(),
@@ -1092,7 +1309,7 @@ mod tests {
             invalid: InvalidDatePolicy::Null,
             ambiguous: AmbiguousPolicy::Latest,
         };
-        assert_equivalent(
+        assert_same_output(
             timezone_convert(&batch, &config),
             generic_timezone_convert(&batch, &config),
         );
@@ -1114,6 +1331,10 @@ mod tests {
             timezone_convert(&batch, &bad),
             generic_timezone_convert(&batch, &bad),
         );
+        assert!(matches!(
+            timezone_convert(&batch, &bad),
+            Err(PlenoraError::InvalidPlan(message)) if message == "source_timezone non valida"
+        ));
     }
 
     #[test]

@@ -2945,12 +2945,21 @@ fn l_eterogeneita_con_tipo_dichiarato_resta_ammessa_e_dipende_dai_dati() {
     .expect("l'eterogeneita' col tipo dichiarato resta ammessa");
 
     // Su QUESTI dati il runtime fallisce, perche' `num` non e' nullo e
-    // `text()` non converte un numero. Il limite e' dichiarato, non nascosto.
-    plenora_kernels_table::expressions::expression(
+    // `text()` non converte un numero. Il limite e' dichiarato, non nascosto:
+    // l'errore e' proprio la conversione di output, non un altro rifiuto.
+    let errore = plenora_kernels_table::expressions::expression(
         &ingresso,
         &serde_json::from_value(config).expect("config"),
     )
     .expect_err("con `num` valorizzato il runtime rifiuta la riga");
+    assert!(
+        matches!(
+            &errore,
+            plenora_core::PlenoraError::Schema(messaggio)
+                if messaggio == "output_type=text richiede testo"
+        ),
+        "rifiuto diverso dalla conversione di output: {errore}"
+    );
 }
 
 #[test]

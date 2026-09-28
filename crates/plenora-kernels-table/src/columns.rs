@@ -768,29 +768,40 @@ mod tests {
         assert_eq!(output.num_columns(), 5);
     }
 
+    /// Errore della guardia attesa: variante e messaggio esatti (il `Display`
+    /// porta il prefisso della variante), non un rifiuto qualunque.
+    fn assert_guard(result: Result<RecordBatch>, expected: &str) {
+        let error = result.expect_err("guardia non scattata");
+        assert_eq!(error.to_string(), expected);
+    }
+
     #[test]
     fn runtime_guards_remain_defensive() {
         let input = batch();
         let limits = Limits::default();
-        assert!(concat_columns(
-            &input,
-            &ConcatColumns {
-                columns: vec![],
-                output_column: "x".into(),
-                separator: String::new(),
-                skip_null: true,
-            },
-            &limits,
-        )
-        .is_err());
-        assert!(reorder_columns(
-            &input,
-            &ReorderColumns {
-                columns: vec!["a".into(), "a".into()],
-                alphabetical: false,
-            },
-        )
-        .is_err());
+        assert_guard(
+            concat_columns(
+                &input,
+                &ConcatColumns {
+                    columns: vec![],
+                    output_column: "x".into(),
+                    separator: String::new(),
+                    skip_null: true,
+                },
+                &limits,
+            ),
+            "contract violation: concat_columns richiede almeno una colonna",
+        );
+        assert_guard(
+            reorder_columns(
+                &input,
+                &ReorderColumns {
+                    columns: vec!["a".into(), "a".into()],
+                    alphabetical: false,
+                },
+            ),
+            "contract violation: colonna ripetuta nel riordino: a",
+        );
 
         let base = SplitColumn {
             column: "z".into(),
@@ -802,19 +813,28 @@ mod tests {
             delimiter: String::new(),
             ..base
         };
-        assert!(split_column(&input, &empty_delimiter, &limits).is_err());
+        assert_guard(
+            split_column(&input, &empty_delimiter, &limits),
+            "contract violation: delimiter vuoto",
+        );
         let empty_outputs = SplitColumn {
             column: "z".into(),
             delimiter: ",".into(),
             new_columns: vec![],
             max_splits: -1,
         };
-        assert!(split_column(&input, &empty_outputs, &limits).is_err());
+        assert_guard(
+            split_column(&input, &empty_outputs, &limits),
+            "contract violation: new_columns e' obbligatorio nel percorso streaming",
+        );
         let duplicates = SplitColumn {
             new_columns: vec!["x".into(), "x".into()],
             ..empty_outputs
         };
-        assert!(split_column(&input, &duplicates, &limits).is_err());
+        assert_guard(
+            split_column(&input, &duplicates, &limits),
+            "schema violation: split_column contiene nomi output duplicati",
+        );
         let one_output = Limits {
             max_split_columns: 1,
             ..Limits::default()
@@ -825,7 +845,10 @@ mod tests {
             new_columns: vec!["x".into(), "y".into()],
             max_splits: -1,
         };
-        assert!(split_column(&input, &too_many, &one_output).is_err());
+        assert_guard(
+            split_column(&input, &too_many, &one_output),
+            "contract violation: split_column supera max_split_columns",
+        );
     }
 
     #[test]
@@ -867,26 +890,37 @@ mod tests {
     #[test]
     fn select_columns_rejects_empty_missing_and_duplicates() {
         let input = batch();
-        assert!(select_columns(&input, &SelectColumns { columns: vec![] }).is_err());
-        assert!(select_columns(
-            &input,
-            &SelectColumns {
-                columns: vec!["missing".into()],
-            },
-        )
-        .is_err());
-        assert!(select_columns(
-            &input,
-            &SelectColumns {
-                columns: vec!["a".into(), "a".into()],
-            },
-        )
-        .is_err());
-        // Config strict: campo sconosciuto rifiutato.
-        assert!(serde_json::from_value::<SelectColumns>(
-            json!({"columns": ["a"], "surprise": true})
-        )
-        .is_err());
+        assert_guard(
+            select_columns(&input, &SelectColumns { columns: vec![] }),
+            "contract violation: select_columns richiede almeno una colonna",
+        );
+        assert_guard(
+            select_columns(
+                &input,
+                &SelectColumns {
+                    columns: vec!["missing".into()],
+                },
+            ),
+            "schema violation: colonna non trovata: missing",
+        );
+        assert_guard(
+            select_columns(
+                &input,
+                &SelectColumns {
+                    columns: vec!["a".into(), "a".into()],
+                },
+            ),
+            "contract violation: colonna ripetuta nella proiezione: a",
+        );
+        // Config strict: campo sconosciuto rifiutato, e solo per quello.
+        assert!(serde_json::from_value::<SelectColumns>(json!({"columns": ["a"]})).is_ok());
+        let error =
+            serde_json::from_value::<SelectColumns>(json!({"columns": ["a"], "surprise": true}))
+                .expect_err("campo sconosciuto accettato");
+        assert!(
+            error.to_string().contains("unknown field `surprise`"),
+            "{error}"
+        );
     }
 
     #[test]

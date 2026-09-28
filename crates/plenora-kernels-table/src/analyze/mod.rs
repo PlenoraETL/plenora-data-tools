@@ -404,6 +404,16 @@ mod tests {
             .expect_err(&format!("{op} con config invalida deve fallire"))
     }
 
+    /// `InvalidPlan` emesso dalla guardia che contiene `fragment`: una
+    /// `InvalidPlan` di un'altra guardia (per esempio `typed` su un campo
+    /// sconosciuto) non basta.
+    fn assert_invalid_plan(error: &PlenoraError, fragment: &str) {
+        assert!(
+            matches!(error, PlenoraError::InvalidPlan(message) if message.contains(fragment)),
+            "attesa InvalidPlan con {fragment:?}, ottenuto: {error}"
+        );
+    }
+
     fn assert_field(contract: &DataContract, name: &str, data_type: &DataType, nullable: bool) {
         let field = contract
             .schema
@@ -515,33 +525,15 @@ mod tests {
     fn arity_is_enforced() {
         let one = vec![tabular_contract()];
         let three = [tabular_contract(), tabular_contract(), tabular_contract()];
-        assert!(matches!(
-            analyze_table_contract(
-                "table.join",
-                &one,
-                &json!({}),
-                &mut FieldAllocator::default()
-            ),
-            Err(PlenoraError::InvalidPlan(_))
-        ));
-        assert!(matches!(
-            analyze_table_contract(
-                "table.filter",
-                &three[..2],
-                &json!({}),
-                &mut FieldAllocator::default()
-            ),
-            Err(PlenoraError::InvalidPlan(_))
-        ));
-        assert!(matches!(
-            analyze_table_contract(
-                "table.concat",
-                &one,
-                &json!({}),
-                &mut FieldAllocator::default()
-            ),
-            Err(PlenoraError::InvalidPlan(_))
-        ));
+        assert_invalid_plan(&err("table.join", &one, json!({})), "attesi 2 input");
+        assert_invalid_plan(
+            &err("table.filter", &three[..2], json!({})),
+            "atteso 1 input",
+        );
+        assert_invalid_plan(
+            &err("table.concat", &one, json!({})),
+            "attesi almeno 2 input",
+        );
         // concat N-aria: 3 input ammessi.
         let (a, b) = simple_pair();
         let (_, c) = simple_pair();
@@ -563,14 +555,14 @@ mod tests {
         assert_eq!(output.geometries.len(), 1);
         assert_eq!(proven_rows(&output), 100);
         assert!(output.properties.sorted_by.is_some());
-        assert!(matches!(
-            err(
+        assert_invalid_plan(
+            &err(
                 "table.add_row_number",
                 &[tabular_contract()],
-                json!({"order_column": "id"})
+                json!({"order_column": "id"}),
             ),
-            PlenoraError::InvalidPlan(_)
-        ));
+            "order_column non supportato",
+        );
     }
 
     #[test]
@@ -1422,14 +1414,14 @@ mod tests {
             json!({"subset": ["name"], "order_column": "id"}),
         );
         assert_eq!(proven_sorted_keys(&dedup).len(), 1);
-        assert!(matches!(
-            err(
+        assert_invalid_plan(
+            &err(
                 "table.dedup_advanced",
                 &[tabular_contract()],
-                json!({"subset": ["name"], "keep": "false"})
+                json!({"subset": ["name"], "keep": "false"}),
             ),
-            PlenoraError::InvalidPlan(_)
-        ));
+            "keep=false non supportato",
+        );
     }
 
     #[test]
@@ -2723,14 +2715,14 @@ mod tests {
             .len(),
             base_fields().len()
         );
-        assert!(matches!(
-            err(
+        assert_invalid_plan(
+            &err(
                 "table.assert_cardinality",
                 &[proven_contract()],
-                json!({"exact_rows": 5})
+                json!({"exact_rows": 5}),
             ),
-            PlenoraError::InvalidPlan(_)
-        ));
+            "cardinalita' attestata incompatibile",
+        );
     }
 
     #[test]
@@ -2866,14 +2858,14 @@ mod tests {
             "{transpose}"
         );
         // Config invalida fallisce prima come Contract.
-        assert!(matches!(
-            err(
+        assert_invalid_plan(
+            &err(
                 "table.pivot",
                 &[tabular_contract()],
-                json!({"index_col": 1})
+                json!({"index_col": 1}),
             ),
-            PlenoraError::InvalidPlan(_)
-        ));
+            "config non valida",
+        );
     }
 
     #[test]
@@ -3046,14 +3038,14 @@ mod tests {
             ContractProperties::default(),
         )
         .unwrap();
-        assert!(matches!(
-            err(
+        assert_invalid_plan(
+            &err(
                 "table.join",
                 &[geo_contract(), right],
-                json!({"left_keys": ["id"], "right_keys": ["rid"]})
+                json!({"left_keys": ["id"], "right_keys": ["rid"]}),
             ),
-            PlenoraError::InvalidPlan(_)
-        ));
+            "due colonne geometriche in output",
+        );
     }
 
     #[test]
@@ -3315,10 +3307,10 @@ mod tests {
         assert_eq!(metadata.get("extra"), Some(&"two".to_owned()));
 
         let conflicting = with_schema_metadata(&simple_pair().1, &[("shared", "other")]);
-        assert!(matches!(
-            err("table.union_distinct", &[left, conflicting], json!({})),
-            PlenoraError::InvalidPlan(_)
-        ));
+        assert_invalid_plan(
+            &err("table.union_distinct", &[left, conflicting], json!({})),
+            "metadata di schema in conflitto sulla chiave",
+        );
     }
 
     #[test]
@@ -3458,14 +3450,17 @@ mod tests {
 
     #[test]
     fn config_with_unknown_fields_fails_closed() {
-        assert!(matches!(
-            err(
-                "table.filter",
-                &[tabular_contract()],
-                json!({"column": "value", "operator": "==", "value": 1, "bogus": true})
-            ),
-            PlenoraError::InvalidPlan(_)
-        ));
+        // La stessa config senza il campo estraneo e' valida: il rifiuto viene
+        // solo da `deny_unknown_fields`, via `typed`.
+        let valid = json!({"column": "value", "operator": "==", "value": 1});
+        ok("table.filter", &[tabular_contract()], valid);
+        let error = err(
+            "table.filter",
+            &[tabular_contract()],
+            json!({"column": "value", "operator": "==", "value": 1, "bogus": true}),
+        );
+        assert_invalid_plan(&error, "config non valida");
+        assert_invalid_plan(&error, "unknown field `bogus`");
     }
 
     // -- Cross-check analyze vs kernel su batch reali --------------------------
