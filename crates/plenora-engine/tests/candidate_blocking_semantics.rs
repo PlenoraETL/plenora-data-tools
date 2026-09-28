@@ -155,11 +155,49 @@ fn melt_transpose_and_all_pivot_aggregations_are_bounded() {
         assert_eq!(pivot.num_rows(), 3);
         assert_eq!(pivot.num_columns(), 3);
     }
+    // Il tetto d'uscita del pivot. Le righe d'uscita sono le chiavi
+    // distinte, mai piu' delle righe d'ingresso: un `max_rows` che le
+    // fermasse fermerebbe prima l'ingresso. Il tetto raggiungibile e' sulle
+    // colonne, una per valore distinto di `pivot_col`: tre colonne
+    // d'ingresso stanno in `max_columns: 4`, le cinque d'uscita (indice piu'
+    // quattro valori) no.
+    let wide = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("group", DataType::Utf8, false),
+            Field::new("kind", DataType::Utf8, false),
+            Field::new("num", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["a", "a", "b", "b"])),
+            Arc::new(StringArray::from(vec!["k1", "k2", "k3", "k4"])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+        ],
+    )
+    .expect("pivot fixture");
     let tight = Limits {
-        max_rows: 2,
+        max_columns: 4,
         ..Limits::default()
     };
-    assert!(execute_batch(input, &plan_with_limits("pivot", json!({"index_col":"group","pivot_col":"kind","value_col":"num","aggr_func":"sum","mapping":{}}), tight)).is_err());
+    let error = execute_batch(
+        wide,
+        &plan_with_limits(
+            "pivot",
+            json!({"index_col":"group","pivot_col":"kind","value_col":"num","aggr_func":"sum","mapping":{}}),
+            tight,
+        ),
+    )
+    .expect_err("pivot oltre max_columns in uscita");
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("pivot supera i limiti di output"),
+        "il rifiuto deve venire dal tetto d'uscita del pivot, non dall'ingresso: {error}"
+    );
 }
 
 #[test]
@@ -282,20 +320,32 @@ fn joins_cover_all_modes_null_semantics_and_key_coalescing() {
         )
     )
     .is_err());
+    // Il tetto d'uscita del join: quattro righe per lato stanno in
+    // `max_rows: 4`; l'outer ne produce sei (due corrispondenze, 3 e null a
+    // sinistra, 4 e null a destra: il null non corrisponde).
     let tight = Limits {
-        max_rows: 1,
+        max_rows: 4,
         ..Limits::default()
     };
-    assert!(execute_binary(
+    let error = execute_binary(
         &left,
         &right,
         &plan_with_limits(
             "join",
             json!({"left_keys":["id"],"right_keys":["id"],"how":"outer"}),
-            tight
-        )
+            tight,
+        ),
     )
-    .is_err());
+    .expect_err("outer oltre max_rows in uscita");
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("join supera max_rows"),
+        "il rifiuto deve venire dal tetto d'uscita del join, non dall'ingresso: {error}"
+    );
 }
 
 #[test]

@@ -330,22 +330,53 @@ fn le_grandezze_escluse_restano_osservabili() {
             contratto(),
         )
         .expect("main");
+    let inizio = std::time::Instant::now();
     let (_, metriche) = execute(&grafo, inputs, RuntimeContext::default())
         .expect("execute")
         .collect_batches()
         .expect("stream");
+    let trascorso = inizio.elapsed();
+
+    // I tempi: un nodo e un segmento che hanno lavorato, con un tempo
+    // misurato e non superiore al tempo dell'intera esecuzione vista da qui.
+    let nodo = metriche
+        .nodes
+        .get("f")
+        .expect("il nodo del caso ha metriche");
+    assert!(nodo.rows_in > 0, "il nodo ha ricevuto righe");
     assert!(
-        metriche
-            .nodes
-            .values()
-            .all(|n| n.wall_time.as_nanos() < u128::MAX),
-        "wall_time per nodo resta leggibile"
+        nodo.wall_time > std::time::Duration::ZERO,
+        "wall_time per nodo non misurato"
     );
     assert!(
-        metriche
-            .segments
-            .values()
-            .all(|s| s.wall_time.as_nanos() < u128::MAX),
-        "wall_time per segmento resta leggibile"
+        nodo.wall_time <= trascorso,
+        "wall_time per nodo oltre l'esecuzione: {:?} > {trascorso:?}",
+        nodo.wall_time
     );
+    assert!(!metriche.segments.is_empty(), "nessun segmento misurato");
+    for (id, segmento) in &metriche.segments {
+        assert!(
+            segmento.wall_time > std::time::Duration::ZERO,
+            "wall_time del segmento {id} non misurato"
+        );
+        assert!(
+            segmento.wall_time <= trascorso,
+            "wall_time del segmento {id} oltre l'esecuzione: {:?} > {trascorso:?}",
+            segmento.wall_time
+        );
+    }
+
+    // La memoria: i batch d'ingresso sono governati, quindi il picco c'e' e
+    // sta nel budget; a esecuzione conclusa non resta nulla di riservato.
+    assert!(
+        metriche.memory.peak_reserved_bytes > 0,
+        "picco non misurato"
+    );
+    assert!(
+        metriche.memory.peak_reserved_bytes <= metriche.memory.budget_bytes,
+        "picco oltre il budget"
+    );
+    assert_eq!(metriche.memory.reserved_bytes, 0);
+    assert_eq!(metriche.memory.live_leases, 0);
+    assert!(metriche.memory.oldest_lease_age.is_none());
 }

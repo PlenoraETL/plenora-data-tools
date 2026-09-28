@@ -1015,6 +1015,8 @@ fn governance_checks_cardinality_metadata_foreign_keys_and_reconciliation() {
         Limits::default(),
     );
     assert!(execute_binary(&ids(vec![None], HashMap::new()), &right, &reject_null_fk).is_err());
+    // Il budget di memoria: la stessa coppia che `valid_fk` accetta, quindi
+    // l'unico motivo di rifiuto e' la memoria dell'insieme delle chiavi.
     let tiny_fk = plan(
         "assert_foreign_key",
         json!({"left_keys":["id"],"right_keys":["id"],"allow_null":true}),
@@ -1023,8 +1025,37 @@ fn governance_checks_cardinality_metadata_foreign_keys_and_reconciliation() {
             ..Limits::default()
         },
     );
-    assert!(execute_binary(&left, &right, &tiny_fk).is_err());
-    assert!(execute_binary(&left, &strings(vec![Some("1")]), &valid_fk).is_err());
+    let conforme = ids(vec![Some(1), None], HashMap::new());
+    let error = execute_binary(&conforme, &right, &tiny_fk).expect_err("oltre il budget");
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::ResourceLimit,
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("assert_foreign_key oltre max_governed_memory_bytes"),
+        "{error}"
+    );
+    // Il tipo: la colonna `id` c'e' su entrambi i lati, ma a destra e' Utf8.
+    let right_utf8 = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(vec![Some("1")]))],
+    )
+    .expect("right utf8");
+    let error = execute_binary(&conforme, &right_utf8, &valid_fk).expect_err("tipi diversi");
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::Schema,
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("foreign key richiede tipi Arrow identici"),
+        "{error}"
+    );
 
     let reconciliation = execute_binary(
         &left,

@@ -501,113 +501,227 @@ fn quality_policy_matrix_covers_null_type_order_and_boundary_failures() {
     .is_err());
 }
 
-#[test]
-#[allow(clippy::too_many_lines)]
-fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
-    let temporal = RecordBatch::try_new(
+/// Un rifiuto per riga con UNA sola causa, quella attesa.
+fn rifiutata_per(esito: plenora_core::Result<RecordBatch>, causa: &str, caso: &str) {
+    let errore = esito.expect_err(caso);
+    let diagnostica = errore
+        .row_diagnostics()
+        .unwrap_or_else(|| panic!("{caso}: diagnostica per riga assente: {errore}"));
+    assert_eq!(
+        diagnostica.counts,
+        std::collections::BTreeMap::from([(causa.to_owned(), 1)]),
+        "{caso}: causa del rifiuto"
+    );
+}
+
+fn temporal_batch(values: &[Option<&str>], others: &[Option<&str>]) -> RecordBatch {
+    RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("value", DataType::Utf8, true),
             Field::new("other", DataType::Utf8, true),
         ])),
         vec![
-            Arc::new(StringArray::from(vec![
-                Some("2024-02-29 12:30:45"),
-                Some("invalid"),
-                None,
-            ])),
-            Arc::new(StringArray::from(vec![
-                Some("2024-03-01 13:31:46"),
-                Some("2024-01-01 00:00:00"),
-                None,
-            ])),
+            Arc::new(StringArray::from(values.to_vec())),
+            Arc::new(StringArray::from(others.to_vec())),
         ],
     )
-    .expect("temporal fixture");
-    let format = "%Y-%m-%d %H:%M:%S";
-    let formatted = execute_batch(
-        temporal.clone(),
-        &plan(
-            "date_format",
-            json!({"column":"value","input_format":format,"output_column":"out","invalid":"null"}),
-        ),
+    .expect("temporal fixture")
+}
+
+fn local_batch(values: &[Option<&str>]) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("local", DataType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(values.to_vec()))],
     )
-    .expect_err("policy null legacy ha rimediato data invalida");
-    assert!(formatted.row_diagnostics().is_some());
-    assert!(execute_batch(
-        temporal.clone(),
-        &plan(
-            "date_format",
-            json!({"column":"value","input_format":format,"output_column":"out","invalid":"error"})
-        )
-    )
-    .is_err());
-    for unit in [
-        "years", "months", "weeks", "days", "hours", "minutes", "seconds",
+    .expect("dst fixture")
+}
+
+const TEMPORAL_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
+    // Fixture pulita: una data valida (il 29 febbraio, per le unita' di
+    // calendario) e un null, che attraversa ogni operazione come null. Le
+    // righe che falliscono stanno nel test accanto, una causa per volta.
+    let temporal = temporal_batch(
+        &[Some("2024-02-29 12:30:45"), None],
+        &[Some("2024-03-01 13:31:46"), None],
+    );
+    for (unit, atteso) in [
+        ("years", "2023-02-28 12:30:45"),
+        ("months", "2024-01-29 12:30:45"),
+        ("weeks", "2024-02-22 12:30:45"),
+        ("days", "2024-02-28 12:30:45"),
+        ("hours", "2024-02-29 11:30:45"),
+        ("minutes", "2024-02-29 12:29:45"),
+        ("seconds", "2024-02-29 12:30:44"),
     ] {
-        assert!(execute_batch(
-            temporal.clone(),
+        for invalid in ["null", "error"] {
+            let output = execute_batch(
+                temporal.clone(),
+                &plan(
+                    "date_add",
+                    json!({"column":"value","input_format":TEMPORAL_FORMAT,"amount":-1,"unit":unit,"output_column":"out","invalid":invalid}),
+                ),
+            )
+            .unwrap_or_else(|error| panic!("date_add {unit}/{invalid}: {error}"));
+            let out = utf8_column(&output, "out");
+            assert_eq!(out.value(0), atteso, "date_add {unit}/{invalid}");
+            assert!(
+                out.is_null(1),
+                "date_add {unit}/{invalid}: null in, null out"
+            );
+        }
+    }
+
+    // 2024-02-29 12:30:45 -> 2024-03-01 13:31:46: un giorno, un'ora, un
+    // minuto e un secondo, cioe' 90061 secondi.
+    for (unit, divisore) in [
+        ("days", 86_400.0),
+        ("hours", 3_600.0),
+        ("minutes", 60.0),
+        ("seconds", 1.0),
+    ] {
+        for invalid in ["null", "error"] {
+            let output = execute_batch(
+                temporal.clone(),
+                &plan(
+                    "date_diff",
+                    json!({"start_column":"value","end_column":"other","input_format":TEMPORAL_FORMAT,"unit":unit,"output_column":"out","invalid":invalid}),
+                ),
+            )
+            .unwrap_or_else(|error| panic!("date_diff {unit}/{invalid}: {error}"));
+            let out = output
+                .column_by_name("out")
+                .expect("out")
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .expect("float");
+            let atteso = 90_061.0 / divisore;
+            assert!(
+                (out.value(0) - atteso).abs() <= atteso * f64::EPSILON,
+                "date_diff {unit}/{invalid}: {} invece di {atteso}",
+                out.value(0)
+            );
+            assert!(
+                out.is_null(1),
+                "date_diff {unit}/{invalid}: null in, null out"
+            );
+        }
+    }
+
+    // Un istante fuori dalle transizioni si converte identico con ogni
+    // politica: Europe/Rome in luglio e' UTC+2.
+    for ambiguous in ["earliest", "latest", "null", "error"] {
+        for invalid in ["null", "error"] {
+            let output = execute_batch(
+                local_batch(&[Some("2024-07-01 12:00:00"), None]),
+                &plan(
+                    "timezone_convert",
+                    json!({"column":"local","input_format":TEMPORAL_FORMAT,"source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"out","invalid":invalid,"ambiguous":ambiguous}),
+                ),
+            )
+            .unwrap_or_else(|error| panic!("timezone_convert {ambiguous}/{invalid}: {error}"));
+            let out = utf8_column(&output, "out");
+            assert_eq!(out.value(0), "2024-07-01 10:00:00", "{ambiguous}/{invalid}");
+            assert!(out.is_null(1), "{ambiguous}/{invalid}: null in, null out");
+        }
+    }
+
+    // I due modi di fallire del DST, con ogni politica: l'ora ripetuta di
+    // ottobre e' ambigua, quella saltata di marzo non esiste. Nessuna
+    // politica le rimedia in silenzio.
+    for (riga, causa) in [
+        ("2024-10-27 02:30:00", "conversion.ambiguous_local_time"),
+        ("2024-03-31 02:30:00", "conversion.nonexistent_local_time"),
+    ] {
+        for ambiguous in ["earliest", "latest", "null", "error"] {
+            for invalid in ["null", "error"] {
+                rifiutata_per(
+                    execute_batch(
+                        local_batch(&[Some(riga), None]),
+                        &plan(
+                            "timezone_convert",
+                            json!({"column":"local","input_format":TEMPORAL_FORMAT,"source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"out","invalid":invalid,"ambiguous":ambiguous}),
+                        ),
+                    ),
+                    causa,
+                    &format!("{riga} {ambiguous}/{invalid}"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn temporal_invalid_row_is_rejected_with_its_cause_under_every_policy() {
+    // La riga non interpretabile nel formato dichiarato e' un rifiuto per
+    // riga con ogni operazione e ogni politica: `invalid: null` e' legacy, e
+    // rimediarla sarebbe una failure silenziosa.
+    let invalida = temporal_batch(&[Some("invalid")], &[Some("2024-01-01 00:00:00")]);
+    for invalid in ["null", "error"] {
+        rifiutata_per(
+            execute_batch(
+                invalida.clone(),
+                &plan(
+                    "date_format",
+                    json!({"column":"value","input_format":TEMPORAL_FORMAT,"output_column":"out","invalid":invalid}),
+                ),
+            ),
+            "conversion.invalid_datetime",
+            &format!("date_format/{invalid}"),
+        );
+        rifiutata_per(
+            execute_batch(
+                invalida.clone(),
+                &plan(
+                    "date_add",
+                    json!({"column":"value","input_format":TEMPORAL_FORMAT,"amount":-1,"unit":"days","output_column":"out","invalid":invalid}),
+                ),
+            ),
+            "conversion.invalid_datetime",
+            &format!("date_add/{invalid}"),
+        );
+        rifiutata_per(
+            execute_batch(
+                invalida.clone(),
+                &plan(
+                    "date_diff",
+                    json!({"start_column":"value","end_column":"other","input_format":TEMPORAL_FORMAT,"unit":"days","output_column":"out","invalid":invalid}),
+                ),
+            ),
+            "conversion.invalid_datetime",
+            &format!("date_diff/{invalid}"),
+        );
+        for ambiguous in ["earliest", "latest", "null", "error"] {
+            rifiutata_per(
+                execute_batch(
+                    local_batch(&[Some("invalid")]),
+                    &plan(
+                        "timezone_convert",
+                        json!({"column":"local","input_format":TEMPORAL_FORMAT,"source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"out","invalid":invalid,"ambiguous":ambiguous}),
+                    ),
+                ),
+                "conversion.invalid_datetime",
+                &format!("timezone_convert {ambiguous}/{invalid}"),
+            );
+        }
+    }
+
+    // Una data valida che esce dall'intervallo rappresentabile ha la sua
+    // causa, distinta dalla riga non interpretabile.
+    rifiutata_per(
+        execute_batch(
+            temporal_batch(&[Some("2024-02-29 12:30:45")], &[None]),
             &plan(
                 "date_add",
-                json!({"column":"value","input_format":format,"amount":-1,"unit":unit,"output_column":"out","invalid":"null"})
-            )
-        )
-        .is_err());
-    }
-    assert!(execute_batch(
-        temporal.clone(),
-        &plan(
-            "date_add",
-            json!({"column":"value","input_format":format,"amount":9_223_372_036_854_775_807_i64,"unit":"years","output_column":"out","invalid":"error"})
-        )
-    )
-    .is_err());
-    for unit in ["days", "hours", "minutes", "seconds"] {
-        assert!(execute_batch(
-            temporal.clone(),
-            &plan(
-                "date_diff",
-                json!({"start_column":"value","end_column":"other","input_format":format,"unit":unit,"output_column":"out","invalid":"null"})
-            )
-        )
-        .is_err());
-    }
-    assert!(execute_batch(
-        temporal,
-        &plan(
-            "date_diff",
-            json!({"start_column":"value","end_column":"other","input_format":format,"unit":"seconds","output_column":"out","invalid":"error"})
-        )
-    )
-    .is_err());
-
-    let dst = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![Field::new("local", DataType::Utf8, true)])),
-        vec![Arc::new(StringArray::from(vec![
-            Some("2024-10-27 02:30:00"),
-            Some("2024-03-31 02:30:00"),
-            Some("invalid"),
-            None,
-        ]))],
-    )
-    .expect("dst fixture");
-    for ambiguous in ["earliest", "latest", "null"] {
-        assert!(execute_batch(
-            dst.clone(),
-            &plan(
-                "timezone_convert",
-                json!({"column":"local","input_format":format,"source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"out","invalid":"null","ambiguous":ambiguous})
-            )
-        )
-        .is_err());
-    }
-    assert!(execute_batch(
-        dst,
-        &plan(
-            "timezone_convert",
-            json!({"column":"local","input_format":format,"source_timezone":"Europe/Rome","target_timezone":"UTC","output_column":"out","invalid":"error","ambiguous":"error"})
-        )
-    )
-    .is_err());
+                json!({"column":"value","input_format":TEMPORAL_FORMAT,"amount":9_223_372_036_854_775_807_i64,"unit":"years","output_column":"out","invalid":"error"}),
+            ),
+        ),
+        "conversion.datetime_range",
+        "date_add oltre l'intervallo",
+    );
 }
 
 #[test]

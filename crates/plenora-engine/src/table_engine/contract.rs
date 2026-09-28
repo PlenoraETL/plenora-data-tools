@@ -381,61 +381,87 @@ mod tests {
         assert!(serde_json::from_value::<Plan>(value).is_err());
     }
 
+    /// Il rifiuto atteso: `InvalidPlan`, con il frammento che identifica la
+    /// guardia che l'ha deciso.
+    fn rifiutato(plan: Plan, guardia: &str) {
+        match plan.validate() {
+            Err(PlenoraError::InvalidPlan(motivo)) => {
+                assert!(
+                    motivo.contains(guardia),
+                    "guardia attesa `{guardia}`: {motivo}"
+                );
+            }
+            Err(altro) => panic!("atteso InvalidPlan per `{guardia}`, ottenuto {altro:?}"),
+            Ok(_) => panic!("piano accettato, atteso il rifiuto di `{guardia}`"),
+        }
+    }
+
+    // La guardia di maturita' (`Maturity::Planned` -> `Unsupported`) non ha
+    // un caso qui: nessuna operazione tabellare del catalogo e' `Planned`, e
+    // il catalogo e' statico, quindi il ramo non e' raggiungibile da un
+    // piano. Il nome del test non la promette piu'.
     #[test]
-    fn rejects_invalid_versions_limits_sizes_and_maturity() {
+    fn rejects_invalid_versions_limits_sizes_and_configs() {
         let mut wrong_version = plan("drop_columns", json!({"columns": []}));
         wrong_version.schema_version = 99;
-        assert!(wrong_version.validate().is_err());
+        rifiutato(wrong_version, "schema_version 99 non supportata");
 
         let mut zero_limit = plan("drop_columns", json!({"columns": []}));
         zero_limit.limits.max_rows = 0;
-        assert!(zero_limit.validate().is_err());
+        rifiutato(zero_limit, "limiti nulli");
 
         let repeated = Step {
             operation: "drop_columns".into(),
             config: json!({"columns": []}),
         };
-        assert!(Plan {
-            schema_version: SCHEMA_VERSION,
-            limits: Limits::default(),
-            steps: vec![repeated; HARD_MAX_STEPS + 1],
-        }
-        .validate()
-        .is_err());
+        rifiutato(
+            Plan {
+                schema_version: SCHEMA_VERSION,
+                limits: Limits::default(),
+                steps: vec![repeated; HARD_MAX_STEPS + 1],
+            },
+            "troppi passi",
+        );
 
-        assert!(plan(
-            "drop_columns",
-            json!({"columns": ["x".repeat(HARD_MAX_CONFIG_BYTES)]})
-        )
-        .validate()
-        .is_err());
+        rifiutato(
+            plan(
+                "drop_columns",
+                json!({"columns": ["x".repeat(HARD_MAX_CONFIG_BYTES)]}),
+            ),
+            "config del passo 0 troppo grande",
+        );
         let binary = plan("concat", json!({}))
             .validate()
             .expect("valid binary plan");
         assert!(binary.requires_secondary());
-        assert!(Plan {
-            schema_version: SCHEMA_VERSION,
-            limits: Limits::default(),
-            steps: vec![
-                Step {
-                    operation: "concat".into(),
-                    config: json!({})
-                },
-                Step {
-                    operation: "drop_columns".into(),
-                    config: json!({"columns": []})
-                },
-            ],
-        }
-        .validate()
-        .is_err());
-        assert!(plan("aggregate", json!({})).validate().is_err());
-        assert!(plan(
-            "string_pad",
-            json!({"column": "x", "width": 2, "side": "left", "fill_char": "xx", "output_column": null})
-        )
-        .validate()
-        .is_err());
+        rifiutato(
+            Plan {
+                schema_version: SCHEMA_VERSION,
+                limits: Limits::default(),
+                steps: vec![
+                    Step {
+                        operation: "concat".into(),
+                        config: json!({}),
+                    },
+                    Step {
+                        operation: "drop_columns".into(),
+                        config: json!({"columns": []}),
+                    },
+                ],
+            },
+            "esattamente un passo binario",
+        );
+        rifiutato(
+            plan("aggregate", json!({})),
+            "config non valida al passo 0 (aggregate)",
+        );
+        rifiutato(
+            plan(
+                "string_pad",
+                json!({"column": "x", "width": 2, "side": "left", "fill_char": "xx", "output_column": null}),
+            ),
+            "config non valida al passo 0 (string_pad)",
+        );
     }
 
     #[test]
