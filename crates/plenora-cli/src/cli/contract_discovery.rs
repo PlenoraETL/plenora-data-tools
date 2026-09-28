@@ -17,7 +17,7 @@ use plenora_core::crs::resolve_crs;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::crs::resolve_crs;
 
-use crate::{contract, DagInputs, PlanInputsProbe};
+use crate::{contract, da_testo_di_controllo, DagInputs, PlanInputsProbe};
 
 // La conversione schema -> contratto e' autorita' di `plenora-core`: qui
 // resta il contesto di file e input, che core non deve conoscere.
@@ -211,4 +211,39 @@ pub fn apply_crs_decisions(
         geometry.crs = ContractCrs::ResolvedByDecision(resolve_crs(definition, "crs")?);
     }
     Ok(())
+}
+
+/// Un piano DAG validato, con gli input accoppiati e i loro contratti.
+pub struct PianoAccoppiato {
+    pub graph: plenora_engine::planner::ValidatedGraph,
+    /// Nome dichiarato e percorso di ogni input, nell'ordine del piano.
+    pub pairs: Vec<(String, PathBuf)>,
+    /// I contratti scoperti, con le decisioni CRS del piano applicate.
+    pub contracts: Vec<(String, DataContract)>,
+}
+
+/// Dal testo di un piano DAG al grafo validato, con gli input accoppiati.
+///
+/// Sonda, accoppiamento, scoperta dei contratti, decisioni CRS e
+/// `planner::validate`, nell'ordine: `validate` e `run` passano entrambi da
+/// qui, cosi' `validate` predice `run` per costruzione invece che per
+/// copia.
+///
+/// # Errors
+///
+/// Il primo errore dei passi, con la loro categoria.
+pub fn grafo_dal_piano(
+    plan_text: &str,
+    inputs: &DagInputs,
+) -> Result<PianoAccoppiato, PlenoraError> {
+    let probe: PlanInputsProbe = da_testo_di_controllo(plan_text)?;
+    let pairs = pair_v4_inputs(&probe, inputs)?;
+    let mut contracts = discover_contracts(&pairs)?;
+    apply_crs_decisions(&probe, &mut contracts)?;
+    let graph = plenora_engine::planner::validate(plan_text, &contracts)?;
+    Ok(PianoAccoppiato {
+        graph,
+        pairs,
+        contracts,
+    })
 }

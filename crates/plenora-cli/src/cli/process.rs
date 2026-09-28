@@ -7,7 +7,7 @@ use std::env;
 
 use plenora_core::PlenoraError;
 
-use super::error_envelope::{emit_error_envelope, error_envelope, error_exit_code, EXIT_INTERNO};
+use super::error_envelope::{emetti_e_codice, error_envelope};
 
 /// Il processo vero e proprio: restituisce l'exit code invece di uscire, cosi'
 /// la barriera anti-panico di `main` puo' avvolgerlo.
@@ -15,11 +15,7 @@ pub fn esegui_processo() -> i32 {
     let args: Vec<String> = env::args().skip(1).collect();
     let args = match crate::strip_output_format(args) {
         Ok(args) => args,
-        Err(error) => {
-            let envelope = error_envelope(&error, false);
-            let _ = emit_error_envelope(std::io::stdout().lock(), &envelope);
-            return error_exit_code(&envelope);
-        }
+        Err(error) => return emetti_e_codice(&error_envelope(&error, false)),
     };
     if let Err(error) = crate::run_with_args(&args) {
         // Cancellazione cooperativa (errori-e-limiti.md#cancellazione): exit
@@ -30,12 +26,7 @@ pub fn esegui_processo() -> i32 {
         let cancelled = error
             .downcast_ref::<PlenoraError>()
             .is_some_and(PlenoraError::is_cancelled);
-        let envelope = error_envelope(error.as_ref(), cancelled);
-        let exit_code = error_exit_code(&envelope);
-        if emit_error_envelope(std::io::stdout().lock(), &envelope).is_err() {
-            return EXIT_INTERNO;
-        }
-        return exit_code;
+        return emetti_e_codice(&error_envelope(error.as_ref(), cancelled));
     }
     0
 }

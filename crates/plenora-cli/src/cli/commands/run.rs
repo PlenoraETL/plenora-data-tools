@@ -11,21 +11,18 @@ use std::path::{Path, PathBuf};
 use plenora_core::catalog::find_operation;
 use plenora_core::PlenoraError;
 use plenora_engine::geo_transport::publish::{verifica_destinazione_libera, PublishProfile};
-use plenora_engine::planner;
 use plenora_engine::table_engine::Plan;
 use plenora_engine::{
     execute, ipc_boundary, parallelism, CancellationToken, Inputs, RuntimeContext,
 };
 
-use crate::cli::contract_discovery::{
-    apply_crs_decisions, discover_contracts, open_input, pair_v4_inputs,
-};
+use crate::cli::contract_discovery::{grafo_dal_piano, open_input, PianoAccoppiato};
 #[cfg(target_os = "linux")]
 use crate::installa_gestore_segnale_isolato;
 use crate::{
     campi_della_pubblicazione, contract, contract_error_missing, da_testo_di_controllo, has_flag,
     install_ctrlc_handler, metrics_json, optional_value_after, read_control_plan_text,
-    run_pipeline, testo_piano_dag, value_after, PlanInputsProbe,
+    run_pipeline, testo_piano_dag, value_after,
 };
 
 /// `run` di un piano DAG: esecuzione DAG e pubblicazione atomica dell'output,
@@ -41,11 +38,11 @@ pub fn run_dag(
 ) -> Result<(), Box<dyn Error>> {
     // Prima del lavoro, con la stessa classe della pubblicazione.
     verifica_destinazione_libera(output_path)?;
-    let probe: PlanInputsProbe = da_testo_di_controllo(plan_text)?;
-    let pairs = pair_v4_inputs(&probe, inputs)?;
-    let mut contracts = discover_contracts(&pairs)?;
-    apply_crs_decisions(&probe, &mut contracts)?;
-    let graph = planner::validate(plan_text, &contracts)?;
+    let PianoAccoppiato {
+        graph,
+        pairs,
+        contracts,
+    } = grafo_dal_piano(plan_text, inputs)?;
     // Un piano con `max_domain_memory_bytes` chiede il profilo isolato:
     // `planner::validate` lo ha gia' respinto fuori da Linux, e qui il
     // percorso e' un altro, mai l'esecuzione in-process sotto.
