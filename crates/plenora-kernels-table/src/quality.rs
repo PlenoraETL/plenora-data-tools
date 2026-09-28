@@ -670,6 +670,7 @@ mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
 
     use super::*;
+    use crate::test_support::single_column_batch;
 
     fn fixture() -> RecordBatch {
         RecordBatch::try_new(
@@ -689,15 +690,16 @@ mod tests {
     fn assert_range_integer_bounds_are_exact_beyond_2_pow_53() {
         // Classe "confronti via f64": 2^53+1 collassa sul double 2^53; un
         // estremo max = 2^53 (esatto in f64) deve comunque escluderlo.
-        let ints = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)])),
-            vec![Arc::new(Int64Array::from(vec![
+        let ints = single_column_batch(
+            "i",
+            Arc::new(Int64Array::from(vec![
                 Some(9_007_199_254_740_992), // 2^53
                 Some(9_007_199_254_740_993), // 2^53 + 1
                 None,
-            ]))],
-        )
-        .expect("fixture i64");
+            ])),
+            DataType::Int64,
+            true,
+        );
         let config = AssertRange {
             column: "i".into(),
             min: Some(9_007_199_254_740_992.0),
@@ -709,32 +711,32 @@ mod tests {
         // La riga con 2^53+1 viola il massimo (il null e' ammesso).
         assert!(assert_range(&ints, &config).is_err());
         // Senza la riga oltre 2^53 il vincolo passa.
-        let ok = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)])),
-            vec![Arc::new(Int64Array::from(vec![
-                Some(9_007_199_254_740_992),
-                None,
-            ]))],
-        )
-        .expect("fixture ok");
+        let ok = single_column_batch(
+            "i",
+            Arc::new(Int64Array::from(vec![Some(9_007_199_254_740_992), None])),
+            DataType::Int64,
+            true,
+        );
         assert!(assert_range(&ok, &config).is_ok());
 
-        let uints = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("u", DataType::UInt64, true)])),
-            vec![Arc::new(UInt64Array::from(vec![
+        let uints = single_column_batch(
+            "u",
+            Arc::new(UInt64Array::from(vec![
                 Some(9_007_199_254_740_993_u64), // 2^53 + 1
                 Some(9),
-            ]))],
-        )
-        .expect("fixture u64");
+            ])),
+            DataType::UInt64,
+            true,
+        );
         // u64 oltre 2^53 contro max = 2^53: violazione esatta (9 < 10 anche
         // in ordinato, mai confronto testuale).
         assert!(assert_range(&uints, &config_u64()).is_err());
-        let uints_ok = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("u", DataType::UInt64, true)])),
-            vec![Arc::new(UInt64Array::from(vec![Some(9), Some(10)]))],
-        )
-        .expect("fixture u64 ok");
+        let uints_ok = single_column_batch(
+            "u",
+            Arc::new(UInt64Array::from(vec![Some(9), Some(10)])),
+            DataType::UInt64,
+            true,
+        );
         assert!(assert_range(&uints_ok, &config_u64_min()).is_ok());
     }
 
@@ -804,11 +806,12 @@ mod tests {
 
     #[test]
     fn assert_regex_distinguishes_null_from_text_mismatch() {
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("text", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![None, Some("no")]))],
-        )
-        .expect("fixture");
+        let batch = single_column_batch(
+            "text",
+            Arc::new(StringArray::from(vec![None, Some("no")])),
+            DataType::Utf8,
+            true,
+        );
         let error = assert_regex(
             &batch,
             &AssertRegex {
@@ -899,11 +902,7 @@ mod tests {
     }
 
     fn int_batch(ids: Vec<Option<i64>>) -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)])),
-            vec![Arc::new(Int64Array::from(ids))],
-        )
-        .expect("batch int64")
+        single_column_batch("id", Arc::new(Int64Array::from(ids)), DataType::Int64, true)
     }
 
     #[test]
@@ -959,16 +958,12 @@ mod tests {
         assert_unique_equivalent(&batch, &unique_config(&["id"], false));
         // Fast path tipizzato Utf8: i null sono contati come chiave
         // (duplicato alla riga 3) con nulls_equal=true, saltati con false.
-        let utf8_nulls = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![
-                Some("a"),
-                None,
-                Some("b"),
-                None,
-            ]))],
-        )
-        .expect("batch utf8 con null");
+        let utf8_nulls = single_column_batch(
+            "s",
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("b"), None])),
+            DataType::Utf8,
+            true,
+        );
         assert_unique_equivalent(&utf8_nulls, &unique_config(&["s"], true));
         assert_unique_equivalent(&utf8_nulls, &unique_config(&["s"], false));
     }
@@ -1023,23 +1018,25 @@ mod tests {
     #[test]
     fn assert_unique_matches_reference_on_nan_and_negative_zero() {
         // NaN serializza come "NaN": due NaN sono duplicati (riga 3).
-        let nans = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, true)])),
-            vec![Arc::new(Float64Array::from(vec![
+        let nans = single_column_batch(
+            "v",
+            Arc::new(Float64Array::from(vec![
                 Some(1.0),
                 Some(f64::NAN),
                 Some(2.0),
                 Some(f64::NAN),
-            ]))],
-        )
-        .expect("batch nan");
+            ])),
+            DataType::Float64,
+            true,
+        );
         assert_unique_equivalent(&nans, &unique_config(&["v"], true));
         // 0.0 -> "0" e -0.0 -> "-0": chiavi diverse, nessun duplicato.
-        let zeros = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, true)])),
-            vec![Arc::new(Float64Array::from(vec![Some(0.0), Some(-0.0)]))],
-        )
-        .expect("batch zeri");
+        let zeros = single_column_batch(
+            "v",
+            Arc::new(Float64Array::from(vec![Some(0.0), Some(-0.0)])),
+            DataType::Float64,
+            true,
+        );
         assert_unique_equivalent(&zeros, &unique_config(&["v"], true));
     }
 

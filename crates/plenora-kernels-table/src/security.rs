@@ -894,6 +894,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     use super::*;
+    use crate::test_support::{assert_batches_identical, single_column_batch};
     use plenora_core::arrow::array::{
         Array, ArrayRef, BooleanArray, Date32Array, Float64Array, Int64Array, UInt64Array,
     };
@@ -1144,63 +1145,6 @@ mod tests {
             )?;
         }
         Ok(result)
-    }
-
-    /// Confronto rigoroso: schema (nomi, tipi, nullabilita'), maschera null
-    /// e valori via profilo scalare; le colonne Float64 si confrontano bit a
-    /// bit, perche' il testo non distingue payload NaN e zeri con segno.
-    fn assert_batches_identical(fast: &RecordBatch, reference: &RecordBatch) {
-        assert_eq!(fast.num_rows(), reference.num_rows(), "righe");
-        assert_eq!(fast.num_columns(), reference.num_columns(), "colonne");
-        let fast_schema = fast.schema();
-        let reference_schema = reference.schema();
-        for index in 0..fast.num_columns() {
-            let fast_field = fast_schema.field(index);
-            let reference_field = reference_schema.field(index);
-            assert_eq!(
-                fast_field.name(),
-                reference_field.name(),
-                "nome colonna {index}"
-            );
-            assert_eq!(
-                fast_field.data_type(),
-                reference_field.data_type(),
-                "tipo colonna {index}"
-            );
-            assert_eq!(
-                fast_field.is_nullable(),
-                reference_field.is_nullable(),
-                "nullabilita' colonna {index}"
-            );
-            for row in 0..fast.num_rows() {
-                assert_eq!(
-                    fast.column(index).is_null(row),
-                    reference.column(index).is_null(row),
-                    "null riga {row} colonna {index}"
-                );
-                if let (Some(fast_values), Some(reference_values)) = (
-                    fast.column(index).as_any().downcast_ref::<Float64Array>(),
-                    reference
-                        .column(index)
-                        .as_any()
-                        .downcast_ref::<Float64Array>(),
-                ) {
-                    if !fast_values.is_null(row) {
-                        assert_eq!(
-                            fast_values.value(row).to_bits(),
-                            reference_values.value(row).to_bits(),
-                            "bit riga {row} colonna {index}"
-                        );
-                    }
-                    continue;
-                }
-                assert_eq!(
-                    scalar_as_string(fast.column(index).as_ref(), row).expect("fast"),
-                    scalar_as_string(reference.column(index).as_ref(), row).expect("ref"),
-                    "valore riga {row} colonna {index}"
-                );
-            }
-        }
     }
 
     fn masking(column: &str, mask_type: MaskType) -> Masking {
@@ -1669,29 +1613,29 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "bit riga 0 colonna 0")]
+    #[should_panic(expected = "bit riga 0 colonna x")]
     fn il_confronto_distingue_i_payload_nan() {
         // Due NaN con payload diversi hanno lo stesso testo: il confronto
-        // deve comunque separarli, come le copie di joins.rs e reshape.rs.
+        // condiviso di `test_support` deve comunque separarli.
         let batch = |bits: u64| {
-            RecordBatch::try_new(
-                Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, true)])),
-                vec![Arc::new(Float64Array::from(vec![Some(f64::from_bits(
-                    bits,
-                ))]))],
+            single_column_batch(
+                "x",
+                Arc::new(Float64Array::from(vec![Some(f64::from_bits(bits))])),
+                DataType::Float64,
+                true,
             )
-            .expect("fixture")
         };
         assert_batches_identical(&batch(0x7ff8_0000_0000_0001), &batch(0x7ff8_0000_0000_0002));
     }
 
     #[test]
     fn mask_data_input_vuoto_oracle() {
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("text", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(Vec::<Option<&str>>::new()))],
-        )
-        .expect("fixture");
+        let batch = single_column_batch(
+            "text",
+            Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
+            DataType::Utf8,
+            true,
+        );
         let config = MaskData {
             maskings: vec![masking("text", MaskType::Custom)],
             overwrite: true,
@@ -1703,11 +1647,12 @@ mod tests {
 
     #[test]
     fn mask_data_errori_identici() {
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("text", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![Some("abcdefgh")]))],
-        )
-        .expect("fixture");
+        let batch = single_column_batch(
+            "text",
+            Arc::new(StringArray::from(vec![Some("abcdefgh")])),
+            DataType::Utf8,
+            true,
+        );
         // mask_char vuoto e multi-carattere: stesso errore.
         for mask_char in ["", "**"] {
             let config = MaskData {
