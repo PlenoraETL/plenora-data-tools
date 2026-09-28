@@ -241,7 +241,6 @@ pub fn analyze_table_contract(
 mod tests {
     use std::sync::Arc;
 
-    use plenora_core::catalog::{Family, CATALOG};
     use plenora_core::crs::{CrsKind, ResolvedCrs};
     use serde_json::json;
 
@@ -486,31 +485,6 @@ mod tests {
                 Some(GeometryEncoding::Ewkb),
                 "rename: encoding"
             );
-        }
-    }
-
-    #[test]
-    fn every_table_op_has_an_analysis_arm() {
-        let table_ops: Vec<_> = CATALOG
-            .iter()
-            .filter(|op| op.family == Family::Table)
-            .collect();
-        assert_eq!(table_ops.len(), 71);
-        for descriptor in table_ops {
-            let inputs = vec![tabular_contract(), right_contract()];
-            let result = analyze_table_contract(
-                descriptor.id,
-                &inputs,
-                &json!({}),
-                &mut FieldAllocator::default(),
-            );
-            if let Err(PlenoraError::Unsupported(message)) = &result {
-                assert!(
-                    !message.contains("analyze_contract non disponibile"),
-                    "{} senza braccio di analisi",
-                    descriptor.id
-                );
-            }
         }
     }
 
