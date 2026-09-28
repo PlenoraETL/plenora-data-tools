@@ -7,7 +7,6 @@
 
 use std::rc::Rc;
 
-use plenora_core::arrow::ipc::reader::StreamReader;
 use plenora_core::diagnostics::RowDiagnostics;
 use plenora_core::error::ReplayedError;
 use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, Result, RetryDisposition};
@@ -18,7 +17,9 @@ use crate::prepare::ExecutionPlan;
 use super::input::BatchStream;
 use super::network::EdgeStream;
 use super::run_streaming_chain;
-use super::staging::{replay_staged_batch, StagedReplay, StagingAccepted, StagingOutcome};
+use super::staging::{
+    apri_replay, replay_staged_batch, StagedReplay, StagingAccepted, StagingOutcome,
+};
 use super::state::ExecState;
 
 /// Fusione dei report row-scoped: la procedura vive in
@@ -353,12 +354,7 @@ pub(super) fn scan_row_diagnostic_segment(
     let Some((dir, path)) = staging else {
         return StagingOutcome::Terminal(None);
     };
-    match std::fs::File::open(&path)
-        .map_err(PlenoraError::Io)
-        .and_then(|file| {
-            StreamReader::try_new(file, None)
-                .map_err(|error| PlenoraError::Internal(format!("replay staging IPC: {error}")))
-        }) {
+    match apri_replay(&path) {
         Ok(reader) => StagingOutcome::Replay(StagedReplay {
             reader,
             staged: staged_meta,

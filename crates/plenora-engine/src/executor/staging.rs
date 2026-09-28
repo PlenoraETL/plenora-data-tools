@@ -13,6 +13,7 @@ use plenora_core::arrow::array::{RecordBatch, UInt32Array};
 use plenora_core::arrow::ipc::reader::StreamReader;
 use plenora_core::arrow::ipc::writer::StreamWriter;
 use plenora_core::arrow::select::take::take;
+use plenora_core::arrow::ArrowError;
 use plenora_core::contract::BatchSequence;
 use plenora_core::{PlenoraError, Result};
 
@@ -24,11 +25,37 @@ use super::diagnostics::{
 use super::input::BatchStream;
 use super::state::ExecState;
 
+/// Capacita' del buffer di scrittura dello staging.
+///
+/// Il writer IPC emette ogni messaggio in molti pezzi piccoli (prefisso,
+/// metadati, padding, un buffer per colonna): senza buffer ognuno e' una
+/// syscall. 64 KiB come lo spill (`SPILL_IO_BUFFER_BYTES` in
+/// `plenora-kernels-table`): fissi, uno per staging aperto, fuori dalla
+/// contabilita' del governor come il resto del writer IPC
+/// (errori-e-limiti.md#memoria-governata). Il replay resta senza buffer: vedi
+/// [`apri_replay`].
+const STAGING_IO_BUFFER_BYTES: usize = 64 * 1024;
+
 /// Writer con conteggio dei byte e quota dichiarata (`max_temp_bytes` del
 /// piano): superata la quota la scrittura fallisce con errore esplicito,
 /// mai silenzioso.
+///
+/// Il conteggio sta **sopra** il buffer: la quota si decide su ogni
+/// scrittura logica del writer IPC, allo stesso byte del percorso senza
+/// buffer. Gli errori del file arrivano invece allo svuotamento, e l'ordine
+/// fra i due si conserva cosi':
+///
+/// - prima di rifiutare per quota si svuota: i pezzi precedenti, senza
+///   buffer, sarebbero gia' stati scritti, e un loro errore del file sarebbe
+///   venuto per primo ([`CountingFile::rifiuta`]);
+/// - un errore di codifica a meta' messaggio segue la stessa regola in
+///   [`stage_one_batch`] ([`prima_il_file`]);
+/// - lo svuotamento esplicito dopo l'intestazione e dopo ogni batch, e quello
+///   di `finish`, fanno emergere l'errore del file nella stessa chiamata in
+///   cui emergeva senza buffer.
 pub(super) struct CountingFile {
-    file: std::fs::File,
+    /// `None` solo dentro il `Drop`.
+    file: Option<std::io::BufWriter<std::fs::File>>,
     written: u64,
     max_bytes: u64,
 }
@@ -37,28 +64,57 @@ impl CountingFile {
     fn create(path: &Path, max_bytes: u64) -> Result<Self> {
         let file = std::fs::File::create(path).map_err(PlenoraError::Io)?;
         Ok(Self {
-            file,
+            file: Some(std::io::BufWriter::with_capacity(
+                STAGING_IO_BUFFER_BYTES,
+                file,
+            )),
             written: 0,
             max_bytes,
         })
+    }
+
+    fn buffer(&mut self) -> std::io::Result<&mut std::io::BufWriter<std::fs::File>> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("staging IPC gia' chiuso"))
+    }
+
+    /// Il rifiuto di quota, dopo aver svuotato cio' che lo precede.
+    ///
+    /// Senza buffer i pezzi gia' accettati sarebbero nel file: se scriverli
+    /// fallisce, quell'errore viene prima della quota e si rende lui.
+    fn rifiuta(&mut self, messaggio: &'static str) -> std::io::Error {
+        match self.buffer().and_then(std::io::Write::flush) {
+            Err(del_file) => del_file,
+            Ok(()) => std::io::Error::new(std::io::ErrorKind::QuotaExceeded, messaggio),
+        }
+    }
+}
+
+/// Nessuna scrittura implicita alla distruzione.
+///
+/// Il `Drop` di `BufWriter` svuoterebbe il buffer ignorandone l'errore. Qui
+/// byte ancora nel buffer esistono solo se lo staging e' gia' fallito: il
+/// percorso riuscito svuota a ogni batch e in `finish`, e ne propaga l'errore.
+/// Quei byte appartengono a un file che la sua `TempDir` cancella, e si
+/// scartano senza scriverli: nessun I/O il cui esito nessuno legge.
+impl Drop for CountingFile {
+    fn drop(&mut self) {
+        if let Some(buffer) = self.file.take() {
+            let (_file, _scartati) = buffer.into_parts();
+        }
     }
 }
 
 impl std::io::Write for CountingFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let written = self.written.checked_add(buf.len() as u64).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::QuotaExceeded,
-                "overflow conteggio staging IPC",
-            )
-        })?;
+        let Some(written) = self.written.checked_add(buf.len() as u64) else {
+            return Err(self.rifiuta("overflow conteggio staging IPC"));
+        };
         if written > self.max_bytes {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::QuotaExceeded,
-                "staging IPC oltre max_temp_bytes",
-            ));
+            return Err(self.rifiuta("staging IPC oltre max_temp_bytes"));
         }
-        let n = self.file.write(buf)?;
+        let n = self.buffer()?.write(buf)?;
         self.written = self.written.checked_add(n as u64).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::QuotaExceeded,
@@ -69,7 +125,7 @@ impl std::io::Write for CountingFile {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.file.flush()
+        self.buffer()?.flush()
     }
 }
 
@@ -270,6 +326,29 @@ impl StagingAccepted {
     }
 }
 
+/// Quale errore rendere quando una scrittura IPC fallisce con byte ancora nel
+/// buffer.
+///
+/// Il writer IPC puo' fallire nella codifica **dopo** aver scritto parte del
+/// batch (i dizionari, in `arrow-ipc` 59). Senza buffer quei pezzi sarebbero
+/// gia' nel file, e un loro errore del file sarebbe venuto per primo: si
+/// svuota adesso, e se lo svuotamento fallisce vince il suo errore, come
+/// avrebbe vinto prima. Un errore che viene gia' dal file (`IoError`, quota
+/// compresa: [`CountingFile::rifiuta`] svuota prima) e' per costruzione il
+/// primo, e resta.
+pub(super) fn prima_il_file(
+    errore: ArrowError,
+    svuota: impl FnOnce() -> std::result::Result<(), ArrowError>,
+) -> ArrowError {
+    if matches!(errore, ArrowError::IoError(..)) {
+        return errore;
+    }
+    match svuota() {
+        Err(del_file) => del_file,
+        Ok(()) => errore,
+    }
+}
+
 /// Scrive un batch nello staging IPC (inizializzando file e writer al primo
 /// batch); la quota `max_temp_bytes` e' fatta rispettare da `CountingFile`.
 /// `what` qualifica il contesto nei messaggi (`input` gate WKB, `output`
@@ -289,7 +368,10 @@ pub(super) fn stage_one_batch(
             .map_err(PlenoraError::Io)?;
         let path = dir.path().join("staged.arrow");
         let counting = CountingFile::create(&path, state.plan.limits().max_temp_bytes)?;
+        // Lo svuotamento dopo l'intestazione riporta un errore di I/O dello
+        // schema qui, con l'errore di `try_new`, e non al primo batch.
         let stream = StreamWriter::try_new(counting, &batch.schema())
+            .and_then(|mut stream| stream.flush().map(|()| stream))
             .map_err(|error| PlenoraError::Internal(format!("staging {what}: {error}")))?;
         *writer = Some(stream);
         *staging = Some((dir, path));
@@ -297,11 +379,17 @@ pub(super) fn stage_one_batch(
     let active = writer
         .as_mut()
         .ok_or_else(|| PlenoraError::Internal(format!("staging {what} non inizializzato")))?;
-    active.write(batch).map_err(|error| {
-        PlenoraError::InvalidPlan(format!(
-            "staging {what} `{edge}` fallito oltre la quota o per I/O: {error}"
-        ))
-    })?;
+    // Scrittura e svuotamento del batch con lo stesso errore: un fallimento
+    // del file emerge nel batch che lo ha causato, come senza buffer.
+    active
+        .write(batch)
+        .map_err(|error| prima_il_file(error, || active.flush()))
+        .and_then(|()| active.flush())
+        .map_err(|error| {
+            PlenoraError::InvalidPlan(format!(
+                "staging {what} `{edge}` fallito oltre la quota o per I/O: {error}"
+            ))
+        })?;
     Ok(())
 }
 
@@ -416,12 +504,7 @@ pub(super) fn stage_input_batches(
     let Some((dir, path)) = staging.take() else {
         return StagingOutcome::Terminal(None);
     };
-    match std::fs::File::open(&path)
-        .map_err(PlenoraError::Io)
-        .and_then(|file| {
-            StreamReader::try_new(file, None)
-                .map_err(|error| PlenoraError::Internal(format!("replay staging IPC: {error}")))
-        }) {
+    match apri_replay(&path) {
         Ok(reader) => StagingOutcome::Replay(StagedReplay {
             reader,
             staged: staged_meta,
@@ -429,6 +512,28 @@ pub(super) fn stage_input_batches(
         }),
         Err(error) => StagingOutcome::Terminal(Some(error)),
     }
+}
+
+/// Apre il file di staging per il replay.
+///
+/// Il lettore resta **senza buffer**, per scelta. Il reader IPC legge ogni
+/// messaggio con quattro `read_exact` (prefisso, lunghezza, metadati, corpo):
+/// un buffer ne risparmierebbe tre per batch, sotto il rumore della misura
+/// dello staging (qualche centinaio di syscall su 49 batch, contro una
+/// variazione di circa 1 ms su 31). In cambio leggerebbe oltre il messaggio
+/// corrente, e un errore del
+/// sistema operativo sui byte del batch successivo emergerebbe mentre si
+/// rilegge quello corrente, anticipando un errore di kernel su quel batch: un
+/// cambio nell'ordine degli errori da dichiarare, per un guadagno che non si
+/// misura.
+///
+/// # Errors
+///
+/// `Io` se il file non si apre; `Internal` se l'intestazione IPC non si legge.
+pub(super) fn apri_replay(path: &Path) -> Result<StreamReader<std::fs::File>> {
+    let file = std::fs::File::open(path).map_err(PlenoraError::Io)?;
+    StreamReader::try_new(file, None)
+        .map_err(|error| PlenoraError::Internal(format!("replay staging IPC: {error}")))
 }
 
 /// Validazione atomica dell'input geometrico: staging bounded + replay.

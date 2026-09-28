@@ -5773,6 +5773,134 @@ fn staging_memoria_e_disco_producono_gli_stessi_byte() {
     assert_eq!(memoria.len(), staging_batches().len());
 }
 
+// ---------------------------------------------------------------------------
+// Oracolo della quota di staging al byte (architettura.md#determinismo): la
+// quota `max_temp_bytes` si applica ai byte che il writer IPC produce, e
+// dove cade il confine non dipende da come quei byte arrivano al file.
+// Confine, errori e testi sono quelli del percorso senza buffer, fissati
+// qui prima del buffering: il buffering non deve spostarli di un byte.
+// ---------------------------------------------------------------------------
+
+/// Esito di un'esecuzione con quota `quota`, ridotto a cio' che si confronta:
+/// i batch, oppure categoria, testo e diagnostica dell'errore.
+type EsitoQuota = std::result::Result<Vec<RecordBatch>, String>;
+
+/// Un'esecuzione parametrizzata dalla quota.
+type EseguiConQuota = dyn Fn(u64) -> EsitoQuota;
+
+fn riduci_esito(esito: Result<(Vec<RecordBatch>, ExecutionMetrics)>) -> EsitoQuota {
+    esito.map(|(batch, _)| batch).map_err(|error| {
+        format!(
+            "{:?}|{}|{:?}",
+            error.category(),
+            error,
+            error.row_diagnostics().map(|report| (
+                report.completeness,
+                report.knowledge_limits.clone(),
+                report.counts.clone()
+            ))
+        )
+    })
+}
+
+/// La quota minima con cui l'esecuzione riesce: il numero esatto di byte
+/// scritti nello staging. Ricerca binaria su un esito monotono.
+fn quota_minima(esegui: &EseguiConQuota) -> u64 {
+    let (mut bassa, mut alta) = (0_u64, 1_u64 << 24);
+    assert!(esegui(alta).is_ok(), "la quota alta deve bastare");
+    while bassa + 1 < alta {
+        let media = bassa + (alta - bassa) / 2;
+        if esegui(media).is_ok() {
+            alta = media;
+        } else {
+            bassa = media;
+        }
+    }
+    alta
+}
+
+/// Input geometrico: tre batch, un null, passano dal gate WKB e quindi dallo
+/// staging dell'input su disco.
+fn quota_input_geo(quota: u64) -> EsitoQuota {
+    let mut plan = nodeless_plan();
+    plan["limits"] = json!({"max_temp_bytes": quota});
+    let batches = vec![
+        geo_batch(&[1, 2], &[Some(point_wkb(1.0, 2.0)), None]),
+        geo_batch(&[3], &[Some(point_wkb(3.0, 4.0))]),
+        geo_batch(
+            &[4, 5, 6],
+            &[
+                Some(point_wkb(5.0, 6.0)),
+                Some(point_wkb(7.0, 8.0)),
+                Some(point_wkb(9.0, 10.0)),
+            ],
+        ),
+    ];
+    riduci_esito(
+        run(
+            &plan,
+            single_input("main", batches),
+            &[("main".to_owned(), geo_contract())],
+        )
+        .and_then(output_rows),
+    )
+}
+
+/// Accepted di un segmento row-diagnostics in modalita' disco.
+fn quota_accepted_disco(quota: u64) -> EsitoQuota {
+    let mut plan = staging_plan(true);
+    plan["limits"]["max_temp_bytes"] = json!(quota);
+    riduci_esito(
+        run(
+            &plan,
+            single_input("main", staging_batches()),
+            &staging_contratti(),
+        )
+        .and_then(output_rows),
+    )
+}
+
+#[test]
+fn quota_di_staging_al_byte_esatto_con_gli_errori_del_percorso_senza_buffer() {
+    // Valori osservati sul percorso senza buffer (d5b2b59), non ricalcolati:
+    // sono l'oracolo, e ricalcolarli con il codice sotto prova lo
+    // svuoterebbe.
+    let casi: [(&str, &EseguiConQuota, u64, usize); 2] = [
+        ("input", &quota_input_geo, 2120, 6),
+        ("output", &quota_accepted_disco, 3144, 12),
+    ];
+    for (cosa, esegui, byte_attesi, righe_attese) in casi {
+        let quota = quota_minima(esegui);
+        assert_eq!(quota, byte_attesi, "{cosa}: byte di staging");
+        let riuscito = esegui(quota).expect("quota esatta");
+        assert_eq!(
+            riuscito.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            righe_attese,
+            "{cosa}: righe"
+        );
+        let oltre = "Io error: staging IPC oltre max_temp_bytes|None";
+        // Il marcatore di fine stream (8 byte) si scrive in `finish`: un byte
+        // in meno fa fallire la chiusura, nove in meno l'ultimo batch, uno
+        // solo l'intestazione dello schema.
+        assert_eq!(
+            esegui(quota - 1).expect_err("chiusura oltre quota"),
+            format!("Internal|internal error: chiusura staging {cosa}: {oltre}"),
+        );
+        let arco = if cosa == "input" { "main" } else { "f" };
+        assert_eq!(
+            esegui(quota - 9).expect_err("ultimo batch oltre quota"),
+            format!(
+                "InvalidPlan|contract violation: staging {cosa} `{arco}` fallito oltre la \
+                 quota o per I/O: {oltre}"
+            ),
+        );
+        assert_eq!(
+            esegui(1).expect_err("schema oltre quota"),
+            format!("Internal|internal error: staging {cosa}: {oltre}"),
+        );
+    }
+}
+
 #[test]
 fn staging_ordine_e_sequenza_logica_preservati() {
     // La sequenza logica non e' esposta da `collect_batches`: si verifica
