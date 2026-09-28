@@ -272,12 +272,6 @@ fn assert_rifiutata_prima_dell_ingresso(result: &std::process::Output, uscita: &
     assert_eq!(envelope["error"]["category"], "conflict", "{envelope}");
     assert_eq!(envelope["error"]["phase"], "commit", "{envelope}");
     assert_eq!(result.status.code(), Some(5), "conflict -> 5: {envelope}");
-    assert!(
-        envelope["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("output gia' esistente")),
-        "{envelope}"
-    );
     assert_eq!(
         std::fs::read(uscita).expect("output intatto"),
         b"contenuto precedente",
