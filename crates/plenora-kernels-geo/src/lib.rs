@@ -379,7 +379,10 @@ fn poligono_con_punta(poligono: &geo::Polygon<f64>) -> bool {
 fn triangolo_degenere(triangolo: &geo::Triangle<f64>) -> bool {
     use geo::algorithm::kernels::{Kernel, Orientation, RobustKernel};
 
-    let vertici = [triangolo.0, triangolo.1, triangolo.2];
+    // Gli accessori rendono i campi come sono, senza riordinare: in
+    // `geo-types` 0.7.19 `v1()` e' `self.0`, e cosi' gli altri due. Il
+    // riordino antiorario lo fa solo `Triangle::new`, che qui non serve.
+    let vertici = [triangolo.v1(), triangolo.v2(), triangolo.v3()];
     vertici
         .iter()
         .all(|vertice| vertice.x.is_finite() && vertice.y.is_finite())

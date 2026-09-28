@@ -388,7 +388,7 @@ impl ValidatedPlanV5 {
     /// Serve al percorso v6, che valida la **struttura** attraverso la forma
     /// v5 condivisa e poi ricompone il proprio documento: senza questo,
     /// dovrebbe conservare un `PlanV5` che non e' il suo.
-    pub(crate) fn in_parti(self) -> (PlanV5, NucleoPianoValidato) {
+    fn in_parti(self) -> (PlanV5, NucleoPianoValidato) {
         (self.plan, self.nucleo)
     }
 
@@ -417,7 +417,7 @@ pub struct ValidatedPlanV6 {
 }
 
 impl ValidatedPlanV6 {
-    pub(crate) const fn nuovo(plan: formato_v6::PlanV6, nucleo: NucleoPianoValidato) -> Self {
+    const fn nuovo(plan: formato_v6::PlanV6, nucleo: NucleoPianoValidato) -> Self {
         Self { plan, nucleo }
     }
 

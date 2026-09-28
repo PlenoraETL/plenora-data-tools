@@ -484,7 +484,7 @@ mod tests {
         use plenora_kernels_geo::spatial_join::SpatialJoinError;
         use plenora_kernels_geo::topology::TopologyError;
 
-        let mut casi = vec![
+        let casi = vec![
             ArrowTransportError::Kernel(OperationError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Topology(TopologyError::ValidazioneNonConclusa("forma")),
             ArrowTransportError::Topology(TopologyError::CalcoloNonConcluso("forma")),
@@ -500,17 +500,27 @@ mod tests {
         ];
         // I due backend opzionali: senza la feature il ramo non e' compilato,
         // e il caso non puo' pretenderlo. Con la feature, si', ed e' li' che
-        // un mapping dimenticato si vedrebbe.
+        // un mapping dimenticato si vedrebbe. Si aggiungono ridichiarando
+        // l'elenco, non con un `push`: senza feature un `let mut` resterebbe
+        // mutabile per niente.
         #[cfg(feature = "proj-backend")]
-        casi.push(ArrowTransportError::Reproject(
-            plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa("forma"),
-        ));
+        let casi: Vec<_> = casi
+            .into_iter()
+            .chain([ArrowTransportError::Reproject(
+                plenora_kernels_geo::proj_backend::ProjBackendError::ValidazioneNonConclusa(
+                    "forma",
+                ),
+            )])
+            .collect();
         #[cfg(feature = "geos-backend")]
-        casi.push(ArrowTransportError::MakeValid(
-            plenora_kernels_geo::geos_backend::GeosBackendError::InputContract(
-                plenora_core::PlenoraError::Internal("difetto nostro".to_owned()),
-            ),
-        ));
+        let casi: Vec<_> = casi
+            .into_iter()
+            .chain([ArrowTransportError::MakeValid(
+                plenora_kernels_geo::geos_backend::GeosBackendError::InputContract(
+                    plenora_core::PlenoraError::Internal("difetto nostro".to_owned()),
+                ),
+            )])
+            .collect();
 
         for caso in &casi {
             assert_eq!(

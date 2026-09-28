@@ -2957,7 +2957,7 @@ pub fn transform_arrow(
 /// IPC e dell'output pubblico.
 pub fn transform_arrow_with_format(
     reader: impl Read,
-    mut writer: impl Write,
+    writer: impl Write,
     schema: &TransformArrowSchema,
     output_format: ArrowOutputFormat,
 ) -> Result<TransformArrowSummary, ArrowTransportError> {
