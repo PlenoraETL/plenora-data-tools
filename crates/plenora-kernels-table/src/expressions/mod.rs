@@ -233,6 +233,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::single_column_batch;
 
     /// Fixture con null, -0.0, zeri, testi (anche data-like) e booleani.
     ///
@@ -659,11 +660,12 @@ mod tests {
         // batch vuoto accetterebbe una colonna inesistente e un letterale
         // non scalare, cioe' lo stesso piano riuscirebbe o fallirebbe a
         // seconda dei dati.
-        let empty = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("n", DataType::Float64, true)])),
-            vec![Arc::new(Float64Array::from(Vec::<f64>::new()))],
-        )
-        .expect("empty");
+        let empty = single_column_batch(
+            "n",
+            Arc::new(Float64Array::from(Vec::<f64>::new())),
+            DataType::Float64,
+            true,
+        );
         for ast in [col("missing"), lit(json!([1, 2]))] {
             let config = config(ast, None);
             expression(&empty, &config)

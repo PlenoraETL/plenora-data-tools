@@ -459,10 +459,10 @@ pub fn text_normalize(
 
 #[cfg(test)]
 mod tests {
-    use plenora_core::arrow::schema::{Field, Schema};
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::single_column_batch;
 
     // -----------------------------------------------------------------------
     // Implementazioni generiche, indipendenti dai fast path: riferimento
@@ -646,9 +646,9 @@ mod tests {
     }
 
     fn extract_batch() -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("text", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![
+        single_column_batch(
+            "text",
+            Arc::new(StringArray::from(vec![
                 Some("LO2244_FV01_II01_GEO001"),
                 Some("LO0000_XX00_YY00_GEO000"),
                 Some("👨\u{200D}👩\u{200D}👧\u{200D}👦 emoji 🎉 123 456"),
@@ -659,9 +659,10 @@ mod tests {
                 Some("   "),
                 Some("nessun numero qui"),
                 None,
-            ]))],
+            ])),
+            DataType::Utf8,
+            true,
         )
-        .expect("fixture")
     }
 
     fn assert_extract_equivalent(config: &StringExtract, limits: &Limits) {
@@ -776,9 +777,9 @@ mod tests {
         // finale (regola contestuale di `str::to_lowercase`), İ turco
         // (combining dot), ß tedesco, legature, emoji con ZWJ, NBSP e figure
         // space (NFKD -> spazio), vuoto, solo spazi, null.
-        let unicode_batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("text", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![
+        let unicode_batch = single_column_batch(
+            "text",
+            Arc::new(StringArray::from(vec![
                 Some("  élÈVE   d'ÉCOLE  "),
                 Some("e\u{0301} cafe\u{0300}"),
                 Some("\u{00C9}\u{0301}"),
@@ -795,9 +796,10 @@ mod tests {
                 Some("   \t  "),
                 Some("àéîõü Çñ"),
                 None,
-            ]))],
-        )
-        .expect("fixture");
+            ])),
+            DataType::Utf8,
+            true,
+        );
         let modes = [
             NormalizeOperation::Trim,
             NormalizeOperation::Lower,
@@ -843,14 +845,12 @@ mod tests {
     }
 
     fn batch() -> RecordBatch {
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("text", DataType::Utf8, true)])),
-            vec![Arc::new(StringArray::from(vec![
-                Some("  élÈVE   d'ÉCOLE  "),
-                None,
-            ]))],
+        single_column_batch(
+            "text",
+            Arc::new(StringArray::from(vec![Some("  élÈVE   d'ÉCOLE  "), None])),
+            DataType::Utf8,
+            true,
         )
-        .expect("fixture")
     }
 
     #[test]

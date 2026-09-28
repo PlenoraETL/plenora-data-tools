@@ -1767,17 +1767,8 @@ pub fn asof_join(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{assert_batches_identical, nullable_batch as batch};
     use plenora_core::arrow::array::Date32Array;
-    use plenora_core::arrow::schema::Field;
-
-    fn batch(pairs: Vec<(&str, ArrayRef)>) -> RecordBatch {
-        let fields = pairs
-            .iter()
-            .map(|(name, column)| Field::new(*name, column.data_type().clone(), true))
-            .collect::<Vec<_>>();
-        let columns = pairs.into_iter().map(|(_, column)| column).collect();
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).expect("batch di test")
-    }
 
     fn i64_column(values: &[Option<i64>]) -> ArrayRef {
         Arc::new(Int64Array::from(values.to_vec()))
@@ -1922,79 +1913,6 @@ mod tests {
         };
         let output = asof_join(&left, &right, &config, &Limits::default()).expect("fallback");
         assert_eq!(output.num_rows(), 2);
-    }
-
-    fn assert_batches_identical(fast: &RecordBatch, reference: &RecordBatch) {
-        assert_eq!(fast.num_rows(), reference.num_rows(), "righe");
-        assert_eq!(fast.num_columns(), reference.num_columns(), "colonne");
-        let fast_schema = fast.schema();
-        let reference_schema = reference.schema();
-        for index in 0..fast.num_columns() {
-            let fast_field = fast_schema.field(index);
-            let reference_field = reference_schema.field(index);
-            assert_eq!(
-                fast_field.name(),
-                reference_field.name(),
-                "nome colonna {index}"
-            );
-            assert_eq!(
-                fast_field.data_type(),
-                reference_field.data_type(),
-                "tipo colonna {}",
-                fast_field.name()
-            );
-            assert_eq!(
-                fast_field.is_nullable(),
-                reference_field.is_nullable(),
-                "nullable colonna {}",
-                fast_field.name()
-            );
-            let fast_column = fast.column(index);
-            let reference_column = reference.column(index);
-            for row in 0..fast.num_rows() {
-                assert_eq!(
-                    fast_column.is_null(row),
-                    reference_column.is_null(row),
-                    "null mask colonna {} riga {row}",
-                    fast_field.name()
-                );
-            }
-            macro_rules! assert_values {
-                ($kind:ty, $value:ident, $converted:expr) => {{
-                    let fast_values = fast_column
-                        .as_any()
-                        .downcast_ref::<$kind>()
-                        .expect("downcast colonna fast");
-                    let reference_values = reference_column
-                        .as_any()
-                        .downcast_ref::<$kind>()
-                        .expect("downcast colonna reference");
-                    for row in 0..fast_values.len() {
-                        if fast_values.is_valid(row) {
-                            let $value = fast_values.value(row);
-                            let fast_value = $converted;
-                            let $value = reference_values.value(row);
-                            let reference_value = $converted;
-                            assert_eq!(
-                                fast_value,
-                                reference_value,
-                                "valore colonna {} riga {row}",
-                                fast_field.name()
-                            );
-                        }
-                    }
-                }};
-            }
-            match fast_field.data_type() {
-                DataType::Int64 => assert_values!(Int64Array, v, v),
-                DataType::UInt64 => assert_values!(UInt64Array, v, v),
-                DataType::Float64 => assert_values!(Float64Array, v, v.to_bits()),
-                DataType::Boolean => assert_values!(BooleanArray, v, v),
-                DataType::Utf8 => assert_values!(StringArray, v, v.to_owned()),
-                DataType::Date32 => assert_values!(Date32Array, v, v),
-                other => panic!("tipo non gestito dal test-oracolo: {other}"),
-            }
-        }
     }
 
     fn assert_join_identical(
