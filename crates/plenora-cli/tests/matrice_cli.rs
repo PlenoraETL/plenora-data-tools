@@ -91,6 +91,11 @@ fn scrivi_input(path: &Path) {
     scrivi_ipc(path, &schema, &[batch]);
 }
 
+/// Input Arrow con `righe` righe in un solo batch.
+fn scrivi_input_righe(path: &Path, righe: i64) {
+    scrivi_input_batch(path, 1, righe);
+}
+
 /// Input Arrow con `batch` batch da `righe_per_batch` righe ciascuno.
 ///
 /// Serve ai limiti di memoria: tanti batch PICCOLI passano singolarmente il
@@ -1211,4 +1216,53 @@ fn l_aiuto_non_scavalca_il_rifiuto_del_formato() {
     assert!(esegui(&["--format", "markdown", "catalog", "--help"])
         .status
         .success());
+}
+
+#[test]
+fn un_limite_di_risorsa_produce_la_categoria_e_l_exit_code_dedicati() {
+    // `resource_limit` dev'essere prodotta da almeno una variante concreta,
+    // altrimenti l'exit code 4 e' irraggiungibile. Un piano legacy con
+    // `max_rows` minuscolo lo raggiunge.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let piano = directory.path().join("legacy.json");
+    let input = directory.path().join("input.arrow");
+    let uscita = directory.path().join("out.arrow");
+    std::fs::write(
+        &piano,
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "limits": {"max_rows": 1},
+            "steps": [{"operation": "rename", "config": {"renames": [
+                {"old_name": "id", "new_name": "identificativo"}
+            ]}}]
+        }))
+        .expect("json"),
+    )
+    .expect("piano");
+    scrivi_input_righe(&input, 8);
+
+    let output = esegui(&[
+        "run",
+        "--plan",
+        &piano.to_string_lossy(),
+        "--input",
+        &input.to_string_lossy(),
+        "--output",
+        &uscita.to_string_lossy(),
+    ]);
+    assert!(!output.status.success());
+    let envelope = envelope_di(&output, "limite di righe");
+    assert_eq!(
+        envelope["error"]["category"], "resource_limit",
+        "un limite superato non e' un piano invalido: {envelope}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "la categoria `resource_limit` proietta sull'exit code 4"
+    );
+    assert!(
+        !uscita.try_exists().expect("stat"),
+        "nessun output da un limite superato"
+    );
 }

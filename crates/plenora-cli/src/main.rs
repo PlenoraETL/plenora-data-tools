@@ -2209,4 +2209,39 @@ mod tests {
         std::fs::write(&bad_path, framed_v2(&[Some(&garbage)])).expect("fixture");
         assert!(read_geometry_stream(&bad_path, 1).is_err());
     }
+
+    #[test]
+    fn discovery_rejects_canonical_keys_without_contract_version() {
+        // R2.5: chiavi canoniche senza `plenora.contract.version` nei
+        // metadati dello schema -> errore esplicito.
+        let schema = std::sync::Arc::new(Schema::new(vec![canonical_geometry_field(
+            DataType::Binary,
+        )]));
+        let result = discover_input_contract_from_schema(schema, resolve_crs);
+        assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
+    }
+
+    #[test]
+    fn discovery_rejects_unrepresentable_encoding() {
+        // (d) R3.5: framing fuori dall'enum chiuso -> rifiuto esplicito
+        // (Unsupported), mai mappato a un encoding noto.
+        for geo_json in [
+            r#"{"crs":"EPSG:32632","encoding":"gpkg"}"#,
+            r#"{"crs":"EPSG:32632","encoding":"twkb"}"#,
+            r#"{"crs":"EPSG:32632","encoding":42}"#,
+        ] {
+            let result = read_geometry_contract_keys(&geometry_field(Some(geo_json)));
+            assert!(
+                matches!(result, Err(PlenoraError::Unsupported(_))),
+                "geo: {geo_json}"
+            );
+        }
+
+        // Encoding rappresentabile -> propagato nel contratto.
+        let contract = contract_from_field(&geometry_field(Some(
+            r#"{"crs":"EPSG:32632","encoding":"wkb"}"#,
+        )))
+        .expect("discovery");
+        assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
+    }
 }
