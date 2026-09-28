@@ -3040,6 +3040,7 @@ pub(super) fn scrivi_output(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::ColonnaTipizzata;
     use geo::{line_string, polygon, LineString, MultiPoint, Point};
 
     use super::*;
@@ -3071,10 +3072,7 @@ mod tests {
             geometrie_sulle_righe(&batches, 1, &schema, &[0, 2], &[Some(vec![7]), None]).unwrap();
         let colonna = |indice: usize| {
             uscita[indice]
-                .column(1)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap()
+                .colonna_a::<BinaryArray>(1)
                 .iter()
                 .map(|valore| valore.map(<[u8]>::to_vec))
                 .collect::<Vec<_>>()

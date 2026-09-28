@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use plenora_core::arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{Array, ArrayRef, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
     ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
@@ -87,6 +87,26 @@ pub fn geo_contract_con(schema: SchemaRef, field_id: u32, crs: ContractCrs) -> D
         ContractProperties::default(),
     )
     .expect("contratto fixture valido")
+}
+
+// ---------------------------------------------------------------------------
+// Lettura dei batch
+// ---------------------------------------------------------------------------
+
+/// Accesso tipizzato alle colonne nelle prove: un tipo diverso da quello
+/// atteso e' un panico, mai un `None` lasciato passare.
+pub trait ColonnaTipizzata {
+    /// La colonna in posizione `index`, con il tipo concreto `A`.
+    fn colonna_a<A: Array + 'static>(&self, index: usize) -> &A;
+}
+
+impl ColonnaTipizzata for RecordBatch {
+    fn colonna_a<A: Array + 'static>(&self, index: usize) -> &A {
+        self.column(index)
+            .as_any()
+            .downcast_ref::<A>()
+            .unwrap_or_else(|| panic!("colonna {index}: tipo inatteso"))
+    }
 }
 
 // ---------------------------------------------------------------------------

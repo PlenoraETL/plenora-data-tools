@@ -40,6 +40,7 @@ use super::*;
 use crate::planner::validate;
 use crate::test_support::{
     geo_contract_con, projected_crs, run, single_input, table_batch, table_contract, table_schema,
+    ColonnaTipizzata,
 };
 
 // ---------------------------------------------------------------------------
@@ -1015,11 +1016,7 @@ fn mixed_table_geo_chain_executes_buffer_then_area() {
         .column_with_name("area")
         .expect("colonna area aggiunta dalla misura")
         .0;
-    let areas = batch
-        .column(area_index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::Float64Array>()
-        .expect("area Float64");
+    let areas = batch.colonna_a::<plenora_core::arrow::array::Float64Array>(area_index);
     // Buffer di un punto con raggio 10 ~ cerchio di area pi*100 (~306 con
     // l'approssimazione poligonale di `geo`).
     let expected = 100.0 * std::f64::consts::PI;
@@ -1388,11 +1385,7 @@ fn xyz_batch_round_trips_byte_per_byte_through_a_table_filter() {
         2,
         "il filtro scarta solo la riga con id 1"
     );
-    let cells = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("colonna geometria binaria");
+    let cells = batch.colonna_a::<BinaryArray>(1);
     assert_eq!(cells.value(0), kept_a.as_slice(), "cella 0 byte-per-byte");
     assert_eq!(cells.value(1), kept_b.as_slice(), "cella 1 byte-per-byte");
     // I metadati di output dichiarano ancora xyz: mai un xy silenzioso.
@@ -1727,11 +1720,7 @@ fn flags_free_ewkb_is_byte_identical_to_iso_and_passes_the_xy_gate() {
         run(&plan, inputs, &[("main".to_owned(), geo_contract_ewkb())]).expect("execute"),
     )
     .expect("EWKB puro-XY passa il gate xy");
-    let cells = batches[0]
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("colonna geometria binaria");
+    let cells = batches[0].colonna_a::<BinaryArray>(1);
     assert_eq!(cells.value(0), cell.as_slice(), "cella byte-per-byte");
 }
 
@@ -2755,32 +2744,19 @@ fn reference_line() -> Vec<(f64, f64)> {
 
 fn string_column(batch: &RecordBatch, name: &str) -> StringArray {
     let index = batch.schema().column_with_name(name).expect("colonna").0;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("colonna Utf8")
-        .clone()
+    batch.colonna_a::<StringArray>(index).clone()
 }
 
 fn f64_column(batch: &RecordBatch, name: &str) -> plenora_core::arrow::array::Float64Array {
     let index = batch.schema().column_with_name(name).expect("colonna").0;
     batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::Float64Array>()
-        .expect("colonna Float64")
+        .colonna_a::<plenora_core::arrow::array::Float64Array>(index)
         .clone()
 }
 
 fn u64_column(batch: &RecordBatch, name: &str) -> UInt64Array {
     let index = batch.schema().column_with_name(name).expect("colonna").0;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("colonna UInt64")
-        .clone()
+    batch.colonna_a::<UInt64Array>(index).clone()
 }
 
 #[test]
@@ -2922,11 +2898,7 @@ fn geo_snap_subdivide_chain_expands_rows() {
     assert_eq!(parents.values(), &[0, 0, 1]);
     // Il vertice perturbato e' stato agganciato alla referenza.
     let geom_index = batch.schema().column_with_name("geom").expect("geom").0;
-    let cells = batch
-        .column(geom_index)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("WKB");
+    let cells = batch.colonna_a::<BinaryArray>(geom_index);
     let first = plenora_kernels_geo::geometry_from_wkb(cells.value(0)).expect("decode");
     let Geometry::LineString(line) = first else {
         panic!("attesa LineString");
@@ -3017,11 +2989,7 @@ fn geo_geometry_accessors_adds_canonical_and_prefixed_columns() {
         .column_with_name("g_is_closed")
         .expect("g_is_closed")
         .0;
-    let closed = batch
-        .column(closed_index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::BooleanArray>()
-        .expect("Boolean");
+    let closed = batch.colonna_a::<plenora_core::arrow::array::BooleanArray>(closed_index);
     assert!(closed.value(0), "poligono chiuso");
     assert!(!closed.value(1), "linea aperta");
     let starts = string_column(batch, "start_point");
@@ -3098,11 +3066,7 @@ fn geo_collect_groups_geometries_by_key() {
     let schema = batch.schema();
     assert_eq!(schema.field(0).name(), "geom", "geometria prima colonna");
     assert_eq!(schema.field(1).name(), "id");
-    let cells = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("WKB");
+    let cells = batch.colonna_a::<BinaryArray>(0);
     let first = plenora_kernels_geo::geometry_from_wkb(cells.value(0)).expect("decode");
     let Geometry::MultiPoint(points) = first else {
         panic!("gruppo omogeneo di punti -> MultiPoint: {first:?}");
@@ -3280,11 +3244,7 @@ fn table_top_n_selects_highest_rows() {
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 2);
     let index = batch.schema().column_with_name("id").expect("id").0;
-    let ids = batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("Int64");
+    let ids = batch.colonna_a::<Int64Array>(index);
     assert_eq!(ids.values(), &[5, 3], "blocking: top_n sull'intero input");
 }
 
@@ -3363,11 +3323,7 @@ fn table_validate_rules_annotates_rows() {
 
     let batch = &batches[0];
     let valid_index = batch.schema().column_with_name("_valid").expect("_valid").0;
-    let valid = batch
-        .column(valid_index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::BooleanArray>()
-        .expect("Boolean");
+    let valid = batch.colonna_a::<plenora_core::arrow::array::BooleanArray>(valid_index);
     assert!(valid.value(0) && valid.value(1), "tutte le righe valide");
 }
 
@@ -3590,11 +3546,7 @@ fn geo_generate_grid_then_collect_executes() {
     // adiacenti di una griglia si toccano su un lato e una MultiPolygon OGC
     // non lo ammette: il kernel e' fail-closed su output non valido).
     assert_eq!(batch.num_rows(), 4, "una riga per cella della griglia 2x2");
-    let cells = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("WKB");
+    let cells = batch.colonna_a::<BinaryArray>(0);
     for row in 0..4 {
         let geometry = plenora_kernels_geo::geometry_from_wkb(cells.value(row)).expect("decode");
         assert!(matches!(geometry, Geometry::Polygon(_)), "{geometry:?}");
@@ -5260,11 +5212,7 @@ fn fused_transforms_plus_terminal_area_matches_unfused() {
         &DataType::Binary,
         "geometria sopravvive"
     );
-    let area = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::Float64Array>()
-        .expect("colonna area Float64");
+    let area = batch.colonna_a::<plenora_core::arrow::array::Float64Array>(2);
     assert!(area.is_null(2), "null-in -> null-out sulla misura");
 }
 
@@ -5313,11 +5261,7 @@ fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
         3,
         "misura appesa in coda allo schema"
     );
-    let wkt = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("colonna wkt Utf8");
+    let wkt = batch.colonna_a::<StringArray>(2);
     assert!(wkt.is_null(2), "null-in -> null-out sulla misura");
 }
 
@@ -5498,12 +5442,7 @@ fn ipc_bytes(batches: &[RecordBatch]) -> Vec<u8> {
 }
 
 fn int64_cell(batch: &RecordBatch, column: usize, row: usize) -> i64 {
-    batch
-        .column(column)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("colonna Int64")
-        .value(row)
+    batch.colonna_a::<Int64Array>(column).value(row)
 }
 
 #[test]
@@ -5551,19 +5490,11 @@ fn geo_sjoin_executes_inner_join_with_take_and_right_index() {
     // Colonne left via take: id ripetuto per coppia, geometria passthrough.
     assert_eq!(int64_cell(batch, 0, 0), 0);
     assert_eq!(int64_cell(batch, 0, 1), 0);
-    let geometries = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("geom Binary");
+    let geometries = batch.colonna_a::<BinaryArray>(1);
     assert_eq!(geometries.value(0), point_wkb(1.0, 1.0).as_slice());
     assert_eq!(geometries.value(1), point_wkb(1.0, 1.0).as_slice());
     // right_index non-null (inner join) e non-nullable nel contratto v4.
-    let right_index = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("right_index UInt64");
+    let right_index = batch.colonna_a::<UInt64Array>(2);
     assert_eq!(right_index.value(0), 0);
     assert_eq!(right_index.value(1), 1);
     assert_eq!(
@@ -5615,17 +5546,9 @@ fn geo_nearest_executes_with_right_index_and_distance() {
     // Un solo match: left0 -> right1 (distanza 2 < 5); il null non produce righe.
     assert_eq!(batch.num_rows(), 1);
     assert_eq!(int64_cell(batch, 0, 0), 0);
-    let right_index = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("right_index UInt64");
+    let right_index = batch.colonna_a::<UInt64Array>(2);
     assert_eq!(right_index.value(0), 1);
-    let distances = batch
-        .column(3)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .expect("distance Float64");
+    let distances = batch.colonna_a::<Float64Array>(3);
     assert_eq!(distances.value(0), 2.0);
     // Contratto v4: right_index e distance nullable (match opzionale per riga).
     assert!(output_contract
@@ -5671,11 +5594,7 @@ fn geo_within_executes_with_flag_column_and_custom_name() {
     // Left passthrough: righe invariate; colonna flag con il nome da config.
     assert_eq!(batch.num_rows(), 3);
     assert_eq!(int64_cell(batch, 0, 2), 2);
-    let flags = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .expect("flag Boolean");
+    let flags = batch.colonna_a::<BooleanArray>(2);
     assert!(flags.value(0), "punto interno al poligono");
     assert!(!flags.value(1), "punto esterno");
     assert!(flags.is_null(2), "geometria null -> flag null");
@@ -5728,11 +5647,7 @@ fn geo_count_points_in_polygons_executes_with_count_column() {
     let batch = &batches[0];
     assert_eq!(batch.schema(), output_contract.schema);
     assert_eq!(batch.num_rows(), 3);
-    let counts = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("count UInt64");
+    let counts = batch.colonna_a::<UInt64Array>(2);
     assert_eq!(counts.value(0), 2, "due punti nel primo poligono");
     assert_eq!(counts.value(1), 0, "nessun punto nel secondo");
     assert!(counts.is_null(2), "poligono null -> conteggio null");
@@ -5938,12 +5853,7 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
         Input::from_batches(vec![geo_batch(&[2], &[Some(point_wkb(2.0, 2.0))])]).expect("secondo")
     };
     let righe = |inputs: &Inputs| match &inputs.readers["main"] {
-        Input::Batches { batches } => batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("colonna id")
-            .value(0),
+        Input::Batches { batches } => batches[0].colonna_a::<Int64Array>(0).value(0),
         Input::Stream { .. } => panic!("variante inattesa"),
     };
 
@@ -6107,14 +6017,7 @@ fn staging_ordine_e_sequenza_logica_preservati() {
         let (batches, _) = staging_esegui(forza_disco).expect("esecuzione");
         let ids: Vec<i64> = batches
             .iter()
-            .flat_map(|b| {
-                b.column(0)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .expect("colonna id")
-                    .values()
-                    .to_vec()
-            })
+            .flat_map(|b| b.colonna_a::<Int64Array>(0).values().to_vec())
             .collect();
         assert_eq!(
             ids,
@@ -6314,14 +6217,7 @@ fn staging_output_consumato_da_un_segmento_successivo() {
     // L'ordinamento discendente e' effettivo: il consumatore ha visto i dati.
     let ids: Vec<i64> = memoria
         .iter()
-        .flat_map(|b| {
-            b.column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .expect("colonna id")
-                .values()
-                .to_vec()
-        })
+        .flat_map(|b| b.colonna_a::<Int64Array>(0).values().to_vec())
         .collect();
     assert_eq!(ids, vec![32, 31, 30, 22, 21, 20, 12, 11, 10, 2, 1, 0]);
 }

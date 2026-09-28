@@ -148,6 +148,7 @@ use plenora_kernels_geo::{geometry_from_wkb, transform_wkb, Operation};
 mod tests {
     use super::super::unary::{geo_metadata_json, geometry_output_field};
     use super::*;
+    use crate::test_support::ColonnaTipizzata;
     use geo::{line_string, polygon, Area, CoordsIter, Geometry, Point};
     use plenora_core::arrow::array::Int64Array;
     use plenora_core::diagnostics::RowDiagnosticsCompleteness;
@@ -335,11 +336,7 @@ mod tests {
             Some(CRS)
         );
 
-        let cells = out_batch
-            .column(geometry_index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .expect("Binary column");
+        let cells = out_batch.colonna_a::<BinaryArray>(geometry_index);
         let expected = transform_wkb(Operation::Centroid, &square).expect("kernel");
         assert_eq!(cells.value(0), expected.as_slice());
         assert!(cells.is_null(1));
@@ -347,23 +344,11 @@ mod tests {
         let centroid = geometry_from_wkb(cells.value(0)).expect("decode centroid");
         assert_eq!(centroid, Geometry::Point(Point::new(2.0, 2.0)));
 
-        let ids = out_batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("Int64");
+        let ids = out_batch.colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2]);
-        let labels = out_batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Utf8");
+        let labels = out_batch.colonna_a::<StringArray>(1);
         assert_eq!(labels.value(2), "riga-2");
-        let weights = out_batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("Float64");
+        let weights = out_batch.colonna_a::<Float64Array>(2);
         assert_eq!(weights.value(1), 0.5);
     }
 
@@ -835,11 +820,7 @@ mod tests {
 
             if operation.produces_geometry() {
                 let index = out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap();
-                let cells = batch
-                    .column(index)
-                    .as_any()
-                    .downcast_ref::<BinaryArray>()
-                    .expect("Binary");
+                let cells = batch.colonna_a::<BinaryArray>(index);
                 assert!(!cells.is_null(0), "{}", operation.name());
                 assert!(cells.is_null(1), "{}", operation.name());
                 geometry_from_wkb(cells.value(0)).unwrap_or_else(|error| {
@@ -880,11 +861,7 @@ mod tests {
             };
             let output = run(&schema, &input).expect("buffer");
             let (_, batch, index) = single_cell_output(&output, DEFAULT_GEOMETRY_COLUMN);
-            let cells = batch
-                .column(index)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap();
+            let cells = batch.colonna_a::<BinaryArray>(index);
             let geometry = geometry_from_wkb(cells.value(0)).expect("decode");
             let bounds = geo::BoundingRect::bounding_rect(&geometry).expect("non vuota");
             (geometry.unsigned_area(), bounds)
@@ -929,11 +906,7 @@ mod tests {
         };
         let output = run(&schema, &input).expect("buffer di default");
         let (_, batch, index) = single_cell_output(&output, DEFAULT_GEOMETRY_COLUMN);
-        let cells = batch
-            .column(index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = batch.colonna_a::<BinaryArray>(index);
         let default_area = geometry_from_wkb(cells.value(0))
             .expect("decode")
             .unsigned_area();
@@ -1004,11 +977,7 @@ mod tests {
             };
             let output = run(&schema, &input).expect("simplify");
             let (_, batch, index) = single_cell_output(&output, DEFAULT_GEOMETRY_COLUMN);
-            let cells = batch
-                .column(index)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap();
+            let cells = batch.colonna_a::<BinaryArray>(index);
             let simplified = geometry_from_wkb(cells.value(0)).expect("decode");
             assert_eq!(simplified.coords_count(), 2, "policy {policy:?}");
         }
@@ -1043,11 +1012,7 @@ mod tests {
 
         let output = run(&arrow_schema(1, ArrowOperation::Boundary), &input).expect("boundary");
         let (_, batch, index) = single_cell_output(&output, DEFAULT_GEOMETRY_COLUMN);
-        let cells = batch
-            .column(index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = batch.colonna_a::<BinaryArray>(index);
         assert!(matches!(
             geometry_from_wkb(cells.value(0)).unwrap(),
             Geometry::MultiLineString(_)
@@ -1056,11 +1021,7 @@ mod tests {
         let output = run(&arrow_schema(1, ArrowOperation::PointOnSurface), &input)
             .expect("point_on_surface");
         let (_, batch, index) = single_cell_output(&output, DEFAULT_GEOMETRY_COLUMN);
-        let cells = batch
-            .column(index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = batch.colonna_a::<BinaryArray>(index);
         let point = geometry_from_wkb(cells.value(0)).unwrap();
         let Geometry::Point(point) = point else {
             panic!("point_on_surface deve produrre un Point: {point:?}")
@@ -1082,11 +1043,7 @@ mod tests {
             let output = run(&arrow_schema(2, operation), &input)
                 .unwrap_or_else(|_| panic!("{}", operation.name()));
             let (_, batch, index) = single_cell_output(&output, operation.name());
-            let values = batch
-                .column(index)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .unwrap();
+            let values = batch.colonna_a::<Float64Array>(index);
             assert_eq!(values.value(0), expected, "{}", operation.name());
             assert!(values.is_null(1));
         }
@@ -1095,11 +1052,7 @@ mod tests {
             run(&arrow_schema(2, ArrowOperation::VertexCount), &input).expect("vertex_count");
         let (out_schema, batch, index) = single_cell_output(&output, "vertex_count");
         assert_eq!(out_schema.field(index).data_type(), &DataType::UInt64);
-        let values = batch
-            .column(index)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+        let values = batch.colonna_a::<UInt64Array>(index);
         assert_eq!(values.value(0), 3);
         assert!(values.is_null(1));
 
@@ -1113,11 +1066,7 @@ mod tests {
         ];
         for (name, expected) in expected_bounds {
             let index = out_schema.index_of(name).expect("colonna bounds");
-            let values = batches[0]
-                .column(index)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .unwrap();
+            let values = batches[0].colonna_a::<Float64Array>(index);
             assert_eq!(values.value(0), expected, "{name}");
             assert!(values.is_null(1));
         }
@@ -1125,11 +1074,7 @@ mod tests {
         let output = run(&arrow_schema(2, ArrowOperation::ToWkt), &input).expect("to_wkt");
         let (out_schema, batch, index) = single_cell_output(&output, WKT_COLUMN);
         assert_eq!(out_schema.field(index).data_type(), &DataType::Utf8);
-        let values = batch
-            .column(index)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let values = batch.colonna_a::<StringArray>(index);
         // Il crate `wkt` non e' una dipendenza di plenora-engine, quindi il
         // WKT non si ri-parsa per confrontarlo con la geometria attesa: il
         // confronto usa il kernel `to_wkt` come riferimento canonico.
@@ -1163,11 +1108,7 @@ mod tests {
         let output = run(&arrow_schema(3, ArrowOperation::MakeValid), &input).expect("make_valid");
         let (out_schema, out_batches) = decode_output(&output);
         let index = out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap();
-        let cells = out_batches[0]
-            .column(index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(index);
         let repaired = geometry_from_wkb(cells.value(0)).expect("riparata");
         assert!((repaired.unsigned_area() - 2.0).abs() < 1e-12);
         assert!(cells.is_null(1));
@@ -1218,11 +1159,7 @@ mod tests {
             geo.get("crs").and_then(serde_json::Value::as_str),
             Some(CRS)
         );
-        let cells = out_batches[0]
-            .column(index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(index);
         let reprojected = geometry_from_wkb(cells.value(0)).unwrap();
         let Geometry::Point(point) = reprojected else {
             panic!("atteso Point: {reprojected:?}")
@@ -1700,15 +1637,7 @@ mod tests {
         )
         .expect("transform");
         let (_, batches) = decode_output(&output);
-        let geometry = geometry_from_wkb(
-            batches[0]
-                .column(3)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap()
-                .value(0),
-        )
-        .unwrap();
+        let geometry = geometry_from_wkb(batches[0].colonna_a::<BinaryArray>(3).value(0)).unwrap();
         assert!(geometry.unsigned_area() > 0.0);
     }
 
@@ -1739,32 +1668,18 @@ mod tests {
         // 3 punti dal MultiPoint + 1 riga dal Polygon semplice; null senza figli.
         assert_eq!(batch.num_rows(), 4);
 
-        let parents = batch
-            .column(out_schema.index_of(PARENT_INDEX_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .expect("UInt64");
+        let parents =
+            batch.colonna_a::<UInt64Array>(out_schema.index_of(PARENT_INDEX_COLUMN).unwrap());
         assert_eq!(parents.values(), &[0, 0, 0, 2]);
         assert!(!parents.is_nullable());
 
-        let ids = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("Int64");
+        let ids = batch.colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 0, 0, 2]);
-        let labels = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Utf8");
+        let labels = batch.colonna_a::<StringArray>(1);
         assert_eq!(labels.value(3), "riga-2");
 
-        let cells = batch
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .expect("Binary");
+        let cells =
+            batch.colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         for row in 0..3 {
             let Geometry::Point(point) = geometry_from_wkb(cells.value(row)).unwrap() else {
                 panic!("componente MultiPoint deve essere Point")
@@ -1832,11 +1747,7 @@ mod tests {
         // una sola riga, solo colonna geometria, attributi non propagati.
         assert_eq!(out_schema.fields().len(), 1);
         assert_eq!(out_batches[0].num_rows(), 1);
-        let cells = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(0);
         let dissolved = geometry_from_wkb(cells.value(0)).expect("decode");
         assert!((dissolved.unsigned_area() - 6.0).abs() < 1e-12);
 
@@ -1845,11 +1756,7 @@ mod tests {
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
         let output = run(&arrow_schema(1, ArrowOperation::Dissolve), &input).expect("dissolve");
         let (_, out_batches) = decode_output(&output);
-        let cells = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(0);
         assert!(cells.is_null(0));
 
         // input non poligonale: rifiutato dal kernel.
@@ -1884,11 +1791,7 @@ mod tests {
 
         let output = run(&arrow_schema(5, ArrowOperation::LineBuilder), &input).expect("line");
         let (_, out_batches) = decode_output(&output);
-        let cells = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(0);
         let Geometry::LineString(line) = geometry_from_wkb(cells.value(0)).unwrap() else {
             panic!("line_builder deve produrre LineString")
         };
@@ -1897,11 +1800,7 @@ mod tests {
         let output =
             run(&arrow_schema(5, ArrowOperation::PolygonBuilder), &input).expect("polygon");
         let (_, out_batches) = decode_output(&output);
-        let cells = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(0);
         let polygon = geometry_from_wkb(cells.value(0)).unwrap();
         assert!((polygon.unsigned_area() - 1.0).abs() < 1e-12);
 
@@ -1910,11 +1809,7 @@ mod tests {
         let input = envelope_bytes(&schema, std::slice::from_ref(&batch));
         let output = run(&arrow_schema(2, ArrowOperation::LineBuilder), &input).expect("line");
         let (_, out_batches) = decode_output(&output);
-        let cells = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(0);
         assert!(cells.is_null(0));
 
         // input non puntuale: fail-closed.
@@ -1969,10 +1864,7 @@ mod tests {
         let (out_schema, out_batches) = decode_output(&output);
         assert_eq!(out_batches[0].num_rows(), 5);
         let cells = out_batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         assert!(cells.is_null(1));
         for (row, point) in [
             (0, &points[0]),
@@ -1985,11 +1877,7 @@ mod tests {
             assert!(cell.intersects(&expected_point), "cella riga {row}");
         }
         // attributi preservati sulle stesse righe.
-        let ids = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = out_batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2, 3, 4]);
 
         // cap punti dal kernel.
@@ -2065,22 +1953,14 @@ mod tests {
                 .map(String::as_str),
             Some(GEOARROW_WKB_EXTENSION)
         );
-        let cells = out_batches[0]
-            .column(index)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(index);
         assert_eq!(
             geometry_from_wkb(cells.value(0)).unwrap(),
             Geometry::Point(Point::new(12.0, 41.0))
         );
         assert!(cells.is_null(1));
         assert!(cells.is_null(2));
-        let ids = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = out_batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2]);
 
         // coordinate non finite: rifiuto fail-closed row-scoped.
@@ -2424,10 +2304,7 @@ mod tests {
             run(&arrow_schema(1, ArrowOperation::FromCoords), &input).expect("from_coords");
         let (out_schema, out_batches) = decode_output(&output);
         let cells = out_batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         assert_eq!(
             geometry_from_wkb(cells.value(0)).unwrap(),
             Geometry::Point(Point::new(3.0, 4.0))
@@ -2472,10 +2349,7 @@ mod tests {
             run(&arrow_schema(1, ArrowOperation::FromCoords), &input).expect("from_coords");
         let (out_schema, out_batches) = decode_output(&output);
         let cells = out_batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         assert_eq!(
             geometry_from_wkb(cells.value(0)).unwrap(),
             Geometry::Point(Point::new(2_f64.powi(53), -(2_f64.powi(53))))
@@ -2557,16 +2431,10 @@ mod tests {
         let output = run_pair(&schema, &left, &right).expect("sjoin");
         let (out_schema, batches) = decode_output(&output);
         assert_eq!(batches.len(), 1);
-        let left_index = batches[0]
-            .column(out_schema.index_of(LEFT_INDEX_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
-        let right_index = batches[0]
-            .column(out_schema.index_of(RIGHT_INDEX_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+        let left_index =
+            batches[0].colonna_a::<UInt64Array>(out_schema.index_of(LEFT_INDEX_COLUMN).unwrap());
+        let right_index =
+            batches[0].colonna_a::<UInt64Array>(out_schema.index_of(RIGHT_INDEX_COLUMN).unwrap());
         assert_eq!(left_index.values(), &[0]);
         assert_eq!(right_index.values(), &[1]);
         assert_eq!(out_schema.fields().len(), 2);
@@ -2625,19 +2493,12 @@ mod tests {
         // colonne left invariate + distance in coda.
         assert_eq!(out_schema.fields().len(), 5);
         assert!(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).is_ok());
-        let values = batches[0]
-            .column(out_schema.index_of(DISTANCE_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+        let values =
+            batches[0].colonna_a::<Float64Array>(out_schema.index_of(DISTANCE_COLUMN).unwrap());
         assert_eq!(values.value(0), 5.0);
         assert!(values.is_null(1));
         assert_eq!(values.value(2), 6.0);
-        let ids = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2]);
 
         let limited = PairArrowSchema {
@@ -2666,21 +2527,12 @@ mod tests {
         };
         let output = run_pair(&schema, &left, &right).expect("nearest");
         let (out_schema, batches) = decode_output(&output);
-        let left_index = batches[0]
-            .column(out_schema.index_of(LEFT_INDEX_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
-        let right_index = batches[0]
-            .column(out_schema.index_of(RIGHT_INDEX_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
-        let distances = batches[0]
-            .column(out_schema.index_of(DISTANCE_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+        let left_index =
+            batches[0].colonna_a::<UInt64Array>(out_schema.index_of(LEFT_INDEX_COLUMN).unwrap());
+        let right_index =
+            batches[0].colonna_a::<UInt64Array>(out_schema.index_of(RIGHT_INDEX_COLUMN).unwrap());
+        let distances =
+            batches[0].colonna_a::<Float64Array>(out_schema.index_of(DISTANCE_COLUMN).unwrap());
         // entrambi i pareggi a distanza 1, ordinati per indice right.
         assert_eq!(left_index.values(), &[0, 0]);
         assert_eq!(right_index.values(), &[0, 2]);
@@ -2724,20 +2576,13 @@ mod tests {
         let (out_schema, batches) = decode_output(&output);
         assert_eq!(batches[0].num_rows(), 3);
         let cells = batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         // riga 0: intersezione 1x1; riga 1: null in input; riga 2: fuori maschera -> null.
         let clipped = geometry_from_wkb(cells.value(0)).unwrap();
         assert!((clipped.unsigned_area() - 1.0).abs() < 1e-12);
         assert!(cells.is_null(1));
         assert!(cells.is_null(2));
-        let ids = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2]);
     }
 
@@ -2761,15 +2606,9 @@ mod tests {
             let (out_schema, batches) = decode_output(&output);
             assert_eq!(batches[0].num_rows(), expected_pieces, "mode {mode:?}");
             let left_index = batches[0]
-                .column(out_schema.index_of(LEFT_INDEX_COLUMN).unwrap())
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap();
+                .colonna_a::<UInt64Array>(out_schema.index_of(LEFT_INDEX_COLUMN).unwrap());
             let right_index = batches[0]
-                .column(out_schema.index_of(RIGHT_INDEX_COLUMN).unwrap())
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap();
+                .colonna_a::<UInt64Array>(out_schema.index_of(RIGHT_INDEX_COLUMN).unwrap());
             match mode {
                 OverlayMode::Intersection => {
                     assert!(!left_index.is_null(0) && !right_index.is_null(0));
@@ -2793,10 +2632,7 @@ mod tests {
                 }
             }
             let cells = batches[0]
-                .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap();
+                .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
             let total: f64 = (0..expected_pieces)
                 .map(|i| geometry_from_wkb(cells.value(i)).unwrap().unsigned_area())
                 .sum();
@@ -2875,11 +2711,9 @@ mod tests {
         let (out_schema, batches) = decode_output(&output);
         // colonne left invariate + `within` Boolean in coda.
         assert_eq!(out_schema.fields().len(), 5);
-        let flags = batches[0]
-            .column(out_schema.index_of(WITHIN_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<plenora_core::arrow::array::BooleanArray>()
-            .unwrap();
+        let flags = batches[0].colonna_a::<plenora_core::arrow::array::BooleanArray>(
+            out_schema.index_of(WITHIN_COLUMN).unwrap(),
+        );
         assert!(flags.value(0));
         assert!(!flags.value(1));
         assert!(!flags.value(2));
@@ -2916,19 +2750,12 @@ mod tests {
         };
         let output = run_pair(&schema, &left, &right).expect("count");
         let (out_schema, batches) = decode_output(&output);
-        let counts = batches[0]
-            .column(out_schema.index_of(COUNT_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+        let counts =
+            batches[0].colonna_a::<UInt64Array>(out_schema.index_of(COUNT_COLUMN).unwrap());
         assert_eq!(counts.value(0), 2);
         assert_eq!(counts.value(1), 1);
         assert!(counts.is_null(2));
-        let ids = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2]);
     }
 
@@ -2956,10 +2783,7 @@ mod tests {
                 run_pair(&schema, &left, &right).unwrap_or_else(|_| panic!("{}", operation.name()));
             let (out_schema, batches) = decode_output(&output);
             let cells = batches[0]
-                .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap();
+                .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
             let areas: Vec<Option<f64>> = (0..4)
                 .map(|row| {
                     (!cells.is_null(row))
@@ -3031,21 +2855,14 @@ mod tests {
         let (out_schema, out_batches) = decode_output(&output);
         assert_eq!(out_batches[0].num_rows(), 4);
         let cells = out_batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         // riga 0 conservata; la duplicata e' assorbita (first-row-wins) -> null;
         // la separata conservata; null in input -> null.
         assert!((geometry_from_wkb(cells.value(0)).unwrap().unsigned_area() - 4.0).abs() < 1e-12);
         assert!(cells.is_null(1));
         assert!((geometry_from_wkb(cells.value(2)).unwrap().unsigned_area() - 4.0).abs() < 1e-12);
         assert!(cells.is_null(3));
-        let ids = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = out_batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2, 3]);
 
         // snap_tolerance obbligatoria e non negativa.
@@ -3088,10 +2905,7 @@ mod tests {
     fn single_geometry_output(output: &[u8]) -> Geometry<f64> {
         let (out_schema, out_batches) = decode_output(output);
         let cells = out_batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         geometry_from_wkb(cells.value(0)).expect("decode")
     }
 
@@ -3358,21 +3172,15 @@ mod tests {
             .expect("geodesic_line_length");
         let (out_schema, out_batches) = decode_output(&output);
         let values = out_batches[0]
-            .column(out_schema.index_of("geodesic_line_length").unwrap())
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+            .colonna_a::<Float64Array>(out_schema.index_of("geodesic_line_length").unwrap());
         assert!((values.value(0) - 111_319.5).abs() / 111_319.5 < 1e-3);
 
         let square = square_wkb(1.0);
         let output = run_single(&arrow_schema(1, ArrowOperation::GeodesicArea), &square)
             .expect("geodesic_area");
         let (out_schema, out_batches) = decode_output(&output);
-        let values = out_batches[0]
-            .column(out_schema.index_of("geodesic_area").unwrap())
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+        let values =
+            out_batches[0].colonna_a::<Float64Array>(out_schema.index_of("geodesic_area").unwrap());
         assert!((values.value(0) - 1.2309e10).abs() / 1.2309e10 < 1e-3);
 
         let (fixture_schema, batch) = fixture_batch(&[Some(&square)]);
@@ -3436,11 +3244,7 @@ mod tests {
         let bounds_maxx = column("bounds_maxx");
         let bounds_maxx = bounds_maxx.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(bounds_maxx.value(1), 2.0);
-        let ids = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = batch.colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 1, 2]);
     }
 
@@ -3463,10 +3267,7 @@ mod tests {
         let output = run(&schema, &input).expect("delaunay");
         let (out_schema, out_batches) = decode_output(&output);
         let parents = out_batches[0]
-            .column(out_schema.index_of(PARENT_INDEX_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+            .colonna_a::<UInt64Array>(out_schema.index_of(PARENT_INDEX_COLUMN).unwrap());
         // Tre punti in posizione generale: un triangolo, area
         // |3 * 2.5 - 0.5 * 1| / 2 = 3.5. Il quadrato unitario: due
         // triangoli, qualunque sia la diagonale scelta, di area 0.5
@@ -3474,10 +3275,7 @@ mod tests {
         assert_eq!(out_batches.len(), 1);
         assert_eq!(parents.values(), &[0, 2, 2]);
         let cells = out_batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         for (riga, area_attesa) in [(0, 3.5), (1, 0.5), (2, 0.5)] {
             let triangle = geometry_from_wkb(cells.value(riga)).unwrap();
             assert!(
@@ -3529,11 +3327,7 @@ mod tests {
         let (out_schema, out_batches) = decode_output(&output);
         assert_eq!(out_schema.fields().len(), 1);
         assert_eq!(out_batches[0].num_rows(), 2);
-        let cells = out_batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let cells = out_batches[0].colonna_a::<BinaryArray>(0);
         let merged: Vec<usize> = (0..2)
             .map(|row| geometry_from_wkb(cells.value(row)).unwrap().coords_count())
             .collect();
@@ -3567,11 +3361,8 @@ mod tests {
         let input = envelope_bytes(&fixture_schema, std::slice::from_ref(&batch));
         let output = run(&arrow_schema(1, ArrowOperation::Polygonize), &input).expect("polygonize");
         let (out_schema, out_batches) = decode_output(&output);
-        let classes = out_batches[0]
-            .column(out_schema.index_of(CLASS_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let classes =
+            out_batches[0].colonna_a::<StringArray>(out_schema.index_of(CLASS_COLUMN).unwrap());
         let classes: Vec<&str> = (0..out_batches[0].num_rows())
             .map(|row| classes.value(row))
             .collect();
@@ -3608,11 +3399,9 @@ mod tests {
         };
         let output = run_pair(&schema, &left, &right).expect("predicate");
         let (out_schema, batches) = decode_output(&output);
-        let flags = batches[0]
-            .column(out_schema.index_of("predicate_covers").unwrap())
-            .as_any()
-            .downcast_ref::<plenora_core::arrow::array::BooleanArray>()
-            .unwrap();
+        let flags = batches[0].colonna_a::<plenora_core::arrow::array::BooleanArray>(
+            out_schema.index_of("predicate_covers").unwrap(),
+        );
         assert!(flags.value(0));
         assert!(flags.value(1));
         assert!(flags.is_null(2));
@@ -3658,10 +3447,7 @@ mod tests {
         let output = run_pair(&schema, &left, &right).expect("hausdorff");
         let (out_schema, batches) = decode_output(&output);
         let values = batches[0]
-            .column(out_schema.index_of("hausdorff_distance").unwrap())
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+            .colonna_a::<Float64Array>(out_schema.index_of("hausdorff_distance").unwrap());
         // Hausdorff per vertici (`extended.rs`), su A = (0,0)-(3,0)-(3,4) e
         // B = (0,1)-(3,5). Il vertice di A piu' lontano dai vertici di B e'
         // (3,0): sqrt(10) da (0,1), 5 da (3,5). Gli altri distano 1, in
@@ -3680,11 +3466,8 @@ mod tests {
         };
         let output = run_pair(&schema, &left, &right).expect("frechet");
         let (out_schema, batches) = decode_output(&output);
-        let values = batches[0]
-            .column(out_schema.index_of("frechet_distance").unwrap())
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+        let values =
+            batches[0].colonna_a::<Float64Array>(out_schema.index_of("frechet_distance").unwrap());
         // Frechet discreto: gli estremi si accoppiano fra loro (distanza 1
         // ciascuno), e il vertice (3,0) di A deve accoppiarsi a (0,1)
         // (sqrt(10)) o a (3,5) (5). Il minimo dei massimi e' sqrt(10): qui
@@ -3750,11 +3533,7 @@ mod tests {
             let output =
                 run_pair(&schema, &left, &right).unwrap_or_else(|_| panic!("{}", operation.name()));
             let (out_schema, batches) = decode_output(&output);
-            let values = batches[0]
-                .column(out_schema.index_of(column).unwrap())
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .unwrap();
+            let values = batches[0].colonna_a::<Float64Array>(out_schema.index_of(column).unwrap());
             let actual = values.value(0);
             assert!(
                 (actual - expected).abs() / expected < tolerance,
@@ -3792,23 +3571,13 @@ mod tests {
         let output = run_pair(&schema, &left, &right).expect("split lineare");
         let (out_schema, batches) = decode_output(&output);
         assert_eq!(batches[0].num_rows(), 2);
-        let parents = batches[0]
-            .column(out_schema.index_of(PARENT_INDEX_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+        let parents =
+            batches[0].colonna_a::<UInt64Array>(out_schema.index_of(PARENT_INDEX_COLUMN).unwrap());
         assert_eq!(parents.values(), &[0, 0]);
-        let ids = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let ids = batches[0].colonna_a::<Int64Array>(0);
         assert_eq!(ids.values(), &[0, 0]);
         let cells = batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         let total: f64 = (0..2)
             .map(|row| match geometry_from_wkb(cells.value(row)).unwrap() {
                 Geometry::LineString(piece) => geo::algorithm::line_measures::Length::length(
@@ -3837,10 +3606,7 @@ mod tests {
         let (out_schema, batches) = decode_output(&output);
         assert_eq!(batches[0].num_rows(), 2);
         let cells = batches[0]
-            .column(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap())
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+            .colonna_a::<BinaryArray>(out_schema.index_of(DEFAULT_GEOMETRY_COLUMN).unwrap());
         let total: f64 = (0..2)
             .map(|row| geometry_from_wkb(cells.value(row)).unwrap().unsigned_area())
             .sum();
