@@ -1019,3 +1019,37 @@ fn un_footer_senza_record_batches_e_rifiutato_anche_dallo_schema() {
         .expect_err("lo schema dal footer deve rifiutarlo come FileReader");
     assert_eq!(errore.category(), plenora_core::ErrorCategory::DataMapping);
 }
+
+// ---------------------------------------------------------------------------
+// Sniffing del framing IPC. I due casi stavano nei test unitari del binario
+// `plenora-cli`, che chiamavano `sniff_format` direttamente.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ipc_sniffing_treats_short_and_non_magic_files_as_streams() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    // Piu' corto del magic: lettura parziale, nessun errore, non-file.
+    let short = directory.path().join("short.bin");
+    fs::write(&short, b"ARR").expect("fixture");
+    assert_eq!(sniff_format(&short).expect("sniffing"), IpcFormat::Stream);
+    // Sei byte ma magic diverso: non e' IPC file format.
+    let other = directory.path().join("other.bin");
+    fs::write(&other, b"ARROW2").expect("fixture");
+    assert_eq!(sniff_format(&other).expect("sniffing"), IpcFormat::Stream);
+}
+
+/// Tagging di fase al confine di lettura (BLOCK-03,
+/// piano-v5.md#contratti-di-input), lato sniffing. Il lato dell'header, che
+/// la CLI raggiunge con `ipc_header_schema`, resta provato nella CLI
+/// (`ipc_probes_tag_read_errors_at_the_input_boundary` in `main.rs`).
+#[test]
+fn ipc_probes_tag_read_errors_at_the_input_boundary() {
+    use plenora_core::ErrorPhase;
+
+    // File assente: Io dello sniffing -> fase Read; testo invariato.
+    let missing = std::path::Path::new("input-che-non-esiste.arrow");
+    let error = sniff_format(missing).expect_err("file assente");
+    assert_eq!(error.phase(), ErrorPhase::Read);
+    assert_eq!(error.phase_tag(), Some(ErrorPhase::Read));
+    assert!(error.to_string().starts_with("io error: "), "{error}");
+}
