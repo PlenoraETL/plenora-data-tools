@@ -2099,6 +2099,14 @@ mod tests {
     /// non convertibile rifiuta il batch con diagnostica row-scoped (costruita
     /// da `reject_rows`, indipendente da `cast_row_diagnostics`); altrimenti
     /// il risultato e' quello del percorso generico.
+    ///
+    /// Che cosa garantisce: l'aggregazione dei rifiuti (righe, ordine, cause,
+    /// conteggi, completezza) e la scelta fra rifiuto e conversione.
+    /// Che cosa NON garantisce: condivide con la produzione
+    /// `string_cast_rejection` (la decisione riga per riga) e
+    /// `type_cast_generic` (il valore convertito), quindi un difetto in quei
+    /// due non emerge qui. Li coprono i valori scritti a mano di
+    /// `type_cast_hand_written_values_per_*`.
     fn generic_type_cast_entry(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
         let source = batch.column(column_index(batch, &config.column)?);
         if matches!(config.errors, CastErrors::Coerce | CastErrors::Raise) {
@@ -2121,6 +2129,216 @@ mod tests {
             )?;
         }
         type_cast_generic(source, config).map(single_batch)
+    }
+
+    /// Cast di una colonna Utf8 con `raise` (i token `coerce`/`raise` sono
+    /// equivalenti per i target fallibili).
+    fn cast_utf8(values: &[&str], target: TargetType) -> Result<RecordBatch> {
+        let batch = single_batch(Arc::new(StringArray::from(values.to_vec())));
+        type_cast(&batch, &cast_config(target, CastErrors::Raise))
+    }
+
+    /// Righe rifiutate, tutte con `cause` sulla colonna `c`.
+    fn assert_cast_rejected(values: &[&str], target: TargetType, rows: &[u64], cause: &str) {
+        for errors in [CastErrors::Coerce, CastErrors::Raise] {
+            let batch = single_batch(Arc::new(StringArray::from(values.to_vec())));
+            let error = type_cast(&batch, &cast_config(target, errors))
+                .expect_err("valori non convertibili accettati");
+            let report = error.row_diagnostics().expect("diagnostica row-scoped");
+            assert_eq!(
+                report
+                    .examples
+                    .iter()
+                    .map(|example| (
+                        example.source_index,
+                        example.cause.as_str(),
+                        example.column.as_deref()
+                    ))
+                    .collect::<Vec<_>>(),
+                rows.iter()
+                    .map(|row| (*row, cause, Some("c")))
+                    .collect::<Vec<_>>(),
+                "{target:?}"
+            );
+        }
+    }
+
+    fn cast_column<T: 'static>(batch: &RecordBatch) -> &T {
+        batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<T>()
+            .expect("tipo di output")
+    }
+
+    #[test]
+    fn type_cast_hand_written_values_per_numeric_target() {
+        // Valori attesi scritti a mano, indipendenti da `string_cast_rejection`
+        // e da `type_cast_generic`: sono la specifica, non un'altra copia.
+        let ints = cast_utf8(&[" 8 ", "-7", "+5", "9223372036854775807"], TargetType::Int)
+            .expect("int validi");
+        assert_eq!(
+            cast_column::<Int64Array>(&ints).values().to_vec(),
+            vec![8, -7, 5, i64::MAX]
+        );
+        assert_cast_rejected(
+            &["1", "9223372036854775808", "1.5", "abc", ""],
+            TargetType::Int,
+            &[1, 2, 3, 4],
+            "conversion.invalid_integer",
+        );
+
+        let floats =
+            cast_utf8(&["2,25", "1e3", "-0.5", "inf"], TargetType::Float).expect("float validi");
+        assert_eq!(
+            cast_column::<Float64Array>(&floats).values().to_vec(),
+            vec![2.25, 1000.0, -0.5, f64::INFINITY]
+        );
+        assert_cast_rejected(
+            &["abc", "1,2,3", "2.5"],
+            TargetType::Float,
+            &[0, 1],
+            "conversion.invalid_float",
+        );
+
+        let bools = cast_utf8(
+            &["sì", "SÌ", "vero", "t", "Y", "falso", "0", "N"],
+            TargetType::Bool,
+        )
+        .expect("bool validi");
+        assert_eq!(
+            cast_column::<BooleanArray>(&bools)
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(false)
+            ]
+        );
+        assert_cast_rejected(
+            &["true", "2", "maybe"],
+            TargetType::Bool,
+            &[1, 2],
+            "conversion.invalid_boolean",
+        );
+
+        let uints =
+            cast_utf8(&["0", "18446744073709551615"], TargetType::Uint64).expect("uint validi");
+        assert_eq!(
+            cast_column::<UInt64Array>(&uints).values().to_vec(),
+            vec![0, u64::MAX]
+        );
+        assert_cast_rejected(
+            &["-1", "7", "18446744073709551616"],
+            TargetType::Uint64,
+            &[0, 2],
+            "conversion.invalid_unsigned_integer",
+        );
+    }
+
+    #[test]
+    fn type_cast_hand_written_values_per_temporal_and_decimal_target() {
+        // Valori attesi scritti a mano, come per i target numerici.
+        let dates = cast_utf8(
+            &["2024-01-31", "31/01/2024", "31-01-2024", "2024/01/31"],
+            TargetType::Date,
+        )
+        .expect("date valide");
+        assert_eq!(
+            cast_column::<StringArray>(&dates)
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("2024-01-31"); 4]
+        );
+        assert_cast_rejected(
+            &["2024-13-40", "2024-02-29", "2023-02-29"],
+            TargetType::Date,
+            &[0, 2],
+            "conversion.invalid_date",
+        );
+
+        let datetimes = cast_utf8(
+            &["2024-01-31 10:20:30", "31/01/2024 10:20:30", "31/01/2024"],
+            TargetType::Datetime,
+        )
+        .expect("datetime validi");
+        assert_eq!(
+            cast_column::<StringArray>(&datetimes)
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some("2024-01-31T10:20:30"),
+                Some("2024-01-31T10:20:30"),
+                Some("2024-01-31T00:00:00")
+            ]
+        );
+        assert_cast_rejected(
+            &["2024-01-31 25:00:00", "bad"],
+            TargetType::Datetime,
+            &[0, 1],
+            "conversion.invalid_datetime",
+        );
+
+        // 2024-01-31: 54 anni dal 1970 con 13 bisestili (1972..=2020), piu' 30.
+        let days = cast_utf8(
+            &["1970-01-01", "1969-12-31", "2024-01-31"],
+            TargetType::Date32,
+        )
+        .expect("date32 valide");
+        assert_eq!(
+            cast_column::<Date32Array>(&days).values().to_vec(),
+            vec![0, -1, 19_753]
+        );
+        assert_cast_rejected(
+            &["2024-13-40", "1970-01-01"],
+            TargetType::Date32,
+            &[0],
+            "conversion.invalid_date",
+        );
+
+        // 19753 giorni * 86_400 s + 10:20:30 = 1_706_696_430 s; l'offset
+        // +01:00 toglie un'ora.
+        let stamps = cast_utf8(
+            &[
+                "2024-01-31 10:20:30",
+                "2024-01-31T10:20:30+01:00",
+                "1970-01-01",
+            ],
+            TargetType::TimestampMillis,
+        )
+        .expect("timestamp validi");
+        assert_eq!(
+            cast_column::<TimestampMillisecondArray>(&stamps)
+                .values()
+                .to_vec(),
+            vec![1_706_696_430_000, 1_706_692_830_000, 0]
+        );
+        assert_cast_rejected(
+            &["bad", "2024-01-31"],
+            TargetType::TimestampMillis,
+            &[0],
+            "conversion.invalid_timestamp",
+        );
+
+        // precision 10, scale 2.
+        let decimals = cast_utf8(&["12.34", "-0.5", "12345678.9"], TargetType::Decimal128)
+            .expect("decimal validi");
+        assert_eq!(
+            cast_column::<Decimal128Array>(&decimals).values().to_vec(),
+            vec![1_234, -50, 1_234_567_890]
+        );
+        assert_cast_rejected(
+            &["12.345", "1", "123456789.1", "abc", "1.2.3"],
+            TargetType::Decimal128,
+            &[0, 2, 3, 4],
+            "conversion.invalid_decimal",
+        );
     }
 
     #[test]

@@ -636,6 +636,16 @@ mod tests {
     // valore non parsabile, fuori range o con ora locale ambigua/inesistente
     // rifiuta l'intero batch con diagnostica row-scoped, qualunque sia il
     // token `invalid`; null resta null.
+    //
+    // Che cosa garantiscono: che i fast path (item precompilati, loop nativi
+    // Utf8, delta precalcolato) diano lo stesso batch del percorso per riga, e
+    // che il rifiuto abbia le stesse righe, cause e colonne.
+    // Che cosa NON garantiscono: condividono con la produzione `parse`
+    // (chrono `parse_from_str`), `shift` (quindi `shift_months` per anni e
+    // mesi) e la localizzazione chrono-tz; un difetto li' colpirebbe fast
+    // path e oracolo allo stesso modo. Li coprono i valori attesi scritti a
+    // mano: `date_add_hand_written_calendar_cases` e
+    // `timezone_convert_hand_written_rome_transitions`.
     // -----------------------------------------------------------------------
 
     /// Esito per riga dell'oracolo: valore (o null) oppure rifiuto con causa
@@ -1335,6 +1345,167 @@ mod tests {
             timezone_convert(&batch, &bad),
             Err(PlenoraError::InvalidPlan(message)) if message == "source_timezone non valida"
         ));
+    }
+
+    fn add_one(value: &str, amount: i64, unit: DateUnit) -> Option<String> {
+        let batch = utf8_batch(vec![Some(value)]);
+        let config = DateAdd {
+            column: "ts".into(),
+            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            output_format: "%Y-%m-%d %H:%M:%S".into(),
+            amount,
+            unit,
+            output_column: "out".into(),
+            invalid: InvalidDatePolicy::Error,
+        };
+        let fast = date_add(&batch, &config).expect("date_add");
+        let generic = generic_date_add(&batch, &config).expect("oracolo");
+        assert_eq!(fast, generic);
+        fast.column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8")
+            .iter()
+            .next()
+            .flatten()
+            .map(ToOwned::to_owned)
+    }
+
+    #[test]
+    fn date_add_hand_written_calendar_cases() {
+        // Risultati scritti a mano dal calendario gregoriano prolettico, non
+        // da `shift_months`: fine mese troncato all'ultimo giorno valido.
+        let cases: [(&str, i64, u8, &str); 16] = [
+            // Fine mese.
+            ("2024-01-31 10:00:00", 1, 1, "2024-02-29 10:00:00"),
+            ("2023-01-31 10:00:00", 1, 1, "2023-02-28 10:00:00"),
+            ("2024-03-31 00:00:00", -1, 1, "2024-02-29 00:00:00"),
+            ("2024-05-31 12:00:00", 1, 1, "2024-06-30 12:00:00"),
+            // 29 febbraio verso anni non bisestili e bisestili.
+            ("2024-02-29 08:30:00", 1, 0, "2025-02-28 08:30:00"),
+            ("2024-02-29 08:30:00", -1, 0, "2023-02-28 08:30:00"),
+            ("2024-02-29 08:30:00", 4, 0, "2028-02-29 08:30:00"),
+            ("2000-02-29 00:00:00", 100, 0, "2100-02-28 00:00:00"),
+            // Attraversamento di dicembre, in avanti e all'indietro.
+            ("2023-12-15 10:00:00", 1, 1, "2024-01-15 10:00:00"),
+            ("2024-01-15 10:00:00", -1, 1, "2023-12-15 10:00:00"),
+            ("2023-12-31 23:59:59", 1, 6, "2024-01-01 00:00:00"),
+            ("2024-01-01 00:00:00", -1, 3, "2023-12-31 00:00:00"),
+            ("2023-12-28 00:00:00", 1, 2, "2024-01-04 00:00:00"),
+            // Prima dell'epoch e anni negativi (anno 0 bisestile, -1 no).
+            ("1969-12-31 23:59:59", 1, 6, "1970-01-01 00:00:00"),
+            ("1900-03-01 00:00:00", -1, 3, "1900-02-28 00:00:00"),
+            ("0000-03-01 00:00:00", -1, 3, "0000-02-29 00:00:00"),
+        ];
+        for (value, amount, unit, expected) in cases {
+            assert_eq!(
+                add_one(value, amount, date_unit(unit)).as_deref(),
+                Some(expected),
+                "{value} {amount} unita' {unit}"
+            );
+        }
+        assert_eq!(
+            add_one("0000-02-29 00:00:00", -1, date_unit(0)).as_deref(),
+            Some("-0001-02-28 00:00:00")
+        );
+        assert_eq!(
+            add_one("-0001-12-31 12:00:00", 12, date_unit(4)).as_deref(),
+            Some("0000-01-01 00:00:00")
+        );
+    }
+
+    #[test]
+    fn timezone_convert_hand_written_rome_transitions() {
+        // Europe/Rome 2024: il 31 marzo alle 02:00 CET (+01) si salta alle
+        // 03:00 CEST (+02); il 27 ottobre alle 03:00 CEST si torna alle 02:00
+        // CET. UTC attesi scritti a mano.
+        let valid = utf8_batch(vec![
+            Some("2024-03-31 01:59:59"), // ultimo secondo CET
+            Some("2024-03-31 03:00:00"), // primo secondo CEST
+            Some("2024-10-27 01:59:59"), // ultimo secondo univoco CEST
+            Some("2024-10-27 03:00:00"), // primo secondo univoco CET
+            Some("2024-07-01 12:00:00"),
+            Some("2024-01-01 00:30:00"),
+        ]);
+        let config = TimezoneConvert {
+            column: "ts".into(),
+            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            output_format: "%Y-%m-%d %H:%M:%S".into(),
+            source_timezone: "Europe/Rome".into(),
+            target_timezone: "UTC".into(),
+            output_column: "out".into(),
+            invalid: InvalidDatePolicy::Error,
+            ambiguous: AmbiguousPolicy::Error,
+        };
+        let output = timezone_convert(&valid, &config).expect("orari validi");
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("utf8")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some("2024-03-31 00:59:59"),
+                Some("2024-03-31 01:00:00"),
+                Some("2024-10-26 23:59:59"),
+                Some("2024-10-27 02:00:00"),
+                Some("2024-07-01 10:00:00"),
+                Some("2023-12-31 23:30:00"),
+            ]
+        );
+        assert_eq!(
+            output,
+            generic_timezone_convert(&valid, &config).expect("oracolo")
+        );
+        // Estremi delle due finestre: il salto [02:00, 03:00) non esiste,
+        // la ripetizione [02:00, 03:00) e' ambigua.
+        let edges = utf8_batch(vec![
+            Some("2024-03-31 02:00:00"),
+            Some("2024-03-31 02:59:59"),
+            Some("2024-10-27 02:00:00"),
+            Some("2024-10-27 02:59:59"),
+        ]);
+        assert_rejected(
+            timezone_convert(&edges, &config),
+            &[
+                (0, "conversion.nonexistent_local_time", Some("ts")),
+                (1, "conversion.nonexistent_local_time", Some("ts")),
+                (2, "conversion.ambiguous_local_time", Some("ts")),
+                (3, "conversion.ambiguous_local_time", Some("ts")),
+            ],
+        );
+        // All'indietro: UTC verso Europe/Rome sugli stessi istanti.
+        let reverse = TimezoneConvert {
+            source_timezone: "UTC".into(),
+            target_timezone: "Europe/Rome".into(),
+            ..config
+        };
+        let back = timezone_convert(
+            &utf8_batch(vec![
+                Some("2024-03-31 00:59:59"),
+                Some("2024-03-31 01:00:00"),
+                Some("2024-10-27 00:59:59"),
+                Some("2024-10-27 01:00:00"),
+            ]),
+            &reverse,
+        )
+        .expect("UTC sempre univoco");
+        assert_eq!(
+            back.column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("utf8")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some("2024-03-31 01:59:59"),
+                Some("2024-03-31 03:00:00"),
+                Some("2024-10-27 02:59:59"),
+                Some("2024-10-27 02:00:00"),
+            ]
+        );
     }
 
     #[test]

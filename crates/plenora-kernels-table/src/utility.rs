@@ -424,6 +424,12 @@ mod tests {
     /// Codifica la semantica corrente: ogni valore non parsabile rifiuta
     /// l'intero batch con diagnostica row-scoped, qualunque sia il token
     /// `invalid`; null resta null.
+    ///
+    /// Che cosa garantisce: che gli item precompilati e il loop Utf8 del fast
+    /// path diano le stesse parti e gli stessi rifiuti del percorso per riga.
+    /// Che cosa NON garantisce: condivide con la produzione `parse_datetime`
+    /// (formati e loro ordine) e l'estrazione chrono delle parti; li coprono
+    /// i valori scritti a mano di `date_extract_hand_written_parts`.
     fn generic_date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;
         let source = batch.column(index);
@@ -610,6 +616,51 @@ mod tests {
             example.cause == "conversion.invalid_datetime"
                 && example.column.as_deref() == Some("ts")
         }));
+    }
+
+    #[test]
+    fn date_extract_hand_written_parts() {
+        // Valori attesi scritti a mano. 2021-01-01 e' un venerdi' della
+        // settimana ISO 53 del 2020; 2019-12-30 un lunedi' della settimana
+        // ISO 1 del 2020; 1969-12-31 un mercoledi' della settimana ISO 1 del
+        // 1970.
+        let batch = utf8_batch(vec![
+            Some("2021-01-01T06:07:08"),
+            Some("30/12/2019 23:59:59"),
+            Some("1969-12-31"),
+            Some("2024/02/29"),
+        ]);
+        let output = date_extract(
+            &batch,
+            &DateExtract {
+                column: "ts".into(),
+                parts: all_parts(),
+                prefix: "p_".into(),
+                date_format: None,
+                invalid: InvalidDatePolicy::Error,
+            },
+        )
+        .expect("date valide");
+        let part = |name: &str| {
+            output
+                .column_by_name(name)
+                .expect("parte")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64")
+                .values()
+                .to_vec()
+        };
+        assert_eq!(part("p_year"), vec![2021, 2019, 1969, 2024]);
+        assert_eq!(part("p_month"), vec![1, 12, 12, 2]);
+        assert_eq!(part("p_day"), vec![1, 30, 31, 29]);
+        assert_eq!(part("p_quarter"), vec![1, 4, 4, 1]);
+        // Lunedi' = 0.
+        assert_eq!(part("p_weekday"), vec![4, 0, 2, 3]);
+        assert_eq!(part("p_week"), vec![53, 1, 1, 9]);
+        assert_eq!(part("p_hour"), vec![6, 23, 0, 0]);
+        assert_eq!(part("p_minute"), vec![7, 59, 0, 0]);
+        assert_eq!(part("p_second"), vec![8, 59, 0, 0]);
     }
 
     #[test]

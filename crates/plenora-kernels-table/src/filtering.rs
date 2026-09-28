@@ -574,8 +574,17 @@ mod tests {
     use super::*;
 
     /// Percorso generico, indipendente dai fast path: riferimento per
-    /// l'equivalenza
-    /// semantica del fast path.
+    /// l'equivalenza semantica del fast path.
+    ///
+    /// Che cosa garantisce: che i loop nativi del fast path (downcast unico,
+    /// `rows_where`) selezionino le stesse righe del percorso per riga, e che
+    /// i rifiuti coincidano parola per parola.
+    /// Che cosa NON garantisce: condivide con la produzione `evaluate`,
+    /// `PreparedCondition`, `NumericBound::parse` e i comparatori
+    /// `compare_i64`/`compare_u64`/`compare_f64`; un difetto li' colpirebbe
+    /// entrambi. Li coprono i risultati scritti a mano di
+    /// `filter_hand_written_boundaries` e i messaggi esatti dei letterali
+    /// non validi.
     fn generic_filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
         let index = column_index(batch, &config.column)?;
         let array = batch.column(index);
@@ -686,6 +695,97 @@ mod tests {
         assert_eq!(nan.num_rows(), 1); // NaN uguale a NaN (total_cmp)
         let gt_zero = filter(&batch, &config(Operator::Gt, json!(0.0))).expect("gt 0");
         assert_eq!(gt_zero.num_rows(), 1); // solo 2.0: -0.0 e NaN esclusi
+    }
+
+    #[test]
+    fn filter_hand_written_boundaries() {
+        // Righe attese scritte a mano, indipendenti dai comparatori.
+        let ints = single_column_batch(
+            Arc::new(Int64Array::from(vec![
+                Some(i64::MIN),
+                Some(-1),
+                Some(0),
+                None,
+                Some(9_007_199_254_740_993),
+                Some(i64::MAX),
+            ])),
+            DataType::Int64,
+            true,
+        );
+        let righe_intere = |operator: Operator, value: serde_json::Value| {
+            let output = filter(&ints, &config(operator, value)).expect("filter");
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64")
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        // Oltre 2^53 il confronto e' esatto: 2^53 + 1 > 2^53.
+        assert_eq!(
+            righe_intere(Operator::Gt, json!(9_007_199_254_740_992_i64)),
+            vec![Some(9_007_199_254_740_993), Some(i64::MAX)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Eq, json!(9_007_199_254_740_992_i64)),
+            Vec::<Option<i64>>::new()
+        );
+        assert_eq!(
+            righe_intere(Operator::Ge, json!(i64::MAX)),
+            vec![Some(i64::MAX)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Le, json!(i64::MIN)),
+            vec![Some(i64::MIN)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Lt, json!(i64::MIN)),
+            Vec::<Option<i64>>::new()
+        );
+        // `between` inclusivo su entrambi gli estremi; null mai selezionato.
+        assert_eq!(
+            righe_intere(Operator::Between, json!("-1,0")),
+            vec![Some(-1), Some(0)]
+        );
+        assert_eq!(
+            righe_intere(Operator::Ne, json!(0)),
+            vec![
+                Some(i64::MIN),
+                Some(-1),
+                Some(9_007_199_254_740_993),
+                Some(i64::MAX)
+            ]
+        );
+
+        let uints = single_column_batch(
+            Arc::new(UInt64Array::from(vec![
+                Some(0),
+                Some(u64::MAX - 1),
+                Some(u64::MAX),
+            ])),
+            DataType::UInt64,
+            true,
+        );
+        let righe_naturali = |operator: Operator, value: serde_json::Value| {
+            let output = filter(&uints, &config(operator, value)).expect("filter");
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("uint64")
+                .values()
+                .to_vec()
+        };
+        assert_eq!(
+            righe_naturali(Operator::Gt, json!(u64::MAX - 1)),
+            vec![u64::MAX]
+        );
+        assert_eq!(righe_naturali(Operator::Lt, json!(-1)), Vec::<u64>::new());
+        assert_eq!(
+            righe_naturali(Operator::Ge, json!(-1)),
+            vec![0, u64::MAX - 1, u64::MAX]
+        );
     }
 
     #[test]

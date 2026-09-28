@@ -495,7 +495,7 @@ Config vuota (`{}`).
 | `input_format` | `string` | obbligatorio | formato strftime chrono; item non riconosciuti fanno fallire il parsing di riga (riga rifiutata) |
 | `output_format` | `string` | `"%Y-%m-%d %H:%M:%S"` | formato strftime chrono |
 | `output_column` | `string` | obbligatorio | nome non vuoto, ≤ 1024 byte |
-| `invalid` | `string` | `"null"` | varianti: `null`, `error` (`InvalidDatePolicy`); accettato solo per compatibilità, **non cambia il comportamento**: un valore non parsabile rifiuta sempre il batch, con entrambe le varianti |
+| `invalid` | `string` | `"null"` | varianti: `null`, `error` (`InvalidDatePolicy`); accettato solo per compatibilità, **non cambia il comportamento** ([`errori-e-limiti.md`](errori-e-limiti.md#i-token-invalid-e-ambiguous-delle-operazioni-temporali-sono-accettati-e-disattesi)): un valore non parsabile rifiuta sempre il batch, con entrambe le varianti |
 
 **Input:** una colonna (`column`) di tipo scalare leggibile come testo; i valori sono parsati come `NaiveDateTime` con fallback `NaiveDate` (orario 00:00:00). Un null resta null. Righe invariate.
 **Output:** colonna `output_column` di tipo Utf8 (nullable) con il valore riformattato; sostituisce in posizione una colonna omonima esistente, altrimenti è aggiunta in coda.
@@ -515,7 +515,7 @@ Config vuota (`{}`).
 | `amount` | `integer` | obbligatorio | quantità con segno; overflow del delta o data risultante fuori range → riga rifiutata |
 | `unit` | `string` | obbligatorio | varianti: `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` (`DateUnit`); anni/mesi con aritmetica calendariale (`Months`) |
 | `output_column` | `string` | obbligatorio | nome non vuoto, ≤ 1024 byte |
-| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento** |
+| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento** ([`errori-e-limiti.md`](errori-e-limiti.md#i-token-invalid-e-ambiguous-delle-operazioni-temporali-sono-accettati-e-disattesi)) |
 
 **Input:** una colonna (`column`) di tipo scalare leggibile come testo, parsata con `input_format` (fallback date-only). Un null resta null. Righe invariate.
 **Output:** colonna `output_column` di tipo Utf8 (nullable) con la data traslata riformattata; upsert (sostituisce una colonna omonima, altrimenti appende).
@@ -534,7 +534,7 @@ Config vuota (`{}`).
 | `input_format` | `string` | obbligatorio | formato strftime chrono, applicato a entrambe le colonne |
 | `unit` | `string` | obbligatorio | varianti: `days`, `hours`, `minutes`, `seconds` (`DiffUnit`); differenza frazionaria |
 | `output_column` | `string` | obbligatorio | nome non vuoto, ≤ 1024 byte |
-| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento** |
+| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento** ([`errori-e-limiti.md`](errori-e-limiti.md#i-token-invalid-e-ambiguous-delle-operazioni-temporali-sono-accettati-e-disattesi)) |
 
 **Input:** due colonne (`start_column`, `end_column`) di tipo scalare leggibile come testo, parsate con `input_format`. Un estremo null produce null. Righe invariate.
 **Output:** colonna `output_column` di tipo Float64 (nullable): `end - start` in unità frazionarie (può essere negativa). Upsert sul nome.
@@ -554,8 +554,8 @@ Config vuota (`{}`).
 | `source_timezone` | `string` | obbligatorio | nome IANA valido per `chrono_tz::Tz` (validato in analisi statica) |
 | `target_timezone` | `string` | obbligatorio | nome IANA valido per `chrono_tz::Tz` (validato in analisi statica) |
 | `output_column` | `string` | obbligatorio | nome non vuoto, ≤ 1024 byte |
-| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento** |
-| `ambiguous` | `string` | `"error"` | varianti: `error`, `null`, `earliest`, `latest` (`AmbiguousPolicy`); accettato solo per compatibilità, **non cambia il comportamento**: nessuna scelta fra le due ore ambigue e nessun null, l'ora ambigua è sempre rifiutata |
+| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento** ([`errori-e-limiti.md`](errori-e-limiti.md#i-token-invalid-e-ambiguous-delle-operazioni-temporali-sono-accettati-e-disattesi)) |
+| `ambiguous` | `string` | `"error"` | varianti: `error`, `null`, `earliest`, `latest` (`AmbiguousPolicy`); accettato solo per compatibilità, **non cambia il comportamento** ([`errori-e-limiti.md`](errori-e-limiti.md#i-token-invalid-e-ambiguous-delle-operazioni-temporali-sono-accettati-e-disattesi)): nessuna scelta fra le due ore ambigue e nessun null, l'ora ambigua è sempre rifiutata |
 
 **Input:** una colonna (`column`) di tipo scalare leggibile come testo; i valori naive sono localizzati in `source_timezone` e convertiti in `target_timezone`. Un null resta null. Righe invariate.
 **Output:** colonna `output_column` di tipo Utf8 (nullable) con il timestamp convertito riformattato; upsert sul nome.
@@ -1196,7 +1196,7 @@ Vincoli per operatore, verificati **prima di leggere una sola riga**: `eq`/`ne` 
 | `parts` | `array[string]` | `["year"]` | varianti: `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` |
 | `prefix` | `string` | `""` | se vuoto viene usato `"<column>_"` |
 | `date_format` | `string` | `null` | formato chrono esplicito; se omesso, parser multi-formato di default |
-| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento**: un valore non parsabile rifiuta sempre il batch, con entrambe le varianti |
+| `invalid` | `string` | `"null"` | varianti: `null`, `error`; accettato solo per compatibilità, **non cambia il comportamento** ([`errori-e-limiti.md`](errori-e-limiti.md#i-token-invalid-e-ambiguous-delle-operazioni-temporali-sono-accettati-e-disattesi)): un valore non parsabile rifiuta sempre il batch, con entrambe le varianti |
 
 **Input:** una tabella; la colonna `column` deve esistere (tipicamente Utf8 con date). Un null resta null.
 **Output:** aggiunge una colonna Int64 nullable per ogni elemento di `parts`, denominata `<prefix><part>` (es. `data_year` con prefix di default); righe invariate.
