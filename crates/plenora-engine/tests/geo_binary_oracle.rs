@@ -1293,6 +1293,18 @@ fn assert_cell_too_large(case: &str, left: Vec<RecordBatch>, right: Vec<RecordBa
         signature.reason, "righe non conformi al contratto di trasformazione",
         "{case} v4: dettagli row-scoped solo nella diagnostica strutturata"
     );
+    // La causa distingue la guardia per-cella dalla validazione WKB che
+    // viene dopo: senza la prima, la seconda rifiuterebbe comunque la cella
+    // oversize, ma come `geometry.invalid_wkb`, con gli stessi assi.
+    let report = v4_error
+        .row_diagnostics()
+        .unwrap_or_else(|| panic!("{case} v4: diagnostica row-scoped"));
+    assert_eq!(
+        report.counts.get("geometry.cell_too_large"),
+        Some(&1),
+        "{case} v4: causa per-cella"
+    );
+    assert_eq!(report.counts.len(), 1, "{case} v4: nessun'altra causa");
 }
 
 /// (c) Cella oversize su LEFT.

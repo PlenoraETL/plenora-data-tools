@@ -8,7 +8,6 @@ use plenora_core::arrow::array::{BinaryArray, Float64Array, RecordBatch, UInt64A
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use rayon::prelude::*;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use super::pair_protocol::MAX_PAIRS;
 use super::protocol::MAX_ROWS;
@@ -32,9 +31,9 @@ use plenora_kernels_geo::topology::{
     BooleanOperation, OverlayMode,
 };
 
-use super::envelope::{EnvelopeReader, EnvelopeWriter};
+use super::envelope::EnvelopeReader;
 use super::error::ArrowTransportError;
-use super::ipc::{decode_ipc, encode_ipc, encode_ipc_file};
+use super::ipc::decode_ipc;
 use super::schema::ArrowOutputFormat;
 use super::transport::{
     COUNT_COLUMN, DEFAULT_GEOMETRY_COLUMN, DISTANCE_COLUMN, LEFT_INDEX_COLUMN, MAX_CELL_BYTES,
