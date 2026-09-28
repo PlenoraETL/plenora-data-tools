@@ -269,8 +269,20 @@ pub(super) fn leggi_identita() -> std::result::Result<Identita, String> {
 
 /// Un campo `Chiave:<tab>valore` di `/proc/self/status`.
 fn campo<'a>(status: &'a str, chiave: &str) -> std::result::Result<&'a str, String> {
+    campo_di(status, "/proc/self/status", chiave)
+}
+
+/// Un campo `Chiave:<spazi>valore` di un file di `/proc` (`status`,
+/// `fdinfo`), che deve comparire una volta sola.
+///
+/// `sorgente` nomina il file nei messaggi.
+fn campo_di<'a>(
+    testo: &'a str,
+    sorgente: &str,
+    chiave: &str,
+) -> std::result::Result<&'a str, String> {
     let mut trovato = None;
-    for riga in status.lines() {
+    for riga in testo.lines() {
         let Some((nome, valore)) = riga.split_once(':') else {
             continue;
         };
@@ -279,12 +291,12 @@ fn campo<'a>(status: &'a str, chiave: &str) -> std::result::Result<&'a str, Stri
         }
         if trovato.is_some() {
             return Err(format!(
-                "/proc/self/status ha piu' di un campo {chiave}: quale valga non lo dichiara nessuno, e sceglierne uno sarebbe inventare meta' del giudizio"
+                "{sorgente} ha piu' di un campo {chiave}: quale valga non lo dichiara nessuno, e sceglierne uno sarebbe inventare meta' del giudizio"
             ));
         }
         trovato = Some(valore.trim());
     }
-    trovato.ok_or_else(|| format!("/proc/self/status non ha il campo {chiave}"))
+    trovato.ok_or_else(|| format!("{sorgente} non ha il campo {chiave}"))
 }
 
 /// I quattro identificatori di `Uid` o `Gid`: reale, effettivo, salvato,
@@ -485,16 +497,12 @@ fn descrittori_scrivibili() -> std::result::Result<Vec<Descrittore>, String> {
             Err(errore) if errore.e_assenza() => continue,
             Err(errore) => return Err(errore.to_string()),
         };
-        let flags = info
-            .lines()
-            .find_map(|riga| riga.strip_prefix("flags:"))
-            .ok_or_else(|| format!("/proc/self/fdinfo/{numero} non ha il campo flags"))?;
-        let flags = u32::from_str_radix(flags.trim(), 8).map_err(|_| {
-            format!(
-                "/proc/self/fdinfo/{numero}: flags «{}» non e' ottale",
-                flags.trim()
-            )
-        })?;
+        // Una sola riga `flags:`, come in `canale::flag_di`: con due, la prima
+        // potrebbe dire «sola lettura» e togliere dal controllo un
+        // descrittore scrivibile.
+        let flags = campo_di(&info, &percorso_info, "flags")?;
+        let flags = u32::from_str_radix(flags, 8)
+            .map_err(|_| format!("{percorso_info}: flags «{flags}» non e' ottale"))?;
         // `O_WRONLY` vale 1 e `O_RDWR` 2; `O_RDONLY` e' 0, quindi il modo sta
         // nei due bit bassi e non in un singolo bit. `trailing_zeros() >= 2`
         // dice la stessa cosa e la dice peggio: nasconde che si stanno
@@ -531,8 +539,32 @@ fn descrittori_scrivibili() -> std::result::Result<Vec<Descrittore>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        booleano, gruppi, maschera, quaterna, Autorita, Capability, Descrittore, Identita,
+        booleano, campo_di, gruppi, maschera, quaterna, Autorita, Capability, Descrittore, Identita,
     };
+
+    #[test]
+    fn una_riga_flags_doppia_in_fdinfo_e_un_errore() {
+        // Con la prima riga vincente, «sola lettura» nasconderebbe il
+        // descrittore scrivibile dichiarato dalla seconda.
+        let doppia = "pos:	0
+flags:	0100000
+flags:	0100002
+mnt_id:	29
+";
+        let errore = campo_di(doppia, "/proc/self/fdinfo/5", "flags").unwrap_err();
+        assert!(errore.contains("piu' di un campo flags"), "{errore}");
+        assert!(errore.contains("/proc/self/fdinfo/5"), "{errore}");
+
+        let singola = "pos:	0
+flags:	0100002
+";
+        assert_eq!(campo_di(singola, "fdinfo", "flags"), Ok("0100002"));
+        assert!(campo_di(
+            "pos:	0
+", "fdinfo", "flags"
+        )
+        .is_err());
+    }
 
     const CGROUP2: u64 = 0x1234;
 
