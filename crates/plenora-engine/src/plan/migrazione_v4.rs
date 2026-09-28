@@ -139,7 +139,7 @@ const fn errore(messaggio: String) -> PlenoraError {
 /// `PlenoraError::InvalidPlan` se il JSON non e' un oggetto, se
 /// `schema_version` manca, non e' un intero non negativo o non sta in `u16`.
 pub(super) fn versione_dichiarata(json_text: &str) -> Result<u16> {
-    let valore: Value = serde_json::from_str(json_text)?;
+    let valore: Value = plenora_core::json::documento_di_controllo(json_text)?;
     let oggetto = valore
         .as_object()
         .ok_or_else(|| errore("il piano deve essere un oggetto JSON".to_owned()))?;
@@ -181,7 +181,7 @@ fn migra_v4_a_v5(json_text: &str) -> Result<String> {
         )));
     }
 
-    let mut valore: Value = serde_json::from_str(json_text)?;
+    let mut valore: Value = plenora_core::json::documento_di_controllo(json_text)?;
     let oggetto: &mut Map<String, Value> = valore
         .as_object_mut()
         .ok_or_else(|| errore("il piano deve essere un oggetto JSON".to_owned()))?;
@@ -203,6 +203,7 @@ fn migra_v4_a_v5(json_text: &str) -> Result<String> {
                      Un piano v4 dichiara `max_memory_bytes`; \
                      `max_governed_memory_bytes` appartiene alla v5 e non ha alias"
                 ))
+                .with_phase(plenora_core::ErrorPhase::Validate)
             })?;
         let v5 = serde_json::to_value(v4.in_v5()).map_err(|errore_serde| {
             PlenoraError::Internal(format!(

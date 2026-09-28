@@ -226,10 +226,11 @@ fn un_tetto_oltre_u64_e_rifiutato() {
         plenora_core::ErrorCategory::DataMapping,
         "un numero che non entra nel tipo e' un difetto di mapping, non un piano invalido: {errore}"
     );
-    // La fase e' `Write`: e' l'approssimazione dichiarata per un
-    // `DataMapping` non taggato, e il parse del piano non tagga la fase. Il
-    // test la fissa per non lasciarla cambiare in silenzio.
-    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
+    // La fase e' `Validate`: il parse del piano passa da
+    // `plenora_core::json::documento_di_controllo`, che tagga il rifiuto di
+    // forma di un documento di controllo. Senza il tag `DataMapping`
+    // deriverebbe `Write` per un piano che non ha scritto nulla.
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
     // Che il valore non sia stato saturato lo dimostra gia' l'`expect_err`:
     // saturare significherebbe ACCETTARE il documento con un tetto diverso da
     // quello scritto. Cercare `u64::MAX` nel messaggio sarebbe per giunta
