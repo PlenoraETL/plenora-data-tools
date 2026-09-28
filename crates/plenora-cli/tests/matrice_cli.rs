@@ -795,29 +795,47 @@ fn nessun_eprintln_incondizionato_nel_sorgente_della_cli() {
     //
     // Serve un controllo eseguibile: senza, il documento puo' dichiarare la
     // garanzia mentre il codice non la implementa, e niente lo dice.
-    let sorgente =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))
-            .expect("sorgente della CLI");
-    let occorrenze: Vec<usize> = sorgente
-        .match_indices("eprintln!")
-        .map(|(indice, _)| indice)
-        .collect();
-    assert!(
-        !occorrenze.is_empty(),
-        "il test presuppone che gli avvisi interattivi esistano ancora"
-    );
-    for indice in occorrenze {
-        // Si guarda indietro di 600 caratteri: il ramo `if interattivo` che
-        // governa l'avviso e' immediatamente sopra.
-        let inizio = indice.saturating_sub(600);
-        let contesto = &sorgente[inizio..indice];
-        assert!(
-            contesto.contains("interattivo"),
-            "eprintln! non governato da `is_terminal` attorno all'offset {indice}"
-        );
+    // Tutti i sorgenti della CLI, non un file: un `eprintln!` spostato in un
+    // modulo nuovo resterebbe fuori da un controllo su un nome solo.
+    let mut da_visitare = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let mut sorgenti = Vec::new();
+    while let Some(cartella) = da_visitare.pop() {
+        for voce in std::fs::read_dir(&cartella).expect("sorgenti della CLI") {
+            let percorso = voce.expect("voce").path();
+            if percorso.is_dir() {
+                da_visitare.push(percorso);
+            } else if percorso
+                .extension()
+                .is_some_and(|estensione| estensione == "rs")
+            {
+                let testo = std::fs::read_to_string(&percorso).expect("sorgente della CLI");
+                sorgenti.push((percorso, testo));
+            }
+        }
+    }
+    let mut avvisi = 0;
+    for (percorso, sorgente) in &sorgenti {
+        for (indice, _) in sorgente.match_indices("eprintln!") {
+            avvisi += 1;
+            // Si guarda indietro di 600 caratteri: il ramo `if interattivo`
+            // che governa l'avviso e' immediatamente sopra.
+            let inizio = indice.saturating_sub(600);
+            let contesto = &sorgente[inizio..indice];
+            assert!(
+                contesto.contains("interattivo"),
+                "eprintln! non governato da `is_terminal` in {} all'offset {indice}",
+                percorso.display()
+            );
+        }
     }
     assert!(
-        sorgente.contains("IsTerminal::is_terminal(&std::io::stderr())"),
+        avvisi > 0,
+        "il test presuppone che gli avvisi interattivi esistano ancora"
+    );
+    assert!(
+        sorgenti
+            .iter()
+            .any(|(_, sorgente)| sorgente.contains("IsTerminal::is_terminal(&std::io::stderr())")),
         "il controllo dichiarato nel documento dev'essere anche nel codice"
     );
 }

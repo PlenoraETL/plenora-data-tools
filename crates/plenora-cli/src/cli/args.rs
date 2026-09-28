@@ -6,7 +6,10 @@
 //! capito e' fail-open. I testi di aiuto stanno qui accanto, e `matrice_cli`
 //! verifica che dichiarino esattamente i flag del dispatch.
 
+use std::path::PathBuf;
+
 use plenora_core::PlenoraError;
+use plenora_engine::geo_transport::transport::ArrowOutputFormat;
 
 use crate::contract;
 
@@ -284,4 +287,60 @@ pub fn reject_unknown_flags(comando: &str, args: &[String]) -> Result<(), Plenor
         indice += 1;
     }
     Ok(())
+}
+
+/// Helper stile nogeo: valore obbligatorio dopo un flag.
+pub fn value_after(args: &[String], flag: &str) -> Result<PathBuf, PlenoraError> {
+    let index = args
+        .iter()
+        .position(|argument| argument == flag)
+        .ok_or_else(|| contract(format!("argomento mancante: {flag}")))?;
+    let value = args
+        .get(index + 1)
+        .ok_or_else(|| contract(format!("valore mancante dopo {flag}")))?;
+    Ok(PathBuf::from(value))
+}
+
+/// Helper stile nogeo: valore opzionale dopo un flag.
+pub fn optional_value_after(args: &[String], flag: &str) -> Result<Option<PathBuf>, PlenoraError> {
+    let Some(index) = args.iter().position(|argument| argument == flag) else {
+        return Ok(None);
+    };
+    let value = args
+        .get(index + 1)
+        .ok_or_else(|| contract(format!("valore mancante dopo {flag}")))?;
+    Ok(Some(PathBuf::from(value)))
+}
+
+/// Helper stile geo: valore obbligatorio dopo un flag (messaggi del sorgente).
+pub fn argument_value(args: &[String], name: &str) -> Result<String, PlenoraError> {
+    let position = args
+        .iter()
+        .position(|value| value == name)
+        .ok_or_else(|| contract(format!("argomento obbligatorio mancante: {name}")))?;
+    args.get(position + 1)
+        .cloned()
+        .ok_or_else(|| contract(format!("valore mancante per {name}")))
+}
+
+/// Formato dei due output Arrow legacy. L'assenza del flag conserva
+/// l'envelope PLNGEO3; qualunque valore non dichiarato fallisce prima di
+/// aprire il percorso di pubblicazione.
+pub fn arrow_output_format(args: &[String]) -> Result<ArrowOutputFormat, PlenoraError> {
+    let Some(position) = args.iter().position(|value| value == "--output-format") else {
+        return Ok(ArrowOutputFormat::PlnGeo3);
+    };
+    match args.get(position + 1).map(String::as_str) {
+        Some("plngeo3") => Ok(ArrowOutputFormat::PlnGeo3),
+        Some("ipc-file") => Ok(ArrowOutputFormat::IpcFile),
+        Some(_) => Err(contract(
+            "--output-format non valido (ammessi: plngeo3, ipc-file)",
+        )),
+        None => Err(contract("valore mancante per --output-format")),
+    }
+}
+
+/// Presenza di un flag booleano negli argomenti (es. `--no-geo-fusion`).
+pub fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|argument| argument == flag)
 }

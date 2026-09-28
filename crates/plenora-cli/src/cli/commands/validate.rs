@@ -7,15 +7,14 @@
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use plenora_engine::planner;
 use plenora_engine::table_engine::Plan;
 use plenora_engine::{explain, RuntimeContext};
 
 use crate::cli::commands::run::{reject_legacy_row_diagnostics_plan, v4_inputs, DagInputs};
-use crate::cli::contract_discovery::{apply_crs_decisions, discover_contracts, pair_v4_inputs};
+use crate::cli::contract_discovery::grafo_dal_piano;
 use crate::{
     contract, da_testo_di_controllo, graph_summary_json, has_flag, read_control_plan_text,
-    testo_piano_dag, value_after, PlanInputsProbe,
+    testo_piano_dag, value_after,
 };
 
 pub fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -74,11 +73,7 @@ pub fn validate_dag(
     inputs: &DagInputs,
     geo_fusion: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let probe: PlanInputsProbe = da_testo_di_controllo(plan_text)?;
-    let pairs = pair_v4_inputs(&probe, inputs)?;
-    let mut contracts = discover_contracts(&pairs)?;
-    apply_crs_decisions(&probe, &mut contracts)?;
-    let graph = planner::validate(plan_text, &contracts)?;
+    let graph = grafo_dal_piano(plan_text, inputs)?.graph;
     let execution = explain(
         &graph,
         &RuntimeContext {
