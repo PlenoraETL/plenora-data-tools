@@ -132,9 +132,12 @@ fn l_hook_di_default_pubblica_il_payload_del_panico() {
 fn la_politica_silent_non_pubblica_nulla() {
     let uscita = esegui_figlio("silent");
     let (stdout, stderr) = uscita.di_un_figlio_andato_in_panico("silent");
+    // Silenziosa vuol dire stderr vuoto, non solo senza il segreto: una
+    // politica che scrivesse la forma del payload (`Sanitized`) passerebbe
+    // il controllo sul segreto e non questo.
     assert!(
-        !stderr.contains(SEGRETO),
-        "il payload non deve comparire su stderr; stderr: {stderr}"
+        stderr.is_empty(),
+        "la politica silent non scrive su stderr; stderr: {stderr}"
     );
     assert!(!stdout.contains(SEGRETO), "ne' su stdout; stdout: {stdout}");
 }
