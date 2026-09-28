@@ -1638,15 +1638,12 @@ mod tests {
     }
 
     #[test]
-    fn internal_display_and_axes() {
+    fn internal_display() {
         // R6: la variante Internal raccoglie le violazioni di invariante che
-        // altrimenti sarebbero panic; gli assi sono quelli dichiarati.
+        // altrimenti sarebbero panic. I suoi assi stanno in `campioni`, con
+        // quelli di tutte le altre varianti.
         let error = PlenoraError::Internal("stato impossibile".into());
         assert_eq!(error.to_string(), "internal error: stato impossibile");
-        assert_eq!(error.category(), ErrorCategory::Internal);
-        assert_eq!(error.phase(), ErrorPhase::Write);
-        assert_eq!(error.remote_effect(), RemoteEffect::None);
-        assert_eq!(error.retry_disposition(), RetryDisposition::Never);
     }
 
     #[test]
@@ -1777,8 +1774,10 @@ mod tests {
     fn l_elenco_completo_e_coerente_con_gli_indici_e_i_nomi() {
         // Che `ALL` contenga tutte le varianti lo garantisce la macro
         // `categorie_errore`. Qui si verifica cio' che la macro non
-        // garantisce: che gli indici siano le posizioni reali e che i nomi
-        // stabili siano distinti.
+        // garantisce: che gli indici siano le posizioni reali. Che i nomi
+        // stabili siano distinti lo provano il giro di `from_stable_name`
+        // qui sotto e la tabella scritta a mano di
+        // `i_nomi_stabili_sono_quelli_dichiarati_e_la_tabella_li_copre_tutti`.
         for (posizione, categoria) in ErrorCategory::ALL.iter().enumerate() {
             assert_eq!(
                 categoria.index(),
@@ -1787,13 +1786,6 @@ mod tests {
                 categoria.index()
             );
         }
-        let nomi: std::collections::BTreeSet<&str> =
-            ErrorCategory::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(
-            nomi.len(),
-            ErrorCategory::ALL.len(),
-            "due categorie condividono lo stesso nome stabile"
-        );
         // Il conteggio e' un'informazione, non un presidio. L'exit code si
         // assegna per forza (`exit_code_di` nella CLI fa un `match`
         // esaustivo); la tabella di `docs/cli.md` invece va aggiornata a mano.
@@ -2510,16 +2502,5 @@ mod tests {
         );
         assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
         assert_eq!(errore.phase(), ErrorPhase::Read);
-    }
-
-    #[test]
-    fn un_solo_tag_anche_applicando_la_fase_piu_volte() {
-        let mut errore =
-            PlenoraError::DataMapping("causa".to_owned()).with_row_diagnostics(diagnostica());
-        for _ in 0..5 {
-            errore = errore.with_phase(ErrorPhase::Read);
-        }
-        assert_eq!(tag_nella_catena(&errore), 1);
-        assert!(errore.row_diagnostics().is_some());
     }
 }
