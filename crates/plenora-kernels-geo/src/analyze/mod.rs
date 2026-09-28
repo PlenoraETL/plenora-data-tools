@@ -65,6 +65,7 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use self::dispatch::{analyze_binary, analyze_unary};
+use self::helpers::crs_requirement;
 use self::producers::{analyze_from_coords, analyze_from_wkt, analyze_generate_grid};
 
 /// Colonna con l'indice della riga madre nelle espansioni 1:N.
@@ -188,39 +189,34 @@ pub fn analyze_geo_contract(
             inputs.len()
         )));
     }
-    if descriptor.id == "geo.from_coords" {
-        let requirement = descriptor.crs_requirement.ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
-        })?;
-        return analyze_from_coords(
-            descriptor.id,
-            &inputs[0],
-            config,
-            plan_crs,
-            requirement,
-            fields,
-        );
-    }
-    if descriptor.id == "geo.from_wkt" {
-        let op = descriptor.id;
-        let requirement = descriptor.crs_requirement.ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
-        })?;
-        return analyze_from_wkt(op, &inputs[0], config, plan_crs, requirement, fields);
-    }
-    if descriptor.id == "geo.generate_grid" {
-        let op = descriptor.id;
-        let requirement = descriptor.crs_requirement.ok_or_else(|| {
-            PlenoraError::InvalidPlan(format!("{op}: crs_requirement assente nel catalogo"))
-        })?;
-        return analyze_generate_grid(op, &inputs[0], config, plan_crs, requirement, fields);
-    }
-    match descriptor.arity {
-        Arity::Unary => analyze_unary(descriptor, &inputs[0], config, plan_crs, fields),
-        Arity::BinaryOrdered => analyze_binary(descriptor, inputs, config),
-        Arity::NAry => Err(PlenoraError::Unsupported(format!(
-            "{op}: arieta' N-aria non supportata in v1"
-        ))),
+    // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
+    // rifiuto dell'N-aria resta prima del controllo sul numero di input,
+    // quindi qui l'arieta' e' solo 1 o 2.
+    match (descriptor.id, expected_arity) {
+        ("geo.from_coords", _) => {
+            // Il messaggio nomina l'op come richiesta (anche un alias).
+            let requirement = crs_requirement(op, descriptor)?;
+            analyze_from_coords(
+                descriptor.id,
+                &inputs[0],
+                config,
+                plan_crs,
+                requirement,
+                fields,
+            )
+        }
+        ("geo.from_wkt", _) => {
+            let op = descriptor.id;
+            let requirement = crs_requirement(op, descriptor)?;
+            analyze_from_wkt(op, &inputs[0], config, plan_crs, requirement, fields)
+        }
+        ("geo.generate_grid", _) => {
+            let op = descriptor.id;
+            let requirement = crs_requirement(op, descriptor)?;
+            analyze_generate_grid(op, &inputs[0], config, plan_crs, requirement, fields)
+        }
+        (_, 2) => analyze_binary(descriptor, inputs, config),
+        _ => analyze_unary(descriptor, &inputs[0], config, plan_crs, fields),
     }
 }
 

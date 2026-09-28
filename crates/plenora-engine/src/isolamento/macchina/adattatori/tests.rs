@@ -44,6 +44,9 @@ fn gerarchia() -> (
     let padre = radice.join("padre");
     let dominio = padre.join("dominio");
     std::fs::create_dir_all(&dominio).expect("gerarchia");
+    // Come in cgroupfs, `cgroup.kill` esiste gia' e vuoto: chi termina lo
+    // apre e ci scrive, non lo crea.
+    std::fs::write(dominio.join("cgroup.kill"), "").expect("cgroup.kill");
     (base, radice, padre, dominio)
 }
 
@@ -139,11 +142,15 @@ fn evidenza_su(radice: &Path, dominio: &Path) -> super::super::EvidenzaDaPrimaDe
 }
 
 fn popolato(dominio: &Path, si: bool) {
+    // Scritto a parte e rinominato: una riscrittura sul posto tronca il file,
+    // e il lettore sotto test potrebbe trovarlo vuoto per un istante.
+    let provvisorio = dominio.join("cgroup.events.nuovo");
     std::fs::write(
-        dominio.join("cgroup.events"),
+        &provvisorio,
         format!("populated {}\nfrozen 0\n", u8::from(si)),
     )
     .expect("cgroup.events");
+    std::fs::rename(&provvisorio, dominio.join("cgroup.events")).expect("cgroup.events");
 }
 
 fn causa_del_dialogo() -> plenora_core::PlenoraError {
@@ -243,7 +250,8 @@ fn svuota_al_kill(dominio: &Path) -> std::thread::JoinHandle<()> {
     let scadenza = std::time::Instant::now() + std::time::Duration::from_secs(60);
     std::thread::spawn(move || {
         while std::time::Instant::now() < scadenza {
-            if dominio.join("cgroup.kill").try_exists().expect("stat") {
+            let kill = std::fs::read_to_string(dominio.join("cgroup.kill")).expect("cgroup.kill");
+            if kill == "1" {
                 popolato(&dominio, false);
                 return;
             }
@@ -412,4 +420,28 @@ fn il_giudizio_cede_all_oom_attribuito() {
         plenora_core::ErrorCategory::ResourceLimit,
         "{errore}"
     );
+}
+
+/// Su una directory che non e' un cgroup `cgroup.kill` non c'e': terminare
+/// e' un errore, non la creazione di un file qualunque che fa sembrare
+/// riuscita una terminazione mai avvenuta.
+#[test]
+fn senza_cgroup_kill_terminare_e_un_errore_e_non_crea_file() {
+    use super::super::conduzione::Terminatore as _;
+    let base = tempfile::tempdir().expect("tempdir");
+    let mut terminatore = super::TerminaDominio::nuova(base.path().to_path_buf());
+    let errore = terminatore
+        .termina()
+        .expect_err("senza cgroup.kill non si termina");
+    assert!(errore.starts_with("cgroup.kill: "), "{errore}");
+    assert!(!base.path().join("cgroup.kill").try_exists().expect("stat"));
+}
+
+/// Un primo valore illeggibile non lascia passare il doppione che segue: la
+/// chiave c'e' due volte, e nessuna delle due e' un'osservazione.
+#[test]
+fn un_contatore_malformato_seguito_da_un_doppione_non_vale() {
+    assert_eq!(super::contatore("oom x\noom 0\n", "oom"), None);
+    assert_eq!(super::contatore("oom 0\noom 3\n", "oom"), None);
+    assert_eq!(super::contatore("low 0\noom 3\n", "oom"), Some(3));
 }
