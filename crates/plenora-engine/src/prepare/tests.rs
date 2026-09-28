@@ -6,64 +6,19 @@ use std::sync::Arc;
 use serde_json::json;
 
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::contract::{
-    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
-    GeometryDimensions, RuntimeStatistic,
-};
-use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::contract::{ContractCrs, DataContract, RuntimeStatistic};
 use plenora_core::PlenoraError;
 
 use super::*;
 use crate::planner::validate;
+use crate::test_support::{geo_contract_con, projected_crs, table_contract, wkb_geo_schema};
 
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
 
-fn projected_crs() -> ResolvedCrs {
-    ResolvedCrs::from_resolved_parts(
-        "EPSG:32632".to_owned(),
-        json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
-        CrsKind::Projected,
-        Some(1.0),
-    )
-}
-
-fn table_contract() -> DataContract {
-    DataContract::tabular(Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, true),
-    ])))
-}
-
-/// Come in `planner::tests`: il marcatore `geoarrow.wkb` rende la colonna
-/// identificabile dal check di analyze (piano-v5.md#contratti-di-input, decisione 8).
-fn wkb_geometry_field(name: &str) -> Field {
-    Field::new(name, DataType::Binary, true).with_metadata(std::collections::HashMap::from([(
-        plenora_kernels_geo::arrow_adapter::GEOARROW_EXTENSION_KEY.to_owned(),
-        plenora_kernels_geo::arrow_adapter::GEOARROW_WKB_EXTENSION.to_owned(),
-    )]))
-}
-
 fn geo_contract() -> DataContract {
-    DataContract::new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            wkb_geometry_field("geom"),
-        ])),
-        vec![GeometryColumnContract {
-            field_id: FieldId(3),
-            name: "geom".to_owned(),
-            crs: ContractCrs::Resolved(projected_crs()),
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
-    )
-    .expect("contratto fixture valido")
+    geo_contract_con(wkb_geo_schema(), 3, ContractCrs::Resolved(projected_crs()))
 }
 
 fn validate_plan(plan: &serde_json::Value, contract: DataContract) -> ValidatedGraph {

@@ -1,58 +1,15 @@
 //! Test del resource accounting (architettura.md#memoria) e della sequenza logica
 //! (architettura.md#determinismo) nell'executor, sorvegliato dal governor.
 
-use std::sync::Arc;
-
 use serde_json::json;
 
-use plenora_core::arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-
 use super::*;
-use crate::planner::validate;
+use crate::test_support::{run, single_input, table_batch, table_contract};
 
 // ---------------------------------------------------------------------------
-// Fixture (minime, locali: i test del governor restano auto-contenuti)
+// Fixture: quelle tabellari stanno in `crate::test_support`; il piano resta
+// locale, e non coincide con l'omonimo di `tests.rs` (qui `id > 0`).
 // ---------------------------------------------------------------------------
-
-fn table_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, true),
-    ]))
-}
-
-fn table_contract() -> DataContract {
-    DataContract::tabular(table_schema())
-}
-
-fn table_batch(ids: &[i64], names: &[&str]) -> RecordBatch {
-    RecordBatch::try_new(
-        table_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(StringArray::from(
-                names.iter().map(|n| Some(*n)).collect::<Vec<_>>(),
-            )) as ArrayRef,
-        ],
-    )
-    .expect("batch fixture valido")
-}
-
-fn run(
-    plan: &serde_json::Value,
-    inputs: Inputs,
-    contracts: &[(String, DataContract)],
-) -> Result<Output> {
-    let graph = validate(&plan.to_string(), contracts)?;
-    execute(&graph, inputs, RuntimeContext::default())
-}
-
-fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
-    Inputs::new()
-        .with(name, Input::from_batches(batches).expect("input non vuoto"))
-        .expect("input unico")
-}
 
 fn streaming_plan() -> serde_json::Value {
     json!({

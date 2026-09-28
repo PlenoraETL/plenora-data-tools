@@ -137,6 +137,11 @@ pub mod pubblicazione;
 mod risolutore;
 pub mod table_engine;
 pub mod temp_store;
+// Le fixture condivise dai test interni. L'`allow` copre `Inputs::with`, il
+// percorso permissivo deprecato che le prove dell'executor esercitano ancora.
+#[cfg(test)]
+#[allow(deprecated)]
+mod test_support;
 // I passi da 3 a 8-bis e il passo 9 che ne consuma la prova. Chiamante di
 // produzione: `isolamento::esecuzione_isolata::esegui_isolato`.
 mod verifica;

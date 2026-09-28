@@ -15,7 +15,7 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::ipc::reader::FileReader;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
-    ContractCrs, ContractProperties, ContractProperty, DataContract, FieldId,
+    ContractCrs, ContractProperties, ContractProperty, DataContract,
     GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryType,
     GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
 };
@@ -38,21 +38,13 @@ use plenora_kernels_geo::arrow_adapter::{
 
 use super::*;
 use crate::planner::validate;
+use crate::test_support::{
+    geo_contract_con, projected_crs, run, single_input, table_batch, table_contract, table_schema,
+};
 
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
-
-fn table_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, true),
-    ]))
-}
-
-fn table_contract() -> DataContract {
-    DataContract::tabular(table_schema())
-}
 
 fn geo_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -62,39 +54,7 @@ fn geo_schema() -> SchemaRef {
 }
 
 fn geo_contract() -> DataContract {
-    DataContract::new(
-        geo_schema(),
-        vec![GeometryColumnContract {
-            field_id: FieldId(3),
-            name: "geom".to_owned(),
-            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
-                "EPSG:32632".to_owned(),
-                json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
-                CrsKind::Projected,
-                Some(1.0),
-            )),
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
-    )
-    .expect("contratto fixture valido")
-}
-
-fn table_batch(ids: &[i64], names: &[&str]) -> RecordBatch {
-    RecordBatch::try_new(
-        table_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(StringArray::from(
-                names.iter().map(|n| Some(*n)).collect::<Vec<_>>(),
-            )) as ArrayRef,
-        ],
-    )
-    .expect("batch fixture valido")
+    geo_contract_con(geo_schema(), 3, ContractCrs::Resolved(projected_crs()))
 }
 
 fn point_wkb(x: f64, y: f64) -> Vec<u8> {
@@ -113,25 +73,6 @@ fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
         ],
     )
     .expect("batch geo fixture valido")
-}
-
-fn run(
-    plan: &serde_json::Value,
-    inputs: Inputs,
-    contracts: &[(String, DataContract)],
-) -> Result<Output> {
-    let graph = validate(&plan.to_string(), contracts)?;
-    execute(&graph, inputs, RuntimeContext::default())
-}
-
-/// `Inputs` SENZA contratto: il percorso permissivo, deprecato ma ancora
-/// supportato e quindi ancora da testare. L'`allow(deprecated)` sta sulla
-/// dichiarazione del modulo, in `executor.rs`, e copre anche i test che
-/// chiamano `Inputs::with` direttamente.
-fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
-    Inputs::new()
-        .with(name, Input::from_batches(batches).expect("input non vuoto"))
-        .expect("input unico")
 }
 
 /// Come [`single_input`], per i test che hanno gia' un [`Input`] costruito.
