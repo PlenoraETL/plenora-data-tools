@@ -357,6 +357,13 @@ pub fn dbscan_nullable(
     check_min_points(min_points)?;
     let (row_of_point, points) = prepare_points(geometries)?;
     let point_labels = dbscan_core(&points, eps, min_points)?;
+    // Un'etichetta per punto, prima di riportarle alle righe: una in piu'
+    // sparirebbe, una in meno andrebbe in panico sull'indice.
+    if point_labels.len() != points.len() {
+        return Err(ClusterError::InternalInvariant(
+            "etichette in numero diverso dai punti",
+        ));
+    }
     Ok(row_of_point
         .iter()
         .map(|slot| slot.and_then(|point| point_labels[point]))
