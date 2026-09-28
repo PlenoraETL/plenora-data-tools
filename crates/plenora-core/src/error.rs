@@ -2508,6 +2508,32 @@ mod tests {
     }
 
     #[test]
+    fn la_diagnostica_si_legge_anche_sotto_un_tag_esterno() {
+        // `with_phase` mette sempre il tag sotto la diagnostica, ma la forma
+        // opposta resta costruibile a mano (come il tag annidato): gli
+        // accessori attraversano il wrapper di fase in entrambi i versi.
+        let errore = PlenoraError::Tagged {
+            phase: ErrorPhase::Commit,
+            source: Box::new(
+                PlenoraError::ResourceLimit("tetto".to_owned()).with_row_diagnostics(diagnostica()),
+            ),
+        };
+
+        assert_eq!(
+            errore.row_diagnostics(),
+            Some(&diagnostica()),
+            "il payload sotto il tag esterno non e' raggiungibile"
+        );
+        assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
+        assert_eq!(errore.phase(), ErrorPhase::Commit);
+        assert_eq!(errore.phase_tag(), Some(ErrorPhase::Commit));
+        assert_eq!(
+            errore.to_string(),
+            PlenoraError::ResourceLimit("tetto".to_owned()).to_string()
+        );
+    }
+
+    #[test]
     fn un_solo_tag_anche_applicando_la_fase_piu_volte() {
         let mut errore =
             PlenoraError::DataMapping("causa".to_owned()).with_row_diagnostics(diagnostica());

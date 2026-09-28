@@ -259,6 +259,64 @@ fn run_v4_non_sovrascrive_un_output_esistente() {
     );
 }
 
+/// Verifica che una destinazione occupata sia rifiutata prima di aprire
+/// l'ingresso, che qui non esiste.
+///
+/// Il controllo no-clobber anticipato e il persist finale danno la stessa
+/// classe (`conflict`, fase `commit`): con un ingresso leggibile i due
+/// cammini sono indistinguibili dall'esterno. Un ingresso assente li separa:
+/// solo il controllo anticipato risponde sulla destinazione senza aver
+/// cominciato il lavoro, altrimenti l'errore riguarda l'ingresso.
+fn assert_rifiutata_prima_dell_ingresso(result: &std::process::Output, uscita: &std::path::Path) {
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "conflict", "{envelope}");
+    assert_eq!(envelope["error"]["phase"], "commit", "{envelope}");
+    assert_eq!(result.status.code(), Some(5), "conflict -> 5: {envelope}");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("output gia' esistente")),
+        "{envelope}"
+    );
+    assert_eq!(
+        std::fs::read(uscita).expect("output intatto"),
+        b"contenuto precedente",
+        "no-clobber: il file esistente non e' toccato"
+    );
+}
+
+#[test]
+fn run_v4_rifiuta_la_destinazione_occupata_prima_di_leggere_l_input() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan.json");
+    scrivi_piano(&plan, &table_plan());
+    let input = directory.path().join("assente.arrow");
+    let output_path = directory.path().join("output.arrow");
+    std::fs::write(&output_path, b"contenuto precedente").expect("output preesistente");
+
+    let result = cli_run(&plan, &input, &output_path);
+    assert_rifiutata_prima_dell_ingresso(&result, &output_path);
+}
+
+#[test]
+fn run_legacy_rifiuta_la_destinazione_occupata_prima_di_leggere_l_input() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        br#"{"schema_version":1,"steps":[{"operation":"rename","config":{"renames":[{"old_name":"name","new_name":"label"}]}}]}"#,
+    )
+    .expect("plan");
+    let input = directory.path().join("assente.arrow");
+    let output_path = directory.path().join("output.arrow");
+    std::fs::write(&output_path, b"contenuto precedente").expect("output preesistente");
+
+    let result = comando_run(&plan, "--input", &input, &output_path)
+        .output()
+        .expect("run");
+    assert_rifiutata_prima_dell_ingresso(&result, &output_path);
+}
+
 #[test]
 fn piano_legacy_continua_a_funzionare_invariato() {
     let directory = tempfile::tempdir().expect("tempdir");

@@ -544,6 +544,63 @@ fn run_v4_rejects_the_right_flag_and_accepts_the_single_input_flag() {
 }
 
 #[test]
+fn blocking_plan_accepts_exactly_max_rows_and_refuses_one_more() {
+    // Il confine esatto del ramo blocking: `max_rows` righe si caricano,
+    // una in piu' e' un limite di risorsa (`resource_limit`, exit 4) in
+    // lettura, senza nulla di pubblicato. La fase `read` e' parte della
+    // prova: se il caricamento lasciasse passare la riga in piu', un tetto
+    // a valle chiuderebbe con la stessa categoria ma in un'altra fase.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let plan = directory.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        br#"{"schema_version":1,"limits":{"max_rows":3},"steps":[{"operation":"sort","config":{"columns":["id"],"ascending":true}}]}"#,
+    )
+    .expect("plan");
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    let scrivi = |nome: &str, ids: Vec<i64>| {
+        let percorso = directory.path().join(nome);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(Int64Array::from(ids))])
+                .expect("batch");
+        scrivi_ipc(&percorso, &schema, &[batch]);
+        percorso
+    };
+
+    let al_limite = scrivi("al_limite.arrow", vec![3, 1, 2]);
+    let output = directory.path().join("al_limite_out.arrow");
+    let result = comando_run(&plan, "--input", &al_limite, &output)
+        .output()
+        .expect("run");
+    assert!(result.status.success(), "stdout: {}", stdout_of(&result));
+    let reader = FileReader::try_new(std::fs::File::open(&output).expect("output"), None)
+        .expect("valid Arrow output");
+    let righe: usize = reader.map(|batch| batch.expect("batch").num_rows()).sum();
+    assert_eq!(righe, 3, "tutte le righe al limite sono pubblicate");
+
+    let oltre = scrivi("oltre.arrow", vec![4, 3, 1, 2]);
+    let output = directory.path().join("oltre_out.arrow");
+    let result = comando_run(&plan, "--input", &oltre, &output)
+        .output()
+        .expect("run");
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(
+        envelope["error"]["category"], "resource_limit",
+        "{envelope}"
+    );
+    assert_eq!(envelope["error"]["phase"], "read", "{envelope}");
+    assert_eq!(
+        result.status.code(),
+        Some(4),
+        "resource_limit -> 4: {envelope}"
+    );
+    assert!(
+        !output.try_exists().expect("stat"),
+        "nessun output parziale"
+    );
+}
+
+#[test]
 fn blocking_plan_over_max_rows_fails_before_any_publication() {
     let directory = tempfile::tempdir().expect("tempdir");
     let input = directory.path().join("input.arrow");
