@@ -2543,4 +2543,40 @@ mod tests {
         assert_eq!(tag_nella_catena(&errore), 1);
         assert!(errore.row_diagnostics().is_some());
     }
+
+    /// `con_contesto` antepone il contesto alle varianti con un messaggio
+    /// nostro e preserva la variante; le altre passano inalterate.
+    ///
+    /// Il caso stava nella CLI come `at_input_prefixes_context_and_preserves_the_variant`:
+    /// il contesto e' quello che `at_input("main", "dati.arrow", _)` compone.
+    /// La CLI conserva la prova della propria composizione (nome e percorso).
+    #[test]
+    fn con_contesto_antepone_il_contesto_e_preserva_la_variante() {
+        let contesto = "input `main` (dati.arrow)";
+        let prefixed = PlenoraError::InvalidPlan("boom".into()).con_contesto(contesto);
+        match prefixed {
+            PlenoraError::InvalidPlan(message) => {
+                assert_eq!(message, "input `main` (dati.arrow): boom");
+            }
+            other => panic!("variante non preservata: {other:?}"),
+        }
+        for make in [
+            PlenoraError::Unsupported as fn(String) -> PlenoraError,
+            PlenoraError::Schema,
+            PlenoraError::Crs,
+        ] {
+            let prefixed = make("boom".to_owned()).con_contesto(contesto);
+            let message = match &prefixed {
+                PlenoraError::Unsupported(message)
+                | PlenoraError::Schema(message)
+                | PlenoraError::Crs(message) => message,
+                other => panic!("variante non preservata: {other:?}"),
+            };
+            assert_eq!(message, "input `main` (dati.arrow): boom");
+        }
+        // Le altre varianti passano inalterate (testo e tipo).
+        let io = PlenoraError::Io(std::io::Error::other("disco")).con_contesto(contesto);
+        assert!(matches!(io, PlenoraError::Io(_)));
+        assert_eq!(io.to_string(), "io error: disco");
+    }
 }
