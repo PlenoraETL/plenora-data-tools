@@ -32,7 +32,7 @@ thread_local! {
 fn decode<T: DeserializeOwned>(step: &Step) -> Result<T> {
     #[cfg(test)]
     DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-    serde_json::from_value(step.config.clone()).map_err(PlenoraError::from)
+    plenora_core::json::valore_di_controllo(step.config.clone())
 }
 
 fn validate_name_list(names: &[String], max: usize, label: &str, allow_empty: bool) -> Result<()> {

@@ -21,7 +21,45 @@ use std::fmt;
 
 use serde::de::{Deserializer, MapAccess, SeqAccess, Visitor};
 
-use crate::error::{PlenoraError, Result};
+use crate::error::{ErrorPhase, PlenoraError, Result};
+
+/// Deserializza un documento di controllo dal suo testo.
+///
+/// Un documento che non ha la forma attesa e' un rifiuto **in validazione**:
+/// l'errore resta `DataMapping`, ma con la fase `validate`. Senza il tag,
+/// `DataMapping` deriverebbe `write`, anche dove non si scrive nulla. E' il
+/// parser di tutti i documenti di controllo (piani v4, v5 e v6, config dei
+/// nodi e dei passi, schemi dei comandi), perche' la fase non dipenda da chi
+/// li legge.
+///
+/// Non controlla le chiavi duplicate: chi legge un testo le rifiuta prima con
+/// [`ensure_no_duplicate_keys`].
+///
+/// # Errors
+///
+/// `PlenoraError::DataMapping` con fase `validate` se il testo non e' JSON o
+/// non ha la forma di `T`.
+pub fn documento_di_controllo<T: serde::de::DeserializeOwned>(json_text: &str) -> Result<T> {
+    serde_json::from_str(json_text).map_err(errore_di_controllo)
+}
+
+/// Come [`documento_di_controllo`], da un valore gia' letto: la config di un
+/// nodo o di un passo.
+///
+/// # Errors
+///
+/// `PlenoraError::DataMapping` con fase `validate` se il valore non ha la
+/// forma di `T`.
+pub fn valore_di_controllo<T: serde::de::DeserializeOwned>(valore: serde_json::Value) -> Result<T> {
+    serde_json::from_value(valore).map_err(errore_di_controllo)
+}
+
+/// Un errore di forma di un documento di controllo: `DataMapping`, fase
+/// `validate`.
+#[must_use]
+pub fn errore_di_controllo(errore: serde_json::Error) -> PlenoraError {
+    PlenoraError::from(errore).with_phase(ErrorPhase::Validate)
+}
 
 /// Verifica che nessun oggetto del documento JSON abbia chiavi ripetute.
 ///
@@ -153,6 +191,27 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn un_documento_di_controllo_malformato_e_un_rifiuto_in_validazione() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Forma {
+            #[allow(dead_code)]
+            numero: u32,
+        }
+        for errore in [
+            documento_di_controllo::<Forma>("{ non json").unwrap_err(),
+            documento_di_controllo::<Forma>(r#"{"numero": "tre"}"#).unwrap_err(),
+            valore_di_controllo::<Forma>(serde_json::json!({"numero": null})).unwrap_err(),
+        ] {
+            assert_eq!(
+                errore.category(),
+                crate::ErrorCategory::DataMapping,
+                "{errore}"
+            );
+            assert_eq!(errore.phase(), ErrorPhase::Validate, "{errore}");
+        }
+    }
 
     #[test]
     fn i_documenti_senza_duplicati_passano() {

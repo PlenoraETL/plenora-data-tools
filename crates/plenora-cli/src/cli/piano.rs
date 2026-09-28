@@ -82,8 +82,7 @@ fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
 pub fn da_testo_di_controllo<T: serde::de::DeserializeOwned>(
     text: &str,
 ) -> Result<T, PlenoraError> {
-    serde_json::from_str(text)
-        .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Validate))
+    plenora_core::json::documento_di_controllo(text)
 }
 
 /// Fissa **un solo testo** per un piano DAG, e lo rende; `None` se il piano

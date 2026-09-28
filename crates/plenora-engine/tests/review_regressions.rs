@@ -87,9 +87,14 @@ fn il_json_malformato_resta_un_errore_di_mappatura() {
     // di sintassi, che restano competenza della deserializzazione.
     let malformed = r#"{"schema_version": 5, "inputs": ["main"#;
     let error = PlanV5::parse_default(malformed).expect_err("json malformato");
+    assert_eq!(
+        error.phase(),
+        plenora_core::ErrorPhase::Validate,
+        "{error:?}"
+    );
     assert!(
-        matches!(error, PlenoraError::DataMapping(_)),
-        "atteso DataMapping, ottenuto: {error:?}"
+        matches!(error.untag(), PlenoraError::DataMapping(_)),
+        "atteso DataMapping"
     );
 }
 
