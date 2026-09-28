@@ -1528,42 +1528,61 @@ mod tests {
         }
     }
 
-    /// Una istanza per variante costruibile direttamente, con la categoria
-    /// attesa (le varianti `#[from]` sono coperte a parte).
-    fn samples() -> Vec<(PlenoraError, ErrorCategory)> {
+    /// Una istanza per variante costruibile direttamente, con la categoria e
+    /// la fase attese (R9.1); le varianti `#[from]` sono coperte a parte.
+    /// `testo_internal` e' il messaggio di `Internal`, proprio di ciascun uso.
+    fn campioni(testo_internal: &str) -> Vec<(PlenoraError, ErrorCategory, ErrorPhase)> {
+        use ErrorCategory as C;
+        use ErrorPhase as P;
         vec![
             (
                 PlenoraError::InvalidPlan("c".into()),
-                ErrorCategory::InvalidPlan,
+                C::InvalidPlan,
+                P::Validate,
             ),
             (
                 PlenoraError::Unsupported("u".into()),
-                ErrorCategory::Unsupported,
+                C::Unsupported,
+                P::Validate,
             ),
-            (PlenoraError::Schema("s".into()), ErrorCategory::Schema),
+            (PlenoraError::Schema("s".into()), C::Schema, P::Validate),
             (
                 PlenoraError::DataMapping("d".into()),
-                ErrorCategory::DataMapping,
+                C::DataMapping,
+                P::Write,
             ),
-            (step("exec-1"), ErrorCategory::Execution),
-            (PlenoraError::Crs("crs".into()), ErrorCategory::Crs),
-            (cancelled(), ErrorCategory::Cancelled),
+            (step("exec-1"), C::Execution, P::Write),
+            (PlenoraError::Crs("crs".into()), C::Crs, P::Validate),
+            (cancelled(), C::Cancelled, P::Write),
             (
                 PlenoraError::Io(std::io::Error::other("io")),
-                ErrorCategory::Io,
+                C::Io,
+                P::Write,
             ),
             (
-                PlenoraError::Internal("invariante violata".into()),
-                ErrorCategory::Internal,
+                PlenoraError::Internal(testo_internal.into()),
+                C::Internal,
+                P::Write,
             ),
             // Wrapper di fase (BLOCK-03): la categoria e' quella della
             // sorgente (DataMapping non e' Io, quindi il test di retry qui
-            // sotto attende `Never` senza vedere attraverso il wrapper).
+            // sotto attende `Never` senza vedere attraverso il wrapper); la
+            // fase e' il tag del confine, non la derivazione della sorgente
+            // (DataMapping → Write).
             (
-                PlenoraError::DataMapping("d".into()).with_phase(ErrorPhase::Read),
-                ErrorCategory::DataMapping,
+                PlenoraError::DataMapping("d".into()).with_phase(P::Read),
+                C::DataMapping,
+                P::Read,
             ),
         ]
+    }
+
+    /// [`campioni`] con la categoria attesa.
+    fn samples() -> Vec<(PlenoraError, ErrorCategory)> {
+        campioni("invariante violata")
+            .into_iter()
+            .map(|(errore, categoria, _)| (errore, categoria))
+            .collect()
     }
 
     #[test]
@@ -1646,6 +1665,33 @@ mod tests {
         }
     }
 
+    /// Una tabella di nomi stabili scritta a mano contro l'elenco dichiarato
+    /// di un asse: ogni valore dichiarato vi compare (per discriminante), la
+    /// tabella non ne nomina altri, e ogni nome e' sia `as_str` sia `Display`.
+    fn pretendi_nomi_stabili<T: Copy + core::fmt::Debug + core::fmt::Display>(
+        attesi: &[(T, &str)],
+        dichiarati: &[T],
+        as_str: impl Fn(T) -> &'static str,
+    ) {
+        for dichiarato in dichiarati {
+            assert!(
+                attesi
+                    .iter()
+                    .any(|(atteso, _)| discriminant(atteso) == discriminant(dichiarato)),
+                "{dichiarato:?} e' dichiarato ma la tabella attesa non lo nomina"
+            );
+        }
+        assert_eq!(
+            attesi.len(),
+            dichiarati.len(),
+            "la tabella attesa nomina valori che la dichiarazione non contiene"
+        );
+        for &(valore, nome) in attesi {
+            assert_eq!(as_str(valore), nome);
+            assert_eq!(valore.to_string(), nome, "Display = as_str canonico");
+        }
+    }
+
     #[test]
     fn ogni_disposizione_dichiarata_ha_il_nome_stabile_atteso() {
         // R9.7: solo i valori canonici, snake_case, nessun valore proprio.
@@ -1653,33 +1699,20 @@ mod tests {
         // La tabella e' scritta a mano, seconda opinione su `as_str`; si
         // itera `DISPOSIZIONI_DICHIARATE` e si pretende che la tabella nomini
         // ogni valore, cosi' una variante nuova fa fallire il test.
-        let attesi: &[(RetryDisposition, &str)] = &[
-            (RetryDisposition::Never, "never"),
-            (RetryDisposition::Safe, "safe"),
-            (
-                RetryDisposition::RequiresIdempotencyKey,
-                "requires_idempotency_key",
-            ),
-            (RetryDisposition::RequiresRecovery, "requires_recovery"),
-            (RetryDisposition::After(Duration::from_millis(250)), "after"),
-        ];
-        for dichiarata in RetryDisposition::DISPOSIZIONI_DICHIARATE {
-            assert!(
-                attesi
-                    .iter()
-                    .any(|(atteso, _)| discriminant(atteso) == discriminant(dichiarata)),
-                "{dichiarata:?} e' dichiarata ma la tabella attesa non la nomina"
-            );
-        }
-        assert_eq!(
-            attesi.len(),
-            RetryDisposition::DISPOSIZIONI_DICHIARATE.len(),
-            "la tabella attesa nomina valori che la dichiarazione non contiene"
+        pretendi_nomi_stabili(
+            &[
+                (RetryDisposition::Never, "never"),
+                (RetryDisposition::Safe, "safe"),
+                (
+                    RetryDisposition::RequiresIdempotencyKey,
+                    "requires_idempotency_key",
+                ),
+                (RetryDisposition::RequiresRecovery, "requires_recovery"),
+                (RetryDisposition::After(Duration::from_millis(250)), "after"),
+            ],
+            RetryDisposition::DISPOSIZIONI_DICHIARATE,
+            RetryDisposition::as_str,
         );
-        for (disposition, name) in attesi {
-            assert_eq!(disposition.as_str(), *name);
-            assert_eq!(disposition.to_string(), *name, "Display = as_str canonico");
-        }
         // `after(durata)` trasporta la durata minima prima del retry.
         assert_eq!(
             RetryDisposition::After(Duration::from_millis(250)).delay(),
@@ -1688,30 +1721,12 @@ mod tests {
         assert_eq!(RetryDisposition::Safe.delay(), None);
     }
 
-    /// Una istanza per variante costruibile direttamente, con la fase
-    /// attesa (R9.1); le conversioni `From` esterne sono
-    /// coperte a parte, come in [`samples`].
+    /// [`campioni`] con la fase attesa.
     fn phase_samples() -> Vec<(PlenoraError, ErrorPhase)> {
-        vec![
-            (PlenoraError::InvalidPlan("c".into()), ErrorPhase::Validate),
-            (PlenoraError::Unsupported("u".into()), ErrorPhase::Validate),
-            (PlenoraError::Schema("s".into()), ErrorPhase::Validate),
-            (PlenoraError::DataMapping("d".into()), ErrorPhase::Write),
-            (step("exec-1"), ErrorPhase::Write),
-            (PlenoraError::Crs("crs".into()), ErrorPhase::Validate),
-            (cancelled(), ErrorPhase::Write),
-            (
-                PlenoraError::Io(std::io::Error::other("io")),
-                ErrorPhase::Write,
-            ),
-            (PlenoraError::Internal("i".into()), ErrorPhase::Write),
-            // Wrapper di fase (BLOCK-03): la fase e' il tag del confine,
-            // non la derivazione della sorgente (DataMapping → Write).
-            (
-                PlenoraError::DataMapping("d".into()).with_phase(ErrorPhase::Read),
-                ErrorPhase::Read,
-            ),
-        ]
+        campioni("i")
+            .into_iter()
+            .map(|(errore, _, fase)| (errore, fase))
+            .collect()
     }
 
     #[test]
@@ -1805,6 +1820,26 @@ mod tests {
         );
     }
 
+    /// `Replayed` di fase `Write`, senza effetto remoto ne' retry, sul nodo
+    /// `n` di `table.filter` e senza id di esecuzione.
+    fn replayed_write(
+        category: ErrorCategory,
+        message: &str,
+        execution_reason: &str,
+    ) -> PlenoraError {
+        PlenoraError::Replayed(Box::new(ReplayedError {
+            category,
+            phase: ErrorPhase::Write,
+            remote_effect: RemoteEffect::None,
+            retry: RetryDisposition::Never,
+            message: message.into(),
+            node: Some("n".into()),
+            operation: Some("table.filter".into()),
+            execution_id: None,
+            execution_reason: Some(execution_reason.into()),
+        }))
+    }
+
     #[test]
     fn la_rigenerazione_del_messaggio_conserva_il_dettaglio_diagnostico() {
         // `with_execution_id` rigenera il messaggio dei `Replayed` di
@@ -1812,17 +1847,11 @@ mod tests {
         // `execution_reason`: un dettaglio presente solo in `message`
         // sparirebbe. Chi arricchisce un `Replayed` scrive quindi in entrambi
         // i campi, e questo test lo fissa dal lato che rigenera.
-        let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
-            category: ErrorCategory::Execution,
-            phase: ErrorPhase::Write,
-            remote_effect: RemoteEffect::None,
-            retry: RetryDisposition::Never,
-            message: "motivo [batch_seq=3]".into(),
-            node: Some("n".into()),
-            operation: Some("table.filter".into()),
-            execution_id: None,
-            execution_reason: Some("motivo [batch_seq=3]".into()),
-        }));
+        let replayed = replayed_write(
+            ErrorCategory::Execution,
+            "motivo [batch_seq=3]",
+            "motivo [batch_seq=3]",
+        );
         let con_id = replayed.with_execution_id("exec-1");
         let testo = con_id.to_string();
         assert!(testo.contains("exec-1"), "l'id viene inserito: {testo}");
@@ -1833,17 +1862,8 @@ mod tests {
 
         // Controprova: se il dettaglio sta solo nel messaggio, la
         // rigenerazione lo perde. E' la premessa del difetto, verificata.
-        let solo_messaggio = PlenoraError::Replayed(Box::new(ReplayedError {
-            category: ErrorCategory::Execution,
-            phase: ErrorPhase::Write,
-            remote_effect: RemoteEffect::None,
-            retry: RetryDisposition::Never,
-            message: "motivo [batch_seq=3]".into(),
-            node: Some("n".into()),
-            operation: Some("table.filter".into()),
-            execution_id: None,
-            execution_reason: Some("motivo".into()),
-        }));
+        let solo_messaggio =
+            replayed_write(ErrorCategory::Execution, "motivo [batch_seq=3]", "motivo");
         assert!(
             !solo_messaggio
                 .with_execution_id("exec-1")
@@ -1867,17 +1887,7 @@ mod tests {
             (ErrorCategory::Execution, ""),
             (ErrorCategory::Cancelled, ""),
         ] {
-            let replayed = PlenoraError::Replayed(Box::new(ReplayedError {
-                category,
-                phase: ErrorPhase::Write,
-                remote_effect: RemoteEffect::None,
-                retry: RetryDisposition::Never,
-                message: "testo precedente".into(),
-                node: Some("n".into()),
-                operation: Some("table.filter".into()),
-                execution_id: None,
-                execution_reason: Some("motivo".into()),
-            }));
+            let replayed = replayed_write(category, "testo precedente", "motivo");
             let (node, operation, execution_id, reason) = (
                 "n".to_owned(),
                 "table.filter".to_owned(),
@@ -2306,35 +2316,22 @@ mod tests {
         // sull'elenco dichiarato: e' `FASI_DICHIARATE` a decidere che cosa
         // dev'essere nominato, non questa tabella a decidere che cosa
         // guardare.
-        let attesi: &[(ErrorPhase, &str)] = &[
-            (ErrorPhase::Validate, "validate"),
-            (ErrorPhase::Connect, "connect"),
-            (ErrorPhase::Probe, "probe"),
-            (ErrorPhase::Prepare, "prepare"),
-            (ErrorPhase::Read, "read"),
-            (ErrorPhase::Write, "write"),
-            (ErrorPhase::Finalize, "finalize"),
-            (ErrorPhase::Commit, "commit"),
-            (ErrorPhase::Rollback, "rollback"),
-            (ErrorPhase::Cleanup, "cleanup"),
-        ];
-        for dichiarata in ErrorPhase::FASI_DICHIARATE {
-            assert!(
-                attesi
-                    .iter()
-                    .any(|(atteso, _)| discriminant(atteso) == discriminant(dichiarata)),
-                "{dichiarata:?} e' dichiarata ma la tabella attesa non la nomina"
-            );
-        }
-        assert_eq!(
-            attesi.len(),
-            ErrorPhase::FASI_DICHIARATE.len(),
-            "la tabella attesa nomina valori che la dichiarazione non contiene"
+        pretendi_nomi_stabili(
+            &[
+                (ErrorPhase::Validate, "validate"),
+                (ErrorPhase::Connect, "connect"),
+                (ErrorPhase::Probe, "probe"),
+                (ErrorPhase::Prepare, "prepare"),
+                (ErrorPhase::Read, "read"),
+                (ErrorPhase::Write, "write"),
+                (ErrorPhase::Finalize, "finalize"),
+                (ErrorPhase::Commit, "commit"),
+                (ErrorPhase::Rollback, "rollback"),
+                (ErrorPhase::Cleanup, "cleanup"),
+            ],
+            ErrorPhase::FASI_DICHIARATE,
+            ErrorPhase::as_str,
         );
-        for (phase, name) in attesi {
-            assert_eq!(phase.as_str(), *name);
-            assert_eq!(phase.to_string(), *name, "Display = as_str canonico");
-        }
     }
 
     #[test]
@@ -2344,30 +2341,17 @@ mod tests {
         //
         // Stesso impianto delle fasi: tabella indipendente, giro
         // sull'elenco dichiarato.
-        let attesi: &[(RemoteEffect, &str)] = &[
-            (RemoteEffect::None, "none"),
-            (RemoteEffect::RolledBack, "rolled_back"),
-            (RemoteEffect::Partial, "partial"),
-            (RemoteEffect::Committed, "committed"),
-            (RemoteEffect::Unknown, "unknown"),
-        ];
-        for dichiarato in RemoteEffect::EFFETTI_DICHIARATI {
-            assert!(
-                attesi
-                    .iter()
-                    .any(|(atteso, _)| discriminant(atteso) == discriminant(dichiarato)),
-                "{dichiarato:?} e' dichiarato ma la tabella attesa non lo nomina"
-            );
-        }
-        assert_eq!(
-            attesi.len(),
-            RemoteEffect::EFFETTI_DICHIARATI.len(),
-            "la tabella attesa nomina valori che la dichiarazione non contiene"
+        pretendi_nomi_stabili(
+            &[
+                (RemoteEffect::None, "none"),
+                (RemoteEffect::RolledBack, "rolled_back"),
+                (RemoteEffect::Partial, "partial"),
+                (RemoteEffect::Committed, "committed"),
+                (RemoteEffect::Unknown, "unknown"),
+            ],
+            RemoteEffect::EFFETTI_DICHIARATI,
+            RemoteEffect::as_str,
         );
-        for (effect, name) in attesi {
-            assert_eq!(effect.as_str(), *name);
-            assert_eq!(effect.to_string(), *name, "Display = as_str canonico");
-        }
     }
 
     #[test]
@@ -2460,34 +2444,8 @@ mod tests {
     /// degradando l'errore a `Internal` — cioe' i test verificherebbero
     /// un'altra cosa.
     fn diagnostica() -> crate::diagnostics::RowDiagnostics {
-        use crate::diagnostics::{
-            RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
-            ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
-        };
-        let mut counts = std::collections::BTreeMap::new();
-        counts.insert("conversion.invalid_date".to_owned(), 1_u64);
-        RowDiagnostics {
-            contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
-            scope: RowDiagnosticScope::Read,
-            index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
-            completeness: RowDiagnosticsCompleteness::Complete,
-            knowledge_limits: None,
-            observed_total: 1,
-            total: Some(1),
-            input_total: None,
-            counts,
-            examples_limit: 2,
-            examples_truncated: false,
-            examples: vec![RowDiagnosticExample {
-                source_index: 0,
-                cause: "conversion.invalid_date".to_owned(),
-                column: Some("value".to_owned()),
-                key: None,
-                write_state: None,
-            }],
-            diagnostic_state_counts: None,
-            write_outcome: None,
-        }
+        use crate::diagnostics::tests::{example, report};
+        report(1, vec![example(0)])
     }
 
     /// Quanti `Tagged` ci sono nell'intera catena.
