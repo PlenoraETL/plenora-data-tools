@@ -30,7 +30,9 @@ use super::produttori::{Difetto, Osservatore};
 /// [`EvidenzaDiLimite`] non li distingue, tutti dicono che il numero non e'
 /// un'osservazione su cui contare.
 fn contatore(testo: &str, chiave: &str) -> Option<u64> {
-    let mut trovato = None;
+    // Presenza e valore si tengono separati: un primo valore illeggibile non
+    // deve lasciare «non trovato» e far passare per unico il doppione dopo.
+    let mut trovato: Option<&str> = None;
     for riga in testo.lines() {
         let (nome, valore) = riga.split_once(' ')?;
         if nome.trim() != chiave {
@@ -42,9 +44,9 @@ fn contatore(testo: &str, chiave: &str) -> Option<u64> {
             // `cgroup.events`.
             return None;
         }
-        trovato = valore.trim().parse().ok();
+        trovato = Some(valore.trim());
     }
-    trovato
+    trovato?.parse().ok()
 }
 
 fn leggi_contatore(percorso: &Path, chiave: &str) -> Option<u64> {

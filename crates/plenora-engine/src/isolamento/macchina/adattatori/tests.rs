@@ -142,11 +142,15 @@ fn evidenza_su(radice: &Path, dominio: &Path) -> super::super::EvidenzaDaPrimaDe
 }
 
 fn popolato(dominio: &Path, si: bool) {
+    // Scritto a parte e rinominato: una riscrittura sul posto tronca il file,
+    // e il lettore sotto test potrebbe trovarlo vuoto per un istante.
+    let provvisorio = dominio.join("cgroup.events.nuovo");
     std::fs::write(
-        dominio.join("cgroup.events"),
+        &provvisorio,
         format!("populated {}\nfrozen 0\n", u8::from(si)),
     )
     .expect("cgroup.events");
+    std::fs::rename(&provvisorio, dominio.join("cgroup.events")).expect("cgroup.events");
 }
 
 fn causa_del_dialogo() -> plenora_core::PlenoraError {
@@ -431,4 +435,13 @@ fn senza_cgroup_kill_terminare_e_un_errore_e_non_crea_file() {
         .expect_err("senza cgroup.kill non si termina");
     assert!(errore.starts_with("cgroup.kill: "), "{errore}");
     assert!(!base.path().join("cgroup.kill").try_exists().expect("stat"));
+}
+
+/// Un primo valore illeggibile non lascia passare il doppione che segue: la
+/// chiave c'e' due volte, e nessuna delle due e' un'osservazione.
+#[test]
+fn un_contatore_malformato_seguito_da_un_doppione_non_vale() {
+    assert_eq!(super::contatore("oom x\noom 0\n", "oom"), None);
+    assert_eq!(super::contatore("oom 0\noom 3\n", "oom"), None);
+    assert_eq!(super::contatore("low 0\noom 3\n", "oom"), Some(3));
 }
