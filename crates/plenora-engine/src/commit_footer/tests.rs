@@ -6,66 +6,36 @@
 //! quando il token manca supererebbe tutti i test sul contenuto e cambierebbe
 //! ogni artefatto gia' prodotto.
 
-use std::sync::Arc;
-
-use plenora_core::arrow::array::{RecordBatch, StringArray, UInt64Array};
+use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::ipc::writer::FileWriter;
-use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
+use plenora_core::arrow::schema::SchemaRef;
 use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
 
 use crate::planner::contract_fingerprint;
 
-use super::{leggi_commit_token, scrivi_commit_token};
+use super::leggi_commit_token;
 use crate::commit_token::{CommitToken, CHIAVE_FOOTER_COMMIT_TOKEN};
 use crate::geo_transport::ipc::IpcLimits;
+use crate::test_support::{
+    batch_artefatto, schema_artefatto as schema, scrivi_artefatto, scrivi_artefatto_con_metadata,
+    token,
+};
 
 const UNO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const DUE: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
-fn token(testo: &str) -> CommitToken {
-    CommitToken::da_esadecimale(testo).expect("canonico")
-}
-
-fn schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt64, false),
-        Field::new("nome", DataType::Utf8, true),
-    ]))
-}
-
 fn batch() -> RecordBatch {
-    RecordBatch::try_new(
-        schema(),
-        vec![
-            Arc::new(UInt64Array::from(vec![1_u64, 2, 3])),
-            Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])),
-        ],
-    )
-    .expect("batch valido")
+    batch_artefatto([Some("a"), None, Some("c")])
 }
 
 /// Scrive un artefatto completo, con o senza token.
 fn artefatto(token: Option<&CommitToken>) -> Vec<u8> {
-    let mut byte = Vec::new();
-    let mut scrittore = FileWriter::try_new(&mut byte, &schema()).expect("writer");
-    scrittore.write(&batch()).expect("batch scritto");
-    scrivi_commit_token(&mut scrittore, token);
-    scrittore.finish().expect("finish");
-    drop(scrittore);
-    byte
+    scrivi_artefatto(&schema(), &batch(), 1, token)
 }
 
 /// Scrive un artefatto con una coppia di metadata arbitraria.
 fn artefatto_con_metadata(coppie: &[(&str, &str)]) -> Vec<u8> {
-    let mut byte = Vec::new();
-    let mut scrittore = FileWriter::try_new(&mut byte, &schema()).expect("writer");
-    scrittore.write(&batch()).expect("batch scritto");
-    for (chiave, valore) in coppie {
-        scrittore.write_metadata(*chiave, *valore);
-    }
-    scrittore.finish().expect("finish");
-    drop(scrittore);
-    byte
+    scrivi_artefatto_con_metadata(&batch(), coppie)
 }
 
 fn letto(byte: &[u8]) -> Result<Option<CommitToken>, String> {

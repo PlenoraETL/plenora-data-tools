@@ -2,20 +2,18 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::{execute_batch, Limits, Plan, Step, ValidatedPlan};
+use plenora_engine::{execute_batch, Limits, ValidatedPlan};
 use serde_json::{json, Value};
 
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::piano;
+
 fn validated(operation: &str, config: Value, limits: Limits) -> Result<ValidatedPlan, String> {
-    Plan {
-        schema_version: 1,
-        limits,
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .map_err(|error| error.to_string())
+    piano(operation, config, limits)
+        .validate()
+        .map_err(|error| error.to_string())
 }
 
 fn strings(columns: &[(&str, Vec<Option<&str>>)]) -> RecordBatch {

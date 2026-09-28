@@ -3040,6 +3040,7 @@ pub(super) fn scrivi_output(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::{ColonnaTipizzata, REPERTO_VALIDAZIONE};
     use geo::{line_string, polygon, LineString, MultiPoint, Point};
 
     use super::*;
@@ -3071,10 +3072,7 @@ mod tests {
             geometrie_sulle_righe(&batches, 1, &schema, &[0, 2], &[Some(vec![7]), None]).unwrap();
         let colonna = |indice: usize| {
             uscita[indice]
-                .column(1)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap()
+                .colonna_a::<BinaryArray>(1)
                 .iter()
                 .map(|valore| valore.map(<[u8]>::to_vec))
                 .collect::<Vec<_>>()
@@ -3639,20 +3637,6 @@ mod tests {
     ) -> Result<Vec<Option<Vec<u8>>>, FusedStepError> {
         Ok(transform_cells_fused(group, None, cells, &mut |_| Ok(()))?.geometry)
     }
-
-    /// Il reperto del 5 settembre 2026, come nel percorso non fuso.
-    const REPERTO_VALIDAZIONE: &[u8] = &[
-        1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0,
-        1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4,
-        0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0,
-        6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0, 0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
 
     /// **Anche il percorso fuso: col candidato esatto, il reperto e' un
     /// ingresso invalido in ogni profilo — stessa correzione della

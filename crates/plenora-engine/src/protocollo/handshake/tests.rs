@@ -11,12 +11,11 @@ use super::{
     WorkerInAttesa,
 };
 use crate::commit_token::CommitToken;
-use crate::protocollo::digest::DigestSha256;
 use crate::protocollo::messaggi::{
-    Ambiente, Annulla, BackendDinamico, Corpo, DescrittoreIngresso, FormatoIngresso, Frame,
-    IdentitaArtefatto, IdentitaResolver, Incarico, LimitiDichiarati, Progresso, RisorsaRisolta,
-    Risposta, Saluto,
+    Ambiente, Annulla, BackendDinamico, Corpo, Frame, IdentitaArtefatto, IdentitaResolver,
+    Incarico, LimitiDichiarati, Progresso, RisorsaRisolta, Risposta, Saluto,
 };
+use crate::test_support::{digest, incarico_di_prova as incarico};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -26,11 +25,6 @@ const ARTEFATTO: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const INSIEME: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const PIANO: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 const CONTRATTO: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-
-/// Un digest dalla forma canonica, per le fixture.
-fn digest(testo: &str) -> DigestSha256 {
-    DigestSha256::da_esadecimale(testo).expect("canonico")
-}
 
 fn token() -> CommitToken {
     CommitToken::da_esadecimale(TOKEN).expect("canonico")
@@ -478,23 +472,6 @@ fn due_risorse_con_lo_stesso_nome_e_versioni_diverse_sono_un_duplicato() {
 // ---------------------------------------------------------------------------
 // Le transizioni: quelle ammesse e quelle vietate
 // ---------------------------------------------------------------------------
-
-fn incarico() -> Frame {
-    Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
-        piano_canonico: serde_json::value::RawValue::from_string(
-            r#"{"schema_version":6}"#.to_owned(),
-        )
-        .expect("JSON valido"),
-        plan_hash_atteso: digest(PIANO),
-        ingressi: vec![DescrittoreIngresso {
-            nome: "in".to_owned(),
-            percorso: "/d/a.arrow".to_owned(),
-            formato: FormatoIngresso::File,
-            contract_fingerprint_atteso: digest(CONTRATTO),
-        }],
-        artefatto_temporaneo: "/t/out.arrow".to_owned(),
-    })))
-}
 
 /// Un `Incarico` prima dell'accordo e' rifiutato **col suo nome**.
 ///

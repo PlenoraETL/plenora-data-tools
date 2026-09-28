@@ -8,9 +8,8 @@ use serde_json::json;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::catalog::{OperationDescriptor, CATALOG};
 use plenora_core::contract::{
-    ContractCrs, ContractProperties, ContractProperty, DataContract, FieldId,
-    GeometryColumnContract, GeometryDimensions, GeometryEncoding, PropertyConfidence,
-    PropertyScope,
+    ContractCrs, ContractProperty, DataContract, FieldId, GeometryDimensions, GeometryEncoding,
+    PropertyConfidence, PropertyScope,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::PlenoraError;
@@ -19,19 +18,11 @@ use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V4};
 use crate::table_engine;
 
 use super::*;
+use crate::test_support::{geo_contract_con, projected_crs, table_contract, wkb_geo_schema};
 
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
-
-fn projected_crs() -> ResolvedCrs {
-    ResolvedCrs::from_resolved_parts(
-        "EPSG:32632".to_owned(),
-        json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
-        CrsKind::Projected,
-        Some(1.0),
-    )
-}
 
 fn geographic_crs() -> ResolvedCrs {
     ResolvedCrs::from_resolved_parts(
@@ -42,24 +33,6 @@ fn geographic_crs() -> ResolvedCrs {
     )
 }
 
-/// Campo geometria WKB delle fixture: il marcatore di estensione
-/// `geoarrow.wkb` rende la colonna identificabile dal trasporto (piano-v5.md#contratti-di-input,
-/// decisione 8 — il check vive in analyze, quindi anche le fixture dei
-/// contratti devono essere realistiche).
-fn wkb_geometry_field(name: &str) -> Field {
-    Field::new(name, DataType::Binary, true).with_metadata(std::collections::HashMap::from([(
-        plenora_kernels_geo::arrow_adapter::GEOARROW_EXTENSION_KEY.to_owned(),
-        plenora_kernels_geo::arrow_adapter::GEOARROW_WKB_EXTENSION.to_owned(),
-    )]))
-}
-
-fn table_contract() -> DataContract {
-    DataContract::tabular(Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, true),
-    ])))
-}
-
 /// Contratto con geometria: `id` Int64 + colonna WKB `geom` con il `FieldId`
 /// dato (i contratti di input arrivano con id assegnati dal lettore: il
 /// planner li rimappa nel namespace del grafo, D16).
@@ -68,24 +41,7 @@ fn geo_contract(field_id: u32) -> DataContract {
 }
 
 fn geo_contract_with_crs(field_id: u32, crs: ResolvedCrs) -> DataContract {
-    DataContract::new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            wkb_geometry_field("geom"),
-        ])),
-        vec![GeometryColumnContract {
-            field_id: FieldId(field_id),
-            name: "geom".to_owned(),
-            crs: ContractCrs::Resolved(crs),
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
-    )
-    .expect("contratto fixture valido")
+    geo_contract_con(wkb_geo_schema(), field_id, ContractCrs::Resolved(crs))
 }
 
 fn input(contract: DataContract) -> Vec<(String, DataContract)> {
@@ -577,24 +533,7 @@ fn incompatible_crs_fails_in_validation() {
 /// lo stato che la discovery produce per una colonna `GeoArrow` senza alcuna
 /// rappresentazione CRS accettata (R4.4: mai un CRS inventato).
 fn geo_contract_missing_crs(field_id: u32) -> DataContract {
-    DataContract::new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            wkb_geometry_field("geom"),
-        ])),
-        vec![GeometryColumnContract {
-            field_id: FieldId(field_id),
-            name: "geom".to_owned(),
-            crs: ContractCrs::Missing,
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
-    )
-    .expect("contratto fixture valido")
+    geo_contract_con(wkb_geo_schema(), field_id, ContractCrs::Missing)
 }
 
 #[test]
@@ -621,28 +560,15 @@ fn missing_crs_enters_the_contract_fingerprint() {
 /// (`ContractCrs::DeclaredUnresolved`, R4.6.3): lo stato che la discovery
 /// produce per un'incoerenza dichiarata o un conflitto decidibile.
 fn geo_contract_declared_unresolved_crs(field_id: u32) -> DataContract {
-    DataContract::new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            wkb_geometry_field("geom"),
-        ])),
-        vec![GeometryColumnContract {
-            field_id: FieldId(field_id),
-            name: "geom".to_owned(),
-            crs: ContractCrs::DeclaredUnresolved {
-                crs_id: Some("EPSG:99999".to_owned()),
-                definition: None,
-                definition_format: None,
-            },
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
+    geo_contract_con(
+        wkb_geo_schema(),
+        field_id,
+        ContractCrs::DeclaredUnresolved {
+            crs_id: Some("EPSG:99999".to_owned()),
+            definition: None,
+            definition_format: None,
+        },
     )
-    .expect("contratto fixture valido")
 }
 
 #[test]

@@ -211,33 +211,9 @@ impl<W: Write> EnvelopeWriter<W> {
 /// si vede per intero nella taglia richiesta.
 #[cfg(test)]
 mod taglie_delle_letture_richieste {
-    use std::io::Read;
-
     use super::{framing, ArrowTransportError, EnvelopeReader, BUFFER_LETTURA_BYTES};
     use crate::geo_transport::transport::ENVELOPE_MAGIC;
-
-    /// Sorgente che dichiara molto e consegna poco, **e registra ogni
-    /// richiesta di lettura**.
-    ///
-    /// La registrazione e' il punto: un lettore corretto puo' fallire anche
-    /// avendo chiesto un buffer enorme, e l'esito da solo non
-    /// distinguerebbe i due casi. Sono le taglie richieste a dirlo.
-    struct SorgenteTroncata<'a> {
-        byte: &'a [u8],
-        letto: usize,
-        richieste: Vec<usize>,
-    }
-
-    impl Read for SorgenteTroncata<'_> {
-        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-            self.richieste.push(out.len());
-            let resto = self.byte.len().saturating_sub(self.letto);
-            let quanti = resto.min(out.len());
-            out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
-            self.letto += quanti;
-            Ok(quanti)
-        }
-    }
+    use crate::test_support::SorgenteTroncata;
 
     /// Header valido che dichiara `payload_len`, seguito da `payload` byte di
     /// riempimento — di norma molti meno di quanti ne dichiara.
@@ -259,11 +235,7 @@ mod taglie_delle_letture_richieste {
         const DICHIARATI: u64 = 4 * 1024 * 1024 * 1024;
 
         let byte = ingresso(DICHIARATI, 32);
-        let mut sorgente = SorgenteTroncata {
-            byte: &byte,
-            letto: 0,
-            richieste: Vec::new(),
-        };
+        let mut sorgente = SorgenteTroncata::nuova(&byte);
         let lettore = EnvelopeReader::new(&mut sorgente).expect("header valido");
         let esito = lettore.read_payload();
 
@@ -292,11 +264,7 @@ mod taglie_delle_letture_richieste {
         const VECCHIO_CHUNK: usize = 8 * 1024 * 1024;
 
         let byte = ingresso(64 * 1024 * 1024, 16);
-        let mut sorgente = SorgenteTroncata {
-            byte: &byte,
-            letto: 0,
-            richieste: Vec::new(),
-        };
+        let mut sorgente = SorgenteTroncata::nuova(&byte);
         let lettore = EnvelopeReader::new(&mut sorgente).expect("header valido");
         let _ = lettore.read_payload();
 
@@ -312,11 +280,7 @@ mod taglie_delle_letture_richieste {
     #[test]
     fn la_sorgente_che_finisce_prima_e_un_errore_non_un_payload_corto() {
         let byte = ingresso(1024, 10);
-        let mut sorgente = SorgenteTroncata {
-            byte: &byte,
-            letto: 0,
-            richieste: Vec::new(),
-        };
+        let mut sorgente = SorgenteTroncata::nuova(&byte);
         let lettore = EnvelopeReader::new(&mut sorgente).expect("header valido");
         match lettore.read_payload() {
             Err(ArrowTransportError::Io(errore)) => {
@@ -429,9 +393,8 @@ mod letture_parziali_e_interruzioni {
 /// fermano, e questi casi lo pretendono.
 #[cfg(test)]
 mod un_read_scorretto_non_passa_per_valido {
-    use std::io::Read;
-
     use super::{ArrowTransportError, EnvelopeReader, EnvelopeWriter};
+    use crate::test_support::SorgenteBugiarda;
 
     /// Envelope completo e valido: header, payload, trailer con checksum.
     fn envelope(payload: &[u8]) -> Vec<u8> {
@@ -445,37 +408,13 @@ mod un_read_scorretto_non_passa_per_valido {
         byte
     }
 
-    /// Serve l'header per intero, poi mente: dichiara un byte piu' della
-    /// fetta senza averla riempita.
-    struct SorgenteBugiarda<'a> {
-        byte: &'a [u8],
-        letto: usize,
-    }
-
-    impl Read for SorgenteBugiarda<'_> {
-        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-            let resto = self.byte.len().saturating_sub(self.letto);
-            let quanti = resto.min(out.len());
-            out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
-            self.letto += quanti;
-            // L'header passa da `read_exact`, che rifiuterebbe subito una
-            // dichiarazione in eccesso: la bugia arriva quando il ciclo del
-            // payload chiede la sua prima fetta.
-            if self.letto <= 16 {
-                return Ok(quanti);
-            }
-            Ok(out.len() + 1)
-        }
-    }
-
     #[test]
     fn l_envelope_si_ferma_invece_di_accodare_byte_mai_scritti() {
         let atteso: Vec<u8> = (0..3000_u32).map(|i| (i % 251) as u8).collect();
         let byte = envelope(&atteso);
-        let mut sorgente = SorgenteBugiarda {
-            byte: &byte,
-            letto: 0,
-        };
+        // L'header (16 byte) passa da `read_exact`: la bugia arriva quando il
+        // ciclo del payload chiede la sua prima fetta.
+        let mut sorgente = SorgenteBugiarda::nuova(&byte, 16);
         let lettore = EnvelopeReader::new(&mut sorgente).expect("header valido");
         match lettore.read_payload() {
             Err(ArrowTransportError::Io(errore)) => {

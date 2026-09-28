@@ -15,9 +15,9 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::ipc::reader::FileReader;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::{
-    ContractCrs, ContractProperties, ContractProperty, DataContract, FieldId,
-    GeometryColumnContract, GeometryDimensions, GeometryEncoding, GeometryType,
-    GeometryTypesProperty, PropertyConfidence, PropertyScope, TypesDeclaration,
+    ContractCrs, ContractProperties, ContractProperty, DataContract, GeometryColumnContract,
+    GeometryDimensions, GeometryEncoding, GeometryType, GeometryTypesProperty, PropertyConfidence,
+    PropertyScope, TypesDeclaration,
 };
 use plenora_core::crs::{CrsKind, ResolvedCrs};
 use plenora_core::diagnostics::RowDiagnosticsCompleteness;
@@ -38,21 +38,14 @@ use plenora_kernels_geo::arrow_adapter::{
 
 use super::*;
 use crate::planner::validate;
+use crate::test_support::{
+    geo_contract_con, projected_crs, run, single_input, square_wkb, table_batch, table_contract,
+    table_schema, ColonnaTipizzata,
+};
 
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
-
-fn table_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, true),
-    ]))
-}
-
-fn table_contract() -> DataContract {
-    DataContract::tabular(table_schema())
-}
 
 fn geo_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -62,39 +55,7 @@ fn geo_schema() -> SchemaRef {
 }
 
 fn geo_contract() -> DataContract {
-    DataContract::new(
-        geo_schema(),
-        vec![GeometryColumnContract {
-            field_id: FieldId(3),
-            name: "geom".to_owned(),
-            crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
-                "EPSG:32632".to_owned(),
-                json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
-                CrsKind::Projected,
-                Some(1.0),
-            )),
-            dimensions: GeometryDimensions::Xy,
-            encoding: None,
-            nullable: true,
-            types: GeometryColumnContract::undeclared_types(),
-        }],
-        None,
-        ContractProperties::default(),
-    )
-    .expect("contratto fixture valido")
-}
-
-fn table_batch(ids: &[i64], names: &[&str]) -> RecordBatch {
-    RecordBatch::try_new(
-        table_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(StringArray::from(
-                names.iter().map(|n| Some(*n)).collect::<Vec<_>>(),
-            )) as ArrayRef,
-        ],
-    )
-    .expect("batch fixture valido")
+    geo_contract_con(geo_schema(), 3, ContractCrs::Resolved(projected_crs()))
 }
 
 fn point_wkb(x: f64, y: f64) -> Vec<u8> {
@@ -113,25 +74,6 @@ fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
         ],
     )
     .expect("batch geo fixture valido")
-}
-
-fn run(
-    plan: &serde_json::Value,
-    inputs: Inputs,
-    contracts: &[(String, DataContract)],
-) -> Result<Output> {
-    let graph = validate(&plan.to_string(), contracts)?;
-    execute(&graph, inputs, RuntimeContext::default())
-}
-
-/// `Inputs` SENZA contratto: il percorso permissivo, deprecato ma ancora
-/// supportato e quindi ancora da testare. L'`allow(deprecated)` sta sulla
-/// dichiarazione del modulo, in `executor.rs`, e copre anche i test che
-/// chiamano `Inputs::with` direttamente.
-fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
-    Inputs::new()
-        .with(name, Input::from_batches(batches).expect("input non vuoto"))
-        .expect("input unico")
 }
 
 /// Come [`single_input`], per i test che hanno gia' un [`Input`] costruito.
@@ -183,6 +125,14 @@ fn with_geom_metadata(contract: &mut DataContract, coppie: &[(&str, &str)]) {
         })
         .collect();
     contract.schema = Arc::new(Schema::new(fields));
+}
+
+/// Il valore di `key` nei metadati, come `&str`.
+fn chiave<'a>(
+    metadata: &'a std::collections::HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    metadata.get(key).map(String::as_str)
 }
 
 fn output_rows(output: Output) -> Result<(Vec<RecordBatch>, ExecutionMetrics)> {
@@ -336,6 +286,40 @@ fn attribuzione(error: &PlenoraError) -> (String, String, String) {
     }
 }
 
+/// Il panico di un kernel arriva come difetto **nostro**, attribuito al nodo e
+/// all'operazione e senza il testo del panico, che puo' contenere dati.
+///
+/// Categoria `Internal` (exit 70), non `execution` (exit 6) e non
+/// `invalid_plan` (exit 2, che accuserebbe il piano di chi ci chiama). Nodo e
+/// operazione si leggono dai campi, con [`attribuzione`]. `caso` apre ogni
+/// messaggio, per distinguere le varianti di una stessa prova.
+fn assert_panico_attribuito(
+    error: &PlenoraError,
+    nodo_atteso: &str,
+    operazione_attesa: &str,
+    caso: &str,
+) {
+    assert_eq!(
+        error.category(),
+        plenora_core::ErrorCategory::Internal,
+        "{caso}un panico di kernel e' un difetto interno: {error}"
+    );
+    let (nodo, operazione, reason) = attribuzione(error);
+    assert_eq!(nodo, nodo_atteso, "{caso}attribuzione al nodo in panic");
+    assert_eq!(
+        operazione, operazione_attesa,
+        "{caso}attribuzione all'operazione"
+    );
+    assert!(
+        !reason.contains("panic di test iniettato"),
+        "{caso}il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
+    );
+    assert!(
+        reason.contains("panic nel kernel"),
+        "{caso}il motivo dichiara comunque che si tratta di un panic: {reason}"
+    );
+}
+
 #[test]
 fn il_dettaglio_diagnostico_sopravvive_all_assegnazione_dell_execution_id() {
     // `with_execution_id` RIGENERA il messaggio da `execution_reason` per
@@ -437,13 +421,28 @@ fn diagnostic_merge_overflow_is_transactional_and_preserves_partial_report() {
     assert_eq!(report.validate_for_emission(), Ok(()));
 }
 
-#[test]
-fn type_cast_collects_complete_row_diagnostics_across_input_batches() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
+/// Schema a una sola colonna Utf8 `effective_date`, con la nullabilita' data.
+fn effective_date_schema(nullable: bool) -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new(
         "effective_date",
         DataType::Utf8,
-        true,
-    )]));
+        nullable,
+    )]))
+}
+
+/// Il piano a un nodo `cast` di `table.type_cast`, con la configurazione data.
+fn cast_plan(config: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "schema_version": 5,
+        "inputs": ["main"],
+        "nodes": [{"id": "cast", "op": "table.type_cast", "in": ["main"], "config": config}],
+        "output": "cast"
+    })
+}
+
+#[test]
+fn type_cast_collects_complete_row_diagnostics_across_input_batches() {
+    let schema = effective_date_schema(true);
     let make_batch = |rows: usize, invalid_row: usize| {
         let values = (0..rows)
             .map(|row| {
@@ -651,11 +650,7 @@ fn expression_collects_complete_row_diagnostics_across_input_batches() {
 
 #[test]
 fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        false,
-    )]));
+    let schema = effective_date_schema(false);
     let batch = |values: Vec<&str>| {
         RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(values))])
             .expect("batch date")
@@ -664,17 +659,7 @@ fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
         batch(vec!["2026-08-01", "2026-08-02"]),
         batch(vec!["not-a-date"]),
     ];
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {"column": "effective_date", "target_type": "date32"}
-        }],
-        "output": "cast"
-    });
+    let plan = cast_plan(&json!({"column": "effective_date", "target_type": "date32"}));
     let make_output = || {
         run(
             &plan,
@@ -708,11 +693,7 @@ fn late_type_cast_rejection_is_atomic_for_iterator_and_ipc() {
 
 #[test]
 fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(StringArray::from(vec![
@@ -731,21 +712,11 @@ fn type_cast_reports_partial_diagnostics_when_the_input_stream_stops() {
         vec![Ok(batch), Err(interrupted)].into_iter(),
     );
     let inputs = single_input_from("main", input);
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {
-                "column": "effective_date",
-                "target_type": "date32",
-                "errors": "coerce"
-            }
-        }],
-        "output": "cast"
-    });
+    let plan = cast_plan(&json!({
+        "column": "effective_date",
+        "target_type": "date32",
+        "errors": "coerce"
+    }));
     let output = run(
         &plan,
         inputs,
@@ -776,11 +747,7 @@ fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
     // lease rilasciato per batch, ri-riserva al replay dopo lo scan
     // completo. Trattenendoli in RAM con i lease vivi fino a fine scan,
     // questo stream valido verrebbe rifiutato per «budget esaurito».
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let make_batch = || {
         RecordBatch::try_new(
             schema.clone(),
@@ -791,22 +758,13 @@ fn accepted_row_diagnostics_outputs_above_cumulative_budget_are_staged() {
         .expect("batch valido")
     };
     let plan_with = |max_governed_memory_bytes: u64| {
-        json!({
-            "schema_version": 5,
-            "inputs": ["main"],
-            "limits": {"max_governed_memory_bytes": max_governed_memory_bytes},
-            "nodes": [{
-                "id": "cast",
-                "op": "table.type_cast",
-                "in": ["main"],
-                "config": {
-                    "column": "effective_date",
-                    "target_type": "date32",
-                    "errors": "coerce"
-                }
-            }],
-            "output": "cast"
-        })
+        let mut plan = cast_plan(&json!({
+            "column": "effective_date",
+            "target_type": "date32",
+            "errors": "coerce"
+        }));
+        plan["limits"] = json!({"max_governed_memory_bytes": max_governed_memory_bytes});
+        plan
     };
     let contract = [("main".to_owned(), DataContract::tabular(schema.clone()))];
     // Sonda: byte governati di un batch di input e del suo output (le
@@ -854,11 +812,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
     // Rejection tardiva con staging: gli accepted staged sono scartati
     // (nessun batch pubblicato), il drenaggio continua per i conteggi
     // completi e gli indici restano assoluti sull'input originale.
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let batch_of = |rows: &[Option<&str>]| {
         RecordBatch::try_new(
             schema.clone(),
@@ -866,17 +820,7 @@ fn late_rejection_stages_zero_accepted_and_keeps_absolute_indices() {
         )
         .expect("batch")
     };
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {"column": "effective_date", "target_type": "date32"}
-        }],
-        "output": "cast"
-    });
+    let plan = cast_plan(&json!({"column": "effective_date", "target_type": "date32"}));
     let make_output = || {
         run(
             &plan,
@@ -921,11 +865,7 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
     // Fail-closed: stream VALIDO la cui staging IPC supera la quota
     // `max_temp_bytes` -> errore esplicito, zero accepted pubblicati,
     // nessun artefatto scrivibile via write_ipc_file_with_profile.
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        true,
-    )]));
+    let schema = effective_date_schema(true);
     let make_batch = || {
         RecordBatch::try_new(
             schema.clone(),
@@ -936,25 +876,15 @@ fn accepted_output_staging_beyond_temp_quota_fails_closed() {
         )
         .expect("batch valido")
     };
-    let plan = json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        // `max_governed_memory_bytes` basso forza la modalita' DISCO fin dal primo
-        // batch (architettura.md#memoria, staging memory-first: si resta in memoria solo finche'
-        // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
-        // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
-        // quota temporanea non verrebbe nemmeno interrogata. Doverlo
-        // dichiarare e' cio' che rende visibile quale sia la modalita'
-        // predefinita: la memoria.
-        "limits": {"max_temp_bytes": 1, "max_governed_memory_bytes": 1_048_576},
-        "nodes": [{
-            "id": "cast",
-            "op": "table.type_cast",
-            "in": ["main"],
-            "config": {"column": "effective_date", "target_type": "date32"}
-        }],
-        "output": "cast"
-    });
+    let mut plan = cast_plan(&json!({"column": "effective_date", "target_type": "date32"}));
+    // `max_governed_memory_bytes` basso forza la modalita' DISCO fin dal primo
+    // batch (architettura.md#memoria, staging memory-first: si resta in memoria solo finche'
+    // `trattenuti + input + max_batch_bytes <= budget`, e il tetto per
+    // batch e' 64 MiB): senza, gli accepted resterebbero in memoria e la
+    // quota temporanea non verrebbe nemmeno interrogata. Doverlo
+    // dichiarare e' cio' che rende visibile quale sia la modalita'
+    // predefinita: la memoria.
+    plan["limits"] = json!({"max_temp_bytes": 1, "max_governed_memory_bytes": 1_048_576});
     let make_output = || {
         run(
             &plan,
@@ -1074,11 +1004,7 @@ fn mixed_table_geo_chain_executes_buffer_then_area() {
         .column_with_name("area")
         .expect("colonna area aggiunta dalla misura")
         .0;
-    let areas = batch
-        .column(area_index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::Float64Array>()
-        .expect("area Float64");
+    let areas = batch.colonna_a::<plenora_core::arrow::array::Float64Array>(area_index);
     // Buffer di un punto con raggio 10 ~ cerchio di area pi*100 (~306 con
     // l'approssimazione poligonale di `geo`).
     let expected = 100.0 * std::f64::consts::PI;
@@ -1447,11 +1373,7 @@ fn xyz_batch_round_trips_byte_per_byte_through_a_table_filter() {
         2,
         "il filtro scarta solo la riga con id 1"
     );
-    let cells = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("colonna geometria binaria");
+    let cells = batch.colonna_a::<BinaryArray>(1);
     assert_eq!(cells.value(0), kept_a.as_slice(), "cella 0 byte-per-byte");
     assert_eq!(cells.value(1), kept_b.as_slice(), "cella 1 byte-per-byte");
     // I metadati di output dichiarano ancora xyz: mai un xy silenzioso.
@@ -1786,11 +1708,7 @@ fn flags_free_ewkb_is_byte_identical_to_iso_and_passes_the_xy_gate() {
         run(&plan, inputs, &[("main".to_owned(), geo_contract_ewkb())]).expect("execute"),
     )
     .expect("EWKB puro-XY passa il gate xy");
-    let cells = batches[0]
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("colonna geometria binaria");
+    let cells = batches[0].colonna_a::<BinaryArray>(1);
     assert_eq!(cells.value(0), cell.as_slice(), "cella byte-per-byte");
 }
 
@@ -2112,46 +2030,35 @@ fn canonical_output_schema_merges_canonical_keys_idempotently() {
     let contract = geo_contract();
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     assert_eq!(
-        merged
-            .metadata()
-            .get(PLENORA_CONTRACT_VERSION_KEY)
-            .map(String::as_str),
+        chiave(merged.metadata(), PLENORA_CONTRACT_VERSION_KEY),
         Some("1"),
         "R2.5: la versione accompagna le chiavi canoniche"
     );
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_DIMENSIONS_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_DIMENSIONS_KEY),
         Some("xy")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632")
     );
     // `GeometryMetadataDetails::default()`: axis_order obbligatorio con CRS
     // -> valore canonico `unknown` (mai inventato), encoding e types non
     // dichiarati dal contratto -> chiavi assenti (R5.2).
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("unknown")
     );
     assert!(!metadata.contains_key(PLENORA_GEOMETRY_ENCODING_KEY));
     assert!(!metadata.contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY));
     // Le chiavi GeoArrow legacy RESTANO (R2.6: coesistenza coerente).
     assert_eq!(
-        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+        chiave(metadata, GEOARROW_EXTENSION_KEY),
         Some(GEOARROW_WKB_EXTENSION)
     );
     assert!(metadata.contains_key(GEO_METADATA_KEY));
@@ -2213,19 +2120,12 @@ fn canonical_output_schema_normalizes_axis_order_and_deduces_srid() {
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("lon_lat")
     );
+    assert_eq!(chiave(metadata, PLENORA_GEOMETRY_SRID_KEY), Some("4326"));
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
-        Some("4326")
-    );
-    assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:4326")
     );
 }
@@ -2248,14 +2148,12 @@ fn canonical_output_schema_lineage_wins_over_authority_deduction() {
     let merged = canonical_output_schema(&contract).expect("lineage preservata, nessun R2.6");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("easting_northing"),
         "la lineage presente vince sulla deduzione"
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("32632"),
         "la lineage presente vince sulla deduzione"
     );
@@ -2313,27 +2211,21 @@ fn canonical_output_schema_passthrough_wkt_definition_is_idempotent() {
     let merged = canonical_output_schema(&contract).expect("passthrough WKT idempotente");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_DEFINITION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_DEFINITION_KEY),
         Some(MONTE_MARIO_WKT),
         "definizione WKT preservata byte-per-byte"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY),
         Some("wkt")
     );
     assert_eq!(metadata.get(PLENORA_GEOMETRY_CRS_ID_KEY), None);
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("easting_northing")
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("3003"),
         "srid dedotto dall'autorita' riempie l'assente"
     );
@@ -2387,21 +2279,17 @@ fn canonical_output_schema_corrects_false_resolved_into_declared_unresolved() {
     let merged = canonical_output_schema(&contract).expect("correzione dichiarata");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("declared_unresolved"),
         "l'incoerenza e' dichiarata, non silenziata"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:4326"),
         "dichiarazione originale preservata"
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("3003"),
         "srid di lineage preservato"
     );
@@ -2445,15 +2333,11 @@ fn canonical_output_schema_replaces_source_declarations_on_plan_decision() {
     let merged = canonical_output_schema(&contract).expect("decisione applicata");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632"),
         "il CRS deciso sostituisce la dichiarazione della sorgente"
     );
@@ -2484,15 +2368,10 @@ fn canonical_output_schema_emits_rewritten_types_from_contract() {
     let merged = canonical_output_schema(&contract).expect("fusione canonica");
     let metadata = merged.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
         Some("exact")
     );
-    assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
-        Some("point")
-    );
+    assert_eq!(chiave(metadata, PLENORA_GEOMETRY_TYPES_KEY), Some("point"));
 }
 
 #[test]
@@ -2583,20 +2462,13 @@ fn canonical_only_input_geometry_executes_and_emits_output_types() {
     let out_schema = reader.schema();
     let metadata = out_schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
         Some("exact"),
         "i tipi dell'output sono quelli dell'operazione, non dell'input"
     );
+    assert_eq!(chiave(metadata, PLENORA_GEOMETRY_TYPES_KEY), Some("point"));
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_TYPES_KEY).map(String::as_str),
-        Some("point")
-    );
-    assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632"),
         "CRS preservato dal centroid"
     );
@@ -2670,29 +2542,23 @@ fn reproject_replaces_canonical_crs_keys_end_to_end() {
     let out_schema = reader.schema();
     let metadata = out_schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:4326"),
         "il CRS emesso e' il target, non la sorgente"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_SRID_KEY),
         Some("4326"),
         "srid del TARGET dedotto dalla definizione d'autorita' (emendamento 2026-07-31: \
          la strip rimuove la chiave ereditata e la deduzione riempie l'assente — \
          non lo srid della sorgente)"
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("lon_lat"),
         "l'ordine descrive le coordinate GIS normalizzate prodotte dal backend, non gli assi authority"
     );
@@ -2719,35 +2585,24 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
         FileReader::try_new(File::open(&destination).expect("open"), None).expect("lettore IPC");
     let schema = reader.schema();
     assert_eq!(
-        schema
-            .metadata()
-            .get(PLENORA_CONTRACT_VERSION_KEY)
-            .map(String::as_str),
+        chiave(schema.metadata(), PLENORA_CONTRACT_VERSION_KEY),
         Some("1")
     );
     let metadata = schema.field_with_name("geom").expect("geom").metadata();
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_DIMENSIONS_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_DIMENSIONS_KEY),
         Some("xy")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY),
         Some("resolved")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_CRS_ID_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_CRS_ID_KEY),
         Some("EPSG:32632")
     );
     assert_eq!(
-        metadata
-            .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            .map(String::as_str),
+        chiave(metadata, PLENORA_GEOMETRY_AXIS_ORDER_KEY),
         Some("unknown")
     );
     // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non ha
@@ -2755,7 +2610,7 @@ fn ipc_output_carries_canonical_geometry_keys_and_contract_version() {
     assert!(!metadata.contains_key(PLENORA_FIELD_ID_KEY));
     // Coesistenza R2.6: le chiavi GeoArrow legacy non sono rimosse.
     assert_eq!(
-        metadata.get(GEOARROW_EXTENSION_KEY).map(String::as_str),
+        chiave(metadata, GEOARROW_EXTENSION_KEY),
         Some(GEOARROW_WKB_EXTENSION)
     );
     assert!(metadata.contains_key(GEO_METADATA_KEY));
@@ -2814,32 +2669,19 @@ fn reference_line() -> Vec<(f64, f64)> {
 
 fn string_column(batch: &RecordBatch, name: &str) -> StringArray {
     let index = batch.schema().column_with_name(name).expect("colonna").0;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("colonna Utf8")
-        .clone()
+    batch.colonna_a::<StringArray>(index).clone()
 }
 
 fn f64_column(batch: &RecordBatch, name: &str) -> plenora_core::arrow::array::Float64Array {
     let index = batch.schema().column_with_name(name).expect("colonna").0;
     batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::Float64Array>()
-        .expect("colonna Float64")
+        .colonna_a::<plenora_core::arrow::array::Float64Array>(index)
         .clone()
 }
 
 fn u64_column(batch: &RecordBatch, name: &str) -> UInt64Array {
     let index = batch.schema().column_with_name(name).expect("colonna").0;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("colonna UInt64")
-        .clone()
+    batch.colonna_a::<UInt64Array>(index).clone()
 }
 
 #[test]
@@ -2981,11 +2823,7 @@ fn geo_snap_subdivide_chain_expands_rows() {
     assert_eq!(parents.values(), &[0, 0, 1]);
     // Il vertice perturbato e' stato agganciato alla referenza.
     let geom_index = batch.schema().column_with_name("geom").expect("geom").0;
-    let cells = batch
-        .column(geom_index)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("WKB");
+    let cells = batch.colonna_a::<BinaryArray>(geom_index);
     let first = plenora_kernels_geo::geometry_from_wkb(cells.value(0)).expect("decode");
     let Geometry::LineString(line) = first else {
         panic!("attesa LineString");
@@ -3076,11 +2914,7 @@ fn geo_geometry_accessors_adds_canonical_and_prefixed_columns() {
         .column_with_name("g_is_closed")
         .expect("g_is_closed")
         .0;
-    let closed = batch
-        .column(closed_index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::BooleanArray>()
-        .expect("Boolean");
+    let closed = batch.colonna_a::<plenora_core::arrow::array::BooleanArray>(closed_index);
     assert!(closed.value(0), "poligono chiuso");
     assert!(!closed.value(1), "linea aperta");
     let starts = string_column(batch, "start_point");
@@ -3157,11 +2991,7 @@ fn geo_collect_groups_geometries_by_key() {
     let schema = batch.schema();
     assert_eq!(schema.field(0).name(), "geom", "geometria prima colonna");
     assert_eq!(schema.field(1).name(), "id");
-    let cells = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("WKB");
+    let cells = batch.colonna_a::<BinaryArray>(0);
     let first = plenora_kernels_geo::geometry_from_wkb(cells.value(0)).expect("decode");
     let Geometry::MultiPoint(points) = first else {
         panic!("gruppo omogeneo di punti -> MultiPoint: {first:?}");
@@ -3339,11 +3169,7 @@ fn table_top_n_selects_highest_rows() {
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 2);
     let index = batch.schema().column_with_name("id").expect("id").0;
-    let ids = batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("Int64");
+    let ids = batch.colonna_a::<Int64Array>(index);
     assert_eq!(ids.values(), &[5, 3], "blocking: top_n sull'intero input");
 }
 
@@ -3422,11 +3248,7 @@ fn table_validate_rules_annotates_rows() {
 
     let batch = &batches[0];
     let valid_index = batch.schema().column_with_name("_valid").expect("_valid").0;
-    let valid = batch
-        .column(valid_index)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::BooleanArray>()
-        .expect("Boolean");
+    let valid = batch.colonna_a::<plenora_core::arrow::array::BooleanArray>(valid_index);
     assert!(valid.value(0) && valid.value(1), "tutte le righe valide");
 }
 
@@ -3593,24 +3415,15 @@ fn geometry_producers_publish_mandatory_encoding_and_types_metadata() {
             .field_with_name("geometry")
             .expect("campo geometry pubblico");
         assert_eq!(
-            field
-                .metadata()
-                .get(PLENORA_GEOMETRY_ENCODING_KEY)
-                .map(String::as_str),
+            chiave(field.metadata(), PLENORA_GEOMETRY_ENCODING_KEY),
             Some("wkb")
         );
         assert_eq!(
-            field
-                .metadata()
-                .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
-                .map(String::as_str),
+            chiave(field.metadata(), PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
             Some(declaration)
         );
         assert_eq!(
-            field
-                .metadata()
-                .get(PLENORA_GEOMETRY_TYPES_KEY)
-                .map(String::as_str),
+            chiave(field.metadata(), PLENORA_GEOMETRY_TYPES_KEY),
             Some(types)
         );
         let (batches, _) = output.collect_batches().expect("output leggibile");
@@ -3649,11 +3462,7 @@ fn geo_generate_grid_then_collect_executes() {
     // adiacenti di una griglia si toccano su un lato e una MultiPolygon OGC
     // non lo ammette: il kernel e' fail-closed su output non valido).
     assert_eq!(batch.num_rows(), 4, "una riga per cella della griglia 2x2");
-    let cells = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("WKB");
+    let cells = batch.colonna_a::<BinaryArray>(0);
     for row in 0..4 {
         let geometry = plenora_kernels_geo::geometry_from_wkb(cells.value(row)).expect("decode");
         assert!(matches!(geometry, Geometry::Polygon(_)), "{geometry:?}");
@@ -4190,28 +3999,7 @@ fn kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    // Un panico dentro un kernel e' un difetto NOSTRO: categoria `Internal`
-    // (exit 70), non `execution` (exit 6) e non `invalid_plan` (exit 2, che
-    // accuserebbe il piano di chi ci chiama).
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    let (node, operation, reason) = attribuzione(&error);
-    assert_eq!(
-        node, "boom_stream",
-        "attribuzione al nodo che e' andato in panic"
-    );
-    assert_eq!(operation, "table.filter", "attribuzione all'operazione");
-    assert!(
-        !reason.contains("panic di test iniettato"),
-        "il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
-    );
-    assert!(
-        reason.contains("panic nel kernel"),
-        "il motivo dichiara comunque che si tratta di un panic: {reason}"
-    );
+    assert_panico_attribuito(&error, "boom_stream", "table.filter", "");
 }
 
 #[test]
@@ -4231,28 +4019,9 @@ fn blocking_kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    // Un panico dentro un kernel e' un difetto NOSTRO: categoria
-    // `Internal` (exit 70), non `execution` (exit 6) e non
-    // `invalid_plan` (exit 2, che accuserebbe il piano di chi ci
-    // chiama). Il contesto del passo resta: e' il motivo per cui il
-    // propagatore usa `Replayed` invece di lasciar passare l'errore
-    // nudo.
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    // Nodo e operazione viaggiano nel testo del `Replayed`: e' il portatore
-    // di categoria PIU' attribuzione, e non espone accessori tipizzati.
-    let (node, operation, reason) = attribuzione(&error);
-    {
-        assert_eq!(node, "boom_block", "attribuzione al nodo");
-        assert_eq!(operation, "table.aggregate", "attribuzione all'operazione");
-        assert!(
-            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
-            "il testo del panic non va pubblicato: {reason}"
-        );
-    }
+    // Il contesto del passo resta: e' il motivo per cui il propagatore usa
+    // `Replayed` invece di lasciar passare l'errore nudo.
+    assert_panico_attribuito(&error, "boom_block", "table.aggregate", "");
 }
 
 #[test]
@@ -4286,31 +4055,8 @@ fn binary_kernel_panic_becomes_step_error_attributed_to_node() {
     let error = output
         .collect_batches()
         .expect_err("panic convertito in errore");
-    // Un panico dentro un kernel e' un difetto NOSTRO: categoria
-    // `Internal` (exit 70), non `execution` (exit 6) e non
-    // `invalid_plan` (exit 2, che accuserebbe il piano di chi ci
-    // chiama). Il contesto del passo resta: e' il motivo per cui il
-    // propagatore usa `Replayed` invece di lasciar passare l'errore
-    // nudo.
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    // Nodo e operazione viaggiano nel testo del `Replayed`: e' il portatore
-    // di categoria PIU' attribuzione, e non espone accessori tipizzati.
-    let (node, operation, reason) = attribuzione(&error);
-    {
-        assert_eq!(
-            node, "boom_join",
-            "attribuzione anche per i segmenti BinaryBlocking"
-        );
-        assert_eq!(operation, "table.join", "attribuzione all'operazione");
-        assert!(
-            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
-            "il testo del panic non va pubblicato: {reason}"
-        );
-    }
+    // Il contesto del passo resta anche per i segmenti `BinaryBlocking`.
+    assert_panico_attribuito(&error, "boom_join", "table.join", "BinaryBlocking: ");
 }
 
 #[test]
@@ -4476,11 +4222,7 @@ fn cancel_between_batches_in_streaming_chain() {
 
 #[test]
 fn cancellation_after_rejection_prevails_with_partial_diagnostics() {
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "effective_date",
-        DataType::Utf8,
-        false,
-    )]));
+    let schema = effective_date_schema(false);
     let invalid = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(StringArray::from(vec!["not-a-date"]))],
@@ -5034,18 +4776,6 @@ fn geo_fusion_chain_plan() -> serde_json::Value {
     })
 }
 
-fn square_wkb(origin_x: f64, origin_y: f64, side: f64) -> Vec<u8> {
-    Geometry::Polygon(polygon![
-        (x: origin_x, y: origin_y),
-        (x: origin_x + side, y: origin_y),
-        (x: origin_x + side, y: origin_y + side),
-        (x: origin_x, y: origin_y + side),
-        (x: origin_x, y: origin_y),
-    ])
-    .to_wkb(CoordDimensions::xy())
-    .expect("wkb fixture")
-}
-
 fn run_geo_fusion(
     plan: &serde_json::Value,
     batches: Vec<RecordBatch>,
@@ -5243,19 +4973,8 @@ fn g_fused_group_panic_is_attributed_to_the_panicking_kernel() {
     // **entrato**, e resta contato. E' la promessa scritta su `geo_fusion_groups_started`,
     // e senza questo caso resterebbe soltanto scritta.
     assert_gruppi_avviati(&fused_metrics, &plain_metrics, 1);
-    for (label, error) in [("fuso", &fused_error), ("non fuso", &plain_error)] {
-        let (node, operation, reason) = attribuzione(error);
-        assert_eq!(
-            error.category(),
-            plenora_core::ErrorCategory::Internal,
-            "{label}: un panico di kernel e' un difetto interno: {error}"
-        );
-        assert_eq!(node, "g_s", "{label}: attribuzione al nodo in panic");
-        assert_eq!(operation, "geo.simplify", "{label}: operazione");
-        assert!(
-            !reason.contains("panic di test iniettato") && reason.contains("panic nel kernel"),
-            "{label}: il testo del panic non va pubblicato: {reason}"
-        );
+    for (label, error) in [("fuso: ", &fused_error), ("non fuso: ", &plain_error)] {
+        assert_panico_attribuito(error, "g_s", "geo.simplify", label);
     }
 }
 
@@ -5319,11 +5038,7 @@ fn fused_transforms_plus_terminal_area_matches_unfused() {
         &DataType::Binary,
         "geometria sopravvive"
     );
-    let area = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<plenora_core::arrow::array::Float64Array>()
-        .expect("colonna area Float64");
+    let area = batch.colonna_a::<plenora_core::arrow::array::Float64Array>(2);
     assert!(area.is_null(2), "null-in -> null-out sulla misura");
 }
 
@@ -5372,11 +5087,7 @@ fn fused_transform_plus_terminal_to_wkt_matches_unfused() {
         3,
         "misura appesa in coda allo schema"
     );
-    let wkt = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("colonna wkt Utf8");
+    let wkt = batch.colonna_a::<StringArray>(2);
     assert!(wkt.is_null(2), "null-in -> null-out sulla misura");
 }
 
@@ -5557,12 +5268,7 @@ fn ipc_bytes(batches: &[RecordBatch]) -> Vec<u8> {
 }
 
 fn int64_cell(batch: &RecordBatch, column: usize, row: usize) -> i64 {
-    batch
-        .column(column)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("colonna Int64")
-        .value(row)
+    batch.colonna_a::<Int64Array>(column).value(row)
 }
 
 #[test]
@@ -5610,19 +5316,11 @@ fn geo_sjoin_executes_inner_join_with_take_and_right_index() {
     // Colonne left via take: id ripetuto per coppia, geometria passthrough.
     assert_eq!(int64_cell(batch, 0, 0), 0);
     assert_eq!(int64_cell(batch, 0, 1), 0);
-    let geometries = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .expect("geom Binary");
+    let geometries = batch.colonna_a::<BinaryArray>(1);
     assert_eq!(geometries.value(0), point_wkb(1.0, 1.0).as_slice());
     assert_eq!(geometries.value(1), point_wkb(1.0, 1.0).as_slice());
     // right_index non-null (inner join) e non-nullable nel contratto v4.
-    let right_index = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("right_index UInt64");
+    let right_index = batch.colonna_a::<UInt64Array>(2);
     assert_eq!(right_index.value(0), 0);
     assert_eq!(right_index.value(1), 1);
     assert_eq!(
@@ -5674,17 +5372,9 @@ fn geo_nearest_executes_with_right_index_and_distance() {
     // Un solo match: left0 -> right1 (distanza 2 < 5); il null non produce righe.
     assert_eq!(batch.num_rows(), 1);
     assert_eq!(int64_cell(batch, 0, 0), 0);
-    let right_index = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("right_index UInt64");
+    let right_index = batch.colonna_a::<UInt64Array>(2);
     assert_eq!(right_index.value(0), 1);
-    let distances = batch
-        .column(3)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .expect("distance Float64");
+    let distances = batch.colonna_a::<Float64Array>(3);
     assert_eq!(distances.value(0), 2.0);
     // Contratto v4: right_index e distance nullable (match opzionale per riga).
     assert!(output_contract
@@ -5730,11 +5420,7 @@ fn geo_within_executes_with_flag_column_and_custom_name() {
     // Left passthrough: righe invariate; colonna flag con il nome da config.
     assert_eq!(batch.num_rows(), 3);
     assert_eq!(int64_cell(batch, 0, 2), 2);
-    let flags = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .expect("flag Boolean");
+    let flags = batch.colonna_a::<BooleanArray>(2);
     assert!(flags.value(0), "punto interno al poligono");
     assert!(!flags.value(1), "punto esterno");
     assert!(flags.is_null(2), "geometria null -> flag null");
@@ -5787,11 +5473,7 @@ fn geo_count_points_in_polygons_executes_with_count_column() {
     let batch = &batches[0];
     assert_eq!(batch.schema(), output_contract.schema);
     assert_eq!(batch.num_rows(), 3);
-    let counts = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("count UInt64");
+    let counts = batch.colonna_a::<UInt64Array>(2);
     assert_eq!(counts.value(0), 2, "due punti nel primo poligono");
     assert_eq!(counts.value(1), 0, "nessun punto nel secondo");
     assert!(counts.is_null(2), "poligono null -> conteggio null");
@@ -5875,22 +5557,7 @@ fn e_geo_binary_kernel_panic_is_attributed_to_the_node() {
     .expect("execute")
     .collect_batches()
     .expect_err("panic convertito in errore");
-    let (node, operation, reason) = attribuzione(&error);
-    assert_eq!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal,
-        "un panico di kernel e' un difetto interno: {error}"
-    );
-    assert_eq!(node, "gb_panic", "attribuzione al nodo in panic");
-    assert_eq!(operation, "geo.sjoin", "attribuzione all'operazione");
-    assert!(
-        !reason.contains("panic di test iniettato"),
-        "il testo del panic NON va pubblicato (puo' contenere dati): {reason}"
-    );
-    assert!(
-        reason.contains("panic nel kernel"),
-        "il motivo dichiara comunque che si tratta di un panic: {reason}"
-    );
+    assert_panico_attribuito(&error, "gb_panic", "geo.sjoin", "");
     assert_eq!(
         error.phase(),
         ErrorPhase::Write,
@@ -5997,12 +5664,7 @@ fn un_inserimento_duplicato_lascia_inputs_invariato() {
         Input::from_batches(vec![geo_batch(&[2], &[Some(point_wkb(2.0, 2.0))])]).expect("secondo")
     };
     let righe = |inputs: &Inputs| match &inputs.readers["main"] {
-        Input::Batches { batches } => batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("colonna id")
-            .value(0),
+        Input::Batches { batches } => batches[0].colonna_a::<Int64Array>(0).value(0),
         Input::Stream { .. } => panic!("variante inattesa"),
     };
 
@@ -6166,14 +5828,7 @@ fn staging_ordine_e_sequenza_logica_preservati() {
         let (batches, _) = staging_esegui(forza_disco).expect("esecuzione");
         let ids: Vec<i64> = batches
             .iter()
-            .flat_map(|b| {
-                b.column(0)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .expect("colonna id")
-                    .values()
-                    .to_vec()
-            })
+            .flat_map(|b| b.colonna_a::<Int64Array>(0).values().to_vec())
             .collect();
         assert_eq!(
             ids,
@@ -6373,14 +6028,7 @@ fn staging_output_consumato_da_un_segmento_successivo() {
     // L'ordinamento discendente e' effettivo: il consumatore ha visto i dati.
     let ids: Vec<i64> = memoria
         .iter()
-        .flat_map(|b| {
-            b.column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .expect("colonna id")
-                .values()
-                .to_vec()
-        })
+        .flat_map(|b| b.colonna_a::<Int64Array>(0).values().to_vec())
         .collect();
     assert_eq!(ids, vec![32, 31, 30, 22, 21, 20, 12, 11, 10, 2, 1, 0]);
 }

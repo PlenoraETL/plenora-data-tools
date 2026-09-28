@@ -1,0 +1,432 @@
+//! Impalcature condivise dai test interni del crate.
+//!
+//! Qui sta solo la costruzione degli ingressi: schemi, contratti, batch. Mai un
+//! atteso e mai un confronto: ogni prova ricava il proprio risultato per conto
+//! suo. Dove due copie differivano, la differenza e' un parametro esplicito e
+//! non una scelta fatta qui.
+
+use std::io::Read;
+use std::sync::Arc;
+
+use ::geo::{polygon, Geometry};
+use geozero::{CoordDimensions, ToWkb};
+use serde_json::json;
+
+use plenora_core::arrow::array::{
+    Array, ArrayRef, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
+use plenora_core::arrow::ipc::writer::FileWriter;
+use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
+use plenora_core::contract::{
+    ContractCrs, ContractProperties, DataContract, FieldId, GeometryColumnContract,
+    GeometryDimensions,
+};
+use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::Result;
+use sha2::{Digest as _, Sha256};
+
+use crate::commit_footer::scrivi_commit_token;
+use crate::commit_token::CommitToken;
+use crate::executor::{execute, Input, Inputs, Output};
+use crate::planner::validate;
+use crate::prepare::RuntimeContext;
+use crate::protocollo::digest::DigestSha256;
+use crate::protocollo::messaggi::{Corpo, DescrittoreIngresso, FormatoIngresso, Frame, Incarico};
+
+// ---------------------------------------------------------------------------
+// Contratti
+// ---------------------------------------------------------------------------
+
+/// `EPSG:32632` risolto e proiettato, con lo stub PROJJSON delle fixture.
+pub fn projected_crs() -> ResolvedCrs {
+    ResolvedCrs::from_resolved_parts(
+        "EPSG:32632".to_owned(),
+        json!({"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 32N"}),
+        CrsKind::Projected,
+        Some(1.0),
+    )
+}
+
+/// Schema tabellare a due colonne: `id` Int64 obbligatorio, `name` Utf8
+/// annullabile.
+pub fn table_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, true),
+    ]))
+}
+
+/// Il contratto tabellare di [`table_schema`].
+pub fn table_contract() -> DataContract {
+    DataContract::tabular(table_schema())
+}
+
+/// Campo geometria WKB con il solo marcatore di estensione `geoarrow.wkb`:
+/// basta a rendere la colonna identificabile dal check di analyze
+/// (piano-v5.md#contratti-di-input, decisione 8).
+pub fn wkb_geometry_field(name: &str) -> Field {
+    Field::new(name, DataType::Binary, true).with_metadata(std::collections::HashMap::from([(
+        plenora_kernels_geo::arrow_adapter::GEOARROW_EXTENSION_KEY.to_owned(),
+        plenora_kernels_geo::arrow_adapter::GEOARROW_WKB_EXTENSION.to_owned(),
+    )]))
+}
+
+/// Schema `id` + `geom` con il campo di [`wkb_geometry_field`].
+pub fn wkb_geo_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        wkb_geometry_field("geom"),
+    ]))
+}
+
+/// Contratto con una sola geometria `geom`, XY, annullabile e senza tipi
+/// dichiarati. Schema, `FieldId` e CRS sono cio' in cui le fixture dei
+/// moduli differiscono, e restano scelte del chiamante.
+pub fn geo_contract_con(schema: SchemaRef, field_id: u32, crs: ContractCrs) -> DataContract {
+    DataContract::new(
+        schema,
+        vec![GeometryColumnContract {
+            field_id: FieldId(field_id),
+            name: "geom".to_owned(),
+            crs,
+            dimensions: GeometryDimensions::Xy,
+            encoding: None,
+            nullable: true,
+            types: GeometryColumnContract::undeclared_types(),
+        }],
+        None,
+        ContractProperties::default(),
+    )
+    .expect("contratto fixture valido")
+}
+
+// ---------------------------------------------------------------------------
+// Piani
+// ---------------------------------------------------------------------------
+
+/// Il piano a un solo `table.filter` nella versione dichiarata, con il blocco
+/// `limits` del chiamante: la forma su cui le prove di migrazione e di
+/// formato confrontano le versioni.
+pub fn piano_con_limiti(versione: u16, limiti: &serde_json::Value) -> String {
+    json!({
+        "schema_version": versione,
+        "inputs": ["main"],
+        "limits": limiti,
+        "nodes": [
+            {"id": "a", "op": "table.filter", "in": ["main"], "config": {}}
+        ],
+        "output": "a"
+    })
+    .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Geometrie
+// ---------------------------------------------------------------------------
+
+/// Il quadrato di lato `side` con l'angolo in basso a sinistra nell'origine
+/// data, in WKB a due dimensioni.
+pub fn square_wkb(origin_x: f64, origin_y: f64, side: f64) -> Vec<u8> {
+    Geometry::Polygon(polygon![
+        (x: origin_x, y: origin_y),
+        (x: origin_x + side, y: origin_y),
+        (x: origin_x + side, y: origin_y + side),
+        (x: origin_x, y: origin_y + side),
+        (x: origin_x, y: origin_y),
+    ])
+    .to_wkb(CoordDimensions::xy())
+    .expect("wkb fixture")
+}
+
+/// Il reperto del 5 settembre 2026: fa panicare la validazione OGC di `geo`
+/// dove le asserzioni di debug sono attive. Lo usano il percorso non fuso
+/// (`transport.rs`) e quello fuso (`unary.rs`).
+pub const REPERTO_VALIDAZIONE: &[u8] = &[
+    1, 6, 0, 0, 0, 3, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 5, 46, 254, 255, 255, 253, 15, 0, 0, 16, 64, 64, 64, 64, 0, 0, 1, 3, 0, 0, 0,
+    1, 0, 0, 0, 7, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 4, 0, 4, 0, 0, 8, 116,
+    116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 1,
+    0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 46, 254,
+    255, 0, 0, 1, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 212, 0, 0, 0, 0, 0, 4, 0,
+    0, 8, 116, 116, 116, 116, 116, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+// ---------------------------------------------------------------------------
+// Lettura dei batch
+// ---------------------------------------------------------------------------
+
+/// Accesso tipizzato alle colonne nelle prove: un tipo diverso da quello
+/// atteso e' un panico, mai un `None` lasciato passare.
+pub trait ColonnaTipizzata {
+    /// La colonna in posizione `index`, con il tipo concreto `A`.
+    fn colonna_a<A: Array + 'static>(&self, index: usize) -> &A;
+}
+
+impl ColonnaTipizzata for RecordBatch {
+    fn colonna_a<A: Array + 'static>(&self, index: usize) -> &A {
+        self.column(index)
+            .as_any()
+            .downcast_ref::<A>()
+            .unwrap_or_else(|| panic!("colonna {index}: tipo inatteso"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Artefatti IPC con il footer del commit
+// ---------------------------------------------------------------------------
+
+/// Il token dalla forma canonica.
+pub fn token(testo: &str) -> CommitToken {
+    CommitToken::da_esadecimale(testo).expect("canonico")
+}
+
+/// Schema degli artefatti: `id` `UInt64` obbligatorio, `nome` `Utf8`
+/// annullabile.
+pub fn schema_artefatto() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt64, false),
+        Field::new("nome", DataType::Utf8, true),
+    ]))
+}
+
+/// Tre righe di [`schema_artefatto`], `id` da 1 a 3, con i nomi dati.
+///
+/// I nomi restano del chiamante: da loro dipende il layout dei byte, e c'e'
+/// chi ne misura gli offset.
+pub fn batch_artefatto(nomi: [Option<&str>; 3]) -> RecordBatch {
+    RecordBatch::try_new(
+        schema_artefatto(),
+        vec![
+            Arc::new(UInt64Array::from(vec![1_u64, 2, 3])),
+            Arc::new(StringArray::from(nomi.to_vec())),
+        ],
+    )
+    .expect("batch valido")
+}
+
+/// Un artefatto in file format: `quanti` copie di `batch` e il token dato,
+/// o nessun token con `None`.
+pub fn scrivi_artefatto(
+    schema: &SchemaRef,
+    batch: &RecordBatch,
+    quanti: usize,
+    tok: Option<&CommitToken>,
+) -> Vec<u8> {
+    let mut byte = Vec::new();
+    {
+        let mut scrittore = FileWriter::try_new(&mut byte, schema).expect("writer");
+        for _ in 0..quanti {
+            scrittore.write(batch).expect("batch scritto");
+        }
+        scrivi_commit_token(&mut scrittore, tok);
+        scrittore.finish().expect("finish");
+    }
+    byte
+}
+
+/// Un artefatto con un solo `batch` e le coppie date nei custom metadata del
+/// footer, al posto del token.
+pub fn scrivi_artefatto_con_metadata(batch: &RecordBatch, coppie: &[(&str, &str)]) -> Vec<u8> {
+    let mut byte = Vec::new();
+    {
+        let mut scrittore = FileWriter::try_new(&mut byte, &batch.schema()).expect("writer");
+        scrittore.write(batch).expect("batch scritto");
+        for (chiave, valore) in coppie {
+            scrittore.write_metadata(*chiave, *valore);
+        }
+        scrittore.finish().expect("finish");
+    }
+    byte
+}
+
+/// Lo SHA-256 dei byte in esadecimale minuscolo, calcolato qui e non dal
+/// codice sotto prova.
+pub fn sha256_esadecimale(byte: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    hasher.update(byte);
+    let esito: [u8; 32] = hasher.finalize().into();
+    let mut testo = String::with_capacity(64);
+    for grezzo in esito {
+        let _ = write!(testo, "{grezzo:02x}");
+    }
+    testo
+}
+
+// ---------------------------------------------------------------------------
+// Protocollo
+// ---------------------------------------------------------------------------
+
+/// Un digest dalla forma canonica, per le fixture.
+///
+/// I test condividono **il costruttore**, non un valore.
+pub fn digest(testo: &str) -> DigestSha256 {
+    DigestSha256::da_esadecimale(testo).expect("canonico")
+}
+
+/// L'`Incarico` nominale delle prove del protocollo: un piano v6 minimo, un
+/// ingresso in file format e l'artefatto temporaneo.
+pub fn incarico_di_prova() -> Frame {
+    Frame::nuovo(Corpo::Incarico(Box::new(Incarico {
+        piano_canonico: serde_json::value::RawValue::from_string(
+            r#"{"schema_version":6}"#.to_owned(),
+        )
+        .expect("JSON valido"),
+        plan_hash_atteso: digest(
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ),
+        ingressi: vec![DescrittoreIngresso {
+            nome: "in".to_owned(),
+            percorso: "/d/a.arrow".to_owned(),
+            formato: FormatoIngresso::File,
+            contract_fingerprint_atteso: digest(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            ),
+        }],
+        artefatto_temporaneo: "/t/out.arrow".to_owned(),
+    })))
+}
+
+/// Il prefisso di lunghezza big-endian seguito dai byte dati: la cornice di un
+/// frame, scritta qui e non dal codificatore sotto prova.
+pub fn incornicia<B: AsRef<[u8]> + ?Sized>(byte: &B) -> Vec<u8> {
+    let byte = byte.as_ref();
+    let mut fuori = u32::try_from(byte.len())
+        .expect("i casi di prova stanno in u32")
+        .to_be_bytes()
+        .to_vec();
+    fuori.extend_from_slice(byte);
+    fuori
+}
+
+// ---------------------------------------------------------------------------
+// Sorgenti `Read` finte
+// ---------------------------------------------------------------------------
+
+/// Sorgente che dichiara molto e consegna poco, **e registra ogni richiesta
+/// di lettura**: sono le taglie richieste, non l'esito, a dire se un lettore
+/// ha dimensionato il buffer sul dichiarato.
+pub struct SorgenteTroncata<'a> {
+    byte: &'a [u8],
+    letto: usize,
+    /// La taglia di ogni slice passata a `read`, nell'ordine.
+    pub richieste: Vec<usize>,
+    interrompi_una_volta: bool,
+}
+
+impl<'a> SorgenteTroncata<'a> {
+    /// Consegna `byte` e poi la fine del flusso.
+    pub const fn nuova(byte: &'a [u8]) -> Self {
+        Self {
+            byte,
+            letto: 0,
+            richieste: Vec::new(),
+            interrompi_una_volta: false,
+        }
+    }
+
+    /// Come [`Self::nuova`], ma la prima lettura fallisce con `Interrupted`
+    /// senza essere registrata.
+    pub const fn interrotta_una_volta(byte: &'a [u8]) -> Self {
+        Self {
+            byte,
+            letto: 0,
+            richieste: Vec::new(),
+            interrompi_una_volta: true,
+        }
+    }
+}
+
+impl Read for SorgenteTroncata<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.interrompi_una_volta {
+            self.interrompi_una_volta = false;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "interrotta",
+            ));
+        }
+        self.richieste.push(out.len());
+        let resto = self.byte.len().saturating_sub(self.letto);
+        let quanti = resto.min(out.len());
+        out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
+        self.letto += quanti;
+        Ok(quanti)
+    }
+}
+
+/// Sorgente che serve per intero i primi `onesti` byte, poi mente: dichiara
+/// un byte piu' della fetta senza averla riempita.
+///
+/// `onesti` e' la parte che il lettore legge con `read_exact`, che
+/// rifiuterebbe subito una dichiarazione in eccesso: la bugia deve arrivare
+/// alla prima fetta del payload, e dove cada dipende dal formato.
+pub struct SorgenteBugiarda<'a> {
+    byte: &'a [u8],
+    letto: usize,
+    onesti: usize,
+}
+
+impl<'a> SorgenteBugiarda<'a> {
+    /// Mente dopo i primi `onesti` byte di `byte`.
+    pub const fn nuova(byte: &'a [u8], onesti: usize) -> Self {
+        Self {
+            byte,
+            letto: 0,
+            onesti,
+        }
+    }
+}
+
+impl Read for SorgenteBugiarda<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let resto = self.byte.len().saturating_sub(self.letto);
+        let quanti = resto.min(out.len());
+        out[..quanti].copy_from_slice(&self.byte[self.letto..self.letto + quanti]);
+        self.letto += quanti;
+        if self.letto <= self.onesti {
+            return Ok(quanti);
+        }
+        Ok(out.len() + 1)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Esecuzione
+// ---------------------------------------------------------------------------
+
+/// Un batch di [`table_schema`], senza nulli.
+pub fn table_batch(ids: &[i64], names: &[&str]) -> RecordBatch {
+    RecordBatch::try_new(
+        table_schema(),
+        vec![
+            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
+            Arc::new(StringArray::from(
+                names.iter().map(|n| Some(*n)).collect::<Vec<_>>(),
+            )) as ArrayRef,
+        ],
+    )
+    .expect("batch fixture valido")
+}
+
+/// Valida il piano sui contratti ed esegue con il contesto di default.
+pub fn run(
+    plan: &serde_json::Value,
+    inputs: Inputs,
+    contracts: &[(String, DataContract)],
+) -> Result<Output> {
+    let graph = validate(&plan.to_string(), contracts)?;
+    execute(&graph, inputs, RuntimeContext::default())
+}
+
+/// `Inputs` SENZA contratto: il percorso permissivo, deprecato ma ancora
+/// supportato e quindi ancora da testare. L'`allow(deprecated)` sta sulla
+/// dichiarazione del modulo, in `lib.rs`.
+pub fn single_input(name: &str, batches: Vec<RecordBatch>) -> Inputs {
+    Inputs::new()
+        .with(name, Input::from_batches(batches).expect("input non vuoto"))
+        .expect("input unico")
+}

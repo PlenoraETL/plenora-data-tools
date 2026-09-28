@@ -7,48 +7,25 @@
 
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{
-    types::Int32Type, DictionaryArray, RecordBatch, StringArray, UInt64Array,
-};
-use plenora_core::arrow::ipc::writer::FileWriter;
+use plenora_core::arrow::array::{types::Int32Type, DictionaryArray, RecordBatch, UInt64Array};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::DataContract;
 use plenora_core::ErrorCategory;
-use sha2::{Digest, Sha256};
 
 use super::{verifica_artefatto, AtteseVerifica};
-use crate::commit_footer::scrivi_commit_token;
 use crate::commit_token::CommitToken;
 use crate::geo_transport::ipc::IpcLimits;
 use crate::protocollo::digest::ALGORITMO_DIGEST;
+use crate::test_support::{
+    batch_artefatto, schema_artefatto as schema, scrivi_artefatto as artefatto,
+    scrivi_artefatto_con_metadata, sha256_esadecimale as digest_reale, token,
+};
 
 const UNO: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const DUE: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
-fn token(testo: &str) -> CommitToken {
-    CommitToken::da_esadecimale(testo).expect("canonico")
-}
-
-fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt64, false),
-        Field::new("nome", DataType::Utf8, true),
-    ]))
-}
-
 fn batch() -> RecordBatch {
-    RecordBatch::try_new(
-        schema(),
-        vec![
-            Arc::new(UInt64Array::from(vec![1_u64, 2, 3])),
-            Arc::new(StringArray::from(vec![
-                Some("segreto-alfa"),
-                None,
-                Some("segreto-beta"),
-            ])),
-        ],
-    )
-    .expect("batch valido")
+    batch_artefatto([Some("segreto-alfa"), None, Some("segreto-beta")])
 }
 
 /// Schema con due colonne dictionary-encoded: due blocchi di dizionario nel
@@ -81,37 +58,9 @@ fn batch_con_dizionari() -> RecordBatch {
     .expect("batch con dizionari")
 }
 
-/// Scrive un artefatto con `batch_count` batch identici e il token dato.
-fn artefatto(
-    schema: &SchemaRef,
-    batch: &RecordBatch,
-    quanti: usize,
-    tok: Option<&CommitToken>,
-) -> Vec<u8> {
-    let mut byte = Vec::new();
-    {
-        let mut scrittore = FileWriter::try_new(&mut byte, schema).expect("writer");
-        for _ in 0..quanti {
-            scrittore.write(batch).expect("batch scritto");
-        }
-        scrivi_commit_token(&mut scrittore, tok);
-        scrittore.finish().expect("finish");
-    }
-    byte
-}
-
 /// Artefatto con una coppia arbitraria nei custom metadata del footer.
 fn artefatto_con_metadata(coppie: &[(&str, &str)]) -> Vec<u8> {
-    let mut byte = Vec::new();
-    {
-        let mut scrittore = FileWriter::try_new(&mut byte, &schema()).expect("writer");
-        scrittore.write(&batch()).expect("batch scritto");
-        for (chiave, valore) in coppie {
-            scrittore.write_metadata(*chiave, *valore);
-        }
-        scrittore.finish().expect("finish");
-    }
-    byte
+    scrivi_artefatto_con_metadata(&batch(), coppie)
 }
 
 /// Il fingerprint di un contratto, nella forma sul filo — quella che
@@ -120,19 +69,6 @@ fn fingerprint_atteso(contratto: &DataContract) -> crate::protocollo::digest::Di
     let impronta = crate::planner::contract_fingerprint(contratto).expect("contratto riducibile");
     crate::protocollo::digest::DigestSha256::da_esadecimale(&impronta.to_hex())
         .expect("un'impronta esadecimale e' sempre canonica")
-}
-
-fn digest_reale(byte: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut hasher = Sha256::new();
-    hasher.update(byte);
-    let esito: [u8; 32] = hasher.finalize().into();
-    let mut testo = String::with_capacity(64);
-    for grezzo in esito {
-        let _ = write!(testo, "{grezzo:02x}");
-    }
-    testo
 }
 
 /// Esegue il verificatore su byte scritti in un file temporaneo.

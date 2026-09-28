@@ -10,6 +10,7 @@ use std::io::{self, Read};
 use super::leggi_frame;
 use crate::protocollo::codifica::{codifica, MAX_PROTOCOL_FRAME_BYTES};
 use crate::protocollo::messaggi::{Annulla, Corpo, Frame};
+use crate::test_support::incornicia;
 
 /// Una sorgente che **conta** i byte consegnati.
 ///
@@ -347,12 +348,7 @@ fn la_somma_col_prefisso_e_controllata() {
 #[test]
 fn il_lettore_non_e_piu_permissivo_del_decoder() {
     let testo = r#"{"protocol_version":1,"tipo":"annulla","corpo":{"motivo":"x","extra":1}}"#;
-    let mut dati = u32::try_from(testo.len())
-        .expect("corto")
-        .to_be_bytes()
-        .to_vec();
-    dati.extend_from_slice(testo.as_bytes());
-    let mut spia = Spia::nuova(dati);
+    let mut spia = Spia::nuova(incornicia(testo));
     let messaggio = leggi_frame(&mut spia)
         .expect_err("campo ignoto")
         .to_string();

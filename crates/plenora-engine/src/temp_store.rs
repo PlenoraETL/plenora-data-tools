@@ -445,12 +445,24 @@ mod tests {
         }
     }
 
+    /// Una radice temporanea e uno store con l'id dato. Il chiamante le lega
+    /// come `(root, store)`: lo store si rilascia prima della radice.
+    fn radice_e_store(execution_id: &str) -> (tempfile::TempDir, TempStore) {
+        let root = tempfile::tempdir().expect("root");
+        let store = TempStore::with_root(execution_id, root.path()).expect("store");
+        (root, store)
+    }
+
+    /// Lo scavenging della radice con il TTL dato.
+    fn scava(root: &tempfile::TempDir, ttl: Duration) -> ScavengeReport {
+        scavenge_stale_temp_dirs(root.path(), ttl).expect("scavenge")
+    }
+
     // -- Creazione / heartbeat / Drop ---------------------------------------
 
     #[test]
     fn creation_writes_lock_with_expected_fields() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-42.A_b", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-42.A_b");
         // Directory isolata sotto la radice con il pattern atteso.
         assert_eq!(store.path().parent(), Some(root.path()));
         let name = store
@@ -487,8 +499,7 @@ mod tests {
 
     #[test]
     fn heartbeat_updates_lock_timestamp() {
-        let root = tempfile::tempdir().expect("root");
-        let mut store = TempStore::with_root("exec-hb", root.path()).expect("store");
+        let (_root, mut store) = radice_e_store("exec-hb");
         // Invecchia artificialmente il lock, poi heartbeat: il timestamp
         // torna fresco.
         let mut lock = read_lock(&store);
@@ -518,10 +529,8 @@ mod tests {
 
     #[test]
     fn live_lock_is_never_scavenged() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-alive", root.path()).expect("store");
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(1)).expect("scavenge");
+        let (root, store) = radice_e_store("exec-alive");
+        let report = scava(&root, Duration::from_secs(1));
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 1);
         assert!(
@@ -533,16 +542,14 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn dead_pid_is_scavenged() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-dead", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-dead");
         // Trova un PID inesistente scansionando all'indietro dal massimo.
         let dead_pid = pid_non_esistente();
         // Heartbeat fermo da oltre la grazia ma ben dentro il TTL: e' il PID
         // morto ad accelerare la bonifica, non la scadenza.
         let lock = sample_lock(dead_pid, now_unix_secs() - GRAZIA_PID.as_secs() - 60);
         plant_lock(store.path(), &lock);
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_hours(24)).expect("scavenge");
+        let report = scava(&root, Duration::from_hours(24));
         assert_eq!(report.removed.len(), 1);
         assert!(
             !store.path().try_exists().expect("stat"),
@@ -559,13 +566,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn foreign_host_pid_is_never_trusted() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-foreign", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-foreign");
         let dead_pid = pid_non_esistente();
         let vecchio = now_unix_secs() - GRAZIA_PID.as_secs() - 60;
         plant_lock(store.path(), &foreign_lock(dead_pid, vecchio));
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_hours(24)).expect("scavenge");
+        let report = scava(&root, Duration::from_hours(24));
         assert!(
             report.removed.is_empty(),
             "il PID di un altro host non decide: {report:?}"
@@ -581,14 +586,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn un_heartbeat_fresco_batte_sempre_il_pid() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-omonimo", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-omonimo");
         let dead_pid = pid_non_esistente();
         // Stesso hostname (il lock dice di venire da qui) ma PID inesistente
         // e heartbeat appena scritto.
         plant_lock(store.path(), &sample_lock(dead_pid, now_unix_secs()));
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_hours(24)).expect("scavenge");
+        let report = scava(&root, Duration::from_hours(24));
         assert!(
             report.removed.is_empty(),
             "un heartbeat fresco non puo' essere cancellato da un PID: {report:?}"
@@ -601,11 +604,9 @@ mod tests {
     /// decide il TTL, che resta valido fra host, e la directory va rimossa.
     #[test]
     fn foreign_host_still_obeys_the_ttl() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-foreign-stale", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-foreign-stale");
         plant_lock(store.path(), &foreign_lock(std::process::id(), 1_000_000));
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(60));
         assert_eq!(report.removed.len(), 1);
         assert!(!store.path().try_exists().expect("stat"));
         std::mem::forget(store);
@@ -648,11 +649,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn un_pid_locale_vivo_non_si_cancella_nemmeno_oltre_il_ttl() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-bloccato", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-bloccato");
         plant_lock(store.path(), &sample_lock(std::process::id(), 1_000_000));
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(60));
         assert!(
             report.removed.is_empty(),
             "un processo locale vivo non e' orfano: {report:?}"
@@ -663,14 +662,12 @@ mod tests {
 
     #[test]
     fn stale_heartbeat_is_scavenged() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-stale", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-stale");
         // Heartbeat antico e processo che non c'e' piu': il TTL decide
         // (errori-e-limiti.md).
         let lock = sample_lock(pid_non_esistente(), 1_000_000);
         plant_lock(store.path(), &lock);
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(60));
         assert_eq!(report.removed.len(), 1);
         assert!(!store.path().try_exists().expect("stat"));
         std::mem::forget(store);
@@ -678,12 +675,10 @@ mod tests {
 
     #[test]
     fn fresh_heartbeat_with_live_pid_survives() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-fresh", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-fresh");
         let lock = sample_lock(std::process::id(), now_unix_secs());
         plant_lock(store.path(), &lock);
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_hours(24)).expect("scavenge");
+        let report = scava(&root, Duration::from_hours(24));
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 1);
         assert!(store.path().try_exists().expect("stat"));
@@ -691,13 +686,11 @@ mod tests {
 
     #[test]
     fn corrupt_lock_is_conservative_until_double_ttl() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-corrupt", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-corrupt");
         let lock_path = store.path().join(LOCK_FILE_NAME);
         fs::write(&lock_path, b"{ non-json !!!").expect("lock corrotto");
         // Corrotto e recente: mai cancellare.
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(60));
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_conservative, 1);
         assert!(store.path().try_exists().expect("stat"));
@@ -709,8 +702,7 @@ mod tests {
             .expect("apertura lock")
             .set_modified(old)
             .expect("set mtime");
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(60));
         assert_eq!(report.removed.len(), 1);
         assert!(!store.path().try_exists().expect("stat"));
         std::mem::forget(store);
@@ -724,8 +716,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn un_lock_illeggibile_non_autorizza_la_cancellazione() {
-        let root = tempfile::tempdir().expect("root");
-        let store = TempStore::with_root("exec-illeggibile", root.path()).expect("store");
+        let (root, store) = radice_e_store("exec-illeggibile");
         let lock_path = store.path().join(LOCK_FILE_NAME);
         fs::remove_file(&lock_path).expect("via il lock");
         fs::create_dir(&lock_path).expect("un lock che non si legge");
@@ -734,8 +725,7 @@ mod tests {
             .expect("apertura della directory")
             .set_modified(old)
             .expect("set mtime");
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(60));
         assert!(report.removed.is_empty(), "{report:?}");
         assert_eq!(report.kept_conservative, 1);
         assert!(store.path().try_exists().expect("stat"));
@@ -754,8 +744,7 @@ mod tests {
         // Directory nel pattern ma senza lock e recente: conservativa.
         let no_lock_dir = root.path().join("plenora-senza-lock-xyz");
         fs::create_dir(&no_lock_dir).expect("mkdir");
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(1)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(1));
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 0);
         assert_eq!(report.kept_conservative, 1);
@@ -772,8 +761,7 @@ mod tests {
         assert_ne!(first.path(), second.path(), "suffisso random distinto");
         // Heartbeat e scavenge sull'uno non toccano l'altro.
         first.heartbeat().expect("heartbeat");
-        let report =
-            scavenge_stale_temp_dirs(root.path(), Duration::from_secs(60)).expect("scavenge");
+        let report = scava(&root, Duration::from_secs(60));
         assert!(report.removed.is_empty());
         assert_eq!(report.kept_alive, 2);
         assert!(first.path().try_exists().expect("stat"));

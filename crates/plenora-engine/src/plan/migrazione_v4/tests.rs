@@ -10,20 +10,7 @@ use plenora_core::limits::PlanLimits;
 
 use super::*;
 use crate::plan::{PlanV5, PLAN_SCHEMA_VERSION_V5};
-
-/// Piano nella forma dichiarata, con il blocco `limits` fornito dal chiamante.
-fn piano(versione: u16, limiti: &Value) -> String {
-    json!({
-        "schema_version": versione,
-        "inputs": ["main"],
-        "limits": limiti,
-        "nodes": [
-            {"id": "a", "op": "table.filter", "in": ["main"], "config": {}}
-        ],
-        "output": "a"
-    })
-    .to_string()
-}
+use crate::test_support::piano_con_limiti as piano;
 
 fn errore_di(testo: &str) -> String {
     match testo_canonico_v5(testo, &PlanLimits::default()) {

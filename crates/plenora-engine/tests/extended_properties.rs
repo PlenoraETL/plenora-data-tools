@@ -6,24 +6,24 @@ use std::sync::Arc;
 use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::{execute_batch, execute_binary, Limits, Plan, Step, ValidatedPlan};
+use plenora_engine::{execute_batch, execute_binary, Limits, ValidatedPlan};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::{piano, plan_with_limits};
+
 fn plan(operation: &str, config: Value) -> ValidatedPlan {
-    Plan {
-        schema_version: 1,
-        limits: Limits {
+    plan_with_limits(
+        operation,
+        config,
+        Limits {
             max_rows: 10_000,
             ..Limits::default()
         },
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .expect("static property plan")
+    )
 }
 
 fn integers(name: &str, values: Vec<i64>) -> RecordBatch {
@@ -208,18 +208,11 @@ proptest! {
         for operation in ["union_distinct", "intersect", "except"] {
             let expected = execute_binary(&left, &right, &plan(operation, json!({})))
                 .expect("in-memory set operation");
-            let forced = Plan {
-                schema_version: 1,
-                limits: Limits {
+            let forced = piano(operation, json!({}), Limits {
                     max_governed_memory_bytes: 2_048,
                     spill_partitions: 32,
                     ..Limits::default()
-                },
-                steps: vec![Step {
-                    operation: operation.into(),
-                    config: json!({}),
-                }],
-            }
+                })
             .validate()
             .expect("spill plan");
             let actual = execute_binary(&left, &right, &forced)

@@ -5,23 +5,13 @@ use plenora_core::arrow::array::{
     Array, ArrayRef, Float64Array, Int64Array, ListArray, RecordBatch, StringArray, StructArray,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::{
-    execute_binary, execute_complete_batch as execute_batch, Limits, Plan, Step, ValidatedPlan,
-};
-use serde_json::{json, Value};
+use plenora_engine::{execute_binary, execute_complete_batch as execute_batch, Limits};
+use serde_json::json;
 
-fn plan(operation: &str, config: Value) -> ValidatedPlan {
-    Plan {
-        schema_version: 1,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .unwrap_or_else(|error| panic!("{operation}: {error}"))
-}
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::{piano, plan, utf8};
 
 fn flat() -> RecordBatch {
     RecordBatch::try_new(
@@ -372,16 +362,9 @@ fn invalid_extended_contracts_are_rejected_before_execution() {
         ),
     ] {
         assert!(
-            Plan {
-                schema_version: 1,
-                limits: Limits::default(),
-                steps: vec![Step {
-                    operation: operation.into(),
-                    config
-                }]
-            }
-            .validate()
-            .is_err(),
+            piano(operation, config, Limits::default())
+                .validate()
+                .is_err(),
             "{operation}"
         );
     }
@@ -566,7 +549,7 @@ fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
                 ),
             )
             .unwrap_or_else(|error| panic!("date_add {unit}/{invalid}: {error}"));
-            let out = utf8_column(&output, "out");
+            let out = utf8(&output, "out");
             assert_eq!(out.value(0), atteso, "date_add {unit}/{invalid}");
             assert!(
                 out.is_null(1),
@@ -623,7 +606,7 @@ fn temporal_policy_matrix_covers_every_unit_and_dst_failure_mode() {
                 ),
             )
             .unwrap_or_else(|error| panic!("timezone_convert {ambiguous}/{invalid}: {error}"));
-            let out = utf8_column(&output, "out");
+            let out = utf8(&output, "out");
             assert_eq!(out.value(0), "2024-07-01 10:00:00", "{ambiguous}/{invalid}");
             assert!(out.is_null(1), "{ambiguous}/{invalid}: null in, null out");
         }
@@ -849,17 +832,14 @@ fn nested_and_set_operations_enforce_resource_and_schema_guards() {
         vec![Arc::new(lists)],
     )
     .expect("list fixture");
-    let limited = Plan {
-        schema_version: 1,
-        limits: Limits {
+    let limited = piano(
+        "explode",
+        json!({"column":"items","empty_policy":"drop"}),
+        Limits {
             max_rows: 1,
             ..Limits::default()
         },
-        steps: vec![Step {
-            operation: "explode".into(),
-            config: json!({"column":"items","empty_policy":"drop"}),
-        }],
-    }
+    )
     .validate()
     .expect("limited explode");
     assert!(execute_batch(input.clone(), &limited).is_err());
@@ -912,27 +892,17 @@ fn nested_and_set_operations_enforce_resource_and_schema_guards() {
     for operation in ["union_distinct", "intersect", "except"] {
         assert!(execute_binary(&left, &incompatible, &plan(operation, json!({}))).is_err());
     }
-    let union_limit = Plan {
-        schema_version: 1,
-        limits: Limits {
+    let union_limit = piano(
+        "union_distinct",
+        json!({}),
+        Limits {
             max_rows: 4,
             ..Limits::default()
         },
-        steps: vec![Step {
-            operation: "union_distinct".into(),
-            config: json!({}),
-        }],
-    }
+    )
     .validate()
     .expect("union limit");
     assert!(execute_binary(&left, &left, &union_limit).is_err());
-}
-
-fn utf8_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
-    batch
-        .column_by_name(name)
-        .and_then(|column| column.as_any().downcast_ref::<StringArray>())
-        .expect("colonna utf8")
 }
 
 #[test]
@@ -976,8 +946,8 @@ fn hash_null_policies_and_defaults_are_explicit() {
         let oracle = execute_batch(substituted, &plan("sha256_hash", config))
             .expect("oracolo su colonna tutta valida");
         assert_eq!(
-            utf8_column(&output, &output_column).value(1),
-            utf8_column(&oracle, &output_column).value(1),
+            utf8(&output, &output_column).value(1),
+            utf8(&oracle, &output_column).value(1),
             "il null sostituito deve dare il digest storico del sostituto"
         );
     }
@@ -1176,16 +1146,7 @@ fn extended_contract_guard_matrix_reaches_every_validation_family() {
     ];
     for (operation, config) in cases {
         assert!(
-            Plan {
-                schema_version: 1,
-                limits: limits.clone(),
-                steps: vec![Step {
-                    operation: operation.into(),
-                    config,
-                }],
-            }
-            .validate()
-            .is_err(),
+            piano(operation, config, limits.clone()).validate().is_err(),
             "{operation}"
         );
     }
@@ -1391,17 +1352,14 @@ fn explode_drop_and_unnest_column_limit_are_enforced() {
         vec![Arc::new(structure)],
     )
     .expect("nested");
-    let limited = Plan {
-        schema_version: 1,
-        limits: Limits {
+    let limited = piano(
+        "unnest",
+        json!({"column":"payload","drop_source":true}),
+        Limits {
             max_columns: 1,
             ..Limits::default()
         },
-        steps: vec![Step {
-            operation: "unnest".into(),
-            config: json!({"column":"payload","drop_source":true}),
-        }],
-    }
+    )
     .validate()
     .expect("limited unnest");
     assert!(execute_batch(nested, &limited).is_err());

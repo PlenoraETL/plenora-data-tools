@@ -2,9 +2,14 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::{execute_batch, Limits, Plan, Step};
+use plenora_engine::{execute_batch, Limits};
 use proptest::prelude::*;
 use serde_json::{json, Value};
+
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::{piano, piano_a_passi, utf8};
 
 fn batch() -> RecordBatch {
     RecordBatch::try_new(
@@ -25,28 +30,9 @@ fn batch() -> RecordBatch {
 }
 
 fn plan(steps: Vec<(&str, Value)>) -> plenora_engine::ValidatedPlan {
-    Plan {
-        schema_version: 1,
-        limits: Limits::default(),
-        steps: steps
-            .into_iter()
-            .map(|(operation, config)| Step {
-                operation: operation.into(),
-                config,
-            })
-            .collect(),
-    }
-    .validate()
-    .expect("valid plan")
-}
-
-fn strings<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
-    batch
-        .column_by_name(name)
-        .expect("column")
-        .as_any()
-        .downcast_ref()
-        .expect("string column")
+    piano_a_passi(steps, Limits::default())
+        .validate()
+        .expect("valid plan")
 }
 
 #[test]
@@ -79,7 +65,7 @@ fn executes_a_schema_changing_chain_without_serialization_between_steps() {
             .collect::<Vec<_>>(),
         vec!["id", "name_norm", "chars", "name"]
     );
-    let normalized = strings(&result, "name_norm");
+    let normalized = utf8(&result, "name_norm");
     assert_eq!(normalized.value(0), "citta'");
     assert!(normalized.is_null(1));
     assert_eq!(normalized.value(2), "ecole roma");
@@ -100,7 +86,7 @@ fn concat_has_explicit_null_semantics() {
         json!({"columns": ["name", "code"], "output_column": "joined", "separator": "|", "skip_null": true}),
     )]);
     let result = execute_batch(batch(), &skip).expect("concat");
-    let joined = strings(&result, "joined");
+    let joined = utf8(&result, "joined");
     assert_eq!(joined.value(0), "  Citta'  |7");
     assert_eq!(joined.value(1), "12");
     assert_eq!(joined.value(2), "ÉCOLE   Roma");
@@ -113,9 +99,9 @@ fn split_preserves_nulls_and_bounds_expansion() {
         json!({"column": "name", "delimiter": " ", "new_columns": ["first", "rest"], "max_splits": 1}),
     )]);
     let result = execute_batch(batch(), &chain).expect("split");
-    assert_eq!(strings(&result, "first").value(0), "");
-    assert_eq!(strings(&result, "rest").value(0), " Citta'  ");
-    assert!(strings(&result, "first").is_null(1));
+    assert_eq!(utf8(&result, "first").value(0), "");
+    assert_eq!(utf8(&result, "rest").value(0), " Citta'  ");
+    assert!(utf8(&result, "first").is_null(1));
 }
 
 #[test]
@@ -134,14 +120,11 @@ fn collisions_and_malformed_config_fail_closed() {
     )]);
     assert!(execute_batch(batch(), &collision).is_err());
 
-    let malformed = Plan {
-        schema_version: 1,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "string_length".into(),
-            config: json!({"column": "name", "typo": true}),
-        }],
-    };
+    let malformed = piano(
+        "string_length",
+        json!({"column": "name", "typo": true}),
+        Limits::default(),
+    );
     assert!(malformed.validate().is_err());
 }
 
@@ -152,9 +135,9 @@ fn unicode_padding_counts_characters_not_bytes() {
         json!({"column": "code", "width": 3, "side": "left", "fill_char": "🙂", "output_column": "padded"}),
     )]);
     let result = execute_batch(batch(), &chain).expect("pad");
-    assert_eq!(strings(&result, "padded").value(0), "🙂🙂7");
-    assert_eq!(strings(&result, "padded").value(1), "🙂12");
-    assert!(strings(&result, "padded").is_null(2));
+    assert_eq!(utf8(&result, "padded").value(0), "🙂🙂7");
+    assert_eq!(utf8(&result, "padded").value(1), "🙂12");
+    assert!(utf8(&result, "padded").is_null(2));
 }
 
 proptest! {

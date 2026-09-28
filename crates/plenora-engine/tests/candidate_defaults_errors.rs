@@ -5,12 +5,16 @@ use plenora_core::arrow::array::{
     UInt32Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::table_engine::SCHEMA_VERSION;
 use plenora_engine::{
     execute_batch as execute_batch_local, execute_binary, execute_complete_batch as execute_batch,
-    Limits, Plan, Step, ValidatedPlan,
+    Limits,
 };
 use serde_json::{json, Value};
+
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::{piano, plan, utf8};
 
 fn batch() -> RecordBatch {
     RecordBatch::try_new(
@@ -44,31 +48,9 @@ fn batch() -> RecordBatch {
     .expect("fixture")
 }
 
-fn plan(operation: &str, config: Value) -> ValidatedPlan {
-    Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .unwrap_or_else(|error| panic!("{operation}: {error}"))
-}
-
 fn run(operation: &str, config: Value) -> RecordBatch {
     execute_batch(batch(), &plan(operation, config))
         .unwrap_or_else(|error| panic!("{operation}: {error}"))
-}
-
-fn utf8<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
-    batch
-        .column_by_name(name)
-        .expect("column")
-        .as_any()
-        .downcast_ref()
-        .expect("Utf8")
 }
 
 #[test]
@@ -182,14 +164,11 @@ fn extraction_casting_and_formula_error_surfaces_are_explicit() {
         "-text",
         "text * text",
     ] {
-        let raw = Plan {
-            schema_version: 1,
-            limits: Limits::default(),
-            steps: vec![Step {
-                operation: "formula".into(),
-                config: json!({"new_column":"x","formula":formula}),
-            }],
-        };
+        let raw = piano(
+            "formula",
+            json!({"new_column":"x","formula":formula}),
+            Limits::default(),
+        );
         if let Ok(valid) = raw.validate() {
             assert!(execute_batch(batch(), &valid).is_err(), "{formula}");
         }
@@ -298,14 +277,7 @@ fn numeric_text_and_null_error_boundaries_are_stable() {
             "{operation}"
         );
     }
-    assert!(Plan {
-        schema_version: SCHEMA_VERSION,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "window_function".into(),
-            config: json!({"column":"num","function":"lag","group_by":null,"order_column":null,"offset":0,"output_column":null}),
-        }],
-    }
+    assert!(piano("window_function", json!({"column":"num","function":"lag","group_by":null,"order_column":null,"offset":0,"output_column":null}), Limits::default())
     .validate()
     .is_err());
     let all_null = RecordBatch::try_new(
@@ -617,16 +589,9 @@ fn blocking_cardinality_guards_are_reached_after_valid_inputs() {
         ..Limits::default()
     };
     let limited = |operation: &str, config: Value| {
-        Plan {
-            schema_version: 1,
-            limits: limits.clone(),
-            steps: vec![Step {
-                operation: operation.into(),
-                config,
-            }],
-        }
-        .validate()
-        .expect("plan")
+        piano(operation, config, limits.clone())
+            .validate()
+            .expect("plan")
     };
     assert!(execute_binary(
         &left,
@@ -739,14 +704,11 @@ fn blocking_schema_collision_and_output_limits_fail_closed() {
         max_columns: 2,
         ..Limits::default()
     };
-    let limited = Plan {
-        schema_version: 1,
-        limits: two_columns,
-        steps: vec![Step {
-            operation: "join".into(),
-            config: json!({"left_keys":["id"],"right_keys":["id"],"how":"inner"}),
-        }],
-    }
+    let limited = piano(
+        "join",
+        json!({"left_keys":["id"],"right_keys":["id"],"how":"inner"}),
+        two_columns,
+    )
     .validate()
     .expect("plan");
     let small_left = collision_left.project(&[0, 1]).expect("project");
@@ -759,18 +721,15 @@ fn transpose_output_limits_are_reached_after_valid_inputs() {
     // nei limiti: le righe diventano colonne (piu' quella dei nomi) e le
     // colonne diventano righe.
     let transpose = |max_rows: usize, max_columns: usize| {
-        Plan {
-            schema_version: 1,
-            limits: Limits {
+        piano(
+            "transpose",
+            json!({"id_column":null,"output_columns":[]}),
+            Limits {
                 max_rows,
                 max_columns,
                 ..Limits::default()
             },
-            steps: vec![Step {
-                operation: "transpose".into(),
-                config: json!({"id_column":null,"output_columns":[]}),
-            }],
-        }
+        )
         .validate()
         .expect("transpose plan")
     };
@@ -828,14 +787,11 @@ fn analysis_and_reshape_post_input_limits_are_exercised() {
         max_columns: three.num_columns(),
         ..Limits::default()
     };
-    let flatten = Plan {
-        schema_version: 1,
-        limits: columns_limit,
-        steps: vec![Step {
-            operation: "flatten_json".into(),
-            config: json!({"column":"json","prefix":"j_","max_level":2,"output_columns":[]}),
-        }],
-    }
+    let flatten = piano(
+        "flatten_json",
+        json!({"column":"json","prefix":"j_","max_level":2,"output_columns":[]}),
+        columns_limit,
+    )
     .validate()
     .expect("flatten plan");
     assert!(execute_batch(three.clone(), &flatten).is_err());
@@ -865,7 +821,13 @@ fn analysis_and_reshape_post_input_limits_are_exercised() {
         max_rows: 3,
         ..Limits::default()
     };
-    let melt = Plan { schema_version: 1, limits: melt_limits, steps: vec![Step { operation: "melt".into(), config: json!({"id_columns":["id"],"value_columns":["text","num"],"var_name":"v","value_name":"x"}) }] }.validate().expect("melt plan");
+    let melt = piano(
+        "melt",
+        json!({"id_columns":["id"],"value_columns":["text","num"],"var_name":"v","value_name":"x"}),
+        melt_limits,
+    )
+    .validate()
+    .expect("melt plan");
     assert!(execute_batch(three.clone(), &melt).is_err());
     let empty = RecordBatch::new_empty(three.schema());
     assert_eq!(

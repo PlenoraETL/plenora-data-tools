@@ -8,23 +8,13 @@ use plenora_core::arrow::array::{
     Int64Array, ListArray, RecordBatch, StringArray, TimestampMillisecondArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_engine::{
-    execute_binary, execute_complete_batch as execute_batch, Limits, Plan, Step, ValidatedPlan,
-};
+use plenora_engine::{execute_binary, execute_complete_batch as execute_batch, Limits, Plan};
 use serde_json::{json, Value};
 
-fn plan(operation: &str, config: Value, limits: Limits) -> ValidatedPlan {
-    Plan {
-        schema_version: 1,
-        limits,
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .unwrap_or_else(|error| panic!("{operation}: {error}"))
-}
+// Ogni file usa una parte delle fixture: il resto serve agli altri.
+#[allow(dead_code)]
+mod fixture_table;
+use fixture_table::{piano, plan_with_limits as plan};
 
 fn strings(values: Vec<Option<&str>>) -> RecordBatch {
     RecordBatch::try_new(
@@ -187,29 +177,17 @@ fn native_arrow_casts_are_exact_nullable_and_fail_closed() {
         }
     }
 
-    assert!(Plan {
-        schema_version: 1,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "type_cast".into(),
-            config: json!({"column":"value","target_type":"decimal128","precision":39,"scale":2}),
-        }],
-    }
+    assert!(piano(
+        "type_cast",
+        json!({"column":"value","target_type":"decimal128","precision":39,"scale":2}),
+        Limits::default()
+    )
     .validate()
     .is_err());
 }
 
 fn contract_is_invalid(operation: &str, config: Value, limits: Limits) -> bool {
-    Plan {
-        schema_version: 1,
-        limits,
-        steps: vec![Step {
-            operation: operation.into(),
-            config,
-        }],
-    }
-    .validate()
-    .is_err()
+    piano(operation, config, limits).validate().is_err()
 }
 
 #[test]
@@ -385,14 +363,11 @@ fn expression_ast_supports_typed_composition_without_code_execution() {
     for _ in 0..65 {
         nested = json!({"kind":"unary","op":"negate","value":nested});
     }
-    assert!(Plan {
-        schema_version: 1,
-        limits: Limits::default(),
-        steps: vec![Step {
-            operation: "expression".into(),
-            config: json!({"output_column":"x","expression":nested}),
-        }],
-    }
+    assert!(piano(
+        "expression",
+        json!({"output_column":"x","expression":nested}),
+        Limits::default()
+    )
     .validate()
     .is_err());
     assert!(serde_json::from_value::<Plan>(json!({
@@ -598,16 +573,9 @@ fn every_expression_operator_function_and_error_policy_is_exercised() {
             "args":(0..65).map(|_| json!({"kind":"literal","value":"x"})).collect::<Vec<_>>()}}),
         json!({"output_column":"out","expression":{"kind":"column","name":""}}),
     ] {
-        assert!(Plan {
-            schema_version: 1,
-            limits: Limits::default(),
-            steps: vec![Step {
-                operation: "expression".into(),
-                config: invalid,
-            }],
-        }
-        .validate()
-        .is_err());
+        assert!(piano("expression", invalid, Limits::default())
+            .validate()
+            .is_err());
     }
     let wide = (0..17)
         .map(|_| json!({"kind":"literal","value":"x"}))
