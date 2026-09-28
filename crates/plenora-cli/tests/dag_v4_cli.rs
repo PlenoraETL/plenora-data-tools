@@ -224,8 +224,15 @@ fn run_v4_senza_inputs_fallisce() {
         .output()
         .expect("run");
     assert!(!result.status.success());
-    let stderr = String::from_utf8_lossy(&result.stdout);
-    assert!(stderr.contains("input"), "stderr: {stderr}");
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["category"], "invalid_plan", "{envelope}");
+    assert!(
+        envelope["error"]["message"].as_str().is_some_and(
+            |message| message.contains("dichiara 1 input (main) ma ne sono stati forniti 0")
+        ),
+        "{envelope}"
+    );
+    assert_eq!(result.status.code(), Some(2), "{envelope}");
     assert!(
         !output_path.try_exists().expect("stat"),
         "nessun output parziale"
@@ -298,11 +305,20 @@ fn run_v4_schema_mismatch_fallisce_in_validazione() {
 
     let result = cli_run(&plan, &input, &output_path);
     assert!(!result.status.success());
-    assert!(!result.stdout.is_empty(), "errore diagnostico presente");
     assert!(
         result.stderr.is_empty(),
         "l'envelope va su stdout e stderr resta vuoto"
     );
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(envelope["error"]["phase"], "validate", "{envelope}");
+    assert_eq!(envelope["error"]["category"], "invalid_plan", "{envelope}");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("colonna non trovata: mancante")),
+        "{envelope}"
+    );
+    assert_eq!(result.status.code(), Some(2), "{envelope}");
     assert!(
         !output_path.try_exists().expect("stat"),
         "nessun output parziale"
@@ -669,10 +685,10 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
         !validate.status.success(),
         "geo.buffer su CRS mancante deve fallire"
     );
-    let stderr = String::from_utf8_lossy(&validate.stdout);
+    let stdout = String::from_utf8_lossy(&validate.stdout);
     assert!(
-        stderr.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
-        "stderr: {stderr}"
+        stdout.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+        "stdout: {stdout}"
     );
 
     // Stesso esito in `run` (la validazione del piano e' il gate, mai lo
@@ -680,10 +696,10 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
     let output_path = directory.path().join("output.arrow");
     let run = cli_run(&plan, &input, &output_path);
     assert!(!run.status.success(), "run deve fallire in validazione");
-    let stderr = String::from_utf8_lossy(&run.stdout);
+    let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(
-        stderr.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
-        "stderr: {stderr}"
+        stdout.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
+        "stdout: {stdout}"
     );
     assert!(
         !output_path.try_exists().expect("stat"),
@@ -934,7 +950,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
         validate.status.success(),
         "stdout: {} — stderr: {}",
         String::from_utf8_lossy(&validate.stdout),
-        String::from_utf8_lossy(&validate.stdout)
+        String::from_utf8_lossy(&validate.stderr)
     );
     let summary: serde_json::Value = serde_json::from_slice(&validate.stdout).expect("JSON");
     let geometry = &summary["edges"][0]["contract"]["geometry"];
@@ -951,7 +967,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
         run.status.success(),
         "stdout: {} — stderr: {}",
         String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stdout)
+        String::from_utf8_lossy(&run.stderr)
     );
     let metadata = geometry_metadata_of(&output_path);
     assert_eq!(
@@ -986,7 +1002,7 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
         revalidate.status.success(),
         "round-trip stdout: {} — stderr: {}",
         String::from_utf8_lossy(&revalidate.stdout),
-        String::from_utf8_lossy(&revalidate.stdout)
+        String::from_utf8_lossy(&revalidate.stderr)
     );
 }
 
@@ -1124,10 +1140,10 @@ fn dag_v4_geo_op_on_declared_unresolved_fails_with_distinct_cause() {
         canonical_crs_fixture(directory.path(), &buffer_plan, &crs_unresolved_pairs());
     let validate = cli_validate(&plan, &input);
     assert!(!validate.status.success(), "geo.buffer deve fallire");
-    let stderr = String::from_utf8_lossy(&validate.stdout);
+    let stdout = String::from_utf8_lossy(&validate.stdout);
     assert!(
-        stderr.contains("declared_unresolved") && stderr.contains("decisione esplicita nel piano"),
-        "stderr: {stderr}"
+        stdout.contains("declared_unresolved") && stdout.contains("decisione esplicita nel piano"),
+        "stdout: {stdout}"
     );
 }
 
@@ -1154,8 +1170,8 @@ fn dag_v4_crs_decision_on_missing_crs_is_an_error() {
         !validate.status.success(),
         "decisione su missing deve fallire"
     );
-    let stderr = String::from_utf8_lossy(&validate.stdout);
-    assert!(stderr.contains("non e' applicabile"), "stderr: {stderr}");
+    let stdout = String::from_utf8_lossy(&validate.stdout);
+    assert!(stdout.contains("non e' applicabile"), "stdout: {stdout}");
 }
 
 #[cfg(feature = "proj-backend")]
@@ -2133,10 +2149,13 @@ fn un_limite_alzato_dentro_un_kernel_arriva_intatto_all_envelope() {
     );
     // La diagnostica del passo non va persa nel preservare la categoria: il
     // nodo che ha alzato il limite resta nell'envelope.
-    let testo = envelope.to_string();
-    assert!(
-        testo.contains("\"j\"") || testo.contains("table.join"),
-        "nodo e operazione restano nella diagnostica: {envelope}"
+    assert_eq!(
+        envelope["error"]["context"]["node"], "j",
+        "il nodo resta nella diagnostica: {envelope}"
+    );
+    assert_eq!(
+        envelope["error"]["context"]["operation"], "table.join",
+        "l'operazione resta nella diagnostica: {envelope}"
     );
     assert!(
         !uscita.try_exists().expect("stat"),
@@ -2706,18 +2725,65 @@ fn il_tetto_anticipato_e_quello_abbassato_dal_piano() {
 
 /// La sonda del tetto sugli input non anticipa il giudizio sui limiti: un
 /// blocco `limits` malformato lo rifiuta il planner, col proprio messaggio.
+///
+/// L'input esiste ed e' valido: con un file assente il rifiuto arriverebbe
+/// dall'apertura, prima del planner.
 #[test]
 fn un_blocco_limits_malformato_lo_giudica_il_planner() {
-    for limiti in [
-        json!(null),
-        json!({"plan": false}),
-        json!({"plan": {"max_inputs": "tre"}}),
-    ] {
-        let documento = envelope_con_ingressi_assenti("validate", 1, Some(limiti.clone()));
+    for (limiti, frammento, documento) in envelope_dei_limits_malformati() {
         let messaggio = documento["error"]["message"].as_str().unwrap_or_default();
         assert!(
-            !messaggio.contains("Sondati") && !messaggio.contains("max_inputs superato"),
-            "{limiti}: il messaggio viene dalla sonda: {documento}"
+            messaggio.starts_with("json error: ") && messaggio.contains(frammento),
+            "{limiti}: atteso il rifiuto del parser del piano: {documento}"
+        );
+        assert_eq!(
+            documento["error"]["category"], "data_mapping",
+            "{limiti}: {documento}"
         );
     }
+}
+
+/// Un piano che il planner rifiuta al parse non ha scritto nulla: la fase e'
+/// `validate`, come per lo stesso rifiuto nella sonda della CLI
+/// (`da_testo_di_controllo`).
+#[test]
+#[ignore = "difetto: il JSON del piano rifiutato da planner::validate esce con fase write"]
+fn un_blocco_limits_malformato_e_un_rifiuto_in_validazione() {
+    for (limiti, _, documento) in envelope_dei_limits_malformati() {
+        assert_eq!(
+            documento["error"]["phase"], "validate",
+            "{limiti}: {documento}"
+        );
+    }
+}
+
+/// `validate` su un piano con un blocco `limits` malformato e un input
+/// **esistente e valido**: con un file assente il rifiuto arriverebbe
+/// dall'apertura, prima del planner. Rende blocco, frammento atteso del
+/// messaggio ed envelope.
+fn envelope_dei_limits_malformati() -> Vec<(serde_json::Value, &'static str, serde_json::Value)> {
+    [
+        (
+            json!(null),
+            "invalid type: null, expected struct LimitsOverride",
+        ),
+        (json!({"plan": false}), "invalid type: boolean `false`"),
+        (
+            json!({"plan": {"max_inputs": "tre"}}),
+            "invalid type: string \"tre\"",
+        ),
+    ]
+    .into_iter()
+    .map(|(limiti, frammento)| {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let (plan, input) = write_table_fixture(directory.path());
+        let mut piano = table_plan();
+        piano["limits"] = limiti.clone();
+        std::fs::write(&plan, serde_json::to_vec(&piano).expect("json")).expect("plan");
+        let risultato = cli_validate(&plan, &input);
+        assert!(!risultato.status.success(), "{limiti}: piano accettato");
+        let documento = serde_json::from_slice(&risultato.stdout).expect("envelope JSON su stdout");
+        (limiti, frammento, documento)
+    })
+    .collect()
 }

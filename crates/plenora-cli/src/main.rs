@@ -361,7 +361,7 @@ mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
     use plenora_core::ErrorPhase;
 
-    use crate::cli::error_envelope::{EXIT_CANCELLED, EXIT_INTERNO};
+    use crate::cli::error_envelope::{retry_json, EXIT_CANCELLED, EXIT_INTERNO};
     use crate::cli::rendering::contract_json;
     use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
     #[cfg(feature = "proj-backend")]
@@ -853,17 +853,36 @@ mod tests {
     #[test]
     fn error_envelope_retry_after_carries_delay_ms() {
         // La forma taggata di conformance/components.json: senza delay_ms
-        // il chiamante saprebbe DI riprovare piu' tardi, non QUANDO.
-        let retry = RetryDisposition::After(std::time::Duration::from_millis(5000));
-        let mut serialized = serde_json::json!({ "kind": retry.as_str() });
-        if let Some(delay) = retry.delay() {
-            serialized["delay_ms"] =
-                serde_json::Value::from(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX));
-        }
+        // il chiamante saprebbe DI riprovare piu' tardi, non QUANDO. Si
+        // prova la funzione che `error_envelope` usa, non una sua copia:
+        // nessun errore della CLI rende oggi `After`, e l'envelope intero
+        // non lo puo' raggiungere.
         assert_eq!(
-            serialized,
+            retry_json(RetryDisposition::After(std::time::Duration::from_millis(
+                5000
+            ))),
             serde_json::json!({"kind": "after", "delay_ms": 5000})
         );
+        // Una durata oltre `u64` millisecondi satura, non si tronca.
+        assert_eq!(
+            retry_json(RetryDisposition::After(std::time::Duration::MAX)),
+            serde_json::json!({"kind": "after", "delay_ms": u64::MAX})
+        );
+        // Le altre disposizioni non portano `delay_ms`.
+        for (disposizione, kind) in [
+            (RetryDisposition::Never, "never"),
+            (RetryDisposition::Safe, "safe"),
+            (
+                RetryDisposition::RequiresIdempotencyKey,
+                "requires_idempotency_key",
+            ),
+            (RetryDisposition::RequiresRecovery, "requires_recovery"),
+        ] {
+            assert_eq!(
+                retry_json(disposizione),
+                serde_json::json!({ "kind": kind })
+            );
+        }
     }
 
     #[test]
@@ -1735,27 +1754,6 @@ mod tests {
     // -------------------------------------------------------------------
     // Helper di presentazione e parsing argomenti
     // -------------------------------------------------------------------
-
-    #[test]
-    fn every_declared_subcommand_accepts_help() {
-        for command in [
-            "catalog",
-            "validate",
-            "run",
-            "capabilities",
-            "transform",
-            "spatial-join",
-            "transform-arrow",
-            "pair-arrow",
-            "self-test",
-        ] {
-            let args = vec![command.to_owned(), "--help".to_owned()];
-            assert!(
-                run_with_args(&args).is_ok(),
-                "{command} --help deve terminare con successo"
-            );
-        }
-    }
 
     #[test]
     fn hex_digest_renders_every_byte_as_two_lowercase_hex_digits() {

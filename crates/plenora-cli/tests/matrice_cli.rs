@@ -253,25 +253,54 @@ fn un_file_inesistente_o_illeggibile_e_un_errore_di_io_senza_pubblicazione() {
     // su ogni piattaforma: i permessi non lo sono.
     let illeggibile = directory.path().to_path_buf();
     let output_path = directory.path().join("mai-creato.arrow");
+    let output_s = output_path.to_string_lossy().into_owned();
+    // Un piano e un input validi: il file mancante e' uno solo per volta,
+    // e i `run` che pubblicherebbero su `output_path` falliscono solo per
+    // quello.
+    let piano = directory.path().join("piano.json");
+    let input = directory.path().join("input.arrow");
+    scrivi_piano(&piano);
+    scrivi_input(&input);
+    let piano_s = piano.to_string_lossy().into_owned();
+    let input_nominale = format!("main={}", input.display());
 
     for percorso in [&assente, &illeggibile] {
         let percorso = percorso.to_string_lossy().into_owned();
+        let percorso_nominale = format!("main={percorso}");
         for args in [
             vec!["describe", "--input", &percorso],
             vec!["inspect-dataset", "--input", &percorso],
             vec!["validate", "--plan", &percorso],
+            vec![
+                "run",
+                "--plan",
+                &percorso,
+                "--input",
+                &input_nominale,
+                "--output",
+                &output_s,
+            ],
+            vec![
+                "run",
+                "--plan",
+                &piano_s,
+                "--input",
+                &percorso_nominale,
+                "--output",
+                &output_s,
+            ],
         ] {
             let output = esegui(&args);
             assert!(!output.status.success(), "{args:?}");
             let envelope = envelope_di(&output, &format!("{args:?}"));
             assert_eq!(envelope["error"]["category"], "io", "{args:?}: {envelope}");
             assert_eq!(output.status.code(), Some(5), "{args:?}");
+            assert!(
+                !output_path.try_exists().expect("stat"),
+                "{args:?}: nessun output deve essere creato da un fallimento"
+            );
         }
     }
-    assert!(
-        !output_path.try_exists().expect("stat"),
-        "nessun output deve essere creato da un fallimento"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -605,11 +634,13 @@ fn nessun_token_estraneo_viene_ignorato() {
 }
 
 #[test]
-fn stderr_resta_vuoto_su_ogni_esito_incluso_il_panico() {
+fn stderr_resta_vuoto_in_successo_e_su_input_corrotto() {
     // Il contratto «stderr vuoto» ha due punti di rottura naturali: l'avviso
     // di durabilita' del publish e l'hook di panico di default. Il primo e'
-    // un campo del documento di uscita, il secondo e' intercettato da
-    // `main`, che ne fa un envelope su stdout.
+    // un campo del documento di uscita, e si prova qui. Il secondo no: la CLI
+    // non ha un modo supportato di provocare un panico, e la politica che lo
+    // silenzia si prova su un processo in
+    // `plenora-core/tests/panic_policy_processo.rs`.
     let directory = tempfile::tempdir().expect("tempdir");
     let piano = directory.path().join("piano.json");
     let input = directory.path().join("input.arrow");

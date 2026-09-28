@@ -127,9 +127,9 @@ fn invalid_plan_is_rejected_before_input_is_opened() {
         .expect("run CLI");
     assert!(!result.status.success());
     assert!(!output.try_exists().expect("stat"));
-    let stderr = String::from_utf8_lossy(&result.stdout);
-    assert!(stderr.contains("fill_char"));
-    assert!(!stderr.contains("missing.arrow"));
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("fill_char"));
+    assert!(!stdout.contains("missing.arrow"));
 }
 
 #[test]
@@ -266,42 +266,98 @@ fn total_row_limit_across_batches_leaves_no_output() {
         br#"{"schema_version":1,"limits":{"max_rows":1},"steps":[{"operation":"drop_columns","config":{"columns":[]}}]}"#,
     )
     .expect("plan");
-    let status = Command::new(executable())
+    // Ogni batch da solo sta nel limite: lo supera solo il totale.
+    let result = Command::new(executable())
         .args(["run", "--plan"])
         .arg(&plan)
         .arg("--input")
         .arg(&input)
         .arg("--output")
         .arg(&output)
-        .status()
+        .output()
         .expect("CLI");
-    assert!(!status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&result.stdout).expect("envelope");
+    assert_eq!(
+        envelope["error"]["category"], "resource_limit",
+        "{envelope}"
+    );
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("file con oltre 1 righe")),
+        "{envelope}"
+    );
+    assert_eq!(result.status.code(), Some(4), "{envelope}");
     assert!(!output.try_exists().expect("stat"));
 }
 
-#[test]
-fn corrupt_ipc_and_missing_output_directory_fail_without_publication() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let input = directory.path().join("corrupt.arrow");
-    let plan = directory.path().join("plan.json");
-    std::fs::write(&input, b"not arrow").expect("corrupt input");
+/// `run` legacy con un piano `drop_columns` neutro: rende l'envelope e
+/// l'exit code, e verifica che `output` non esista.
+fn run_legacy_fallito(
+    directory: &std::path::Path,
+    input: &std::path::Path,
+    output: &std::path::Path,
+) -> (serde_json::Value, Option<i32>) {
+    let plan = directory.join("plan.json");
     std::fs::write(
         &plan,
         br#"{"schema_version":1,"steps":[{"operation":"drop_columns","config":{"columns":[]}}]}"#,
     )
     .expect("plan");
-    let output = directory.path().join("missing").join("output.arrow");
-    let status = Command::new(executable())
+    let result = Command::new(executable())
         .args(["run", "--plan"])
         .arg(&plan)
         .arg("--input")
-        .arg(&input)
+        .arg(input)
         .arg("--output")
-        .arg(&output)
-        .status()
+        .arg(output)
+        .output()
         .expect("CLI");
-    assert!(!status.success());
+    assert!(!result.status.success());
     assert!(!output.try_exists().expect("stat"));
+    let envelope = serde_json::from_slice(&result.stdout).expect("envelope");
+    (envelope, result.status.code())
+}
+
+#[test]
+fn corrupt_ipc_fails_without_publication() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let input = directory.path().join("corrupt.arrow");
+    std::fs::write(&input, b"not arrow").expect("corrupt input");
+    let output = directory.path().join("output.arrow");
+    let (envelope, codice) = run_legacy_fallito(directory.path(), &input, &output);
+    assert_eq!(envelope["error"]["category"], "data_mapping", "{envelope}");
+    assert_eq!(envelope["error"]["phase"], "read", "{envelope}");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("stream IPC troncato o non allineato")),
+        "{envelope}"
+    );
+    assert_eq!(codice, Some(3), "{envelope}");
+}
+
+#[test]
+fn missing_output_directory_fails_without_publication() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let input = directory.path().join("input.arrow");
+    write_input(&input);
+    let output = directory.path().join("missing").join("output.arrow");
+    let (envelope, codice) = run_legacy_fallito(directory.path(), &input, &output);
+    // Il controllo del publish, prima di aprire l'input.
+    assert_eq!(envelope["error"]["category"], "invalid_plan", "{envelope}");
+    assert_eq!(envelope["error"]["phase"], "probe", "{envelope}");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("directory output inesistente")),
+        "{envelope}"
+    );
+    assert_eq!(codice, Some(2), "{envelope}");
+    assert!(
+        !directory.path().join("missing").try_exists().expect("stat"),
+        "la directory mancante non si crea: {envelope}"
+    );
 }
 
 #[test]
@@ -671,10 +727,10 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
             .arg(&output)
             .output()
             .expect("run legacy formula/expression");
-        let stderr = String::from_utf8_lossy(&result.stdout).into_owned();
+        let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
         assert!(
             !result.status.success(),
-            "{operation}: piano legacy blocking+diagnostico accettato: {stderr}"
+            "{operation}: piano legacy blocking+diagnostico accettato: {stdout}"
         );
         assert!(
             !output.try_exists().expect("stat"),
@@ -686,12 +742,12 @@ fn legacy_blocking_plan_with_formula_or_expression_requires_dag_v4() {
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(
-            stderr.contains("piano DAG"),
-            "{operation}: atteso rifiuto fail-closed verso il DAG: {stderr}"
+            stdout.contains("piano DAG"),
+            "{operation}: atteso rifiuto fail-closed verso il DAG: {stdout}"
         );
         assert!(
-            !stderr.contains("row_diagnostics"),
-            "{operation}: indici post-sort pubblicati come source_row: {stderr}"
+            !stdout.contains("row_diagnostics"),
+            "{operation}: indici post-sort pubblicati come source_row: {stdout}"
         );
     }
 }
@@ -779,20 +835,20 @@ fn every_legacy_expressible_row_diagnostics_operation_requires_dag_v4() {
                 .arg(&output)
                 .output()
                 .expect("run legacy gate probe");
-            let stderr = String::from_utf8_lossy(&result.stdout).into_owned();
+            let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
             assert!(
                 !result.status.success(),
-                "{} (alias `{alias}`): bypass del gate legacy: {stderr}",
+                "{} (alias `{alias}`): bypass del gate legacy: {stdout}",
                 descriptor.id
             );
             assert!(
-                stderr.contains("piano DAG"),
-                "{} (alias `{alias}`): atteso rifiuto dal gate verso il DAG: {stderr}",
+                stdout.contains("piano DAG"),
+                "{} (alias `{alias}`): atteso rifiuto dal gate verso il DAG: {stdout}",
                 descriptor.id
             );
             assert!(
-                !stderr.contains("row_diagnostics"),
-                "{} (alias `{alias}`): row_diagnostics inventata: {stderr}",
+                !stdout.contains("row_diagnostics"),
+                "{} (alias `{alias}`): row_diagnostics inventata: {stdout}",
                 descriptor.id
             );
             assert!(
@@ -1026,8 +1082,22 @@ fn ogni_sottocomando_del_dispatch_ha_un_help_che_lo_nomina() {
             "`{comando} --help` deve funzionare"
         );
         let testo = String::from_utf8_lossy(&specifico.stdout);
+        // L'alias rende l'help del comando canonico.
+        let atteso = if comando == "inspect-dataset" {
+            "describe"
+        } else {
+            comando
+        };
+        // Una riga d'uso, sulla riga di `Usage:` o sotto di essa, invoca
+        // esattamente quel comando.
+        let invocazione = format!("plenora-data-tools {atteso}");
         assert!(
-            testo.contains(comando) || testo.contains("describe"),
+            testo.lines().any(|riga| {
+                let riga = riga.trim_start();
+                let riga = riga.strip_prefix("Usage:").unwrap_or(riga).trim_start();
+                riga.strip_prefix(&invocazione)
+                    .is_some_and(|resto| resto.is_empty() || resto.starts_with(' '))
+            }),
             "`{comando} --help` non nomina il comando: {testo}"
         );
     }
