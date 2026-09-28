@@ -14,8 +14,8 @@ use plenora_engine::{explain, RuntimeContext};
 use crate::cli::commands::run::{reject_legacy_row_diagnostics_plan, v4_inputs, DagInputs};
 use crate::cli::contract_discovery::{apply_crs_decisions, discover_contracts, pair_v4_inputs};
 use crate::{
-    contract, graph_summary_json, has_flag, read_control_plan_text, testo_piano_dag, value_after,
-    PlanInputsProbe,
+    contract, da_testo_di_controllo, graph_summary_json, has_flag, read_control_plan_text,
+    testo_piano_dag, value_after, PlanInputsProbe,
 };
 
 pub fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -47,7 +47,7 @@ pub fn validate_command(args: &[String]) -> Result<(), Box<dyn Error>> {
     // Lo stesso rifiuto di `run`: `validate` che dice «ok» a un piano che
     // `run` rifiuta non predice niente.
     reject_legacy_row_diagnostics_plan(&plan_text)?;
-    let plan: Plan = serde_json::from_str(&plan_text)?;
+    let plan: Plan = da_testo_di_controllo(&plan_text)?;
     let plan = plan.validate()?;
     println!(
         "{}",
@@ -74,7 +74,7 @@ pub fn validate_dag(
     inputs: &DagInputs,
     geo_fusion: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let probe: PlanInputsProbe = serde_json::from_str(plan_text)?;
+    let probe: PlanInputsProbe = da_testo_di_controllo(plan_text)?;
     let pairs = pair_v4_inputs(&probe, inputs)?;
     let mut contracts = discover_contracts(&pairs)?;
     apply_crs_decisions(&probe, &mut contracts)?;

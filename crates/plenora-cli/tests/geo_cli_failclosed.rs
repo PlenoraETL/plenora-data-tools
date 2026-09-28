@@ -91,7 +91,9 @@ fn cli_transform(
 #[test]
 fn self_test_writes_a_valid_control_frame_and_never_overwrites() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let output = directory.path().join("result.bin");
+    // U+007F: il `{:?}` di Rust lo scrive `\u{7f}`, che non e' JSON. Un
+    // percorso qualunque passerebbe anche con la resa sbagliata.
+    let output = directory.path().join("result\u{7f}.bin");
 
     let result = cli()
         .args(["self-test", "--output"])

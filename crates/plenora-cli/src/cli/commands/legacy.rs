@@ -38,7 +38,9 @@ use plenora_core::crs::resolve_crs;
 #[cfg(feature = "proj-backend")]
 use plenora_kernels_geo::crs::resolve_crs;
 
-use crate::{contract, limite_risorsa, optional_value_after, read_control_json};
+use crate::{
+    contract, da_testo_di_controllo, limite_risorsa, optional_value_after, read_control_json,
+};
 use plenora_engine::geo_transport::publish::EsitoDellaPubblicazione;
 
 /// Memoria che resta del budget dichiarato dal piano dopo `trattenuti` byte.
@@ -193,7 +195,7 @@ pub fn run_pipeline(
 ) -> Result<EsitoDellaPubblicazione, PlenoraError> {
     // Prima del lavoro, con la stessa classe della pubblicazione.
     verifica_destinazione_libera(output_path)?;
-    let plan: Plan = serde_json::from_str(plan_text)?;
+    let plan: Plan = da_testo_di_controllo(plan_text)?;
     let plan = plan.validate()?;
     if plan.requires_secondary() || plan.requires_blocking() {
         // Contabilita' globale del budget: il secondo lato riceve cio' che

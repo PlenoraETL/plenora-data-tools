@@ -66,7 +66,12 @@ il sottocomando.
 
 `markdown` è disponibile dove esiste una resa leggibile — `describe`,
 `catalog`, `capabilities` — e altrove è rifiutato invece di essere ignorato in
-silenzio.
+silenzio. Il rifiuto viene prima di `--help`: `--format markdown run --help`
+esce con `2`.
+
+Due uscite restano testo per natura, in qualunque formato: l'aiuto (`--help`,
+globale o del sottocomando) e `--version` con `--format markdown`; senza,
+`--version` emette JSON.
 
 ## stdout e stderr
 

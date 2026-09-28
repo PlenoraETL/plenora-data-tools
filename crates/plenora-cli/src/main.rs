@@ -529,7 +529,21 @@ impl PlanInputsProbe {
 
 /// `schema_version` del piano, senza validazione strutturale.
 fn plan_schema_version(plan_text: &str) -> Result<u32, PlenoraError> {
-    Ok(serde_json::from_str::<PlanVersionProbe>(plan_text)?.schema_version)
+    Ok(da_testo_di_controllo::<PlanVersionProbe>(plan_text)?.schema_version)
+}
+
+/// Deserializza un documento di controllo (piano, schema di comando) dal suo
+/// testo.
+///
+/// Un documento che non ha la forma attesa e' un rifiuto in validazione:
+/// senza il tag, `DataMapping` deriverebbe la fase `write` anche in un
+/// comando che non scrive nulla. E' l'unico parser dei documenti di
+/// controllo, perche' la fase non dipenda da quale comando li legge.
+pub(crate) fn da_testo_di_controllo<T: serde::de::DeserializeOwned>(
+    text: &str,
+) -> Result<T, PlenoraError> {
+    serde_json::from_str(text)
+        .map_err(|error| PlenoraError::from(error).with_phase(ErrorPhase::Validate))
 }
 
 /// Fissa **un solo testo** per un piano DAG, e lo rende; `None` se il piano
@@ -571,7 +585,7 @@ const MAX_CONTROL_JSON_BYTES: u64 = 16 * 1024 * 1024;
 fn read_control_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, PlenoraError> {
     let text = read_control_json_text(path)?;
     plenora_core::json::ensure_no_duplicate_keys(&text)?;
-    Ok(serde_json::from_str(&text)?)
+    da_testo_di_controllo(&text)
 }
 
 /// Testo di un documento JSON di controllo, entro [`MAX_CONTROL_JSON_BYTES`].
