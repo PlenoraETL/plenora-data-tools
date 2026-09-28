@@ -3443,6 +3443,10 @@ mod tests {
     fn sample_and_sort_keep_geometry() {
         let sampled = ok("table.sample", &[geo_contract()], json!({"n": 5}));
         assert_eq!(sampled.geometries.len(), 1);
+        // sample non rialloca identita': la geometria e quella attiva restano
+        // lo stesso campo dell'input.
+        assert_eq!(sampled.geometries[0].field_id, FieldId(7));
+        assert_eq!(sampled.active_geometry, Some(FieldId(7)));
         let sorted = ok("table.sort", &[geo_contract()], json!({"columns": ["id"]}));
         assert_eq!(sorted.geometries.len(), 1);
         assert_eq!(sorted.geometries[0].field_id, FieldId(7));
