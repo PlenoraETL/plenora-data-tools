@@ -614,7 +614,17 @@ mod tests {
         let generic = generic_filter(batch, &config);
         match (fast, generic) {
             (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
-            (fast, generic) => assert_eq!(fast.is_err(), generic.is_err()),
+            // Stesso rifiuto, non solo un rifiuto: categoria e messaggio.
+            (Err(fast), Err(generic)) => {
+                assert_eq!(fast.category(), generic.category());
+                assert_eq!(fast.to_string(), generic.to_string());
+                assert_eq!(fast.row_diagnostics(), generic.row_diagnostics());
+            }
+            (fast, generic) => panic!(
+                "fast e generico divergono: fast ok={}, generico ok={}",
+                fast.is_ok(),
+                generic.is_ok()
+            ),
         }
     }
 
@@ -713,6 +723,30 @@ mod tests {
         // Ordinati: numerici anche su UInt64 (ramo f64 del generico).
         assert_equivalent(&uints, Operator::Gt, json!(9));
         assert_equivalent(&uints, Operator::Le, json!(10));
+
+        // Letterali non validi: il rifiuto del fast path e' lo stesso del
+        // generico, parola per parola.
+        for batch in [&ints, &uints] {
+            for operator in [Operator::Gt, Operator::Ge, Operator::Lt, Operator::Le] {
+                assert_equivalent(batch, operator.clone(), json!("x"));
+                let error =
+                    filter(batch, &config(operator, json!("x"))).expect_err("letterale accettato");
+                assert_eq!(
+                    error.to_string(),
+                    "contract violation: confronto ordinato richiede un valore numerico"
+                );
+            }
+            for (bounds, message) in [
+                ("10", "between richiede min,max"),
+                ("x,10", "min between non valido"),
+                ("0,x", "max between non valido"),
+            ] {
+                assert_equivalent(batch, Operator::Between, json!(bounds));
+                let error = filter(batch, &config(Operator::Between, json!(bounds)))
+                    .expect_err("estremi accettati");
+                assert_eq!(error.to_string(), format!("contract violation: {message}"));
+            }
+        }
     }
 
     #[test]

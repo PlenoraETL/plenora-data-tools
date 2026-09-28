@@ -2009,22 +2009,26 @@ mod tests {
                 None,
             ])),
         ];
+        let (mut accepted, mut rejected) = (0_usize, 0_usize);
         for source in sources {
             let batch = single_batch(source.clone());
             for target in all_targets() {
                 for errors in all_errors() {
                     let config = cast_config(target, errors);
                     let production = type_cast(&batch, &config);
-                    let generic = type_cast_generic(batch.column(0), &config).map(single_batch);
+                    let generic = generic_type_cast_entry(&batch, &config);
                     match (production, generic) {
-                        (Ok(production), Ok(generic)) => assert_eq!(production, generic),
-                        (Err(production), _) if production.row_diagnostics().is_some() => {
-                            assert!(production
-                                .row_diagnostics()
-                                .is_some_and(|report| report.observed_total > 0));
+                        (Ok(production), Ok(generic)) => {
+                            accepted += 1;
+                            assert_eq!(production, generic);
                         }
                         (Err(production), Err(generic)) => {
-                            assert_eq!(format!("{production:?}"), format!("{generic:?}"));
+                            if production.row_diagnostics().is_some() {
+                                rejected += 1;
+                            }
+                            assert_eq!(production.category(), generic.category());
+                            assert_eq!(production.to_string(), generic.to_string());
+                            assert_eq!(production.row_diagnostics(), generic.row_diagnostics());
                         }
                         (production, generic) => panic!(
                             "fallback {:?}: produzione/generico divergono (prod ok={}, gen ok={})",
@@ -2036,6 +2040,87 @@ mod tests {
                 }
             }
         }
+        // La matrice raggiunge entrambi i rami: conversioni riuscite e rifiuti
+        // row-scoped.
+        assert!(accepted > 0, "nessuna conversione riuscita confrontata");
+        assert!(rejected > 0, "nessun rifiuto row-scoped confrontato");
+
+        // Rifiuto esplicito: le date non sono interi, ogni riga non nulla e'
+        // rifiutata con la sua causa, per `coerce` come per `raise`.
+        let dates = single_batch(Arc::new(Date32Array::from(vec![
+            Some(0),
+            None,
+            Some(19000),
+            Some(-1),
+        ])));
+        for errors in [CastErrors::Coerce, CastErrors::Raise] {
+            let error = type_cast(&dates, &cast_config(TargetType::Int, errors))
+                .expect_err("date convertite in interi");
+            let report = error.row_diagnostics().expect("diagnostica row-scoped");
+            assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
+            assert_eq!(report.observed_total, 3);
+            assert_eq!(
+                report
+                    .examples
+                    .iter()
+                    .map(|example| (
+                        example.source_index,
+                        example.cause.as_str(),
+                        example.column.as_deref()
+                    ))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (0, "conversion.invalid_integer", Some("c")),
+                    (2, "conversion.invalid_integer", Some("c")),
+                    (3, "conversion.invalid_integer", Some("c")),
+                ]
+            );
+        }
+        // Conversione valida esplicita: Date32 verso testo.
+        let text = type_cast(&dates, &cast_config(TargetType::Str, CastErrors::Raise))
+            .expect("Date32 -> str");
+        let text = text
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8");
+        assert_eq!(
+            text.iter().collect::<Vec<_>>(),
+            vec![
+                Some("1970-01-01"),
+                None,
+                Some("2022-01-08"),
+                Some("1969-12-31")
+            ]
+        );
+    }
+
+    /// Oracolo del punto d'ingresso pubblico: con `coerce`/`raise` ogni riga
+    /// non convertibile rifiuta il batch con diagnostica row-scoped (costruita
+    /// da `reject_rows`, indipendente da `cast_row_diagnostics`); altrimenti
+    /// il risultato e' quello del percorso generico.
+    fn generic_type_cast_entry(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
+        let source = batch.column(column_index(batch, &config.column)?);
+        if matches!(config.errors, CastErrors::Coerce | CastErrors::Raise) {
+            let mut rejections = Vec::new();
+            for row in 0..source.len() {
+                let Some(value) = scalar_as_string(source.as_ref(), row)? else {
+                    continue;
+                };
+                if let Some(cause) = string_cast_rejection(&value, config) {
+                    rejections.push(crate::RowRejection {
+                        row,
+                        cause,
+                        column: Some(&config.column),
+                    });
+                }
+            }
+            crate::reject_rows(
+                &rejections,
+                "conversione rifiutata; consultare row_diagnostics",
+            )?;
+        }
+        type_cast_generic(source, config).map(single_batch)
     }
 
     #[test]
