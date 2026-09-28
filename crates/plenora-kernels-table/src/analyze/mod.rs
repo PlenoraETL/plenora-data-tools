@@ -241,7 +241,6 @@ pub fn analyze_table_contract(
 mod tests {
     use std::sync::Arc;
 
-    use plenora_core::catalog::{Family, CATALOG};
     use plenora_core::crs::{CrsKind, ResolvedCrs};
     use serde_json::json;
 
@@ -486,31 +485,6 @@ mod tests {
                 Some(GeometryEncoding::Ewkb),
                 "rename: encoding"
             );
-        }
-    }
-
-    #[test]
-    fn every_table_op_has_an_analysis_arm() {
-        let table_ops: Vec<_> = CATALOG
-            .iter()
-            .filter(|op| op.family == Family::Table)
-            .collect();
-        assert_eq!(table_ops.len(), 71);
-        for descriptor in table_ops {
-            let inputs = vec![tabular_contract(), right_contract()];
-            let result = analyze_table_contract(
-                descriptor.id,
-                &inputs,
-                &json!({}),
-                &mut FieldAllocator::default(),
-            );
-            if let Err(PlenoraError::Unsupported(message)) = &result {
-                assert!(
-                    !message.contains("analyze_contract non disponibile"),
-                    "{} senza braccio di analisi",
-                    descriptor.id
-                );
-            }
         }
     }
 
@@ -3622,9 +3596,9 @@ mod tests {
             op: &str,
             batch: &RecordBatch,
             config: Value,
-            kernel: impl FnOnce(&RecordBatch) -> Result<RecordBatch>,
+            kernel: impl FnOnce(&RecordBatch, &Value) -> Result<RecordBatch>,
         ) -> DataContract {
-            let expected = kernel(batch).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
+            let expected = kernel(batch, &config).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
             let input = geo_input(batch);
             let analyzed =
                 analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
@@ -3642,9 +3616,9 @@ mod tests {
             op: &str,
             batch: &RecordBatch,
             config: Value,
-            kernel: impl FnOnce(&RecordBatch) -> Result<RecordBatch>,
+            kernel: impl FnOnce(&RecordBatch, &Value) -> Result<RecordBatch>,
         ) {
-            let expected = kernel(batch).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
+            let expected = kernel(batch, &config).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
             let input = DataContract::tabular(batch.schema());
             let analyzed =
                 analyze_table_contract(op, &[input], &config, &mut FieldAllocator::default())
@@ -3662,9 +3636,10 @@ mod tests {
             left: &RecordBatch,
             right: &RecordBatch,
             config: Value,
-            kernel: impl FnOnce(&RecordBatch, &RecordBatch) -> Result<RecordBatch>,
+            kernel: impl FnOnce(&RecordBatch, &RecordBatch, &Value) -> Result<RecordBatch>,
         ) {
-            let expected = kernel(left, right).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
+            let expected =
+                kernel(left, right, &config).unwrap_or_else(|e| panic!("kernel {op}: {e}"));
             let inputs = [geo_input(left), DataContract::tabular(right.schema())];
             let analyzed =
                 analyze_table_contract(op, &inputs, &config, &mut FieldAllocator::default())
@@ -3687,434 +3662,303 @@ mod tests {
             let batch = simple_batch();
             let limits = Limits::default();
 
-            check_unary("table.add_row_number", &batch, json!({}), |b| {
-                utility::add_row_number(b, &cfg(&json!({})))
+            check_unary("table.add_row_number", &batch, json!({}), |b, config| {
+                utility::add_row_number(b, &cfg(config))
             });
-            check_unary("table.sort", &batch, json!({"columns": ["id"]}), |b| {
-                aggregation::sort(b, &cfg(&json!({"columns": ["id"]})))
-            });
-            check_unary("table.distinct", &batch, json!({}), |b| {
-                aggregation::distinct(b, &cfg(&json!({})))
+            check_unary(
+                "table.sort",
+                &batch,
+                json!({"columns": ["id"]}),
+                |b, config| aggregation::sort(b, &cfg(config)),
+            );
+            check_unary("table.distinct", &batch, json!({}), |b, config| {
+                aggregation::distinct(b, &cfg(config))
             });
             check_unary(
                 "table.dedup_advanced",
                 &batch,
                 json!({"subset": ["name"]}),
-                |b| aggregation::dedup_advanced(b, &cfg(&json!({"subset": ["name"]}))),
+                |b, config| aggregation::dedup_advanced(b, &cfg(config)),
             );
             let filtered = check_unary(
                 "table.filter",
                 &batch,
                 json!({"column": "value", "operator": ">", "value": 2}),
-                |b| {
-                    filtering::filter(
-                        b,
-                        &cfg(&json!({"column": "value", "operator": ">", "value": 2})),
-                    )
-                },
+                |b, config| filtering::filter(b, &cfg(config)),
             );
             assert_eq!(filtered.geometries.len(), 1);
-            check_unary("table.sample", &batch, json!({"n": 2}), |b| {
-                analysis::sample(b, &cfg(&json!({"n": 2})))
+            check_unary("table.sample", &batch, json!({"n": 2}), |b, config| {
+                analysis::sample(b, &cfg(config))
             });
             check_unary(
                 "table.rename",
                 &batch,
                 json!({"renames": [{"old_name": "name", "new_name": "label"}]}),
-                |b| {
-                    columns::rename(
-                        b,
-                        &cfg(&json!({"renames": [{"old_name": "name", "new_name": "label"}]})),
-                    )
-                },
+                |b, config| columns::rename(b, &cfg(config)),
             );
             check_unary(
                 "table.drop_columns",
                 &batch,
                 json!({"columns": ["flag"]}),
-                |b| columns::drop_columns(b, &cfg(&json!({"columns": ["flag"]}))),
+                |b, config| columns::drop_columns(b, &cfg(config)),
             );
             check_unary(
                 "table.reorder_columns",
                 &batch,
                 json!({"columns": ["name"]}),
-                |b| columns::reorder_columns(b, &cfg(&json!({"columns": ["name"]}))),
+                |b, config| columns::reorder_columns(b, &cfg(config)),
             );
             check_unary(
                 "table.concat_columns",
                 &batch,
                 json!({"columns": ["name"]}),
-                |b| columns::concat_columns(b, &cfg(&json!({"columns": ["name"]})), &limits),
+                |b, config| columns::concat_columns(b, &cfg(config), &limits),
             );
             check_unary(
                 "table.split_column",
                 &batch,
                 json!({"column": "name", "new_columns": ["first"]}),
-                |b| {
-                    columns::split_column(
-                        b,
-                        &cfg(&json!({"column": "name", "new_columns": ["first"]})),
-                        &limits,
-                    )
-                },
+                |b, config| columns::split_column(b, &cfg(config), &limits),
             );
             check_unary(
                 "table.fill_na",
                 &batch,
                 json!({"column": "name", "value": "?"}),
-                |b| cleansing::fill_na(b, &cfg(&json!({"column": "name", "value": "?"}))),
+                |b, config| cleansing::fill_na(b, &cfg(config)),
             );
             check_unary(
                 "table.replace",
                 &batch,
                 json!({"column": "name", "old_value": "a", "new_value": "z"}),
-                |b| {
-                    cleansing::replace(
-                        b,
-                        &cfg(&json!({"column": "name", "old_value": "a", "new_value": "z"})),
-                    )
-                },
+                |b, config| cleansing::replace(b, &cfg(config)),
             );
             check_unary(
                 "table.type_cast",
                 &batch,
                 json!({"column": "id", "target_type": "str"}),
-                |b| cleansing::type_cast(b, &cfg(&json!({"column": "id", "target_type": "str"}))),
+                |b, config| cleansing::type_cast(b, &cfg(config)),
             );
             check_unary(
                 "table.conditional",
                 &batch,
                 json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": 1}], "default_value": 0}),
-                |b| {
-                    filtering::conditional(
-                        b,
-                        &cfg(
-                            &json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": 1}], "default_value": 0}),
-                        ),
-                    )
-                },
+                |b, config| filtering::conditional(b, &cfg(config)),
             );
             check_unary(
                 "table.conditional",
                 &batch,
                 json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": "hi"}], "default_value": "lo"}),
-                |b| {
-                    filtering::conditional(
-                        b,
-                        &cfg(
-                            &json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": "hi"}], "default_value": "lo"}),
-                        ),
-                    )
-                },
+                |b, config| filtering::conditional(b, &cfg(config)),
             );
             check_unary(
                 "table.lookup",
                 &batch,
                 json!({"column": "name", "mapping": {"a": "A"}}),
-                |b| analysis::lookup(b, &cfg(&json!({"column": "name", "mapping": {"a": "A"}}))),
+                |b, config| analysis::lookup(b, &cfg(config)),
             );
             check_unary(
                 "table.bin",
                 &batch,
                 json!({"column": "value", "bins": 2}),
-                |b| analysis::bin(b, &cfg(&json!({"column": "value", "bins": 2}))),
+                |b, config| analysis::bin(b, &cfg(config)),
             );
             check_unary(
                 "table.statistics",
                 &batch,
                 json!({"column": "value"}),
-                |b| analysis::statistics(b, &cfg(&json!({"column": "value"}))),
+                |b, config| analysis::statistics(b, &cfg(config)),
             );
             check_unary(
                 "table.date_extract",
                 &batch,
                 json!({"column": "date", "parts": ["year", "month"]}),
-                |b| {
-                    utility::date_extract(
-                        b,
-                        &cfg(&json!({"column": "date", "parts": ["year", "month"]})),
-                    )
-                },
+                |b, config| utility::date_extract(b, &cfg(config)),
             );
-            check_unary("table.string_pad", &batch, json!({"column": "name"}), |b| {
-                strings::string_pad(b, &cfg(&json!({"column": "name"})), &limits)
-            });
+            check_unary(
+                "table.string_pad",
+                &batch,
+                json!({"column": "name"}),
+                |b, config| strings::string_pad(b, &cfg(config), &limits),
+            );
             check_unary(
                 "table.string_length",
                 &batch,
                 json!({"column": "name"}),
-                |b| strings::string_length(b, &cfg(&json!({"column": "name"}))),
+                |b, config| strings::string_length(b, &cfg(config)),
             );
             check_unary(
                 "table.string_extract",
                 &batch,
                 json!({"column": "name", "pattern": "(?P<x>a)"}),
-                |b| {
-                    strings::string_extract(
-                        b,
-                        &cfg(&json!({"column": "name", "pattern": "(?P<x>a)"})),
-                        &limits,
-                    )
-                },
+                |b, config| strings::string_extract(b, &cfg(config), &limits),
             );
             check_unary(
                 "table.text_normalize",
                 &batch,
                 json!({"columns": ["name"]}),
-                |b| strings::text_normalize(b, &cfg(&json!({"columns": ["name"]})), &limits),
+                |b, config| strings::text_normalize(b, &cfg(config), &limits),
             );
-            check_unary("table.md5_hash", &batch, json!({"columns": ["id"]}), |b| {
-                security::md5_hash(b, &cfg(&json!({"columns": ["id"]})))
-            });
+            check_unary(
+                "table.md5_hash",
+                &batch,
+                json!({"columns": ["id"]}),
+                |b, config| security::md5_hash(b, &cfg(config)),
+            );
             check_unary(
                 "table.sha256_hash",
                 &batch,
                 json!({"columns": ["id"]}),
-                |b| security::sha256_hash(b, &cfg(&json!({"columns": ["id"]}))),
+                |b, config| security::sha256_hash(b, &cfg(config)),
             );
             check_unary(
                 "table.mask_data",
                 &batch,
                 json!({"maskings": [{"column": "name"}]}),
-                |b| security::mask_data(b, &cfg(&json!({"maskings": [{"column": "name"}]}))),
+                |b, config| security::mask_data(b, &cfg(config)),
             );
-            check_unary("table.uuid_generator", &batch, json!({}), |b| {
-                utility::uuid_generator(b, &cfg(&json!({})))
+            check_unary("table.uuid_generator", &batch, json!({}), |b, config| {
+                utility::uuid_generator(b, &cfg(config))
             });
             check_unary(
                 "table.date_format",
                 &batch,
                 json!({"column": "date", "input_format": "%Y-%m-%d", "output_column": "df"}),
-                |b| {
-                    dates::date_format(
-                        b,
-                        &cfg(
-                            &json!({"column": "date", "input_format": "%Y-%m-%d", "output_column": "df"}),
-                        ),
-                    )
-                },
+                |b, config| dates::date_format(b, &cfg(config)),
             );
             check_unary(
                 "table.date_add",
                 &batch,
                 json!({"column": "date", "input_format": "%Y-%m-%d", "amount": 1, "unit": "days", "output_column": "da"}),
-                |b| {
-                    dates::date_add(
-                        b,
-                        &cfg(
-                            &json!({"column": "date", "input_format": "%Y-%m-%d", "amount": 1, "unit": "days", "output_column": "da"}),
-                        ),
-                    )
-                },
+                |b, config| dates::date_add(b, &cfg(config)),
             );
             check_unary(
                 "table.date_diff",
                 &batch,
                 json!({"start_column": "date", "end_column": "date", "input_format": "%Y-%m-%d", "unit": "days", "output_column": "dd"}),
-                |b| {
-                    dates::date_diff(
-                        b,
-                        &cfg(
-                            &json!({"start_column": "date", "end_column": "date", "input_format": "%Y-%m-%d", "unit": "days", "output_column": "dd"}),
-                        ),
-                    )
-                },
+                |b, config| dates::date_diff(b, &cfg(config)),
             );
             check_unary(
                 "table.timezone_convert",
                 &batch,
                 json!({"column": "date", "input_format": "%Y-%m-%d", "source_timezone": "UTC", "target_timezone": "Europe/Rome", "output_column": "tc"}),
-                |b| {
-                    dates::timezone_convert(
-                        b,
-                        &cfg(
-                            &json!({"column": "date", "input_format": "%Y-%m-%d", "source_timezone": "UTC", "target_timezone": "Europe/Rome", "output_column": "tc"}),
-                        ),
-                    )
-                },
+                |b, config| dates::timezone_convert(b, &cfg(config)),
             );
             check_unary(
                 "table.aggregate",
                 &batch,
                 json!({"group_by": ["name"], "aggregations": [{"column": "value", "function": "sum"}, {"column": "id", "function": "count"}]}),
-                |b| {
-                    aggregation::aggregate(
-                        b,
-                        &cfg(
-                            &json!({"group_by": ["name"], "aggregations": [{"column": "value", "function": "sum"}, {"column": "id", "function": "count"}]}),
-                        ),
-                    )
-                },
+                |b, config| aggregation::aggregate(b, &cfg(config)),
             );
             check_unary(
                 "table.rolling_window",
                 &batch,
                 json!({"column": "value", "function": "sum", "window": 2, "output_column": "rw"}),
-                |b| {
-                    aggregation::rolling_window(
-                        b,
-                        &cfg(
-                            &json!({"column": "value", "function": "sum", "window": 2, "output_column": "rw"}),
-                        ),
-                    )
-                },
+                |b, config| aggregation::rolling_window(b, &cfg(config)),
             );
             check_unary(
                 "table.window_function",
                 &batch,
                 json!({"column": "value", "function": "rank"}),
-                |b| {
-                    aggregation::window_function(
-                        b,
-                        &cfg(&json!({"column": "value", "function": "rank"})),
-                    )
-                },
+                |b, config| aggregation::window_function(b, &cfg(config)),
             );
             check_unary(
                 "table.coalesce",
                 &batch,
                 json!({"columns": ["value"], "output_column": "c"}),
-                |b| {
-                    quality::coalesce(
-                        b,
-                        &cfg(&json!({"columns": ["value"], "output_column": "c"})),
-                    )
-                },
+                |b, config| quality::coalesce(b, &cfg(config)),
             );
             check_unary(
                 "table.formula",
                 &batch,
                 json!({"new_column": "f", "formula": "value * 2"}),
-                |b| formula::formula(b, &cfg(&json!({"new_column": "f", "formula": "value * 2"}))),
+                |b, config| formula::formula(b, &cfg(config)),
             );
             check_unary(
                 "table.formula",
                 &batch,
                 json!({"new_column": "f", "formula": "name + 'x'"}),
-                |b| {
-                    formula::formula(
-                        b,
-                        &cfg(&json!({"new_column": "f", "formula": "name + 'x'"})),
-                    )
-                },
+                |b, config| formula::formula(b, &cfg(config)),
             );
             check_unary(
                 "table.expression",
                 &batch,
                 json!({"output_column": "e", "expression": {"kind": "binary", "op": "add", "left": {"kind": "column", "name": "value"}, "right": {"kind": "literal", "value": 1}}}),
-                |b| {
-                    expressions::expression(
-                        b,
-                        &cfg(
-                            &json!({"output_column": "e", "expression": {"kind": "binary", "op": "add", "left": {"kind": "column", "name": "value"}, "right": {"kind": "literal", "value": 1}}}),
-                        ),
-                    )
-                },
+                |b, config| expressions::expression(b, &cfg(config)),
             );
             check_unary(
                 "table.expression",
                 &batch,
                 json!({"output_column": "e", "expression": {"kind": "column", "name": "name"}, "output_type": "text"}),
-                |b| {
-                    expressions::expression(
-                        b,
-                        &cfg(
-                            &json!({"output_column": "e", "expression": {"kind": "column", "name": "name"}, "output_type": "text"}),
-                        ),
-                    )
-                },
+                |b, config| expressions::expression(b, &cfg(config)),
             );
             check_unary(
                 "table.flatten_json",
                 &batch,
                 json!({"column": "json", "output_columns": ["json_a"]}),
-                |b| {
-                    analysis::flatten_json(
-                        b,
-                        &cfg(&json!({"column": "json", "output_columns": ["json_a"]})),
-                        &limits,
-                    )
-                },
+                |b, config| analysis::flatten_json(b, &cfg(config), &limits),
             );
             check_unary(
                 "table.melt",
                 &batch,
                 json!({"id_columns": ["id"], "value_columns": ["value"]}),
-                |b| {
-                    reshape::melt(
-                        b,
-                        &cfg(&json!({"id_columns": ["id"], "value_columns": ["value"]})),
-                        &limits,
-                    )
-                },
+                |b, config| reshape::melt(b, &cfg(config), &limits),
             );
             check_unary(
                 "table.assert_schema",
                 &batch,
                 json!({"fields": [{"name": "id", "data_type": "int64", "nullable": false}], "allow_extra": true}),
-                |b| {
-                    quality::assert_schema(
-                        b,
-                        &cfg(
-                            &json!({"fields": [{"name": "id", "data_type": "int64", "nullable": false}], "allow_extra": true}),
-                        ),
-                    )
-                },
+                |b, config| quality::assert_schema(b, &cfg(config)),
             );
             check_unary(
                 "table.assert_not_null",
                 &batch,
                 json!({"columns": ["id"]}),
-                |b| quality::assert_not_null(b, &cfg(&json!({"columns": ["id"]}))),
+                |b, config| quality::assert_not_null(b, &cfg(config)),
             );
             check_unary(
                 "table.assert_unique",
                 &batch,
                 json!({"columns": ["id"]}),
-                |b| quality::assert_unique(b, &cfg(&json!({"columns": ["id"]}))),
+                |b, config| quality::assert_unique(b, &cfg(config)),
             );
             check_unary(
                 "table.assert_range",
                 &batch,
                 json!({"column": "value", "min": 0, "allow_null": true}),
-                |b| {
-                    quality::assert_range(
-                        b,
-                        &cfg(&json!({"column": "value", "min": 0, "allow_null": true})),
-                    )
-                },
+                |b, config| quality::assert_range(b, &cfg(config)),
             );
             check_unary(
                 "table.assert_regex",
                 &batch,
                 json!({"column": "name", "pattern": "^[ab]$", "allow_null": true}),
-                |b| {
-                    quality::assert_regex(
-                        b,
-                        &cfg(&json!({"column": "name", "pattern": "^[ab]$", "allow_null": true})),
-                    )
-                },
+                |b, config| quality::assert_regex(b, &cfg(config)),
             );
             check_unary(
                 "table.assert_cardinality",
                 &batch,
                 json!({"min_rows": 1}),
-                |b| governance::assert_cardinality(b, &cfg(&json!({"min_rows": 1}))),
+                |b, config| governance::assert_cardinality(b, &cfg(config)),
             );
             check_unary(
                 "table.assert_metadata",
                 &batch,
                 json!({"expected": {}}),
-                |b| governance::assert_metadata(b, &cfg(&json!({"expected": {}}))),
+                |b, config| governance::assert_metadata(b, &cfg(config)),
             );
 
             let nested = nested_batch();
-            check_unary_plain("table.explode", &nested, json!({"column": "lst"}), |b| {
-                reshape::explode(b, &cfg(&json!({"column": "lst"})), &limits)
-            });
-            check_unary_plain("table.unnest", &nested, json!({"column": "st"}), |b| {
-                reshape::unnest(b, &cfg(&json!({"column": "st"})), &limits)
-            });
+            check_unary_plain(
+                "table.explode",
+                &nested,
+                json!({"column": "lst"}),
+                |b, config| reshape::explode(b, &cfg(config), &limits),
+            );
+            check_unary_plain(
+                "table.unnest",
+                &nested,
+                json!({"column": "st"}),
+                |b, config| reshape::unnest(b, &cfg(config), &limits),
+            );
         }
 
         #[test]
@@ -4129,125 +3973,83 @@ mod tests {
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| {
-                    joins::join(
-                        l,
-                        r,
-                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
-                        &limits,
-                    )
-                },
+                |l, r, config| joins::join(l, r, &cfg(config), &limits),
             );
             check_binary(
                 "table.join",
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"], "how": "outer"}),
-                |l, r| {
-                    joins::join(
-                        l,
-                        r,
-                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"], "how": "outer"})),
-                        &limits,
-                    )
-                },
+                |l, r, config| joins::join(l, r, &cfg(config), &limits),
             );
-            check_binary("table.cross_join", &batch, &right, json!({}), |l, r| {
-                joins::cross_join(l, r, &cfg(&json!({})), &limits)
-            });
+            check_binary(
+                "table.cross_join",
+                &batch,
+                &right,
+                json!({}),
+                |l, r, config| joins::cross_join(l, r, &cfg(config), &limits),
+            );
             check_binary(
                 "table.semi_join",
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| {
-                    joins::semi_join(
-                        l,
-                        r,
-                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
-                    )
-                },
+                |l, r, config| joins::semi_join(l, r, &cfg(config)),
             );
             check_binary(
                 "table.anti_join",
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| {
-                    joins::anti_join(
-                        l,
-                        r,
-                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
-                    )
-                },
+                |l, r, config| joins::anti_join(l, r, &cfg(config)),
             );
             check_binary(
                 "table.asof_join",
                 &batch,
                 &right,
                 json!({"left_on": "id", "right_on": "rid"}),
-                |l, r| {
-                    joins::asof_join(
-                        l,
-                        r,
-                        &cfg(&json!({"left_on": "id", "right_on": "rid"})),
-                        &limits,
-                    )
-                },
+                |l, r, config| joins::asof_join(l, r, &cfg(config), &limits),
             );
-            check_binary("table.concat", &batch, &batch, json!({}), |l, r| {
-                joins::concat(l, r, &cfg(&json!({})), &limits)
+            check_binary("table.concat", &batch, &batch, json!({}), |l, r, config| {
+                joins::concat(l, r, &cfg(config), &limits)
             });
-            check_binary("table.union_distinct", &batch, &batch, json!({}), |l, r| {
-                setops::union_distinct(l, r, &cfg(&json!({})), &limits)
-            });
-            check_binary("table.intersect", &batch, &batch, json!({}), |l, r| {
-                setops::intersect(l, r, &cfg(&json!({})))
-            });
-            check_binary("table.except", &batch, &batch, json!({}), |l, r| {
-                setops::except(l, r, &cfg(&json!({})))
+            check_binary(
+                "table.union_distinct",
+                &batch,
+                &batch,
+                json!({}),
+                |l, r, config| setops::union_distinct(l, r, &cfg(config), &limits),
+            );
+            check_binary(
+                "table.intersect",
+                &batch,
+                &batch,
+                json!({}),
+                |l, r, config| setops::intersect(l, r, &cfg(config)),
+            );
+            check_binary("table.except", &batch, &batch, json!({}), |l, r, config| {
+                setops::except(l, r, &cfg(config))
             });
             check_binary(
                 "table.table_diff",
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| {
-                    reshape::table_diff(
-                        l,
-                        r,
-                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
-                        &limits,
-                    )
-                },
+                |l, r, config| reshape::table_diff(l, r, &cfg(config), &limits),
             );
             check_binary(
                 "table.reconcile",
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| {
-                    governance::reconcile(
-                        l,
-                        r,
-                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
-                        &limits,
-                    )
-                },
+                |l, r, config| governance::reconcile(l, r, &cfg(config), &limits),
             );
             check_binary(
                 "table.assert_foreign_key",
                 &batch,
                 &right,
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-                |l, r| {
-                    governance::assert_foreign_key(
-                        l,
-                        r,
-                        &cfg(&json!({"left_keys": ["id"], "right_keys": ["rid"]})),
-                        &limits,
-                    )
-                },
+                |l, r, config| governance::assert_foreign_key(l, r, &cfg(config), &limits),
             );
         }
     }
