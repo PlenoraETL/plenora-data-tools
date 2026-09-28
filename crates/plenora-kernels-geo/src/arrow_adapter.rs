@@ -180,7 +180,7 @@ pub fn accumulate_decoded_cells_native_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::polygon;
+    use crate::test_support::rect;
     use plenora_core::arrow::{DataType, Field, RecordBatch, Schema};
     use plenora_core::contract::{
         AxisOrder, ContractCrs, ContractProperty, CrsDefinitionFormat, CrsResolution, FieldId,
@@ -212,12 +212,7 @@ mod tests {
     }
 
     fn square_wkb(size: f64) -> Vec<u8> {
-        encode_geometry(&Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: size, y: 0.0),
-            (x: size, y: size), (x: 0.0, y: size),
-            (x: 0.0, y: 0.0),
-        ]))
-        .expect("encode")
+        encode_geometry(&rect(0.0, 0.0, size, size)).expect("encode")
     }
 
     #[test]
@@ -601,11 +596,7 @@ mod tests {
     fn decoded_cells_estimate_sums_non_null_cells_and_feeds_the_accumulator() {
         use crate::memory_estimate::{estimate_geometry_native_bytes, DecodedNativeBytesEstimate};
 
-        let square = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
-            (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-            (x: 0.0, y: 0.0),
-        ]);
+        let square = rect(0.0, 0.0, 4.0, 4.0);
         let point = Geometry::Point(geo::Point::new(1.0, 2.0));
         let cells_payload = [
             Some(encode_geometry(&square).expect("square")),

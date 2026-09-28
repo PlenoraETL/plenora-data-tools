@@ -220,42 +220,21 @@ fn check_ring(ring: &LineString<f64>) -> Result<(), PlenoraError> {
 #[cfg(test)]
 mod tests {
     use geo::{
-        line_string, polygon, GeometryCollection, Line, MultiLineString, MultiPoint, MultiPolygon,
-        Point, Rect, Triangle,
+        line_string, polygon, GeometryCollection, Line, MultiPolygon, Point, Rect, Triangle,
     };
     use geozero::{CoordDimensions, ToWkb};
 
     use super::*;
+    use crate::test_support::{corpus_holed, corpus_triangle, valid_corpus};
     use crate::{wkb_decoder, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH};
 
-    /// Batteria di geometrie valide usata da entrambe le parita'.
-    // La fixture enumera intenzionalmente tutte le famiglie OGC in un unico
-    // oracolo condiviso; dividerla renderebbe meno evidente la parita' coperta.
-    #[allow(clippy::too_many_lines)]
+    /// Batteria di geometrie valide usata da entrambe le parita': il corpus
+    /// multi-tipo (`test_support::valid_corpus`) con la multipolygon
+    /// triangolo + poligono con buco, piu' `Line`, `Rect` e `Triangle`.
     fn valid_fixtures() -> Vec<(&'static str, Geometry<f64>)> {
-        let triangle = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0),
-            (x: 4.0, y: 0.0),
-            (x: 2.0, y: 3.0),
-            (x: 0.0, y: 0.0),
-        ]);
-        let holed = Geometry::Polygon(polygon!(
-            exterior: [
-                (x: 0.0, y: 0.0),
-                (x: 10.0, y: 0.0),
-                (x: 10.0, y: 10.0),
-                (x: 0.0, y: 10.0),
-                (x: 0.0, y: 0.0),
-            ],
-            interiors: [[
-                (x: 2.0, y: 2.0),
-                (x: 4.0, y: 2.0),
-                (x: 2.0, y: 4.0),
-                (x: 2.0, y: 2.0),
-            ]],
-        ));
-        vec![
-            ("point", Geometry::Point(Point::new(1.5, -2.5))),
+        let mut fixtures = valid_corpus(MultiPolygon::new(vec![corpus_triangle(), corpus_holed()]));
+        fixtures.insert(
+            1,
             (
                 "line",
                 Geometry::Line(Line::new(
@@ -263,80 +242,33 @@ mod tests {
                     Coord { x: 3.0, y: 4.0 },
                 )),
             ),
-            (
-                "linestring",
-                Geometry::LineString(
-                    line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0), (x: 2.0, y: 0.5)],
+        );
+        let dopo_multipolygon = fixtures
+            .iter()
+            .position(|(label, _)| *label == "multipolygon")
+            .expect("multipolygon nel corpus")
+            + 1;
+        fixtures.splice(
+            dopo_multipolygon..dopo_multipolygon,
+            [
+                (
+                    "rect",
+                    Geometry::Rect(Rect::new(
+                        Coord { x: 0.0, y: 0.0 },
+                        Coord { x: 2.0, y: 1.0 },
+                    )),
                 ),
-            ),
-            (
-                "linestring vuota",
-                Geometry::LineString(LineString::from(Vec::<(f64, f64)>::new())),
-            ),
-            ("polygon semplice", triangle.clone()),
-            ("polygon con buco", holed.clone()),
-            (
-                "multipoint",
-                Geometry::MultiPoint(MultiPoint::new(vec![
-                    Point::new(0.0, 0.0),
-                    Point::new(3.0, 4.0),
-                ])),
-            ),
-            (
-                "multipoint vuota",
-                Geometry::MultiPoint(MultiPoint::new(Vec::new())),
-            ),
-            (
-                "multilinestring",
-                Geometry::MultiLineString(MultiLineString::new(vec![
-                    line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)],
-                    line_string![(x: 2.0, y: 2.0), (x: 3.0, y: 3.0), (x: 4.0, y: 2.0)],
-                ])),
-            ),
-            (
-                "multipolygon",
-                Geometry::MultiPolygon(MultiPolygon::new(vec![
-                    match &triangle {
-                        Geometry::Polygon(p) => p.clone(),
-                        _ => unreachable!("fixture"),
-                    },
-                    match &holed {
-                        Geometry::Polygon(p) => p.clone(),
-                        _ => unreachable!("fixture"),
-                    },
-                ])),
-            ),
-            (
-                "rect",
-                Geometry::Rect(Rect::new(
-                    Coord { x: 0.0, y: 0.0 },
-                    Coord { x: 2.0, y: 1.0 },
-                )),
-            ),
-            (
-                "triangle",
-                Geometry::Triangle(Triangle::new(
-                    Coord { x: 0.0, y: 0.0 },
-                    Coord { x: 4.0, y: 0.0 },
-                    Coord { x: 2.0, y: 3.0 },
-                )),
-            ),
-            (
-                "collection annidata",
-                Geometry::GeometryCollection(GeometryCollection::new_from(vec![
-                    Geometry::Point(Point::new(0.0, 0.0)),
-                    Geometry::GeometryCollection(GeometryCollection::new_from(vec![
-                        Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 5.0, y: 5.0)]),
-                        triangle,
-                    ])),
-                    holed,
-                ])),
-            ),
-            (
-                "collection vuota",
-                Geometry::GeometryCollection(GeometryCollection::new_from(Vec::new())),
-            ),
-        ]
+                (
+                    "triangle",
+                    Geometry::Triangle(Triangle::new(
+                        Coord { x: 0.0, y: 0.0 },
+                        Coord { x: 4.0, y: 0.0 },
+                        Coord { x: 2.0, y: 3.0 },
+                    )),
+                ),
+            ],
+        );
+        fixtures
     }
 
     /// Parita' di misura (D12.3): la camminata strutturale deve dare

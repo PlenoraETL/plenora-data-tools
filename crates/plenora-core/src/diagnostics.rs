@@ -656,10 +656,11 @@ fn valid_code(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn report(observed_total: u64, examples: Vec<RowDiagnosticExample>) -> RowDiagnostics {
+    /// Diagnostica valida di scope `Read`; la usano anche i test di `error`.
+    pub fn report(observed_total: u64, examples: Vec<RowDiagnosticExample>) -> RowDiagnostics {
         let mut counts = BTreeMap::new();
         if observed_total > 0 {
             counts.insert("conversion.invalid_date".to_owned(), observed_total);
@@ -682,7 +683,7 @@ mod tests {
         }
     }
 
-    fn example(source_index: u64) -> RowDiagnosticExample {
+    pub fn example(source_index: u64) -> RowDiagnosticExample {
         RowDiagnosticExample {
             source_index,
             cause: "conversion.invalid_date".to_owned(),

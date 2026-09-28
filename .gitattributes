@@ -3,3 +3,5 @@
 # committati (snapshot del catalogo) e script bash non dipendono da
 # core.autocrlf della macchina.
 * text=auto eol=lf
+# I reperti WKB sono byte, non testo: nessuna conversione di fine riga.
+*.wkb binary

@@ -242,6 +242,10 @@ mod tests {
     use geozero::{wkb::Wkb, ToGeo};
 
     use super::*;
+    use crate::test_support::{
+        collection_wkb_le, linestring_wkb_le, multipoint_wkb_le, multipolygon_wkb_le, point_wkb_le,
+        polygon_with_interiors_wkb_le, polygon_wkb_le,
+    };
     use crate::validate_wkb_contract;
 
     /// Oracolo differenziale (architettura.md#geometrie): per ogni payload, il percorso
@@ -263,114 +267,6 @@ mod tests {
             (Ok(_), Err(error)) => panic!("{label}: riferimento Ok, decoder Err: {error}"),
             (Err(error), Ok(_)) => panic!("{label}: riferimento Err ({error}), decoder Ok"),
         }
-    }
-
-    fn point_wkb_le(x: f64, y: f64) -> Vec<u8> {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&1_u32.to_le_bytes());
-        payload.extend_from_slice(&x.to_le_bytes());
-        payload.extend_from_slice(&y.to_le_bytes());
-        payload
-    }
-
-    fn linestring_wkb_le(points: &[(f64, f64)]) -> Vec<u8> {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&2_u32.to_le_bytes());
-        payload.extend_from_slice(
-            &u32::try_from(points.len())
-                .expect("fixture entro u32")
-                .to_le_bytes(),
-        );
-        for (x, y) in points {
-            payload.extend_from_slice(&x.to_le_bytes());
-            payload.extend_from_slice(&y.to_le_bytes());
-        }
-        payload
-    }
-
-    fn polygon_wkb_le(ring: &[(f64, f64)]) -> Vec<u8> {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&3_u32.to_le_bytes());
-        payload.extend_from_slice(&1_u32.to_le_bytes());
-        payload.extend_from_slice(
-            &u32::try_from(ring.len())
-                .expect("fixture entro u32")
-                .to_le_bytes(),
-        );
-        for (x, y) in ring {
-            payload.extend_from_slice(&x.to_le_bytes());
-            payload.extend_from_slice(&y.to_le_bytes());
-        }
-        payload
-    }
-
-    /// Poligono con anelli interni: e' la forma su cui un decoder che
-    /// gestisse un solo anello perderebbe l'esterno.
-    fn polygon_with_interiors_wkb_le(
-        exterior: &[(f64, f64)],
-        interiors: &[&[(f64, f64)]],
-    ) -> Vec<u8> {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&3_u32.to_le_bytes());
-        payload.extend_from_slice(
-            &u32::try_from(1 + interiors.len())
-                .expect("fixture entro u32")
-                .to_le_bytes(),
-        );
-        for ring in std::iter::once(exterior).chain(interiors.iter().copied()) {
-            payload.extend_from_slice(
-                &u32::try_from(ring.len())
-                    .expect("fixture entro u32")
-                    .to_le_bytes(),
-            );
-            for (x, y) in ring {
-                payload.extend_from_slice(&x.to_le_bytes());
-                payload.extend_from_slice(&y.to_le_bytes());
-            }
-        }
-        payload
-    }
-
-    fn multipolygon_wkb_le(polygons: &[Vec<u8>]) -> Vec<u8> {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&6_u32.to_le_bytes());
-        payload.extend_from_slice(
-            &u32::try_from(polygons.len())
-                .expect("fixture entro u32")
-                .to_le_bytes(),
-        );
-        for polygon in polygons {
-            payload.extend_from_slice(polygon);
-        }
-        payload
-    }
-
-    fn multipoint_wkb_le(points: &[(f64, f64)]) -> Vec<u8> {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&4_u32.to_le_bytes());
-        payload.extend_from_slice(
-            &u32::try_from(points.len())
-                .expect("fixture entro u32")
-                .to_le_bytes(),
-        );
-        for (x, y) in points {
-            payload.extend(point_wkb_le(*x, *y));
-        }
-        payload
-    }
-
-    fn collection_wkb_le(parts: &[Vec<u8>]) -> Vec<u8> {
-        let mut payload = vec![1_u8];
-        payload.extend_from_slice(&7_u32.to_le_bytes());
-        payload.extend_from_slice(
-            &u32::try_from(parts.len())
-                .expect("fixture entro u32")
-                .to_le_bytes(),
-        );
-        for part in parts {
-            payload.extend_from_slice(part);
-        }
-        payload
     }
 
     #[test]

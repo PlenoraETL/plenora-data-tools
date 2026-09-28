@@ -278,14 +278,8 @@ pub fn polygon_from_ordered_points(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::test_support::some_point as point;
     use geo::{Area, CoordsIter};
-
-    // unnecessary_wraps: l'Option e' il contratto dei fixture (colonne con
-    // righe null), non un possibile fallimento dell'helper.
-    #[allow(clippy::unnecessary_wraps)]
-    fn point(x: f64, y: f64) -> Option<Geometry<f64>> {
-        Some(Geometry::Point(Point::new(x, y)))
-    }
 
     #[test]
     fn creates_point_line_and_polygon_with_strict_validation() {
