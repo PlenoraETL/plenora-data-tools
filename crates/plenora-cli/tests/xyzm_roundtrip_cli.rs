@@ -11,19 +11,18 @@
 //! file e' compilato solo con la feature `proj-backend`.
 #![cfg(feature = "proj-backend")]
 
-use std::process::Command;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch};
+use plenora_core::arrow::array::{BinaryArray, RecordBatch};
 use plenora_core::arrow::ipc::reader::FileReader;
-use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::contract::GeometryDimensions;
 use serde_json::json;
 
-fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plenora-data-tools"))
-}
+mod comune;
+use comune::{
+    batch_id_geometria, cli_run, filter_only_plan, point_wkb_le, point_z_wkb, scrivi_ipc,
+};
 
 /// Schema `id` Int64 + colonna `geometry` GeoArrow-WKB con dimensionalita'
 /// XYZ dichiarata nel metadato `geo` (EPSG:32632).
@@ -39,67 +38,20 @@ fn xyz_schema() -> SchemaRef {
     ]))
 }
 
-/// WKB ISO little-endian di un Point Z (type code 1001).
-fn xyz_point_wkb(x: f64, y: f64, z: f64) -> Vec<u8> {
-    let mut payload = vec![1_u8];
-    payload.extend_from_slice(&1001_u32.to_le_bytes());
-    for value in [x, y, z] {
-        payload.extend_from_slice(&value.to_le_bytes());
-    }
-    payload
-}
-
-/// WKB ISO little-endian di un Point XY (type code 1): celle incoerenti con
-/// un metadato `dimensions = "xyz"` (fixture adversarial).
-fn xy_point_wkb(x: f64, y: f64) -> Vec<u8> {
-    let mut payload = vec![1_u8];
-    payload.extend_from_slice(&1_u32.to_le_bytes());
-    payload.extend_from_slice(&x.to_le_bytes());
-    payload.extend_from_slice(&y.to_le_bytes());
-    payload
-}
-
 fn xyz_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
-    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
-    RecordBatch::try_new(
-        xyz_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(BinaryArray::from(refs)) as ArrayRef,
-        ],
-    )
-    .expect("batch geo xyz fixture")
+    batch_id_geometria(xyz_schema(), ids, cells)
 }
 
 fn write_input(directory: &std::path::Path, batch: &RecordBatch) -> std::path::PathBuf {
     let input = directory.join("input.arrow");
-    let file = std::fs::File::create(&input).expect("create input");
-    let mut writer = FileWriter::try_new(file, &xyz_schema()).expect("writer");
-    writer.write(batch).expect("write batch");
-    writer.finish().expect("finish");
+    scrivi_ipc(&input, &xyz_schema(), std::slice::from_ref(batch));
     input
 }
 
 fn write_plan(directory: &std::path::Path, plan: &serde_json::Value) -> std::path::PathBuf {
     let plan_path = directory.join("plan.json");
-    std::fs::write(&plan_path, serde_json::to_vec(plan).expect("json")).expect("plan");
+    comune::scrivi_piano(&plan_path, plan);
     plan_path
-}
-
-fn run_cli(
-    plan: &std::path::Path,
-    input: &std::path::Path,
-    output: &std::path::Path,
-) -> std::process::Output {
-    cli()
-        .args(["run", "--plan"])
-        .arg(plan)
-        .arg("--inputs")
-        .arg(input)
-        .arg("--output")
-        .arg(output)
-        .output()
-        .expect("run")
 }
 
 /// Dimensionalita' dichiarata nel metadato `geo` della colonna `geometry`
@@ -118,9 +70,9 @@ fn xyz_input_round_trips_byte_per_byte_through_a_table_filter() {
     // tabellare (passthrough) -> publish -> output IPC riletto: celle
     // byte-identiche e metadato `xyz` preservato (mai un xy silenzioso).
     let directory = tempfile::tempdir().expect("tempdir");
-    let kept_a = xyz_point_wkb(1.0, 2.0, 3.0);
-    let kept_b = xyz_point_wkb(4.0, 5.0, 6.0);
-    let dropped = xyz_point_wkb(7.0, 8.0, 9.0);
+    let kept_a = point_z_wkb(1.0, 2.0, 3.0);
+    let kept_b = point_z_wkb(4.0, 5.0, 6.0);
+    let dropped = point_z_wkb(7.0, 8.0, 9.0);
     let input = write_input(
         directory.path(),
         &xyz_batch(
@@ -142,7 +94,7 @@ fn xyz_input_round_trips_byte_per_byte_through_a_table_filter() {
     );
     let output_path = directory.path().join("output.arrow");
 
-    let run = run_cli(&plan, &input, &output_path);
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         run.status.success(),
         "stdout: {}",
@@ -182,7 +134,7 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
     let directory = tempfile::tempdir().expect("tempdir");
     let input = write_input(
         directory.path(),
-        &xyz_batch(&[1, 2], &[Some(xyz_point_wkb(1.0, 2.0, 3.0)), None]),
+        &xyz_batch(&[1, 2], &[Some(point_z_wkb(1.0, 2.0, 3.0)), None]),
     );
     let plan = write_plan(
         directory.path(),
@@ -198,7 +150,7 @@ fn geo_op_on_xyz_input_is_rejected_at_compile_plan_without_output() {
     );
     let output_path = directory.path().join("output.arrow");
 
-    let run = run_cli(&plan, &input, &output_path);
+    let run = cli_run(&plan, &input, &output_path);
     assert!(!run.status.success(), "input XYZ accettato da geo.buffer");
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(
@@ -223,23 +175,12 @@ fn xyz_metadata_with_xy_cells_fails_at_the_gate_never_silent_passthrough() {
     let directory = tempfile::tempdir().expect("tempdir");
     let input = write_input(
         directory.path(),
-        &xyz_batch(&[1], &[Some(xy_point_wkb(1.0, 2.0))]),
+        &xyz_batch(&[1], &[Some(point_wkb_le(1.0, 2.0))]),
     );
-    let plan = write_plan(
-        directory.path(),
-        &json!({
-            "schema_version": 5,
-            "inputs": ["main"],
-            "nodes": [
-                {"id": "f", "op": "table.filter", "in": ["main"],
-                 "config": {"column": "id", "operator": ">", "value": 0}},
-            ],
-            "output": "f",
-        }),
-    );
+    let plan = write_plan(directory.path(), &filter_only_plan());
     let output_path = directory.path().join("output.arrow");
 
-    let run = run_cli(&plan, &input, &output_path);
+    let run = cli_run(&plan, &input, &output_path);
     assert!(
         !run.status.success(),
         "incoerenza metadato/celle passata silenziosamente"

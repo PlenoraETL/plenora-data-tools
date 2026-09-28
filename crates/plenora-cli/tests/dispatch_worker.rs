@@ -15,10 +15,7 @@
 //! Il difetto si vedrebbe solo a runtime, come un worker che si sente dire
 //! «comando sconosciuto» da un supervisore che aspetta un saluto.
 
-use std::process::Command;
-
 mod comune;
-use comune::eseguibile;
 #[cfg(unix)]
 use comune::ricaduta_nel_parser;
 
@@ -29,21 +26,13 @@ use comune::ricaduta_nel_parser;
 /// se quel nome cambiasse.
 const VARIABILE: &str = "PLENORA_CANALE";
 
-/// Che cosa il binario ha scritto, unito: l'envelope va su stdout, ma un
-/// messaggio che finisse su stderr non deve sfuggire al caso.
+/// Che cosa il binario ha scritto, unito (vedi [`comune::esegui`]).
 ///
 /// La variabile del canale viene **tolta** dall'ambiente del figlio: questi
 /// casi provano il cammino in cui non c'e', e l'ambiente del runner potrebbe
 /// averla per conto suo.
 fn esegui(argomenti: &[&str]) -> (i32, String) {
-    let uscita = Command::new(eseguibile())
-        .args(argomenti)
-        .env_remove(VARIABILE)
-        .output()
-        .expect("il binario si esegue");
-    let mut testo = String::from_utf8_lossy(&uscita.stdout).into_owned();
-    testo.push_str(&String::from_utf8_lossy(&uscita.stderr));
-    (uscita.status.code().unwrap_or(-1), testo)
+    comune::esegui(argomenti, Some(VARIABILE))
 }
 
 /// **La modalita' worker raggiunge il worker**, e fallisce dove deve.

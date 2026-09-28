@@ -7,25 +7,13 @@
 //! con confronto geometrico/semantico). Se questo test fallisce segnala un
 //! NON-determinismo binario reale del motore: non va "corretto" il test.
 
-use std::process::Command;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Int64Array, RecordBatch, StringArray};
-use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 
-fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plenora-data-tools"))
-}
-
-fn write_ipc(path: &std::path::Path, schema: &Schema, batches: &[RecordBatch]) {
-    let file = std::fs::File::create(path).expect("create input");
-    let mut writer = FileWriter::try_new(file, &Arc::new(schema.clone())).expect("writer");
-    for batch in batches {
-        writer.write(batch).expect("write batch");
-    }
-    writer.finish().expect("finish");
-}
+mod comune;
+use comune::{comando_run, scrivi_ipc};
 
 #[test]
 fn stesso_piano_produce_output_ipc_binariamente_identici() {
@@ -52,7 +40,7 @@ fn stesso_piano_produce_output_ipc_binariamente_identici() {
         ],
     )
     .expect("batch");
-    write_ipc(&input, &schema, &[batch]);
+    scrivi_ipc(&input, &schema, &[batch]);
 
     // Piano a due passi (alias legacy del catalogo), identico per entrambe
     // le esecuzioni.
@@ -66,13 +54,7 @@ fn stesso_piano_produce_output_ipc_binariamente_identici() {
     .expect("plan");
 
     for output in [&output_first, &output_second] {
-        let result = cli()
-            .args(["run", "--plan"])
-            .arg(&plan)
-            .arg("--input")
-            .arg(&input)
-            .arg("--output")
-            .arg(output)
+        let result = comando_run(&plan, "--input", &input, output)
             .output()
             .expect("run");
         assert!(

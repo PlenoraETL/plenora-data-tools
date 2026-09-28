@@ -6,18 +6,15 @@
 //! README che non gira piu' e' peggio di un README assente.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::ipc::reader::FileReader;
-use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde_json::{json, Value};
 
-const fn executable() -> &'static str {
-    env!("CARGO_BIN_EXE_plenora-data-tools")
-}
+mod comune;
+use comune::{cli, scrivi_ipc};
 
 /// Radice del repository: `crates/plenora-cli` risalito di due livelli.
 fn repository() -> PathBuf {
@@ -58,10 +55,7 @@ fn scrivi_arrow(righe: &Value, destinazione: &Path) {
         ],
     )
     .expect("batch dell'esempio");
-    let file = std::fs::File::create(destinazione).expect("create arrow");
-    let mut writer = FileWriter::try_new(file, &schema).expect("writer");
-    writer.write(&batch).expect("write");
-    writer.finish().expect("finish");
+    scrivi_ipc(destinazione, &schema, &[batch]);
 }
 
 /// Rilegge un Arrow IPC file come righe JSON, per confrontarlo con `atteso/`.
@@ -104,7 +98,7 @@ fn e1_filtro_e_ordinamento_riproduce_l_output_atteso() {
     let piano = esempio.join("piano.json");
 
     // 1. `describe`: cosa contiene l'input. E' il primo comando del README.
-    let descrizione = Command::new(executable())
+    let descrizione = cli()
         .args(["describe", "--input"])
         .arg(&input)
         .output()
@@ -135,7 +129,7 @@ fn e1_filtro_e_ordinamento_riproduce_l_output_atteso() {
     assert_eq!(descrizione["geometries"], json!([]));
 
     // 2. `validate`: il piano si controlla contro il contratto, senza dati.
-    let validazione = Command::new(executable())
+    let validazione = cli()
         .args(["validate", "--plan"])
         .arg(&piano)
         .arg("--input")
@@ -149,7 +143,7 @@ fn e1_filtro_e_ordinamento_riproduce_l_output_atteso() {
     );
 
     // 3. `run`: esecuzione e pubblicazione atomica.
-    let esecuzione = Command::new(executable())
+    let esecuzione = cli()
         .args(["run", "--plan"])
         .arg(&piano)
         .arg("--input")
@@ -191,7 +185,7 @@ fn e1_rifiuta_un_nome_di_input_che_il_piano_non_dichiara() {
     let input = lavoro.path().join("citta.arrow");
     scrivi_arrow(&leggi_json(&esempio.join("dati/citta.json")), &input);
 
-    let esito = Command::new(executable())
+    let esito = cli()
         .args(["validate", "--plan"])
         .arg(esempio.join("piano.json"))
         .arg("--input")

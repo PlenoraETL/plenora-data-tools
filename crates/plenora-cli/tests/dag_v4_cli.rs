@@ -8,41 +8,25 @@
 //! PROJ (la scoperta del contratto risolve il `geo.crs` dei metadati): e'
 //! compilato solo con la feature `proj-backend`.
 
-use std::process::Command;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{Int64Array, RecordBatch};
 use plenora_core::arrow::ipc::reader::FileReader;
-use plenora_core::arrow::ipc::writer::FileWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use serde_json::json;
 
 #[cfg(feature = "proj-backend")]
 use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, Float64Array};
 
-fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_plenora-data-tools"))
-}
-
-/// Invoca `run --plan <piano> --inputs <ingresso> --output <uscita>`.
-///
-/// Rende l'uscita del processo **grezza**: codice, stdout e stderr restano da
-/// esaminare a chi chiama, perche' sono gli oracoli e non possono stare qui.
-fn cli_run(
-    piano: &std::path::Path,
-    ingresso: &std::path::Path,
-    uscita: &std::path::Path,
-) -> std::process::Output {
-    cli()
-        .args(["run", "--plan"])
-        .arg(piano)
-        .arg("--inputs")
-        .arg(ingresso)
-        .arg("--output")
-        .arg(uscita)
-        .output()
-        .expect("il processo si avvia")
-}
+mod comune;
+#[cfg(feature = "proj-backend")]
+use comune::costanti::MONTE_MARIO_WKT;
+#[cfg(feature = "proj-backend")]
+use comune::point_z_wkb;
+use comune::{
+    batch_id_geometria, cli, cli_run, comando_run, filter_only_plan, point_wkb_le, scrivi_ipc,
+    scrivi_piano, table_batch, table_plan, table_schema, write_table_fixture,
+};
 
 /// Invoca `validate --plan <piano> --inputs <ingresso>`.
 ///
@@ -55,63 +39,6 @@ fn cli_validate(piano: &std::path::Path, ingresso: &std::path::Path) -> std::pro
         .arg(ingresso)
         .output()
         .expect("il processo si avvia")
-}
-
-fn write_ipc(path: &std::path::Path, schema: &SchemaRef, batches: &[RecordBatch]) {
-    let file = std::fs::File::create(path).expect("create input");
-    let mut writer = FileWriter::try_new(file, schema).expect("writer");
-    for batch in batches {
-        writer.write(batch).expect("write batch");
-    }
-    writer.finish().expect("finish");
-}
-
-fn table_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("name", DataType::Utf8, true),
-    ]))
-}
-
-fn table_batch(ids: &[i64], names: &[&str]) -> RecordBatch {
-    RecordBatch::try_new(
-        table_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())),
-            Arc::new(StringArray::from(
-                names.iter().map(|name| Some(*name)).collect::<Vec<_>>(),
-            )),
-        ],
-    )
-    .expect("batch fixture")
-}
-
-/// Piano v4 tabellare: filter `id > 0` poi rename `name` -> `label`.
-fn table_plan() -> serde_json::Value {
-    json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
-             "config": {"column": "id", "operator": ">", "value": 0}},
-            {"id": "r", "op": "table.rename", "in": ["f"],
-             "config": {"renames": [{"old_name": "name", "new_name": "label"}]}},
-        ],
-        "output": "r",
-    })
-}
-
-/// Scrive piano e input tabellare standard nella directory data.
-fn write_table_fixture(directory: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    let plan = directory.join("plan.json");
-    let input = directory.join("input.arrow");
-    std::fs::write(&plan, serde_json::to_vec(&table_plan()).expect("json")).expect("plan");
-    write_ipc(
-        &input,
-        &table_schema(),
-        &[table_batch(&[0, 1, 2], &["a", "b", "c"])],
-    );
-    (plan, input)
 }
 
 #[test]
@@ -357,7 +284,7 @@ fn piano_legacy_continua_a_funzionare_invariato() {
         br#"{"schema_version":1,"steps":[{"operation":"rename","config":{"renames":[{"old_name":"name","new_name":"label"}]}}]}"#,
     )
     .expect("plan");
-    write_ipc(
+    scrivi_ipc(
         &input,
         &table_schema(),
         &[table_batch(&[1, 2], &["a", "b"])],
@@ -377,13 +304,7 @@ fn piano_legacy_continua_a_funzionare_invariato() {
     assert!(summary.get("plan_hash").is_none());
 
     // run legacy: stessa invocazione di sempre (--input singolo).
-    let run = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--input")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
+    let run = comando_run(&plan, "--input", &input, &output_path)
         .output()
         .expect("run legacy");
     assert!(
@@ -421,44 +342,12 @@ fn geometry_without_crs_schema(geo_json: Option<&str>) -> SchemaRef {
     ]))
 }
 
-/// WKB little-endian di un punto (fixture tabellare: mai decodificato).
-fn point_wkb_le(x: f64, y: f64) -> Vec<u8> {
-    let mut wkb = Vec::with_capacity(21);
-    wkb.push(1_u8);
-    wkb.extend_from_slice(&1_u32.to_le_bytes());
-    wkb.extend_from_slice(&x.to_le_bytes());
-    wkb.extend_from_slice(&y.to_le_bytes());
-    wkb
-}
-
 fn geometry_without_crs_batch(
     geo_json: Option<&str>,
     ids: &[i64],
     cells: &[Option<Vec<u8>>],
 ) -> RecordBatch {
-    use plenora_core::arrow::array::{ArrayRef, BinaryArray};
-    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
-    RecordBatch::try_new(
-        geometry_without_crs_schema(geo_json),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(BinaryArray::from(refs)) as ArrayRef,
-        ],
-    )
-    .expect("batch fixture senza CRS")
-}
-
-/// Piano v4: solo `table.filter` su `id` (colonna non geometrica).
-fn filter_only_plan() -> serde_json::Value {
-    json!({
-        "schema_version": 5,
-        "inputs": ["main"],
-        "nodes": [
-            {"id": "f", "op": "table.filter", "in": ["main"],
-             "config": {"column": "id", "operator": ">", "value": 0}},
-        ],
-        "output": "f",
-    })
+    batch_id_geometria(geometry_without_crs_schema(geo_json), ids, cells)
 }
 
 fn write_geometry_without_crs_fixture(
@@ -467,12 +356,8 @@ fn write_geometry_without_crs_fixture(
 ) -> (std::path::PathBuf, std::path::PathBuf) {
     let plan = directory.join("plan.json");
     let input = directory.join("input.arrow");
-    std::fs::write(
-        &plan,
-        serde_json::to_vec(&filter_only_plan()).expect("json"),
-    )
-    .expect("plan");
-    write_ipc(
+    scrivi_piano(&plan, &filter_only_plan());
+    scrivi_ipc(
         &input,
         &geometry_without_crs_schema(geo_json),
         &[geometry_without_crs_batch(
@@ -611,7 +496,7 @@ fn dag_v4_geo_pregate_wkb_rejection_carries_authoritative_step_context() {
         ],
     )
     .expect("batch WKB invalido");
-    write_ipc(&input, &schema, &[batch]);
+    scrivi_ipc(&input, &schema, &[batch]);
 
     let result = cli_run(&plan, &input, &output);
 
@@ -678,7 +563,7 @@ fn dag_v4_geo_op_on_geometry_without_crs_fails_with_the_declared_cause() {
         ],
         "output": "b",
     });
-    std::fs::write(&plan, serde_json::to_vec(&buffer_plan).expect("json")).expect("plan");
+    scrivi_piano(&plan, &buffer_plan);
 
     let validate = cli_validate(&plan, &input);
     assert!(
@@ -723,39 +608,50 @@ fn canonical_crs_fixture(
     plan: &serde_json::Value,
     pairs: &[(&str, &str)],
 ) -> (std::path::PathBuf, std::path::PathBuf) {
-    use plenora_core::arrow::array::{ArrayRef, BinaryArray};
-    use plenora_kernels_geo::arrow_adapter as adapter;
     let plan_path = directory.join("plan.json");
     let input = directory.join("input.arrow");
-    std::fs::write(&plan_path, serde_json::to_vec(plan).expect("json")).expect("plan");
+    scrivi_piano(&plan_path, plan);
+    let schema = schema_geometria(metadati_geometria(pairs, true));
+    let cells = [Some(point_wkb_le(0.0, 0.0)), Some(point_wkb_le(1.0, 1.0))];
+    let batch = batch_id_geometria(schema.clone(), &[1, 2], &cells);
+    scrivi_ipc(&input, &schema, &[batch]);
+    (plan_path, input)
+}
+
+/// I metadati di campo delle coppie date, piu' il nome di estensione
+/// `geoarrow.wkb` se `estensione`.
+fn metadati_geometria(
+    pairs: &[(&str, &str)],
+    estensione: bool,
+) -> std::collections::HashMap<String, String> {
+    use plenora_kernels_geo::arrow_adapter as adapter;
     let mut metadata: std::collections::HashMap<String, String> = pairs
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect();
-    metadata.insert(
-        adapter::GEOARROW_EXTENSION_KEY.to_owned(),
-        adapter::GEOARROW_WKB_EXTENSION.to_owned(),
-    );
-    let geometry = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
-    let schema = Arc::new(Schema::new_with_metadata(
-        vec![Field::new("id", DataType::Int64, false), geometry],
+    if estensione {
+        metadata.insert(
+            adapter::GEOARROW_EXTENSION_KEY.to_owned(),
+            adapter::GEOARROW_WKB_EXTENSION.to_owned(),
+        );
+    }
+    metadata
+}
+
+/// Schema `id` Int64 + colonna `geometry` Binary coi metadati di campo dati,
+/// e `plenora.contract.version` sullo schema (R2.5).
+fn schema_geometria(metadata: std::collections::HashMap<String, String>) -> SchemaRef {
+    use plenora_kernels_geo::arrow_adapter as adapter;
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+        ],
         std::collections::HashMap::from([(
             adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
             "1".to_owned(),
         )]),
-    ));
-    let cells = [Some(point_wkb_le(0.0, 0.0)), Some(point_wkb_le(1.0, 1.0))];
-    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
-            Arc::new(BinaryArray::from(refs)) as ArrayRef,
-        ],
-    )
-    .expect("batch fixture");
-    write_ipc(&input, &schema, &[batch]);
-    (plan_path, input)
+    ))
 }
 
 /// Coppie canoniche del caso `crs_unresolved` del corpus di conformita':
@@ -1006,21 +902,6 @@ fn dag_v4_filter_accepts_srid_only_declared_unresolved_without_synthesis() {
     );
 }
 
-/// WKT1 realistico di Monte Mario / Italy zone 1 con `AUTHORITY` e
-/// `TOWGS84` (EPSG:3003): la forma dello shapefile catastale owner.
-#[cfg(feature = "proj-backend")]
-const MONTE_MARIO_WKT: &str = concat!(
-    r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
-    r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297],"#,
-    r#"TOWGS84[-104.1,-49.1,-9.9,0.971,-2.917,0.714,-11.68]],"#,
-    r#"PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],"#,
-    r#"PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],"#,
-    r#"PARAMETER["central_meridian",9],PARAMETER["scale_factor",0.9996],"#,
-    r#"PARAMETER["false_easting",1500000],PARAMETER["false_northing",0],"#,
-    r#"UNIT["metre",1],AXIS["Easting",EAST],AXIS["Northing",NORTH],"#,
-    r#"AUTHORITY["EPSG","3003"]]"#
-);
-
 /// Coppie canoniche del caso owner: input `resolved` con doppia
 /// rappresentazione coerente — `crs_id` EPSG:3003 + definizione WKT Monte
 /// Mario (`wkt`) + `axis_order` `easting_northing`.
@@ -1164,7 +1045,7 @@ fn dag_v4_crs_decision_on_missing_crs_is_an_error() {
         "output": "f",
     });
     let (plan, input) = write_geometry_without_crs_fixture(directory.path(), None);
-    std::fs::write(&plan, serde_json::to_vec(&decision_plan).expect("json")).expect("plan");
+    scrivi_piano(&plan, &decision_plan);
     let validate = cli_validate(&plan, &input);
     assert!(
         !validate.status.success(),
@@ -1252,15 +1133,7 @@ fn point_wkb(x: f64, y: f64) -> Vec<u8> {
 
 #[cfg(feature = "proj-backend")]
 fn geo_batch(ids: &[i64], cells: &[Option<Vec<u8>>]) -> RecordBatch {
-    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
-    RecordBatch::try_new(
-        geo_schema(),
-        vec![
-            Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef,
-            Arc::new(BinaryArray::from(refs)) as ArrayRef,
-        ],
-    )
-    .expect("batch geo fixture")
+    batch_id_geometria(geo_schema(), ids, cells)
 }
 
 /// Piano v4 misto: buffer(10) -> area -> filter `id > 0`.
@@ -1289,8 +1162,8 @@ fn dag_v4_misto_geo_end_to_end() {
     let plan = directory.path().join("plan.json");
     let input = directory.path().join("input.arrow");
     let output_path = directory.path().join("output.arrow");
-    std::fs::write(&plan, serde_json::to_vec(&mixed_plan()).expect("json")).expect("plan");
-    write_ipc(
+    scrivi_piano(&plan, &mixed_plan());
+    scrivi_ipc(
         &input,
         &geo_schema(),
         &[geo_batch(
@@ -1370,8 +1243,8 @@ fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
     let directory = tempfile::tempdir().expect("tempdir");
     let plan = directory.path().join("plan.json");
     let input = directory.path().join("input.arrow");
-    std::fs::write(&plan, serde_json::to_vec(&mixed_plan()).expect("json")).expect("plan");
-    write_ipc(
+    scrivi_piano(&plan, &mixed_plan());
+    scrivi_ipc(
         &input,
         &geo_schema(),
         &[geo_batch(
@@ -1388,14 +1261,7 @@ fn run_v4_no_geo_fusion_output_identico_e_contatore_esposto() {
     let mut avviati = Vec::new();
     for (label, extra_args) in [("fuso", vec![]), ("non-fuso", vec!["--no-geo-fusion"])] {
         let output_path = directory.path().join(format!("output-{label}.arrow"));
-        let mut command = cli();
-        command
-            .args(["run", "--plan"])
-            .arg(&plan)
-            .arg("--inputs")
-            .arg(&input)
-            .arg("--output")
-            .arg(&output_path);
+        let mut command = comando_run(&plan, "--inputs", &input, &output_path);
         command.args(extra_args);
         let run = command.output().expect("run");
         assert!(
@@ -1439,13 +1305,7 @@ fn run_v4_espone_contatori_geo_fusion_anche_senza_geo() {
     let (plan, input) = write_table_fixture(directory.path());
     let output_path = directory.path().join("output.arrow");
 
-    let result = cli()
-        .args(["run", "--plan"])
-        .arg(&plan)
-        .arg("--inputs")
-        .arg(&input)
-        .arg("--output")
-        .arg(&output_path)
+    let result = comando_run(&plan, "--inputs", &input, &output_path)
         .arg("--no-geo-fusion")
         .output()
         .expect("run");
@@ -1475,64 +1335,25 @@ fn chain_schema() -> SchemaRef {
     let legacy =
         adapter::geometry_output_field("geometry", "EPSG:32632").expect("campo geometria legacy");
     let mut metadata = legacy.metadata().clone();
-    // Legacy: dimensions dichiarate xyz nel metadato `geo`.
-    metadata.insert(
-        adapter::GEO_METADATA_KEY.to_owned(),
-        r#"{"crs":"EPSG:32632","dimensions":"xyz"}"#.to_owned(),
-    );
-    // Chiavi canoniche R2.2 coerenti con il legacy (R2.6).
-    metadata.insert(
-        adapter::PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
-        "wkb".to_owned(),
-    );
-    metadata.insert(
-        adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
-        "xyz".to_owned(),
-    );
-    metadata.insert(
-        adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY.to_owned(),
-        "exact".to_owned(),
-    );
-    metadata.insert(
-        adapter::PLENORA_GEOMETRY_TYPES_KEY.to_owned(),
-        "point".to_owned(),
-    );
-    metadata.insert(
-        adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-        "resolved".to_owned(),
-    );
-    metadata.insert(
-        adapter::PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
-        "EPSG:32632".to_owned(),
-    );
-    metadata.insert(
-        adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-        "lat_lon".to_owned(),
-    );
-    let schema_metadata = std::collections::HashMap::from([(
-        adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
-        "1".to_owned(),
-    )]);
-    Arc::new(Schema::new_with_metadata(
-        vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+    metadata.extend(metadati_geometria(
+        &[
+            // Legacy: dimensions dichiarate xyz nel metadato `geo`.
+            (
+                adapter::GEO_METADATA_KEY,
+                r#"{"crs":"EPSG:32632","dimensions":"xyz"}"#,
+            ),
+            // Chiavi canoniche R2.2 coerenti con il legacy (R2.6).
+            (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
+            (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xyz"),
+            (adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, "exact"),
+            (adapter::PLENORA_GEOMETRY_TYPES_KEY, "point"),
+            (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
+            (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lat_lon"),
         ],
-        schema_metadata,
-    ))
-}
-
-/// Punto 3D in WKB ISO little-endian (type code 1001): i byte Z
-/// attraversano il centro invariati su operazioni tabellari (passthrough,
-/// nessun decode).
-#[cfg(feature = "proj-backend")]
-fn point_z_wkb(x: f64, y: f64, z: f64) -> Vec<u8> {
-    let mut payload = vec![1_u8];
-    payload.extend_from_slice(&1001_u32.to_le_bytes());
-    for value in [x, y, z] {
-        payload.extend_from_slice(&value.to_le_bytes());
-    }
-    payload
+        false,
+    ));
+    schema_geometria(metadata)
 }
 
 #[cfg(feature = "proj-backend")]
@@ -1547,20 +1368,7 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
     let plan = directory.path().join("plan.json");
     let input = directory.path().join("input.arrow");
     let output_path = directory.path().join("output.arrow");
-    std::fs::write(
-        &plan,
-        serde_json::to_vec(&json!({
-            "schema_version": 5,
-            "inputs": ["main"],
-            "nodes": [
-                {"id": "f", "op": "table.filter", "in": ["main"],
-                 "config": {"column": "id", "operator": ">", "value": 0}},
-            ],
-            "output": "f",
-        }))
-        .expect("json"),
-    )
-    .expect("plan");
+    scrivi_piano(&plan, &filter_only_plan());
 
     let cells = [
         Some(point_z_wkb(1.0, 2.0, 3.0)),
@@ -1568,17 +1376,8 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
         Some(point_z_wkb(7.0, 8.0, 9.0)),
     ];
     let schema = chain_schema();
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int64Array::from(vec![0, 1, 2])) as ArrayRef,
-            Arc::new(BinaryArray::from(
-                cells.iter().map(|cell| cell.as_deref()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-        ],
-    )
-    .expect("batch catena");
-    write_ipc(&input, &schema, &[batch]);
+    let batch = batch_id_geometria(schema.clone(), &[0, 1, 2], &cells);
+    scrivi_ipc(&input, &schema, &[batch]);
 
     let run = cli_run(&plan, &input, &output_path);
     assert!(
@@ -1673,46 +1472,19 @@ fn dag_v4_catena_completa_chiavi_canoniche_e_byte_z() {
 #[cfg(feature = "proj-backend")]
 fn canonical_crs_schema() -> SchemaRef {
     use plenora_kernels_geo::arrow_adapter as adapter;
-    let metadata = std::collections::HashMap::from([
-        (
-            adapter::GEOARROW_EXTENSION_KEY.to_owned(),
-            adapter::GEOARROW_WKB_EXTENSION.to_owned(),
-        ),
-        (
-            adapter::GEO_METADATA_KEY.to_owned(),
-            r#"{"crs":"EPSG:32632","dimensions":"xy"}"#.to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
-            "xy".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-            "resolved".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
-            "EPSG:32632".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_SRID_KEY.to_owned(),
-            "32632".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-            "easting_northing".to_owned(),
-        ),
-    ]);
-    let schema_metadata = std::collections::HashMap::from([(
-        adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
-        "1".to_owned(),
-    )]);
-    Arc::new(Schema::new_with_metadata(
-        vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+    schema_geometria(metadati_geometria(
+        &[
+            (
+                adapter::GEO_METADATA_KEY,
+                r#"{"crs":"EPSG:32632","dimensions":"xy"}"#,
+            ),
+            (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
+            (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
+            (adapter::PLENORA_GEOMETRY_SRID_KEY, "32632"),
+            (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing"),
         ],
-        schema_metadata,
+        true,
     ))
 }
 
@@ -1721,38 +1493,15 @@ fn canonical_crs_schema() -> SchemaRef {
 #[cfg(feature = "proj-backend")]
 fn canonical_only_schema() -> SchemaRef {
     use plenora_kernels_geo::arrow_adapter as adapter;
-    let metadata = std::collections::HashMap::from([
-        (
-            adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(),
-            "xy".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_ENCODING_KEY.to_owned(),
-            "wkb".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-            "resolved".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(),
-            "EPSG:32632".to_owned(),
-        ),
-        (
-            adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-            "unknown".to_owned(),
-        ),
-    ]);
-    let schema_metadata = std::collections::HashMap::from([(
-        adapter::PLENORA_CONTRACT_VERSION_KEY.to_owned(),
-        "1".to_owned(),
-    )]);
-    Arc::new(Schema::new_with_metadata(
-        vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+    schema_geometria(metadati_geometria(
+        &[
+            (adapter::PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
+            (adapter::PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),
+            (adapter::PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+            (adapter::PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
+            (adapter::PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
         ],
-        schema_metadata,
+        false,
     ))
 }
 
@@ -1762,16 +1511,8 @@ fn write_fixture_batch(path: &std::path::Path, schema: &SchemaRef) {
         Some(point_wkb_le(500_000.0, 4_649_776.0)),
         Some(point_wkb_le(500_100.0, 4_649_876.0)),
     ];
-    let refs: Vec<Option<&[u8]>> = cells.iter().map(|cell| cell.as_deref()).collect();
-    let batch = RecordBatch::try_new(
-        Arc::clone(schema),
-        vec![
-            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
-            Arc::new(BinaryArray::from(refs)) as ArrayRef,
-        ],
-    )
-    .expect("batch fixture");
-    write_ipc(path, schema, &[batch]);
+    let batch = batch_id_geometria(Arc::clone(schema), &[1, 2], &cells);
+    scrivi_ipc(path, schema, &[batch]);
 }
 
 #[cfg(feature = "proj-backend")]
@@ -1783,7 +1524,7 @@ fn run_plan(
     let plan_path = directory.join("plan.json");
     let input = directory.join("input.arrow");
     let output_path = directory.join("output.arrow");
-    std::fs::write(&plan_path, serde_json::to_vec(plan).expect("json")).expect("plan");
+    scrivi_piano(&plan_path, plan);
     write_fixture_batch(&input, schema);
     let run = cli_run(&plan_path, &input, &output_path);
     assert!(
@@ -1813,13 +1554,7 @@ fn dag_v4_reproject_replaces_canonical_crs_keys() {
     });
     let output_path = run_plan(directory.path(), &plan, &canonical_crs_schema());
 
-    let reader = FileReader::try_new(std::fs::File::open(&output_path).expect("output"), None)
-        .expect("reader");
-    let out_schema = reader.schema();
-    let (_, geometry_field) = out_schema
-        .column_with_name("geometry")
-        .expect("colonna geometria");
-    let metadata = geometry_field.metadata();
+    let metadata = geometry_metadata_of(&output_path);
     assert_eq!(
         metadata.get(adapter::PLENORA_GEOMETRY_CRS_ID_KEY),
         Some(&"EPSG:4326".to_owned()),
@@ -1917,15 +1652,15 @@ fn scrivi_due_input(
     directory: &std::path::Path,
 ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
     let plan = directory.join("plan.json");
-    std::fs::write(&plan, serde_json::to_vec(&plan_due_input()).expect("json")).expect("plan");
+    scrivi_piano(&plan, &plan_due_input());
     let sinistra = directory.join("sinistra.arrow");
     let destra = directory.join("destra.arrow");
-    write_ipc(
+    scrivi_ipc(
         &sinistra,
         &table_schema(),
         &[table_batch(&[1, 2], &["a", "b"])],
     );
-    write_ipc(
+    scrivi_ipc(
         &destra,
         &table_schema(),
         &[table_batch(&[2, 3], &["x", "y"])],
@@ -2110,12 +1845,12 @@ fn un_limite_alzato_dentro_un_kernel_arriva_intatto_all_envelope() {
     .expect("plan");
     let sinistra = directory.path().join("sinistra.arrow");
     let destra = directory.path().join("destra.arrow");
-    write_ipc(
+    scrivi_ipc(
         &sinistra,
         &table_schema(),
         &[table_batch(&[1, 1, 1, 1], &["a", "b", "c", "d"])],
     );
-    write_ipc(
+    scrivi_ipc(
         &destra,
         &table_schema(),
         &[table_batch(&[1, 1, 1, 1], &["w", "x", "y", "z"])],
@@ -2188,7 +1923,7 @@ fn un_tetto_del_trasporto_e_un_limite_di_risorsa_in_fase_di_lettura() {
     let ids: Vec<i64> = (0..4_000).collect();
     let etichette: Vec<String> = ids.iter().map(|id| format!("riga-{id}")).collect();
     let riferimenti: Vec<&str> = etichette.iter().map(String::as_str).collect();
-    write_ipc(&input, &table_schema(), &[table_batch(&ids, &riferimenti)]);
+    scrivi_ipc(&input, &table_schema(), &[table_batch(&ids, &riferimenti)]);
     let uscita = directory.path().join("out.arrow");
 
     let esito = cli()
@@ -2248,15 +1983,11 @@ fn un_piano_v4_entra_dalla_migrazione_e_riporta_la_versione_canonica() {
     let (_, input) = write_table_fixture(directory.path());
 
     let piano_v4 = directory.path().join("plan_v4.json");
-    std::fs::write(
-        &piano_v4,
-        serde_json::to_vec(&table_plan_v4()).expect("json"),
-    )
-    .expect("plan");
+    scrivi_piano(&piano_v4, &table_plan_v4());
     let piano_v5 = directory.path().join("plan_v5.json");
     let mut equivalente = table_plan();
     equivalente["limits"] = json!({"max_governed_memory_bytes": 4_194_304});
-    std::fs::write(&piano_v5, serde_json::to_vec(&equivalente).expect("json")).expect("plan");
+    scrivi_piano(&piano_v5, &equivalente);
 
     let da_v4 = riepilogo_validate(&piano_v4, &input);
     let da_v5 = riepilogo_validate(&piano_v5, &input);
@@ -2276,7 +2007,7 @@ fn un_piano_v4_col_nome_della_v5_e_rifiutato_dalla_cli() {
     let mut piano = table_plan_v4();
     piano["limits"] = json!({"max_governed_memory_bytes": 4_194_304});
     let percorso = directory.path().join("plan_misto.json");
-    std::fs::write(&percorso, serde_json::to_vec(&piano).expect("json")).expect("plan");
+    scrivi_piano(&percorso, &piano);
 
     let result = cli_validate(&percorso, &input);
     assert!(!result.status.success());
@@ -2295,7 +2026,7 @@ fn un_piano_v5_col_nome_della_v4_e_rifiutato_dalla_cli() {
     let mut piano = table_plan();
     piano["limits"] = json!({"max_memory_bytes": 4_194_304});
     let percorso = directory.path().join("plan_vecchio.json");
-    std::fs::write(&percorso, serde_json::to_vec(&piano).expect("json")).expect("plan");
+    scrivi_piano(&percorso, &piano);
 
     let result = cli_validate(&percorso, &input);
     assert!(!result.status.success());
@@ -2311,7 +2042,7 @@ fn un_piano_v4_esegue_e_produce_lo_stesso_output_del_v5() {
     let piano_v4 = directory.path().join("plan_v4.json");
     let mut v4 = table_plan();
     v4["schema_version"] = json!(4);
-    std::fs::write(&piano_v4, serde_json::to_vec(&v4).expect("json")).expect("plan");
+    scrivi_piano(&piano_v4, &v4);
 
     let esegui = |plan: &std::path::Path, output: &std::path::Path| {
         let result = cli_run(plan, &input, output);
@@ -2351,7 +2082,7 @@ fn un_piano_legacy_conserva_il_nome_del_proprio_formato() {
             {"old_name":"name","new_name":"label"}]}}]}"#,
     )
     .expect("plan");
-    write_ipc(
+    scrivi_ipc(
         &input,
         &table_schema(),
         &[table_batch(&[1, 2], &["a", "b"])],
@@ -2380,7 +2111,7 @@ fn un_piano_legacy_col_nome_della_v5_e_rifiutato() {
             {"old_name":"name","new_name":"label"}]}}]}"#,
     )
     .expect("plan");
-    write_ipc(
+    scrivi_ipc(
         &input,
         &table_schema(),
         &[table_batch(&[1, 2], &["a", "b"])],
@@ -2412,8 +2143,8 @@ fn table_plan_v6() -> serde_json::Value {
 fn write_v6_fixture(directory: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let plan = directory.join("plan-v6.json");
     let input = directory.join("input.arrow");
-    std::fs::write(&plan, serde_json::to_vec(&table_plan_v6()).expect("json")).expect("plan");
-    write_ipc(
+    scrivi_piano(&plan, &table_plan_v6());
+    scrivi_ipc(
         &input,
         &table_schema(),
         &[table_batch(&[0, 1, 2], &["a", "b", "c"])],
@@ -2468,7 +2199,7 @@ fn un_v5_e_il_v6_equivalente_hanno_plan_hash_diversi() {
     let plan_v6 = directory.path().join("solo-versione.json");
     let mut senza_tetto = table_plan();
     senza_tetto["schema_version"] = json!(6);
-    std::fs::write(&plan_v6, serde_json::to_vec(&senza_tetto).expect("json")).expect("plan");
+    scrivi_piano(&plan_v6, &senza_tetto);
 
     let hash_di = |percorso: &std::path::Path| -> String {
         let result = cli_validate(percorso, &input);
@@ -2512,12 +2243,8 @@ fn un_piano_che_richiede_isolamento_dipende_dalla_piattaforma_non_da_un_default(
     let directory = tempfile::tempdir().expect("tempdir");
     let plan = directory.path().join("plan-v6-isolato.json");
     let input = directory.path().join("input.arrow");
-    std::fs::write(
-        &plan,
-        serde_json::to_vec(&table_plan_v6_isolato()).expect("json"),
-    )
-    .expect("plan");
-    write_ipc(
+    scrivi_piano(&plan, &table_plan_v6_isolato());
+    scrivi_ipc(
         &input,
         &table_schema(),
         &[table_batch(&[0, 1, 2], &["a", "b", "c"])],
@@ -2557,12 +2284,8 @@ fn run_con_isolamento_non_esegue_mai_in_process() {
     let plan = directory.path().join("plan-v6-isolato.json");
     let input = directory.path().join("input.arrow");
     let output_path = directory.path().join("output-isolato.arrow");
-    std::fs::write(
-        &plan,
-        serde_json::to_vec(&table_plan_v6_isolato()).expect("json"),
-    )
-    .expect("plan");
-    write_ipc(
+    scrivi_piano(&plan, &table_plan_v6_isolato());
+    scrivi_ipc(
         &input,
         &table_schema(),
         &[table_batch(&[0, 1, 2], &["a", "b", "c"])],
@@ -2613,7 +2336,7 @@ fn il_tetto_sugli_input_precede_l_apertura_dei_file() {
         "output": "f",
     });
     let percorso_piano = directory.path().join("plan.json");
-    std::fs::write(&percorso_piano, serde_json::to_vec(&piano).expect("json")).expect("plan");
+    scrivi_piano(&percorso_piano, &piano);
     let uscita = directory.path().join("output.arrow");
 
     let mut comando = cli();
@@ -2671,7 +2394,7 @@ fn envelope_con_ingressi_assenti(
         piano["limits"] = limiti;
     }
     let percorso_piano = directory.path().join("plan.json");
-    std::fs::write(&percorso_piano, serde_json::to_vec(&piano).expect("json")).expect("plan");
+    scrivi_piano(&percorso_piano, &piano);
 
     let mut processo = cli();
     processo.args([comando, "--plan"]).arg(&percorso_piano);
@@ -2778,7 +2501,7 @@ fn envelope_dei_limits_malformati() -> Vec<(serde_json::Value, &'static str, ser
         let (plan, input) = write_table_fixture(directory.path());
         let mut piano = table_plan();
         piano["limits"] = limiti.clone();
-        std::fs::write(&plan, serde_json::to_vec(&piano).expect("json")).expect("plan");
+        scrivi_piano(&plan, &piano);
         let risultato = cli_validate(&plan, &input);
         assert!(!risultato.status.success(), "{limiti}: piano accettato");
         let documento = serde_json::from_slice(&risultato.stdout).expect("envelope JSON su stdout");

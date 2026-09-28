@@ -56,13 +56,10 @@
 //! committato insieme alla modifica, cosi' il diff mostra in review che cosa
 //! vede l'utente di diverso.
 
-use std::process::Command;
-
 use serde_json::{json, Value};
 
-const fn eseguibile() -> &'static str {
-    env!("CARGO_BIN_EXE_plenora-data-tools")
-}
+mod comune;
+use comune::{cli, eseguibile};
 
 const ORACOLO_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -127,7 +124,7 @@ fn normalizza(testo: &str) -> String {
 }
 
 fn cattura(args: &[&str]) -> Value {
-    let esito = Command::new(eseguibile())
+    let esito = cli()
         .args(args)
         .output()
         .unwrap_or_else(|error| panic!("invocazione CLI {args:?}: {error}"));
