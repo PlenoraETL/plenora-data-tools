@@ -28,8 +28,24 @@ progetto d'origine si portano qui senza rinomine.
   risolto dal chiamante.
 
 Engine, CLI, isolamento e protocollo del progetto d'origine non sono stati
-portati. I riferimenti a `docs/…` nei commenti rimandano alla documentazione
-di `plenora-data-tools`.
+portati.
+
+## Le operazioni
+
+Il riferimento delle operazioni del catalogo è
+[`docs/operazioni.md`](docs/operazioni.md): una scheda per operazione con
+parametri, schema d'uscita, semantica delle righe, ordine, errori,
+complessità e un esempio. Questo README resta il documento delle regole e
+dei limiti dichiarati; le schede li collegano senza ripeterli.
+
+`docs/operazioni.md` è generato dalle schede `docs/schede/<id>.md` e dal
+catalogo (`plenora_core::catalog`) da `crates/plenora-io/tests/operazioni_doc.rs`,
+che esegue anche l'esempio di ogni scheda e fallisce se il documento non è
+aggiornato. Un'operazione nuova o cambiata aggiorna la sua scheda, poi:
+
+```sh
+PLENORA_RIGENERA_DOC=1 cargo test -p plenora-io --test operazioni_doc
+```
 
 ## Limiti dichiarati
 
