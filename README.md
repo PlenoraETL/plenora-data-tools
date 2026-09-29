@@ -585,17 +585,28 @@ i parametri che il kernel ignorerebbe (`date_format`, `precision`, `scale`,
 `timezone` di `type_cast` su target che non li usano; `ascending` di
 `add_row_number` e `dedup_advanced` senza `order_column`;
 `inclusive_min`/`inclusive_max` di `assert_range` senza l'estremo;
-`quantile` su un'altra funzione; `output_column` ed `extract_all` di
-`string_extract` con gruppi con nome, rifiutati anche dal kernel); le
+`quantile`, `separator`, `distinct`, `skip_null` e `ddof` di `aggregate`
+su funzioni che non li usano; `chars_start`, `chars_end` e `mask_char` di
+`mask_data` fuori da `mask_type=custom`; `value` di `fill_na` con
+`ffill`/`bfill`; `offset` di `window_function` fuori da `lag`/`lead`;
+`ddof` di `rolling_window` fuori da `stddev`; `output_column` ed
+`extract_all` di `string_extract` con gruppi con nome). Un parametro
+assente prende il suo default; uno scritto e senza effetto si rifiuta,
+nell'analisi e nel kernel, con la stessa funzione (`verifica_parametri`,
+`verifica_offset`, `verifica_ascending`, `verifica_gruppi_con_nome`). Le
 asserzioni vacue (`assert_not_null`, `assert_unique`, `assert_schema` senza
 colonne, `assert_range` senza estremi, `assert_cardinality` senza vincoli,
 `assert_metadata` senza chiavi, `conditional` senza condizioni, `sha256_hash`
 e `stable_fingerprint` senza colonne); `melt` con variabile e valore
 omonimi, `rename` con una sorgente ripetuta, `explode` con
 `empty_policy=drop`; formati di data vuoti; `flatten_json` oltre
-`max_columns`; `amount` di `date_add` che nessuna data sopporta
-(`dates::verifica_amount`); in `expression`, arietà delle funzioni, pattern
-letterali di `regex_replace` e indici letterali negativi di `substring`.
+`max_columns`; `amount` di `date_add` che nessuna data sopporta, secondo
+intercalare dell'ultimo giorno compreso (`dates::verifica_amount`); nomi
+delle regole di `validate_rules` oltre 1024 byte; in `expression`, arietà
+delle funzioni, pattern letterali di `regex_replace` e indici letterali
+negativi di `substring`, questi ultimi solo dove la valutazione li
+guarderebbe (nessun argomento che li precede, o la sostituzione, solo
+null).
 
 Il runner tiene un solo controllo proprio, perché non riguarda la config ma
 l'ambiente del processo: la variabile `key_env` di `table.hmac_sha256`
@@ -780,20 +791,23 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   *Rientro*: nessuno previsto, è la natura del dato. L'oracolo
   `crates/plenora-pipeline/tests/oracolo_config.rs` esegue ogni config che
   l'analisi accetta (varianti di ogni operazione del catalogo) e ammette in
-  esecuzione solo queste classi, elencate con il motivo.
-- **Parametri ignorati non ancora censiti.**
-  *Regola*: un parametro che il kernel non usa per la config data si
-  rifiuta in analisi, non si ignora.
-  *Ambito*: fatto per i parametri elencati in «Validazione»; restano, trovati
-  e non ancora trattati, `chars_start`, `chars_end` e `mask_char` di
-  `mask_data` con un `mask_type` diverso da `custom`, `value` di `fill_na`
-  con `ffill`/`bfill`, e i parametri di `aggregate` che valgono solo per
-  alcune funzioni (`separator` fuori da `concat`). Con valori di default non
-  distinguibili da uno scritto, il rifiuto chiede un campo facoltativo, come
-  per `ascending` e `inclusive_min`.
-  *Hazard*: la config dice una cosa che l'esecuzione non fa, senza errore.
-  *Rientro*: lo stesso trattamento di `ascending` (campo facoltativo e
-  rifiuto in analisi) per ciascuno.
+  esecuzione solo queste classi, elencate con il motivo; per le config che
+  l'analisi rifiuta con una regola «il kernel fallirebbe», chiama il kernel
+  direttamente e verifica che fallisca davvero (nessun rifiuto falso).
+  Oltre i dati delle fixture non prova: il confine di `verifica_amount` sul
+  secondo intercalare ha un test a parte.
+- **Parametri ignorati: censimento per ispezione.**
+  *Regola*: nessun parametro scritto si ignora; si rifiuta in analisi e nel
+  kernel.
+  *Ambito*: i parametri elencati in «Validazione», trovati leggendo i
+  kernel tabellari; l'oracolo `oracolo_config.rs` li prova contro i kernel.
+  *Hazard*: un parametro che il censimento non ha visto resterebbe ignorato
+  senza errore. Restano fuori, di proposito, i parametri che hanno effetto
+  ma non cambiano il risultato su certi dati (`distinct` con `min`/`max`).
+  `fill_na` con `method=value` e senza `value` riempie con null, cioè non
+  cambia niente: è accettato.
+  *Rientro*: un parametro nuovo di un kernel entra con la sua regola in
+  `verifica_parametri` e un caso nell'oracolo.
 - **Chiave HMAC controllata in validazione, dal runner**: è ambiente, non
   config, quindi non sta nell'analisi dei kernel; la variabile d'ambiente
   può cambiare fra `validate` e `run`, e in quel caso l'errore arriva al
