@@ -493,6 +493,47 @@ fn reconcile_e_foreign_key_come_il_riferimento_su_ogni_chiave() {
     );
 }
 
+/// Liste di chiavi di lunghezza diversa sui due lati (piano valido: si
+/// confrontano solo le coppie di colonne): nessuna chiave coincide, e la
+/// chiave Int64 singola di un lato non sceglie l'indice nativo per l'altro.
+#[test]
+fn reconcile_e_foreign_key_come_il_riferimento_con_liste_di_chiavi_diverse() {
+    let limits = Limits::default();
+    let left = tabella(9, 0);
+    let right = tabella(7, 2);
+    let coppie: [(&[&str], &[&str]); 5] = [
+        (&["i"], &["i", "s"]),
+        (&["i", "s"], &["i"]),
+        (&[], &["i"]),
+        (&["i"], &[]),
+        (&["s"], &["s", "i"]),
+    ];
+    for (chiavi_sinistra, chiavi_destra) in coppie {
+        for nulls_equal in [true, false] {
+            let config = Reconcile {
+                left_keys: nomi(chiavi_sinistra),
+                right_keys: nomi(chiavi_destra),
+                nulls_equal,
+            };
+            assert_same_outcome_bits(
+                reconcile(&left, &right, &config, &limits),
+                reconcile_riferimento(&left, &right, &config, &limits),
+            );
+        }
+        for allow_null in [true, false] {
+            let config = ForeignKey {
+                left_keys: nomi(chiavi_sinistra),
+                right_keys: nomi(chiavi_destra),
+                allow_null,
+            };
+            assert_same_outcome_bits(
+                assert_foreign_key(&left, &right, &config, &limits),
+                assert_foreign_key_riferimento(&left, &right, &config, &limits),
+            );
+        }
+    }
+}
+
 /// Ogni soglia di memoria e di chiavi distinte scatta alla stessa riga e
 /// con lo stesso errore: la contabilita' resta quella delle chiavi
 /// testuali, per lato.

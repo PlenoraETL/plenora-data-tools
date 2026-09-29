@@ -443,10 +443,13 @@ enum IndiceChiavi {
 }
 
 impl IndiceChiavi {
-    /// Indice nativo se `lato` ha una sola colonna Int64 (i tipi dei due
-    /// lati sono identici, quindi vale per entrambi), binario altrimenti.
-    fn per(lato: &LatoChiavi<'_>, capacita: usize) -> Self {
-        if lato.int64.is_some() {
+    /// Indice nativo se **entrambi** i lati hanno una sola colonna Int64,
+    /// binario altrimenti. `validate_key_types` confronta solo le coppie di
+    /// colonne, non il loro numero: `["id"]` contro `["id", "grp"]` e' un
+    /// piano valido, e li' le chiavi non coincidono mai (la codifica di una
+    /// colonna e' autodelimitata), come nel percorso testuale.
+    fn per(sinistra: &LatoChiavi<'_>, destra: &LatoChiavi<'_>, capacita: usize) -> Self {
+        if sinistra.int64.is_some() && destra.int64.is_some() {
             Self::Int64 {
                 valori: HashMap::with_capacity_and_hasher(capacita, FastHasher::default()),
                 nullo: None,
@@ -549,7 +552,8 @@ pub fn assert_foreign_key(
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;
     let destra = LatoChiavi::new(right, &right_indices);
-    let mut referenced = IndiceChiavi::per(&destra, right.num_rows());
+    let sinistra = LatoChiavi::new(left, &left_indices);
+    let mut referenced = IndiceChiavi::per(&sinistra, &destra, right.num_rows());
     let mut memory_used = 0_usize;
     let mut testo = String::new();
     for row in 0..right.num_rows() {
@@ -567,7 +571,6 @@ pub fn assert_foreign_key(
             }
         }
     }
-    let sinistra = LatoChiavi::new(left, &left_indices);
     let mut rejections = Vec::new();
     for row in 0..left.num_rows() {
         if has_null(left, &left_indices, row) {
@@ -688,7 +691,7 @@ pub fn reconcile(
     validate_key_types(left, right, &left_indices, &right_indices)?;
     let sinistra = LatoChiavi::new(left, &left_indices);
     let destra = LatoChiavi::new(right, &right_indices);
-    let mut chiavi = IndiceChiavi::per(&sinistra, left.num_rows());
+    let mut chiavi = IndiceChiavi::per(&sinistra, &destra, left.num_rows());
     let mut left_nulls = 0;
     let mut right_nulls = 0;
     let mut memory_used = 0_usize;
