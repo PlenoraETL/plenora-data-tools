@@ -1,4 +1,9 @@
-//! Deterministic, bounded spatial join based on an R-tree candidate index.
+//! Join spaziale deterministico e limitato.
+//!
+//! Un R-tree dei rettangoli d'ingombro destri sceglie i candidati. E' il
+//! kernel di `geo.sjoin`, e la base di `geo.within`,
+//! `geo.count_points_in_polygons` e delle coppie candidate di
+//! `geo.overlay`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,40 +14,70 @@ use rstar::{RTree, RTreeObject, AABB};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Il predicato esatto di una coppia (sinistra `L`, destra `R`).
+///
+/// E' il parametro `predicate` di `geo.sjoin`, in serde `snake_case`. I
+/// predicati sono quelli di `geo`, esatti; tutti tranne `Intersects`
+/// passano dalla matrice DE-9IM.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinPredicate {
+    /// `L` e `R` hanno almeno un punto in comune, bordo compreso
+    /// (`intersects`).
     Intersects,
+    /// `L` contiene `R`: nessun punto di `R` fuori da `L` e almeno un punto
+    /// dell'interno di `R` nell'interno di `L`; `R` sul solo bordo di `L`
+    /// non e' contenuta (`contains`).
     Contains,
+    /// `L` e' contenuta in `R`, cioe' `R` contiene `L` (`within`).
     Within,
+    /// `L` e `R` si attraversano, secondo la DE-9IM (`crosses`).
     Crosses,
+    /// `L` e `R` si sovrappongono in parte, secondo la DE-9IM (`overlaps`).
     Overlaps,
+    /// `L` e `R` si toccano solo sul bordo, secondo la DE-9IM (`touches`).
     Touches,
 }
 
+/// Una coppia confermata dal predicato: le posizioni della riga sinistra e
+/// della destra.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JoinPair {
+    /// Posizione della riga sinistra.
     pub left: u64,
+    /// Posizione della riga destra.
     pub right: u64,
 }
 
+/// Gli errori del join spaziale. Nessun messaggio porta valori delle
+/// geometrie.
 #[derive(Debug, Error)]
 pub enum SpatialJoinError {
+    /// Un numero di righe o un indice non entra in `u64`.
     #[error("numero geometrie non rappresentabile nel protocollo uint64")]
     IndexOverflow,
+    /// `max_pairs` e' zero.
     #[error("max_pairs deve essere maggiore di zero")]
     InvalidPairLimit,
+    /// Le coppie confermate superano `max_pairs` (`limit`).
     #[error("spatial join oltre il limite di {limit} coppie")]
     PairLimitExceeded { limit: u64 },
+    /// Una geometria ha coordinate NaN o infinite; porta il lato (`side`,
+    /// `left` o `right`) e la posizione della riga (`index`).
     #[error("geometria {side}[{index}] contiene coordinate NaN o infinite")]
     NonFiniteCoordinate { side: &'static str, index: usize },
+    /// Una geometria non supera la validazione OGC; porta il lato e la
+    /// posizione.
     #[error("geometria {side}[{index}] non valida: {reason}")]
     InvalidGeometry {
+        /// `left` o `right`.
         side: &'static str,
+        /// La posizione della riga.
         index: usize,
+        /// Il motivo, senza valori.
         reason: String,
     },
-    /// Invariante interna violata (R6: errore propagato, mai panic).
+    /// Invariante interna violata: errore propagato, mai un panico.
     #[error("internal error: {0}")]
     Internal(&'static str),
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -53,7 +88,7 @@ pub enum SpatialJoinError {
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
     /// Il predicato esatto non ha concluso su geometrie **valide**: `relate`
-    /// si e' interrotta ([`crate::calcolo_protetto`]). Non accusa l'ingresso,
+    /// si e' interrotta (`calcolo_protetto`). Non accusa l'ingresso,
     /// e porta la *forma* del payload, mai il contenuto.
     #[error("predicato esatto non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
@@ -137,10 +172,12 @@ fn exact_match(
     .map_err(SpatialJoinError::CalcoloNonConcluso)
 }
 
-/// Returns `(left_index, right_index)` pairs in stable lexicographic order.
+/// Le coppie `(sinistra, destra)` che soddisfano `predicate`, in ordine
+/// lessicografico crescente: il kernel di `geo.sjoin`.
 ///
-/// Empty geometries produce no pairs. Bounding boxes only select candidates;
-/// every result is confirmed by the requested exact geometry predicate.
+/// Le geometrie vuote non producono coppie, e una riga sinistra senza
+/// coppie non compare. I rettangoli d'ingombro scelgono solo i candidati;
+/// ogni coppia e' confermata dal predicato esatto.
 ///
 /// # Errors
 ///
@@ -175,7 +212,7 @@ pub fn spatial_join(
 /// validita' OGC), come da [`crate::geometry_from_wkb`] o da un kernel che
 /// valida il proprio output (es. `checked_result` in [`crate::topology`]).
 /// Altrimenti il risultato e' indefinito. Solo per percorsi validati per
-/// costruzione (R0.1); il gate resta in [`spatial_join`].
+/// costruzione; il gate resta in [`spatial_join`].
 ///
 /// # Errors
 ///
@@ -192,8 +229,9 @@ pub fn spatial_join_validated(
     spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true)
 }
 
-/// Nullable variant used by framed transports. `None` rows never match, but
-/// retain their original positional index in every emitted pair.
+/// Variante di [`spatial_join`] su colonne con celle nulle: una riga `None`
+/// non produce coppie, e ogni coppia porta le posizioni originali delle
+/// righe, nulle comprese.
 ///
 /// # Errors
 ///
@@ -260,9 +298,9 @@ fn spatial_join_refs(
         .map_err(SpatialJoinError::CalcoloNonConcluso)?;
     let pair_count = AtomicU64::new(0);
 
-    // architettura.md#determinismo: come `map_nullable` — i `Result` per riga prima (ordine
-    // preservato), il primo errore IN ORDINE DI RIGA poi, dal collect
-    // sequenziale; mai la selezione non deterministica di rayon.
+    // Determinismo: i `Result` per riga prima (ordine preservato), il primo
+    // errore IN ORDINE DI RIGA poi, dal collect sequenziale; mai la
+    // selezione non deterministica di rayon.
     let groups: Vec<Result<Vec<JoinPair>, SpatialJoinError>> = left
         .par_iter()
         .enumerate()
@@ -277,9 +315,9 @@ fn spatial_join_refs(
             }) else {
                 return Ok(Vec::new());
             };
-            // The pair limit is enforced per confirmed match, before pushing
-            // onto the group vector: a single left geometry with millions of
-            // matches must fail without materializing them all first.
+            // Il limite delle coppie vale per ogni coppia confermata, prima di
+            // accodarla al gruppo: una sola geometria sinistra con milioni di
+            // coppie deve fallire senza materializzarle tutte.
             //
             // Superato il limite la riga smette di accumulare ma valuta i
             // candidati restanti: quale riga lo supera dipende dai thread, e

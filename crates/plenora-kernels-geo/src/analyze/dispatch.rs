@@ -42,13 +42,14 @@ use super::{
 // Validazione parametri per gruppo di operazioni.
 // ---------------------------------------------------------------------------
 
-/// Gate R4.6.3 del CRS risolto, a compile-plan e mai a meta' stream.
+/// Il controllo del CRS risolto, in validazione del piano e mai a meta'
+/// esecuzione.
 ///
 /// Una colonna con CRS non risolto attraversa le op senza `CrsRequirement` e
 /// si ferma qui, quando la tocca un'op che dichiara il requisito. L'errore e'
 /// `PlenoraError::Crs` e il messaggio distingue `Missing` (nessun CRS
-/// dichiarato, R4.4: mai un CRS inventato) da `DeclaredUnresolved` (la
-/// colonna dichiara un'incoerenza che solo il piano puo' risolvere).
+/// dichiarato: mai un CRS inventato) da `DeclaredUnresolved` (la colonna
+/// dichiara un'incoerenza che solo il piano puo' risolvere).
 pub(in crate::analyze) fn require_resolved_crs<'a>(
     op: &str,
     geometry: &'a GeometryColumnContract,
@@ -69,8 +70,8 @@ pub(in crate::analyze) fn require_resolved_crs<'a>(
     }
 }
 
-/// Trasformazioni 1:1 in place con parametri: domini identici a
-/// `TransformArrowSchema::validate_parameters` (senza i limiti di trasporto).
+/// Trasformazioni 1:1 in place con parametri: config stretta (campi
+/// sconosciuti rifiutati) e domini dei parametri, `InvalidPlan` se violati.
 pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) -> Result<()> {
     match op {
         "geo.centroid"
@@ -202,7 +203,7 @@ pub(in crate::analyze) fn analyze_unary_pair(
 }
 
 /// Proprieta' `exact` della mappa tipi di output: le liste della mappa sono
-/// statiche e note rispettare R3.4.1; un fallimento di costruzione e' una
+/// statiche e coerenti per costruzione; un fallimento di costruzione e' una
 /// invariante interna violata, mai un errore dell'utente.
 fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
     GeometryTypesProperty::new(TypesDeclaration::Exact, types).map_err(|error| {
@@ -210,15 +211,15 @@ fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
     })
 }
 
-/// Tipi geometrici dell'output delle trasformazioni 1:1 in place (mappa
-/// per-op, piano-v5.md#contratti-di-input decisione 8).
+/// Tipi geometrici dell'output delle trasformazioni 1:1 in place, per
+/// operazione.
 ///
 /// `Some` con i tipi dell'OUTPUT, verificati contro i kernel, per le op che
 /// cambiano il tipo; `None` per quelle che lo preservano. Casi non ovvi:
 /// `convex_hull` e `concave_hull` producono sempre `Polygon`, anche
 /// degenere; `make_valid` dichiara `mixed` senza elenco, perche' la
 /// riparazione cella per cella (backend Rust, `rust_backend`) puo' cambiare
-/// tipo e l'insieme non e' enumerabile a secco (R3.4.1).
+/// tipo e l'insieme non e' enumerabile a secco.
 fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
     match op {
         "geo.centroid" | "geo.point_on_surface" | "geo.line_interpolate_point" => {
@@ -308,18 +309,19 @@ fn analyze_unary_shape(
 ) -> Result<DataContract> {
     let op = descriptor.id;
     let geometry = single_geometry(op, input)?;
-    // piano-v5.md#contratti-di-input decisione 8: la colonna deve essere identificabile dal
-    // trasporto (estensione `geoarrow.wkb` o sole chiavi canoniche) —
-    // rifiuto a compile-plan, mai a meta' esecuzione (architettura.md#geometrie).
+    // La colonna deve essere identificabile come geometria (estensione
+    // `geoarrow.wkb` o sole chiavi canoniche): rifiuto in validazione, mai a
+    // meta' esecuzione.
     require_identifiable_geometry(op, input, geometry)?;
-    // Ogni op unaria che consuma una geometria la decodifica in XY —
-    // dimensionalita' diversa rifiutata a compile-plan (mai a meta' stream).
+    // Ogni op unaria che consuma una geometria la decodifica in XY:
+    // dimensionalita' diversa rifiutata in validazione (mai a meta'
+    // esecuzione).
     require_xy_dimensions(op, geometry)?;
     let requirement = crs_requirement(op, descriptor)?;
     match op {
         // Trasformazioni 1:1 in place: schema e FieldId invariati; le op
         // che CAMBIANO il tipo geometrico dichiarano i tipi dell'output
-        // (piano-v5.md#contratti-di-input decisione 8, `transform_output_types`).
+        // (`transform_output_types`).
         "geo.centroid"
         | "geo.convex_hull"
         | "geo.envelope"
@@ -386,8 +388,9 @@ fn analyze_unary_shape(
                 ensure_non_negative(op, "tolerance", tolerance)?;
             }
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            // La lama arriva dalla config nel CRS dell'input (D16): stesso
-            // dominio del secondo operando di distanze e predicati.
+            // La lama arriva dalla config nel CRS dell'input (un input ha una
+            // sola colonna geometria): stesso dominio del secondo operando di
+            // distanze e predicati.
             let _ = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
             analyze_expand(op, input)
         }
@@ -399,8 +402,8 @@ fn analyze_unary_shape(
                 }
             }
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            // piano-v5.md#contratti-di-input decisione 8: le celle di Voronoi sono sempre poligoni
-            // (l'input puntuale non e' il tipo dell'output).
+            // Le celle di Voronoi sono sempre poligoni (l'input puntuale non
+            // e' il tipo dell'output).
             with_geometry_types(input, geometry, exact_types(vec![GeometryType::Polygon])?)
         }
         "geo.clean_topology" => {
@@ -408,12 +411,12 @@ fn analyze_unary_shape(
             ensure_non_negative(op, "snap_tolerance", parsed.snap_tolerance)?;
             let _ = (&parsed.remove_overlaps, &parsed.fill_gaps);
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            // piano-v5.md#contratti-di-input decisione 8: input poligonale, output poligonale — ma
-            // la rimozione degli overlap (differenza) puo' spezzare un
-            // `Polygon` in `MultiPolygon`: insieme noto, dichiarazione exact.
-            // Una riga assorbita da una precedente diventa null (come a
-            // 190c493): la geometria dell'uscita e' nullable anche quando
-            // quella dell'ingresso non lo e'.
+            // Input poligonale, output poligonale: una riga non toccata resta
+            // del suo tipo, la chiusura e la rimozione delle sovrapposizioni
+            // (differenza) danno `MultiPolygon`. Insieme noto, dichiarazione
+            // exact. Una riga coperta del tutto dalle precedenti diventa null:
+            // la geometria dell'uscita e' nullable anche quando quella
+            // dell'ingresso non lo e'.
             let typed = with_geometry_types(
                 input,
                 geometry,
@@ -524,8 +527,13 @@ fn with_nullable_geometry(
 
 /// Inferenza per le operazioni binarie ordinate (left, right).
 ///
-/// I metadati di SCHEMA dell'output sono il merge R2.4 delle due sorgenti
-/// ([`super::helpers::merge_schema_metadata`]): chiave presente in una sola copiata, uguale
+/// Entrambi i lati: una sola colonna geometria, identificabile, XY, con CRS
+/// risolto e che soddisfa il requisito del catalogo (per le binarie geo lo
+/// stesso CRS proiettato sui due lati). Il contratto d'uscita parte sempre
+/// dalla sinistra: le colonne della destra non passano.
+///
+/// I metadati di SCHEMA dell'output sono la fusione di quelli delle due
+/// sorgenti ([`super::helpers::merge_schema_metadata`]): chiave presente in una sola copiata, uguale
 /// in entrambe copiata, diversa in entrambe -> errore che nomina la chiave.
 pub(in crate::analyze) fn analyze_binary(
     descriptor: &OperationDescriptor,
@@ -537,8 +545,8 @@ pub(in crate::analyze) fn analyze_binary(
     let right = &inputs[1];
     let left_geometry = single_geometry(op, left)?;
     let right_geometry = single_geometry(op, right)?;
-    // piano-v5.md#contratti-di-input decisione 8 (come per le unarie): identificabilita' della
-    // colonna verificata a compile-plan su entrambi gli operandi.
+    // Come per le unarie: identificabilita' della colonna verificata in
+    // validazione su entrambi gli operandi.
     require_identifiable_geometry(op, left, left_geometry)?;
     require_identifiable_geometry(op, right, right_geometry)?;
     // Come per le unarie: entrambi gli operandi devono essere XY.
@@ -553,13 +561,12 @@ pub(in crate::analyze) fn analyze_binary(
         ],
     )?;
     let output = match op {
-        // Schema left invariato, geometria sostituita in place; righe
-        // allineate a left nel protocollo legacy: proprieta' preservate.
-        // piano-v5.md#contratti-di-input decisione 8: le booleane poligonali producono sempre
-        // `MultiPolygon` (forma unica del kernel), non il tipo di left.
-        // Un risultato vuoto (geometrie disgiunte, maschera che non copre)
-        // e' null, come a 190c493: la geometria dell'uscita e' nullable
-        // anche quando quella di left non lo e'.
+        // Schema left invariato, geometria sostituita in place; una riga
+        // d'uscita per riga left, quindi proprieta' preservate. Le booleane
+        // poligonali producono sempre `MultiPolygon` (forma unica del
+        // kernel), non il tipo di left. Un risultato vuoto (geometrie
+        // disgiunte, maschera che non copre) e' null: la geometria
+        // dell'uscita e' nullable anche quando quella di left non lo e'.
         "geo.clip"
         | "geo.intersection"
         | "geo.union"
@@ -583,7 +590,9 @@ pub(in crate::analyze) fn analyze_binary(
             let name = output_name(op, parsed.output_column.as_deref(), COUNT_COLUMN)?;
             analyze_add_column(op, left, name, DataType::UInt64)
         }
-        // Join con lineage: righe moltiplicate, proprieta' eliminate.
+        // Join con lineage: righe moltiplicate, proprieta' eliminate. Non
+        // c'e' `__left_index`: il contratto dichiara le colonne left piu'
+        // `__right_index`.
         "geo.sjoin" => {
             let parsed: SJoinConfig = parse_config(op, config)?;
             let _ = &parsed.predicate;
@@ -624,8 +633,8 @@ pub(in crate::analyze) fn analyze_binary(
         ))),
     }?;
     let output = redeclare_output_types(op, left_geometry, output)?;
-    // R2.4: i metadati di SCHEMA delle due sorgenti sono fusi; un conflitto
-    // su valori diversi fallisce qui, in validazione, mai a runtime.
+    // I metadati di SCHEMA delle due sorgenti sono fusi; un conflitto su
+    // valori diversi fallisce qui, in validazione, mai in esecuzione.
     let schema_metadata = merge_schema_metadata(op, left, right)?;
     with_schema_metadata(&output, schema_metadata)
 }

@@ -1,5 +1,11 @@
-//! Polygonal boolean kernels. Non-polygon inputs are rejected explicitly:
-//! they need a backend with full GEOS-compatible dimensional semantics.
+//! Kernel booleani poligonali.
+//!
+//! Le booleane di `geo.intersection`, `geo.union`, `geo.difference`,
+//! `geo.symmetric_difference`, il ritaglio di `geo.clip`, `geo.dissolve`,
+//! `geo.overlay` e `geo.clean_topology`. Gli ingressi non poligonali si
+//! rifiutano con un errore esplicito
+//! ([`TopologyError::UnsupportedGeometry`]): le booleane con parti di
+//! dimensione mista (linee, punti) non sono implementate.
 //!
 //! Ogni funzione pubblica riceve la precisione dichiarata (1 cm a terra
 //! nelle unita' delle coordinate, [`Precision`]) come argomento esplicito,
@@ -23,48 +29,91 @@ use crate::rust_backend::buffer::{buffer_con_freccia, ErroreBuffer, Estremita};
 use crate::rust_backend::griglia::{self, PrecisioneInsufficiente};
 use crate::rust_backend::precision::Precision;
 
+/// La booleana di [`boolean_operation`] fra la geometria sinistra `A` e la
+/// destra `B` (in serde `snake_case`).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BooleanOperation {
+    /// `A ∩ B` (`intersection`), di `geo.intersection`.
     Intersection,
+    /// `A ∪ B` (`union`), di `geo.union`.
     Union,
+    /// `A \ B` (`difference`), di `geo.difference`.
     Difference,
+    /// `(A \ B) ∪ (B \ A)` (`symmetric_difference`), di
+    /// `geo.symmetric_difference`.
     SymmetricDifference,
 }
 
+/// I pezzi che [`polygon_overlay`] emette (parametro `mode` di
+/// `geo.overlay`, in serde `snake_case`).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayMode {
+    /// Solo le intersezioni delle coppie di righe che si intersecano
+    /// (`intersection`).
     Intersection,
+    /// Intersezioni, resti delle righe sinistre fuori dall'unione delle
+    /// destre e resti delle righe destre fuori dall'unione delle sinistre
+    /// (`union`).
     Union,
+    /// Intersezioni e resti delle righe sinistre (`identity`): la
+    /// sinistra resta coperta per intero, la destra solo dove la tocca.
     Identity,
+    /// Solo i resti delle due parti, senza le intersezioni
+    /// (`symmetric_difference`).
     SymmetricDifference,
 }
 
+/// Un pezzo di [`polygon_overlay`] con la sua provenienza.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OverlayPiece {
+    /// La geometria del pezzo, mai vuota: `MultiPolygon`, oppure la riga
+    /// d'ingresso invariata quando l'altro lato non ha righe.
     pub geometry: Geometry<f64>,
+    /// Posizione della riga sinistra da cui viene il pezzo; `None` per un
+    /// resto della destra.
     pub left: Option<u64>,
+    /// Posizione della riga destra da cui viene il pezzo; `None` per un
+    /// resto della sinistra.
     pub right: Option<u64>,
 }
 
+/// Gli errori dei kernel di questo modulo. Nessun messaggio porta valori
+/// delle geometrie.
 #[derive(Debug, Error)]
 pub enum TopologyError {
+    /// Un ingresso non e' `Polygon` o `MultiPolygon`; porta il nome del tipo
+    /// ricevuto.
     #[error("operazione topologica supportata solo per Polygon/MultiPolygon, ricevuto {0}")]
     UnsupportedGeometry(&'static str),
+    /// Un ingresso o un risultato non supera la validazione OGC; per
+    /// `polygon_overlay` anche un fallimento del join che cerca le coppie
+    /// candidate (compreso il superamento di `max_candidate_pairs`).
     #[error("geometria topologica non valida: {0}")]
     InvalidGeometry(String),
+    /// Un parametro fuori dominio (`snap_tolerance` negativa o non finita,
+    /// limiti a zero).
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
+        /// Il nome del parametro.
         name: &'static str,
+        /// Perche' e' rifiutato.
         reason: &'static str,
     },
+    /// Un limite di lavoro superato (`geometries`, `vertices`,
+    /// `overlay_results`).
     #[error("limite {name} superato: valore={actual}, limite={limit}")]
     ResourceLimit {
+        /// Il nome del limite.
         name: &'static str,
+        /// Il valore raggiunto (per `overlay_results` il primo oltre il
+        /// limite).
         actual: u64,
+        /// Il limite.
         limit: u64,
     },
+    /// Un indice o un conteggio non entra in `u64` (o un `u64` in `usize`).
     #[error("indice non rappresentabile come uint64")]
     IndexOverflow,
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -77,7 +126,7 @@ pub enum TopologyError {
     /// Un calcolo non ha concluso: il join spaziale che accoppia i
     /// candidati (un predicato esatto interrotto o un'invariante interna), o
     /// un calcolo di `geo`/`i_overlay` andato in panico dentro
-    /// [`crate::calcolo_protetto`]. Non accusa l'ingresso, e porta la
+    /// `calcolo_protetto`. Non accusa l'ingresso, e porta la
     /// *forma* del payload, mai il contenuto.
     #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
@@ -156,18 +205,25 @@ fn checked_result(result: MultiPolygon<f64>) -> Result<Geometry<f64>, TopologyEr
     Ok(Geometry::MultiPolygon(result))
 }
 
-/// Applies a polygonal boolean operation to two inputs.
+/// La booleana `operation` fra due geometrie poligonali: il kernel di
+/// `geo.intersection`, `geo.union`, `geo.difference` e
+/// `geo.symmetric_difference`.
 ///
-/// `precision` e' la precisione dichiarata nelle unita' delle coordinate
-/// (`Precision::from_crs` con un CRS, altrimenti esplicita).
+/// Il risultato e' sempre un `MultiPolygon` validato OGC, vuoto se la
+/// booleana e' vuota. `precision` e' la precisione dichiarata nelle unita'
+/// delle coordinate (`Precision::from_crs` con un CRS, altrimenti
+/// esplicita): un solo overlay, con la griglia entro `precision / 2`.
 ///
 /// # Errors
 ///
-/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
-/// - `InvalidGeometry`: an input fails OGC validation, or the result is not
-///   valid.
+/// - `UnsupportedGeometry`: un ingresso non e' `Polygon`/`MultiPolygon`.
+/// - `InvalidGeometry`: un ingresso non supera la validazione OGC, o il
+///   risultato non e' valido.
+/// - `ValidazioneNonConclusa`: la validazione OGC di un ingresso o del
+///   risultato non ha concluso.
 /// - `PrecisionInsufficient`: la griglia dell'overlay sposterebbe il
 ///   risultato oltre la precisione.
+/// - `CalcoloNonConcluso`: l'overlay di `geo` e' andato in panico.
 pub fn boolean_operation(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -179,15 +235,15 @@ pub fn boolean_operation(
 
 /// Variante di [`boolean_operation`] SENZA il gate OGC di ingresso.
 ///
-/// Restano la validazione OGC dell'output ([`checked_result`]), garanzia del
-/// produttore per i consumatori a valle (R0.1), il rifiuto dei tipi non
+/// Restano la validazione OGC dell'output (`checked_result`), garanzia del
+/// produttore per i consumatori a valle, il rifiuto dei tipi non
 /// poligonali, che e' il contratto del kernel, e i controlli di precisione.
 ///
 /// # Precondizione (contratto del chiamante)
 ///
 /// Entrambi gli input GIA' validati OGC e a coordinate finite, per
 /// costruzione: da [`crate::geometry_from_wkb`] o da un kernel che valida il
-/// proprio output, mai per inferenza sui chiamanti (R0.1). Altrimenti il
+/// proprio output, mai per inferenza sui chiamanti. Altrimenti il
 /// risultato e' indefinito e nessun errore dedicato e' garantito.
 ///
 /// # Errors
@@ -247,15 +303,22 @@ fn boolean_raw(
     })
 }
 
-/// Efficient polygonal dissolve/unary union. Grouping and attribute
-/// aggregation remain a transport/adapter concern.
+/// L'unione di tutte le geometrie in una sola (`unary_union` di `geo`): il
+/// kernel di `geo.dissolve`.
+///
+/// Il risultato e' un solo `MultiPolygon` validato OGC (vuoto se non ci
+/// sono ingressi); le parti che si toccano o si sovrappongono si fondono.
+/// Un solo overlay, con la griglia entro `precision / 2` sull'ingombro di
+/// tutti gli ingressi. Raggruppare le righe e aggregare gli attributi non e'
+/// compito del kernel.
 ///
 /// # Errors
 ///
-/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
-/// - `InvalidGeometry`: an input fails OGC validation, or the dissolved
-///   result is not valid.
-/// - `PrecisionInsufficient`: vedi [`boolean_operation`].
+/// - `UnsupportedGeometry`: un ingresso non e' `Polygon`/`MultiPolygon`.
+/// - `InvalidGeometry`: un ingresso non supera la validazione OGC, o il
+///   risultato non e' valido.
+/// - `ValidazioneNonConclusa`, `PrecisionInsufficient`,
+///   `CalcoloNonConcluso`: come [`boolean_operation`].
 pub fn dissolve(
     geometries: &[Geometry<f64>],
     precision: Precision,
@@ -265,7 +328,7 @@ pub fn dissolve(
 
 /// Variante di [`dissolve`] SENZA il gate OGC di ingresso: stessa
 /// precondizione e stesso contratto di [`boolean_operation_validated`].
-/// La validazione OGC dell'output resta ([`checked_result`]).
+/// La validazione OGC dell'output resta (`checked_result`).
 ///
 /// # Errors
 ///
@@ -321,14 +384,20 @@ fn is_empty(geometry: &Geometry<f64>) -> bool {
     geometry.coords_count() == 0
 }
 
-/// Clips each polygonal input row to the dissolved polygonal mask. Empty
-/// results become `None`, preserving the input row position for the adapter.
+/// Ritaglia ogni riga di `geometries` sulla maschera, l'unione di tutte le
+/// `masks`: il kernel di `geo.clip`.
+///
+/// Un risultato per riga, nella stessa posizione: il `MultiPolygon`
+/// dell'intersezione, o `None` se e' vuota. Senza maschere ogni riga e'
+/// `None`. Due overlay in catena (maschera dissolta, poi intersezione con
+/// ogni riga), ognuno con la griglia entro `precision / 4`.
 ///
 /// # Errors
 ///
-/// Propagates the errors of [`dissolve`] (mask) and [`boolean_operation`]
-/// (per-row intersection): non-polygonal or invalid inputs, invalid results,
-/// `PrecisionInsufficient`.
+/// Quelli di [`dissolve`] (la maschera) e di [`boolean_operation`]
+/// (l'intersezione di ogni riga): ingressi non poligonali o non validi,
+/// maschera o risultato non validi, validazione non conclusa,
+/// `PrecisionInsufficient`, `CalcoloNonConcluso`.
 pub fn clip_to_mask(
     geometries: &[Geometry<f64>],
     masks: &[Geometry<f64>],
@@ -424,21 +493,30 @@ fn push_piece(
     Ok(())
 }
 
-/// Polygonal overlay with explicit attribute lineage.
+/// Overlay poligonale con la provenienza di ogni pezzo: il kernel di
+/// `geo.overlay`.
 ///
-/// Boundary-only line/point intersections are intentionally excluded;
-/// enabling `keep_geom_type=false` requires the GEOS backend and must not
-/// silently use this kernel.
+/// Emette, secondo `mode` ([`OverlayMode`]) e in quest'ordine: le
+/// intersezioni delle coppie di righe che si intersecano, nell'ordine
+/// `(sinistra, destra)` del join spaziale; i resti delle righe sinistre
+/// (la riga meno l'unione di tutte le destre), in ordine di riga; i resti
+/// delle righe destre, in ordine di riga. I pezzi vuoti non si emettono.
+/// Le intersezioni solo di bordo (linee, punti) sono escluse: il kernel
+/// produce solo parti poligonali. Ogni intersezione e' un overlay entro
+/// `precision / 2`; ogni resto due in catena (unione dell'altro lato, poi
+/// differenza), ognuno entro `precision / 4`.
 ///
 /// # Errors
 ///
-/// - `InvalidParameter`: `max_candidate_pairs` or `max_results` is zero.
-/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
-/// - `InvalidGeometry`: an input fails OGC validation, the candidate-pair
-///   join fails, or a produced piece is not valid.
-/// - `ResourceLimit`: the pieces exceed `max_results`.
-/// - `IndexOverflow`: an index is not representable as `u64`/`usize`.
-/// - `PrecisionInsufficient`: vedi [`boolean_operation`].
+/// - `InvalidParameter`: `max_candidate_pairs` o `max_results` e' zero.
+/// - `UnsupportedGeometry`: un ingresso non e' `Polygon`/`MultiPolygon`.
+/// - `InvalidGeometry`: un ingresso non supera la validazione OGC, un pezzo
+///   o un'unione non e' valido, o il join delle coppie candidate fallisce
+///   (anche oltre `max_candidate_pairs`).
+/// - `ResourceLimit` (`overlay_results`): i pezzi superano `max_results`.
+/// - `IndexOverflow`: un indice non entra in `u64`/`usize`.
+/// - `ValidazioneNonConclusa`, `PrecisionInsufficient`,
+///   `CalcoloNonConcluso`: come [`boolean_operation`] (anche dal join).
 pub fn polygon_overlay(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
@@ -613,22 +691,37 @@ fn polygon_overlay_impl(
     Ok(pieces)
 }
 
-/// Ordered topology cleanup for inputs that are already valid polygons.
+/// Pulizia topologica ordinata di poligoni gia' validi: il kernel di
+/// `geo.clean_topology`, con la stessa chiusura dei varchi e la stessa
+/// regola «vince la prima riga» di Manipola.
 ///
-/// Applies the same gap-closing morphology and first-row-wins overlap
-/// policy as Manipola. Invalid inputs are rejected; repair belongs to GEOS
-/// make-valid.
+/// Un risultato per riga, nella stessa posizione. Con `fill_gaps` e
+/// `snap_tolerance > 0` ogni riga, da sola, passa per una chiusura
+/// morfologica: buffer di `+snap_tolerance` e poi di `-snap_tolerance`,
+/// estremita' tonde (riempie rientranze e varchi della riga piu' stretti
+/// di `2 * snap_tolerance`, non i vuoti fra righe diverse) e diventa un
+/// `MultiPolygon`. Con `remove_overlaps` ogni riga perde la parte coperta
+/// dalle righe precedenti che la toccano (per ingombro), prese dopo la
+/// chiusura: resta un `MultiPolygon`, o `None` se non resta nulla. Una
+/// riga senza precedenti che la toccano resta com'e' dopo la chiusura
+/// (senza chiusura, invariata, anche nel tipo). Gli ingressi non validi
+/// si rifiutano: la riparazione e' di `geo.make_valid`.
 ///
 /// # Errors
 ///
-/// - `InvalidParameter`: `snap_tolerance` is not finite or is negative.
-/// - `ResourceLimit`: the input exceeds `max_geometries` or `max_vertices`.
-/// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
-/// - `InvalidGeometry`: an input fails OGC validation, or a morphology or
-///   overlap-removal step produces an invalid geometry.
-/// - `IndexOverflow`: a count is not representable as `u64`.
-/// - `PrecisionInsufficient`: un buffer della morfologia o una booleana
+/// - `InvalidParameter`: `snap_tolerance` non e' finita o e' negativa.
+/// - `ResourceLimit`: le righe superano `max_geometries` (`geometries`) o
+///   i vertici `max_vertices` (`vertices`).
+/// - `UnsupportedGeometry`: un ingresso non e' `Polygon`/`MultiPolygon`.
+/// - `InvalidGeometry`: un ingresso non supera la validazione OGC, o la
+///   chiusura o la rimozione delle sovrapposizioni produce una geometria
+///   non valida.
+/// - `ValidazioneNonConclusa`: una validazione OGC non ha concluso.
+/// - `IndexOverflow`: un conteggio non entra in `u64`.
+/// - `PrecisionInsufficient`: un buffer della chiusura o una booleana
 ///   sposterebbe il risultato oltre la precisione.
+/// - `CalcoloNonConcluso`: un buffer o un overlay di `geo` e' andato in
+///   panico.
 pub fn clean_valid_polygon_topology(
     geometries: &[Geometry<f64>],
     snap_tolerance: f64,
@@ -655,8 +748,8 @@ pub fn clean_valid_polygon_topology(
 /// Stessa precondizione e stesso contratto di
 /// [`boolean_operation_validated`]. Restano SEMPRE validati: l'output di
 /// ogni booleana e la geometria prodotta dalla morfologia `buffer`
-/// (output di kernel che NON garantisce la validita' — la catena di
-/// fiducia non si applica, regola R0.1).
+/// (output di kernel che NON garantisce la validita': la precondizione non
+/// copre geometrie prodotte senza garanzia).
 ///
 /// # Errors
 ///
@@ -788,8 +881,9 @@ fn clean_valid_polygon_topology_impl(
                 precision,
             )?);
             // Output di `buffer` (kernel che NON garantisce la validita'):
-            // gate OGC completo in entrambe le forme — nessuna catena di
-            // fiducia su geometrie prodotte senza garanzia.
+            // gate OGC completo anche nella variante `_validated`, perche'
+            // la precondizione del chiamante non copre geometrie prodotte
+            // qui.
             *geometry = checked_result(as_multi_polygon(&closed)?)?;
         }
     }

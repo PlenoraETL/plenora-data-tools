@@ -143,11 +143,22 @@ pub struct LineInterpolatePointConfig {
     pub ratio: f64,
 }
 
+/// `geo.clean_topology`: pulizia topologica ordinata di poligoni validi
+/// (kernel `topology::clean_valid_polygon_topology`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CleanTopologyConfig {
+    /// Raggio della chiusura morfologica, nelle unita' del CRS;
+    /// obbligatorio, finito e non negativo (`InvalidPlan` altrimenti).
+    /// Con `0` la chiusura non si fa.
     pub snap_tolerance: f64,
+    /// Toglie a ogni riga la parte coperta dalle righe precedenti.
+    /// Facoltativo: l'analisi lo accetta senza leggerlo, e quando manca il
+    /// runner usa `true`.
     pub remove_overlaps: Option<bool>,
+    /// Chiude, riga per riga, rientranze e varchi piu' stretti di
+    /// `2 * snap_tolerance`. Facoltativo, come `remove_overlaps` (assente:
+    /// `true`).
     pub fill_gaps: Option<bool>,
 }
 
@@ -189,21 +200,34 @@ pub struct SplitConfig {
     pub tolerance: Option<f64>,
 }
 
+/// `geo.sjoin`: join spaziale (kernel `spatial_join::spatial_join_nullable`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SJoinConfig {
+    /// Il predicato che una coppia (sinistra, destra) deve soddisfare;
+    /// obbligatorio: `intersects`, `contains`, `within`, `crosses`,
+    /// `overlaps`, `touches` ([`JoinPredicate`]).
     pub predicate: JoinPredicate,
 }
 
+/// `geo.nearest`: vicino piu' prossimo (kernel
+/// `analysis::nearest_matches`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NearestConfig {
+    /// Distanza massima, nelle unita' del CRS: una riga sinistra il cui
+    /// vicino e' piu' lontano non ha abbinamenti. Facoltativa (assente:
+    /// nessun limite); finita e non negativa (`InvalidPlan` altrimenti).
     pub max_distance: Option<f64>,
 }
 
+/// `geo.overlay`: overlay poligonale con provenienza (kernel
+/// `topology::polygon_overlay`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OverlayConfig {
+    /// Quali pezzi emettere; obbligatorio: `intersection`, `union`,
+    /// `identity`, `symmetric_difference` ([`OverlayMode`]).
     pub mode: OverlayMode,
 }
 

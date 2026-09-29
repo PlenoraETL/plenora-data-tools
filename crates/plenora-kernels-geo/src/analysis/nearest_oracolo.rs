@@ -59,9 +59,9 @@ fn forza_bruta(
     }
 
     let result_count = AtomicU64::new(0);
-    // architettura.md#determinismo: i `Result` sono raccolti per riga (ordine preservato) e il
-    // primo errore IN ORDINE DI RIGA e' selezionato dal collect
-    // sequenziale — il collect parallelo diretto sarebbe non deterministico.
+    // Determinismo: i `Result` sono raccolti per riga (ordine preservato) e
+    // il primo errore IN ORDINE DI RIGA e' selezionato dal collect
+    // sequenziale; il collect parallelo diretto sarebbe non deterministico.
     let groups: Vec<Result<Vec<NearestMatch>, AnalysisError>> = left
         .par_iter()
         .enumerate()

@@ -1,7 +1,10 @@
-//! Exact binary and aggregate kernels with explicit expansion/work limits.
+//! Kernel binari esatti con limiti di lavoro espliciti: la distanza minima,
+//! `geo.nearest`, `geo.within` e `geo.count_points_in_polygons`.
 //!
-//! Attribute propagation and CRS transformation live in the tabular adapter;
-//! this module returns deterministic row lineage and scalar results.
+//! Lavorano su colonne di geometrie (`None` per le celle nulle) e rendono
+//! provenienza di riga deterministica (posizioni sinistra e destra) e
+//! valori scalari. Portare gli attributi e controllare i CRS non e' loro
+//! compito: il CRS uguale sui due lati lo verifica l'analisi del contratto.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -16,31 +19,53 @@ use crate::spatial_join::{
     spatial_join_nullable, spatial_join_nullable_validated, JoinPredicate, SpatialJoinError,
 };
 
+/// Un abbinamento di [`nearest_matches`]: una riga sinistra e una delle
+/// righe destre alla distanza minima.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NearestMatch {
+    /// Posizione della riga sinistra.
     pub left: u64,
+    /// Posizione della riga destra.
     pub right: u64,
+    /// La distanza planare, `Euclidean.distance` di `geo`, nelle unita' del
+    /// CRS.
     pub distance: f64,
 }
 
+/// Gli errori dei kernel di questo modulo. Nessun messaggio porta valori
+/// delle geometrie.
 #[derive(Debug, Error)]
 pub enum AnalysisError {
+    /// Un errore del join spaziale su cui poggiano [`within_indexes`] e
+    /// [`count_points_in_polygons`], invariato.
     #[error(transparent)]
     SpatialJoin(#[from] SpatialJoinError),
+    /// `max_comparisons` o `max_results` e' zero.
     #[error("limite di lavoro deve essere maggiore di zero")]
     InvalidWorkLimit,
+    /// Il numero di confronti (righe sinistre non nulle per righe destre
+    /// non nulle e non vuote) supera `max_comparisons` (`limit`) o non
+    /// entra in `u64`.
     #[error("numero di confronti oltre il limite di {limit}")]
     WorkLimitExceeded { limit: u64 },
+    /// Gli abbinamenti emessi superano `max_results` (`limit`).
     #[error("numero di risultati oltre il limite di {limit}")]
     ResultLimitExceeded { limit: u64 },
+    /// `max_distance` non e' finita o e' negativa.
     #[error("max_distance deve essere finita e non negativa")]
     InvalidMaximumDistance,
+    /// Un indice o un conteggio non entra in `u64`.
     #[error("indice non rappresentabile come uint64")]
     IndexOverflow,
+    /// Una geometria ha coordinate NaN o infinite o non supera la
+    /// validazione OGC; porta il lato (`left`/`right`) e la posizione.
     #[error("geometria {side}[{index}] non valida: {reason}")]
     InvalidGeometry {
+        /// `left` o `right`.
         side: &'static str,
+        /// La posizione della riga.
         index: usize,
+        /// Il motivo, senza valori.
         reason: String,
     },
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -51,7 +76,7 @@ pub enum AnalysisError {
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
     /// La distanza di `geo` non ha concluso: e' andata in panico dentro
-    /// [`crate::calcolo_protetto`] (per esempio `nearest_neighbour_distance`
+    /// `calcolo_protetto` (per esempio `nearest_neighbour_distance`
     /// su una linea di un solo punto, o con coordinate che vanno in underflow).
     /// Non accusa l'ingresso; porta la *forma* del payload, mai il contenuto.
     #[error("distanza non conclusa: {0} (contenuto non pubblicato)")]
@@ -97,20 +122,23 @@ fn validate_geometries(
     Ok(())
 }
 
-/// Minimum planar distance from every left row to the non-null, non-empty
-/// right geometries.
+/// La distanza planare minima da ogni riga sinistra alle geometrie destre
+/// non nulle e non vuote, una per riga sinistra.
 ///
-/// `None` is returned when either the left geometry is null/empty or the
-/// right side has no usable geometry.
+/// `None` se la geometria sinistra e' nulla o vuota, o se la destra non ha
+/// geometrie utilizzabili.
 ///
 /// # Errors
 ///
-/// - `InvalidWorkLimit`: `max_comparisons` is zero.
-/// - `InvalidGeometry`: a left or right geometry has NaN/infinite
-///   coordinates or fails OGC validation.
-/// - `IndexOverflow`: a row count is not representable as `u64`.
-/// - `WorkLimitExceeded`: the comparison count overflows `u64` or exceeds
-///   `max_comparisons`.
+/// - `InvalidWorkLimit`: `max_comparisons` e' zero.
+/// - `InvalidGeometry`: una geometria sinistra o destra ha coordinate NaN o
+///   infinite o non supera la validazione OGC.
+/// - `ValidazioneNonConclusa`: la validazione OGC non ha concluso.
+/// - `IndexOverflow`: un numero di righe non entra in `u64`.
+/// - `WorkLimitExceeded`: i confronti (righe sinistre non nulle per righe
+///   destre utilizzabili) superano `max_comparisons` o non entrano in
+///   `u64`.
+/// - `CalcoloNonConcluso`: la distanza di `geo` e' andata in panico.
 pub fn minimum_distances(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
@@ -127,7 +155,7 @@ pub fn minimum_distances(
 /// Ogni geometria dei due lati deve essere GIA' validata (coordinate finite,
 /// validita' OGC), come da [`crate::geometry_from_wkb`] o da un kernel che
 /// valida il proprio output. Altrimenti il risultato e' indefinito. Solo per
-/// percorsi validati per costruzione (R0.1); il gate resta in
+/// percorsi validati per costruzione; il gate resta in
 /// [`minimum_distances`].
 ///
 /// # Errors
@@ -193,24 +221,34 @@ fn minimum_distances_impl(
     per_riga.into_iter().collect()
 }
 
-/// Exact nearest-neighbour lineage. All equidistant nearest rows are emitted,
-/// matching the duplicate-on-tie behaviour of `GeoPandas` `sjoin_nearest`.
+/// Il vicino piu' prossimo esatto di ogni riga sinistra fra le righe destre:
+/// il kernel di `geo.nearest`.
 ///
-/// Matches are returned in stable lexicographic `(left, right)` order —
-/// the canonical pair order of architettura.md#geometrie D14.7, shared by the v3 transport
-/// and the v4 plan executor (identical construction in
-/// `nearest_matches_impl`).
+/// Per ogni riga sinistra non nulla e non vuota emette le righe destre (non
+/// nulle, non vuote) alla distanza minima, tutte in caso di pari, come
+/// `sjoin_nearest` di `GeoPandas`. Una riga sinistra nulla o vuota, senza
+/// destre utilizzabili o con il minimo oltre `max_distance` (se dato) non
+/// emette nulla. Gli abbinamenti sono in ordine `(sinistra, destra)`
+/// crescente. La distanza e' `Euclidean.distance` di `geo`, la stessa
+/// della forza bruta: un R-tree sceglie i candidati senza cambiare il
+/// risultato (README, «`geo.nearest`: lo scarto dell'R-tree si appoggia
+/// alla stima d'errore di `geo`»).
 ///
 /// # Errors
 ///
-/// - `InvalidWorkLimit`: `max_comparisons` or `max_results` is zero.
-/// - `InvalidMaximumDistance`: `max_distance` is not finite or is negative.
-/// - `InvalidGeometry`: a left or right geometry has NaN/infinite
-///   coordinates or fails OGC validation.
-/// - `IndexOverflow`: a row index or count is not representable as `u64`.
-/// - `WorkLimitExceeded`: the comparison count overflows `u64` or exceeds
-///   `max_comparisons`.
-/// - `ResultLimitExceeded`: the emitted matches exceed `max_results`.
+/// - `InvalidWorkLimit`: `max_comparisons` o `max_results` e' zero.
+/// - `InvalidMaximumDistance`: `max_distance` non e' finita o e' negativa.
+/// - `InvalidGeometry`: una geometria sinistra o destra ha coordinate NaN o
+///   infinite o non supera la validazione OGC.
+/// - `ValidazioneNonConclusa`: la validazione OGC non ha concluso.
+/// - `IndexOverflow`: un indice o un conteggio non entra in `u64`.
+/// - `WorkLimitExceeded`: i confronti della forza bruta (righe sinistre
+///   non nulle per righe destre utilizzabili, `n * m` anche se l'indice ne
+///   fa meno) superano `max_comparisons` o non entrano in `u64`.
+/// - `ResultLimitExceeded`: gli abbinamenti emessi superano `max_results`
+///   (ogni altro errore, il primo in ordine di riga, ha la precedenza).
+/// - `CalcoloNonConcluso`: la distanza di `geo` su un candidato e' andata
+///   in panico.
 pub fn nearest_matches(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
@@ -294,9 +332,9 @@ fn nearest_matches_impl(
 
     let indice = IndiceVicini::nuovo(&usable_right);
     let result_count = AtomicU64::new(0);
-    // architettura.md#determinismo: i `Result` sono raccolti per riga (ordine preservato) e il
-    // primo errore IN ORDINE DI RIGA e' selezionato dal collect
-    // sequenziale — il collect parallelo diretto sarebbe non deterministico.
+    // Determinismo: i `Result` sono raccolti per riga (ordine preservato) e
+    // il primo errore IN ORDINE DI RIGA e' selezionato dal collect
+    // sequenziale; il collect parallelo diretto sarebbe non deterministico.
     let groups: Vec<Result<Vec<NearestMatch>, AnalysisError>> = left
         .par_iter()
         .enumerate()
@@ -567,12 +605,20 @@ fn struttura_regolare(geometria: &Geometry<f64>) -> bool {
     }
 }
 
-/// Returns the stable left row indexes that are within at least one right row.
+/// Le posizioni delle righe sinistre contenute in almeno una riga destra,
+/// crescenti e senza ripetizioni: il kernel di `geo.within`.
+///
+/// «Contenuta» e' `right.contains(left)` di `geo` (DE-9IM): una geometria
+/// sul solo bordo della destra, come un punto sul lato, non lo e'. Le righe
+/// nulle o vuote, da entrambi i lati, non sono mai contenute.
 ///
 /// # Errors
 ///
-/// - `SpatialJoin`: every error of `spatial_join_nullable` (`max_pairs` zero
-///   or exceeded, invalid or non-finite geometries, index overflow).
+/// - `SpatialJoin`: ogni errore di [`spatial_join_nullable`]
+///   (`max_pairs` zero, o superato dalle coppie confermate, che contano
+///   ogni riga destra che contiene una sinistra; geometrie non valide o con
+///   coordinate non finite; validazione o predicato non conclusi; indici
+///   oltre `u64`).
 pub fn within_indexes(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
@@ -602,15 +648,23 @@ pub fn within_indexes_validated(
     Ok(indexes)
 }
 
-/// Counts points strictly within every polygon row. Boundary points are not
-/// counted, matching Manipola's `predicate="within"` contract.
+/// Per ogni riga di `polygons`, quante righe di `points` contiene: il
+/// kernel di `geo.count_points_in_polygons`.
+///
+/// Un conteggio per riga di `polygons`, nella stessa posizione (0 per una
+/// riga nulla o vuota). Conta ogni riga di `points` per cui
+/// `polygon.contains(point)` di `geo` e' vero, qualunque sia il suo tipo: i
+/// punti sul bordo non contano, come il `predicate="within"` di Manipola;
+/// un punto dentro piu' poligoni conta in ognuno.
 ///
 /// # Errors
 ///
-/// - `SpatialJoin`: every error of `spatial_join_nullable` (`max_pairs` zero
-///   or exceeded, invalid or non-finite geometries, index overflow).
-/// - `IndexOverflow`: internal guard on the per-polygon counts (not
-///   reachable with inputs already validated by the join).
+/// - `SpatialJoin`: ogni errore di [`spatial_join_nullable`], con
+///   `points` a sinistra e `polygons` a destra (`max_pairs` zero, o
+///   superato dalle coppie punto-poligono confermate; geometrie non valide
+///   o con coordinate non finite; validazione o predicato non conclusi).
+/// - `IndexOverflow`: difesa interna sui conteggi (non raggiungibile con
+///   ingressi gia' accettati dal join).
 pub fn count_points_in_polygons(
     polygons: &[Option<Geometry<f64>>],
     points: &[Option<Geometry<f64>>],
