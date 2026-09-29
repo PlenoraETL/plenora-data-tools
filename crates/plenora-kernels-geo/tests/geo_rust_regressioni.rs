@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use geo::{line_string, polygon, Area, Geometry, LineString, MultiLineString, Polygon};
 use geozero::{CoordDimensions, ToWkb};
-use plenora_core::arrow::array::BinaryArray;
+use plenora_core::arrow::array::{Array, BinaryArray};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{geometry_output_field, DEFAULT_GEOMETRY_COLUMN};
 use plenora_kernels_geo::rust_backend::arrow::{
@@ -204,6 +204,28 @@ fn blocker_seed_2147483647_caso_227_conserva_la_faccia() {
         assert!(other.cut_edges.is_empty());
         assert_eq!(other.dangles.len(), 3);
     }
+    let (schema, batch) = table(&wkb_lines(&lines));
+    let (out_schema, batches) = polygonize_batches(
+        &schema,
+        &[batch],
+        DEFAULT_GEOMETRY_COLUMN,
+        CRS,
+        PolygonizeParams::default(),
+        LIMIT,
+    )
+    .expect("polygonize Arrow");
+    let classes = batches[0]
+        .column(out_schema.index_of("__class").expect("classe"))
+        .as_any()
+        .downcast_ref::<plenora_core::arrow::array::StringArray>()
+        .expect("utf8");
+    let classes: Vec<&str> = (0..classes.len()).map(|row| classes.value(row)).collect();
+    let count = |class: &str| classes.iter().filter(|value| **value == class).count();
+    assert_eq!(
+        (count("polygon"), count("cut_edge"), count("dangle")),
+        (8, 0, 3)
+    );
+    assert_eq!(classes.len(), 11, "nessun anello invalido");
 }
 
 /// Il test del laboratorio `preserves_near_endpoint_face_on_anisotropic_linework`

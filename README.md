@@ -141,8 +141,14 @@ differenziali no. Le differenze note sono in
   darebbe diverso; area e copertura di `split` sono controllate a
   posteriori, le facce di `polygonize` e le riparazioni di `make_valid` solo
   dalla validazione OGC dell'output;
-- dove il vecchio `orient2d` sbagliava il segno, il comportamento verificato
-  nel laboratorio e quello di qui possono divergere;
+- dove il vecchio `orient2d` sbagliava il segno, o dove il laboratorio
+  decideva da un'area in `f64` che ora è esatta, il comportamento
+  verificato nel laboratorio e quello di qui possono divergere;
+- restano decisioni con tolleranza, non esatte (elenco in
+  `rust_backend/mod.rs`): punto medio dei lati nell'assemblaggio dei buchi,
+  tolleranze `1e-9` dei controlli a posteriori di `split` (una scheggia
+  sotto quella soglia li passa), tolleranze e snap dell'overlay di
+  `make_valid`;
 - il corpus applicativo reale (gate del laboratorio) non è mai stato eseguito:
   mancano WKB reali anonimizzati;
 - la validazione interna dei kernel usa `check_validation` di `geo`,
@@ -176,7 +182,8 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 
 ### Che cosa è provato qui
 
-- i 18 test unitari dei tre kernel, fra cui il caso che perdeva una faccia di
+- i 18 test unitari dei tre kernel (uno con l'attesa aggiornata ai segni
+  esatti, vedi sotto), fra cui il caso che perdeva una faccia di
   area 3,5 (`seed=2147483647`, indice 227): `tests/geo_rust_regressioni.rs` lo
   rigenera col generatore della campagna e lo confronta con l'esito GEOS
   registrato (8 poligoni, 0 cut edge, 3 dangle);
@@ -185,6 +192,10 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 - i test che a `190c493` coprivano le tre operazioni senza dipendere dal
   processo GEOS (`geos_backend`, parte GEOS di `geo_adversarial`, trasporto
   Arrow, analisi, catalogo), sulle stesse attese;
+- segni esatti: il quadrato unitario in `(2^30, 2^30)` e varianti (offset
+  grandi di segno diverso, aree minuscole, entrambi i versi, ogni vertice
+  iniziale) dall'API e dall'adapter Arrow (`tests/geo_rust_segni_esatti.rs`),
+  più i test d'unità di `rust_backend::exact`;
 - determinismo: ogni operazione due volte byte per byte; input permutato o
   invertito byte per byte dove il contratto promette la forma canonica, per
   classe e area dove non la promette.
@@ -228,12 +239,28 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
 - **Limiti che GEOS non aveva.** `make_valid` su input invalido oltre 10.000
   segmenti fallisce con `WorkLimit` (l'input valido passa invariato a ogni
   dimensione); i limiti di output di `polygonize` e `split` valgono anche
-  sulle facce intermedie, comprese quelle fuori dalla sorgente di `split`;
+  sulle facce intermedie; in `split` il budget di parti e coordinate conta
+  tutto l'output del polygonize interno, cioè anche le facce fuori dalla
+  sorgente e i residui scartati (dangle e cut edge di una lama che sporge),
+  non solo le parti tenute;
   in `split` il limite di coordinate vale per ciascun input e per la somma;
   un limite a `u64::MAX` è rifiutato (`UnboundedLimits`).
-- **Errori nuovi.** Noding non convergente (`Unsupported`), memoria non
-  prenotabile (`ResourceLimit`), panico di `geo`/`i_overlay` dentro il kernel
-  (`Internal`, solo la forma del payload).
+- **Errori nuovi.** Noding non convergente (`Unsupported`), segno o
+  confronto d'area non decidibile su coordinate fuori dal dominio
+  dell'aritmetica esatta, cioè con modulo fuori da `[2^-450, 2^450]`
+  (`NumericRange`, `Unsupported`), memoria non prenotabile (`ResourceLimit`),
+  panico di `geo`/`i_overlay` dentro il kernel (`Internal`, solo la forma
+  del payload).
+- **Segni esatti, anche dove GEOS non lo è.** Orientamento delle facce,
+  annidamento per area, lato del punto nello split e area positiva del
+  passthrough di `make_valid` sono decisi in modo esatto. Una faccia
+  degenere solo per la precisione di GEOS resta un poligono: nel caso del
+  laboratorio `iterated_noding_matches_geos_on_near_coincident_crossings` un
+  triangolo di area circa 3,45e-31, che GEOS dà come anello invalido, esce
+  come nono poligono (area totale e dangle invariati).
+- **Tipi d'ingresso di `make_valid_geometry`.** `Line` diventa
+  `LineString`, `Rect` e `Triangle` diventano il `Polygon` di `to_polygon`,
+  come faceva geozero a `190c493`.
 - **Validità.** «Valido» è la validazione OGC del workspace (quella di `geo`
   più il controllo degli anelli con punta), non `IsValid` di GEOS: dove le
   due divergono, `make_valid` può riparare un input che GEOS restituiva
