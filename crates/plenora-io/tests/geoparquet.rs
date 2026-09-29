@@ -828,3 +828,132 @@ fn la_geometria_resta_in_ipc_con_il_suo_contratto() {
     );
     let _: &dyn Array = tabella.column(0).as_ref();
 }
+
+/// Andata e ritorno di tabelle nella forma canonica del contratto (quella
+/// che il runner emette): ogni combinazione di dimensionalita', dati e
+/// dichiarazione dei tipi si rilegge, con la stessa dimensionalita' e la
+/// stessa dichiarazione quando c'era.
+#[test]
+#[allow(clippy::too_many_lines)] // La matrice dei casi in un posto solo.
+fn forma_canonica_andata_e_ritorno() {
+    use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
+    use plenora_core::contract::{
+        ContractProperty, GeometryTypesProperty, PropertyConfidence, PropertyScope,
+        TypesDeclaration,
+    };
+
+    fn punto_z(x: f64, y: f64) -> Vec<u8> {
+        let mut v = vec![1_u8];
+        v.extend_from_slice(&1001_u32.to_le_bytes());
+        for c in [x, y, 5.0] {
+            v.extend_from_slice(&c.to_le_bytes());
+        }
+        v
+    }
+
+    let dichiarazioni: Vec<Option<GeometryTypesProperty>> = vec![
+        None,
+        Some(GeometryTypesProperty::new(TypesDeclaration::Unresolved, vec![]).unwrap()),
+        Some(
+            GeometryTypesProperty::new(
+                TypesDeclaration::Mixed,
+                vec![GeometryType::Point, GeometryType::Polygon],
+            )
+            .unwrap(),
+        ),
+        Some(
+            GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Point]).unwrap(),
+        ),
+    ];
+    let mut casi = 0;
+    for dimensioni in [
+        GeometryDimensions::Unknown,
+        GeometryDimensions::Xy,
+        GeometryDimensions::Xyz,
+    ] {
+        let cella = |x: f64| {
+            if dimensioni == GeometryDimensions::Xyz {
+                punto_z(x, 5_000_000.0)
+            } else {
+                punto(x, 5_000_000.0)
+            }
+        };
+        let dati: Vec<Vec<Option<Vec<u8>>>> = vec![
+            vec![Some(cella(500_000.0)), None, Some(cella(500_001.0))],
+            vec![],
+            vec![None, None],
+        ];
+        for celle in dati {
+            for dichiarazione in &dichiarazioni {
+                let campo =
+                    geometry_output_field_with_dimensions("geometry", "EPSG:32632", dimensioni)
+                        .unwrap();
+                let tabella = tabella_geo(campo, celle.clone());
+                let mut c = contratto(&tabella);
+                if let Some(tipi) = dichiarazione {
+                    c.geometries[0].types = ContractProperty::new(
+                        PropertyConfidence::Declared(tipi.clone()),
+                        PropertyScope::Schema,
+                    );
+                }
+                let schema = arrow_schema_from_contract(&c).unwrap();
+                let tabella = tabella.with_schema(schema).unwrap();
+                let dir = cartella();
+                let percorso = dir.path().join("c.parquet");
+                scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default())
+                    .unwrap_or_else(|e| panic!("{dimensioni:?} {dichiarazione:?}: {e}"));
+                let letta = leggi(&percorso).unwrap_or_else(|e| {
+                    panic!(
+                        "rilettura {dimensioni:?} {dichiarazione:?} {} celle: {e}",
+                        celle.len()
+                    )
+                });
+                assert_eq!(letta.columns(), tabella.columns());
+                let dopo = contratto(&letta);
+                let g = &dopo.geometries[0];
+                assert_eq!(g.dimensions, dimensioni, "{dichiarazione:?}");
+                if let Some(tipi) = dichiarazione {
+                    assert_eq!(g.types.value(), Some(tipi), "{dimensioni:?}");
+                } else {
+                    // Tipi dai dati solo con dimensionalita' nota e geometrie
+                    // presenti; altrimenti restano non dichiarati.
+                    let attesi = dimensioni != GeometryDimensions::Unknown
+                        && celle.iter().any(Option::is_some);
+                    assert_eq!(g.types.value().is_some(), attesi, "{dimensioni:?}");
+                }
+                // Seconda andata e ritorno: stesso schema.
+                let percorso2 = dir.path().join("c2.parquet");
+                scrivi_tabella(&letta, &percorso2, &OpzioniScrittura::default()).unwrap();
+                assert_eq!(leggi(&percorso2).unwrap(), letta);
+                casi += 1;
+            }
+        }
+    }
+    assert_eq!(casi, 36);
+}
+
+/// Senza blocco canonico, zero geometrie e tipi non dichiarati:
+/// `geometry_types` vuoto, dimensionalita' riletta `unknown` (limite
+/// dichiarato: `GeoParquet` non la rappresenta senza tipi).
+#[test]
+fn senza_geometrie_la_dimensionalita_non_si_rappresenta() {
+    let tabella = tabella_geo(
+        geometry_output_field("geometry", "EPSG:32632").unwrap(),
+        vec![None],
+    );
+    let dir = cartella();
+    let percorso = dir.path().join("vuota.parquet");
+    scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default()).unwrap();
+    assert_eq!(
+        geo_del_file(&percorso)["columns"]["geometry"]["geometry_types"],
+        json!([])
+    );
+    assert!(geo_del_file(&percorso)["columns"]["geometry"]
+        .get("bbox")
+        .is_none());
+    let letta = leggi(&percorso).unwrap();
+    assert_eq!(
+        contratto(&letta).geometries[0].dimensions,
+        GeometryDimensions::Unknown
+    );
+}

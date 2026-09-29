@@ -61,15 +61,17 @@ fn ricomponi(schema: &SchemaRef, blocchi: Vec<RecordBatch>) -> Result<RecordBatc
 pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
     let mut file = File::open(percorso)?;
     let lunghezza = file.metadata()?.len();
-    let mut inizio = [0_u8; 6];
-    let letti = leggi_fino_a(&mut file, &mut inizio)?;
+    let mut inizio = Vec::with_capacity(MAGIA_FILE.len());
+    Read::by_ref(&mut file)
+        .take(MAGIA_FILE.len() as u64)
+        .read_to_end(&mut inizio)?;
     file.seek(SeekFrom::Start(0))?;
-    if letti >= 4 && &inizio[..4] == MAGIA_FEATHER_V1 {
+    if inizio.starts_with(MAGIA_FEATHER_V1) {
         return Err(PlenoraError::Unsupported(
             "Feather v1 non supportato: solo Feather v2 (Arrow IPC)".to_owned(),
         ));
     }
-    let (schema, blocchi) = if letti == 6 && &inizio == MAGIA_FILE {
+    let (schema, blocchi) = if inizio == MAGIA_FILE {
         let lettore = FileReader::try_new(BufReader::new(file), None)?;
         let quanti = lettore.num_batches();
         let fattore = if quanti > 1 { 2 } else { 1 };
@@ -101,18 +103,6 @@ pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
         return Err(oltre_il_budget(vivi, residuo));
     }
     Ok(tabella)
-}
-
-fn leggi_fino_a(file: &mut File, destinazione: &mut [u8]) -> Result<usize> {
-    let mut letti = 0;
-    while letti < destinazione.len() {
-        let n = file.read(&mut destinazione[letti..])?;
-        if n == 0 {
-            break;
-        }
-        letti += n;
-    }
-    Ok(letti)
 }
 
 /// Righe per blocco: circa [`BYTE_PER_BLOCCO`] byte di dati ciascuno.
@@ -154,13 +144,28 @@ pub fn scrivi(tabella: &RecordBatch, uscita: impl Write) -> Result<()> {
 }
 
 /// Transitorio previsto della scrittura: il doppio del blocco più grande
-/// (il vettore di codifica cresce per raddoppi) più i valori dei dizionari,
-/// che il primo blocco codifica interi, più un margine.
+/// (il vettore di codifica cresce per raddoppi), misurato sui blocchi veri
+/// con i valori dei dizionari interi, più un margine.
 #[must_use]
 pub fn transitorio_scrittura(tabella: &RecordBatch) -> u64 {
-    let blocco = BYTE_PER_BLOCCO.min(stima_byte(std::slice::from_ref(tabella)));
-    blocco
+    crate::memoria::fetta_massima(tabella, righe_per_blocco(tabella))
         .saturating_mul(2)
-        .saturating_add(crate::memoria::byte_dizionari(tabella).saturating_mul(2))
         .saturating_add(crate::memoria::MARGINE)
+}
+
+/// Rilegge il footer di un file appena scritto: lo schema deve essere quello
+/// scritto.
+///
+/// # Errors
+///
+/// `Schema` se lo schema del file è diverso; `Io`, `DataMapping` dalla
+/// lettura del footer.
+pub fn verifica_schema(percorso: &Path, scritto: &SchemaRef) -> Result<()> {
+    let lettore = FileReader::try_new(BufReader::new(File::open(percorso)?), None)?;
+    if lettore.schema() != *scritto {
+        return Err(PlenoraError::Schema(
+            "schema del file IPC scritto diverso da quello della tabella".to_owned(),
+        ));
+    }
+    Ok(())
 }

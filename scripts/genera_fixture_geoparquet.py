@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genera le fixture GeoParquet di `plenora-io` con uno scrittore esterno.
+"""Genera le fixture Parquet e GeoParquet di `plenora-io` con uno scrittore esterno.
 
 I file li scrive pyarrow (Parquet C++), non `parquet-rs`: provano che il
 lettore di `plenora-io` legge GeoParquet prodotto da un'altra
@@ -110,6 +110,15 @@ def main() -> int:
             "columns": {"geom": {"encoding": "WKB", "geometry_types": ["Point Z"]}},
         },
         compression="zstd",
+    )
+
+    # Timestamp INT96 (Impala/Spark), senza GeoParquet: il lettore lo rifiuta.
+    int96 = pa.table({"quando": pa.array([0, 1_700_000_000_000_000_000], pa.timestamp("ns"))})
+    pq.write_table(
+        int96,
+        DESTINAZIONE / "pyarrow_int96.parquet",
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
     )
     return 0
 

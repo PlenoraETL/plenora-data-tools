@@ -74,7 +74,7 @@ pub fn scrivi_tabella(
             percorso,
             opzioni.sovrascrivi,
             |uscita| ipc::scrivi(tabella, uscita),
-            |_| Ok(()),
+            |temporaneo| ipc::verifica_schema(temporaneo, &tabella.schema()),
         ),
         Formato::Parquet => {
             let scritto = RefCell::new(None);

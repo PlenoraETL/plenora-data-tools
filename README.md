@@ -898,14 +898,22 @@ mappe, `Null`, tabelle vuote): lo schema Arrow incorporato (`ARROW:schema`)
 deve coincidere campo per campo con quello che `parquet` applica, altrimenti
 la lettura si rifiuta (`Schema`), perché `parquet` ricadrebbe in silenzio sul
 tipo Parquet. Senza schema incorporato (file di scrittori non Arrow) vale il
-tipo che `parquet` deduce.
+tipo che `parquet` deduce. Si rifiutano anche, prima di decodificare: le
+colonne `INT96` (timestamp legacy di Impala e Spark, che `parquet` converte
+con aritmetica che avvolge), una chiave ripetuta nei metadati chiave-valore
+del file (`parquet` terrebbe l'ultima) e una chiave del file che contraddice
+i metadati dello schema incorporato. In scrittura ogni decimale deve stare
+nella precisione del suo tipo, a ogni profondità: `parquet` restringe il
+valore alla larghezza fisica e un decimale fuori precisione tornerebbe un
+altro numero.
 
 **Scrittura deterministica.** `created_by` costante (`parquet-rs version
 59.2.0`), pagine formato 1.0, row group di al più 1 048 576 righe,
 statistiche di pagina, niente bloom filter, metadati JSON con chiavi in
 ordine: la stessa tabella dà gli stessi byte, in Parquet e in Arrow IPC
-(provato). Dopo ogni scrittura Parquet si rilegge il footer e se ne verifica
-lo schema incorporato.
+(provato). Dopo ogni scrittura si rilegge il footer: per Parquet lo schema
+incorporato deve essere quello scritto e applicarsi senza cambiare, per
+Arrow IPC lo schema del file deve essere quello della tabella.
 
 ### GeoParquet
 
@@ -922,10 +930,13 @@ In lettura il metadato di file `geo` è l'autorità:
 | `epoch` | `Unsupported` (il contratto non ha epoche) |
 | `orientation`, `bbox`, `covering` | validati nella forma e lasciati cadere |
 | altre chiavi di colonna | `Unsupported` |
+| altre chiavi di primo livello | ignorate, come chiede la specifica |
 
 Ogni colonna diventa il campo che il contratto accetta: `Binary`
 (`LargeBinary` si converte), `ARROW:extension:name = geoarrow.wkb`,
-metadato di campo `geo` con `crs`, `dimensions`, `encoding`; poi
+metadato di campo `geo` con `crs`, `encoding` e `dimensions` (solo se
+`geometry_types` la decide: con un elenco vuoto resta quella delle chiavi
+canoniche del campo, o `unknown`); poi
 `contract_from_arrow_schema` e `arrow_schema_from_contract` aggiungono il
 blocco canonico `plenora.geometry.*` e `plenora.contract.version`, e
 rifiutano chiavi canoniche già presenti in conflitto. Il metadato `geo` di
@@ -944,10 +955,18 @@ geometria attiva, `encoding` `WKB`, `crs` il PROJJSON **completo** del CRS
 integrato (`crates/plenora-io/data/projjson_integrati.json`, generato con
 PROJ 9.5.1 da `scripts/genera_projjson_integrati.py` con la terna di
 `genera_crs_integrati.py`; un test verifica che copra esattamente i CRS
-integrati) o `null` per un CRS mancante, `geometry_types` i tipi dichiarati
-dal contratto (verificati sui dati) o, senza dichiarazione, quelli trovati
-nei dati, `bbox` il riquadro XY di tutte le coordinate quando le geometrie
-sono 2D. Il `geo` di campo non entra nello schema incorporato: lo porta il
+integrati) o `null` per un CRS mancante, `bbox` il riquadro XY di tutte le
+coordinate quando le geometrie sono 2D. `geometry_types` porta insieme tipi
+e dimensionalità, e si scrive solo ciò che il contratto decide, così la
+rilettura ridà lo stesso contratto:
+
+| contratto | `geometry_types` |
+| --- | --- |
+| dimensionalità `xy`/`xyz`, tipi dichiarati con elenco | l'elenco dichiarato (anche se i dati ne usano una parte), con ` Z` per `xyz` |
+| dimensionalità `xy`/`xyz`, tipi non dichiarati | i tipi trovati nei dati (la rilettura li dichiara `exact`) |
+| dimensionalità `unknown`, o dichiarazione senza elenco (`unresolved`) | `[]` |
+
+Tipi e dimensionalità dei dati si verificano comunque contro il contratto. Il `geo` di campo non entra nello schema incorporato: lo porta il
 metadato di file. Si rifiutano: EWKB, coordinate M, curve, un ordine degli
 assi dichiarato diverso da `lon_lat`/`easting_northing`, un CRS dichiarato
 ma non risolto, geometrie di un tipo o di una dimensionalità diversi dal
@@ -957,12 +976,13 @@ La camminata delle celle (`plenora_io::wkb`) è una validazione strutturale:
 WKB ISO dei sette tipi, 2D o 3D, byte order per geometria, conteggi limitati
 dai byte rimasti, figli coerenti con la multi-geometria, profondità 64,
 nessun byte in eccesso, coordinate finite (il punto vuoto, tutto NaN, è
-ammesso e resta fuori dal riquadro). Un proptest la confronta con la
+ammesso e resta fuori dal riquadro). Non verifica la chiusura degli anelli e
+ammette anelli vuoti: la validità geometrica resta ai kernel. Un proptest la confronta con la
 codifica dei kernel e con le coordinate di `geo`.
 
-Fixture: `crates/plenora-io/tests/dati/` contiene due file scritti da
-pyarrow (Parquet C++) nella forma di GeoPandas, con il PROJJSON di PROJ
-(`scripts/genera_fixture_geoparquet.py`).
+Fixture: `crates/plenora-io/tests/dati/` contiene file scritti da pyarrow
+(Parquet C++): due GeoParquet nella forma di GeoPandas, con il PROJJSON di
+PROJ, e uno con timestamp `INT96` (`scripts/genera_fixture_geoparquet.py`).
 
 ### Scrittura atomica
 
@@ -992,8 +1012,8 @@ budget residuo, e dopo la lettura i byte vivi esatti devono starci.
 | --- | --- | --- |
 | lettura Arrow IPC | dimensione del file, il doppio se i blocchi sono più di uno (ricomposizione) | picco 1,0 volte la tabella con un blocco, 2,0 con più blocchi |
 | lettura Parquet | 5 volte la stima dal footer, più 1 MiB | picco fino a 2,8 volte la tabella da 20 000 righe in su (liste, interi e float con null; 4 volte a 1 000 righe, per i buffer fissi), sempre sotto il 75% della previsione |
-| scrittura Arrow IPC | due volte il blocco (≤ 8 MiB) e i dizionari, più 1 MiB | picco sotto 3 MiB |
-| scrittura Parquet | 4 volte i byte del row group più grande, più 8 MiB | picco fino a 45 MiB (liste, 5 milioni di righe) |
+| scrittura Arrow IPC | due volte il blocco più grande (circa 8 MiB, di più con righe molto più grandi della media), misurato sui blocchi veri con i dizionari interi, più 1 MiB | picco sotto 3 MiB |
+| scrittura Parquet | 4 volte i byte del row group più grande, misurato sulle fette vere, più 8 MiB | picco fino a 45 MiB (liste, 5 milioni di righe) |
 
 La **stima dal footer** Parquet è il maggiore fra i byte non compressi dei
 column chunk e i valori per la larghezza fisica di ogni foglia, più i byte
@@ -1032,7 +1052,25 @@ allocatore che conta, fuori dal workspace (niente `unsafe` qui).
 - **Metadati geometrici normalizzati**: dopo GeoParquet il campo porta il
   `geo` di campo e il blocco canonico nella forma del contratto, non i byte
   di metadati che aveva prima della scrittura; il contratto si conserva
-  (provato), i byte dei metadati no.
+  (provato su ogni combinazione di dimensionalità, dati e dichiarazione dei
+  tipi), i byte dei metadati no. Due cambi voluti: con dimensionalità nota
+  e tipi non dichiarati la rilettura dichiara `exact` i tipi dei dati; senza
+  blocco canonico e senza geometrie (zero righe o tutte nulle) la
+  dimensionalità `xy`/`xyz` non si rappresenta (`geometry_types` vuoto) e si
+  rilegge `unknown`.
+- **Interi stretti da file malformati.**
+  *Regola*: `parquet` legge `Int8`, `Int16`, `UInt8`, `UInt16` da colonne
+  fisiche `INT32` con un cast che tronca.
+  *Ambito*: `parquet_io::leggi` su file di altri scrittori.
+  *Hazard*: un file malformato con un valore `INT32` fuori dal dominio del
+  tipo logico (o dello schema incorporato) torna un altro valore, senza
+  errore; gli scrittori conformi (e `plenora-io`) non producono questi file.
+  *Rientro*: rilettura di quelle colonne come `Int32` con un cast
+  verificato.
+- **Permessi dei file su Unix**: `tempfile` crea il temporaneo con modo
+  `0600` e la rinomina lo conserva, quindi i file scritti sono leggibili solo
+  dal proprietario, anche quando sostituiscono un file con altri permessi.
+  Su Windows valgono le ACL ereditate dalla directory.
 - **Più output, non una transazione**: ogni file è atomico, l'insieme degli
   output no; un errore sul secondo lascia scritto il primo. La directory non
   si sincronizza dopo la rinomina (su un crash del sistema la rinomina può

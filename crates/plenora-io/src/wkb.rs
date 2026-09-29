@@ -43,22 +43,30 @@ pub struct Sommario {
 }
 
 impl Sommario {
+    /// Confronti stretti, non `f64::min`/`max`: con `0.0` e `-0.0` resta il
+    /// primo incontrato, in ogni piattaforma.
     fn aggiungi_punto(&mut self, x: f64, y: f64) {
-        let nuovo = self.riquadro.map_or(
-            Riquadro {
+        let Some(r) = self.riquadro.as_mut() else {
+            self.riquadro = Some(Riquadro {
                 xmin: x,
                 ymin: y,
                 xmax: x,
                 ymax: y,
-            },
-            |r| Riquadro {
-                xmin: r.xmin.min(x),
-                ymin: r.ymin.min(y),
-                xmax: r.xmax.max(x),
-                ymax: r.ymax.max(y),
-            },
-        );
-        self.riquadro = Some(nuovo);
+            });
+            return;
+        };
+        if x < r.xmin {
+            r.xmin = x;
+        }
+        if y < r.ymin {
+            r.ymin = y;
+        }
+        if x > r.xmax {
+            r.xmax = x;
+        }
+        if y > r.ymax {
+            r.ymax = y;
+        }
     }
 }
 
@@ -398,6 +406,47 @@ mod tests {
         multi.extend_from_slice(&figlio);
         assert!(scansiona_cella(&multi, &mut s).is_err());
         assert!(s.tipi.is_empty());
+    }
+
+    #[test]
+    fn collezione_z_con_byte_order_misti() {
+        // GeometryCollection Z big endian con un Point Z little endian e una
+        // LineString Z big endian.
+        let mut cella = vec![0_u8];
+        cella.extend_from_slice(&1007_u32.to_be_bytes());
+        cella.extend_from_slice(&2_u32.to_be_bytes());
+        cella.push(1);
+        cella.extend_from_slice(&1001_u32.to_le_bytes());
+        for c in [1.0_f64, -2.0, 3.0] {
+            cella.extend_from_slice(&c.to_le_bytes());
+        }
+        cella.push(0);
+        cella.extend_from_slice(&1002_u32.to_be_bytes());
+        cella.extend_from_slice(&2_u32.to_be_bytes());
+        for c in [5.0_f64, 6.0, 0.0, -7.0, 8.0, 0.0] {
+            cella.extend_from_slice(&c.to_be_bytes());
+        }
+        let mut s = Sommario::default();
+        scansiona_cella(&cella, &mut s).expect("collezione");
+        assert_eq!(
+            s.tipi.into_iter().collect::<Vec<_>>(),
+            vec![(GeometryType::GeometryCollection, true)]
+        );
+        assert_eq!(
+            s.riquadro,
+            Some(Riquadro {
+                xmin: -7.0,
+                ymin: -2.0,
+                xmax: 5.0,
+                ymax: 8.0
+            })
+        );
+        // Un figlio 2D in una collezione Z si rifiuta.
+        let mut incoerente = vec![1_u8];
+        incoerente.extend_from_slice(&1007_u32.to_le_bytes());
+        incoerente.extend_from_slice(&1_u32.to_le_bytes());
+        incoerente.extend_from_slice(&punto(0.0, 0.0));
+        assert!(scansiona_cella(&incoerente, &mut Sommario::default()).is_err());
     }
 
     #[test]

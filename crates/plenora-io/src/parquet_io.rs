@@ -19,6 +19,7 @@
 //! rilegge il footer del file e se ne verifica lo schema incorporato
 //! ([`verifica_schema`]).
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -33,7 +34,12 @@ use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::{
     EnabledStatistics, WriterProperties, WriterVersion, DEFAULT_CREATED_BY,
 };
-use plenora_core::arrow::array::RecordBatch;
+use plenora_core::arrow::array::cast::AsArray;
+use plenora_core::arrow::array::types::{
+    Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+};
+use plenora_core::arrow::array::{make_array, Array, ArrayRef, RecordBatch};
+use plenora_core::arrow::schema::DataType;
 use plenora_core::arrow::schema::{Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::contract::arrow_metadata::GEO_METADATA_KEY;
@@ -69,10 +75,20 @@ fn da_parquet_valore(errore: ParquetError) -> PlenoraError {
     da_parquet(&errore)
 }
 
-/// I codec di tutti i column chunk devono essere fra quelli compilati.
-fn verifica_codec(metadati: &ParquetMetaData) -> Result<()> {
+/// I codec di tutti i column chunk devono essere fra quelli compilati, e
+/// nessuna colonna è `INT96`: `parquet` la converte in nanosecondi con
+/// aritmetica che avvolge, e le date oltre ±292 anni dal 1970 diventano
+/// altre date senza errore.
+fn verifica_colonne(metadati: &ParquetMetaData) -> Result<()> {
     for gruppo in metadati.row_groups() {
         for chunk in gruppo.columns() {
+            if chunk.column_descr().physical_type() == TipoFisico::INT96 {
+                return Err(PlenoraError::Unsupported(format!(
+                    "colonna `{}` INT96 (timestamp legacy): la conversione di parquet-rs \
+                     avvolge in silenzio le date fuori da ±292 anni",
+                    chunk.column_descr().path()
+                )));
+            }
             let codec = chunk.compression();
             if !matches!(
                 codec,
@@ -85,6 +101,83 @@ fn verifica_codec(metadati: &ParquetMetaData) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Le chiavi dei metadati chiave-valore sono uniche, e non contraddicono i
+/// metadati dello schema incorporato: `parquet` terrebbe l'ultima di due
+/// chiavi uguali, e una chiave del file prevale in silenzio su quella dello
+/// schema.
+fn verifica_chiavi(metadati: &ParquetMetaData, incorporato: Option<&Schema>) -> Result<()> {
+    let mut viste: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+    for voce in metadati
+        .file_metadata()
+        .key_value_metadata()
+        .map_or(&[][..], Vec::as_slice)
+    {
+        if viste
+            .insert(voce.key.as_str(), voce.value.as_deref())
+            .is_some()
+        {
+            return Err(PlenoraError::DataMapping(format!(
+                "metadati del file con la chiave `{}` ripetuta: documento ambiguo",
+                voce.key
+            )));
+        }
+    }
+    if let Some(incorporato) = incorporato {
+        for (chiave, valore) in incorporato.metadata() {
+            if let Some(nel_file) = viste.get(chiave.as_str()) {
+                if *nel_file != Some(valore.as_str()) {
+                    return Err(PlenoraError::DataMapping(format!(
+                        "metadato `{chiave}` diverso fra il file e lo schema Arrow incorporato"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ogni decimale sta nella precisione dichiarata del suo tipo: `parquet`
+/// scrive i decimali con precisione piccola restringendo il valore
+/// (`as i32`/`as i64`, byte troncati), e un valore fuori precisione
+/// tornerebbe un altro numero senza errore. Arrow non impone la precisione
+/// sui valori, quindi si verifica qui, a ogni profondità (figli di liste e
+/// strutture, valori dei dizionari).
+fn verifica_decimali(nome: &str, array: &ArrayRef) -> Result<()> {
+    let valida = match *array.data_type() {
+        DataType::Decimal32(precisione, _) => array
+            .as_primitive_opt::<Decimal32Type>()
+            .map(|a| a.validate_decimal_precision(precisione).is_ok()),
+        DataType::Decimal64(precisione, _) => array
+            .as_primitive_opt::<Decimal64Type>()
+            .map(|a| a.validate_decimal_precision(precisione).is_ok()),
+        DataType::Decimal128(precisione, _) => array
+            .as_primitive_opt::<Decimal128Type>()
+            .map(|a| a.validate_decimal_precision(precisione).is_ok()),
+        DataType::Decimal256(precisione, _) => array
+            .as_primitive_opt::<Decimal256Type>()
+            .map(|a| a.validate_decimal_precision(precisione).is_ok()),
+        _ => Some(true),
+    };
+    match valida {
+        Some(true) => {}
+        Some(false) => {
+            return Err(PlenoraError::DataMapping(format!(
+                "colonna `{nome}`: decimale oltre la precisione del suo tipo"
+            )))
+        }
+        None => {
+            return Err(PlenoraError::Internal(
+                "array decimale con un tipo incoerente".to_owned(),
+            ))
+        }
+    }
+    array
+        .to_data()
+        .child_data()
+        .iter()
+        .try_for_each(|figlio| verifica_decimali(nome, &make_array(figlio.clone())))
 }
 
 /// Lo schema Arrow incorporato nei metadati chiave-valore, se c'è.
@@ -209,13 +302,15 @@ pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
     let file = File::open(percorso)?;
     let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).map_err(da_parquet_valore)?;
     let metadati = Arc::clone(costruttore.metadata());
-    verifica_codec(&metadati)?;
+    verifica_colonne(&metadati)?;
     let previsto = picco_previsto(&metadati);
     if previsto > residuo {
         return Err(oltre_il_budget(previsto, residuo));
     }
     let schema: SchemaRef = Arc::clone(costruttore.schema());
-    verifica_applicato(&schema, schema_incorporato(&metadati)?.as_ref())?;
+    let incorporato = schema_incorporato(&metadati)?;
+    verifica_chiavi(&metadati, incorporato.as_ref())?;
+    verifica_applicato(&schema, incorporato.as_ref())?;
     let righe = usize::try_from(metadati.file_metadata().num_rows())
         .map_err(|_| PlenoraError::DataMapping("numero di righe non valido".to_owned()))?;
     let lettore = costruttore
@@ -240,7 +335,7 @@ pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
         }
     };
     if tabella.num_rows() != righe {
-        return Err(PlenoraError::Internal(
+        return Err(PlenoraError::DataMapping(
             "righe lette diverse da quelle del footer".to_owned(),
         ));
     }
@@ -295,6 +390,9 @@ fn da_scrivere(
              perso): usare Arrow IPC"
                 .to_owned(),
         ));
+    }
+    for (campo, colonna) in tabella.schema().fields().iter().zip(tabella.columns()) {
+        verifica_decimali(campo.name(), colonna)?;
     }
     match geoparquet::prepara(tabella)? {
         Some(preparata) => {
@@ -355,11 +453,7 @@ pub fn verifica_schema(percorso: &Path, scritto: &Schema) -> Result<()> {
 /// «File», per le misure).
 #[must_use]
 pub fn transitorio_scrittura(tabella: &RecordBatch) -> u64 {
-    let righe = tabella.num_rows().max(1);
-    let per_riga = stima_byte(std::slice::from_ref(tabella)) / u64::try_from(righe).unwrap_or(1);
-    let gruppo =
-        per_riga.saturating_mul(u64::try_from(RIGHE_PER_ROW_GROUP.min(righe)).unwrap_or(u64::MAX));
-    gruppo
+    crate::memoria::fetta_massima(tabella, RIGHE_PER_ROW_GROUP)
         .saturating_mul(FATTORE_SCRITTURA)
         .saturating_add(MARGINE_SCRITTURA)
 }

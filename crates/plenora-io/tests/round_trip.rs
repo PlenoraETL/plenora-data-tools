@@ -343,3 +343,120 @@ fn tipi_rari_identici_o_rifiutati() {
     // entra o esce da qui e' una modifica da dichiarare.
     assert_eq!(rifiutati, ["intervallo_mdn r.parquet", "run_end r.parquet"]);
 }
+
+/// `parquet` restringe i decimali alla precisione del tipo (`as i32`,
+/// byte troncati): un valore fuori precisione si rifiuta prima di scrivere,
+/// anche annidato. Arrow IPC lo conserva com'e'.
+#[test]
+fn decimali_fuori_precisione_rifiutati_in_parquet() {
+    use plenora_core::arrow::array::builder::{Decimal128Builder, ListBuilder};
+    use plenora_core::arrow::array::{ArrayRef, Decimal128Array};
+
+    let piatta: ArrayRef = Arc::new(
+        Decimal128Array::from(vec![Some(1), None, Some(10_000_000_000)])
+            .with_precision_and_scale(5, 0)
+            .unwrap(),
+    );
+    let mut lista = ListBuilder::new(
+        Decimal128Builder::new()
+            .with_precision_and_scale(4, 2)
+            .unwrap(),
+    );
+    lista.values().append_value(12);
+    lista.values().append_value(123_456);
+    lista.append(true);
+    let annidata: ArrayRef = Arc::new(lista.finish());
+    for colonna in [piatta, annidata] {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            colonna.data_type().clone(),
+            true,
+        )]));
+        let tabella = RecordBatch::try_new(schema, vec![colonna]).unwrap();
+        let dir = cartella();
+        let percorso = dir.path().join("d.parquet");
+        let errore = scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default())
+            .expect_err("fuori precisione");
+        assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+        assert!(
+            !errore.to_string().contains("10000000000"),
+            "errore con il valore"
+        );
+        assert!(!percorso.exists());
+        let ipc = andata_e_ritorno(&tabella, "d.arrow", CompressioneParquet::Nessuna);
+        identiche(&tabella, &ipc);
+    }
+}
+
+/// `INT96` si converte con aritmetica che avvolge: si rifiuta.
+#[test]
+fn int96_rifiutato() {
+    let percorso = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("dati")
+        .join("pyarrow_int96.parquet");
+    let errore = leggi_tabella(&percorso, None, u64::MAX).expect_err("INT96");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert!(errore.to_string().contains("INT96"), "{errore}");
+}
+
+/// Chiavi ripetute nei metadati del file, o in conflitto con lo schema
+/// incorporato: `parquet` ne terrebbe una in silenzio.
+#[test]
+fn metadati_ambigui_rifiutati() {
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::metadata::KeyValue;
+    use parquet::file::properties::WriterProperties;
+
+    let scrivi = |voci: Vec<KeyValue>, metadati_schema: &[(&str, &str)]| {
+        let dir = cartella();
+        let percorso = dir.path().join("m.parquet");
+        let tabella = comune::ordini();
+        let schema = Arc::new(Schema::new_with_metadata(
+            tabella.schema().fields().clone(),
+            metadati_schema
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        ));
+        let tabella = tabella.with_schema(schema.clone()).unwrap();
+        let proprieta = WriterProperties::builder()
+            .set_key_value_metadata(Some(voci))
+            .build();
+        let mut w = ArrowWriter::try_new(File::create(&percorso).unwrap(), schema, Some(proprieta))
+            .unwrap();
+        w.write(&tabella).unwrap();
+        w.close().unwrap();
+        leggi_tabella(&percorso, None, u64::MAX)
+    };
+    let voce = |k: &str, v: &str| KeyValue::new(k.to_owned(), v.to_owned());
+    let errore = scrivi(vec![voce("x", "1"), voce("x", "2")], &[]).expect_err("ripetuta");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    let errore = scrivi(vec![voce("x", "1")], &[("x", "2")]).expect_err("conflitto");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    // Stesso valore nei due posti (come scrive pyarrow): ammesso.
+    let letta = scrivi(vec![voce("x", "1")], &[("x", "1")]).expect("coerente");
+    assert_eq!(
+        letta.schema().metadata().get("x").map(String::as_str),
+        Some("1")
+    );
+}
+
+/// Il transitorio di scrittura si misura sui blocchi veri: una riga molto
+/// piu' grande della media non sfugge.
+#[test]
+fn transitorio_con_righe_sbilanciate() {
+    use plenora_core::arrow::array::StringArray;
+
+    let grande = "x".repeat(20 * 1024 * 1024);
+    let mut valori: Vec<&str> = vec!["a"; 100_000];
+    valori.push(&grande);
+    let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+    let tabella = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(valori))]).unwrap();
+    let byte = u64::try_from(grande.len()).unwrap();
+    assert!(plenora_io::ipc::transitorio_scrittura(&tabella) >= 2 * byte);
+    assert!(
+        plenora_io::parquet_io::transitorio_scrittura(&tabella)
+            >= plenora_io::parquet_io::FATTORE_SCRITTURA * byte
+    );
+}

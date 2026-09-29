@@ -42,8 +42,8 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, LargeBinaryArray, RecordBatch};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::arrow_metadata::{
-    canonical_geometry_axis_order, field_declares_wkb_geometry, geo_metadata_json_with_encoding,
-    GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
+    canonical_geometry_axis_order, field_declares_wkb_geometry, GEOARROW_EXTENSION_KEY,
+    GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
 };
 use plenora_core::contract::arrow_schema::{
     arrow_schema_from_contract, contract_from_arrow_schema,
@@ -266,24 +266,27 @@ fn sommario(celle: &BinaryArray) -> Result<Sommario> {
 
 /// Il metadato di campo `geo` letto: `crs` (se c'è), dimensionalità,
 /// encoding.
+///
+/// `dimensions` c'è solo se `geometry_types` la decide (`xy` o `xyz`): un
+/// elenco vuoto non dice nulla, e una dimensionalità già dichiarata dalle
+/// chiavi canoniche del campo resta quella (nessun conflitto con un
+/// `unknown` inventato qui).
 fn geo_di_campo(crs: &CrsColonna, dimensioni: GeometryDimensions) -> Result<String> {
-    match crs {
-        CrsColonna::Integrato(identificativo) => {
-            geo_metadata_json_with_encoding(identificativo, dimensioni, Some(GeometryEncoding::Wkb))
-        }
-        CrsColonna::Assente => {
-            let mut mappa = Map::new();
-            mappa.insert(
-                "dimensions".to_owned(),
-                Value::String(dimensioni.as_str().to_owned()),
-            );
-            mappa.insert(
-                "encoding".to_owned(),
-                Value::String(GeometryEncoding::Wkb.as_str().to_owned()),
-            );
-            Ok(serde_json::to_string(&Value::Object(mappa))?)
-        }
+    let mut mappa = Map::new();
+    if let CrsColonna::Integrato(identificativo) = crs {
+        mappa.insert("crs".to_owned(), Value::String(identificativo.clone()));
     }
+    if dimensioni != GeometryDimensions::Unknown {
+        mappa.insert(
+            "dimensions".to_owned(),
+            Value::String(dimensioni.as_str().to_owned()),
+        );
+    }
+    mappa.insert(
+        "encoding".to_owned(),
+        Value::String(GeometryEncoding::Wkb.as_str().to_owned()),
+    );
+    Ok(serde_json::to_string(&Value::Object(mappa))?)
 }
 
 /// Applica il metadato di file `geo` a una tabella letta da Parquet.
@@ -524,11 +527,7 @@ fn colonna_da_scrivere(
                 "coordinate M: GeoParquet 1.1 non le ammette".to_owned(),
             ))
         }
-        GeometryDimensions::Unknown => match (z_dati.contains(&false), z_dati.contains(&true)) {
-            (true, false) => Some(false),
-            (false, true) => Some(true),
-            _ => None,
-        },
+        GeometryDimensions::Unknown => None,
     };
     if let Some(z) = z_colonna {
         if z_dati.iter().any(|trovata| *trovata != z) {
@@ -537,24 +536,32 @@ fn colonna_da_scrivere(
             ));
         }
     }
-    let dichiarati: Vec<GeometryType> = geometria
-        .types
-        .value()
-        .map(|tipi| tipi.types().to_vec())
-        .unwrap_or_default();
-    if !dichiarati.is_empty()
-        && trovati
-            .tipi
-            .iter()
-            .any(|(tipo, _)| !dichiarati.contains(tipo))
-    {
-        return Err(PlenoraError::DataMapping(
-            "geometrie di un tipo non dichiarato dal contratto".to_owned(),
-        ));
+    let dichiarazione = geometria.types.value();
+    if let Some(dichiarati) = dichiarazione.map(GeometryTypesProperty::types) {
+        if !dichiarati.is_empty()
+            && trovati
+                .tipi
+                .iter()
+                .any(|(tipo, _)| !dichiarati.contains(tipo))
+        {
+            return Err(PlenoraError::DataMapping(
+                "geometrie di un tipo non dichiarato dal contratto".to_owned(),
+            ));
+        }
     }
-    let coppie: Vec<(GeometryType, bool)> = match z_colonna {
-        Some(z) if !dichiarati.is_empty() => dichiarati.iter().map(|tipo| (*tipo, z)).collect(),
-        _ => trovati.tipi.iter().copied().collect(),
+    // `geometry_types` dice tipi e dimensionalita' insieme: si scrive solo
+    // cio' che il contratto decide, cosi' la rilettura ridà lo stesso
+    // contratto. Tipi dichiarati con dimensionalita' nota: l'elenco
+    // dichiarato. Tipi non dichiarati con dimensionalita' nota: i tipi dei
+    // dati (tutti della dimensionalita' del contratto, verificato sopra).
+    // Altrimenti (dimensionalita' `unknown`, dichiarazione senza elenco):
+    // elenco vuoto, «sconosciuti».
+    let coppie: Vec<(GeometryType, bool)> = match (z_colonna, dichiarazione) {
+        (Some(z), Some(dichiarati)) if !dichiarati.types().is_empty() => {
+            dichiarati.types().iter().map(|tipo| (*tipo, z)).collect()
+        }
+        (Some(_), None) => trovati.tipi.iter().copied().collect(),
+        _ => Vec::new(),
     };
     let mut nomi = Vec::with_capacity(coppie.len());
     for (tipo, z) in coppie {
