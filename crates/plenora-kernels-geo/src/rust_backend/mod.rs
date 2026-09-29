@@ -1,6 +1,12 @@
 //! Backend topologico in Rust puro per `geo.make_valid`, `geo.polygonize` e
 //! `geo.split` poligonale.
 //!
+//! Il modulo `griglia` applica la stessa precisione dichiarata alle
+//! operazioni che passano dalla griglia intera di `i_overlay` (booleane,
+//! `dissolve`, `clip`, `overlay`, `clean_topology`, buffer, `subdivide`,
+//! `coverage_validate`): passo della griglia a priori, spostamento del
+//! risultato a posteriori (README, «Limiti dichiarati»).
+//!
 //! Sostituisce `geos_backend` di `plenora-data-tools@190c493` con le stesse
 //! firme e gli stessi nomi d'errore, senza dipendenze native.
 //!
@@ -152,6 +158,7 @@
 pub mod arrow;
 pub mod exact;
 pub mod make_valid;
+pub(crate) mod griglia;
 pub mod polygonize;
 pub mod precision;
 pub mod split;

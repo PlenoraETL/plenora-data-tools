@@ -87,6 +87,11 @@ use plenora_kernels_geo::{transform_wkb, Operation};
 use rayon::prelude::*;
 use serde_json::{json, Value};
 
+/// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
+fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
+    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
+}
+
 /// Budget di una singola ripetizione: oltre si riduce la scala.
 const TARGET_REP_SECONDS: f64 = 4.0;
 /// Celle usate per la calibrazione del costo unitario.
@@ -1299,7 +1304,7 @@ fn main() {
         );
         let op_buffer = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                buffer_with_cap(&g, 10.0, BufferCapStyle::Round)
+                buffer_with_cap(&g, 10.0, BufferCapStyle::Round, precisione())
                     .map_err(|e| e.to_string())
                     .and_then(|r| enc(&r))
             })
@@ -1915,7 +1920,7 @@ fn main() {
 
         // --- Estensioni v1.2 -----------------------------------------------------
         let op_subdivide = |payload: &Vec<u8>| {
-            subdivide_wkb(payload, 500)
+            subdivide_wkb(payload, 500, precisione())
                 .map(|parts| parts.iter().map(Vec::len).sum())
                 .map_err(|e| e.to_string())
         };
@@ -1998,7 +2003,7 @@ fn main() {
                 left.par_iter()
                     .zip(right.par_iter())
                     .map(|(l, r)| {
-                        boolean_operation_validated(l, r, boolean)
+                        boolean_operation_validated(l, r, boolean, precisione())
                             .map_err(|e| e.to_string())
                             .and_then(|out| enc(&out))
                     })
@@ -2092,7 +2097,7 @@ fn main() {
             "unary union di rettangoli con overlap jitterati",
             &|n| {
                 let geoms = decode_prefix(grid_jitter_wkb(), n)?;
-                dissolve_validated(&geoms)
+                dissolve_validated(&geoms, precisione())
                     .map_err(|e| e.to_string())
                     .and_then(|out| enc(&out))
             },
@@ -2107,7 +2112,7 @@ fn main() {
             &|n| {
                 let geoms = decode_prefix(polys_wkb(), n)?;
                 let masks = decode_prefix(&grid_jitter_wkb()[4_500..], 100)?;
-                clip_to_mask_validated(&geoms, &masks)
+                clip_to_mask_validated(&geoms, &masks, precisione())
                     .map_err(|e| e.to_string())
                     .and_then(|outs| {
                         outs.iter().try_fold(0_usize, |total, out| {
@@ -2132,6 +2137,7 @@ fn main() {
                     OverlayMode::Intersection,
                     MAX_WORK,
                     MAX_WORK,
+                    precisione(),
                 )
                 .map_err(|e| e.to_string())
                 .and_then(|pieces| {
@@ -2166,7 +2172,7 @@ fn main() {
                 ]),
                 Vec::new(),
             ))];
-            clip_to_mask_validated(&geoms, &masks)
+            clip_to_mask_validated(&geoms, &masks, precisione())
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {
@@ -2189,13 +2195,20 @@ fn main() {
             &|n| {
                 let left = decode_prefix(grid_wkb(), n)?;
                 let right = decode_prefix(grid_far_wkb(), n)?;
-                polygon_overlay_validated(&left, &right, OverlayMode::Union, MAX_WORK, MAX_WORK)
-                    .map_err(|e| e.to_string())
-                    .and_then(|pieces| {
-                        pieces.iter().try_fold(0_usize, |total, piece| {
-                            enc(&piece.geometry).map(|len| total + len)
-                        })
+                polygon_overlay_validated(
+                    &left,
+                    &right,
+                    OverlayMode::Union,
+                    MAX_WORK,
+                    MAX_WORK,
+                    precisione(),
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|pieces| {
+                    pieces.iter().try_fold(0_usize, |total, piece| {
+                        enc(&piece.geometry).map(|len| total + len)
                     })
+                })
             },
         );
         sweep_collective(
@@ -2207,13 +2220,21 @@ fn main() {
             "snap_tolerance=1, remove_overlaps+fill_gaps",
             &|n| {
                 let geoms = decode_prefix(grid_jitter_wkb(), n)?;
-                clean_valid_polygon_topology_validated(&geoms, 1.0, true, true, MAX_WORK, MAX_WORK)
-                    .map_err(|e| e.to_string())
-                    .and_then(|outs| {
-                        outs.iter().try_fold(0_usize, |total, out| {
-                            enc_opt(out.as_ref()).map(|len| total + len)
-                        })
+                clean_valid_polygon_topology_validated(
+                    &geoms,
+                    1.0,
+                    true,
+                    true,
+                    MAX_WORK,
+                    MAX_WORK,
+                    precisione(),
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|outs| {
+                    outs.iter().try_fold(0_usize, |total, out| {
+                        enc_opt(out.as_ref()).map(|len| total + len)
                     })
+                })
             },
         );
         sweep_collective(
@@ -2325,7 +2346,7 @@ fn main() {
         "griglia 100x100 con overlap jitterati, tolerance=0",
         &|n| {
             let geoms = as_options(decode_prefix(grid_jitter_wkb(), n)?);
-            coverage_validate_nullable(&geoms, 0.0, 1_000_000)
+            coverage_validate_nullable(&geoms, 0.0, 1_000_000, precisione())
                 .map_err(|e| e.to_string())
                 .and_then(|issues| {
                     issues.iter().try_fold(0_usize, |total, issue| {

@@ -21,6 +21,11 @@ use plenora_kernels_geo::{check_geometry_valid, transform_geometry, Operation};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
+fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
+    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
+}
+
 /// Stessa costruzione di `circle_polygon_wkb` in
 /// `crates/plenora-engine/src/executor/tests.rs` (non importata da li': quella
 /// e' privata al modulo di test dell'altro crate) — poligono-cerchio con
@@ -96,7 +101,7 @@ fn main() {
         // --- buffer da solo, sul cerchio grezzo (stessa distanza del test
         // originale: 5.0) ---
         let buffer_esito = con_tetto(
-            move || operations::buffer(&circle_polygon(n), 5.0),
+            move || operations::buffer(&circle_polygon(n), 5.0, precisione()),
             budget_per_taglia,
         );
         let (buffer_secs, buffer_ok) = match &buffer_esito {

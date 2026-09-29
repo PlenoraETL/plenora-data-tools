@@ -65,6 +65,17 @@ pub enum ExtensionError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe, o ha
+    /// introdotto, supera la precisione dichiarata (`geo.subdivide`,
+    /// `geo.coverage_validate`). Nessun dato nel messaggio.
+    #[error("geometria troppo estesa per la precisione dichiarata")]
+    PrecisionInsufficient,
+}
+
+impl From<crate::rust_backend::griglia::PrecisioneInsufficiente> for ExtensionError {
+    fn from(_: crate::rust_backend::griglia::PrecisioneInsufficiente) -> Self {
+        Self::PrecisionInsufficient
+    }
 }
 
 impl ExtensionError {
@@ -75,11 +86,16 @@ impl ExtensionError {
         matches!(self, Self::Internal(_) | Self::ValidazioneNonConclusa(_))
     }
 
-    /// L'errore nella categoria giusta, con il prefisso dell'operazione.
+    /// L'errore nella categoria giusta, con il prefisso dell'operazione:
+    /// interno cio' che e' interno, `Unsupported` la precisione
+    /// insufficiente (come `RustBackendError::PrecisionInsufficient`),
+    /// `InvalidPlan` il resto.
     #[must_use]
     pub fn del_passo(&self, operazione: &str) -> PlenoraError {
         if self.e_interna() {
             PlenoraError::Internal(format!("{operazione}: {self}"))
+        } else if matches!(self, Self::PrecisionInsufficient) {
+            PlenoraError::Unsupported(format!("{operazione}: {self}"))
         } else {
             PlenoraError::InvalidPlan(format!("{operazione}: {self}"))
         }

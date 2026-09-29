@@ -23,6 +23,11 @@ use geo::{Geometry, LineString, MultiPolygon, Polygon};
 use plenora_kernels_geo::check_geometry_valid;
 use plenora_kernels_geo::topology::dissolve_validated;
 
+/// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
+fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
+    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
+}
+
 const RUNS: usize = 5;
 const TAGLIE: [usize; 4] = [100, 1_000, 10_000, 20_000];
 
@@ -126,7 +131,7 @@ fn main() {
                 .map(Geometry::Polygon)
                 .collect();
             misura("dissolve_reticolo", taglia, || {
-                dissolve_validated(&celle).is_ok()
+                dissolve_validated(&celle, precisione()).is_ok()
             });
         }
     }

@@ -40,6 +40,11 @@ use plenora_kernels_geo::topology::{
     clip_to_mask_validated, polygon_overlay_validated, OverlayMode,
 };
 
+/// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
+fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
+    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
+}
+
 const RUNS: usize = 5;
 
 struct Rng(u64);
@@ -220,15 +225,19 @@ fn main() {
         // (engine `pair.rs`), dove la validazione OGC e' gia' avvenuta al
         // decode (`geometry_from_wkb`, righe sopra) e il kernel non
         // rivalida — precondizione dimostrata per costruzione (R0.1).
-        clip_to_mask_validated(&geometries, std::slice::from_ref(&full_domain_mask))
-            .expect("clip")
-            .iter()
-            .map(|out| {
-                out.as_ref().map_or(0, |geometry| {
-                    encode_geometry(geometry).expect("encode").len()
-                })
+        clip_to_mask_validated(
+            &geometries,
+            std::slice::from_ref(&full_domain_mask),
+            precisione(),
+        )
+        .expect("clip")
+        .iter()
+        .map(|out| {
+            out.as_ref().map_or(0, |geometry| {
+                encode_geometry(geometry).expect("encode").len()
             })
-            .sum()
+        })
+        .sum()
     });
 
     // op.overlay_union_unchanged: scenario "passthrough" — union di due
@@ -257,6 +266,7 @@ fn main() {
             OverlayMode::Union,
             1_000_000_000_000,
             1_000_000_000_000,
+            precisione(),
         )
         .expect("overlay")
         .iter()

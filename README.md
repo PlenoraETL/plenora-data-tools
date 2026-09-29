@@ -13,7 +13,7 @@ progetto d'origine si portano qui senza rinomine.
 | --- | --- |
 | `plenora-core` | re-export Arrow, `PlenoraError`, limiti, catalogo delle operazioni, contratti dati, contratto CRS fail-closed, politica dei panici |
 | `plenora-kernels-table` | kernel tabellari (filtri, ordinamenti, aggregazioni, join, espressioni, date, stringhe, qualità, spill) |
-| `plenora-kernels-geo` | kernel geografici su `geo::Geometry` e adapter GeoArrow-WKB; `rust_backend` per `geo.make_valid`, `geo.polygonize` e `geo.split` senza GEOS |
+| `plenora-kernels-geo` | kernel geografici su `geo::Geometry` e adapter GeoArrow-WKB; `rust_backend` per `geo.make_valid`, `geo.polygonize` e `geo.split` senza GEOS, e i controlli di precisione della griglia degli overlay (`rust_backend::griglia`) |
 | `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione e budget di memoria per passo ([«Runner»](#runner)) |
 | `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](#file)) |
 | `vendor/` | `geo`, `wkt`, `i_shape` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
@@ -55,53 +55,60 @@ esplicito, mai silenzioso. Le funzioni dei kernel chiamate senza CRS
 ricevono la precisione come argomento esplicito, senza valore predefinito.
 
 Il solo rifiuto legato alla precisione è lo **spostamento che il calcolo
-introdurrebbe**, confrontato con la precisione prima di costruire il
-risultato: `PrecisionInsufficient` ("geometria troppo estesa per la
-precisione dichiarata"). Tre controlli lo misurano:
+introduce**, confrontato con la precisione: `PrecisionInsufficient`
+("geometria troppo estesa per la precisione dichiarata"; `Unsupported`
+dove attraversa il confine con `PlenoraError`: `RustBackendError`,
+`ExtensionError::del_passo`). Lo misurano:
 
 - **spaziatura delle coordinate** (all'ingresso di `polygonize`, quindi
-  anche di `split` e dei passi di `make_valid` che lo usano, e prima di
-  ogni overlay di `make_valid` `STRUCTURE`): se l'unità in ultima posizione del modulo
+  anche di `split` poligonale, prima dello split lineare e prima di ogni
+  overlay di `i_overlay`): se l'unità in ultima posizione del modulo
   massimo delle coordinate supera `p / 64` nessun punto calcolato potrebbe
-  restare entro la precisione (a `2^52` un incrocio esatto `(B, B + 1.5)`
-  torna a 27,7 cm), e il kernel non calcola. In metri con 1 cm il limite è
-  un modulo di circa `2^39` m, fuori da ogni dominio di un CRS reale;
-- **overlay di `make_valid` `STRUCTURE`** (`LINEWORK` non ne usa):
-  `i_overlay` porta le coordinate su una
-  griglia intera il cui passo `g`, letto dai sorgenti di `i_float` 1.16.0
-  (`FloatPointAdapter::new`), è `2^(round(log2(h)) - 29)` con `h` la metà
-  della dimensione maggiore del rettangolo d'ingombro degli operandi, cioè
-  fra `2^-30.5` e `2^-29.5` di quella dimensione. In `make_valid` gli
-  operandi sono normalizzati per asse su `[0, 1]^2`, dove il passo è
-  esattamente `2^-30`: in coordinate originali `span * 2^-30` per asse, di
-  diagonale `d`. Il bilancio di un vertice è l'arrotondamento alla griglia
-  (al più `d / 2`) più l'aggancio al vertice d'ingresso **vicino** entro
-  `d`, o al lato assiale d'ingresso che gli passa accanto (al più
-  `sqrt(2) * d`): meno di `2 * d`. Se `2 * d` supera la precisione
-  l'overlay non si esegue. In metri succede oltre circa 5.400 km di
-  estensione su un solo asse, 3.800 km su entrambi. **Dopo** ogni overlay,
-  qualunque cosa abbia fatto `i_overlay` dentro (i suoi agganci durante lo
-  split dei segmenti, `split::snap_radius`, hanno un raggio di `2^(k/2)`
-  passi al giro `k`, senza tetto a priori), ogni vertice dell'output deve
-  stare entro la precisione da un lato d'ingresso dei due operandi
-  (distanza punto-segmento con margine d'arrotondamento, lati in un
-  `RTree`); altrimenti l'errore;
-- **noding di `polygonize`** (anche dentro `make_valid` e `split`): il
-  punto d'incrocio calcolato in doppia-doppia e arrotondato in `f64` deve
-  stare entro un quinto della precisione da entrambi i segmenti che divide
-  (il noding si ripete al più cinque volte, e gli spostamenti si sommano).
-  Oltre, il grafo non si costruisce. Succede solo dove l'unità in ultima
-  posizione delle coordinate si avvicina alla precisione (in metri, oltre
-  circa `10^13` m).
+  restare entro la precisione (a `2^52` un incrocio esatto `(B + 1.5, B +
+  1.5)` torna a 70,7 cm da uno dei segmenti), e il kernel non calcola. In
+  metri con 1 cm il limite è un modulo di circa `2^39` m, fuori da ogni
+  dominio di un CRS reale;
+- **noding di `polygonize`** (anche dentro `split`): il punto d'incrocio
+  calcolato in doppia-doppia e arrotondato in `f64` deve stare entro un
+  quinto della precisione da entrambi i segmenti che divide (il noding si
+  ripete al più cinque volte, e gli spostamenti si sommano). Oltre, il
+  grafo non si costruisce. Con la spaziatura delle coordinate già
+  controllata è un secondo livello di difesa;
+- **griglia di `i_overlay`, a priori** (`rust_backend::griglia`): le
+  booleane e il buffer di `geo` portano le coordinate su interi con passo
+  `g = 2^(round(log2(h)) - 29)`, `h` la metà della dimensione maggiore del
+  rettangolo d'ingombro degli operandi di **quella** chiamata (letto da
+  `FloatPointAdapter::new` di `i_float` 1.16.0; per il buffer l'ingombro
+  dell'ingresso allargato di `3 |d|` per lato, il margine massimo di
+  `i_overlay::mesh`). Un giro dell'overlay sposta un punto di al più
+  `(1 + sqrt(2)) g` (arrotondamento dei vertici e degli incroci, primo
+  aggancio): oltre `p` l'overlay non si esegue. In metri con 1 cm passano
+  estensioni fino a circa 5.900 km (l'Italia, 1.300 km, ha `g = 2^-10` m),
+  20.000 km no;
+- **risultato di ogni overlay, a posteriori**: gli agganci successivi al
+  primo hanno un raggio che cresce a ogni giro, e nessun limite a priori li
+  copre. Per le booleane ogni **lato** del risultato deve stare per intero
+  entro `p` dai bordi degli ingressi **originali** dell'operazione pubblica
+  (l'insieme dei punti entro `p` da un segmento è convesso, e le tracce dei
+  segmenti vicini devono ricoprire il lato); per il buffer ogni vertice
+  deve stare fra `|d| - s - p` e `k |d| + p` dall'ingresso (`s` la freccia
+  degli archi, `k = sqrt(2)` con estremità quadrate). Il controllo sugli
+  ingressi originali, non sui risultati intermedi, impedisce che gli
+  spostamenti di overlay in catena (maschera dissolta e poi intersecata,
+  unioni accumulate, tagli ricorsivi) si sommino oltre `p`.
 
-**Ambito.** Tutte le operazioni geografiche. Il controllo della griglia e'
-applicato oggi ai tre kernel portati (`geo.make_valid`, `geo.polygonize`,
-`geo.split`; solo `make_valid` `STRUCTURE` usa l'overlay). Le altre operazioni
-booleane passano dalla stessa griglia senza controllo, ed è il prossimo
-passo: `topology.rs` (`boolean_operation`, `clip_to_mask`,
-`polygon_overlay`, `dissolve`, `clean_valid_polygon_topology`),
-`operations.rs` (`buffer_with_cap`, `Buffer` di `geo`), `extensions2.rs`
-(`subdivide_polygon`), `extensions3.rs` (`coverage_validate_elements`).
+**Ambito.** Tutte le operazioni geografiche. `geo.polygonize` e
+`geo.split` con i controlli di spaziatura e noding; ogni operazione che
+passa da `i_overlay` con la griglia a priori e il controllo a posteriori:
+`topology.rs` (`boolean_operation` e la variante `_validated`:
+intersezione, unione, differenza, differenza simmetrica; `dissolve`,
+`clip_to_mask`, `polygon_overlay`, `clean_valid_polygon_topology` con la
+morfologia `buffer(±snap_tolerance)` e la rimozione delle sovrapposizioni),
+`operations.rs` (`buffer`, `buffer_with_cap`), `extensions2.rs`
+(`subdivide`, taglio dei poligoni), `extensions3.rs` (`coverage_validate`).
+Tutte ricevono la precisione come argomento esplicito (`Precision`, nelle
+unità delle coordinate): nessuna ha oggi un CRS risolto da cui ricavarla, e
+il chiamante che lo ha usa `Precision::from_crs`.
 
 Le verifiche a posteriori di `split` sono **locali**: la copertura del bordo
 somma la lunghezza scoperta per anello sorgente (entro 1 cm), e l'area può
@@ -126,31 +133,42 @@ incrocio non esatto del noding a meno di 1 cm da un altro vertice o da un
 lato non incidente; due incroci arrotondati sullo stesso vertice o su un
 vertice d'ingresso non sono riconosciuti.
 
-**Hazard.** Una geometria più sottile di 1 cm (in tutto o in parte) può
-uscire fusa o vuota senza errore, per scelta; feature distinte più vicine
-di 1 cm possono cambiare la topologia (paragrafo precedente); sulle operazioni booleane non
-ancora controllate una griglia più grossa di 1 cm (estensioni oltre circa
-5.400 km in metri) non è rifiutata. Il controllo finale degli overlay di
-`make_valid` `STRUCTURE` garantisce che **ogni vertice** dell'output stia entro 1 cm
-dal linework degli operandi; non garantisce che stia vicino al lato
-**giusto** (un vertice agganciato lungo un altro lato entro 1 cm passa), né
-che un lato dell'output segua il linework fra i suoi due estremi, né la
-topologia (quali facce sono piene): per questo restano la validazione OGC
-dell'output e la campagna differenziale contro GEOS, non una prova. Lo split lineare
-(`split_line`, sorgenti `LineString` di `geo.split`, codice precedente al
-porting) ammette un punto di taglio entro la tolleranza più un margine
-numerico proporzionale al modulo delle coordinate: l'adapter
-(`rust_backend::arrow::split_batches`) applica prima lo stesso controllo di
-spaziatura delle coordinate, così il margine resta sotto mezza precisione e
-un punto a più di 1 cm dalla linea, con tolleranza nulla, non taglia.
+**Hazard.**
+
+- Una geometria più sottile di 1 cm (in tutto o in parte) può uscire fusa o
+  vuota senza errore, per scelta.
+- Il controllo a posteriori degli overlay è **unilaterale**: dice che il
+  risultato non si è allontanato dagli ingressi oltre la precisione, non
+  che nessuna parte manchi. Una faccia intera omessa, il cui bordo coincide
+  con quello degli ingressi, non è uno spostamento della griglia e non è
+  vista qui (la validazione OGC dell'output resta).
+- **Buffer, archi.** Il buffer di `geo` approssima gli archi con corde di
+  passo al più 0,3 rad (`BufferStyle` chiede 0,2 rad; `i_overlay` arrotonda
+  il numero di corde): la freccia arriva a circa l'1,1% della distanza, 11
+  cm per un buffer di 10 m. È la definizione dell'operazione, come i
+  `quad_segs` di GEOS, non uno spostamento della griglia: il controllo la
+  ammette nel limite inferiore e non la segnala.
+- **Buffer, estremità piatte o quadrate su linee.** Il bordo di
+  un'estremità piatta passa fra `0` e `|d|` dall'estremo della linea, e un
+  vertice dell'unione può cadervi: lì resta solo il limite superiore (lo
+  spostamento verso l'esterno è visto, quello verso l'interno no).
+- **Non applicabile.** Il buffer tondo di un `Point` non passa da
+  `i_overlay` (è un poligono di 32 lati costruito direttamente); le parti
+  di `subdivide` sotto la soglia di vertici escono invariate, senza
+  overlay. Entrambe passano comunque dai controlli, senza effetto.
+- Lo split lineare (`split_line`, sorgenti `LineString` di `geo.split`,
+  codice precedente al porting) ammette un punto di taglio entro la
+  tolleranza più un margine numerico proporzionale al modulo delle
+  coordinate: l'adapter (`rust_backend::arrow::split_batches`) applica prima
+  il controllo di spaziatura delle coordinate, così il margine resta sotto
+  mezza precisione e un punto a più di 1 cm dalla linea, con tolleranza
+  nulla, non taglia.
 
 **Condizione di rientro.** Nessuna per la precisione, che è una scelta di
-prodotto; per il controllo della griglia, la sua estensione alle altre
-operazioni booleane (con la spaziatura delle coordinate e il controllo
-finale dei vertici); per i lati dell'output degli overlay, una verifica di
-Hausdorff contro gli operandi, o un overlay con raggio d'aggancio costante
-(`Precision::ABSOLUTE` di `i_overlay`, oggi non raggiungibile attraverso
-`geo`).
+prodotto. Per il controllo unilaterale, un confronto delle aree con i
+limiti dell'operazione insiemistica (lo sviluppa `geo.make_valid` sul suo
+branch di lavoro); per gli archi del buffer, un parametro di passo esposto
+o derivato dalla precisione.
 
 ### Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
 

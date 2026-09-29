@@ -16,8 +16,8 @@
 //!   e' deterministica ma non specificata; l'output e' validato.
 
 use geo::{
-    Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, LineString, MapCoords, MultiPoint,
-    Polygon, Rect,
+    Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, Line, LineString, MapCoords,
+    MultiPoint, MultiPolygon, Polygon, Rect,
 };
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::PlenoraError;
@@ -28,6 +28,8 @@ use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
 use crate::extensions::{
     check_tolerance, ensure_valid, invalid_parameter, u64_len, validate_output, ExtensionError,
 };
+use crate::rust_backend::griglia::{self, IndiceLinework};
+use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 
 /// Numero minimo di vertici ammesso per `max_vertices` (un anello chiuso ne
@@ -427,18 +429,61 @@ fn chunk_line_string(line: &LineString<f64>, max_vertices: usize) -> Vec<Geometr
     parts
 }
 
+/// Il poligono di partenza di un taglio ricorsivo: i suoi bordi, le linee
+/// di taglio sul cammino fino al pezzo corrente e la precisione.
+struct Taglio<'a> {
+    bordi: &'a IndiceLinework,
+    linee: Vec<Line<f64>>,
+    precision: Precision,
+}
+
+/// Taglio ricorsivo di un poligono di partenza.
+fn subdivide_polygon_root(
+    polygon: &Polygon<f64>,
+    max_vertices: usize,
+    precision: Precision,
+    parts: &mut Vec<Geometry<f64>>,
+) -> Result<(), ExtensionError> {
+    let bordi = IndiceLinework::da_multipoligoni([(0, &MultiPolygon::new(vec![polygon.clone()]))]);
+    let mut taglio = Taglio {
+        bordi: &bordi,
+        linee: Vec::new(),
+        precision,
+    };
+    subdivide_polygon(polygon, max_vertices, 0, &mut taglio, parts)
+}
+
 /// Taglio ricorsivo di un poligono per bisezione dell'envelope.
 ///
 /// L'envelope e' tagliato a meta' sull'asse lungo e il poligono e'
 /// intersecato nativamente (`BooleanOps`) con le due meta'; la linea di
 /// taglio appartiene a entrambe le meta' (sovrapposizione di area nulla).
+///
+/// Ogni intersezione passa dalla griglia di `i_overlay`: prima, il controllo
+/// a priori sull'ingombro del pezzo (la meta' vi sta dentro); a ogni foglia
+/// prodotta da un taglio, ogni lato deve stare entro la precisione dai
+/// bordi del poligono di partenza o dalle linee di taglio del suo cammino
+/// (il bordo esatto di `P` intersecato con una meta' sta su quelli). Il
+/// controllo e' sugli ingressi originali, non sui pezzi intermedi: gli
+/// spostamenti dei livelli non si sommano oltre la precisione.
 fn subdivide_polygon(
     polygon: &Polygon<f64>,
     max_vertices: usize,
     depth: u32,
+    taglio: &mut Taglio<'_>,
     parts: &mut Vec<Geometry<f64>>,
 ) -> Result<(), ExtensionError> {
     if polygon.coords_count() <= max_vertices {
+        if depth > 0
+            && !taglio.bordi.bordo_entro(
+                &MultiPolygon::new(vec![polygon.clone()]),
+                &taglio.linee,
+                |_| true,
+                taglio.precision,
+            )
+        {
+            return Err(ExtensionError::PrecisionInsufficient);
+        }
         parts.push(Geometry::Polygon(polygon.clone()));
         return Ok(());
     }
@@ -452,19 +497,27 @@ fn subdivide_polygon(
         .ok_or_else(|| ExtensionError::InvalidInput("poligono senza envelope".to_owned()))?;
     let min = rect.min();
     let max = rect.max();
-    let halves = if max.x - min.x >= max.y - min.y {
+    let (halves, cut) = if max.x - min.x >= max.y - min.y {
         let mid_x = f64::midpoint(min.x, max.x);
-        [
-            Rect::new(min, Coord { x: mid_x, y: max.y }),
-            Rect::new(Coord { x: mid_x, y: min.y }, max),
-        ]
+        (
+            [
+                Rect::new(min, Coord { x: mid_x, y: max.y }),
+                Rect::new(Coord { x: mid_x, y: min.y }, max),
+            ],
+            Line::new(Coord { x: mid_x, y: min.y }, Coord { x: mid_x, y: max.y }),
+        )
     } else {
         let mid_y = f64::midpoint(min.y, max.y);
-        [
-            Rect::new(min, Coord { x: max.x, y: mid_y }),
-            Rect::new(Coord { x: min.x, y: mid_y }, max),
-        ]
+        (
+            [
+                Rect::new(min, Coord { x: max.x, y: mid_y }),
+                Rect::new(Coord { x: min.x, y: mid_y }, max),
+            ],
+            Line::new(Coord { x: min.x, y: mid_y }, Coord { x: max.x, y: mid_y }),
+        )
     };
+    griglia::controlla_overlay(Some(rect), taglio.precision)?;
+    taglio.linee.push(cut);
     for half in halves {
         let intersection = polygon.intersection(&half.to_polygon());
         for part in intersection.0 {
@@ -472,15 +525,17 @@ fn subdivide_polygon(
             if part.coords_count() == 0 || part.unsigned_area() == 0.0 {
                 continue;
             }
-            subdivide_polygon(&part, max_vertices, depth + 1, parts)?;
+            subdivide_polygon(&part, max_vertices, depth + 1, taglio, parts)?;
         }
     }
+    taglio.linee.pop();
     Ok(())
 }
 
 fn subdivide_validated(
     geometry: &Geometry<f64>,
     max_vertices: usize,
+    precision: Precision,
 ) -> Result<Vec<Geometry<f64>>, ExtensionError> {
     if geometry.coords_count() <= max_vertices {
         return Ok(vec![geometry.clone()]);
@@ -508,23 +563,23 @@ fn subdivide_validated(
             }
         }
         Geometry::Polygon(polygon) => {
-            subdivide_polygon(polygon, max_vertices, 0, &mut parts)?;
+            subdivide_polygon_root(polygon, max_vertices, precision, &mut parts)?;
         }
         Geometry::MultiPolygon(polygons) => {
             for polygon in &polygons.0 {
-                subdivide_polygon(polygon, max_vertices, 0, &mut parts)?;
+                subdivide_polygon_root(polygon, max_vertices, precision, &mut parts)?;
             }
         }
         Geometry::GeometryCollection(collection) => {
             for child in &collection.0 {
-                parts.extend(subdivide_validated(child, max_vertices)?);
+                parts.extend(subdivide_validated(child, max_vertices, precision)?);
             }
         }
         Geometry::Rect(rect) => {
-            subdivide_polygon(&rect.to_polygon(), max_vertices, 0, &mut parts)?;
+            subdivide_polygon_root(&rect.to_polygon(), max_vertices, precision, &mut parts)?;
         }
         Geometry::Triangle(triangle) => {
-            subdivide_polygon(&triangle.to_polygon(), max_vertices, 0, &mut parts)?;
+            subdivide_polygon_root(&triangle.to_polygon(), max_vertices, precision, &mut parts)?;
         }
     }
     for part in &parts {
@@ -556,13 +611,18 @@ fn subdivide_validated(
 ///   validazione OGC.
 /// - `ExtensionError::Internal`: invariante interna violata (mai atteso:
 ///   punti e linee hanno al piu' 2 vertici).
+/// - `ExtensionError::PrecisionInsufficient`: il taglio dei poligoni passa
+///   dalla griglia di `i_overlay`, che sposterebbe, o ha spostato, una parte
+///   oltre la precisione dichiarata (`precision`, nelle unita' delle
+///   coordinate: `Precision::from_crs` con un CRS, altrimenti esplicita).
 pub fn subdivide(
     geometry: &Geometry<f64>,
     max_vertices: usize,
+    precision: Precision,
 ) -> Result<Vec<Geometry<f64>>, ExtensionError> {
     ensure_valid(geometry)?;
     check_max_vertices(max_vertices)?;
-    subdivide_validated(geometry, max_vertices)
+    subdivide_validated(geometry, max_vertices, precision)
 }
 
 fn subdivide_error(error: &ExtensionError) -> PlenoraError {
@@ -579,11 +639,15 @@ fn subdivide_error(error: &ExtensionError) -> PlenoraError {
 /// `max_vertices` non valido (messaggio con prefisso `geo.subdivide:`), per
 /// il decode della cella WKB (`decode_geometry_cell`) o per la codifica WKB
 /// di una parte (`encode_geometry`).
-pub fn subdivide_wkb(payload: &[u8], max_vertices: usize) -> Result<Vec<Vec<u8>>, PlenoraError> {
+pub fn subdivide_wkb(
+    payload: &[u8],
+    max_vertices: usize,
+    precision: Precision,
+) -> Result<Vec<Vec<u8>>, PlenoraError> {
     check_max_vertices(max_vertices).map_err(|error| subdivide_error(&error))?;
     let geometry = decode_geometry_cell(payload)?;
-    let parts =
-        subdivide_validated(&geometry, max_vertices).map_err(|error| subdivide_error(&error))?;
+    let parts = subdivide_validated(&geometry, max_vertices, precision)
+        .map_err(|error| subdivide_error(&error))?;
     parts.iter().map(encode_geometry).collect()
 }
 
@@ -710,6 +774,11 @@ pub fn snap_column(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// Precisione dei test: coordinate astratte, un milionesimo di unita'.
+    fn precisione() -> Precision {
+        Precision::new(1e-6).unwrap()
+    }
     use crate::test_support::{assert_close, rect};
     use geo::{line_string, GeometryCollection, MultiLineString, Point};
     use geozero::{CoordDimensions, ToWkb};
@@ -896,11 +965,14 @@ mod tests {
     #[test]
     fn subdivide_passes_small_geometries_through_unchanged() {
         let square = rect(0.0, 0.0, 4.0, 4.0);
-        assert_eq!(subdivide(&square, 8).unwrap(), vec![square.clone()]);
+        assert_eq!(
+            subdivide(&square, 8, precisione()).unwrap(),
+            vec![square.clone()]
+        );
         // Soglia esatta: vertici == max_vertices, nessuna divisione.
-        assert_eq!(subdivide(&square, 5).unwrap(), vec![square]);
+        assert_eq!(subdivide(&square, 5, precisione()).unwrap(), vec![square]);
         let point = Geometry::Point(Point::new(1.0, 2.0));
-        assert_eq!(subdivide(&point, 4).unwrap(), vec![point]);
+        assert_eq!(subdivide(&point, 4, precisione()).unwrap(), vec![point]);
     }
 
     #[test]
@@ -913,7 +985,7 @@ mod tests {
                 })
                 .collect(),
         ));
-        let parts = subdivide(&line, 4).expect("parti");
+        let parts = subdivide(&line, 4, precisione()).expect("parti");
         assert_eq!(parts.len(), 3);
         for (part, expected) in parts.iter().zip([4_usize, 4, 4]) {
             assert_eq!(part.coords_count(), expected);
@@ -938,7 +1010,7 @@ mod tests {
                 })
                 .collect(),
         ));
-        let parts = subdivide(&seven, 4).expect("parti");
+        let parts = subdivide(&seven, 4, precisione()).expect("parti");
         assert_eq!(parts.len(), 2);
         assert!(parts.iter().all(|part| part.coords_count() >= 2));
     }
@@ -955,7 +1027,7 @@ mod tests {
         ring.push(ring[0]);
         let star = Geometry::Polygon(Polygon::new(LineString::from(ring), Vec::new()));
         let original_area = star.unsigned_area();
-        let parts = subdivide(&star, 8).expect("parti");
+        let parts = subdivide(&star, 8, precisione()).expect("parti");
         assert!(parts.len() > 1);
         let mut total_area = 0.0;
         for part in &parts {
@@ -995,7 +1067,7 @@ mod tests {
             vec![LineString::from(hole)],
         ));
         let original_area = donut.unsigned_area();
-        let parts = subdivide(&donut, 8).expect("parti");
+        let parts = subdivide(&donut, 8, precisione()).expect("parti");
         assert!(parts.len() > 1);
         let total_area: f64 = parts.iter().map(geo::Area::unsigned_area).sum();
         for part in &parts {
@@ -1015,7 +1087,7 @@ mod tests {
                 .map(|index| Point::new(f64::from(index), 0.0))
                 .collect(),
         ));
-        let parts = subdivide(&points, 4).expect("parti");
+        let parts = subdivide(&points, 4, precisione()).expect("parti");
         assert_eq!(parts.len(), 3);
         for (part, expected) in parts.iter().zip([4_usize, 4, 2]) {
             match part {
@@ -1036,7 +1108,7 @@ mod tests {
                     .collect(),
             ),
         ]));
-        let parts = subdivide(&lines, 4).expect("parti");
+        let parts = subdivide(&lines, 4, precisione()).expect("parti");
         // 2 linee corte passate come parti singole + 3 chunk della lunga.
         assert_eq!(parts.len(), 5);
         assert!(parts
@@ -1047,7 +1119,7 @@ mod tests {
             Geometry::Point(Point::new(0.0, 0.0)),
             lines,
         ]));
-        let parts = subdivide(&collection, 4).expect("parti");
+        let parts = subdivide(&collection, 4, precisione()).expect("parti");
         assert_eq!(parts.len(), 6);
         assert!(matches!(parts[0], Geometry::Point(_)));
     }
@@ -1056,7 +1128,7 @@ mod tests {
     fn subdivide_rejects_too_low_max_vertices_and_fails_closed_on_degenerates() {
         let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)]);
         assert!(matches!(
-            subdivide(&line, 3),
+            subdivide(&line, 3, precisione()),
             Err(ExtensionError::InvalidParameter {
                 name: "max_vertices",
                 ..
@@ -1070,7 +1142,7 @@ mod tests {
             LineString::from(vec![(1.0, 1.0); 10]),
             Vec::new(),
         ));
-        assert!(subdivide(&degenerate, 4).is_err());
+        assert!(subdivide(&degenerate, 4, precisione()).is_err());
     }
 
     #[test]
@@ -1084,12 +1156,12 @@ mod tests {
                 .collect(),
         ));
         let payload = line.to_wkb(CoordDimensions::xy()).expect("encode");
-        let parts = subdivide_wkb(&payload, 4).expect("parti");
+        let parts = subdivide_wkb(&payload, 4, precisione()).expect("parti");
         assert_eq!(parts.len(), 3);
         for part in &parts {
             crate::geometry_from_wkb(part).expect("decode parte");
         }
-        assert!(subdivide_wkb(&payload, 2).is_err());
+        assert!(subdivide_wkb(&payload, 2, precisione()).is_err());
     }
 
     // --- geo.snap ------------------------------------------------------------

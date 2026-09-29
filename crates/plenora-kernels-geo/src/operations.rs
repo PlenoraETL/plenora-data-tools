@@ -1,5 +1,7 @@
 //! Pure geometry kernels, independent of the transport adapters.
 
+use crate::rust_backend::griglia;
+use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::buffer::{BufferStyle, LineCap};
 use geo::algorithm::line_measures::{Distance, Euclidean, Length};
@@ -57,6 +59,17 @@ pub enum OperationError {
     /// reggere. Porta la *forma* del payload, mai il contenuto.
     #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
+    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe, o ha
+    /// introdotto, nel buffer supera la precisione dichiarata (vedi
+    /// [`buffer_with_cap`]). Nessun dato nel messaggio.
+    #[error("geometria troppo estesa per la precisione dichiarata")]
+    PrecisionInsufficient,
+}
+
+impl From<griglia::PrecisioneInsufficiente> for OperationError {
+    fn from(_: griglia::PrecisioneInsufficiente) -> Self {
+        Self::PrecisionInsufficient
+    }
 }
 
 fn ensure_valid(geometry: &Geometry<f64>) -> Result<(), OperationError> {
@@ -271,21 +284,38 @@ pub fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError> {
 /// # Errors
 ///
 /// Come [`buffer_with_cap`].
-pub fn buffer(geometry: &Geometry<f64>, distance: f64) -> Result<Geometry<f64>, OperationError> {
-    buffer_with_cap(geometry, distance, BufferCapStyle::Round)
+pub fn buffer(
+    geometry: &Geometry<f64>,
+    distance: f64,
+    precision: Precision,
+) -> Result<Geometry<f64>, OperationError> {
+    buffer_with_cap(geometry, distance, BufferCapStyle::Round, precision)
 }
 
 /// Buffer planare della geometria con lo stile di estremita' richiesto.
+///
+/// `precision` e' la precisione dichiarata nelle unita' delle coordinate
+/// (`Precision::from_crs` con un CRS, altrimenti esplicita). Il buffer di
+/// `geo` passa dalla griglia intera di `i_overlay`: prima del calcolo il
+/// passo della griglia sull'ingombro dell'ingresso allargato della distanza
+/// e la spaziatura delle coordinate sono confrontati con la precisione;
+/// dopo, ogni vertice dell'uscita deve stare alla distanza `|distance|`
+/// dall'ingresso entro la precisione, meno la freccia degli archi
+/// approssimati da corde (`rust_backend::griglia`, e README «Limiti
+/// dichiarati»).
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `distance` non e' finita (NaN o infinita);
+/// - `PrecisionInsufficient`: la griglia sposterebbe, o ha spostato, il
+///   risultato oltre la precisione;
 /// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC.
 pub fn buffer_with_cap(
     geometry: &Geometry<f64>,
     distance: f64,
     cap_style: BufferCapStyle,
+    precision: Precision,
 ) -> Result<Geometry<f64>, OperationError> {
     ensure_valid(geometry)?;
     if !distance.is_finite() {
@@ -294,15 +324,23 @@ pub fn buffer_with_cap(
             reason: "deve essere finita",
         });
     }
-    let line_cap = match cap_style {
-        BufferCapStyle::Round => {
-            return validate_output(Geometry::MultiPolygon(geometry.buffer(distance)))
+    griglia::controlla_buffer(geometry, distance, precision)?;
+    let result = match cap_style {
+        BufferCapStyle::Round => geometry.buffer(distance),
+        BufferCapStyle::Flat => {
+            geometry.buffer_with_style(BufferStyle::new(distance).line_cap(LineCap::Butt))
         }
-        BufferCapStyle::Flat => LineCap::Butt,
-        BufferCapStyle::Square => LineCap::Square,
+        BufferCapStyle::Square => {
+            geometry.buffer_with_style(BufferStyle::new(distance).line_cap(LineCap::Square))
+        }
     };
-    let style = BufferStyle::new(distance).line_cap(line_cap);
-    validate_output(Geometry::MultiPolygon(geometry.buffer_with_style(style)))
+    let estremita = match cap_style {
+        BufferCapStyle::Round => griglia::Estremita::Tonde,
+        BufferCapStyle::Flat => griglia::Estremita::Piatte,
+        BufferCapStyle::Square => griglia::Estremita::Quadrate,
+    };
+    griglia::verifica_buffer(geometry, distance, estremita, &result, precision)?;
+    validate_output(Geometry::MultiPolygon(result))
 }
 
 /// Semplificazione della geometria con Douglas-Peucker
@@ -543,6 +581,11 @@ mod tests {
     };
     use proptest::prelude::*;
 
+    /// Precisione dei test: coordinate astratte, un milionesimo di unita'.
+    fn precisione() -> Precision {
+        Precision::new(1e-6).unwrap()
+    }
+
     fn rectangle() -> Geometry<f64> {
         rect(0.0, 0.0, 4.0, 2.0)
     }
@@ -616,15 +659,15 @@ mod tests {
 
     #[test]
     fn buffer_rejects_non_finite_distance_and_produces_valid_polygon() {
-        assert!(buffer(&rectangle(), f64::NAN).is_err());
-        let result = buffer(&Geometry::Point(Point::new(0.0, 0.0)), 2.0).unwrap();
+        assert!(buffer(&rectangle(), f64::NAN, precisione()).is_err());
+        let result = buffer(&Geometry::Point(Point::new(0.0, 0.0)), 2.0, precisione()).unwrap();
         assert!(result.unsigned_area() > 12.0);
         assert!(result.unsigned_area() < 13.0);
 
         let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 2.0, y: 0.0)]);
-        let flat = buffer_with_cap(&line, 1.0, BufferCapStyle::Flat).unwrap();
-        let square = buffer_with_cap(&line, 1.0, BufferCapStyle::Square).unwrap();
-        let round = buffer_with_cap(&line, 1.0, BufferCapStyle::Round).unwrap();
+        let flat = buffer_with_cap(&line, 1.0, BufferCapStyle::Flat, precisione()).unwrap();
+        let square = buffer_with_cap(&line, 1.0, BufferCapStyle::Square, precisione()).unwrap();
+        let round = buffer_with_cap(&line, 1.0, BufferCapStyle::Round, precisione()).unwrap();
         assert!((flat.unsigned_area() - 4.0).abs() < 1e-9);
         assert!(square.unsigned_area() > flat.unsigned_area());
         assert!(round.unsigned_area() > flat.unsigned_area());
@@ -991,10 +1034,10 @@ mod tests {
             (0.0, 16.0..=16.0),
             (1.0, 32.0..=32.0 + std::f64::consts::PI),
         ] {
-            let risultato = buffer(con_vuoti, distance).unwrap_or_else(|errore| {
+            let risultato = buffer(con_vuoti, distance, precisione()).unwrap_or_else(|errore| {
                 panic!("{caso}, distanza {distance}: buffer rifiutato: {errore}")
             });
-            let oracolo = buffer(senza_vuoti, distance).unwrap_or_else(|errore| {
+            let oracolo = buffer(senza_vuoti, distance, precisione()).unwrap_or_else(|errore| {
                 panic!("{caso}, distanza {distance}: oracolo rifiutato: {errore}")
             });
             assert_eq!(risultato, oracolo, "{caso}, distanza {distance}");
@@ -1010,7 +1053,7 @@ mod tests {
     /// distanza.
     fn assert_buffer_vuoto(geometria: &Geometry<f64>, caso: &str) {
         for distance in [-1.0, 0.0, 1.0] {
-            let risultato = buffer(geometria, distance).unwrap_or_else(|errore| {
+            let risultato = buffer(geometria, distance, precisione()).unwrap_or_else(|errore| {
                 panic!("{caso}, distanza {distance}: buffer rifiutato: {errore}")
             });
             assert_eq!(
@@ -1070,9 +1113,10 @@ mod tests {
         let vuoto_centrale =
             Geometry::MultiPolygon(MultiPolygon::new(vec![ordinario(), vuoto(), ordinario2()]));
         for distance in [-1.0, 0.0, 1.0] {
-            let risultato = buffer(&vuoto_centrale, distance).unwrap_or_else(|errore| {
-                panic!("buffer con vuoto centrale a distanza {distance}: {errore}")
-            });
+            let risultato =
+                buffer(&vuoto_centrale, distance, precisione()).unwrap_or_else(|errore| {
+                    panic!("buffer con vuoto centrale a distanza {distance}: {errore}")
+                });
             assert!(
                 risultato.unsigned_area() > 0.0,
                 "buffer con vuoto centrale a distanza {distance}: area non positiva"
@@ -1106,7 +1150,7 @@ mod tests {
         let ordinario = rect(0.0, 0.0, 4.0, 4.0);
 
         for distance in [-1.0, 0.0, 1.0] {
-            let risultato = buffer(&ordinario, distance).unwrap_or_else(|errore| {
+            let risultato = buffer(&ordinario, distance, precisione()).unwrap_or_else(|errore| {
                 panic!("buffer ordinario a distanza {distance}: {errore}")
             });
             assert!(

@@ -29,6 +29,8 @@ use rstar::{RTree, RTreeObject, AABB};
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
 use crate::extensions::{check_tolerance, invalid_parameter, u64_len, ExtensionError};
 use crate::geometry_type_name as geometry_name;
+use crate::rust_backend::griglia::{self, IndiceLinework};
+use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 
 /// Default di `max_issues` per `geo.coverage_validate`.
@@ -203,12 +205,24 @@ fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, Ex
     Ok(geometry)
 }
 
+/// Ogni intersezione passa dalla griglia di `i_overlay`: prima, il
+/// controllo a priori sull'ingombro della coppia; dopo, ogni lato
+/// dell'intersezione entro la precisione dai bordi delle due geometrie
+/// (anche quando l'area resta sotto la tolleranza: la decisione
+/// sull'area viene dal risultato).
 fn coverage_validate_elements(
     elements: &[Option<CoverageElement>],
     tree: &RTree<IndexedEnvelope>,
     tolerance: f64,
     max_issues: u64,
+    precision: Precision,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
+    let bordi = IndiceLinework::da_multipoligoni(
+        elements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, element)| element.as_ref().map(|e| (index, &e.polygons))),
+    );
     let mut issues = Vec::new();
     for (a, b) in candidate_pairs(elements, tree) {
         let left = &elements[a]
@@ -219,7 +233,16 @@ fn coverage_validate_elements(
             .as_ref()
             .ok_or(ExtensionError::Internal("coppia indicizzata"))?
             .polygons;
+        griglia::controlla_overlay(griglia::rettangolo_multipoligoni([left, right]), precision)?;
         let intersection = left.intersection(right);
+        if !bordi.bordo_entro(
+            &intersection,
+            &[],
+            |etichetta| etichetta == a || etichetta == b,
+            precision,
+        ) {
+            return Err(ExtensionError::PrecisionInsufficient);
+        }
         let area = intersection.unsigned_area();
         if area > tolerance {
             if u64_len(issues.len())? >= max_issues {
@@ -260,9 +283,10 @@ pub fn coverage_validate(
     geometries: &[Geometry<f64>],
     tolerance: f64,
     max_issues: usize,
+    precision: Precision,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
     let refs: Vec<Option<Geometry<f64>>> = geometries.iter().cloned().map(Some).collect();
-    coverage_validate_nullable(&refs, tolerance, max_issues)
+    coverage_validate_nullable(&refs, tolerance, max_issues, precision)
 }
 
 /// Variante nullable: le righe `None` non partecipano mai, ma conservano la
@@ -276,11 +300,12 @@ pub fn coverage_validate_nullable(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
     max_issues: usize,
+    precision: Precision,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
     check_tolerance(tolerance)?;
     let max_issues = check_max_issues(max_issues)?;
     let (elements, tree) = prepare_elements(geometries)?;
-    coverage_validate_elements(&elements, &tree, tolerance, max_issues)
+    coverage_validate_elements(&elements, &tree, tolerance, max_issues, precision)
 }
 
 fn coverage_error(error: &ExtensionError) -> PlenoraError {
@@ -313,9 +338,10 @@ pub fn coverage_validate_rows(
     cells: &BinaryArray,
     tolerance: f64,
     max_issues: usize,
+    precision: Precision,
 ) -> Result<Vec<CoverageIssueRow>, PlenoraError> {
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
-    let issues = coverage_validate_nullable(&geometries, tolerance, max_issues)
+    let issues = coverage_validate_nullable(&geometries, tolerance, max_issues, precision)
         .map_err(|error| coverage_error(&error))?;
     issues
         .iter()
@@ -541,6 +567,11 @@ pub fn shared_paths_rows(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// Precisione dei test: coordinate astratte, un milionesimo di unita'.
+    fn precisione() -> Precision {
+        Precision::new(1e-6).unwrap()
+    }
     use crate::test_support::rect as rectangle;
     use crate::test_support::{assert_close, bowtie, wkb_column_with};
     use geo::{polygon, MultiPolygon as GeoMultiPolygon, Point};
@@ -578,7 +609,8 @@ mod tests {
     #[test]
     fn coverage_validate_reports_exact_overlap_area_and_geometry() {
         let inputs = vec![rectangle(0.0, 0.0, 4.0, 4.0), rectangle(2.0, 0.0, 6.0, 4.0)];
-        let issues = coverage_validate(&inputs, 0.0, DEFAULT_MAX_ISSUES).expect("issues");
+        let issues =
+            coverage_validate(&inputs, 0.0, DEFAULT_MAX_ISSUES, precisione()).expect("issues");
         assert_eq!(issues.len(), 1);
         let issue = &issues[0];
         assert_eq!(issue.issue_type, CoverageIssueType::Overlap);
@@ -603,22 +635,27 @@ mod tests {
             rectangle(4.0, 0.0, 8.0, 4.0), // tocca la prima sul bordo x=4
             rectangle(10.0, 0.0, 14.0, 4.0), // gap (8..10) rispetto alla seconda
         ];
-        assert!(coverage_validate(&inputs, 0.0, DEFAULT_MAX_ISSUES)
-            .expect("issues")
-            .is_empty());
+        assert!(
+            coverage_validate(&inputs, 0.0, DEFAULT_MAX_ISSUES, precisione())
+                .expect("issues")
+                .is_empty()
+        );
     }
 
     #[test]
     fn coverage_validate_tolerance_filters_small_overlaps() {
         // Overlap di area 8.0: ignorato con tolerance >= 8 (confronto stretto).
         let inputs = vec![rectangle(0.0, 0.0, 4.0, 4.0), rectangle(2.0, 0.0, 6.0, 4.0)];
-        assert!(coverage_validate(&inputs, 8.0, DEFAULT_MAX_ISSUES)
-            .expect("issues")
-            .is_empty());
-        let issues = coverage_validate(&inputs, 7.9, DEFAULT_MAX_ISSUES).expect("issues");
+        assert!(
+            coverage_validate(&inputs, 8.0, DEFAULT_MAX_ISSUES, precisione())
+                .expect("issues")
+                .is_empty()
+        );
+        let issues =
+            coverage_validate(&inputs, 7.9, DEFAULT_MAX_ISSUES, precisione()).expect("issues");
         assert_eq!(issues.len(), 1);
-        assert!(coverage_validate(&inputs, -1.0, DEFAULT_MAX_ISSUES).is_err());
-        assert!(coverage_validate(&inputs, f64::NAN, DEFAULT_MAX_ISSUES).is_err());
+        assert!(coverage_validate(&inputs, -1.0, DEFAULT_MAX_ISSUES, precisione()).is_err());
+        assert!(coverage_validate(&inputs, f64::NAN, DEFAULT_MAX_ISSUES, precisione()).is_err());
     }
 
     #[test]
@@ -634,7 +671,8 @@ mod tests {
             },
         ]));
         let inputs = vec![multi, rectangle(1.0, 1.0, 3.0, 3.0)];
-        let issues = coverage_validate(&inputs, 0.0, DEFAULT_MAX_ISSUES).expect("issues");
+        let issues =
+            coverage_validate(&inputs, 0.0, DEFAULT_MAX_ISSUES, precisione()).expect("issues");
         assert_eq!(issues.len(), 1);
         assert_eq!((issues[0].index_a, issues[0].index_b), (0, 1));
         assert_close(issues[0].area, 1.0);
@@ -648,7 +686,7 @@ mod tests {
             rectangle(2.0, 0.0, 6.0, 4.0),
             rectangle(1.0, 2.0, 5.0, 6.0),
         ];
-        let issues = coverage_validate(&inputs, 0.0, 3).expect("tre issue ammesse");
+        let issues = coverage_validate(&inputs, 0.0, 3, precisione()).expect("tre issue ammesse");
         assert_eq!(issues.len(), 3);
         assert_eq!(
             issues
@@ -658,11 +696,11 @@ mod tests {
             vec![(0, 1), (0, 2), (1, 2)]
         );
         assert!(matches!(
-            coverage_validate(&inputs, 0.0, 2),
+            coverage_validate(&inputs, 0.0, 2, precisione()),
             Err(ExtensionError::IssueLimit { limit: 2 })
         ));
         assert!(matches!(
-            coverage_validate(&inputs, 0.0, 0),
+            coverage_validate(&inputs, 0.0, 0, precisione()),
             Err(ExtensionError::InvalidParameter {
                 name: "max_issues",
                 ..
@@ -674,7 +712,7 @@ mod tests {
     fn coverage_validate_rejects_non_polygonal_invalid_and_non_finite_inputs() {
         let point = vec![Geometry::Point(Point::new(0.0, 0.0))];
         assert!(matches!(
-            coverage_validate(&point, 0.0, DEFAULT_MAX_ISSUES),
+            coverage_validate(&point, 0.0, DEFAULT_MAX_ISSUES, precisione()),
             Err(ExtensionError::UnsupportedGeometry {
                 index: 0,
                 found: "Point"
@@ -682,12 +720,12 @@ mod tests {
         ));
         let bowtie = vec![bowtie()];
         assert!(matches!(
-            coverage_validate(&bowtie, 0.0, DEFAULT_MAX_ISSUES),
+            coverage_validate(&bowtie, 0.0, DEFAULT_MAX_ISSUES, precisione()),
             Err(ExtensionError::InvalidGeometry { index: 0, .. })
         ));
         let nan = vec![Geometry::Point(Point::new(f64::NAN, 0.0))];
         assert!(matches!(
-            coverage_validate(&nan, 0.0, DEFAULT_MAX_ISSUES),
+            coverage_validate(&nan, 0.0, DEFAULT_MAX_ISSUES, precisione()),
             Err(ExtensionError::NonFiniteCoordinate { index: 0 })
         ));
     }
@@ -700,14 +738,15 @@ mod tests {
             Some(rectangle(2.0, 0.0, 6.0, 4.0)),
         ];
         let cells = wkb_cells(&inputs);
-        let rows = coverage_validate_rows(&cells, 0.0, DEFAULT_MAX_ISSUES).expect("righe");
+        let rows =
+            coverage_validate_rows(&cells, 0.0, DEFAULT_MAX_ISSUES, precisione()).expect("righe");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].issue_type, "overlap");
         assert_eq!((rows[0].index_a, rows[0].index_b), (0, 2));
         assert_close(rows[0].area, 8.0);
         let geometry = crate::geometry_from_wkb(&rows[0].wkb).expect("decode");
         assert_close(geometry.unsigned_area(), 8.0);
-        assert!(coverage_validate_rows(&cells, -1.0, DEFAULT_MAX_ISSUES).is_err());
+        assert!(coverage_validate_rows(&cells, -1.0, DEFAULT_MAX_ISSUES, precisione()).is_err());
     }
 
     // --- geo.shared_paths ----------------------------------------------------

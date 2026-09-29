@@ -36,6 +36,11 @@ use plenora_kernels_geo::advanced::{voronoi_cells, AdvancedError};
 use plenora_kernels_geo::predicates::{evaluate, PredicateError, SpatialPredicate};
 use plenora_kernels_geo::topology::{dissolve, TopologyError};
 
+/// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
+fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
+    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
+}
+
 /// Il reperto del 5 settembre 2026, decodificato **senza** validazione OGC:
 /// serve la geometria grezza, perche' il punto e' quello che i chiamanti
 /// fanno quando la validano loro.
@@ -82,7 +87,7 @@ fn voronoi_su_reperto_concluso_resta_invalidpoint_con_contesto() {
 #[test]
 fn dissolve_su_reperto_concluso_resta_invalidgeometry() {
     let geometrie = [reperto(), quadrato()];
-    let errore = dissolve(&geometrie).expect_err("il reperto non passa");
+    let errore = dissolve(&geometrie, precisione()).expect_err("il reperto non passa");
     assert!(
         matches!(errore, TopologyError::InvalidGeometry(_)),
         "col candidato esatto `geo` conclude sempre: {errore:?}"
