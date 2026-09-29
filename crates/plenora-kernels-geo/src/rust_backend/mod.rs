@@ -120,10 +120,10 @@
 //!   vertici dell'overlay sul vertice d'ingresso piu' vicino, o sul lato
 //!   assiale d'ingresso che gli passa accanto, entro una diagonale del passo
 //!   della griglia, e la griglia stessa: entrambi nel bilancio del controllo
-//!   della griglia. Gli agganci interni di `i_overlay` allo split dei
-//!   segmenti, con raggio che cresce a ogni giro, li limita il controllo
-//!   finale: ogni vertice dell'output entro la precisione da un lato
-//!   d'ingresso (`make_valid::checked_displacement`). Prima di tutto, la
+//!   della griglia, diviso fra gli overlay in catena. Gli agganci interni di
+//!   `i_overlay` allo split dei segmenti, con raggio che cresce a ogni giro,
+//!   non hanno un limite a priori e nessun controllo a posteriori li vede
+//!   (README, «Limiti dichiarati»). Prima di tutto, la
 //!   spaziatura dei `f64` al modulo massimo delle coordinate non supera
 //!   `p / 64` (`precision::coordinate_abbastanza_fitte`), in `polygonize` e
 //!   negli overlay.

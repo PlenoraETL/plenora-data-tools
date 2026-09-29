@@ -87,42 +87,28 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
   `FloatPointAdapter::with_iter_conservative` di `i_float` 5.0.0). Un giro
   sposta un punto di al più `(1 + 3 sqrt(2) / 2) g` (arrotondamento dei
   vertici e degli incroci, primo aggancio, pulizia del risultato) più `12
-  ulp(M)` per gli arrotondamenti dei `f64`: oltre `p / 2` (la tolleranza
-  del controllo a posteriori, sotto) l'overlay non si esegue. Con la
-  guardia di spaziatura soddisfatta il limite non scatta: **nessun limite
-  d'estensione**, in metri con 1 cm 20.000 km hanno `g = 2^-37` m (con
+  ulp(M)` per gli arrotondamenti dei `f64`: oltre `p / 2` (l'altra metà
+  resta agli agganci successivi al primo giro, sotto) l'overlay non si
+  esegue. Con la guardia di spaziatura soddisfatta il limite non scatta:
+  **nessun limite d'estensione**, in metri con 1 cm 20.000 km hanno `g = 2^-37` m (con
   `i_overlay` 4.5 e `i32` il passo era `2^(round(log2(h)) - 29)` e
   passavano estensioni fino a circa 2.950 km); resta solo il modulo delle
   coordinate, circa `2^39` m;
-- **risultato di ogni overlay, a posteriori, contro gli ingressi
-  originali** dell'operazione pubblica (`griglia::Operandi`), non contro i
-  risultati intermedi: gli overlay in catena (maschera dissolta e poi
-  intersecata, unione dei vicini e differenza, tagli ricorsivi) non
-  sommano gli spostamenti. Tre controlli:
-  - *nessun bordo fuori posto*: ogni **lato** del risultato sta per intero
-    entro `p / 2` dai bordi degli ingressi (l'insieme dei punti entro `p /
-    2` da un segmento è convesso, e le tracce dei segmenti vicini devono
-    ricoprire il lato). `p / 2` perché un aggancio può portare un vertice
-    su un altro bordo vicino, e i lati che vi arrivano restano entro metà
-    dello spostamento da uno dei due;
-  - *nessun bordo mancante*: ogni lato d'ingresso si spezza dove i bordi
-    degli altri operandi gli arrivano entro `p / 2`; per ogni tratto, due
-    punti a `p / 2` ai suoi due lati, e la regola dell'operazione (unione,
-    intersezione, differenza, differenza simmetrica, intersezione con
-    un'unione) valutata con `Contains` esatto su tutti gli operandi dice se
-    il risultato esatto contiene l'uno e non l'altro, cioè se il tratto sta
-    sul suo bordo. Vale anche per i bordi comuni: due bordi coincidenti
-    dallo stesso lato restano bordo nell'unione e nell'intersezione e
-    spariscono nella differenza e nella differenza simmetrica, dai lati
-    opposti il contrario (prima i bordi comuni erano esclusi, e due operandi
-    identici con uscita vuota passavano). Un tratto atteso deve stare entro
-    `p / 2` dal bordo del risultato, entro `p` se vicino a un altro bordo;
-  - *nessuna faccia in più*: accanto a ogni lato del risultato lungo almeno
-    `4 p`, a `p` dai suoi due lati, e in un punto interno di ogni faccia
-    del risultato e di ogni faccia d'ingresso (lontano più di `p` dai
-    bordi), l'appartenenza al risultato (parità) coincide con quella al
-    risultato esatto: una faccia aggiunta, anche con lati corti, o un
-    operando intero al posto di una differenza vuota, è un errore.
+- **overlay in catena, a priori**: un'operazione che passa il risultato
+  di un overlay a un altro (`clip_to_mask`: maschera dissolta e poi
+  intersecata; resti di `polygon_overlay` e rimozione delle sovrapposizioni
+  di `clean_topology`: unione dei vicini e poi differenza; `subdivide`:
+  fino a 32 livelli di tagli; il buffer: `Buffer` di `geo` e unione delle
+  parti) divide `p / 2` fra i passi (`griglia::controlla_overlay_in_catena`):
+  gli spostamenti sommati restano entro `p / 2`.
+
+**Nessun controllo a posteriori.** Il risultato di un overlay o di un
+buffer non è confrontato con gli ingressi dopo il calcolo (fino al
+porting a `i_overlay` 9 tre controlli contro gli ingressi originali, e
+per il buffer contro la definizione esatta, costavano il 90-99% di ogni
+booleana e rifiutavano risultati corretti su dati ordinari: vedi
+«Hazard»). La garanzia di 1 cm poggia sui limiti a priori sopra e sulla
+correttezza di `i_overlay`; resta la validazione OGC dell'uscita.
 
 **`make_valid` `STRUCTURE`** ha i propri overlay (`LINEWORK` non ne usa):
 gli operandi sono normalizzati per asse su `[0, 1]^2`, dove il passo della
@@ -133,11 +119,9 @@ l'aggancio al vertice d'ingresso vicino entro `d`, o al lato assiale che
 gli passa accanto (al più `sqrt(2) * d`): se `(1 + sqrt(2)) d` supera la
 precisione l'overlay non si esegue (in metri con 1 cm mai prima della
 guardia di spaziatura; con `i_overlay` 4.5, passo `span * 2^-30`, oltre
-circa 5.400 km di estensione su un solo asse). Dopo ogni
-overlay ogni **vertice** dell'output deve stare entro la precisione da un
-lato d'ingresso (`checked_displacement`): un controllo più debole dei due
-sopra (nessun controllo dei lati né dei bordi mancanti), da unificare con
-`griglia::Operandi` (condizione di rientro).
+circa 5.400 km di estensione su un solo asse). Gli overlay di una
+riparazione sono in catena (unioni dei buchi e delle parti, differenza):
+ognuno ha `p / n`, `n` il numero di anelli più tre per poligono.
 
 **Buffer** (`rust_backend::buffer`). Il `Buffer` di `geo` con gli archi di
 default approssimava con un passo di 0,2 rad (il cerchio di 10 m di un
@@ -163,30 +147,19 @@ Ora:
   il loro buffer non sparisce (la linea di 0,4 mm accanto a una di 1.300
   km perdeva un disco di 10 m). Il buffer negativo di una collezione
   considera solo le parti areali;
-- **griglia**: filtro grossolano prima del calcolo, `(3.5 + 2.5 sqrt(2)) g
-  + 12 ulp(M)` entro `p` sull'ingombro allargato di `3 |d|` (più del
-  margine di `i_overlay` 9, `2.2 |d|`; vertici, distanza, punti degli archi
-  e due overlay sulla griglia `i64`); la garanzia è il controllo che
-  segue;
-- **controllo contro la definizione esatta**, indipendente da ciò che il
-  calcolo ha prodotto (rettangoli dei lati, allungati agli estremi solo con
-  estremità quadrate; settori dei coni normali ai vertici interni; dischi o
-  quadrati agli estremi e ai punti; parti areali), su indici `rstar`: ogni
-  **lato** dell'uscita per intero dentro la definizione allargata di `p / 2`
-  (traccia del lato su ogni forma convessa, intervalli che lo ricoprono;
-  con `d < 0` ricoperto dai tratti che ciascuna parte ammette, dentro la
-  parte e fuori dalla sua fascia `|d| - f - p/2`: le erosioni di parti
-  sovrapposte si uniscono); ogni
-  vertice non affondato nella definizione ristretta di `f + p / 2` (niente
-  buchi o vertici dentro il buffer); punti campione a `|d| - f - p/2` dai
-  lati, sulle bisettrici dei giunti, davanti agli estremi e attorno ai
-  punti (con `d < 0` a `|d| + p` dentro le parti) dentro l'uscita: un'uscita
-  vuota o troncata è un errore.
+- **griglia**: prima del calcolo `(3.5 + 2.5 sqrt(2)) g + 12 ulp(M)` per
+  i due passaggi in catena (il `Buffer` di `geo` e l'unione delle parti)
+  entro `p / 2` sull'ingombro allargato di `3 |d|` (più del margine di
+  `i_overlay` 9, `2.2 |d|`; vertici, distanza, punti degli archi e due
+  overlay sulla griglia `i64`). Il buffer resta entro `p / 2` dal buffer
+  esatto verso l'esterno ed entro `f + p / 2` verso l'interno lungo gli
+  archi, senza controllo a posteriori contro la definizione.
 
 `clean_topology` con la morfologia divide il bilancio: due buffer con
 freccia `p / 8` (o lo 0,1% della tolleranza di chiusura, se maggiore:
 la stessa deviazione) e griglia entro `p / 4`, e la rimozione delle
-sovrapposizioni con griglia entro `p / 4`: in tutto `p`. La rimozione non
+sovrapposizioni (unione dei vicini e differenza in catena) con griglia
+entro `p / 4`: in tutto `p`. La rimozione non
 accumula un'unione riga dopo riga (a ogni giro la griglia spostava
 l'accumulatore: dopo 80 righe di 1.300 km una riga staccata larga 1,56 cm
 spariva senza errore): ogni resto è la riga meno l'unione delle sole righe
@@ -198,7 +171,7 @@ valido di verso opposto spariva dall'unione.
 
 **Ambito.** Tutte le operazioni geografiche. `geo.polygonize` e
 `geo.split` con i controlli di spaziatura e noding; ogni operazione che
-passa da `i_overlay` con la griglia a priori e il controllo a posteriori:
+passa da `i_overlay` con la griglia a priori (e le catene di overlay):
 `topology.rs` (`boolean_operation` e la variante `_validated`:
 intersezione, unione, differenza, differenza simmetrica; `dissolve`,
 `clip_to_mask`, `polygon_overlay`, `clean_valid_polygon_topology` con la
@@ -236,47 +209,63 @@ vertice d'ingresso non sono riconosciuti.
 
 - Una geometria più sottile di 1 cm (in tutto o in parte) può uscire fusa o
   vuota senza errore, per scelta.
-- Un lato intero del risultato portato su un bordo d'ingresso parallelo
-  vicino (entrambi gli estremi agganciati) resta entro `p / 2` da un bordo
-  d'ingresso e non è visto come fuori posto; il bordo che manca al suo
-  posto è visto dal secondo controllo solo se più largo di `p`.
+- **Nessun controllo a posteriori** (decisione dell'utente). *Regola:* la
+  garanzia di 1 cm degli overlay e del buffer poggia sui limiti a priori
+  (griglia, arrotondamenti, catene) e sulla correttezza di `i_overlay`.
+  *Ambito:* booleane, `dissolve`, `clip_to_mask`, `polygon_overlay`,
+  `clean_topology`, `coverage_validate`, `subdivide`, `buffer`,
+  `make_valid` `STRUCTURE`. *Hazard:* un difetto di `i_overlay` (una
+  faccia persa o in più, come #87 in 4.5, corretto in 9.0) passerebbe
+  senza errore; gli agganci di `i_overlay` dopo il primo giro (raggio `2^(k
+  / 2) g` al giro `k`) non hanno un tetto a priori: per spostare un punto
+  di `p / 2` servono circa `2 log2(p / g)` giri, 26 al limite della
+  guardia di spaziatura e 60 a 20.000 km con 1 cm. I controlli rimossi
+  costavano il 90-99% di ogni booleana (82% in `InteriorPoint` di `geo`
+  per faccia) e rifiutavano risultati corretti (`completo` sulle
+  differenze, sulle foglie di `subdivide` e sull'unione di due stelle da
+  5.000 vertici, la cui area coincide con `|A| + |B| - |A ∩ B|` a `7e-7`
+  m²), senza aver mai trovato un errore vero. *Condizione di rientro:* una
+  verifica a posteriori a costo accettabile (campionata, o un oracolo
+  esatto nei test su un corpus reale) che non rifiuti risultati corretti.
 - **`coverage_validate`, decisione sull'area.** L'area di ogni
   sovrapposizione si confronta con la tolleranza sul risultato passato
   dalla griglia: una sovrapposizione più sottile della griglia può sparire
   (issue mancata) e vertici diversi su lati collineari possono lasciare una
   scheggia (issue spuria), entro la precisione per il perimetro della
   zona.
-- **`subdivide`.** I tagli sono in catena (fino a 32 livelli): ogni taglio
-  è controllato contro i propri operandi (nessuna parte mancante) e ogni
-  foglia contro il poligono di partenza e le linee di taglio del suo
-  cammino (nessun lato fuori posto). Il passo della griglia si dimezza con
-  il pezzo, e lo spostamento accumulato resta sotto la precisione.
-- **Buffer, costo.** Misure in release, stella di 1.000 vertici (raggio 1
-  km) e linea di 1.000 vertici, 1 cm; totale (buffer di `geo` con gli archi
-  scelti + controlli) contro il `Buffer` di `geo` di default: poligono 20
-  ms (7 + 10) / 6 ms a 1 m, 20 ms (11 + 9) / 5 ms a 10 m, 21 ms (16 + 3) /
-  26 ms a 100 m, 189 ms (179 + 15) / 171 ms a 1000 m; linea 11 ms (4 + 5)
-  / 4 ms a 1 m, 7 ms (3 + 6) / 2 ms a 10 m, 8 ms (1 + 7) / 1 ms a 100 m,
-  9 ms (3 + 7) / 3 ms a 1000 m. Sotto i 10 m gli archi più fini e i
-  controlli costano da 3 a 7 volte `geo`, pochi millisecondi; da 100 m in su
-  quasi niente in più. Anche `geo` degenera quando molti lati convergono
-  (la chiusura di angoli di centinaia di corde).
+- **`subdivide`.** I tagli sono in catena (fino a 32 livelli): ognuno ha
+  `1/32` di `p / 2`, e le foglie non sono confrontate con il poligono di
+  partenza. Le parti non sono uniche: due versioni di `i_overlay` possono
+  scegliere tagli diversi (una foglia sotto la soglia di vertici in una e
+  sopra nell'altra), con la stessa area totale.
+- **Costo, `i_overlay` 9 con `i64` e senza controlli a posteriori.**
+  Mediane in release su Windows (7 ripetizioni), 1 cm, stelle rumorose
+  in UTM; fra parentesi `i_overlay` 4.5.2 con i controlli a posteriori:
+  booleane di due stelle da 5.000 vertici: intersezione 27,9 s (4,1 s,
+  rifiutata), unione 0,46 s (5,0 s), differenza 0,42 s (3,9 s, rifiutata),
+  xor 1,1 s (4,0 s, rifiutata) — l'intersezione, 6.872 parti, sono quasi
+  tutti la validazione OGC dell'uscita (l'overlay di `geo` 164 ms, contro
+  72-95 ms con `i32`); `dissolve` di 1.600 quadrati 6,4 ms (24 ms);
+  `coverage_validate` di 400 celle 3,2 ms (22 ms); `clean_topology` di 100
+  celle 116 ms (131 ms); `clip_inside_mask` di `bench_geo_perfcheck` 0,83
+  s (19,4 s con i controlli e `i64`); buffer di una stella da 1.000
+  vertici 10 / 14 / 42 / 261 ms a 1 / 10 / 100 / 1000 m (22 / 66 / 29 /
+  172 ms), di una linea da 1.000 vertici 7 / 7 / 17 / 113 ms (43 / 24 /
+  16 / 281 ms); `make_valid` di una stella da 1.000 vertici con 20 buchi
+  che la attraversano 285 ms `STRUCTURE`, 486 ms `LINEWORK` (264 / 468
+  ms). Il motore `i64` costa da 1,5 a 2 volte `i32` sull'overlay puro.
 - **Deviazione: archi del buffer** (decisione dell'utente). *Regola:* gli
   archi del buffer (e della chiusura di `clean_topology`) hanno freccia al
   più `max(p / 2, 0.001 |d|)`, non `p / 2`. *Ambito:* `buffer`,
   `buffer_with_cap`, la morfologia di `clean_valid_polygon_topology`
-  (`rust_backend::buffer::freccia_degli_archi`); la griglia e il controllo
-  contro la definizione restano a `p / 2`. *Hazard:* oltre `|d| = 500 p`
+  (`rust_backend::buffer::freccia_degli_archi`); la griglia resta entro
+  `p / 2`. *Hazard:* oltre `|d| = 500 p`
   il buffer si scosta dal buffer esatto fino allo 0,1% della distanza (10
   cm a 100 m, 1 m a 1 km), sempre verso l'interno lungo gli archi (poligoni
   inscritti), senza errore: sopra la precisione di 1 cm. *Condizione di
   rientro:* archi entro `p / 2` a costo accettabile per ogni distanza
   (`i_overlay` non scende sotto un passo di `0.01 pi`), o un parametro
   esplicito di tolleranza nel piano.
-- **Buffer, lati.** Il controllo dei lati è verso l'esterno (ogni lato
-  dentro la definizione); verso l'interno contano vertici e campioni: un
-  lato che rientra nel buffer fra due vertici corretti non è visto se non
-  lascia scoperto un campione.
 - **Non applicabile.** Le parti di `subdivide` sotto la soglia di vertici
   escono invariate, senza overlay; i punti con estremità piatte e il buffer
   negativo senza parti areali sono vuoti per definizione, senza calcolo.
@@ -289,10 +278,8 @@ vertice d'ingresso non sono riconosciuti.
   nulla, non taglia.
 
 **Condizione di rientro.** Nessuna per la precisione, che è una scelta di
-prodotto. Per `make_valid` `STRUCTURE`, portare i suoi overlay sui due
-controlli contro gli ingressi originali (`griglia::Operandi`) al posto del
-controllo dei soli vertici (`checked_displacement`), che non vede un lato
-che non segue il linework né una faccia omessa.
+prodotto. Per l'assenza del controllo a posteriori, vedi l'hazard
+«Nessun controllo a posteriori».
 
 ### `geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata
 

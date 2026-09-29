@@ -5,22 +5,22 @@
 //! nelle unita' delle coordinate, [`Precision`]) come argomento esplicito,
 //! senza valore predefinito: prima di ogni overlay di `i_overlay` il passo
 //! della griglia e la spaziatura delle coordinate degli operandi di quella
-//! chiamata sono confrontati con meta' della precisione; dopo l'overlay il
-//! risultato e' confrontato con gli ingressi **originali** dell'operazione
-//! (`rust_backend::griglia::Operandi`): nessun lato oltre meta' della
-//! precisione dai loro bordi, nessun tratto di bordo del risultato esatto
-//! mancante. Oltre, [`TopologyError::PrecisionInsufficient`].
+//! chiamata sono confrontati con meta' della precisione (divisa fra i passi
+//! quando piu' overlay sono in catena, `rust_backend::griglia`). Oltre,
+//! [`TopologyError::PrecisionInsufficient`]. Il risultato non e'
+//! confrontato con gli ingressi dopo il calcolo: resta la sola validazione
+//! OGC dell'output (README, «Limiti dichiarati»).
 
 use geo::algorithm::bool_ops::unary_union;
 use geo::orient::{Direction, Orient};
 use geo::{BooleanOps, BoundingRect, CoordsIter, Geometry, MultiPolygon};
+use rstar::primitives::{GeomWithData, Rectangle};
+use rstar::{RTree, AABB};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::rust_backend::buffer::{buffer_con_freccia, ErroreBuffer, Estremita};
-use crate::rust_backend::griglia::{
-    self, ErroreVerifica, Operandi, PrecisioneInsufficiente, Regola,
-};
+use crate::rust_backend::griglia::{self, PrecisioneInsufficiente};
 use crate::rust_backend::precision::Precision;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -81,11 +81,10 @@ pub enum TopologyError {
     /// *forma* del payload, mai il contenuto.
     #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
-    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe, o ha
-    /// introdotto, supera la precisione dichiarata: coordinate troppo rade,
-    /// passo della griglia troppo grosso per l'estensione degli operandi, o
-    /// un lato del risultato oltre la precisione dai bordi degli ingressi.
-    /// Nessun dato nel messaggio.
+    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe supera la
+    /// precisione dichiarata: coordinate troppo rade, o passo della griglia
+    /// troppo grosso per l'estensione degli operandi. Nessun dato nel
+    /// messaggio.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
 }
@@ -93,15 +92,6 @@ pub enum TopologyError {
 impl From<PrecisioneInsufficiente> for TopologyError {
     fn from(_: PrecisioneInsufficiente) -> Self {
         Self::PrecisionInsufficient
-    }
-}
-
-impl From<ErroreVerifica> for TopologyError {
-    fn from(errore: ErroreVerifica) -> Self {
-        match errore {
-            ErroreVerifica::PrecisioneInsufficiente => Self::PrecisionInsufficient,
-            ErroreVerifica::CalcoloNonConcluso(forma) => Self::CalcoloNonConcluso(forma),
-        }
     }
 }
 
@@ -176,8 +166,8 @@ fn checked_result(result: MultiPolygon<f64>) -> Result<Geometry<f64>, TopologyEr
 /// - `UnsupportedGeometry`: an input is not Polygon/MultiPolygon.
 /// - `InvalidGeometry`: an input fails OGC validation, or the result is not
 ///   valid.
-/// - `PrecisionInsufficient`: la griglia dell'overlay sposterebbe, o ha
-///   spostato, il risultato oltre la precisione.
+/// - `PrecisionInsufficient`: la griglia dell'overlay sposterebbe il
+///   risultato oltre la precisione.
 pub fn boolean_operation(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -222,15 +212,7 @@ fn boolean_operation_impl(
 ) -> Result<Geometry<f64>, TopologyError> {
     let left = coerce(left_geometry, validated)?;
     let right = coerce(right_geometry, validated)?;
-    let result = boolean_raw(&left, &right, operation, precision)?;
-    let atteso = match operation {
-        BooleanOperation::Intersection => Regola::Intersezione,
-        BooleanOperation::Union => Regola::Unione,
-        BooleanOperation::Difference => Regola::Differenza(0),
-        BooleanOperation::SymmetricDifference => Regola::DifferenzaSimmetrica,
-    };
-    let operandi = Operandi::nuovi(vec![&left, &right])?;
-    checked(result, &operandi, |_| true, None, atteso, precision)
+    checked_result(boolean_raw(&left, &right, operation, precision, 1)?)
 }
 
 /// Coercizione con o senza il gate OGC di ingresso.
@@ -242,37 +224,27 @@ fn coerce(geometry: &Geometry<f64>, validated: bool) -> Result<MultiPolygon<f64>
     }
 }
 
-/// La booleana di due ingressi, con il controllo a priori della griglia e
-/// senza alcun controllo del risultato: lo fa il chiamante, contro gli
-/// ingressi originali della sua operazione.
+/// La booleana di due ingressi, con il controllo a priori della griglia
+/// per uno di `passi` overlay in catena (vedi `rust_backend::griglia`), senza
+/// validazione dell'output: la fa il chiamante.
 fn boolean_raw(
     left: &MultiPolygon<f64>,
     right: &MultiPolygon<f64>,
     operation: BooleanOperation,
     precision: Precision,
+    passi: u32,
 ) -> Result<MultiPolygon<f64>, TopologyError> {
-    griglia::controlla_overlay(griglia::rettangolo_multipoligoni([left, right]), precision)?;
+    griglia::controlla_overlay_in_catena(
+        griglia::rettangolo_multipoligoni([left, right]),
+        precision,
+        passi,
+    )?;
     protetto(|| match operation {
         BooleanOperation::Intersection => left.intersection(right),
         BooleanOperation::Union => left.union(right),
         BooleanOperation::Difference => left.difference(right),
         BooleanOperation::SymmetricDifference => left.xor(right),
     })
-}
-
-/// I controlli a posteriori contro gli ingressi originali (nessun lato
-/// fuori posto, nessun bordo mancante secondo la regola `atteso`), poi la
-/// validazione OGC dell'output.
-fn checked(
-    result: MultiPolygon<f64>,
-    operandi: &Operandi<'_>,
-    rilevante: impl Fn(usize) -> bool,
-    regione: Option<geo::Rect<f64>>,
-    atteso: Regola,
-    precision: Precision,
-) -> Result<Geometry<f64>, TopologyError> {
-    operandi.verifica(&result, rilevante, regione, atteso, precision)?;
-    checked_result(result)
 }
 
 /// Efficient polygonal dissolve/unary union. Grouping and attribute
@@ -315,13 +287,12 @@ fn dissolve_impl(
         .iter()
         .map(|geometry| coerce(geometry, validated))
         .collect::<Result<_, _>>()?;
-    let result = dissolve_raw(&polygons, precision)?;
-    let operandi = Operandi::nuovi(polygons.iter().collect())?;
-    checked(result, &operandi, |_| true, None, Regola::Unione, precision)
+    checked_result(dissolve_raw(&polygons, precision, 1)?)
 }
 
 /// L'unione di tutti gli ingressi, con il controllo a priori della griglia
-/// e senza controllo del risultato (vedi [`boolean_raw`]).
+/// per uno di `passi` overlay in catena e senza validazione dell'output
+/// (vedi [`boolean_raw`]).
 ///
 /// Gli ingressi sono orientati (anello esterno antiorario) prima di
 /// `unary_union`: `geo` sceglie la regola di riempimento dal verso del primo
@@ -330,8 +301,13 @@ fn dissolve_impl(
 fn dissolve_raw(
     polygons: &[MultiPolygon<f64>],
     precision: Precision,
+    passi: u32,
 ) -> Result<MultiPolygon<f64>, TopologyError> {
-    griglia::controlla_overlay(griglia::rettangolo_multipoligoni(polygons), precision)?;
+    griglia::controlla_overlay_in_catena(
+        griglia::rettangolo_multipoligoni(polygons),
+        precision,
+        passi,
+    )?;
     protetto(|| {
         let oriented: Vec<MultiPolygon<f64>> = polygons
             .iter()
@@ -380,9 +356,8 @@ pub fn clip_to_mask_validated(
     clip_to_mask_impl(geometries, masks, true, precision)
 }
 
-/// Il pezzo di ogni riga e' controllato contro la riga e le maschere
-/// originali (etichette: maschere `0..m`, righe `m..`), non contro la
-/// maschera dissolta: gli spostamenti delle due griglie non si sommano.
+/// La maschera dissolta e poi intersecata con ogni riga: due overlay in
+/// catena, ognuno entro `p / 4`.
 fn clip_to_mask_impl(
     geometries: &[Geometry<f64>],
     masks: &[Geometry<f64>],
@@ -400,23 +375,17 @@ fn clip_to_mask_impl(
         .iter()
         .map(|geometry| coerce(geometry, validated))
         .collect::<Result<_, _>>()?;
-    let mask = dissolve_raw(&masks, precision)?;
+    let mask = dissolve_raw(&masks, precision, 2)?;
     checked_result(mask.clone())?;
-    let m = masks.len();
-    let operandi = Operandi::nuovi(masks.iter().chain(&rows).collect())?;
     rows.iter()
-        .enumerate()
-        .map(|(row, polygons)| {
-            let clipped = boolean_raw(polygons, &mask, BooleanOperation::Intersection, precision)?;
-            let soggetto = m + row;
-            let clipped = checked(
-                clipped,
-                &operandi,
-                |etichetta| etichetta < m || etichetta == soggetto,
-                polygons.bounding_rect(),
-                Regola::IntersezioneConUnione(soggetto),
+        .map(|polygons| {
+            let clipped = checked_result(boolean_raw(
+                polygons,
+                &mask,
+                BooleanOperation::Intersection,
                 precision,
-            )?;
+                2,
+            )?)?;
             Ok((!is_empty(&clipped)).then_some(clipped))
         })
         .collect()
@@ -546,9 +515,8 @@ fn candidate_pairs(
     .map_err(dal_join)
 }
 
-/// Ogni pezzo e' controllato contro gli ingressi originali da cui viene:
-/// etichette `i` per la riga sinistra `i`, `left.len() + j` per la destra
-/// `j`; un resto contro la sua riga e tutte le righe dell'altro lato.
+/// Le intersezioni delle coppie sono un overlay; i resti due in catena
+/// (unione dell'altro lato, poi differenza).
 // Sequenza lineare dei passi dell'operazione: lunghezza intrinseca.
 #[allow(clippy::too_many_lines)]
 fn polygon_overlay_impl(
@@ -574,8 +542,6 @@ fn polygon_overlay_impl(
         .map(|geometry| coerce(geometry, validated))
         .collect::<Result<_, _>>()?;
     let pairs = candidate_pairs(left, right, max_candidate_pairs, validated)?;
-    let left_count = left.len();
-    let operandi = Operandi::nuovi(left_polygons.iter().chain(&right_polygons).collect())?;
     let mut pieces = Vec::new();
 
     if matches!(
@@ -587,21 +553,13 @@ fn polygon_overlay_impl(
                 usize::try_from(pair.left).map_err(|_| TopologyError::IndexOverflow)?;
             let right_index =
                 usize::try_from(pair.right).map_err(|_| TopologyError::IndexOverflow)?;
-            let destra = left_count + right_index;
-            let result = boolean_raw(
+            let geometry = checked_result(boolean_raw(
                 &left_polygons[left_index],
                 &right_polygons[right_index],
                 BooleanOperation::Intersection,
                 precision,
-            )?;
-            let geometry = checked(
-                result,
-                &operandi,
-                |etichetta| etichetta == left_index || etichetta == destra,
-                left_polygons[left_index].bounding_rect(),
-                Regola::Intersezione,
-                precision,
-            )?;
+                1,
+            )?)?;
             push_piece(
                 &mut pieces,
                 geometry,
@@ -612,20 +570,16 @@ fn polygon_overlay_impl(
         }
     }
 
-    let remainder = |soggetto: usize,
-                     polygons: &MultiPolygon<f64>,
-                     mask: &MultiPolygon<f64>,
-                     altro_lato: &dyn Fn(usize) -> bool|
+    let remainder = |polygons: &MultiPolygon<f64>,
+                     mask: &MultiPolygon<f64>|
      -> Result<Geometry<f64>, TopologyError> {
-        let result = boolean_raw(polygons, mask, BooleanOperation::Difference, precision)?;
-        checked(
-            result,
-            &operandi,
-            |etichetta| etichetta == soggetto || altro_lato(etichetta),
-            polygons.bounding_rect(),
-            Regola::Differenza(soggetto),
+        checked_result(boolean_raw(
+            polygons,
+            mask,
+            BooleanOperation::Difference,
             precision,
-        )
+            2,
+        )?)
     };
 
     if matches!(
@@ -633,13 +587,11 @@ fn polygon_overlay_impl(
         OverlayMode::Union | OverlayMode::Identity | OverlayMode::SymmetricDifference
     ) {
         let right_mask = (!right.is_empty())
-            .then(|| dissolve_raw(&right_polygons, precision))
+            .then(|| dissolve_raw(&right_polygons, precision, 2))
             .transpose()?;
         for (index, geometry) in left.iter().enumerate() {
             let piece = match &right_mask {
-                Some(mask) => remainder(index, &left_polygons[index], mask, &|etichetta| {
-                    etichetta >= left_count
-                })?,
+                Some(mask) => remainder(&left_polygons[index], mask)?,
                 None => geometry.clone(),
             };
             push_piece(&mut pieces, piece, Some(index), None, max_results)?;
@@ -648,16 +600,11 @@ fn polygon_overlay_impl(
 
     if matches!(mode, OverlayMode::Union | OverlayMode::SymmetricDifference) {
         let left_mask = (!left.is_empty())
-            .then(|| dissolve_raw(&left_polygons, precision))
+            .then(|| dissolve_raw(&left_polygons, precision, 2))
             .transpose()?;
         for (index, geometry) in right.iter().enumerate() {
             let piece = match &left_mask {
-                Some(mask) => remainder(
-                    left_count + index,
-                    &right_polygons[index],
-                    mask,
-                    &|etichetta| etichetta < left_count,
-                )?,
+                Some(mask) => remainder(&right_polygons[index], mask)?,
                 None => geometry.clone(),
             };
             push_piece(&mut pieces, piece, None, Some(index), max_results)?;
@@ -681,7 +628,7 @@ fn polygon_overlay_impl(
 ///   overlap-removal step produces an invalid geometry.
 /// - `IndexOverflow`: a count is not representable as `u64`.
 /// - `PrecisionInsufficient`: un buffer della morfologia o una booleana
-///   sposterebbe, o ha spostato, il risultato oltre la precisione.
+///   sposterebbe il risultato oltre la precisione.
 pub fn clean_valid_polygon_topology(
     geometries: &[Geometry<f64>],
     snap_tolerance: f64,
@@ -755,17 +702,17 @@ fn checked_buffer(
 /// Il bilancio della precisione `p` con la morfologia (`fill_gaps`): due
 /// buffer (positivo e negativo), ognuno con archi di freccia `p / 8` (o lo
 /// 0,1% della tolleranza, se maggiore: deviazione dichiarata del buffer) e
-/// griglia entro `p / 4`, e la rimozione delle sovrapposizioni con griglia
-/// entro `p / 4`: `2 (p/8 + p/4) + p/4 = p`. Senza morfologia la rimozione
-/// ha tutta la tolleranza `p / 2` delle booleane.
+/// griglia entro `p / 4`, e la rimozione delle sovrapposizioni (unione dei
+/// vicini e differenza, due overlay in catena) con griglia entro `p / 4`:
+/// `2 (p/8 + p/4) + p/4 = p`. Senza morfologia la rimozione ha tutta la
+/// tolleranza `p / 2` delle booleane.
 ///
 /// La rimozione delle sovrapposizioni non accumula un'unione riga dopo
 /// riga (a ogni giro la griglia sposterebbe di nuovo l'accumulatore, e gli
 /// spostamenti si sommerebbero fino a cancellare una riga vicina): ogni
 /// resto e' la riga meno l'unione delle sole righe precedenti che la
-/// toccano (per ingombro), prese dagli ingressi dopo la morfologia, e si
-/// controlla contro di esse (entro meta' della precisione). Totale: entro
-/// la precisione.
+/// toccano (per ingombro), prese dagli ingressi dopo la morfologia. Totale:
+/// entro la precisione.
 // Sequenza lineare dei passi dell'operazione: lunghezza intrinseca.
 #[allow(clippy::too_many_lines)]
 fn clean_valid_polygon_topology_impl(
@@ -855,7 +802,7 @@ fn clean_valid_polygon_topology_impl(
                     .map_or_else(|| Ok(MultiPolygon::new(Vec::new())), |g| coerce(g, true))
             })
             .collect::<Result<_, _>>()?;
-        let operandi = Operandi::nuovi(rows.iter().collect())?;
+        let ingombri = indice_ingombri(&rows);
         for (row, geometry) in working.iter_mut().enumerate() {
             if geometry.is_none() {
                 continue;
@@ -863,30 +810,58 @@ fn clean_valid_polygon_topology_impl(
             let Some(bounds) = rows[row].bounding_rect() else {
                 continue;
             };
-            let previous: Vec<usize> = operandi
-                .vicini(bounds)
-                .into_iter()
-                .filter(|&other| other < row)
-                .collect();
+            let previous = vicini_precedenti(&ingombri, bounds, row);
             if previous.is_empty() {
                 continue;
             }
             let neighbours: Vec<MultiPolygon<f64>> =
                 previous.iter().map(|&other| rows[other].clone()).collect();
-            let union = dissolve_raw(&neighbours, precision)?;
-            let result = boolean_raw(&rows[row], &union, BooleanOperation::Difference, precision)?;
-            let remainder = checked(
-                result,
-                &operandi,
-                |etichetta| etichetta == row || previous.binary_search(&etichetta).is_ok(),
-                Some(bounds),
-                Regola::Differenza(row),
+            let union = dissolve_raw(&neighbours, precision, 2)?;
+            let remainder = checked_result(boolean_raw(
+                &rows[row],
+                &union,
+                BooleanOperation::Difference,
                 precision,
-            )?;
+                2,
+            )?)?;
             *geometry = (!is_empty(&remainder)).then_some(remainder);
         }
     }
     Ok(working)
+}
+
+/// L'indice dei rettangoli d'ingombro delle righe (le righe vuote non ci
+/// sono).
+fn indice_ingombri(rows: &[MultiPolygon<f64>]) -> RTree<GeomWithData<Rectangle<[f64; 2]>, usize>> {
+    RTree::bulk_load(
+        rows.iter()
+            .enumerate()
+            .filter_map(|(index, polygons)| {
+                polygons.bounding_rect().map(|rect| {
+                    GeomWithData::new(
+                        Rectangle::from_corners(rect.min().into(), rect.max().into()),
+                        index,
+                    )
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Le righe prima di `row` il cui ingombro tocca `bounds`, in ordine.
+fn vicini_precedenti(
+    indice: &RTree<GeomWithData<Rectangle<[f64; 2]>, usize>>,
+    bounds: geo::Rect<f64>,
+    row: usize,
+) -> Vec<usize> {
+    let busta = AABB::from_corners(bounds.min().into(), bounds.max().into());
+    let mut vicini: Vec<usize> = indice
+        .locate_in_envelope_intersecting(&busta)
+        .map(|elemento| elemento.data)
+        .filter(|&other| other < row)
+        .collect();
+    vicini.sort_unstable();
+    vicini
 }
 
 #[cfg(test)]

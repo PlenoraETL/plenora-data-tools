@@ -29,7 +29,7 @@ use rstar::{RTree, RTreeObject, AABB};
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
 use crate::extensions::{check_tolerance, invalid_parameter, protetto, u64_len, ExtensionError};
 use crate::geometry_type_name as geometry_name;
-use crate::rust_backend::griglia::{self, Operandi, Regola};
+use crate::rust_backend::griglia;
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 
@@ -206,11 +206,9 @@ fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, Ex
     Ok(geometry)
 }
 
-/// Ogni intersezione passa dalla griglia di `i_overlay`: prima, il
-/// controllo a priori sull'ingombro della coppia; dopo, ogni lato
-/// dell'intersezione entro la precisione dai bordi delle due geometrie
-/// (anche quando l'area resta sotto la tolleranza: la decisione
-/// sull'area viene dal risultato).
+/// Ogni intersezione passa dalla griglia di `i_overlay`, con il controllo a
+/// priori sull'ingombro della coppia; la decisione sull'area viene dal
+/// risultato, senza controllo a posteriori (README, «Limiti dichiarati»).
 fn coverage_validate_elements(
     elements: &[Option<CoverageElement>],
     tree: &RTree<IndexedEnvelope>,
@@ -218,13 +216,6 @@ fn coverage_validate_elements(
     max_issues: u64,
     precision: Precision,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
-    let vuoto = MultiPolygon::new(Vec::new());
-    let operandi = Operandi::nuovi(
-        elements
-            .iter()
-            .map(|element| element.as_ref().map_or(&vuoto, |e| &e.polygons))
-            .collect(),
-    )?;
     let mut issues = Vec::new();
     for (a, b) in protetto(|| candidate_pairs(elements, tree))? {
         let left = &elements[a]
@@ -237,13 +228,6 @@ fn coverage_validate_elements(
             .polygons;
         griglia::controlla_overlay(griglia::rettangolo_multipoligoni([left, right]), precision)?;
         let intersection = protetto(|| left.intersection(right))?;
-        operandi.verifica(
-            &intersection,
-            |etichetta| etichetta == a || etichetta == b,
-            left.bounding_rect(),
-            Regola::Intersezione,
-            precision,
-        )?;
         let area = protetto(|| intersection.unsigned_area())?;
         if area > tolerance {
             if u64_len(issues.len())? >= max_issues {

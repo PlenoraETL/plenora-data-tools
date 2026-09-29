@@ -65,9 +65,9 @@ pub enum ExtensionError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
-    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe, o ha
-    /// introdotto, supera la precisione dichiarata (`geo.subdivide`,
-    /// `geo.coverage_validate`). Nessun dato nel messaggio.
+    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe supera la
+    /// precisione dichiarata (`geo.subdivide`, `geo.coverage_validate`).
+    /// Nessun dato nel messaggio.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
     /// Un calcolo di `geo`, `i_overlay` o `rstar` e' andato in panico dentro
@@ -75,19 +75,6 @@ pub enum ExtensionError {
     /// del payload, mai il contenuto. Interno.
     #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
-}
-
-impl From<crate::rust_backend::griglia::ErroreVerifica> for ExtensionError {
-    fn from(errore: crate::rust_backend::griglia::ErroreVerifica) -> Self {
-        match errore {
-            crate::rust_backend::griglia::ErroreVerifica::PrecisioneInsufficiente => {
-                Self::PrecisionInsufficient
-            }
-            crate::rust_backend::griglia::ErroreVerifica::CalcoloNonConcluso(forma) => {
-                Self::CalcoloNonConcluso(forma)
-            }
-        }
-    }
 }
 
 /// Un calcolo di `geo` (o `rstar`) dietro la barriera dei panici: un panico

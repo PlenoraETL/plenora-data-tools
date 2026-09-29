@@ -59,9 +59,9 @@ pub enum OperationError {
     /// reggere. Porta la *forma* del payload, mai il contenuto.
     #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
-    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe, o ha
-    /// introdotto, nel buffer supera la precisione dichiarata (vedi
-    /// [`buffer_with_cap`]). Nessun dato nel messaggio.
+    /// Lo spostamento che la griglia di `i_overlay` introdurrebbe nel buffer
+    /// supera la precisione dichiarata (vedi [`buffer_with_cap`]). Nessun
+    /// dato nel messaggio.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
 }
@@ -305,17 +305,16 @@ pub fn buffer(
 /// (`Precision::from_crs` con un CRS, altrimenti esplicita). Il buffer e'
 /// quello di `geo::Buffer` con gli archi scelti dalla precisione (freccia
 /// `max(p / 2, 0.001 |d|)`, deviazione dichiarata oltre 5 m con 1 cm) e le
-/// componenti sotto la griglia bufferizzate come punti, poi controllato
-/// contro la definizione esatta del buffer (`rust_backend::buffer`). Le
-/// estremita' e il trattamento di punti e linee con distanza non positiva
-/// sono quelli di `geo::Buffer`.
+/// componenti sotto la griglia bufferizzate come punti, con la griglia
+/// controllata a priori (`rust_backend::buffer`, nessun controllo a
+/// posteriori). Le estremita' e il trattamento di punti e linee con
+/// distanza non positiva sono quelli di `geo::Buffer`.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `distance` non e' finita (NaN o infinita);
-/// - `PrecisionInsufficient`: la griglia supererebbe la precisione, o il
-///   risultato non rispetta la definizione entro la tolleranza;
+/// - `PrecisionInsufficient`: la griglia supererebbe la precisione;
 /// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC.
 pub fn buffer_with_cap(
     geometry: &Geometry<f64>,

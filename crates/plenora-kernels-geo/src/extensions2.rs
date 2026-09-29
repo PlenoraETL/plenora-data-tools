@@ -16,8 +16,8 @@
 //!   e' deterministica ma non specificata; l'output e' validato.
 
 use geo::{
-    Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, Line, LineString, MapCoords,
-    MultiPoint, MultiPolygon, Polygon, Rect,
+    Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, LineString, MapCoords, MultiPoint,
+    MultiPolygon, Polygon, Rect,
 };
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::PlenoraError;
@@ -29,7 +29,7 @@ use crate::extensions::{
     check_tolerance, ensure_valid, invalid_parameter, protetto, u64_len, validate_output,
     ExtensionError,
 };
-use crate::rust_backend::griglia::{self, IndiceLinework, Operandi, Regola};
+use crate::rust_backend::griglia;
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 
@@ -430,14 +430,6 @@ fn chunk_line_string(line: &LineString<f64>, max_vertices: usize) -> Vec<Geometr
     parts
 }
 
-/// Il poligono di partenza di un taglio ricorsivo: i suoi bordi, le linee
-/// di taglio sul cammino fino al pezzo corrente e la precisione.
-struct Taglio<'a> {
-    bordi: &'a IndiceLinework,
-    linee: Vec<Line<f64>>,
-    precision: Precision,
-}
-
 /// Taglio ricorsivo di un poligono di partenza.
 fn subdivide_polygon_root(
     polygon: &Polygon<f64>,
@@ -445,15 +437,7 @@ fn subdivide_polygon_root(
     precision: Precision,
     parts: &mut Vec<Geometry<f64>>,
 ) -> Result<(), ExtensionError> {
-    let bordi = protetto(|| {
-        IndiceLinework::da_multipoligoni([(0, &MultiPolygon::new(vec![polygon.clone()]))])
-    })?;
-    let mut taglio = Taglio {
-        bordi: &bordi,
-        linee: Vec::new(),
-        precision,
-    };
-    subdivide_polygon(polygon, max_vertices, 0, &mut taglio, parts)
+    subdivide_polygon(polygon, max_vertices, 0, precision, parts)
 }
 
 /// Taglio ricorsivo di un poligono per bisezione dell'envelope.
@@ -462,33 +446,20 @@ fn subdivide_polygon_root(
 /// intersecato nativamente (`BooleanOps`) con le due meta'; la linea di
 /// taglio appartiene a entrambe le meta' (sovrapposizione di area nulla).
 ///
-/// Ogni intersezione passa dalla griglia di `i_overlay`: prima, il controllo
-/// a priori sull'ingombro del pezzo (la meta' vi sta dentro); a ogni foglia
-/// prodotta da un taglio, ogni lato deve stare entro la precisione dai
-/// bordi del poligono di partenza o dalle linee di taglio del suo cammino
-/// (il bordo esatto di `P` intersecato con una meta' sta su quelli). Il
-/// controllo e' sugli ingressi originali, non sui pezzi intermedi: gli
-/// spostamenti dei livelli non si sommano oltre la precisione.
+/// Ogni intersezione passa dalla griglia di `i_overlay`, con il controllo a
+/// priori sull'ingombro del pezzo (la meta' vi sta dentro). I tagli sono in
+/// catena, un livello sul risultato del precedente: ognuno ha la sua parte
+/// di [`MAX_SUBDIVIDE_DEPTH`] del bilancio (`griglia::controlla_overlay_in_catena`),
+/// e la foglia piu' profonda resta entro meta' della precisione. Nessun
+/// controllo a posteriori delle foglie (README, «Limiti dichiarati»).
 fn subdivide_polygon(
     polygon: &Polygon<f64>,
     max_vertices: usize,
     depth: u32,
-    taglio: &mut Taglio<'_>,
+    precision: Precision,
     parts: &mut Vec<Geometry<f64>>,
 ) -> Result<(), ExtensionError> {
     if polygon.coords_count() <= max_vertices {
-        if depth > 0
-            && !protetto(|| {
-                taglio.bordi.bordo_entro(
-                    &MultiPolygon::new(vec![polygon.clone()]),
-                    &taglio.linee,
-                    |_| true,
-                    taglio.precision,
-                )
-            })?
-        {
-            return Err(ExtensionError::PrecisionInsufficient);
-        }
         parts.push(Geometry::Polygon(polygon.clone()));
         return Ok(());
     }
@@ -502,51 +473,32 @@ fn subdivide_polygon(
         .ok_or_else(|| ExtensionError::InvalidInput("poligono senza envelope".to_owned()))?;
     let min = rect.min();
     let max = rect.max();
-    let (halves, cut) = if max.x - min.x >= max.y - min.y {
+    let halves = if max.x - min.x >= max.y - min.y {
         let mid_x = f64::midpoint(min.x, max.x);
-        (
-            [
-                Rect::new(min, Coord { x: mid_x, y: max.y }),
-                Rect::new(Coord { x: mid_x, y: min.y }, max),
-            ],
-            Line::new(Coord { x: mid_x, y: min.y }, Coord { x: mid_x, y: max.y }),
-        )
+        [
+            Rect::new(min, Coord { x: mid_x, y: max.y }),
+            Rect::new(Coord { x: mid_x, y: min.y }, max),
+        ]
     } else {
         let mid_y = f64::midpoint(min.y, max.y);
-        (
-            [
-                Rect::new(min, Coord { x: max.x, y: mid_y }),
-                Rect::new(Coord { x: min.x, y: mid_y }, max),
-            ],
-            Line::new(Coord { x: min.x, y: mid_y }, Coord { x: max.x, y: mid_y }),
-        )
+        [
+            Rect::new(min, Coord { x: max.x, y: mid_y }),
+            Rect::new(Coord { x: min.x, y: mid_y }, max),
+        ]
     };
-    griglia::controlla_overlay(Some(rect), taglio.precision)?;
-    taglio.linee.push(cut);
+    griglia::controlla_overlay_in_catena(Some(rect), precision, MAX_SUBDIVIDE_DEPTH)?;
     let pezzo = MultiPolygon::new(vec![polygon.clone()]);
     for half in halves {
         let meta = MultiPolygon::new(vec![half.to_polygon()]);
         let intersection = protetto(|| pezzo.intersection(&meta))?;
-        // Nessuna parte mancante rispetto agli operandi di questo taglio: lo
-        // spostamento accumulato dai livelli (passo che si dimezza con il
-        // pezzo) resta sotto la precisione, e i lati delle foglie sono
-        // controllati contro il poligono di partenza.
-        Operandi::nuovi(vec![&pezzo, &meta])?.verifica(
-            &intersection,
-            |_| true,
-            None,
-            Regola::Intersezione,
-            taglio.precision,
-        )?;
         for part in intersection.0 {
             // Scarti di area nulla lungo la linea di taglio.
             if part.coords_count() == 0 || protetto(|| part.unsigned_area())? == 0.0 {
                 continue;
             }
-            subdivide_polygon(&part, max_vertices, depth + 1, taglio, parts)?;
+            subdivide_polygon(&part, max_vertices, depth + 1, precision, parts)?;
         }
     }
-    taglio.linee.pop();
     Ok(())
 }
 
@@ -630,8 +582,8 @@ fn subdivide_validated(
 /// - `ExtensionError::Internal`: invariante interna violata (mai atteso:
 ///   punti e linee hanno al piu' 2 vertici).
 /// - `ExtensionError::PrecisionInsufficient`: il taglio dei poligoni passa
-///   dalla griglia di `i_overlay`, che sposterebbe, o ha spostato, una parte
-///   oltre la precisione dichiarata (`precision`, nelle unita' delle
+///   dalla griglia di `i_overlay`, che sposterebbe una parte oltre la
+///   precisione dichiarata (`precision`, nelle unita' delle
 ///   coordinate: `Precision::from_crs` con un CRS, altrimenti esplicita).
 pub fn subdivide(
     geometry: &Geometry<f64>,
