@@ -165,6 +165,9 @@ const fn vero() -> bool {
 struct TabellaSpec {
     nome: String,
     colonne: Vec<ColonnaSpec>,
+    /// Metadati di schema dell'ingresso (`table.assert_metadata`).
+    #[serde(default)]
+    metadati: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -178,7 +181,10 @@ struct UscitaSpec {
 struct ColonnaSpec {
     nome: String,
     tipo: String,
-    valori: Vec<Value>,
+    /// Testo originale di ogni valore: un `float64` si legge dal suo testo
+    /// con `str::parse`, esatto, perché `serde_json` senza `float_roundtrip`
+    /// può sbagliare l'ultima cifra.
+    valori: Vec<Box<RawValue>>,
     /// CRS della colonna `geometry`; assente vale `EPSG:4326`.
     #[serde(default)]
     crs: Option<String>,
@@ -670,13 +676,42 @@ fn aggiungi(builder: &mut dyn ArrayBuilder, tipo: &DataType, valore: &Value) -> 
     Ok(())
 }
 
+/// Un valore d'esempio come `float64`, letto dal testo: `null`, un numero
+/// JSON o le stringhe `"NaN"`, `"inf"`, `"-inf"`.
+fn float_dal_testo(testo: &str) -> Result<Option<f64>, String> {
+    match testo.trim() {
+        "null" => Ok(None),
+        "\"NaN\"" => Ok(Some(f64::NAN)),
+        "\"inf\"" => Ok(Some(f64::INFINITY)),
+        "\"-inf\"" => Ok(Some(f64::NEG_INFINITY)),
+        numero => numero
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("{numero}: numero atteso")),
+    }
+}
+
 fn colonna(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
     let (tipo, geometria) = tipo_arrow(&spec.tipo)?;
+    if tipo == DataType::Float64 && !geometria {
+        let valori = spec
+            .valori
+            .iter()
+            .map(|valore| float_dal_testo(valore.get()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let array = plenora_core::arrow::array::Float64Array::from(valori);
+        return Ok((Field::new(&spec.nome, tipo, true), Arc::new(array)));
+    }
+    let valori = spec
+        .valori
+        .iter()
+        .map(|valore| serde_json::from_str::<Value>(valore.get()).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
     if geometria {
         let crs = spec.crs.as_deref().unwrap_or("EPSG:4326");
         let campo = geometry_output_field(&spec.nome, crs).map_err(|e| e.to_string())?;
         let mut builder = BinaryBuilder::new();
-        for valore in &spec.valori {
+        for valore in &valori {
             if valore.is_null() {
                 builder.append_null();
                 continue;
@@ -696,8 +731,8 @@ fn colonna(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
             spec.nome
         ));
     }
-    let mut builder = make_builder(&tipo, spec.valori.len());
-    for valore in &spec.valori {
+    let mut builder = make_builder(&tipo, valori.len());
+    for valore in &valori {
         aggiungi(builder.as_mut(), &tipo, valore)?;
     }
     let array = builder.finish();
@@ -705,6 +740,13 @@ fn colonna(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
 }
 
 fn tabella(colonne: &[ColonnaSpec]) -> Result<RecordBatch, String> {
+    tabella_con_metadati(colonne, &BTreeMap::new())
+}
+
+fn tabella_con_metadati(
+    colonne: &[ColonnaSpec],
+    metadati: &BTreeMap<String, String>,
+) -> Result<RecordBatch, String> {
     let mut campi = Vec::new();
     let mut array = Vec::new();
     for spec in colonne {
@@ -713,8 +755,12 @@ fn tabella(colonne: &[ColonnaSpec]) -> Result<RecordBatch, String> {
         array.push(valori);
     }
     let righe = colonne.first().map_or(0, |spec| spec.valori.len());
-    plenora_core::batch_with_rows(Arc::new(Schema::new(campi)), array, righe)
-        .map_err(|e| e.to_string())
+    let metadati = metadati
+        .iter()
+        .map(|(chiave, valore)| (chiave.clone(), valore.clone()))
+        .collect();
+    let schema = Schema::new_with_metadata(campi, metadati);
+    plenora_core::batch_with_rows(Arc::new(schema), array, righe).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,7 +1100,7 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
     let ingressi = esempio
         .ingressi
         .iter()
-        .map(|spec| tabella(&spec.colonne))
+        .map(|spec| tabella_con_metadati(&spec.colonne, &spec.metadati))
         .collect::<Result<Vec<_>, _>>()?;
     let piano = Pipeline::from_json(&testo_piano(scheda)).map_err(|e| format!("piano: {e}"))?;
     let schemi: Vec<(&str, SchemaRef)> = esempio
@@ -1309,7 +1355,8 @@ fn sezione_esempio(scheda: &Scheda, verifica: Verifica) -> String {
     );
     uscita.push_str("```\n");
     for spec in &esempio.ingressi {
-        let batch = tabella(&spec.colonne).expect("ingresso già verificato");
+        let batch =
+            tabella_con_metadati(&spec.colonne, &spec.metadati).expect("ingresso già verificato");
         let crs: Vec<String> = spec
             .colonne
             .iter()
@@ -1327,7 +1374,15 @@ fn sezione_esempio(scheda: &Scheda, verifica: Verifica) -> String {
         } else {
             format!(" (geometrie {})", crs.join(", "))
         };
-        let _ = writeln!(uscita, "\nIngresso `{}`{crs}:\n", spec.nome);
+        let metadati = if spec.metadati.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (metadati di schema `{}`)",
+                serde_json::to_string(&spec.metadati).expect("metadati")
+            )
+        };
+        let _ = writeln!(uscita, "\nIngresso `{}`{crs}{metadati}:\n", spec.nome);
         uscita.push_str(&tabella_markdown(&rendi(&batch)));
     }
     let attesa = tabella(&esempio.uscita.colonne).expect("uscita già verificata");

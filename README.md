@@ -1364,7 +1364,6 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   (`table.filter`, `table.sort`) non punta alla riga del file d'origine.
   *Rientro*: la raccolta completa per riga del passo geo di `190c493`
   (`collect_cell_failures`), con il controllo di provenance.
->>>>
 
 - **Errori che dipendono dai valori delle celle, in esecuzione.**
   *Regola*: la validazione rifiuta ciò che config, schema e limiti rendono
