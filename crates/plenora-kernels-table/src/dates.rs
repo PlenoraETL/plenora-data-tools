@@ -108,21 +108,28 @@ fn scrivi_formattato(valore: impl std::fmt::Display) -> Result<String> {
 /// RFC 2822.
 pub(crate) struct FormatoUscita<'a> {
     items: Vec<Item<'a>>,
-    /// Il formato scrive il secolo a due cifre (anno / 100).
-    secolo: bool,
+    /// Il formato scrive il secolo civile a due cifre (`%C`, anno / 100).
+    secolo_civile: bool,
+    /// Il formato scrive il secolo dell'anno ISO a due cifre (item chrono
+    /// `IsoYearDiv100`, senza specificatore strftime ma costruibile).
+    secolo_iso: bool,
 }
 
 impl<'a> FormatoUscita<'a> {
     fn compila(format: &'a str) -> Result<Self> {
         validate_format_items(format, "output_format")?;
         let items = compile_items(format);
-        let secolo = items.iter().any(|item| {
-            matches!(
-                item,
-                Item::Numeric(Numeric::YearDiv100 | Numeric::IsoYearDiv100, _)
-            )
-        });
-        Ok(Self { items, secolo })
+        let secolo_civile = items
+            .iter()
+            .any(|item| matches!(item, Item::Numeric(Numeric::YearDiv100, _)));
+        let secolo_iso = items
+            .iter()
+            .any(|item| matches!(item, Item::Numeric(Numeric::IsoYearDiv100, _)));
+        Ok(Self {
+            items,
+            secolo_civile,
+            secolo_iso,
+        })
     }
 
     /// Istante di prova per scoprire, prima dei dati, gli item che chrono
@@ -157,8 +164,12 @@ impl<'a> FormatoUscita<'a> {
         Ok(formato)
     }
 
+    /// Ogni secolo si controlla sul proprio anno: `%C` sul civile, il
+    /// secolo ISO sull'anno ISO. 0000-01-01 ha anno civile 0 (secolo "00")
+    /// e anno ISO -1.
     fn controlla_secolo(&self, anno: i32, anno_iso: i32) -> Result<()> {
-        if self.secolo && !((0..=9999).contains(&anno) && (0..=9999).contains(&anno_iso)) {
+        let fuori = |anno: i32| !(0..=9999).contains(&anno);
+        if (self.secolo_civile && fuori(anno)) || (self.secolo_iso && fuori(anno_iso)) {
             return Err(PlenoraError::DataMapping(
                 "anno fuori da 0..=9999: il secolo di output_format non e' rappresentabile".into(),
             ));
@@ -1001,6 +1012,62 @@ mod tests {
                 "{op} {json}: analisi {analisi:?}, kernel {kernel:?}"
             );
         }
+    }
+
+    #[test]
+    fn il_secolo_civile_non_dipende_dall_anno_iso() {
+        // 0000-01-01 e 0000-01-02: anno civile 0, anno ISO -1. 9999-12-31:
+        // anno civile e ISO 9999.
+        for (valore, atteso) in [
+            ("0000-01-01", "00"),
+            ("0000-01-02", "00"),
+            ("9999-12-31", "99"),
+        ] {
+            let uscita = date_format(
+                &date_testuali(&[valore]),
+                &config(serde_json::json!({
+                    "column": "d", "input_format": "%Y-%m-%d",
+                    "output_format": "%C", "output_column": "o"})),
+            )
+            .unwrap_or_else(|errore| panic!("{valore}: {errore}"));
+            let testo = uscita
+                .column_by_name("o")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .expect("o");
+            assert_eq!(testo.value(0), atteso, "{valore}");
+        }
+    }
+
+    #[test]
+    fn il_secolo_iso_si_controlla_sull_anno_iso() {
+        use chrono::format::Pad;
+
+        let formato = FormatoUscita {
+            items: vec![Item::Numeric(Numeric::IsoYearDiv100, Pad::Zero)],
+            secolo_civile: false,
+            secolo_iso: true,
+        };
+        let data = |a, m, g| {
+            NaiveDate::from_ymd_opt(a, m, g)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .expect("data")
+        };
+        // 0000-01-01 (sabato) e 0000-01-02 sono nell'anno ISO -1, 0000-01-03 (lunedi')
+        // apre la settimana 1 dell'anno ISO 0.
+        assert!(matches!(
+            formato.scrivi_senza_fuso(&data(0, 1, 2)),
+            Err(PlenoraError::DataMapping(_))
+        ));
+        assert_eq!(
+            formato.scrivi_senza_fuso(&data(0, 1, 3)).expect("iso 0"),
+            "00"
+        );
+        assert_eq!(
+            formato
+                .scrivi_senza_fuso(&data(9999, 12, 31))
+                .expect("iso 9999"),
+            "99"
+        );
     }
 
     #[test]
