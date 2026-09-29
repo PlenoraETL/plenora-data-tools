@@ -1,10 +1,8 @@
-//! Benchmark autonomo per `table.assert_unique` (baseline
-//! kernel: quality).
+//! Benchmark autonomo per `table.assert_unique` (kernel: quality).
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep2` (seed logico 42,
 //! xorshift64, stesse colonne), cosi' lo scenario `unique_id` e'
-//! confrontabile con la baseline di `benchmarks/sweep/sweep2.json`
-//! (`table.assert_unique`, "chiave id unica", 5.03M righe/s).
+//! confrontabile con lo scenario "chiave id unica" di `bench_sweep2`.
 //!
 //! Scenari (duplicati in posizioni diverse, piu' la scansione completa):
 //! - `unique_id`: chiave `id` int64 unica, nessun duplicato (full scan);

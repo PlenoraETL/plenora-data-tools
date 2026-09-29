@@ -4,7 +4,7 @@
 //!
 //! Fixture deterministica IDENTICA a `bench_sweep` (seed logico 42,
 //! xorshift64, stesse colonne e stesse configurazioni), cosi' le misure
-//! sono confrontabili con le baseline di `benchmarks/sweep/sweep.json`:
+//! sono confrontabili con quelle dello sweep:
 //! - fixture base: `id` int64, `num` float64, `grp` utf8 (1024 gruppi),
 //!   `text` utf8 (40 char esadecimali), `key` int64 (1M valori distinti
 //!   possibili), `path` utf8;

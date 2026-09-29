@@ -1,5 +1,5 @@
-//! Sweep prestazionale, seconda ondata (`bench_sweep2)`: 26 kernel tabellari
-//! residui (mai ottimizzati) + i 9 kernel delle estensioni v1.1/v1.2/v1.3
+//! Sweep prestazionale, seconda parte (`bench_sweep2`): 26 kernel tabellari
+//! residui (mai ottimizzati) piu' 9 kernel aggiunti dopo il primo sweep
 //! (`select_columns`, `limit`, `top_n`, `stable_fingerprint`, `align_schema`,
 //! `concat_by_name`, `validate_rules`, `hmac_sha256`, `fuzzy_join`).
 //!
@@ -19,7 +19,7 @@
 //! permutati, `align_schema` 20 colonne.
 //!
 //! Uso: `bench_sweep2` — scrive `benchmarks/sweep/sweep2.json` e
-//! `benchmarks/sweep/sweep2.md` (relativi alla cwd, /work in Docker) e
+//! `benchmarks/sweep/sweep2.md` (relativi alla directory corrente) e
 //! stampa le stesse righe JSON su stdout.
 
 #[path = "comune/mod.rs"]

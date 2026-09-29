@@ -1,29 +1,67 @@
-//! plenora-kernels-table — kernel tabellari puri `&RecordBatch -> Result<RecordBatch>`
-//! (architettura.md).
+//! plenora-kernels-table — kernel tabellari puri su Arrow `RecordBatch`.
 //!
-//! I moduli kernel — `columns`, `strings`, `cleansing`, `filtering`,
+//! Ogni operazione `table.*` del catalogo ha due parti: l'analisi del
+//! contratto ([`analyze::analyze_table_contract`]), che decide senza dati
+//! se la config e lo schema d'ingresso sono accettabili e quale schema esce,
+//! e il kernel, una funzione pura dal batch d'ingresso (due per le binarie),
+//! la config e se serve i [`Limits`] al batch d'uscita, che lavora su una
+//! tabella intera in memoria. Le varianti che scaricano su disco file
+//! temporanei (`aggregate`, `distinct`, `sort`, set operation) stanno in
+//! [`spill`]; quale variante eseguire lo decide il chiamante.
+//!
+//! I moduli kernel sono `columns`, `strings`, `cleansing`, `filtering`,
 //! `dates`, `utility`, `analysis`, `aggregation`, `reshape`, `joins`,
-//! `setops`, `security`, `quality`, `governance`, `formula`, `expressions`,
-//! `spill` — con gli helper che condividono.
+//! `fuzzy`, `setops`, `security`, `quality`, `governance`, `formula`,
+//! `expressions` e `spill`. Questo file raccoglie cio' che condividono: i
+//! limiti ([`Limits`]), la lettura e la conversione dei valori scalari, i
+//! confronti numerici esatti ([`NumericBound`], [`scalar_compare`]), le stime
+//! di memoria per il rifiuto preventivo ([`preflight_output_bytes`]) e la
+//! costruzione dei batch d'uscita.
 
 use serde::{Deserialize, Serialize};
 
 /// Limiti dei kernel tabellari.
 ///
-/// Non coincide con `plenora_core::limits::Limits` (D19,
-/// errori-e-limiti.md): quello non ha `max_columns` e `max_split_columns` e
-/// sostituisce `max_rows` con `RowLimits`. La mappatura fra i due e' una
-/// decisione semantica dell'engine, non un adattamento meccanico.
+/// Non coincide con `plenora_core::limits::Limits`, il contenitore dei
+/// limiti di un piano: quello non ha `max_columns` e `max_split_columns`
+/// (qui valgono le costanti di [`limiti_interni`]) e sostituisce `max_rows`
+/// con limiti di riga per arco. La traduzione dall'uno all'altro la fa chi
+/// esegue il piano (il runner di `plenora-pipeline`), non questo crate.
+///
+/// Con `#[serde(default)]` un campo assente prende il valore di
+/// [`Limits::default`]; un campo sconosciuto si rifiuta.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
+    /// Righe massime: tetto dei parametri di config che contano righe (`n`,
+    /// `offset`, `window`, i bucket di `ntile`, le voci di `mapping`...) e
+    /// delle uscite dei kernel che lo controllano (`fuzzy_join`,
+    /// `reconcile`...). Default: 10 000 000.
     pub max_rows: usize,
+    /// Colonne massime di un batch e delle liste di colonne di una config.
+    /// Default: [`limiti_interni::MAX_COLUMNS`].
     pub max_columns: usize,
+    /// Byte massimi di un testo di config (separatori, formati, prefissi,
+    /// valori sostitutivi) e dei valori testuali costruiti dai kernel che lo
+    /// controllano (`concat_columns`, `melt`...). Default: 16 MiB.
     pub max_string_bytes: usize,
+    /// Byte massimi di un'espressione regolare di config. Default: 4096.
     pub max_regex_bytes: usize,
+    /// Colonne massime che un singolo `split_column` produce.
+    /// Default: [`limiti_interni::MAX_SPLIT_COLUMNS`].
     pub max_split_columns: usize,
+    /// Byte di memoria governata: tetto delle stime di output dei rifiuti
+    /// preventivi ([`preflight_output_bytes`]) e della memoria contata dai
+    /// kernel che la contano. E' una stima, non un tetto duro (vedi
+    /// [`preflight_output_bytes`]). Default:
+    /// `plenora_core::limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE`.
     pub max_governed_memory_bytes: usize,
+    /// Byte massimi scritti su disco dalle varianti spilled ([`spill`]).
+    /// Default: `plenora_core::limits::DEFAULT_MAX_TEMP_BYTES`.
     pub max_temp_bytes: u64,
+    /// Numero di partizioni (file temporanei) delle varianti spilled; zero
+    /// si rifiuta dove serve partizionare. Default:
+    /// `plenora_core::limits::DEFAULT_SPILL_PARTITIONS` (64).
     pub spill_partitions: usize,
 }
 
@@ -32,8 +70,9 @@ pub struct Limits {
 ///
 /// Proteggono invarianti dei kernel — quante colonne puo' generare una
 /// `flatten_json` o uno `split` — che il formato del piano non nomina, e per
-/// questo mancano da `plenora_core::limits::Limits`. Sono dichiarati dove
-/// sono imposti, perche' non sembrino ereditati dal piano.
+/// questo mancano da `plenora_core::limits::Limits`: il runner li copia in
+/// [`Limits`] cosi' come sono. Sono dichiarati dove sono imposti, perche' non
+/// sembrino ereditati dal piano.
 pub mod limiti_interni {
     /// Colonne totali che un batch puo' raggiungere dopo un'espansione.
     pub const MAX_COLUMNS: usize = 4_096;
@@ -224,7 +263,7 @@ pub fn utf8_column<'a>(
         .ok_or_else(|| PlenoraError::Schema(format!("la colonna {name} deve essere Utf8")))
 }
 
-/// Merge R2.4 dei metadati di schema di piu' sorgenti, nell'ordine dato.
+/// Unione dei metadati di schema di piu' sorgenti, nell'ordine dato.
 ///
 /// Una chiave nuova si aggiunge, la stessa chiave con lo stesso valore resta,
 /// la stessa chiave con valori diversi e' un conflitto: mai precedenza
@@ -276,8 +315,8 @@ pub(crate) fn metadata_schema_input(
 /// stesso tipo conserva i metadati del campo.
 ///
 /// Per le operazioni che cambiano i valori e non il significato della
-/// colonna (R2.4 type-preserving: `fill_na`, `replace`), come dichiara la
-/// loro analisi. Con un tipo diverso o una colonna nuova e' esattamente
+/// colonna, a tipo invariato (`fill_na`, `replace`), come dichiara la loro
+/// analisi. Con un tipo diverso o una colonna nuova e' esattamente
 /// [`replace_or_append`].
 ///
 /// # Errors
@@ -323,10 +362,16 @@ pub fn replace_keeping_field_metadata(
 /// Batch con la colonna `name` sostituita da `array` (o aggiunta in coda se
 /// assente), preservando i metadati dello schema.
 ///
+/// Il campo sostituito o aggiunto e' nuovo: nome, `data_type` e `nullable`
+/// dati, senza metadati di campo (per conservarli a tipo invariato c'e'
+/// [`replace_keeping_field_metadata`]).
+///
 /// # Errors
 ///
-/// - `Schema`: `array` ha un numero di righe diverso dal batch, oppure lo
-///   schema risultante non e' coerente con le colonne.
+/// - `Schema`: `array` ha un numero di righe diverso dal batch;
+/// - `DataMapping` (errore Arrow): lo schema risultante non e' coerente con
+///   le colonne, per esempio `array` non e' di tipo `data_type` o ha null
+///   con `nullable` falso.
 pub fn replace_or_append(
     batch: &RecordBatch,
     name: &str,
@@ -527,8 +572,11 @@ pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
 /// E' una stima, non una misura: resta fuori cio' che l'implementazione
 /// alloca oltre il risultato (indici, tabelle hash, temporanei) se il
 /// chiamante non lo include. Impedisce le esplosioni di ordini di grandezza,
-/// non rende `max_governed_memory_bytes` un tetto duro; vedi
-/// errori-e-limiti.md#che-cosa-la-memoria-governata-non-garantisce.
+/// non rende `max_governed_memory_bytes` un tetto duro. Nel runner il
+/// budget di un passo lo governa il suo modello di costo (README, «Budget di
+/// memoria»).
+///
+/// Un output a zero righe o a zero byte per riga passa sempre.
 ///
 /// # Errors
 ///
@@ -676,7 +724,7 @@ pub fn validate_output_name(name: &str) -> Result<()> {
 /// verrebbe letta come stringa vuota.
 ///
 /// Il controllo dei limiti della chiave sta qui: `value()` fuori intervallo
-/// va in panico (gate R6).
+/// va in panico, e nei kernel i panici non sono ammessi.
 ///
 /// # Errors
 ///
@@ -736,7 +784,8 @@ pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
 /// - `InvalidPlan`: epoch date32 non valida (guardia interna);
 /// - `Schema`: valore date32/timestamp fuori intervallo, timezone Arrow non
 ///   valida, decimal128 incoerente o con scala non supportata, binary non
-///   UTF-8, dictionary non Utf8, tipo non supportato dal profilo scalare.
+///   UTF-8, dictionary non Utf8 o con chiave fuori dal dizionario, tipo non
+///   supportato dal profilo scalare.
 pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>> {
     if array.is_null(row) {
         return Ok(None);
@@ -986,7 +1035,9 @@ pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
 /// un decimale `0.1`. Dove il valore serve a decidere (confronti, chiavi,
 /// vincoli) valgono [`scalar_as_f64`] o [`scalar_compare`].
 ///
-/// Deroga registrata in errori-e-limiti.md#limiti-dichiarati.
+/// E' una deroga dichiarata alla regola «esatto o errore»: un intero oltre
+/// 2^53, un timestamp o un decimale diventano il double piu' vicino (per un
+/// decimale, il quoziente di due double arrotondati), senza errore.
 ///
 /// # Errors
 ///
@@ -1388,9 +1439,9 @@ fn compare_scaled_i128(unscaled: i128, scale: i8, expected: i128) -> Ordering {
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss
 )]
-// Le guardie sopra ogni cast ne garantiscono gamma e integrita'; la
-// conversione del decimal a double avviene solo nel ramo frazionario, dove
-// l'approssimazione e' gia' nel contratto del letterale.
+// Le guardie sopra ogni cast ne garantiscono gamma e integrita'. Il decimal
+// non si converte mai in double: il ramo frazionario usa il confronto
+// razionale esatto di `exact_compare`.
 fn compare_decimal128_f64(unscaled: i128, scale: i8, expected: f64) -> Option<Ordering> {
     if expected.is_nan() {
         return None;
@@ -1514,8 +1565,9 @@ pub const fn scalar_compare_supported(data_type: &DataType) -> bool {
 ///
 /// # Errors
 ///
-/// `Schema` se il tipo non e' confrontabile numericamente o se il testo di
-/// una colonna Utf8 non e' un numero.
+/// `Schema` se il tipo non e' confrontabile numericamente (vedi
+/// [`scalar_compare_supported`]), se il testo di una colonna Utf8 non e' un
+/// numero o se una colonna Decimal128 e' incoerente con il proprio tipo.
 pub fn scalar_compare(
     array: &dyn Array,
     row: usize,
@@ -1565,7 +1617,11 @@ pub fn scalar_compare(
 ///
 /// - `ResourceLimit`: indice di riga oltre `u32::MAX` (cresce col numero di
 ///   righe: e' un volume, non un piano sbagliato);
-/// - `Schema`: errore Arrow nella `take` o nella costruzione del batch.
+/// - `DataMapping` (errore Arrow): errore nella `take` o nella costruzione
+///   del batch.
+///
+/// Precondizione: gli indici stanno dentro il batch. La `take` e' chiamata
+/// senza controllo dei limiti, quindi a garantirlo e' il chiamante.
 pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     let indices: UInt32Array = rows
         .iter()
@@ -1674,7 +1730,7 @@ mod tests {
         (interi, doppi)
     }
 
-    /// Oracolo (architettura.md#determinismo): il confronto intero <-> double
+    /// Oracolo: il confronto intero <-> double
     /// di `compare_i64`, `compare_u64`, `compare_i128` e `compare_f64`
     /// coincide con il confronto razionale esatto di `exact_compare`, che non
     /// converte mai il double in intero.

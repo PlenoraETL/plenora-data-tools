@@ -1,15 +1,15 @@
 //! Inferenza a secco del `DataContract` di output per le operazioni
-//! `table.*` del catalogo (architettura.md e 6.1, architettura.md#planner-ed-executor).
+//! `table.*` del catalogo: la validazione di un piano senza dati.
 //!
 //! [`analyze_table_contract`] deserializza la config (fail-closed: config non
 //! valida -> `InvalidPlan`), replica le validazioni statiche del kernel e
-//! inferisce il contratto di output: schema Arrow, colonna geometrica (D16) e
-//! proprieta' (`sorted_by`, `row_count`) con provenienza e scope (D25).
+//! inferisce il contratto di output: schema Arrow, colonna geometrica e
+//! proprieta' (`sorted_by`, `row_count`) con provenienza e scope.
 //!
-//! D16: una rinomina preserva il `FieldId`, una colonna derivata ne riceve uno
-//! nuovo dal [`FieldAllocator`]; la geometria sopravvive solo se la colonna e'
-//! propagata inalterata (una sovrascrittura `replace_or_append` la rende
-//! tabellare).
+//! Identita' delle colonne: una rinomina preserva il `FieldId`, una colonna
+//! derivata ne riceve uno nuovo dal [`FieldAllocator`]; la geometria
+//! sopravvive solo se la colonna e' propagata inalterata (una sovrascrittura
+//! `replace_or_append` la rende tabellare).
 //!
 //! Proprieta' conservative: `sorted_by` e' `Proven` solo dopo le op che
 //! riordinano l'intero stream, si propaga dalle op che preservano l'ordine e
@@ -18,10 +18,14 @@
 //! Le op con schema dipendente dai dati (`table.pivot`, `table.transpose`,
 //! `table.flatten_json` senza `output_columns`) falliscono con `Unsupported`.
 //!
-//! Metadata Arrow (R2.4): quelli di schema attraversano l'output, con la
-//! merge-policy di `merge_metadata_maps` per le op a due sorgenti; quelli di
-//! campo seguono le classi R2.4. Le chiavi `plenora.*` si emettono solo in
-//! `executor.rs::canonical_output_schema`: qui non si perdono quelle esistenti.
+//! Metadati Arrow: quelli di schema attraversano l'output, uniti con la
+//! regola di `crate::unisci_metadata_schema` (stessa chiave con valori
+//! diversi -> errore) per le op a piu' sorgenti. Quelli di campo seguono la
+//! colonna: una colonna propagata inalterata o rinominata li conserva, una
+//! sostituita a tipo invariato (`fill_na`, `replace`) pure, una derivata
+//! nasce senza. Le chiavi `plenora.*` non le scrive l'analisi ma
+//! `plenora_core::contract::arrow_schema::arrow_schema_from_contract`: qui
+//! quelle esistenti non si perdono.
 
 // Firma uniforme degli analyzer per-op: il dispatch passa l'allocatore di
 // FieldId a ogni operazione, anche a quelle (assert, gate, join) che non
@@ -88,8 +92,8 @@ use self::strings::{
     analyze_text_normalize,
 };
 
-/// Inferisce il `DataContract` di output di un'operazione `table.*` a secco
-/// (in `validate`, architettura.md passo 6).
+/// Inferisce il `DataContract` di output di un'operazione `table.*` a secco,
+/// senza dati: e' la validazione di un passo del piano.
 ///
 /// `op` accetta id canonici e alias legacy (risolti via catalogo);
 /// `inputs` deve rispettare l'arieta' dichiarata dal catalogo (unaria,
@@ -112,7 +116,9 @@ use self::strings::{
 ///   regex o conteggi oltre `limits`;
 /// - `ResourceLimit`: colonne prodotte oltre `limits.max_columns` dove il
 ///   kernel lo tratta come limite di risorsa (`flatten_json`);
-/// - `Schema`: il contratto inferito viola le regole strutturali v1 (D16).
+/// - `Schema`: il contratto inferito viola le regole strutturali di
+///   `DataContract::new` (per esempio nomi di campo ripetuti o una
+///   geometria non coerente con lo schema).
 // Un braccio per operazione: la lunghezza e' intrinseca al dispatch.
 #[allow(clippy::too_many_lines)]
 pub fn analyze_table_contract(
@@ -490,7 +496,7 @@ mod tests {
         use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 
         // Le op tabellari sono passthrough byte-preserving — la
-        // dimensionalita' (anche `Unknown`, R3.4) e l'encoding del contratto
+        // dimensionalita' (anche `Unknown`) e l'encoding del contratto
         // di input attraversano invariati filtri e rinomine; MAI un xy
         // silenzioso.
         for dimensions in [
@@ -3469,7 +3475,7 @@ mod tests {
         .contains("schemi"));
     }
 
-    // -- Lineage dei metadata Arrow (R2.4) --------------------------------------
+    // -- Lineage dei metadata Arrow --------------------------------------------
 
     /// Clona il contratto sostituendo i metadata dello schema Arrow.
     fn with_schema_metadata(contract: &DataContract, entries: &[(&str, &str)]) -> DataContract {
@@ -3675,7 +3681,7 @@ mod tests {
             output.schema.metadata().get("shared"),
             Some(&"v".to_owned())
         );
-        // Campi ricostruiti = colonne derivate (R2.4): nessun metadata ereditato.
+        // Campi ricostruiti = colonne derivate: nessun metadata ereditato.
         let field = output.schema.field_with_name("id").unwrap();
         assert!(
             field.metadata().is_empty(),
@@ -4466,7 +4472,7 @@ mod tests {
             check_binary("table.except", &batch, &batch, json!({}), |l, r, config| {
                 setops::except(l, r, &cfg(config))
             });
-            // Stesse colonne, metadata di schema diversi: il merge R2.4 delle
+            // Stesse colonne, metadata di schema diversi: l'unione delle
             // due sorgenti, non i metadata del solo lato sinistro.
             let altra = con_metadata(&simple_batch(), "altra");
             check_binary("table.concat", &batch, &altra, json!({}), |l, r, config| {

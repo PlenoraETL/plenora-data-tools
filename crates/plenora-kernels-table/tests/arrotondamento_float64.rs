@@ -1,9 +1,10 @@
 //! Le operazioni con risultato `Float64` per contratto **arrotondano**.
 //!
-//! L'autorita' e' `docs/errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64`:
-//! in quelle operazioni il double e' il tipo del risultato, non un passaggio
-//! intermedio, e pretendere l'esattezza rifiuterebbe input legittimi. Un
-//! valore oltre 2^53 perde precisione **senza errore**.
+//! E' una deroga dichiarata alla regola «esatto o errore» (vedi
+//! `scalar_as_f64_rounded`): in quelle operazioni il double e' il tipo del
+//! risultato, non un passaggio intermedio, e pretendere l'esattezza
+//! rifiuterebbe input legittimi. Un valore oltre 2^53 perde precisione
+//! **senza errore**.
 //!
 //! Gli attesi qui sono letterali, calcolati dalla regola IEEE 754 e non da
 //! `scalar_as_f64_rounded`: un oracolo che chiedesse al codice quale sia la

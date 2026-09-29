@@ -1,12 +1,12 @@
 //! Benchmark autonomo per i kernel `table.distinct`, `table.dedup_advanced`,
-//! `table.window_function` e `table.rolling_window`, guidato dallo sweep
-//! tabellare `benchmarks/sweep/sweep.json`.
+//! `table.window_function` e `table.rolling_window`, sugli scenari dello
+//! sweep tabellare (`bench_sweep`).
 //!
 //! Stessa fixture e stessi scenari di `bench_sweep` (seed logico 42 via
 //! xorshift, 6 colonne: id/num/grp/text/key/path), stesse scale dello sweep
 //! (`distinct` a 10M, le altre a 1M), mediana di 3 run, righe/s e peak RSS
-//! (`VmHWM` da `/proc/self/status`): i numeri sono confrontabili con la
-//! baseline di `benchmarks/sweep/sweep.json`.
+//! (`VmHWM` da `/proc/self/status`): i numeri sono confrontabili con
+//! quelli dello sweep.
 //!
 //! In piu', `table.window_function` rank **senza** `group_by` a 1M e 5M su
 //! una fixture stretta come quella del catalogo di memoria (`id` Int64,

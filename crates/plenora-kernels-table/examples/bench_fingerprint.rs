@@ -4,7 +4,7 @@
 //! Fixture deterministica: IDENTICA a `base_fixture` di `bench_sweep.rs` /
 //! `bench_sweep2.rs` (seed logico 42 via xorshift64, 9 draw per riga, 6
 //! colonne id/num/grp/text/key/path) per confrontabilita' diretta con le
-//! misure dello sweep (1.5M righe/s baseline su entrambe le op).
+//! misure dello sweep.
 //!
 //! Uso: `bench_fingerprint <rows> <repetitions>`
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e
@@ -94,7 +94,7 @@ fn main() {
     std::env::set_var(HMAC_KEY_ENV, "bench-fingerprint-hmac-key-seed-42");
     let input = fixture(rows);
 
-    // Stessa config della baseline: sha256 su tutte e 6 le colonne.
+    // Stessa config dello sweep: sha256 su tutte e 6 le colonne.
     let fingerprint_sha256 = StableFingerprint {
         columns: Vec::new(),
         output_column: "fingerprint".into(),
@@ -112,7 +112,7 @@ fn main() {
         stable_fingerprint(&input, &fingerprint_md5).expect("fingerprint md5")
     });
 
-    // Stessa config della baseline: 2 colonne (id+text), chiave da env.
+    // Stessa config dello sweep: 2 colonne (id+text), chiave da env.
     let hmac_config = HmacSha256 {
         columns: vec!["id".into(), "text".into()],
         key_env: HMAC_KEY_ENV.into(),

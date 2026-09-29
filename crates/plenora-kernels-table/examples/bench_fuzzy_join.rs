@@ -1,4 +1,4 @@
-//! Benchmark autonomo per il kernel `table.fuzzy_join` (estensione v1.3).
+//! Benchmark autonomo per il kernel `table.fuzzy_join`.
 //!
 //! Fixture deterministica (seed logico 42, LCG): anagrafica destra di nomi
 //! sintetici "puliti" e anagrafica sinistra con errori di battitura
@@ -6,7 +6,7 @@
 //! riconciliazione per similarita' testuale.
 //!
 //! Uso: `bench_fuzzy_join <left_rows> <right_rows> <repetitions>`
-//! (default 100000 10000 3, lo scenario del report). Emette una riga JSON per
+//! (default 100000 10000 3). Emette una riga JSON per
 //! scenario con mediana dei tempi, righe/s e peak RSS (`VmHWM`).
 
 #[path = "comune/mod.rs"]

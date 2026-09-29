@@ -1,9 +1,7 @@
-//! Benchmark autonomo per i kernel `table.filter` e `table.sort`
-//! del motore tabellare.
+//! Benchmark autonomo per i kernel `table.filter` e `table.sort`.
 //!
-//! Fixture deterministica (seed logico 42): stessa forma di
-//! `benchmarks/baseline/harness` — `id` int64, `num` float64 (0..9999),
-//! `group` utf8 (1024 gruppi), `text` utf8.
+//! Fixture deterministica (seed logico 42): `id` int64, `num` float64
+//! (0..9999), `group` utf8 (1024 gruppi), `text` utf8.
 //!
 //! Uso: `bench_filter_sort <rows> <repetitions>`
 //! Emette una riga JSON per scenario con mediana dei tempi, righe/s e

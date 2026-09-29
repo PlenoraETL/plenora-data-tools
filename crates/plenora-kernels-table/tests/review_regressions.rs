@@ -940,14 +940,12 @@ fn il_pivot_count_non_conta_una_entry_nulla_del_dizionario() {
 #[test]
 #[allow(clippy::too_many_lines)] // Elenco di casi: la lunghezza e' nei dati.
 fn ogni_limite_di_risorsa_dei_kernel_ha_la_categoria_dedicata() {
-    // `ResourceLimit` vale nei kernel quanto in join, spill ed executor: un
-    // kernel che risponde `invalid_plan` quando sono i DATI a non entrare nel
-    // budget da' alla stessa condizione — «il piano e' corretto, il volume
-    // no» — una categoria diversa, e quindi un exit code diverso, a seconda
-    // di dove capita.
+    // `ResourceLimit` vale nei kernel quanto in join e spill: un kernel che
+    // risponde `invalid_plan` quando sono i DATI a non entrare nel budget
+    // da' alla stessa condizione — «il piano e' corretto, il volume no» —
+    // una categoria diversa a seconda di dove capita.
     //
-    // Il test attraversa un kernel per famiglia; la ricerca per classe e'
-    // documentata in docs/errori-e-limiti.md.
+    // Il test attraversa un kernel per famiglia.
     use plenora_core::ErrorCategory;
 
     let stretti = Limits {
@@ -1070,9 +1068,8 @@ fn ogni_limite_di_risorsa_dei_kernel_ha_la_categoria_dedicata() {
 #[test]
 fn i_limiti_nascosti_dietro_helper_hanno_la_categoria_dedicata() {
     // Cercare le occorrenze LETTERALI di `PlenoraError::InvalidPlan` non
-    // trova i siti che passano da un helper (`contract()` della CLI), da un
-    // costruttore di comodo (`cell_too_large` in geo) o da una conversione:
-    // qui ce n'e' uno per famiglia.
+    // trova i siti che passano da un helper, da un costruttore di comodo o
+    // da una conversione: qui ce n'e' uno per famiglia.
     use plenora_core::ErrorCategory;
 
     let stretti = Limits {
@@ -1671,7 +1668,7 @@ fn una_stima_che_perde_il_conto_non_autorizza_l_allocazione() {
     // `saturating_add` a fondo scala restituisce `usize::MAX`; con un budget
     // anch'esso a fondo scala il confronto `stima > budget` e' falso, e una
     // stima che ha perso il conto autorizzerebbe l'allocazione. E' la stessa
-    // forma del difetto gia' corretto nello spill e nel picco della CLI.
+    // forma del difetto gia' corretto nello spill.
     //
     // Il caso si costruisce sul prodotto, che e' la moltiplicazione dove il
     // traboccamento e' raggiungibile: righe enormi per una larghezza reale.
@@ -2012,7 +2009,7 @@ fn i_nomi_di_melt_si_risolvono_in_sequenza_e_non_collidono() {
 
 #[test]
 fn due_nomi_di_melt_uguali_non_producono_colonne_omonime() {
-    // Chiamando il kernel DIRETTAMENTE — l'executor rifiuta prima
+    // Chiamando il kernel DIRETTAMENTE — l'analisi rifiuta prima
     // `var_name == value_name`, ma il kernel e' pubblico — la risoluzione
     // sequenziale disambigua invece di produrre due colonne con lo stesso
     // nome.

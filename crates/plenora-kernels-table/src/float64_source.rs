@@ -1,9 +1,10 @@
 //! Lettura di una colonna Arrow come `f64` **con arrotondamento dichiarato**.
 //!
 //! Il nome dice la semantica: questa sorgente serve alle operazioni il cui
-//! risultato e' un `Float64` per contratto, dove il double e' il tipo del
-//! risultato e non un passaggio intermedio
-//! (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+//! risultato e' un `Float64` per contratto (medie, statistiche, formule),
+//! dove il double e' il tipo del risultato e non un passaggio intermedio: un
+//! intero oltre 2^53 o un decimale diventano il double piu' vicino, senza
+//! errore.
 //! Chi deve **decidere** — confrontare, raggruppare, scegliere una riga — non
 //! passa di qui: usa `scalar_as_f64` (esatto o errore) o `scalar_compare`,
 //! che non converte affatto.
@@ -27,9 +28,13 @@ use crate::scalar_as_f64_rounded;
 /// Colonna letta come `f64`: percorsi nativi per i tipi piu' comuni,
 /// `scalar_as_f64_rounded` per tutti gli altri.
 pub enum Float64Source<'a> {
+    /// Colonna `Float64`: il valore cosi' com'e'.
     Float64(&'a Float64Array),
+    /// Colonna `Int64`: cast a `f64`, arrotondato oltre 2^53.
     Int64(&'a Int64Array),
+    /// Colonna `UInt64`: cast a `f64`, arrotondato oltre 2^53.
     UInt64(&'a UInt64Array),
+    /// Ogni altro tipo: `scalar_as_f64_rounded` riga per riga.
     Generic(&'a ArrayRef),
 }
 

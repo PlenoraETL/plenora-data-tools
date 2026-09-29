@@ -1,5 +1,5 @@
 //! Benchmark autonomo per i kernel `table.union_distinct`, `table.intersect`
-//! e `table.except` (ondata stabilizzazione setops).
+//! e `table.except`.
 //!
 //! Fixture identica a quella dello sweep (`bench_sweep.rs`): xorshift64
 //! seed logico 42, tabella base a 6 colonne (`id` int64, `num` float64,

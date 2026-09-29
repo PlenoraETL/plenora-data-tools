@@ -19,7 +19,8 @@ md-5.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
-# Stable parallel merge sort for `table.sort`.
+# Parallelismo dei kernel: merge sort stabile di `table.sort`, raggruppamenti,
+# join, `fuzzy_join`, hash di sicurezza.
 rayon.workspace = true
 
 [dev-dependencies]

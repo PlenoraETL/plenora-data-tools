@@ -1,6 +1,5 @@
-//! Sweep prestazionale dei kernel tabellari NON ancora ottimizzati
-//! del motore tabellare: le op `table.*` del
-//! catalogo escluse quelle gia' ottimizzate (filter, sort, `fill_na`,
+//! Sweep prestazionale dei kernel tabellari: le op `table.*` del catalogo
+//! escluse quelle ottimizzate prima dello sweep (filter, sort, `fill_na`,
 //! coalesce, `type_cast`, aggregate, `date_add`, `date_diff`, `date_format`,
 //! `timezone_convert`, `date_extract`, `text_normalize`, join, `semi_join`,
 //! `anti_join`, `string_extract`, formula, expression, melt, pivot).
@@ -14,7 +13,7 @@
 //! `cross_join` (1k x 1k = 1M righe output), `distinct` (10M dichiarate).
 //!
 //! Uso: `bench_sweep` — scrive `benchmarks/sweep/sweep.json` e
-//! `benchmarks/sweep/sweep.md` (relativi alla cwd, /work in Docker) e
+//! `benchmarks/sweep/sweep.md` (relativi alla directory corrente) e
 //! stampa le stesse righe JSON su stdout.
 
 #[path = "comune/mod.rs"]
@@ -76,7 +75,7 @@ const M10: usize = 10_000_000;
 /// Soglia di escalation: sotto 1s a 1M righe l'op viene rimisurata a 10M.
 const ESCALATION_SECONDS: f64 = 1.0;
 
-/// Limiti allargati per le scale di benchmark (10M righe, container 10g).
+/// Limiti allargati per le scale di benchmark (10M righe).
 fn bench_limits() -> Limits {
     Limits {
         max_rows: 40_000_000,

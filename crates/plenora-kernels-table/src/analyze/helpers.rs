@@ -1,6 +1,7 @@
-//! Helper condivisi degli analyzer per-op: deserializzazione tipizzata
-//! fail-closed, propagazione della geometria (D16), merge dei metadata
-//! (R2.4) e costruzione del `DataContract` di output.
+//! Helper condivisi degli analizzatori per operazione: deserializzazione
+//! tipizzata fail-closed, controlli della config, propagazione della colonna
+//! geometrica, unione dei metadati di schema e costruzione del
+//! `DataContract` di output.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -239,7 +240,8 @@ pub(in crate::analyze) fn clone_fields(input: &DataContract) -> Vec<Field> {
 
 /// Propaga la colonna geometrica se sopravvive come colonna logica inalterata
 /// (stesso tipo dell'input) sotto il nome `preserved_as`; `None` se la colonna
-/// e' stata eliminata o sovrascritta (colonna derivata -> nuovo `FieldId`, D16).
+/// e' stata eliminata o sovrascritta (una colonna derivata riceve un
+/// `FieldId` nuovo e non e' piu' la stessa geometria).
 pub(in crate::analyze) fn propagate_geometry(
     input: &DataContract,
     output: &Schema,
@@ -259,16 +261,15 @@ pub(in crate::analyze) fn propagate_geometry(
         dimensions: geometry.dimensions,
         encoding: geometry.encoding,
         nullable: field.is_nullable(),
-        // Colonna preservata identica (R2.4 identity-preserving): la
-        // dichiarazione dei tipi si propaga invariata come le altre
-        // proprieta'.
+        // Colonna preservata identica: la dichiarazione dei tipi si propaga
+        // invariata come le altre proprieta'.
         types: geometry.types.clone(),
     })
 }
 
-/// Unisce le geometrie dei due rami di un'op binaria: la v1 ammette al
-/// massimo una colonna geometrica per arco (D16), due sopravvissute ->
-/// errore fail-closed.
+/// Unisce le geometrie dei due rami di un'op binaria: un contratto ammette al
+/// massimo una colonna geometrica, quindi due sopravvissute sono un errore
+/// `InvalidPlan`.
 pub(in crate::analyze) fn merge_geometry(
     op: &str,
     left: Option<GeometryColumnContract>,
@@ -283,15 +284,14 @@ pub(in crate::analyze) fn merge_geometry(
     }
 }
 
-/// Merge R2.4 dei metadata di schema di N sorgenti.
+/// Unione dei metadati di schema di N sorgenti: la stessa regola dei kernel
+/// (`crate::unisci_metadata_schema`), con l'errore di piano dell'analisi.
 ///
 /// Una chiave su una sola sorgente, o con lo stesso valore su piu' sorgenti,
-/// e' copiata; valori diversi sono un errore `InvalidPlan` che nomina SOLO la
-/// chiave (regola 8), mai precedenza implicita. Sorgenti in ordine di
-/// dichiarazione e chiavi in ordine lessicografico: il primo conflitto e'
-/// deterministico (architettura.md#determinismo).
-/// Il merge R2.4 dei kernel (`crate::unisci_metadata_schema`), con l'errore
-/// di piano dell'analisi.
+/// e' copiata; valori diversi sono un errore `InvalidPlan` che nomina solo
+/// la chiave (AGENTS.md, regola 5), mai precedenza implicita. Sorgenti in
+/// ordine di dichiarazione e chiavi in ordine lessicografico: il primo
+/// conflitto e' deterministico.
 fn merge_metadata_maps<'a>(
     op: &str,
     sorgenti: impl IntoIterator<Item = &'a HashMap<String, String>>,
@@ -365,8 +365,8 @@ pub(in crate::analyze) fn sorted_only(input: &DataContract) -> ContractPropertie
     }
 }
 
-/// `sorted_by = Proven(ordine, Stream)`: op blocking che riordina l'intero
-/// stream di output (architettura.md; `execution_class` Blocking).
+/// `sorted_by = Proven(ordine, Stream)`: op blocking (`execution_class`
+/// Blocking) che riordina l'intera tabella di output.
 ///
 /// L'ordine è quello del kernel `table.sort` (`aggregation::sort`): il
 /// comparatore mette il null dopo ogni valore e il discendente rovescia il

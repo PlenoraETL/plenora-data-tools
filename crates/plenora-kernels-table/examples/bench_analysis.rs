@@ -1,9 +1,8 @@
-//! Benchmark autonomo per i kernel `table.statistics` e `table.flatten_json`
-//! del motore tabellare.
+//! Benchmark autonomo per i kernel `table.statistics` e `table.flatten_json`.
 //!
 //! Fixture deterministiche identiche a `bench_sweep` (seed logico 42,
 //! xorshift64, stesso ordine di draw), cosi' i numeri sono confrontabili
-//! con `benchmarks/sweep/sweep.json`:
+//! con quelli dello sweep:
 //! - statistics: `num` float64 x `grp` utf8 (1024 gruppi), tutte le 10
 //!   statistiche (config dello sweep);
 //! - `flatten_json` discovery: JSON annidati 3 livelli, `output_columns`
