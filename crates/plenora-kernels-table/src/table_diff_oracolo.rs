@@ -240,7 +240,7 @@ fn table_diff_precedente(
                 ));
             }
         };
-        if status != "UNCHANGED" || config.include_unchanged == "yes" {
+        if status != "UNCHANGED" || config.include_unchanged == IncludeUnchanged::Yes {
             rows.push(DiffRowPrecedente {
                 old_row,
                 new_row,
@@ -333,7 +333,8 @@ fn config(chiavi: &[&str], confronto: &[&str], unchanged: &str, separator: &str)
         left_keys: chiavi.iter().map(|nome| (*nome).to_owned()).collect(),
         right_keys: chiavi.iter().map(|nome| (*nome).to_owned()).collect(),
         compare_columns: confronto.iter().map(|nome| (*nome).to_owned()).collect(),
-        include_unchanged: unchanged.into(),
+        include_unchanged: IncludeUnchanged::try_from(unchanged.to_owned())
+            .unwrap_or(IncludeUnchanged::No),
         separator: separator.into(),
     }
 }
