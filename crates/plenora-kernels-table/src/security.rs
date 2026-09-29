@@ -19,25 +19,39 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
+/// Config di `table.md5_hash`: MD5 esadecimale dei valori di alcune
+/// colonne.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Md5Hash {
+    /// Colonne del messaggio, lette come testo; l'ordine non conta (si
+    /// ordinano per nome).
     pub columns: Vec<String>,
+    /// Colonna d'uscita (`Utf8` non nullable); default `md5_hash`.
     #[serde(default = "default_hash_name")]
     pub output_column: String,
+    /// `trim` e `to_lowercase` di ogni valore e di `null_literal`; default
+    /// `true`.
     #[serde(default = "default_true")]
     pub normalize: bool,
+    /// Come entra una cella nulla; default `empty`.
     #[serde(default = "default_null_policy")]
     pub null_policy: HashNullPolicy,
+    /// Testo di una cella nulla con `null_policy` `literal`; default
+    /// `<null>`. Con le altre politiche non ha effetto.
     #[serde(default = "default_null_literal")]
     pub null_literal: String,
 }
 
+/// Politica sui null di `md5_hash` e `sha256_hash`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HashNullPolicy {
+    /// La cella nulla vale il testo vuoto (come una cella vuota).
     Empty,
+    /// La cella nulla vale `null_literal`.
     Literal,
+    /// Una cella nulla rifiuta la riga, con diagnostica per riga.
     Error,
 }
 
@@ -81,12 +95,14 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
 ///
 /// I nomi sono ordinati e deduplicati; i valori sono concatenati con
 /// separatore U+001F e, con `normalize`, trimmati e portati in minuscolo.
+/// Il messaggio non e' delimitato: un valore con U+001F, o un null con
+/// `empty` e un testo vuoto, possono dare lo stesso hash.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto;
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
-///   diagnostics;
+///   diagnostics (`validation.required_value_missing`);
 /// - `Schema`: colonna assente dal batch, valore non rappresentabile come
 ///   testo o tipo non coperto dal profilo scalare (gli errori di
 ///   `scalar_as_string`).
@@ -104,14 +120,14 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
-    // Il pre-rifiuto row-scoped vale solo per null_policy=error;
-    // empty (default) e literal hanno semantica storica dichiarata.
+    // Il pre-rifiuto row-scoped vale solo per null_policy=error: empty
+    // (default) e literal danno un valore alla cella nulla.
     if matches!(config.null_policy, HashNullPolicy::Error) {
         reject_null_hash_rows(batch, &columns, &indices)?;
     }
     // Accesso tipizzato e letterale normalizzato risolti una volta per
     // batch; per riga un solo buffer riusato, con gli stessi byte di
-    // `parts.join("\u{1f}")` della versione precedente.
+    // `parts.join("\u{1f}")` dell'oracolo (`security_hash_oracolo.rs`).
     let accessi = indices
         .iter()
         .map(|index| column_access(batch.column(*index).as_ref()))
@@ -154,16 +170,26 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     )
 }
 
+/// Config di `table.sha256_hash`: SHA-256 esadecimale di un messaggio
+/// delimitato (nome, tipo e valore di ogni colonna).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sha256Hash {
+    /// Colonne del messaggio, lette come testo; l'ordine non conta (si
+    /// ordinano per nome).
     pub columns: Vec<String>,
+    /// Colonna d'uscita (`Utf8` non nullable); default `sha256_hash`.
     #[serde(default = "default_sha256_name")]
     pub output_column: String,
+    /// `trim` e `to_lowercase` di ogni valore e di `null_literal`; default
+    /// `true`.
     #[serde(default = "default_true")]
     pub normalize: bool,
+    /// Come entra una cella nulla; default `empty`.
     #[serde(default = "default_null_policy")]
     pub null_policy: HashNullPolicy,
+    /// Testo di una cella nulla con `null_policy` `literal`; default
+    /// `<null>`. Con le altre politiche non ha effetto.
     #[serde(default = "default_null_literal")]
     pub null_literal: String,
 }
@@ -174,16 +200,19 @@ fn default_sha256_name() -> String {
 
 /// Colonna con l'hash SHA-256 (esadecimale) delle colonne configurate.
 ///
-/// Ogni parte e' framed (lunghezza u64 big-endian + valore) dopo il
-/// separatore di dominio `plenora-sha256-v1`, con byte di presenza per i
-/// null: nessuna collisione per concatenazione.
+/// Dopo il separatore di dominio `plenora-sha256-v1\0`, per ogni colonna
+/// in ordine di nome: `framed(nome)`, `framed(tipo Arrow)`, il byte 1 e
+/// `framed(valore)` (lunghezza u64 big-endian + byte). Il byte di presenza
+/// e' sempre 1: una cella nulla entra come testo vuoto o `null_literal`.
+/// Nessuna collisione per concatenazione; null e testo vuoto (`empty`), o
+/// null e `null_literal` (`literal`), coincidono.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido;
 /// - `ResourceLimit`: lunghezza di un valore oltre `u64` nel framing;
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
-///   diagnostics;
+///   diagnostics (`validation.required_value_missing`);
 /// - `Schema`: colonna assente dal batch, valore non rappresentabile come
 ///   testo o tipo non coperto dal profilo scalare (gli errori di
 ///   `scalar_as_string`).
@@ -202,8 +231,8 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
     // Il framing di nome e tipo con il byte di presenza (sempre 1: anche un
     // null diventa un valore, vuoto o letterale) e' costante per colonna; il
     // separatore di dominio e la prima intestazione sono assorbiti una volta
-    // in `base`, clonato per riga. Byte assorbiti identici alla versione
-    // precedente.
+    // in `base`, clonato per riga. Byte assorbiti identici a quelli
+    // dell'oracolo (`security_hash_oracolo.rs`).
     let accessi = indices
         .iter()
         .map(|index| column_access(batch.column(*index).as_ref()))
@@ -272,14 +301,19 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
     )
 }
 
+/// Funzione di hash di `stable_fingerprint`.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FingerprintAlgorithm {
+    /// SHA-256, 64 cifre esadecimali (default).
     #[default]
     Sha256,
+    /// MD5, 32 cifre esadecimali; non resistente alle collisioni costruite.
     Md5,
 }
 
+/// Config di `table.stable_fingerprint`: impronta canonica per riga, senza
+/// normalizzazione, con null distinto dal testo vuoto.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StableFingerprint {
@@ -287,8 +321,10 @@ pub struct StableFingerprint {
     /// nell'ordine dello schema.
     #[serde(default)]
     pub columns: Vec<String>,
+    /// Colonna d'uscita (`Utf8` non nullable); default `fingerprint`.
     #[serde(default = "default_fingerprint_name")]
     pub output_column: String,
+    /// Funzione di hash; default `sha256`.
     #[serde(default)]
     pub algorithm: FingerprintAlgorithm,
 }
@@ -389,7 +425,7 @@ fn testo_cella<'r>(
 /// Su un testo ASCII `to_lowercase` coincide con `to_ascii_lowercase` (la
 /// sola regola di contesto di `to_lowercase`, il sigma finale, riguarda un
 /// carattere non ASCII); `trim` resta quello di `str`, con gli spazi
-/// Unicode. Il testo non ASCII passa da `to_lowercase`, come prima.
+/// Unicode. Il testo non ASCII passa da `to_lowercase`.
 fn accoda_normalizzato(messaggio: &mut Vec<u8>, valore: &str) {
     let ridotto = valore.trim();
     if ridotto.is_ascii() {
@@ -648,12 +684,18 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HmacNullPolicy {
+    /// La cella nulla entra come testo vuoto, con intestazione e byte di
+    /// presenza 1 (default).
     #[default]
     Empty,
+    /// Una cella nulla rende nulla l'uscita della riga.
     Null,
+    /// La colonna nulla manca dal messaggio, intestazione compresa.
     Skip,
 }
 
+/// Config di `table.hmac_sha256`: HMAC-SHA256 per riga con chiave da
+/// variabile d'ambiente.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HmacSha256 {
@@ -662,8 +704,11 @@ pub struct HmacSha256 {
     /// NOME della variabile d'ambiente che contiene la chiave. La chiave non
     /// compare mai nel piano, negli errori o nei log: solo il nome.
     pub key_env: String,
+    /// Colonna d'uscita (`Utf8`, nullable solo con `null_policy` `null`);
+    /// default `hmac`.
     #[serde(default = "default_hmac_name")]
     pub output_column: String,
+    /// Come entra una cella nulla; default `empty`.
     #[serde(default)]
     pub null_policy: HmacNullPolicy,
 }
@@ -677,7 +722,7 @@ fn default_hmac_name() -> String {
 ///
 /// Gli stati Sha256 dopo l'assorbimento di ipad/opad dipendono SOLO dalla
 /// chiave: sono precomputati una volta per batch e clonati per riga (il
-/// byte stream assorbito e' identico alla versione byte-per-byte).
+/// byte stream assorbito e' identico a quello dell'oracolo byte per byte).
 /// `hmac_sha256` assorbe nello stato interno anche il separatore di dominio.
 fn hmac_sha256_states(key: &[u8]) -> (Sha256, Sha256) {
     const BLOCK: usize = 64;
@@ -714,9 +759,10 @@ fn hmac_sha256_with_states(inner_base: &Sha256, outer_base: &Sha256, message: &[
     output
 }
 
-/// Legge la chiave dalla variabile d'ambiente indicata. L'errore e'
-/// volutamente generico: non rivela ne' il nome della variabile ne' alcun
-/// frammento del valore.
+/// Legge la chiave (i byte UTF-8 del valore) dalla variabile d'ambiente
+/// indicata. L'errore e' volutamente generico: non rivela ne' il nome della
+/// variabile ne' alcun frammento del valore. Un valore non UTF-8 vale come
+/// variabile assente.
 fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
     match std::env::var(key_env) {
         Ok(value) if !value.is_empty() => Ok(value.into_bytes()),
@@ -743,7 +789,7 @@ fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, `key_env` vuoto,
 ///   `columns` vuoto, colonna ripetuta, chiave HMAC non disponibile
-///   (variabile d'ambiente assente o vuota);
+///   (variabile d'ambiente assente, vuota o non UTF-8);
 /// - `ResourceLimit`: lunghezza di un valore oltre `u64` nel framing;
 /// - `Schema`: colonna assente dal batch, valore non rappresentabile come
 ///   testo o tipo non coperto dal profilo scalare (gli errori di
@@ -775,8 +821,8 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let key = load_hmac_key(&config.key_env)?;
-    // hmac non ha null_policy=error; Empty (default), Null e Skip
-    // mantengono l'output storico dichiarato, nessun pre-rifiuto.
+    // hmac non ha null_policy=error: Empty (default), Null e Skip danno
+    // sempre un'uscita, nessun pre-rifiuto.
     // Stati ipad/opad dalla chiave, con il separatore di dominio gia'
     // assorbito nello stato interno: e' il prefisso costante di ogni
     // messaggio (con `skip` l'intestazione di una colonna nulla manca, e il
@@ -797,7 +843,7 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
         accesses.push(column_access(column.as_ref()));
     }
     // Con `null` la riga e' nulla alla prima colonna nulla, e le colonne
-    // seguenti non si leggono (come prima: nessun loro errore).
+    // seguenti non si leggono (quindi nessun loro errore di conversione).
     let values = colonna_digest(batch.num_rows(), 64, |row, appunti, uscita| {
         let Appunti { messaggio, testo } = appunti;
         messaggio.clear();
@@ -834,13 +880,24 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
     )
 }
 
+/// Forma della maschera di `table.mask_data`; i caratteri si contano come
+/// caratteri Unicode.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaskType {
+    /// Codice fiscale: 3 caratteri iniziali e 3 finali in chiaro, `*`.
     Cf,
+    /// Email: della parte prima dell'ultima `@` resta il primo carattere,
+    /// gli altri diventano `*` (un solo `*` se ha al piu' un carattere); il
+    /// dominio resta. Senza `@` il testo resta com'e'.
     Email,
+    /// Telefono: si tengono cifre e `+`; con almeno 6 caratteri, 3 iniziali
+    /// e 4 finali in chiaro, altrimenti il testo originale resta com'e'.
     Phone,
+    /// IBAN: 4 caratteri iniziali e 4 finali in chiaro, `*`.
     Iban,
+    /// `chars_start` iniziali e `chars_end` finali in chiaro, `mask_char`
+    /// al posto degli altri (default).
     Custom,
 }
 
@@ -848,10 +905,13 @@ const fn default_mask_type() -> MaskType {
     MaskType::Custom
 }
 
+/// Una mascheratura di `table.mask_data`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Masking {
+    /// Colonna da mascherare, letta come testo.
     pub column: String,
+    /// Forma della maschera; default `custom`.
     #[serde(default = "default_mask_type")]
     pub mask_type: MaskType,
     /// Caratteri iniziali lasciati in chiaro (`custom`; assente: 3).
@@ -904,10 +964,14 @@ impl Masking {
     }
 }
 
+/// Config di `table.mask_data`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaskData {
+    /// Mascherature, applicate in sequenza; almeno una.
     pub maskings: Vec<Masking>,
+    /// `true` sovrascrive la colonna, `false` (default) scrive
+    /// `<colonna>_masked`.
     #[serde(default)]
     pub overwrite: bool,
 }
@@ -994,15 +1058,18 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
 /// Colonne mascherate secondo le configurazioni di `config.maskings`.
 ///
 /// Con `overwrite` la colonna originale e' sostituita, altrimenti il
-/// risultato va in `<colonna>_masked`. I null restano null.
+/// risultato va in `<colonna>_masked` (`Utf8` nullable). I null restano
+/// null. Le voci si applicano in sequenza sul batch gia' mascherato dalle
+/// precedenti.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `maskings` vuoto, nome della colonna di output non valido,
 ///   `mask_char` vuoto o piu' di un carattere (tipo `custom`),
-///   `chars_start`/`chars_end`/`mask_char` con un altro tipo, valore non
-///   rappresentabile come testo (come `scalar_as_string`);
-/// - `Schema`: colonna assente dal batch.
+///   `chars_start`/`chars_end`/`mask_char` con un altro tipo;
+/// - `Schema`: colonna assente dal batch; valore non rappresentabile come
+///   testo o tipo non coperto dal profilo scalare (gli errori di
+///   `scalar_as_string`).
 pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
     if config.maskings.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -1124,8 +1191,8 @@ mod tests {
     #[test]
     fn hash_null_policy_empty_and_literal_preserve_historic_output() {
         // Il rifiuto row-scoped e' solo per null_policy=error; empty
-        // (default) e literal mantengono l'output storico (sostituzione
-        // dichiarata nel contratto dell'op, mai remediation silenziosa).
+        // (default) e literal sostituiscono il null con il valore che la
+        // politica dichiara (testo vuoto o letterale).
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Utf8, true),
@@ -1177,7 +1244,7 @@ mod tests {
         assert_eq!(digest_column(&md5_empty, "digest"), expected_empty);
         // Literal: null -> letterale dichiarato. Oracolo: sostituire i null
         // col letterale in una colonna tutta valida deve dare lo STESSO
-        // digest (la sostituzione e' la semantica storica dichiarata).
+        // digest (la sostituzione e' la semantica dichiarata).
         let sha_literal = sha256_hash(
             &batch,
             &Sha256Hash {
@@ -1530,8 +1597,8 @@ mod tests {
 
     #[test]
     fn hmac_sha256_null_policies() {
-        // hmac non ha null_policy=error — Empty (default), Null e Skip
-        // mantengono l'output storico dichiarato; nessun rifiuto aggiunto.
+        // hmac non ha null_policy=error: Empty (default), Null e Skip danno
+        // sempre un'uscita, nessun rifiuto.
         std::env::set_var("PLENORA_HMAC_NULL_KEY", "plenora-hmac-test-key");
         let batch = hmac_fixture();
         // Empty: il null di riga 1 entra nel framing come campo vuoto.
@@ -1546,7 +1613,7 @@ mod tests {
             empty.iter().all(Option::is_some),
             "empty policy: digest atteso su ogni riga"
         );
-        // Null: riga con null -> digest null in output (contratto storico).
+        // Null: riga con null -> digest null in output.
         let nulled = hmac_values(
             &batch,
             &HmacSha256 {
@@ -2201,8 +2268,8 @@ mod tests {
                     output_column: "hmac".into(),
                     null_policy,
                 };
-                // Politiche null storiche — nessun rifiuto; il percorso
-                // veloce deve coincidere con l'oracolo indipendente.
+                // Nessuna politica null rifiuta; il percorso veloce deve
+                // coincidere con l'oracolo indipendente.
                 let fast = output_strings(&hmac_sha256(&batch, &config).expect("fast"), "hmac");
                 let reference = output_strings(
                     &hmac_sha256_reference(&batch, &config).expect("ref"),

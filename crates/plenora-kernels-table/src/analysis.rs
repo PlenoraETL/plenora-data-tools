@@ -25,13 +25,22 @@ use plenora_core::diagnostics::{
 };
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 
+/// Config di `table.lookup`: traduzione dei valori di una colonna con una
+/// tabella di corrispondenza.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lookup {
+    /// Colonna da tradurre, letta come testo (`scalar_as_string`).
     pub column: String,
+    /// Corrispondenze testo della cella -> valore. Il valore si scrive come
+    /// testo: una stringa com'e', un numero o un booleano con il suo testo
+    /// JSON, `null` come stringa vuota.
     pub mapping: BTreeMap<String, Value>,
+    /// Valore delle celle non nulle senza voce in `mapping`; `null`
+    /// (default) le lascia invariate.
     #[serde(default)]
     pub default: Value,
+    /// Colonna d'uscita (`Utf8`); assente, sovrascrive `column`.
     pub output_column: Option<String>,
 }
 
@@ -120,6 +129,9 @@ const RIGHE_PER_CHUNK_LOOKUP: usize = if cfg!(test) { 16 } else { 65_536 };
 /// Colonna di lookup: ogni valore di `column` e' tradotto via `mapping`
 /// (o sostituito da `default`, se non null; altrimenti resta invariato).
 ///
+/// Il risultato e' una colonna `Utf8` nullable, `output_column` o `column`;
+/// una cella nulla resta nulla.
+///
 /// Su una colonna Utf8 le chiavi si cercano in prestito, per chunk contigui
 /// di righe in parallelo (rayon), e l'uscita si scrive in ordine di riga;
 /// gli altri tipi passano da `scalar_as_string`, riga per riga.
@@ -127,8 +139,9 @@ const RIGHE_PER_CHUNK_LOOKUP: usize = if cfg!(test) { 16 } else { 65_536 };
 /// # Errors
 ///
 /// - `InvalidPlan`: nome di output non valido (come `validate_output_name`);
-/// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
-///   di `scalar_as_string` e `replace_or_append`.
+/// - `Schema`: colonna `column` assente dallo schema; cella non
+///   convertibile in testo (gli errori di `scalar_as_string`); gli errori
+///   di `replace_or_append`.
 pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -191,10 +204,15 @@ pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
     replace_or_append(batch, output, DataType::Utf8, true, Arc::new(values))
 }
 
+/// Classi di `table.bin`: un numero di classi o i bordi espliciti (JSON:
+/// un intero o una lista di numeri).
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Bins {
+    /// Classi di uguale ampiezza fra minimo e massimo dei valori finiti,
+    /// da 2 a 100.
     Count(usize),
+    /// Bordi espliciti, da 3 a 101, strettamente crescenti.
     Edges(Vec<f64>),
 }
 
@@ -202,13 +220,20 @@ const fn default_bins() -> Bins {
     Bins::Count(5)
 }
 
+/// Config di `table.bin`: classi `(a, b]` dei valori di una colonna
+/// numerica.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bin {
+    /// Colonna numerica da classificare.
     pub column: String,
+    /// Classi: numero (default 5) o bordi espliciti.
     #[serde(default = "default_bins")]
     pub bins: Bins,
+    /// Etichette delle classi, una per classe; assenti, `(a, b]` con la resa
+    /// `Display` dei bordi.
     pub labels: Option<Vec<String>>,
+    /// Colonna d'uscita (`Utf8`); assente, `<column>_bin`.
     pub output_column: Option<String>,
 }
 
@@ -234,13 +259,13 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
         .to_f64()
         .ok_or_else(|| PlenoraError::InvalidPlan("numero bin non rappresentabile".into()))?;
     if max.total_cmp(&min) == std::cmp::Ordering::Equal {
-        // pandas.cut expands a constant range by 0.1% on both sides
-        // (or by 0.001 around zero) before computing equal-width bins.
+        // Come `pandas.cut`: un intervallo costante si allarga dello 0,1%
+        // per lato (di 0,001 attorno allo zero) prima delle classi.
         let adjustment = if min == 0.0 { 0.001 } else { min.abs() * 0.001 };
         let lower = min - adjustment;
-        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-        // fusa e' il contratto numerico.
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e il
+        // risultato dipenderebbe dalla piattaforma; la forma non fusa e' il
+        // contratto numerico.
         #[allow(clippy::suboptimal_flops)]
         let width = (adjustment * 2.0 + 0.0) / count_f64;
         return (0..=count)
@@ -277,7 +302,8 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
                 .ok_or_else(|| PlenoraError::InvalidPlan("indice bin non rappresentabile".into()))
         })
         .collect::<Result<Vec<_>>>()?;
-    // pandas.cut uses right-closed intervals and expands only the open side.
+    // Come `pandas.cut`: classi chiuse a destra, si allarga solo il lato
+    // aperto (il bordo sinistro della prima).
     // Come sopra: forma non fusa (niente mul_add/FMA).
     #[allow(clippy::suboptimal_flops)]
     {
@@ -289,14 +315,21 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
 /// Discretizza `column` in bin equal-width (`Bins::Count`) o su bordi
 /// espliciti (`Bins::Edges`), con etichette opzionali.
 ///
+/// Le classi sono chiuse a destra e la prima comprende il bordo sinistro.
+/// Con `Count` i bordi sono calcolati in `f64` come in `pandas.cut` e un
+/// valore oltre i bordi esterni cade nella classe esterna; con `Edges` un
+/// valore fuori dai bordi, come un `NaN` o una cella nulla, da' null. La
+/// classe la decide il confronto esatto del valore d'origine con il bordo.
+///
 /// # Errors
 ///
 /// - `InvalidPlan`: numero di bin fuori da 2..=100 o non rappresentabile;
 ///   bordi non strettamente crescenti (o in numero fuori da 3..=101);
 ///   numero di `labels` diverso dal numero di bin;
-/// - `Schema`: colonna `column` assente dallo schema; nessun valore
-///   numerico su cui calcolare i bordi; in piu' gli errori di
-///   `scalar_as_f64_rounded` e `replace_or_append`.
+/// - `Schema`: colonna `column` assente dallo schema; con `Count`, nessun
+///   valore finito su cui calcolare i bordi (anche un batch vuoto o tutto
+///   null); valore non convertibile in numero (gli errori di
+///   `scalar_as_numero`); gli errori di `replace_or_append`.
 pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -505,14 +538,24 @@ enum Bisezione {
     Indefinita,
 }
 
+/// Config di `table.flatten_json`: estrazione di valori da documenti JSON
+/// in colonne `prefix + percorso`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlattenJson {
+    /// Colonna con i documenti JSON, letta come testo.
     pub column: String,
+    /// Prefisso dei nomi d'uscita; vuoto (default) vale `<column>_`.
     #[serde(default)]
     pub prefix: String,
+    /// Livelli di annidamento attraversati, da 0 a 5 (default 1): un
+    /// percorso con k punti si estrae solo se `k <= max_level`.
     #[serde(default = "default_level")]
     pub max_level: usize,
+    /// Colonne da estrarre, ciascuna `prefix + percorso`. Vuota (default),
+    /// una colonna per ogni percorso trovato nei dati: l'analisi dei
+    /// contratti la rifiuta (`Unsupported`), perche' lo schema dipenderebbe
+    /// dai dati.
     #[serde(default)]
     pub output_columns: Vec<String>,
 }
@@ -820,7 +863,8 @@ impl<'de> Visitor<'de> for LeafSeed<'_, '_> {
 }
 
 /// Seed di radice: solo un oggetto produce path; qualsiasi altra radice
-/// (scalare, array, null) da' mappa vuota come l'originale.
+/// (scalare, array, null) non emette nulla, e `flatten_row` rifiuta la riga
+/// come `json.root_not_object`.
 struct RootSeed<'a, 'b> {
     row: &'a mut RowFlatten<'b>,
 }
@@ -1257,14 +1301,24 @@ impl RifiutiJson {
 /// Appiattisce i documenti JSON di `column` in colonne `prefix + path`
 /// (profondita' massima `max_level`).
 ///
+/// Ogni colonna d'uscita e' `Utf8` nullable: una stringa JSON vale se
+/// stessa, numeri e booleani il loro testo JSON, un array il testo JSON
+/// compatto, un `null` la stringa vuota; un percorso assente, o una cella
+/// nulla, da' null. Gli oggetti si attraversano, non si emettono.
+///
 /// # Errors
 ///
 /// - `InvalidPlan`: `max_level` oltre 5; nome di output non valido o privo
 ///   del `prefix` atteso;
-/// - `ResourceLimit`: totale colonne oltre `limits.max_columns`;
-/// - `Schema`: colonna `column` assente dallo schema; in piu' gli errori
-///   di `scalar_as_string` (colonne non Utf8) e `replace_or_append`.
-// La raccolta completa per riga (R9.9) rende la funzione una sequenza
+/// - `ResourceLimit`: colonne dell'ingresso piu' colonne prodotte oltre
+///   `limits.max_columns`;
+/// - `DataMapping` con diagnostica per riga: celle non nulle che non sono
+///   JSON valido (`json.invalid_syntax`) o con radice non oggetto
+///   (`json.root_not_object`), tutte contate;
+/// - `Schema`: colonna `column` assente dallo schema; cella non
+///   convertibile in testo (gli errori di `scalar_as_string`); gli errori
+///   di `replace_or_append`.
+// La raccolta completa dei rifiuti per riga rende la funzione una sequenza
 // lineare sopra il limite di linee: nessuna complessita' logica aggiunta.
 #[allow(clippy::too_many_lines)]
 pub fn flatten_json(
@@ -1290,9 +1344,9 @@ pub fn flatten_json(
     // Una sola passata: ogni documento si valida e si appiattisce insieme.
     // Al primo rifiuto l'output non serve piu' (l'esito e' l'errore con la
     // diagnostica di tutte le righe rifiutate): le righe seguenti si
-    // classificano soltanto. Gli errori di `scalar_as_string` escono alla
-    // stessa riga di prima, perche' la conversione precede comunque il
-    // parsing della riga.
+    // classificano soltanto. Un errore di `scalar_as_string` esce alla prima
+    // riga che lo ha, anche dopo un rifiuto, perche' la conversione precede
+    // il parsing della riga.
     let mut columns = PathColumns::default();
     let mut cells: Vec<(String, String)> = Vec::new();
     let mut rifiuti = RifiutiJson::new();
@@ -1378,18 +1432,31 @@ pub fn flatten_json(
     Ok(result)
 }
 
+/// Statistica di `table.statistics`, calcolata sui valori non nulli del
+/// gruppo; la colonna prodotta e' `<prefisso><nome>` (`count`, `min`, ...).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stat {
+    /// Numero di valori non nulli.
     Count,
+    /// Minimo (ordinamento `total_cmp`).
     Min,
+    /// Massimo (ordinamento `total_cmp`).
     Max,
+    /// Somma in `f64`, nell'ordine delle righe.
     Sum,
+    /// Somma diviso numero di valori.
     Mean,
+    /// Quantile 0,5 con interpolazione lineare.
     Median,
+    /// Deviazione standard campionaria (divisore `n - 1`); null con meno di
+    /// due valori.
     Std,
+    /// Varianza campionaria (divisore `n - 1`); null con meno di due valori.
     Var,
+    /// Quantile 0,25 con interpolazione lineare.
     Q25,
+    /// Quantile 0,75 con interpolazione lineare.
     Q75,
 }
 
@@ -1404,13 +1471,21 @@ fn default_stats() -> Vec<Stat> {
     ]
 }
 
+/// Config di `table.statistics`: statistiche per gruppo ripetute su ogni
+/// riga.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Statistics {
+    /// Colonna numerica dei valori.
     pub column: String,
+    /// Colonna dei gruppi, letta come testo (le celle nulle formano un
+    /// gruppo); assente, un gruppo solo.
     pub group_by: Option<String>,
+    /// Statistiche, una colonna `Float64` ciascuna nell'ordine scritto;
+    /// default `count`, `min`, `max`, `mean`, `median`, `std`.
     #[serde(default = "default_stats")]
     pub stats: Vec<Stat>,
+    /// Prefisso dei nomi d'uscita; vuoto (default) vale `<column>_`.
     #[serde(default)]
     pub output_prefix: String,
 }
@@ -1425,9 +1500,9 @@ fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
     Some(if low == high {
         sorted[low]
     } else {
-        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-        // fusa e' il contratto numerico.
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e il
+        // risultato dipenderebbe dalla piattaforma; la forma non fusa e' il
+        // contratto numerico.
         #[allow(clippy::suboptimal_flops)]
         let interpolated = (sorted[high] - sorted[low]) * (position - low.to_f64()?) + sorted[low];
         interpolated
@@ -1505,10 +1580,16 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
 /// Aggiunge le colonne di statistiche `prefix + nome` (count, min, max,
 /// ...) sui valori di `column`, opzionalmente per gruppi di `group_by`.
 ///
+/// Ogni riga riceve le statistiche del proprio gruppo; un gruppo senza
+/// valori non nulli ha tutte le statistiche nulle, `count` compreso. I
+/// valori passano da `scalar_as_f64_rounded` (arrotondamento dichiarato:
+/// l'uscita e' `Float64` per contratto).
+///
 /// # Errors
 ///
-/// - `Schema`: colonna `column` o `group_by` assente dallo schema; in
-///   piu' gli errori di `scalar_as_string`/`scalar_as_f64_rounded` e
+/// - `Schema`: colonna `column` o `group_by` assente dallo schema; valore
+///   non convertibile in numero o gruppo non convertibile in testo (gli
+///   errori di `scalar_as_f64_rounded` e `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
     let value_index = column_index(batch, &config.column)?;
@@ -1594,13 +1675,20 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
     Ok(result)
 }
 
+/// Config di `table.sample`: campione pseudocasuale deterministico.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sample {
+    /// Righe del campione (default 100); con `fraction` presente non conta.
     #[serde(default = "default_n")]
     pub n: usize,
+    /// Frazione delle righe, da 0 a 1 compresi; prevale su `n`.
     pub fraction: Option<f64>,
+    /// Seme del generatore; assente, `0x9e37_79b9_7f4a_7c15`. `0` e `1`
+    /// danno lo stesso campione.
     pub random_state: Option<u64>,
+    /// Colonna degli strati, letta come testo; ogni strato contribuisce
+    /// almeno una riga.
     pub stratify_column: Option<String>,
 }
 const fn default_n() -> usize {
@@ -1622,11 +1710,17 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 /// Campione casuale deterministico delle righe (dimensione `n` o
 /// `fraction`, opzionalmente stratificato su `stratify_column`).
 ///
+/// Senza strati: `min(n, righe)` righe o `round(righe * fraction)`,
+/// nell'ordine di un rimescolamento Fisher-Yates con xorshift64 dal seme.
+/// Con strati: per ogni strato, nell'ordine dei testi (il null per primo),
+/// `floor(n * s / righe)` o `floor(s * fraction)` righe del suo
+/// rimescolamento, almeno una e al piu' `s`.
+///
 /// # Errors
 ///
 /// - `InvalidPlan`: `fraction` fuori da 0..=1;
 /// - `ResourceLimit`: dimensioni di gruppo, dataset o campione non
-///   rappresentabili;
+///   rappresentabili; indice di riga oltre `u32` (`select_rows`);
 /// - `Schema`: colonna `stratify_column` assente dallo schema; in piu' gli
 ///   errori di `scalar_as_string` e `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
