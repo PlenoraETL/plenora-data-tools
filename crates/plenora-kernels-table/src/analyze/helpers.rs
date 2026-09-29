@@ -225,29 +225,18 @@ pub(in crate::analyze) fn merge_geometry(
 /// chiave (regola 8), mai precedenza implicita. Sorgenti in ordine di
 /// dichiarazione e chiavi in ordine lessicografico: il primo conflitto e'
 /// deterministico (architettura.md#determinismo).
-fn merge_metadata_maps(
+/// Il merge R2.4 dei kernel (`crate::unisci_metadata_schema`), con l'errore
+/// di piano dell'analisi.
+fn merge_metadata_maps<'a>(
     op: &str,
-    merged: &mut HashMap<String, String>,
-    right: &HashMap<String, String>,
-) -> Result<()> {
-    let mut right_keys: Vec<_> = right.keys().collect();
-    right_keys.sort();
-    for key in right_keys {
-        let value = &right[key];
-        match merged.get(key) {
-            None => {
-                merged.insert(key.clone(), value.clone());
-            }
-            Some(existing) if existing == value => {}
-            Some(_) => {
-                return contract_error(
-                    op,
-                    format!("metadata di schema in conflitto sulla chiave {key:?}"),
-                );
-            }
-        }
-    }
-    Ok(())
+    sorgenti: impl IntoIterator<Item = &'a HashMap<String, String>>,
+) -> Result<HashMap<String, String>> {
+    crate::unisci_metadata_schema(sorgenti).or_else(|chiave| {
+        contract_error(
+            op,
+            format!("metadata di schema in conflitto sulla chiave {chiave:?}"),
+        )
+    })
 }
 
 pub(in crate::analyze) fn merge_schema_metadata(
@@ -255,9 +244,7 @@ pub(in crate::analyze) fn merge_schema_metadata(
     left: &Schema,
     right: &Schema,
 ) -> Result<HashMap<String, String>> {
-    let mut merged = left.metadata().clone();
-    merge_metadata_maps(op, &mut merged, right.metadata())?;
-    Ok(merged)
+    merge_metadata_maps(op, [left.metadata(), right.metadata()])
 }
 
 /// Merge N-ario per `concat`: come [`merge_schema_metadata`] sulle
@@ -266,11 +253,7 @@ pub(in crate::analyze) fn merge_schema_metadata_many(
     op: &str,
     inputs: &[DataContract],
 ) -> Result<HashMap<String, String>> {
-    let mut merged = HashMap::new();
-    for input in inputs {
-        merge_metadata_maps(op, &mut merged, input.schema.metadata())?;
-    }
-    Ok(merged)
+    merge_metadata_maps(op, inputs.iter().map(|input| input.schema.metadata()))
 }
 
 pub(in crate::analyze) fn finish(

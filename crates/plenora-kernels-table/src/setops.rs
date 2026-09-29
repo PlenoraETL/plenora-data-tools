@@ -337,11 +337,11 @@ pub fn concat_compatible(
                 .with_nullable(left.is_nullable() || right.is_nullable())
         })
         .collect::<Vec<_>>();
+    // R2.4: righe di entrambe le sorgenti, metadati di schema fusi.
+    let metadata =
+        crate::metadata_schema_input("union_distinct", &[&left.schema(), &right.schema()])?;
     crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(
-            fields,
-            left.schema().metadata().clone(),
-        )),
+        Arc::new(Schema::new_with_metadata(fields, metadata)),
         columns,
         rows,
     )

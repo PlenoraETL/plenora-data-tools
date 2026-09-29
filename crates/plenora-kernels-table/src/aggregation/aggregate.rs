@@ -400,7 +400,10 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
         .first()
         .map_or(0, plenora_core::arrow::array::Array::len);
     let mut result = crate::batch_with_rows(
-        Arc::new(plenora_core::arrow::schema::Schema::new(group_fields)),
+        Arc::new(plenora_core::arrow::schema::Schema::new_with_metadata(
+            group_fields,
+            batch.schema().metadata().clone(),
+        )),
         group_columns,
         righe_gruppi,
     )?;

@@ -450,7 +450,10 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
         ));
     }
     Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            batch.schema().metadata().clone(),
+        )),
         columns,
     )?)
 }
@@ -1447,28 +1450,27 @@ pub fn table_diff(
     for (position, name) in config.left_keys.iter().enumerate() {
         let left_column = left.column(left_keys[position]);
         let right_column = right.column(right_keys[position]);
-        fields.push(
-            left.schema()
-                .field(left_keys[position])
-                .as_ref()
-                .clone()
-                .with_name(name)
-                .with_nullable(true),
-        );
+        // Colonne derivate (valori dei due lati): nessun metadato di campo
+        // ereditato, come dichiara l'analisi.
+        fields.push(Field::new(
+            name,
+            left.schema().field(left_keys[position]).data_type().clone(),
+            true,
+        ));
         columns.push(diff_values(left_column, right_column, &rows)?);
     }
     for (position, name) in compare.iter().enumerate() {
         let left_column = left.column(left_compare[position]);
         let right_column = right.column(right_compare[position]);
-        fields.push(
+        fields.push(Field::new(
+            name,
             right
                 .schema()
                 .field(right_compare[position])
-                .as_ref()
-                .clone()
-                .with_name(name)
-                .with_nullable(true),
-        );
+                .data_type()
+                .clone(),
+            true,
+        ));
         columns.push(diff_values(left_column, right_column, &rows)?);
     }
     for (name, selector) in [
@@ -1499,8 +1501,9 @@ pub fn table_diff(
         }
         columns.push(Arc::new(builder.finish()));
     }
+    let metadata = crate::metadata_schema_input("table_diff", &[&left.schema(), &right.schema()])?;
     Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
+        Arc::new(Schema::new_with_metadata(fields, metadata)),
         columns,
     )?)
 }

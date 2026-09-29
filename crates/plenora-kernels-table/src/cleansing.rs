@@ -16,7 +16,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{column_index, replace_or_append, scalar_as_string};
+use crate::{column_index, replace_keeping_field_metadata, replace_or_append, scalar_as_string};
 use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
@@ -355,7 +355,7 @@ pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
     for index in targets {
         let name = out.schema().field(index).name().clone();
         let array = fill_array(out.column(index).as_ref(), &config.method, &config.value)?;
-        out = replace_or_append(&out, &name, array.data_type().clone(), true, array)?;
+        out = replace_keeping_field_metadata(&out, &name, array.data_type().clone(), true, array)?;
     }
     Ok(out)
 }
@@ -481,7 +481,7 @@ pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
             })
         })
         .collect();
-    replace_or_append(batch, &config.column, DataType::Utf8, true, Arc::new(out))
+    replace_keeping_field_metadata(batch, &config.column, DataType::Utf8, true, Arc::new(out))
 }
 
 fn cast_failure<T>(errors: CastErrors, message: &str) -> Result<Option<T>> {

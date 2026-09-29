@@ -3725,7 +3725,11 @@ mod tests {
     //
     // Esegue il kernel vero su un piccolo RecordBatch e confronta lo schema
     // del batch prodotto con quello inferito a secco da analyze_table_contract
-    // (nomi, tipi, nullability). Copre tutte le op con schema deterministico.
+    // (nomi, tipi, nullability, metadata dei campi e dello schema). Copre
+    // tutte le op con schema deterministico. Ogni campo delle fixture porta
+    // un metadata proprio e ogni schema una chiave propria, cosi' un kernel
+    // che li perde (o un'analisi che li dichiara senza che il kernel li
+    // conservi) diverge.
 
     mod kernel_crosscheck {
         use plenora_core::arrow::array::{
@@ -3735,54 +3739,88 @@ mod tests {
 
         use super::*;
 
-        fn signature(schema: &Schema) -> Vec<(String, DataType, bool)> {
+        /// Nome, tipo, nullability e metadata (ordinati) di ogni campo.
+        type Firma = (String, DataType, bool, Vec<(String, String)>);
+
+        fn signature(schema: &Schema) -> Vec<Firma> {
             schema
                 .fields()
                 .iter()
                 .map(|field| {
+                    let mut metadata = field
+                        .metadata()
+                        .iter()
+                        .map(|(chiave, valore)| (chiave.clone(), valore.clone()))
+                        .collect::<Vec<_>>();
+                    metadata.sort();
                     (
                         field.name().clone(),
                         field.data_type().clone(),
                         field.is_nullable(),
+                        metadata,
                     )
                 })
                 .collect()
         }
 
+        /// La fixture con un metadata per campo (`prova.campo` = nome) e una
+        /// chiave di schema propria (`prova.<fixture>`).
+        fn con_metadata(batch: &RecordBatch, fixture: &str) -> RecordBatch {
+            let fields = batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| {
+                    field.as_ref().clone().with_metadata(HashMap::from([(
+                        "prova.campo".to_owned(),
+                        field.name().clone(),
+                    )]))
+                })
+                .collect::<Vec<_>>();
+            let schema = Schema::new_with_metadata(
+                fields,
+                HashMap::from([(format!("prova.{fixture}"), fixture.to_owned())]),
+            );
+            RecordBatch::try_new(Arc::new(schema), batch.columns().to_vec()).unwrap()
+        }
+
         fn simple_batch() -> RecordBatch {
-            RecordBatch::try_new(
-                Arc::new(Schema::new(vec![
-                    Field::new("id", DataType::Int64, false),
-                    Field::new("name", DataType::Utf8, true),
-                    Field::new("value", DataType::Float64, true),
-                    Field::new("flag", DataType::Boolean, true),
-                    Field::new("date", DataType::Utf8, true),
-                    Field::new("json", DataType::Utf8, true),
-                    Field::new("geom", DataType::Binary, true),
-                ])),
-                vec![
-                    Arc::new(Int64Array::from(vec![3, 1, 2])),
-                    Arc::new(StringArray::from(vec![Some("b"), Some("a"), None])),
-                    Arc::new(Float64Array::from(vec![Some(3.5), Some(1.5), None])),
-                    Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
-                    Arc::new(StringArray::from(vec![
-                        Some("2024-01-02"),
-                        Some("2025-03-04"),
-                        None,
+            con_metadata(
+                &RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![
+                        Field::new("id", DataType::Int64, false),
+                        Field::new("name", DataType::Utf8, true),
+                        Field::new("value", DataType::Float64, true),
+                        Field::new("flag", DataType::Boolean, true),
+                        Field::new("date", DataType::Utf8, true),
+                        Field::new("json", DataType::Utf8, true),
+                        Field::new("geom", DataType::Binary, true),
                     ])),
-                    Arc::new(StringArray::from(vec![
-                        Some("{\"a\":1}"),
-                        Some("{\"a\":2}"),
-                        None,
-                    ])),
-                    Arc::new(BinaryArray::from(vec![
-                        Some(b"wkb-a".as_slice()),
-                        Some(b"wkb-b".as_slice()),
-                        None,
-                    ])),
-                ],
+                    vec![
+                        Arc::new(Int64Array::from(vec![3, 1, 2])),
+                        Arc::new(StringArray::from(vec![Some("b"), Some("a"), None])),
+                        Arc::new(Float64Array::from(vec![Some(3.5), Some(1.5), None])),
+                        Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
+                        Arc::new(StringArray::from(vec![
+                            Some("2024-01-02"),
+                            Some("2025-03-04"),
+                            None,
+                        ])),
+                        Arc::new(StringArray::from(vec![
+                            Some("{\"a\":1}"),
+                            Some("{\"a\":2}"),
+                            None,
+                        ])),
+                        Arc::new(BinaryArray::from(vec![
+                            Some(b"wkb-a".as_slice()),
+                            Some(b"wkb-b".as_slice()),
+                            None,
+                        ])),
+                    ],
+                )
+                .unwrap(),
+                "simple",
             )
-            .unwrap()
         }
 
         fn nested_batch() -> RecordBatch {
@@ -3801,37 +3839,43 @@ mod tests {
                     Arc::new(StringArray::from(vec![Some("x"), None, Some("z")])) as ArrayRef,
                 ),
             ]));
-            RecordBatch::try_new(
-                Arc::new(Schema::new(vec![
-                    Field::new("id", DataType::Int64, false),
-                    Field::new("lst", list.data_type().clone(), true),
-                    Field::new("st", structure.data_type().clone(), true),
-                ])),
-                vec![
-                    Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
-                    list,
-                    structure,
-                ],
+            con_metadata(
+                &RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![
+                        Field::new("id", DataType::Int64, false),
+                        Field::new("lst", list.data_type().clone(), true),
+                        Field::new("st", structure.data_type().clone(), true),
+                    ])),
+                    vec![
+                        Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+                        list,
+                        structure,
+                    ],
+                )
+                .unwrap(),
+                "nested",
             )
-            .unwrap()
         }
 
         fn right_batch() -> RecordBatch {
-            RecordBatch::try_new(
-                Arc::new(Schema::new(vec![
-                    Field::new("rid", DataType::Int64, false),
-                    Field::new("name", DataType::Utf8, true),
-                    Field::new("value", DataType::Float64, true),
-                    Field::new("rname", DataType::Utf8, true),
-                ])),
-                vec![
-                    Arc::new(Int64Array::from(vec![1, 2, 3])),
-                    Arc::new(StringArray::from(vec![Some("a"), Some("b"), None])),
-                    Arc::new(Float64Array::from(vec![Some(10.0), Some(20.0), None])),
-                    Arc::new(StringArray::from(vec![Some("x"), Some("y"), None])),
-                ],
+            con_metadata(
+                &RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![
+                        Field::new("rid", DataType::Int64, false),
+                        Field::new("name", DataType::Utf8, true),
+                        Field::new("value", DataType::Float64, true),
+                        Field::new("rname", DataType::Utf8, true),
+                    ])),
+                    vec![
+                        Arc::new(Int64Array::from(vec![1, 2, 3])),
+                        Arc::new(StringArray::from(vec![Some("a"), Some("b"), None])),
+                        Arc::new(Float64Array::from(vec![Some(10.0), Some(20.0), None])),
+                        Arc::new(StringArray::from(vec![Some("x"), Some("y"), None])),
+                    ],
+                )
+                .unwrap(),
+                "right",
             )
-            .unwrap()
         }
 
         fn geo_input(batch: &RecordBatch) -> DataContract {
@@ -3842,6 +3886,24 @@ mod tests {
                 ContractProperties::default(),
             )
             .unwrap()
+        }
+
+        thread_local! {
+            static DIVERGENZE: std::cell::RefCell<Vec<String>> =
+                const { std::cell::RefCell::new(Vec::new()) };
+        }
+
+        /// Fallisce con tutte le divergenze raccolte dal test corrente.
+        fn riporta_divergenze() {
+            let divergenze = DIVERGENZE.with_borrow_mut(std::mem::take);
+            assert!(
+                divergenze.is_empty(),
+                "{}",
+                divergenze.join(
+                    "
+"
+                )
+            );
         }
 
         /// Confronta lo schema dedotto da `analyze_table_contract` sugli
@@ -3856,11 +3918,30 @@ mod tests {
             let analyzed =
                 analyze_table_contract(op, inputs, config, &mut FieldAllocator::default())
                     .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
-            assert_eq!(
-                signature(&analyzed.schema),
-                signature(&expected.schema()),
-                "schema diverso per {op}"
-            );
+            // Le divergenze si raccolgono tutte e si riportano insieme alla
+            // fine del test (`riporta_divergenze`), non alla prima.
+            if signature(&analyzed.schema) != signature(&expected.schema()) {
+                DIVERGENZE.with_borrow_mut(|divergenze| {
+                    divergenze.push(format!(
+                        "{op}: campi
+  analisi {:?}
+  kernel  {:?}",
+                        signature(&analyzed.schema),
+                        signature(&expected.schema())
+                    ));
+                });
+            }
+            if analyzed.schema.metadata() != expected.schema().metadata() {
+                DIVERGENZE.with_borrow_mut(|divergenze| {
+                    divergenze.push(format!(
+                        "{op}: metadata di schema
+  analisi {:?}
+  kernel  {:?}",
+                        analyzed.schema.metadata(),
+                        expected.schema().metadata()
+                    ));
+                });
+            }
             analyzed
         }
 
@@ -4212,6 +4293,64 @@ mod tests {
                 json!({"column": "st"}),
                 |b, config| reshape::unnest(b, &cfg(config), &limits),
             );
+            riporta_divergenze();
+        }
+
+        #[test]
+        fn metadata_di_schema_in_conflitto_sono_un_errore_in_analisi_e_nel_kernel() {
+            let limits = Limits::default();
+            let con_chiave = |batch: RecordBatch, valore: &str| {
+                let schema = batch
+                    .schema()
+                    .as_ref()
+                    .clone()
+                    .with_metadata(HashMap::from([("k".to_owned(), valore.to_owned())]));
+                RecordBatch::try_new(Arc::new(schema), batch.columns().to_vec()).unwrap()
+            };
+            let a = con_chiave(simple_batch(), "a");
+            let b = con_chiave(simple_batch(), "b");
+            let destra = con_chiave(right_batch(), "b");
+            let casi: [(&str, &RecordBatch, &RecordBatch, Value); 5] = [
+                ("table.concat", &a, &b, json!({})),
+                ("table.union_distinct", &a, &b, json!({})),
+                ("table.concat_by_name", &a, &b, json!({})),
+                ("table.cross_join", &a, &destra, json!({})),
+                (
+                    "table.table_diff",
+                    &a,
+                    &destra,
+                    json!({"left_keys": ["id"], "right_keys": ["rid"]}),
+                ),
+            ];
+            for (op, sinistra, destra, config) in casi {
+                let analisi = analyze_table_contract(
+                    op,
+                    &[
+                        DataContract::tabular(sinistra.schema()),
+                        DataContract::tabular(destra.schema()),
+                    ],
+                    &config,
+                    &mut FieldAllocator::default(),
+                );
+                assert!(analisi.is_err(), "analisi {op}");
+                let kernel = match op {
+                    "table.concat" => joins::concat(sinistra, destra, &cfg(&config), &limits),
+                    "table.union_distinct" => {
+                        setops::union_distinct(sinistra, destra, &cfg(&config), &limits)
+                    }
+                    "table.concat_by_name" => {
+                        joins::concat_by_name(&[sinistra, destra], &cfg(&config), &limits)
+                    }
+                    "table.cross_join" => {
+                        joins::cross_join(sinistra, destra, &cfg(&config), &limits)
+                    }
+                    _ => reshape::table_diff(sinistra, destra, &cfg(&config), &limits),
+                };
+                assert!(
+                    matches!(kernel, Err(PlenoraError::Schema(_))),
+                    "kernel {op}: {kernel:?}"
+                );
+            }
         }
 
         #[test]
@@ -4283,6 +4422,44 @@ mod tests {
             check_binary("table.except", &batch, &batch, json!({}), |l, r, config| {
                 setops::except(l, r, &cfg(config))
             });
+            // Stesse colonne, metadata di schema diversi: il merge R2.4 delle
+            // due sorgenti, non i metadata del solo lato sinistro.
+            let altra = con_metadata(&simple_batch(), "altra");
+            check_binary("table.concat", &batch, &altra, json!({}), |l, r, config| {
+                joins::concat(l, r, &cfg(config), &limits)
+            });
+            check_binary(
+                "table.union_distinct",
+                &batch,
+                &altra,
+                json!({}),
+                |l, r, config| setops::union_distinct(l, r, &cfg(config), &limits),
+            );
+            check_binary(
+                "table.intersect",
+                &batch,
+                &altra,
+                json!({}),
+                |l, r, config| setops::intersect(l, r, &cfg(config)),
+            );
+            check_binary("table.except", &batch, &altra, json!({}), |l, r, config| {
+                setops::except(l, r, &cfg(config))
+            });
+            check_binary(
+                "table.concat_by_name",
+                &batch,
+                &altra,
+                json!({}),
+                |l, r, config| joins::concat_by_name(&[l, r], &cfg(config), &limits),
+            );
+            check_binary(
+                "table.fuzzy_join",
+                &batch,
+                &right,
+                json!({"left_key": "name", "right_key": "rname", "metric": "jaro_winkler",
+                       "threshold": 0.9, "blocking": "prefix"}),
+                |l, r, config| crate::fuzzy::fuzzy_join(l, r, &cfg(config), &limits),
+            );
             check_binary(
                 "table.table_diff",
                 &batch,
@@ -4304,6 +4481,7 @@ mod tests {
                 json!({"left_keys": ["id"], "right_keys": ["rid"]}),
                 |l, r, config| governance::assert_foreign_key(l, r, &cfg(config), &limits),
             );
+            riporta_divergenze();
         }
     }
 }

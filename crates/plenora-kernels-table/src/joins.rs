@@ -916,7 +916,14 @@ pub(crate) fn combine_horizontal(
     // Righe DICHIARATE: con due input a zero colonne l'output ha zero colonne
     // e arrow non saprebbe da dove dedurre la cardinalita'. Il numero giusto
     // e' quello degli indici di riga costruiti sopra.
-    crate::batch_with_rows(Arc::new(Schema::new(fields)), columns, left_rows.len())
+    // R2.4: i metadati di schema delle due sorgenti si fondono, come
+    // dichiara l'analisi dei join.
+    let metadata = crate::metadata_schema_input("join", &[&left_schema, &right_schema])?;
+    crate::batch_with_rows(
+        Arc::new(Schema::new_with_metadata(fields, metadata)),
+        columns,
+        left_rows.len(),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -993,7 +1000,8 @@ pub fn concat(
                 .with_nullable(left.is_nullable() || right.is_nullable())
         })
         .collect::<Vec<_>>();
-    let schema = Schema::new_with_metadata(fields, left.schema().metadata().clone());
+    let metadata = crate::metadata_schema_input("concat", &[&left.schema(), &right.schema()])?;
+    let schema = Schema::new_with_metadata(fields, metadata);
     // `rows` e' la somma gia' calcolata sopra: e' la cardinalita' corretta
     // anche quando non c'e' alcuna colonna da cui dedurla.
     crate::batch_with_rows(Arc::new(schema), columns, rows)
@@ -1108,7 +1116,6 @@ pub fn concat_by_name(
             "concat_by_name richiede almeno un input".into(),
         ));
     }
-    let first = inputs[0];
     let mut rows = 0_usize;
     for input in inputs {
         rows = rows
@@ -1184,7 +1191,15 @@ pub fn concat_by_name(
             plenora_core::arrow::select::concat::concat(&refs).map_err(PlenoraError::from)
         })
         .collect::<Result<Vec<_>>>()?;
-    let schema = Schema::new_with_metadata(fields, first.schema().metadata().clone());
+    let sorgenti = inputs
+        .iter()
+        .map(|input| input.schema())
+        .collect::<Vec<_>>();
+    let metadata = crate::metadata_schema_input(
+        "concat_by_name",
+        &sorgenti.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+    )?;
+    let schema = Schema::new_with_metadata(fields, metadata);
     crate::batch_with_rows(Arc::new(schema), columns, rows)
 }
 

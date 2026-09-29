@@ -90,7 +90,7 @@ pub mod utility;
 mod test_support;
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
@@ -219,6 +219,102 @@ pub fn utf8_column<'a>(
         .as_any()
         .downcast_ref::<plenora_core::arrow::array::StringArray>()
         .ok_or_else(|| PlenoraError::Schema(format!("la colonna {name} deve essere Utf8")))
+}
+
+/// Merge R2.4 dei metadati di schema di piu' sorgenti, nell'ordine dato.
+///
+/// Una chiave nuova si aggiunge, la stessa chiave con lo stesso valore resta,
+/// la stessa chiave con valori diversi e' un conflitto: mai precedenza
+/// implicita di una sorgente. Le chiavi di ogni sorgente si visitano in
+/// ordine, cosi' il conflitto riportato e' deterministico. La stessa regola
+/// vale nell'analisi e nei kernel.
+///
+/// # Errors
+///
+/// La chiave in conflitto.
+pub(crate) fn unisci_metadata_schema<'a>(
+    sorgenti: impl IntoIterator<Item = &'a HashMap<String, String>>,
+) -> std::result::Result<HashMap<String, String>, String> {
+    let mut uniti = HashMap::new();
+    for sorgente in sorgenti {
+        let mut chiavi: Vec<_> = sorgente.keys().collect();
+        chiavi.sort();
+        for chiave in chiavi {
+            let valore = &sorgente[chiave];
+            match uniti.get(chiave) {
+                None => {
+                    uniti.insert(chiave.clone(), valore.clone());
+                }
+                Some(esistente) if esistente == valore => {}
+                Some(_) => return Err(chiave.clone()),
+            }
+        }
+    }
+    Ok(uniti)
+}
+
+/// [`unisci_metadata_schema`] sugli schemi degli input di un kernel.
+///
+/// # Errors
+///
+/// `Schema` se due input danno valori diversi alla stessa chiave.
+pub(crate) fn metadata_schema_input(
+    op: &str,
+    schemi: &[&Schema],
+) -> Result<HashMap<String, String>> {
+    unisci_metadata_schema(schemi.iter().map(|schema| schema.metadata())).map_err(|chiave| {
+        PlenoraError::Schema(format!(
+            "{op}: metadata di schema in conflitto sulla chiave {chiave:?}"
+        ))
+    })
+}
+
+/// Come [`replace_or_append`], ma una colonna esistente sostituita con lo
+/// stesso tipo conserva i metadati del campo.
+///
+/// Per le operazioni che cambiano i valori e non il significato della
+/// colonna (R2.4 type-preserving: `fill_na`, `replace`), come dichiara la
+/// loro analisi. Con un tipo diverso o una colonna nuova e' esattamente
+/// [`replace_or_append`].
+///
+/// # Errors
+///
+/// Come [`replace_or_append`].
+pub fn replace_keeping_field_metadata(
+    batch: &RecordBatch,
+    name: &str,
+    data_type: DataType,
+    nullable: bool,
+    array: ArrayRef,
+) -> Result<RecordBatch> {
+    let metadata = batch
+        .schema()
+        .field_with_name(name)
+        .ok()
+        .filter(|field| field.data_type() == &data_type)
+        .map(|field| field.metadata().clone());
+    let output = replace_or_append(batch, name, data_type, nullable, array)?;
+    let Some(metadata) = metadata else {
+        return Ok(output);
+    };
+    let schema = output.schema();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == name {
+                field.as_ref().clone().with_metadata(metadata.clone())
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let schema = Schema::new_with_metadata(fields, schema.metadata().clone());
+    batch_with_rows(
+        Arc::new(schema),
+        output.columns().to_vec(),
+        output.num_rows(),
+    )
 }
 
 /// Batch con la colonna `name` sostituita da `array` (o aggiunta in coda se
