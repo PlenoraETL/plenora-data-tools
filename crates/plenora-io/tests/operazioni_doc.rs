@@ -30,6 +30,9 @@
 //! sostituirà il catalogo delle misure v4.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Nomi paralleli voluti (`scritta`/`scritte`, `riga`/`righe`, `tipo`/`tipi`):
+// la coppia singolare/plurale è il modo più chiaro di dirli in italiano.
+#![allow(clippy::similar_names)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -55,14 +58,16 @@ use plenora_core::arrow::array::{Array, ArrayRef, RecordBatch};
 use plenora_core::arrow::schema::{Fields, TimeUnit};
 use plenora_core::arrow::{DataType, Field, Schema, SchemaRef};
 use plenora_core::catalog::{
-    find_operation, Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy,
-    ExecutionClass, ExpansionConstraint, Family, GeoFusion, Maturity, OperationDescriptor, Origin,
-    ResultShape, SourceRowProvenance, ALIASES, CATALOG,
+    find_operation, Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy, ExecutionClass,
+    ExpansionConstraint, Family, GeoFusion, Maturity, OperationDescriptor, Origin, ResultShape,
+    SourceRowProvenance, ALIASES, CATALOG,
 };
 use plenora_core::contract::arrow_metadata::{
     geometry_output_field, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
 };
-use plenora_core::contract::arrow_schema::{arrow_schema_from_contract, contract_from_arrow_schema};
+use plenora_core::contract::arrow_schema::{
+    arrow_schema_from_contract, contract_from_arrow_schema,
+};
 use plenora_core::contract::FieldAllocator;
 use plenora_core::crs::resolve_crs;
 use plenora_core::PlenoraError;
@@ -495,7 +500,9 @@ fn istante(testo: &str) -> Result<NaiveDateTime, String> {
             return Ok(valore);
         }
     }
-    Err(format!("istante `{testo}` non leggibile (AAAA-MM-GG HH:MM:SS[.f])"))
+    Err(format!(
+        "istante `{testo}` non leggibile (AAAA-MM-GG HH:MM:SS[.f])"
+    ))
 }
 
 fn decimale(testo: &str, scala: i8) -> Result<i128, String> {
@@ -545,7 +552,9 @@ fn virgola_mobile(valore: &Value) -> Result<f64, String> {
 }
 
 fn testo_di(valore: &Value) -> Result<&str, String> {
-    valore.as_str().ok_or_else(|| format!("{valore}: testo atteso"))
+    valore
+        .as_str()
+        .ok_or_else(|| format!("{valore}: testo atteso"))
 }
 
 /// Aggiunge un valore JSON al builder del tipo dato; `null` è sempre null.
@@ -576,7 +585,9 @@ fn aggiungi(builder: &mut dyn ArrayBuilder, tipo: &DataType, valore: &Value) -> 
         DataType::Float64 => primitivo!(Float64Builder, virgola_mobile(valore)),
         DataType::Boolean => primitivo!(
             BooleanBuilder,
-            valore.as_bool().ok_or_else(|| format!("{valore}: booleano atteso"))
+            valore
+                .as_bool()
+                .ok_or_else(|| format!("{valore}: booleano atteso"))
         ),
         DataType::Utf8 => primitivo!(StringBuilder, testo_di(valore)),
         DataType::LargeUtf8 => primitivo!(LargeStringBuilder, testo_di(valore)),
@@ -680,7 +691,10 @@ fn colonna(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
         return Ok((campo, Arc::new(builder.finish())));
     }
     if spec.crs.is_some() {
-        return Err(format!("colonna `{}`: `crs` solo per `geometry`", spec.nome));
+        return Err(format!(
+            "colonna `{}`: `crs` solo per `geometry`",
+            spec.nome
+        ));
     }
     let mut builder = make_builder(&tipo, spec.valori.len());
     for valore in &spec.valori {
@@ -859,7 +873,11 @@ fn rendi(batch: &RecordBatch) -> Resa {
         .collect();
     Resa {
         intestazioni,
-        tipi: schema.fields().iter().map(|c| c.data_type().clone()).collect(),
+        tipi: schema
+            .fields()
+            .iter()
+            .map(|c| c.data_type().clone())
+            .collect(),
         righe,
     }
 }
@@ -928,7 +946,11 @@ fn testo_piano(scheda: &Scheda) -> String {
         .collect();
     let mut piano = format!("{{\"version\": 1, \"inputs\": [{}]", nomi.join(", "));
     if let Some(crs) = &esempio.crs {
-        let _ = write!(piano, ", \"crs\": {}", serde_json::to_string(crs).expect("crs"));
+        let _ = write!(
+            piano,
+            ", \"crs\": {}",
+            serde_json::to_string(crs).expect("crs")
+        );
     }
     if let Some(limits) = &esempio.limits {
         let _ = write!(piano, ", \"limits\": {}", limits.get());
@@ -1049,7 +1071,9 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
                 .zip(ingressi)
                 .map(|(spec, batch)| (spec.nome.clone(), batch))
                 .collect();
-            let esito = validata.run(tabelle).map_err(|e| format!("esecuzione: {e}"))?;
+            let esito = validata
+                .run(tabelle)
+                .map_err(|e| format!("esecuzione: {e}"))?;
             let (_, uscita) = esito.outputs.into_iter().next().expect("un'uscita");
             confronta(scheda, &uscita, esempio.valori_confrontati)?;
             Ok(if esempio.valori_confrontati {
@@ -1213,7 +1237,10 @@ fn scheda_catalogo(operazione: &OperationDescriptor) -> String {
             if alias.is_empty() {
                 "nessuno".into()
             } else {
-                format!("{} (risolti da `find_operation`; il runner li rifiuta)", alias.join(", "))
+                format!(
+                    "{} (risolti da `find_operation`; il runner li rifiuta)",
+                    alias.join(", ")
+                )
             },
         ),
         ("arietà", arieta(operazione.arity).into()),
@@ -1228,7 +1255,10 @@ fn scheda_catalogo(operazione: &OperationDescriptor) -> String {
         ("forma del risultato", forma(operazione.result_shape).into()),
         ("determinismo", determinismo(operazione.determinism).into()),
         ("indice della riga sorgente", provenienza.into()),
-        ("requisito CRS", requisito_crs(operazione.crs_requirement).into()),
+        (
+            "requisito CRS",
+            requisito_crs(operazione.crs_requirement).into(),
+        ),
         ("capability richieste", requisiti),
         ("vincolo di espansione", espansione(operazione)),
         ("fusione geo", fusione(operazione.geo_fusion).into()),
@@ -1284,7 +1314,13 @@ fn sezione_esempio(scheda: &Scheda, verifica: Verifica) -> String {
             .colonne
             .iter()
             .filter(|c| c.tipo == "geometry")
-            .map(|c| format!("`{}` in {}", c.nome, c.crs.as_deref().unwrap_or("EPSG:4326")))
+            .map(|c| {
+                format!(
+                    "`{}` in {}",
+                    c.nome,
+                    c.crs.as_deref().unwrap_or("EPSG:4326")
+                )
+            })
             .collect();
         let crs = if crs.is_empty() {
             String::new()
@@ -1308,11 +1344,20 @@ fn documento(schede: &[Scheda], verifiche: &[Verifica]) -> String {
         let ids: Vec<String> = schede
             .iter()
             .filter(|s| s.operazione.family == famiglia)
-            .map(|s| format!("[`{}`](#{})", s.operazione.id, slug(&format!("`{}`", s.operazione.id))))
+            .map(|s| {
+                format!(
+                    "[`{}`](#{})",
+                    s.operazione.id,
+                    slug(&format!("`{}`", s.operazione.id))
+                )
+            })
             .collect();
         let _ = writeln!(uscita, "- **{titolo}** ({}): {}", ids.len(), ids.join(", "));
     }
-    let contratto = verifiche.iter().filter(|v| **v == Verifica::Contratto).count();
+    let contratto = verifiche
+        .iter()
+        .filter(|v| **v == Verifica::Contratto)
+        .count();
     let _ = writeln!(
         uscita,
         "\nEsempi: {} eseguiti con l'uscita confrontata, {} verificati solo sul contratto.\n",
@@ -1335,7 +1380,11 @@ fn documento(schede: &[Scheda], verifiche: &[Verifica]) -> String {
             let _ = writeln!(uscita, "\n#### {titolo}\n\n{corpo}");
         }
         let _ = writeln!(uscita, "\n#### Memoria\n\n{SEGNAPOSTO_MEMORIA}");
-        let _ = write!(uscita, "\n#### Esempio\n\n{}", sezione_esempio(scheda, *verifica));
+        let _ = write!(
+            uscita,
+            "\n#### Esempio\n\n{}",
+            sezione_esempio(scheda, *verifica)
+        );
         uscita.push('\n');
     }
     // Una sola riga vuota in coda.
@@ -1451,14 +1500,16 @@ fn collegamenti_rotti(documento: &str) -> Vec<String> {
     let proprie = ancore(documento);
     let mut rotti = Vec::new();
     for destinazione in collegamenti(documento) {
-        let valido = if let Some(ancora) = destinazione.strip_prefix("../README.md#") {
-            readme.contains(ancora)
-        } else if let Some(ancora) = destinazione.strip_prefix('#') {
-            proprie.contains(ancora)
-        } else {
-            destinazione == "../README.md"
-                || destinazione.starts_with("https://")
-                || radice().join("docs").join(&destinazione).exists()
+        let readme_ancora = destinazione.strip_prefix("../README.md#");
+        let propria_ancora = destinazione.strip_prefix('#');
+        let valido = match (readme_ancora, propria_ancora) {
+            (Some(ancora), _) => readme.contains(ancora),
+            (None, Some(ancora)) => proprie.contains(ancora),
+            (None, None) => {
+                destinazione == "../README.md"
+                    || destinazione.starts_with("https://")
+                    || radice().join("docs").join(&destinazione).exists()
+            }
         };
         if !valido {
             rotti.push(destinazione);
