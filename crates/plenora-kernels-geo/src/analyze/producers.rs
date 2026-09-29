@@ -124,7 +124,9 @@ pub(in crate::analyze) fn analyze_expand(op: &str, input: &DataContract) -> Resu
 
 /// Aggregazione a sole geometrie (`dissolve`, builder, `polygonize`,
 /// `line_merge`, `overlay`): le colonne attributo non sono propagate; la
-/// geometria aggregata e' nullable (input vuoto -> geometria null).
+/// geometria aggregata si dichiara nullable, in modo conservativo: il
+/// kernel di `dissolve` su un ingresso vuoto rende `MULTIPOLYGON EMPTY`, non
+/// null, e che cosa rende una tabella vuota lo decide l'esecuzione Arrow.
 ///
 /// I metadati dello SCHEMA di input restano: riguardano il dataset.
 /// Le colonne `extra` sono `Field` interi: quelle copiate dall'input (chiavi
