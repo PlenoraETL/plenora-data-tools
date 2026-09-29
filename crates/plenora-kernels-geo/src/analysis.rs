@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::line_measures::{Distance, Euclidean};
-use geo::{CoordsIter, Geometry};
+use geo::{BoundingRect, CoordsIter, Geometry, LineString, Polygon};
 use rayon::prelude::*;
+use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use thiserror::Error;
 
 use crate::spatial_join::{
@@ -271,6 +272,7 @@ fn nearest_matches_impl(
         });
     }
 
+    let indice = IndiceVicini::nuovo(&usable_right);
     let result_count = AtomicU64::new(0);
     // architettura.md#determinismo: i `Result` sono raccolti per riga (ordine preservato) e il
     // primo errore IN ORDINE DI RIGA e' selezionato dal collect
@@ -282,9 +284,17 @@ fn nearest_matches_impl(
             let Some(geometry) = geometry.as_ref().filter(|value| value.coords_count() > 0) else {
                 return Ok(Vec::new());
             };
-            let mut distances: Vec<_> = usable_right
-                .iter()
-                .map(|(right_index, right)| (*right_index, Euclidean.distance(geometry, *right)))
+            // Candidati in ordine di indice right: un sovrainsieme di ogni
+            // riga che puo' essere alla distanza minima (vedi `IndiceVicini`).
+            // La distanza di ogni candidato e' la stessa chiamata della
+            // forza bruta, quindi minimo, pari e valori sono gli stessi bit.
+            let mut distances: Vec<_> = indice
+                .candidati(geometry, &usable_right)
+                .into_iter()
+                .map(|posizione| {
+                    let (right_index, right) = usable_right[posizione];
+                    (right_index, Euclidean.distance(geometry, right))
+                })
                 .collect();
             let Some(minimum) = distances
                 .iter()
@@ -300,6 +310,8 @@ fn nearest_matches_impl(
             // minimo degli stessi valori (reduce(f64::min)), non una stima.
             #[allow(clippy::float_cmp)]
             distances.retain(|(_, distance)| *distance == minimum);
+            // Gia' in ordine di indice (i candidati lo sono): resta come
+            // difesa, a costo trascurabile sui soli pari.
             distances.sort_unstable_by_key(|(right_index, _)| *right_index);
             let additional =
                 u64::try_from(distances.len()).map_err(|_| AnalysisError::IndexOverflow)?;
@@ -326,6 +338,195 @@ fn nearest_matches_impl(
         .collect();
     let grouped: Result<Vec<Vec<NearestMatch>>, AnalysisError> = groups.into_iter().collect();
     Ok(grouped?.into_iter().flatten().collect())
+}
+
+/// Modulo minimo non nullo delle coordinate per cui vale la stima d'errore di
+/// [`IndiceVicini`]: `2^-400`. Sotto, prodotti di differenze possono andare
+/// in underflow e l'errore di `Euclidean.distance` non e' piu' relativo.
+const MODULO_MINIMO: f64 = f64::from_bits((1023 - 400) << 52);
+/// Modulo massimo delle coordinate per la stessa stima: `2^400`, lontano
+/// dall'overflow dei quadrati.
+const MODULO_MASSIMO: f64 = f64::from_bits((1023 + 400) << 52);
+/// Margine dello scarto, relativo al modulo massimo delle coordinate: `2^-40`,
+/// cioe' 4096 volte l'epsilon di `f64`: la stima d'errore e' sotto
+/// `64 * eps * S`, il fattore 64 resta di scorta.
+const MARGINE_RELATIVO: f64 = f64::from_bits((1023 - 40) << 52);
+
+/// Rettangolo d'ingombro di una geometria right nell'albero, con la sua
+/// posizione in `usable_right`.
+struct InvolucroRight {
+    envelope: AABB<[f64; 2]>,
+    posizione: usize,
+}
+
+impl RTreeObject for InvolucroRight {
+    type Envelope = AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        self.envelope
+    }
+}
+
+impl PointDistance for InvolucroRight {
+    fn distance_2(&self, point: &[f64; 2]) -> f64 {
+        self.envelope.distance_2(point)
+    }
+}
+
+/// Indice dei candidati di `geo.nearest`: per una geometria left restituisce
+/// un sovrainsieme delle righe right che possono stare alla distanza minima
+/// della forza bruta. Il risultato non cambia: minimo, pari e valori si
+/// calcolano poi con la stessa `Euclidean.distance` sui soli candidati.
+///
+/// # Perche' lo scarto e' esatto
+///
+/// Sia `d` la distanza calcolata di un candidato qualunque (il primo vicino
+/// del centro del rettangolo left), che entra sempre fra i candidati, e `S` il
+/// modulo massimo delle coordinate del left e dei right regolari. Si tengono
+/// i right il cui rettangolo interseca il rettangolo left allargato di
+/// `e = d + 2 * S * 2^-40`. Un right scartato ha un asse su cui la distanza
+/// esatta fra i rettangoli supera `d + S * 2^-40` (l'arrotondamento del bordo
+/// della finestra e' sotto `ulp(S)`), quindi anche la distanza vera fra le
+/// geometrie. Su geometrie regolari (vedi [`involucro_regolare`])
+/// `Euclidean.distance` di `geo` 0.33.1 restituisce o zero da un predicato
+/// d'intersezione esatto (i rettangoli allora si toccano e l'elemento non e'
+/// scartato), o il minimo di distanze punto-segmento e punto-punto calcolate,
+/// ciascuna sotto il valore vero di meno di `64 * eps * S` (differenze di
+/// coordinate, `hypot`, scelta del ramo di `line_segment_distance`,
+/// tolleranza parametrica di `line_string_contains_point`). La distanza
+/// calcolata di uno scartato supera dunque `d`, che non e' sotto il minimo
+/// dei candidati: nessuno scartato e' al minimo, ne' lo cambia.
+///
+/// Le geometrie fuori da quella stima non si scartano mai: i right irregolari
+/// sono candidati di ogni riga, un left irregolare prende tutti i right.
+/// Irregolare vuol dire una coordinata fuori da `{0} ∪ [2^-400, 2^400]` in
+/// modulo (anche NaN o infinita), o una parte vuota o degenere, su cui `geo`
+/// risponde zero o con tolleranze assolute (`point_contains_point` in `f32`).
+struct IndiceVicini {
+    albero: RTree<InvolucroRight>,
+    sempre: Vec<usize>,
+    modulo_right: f64,
+    totale: usize,
+}
+
+impl IndiceVicini {
+    fn nuovo(usable_right: &[(usize, &Geometry<f64>)]) -> Self {
+        let mut involucri = Vec::new();
+        let mut sempre = Vec::new();
+        let mut modulo_right = 0.0_f64;
+        for (posizione, (_, geometria)) in usable_right.iter().enumerate() {
+            match involucro_regolare(geometria) {
+                Some((envelope, modulo)) => {
+                    modulo_right = modulo_right.max(modulo);
+                    involucri.push(InvolucroRight {
+                        envelope,
+                        posizione,
+                    });
+                }
+                None => sempre.push(posizione),
+            }
+        }
+        Self {
+            albero: RTree::bulk_load(involucri),
+            sempre,
+            modulo_right,
+            totale: usable_right.len(),
+        }
+    }
+
+    /// Posizioni in `usable_right` da valutare, crescenti e senza ripetizioni.
+    fn candidati(
+        &self,
+        geometria: &Geometry<f64>,
+        usable_right: &[(usize, &Geometry<f64>)],
+    ) -> Vec<usize> {
+        let tutti = || (0..self.totale).collect();
+        let Some((involucro, modulo_left)) = involucro_regolare(geometria) else {
+            return tutti();
+        };
+        let (minimo, massimo) = (involucro.lower(), involucro.upper());
+        // Qualunque punto va bene: il centro serve solo a scegliere `d`.
+        let centro = [
+            f64::midpoint(minimo[0], massimo[0]),
+            f64::midpoint(minimo[1], massimo[1]),
+        ];
+        let Some(primo) = self.albero.nearest_neighbor(&centro) else {
+            return tutti();
+        };
+        let Some((_, destra)) = usable_right.get(primo.posizione) else {
+            return tutti();
+        };
+        let limite = Euclidean.distance(geometria, *destra);
+        let margine = modulo_left.max(self.modulo_right) * MARGINE_RELATIVO;
+        let espansione = limite + (margine + margine);
+        // NaN o infinito: nessuna stima, nessuno scarto.
+        if !espansione.is_finite() {
+            return tutti();
+        }
+        let finestra = AABB::from_corners(
+            [minimo[0] - espansione, minimo[1] - espansione],
+            [massimo[0] + espansione, massimo[1] + espansione],
+        );
+        let mut candidati: Vec<usize> = self
+            .albero
+            .locate_in_envelope_intersecting(&finestra)
+            .map(|candidato| candidato.posizione)
+            .chain(self.sempre.iter().copied())
+            .chain(std::iter::once(primo.posizione))
+            .collect();
+        candidati.sort_unstable();
+        candidati.dedup();
+        candidati
+    }
+}
+
+/// Rettangolo d'ingombro e modulo massimo delle coordinate di una geometria
+/// su cui vale la stima d'errore di [`IndiceVicini`]; `None` se irregolare.
+fn involucro_regolare(geometria: &Geometry<f64>) -> Option<(AABB<[f64; 2]>, f64)> {
+    if !struttura_regolare(geometria) {
+        return None;
+    }
+    let mut modulo = 0.0_f64;
+    for coordinata in geometria.coords_iter() {
+        for valore in [coordinata.x, coordinata.y] {
+            let assoluto = valore.abs();
+            // NaN non passa: nessuno dei due confronti e' vero.
+            let nel_dominio = valore == 0.0 || (MODULO_MINIMO..=MODULO_MASSIMO).contains(&assoluto);
+            if !nel_dominio {
+                return None;
+            }
+            modulo = modulo.max(assoluto);
+        }
+    }
+    let rettangolo = geometria.bounding_rect()?;
+    Some((
+        AABB::from_corners(
+            [rettangolo.min().x, rettangolo.min().y],
+            [rettangolo.max().x, rettangolo.max().y],
+        ),
+        modulo,
+    ))
+}
+
+/// Nessuna parte vuota o degenere: linee con almeno due vertici, anelli
+/// chiusi con almeno quattro, collezioni non vuote.
+fn struttura_regolare(geometria: &Geometry<f64>) -> bool {
+    let linea = |linea: &LineString<f64>| linea.0.len() >= 2;
+    let anello = |anello: &LineString<f64>| anello.0.len() >= 4 && anello.is_closed();
+    let poligono = |poligono: &Polygon<f64>| {
+        anello(poligono.exterior()) && poligono.interiors().iter().all(anello)
+    };
+    match geometria {
+        Geometry::Point(_) | Geometry::Line(_) | Geometry::Rect(_) | Geometry::Triangle(_) => true,
+        Geometry::LineString(valore) => linea(valore),
+        Geometry::Polygon(valore) => poligono(valore),
+        Geometry::MultiPoint(valore) => !valore.0.is_empty(),
+        Geometry::MultiLineString(valore) => !valore.0.is_empty() && valore.0.iter().all(linea),
+        Geometry::MultiPolygon(valore) => !valore.0.is_empty() && valore.0.iter().all(poligono),
+        Geometry::GeometryCollection(valore) => {
+            !valore.0.is_empty() && valore.0.iter().all(struttura_regolare)
+        }
+    }
 }
 
 /// Returns the stable left row indexes that are within at least one right row.
@@ -414,6 +615,9 @@ pub fn count_points_in_polygons_validated(
     }
     Ok(counts)
 }
+
+#[cfg(test)]
+mod nearest_oracolo;
 
 #[cfg(test)]
 mod tests {

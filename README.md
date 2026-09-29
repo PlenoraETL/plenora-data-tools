@@ -197,6 +197,52 @@ auto-intersezioni sub-quadratica a verdetto identico: la sequenza copiata si
 toglie, la barriera torna a `check_validation` e l'oracolo resta come
 regressione.
 
+### `geo.nearest`: lo scarto dell'R-tree si appoggia alla stima d'errore di `geo`
+
+**Regola.** `nearest_matches` (e `_validated`) non confronta più ogni left
+con ogni right: un R-tree dei rettangoli d'ingombro right sceglie i
+candidati, e minimo, pari e distanze si calcolano sui soli candidati con la
+stessa `Euclidean.distance` di prima, in ordine di indice right. Un right si
+scarta solo se il suo rettangolo dista dal rettangolo left più di `d + S *
+2^-40`, con `d` la distanza calcolata di un candidato e `S` il modulo
+massimo delle coordinate: la distanza calcolata da `geo` 0.33.1 su geometrie
+regolari non scende sotto quella vera di più di circa `64 * eps * S`
+(differenze di coordinate, `hypot`, ramo di `line_segment_distance`,
+tolleranza parametrica di `line_string_contains_point`, che dà zero a un
+punto fuori dal rettangolo del segmento), quindi nessuno scartato è al
+minimo. Le geometrie su cui la stima non vale non si scartano mai: parti
+vuote o degeneri (linee di un punto, anelli aperti o sotto quattro vertici,
+collezioni vuote, dove `geo` risponde zero o usa una tolleranza assoluta in
+`f32`) e coordinate fuori da `{0} ∪ [2^-400, 2^400]` in modulo, NaN e
+infiniti compresi: un right così è candidato di ogni riga, un left così li
+prende tutti. Il limite `max_comparisons` resta `n * m` come prima: stesso
+errore per gli stessi ingressi, anche se il lavoro vero è di solito molto
+minore. L'oracolo, con la forza bruta copiata alla lettera e confrontata sui
+bit, è in `crates/plenora-kernels-geo/src/analysis/nearest_oracolo.rs`.
+
+**Ambito.** `plenora-kernels-geo`, `analysis::nearest_matches` e
+`nearest_matches_validated`.
+
+**Hazard.**
+
+- la stima d'errore è letta dai sorgenti di `geo` 0.33.1 e `geo-types`
+  0.7.19, non dimostrata in forma chiusa; il margine le lascia un fattore
+  64 circa. Un aggiornamento che introducesse un'altra tolleranza assoluta o
+  un altro «zero» per parti vuote renderebbe lo scarto sbagliato senza
+  errore: l'oracolo lo vede solo sulle forme che esercita (fra queste il
+  punto fuori dal rettangolo che `geo` dichiara sul segmento, che fallisce
+  senza il margine);
+- un panico di `geo` su una coppia (per esempio `nearest_neighbour_distance`
+  con coordinate sotto `2^-400`) resta un panico solo se la coppia è fra i
+  candidati; quelle osservate coinvolgono sempre una geometria fuori
+  dominio, che non si scarta, ma la forza bruta le valutava tutte;
+- il caso peggiore resta O(n·m): con right equidistanti da molti left
+  (una circonferenza, rettangoli grandi sovrapposti) i candidati sono tutti.
+
+**Condizione di rientro.** Una distanza di `geo` con un limite d'errore
+dichiarato, o un confronto esatto delle distanze: il margine si ricava da
+lì e la stima letta dai sorgenti si toglie.
+
 ### Hash delle chiavi non keyed
 
 **Regola.** Le mappe di chiavi dei kernel tabellari usano due hash
