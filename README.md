@@ -103,10 +103,19 @@ tutti gli usi (nessun output deve dipendere dall'ordine di una mappa), e
 `assert_unique` e `table_diff` in memoria non contabilizzano le proprie
 strutture di chiavi (arena, indici, gruppi) su `max_governed_memory_bytes`:
 il budget decide solo il passaggio allo spill, sulla stima dei byte
-dell'input. Nelle varianti spilled le chiavi distinte di una partizione sono
-contabilizzate (lunghezza della chiave più 64 byte per chiave).
+dell'input. Nelle varianti spilled la contabilità dipende dall'operatore:
 
-**Ambito.** I kernel elencati, percorso in memoria.
+- set operation: le chiavi distinte di **ciascuna partizione** (lunghezza
+  della chiave più 64 byte per chiave), quindi più partizioni riducono il
+  picco;
+- `distinct`: la mappa delle statistiche è **globale**, una
+  voce per chiave distinta di tutto l'input (lunghezza più 64 byte), e più
+  partizioni non la riducono;
+- `aggregate`: i batch Arrow letti di una partizione, **non** le strutture
+  di chiavi e gruppi costruite su di essi.
+
+**Ambito.** I kernel elencati, percorso in memoria; nelle varianti spilled,
+le strutture di chiavi e gruppi di `aggregate`.
 
 **Hazard.** Con molte chiavi distinte il picco reale supera la stima
 dell'input: l'arena delle chiavi, due `usize` e una voce di mappa per chiave
