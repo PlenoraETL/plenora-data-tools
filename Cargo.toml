@@ -67,7 +67,7 @@ log = "=0.4.33"
 # Comuni
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["raw_value"] }
-thiserror = "=2.0.20"
+thiserror = "=2.0.21"
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 chrono-tz = "=0.10.4"
 regex = "=1.13.1"
@@ -75,7 +75,7 @@ unicode-normalization = "=0.1.25"
 num-traits = "=0.2.19"
 md-5 = "=0.11.0"
 sha2 = "=0.11.0"
-uuid = { version = "=1.25.0", features = ["v4"] }
+uuid = { version = "=1.26.1", features = ["v4"] }
 tempfile = "=3.27.0"
 # Dev
 proptest = "=1.11.0"
