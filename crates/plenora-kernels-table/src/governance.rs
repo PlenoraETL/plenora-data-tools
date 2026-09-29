@@ -1,3 +1,9 @@
+//! Governance: asserzioni, riconciliazione e regole dichiarative.
+//!
+//! Asserzioni `table.assert_cardinality`, `table.assert_metadata`,
+//! `table.assert_foreign_key`; `table.reconcile` fra due tabelle;
+//! `table.validate_rules`.
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -20,18 +26,29 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
+/// Config di `table.assert_cardinality`.
+///
+/// L'analisi del contratto pretende almeno un vincolo, rifiuta `exact_rows`
+/// insieme a `min_rows`/`max_rows`, `min_rows > max_rows` e i vincoli oltre
+/// `max_rows` dei limiti.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertCardinality {
+    /// Numero esatto di righe; se presente, prevale sugli altri due.
     #[serde(default)]
     pub exact_rows: Option<usize>,
+    /// Minimo di righe, incluso.
     #[serde(default)]
     pub min_rows: Option<usize>,
+    /// Massimo di righe, incluso.
     #[serde(default)]
     pub max_rows: Option<usize>,
 }
 
 /// Batch invariato se il numero di righe rispetta il contratto dichiarato.
+///
+/// Nessuna diagnostica per riga: il difetto e' della tabella, non di una
+/// riga.
 ///
 /// # Errors
 ///
@@ -55,10 +72,17 @@ pub fn assert_cardinality(batch: &RecordBatch, config: &AssertCardinality) -> Re
     }
 }
 
+/// Config di `table.assert_metadata`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertMetadata {
+    /// Coppie chiave-valore che i metadati di schema devono contenere, con
+    /// lo stesso valore (obbligatorio). L'analisi del contratto rifiuta la
+    /// mappa vuota, oltre `max_columns` coppie, chiavi vuote e testi oltre
+    /// `max_string_bytes`.
     pub expected: BTreeMap<String, String>,
+    /// Con `true` (default) i metadati possono avere altre chiavi; con
+    /// `false` hanno esattamente quelle di `expected`.
     #[serde(default = "default_true")]
     pub allow_extra: bool,
 }
@@ -67,13 +91,16 @@ const fn default_true() -> bool {
     true
 }
 
-/// Batch invariato se i metadata dello schema contengono tutte le coppie
+/// Batch invariato se i metadati dello schema contengono tutte le coppie
 /// `expected` (con gli stessi valori).
+///
+/// Guarda solo lo schema: nel runner l'analisi del contratto rifiuta gli
+/// stessi casi in validazione, con `InvalidPlan`.
 ///
 /// # Errors
 ///
 /// - `Schema`: chiave attesa assente o con valore diverso; con
-///   `allow_extra = false`, anche numero di metadata diverso da `expected`.
+///   `allow_extra = false`, anche numero di metadati diverso da `expected`.
 pub fn assert_metadata(batch: &RecordBatch, config: &AssertMetadata) -> Result<RecordBatch> {
     let schema = batch.schema();
     let metadata = schema.metadata();
@@ -90,11 +117,20 @@ pub fn assert_metadata(batch: &RecordBatch, config: &AssertMetadata) -> Result<R
     Ok(batch.clone())
 }
 
+/// Config di `table.assert_foreign_key`.
+///
+/// Le chiavi si abbinano per posizione; l'analisi del contratto pretende
+/// liste non vuote, della stessa lunghezza, senza ripetizioni, con colonne
+/// leggibili come testo scalare e tipi identici per coppia.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForeignKey {
+    /// Colonne della chiave esterna nella tabella sinistra (obbligatorio).
     pub left_keys: Vec<String>,
+    /// Colonne della chiave riferita nella tabella destra (obbligatorio).
     pub right_keys: Vec<String>,
+    /// Con `true` una riga sinistra con un null nella chiave passa senza
+    /// controllo; con `false` (default) e' rifiutata.
     #[serde(default)]
     pub allow_null: bool,
 }
@@ -192,7 +228,7 @@ impl<'a> KeyValueColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(text, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -201,7 +237,7 @@ impl<'a> KeyValueColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(text, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -210,7 +246,7 @@ impl<'a> KeyValueColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(text, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -219,7 +255,7 @@ impl<'a> KeyValueColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(text, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -541,14 +577,24 @@ fn senza_int64() -> PlenoraError {
 /// Batch sinistro invariato se ogni chiave sinistra e' referenziata nella
 /// tabella destra.
 ///
+/// Una chiave con un null in una qualunque colonna e' nulla: a destra non
+/// si registra, a sinistra decide `allow_null`. La memoria contata e' quella
+/// delle chiavi distinte della destra: lunghezza della forma testuale di
+/// `key_for_row` piu' 64 byte per chiave.
+///
 /// # Errors
 ///
 /// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
-///   delle chiavi non identici fra i due lati;
-/// - `DataMapping`: chiave null in `left` con `allow_null = false` o chiave
-///   sinistra non presente in `right`, con row diagnostics;
-/// - `ResourceLimit`: memoria oltre `limits.max_governed_memory_bytes`;
-/// - `Internal`: overflow dei contatori.
+///   delle chiavi non identici fra i due lati; cella di chiave fuori dai
+///   tipi nativi che non si converte in testo (come `scalar_as_string`);
+/// - `DataMapping` con diagnostica per riga, senza colonna: chiave nulla in
+///   `left` con `allow_null = false` (causa `validation.foreign_key_null`) o
+///   chiave sinistra assente da `right` (causa
+///   `validation.foreign_key_missing`);
+/// - `ResourceLimit`: memoria delle chiavi destre oltre
+///   `limits.max_governed_memory_bytes`, o traboccamento del suo contatore;
+/// - `Internal`: invarianti interne violate (indice nativo Int64 senza la
+///   colonna, contatori delle diagnostiche).
 pub fn assert_foreign_key(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -606,11 +652,21 @@ pub fn assert_foreign_key(
     Ok(left.clone())
 }
 
+/// Config di `table.reconcile`.
+///
+/// Le chiavi si abbinano per posizione; l'analisi del contratto pretende
+/// liste non vuote, della stessa lunghezza, senza ripetizioni, con colonne
+/// leggibili come testo scalare e tipi identici per coppia.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reconcile {
+    /// Colonne della chiave nella tabella sinistra (obbligatorio).
     pub left_keys: Vec<String>,
+    /// Colonne della chiave nella tabella destra (obbligatorio).
     pub right_keys: Vec<String>,
+    /// Con `true` (default) il null e' un valore della chiave e due null si
+    /// abbinano; con `false` una riga con un null nella chiave conta fra le
+    /// righe solo del suo lato, e non fra i duplicati.
     #[serde(default = "default_true")]
     pub nulls_equal: bool,
 }
@@ -676,17 +732,31 @@ fn as_u64(value: usize) -> Result<u64> {
     u64::try_from(value).map_err(|_| PlenoraError::ResourceLimit("conteggio oltre u64".into()))
 }
 
-/// Report di riconciliazione fra due tabelle (batch di metriche
-/// `matched`/`left_only`/`right_only`/`duplicates`).
+/// Resoconto di riconciliazione fra due tabelle, in cinque metriche.
+///
+/// Un batch di cinque righe `metric` (`Utf8`) / `value` (`UInt64`), in
+/// quest'ordine: `matched_rows`, `left_only_rows`, `right_only_rows`,
+/// `left_duplicate_rows`, `right_duplicate_rows`.
+///
+/// Per ogni chiave con `L` righe a sinistra e `R` a destra: abbinate
+/// `min(L, R)`, solo a sinistra `L - min(L, R)`, solo a destra
+/// `R - min(L, R)`, duplicati `L - 1` e `R - 1` sulle chiavi presenti in quel
+/// lato. Con `nulls_equal = false` le righe con una chiave nulla si sommano
+/// alle righe solo del loro lato.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna chiave assente (in `left` o `right`); tipi Arrow
-///   delle chiavi non identici fra i due lati; errore Arrow nella
-///   costruzione del batch di output;
-/// - `ResourceLimit`: memoria oltre `limits.max_governed_memory_bytes`; chiavi distinte
-///   oltre `limits.max_rows`; conteggio oltre `u64`/overflow dei contatori
-///   (errore Internal).
+///   delle chiavi non identici fra i due lati; cella di chiave fuori dai
+///   tipi nativi che non si converte in testo (come `scalar_as_string`);
+/// - `ResourceLimit`: memoria delle chiavi oltre
+///   `limits.max_governed_memory_bytes` (chiavi distinte contate lato per
+///   lato, lunghezza della forma testuale piu' 64 byte); chiavi distinte di
+///   un lato oltre `limits.max_rows`; conteggio oltre `u64` o traboccamento
+///   dei contatori;
+/// - `Internal`: invarianti interne violate;
+/// - `DataMapping` (`arrow error`): errore Arrow nella costruzione del batch
+///   di output.
 pub fn reconcile(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -773,30 +843,54 @@ pub fn reconcile(
 // ---------------------------------------------------------------------------
 
 /// Operatore di una regola di validazione: sottoinsieme degli operatori di
-/// `filtering` con nomi testuali stabili.
+/// `filtering` con nomi testuali stabili (in minuscolo nella config).
+///
+/// "Colonna numerica" qui e' una di [`is_rule_numeric`]: `Utf8` non lo e'.
+/// Una cella nulla fa fallire ogni operatore tranne `isnull`.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleOperator {
+    /// `eq`: uguale a `value`. Esatto nel dominio nativo su una colonna
+    /// numerica (`value` numerico; su `Float64` `NaN` e' uguale a `NaN`),
+    /// testuale su `Utf8`, `Boolean` e `Binary`.
     Eq,
+    /// `ne`: negazione di `eq`; una cella che non si legge fa fallire
+    /// entrambi.
     Ne,
+    /// `gt`: maggiore di `value`; colonna numerica, `value` numerico.
     Gt,
+    /// `ge`: maggiore o uguale; come `gt`.
     Ge,
+    /// `lt`: minore; come `gt`.
     Lt,
+    /// `le`: minore o uguale; come `gt`.
     Le,
+    /// `isnull`: cella nulla (null logico); qualunque colonna, senza
+    /// `value`.
     Isnull,
+    /// `notnull`: cella non nulla; qualunque colonna, senza `value`.
     Notnull,
+    /// `regex`: la regex `value` trova una corrispondenza nel testo
+    /// (ricerca, non corrispondenza intera); colonna `Utf8`.
     Regex,
+    /// `range`: `value` e' il testo `"min,max"`, estremi inclusi; colonna
+    /// numerica.
     Range,
 }
 
+/// Gravita' di una regola: decide in quale elenco (o conteggio) finisce la
+/// sua violazione.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleSeverity {
+    /// `error` (default): la violazione rende la riga non valida.
     #[default]
     Error,
+    /// `warning`: la violazione si segnala, la riga resta valida.
     Warning,
 }
 
+/// Forma dell'uscita di [`validate_rules`].
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ValidateOutputMode {
@@ -807,23 +901,37 @@ pub enum ValidateOutputMode {
     Summary,
 }
 
+/// Una regola di [`validate_rules`].
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValidateRule {
+    /// Nome della regola nell'uscita (obbligatorio): non vuoto, unico fra le
+    /// regole; l'analisi del contratto lo limita a 1024 byte.
     pub name: String,
+    /// Operatore (obbligatorio).
     pub operator: RuleOperator,
+    /// Colonna su cui si valuta la regola. Facoltativa per serde, ma una
+    /// regola senza `column` si rifiuta con `InvalidPlan`.
     #[serde(default)]
     pub column: Option<String>,
+    /// Termine di confronto: obbligatorio per ogni operatore tranne
+    /// `isnull`/`notnull`, dove non e' ammesso. Una stringa vale il suo
+    /// testo, un altro valore il suo testo JSON; `null` vale assente.
     #[serde(default)]
     pub value: Option<serde_json::Value>,
+    /// Gravita' (default `error`).
     #[serde(default)]
     pub severity: RuleSeverity,
 }
 
+/// Config di `table.validate_rules`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValidateRules {
+    /// Regole, valutate nell'ordine scritto (obbligatorio, almeno una;
+    /// l'analisi del contratto ne ammette al piu' `max_columns`).
     pub rules: Vec<ValidateRule>,
+    /// Forma dell'uscita (default `annotate`).
     #[serde(default)]
     pub output_mode: ValidateOutputMode,
 }
@@ -1295,7 +1403,7 @@ fn aggiungi_nome(elenco: &mut String, vuoto: &mut bool, nome: &str) {
 /// conteggi delle righe fallite per gravita').
 ///
 /// Le regole si valutano riga per riga nell'ordine di configurazione, con
-/// la colonna di ogni regola risolta una volta ([`ColonnaRegola`]); i nomi
+/// la colonna di ogni regola risolta una volta (`ColonnaRegola`); i nomi
 /// delle regole fallite si scrivono direttamente nei buffer di output.
 ///
 /// # Errors
@@ -1303,10 +1411,11 @@ fn aggiungi_nome(elenco: &mut String, vuoto: &mut bool, nome: &str) {
 /// - `InvalidPlan`: nessuna regola; nome regola vuoto o ripetuto; regola senza
 ///   `column`; `value` mancante o non ammesso per l'operatore; tipo della
 ///   colonna incompatibile con l'operatore; valore atteso non numerico o
-///   range malformato; regex non valida; invarianti interne violate (errore
-///   Internal);
-/// - `Schema`: colonna di una regola assente; errore Arrow nella
-///   costruzione dell'output.
+///   range malformato; regex non valida;
+/// - `Schema`: colonna di una regola assente;
+/// - `Internal`: invarianti interne violate;
+/// - `DataMapping` (`arrow error`): errore Arrow nella costruzione
+///   dell'output.
 pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<RecordBatch> {
     let rules = compile_rules(batch, config)?;
     let colonne = rules

@@ -64,7 +64,7 @@ fn rule_passes_riferimento(batch: &RecordBatch, rule: &CompiledRule, row: usize)
             rule_compare(array, row, rule.expected_high_bound).ordering(),
         ),
         // La colonna di una regola regex e' garantita Utf8 da
-        // `compile_rules` (hot path minimale): prestito diretto sulla `StringArray`,
+        // `compile_rules` (percorso caldo): prestito diretto sulla `StringArray`,
         // senza l'allocazione per riga di `scalar_as_string`. Tipi diversi
         // (mai raggiunti per contratto) restano sul percorso scalare.
         RuleOperator::Regex => rule.regex.as_ref().is_some_and(|regex| {

@@ -1,3 +1,12 @@
+//! Asserzioni di qualita' sui dati (`table.assert_schema`,
+//! `table.assert_not_null`, `table.assert_unique`, `table.assert_range`,
+//! `table.assert_regex`) e `table.coalesce`.
+//!
+//! Un'asserzione che regge restituisce il batch invariato; una violazione
+//! e' un errore, mai un batch ridotto. Le violazioni per riga escono come
+//! `DataMapping` con diagnostica per riga (`reject_rows`): conteggi per
+//! causa ed esempi con indice di riga e colonna, mai valori.
+
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -16,20 +25,37 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
+/// Una colonna attesa da [`assert_schema`].
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaExpectation {
+    /// Nome della colonna attesa (obbligatorio).
     pub name: String,
+    /// Famiglia di tipo attesa (obbligatoria), senza distinzione fra
+    /// maiuscole e minuscole e con gli spazi ai lati ignorati: `utf8` o
+    /// `string`, `int64` o `integer`, `float64`, `float` o `double`,
+    /// `boolean` o `bool`, `uint64` o `unsigned`, `date32`,
+    /// `timestamp_millis` (qualunque fuso), `decimal128` (qualunque
+    /// precisione e scala), `binary`, `dictionary_utf8` (chiavi `Int32`),
+    /// `list` (qualunque elemento), `struct` (qualunque campo).
     pub data_type: String,
+    /// Nullabilita' attesa; assente (default), non si controlla.
     pub nullable: Option<bool>,
 }
 
+/// Config di `table.assert_schema`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertSchema {
+    /// Colonne attese (obbligatorio). L'analisi del contratto rifiuta la
+    /// lista vuota, i nomi ripetuti e oltre `max_columns` voci.
     pub fields: Vec<SchemaExpectation>,
+    /// Con `false` (default) il batch ha esattamente tante colonne quante
+    /// voci in `fields`; con `true` puo' averne altre.
     #[serde(default)]
     pub allow_extra: bool,
+    /// Con `true` (default) la voce *i* descrive la colonna in posizione
+    /// *i*; con `false` la colonna si cerca per nome.
     #[serde(default = "default_true")]
     pub ordered: bool,
 }
@@ -83,17 +109,19 @@ fn type_matches(actual: &DataType, expected: &DataType) -> bool {
     }
 }
 
-/// Verifica che lo schema del batch (nomi, tipi, nullability) corrisponda
+/// Verifica che lo schema del batch (nomi, tipi, nullabilita') corrisponda
 /// alle attese di configurazione; restituisce il batch invariato.
 ///
 /// Con `ordered=true` i campi sono confrontati in posizione, altrimenti per
 /// nome; con `allow_extra=false` anche il numero di colonne deve coincidere.
+/// Guarda solo lo schema, mai i valori: nel runner l'analisi del contratto
+/// rifiuta gli stessi casi in validazione, con `InvalidPlan`.
 ///
 /// # Errors
 ///
 /// - `Schema`: numero di colonne diverso con `allow_extra=false`, colonna
-///   assente, nome diverso in posizione (`ordered=true`), tipo o nullability
-///   diversi dall'atteso;
+///   assente, nome diverso in posizione (`ordered=true`), tipo o
+///   nullabilita' diversi dall'atteso;
 /// - `InvalidPlan`: tipo atteso non supportato da `assert_schema`.
 pub fn assert_schema(batch: &RecordBatch, config: &AssertSchema) -> Result<RecordBatch> {
     if !config.allow_extra && batch.num_columns() != config.fields.len() {
@@ -144,19 +172,25 @@ pub fn assert_schema(batch: &RecordBatch, config: &AssertSchema) -> Result<Recor
     Ok(batch.clone())
 }
 
+/// Config di `table.assert_not_null`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertNotNull {
+    /// Colonne che non devono contenere null (obbligatorio, di qualunque
+    /// tipo). L'analisi del contratto rifiuta la lista vuota e i nomi
+    /// ripetuti.
     pub columns: Vec<String>,
 }
 
-/// Verifica che le colonne configurate non contengano null; restituisce il
-/// batch invariato.
+/// Verifica che le colonne configurate non contengano null logici (anche la
+/// voce nulla di un dizionario); restituisce il batch invariato.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`);
-/// - `DataMapping`: una o piu' righe contengono null, con row diagnostics.
+/// - `DataMapping` con diagnostica per riga: righe con un null in una delle
+///   colonne, causa `validation.required_value_missing`; ogni riga conta una
+///   volta, con la prima colonna di `columns` in cui e' nulla.
 pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<RecordBatch> {
     let mut rejections = Vec::new();
     for name in &config.columns {
@@ -189,8 +223,9 @@ pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<Re
 ///
 /// # Errors
 ///
-/// Come `scalar_as_string`: guardia interna date32 (`Contract`) oppure
-/// valore o tipo non codificabile (`Schema`).
+/// Come `scalar_as_string`: guardia interna date32 (`InvalidPlan`) oppure
+/// valore o tipo non codificabile (`Schema`), compreso un `Binary` non
+/// UTF-8.
 pub fn key_for_row(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Vec<u8>> {
     let mut key = Vec::new();
     for index in indices {
@@ -212,10 +247,16 @@ pub fn key_for_row(batch: &RecordBatch, indices: &[usize], row: usize) -> Result
     Ok(key)
 }
 
+/// Config di `table.assert_unique`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertUnique {
+    /// Colonne della chiave (obbligatorio), leggibili come testo scalare.
+    /// L'analisi del contratto rifiuta la lista vuota e i nomi ripetuti.
     pub columns: Vec<String>,
+    /// Con `true` (default) il null e' un valore della chiave e due null
+    /// sono uguali; con `false` le righe con un null logico in una colonna
+    /// della chiave non si controllano.
     #[serde(default = "default_true")]
     pub nulls_equal: bool,
 }
@@ -225,14 +266,22 @@ pub struct AssertUnique {
 ///
 /// Con `nulls_equal=true` i null contano come chiave (un solo null ammesso),
 /// con `false` le righe con null nella chiave sono saltate. Tutte le righe dei
-/// gruppi duplicati sono rifiutate e conteggiate.
+/// gruppi duplicati, la prima compresa, sono rifiutate e conteggiate.
+///
+/// L'uguaglianza e' quella della forma testuale di `key_for_row`: su
+/// `Float64` ogni `NaN` e' uguale agli altri e `0.0` e' diverso da `-0.0`.
+/// Un `Binary` si confronta sui byte, anche se non e' UTF-8 (dove
+/// `key_for_row` fallirebbe).
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
-///   non codificabile nella chiave (come `key_for_row`);
-/// - `DataMapping`: chiave duplicata, con row diagnostics.
-// La raccolta completa per riga (R9.9) rende la funzione una sequenza
+/// - `Schema`: colonna assente dallo schema (come `column_index`) o cella
+///   di una colonna fuori dai tipi nativi che non si converte in testo
+///   (come `scalar_as_string`: `Date32` o `Timestamp` fuori calendario,
+///   chiave di dizionario fuori intervallo);
+/// - `DataMapping` con diagnostica per riga: chiave duplicata, causa
+///   `validation.duplicate_key`, senza colonna.
+// La raccolta completa delle righe rifiutate rende la funzione una sequenza
 // lineare sopra il limite di linee: nessuna complessita' logica aggiunta.
 #[allow(clippy::too_many_lines)]
 pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<RecordBatch> {
@@ -242,8 +291,8 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     // Una sola passata con indici di chiave (`visit_key_ids_where`: stessa
-    // identita' di `key_for_row`, valore nativo su colonna singola, chiave
-    // binaria altrimenti). Con `nulls_equal=false` le righe con un null
+    // identita' di `key_for_row` salvo i `Binary` non UTF-8, valore nativo
+    // su colonna singola, chiave binaria altrimenti). Con `nulls_equal=false` le righe con un null
     // logico nella chiave sono saltate PRIMA della codifica, come nel
     // percorso testuale: non producono ne' chiavi ne' errori di conversione.
     //
@@ -298,11 +347,19 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
     Ok(batch.clone())
 }
 
+/// Config di `table.assert_range`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertRange {
+    /// Colonna da controllare (obbligatorio): `Int64`, `UInt64`, `Float64`,
+    /// `Decimal128`, `Date32` (giorni dall'epoca), `Timestamp(ms)`
+    /// (millisecondi dall'epoca) o `Utf8` letto come numero.
     pub column: String,
+    /// Estremo inferiore. Si legge dal JSON come `f64`: un intero oltre
+    /// 2^53 arriva gia' arrotondato. L'analisi del contratto pretende almeno
+    /// uno fra `min` e `max`, finiti, con `min <= max`.
     pub min: Option<f64>,
+    /// Estremo superiore; come `min`.
     pub max: Option<f64>,
     /// Estremo `min` incluso (assente: incluso). Senza `min` non ha effetto,
     /// e l'analisi dei contratti lo rifiuta.
@@ -311,6 +368,8 @@ pub struct AssertRange {
     /// Come `inclusive_min`, per `max`.
     #[serde(default)]
     pub inclusive_max: Option<bool>,
+    /// Con `true` le celle nulle passano; con `false` (default) sono
+    /// rifiutate.
     #[serde(default)]
     pub allow_null: bool,
 }
@@ -365,9 +424,12 @@ fn non_finite_cell(array: &dyn Array, row: usize) -> bool {
 /// # Errors
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
-///   non confrontabile numericamente (come `scalar_compare`);
-/// - `DataMapping`: null non ammesso o valore fuori intervallo, con row
-///   diagnostics.
+///   non confrontabile numericamente (come `scalar_compare`: tipo fuori
+///   elenco, testo `Utf8` che non e' un numero); il passo fallisce subito,
+///   senza diagnostica per riga;
+/// - `DataMapping` con diagnostica per riga: valore fuori intervallo o non
+///   finito (causa `validation.value_out_of_range`), null con
+///   `allow_null=false` (causa `validation.required_value_missing`).
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index).as_ref();
@@ -425,11 +487,17 @@ pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordB
     Ok(batch.clone())
 }
 
+/// Config di `table.assert_regex`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertRegex {
+    /// Colonna `Utf8` da controllare (obbligatorio).
     pub column: String,
+    /// Regex del crate `regex` (obbligatoria). L'analisi del contratto
+    /// rifiuta il pattern vuoto e quello oltre `max_regex_bytes`.
     pub pattern: String,
+    /// Con `true` le celle nulle passano; con `false` (default) sono
+    /// rifiutate.
     #[serde(default)]
     pub allow_null: bool,
 }
@@ -437,13 +505,17 @@ pub struct AssertRegex {
 /// Verifica che i valori della colonna Utf8 corrispondano alla regex
 /// configurata; restituisce il batch invariato.
 ///
+/// La corrispondenza e' una ricerca (`Regex::is_match`): senza `^` e `$`
+/// basta che una parte del valore corrisponda.
+///
 /// # Errors
 ///
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o non di
 ///   tipo Utf8;
 /// - `InvalidPlan`: pattern non una regex valida;
-/// - `DataMapping`: valore non conforme (incluso un null con
-///   `allow_null=false`), con row diagnostics.
+/// - `DataMapping` con diagnostica per riga: valore che non corrisponde
+///   (causa `validation.regex_mismatch`), null con `allow_null=false` (causa
+///   `validation.required_value_missing`).
 pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     if batch.column(index).data_type() != &DataType::Utf8 {
@@ -481,17 +553,22 @@ pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordB
     Ok(batch.clone())
 }
 
+/// Config di `table.coalesce`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Coalesce {
+    /// Colonne da cui prendere il valore, in ordine di precedenza
+    /// (obbligatorio, almeno una, con tipi Arrow identici).
     pub columns: Vec<String>,
+    /// Colonna del risultato (obbligatorio): sostituita nella sua posizione
+    /// se esiste, altrimenti aggiunta in coda; sempre nullabile.
     pub output_column: String,
 }
 
-/// Prima colonna non-null fra quelle configurate, riga per riga; il
-/// risultato sostituisce (o aggiunge) `output_column`.
+/// Prima colonna non nulla (null logico) fra quelle configurate, riga per
+/// riga; il risultato sostituisce (o aggiunge) `output_column`.
 ///
-/// Tutte le colonne devono avere lo stesso tipo Arrow; il fast path
+/// Tutte le colonne devono avere lo stesso tipo Arrow; il percorso veloce
 /// tipizzato di `cleansing::coalesce_fast` ha semantica identica al percorso
 /// generico (`coalesce_generic`).
 ///
@@ -502,8 +579,9 @@ pub struct Coalesce {
 /// - `ResourceLimit`: overflow degli indici interni del percorso generico
 ///   (cresce col numero di righe);
 /// - `Schema`: colonna assente dallo schema (come `column_index`), tipi
-///   Arrow non identici fra le colonne, errore Arrow nella concat/take del
-///   percorso generico o batch risultante incoerente (come
+///   Arrow non identici fra le colonne;
+/// - `DataMapping` (`arrow error`): errore Arrow nella concat/take del
+///   percorso generico o nella costruzione del batch risultante (come
 ///   `replace_or_append`).
 pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
@@ -526,7 +604,7 @@ pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
             "coalesce richiede colonne con tipi Arrow identici".into(),
         ));
     }
-    // Fast path tipizzato: copre Int64,
+    // Percorso veloce tipizzato: copre Int64,
     // Float64, UInt64, Boolean, Utf8 con semantica identica al generico.
     if let Some(values) = crate::cleansing::coalesce_fast(batch, &indices) {
         return replace_or_append(batch, &config.output_column, data_type, true, values);
@@ -737,11 +815,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test-oracolo del fast path di `assert_unique`: qui sotto
-    // un'implementazione di riferimento indipendente, che non passa dal
-    // percorso ottimizzato. Ogni scenario confronta esito (ok/errore) e
-    // messaggio, che dev'essere byte-identico — stessa chiave duplicata,
-    // stessa riga, stesso formato.
+    // Test-oracolo del percorso a indici di chiave di `assert_unique`: qui
+    // sotto un'implementazione di riferimento indipendente, che si ferma al
+    // primo duplicato. Ogni scenario confronta l'esito (ok/errore), e il
+    // messaggio solo se l'errore non porta diagnostica per riga (colonna
+    // mancante, conversione): il riferimento la diagnostica non la produce.
     // -----------------------------------------------------------------------
 
     /// Oracolo indipendente di `assert_unique`: stesso contratto, percorso
@@ -784,7 +862,8 @@ mod tests {
         }
     }
 
-    /// Esito e messaggio del fast path devono essere identici all'oracolo.
+    /// Esito uguale all'oracolo; messaggio identico se l'errore non ha
+    /// diagnostica per riga.
     fn assert_unique_equivalent(batch: &RecordBatch, config: &AssertUnique) {
         let reference = assert_unique_reference(batch, config);
         let fast = assert_unique(batch, config);
@@ -815,7 +894,7 @@ mod tests {
         // Nessun duplicato: output invariato.
         let unique = int_batch((0..1_000).map(Some).collect());
         assert_unique_equivalent(&unique, &unique_config(&["id"], true));
-        // Duplicato adiacente in testa (righe 0 e 1): fail-fast, riga 1.
+        // Duplicato adiacente in testa (righe 0 e 1): rifiutate entrambe.
         let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
         ids[1] = ids[0];
         let head = int_batch(ids);
@@ -839,7 +918,7 @@ mod tests {
         let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
         ids[501] = ids[500];
         assert_unique_equivalent(&int_batch(ids), &unique_config(&["id"], true));
-        // Piu' duplicati: segnalato il primo in ordine di scansione (riga 10).
+        // Tre righe con la stessa chiave (3, 10, 900).
         let mut ids: Vec<Option<i64>> = (0..1_000).map(Some).collect();
         ids[10] = ids[3];
         ids[900] = ids[3];
@@ -861,7 +940,7 @@ mod tests {
         // Duplicato non-null oltre i null saltati (nulls_equal=false).
         let batch = int_batch(vec![None, Some(5), None, Some(5)]);
         assert_unique_equivalent(&batch, &unique_config(&["id"], false));
-        // Fast path tipizzato Utf8: i null sono contati come chiave
+        // Chiave nativa Utf8: i null sono contati come chiave
         // (duplicato alla riga 3) con nulls_equal=true, saltati con false.
         let utf8_nulls = single_column_batch(
             "s",
@@ -995,8 +1074,8 @@ mod tests {
             ],
         )
         .expect("batch multi-tipo");
-        // Duplicato alla riga 2 su ogni colonna, singolarmente (typed e
-        // fallback generico Date32/Binary) e composta.
+        // Duplicato alla riga 2 su ogni colonna, singolarmente (chiave
+        // nativa, o binaria per Date32 e Binary) e composta.
         for columns in [
             vec!["u"],
             vec!["b"],

@@ -1,5 +1,10 @@
-//! Analyzer a secco delle op di quality e governance
-//! (kernel `quality.rs` / `governance.rs`).
+//! Analisi a secco delle operazioni di qualita' e governance (kernel
+//! `quality.rs` e `governance.rs`).
+//!
+//! Le asserzioni restituiscono il contratto d'ingresso invariato. Quelle che
+//! guardano solo lo schema (`assert_schema`, `assert_metadata`) e
+//! `assert_cardinality` su un `row_count` dimostrato decidono qui, in
+//! validazione: il runner le rifiuta prima di eseguire qualunque passo.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -340,8 +345,9 @@ pub(in crate::analyze) fn analyze_assert_metadata(
     Ok(input.clone())
 }
 
-/// Chiavi di un'op binaria: esistenza nei due schemi e tipi delle coppie
-/// identici (zip come i kernel governance, senza check di pari cardinalita').
+/// Chiavi di un'operazione binaria: esistenza nei due schemi e tipi delle
+/// coppie identici (per posizione, come i kernel di governance; la pari
+/// lunghezza delle liste la controlla `check_key_pairs`).
 pub(in crate::analyze) fn check_foreign_keys(
     op: &str,
     left: &DataContract,
@@ -400,10 +406,10 @@ pub(in crate::analyze) fn analyze_reconcile(
         &config.right_keys,
         limits,
     )?;
-    // Schema fisso: 5 righe di metriche, indipendente dagli input.
-    // R2.4: dataset derivato — nessuna colonna degli input sopravvive e i
-    // metadata di schema degli input NON si ereditano (descriverebbero il
-    // risultato con le proprieta' dell'ingresso, R5.1). Deroga segnalata.
+    // Schema fisso: 5 righe di metriche, indipendente dagli input. Dataset
+    // derivato: nessuna colonna degli input sopravvive e i metadati di
+    // schema degli input NON si ereditano (descriverebbero il risultato con
+    // le proprieta' dell'ingresso).
     let schema = Schema::new(vec![
         Field::new("metric", DataType::Utf8, false),
         Field::new("value", DataType::UInt64, false),
@@ -586,8 +592,8 @@ pub(in crate::analyze) fn analyze_validate_rules(
         ),
         governance::ValidateOutputMode::Summary => {
             // Dataset nuovo: una riga per regola, nessuna colonna d'input.
-            // R2.4: dataset derivato — i metadata di schema dell'input NON si
-            // ereditano (come `reconcile`, R5.1). Deroga segnalata.
+            // Come per `reconcile`, i metadati di schema dell'input NON si
+            // ereditano.
             for name in ["name", "errors", "warnings"] {
                 fields.derive(name)?;
             }
