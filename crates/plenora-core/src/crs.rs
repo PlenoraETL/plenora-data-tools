@@ -582,23 +582,23 @@ pub enum CrsError {
     #[error("CRS_CONTRACT_INVALID: {0}")]
     InvalidContract(&'static str),
     #[error(
-        "REPROJECTION_PATH_UNAVAILABLE: nessun percorso di trasformazioni EPSG collega i due          datum (senza griglie, o con le sole griglie NTv2 fornite)"
+        "REPROJECTION_PATH_UNAVAILABLE: nessun percorso di trasformazioni EPSG collega i due datum (senza griglie, o con le sole griglie NTv2 fornite)"
     )]
     ReprojectionPathUnavailable,
     #[error(
-        "REPROJECTION_ACCURACY_NOT_ACCEPTED: il percorso migliore fra i due datum ha          accuratezza EPSG di {accuracy_m} m, oltre la precisione di 0.01 m: dichiarare          `accuratezza_accettata_m` almeno pari, e il risultato vale solo entro quella          accuratezza"
+        "REPROJECTION_ACCURACY_NOT_ACCEPTED: il percorso migliore fra i due datum ha accuratezza EPSG di {accuracy_m} m, oltre la precisione di 0.01 m: dichiarare `accuratezza_accettata_m` almeno pari, e il risultato vale solo entro quella accuratezza"
     )]
     ReprojectionAccuracyNotAccepted { accuracy_m: f64 },
     #[error("REPROJECTION_CONFIG_INVALID: {0}")]
     ReprojectionConfig(&'static str),
     #[error(
-        "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA: la geometria esce dall'area d'uso di ogni          percorso ammesso fra i due datum (o dalle griglie fornite)"
+        "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA: la geometria esce dall'area d'uso di ogni percorso ammesso fra i due datum (o dalle griglie fornite)"
     )]
     ReprojectionOutsideTransformationArea,
     #[error("REPROJECTION_NOT_CONVERGED: un'inversa iterativa non ha raggiunto la precisione")]
     ReprojectionNotConverged,
     #[error(
-        "REPROJECTION_EDGE_NOT_CONVERGED: un lato non si approssima entro la precisione con          la densificazione ammessa (discontinuita' della proiezione, per esempio          l'antimeridiano, o limite di vertici)"
+        "REPROJECTION_EDGE_NOT_CONVERGED: un lato non si approssima entro la precisione con la densificazione ammessa (discontinuita' della proiezione, per esempio l'antimeridiano, o limite di vertici)"
     )]
     ReprojectionEdgeNotConverged,
     #[error("NTV2_GRID_UNREADABLE: il file della griglia non si legge")]

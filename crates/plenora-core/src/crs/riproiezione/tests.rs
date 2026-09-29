@@ -175,8 +175,18 @@ fn oltre_il_centimetro_serve_accuratezza_accettata_almeno_pari() {
         CrsError::ReprojectionAccuracyNotAccepted { .. }
     ));
     let ammesso = piano("EPSG:3003", "EPSG:7791", &accetta(4.0)).expect("accettata 4 m");
-    assert_eq!(ammesso.percorsi()[0].codici(), vec![1659, 6710]);
-    assert!(ammesso.percorsi()[0].passi()[1].inversa());
+    // A parita' di accuratezza vince l'area d'uso piu' piccola: Sardegna,
+    // Sicilia, poi l'Italia continentale.
+    let codici: Vec<Vec<u32>> = ammesso
+        .percorsi()
+        .iter()
+        .map(PercorsoDatum::codici)
+        .collect();
+    assert_eq!(
+        codici,
+        vec![vec![1661, 6710], vec![1663, 6710], vec![1659, 6710]]
+    );
+    assert!(ammesso.percorsi()[2].passi()[1].inversa());
     assert!(ammesso.percorsi().iter().all(|p| p.accuratezza_m() <= 4.0));
     // Con piu' tolleranza entrano altri percorsi (Sardegna, Sicilia, via
     // WGS 84), sempre in ordine di accuratezza.
@@ -337,6 +347,18 @@ fn dominio_e_regione_si_controllano_su_entrambi_i_lati() {
 }
 
 #[test]
+fn i_fusi_vicini_all_antimeridiano_accettano_le_longitudini_oltre_180() {
+    // UTM 1N ha il meridiano centrale a -177: la regione va da -192 a -162,
+    // e 179 E (cioe' -181) ci sta.
+    let r = riproiettore("EPSG:4326", "EPSG:32601", &OpzioniRiproiezione::default());
+    let (x, _) = r.trasforma(0, 179.0, 50.0).expect("dentro").expect("area");
+    assert!(x < 500_000.0, "a ovest del meridiano centrale");
+    let (x, _) = r.trasforma(0, -170.0, 50.0).expect("dentro").expect("area");
+    assert!(x > 500_000.0);
+    assert!(r.trasforma(0, 160.0, 50.0).is_err());
+}
+
+#[test]
 fn i_messaggi_non_riportano_coordinate() {
     let r = riproiettore("EPSG:4326", "EPSG:3857", &OpzioniRiproiezione::default());
     let errore = r
@@ -381,8 +403,14 @@ fn trasformazione_nulla_non_cambia_lon_lat_fra_ellissoidi_diversi() {
     // NAD83 to WGS 84 (1): traslazioni nulle, GRS 1980 -> WGS 84. Come PROJ
     // (`+proj=noop`), lon/lat restano al bit.
     let r = riproiettore("EPSG:4269", "EPSG:4326", &accetta(4.0));
+    let indice = r
+        .piano()
+        .percorsi()
+        .iter()
+        .position(|p| p.codici() == vec![1188])
+        .expect("NAD83 to WGS 84 (1)");
     let (lon, lat) = r
-        .trasforma(0, -100.123_456_7, 40.765_432_1)
+        .trasforma(indice, -100.123_456_7, 40.765_432_1)
         .expect("dominio")
         .expect("area");
     assert_eq!((lon, lat), (-100.123_456_7, 40.765_432_1));

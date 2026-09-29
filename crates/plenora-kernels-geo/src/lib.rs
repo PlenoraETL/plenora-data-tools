@@ -31,6 +31,7 @@ pub mod geometry_contract;
 pub mod memory_estimate;
 pub mod operations;
 pub mod predicates;
+pub mod riproiezione;
 pub mod rust_backend;
 pub mod spatial_join;
 #[cfg(test)]

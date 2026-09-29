@@ -6,8 +6,13 @@
 //! quelle `NTv2` di cui l'utente fornisce il file.
 //!
 //! Ordine di preferenza, totale e deterministico: accuratezza (somma delle
-//! accuratezze EPSG dei passi), poi numero di passi, poi i codici EPSG in
-//! ordine lessicografico, poi il verso (registro prima dell'inverso).
+//! accuratezze EPSG dei passi), poi numero di passi, poi l'area d'uso piu'
+//! piccola (somma dei riquadri dei passi in gradi quadrati: a parita' di
+//! accuratezza vince la trasformazione piu' specifica, per esempio Monte
+//! Mario to WGS 84 (2) per la Sardegna prima della (4) per l'Italia
+//! continentale, il cui riquadro contiene anche la Sardegna), poi i codici
+//! EPSG in ordine lessicografico, poi il verso (registro prima
+//! dell'inverso).
 
 use std::collections::BTreeSet;
 
@@ -45,6 +50,7 @@ pub(super) fn enumera(da: u32, a: u32, griglie: &BTreeSet<u32>) -> Vec<PercorsoD
         x.accuratezza_m
             .total_cmp(&y.accuratezza_m)
             .then(x.passi.len().cmp(&y.passi.len()))
+            .then_with(|| area(x).total_cmp(&area(y)))
             .then_with(|| x.codici().cmp(&y.codici()))
             .then_with(|| {
                 let versi =
@@ -53,6 +59,23 @@ pub(super) fn enumera(da: u32, a: u32, griglie: &BTreeSet<u32>) -> Vec<PercorsoD
             })
     });
     percorsi
+}
+
+/// Somma dei riquadri d'uso dei passi, in gradi quadrati (un riquadro
+/// oltre l'antimeridiano conta la sua larghezza vera).
+fn area(percorso: &PercorsoDatum) -> f64 {
+    percorso
+        .passi
+        .iter()
+        .map(|passo| {
+            let riquadro = passo.trasformazione.area;
+            let mut larghezza = riquadro.east_longitude - riquadro.west_longitude;
+            if larghezza < 0.0 {
+                larghezza += 360.0;
+            }
+            larghezza * (riquadro.north_latitude - riquadro.south_latitude)
+        })
+        .sum()
 }
 
 fn visita(

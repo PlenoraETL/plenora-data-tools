@@ -167,12 +167,23 @@ impl Lato {
         })
     }
 
+    /// La regione lon/lat del dominio contiene il punto. La regione dei
+    /// fusi vicini all'antimeridiano esce da `[-180, 180]` (UTM 1N: da -192
+    /// a -162): la longitudine si prova anche spostata di un giro.
     fn regione(&self, lon: f64, lat: f64) -> Result<(), CrsError> {
-        match self.definizione.regione {
-            Some(regione) if !regione.contains(lon, lat) => Err(CrsError::CoordinateOutOfDomain {
+        let Some(regione) = self.definizione.regione else {
+            return Ok(());
+        };
+        let dentro = (regione.south_latitude..=regione.north_latitude).contains(&lat)
+            && [lon, lon - 360.0, lon + 360.0]
+                .iter()
+                .any(|l| (regione.west_longitude..=regione.east_longitude).contains(l));
+        if dentro {
+            Ok(())
+        } else {
+            Err(CrsError::CoordinateOutOfDomain {
                 violation: CoordinateDomainViolation::OutsideProjectionRegion,
-            }),
-            _ => Ok(()),
+            })
         }
     }
 }
@@ -326,6 +337,12 @@ impl PianoRiproiezione {
             .filter(|passo| passo.a_griglia())
             .map(PassoPercorso::codice)
             .collect()
+    }
+
+    /// `crs` e' il CRS sorgente con cui il piano e' stato deciso.
+    #[must_use]
+    pub fn coincide_sorgente(&self, crs: &ResolvedCrs) -> bool {
+        self.sorgente.crs.semantically_equals(crs)
     }
 
     /// I nomi dei datum sorgente e d'arrivo.

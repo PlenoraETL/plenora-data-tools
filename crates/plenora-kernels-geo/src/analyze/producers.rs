@@ -1,6 +1,6 @@
 //! Produttori e trasformazioni: inferenza per le op che creano o
 //! ristrutturano la colonna geometria (`from_coords`, `from_wkt`,
-//! `generate_grid`, `collect`, `subdivide`, `snap`) e le forme
+//! `generate_grid`, `reproject`, `collect`, `subdivide`, `snap`) e le forme
 //! di risultato condivise (colonna aggiunta, espansione, sole geometrie).
 
 use std::sync::Arc;
@@ -30,6 +30,65 @@ use super::{
     CELL_I_COLUMN, CELL_J_COLUMN, CENTROID_X_COLUMN, CENTROID_Y_COLUMN, DEFAULT_X_COLUMN,
     DEFAULT_Y_COLUMN, PARENT_INDEX_COLUMN,
 };
+
+/// `reproject`: schema invariato, CRS del contratto e campo geometria
+/// riscritti sul target risolto. La sorgente deve avere un CRS risolto della
+/// tabella integrata (R4.6.3) e un ordine degli assi dichiarato normalizzato
+/// o assente; la config si verifica per intero qui, con la stessa funzione
+/// del kernel ([`crate::riproiezione::ReprojectParams::da_config`]): target,
+/// percorsi fra i datum, regola dell'accuratezza, griglie. I file delle
+/// griglie si leggono solo in esecuzione.
+///
+/// Il campo d'uscita e' [`crate::riproiezione::campo_riproiettato`]: `geo`
+/// sul target, chiavi canoniche CRS della sorgente sostituite (non fuse,
+/// piano-v5.md#contratti-di-input decisione 8), `axis_order` GIS
+/// normalizzato del target.
+pub(in crate::analyze) fn analyze_reproject(
+    op: &str,
+    input: &DataContract,
+    config: &Value,
+) -> Result<DataContract> {
+    let geometry = super::helpers::single_geometry(op, input)?;
+    super::helpers::require_identifiable_geometry(op, input, geometry)?;
+    super::helpers::require_xy_dimensions(op, geometry)?;
+    // Gate R4.6.3 e ordine degli assi prima del target: dipendono dalla
+    // sola sorgente (determinismo del fallimento).
+    let source = super::dispatch::require_resolved_crs(op, geometry)?;
+    let field = input.schema.field_with_name(&geometry.name).map_err(|_| {
+        PlenoraError::Schema(format!(
+            "{op}: colonna geometria `{}` assente dallo schema",
+            geometry.name
+        ))
+    })?;
+    crate::riproiezione::richiedi_assi_normalizzati(op, field, source)?;
+    let params = crate::riproiezione::ReprojectParams::da_config(op, config, source)?;
+    let target = params.target().clone();
+    validate_requirement(CrsRequirement::Reprojection, &[source, &target])?;
+    let mut fields = output_fields(input);
+    for campo in &mut fields {
+        if campo.name() == &geometry.name {
+            *campo = crate::riproiezione::campo_riproiettato(
+                campo,
+                &target,
+                geometry.dimensions,
+                geometry.encoding,
+            )?;
+        }
+    }
+    let reprojected = GeometryColumnContract {
+        crs: ContractCrs::Resolved(target),
+        ..geometry.clone()
+    };
+    DataContract::new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        )),
+        vec![reprojected],
+        input.active_geometry,
+        input.properties.clone(),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Inferenza per forma di risultato.

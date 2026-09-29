@@ -63,7 +63,7 @@ pub enum GeoFusion {
     NotFusible,
     /// Trasformazione 1:1 sul posto: fondibile in un gruppo di nodi unari
     /// consecutivi a parita' di colonna geometria e ruolo (le trasformazioni
-    /// in place, piu' `make_valid`).
+    /// in place, piu' `reproject` e `make_valid`).
     TransformInPlace,
     /// Misura terminale: consuma la geometria producendo un valore non
     /// geometrico (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`
@@ -489,6 +489,7 @@ impl OperationDescriptor {
                     | "geo.boundary"
                     | "geo.point_on_surface"
                     | "geo.make_valid"
+                    | "geo.reproject"
                     | "geo.affine_transform"
                     | "geo.translate"
                     | "geo.scale"
@@ -2021,6 +2022,30 @@ pub static CATALOG: &[OperationDescriptor] = &[
         semantic_version = 2,
         kernel_version = 2
     ),
+    // Riproiezione in Rust puro (`plenora_core::crs::riproiezione`,
+    // `plenora_kernels_geo::riproiezione`) al posto di PROJ: nessuna
+    // capability, `kernel_version` 2 per il cambio di kernel e
+    // `config_schema_version` 2 per i parametri nuovi
+    // (`accuratezza_accettata_m`, `trasformazioni`, `griglie`). Resta
+    // `NonInterruptible` come a 190c493: il kernel non ha punti di
+    // cancellazione.
+    op!(
+        "geo.reproject",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        NonInterruptible,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Reprojection),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2,
+        config_schema_version = 2,
+        kernel_version = 2
+    ),
     // --- Predicati DE-9IM, estensioni geo ------------------------------
     op!(
         "geo.predicate_intersects",
@@ -2847,6 +2872,7 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "geo_voronoi", "geo.voronoi"),
     (3, "geo_within", "geo.within"),
     (3, "geo_make_valid", "geo.make_valid"),
+    (3, "geo_reproject", "geo.reproject"),
     // --- Predicati DE-9IM: id invariato sotto geo. --------------------
     (3, "predicate_intersects", "geo.predicate_intersects"),
     (3, "predicate_disjoint", "geo.predicate_disjoint"),
@@ -2917,10 +2943,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_145_unique_ids() {
-        // 145: le 146 di plenora-data-tools@190c493 meno `geo.reproject`
-        // (richiedeva PROJ, assente in Rust puro).
-        assert_eq!(CATALOG.len(), 145);
+    fn catalog_has_146_unique_ids() {
+        // 146, come plenora-data-tools@190c493: `geo.reproject` e' tornata
+        // con la riproiezione in Rust puro.
+        assert_eq!(CATALOG.len(), 146);
         let ids: HashSet<_> = CATALOG.iter().map(|op| op.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
         assert_eq!(
@@ -2932,13 +2958,13 @@ mod tests {
         );
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Geo).count(),
-            74
+            75
         );
     }
 
     #[test]
     fn every_alias_resolves_to_an_existing_catalog_id() {
-        assert_eq!(ALIASES.len(), 126);
+        assert_eq!(ALIASES.len(), 127);
         for (schema_version, alias, canonical) in ALIASES {
             assert!(
                 CATALOG.iter().any(|op| op.id == *canonical),
@@ -3344,7 +3370,7 @@ mod tests {
     #[test]
     fn geo_fusion_matches_the_adr_0012_perimeter() {
         // architettura.md#geometrie D12.2, perimetro fondibile: le
-        // trasformazioni 1:1 in place (piu' `make_valid`) sono
+        // trasformazioni 1:1 in place (piu' `reproject` e `make_valid`) sono
         // TransformInPlace, le misure terminali TerminalMeasure, tutto il resto
         // (tabellari incluse) NotFusible. La lista chiusa qui sotto e' il
         // contratto; aggiungere un op fondibile richiede l'oracolo
@@ -3371,6 +3397,7 @@ mod tests {
                 "geo.concave_hull",
                 "geo.densify",
                 "geo.snap_to_grid",
+                "geo.reproject",
                 "geo.make_valid",
             ])
         );
@@ -3530,11 +3557,10 @@ mod tests {
             .filter(|op| probes.iter().any(|config| op.emits_row_diagnostics(config)))
             .map(|op| op.id)
             .collect();
-        // 39: le 40 di plenora-data-tools@190c493 meno `geo.reproject`,
-        // assente in Rust puro.
+        // 40, come plenora-data-tools@190c493 (`geo.reproject` compresa).
         assert_eq!(
             emitting.len(),
-            39,
+            40,
             "perimetro row-diagnostics: {emitting:?}"
         );
         for id in &emitting {
@@ -3601,6 +3627,9 @@ mod tests {
             ("geo.make_valid", 2, 1, 1, 2),
             ("geo.perimeter", 2, 1, 1, 1),
             ("geo.point_on_surface", 2, 1, 1, 1),
+            // Rust puro al posto di PROJ: kernel 2, config 2 (vedi il
+            // descrittore).
+            ("geo.reproject", 2, 2, 1, 2),
             ("geo.rotate", 2, 1, 1, 1),
             ("geo.scale", 2, 1, 1, 1),
             ("geo.simplify", 2, 1, 1, 1),

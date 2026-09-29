@@ -149,7 +149,8 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 /// (architettura.md): inferenza a secco del contratto di output.
 ///
 /// `plan_crs` e' il CRS di piano gia' risolto dal planner (usato dai
-/// produttori `from_coords`, `from_wkt`, `generate_grid`); `fields` alloca i `FieldId`
+/// produttori `from_coords`, `from_wkt`, `generate_grid`; `reproject` risolve
+/// il target sempre dalla tabella integrata); `fields` alloca i `FieldId`
 /// delle nuove colonne geometriche nel namespace globale del grafo.
 ///
 /// # Errors
@@ -218,6 +219,10 @@ pub fn analyze_geo_contract(
             let op = descriptor.id;
             let requirement = crs_requirement(op, descriptor)?;
             analyze_generate_grid(op, &inputs[0], config, plan_crs, requirement, fields)
+        }
+        ("geo.reproject", _) => {
+            let op = descriptor.id;
+            producers::analyze_reproject(op, &inputs[0], config)
         }
         (_, 2) => analyze_binary(descriptor, inputs, config),
         _ => analyze_unary(descriptor, &inputs[0], config, fields),
@@ -508,6 +513,8 @@ mod tests {
         /// Op di copertura (WholeToMany): schema nuovo completo (tutto
         /// non null), geometria con nuovo `FieldId` e CRS dell'input.
         CoverageRows(Vec<(&'static str, DataType, bool)>),
+        /// Schema invariato, CRS del contratto aggiornato al target.
+        Reprojected,
     }
 
     struct Case {
@@ -696,8 +703,13 @@ mod tests {
                 json!({}),
                 Expect::GeometryOnly(vec![(CLASS_COLUMN, DataType::Utf8, false)]),
             ),
-            // --- Costruzione ------------------------------------------------
+            // --- Costruzione e riproiezione ---------------------------------
             unary("geo.from_coords", json!({}), Expect::FromCoords),
+            unary(
+                "geo.reproject",
+                json!({"target_crs": "EPSG:32632"}),
+                Expect::Reprojected,
+            ),
             unary(
                 "geo.from_wkt",
                 json!({"wkt_column": "wkt"}),
@@ -820,6 +832,10 @@ mod tests {
 
     fn input_crs_for(op: &str) -> ResolvedCrs {
         let descriptor = find_operation(op).expect("op in catalogo");
+        if op == "geo.reproject" {
+            // La riproiezione chiede un CRS della tabella integrata.
+            return builtin_crs("EPSG:4326");
+        }
         match descriptor.crs_requirement {
             Some(CrsRequirement::Geographic) => geographic_crs(),
             _ => projected_crs(),
@@ -908,15 +924,15 @@ mod tests {
     }
 
     #[test]
-    fn table_covers_all_and_only_the_74_catalog_geo_ops() {
+    fn table_covers_all_and_only_the_75_catalog_geo_ops() {
         let catalog_ops: HashSet<&str> = CATALOG
             .iter()
             .filter(|op| op.family == Family::Geo)
             .map(|op| op.id)
             .collect();
-        assert_eq!(catalog_ops.len(), 74);
+        assert_eq!(catalog_ops.len(), 75);
         let case_ops: HashSet<&str> = cases().iter().map(|case| case.op).collect();
-        assert_eq!(case_ops.len(), 74, "casi duplicati nella tabella");
+        assert_eq!(case_ops.len(), 75, "casi duplicati nella tabella");
         assert_eq!(catalog_ops, case_ops);
     }
 
@@ -1191,6 +1207,46 @@ mod tests {
                         .as_ref()
                         .expect("row_count della griglia");
                     assert_eq!(row_count.value(), Some(&4), "{}: conteggio celle", case.op);
+                }
+                Expect::Reprojected => {
+                    assert_eq!(
+                        signatures(&output),
+                        signatures(&input),
+                        "{}: schema",
+                        case.op
+                    );
+                    let geometry = output
+                        .active_geometry_column()
+                        .expect("geometria in output");
+                    assert_eq!(
+                        geometry.field_id,
+                        FieldId(2),
+                        "{}: FieldId preservato",
+                        case.op
+                    );
+                    assert_eq!(
+                        resolved_crs_of(geometry).definition(),
+                        "EPSG:32632",
+                        "{}: CRS target",
+                        case.op
+                    );
+                    let field = output
+                        .schema
+                        .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+                        .expect("campo geometria");
+                    let geo: Value = serde_json::from_str(
+                        field
+                            .metadata()
+                            .get(GEO_METADATA_KEY)
+                            .expect("geo metadata"),
+                    )
+                    .expect("geo JSON");
+                    assert_eq!(
+                        geo.get("crs").and_then(Value::as_str),
+                        Some("EPSG:32632"),
+                        "{}: metadato geo.crs aggiornato",
+                        case.op
+                    );
                 }
                 Expect::CoverageRows(expected) => {
                     assert_eq!(signatures(&output), *expected, "{}: schema", case.op);
@@ -2442,24 +2498,23 @@ mod tests {
         assert_eq!(allocator.peek(), FieldId(43));
     }
 
+    fn builtin_crs(definizione: &str) -> ResolvedCrs {
+        plenora_core::crs::resolve_crs(definizione, "crs").expect("CRS integrato")
+    }
+
     #[test]
-    fn reproject_resta_assente_e_nessuna_operazione_chiede_un_backend_nativo() {
-        // Rust puro: `reproject` (PROJ) non esiste nel catalogo, e l'analisi
-        // la rifiuta come operazione sconosciuta, mai con un'inferenza che
-        // poi nessun kernel potrebbe onorare. `make_valid`, `polygonize` e
-        // `split`, che a 190c493 dichiaravano la capability `geos`, sono
-        // tornate col backend Rust (`crate::rust_backend`) e non dichiarano
-        // piu' alcuna capability: l'analisi le accetta come prima.
+    fn nessuna_operazione_chiede_un_backend_nativo() {
+        // Rust puro: `make_valid`, `polygonize` e `split` (a 190c493 dietro la
+        // capability `geos`) e `reproject` (dietro `proj`) sono tornate con i
+        // backend Rust (`crate::rust_backend`, `crate::riproiezione`) e non
+        // dichiarano alcuna capability.
         let inputs = [geo_contract(projected_crs())];
-        assert!(find_operation("geo.reproject").is_none());
-        assert!(
-            matches!(
-                analyze_one("geo.reproject", &inputs, &json!({}), None),
-                Err(PlenoraError::Unsupported(_))
-            ),
-            "reproject: atteso rifiuto Unsupported"
-        );
-        for op in ["geo.make_valid", "geo.polygonize", "geo.split"] {
+        for op in [
+            "geo.make_valid",
+            "geo.polygonize",
+            "geo.split",
+            "geo.reproject",
+        ] {
             let descriptor = find_operation(op).expect("op in catalogo");
             assert!(descriptor.required_capabilities.is_empty(), "{op}");
             assert_eq!(descriptor.maturity, Maturity::KernelValidated, "{op}");
@@ -2467,12 +2522,99 @@ mod tests {
         analyze_one("geo.make_valid", &inputs, &json!({}), None).expect("make_valid");
         analyze_one("geo.polygonize", &inputs, &json!({}), None).expect("polygonize");
         analyze_one("geo.split", &inputs, &other_wkb_config(), None).expect("split");
+        let integrato = [geo_contract(builtin_crs("EPSG:32632"))];
+        analyze_one(
+            "geo.reproject",
+            &integrato,
+            &json!({"target_crs": "EPSG:3857"}),
+            None,
+        )
+        .expect("reproject");
         assert!(
             CATALOG
                 .iter()
                 .all(|descriptor| descriptor.required_capabilities.is_empty()),
             "nessuna operazione del catalogo richiede un backend nativo"
         );
+    }
+
+    #[test]
+    fn reproject_rifiuta_i_crs_fuori_tabella_e_le_config_sbagliate() {
+        // Un CRS risolto dal chiamante (non della tabella) non si riproietta.
+        let esterno = [geo_contract(projected_crs())];
+        match analyze_one(
+            "geo.reproject",
+            &esterno,
+            &json!({"target_crs": "EPSG:3857"}),
+            None,
+        ) {
+            Err(PlenoraError::Crs(message)) => {
+                assert!(message.contains("CRS_NOT_BUILTIN"), "{message}");
+            }
+            other => panic!("atteso CRS_NOT_BUILTIN: {other:?}"),
+        }
+        let inputs = [geo_contract(builtin_crs("EPSG:3003"))];
+        // Regola dell'accuratezza: Gauss-Boaga -> RDN2008 senza accuratezza
+        // accettata si rifiuta nell'analisi, con l'accuratezza del percorso.
+        match analyze_one(
+            "geo.reproject",
+            &inputs,
+            &json!({"target_crs": "EPSG:7791"}),
+            None,
+        ) {
+            Err(PlenoraError::Crs(message)) => {
+                assert!(
+                    message.contains("REPROJECTION_ACCURACY_NOT_ACCEPTED")
+                        && message.contains("4 m"),
+                    "{message}"
+                );
+            }
+            other => panic!("atteso il rifiuto dell'accuratezza: {other:?}"),
+        }
+        analyze_one(
+            "geo.reproject",
+            &inputs,
+            &json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0}),
+            None,
+        )
+        .expect("accuratezza accettata");
+        for config in [
+            json!({}),
+            json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0, "extra": 1}),
+            json!({"target_crs": "WGS 84"}),
+            json!({"target_crs": "EPSG:4490", "accuratezza_accettata_m": 100.0}),
+            json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
+                   "griglie": [{"trasformazione": 1659, "file": "x.gsb"}]}),
+        ] {
+            assert!(
+                analyze_one("geo.reproject", &inputs, &config, None).is_err(),
+                "{config}"
+            );
+        }
+        // Le griglie si verificano nella forma; il file si legge in
+        // esecuzione.
+        analyze_one(
+            "geo.reproject",
+            &inputs,
+            &json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 0.1,
+                    "griglie": [{"trasformazione": 9734, "file": "IGM/R40_F00.gsb"}]}),
+            None,
+        )
+        .expect("griglia IGM dichiarata");
+    }
+
+    #[test]
+    fn reproject_preserva_le_proprieta_riga_per_riga() {
+        let mut contract = contract_with_properties();
+        contract.geometries[0].crs = ContractCrs::Resolved(builtin_crs("EPSG:32632"));
+        let output = analyze_one(
+            "geo.reproject",
+            &[contract.clone()],
+            &json!({"target_crs": "EPSG:3857"}),
+            None,
+        )
+        .expect("reproject");
+        assert_eq!(output.properties, contract.properties);
     }
 
     // -----------------------------------------------------------------------
@@ -2662,8 +2804,9 @@ mod tests {
         // `Crs` (come ogni requisito non soddisfatto) e messaggio che
         // dichiara la causa, non l'ultimo tentativo di lettura fallito.
         let input = geo_contract_missing_crs();
-        let cases: [(&str, Value); 4] = [
+        let cases: [(&str, Value); 5] = [
             ("geo.buffer", json!({"distance": 1.0})),
+            ("geo.reproject", json!({"target_crs": "EPSG:3857"})),
             ("geo.area", json!({})),
             ("geo.centroid", json!({})),
             ("geo.explode", json!({})),
@@ -2719,8 +2862,9 @@ mod tests {
         // un'assenza, e la risoluzione richiede una decisione esplicita nel
         // piano (mai una scelta silenziosa del centro).
         let input = geo_contract_declared_unresolved_crs();
-        let cases: [(&str, Value); 2] = [
+        let cases: [(&str, Value); 3] = [
             ("geo.buffer", json!({"distance": 1.0})),
+            ("geo.reproject", json!({"target_crs": "EPSG:3857"})),
             ("geo.area", json!({})),
         ];
         for (op, config) in &cases {
@@ -3095,6 +3239,7 @@ mod tests {
 
         use super::*;
         use crate::arrow_adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY;
+        use crate::riproiezione::{reproject_batches, ReprojectParams};
         use crate::rust_backend::arrow::{
             make_valid_batches, polygonize_batches, split_batches, PolygonizeParams,
         };
@@ -3143,7 +3288,17 @@ mod tests {
         /// compresi), piu' un metadato di lineage sul campo geometria e su
         /// un attributo, e un metadato di schema.
         fn ingresso(tipi: &[GeometryType], geometria_nullable: bool) -> DataContract {
-            let mut contract = geo_contract(projected_crs());
+            ingresso_con_crs(projected_crs(), tipi, geometria_nullable)
+        }
+
+        /// Come [`ingresso`], con il CRS dato (la riproiezione chiede un CRS
+        /// della tabella integrata, che dichiara anche l'ordine degli assi).
+        fn ingresso_con_crs(
+            crs: ResolvedCrs,
+            tipi: &[GeometryType],
+            geometria_nullable: bool,
+        ) -> DataContract {
+            let mut contract = geo_contract(crs);
             contract.geometries[0].encoding = Some(GeometryEncoding::Wkb);
             contract.geometries[0].types = esatti(tipi);
             contract.geometries[0].nullable = geometria_nullable;
@@ -3410,6 +3565,62 @@ mod tests {
             .expect("kernel");
             let schema = batches[0].schema();
             confronta("geo.make_valid", &analizzato, &schema, &batches[0]);
+        }
+
+        /// `reproject` riscrive CRS e ordine degli assi del campo, conserva
+        /// i tipi dichiarati, le lineage e i metadati di schema.
+        #[test]
+        fn reproject_come_l_analisi() {
+            for tipi in [
+                &[GeometryType::Polygon][..],
+                &[GeometryType::LineString][..],
+            ] {
+                for target in ["EPSG:4326", "EPSG:3857", "EPSG:25832"] {
+                    let contract = ingresso_con_crs(builtin_crs("EPSG:32632"), tipi, true);
+                    // Verso ETRS89 serve accettare 1 m (ETRS89 to WGS 84 (1)).
+                    let config = if target == "EPSG:25832" {
+                        json!({"target_crs": target, "accuratezza_accettata_m": 1.0})
+                    } else {
+                        json!({"target_crs": target})
+                    };
+                    let analizzato = analyze_one(
+                        "geo.reproject",
+                        std::slice::from_ref(&contract),
+                        &config,
+                        None,
+                    )
+                    .expect("analisi");
+                    let sorgente = contract.geometries[0]
+                        .crs
+                        .as_resolved()
+                        .expect("CRS")
+                        .clone();
+                    let params = ReprojectParams::da_config("geo.reproject", &config, &sorgente)
+                        .expect("config");
+                    let esemplare = match tipi[0] {
+                        GeometryType::Polygon => {
+                            Geometry::Polygon(quadrato(500_000.0, 5_000_000.0, 1_000.0))
+                        }
+                        _ => Geometry::LineString(anello(&[
+                            (400_000.0, 4_900_000.0),
+                            (600_000.0, 5_100_000.0),
+                        ])),
+                    };
+                    let input = batch(&contract.schema, &[Some(wkb(&esemplare)), None]);
+                    let (schema, batches) = reproject_batches(
+                        &contract.schema,
+                        &[input],
+                        DEFAULT_GEOMETRY_COLUMN,
+                        &sorgente,
+                        &params,
+                    )
+                    .expect("kernel");
+                    confronta("geo.reproject", &analizzato, &schema, &batches[0]);
+                    for prodotta in geometrie_della_colonna(&batches[0]) {
+                        assert!(tipi.contains(&tipo_di(&prodotta)), "{target}: tipo");
+                    }
+                }
+            }
         }
 
         #[test]
