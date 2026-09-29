@@ -58,7 +58,9 @@ use crate::budget::{riserva_spill, Costo, Ingresso};
 use crate::costi_operazioni::BUDGET_SPILL_MISURATO;
 use crate::dispatch::Variante;
 use crate::sfratto::{pianifica, AreaSfratti};
-use crate::validazione::{nel_passo, PassoValidato, PipelineValidata, METADATI_PANDAS};
+use crate::validazione::{
+    nel_passo, KernelPasso, PassoValidato, PipelineValidata, METADATI_PANDAS,
+};
 
 /// Esito di un'esecuzione: le tabelle d'uscita e il resoconto.
 #[derive(Debug)]
@@ -313,15 +315,19 @@ fn esegui_kernel(
     ingressi: &[&RecordBatch],
     limiti: &plenora_kernels_table::Limits,
     variante: Variante,
+    contratto: &DataContract,
 ) -> Result<RecordBatch> {
     #[cfg(test)]
     CHIAMATE_KERNEL.with(|chiamate| chiamate.set(chiamate.get() + 1));
-    let chiamata = || match ingressi {
-        [unico] => passo.preparato.esegui_unario(unico, limiti, variante),
-        [sinistra, destra] => passo
-            .preparato
-            .esegui_binario(sinistra, destra, limiti, variante),
-        _ => Err(PlenoraError::Internal(
+    let chiamata = || match (&passo.kernel, ingressi) {
+        (KernelPasso::Geo(geo), _) => geo.esegui(ingressi, contratto),
+        (KernelPasso::Tabellare(preparato), [unico]) => {
+            preparato.esegui_unario(unico, limiti, variante)
+        }
+        (KernelPasso::Tabellare(preparato), [sinistra, destra]) => {
+            preparato.esegui_binario(sinistra, destra, limiti, variante)
+        }
+        (KernelPasso::Tabellare(_), _) => Err(PlenoraError::Internal(
             "numero di input diverso da quello validato".to_owned(),
         )),
     };
@@ -472,6 +478,19 @@ impl PipelineValidata {
                     "input `{nome}`: schema diverso da quello dato in validazione"
                 )));
             }
+            // Lo schema del contratto dell'input (blocco canonico delle
+            // geometrie, `validazione::canonico`): stesse colonne, solo
+            // metadati in piu'.
+            let canonico = self.contratti.get(&nome).ok_or_else(|| {
+                PlenoraError::Internal(format!("contratto dell'input `{nome}` assente"))
+            })?;
+            let righe_tabella = tabella.num_rows();
+            let tabella = plenora_core::batch_with_rows(
+                canonico.schema.clone(),
+                tabella.columns().to_vec(),
+                righe_tabella,
+            )
+            .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
             validate_batch(&tabella, &self.limiti_kernel)
                 .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
             let righe_input = righe(&tabella)?;
@@ -595,7 +614,7 @@ impl PipelineValidata {
                 variante,
                 costo,
                 Ingresso {
-                    righe: somma(&righe_in),
+                    righe: somma(&righe_in).max(passo.righe_previste),
                     byte: byte_ingresso(&ingressi).map_err(nel)?,
                     coppie: coppie(&righe_in),
                 },
@@ -624,7 +643,7 @@ impl PipelineValidata {
                 ..self.limiti_kernel.clone()
             };
 
-            let uscita = esegui_kernel(passo, &ingressi, &limiti_kernel, variante)
+            let uscita = esegui_kernel(passo, &ingressi, &limiti_kernel, variante, contratto)
                 .and_then(|uscita| {
                     validate_batch(&uscita, &self.limiti_kernel)?;
                     let righe_out = righe(&uscita)?;
@@ -790,7 +809,7 @@ impl PipelineValidata {
             }
         }
         let ingresso = Ingresso {
-            righe: somma(&righe_in),
+            righe: somma(&righe_in).max(passo.righe_previste),
             byte: byte_ingresso(&residenti_del_passo)?.saturating_add(riletti),
             coppie: coppie(&righe_in),
         };
@@ -811,7 +830,7 @@ impl PipelineValidata {
         candidati.sort_by_key(|nome| (Reverse(prossimo_uso(nome)), *nome));
 
         let mut varianti = vec![(Variante::InMemoria, passo.costo.in_memoria)];
-        if passo.preparato.ha_spill() {
+        if passo.ha_spill() {
             if let Some(costo) = passo.costo.spill {
                 varianti.push((Variante::Spill, costo));
             }
@@ -920,11 +939,14 @@ mod tests {
             max_governed_memory_bytes: 16 * 1024,
             ..plenora_kernels_table::Limits::default()
         };
-        let passo = &validata.passi[0];
+        let crate::validazione::KernelPasso::Tabellare(preparato) = &validata.passi[0].kernel
+        else {
+            panic!("{op}: passo tabellare atteso");
+        };
         let uscita = if binaria {
-            passo.preparato.esegui_binario(&a, &b, &limiti, variante)
+            preparato.esegui_binario(&a, &b, &limiti, variante)
         } else {
-            passo.preparato.esegui_unario(&a, &limiti, variante)
+            preparato.esegui_unario(&a, &limiti, variante)
         };
         uscita.unwrap_or_else(|errore| panic!("{op} {variante:?}: {errore}"))
     }

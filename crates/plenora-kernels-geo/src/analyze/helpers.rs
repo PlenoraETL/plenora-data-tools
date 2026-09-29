@@ -162,11 +162,16 @@ pub(in crate::analyze) fn validate_other_wkb(op: &str, hex: &str) -> Result<()> 
     validate_wkb_hex(op, "other_wkb", hex).map(|_| ())
 }
 
-/// Dominio di validita' del CRS dell'input sulle coordinate del secondo
-/// operando `other_wkb` (convenzione D16: stesso CRS dell'input).
+/// Validita' OGC e dominio di validita' del CRS dell'input sulle coordinate
+/// del secondo operando `other_wkb` (convenzione D16: stesso CRS
+/// dell'input).
 ///
 /// Rifa' la validazione strutturale di [`validate_other_wkb`] per avere i
-/// byte: il costo e' per piano, non per riga.
+/// byte: il costo e' per piano, non per riga. La decodifica e' quella
+/// completa ([`crate::geometry_from_wkb`], validazione OGC compresa), come
+/// per `point_wkb` e `reference_wkb`: ogni kernel che riceve `other_wkb`
+/// (distanze, predicati, lama di `split`) rifiuterebbe una geometria non
+/// valida alla prima riga, e il rifiuto sta qui, in validazione.
 pub(in crate::analyze) fn validate_other_wkb_domain(
     op: &str,
     hex: &str,
@@ -174,7 +179,7 @@ pub(in crate::analyze) fn validate_other_wkb_domain(
 ) -> Result<()> {
     let crs = input_crs(op, input)?;
     let bytes = validate_wkb_hex(op, "other_wkb", hex)?;
-    let geometry = crate::wkb_decoder::decode_validated(&bytes).map_err(|error| {
+    let geometry = crate::geometry_from_wkb(&bytes).map_err(|error| {
         parametro_non_decodificabile(op, "other_wkb", "WKB non decodificabile", &error)
     })?;
     validate_config_geometry_domain(op, "other_wkb", &geometry, crs)

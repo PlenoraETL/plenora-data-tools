@@ -1,4 +1,8 @@
 //! Struct serde di configurazione per l'analisi dei contratti `geo.*`.
+//!
+//! Pubbliche perche' l'esecutore (`plenora-pipeline`) legga la config con
+//! gli stessi tipi dell'analisi: una sola lettura della config, nessuna
+//! seconda copia dei nomi e dei default che potrebbe divergere.
 
 use serde::Deserialize;
 
@@ -12,18 +16,18 @@ use crate::topology::OverlayMode;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct EmptyConfig {}
+pub struct EmptyConfig {}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct OutputColumnConfig {
-    pub(in crate::analyze) output_column: Option<String>,
+pub struct OutputColumnConfig {
+    pub output_column: Option<String>,
 }
 
 /// Stile di cap per `buffer` (default round, come il kernel).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::analyze) enum BufferCapParam {
+pub enum BufferCapParam {
     Round,
     Flat,
     Square,
@@ -32,166 +36,166 @@ pub(in crate::analyze) enum BufferCapParam {
 /// Politica di `simplify`: Douglas-Peucker (default) o topology-preserving.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::analyze) enum SimplifyPolicyParam {
+pub enum SimplifyPolicyParam {
     DouglasPeucker,
     PreserveTopology,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct BufferConfig {
-    pub(in crate::analyze) distance: f64,
-    pub(in crate::analyze) cap: Option<BufferCapParam>,
+pub struct BufferConfig {
+    pub distance: f64,
+    pub cap: Option<BufferCapParam>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct SimplifyConfig {
-    pub(in crate::analyze) tolerance: f64,
-    pub(in crate::analyze) policy: Option<SimplifyPolicyParam>,
+pub struct SimplifyConfig {
+    pub tolerance: f64,
+    pub policy: Option<SimplifyPolicyParam>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct AffineTransformConfig {
-    pub(in crate::analyze) coefficients: Vec<f64>,
+pub struct AffineTransformConfig {
+    pub coefficients: Vec<f64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct TranslateConfig {
-    pub(in crate::analyze) x_offset: f64,
-    pub(in crate::analyze) y_offset: f64,
+pub struct TranslateConfig {
+    pub x_offset: f64,
+    pub y_offset: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct ScaleConfig {
-    pub(in crate::analyze) x_factor: f64,
-    pub(in crate::analyze) y_factor: f64,
-    pub(in crate::analyze) x_origin: Option<f64>,
-    pub(in crate::analyze) y_origin: Option<f64>,
+pub struct ScaleConfig {
+    pub x_factor: f64,
+    pub y_factor: f64,
+    pub x_origin: Option<f64>,
+    pub y_origin: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct RotateConfig {
-    pub(in crate::analyze) degrees: f64,
-    pub(in crate::analyze) x_origin: Option<f64>,
-    pub(in crate::analyze) y_origin: Option<f64>,
+pub struct RotateConfig {
+    pub degrees: f64,
+    pub x_origin: Option<f64>,
+    pub y_origin: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct ConcaveHullConfig {
-    pub(in crate::analyze) concavity: f64,
-    pub(in crate::analyze) length_threshold: Option<f64>,
+pub struct ConcaveHullConfig {
+    pub concavity: f64,
+    pub length_threshold: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct DensifyConfig {
-    pub(in crate::analyze) max_segment_length: f64,
+pub struct DensifyConfig {
+    pub max_segment_length: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct SnapToGridConfig {
-    pub(in crate::analyze) grid_size: f64,
+pub struct SnapToGridConfig {
+    pub grid_size: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct LineSubstringConfig {
-    pub(in crate::analyze) start_ratio: f64,
-    pub(in crate::analyze) end_ratio: f64,
+pub struct LineSubstringConfig {
+    pub start_ratio: f64,
+    pub end_ratio: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct LineInterpolatePointConfig {
-    pub(in crate::analyze) ratio: f64,
+pub struct LineInterpolatePointConfig {
+    pub ratio: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct CleanTopologyConfig {
-    pub(in crate::analyze) snap_tolerance: f64,
-    pub(in crate::analyze) remove_overlaps: Option<bool>,
-    pub(in crate::analyze) fill_gaps: Option<bool>,
+pub struct CleanTopologyConfig {
+    pub snap_tolerance: f64,
+    pub remove_overlaps: Option<bool>,
+    pub fill_gaps: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct VoronoiConfig {
-    pub(in crate::analyze) max_points: Option<u64>,
+pub struct VoronoiConfig {
+    pub max_points: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct PolygonizeConfig {
-    pub(in crate::analyze) node_input: Option<bool>,
-    pub(in crate::analyze) require_complete: Option<bool>,
+pub struct PolygonizeConfig {
+    pub node_input: Option<bool>,
+    pub require_complete: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct FromCoordsConfig {
-    pub(in crate::analyze) x_column: Option<String>,
-    pub(in crate::analyze) y_column: Option<String>,
-    pub(in crate::analyze) geometry_column: Option<String>,
-    pub(in crate::analyze) crs: Option<String>,
+pub struct FromCoordsConfig {
+    pub x_column: Option<String>,
+    pub y_column: Option<String>,
+    pub geometry_column: Option<String>,
+    pub crs: Option<String>,
 }
 
 /// Secondo operando geometrico da config (D16: una sola colonna
 /// geometria per input): WKB codificato esadecimale, validato in analisi.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct OtherWkbConfig {
-    pub(in crate::analyze) other_wkb: String,
-    pub(in crate::analyze) output_column: Option<String>,
+pub struct OtherWkbConfig {
+    pub other_wkb: String,
+    pub output_column: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct SplitConfig {
-    pub(in crate::analyze) other_wkb: String,
-    pub(in crate::analyze) tolerance: Option<f64>,
+pub struct SplitConfig {
+    pub other_wkb: String,
+    pub tolerance: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct SJoinConfig {
-    pub(in crate::analyze) predicate: JoinPredicate,
+pub struct SJoinConfig {
+    pub predicate: JoinPredicate,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct NearestConfig {
-    pub(in crate::analyze) max_distance: Option<f64>,
+pub struct NearestConfig {
+    pub max_distance: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct OverlayConfig {
-    pub(in crate::analyze) mode: OverlayMode,
+pub struct OverlayConfig {
+    pub mode: OverlayMode,
 }
 
 /// `from_wkt`: colonna Utf8 con il testo WKT; la politica `on_error`
 /// (default `null`) e' semantica di runtime, qui solo validata.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct FromWktConfig {
-    pub(in crate::analyze) wkt_column: String,
-    pub(in crate::analyze) output_column: Option<String>,
-    pub(in crate::analyze) on_error: Option<crate::extensions::OnWktError>,
-    pub(in crate::analyze) crs: Option<String>,
+pub struct FromWktConfig {
+    pub wkt_column: String,
+    pub output_column: Option<String>,
+    pub on_error: Option<crate::extensions::OnWktError>,
+    pub crs: Option<String>,
 }
 
 /// Campo accessorio richiedibile in `geometry_accessors.fields`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::analyze) enum AccessorFieldParam {
+pub enum AccessorFieldParam {
     GeometryType,
     NumGeometries,
     NumInteriorRings,
@@ -202,7 +206,8 @@ pub(in crate::analyze) enum AccessorFieldParam {
 
 impl AccessorFieldParam {
     /// Indice in [`super::ACCESSOR_COLUMNS`] (ordine canonico di output).
-    pub(in crate::analyze) const fn column_index(self) -> usize {
+    #[must_use]
+    pub const fn column_index(self) -> usize {
         match self {
             Self::GeometryType => 0,
             Self::NumGeometries => 1,
@@ -216,89 +221,89 @@ impl AccessorFieldParam {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct GeometryAccessorsConfig {
-    pub(in crate::analyze) fields: Option<Vec<AccessorFieldParam>>,
-    pub(in crate::analyze) output_prefix: Option<String>,
+pub struct GeometryAccessorsConfig {
+    pub fields: Option<Vec<AccessorFieldParam>>,
+    pub output_prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct CollectConfig {
-    pub(in crate::analyze) group_by: Vec<String>,
+pub struct CollectConfig {
+    pub group_by: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct LineLocatePointConfig {
-    pub(in crate::analyze) point_wkb: String,
-    pub(in crate::analyze) output_column: Option<String>,
+pub struct LineLocatePointConfig {
+    pub point_wkb: String,
+    pub output_column: Option<String>,
 }
 
 /// Extent di `generate_grid`: finito e non degenere (dominio verificato dal
 /// kernel [`crate::extensions2::GridExtent`]).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct GridExtentConfig {
-    pub(in crate::analyze) xmin: f64,
-    pub(in crate::analyze) ymin: f64,
-    pub(in crate::analyze) xmax: f64,
-    pub(in crate::analyze) ymax: f64,
+pub struct GridExtentConfig {
+    pub xmin: f64,
+    pub ymin: f64,
+    pub xmax: f64,
+    pub ymax: f64,
 }
 
 /// `generate_grid` (generativa): `shape` default `square`,
 /// `include_centroid` default false, CRS da `crs` o di piano.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct GenerateGridConfig {
-    pub(in crate::analyze) extent: GridExtentConfig,
-    pub(in crate::analyze) cell_size: f64,
-    pub(in crate::analyze) shape: Option<crate::extensions2::GridShape>,
-    pub(in crate::analyze) crs: Option<String>,
-    pub(in crate::analyze) include_centroid: Option<bool>,
+pub struct GenerateGridConfig {
+    pub extent: GridExtentConfig,
+    pub cell_size: f64,
+    pub shape: Option<crate::extensions2::GridShape>,
+    pub crs: Option<String>,
+    pub include_centroid: Option<bool>,
 }
 
 /// `subdivide`: `output_column` rinomina la colonna geometria
 /// (default: nome invariato, in place come `explode`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct SubdivideConfig {
-    pub(in crate::analyze) max_vertices: usize,
-    pub(in crate::analyze) output_column: Option<String>,
+pub struct SubdivideConfig {
+    pub max_vertices: usize,
+    pub output_column: Option<String>,
 }
 
 /// `snap`: riferimento WKB hex da config (convenzione D16, stesso CRS
 /// dell'input), validato strutturalmente e decodificato in analisi.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct SnapConfig {
-    pub(in crate::analyze) reference_wkb: String,
-    pub(in crate::analyze) tolerance: f64,
+pub struct SnapConfig {
+    pub reference_wkb: String,
+    pub tolerance: f64,
 }
 
 /// `coverage_validate`: tutti i campi opzionali; default kernel
 /// (`tolerance` 0, `max_issues` [`crate::extensions3::DEFAULT_MAX_ISSUES`]).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct CoverageValidateConfig {
-    pub(in crate::analyze) tolerance: Option<f64>,
-    pub(in crate::analyze) max_issues: Option<usize>,
+pub struct CoverageValidateConfig {
+    pub tolerance: Option<f64>,
+    pub max_issues: Option<usize>,
 }
 
 /// `shared_paths`: tutti i campi opzionali; default kernel
 /// (`tolerance` 0, `min_length` 0).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct SharedPathsConfig {
-    pub(in crate::analyze) tolerance: Option<f64>,
-    pub(in crate::analyze) min_length: Option<f64>,
+pub struct SharedPathsConfig {
+    pub tolerance: Option<f64>,
+    pub min_length: Option<f64>,
 }
 
 /// `cluster_dbscan`: `eps` e `min_points` obbligatori; `output_column`
 /// opzionale (default [`super::CLUSTER_ID_COLUMN`]).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::analyze) struct ClusterDbscanConfig {
-    pub(in crate::analyze) eps: f64,
-    pub(in crate::analyze) min_points: usize,
-    pub(in crate::analyze) output_column: Option<String>,
+pub struct ClusterDbscanConfig {
+    pub eps: f64,
+    pub min_points: usize,
+    pub output_column: Option<String>,
 }

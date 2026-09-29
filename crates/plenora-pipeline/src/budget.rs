@@ -2,11 +2,14 @@
 //! previsione del picco di un passo.
 //!
 //! Il modello è generato da `scripts/genera_costi_operazioni.py` in
-//! [`crate::costi_operazioni`] (formula nell'intestazione di quel file).
+//! [`crate::costi_operazioni`] (formula nell'intestazione di quel file) per
+//! le operazioni tabellari, e da `scripts/genera_costi_geo.py` in
+//! [`crate::costi_geo`] per le geo (modello provvisorio, dichiarato).
 //! Qui ci sono i tipi e l'aritmetica: intera, controllata, per eccesso.
 //! Un valore non rappresentabile satura a `u64::MAX`, che non sta in nessun
 //! budget e diventa un `ResourceLimit` esplicito, mai un passo ammesso.
 
+use crate::costi_geo::COSTI_GEO;
 use crate::costi_operazioni::{BUDGET_SPILL_MISURATO, COSTI, FATTORE_SICUREZZA};
 
 /// Coefficienti del modello di una variante: `a` in byte, gli altri in
@@ -48,13 +51,19 @@ pub struct Ingresso {
     pub coppie: u64,
 }
 
-/// Il modello di un'operazione, se misurata.
+/// Il modello di un'operazione, se misurata: le tabellari da
+/// [`COSTI`], le geo dal modello provvisorio [`COSTI_GEO`].
 #[must_use]
 pub fn costo_di(op: &str) -> Option<&'static CostoOperazione> {
-    COSTI
+    let tabella = if op.starts_with("geo.") {
+        COSTI_GEO
+    } else {
+        COSTI
+    };
+    tabella
         .binary_search_by(|voce| voce.op.cmp(op))
         .ok()
-        .and_then(|indice| COSTI.get(indice))
+        .and_then(|indice| tabella.get(indice))
 }
 
 /// Memoria da riservare, oltre al picco del modello, al kernel spilled.
@@ -100,13 +109,19 @@ impl Costo {
 #[cfg(test)]
 mod tests {
     use super::{costo_di, Costo, Ingresso};
+    use crate::costi_geo::COSTI_GEO;
     use crate::costi_operazioni::{COSTI, FATTORE_SICUREZZA};
 
     #[test]
     fn i_costi_sono_ordinati_e_unici() {
         assert!(COSTI.windows(2).all(|coppia| coppia[0].op < coppia[1].op));
+        assert!(COSTI_GEO
+            .windows(2)
+            .all(|coppia| coppia[0].op < coppia[1].op));
         assert!(costo_di("table.sort").is_some());
+        assert!(costo_di("geo.buffer").is_some());
         assert!(costo_di("table.inesistente").is_none());
+        assert!(costo_di("geo.inesistente").is_none());
     }
 
     #[test]

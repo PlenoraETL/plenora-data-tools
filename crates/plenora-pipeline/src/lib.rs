@@ -1,4 +1,4 @@
-//! plenora-pipeline — runner minimo di pipeline sui kernel tabellari.
+//! plenora-pipeline — runner minimo di pipeline sui kernel tabellari e geo.
 //!
 //! Un piano ([`Pipeline`]) nomina le tabelle in ingresso, una sequenza di
 //! passi in forma SSA (ogni nome definito una volta) e le tabelle in uscita.
@@ -15,13 +15,15 @@
 //! passo che non sta si rifiuta prima di eseguirlo.
 //!
 //! Le tabelle sono intere in memoria, un `RecordBatch` per nome: niente
-//! streaming. Le operazioni geo non sono ancora nel dispatch e si rifiutano
-//! in validazione.
+//! streaming. Le operazioni geo ([`geo`]) passano dall'analisi e dai kernel
+//! di `plenora-kernels-geo`, con lo stesso budget.
 
 pub mod budget;
+pub mod costi_geo;
 pub mod costi_operazioni;
 mod dispatch;
 mod esecuzione;
+mod geo;
 pub mod piano;
 mod sfratto;
 mod validazione;

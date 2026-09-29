@@ -2,7 +2,8 @@
 //!
 //! Tutto ciò che si può dire senza i dati si dice qui: nomi SSA, operazione
 //! e arietà dal catalogo, dispatch del runner, config tipizzate, contratti
-//! passo per passo con `analyze_table_contract` e i limiti dei kernel (ogni
+//! passo per passo con `analyze_table_contract` e i limiti dei kernel, o con
+//! `analyze_geo_contract` e il CRS di piano per le operazioni geo (ogni
 //! regola sulla config sta lì, una volta sola, per ogni chiamante dei
 //! kernel). Qui resta solo ciò che non è config: la chiave HMAC
 //! nell'ambiente ([`verifica_ambiente`]). Un piano che passa non fallisce in
@@ -23,19 +24,32 @@ use plenora_core::arrow::schema::{DataType, Schema, SchemaRef};
 use plenora_core::catalog::{
     find_operation, Arity, Family, OperationDescriptor, SourceRowProvenance,
 };
-use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
+use plenora_core::contract::arrow_schema::{
+    arrow_schema_from_contract, contract_from_arrow_schema,
+};
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::{resolve_crs, ResolvedCrs};
 use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
+use plenora_kernels_geo::analyze::analyze_geo_contract;
 use plenora_kernels_table::analyze::analyze_table_contract;
 
 use crate::budget::{costo_di, CostoOperazione};
 use crate::dispatch::PassoPreparato;
+use crate::geo::PassoGeo;
 use crate::piano::{Pipeline, VERSIONE_PIANO};
 
 /// Chiave dei metadati di schema che pandas usa come secondo schema opaco.
 pub const METADATI_PANDAS: &str = "pandas";
+
+/// Il kernel di un passo, con la config gia' letta.
+#[derive(Debug)]
+pub enum KernelPasso {
+    /// Operazione tabellare.
+    Tabellare(PassoPreparato),
+    /// Operazione geo ([`crate::geo`]).
+    Geo(Box<PassoGeo>),
+}
 
 /// Un passo che ha superato la validazione.
 #[derive(Debug)]
@@ -43,9 +57,23 @@ pub struct PassoValidato {
     pub out: String,
     pub descrittore: &'static OperationDescriptor,
     pub inputs: Vec<String>,
-    pub preparato: PassoPreparato,
+    pub kernel: KernelPasso,
     /// Modello di costo dell'operazione, per il budget.
     pub costo: &'static CostoOperazione,
+    /// Righe dell'uscita note a secco (le celle di `geo.generate_grid`):
+    /// il modello di costo le usa come righe quando superano quelle degli
+    /// ingressi.
+    pub righe_previste: u64,
+}
+
+impl PassoValidato {
+    /// `true` se il passo ha una variante spilled.
+    pub const fn ha_spill(&self) -> bool {
+        match &self.kernel {
+            KernelPasso::Tabellare(preparato) => preparato.ha_spill(),
+            KernelPasso::Geo(_) => false,
+        }
+    }
 }
 
 /// Piano validato contro gli schemi degli input: pronto per l'esecuzione.
@@ -269,6 +297,22 @@ fn verifica_limiti_del_piano(piano: &Pipeline, limiti: &PlanLimits) -> Result<()
     Ok(())
 }
 
+/// Il contratto con lo schema che il runner emette: il blocco canonico
+/// `plenora.geometry.*` e `plenora.contract.version` dal contratto
+/// (`arrow_schema_from_contract`), come dopo ogni passo in esecuzione.
+///
+/// Ogni tabella del piano (input e uscite dei passi) porta questo schema,
+/// e il passo seguente si analizza su di esso: altrimenti le chiavi che
+/// l'emissione aggiunge (per esempio i tipi che un'operazione geo
+/// ridichiara) sarebbero nel batch e non nel contratto, e il controllo
+/// dopo il passo seguente li vedrebbe divergere. Uno schema senza
+/// geometrie resta invariato.
+fn canonico(mut contratto: DataContract) -> Result<DataContract> {
+    contratto.schema = arrow_schema_from_contract(&contratto)?;
+    contratto.validate()?;
+    Ok(contratto)
+}
+
 /// Colonne di un contratto contro `max_columns` dei kernel e regole del
 /// contratto (nomi unici): prevedibile dallo schema, quindi in validazione.
 fn verifica_colonne(contratto: &DataContract, massimo: usize) -> Result<()> {
@@ -296,13 +340,14 @@ impl Pipeline {
     ///   ripetuti), alias legacy al posto dell'id canonico, arietà errata,
     ///   config non valida, `sorted_by` su un input, provenance per riga
     ///   assente dove l'operazione la richiede;
-    /// - `Unsupported`: operazione sconosciuta, geo (non ancora nel dispatch
-    ///   del runner), `table.concat` con più di due input, schema di output
-    ///   non inferibile senza i dati;
+    /// - `Unsupported`: operazione sconosciuta o senza dispatch nel runner,
+    ///   `table.concat` con più di due input, schema di output non
+    ///   inferibile senza i dati;
     /// - `Schema`: contratti di input o inferiti che violano le regole;
     /// - `ResourceLimit`: schema di un input o di un passo oltre le colonne
     ///   ammesse dai kernel;
-    /// - `Crs`: CRS di piano non risolvibile.
+    /// - `Crs`: CRS di piano non risolvibile, CRS delle operazioni geo
+    ///   (requisito del catalogo, dominio delle geometrie della config).
     #[allow(clippy::too_many_lines)] // Passi sequenziali della validazione: spezzarli nuocerebbe alla lettura.
     pub fn validate(&self, schemas: &[(&str, SchemaRef)]) -> Result<PipelineValidata> {
         if self.version != VERSIONE_PIANO {
@@ -433,6 +478,8 @@ impl Pipeline {
             }
             verifica_colonne(&letto, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;
+            letto = canonico(letto)
+                .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;
             schemi_input.insert(nome.clone(), normalizzato);
             contratti.insert(nome.clone(), letto);
             provenance.insert(nome.clone(), true);
@@ -457,19 +504,17 @@ impl Pipeline {
                     )),
                 ));
             }
-            if descrittore.family == Family::Geo {
-                return Err(nel_passo(
-                    &passo.out,
-                    PlenoraError::Unsupported(format!(
-                        "{}: le operazioni geo non sono ancora nel dispatch del runner",
-                        descrittore.id
-                    )),
-                ));
-            }
+            let geo = descrittore.family == Family::Geo;
             verifica_arieta(descrittore, passo.inputs.len())
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
-            let preparato = PassoPreparato::prepara(descrittore.id, &passo.config)
-                .map_err(|errore| nel_passo(&passo.out, errore))?;
+            let preparato = if geo {
+                None
+            } else {
+                Some(
+                    PassoPreparato::prepara(descrittore.id, &passo.config)
+                        .map_err(|errore| nel_passo(&passo.out, errore))?,
+                )
+            };
             // Il budget si applica a ogni passo: un'operazione senza modello
             // di costo non ha una previsione, e non si esegue.
             let costo = costo_di(descrittore.id).ok_or_else(|| {
@@ -484,12 +529,17 @@ impl Pipeline {
 
             // Diagnostiche per riga: gli indici riportati sono quelli della
             // sorgente solo se nessun passo a monte ha cambiato cardinalità o
-            // ordine.
+            // ordine. Delle operazioni geo che il catalogo dichiara con
+            // diagnostica per riga, nel runner la emette solo `from_wkt`
+            // (l'adapter dei kernel): le altre rendono il primo errore in
+            // ordine di riga, senza indici di sorgente (README, «Runner»).
             let provenance_sorgente = passo
                 .inputs
                 .iter()
                 .all(|sorgente| provenance.get(sorgente).copied().unwrap_or(false));
-            if descrittore.emits_row_diagnostics(&passo.config) && !provenance_sorgente {
+            let emette_diagnostica = descrittore.emits_row_diagnostics(&passo.config)
+                && (!geo || descrittore.id == "geo.from_wkt");
+            if emette_diagnostica && !provenance_sorgente {
                 return Err(nel_passo(
                     &passo.out,
                     PlenoraError::InvalidPlan(format!(
@@ -510,17 +560,41 @@ impl Pipeline {
                     })
                 })
                 .collect::<Result<_>>()?;
-            let uscita = analyze_table_contract(
-                descrittore.id,
-                &ingressi,
-                &passo.config,
-                &mut campi,
-                &limiti_kernel,
-            )
-            .map_err(|errore| nel_passo(&passo.out, errore))?;
-            verifica_ambiente(&preparato).map_err(|errore| nel_passo(&passo.out, errore))?;
+            let (uscita, kernel, righe_previste) = if let Some(preparato) = preparato {
+                let uscita = analyze_table_contract(
+                    descrittore.id,
+                    &ingressi,
+                    &passo.config,
+                    &mut campi,
+                    &limiti_kernel,
+                )
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
+                verifica_ambiente(&preparato).map_err(|errore| nel_passo(&passo.out, errore))?;
+                (uscita, KernelPasso::Tabellare(preparato), 0)
+            } else {
+                let uscita = analyze_geo_contract(
+                    descrittore.id,
+                    &ingressi,
+                    &passo.config,
+                    crs_piano.as_ref(),
+                    &mut campi,
+                )
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
+                let geo = PassoGeo::prepara(
+                    descrittore,
+                    &passo.config,
+                    &ingressi,
+                    &uscita,
+                    &limiti,
+                    self.outputs.contains(&passo.out),
+                )
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
+                let righe = PassoGeo::righe_previste(&uscita);
+                (uscita, KernelPasso::Geo(Box::new(geo)), righe)
+            };
             verifica_colonne(&uscita, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
+            let uscita = canonico(uscita).map_err(|errore| nel_passo(&passo.out, errore))?;
             contratti.insert(passo.out.clone(), uscita);
             provenance.insert(
                 passo.out.clone(),
@@ -531,8 +605,9 @@ impl Pipeline {
                 out: passo.out.clone(),
                 descrittore,
                 inputs: passo.inputs.clone(),
-                preparato,
+                kernel,
                 costo,
+                righe_previste,
             });
         }
 

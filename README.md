@@ -14,14 +14,16 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-core` | re-export Arrow, `PlenoraError`, limiti, catalogo delle operazioni, contratti dati, contratto CRS fail-closed e riproiezione fra i CRS integrati ([«Riproiezione»](#riproiezione)), politica dei panici |
 | `plenora-kernels-table` | kernel tabellari (filtri, ordinamenti, aggregazioni, join, espressioni, date, stringhe, qualità, spill) |
 | `plenora-kernels-geo` | kernel geografici su `geo::Geometry` e adapter GeoArrow-WKB; `rust_backend` per `geo.make_valid`, `geo.polygonize` e `geo.split` senza GEOS, e i controlli di precisione della griglia degli overlay (`rust_backend::griglia`); `riproiezione` per `geo.reproject` senza PROJ |
-| `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione e budget di memoria per passo ([«Runner»](#runner)) |
+| `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari e geo, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione e budget di memoria per passo ([«Runner»](#runner)) |
 | `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](#file)) |
 | `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0) e `wkt` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
 
-- **Operazioni geo nel runner**: [«Runner»](#runner) esegue solo le
-  operazioni tabellari; le geo si chiamano ancora dai kernel.
+- **Operazioni geo nel runner, in parte**: [«Runner»](#runner) esegue le
+  tabellari e le geo 1:1 sulle righe ([«Operazioni geo»](#operazioni-geo));
+  le geo bloccanti, collettive e binarie si rifiutano in validazione
+  (`Unsupported`) e si chiamano ancora dai kernel.
 - **Risoluzione CRS fuori tabella**: senza PROJ `resolve_crs` risolve solo
   gli identificatori d'autorità della tabella integrata
   ([«CRS integrati»](#crs-integrati)); un codice fuori tabella fallisce
@@ -902,8 +904,9 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
 
 ## Runner
 
-`plenora-pipeline` concatena le operazioni **tabellari** del catalogo su
-tabelle intere in memoria: un `RecordBatch` per nome, niente streaming.
+`plenora-pipeline` concatena le operazioni **tabellari** e **geo** del
+catalogo su tabelle intere in memoria: un `RecordBatch` per nome, niente
+streaming ([«Operazioni geo»](#operazioni-geo) per quelle supportate).
 
 ```rust
 let pipeline = Pipeline::from_json(testo)?;              // o costruita in Rust
@@ -962,11 +965,17 @@ Prima di qualunque esecuzione, contro gli schemi degli input: nomi SSA;
 limiti di complessità del piano (`PlanLimits::default()`: passi, input,
 archi, fan-out, profondità, byte di config per passo, lunghezza dei nomi,
 byte del testo JSON); operazione, arietà e dispatch (`table.concat` a più
-di due input, le operazioni geo e quelle senza dispatch sono
-`Unsupported`); config tipizzate una volta; contratti di output passo per
-passo con `analyze_table_contract` e i limiti con cui i kernel
-eseguiranno, un solo `FieldAllocator`, provenance delle diagnostiche per
-riga; colonne di ogni input e di ogni contratto contro `max_columns`.
+di due input e le operazioni senza dispatch sono `Unsupported`); config
+tipizzate una volta; contratti di output passo per passo con
+`analyze_table_contract` e i limiti con cui i kernel eseguiranno, o con
+`analyze_geo_contract` e il CRS di piano per le geo, un solo
+`FieldAllocator`, provenance delle diagnostiche per riga; colonne di ogni
+input e di ogni contratto contro `max_columns`. Ogni contratto (input e
+uscite dei passi) porta lo schema che il runner emette, con il blocco
+canonico delle geometrie (`arrow_schema_from_contract`): il passo
+seguente si analizza sullo schema delle tabelle che riceverà, e le
+tabelle d'ingresso ricevono quello schema in `run` (stesse colonne, solo
+metadati in più; per una tabella senza geometrie nulla cambia).
 `table.pivot` e `table.transpose` si rifiutano: il loro schema d'uscita
 dipende dai dati.
 
@@ -1031,6 +1040,76 @@ colonne di un batch letto da Arrow IPC non aggiungono nulla. È la stessa
 misura con cui i kernel stimano i byte di un batch
 (`spill::estimated_batch_bytes`).
 
+### Operazioni geo
+
+I passi `geo.*` passano dall'analisi dei kernel (`analyze_geo_contract`) e
+dai kernel di `plenora-kernels-geo`, con lo stesso budget, gli stessi
+sfratti e gli stessi controlli dopo il passo delle tabellari. Un passo geo
+è una funzione `RecordBatch` → `RecordBatch` (`plenora_pipeline::geo`,
+privato): calcola le colonne del contratto d'uscita, nel suo ordine, e le
+monta sul suo schema. Niente fusione, niente streaming.
+
+| forma | operazioni | uscita |
+| --- | --- | --- |
+| 1:1 in place | `centroid`, `convex_hull`, `envelope`, `boundary`, `point_on_surface`, `buffer`, `simplify`, `affine_transform`, `translate`, `scale`, `rotate`, `concave_hull`, `densify`, `snap_to_grid`, `line_substring`, `line_interpolate_point`, `snap`, `reproject` | la geometria della riga, attributi invariati |
+| colonne in coda | `area`, `length`, `perimeter`, `geodesic_line_length`, `geodesic_area`, `vertex_count`, `to_wkt`, `bounds_extractor`, `geometry_accessors`, `line_locate_point`; contro la geometria `other_wkb` della config: `distance`, `hausdorff_distance`, `frechet_distance`, `haversine_distance`, `geodesic_distance`, `bearing`, i predicati `predicate_*` | la misura della riga, null per una geometria null |
+| sostituzione | `geometry_diagnostics` | le dieci colonne diagnostiche al posto della geometria |
+| produttori | `from_coords`, `from_wkt` | colonna geometria in coda, CRS da `crs` della config o di piano |
+
+Le geo bloccanti, collettive e binarie non sono ancora nel dispatch:
+`Unsupported` in validazione, dopo l'analisi.
+
+**Config.** Si legge una volta, in validazione, con i tipi dell'analisi
+(`plenora_kernels_geo::analyze::config`, pubblici per questo): nessuna
+seconda copia di nomi e default. Le geometrie della config (`other_wkb`,
+`point_wkb`, `reference_wkb`) si decodificano lì, già accettate
+dall'analisi, che per `other_wkb` ora verifica anche la validità OGC come
+per le altre due (un kernel l'avrebbe rifiutata alla prima riga). La
+validazione rifiuta esattamente ciò che l'analisi rifiuta (test
+`la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta`); in più
+solo `Unsupported` per le operazioni senza dispatch.
+
+**Prima del kernel**, per ogni colonna geometria d'ingresso: ogni cella
+si decodifica (contratto WKB strutturale) e ogni coordinata deve stare nel
+dominio di validità del CRS della colonna (`Crs`, [«CRS
+integrati»](#crs-integrati): i kernel non ricevono un CRS); se il
+contratto dichiara i tipi geometrici con un elenco (`exact`, o `mixed`
+con elenco), ogni cella deve essere di un tipo dichiarato (`Schema`). La
+validazione OGC la fa il kernel, una volta per geometria; la decodifica
+strutturale del controllo di dominio è quindi una seconda passata sui
+byte, il prezzo di un controllo in un posto solo. Le geometrie prodotte
+da `from_coords` e `from_wkt` stanno nel dominio del CRS dell'uscita.
+
+**Precisione.** I kernel che la chiedono (`buffer`, e le bloccanti)
+ricevono 1 cm a terra nelle unità del CRS della colonna
+(`Precision::from_crs`, [«Precisione delle operazioni
+geografiche»](#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
+calcolata in validazione.
+
+**Dopo il kernel.** Una geometria null in una colonna che il contratto
+dichiara non nullable è un errore del passo (`InvalidPlan`): per esempio
+`point_on_surface` di una geometria vuota, o `from_coords` con una
+coordinata null (il contratto dichiara la geometria prodotta non
+nullable; a `190c493` diventava null). Ogni geometria prodotta deve avere
+un tipo che il contratto d'uscita dichiara, altrimenti `Internal`
+(analisi e kernel divergono).
+
+**Limiti passati ai kernel**: `MAX_CELL_COORDINATES` per `concave_hull` e
+`densify`, `10^8` coppie di coordinate per riga per `hausdorff_distance`
+e `frechet_distance` (l'ordine di `MAX_NODING_WORK`); una `Int64` di
+`from_coords` oltre `2^53` in modulo si rifiuta (non è esatta in `f64`).
+
+**Errori.** Categoria come nei kernel e nel passo geo di `190c493`:
+`Internal` ciò che non ha concluso o un'invariante violata, `Unsupported`
+la precisione insufficiente, `InvalidPlan` il resto, con il nome
+dell'operazione e del passo; il testo è quello dei kernel, senza valori.
+Il primo errore è quello della prima riga, in ordine di riga.
+
+**Diagnostica per riga.** Delle geo che il catalogo dichiara con
+diagnostica per riga, nel runner la emette solo `from_wkt` (l'adapter dei
+kernel), e solo per lei vale il controllo di provenance della validazione;
+le altre rendono il primo errore, senza indici di sorgente (limite sotto).
+
 ### Budget di memoria
 
 `limits.max_governed_memory_bytes` del piano è il budget del runner. Prima
@@ -1050,6 +1129,36 @@ spilled, fino a 5 milioni di righe) in
 nell'intestazione e lo SHA-256 del catalogo (`--verifica` rigenera e
 confronta; un test confronta l'impronta). Un'operazione senza modello si
 rifiuta in validazione (`Unsupported`).
+
+**Modelli geo, provvisori.** Le operazioni geo non sono ancora misurate
+sul runner. Fino ad allora hanno un modello **dichiarato e conservativo**,
+della stessa forma (`r` solo per `generate_grid`, sulle celle che il
+contratto conosce a secco), derivato dal catalogo empirico di
+`plenora-memory-lab` (`results/memory-catalog/catalog.json`, schema 2,
+Windows, `PeakWorkingSet64`, i kernel misurati su geometrie già
+decodificate, senza adapter Arrow). `python scripts/genera_costi_geo.py
+--estrai <catalog.json>` ne estrae i campi usati in
+`data/misure/profili-geo-memory-lab.json` (con lo SHA-256 del catalogo
+d'origine); `python scripts/genera_costi_geo.py` genera
+`crates/plenora-pipeline/src/costi_geo.rs` (`--verifica` rigenera e
+confronta; un test confronta l'impronta del file dei profili). Per ogni
+punto `u` = byte di geometria in ingresso stimati per difetto (16 per
+vertice più 9 per geometria: WKB più offset Arrow non sono mai meno; i
+byte nativi dell'ingresso per `from_coords` e `from_wkt`), `a0` = picco al
+campione più piccolo, `c0` = inviluppo superiore `max (y - a0) / u`; poi
+
+```text
+c = 2 * c0 + 4     (decodifica, uscita codificata e sua copia Arrow)
+a = a0 + 4 MiB
+```
+
+sul peggiore dei profili dell'operazione. Per le operazioni misurate con
+un altro backend (GEOS per `make_valid`, `polygonize`, `split`; PROJ per
+`reproject`) il loro profilo; per `split`, misurato solo su 100 geometrie,
+il `c` più alto delle espansioni Rust (`explode`, `delaunay`,
+`subdivide`). Il runner usa i byte Arrow di tutti gli ingressi, che non
+sono mai meno dei byte di geometria: il modello è per eccesso anche per
+questo.
 
 Quando il passo non sta, nell'ordine:
 
@@ -1173,7 +1282,29 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   misure del profilo narrow per le varianti spilled e dei casi oltre il
   dominio misurato, e un allocatore contato per il processo (un tetto
   vero, non una previsione).
-- **Solo operazioni tabellari**: le geo si rifiutano in validazione.
+- **Modelli di costo geo provvisori.**
+  *Regola*: ogni operazione geo ha un modello dichiarato, conservativo,
+  derivato dalle misure dei kernel senza adapter ([«Budget di
+  memoria»](#budget-di-memoria)).
+  *Ambito*: `crates/plenora-pipeline/src/costi_geo.rs`, tutte le `geo.*`.
+  *Hazard*: non è una misura del runner: il transitorio dipende da tipo e
+  forma delle geometrie (un `buffer` di punti produce ~27 volte i byte
+  d'ingresso, di poligoni molto meno), e le fixture del laboratorio non
+  coprono ogni forma; le operazioni misurate con GEOS o PROJ hanno oggi un
+  backend Rust diverso. Un ingresso fuori dalle fixture può superare la
+  previsione senza errore; i byte vivi dopo il passo restano controllati
+  esattamente.
+  *Rientro*: la campagna di misura delle geo sul runner, con un modello
+  generato come quello tabellare.
+- **Geo senza diagnostica per riga.**
+  *Regola*: un passo geo rende il primo errore in ordine di riga, senza
+  report `plenora-row-diagnostics-v1`; gli indici che alcuni messaggi dei
+  kernel riportano sono righe dell'ingresso del passo, non della sorgente.
+  *Ambito*: ogni `geo.*` tranne `from_wkt`.
+  *Hazard*: un indice di riga dopo un passo che cambia righe o ordine
+  (`table.filter`, `table.sort`) non punta alla riga del file d'origine.
+  *Rientro*: la raccolta completa per riga del passo geo di `190c493`
+  (`collect_cell_failures`), con il controllo di provenance.
 >>>>
 
 - **Errori che dipendono dai valori delle celle, in esecuzione.**
@@ -1536,7 +1667,9 @@ predicati e la lama `other_wkb` di `geo.split`, `point_wkb` di
 `line_locate_point`, `reference_wkb` di `snap`, e
 l'`extent` di `generate_grid` con il CRS del produttore. I kernel non
 ricevono un CRS: sulle colonne il controllo lo chiama il chiamante, con
-`plenora_kernels_geo::crs::validate_geometry_domain`, dopo la decodifica.
+`plenora_kernels_geo::crs::validate_geometry_domain`, dopo la decodifica;
+nel runner, su ogni colonna geometria d'ingresso di un passo geo e sulle
+geometrie prodotte ([«Operazioni geo»](#operazioni-geo)).
 
 **Precisione.** `ResolvedCrs::precisione_coordinate()` esprime 1 cm a terra
 nelle unità del CRS: `0.01 / horizontal_unit_to_metre` per i proiettati,
@@ -1927,11 +2060,11 @@ pyproj/PROJ/EPSG come `genera_crs_integrati.py`.
   quella trasformazione (e quindi che valga la sua accuratezza) non si
   controlla (il file non porta il codice). Un file sbagliato ma ben formato
   dà spostamenti sbagliati senza errore.
-- **Kernel non ancora nel runner.** Il runner rifiuta le operazioni geo
-  ([«Runner»](#runner)): `reproject_batches` si chiama dal kernel. Un
-  esecutore futuro che fonda le trasformazioni in place
-  (`TransformInPlace`) deve rileggere il CRS dopo `geo.reproject`, che lo
-  cambia a metà del gruppo.
+- **Nel runner, un passo per volta.** Il runner esegue `geo.reproject`
+  con `reproject_batches` e analizza il passo seguente sul contratto con
+  il CRS d'arrivo ([«Operazioni geo»](#operazioni-geo)). Un esecutore
+  futuro che fonda le trasformazioni in place (`TransformInPlace`) deve
+  rileggere il CRS dopo `geo.reproject`, che lo cambia a metà del gruppo.
 - **Fuori ambito.** CRS fuori tabella, operazioni concatenate del registro,
   griglie non NTv2, percorsi di più di tre passi, CGCS2000 verso altri
   datum (nessuna trasformazione nel registro), coordinate Z/M.

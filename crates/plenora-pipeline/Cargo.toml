@@ -1,6 +1,6 @@
 [package]
 name = "plenora-pipeline"
-description = "Runner minimo di pipeline: piano SSA di kernel tabellari su RecordBatch interi in memoria"
+description = "Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,13 @@ publish.workspace = true
 [dependencies]
 plenora-core.workspace = true
 plenora-kernels-table.workspace = true
+# Operazioni geo del runner (F4): analisi dei contratti, kernel e adapter
+# Arrow dei kernel geografici. Crate del workspace, nessun pacchetto nuovo.
+plenora-kernels-geo.workspace = true
+# Il tipo `geo::Geometry` che i kernel geografici ricevono e rendono: la
+# stessa copia (vendorizzata) che plenora-kernels-geo usa gia', nessun
+# pacchetto nuovo nel lockfile.
+geo.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Sfratto delle tabelle fredde su file Arrow IPC temporanei (budget di

@@ -12,6 +12,7 @@ use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::resolve_crs;
 use plenora_core::{PlenoraError, Result};
+use plenora_kernels_geo::analyze::analyze_geo_contract;
 use plenora_kernels_table::analyze::analyze_table_contract;
 use plenora_pipeline::{Passo, Pipeline, PipelineValidata};
 use serde_json::{json, Value};
@@ -233,7 +234,7 @@ fn l_arieta_viene_dal_catalogo() {
 }
 
 #[test]
-fn operazioni_sconosciute_alias_e_geo_si_rifiutano() {
+fn operazioni_sconosciute_e_alias_si_rifiutano_le_geo_come_l_analisi() {
     let sconosciuta = piano(
         &["t"],
         vec![passo("a", "table.non_esiste", &["t"], json!({}))],
@@ -264,17 +265,21 @@ fn operazioni_sconosciute_alias_e_geo_si_rifiutano() {
     };
     assert!(messaggio.contains(canonico), "{messaggio}");
 
+    // Le geo passano dall'analisi dei kernel: su una tabella senza
+    // geometria e con la config vuota la validazione rifiuta come l'analisi.
     for descrittore in CATALOG.iter().filter(|d| d.family == Family::Geo) {
         let geo = piano(
             &["t"],
             vec![passo("a", descrittore.id, &["t"], json!({}))],
             &["a"],
         );
-        assert!(
-            matches!(valida_wide(&geo), Err(PlenoraError::Unsupported(_))),
-            "{} deve essere rifiutata in validazione",
-            descrittore.id
-        );
+        let mut campi = FieldAllocator::default();
+        let ingresso = contract_from_arrow_schema(schema_wide(), resolve_crs).expect("contratto");
+        let atteso =
+            analyze_geo_contract(descrittore.id, &[ingresso], &json!({}), None, &mut campi)
+                .expect_err("l'analisi rifiuta");
+        let ottenuto = valida_wide(&geo).expect_err("la validazione rifiuta");
+        assert_eq!(ottenuto.category(), atteso.category(), "{}", descrittore.id);
     }
 }
 

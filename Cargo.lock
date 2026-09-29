@@ -876,7 +876,9 @@ dependencies = [
 name = "plenora-pipeline"
 version = "0.1.0"
 dependencies = [
+ "geo",
  "plenora-core",
+ "plenora-kernels-geo",
  "plenora-kernels-table",
  "proptest",
  "serde",

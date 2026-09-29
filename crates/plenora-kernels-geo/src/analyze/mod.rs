@@ -53,7 +53,7 @@
 //! preservano `sorted_by` ma eliminano `row_count`; join e aggregazioni
 //! eliminano entrambe (declassamento obbligatorio, par. 4.3).
 
-mod config;
+pub mod config;
 mod dispatch;
 mod helpers;
 mod measures;
