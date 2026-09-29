@@ -363,15 +363,106 @@ fn jaro_winkler_chars(left: &[char], right: &[char], scratch: &mut FuzzyScratch)
         &mut scratch.left_matched,
         &mut scratch.right_matched,
     );
-    let prefix = left
-        .iter()
+    winkler(jaro, prefisso_comune(left, right))
+}
+
+/// Prefisso comune del boost di Winkler: al piu' 4 caratteri.
+fn prefisso_comune(left: &[char], right: &[char]) -> usize {
+    left.iter()
         .zip(right)
         .take(4)
         .take_while(|(a, b)| a == b)
-        .count();
+        .count()
+}
+
+/// Boost di Winkler (p = 0.1): la stessa espressione f64 del riferimento.
+fn winkler(jaro: f64, prefix: usize) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     let boost = prefix as f64 * 0.1 * (1.0 - jaro);
     jaro + boost
+}
+
+/// Jaro massimo con al piu' `matches` caratteri abbinati e nessuna
+/// trasposizione, per stringhe non vuote: la formula di
+/// `jaro_similarity_scratch` con il terzo termine `(m - t/2)/m` al suo
+/// massimo 1.
+///
+/// In f64 e' un maggiorante esatto del Jaro calcolato: con `m <= matches`
+/// i termini `m/|a|` e `m/|b|` non crescono (conversione e divisione
+/// arrotondate al piu' vicino sono monotone), `(m - t/2)/m` e' al piu'
+/// `m/m = 1` per la stessa monotonia, e somme e divisione per 3 sono
+/// monotone. Senza caratteri abbinati il Jaro e' 0.
+fn jaro_massimo(matches: usize, left_len: usize, right_len: usize) -> f64 {
+    if matches == 0 {
+        return 0.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let matches = matches as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let score = (matches / left_len as f64 + matches / right_len as f64 + 1.0) / 3.0;
+    score
+}
+
+/// Caratteri in comune come multinsiemi, da due sequenze ordinate: ogni
+/// abbinamento di Jaro unisce due posizioni distinte con lo stesso
+/// carattere, quindi i caratteri abbinati sono al piu' questi.
+fn caratteri_comuni(left_sorted: &[char], right_sorted: &[char]) -> usize {
+    let (mut i, mut j, mut comuni) = (0, 0, 0);
+    while let (Some(a), Some(b)) = (left_sorted.get(i), right_sorted.get(j)) {
+        match a.cmp(b) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                comuni += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    comuni
+}
+
+/// Margine del bound di Jaro-Winkler sotto la soglia.
+///
+/// Il boost `j + c (1 - j)` (con `c = fl(p * 0.1) <= 0.4`) e' crescente in
+/// `j` nei reali, ma calcolato in f64 non e' garantito monotono: fra il
+/// valore f64 e quello reale, per `j` in [0, 1], ci sono al piu' 2 ulp di 1
+/// (un arrotondamento sulla somma, due sul prodotto e uno su `1 - j`,
+/// pesati da `c <= 0.4`). Il JW calcolato di una coppia supera quindi il
+/// bound calcolato al piu' di 4 ulp (circa 9e-16): una coppia si scarta
+/// solo se il bound e' sotto la soglia di piu' di 1e-12, e ogni coppia piu'
+/// vicina alla soglia si calcola per intero.
+const MARGINE_WINKLER: f64 = 1e-12;
+
+/// Score di Jaro-Winkler se e' >= `threshold`, `None` se e' certamente
+/// sotto.
+///
+/// Due maggioranti del numero di caratteri abbinati, dal piu' economico: la
+/// lunghezza minore (in caratteri Unicode dopo la normalizzazione, come la
+/// metrica) e i caratteri in comune come multinsiemi. Il Jaro massimo
+/// (`jaro_massimo`, maggiorante esatto in f64) con il prefisso esatto
+/// della coppia da' il JW massimo; sotto `threshold - MARGINE_WINKLER` la
+/// coppia si scarta. Le altre si calcolano con `jaro_winkler_chars`, lo
+/// stesso calcolo del riferimento, bit per bit. Le coppie con una stringa
+/// vuota si calcolano sempre (costo nullo).
+fn jaro_winkler_sopra_soglia(
+    (left, left_sorted): (&[char], &[char]),
+    (right, right_sorted): (&[char], &[char]),
+    threshold: f64,
+    scratch: &mut FuzzyScratch,
+) -> Option<f64> {
+    if !left.is_empty() && !right.is_empty() {
+        let soglia_sicura = threshold - MARGINE_WINKLER;
+        let prefix = prefisso_comune(left, right);
+        let massimo = |matches| winkler(jaro_massimo(matches, left.len(), right.len()), prefix);
+        if massimo(left.len().min(right.len())) < soglia_sicura {
+            return None;
+        }
+        if massimo(caratteri_comuni(left_sorted, right_sorted)) < soglia_sicura {
+            return None;
+        }
+    }
+    Some(jaro_winkler_chars(left, right, scratch))
 }
 
 /// Score di Levenshtein normalizzato da distanza e lunghezza massima (in
@@ -535,7 +626,11 @@ fn jaccard_sets(
 /// non sono mai lette: i blocchi contengono solo righe non null. La metrica
 /// e' la variante stessa, quindi forma e metrica non possono divergere.
 enum DestraDecodificata<'a> {
-    JaroWinkler(Vec<Vec<char>>),
+    /// Caratteri e caratteri ordinati (per il bound sui caratteri comuni).
+    JaroWinkler {
+        chars: Vec<Vec<char>>,
+        ordinati: Vec<Vec<char>>,
+    },
     Levenshtein(Vec<Vec<char>>),
     Jaccard(Vec<std::collections::HashSet<&'a str>>),
 }
@@ -604,6 +699,7 @@ fn probe_chunk(
     let mut uscita = UscitaChunk::default();
     let mut scratch = FuzzyScratch::default();
     let mut left_chars: Vec<char> = Vec::new();
+    let mut left_sorted: Vec<char> = Vec::new();
     for left_row in righe {
         if contatore.superato.load(Ordering::Relaxed) {
             break;
@@ -622,13 +718,26 @@ fn probe_chunk(
                 }
             };
             match destra {
-                DestraDecodificata::JaroWinkler(right_chars) => {
+                DestraDecodificata::JaroWinkler {
+                    chars: right_chars,
+                    ordinati: right_sorted,
+                } => {
                     left_chars.clear();
                     left_chars.extend(value.chars());
+                    left_sorted.clear();
+                    left_sorted.extend_from_slice(&left_chars);
+                    left_sorted.sort_unstable();
                     for &right_row in candidates {
-                        let similarity =
-                            jaro_winkler_chars(&left_chars, &right_chars[right_row], &mut scratch);
-                        emetti(right_row, similarity);
+                        // `None`: score certamente sotto soglia, nessuna riga
+                        // come nel riferimento.
+                        if let Some(similarity) = jaro_winkler_sopra_soglia(
+                            (&left_chars, &left_sorted),
+                            (&right_chars[right_row], &right_sorted[right_row]),
+                            config.threshold,
+                            &mut scratch,
+                        ) {
+                            emetti(right_row, similarity);
+                        }
                     }
                 }
                 DestraDecodificata::Levenshtein(right_chars) => {
@@ -771,7 +880,16 @@ fn fuzzy_join_con_chunk(
     };
     let destra = match config.metric {
         FuzzyMetric::JaroWinkler => {
-            DestraDecodificata::JaroWinkler(right_norm.iter().map(chars_of).collect())
+            let chars: Vec<Vec<char>> = right_norm.iter().map(chars_of).collect();
+            let ordinati = chars
+                .iter()
+                .map(|chars| {
+                    let mut ordinati = chars.clone();
+                    ordinati.sort_unstable();
+                    ordinati
+                })
+                .collect();
+            DestraDecodificata::JaroWinkler { chars, ordinati }
         }
         FuzzyMetric::Levenshtein => {
             DestraDecodificata::Levenshtein(right_norm.iter().map(chars_of).collect())

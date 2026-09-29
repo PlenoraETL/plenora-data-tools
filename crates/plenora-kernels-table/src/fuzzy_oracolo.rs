@@ -852,3 +852,85 @@ proptest! {
         confronta_levenshtein_entro(&coppie);
     }
 }
+
+/// `jaro_winkler_sopra_soglia` contro Jaro-Winkler del riferimento, con la
+/// soglia sullo score della coppia e sui suoi vicini: sopra soglia lo
+/// score e' lo stesso bit per bit, sotto soglia la coppia si scarta o si
+/// calcola (il probe la filtra comunque). Conta le coppie scartate.
+fn confronta_jaro_winkler_sopra_soglia(coppie: &[(Vec<char>, Vec<char>)], soglie: &[f64]) -> usize {
+    let mut scratch = super::FuzzyScratch::default();
+    let mut riferimento = FuzzyScratch::default();
+    let mut scartate = 0;
+    for (left, right) in coppie {
+        let atteso = jaro_winkler_chars(left, right, &mut riferimento);
+        let mut left_sorted = left.clone();
+        left_sorted.sort_unstable();
+        let mut right_sorted = right.clone();
+        right_sorted.sort_unstable();
+        let vicine = [atteso, atteso.next_up(), atteso.next_down()];
+        for &threshold in soglie.iter().chain(&vicine) {
+            let ottenuto = super::jaro_winkler_sopra_soglia(
+                (left, &left_sorted),
+                (right, &right_sorted),
+                threshold,
+                &mut scratch,
+            );
+            if let Some(score) = ottenuto {
+                assert_eq!(score.to_bits(), atteso.to_bits(), "{left:?} {right:?}");
+            } else {
+                assert!(atteso < threshold, "{left:?} {right:?} soglia {threshold}");
+                scartate += 1;
+            }
+        }
+    }
+    scartate
+}
+
+#[test]
+fn oracolo_jaro_winkler_sopra_soglia_casi_avversari() {
+    let mut chiavi: Vec<Vec<char>> = CHIAVI
+        .iter()
+        .flatten()
+        .map(|chiave| chiave.chars().collect())
+        .collect();
+    chiavi.extend(
+        [
+            "dixon",
+            "dicksonx",
+            "jellyfish",
+            "smellyfish",
+            "abcdefghijkl",
+            "lkjihgfedcba",
+        ]
+        .iter()
+        .map(|chiave| chiave.chars().collect()),
+    );
+    let coppie: Vec<(Vec<char>, Vec<char>)> = chiavi
+        .iter()
+        .flat_map(|left| {
+            chiavi
+                .iter()
+                .map(move |right| (left.clone(), right.clone()))
+        })
+        .collect();
+    let scartate = confronta_jaro_winkler_sopra_soglia(&coppie, &soglie_fisse());
+    assert!(scartate > 0, "il bound deve scartare qualche coppia");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    #[test]
+    fn oracolo_jaro_winkler_sopra_soglia_casuale(
+        coppie in prop::collection::vec(
+            (
+                prop::collection::vec(prop::sample::select(vec!['a', 'b', 'c', 'd', '\u{e9}']), 0..20),
+                prop::collection::vec(prop::sample::select(vec!['a', 'b', 'c', 'd', '\u{e9}']), 0..20),
+            ),
+            1..6,
+        ),
+        soglia in soglia(),
+    ) {
+        confronta_jaro_winkler_sopra_soglia(&coppie, &[soglia]);
+    }
+}
