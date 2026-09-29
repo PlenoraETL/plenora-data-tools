@@ -84,12 +84,12 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto,
-///   valore non rappresentabile come testo (come `scalar_as_string`);
+/// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto;
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
 ///   diagnostics;
-/// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
-///   scalare.
+/// - `Schema`: colonna assente dal batch, valore non rappresentabile come
+///   testo o tipo non coperto dal profilo scalare (gli errori di
+///   `scalar_as_string`).
 pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {
@@ -180,13 +180,13 @@ fn default_sha256_name() -> String {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido, valore oltre
-///   `u64` nel framing, valore non rappresentabile come testo (come
-///   `scalar_as_string`);
+/// - `InvalidPlan`: nome della colonna di output non valido;
+/// - `ResourceLimit`: lunghezza di un valore oltre `u64` nel framing;
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
 ///   diagnostics;
-/// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
-///   scalare.
+/// - `Schema`: colonna assente dal batch, valore non rappresentabile come
+///   testo o tipo non coperto dal profilo scalare (gli errori di
+///   `scalar_as_string`).
 pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     let mut names = config.columns.clone();
@@ -589,9 +589,11 @@ fn fingerprint_rows<D: Digest + Clone + Sync>(
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, colonna ripetuta
 ///   in `columns`, nessuna colonna disponibile (config vuota su schema senza
-///   colonne), valore oltre `u64` nel framing, valore non rappresentabile
-///   come testo (come `scalar_as_string`);
-/// - `Schema`: colonna assente dal batch.
+///   colonne);
+/// - `ResourceLimit`: lunghezza di un valore oltre `u64` nel framing;
+/// - `Schema`: colonna assente dal batch, valore non rappresentabile come
+///   testo o tipo non coperto dal profilo scalare (gli errori di
+///   `scalar_as_string`).
 pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     let names: Vec<String> = if config.columns.is_empty() {
@@ -640,8 +642,9 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
 
 /// Politica sui null per `hmac_sha256`.
 ///
-/// I token legacy restano deserializzabili per compatibilita' dei piani, ma
-/// nessuno autorizza remediation implicita: ogni null sorgente e' rifiutato.
+/// Nessun null sorgente e' rifiutato: `empty` lo hasha come valore vuoto,
+/// `null` rende nulla la riga d'uscita, `skip` omette la colonna dal
+/// messaggio (vedi `hmac_sha256`).
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HmacNullPolicy {
@@ -730,14 +733,22 @@ fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
 /// separatore `b"plenora-hmac-sha256-v1\0"`. La chiave arriva SOLO dalla
 /// variabile d'ambiente il cui nome e' `key_env`.
 ///
+/// Nessun null sorgente e' rifiutato; la politica decide l'uscita:
+/// `empty` (default) hasha il null come valore vuoto, con intestazione e
+/// byte di presenza 1; `null` rende nulla la riga d'uscita alla prima
+/// colonna nulla; `skip` omette la colonna nulla (intestazione compresa)
+/// dal messaggio.
+///
 /// # Errors
 ///
 /// - `InvalidPlan`: nome della colonna di output non valido, `key_env` vuoto,
 ///   `columns` vuoto, colonna ripetuta, chiave HMAC non disponibile
-///   (variabile d'ambiente assente o vuota), valore oltre `u64` nel framing,
-///   valore non rappresentabile come testo (come `scalar_as_string`);
-/// - `Schema`: colonna assente dal batch;
-/// - `DataMapping`: qualunque null sorgente, con row diagnostics.
+///   (variabile d'ambiente assente o vuota);
+/// - `ResourceLimit`: lunghezza di un valore oltre `u64` nel framing;
+/// - `Schema`: colonna assente dal batch, valore non rappresentabile come
+///   testo o tipo non coperto dal profilo scalare (gli errori di
+///   `scalar_as_string`, per le colonne lette: con `null` quelle dopo la
+///   prima nulla di una riga non si leggono).
 pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.key_env.trim().is_empty() {
