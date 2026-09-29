@@ -27,6 +27,7 @@
 //! deve avere un tipo che il contratto dichiara (altrimenti `Internal`:
 //! analisi e kernel divergono).
 
+mod binari;
 mod collettivi;
 mod errori;
 mod unari;
@@ -47,6 +48,7 @@ use plenora_kernels_geo::rust_backend::precision::Precision;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use self::binari::KernelBinario;
 use self::collettivi::KernelCollettivo;
 use self::unari::KernelUnario;
 
@@ -259,6 +261,8 @@ enum Kernel {
     Unario(Box<KernelUnario>),
     /// Con il limite di righe dell'arco d'uscita, tetto dei kernel.
     Collettivo(Box<KernelCollettivo>, u64),
+    /// Due tabelle (left, right), con lo stesso limite di righe.
+    Binario(Box<KernelBinario>, u64),
 }
 
 /// Un passo geo validato: il kernel e le colonne geometria degli ingressi.
@@ -314,6 +318,8 @@ impl PassoGeo {
             Kernel::Unario(Box::new(unario))
         } else if let Some(collettivo) = KernelCollettivo::prepara(op, valore, &lati, ingressi)? {
             Kernel::Collettivo(Box::new(collettivo), righe)
+        } else if let Some(binario) = KernelBinario::prepara(op, valore, &lati, limiti)? {
+            Kernel::Binario(Box::new(binario), righe)
         } else {
             return Err(PlenoraError::Unsupported(format!(
                 "{op}: operazione geo senza dispatch nel runner"
@@ -377,6 +383,22 @@ impl PassoGeo {
                     self.op,
                     self.lati.first().and_then(Option::as_ref),
                     batch,
+                    *righe_massime,
+                )?
+            }
+            Kernel::Binario(kernel, righe_massime) => {
+                let ([sinistra, destra], [Some(geo_left), Some(geo_right)]) =
+                    (ingressi, self.lati.as_slice())
+                else {
+                    return Err(PlenoraError::Internal(format!(
+                        "{}: operazione binaria senza due ingressi geometrici",
+                        self.op
+                    )));
+                };
+                kernel.esegui(
+                    self.op,
+                    (geo_left, geo_right),
+                    (sinistra, destra),
                     *righe_massime,
                 )?
             }

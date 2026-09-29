@@ -20,10 +20,6 @@ progetto d'origine si portano qui senza rinomine.
 
 ## Che cosa non c'è ancora
 
-- **Operazioni geo binarie nel runner**: [«Runner»](#runner) esegue le
-  tabellari e le geo unarie ([«Operazioni geo»](#operazioni-geo)); le geo
-  a due tabelle si rifiutano in validazione (`Unsupported`) e si chiamano
-  ancora dai kernel.
 - **Risoluzione CRS fuori tabella**: senza PROJ `resolve_crs` risolve solo
   gli identificatori d'autorità della tabella integrata
   ([«CRS integrati»](#crs-integrati)); un codice fuori tabella fallisce
@@ -1062,8 +1058,27 @@ monta sul suo schema. Niente fusione, niente streaming.
 | coperture | `coverage_validate`, `shared_paths` | schema nuovo, una riga per problema o tratto |
 | griglia | `generate_grid` | le celle; l'ingresso fa solo da innesco |
 
-Le geo binarie non sono ancora nel dispatch: `Unsupported` in
-validazione, dopo l'analisi. `collect` ordina i gruppi per la chiave
+Le operazioni su due tabelle (left, right; il catalogo chiede lo stesso
+CRS proiettato sui due lati) hanno questa semantica delle righe, quella
+di `190c493` (`execute_geo_binary` dell'executor per i join, `pair_arrow`
+per ritaglio, overlay e booleane, che il DAG d'origine non eseguiva) e
+quella che il contratto dell'analisi dichiara:
+
+| operazioni | righe dell'uscita |
+| --- | --- |
+| `sjoin` (`predicate`), `nearest` (`max_distance`) | una per coppia trovata: le colonne di left di quella riga, `__right_index` (e `distance`); una riga di left senza coppie non compare |
+| `within`, `count_points_in_polygons` | allineate a left: la colonna in coda (`within`: la geometria di left è dentro una di right; conteggio dei punti di right in ogni poligono di left), null per una geometria di left null |
+| `clip` | allineata a left: ogni geometria ritagliata dall'unione di **tutte** le geometrie di right (la maschera), null dove il ritaglio è vuoto |
+| `overlay` (`mode`) | una per pezzo: la geometria e le righe d'origine `__left_index`, `__right_index` (null dove il pezzo non viene da quel lato); nessun attributo |
+| `intersection`, `union`, `difference`, `symmetric_difference` | allineate: riga `i` di left con riga `i` di right, **stesse righe richieste** (altrimenti `InvalidPlan`, in esecuzione: le righe non si conoscono a secco); null dove uno dei due è null o il risultato è vuoto |
+
+Per `clip` e le quattro booleane un risultato vuoto è null: l'analisi
+dichiara ora la geometria dell'uscita nullable anche quando quella di
+left non lo è. Per `sjoin` e `within` il tetto delle coppie è il limite
+di righe dell'arco, per `nearest` i confronti sono al più il quadrato del
+maggiore fra `max_input_rows` e `max_rows_per_edge` (come D14.6).
+
+`collect` ordina i gruppi per la chiave
 testuale di `190c493` (tipo, presenza e lunghezza di ogni valore, poi il
 valore): un ordine deterministico, non quello dei valori (`"pari"` prima
 di `"dispari"`).
@@ -1309,7 +1324,11 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   coprono ogni forma; le operazioni misurate con GEOS o PROJ hanno oggi un
   backend Rust diverso. Un ingresso fuori dalle fixture può superare la
   previsione senza errore; i byte vivi dopo il passo restano controllati
-  esattamente.
+  esattamente. Le uscite che dipendono dai dati (coppie di `sjoin` e
+  `nearest`, pezzi di `overlay`, parti delle espansioni) le limita solo il
+  limite di righe dell'arco passato ai kernel: i kernel geo non ricevono
+  il margine di memoria, e un'uscita grande si scopre al controllo dopo il
+  passo, cioè dopo essere stata allocata.
   *Rientro*: la campagna di misura delle geo sul runner, con un modello
   generato come quello tabellare.
 - **Geo senza diagnostica per riga.**

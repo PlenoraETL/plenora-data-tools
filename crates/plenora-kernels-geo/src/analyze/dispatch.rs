@@ -539,17 +539,21 @@ pub(in crate::analyze) fn analyze_binary(
         // allineate a left nel protocollo legacy: proprieta' preservate.
         // piano-v5.md#contratti-di-input decisione 8: le booleane poligonali producono sempre
         // `MultiPolygon` (forma unica del kernel), non il tipo di left.
+        // Un risultato vuoto (geometrie disgiunte, maschera che non copre)
+        // e' null, come a 190c493: la geometria dell'uscita e' nullable
+        // anche quando quella di left non lo e'.
         "geo.clip"
         | "geo.intersection"
         | "geo.union"
         | "geo.difference"
         | "geo.symmetric_difference" => {
             let _: EmptyConfig = parse_config(op, config)?;
-            with_geometry_types(
+            let typed = with_geometry_types(
                 left,
                 left_geometry,
                 exact_types(vec![GeometryType::MultiPolygon])?,
-            )
+            )?;
+            with_nullable_geometry(&typed, left_geometry)
         }
         "geo.within" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
