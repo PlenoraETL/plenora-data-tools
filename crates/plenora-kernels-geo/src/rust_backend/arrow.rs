@@ -224,11 +224,19 @@ pub fn split_batches(
         for local in 0..cells.len() {
             let index = row;
             row += 1;
-            if cells.is_null(local) || splitters.is_null(index) {
+            // Ogni cella non-null dei due lati si valida, anche se l'altro
+            // lato e' null e la coppia non produce righe (come
+            // `decode_geometry_side` a 190c493): prima la sorgente, poi lo
+            // splitter, in ordine di riga.
+            let source = (!cells.is_null(local))
+                .then(|| decode_geometry_cell(cells.value(local)))
+                .transpose()?;
+            let splitter = (!splitters.is_null(index))
+                .then(|| decode_geometry_cell(splitters.value(index)))
+                .transpose()?;
+            let (Some(source), Some(splitter)) = (source, splitter) else {
                 continue;
-            }
-            let source = decode_geometry_cell(cells.value(local))?;
-            let splitter = decode_geometry_cell(splitters.value(index))?;
+            };
             let parts = split_row(&source, &splitter, tolerance, max_output_rows)?;
             pieces.push(index, &parts, max_output_rows)?;
         }
@@ -590,23 +598,101 @@ mod tests {
         ));
     }
 
+    /// Come `decode_geometry_side` a 190c493: ogni cella non-null dei due
+    /// lati e' validata anche quando la coppia non produce righe perche'
+    /// l'altro lato e' null.
     #[test]
-    fn split_enforces_max_output_rows_across_rows() {
+    fn split_validates_both_sides_even_when_the_pair_is_skipped() {
         let square = square_wkb(2.0);
+        let malformed = vec![1_u8, 2, 3];
+        let bowtie = polygon_wkb_le(&[(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0), (0.0, 0.0)]);
         let blade = linestring_wkb_le(&[(1.0, -1.0), (1.0, 3.0)]);
-        let (schema, batch) = fixture_batch(&[Some(&square), Some(&square)]);
-        let splitters = [Some(blade.as_slice()), Some(blade.as_slice())]
+        // Sorgente null, splitter malformato o invalido.
+        for bad in [&malformed, &bowtie] {
+            let (schema, batch) = fixture_batch(&[None]);
+            let splitters = std::iter::once(Some(bad.as_slice())).collect::<BinaryArray>();
+            assert!(
+                split_batches(
+                    &schema,
+                    &[batch],
+                    DEFAULT_GEOMETRY_COLUMN,
+                    &splitters,
+                    CRS,
+                    None,
+                    16
+                )
+                .is_err(),
+                "splitter non valido accettato accanto a una sorgente null"
+            );
+        }
+        // Splitter null, sorgente malformata o invalida.
+        for bad in [&malformed, &bowtie] {
+            let (schema, batch) = fixture_batch(&[Some(bad)]);
+            let splitters = std::iter::once(None::<&[u8]>).collect::<BinaryArray>();
+            assert!(
+                split_batches(
+                    &schema,
+                    &[batch],
+                    DEFAULT_GEOMETRY_COLUMN,
+                    &splitters,
+                    CRS,
+                    None,
+                    16
+                )
+                .is_err(),
+                "sorgente non valida accettata accanto a uno splitter null"
+            );
+        }
+        // Coppie valide con un lato null: nessuna riga, nessun errore.
+        let (schema, batch) = fixture_batch(&[Some(&square), None]);
+        let splitters = [None, Some(blade.as_slice())]
             .into_iter()
             .collect::<BinaryArray>();
-        let limited = split_batches(
+        let (_, batches) = split_batches(
             &schema,
             &[batch],
             DEFAULT_GEOMETRY_COLUMN,
             &splitters,
             CRS,
             None,
-            3,
+            16,
+        )
+        .expect("lati validi");
+        assert_eq!(batches[0].num_rows(), 0);
+    }
+
+    #[test]
+    fn split_enforces_max_output_rows_across_rows() {
+        // La lama va da bordo a bordo: nessun dangle, due facce, nessun
+        // residuo. Ogni sorgente da sola sta nel limite 3 (anche nel budget
+        // del polygonize, che conta pure i residui scartati); solo il totale
+        // cumulato, 4, lo supera.
+        let square = square_wkb(2.0);
+        let blade = linestring_wkb_le(&[(1.0, 0.0), (1.0, 2.0)]);
+        let one = |rows: usize| {
+            let cells = vec![Some(&square); rows];
+            let (schema, batch) = fixture_batch(&cells);
+            let splitters =
+                std::iter::repeat_n(Some(blade.as_slice()), rows).collect::<BinaryArray>();
+            split_batches(
+                &schema,
+                &[batch],
+                DEFAULT_GEOMETRY_COLUMN,
+                &splitters,
+                CRS,
+                None,
+                3,
+            )
+        };
+        let single = one(1).expect("una sorgente sta nel limite");
+        assert_eq!(single.1[0].num_rows(), 2);
+        let message = match one(2) {
+            Err(PlenoraError::InvalidPlan(message)) => message,
+            other => panic!("atteso il limite cumulato: {other:?}"),
+        };
+        assert!(
+            message.contains("max_output_rows"),
+            "errore del limite cumulato di split_batches: {message}"
         );
-        assert!(matches!(limited, Err(PlenoraError::InvalidPlan(_))));
     }
 }
