@@ -47,7 +47,10 @@ pub struct PolygonizeParams {
 ///
 /// Ogni cella non-null e' riparata con `LINEWORK` e `keep_collapsed = true`,
 /// come nel trasporto GEOS; i null restano null, le celle gia' valide restano
-/// byte per byte, lo schema e' invariato.
+/// byte per byte. Lo schema e' quello dell'ingresso salvo la dichiarazione
+/// dei tipi geometrici del campo, che la riparazione riscrive (l'analisi
+/// dichiara `mixed`; [`output_geometry_field`], oracolo
+/// `analyze::tests::kernel_crosscheck`).
 ///
 /// Le differenze di contenuto dal backend GEOS sono quelle di
 /// [`make_valid_wkb`].
@@ -65,6 +68,14 @@ pub fn make_valid_batches(
     precision: Precision,
 ) -> Result<Vec<RecordBatch>, PlenoraError> {
     let geometry_index = geometry_column_index(schema, geometry_column)?;
+    let mut fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    let input_geometry = schema.field(geometry_index);
+    fields[geometry_index] = output_geometry_field(input_geometry, input_geometry.is_nullable());
+    let output_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
     let mut output = Vec::with_capacity(batches.len());
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
@@ -81,7 +92,7 @@ pub fn make_valid_batches(
                 .collect::<BinaryArray>(),
         );
         output.push(plenora_core::batch_with_rows(
-            schema.clone(),
+            output_schema.clone(),
             columns,
             batch.num_rows(),
         )?);
@@ -172,7 +183,7 @@ pub fn polygonize_batches(
     Ok((output_schema, vec![batch]))
 }
 
-/// Il campo geometria dell'uscita di `polygonize` e `split`: quello
+/// Il campo geometria dell'uscita di `make_valid`, `polygonize` e `split`: quello
 /// dell'ingresso, con tutti i suoi metadati (R2.4: CRS, dimensioni,
 /// encoding e lineage passano invariati), senza la dichiarazione dei tipi
 /// geometrici, che l'operazione riscrive (l'analisi la ridichiara nel

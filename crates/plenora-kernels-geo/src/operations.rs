@@ -105,7 +105,14 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, OperationEr
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
-    Ok(geometry.unsigned_area())
+    protetto(|| geometry.unsigned_area())
+}
+
+/// Un calcolo di `geo` dietro la barriera dei panici
+/// ([`crate::calcolo_protetto`]): un panico e' `CalcoloNonConcluso`, con la
+/// sola forma del payload.
+fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, OperationError> {
+    crate::calcolo_protetto(calcolo).map_err(OperationError::CalcoloNonConcluso)
 }
 
 /// Planar geometry length with Shapely-compatible semantics for polygons:
@@ -116,7 +123,7 @@ pub fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC.
 pub fn length(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
-    Ok(length_unchecked(geometry))
+    protetto(|| length_unchecked(geometry))
 }
 
 fn length_unchecked(geometry: &Geometry<f64>) -> f64 {
@@ -168,7 +175,7 @@ pub fn distance(
     if left.coords_count() == 0 || right.coords_count() == 0 {
         return Ok(None);
     }
-    Ok(Some(Euclidean.distance(left, right)))
+    protetto(|| Euclidean.distance(left, right)).map(Some)
 }
 
 /// Bounding box planare come `[min_x, min_y, max_x, max_y]`; `None` per
@@ -343,6 +350,7 @@ pub fn buffer_with_cap(
                 actual,
                 limit,
             },
+            ErroreBuffer::CalcoloNonConcluso(forma) => OperationError::CalcoloNonConcluso(forma),
         },
     )?;
     validate_output(Geometry::MultiPolygon(result))
@@ -421,9 +429,9 @@ pub fn simplify_with_policy(
     };
 
     if policy == SimplifyPolicy::DouglasPeucker {
-        rdp::accerta_distanze(&working, working_tolerance)?;
+        protetto(|| rdp::accerta_distanze(&working, working_tolerance))??;
     }
-    let simplified = match (&working, policy) {
+    let simplified = protetto(|| match (&working, policy) {
         (Geometry::LineString(value), SimplifyPolicy::DouglasPeucker) => {
             Geometry::LineString(value.simplify(working_tolerance))
         }
@@ -449,7 +457,7 @@ pub fn simplify_with_policy(
             Geometry::MultiPolygon(value.simplify_vw_preserve(working_tolerance))
         }
         (value, _) => value.clone(),
-    };
+    })?;
     let simplified = if normalize {
         simplified.map_coords(|coordinate| Coord {
             x: coordinate.x * scale,

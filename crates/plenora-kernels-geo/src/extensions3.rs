@@ -27,7 +27,7 @@ use plenora_core::PlenoraError;
 use rstar::{RTree, RTreeObject, AABB};
 
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
-use crate::extensions::{check_tolerance, invalid_parameter, u64_len, ExtensionError};
+use crate::extensions::{check_tolerance, invalid_parameter, protetto, u64_len, ExtensionError};
 use crate::geometry_type_name as geometry_name;
 use crate::rust_backend::griglia::{self, Operandi, Regola};
 use crate::rust_backend::precision::Precision;
@@ -125,7 +125,8 @@ fn prepare_elements(
         }
         elements.push(element);
     }
-    Ok((elements, RTree::bulk_load(envelopes)))
+    let tree = protetto(|| RTree::bulk_load(envelopes))?;
+    Ok((elements, tree))
 }
 
 /// Coppie candidate `(a, b)` con `a < b` in ordine lessicografico: envelope
@@ -223,9 +224,9 @@ fn coverage_validate_elements(
             .iter()
             .map(|element| element.as_ref().map_or(&vuoto, |e| &e.polygons))
             .collect(),
-    );
+    )?;
     let mut issues = Vec::new();
-    for (a, b) in candidate_pairs(elements, tree) {
+    for (a, b) in protetto(|| candidate_pairs(elements, tree))? {
         let left = &elements[a]
             .as_ref()
             .ok_or(ExtensionError::Internal("coppia indicizzata"))?
@@ -235,7 +236,7 @@ fn coverage_validate_elements(
             .ok_or(ExtensionError::Internal("coppia indicizzata"))?
             .polygons;
         griglia::controlla_overlay(griglia::rettangolo_multipoligoni([left, right]), precision)?;
-        let intersection = left.intersection(right);
+        let intersection = protetto(|| left.intersection(right))?;
         operandi.verifica(
             &intersection,
             |etichetta| etichetta == a || etichetta == b,
@@ -243,7 +244,7 @@ fn coverage_validate_elements(
             Regola::Intersezione,
             precision,
         )?;
-        let area = intersection.unsigned_area();
+        let area = protetto(|| intersection.unsigned_area())?;
         if area > tolerance {
             if u64_len(issues.len())? >= max_issues {
                 return Err(ExtensionError::IssueLimit { limit: max_issues });
@@ -473,7 +474,7 @@ pub fn shared_paths_nullable(
     }
     let (elements, tree) = prepare_elements(geometries)?;
     let mut paths = Vec::new();
-    for (a, b) in candidate_pairs(&elements, &tree) {
+    for (a, b) in protetto(|| candidate_pairs(&elements, &tree))? {
         let left = &elements[a]
             .as_ref()
             .ok_or(ExtensionError::Internal("coppia indicizzata"))?
@@ -482,7 +483,7 @@ pub fn shared_paths_nullable(
             .as_ref()
             .ok_or(ExtensionError::Internal("coppia indicizzata"))?
             .polygons;
-        let segments = shared_boundary_segments(left, right, tolerance);
+        let segments = protetto(|| shared_boundary_segments(left, right, tolerance))?;
         let shared_length: f64 = segments.iter().map(segment_length).sum();
         if shared_length < min_length || shared_length == 0.0 {
             continue;

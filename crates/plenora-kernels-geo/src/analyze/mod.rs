@@ -3095,7 +3095,9 @@ mod tests {
 
         use super::*;
         use crate::arrow_adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY;
-        use crate::rust_backend::arrow::{polygonize_batches, split_batches, PolygonizeParams};
+        use crate::rust_backend::arrow::{
+            make_valid_batches, polygonize_batches, split_batches, PolygonizeParams,
+        };
         use crate::rust_backend::precision::Precision;
 
         type Firma = (String, DataType, bool, BTreeMap<String, String>);
@@ -3373,6 +3375,41 @@ mod tests {
                 .filter(|riga| !celle.is_null(*riga))
                 .map(|riga| crate::geometry_from_wkb(celle.value(riga)).unwrap())
                 .collect()
+        }
+
+        /// `make_valid` riscrive i tipi (`mixed`): il campo dell'uscita non
+        /// porta piu' la dichiarazione dell'ingresso, il resto invariato.
+        #[test]
+        fn make_valid_come_l_analisi() {
+            let contract = ingresso(&[GeometryType::Polygon], true);
+            let analizzato = analyze_one(
+                "geo.make_valid",
+                std::slice::from_ref(&contract),
+                &json!({}),
+                None,
+            )
+            .expect("analisi");
+            let farfalla = Geometry::Polygon(Polygon::new(
+                anello(&[(0.0, 0.0), (4.0, 4.0), (4.0, 0.0), (0.0, 4.0), (0.0, 0.0)]),
+                vec![],
+            ));
+            let input = batch(
+                &contract.schema,
+                &[
+                    Some(wkb(&Geometry::Polygon(quadrato(0.0, 0.0, 4.0)))),
+                    None,
+                    Some(wkb(&farfalla)),
+                ],
+            );
+            let batches = make_valid_batches(
+                &contract.schema,
+                &[input],
+                DEFAULT_GEOMETRY_COLUMN,
+                centimetro(),
+            )
+            .expect("kernel");
+            let schema = batches[0].schema();
+            confronta("geo.make_valid", &analizzato, &schema, &batches[0]);
         }
 
         #[test]

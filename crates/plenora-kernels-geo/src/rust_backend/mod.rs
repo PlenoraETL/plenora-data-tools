@@ -158,8 +158,8 @@
 pub mod arrow;
 pub(crate) mod buffer;
 pub mod exact;
-pub mod make_valid;
 pub(crate) mod griglia;
+pub mod make_valid;
 pub mod polygonize;
 pub mod precision;
 pub mod split;

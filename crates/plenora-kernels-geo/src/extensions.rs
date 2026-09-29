@@ -70,6 +70,30 @@ pub enum ExtensionError {
     /// `geo.coverage_validate`). Nessun dato nel messaggio.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
+    /// Un calcolo di `geo`, `i_overlay` o `rstar` e' andato in panico dentro
+    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// del payload, mai il contenuto. Interno.
+    #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
+}
+
+impl From<crate::rust_backend::griglia::ErroreVerifica> for ExtensionError {
+    fn from(errore: crate::rust_backend::griglia::ErroreVerifica) -> Self {
+        match errore {
+            crate::rust_backend::griglia::ErroreVerifica::PrecisioneInsufficiente => {
+                Self::PrecisionInsufficient
+            }
+            crate::rust_backend::griglia::ErroreVerifica::CalcoloNonConcluso(forma) => {
+                Self::CalcoloNonConcluso(forma)
+            }
+        }
+    }
+}
+
+/// Un calcolo di `geo` (o `rstar`) dietro la barriera dei panici: un panico
+/// e' [`ExtensionError::CalcoloNonConcluso`], interno.
+pub(crate) fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, ExtensionError> {
+    crate::calcolo_protetto(calcolo).map_err(ExtensionError::CalcoloNonConcluso)
 }
 
 impl From<crate::rust_backend::griglia::PrecisioneInsufficiente> for ExtensionError {
@@ -83,7 +107,10 @@ impl ExtensionError {
     /// validazione che non ha concluso. Il resto e' `InvalidPlan`.
     #[must_use]
     pub const fn e_interna(&self) -> bool {
-        matches!(self, Self::Internal(_) | Self::ValidazioneNonConclusa(_))
+        matches!(
+            self,
+            Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_)
+        )
     }
 
     /// L'errore nella categoria giusta, con il prefisso dell'operazione:

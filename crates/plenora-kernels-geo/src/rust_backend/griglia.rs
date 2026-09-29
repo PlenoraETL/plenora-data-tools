@@ -76,6 +76,22 @@ use super::precision::{coordinate_abbastanza_fitte, modulo_massimo, Precision};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PrecisioneInsufficiente;
 
+/// L'esito negativo di un controllo a posteriori: la precisione non e'
+/// rispettata, oppure il controllo stesso (`geo`, `rstar`) e' andato in
+/// panico dentro [`crate::calcolo_protetto`] (la forma del payload, mai il
+/// contenuto).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ErroreVerifica {
+    PrecisioneInsufficiente,
+    CalcoloNonConcluso(&'static str),
+}
+
+impl From<PrecisioneInsufficiente> for ErroreVerifica {
+    fn from(_: PrecisioneInsufficiente) -> Self {
+        Self::PrecisioneInsufficiente
+    }
+}
+
 /// Esponente di `i_float`: la scala e' `2^(29 - round(log2(h)))`.
 const ESPONENTE_GRIGLIA: i32 = 29;
 
@@ -376,9 +392,19 @@ pub struct Operandi<'a> {
 }
 
 impl<'a> Operandi<'a> {
-    /// Gli operandi, etichettati con la loro posizione.
-    #[must_use]
-    pub fn nuovi(poligoni: Vec<&'a MultiPolygon<f64>>) -> Self {
+    /// Gli operandi, etichettati con la loro posizione; gli indici sono
+    /// costruiti dietro la barriera dei panici.
+    ///
+    /// # Errors
+    ///
+    /// [`ErroreVerifica::CalcoloNonConcluso`] se la costruzione va in
+    /// panico.
+    pub fn nuovi(poligoni: Vec<&'a MultiPolygon<f64>>) -> Result<Self, ErroreVerifica> {
+        crate::calcolo_protetto(|| Self::costruisci(poligoni))
+            .map_err(ErroreVerifica::CalcoloNonConcluso)
+    }
+
+    fn costruisci(poligoni: Vec<&'a MultiPolygon<f64>>) -> Self {
         let bordi = IndiceLinework::da_multipoligoni(poligoni.iter().copied().enumerate());
         let ingombri = RTree::bulk_load(
             poligoni
@@ -522,11 +548,12 @@ impl<'a> Operandi<'a> {
         true
     }
 
-    /// I due controlli insieme.
+    /// I due controlli insieme, dietro la barriera dei panici.
     ///
     /// # Errors
     ///
-    /// [`PrecisioneInsufficiente`] se uno dei due fallisce.
+    /// [`ErroreVerifica::PrecisioneInsufficiente`] se uno dei due fallisce;
+    /// [`ErroreVerifica::CalcoloNonConcluso`] se un controllo va in panico.
     pub fn verifica(
         &self,
         output: &MultiPolygon<f64>,
@@ -534,13 +561,16 @@ impl<'a> Operandi<'a> {
         regione: Option<Rect<f64>>,
         regola: Regola,
         precision: Precision,
-    ) -> Result<(), PrecisioneInsufficiente> {
-        if self.bordo_entro(output, &rilevante, precision)
-            && self.completo(output, &rilevante, regione, regola, precision)
-        {
+    ) -> Result<(), ErroreVerifica> {
+        let esito = crate::calcolo_protetto(|| {
+            self.bordo_entro(output, &rilevante, precision)
+                && self.completo(output, &rilevante, regione, regola, precision)
+        })
+        .map_err(ErroreVerifica::CalcoloNonConcluso)?;
+        if esito {
             Ok(())
         } else {
-            Err(PrecisioneInsufficiente)
+            Err(ErroreVerifica::PrecisioneInsufficiente)
         }
     }
 }
@@ -929,7 +959,7 @@ mod tests {
         let dentro = MultiPolygon::new(vec![polygon![
             (x: 10.0, y: 10.0), (x: 20.0, y: 10.0), (x: 20.0, y: 20.0), (x: 10.0, y: 20.0)
         ]]);
-        let operandi = Operandi::nuovi(vec![&grande, &staccato, &dentro]);
+        let operandi = Operandi::nuovi(vec![&grande, &staccato, &dentro]).unwrap();
         // Unione esatta: il grande e lo staccato; il bordo del terzo e'
         // dentro il primo.
         let esatta = MultiPolygon::new(vec![grande.0[0].clone(), staccato.0[0].clone()]);

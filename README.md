@@ -55,9 +55,10 @@ esplicito, mai silenzioso. Le funzioni dei kernel chiamate senza CRS
 ricevono la precisione come argomento esplicito, senza valore predefinito.
 
 **La garanzia vale per ingressi le cui parti distinte distano almeno la
-precisione.** Coordinate che differiscono solo nelle ultime cifre, parti o
-distanze fra parti sotto 1 cm sono fuori ambito: lì fusioni e scomparse
-sono accettate, e nessun controllo le cerca.
+precisione** (sotto, «Feature d'ingresso più vicine della precisione»):
+coordinate che differiscono solo nelle ultime cifre, parti o distanze fra
+parti sotto 1 cm sono fuori ambito, fusioni e scomparse lì sono accettate e
+nessun controllo le cerca.
 
 Il solo rifiuto legato alla precisione è lo **spostamento che il calcolo
 introduce**, confrontato con la precisione: `PrecisionInsufficient`
@@ -66,14 +67,14 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
 `ExtensionError::del_passo`). Lo misurano:
 
 - **spaziatura delle coordinate** (all'ingresso di `polygonize`, quindi
-  anche di `split` poligonale, prima dello split lineare e prima di ogni
-  overlay di `i_overlay`): se l'unità in ultima posizione del modulo
+  anche di `split` poligonale e dei passi di `make_valid` che lo usano,
+  prima dello split lineare e prima di ogni overlay di `i_overlay`): se l'unità in ultima posizione del modulo
   massimo delle coordinate supera `p / 64` nessun punto calcolato potrebbe
   restare entro la precisione (a `2^52` un incrocio esatto `(B + 1.5, B +
   1.5)` torna a 70,7 cm da uno dei segmenti), e il kernel non calcola. In
   metri con 1 cm il limite è un modulo di circa `2^39` m, fuori da ogni
   dominio di un CRS reale;
-- **noding di `polygonize`** (anche dentro `split`): il punto d'incrocio
+- **noding di `polygonize`** (anche dentro `make_valid` e `split`): il punto d'incrocio
   calcolato in doppia-doppia e arrotondato in `f64` deve stare entro un
   quinto della precisione da entrambi i segmenti che divide (il noding si
   ripete al più cinque volte, e gli spostamenti si sommano). Oltre, il
@@ -107,6 +108,19 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
     simmetrica, intersezione con un'unione) dice se sta sul bordo del
     risultato esatto, e allora deve stare entro `p / 2` dal bordo del
     risultato. Una faccia omessa o cancellata più larga di `p` è un errore.
+
+**`make_valid` `STRUCTURE`** ha i propri overlay (`LINEWORK` non ne usa):
+gli operandi sono normalizzati per asse su `[0, 1]^2`, dove il passo della
+griglia è esattamente `2^-30` (in coordinate originali `span * 2^-30` per
+asse, di diagonale `d`); il bilancio di un vertice è l'arrotondamento (al
+più `d / 2`) più l'aggancio al vertice d'ingresso vicino entro `d`, o al
+lato assiale che gli passa accanto (al più `sqrt(2) * d`): se `2 * d`
+supera la precisione l'overlay non si esegue (oltre circa 5.400 km di
+estensione su un solo asse, 3.800 km su entrambi, in metri). Dopo ogni
+overlay ogni **vertice** dell'output deve stare entro la precisione da un
+lato d'ingresso (`checked_displacement`): un controllo più debole dei due
+sopra (nessun controllo dei lati né dei bordi mancanti), da unificare con
+`griglia::Operandi` (condizione di rientro).
 
 **Buffer.** Il `Buffer` di `geo` non si usa più: approssimava gli archi con
 un passo fisso di 0,2 rad (il cerchio di 10 m di un punto, 32 lati, aveva
@@ -239,9 +253,10 @@ vertice d'ingresso non sono riconosciuti.
   nulla, non taglia.
 
 **Condizione di rientro.** Nessuna per la precisione, che è una scelta di
-prodotto. Da unificare con il `checked_displacement` di `geo.make_valid`
-(sul suo branch di lavoro: vertici entro `p`), che qui diventa i due
-controlli contro gli ingressi originali.
+prodotto. Per `make_valid` `STRUCTURE`, portare i suoi overlay sui due
+controlli contro gli ingressi originali (`griglia::Operandi`) al posto del
+controllo dei soli vertici (`checked_displacement`), che non vede un lato
+che non segue il linework né una faccia omessa.
 
 ### Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
 
@@ -576,7 +591,8 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   (`make_valid_geometry_rust*`, `split_polygon_by_linework_rust*`, e
   `PolygonizeOptions::precision`) la prendono in unità delle coordinate.
 - **Campo geometria dell'uscita.** `polygonize_batches` e `split_batches`
-  non prendono più `output_crs`: il campo geometria dell'uscita è quello
+  non prendono più `output_crs`, e `make_valid_batches` non ripete più lo
+  schema d'ingresso tale e quale: il campo geometria dell'uscita è quello
   dell'ingresso con tutti i suoi metadati (CRS, dimensioni, encoding,
   lineage, R2.4), senza la dichiarazione dei tipi che l'operazione
   riscrive, e con la nullability del contratto. È lo schema che l'analisi

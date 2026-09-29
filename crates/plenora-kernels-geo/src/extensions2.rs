@@ -26,7 +26,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
 use crate::extensions::{
-    check_tolerance, ensure_valid, invalid_parameter, u64_len, validate_output, ExtensionError,
+    check_tolerance, ensure_valid, invalid_parameter, protetto, u64_len, validate_output,
+    ExtensionError,
 };
 use crate::rust_backend::griglia::{self, IndiceLinework, Operandi, Regola};
 use crate::rust_backend::precision::Precision;
@@ -444,7 +445,9 @@ fn subdivide_polygon_root(
     precision: Precision,
     parts: &mut Vec<Geometry<f64>>,
 ) -> Result<(), ExtensionError> {
-    let bordi = IndiceLinework::da_multipoligoni([(0, &MultiPolygon::new(vec![polygon.clone()]))]);
+    let bordi = protetto(|| {
+        IndiceLinework::da_multipoligoni([(0, &MultiPolygon::new(vec![polygon.clone()]))])
+    })?;
     let mut taglio = Taglio {
         bordi: &bordi,
         linee: Vec::new(),
@@ -475,12 +478,14 @@ fn subdivide_polygon(
 ) -> Result<(), ExtensionError> {
     if polygon.coords_count() <= max_vertices {
         if depth > 0
-            && !taglio.bordi.bordo_entro(
-                &MultiPolygon::new(vec![polygon.clone()]),
-                &taglio.linee,
-                |_| true,
-                taglio.precision,
-            )
+            && !protetto(|| {
+                taglio.bordi.bordo_entro(
+                    &MultiPolygon::new(vec![polygon.clone()]),
+                    &taglio.linee,
+                    |_| true,
+                    taglio.precision,
+                )
+            })?
         {
             return Err(ExtensionError::PrecisionInsufficient);
         }
@@ -521,23 +526,26 @@ fn subdivide_polygon(
     let pezzo = MultiPolygon::new(vec![polygon.clone()]);
     for half in halves {
         let meta = MultiPolygon::new(vec![half.to_polygon()]);
-        let intersection = pezzo.intersection(&meta);
+        let intersection = protetto(|| pezzo.intersection(&meta))?;
         // Nessuna parte mancante rispetto agli operandi di questo taglio: lo
         // spostamento accumulato dai livelli (passo che si dimezza con il
         // pezzo) resta sotto la precisione, e i lati delle foglie sono
         // controllati contro il poligono di partenza.
-        if !Operandi::nuovi(vec![&pezzo, &meta]).completo(
-            &intersection,
-            |_| true,
-            None,
-            Regola::Intersezione,
-            taglio.precision,
-        ) {
+        let operandi = Operandi::nuovi(vec![&pezzo, &meta])?;
+        if !protetto(|| {
+            operandi.completo(
+                &intersection,
+                |_| true,
+                None,
+                Regola::Intersezione,
+                taglio.precision,
+            )
+        })? {
             return Err(ExtensionError::PrecisionInsufficient);
         }
         for part in intersection.0 {
             // Scarti di area nulla lungo la linea di taglio.
-            if part.coords_count() == 0 || part.unsigned_area() == 0.0 {
+            if part.coords_count() == 0 || protetto(|| part.unsigned_area())? == 0.0 {
                 continue;
             }
             subdivide_polygon(&part, max_vertices, depth + 1, taglio, parts)?;
@@ -682,14 +690,16 @@ fn snap_with_tree(
         Geometry::Triangle(triangle) => Geometry::Polygon(triangle.to_polygon()),
         other => other.clone(),
     };
-    let snapped = working.map_coords(|coordinate| {
-        match tree.nearest_neighbor(&[coordinate.x, coordinate.y]) {
-            Some(&[x, y]) if (coordinate.x - x).hypot(coordinate.y - y) <= tolerance => {
-                Coord { x, y }
+    let snapped = protetto(|| {
+        working.map_coords(|coordinate| {
+            match tree.nearest_neighbor(&[coordinate.x, coordinate.y]) {
+                Some(&[x, y]) if (coordinate.x - x).hypot(coordinate.y - y) <= tolerance => {
+                    Coord { x, y }
+                }
+                _ => coordinate,
             }
-            _ => coordinate,
-        }
-    });
+        })
+    })?;
     validate_output(snapped)
 }
 
@@ -705,7 +715,7 @@ fn snap_validated(
     if reference_vertices.is_empty() {
         return Ok(geometry.clone());
     }
-    let tree = RTree::bulk_load(reference_vertices);
+    let tree = protetto(|| RTree::bulk_load(reference_vertices))?;
     snap_with_tree(geometry, &tree, tolerance)
 }
 
@@ -773,7 +783,8 @@ pub fn snap_column(
             encode_geometry(&geometry).map(Some)
         });
     }
-    let tree = RTree::bulk_load(reference_vertices);
+    let tree =
+        protetto(|| RTree::bulk_load(reference_vertices)).map_err(|error| snap_error(&error))?;
     map_nullable(cells, |payload| {
         let geometry = decode_geometry_cell(payload)?;
         let snapped =

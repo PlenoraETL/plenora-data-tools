@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::rust_backend::buffer::{buffer_con_freccia, ErroreBuffer, Estremita};
-use crate::rust_backend::griglia::{self, Operandi, PrecisioneInsufficiente, Regola};
+use crate::rust_backend::griglia::{
+    self, ErroreVerifica, Operandi, PrecisioneInsufficiente, Regola,
+};
 use crate::rust_backend::precision::Precision;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -72,10 +74,12 @@ pub enum TopologyError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
-    /// Il join spaziale che accoppia i candidati non ha concluso: un
-    /// predicato esatto interrotto o un'invariante interna. Non accusa
-    /// l'ingresso, e porta la *forma* del payload, mai il contenuto.
-    #[error("join spaziale non concluso: {0} (contenuto non pubblicato)")]
+    /// Un calcolo non ha concluso: il join spaziale che accoppia i
+    /// candidati (un predicato esatto interrotto o un'invariante interna), o
+    /// un calcolo di `geo`/`i_overlay` andato in panico dentro
+    /// [`crate::calcolo_protetto`]. Non accusa l'ingresso, e porta la
+    /// *forma* del payload, mai il contenuto.
+    #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
     /// Lo spostamento che la griglia di `i_overlay` introdurrebbe, o ha
     /// introdotto, supera la precisione dichiarata: coordinate troppo rade,
@@ -90,6 +94,20 @@ impl From<PrecisioneInsufficiente> for TopologyError {
     fn from(_: PrecisioneInsufficiente) -> Self {
         Self::PrecisionInsufficient
     }
+}
+
+impl From<ErroreVerifica> for TopologyError {
+    fn from(errore: ErroreVerifica) -> Self {
+        match errore {
+            ErroreVerifica::PrecisioneInsufficiente => Self::PrecisionInsufficient,
+            ErroreVerifica::CalcoloNonConcluso(forma) => Self::CalcoloNonConcluso(forma),
+        }
+    }
+}
+
+/// Un calcolo di `geo` dietro la barriera dei panici.
+fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, TopologyError> {
+    crate::calcolo_protetto(calcolo).map_err(TopologyError::CalcoloNonConcluso)
 }
 
 /// Il fallimento del join spaziale nella lingua di questo modulo, senza
@@ -211,7 +229,7 @@ fn boolean_operation_impl(
         BooleanOperation::Difference => Regola::Differenza(0),
         BooleanOperation::SymmetricDifference => Regola::DifferenzaSimmetrica,
     };
-    let operandi = Operandi::nuovi(vec![&left, &right]);
+    let operandi = Operandi::nuovi(vec![&left, &right])?;
     checked(result, &operandi, |_| true, None, atteso, precision)
 }
 
@@ -234,7 +252,7 @@ fn boolean_raw(
     precision: Precision,
 ) -> Result<MultiPolygon<f64>, TopologyError> {
     griglia::controlla_overlay(griglia::rettangolo_multipoligoni([left, right]), precision)?;
-    Ok(match operation {
+    protetto(|| match operation {
         BooleanOperation::Intersection => left.intersection(right),
         BooleanOperation::Union => left.union(right),
         BooleanOperation::Difference => left.difference(right),
@@ -298,7 +316,7 @@ fn dissolve_impl(
         .map(|geometry| coerce(geometry, validated))
         .collect::<Result<_, _>>()?;
     let result = dissolve_raw(&polygons, precision)?;
-    let operandi = Operandi::nuovi(polygons.iter().collect());
+    let operandi = Operandi::nuovi(polygons.iter().collect())?;
     checked(result, &operandi, |_| true, None, Regola::Unione, precision)
 }
 
@@ -314,11 +332,13 @@ fn dissolve_raw(
     precision: Precision,
 ) -> Result<MultiPolygon<f64>, TopologyError> {
     griglia::controlla_overlay(griglia::rettangolo_multipoligoni(polygons), precision)?;
-    let oriented: Vec<MultiPolygon<f64>> = polygons
-        .iter()
-        .map(|polygon| polygon.orient(Direction::Default))
-        .collect();
-    Ok(unary_union(&oriented))
+    protetto(|| {
+        let oriented: Vec<MultiPolygon<f64>> = polygons
+            .iter()
+            .map(|polygon| polygon.orient(Direction::Default))
+            .collect();
+        unary_union(&oriented)
+    })
 }
 
 fn is_empty(geometry: &Geometry<f64>) -> bool {
@@ -383,7 +403,7 @@ fn clip_to_mask_impl(
     let mask = dissolve_raw(&masks, precision)?;
     checked_result(mask.clone())?;
     let m = masks.len();
-    let operandi = Operandi::nuovi(masks.iter().chain(&rows).collect());
+    let operandi = Operandi::nuovi(masks.iter().chain(&rows).collect())?;
     rows.iter()
         .enumerate()
         .map(|(row, polygons)| {
@@ -555,7 +575,7 @@ fn polygon_overlay_impl(
         .collect::<Result<_, _>>()?;
     let pairs = candidate_pairs(left, right, max_candidate_pairs, validated)?;
     let left_count = left.len();
-    let operandi = Operandi::nuovi(left_polygons.iter().chain(&right_polygons).collect());
+    let operandi = Operandi::nuovi(left_polygons.iter().chain(&right_polygons).collect())?;
     let mut pieces = Vec::new();
 
     if matches!(
@@ -732,6 +752,7 @@ fn checked_buffer(
                 actual,
                 limit,
             },
+            ErroreBuffer::CalcoloNonConcluso(forma) => TopologyError::CalcoloNonConcluso(forma),
         }
     })
 }
@@ -839,7 +860,7 @@ fn clean_valid_polygon_topology_impl(
                     .map_or_else(|| Ok(MultiPolygon::new(Vec::new())), |g| coerce(g, true))
             })
             .collect::<Result<_, _>>()?;
-        let operandi = Operandi::nuovi(rows.iter().collect());
+        let operandi = Operandi::nuovi(rows.iter().collect())?;
         for (row, geometry) in working.iter_mut().enumerate() {
             if geometry.is_none() {
                 continue;

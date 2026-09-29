@@ -42,7 +42,7 @@ use geo::algorithm::bool_ops::unary_union;
 use geo::orient::{Direction, Orient};
 use geo::{BooleanOps, BoundingRect, Coord, Geometry, LineString, MultiPolygon, Polygon};
 
-use super::griglia::{self, Operandi, PrecisioneInsufficiente, Regola};
+use super::griglia::{self, ErroreVerifica, Operandi, PrecisioneInsufficiente, Regola};
 use super::precision::Precision;
 
 /// Le estremita' delle linee nel buffer.
@@ -61,12 +61,29 @@ pub enum ErroreBuffer {
     PrecisioneInsufficiente,
     /// I pezzi supererebbero [`MAX_VERTICI_BUFFER`] vertici.
     TroppiVertici { actual: u64, limit: u64 },
+    /// Un calcolo di `geo` o `i_overlay` e' andato in panico dentro
+    /// [`crate::calcolo_protetto`]: la forma del payload, mai il contenuto.
+    CalcoloNonConcluso(&'static str),
 }
 
 impl From<PrecisioneInsufficiente> for ErroreBuffer {
     fn from(_: PrecisioneInsufficiente) -> Self {
         Self::PrecisioneInsufficiente
     }
+}
+
+impl From<ErroreVerifica> for ErroreBuffer {
+    fn from(errore: ErroreVerifica) -> Self {
+        match errore {
+            ErroreVerifica::PrecisioneInsufficiente => Self::PrecisioneInsufficiente,
+            ErroreVerifica::CalcoloNonConcluso(forma) => Self::CalcoloNonConcluso(forma),
+        }
+    }
+}
+
+/// Un calcolo di `geo` dietro la barriera dei panici.
+fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, ErroreBuffer> {
+    crate::calcolo_protetto(calcolo).map_err(ErroreBuffer::CalcoloNonConcluso)
 }
 
 /// Lati massimi di un cerchio: oltre, la precisione non e' raggiungibile
@@ -539,8 +556,8 @@ fn unione(
         return Ok(MultiPolygon::new(Vec::new()));
     }
     griglia::controlla_overlay(griglia::rettangolo_multipoligoni(operandi), precision)?;
-    let risultato = unary_union(operandi);
-    let controllo = Operandi::nuovi(operandi.iter().collect());
+    let risultato = protetto(|| unary_union(operandi))?;
+    let controllo = Operandi::nuovi(operandi.iter().collect())?;
     controllo.verifica(&risultato, |_| true, None, Regola::Unione, precision)?;
     Ok(risultato)
 }
@@ -554,15 +571,17 @@ fn erosione(
     precision: Precision,
 ) -> Result<MultiPolygon<f64>, ErroreBuffer> {
     let mut pezzi = Pezzi::nuovi(raggio, freccia)?;
-    for polygon in parte {
-        pezzi.anelli(polygon, Lato::Sinistra)?;
-    }
+    protetto(|| -> Result<(), ErroreBuffer> {
+        for polygon in parte {
+            pezzi.anelli(polygon, Lato::Sinistra)?;
+        }
+        Ok(())
+    })??;
     let mut operandi = vec![parte.clone()];
     operandi.append(&mut pezzi.prodotti);
     griglia::controlla_overlay(griglia::rettangolo_multipoligoni(&operandi), precision)?;
-    let fascia = unary_union(&operandi[1..]);
-    let risultato = parte.difference(&fascia);
-    let controllo = Operandi::nuovi(operandi.iter().collect());
+    let risultato = protetto(|| parte.difference(&unary_union(&operandi[1..])))?;
+    let controllo = Operandi::nuovi(operandi.iter().collect())?;
     controllo.verifica(
         &risultato,
         |_| true,
@@ -617,12 +636,12 @@ pub fn buffer_con_freccia(
     if distance > 0.0 {
         let mut pezzi = Pezzi::nuovi(distance, freccia)?;
         let mut operandi = Vec::new();
-        pezzi.geometria(geometry, estremita, &mut operandi)?;
+        protetto(|| pezzi.geometria(geometry, estremita, &mut operandi))??;
         operandi.append(&mut pezzi.prodotti);
         return unione(&operandi, precision);
     }
     let mut parti = Vec::new();
-    areali(geometry, &mut parti);
+    protetto(|| areali(geometry, &mut parti))?;
     if distance == 0.0 {
         return unione(&parti, precision);
     }
@@ -640,7 +659,7 @@ pub fn buffer_con_freccia(
     for parte in &parti {
         let risultato = erosione(parte, -distance, freccia, passo)?;
         if !risultato.0.is_empty() {
-            erose.push(risultato.orient(Direction::Default));
+            erose.push(protetto(|| risultato.orient(Direction::Default))?);
         }
     }
     match erose.len() {
