@@ -11,8 +11,9 @@ use serde_json::Value;
 
 use super::config::{GeometryAccessorsConfig, LineLocatePointConfig, OutputColumnConfig};
 use super::helpers::{
-    ensure_name, ensure_name_free, invalid_param, output_fields, output_name,
-    parametro_non_decodificabile, parse_config, rebuild, short_id, validate_wkb_hex,
+    ensure_name, ensure_name_free, input_crs, invalid_param, output_fields, output_name,
+    parametro_non_decodificabile, parse_config, rebuild, short_id, validate_config_geometry_domain,
+    validate_wkb_hex,
 };
 use super::producers::analyze_add_column;
 use super::{ACCESSOR_COLUMNS, DIAGNOSTIC_COLUMNS, FRACTION_COLUMN};
@@ -131,6 +132,7 @@ pub(in crate::analyze) fn analyze_line_locate_point(
     if !matches!(point, geo::Geometry::Point(_)) {
         return Err(invalid_param(op, "point_wkb", "deve essere un Point"));
     }
+    validate_config_geometry_domain(op, "point_wkb", &point, input_crs(op, input)?)?;
     let name = output_name(op, parsed.output_column.as_deref(), FRACTION_COLUMN)?;
     analyze_add_column(op, input, name, DataType::Float64)
 }

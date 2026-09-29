@@ -166,7 +166,8 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
     Ok(())
 }
 
-/// Predicati e distanze "unari" con secondo operando da config (`other_wkb`).
+/// Predicati e distanze "unari" con secondo operando da config (`other_wkb`),
+/// che deve stare nel dominio di validita' del CRS dell'input.
 pub(in crate::analyze) fn analyze_unary_pair(
     op: &str,
     input: &DataContract,
@@ -175,6 +176,7 @@ pub(in crate::analyze) fn analyze_unary_pair(
 ) -> Result<DataContract> {
     let parsed: OtherWkbConfig = parse_config(op, config)?;
     validate_other_wkb(op, &parsed.other_wkb)?;
+    super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
     let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
     analyze_add_column(op, input, name, data_type)
 }

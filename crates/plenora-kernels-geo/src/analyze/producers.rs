@@ -22,9 +22,9 @@ use super::config::{
     CollectConfig, FromCoordsConfig, FromWktConfig, GenerateGridConfig, SnapConfig, SubdivideConfig,
 };
 use super::helpers::{
-    ensure_name, ensure_name_free, ensure_non_negative, geometry_field, invalid_param,
+    ensure_name, ensure_name_free, ensure_non_negative, geometry_field, input_crs, invalid_param,
     new_geometry_field, output_fields, parametro_non_decodificabile, parse_config, rebuild,
-    resolve_definition, validate_wkb_hex,
+    resolve_definition, validate_config_geometry_domain, validate_wkb_hex,
 };
 use super::{
     CELL_I_COLUMN, CELL_J_COLUMN, CENTROID_X_COLUMN, CENTROID_Y_COLUMN, DEFAULT_X_COLUMN,
@@ -356,6 +356,19 @@ pub(in crate::analyze) fn analyze_generate_grid(
     let cells = crate::extensions2::grid_cell_count(&extent, parsed.cell_size, shape)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     let crs = producer_crs(op, parsed.crs.as_deref(), plan_crs, requirement)?;
+    // La griglia copre il rettangolo `extent`: i quattro vertici dentro il
+    // dominio di validita' (un rettangolo o il mondo lon/lat) bastano.
+    plenora_core::crs::validate_geometry_domain(
+        [
+            (parsed.extent.xmin, parsed.extent.ymin),
+            (parsed.extent.xmax, parsed.extent.ymin),
+            (parsed.extent.xmax, parsed.extent.ymax),
+            (parsed.extent.xmin, parsed.extent.ymax),
+        ]
+        .into_iter(),
+        &crs,
+    )
+    .map_err(|error| PlenoraError::Crs(format!("{op}: parametro `extent`: {error}")))?;
     let mut fields = vec![new_geometry_field(
         DEFAULT_GEOMETRY_COLUMN,
         &crs,
@@ -459,8 +472,9 @@ pub(in crate::analyze) fn analyze_subdivide(
     )
 }
 
-/// `snap`: 1:1 in place; `reference_wkb` validato strutturalmente e
-/// decodificato in analisi, `tolerance` finita e non negativa.
+/// `snap`: 1:1 in place; `reference_wkb` validato strutturalmente,
+/// decodificato in analisi e nel dominio di validita' del CRS dell'input,
+/// `tolerance` finita e non negativa.
 pub(in crate::analyze) fn analyze_snap(
     op: &str,
     input: &DataContract,
@@ -468,9 +482,10 @@ pub(in crate::analyze) fn analyze_snap(
 ) -> Result<DataContract> {
     let parsed: SnapConfig = parse_config(op, config)?;
     let bytes = validate_wkb_hex(op, "reference_wkb", &parsed.reference_wkb)?;
-    crate::geometry_from_wkb(&bytes).map_err(|error| {
+    let reference = crate::geometry_from_wkb(&bytes).map_err(|error| {
         parametro_non_decodificabile(op, "reference_wkb", "WKB non decodificabile", &error)
     })?;
+    validate_config_geometry_domain(op, "reference_wkb", &reference, input_crs(op, input)?)?;
     ensure_non_negative(op, "tolerance", parsed.tolerance)?;
     Ok(input.clone())
 }

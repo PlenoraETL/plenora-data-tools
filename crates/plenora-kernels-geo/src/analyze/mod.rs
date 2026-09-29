@@ -28,13 +28,16 @@
 //! Il catalogo marca `Unary` predicati, distanze a due colonne e `split`, ma
 //! un input ha una sola colonna geometria (D16): il secondo operando arriva
 //! dalla config come WKB hex (`other_wkb`), validato in analisi, con CRS
-//! assunto uguale a quello dell'input.
+//! assunto uguale a quello dell'input e coordinate nel suo dominio di
+//! validita' (come `point_wkb`, `reference_wkb` e l'`extent` di
+//! `generate_grid`).
 //!
 //! # CRS, dimensionalita', encoding
 //!
 //! Una definizione in config testualmente uguale al CRS di piano lo riusa
-//! senza backend; altrimenti `resolve_crs`, che senza backend PROJ fallisce
-//! chiuso (`CRS_BACKEND_UNAVAILABLE`). Ogni kernel che consuma una geometria
+//! senza backend; altrimenti `resolve_crs`, che risolve solo la tabella dei
+//! CRS integrati e fallisce chiuso sul resto (`CRS_NOT_BUILTIN`,
+//! `CRS_BACKEND_UNAVAILABLE`). Ogni kernel che consuma una geometria
 //! la decodifica in XY, quindi un input con `dimensions != Xy` si rifiuta a
 //! compile-plan (R3.4); produttori e output ricodificati dichiarano `Xy`, e
 //! le dimensionalita' estese passano solo per le op tabellari.

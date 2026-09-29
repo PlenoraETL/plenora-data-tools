@@ -162,6 +162,46 @@ pub(in crate::analyze) fn validate_other_wkb(op: &str, hex: &str) -> Result<()> 
     validate_wkb_hex(op, "other_wkb", hex).map(|_| ())
 }
 
+/// Dominio di validita' del CRS dell'input sulle coordinate del secondo
+/// operando `other_wkb` (convenzione D16: stesso CRS dell'input).
+///
+/// Rifa' la validazione strutturale di [`validate_other_wkb`] per avere i
+/// byte: il costo e' per piano, non per riga.
+pub(in crate::analyze) fn validate_other_wkb_domain(
+    op: &str,
+    hex: &str,
+    input: &DataContract,
+) -> Result<()> {
+    let crs = input_crs(op, input)?;
+    let bytes = validate_wkb_hex(op, "other_wkb", hex)?;
+    let geometry = crate::wkb_decoder::decode_validated(&bytes).map_err(|error| {
+        parametro_non_decodificabile(op, "other_wkb", "WKB non decodificabile", &error)
+    })?;
+    validate_config_geometry_domain(op, "other_wkb", &geometry, crs)
+}
+
+/// Il CRS risolto della colonna geometria dell'input, per le geometrie che
+/// arrivano dalla config con lo stesso CRS (D16).
+pub(in crate::analyze) fn input_crs<'a>(
+    op: &str,
+    input: &'a DataContract,
+) -> Result<&'a ResolvedCrs> {
+    super::dispatch::require_resolved_crs(op, single_geometry(op, input)?)
+}
+
+/// Dominio di validita' del CRS sulle coordinate di una geometria da config.
+///
+/// L'errore nomina operazione e parametro, mai la coordinata.
+pub(in crate::analyze) fn validate_config_geometry_domain(
+    op: &str,
+    name: &'static str,
+    geometry: &geo::Geometry<f64>,
+    crs: &ResolvedCrs,
+) -> Result<()> {
+    crate::crs::validate_geometry_domain(geometry, crs)
+        .map_err(|error| PlenoraError::Crs(format!("{op}: parametro `{name}`: {error}")))
+}
+
 // ---------------------------------------------------------------------------
 // Helper su contratti e schemi.
 // ---------------------------------------------------------------------------
@@ -405,7 +445,8 @@ pub(in crate::analyze) fn require_xy_dimensions(
 }
 
 /// Risoluzione CRS in analisi: riuso del CRS di piano se la definizione
-/// coincide, altrimenti backend (fail-closed: non c'e' backend PROJ).
+/// coincide, altrimenti la tabella dei CRS integrati (fail-closed su tutto
+/// il resto: non c'e' backend PROJ).
 pub(in crate::analyze) fn resolve_definition(
     definition: &str,
     plan_crs: Option<&ResolvedCrs>,
