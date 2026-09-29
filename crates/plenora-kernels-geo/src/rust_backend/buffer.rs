@@ -10,9 +10,8 @@
 //! unita' angolari intere (`2^32` per giro, al piu' vicino) e costruisce
 //! ogni arco (giunzioni ed estremita') con rotazioni intere
 //! (`mesh/int/arc`): **ogni intervallo angolare fra due direzioni
-//! consecutive e' al piu' `a`**, errori delle rotazioni compresi (in 4.5
-//! l'arco era diviso in `round(A / a)` corde e il passo effettivo arrivava
-//! a `1.5 a`). Il cerchio di un punto lo costruisce `geo` in `f64` con
+//! consecutive e' al piu' `a`**, errori delle rotazioni compresi. Il
+//! cerchio di un punto lo costruisce `geo` in `f64` con
 //! `ceil(2 pi / a)` corde uguali, anch'esse entro `a`. Una corda che
 //! sottende al piu' `a` ha freccia `R (1 - cos(a / 2))`: per una freccia al
 //! piu' `f` si chiede `a = 2 acos(1 - f / |d|)`, ridotto di una parte su un
@@ -84,8 +83,11 @@ use super::precision::Precision;
 /// Le estremita' delle linee nel buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Estremita {
+    /// Arco attorno all'estremo (`LineCap::Round` con il passo degli archi).
     Tonde,
+    /// Taglio all'estremo (`LineCap::Butt`): i punti non hanno buffer.
     Piatte,
+    /// Quadrato che sporge di `|d|` (`LineCap::Square`).
     Quadrate,
 }
 
@@ -331,9 +333,12 @@ fn unione(
 ///
 /// # Errors
 ///
-/// [`ErroreBuffer::PrecisioneInsufficiente`] se la griglia supererebbe la
-/// precisione;
-/// [`ErroreBuffer::CalcoloNonConcluso`] se `geo` va in panico.
+/// [`ErroreBuffer::PrecisioneInsufficiente`] se la griglia, con il rientro
+/// delle direzioni intere, supererebbe meta' della precisione, se la
+/// freccia chiesta alle corde non resta positiva, o se `distance` non e'
+/// finita;
+/// [`ErroreBuffer::CalcoloNonConcluso`] se `geo` o `i_overlay` vanno in
+/// panico.
 pub fn buffer_controllato(
     geometry: &Geometry<f64>,
     distance: f64,
@@ -438,7 +443,7 @@ mod tests {
     /// attorno agli estremi di una linea (estremita' tonde) ogni coppia di
     /// vertici consecutivi dell'arco sottende al piu' il passo chiesto, e il
     /// punto medio della corda sta entro la freccia (piu' la griglia) dal
-    /// cerchio. Con il passo di 4.5 (fino a `1.5 a`) fallirebbe.
+    /// cerchio: un passo effettivo oltre `a` lo farebbe fallire.
     #[test]
     fn gli_archi_di_i_overlay_hanno_il_passo_chiesto() {
         for d in [1.0, 10.0, 100.0, 1000.0] {
@@ -523,8 +528,8 @@ mod tests {
         }
     }
 
-    /// Revisione: una componente che la griglia ridurrebbe a un punto (0,4
-    /// mm accanto a una linea di 1.300 km) ha il suo buffer.
+    /// Una componente che la griglia ridurrebbe a un punto (0,4 mm accanto a
+    /// una linea di 1.300 km) ha il suo buffer.
     #[test]
     fn la_componente_minuscola_ha_il_suo_buffer() {
         use geo::Contains as _;
@@ -595,8 +600,8 @@ mod tests {
         assert!((chiusa.unsigned_area() - 10_000.0).abs() < 400.0 * 0.01);
     }
 
-    /// Revisione (Codex, secondo giro): con estremita' piatte l'uscita non
-    /// esce dagli estremi.
+    /// Con estremita' piatte l'uscita non esce dagli estremi (con quelle
+    /// quadrate di `|d|` al piu').
     #[test]
     fn le_estremita_piatte_restano_agli_estremi() {
         let linea =
@@ -617,8 +622,8 @@ mod tests {
         }
     }
 
-    /// Revisione (Codex, ultimo giro): l'erosione di parti sovrapposte si
-    /// unisce (unione delle erosioni, come `geo`).
+    /// L'erosione di parti sovrapposte si unisce (unione delle erosioni,
+    /// come `geo`).
     #[test]
     fn erosione_di_parti_sovrapposte() {
         let collezione = Geometry::GeometryCollection(
@@ -632,11 +637,10 @@ mod tests {
         assert!((buffer.unsigned_area() - 104.0).abs() < 1e-6);
     }
 
-    /// Revisione (Codex): le normali intere di `i_float` 5 sono piu' corte
-    /// di al piu' `2^-30`, e a `10^8` m l'offset dritto rientrava di 2,5 cm
-    /// senza errore. Ora il rientro e' nel bilancio: a 5.000 km il buffer
-    /// si calcola e i lati dritti restano entro `p / 2`, a `10^8` m e'
-    /// rifiutato prima del calcolo.
+    /// Le normali intere di `i_float` 5 sono piu' corte di al piu' `2^-30`:
+    /// a `10^8` m l'offset dritto rientrerebbe di 2,5 cm. Il rientro e' nel
+    /// bilancio: a 5.000 km il buffer si calcola e i lati dritti restano
+    /// entro `p / 2`, a `10^8` m e' rifiutato prima del calcolo.
     #[test]
     fn il_rientro_delle_normali_intere_e_nel_bilancio() {
         let linea = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (100.0, 100.0)]));
@@ -661,12 +665,11 @@ mod tests {
         );
     }
 
-    /// Revisione (Codex): `i_overlay` 9 smussa le giunzioni `Miter` con
-    /// una svolta sotto `miter_min_turn` (5 gradi di default); il porting di
-    /// `geo` lo porta a `1e-4` rad, la soglia `|cross| < 1e-4` di 4.5. Una
-    /// svolta di 4 gradi con `Miter(1.0)` a 100 m tiene la punta a `d /
-    /// cos(2 gradi)` dal vertice, sia sui tratti sia sui contorni (lo smusso
-    /// la perdeva di 12 cm).
+    /// `i_overlay` 9 smussa le giunzioni `Miter` con una svolta sotto
+    /// `miter_min_turn` (5 gradi di default); il porting di `geo` lo porta a
+    /// `1e-4` rad. Una svolta di 4 gradi con `Miter(1.0)` a 100 m tiene la
+    /// punta a `d / cos(2 gradi)` dal vertice, sia sui tratti sia sui
+    /// contorni (lo smusso la perdeva di 12 cm).
     #[test]
     fn la_giunzione_miter_tiene_la_punta_sotto_i_5_gradi() {
         let d = 100.0;

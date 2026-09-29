@@ -1,23 +1,44 @@
-//! Geometry construction kernels. Grouping and ordering columns are handled
-//! by the future Arrow adapter; these functions operate on one ordered group.
+//! Kernel di costruzione delle geometrie.
+//!
+//! Punto da due coordinate (`geo.from_coords`), geometria da WKT
+//! (`geo.from_wkt`), linea e poligono da un gruppo ordinato di punti
+//! (`geo.line_builder`, `geo.polygon_builder`).
+//!
+//! Le funzioni sui gruppi lavorano su un gruppo gia' formato e ordinato:
+//! nessun adapter Arrow le chiama ancora, e la config di quelle operazioni
+//! non ha colonne di gruppo ne' d'ordine.
 
 use geo::{Geometry, LineString, Point, Polygon};
 use std::str::FromStr as _;
 use thiserror::Error;
 
+/// Gli errori dei kernel di costruzione. Nessun messaggio porta coordinate
+/// o testo dell'ingresso.
 #[derive(Debug, Error)]
 pub enum ConstructionError {
+    /// Una coordinata e' NaN o infinita. `name` e' `lon` per la prima
+    /// coordinata (x) e `lat` per la seconda (y): i nomi del kernel
+    /// d'origine, anche con un CRS proiettato.
     #[error("coordinata {name} non finita")]
     NonFiniteCoordinate { name: &'static str },
+    /// Una geometria del gruppo non e' un `Point`.
     #[error("atteso Point alla posizione {index}, ricevuto {geometry_type}")]
     ExpectedPoint {
+        /// La posizione nel gruppo, contando anche le voci assenti.
         index: usize,
+        /// Il tipo trovato.
         geometry_type: &'static str,
     },
+    /// La geometria costruita non supera la validazione OGC; porta la
+    /// ragione classificata, mai il testo di `geo`.
     #[error("geometria costruita non valida: {0}")]
     InvalidOutput(String),
+    /// Il testo non e' WKT valido, supera 64 MiB, contiene NUL o continua
+    /// dopo la geometria.
     #[error("WKT non valido: {0}")]
     InvalidWkt(String),
+    /// Il testo dichiara uno SRID (`SRID=...`) o una dimensione Z/M/ZM, anche
+    /// in un membro annidato.
     #[error("WKT con SRID o dimensioni Z/M non supportato dal contratto XY")]
     UnsupportedWktDimension,
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -32,7 +53,11 @@ pub enum ConstructionError {
 use crate::geometry_type_name as geometry_name;
 use crate::ValidazioneProtetta as _;
 
-/// Costruisce un `Point` da longitudine e latitudine.
+/// Costruisce un `Point` da due coordinate (kernel di `geo.from_coords`).
+///
+/// `lon` e' la x, `lat` la y, nelle unita' del CRS della colonna (il
+/// catalogo chiede per `geo.from_coords` un CRS proiettato). Copia esatta,
+/// nessun controllo del dominio del CRS.
 ///
 /// # Errors
 ///
@@ -52,13 +77,16 @@ pub fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, Construct
 ///
 /// # Errors
 ///
-/// - `ConstructionError::InvalidWkt`: testo oltre il limite di 64 MiB o
-///   parsing WKT fallito;
+/// - `ConstructionError::InvalidWkt`: testo oltre il limite di 64 MiB,
+///   con un carattere NUL, con testo dopo la fine della geometria, o parsing
+///   WKT fallito;
 /// - `ConstructionError::UnsupportedWktDimension`: il testo dichiara uno
 ///   SRID (`SRID=...`) o dimensioni Z/M/ZM, non supportate dal contratto
 ///   XY;
 /// - `ConstructionError::InvalidOutput`: la geometria decodificata non
-///   supera la validazione OGC.
+///   supera la validazione OGC;
+/// - `ConstructionError::ValidazioneNonConclusa`: la validazione OGC va in
+///   panico dentro la barriera.
 pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError> {
     const MAX_WKT_BYTES: usize = 64 * 1024 * 1024;
     if value.len() > MAX_WKT_BYTES {
@@ -209,17 +237,20 @@ fn collect_points(
         .collect()
 }
 
-/// Costruisce una `LineString` dai punti del gruppo ordinato.
+/// Costruisce una `LineString` dai punti del gruppo ordinato (kernel di
+/// `geo.line_builder`), nell'ordine dato.
 ///
-/// Le righe `None` sono ignorate; con meno di due punti utili il risultato
+/// Le voci `None` sono ignorate; con meno di due punti utili il risultato
 /// e' `None` (gruppo omesso, non un errore).
 ///
 /// # Errors
 ///
-/// - `ConstructionError::ExpectedPoint`: una geometria non nulla non e' un
+/// - `ConstructionError::ExpectedPoint`: una geometria presente non e' un
 ///   `Point`;
 /// - `ConstructionError::InvalidOutput`: la linea costruita non supera la
-///   validazione OGC.
+///   validazione OGC (per esempio tutti i punti coincidono);
+/// - `ConstructionError::ValidazioneNonConclusa`: la validazione OGC va in
+///   panico dentro la barriera.
 pub fn line_from_ordered_points(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ConstructionError> {
@@ -240,17 +271,20 @@ pub fn line_from_ordered_points(
 }
 
 /// Costruisce un `Polygon` (anello esterno senza buchi) dai punti del
-/// gruppo ordinato.
+/// gruppo ordinato (kernel di `geo.polygon_builder`).
 ///
-/// Le righe `None` sono ignorate; con meno di tre punti utili il risultato
-/// e' `None` (gruppo omesso, non un errore).
+/// I punti restano nell'ordine dato; l'anello si chiude da se' se l'ultimo
+/// punto non ripete il primo. Le voci `None` sono ignorate; con meno di tre
+/// punti utili il risultato e' `None` (gruppo omesso, non un errore).
 ///
 /// # Errors
 ///
-/// - `ConstructionError::ExpectedPoint`: una geometria non nulla non e' un
+/// - `ConstructionError::ExpectedPoint`: una geometria presente non e' un
 ///   `Point`;
 /// - `ConstructionError::InvalidOutput`: il poligono costruito non supera
-///   la validazione OGC (es. auto-intersezione).
+///   la validazione OGC (es. auto-intersezione, punti collineari);
+/// - `ConstructionError::ValidazioneNonConclusa`: la validazione OGC va in
+///   panico dentro la barriera.
 pub fn polygon_from_ordered_points(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ConstructionError> {

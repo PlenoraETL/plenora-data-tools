@@ -24,34 +24,52 @@ pub struct OutputColumnConfig {
     pub output_column: Option<String>,
 }
 
-/// Stile di cap per `buffer` (default round, come il kernel).
+/// Estremita' delle linee di `geo.buffer` (`cap`; default `round`, come il
+/// kernel). Specchio di `operations::BufferCapStyle`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum BufferCapParam {
+    /// `round`: arco attorno all'estremo.
     Round,
+    /// `flat`: taglio netto all'estremo; i punti non hanno buffer.
     Flat,
+    /// `square`: quadrato che sporge di `|distance|` oltre l'estremo.
     Square,
 }
 
-/// Politica di `simplify`: Douglas-Peucker (default) o topology-preserving.
+/// Algoritmo di `geo.simplify` (`policy`; default `douglas_peucker`).
+/// Specchio di `operations::SimplifyPolicy`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SimplifyPolicyParam {
+    /// `douglas_peucker`: Ramer-Douglas-Peucker, `tolerance` e' una
+    /// distanza.
     DouglasPeucker,
+    /// `preserve_topology`: Visvalingam-Whyatt con conservazione della
+    /// topologia, `tolerance` e' un'area.
     PreserveTopology,
 }
 
+/// Config di `geo.buffer`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BufferConfig {
+    /// Distanza del buffer nelle unita' del CRS, obbligatoria e finita;
+    /// negativa erode le parti areali, nulla ne da' l'unione.
     pub distance: f64,
+    /// Estremita' delle linee; assente vale `round`.
     pub cap: Option<BufferCapParam>,
 }
 
+/// Config di `geo.simplify`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimplifyConfig {
+    /// Soglia, obbligatoria, finita e non negativa: distanza (unita' del
+    /// CRS) con `douglas_peucker`, area (unita' al quadrato) con
+    /// `preserve_topology`; 0 lascia la geometria invariata.
     pub tolerance: f64,
+    /// Algoritmo; assente vale `douglas_peucker`.
     pub policy: Option<SimplifyPolicyParam>,
 }
 
@@ -175,12 +193,20 @@ pub struct PolygonizeConfig {
     pub require_complete: Option<bool>,
 }
 
+/// Config di `geo.from_coords`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FromCoordsConfig {
+    /// Colonna della x, `float64` o `int64`; assente vale `x`.
     pub x_column: Option<String>,
+    /// Colonna della y, `float64` o `int64`; assente vale `y`.
     pub y_column: Option<String>,
+    /// Nome della colonna geometria prodotta, libero; assente vale
+    /// `geometry`.
     pub geometry_column: Option<String>,
+    /// CRS della colonna prodotta (tabella integrata, o la definizione del
+    /// CRS di piano scritta uguale); assente vale il CRS di piano, e senza
+    /// nessuno dei due il passo si rifiuta. Deve essere proiettato.
     pub crs: Option<String>,
 }
 

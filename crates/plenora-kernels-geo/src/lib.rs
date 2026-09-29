@@ -1,17 +1,18 @@
 //! plenora-kernels-geo — kernel geografici su `geo::Geometry<f64>` e adapter
-//! Arrow per il canone GeoArrow-WKB (architettura.md#geometrie).
+//! Arrow per il canone GeoArrow-WKB.
 //!
 //! Contiene il validatore WKB strutturale, i kernel puri (Rust puro: niente
-//! backend GEOS/PROJ), [`arrow_adapter`](crate::arrow_adapter) per la
-//! rappresentazione GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei
-//! contratti. L'adapter ammette una cache di decode per segmento senza
-//! modifiche ai contratti.
+//! backend GEOS/PROJ), [`arrow_adapter`] per la rappresentazione
+//! GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti. Il
+//! runner non esegue ancora le operazioni geo (README, «Che cosa non c'e'
+//! ancora»): i kernel si chiamano direttamente.
 //!
-//! [`memory_estimate`](crate::memory_estimate) da' una STIMA della memoria
-//! nativa delle geometrie decodificate, mai un conteggio preciso
-//! (architettura.md#memoria); [`geometry_contract`](crate::geometry_contract)
-//! fissa la dimensione esatta del WKB ISO XY e la validazione strutturale su
-//! `Geometry`. Gli errori sono [`plenora_core::PlenoraError`].
+//! [`memory_estimate`] da' una STIMA della memoria nativa delle geometrie
+//! decodificate, mai un conteggio preciso; [`geometry_contract`] fissa la
+//! dimensione esatta del WKB ISO XY e la validazione strutturale su
+//! `Geometry`. Gli errori pubblici sono [`plenora_core::PlenoraError`]; i
+//! moduli di kernel hanno anche errori propri
+//! (`operations::OperationError`, `construction::ConstructionError`, ...).
 
 pub mod advanced;
 pub mod analysis;
@@ -49,17 +50,29 @@ use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 use plenora_core::PlenoraError;
 use serde::{Deserialize, Serialize};
 
+/// Le trasformazioni 1:1 di [`transform_geometry`] e [`transform_wkb`]:
+/// i kernel di `geo.centroid`, `geo.convex_hull` e `geo.envelope`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
+    /// Il centroide (`geo.centroid`): un `Point`, baricentro pesato per
+    /// area, lunghezza o numero di punti secondo la dimensione piu' alta
+    /// presente; errore su una geometria vuota.
     Centroid,
+    /// L'inviluppo convesso (`geo.convex_hull`): un `Polygon`; errore se
+    /// l'inviluppo e' degenere (punto, segmento, punti collineari).
     ConvexHull,
+    /// Il rettangolo d'ingombro (`geo.envelope`): `Polygon`, oppure `Point`
+    /// o `LineString` se una o entrambe le dimensioni sono nulle; errore su
+    /// una geometria vuota.
     Envelope,
 }
 
 impl Operation {
+    /// Tutte le varianti, nell'ordine di dichiarazione.
     pub const ALL: [Self; 3] = [Self::Centroid, Self::ConvexHull, Self::Envelope];
 
+    /// Il nome breve, senza il prefisso `geo.` (lo stesso di serde).
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -146,9 +159,9 @@ where
 /// Perche' una geometria non e' utilizzabile, in **vocabolario nostro**.
 ///
 /// I messaggi di `geo` interpolano indici dell'ingresso, cioe' fatti sui dati
-/// di chi chiama: come per arrow, GEOS e PROJ, il testo della dipendenza si
-/// legge per classificare e non attraversa il confine. Una forma non
-/// riconosciuta cade su [`Self::NonSpecificata`].
+/// di chi chiama: come per ogni dipendenza, il testo si legge per
+/// classificare e non attraversa il confine. Una forma non riconosciuta
+/// cade su [`Self::NonSpecificata`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RagioneNonValida {
     /// Una coordinata non finita: NaN o infinito.
@@ -432,9 +445,9 @@ impl AnelliSemplici for Geometry<f64> {
 /// Un calcolo di `geo` che passa da `relate`, **dietro una barriera**.
 ///
 /// Serve anche su geometrie valide: `relate` va in panico su un «topology
-/// position conflict» con poligoni che `check_validation` accetta (fuzz
-/// target `wkt_operations`), e ci passano `interior_point` e i predicati
-/// spaziali. Il lavoro contiene la sola chiamata a `geo`: e' una
+/// position conflict» con poligoni che `check_validation` accetta (trovati
+/// dal fuzz target `wkt_operations` del progetto d'origine), e ci passano
+/// `interior_point` e i predicati spaziali. Il lavoro contiene la sola chiamata a `geo`: e' una
 /// [`barriera_di_dipendenza`](plenora_core::panic_policy::barriera_di_dipendenza).
 ///
 /// # Errors
@@ -455,8 +468,8 @@ mod prove_del_calcolo_protetto {
     use plenora_core::panic_policy::dentro_una_barriera_di_dipendenza;
 
     /// Il panico diventa la forma del payload, mai il contenuto; e durante il
-    /// calcolo la barriera e' una barriera di dipendenza, cioe' tollerata dal
-    /// fuzz.
+    /// calcolo la barriera e' una barriera di dipendenza, riconoscibile da
+    /// `dentro_una_barriera_di_dipendenza`.
     #[test]
     fn il_panico_diventa_la_forma_e_la_barriera_e_di_dipendenza() {
         let esito: Result<(), _> = super::calcolo_protetto(|| {
@@ -470,7 +483,9 @@ mod prove_del_calcolo_protetto {
     }
 }
 
+/// Dimensione massima di un payload WKB: 64 MiB.
 pub const MAX_WKB_BYTES: usize = 64 * 1024 * 1024;
+/// Numero massimo di geometrie (radice e figli annidati) in un payload WKB.
 pub const MAX_WKB_COMPONENTS: u64 = 100_000;
 /// Profondita' massima di annidamento (multi-geometrie) di default.
 pub const MAX_WKB_DEPTH: usize = 64;
@@ -490,7 +505,7 @@ const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 
 /// Decodifica una geometria dal canone GeoArrow-WKB.
 ///
-/// Una sola passata (architettura.md#geometrie): il decoder validante
+/// Una sola passata: il decoder validante
 /// ([`wkb_decoder::decode_validated`]) esegue validazione strutturale e
 /// costruzione nella stessa camminata sui byte; poi la validazione OGC
 /// della geometria risultante.
@@ -500,7 +515,9 @@ const EWKB_RESERVED_MASK: u32 = 0x1FFF_0000;
 /// `PlenoraError::InvalidPlan` se il payload viola il contratto WKB (struttura
 /// non valida, coordinate NaN o infinite, geometria OGC non valida) o se il
 /// decode fallisce; `PlenoraError::Unsupported` se il payload porta
-/// dimensioni Z/M o SRID non preservabili nel protocollo 2D.
+/// dimensioni Z/M o SRID non preservabili nel protocollo 2D;
+/// `PlenoraError::Internal` se la validazione OGC non conclude (panico di
+/// `geo` dentro la barriera).
 pub fn geometry_from_wkb(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
     let geometry = wkb_decoder::decode_validated(payload)?;
     valida_ogc(&geometry)?;
@@ -570,7 +587,7 @@ impl<'a> WkbCursor<'a> {
 
     /// Legge una coordinata con lo `stride` dichiarato (byte per coordinata
     /// interleaved, vedi [`GeometryDimensions::coordinate_stride`]): X e Y
-    /// sono decodificate e validate (NaN/inf vietati, architettura.md#determinismo), le ordinate
+    /// sono decodificate e validate (NaN e infiniti vietati), le ordinate
     /// extra (Z/M) sono saltate via stride e mai lette.
     fn read_coordinate(
         &mut self,
@@ -613,8 +630,8 @@ pub(crate) fn checked_count(
 /// non sulla chiave `encoding` del metadato `geo`.
 ///
 /// Con `Xy` ogni marcatore dimensionale da' [`unsupported_wkb_dimension`];
-/// con `Unknown` (R3.4) lo stride si deriva dal type code, geometria per
-/// geometria; con `Xyz`/`Xym`/`Xyzm` una divergenza da'
+/// con `Unknown` (mai trattata come `Xy`) lo stride si deriva dal type
+/// code, geometria per geometria; con `Xyz`/`Xym`/`Xyzm` una divergenza da'
 /// [`wkb_dimension_mismatch`], mai un passthrough.
 pub(crate) fn parse_wkb_type_code(
     raw_type: u32,
@@ -806,8 +823,8 @@ fn validate_wkb_geometry_with_dimensions(
 ///
 /// Lavora sui byte e non affetta mai la stringa: una lunghezza in byte pari
 /// non garantisce confini di carattere (`"a\u{e9}b"`), e affettare fuori da
-/// un confine e' un panic che il lint R6 non vede. L'input arriva dalla
-/// configurazione di un piano, quindi da fuori.
+/// un confine e' un panic che il gate anti-panic di clippy non vede.
+/// L'input arriva dalla configurazione di un piano, quindi da fuori.
 ///
 /// `None` per stringa vuota, di lunghezza dispari, o con un byte che non e'
 /// una cifra esadecimale ASCII. Il chiamante lo traduce nel proprio errore.
@@ -858,9 +875,9 @@ pub fn validate_wkb_contract(payload: &[u8]) -> Result<(), PlenoraError> {
 
 /// Variante con profondita' di annidamento configurabile.
 ///
-/// Il limite arriva dai `Limits` effettivi del piano
-/// (`max_geometry_depth`); il default di [`validate_wkb_contract`] resta
-/// [`MAX_WKB_DEPTH`].
+/// Il limite e' quello di `max_geometry_depth` dei `Limits` del piano per
+/// chi lo passa (oggi nessun chiamante del workspace); il default di
+/// [`validate_wkb_contract`] resta [`MAX_WKB_DEPTH`].
 ///
 /// # Errors
 ///
@@ -876,12 +893,11 @@ pub fn validate_wkb_contract_with_depth(
 /// Variante stride-aware, con dimensionalita' attesa esplicita.
 ///
 /// La validazione strutturale usa lo stride della dimensionalita'
-/// dichiarata e rifiuta ogni type code incoerente con essa
-/// ([`wkb_dimension_mismatch`]). Con [`GeometryDimensions::Unknown`] i byte
-/// sono preservati e la dimensionalita' e' derivata dal type code di ogni
-/// geometria (R3.4); il flag SRID EWKB resta rifiutato in ogni caso. Le
-/// ordinate extra (Z/M) non sono lette: vedi
-/// [`validate_wkb_geometry_with_dimensions`].
+/// dichiarata e rifiuta ogni type code incoerente con essa (errore
+/// dedicato). Con [`GeometryDimensions::Unknown`] i byte sono preservati e
+/// la dimensionalita' e' derivata dal type code di ogni geometria; il flag
+/// SRID EWKB resta rifiutato in ogni caso. Le ordinate extra (Z/M) non sono
+/// lette ne' validate.
 ///
 /// In produzione nessun chiamante passa la dimensionalita' del contratto di
 /// colonna: usano tutti [`validate_wkb_contract`], cioe' `Xy`.
@@ -889,9 +905,9 @@ pub fn validate_wkb_contract_with_depth(
 /// # Errors
 ///
 /// `PlenoraError::InvalidPlan` se la struttura WKB non e' valida o se il type
-/// code e' incoerente con la dimensionalita' attesa
-/// ([`wkb_dimension_mismatch`]); `PlenoraError::Unsupported` se il payload
-/// porta dimensioni Z/M non dichiarate o il flag SRID EWKB.
+/// code e' incoerente con la dimensionalita' attesa;
+/// `PlenoraError::Unsupported` se il payload porta dimensioni Z/M non
+/// dichiarate o il flag SRID EWKB.
 pub fn validate_wkb_contract_for_dimensions(
     payload: &[u8],
     dimensions: GeometryDimensions,
@@ -931,7 +947,8 @@ pub fn validate_wkb_contract_for_dimensions_with_depth(
     Ok(())
 }
 
-/// Valida WKB/EWKB al confine di trasporto senza riscrivere le celle.
+/// Valida WKB/EWKB al confine di trasporto senza riscrivere le celle (oggi
+/// senza chiamanti nel workspace).
 ///
 /// A differenza dei decoder dei kernel geometrici, questo gate ammette il
 /// flag SRID soltanto per encoding EWKB dichiarato e verifica ogni SRID
@@ -976,7 +993,7 @@ pub fn validate_wkb_transport_for_dimensions_with_depth(
 // float_cmp: i confronti esatti min/max individuano gli envelope degeneri
 // (larghezza o altezza nulle) per costruzione — min e max provengono dalle
 // stesse coordinate, quindi l'uguaglianza esatta e' il criterio voluto e un
-// margine epsilon cambierebbe la geometria prodotta (determinismo architettura.md#determinismo).
+// margine epsilon cambierebbe la geometria prodotta.
 #[allow(clippy::float_cmp)]
 fn envelope(geometry: &Geometry<f64>) -> Result<Geometry<f64>, PlenoraError> {
     let rect = geometry
@@ -1008,9 +1025,12 @@ fn trasformazione_protetta<T>(
 }
 
 fn robust_convex_hull(geometry: &Geometry<f64>) -> Result<Geometry<f64>, PlenoraError> {
-    // `geo`'s orientation math can overflow for otherwise finite coordinates
-    // near f64 limits. Uniform normalization preserves hull topology while
-    // keeping every intermediate determinant in a safe numeric range.
+    // Gli orientamenti di `geo` possono traboccare con coordinate finite ma
+    // vicine ai limiti di `f64`. Si divide sempre per il modulo massimo (non
+    // solo vicino ai limiti): la scala uniforme conserva l'inviluppo e tiene
+    // ogni determinante in un intervallo sicuro. Il ritorno moltiplica per
+    // la stessa scala: qualche ulp per coordinata, nessuno se la scala e'
+    // una potenza di 2.
     let scale = geometry.coords_iter().fold(0.0_f64, |maximum, coordinate| {
         maximum.max(coordinate.x.abs()).max(coordinate.y.abs())
     });
@@ -1031,13 +1051,21 @@ fn robust_convex_hull(geometry: &Geometry<f64>) -> Result<Geometry<f64>, Plenora
 }
 
 /// Applica l'operazione (`Operation::Centroid`, `ConvexHull`, `Envelope`)
-/// a una geometria gia' decodificata, validandola in ingresso e in uscita.
+/// a una geometria gia' decodificata.
+///
+/// E' il kernel di `geo.centroid`, `geo.convex_hull` e `geo.envelope`; la
+/// geometria si valida in ingresso e in uscita.
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` se la geometria in ingresso o quella prodotta
-/// non supera la validazione OGC, o se l'operazione non e' definita su una
-/// geometria vuota (es. centroide o envelope di una geometria vuota).
+/// - `PlenoraError::InvalidPlan` se la geometria in ingresso o quella
+///   prodotta non supera la validazione OGC (un inviluppo convesso degenere,
+///   da un punto, un segmento o punti collineari, e' un poligono non
+///   valido), o se l'operazione non e' definita su una geometria vuota
+///   (centroide o envelope);
+/// - `PlenoraError::Internal` se la validazione OGC o il calcolo di `geo`
+///   vanno in panico dentro la barriera: il messaggio porta la sola forma
+///   del payload.
 pub fn transform_geometry(
     operation: Operation,
     geometry: &Geometry<f64>,
@@ -1063,16 +1091,17 @@ fn transform_geometry_validated(
 
 /// Applica l'operazione direttamente su un payload WKB.
 ///
-/// Decode, trasforma ([`transform_geometry`]), ri-encode nel canone XY e
-/// ri-validazione del risultato contro il contratto
-/// ([`validate_wkb_contract`]).
+/// Decode ([`geometry_from_wkb`], con la validazione OGC), trasforma (come
+/// [`transform_geometry`]), ri-encode nel canone XY e ri-validazione del
+/// risultato contro il contratto ([`validate_wkb_contract`]).
 ///
 /// # Errors
 ///
 /// `PlenoraError::InvalidPlan` per gli errori di decode, trasformazione,
 /// serializzazione WKB o validazione del risultato;
 /// `PlenoraError::Unsupported` se il payload in ingresso porta dimensioni
-/// Z/M o SRID non preservabili nel protocollo 2D.
+/// Z/M o SRID non preservabili nel protocollo 2D;
+/// `PlenoraError::Internal` come in [`transform_geometry`].
 pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, PlenoraError> {
     let geometry = geometry_from_wkb(payload)?;
     let transformed = transform_geometry_validated(operation, &geometry)?;
@@ -1083,16 +1112,18 @@ pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, Pl
     Ok(output)
 }
 
-/// Validazione OGC di una geometria decodificata (architettura.md#geometrie D12.4).
+/// Validazione OGC di una geometria gia' decodificata.
 ///
-/// La STESSA chiamata e lo STESSO messaggio del check in coda a
-/// [`geometry_from_wkb`]. Esposta per il runner fuso, che riproduce tra i
-/// passi del gruppo il controllo che il percorso non fuso esegue al decode
-/// del nodo successivo.
+/// La STESSA chiamata e lo STESSO messaggio del controllo in coda a
+/// [`geometry_from_wkb`], per chi ha una geometria in memoria e vuole il
+/// verdetto che il decode darebbe.
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` se la geometria non supera la validazione OGC.
+/// `PlenoraError::InvalidPlan` se la geometria non supera la validazione
+/// OGC; `PlenoraError::Internal` se la validazione non conclude (panico di
+/// `geo` dentro la barriera: nessuno ha dimostrato che la geometria sia
+/// invalida).
 pub fn check_geometry_valid(geometry: &Geometry<f64>) -> Result<(), PlenoraError> {
     valida_ogc(geometry)
 }
@@ -1304,7 +1335,7 @@ mod tests {
     }
 
     /// La validazione OGC legge il testo di `geo` per classificare, senza
-    /// pubblicarlo (errori-e-limiti.md#privacy-dei-messaggi); il canary passa
+    /// pubblicarlo (errori senza dati, AGENTS.md); il canary passa
     /// dal confine pubblico reale (`geometry_from_wkb`).
     ///
     /// Qui `geo` interpola un **indice posizionale** (`"polygons at indices I
@@ -1688,7 +1719,7 @@ mod tests {
 
     #[test]
     fn non_finite_xy_is_rejected_with_z_present_but_z_is_never_read() {
-        // NaN in X con Z presente: rifiutato (architettura.md#determinismo).
+        // NaN in X con Z presente: rifiutato.
         let mut payload = Vec::new();
         push_header(&mut payload, 1001);
         push_coordinate(&mut payload, f64::NAN, 2.0, &[3.0]);
@@ -1742,7 +1773,7 @@ mod tests {
 
     #[test]
     fn unknown_dimensions_preserve_bytes_and_derive_stride_per_geometry() {
-        // Unknown (R3.4): byte preservati, dimensionalita' dal type code di
+        // Unknown: byte preservati, dimensionalita' dal type code di
         // ogni geometria; una collection puo' mescolare dimensionalita'.
         let mut collection = Vec::new();
         push_header(&mut collection, 7);
@@ -2033,7 +2064,8 @@ mod tests {
 
     /// Il logging di `relate` nel `geo` vendorizzato resta statico anche con
     /// un logger attivo a Trace: stessa coppia di quadrati, matrice ed elenco
-    /// dei messaggi ammessi di `privacy_probe.rs`, con `a.relate(&b)` diretto.
+    /// dei messaggi ammessi della sonda di privacy del progetto d'origine, con
+    /// `a.relate(&b)` diretto.
     ///
     /// Sottoprocesso perche' `log::set_logger` si installa una sola volta per
     /// processo.
@@ -2043,8 +2075,8 @@ mod tests {
 
         const VARIABILE: &str = "PLENORA_TEST_LOGGING_RELATE";
 
-        /// I siti di log statici di `relate`, copiati da
-        /// `results/geo-ogc-panic/windows/logging-wkt-01/allowed-events.json`.
+        /// I siti di log statici di `relate`, copiati dall'elenco degli eventi
+        /// ammessi misurato nel progetto d'origine.
         const MESSAGGI_AMMESSI: [&str; 12] = [
             "geo.relate.edge_end_bundle_star.0",
             "geo.relate.edge_end_bundle_star.1",
@@ -2128,7 +2160,7 @@ mod tests {
             log::set_max_level(log::LevelFilter::Trace);
             log::info!(target: "prova_logging_relate", "logger-active");
 
-            // Stessa coppia di `privacy_probe.rs`: due quadrati che si
+            // Stessa coppia della sonda d'origine: due quadrati che si
             // sovrappongono, Relate diretto.
             let quadrato = |x: f64, y: f64| {
                 Polygon::new(
@@ -2189,8 +2221,8 @@ mod tests {
         // I quadrati provano che il gate funziona; questi reperti che reggono
         // su dati reali, con un verdetto specifico per fixture. Decodifica
         // grezza (`geozero`), perche' il bersaglio e' `check_validation` di
-        // `geo` e non il cancello strutturale. Verdetti e conteggi vengono da
-        // `privacy-{debug,release}-{original,reduced}-{A,B}.stdout`.
+        // `geo` e non il cancello strutturale. Verdetti e conteggi vengono
+        // dalle uscite della sonda d'origine, in debug e in release.
         const REPERTO_ORIGINALE_A: &[u8] = include_bytes!("../tests/fixtures/reperto_a.wkb");
         const REPERTO_ORIGINALE_B: &[u8] = include_bytes!("../tests/fixtures/reperto_b.wkb");
         const REPERTO_RIDOTTO_A: &[u8] = &[

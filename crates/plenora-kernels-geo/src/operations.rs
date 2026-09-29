@@ -1,4 +1,12 @@
-//! Pure geometry kernels, independent of the transport adapters.
+//! Kernel geometrici puri su `geo::Geometry<f64>`, indipendenti dagli
+//! adapter Arrow: misure, trasformazioni 1:1, `explode`, `boundary`.
+//!
+//! Ogni kernel valida l'ingresso con la validazione OGC dietro la barriera
+//! dei panici, e le trasformazioni validano anche l'uscita: una geometria
+//! sbagliata e' un errore, mai un risultato. Nessun adapter chiama ancora
+//! questi kernel sulle righe di una tabella (il runner non esegue le
+//! operazioni geo), quindi i null e la traduzione di [`OperationError`] in
+//! `PlenoraError` non sono ancora definiti qui.
 
 use crate::rust_backend::buffer::{buffer_controllato, ErroreBuffer, Estremita};
 use crate::rust_backend::griglia;
@@ -15,33 +23,55 @@ use wkt::ToWkt;
 
 mod rdp;
 
+/// Le estremita' delle linee nel buffer ([`buffer_with_cap`]); le giunzioni
+/// sono sempre tonde.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BufferCapStyle {
+    /// Arco attorno all'estremo, con il passo angolare dalla precisione.
     Round,
+    /// Taglio netto all'estremo: nessun buffer oltre la linea, nessun
+    /// buffer per i punti.
     Flat,
+    /// Quadrato che sporge di `|distance|` oltre l'estremo.
     Square,
 }
 
+/// L'algoritmo di [`simplify_with_policy`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SimplifyPolicy {
+    /// Ramer-Douglas-Peucker di `geo`: `tolerance` e' una distanza; nessuna
+    /// garanzia di topologia (un risultato non valido e' un errore).
     DouglasPeucker,
+    /// Visvalingam-Whyatt con conservazione della topologia di `geo`
+    /// (`simplify_vw_preserve`): `tolerance` e' un'**area**, la soglia sul
+    /// triangolo di ogni vertice con i due vicini.
     PreserveTopology,
 }
 
+/// Gli errori dei kernel di questo modulo. Nessun messaggio porta
+/// coordinate o valori delle geometrie.
 #[derive(Debug, Error)]
 pub enum OperationError {
+    /// Un parametro fuori dominio (nome e ragione statici).
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
+        /// Il nome del parametro.
         name: &'static str,
+        /// Perche' non e' valido.
         reason: &'static str,
     },
+    /// La geometria prodotta non supera la validazione OGC; porta la
+    /// ragione classificata, mai il testo di `geo`.
     #[error("geometria prodotta non valida: {0}")]
     InvalidOutput(String),
+    /// La geometria d'ingresso non supera la validazione OGC; porta la
+    /// ragione classificata, mai il testo di `geo`.
     #[error("geometria di input non valida: {0}")]
     InvalidInput(String),
+    /// Il writer WKT rifiuta la geometria; il testo e' fisso.
     #[error("serializzazione WKT fallita: {0}")]
     WktSerialization(String),
-    /// Invariante interna violata (R6: errore propagato, mai panic).
+    /// Invariante interna violata: errore propagato, mai panico.
     #[error("internal error: {0}")]
     Internal(&'static str),
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -52,7 +82,8 @@ pub enum OperationError {
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
     /// Un calcolo di `geo` non ha concluso su una geometria **valida**: si e'
-    /// interrotto dentro `relate` ([`crate::calcolo_protetto`]).
+    /// interrotto dietro la barriera (`crate::calcolo_protetto`), per esempio
+    /// dentro `relate` o, nel buffer, in `i_overlay`.
     ///
     /// Come [`Self::ValidazioneNonConclusa`], non accusa l'ingresso: la
     /// geometria ha superato la validazione, ed e' la dipendenza a non
@@ -91,12 +122,18 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, OperationEr
     Ok(geometry)
 }
 
-/// Planar unsigned area. CRS/unit policy remains the responsibility of the
-/// caller; geographic coordinates must be projected before this kernel.
+/// Area planare senza segno, nelle unita' delle coordinate al quadrato
+/// (kernel di `geo.area`).
+///
+/// Il CRS e' affare del chiamante: coordinate geografiche vanno proiettate
+/// prima. Un poligono conta l'esterno meno i buchi; una collezione somma le
+/// aree dei membri senza unirli.
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
+///   calcolo di `geo` vanno in panico dentro la barriera.
 pub fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
     protetto(|| geometry.unsigned_area())
@@ -109,12 +146,15 @@ fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, OperationError> {
     crate::calcolo_protetto(calcolo).map_err(OperationError::CalcoloNonConcluso)
 }
 
-/// Planar geometry length with Shapely-compatible semantics for polygons:
-/// polygon length is the sum of exterior and interior ring lengths.
+/// Lunghezza planare (kernel di `geo.length`), con la semantica di Shapely
+/// per i poligoni: la lunghezza di un poligono e' la somma degli anelli,
+/// esterno e buchi. Punti 0, collezioni la somma dei membri.
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
+///   calcolo di `geo` vanno in panico dentro la barriera.
 pub fn length(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
     protetto(|| length_unchecked(geometry))
@@ -144,8 +184,9 @@ fn length_unchecked(geometry: &Geometry<f64>) -> f64 {
     }
 }
 
-/// Perimeter shares the semantics of `length`, as Manipola defines it through
-/// `GeoSeries.length`.
+/// Perimetro (kernel di `geo.perimeter`): la stessa semantica di
+/// [`length`], come Manipola lo definisce con `GeoSeries.length`; una
+/// linea vale quindi la sua lunghezza, non 0.
 ///
 /// # Errors
 ///
@@ -154,12 +195,15 @@ pub fn perimeter(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     length(geometry)
 }
 
-/// Distanza euclidea planare fra due geometrie; `None` se una delle due non
-/// ha coordinate (geometria vuota).
+/// Distanza euclidea planare minima fra due geometrie (kernel di
+/// `geo.distance`), 0 se si intersecano; `None` se una delle due non ha
+/// coordinate (geometria vuota).
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: una delle due geometrie non supera la validazione OGC.
+/// - `InvalidInput`: una delle due geometrie non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
+///   calcolo di `geo` vanno in panico dentro la barriera.
 pub fn distance(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -172,12 +216,15 @@ pub fn distance(
     protetto(|| Euclidean.distance(left, right)).map(Some)
 }
 
-/// Bounding box planare come `[min_x, min_y, max_x, max_y]`; `None` per
-/// geometrie senza coordinate.
+/// Rettangolo d'ingombro come `[min_x, min_y, max_x, max_y]` (kernel di
+/// `geo.bounds_extractor`); `None` per geometrie senza coordinate. Valori
+/// copiati dalle coordinate, esatti.
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
+///   barriera.
 pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationError> {
     ensure_valid(geometry)?;
     Ok(geometry.bounding_rect().map(|rect| {
@@ -187,11 +234,14 @@ pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationErr
     }))
 }
 
-/// Numero di coordinate (vertici) della geometria.
+/// Numero di coordinate della geometria, su tutte le parti (kernel di
+/// `geo.vertex_count`): ogni anello conta anche il vertice di chiusura.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
+///   barriera.
 /// - `Internal`: invariante interna violata (`usize` non rappresentabile in
 ///   `u64`; mai sui target supportati).
 pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
@@ -234,12 +284,18 @@ fn is_negative_zero(value: f64) -> bool {
     zero && value.is_sign_negative()
 }
 
-/// Punto interno alla geometria (garantito sulla superficie); `None` per
-/// geometrie senza coordinate.
+/// Un punto che appartiene alla geometria (kernel di
+/// `geo.point_on_surface`).
+///
+/// E' `interior_point` di `geo`: per i poligoni il punto medio del tratto
+/// interno piu' lungo di una linea di scansione orizzontale, per linee e
+/// punti un vertice. `None` per geometrie senza coordinate.
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
+///   calcolo di `geo` vanno in panico dentro la barriera.
 pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
 
@@ -266,7 +322,8 @@ pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>
     Ok(punto.map(Geometry::Point))
 }
 
-/// Serializzazione WKT della geometria.
+/// Serializzazione WKT della geometria (kernel di `geo.to_wkt`): ogni
+/// coordinata nella forma decimale piu' breve che rilegge lo stesso `f64`.
 ///
 /// Usa l'API fallibile `try_wkt_string`: `wkt_string()` puo' panicare su un
 /// anello interno orfano (poligono con interni ma senza esterno), che
@@ -276,6 +333,8 @@ pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
+///   barriera.
 /// - `WktSerialization`: l'encoder ha rifiutato la geometria (es. anello
 ///   interno orfano) — testo statico, nessun dettaglio della dipendenza.
 pub fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError> {
@@ -286,7 +345,7 @@ pub fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError> {
 }
 
 /// Buffer planare della geometria con estremita' arrotondate
-/// (`BufferCapStyle::Round`).
+/// (`BufferCapStyle::Round`), il default di `geo.buffer`.
 ///
 /// # Errors
 ///
@@ -299,23 +358,31 @@ pub fn buffer(
     buffer_with_cap(geometry, distance, BufferCapStyle::Round, precision)
 }
 
-/// Buffer planare della geometria con lo stile di estremita' richiesto.
+/// Buffer planare della geometria con lo stile di estremita' richiesto
+/// (kernel di `geo.buffer`); l'uscita e' sempre un `MultiPolygon`, anche
+/// vuoto.
 ///
 /// `precision` e' la precisione dichiarata nelle unita' delle coordinate
 /// (`Precision::from_crs` con un CRS, altrimenti esplicita). Il buffer e'
-/// quello di `geo::Buffer` con gli archi scelti dalla precisione (freccia
-/// `max(p / 2, 0.001 |d|)`, deviazione dichiarata oltre 5 m con 1 cm) e le
-/// componenti sotto la griglia bufferizzate come punti, con la griglia
-/// controllata a priori (`rust_backend::buffer`, nessun controllo a
-/// posteriori). Le estremita' e il trattamento di punti e linee con
-/// distanza non positiva sono quelli di `geo::Buffer`.
+/// quello di `geo::Buffer` con giunzioni tonde, gli archi scelti dalla
+/// precisione (freccia `max(p / 2, 0.001 |d|)`, deviazione dichiarata oltre
+/// 5 m con 1 cm) e le componenti sotto la griglia bufferizzate come punti o
+/// come anelli, con la griglia controllata a priori
+/// (`rust_backend::buffer`, nessun controllo a posteriori; README,
+/// «Precisione delle operazioni geografiche: 1 cm a terra»). Distanza
+/// nulla: l'unione delle parti areali; negativa: l'erosione delle sole
+/// parti areali (punti e linee spariscono); estremita' piatte su soli punti:
+/// vuoto.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `distance` non e' finita (NaN o infinita);
-/// - `PrecisionInsufficient`: la griglia supererebbe la precisione;
-/// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC.
+/// - `PrecisionInsufficient`: la griglia, piu' il rientro delle direzioni
+///   intere di `i_float`, supererebbe meta' della precisione;
+/// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
+///   calcolo di `geo` vanno in panico dentro la barriera.
 pub fn buffer_with_cap(
     geometry: &Geometry<f64>,
     distance: f64,
@@ -344,7 +411,7 @@ pub fn buffer_with_cap(
 }
 
 /// Semplificazione della geometria con Douglas-Peucker
-/// (`SimplifyPolicy::DouglasPeucker`).
+/// (`SimplifyPolicy::DouglasPeucker`), il default di `geo.simplify`.
 ///
 /// # Errors
 ///
@@ -353,20 +420,29 @@ pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64
     simplify_with_policy(geometry, tolerance, SimplifyPolicy::DouglasPeucker)
 }
 
-/// Semplificazione della geometria con la politica richiesta.
+/// Semplificazione della geometria con la politica richiesta (kernel di
+/// `geo.simplify`).
 ///
-/// Le coordinate vicine ai limiti di `f64` sono elaborate in uno spazio
-/// scalato uniformemente e riportate alle unita' originali, per evitare
-/// overflow/underflow nei kernel a distanza quadratica.
+/// Linee, anelli e loro multi si semplificano; punti e
+/// multi-punti restano invariati; una collezione si semplifica membro per
+/// membro. Con `tolerance` 0 la geometria non cambia. I vertici d'uscita
+/// sono vertici d'ingresso.
+///
+/// Le coordinate vicine ai limiti di `f64` (modulo oltre `1e150`, o non
+/// nullo e sotto `1e-150`) sono elaborate in uno spazio scalato
+/// uniformemente e riportate alle unita' originali, per evitare overflow e
+/// underflow nei kernel a distanza quadratica.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `tolerance` non e' finita oppure e' negativa;
 /// - `InvalidOutput`: la geometria semplificata non supera la validazione
-///   OGC.
+///   OGC;
 /// - `Internal`: una distanza del percorso Douglas-Peucker non e'
-///   rappresentabile; nessun risultato parziale viene restituito.
+///   rappresentabile; nessun risultato parziale viene restituito;
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
+///   calcolo di `geo` vanno in panico dentro la barriera.
 pub fn simplify_with_policy(
     geometry: &Geometry<f64>,
     tolerance: f64,
@@ -389,9 +465,9 @@ pub fn simplify_with_policy(
         ));
     }
 
-    // Squared-distance kernels can overflow/underflow for perfectly finite
-    // coordinates close to f64 limits. Work in a uniformly scaled space and
-    // restore the original units after simplification.
+    // I kernel a distanza quadratica possono traboccare (o perdere cifre)
+    // con coordinate finite vicine ai limiti di `f64`: si lavora in uno
+    // spazio scalato uniformemente e si torna alle unita' originali dopo.
     let scale = geometry.coords_iter().fold(0.0_f64, |maximum, coordinate| {
         maximum.max(coordinate.x.abs()).max(coordinate.y.abs())
     });
@@ -456,12 +532,18 @@ pub fn simplify_with_policy(
     validate_output(simplified)
 }
 
-/// Explodes one multipart/collection level while preserving deterministic
-/// component order. Simple geometries produce exactly one row.
+/// Spezza un livello di multi-parte o di collezione, nell'ordine delle parti
+/// (kernel di `geo.explode`).
+///
+/// Una geometria semplice da' esattamente se
+/// stessa; un multi o una collezione vuoti nessuna parte; una collezione
+/// annidata resta una parte.
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: la geometria di input non supera la validazione OGC.
+/// - `InvalidInput`: la geometria di input non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
+///   barriera.
 pub fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
     Ok(match geometry {
@@ -475,12 +557,19 @@ pub fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, Operation
     })
 }
 
-/// OGC boundary for the WKB geometry variants used by Plenora-Geo.
+/// Confine OGC della geometria (kernel di `geo.boundary`).
+///
+/// Anelli dei poligoni come `MultiLineString`, estremi delle linee aperte
+/// come
+/// `MultiPoint` (regola mod-2 per le `MultiLineString`), collezione vuota per
+/// i punti, collezione dei confini per una `GeometryCollection`.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
-/// - `InvalidOutput`: il boundary prodotto non supera la validazione OGC.
+/// - `InvalidOutput`: il boundary prodotto non supera la validazione OGC;
+/// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
+///   barriera.
 pub fn boundary(geometry: &Geometry<f64>) -> Result<Geometry<f64>, OperationError> {
     ensure_valid(geometry)?;
     let output = boundary_unchecked(geometry);
@@ -590,7 +679,8 @@ mod tests {
         rect(0.0, 0.0, 4.0, 2.0)
     }
 
-    /// Regressione del fuzz target `wkt_operations`.
+    /// Regressione trovata dal fuzz target `wkt_operations` del progetto
+    /// d'origine.
     ///
     /// Poligono valido con `-0.0` accanto a `0.0`: la sweep line di
     /// `interior_point()` ne viola l'invariante (vedi `point_on_surface`).
@@ -1090,9 +1180,7 @@ mod tests {
     /// all'inizio o in mezzo, l'esito non dipende dalla sua posizione.
     ///
     /// L'offset planare di `i_overlay` 9 salta i percorsi con meno di tre
-    /// punti prima di calcolarne l'area (con `i_overlay` 4.5 serviva la
-    /// patch di `i_shape` 1.18.0, che dava area zero a un percorso vuoto
-    /// prima di accedere all'ultimo vertice).
+    /// punti prima di calcolarne l'area.
     #[test]
     fn buffer_su_multipolygon_con_vuoto_in_diverse_posizioni_non_panica() {
         let ordinario = quadrato_4x4;

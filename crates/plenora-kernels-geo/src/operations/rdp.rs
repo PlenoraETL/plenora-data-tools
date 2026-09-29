@@ -5,7 +5,9 @@
 //! geo, senza cambiare i vertici o la tolleranza. Ogni distanza viene
 //! controllata, non soltanto il massimo: un NaN parziale sparirebbe dal fold.
 //! Il costo e' una seconda traversata RDP, con stack esplicito O(n).
-//! Ambito e condizione di rientro: docs/errori-e-limiti.md.
+//! Vale per `simplify` con `SimplifyPolicy::DouglasPeucker` e tolleranza
+//! positiva: una distanza non finita e' `OperationError::Internal`, senza
+//! risultato parziale.
 
 use super::OperationError;
 use geo::{Coord, Distance, Euclidean, Geometry, Line, LineString};

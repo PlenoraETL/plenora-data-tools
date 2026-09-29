@@ -1,17 +1,16 @@
 ### Che cosa fa
 
-Aggiunge una colonna `float64` con l'area planare, senza segno, della
-geometria di ogni riga, nelle unità del CRS al quadrato. Un poligono conta
-l'esterno meno i buchi, una multi-geometria la somma delle parti; punti e
-linee hanno area 0. In una `GeometryCollection` si sommano le aree dei
-membri senza unirli: due poligoni sovrapposti contano la sovrapposizione
-due volte.
+Aggiunge una colonna `float64` con la lunghezza planare della geometria di
+ogni riga, nelle unità del CRS. Una linea vale la somma dei suoi segmenti;
+un poligono il suo perimetro, anello esterno più buchi (la semantica di
+`length` di Shapely); una multi-geometria o una collezione la somma delle
+parti; i punti valgono 0.
 
 ### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `output_column` | stringa | `area` | nome non vuoto (non di soli spazi) e non già presente nell'ingresso | colonna aggiunta |
+| `output_column` | stringa | `length` | nome non vuoto (non di soli spazi) e non già presente nell'ingresso | colonna aggiunta |
 
 ### Schema
 
@@ -21,9 +20,9 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1 per contratto. Il kernel (`operations::area`) lavora su una geometria
-alla volta e nessun adapter lo chiama ancora sulle righe: il trattamento di
-una cella nulla non è definito da codice eseguito.
+1:1 per contratto. Il kernel (`operations::length`) lavora su una
+geometria alla volta e nessun adapter lo chiama ancora sulle righe: il
+trattamento di una cella nulla non è definito da codice eseguito.
 
 ### Ordine
 
@@ -53,19 +52,19 @@ codice traduce ancora in `PlenoraError`):
 
 Il runner non esegue ancora le operazioni geo
 ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
-L'area è planare, nel piano del CRS proiettato: non è l'area geodetica.
+Un poligono ha la lunghezza del suo perimetro, dove `ST_Length` di PostGIS
+rende 0. La lunghezza è planare, non geodetica.
 
 ### Precisione
 
-Nessuna griglia e nessun rifiuto `PrecisionInsufficient`: l'area è la
-formula dell'anello di `geo` in `f64` (anello traslato sul primo vertice
-prima delle somme), senza un bilancio d'errore dichiarato rispetto alla
-regola di 1 cm
+Nessuna griglia e nessun rifiuto `PrecisionInsufficient`: la lunghezza è la
+somma in `f64` delle lunghezze dei segmenti calcolate da `geo`, senza un
+bilancio d'errore dichiarato rispetto alla regola di 1 cm
 ([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
-Per geometria di n vertici: tempo O(n) per l'area, più la validazione OGC
+Per geometria di n vertici: tempo O(n) per la somma, più la validazione OGC
 dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
@@ -76,15 +75,15 @@ memoria O(n) per la validazione.
 {
   "config": {},
   "ingressi": [
-    {"nome": "lotti", "colonne": [
-      {"nome": "id", "tipo": "int64", "valori": [1, 2]},
-      {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,4 2,4 4,2 4,2 2))", "LINESTRING(0 0,3 4)"]}
+    {"nome": "tratte", "colonne": [
+      {"nome": "id", "tipo": "int64", "valori": [1, 2, 3]},
+      {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["LINESTRING(0 0,3 4)", "POLYGON((0 0,10 0,10 10,0 10,0 0))", "POINT(1 1)"]}
     ]}
   ],
   "uscita": {"colonne": [
-    {"nome": "id", "tipo": "int64", "valori": [1, 2]},
-    {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,4 2,4 4,2 4,2 2))", "LINESTRING(0 0,3 4)"]},
-    {"nome": "area", "tipo": "float64", "valori": [96.0, 0.0]}
+    {"nome": "id", "tipo": "int64", "valori": [1, 2, 3]},
+    {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["LINESTRING(0 0,3 4)", "POLYGON((0 0,10 0,10 10,0 10,0 0))", "POINT(1 1)"]},
+    {"nome": "length", "tipo": "float64", "valori": [5.0, 40.0, 0.0]}
   ]}
 }
 ```
