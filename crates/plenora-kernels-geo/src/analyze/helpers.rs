@@ -20,7 +20,7 @@ use crate::arrow_adapter::{
 };
 
 // ---------------------------------------------------------------------------
-// Errori e validazioni di dominio (messaggi coerenti col protocollo legacy).
+// Errori e validazioni di dominio.
 // ---------------------------------------------------------------------------
 
 pub(in crate::analyze) fn invalid_param(
@@ -35,7 +35,7 @@ pub(in crate::analyze) fn invalid_param(
 ///
 /// La porta WKB rende `Internal` quando la validazione OGC non conclude:
 /// quell'errore passa intatto, perche' «parametro non valido» accuserebbe un
-/// WKB che nessuno ha dimostrato sbagliato e cambierebbe l'exit code. Si
+/// WKB che nessuno ha dimostrato sbagliato e ne cambierebbe la categoria. Si
 /// legge la categoria e non la variante, cosi' un errore avvolto (`Tagged`)
 /// non sfugge.
 pub(in crate::analyze) fn parametro_non_decodificabile(
@@ -138,12 +138,12 @@ pub(in crate::analyze) fn short_id(op: &str) -> &str {
 ///
 /// Si lavora sui byte e non su `&str`: una lunghezza in byte pari non
 /// garantisce confini di carattere (`"a\u{e9}b"`), e affettare una stringa
-/// fuori da un confine e' un panic che il lint R6 non vede. Ogni byte non
+/// fuori da un confine e' un panic che i lint anti-panico non vedono. Ogni byte non
 /// ASCII o non esadecimale e' un errore esplicito.
 ///
 /// # Errors
 ///
-/// `InvalidParam` se la stringa e' vuota, di lunghezza dispari, o contiene un
+/// `PlenoraError::InvalidPlan` se la stringa e' vuota, di lunghezza dispari, o contiene un
 /// byte che non e' una cifra esadecimale ASCII; gli errori di
 /// [`crate::validate_wkb_contract`] sul contenuto decodificato.
 pub(in crate::analyze) fn validate_wkb_hex(
@@ -163,8 +163,8 @@ pub(in crate::analyze) fn validate_other_wkb(op: &str, hex: &str) -> Result<()> 
 }
 
 /// Validita' OGC e dominio di validita' del CRS dell'input sulle coordinate
-/// del secondo operando `other_wkb` (convenzione D16: stesso CRS
-/// dell'input).
+/// del secondo operando `other_wkb` (convenzione: il secondo operando e' nel
+/// CRS dell'input).
 ///
 /// Rifa' la validazione strutturale di [`validate_other_wkb`] per avere i
 /// byte: il costo e' per piano, non per riga. La decodifica e' quella
@@ -187,7 +187,7 @@ pub(in crate::analyze) fn validate_other_wkb_domain(
 }
 
 /// Il CRS risolto della colonna geometria dell'input, per le geometrie che
-/// arrivano dalla config con lo stesso CRS (D16).
+/// arrivano dalla config con lo stesso CRS.
 pub(in crate::analyze) fn input_crs<'a>(
     op: &str,
     input: &'a DataContract,
@@ -212,7 +212,8 @@ pub(in crate::analyze) fn validate_config_geometry_domain(
 // Helper su contratti e schemi.
 // ---------------------------------------------------------------------------
 
-/// Esattamente una colonna geometria attiva per input (D16).
+/// Esattamente una colonna geometria attiva per input: il secondo operando
+/// di un'operazione binaria arriva da un secondo input o dalla config.
 pub(in crate::analyze) fn single_geometry<'a>(
     op: &str,
     input: &'a DataContract,
@@ -226,14 +227,13 @@ pub(in crate::analyze) fn single_geometry<'a>(
     Ok(&input.geometries[0])
 }
 
-/// Identificazione della colonna geometria sul campo dello schema
-/// (piano-v5.md#contratti-di-input, decisione 8).
+/// Identificazione della colonna geometria sul campo dello schema.
 ///
 /// Estensione `geoarrow.wkb` oppure sole chiavi canoniche
 /// (`plenora.geometry.*`), lo stesso criterio del trasporto
 /// ([`crate::arrow_adapter::field_declares_wkb_geometry`]). Una colonna che
-/// il trasporto non saprebbe identificare si ferma a compile-plan, mai a
-/// meta' esecuzione (architettura.md#geometrie).
+/// il trasporto non saprebbe identificare si ferma in analisi, mai a
+/// meta' esecuzione.
 pub(in crate::analyze) fn require_identifiable_geometry(
     op: &str,
     input: &DataContract,
@@ -256,12 +256,12 @@ pub(in crate::analyze) fn require_identifiable_geometry(
 }
 
 /// Contratto di output di un'operazione che RISCRIVE i tipi geometrici
-/// della colonna (piano-v5.md#contratti-di-input, decisione 8).
+/// della colonna.
 ///
 /// La proprieta' `types` dichiara i tipi dell'OUTPUT; le chiavi canoniche
 /// `types`/`types_declaration` ereditate sono rimosse e
-/// `executor.rs::canonical_output_schema` le ri-emette dal contratto, senza
-/// conflitto R2.6. Il resto e' preservato (stesso `FieldId`, in place).
+/// `plenora_core::contract::arrow_schema::arrow_schema_from_contract` le
+/// ri-emette dal contratto, senza conflitto con la chiave ereditata. Il resto e' preservato (stesso `FieldId`, in place).
 pub(in crate::analyze) fn with_geometry_types(
     input: &DataContract,
     geometry: &GeometryColumnContract,
@@ -352,12 +352,12 @@ pub(in crate::analyze) fn rebuild(
     )
 }
 
-/// Merge dei metadati di SCHEMA delle due sorgenti di un'op binaria (R2.4):
+/// Merge dei metadati di SCHEMA delle due sorgenti di un'op binaria:
 /// chiave in una sola sorgente -> copiata; in entrambe con lo stesso valore
 /// -> copiata; in entrambe con valori diversi -> errore esplicito che nomina
 /// la chiave (mai i valori: errori senza dati). Le chiavi di `right` sono
-/// esaminate in ordine lessicografico: l'eventuale errore e' deterministico
-/// (architettura.md#determinismo), mai dipendente dall'ordine di iterazione della mappa.
+/// esaminate in ordine lessicografico: l'eventuale errore e' deterministico,
+/// mai dipendente dall'ordine di iterazione della mappa.
 pub(in crate::analyze) fn merge_schema_metadata(
     op: &str,
     left: &DataContract,
@@ -384,7 +384,8 @@ pub(in crate::analyze) fn merge_schema_metadata(
 }
 
 /// Sostituisce i metadati di SCHEMA del contratto (campi, geometrie e
-/// proprieta' invariati): usato dalle op binarie per applicare il merge R2.4.
+/// proprieta' invariati): usato dalle op binarie per applicare il merge
+/// di [`merge_schema_metadata`].
 pub(in crate::analyze) fn with_schema_metadata(
     contract: &DataContract,
     metadata: HashMap<String, String>,
@@ -400,9 +401,10 @@ pub(in crate::analyze) fn with_schema_metadata(
 /// Copia del campo geometria con nullability aggiornata (per gli output a
 /// sole geometrie, dove l'aggregazione puo' produrre null).
 ///
-/// R2.4 identity-preserving: si clonano TUTTI i metadati del campo, chiavi
+/// Lineage identity-preserving: si clonano TUTTI i metadati del campo, chiavi
 /// `plenora.*` comprese, perche' il campo sopravvive invariato; l'emissione
-/// canonica resta in `executor.rs::canonical_output_schema`.
+/// canonica resta in
+/// `plenora_core::contract::arrow_schema::arrow_schema_from_contract`.
 pub(in crate::analyze) fn geometry_field(
     input: &DataContract,
     geometry: &GeometryColumnContract,
@@ -446,7 +448,7 @@ pub(in crate::analyze) fn new_geometry_field(
 
 /// Rifiuto a compile-plan per i kernel geo che ELABORANO la geometria
 /// decodificandola in `geo::Geometry<f64>` (XY): ogni dimensionalita' diversa
-/// da `Xy` — Z/M dichiarate oppure `Unknown` (R3.4: mai mappata a Xy) — e'
+/// da `Xy` — Z/M dichiarate oppure `Unknown` (mai mappata a Xy) — e'
 /// rifiutata qui, in validazione del piano, mai scoperta a meta' esecuzione
 /// (il decode fallirebbe a runtime sulla prima cella Z/M). Il trasporto dei
 /// byte Z/M resta possibile con le op tabellari, che li propagano invariati.

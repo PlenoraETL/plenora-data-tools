@@ -199,7 +199,7 @@ fn cornice_sottile_segue_la_politica_del_centimetro() {
     }
 }
 
-/// Primo controesempio della terza revisione, in metri: il buco largo
+/// Primo controesempio di una revisione, in metri: il buco largo
 /// `2^-40` m e' sotto la precisione e puo' sparire; il quadrato resta.
 #[test]
 fn buco_sotto_la_precisione_puo_sparire_il_resto_resta() {
@@ -223,8 +223,7 @@ fn buco_sotto_la_precisione_puo_sparire_il_resto_resta() {
 
 /// Il controllo della griglia: con il motore `i64` di `i_overlay` 9 un
 /// poligono da riparare esteso 20.000 km in metri passa anche in
-/// `STRUCTURE` (con `i_overlay` 4.5 la griglia, circa 1,9 cm, lo rifiutava),
-/// come a 1.300 km (l'Italia); il solo rifiuto resta la spaziatura delle
+/// `STRUCTURE`, come a 1.300 km (l'Italia); il solo rifiuto resta la spaziatura delle
 /// coordinate (lo stesso poligono a `2^45` m). `LINEWORK` non passa da
 /// overlay e ripara entrambi: l'area e' quella di GEOS, la shell meno la
 /// parte del buco dentro piu' quella fuori, `L^2`.
@@ -397,12 +396,9 @@ fn caso_92(inizio: f64, larghezza: f64) -> (Geometry<f64>, Polygon<f64>) {
 }
 
 /// Campagna differenziale traslata di `2^30`, seme 1 caso 92: shell larga
-/// 6.000 km e alta 7 micrometri, in metri. Con `i_overlay` 4.5 (passo
-/// `span * 2^-30`, circa 5,6 mm) il bilancio di spostamento
-/// (arrotondamento piu' aggancio: 11,2 mm) superava il centimetro e
-/// `STRUCTURE` dava errore; con il motore `i64` il bilancio e' fatto di
-/// arrotondamenti dei `f64` (qualche `ulp(2^30)`, sotto il micrometro) e
-/// `STRUCTURE` risponde: la shell meno un buco alto 2 micrometri, sotto la
+/// 6.000 km e alta 7 micrometri, in metri. Con il motore `i64` il bilancio
+/// di spostamento di `STRUCTURE` e' fatto di arrotondamenti dei `f64`
+/// (qualche `ulp(2^30)`, sotto il micrometro) e `STRUCTURE` risponde: la shell meno un buco alto 2 micrometri, sotto la
 /// precisione, con l'area della shell entro perimetro per 1 cm. `LINEWORK`
 /// non usa overlay e risponde come GEOS, esatto: il buco condivide un
 /// tratto del lato destro con la shell, il primo giro costruisce la shell
@@ -451,8 +447,7 @@ fn caso_92_in_metri_a_6000_km_structure_e_linework_rispondono() {
     }
 }
 
-/// Lo stesso caso lungo 4.000 km: bilancio circa 7,5 mm, sotto il
-/// centimetro. Le linee del buco (a 2 micrometri dal bordo) sono sotto la
+/// Lo stesso caso lungo 4.000 km, con `LINEWORK`. Le linee del buco (a 2 micrometri dal bordo) sono sotto la
 /// precisione: possono restare o sparire. Il risultato deve esserci, con
 /// l'area della shell entro perimetro per 1 cm.
 #[test]
@@ -538,7 +533,7 @@ fn scala_di_epsilon_del_laboratorio_entro_la_precisione() {
     }
 }
 
-/// Revisione (Codex): il bilancio di `STRUCTURE` conta gli overlay eseguiti,
+/// Il bilancio di `STRUCTURE` conta gli overlay eseguiti,
 /// non quelli possibili. 2.000 rettangoli disgiunti a `3e8` m (dove la
 /// spaziatura dei `f64` e' circa `6e-8` m) con una sola coppia sovrapposta:
 /// un solo overlay. Il vecchio bilancio `p / n` sui 6.000 passi possibili

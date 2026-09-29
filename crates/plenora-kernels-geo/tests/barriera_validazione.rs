@@ -1,4 +1,5 @@
-//! I due reperti che `fuzz wkb_contract` ha trovato, e cio' che la barriera
+//! I due reperti che il fuzz target `wkb_contract` del progetto d'origine ha
+//! trovato, e cio' che la barriera
 //! deve garantire.
 //!
 //! # Perche' i byte stanno per intero in `tests/fixtures/`
@@ -17,7 +18,7 @@
 //! 2.47e-312 e' subnormale. Vietare una classe di magnitudini rifiuterebbe
 //! geometrie valide senza chiudere il difetto.
 //!
-//! # Dov'e' il punto di rottura, senza il candidato esatto
+//! # Dov'era il punto di rottura, con `geo` non patchato
 //!
 //! Entrambi i reperti sono `MultiPolygon` di tre poligoni: i primi due validi
 //! da soli, il terzo no. Il panico e' un **`debug_assert!`** di `geo`
@@ -25,20 +26,20 @@
 //! e' valida — ma `propagate_side_labels` riceve **un solo** operando, e
 //! il conflitto topologico nasce dalla *coppia*: relazionare il poligono 1
 //! (valido) con il 2 (invalido). Il guardiano guarda quello valido, non
-//! vede l'altro, e l'asserzione scatta solo con le asserzioni di debug
+//! vede l'altro, e l'asserzione scattava solo con le asserzioni di debug
 //! attive — mai in produzione.
 //!
-//! # Con il candidato esatto (BOZZA NON ADOTTATA, vedi Cargo.toml)
+//! # Con il segno esatto di `orient2d`
 //!
-//! Il candidato memory-lab sostituisce il segno di `orient2d` con aritmetica
-//! intera esatta (`vendor/geo-0.33.1-exact`), non il guardiano: l'asserzione
-//! resta scritta uguale. Corretto il segno, `geo` non la fa piu' scattare su
+//! Il `geo` vendorizzato (`vendor/geo-0.33.1-exact-filtered`,
+//! `patches/geo-exact-orientation.patch`) sostituisce il segno di `orient2d`
+//! con aritmetica intera esatta, non il guardiano: l'asserzione resta
+//! scritta uguale. Corretto il segno, `geo` non la fa piu' scattare su
 //! questi due reperti in NESSUN profilo — conclude sempre, e la conclusione
 //! e' un ingresso invalido (non piu' `ElementsOverlaps`: un anello con
-//! auto-intersezione, misurato sotto). La distinzione profilo-dipendente che
-//! questo file verifica senza il candidato esatto non c'e' piu' per questi
-//! due reperti specifici quando il candidato e' applicato: resta la garanzia
-//! generale (contenimento se `geo` panicasse per un motivo diverso), provata
+//! auto-intersezione, misurato sotto). La distinzione dipendente dal profilo
+//! che questi reperti mostravano con `geo` non patchato non c'e' piu': resta
+//! la garanzia generale (contenimento se `geo` panicasse per un motivo diverso), provata
 //! separatamente e sinteticamente nel modulo `barriera_privacy_processo` dei
 //! test di `src/lib.rs`.
 //!
@@ -58,16 +59,16 @@ const REPERTO_A: &[u8] = include_bytes!("fixtures/reperto_a.wkb");
 /// Il reperto della campagna schedulata del 4 settembre 2026.
 const REPERTO_B: &[u8] = include_bytes!("fixtures/reperto_b.wkb");
 
-/// **Col candidato esatto, entrambi i reperti sono un ingresso invalido — in
+/// **Col segno esatto, entrambi i reperti sono un ingresso invalido — in
 /// ogni profilo.**
 ///
-/// Senza il candidato memory-lab questo caso dipende dal profilo: con
-/// `debug_assertions` attive `geo` panica (guardiano sbagliato,
-/// `ElementsOverlaps` mai raggiunto), la barriera lo contiene come
-/// `Internal`; in `release` conclude da solo. Il segno corretto di
-/// `orient2d` (diff 1, `vendor/geo-0.33.1-exact`) toglie la causa
-/// dell'asserzione, non l'asserzione: `geo` ora conclude **sempre**, in
-/// debug e in release, misurato qui su entrambi i reperti — non dedotto
+/// Con `geo` 0.33.1 non patchato questo caso dipendeva dal profilo: con
+/// `debug_assertions` attive `geo` panicava (guardiano sbagliato,
+/// `ElementsOverlaps` mai raggiunto), la barriera lo conteneva come
+/// `Internal`; in `release` concludeva da solo. Il segno corretto di
+/// `orient2d` (`vendor/geo-0.33.1-exact-filtered`,
+/// `patches/geo-exact-orientation.patch`) toglie la causa dell'asserzione,
+/// non l'asserzione: `geo` ora conclude **sempre**, in debug e in release, misurato qui su entrambi i reperti — non dedotto
 /// dalla patch. La categoria e' quella di chi ha scritto l'ingresso, perche'
 /// il validatore ha concluso e non si e' interrotto.
 #[test]
@@ -145,7 +146,7 @@ fn una_geometria_invalida_resta_un_ingresso_invalido() {
 /// Non si verifica l'assenza di qualche frammento di coordinata — un elenco di
 /// frammenti prova solo che quei frammenti non ci sono. Si verifica che il
 /// testo reso appartenga al **vocabolario nostro**: una ragione controllata,
-/// sul reperto e sulla farfalla, che col candidato esatto concludono entrambi
+/// sul reperto e sulla farfalla, che col segno esatto concludono entrambi
 /// come ingresso invalido.
 ///
 /// L'altro esito, la validazione interrotta, da qui non si raggiunge: nessun
@@ -154,7 +155,7 @@ fn una_geometria_invalida_resta_un_ingresso_invalido() {
 /// il panico sintetico del modulo `barriera_privacy_processo` di `src/lib.rs`.
 #[test]
 fn il_rifiuto_di_un_ingresso_invalido_non_pubblica_il_testo_della_dipendenza() {
-    // 1. Il reperto. Col candidato esatto conclude in ogni profilo — vedi
+    // 1. Il reperto. Col segno esatto conclude in ogni profilo — vedi
     //    `i_reperti_geo_sono_un_ingresso_invalido_in_ogni_profilo` — quindi
     //    la ragione appartiene sempre al vocabolario controllato, non piu'
     //    condizionata dal profilo.

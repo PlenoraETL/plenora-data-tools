@@ -1,10 +1,10 @@
 //! Diagnostica isolata (non un gate, non un benchmark applicativo): separa
 //! `buffer`, `simplify` e `centroid` su poligoni a molti vertici, a
-//! dimensioni crescenti, per localizzare dove va il tempo quando il
-//! candidato esatto (diff 1, orientamento esatto) rallenta drammaticamente
-//! `executor::tests::geo_fusion_falls_back_when_the_governor_rejects_the_reservation`
-//! (quel test resta intatto: qui la stessa fixture — poligono-cerchio — e'
-//! ricostruita a parte, a dimensioni piu' piccole e crescenti).
+//! dimensioni crescenti, per localizzare dove va il tempo con l'orientamento
+//! esatto di `orient2d` (`patches/geo-exact-orientation.patch`). Nata per
+//! un test dell'executor del progetto d'origine che l'orientamento esatto
+//! rallentava molto: qui la stessa fixture — poligono-cerchio — e'
+//! ricostruita a dimensioni piu' piccole e crescenti.
 //!
 //! Ogni chiamata gira su un thread separato con un tetto per-taglia: se una
 //! taglia non risponde entro il budget, la taglia e' segnata "incompleto" e
@@ -26,10 +26,9 @@ fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
     plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
 }
 
-/// Stessa costruzione di `circle_polygon_wkb` in
-/// `crates/plenora-engine/src/executor/tests.rs` (non importata da li': quella
-/// e' privata al modulo di test dell'altro crate) — poligono-cerchio con
-/// `coords` vertici, chiusura esatta sull'angolo 0.
+/// Stessa costruzione di `circle_polygon_wkb` dei test dell'executor del
+/// progetto d'origine — poligono-cerchio con `coords` vertici, chiusura
+/// esatta sull'angolo 0.
 #[allow(clippy::cast_precision_loss)]
 fn circle_polygon(coords: usize) -> Geometry<f64> {
     let mut ring: Vec<(f64, f64)> = (0..coords - 1)

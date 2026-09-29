@@ -2,9 +2,9 @@
 //! casi positivi e negativi, due densita' di candidati — separato da
 //! `bench_geo_sweep` apposta: quello rifà tutte le 88 misure a ogni run e
 //! adatta la scala ai tempi; qui la scala è FISSA (stessi N nei due bracci
-//! del confronto candidato-esatto/originale) e lo scenario è quello del
-//! join spaziale vero (`spatial_join_nullable_validated`, la stessa API di
-//! `geo_transport::pair`), non predicati punto-contro-poligono per cella.
+//! di un confronto fra due alberi) e lo scenario è quello del join spaziale
+//! vero (`spatial_join_nullable_validated`), non predicati
+//! punto-contro-poligono per cella.
 //!
 //! # Budget interno vs esterno
 //!

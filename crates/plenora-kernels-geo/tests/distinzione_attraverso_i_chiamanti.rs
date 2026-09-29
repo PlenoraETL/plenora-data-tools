@@ -8,12 +8,14 @@
 //! il tipo la conserva all'origine, ma e' la conversione a poterla perdere.
 //! Un caso che guardasse solo la porta WKB non vedrebbe mai quella perdita.
 //!
-//! # Stato col candidato esatto (BOZZA NON ADOTTATA, vedi Cargo.toml)
+//! # Stato col segno esatto di `orient2d`
 //!
-//! Il reperto sotto conclude `Internal` (`ValidazioneNonConclusa`) con le
-//! asserzioni di debug attive, senza il diff 1 (`vendor/geo-0.33.1-exact`):
-//! il segno corretto di `orient2d` toglie la causa dell'asserzione, e `geo`
-//! conclude sempre — misurato qui, non dedotto. Con questo reperto non resta
+//! Con `geo` 0.33.1 non patchato il reperto sotto concludeva `Internal`
+//! (`ValidazioneNonConclusa`) con le asserzioni di debug attive. Il `geo`
+//! vendorizzato (`vendor/geo-0.33.1-exact-filtered`,
+//! `patches/geo-exact-orientation.patch`) ha il segno corretto di
+//! `orient2d`, che toglie la causa dell'asserzione: `geo` conclude sempre —
+//! misurato qui, non dedotto. Con questo reperto non resta
 //! piu' un ingresso che interrompa la validazione di NESSUNO dei tre
 //! chiamanti sotto: i casi qui provano solo la meta' "geo conclude, l'ingresso
 //! e' davvero invalido".

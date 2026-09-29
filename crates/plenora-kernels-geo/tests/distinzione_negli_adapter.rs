@@ -32,15 +32,14 @@ fn coppia_del_reperto_in_wkt() -> String {
         .to_string()
 }
 
-/// **Col candidato esatto, questa coppia e' una cella invalida in ogni
+/// **Col segno esatto, questa coppia e' una cella invalida in ogni
 /// profilo — mai piu' una validazione interrotta.**
 ///
-/// Senza il diff 1 (`vendor/geo-0.33.1-exact`), con le asserzioni di debug
-/// attive la cella fa panicare `geo` e l'adapter rende
-/// `Internal`, non `DataMapping`. Il segno corretto di `orient2d` toglie la
+/// Con `geo` 0.33.1 non patchato e le asserzioni di debug attive la cella
+/// faceva panicare `geo` e l'adapter rendeva `Internal`, non `DataMapping`. Il segno corretto di `orient2d` toglie la
 /// causa dell'asserzione: `geo` conclude sempre — misurato qui in entrambi i
-/// profili, non dedotto. La distinzione fra i due esiti (provata, senza il
-/// diff 1, con un reperto reale per entrambi) non e' cambiata nell'adapter,
+/// profili, non dedotto. La distinzione fra i due esiti (provata, con `geo`
+/// non patchato, con un reperto reale per entrambi) non e' cambiata nell'adapter,
 /// solo il verdetto su QUESTA coppia: resta la meta' "conclusa".
 #[test]
 fn l_adapter_wkt_su_reperto_concluso_resta_datamapping() {

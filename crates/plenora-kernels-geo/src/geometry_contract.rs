@@ -1,14 +1,15 @@
-//! Contratto di geometria su forme decodificate (architettura.md#geometrie, D12.3/D12.4).
+//! Contratto di geometria su forme decodificate.
 //!
-//! Riproduce su `Geometry<f64>` cio' che il percorso non fuso ottiene con il
-//! round-trip WKB (encode canonico `to_wkb` + validazione del decoder):
+//! Riproduce su `Geometry<f64>` cio' che si ottiene con il round-trip WKB
+//! (encode canonico `to_wkb` + validazione del decoder), senza passare dal
+//! WKB:
 //! [`wkb_size_xy`] da' la dimensione ESATTA del WKB ISO XY senza
 //! serializzare; [`validate_geometry_structural`] applica le regole di
 //! `wkb_decoder` nello stesso ordine e con gli stessi messaggi.
 //!
 //! Parita' con l'encoder canonico (geozero 0.15), verificata dai test: un
 //! `Polygon` e' sempre codificato con l'anello esterno, quindi il poligono
-//! vuoto e' rifiutato come nel percorso non fuso; `Line` vale come
+//! vuoto e' rifiutato come nel round-trip; `Line` vale come
 //! `LineString` di due coordinate, `Rect` e `Triangle` come poligoni.
 //! L'incoerenza di tipo dei figli delle multi-geometrie non e'
 //! rappresentabile in `geo`.
@@ -26,7 +27,7 @@ const COUNT_BYTES: u64 = 4;
 /// Byte di una coordinata XY: due `f64`.
 const COORD_BYTES: u64 = 16;
 
-/// Dimensione esatta in byte del WKB ISO XY di `geometry` (architettura.md#geometrie D12.3).
+/// Dimensione esatta in byte del WKB ISO XY di `geometry`.
 ///
 /// Camminata strutturale speculare all'encoder canonico
 /// (`geozero::ToWkb::to_wkb(CoordDimensions::xy())`): un header per ogni
@@ -76,10 +77,10 @@ fn polygon_size_xy(polygon: &Polygon<f64>) -> u64 {
             .sum::<u64>()
 }
 
-/// Validazione strutturale di una geometria decodificata (architettura.md#geometrie D12.4).
+/// Validazione strutturale di una geometria decodificata.
 ///
 /// L'equivalente su `Geometry<f64>` delle regole del decoder validante
-/// ([`crate::wkb_decoder`], architettura.md#geometrie), nello stesso ordine di valutazione
+/// ([`crate::wkb_decoder`]), nello stesso ordine di valutazione
 /// e con gli stessi messaggi d'errore: profondita' di annidamento,
 /// conteggio dei componenti (una unita' per geometria, figli inclusi),
 /// cardinalita' delle `LineString`, coordinate finite (NaN e infiniti
@@ -87,7 +88,7 @@ fn polygon_size_xy(polygon: &Polygon<f64>) -> u64 {
 /// (first == last, confronto su X/Y).
 ///
 /// La validazione OGC NON e' compresa: resta responsabilita' del
-/// chiamante (topologica, non strutturale — come in architettura.md#geometrie).
+/// chiamante (e' topologica, non strutturale).
 ///
 /// # Errors
 ///
@@ -173,7 +174,7 @@ fn validate_node(
     }
 }
 
-/// X/Y finite (NaN e infiniti rifiutati, architettura.md#determinismo), stesso errore del
+/// X/Y finite (NaN e infiniti rifiutati), stesso errore del
 /// decoder.
 fn check_finite(coord: &Coord<f64>) -> Result<(), PlenoraError> {
     if coord.x.is_finite() && coord.y.is_finite() {
@@ -203,7 +204,7 @@ fn check_polygon(polygon: &Polygon<f64>) -> Result<(), PlenoraError> {
 
 /// Anello: almeno quattro coordinate, tutte finite, chiusura esatta
 /// (first == last su X/Y — i NaN sono gia' esclusi dalla finitezza,
-/// nessun margine epsilon: determinismo architettura.md#determinismo).
+/// nessun margine epsilon: il confronto esatto e' deterministico).
 fn check_ring(ring: &LineString<f64>) -> Result<(), PlenoraError> {
     if ring.0.len() < 4 {
         return Err(invalid_wkb_structure(
@@ -271,7 +272,7 @@ mod tests {
         fixtures
     }
 
-    /// Parita' di misura (D12.3): la camminata strutturale deve dare
+    /// Parita' di misura: la camminata strutturale deve dare
     /// esattamente la lunghezza del WKB prodotto dall'encoder canonico.
     #[test]
     fn wkb_size_xy_matches_canonical_encoder() {
@@ -299,8 +300,8 @@ mod tests {
         assert_eq!(wkb_size_xy(&empty), encoded.len() as u64);
     }
 
-    /// Parita' di validazione (D12.4): l'esito (e il messaggio d'errore)
-    /// deve coincidere con il percorso non fuso, cioe' encode canonico +
+    /// Parita' di validazione: l'esito (e il messaggio d'errore)
+    /// deve coincidere con il round-trip, cioe' encode canonico +
     /// decode validante.
     fn assert_validation_parity(geometry: &Geometry<f64>, label: &str) {
         let reference = geometry

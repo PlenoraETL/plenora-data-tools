@@ -1,6 +1,7 @@
 //! `geo.make_valid` su anelli che girano dentro se stessi o si toccano, su
 //! parti collassate e su incroci arrotondati: attese dall'output di GEOS
-//! 3.14 (sonda della campagna differenziale), in metri con 1 cm.
+//! 3.14 registrato dalla sonda della campagna differenziale del laboratorio
+//! (qui GEOS non gira), in metri con 1 cm.
 //!
 //! - `STRUCTURE` ripara un anello come `GeometryFixer::fixRing` di GEOS, il
 //!   buffer nullo nei due versi: le regioni con avvolgimento diverso da zero.
@@ -210,7 +211,7 @@ fn linework_rejects_a_rounded_crossing_next_to_another_feature() {
     assert!(make_valid_geometry_rust(&exact, RepairMethod::Linework, false, CENTIMETRO).is_ok());
 }
 
-/// Revisione 8: il tratto ripercorso `(0 0) -> (5 5) -> (0 0)` sparisce dal
+/// Il tratto ripercorso `(0 0) -> (5 5) -> (0 0)` sparisce dal
 /// polygonize, e il campione interno del quadrato `(5, 5)` sta su di esso.
 /// L'avvolgimento per perturbazione simbolica e' quello della faccia (1):
 /// il quadrato, come GEOS, come shell e come buco.

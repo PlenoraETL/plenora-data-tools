@@ -270,10 +270,12 @@ fn vertical_splitters(width: u32, height: u32, parts: u32) -> Geometry<f64> {
 /// Precisione dichiarata della campagna: le coordinate sono astratte, e i
 /// kernel la vogliono esplicita. `2^-20` del lato minore del rettangolo
 /// d'ingombro: molto sotto ogni feature delle costruzioni, anche con le
-/// trasformazioni anisotrope, e sopra il bilancio degli overlay (con
-/// `i_overlay` 4.5 due diagonali del passo `2^-30`, al piu' `2^-28` del lato
-/// maggiore; con il motore `i64` di 9.0 `1 + sqrt(2)` diagonali di `span *
-/// 2^-49 + 4 ulp(M)`, molto meno) finche' l'anisotropia resta sotto `2^8`.
+/// trasformazioni anisotrope, e sopra il bilancio degli overlay di
+/// `STRUCTURE` (`1 + sqrt(2)` diagonali di `span * 2^-49 + 4 ulp(M)` con il
+/// motore `i64` di `i_overlay` 9.0) finche' l'anisotropia resta sotto `2^8`.
+/// Il minimo di `2^-28` del lato maggiore viene dal bilancio di `i_overlay`
+/// 4.5 (due diagonali del passo `2^-30`): con 9.0 e' largo, e resta per non
+/// cambiare le attese della campagna.
 fn precisione(geometry: &Geometry<f64>) -> f64 {
     use geo::BoundingRect;
     geometry.bounding_rect().map_or(1.0, |rect| {

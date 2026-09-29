@@ -4,7 +4,7 @@
 //!
 //! La ricerca di auto-intersezioni di `geo` 0.33.1 salta le coppie di segmenti
 //! adiacenti, e una punta sta proprio li'. I tre reperti del fuzz target
-//! `wkt_operations` hanno un guscio di tre punti collineari: per `geo` sono
+//! `wkt_operations` del progetto d'origine hanno un guscio di tre punti collineari: per `geo` sono
 //! validi, e su di loro `relate` rende una matrice che fa «contenere» un buco
 //! esterno al guscio, oppure va in panico dentro `point_on_surface`.
 

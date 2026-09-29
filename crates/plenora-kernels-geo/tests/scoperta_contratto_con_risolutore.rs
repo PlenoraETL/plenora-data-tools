@@ -28,9 +28,9 @@ use plenora_core::crs::resolve_crs;
 use plenora_core::PlenoraError;
 
 /// WKT1 realistico di Monte Mario / Italy zone 1 con `AUTHORITY` e
-/// `TOWGS84` (EPSG:3003): la forma dello shapefile catastale owner.
+/// `TOWGS84` (EPSG:3003): la forma di uno shapefile catastale.
 ///
-/// Stesso testo di `plenora-cli/tests/comune/costanti.rs`, da cui i casi
+/// Stesso testo dei test della CLI del progetto d'origine, da cui i casi
 /// provengono.
 const MONTE_MARIO_WKT: &str = concat!(
     r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
@@ -72,7 +72,8 @@ fn canonical_field(data_type: DataType, pairs: &[(&str, &str)]) -> Field {
     Field::new("geometry", data_type, true).with_metadata(metadata)
 }
 
-/// Schema con la versione di protocollo R2.5 nei metadati di schema.
+/// Schema con la versione di protocollo (`plenora.contract.version`) nei
+/// metadati di schema.
 fn schema_v1(fields: Vec<Field>) -> SchemaRef {
     Arc::new(Schema::new_with_metadata(
         fields,
@@ -81,14 +82,14 @@ fn schema_v1(fields: Vec<Field>) -> SchemaRef {
 }
 
 /// Campo geometria canonico con le chiavi date (helper delle fixture
-/// CRS: schema con versione R2.5, colonna `id` + `geometry`).
+/// CRS: schema con versione di protocollo, colonna `id` + `geometry`).
 fn canonical_crs_field(pairs: &[(&str, &str)]) -> Field {
     canonical_field(DataType::Binary, pairs)
 }
 
 #[test]
 fn discovery_recognizes_canonical_only_geometry_field() {
-    // (a) tabella §2: le chiavi canoniche sono autosufficienti — il campo
+    // Le chiavi canoniche sono autosufficienti — il campo
     // e' riconosciuto come geometria anche senza estensione `geoarrow.wkb`
     // e metadato `geo`, con types Declared/Schema dalla coppia canonica.
     let schema = schema_v1(vec![
@@ -125,11 +126,11 @@ fn discovery_recognizes_canonical_only_geometry_field() {
 }
 
 // -------------------------------------------------------------------
-// Emendamento 2026-07-31 (classe A): `resolved` dichiarato con doppia
-// rappresentazione — risoluzione + verifica di coerenza decidibile.
+// `resolved` dichiarato con doppia rappresentazione: risoluzione e
+// verifica di coerenza decidibile.
 // -------------------------------------------------------------------
 
-/// Campo canonico del caso owner: `resolved` dichiarato, doppia
+/// Campo canonico del caso Monte Mario: `resolved` dichiarato, doppia
 /// rappresentazione (`crs_id` + definizione WKT) con formato `wkt`.
 fn monte_mario_field(crs_id: &str) -> Field {
     canonical_crs_field(&[
@@ -143,11 +144,10 @@ fn monte_mario_field(crs_id: &str) -> Field {
 
 #[test]
 fn discovery_resolved_with_double_representation_needs_the_backend() {
-    // Conseguenza DICHIARATA dell'emendamento 2026-07-31 (classe A):
-    // senza `proj-backend` un input `resolved` con doppia
-    // rappresentazione non degrada a `DeclaredUnresolved`. La
-    // dichiarazione si onora con la regola (3), quindi la risoluzione
-    // impossibile fallisce con errore `Crs` — coerente con quel che fa un
+    // Senza backend PROJ un input `resolved` con doppia rappresentazione
+    // non degrada a `DeclaredUnresolved`: la dichiarazione `resolved` si
+    // onora risolvendo, quindi la risoluzione impossibile (senza PROJ una
+    // definizione WKT non si risolve) fallisce con errore `Crs` — coerente con quel che fa un
     // `resolved` a rappresentazione singola.
     let field = monte_mario_field("EPSG:3003");
     let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
@@ -172,7 +172,8 @@ fn contract_crs_from_keys_legacy_fallback_feeds_the_resolution() {
     let legacy_wkt = format!(r#"{{"crs":{}}}"#, serde_json::Value::from(MONTE_MARIO_WKT));
     let result = contract_crs_from_keys("geometry", Some(&legacy_wkt), &keys, resolve_crs);
     assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
-    // Nessuna rappresentazione: `Missing`, mai errore (R4.6.3).
+    // Nessuna rappresentazione: `Missing`, mai errore (il rifiuto spetta
+    // all'analisi delle op che chiedono un CRS).
     let missing = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("assente");
     assert!(matches!(missing, ContractCrs::Missing));
 }

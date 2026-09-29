@@ -1,32 +1,29 @@
-//! Inferenza a secco dei `DataContract` per le operazioni `geo.*`
-//! (architettura.md#planner-ed-executor).
+//! Inferenza a secco dei `DataContract` per le operazioni `geo.*`.
 //!
 //! [`analyze_geo_contract`] ricava il contratto dell'arco in uscita da id
 //! dell'operazione, contratti di input, config JSON e CRS di piano, oppure
 //! fallisce **in validazione** (fail-closed), mai a runtime.
-//! `required_capabilities` non si verifica qui: il controllo sui backend
-//! compilati spetta al planner.
+//! `required_capabilities` del catalogo non si verifica qui: l'analisi
+//! decide solo il contratto.
 //!
 //! # Config
 //!
-//! Le struct serde sono locali: stessi nomi e domini di `validate_parameters`
-//! delle config di `plenora-engine::geo_transport`, senza i limiti di
-//! trasporto, che non appartengono all'analisi semantica. Gli enum semantici
-//! di `kernels-geo` sono riusati.
+//! Le struct serde sono locali all'analisi, con nomi e domini dei parametri
+//! dei kernel e senza i limiti di trasporto, che non appartengono
+//! all'analisi semantica. Gli enum semantici dei kernel sono riusati.
 //!
 //! # Forme di output
 //!
 //! Le trasformazioni 1:1 riscrivono la geometria in place con lo stesso
 //! `FieldId`; quelle che cambiano tipo dichiarano i tipi dell'output e
-//! sostituiscono le chiavi canoniche ereditate (piano-v5.md#contratti-di-input,
-//! decisione 8). Misure e predicati aggiungono una colonna, le espansioni 1:N
+//! sostituiscono le chiavi canoniche ereditate. Misure e predicati aggiungono una colonna, le espansioni 1:N
 //! aggiungono `__parent_index`, le aggregazioni tengono le sole geometrie, i
 //! join aggiungono `__right_index`, i produttori creano una colonna geometria
 //! con nuovo `FieldId`. Il dettaglio per operazione sta sulle funzioni di
 //! inferenza.
 //!
 //! Il catalogo marca `Unary` predicati, distanze a due colonne e `split`, ma
-//! un input ha una sola colonna geometria (D16): il secondo operando arriva
+//! un input ha una sola colonna geometria: il secondo operando arriva
 //! dalla config come WKB hex (`other_wkb`), validato in analisi, con CRS
 //! assunto uguale a quello dell'input e coordinate nel suo dominio di
 //! validita' (come `point_wkb`, `reference_wkb` e l'`extent` di
@@ -38,20 +35,21 @@
 //! senza backend; altrimenti `resolve_crs`, che risolve solo la tabella dei
 //! CRS integrati e fallisce chiuso sul resto (`CRS_NOT_BUILTIN`,
 //! `CRS_BACKEND_UNAVAILABLE`). Ogni kernel che consuma una geometria
-//! la decodifica in XY, quindi un input con `dimensions != Xy` si rifiuta a
-//! compile-plan (R3.4); produttori e output ricodificati dichiarano `Xy`, e
+//! la decodifica in XY, quindi un input con `dimensions != Xy` si rifiuta
+//! in analisi (una dimensionalita' `Unknown` non vale `Xy`); produttori e output ricodificati dichiarano `Xy`, e
 //! le dimensionalita' estese passano solo per le op tabellari.
 //!
 //! La chiave `encoding` dei metadati `geo` di output si scrive solo se il
 //! contratto la dichiara. EWKB senza flag Z/M e senza SRID e' byte-identico a
 //! WKB ISO e passa come `xy`; il flag SRID EWKB e' sempre rifiutato dal
-//! validatore celle dell'esecutore.
+//! validatore WKB delle celle ([`crate::geometry_from_wkb`]).
 //!
 //! # Proprieta' del contratto
 //!
 //! Le op 1:1 preservano `sorted_by`/`row_count`; le espansioni 1:N
 //! preservano `sorted_by` ma eliminano `row_count`; join e aggregazioni
-//! eliminano entrambe (declassamento obbligatorio, par. 4.3).
+//! eliminano entrambe: una proprieta' che l'operazione non conserva si
+//! declassa, mai si eredita.
 
 pub mod config;
 mod dispatch;
@@ -127,7 +125,7 @@ pub const ACCESSOR_COLUMNS: [(&str, DataType); 6] = [
 ];
 
 /// Le 10 colonne diagnostiche di `geometry_diagnostics`, nella posizione
-/// della colonna geometria che sostituiscono (come nel kernel legacy).
+/// della colonna geometria che sostituiscono (come nel kernel).
 pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
     ("geometry_type", DataType::Utf8),
     ("coordinate_count", DataType::UInt64),
@@ -145,25 +143,36 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 // Entry point del catalogo (`analyze_contract` delle operazioni `geo.*`).
 // ---------------------------------------------------------------------------
 
-/// `analyze_contract` del catalogo per le operazioni `geo.*`
-/// (architettura.md): inferenza a secco del contratto di output.
+/// `analyze_contract` del catalogo per le operazioni `geo.*`: inferenza a
+/// secco del contratto di output.
 ///
-/// `plan_crs` e' il CRS di piano gia' risolto dal planner (usato dai
+/// `plan_crs` e' il CRS di piano gia' risolto dal chiamante (usato dai
 /// produttori `from_coords`, `from_wkt`, `generate_grid`; `reproject` risolve
 /// il target sempre dalla tabella integrata); `fields` alloca i `FieldId`
 /// delle nuove colonne geometriche nel namespace globale del grafo.
 ///
 /// # Errors
 ///
-/// Fallisce (fail-closed, in validazione) se: l'op non e' nel catalogo o non
-/// e' geo; l'arieta' non e' rispettata; un input non ha esattamente una
-/// colonna geometria attiva; la colonna geometria non e' identificabile
-/// dal trasporto (ne' estensione `geoarrow.wkb` ne' chiavi canoniche,
-/// piano-v5.md#contratti-di-input decisione 8); la geometria di input non e' `Xy` per un kernel
-/// che la elabora; il `crs_requirement` non e' soddisfatto;
-/// la config non supera deserializzazione stretta o domini dei parametri;
-/// una colonna prodotta collide con una esistente; il CRS di output non e'
-/// risolvibile.
+/// Fallisce (fail-closed, in validazione), senza toccare dati:
+///
+/// - `PlenoraError::Unsupported` se l'op non e' nel catalogo, non e' geo o e'
+///   N-aria, o se la geometria di input non e' `Xy` per un kernel che la
+///   elabora;
+/// - `PlenoraError::InvalidPlan` se il numero di input non e' l'arieta'
+///   dell'op, se la config non supera la deserializzazione stretta o i
+///   domini dei parametri (anche un WKB di config non valido), o se lo
+///   spazio dei `FieldId` di `fields` e' esaurito;
+/// - `PlenoraError::Schema` se un input non ha esattamente una colonna
+///   geometria attiva, se la colonna geometria non e' identificabile dal
+///   trasporto (ne' estensione `geoarrow.wkb` ne' chiavi canoniche), se una
+///   colonna richiesta manca o ha un tipo sbagliato, o se una colonna
+///   prodotta collide con una esistente;
+/// - `PlenoraError::Crs` se il `crs_requirement` non e' soddisfatto (CRS
+///   `Missing` o dichiarato ma non risolto compresi), se il CRS di output non
+///   e' risolvibile o la riproiezione non e' ammessa, o se una geometria di
+///   config esce dal dominio del CRS;
+/// - `PlenoraError::Internal` per un'incoerenza interna dell'analisi, o se
+///   la validazione OGC di un WKB di config non conclude.
 pub fn analyze_geo_contract(
     op: &str,
     inputs: &[DataContract],
@@ -259,7 +268,7 @@ mod tests {
     };
 
     /// Il CRS risolto di un contratto di colonna (i test di analyze lavorano
-    /// su CRS risolti; il gate R4.6.3 per `Missing` ha test dedicati).
+    /// su CRS risolti; il rifiuto dei CRS `Missing` ha test dedicati).
     fn resolved_crs_of(geometry: &GeometryColumnContract) -> &ResolvedCrs {
         geometry.crs.as_resolved().expect("CRS risolto")
     }
@@ -408,13 +417,13 @@ mod tests {
         esadecimale(&wkb)
     }
 
-    /// Replay deterministico dell'invariante di `fuzz_targets/analyze_geo.rs`
-    /// («mai panic») sui soli parametri WKB esadecimali.
+    /// Replay deterministico dell'invariante «mai panic» del fuzz target
+    /// dell'analisi del progetto d'origine (qui non portato), sui soli
+    /// parametri WKB esadecimali.
     ///
     /// Non esplora: ripete un elenco scritto a mano sul percorso
     /// `analyze_geo_contract` -> `validate_wkb_hex`, per ogni operazione che
-    /// accetta un WKB da configurazione, dove la campagna libFuzzer non e'
-    /// eseguibile (release.md#fuzzing). Ogni caso deve arrivare davvero a
+    /// accetta un WKB da configurazione. Ogni caso deve arrivare davvero a
     /// `validate_wkb_hex`: il controllo con un WKB valido prova che il resto
     /// della config e l'input passano, e l'errore atteso e' quello del
     /// decoder, non di un controllo precedente.
@@ -509,7 +518,8 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Tabella dei 69 casi: config minima valida + contratto atteso per op.
+    // Tabella dei casi, uno per op geo del catalogo: config minima valida +
+    // contratto atteso.
     // -----------------------------------------------------------------------
 
     #[derive(Clone)]
@@ -968,7 +978,7 @@ mod tests {
     #[test]
     fn dimensions_propagation_table_for_all_catalog_geo_ops() {
         // (a) per OGNI op geo del catalogo, un input con dimensionalita'
-        // estesa o non risolta -> rifiuto esplicito a compile-plan (kernel
+        // estesa o non risolta -> rifiuto esplicito in analisi (kernel
         // elaboranti) oppure Xy dichiarato dal produttore; MAI un xy
         // silenzioso. La tabella `cases()` copre tutte e sole le 75 op.
         const PRODUCERS: [&str; 3] = ["geo.from_coords", "geo.from_wkt", "geo.generate_grid"];
@@ -2523,10 +2533,10 @@ mod tests {
 
     #[test]
     fn nessuna_operazione_chiede_un_backend_nativo() {
-        // Rust puro: `make_valid`, `polygonize` e `split` (a 190c493 dietro la
-        // capability `geos`) e `reproject` (dietro `proj`) sono tornate con i
-        // backend Rust (`crate::rust_backend`, `crate::riproiezione`) e non
-        // dichiarano alcuna capability.
+        // Rust puro: `make_valid`, `polygonize` e `split` (nel progetto
+        // d'origine dietro la capability `geos`) e `reproject` (dietro
+        // `proj`) sono tornate con i backend Rust (`crate::rust_backend`,
+        // `crate::riproiezione`) e non dichiarano alcuna capability.
         let inputs = [geo_contract(projected_crs())];
         for op in [
             "geo.make_valid",
@@ -2637,7 +2647,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Lineage dei metadati Arrow (R2.4).
+    // Lineage dei metadati Arrow: cio' che l'op non tocca resta invariato.
     // -----------------------------------------------------------------------
 
     /// Restituisce il contratto con i metadati di SCHEMA sostituiti dalle
@@ -2749,7 +2759,7 @@ mod tests {
 
     #[test]
     fn geometry_field_metadata_survive_geometry_only_aggregation() {
-        // R2.4 identity-preserving sul campo geometria che sopravvive
+        // Lineage identity-preserving sul campo geometria che sopravvive
         // invariato: TUTTI i metadati del campo sorgente (chiave canonica
         // `plenora.*` gia' presente e chiave esterna) sono conservati.
         // Schema ricostruito senza i metadati di schema.
@@ -2773,12 +2783,12 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // R4.6.3: il requisito di CRS risolvibile e' condizionato alle op che
-    // lo usano — il gate vive qui, in analyze (compile-plan).
+    // Il requisito di CRS risolvibile e' condizionato alle op che lo
+    // usano: il rifiuto vive qui, in analisi.
     // -------------------------------------------------------------------
 
     /// Campo geometria con la sola estensione `geoarrow.wkb` (colonna
-    /// identificabile dal trasporto, piano-v5.md#contratti-di-input decisione 8) e nessun
+    /// identificabile dal trasporto) e nessun
     /// metadato `geo`: la forma delle fixture senza CRS dichiarato.
     fn extension_only_geometry_field() -> Field {
         Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(HashMap::from([
@@ -2803,7 +2813,7 @@ mod tests {
     #[test]
     fn every_geo_op_declares_a_crs_requirement() {
         // Perimetro verificato dal catalogo: NESSUNA op geo e' senza
-        // `CrsRequirement` (il gate R4.6.3 ha sempre un requisito da
+        // `CrsRequirement` (il rifiuto dei CRS non risolti ha sempre un requisito da
         // applicare); le op senza requisito sono solo le table.*.
         for descriptor in CATALOG {
             if descriptor.family == Family::Geo {
@@ -2818,7 +2828,7 @@ mod tests {
 
     #[test]
     fn missing_crs_stops_geo_ops_in_analyze_with_the_declared_cause() {
-        // R4.6.3: un contratto con CRS `Missing` ferma OGNI op che dichiara
+        // Un contratto con CRS `Missing` ferma OGNI op che dichiara
         // un `CrsRequirement` nel punto in cui tocca la colonna — categoria
         // `Crs` (come ogni requisito non soddisfatto) e messaggio che
         // dichiara la causa, non l'ultimo tentativo di lettura fallito.
@@ -2858,7 +2868,7 @@ mod tests {
     }
 
     /// Contratto con geometria a CRS dichiarato non risolto
-    /// (`ContractCrs::DeclaredUnresolved`, R4.6.3).
+    /// (`ContractCrs::DeclaredUnresolved`).
     fn geo_contract_declared_unresolved_crs() -> DataContract {
         contract_with_geometry(
             vec![
@@ -2875,7 +2885,7 @@ mod tests {
 
     #[test]
     fn declared_unresolved_crs_stops_geo_ops_with_a_distinct_cause() {
-        // R4.6.3: come `Missing`, lo stato `DeclaredUnresolved` ferma le op
+        // Come `Missing`, lo stato `DeclaredUnresolved` ferma le op
         // con `CrsRequirement` in analyze con categoria `Crs` — ma il
         // messaggio e' DISTINTO: la colonna DICHIARA un'incoerenza, non
         // un'assenza, e la risoluzione richiede una decisione esplicita nel
@@ -2908,9 +2918,9 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // piano-v5.md#contratti-di-input decisione 8: le op che riscrivono un fatto canonico (tipo
-    // geometrico, CRS) dichiarano il fatto dell'OUTPUT; le chiavi ereditate
-    // sono sostituite. Identificabilita' della colonna a compile-plan.
+    // Le op che riscrivono un fatto canonico (tipo geometrico, CRS)
+    // dichiarano il fatto dell'OUTPUT; le chiavi ereditate sono sostituite.
+    // Identificabilita' della colonna in analisi.
     // -----------------------------------------------------------------------
 
     /// (op, dichiarazione attesa, lista canonica attesa) per le operazioni
@@ -3058,7 +3068,7 @@ mod tests {
     fn type_changers_replace_preexisting_types_type_preservers_keep_it() {
         // Type-changer: la dichiarazione di input (`polygon`) e' SOSTITUITA
         // da quella dell'output e le chiavi ereditate sono rimosse (mai un
-        // conflitto R2.6 a valle).
+        // conflitto con la chiave ereditata a valle).
         for case in cases() {
             let Some((declaration, list)) = expected_types_of(case.op) else {
                 continue;
@@ -3172,7 +3182,7 @@ mod tests {
 
     #[test]
     fn unidentifiable_geometry_column_is_rejected_in_analysis() {
-        // Minore 2 / architettura.md#geometrie: una colonna geometria che il trasporto non
+        // Una colonna geometria che il trasporto non
         // saprebbe identificare (ne' estensione `geoarrow.wkb` ne' chiavi
         // canoniche) e' rifiutata QUI, in analisi del piano — mai scoperta
         // a meta' esecuzione.
@@ -3207,7 +3217,7 @@ mod tests {
 
     #[test]
     fn canonical_only_geometry_column_is_accepted_in_analysis() {
-        // Minore 1: la forma a sole chiavi canoniche (estensione ammessa,
+        // La forma a sole chiavi canoniche (estensione ammessa,
         // non richiesta) identifica la colonna.
         let mut contract = geo_contract(projected_crs());
         contract.schema = Arc::new(Schema::new(vec![
@@ -3302,7 +3312,8 @@ mod tests {
             )
         }
 
-        /// Il contratto d'ingresso come lo vede l'executor dopo la scoperta:
+        /// Il contratto d'ingresso come lo restituisce la scoperta da uno
+        /// schema Arrow:
         /// lo schema porta le chiavi canoniche emesse dal contratto (tipi
         /// compresi), piu' un metadato di lineage sul campo geometria e su
         /// un attributo, e un metadato di schema.
@@ -3521,7 +3532,7 @@ mod tests {
                 assert_eq!(letta.nullable, dedotta.nullable, "{op}: nullable");
             }
             // Lo schema pubblicato (blocco canonico dal contratto) si
-            // costruisce sui metadati del kernel senza conflitti R2.6.
+            // costruisce sui metadati del kernel senza chiavi in conflitto.
             let mut pubblicato = analizzato.clone();
             pubblicato.schema = kernel.clone();
             arrow_schema_from_contract(&pubblicato)

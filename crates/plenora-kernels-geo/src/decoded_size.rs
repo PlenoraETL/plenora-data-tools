@@ -1,16 +1,18 @@
-//! Preflight della forma decodificata (architettura.md#geometrie D14.4).
+//! Preflight della forma decodificata.
 //!
 //! [`decoded_size_xy`] calcola i byte della `Geometry<f64>` che il decoder
 //! validante ([`crate::wkb_decoder`]) costruirebbe da una cella WKB, SENZA
-//! decodificarla: il governor riserva prima di decodificare e rifiuta prima
-//! di allocare (R7).
+//! decodificarla, cosi' un chiamante puo' riservare memoria prima di
+//! decodificare e rifiutare prima di allocare. Oggi nessun chiamante del
+//! workspace lo usa: il governor di memoria del progetto d'origine non e'
+//! stato portato.
 //!
 //! La camminata e' speculare a `decode_geometry`: stesso ordine di
 //! valutazione e stessi limiti ([`MAX_WKB_BYTES`], [`MAX_WKB_DEPTH`],
 //! [`MAX_WKB_COMPONENTS`]), ma salta i valori delle coordinate e accumula
 //! byte invece di costruire. I controlli sono un sottoinsieme di quelli del
 //! decoder, quindi se il preflight fallisce su una cella fallisce anche il
-//! decode; il rapporto d'errore canonico resta sempre al decode (D14.3).
+//! decode; il rapporto d'errore canonico resta sempre al decode.
 //!
 //! # Modello di memoria (dichiarato)
 //!
@@ -48,8 +50,7 @@ pub const GEOMETRY_BYTES: u64 = size_of::<Geometry<f64>>() as u64;
 /// (`size_of`; contato per riga, null inclusi).
 pub const OPTION_SLOT_BYTES: u64 = size_of::<Option<Geometry<f64>>>() as u64;
 
-/// Dimensione in byte della forma decodificata di una cella WKB (architettura.md#geometrie
-/// D14.4).
+/// Dimensione in byte della forma decodificata di una cella WKB.
 ///
 /// Heap della `Geometry<f64>` che il decoder validante costruirebbe, SENZA
 /// lo slot `Option` radice (contato dal chiamante via
@@ -63,7 +64,7 @@ pub const OPTION_SLOT_BYTES: u64 = size_of::<Option<Geometry<f64>>>() as u64;
 /// profondita', componenti, conteggi contro i byte residui, type code).
 /// L'esito d'errore NON e' destinato al rapporto canonico: il chiamante lo
 /// tratta come "stima interrotta" e lascia al decode validante l'errore
-/// definitivo sulla stessa cella (D14.3, una sola fonte di verita').
+/// definitivo sulla stessa cella (una sola fonte di verita').
 pub fn decoded_size_xy(payload: &[u8]) -> Result<u64, PlenoraError> {
     if payload.len() > MAX_WKB_BYTES {
         return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
@@ -268,9 +269,8 @@ mod tests {
         ]))
     }
 
-    /// Conservativita' (architettura.md#geometrie D14.4, ruolo del test errori-e-limiti.md#limiti-dichiarati): su tutto il
-    /// corpus la stima del preflight e' >= la memoria reale misurata sulla
-    /// geometria decodificata dal decoder validante — e qui esattamente
+    /// Conservativita': su tutto il corpus la stima del preflight e' >= la
+    /// memoria reale misurata sulla geometria decodificata dal decoder validante — e qui esattamente
     /// uguale, perche' il decoder alloca ogni `Vec` con capacita' esatta
     /// (invariante che questa uguaglianza stessa presidia: uno slack di
     /// capacita' la violerebbe).

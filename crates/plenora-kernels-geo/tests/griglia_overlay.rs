@@ -6,9 +6,7 @@
 //!
 //! - un'estensione di circa 1.300 km (l'Italia) passa: passo della griglia
 //!   `2^-41` m con il motore `i64` di `i_overlay` 9;
-//! - un'estensione di circa 20.000 km passa: passo `2^-37` m (con
-//!   `i_overlay` 4.5 e `i32` era `2^-6` m, 1,56 cm da solo, e l'operazione
-//!   era rifiutata);
+//! - un'estensione di circa 20.000 km passa: passo `2^-37` m;
 //! - coordinate oltre la guardia di modulo (`2^45` m, dove la spaziatura
 //!   dei `f64` supera `p / 64`) sono rifiutate anche con un'estensione di
 //!   pochi metri: e' il solo rifiuto legato alla precisione rimasto.
@@ -268,7 +266,7 @@ fn buffer_alle_tre_scale() {
 
 /// Il controllo a priori del buffer e' sull'ingresso allargato della
 /// distanza: due punti (ingombro di 1 m) con una distanza di 5.000 km
-/// passano (con `i_overlay` 4.5 la griglia li rifiutava); a 10.000 km il
+/// passano; a 10.000 km il
 /// rientro delle normali intere, `2^-30 |d|` (circa 9,3 mm), supera `p/2`
 /// e il buffer e' rifiutato; con una distanza di `10^12` m l'ingombro
 /// allargato supera anche la guardia di spaziatura.
@@ -290,11 +288,12 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
     ));
 }
 
-/// Revisione: il `Buffer` di `geo` saltava senza errore la componente che
-/// la griglia di `i_overlay` riduce a un punto, anche quando il suo buffer
-/// e' grande: una linea di 0,4 mm accanto a una di 1.300 km perdeva un
-/// disco di 10 m (9 m fuori dal buffer della linea lunga). Ora il buffer si
-/// costruisce per pezzi (il disco di ogni estremo c'e' comunque).
+/// Il `Buffer` di `geo` salta senza errore la componente che la griglia di
+/// `i_overlay` riduce a un punto, anche quando il suo buffer e' grande: una
+/// linea di 0,4 mm accanto a una di 1.300 km perdeva un disco di 10 m (9 m
+/// fuori dal buffer della linea lunga). Ora prima del calcolo una linea
+/// piu' corta di due passi di griglia diventa il suo primo punto, e le parti
+/// si bufferizzano una per una prima dell'unione: il disco c'e' comunque.
 #[test]
 fn il_buffer_di_una_componente_minuscola_resta() {
     use geo::Contains as _;
@@ -386,8 +385,9 @@ fn il_rifiuto_e_unsupported_senza_dati() {
 }
 
 mod senza_rifiuti_spuri {
-    //! Il controllo a posteriori non rifiuta risultati corretti: stelle a
-    //! scala italiana, centri e raggi casuali, tutte le booleane e il buffer.
+    //! I controlli a priori della precisione non rifiutano risultati
+    //! corretti: stelle a scala italiana, centri e raggi casuali, tutte le
+    //! booleane, `dissolve` e il buffer.
     use super::*;
     use proptest::prelude::*;
 

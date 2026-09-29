@@ -13,7 +13,8 @@
 //!   da uno dei segmenti.
 //!
 //! Il quarto controesempio (un buco omesso dall'output di `split`) riguarda
-//! i controlli a posteriori, privati: e' nei test di `rust_backend::split`.
+//! le verifiche a posteriori di `split`, private: e' nei test di
+//! `rust_backend::split`.
 //!
 //! Qui le coordinate sono metri e la precisione e' 1 cm.
 
@@ -104,13 +105,11 @@ fn shell_con_vertice_lontano(lontano: f64, scarto: f64) -> Geometry<f64> {
     Geometry::Polygon(Polygon::new(shell, vec![buco]))
 }
 
-/// A `span_x = 2^23` m, con `i_overlay` 4.5 (passo 7.8 mm), l'aggancio del
-/// laboratorio (due passi, 15.6 mm) portava l'incrocio a `x = 100`
-/// sull'ascissa `100.0155` di un vertice a 1 km, e il bilancio
-/// (arrotondamento piu' aggancio) superava il centimetro: errore esplicito.
-/// Con il motore `i64` il raggio d'aggancio e' fatto di arrotondamenti dei
-/// `f64` (sotto il micrometro): l'overlay si esegue e l'incrocio resta
-/// esatto, lontano dal vertice.
+/// A `span_x = 2^23` m l'aggancio del laboratorio (due passi di griglia per
+/// asse) portava l'incrocio a `x = 100` sull'ascissa `100.0155` di un
+/// vertice a 1 km. Con il motore `i64` il raggio d'aggancio e' fatto di
+/// arrotondamenti dei `f64` (sotto il micrometro): l'overlay si esegue e
+/// l'incrocio resta esatto, lontano dal vertice.
 #[test]
 fn aggancio_oltre_il_centimetro_non_serve_piu() {
     let input = shell_con_vertice_lontano(2_f64.powi(23), 0.0155);
@@ -239,7 +238,7 @@ fn quadrato(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> LineString<f64> {
     ])
 }
 
-/// Revisione, quinto giro: shell `[0, 10]^2`, buchi `A = [3, 5]^2` e
+/// Controesempio di revisione: shell `[0, 10]^2`, buchi `A = [3, 5]^2` e
 /// `B = [2, 8] x [0, 8]`, con `B` sul lato inferiore della shell e dentro.
 /// Unire `B` intero reinseriva nell'ordine `A, B` i 4 m^2 di `A`; ora si
 /// unisce solo la sporgenza di `B` fuori dalla shell (vuota). L'esito non
@@ -264,7 +263,7 @@ fn linework_non_dipende_dall_ordine_dei_buchi() {
     }
 }
 
-/// Revisione, quinto giro: traslato di `(B, B)` con `B = 2^52`, l'incrocio
+/// Controesempio di revisione: traslato di `(B, B)` con `B = 2^52`, l'incrocio
 /// esatto `(B, B + 1.5)` non e' rappresentabile e l'ordinata riportata
 /// sbaglia di 27.7 cm, anche se il passo della griglia e' minuscolo. Oltre
 /// `ulp(max |coordinata|) > p / 64` nessun kernel calcola: errore esplicito.

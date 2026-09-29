@@ -1,22 +1,26 @@
-//! Adapter Arrow per il canone GeoArrow-WKB (rappresentazione).
+//! Adapter Arrow per il canone GeoArrow-WKB: le celle.
 //!
-//! Casa unica dei metadati `GeoArrow` (`geoarrow.wkb`, metadato `geo` con
-//! `crs`, `dimensions` (ICD §3.3) ed `encoding`, quest'ultima solo se il
-//! contratto la dichiara), del decode/encode delle celle WKB con limite per
-//! cella e degli helper sui `RecordBatch`; il trasporto Arrow di
-//! `plenora-engine::geo_transport` delega qui. Envelope `PLNGEO3`, checksum,
-//! CLI e schemi Arrow vivono in `plenora-engine`. Le celle non-null sono
-//! validate dal validatore WKB del kernel; i null sono preservati.
+//! Decode e encode delle celle WKB con il limite per cella
+//! ([`MAX_CELL_BYTES`], controllato prima di toccare i dati), applicazione
+//! di una funzione alle celle di una colonna preservando i null, colonna
+//! geometria di un `RecordBatch` e stima dei byte nativi delle geometrie
+//! decodificate. Le celle decodificate passano dal validatore WKB
+//! strutturale e dalla validazione OGC del kernel ([`geometry_from_wkb`]).
 //!
-//! Chiavi canoniche `plenora.geometry.*` e `plenora.contract.version`
-//! (R2.1/R2.2, deroga DER-ICD-002: errori-e-limiti.md#limiti-dichiarati):
-//! emissione da [`GeometryColumnContract`], inclusi gli stati `missing` e
-//! `declared_unresolved` (R4.6.3/R4.6.4, piano-v5.md#contratti-di-input);
-//! `plenora.field_id` e' solo letta. Lettura fail-closed per chiave (R5.1),
-//! divergenza dal legacy `geo` → errore (R2.6), completamento per precedenza
-//! canonica > legacy > standard esterno (R2.7).
+//! Il codec dei metadati (estensione `geoarrow.wkb`, metadato `geo` con
+//! `crs`, `dimensions` ed `encoding`, chiavi canoniche `plenora.geometry.*` e
+//! `plenora.contract.version`) sta in `plenora_core::contract::arrow_metadata`
+//! ed e' ri-esportato da qui. Le sue regole, provate dai test di questo
+//! modulo: emissione da
+//! [`GeometryColumnContract`](plenora_core::contract::GeometryColumnContract),
+//! compresi i CRS `missing` e `declared_unresolved`; `plenora.field_id`
+//! solo letta, mai emessa;
+//! lettura fail-closed per chiave (un valore non canonico e' un errore, mai
+//! «assente»); divergenza fra chiavi canoniche e metadato `geo` → errore;
+//! completamento di cio' che manca con precedenza chiavi canoniche > `geo` >
+//! standard esterno.
 //!
-//! Errori: mappati su [`PlenoraError`] preservando i messaggi.
+//! Errori: [`PlenoraError`], con i messaggi del validatore WKB.
 
 use geo::Geometry;
 use geozero::{CoordDimensions, ToWkb};
@@ -28,9 +32,9 @@ use rayon::prelude::*;
 use crate::geometry_from_wkb;
 use crate::memory_estimate::{estimate_geometry_native_bytes, DecodedNativeBytesEstimate};
 
-// Il codec dei metadati contrattuali vive ora in `plenora-core`: e' sotto sia
-// alla CLI sia all'engine, come il protocollo del worker isolato richiede.
-// Qui resta cio' che tocca le celle WKB, e il re-export tiene invariati i
+// Il codec dei metadati contrattuali sta in `plenora-core`, sotto kernel e
+// `plenora-io`, che devono leggere e scrivere uno schema allo stesso modo.
+// Qui resta cio' che tocca le celle WKB; il re-export tiene invariati i
 // percorsi dei chiamanti.
 pub use plenora_core::contract::arrow_metadata::*;
 
@@ -105,12 +109,12 @@ pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError
 ///
 /// `PlenoraError::ResourceLimit` se una cella non-null supera [`MAX_CELL_BYTES`];
 /// in piu' l'errore restituito da `f` sulla prima cella IN ORDINE DI RIGA
-/// che fallisce (deterministico, architettura.md#determinismo).
+/// che fallisce (deterministico).
 pub fn map_nullable<T: Send>(
     cells: &BinaryArray,
     f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync,
 ) -> Result<Vec<Option<T>>, PlenoraError> {
-    // architettura.md#determinismo: il collect parallelo di `Result` sceglie
+    // Determinismo: il collect parallelo di `Result` sceglie
     // l'errore in modo non deterministico. Qui i `Result` sono raccolti per
     // riga e il collect sequenziale seleziona il primo errore in ordine di
     // riga: l'identita' dell'errore e' output. Si parallelizza sugli indici
@@ -132,7 +136,7 @@ pub fn map_nullable<T: Send>(
 }
 
 /// STIMA dei byte nativi delle geometrie decodificate di una colonna
-/// geometria (architettura.md#memoria).
+/// geometria.
 ///
 /// Decodifica ogni cella non-null e somma le stime per cella. Il valore e'
 /// una STIMA dichiarata (formula in [`crate::memory_estimate`]), da riportare
@@ -294,7 +298,7 @@ mod tests {
 
     #[test]
     fn geo_metadata_with_encoding_writes_the_key_only_when_declared() {
-        // `Some` -> chiave `encoding` in forma ICD; `None` -> chiave
+        // `Some` -> chiave `encoding` in forma canonica; `None` -> chiave
         // omessa e JSON identico byte-per-byte alla forma senza encoding
         // (fingerprint e retrocompatibilita' invariati).
         for encoding in [GeometryEncoding::Wkb, GeometryEncoding::Ewkb] {
@@ -344,7 +348,8 @@ mod tests {
 
     #[test]
     fn dimensions_and_encoding_readers_never_default_to_xy() {
-        // Campo senza metadato `geo`: Unknown/None, mai default xy (R3.4).
+        // Campo senza metadato `geo`: Unknown/None, mai default xy (una
+        // dimensionalita' non dichiarata non si inventa).
         let bare = Field::new("geom", DataType::Binary, true);
         assert_eq!(
             geometry_dimensions_from_metadata(&bare),
@@ -399,7 +404,7 @@ mod tests {
     #[test]
     fn strict_encoding_reader_rejects_unrepresentable_framing() {
         // Discovery: encoding fuori dall'enum chiuso -> errore
-        // esplicito (R3.5), mai mappato o ignorato.
+        // esplicito, mai mappato o ignorato.
         for raw in [
             r#"{"crs":"EPSG:3857","encoding":"gpkg"}"#,
             r#"{"crs":"EPSG:3857","encoding":"twkb"}"#,
@@ -437,7 +442,7 @@ mod tests {
         }
         let bare = Field::new("geom", DataType::Binary, true);
         assert_eq!(geometry_encoding_from_metadata_strict(&bare).unwrap(), None);
-        // Metadato `geo` illeggibile: ERRORE, non «assente» (R5.1). Il
+        // Metadato `geo` illeggibile: ERRORE, non «assente» (fail-closed). Il
         // lettore strict e' quello di contratto: se non riesce a leggere il
         // rango legacy non puo' dichiararlo vuoto e lasciare che le chiavi
         // canoniche completino al suo posto.
@@ -486,7 +491,7 @@ mod tests {
 
     #[test]
     fn geometry_column_index_accepts_the_canonical_only_form() {
-        // piano-v5.md#contratti-di-input decisione 8 (minore 1): la forma a sole chiavi canoniche
+        // La forma a sole chiavi canoniche
         // (`plenora.geometry.encoding` + `plenora.geometry.dimensions`
         // bastano) identifica la colonna — l'estensione `geoarrow.wkb` e'
         // ammessa, non richiesta.
@@ -557,7 +562,7 @@ mod tests {
 
     #[test]
     fn map_nullable_reports_the_first_failing_row_deterministically() {
-        // architettura.md#determinismo: con piu' celle fallite, l'errore riportato DEVE essere
+        // Determinismo: con piu' celle fallite, l'errore riportato DEVE essere
         // quello della prima riga in ordine, a qualunque scheduling rayon
         // (il collect parallelo diretto sceglierebbe il primo errore che
         // acquisisce il mutex interno: non deterministico).
@@ -589,7 +594,7 @@ mod tests {
         ));
     }
 
-    /// STIMA per colonna geometria (architettura.md#memoria): somma delle stime delle celle
+    /// STIMA per colonna geometria: somma delle stime delle celle
     /// non-null; i null contribuiscono zero; l'accumulatore riporta lo
     /// stesso totale come metrica "stimata".
     #[test]
@@ -624,7 +629,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Protocollo delle chiavi canoniche (R2.x, R3.4.1, R5.x)
+    // Protocollo delle chiavi canoniche `plenora.geometry.*`
     // ------------------------------------------------------------------
 
     fn resolved_crs(definition: &str) -> ResolvedCrs {
@@ -683,7 +688,7 @@ mod tests {
         assert_eq!(get(PLENORA_GEOMETRY_ENCODING_KEY), Some("wkb"));
         assert_eq!(get(PLENORA_GEOMETRY_DIMENSIONS_KEY), Some("xyz"));
         assert_eq!(get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY), Some("exact"));
-        // Elenco normalizzato: unici, ordine canonico §3.1.
+        // Elenco normalizzato: unici, in ordine canonico dei tipi.
         assert_eq!(get(PLENORA_GEOMETRY_TYPES_KEY), Some("point,polygon"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY), Some("resolved"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:3857"));
@@ -699,8 +704,8 @@ mod tests {
             Some("geometry")
         );
         assert_eq!(get(PLENORA_GEOMETRY_PRECISION_KEY), Some("float64"));
-        // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non
-        // ha significato fuori dal processo, piano-v5.md#contratti-di-input decisione 3).
+        // `field_id` non e' emesso (chiave opzionale: il FieldId di grafo non
+        // ha significato fuori dal processo).
         assert_eq!(get(PLENORA_FIELD_ID_KEY), None);
     }
 
@@ -719,10 +724,10 @@ mod tests {
         assert_eq!(get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY), Some("resolved"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:3857"));
         assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
-        // `field_id` non e' emesso (R2.2 opzionale; il FieldId di grafo non
-        // ha significato fuori dal processo, piano-v5.md#contratti-di-input decisione 3).
+        // `field_id` non e' emesso (chiave opzionale: il FieldId di grafo non
+        // ha significato fuori dal processo).
         assert_eq!(get(PLENORA_FIELD_ID_KEY), None);
-        // R5.2 + R3.4.1: le opzionali e le non dichiarate restano assenti.
+        // Le opzionali e le non dichiarate restano assenti, mai un default.
         for key in [
             PLENORA_GEOMETRY_ENCODING_KEY,
             PLENORA_GEOMETRY_TYPES_KEY,
@@ -737,11 +742,10 @@ mod tests {
         }
     }
 
-    // --- Ordine fisico normalizzato + SRID d'autorita' (piano-v5.md#contratti-di-input,
-    // emendamento 2026-08-01) ----------------------------------------------
+    // --- Ordine fisico normalizzato + SRID d'autorita' -----------------------
 
     /// Contratto `Resolved` con PROJJSON realistico di EPSG:4326 (assi e
-    /// `id` d'autorita' presenti — la forma prodotta dalla risoluzione PROJ).
+    /// `id` d'autorita' presenti — la forma di un PROJJSON completo).
     fn epsg_4326_realistic_contract() -> GeometryColumnContract {
         GeometryColumnContract {
             crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
@@ -771,7 +775,7 @@ mod tests {
 
     #[test]
     fn canonical_metadata_uses_normalized_axis_order_and_authority_srid() {
-        // Completamento DELL'ASSENTE (R2.7): senza dettagli espliciti,
+        // Completamento DELL'ASSENTE: senza dettagli espliciti,
         // axis_order descrive i byte x/y normalizzati (EPSG:4326 -> lon_lat),
         // mentre lo srid resta dedotto dall'autorita' (id EPSG:4326 -> 4326).
         // Lo stub `{"type":"ProjectedCRS"}` (`unknown` + niente srid) e'
@@ -788,7 +792,7 @@ mod tests {
 
     #[test]
     fn canonical_metadata_explicit_details_win_over_authority_deduction() {
-        // R2.7 completa solo l'assente: un dettaglio esplicito vince SEMPRE
+        // Il completamento tocca solo l'assente: un dettaglio esplicito vince SEMPRE
         // sulla deduzione d'autorita', anche se diverge.
         let details = GeometryMetadataDetails {
             axis_order: Some(AxisOrder::LonLat),
@@ -841,11 +845,10 @@ mod tests {
         );
     }
 
-    // --- Emissione da definizione WKT (piano-v5.md#contratti-di-input, emendamento 2026-07-31 —
-    // classe B) ----------------------------------------------------------
+    // --- Emissione da definizione WKT ---------------------------------------
 
     /// WKT1 realistico di Monte Mario / Italy zone 1 con `AUTHORITY` e
-    /// `TOWGS84` (EPSG:3003): la forma dello shapefile catastale owner.
+    /// `TOWGS84` (EPSG:3003): la forma di uno shapefile catastale.
     const MONTE_MARIO_WKT: &str = concat!(
         r#"PROJCS["Monte Mario / Italy zone 1",GEOGCS["Monte Mario","#,
         r#"DATUM["Monte_Mario",SPHEROID["International 1924",6378388,297],"#,
@@ -858,8 +861,8 @@ mod tests {
         r#"AUTHORITY["EPSG","3003"]]"#
     );
 
-    /// Contratto `Resolved` la cui definizione e' WKT (il kernel ha
-    /// risolto il testo WKT contro PROJ; il canonical porta assi e `id`).
+    /// Contratto `Resolved` la cui definizione e' WKT (risolta dal chiamante:
+    /// qui non c'e' backend PROJ; il canonical porta assi e `id`).
     fn monte_mario_wkt_contract() -> GeometryColumnContract {
         GeometryColumnContract {
             crs: ContractCrs::Resolved(ResolvedCrs::from_resolved_parts(
@@ -889,9 +892,9 @@ mod tests {
 
     #[test]
     fn canonical_metadata_from_wkt_definition_emits_definition_and_wkt_format() {
-        // Classe B: una definizione WKT e' emessa come `crs_definition`
+        // Una definizione WKT e' emessa come `crs_definition`
         // (byte originali) + `crs_definition_format = wkt`, MAI in
-        // `crs_id` (passthrough R2.6 contro la lineage WKT); deduzione
+        // `crs_id` (divergerebbe dalla lineage WKT); deduzione
         // d'autorita' dal canonical realistico (assi + id) gratis.
         let metadata = canonical_geometry_metadata(
             &monte_mario_wkt_contract(),
@@ -1013,7 +1016,7 @@ mod tests {
 
     #[test]
     fn canonical_metadata_declared_unresolved_reemits_the_original_declarations() {
-        // R4.6.4: l'incoerenza dichiarata arriva al bordo di scrittura con
+        // CRS dichiarato ma non risolto: arriva al bordo di scrittura con
         // le dichiarazioni ORIGINALI ri-emesse invariate — mai una persa,
         // mai una inventata. `srid` non e' ri-emesso dal blocco (resta alla
         // lineage); `axis_order` segue la stessa regola del risolto
@@ -1045,7 +1048,7 @@ mod tests {
             assert_eq!(get(key), None, "{key} non dichiarato -> assente");
         }
 
-        // Definizione con il suo formato (R4.3): entrambi ri-emessi.
+        // Definizione con il suo formato: entrambi ri-emessi.
         let contract = GeometryColumnContract {
             crs: ContractCrs::DeclaredUnresolved {
                 crs_id: Some("EPSG:4326".to_owned()),
@@ -1076,8 +1079,8 @@ mod tests {
     #[test]
     fn canonical_metadata_types_follow_the_confidence() {
         // Qualunque confidence con valore (Declared/Proven/Estimated) emette
-        // la coppia; `unresolved` emette la sola dichiarazione (elenco vietato
-        // da R3.4.1); confidence `Unknown` non emette nulla (mai inventare).
+        // la coppia; `unresolved` emette la sola dichiarazione (con `unresolved`
+        // l'elenco e' vietato); confidence `Unknown` non emette nulla (mai inventare).
         for confidence in [
             PropertyConfidence::Estimated(
                 GeometryTypesProperty::new(TypesDeclaration::Mixed, Vec::new()).expect("coerente"),
@@ -1156,9 +1159,9 @@ mod tests {
         assert_eq!(keys.axis_order, Some(AxisOrder::EastingNorthing));
         assert_eq!(keys.spatial_semantics, Some(SpatialSemantics::Geometry));
         assert_eq!(keys.precision, Some(GeometryPrecision::Float64));
-        // `field_id` non e' emesso dal contratto (R2.2 opzionale)...
+        // `field_id` non e' emesso dal contratto (chiave opzionale)...
         assert_eq!(keys.field_id, None);
-        // ...ma una chiave RICEVUTA e' propagata invariata (R2.4).
+        // ...ma una chiave RICEVUTA e' propagata invariata.
         let mut received = Field::new("geom", DataType::Binary, true)
             .with_metadata(canonical_geometry_metadata(
                 &full_contract(),
@@ -1217,8 +1220,9 @@ mod tests {
                 "{key} con valore non canonico deve essere rifiutato (R5.1)"
             );
         }
-        // Coppia definizione/formato: una sola delle due -> errore (R2.2);
-        // `projjson` che non e' un oggetto JSON -> errore (R5.1).
+        // Coppia definizione/formato: una sola delle due -> errore;
+        // `projjson` che non e' un oggetto JSON -> errore; formato che non
+        // corrisponde alla radice del testo -> errore.
         for pairs in [
             &[(PLENORA_GEOMETRY_CRS_DEFINITION_KEY, "PROJCS[demo]")][..],
             &[(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt")][..],
@@ -1245,7 +1249,7 @@ mod tests {
             let field = field_with_pairs(pairs);
             assert!(read_geometry_contract_keys(&field).is_err());
         }
-        // `crs_id` senza `axis_order` -> errore (tabella R2.2); valore
+        // `crs_id` senza `axis_order` -> errore (obbligatorio con un CRS); valore
         // `unknown` esplicito -> ammesso.
         let without_axis = field_with_pairs(&[(PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326")]);
         assert!(matches!(
@@ -1284,11 +1288,12 @@ mod tests {
             (PLENORA_GEOMETRY_TYPES_KEY, "point"),
         ]);
         assert!(read_geometry_contract_keys(&unresolved_with).is_err());
-        // Elenco senza dichiarazione -> errore (R3.4.1: il produttore conforme
+        // Elenco senza dichiarazione -> errore (il produttore conforme
         // emette sempre `types_declaration`).
         let types_only = field_with_pairs(&[(PLENORA_GEOMETRY_TYPES_KEY, "point")]);
         assert!(read_geometry_contract_keys(&types_only).is_err());
-        // Forma canonica dell'elenco: ordine §3.1, valori unici, senza spazi.
+        // Forma canonica dell'elenco: ordine canonico dei tipi, valori unici,
+        // senza spazi.
         for list in ["polygon,point", "point,point", "point, polygon", "POINT"] {
             let field = field_with_pairs(&[
                 (PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, "exact"),
@@ -1321,8 +1326,8 @@ mod tests {
     #[test]
     fn contract_version_gate_enforces_r25() {
         let canonical_field = field_with_pairs(&[(PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy")]);
-        // Versione assente + chiavi canoniche presenti -> errore (R2.5 la
-        // richiede: la versione descrive il protocollo che quelle chiavi
+        // Versione assente + chiavi canoniche presenti -> errore (la
+        // versione e' obbligatoria: la versione descrive il protocollo che quelle chiavi
         // seguono, senza di essa non sono interpretabili).
         assert!(matches!(
             read_contract_version(&Schema::new(vec![canonical_field.clone()])),
@@ -1335,7 +1340,7 @@ mod tests {
                 .expect("legacy"),
             None
         );
-        // Versioni 0 e 1 accettate: R2.5 impone il fallimento solo per
+        // Versioni 0 e 1 accettate: il fallimento e' solo per
         // versioni successive a quella nota.
         for (version, expected) in [("0", 0), ("1", 1)] {
             let schema = Schema::new_with_metadata(
@@ -1357,7 +1362,7 @@ mod tests {
             read_contract_version(&future),
             Err(PlenoraError::Unsupported(_))
         ));
-        // Valore non numerico -> errore (R5.4).
+        // Valore non numerico -> errore.
         let broken = Schema::new_with_metadata(
             vec![canonical_field],
             HashMap::from([(PLENORA_CONTRACT_VERSION_KEY.to_owned(), "1.0".to_owned())]),
@@ -1378,7 +1383,7 @@ mod tests {
     #[test]
     fn contract_keys_reject_divergent_legacy_metadata() {
         // Ogni nozione presente in DUE rappresentazioni deve coincidere
-        // (R2.6: il componente fallisce, non sceglie).
+        // (il lettore fallisce, non sceglie).
         let divergent_dimensions = field_with_pairs(&[
             (PLENORA_GEOMETRY_DIMENSIONS_KEY, "xy"),
             (
@@ -1436,7 +1441,7 @@ mod tests {
 
     #[test]
     fn contract_keys_complete_by_precedence_never_arbitrate() {
-        // Solo legacy: adottato (completamento, R2.7).
+        // Solo legacy: adottato (completamento per precedenza).
         let legacy_only = field_with_pairs(&[(
             GEO_METADATA_KEY,
             r#"{"crs":"EPSG:3857","dimensions":"xyz","encoding":"ewkb"}"#,
@@ -1497,7 +1502,7 @@ mod tests {
             Some(GeometryEncoding::Ewkb)
         );
 
-        // Campo nudo: tutto assente, mai default (R5.2).
+        // Campo nudo: tutto assente, mai default.
         let bare = Field::new("geom", DataType::Binary, true);
         assert_eq!(
             read_geometry_contract_keys(&bare).expect("bare"),
@@ -1505,7 +1510,7 @@ mod tests {
         );
 
         // Metadato legacy ILLEGGIBILE: errore, non rango legacy assente
-        // (R5.1/piano-v5.md#contratti-di-input). Trattandolo come assente, il
+        // (fail-closed). Trattandolo come assente, il
         // JSON malformato sarebbe indistinguibile da una chiave che non
         // c'e', e la risoluzione completerebbe per precedenza dalle sole
         // chiavi canoniche, scavalcando in silenzio un legacy che non e'

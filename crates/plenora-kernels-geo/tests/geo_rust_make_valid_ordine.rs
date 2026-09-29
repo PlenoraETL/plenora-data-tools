@@ -1,11 +1,11 @@
 //! `geo.make_valid`: l'esito non dipende dall'ordine di anelli e poligoni, e
 //! `LINEWORK` e' quello di GEOS.
 //!
-//! - I controesempi della sesta revisione (un buco che condivide un lato con
+//! - I controesempi di una revisione (un buco che condivide un lato con
 //!   la shell e ne sporge, le parti sovrapposte di un `MultiPolygon`) in ogni
 //!   ordine: stessa geometria, e l'area e le linee che GEOS 3.14 da' su
 //!   quegli input (`MakeValid` `LINEWORK`, sonda della campagna
-//!   differenziale). Non e' l'area pari-dispari sugli anelli: GEOS
+//!   differenziale del laboratorio, registrata: qui GEOS non gira). Non e' l'area pari-dispari sugli anelli: GEOS
 //!   costruisce l'area a giri (`BuildArea`, XOR, lati meno il bordo), e sui
 //!   due controesempi da' 112 e 96 dove il pari-dispari darebbe 52 e 56.
 //! - Otto casi della classe B della campagna differenziale (`p5`, seme e caso
@@ -429,7 +429,7 @@ proptest! {
     }
 }
 
-/// Buchi che si toccano in due vertici (seconda lettura): il bordo dei
+/// Buchi che si toccano in due vertici: il bordo dei
 /// figli della faccia esce dal polygonize in catene aperte, che il
 /// laboratorio scartava, e la faccia perdeva il buco centrale coprendone la
 /// faccia figlia. GEOS: la shell con i tre buchi, piu' il bow-tie diviso,

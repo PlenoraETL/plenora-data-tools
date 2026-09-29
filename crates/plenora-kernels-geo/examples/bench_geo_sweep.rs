@@ -5,7 +5,7 @@
 //!
 //! Pipeline misurata per le op per-cella: decode WKB (`decode_geometry_cell`),
 //! kernel ed encode WKB (`encode_geometry`) quando l'output e' una
-//! geometria — lo stesso percorso dell'adapter Arrow del trasporto. Per le
+//! geometria — lo stesso percorso dell'adapter Arrow (`arrow_adapter`). Per le
 //! op blocking/collettive (join, dissolve, overlay, coverage, dbscan, ...)
 //! la misura include il decode dell'intera tabella e l'encode degli output.
 //! I riferimenti `_ref.wkb_decode.*` / `_ref.wkb_encode.*` misurano il solo
@@ -23,10 +23,10 @@
 //! questo sweep.
 //!
 //! Uso: `bench_geo_sweep` — scrive `benchmarks/sweep/geo_sweep.json` e
-//! `benchmarks/sweep/geo_sweep.md` (relativi alla cwd, /work in Docker) e
+//! `benchmarks/sweep/geo_sweep.md` (relativi alla cwd) e
 //! stampa le stesse righe JSON su stdout. Ogni misura e' anche accodata in
 //! streaming a `benchmarks/sweep/geo_sweep.jsonl` (sopravvive a uno stallo
-//! del container prima della scrittura finale).
+//! del processo prima della scrittura finale).
 //!
 //! Note operative:
 //! - kernel WSL2 6.18: sotto carico di allocazioni intensive il processo puo'
@@ -127,7 +127,7 @@ impl Rng {
 
     /// Uniforme in [min, max).
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
+    // violerebbe il determinismo bit-esatto; la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     fn range(&mut self, min: f64, max: f64) -> f64 {
@@ -281,7 +281,7 @@ fn polys_complex_wkb() -> &'static WkbCells {
 
 /// `MultiPoligoni`: 4 componenti da ~100 vertici.
 // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-// violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
+// violerebbe il determinismo bit-esatto; la forma non
 // fusa e' il contratto numerico.
 #[allow(clippy::suboptimal_flops)]
 fn multipolys_wkb() -> &'static WkbCells {
@@ -431,7 +431,7 @@ fn pairs_wkb() -> (&'static WkbCells, &'static WkbCells) {
 /// Rettangolo di griglia [i*100, (i+1)*100) x [j*100, (j+1)*100).
 fn grid_rect(i: usize, j: usize, grow: f64, shift: f64) -> Geometry<f64> {
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
+    // violerebbe il determinismo bit-esatto; la forma non
     // fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let x0 = i as f64 * 100.0 - grow + shift;
@@ -527,7 +527,7 @@ fn collect_polys_wkb() -> &'static WkbCells {
             let i = index % 317;
             let j = index / 317;
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-            // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
+            // violerebbe il determinismo bit-esatto; la forma non
             // fusa e' il contratto numerico.
             #[allow(clippy::suboptimal_flops)]
             let cx = 50.0 + i as f64 * 100.0;
@@ -2025,8 +2025,7 @@ fn main() {
         // --- Collettive Manipola-compat ------------------------------------------
         // Kernel in variante `*_validated`: gli scenari decodificano via `dec`/
         // `decode_prefix` (= `geometry_from_wkb`, validazione OGC per geometria),
-        // quindi rispecchiano il percorso di produzione dell'engine (`pair.rs`),
-        // dove il gate di ingresso del kernel non si ripete (R0.1: precondizione
+        // quindi il gate di ingresso del kernel non si ripete (precondizione
         // dimostrata per costruzione al decode, non inferenza sui chiamanti).
         sweep_collective(
             &mut results,

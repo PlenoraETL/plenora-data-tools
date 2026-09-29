@@ -1,12 +1,11 @@
-//! Verifica prestazionale mirata dei percorsi ottimizzati dei kernel geo
-//! (misura richiesta da architettura.md): la full `geo_sweep`
-//! non e' eseguibile su questo host (stallo noto WSL2 `__vma_start_write`
+//! Verifica prestazionale mirata dei percorsi ottimizzati dei kernel geo:
+//! la full `geo_sweep` non era eseguibile su questo host (stallo noto WSL2 `__vma_start_write`
 //! sotto carico di allocazioni intensive), quindi fixture COMPATTE a bassa
 //! pressione di allocazione, mediana di 5, stessa classe di carico:
 //!
 //! - `ref.decode_points`: ancora (percorso invariato per costruzione);
 //! - `op.centroid_polys`: per-cella con decode+op+encode via `map_nullable`
-//!   (misura il costo del Vec di determinismo architettura.md#determinismo);
+//!   (misura il costo del `Vec` che rende deterministico l'errore);
 //! - `op.snap_reference_2k`: R-tree del riferimento condiviso vs per-cella;
 //! - `op.voronoi_2k`: pre-filtro `bounding_rect`;
 //! - `op.from_wkt`: parsing senza uppercase integrale;
@@ -69,7 +68,7 @@ impl Rng {
 
     fn range(&mut self, min: f64, max: f64) -> f64 {
         // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (architettura.md#determinismo).
+        // violerebbe il determinismo bit-esatto.
         #[allow(clippy::suboptimal_flops)]
         let value = min + (max - min) * self.unit();
         value
@@ -81,10 +80,10 @@ fn star_polygon(rng: &mut Rng, cx: f64, cy: f64, radius: f64, vertices: usize) -
     for index in 0..vertices {
         #[allow(clippy::cast_precision_loss)] // index < 2^53: esatto.
         let angle = index as f64 * 2.0 * std::f64::consts::PI / vertices as f64;
-        // Niente mul_add/FMA (architettura.md#determinismo): forma non fusa come il contratto.
+        // Niente mul_add/FMA (determinismo bit-esatto): forma non fusa come il contratto.
         #[allow(clippy::suboptimal_flops)]
         let jitter = 0.75 + 0.5 * rng.unit();
-        // Niente mul_add/FMA (architettura.md#determinismo): forma non fusa come il contratto.
+        // Niente mul_add/FMA (determinismo bit-esatto): forma non fusa come il contratto.
         #[allow(clippy::suboptimal_flops)]
         let point = (
             cx + radius * jitter * angle.cos(),
@@ -105,7 +104,7 @@ fn grid_geometries(shift: f64) -> Vec<Geometry<f64>> {
     for j in 0..50 {
         for i in 0..50 {
             // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-            // violerebbe il determinismo bit-esatto (architettura.md#determinismo).
+            // violerebbe il determinismo bit-esatto.
             #[allow(clippy::suboptimal_flops)]
             let x0 = f64::from(i) * 100.0 + shift;
             #[allow(clippy::suboptimal_flops)]
@@ -221,10 +220,9 @@ fn main() {
             .iter()
             .map(|cell| geometry_from_wkb(cell.expect("cella non null")).expect("decode"))
             .collect();
-        // Variante `*_validated`: rispecchia il percorso di produzione
-        // (engine `pair.rs`), dove la validazione OGC e' gia' avvenuta al
+        // Variante `*_validated`: la validazione OGC e' gia' avvenuta al
         // decode (`geometry_from_wkb`, righe sopra) e il kernel non
-        // rivalida — precondizione dimostrata per costruzione (R0.1).
+        // rivalida — precondizione dimostrata per costruzione.
         clip_to_mask_validated(
             &geometries,
             std::slice::from_ref(&full_domain_mask),
@@ -258,8 +256,8 @@ fn main() {
         };
         let left = decode(&overlay_left);
         let right = decode(&overlay_right);
-        // Variante `*_validated`: come sopra, rispecchia il percorso engine
-        // (input validati al decode, nessuna rivalidazione nel kernel).
+        // Variante `*_validated`: come sopra (input validati al decode,
+        // nessuna rivalidazione nel kernel).
         polygon_overlay_validated(
             &left,
             &right,

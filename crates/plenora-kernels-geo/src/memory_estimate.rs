@@ -1,20 +1,18 @@
-//! Stima della memoria nativa delle geometrie decodificate
-//! (architettura.md#memoria).
+//! Stima della memoria nativa delle geometrie decodificate.
 //!
 //! La memoria nativa delle geometrie decodificate e' **stimata e dichiarata
 //! come stima**, mai presentata come conteggio preciso. Il modulo fornisce
 //! la stima per geometria ([`estimate_geometry_native_bytes`]), per sequenza
 //! ([`estimate_geometries_native_bytes`]) e l'accumulatore thread-safe
-//! [`DecodedNativeBytesEstimate`] letto dal governor come metrica "stimata".
+//! [`DecodedNativeBytesEstimate`], da leggere come metrica "stimata".
 //!
 //! # Formula di stima (dichiarata)
 //!
 //! [`COORD_XY_BYTES`] per coordinata XY, [`STRUCT_OVERHEAD_BYTES`] per nodo
 //! geometrico, [`VEC_OVERHEAD_BYTES`] per ogni `Vec` di coordinate, anelli o
 //! componenti; le collection sommano ricorsivamente i figli. La stima conta
-//! solo i dati: non modella la capacita' in eccesso dei `Vec`, le
-//! indirezioni GEOS ne' le strutture ausiliarie (architettura.md#memoria,
-//! "Perimetro di `max_governed_memory_bytes`").
+//! solo i dati: non modella la capacita' in eccesso dei `Vec` ne' le
+//! strutture ausiliarie dei kernel.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -56,8 +54,8 @@ fn polygon_body_bytes(polygon: &geo::Polygon<f64>) -> u64 {
 
 /// STIMA euristica dei byte nativi di una geometria decodificata.
 ///
-/// **Non e' un conteggio preciso**: e' l'euristica dichiarata da architettura.md#memoria
-/// per la memoria nativa delle geometrie (formula nel doc-comment di
+/// **Non e' un conteggio preciso**: e' l'euristica dichiarata per la
+/// memoria nativa delle geometrie (formula nel doc-comment di
 /// modulo). Va esposta nelle metriche come "stimata", separata da memoria
 /// riservata e osservata.
 #[must_use]
@@ -101,7 +99,7 @@ pub fn estimate_geometry_native_bytes(geometry: &Geometry<f64>) -> u64 {
 ///
 /// Stessa natura dichiarata di [`estimate_geometry_native_bytes`]: somma
 /// saturante delle stime per cella, da riportare come "memoria nativa
-/// stimata" (architettura.md#memoria).
+/// stimata".
 pub fn estimate_geometries_native_bytes<'a>(
     geometries: impl IntoIterator<Item = &'a Geometry<f64>>,
 ) -> u64 {
@@ -111,7 +109,7 @@ pub fn estimate_geometries_native_bytes<'a>(
 }
 
 /// Accumulatore thread-safe della STIMA dei byte nativi decodificati
-/// (architettura.md#memoria: metrica "stimata", separata da riservato/osservato).
+/// (metrica "stimata", separata da memoria riservata e osservata).
 ///
 /// Gli adapter che decodificano celle WKB in parallelo vi sommano la stima di
 /// ogni cella; il totale e' leggibile in qualsiasi momento.

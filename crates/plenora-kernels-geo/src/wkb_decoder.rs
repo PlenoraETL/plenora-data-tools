@@ -1,4 +1,4 @@
-//! Decoder WKB validante (architettura.md#geometrie).
+//! Decoder WKB validante.
 //!
 //! Una sola passata sui byte esegue la validazione strutturale del contratto
 //! e costruisce la geometria, senza cedere nulla della garanzia fail-closed.
@@ -23,13 +23,13 @@ use crate::{
     MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH,
 };
 
-/// Decodifica e valida un payload WKB in una sola passata (architettura.md#geometrie).
+/// Decodifica e valida un payload WKB in una sola passata.
 ///
 /// Copre la classe di input del protocollo 2D (come
 /// [`crate::geometry_from_wkb`]): serie Z/M e SRID rifiutate come
-/// [`crate::Unsupported`]. La validazione OGC della geometria risultante
-/// NON e' compresa: resta responsabilita' del chiamante (topologica, non
-/// strutturale — vedi architettura.md#geometrie).
+/// `PlenoraError::Unsupported`. La validazione OGC della geometria risultante
+/// NON e' compresa: resta responsabilita' del chiamante (e' topologica,
+/// non strutturale).
 ///
 /// # Errors
 ///
@@ -43,8 +43,10 @@ pub fn decode_validated(payload: &[u8]) -> Result<Geometry<f64>, PlenoraError> {
 }
 
 /// Variante con profondita' di annidamento configurabile (come
-/// [`crate::validate_wkb_contract_with_depth`]): il limite arriva dai
-/// `Limits` effettivi del piano.
+/// [`crate::validate_wkb_contract_with_depth`]).
+///
+/// Per un limite diverso da [`MAX_WKB_DEPTH`], come `max_geometry_depth`
+/// dei `Limits` di un piano (oggi la chiamano solo i test).
 ///
 /// # Errors
 ///
@@ -71,7 +73,7 @@ pub fn decode_validated_with_depth(
 /// stesse coordinate consumate.
 // Dispatcher esaustivo per tipo geometrico WKB: un solo corpo tiene le
 // regole di validazione e costruzione allineate alla speculare del
-// validatore strutturale (architettura.md#geometrie); spezzarlo peggiorerebbe il confronto
+// validatore strutturale; spezzarlo peggiorerebbe il confronto
 // riga-per-riga con `validate_wkb_geometry_with_dimensions`.
 #[allow(clippy::too_many_lines)]
 fn decode_geometry(
@@ -126,7 +128,7 @@ fn decode_geometry(
             let rings = checked_count(rings, cursor.remaining(), 4)?;
             let mut exterior: Option<LineString<f64>> = None;
             // Capacita' esatta (un anello e' l'esterno): la forma
-            // decodificata resta densa, invariante del preflight D14.4
+            // decodificata resta densa, invariante del preflight
             // (`decoded_size_xy` — il test di conservativita' misura le
             // capacita' reali).
             let mut interiors: Vec<LineString<f64>> = Vec::with_capacity(rings.saturating_sub(1));
@@ -192,7 +194,7 @@ fn decode_geometry(
                     // Nessun `collect::<Result<Vec<_>>>`: la raccolta con
                     // Result lascia capacita' in eccesso (crescita a
                     // raddoppio) e la forma decodificata non sarebbe densa —
-                    // invariante del preflight D14.4 (`decoded_size_xy`, il
+                    // invariante del preflight (`decoded_size_xy`, il
                     // test di conservativita' misura le capacita' reali).
                     // Il tipo figlio e' gia' verificato per costruzione nel
                     // ciclo sopra: il ramo d'errore resta come difesa.
@@ -248,7 +250,7 @@ mod tests {
     };
     use crate::validate_wkb_contract;
 
-    /// Oracolo differenziale (architettura.md#geometrie): per ogni payload, il percorso
+    /// Oracolo differenziale: per ogni payload, il percorso
     /// di riferimento (`validate_wkb_contract` + `Wkb::to_geo`) e il decoder
     /// validante devono produrre lo stesso esito e, in caso di successo,
     /// la stessa geometria coordinata per coordinata.
