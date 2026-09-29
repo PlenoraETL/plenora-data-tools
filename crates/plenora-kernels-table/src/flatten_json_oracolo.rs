@@ -217,6 +217,19 @@ fn valori_difficili() -> Vec<String> {
         "[1 2]",
         r#"{"k":1,"k":2}"#,
         r#"[{"k":1e400}]"#,
+        // Prima chiave di `RawValue` (feature `raw_value`): `Value` vuole
+        // una stringa e la riparsa al posto dell'oggetto.
+        r#"{"$serde_json::private::RawValue":"null"}"#,
+        r#"{"$serde_json::private::RawValue":0}"#,
+        r#"{"$serde_json::private::RawValue":"{\"x\":1,\"y\":{\"z\":2}}"}"#,
+        r#"{"$serde_json::private::RawValue":"[1"}"#,
+        r#"{"$serde_json::private::RawValue":"1e400"}"#,
+        r#"{"$serde_json::private::RawValue":"\"\ud800\""}"#,
+        r#"{"$serde_json::private::RawValue":"{}","b":1}"#,
+        r#"{"$serde_json::private::RawValue":{}}"#,
+        r#"{"a":1,"$serde_json::private::RawValue":"null"}"#,
+        r#"{"$serde_json::private::RawValue":"{\"k\":2}"}"#,
+        r#"[{"$serde_json::private::RawValue":0}]"#,
         r#"{"k":[1,{"x":"\ud800"}]}"#,
     ]
     .iter()
@@ -326,6 +339,51 @@ fn la_chiave_ripetuta_sostituisce_il_sotto_albero() {
 }
 
 #[test]
+fn la_prima_chiave_raw_value_segue_value() {
+    // I casi della revisione: prima la passata unica li accettava.
+    let esito = |documento: &str, output: &[&str]| {
+        let config = FlattenJson {
+            column: "doc".into(),
+            prefix: String::new(),
+            max_level: 1,
+            output_columns: output.iter().map(|c| (*c).to_owned()).collect(),
+        };
+        let batch = docs(&[Some(documento.to_owned())]);
+        assert_same_outcome_bits(
+            flatten_json(&batch, &config, &Limits::default()),
+            flatten_json_prima(&batch, &config, &Limits::default()),
+        );
+        flatten_json(&batch, &config, &Limits::default())
+            .err()
+            .and_then(|e| e.row_diagnostics().map(|r| r.counts.clone()))
+            .map(|counts| counts.into_keys().collect::<Vec<_>>())
+    };
+    assert_eq!(
+        esito(r#"{"$serde_json::private::RawValue":"null"}"#, &[]),
+        Some(vec!["json.root_not_object".to_owned()])
+    );
+    assert_eq!(
+        esito(r#"{"$serde_json::private::RawValue":0}"#, &[]),
+        Some(vec!["json.invalid_syntax".to_owned()])
+    );
+    assert_eq!(
+        esito(
+            r#"{"z":{"$serde_json::private::RawValue":0},"k":1}"#,
+            &["doc_k"]
+        ),
+        Some(vec!["json.invalid_syntax".to_owned()])
+    );
+    // Dopo il primo rifiuto (sola classificazione).
+    let batch = docs(&[
+        Some("[1]".into()),
+        Some(r#"{"$serde_json::private::RawValue":"null"}"#.into()),
+        Some(r#"{"$serde_json::private::RawValue":"{}"}"#.into()),
+        Some(r#"{"o":{"$serde_json::private::RawValue":0}}"#.into()),
+    ]);
+    confronta(&batch);
+}
+
+#[test]
 fn corpus_difficile_in_un_solo_batch() {
     // Tutti insieme, con null in mezzo: conteggi, cause ed esempi (primi
     // dieci) dell'errore, oppure l'output se il batch e' tutto valido.
@@ -379,7 +437,10 @@ fn sorgente_non_utf8_stesso_errore_alla_stessa_riga() {
 }
 
 /// Frammenti con cui il generatore compone documenti quasi-JSON.
-const FRAMMENTI: [&str; 32] = [
+const FRAMMENTI: [&str; 35] = [
+    "\"$serde_json::private::RawValue\"",
+    "{\"$serde_json::private::RawValue\":",
+    "\"{\\\"k\\\":1}\"",
     "{",
     "}",
     "[",
@@ -438,7 +499,15 @@ fn oggetto() -> impl Strategy<Value = String> {
         "[1,2]",
         "{}",
     ]);
-    let chiave = prop::sample::select(vec!["k", "o", "a", "a.b", "", "z"]);
+    let chiave = prop::sample::select(vec![
+        "k",
+        "o",
+        "a",
+        "a.b",
+        "",
+        "z",
+        "$serde_json::private::RawValue",
+    ]);
     let foglia = (chiave.clone(), scalare).prop_map(|(k, v)| format!("\"{k}\":{v}"));
     let livello = prop::collection::vec(foglia, 0..4).prop_map(|campi| campi.join(","));
     (livello.clone(), chiave, livello).prop_map(|(esterno, k, interno)| {

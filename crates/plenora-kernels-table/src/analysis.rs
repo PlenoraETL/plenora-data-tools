@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -511,6 +512,9 @@ struct RowFlatten<'a> {
     weird_key: bool,
     /// La radice e' un oggetto (vale solo se il documento e' valido).
     radice_oggetto: bool,
+    /// Un oggetto ha come prima chiave [`CHIAVE_RAW_VALUE`]: la riga passa
+    /// tutta dall'albero `Value` (vedi [`Valida`]).
+    magica: Cell<bool>,
 }
 
 impl RowFlatten<'_> {
@@ -528,13 +532,19 @@ impl RowFlatten<'_> {
         if depth > self.max {
             // Oggetto oltre max_level: si scarta senza emettere nulla, ma
             // validandone il contenuto come `Value` (`Valida`).
-            while map.next_entry_seed(Valida, Valida)?.is_some() {}
-            return Ok(());
+            return Valida {
+                magica: &self.magica,
+            }
+            .visit_map(map);
         }
         let base = self.path.len();
         let empty = self.path.is_empty();
         let mut viste = ChiaviViste::default();
+        let mut prima = true;
         while let Some(key) = map.next_key::<String>()? {
+            if std::mem::take(&mut prima) && key == CHIAVE_RAW_VALUE {
+                self.magica.set(true);
+            }
             if key.is_empty() || key.contains('.') {
                 self.weird_key = true;
             }
@@ -558,7 +568,9 @@ impl RowFlatten<'_> {
                     capture,
                 })?;
             } else {
-                map.next_value_seed(Valida)?;
+                map.next_value_seed(Valida {
+                    magica: &self.magica,
+                })?;
             }
             self.path.truncate(base);
             // Chiave ripetuta nello stesso oggetto: in `Value` l'ultima
@@ -644,7 +656,10 @@ impl<'de> Visitor<'de> for LeafSeed<'_, '_> {
             let value = Value::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
             self.row.emit(value_text(&value));
         } else {
-            Valida.visit_seq(seq)?;
+            Valida {
+                magica: &self.row.magica,
+            }
+            .visit_seq(seq)?;
         }
         Ok(())
     }
@@ -724,7 +739,10 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> std::result::Result<Self::Value, A::Error> {
-        Valida.visit_seq(seq)
+        Valida {
+            magica: &self.row.magica,
+        }
+        .visit_seq(seq)
     }
 
     fn visit_bool<E: de::Error>(self, _value: bool) -> std::result::Result<Self::Value, E> {
@@ -766,10 +784,31 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
 /// numeri senza convertirli e gli escape `\u` senza controllare i
 /// surrogati, quindi accetterebbe documenti che `from_str::<Value>`
 /// rifiuta.
+///
+/// L'unico caso in cui il visitor di `Value` fa altro e' un oggetto la cui
+/// **prima** chiave e' [`CHIAVE_RAW_VALUE`] (feature `raw_value` di
+/// `serde_json`, attiva nel workspace): il valore deve essere una stringa,
+/// che `Value` riparsa come JSON e mette al posto dell'oggetto. `Valida` non
+/// lo imita: segna `magica`, e chi lo usa rifa' la riga intera con
+/// `from_str::<Value>`, che e' esatto per definizione. Prima di quella
+/// chiave i due percorsi fanno le stesse chiamate, quindi un errore che la
+/// precede e' lo stesso nei due.
 #[derive(Clone, Copy)]
-struct Valida;
+struct Valida<'a> {
+    magica: &'a Cell<bool>,
+}
 
-impl<'de> DeserializeSeed<'de> for Valida {
+/// La chiave speciale di `serde_json::value::RawValue` (`raw::TOKEN`, non
+/// pubblica), riconosciuta da `Value::deserialize` come prima chiave di un
+/// oggetto con la feature `raw_value`.
+const CHIAVE_RAW_VALUE: &str = "$serde_json::private::RawValue";
+
+/// Prima chiave di un oggetto in [`Valida`]: segna [`CHIAVE_RAW_VALUE`].
+struct PrimaChiave<'a> {
+    magica: &'a Cell<bool>,
+}
+
+impl<'de> DeserializeSeed<'de> for PrimaChiave<'_> {
     type Value = ();
 
     fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
@@ -780,7 +819,33 @@ impl<'de> DeserializeSeed<'de> for Valida {
     }
 }
 
-impl<'de> Visitor<'de> for Valida {
+impl Visitor<'_> for PrimaChiave<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("una chiave JSON")
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> std::result::Result<(), E> {
+        if value == CHIAVE_RAW_VALUE {
+            self.magica.set(true);
+        }
+        Ok(())
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for Valida<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Valida<'_> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -788,14 +853,21 @@ impl<'de> Visitor<'de> for Valida {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<(), A::Error> {
-        while map.next_key_seed(Self)?.is_some() {
-            map.next_value_seed(Self)?;
+        let prima = PrimaChiave {
+            magica: self.magica,
+        };
+        if map.next_key_seed(prima)?.is_none() {
+            return Ok(());
+        }
+        map.next_value_seed(self)?;
+        while map.next_key_seed(self)?.is_some() {
+            map.next_value_seed(self)?;
         }
         Ok(())
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<(), A::Error> {
-        while seq.next_element_seed(Self)?.is_some() {}
+        while seq.next_element_seed(self)?.is_some() {}
         Ok(())
     }
 
@@ -833,9 +905,11 @@ enum EsitoDocumento {
 }
 
 /// Radice di [`classifica_documento`]: `true` se e' un oggetto.
-struct RadiceClassificata;
+struct RadiceClassificata<'a> {
+    magica: &'a Cell<bool>,
+}
 
-impl<'de> DeserializeSeed<'de> for RadiceClassificata {
+impl<'de> DeserializeSeed<'de> for RadiceClassificata<'_> {
     type Value = bool;
 
     fn deserialize<D>(self, deserializer: D) -> std::result::Result<bool, D::Error>
@@ -846,7 +920,7 @@ impl<'de> DeserializeSeed<'de> for RadiceClassificata {
     }
 }
 
-impl<'de> Visitor<'de> for RadiceClassificata {
+impl<'de> Visitor<'de> for RadiceClassificata<'_> {
     type Value = bool;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -854,11 +928,19 @@ impl<'de> Visitor<'de> for RadiceClassificata {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, map: A) -> std::result::Result<bool, A::Error> {
-        Valida.visit_map(map).map(|()| true)
+        Valida {
+            magica: self.magica,
+        }
+        .visit_map(map)
+        .map(|()| true)
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> std::result::Result<bool, A::Error> {
-        Valida.visit_seq(seq).map(|()| false)
+        Valida {
+            magica: self.magica,
+        }
+        .visit_seq(seq)
+        .map(|()| false)
     }
 
     fn visit_bool<E: de::Error>(self, _value: bool) -> std::result::Result<bool, E> {
@@ -889,8 +971,13 @@ impl<'de> Visitor<'de> for RadiceClassificata {
 /// Esito di `text` senza appiattirlo: dopo il primo rifiuto l'output non
 /// serve piu', resta da contare i rifiuti.
 fn classifica_documento(text: &str) -> EsitoDocumento {
+    let magica = Cell::new(false);
     let mut deserializer = serde_json::Deserializer::from_str(text);
-    match RadiceClassificata.deserialize(&mut deserializer) {
+    let esito = RadiceClassificata { magica: &magica }.deserialize(&mut deserializer);
+    if magica.get() {
+        return classifica_valore(serde_json::from_str::<Value>(text).as_ref().ok());
+    }
+    match esito {
         Ok(oggetto) if deserializer.end().is_ok() => {
             if oggetto {
                 EsitoDocumento::Oggetto
@@ -899,6 +986,15 @@ fn classifica_documento(text: &str) -> EsitoDocumento {
             }
         }
         _ => EsitoDocumento::Invalido,
+    }
+}
+
+/// Esito di un documento gia' letto come `Value` (`None`: JSON invalido).
+const fn classifica_valore(valore: Option<&Value>) -> EsitoDocumento {
+    match valore {
+        Some(Value::Object(_)) => EsitoDocumento::Oggetto,
+        Some(_) => EsitoDocumento::RadiceNonOggetto,
+        None => EsitoDocumento::Invalido,
     }
 }
 
@@ -926,12 +1022,27 @@ fn flatten_row(
         targets,
         weird_key: false,
         radice_oggetto: false,
+        magica: Cell::new(false),
     };
     let valid = {
         let mut deserializer = serde_json::Deserializer::from_str(text);
         let parsed = RootSeed { row: &mut row }.deserialize(&mut deserializer);
         parsed.is_ok() && deserializer.end().is_ok()
     };
+    if row.magica.get() {
+        // Prima chiave `CHIAVE_RAW_VALUE` in qualche oggetto: esito e celle
+        // dall'albero `Value`, come nel parsing completo.
+        let parsed = serde_json::from_str::<Value>(text).ok();
+        let esito = classifica_valore(parsed.as_ref());
+        if let Some(parsed) = parsed.filter(|_| esito == EsitoDocumento::Oggetto) {
+            let mut map = BTreeMap::new();
+            flatten(&parsed, "", 0, max, &mut map);
+            for (path, text) in map {
+                out.insert(row_index, &path, text);
+            }
+        }
+        return esito;
+    }
     let esito = match (valid, row.radice_oggetto) {
         (false, _) => EsitoDocumento::Invalido,
         (true, false) => EsitoDocumento::RadiceNonOggetto,
