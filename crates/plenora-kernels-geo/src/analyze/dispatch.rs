@@ -216,8 +216,10 @@ fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
 ///
 /// `Some` con i tipi dell'OUTPUT, verificati contro i kernel, per le op che
 /// cambiano il tipo; `None` per quelle che lo preservano. Casi non ovvi:
-/// `convex_hull` e `concave_hull` producono sempre `Polygon`, anche
-/// degenere; `make_valid` dichiara `mixed` senza elenco, perche' la
+/// `convex_hull` e `concave_hull` producono sempre `Polygon`: un inviluppo
+/// degenere (punto, segmento, punti allineati) non diventa `Point` o
+/// `LineString` come in GEOS, ma un poligono non valido che il kernel
+/// rifiuta con `InvalidPlan`; `make_valid` dichiara `mixed` senza elenco, perche' la
 /// riparazione cella per cella (backend Rust, `rust_backend`) puo' cambiare
 /// tipo e l'insieme non e' enumerabile a secco.
 fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
