@@ -15,6 +15,8 @@
 mod aggregate;
 mod compare;
 mod grouping;
+#[cfg(test)]
+mod oracolo_chiavi;
 mod sort;
 mod window;
 
@@ -23,7 +25,7 @@ pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
 // (`sort`, top-N, merge dello spill) e va verificabile dall'esterno.
 pub(crate) use crate::hashing::KeyHasher;
 pub use compare::{compare_cells_typed, is_sortable, validate_sortable};
-pub(crate) use grouping::KeyColumn;
+pub(crate) use grouping::{visit_key_ids_where, BinaryKeyEncoder, KeyColumn};
 pub(crate) use sort::sort_permutation;
 pub use sort::{dedup_advanced, distinct, sort, top_n, DedupAdvanced, Distinct, Keep, Sort, TopN};
 pub use window::{
@@ -485,7 +487,10 @@ mod tests {
     /// dello stesso contratto. Non passa dal percorso ottimizzato, cosi' una
     /// sua deviazione resta osservabile.
     #[allow(clippy::too_many_lines)]
-    fn aggregate_reference(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
+    pub(super) fn aggregate_reference(
+        batch: &RecordBatch,
+        config: &Aggregate,
+    ) -> Result<RecordBatch> {
         let group_indices = config
             .group_by
             .iter()
@@ -1623,7 +1628,10 @@ mod tests {
 
     /// Oracolo indipendente di `distinct`: stesso contratto, percorso
     /// diverso.
-    fn distinct_reference(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
+    pub(super) fn distinct_reference(
+        batch: &RecordBatch,
+        config: &Distinct,
+    ) -> Result<RecordBatch> {
         let indices = if config.subset.is_empty() {
             (0..batch.num_columns()).collect()
         } else {

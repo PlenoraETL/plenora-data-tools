@@ -1,17 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::hash::Hash;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+    Array, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::DataType;
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::governance::RowKeyEncoder;
-use crate::hashing::FastHasher;
+use crate::aggregation::visit_key_ids_where;
 use crate::{
     column_index, reject_rows, replace_or_append, scalar_as_string, scalar_compare,
     validate_output_name, NumericBound, RowRejection,
@@ -243,18 +241,40 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
-    let mut diagnostic_seen = std::collections::HashMap::new();
+    // Una sola passata con indici di chiave (`visit_key_ids_where`: stessa
+    // identita' di `key_for_row`, valore nativo su colonna singola, chiave
+    // binaria altrimenti). Con `nulls_equal=false` le righe con un null
+    // logico nella chiave sono saltate PRIMA della codifica, come nel
+    // percorso testuale: non producono ne' chiavi ne' errori di conversione.
+    //
+    // `ultima[indice]` e' l'ultima riga vista con quella chiave: e' il valore
+    // che la mappa chiave -> riga del percorso testuale restituiva a ogni
+    // `insert`, quindi le diagnostiche escono nello stesso ordine.
+    //
+    // Non c'e' una seconda passata di verifica: la chiave duplicata produce
+    // qui le diagnostiche e l'errore di `reject_rows`, e senza duplicati non
+    // c'e' altro da verificare.
+    let mut ultima: Vec<usize> = Vec::new();
     let mut rejected_rows = HashSet::new();
     let mut rejections = Vec::new();
-    for row in 0..batch.num_rows() {
-        if !config.nulls_equal
-            && indices
-                .iter()
-                .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
-        {
-            continue;
-        }
-        if let Some(first_row) = diagnostic_seen.insert(key_for_row(batch, &indices, row)?, row) {
+    visit_key_ids_where(
+        batch,
+        &indices,
+        |row| {
+            config.nulls_equal
+                || !indices
+                    .iter()
+                    .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
+        },
+        |row, indice, nuova| {
+            if nuova {
+                ultima.push(row);
+                return Ok(());
+            }
+            let slot = ultima.get_mut(indice).ok_or_else(|| {
+                PlenoraError::Internal("assert_unique: chiave senza ultima riga".into())
+            })?;
+            let first_row = std::mem::replace(slot, row);
             if rejected_rows.insert(first_row) {
                 rejections.push(RowRejection {
                     row: first_row,
@@ -268,131 +288,13 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
                 cause: "validation.duplicate_key",
                 column: None,
             });
-        }
-    }
+            Ok(())
+        },
+    )?;
     reject_rows(
         &rejections,
         "righe non conformi; consultare row_diagnostics",
     )?;
-    // Fast path in due livelli, con semantica identica al percorso generico;
-    // l'oracolo nei test e' `assert_unique_reference`.
-    //
-    // 1. Chiave su colonna singola nativa: la codifica di `key_for_row` e'
-    //    iniettiva (NaN -> "NaN", -0.0 distinto da 0.0), quindi basta
-    //    l'uguaglianza fra valori nativi, con i NaN canonizzati a un solo
-    //    NaN. `HashSet` di valori o `&str` in prestito: nessuna allocazione
-    //    per riga. I null sono contati a parte, come il marcatore 0.
-    if let [index] = indices.as_slice() {
-        let column = batch.column(*index);
-        if let Some(values) = column.as_any().downcast_ref::<Int64Array>() {
-            return assert_unique_scalar(
-                batch,
-                config.nulls_equal,
-                |row| values.is_null(row),
-                |row| values.value(row),
-            );
-        }
-        if let Some(values) = column.as_any().downcast_ref::<UInt64Array>() {
-            return assert_unique_scalar(
-                batch,
-                config.nulls_equal,
-                |row| values.is_null(row),
-                |row| values.value(row),
-            );
-        }
-        if let Some(values) = column.as_any().downcast_ref::<Float64Array>() {
-            return assert_unique_scalar(
-                batch,
-                config.nulls_equal,
-                |row| values.is_null(row),
-                |row| {
-                    let value = values.value(row);
-                    // NaN canonizzato: payload diversi restano "lo stesso NaN"
-                    // (la chiave stringa e' "NaN" per tutti); -0.0 resta
-                    // distinto da 0.0 ("-0" vs "0").
-                    if value.is_nan() {
-                        0x7ff8_0000_0000_0000_u64
-                    } else {
-                        value.to_bits()
-                    }
-                },
-            );
-        }
-        if let Some(values) = column.as_any().downcast_ref::<BooleanArray>() {
-            return assert_unique_scalar(
-                batch,
-                config.nulls_equal,
-                |row| values.is_null(row),
-                |row| values.value(row),
-            );
-        }
-        if let Some(values) = column.as_any().downcast_ref::<StringArray>() {
-            return assert_unique_scalar(
-                batch,
-                config.nulls_equal,
-                |row| values.is_null(row),
-                |row| values.value(row),
-            );
-        }
-    }
-    // 2. Altrimenti: chiavi con gli STESSI byte di `key_for_row` scritte da
-    //    `RowKeyEncoder` in un buffer riusato (niente `Vec`/`String` per riga,
-    //    header di tipo precomputato), `HashSet` con `FastHasher` (FxHash +
-    //    splitmix64) al posto di SipHash.
-    let mut encoder = RowKeyEncoder::new(batch, &indices);
-    let mut seen: HashSet<Vec<u8>, FastHasher> =
-        HashSet::with_capacity_and_hasher(batch.num_rows(), FastHasher::default());
-    let mut key = Vec::new();
-    for row in 0..batch.num_rows() {
-        if !config.nulls_equal
-            && indices
-                .iter()
-                .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
-        {
-            continue;
-        }
-        encoder.encode_into(row, &mut key)?;
-        if !seen.insert(key.clone()) {
-            return Err(PlenoraError::InvalidPlan(
-                "assert_unique: chiave duplicata".into(),
-            ));
-        }
-    }
-    Ok(batch.clone())
-}
-
-/// Fast path di `assert_unique` su colonna singola: set di valori nativi
-/// (`i64`/`u64`/`bool`/`&str` presi in prestito) o di bit canonici
-/// (`Float64`, NaN canonizzato), senza allocazioni per riga. Stesso ordine di
-/// scansione, stesso errore e stessa gestione dei null del generico: il null
-/// e' una chiave a parte (marcatore 0 di `key_for_row`), ammesso una sola
-/// volta con `nulls_equal=true`, saltato con `nulls_equal=false`.
-fn assert_unique_scalar<K: Hash + Eq>(
-    batch: &RecordBatch,
-    nulls_equal: bool,
-    is_null: impl Fn(usize) -> bool,
-    key: impl Fn(usize) -> K,
-) -> Result<RecordBatch> {
-    let mut seen: HashSet<K, FastHasher> =
-        HashSet::with_capacity_and_hasher(batch.num_rows(), FastHasher::default());
-    let mut seen_null = false;
-    for row in 0..batch.num_rows() {
-        if is_null(row) {
-            if !nulls_equal {
-                continue;
-            }
-            if seen_null {
-                return Err(PlenoraError::InvalidPlan(
-                    "assert_unique: chiave duplicata".into(),
-                ));
-            }
-            seen_null = true;
-        } else if !seen.insert(key(row)) {
-            return Err(PlenoraError::InvalidPlan(
-                "assert_unique: chiave duplicata".into(),
-            ));
-        }
-    }
     Ok(batch.clone())
 }
 
@@ -1142,5 +1044,153 @@ mod tests {
         )
         .expect("batch scala unico");
         assert_unique_equivalent(&unique_batch, &unique_config(&["id", "grp"], true));
+    }
+
+    /// Oracolo del percorso diagnostico di `assert_unique` com'era con le
+    /// chiavi testuali: `key_for_row` per riga, mappa chiave -> ultima riga
+    /// vista, rifiuti nell'ordine di scansione, poi `reject_rows`. Il percorso
+    /// a indici di chiave deve dare lo stesso esito e le stesse diagnostiche.
+    fn assert_unique_text_diagnostics(
+        batch: &RecordBatch,
+        config: &AssertUnique,
+    ) -> Result<RecordBatch> {
+        let indices = config
+            .columns
+            .iter()
+            .map(|name| column_index(batch, name))
+            .collect::<Result<Vec<_>>>()?;
+        let mut diagnostic_seen = std::collections::HashMap::new();
+        let mut rejected_rows = HashSet::new();
+        let mut rejections = Vec::new();
+        for row in 0..batch.num_rows() {
+            if !config.nulls_equal
+                && indices
+                    .iter()
+                    .any(|index| crate::is_logically_null(batch.column(*index).as_ref(), row))
+            {
+                continue;
+            }
+            if let Some(first_row) = diagnostic_seen.insert(key_for_row(batch, &indices, row)?, row)
+            {
+                if rejected_rows.insert(first_row) {
+                    rejections.push(RowRejection {
+                        row: first_row,
+                        cause: "validation.duplicate_key",
+                        column: None,
+                    });
+                }
+                rejected_rows.insert(row);
+                rejections.push(RowRejection {
+                    row,
+                    cause: "validation.duplicate_key",
+                    column: None,
+                });
+            }
+        }
+        reject_rows(
+            &rejections,
+            "righe non conformi; consultare row_diagnostics",
+        )?;
+        Ok(batch.clone())
+    }
+
+    #[test]
+    fn assert_unique_ha_le_diagnostiche_del_percorso_testuale() {
+        use plenora_core::arrow::array::{types::Int32Type, DictionaryArray, Int32Array};
+
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move |bound: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % bound
+        };
+        for rows in [0_usize, 1, 2, 9, 60, 300] {
+            let ints = (0..rows)
+                .map(|_| match next(6) {
+                    0 => None,
+                    value => Some(i64::try_from(value).expect("intero") - 3),
+                })
+                .collect::<Vec<_>>();
+            let floats = (0..rows)
+                .map(|_| match next(7) {
+                    0 => None,
+                    1 => Some(f64::NAN),
+                    2 => Some(f64::from_bits(0x7ff8_0000_0000_0042)),
+                    3 => Some(-0.0),
+                    4 => Some(0.0),
+                    5 => Some(-f64::NAN),
+                    _ => Some(2.5),
+                })
+                .collect::<Vec<_>>();
+            let texts = (0..rows)
+                .map(|_| {
+                    [None, Some("a"), Some("ab"), Some("bc"), Some("c"), Some("")]
+                        [usize::try_from(next(6)).expect("indice")]
+                })
+                .collect::<Vec<_>>();
+            let dictionary_keys = (0..rows)
+                .map(|_| match next(4) {
+                    0 => None,
+                    value => Some(i32::try_from(value).expect("chiave") - 1),
+                })
+                .collect::<Vec<_>>();
+            let dictionary = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(dictionary_keys),
+                Arc::new(StringArray::from(vec![Some("x"), None, Some("")])),
+            )
+            .expect("dizionario");
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("i", DataType::Int64, true),
+                    Field::new("f", DataType::Float64, true),
+                    Field::new("s", DataType::Utf8, true),
+                    Field::new(
+                        "d",
+                        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                        true,
+                    ),
+                ])),
+                vec![
+                    Arc::new(Int64Array::from(ints)),
+                    Arc::new(Float64Array::from(floats)),
+                    Arc::new(StringArray::from(texts)),
+                    Arc::new(dictionary),
+                ],
+            )
+            .expect("batch");
+            for columns in [
+                vec!["i"],
+                vec!["f"],
+                vec!["s"],
+                vec!["d"],
+                vec!["i", "s"],
+                vec!["s", "i"],
+                vec!["f", "d"],
+                vec!["i", "f", "s", "d"],
+            ] {
+                for nulls_equal in [true, false] {
+                    let config = unique_config(&columns, nulls_equal);
+                    let expected = assert_unique_text_diagnostics(&batch, &config);
+                    let actual = assert_unique(&batch, &config);
+                    assert_eq!(
+                        describe(&expected),
+                        describe(&actual),
+                        "{columns:?} nulls_equal={nulls_equal}"
+                    );
+                    assert_eq!(
+                        expected
+                            .as_ref()
+                            .err()
+                            .and_then(PlenoraError::row_diagnostics),
+                        actual
+                            .as_ref()
+                            .err()
+                            .and_then(PlenoraError::row_diagnostics),
+                        "{columns:?} nulls_equal={nulls_equal}"
+                    );
+                }
+            }
+        }
     }
 }

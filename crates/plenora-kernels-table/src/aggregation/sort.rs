@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use plenora_core::arrow::array::{
@@ -13,8 +12,7 @@ use plenora_core::{PlenoraError, Result};
 use crate::{column_index, select_rows};
 
 use super::compare::{compare_at, validate_sortable};
-use super::grouping::KeyColumn;
-use crate::hashing::KeyHasher;
+use super::grouping::visit_key_ids;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -327,42 +325,30 @@ pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
             .map(|name| column_index(batch, name))
             .collect::<Result<Vec<_>>>()?
     };
-    // Una sola passata: chiave con gli stessi byte di `row_key` in un buffer
-    // riusato, una mappa chiave -> statistiche con `KeyHasher`. Le righe in
-    // uscita restano in ordine crescente di indice per ogni variante di
+    // Una sola passata: indice di chiave per riga con la stessa identita'
+    // dei byte di `row_key` (`visit_key_ids`: valore nativo su colonna
+    // singola, chiave binaria altrimenti) e statistiche per indice. Le righe
+    // in uscita restano in ordine crescente di indice per ogni variante di
     // `keep`.
-    let key_columns = indices
-        .iter()
-        .map(|index| KeyColumn::new(batch.column(*index)))
-        .collect::<Vec<_>>();
-    let mut stats: HashMap<Box<[u8]>, KeyStats, std::hash::BuildHasherDefault<KeyHasher>> =
-        HashMap::default();
-    let mut key = String::new();
-    let mut scratch = String::new();
-    for row in 0..batch.num_rows() {
-        key.clear();
-        for column in &key_columns {
-            column.write_key(row, &mut key, &mut scratch)?;
+    let mut stats: Vec<KeyStats> = Vec::new();
+    visit_key_ids(batch, &indices, |row, indice, nuova| {
+        if nuova {
+            stats.push(KeyStats {
+                first: row,
+                last: row,
+                count: 1,
+            });
+        } else {
+            let entry = stats.get_mut(indice).ok_or_else(|| {
+                PlenoraError::Internal("statistiche distinct senza la chiave".into())
+            })?;
+            entry.last = row;
+            entry.count += 1;
         }
-        match stats.get_mut(key.as_bytes()) {
-            Some(entry) => {
-                entry.last = row;
-                entry.count += 1;
-            }
-            None => {
-                stats.insert(
-                    key.clone().into_bytes().into_boxed_slice(),
-                    KeyStats {
-                        first: row,
-                        last: row,
-                        count: 1,
-                    },
-                );
-            }
-        }
-    }
+        Ok(())
+    })?;
     let mut rows = stats
-        .values()
+        .iter()
         .filter_map(|entry| match config.keep {
             Keep::First => Some(entry.first),
             Keep::Last => Some(entry.last),

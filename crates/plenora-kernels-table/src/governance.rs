@@ -231,8 +231,7 @@ impl<'a> KeyValueColumn<'a> {
 /// Encoder zero-copy di chiavi di riga.
 ///
 /// Stessi byte di `quality::key_for_row` senza allocare una String per
-/// colonna per riga. Condiviso con il fast path di `quality::assert_unique`
-/// (stesso formato chiave, stesso oracolo).
+/// colonna per riga (`reconcile`, `assert_foreign_key`).
 pub(crate) struct RowKeyEncoder<'a> {
     columns: Vec<(Vec<u8>, KeyValueColumn<'a>)>,
     text: String,
