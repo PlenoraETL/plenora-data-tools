@@ -1160,14 +1160,28 @@ struct DiffRow {
 ///
 /// Forma testuale `"yes"`/`"no"` come nel piano; un enum chiuso e non una
 /// stringa, cosi' un valore diverso e' un errore di config invece di valere
-/// `"no"` in silenzio.
+/// `"no"` in silenzio. Si deserializza da una stringa e solo da quella: la
+/// forma a oggetto di serde (`{"yes": null}`) non e' accettata, come non lo
+/// era dal vecchio campo `String`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(try_from = "String")]
 pub enum IncludeUnchanged {
     /// Emette anche le righe invariate.
     Yes,
     /// Solo righe aggiunte, rimosse o modificate.
     No,
+}
+
+impl TryFrom<String> for IncludeUnchanged {
+    type Error = &'static str;
+
+    fn try_from(testo: String) -> std::result::Result<Self, Self::Error> {
+        match testo.as_str() {
+            "yes" => Ok(Self::Yes),
+            "no" => Ok(Self::No),
+            _ => Err("include_unchanged ammette solo \"yes\" o \"no\""),
+        }
+    }
 }
 
 const fn default_no() -> IncludeUnchanged {
@@ -2812,17 +2826,43 @@ mod tests {
                 "include_unchanged {valore:?} accettato"
             );
         }
-        for valore in ["yes", "no"] {
+        // Solo le due stringhe: niente forma a oggetto di serde, null,
+        // numeri, booleani, liste.
+        for valore in [
+            serde_json::json!({"yes": null}),
+            serde_json::json!({"no": null}),
+            serde_json::json!(null),
+            serde_json::json!(1),
+            serde_json::json!(true),
+            serde_json::json!(["yes"]),
+        ] {
             let config = serde_json::json!({
                 "left_keys": ["id"],
                 "right_keys": ["id"],
                 "include_unchanged": valore,
             });
             assert!(
-                serde_json::from_value::<TableDiff>(config).is_ok(),
-                "{valore}"
+                serde_json::from_value::<TableDiff>(config).is_err(),
+                "include_unchanged {valore} accettato"
             );
         }
+        for (valore, atteso) in [("yes", IncludeUnchanged::Yes), ("no", IncludeUnchanged::No)] {
+            let config = serde_json::json!({
+                "left_keys": ["id"],
+                "right_keys": ["id"],
+                "include_unchanged": valore,
+            });
+            let decodificato = serde_json::from_value::<TableDiff>(config).expect(valore);
+            assert_eq!(decodificato.include_unchanged, atteso);
+        }
+        // Assente: "no".
+        let config = serde_json::json!({"left_keys": ["id"], "right_keys": ["id"]});
+        assert_eq!(
+            serde_json::from_value::<TableDiff>(config)
+                .expect("default")
+                .include_unchanged,
+            IncludeUnchanged::No
+        );
     }
 
     #[test]
