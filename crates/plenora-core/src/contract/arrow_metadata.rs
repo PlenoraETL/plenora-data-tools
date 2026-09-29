@@ -434,7 +434,8 @@ pub struct GeometryMetadataDetails {
 /// un [`GeometryColumnContract`] e dai dettagli che il contratto non modella.
 ///
 /// - `crs_resolution` riflette lo stato del contratto: `resolved`
-///   (`ResolvedCrs` nasce solo da una risoluzione PROJ), `declared_unresolved`
+///   (`ResolvedCrs` nasce solo da una risoluzione verificata: PROJ o la
+///   tabella dei CRS integrati), `declared_unresolved`
 ///   o `missing` (R4.6.3/R4.6.4, mai un CRS inventato, R4.4).
 /// - Con `declared_unresolved` le dichiarazioni originali (`crs_id` e/o
 ///   `crs_definition` col formato, R4.3) si ri-emettono invariate (R4.6.4);

@@ -170,12 +170,14 @@ pub fn contract_from_arrow_schema(
 ///    (R4.3.1). Il limite della (2a) evita di rovesciare la dichiarazione del
 ///    produttore;
 /// 3. una rappresentazione (canonica o legacy `geo.crs`), o `resolved`
-///    dichiarato: risoluzione contro PROJ, e un fallimento resta un errore
+///    dichiarato: risoluzione con il risolutore dato (senza PROJ, la tabella
+///    dei CRS integrati), e un fallimento resta un errore
 ///    `Crs` (limite dichiarato: chi non garantisce la risoluzione dichiara
 ///    `declared_unresolved`). Con `resolved` e sia `crs_id` sia
 ///    `crs_definition` segue [`verify_declared_coherence`]. Senza
-///    backend PROJ quell'input fallisce con errore `Crs`, come uno a
-///    rappresentazione singola;
+///    backend PROJ una definizione WKT o PROJJSON non si risolve, e
+///    quell'input fallisce con errore `Crs`, come uno a rappresentazione
+///    singola;
 /// 4. nessuna rappresentazione: [`ContractCrs::Missing`] (R4.4), salvo la
 ///    contraddizione R4.1 (`resolved`/`declared_unresolved` senza
 ///    rappresentazioni), che resta errore.

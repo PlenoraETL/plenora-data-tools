@@ -87,15 +87,33 @@ fn contratto(crs: ContractCrs, dimensioni: GeometryDimensions) -> DataContract {
 
 /// I casi che il round-trip puo' attraversare **senza backend PROJ**.
 ///
-/// Un CRS risolto non e' fra questi, e non e' una lacuna del test: il
-/// risolutore di base rifiuta la validazione (`CRS_BACKEND_UNAVAILABLE`)
-/// invece di fidarsi, quindi rileggere uno schema che dichiara un CRS
-/// risolto FALLISCE dove PROJ non c'e'. E' fail-closed corretto, ed e' una
-/// proprieta' del sistema: il round-trip completo di un CRS risolto e'
-/// possibile solo dove il backend e' disponibile. Il caso con backend e'
-/// coperto dai test della CLI, che compila con la feature.
+/// Fra i CRS risolti ci sono solo quelli della tabella integrata: per ogni
+/// altra definizione il risolutore di base rifiuta la validazione
+/// (`CRS_BACKEND_UNAVAILABLE`) invece di fidarsi, quindi rileggere uno schema
+/// che la dichiara risolta FALLISCE dove PROJ non c'e'. E' fail-closed
+/// corretto, e il round-trip di quei CRS resta possibile solo dove il
+/// backend e' disponibile.
 fn casi() -> Vec<(&'static str, DataContract)> {
+    let integrato = |definizione: &str| {
+        ContractCrs::Resolved(resolve_crs(definizione, "crs").expect("CRS integrato"))
+    };
     vec![
+        (
+            "crs_integrato_utm",
+            contratto(integrato("EPSG:32632"), GeometryDimensions::Xy),
+        ),
+        (
+            "crs_integrato_geografico_lat_lon",
+            contratto(integrato("EPSG:4326"), GeometryDimensions::Xy),
+        ),
+        (
+            "crs_integrato_crs84",
+            contratto(integrato("OGC:CRS84"), GeometryDimensions::Xy),
+        ),
+        (
+            "crs_integrato_northing_first",
+            contratto(integrato("EPSG:6707"), GeometryDimensions::Xy),
+        ),
         (
             "crs_assente",
             contratto(ContractCrs::Missing, GeometryDimensions::Xy),

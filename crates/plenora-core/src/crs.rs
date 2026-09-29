@@ -3,8 +3,23 @@
 //! Le sole coordinate non identificano un CRS: il chiamante fornisce una
 //! definizione, che va risolta prima che un kernel spaziale giri. Qui vive il
 //! contratto indipendente dal backend. In questo workspace (Rust puro) non
-//! c'e' risoluzione PROJ: [`resolve_crs`] fallisce sempre chiuso, e un
-//! [`ResolvedCrs`] entra solo gia' risolto dal chiamante.
+//! c'e' risoluzione PROJ: [`resolve_crs`] risolve solo gli identificatori
+//! d'autorita' della tabella dei CRS integrati (`epsg_integrati`, generata dal
+//! registro EPSG), senza riproiezione; ogni altra definizione fallisce chiusa
+//! e un [`ResolvedCrs`] diverso entra solo gia' risolto dal chiamante.
+//!
+//! Per ogni CRS integrato ci sono due insiemi di limiti:
+//! - l'**area d'uso EPSG** ([`AreaOfUse`]), stretta: e' un metadato, nessun
+//!   controllo la usa per rifiutare dati;
+//! - il **dominio di validita'**, largo: [`validate_geometry_domain`]
+//!   rifiuta le coordinate che ne escono. Per i geografici e' il mondo
+//!   (longitudine `-180..=180`, latitudine `-90..=90`); per i proiettati e'
+//!   un rettangolo in easting/northing ([`ResolvedCrs::validity_domain`])
+//!   con una regola fissa per famiglia di proiezione, descritta nel
+//!   generatore `scripts/genera_crs_integrati.py`.
+
+mod epsg_integrati;
+mod integrati;
 
 use std::fmt;
 
@@ -16,6 +31,129 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub const MAX_CRS_DEFINITION_BYTES: usize = 64 * 1024;
+
+/// Versione del registro EPSG da cui e' generata la tabella dei CRS
+/// integrati.
+pub const BUILTIN_EPSG_VERSION: &str = epsg_integrati::VERSIONE_EPSG;
+/// Data di pubblicazione di [`BUILTIN_EPSG_VERSION`].
+pub const BUILTIN_EPSG_DATE: &str = epsg_integrati::DATA_EPSG;
+/// Versione di PROJ che distribuiva il registro letto dal generatore.
+pub const BUILTIN_PROJ_VERSION: &str = epsg_integrati::VERSIONE_PROJ;
+
+/// Metri per grado d'arco sull'equatore di WGS 84 (`2 * pi * 6378137 / 360`,
+/// arrotondato al centimetro): converte la precisione a terra in gradi.
+pub const METRES_PER_DEGREE_AT_EQUATOR: f64 = 111_319.49;
+
+/// Precisione a terra delle geometrie, in metri (decisione dell'utente,
+/// 2026-09-29): un centimetro.
+pub const GROUND_PRECISION_METRES: f64 = 0.01;
+
+/// Riquadro longitudine/latitudine in gradi, come il registro EPSG pubblica
+/// l'area d'uso.
+///
+/// `west_longitude > east_longitude` indica un riquadro che attraversa
+/// l'antimeridiano (per esempio NAD83, da 167.65 a -40.73).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeographicBounds {
+    pub west_longitude: f64,
+    pub south_latitude: f64,
+    pub east_longitude: f64,
+    pub north_latitude: f64,
+}
+
+impl GeographicBounds {
+    #[must_use]
+    pub const fn new(
+        west_longitude: f64,
+        south_latitude: f64,
+        east_longitude: f64,
+        north_latitude: f64,
+    ) -> Self {
+        Self {
+            west_longitude,
+            south_latitude,
+            east_longitude,
+            north_latitude,
+        }
+    }
+
+    /// Il riquadro attraversa l'antimeridiano.
+    #[must_use]
+    pub fn crosses_antimeridian(&self) -> bool {
+        self.west_longitude > self.east_longitude
+    }
+
+    /// Il punto `(longitudine, latitudine)` sta nel riquadro, bordi
+    /// compresi. Un valore non finito non ci sta mai.
+    #[must_use]
+    pub fn contains(&self, longitude: f64, latitude: f64) -> bool {
+        if !(self.south_latitude..=self.north_latitude).contains(&latitude) {
+            return false;
+        }
+        if self.crosses_antimeridian() {
+            (self.west_longitude..=180.0).contains(&longitude)
+                || (-180.0..=self.east_longitude).contains(&longitude)
+        } else {
+            (self.west_longitude..=self.east_longitude).contains(&longitude)
+        }
+    }
+}
+
+/// Rettangolo in coordinate proiettate, per nome d'asse.
+///
+/// Easting e northing si nominano, non si contano per posizione: vale anche
+/// per i CRS con northing come primo asse d'autorita'. Unita': quella
+/// lineare del CRS (il metro per ogni CRS integrato).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectedBounds {
+    pub min_easting: f64,
+    pub min_northing: f64,
+    pub max_easting: f64,
+    pub max_northing: f64,
+}
+
+impl ProjectedBounds {
+    #[must_use]
+    pub const fn new(
+        min_easting: f64,
+        min_northing: f64,
+        max_easting: f64,
+        max_northing: f64,
+    ) -> Self {
+        Self {
+            min_easting,
+            min_northing,
+            max_easting,
+            max_northing,
+        }
+    }
+
+    /// Il punto `(easting, northing)` sta nel rettangolo, bordi compresi.
+    /// Un valore non finito non ci sta mai.
+    #[must_use]
+    pub fn contains(&self, easting: f64, northing: f64) -> bool {
+        (self.min_easting..=self.max_easting).contains(&easting)
+            && (self.min_northing..=self.max_northing).contains(&northing)
+    }
+}
+
+/// Area d'uso EPSG di un CRS: metadato, non un controllo.
+///
+/// `geographic` e' il riquadro del registro; `projected`, per i CRS
+/// proiettati, e' il suo inviluppo nelle coordinate del CRS, arrotondato al
+/// millimetro verso l'esterno.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AreaOfUse {
+    pub geographic: GeographicBounds,
+    pub projected: Option<ProjectedBounds>,
+}
+
+/// Ellissoide del datum di un CRS.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ellipsoid {
+    pub semi_major_axis_metre: f64,
+    pub inverse_flattening: f64,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +168,11 @@ pub struct ResolvedCrs {
     canonical: Value,
     kind: CrsKind,
     horizontal_unit_to_metre: Option<f64>,
+    /// Metadati della tabella integrata: assenti per un CRS risolto dal
+    /// chiamante con [`Self::from_resolved_parts`].
+    area_of_use: Option<AreaOfUse>,
+    validity_domain: Option<ProjectedBounds>,
+    ellipsoid: Option<Ellipsoid>,
 }
 
 impl ResolvedCrs {
@@ -38,6 +181,10 @@ impl ResolvedCrs {
     /// Riservato ai backend di risoluzione e ai test: il contratto resta che
     /// solo una risoluzione verificata puo' produrre questi valori. Il
     /// risolutore PROJ di plenora-data-tools non e' in questo workspace.
+    ///
+    /// Il valore non porta area d'uso, dominio di validita' ne' ellissoide:
+    /// per un CRS proiettato [`validate_geometry_domain`] controlla solo che
+    /// le coordinate siano finite.
     #[must_use]
     pub const fn from_resolved_parts(
         definition: String,
@@ -50,6 +197,54 @@ impl ResolvedCrs {
             canonical,
             kind,
             horizontal_unit_to_metre,
+            area_of_use: None,
+            validity_domain: None,
+            ellipsoid: None,
+        }
+    }
+
+    /// Area d'uso EPSG (metadato), presente per i CRS della tabella
+    /// integrata.
+    #[must_use]
+    pub const fn area_of_use(&self) -> Option<AreaOfUse> {
+        self.area_of_use
+    }
+
+    /// Dominio di validita' in easting/northing di un CRS proiettato della
+    /// tabella integrata: e' il limite che [`validate_geometry_domain`] fa
+    /// rispettare. `None` per i geografici (il loro dominio e' il mondo) e
+    /// per i CRS risolti dal chiamante.
+    #[must_use]
+    pub const fn validity_domain(&self) -> Option<ProjectedBounds> {
+        self.validity_domain
+    }
+
+    /// Ellissoide del datum, presente per i CRS della tabella integrata.
+    #[must_use]
+    pub const fn ellipsoid(&self) -> Option<Ellipsoid> {
+        self.ellipsoid
+    }
+
+    /// Precisione a terra ([`GROUND_PRECISION_METRES`], un centimetro)
+    /// espressa nelle unita' delle coordinate del CRS.
+    ///
+    /// Proiettato: `0.01 / horizontal_unit_to_metre`. Geografico: `0.01 /
+    /// 111_319.49` gradi, un centimetro d'arco sull'equatore
+    /// ([`METRES_PER_DEGREE_AT_EQUATOR`]); lontano dall'equatore un grado di
+    /// longitudine e' piu' corto, e la stessa quantita' in gradi vale meno
+    /// di un centimetro a terra (precisione piu' fine, mai piu' grossolana).
+    /// `None` per un proiettato senza un'unita' lineare finita e positiva:
+    /// la precisione non si indovina.
+    #[must_use]
+    pub fn precisione_coordinate(&self) -> Option<f64> {
+        match self.kind {
+            CrsKind::Geographic => Some(GROUND_PRECISION_METRES / METRES_PER_DEGREE_AT_EQUATOR),
+            CrsKind::Projected => match self.horizontal_unit_to_metre {
+                Some(unit) if unit.is_finite() && unit > 0.0 => {
+                    Some(GROUND_PRECISION_METRES / unit)
+                }
+                _ => None,
+            },
         }
     }
 
@@ -312,6 +507,10 @@ pub enum CoordinateDomainViolation {
     LongitudeOutOfRange,
     /// Latitudine fuori da `-90..=90`.
     LatitudeOutOfRange,
+    /// Easting fuori dal dominio di validita' del CRS proiettato.
+    EastingOutOfValidityDomain,
+    /// Northing fuori dal dominio di validita' del CRS proiettato.
+    NorthingOutOfValidityDomain,
 }
 
 impl fmt::Display for CoordinateDomainViolation {
@@ -320,6 +519,12 @@ impl fmt::Display for CoordinateDomainViolation {
             Self::NonFinite => "coordinata non finita",
             Self::LongitudeOutOfRange => "longitudine fuori da -180..=180",
             Self::LatitudeOutOfRange => "latitudine fuori da -90..=90",
+            Self::EastingOutOfValidityDomain => {
+                "easting fuori dal dominio di validita' del CRS proiettato"
+            }
+            Self::NorthingOutOfValidityDomain => {
+                "northing fuori dal dominio di validita' del CRS proiettato"
+            }
         };
         formatter.write_str(testo)
     }
@@ -333,6 +538,11 @@ pub enum CrsError {
     InvalidDefinition { name: &'static str, reason: String },
     #[error("CRS_BACKEND_UNAVAILABLE: la validazione CRS richiede il backend PROJ")]
     BackendUnavailable,
+    #[error(
+        "CRS_NOT_BUILTIN: l'identificatore d'autorita' non e' nella tabella dei CRS integrati \
+         (senza backend PROJ non si risolve altro)"
+    )]
+    NotBuiltin,
     #[error("CRS_TYPE_UNSUPPORTED: tipo PROJJSON {0} non supportato")]
     UnsupportedType(String),
     #[error(
@@ -397,19 +607,47 @@ fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsEr
     Ok(())
 }
 
-/// Risoluzione fail-closed senza backend PROJ.
+/// Risoluzione contro la tabella dei CRS integrati, fail-closed per tutto il
+/// resto.
 ///
-/// Non c'e' backend PROJ in questo workspace: nessuna dichiarazione non
-/// verificata e' accettata.
+/// Riconosce gli identificatori d'autorita' dei CRS della tabella:
+/// `EPSG:<codice>` (autorita' senza distinzione di maiuscole, codice
+/// decimale senza zeri iniziali), le forme URN
+/// `urn:ogc:def:crs:EPSG:<versione>:<codice>` (versione vuota o fatta di
+/// cifre e punti) e `OGC:CRS84` / `urn:ogc:def:crs:OGC:<versione>:CRS84`. Il
+/// canonical dipende solo dal CRS, non dalla forma: due forme dello stesso
+/// codice sono [`ResolvedCrs::semantically_equals`], e la definizione
+/// originale resta in [`ResolvedCrs::definition`]. Nessuna riproiezione: il
+/// valore descrive il CRS (tipo, unita', assi, area d'uso, dominio), non
+/// trasforma coordinate.
+///
+/// Il canonical e' un sottoinsieme del PROJJSON che PROJ produrrebbe (tipo,
+/// nome, sistema di coordinate, `id`), non il documento completo: e' stabile
+/// dentro questo workspace, ma non e' confrontabile con un canonical del
+/// risolutore PROJ di plenora-data-tools.
 ///
 /// # Errors
 ///
-/// Restituisce [`CrsError::Required`] o [`CrsError::InvalidDefinition`] per
-/// definizioni testualmente invalide; senza backend PROJ restituisce sempre
-/// [`CrsError::BackendUnavailable`] dopo la validazione testuale.
+/// - [`CrsError::Required`] o [`CrsError::InvalidDefinition`] per
+///   definizioni testualmente invalide;
+/// - [`CrsError::NotBuiltin`] per un identificatore d'autorita' che non e'
+///   nella tabella (codice sconosciuto, altra autorita', forma non
+///   riconosciuta);
+/// - [`CrsError::BackendUnavailable`] per ogni definizione non d'autorita'
+///   (WKT, WKT2, PROJJSON, proj-string): verificarla richiede PROJ.
 pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, CrsError> {
     validate_definition_text(definition, name)?;
-    Err(CrsError::BackendUnavailable)
+    if definition_form(definition) != DefinitionForm::AuthorityCode {
+        return Err(CrsError::BackendUnavailable);
+    }
+    integrati::risolvi(definition).ok_or(CrsError::NotBuiltin)
+}
+
+/// Gli identificatori canonici (`OGC:CRS84`, `EPSG:<codice>`) di tutti i CRS
+/// della tabella integrata: `OGC:CRS84` per primo, poi i codici EPSG in
+/// ordine crescente.
+pub fn builtin_crs_identifiers() -> impl Iterator<Item = String> {
+    integrati::identificatori()
 }
 
 /// Verifica il requisito CRS del catalogo sugli input risolti.
@@ -471,10 +709,21 @@ fn ensure_geographic(crs: &ResolvedCrs) -> Result<(), CrsError> {
     Ok(())
 }
 
-/// Verifica il dominio delle coordinate di un input geografico.
+/// Verifica il dominio di validita' delle coordinate di un input.
 ///
-/// Presuppone l'ordine GIS normalizzato (x=longitudine, y=latitudine) e va
-/// chiamata su ogni input geografico dopo la decodifica WKB, prima dei kernel.
+/// Presuppone l'ordine GIS normalizzato (x=longitudine, y=latitudine per i
+/// geografici; x=easting, y=northing per i proiettati, anche quando l'asse
+/// d'autorita' e' northing-first) e va chiamata su ogni input dopo la
+/// decodifica WKB, prima dei kernel.
+///
+/// - Geografico: longitudine `-180..=180`, latitudine `-90..=90`, bordi
+///   compresi. L'area d'uso EPSG non e' un limite.
+/// - Proiettato della tabella integrata: easting e northing entro
+///   [`ResolvedCrs::validity_domain`], bordi compresi.
+/// - Proiettato risolto dal chiamante senza dominio: solo coordinate finite.
+///
+/// Il dominio e' un controllo di plausibilita' contro un CRS sbagliato o
+/// coordinate prive di senso, non una garanzia di precisione.
 ///
 /// Lavora su coordinate `(x, y)` perche' `plenora-core` non dipende da `geo`;
 /// `plenora_kernels_geo::crs::validate_geometry_domain` e' il wrapper su
@@ -483,26 +732,38 @@ fn ensure_geographic(crs: &ResolvedCrs) -> Result<(), CrsError> {
 /// # Errors
 ///
 /// Restituisce [`CrsError::CoordinateOutOfDomain`] alla prima coordinata non
-/// finita o fuori dal dominio longitude/latitude di un CRS geografico; per un
-/// CRS proiettato non fallisce mai.
+/// finita o fuori dal dominio.
 pub fn validate_geometry_domain(
     coordinates: impl Iterator<Item = (f64, f64)>,
     crs: &ResolvedCrs,
 ) -> Result<(), CrsError> {
-    if crs.kind != CrsKind::Geographic {
-        return Ok(());
-    }
     for (x, y) in coordinates {
         // Il motivo e' strutturale, non numerico: nomina l'asse e la natura
         // del difetto senza riportare la coordinata, che e' un dato di cella.
         let violation = if !x.is_finite() || !y.is_finite() {
             Some(CoordinateDomainViolation::NonFinite)
-        } else if !(-180.0..=180.0).contains(&x) {
-            Some(CoordinateDomainViolation::LongitudeOutOfRange)
-        } else if !(-90.0..=90.0).contains(&y) {
-            Some(CoordinateDomainViolation::LatitudeOutOfRange)
         } else {
-            None
+            match (crs.kind, crs.validity_domain) {
+                (CrsKind::Geographic, _) => {
+                    if !(-180.0..=180.0).contains(&x) {
+                        Some(CoordinateDomainViolation::LongitudeOutOfRange)
+                    } else if !(-90.0..=90.0).contains(&y) {
+                        Some(CoordinateDomainViolation::LatitudeOutOfRange)
+                    } else {
+                        None
+                    }
+                }
+                (CrsKind::Projected, Some(domain)) => {
+                    if !(domain.min_easting..=domain.max_easting).contains(&x) {
+                        Some(CoordinateDomainViolation::EastingOutOfValidityDomain)
+                    } else if !(domain.min_northing..=domain.max_northing).contains(&y) {
+                        Some(CoordinateDomainViolation::NorthingOutOfValidityDomain)
+                    } else {
+                        None
+                    }
+                }
+                (CrsKind::Projected, None) => None,
+            }
         };
         if let Some(violation) = violation {
             return Err(CrsError::CoordinateOutOfDomain { violation });
@@ -557,10 +818,22 @@ mod tests {
 
     #[test]
     fn missing_backend_never_trusts_an_unverified_declaration() {
-        assert!(matches!(
-            resolve_crs("EPSG:3857", "crs"),
-            Err(CrsError::BackendUnavailable)
-        ));
+        // Le definizioni non d'autorita' richiedono PROJ, anche quando
+        // descrivono un CRS della tabella.
+        for definizione in [
+            r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84"]]"#,
+            r#"PROJCRS["WGS 84 / UTM zone 32N",BASEGEOGCRS["WGS 84"]]"#,
+            r#"{"type":"GeographicCRS","name":"WGS 84","id":{"authority":"EPSG","code":4326}}"#,
+            "+proj=longlat +datum=WGS84 +no_defs",
+        ] {
+            assert!(
+                matches!(
+                    resolve_crs(definizione, "crs"),
+                    Err(CrsError::BackendUnavailable)
+                ),
+                "{definizione}"
+            );
+        }
     }
 
     #[test]
@@ -598,8 +871,15 @@ mod tests {
             validate_requirement(CrsRequirement::Geographic, &[&projected]),
             Err(CrsError::GeographicRequired { .. })
         ));
-        validate_geometry_domain([(f64::INFINITY, f64::NEG_INFINITY)].into_iter(), &projected)
-            .unwrap();
+        // Proiettato senza dominio (risolto dal chiamante): passa ogni
+        // coordinata finita, mai una non finita.
+        validate_geometry_domain([(-1.0e12, 1.0e12)].into_iter(), &projected).unwrap();
+        assert!(matches!(
+            validate_geometry_domain([(f64::INFINITY, f64::NEG_INFINITY)].into_iter(), &projected),
+            Err(CrsError::CoordinateOutOfDomain {
+                violation: CoordinateDomainViolation::NonFinite
+            })
+        ));
 
         let missing_unit = ResolvedCrs::from_resolved_parts(
             "EPSG:3857".to_owned(),

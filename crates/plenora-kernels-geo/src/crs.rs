@@ -5,8 +5,10 @@
 //! `plenora_core::crs` ed e' qui riesportato. Questo modulo aggiunge:
 //! - il wrapper tipizzato su `geo::Geometry` per la validazione di dominio.
 //!
-//! Non c'e' backend PROJ: una definizione CRS che non coincide con quella del
-//! piano non si risolve e fallisce chiusa (`CrsError::BackendUnavailable`).
+//! Non c'e' backend PROJ: `plenora_core::crs::resolve_crs` risolve solo gli
+//! identificatori della tabella dei CRS integrati (`EPSG:<codice>`, URN OGC,
+//! `OGC:CRS84`); ogni altra definizione fallisce chiusa
+//! (`CrsError::NotBuiltin` o `CrsError::BackendUnavailable`).
 
 use geo::{CoordsIter, Geometry};
 pub use plenora_core::crs::{
@@ -14,18 +16,20 @@ pub use plenora_core::crs::{
     MAX_CRS_DEFINITION_BYTES,
 };
 
-/// Validates normalized GIS axis order (x=longitude, y=latitude).
+/// Verifica il dominio di validita' del CRS sulle coordinate di una geometria,
+/// in ordine GIS normalizzato (x=longitudine o easting, y=latitudine o
+/// northing).
 ///
-/// Call this for every geographic input after WKB decoding and before any
-/// kernel work. Wrapper tipizzato: la logica e' in
+/// Va chiamata su ogni input dopo la decodifica WKB e prima dei kernel.
+/// Wrapper tipizzato: la logica e' in
 /// [`plenora_core::crs::validate_geometry_domain`].
 ///
 /// # Errors
 ///
 /// Come [`plenora_core::crs::validate_geometry_domain`]:
 /// [`CrsError::CoordinateOutOfDomain`] alla prima coordinata non finita o
-/// fuori dal dominio longitude/latitude di un CRS geografico; per un CRS
-/// proiettato non fallisce mai.
+/// fuori dal dominio del CRS (mondo lon/lat per i geografici, dominio di
+/// validita' per i proiettati della tabella integrata).
 pub fn validate_geometry_domain(
     geometry: &Geometry<f64>,
     crs: &ResolvedCrs,
@@ -54,8 +58,15 @@ mod tests {
     #[test]
     fn missing_backend_never_trusts_an_unverified_declaration() {
         assert!(matches!(
-            plenora_core::crs::resolve_crs("EPSG:3857", "crs"),
+            plenora_core::crs::resolve_crs(
+                r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84"]]"#,
+                "crs"
+            ),
             Err(CrsError::BackendUnavailable)
+        ));
+        assert!(matches!(
+            plenora_core::crs::resolve_crs("EPSG:99999", "crs"),
+            Err(CrsError::NotBuiltin)
         ));
     }
 
@@ -82,11 +93,30 @@ mod tests {
             validate_geometry_domain(&Geometry::Point(Point::new(0.0, 91.0)), &geographic),
             Err(CrsError::CoordinateOutOfDomain { .. })
         ));
-        // Il dominio non si applica ai CRS proiettati.
+        // Un proiettato senza dominio (risolto dal chiamante) accetta ogni
+        // coordinata finita, mai una non finita.
+        validate_geometry_domain(&Geometry::Point(Point::new(-1.0e12, 1.0e12)), &projected())
+            .unwrap();
+        assert!(matches!(
+            validate_geometry_domain(
+                &Geometry::Point(Point::new(f64::INFINITY, f64::NEG_INFINITY)),
+                &projected(),
+            ),
+            Err(CrsError::CoordinateOutOfDomain { .. })
+        ));
+        // Un proiettato della tabella integrata ha il suo dominio.
+        let utm = plenora_core::crs::resolve_crs("EPSG:32632", "crs").unwrap();
         validate_geometry_domain(
-            &Geometry::Point(Point::new(f64::INFINITY, f64::NEG_INFINITY)),
-            &projected(),
+            &Geometry::LineString(line_string![
+                (x: 313_533.063, y: 4_996_791.752),
+                (x: 1_312_068.675, y: 4_482_531.752),
+            ]),
+            &utm,
         )
         .unwrap();
+        assert!(matches!(
+            validate_geometry_domain(&Geometry::Point(Point::new(5.0e6, 4.0e6)), &utm),
+            Err(CrsError::CoordinateOutOfDomain { .. })
+        ));
     }
 }

@@ -2,8 +2,9 @@
 //!
 //! La conversione schema -> contratto e' di `plenora-core`, ma riceve il
 //! risolutore come parametro. Qui (Rust puro, niente PROJ) e' quello di base
-//! di core, che rifiuta sempre: i casi verificano che il rifiuto arrivi DOPO
-//! il riconoscimento e sia un errore `Crs`, mai un degrado silenzioso.
+//! di core, che risolve solo i CRS della tabella integrata e rifiuta tutto il
+//! resto: i casi verificano che la risoluzione arrivi DOPO il riconoscimento
+//! e che un rifiuto sia un errore `Crs`, mai un degrado silenzioso.
 //!
 //! I casi il cui esito non dipende dal risolutore stanno in
 //! `plenora-core/tests/contratto_da_schema_arrow.rs`.
@@ -94,17 +95,33 @@ fn discovery_recognizes_canonical_only_geometry_field() {
         Field::new("id", DataType::Int64, false),
         canonical_geometry_field(DataType::Binary),
     ]);
+    let contract = discover_input_contract_from_schema(schema, resolve_crs)
+        .expect("EPSG:32632 e' nella tabella dei CRS integrati");
+    // Il campo canonico-only e' riconosciuto come geometria e il CRS
+    // dichiarato si risolve dalla tabella integrata.
+    assert_eq!(contract.geometries.len(), 1);
+    let ContractCrs::Resolved(crs) = &contract.geometries[0].crs else {
+        panic!("atteso CRS risolto: {:?}", contract.geometries[0].crs);
+    };
+    assert_eq!(crs.authority_identifier(), Some(("EPSG", 32632)));
+    // Un codice fuori tabella fallisce chiuso DOPO il riconoscimento: un
+    // errore `Crs` (non `InvalidPlan`).
+    let schema = schema_v1(vec![
+        Field::new("id", DataType::Int64, false),
+        canonical_field(
+            DataType::Binary,
+            &[
+                (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
+                (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:99999"),
+                (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+            ],
+        ),
+    ]);
     let result = discover_input_contract_from_schema(schema, resolve_crs);
-    {
-        // Senza backend PROJ la risoluzione CRS fallisce chiusa DOPO il
-        // riconoscimento: un errore `Crs` (non `InvalidPlan`) dimostra che
-        // il campo canonico-only e' stato riconosciuto come geometria e
-        // le chiavi lette senza errori.
-        assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
-            "atteso fallimento di risoluzione CRS, ottenuto {result:?}"
-        );
-    }
+    assert!(
+        matches!(result, Err(PlenoraError::Crs(_))),
+        "atteso fallimento di risoluzione CRS, ottenuto {result:?}"
+    );
 }
 
 // -------------------------------------------------------------------
@@ -143,11 +160,17 @@ fn discovery_resolved_with_double_representation_needs_the_backend() {
 #[test]
 fn contract_crs_from_keys_legacy_fallback_feeds_the_resolution() {
     // Nessuna forma canonica: il legacy `geo.crs` alimenta la
-    // risoluzione (con backend -> Resolved; senza -> errore `Crs` di
-    // backend, mai `Missing` inventato).
+    // risoluzione (CRS della tabella integrata -> Resolved; altrimenti
+    // errore `Crs`, mai `Missing` inventato).
     let legacy = r#"{"crs":"EPSG:32632"}"#.to_owned();
     let keys = CanonicalGeometryKeys::default();
     let result = contract_crs_from_keys("geometry", Some(&legacy), &keys, resolve_crs);
+    assert!(
+        matches!(&result, Ok(ContractCrs::Resolved(crs)) if crs.authority_srid() == Some(32632)),
+        "{result:?}"
+    );
+    let legacy_wkt = format!(r#"{{"crs":{}}}"#, serde_json::Value::from(MONTE_MARIO_WKT));
+    let result = contract_crs_from_keys("geometry", Some(&legacy_wkt), &keys, resolve_crs);
     assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
     // Nessuna rappresentazione: `Missing`, mai errore (R4.6.3).
     let missing = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("assente");
