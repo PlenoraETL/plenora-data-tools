@@ -824,14 +824,18 @@ name = "plenora-io"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "geo",
  "parquet",
  "plenora-core",
  "plenora-kernels-geo",
+ "plenora-kernels-table",
  "plenora-pipeline",
  "proptest",
+ "serde",
  "serde_json",
  "tempfile",
+ "wkt",
 ]
 
 [[package]]
