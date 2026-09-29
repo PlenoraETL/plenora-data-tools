@@ -20,8 +20,7 @@ use super::RustBackendError;
 ///
 /// # Errors
 ///
-/// [`RustBackendError::Internal`] per `Line`, `Rect` e `Triangle`, che
-/// l'output dei kernel non contiene, e per un conteggio oltre `u32`.
+/// [`RustBackendError::Internal`] per un conteggio oltre `u32`.
 pub fn wkb_xy(geometry: &Geometry<f64>) -> Result<Vec<u8>, RustBackendError> {
     let mut output = Vec::new();
     write_geometry(&mut output, geometry)?;
@@ -111,11 +110,14 @@ fn write_geometry(output: &mut Vec<u8>, geometry: &Geometry<f64>) -> Result<(), 
                 write_geometry(output, child)?;
             }
         }
-        Geometry::Line(_) | Geometry::Rect(_) | Geometry::Triangle(_) => {
-            return Err(RustBackendError::Internal(
-                "tipo geometria non atteso nell'output del kernel",
-            ));
+        // Come geozero: `Line` e' una `LineString` di due coordinate, `Rect`
+        // e `Triangle` sono il poligono di `to_polygon`, stesso ordine dei
+        // vertici.
+        Geometry::Line(line) => {
+            write_line_string(output, &LineString::new(vec![line.start, line.end]))?;
         }
+        Geometry::Rect(rect) => write_polygon(output, &rect.to_polygon())?,
+        Geometry::Triangle(triangle) => write_polygon(output, &triangle.to_polygon())?,
     }
     Ok(())
 }
@@ -197,12 +199,30 @@ mod tests {
         }
     }
 
+    /// Oracolo anche su `Line`, `Rect` e `Triangle`, da soli e annidati.
     #[test]
-    fn rifiuta_i_tipi_che_l_output_non_contiene() {
+    fn line_rect_e_triangle_come_l_encoder_canonico() {
         let line = Geometry::Line(geo::Line::new(
             Coord { x: 0.0, y: 0.0 },
-            Coord { x: 1.0, y: 1.0 },
+            Coord { x: 1.0, y: -1.5 },
         ));
-        assert!(matches!(wkb_xy(&line), Err(RustBackendError::Internal(_))));
+        let rect = Geometry::Rect(geo::Rect::new((3.0, 1.0), (-2.0, 4.5)));
+        let triangle = Geometry::Triangle(geo::Triangle::new(
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 0.0, y: 2.0 },
+            Coord { x: 5.0, y: 1.0 },
+        ));
+        let collection = Geometry::GeometryCollection(GeometryCollection::new_from(vec![
+            line.clone(),
+            rect.clone(),
+            triangle.clone(),
+        ]));
+        for geometry in [line, rect, triangle, collection] {
+            assert_eq!(
+                wkb_xy(&geometry).unwrap(),
+                geometry.to_wkb(CoordDimensions::xy()).unwrap(),
+                "{geometry:?}"
+            );
+        }
     }
 }

@@ -880,6 +880,52 @@ mod tests {
         );
     }
 
+    /// `Line`, `Rect` e `Triangle` entrano come a 190c493: geozero li
+    /// codificava come `LineString` e `Polygon` (`to_polygon` di `geo`),
+    /// anche dentro una collezione; gia' validi, tornano in quella forma.
+    #[test]
+    fn make_valid_geometry_normalizes_line_rect_and_triangle() {
+        let rect = geo::Rect::new((0.0, 0.0), (2.0, 1.0));
+        let triangle = geo::Triangle::new(
+            geo::Coord { x: 0.0, y: 0.0 },
+            geo::Coord { x: 3.0, y: 0.0 },
+            geo::Coord { x: 0.0, y: 3.0 },
+        );
+        let line = geo::Line::new(geo::Coord { x: 0.0, y: 0.0 }, geo::Coord { x: 1.0, y: 1.0 });
+        let cases = [
+            (Geometry::Rect(rect), Geometry::Polygon(rect.to_polygon())),
+            (
+                Geometry::Triangle(triangle),
+                Geometry::Polygon(triangle.to_polygon()),
+            ),
+            (
+                Geometry::Line(line),
+                Geometry::LineString(LineString::new(vec![line.start, line.end])),
+            ),
+            (
+                Geometry::GeometryCollection(GeometryCollection::new_from(vec![
+                    Geometry::Rect(rect),
+                    Geometry::Line(line),
+                ])),
+                Geometry::GeometryCollection(GeometryCollection::new_from(vec![
+                    Geometry::Polygon(rect.to_polygon()),
+                    Geometry::LineString(LineString::new(vec![line.start, line.end])),
+                ])),
+            ),
+        ];
+        for (input, expected) in cases {
+            for method in [RepairMethod::Linework, RepairMethod::Structure] {
+                let output = make_valid_geometry(&input, method, true).expect("passthrough");
+                assert_eq!(output, expected);
+                // Stessi byte che geozero dava a 190c493.
+                assert_eq!(
+                    wkb::wkb_xy(&input).unwrap(),
+                    input.to_wkb(CoordDimensions::xy()).unwrap()
+                );
+            }
+        }
+    }
+
     #[test]
     fn make_valid_keep_collapsed_handles_degenerate_invalid_polygon() {
         let degenerate = Geometry::Polygon(polygon![
