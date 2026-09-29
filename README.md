@@ -377,13 +377,13 @@ lì e la stima letta dai sorgenti si toglie.
 
 ### Hash delle chiavi non keyed
 
-**Regola.** Le mappe di chiavi dei kernel tabellari usano due hash
-deterministici senza seme (`crates/plenora-kernels-table/src/hashing.rs`):
-`KeyHasher` (`FastHasher`) per i valori nativi (interi, testi, valori e
-chiavi composte dei join, partizioni delle finestre, blocchi di
-`fuzzy_join`, chiave Int64 singola di `reconcile` e `assert_foreign_key`,
-valori pivot e celle di `pivot`) e
-`ChiaveHasher` per le chiavi binarie di riga (arena `KeyInterner` di
+**Regola.** Le mappe di chiavi dei kernel tabellari usano un solo hash
+deterministico senza seme, `KeyHasher`
+(`crates/plenora-kernels-table/src/hashing.rs`): come `FastHasher` per i
+valori nativi (interi, testi, valori e chiavi composte dei join, partizioni
+delle finestre, blocchi di `fuzzy_join`, chiave Int64 singola di
+`reconcile` e `assert_foreign_key`, valori pivot e celle di `pivot`) e come
+`hash_chiave` (lunghezza, poi byte) per le chiavi binarie di riga (arena `KeyInterner` di
 aggregate, distinct, set operation, assert_unique, table_diff, `reconcile`,
 `assert_foreign_key` e dell'indice di `pivot`; mappe e scelta della partizione dello spill). L'uguaglianza delle chiavi si decide
 sempre sui valori o sui byte: l'hash sceglie i candidati, mai il risultato,
@@ -397,10 +397,10 @@ set operation, qualità, spill, `fuzzy_join`.
 
 **Hazard.**
 
-- nessuno dei due è keyed: dati costruiti apposta per collidere degradano
+- non è keyed: dati costruiti apposta per collidere degradano
   build e probe fino al quadratico entro i limiti di riga, che limitano `n`
   ma non il comportamento dentro `n`. Nessuna perdita di correttezza;
-- entrambi ripiegano i bit alti su quelli bassi dopo ogni blocco. Senza, il
+- ripiega i bit alti su quelli bassi dopo ogni blocco. Senza, il
   passo di `KeyHasher` propagava le differenze solo verso i bit alti e su
   chiavi di più blocchi collideva anche senza avversario (un milione di
   codici `CUST-%08d` davano 960 000 hash, un milione di chiavi compatte

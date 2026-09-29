@@ -15,7 +15,7 @@ use plenora_core::arrow::select::concat::concat_batches;
 use tempfile::TempDir;
 
 use crate::aggregation::{self, Aggregate, Distinct, Keep, KeyColumn, Sort};
-use crate::hashing::{hash_chiave, ChiaveBuildHasher};
+use crate::hashing::{hash_chiave, FastHasher};
 use crate::setops::{self, CompactRowEncoder, SetOperationKind};
 use crate::Limits;
 use crate::{column_index, replace_or_append, select_rows};
@@ -77,9 +77,10 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
     // — la correttezza richiede solo "stessa chiave -> stessa partizione"
     // (il riordino canonico usa i byte di chiave, mai la partizione), e un
     // hash crittografico per riga sarebbe il costo dominante dello spill.
-    // Non e' `KeyHasher`: sulle chiavi compatte degli interi concentrava
-    // chiavi distinte in una sola partizione, oltre il budget di memoria
-    // della partizione (errore `ResourceLimit` spurio).
+    // Prima del ripiegamento dei bit alti `KeyHasher` concentrava le chiavi
+    // compatte degli interi in una sola partizione, oltre il budget di
+    // memoria della partizione (errore `ResourceLimit` spurio): il test
+    // `ripartizione_le_chiavi_int64_non_si_concentrano` lo tiene chiuso.
     let divisor = partitions as u64;
     // `% divisor` con `divisor <= 4096` (validato da `Limits`) sta in
     // `usize` su qualunque piattaforma supportata: se questa conversione
@@ -220,10 +221,10 @@ fn read_record(
     })?))
 }
 
-/// Insieme di chiavi lette da spill con `ChiaveHasher` (deterministico) al
+/// Insieme di chiavi lette da spill con `KeyHasher` (deterministico) al
 /// posto di `SipHash` (hot path minimale): stesso hash di `partition` e
 /// delle mappe di `distinct` spilled.
-type SpillKeySet = HashSet<Box<[u8]>, ChiaveBuildHasher>;
+type SpillKeySet = HashSet<Box<[u8]>, FastHasher>;
 
 fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
     let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?);
@@ -893,7 +894,7 @@ pub fn distinct_spilled_in(
         limits.spill_partitions,
     )?;
 
-    let mut stats: HashMap<Box<[u8]>, KeyStats, ChiaveBuildHasher> = HashMap::default();
+    let mut stats: HashMap<Box<[u8]>, KeyStats, FastHasher> = HashMap::default();
     let mut estimated = 0_usize;
     let mut key = Vec::new();
     let mut scratch = String::new();
@@ -1439,8 +1440,9 @@ mod tests {
             .expect("chiave");
         assert_eq!(compatta, chiave_int64(21));
 
-        // Con `KeyHasher` le chiavi di 21 e 2048 avevano lo stesso hash, e
-        // quindi la stessa partizione per qualunque numero di partizioni.
+        // Con `KeyHasher` senza ripiegamento dei bit alti le chiavi di 21 e
+        // 2048 avevano lo stesso hash, e quindi la stessa partizione per
+        // qualunque numero di partizioni.
         let (a, b) = (chiave_int64(21), chiave_int64(2048));
         assert_ne!(hash_chiave(&a), hash_chiave(&b));
         let separate = (2..=64)
