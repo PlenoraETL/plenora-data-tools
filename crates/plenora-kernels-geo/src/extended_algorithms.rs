@@ -307,6 +307,12 @@ pub fn snap_to_grid(
 /// anello chiuso antiorario `[a, b, c, a]` che parte dal vertice comparso
 /// per primo nell'ingresso; i triangoli sono in ordine lessicografico della
 /// prima comparsa dei loro tre vertici. Stesso ingresso, stessa uscita.
+/// L'ordine e' parte del contratto (`DefinedOrder` nel catalogo,
+/// `semantic_version` 2).
+///
+/// Nessuna precisione come argomento: i vertici d'uscita sono i punti
+/// d'ingresso con i loro bit e i predicati di `spade` sono esatti, quindi
+/// nessuna coordinata calcolata puo' spostarsi.
 ///
 /// Costruita con il caricamento in blocco di `spade` ([`crate::triangolazione`]):
 /// sugli ingressi senza quattro punti cocircolari i triangoli sono quelli

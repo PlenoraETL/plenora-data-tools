@@ -73,7 +73,7 @@ fn quadrato() -> Geometry<f64> {
 #[test]
 fn voronoi_su_reperto_concluso_resta_invalidpoint_con_contesto() {
     let geometrie = [reperto(), quadrato()];
-    let errore = voronoi_cells(&geometrie, 16).expect_err("il reperto non passa");
+    let errore = voronoi_cells(&geometrie, 16, precisione()).expect_err("il reperto non passa");
     assert!(
         matches!(errore, AdvancedError::InvalidPoint { .. }),
         "col candidato esatto `geo` conclude sempre: l'ingresso e' davvero invalido — {errore:?}"

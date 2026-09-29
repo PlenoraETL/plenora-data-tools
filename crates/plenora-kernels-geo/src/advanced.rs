@@ -8,6 +8,8 @@ use geo::{
 use rstar::{RTree, RTreeObject, AABB};
 use spade::handles::VoronoiVertex::{Inner, Outer};
 use spade::Triangulation as _;
+
+use crate::rust_backend::precision::{coordinate_abbastanza_fitte, modulo_massimo, Precision};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -43,6 +45,15 @@ pub enum AdvancedError {
     /// del payload, mai il contenuto.
     #[error("calcolo Voronoi non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
+    /// Le coordinate (siti e punti lontani dei raggi) sono troppo grandi
+    /// per la precisione dichiarata: la spaziatura dei `f64` supera `p /
+    /// 64` (`rust_backend::precision`).
+    #[error("geometria troppo estesa per la precisione dichiarata")]
+    PrecisionInsufficient,
+    /// Un vertice Voronoi (circocentro di un triangolo quasi degenere) ha un
+    /// errore d'arrotondamento maggiorato oltre un quarto della precisione.
+    #[error("vertice Voronoi troppo mal condizionato per la precisione dichiarata")]
+    VerticeMalCondizionato,
 }
 
 /// Un calcolo di `geo` o `rstar` dietro la barriera dei panici.
@@ -92,11 +103,26 @@ fn classifica_cella(esito: crate::EsitoValidazione) -> AdvancedError {
 /// - `Voronoi`: the Voronoi construction itself failed.
 /// - `InvalidOutput`: a produced cell fails OGC validation.
 /// - `UnmatchedPoint`: no produced cell intersects an input point.
+/// - `PrecisionInsufficient`: sites or far ray points too large for
+///   `precision` (the spacing of `f64` there exceeds `precision / 64`).
+/// - `VerticeMalCondizionato`: a Voronoi vertex (circumcenter of a nearly
+///   degenerate triangle) whose rounding-error bound exceeds
+///   `precision / 4`.
+///
+/// Cell order and contents: one cell per input point in input order (the
+/// order is part of the contract, `DefinedOrder` in the catalog).
 pub fn voronoi_cells(
     geometries: &[Geometry<f64>],
     max_points: usize,
+    precision: Precision,
 ) -> Result<Vec<Geometry<f64>>, AdvancedError> {
-    voronoi_cells_con(geometries, max_points, costruisci_celle, associa_celle)
+    voronoi_cells_con(
+        geometries,
+        max_points,
+        precision,
+        costruisci_celle,
+        associa_celle,
+    )
 }
 
 /// Firma dell'associazione punto -> cella: separata perche' l'oracolo dei
@@ -106,11 +132,12 @@ type Associazione = fn(&[Polygon<f64>], &[Point<f64>]) -> Result<Vec<Geometry<f6
 /// Firma della costruzione delle celle: separata perche' l'oracolo dei test
 /// possa far girare la stessa pipeline con `voronoi_cells` di `geo`
 /// (inserimento incrementale).
-type Costruzione = fn(&[Point<f64>]) -> Result<Vec<Polygon<f64>>, AdvancedError>;
+type Costruzione = fn(&[Point<f64>], Precision) -> Result<Vec<Polygon<f64>>, AdvancedError>;
 
 fn voronoi_cells_con(
     geometries: &[Geometry<f64>],
     max_points: usize,
+    precision: Precision,
     costruisci: Costruzione,
     associa: Associazione,
 ) -> Result<Vec<Geometry<f64>>, AdvancedError> {
@@ -144,7 +171,7 @@ fn voronoi_cells_con(
         })
         .collect::<Result<_, _>>()?;
 
-    let cells = costruisci(&points)?;
+    let cells = costruisci(&points, precision)?;
     for cell in &cells {
         cell.validazione_protetta().map_err(classifica_cella)?;
     }
@@ -166,33 +193,54 @@ fn voronoi_cells_con(
 /// - il rettangolo d'ingombro dei siti si accumula in ordine di rango sui
 ///   bit che l'incrementale lascia ai vertici.
 ///
-/// Il circocentro di una faccia dipende dal vertice da cui `spade` la
-/// parte: se l'incrementale la parte da un altro vertice, un vertice
-/// Voronoi puo' differire di qualche `ulp`; sugli ingressi degeneri le
-/// facce stesse sono diverse (README, «geo.delaunay e geo.voronoi»).
-fn costruisci_celle(points: &[Point<f64>]) -> Result<Vec<Polygon<f64>>, AdvancedError> {
+/// Una differenza voluta dal corpo di `geo`: il circocentro non e'
+/// `circumcenter` di `spade`, che dipende dal vertice da cui `spade` parte la
+/// faccia, ma [`circocentro_maggiorato`], con l'origine nel vertice di rango
+/// minimo: stesso risultato qualunque sia la rotazione della faccia, e un
+/// errore maggiorato che si confronta con la precisione. Rispetto
+/// all'incrementale un vertice Voronoi puo' quindi differire di qualche
+/// `ulp`; sugli ingressi degeneri le facce stesse sono diverse (README,
+/// «geo.delaunay e geo.voronoi»).
+///
+/// Due controlli di precisione, entrambi errori espliciti:
+/// - spaziatura (`coordinate_abbastanza_fitte`) sul modulo massimo dei siti
+///   piu' la distanza a cui si prolungano i raggi, e sul modulo massimo di
+///   ogni vertice delle celle grezze;
+/// - errore maggiorato di ogni circocentro entro `p / 4`.
+fn costruisci_celle(
+    points: &[Point<f64>],
+    precision: Precision,
+) -> Result<Vec<Polygon<f64>>, AdvancedError> {
     let coordinate: Vec<Coord<f64>> = points.iter().map(|point| point.0).collect();
-    protetto(|| celle_da_spade(&coordinate))?.map_err(AdvancedError::Voronoi)
+    protetto(|| celle_da_spade(&coordinate, precision))?
 }
 
 // Il corpo ricopia `build_raw_voronoi_cells` di `geo` riga per riga: spezzarlo
 // renderebbe piu' difficile il confronto con il sorgente.
 #[allow(clippy::too_many_lines)]
-fn celle_da_spade(coordinate: &[Coord<f64>]) -> Result<Vec<Polygon<f64>>, String> {
+fn celle_da_spade(
+    coordinate: &[Coord<f64>],
+    precision: Precision,
+) -> Result<Vec<Polygon<f64>>, AdvancedError> {
     let costruita =
         crate::triangolazione::triangola(coordinate).map_err(|errore| match errore {
             crate::triangolazione::ErroreTriangolazione::Inserimento(inserimento) => {
-                VoronoiError::Triangulation(TriangulationError::SpadeError(inserimento)).to_string()
+                AdvancedError::Voronoi(
+                    VoronoiError::Triangulation(TriangulationError::SpadeError(inserimento))
+                        .to_string(),
+                )
             }
-            crate::triangolazione::ErroreTriangolazione::VerticiInattesi => {
-                "vertici della triangolazione diversi dai punti distinti".to_owned()
-            }
+            crate::triangolazione::ErroreTriangolazione::VerticiInattesi => AdvancedError::Voronoi(
+                "vertici della triangolazione diversi dai punti distinti".to_owned(),
+            ),
         })?;
     let triangolazione = &costruita.triangolazione;
 
     let num_vertices = costruita.siti.len();
     if num_vertices < 2 {
-        return Err(VoronoiError::InsufficientVertices.to_string());
+        return Err(AdvancedError::Voronoi(
+            VoronoiError::InsufficientVertices.to_string(),
+        ));
     }
 
     let base_bounds = compute_bounds_from_vertices(costruita.siti.iter().copied());
@@ -200,6 +248,41 @@ fn celle_da_spade(coordinate: &[Coord<f64>]) -> Result<Vec<Polygon<f64>>, String
     // Use padded bounds for extension distance calculation
     let padded = padded_bounds(base_bounds, 0.5);
     let extension = (padded.width() + padded.height()) * 2.0;
+
+    // Spaziatura: siti e punti lontani dei raggi (a `extension` da un
+    // circocentro dentro o vicino al rettangolo) devono stare dove i `f64`
+    // sono fitti per la precisione.
+    let p = precision.value();
+    if !coordinate_abbastanza_fitte(
+        modulo_massimo(costruita.siti.iter().copied()) + extension,
+        p,
+    ) {
+        return Err(AdvancedError::PrecisionInsufficient);
+    }
+
+    // Circocentri di tutte le facce, una volta, con l'errore maggiorato.
+    let mut circocentri: Vec<Coord<f64>> =
+        vec![Coord { x: 0.0, y: 0.0 }; triangolazione.num_all_faces()];
+    for faccia in triangolazione.inner_faces() {
+        let [a, b, c] = faccia.vertices().map(|vertice| *vertice.data());
+        let (centro, errore) = circocentro_maggiorato(a, b, c);
+        // `errore` puo' essere NaN o infinito: si rifiuta anche allora.
+        if !matches!(
+            errore.partial_cmp(&(p / 4.0)),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        ) {
+            return Err(AdvancedError::VerticeMalCondizionato);
+        }
+        if let Some(posto) = circocentri.get_mut(faccia.fix().index()) {
+            *posto = centro;
+        }
+    }
+    let centro_della_faccia = |indice: usize| {
+        circocentri.get(indice).copied().unwrap_or(Coord {
+            x: f64::NAN,
+            y: f64::NAN,
+        })
+    };
 
     // Una cella per rango al piu': l'ordine di `voronoi_faces` e' quello
     // dei vertici caricati in blocco, non quello dell'incrementale.
@@ -223,15 +306,13 @@ fn celle_da_spade(coordinate: &[Coord<f64>]) -> Result<Vec<Polygon<f64>>, String
             let to_vertex = edge.to();
 
             if let Inner(inner_face) = &from_vertex {
-                let cc = inner_face.circumcenter();
-                let coord = Coord { x: cc.x, y: cc.y };
+                let coord = centro_della_faccia(inner_face.fix().index());
                 if !circumcenters.contains(&coord) {
                     circumcenters.push(coord);
                 }
             }
             if let Inner(inner_face) = &to_vertex {
-                let cc = inner_face.circumcenter();
-                let coord = Coord { x: cc.x, y: cc.y };
+                let coord = centro_della_faccia(inner_face.fix().index());
                 if !circumcenters.contains(&coord) {
                     circumcenters.push(coord);
                 }
@@ -239,27 +320,15 @@ fn celle_da_spade(coordinate: &[Coord<f64>]) -> Result<Vec<Polygon<f64>>, String
 
             // Collect ray information
             if let (Inner(inner_face), Outer(outer_edge)) = (&from_vertex, &to_vertex) {
-                let ref_pt = inner_face.circumcenter();
+                let ref_pt = centro_della_faccia(inner_face.fix().index());
                 let dir = outer_edge.direction_vector();
-                rays.push((
-                    Coord {
-                        x: ref_pt.x,
-                        y: ref_pt.y,
-                    },
-                    Coord { x: dir.x, y: dir.y },
-                ));
+                rays.push((ref_pt, Coord { x: dir.x, y: dir.y }));
             }
 
             if let (Outer(outer_edge), Inner(inner_face)) = (&from_vertex, &to_vertex) {
-                let ref_pt = inner_face.circumcenter();
+                let ref_pt = centro_della_faccia(inner_face.fix().index());
                 let dir = outer_edge.direction_vector();
-                rays.push((
-                    Coord {
-                        x: ref_pt.x,
-                        y: ref_pt.y,
-                    },
-                    Coord { x: dir.x, y: dir.y },
-                ));
+                rays.push((ref_pt, Coord { x: dir.x, y: dir.y }));
             }
         }
 
@@ -313,7 +382,15 @@ fn celle_da_spade(coordinate: &[Coord<f64>]) -> Result<Vec<Polygon<f64>>, String
     // Collinear input produces no cells (only perpendicular bisector lines).
     // Return an error rather than silently returning an empty result.
     if raw_cells.is_empty() {
-        return Err(VoronoiError::CollinearInput.to_string());
+        return Err(AdvancedError::Voronoi(
+            VoronoiError::CollinearInput.to_string(),
+        ));
+    }
+    let vertici_grezzi = raw_cells
+        .iter()
+        .flat_map(|cella| cella.exterior().0.iter().copied());
+    if !coordinate_abbastanza_fitte(modulo_massimo(vertici_grezzi), p) {
+        return Err(AdvancedError::PrecisionInsufficient);
     }
 
     // Ritaglio `VoronoiClip::Padded`, come `voronoi_cells_with_params`.
@@ -336,6 +413,68 @@ fn celle_da_spade(coordinate: &[Coord<f64>]) -> Result<Vec<Polygon<f64>>, String
             }
         })
         .collect())
+}
+
+/// Il circocentro del triangolo `a, b, c` e un maggiorante del suo errore
+/// assoluto (norma 1), indipendenti dalla rotazione della terna.
+///
+/// La terna si ruota a partire dal vertice di rango minimo (il verso resta
+/// quello di `spade`), poi si calcola come `math::circumcenter` di `spade`
+/// 2.15.1 con l'origine in quel vertice: `b = v1 - v0`, `c = v2 - v0`,
+/// `d = 2 (bx cy - cx by)`, `x = (|b|^2 cy - |c|^2 by) / d`,
+/// `y = (|c|^2 bx - |b|^2 cx) / d`, piu' `v0`.
+///
+/// Il maggiorante segue ogni operazione al primo ordine in `u = 2^-53`
+/// (differenze: `u`; quadrati e somme: `4 u`; `d`: `8 u (|bx cy| + |cx by|)`;
+/// numeratori: `7 u (|.| + |.|)`; quoziente: errore relativo del
+/// denominatore `r`, infinito se `r >= 1/2`; somma finale: `u |x + v0|`) e
+/// si raddoppia per coprire i termini di ordine superiore. Infinito (o NaN)
+/// se il denominatore non e' separato dallo zero.
+// I nomi corti sono quelli della formula di `spade` (`math::circumcenter`);
+// niente `mul_add`: la fusione cambia l'arrotondamento su cui e' scritto il
+// maggiorante.
+#[allow(clippy::many_single_char_names, clippy::suboptimal_flops)]
+fn circocentro_maggiorato(
+    a: crate::triangolazione::Sito,
+    b: crate::triangolazione::Sito,
+    c: crate::triangolazione::Sito,
+) -> (Coord<f64>, f64) {
+    const U: f64 = f64::EPSILON / 2.0;
+    let [v0, v1, v2] = if b.rango < a.rango && b.rango < c.rango {
+        [b, c, a]
+    } else if c.rango < a.rango && c.rango < b.rango {
+        [c, a, b]
+    } else {
+        [a, b, c]
+    }
+    .map(|sito| sito.coordinata);
+    let (bx, by) = (v1.x - v0.x, v1.y - v0.y);
+    let (cx, cy) = (v2.x - v0.x, v2.y - v0.y);
+    let d = 2.0 * (bx * cy - cx * by);
+    let len_b = bx * bx + by * by;
+    let len_c = cx * cx + cy * cy;
+    let d_inv = 1.0 / d;
+    let nx = len_b * cy - len_c * by;
+    let ny = -len_b * cx + len_c * bx;
+    let x = nx * d_inv;
+    let y = ny * d_inv;
+    let centro = Coord {
+        x: x + v0.x,
+        y: y + v0.y,
+    };
+
+    let errore_d = 16.0 * U * ((bx * cy).abs() + (cx * by).abs());
+    let r = errore_d / d.abs();
+    let errore = if r < 0.5 {
+        let numeratore_x = 7.0 * U * ((len_b * cy).abs() + (len_c * by).abs());
+        let numeratore_y = 7.0 * U * ((len_b * cx).abs() + (len_c * bx).abs());
+        let ex = (numeratore_x / d.abs() + x.abs() * r) / (1.0 - r) + 2.0 * U * x.abs();
+        let ey = (numeratore_y / d.abs() + y.abs() * r) / (1.0 - r) + 2.0 * U * y.abs();
+        2.0 * (ex + ey + U * (centro.x.abs() + centro.y.abs()))
+    } else {
+        f64::INFINITY
+    };
+    (centro, errore)
 }
 
 /// `compute_bounds_from_vertices` di `geo` 0.33.1.
@@ -464,6 +603,15 @@ mod tests {
     use super::*;
     use geo::{Area, HausdorffDistance, MultiPoint, Voronoi};
 
+    /// Precisione delle prove su coordinate unitarie: fitta abbastanza da
+    /// non rifiutare nulla fino a coordinate di circa `2^30`.
+    ///
+    /// `10^-4` su estensioni fino a 100: un rapporto di `10^6`, come 10 km
+    /// al centimetro.
+    fn prova() -> Precision {
+        Precision::new(1.0e-4).expect("precisione")
+    }
+
     /// Sintetico attraverso la conversione reale (stessa motivazione di
     /// `predicates::classifica_lato_non_appiattisce_l_interruzione`): nessun
     /// reperto reale interrompe piu' `geo` col candidato esatto, quindi
@@ -535,7 +683,7 @@ mod tests {
             Geometry::Point(Point::new(2.0, 0.0)),
             Geometry::Point(Point::new(1.0, 2.0)),
         ];
-        let cells = voronoi_cells(&sites, 10).unwrap();
+        let cells = voronoi_cells(&sites, 10, prova()).unwrap();
         assert_eq!(cells.len(), sites.len());
         for (cell, site) in cells.iter().zip(&sites) {
             assert!(cell.contains(site) || cell.intersects(site));
@@ -551,7 +699,7 @@ mod tests {
             Geometry::Point(Point::new(1.0, 2.0)),
         ];
         assert!(matches!(
-            voronoi_cells(&sites, 2),
+            voronoi_cells(&sites, 2, prova()),
             Err(AdvancedError::PointLimitExceeded { .. })
         ));
         let non_points = vec![
@@ -559,15 +707,15 @@ mod tests {
             geo::Rect::new((0.0, 0.0), (1.0, 1.0)).into(),
         ];
         assert!(matches!(
-            voronoi_cells(&non_points, 10),
+            voronoi_cells(&non_points, 10, prova()),
             Err(AdvancedError::ExpectedPoint { index: 1, .. })
         ));
         assert!(matches!(
-            voronoi_cells(&[], 1),
+            voronoi_cells(&[], 1, prova()),
             Err(AdvancedError::InvalidPointLimit)
         ));
         assert!(matches!(
-            voronoi_cells(&[], 2),
+            voronoi_cells(&[], 2, prova()),
             Err(AdvancedError::InsufficientPoints)
         ));
         let invalid = vec![
@@ -575,7 +723,7 @@ mod tests {
             Geometry::Point(Point::new(f64::NAN, 1.0)),
         ];
         assert!(matches!(
-            voronoi_cells(&invalid, 2),
+            voronoi_cells(&invalid, 2, prova()),
             Err(AdvancedError::InvalidPoint { .. })
         ));
         let variants = vec![
@@ -594,7 +742,7 @@ mod tests {
         ];
         for variant in variants {
             assert!(matches!(
-                voronoi_cells(&[sites[0].clone(), variant], 2),
+                voronoi_cells(&[sites[0].clone(), variant], 2, prova()),
                 Err(AdvancedError::ExpectedPoint { .. })
             ));
         }
@@ -647,9 +795,14 @@ mod tests {
             .iter()
             .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
             .collect();
-        let veloce = voronoi_cells(&geometrie, usize::MAX);
-        let riferimento =
-            voronoi_cells_con(&geometrie, usize::MAX, costruisci_celle, associa_lineare);
+        let veloce = voronoi_cells(&geometrie, usize::MAX, prova());
+        let riferimento = voronoi_cells_con(
+            &geometrie,
+            usize::MAX,
+            prova(),
+            costruisci_celle,
+            associa_lineare,
+        );
         assert_eq!(
             impronta(&veloce),
             impronta(&riferimento),
@@ -998,7 +1151,10 @@ mod tests {
 
     /// La costruzione di prima, ricopiata alla lettera: `voronoi_cells` di
     /// `geo` 0.33.1, che inserisce i siti in `spade` uno alla volta.
-    fn costruisci_con_geo(points: &[Point<f64>]) -> Result<Vec<Polygon<f64>>, AdvancedError> {
+    fn costruisci_con_geo(
+        points: &[Point<f64>],
+        _precision: Precision,
+    ) -> Result<Vec<Polygon<f64>>, AdvancedError> {
         let multipunto = MultiPoint::new(points.to_vec());
         let cells = protetto(|| multipunto.voronoi_cells())?
             .map_err(|error| AdvancedError::Voronoi(error.to_string()))?;
@@ -1011,6 +1167,9 @@ mod tests {
         celle: usize,
         identiche: usize,
         hausdorff: f64,
+        /// Ingressi su cui la costruzione nuova rifiuta per precisione e
+        /// quella di `geo` risponde.
+        rifiutati: usize,
     }
 
     fn perimetro(poligono: &Polygon<f64>) -> f64 {
@@ -1023,15 +1182,37 @@ mod tests {
     /// messaggio, stesso indice); altrimenti una cella per punto, nello
     /// stesso ordine, identica bit per bit oppure entro `tolleranza`
     /// (Hausdorff fra i vertici, e area entro `tolleranza` per il perimetro).
+    ///
+    /// La precisione e' `tolleranza`, e non meno di `10^-4`; un rifiuto per
+    /// precisione dove `geo` risponde fa fallire la prova.
     fn confronta_costruzione(punti: &[(f64, f64)], tolleranza: f64) -> Scarti {
+        let scarti = confronta_o_rifiuta(punti, tolleranza);
+        assert_eq!(scarti.rifiutati, 0, "rifiuto per precisione: {punti:?}");
+        scarti
+    }
+
+    /// Come [`confronta_costruzione`], ma un rifiuto per precisione
+    /// (`PrecisionInsufficient`, `VerticeMalCondizionato`) si conta.
+    fn confronta_o_rifiuta(punti: &[(f64, f64)], tolleranza: f64) -> Scarti {
         let geometrie: Vec<Geometry<f64>> = punti
             .iter()
             .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
             .collect();
-        let nuova = voronoi_cells(&geometrie, usize::MAX);
-        let vecchia = voronoi_cells_con(&geometrie, usize::MAX, costruisci_con_geo, associa_celle);
+        let precisione = Precision::new(tolleranza.max(1.0e-4)).expect("precisione");
+        let nuova = voronoi_cells(&geometrie, usize::MAX, precisione);
+        let vecchia = voronoi_cells_con(
+            &geometrie,
+            usize::MAX,
+            precisione,
+            costruisci_con_geo,
+            associa_celle,
+        );
         let mut scarti = Scarti::default();
         match (nuova, vecchia) {
+            (
+                Err(AdvancedError::PrecisionInsufficient | AdvancedError::VerticeMalCondizionato),
+                Ok(_),
+            ) => scarti.rifiutati += 1,
             (Err(nuova), Err(vecchia)) => {
                 assert_eq!(
                     format!("{nuova:?}"),
@@ -1174,9 +1355,10 @@ mod tests {
                 (0.5, 1.0),
             ],
         ];
+        // Non piu' bit per bit: il circocentro ha l'origine nel vertice di
+        // rango minimo, non in quello da cui `spade` parte la faccia.
         for punti in esatti {
-            let scarti = confronta_costruzione(punti, 0.0);
-            assert_eq!(scarti.celle, scarti.identiche, "punti: {punti:?}");
+            confronta_costruzione(punti, 1.0e-12);
         }
         let errori: &[&[(f64, f64)]] = &[
             &[(0.0, 0.0), (0.0, 0.0)],
@@ -1192,7 +1374,7 @@ mod tests {
                 .collect();
             assert!(
                 matches!(
-                    voronoi_cells(&geometrie, usize::MAX),
+                    voronoi_cells(&geometrie, usize::MAX, prova()),
                     Err(AdvancedError::Voronoi(_))
                 ),
                 "punti: {punti:?}"
@@ -1220,7 +1402,7 @@ mod tests {
             (2.0_f64.powi(190), (0.0, 0.0), 1.0e-9 * 2.0_f64.powi(190)),
             (2.0_f64.powi(196), (-massimo / 2.0, 0.0), 1.0e-9 * massimo),
             (1.0e-9, (1.0e9, -1.0e9), 1.0e-3),
-            (1.0e-3, (1.0e15, 1.0e15), 1.0),
+            (1.0e-3, (1.0e11, 1.0e11), 1.0),
         ];
         for (passo, origine, tolleranza) in dentro {
             for lato in [2, 3, 4, 7] {
@@ -1280,9 +1462,165 @@ mod tests {
                 .iter()
                 .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
                 .collect();
-            let prima = impronta(&voronoi_cells(&geometrie, usize::MAX));
+            let prima = impronta(&voronoi_cells(&geometrie, usize::MAX, prova()));
             for _ in 0..3 {
-                assert_eq!(impronta(&voronoi_cells(&geometrie, usize::MAX)), prima);
+                assert_eq!(
+                    impronta(&voronoi_cells(&geometrie, usize::MAX, prova())),
+                    prima
+                );
+            }
+        }
+    }
+
+    /// Il reperto della revisione: siti a `(10^15, 10^15)` piu' pochi metri,
+    /// distanti almeno 11 m. Con l'origine nel vertice da cui `spade` parte
+    /// la faccia, incrementale e caricamento in blocco davano circocentri a
+    /// 12,5 cm l'uno dall'altro. A `10^15` la spaziatura dei `f64` e'
+    /// 0,125: la precisione di 1 cm non si puo' garantire e l'operazione si
+    /// rifiuta; con i siti in coordinate UTM le celle ci sono.
+    #[test]
+    fn coordinate_troppo_grandi_per_la_precisione_si_rifiutano() {
+        let siti = [(12.0, 19.125), (2.375, 2.625), (0.875, 19.125)];
+        let centimetro = Precision::new(0.01).expect("precisione");
+        let lontani: Vec<Geometry<f64>> = siti
+            .iter()
+            .map(|&(x, y)| Geometry::Point(Point::new(1.0e15 + x, 1.0e15 + y)))
+            .collect();
+        assert!(matches!(
+            voronoi_cells(&lontani, 10, centimetro),
+            Err(AdvancedError::PrecisionInsufficient)
+        ));
+        assert_eq!(
+            AdvancedError::PrecisionInsufficient.to_string(),
+            "geometria troppo estesa per la precisione dichiarata"
+        );
+        let vicini: Vec<Geometry<f64>> = siti
+            .iter()
+            .map(|&(x, y)| Geometry::Point(Point::new(500_000.0 + x, 4_500_000.0 + y)))
+            .collect();
+        assert_eq!(
+            voronoi_cells(&vicini, 10, centimetro).expect("celle").len(),
+            3
+        );
+        // Al limite: attorno a 2^38 m passa (spaziatura 2^-14 m), a 2^41 m no.
+        for (origine, passa) in [(2.0_f64.powi(38), true), (2.0_f64.powi(41), false)] {
+            let quadrato: Vec<Geometry<f64>> = griglia(3, 10.0, (origine, origine))
+                .into_iter()
+                .map(|(x, y)| Geometry::Point(Point::new(x, y)))
+                .collect();
+            let esito = voronoi_cells(&quadrato, 100, centimetro);
+            assert_eq!(esito.is_ok(), passa, "{esito:?}");
+        }
+    }
+
+    const fn sito(x: f64, y: f64, rango: usize) -> crate::triangolazione::Sito {
+        crate::triangolazione::Sito {
+            coordinata: Coord { x, y },
+            rango,
+        }
+    }
+
+    /// Il circocentro non dipende dalla rotazione della faccia (stessi bit),
+    /// e il maggiorante copre lo scarto dal circocentro calcolato con le
+    /// altre due origini, che hanno ciascuna il proprio maggiorante.
+    #[test]
+    // Niente mul_add: i punti di prova devono restare quelli scritti.
+    #[allow(clippy::suboptimal_flops)]
+    fn circocentro_indipendente_dalla_rotazione_e_maggiorato() {
+        let mut generatore = Xorshift(0x0DDB_A11C_AFE0_F00D);
+        let mut casi = 0;
+        for giro in 0..20_000_u64 {
+            let scala = [1.0, 1.0e3, 1.0e6][usize::try_from(giro % 3).unwrap_or(0)];
+            let base = (500_000.0, 4_500_000.0);
+            let a = (
+                base.0 + generatore.unitario() * scala,
+                base.1 + generatore.unitario() * scala,
+            );
+            let b = (
+                base.0 + generatore.unitario() * scala,
+                base.1 + generatore.unitario() * scala,
+            );
+            // Il terzo vicino alla retta per a e b: triangoli sottili.
+            let t = generatore.unitario() * 3.0 - 1.0;
+            let scosta = (generatore.unitario() - 0.5) * scala * 1.0e-6;
+            let c = (
+                a.0 + t * (b.0 - a.0) - scosta,
+                a.1 + t * (b.1 - a.1) + scosta,
+            );
+            let orientazione = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+            if orientazione.abs() < 1.0e-9 * scala * scala {
+                continue;
+            }
+            let (a, b) = if orientazione > 0.0 { (a, b) } else { (b, a) };
+            let [sa, sb, sc] = [sito(a.0, a.1, 0), sito(b.0, b.1, 1), sito(c.0, c.1, 2)];
+            let (centro, errore) = circocentro_maggiorato(sa, sb, sc);
+            for altra in [
+                circocentro_maggiorato(sb, sc, sa),
+                circocentro_maggiorato(sc, sa, sb),
+            ] {
+                assert_eq!(
+                    (altra.0.x.to_bits(), altra.0.y.to_bits(), altra.1.to_bits()),
+                    (centro.x.to_bits(), centro.y.to_bits(), errore.to_bits()),
+                );
+            }
+            if !errore.is_finite() {
+                continue;
+            }
+            // Le altre due origini: ranghi riassegnati, la formula parte da
+            // b e poi da c.
+            for [v0, v1, v2] in [[sb, sc, sa], [sc, sa, sb]] {
+                let (altro, errore_altro) = circocentro_maggiorato(
+                    sito(v0.coordinata.x, v0.coordinata.y, 0),
+                    sito(v1.coordinata.x, v1.coordinata.y, 1),
+                    sito(v2.coordinata.x, v2.coordinata.y, 2),
+                );
+                let scarto = (altro.x - centro.x).abs() + (altro.y - centro.y).abs();
+                assert!(
+                    scarto <= errore + errore_altro,
+                    "scarto {scarto:e} oltre {:e}",
+                    errore + errore_altro
+                );
+            }
+            casi += 1;
+        }
+        assert!(casi > 15_000);
+    }
+
+    /// Il dominio realistico: siti UTM al centimetro (o continui) su 1, 10 e
+    /// 30 km con 1 cm di precisione non si rifiutano (maggiorante misurato
+    /// al piu' `3,4e-4 p`, contro il limite `p / 4`).
+    #[test]
+    fn dominio_utm_realistico_non_si_rifiuta() {
+        let centimetro = Precision::new(0.01).expect("precisione");
+        let mut generatore = Xorshift(0x1234_5678_9ABC_DEF1);
+        for (quanti, lato_cm) in [
+            (2_000_u64, 100_000_u64),
+            (5_000, 1_000_000),
+            (5_000, 3_000_000),
+        ] {
+            for continui in [false, true] {
+                let siti: Vec<Geometry<f64>> = (0..quanti)
+                    .map(|_| {
+                        let (x, y) = if continui {
+                            (
+                                generatore.unitario() * intero(lato_cm) / 100.0,
+                                generatore.unitario() * intero(lato_cm) / 100.0,
+                            )
+                        } else {
+                            (
+                                intero(generatore.sotto(lato_cm)) / 100.0,
+                                intero(generatore.sotto(lato_cm)) / 100.0,
+                            )
+                        };
+                        Geometry::Point(Point::new(500_000.0 + x, 4_500_000.0 + y))
+                    })
+                    .collect();
+                assert_eq!(
+                    voronoi_cells(&siti, usize::MAX, centimetro)
+                        .expect("celle")
+                        .len(),
+                    siti.len()
+                );
             }
         }
     }

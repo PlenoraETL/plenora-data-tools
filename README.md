@@ -528,16 +528,31 @@ conteggio dei vertici dopo il caricamento si verifica: un punto perso o
 fuso è un errore `Triangulation`/`Voronoi`, mai un'uscita.
 
 - `delaunay`: stessi triangoli, antiorari, anelli chiusi `[a, b, c, a]`.
-  L'ordine prima era quello interno delle facce di `spade`, non dichiarato;
-  ora è canonico: ogni triangolo parte dal vertice comparso per primo, i
-  triangoli sono in ordine lessicografico della prima comparsa dei tre
-  vertici.
+  L'ordine d'uscita (`DefinedOrder` nel catalogo) prima era quello interno
+  delle facce di `spade`; ora è canonico e fa parte del contratto: ogni
+  triangolo parte dal vertice comparso per primo, i triangoli sono in
+  ordine lessicografico della prima comparsa dei tre vertici. Nel catalogo
+  `geo.delaunay` passa a `semantic_version` 2 e `kernel_version` 2.
+  Nessun controllo di precisione: i vertici d'uscita sono i punti
+  d'ingresso con i loro bit e i predicati sono esatti, quindi nessuna
+  coordinata calcolata può spostarsi.
 - `voronoi_cells`: il corpo di `build_raw_voronoi_cells` e
-  `voronoi_cells_with_params` di `geo` 0.33.1 è ricopiato (circocentri di
-  `spade`, raggi, ordinamento angolare, ritaglio `Padded` con
-  `intersection` di `geo`), le celle escono in ordine di rango e il
-  rettangolo dei siti si accumula in quell'ordine, come nell'incrementale;
-  associazione punto -> cella invariata.
+  `voronoi_cells_with_params` di `geo` 0.33.1 è ricopiato (raggi,
+  ordinamento angolare, ritaglio `Padded` con `intersection` di `geo`), le
+  celle escono in ordine di rango e il rettangolo dei siti si accumula in
+  quell'ordine, come nell'incrementale; associazione punto -> cella
+  invariata. Il circocentro non è più `circumcenter` di `spade`, che
+  dipende dal vertice da cui `spade` parte la faccia (la revisione ha
+  trovato 12,5 cm fra incrementale e caricamento in blocco con siti a
+  `10^15`): stessa formula con l'origine nel vertice di rango minimo,
+  indipendente dalla rotazione, con un maggiorante del suo errore
+  d'arrotondamento. La funzione riceve la precisione (`Precision`) e
+  rifiuta con errore esplicito: `PrecisionInsufficient` se la spaziatura
+  dei `f64` supera `p / 64` al modulo dei siti più la distanza dei punti
+  lontani dei raggi, o al modulo dei vertici delle celle grezze (lo stesso
+  `coordinate_abbastanza_fitte` degli overlay); `VerticeMalCondizionato`
+  se il maggiorante di un circocentro supera `p / 4`. Nel catalogo
+  `geo.voronoi` passa a `semantic_version` 2 e `kernel_version` 2.
 
 `bulk_load` e non `bulk_load_stable`: la variante stabile reinserisce i
 vertici saltati iterando un `HashSet` a seme casuale (`try_bulk_load_cdt`
@@ -553,9 +568,11 @@ su punti casuali continui e UTM al centimetro stessi triangoli bit per bit;
 su griglie, punti interi cocircolari e reticoli con duplicati un controllo
 esatto in interi (`i128`) che l'uscita sia di Delaunay, anche con le
 coordinate scalate a `2^-142` e `2^190`; celle Voronoi identiche bit per
-bit o entro `10^-6` in Hausdorff (misurato: 77 % identiche, scarto massimo
-`5,8e-11` in coordinate UTM; su griglie di 100k punti l'impronta
-dell'uscita è identica).
+bit o entro `10^-6` in Hausdorff (misurato: 70 % identiche, scarto massimo
+`4,7e-10` in coordinate UTM). Il maggiorante del circocentro è provato
+contro lo scarto fra le tre origini possibili su 20.000 triangoli, anche
+sottili; sul dominio realistico (siti UTM al centimetro o continui, 1 cm)
+il maggiorante misurato resta sotto `3,4e-4 p` fino a 30 km di lato.
 
 Misure (release, mediane di 7 esecuzioni alternate prima/dopo, Windows,
 punti casuali UTM al centimetro; prima -> dopo): `delaunay` 10k 27,5 ->
@@ -578,12 +595,24 @@ esecuzione; `examples/bench_delaunay_voronoi.rs`).
   risultato di prima è quello dell'errore di arrotondamento del
   circocentro, lo stesso ordine dell'errore che il risultato di prima aveva
   già rispetto all'esatto;
-- **ordine dei vertici delle facce**: `circumcenter` di `spade` dipende
-  dal vertice da cui la faccia parte, e il caricamento in blocco non parte
-  sempre dallo stesso dell'incrementale: un vertice Voronoi può differire
-  di qualche `ulp` anche su ingressi non degeneri; parità di angolo
+- **circocentri**: l'origine nel vertice di rango minimo non è quella
+  dell'incrementale, quindi un vertice Voronoi può differire di qualche
+  `ulp` da prima anche su ingressi non degeneri; parità di angolo
   nell'ordinamento attorno al sito (rarissime) seguono l'ordine dei lati
   di `spade`, diverso da quello dell'incrementale;
+- **rifiuti di `VerticeMalCondizionato`**: il maggiorante è al primo
+  ordine, raddoppiato, non dimostrato in forma chiusa. Cresce con
+  `R L^2 / A` (raggio circoscritto, lato, area): i triangoli sottili sul
+  bordo dell'inviluppo lo fanno salire con l'estensione dei dati. Misurato
+  con siti UTM al centimetro: sotto `3,4e-4 p` fino a 30 km, ma a 1.000 km
+  di lato con 200.000 siti un triangolo arriva a `1,17 p` e l'operazione si
+  rifiuta. Il vertice lontano di un triangolo sottile cade di solito fuori
+  dal ritaglio, e il rifiuto è quindi prudente, non necessario, in quei
+  casi;
+- `intersection` di `geo` nel ritaglio delle celle di bordo non passa dal
+  controllo di griglia di `rust_backend::griglia` (come prima di questa
+  modifica): lo spostamento della griglia di `i_overlay` non è confrontato
+  con la precisione;
 - **predicati di `robust` 1.2.0**: `spade` accetta solo coordinate zero o
   di modulo in `[2^-142, 2^201]`, il dominio in cui Shewchuk dichiara che
   `orient2d` e `incircle` non vanno in underflow né in overflow; fuori,
@@ -604,9 +633,12 @@ esecuzione; `examples/bench_delaunay_voronoi.rs`).
   degeneri (punti quasi tutti allineati), come l'incrementale.
 
 **Condizione di rientro.** Una versione di `geo` che costruisca
-triangolazione e celle Voronoi con il caricamento in blocco e un ordine
-deterministico: le due funzioni tornano a chiamare `geo`, e gli oracoli
-restano come regressione.
+triangolazione e celle Voronoi con il caricamento in blocco, un ordine
+deterministico e circocentri con un limite d'errore dichiarato: le due
+funzioni tornano a chiamare `geo`, e gli oracoli restano come regressione.
+Per i rifiuti di `VerticeMalCondizionato`: un circocentro calcolato in
+aritmetica estesa (differenze esatte, prodotti in doppia-doppia), che
+riduce il maggiorante di circa `2^-53`.
 
 ## Operazioni topologiche in Rust puro
 

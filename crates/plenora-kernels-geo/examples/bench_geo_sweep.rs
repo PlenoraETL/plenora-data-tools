@@ -2246,9 +2246,14 @@ fn main() {
             "celle Voronoi da n punti, encode di ogni cella",
             &|n| {
                 let geoms = decode_prefix(points_wkb(), n)?;
-                voronoi_cells(&geoms, 100_000)
-                    .map_err(|e| e.to_string())
-                    .and_then(|cells| enc_many(&cells))
+                voronoi_cells(
+                    &geoms,
+                    100_000,
+                    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01)
+                        .expect("precisione"),
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|cells| enc_many(&cells))
             },
         );
         sweep_collective(

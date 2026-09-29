@@ -1967,6 +1967,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TerminalMeasure,
         semantic_version = 2
     ),
+    // Triangolazione caricata in blocco (spade `bulk_load`) al posto
+    // dell'inserimento incrementale di `geo`: kernel 2; celle a qualche ulp
+    // da prima e rifiuti espliciti di precisione (`PrecisionInsufficient`,
+    // `VerticeMalCondizionato`): semantica 2.
     op!(
         "geo.voronoi",
         Geo,
@@ -1978,7 +1982,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Projected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2,
+        kernel_version = 2
     ),
     // within: filtro del left sul right -> output <= left -> LeftRelative.
     op!(
@@ -2349,6 +2355,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TransformInPlace,
         semantic_version = 2
     ),
+    // Triangolazione caricata in blocco (spade `bulk_load`): kernel 2; ordine
+    // d'uscita canonico (triangoli per prima comparsa dei vertici, ognuno dal
+    // vertice comparso per primo) al posto dell'ordine interno di spade, e
+    // su ingressi degeneri un'altra triangolazione valida: semantica 2.
     op!(
         "geo.delaunay",
         Geo,
@@ -2360,7 +2370,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Projected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.polygonize",
@@ -3623,6 +3635,10 @@ mod tests {
             ("geo.length", 2, 1, 1, 1),
             ("geo.line_interpolate_point", 2, 1, 1, 1),
             ("geo.line_substring", 2, 1, 1, 1),
+            // Triangolazione caricata in blocco: kernel 2, uscita osservabile
+            // cambiata (ordine di delaunay, rifiuti di precisione di voronoi).
+            ("geo.delaunay", 2, 1, 1, 2),
+            ("geo.voronoi", 2, 1, 1, 2),
             // Backend Rust al posto di GEOS: kernel 2 (vedi il descrittore).
             ("geo.make_valid", 2, 1, 1, 2),
             ("geo.perimeter", 2, 1, 1, 1),

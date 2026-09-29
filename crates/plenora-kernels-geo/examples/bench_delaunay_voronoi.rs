@@ -85,7 +85,13 @@ fn main() {
     for giro in 0..runs {
         let inizio = Instant::now();
         let uscita: Vec<Geometry<f64>> = if voronoi {
-            voronoi_cells(black_box(&geometrie), usize::MAX).expect("voronoi")
+            voronoi_cells(
+                black_box(&geometrie),
+                usize::MAX,
+                plenora_kernels_geo::rust_backend::precision::Precision::new(0.01)
+                    .expect("precisione"),
+            )
+            .expect("voronoi")
         } else {
             delaunay(black_box(&multipunto), u64::MAX, u64::MAX)
                 .expect("delaunay")

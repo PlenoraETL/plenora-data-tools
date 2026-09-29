@@ -292,10 +292,14 @@ fn main() {
         .map(|_| Geometry::Point(Point::new(rng.range(0.0, 1_000.0), rng.range(0.0, 1_000.0))))
         .collect();
     measure("op.voronoi_2k", 1, || {
-        voronoi_cells(&voronoi_geometries, 100_000)
-            .map(black_box)
-            .expect("voronoi")
-            .len()
+        voronoi_cells(
+            &voronoi_geometries,
+            100_000,
+            plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione"),
+        )
+        .map(black_box)
+        .expect("voronoi")
+        .len()
     });
 
     // op.from_wkt: 10k celle WKT (parsing senza uppercase integrale).
