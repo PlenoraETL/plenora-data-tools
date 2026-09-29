@@ -710,7 +710,7 @@ riduce il maggiorante di circa `2^-53`.
 ## Operazioni topologiche in Rust puro
 
 `geo.make_valid`, `geo.polygonize` e `geo.split` sono tornate nel catalogo
-(145 operazioni, 74 geo) con lo stesso contratto pubblico di
+(146 operazioni, 75 geo) con lo stesso contratto pubblico di
 `plenora-data-tools@190c493`: id, alias legacy, parametri, schema di output,
 colonna `__class` (`polygon`, `cut_edge`, `dangle`, `invalid_ring`),
 `__parent_index` di `split`, nomi delle varianti d'errore e attribuzione del
