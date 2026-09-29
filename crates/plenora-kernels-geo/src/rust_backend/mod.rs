@@ -10,7 +10,8 @@
 //! `plenora-memory-lab/operations/geo_rust`, dove sono stati qualificati
 //! contro GEOS (28.672 confronti differenziali su 12.288 configurazioni, 861
 //! casi curati e di matrice, 1.097 controlli indipendenti da GEOS). Gli
-//! algoritmi sono quelli, riga per riga. Le sole modifiche:
+//! algoritmi sono quelli, riga per riga, salvo le decisioni numeriche
+//! corrette sotto. Le sole modifiche:
 //!
 //! - **meccaniche, per i lint del workspace**: `const fn` dove clippy lo
 //!   chiede, `Eq` derivato su `PolygonizeError`, catene `if` di confronto
@@ -25,9 +26,40 @@
 //!   proprio su prodotti e somme separati), `float_cmp` (spareggi esatti
 //!   voluti), `bool_to_int_with_if` (`usize::from` invertirebbe il ramo su
 //!   un NaN), `similar_names`, `too_many_lines`, `needless_pass_by_value`;
-//! - **non meccanica, una sola**: `split::SplitError::AreaMismatch` non porta
-//!   piu' le due aree (dato derivato dalla cella, regola «errori senza
-//!   dati»); il controllo di conservazione dell'area e' invariato.
+//! - **non meccaniche**:
+//!   - `split::SplitError::AreaMismatch` non porta piu' le due aree (dato
+//!     derivato dalla cella, regola «errori senza dati»); il controllo di
+//!     conservazione dell'area e' invariato;
+//!   - **segni e ordini d'area esatti** ([`exact`]): il laboratorio decideva
+//!     da somme di Gauss in `f64` senza compensazione, che la cancellazione
+//!     azzera o scambia (il quadrato unitario in `(2^30, 2^30)` spariva fra
+//!     gli anelli invalidi, senza errore). Ora sono esatti: l'orientamento
+//!     delle facce in `polygonize::extract_faces`; i confronti d'area che
+//!     scelgono genitori e figli in `assemble_face_holes` e
+//!     `atomize_contained_faces` (e la loro scorciatoia «tutte uguali»); il
+//!     lato del punto nel test pari-dispari di `split` (con `orient2d`
+//!     esatto al posto dell'ascissa d'incrocio in `f64`) e il verso del
+//!     campione interno; l'«area positiva» del passthrough di `make_valid`.
+//!     Fuori dal dominio esatto, quando il filtro non decide, l'errore
+//!     `PolygonizeError::NumericRange` sostituisce il segno indovinato. Un
+//!     test del laboratorio cambia attesa per questo: un triangolo di area
+//!     circa 3,45e-31 che GEOS scarta come anello invalido e' ora un
+//!     poligono (vedi `README.md`);
+//!
+//! Decisioni numeriche **non** rese esatte, valutate e dichiarate:
+//!
+//! - `polygonize`: il punto medio in `f64` dei lati in `union_boundary_rings`
+//!   (poi `contains` esatto) e il campione `interior_point` di `geo` per
+//!   l'annidamento; lo spareggio per distanza `hypot` fra vicini collineari
+//!   nello stesso verso, possibili solo senza noding (archi sovrapposti);
+//! - `split`: le tolleranze relative `1e-9` dei controlli a posteriori di
+//!   area e copertura (`checked_output`, `point_on_segment`) sono verifiche,
+//!   non la scelta delle facce: una scheggia sotto `1e-9` dell'area puo'
+//!   passarle;
+//! - `make_valid`: la tolleranza `1e-12` sull'area fuori dalla shell in
+//!   `linework`, il test punto-su-segmento con tolleranza per bordi e punti
+//!   collassati, e la normalizzazione con snap dell'overlay: sono scelte del
+//!   laboratorio qualificate contro GEOS, non segni esatti.
 //!
 //! Il laboratorio ha girato su `geo` 0.33.1 **non patchato**; qui `geo`
 //! risolve alla copia vendorizzata con `orient2d` esatto (filtro veloce piu'
@@ -57,6 +89,7 @@
 //! [`split_polygon_by_linework`], e in `README.md` («Differenze da GEOS»).
 
 pub mod arrow;
+pub mod exact;
 pub mod make_valid;
 pub mod polygonize;
 pub mod split;
@@ -172,6 +205,11 @@ pub enum RustBackendError {
     /// sa trattare, non necessariamente sbagliato.
     #[error("noding non convergente: input fuori dal dominio del kernel Rust")]
     NodingDidNotConverge,
+    /// Un segno o un confronto d'area non decidibile in `f64` su coordinate
+    /// fuori dal dominio dell'aritmetica esatta (vedi [`exact`]): un errore
+    /// al posto di un segno indovinato.
+    #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
+    NumericRange,
     /// Una prenotazione di memoria fallita.
     #[error("prenotazione di memoria fallita per {0}")]
     AllocationFailed(&'static str),
@@ -196,7 +234,9 @@ impl From<RustBackendError> for PlenoraError {
                 Self::Internal(error.to_string())
             }
             RustBackendError::AllocationFailed(_) => Self::ResourceLimit(error.to_string()),
-            RustBackendError::NodingDidNotConverge => Self::Unsupported(error.to_string()),
+            RustBackendError::NodingDidNotConverge | RustBackendError::NumericRange => {
+                Self::Unsupported(error.to_string())
+            }
             other => Self::InvalidPlan(other.to_string()),
         }
     }
@@ -220,6 +260,7 @@ impl RustBackendError {
             PolygonizeError::WorkLimit { actual, limit } => Self::WorkLimit { actual, limit },
             PolygonizeError::OutputLimit { actual, limit } => Self::OutputLimit { actual, limit },
             PolygonizeError::NodingDidNotConverge { .. } => Self::NodingDidNotConverge,
+            PolygonizeError::NumericRange => Self::NumericRange,
             // L'adapter chiama sempre con `require_complete = false` e
             // controlla i residui da se', per riportarli per classe.
             PolygonizeError::Incomplete { .. } => {
@@ -556,8 +597,9 @@ pub fn polygonize_linework(
 /// - `max_input_coordinates` vale per ciascun input (come in GEOS) **e** per
 ///   la loro somma (kernel); `max_noding_work` ha il significato di
 ///   [`polygonize_linework`]; `max_output_parts` e `max_output_coordinates`
-///   valgono anche sulle facce intermedie, comprese quelle fuori dalla
-///   sorgente, che GEOS scartava senza contarle.
+///   valgono anche sul polygonize intermedio: facce fuori dalla sorgente e
+///   residui scartati (dangle e cut edge delle lame che sporgono) contano
+///   come parti, mentre GEOS contava solo le parti tenute.
 ///
 /// # Errors
 ///

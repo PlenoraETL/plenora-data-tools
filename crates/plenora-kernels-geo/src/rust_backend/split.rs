@@ -24,6 +24,7 @@ use super::polygonize::{
     polygonize_linework_rust, PolygonizeError, PolygonizeLimits, PolygonizeOptions,
 };
 use geo::algorithm::validation::Validation;
+use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{
     Area, Contains, Coord, CoordsIter, Geometry, InteriorPoint, LineString, MultiLineString, Point,
     Polygon,
@@ -254,6 +255,11 @@ fn point_on_segment(point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> bo
         && (point.y - (start.y + dy * parameter)).abs() <= tolerance_y
 }
 
+/// Test pari-dispari del laboratorio con il lato del punto deciso da
+/// `orient2d` esatto invece che dall'ascissa d'incrocio in `f64`, che su
+/// facce sottili o lontane dall'origine sbagliava lato (deviazione
+/// dichiarata in `super`). `point.x < x_incrocio` equivale a «il punto sta a
+/// sinistra del lato orientato verso l'alto».
 fn ring_contains_point(ring: &LineString<f64>, point: Point<f64>) -> bool {
     let mut inside = false;
     for pair in ring.0.windows(2) {
@@ -261,9 +267,13 @@ fn ring_contains_point(ring: &LineString<f64>, point: Point<f64>) -> bool {
         let end = pair[1];
         let crosses = (start.y > point.y()) != (end.y > point.y());
         if crosses {
-            let crossing_x =
-                (end.x - start.x) * (point.y() - start.y) / (end.y - start.y) + start.x;
-            if point.x() < crossing_x {
+            let orientation = RobustKernel::orient2d(start, end, point.0);
+            let left_of_crossing = if end.y > start.y {
+                orientation == Orientation::CounterClockwise
+            } else {
+                orientation == Orientation::Clockwise
+            };
+            if left_of_crossing {
                 inside = !inside;
             }
         }
@@ -291,11 +301,13 @@ fn face_sample(face: &Polygon<f64>) -> Option<Point<f64>> {
     if span_x == 0.0 || span_y == 0.0 {
         return None;
     }
-    let orientation = coordinates
-        .windows(2)
-        .map(|pair| pair[0].x * pair[1].y - pair[1].x * pair[0].y)
-        .sum::<f64>()
-        .signum();
+    // Verso esatto dell'anello (deviazione dichiarata in `super`): il
+    // campione e' comunque verificato da `contains`, quindi fuori dominio si
+    // tiene il verso antiorario e si ricade su `interior_point`.
+    let orientation = match super::exact::orientamento(coordinates) {
+        Ok(std::cmp::Ordering::Less) => -1.0,
+        _ => 1.0,
+    };
     for pair in coordinates.windows(2) {
         let start = pair[0];
         let end = pair[1];
@@ -536,6 +548,36 @@ pub fn split_polygon_by_linework_rust_bounded(
 mod tests {
     use super::*;
     use geo::{line_string, polygon};
+
+    /// Il punto sta a sinistra del lato `s -> e` (segno esatto), ma
+    /// l'ascissa d'incrocio in `f64` del laboratorio lo metteva a destra:
+    /// il test pari-dispari lo dava fuori da un triangolo che lo contiene.
+    #[test]
+    fn even_odd_side_is_decided_exactly() {
+        let hex = |bits: u64| f64::from_bits(bits);
+        let start = Coord {
+            x: hex(0x41D0_0000_0046_3657),
+            y: hex(0x41D0_0000_000B_22C3),
+        };
+        let end = Coord {
+            x: hex(0x41D0_0000_02E1_6D7B),
+            y: hex(0x41D0_0000_FA07_32FD),
+        };
+        let point = Point::new(hex(0x41D0_0000_0167_8C1E), hex(0x41D0_0000_6C72_C0A0));
+        let apex = Coord {
+            x: start.x - 100.0,
+            y: end.y,
+        };
+        let ring = LineString::new(vec![start, end, apex, start]);
+        let crossing_x = (end.x - start.x) * (point.y() - start.y) / (end.y - start.y) + start.x;
+        assert!(point.x() >= crossing_x, "la formula in f64 sbaglia lato");
+        assert_eq!(
+            RobustKernel::orient2d(start, end, point.0),
+            Orientation::CounterClockwise
+        );
+        assert!(ring_contains_point(&ring, point));
+        assert!(Polygon::new(ring, Vec::new()).contains(&point));
+    }
 
     #[test]
     fn splits_rectangle_with_vertical_line() -> Result<(), SplitError> {

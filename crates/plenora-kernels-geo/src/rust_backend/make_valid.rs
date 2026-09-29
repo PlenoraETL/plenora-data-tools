@@ -1053,18 +1053,17 @@ fn make_valid_geometry_rust_impl(
     limits: MakeValidLimits,
 ) -> Result<Geometry<f64>, MakeValidError> {
     validate_structure(geometry)?;
+    // Area positiva decisa in modo esatto (deviazione dichiarata in `super`:
+    // il laboratorio usava `unsigned_area() > 0.0`, che la cancellazione
+    // puo' azzerare). Fuori dal dominio esatto l'area non si dichiara
+    // positiva: la geometria passa dalla riparazione, che la rivalida.
+    let positive = |polygon: &Polygon<f64>| super::exact::area_positiva(polygon).unwrap_or(false);
     let non_degenerate_area = match geometry {
-        Geometry::Polygon(polygon) => polygon.unsigned_area() > 0.0,
-        Geometry::MultiPolygon(polygons) => polygons
-            .0
-            .iter()
-            .all(|polygon| polygon.unsigned_area() > 0.0),
+        Geometry::Polygon(polygon) => positive(polygon),
+        Geometry::MultiPolygon(polygons) => polygons.0.iter().all(positive),
         Geometry::GeometryCollection(collection) => collection.0.iter().all(|child| match child {
-            Geometry::Polygon(polygon) => polygon.unsigned_area() > 0.0,
-            Geometry::MultiPolygon(polygons) => polygons
-                .0
-                .iter()
-                .all(|polygon| polygon.unsigned_area() > 0.0),
+            Geometry::Polygon(polygon) => positive(polygon),
+            Geometry::MultiPolygon(polygons) => polygons.0.iter().all(positive),
             _ => true,
         }),
         _ => true,
@@ -1251,6 +1250,37 @@ mod tests {
             return Err(MakeValidError::InvalidOutput(
                 "coordinata non finita accettata".to_owned(),
             ));
+        }
+        Ok(())
+    }
+
+    /// Triangolo valido con area doppia esatta 1 ma `2^54 - 2^54 = 0` nella
+    /// somma in `f64`: il controllo "area non nulla" del passthrough deve
+    /// essere esatto, o la geometria valida passa dalla riparazione.
+    #[test]
+    fn valid_triangle_with_cancelled_area_passes_through() -> Result<(), MakeValidError> {
+        let big = 134_217_728.0; // 2^27
+        let input = Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (big + 1.0, big),
+                (big, big - 1.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        ));
+        if input.check_validation().is_err() {
+            return Err(MakeValidError::InvalidOutput(
+                "fixture non valida".to_owned(),
+            ));
+        }
+        for method in [RepairMethod::Structure, RepairMethod::Linework] {
+            let output = make_valid_geometry_rust(&input, method, false)?;
+            if output != input {
+                return Err(MakeValidError::InvalidOutput(format!(
+                    "{method:?}: passthrough mancato"
+                )));
+            }
         }
         Ok(())
     }

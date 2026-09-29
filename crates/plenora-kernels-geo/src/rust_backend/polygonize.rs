@@ -24,14 +24,15 @@
     clippy::needless_pass_by_value
 )]
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use super::exact::{self, AreaPoligono};
 
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::algorithm::validation::{InvalidPolygon, Validation};
 use geo::kernels::{Kernel, Orientation, RobustKernel};
-use geo::{
-    Area, Contains, Coord, CoordsIter, Geometry, InteriorPoint, Line, LineString, Point, Polygon,
-};
+use geo::{Contains, Coord, CoordsIter, Geometry, InteriorPoint, Line, LineString, Point, Polygon};
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,6 +124,11 @@ pub enum PolygonizeError {
     InvalidOutput(String),
     #[error("indice non rappresentabile")]
     IndexOverflow,
+    /// Un segno o un confronto d'area che il filtro in `f64` non decide e
+    /// che le coordinate non permettono di calcolare in modo esatto (vedi
+    /// [`super::exact`]). Deviazione dal laboratorio, che decideva comunque.
+    #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
+    NumericRange,
     #[error("invariante interna violata: {0}")]
     InternalInvariant(&'static str),
     #[error("prenotazione di memoria fallita per {0}")]
@@ -1041,10 +1047,53 @@ fn next_half_edge(
         ))
 }
 
-fn signed_area(ring: &[Coord<f64>]) -> f64 {
-    ring.windows(2).fold(0.0, |area, pair| {
-        area + pair[0].x * pair[1].y - pair[1].x * pair[0].y
-    }) * 0.5
+/// Orientamento esatto dell'anello chiuso (`Greater` antiorario, `Equal`
+/// solo se degenere). Il laboratorio usava il segno di una somma di Gauss in
+/// `f64`, che su coordinate grandi si annulla per cancellazione: deviazione
+/// dichiarata in `super`.
+fn ring_orientation(ring: &[Coord<f64>]) -> Result<Ordering, PolygonizeError> {
+    exact::orientamento(ring).map_err(|_| PolygonizeError::NumericRange)
+}
+
+/// Aree (senza segno) delle facce, confrontate in modo esatto.
+struct FaceAreas<'a> {
+    polygons: &'a [Polygon<f64>],
+    approximations: Vec<AreaPoligono>,
+}
+
+impl<'a> FaceAreas<'a> {
+    fn new(polygons: &'a [Polygon<f64>]) -> Self {
+        Self {
+            polygons,
+            approximations: polygons.iter().map(AreaPoligono::di).collect(),
+        }
+    }
+
+    fn cmp(&self, left: usize, right: usize) -> Result<Ordering, PolygonizeError> {
+        let (Some(left_polygon), Some(left_area), Some(right_polygon), Some(right_area)) = (
+            self.polygons.get(left),
+            self.approximations.get(left),
+            self.polygons.get(right),
+            self.approximations.get(right),
+        ) else {
+            return Err(PolygonizeError::InternalInvariant(
+                "faccia assente nel confronto delle aree",
+            ));
+        };
+        exact::confronta_aree(left_polygon, *left_area, right_polygon, *right_area)
+            .map_err(|_| PolygonizeError::NumericRange)
+    }
+
+    /// Almeno due aree diverse: senza, nessuna faccia puo' contenerne
+    /// un'altra.
+    fn distinct(&self) -> Result<bool, PolygonizeError> {
+        for index in 1..self.polygons.len() {
+            if self.cmp(0, index)? != Ordering::Equal {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 fn decompose_closed_walk(mut keys: Vec<CoordKey>) -> Vec<Vec<CoordKey>> {
@@ -1175,8 +1224,8 @@ fn extract_faces(
                 if ring.len() < 4 {
                     continue;
                 }
-                let area = signed_area(&ring);
-                if area > 0.0 {
+                let orientation = ring_orientation(&ring)?;
+                if orientation == Ordering::Greater {
                     let polygon = Polygon::new(LineString::new(ring), Vec::new());
                     if polygon.check_validation().is_ok() {
                         intermediate_budget.charge_polygon(&polygon)?;
@@ -1193,7 +1242,7 @@ fn extract_faces(
                         polygon_edges.extend(&cycle_edges);
                         invalid_rings.push(polygon.exterior().clone());
                     }
-                } else if area >= 0.0
+                } else if orientation == Ordering::Equal
                     && cycle_edges.iter().any(|edge| !polygon_edges.contains(edge))
                 {
                     let invalid = LineString::new(ring);
@@ -1516,13 +1565,6 @@ impl FaceSpatialIndex {
     }
 }
 
-fn has_distinct_areas(areas: &[f64]) -> bool {
-    let Some(first) = areas.first() else {
-        return false;
-    };
-    areas.iter().skip(1).any(|area| area != first)
-}
-
 #[derive(Debug)]
 struct ChildLinks {
     first_child: Vec<usize>,
@@ -1558,8 +1600,8 @@ fn assemble_face_holes(
     limits: PolygonizeLimits,
     output_budget: &mut OutputBudget,
 ) -> Result<Vec<Polygon<f64>>, PolygonizeError> {
-    let areas = polygons.iter().map(Area::unsigned_area).collect::<Vec<_>>();
-    let distinct_areas = has_distinct_areas(&areas);
+    let areas = FaceAreas::new(&polygons);
+    let distinct_areas = areas.distinct()?;
     let links = if distinct_areas {
         let mut parents = vec![NO_FACE; polygons.len()];
         let index = FaceSpatialIndex::build(&polygons)?;
@@ -1569,22 +1611,30 @@ fn assemble_face_holes(
                 .ok_or(PolygonizeError::InternalInvariant(
                     "punto interno della faccia assente",
                 ))?;
-            let mut best = None;
+            let mut visited = Vec::new();
             index.for_each_containing_point(sample, |candidate_index| {
+                visited.push(candidate_index);
+            });
+            let mut best: Option<usize> = None;
+            for candidate_index in visited {
                 if candidate_index == child_index
-                    || areas[candidate_index] <= areas[child_index]
+                    || areas.cmp(candidate_index, child_index)? != Ordering::Greater
                     || !polygons[candidate_index].contains(&sample)
                 {
-                    return;
+                    continue;
                 }
-                match best {
-                    Some(previous)
-                        if areas[previous] < areas[candidate_index]
-                            || (areas[previous] == areas[candidate_index]
-                                && previous < candidate_index) => {}
-                    _ => best = Some(candidate_index),
+                let keep_previous = match best {
+                    Some(previous) => {
+                        let order = areas.cmp(previous, candidate_index)?;
+                        order == Ordering::Less
+                            || (order == Ordering::Equal && previous < candidate_index)
+                    }
+                    None => false,
+                };
+                if !keep_previous {
+                    best = Some(candidate_index);
                 }
-            });
+            }
             parents[child_index] = best.unwrap_or(NO_FACE);
         }
         Some(child_links(&parents)?)
@@ -1626,12 +1676,12 @@ fn atomize_contained_faces(
     limits: PolygonizeLimits,
     output_budget: &mut OutputBudget,
 ) -> Result<Vec<Polygon<f64>>, PolygonizeError> {
-    let areas = polygons.iter().map(Area::unsigned_area).collect::<Vec<_>>();
+    let areas = FaceAreas::new(&polygons);
     let interior_points = polygons
         .iter()
         .map(InteriorPoint::interior_point)
         .collect::<Vec<_>>();
-    let index = if has_distinct_areas(&areas) {
+    let index = if areas.distinct()? {
         Some(FaceSpatialIndex::build(&polygons)?)
     } else {
         None
@@ -1644,9 +1694,11 @@ fn atomize_contained_faces(
         let mut candidates = Vec::new();
         if let Some(index) = &index {
             let parent_bounds = index.face_bounds[parent_index];
-            index.for_each_within(parent_bounds, |child_index| {
+            let mut visited = Vec::new();
+            index.for_each_within(parent_bounds, |child_index| visited.push(child_index));
+            for child_index in visited {
                 if child_index != parent_index
-                    && areas[child_index] < areas[parent_index]
+                    && areas.cmp(child_index, parent_index)? == Ordering::Less
                     && polygons[child_index]
                         .exterior()
                         .0
@@ -1656,21 +1708,25 @@ fn atomize_contained_faces(
                 {
                     candidates.push(child_index);
                 }
-            });
+            }
         }
-        let direct_children = candidates
-            .iter()
-            .copied()
-            .filter(|child_index| {
-                !candidates.iter().copied().any(|between_index| {
-                    between_index != *child_index
-                        && areas[between_index] > areas[*child_index]
-                        && interior_points[*child_index]
-                            .is_some_and(|point| polygons[between_index].contains(&point))
-                })
-            })
-            .map(|child_index| &polygons[child_index])
-            .collect::<Vec<_>>();
+        let mut direct_children = Vec::new();
+        for &child_index in &candidates {
+            let mut has_between = false;
+            for &between_index in &candidates {
+                if between_index != child_index
+                    && areas.cmp(between_index, child_index)? == Ordering::Greater
+                    && interior_points[child_index]
+                        .is_some_and(|point| polygons[between_index].contains(&point))
+                {
+                    has_between = true;
+                    break;
+                }
+            }
+            if !has_between {
+                direct_children.push(&polygons[child_index]);
+            }
+        }
         let mut holes = parent.interiors().to_vec();
         holes.extend(union_boundary_rings(&direct_children, limits)?);
         let face = Polygon::new(parent.exterior().clone(), holes);
@@ -1925,7 +1981,7 @@ pub fn polygonize_linework_rust_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{line_string, polygon, MultiLineString};
+    use geo::{line_string, polygon, Area, MultiLineString};
 
     fn options(node_input: bool, require_complete: bool) -> PolygonizeOptions {
         PolygonizeOptions {
@@ -2243,12 +2299,24 @@ mod tests {
             line_string![(x: 0.3, y: 9.3), (x: 0.3, y: 13.3), (x: 1.8, y: 13.3), (x: 1.8, y: 9.3), (x: 0.3, y: 9.3)],
         ]));
         let result = polygonize_linework_rust(&input, options(true, false))?;
+        // GEOS: 8 poligoni e 5 residui (4 dangle, 1 anello invalido). Con il
+        // segno esatto l'anello invalido di GEOS e' un triangolo vero di area
+        // circa 3,45e-31 e diventa il nono poligono: GEOS lo scarta con la
+        // propria precisione double-double. Divergenza dichiarata nel README
+        // («Differenze da GEOS»); area totale e dangle restano quelli di GEOS.
         let polygon_area = result.polygons.iter().map(Area::unsigned_area).sum::<f64>();
         let residuals = result.residual_count()?;
-        if result.polygons.len() != 8
+        let slivers = result
+            .polygons
+            .iter()
+            .filter(|polygon| polygon.unsigned_area() < 1e-30)
+            .count();
+        if result.polygons.len() != 9
+            || slivers != 1
             || !result.cut_edges.is_empty()
+            || result.dangles.len() != 4
             || (polygon_area - 38.125).abs() > 1e-12
-            || residuals != 5
+            || residuals != 4
         {
             return Err(PolygonizeError::InvalidOutput(format!(
                 "poligoni={}, area={}, cut={}, dangles={}, invalid={}",
