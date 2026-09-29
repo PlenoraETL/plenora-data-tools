@@ -348,8 +348,9 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
 /// Rifiuta un `amount` che nessuna data rappresentabile sopporta.
 ///
 /// Lo spostamento fallisce anche dall'estremo da cui c'e' piu' spazio (il
-/// minimo di `NaiveDateTime` per un `amount` positivo, il massimo per uno
-/// negativo), quindi su ogni riga valida. `date_add` lo rifiuterebbe riga per
+/// minimo di `NaiveDateTime` per un `amount` positivo, il massimo o il
+/// secondo intercalare dell'ultimo giorno per uno negativo), quindi su ogni
+/// riga valida. `date_add` lo rifiuterebbe riga per
 /// riga come `conversion.datetime_range`; l'analisi dei contratti lo rifiuta
 /// prima, dalla sola config.
 ///
@@ -361,12 +362,23 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
 ///
 /// `InvalidPlan` se `amount` in `unit` non e' applicabile a nessuna data.
 pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
-    let partenza = if amount >= 0 {
-        NaiveDateTime::MIN
-    } else {
-        NaiveDateTime::MAX
-    };
-    if shift(partenza, amount, unit).is_none() {
+    // Gli estremi di ogni rappresentazione: chrono ammette il secondo
+    // intercalare (`23:59:60`, nanosecondi oltre 10^9), e da quello del
+    // giorno massimo uno spostamento all'indietro arriva piu' lontano che da
+    // `NaiveDateTime::MAX` (23:59:59.999999999). Si rifiuta solo cio' che
+    // fallisce da tutti.
+    let intercalare = |data: NaiveDate| data.and_hms_nano_opt(23, 59, 59, 1_999_999_999);
+    let estremi = [
+        Some(NaiveDateTime::MIN),
+        Some(NaiveDateTime::MAX),
+        intercalare(NaiveDate::MIN),
+        intercalare(NaiveDate::MAX),
+    ];
+    if estremi
+        .into_iter()
+        .flatten()
+        .all(|partenza| shift(partenza, amount, unit).is_none())
+    {
         return Err(PlenoraError::InvalidPlan(
             "amount fuori scala: nessuna data rappresentabile lo sopporta".into(),
         ));

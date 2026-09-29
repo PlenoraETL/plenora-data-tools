@@ -58,6 +58,7 @@ pub(in crate::analyze) fn analyze_fill_na(
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let config: cleansing::FillNa = typed(op, config)?;
+    con_op(op, config.verifica_parametri())?;
     let input = &inputs[0];
     let _ = fields;
     let targets: Vec<usize> = if let Some(name) = &config.column {
@@ -83,7 +84,7 @@ pub(in crate::analyze) fn analyze_fill_na(
                 ),
             );
         }
-        check_fill_value(op, &data_type, &config.value)?;
+        check_fill_value(op, &data_type, config.valore())?;
         // R2.4 type-preserving: il tipo non muta, quindi i metadata del campo
         // sorgente restano validi e si conservano (clone); cambia solo la
         // nullability (i valori riempiti possono non essere piu' null).

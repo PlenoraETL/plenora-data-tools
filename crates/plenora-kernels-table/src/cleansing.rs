@@ -41,8 +41,44 @@ pub struct FillNa {
     pub column: Option<String>,
     #[serde(default = "default_fill_method")]
     pub method: FillMethod,
-    #[serde(default)]
-    pub value: Value,
+    /// Valore di riempimento di `method = value`. Assente: nessun valore
+    /// (null). Scritto, anche `null`, e' `Some`: con `ffill`/`bfill` non
+    /// avrebbe effetto e si rifiuta ([`FillNa::verifica_parametri`]).
+    #[serde(default, deserialize_with = "valore_scritto")]
+    pub value: Option<Value>,
+}
+
+/// `Some` per ogni valore scritto, `null` compreso: serde renderebbe `None`
+/// anche un `null` esplicito, e un parametro scritto non sarebbe piu'
+/// distinguibile da uno assente.
+fn valore_scritto<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
+impl FillNa {
+    /// Il valore di riempimento (null se assente).
+    #[must_use]
+    pub fn valore(&self) -> &Value {
+        self.value.as_ref().unwrap_or(&Value::Null)
+    }
+
+    /// `value` vale solo per `method = value`: con `ffill` e `bfill` si
+    /// rifiuta invece di essere ignorato. La chiamano il kernel e l'analisi
+    /// dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se `value` accompagna `ffill` o `bfill`.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.value.is_some() && !matches!(self.method, FillMethod::Value) {
+            return Err(PlenoraError::InvalidPlan(
+                "value ammesso solo con method=value".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,8 +380,10 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
 ///
 /// - `Schema`: colonna assente; tipo di colonna non supportato (coperti
 ///   Utf8, Int64, Float64, Boolean); errore Arrow nella sostituzione;
-/// - `InvalidPlan`: valore di fill non convertibile al tipo della colonna.
+/// - `InvalidPlan`: valore di fill non convertibile al tipo della colonna;
+///   `value` con `ffill`/`bfill`.
 pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     let targets: Vec<usize> = if let Some(name) = &config.column {
         vec![column_index(batch, name)?]
     } else {
@@ -354,7 +392,7 @@ pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
     let mut out = batch.clone();
     for index in targets {
         let name = out.schema().field(index).name().clone();
-        let array = fill_array(out.column(index).as_ref(), &config.method, &config.value)?;
+        let array = fill_array(out.column(index).as_ref(), &config.method, config.valore())?;
         out = replace_keeping_field_metadata(&out, &name, array.data_type().clone(), true, array)?;
     }
     Ok(out)

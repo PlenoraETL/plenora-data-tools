@@ -104,7 +104,7 @@ fn main() {
         order_column: Some("id".into()),
         window: 10,
         min_periods: 1,
-        ddof: 1,
+        ddof: None,
         output_column: "num_roll".into(),
     };
     measure(
@@ -120,7 +120,7 @@ fn main() {
         function: WindowKind::Rank,
         group_by: Some("grp".into()),
         order_column: Some("num".into()),
-        offset: 1,
+        offset: None,
         buckets: None,
         output_column: Some("num_rank".into()),
     };
@@ -137,7 +137,7 @@ fn main() {
         function: WindowKind::Rank,
         group_by: None,
         order_column: None,
-        offset: 1,
+        offset: None,
         buckets: None,
         output_column: Some("ranked".into()),
     };

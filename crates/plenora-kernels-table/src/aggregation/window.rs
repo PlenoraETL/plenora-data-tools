@@ -41,9 +41,33 @@ pub struct RollingWindow {
     pub window: usize,
     #[serde(default = "default_min_periods")]
     pub min_periods: usize,
-    #[serde(default = "default_ddof")]
-    pub ddof: usize,
+    /// Gradi di liberta' di `stddev` (assente: 1).
+    #[serde(default)]
+    pub ddof: Option<usize>,
     pub output_column: String,
+}
+
+impl RollingWindow {
+    /// Gradi di liberta' di `stddev`.
+    #[must_use]
+    pub fn ddof(&self) -> usize {
+        self.ddof.unwrap_or(default_ddof())
+    }
+
+    /// `ddof` vale solo per `stddev`: con un'altra funzione si rifiuta
+    /// invece di essere ignorato. La chiamano il kernel e l'analisi.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se `ddof` accompagna una funzione diversa da `stddev`.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.ddof.is_some() && !matches!(self.function, RollingKind::Stddev) {
+            return Err(PlenoraError::InvalidPlan(
+                "ddof ammesso solo con function=stddev".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Che cosa serve a una variante per essere calcolata.
@@ -186,6 +210,7 @@ fn ranghi(
 /// # Errors
 ///
 /// - `InvalidPlan`: `window` o `min_periods` nulli, `min_periods > window`;
+///   `ddof` con una funzione diversa da `stddev`;
 /// - `ResourceLimit`: dimensioni/divisori della finestra non rappresentabili
 ///   come `f64` (dipendono dal numero di righe nella finestra);
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
@@ -196,6 +221,7 @@ fn ranghi(
 /// per contratto, quindi la conversione arrotonda
 /// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
 pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
         return Err(PlenoraError::InvalidPlan(
             "rolling_window: finestra non valida".into(),
@@ -258,13 +284,13 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
                 RollingKind::Mean => count.to_f64().map(|length| sum / length),
                 RollingKind::Min => minimum,
                 RollingKind::Max => maximum,
-                RollingKind::Stddev if count <= config.ddof => None,
+                RollingKind::Stddev if count <= config.ddof() => None,
                 RollingKind::Stddev => {
                     let length = count.to_f64().ok_or_else(|| {
                         PlenoraError::ResourceLimit("dimensione rolling non rappresentabile".into())
                     })?;
                     let mean = sum / length;
-                    let divisor = (count - config.ddof).to_f64().ok_or_else(|| {
+                    let divisor = (count - config.ddof()).to_f64().ok_or_else(|| {
                         PlenoraError::ResourceLimit("divisore rolling non rappresentabile".into())
                     })?;
                     Some(
@@ -322,11 +348,39 @@ pub struct WindowFunction {
     pub function: WindowKind,
     pub group_by: Option<String>,
     pub order_column: Option<String>,
-    #[serde(default = "default_offset")]
-    pub offset: usize,
+    /// Distanza di `lag` e `lead` (assente: 1).
+    #[serde(default)]
+    pub offset: Option<usize>,
     #[serde(default)]
     pub buckets: Option<usize>,
     pub output_column: Option<String>,
+}
+
+impl WindowFunction {
+    /// Distanza di `lag` e `lead`.
+    #[must_use]
+    pub fn offset(&self) -> usize {
+        self.offset.unwrap_or(default_offset())
+    }
+
+    /// `offset` vale solo per `lag` e `lead`, e deve essere positivo: con
+    /// un'altra funzione si rifiuta invece di essere ignorato. La chiamano
+    /// il kernel e l'analisi.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per `offset` nullo o scritto per un'altra funzione.
+    pub fn verifica_offset(&self) -> Result<()> {
+        match self.offset {
+            Some(0) => Err(PlenoraError::InvalidPlan(
+                "offset deve essere positivo".into(),
+            )),
+            Some(_) if !matches!(self.function, WindowKind::Lag | WindowKind::Lead) => Err(
+                PlenoraError::InvalidPlan("offset ammesso solo con function=lag o lead".into()),
+            ),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)] // All window variants share partition/order state and one output pass.
@@ -336,7 +390,8 @@ pub struct WindowFunction {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `offset` nullo; `ntile` senza `buckets` maggiore di zero;
+/// - `InvalidPlan`: `offset` nullo o fuori da `lag`/`lead`; `ntile` senza
+///   `buckets` maggiore di zero;
 ///   `buckets` specificato per una funzione diversa da `ntile`;
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
 ///   schema; in piu' gli errori di `sort`,
@@ -355,11 +410,7 @@ pub struct WindowFunction {
 /// `cumcount` e `ntile` dipendono dalla posizione, ma il contratto numerico
 /// della colonna vale anche per loro.
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
-    if config.offset == 0 {
-        return Err(PlenoraError::InvalidPlan(
-            "offset deve essere positivo".into(),
-        ));
-    }
+    config.verifica_offset()?;
     if matches!(config.function, WindowKind::Ntile) {
         if config.buckets.is_none_or(|buckets| buckets == 0) {
             return Err(PlenoraError::InvalidPlan(
@@ -434,9 +485,9 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
                     sum / count
                 }),
                 WindowKind::Lag => position
-                    .checked_sub(config.offset)
+                    .checked_sub(config.offset())
                     .and_then(|other| numbers[other]),
-                WindowKind::Lead => numbers.get(position + config.offset).copied().flatten(),
+                WindowKind::Lead => numbers.get(position + config.offset()).copied().flatten(),
                 WindowKind::PctChange => position
                     .checked_sub(1)
                     .and_then(|previous| numbers[previous])

@@ -266,8 +266,9 @@ pub(in crate::analyze) fn analyze_mask_data(
             return contract_error(op, format!("colonna non trovata: {}", masking.column));
         }
         require_scalar_string(op, input, &masking.column)?;
+        con_op(op, masking.verifica_parametri())?;
         if matches!(masking.mask_type, security::MaskType::Custom)
-            && masking.mask_char.chars().count() != 1
+            && masking.mask_char().chars().count() != 1
         {
             return contract_error(op, "mask_char deve essere un singolo carattere");
         }

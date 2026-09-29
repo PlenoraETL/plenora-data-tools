@@ -146,7 +146,7 @@ fn main() {
     let fill_id = FillNa {
         column: Some("id".into()),
         method: FillMethod::Value,
-        value: Value::from(0),
+        value: Some(Value::from(0)),
     };
     run_scenario("fill_na_int_value", rows, repetitions, || {
         fill_na(&input, &fill_id).expect("fill id")
@@ -155,7 +155,7 @@ fn main() {
     let fill_num = FillNa {
         column: Some("num".into()),
         method: FillMethod::Ffill,
-        value: Value::Null,
+        value: None,
     };
     run_scenario("fill_na_float_ffill", rows, repetitions, || {
         fill_na(&input, &fill_num).expect("fill num")
@@ -164,7 +164,7 @@ fn main() {
     let fill_group = FillNa {
         column: Some("group".into()),
         method: FillMethod::Value,
-        value: Value::from("n/d"),
+        value: Some(Value::from("n/d")),
     };
     run_scenario("fill_na_utf8_value", rows, repetitions, || {
         fill_na(&input, &fill_group).expect("fill group")
@@ -173,7 +173,7 @@ fn main() {
     let fill_group_ffill = FillNa {
         column: Some("group".into()),
         method: FillMethod::Ffill,
-        value: Value::Null,
+        value: None,
     };
     run_scenario("fill_na_utf8_ffill", rows, repetitions, || {
         fill_na(&input, &fill_group_ffill).expect("fill group ffill")

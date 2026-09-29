@@ -56,12 +56,12 @@ fn aggregation(column: &str, function: AggFunction) -> Aggregation {
     Aggregation {
         column: column.into(),
         function,
-        separator: ", ".into(),
-        distinct: false,
-        skip_null: true,
+        separator: None,
+        distinct: None,
+        skip_null: None,
         alias: String::new(),
         quantile: None,
-        ddof: 1,
+        ddof: None,
     }
 }
 

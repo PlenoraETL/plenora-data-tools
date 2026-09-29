@@ -22,7 +22,6 @@ use super::grouping::{
     build_binary_groups, build_native_groups, cmp_i64_group_key, cmp_str_group_key,
     cmp_u64_group_key, map_groups, TextSource, PARALLEL_THRESHOLD,
 };
-use super::sort::default_true;
 
 /// Cardinalita' di un gruppo come `i64`, in modo **fallibile**.
 ///
@@ -65,9 +64,6 @@ pub enum AggFunction {
 const fn default_agg() -> AggFunction {
     AggFunction::Count
 }
-fn default_separator() -> String {
-    ", ".into()
-}
 pub(in crate::aggregation) const fn default_ddof() -> usize {
     1
 }
@@ -78,17 +74,82 @@ pub struct Aggregation {
     pub column: String,
     #[serde(default = "default_agg")]
     pub function: AggFunction,
-    #[serde(default = "default_separator")]
-    pub separator: String,
+    /// Separatore di `concat` (assente: `", "`).
     #[serde(default)]
-    pub distinct: bool,
-    #[serde(default = "default_true")]
-    pub skip_null: bool,
+    pub separator: Option<String>,
+    /// Valori distinti (assente: no). Non ha effetto su `count`, `nunique`,
+    /// `first` e `last`.
+    #[serde(default)]
+    pub distinct: Option<bool>,
+    /// Null ignorati (assente: si'). Non ha effetto su `count`, `first` e
+    /// `last`.
+    #[serde(default)]
+    pub skip_null: Option<bool>,
     #[serde(default)]
     pub alias: String,
     pub quantile: Option<f64>,
-    #[serde(default = "default_ddof")]
-    pub ddof: usize,
+    /// Gradi di liberta' di `variance` e `stddev` (assente: 1).
+    #[serde(default)]
+    pub ddof: Option<usize>,
+}
+
+impl Aggregation {
+    /// Separatore di `concat`.
+    #[must_use]
+    pub fn separator(&self) -> &str {
+        self.separator.as_deref().unwrap_or(", ")
+    }
+
+    /// Valori distinti.
+    #[must_use]
+    pub fn distinct(&self) -> bool {
+        self.distinct.unwrap_or(false)
+    }
+
+    /// Null ignorati.
+    #[must_use]
+    pub fn skip_null(&self) -> bool {
+        self.skip_null.unwrap_or(true)
+    }
+
+    /// Gradi di liberta' di `variance` e `stddev`.
+    #[must_use]
+    pub fn ddof(&self) -> usize {
+        self.ddof.unwrap_or(default_ddof())
+    }
+
+    /// Un parametro scritto che la funzione non usa si rifiuta, non si
+    /// ignora: `separator` fuori da `concat`, `distinct` su `count`,
+    /// `nunique`, `first` e `last`, `skip_null` su `count`, `first` e
+    /// `last`, `ddof` fuori da `variance` e `stddev`, `quantile` fuori da
+    /// `quantile`. Un parametro assente prende il suo default. La chiamano il
+    /// kernel e l'analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per il primo parametro che la funzione non usa.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        use AggFunction as F;
+        let funzione = &self.function;
+        let ignorato = if self.separator.is_some() && !matches!(funzione, F::Concat) {
+            Some("separator ammesso solo con function=concat")
+        } else if self.distinct.is_some()
+            && matches!(funzione, F::Count | F::Nunique | F::First | F::Last)
+        {
+            Some("distinct non ha effetto con count, nunique, first e last")
+        } else if self.skip_null.is_some() && matches!(funzione, F::Count | F::First | F::Last) {
+            Some("skip_null non ha effetto con count, first e last")
+        } else if self.ddof.is_some() && !matches!(funzione, F::Variance | F::Stddev) {
+            Some("ddof ammesso solo con function=variance o stddev")
+        } else if self.quantile.is_some() && !matches!(funzione, F::Quantile) {
+            Some("quantile ammesso solo con function=quantile")
+        } else {
+            None
+        };
+        ignorato.map_or(Ok(()), |messaggio| {
+            Err(PlenoraError::InvalidPlan(messaggio.into()))
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,14 +198,14 @@ fn reduce_numeric_streaming(raw: &[Option<f64>], aggregation: &Aggregation) -> R
             .reduce(f64::max)
             .unwrap_or_default(),
         AggFunction::Variance | AggFunction::Stddev => {
-            if len <= aggregation.ddof {
+            if len <= aggregation.ddof() {
                 return Ok(None);
             }
             let length = len.to_f64().ok_or_else(|| {
                 PlenoraError::ResourceLimit("dimensione gruppo non rappresentabile".into())
             })?;
             let mean = sum / length;
-            let divisor = (len - aggregation.ddof).to_f64().ok_or_else(|| {
+            let divisor = (len - aggregation.ddof()).to_f64().ok_or_else(|| {
                 PlenoraError::ResourceLimit("divisore statistico non rappresentabile".into())
             })?;
             let variance = raw
@@ -204,14 +265,14 @@ pub(super) fn distinti_esatti(array: &ArrayRef, rows: &[usize]) -> Result<Vec<Op
 }
 
 fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Option<f64>> {
-    if !aggregation.skip_null && raw.iter().any(Option::is_none) {
+    if !aggregation.skip_null() && raw.iter().any(Option::is_none) {
         return Ok(None);
     }
     // Solo `distinct` e `quantile` hanno bisogno del gruppo materializzato
     // (ordinamento); per le altre funzioni il secondo `Vec` e' lavoro
     // evitabile (hot path minimale): si riduce sull'iteratore flatten, stesse operazioni
     // f64 nello stesso ordine — parita' bit-a-bit per costruzione.
-    if !aggregation.distinct && !matches!(aggregation.function, AggFunction::Quantile) {
+    if !aggregation.distinct() && !matches!(aggregation.function, AggFunction::Quantile) {
         return reduce_numeric_streaming(&raw, aggregation);
     }
     // Con `distinct` i valori arrivano gia' distinti (`distinti_esatti`).
@@ -230,16 +291,18 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
         AggFunction::Min => values.iter().copied().reduce(f64::min).unwrap_or_default(),
         AggFunction::Max => values.iter().copied().reduce(f64::max).unwrap_or_default(),
         AggFunction::Variance | AggFunction::Stddev => {
-            if values.len() <= aggregation.ddof {
+            if values.len() <= aggregation.ddof() {
                 return Ok(None);
             }
             let length = values.len().to_f64().ok_or_else(|| {
                 PlenoraError::ResourceLimit("dimensione gruppo non rappresentabile".into())
             })?;
             let mean = sum / length;
-            let divisor = (values.len() - aggregation.ddof).to_f64().ok_or_else(|| {
-                PlenoraError::ResourceLimit("divisore statistico non rappresentabile".into())
-            })?;
+            let divisor = (values.len() - aggregation.ddof())
+                .to_f64()
+                .ok_or_else(|| {
+                    PlenoraError::ResourceLimit("divisore statistico non rappresentabile".into())
+                })?;
             let variance = values
                 .iter()
                 .map(|value| (value - mean).powi(2))
@@ -322,6 +385,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
     // produrrebbe indici oltre il gruppo ordinato — errore esplicito, mai
     // indexing out-of-bounds a meta' esecuzione.
     for aggregation in &config.aggregations {
+        aggregation.verifica_parametri()?;
         if matches!(aggregation.function, AggFunction::Quantile)
             && aggregation
                 .quantile
@@ -487,7 +551,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     }
                     // Come il generico: valori distinti piu' una voce per il
                     // null solo quando `skip_null` e' falso.
-                    let count = seen.len() + usize::from(null_seen && !aggregation.skip_null);
+                    let count = seen.len() + usize::from(null_seen && !aggregation.skip_null());
                     i64::try_from(count).map(Some).map_err(|_| {
                         PlenoraError::ResourceLimit("conteggio gruppo oltre i64".into())
                     })
@@ -526,14 +590,14 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     let mut values = Vec::new();
                     for row in rows {
                         if let Some(value) = source.value(*row)? {
-                            if !aggregation.distinct || seen.insert(value.clone()) {
+                            if !aggregation.distinct() || seen.insert(value.clone()) {
                                 values.push(value);
                             }
-                        } else if !aggregation.skip_null {
+                        } else if !aggregation.skip_null() {
                             values.push(Cow::Borrowed(""));
                         }
                     }
-                    Ok(Some(values.join(&aggregation.separator)))
+                    Ok(Some(values.join(aggregation.separator())))
                 })?;
                 result = replace_or_append(
                     &result,
@@ -546,7 +610,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
             _ => {
                 let source = Float64Source::new(batch.column(index));
                 let values = map_groups(&groups, parallel, |rows| {
-                    let raw = if aggregation.distinct {
+                    let raw = if aggregation.distinct() {
                         distinti_esatti(batch.column(index), rows)?
                     } else {
                         rows.iter()

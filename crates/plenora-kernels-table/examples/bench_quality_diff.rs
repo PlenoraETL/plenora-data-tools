@@ -158,9 +158,9 @@ fn main() {
         maskings: vec![Masking {
             column: "text".into(),
             mask_type: MaskType::Custom,
-            chars_start: 3,
-            chars_end: 3,
-            mask_char: "*".into(),
+            chars_start: None,
+            chars_end: None,
+            mask_char: None,
         }],
         overwrite: true,
     };

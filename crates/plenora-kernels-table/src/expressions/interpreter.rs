@@ -251,7 +251,7 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
 /// Indice di `substring`: numero >= 0 troncato verso zero (`-0.0` vale 0),
 /// saturato a `usize::MAX`; null propagato dal chiamante.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn substring_index(value: &Scalar, context: &str) -> Result<Option<usize>> {
+pub(super) fn substring_index(value: &Scalar, context: &str) -> Result<Option<usize>> {
     let Some(value) = number(value, context)? else {
         return Ok(None);
     };
@@ -338,37 +338,17 @@ const fn arity(name: Function) -> (usize, usize) {
     }
 }
 
-/// I letterali che la valutazione rifiuterebbe su ogni riga che li
-/// raggiunge, qualunque siano i dati: numero di argomenti, pattern
-/// letterale di `regex_replace` non compilabile, indice letterale negativo
-/// di `substring`. Una regex o un indice calcolati dalle colonne dipendono
-/// dai dati e restano un errore di valutazione.
+/// Il numero di argomenti: `function` lo controlla a ogni valutazione, prima
+/// di guardare i valori (anche null), quindi un'arieta' sbagliata fallisce su
+/// ogni riga che raggiunge la chiamata. I letterali di `regex_replace` e
+/// `substring`, che la valutazione guarda solo con argomenti non nulli, li
+/// controlla [`super::static_type::verifica_letterali`] con i tipi.
 fn audit_literals(name: Function, args: &[Expression]) -> Result<()> {
     let (min, max) = arity(name);
     if args.len() < min || args.len() > max {
         return Err(PlenoraError::InvalidPlan(format!(
             "{name:?}: numero di argomenti non valido"
         )));
-    }
-    match name {
-        Function::RegexReplace => {
-            if let Some(Expression::Literal {
-                value: Value::String(pattern),
-            }) = args.get(1)
-            {
-                regex::Regex::new(pattern).map_err(|error| {
-                    PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}"))
-                })?;
-            }
-        }
-        Function::Substring => {
-            for (arg, context) in args[1..].iter().zip(["substring: start", "substring: len"]) {
-                if let Expression::Literal { value } = arg {
-                    substring_index(&literal(value)?, context)?;
-                }
-            }
-        }
-        _ => {}
     }
     Ok(())
 }
@@ -468,9 +448,8 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
 ///   `validate_output_name`); AST oltre la profondita' massima o oltre
 ///   `max_nodes`; nome colonna vuoto; letterale non scalare o non finito;
 ///   troppi argomenti o rami `case`; numero di argomenti diverso da quello
-///   della funzione; pattern letterale di `regex_replace` non compilabile;
-///   indice letterale negativo di `substring`; unita' di `date_trunc` non
-///   letterale o fuori dal set chiuso; `in` senza lista di letterali scalari.
+///   della funzione; unita' di `date_trunc` non letterale o fuori dal set
+///   chiuso; `in` senza lista di letterali scalari.
 pub fn validate(config: &ExpressionTransform, max_nodes: usize) -> Result<()> {
     crate::validate_output_name(&config.output_column)?;
     audit(&config.expression, 1, &mut 0, max_nodes)

@@ -399,12 +399,12 @@ fn aggregations() -> Vec<Aggregation> {
     let aggregation = |column: &str, function: AggFunction, alias: &str| Aggregation {
         column: column.into(),
         function,
-        separator: "|".into(),
-        distinct: false,
-        skip_null: true,
+        separator: matches!(function, AggFunction::Concat).then(|| "|".into()),
+        distinct: None,
+        skip_null: None,
         alias: alias.into(),
         quantile: None,
-        ddof: 1,
+        ddof: None,
     };
     vec![
         // Le righe di ogni gruppo, in ordine: `concat` degli id le fissa

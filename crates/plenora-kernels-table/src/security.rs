@@ -721,12 +721,6 @@ pub enum MaskType {
 const fn default_mask_type() -> MaskType {
     MaskType::Custom
 }
-const fn default_three() -> usize {
-    3
-}
-fn default_mask_char() -> String {
-    "*".into()
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -734,12 +728,54 @@ pub struct Masking {
     pub column: String,
     #[serde(default = "default_mask_type")]
     pub mask_type: MaskType,
-    #[serde(default = "default_three")]
-    pub chars_start: usize,
-    #[serde(default = "default_three")]
-    pub chars_end: usize,
-    #[serde(default = "default_mask_char")]
-    pub mask_char: String,
+    /// Caratteri iniziali lasciati in chiaro (`custom`; assente: 3).
+    #[serde(default)]
+    pub chars_start: Option<usize>,
+    /// Caratteri finali lasciati in chiaro (`custom`; assente: 3).
+    #[serde(default)]
+    pub chars_end: Option<usize>,
+    /// Carattere di maschera (`custom`; assente: `*`).
+    #[serde(default)]
+    pub mask_char: Option<String>,
+}
+
+impl Masking {
+    /// Caratteri iniziali in chiaro.
+    #[must_use]
+    pub fn chars_start(&self) -> usize {
+        self.chars_start.unwrap_or(3)
+    }
+
+    /// Caratteri finali in chiaro.
+    #[must_use]
+    pub fn chars_end(&self) -> usize {
+        self.chars_end.unwrap_or(3)
+    }
+
+    /// Carattere di maschera.
+    #[must_use]
+    pub fn mask_char(&self) -> &str {
+        self.mask_char.as_deref().unwrap_or("*")
+    }
+
+    /// `chars_start`, `chars_end` e `mask_char` valgono solo per
+    /// `mask_type = custom`: gli altri tipi hanno una forma fissa, e un
+    /// parametro scritto per loro si rifiuta invece di essere ignorato. La
+    /// chiamano il kernel e l'analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se un parametro di `custom` accompagna un altro tipo.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if !matches!(self.mask_type, MaskType::Custom)
+            && (self.chars_start.is_some() || self.chars_end.is_some() || self.mask_char.is_some())
+        {
+            return Err(PlenoraError::InvalidPlan(
+                "chars_start, chars_end e mask_char ammessi solo con mask_type=custom".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -815,7 +851,7 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
             }
         }
         MaskType::Custom => {
-            let mut chars = config.mask_char.chars();
+            let mut chars = config.mask_char().chars();
             let character = chars
                 .next()
                 .ok_or_else(|| PlenoraError::InvalidPlan("mask_char vuoto".into()))?;
@@ -824,7 +860,7 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
                     "mask_char deve essere un carattere".into(),
                 ));
             }
-            mask_middle(value, config.chars_start, config.chars_end, character)
+            mask_middle(value, config.chars_start(), config.chars_end(), character)
         }
     })
 }
@@ -837,7 +873,8 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
 /// # Errors
 ///
 /// - `InvalidPlan`: `maskings` vuoto, nome della colonna di output non valido,
-///   `mask_char` vuoto o piu' di un carattere (tipo `custom`), valore non
+///   `mask_char` vuoto o piu' di un carattere (tipo `custom`),
+///   `chars_start`/`chars_end`/`mask_char` con un altro tipo, valore non
 ///   rappresentabile come testo (come `scalar_as_string`);
 /// - `Schema`: colonna assente dal batch.
 pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
@@ -845,6 +882,9 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
         return Err(PlenoraError::InvalidPlan(
             "mask_data richiede configurazioni".into(),
         ));
+    }
+    for masking in &config.maskings {
+        masking.verifica_parametri()?;
     }
     let mut result = batch.clone();
     for masking in &config.maskings {
@@ -1097,7 +1137,7 @@ mod tests {
                 }
             }
             MaskType::Custom => {
-                let mut chars = config.mask_char.chars();
+                let mut chars = config.mask_char().chars();
                 let character = chars
                     .next()
                     .ok_or_else(|| PlenoraError::InvalidPlan("mask_char vuoto".into()))?;
@@ -1106,7 +1146,7 @@ mod tests {
                         "mask_char deve essere un carattere".into(),
                     ));
                 }
-                mask_middle_reference(value, config.chars_start, config.chars_end, character)
+                mask_middle_reference(value, config.chars_start(), config.chars_end(), character)
             }
         })
     }
@@ -1151,9 +1191,9 @@ mod tests {
         Masking {
             column: column.into(),
             mask_type,
-            chars_start: 3,
-            chars_end: 3,
-            mask_char: "*".into(),
+            chars_start: None,
+            chars_end: None,
+            mask_char: None,
         }
     }
 
@@ -1657,7 +1697,7 @@ mod tests {
         for mask_char in ["", "**"] {
             let config = MaskData {
                 maskings: vec![Masking {
-                    mask_char: mask_char.into(),
+                    mask_char: Some(mask_char.into()),
                     ..masking("text", MaskType::Custom)
                 }],
                 overwrite: true,

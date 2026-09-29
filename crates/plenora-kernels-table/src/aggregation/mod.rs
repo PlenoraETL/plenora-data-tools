@@ -588,7 +588,7 @@ mod tests {
                                         scalar_as_string(batch.column(index).as_ref(), *row)?
                                     {
                                         seen.insert(format!("1{}:{value}", value.len()));
-                                    } else if !aggregation.skip_null {
+                                    } else if !aggregation.skip_null() {
                                         seen.insert("0".to_owned());
                                     }
                                 }
@@ -628,14 +628,14 @@ mod tests {
                                 if let Some(value) =
                                     scalar_as_string(batch.column(index).as_ref(), *row)?
                                 {
-                                    if !aggregation.distinct || seen.insert(value.clone()) {
+                                    if !aggregation.distinct() || seen.insert(value.clone()) {
                                         values.push(value);
                                     }
-                                } else if !aggregation.skip_null {
+                                } else if !aggregation.skip_null() {
                                     values.push(String::new());
                                 }
                             }
-                            Ok(Some(values.join(&aggregation.separator)))
+                            Ok(Some(values.join(aggregation.separator())))
                         })
                         .collect::<Result<Vec<_>>>()?;
                     result = replace_or_append(
@@ -656,11 +656,11 @@ mod tests {
                                     crate::scalar_as_numero(batch.column(index).as_ref(), *row)
                                 })
                                 .collect::<Result<Vec<_>>>()?;
-                            if !aggregation.skip_null && raw.iter().any(Option::is_none) {
+                            if !aggregation.skip_null() && raw.iter().any(Option::is_none) {
                                 return Ok(None);
                             }
                             let mut numeri = raw.into_iter().flatten().collect::<Vec<_>>();
-                            if aggregation.distinct {
+                            if aggregation.distinct() {
                                 // Distinti sul valore esatto, per confronto a
                                 // coppie; poi l'ordine del percorso principale,
                                 // da cui dipende la somma in f64.
@@ -709,7 +709,7 @@ mod tests {
                                     values.iter().copied().reduce(f64::max).unwrap_or_default()
                                 }
                                 AggFunction::Variance | AggFunction::Stddev => {
-                                    if values.len() <= aggregation.ddof {
+                                    if values.len() <= aggregation.ddof() {
                                         return Ok(None);
                                     }
                                     let length = values.len().to_f64().ok_or_else(|| {
@@ -718,7 +718,7 @@ mod tests {
                                         )
                                     })?;
                                     let mean = sum / length;
-                                    let divisor = (values.len() - aggregation.ddof)
+                                    let divisor = (values.len() - aggregation.ddof())
                                         .to_f64()
                                         .ok_or_else(|| {
                                             PlenoraError::InvalidPlan(
@@ -800,12 +800,12 @@ mod tests {
         Aggregation {
             column: column.into(),
             function,
-            separator: ", ".into(),
-            distinct: false,
-            skip_null: true,
+            separator: None,
+            distinct: None,
+            skip_null: None,
             alias: String::new(),
             quantile: None,
-            ddof: 1,
+            ddof: None,
         }
     }
 
@@ -891,7 +891,7 @@ mod tests {
         let config = Aggregate {
             group_by: vec!["g".into()],
             aggregations: vec![Aggregation {
-                distinct: true,
+                distinct: Some(true),
                 alias: "d_var".into(),
                 ..agg("n", AggFunction::Variance)
             }],
@@ -917,7 +917,7 @@ mod tests {
         // parita' bit-a-bit con l'oracolo per ogni funzione numerica.
         let batch = mixed_fixture();
         let distinct = |function| Aggregation {
-            distinct: true,
+            distinct: Some(true),
             ..agg("num", function)
         };
         let config = Aggregate {
@@ -957,12 +957,12 @@ mod tests {
             group_by: vec!["id".into()],
             aggregations: vec![
                 Aggregation {
-                    distinct: true,
+                    distinct: Some(true),
                     alias: "dv".into(),
                     ..agg("num", AggFunction::Variance)
                 },
                 Aggregation {
-                    distinct: true,
+                    distinct: Some(true),
                     alias: "ds".into(),
                     ..agg("num", AggFunction::Stddev)
                 },
@@ -1042,11 +1042,11 @@ mod tests {
             agg("num", AggFunction::Count),
             agg("num", AggFunction::Nunique),
             Aggregation {
-                skip_null: false,
+                skip_null: Some(false),
                 ..agg("num", AggFunction::Mean)
             },
             Aggregation {
-                distinct: true,
+                distinct: Some(true),
                 ..agg("num", AggFunction::Sum)
             },
             agg("val", AggFunction::Sum),
@@ -1054,7 +1054,7 @@ mod tests {
             agg("txt", AggFunction::First),
             agg("txt", AggFunction::Last),
             Aggregation {
-                distinct: true,
+                distinct: Some(true),
                 ..agg("txt", AggFunction::Concat)
             },
         ]
@@ -1762,7 +1762,7 @@ mod tests {
                         .map(|length| values.iter().sum::<f64>() / length),
                     RollingKind::Min => values.iter().copied().reduce(f64::min),
                     RollingKind::Max => values.iter().copied().reduce(f64::max),
-                    RollingKind::Stddev if values.len() <= config.ddof => None,
+                    RollingKind::Stddev if values.len() <= config.ddof() => None,
                     RollingKind::Stddev => {
                         let length = values.len().to_f64().ok_or_else(|| {
                             PlenoraError::ResourceLimit(
@@ -1770,7 +1770,7 @@ mod tests {
                             )
                         })?;
                         let mean = values.iter().sum::<f64>() / length;
-                        let divisor = (values.len() - config.ddof).to_f64().ok_or_else(|| {
+                        let divisor = (values.len() - config.ddof()).to_f64().ok_or_else(|| {
                             PlenoraError::ResourceLimit(
                                 "divisore rolling non rappresentabile".into(),
                             )
@@ -1805,11 +1805,7 @@ mod tests {
         batch: &RecordBatch,
         config: &WindowFunction,
     ) -> Result<RecordBatch> {
-        if config.offset == 0 {
-            return Err(PlenoraError::InvalidPlan(
-                "offset deve essere positivo".into(),
-            ));
-        }
+        config.verifica_offset()?;
         if matches!(config.function, WindowKind::Ntile) {
             if config.buckets.is_none_or(|buckets| buckets == 0) {
                 return Err(PlenoraError::InvalidPlan(
@@ -1894,9 +1890,9 @@ mod tests {
                         sum / count
                     }),
                     WindowKind::Lag => position
-                        .checked_sub(config.offset)
+                        .checked_sub(config.offset())
                         .and_then(|other| numbers[other]),
-                    WindowKind::Lead => numbers.get(position + config.offset).copied().flatten(),
+                    WindowKind::Lead => numbers.get(position + config.offset()).copied().flatten(),
                     WindowKind::PctChange => position
                         .checked_sub(1)
                         .and_then(|previous| numbers[previous])
@@ -2198,7 +2194,7 @@ mod tests {
             order_column: Some("val".into()),
             window,
             min_periods,
-            ddof: 1,
+            ddof: None,
             output_column: "num_roll".into(),
         }
     }
@@ -2220,7 +2216,7 @@ mod tests {
             assert_rolling_parity(
                 &batch,
                 &RollingWindow {
-                    ddof: 0,
+                    ddof: matches!(function, RollingKind::Stddev).then_some(0),
                     ..rolling_config(function, 3, 1)
                 },
             );
@@ -2235,7 +2231,7 @@ mod tests {
                 order_column: None,
                 window: 2,
                 min_periods: 1,
-                ddof: 1,
+                ddof: None,
                 output_column: "val_roll".into(),
             },
         );
@@ -2260,7 +2256,7 @@ mod tests {
                 order_column: None,
                 window: 2,
                 min_periods: 1,
-                ddof: 1,
+                ddof: None,
                 output_column: "num_roll".into(),
             },
         );
@@ -2282,7 +2278,7 @@ mod tests {
                     order_column: None,
                     window: 1,
                     min_periods: 1,
-                    ddof: 0,
+                    ddof: matches!(function, RollingKind::Stddev).then_some(0),
                     output_column: "num_roll".into(),
                 },
             );
@@ -2329,7 +2325,7 @@ mod tests {
             function,
             group_by: Some("g".into()),
             order_column: Some("val".into()),
-            offset: 1,
+            offset: None,
             buckets: None,
             output_column: Some("num_win".into()),
         }
@@ -2356,14 +2352,14 @@ mod tests {
         assert_window_parity(
             &batch,
             &WindowFunction {
-                offset: 3,
+                offset: Some(3),
                 ..window_config(WindowKind::Lag)
             },
         );
         assert_window_parity(
             &batch,
             &WindowFunction {
-                offset: 2,
+                offset: Some(2),
                 ..window_config(WindowKind::Lead)
             },
         );
@@ -2386,7 +2382,7 @@ mod tests {
                 function: WindowKind::RunningMean,
                 group_by: None,
                 order_column: None,
-                offset: 1,
+                offset: None,
                 buckets: None,
                 output_column: None,
             },
@@ -2415,7 +2411,7 @@ mod tests {
                     function,
                     group_by: Some("g".into()),
                     order_column: None,
-                    offset: 1,
+                    offset: None,
                     buckets: None,
                     output_column: None,
                 },
@@ -2453,7 +2449,7 @@ mod tests {
         let batch = mixed_fixture();
         // offset 0.
         let config = WindowFunction {
-            offset: 0,
+            offset: Some(0),
             ..window_config(WindowKind::Lag)
         };
         assert!(window_function(&batch, &config).is_err());
@@ -2497,7 +2493,7 @@ mod tests {
             function: WindowKind::Rank,
             group_by: Some("g".into()),
             order_column: None,
-            offset: 1,
+            offset: None,
             buckets: None,
             output_column: None,
         };

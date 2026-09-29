@@ -763,3 +763,293 @@ fn i_kernel_rifiutano_gli_stessi_parametri_ignorati() {
         ));
     }
 }
+
+#[test]
+fn verifica_amount_conta_il_secondo_intercalare_dell_ultimo_giorno() {
+    use chrono::NaiveDate;
+    use plenora_core::arrow::array::{Array, RecordBatch, StringArray};
+    use plenora_kernels_table::dates::{date_add, verifica_amount, DateAdd, DateUnit};
+
+    // Dal secondo intercalare dell'ultimo giorno (`23:59:60`), `giorni`
+    // giorni all'indietro arrivano alla mezzanotte del primo giorno; da
+    // `NaiveDateTime::MAX` (23:59:59.999999999) no.
+    let giorni = (NaiveDate::MAX - NaiveDate::MIN).num_days() + 1;
+    assert!(verifica_amount(-giorni, &DateUnit::Days).is_ok());
+    assert!(matches!(
+        verifica_amount(-giorni - 1, &DateUnit::Days),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    let batch = RecordBatch::try_new(
+        schema(vec![Field::new("ts", DataType::Utf8, false)]),
+        vec![Arc::new(StringArray::from(vec!["+262142-12-31 23:59:60"]))],
+    )
+    .expect("batch");
+    let config = |amount: i64| -> DateAdd {
+        serde_json::from_value(json!({"column": "ts", "input_format": "%Y-%m-%d %H:%M:%S",
+            "output_format": "%Y-%m-%d %H:%M:%S", "amount": amount, "unit": "days",
+            "output_column": "d"}))
+        .expect("config")
+    };
+    let uscita = date_add(&batch, &config(-giorni)).expect("il kernel lo esegue");
+    let colonna = uscita
+        .column_by_name("d")
+        .and_then(|colonna| colonna.as_any().downcast_ref::<StringArray>())
+        .expect("colonna d");
+    assert!(!colonna.is_null(0));
+    assert!(
+        colonna.value(0).starts_with("-262143-01-01"),
+        "{}",
+        colonna.value(0)
+    );
+    // Oltre: il kernel rifiuta anche la data piu' favorevole.
+    assert!(date_add(&batch, &config(-giorni - 1)).is_err());
+    // In analisi, lo stesso confine.
+    let w = largo();
+    let analisi = |amount: i64| {
+        json!({"column": "date", "input_format": "%Y-%m-%d %H:%M:%S", "amount": amount,
+               "unit": "days", "output_column": "d"})
+    };
+    accetta("table.date_add", &[&w], analisi(-giorni));
+    rifiuta(
+        "table.date_add",
+        &[&w],
+        analisi(-giorni - 1),
+        "amount fuori scala",
+    );
+}
+
+#[test]
+fn i_letterali_di_expression_si_guardano_solo_se_valutati() {
+    let w = largo();
+    let chiamata =
+        |nome: &str, args: Vec<Value>| json!({"kind": "function", "name": nome, "args": args});
+    let funzione = |nome: &str, args: Vec<Value>| json!({"output_column": "e", "expression": chiamata(nome, args)});
+    let col = |nome: &str| json!({"kind": "column", "name": nome});
+    let lit = |valore: Value| json!({"kind": "literal", "value": valore});
+    // Valore o sostituzione solo null: la regex non viene mai compilata.
+    for args in [
+        vec![lit(Value::Null), lit(json!("(")), lit(json!("x"))],
+        vec![col("name"), lit(json!("(")), lit(Value::Null)],
+    ] {
+        accetta("table.expression", &[&w], funzione("regex_replace", args));
+    }
+    // Valore solo null: l'indice non viene guardato; start null: len no.
+    accetta(
+        "table.expression",
+        &[&w],
+        funzione("substring", vec![lit(Value::Null), lit(json!(-1))]),
+    );
+    accetta(
+        "table.expression",
+        &[&w],
+        funzione(
+            "substring",
+            vec![col("name"), lit(Value::Null), lit(json!(-1))],
+        ),
+    );
+    // Dentro un'altra funzione il controllo resta.
+    rifiuta(
+        "table.expression",
+        &[&w],
+        funzione(
+            "upper",
+            vec![chiamata("substring", vec![col("name"), lit(json!(-1))])],
+        ),
+        "start negativo",
+    );
+}
+
+#[test]
+fn i_nomi_delle_regole_hanno_il_limite_dei_nomi_di_colonna() {
+    let w = largo();
+    let regola =
+        |nome: String| json!({"rules": [{"name": nome, "operator": "notnull", "column": "id"}]});
+    accetta("table.validate_rules", &[&w], regola("a".repeat(1_024)));
+    rifiuta(
+        "table.validate_rules",
+        &[&w],
+        regola("a".repeat(1_025)),
+        "oltre 1024 byte",
+    );
+}
+
+#[test]
+fn nessun_parametro_di_aggregate_mask_data_e_fill_na_si_ignora() {
+    let w = largo();
+    let aggrega =
+        |aggregazione: Value| json!({"group_by": ["name"], "aggregations": [aggregazione]});
+    for (aggregazione, frammento) in [
+        (
+            json!({"column": "value", "function": "sum", "separator": "|"}),
+            "separator",
+        ),
+        (
+            json!({"column": "value", "function": "count", "distinct": true}),
+            "distinct",
+        ),
+        (
+            json!({"column": "name", "function": "first", "skip_null": false}),
+            "skip_null",
+        ),
+        (
+            json!({"column": "value", "function": "mean", "ddof": 0}),
+            "ddof",
+        ),
+    ] {
+        rifiuta("table.aggregate", &[&w], aggrega(aggregazione), frammento);
+    }
+    for aggregazione in [
+        json!({"column": "name", "function": "concat", "separator": "|", "distinct": true,
+               "skip_null": false}),
+        json!({"column": "value", "function": "variance", "ddof": 0, "distinct": true}),
+        json!({"column": "value", "function": "sum"}),
+    ] {
+        accetta("table.aggregate", &[&w], aggrega(aggregazione));
+    }
+    for (chiave, valore) in [
+        ("chars_start", json!(1)),
+        ("chars_end", json!(1)),
+        ("mask_char", json!("#")),
+    ] {
+        let mut masking = json!({"column": "name", "mask_type": "email"});
+        masking[chiave] = valore;
+        rifiuta(
+            "table.mask_data",
+            &[&w],
+            json!({"maskings": [masking]}),
+            "mask_type=custom",
+        );
+    }
+    accetta(
+        "table.mask_data",
+        &[&w],
+        json!({"maskings": [{"column": "name", "chars_start": 1, "mask_char": "#"}]}),
+    );
+    for metodo in ["ffill", "bfill"] {
+        for valore in [json!(0), Value::Null] {
+            rifiuta(
+                "table.fill_na",
+                &[&w],
+                json!({"column": "id", "method": metodo, "value": valore}),
+                "value ammesso solo",
+            );
+        }
+        accetta(
+            "table.fill_na",
+            &[&w],
+            json!({"column": "id", "method": metodo}),
+        );
+    }
+    accetta(
+        "table.fill_na",
+        &[&w],
+        json!({"column": "id", "method": "value", "value": 0}),
+    );
+}
+
+#[test]
+fn i_kernel_rifiutano_i_parametri_che_non_usano() {
+    use plenora_core::arrow::array::{Float64Array, RecordBatch, StringArray};
+    use plenora_kernels_table::aggregation::{aggregate, Aggregate};
+    use plenora_kernels_table::cleansing::{fill_na, FillNa};
+    use plenora_kernels_table::security::{mask_data, MaskData};
+
+    let batch = RecordBatch::try_new(
+        schema(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("value", DataType::Float64, true),
+        ]),
+        vec![
+            Arc::new(StringArray::from(vec![Some("a@b.it"), None])),
+            Arc::new(Float64Array::from(vec![Some(1.0), None])),
+        ],
+    )
+    .expect("batch");
+    let aggrega: Aggregate = serde_json::from_value(json!({"group_by": ["name"],
+        "aggregations": [{"column": "value", "function": "sum", "separator": "|"}]}))
+    .expect("config");
+    assert!(matches!(
+        aggregate(&batch, &aggrega),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    let maschera: MaskData = serde_json::from_value(json!({"maskings": [{"column": "name",
+        "mask_type": "email", "mask_char": "#"}]}))
+    .expect("config");
+    assert!(matches!(
+        mask_data(&batch, &maschera),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    let riempi: FillNa =
+        serde_json::from_value(json!({"column": "value", "method": "ffill", "value": null}))
+            .expect("config");
+    assert!(matches!(
+        fill_na(&batch, &riempi),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    // Parametri assenti: i default, nessun errore.
+    let riempi: FillNa =
+        serde_json::from_value(json!({"column": "value", "method": "ffill"})).expect("config");
+    assert!(fill_na(&batch, &riempi).is_ok());
+}
+
+#[test]
+fn offset_e_ddof_delle_finestre_solo_dove_hanno_effetto() {
+    use plenora_core::arrow::array::{Float64Array, RecordBatch};
+    use plenora_kernels_table::aggregation::{
+        rolling_window, window_function, RollingWindow, WindowFunction,
+    };
+
+    let w = largo();
+    rifiuta(
+        "table.window_function",
+        &[&w],
+        json!({"column": "value", "function": "cumsum", "offset": 2}),
+        "offset ammesso solo",
+    );
+    rifiuta(
+        "table.window_function",
+        &[&w],
+        json!({"column": "value", "function": "lag", "offset": 0}),
+        "offset deve essere positivo",
+    );
+    for funzione in ["lag", "lead"] {
+        accetta(
+            "table.window_function",
+            &[&w],
+            json!({"column": "value", "function": funzione, "offset": 2}),
+        );
+    }
+    rifiuta(
+        "table.rolling_window",
+        &[&w],
+        json!({"column": "value", "function": "mean", "window": 2, "ddof": 0,
+               "output_column": "r"}),
+        "ddof ammesso solo",
+    );
+    accetta(
+        "table.rolling_window",
+        &[&w],
+        json!({"column": "value", "function": "stddev", "window": 2, "ddof": 0,
+               "output_column": "r"}),
+    );
+    // Anche i kernel.
+    let batch = RecordBatch::try_new(
+        schema(vec![Field::new("value", DataType::Float64, false)]),
+        vec![Arc::new(Float64Array::from(vec![1.0, 2.0]))],
+    )
+    .expect("batch");
+    let finestra: WindowFunction =
+        serde_json::from_value(json!({"column": "value", "function": "cumsum", "offset": 2}))
+            .expect("config");
+    assert!(matches!(
+        window_function(&batch, &finestra),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+    let mobile: RollingWindow = serde_json::from_value(json!({"column": "value",
+        "function": "mean", "window": 2, "ddof": 0, "output_column": "r"}))
+    .expect("config");
+    assert!(matches!(
+        rolling_window(&batch, &mobile),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+}

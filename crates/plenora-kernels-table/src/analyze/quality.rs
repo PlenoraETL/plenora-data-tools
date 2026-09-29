@@ -444,6 +444,11 @@ pub(in crate::analyze) fn analyze_validate_rules(
         if rule.name.trim().is_empty() {
             return contract_error(op, "nome regola vuoto");
         }
+        // Stesso limite dei nomi di colonna: il nome della regola finisce
+        // nell'output (`name` del sommario, `_errors`/`_warnings`).
+        if rule.name.len() > 1_024 {
+            return contract_error(op, "nome regola oltre 1024 byte");
+        }
         if !seen.insert(rule.name.as_str()) {
             return contract_error(op, format!("regola ripetuta: {}", rule.name));
         }

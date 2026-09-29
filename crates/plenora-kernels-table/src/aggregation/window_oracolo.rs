@@ -20,11 +20,7 @@ fn window_function_riferimento(
     batch: &RecordBatch,
     config: &WindowFunction,
 ) -> Result<RecordBatch> {
-    if config.offset == 0 {
-        return Err(PlenoraError::InvalidPlan(
-            "offset deve essere positivo".into(),
-        ));
-    }
+    config.verifica_offset()?;
     if matches!(config.function, WindowKind::Ntile) {
         if config.buckets.is_none_or(|buckets| buckets == 0) {
             return Err(PlenoraError::InvalidPlan(
@@ -125,9 +121,9 @@ fn window_function_riferimento(
                     sum / count
                 }),
                 WindowKind::Lag => position
-                    .checked_sub(config.offset)
+                    .checked_sub(config.offset())
                     .and_then(|other| numbers[other]),
-                WindowKind::Lead => numbers.get(position + config.offset).copied().flatten(),
+                WindowKind::Lead => numbers.get(position + config.offset()).copied().flatten(),
                 WindowKind::PctChange => position
                     .checked_sub(1)
                     .and_then(|previous| numbers[previous])
@@ -259,7 +255,7 @@ fn confronta_tutto(batch: &RecordBatch) {
                     function: funzione.clone(),
                     group_by: group_by.map(Into::into),
                     order_column: order_column.map(Into::into),
-                    offset: 2,
+                    offset: matches!(funzione, WindowKind::Lag | WindowKind::Lead).then_some(2),
                     buckets,
                     output_column: None,
                 };
@@ -409,7 +405,7 @@ fn ranghi_come_il_riferimento_su_una_partizione_grande_con_molti_pari_merito() {
                 function: funzione.clone(),
                 group_by: group_by.map(Into::into),
                 order_column: None,
-                offset: 1,
+                offset: None,
                 buckets: None,
                 output_column: Some("r".into()),
             };
@@ -467,7 +463,7 @@ proptest! {
             function: funzione,
             group_by: group.then(|| "g".into()),
             order_column: ordina.then(|| "o".into()),
-            offset: 1,
+            offset: None,
             output_column: None,
         };
         assert_same_outcome_bits(

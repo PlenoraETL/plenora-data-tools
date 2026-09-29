@@ -1034,6 +1034,11 @@ pub fn aggregate_spilled_in(
             "aggregate richiede group_by".into(),
         ));
     }
+    // Prima di scrivere partizioni: un parametro che la funzione non usa e'
+    // un errore di config, come in `aggregate`.
+    for aggregazione in &config.aggregations {
+        aggregazione.verifica_parametri()?;
+    }
     if batch.num_rows() == 0 {
         return Ok((
             aggregation::aggregate(batch, config)?,
@@ -2079,12 +2084,12 @@ mod tests {
         let aggregation = |column: &str, function: AggFunction, alias: &str| Aggregation {
             column: column.to_string(),
             function,
-            separator: ", ".into(),
-            distinct: false,
-            skip_null: true,
+            separator: matches!(function, AggFunction::Concat).then(|| ", ".into()),
+            distinct: None,
+            skip_null: None,
             alias: alias.to_string(),
             quantile: None,
-            ddof: 1,
+            ddof: None,
         };
         Aggregate {
             group_by: group_by.iter().map(|name| (*name).to_string()).collect(),
@@ -2156,12 +2161,12 @@ mod tests {
         let aggregation = |column: &str, function: AggFunction, alias: &str| Aggregation {
             column: column.to_string(),
             function,
-            separator: "|".into(),
-            distinct: false,
-            skip_null: true,
+            separator: matches!(function, AggFunction::Concat).then(|| "|".into()),
+            distinct: None,
+            skip_null: None,
             alias: alias.to_string(),
             quantile: None,
-            ddof: 1,
+            ddof: None,
         };
         for group_by in key_sets.iter().skip(1) {
             let config = Aggregate {

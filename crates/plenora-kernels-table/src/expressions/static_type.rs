@@ -237,6 +237,106 @@ fn literal_kind(op: &str, value: &Value) -> Result<TypeSet> {
     }
 }
 
+/// I letterali che la valutazione rifiuterebbe: pattern letterale di
+/// `regex_replace` non compilabile, indice letterale negativo di
+/// `substring`.
+///
+/// Come la valutazione, che guarda il pattern solo con valore, pattern e
+/// sostituzione non nulli, e l'indice solo con gli argomenti che lo
+/// precedono non nulli: un argomento che puo' essere solo null
+/// (`TypeSet::NULL_ONLY`) rende la chiamata null e il letterale non viene
+/// mai guardato. Una regex o un indice calcolati dalle colonne dipendono dai
+/// dati e restano un errore di valutazione.
+///
+/// # Errors
+///
+/// `InvalidPlan` con il prefisso `op`; gli errori di [`infer`] sugli
+/// argomenti.
+pub fn verifica_letterali(
+    op: &str,
+    expression: &Expression,
+    lookup: &dyn Fn(&str) -> Result<DataType>,
+) -> Result<()> {
+    match expression {
+        Expression::Column { .. } | Expression::Literal { .. } => Ok(()),
+        Expression::Unary { value, .. } => verifica_letterali(op, value, lookup),
+        Expression::Binary { left, right, .. } => {
+            verifica_letterali(op, left, lookup)?;
+            verifica_letterali(op, right, lookup)
+        }
+        Expression::Case {
+            branches,
+            else_value,
+        } => {
+            for branch in branches {
+                verifica_letterali(op, &branch.when, lookup)?;
+                verifica_letterali(op, &branch.then, lookup)?;
+            }
+            verifica_letterali(op, else_value, lookup)
+        }
+        Expression::Function { name, args } => {
+            for arg in args {
+                verifica_letterali(op, arg, lookup)?;
+            }
+            verifica_letterali_della_funzione(op, *name, args, lookup)
+        }
+    }
+}
+
+fn verifica_letterali_della_funzione(
+    op: &str,
+    name: Function,
+    args: &[Expression],
+    lookup: &dyn Fn(&str) -> Result<DataType>,
+) -> Result<()> {
+    let solo_null = |indice: usize| -> Result<bool> {
+        args.get(indice)
+            .map_or(Ok(true), |arg| Ok(infer(op, arg, lookup)?.is_null_only()))
+    };
+    let con_op = |errore: PlenoraError| match errore {
+        PlenoraError::InvalidPlan(messaggio) => {
+            PlenoraError::InvalidPlan(format!("{op}: {messaggio}"))
+        }
+        altro => altro,
+    };
+    match name {
+        Function::RegexReplace if args.len() == 3 => {
+            if let Expression::Literal {
+                value: Value::String(pattern),
+            } = &args[1]
+            {
+                if !solo_null(0)? && !solo_null(2)? {
+                    regex::Regex::new(pattern).map_err(|error| {
+                        PlenoraError::InvalidPlan(format!(
+                            "{op}: regex_replace: regex non valida: {error}"
+                        ))
+                    })?;
+                }
+            }
+        }
+        Function::Substring if (2..=3).contains(&args.len()) => {
+            // `start` si guarda con il valore non nullo, `len` con valore e
+            // `start` non nulli.
+            for (indice, contesto) in [(1, "substring: start"), (2, "substring: len")] {
+                for prima in 0..indice {
+                    if solo_null(prima)? {
+                        return Ok(());
+                    }
+                }
+                if let Some(Expression::Literal { value }) = args.get(indice) {
+                    super::interpreter::substring_index(
+                        &super::scalar::literal(value).map_err(con_op)?,
+                        contesto,
+                    )
+                    .map_err(con_op)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Tipo statico di un'espressione.
 ///
 /// `lookup` risolve il tipo Arrow di una colonna referenziata: e' il solo

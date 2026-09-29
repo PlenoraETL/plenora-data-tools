@@ -159,8 +159,8 @@ pub(in crate::analyze) fn analyze_dedup_advanced(
 }
 
 /// Parametri di una aggregazione indipendenti dallo schema: `separator` entro
-/// `max_string_bytes`, `quantile` solo con `function=quantile` (su un'altra
-/// funzione non avrebbe effetto).
+/// `max_string_bytes`, e nessun parametro scritto che la funzione non usa
+/// (`Aggregation::verifica_parametri`, la stessa regola del kernel).
 fn check_aggregation_parameters(
     op: &str,
     aggregation: &aggregation::Aggregation,
@@ -168,16 +168,11 @@ fn check_aggregation_parameters(
 ) -> Result<()> {
     check_text_len(
         op,
-        &aggregation.separator,
+        aggregation.separator(),
         limits.max_string_bytes,
         "separator",
     )?;
-    if aggregation.quantile.is_some()
-        && !matches!(aggregation.function, aggregation::AggFunction::Quantile)
-    {
-        return contract_error(op, "quantile ammesso solo con function=quantile");
-    }
-    Ok(())
+    con_op(op, aggregation.verifica_parametri())
 }
 
 pub(in crate::analyze) fn analyze_aggregate(
@@ -301,6 +296,7 @@ pub(in crate::analyze) fn analyze_rolling_window(
 ) -> Result<DataContract> {
     let config: aggregation::RollingWindow = typed(op, config)?;
     let input = &inputs[0];
+    con_op(op, config.verifica_parametri())?;
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
         return contract_error(op, "window/min_periods non validi");
     }
@@ -342,9 +338,7 @@ pub(in crate::analyze) fn analyze_window_function(
 ) -> Result<DataContract> {
     let config: aggregation::WindowFunction = typed(op, config)?;
     let input = &inputs[0];
-    if config.offset == 0 {
-        return contract_error(op, "offset deve essere > 0");
-    }
+    con_op(op, config.verifica_offset())?;
     match (&config.function, config.buckets) {
         (aggregation::WindowKind::Ntile, Some(buckets)) if buckets > limits.max_rows => {
             return contract_error(op, "buckets oltre max_rows");

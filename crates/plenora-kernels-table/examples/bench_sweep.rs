@@ -511,7 +511,7 @@ fn main() {
         order_column: Some("id".into()),
         window: 10,
         min_periods: 1,
-        ddof: 1,
+        ddof: None,
         output_column: "num_roll".into(),
     };
     sweep_unary(
@@ -527,7 +527,7 @@ fn main() {
         function: WindowKind::Rank,
         group_by: Some("grp".into()),
         order_column: Some("num".into()),
-        offset: 1,
+        offset: None,
         buckets: None,
         output_column: Some("num_rank".into()),
     };
@@ -704,9 +704,9 @@ fn main() {
         maskings: vec![Masking {
             column: "text".into(),
             mask_type: MaskType::Custom,
-            chars_start: 3,
-            chars_end: 3,
-            mask_char: "*".into(),
+            chars_start: None,
+            chars_end: None,
+            mask_char: None,
         }],
         overwrite: true,
     };

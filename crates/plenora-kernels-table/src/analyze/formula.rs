@@ -65,6 +65,9 @@ pub(in crate::analyze) fn analyze_expression(
         field_of(op, input, name).map(|field| field.data_type().clone())
     })?;
     let kind = expressions::static_type::resolve_output(op, possibili, config.output_type)?;
+    expressions::static_type::verifica_letterali(op, &config.expression, &|name| {
+        field_of(op, input, name).map(|field| field.data_type().clone())
+    })?;
     analyze_append(
         input,
         fields,
