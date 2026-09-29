@@ -737,7 +737,8 @@ fn checked_buffer(
 }
 
 /// Il bilancio della precisione `p` con la morfologia (`fill_gaps`): due
-/// buffer (positivo e negativo), ognuno con archi di freccia `p / 8` e
+/// buffer (positivo e negativo), ognuno con archi di freccia `p / 8` (o lo
+/// 0,1% della tolleranza, se maggiore: deviazione dichiarata del buffer) e
 /// griglia entro `p / 4`, e la rimozione delle sovrapposizioni con griglia
 /// entro `p / 4`: `2 (p/8 + p/4) + p/4 = p`. Senza morfologia la rimozione
 /// ha tutta la tolleranza `p / 2` delle booleane.
@@ -805,7 +806,11 @@ fn clean_valid_polygon_topology_impl(
         precision
     };
     if morfologia {
-        let freccia = precision.value() * 0.25;
+        // Archi: `p / 8` (qui `precision` e' gia' `p / 2`), o lo 0,1% della
+        // tolleranza di chiusura se maggiore (deviazione dichiarata del
+        // buffer, README «Limiti dichiarati»).
+        let freccia = (precision.value() * 0.25)
+            .max(crate::rust_backend::buffer::FRECCIA_RELATIVA_MASSIMA * snap_tolerance);
         for geometry in working.iter_mut().flatten() {
             let expanded = Geometry::MultiPolygon(checked_buffer(
                 geometry,

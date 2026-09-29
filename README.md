@@ -125,18 +125,20 @@ overlay controllato come sopra:
 - `d < 0`: ogni parte areale meno l'unione delle metà interne dei suoi
   anelli e dei settori ai vertici concavi; punti e linee non contano, come
   in `geo` (e come `geo` una collezione erode ogni parte areale da sola);
-- **archi dalla precisione**: settori e dischi sono poligoni inscritti con
-  freccia al più `p / 2`, `n = ceil(pi / acos(1 - (p/2) / |d|))` lati per
-  il cerchio intero. Con 1 cm: 32 lati a 1 m, 100 a 10 m, 315 a 100 m, 994
-  a 1000 m; oltre `2^20` lati (circa `|d| = 3,5e7 p`) errore. Freccia più
-  griglia restano entro `p`. Per non creare contatti quasi collineari fra
+- **archi**: settori e dischi sono poligoni inscritti con freccia al più
+  `f = max(p / 2, 0.001 |d|)`, `n = ceil(pi / acos(1 - f / |d|))` lati per
+  il cerchio intero. Con 1 cm: 32 lati a 1 m, 71 da 5 m in su; oltre
+  `2^20` lati errore. Fino a `|d| = 500 p` (5 m) freccia più griglia
+  restano entro `p`; oltre vale la deviazione dichiarata sotto
+  («Deviazione: archi del buffer»). Per non creare contatti quasi collineari fra
   pezzi (schegge degli agganci) i rettangoli si sovrappongono ai giunti di
   `sqrt(2 |d| f / 100)` (`f` la freccia: il pezzo esce dal buffer di un
   centesimo della freccia) e i settori hanno il vertice arretrato dentro il
   disco.
 
 `clean_topology` con la morfologia divide il bilancio: due buffer con
-freccia `p / 8` e griglia entro `p / 4`, e la rimozione delle
+freccia `p / 8` (o lo 0,1% della tolleranza di chiusura, se maggiore:
+la stessa deviazione) e griglia entro `p / 4`, e la rimozione delle
 sovrapposizioni con griglia entro `p / 4`: in tutto `p`. La rimozione non
 accumula un'unione riga dopo riga (a ogni giro la griglia spostava
 l'accumulatore: dopo 80 righe di 1.300 km una riga staccata larga 1,56 cm
@@ -202,17 +204,29 @@ vertice d'ingresso non sono riconosciuti.
   foglia contro il poligono di partenza e le linee di taglio del suo
   cammino (nessun lato fuori posto). Il passo della griglia si dimezza con
   il pezzo, e lo spostamento accumulato resta sotto la precisione.
-- **Buffer, costo.** Gli archi dalla precisione e l'unione di pezzi
-  costano più del `Buffer` di `geo`. Misure in release, stella di 1.000
-  vertici (raggio 1 km) e linea di 1.000 vertici, 1 cm, contro `geo` più le
-  stesse validazioni: poligono 86 ms / 8 ms a 1 m, 125 / 6 ms a 10 m,
-  586 / 34 ms a 100 m, 17 s / 0,17 s a 1000 m; linea 27 / 4 ms a 1 m, 24 /
-  3 ms a 10 m, 36 / 1 ms a 100 m, 1,5 s / 4 ms a 1000 m. Il caso peggiore
-  sono distanze molto maggiori dei dettagli dell'ingresso (tutti i pezzi si
-  sovrappongono); anche `geo` degenera quando molti lati convergono (la
-  chiusura di angoli di 157 corde: 2,5 s qui, 2,2 s con `geo`; di 600
-  corde: 121 s qui, 122 s con `geo`). I
-  vertici dell'uscita crescono con gli archi (fino a circa 6 volte).
+- **Buffer, costo.** L'unione di pezzi costa più del `Buffer` di `geo`.
+  Misure in release, stella di 1.000 vertici (raggio 1 km) e linea di
+  1.000 vertici, 1 cm, contro `geo` più le stesse validazioni: poligono
+  61 / 8 ms a 1 m, 87 / 6 ms a 10 m, 349 / 27 ms a 100 m, 5,6 s / 0,18 s a
+  1000 m; linea 34 / 4 ms a 1 m, 32 / 3 ms a 10 m, 37 / 1 ms a 100 m,
+  0,93 s / 3 ms a 1000 m. Il caso peggiore sono distanze molto maggiori dei
+  dettagli dell'ingresso: tutti i pezzi (un rettangolo per lato) si
+  sovrappongono e l'overlay ne paga gli incroci, anche con archi di 71
+  lati. Anche `geo` degenera quando molti lati convergono (la chiusura di
+  angoli di 600 corde: 121 s qui, 122 s con `geo`). I vertici dell'uscita
+  sono fino a circa 2,5 volte quelli di `geo`.
+- **Deviazione: archi del buffer** (decisione dell'utente). *Regola:* gli
+  archi del buffer (e della chiusura di `clean_topology`) hanno freccia al
+  più `max(p / 2, 0.001 |d|)`, non `p / 2`. *Ambito:* `buffer`,
+  `buffer_with_cap`, la morfologia di `clean_valid_polygon_topology`
+  (`rust_backend::buffer::freccia_degli_archi`); griglia, agganci e
+  controlli dell'unione restano a `p / 2`. *Hazard:* oltre `|d| = 500 p`
+  il buffer si scosta dal buffer esatto fino allo 0,1% della distanza (10
+  cm a 100 m, 1 m a 1 km), sempre verso l'interno lungo gli archi (poligoni
+  inscritti), senza errore: sopra la precisione di 1 cm. *Condizione di
+  rientro:* una discretizzazione degli archi entro `p / 2` a costo
+  accettabile per ogni distanza (per esempio archi calcolati solo sul bordo
+  dell'unione), o un parametro esplicito di tolleranza nel piano.
 - **Non applicabile.** Le parti di `subdivide` sotto la soglia di vertici
   escono invariate, senza overlay; i punti con estremità piatte non hanno
   buffer (come in `geo`), senza overlay.

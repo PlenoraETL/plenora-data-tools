@@ -23,12 +23,17 @@
 //!   `|d|` dal bordo); punti e linee non contribuiscono, come in `geo`;
 //! - per `d = 0` l'unione delle parti areali.
 //!
-//! **Archi dalla precisione.** Dischi e settori sono poligoni inscritti con
-//! freccia al piu' `p / 2`: `n = ceil(2 pi / (2 acos(1 - (p/2) / |d|)))`
-//! lati per il cerchio intero ([`lati_per_cerchio`]). L'unione passa dai
-//! controlli di [`super::griglia`] contro i pezzi con tolleranza `p / 2`
-//! (la griglia a priori entro `p / 2`): freccia piu' griglia restano entro
-//! `p`. Oltre [`MAX_LATI_CERCHIO`] lati per cerchio, o
+//! **Archi.** Dischi e settori sono poligoni inscritti con freccia al piu'
+//! `f = max(p / 2, 0.001 |d|)` ([`freccia_degli_archi`]): `n = ceil(2 pi /
+//! (2 acos(1 - f / |d|)))` lati per il cerchio intero
+//! ([`lati_per_cerchio`]). Fino a `|d| = 500 p` (5 m con 1 cm) la freccia
+//! e' `p / 2` e freccia piu' griglia restano entro `p`; oltre, la freccia e'
+//! lo 0,1% della distanza, **deviazione dichiarata** del solo buffer
+//! (decisione dell'utente, README «Limiti dichiarati»): gli archi del
+//! buffer si scostano dal cerchio esatto fino a `0.001 |d|` (10 cm a 100
+//! m), sempre verso l'interno (poligoni inscritti), senza errore. La
+//! griglia e i controlli dell'unione contro i pezzi restano a `p / 2`:
+//! la deviazione riguarda solo la discretizzazione degli archi. Oltre [`MAX_LATI_CERCHIO`] lati per cerchio, o
 //! [`MAX_VERTICI_BUFFER`] vertici in tutto, errore esplicito.
 
 use std::f64::consts::{PI, TAU};
@@ -67,6 +72,17 @@ impl From<PrecisioneInsufficiente> for ErroreBuffer {
 /// Lati massimi di un cerchio: oltre, la precisione non e' raggiungibile
 /// per quella distanza (circa `|d| = 3,5e7 p`).
 pub const MAX_LATI_CERCHIO: u64 = 1 << 20;
+
+/// La freccia relativa massima ammessa per gli archi del buffer: lo 0,1%
+/// della distanza (deviazione dichiarata, vedi il modulo).
+pub const FRECCIA_RELATIVA_MASSIMA: f64 = 0.001;
+
+/// La freccia degli archi di un buffer di distanza `distance` con
+/// precisione `precision`: `max(p / 2, 0.001 |d|)` (vedi il modulo).
+#[must_use]
+pub fn freccia_degli_archi(distance: f64, precision: Precision) -> f64 {
+    (precision.value() * griglia::FRAZIONE_BORDO).max(FRECCIA_RELATIVA_MASSIMA * distance.abs())
+}
 
 /// Vertici massimi dei pezzi di un buffer.
 ///
@@ -558,7 +574,8 @@ fn erosione(
 }
 
 /// Il buffer di `geometry` a distanza `distance`, entro la precisione
-/// (vedi il modulo): freccia degli archi `p / 2`, griglia entro `p / 2`.
+/// (vedi il modulo): freccia degli archi [`freccia_degli_archi`], griglia
+/// entro `p / 2`.
 ///
 /// # Errors
 ///
@@ -575,7 +592,7 @@ pub fn buffer_controllato(
         geometry,
         distance,
         estremita,
-        precision.value() * griglia::FRAZIONE_BORDO,
+        freccia_degli_archi(distance, precision),
         precision,
     )
 }
@@ -660,33 +677,46 @@ mod tests {
         assert_eq!(lati_per_cerchio(f64::NAN, 0.005), None);
     }
 
-    /// Revisione: il cerchio di `geo` per un punto a 10 m ha 32 lati, freccia
-    /// 4,8 cm. Qui ogni punto del bordo sta entro 1 cm dal cerchio vero.
+    /// Il cerchio di un punto: fino a `|d| = 500 p` ogni punto del bordo
+    /// sta entro `p` dal cerchio vero (il cerchio di `geo` a 10 m, 32 lati,
+    /// aveva 4,8 cm di freccia); oltre, entro lo 0,1% della distanza piu' la
+    /// griglia (deviazione dichiarata).
     #[test]
-    fn il_cerchio_di_un_punto_sta_entro_la_precisione() {
+    fn il_cerchio_di_un_punto_sta_entro_la_freccia_dichiarata() {
         let centro = Coord {
             x: 500_000.0,
             y: 4_000_000.0,
         };
-        let buffer = buffer_controllato(
-            &Geometry::Point(Point(centro)),
-            10.0,
-            Estremita::Tonde,
-            centimetro(),
-        )
-        .unwrap();
-        let vertici: Vec<Coord<f64>> = buffer.coords_iter().collect();
-        assert!(vertici.len() > 90);
-        for coppia in vertici.windows(2) {
-            let medio = Coord {
-                x: f64::midpoint(coppia[0].x, coppia[1].x),
-                y: f64::midpoint(coppia[0].y, coppia[1].y),
-            };
-            let distanza = (medio.x - centro.x).hypot(medio.y - centro.y);
-            assert!((distanza - 10.0).abs() <= 0.01, "{distanza}");
+        for (raggio, scarto) in [(4.0, 0.01), (10.0, 0.015), (100.0, 0.105), (1000.0, 1.005)] {
+            let buffer = buffer_controllato(
+                &Geometry::Point(Point(centro)),
+                raggio,
+                Estremita::Tonde,
+                centimetro(),
+            )
+            .unwrap();
+            let vertici: Vec<Coord<f64>> = buffer.coords_iter().collect();
+            for coppia in vertici.windows(2) {
+                let medio = Coord {
+                    x: f64::midpoint(coppia[0].x, coppia[1].x),
+                    y: f64::midpoint(coppia[0].y, coppia[1].y),
+                };
+                let distanza = (medio.x - centro.x).hypot(medio.y - centro.y);
+                assert!((distanza - raggio).abs() <= scarto, "{raggio}: {distanza}");
+            }
         }
-        let area = buffer.unsigned_area();
-        assert!(PI.mul_add(-100.0, area).abs() <= 2.0 * PI * 10.0 * 0.01);
+    }
+
+    #[test]
+    fn la_freccia_e_mezzo_centimetro_o_lo_zero_virgola_uno_per_cento() {
+        assert!((freccia_degli_archi(1.0, centimetro()) - 0.005).abs() < 1e-15);
+        assert!((freccia_degli_archi(-5.0, centimetro()) - 0.005).abs() < 1e-15);
+        assert!((freccia_degli_archi(100.0, centimetro()) - 0.1).abs() < 1e-15);
+        let lati: Vec<u64> = [1.0, 10.0, 100.0, 1000.0]
+            .iter()
+            .map(|d| lati_per_cerchio(*d, freccia_degli_archi(*d, centimetro())).unwrap())
+            .collect();
+        assert_eq!(lati, vec![32, 71, 71, 71]);
     }
 
     /// Revisione: una componente che la griglia ridurrebbe a un punto (0,4
