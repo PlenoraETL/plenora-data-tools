@@ -165,31 +165,37 @@ regressione.
 
 **Regola.** Le mappe di chiavi dei kernel tabellari usano due hash
 deterministici senza seme (`crates/plenora-kernels-table/src/hashing.rs`):
-`KeyHasher` per i valori nativi (interi, testi, valori di join) e
+`KeyHasher` (`FastHasher`) per i valori nativi (interi, testi, valori e
+chiavi composte dei join, partizioni delle finestre, blocchi di
+`fuzzy_join`, chiavi testuali di `reconcile` e `assert_foreign_key`) e
 `ChiaveHasher` per le chiavi binarie di riga (arena `KeyInterner` di
 aggregate, distinct, set operation, assert_unique e table_diff; mappe e
 scelta della partizione dello spill). L'uguaglianza delle chiavi si decide
-sempre sui valori o sui byte: l'hash sceglie i candidati, mai il risultato.
+sempre sui valori o sui byte: l'hash sceglie i candidati, mai il risultato,
+e nessun output dipende dall'ordine di visita di una mappa (le mappe si
+interrogano per chiave; dove si visitano, il risultato si ordina o si
+riduce con operazioni commutative, e `fuzzy_join` sceglie il blocco peggiore
+con uno spareggio sulla chiave).
 
-**Ambito.** `plenora-kernels-table`: raggruppamenti, join, set operation,
-qualità, spill.
+**Ambito.** `plenora-kernels-table`: raggruppamenti, join, finestre,
+set operation, qualità, spill, `fuzzy_join`.
 
 **Hazard.**
 
 - nessuno dei due è keyed: dati costruiti apposta per collidere degradano
   build e probe fino al quadratico entro i limiti di riga, che limitano `n`
   ma non il comportamento dentro `n`. Nessuna perdita di correttezza;
-- `KeyHasher` ha un passo per blocco che propaga le differenze solo verso i
-  bit alti: su chiavi di più blocchi in cui i byte che variano stanno in
-  cima a un blocco e nel blocco di coda collide anche senza avversario (un
-  milione di chiavi compatte Int64 davano 32 768 hash). Per questo le chiavi
-  binarie di riga e lo spill usano `ChiaveHasher`; le mappe di valori nativi
-  su più blocchi (testi, chiavi composte dei join) usano ancora `KeyHasher`,
-  e lì il rischio residuo è di tempo.
+- entrambi ripiegano i bit alti su quelli bassi dopo ogni blocco. Senza, il
+  passo di `KeyHasher` propagava le differenze solo verso i bit alti e su
+  chiavi di più blocchi collideva anche senza avversario (un milione di
+  codici `CUST-%08d` davano 960 000 hash, un milione di chiavi compatte
+  Int64 32 768); i test di `hashing` e dei join fissano un milione di hash
+  distinti su queste forme. Restano collisioni costruibili fra chiavi di
+  lunghezza diversa (la lunghezza della coda entra nel digest, quella del
+  testo intero no): costano tempo, non risultati.
 
 **Condizione di rientro.** Un hasher con chiave per processo, verificato su
-tutti gli usi (nessun output deve dipendere dall'ordine di una mappa), e
-`KeyHasher` corretto o sostituito sulle chiavi di più blocchi.
+tutti gli usi.
 
 ### Memoria delle chiavi dei kernel in memoria non governata
 

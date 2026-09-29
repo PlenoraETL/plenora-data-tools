@@ -1782,6 +1782,47 @@ pub fn asof_join(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hash distinti di un insieme di chiavi di join, con l'hasher delle
+    /// mappe dei join.
+    fn hash_distinti<K: std::hash::Hash>(chiavi: impl Iterator<Item = K>) -> usize {
+        use std::hash::BuildHasher;
+        chiavi
+            .map(|chiave| FastHasher::default().hash_one(&chiave))
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    /// Le chiavi di testo e composte delle mappe dei join non collidono sui
+    /// 64 bit: senza il ripiegamento di `KeyHasher` un milione di codici
+    /// `CUST-%08d` davano 960 000 hash anche senza avversario.
+    #[test]
+    fn le_mappe_dei_join_separano_testi_e_chiavi_composte() {
+        let testi = (0..1_000_000_u32)
+            .map(|indice| format!("CUST-{indice:08}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hash_distinti(testi.iter().map(|testo| KeyVal::Utf8(testo))),
+            1_000_000
+        );
+        let composte = (0..1_000_000_u32)
+            .map(|indice| format!("k{}", indice / 1000))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hash_distinti(composte.iter().zip(0_i64..).map(
+                |(testo, indice)| -> Box<[KeyVal<'_>]> {
+                    vec![KeyVal::Int64(indice % 1000), KeyVal::Utf8(testo)].into_boxed_slice()
+                },
+            )),
+            1_000_000
+        );
+        assert_eq!(
+            hash_distinti((0_i64..1_000_000).map(|indice| {
+                vec![KeyVal::Int64(indice), KeyVal::Int64(indice * 7)].into_boxed_slice()
+            })),
+            1_000_000
+        );
+    }
     use crate::test_support::{assert_batches_identical, nullable_batch as batch};
     use plenora_core::arrow::array::Date32Array;
 
