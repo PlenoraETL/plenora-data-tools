@@ -807,7 +807,6 @@ dependencies = [
 name = "plenora-pipeline"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "plenora-core",
  "plenora-kernels-table",
  "serde",

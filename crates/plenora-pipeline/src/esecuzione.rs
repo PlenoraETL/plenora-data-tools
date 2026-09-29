@@ -155,9 +155,10 @@ fn normalize_large_utf8(batch: RecordBatch) -> Result<RecordBatch> {
     )
 }
 
-/// L'output del kernel ha nomi e tipi del contratto; riceve lo schema del
-/// contratto. La ricostruzione verifica anche che una colonna dichiarata
-/// non nulla non contenga null.
+/// L'output del kernel ha nomi, tipi e metadati (di campo e di schema) del
+/// contratto; riceve lo schema del contratto. Kernel e analisi concordano
+/// sui metadati: una divergenza è un difetto, non un dato. La ricostruzione
+/// verifica anche che una colonna dichiarata non nulla non contenga null.
 fn conforma(batch: &RecordBatch, contratto: &DataContract) -> Result<RecordBatch> {
     let attesi = contratto.schema.fields();
     let ottenuti = batch.schema();
@@ -172,6 +173,18 @@ fn conforma(batch: &RecordBatch, contratto: &DataContract) -> Result<RecordBatch
         return Err(PlenoraError::Internal(
             "l'output del kernel diverge dal contratto inferito in validazione \
              (nomi o tipi delle colonne)"
+                .to_owned(),
+        ));
+    }
+    let metadati_divergenti = contratto.schema.metadata() != ottenuti.metadata()
+        || attesi
+            .iter()
+            .zip(ottenuti.fields())
+            .any(|(atteso, ottenuto)| atteso.metadata() != ottenuto.metadata());
+    if metadati_divergenti {
+        return Err(PlenoraError::Internal(
+            "l'output del kernel diverge dal contratto inferito in validazione \
+             (metadati di campo o di schema)"
                 .to_owned(),
         ));
     }
@@ -446,8 +459,10 @@ mod tests {
     use plenora_core::arrow::schema::{DataType, Field, Schema};
     use serde_json::json;
 
-    use super::Instradamento;
+    use super::{conforma, Instradamento};
     use crate::{LimitiParziali, Passo, Pipeline};
+    use plenora_core::contract::DataContract;
+    use plenora_core::PlenoraError;
 
     fn tabella(modulo: i64) -> RecordBatch {
         let righe: Vec<i64> = (0..1000).map(|indice| (indice * 7) % modulo).collect();
@@ -549,5 +564,23 @@ mod tests {
             assert_eq!(memoria, spill, "{op}");
             assert!(memoria.num_rows() > 0, "{op}");
         }
+    }
+
+    #[test]
+    fn metadati_diversi_dal_contratto_sono_un_errore_interno() {
+        let batch = tabella(10);
+        let con_metadati = Arc::new(
+            batch
+                .schema()
+                .as_ref()
+                .clone()
+                .with_metadata([("chiave".to_owned(), "valore".to_owned())].into()),
+        );
+        let contratto = DataContract::tabular(con_metadati);
+        assert!(matches!(
+            conforma(&batch, &contratto),
+            Err(PlenoraError::Internal(_))
+        ));
+        assert!(conforma(&batch, &DataContract::tabular(batch.schema())).is_ok());
     }
 }

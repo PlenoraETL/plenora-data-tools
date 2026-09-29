@@ -451,16 +451,21 @@ di due input, le operazioni geo e quelle senza dispatch sono
 contro i limiti; contratti di output passo per passo con
 `analyze_table_contract`, un solo `FieldAllocator`, provenance delle
 diagnostiche per riga; colonne di ogni input e di ogni contratto contro
-`max_columns`; controlli che dipendono da schema e config insieme (chiavi e
-`group_by` leggibili come testo, formati delle date scrivibili senza fuso,
-`explode` in place su List non nullabile, chiave HMAC presente
-nell'ambiente). `table.pivot` e `table.transpose` si rifiutano: il loro
+`max_columns`; controlli che dipendono da schema e config insieme e che
+l'analisi dei kernel non ha ancora (chiavi di join, semi/anti, asof,
+`table_diff`, FK e reconcile leggibili come testo; riga intera di `distinct`
+senza `subset`; operatori testuali di `filter` e `conditional`; `date_format`
+di `type_cast` su target che non lo usano; `explode` con `empty_policy=drop`;
+`stable_fingerprint` senza colonne; `flatten_json` oltre `max_columns`;
+chiave HMAC presente nell'ambiente). Ogni regola sta in un posto solo: quando
+l'analisi la acquisisce si toglie dal runner (formati delle date,
+`order_column` ordinabile e `group_by` testuale sono già passati di là). `table.pivot` e `table.transpose` si rifiutano: il loro
 schema d'uscita dipende dai dati.
 
 ### Esecuzione
 
-Dopo ogni passo l'output del kernel deve avere nomi e tipi del contratto
-inferito (altrimenti `Internal`) e riceve lo schema del contratto; righe
+Dopo ogni passo l'output del kernel deve avere nomi, tipi e metadati (di
+campo e di schema) del contratto inferito (altrimenti `Internal`) e riceve lo schema del contratto; righe
 per arco, colonne, nomi ripetuti e fattore di espansione si controllano
 sui dati. Ogni tabella si libera appena ha girato il suo ultimo
 consumatore; un'uscita che nessuno usa si libera subito, un input mai usato
@@ -505,8 +510,7 @@ aggiungono nulla.
   `conditional` su tipi che `scalar_compare` non accetta, `==`/`!=` su
   colonne numeriche con valore non numerico in `conditional`, `amount` di
   `date_add` fuori scala, arietà, regex letterali e `substring` negativi di
-  `expression`, colonne `order_column` non ordinabili (in correzione
-  nell'analisi dei kernel). Falliscono con un errore esplicito, ma durante
+  `expression`. Falliscono con un errore esplicito, ma durante
   l'esecuzione. Rientro: predicati di tipo pubblici nei kernel, o gli stessi
   controlli nell'analisi.
 - **Chiave HMAC controllata in validazione**: la variabile d'ambiente può

@@ -18,7 +18,7 @@ use plenora_core::arrow::schema::{DataType, Field};
 use plenora_core::contract::DataContract;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::{
-    aggregation, cleansing, dates, filtering, fuzzy, reshape, strings, validate_output_name,
+    aggregation, cleansing, filtering, fuzzy, reshape, strings, validate_output_name,
     validate_text_convertible, Limits,
 };
 
@@ -129,9 +129,14 @@ fn validate_quantile(aggregation: &aggregation::Aggregation) -> Result<()> {
 }
 
 fn validate_date_formats(input: &str, output: Option<&str>, limits: &Limits) -> Result<()> {
-    dates::validate_format(input, "input_format", limits.max_string_bytes)?;
-    if let Some(output) = output {
-        dates::validate_format(output, "output_format", limits.max_string_bytes)?;
+    // Gli item strftime non riconosciuti li rifiuta l'analisi dei kernel;
+    // vuoto e lunghezza no.
+    for (formato, etichetta) in [(Some(input), "input_format"), (output, "output_format")] {
+        if let Some(formato) = formato {
+            if formato.is_empty() || formato.len() > limits.max_string_bytes {
+                return Err(PlenoraError::InvalidPlan(format!("{etichetta} non valido")));
+            }
+        }
     }
     Ok(())
 }
@@ -717,22 +722,6 @@ fn testuali<'a>(
         .try_for_each(|nome| testuale(contratto, nome, ruolo))
 }
 
-/// Un formato d'uscita scritto da una data senza fuso: `%z`, `%Z` e simili
-/// fanno fallire la scrittura, e il kernel va in panico alla prima riga.
-/// Si prova qui, scrivendo una data fissa.
-fn formato_senza_fuso(formato: &str, etichetta: &str) -> Result<()> {
-    use std::fmt::Write as _;
-    let data = chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
-        .and_then(|giorno| giorno.and_hms_opt(0, 0, 0))
-        .ok_or_else(|| PlenoraError::Internal("data di prova non costruibile".to_owned()))?;
-    let mut uscita = String::new();
-    write!(uscita, "{}", data.format(formato)).map_err(|_| {
-        PlenoraError::InvalidPlan(format!(
-            "{etichetta} non scrivibile da una data senza fuso (per esempio %z, %Z)"
-        ))
-    })
-}
-
 /// Gli operatori che il kernel valuta come testo richiedono una colonna
 /// leggibile come scalare testuale: `==`/`!=` fuori da Int64 e Float64,
 /// `contains`, `startswith`, `endswith`. Gli operatori ordinati passano da
@@ -762,7 +751,10 @@ fn verifica_operatore(
 impl PassoPreparato {
     /// Controlli che dipendono dagli schemi d'ingresso e dalla config, fatti
     /// dopo l'analisi: condizioni per cui il kernel fallirebbe comunque, su
-    /// qualunque dato non vuoto. Regola del runner: tutto ciò che schemi e
+    /// qualunque dato non vuoto, e che l'analisi dei kernel non ha ancora.
+    /// Ogni regola sta in un posto solo: quando l'analisi la acquisisce, si
+    /// toglie da qui (formati delle date, `order_column` ordinabile,
+    /// `group_by` testuale ed `explode` in place sono già passati di là). Regola del runner: tutto ciò che schemi e
     /// config rendono prevedibile fallisce in validazione, mai dopo che
     /// qualche passo ha girato.
     ///
@@ -796,25 +788,8 @@ impl PassoPreparato {
                             .to_owned(),
                     ));
                 }
-                let in_place = config
-                    .output_column
-                    .as_deref()
-                    .is_none_or(|uscita| uscita == config.column);
-                if in_place && !campo(primo, &config.column)?.is_nullable() {
-                    // Difetto del kernel (`select_rows_except` lascia un
-                    // segnaposto nullo sotto lo schema d'ingresso): fallirebbe
-                    // su ogni input non vuoto.
-                    return Err(PlenoraError::Unsupported(
-                        "explode in place su una colonna List non nullabile: usare un \
-                         output_column diverso"
-                            .to_owned(),
-                    ));
-                }
                 Ok(())
             }
-            Self::DateExtract(config) => config.date_format.as_deref().map_or(Ok(()), |formato| {
-                dates::validate_format(formato, "date_format", limits.max_string_bytes)
-            }),
             Self::TypeCast(config) => {
                 let usa_il_formato = matches!(
                     config.target_type,
@@ -823,30 +798,14 @@ impl PassoPreparato {
                         | cleansing::TargetType::Date32
                         | cleansing::TargetType::TimestampMillis
                 );
-                if config.date_format.is_empty() {
+                if config.date_format.is_empty() || usa_il_formato {
                     Ok(())
-                } else if usa_il_formato {
-                    dates::validate_format(
-                        &config.date_format,
-                        "date_format",
-                        limits.max_string_bytes,
-                    )
                 } else {
                     Err(PlenoraError::InvalidPlan(
                         "date_format ammesso solo per i target data e timestamp".to_owned(),
                     ))
                 }
             }
-            Self::DateFormat(config) => formato_senza_fuso(&config.output_format, "output_format"),
-            Self::DateAdd(config) => formato_senza_fuso(&config.output_format, "output_format"),
-            Self::Aggregate(config) => testuali(primo, &config.group_by, "aggregate.group_by"),
-            Self::WindowFunction(config) => {
-                testuali(primo, &config.group_by, "window_function.group_by")
-            }
-            Self::RollingWindow(config) => {
-                testuali(primo, &config.group_by, "rolling_window.group_by")
-            }
-            Self::Statistics(config) => testuali(primo, &config.group_by, "statistics.group_by"),
             Self::Distinct(config) => {
                 if config.subset.is_empty() {
                     // Senza subset la chiave e' la riga intera.

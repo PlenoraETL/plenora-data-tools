@@ -643,11 +643,28 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
     // primo passo girerebbe e l'errore arriverebbe dopo.
     let schema_nested = nested().schema();
     let casi: Vec<(SchemaRef, &str, Value)> = vec![
-        // Difetto del kernel: explode in place su List non nullabile.
+        // `order_column` di tipo List: non ordinabile (analisi dei kernel).
         (
             schema_nested.clone(),
-            "table.explode",
-            json!({"column": "lst"}),
+            "table.window_function",
+            json!({"column": "id", "function": "rank", "order_column": "lst",
+                   "output_column": "r"}),
+        ),
+        (
+            schema_nested.clone(),
+            "table.rolling_window",
+            json!({"column": "id", "function": "sum", "window": 2, "order_column": "lst",
+                   "output_column": "r"}),
+        ),
+        (
+            schema_nested.clone(),
+            "table.dedup_advanced",
+            json!({"subset": ["id"], "order_column": "lst"}),
+        ),
+        (
+            schema_nested.clone(),
+            "table.join",
+            json!({"left_keys": ["lst"], "right_keys": ["lst"], "how": "inner"}),
         ),
         (
             schema_nested.clone(),

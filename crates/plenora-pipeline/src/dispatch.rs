@@ -211,12 +211,12 @@ pub enum Instradamento {
 }
 
 impl PassoPreparato {
-    /// Nome dell'operazione di set per `spill::execute_set_operation`.
-    const fn nome_set_operation(&self) -> Option<&'static str> {
+    /// Operazione di set per `spill::execute_set_operation`.
+    const fn tipo_set_operation(&self) -> Option<setops::SetOperationKind> {
         match self {
-            Self::UnionDistinct(_) => Some("union_distinct"),
-            Self::Intersect(_) => Some("intersect"),
-            Self::Except(_) => Some("except"),
+            Self::UnionDistinct(_) => Some(setops::SetOperationKind::UnionDistinct),
+            Self::Intersect(_) => Some(setops::SetOperationKind::Intersect),
+            Self::Except(_) => Some(setops::SetOperationKind::Except),
             _ => None,
         }
     }
@@ -340,11 +340,11 @@ impl PassoPreparato {
         limits: &Limits,
         instradamento: Instradamento,
     ) -> Result<RecordBatch> {
-        if let Some(nome) = self.nome_set_operation() {
+        if let Some(tipo) = self.tipo_set_operation() {
             if instradamento == Instradamento::SpillSopraBudget
                 && spill::should_spill(left, right, limits)
             {
-                return spill::execute_set_operation(nome, left, right, limits);
+                return spill::execute_set_operation(tipo, left, right, limits);
             }
         }
         match self {
