@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
@@ -9,19 +8,18 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Schema};
 use serde::Deserialize;
 
-use crate::hashing::FastHasher;
+use crate::interning::KeyInterner;
 use crate::select_rows;
 use crate::Limits;
 use plenora_core::{PlenoraError, Result};
 
-/// Insieme delle chiavi di riga gia' viste/emesse: hash FxHash-style con
-/// finalizer splitmix64 (`FastHasher` di `joins.rs`, stesso profilo di costo
-/// dei join/aggregate: throughput su milioni di chiavi, non resistenza
-/// avversaria). `SipHash` (default std) dominerebbe build e probe.
-type KeySet = HashSet<Box<[u8]>, FastHasher>;
-
-fn key_set(capacity: usize) -> KeySet {
-    HashSet::with_capacity_and_hasher(capacity, FastHasher::default())
+/// Insieme delle chiavi di riga gia' viste/emesse: arena contigua con
+/// identita' decisa sui byte ([`KeyInterner`], con il proprio hash: vedi
+/// `interning::hash_chiave`). Una sola allocazione per tutte le chiavi
+/// invece di una `Box<[u8]>` per chiave distinta: e' il costo che dominava
+/// build e rilascio del set.
+fn key_set(capacity: usize) -> KeyInterner {
+    KeyInterner::with_capacity(capacity)
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,8 +339,7 @@ fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result
     let mut key = Vec::new();
     for row in 0..batch.num_rows() {
         encoder.encode_into(row, &mut key)?;
-        if predicate(&key) && !emitted.contains(key.as_slice()) {
-            emitted.insert(std::mem::take(&mut key).into_boxed_slice());
+        if predicate(&key) && emitted.inserisci(&key).1 {
             rows.push(row);
         }
     }
@@ -387,16 +384,14 @@ pub fn union_distinct(
     let mut left_rows = Vec::new();
     for row in 0..left.num_rows() {
         left_encoder.encode_into(row, &mut key)?;
-        if !emitted.contains(key.as_slice()) {
-            emitted.insert(std::mem::take(&mut key).into_boxed_slice());
+        if emitted.inserisci(&key).1 {
             left_rows.push(row);
         }
     }
     let mut right_rows = Vec::new();
     for row in 0..right.num_rows() {
         right_encoder.encode_into(row, &mut key)?;
-        if !emitted.contains(key.as_slice()) {
-            emitted.insert(std::mem::take(&mut key).into_boxed_slice());
+        if emitted.inserisci(&key).1 {
             right_rows.push(row);
         }
     }
@@ -405,15 +400,13 @@ pub fn union_distinct(
     concat_compatible(&selected_left, &selected_right, limits)
 }
 
-fn right_keys(right: &RecordBatch) -> Result<KeySet> {
+fn right_keys(right: &RecordBatch) -> Result<KeyInterner> {
     let encoder = CompactRowEncoder::try_new(right)?;
     let mut keys = key_set(right.num_rows());
     let mut key = Vec::new();
     for row in 0..right.num_rows() {
         encoder.encode_into(row, &mut key)?;
-        if !keys.contains(key.as_slice()) {
-            keys.insert(std::mem::take(&mut key).into_boxed_slice());
-        }
+        keys.inserisci(&key);
     }
     Ok(keys)
 }
@@ -432,16 +425,24 @@ pub fn intersect(
     _config: &SetOperation,
 ) -> Result<RecordBatch> {
     validate_schema(left, right)?;
-    let mut right = right_keys(right)?;
+    let right = right_keys(right)?;
     let encoder = CompactRowEncoder::try_new(left)?;
     let mut rows = Vec::with_capacity(left.num_rows().min(right.len()));
+    // Una chiave destra "consumata" equivale alla rimozione dal set: prova
+    // l'appartenenza e garantisce DISTINCT senza un secondo set per la
+    // sinistra.
+    let mut consumed = vec![false; right.len()];
     let mut key = Vec::new();
     for row in 0..left.num_rows() {
         encoder.encode_into(row, &mut key)?;
-        // Removing the exact byte key both proves membership and guarantees
-        // DISTINCT semantics without retaining a second HashSet for the left.
-        if right.remove(key.as_slice()) {
-            rows.push(row);
+        if let Some(index) = right.cerca(&key) {
+            let slot = consumed.get_mut(index).ok_or_else(|| {
+                PlenoraError::Internal("indice di chiave oltre il set destro".into())
+            })?;
+            if !*slot {
+                *slot = true;
+                rows.push(row);
+            }
         }
     }
     select_rows(left, &rows)
@@ -462,12 +463,14 @@ pub fn except(
 ) -> Result<RecordBatch> {
     validate_schema(left, right)?;
     let right = right_keys(right)?;
-    let rows = unique_rows(left, |key| !right.contains(key))?;
+    let rows = unique_rows(left, |key| right.cerca(key).is_none())?;
     select_rows(left, &rows)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use plenora_core::arrow::array::builder::StringDictionaryBuilder;
     use plenora_core::arrow::array::types::Int32Type;
     use plenora_core::arrow::schema::{DataType, Field};
