@@ -6,8 +6,8 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, clone_fields, contract_error, field_of, finish, produce, propagate_geometry,
-    require_scalar_string, require_utf8, rows_only, typed,
+    analyze_append, clone_fields, con_op, contract_error, field_of, finish, produce,
+    propagate_geometry, require_scalar_string, require_utf8, rows_only, typed,
 };
 use crate::cleansing;
 
@@ -150,6 +150,13 @@ pub(in crate::analyze) fn analyze_type_cast(
     let config: cleansing::TypeCast = typed(op, config)?;
     let input = &inputs[0];
     require_scalar_string(op, input, &config.column)?;
+    // Vuoto e' il parser multi-formato di default.
+    if !config.date_format.is_empty() {
+        con_op(
+            op,
+            crate::dates::validate_format_items(&config.date_format, "date_format"),
+        )?;
+    }
     let target = match config.target_type {
         cleansing::TargetType::Str
         | cleansing::TargetType::Date

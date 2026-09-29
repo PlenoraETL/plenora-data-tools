@@ -7,7 +7,8 @@ use plenora_core::Result;
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, require_scalar_string, sorted_only, typed,
+    analyze_append, check_output_name, con_op, contract_error, require_scalar_string, sorted_only,
+    typed,
 };
 use crate::utility;
 
@@ -64,6 +65,12 @@ pub(in crate::analyze) fn analyze_date_extract(
     let config: utility::DateExtract = typed(op, config)?;
     let input = &inputs[0];
     require_scalar_string(op, input, &config.column)?;
+    if let Some(format) = &config.date_format {
+        con_op(
+            op,
+            crate::dates::validate_format_items(format, "date_format"),
+        )?;
+    }
     let prefix = if config.prefix.is_empty() {
         format!("{}_", config.column)
     } else {

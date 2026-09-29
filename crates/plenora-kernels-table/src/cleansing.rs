@@ -1172,6 +1172,11 @@ pub fn type_cast_with_source_offset(
     config: &TypeCast,
     source_offset: u64,
 ) -> Result<RecordBatch> {
+    // Un formato non riconosciuto non combacia con nessun valore: errore di
+    // piano, non righe rifiutate. Vuoto e' il parser di default.
+    if !config.date_format.is_empty() {
+        crate::dates::validate_format_items(&config.date_format, "date_format")?;
+    }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     if matches!(config.errors, CastErrors::Coerce | CastErrors::Raise) {

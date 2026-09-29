@@ -5,7 +5,7 @@ use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
-use super::helpers::{analyze_append, check_output_name, require_scalar_string, typed};
+use super::helpers::{analyze_append, check_output_name, con_op, require_scalar_string, typed};
 use crate::dates;
 
 // ---------------------------------------------------------------------------
@@ -38,6 +38,11 @@ pub(in crate::analyze) fn analyze_date_format(
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let config: dates::DateFormat = typed(op, config)?;
+    con_op(
+        op,
+        dates::validate_format_items(&config.input_format, "input_format"),
+    )?;
+    con_op(op, dates::FormatoUscita::senza_fuso(&config.output_format))?;
     analyze_date_op(
         op,
         &inputs[0],
@@ -55,6 +60,11 @@ pub(in crate::analyze) fn analyze_date_add(
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let config: dates::DateAdd = typed(op, config)?;
+    con_op(
+        op,
+        dates::validate_format_items(&config.input_format, "input_format"),
+    )?;
+    con_op(op, dates::FormatoUscita::senza_fuso(&config.output_format))?;
     analyze_date_op(
         op,
         &inputs[0],
@@ -72,6 +82,10 @@ pub(in crate::analyze) fn analyze_date_diff(
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let config: dates::DateDiff = typed(op, config)?;
+    con_op(
+        op,
+        dates::validate_format_items(&config.input_format, "input_format"),
+    )?;
     analyze_date_op(
         op,
         &inputs[0],
@@ -89,10 +103,21 @@ pub(in crate::analyze) fn analyze_timezone_convert(
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let config: dates::TimezoneConvert = typed(op, config)?;
+    let mut target = None;
     for timezone in [&config.source_timezone, &config.target_timezone] {
-        timezone.parse::<chrono_tz::Tz>().map_err(|_| {
+        target = Some(timezone.parse::<chrono_tz::Tz>().map_err(|_| {
             PlenoraError::InvalidPlan(format!("{op}: timezone non valida: {timezone}"))
-        })?;
+        })?);
+    }
+    con_op(
+        op,
+        dates::validate_format_items(&config.input_format, "input_format"),
+    )?;
+    if let Some(target) = target {
+        con_op(
+            op,
+            dates::FormatoUscita::con_fuso(&config.output_format, target),
+        )?;
     }
     analyze_date_op(
         op,

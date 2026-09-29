@@ -234,6 +234,9 @@ fn parse_datetime_default(
 // bracci del parser sono blocchi completi, troppo grandi per `map_or_else`.
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
+    if let Some(format) = &config.date_format {
+        crate::dates::validate_format_items(format, "date_format")?;
+    }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     let mut rejections = Vec::new();

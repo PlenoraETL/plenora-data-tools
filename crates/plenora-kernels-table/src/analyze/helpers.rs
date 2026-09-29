@@ -35,6 +35,17 @@ pub(in crate::analyze) fn contract_error<T>(op: &str, message: impl Into<String>
     )))
 }
 
+/// Un controllo condiviso con il kernel, con l'operazione davanti al
+/// messaggio d'errore di piano.
+pub(in crate::analyze) fn con_op<T>(op: &str, esito: Result<T>) -> Result<T> {
+    esito.map_err(|errore| match errore {
+        PlenoraError::InvalidPlan(messaggio) => {
+            PlenoraError::InvalidPlan(format!("{op}: {messaggio}"))
+        }
+        altro => altro,
+    })
+}
+
 pub(in crate::analyze) fn unsupported<T>(op: &str, message: impl Into<String>) -> Result<T> {
     Err(PlenoraError::Unsupported(format!(
         "{op}: {}",
