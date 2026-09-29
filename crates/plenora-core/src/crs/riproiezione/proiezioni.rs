@@ -13,7 +13,7 @@
 //! - Hotine Oblique Mercator (variant B) con azimut e angolo del reticolo di
 //!   90 gradi (EPSG:2056): Swiss Oblique Mercator come PROJ ([`Svizzera`]).
 //!
-//! L'oracolo contro PROJ 9.5.1 e' in `tests/riproiezione_oracolo.rs`.
+//! L'oracolo contro PROJ 9.5.1 è in `crs/riproiezione/oracolo.rs`.
 
 // Formule trascritte dalla nota EPSG 7-2 e da Karney: i nomi brevi sono
 // quelli delle fonti, e la forma a*b+c resta quella delle fonti (mul_add

@@ -13,8 +13,8 @@
 //! caso vuoto e lascia decidere alle colonne quando ci sono.
 //!
 //! Questo controllo e' sul SORGENTE e non sul comportamento, per una ragione
-//! precisa: la classe ricompare ogni volta in un punto nuovo — i kernel
-//! tabellari, l'engine — e un test per sito non impedisce al prossimo sito
+//! precisa: la classe ricompare ogni volta in un punto nuovo — i kernel,
+//! il runner, `plenora-io` — e un test per sito non impedisce al prossimo sito
 //! di nascere sbagliato. Un controllo sulla forma del codice si', perche'
 //! fallisce quando qualcuno lo scrive.
 //!

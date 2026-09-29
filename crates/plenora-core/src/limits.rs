@@ -1,24 +1,34 @@
-//! Le tre famiglie di limiti (decisione D19, errori-e-limiti.md).
+//! I limiti, in tre famiglie.
 //!
-//! - [`RowLimits`]: espansioni logiche dei dati;
-//! - [`PlanLimits`]: complessità del piano, applicati durante il parsing;
-//! - [`Limits`]: contenitore unico (dati/runtime, piano, stringhe).
+//! - [`RowLimits`]: righe e fattore di espansione;
+//! - [`PlanLimits`]: complessità del piano, applicati in lettura e in
+//!   validazione;
+//! - [`Limits`]: contenitore unico (righe, piano, memoria, spill, stringhe,
+//!   geometrie).
+//!
+//! Il runner applica solo una parte dei campi e rende dichiarabili nel piano
+//! solo quelli (README, «Il piano»); i campi che nessun codice applica lo
+//! dicono nel proprio rustdoc.
 
 use serde::Deserialize;
 
 use crate::error::{PlenoraError, Result};
 
-/// Limiti di righe, semanticamente distinti (errori-e-limiti.md).
+/// Limiti di righe, semanticamente distinti.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RowLimits {
-    /// Righe lette da ciascuna sorgente di input.
+    /// Righe di ciascun input del piano. Default 10 milioni.
     pub max_input_rows: u64,
-    /// Righe dell'output finale.
+    /// Righe di ciascun output del piano. Default 10 milioni.
     pub max_output_rows: u64,
-    /// Righe su qualunque arco intermedio del DAG.
+    /// Righe di ogni tabella intermedia (uscita di un passo). Default 10
+    /// milioni.
     pub max_rows_per_edge: u64,
-    /// Fattore di espansione output/input; la base è per classe di operazione.
+    /// Fattore di espansione massimo, righe d'uscita su righe d'ingresso: la
+    /// base è l'unico ingresso per le unarie, il vincolo del catalogo
+    /// ([`crate::catalog::ExpansionConstraint`]) per le operazioni a due
+    /// ingressi. Finito e positivo; default 100.
     pub max_expansion_factor: f64,
 }
 
@@ -35,11 +45,10 @@ impl Default for RowLimits {
 
 /// Budget di memoria governato applicato quando il piano non lo dichiara.
 ///
-/// E' pubblica perche' `Plan Budget 1.0` (`PLAN-013`) obbliga a pubblicare il
-/// default applicato: senza, chi invia un piano non puo' verificare prima che
-/// il tetto del dominio sia `>=` al budget governato effettivo.
+/// 512 MiB. È pubblica perché chi scrive un piano deve poter sapere quale
+/// budget si applica quando non lo dichiara.
 ///
-/// E' una costante sola perche' serve anche ai kernel tabellari: due letterali
+/// È una costante sola perché serve anche ai kernel tabellari: due letterali
 /// divergerebbero in silenzio, con budget diversi applicati allo stesso piano.
 pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES: u64 = DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE as u64;
 
@@ -57,8 +66,8 @@ pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE: usize = 512 * 1024 * 1024;
 
 /// Quota di spill su disco applicata quando il piano non la dichiara.
 ///
-/// Costante sola per la stessa ragione di [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]:
-/// la usano anche i kernel tabellari e il percorso legacy.
+/// 8 GiB. Costante sola per la stessa ragione di
+/// [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: la usano anche i kernel tabellari.
 pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Partizioni di spill applicate quando il piano non le dichiara.
@@ -68,17 +77,29 @@ pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// 16 bit non lo sarebbe): chi lo cambia la riguarda.
 pub const DEFAULT_SPILL_PARTITIONS: u32 = 64;
 
-/// Limiti alla complessità del piano, applicati durante il parsing (errori-e-limiti.md).
+/// Limiti alla complessità del piano, controllati prima di qualunque dato.
+///
+/// Il runner applica sempre `PlanLimits::default()`: nel piano non sono
+/// dichiarabili.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanLimits {
+    /// Byte del testo JSON del piano, controllati prima della lettura.
+    /// Default 16 MiB.
     pub max_plan_json_bytes: usize,
+    /// Passi del piano. Default 1024.
     pub max_plan_nodes: usize,
+    /// Archi (ingressi dei passi). Default 4096.
     pub max_plan_edges: usize,
+    /// Profondità del grafo dei passi. Default 256.
     pub max_plan_depth: usize,
+    /// Consumatori di una stessa tabella. Default 64.
     pub max_fan_out: usize,
+    /// Input del piano. Default 16.
     pub max_inputs: usize,
+    /// Byte della config di un passo. Default 1 MiB.
     pub max_config_bytes_per_node: usize,
+    /// Byte di un nome (input, passo, output). Default 256.
     pub max_identifier_bytes: usize,
 }
 
@@ -97,38 +118,54 @@ impl Default for PlanLimits {
     }
 }
 
-/// Contenitore unico dei limiti (architettura.md).
+/// Contenitore unico dei limiti.
+///
+/// Si costruisce con `Limits::default()` e si controlla con
+/// [`Limits::validate`]; il runner parte dal default e sostituisce i soli
+/// campi dichiarati nel piano.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
+    /// Limiti di righe (in serde, campi al primo livello).
     #[serde(flatten)]
     pub rows: RowLimits,
+    /// Limiti di complessità del piano.
     #[serde(default)]
     pub plan: PlanLimits,
-    /// Budget memoria globale del piano (perimetro: architettura.md#memoria).
+    /// Budget di memoria del runner, in byte (README, «Budget di memoria»).
+    /// Default [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`].
     pub max_governed_memory_bytes: u64,
-    /// Quota spill su disco.
+    /// Quota di byte su disco per lo spill dei kernel e lo sfratto delle
+    /// tabelle del runner. Default [`DEFAULT_MAX_TEMP_BYTES`].
     pub max_temp_bytes: u64,
-    /// Partizioni di spill.
+    /// Partizioni dello spill, fra [`Limits::MIN_SPILL_PARTITIONS`] e
+    /// [`Limits::MAX_SPILL_PARTITIONS`]. Default
+    /// [`DEFAULT_SPILL_PARTITIONS`].
     pub spill_partitions: u32,
-    /// Grado massimo di parallelismo (risorsa, non proprietà dei nodi).
+    /// Grado massimo di parallelismo; `0` significa «numero di core logici».
     ///
-    /// `0` significa «numero di core logici». Si applica dimensionando il pool
-    /// Rayon del processo (`plenora_engine::parallelism::configure`), l'unica
-    /// leva che copre tutti i percorsi paralleli: e' configurazione **di
-    /// processo**, non per-piano.
+    /// Nessun codice di questo repository lo applica: nel progetto
+    /// d'origine l'engine dimensionava il pool Rayon del processo.
     pub max_parallelism: u32,
-    /// Limite per cella WKB.
+    /// Byte di una cella WKB. Default 64 MiB. Nessun codice di questo
+    /// repository lo applica.
     pub max_wkb_cell_bytes: u64,
-    /// Limite payload complessivo in lettura.
+    /// Byte complessivi letti. Default 16 GiB. Nessun codice di questo
+    /// repository lo applica.
     pub max_payload_bytes: u64,
-    /// Numero massimo di batch per arco.
+    /// Batch per arco. Default 65 536. Nessun codice di questo repository lo
+    /// applica: il runner ha un batch per tabella.
     pub max_batches: u64,
-    /// Profondità geometrica massima (componenti annidate).
+    /// Profondità d'annidamento delle geometrie (collezioni dentro
+    /// collezioni). Default 64, lo stesso valore delle costanti con cui
+    /// `plenora-io` e i kernel geo controllano il WKB; il campo in sé non è
+    /// letto da nessun codice.
     pub max_geometry_depth: u32,
-    /// Limite per singola stringa.
+    /// Byte di un testo: parametri testuali delle config tabellari e
+    /// stringhe prodotte da alcuni kernel (per esempio `string_pad`).
+    /// Default 16 MiB.
     pub max_string_bytes: usize,
-    /// Limite per pattern regex.
+    /// Byte di un pattern regex. Default 64 KiB.
     pub max_regex_bytes: usize,
 }
 
@@ -138,7 +175,7 @@ impl Limits {
     pub const MIN_SPILL_PARTITIONS: u32 = 2;
 
     /// Numero massimo di partizioni di spill: oltre, i file aperti e i buffer
-    /// per partizione costano piu' della memoria che lo spill libera.
+    /// per partizione costano più della memoria che lo spill libera.
     pub const MAX_SPILL_PARTITIONS: u32 = 4_096;
 
     /// Validazione dei limiti effettivi, in un punto solo.
@@ -202,10 +239,9 @@ impl Limits {
         // Limiti di piano: si rifiuta lo zero solo dove nessun documento
         // valido potrebbe rispettarlo. I tetti sui nodi (nodi, archi,
         // profondita', fan-out, byte di config) valgono legittimamente zero
-        // per un piano pass-through (`nodes: []`), che il formato ammette; il
-        // parse lo accetterebbe e la validazione lo rifiuterebbe, due verdetti
-        // discordi. Un piano invece ha sempre byte, almeno un input e
-        // identificatori non vuoti.
+        // per un piano senza passi: rifiutarli qui darebbe un verdetto
+        // discorde da quello del piano. Un piano invece ha sempre byte,
+        // almeno un input e identificatori non vuoti.
         if self.plan.max_plan_json_bytes == 0 {
             return nullo("plan.max_plan_json_bytes");
         }
@@ -250,9 +286,8 @@ impl Default for Limits {
 
 /// `true` se `output_rows` supera `base_rows * factor`.
 ///
-/// Nessun conteggio passa per `f64`: il fattore (un double per contratto,
-/// errori-e-limiti.md) si decompone in `mantissa * 2^esponente` e il
-/// confronto resta fra interi:
+/// Nessun conteggio passa per `f64`: il fattore (un `f64` per contratto) si
+/// decompone in `mantissa * 2^esponente` e il confronto resta fra interi:
 ///
 /// ```text
 ///   output_rows  >  base_rows * mantissa * 2^esponente
@@ -265,9 +300,9 @@ impl Default for Limits {
 /// [`Limits::validate`] lo esclude a monte, ma una soglia non ordinabile non
 /// puo' dire che il limite sia rispettato.
 ///
-/// Su tutta la base `u64` la funzione e' totale (`base * mantissa <= 2^117`).
-/// [`expansion_exceeded_wide`] prende una base a 128 bit e non e' pubblica,
-/// perche' fuori da quel dominio il prodotto puo' traboccare.
+/// Su tutta la base `u64` la funzione è totale (`base * mantissa <= 2^117`).
+/// La variante interna `expansion_exceeded_wide` prende una base a 128 bit e
+/// non è pubblica, perché fuori dal suo dominio il prodotto può traboccare.
 #[must_use]
 pub fn expansion_exceeded(output_rows: u64, base_rows: u64, factor: f64) -> bool {
     expansion_exceeded_wide(output_rows, u128::from(base_rows), factor)
@@ -335,11 +370,9 @@ mod tests {
 
     #[test]
     fn il_default_governato_viene_dall_autorita_ed_e_quello_pubblicato() {
-        // Il valore e' PUBBLICO: `Plan Budget 1.0` (`PLAN-013`) obbliga a
-        // pubblicarlo, perche' senza di esso chi invia un piano non puo'
-        // verificare prima di inviare che il tetto del dominio sia `>=` al
-        // budget effettivo. Cambiarlo e' una modifica osservabile, non un
-        // dettaglio, e questo test lo dice a chi ci prova.
+        // Il valore è PUBBLICO: è il budget di ogni piano che non lo
+        // dichiara. Cambiarlo è una modifica osservabile, non un dettaglio,
+        // e questo test lo dice a chi ci prova.
         assert_eq!(
             DEFAULT_MAX_GOVERNED_MEMORY_BYTES, 536_870_912,
             "512 MiB, ed e' il numero che la documentazione pubblica"
@@ -350,9 +383,9 @@ mod tests {
             Limits::default().max_governed_memory_bytes,
             DEFAULT_MAX_GOVERNED_MEMORY_BYTES
         );
-        // Gli altri due default del gruppo memoria sono pubblicati nella
-        // stessa tabella di `piano-v5.md`, e valgono le stesse due cose:
-        // il numero e' quello documentato, e la struttura lo prende da qui.
+        // Gli altri due default del gruppo memoria valgono le stesse due
+        // cose: il numero è quello documentato nel rustdoc, e la struttura lo
+        // prende da qui.
         assert_eq!(DEFAULT_MAX_TEMP_BYTES, 8_589_934_592, "8 GiB");
         assert_eq!(DEFAULT_SPILL_PARTITIONS, 64);
         let predefiniti = Limits::default();
@@ -362,10 +395,8 @@ mod tests {
 
     #[test]
     fn un_limite_di_piano_a_zero_e_rifiutato() {
-        // Gli otto tetti strutturali passano da `validate`. Se non ci
-        // passassero, un piano potrebbe dichiararne uno a zero, entrare
-        // nella forma canonica e quindi nel `plan_hash`, senza che nessuno
-        // lo dica.
+        // Gli otto tetti strutturali passano da `validate`: se non ci
+        // passassero, un limite a zero entrerebbe senza che nessuno lo dica.
         fn azzerato(muta: impl FnOnce(&mut PlanLimits)) -> Limits {
             let mut limits = Limits::default();
             muta(&mut limits.plan);
@@ -390,9 +421,7 @@ mod tests {
             let testo = errore.to_string();
             assert!(testo.contains(nome), "{nome}: {testo}");
         }
-        // Tetti sui NODI: zero e' legittimo, lo rispetta un pass-through.
-        // Rifiutarli qui darebbe un verdetto discorde da quello del parse,
-        // che un piano senza nodi lo accetta.
+        // Tetti sui NODI: zero è legittimo, lo rispetta un piano senza passi.
         let ammessi = [
             azzerato(|p| p.max_plan_nodes = 0),
             azzerato(|p| p.max_plan_edges = 0),

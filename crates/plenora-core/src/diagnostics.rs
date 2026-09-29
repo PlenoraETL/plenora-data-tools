@@ -1,112 +1,206 @@
+//! Diagnostica per riga: il payload `plenora-row-diagnostics-v1` che un
+//! kernel allega a un errore quando rifiuta righe
+//! ([`crate::PlenoraError::with_row_diagnostics`]).
+//!
+//! Il payload dice quante righe sono state rifiutate e perché (un codice
+//! per causa), con al più `examples_limit` esempi: indice di riga nella
+//! sorgente, codice, nome della colonna. Mai il valore della cella.
+//! [`RowDiagnostics::validate_for_emission`] ne verifica la coerenza prima di
+//! ogni serializzazione e dopo ogni lettura.
+//!
+//! I campi di scrittura (`scope` `write`, stati e esiti di scrittura) e la
+//! chiave di riga degli esempi vengono dal contratto di `plenora-data-tools`,
+//! dove li riempiva la pubblicazione verso un database; qui nessun codice li
+//! produce.
+
 use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+/// Nome e versione del contratto, valore obbligato di
+/// [`RowDiagnostics::contract`].
 pub const ROW_DIAGNOSTICS_CONTRACT: &str = "plenora-row-diagnostics-v1";
+/// Base degli indici di riga, valore obbligato di
+/// [`RowDiagnostics::index_basis`]: indice nella sorgente, da zero.
 pub const ROW_DIAGNOSTICS_INDEX_BASIS: &str = "source_row_zero_based";
 
+/// Dove sono state rifiutate le righe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowDiagnosticScope {
+    /// Leggendo o convertendo un valore (tutti i rifiuti dei kernel).
     Read,
+    /// Scrivendo verso una destinazione; richiede `input_total`,
+    /// `diagnostic_state_counts` e `write_outcome`. Qui nessun codice lo
+    /// produce.
     Write,
 }
 
+/// Quanto il payload conosce delle righe rifiutate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowDiagnosticsCompleteness {
+    /// Tutte le righe rifiutate sono contate: `total` è `observed_total`,
+    /// niente `knowledge_limits`.
     Complete,
+    /// Una parte: `knowledge_limits` dice perché, `total` se noto.
     Partial,
+    /// Il totale non è noto: `total` assente, `knowledge_limits` presente.
     Unknown,
 }
 
+/// Stato della chiave di riga di un esempio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowDiagnosticKeyState {
+    /// Il valore della chiave è riportato in `value`.
     Value,
+    /// Il valore esiste ma è oscurato.
     Redacted,
+    /// Il valore non è disponibile.
     Unavailable,
 }
 
+/// Valore di una chiave di riga: testo (al più 1024 caratteri), intero
+/// entro ±(2^53 - 1) o booleano.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RowDiagnosticKeyValue {
+    /// Testo.
     String(String),
+    /// Intero rappresentabile esattamente in un numero JSON.
     Integer(i64),
+    /// Booleano.
     Boolean(bool),
 }
 
+/// Chiave di riga di un esempio: il campo che la identifica e il suo stato.
+/// Qui nessun kernel la riempie.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RowDiagnosticKey {
+    /// Nome del campo chiave (1-256 caratteri).
     pub field: String,
+    /// Se il valore è riportato, oscurato o non disponibile.
     pub state: RowDiagnosticKeyState,
+    /// Il valore, presente se e solo se `state` è `Value`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<RowDiagnosticKeyValue>,
 }
 
+/// Esito di scrittura di una riga rifiutata (solo `scope` `write`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowDiagnosticWriteState {
+    /// La destinazione l'ha rifiutata.
     CertainlyRejected,
+    /// Non si è tentato di scriverla.
     CertainlyNotAttempted,
+    /// Scritta e poi annullata.
     CertainlyRolledBack,
+    /// Non si sa se sia stata scritta.
     EffectUnknown,
 }
 
+/// Una riga rifiutata, d'esempio.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RowDiagnosticExample {
+    /// Indice della riga nella sorgente, da zero; unico fra gli esempi.
     pub source_index: u64,
+    /// Codice della causa (minuscole, cifre, `.`, `_`, `-`; al più 128
+    /// byte), una delle chiavi di [`RowDiagnostics::counts`].
     pub cause: String,
+    /// Nome della colonna (1-256 caratteri), se la causa ne ha una.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<String>,
+    /// Chiave di riga (vedi [`RowDiagnosticKey`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<RowDiagnosticKey>,
+    /// Esito di scrittura: obbligatorio con `scope` `write`, vietato con
+    /// `read`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write_state: Option<RowDiagnosticWriteState>,
 }
 
+/// Un conteggio noto o dichiaratamente ignoto.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum KnownOrUnknownCount {
+    /// Conteggio noto, in `value`.
     Known { value: u64 },
+    /// Conteggio non noto.
     Unknown,
 }
 
+/// Righe rifiutate per esito di scrittura (solo `scope` `write`): la somma è
+/// `observed_total`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteDiagnosticStateCounts {
+    /// Rifiutate dalla destinazione.
     pub certainly_rejected: u64,
+    /// Non tentate.
     pub certainly_not_attempted: u64,
+    /// Annullate.
     pub certainly_rolled_back: u64,
+    /// Con effetto ignoto.
     pub effect_unknown: u64,
 }
 
+/// Esito di tutte le righe d'ingresso di una scrittura (solo `scope`
+/// `write`), per stato; i conteggi noti non superano `input_total`, e se
+/// sono tutti noti lo sommano.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RowDiagnosticWriteOutcome {
+    /// Righe rifiutate.
     pub certainly_rejected: KnownOrUnknownCount,
+    /// Righe non tentate.
     pub certainly_not_attempted: KnownOrUnknownCount,
+    /// Righe annullate.
     pub certainly_rolled_back: KnownOrUnknownCount,
+    /// Righe con effetto ignoto.
     pub effect_unknown: KnownOrUnknownCount,
 }
 
+/// Il payload `plenora-row-diagnostics-v1`.
+///
+/// Si serializza e si deserializza solo se
+/// [`RowDiagnostics::validate_for_emission`] lo accetta.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowDiagnostics {
+    /// Sempre [`ROW_DIAGNOSTICS_CONTRACT`].
     pub contract: String,
+    /// Lettura o scrittura.
     pub scope: RowDiagnosticScope,
+    /// Sempre [`ROW_DIAGNOSTICS_INDEX_BASIS`].
     pub index_basis: String,
+    /// Quanto il payload conosce delle righe rifiutate.
     pub completeness: RowDiagnosticsCompleteness,
+    /// Codici distinti che dicono perché il conteggio non è completo;
+    /// assente con `Complete`, non vuoto con `Partial` e `Unknown`.
     pub knowledge_limits: Option<Vec<String>>,
+    /// Righe rifiutate osservate: la somma di `counts`.
     pub observed_total: u64,
+    /// Righe rifiutate in tutto, se noto: positivo e non minore di
+    /// `observed_total`.
     pub total: Option<u64>,
+    /// Righe d'ingresso della scrittura (solo `scope` `write`).
     pub input_total: Option<u64>,
+    /// Righe rifiutate per codice di causa, ognuna almeno 1.
     pub counts: BTreeMap<String, u64>,
+    /// Numero massimo di esempi, almeno 1.
     pub examples_limit: u64,
+    /// Vero se e solo se gli esempi sono al limite e le righe osservate
+    /// sono di più.
     pub examples_truncated: bool,
+    /// Esempi, al più `examples_limit` e al più `observed_total`; con
+    /// `Complete` esattamente `min(observed_total, examples_limit)`.
     pub examples: Vec<RowDiagnosticExample>,
+    /// Righe rifiutate per esito di scrittura (solo `scope` `write`).
     pub diagnostic_state_counts: Option<WriteDiagnosticStateCounts>,
+    /// Esito di tutte le righe della scrittura (solo `scope` `write`).
     pub write_outcome: Option<RowDiagnosticWriteOutcome>,
 }
 
@@ -169,14 +263,15 @@ impl<'de> Deserialize<'de> for RowDiagnostics {
 }
 
 impl RowDiagnostics {
-    /// Valida schema e invarianti aritmetiche rc17 prima dell'emissione.
+    /// Valida schema e invarianti aritmetiche del contratto prima di
+    /// emettere o dopo aver letto il payload.
     ///
     /// # Errors
     ///
-    /// Restituisce un errore bounded, senza dati di riga, se il report non è
-    /// serializzabile secondo `plenora-row-diagnostics-v1`.
+    /// Restituisce un motivo breve, senza dati di riga, se il payload non è
+    /// valido secondo `plenora-row-diagnostics-v1`.
     // La sequenza resta intenzionalmente monolitica per essere confrontabile,
-    // nell'ordine, con il validator normativo rc17.
+    // nell'ordine, con il validatore del contratto del progetto d'origine.
     #[allow(clippy::too_many_lines)]
     pub fn validate_for_emission(&self) -> Result<(), &'static str> {
         if self.contract != ROW_DIAGNOSTICS_CONTRACT

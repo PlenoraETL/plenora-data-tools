@@ -1,12 +1,13 @@
-//! Contratto CRS fail-closed per gli adapter pubblici.
+//! Contratto CRS fail-closed.
 //!
 //! Le sole coordinate non identificano un CRS: il chiamante fornisce una
-//! definizione, che va risolta prima che un kernel spaziale giri. Qui vive il
-//! contratto indipendente dal backend. In questo workspace (Rust puro) non
-//! c'e' risoluzione PROJ: [`resolve_crs`] risolve solo gli identificatori
-//! d'autorita' della tabella dei CRS integrati (`epsg_integrati`, generata dal
-//! registro EPSG), senza riproiezione; ogni altra definizione fallisce chiusa
-//! e un [`ResolvedCrs`] diverso entra solo gia' risolto dal chiamante.
+//! definizione, che va risolta prima che un kernel spaziale giri. In questo
+//! workspace (Rust puro) non c'è risoluzione PROJ: [`resolve_crs`] risolve
+//! solo gli identificatori d'autorità della tabella dei CRS integrati
+//! (`epsg_integrati`, generata dal registro EPSG); ogni altra definizione
+//! fallisce chiusa e un [`ResolvedCrs`] diverso entra solo già risolto dal
+//! chiamante (README, «CRS integrati»). La riproiezione fra CRS integrati
+//! sta in [`riproiezione`].
 //!
 //! Per ogni CRS integrato ci sono due insiemi di limiti:
 //! - l'**area d'uso EPSG** ([`AreaOfUse`]), stretta: e' un metadato, nessun
@@ -31,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+/// Byte massimi di una definizione CRS testuale (64 KiB).
 pub const MAX_CRS_DEFINITION_BYTES: usize = 64 * 1024;
 
 /// Versione del registro EPSG da cui e' generata la tabella dei CRS
@@ -45,8 +47,8 @@ pub const BUILTIN_PROJ_VERSION: &str = epsg_integrati::VERSIONE_PROJ;
 /// arrotondato al centimetro): converte la precisione a terra in gradi.
 pub const METRES_PER_DEGREE_AT_EQUATOR: f64 = 111_319.49;
 
-/// Precisione a terra delle geometrie, in metri (decisione dell'utente,
-/// 2026-09-29): un centimetro.
+/// Precisione a terra delle geometrie, in metri: un centimetro (README,
+/// «Precisione delle operazioni geografiche: 1 cm a terra»).
 pub const GROUND_PRECISION_METRES: f64 = 0.01;
 
 /// Riquadro longitudine/latitudine in gradi, come il registro EPSG pubblica
@@ -56,13 +58,18 @@ pub const GROUND_PRECISION_METRES: f64 = 0.01;
 /// l'antimeridiano (per esempio NAD83, da 167.65 a -40.73).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeographicBounds {
+    /// Longitudine ovest, in gradi.
     pub west_longitude: f64,
+    /// Latitudine sud, in gradi.
     pub south_latitude: f64,
+    /// Longitudine est, in gradi.
     pub east_longitude: f64,
+    /// Latitudine nord, in gradi.
     pub north_latitude: f64,
 }
 
 impl GeographicBounds {
+    /// Riquadro dai quattro lati, senza verifiche.
     #[must_use]
     pub const fn new(
         west_longitude: f64,
@@ -107,13 +114,18 @@ impl GeographicBounds {
 /// lineare del CRS (il metro per ogni CRS integrato).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectedBounds {
+    /// Easting minimo.
     pub min_easting: f64,
+    /// Northing minimo.
     pub min_northing: f64,
+    /// Easting massimo.
     pub max_easting: f64,
+    /// Northing massimo.
     pub max_northing: f64,
 }
 
 impl ProjectedBounds {
+    /// Rettangolo dai quattro estremi, senza verifiche.
     #[must_use]
     pub const fn new(
         min_easting: f64,
@@ -145,24 +157,37 @@ impl ProjectedBounds {
 /// millimetro verso l'esterno.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AreaOfUse {
+    /// Riquadro lon/lat del registro.
     pub geographic: GeographicBounds,
+    /// Inviluppo nelle coordinate del CRS (solo proiettati).
     pub projected: Option<ProjectedBounds>,
 }
 
 /// Ellissoide del datum di un CRS.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ellipsoid {
+    /// Semiasse maggiore, in metri.
     pub semi_major_axis_metre: f64,
+    /// Inverso dello schiacciamento.
     pub inverse_flattening: f64,
 }
 
+/// Tipo di CRS: i soli due che il contratto ammette.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CrsKind {
+    /// Geografico: coordinate in gradi (longitudine, latitudine).
     Geographic,
+    /// Proiettato: coordinate in un'unità lineare (easting, northing).
     Projected,
 }
 
+/// Un CRS risolto: definizione originale, canonical PROJJSON, tipo, unità
+/// e, per i CRS della tabella integrata, area d'uso, dominio di validità ed
+/// ellissoide.
+///
+/// Nasce solo da una risoluzione verificata ([`resolve_crs`]) o, per un
+/// risolutore del chiamante, da [`ResolvedCrs::from_resolved_parts`].
 #[derive(Clone, Debug)]
 pub struct ResolvedCrs {
     definition: String,
@@ -183,9 +208,8 @@ pub struct ResolvedCrs {
 impl ResolvedCrs {
     /// Costruisce un CRS gia' risolto e verificato.
     ///
-    /// Riservato ai backend di risoluzione e ai test: il contratto resta che
-    /// solo una risoluzione verificata puo' produrre questi valori. Il
-    /// risolutore PROJ di plenora-data-tools non e' in questo workspace.
+    /// Riservato ai risolutori del chiamante e ai test: il contratto resta
+    /// che solo una risoluzione verificata può produrre questi valori.
     ///
     /// Il valore non porta area d'uso, dominio di validita' ne' ellissoide:
     /// per un CRS proiettato [`validate_geometry_domain`] controlla solo che
@@ -260,21 +284,27 @@ impl ResolvedCrs {
         }
     }
 
+    /// La definizione originale, nella forma in cui è stata data.
     #[must_use]
     pub fn definition(&self) -> &str {
         &self.definition
     }
 
+    /// Geografico o proiettato.
     #[must_use]
     pub const fn kind(&self) -> CrsKind {
         self.kind
     }
 
+    /// Metri per unità orizzontale: `Some(1.0)` per i proiettati della
+    /// tabella integrata, `None` per i geografici.
     #[must_use]
     pub const fn horizontal_unit_to_metre(&self) -> Option<f64> {
         self.horizontal_unit_to_metre
     }
 
+    /// Stesso CRS: canonical uguali, qualunque sia la forma della
+    /// definizione (`EPSG:4326` e la sua forma URN sono uguali).
     #[must_use]
     pub fn semantically_equals(&self, other: &Self) -> bool {
         self.canonical == other.canonical
@@ -291,8 +321,7 @@ impl ResolvedCrs {
         }
     }
 
-    /// Ordine degli assi dedotto dalla definizione canonica d'autorita'
-    /// (piano-v5.md#contratti-di-input, emendamento 2026-07-31).
+    /// Ordine degli assi dedotto dalla definizione canonica d'autorità.
     ///
     /// Combina le direzioni dei primi due assi di `coordinate_system` nel
     /// PROJJSON con il `kind`, senza tabelle di CRS: per esempio geographic
@@ -318,12 +347,13 @@ impl ResolvedCrs {
         }
     }
 
-    /// Ordine delle coordinate prodotto dalle pipeline PROJ normalizzate per
-    /// visualizzazione GIS, distinto dall'ordine nativo dell'autorita'.
+    /// Ordine delle coordinate normalizzato per l'uso GIS, distinto
+    /// dall'ordine nativo dell'autorità: sempre x/y (lon/lat o
+    /// easting/northing).
     ///
-    /// `proj_backend` usa `Proj::new_known_crs` e produce sempre x/y
-    /// normalizzato (lon/lat o easting/northing): descrive i byte di output;
-    /// [`Self::authority_axis_order`] resta il metadato della definizione.
+    /// È l'ordine dei byte delle geometrie in tutto il workspace, compresa
+    /// l'uscita di `geo.reproject`; [`Self::authority_axis_order`] resta il
+    /// metadato della definizione.
     #[must_use]
     pub const fn normalized_gis_axis_order(&self) -> AxisOrder {
         match self.kind {
@@ -332,12 +362,11 @@ impl ResolvedCrs {
         }
     }
 
-    /// SRID dedotto dalla definizione canonica d'autorita' (piano-v5.md#contratti-di-input,
-    /// emendamento 2026-07-31).
+    /// SRID dedotto dalla definizione canonica d'autorità.
     ///
-    /// `id.code` numerico (numero o stringa numerica) quando `id.authority` e'
+    /// `id.code` numerico (numero o stringa numerica) quando `id.authority` è
     /// una stringa. Codice non numerico, oltre `u32` o `id` assente danno
-    /// `None`: lo `srid` resta non emesso (chiave opzionale R5.2), mai
+    /// `None`: lo `srid` resta non emesso (la chiave è opzionale), mai
     /// indovinato.
     #[must_use]
     pub fn authority_srid(&self) -> Option<u32> {
@@ -363,10 +392,10 @@ impl ResolvedCrs {
 
 /// SRID da un identificatore testuale `authority:code` (es. `EPSG:4326`).
 ///
-/// Serve al trasporto legacy, che porta la sola definizione senza un
-/// [`ResolvedCrs`] (piano-v5.md#contratti-di-input, emendamento 2026-07-31).
-/// Ogni altra forma (parti vuote, codice non numerico, oltre `u32`) da'
-/// `None`, mai un valore indovinato. E' l'unica fonte di questo parsing.
+/// Serve dove c'è la sola definizione senza un [`ResolvedCrs`] (il blocco
+/// canonico da una definizione, il confronto fra `crs_id` e `srid`). Ogni
+/// altra forma (parti vuote, codice non numerico, oltre `u32`) dà `None`,
+/// mai un valore indovinato. È l'unica fonte di questo parsing.
 #[must_use]
 pub fn authority_code_srid(crs_id: &str) -> Option<u32> {
     let (authority, code) = crs_id.rsplit_once(':')?;
@@ -378,8 +407,8 @@ pub fn authority_code_srid(crs_id: &str) -> Option<u32> {
 
 /// Coppia `authority:code` semplice, con codice numerico.
 ///
-/// Le forme multi-segmento come gli URN non vengono reinterpretate: il
-/// chiamante che dispone di PROJ puo' risolverle semanticamente.
+/// Le forme multi-segmento come gli URN non vengono reinterpretate: si
+/// confrontano risolvendole ([`resolve_crs`] o il risolutore del chiamante).
 #[must_use]
 pub fn authority_code_identifier(crs_id: &str) -> Option<(&str, u32)> {
     let (authority, code) = crs_id.rsplit_once(':')?;
@@ -393,12 +422,12 @@ pub fn authority_code_identifier(crs_id: &str) -> Option<(&str, u32)> {
     Some((authority, code.parse().ok()?))
 }
 
-/// Forma testuale di una definizione CRS (piano-v5.md#contratti-di-input,
-/// emendamento 2026-07-31, classe B, emissione).
+/// Forma testuale di una definizione CRS.
 ///
-/// Classifica la sola stringa, senza backend: sceglie per il blocco canonico
-/// R2.2 fra `crs_id` e `crs_definition`+`crs_definition_format`, come
-/// passthrough idempotente della lineage, mai una riscrittura.
+/// Classifica la sola stringa, senza risolverla: sceglie per il blocco
+/// canonico `plenora.geometry.*` fra `crs_id` e
+/// `crs_definition`+`crs_definition_format`, come passaggio idempotente
+/// della lineage, mai una riscrittura.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DefinitionForm {
     /// Identificatore d'autorita': UNA SOLA coppia `auth:code` senza spazi,
@@ -419,11 +448,11 @@ pub enum DefinitionForm {
     /// (`PROJCRS`/`PROJECTEDCRS`, `GEODCRS`/`GEODETICCRS`,
     /// `GEOGCRS`/`GEOGRAPHICCRS`, `VERTCRS`/`VERTICALCRS`,
     /// `ENGCRS`/`ENGINEERINGCRS`) e le altre radici esplicitamente elencate
-    /// in [`WKT2_KEYWORDS`].
+    /// nell'elenco delle parole chiave WKT2 del modulo.
     Wkt2,
     /// Qualunque altra forma (es. proj-string `+proj=...`): in emissione
-    /// conserva il comportamento storico (`crs_id`) — limite documentato
-    /// preesistente: la tabella §2 non ha un formato proj.
+    /// finisce in `crs_id`. Limite dichiarato: le chiavi canoniche non hanno
+    /// un formato proj-string.
     Other,
 }
 
@@ -475,9 +504,8 @@ fn starts_with_wkt_keyword(trimmed: &str, keywords: &[&str]) -> bool {
 
 /// Classifica una definizione CRS testuale (vedi [`DefinitionForm`]).
 ///
-/// Funzione pura della stringa: nessun backend, mai un errore — le forme
-/// non riconosciute cadono in [`DefinitionForm::Other`], che preserva il
-/// comportamento storico.
+/// Funzione pura della stringa: nessuna risoluzione, mai un errore. Le
+/// forme non riconosciute cadono in [`DefinitionForm::Other`].
 #[must_use]
 pub fn definition_form(definition: &str) -> DefinitionForm {
     if let Ok(value) = serde_json::from_str::<Value>(definition) {
@@ -507,8 +535,8 @@ pub fn definition_form(definition: &str) -> DefinitionForm {
 /// Motivo strutturale di una violazione del dominio geografico.
 ///
 /// Nomina l'asse e la natura del difetto, **mai il valore**: la coordinata e'
-/// un dato di cella e non puo' comparire in un messaggio d'errore
-/// (errori-e-limiti.md#privacy-dei-messaggi). Chi diagnostica ha comunque
+/// un dato di cella e non può comparire in un messaggio d'errore (errori
+/// senza dati). Chi diagnostica ha comunque
 /// l'informazione che serve — quale asse, e se il difetto e' un valore non
 /// finito o un valore fuori intervallo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -550,63 +578,93 @@ impl fmt::Display for CoordinateDomainViolation {
     }
 }
 
+/// Errore CRS, con un codice stabile in testa al messaggio; diventa
+/// [`PlenoraError::Crs`].
 #[derive(Debug, Error)]
 pub enum CrsError {
+    /// Definizione assente o vuota.
     #[error("CRS_REQUIRED: {name} e' obbligatorio")]
     Required { name: &'static str },
+    /// Definizione oltre [`MAX_CRS_DEFINITION_BYTES`] o con NUL.
     #[error("CRS_INVALID: {name}: {reason}")]
     InvalidDefinition { name: &'static str, reason: String },
+    /// Definizione non d'autorità (WKT, WKT2, PROJJSON, proj-string), che
+    /// qui non si risolve.
     #[error("CRS_BACKEND_UNAVAILABLE: la validazione CRS richiede il backend PROJ")]
     BackendUnavailable,
+    /// Identificatore d'autorità fuori dalla tabella dei CRS integrati.
     #[error(
         "CRS_NOT_BUILTIN: l'identificatore d'autorita' non e' nella tabella dei CRS integrati \
          (senza backend PROJ non si risolve altro)"
     )]
     NotBuiltin,
+    /// Tipo PROJJSON diverso da geografico o proiettato. Nessun codice di
+    /// questo repository lo produce: lo produceva il risolutore PROJ del
+    /// progetto d'origine.
     #[error("CRS_TYPE_UNSUPPORTED: tipo PROJJSON {0} non supportato")]
     UnsupportedType(String),
+    /// CRS proiettato senza un'unità lineare orizzontale finita e positiva.
     #[error(
         "LINEAR_UNIT_REQUIRED: il CRS proiettato non dichiara un'unita' lineare orizzontale valida"
     )]
     MissingLinearUnit,
+    /// L'operazione richiede un CRS proiettato.
     #[error("PROJECTED_CRS_REQUIRED: ricevuto CRS {actual:?}")]
     ProjectedRequired { actual: CrsKind },
+    /// L'operazione richiede un CRS geografico.
     #[error("GEOGRAPHIC_CRS_REQUIRED: ricevuto CRS {actual:?}")]
     GeographicRequired { actual: CrsKind },
+    /// Gli ingressi di un'operazione `SameProjected` hanno CRS diversi.
     #[error("CRS_MISMATCH: gli input non usano lo stesso CRS")]
     Mismatch,
+    /// Coordinata non finita o fuori dal dominio del CRS.
     #[error("COORDINATE_OUT_OF_CRS_DOMAIN: {violation}")]
     CoordinateOutOfDomain {
         violation: CoordinateDomainViolation,
     },
+    /// Contratto del requisito violato (nessun ingresso, numero di CRS
+    /// sbagliato).
     #[error("CRS_CONTRACT_INVALID: {0}")]
     InvalidContract(&'static str),
+    /// Riproiezione: nessun percorso di trasformazioni EPSG fra i due datum.
     #[error(
         "REPROJECTION_PATH_UNAVAILABLE: nessun percorso di trasformazioni EPSG collega i due datum (senza griglie, o con le sole griglie NTv2 fornite)"
     )]
     ReprojectionPathUnavailable,
+    /// Riproiezione: il percorso migliore è meno accurato di 1 cm e la
+    /// config non dichiara `accuratezza_accettata_m` sufficiente.
     #[error(
         "REPROJECTION_ACCURACY_NOT_ACCEPTED: il percorso migliore fra i due datum ha accuratezza EPSG di {accuracy_m} m, oltre la precisione di 0.01 m: dichiarare `accuratezza_accettata_m` almeno pari, e il risultato vale solo entro quella accuratezza"
     )]
     ReprojectionAccuracyNotAccepted { accuracy_m: f64 },
+    /// Riproiezione: config non valida.
     #[error("REPROJECTION_CONFIG_INVALID: {0}")]
     ReprojectionConfig(&'static str),
+    /// Riproiezione: la geometria esce dall'area d'uso di ogni percorso
+    /// ammesso.
     #[error(
         "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA: la geometria esce dall'area d'uso di ogni percorso ammesso fra i due datum (o dalle griglie fornite)"
     )]
     ReprojectionOutsideTransformationArea,
+    /// Riproiezione: vertici della stessa geometria in aree d'uso che
+    /// preferiscono percorsi diversi.
     #[error(
         "REPROJECTION_MIXED_TRANSFORMATION_AREAS: i vertici della geometria preferiscono percorsi diversi fra i due datum (aree d'uso diverse): una sola trasformazione per tutti darebbe ad alcuni vertici parametri di un'altra area, oltre l'accuratezza dichiarata; dividere la geometria o fissare `trasformazioni`"
     )]
     ReprojectionMixedTransformationAreas,
+    /// Riproiezione: un'inversa iterativa non converge.
     #[error("REPROJECTION_NOT_CONVERGED: un'inversa iterativa non ha raggiunto la precisione")]
     ReprojectionNotConverged,
+    /// Riproiezione: un lato non si approssima entro la precisione con la
+    /// densificazione ammessa.
     #[error(
         "REPROJECTION_EDGE_NOT_CONVERGED: un lato non si approssima entro la precisione con la densificazione ammessa (discontinuita' della proiezione, per esempio l'antimeridiano, o limite di vertici)"
     )]
     ReprojectionEdgeNotConverged,
+    /// Griglia `NTv2`: il file non si legge.
     #[error("NTV2_GRID_UNREADABLE: il file della griglia non si legge")]
     GridUnreadable,
+    /// Griglia `NTv2`: il contenuto non è una griglia valida.
     #[error("NTV2_GRID_INVALID: {reason}")]
     GridInvalid { reason: &'static str },
 }
@@ -682,7 +740,8 @@ fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsEr
 ///   nella tabella (codice sconosciuto, altra autorita', forma non
 ///   riconosciuta);
 /// - [`CrsError::BackendUnavailable`] per ogni definizione non d'autorita'
-///   (WKT, WKT2, PROJJSON, proj-string): verificarla richiede PROJ.
+///   (WKT, WKT2, PROJJSON, proj-string): verificarla richiederebbe PROJ,
+///   che qui non c'è.
 pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, CrsError> {
     validate_definition_text(definition, name)?;
     if definition_form(definition) != DefinitionForm::AuthorityCode {
@@ -963,7 +1022,7 @@ mod tests {
     /// Sentinella di privacy: la coordinata che ha violato il dominio e' un
     /// dato di cella e non deve comparire in nessuna forma del messaggio,
     /// ne' nella variante CRS ne' nell'errore unificato che la avvolge
-    /// (errori-e-limiti.md#privacy-dei-messaggi).
+    /// (errori senza dati).
     #[test]
     fn il_messaggio_di_dominio_non_riporta_la_coordinata() {
         let geographic = geographic();
@@ -1015,8 +1074,7 @@ mod tests {
         assert!(error.to_string().contains("CRS_BACKEND_UNAVAILABLE"));
     }
 
-    // --- Deduzione axis_order/srid dalla definizione canonica (piano-v5.md#contratti-di-input,
-    // emendamento 2026-07-31) ---------------------------------------------
+    // --- Deduzione axis_order/srid dalla definizione canonica ------------
 
     #[test]
     fn authority_axis_order_and_srid_from_realistic_epsg_4326() {
@@ -1149,7 +1207,7 @@ mod tests {
         assert_eq!(one_axis.authority_axis_order(), None);
         // Due direzioni presenti ma fuori dalle quattro combinazioni
         // canoniche sono un ordine noto non canonico: `other`, non
-        // `unknown` (R4.2/R4.3.3).
+        // `unknown`.
         let non_canonical = ResolvedCrs::from_resolved_parts(
             "EPSG:32632".to_owned(),
             serde_json::json!({
@@ -1303,8 +1361,8 @@ mod tests {
                 "{definition}"
             );
         }
-        // proj-string e forme degeneri: Other (comportamento storico,
-        // `crs_id` — la tabella §2 non ha formato proj).
+        // proj-string e forme degeneri: Other (in emissione `crs_id`: le
+        // chiavi canoniche non hanno un formato proj-string).
         assert_eq!(
             definition_form("+proj=longlat +datum=WGS84 +no_defs"),
             DefinitionForm::Other

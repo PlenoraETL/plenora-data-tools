@@ -1,25 +1,27 @@
-//! Errori unificati (architettura.md).
+//! L'errore unico del workspace, [`PlenoraError`], e i suoi assi.
 //!
-//! Regola: nessun dato sensibile negli errori — contesto (nodo, operazione,
-//! motivo), mai valori. La modalità diagnostica opt-in (errori-e-limiti.md) è aggiunta
-//! dall'executor, non da queste varianti.
+//! Regola: nessun dato negli errori. Il testo porta il contesto (passo,
+//! operazione, colonna per nome, motivo), mai valori di righe o colonne,
+//! nemmeno in diagnostica; gli indici e i conteggi delle righe rifiutate
+//! viaggiano nel payload strutturato di [`PlenoraError::RowDiagnostics`].
 //!
-//! Ogni errore espone una [`ErrorCategory`] stabile
-//! ([`PlenoraError::category`]); `Execution` e `Cancelled` portano
-//! l'`execution_id` dell'esecuzione che li ha prodotti (vuoto fuori da
-//! un'esecuzione DAG, e allora il `Display` lo omette).
+//! Ogni errore espone quattro assi indipendenti, con valori da enumerazioni
+//! chiuse e nomi stabili: categoria ([`ErrorCategory`],
+//! [`PlenoraError::category`]), fase ([`ErrorPhase`]), effetto restato sul
+//! supporto ([`RemoteEffect`]) e disposizione al ritentativo
+//! ([`RetryDisposition`]). Un booleano `retryable()` non basterebbe: un
+//! timeout in lettura è ritentabile, lo stesso timeout dopo l'invio di un
+//! commit no.
 //!
-//! I quattro assi indipendenti di R9.1 (§9, proposta in attesa di ratifica):
-//! categoria, fase ([`ErrorPhase`]), effetto remoto ([`RemoteEffect`]) e
-//! disposizione di retry ([`RetryDisposition`]), da enumerazioni canoniche
-//! (R9.5/R9.6, con una deviazione dichiarata per le categorie, vedi
-//! [`ErrorCategory`]). Un booleano `retryable()` non basterebbe: un timeout
-//! in lettura e' ritentabile, lo stesso timeout dopo l'invio di un commit no
-//! (R9.7).
+//! La fase derivata dalla variante si raffina con [`PlenoraError::Tagged`]
+//! dove chi produce l'errore conosce il momento esatto (oggi i kernel che
+//! rifiutano righe con un valore non convertibile taggano
+//! [`ErrorPhase::Read`]); gli altri assi restano delegati alla sorgente.
 //!
-//! La fase derivata per variante si raffina ai confini che conoscono il
-//! momento esatto con [`PlenoraError::Tagged`] (piano-v5.md#contratti-di-input,
-//! BLOCK-03); gli altri assi restano delegati alla sorgente.
+//! Alcune varianti vengono dall'engine, dalla CLI e dal trasporto fra
+//! processi di `plenora-data-tools` e qui nessun codice le produce
+//! (`Execution`, `Cancelled`, `Protocol`, `Timeout`): lo dice il rustdoc di
+//! ciascuna.
 
 use std::fmt;
 use std::time::Duration;
@@ -30,22 +32,24 @@ use crate::diagnostics::RowDiagnostics;
 
 /// Errore unico del workspace.
 ///
-/// Nomi delle varianti allineati all'enumerazione canonica §9 (Appendice C,
-/// R9.5, con la deviazione dichiarata su [`ErrorCategory`]). I testi
-/// `Display` ("contract violation", "step failed at node", "arrow error",
-/// ...) non seguono i nomi delle varianti e sono stabili per i consumatori
-/// testuali.
+/// I nomi delle varianti seguono le categorie canoniche ([`ErrorCategory`]).
+/// I testi `Display` ("contract violation", "step failed at node", "arrow
+/// error", ...) non seguono i nomi delle varianti e sono stabili per chi
+/// legge il testo.
+///
 /// Approssimazione dichiarata: `DataMapping` fonde errori JSON e Arrow e
 /// perde la sorgente tipizzata (resta nel testo) e la distinzione di fase a
-/// livello di variante, recuperata ai confini da [`PlenoraError::Tagged`].
+/// livello di variante, recuperata dove serve con [`PlenoraError::Tagged`].
 #[derive(Debug, Error)]
 pub enum PlenoraError {
     /// Piano o configurazione di un nodo malformati o incoerenti.
     #[error("contract violation: {0}")]
     InvalidPlan(String),
 
-    /// Operazione non supportata (id sconosciuto, maturity insufficiente,
-    /// capability mancante, destinazione di publish non supportata).
+    /// Operazione o caso non supportato: id sconosciuto, operazione che il
+    /// runner non esegue, parametro o tipo che il kernel non tratta,
+    /// geometria oltre la precisione dichiarata dove l'errore attraversa il
+    /// confine con `PlenoraError`.
     #[error("unsupported operation: {0}")]
     Unsupported(String),
 
@@ -53,17 +57,17 @@ pub enum PlenoraError {
     #[error("schema violation: {0}")]
     Schema(String),
 
-    /// Un valore non e' rappresentabile nella destinazione (errore Arrow o
-    /// di deserializzazione JSON di piano/config).
+    /// Un valore non è rappresentabile nella destinazione: errore Arrow
+    /// (solo il codice della variante, [`arrow_error_code`]), lettura JSON
+    /// di piano o config, valore di cella rifiutato da un kernel.
     #[error("{0}")]
     DataMapping(String),
 
-    /// Fallimento di un nodo durante l'esecuzione.
+    /// Fallimento di un nodo durante l'esecuzione di un DAG.
     ///
-    /// `execution_id` (errori-e-limiti.md, errori arricchiti) identifica l'esecuzione DAG che ha
-    /// prodotto l'errore: e' riempito dall'executor al confine di
-    /// dispatch/uscita; resta vuoto per errori costruiti fuori da
-    /// un'esecuzione DAG (percorso legacy `table_engine`).
+    /// Nessun codice di questo repository la produce: la costruiva l'executor
+    /// di `plenora-data-tools`, che riempiva `execution_id` al confine del
+    /// nodo. Con `execution_id` vuoto il `Display` lo omette.
     #[error(
         "step failed at node `{node}` (operation `{operation}`{}): {reason}",
         execution_suffix(execution_id)
@@ -75,14 +79,19 @@ pub enum PlenoraError {
         reason: String,
     },
 
-    /// Errore CRS (irrisolvibile, requisito non soddisfatto, dominio violato).
+    /// Errore CRS: identificatore non risolvibile (anche un codice fuori
+    /// dalla tabella integrata o una definizione WKT/PROJJSON), requisito
+    /// dell'operazione non soddisfatto, coordinate fuori dominio, percorso
+    /// di riproiezione rifiutato.
     #[error("CRS error: {0}")]
     Crs(String),
 
-    /// Esecuzione annullata dal chiamante (errori-e-limiti.md#cancellazione): il token di
-    /// cancellazione e' stato osservato a un confine cooperativo
-    /// dell'executor e nessun output e' stato pubblicato (invariante publish atomico).
-    /// Contesto come `Execution` — nodo, operazione, `execution_id` — mai dati.
+    /// Esecuzione annullata dal chiamante.
+    ///
+    /// Nessun codice di questo repository la produce: qui non c'è un
+    /// meccanismo di cancellazione (lo aveva l'executor di
+    /// `plenora-data-tools`). Contesto come `Execution` (nodo, operazione,
+    /// `execution_id`), mai dati.
     #[error(
         "cancelled at node `{node}` (operation `{operation}`{}): {reason}",
         execution_suffix(execution_id)
@@ -94,13 +103,13 @@ pub enum PlenoraError {
         reason: String,
     },
 
-    /// Limite di RISORSA superato durante l'esecuzione: righe, byte in
-    /// memoria, byte temporanei, fattore di espansione.
+    /// Limite di risorsa superato: righe, byte in memoria, byte temporanei,
+    /// fattore di espansione, lavoro massimo di un kernel.
     ///
-    /// Distinta da [`PlenoraError::InvalidPlan`]: qui il piano e' corretto e
+    /// Distinta da [`PlenoraError::InvalidPlan`]: qui il piano è corretto e
     /// sono i dati a non entrare nel budget, quindi chi orchestra rilancia con
-    /// piu' budget o meno dati invece di correggere il piano. E' l'unica
-    /// variante con categoria `resource_limit` (R9.1).
+    /// più budget o meno dati invece di correggere il piano. È l'unica
+    /// variante con categoria `resource_limit`.
     #[error("resource limit: {0}")]
     ResourceLimit(String),
 
@@ -110,61 +119,66 @@ pub enum PlenoraError {
 
     /// Scambio malformato o fuori sequenza su un canale tra processi.
     ///
-    /// Riguarda la conversazione, non il supporto: un canale che si chiude a
-    /// meta' e' [`PlenoraError::Io`]. Testo strutturale (quale confine, quale
-    /// attesa), mai il contenuto del messaggio.
+    /// Nessun codice di questo repository la produce: il canale era quello
+    /// dell'esecuzione isolata di `plenora-data-tools`. Riguarda la
+    /// conversazione, non il supporto: un canale che si chiude a metà è
+    /// [`PlenoraError::Io`]. Testo strutturale (quale confine, quale attesa),
+    /// mai il contenuto del messaggio.
     #[error("protocol error: {0}")]
     Protocol(String),
 
-    /// Una scadenza dichiarata e' passata senza che l'attesa si chiudesse.
+    /// Una scadenza dichiarata è passata senza che l'attesa si chiudesse.
     ///
-    /// Non dice che l'altro capo sia morto: dice che non ha risposto entro
-    /// il tempo che gli e' stato dato. Chi sceglie la scadenza deve
-    /// nominarla nel testo, altrimenti l'errore non e' diagnosticabile.
+    /// Nessun codice di questo repository la produce. Non dice che l'altro
+    /// capo sia morto: dice che non ha risposto entro il tempo che gli è
+    /// stato dato. Chi sceglie la scadenza deve nominarla nel testo,
+    /// altrimenti l'errore non è diagnosticabile.
     #[error("timeout: {0}")]
     Timeout(String),
 
-    /// Lo stato osservato al commit non e' quello su cui la decisione e'
-    /// stata presa.
+    /// La destinazione di una scrittura è occupata.
     ///
-    /// Il caso concreto e' il no-clobber del publish: la destinazione e'
-    /// comparsa tra il controllo e il rename. Distinta da
-    /// [`PlenoraError::Io`] perche' non c'e' nulla di rotto — c'e' qualcun
-    /// altro — e distinta da `InvalidPlan` perche' lo stesso piano, su una
-    /// destinazione libera, e' corretto.
+    /// Il caso concreto è la scrittura atomica di `plenora-io` senza
+    /// sovrascrittura: la destinazione esiste al controllo anticipato, o è
+    /// comparsa fra il controllo e la rinomina, o è il file di un altro
+    /// output appena scritto dallo stesso piano. Distinta da
+    /// [`PlenoraError::Io`] perché non c'è nulla di rotto (c'è qualcun
+    /// altro), e da `InvalidPlan` perché lo stesso piano, su una destinazione
+    /// libera, è corretto.
     #[error("conflict: {0}")]
     Conflict(String),
 
-    /// La configurazione dell'ambiente, non il piano, e' incoerente.
+    /// La configurazione dell'ambiente, non il piano, è incoerente.
     ///
-    /// Il piano descrive **cosa** calcolare ed e' portabile, la configurazione
-    /// **dove**: si correggono in posti diversi, e la categoria lo dice. L'exit
-    /// code `2` e' condiviso con `InvalidPlan` come raggruppamento grossolano
-    /// («qualcosa a monte va sistemato»); il *cosa* sta in `error.category`.
+    /// Il piano descrive **che cosa** calcolare ed è portabile, la
+    /// configurazione **dove**: si correggono in posti diversi, e la
+    /// categoria lo dice. Oggi la produce `geo.reproject` per una config non
+    /// leggibile o un percorso di griglia `NTv2` non valido.
     #[error("invalid configuration: {0}")]
     InvalidConfiguration(String),
 
     /// Invariante interna violata: uno stato che per costruzione non
-    /// dovrebbe esistere (categoria `Internal` di par. 9). Sta al posto
-    /// delle primitive di panic (`unreachable!`,
-    /// `expect`) nei punti in cui il compilatore non puo' dimostrare
-    /// l'esaustivita': il caso "impossibile" diventa un errore esplicito,
-    /// mai un panic (R6). Il testo porta il contesto strutturale, mai
-    /// valori di righe/colonne (regola 8).
+    /// dovrebbe esistere. Sta al posto delle primitive di panico
+    /// (`unreachable!`, `expect`) nei punti in cui il compilatore non può
+    /// dimostrare l'esaustività: il caso "impossibile" diventa un errore
+    /// esplicito, mai un panico. Il testo porta il contesto strutturale, mai
+    /// valori di righe o colonne.
     #[error("internal error: {0}")]
     Internal(String),
 
-    /// Errore con diagnostica row-scoped conforme al contratto trasversale.
+    /// Errore con diagnostica per riga (`plenora-row-diagnostics-v1`):
+    /// righe rifiutate, contate per codice, con esempi limitati (indice di
+    /// riga e codice, mai il valore). Si costruisce con
+    /// [`PlenoraError::with_row_diagnostics`].
     #[error("{source}")]
     RowDiagnostics {
         /// Causa primaria; testo e assi restano invariati.
         source: Box<Self>,
-        /// Payload bounded machine-readable.
+        /// Payload strutturato, di dimensione limitata.
         diagnostics: Box<RowDiagnostics>,
     },
 
-    /// Errore con fase esplicita, assegnata al confine che lo ha prodotto
-    /// (piano-v5.md#contratti-di-input, BLOCK-03).
+    /// Errore con fase esplicita, assegnata da chi lo ha prodotto.
     ///
     /// Wrapper trasparente: `Display`, categoria, effetto e disposizione sono
     /// delegati alla sorgente; solo [`PlenoraError::phase`] e' raffinato. Si
@@ -184,10 +198,9 @@ pub enum PlenoraError {
 ///
 /// I messaggi di arrow-rs citano spesso il valore che ha causato il difetto
 /// (`Cannot cast string '<valore>' to Int64`): farli passare violerebbe la
-/// regola «errori senza dati» (errori-e-limiti.md#privacy-dei-messaggi), e la
-/// privacy dipenderebbe da una libreria esterna invece che dalla nostra
-/// costruzione. Si conserva quindi la sola **variante**, che dice il genere
-/// di difetto senza dire su quale dato.
+/// regola «errori senza dati», e la privacy dipenderebbe da una libreria
+/// esterna invece che dalla nostra costruzione. Si conserva quindi la sola
+/// **variante**, che dice il genere di difetto senza dire su quale dato.
 ///
 /// Il `match` e' esaustivo e `arrow-schema` e' pinnato a una versione esatta:
 /// una variante nuova non compila, invece di cadere su un ramo generico.
@@ -220,15 +233,18 @@ pub const fn arrow_error_code(error: &arrow_schema::ArrowError) -> &'static str 
 
 impl From<arrow_schema::ArrowError> for PlenoraError {
     fn from(error: arrow_schema::ArrowError) -> Self {
-        // Prefisso `arrow error: ` (fusione §9) seguito da un codice scritto
-        // da noi, non dal testo della dipendenza. Vedi [`arrow_error_code`].
+        // Prefisso `arrow error: ` seguito da un codice scritto da noi, non
+        // dal testo della dipendenza. Vedi [`arrow_error_code`].
         Self::DataMapping(format!("arrow error: {}", arrow_error_code(&error)))
     }
 }
 
 impl From<serde_json::Error> for PlenoraError {
     fn from(error: serde_json::Error) -> Self {
-        // Come sopra: testo invariato rispetto alla variante `Json`.
+        // Il testo è quello di serde_json: posizione e genere del difetto e,
+        // per un tipo sbagliato, il valore letto. In forma tipizzata si
+        // leggono solo piani e config, i cui valori sono parametri, non dati
+        // di riga.
         Self::DataMapping(format!("json error: {error}"))
     }
 }
@@ -249,10 +265,13 @@ macro_rules! categorie_errore {
     ) => {
         /// Categoria stabile di un [`PlenoraError`].
         ///
-        /// Il sottoinsieme canonico §9 usato dal componente (R9.5, mai valori
-        /// propri). Le due estensioni locali dell'esecuzione isolata di
-        /// plenora-data-tools non ci sono: l'isolamento non e' in questo
-        /// workspace.
+        /// Le categorie canoniche del contratto d'errore di
+        /// `plenora-data-tools`, senza valori propri. Le due estensioni
+        /// locali dell'esecuzione isolata di quel progetto non ci sono:
+        /// l'isolamento non è in questo workspace. `NotFound`,
+        /// `Authentication`, `Authorization` e `Transient` non hanno una
+        /// variante di [`PlenoraError`] che le produca: restano perché
+        /// l'enumerazione è quella canonica.
         ///
         /// Pensata per telemetria e report machine-readable, non per il
         /// controllo di flusso (per quello ci sono le varianti). Enum,
@@ -276,9 +295,8 @@ macro_rules! categorie_errore {
             /// Nome stabile **pubblico** della categoria (telemetria,
             /// report JSON), in `snake_case`.
             ///
-            /// Per le categorie canoniche e' anche il nome §9; per le
-            /// estensioni locali e' un nome stabile di questo componente e
-            /// basta. Cambiarlo rompe chi legge gli envelope.
+            /// È il nome canonico della categoria. Cambiarlo rompe chi
+            /// legge i report.
             #[must_use]
             pub const fn as_str(self) -> &'static str {
                 match self {
@@ -288,9 +306,8 @@ macro_rules! categorie_errore {
 
             /// Categoria dal nome stabile, l'inverso di [`Self::as_str`].
             ///
-            /// Non si chiama `from_canonical` perche' accetta anche le
-            /// estensioni locali. `None` per una stringa che non e' una
-            /// categoria (un envelope di un'altra versione, o corrotto).
+            /// `None` per una stringa che non è una categoria (un report di
+            /// un'altra versione, o corrotto).
             #[must_use]
             pub fn from_stable_name(nome: &str) -> Option<Self> {
                 match nome {
@@ -362,9 +379,9 @@ macro_rules! carico_ignorato {
     };
 }
 
-/// Genera insieme l'enum di un asse canonico R9.1, il nome stabile di ogni
-/// valore e l'elenco completo delle varianti: **una sola dichiarazione**, tre
-/// derivati.
+/// Genera insieme l'enum di un asse canonico dell'errore, il nome stabile di
+/// ogni valore e l'elenco completo delle varianti: **una sola
+/// dichiarazione**, tre derivati.
 ///
 /// Il compilatore obbliga il `match` di `as_str` a coprire ogni variante, ma
 /// non un elenco scritto a mano: una variante mancante li' sparirebbe dagli
@@ -430,38 +447,35 @@ macro_rules! asse_canonico {
 }
 
 asse_canonico! {
-    /// Fase del ciclo dell'operazione in cui l'errore e' nato: asse «fase» di
-    /// R9.1 (§9).
+    /// Fase del ciclo dell'operazione in cui l'errore è nato: l'asse «fase».
     ///
-    /// Enumerazione canonica (R9.5): il componente ne usa un sottoinsieme e
-    /// non ne definisce di propri. Non esiste una fase «Execute»: l'esecuzione
-    /// dei nodi ricade in [`ErrorPhase::Write`] (vedi [`PlenoraError::phase`]).
-    /// Sui bordi filesystem: `Connect` = acquisizione dell'handle, `Probe` =
-    /// ispezione preliminare del formato, `Commit` = rename atomico di publish
-    /// (errori-e-limiti.md#publish-e-cleanup).
+    /// Enumerazione canonica: il componente ne usa un sottoinsieme e non ne
+    /// definisce di proprie. Non esiste una fase «Execute»: l'esecuzione dei
+    /// kernel ricade in [`ErrorPhase::Write`] (vedi [`PlenoraError::phase`]).
+    /// Sui bordi del filesystem: `Connect` = acquisizione dell'handle,
+    /// `Probe` = ispezione preliminare del formato, `Commit` = rinomina della
+    /// scrittura atomica.
     ///
     /// Enum, [`ErrorPhase::as_str`] ed elenco delle varianti nascono dalla
     /// macro `asse_canonico`.
     ErrorPhase => FASI_DICHIARATE, nota_nome_stabile = "`snake_case` canonico §9." {
-        /// Validazione: parse del piano (JSON), contratti, schema, CRS,
-        /// capability, limiti del governor.
+        /// Validazione: lettura del piano (JSON), contratti, schema, CRS,
+        /// limiti.
         Validate => "validate",
-        /// Acquisizione dell'handle/lease sulla risorsa (bordo filesystem, §9).
+        /// Acquisizione dell'handle sulla risorsa (bordo del filesystem).
         Connect => "connect",
-        /// Ispezione preliminare del formato o della risorsa di destinazione
-        /// (es. riconoscimento fail-closed del filesystem, errori-e-limiti.md#publish-e-cleanup).
+        /// Ispezione preliminare del formato o della risorsa di destinazione.
         Probe => "probe",
         /// Preparazione di kernel e risorse prima dell'esecuzione.
         Prepare => "prepare",
         /// Lettura dei dati di input dal supporto.
         Read => "read",
-        /// Produzione dell'output: esecuzione dei nodi del DAG e scrittura del
-        /// tempfile di publish.
+        /// Produzione dell'uscita: esecuzione dei kernel e scrittura del file
+        /// temporaneo.
         Write => "write",
-        /// Finalizzazione dello stream di output (chiusura del writer).
+        /// Finalizzazione dello stream d'uscita (chiusura dello scrittore).
         Finalize => "finalize",
-        /// Commit dell'effetto: rename atomico di publish
-        /// (errori-e-limiti.md#publish-e-cleanup, ICD §9).
+        /// Commit dell'effetto: rinomina della scrittura atomica.
         Commit => "commit",
         /// Annullamento dell'effetto, con conferma.
         Rollback => "rollback",
@@ -472,13 +486,11 @@ asse_canonico! {
 
 asse_canonico! {
     /// Effetto restato sul sistema remoto o sul supporto quando l'operazione
-    /// riporta l'esito: asse «effetto» di R9.1, enumerazione canonica R9.6.
+    /// riporta l'esito: l'asse «effetto», enumerazione canonica.
     ///
-    /// L'esito ignoto non e' una categoria d'errore (R9.3) ma
+    /// L'esito ignoto non è una categoria d'errore ma
     /// [`RemoteEffect::Unknown`]. Un [`PlenoraError`] ha sempre effetto
-    /// [`RemoteEffect::None`] (vedi [`PlenoraError::remote_effect`]); «publish
-    /// riuscito, durabilita' non confermata» e' un esito tipizzato
-    /// (`PublishOutcome`, errori-e-limiti.md#publish-e-cleanup), non un errore.
+    /// [`RemoteEffect::None`] (vedi [`PlenoraError::remote_effect`]).
     ///
     /// Enum, [`RemoteEffect::as_str`] ed elenco delle varianti nascono dalla
     /// macro `asse_canonico`.
@@ -497,8 +509,8 @@ asse_canonico! {
 }
 
 asse_canonico! {
-    /// Disposizione al ritentativo di un'operazione fallita: asse
-    /// «ritentativo» di R9.1, enumerazione canonica R9.7.
+    /// Disposizione al ritentativo di un'operazione fallita: l'asse
+    /// «ritentativo», enumerazione canonica.
     ///
     /// Calcolata da fase, effetto e idempotenza, mai dalla sola categoria, in
     /// [`PlenoraError::retry_disposition`].
@@ -540,16 +552,21 @@ impl RetryDisposition {
 }
 
 impl PlenoraError {
-    /// Antepone un contesto al messaggio, dove il messaggio e' NOSTRO.
+    /// Antepone un contesto (`"{contesto}: {messaggio}"`) al messaggio di
+    /// `InvalidPlan`, `Unsupported`, `Schema` e `Crs`, i cui testi sono
+    /// nostri; la variante resta la stessa.
     ///
-    /// Serve a `planner::at_node` e alla scoperta dei contratti della CLI.
-    /// Il `match` non ha ramo di default: una variante nuova obbliga a
-    /// decidere se il contesto le si applica, invece di perderlo in silenzio.
+    /// Lo usano il runner (nome dell'input) e `plenora-io` (nome dell'input
+    /// o dell'output, colonna geometrica). Il `match` non ha ramo di
+    /// default: una variante nuova obbliga a decidere se il contesto le si
+    /// applica, invece di perderlo in silenzio.
     ///
-    /// Tornano invariate le varianti senza un messaggio nostro: `Io` (errore
-    /// del sistema operativo); `Execution`, `Cancelled`,
-    /// `RowDiagnostics` e `Tagged`, che portano gia' un'attribuzione
-    /// strutturata; `Internal`, dove il contesto utile e' il punto del codice.
+    /// Tornano invariate tutte le altre: `Io` (errore del sistema
+    /// operativo); `Execution`, `Cancelled`, `RowDiagnostics` e `Tagged`, che
+    /// portano già un'attribuzione strutturata; `Internal`, dove il contesto
+    /// utile è il punto del codice; `DataMapping`, `ResourceLimit`,
+    /// `Protocol`, `Timeout`, `Conflict` e `InvalidConfiguration`, che chi
+    /// vuole un contesto compone da sé.
     #[must_use]
     pub fn con_contesto(self, contesto: &str) -> Self {
         let anteponi = |messaggio: String| format!("{contesto}: {messaggio}");
@@ -573,9 +590,9 @@ impl PlenoraError {
         }
     }
 
-    /// Categoria dell'errore (errori-e-limiti.md, errori arricchiti): mapping dichiarato per variante.
-    /// Per [`PlenoraError::Tagged`] e' delegata alla sorgente: il tag
-    /// raffina solo la fase.
+    /// Categoria dell'errore, dichiarata per variante. Per
+    /// [`PlenoraError::Tagged`] e [`PlenoraError::RowDiagnostics`] è
+    /// delegata alla sorgente.
     #[must_use]
     pub const fn category(&self) -> ErrorCategory {
         match self {
@@ -597,18 +614,18 @@ impl PlenoraError {
         }
     }
 
-    /// Disposizione al ritentativo (asse «ritentativo» di R9.1, R9.7),
-    /// calcolata da fase, effetto e idempotenza, mai dalla sola categoria.
+    /// Disposizione al ritentativo (l'asse «ritentativo»), calcolata da
+    /// fase, effetto e idempotenza, mai dalla sola categoria.
     ///
-    /// - L'effetto e' sempre [`RemoteEffect::None`] e la riesecuzione e'
-    ///   idempotente (errori-e-limiti.md#publish-e-cleanup,
-    ///   architettura.md#determinismo): nessun errore richiede
+    /// - L'effetto è sempre [`RemoteEffect::None`] (la scrittura atomica non
+    ///   lascia mai un file parziale alla destinazione) e la riesecuzione è
+    ///   deterministica: nessun errore richiede
     ///   [`RetryDisposition::RequiresIdempotencyKey`] o
     ///   [`RetryDisposition::RequiresRecovery`], che restano per i componenti
     ///   con stato remoto.
     /// - [`RetryDisposition::Safe`] solo per gli errori di I/O, causa
-    ///   potenzialmente transitoria (cfr. `retryable_persist_error` in
-    ///   engine); backoff e tentativi spettano al chiamante.
+    ///   potenzialmente transitoria; backoff e tentativi spettano al
+    ///   chiamante.
     /// - [`RetryDisposition::Never`] per le cause deterministiche, la
     ///   cancellazione (volontaria) e `Internal`.
     /// - [`RetryDisposition::After`] non e' mai prodotto: non ci sono sorgenti
@@ -642,33 +659,28 @@ impl PlenoraError {
         }
     }
 
-    /// Fase del ciclo in cui l'errore e' nato (asse «fase» di R9.1).
+    /// Fase del ciclo in cui l'errore è nato (l'asse «fase»).
     ///
-    /// Un errore taggato ([`PlenoraError::Tagged`], piano-v5.md#contratti-di-input,
-    /// BLOCK-03) riporta la fase del confine che lo ha prodotto; uno non
-    /// taggato quella derivata dalla variante.
-    ///
-    /// Confini che taggano:
-    ///
-    /// - lettura degli input -> [`ErrorPhase::Read`] (`Input::read_ipc_*`,
-    ///   `Network::input_stream`, sonde dell'header IPC nella CLI);
-    /// - publish (errori-e-limiti.md#publish-e-cleanup): riconoscimento della
-    ///   destinazione -> [`ErrorPhase::Probe`], tempfile ->
-    ///   [`ErrorPhase::Write`], flush e sync -> [`ErrorPhase::Finalize`],
-    ///   no-clobber e rename -> [`ErrorPhase::Commit`]. La closure di
-    ///   scrittura non tagga; il tempfile si ripulisce via `Drop`.
+    /// Un errore taggato ([`PlenoraError::Tagged`]) riporta la fase che gli
+    /// ha dato chi lo ha prodotto; uno non taggato quella derivata dalla
+    /// variante. Oggi taggano [`ErrorPhase::Read`] i kernel che rifiutano
+    /// righe con un valore non convertibile (WKT, JSON, cast); `plenora-io`
+    /// non tagga.
     ///
     /// Derivazione per variante, con le approssimazioni dichiarate:
     ///
     /// - `InvalidPlan`, `Unsupported`, `Schema`, `Crs` ->
-    ///   [`ErrorPhase::Validate`], anche per i controlli del governor che
-    ///   scattano durante l'esecuzione;
+    ///   [`ErrorPhase::Validate`], anche quando il controllo scatta durante
+    ///   l'esecuzione;
     /// - `Execution`, `Cancelled` -> [`ErrorPhase::Write`]: il canone non ha
-    ///   «Execute», la lettura degli input avviene prima del DAG, e un
-    ///   `Execution` nasce solo mentre un nodo produce output;
+    ///   «Execute», e un `Execution` nasce solo mentre un nodo produce
+    ///   l'uscita;
     /// - `DataMapping`, `Io`, `Internal` non taggati -> [`ErrorPhase::Write`],
     ///   il lato con possibile effetto sul supporto (scelta conservativa; la
-    ///   disposizione di retry non dipende comunque dalla fase).
+    ///   disposizione di retry non dipende comunque dalla fase);
+    /// - `InvalidConfiguration` -> [`ErrorPhase::Prepare`], `Conflict` ->
+    ///   [`ErrorPhase::Commit`] (anche quando `plenora-io` lo rileva al
+    ///   controllo anticipato, prima di scrivere).
     #[must_use]
     pub const fn phase(&self) -> ErrorPhase {
         match self {
@@ -705,7 +717,7 @@ impl PlenoraError {
         }
     }
 
-    /// Tag di fase al confine (piano-v5.md#contratti-di-input, BLOCK-03).
+    /// Assegna la fase in cui l'errore è nato.
     ///
     /// Avvolge l'errore in [`PlenoraError::Tagged`]; `Display`, categoria,
     /// effetto e disposizione restano delegati. Se l'errore e' gia' taggato
@@ -722,11 +734,9 @@ impl PlenoraError {
     /// ```
     ///
     /// Tutti gli assi e il payload sono invarianti; la struttura pubblica
-    /// (`match`, `Debug`, catena di [`std::error::Error::source`]) e' invece
-    /// osservabile, e la rottura verso chi osservava una catena annidata e'
-    /// registrata in `docs/release.md`. `RowDiagnostics` e `Tagged` sono le
-    /// sole varianti con un `Box<Self>`: un terzo wrapper richiede di
-    /// estendere questa funzione.
+    /// (`match`, `Debug`, catena di [`std::error::Error::source`]) è invece
+    /// osservabile. `RowDiagnostics` e `Tagged` sono le sole varianti con un
+    /// `Box<Self>`: un terzo wrapper richiede di estendere questa funzione.
     #[must_use]
     pub fn with_phase(self, phase: ErrorPhase) -> Self {
         match self {
@@ -750,7 +760,12 @@ impl PlenoraError {
         }
     }
 
-    /// Associa un payload row-scoped senza alterare testo o assi dell'errore.
+    /// Associa un payload di diagnostica per riga senza alterare testo o
+    /// assi dell'errore.
+    ///
+    /// Un payload che non supera [`RowDiagnostics::validate_for_emission`]
+    /// non si allega: l'errore diventa `Internal`, perché un payload
+    /// incoerente è un difetto del kernel che lo ha costruito.
     #[must_use]
     pub fn with_row_diagnostics(self, diagnostics: RowDiagnostics) -> Self {
         if diagnostics.validate_for_emission().is_err() {
@@ -762,7 +777,8 @@ impl PlenoraError {
         }
     }
 
-    /// Restituisce il payload row-scoped anche attraverso wrapper di fase.
+    /// Restituisce il payload di diagnostica per riga, anche attraverso un
+    /// wrapper di fase.
     #[must_use]
     pub const fn row_diagnostics(&self) -> Option<&RowDiagnostics> {
         match self {
@@ -779,14 +795,16 @@ impl PlenoraError {
         self.category() == ErrorCategory::Cancelled
     }
 
-    /// Contesto DAG, attraversando i wrapper trasparenti.
+    /// Nodo, operazione ed `execution_id` di un `Execution` o `Cancelled`
+    /// con `execution_id` assegnato, attraversando i wrapper trasparenti.
     #[must_use]
     pub fn execution_context(&self) -> Option<(&str, &str, &str)> {
         let (node, operation, execution_id) = self.execution_location()?;
         execution_id.map(|execution_id| (node, operation, execution_id))
     }
 
-    /// Posizione DAG con `execution_id` opzionale durante la propagazione interna.
+    /// Nodo, operazione ed `execution_id` (se assegnato) di un `Execution` o
+    /// `Cancelled`, attraversando i wrapper trasparenti.
     #[must_use]
     pub fn execution_location(&self) -> Option<(&str, &str, Option<&str>)> {
         match self {
@@ -813,7 +831,7 @@ impl PlenoraError {
         }
     }
 
-    /// Motivo semantico di esecuzione/cancellazione attraverso i wrapper.
+    /// Motivo di un `Execution` o `Cancelled`, attraverso i wrapper.
     #[must_use]
     pub fn execution_reason(&self) -> Option<&str> {
         match self {
@@ -825,7 +843,9 @@ impl PlenoraError {
         }
     }
 
-    /// Completa l'execution id senza sovrascriverne uno già assegnato.
+    /// Assegna l'`execution_id` a un `Execution` o `Cancelled` (anche sotto
+    /// i wrapper) senza sovrascriverne uno già assegnato; le altre varianti
+    /// tornano invariate.
     #[must_use]
     pub fn with_execution_id(self, execution_id: &str) -> Self {
         match self {
@@ -903,14 +923,12 @@ impl PlenoraError {
         }
     }
 
-    /// Effetto restato sul supporto quando l'errore e' riportato (asse
-    /// «effetto» di R9.1, enumerazione R9.6).
+    /// Effetto restato sul supporto quando l'errore è riportato (l'asse
+    /// «effetto»).
     ///
-    /// Sempre [`RemoteEffect::None`], per costruzione: il publish atomico
-    /// (errori-e-limiti.md#publish-e-cleanup) non rende mai visibile un output
-    /// parziale, e i residui temporanei dopo un crash non stanno alla
-    /// destinazione. «Publish riuscito, durabilita' non confermata» non e' un
-    /// errore (R9.3) ma `PublishOutcome::PublishedButDurabilityUnconfirmed`.
+    /// Sempre [`RemoteEffect::None`], per costruzione: la scrittura atomica
+    /// di `plenora-io` non rende mai visibile un'uscita parziale, e un
+    /// temporaneo rimasto dopo un crash non sta alla destinazione.
     #[must_use]
     pub const fn remote_effect(&self) -> RemoteEffect {
         match self {
@@ -943,9 +961,8 @@ impl PlenoraError {
     }
 }
 
-/// Suffisso del Display con l'`execution_id` (errori-e-limiti.md): omesso quando
-/// l'errore e' nato fuori da un'esecuzione DAG (id vuoto), cosi' i messaggi
-/// del percorso legacy restano invariati.
+/// Suffisso del `Display` con l'`execution_id`: omesso quando l'id è vuoto,
+/// così il messaggio resta quello senza esecuzione.
 fn execution_suffix(execution_id: &str) -> String {
     if execution_id.is_empty() {
         String::new()
@@ -983,7 +1000,7 @@ mod tests {
     }
 
     /// Una istanza per variante costruibile direttamente, con la categoria e
-    /// la fase attese (R9.1); le varianti `#[from]` sono coperte a parte.
+    /// la fase attese; le varianti `#[from]` sono coperte a parte.
     /// `testo_internal` e' il messaggio di `Internal`, proprio di ciascun uso.
     fn campioni(testo_internal: &str) -> Vec<(PlenoraError, ErrorCategory, ErrorPhase)> {
         use ErrorCategory as C;
@@ -1018,7 +1035,7 @@ mod tests {
                 C::Internal,
                 P::Write,
             ),
-            // Wrapper di fase (BLOCK-03): la categoria e' quella della
+            // Wrapper di fase: la categoria e' quella della
             // sorgente (DataMapping non e' Io, quindi il test di retry qui
             // sotto attende `Never` senza vedere attraverso il wrapper); la
             // fase e' il tag del confine, non la derivazione della sorgente
@@ -1045,7 +1062,7 @@ mod tests {
             assert_eq!(error.category(), expected, "{error}");
             assert!(!error.category().as_str().is_empty());
         }
-        // Conversioni `From` esterne (fusione §9 in `DataMapping`).
+        // Conversioni `From` esterne (fuse in `DataMapping`).
         let arrow: PlenoraError = arrow_schema::ArrowError::SchemaError("boom".into()).into();
         assert_eq!(arrow.category(), ErrorCategory::DataMapping);
         assert!(arrow.to_string().starts_with("arrow error: "));
@@ -1057,9 +1074,8 @@ mod tests {
     }
 
     /// Sentinella di privacy: il testo di arrow-rs cita i valori che hanno
-    /// causato il difetto, e non deve attraversare il confine
-    /// (errori-e-limiti.md#privacy-dei-messaggi). Resta il codice della
-    /// variante, che e' strutturale.
+    /// causato il difetto, e non deve attraversare il confine (errori senza
+    /// dati). Resta il codice della variante, che e' strutturale.
     #[test]
     fn il_testo_di_arrow_non_attraversa_il_confine() {
         const SENTINELLA: &str = "mario.rossi@example.com";
@@ -1093,7 +1109,7 @@ mod tests {
 
     #[test]
     fn internal_display_and_axes() {
-        // R6: la variante Internal raccoglie le violazioni di invariante che
+        // La variante Internal raccoglie le violazioni di invariante che
         // altrimenti sarebbero panic; gli assi sono quelli dichiarati.
         let error = PlenoraError::Internal("stato impossibile".into());
         assert_eq!(error.to_string(), "internal error: stato impossibile");
@@ -1105,7 +1121,7 @@ mod tests {
 
     #[test]
     fn retry_disposition_is_safe_only_for_transient_io() {
-        // R9.7: la disposizione sostituisce il booleano — `Safe` solo per
+        // La disposizione sostituisce il booleano: `Safe` solo per
         // la causa potenzialmente transitoria (I/O) a effetto assente e
         // operazione idempotente; `Never` per cause deterministiche o
         // volontarie.
@@ -1148,7 +1164,7 @@ mod tests {
 
     #[test]
     fn ogni_disposizione_dichiarata_ha_il_nome_stabile_atteso() {
-        // R9.7: solo i valori canonici, snake_case, nessun valore proprio.
+        // Solo i valori canonici, snake_case, nessun valore proprio.
         //
         // La tabella e' scritta a mano, seconda opinione su `as_str`; si
         // itera `DISPOSIZIONI_DICHIARATE` e si pretende che la tabella nomini
@@ -1188,10 +1204,9 @@ mod tests {
         for (error, expected) in phase_samples() {
             assert_eq!(error.phase(), expected, "{error}");
         }
-        // Conversioni `From` esterne: entrambe in `DataMapping` (Write —
-        // la fusione §9 cancella la distinzione parse/I-O A LIVELLO DI
-        // VARIANTE; i confini la recuperano col tagging, vedi i test del
-        // wrapper).
+        // Conversioni `From` esterne: entrambe in `DataMapping` (Write: la
+        // fusione cancella la distinzione parse/I-O A LIVELLO DI VARIANTE;
+        // chi la conosce la recupera col tag, vedi i test del wrapper).
         let arrow: PlenoraError = arrow_schema::ArrowError::SchemaError("boom".into()).into();
         assert_eq!(arrow.phase(), ErrorPhase::Write);
         let json: PlenoraError = serde_json::from_str::<u32>("\"non-un-numero\"")
@@ -1202,7 +1217,7 @@ mod tests {
 
     #[test]
     fn tagged_phase_overrides_derivation_and_display_is_identical() {
-        // BLOCK-03: il tag del confine raffina SOLO la fase. Per ogni fase
+        // Il tag raffina SOLO la fase. Per ogni fase
         // canonica: `phase()` riporta il tag, il `Display` e' byte-identico
         // alla sorgente (nessun consumatore testuale si rompe).
         let source = || PlenoraError::Io(std::io::Error::other("caduta di rete"));
@@ -1247,10 +1262,9 @@ mod tests {
         // canoniche usate (le due estensioni locali dell'isolamento non ci
         // sono).
         assert_eq!(ErrorCategory::ALL.len(), 18, "categorie supportate");
-        // `from_stable_name` e' l'inverso di `as_str`, ed e' cio' che regge
-        // il ripiego su 70 della CLI: se il giro non chiudesse, un envelope
-        // legittimo verrebbe letto come categoria sconosciuta e degradato a
-        // errore interno.
+        // `from_stable_name` e' l'inverso di `as_str`: se il giro non
+        // chiudesse, un report legittimo verrebbe letto come categoria
+        // sconosciuta.
         for &categoria in ErrorCategory::ALL {
             assert_eq!(
                 ErrorCategory::from_stable_name(categoria.as_str()),
@@ -1269,7 +1283,7 @@ mod tests {
     fn tagged_axes_are_delegated_to_the_source() {
         // Gli assi diversi dalla fase attraversano il wrapper invariati:
         // `Io` taggato resta categoria Io, effetto None, retry `Safe` —
-        // la disposizione NON cambia col raffinamento di fase (piano-v5.md#contratti-di-input).
+        // la disposizione NON cambia col raffinamento di fase.
         let tagged = PlenoraError::Io(std::io::Error::other("io")).with_phase(ErrorPhase::Read);
         assert_eq!(tagged.category(), ErrorCategory::Io);
         assert_eq!(tagged.remote_effect(), RemoteEffect::None);
@@ -1366,11 +1380,8 @@ mod tests {
 
     #[test]
     fn remote_effect_is_none_for_every_variant_by_construction() {
-        // errori-e-limiti.md#publish-e-cleanup (publish atomico: nessun output parziale mai visibile) +
-        // invariante publish atomico (cancellazione senza output pubblicato): un
-        // `PlenoraError` non accompagna mai un effetto osservabile. Il caso
-        // «durabilita' non confermata» e' un `PublishOutcome`, non un
-        // errore (R9.3).
+        // La scrittura atomica non rende mai visibile un'uscita parziale: un
+        // `PlenoraError` non accompagna mai un effetto osservabile.
         for (error, _) in samples() {
             assert_eq!(error.remote_effect(), RemoteEffect::None, "{error}");
         }
@@ -1384,8 +1395,7 @@ mod tests {
 
     #[test]
     fn ogni_fase_dichiarata_ha_il_nome_stabile_atteso() {
-        // R9.5: solo i dieci valori canonici, snake_case; nessun valore
-        // proprio di data-tools.
+        // Solo i dieci valori canonici, snake_case; nessun valore proprio.
         //
         // Tabella scritta a mano — seconda opinione su `as_str` — e giro
         // sull'elenco dichiarato: e' `FASI_DICHIARATE` a decidere che cosa
@@ -1411,8 +1421,8 @@ mod tests {
 
     #[test]
     fn ogni_effetto_dichiarato_ha_il_nome_stabile_atteso() {
-        // R9.6: solo i cinque valori canonici; l'esito ignoto e' un effetto
-        // (`unknown`), non una categoria (R9.3).
+        // Solo i cinque valori canonici; l'esito ignoto e' un effetto
+        // (`unknown`), non una categoria.
         //
         // Stesso impianto delle fasi: tabella indipendente, giro
         // sull'elenco dichiarato.
@@ -1431,7 +1441,7 @@ mod tests {
 
     #[test]
     fn step_display_omits_the_execution_id_when_empty() {
-        // Percorso legacy (nessuna esecuzione DAG): messaggio invariato.
+        // Senza execution_id il messaggio non ha il suffisso.
         assert_eq!(
             step("").to_string(),
             "step failed at node `n` (operation `table.filter`): boom"
@@ -1621,9 +1631,8 @@ mod tests {
     /// `con_contesto` antepone il contesto alle varianti con un messaggio
     /// nostro e preserva la variante; le altre passano inalterate.
     ///
-    /// Il caso stava nella CLI come `at_input_prefixes_context_and_preserves_the_variant`:
-    /// il contesto e' quello che `at_input("main", "dati.arrow", _)` compone.
-    /// La CLI conserva la prova della propria composizione (nome e percorso).
+    /// Il contesto di prova ha la forma di quello che compone chi legge un
+    /// input da file: nome e percorso.
     #[test]
     fn con_contesto_antepone_il_contesto_e_preserva_la_variante() {
         let contesto = "input `main` (dati.arrow)";

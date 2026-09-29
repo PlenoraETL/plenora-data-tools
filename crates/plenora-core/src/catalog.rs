@@ -1,79 +1,109 @@
-//! Catalogo unificato delle operazioni (architettura.md, piano-v5.md#identita-e-fingerprint).
+//! Catalogo delle operazioni.
 //!
-//! Ogni operazione dichiara il proprio contratto in modo machine-readable;
-//! il fingerprint del catalogo deriva dalle versioni esplicite per-componente,
-//! mai da hash del binario.
+//! Un [`OperationDescriptor`] per ogni operazione tabellare e geografica,
+//! con id canonico, famiglia, arietà, forma del risultato, requisito CRS,
+//! vincolo di espansione e versioni.
+//!
+//! Il catalogo è dichiarativo: nessun campo esegue qualcosa. Oggi lo
+//! consultano il runner (`plenora-pipeline`: id, arietà, provenance delle
+//! diagnostiche per riga, vincolo ed esenzione del fattore di espansione),
+//! l'analisi dei contratti geo (`crs_requirement`) e il generatore di
+//! `docs/operazioni.md`, che ne riporta i campi nella tabella «dal
+//! catalogo» di ogni operazione. I campi che nessun codice di questo
+//! repository consulta lo dicono nel proprio rustdoc: vengono da
+//! `plenora-data-tools@190c493`, dove li usavano engine e planner, e restano
+//! come dichiarazione.
 
-/// Famiglia di appartenenza (namespace dell'`id`).
+/// Famiglia dell'operazione: il prefisso del suo `id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Family {
+    /// Operazione tabellare, `id` `table.*`: lavora su colonne Arrow senza
+    /// geometrie.
     Table,
+    /// Operazione geografica, `id` `geo.*`: legge o produce una colonna
+    /// geometria (`GeoArrow` WKB) con un CRS.
     Geo,
 }
 
 /// Provenienza dell'operazione.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Origin {
-    /// Compatibile con il tool Python Manipola di riferimento.
+    /// Compatibile con l'operazione omonima di Manipola, lo strumento Python
+    /// di riferimento.
     ManipolaCompat,
-    /// Estensione nativa.
+    /// Estensione propria, senza corrispondente in Manipola.
     Extension,
 }
 
-/// Arietà del nodo nel DAG.
+/// Numero e ruolo delle tabelle d'ingresso.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Arity {
+    /// Un ingresso.
     Unary,
-    /// Binaria ordinata (left, right).
+    /// Due ingressi in ordine fisso: sinistra, destra.
     BinaryOrdered,
-    /// N-aria (es. concat di 3+ input).
+    /// Due o più ingressi equivalenti (`table.concat`,
+    /// `table.concat_by_name`). Il runner ne esegue al più due.
     NAry,
 }
 
-/// Classe di esecuzione, usata dal planner per segmenti e materializzazioni.
+/// Classe di esecuzione: quanto dell'ingresso serve prima di produrre
+/// l'uscita.
+///
+/// Dichiarazione del progetto d'origine per il planner a segmenti: il
+/// runner di questo repository esegue sempre su tabelle intere e non la
+/// consulta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecutionClass {
-    /// 1:1 sulle righe, eseguibile batch-per-batch.
+    /// Riga per riga, senza stato fra un batch e l'altro: si può eseguire
+    /// batch per batch.
     Streaming,
-    /// Richiede l'intero input.
+    /// Serve l'intero ingresso (ordinamenti, aggregazioni, tessellazioni).
     Blocking,
-    /// Blocking con due input.
+    /// Servono per intero entrambi gli ingressi (join, overlay, operazioni
+    /// insiemistiche).
     BinaryBlocking,
 }
 
-/// Comportamento alla cancellazione (errori-e-limiti.md#cancellazione).
+/// Dove l'operazione può osservare una richiesta di annullamento.
+///
+/// Dichiarazione del progetto d'origine: in questo repository non c'è un
+/// meccanismo di cancellazione e nessun codice la consulta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CancellationBehavior {
+    /// Fra un batch e l'altro (kernel streaming).
     Cooperative,
+    /// Solo prima e dopo l'operazione, non durante (kernel bloccanti).
     BoundaryOnly,
+    /// Nessun punto di cancellazione: il kernel gira fino in fondo
+    /// (`geo.make_valid`, `geo.polygonize`, `geo.split`, `geo.reproject`).
     NonInterruptible,
 }
 
-/// Fondibilita' di un'operazione geo nella fusione dei segmenti (architettura.md#geometrie
-/// D12.2).
+/// Fondibilità di un'operazione geo con le vicine, per decodificare la
+/// geometria una volta sola lungo una catena di passi 1:1.
 ///
-/// Capability dichiarativa FISICA, stesso principio di
-/// [`CancellationBehavior`]. Resta FUORI da `descriptor_canonical` e quindi
-/// dal `catalog_fingerprint` (decisione deliberata: il fingerprint guarda la
-/// compatibilita' semantica dei piani, la fondibilita' e' fisica — architettura.md#planner-ed-executor).
+/// Dichiarazione del progetto d'origine: il runner di questo repository non
+/// esegue le geo e non fonde passi. È una proprietà fisica, non semantica:
+/// il fingerprint del catalogo del progetto d'origine non la comprendeva.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GeoFusion {
-    /// Non fondibile: esecuzione nodo-per-nodo (default). Tutte le op
-    /// tabellari e le geo fuori dal perimetro fondibile.
+    /// Non fondibile: si esegue da sola. Tutte le tabellari e le geo che non
+    /// sono né trasformazioni 1:1 sul posto né misure terminali.
     NotFusible,
-    /// Trasformazione 1:1 sul posto: fondibile in un gruppo di nodi unari
-    /// consecutivi a parita' di colonna geometria e ruolo (le trasformazioni
-    /// in place, piu' `reproject` e `make_valid`).
+    /// Trasformazione 1:1 della geometria sulla stessa colonna (affini,
+    /// buffer, semplificazioni, involucri, `reproject`, `make_valid`):
+    /// fondibile con le vicine dello stesso genere.
     TransformInPlace,
-    /// Misura terminale: consuma la geometria producendo un valore non
-    /// geometrico (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`
-    /// — misure terminali); chiude un eventuale gruppo fuso a monte.
+    /// Misura che consuma la geometria e produce un valore non geometrico
+    /// (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`): chiude una
+    /// catena fusa a monte.
     TerminalMeasure,
 }
 
 impl GeoFusion {
-    /// Nome stabile `snake_case` della variante: unica fonte per il JSON
-    /// delle capability (`capabilities.rs`) e per lo snapshot di catalogo.
+    /// Nome stabile `snake_case` della variante, indipendente dal `Debug`
+    /// di Rust.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -84,82 +114,122 @@ impl GeoFusion {
     }
 }
 
-/// Forma del risultato rispetto alle righe di input.
+/// Forma del risultato di un'operazione geo rispetto alle righe d'ingresso.
+///
+/// Le tabellari non la dichiarano (`result_shape` è `None`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultShape {
+    /// Una riga d'uscita per riga d'ingresso, nello stesso ordine.
     OneToOne,
+    /// Ogni riga d'ingresso produce zero, una o più righe (esplosioni,
+    /// tagli, tessellazioni); per le binarie, gli abbinamenti fra i lati.
     OneToMany,
+    /// Più righe d'ingresso si fondono in una (dissolve, collect,
+    /// costruzione di linee e poligoni, poligonizzazione).
     ManyToOne,
+    /// Il risultato dipende dall'intero ingresso senza corrispondenza fra
+    /// righe. Nessuna operazione del catalogo la dichiara oggi.
     Collective,
+    /// Dall'intero ingresso a un numero di righe che non si lega alle righe
+    /// d'ingresso (griglia generata, problemi di copertura, tratti
+    /// condivisi); queste operazioni sono esenti dal fattore di espansione.
     WholeToMany,
+    /// Produttore 1:1: costruisce la geometria da colonne non geometriche
+    /// della stessa riga (`geo.from_coords`, `geo.from_wkt`).
     FromCoords,
+    /// Una riga di diagnostica per riga d'ingresso
+    /// (`geo.geometry_diagnostics`).
     Diagnostic,
 }
 
-/// Osservabilita' dell'indice sorgente attraverso un nodo.
+/// Se l'indice di riga della sorgente resta valido attraverso l'operazione.
 ///
-/// `Preserved` significa che ogni configurazione valida del descrittore
-/// mantiene cardinalita' e ordine delle righe. Ogni altra operazione e'
-/// `Unavailable`: senza un sidecar di lineage il runtime non puo' ricostruire
-/// un indice sorgente originale e deve rifiutare i consumer row-diagnostic.
+/// `Preserved` significa che ogni configurazione valida mantiene numero e
+/// ordine delle righe. Ogni altra operazione è `Unavailable`: senza una
+/// traccia di lineage non si può ricostruire l'indice originale, e il runner
+/// rifiuta, a valle di un passo così, un'operazione con diagnostica per riga
+/// ([`OperationDescriptor::emits_row_diagnostics`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceRowProvenance {
+    /// Numero e ordine delle righe invariati: l'indice di riga d'uscita è
+    /// quello della sorgente.
     Preserved,
+    /// Almeno una configurazione può filtrare, riordinare, espandere o
+    /// aggregare righe.
     Unavailable,
 }
 
-/// Requisito CRS (solo operazioni geo).
+/// Requisito sul CRS degli ingressi di un'operazione geo, verificato
+/// dall'analisi del contratto con [`crate::crs::validate_requirement`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CrsRequirement {
+    /// Un CRS risolto qualunque, geografico o proiettato.
     Known,
+    /// CRS proiettato con unità lineare nota su ogni ingresso: distanze e
+    /// aree sono in unità di mappa.
     Projected,
+    /// CRS geografico su ogni ingresso (misure geodetiche).
     Geographic,
+    /// CRS proiettato con unità nota, lo stesso (per equivalenza semantica)
+    /// su tutti gli ingressi; con un solo ingresso vale come `Projected`.
     SameProjected,
+    /// CRS d'origine e di destinazione entrambi risolti (`geo.reproject`).
     Reprojection,
 }
 
-/// Politica di determinismo per operazioni con ordine non definito (architettura.md#determinismo).
+/// Politica d'ordine delle righe d'uscita: stesso ingresso, stesso ordine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeterminismPolicy {
-    /// L'output ha ordine definito dalla semantica dell'operazione.
+    /// Ordine definito dalla semantica dell'operazione: quello d'ingresso
+    /// per le 1:1, quello della chiave per gli ordinamenti, quello descritto
+    /// nella scheda per le altre.
     DefinedOrder,
-    /// Ordine di arrivo dei batch (stabile, deterministico).
+    /// Ordine d'arrivo delle righe e, con più ingressi, degli ingressi
+    /// nell'ordine in cui sono dati (`table.concat`, `table.concat_by_name`,
+    /// `table.limit`).
     InputOrder,
-    /// Ordinamento stabile su chiave dichiarata.
+    /// Ordinamento stabile su una chiave dichiarata. Nessuna operazione del
+    /// catalogo la dichiara oggi.
     StableKeyOrder,
-    /// Ordinamento canonico dei valori (set operations).
+    /// Ordine canonico dei valori, indipendente dall'ordine d'ingresso
+    /// (operazioni insiemistiche e aggregazioni senza ordine proprio).
     CanonicalOrder,
 }
 
-/// Vincolo di espansione vincolante per un'operazione binaria (errori-e-limiti.md).
+/// Base del fattore di espansione di un'operazione con due ingressi.
 ///
-/// Il runtime calcola tutte le metriche di [`JoinExpansion`] e il catalogo
-/// dichiara quale vincola. La soglia e' `max_expansion_factor`, tranne per
-/// [`ExpansionConstraint::Custom`] che la sovrascrive per l'operazione.
+/// Il runner confronta le righe d'uscita con la base scelta qui e con la
+/// soglia `max_expansion_factor` dei limiti (o il fattore di
+/// [`ExpansionConstraint::Custom`]); per le unarie la base è sempre l'unico
+/// ingresso e questo campo non conta.
 ///
-/// `PartialEq`/`Eq`/`Hash` sono a mano: il fattore di `Custom` si confronta e
-/// si hasha per bit (`f64::to_bits`), senza ambiguita' su NaN/-0.0 nel
-/// fingerprint del catalogo (piano-v5.md#identita-e-fingerprint).
+/// `PartialEq`/`Eq`/`Hash` sono scritti a mano: il fattore di `Custom` si
+/// confronta e si hasha per bit (`f64::to_bits`), senza ambiguità su NaN e
+/// `-0.0`.
 #[derive(Debug, Clone, Copy)]
 pub enum ExpansionConstraint {
-    /// `output / (left + right)`: default. E' la base fissa su cui e' tarato
-    /// `max_expansion_factor`, quindi un'operazione che non dichiara un
-    /// vincolo proprio resta misurata come lo sono le soglie.
+    /// `uscita / (sinistra + destra)`: il default. È la base su cui è
+    /// tarato `max_expansion_factor`, quindi un'operazione che non dichiara
+    /// un vincolo proprio è misurata come le soglie.
     SumRelative,
-    /// `output / left`: operazioni lookup-style (output <= left).
+    /// `uscita / sinistra`: operazioni guidate dal lato sinistro, con al più
+    /// una riga o poche righe per riga sinistra (join semi, anti e asof,
+    /// `except`, `intersect`, `assert_foreign_key`, `geo.nearest`,
+    /// `geo.within`, `geo.count_points_in_polygons`).
     LeftRelative,
-    /// `output / right`.
+    /// `uscita / destra`. Nessuna operazione del catalogo la dichiara oggi.
     RightRelative,
-    /// `max(output / left, output / right)`: join molti-a-molti.
+    /// `max(uscita / sinistra, uscita / destra)`: join molti-a-molti e
+    /// overlay che spezzano le geometrie.
     MaxRelative,
-    /// Stima a priori da statistiche (errori-e-limiti.md,
-    /// architettura.md#planner-ed-executor), per operazioni la cui
-    /// semantica di output non e' caratterizzabile con una base fissa.
+    /// Soglia propria dell'operazione, per un'uscita senza una base fissa
+    /// caratterizzabile.
     ///
-    /// La metrica resta `output_over_sum_inputs`, ma la soglia e' il fattore
-    /// dichiarato, che sovrascrive `max_expansion_factor` per l'operazione
+    /// La metrica resta `output_over_sum_inputs`, ma la soglia è il fattore
+    /// dichiarato, che sostituisce `max_expansion_factor` per l'operazione
     /// ([`ExpansionConstraint::binding_threshold`]). Il fattore, costante di
-    /// catalogo, dev'essere finito e positivo.
+    /// catalogo, dev'essere finito e positivo. Nessuna operazione del
+    /// catalogo la dichiara oggi.
     Custom(f64),
 }
 
@@ -194,8 +264,8 @@ impl std::hash::Hash for ExpansionConstraint {
 }
 
 impl ExpansionConstraint {
-    /// Soglia effettiva del fattore di espansione per questo vincolo (errori-e-limiti.md):
-    /// il fattore custom per [`ExpansionConstraint::Custom`] (override di
+    /// Soglia effettiva del fattore di espansione per questo vincolo: il
+    /// fattore di [`ExpansionConstraint::Custom`] (che sostituisce
     /// `max_expansion_factor` per la singola operazione), altrimenti il
     /// `max_expansion_factor` dei limiti effettivi passato dal chiamante.
     #[must_use]
@@ -242,28 +312,28 @@ impl ExpansionConstraint {
     }
 }
 
-/// Metriche di espansione di un'operazione binaria (errori-e-limiti.md).
+/// Metriche di espansione di un'operazione binaria.
 ///
 /// Il vincolo dichiarato in catalogo ([`ExpansionConstraint`]) seleziona
-/// quella vincolante. Sono metriche **osservabili** in `f64`: il limite si
+/// quella vincolante. Sono metriche da riportare, in `f64`: il limite si
 /// decide in aritmetica esatta con [`ExpansionConstraint::exceeded`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct JoinExpansion {
-    /// Righe output / (righe left + righe right).
+    /// Righe d'uscita / (righe sinistre + righe destre).
     pub output_over_sum_inputs: f64,
-    /// Righe output / righe left.
+    /// Righe d'uscita / righe sinistre.
     pub output_over_left: f64,
-    /// Righe output / righe right.
+    /// Righe d'uscita / righe destre.
     pub output_over_right: f64,
 }
 
 impl JoinExpansion {
-    /// Calcola le tre metriche dalle righe output/left/right.
+    /// Calcola le tre metriche dalle righe d'uscita, sinistre e destre.
     ///
-    /// Denominatore nullo: la metrica e' infinita se l'output e' non nullo
-    /// (espansione da input vuoto), zero altrimenti.
+    /// Denominatore nullo: la metrica è infinita se l'uscita non è vuota
+    /// (espansione da un ingresso vuoto), zero altrimenti.
     #[must_use]
-    #[allow(clippy::cast_precision_loss)] // Metriche f64 per contratto (errori-e-limiti.md); sotto 2^53 righe il confronto e' esatto.
+    #[allow(clippy::cast_precision_loss)] // Metriche f64 per contratto: sotto 2^53 righe sono esatte, e il limite non le usa.
     pub fn compute(output_rows: u64, left_rows: u64, right_rows: u64) -> Self {
         fn ratio(numerator: u64, denominator: u64) -> f64 {
             if denominator == 0 {
@@ -277,10 +347,9 @@ impl JoinExpansion {
             }
         }
         Self {
-            // Somma SATURANTE: e' un denominatore di una metrica che decide
-            // un limite, e avvolgere lo abbasserebbe — cioe' alzerebbe il
-            // rapporto e potrebbe far scattare il vincolo a sproposito (o in
-            // debug far abortire con `overflow-checks`).
+            // Somma saturante: avvolgere abbasserebbe il denominatore, cioè
+            // alzerebbe il rapporto riportato (e in debug farebbe abortire
+            // con `overflow-checks`).
             output_over_sum_inputs: ratio(output_rows, left_rows.saturating_add(right_rows)),
             output_over_left: ratio(output_rows, left_rows),
             output_over_right: ratio(output_rows, right_rows),
@@ -288,10 +357,10 @@ impl JoinExpansion {
     }
 
     /// Restituisce la metrica vincolante per il vincolo dichiarato in
-    /// catalogo. `MaxRelative` e' il massimo delle tre (la metrica sulla
-    /// somma e' sempre dominata dalle altre due, quindi includerla non
+    /// catalogo. `MaxRelative` è il massimo delle tre (la metrica sulla
+    /// somma è sempre dominata dalle altre due, quindi includerla non
     /// cambia il risultato). `Custom` usa la metrica sulla somma degli
-    /// input: la specificita' del vincolo e' nella soglia
+    /// ingressi: la specificità del vincolo è nella soglia
     /// ([`ExpansionConstraint::binding_threshold`]), non nella base.
     #[must_use]
     pub const fn binding_metric(&self, constraint: ExpansionConstraint) -> f64 {
@@ -309,54 +378,89 @@ impl JoinExpansion {
     }
 }
 
-/// Livello di maturità (pipeline di promozione).
+/// Livello di maturità dell'operazione, dal progetto d'origine.
+///
+/// Nessun codice di questo repository lo consulta: il runner non filtra per
+/// maturità (esegue le tabellari che hanno un dispatch, rifiuta le geo).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Maturity {
+    /// Dichiarata, senza kernel. Nessuna operazione del catalogo è in
+    /// questo stato.
     Planned,
-    /// Kernel implementato ma in attesa del backend richiesto (op
-    /// feature-gated geos/proj).
+    /// Kernel scritto ma in attesa di un backend esterno (GEOS o PROJ nel
+    /// progetto d'origine). Nessuna operazione del catalogo è in questo
+    /// stato: qui non ci sono backend esterni.
     BackendPending,
+    /// Kernel validato dai propri test; nel progetto d'origine non era
+    /// ancora esposto dal protocollo pubblico dell'engine.
     KernelValidated,
+    /// Kernel validato ed esposto dal protocollo pubblico dell'engine del
+    /// progetto d'origine. Qui non c'è un protocollo pubblico: la
+    /// distinzione da `KernelValidated` è storica.
     PublicProtocol,
 }
 
-/// Contratto machine-readable di un'operazione (piano-v5.md#identita-e-fingerprint).
+/// Descrizione di un'operazione del catalogo.
 ///
-/// Le versioni per-componente alimentano il `catalog_fingerprint`:
-/// ogni modifica incompatibile incrementa la versione pertinente.
+/// Le quattro versioni per componente dicono che cosa è cambiato in modo
+/// osservabile: ogni modifica incompatibile incrementa quella pertinente.
 #[derive(Debug, Clone)]
 pub struct OperationDescriptor {
-    /// Id namespaced: `table.*` / `geo.*`.
+    /// Id canonico con il prefisso della famiglia: `table.*` o `geo.*`.
     pub id: &'static str,
+    /// Famiglia, coerente con il prefisso dell'id.
     pub family: Family,
+    /// Compatibile con Manipola o estensione propria.
     pub origin: Origin,
+    /// Numero e ruolo degli ingressi; il runner rifiuta un passo con un
+    /// numero di ingressi diverso.
     pub arity: Arity,
+    /// Quanto dell'ingresso serve prima dell'uscita (vedi
+    /// [`ExecutionClass`]: il runner non la consulta).
     pub execution_class: ExecutionClass,
+    /// Dove l'operazione può essere annullata (vedi
+    /// [`CancellationBehavior`]: qui non c'è cancellazione).
     pub cancellation_behavior: CancellationBehavior,
-    /// Fondibilita' nella fusione dei segmenti geo (architettura.md#geometrie D12.2):
-    /// capability fisica, NON entra in `descriptor_canonical` ne' nel
-    /// `catalog_fingerprint`. `NotFusible` per tutte le op tabellari.
+    /// Fondibilità con i passi geo vicini (vedi [`GeoFusion`]): proprietà
+    /// fisica, fuori dalla compatibilità semantica. `NotFusible` per tutte
+    /// le tabellari.
     pub geo_fusion: GeoFusion,
+    /// Forma del risultato rispetto alle righe d'ingresso; `None` per le
+    /// tabellari, `Some` per tutte le geo.
     pub result_shape: Option<ResultShape>,
+    /// Requisito sul CRS degli ingressi; `None` per le tabellari, `Some`
+    /// per tutte le geo (l'analisi geo rifiuta con `InvalidPlan` una geo
+    /// senza requisito).
     pub crs_requirement: Option<CrsRequirement>,
-    /// Backend/feature richiesti (es. `geos`, `proj`).
+    /// Backend esterni richiesti. Vuoto per tutte le operazioni: GEOS e
+    /// PROJ sono stati sostituiti da kernel in Rust puro.
     pub required_capabilities: &'static [&'static str],
+    /// Politica d'ordine delle righe d'uscita.
     pub determinism: DeterminismPolicy,
-    /// Vincolo di espansione vincolante per le operazioni binarie (errori-e-limiti.md);
-    /// irrilevante per unarie/N-arie, che restano sulla base input
-    /// (default `SumRelative`, retrocompatibile).
+    /// Base del fattore di espansione per le operazioni con due ingressi;
+    /// per le unarie la base è l'unico ingresso e il campo non conta
+    /// (default `SumRelative`).
     pub expansion_constraint: ExpansionConstraint,
-    /// Esenzione da `max_expansion_factor` dichiarata in catalogo (errori-e-limiti.md):
-    /// le op che espandono per contratto ogni elemento di input in molti
-    /// output (`WholeToMany`: generative/diagnostiche) non sono soggette al
-    /// fattore; restano vincolate da `max_rows_per_edge` e dagli altri
-    /// limiti di righe.
+    /// Esenzione da `max_expansion_factor`: le operazioni che per contratto
+    /// producono dall'intero ingresso un numero di righe che non dipende
+    /// dalle righe (`WholeToMany`: griglie generate, problemi di copertura,
+    /// tratti condivisi) non sono soggette al fattore; restano vincolate da
+    /// `max_rows_per_edge` e dagli altri limiti di righe.
     pub expansion_factor_exempt: bool,
+    /// Livello di maturità (vedi [`Maturity`]: nessun codice lo consulta).
     pub maturity: Maturity,
-    // Versioni esplicite per-componente (piano-v5.md#identita-e-fingerprint): disciplina di incremento in CI.
+    /// Versione della semantica osservabile: si incrementa quando cambia
+    /// l'uscita per lo stesso ingresso e la stessa config.
     pub semantic_version: u32,
+    /// Versione dello schema della config: si incrementa quando cambiano i
+    /// parametri accettati.
     pub config_schema_version: u32,
+    /// Versione dell'analisi del contratto: si incrementa quando cambia lo
+    /// schema d'uscita inferito o una regola di validazione.
     pub contract_analysis_version: u32,
+    /// Versione del kernel: si incrementa quando cambia l'implementazione,
+    /// anche a semantica invariata (per esempio il passaggio da GEOS a Rust
+    /// puro).
     pub kernel_version: u32,
 }
 
@@ -364,9 +468,9 @@ impl OperationDescriptor {
     /// Dichiara se la posizione sorgente resta osservabile per tutte le
     /// configurazioni valide dell'operazione.
     ///
-    /// La classificazione e' conservativa: una sola modalita' capace di
+    /// La classificazione è conservativa: una sola modalità capace di
     /// selezionare, riordinare, espandere o aggregare rende il descrittore
-    /// `Unavailable`. Questo evita provenance inventata nei sibling paths.
+    /// `Unavailable`, così nessun indice di riga riportato è inventato.
     #[must_use]
     pub fn source_row_provenance(&self) -> SourceRowProvenance {
         match self.family {
@@ -419,19 +523,19 @@ impl OperationDescriptor {
         }
     }
 
-    /// Dichiara se l'operazione, nella configurazione data, puo' rifiutare
-    /// righe con diagnostica row-scoped (`plenora-row-diagnostics-v1`).
+    /// Dichiara se l'operazione, nella configurazione data, può rifiutare
+    /// righe con diagnostica per riga (`plenora-row-diagnostics-v1`).
     ///
-    /// Autorita' unica catalog-level, accanto a [`Self::source_row_provenance`]
-    /// e `required_capabilities`: la usano il gate provenance del planner,
-    /// `prepare` e il gate dei piani legacy della CLI. Un nuovo percorso di
-    /// rifiuto row-scoped si dichiara qui.
+    /// È l'autorità unica, accanto a [`Self::source_row_provenance`]: la
+    /// usa la validazione del runner, che rifiuta un passo così quando un
+    /// passo a monte ha cambiato numero o ordine delle righe (gli indici
+    /// riportati non sarebbero più quelli della sorgente). Un nuovo percorso
+    /// di rifiuto per riga si dichiara qui.
     ///
-    /// E' config-sensitive: `table.type_cast` solo per i target con
-    /// conversione fallibile e `errors` assente/`coerce`/`raise`; gli hash solo
-    /// con `null_policy=error`; `table.hmac_sha256` mai. Le op geo sono quelle
-    /// dispatchate nel DAG con raccolta row-scoped: le op solo-trasporto
-    /// restano coperte dal contratto del trasporto.
+    /// Dipende dalla config: `table.type_cast` solo per i target con
+    /// conversione fallibile ed `errors` assente, `coerce` o `raise`; gli hash
+    /// solo con `null_policy=error`; `table.hmac_sha256` mai. Le geo sono
+    /// quelle i cui kernel raccolgono diagnostica per riga.
     #[must_use]
     pub fn emits_row_diagnostics(&self, config: &serde_json::Value) -> bool {
         match self.family {
@@ -510,29 +614,30 @@ impl OperationDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Catalogo unificato delle operazioni (decisione D17/D20).
+// Il catalogo.
 //
 // Le voci sono raggruppate per famiglia e versione di estensione; i
-// separatori dentro `CATALOG` sono l'unico indice. Mapping degli id in
-// piano-v5.md#alias-legacy.
+// separatori dentro `CATALOG` sono l'unico indice. Gli alias legacy stanno
+// in `ALIASES`.
 //
-// Metadati dove i descrittori geo non li dichiarano, scelti conservativi:
-// - `arity`: `BinaryOrdered` solo per le op su due input; due colonne dello
-//   stesso input restano `Unary`;
+// Criteri dei metadati geo, scelti conservativi:
+// - `arity`: `BinaryOrdered` solo per le operazioni su due ingressi; due
+//   colonne dello stesso ingresso restano `Unary`;
 // - `execution_class`: da `result_shape` (1:1 -> Streaming, aggregazioni e
-//   tessellazioni -> Blocking, overlay/join -> BinaryBlocking);
-// - `cancellation_behavior`: `Cooperative` per i kernel puri streaming,
-//   `BoundaryOnly` per i blocking grandi, `NonInterruptible` per i kernel
-//   topologici senza punti di cancellazione (`make_valid`, `polygonize`,
-//   `split`, un tempo dietro la capability esterna `geos`; errori-e-limiti.md);
-// - `result_shape`: la lineage binaria geo diventa `OneToMany`;
-// - `determinism`: `DefinedOrder` di default, `CanonicalOrder` per set
-//   operation e aggregazioni senza ordine, `InputOrder` per `concat`.
+//   tessellazioni -> Blocking, overlay e join -> BinaryBlocking);
+// - `cancellation_behavior`: `Cooperative` per i kernel streaming,
+//   `BoundaryOnly` per i bloccanti, `NonInterruptible` per i kernel senza
+//   punti di cancellazione (`make_valid`, `polygonize`, `split`,
+//   `reproject`);
+// - `result_shape`: gli abbinamenti delle binarie geo sono `OneToMany`;
+// - `determinism`: `DefinedOrder` di default, `CanonicalOrder` per le
+//   operazioni insiemistiche e le aggregazioni senza ordine, `InputOrder`
+//   per `concat`.
 // ---------------------------------------------------------------------------
 
 macro_rules! op {
-    // Nessuna versione esplicita: tutte e 4 le componenti a 1 (piano-v5.md#identita-e-fingerprint),
-    // vincolo di espansione `SumRelative` e nessuna esenzione (errori-e-limiti.md).
+    // Nessuna versione esplicita: tutte e quattro le componenti a 1,
+    // vincolo di espansione `SumRelative` e nessuna esenzione.
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident) => {
         op!($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat,
@@ -541,10 +646,10 @@ macro_rules! op {
     // Variante con chiavi opzionali: `semantic_version`,
     // `config_schema_version`, `contract_analysis_version`, `kernel_version`
     // (default 1), `expansion_constraint` (default `SumRelative`; accetta un
-    // ident di variante oppure `Custom(fattore)` con il fattore f64, errori-e-limiti.md),
+    // ident di variante oppure `Custom(fattore)` con il fattore f64),
     // `expansion_factor_exempt` (default `false`) e `geo_fusion` (default
-    // `NotFusible`, architettura.md#geometrie D12.2) sono ammesse in qualsiasi combinazione e
-    // ordine; chiave duplicata o sconosciuta -> errore di compilazione.
+    // `NotFusible`) sono ammesse in qualsiasi combinazione e ordine; una
+    // chiave sconosciuta non compila, una ripetuta vale l'ultima.
     ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
      $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident,
      $($versions:tt)+) => {
@@ -589,7 +694,7 @@ macro_rules! op {
         op!(@munch ($($base)*) ($s, $c, $a, $v, $x, $e, $g) $($rest)+)
     };
     // `expansion_constraint`: variante senza payload (ident) oppure
-    // `Custom(fattore)` con fattore f64 esplicito (errori-e-limiti.md).
+    // `Custom(fattore)` con fattore f64 esplicito.
     (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         expansion_constraint = Custom($v:expr)) => {
         op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e, $g))
@@ -614,7 +719,7 @@ macro_rules! op {
         expansion_factor_exempt = $v:expr, $($rest:tt)+) => {
         op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $v, $g) $($rest)+)
     };
-    // `geo_fusion`: variante di [`GeoFusion`] senza payload (architettura.md#geometrie D12.2).
+    // `geo_fusion`: variante di [`GeoFusion`] senza payload.
     (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
         geo_fusion = $v:ident) => {
         op!(@build ($($base)*) ($s, $c, $a, $k, $x, $e, GeoFusion::$v))
@@ -860,7 +965,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         semantic_version = 2,
         kernel_version = 3
     ),
-    // join generico: molti-a-molti possibile -> MaxRelative (errori-e-limiti.md).
+    // join generico: molti-a-molti possibile -> MaxRelative.
     op!(
         "table.join",
         Table,
@@ -1050,8 +1155,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol
     ),
-    // diff: l'output (added/removed/changed) e' proporzionale a entrambi gli
-    // input -> SumRelative (errori-e-limiti.md).
+    // diff: l'uscita (added/removed/changed) è proporzionale a entrambi gli
+    // ingressi -> SumRelative.
     op!(
         "table.table_diff",
         Table,
@@ -1467,10 +1572,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
     ),
     // `table.expression`: la grammatica comprende substring, regex_replace,
     // between, in, greatest, least, floor, ceil e power, e `date_trunc` rende
-    // Date32/TimestampMs nativi. Ciascuna di quelle capacita' e' osservabile
+    // Date32/TimestampMs nativi. Ciascuna di quelle capacità è osservabile
     // da fuori, quindi tutte e quattro le componenti di versione sono
-    // dichiarate esplicitamente invece di restare al default
-    // (piano-v5.md#identita-e-fingerprint).
+    // dichiarate esplicitamente invece di restare al default.
     op!(
         "table.expression",
         Table,
@@ -1593,8 +1697,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TransformInPlace,
         semantic_version = 2
     ),
-    // sjoin: una geometria left puo' intersecare molte right (molti-a-molti)
-    // -> MaxRelative (errori-e-limiti.md).
+    // sjoin: una geometria sinistra può intersecarne molte destre
+    // (molti-a-molti) -> MaxRelative.
     op!(
         "geo.sjoin",
         Geo,
@@ -1681,8 +1785,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // clip/difference: il taglio puo' spezzare una geometria left in piu'
-    // pezzi (OneToMany) -> MaxRelative.
+    // clip/difference: il kernel restituisce una sola geometria (anche
+    // Multi) per riga sinistra; `OneToMany` e `MaxRelative` sono le
+    // dichiarazioni del progetto d'origine, più larghe del kernel.
     op!(
         "geo.clip",
         Geo,
@@ -1820,7 +1925,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // nearest: una corrispondenza per riga left (lookup-style) -> LeftRelative.
+    // nearest: per ogni riga sinistra tutte le righe destre alla distanza
+    // minima (a pari distanza più righe); uscita guidata dal lato sinistro
+    // -> LeftRelative.
     op!(
         "geo.nearest",
         Geo,
@@ -2001,12 +2108,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         KernelValidated,
         expansion_constraint = LeftRelative
     ),
-    // architettura.md#geometrie: `make_valid` entra nel perimetro di fusione come
-    // TransformInPlace; l'ammissione di input OGC-invalido e' una
-    // proprieta' del suo gate di decode, gestita dal runner fuso con
-    // l'eccezione documentata in architettura.md#geometrie D12.4 — non richiede una
-    // variante di capability dedicata (la relazione di raggruppamento e'
-    // identica: 1:1 in place sulla stessa colonna).
+    // `make_valid` è TransformInPlace come le altre trasformazioni 1:1 sulla
+    // stessa colonna: che accetti ingressi OGC-invalidi è una proprietà
+    // della sua decodifica, non del raggruppamento.
     //
     // Backend Rust puro (`plenora_kernels_geo::rust_backend`) al posto di
     // GEOS: nessuna capability richiesta, `kernel_version` 2 per il cambio
@@ -2033,8 +2137,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // capability, `kernel_version` 2 per il cambio di kernel e
     // `config_schema_version` 2 per i parametri nuovi
     // (`accuratezza_accettata_m`, `trasformazioni`, `griglie`). Resta
-    // `NonInterruptible` come a 190c493: il kernel non ha punti di
-    // cancellazione.
+    // `NonInterruptible` come in `plenora-data-tools@190c493`: il kernel non
+    // ha punti di cancellazione.
     op!(
         "geo.reproject",
         Geo,
@@ -2582,9 +2686,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // `snap`: il riferimento da config (`reference_wkb`) e' assunto nello
-    // stesso CRS dell'input (convenzione D16): requisito SameProjected per
-    // l'unica colonna, come le distanze "unarie".
+    // `snap`: il riferimento da config (`reference_wkb`) si assume nello
+    // stesso CRS dell'ingresso, come ogni geometria letterale di una config:
+    // requisito SameProjected per l'unica colonna, come le distanze
+    // "unarie".
     op!(
         "geo.snap",
         Geo,
@@ -2601,9 +2706,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // --- Estensioni geo v1.3 ---------------------------------------------
     // Coperture poligonali (piantine di edifici): entrambe consumano l'intero
     // input (Blocking) e producono una riga per issue/tratto condiviso
-    // (WholeToMany, schema nuovo); aree e lunghezze in unita' di mappa,
-    // quindi SameProjected. Esenti da `max_expansion_factor` (errori-e-limiti.md:
-    // esenzione dichiarata in catalogo).
+    // (WholeToMany, schema nuovo); aree e lunghezze in unità di mappa,
+    // quindi SameProjected. Esenti da `max_expansion_factor`, per
+    // dichiarazione di catalogo.
     op!(
         "geo.coverage_validate",
         Geo,
@@ -2778,12 +2883,13 @@ pub static CATALOG: &[OperationDescriptor] = &[
     ),
 ];
 
-/// Tabella alias versionata (piano-v5.md#alias-legacy).
+/// Alias legacy degli id, dai piani e dal protocollo del progetto d'origine.
 ///
-/// Forma: `(schema_version, legacy_alias, canonical_id)`. Immutabile per le
-/// versioni pubblicate: un alias introdotto non puo' mai essere riassegnato.
-/// `schema_version` 3 copre sia i piani nogeo legacy sia gli id storici del
-/// protocollo geo (v2/v3, `TransformArrowSchema`).
+/// Forma: `(schema_version, legacy_alias, canonical_id)`. Un alias
+/// introdotto non si riassegna mai a un altro id. `schema_version` 3 copre
+/// sia i piani tabellari legacy sia gli id storici del protocollo geo
+/// (v2/v3, `TransformArrowSchema`). [`find_operation`] li risolve; il
+/// runner li rifiuta e vuole l'id canonico.
 pub static ALIASES: &[(u16, &str, &str)] = &[
     // --- Piani nogeo legacy: id storico -> table.<id> -----------------
     (3, "add_row_number", "table.add_row_number"),
@@ -2926,7 +3032,8 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "geometry_diagnostics", "geo.geometry_diagnostics"),
 ];
 
-/// Risolve un alias legacy per una data `schema_version` verso l'id canonico.
+/// Risolve un alias legacy per una data `schema_version` verso l'id
+/// canonico; `None` se l'alias non esiste per quella versione.
 #[must_use]
 pub fn resolve_alias(schema_version: u16, alias: &str) -> Option<&'static str> {
     ALIASES
@@ -2935,9 +3042,10 @@ pub fn resolve_alias(schema_version: u16, alias: &str) -> Option<&'static str> {
         .map(|(_, _, canonical)| *canonical)
 }
 
-/// Cerca un'operazione per id canonico; accetta anche gli alias legacy
-/// (in questo caso la `schema_version` non e' nota al chiamante e si usa
-/// la prima voce di tabella corrispondente).
+/// Cerca un'operazione per id canonico o alias legacy.
+///
+/// Per un alias la `schema_version` non è nota al chiamante e si usa la
+/// prima voce di tabella corrispondente. `None` se l'id è sconosciuto.
 #[must_use]
 pub fn find_operation(id: &str) -> Option<&'static OperationDescriptor> {
     CATALOG.iter().find(|op| op.id == id).or_else(|| {
@@ -2956,7 +3064,7 @@ mod tests {
 
     #[test]
     fn catalog_has_146_unique_ids() {
-        // 146, come plenora-data-tools@190c493: `geo.reproject` e' tornata
+        // 146, come in plenora-data-tools@190c493: `geo.reproject` è tornata
         // con la riproiezione in Rust puro.
         assert_eq!(CATALOG.len(), 146);
         let ids: HashSet<_> = CATALOG.iter().map(|op| op.id).collect();
@@ -3053,8 +3161,8 @@ mod tests {
         assert_eq!(filter.contract_analysis_version, 1);
         assert_eq!(filter.kernel_version, 2);
         // Le 4 componenti di table.expression restano esplicite e indipendenti:
-        // diagnostics row-scoped cambia semantica e kernel, non schema config
-        // né analisi del contratto (piano-v5.md#identita-e-fingerprint).
+        // la diagnostica per riga cambia semantica e kernel, non schema della
+        // config né analisi del contratto.
         let expression = find_operation("table.expression").expect("table.expression");
         assert_eq!(expression.semantic_version, 3);
         assert_eq!(expression.config_schema_version, 2);
@@ -3077,6 +3185,8 @@ mod tests {
         }
     }
 
+    // Nessuna operazione è oggi `BackendPending`: il test fissa la regola per
+    // una futura operazione dietro un backend esterno.
     #[test]
     fn backend_pending_ops_declare_their_capability() {
         for op in CATALOG {
@@ -3098,9 +3208,8 @@ mod tests {
 
     #[test]
     fn expansion_constraint_defaults_to_sum_relative() {
-        // Retrocompatibilita' comportamentale (errori-e-limiti.md): le op senza
-        // dichiarazione esplicita restano sulla base left+right e non sono
-        // esenti.
+        // Le operazioni senza dichiarazione esplicita restano sulla base
+        // sinistra + destra, su cui sono tarate le soglie, e non sono esenti.
         let filter = find_operation("table.filter").expect("table.filter");
         assert_eq!(
             filter.expansion_constraint,
@@ -3212,9 +3321,9 @@ mod tests {
 
     #[test]
     fn whole_to_many_exemption_is_declared_in_catalog() {
-        // errori-e-limiti.md: la classe di esenzione e' dichiarata in catalogo, non
-        // riconosciuta a posteriori — esattamente le op WholeToMany
-        // generative/diagnostiche.
+        // La classe di esenzione è dichiarata in catalogo, non riconosciuta
+        // guardando l'uscita: esattamente le operazioni WholeToMany
+        // generative o diagnostiche.
         let exempt: HashSet<_> = CATALOG
             .iter()
             .filter(|op| op.expansion_factor_exempt)
@@ -3326,13 +3435,12 @@ mod tests {
 
     #[test]
     // Come sopra: i confronti esatti sui fattori custom verificano
-    // l'uguaglianza per bit richiesta dal fingerprint
-    // (piano-v5.md#identita-e-fingerprint, errori-e-limiti.md).
+    // l'uguaglianza per bit di `PartialEq`.
     #[allow(clippy::float_cmp)]
     fn custom_constraint_overrides_the_threshold_not_the_metric() {
-        // errori-e-limiti.md: `Custom(fattore)` e' la stima a priori per op la cui
-        // semantica di output non ha una base fissa. La metrica vincolante
-        // resta `output_over_sum_inputs`; il fattore sovrascrive
+        // `Custom(fattore)` è la soglia propria di un'operazione la cui
+        // uscita non ha una base fissa. La metrica vincolante resta
+        // `output_over_sum_inputs`; il fattore sostituisce
         // `max_expansion_factor` come soglia per la singola operazione.
         let expansion = JoinExpansion::compute(6, 3, 2);
         assert_eq!(
@@ -3381,12 +3489,11 @@ mod tests {
 
     #[test]
     fn geo_fusion_matches_the_adr_0012_perimeter() {
-        // architettura.md#geometrie D12.2, perimetro fondibile: le
-        // trasformazioni 1:1 in place (piu' `reproject` e `make_valid`) sono
-        // TransformInPlace, le misure terminali TerminalMeasure, tutto il resto
-        // (tabellari incluse) NotFusible. La lista chiusa qui sotto e' il
-        // contratto; aggiungere un op fondibile richiede l'oracolo
-        // differenziale.
+        // Perimetro fondibile (il nome del test ricorda la decisione del
+        // progetto d'origine): le trasformazioni 1:1 sul posto (più
+        // `reproject` e `make_valid`) sono TransformInPlace, le misure
+        // terminali TerminalMeasure, tutto il resto (tabellari comprese)
+        // NotFusible. La lista chiusa qui sotto è il contratto.
         let transforms: HashSet<_> = CATALOG
             .iter()
             .filter(|op| op.geo_fusion == GeoFusion::TransformInPlace)
@@ -3458,16 +3565,15 @@ mod tests {
 
     #[test]
     fn geo_fusion_names_are_stable_snake_case() {
-        // Nomi usati da capabilities JSON e snapshot di catalogo: stabili per
-        // contratto (architettura.md#geometrie D12.2), mai derivati dal `Debug` Rust.
+        // Nomi stabili per contratto, mai derivati dal `Debug` di Rust.
         assert_eq!(GeoFusion::NotFusible.as_str(), "not_fusible");
         assert_eq!(GeoFusion::TransformInPlace.as_str(), "transform_in_place");
         assert_eq!(GeoFusion::TerminalMeasure.as_str(), "terminal_measure");
     }
 
-    /// Config di sonda generiche per l'autorita' row-diagnostics: applicate a
-    /// TUTTE le op (non sono una lista di op, coprono lo spazio config
-    /// sensibile: target di cast e policy null degli hash).
+    /// Config di sonda generiche per `emits_row_diagnostics`: applicate a
+    /// TUTTE le operazioni (non sono una lista di operazioni, coprono lo
+    /// spazio di config che conta: target di cast e policy null degli hash).
     fn row_diagnostics_probes() -> Vec<serde_json::Value> {
         let mut probes = vec![serde_json::json!({})];
         for target in [
@@ -3547,9 +3653,9 @@ mod tests {
             );
         }
 
-        // Drift lock: formula ed expression emettono con qualunque
-        // configurazione; se il catalogo smettesse di classificarle il gate
-        // legacy tornerebbe bypassabile via sort -> formula/expression.
+        // formula ed expression emettono con qualunque configurazione: se il
+        // catalogo smettesse di classificarle, il controllo di provenance del
+        // runner si aggirerebbe con sort -> formula/expression.
         assert!(find_operation("table.formula")
             .expect("formula")
             .emits_row_diagnostics(&serde_json::json!({})));
@@ -3560,16 +3666,16 @@ mod tests {
 
     #[test]
     fn row_diagnostics_emitting_operations_are_a_closed_catalog_set() {
-        // Anti-drift: il perimetro delle op che emettono diagnostica
-        // row-scoped e' chiuso e contato. Cambiarlo richiede un diff esplicito
-        // di questo test e del ledger di copertura.
+        // Il perimetro delle operazioni che emettono diagnostica per riga è
+        // chiuso e contato: cambiarlo richiede un diff esplicito di questo
+        // test.
         let probes = row_diagnostics_probes();
         let emitting: Vec<&str> = CATALOG
             .iter()
             .filter(|op| probes.iter().any(|config| op.emits_row_diagnostics(config)))
             .map(|op| op.id)
             .collect();
-        // 40, come plenora-data-tools@190c493 (`geo.reproject` compresa).
+        // 40, come in plenora-data-tools@190c493 (`geo.reproject` compresa).
         assert_eq!(
             emitting.len(),
             40,
@@ -3587,13 +3693,14 @@ mod tests {
 
     #[test]
     fn row_diagnostics_changes_carry_the_declared_version_bumps() {
-        // piano-v5.md#identita-e-fingerprint: ogni op il cui comportamento
-        // osservabile, kernel o gate planner e' cambiato con la diagnostica
-        // row-scoped dichiara il bump nelle componenti di versione. La tabella
-        // e' scritta a mano, non letta dal catalogo (anti-tautologia): (id,
-        // semantic, config_schema, contract_analysis, kernel).
+        // Ogni operazione il cui comportamento osservabile, kernel o
+        // controllo di validazione è cambiato con la diagnostica per riga
+        // dichiara l'incremento nelle componenti di versione. La tabella è
+        // scritta a mano, non letta dal catalogo, perché non sia una
+        // tautologia: (id, semantic, config_schema, contract_analysis,
+        // kernel).
         let expected: &[(&str, u32, u32, u32, u32)] = &[
-            // diag-kernel table: nuovo reject_rows / comportamento pubblico.
+            // Tabellari: nuovo rifiuto per riga nel kernel.
             ("table.date_extract", 2, 1, 1, 3),
             ("table.flatten_json", 2, 1, 1, 3),
             ("table.type_cast", 2, 1, 1, 3),
@@ -3611,14 +3718,13 @@ mod tests {
             ("table.explode", 2, 1, 1, 2),
             ("table.formula", 2, 1, 1, 3),
             ("table.expression", 3, 2, 2, 4),
-            // diag-wkt: raccolta nel kernel geo. La successiva dichiarazione
-            // pubblica encoding/types del produttore cambia anche semantica e
-            // contract analysis (piano-v5.md#identita-e-fingerprint,
-            // piano-v5.md#contratti-di-input).
+            // `from_wkt`: raccolta nel kernel geo. La successiva dichiarazione
+            // di encoding e tipi geometrici del produttore cambia anche
+            // semantica e analisi del contratto.
             ("geo.from_wkt", 3, 1, 2, 2),
-            // diag-transport / diag-coords: il rifiuto row-scoped porta
-            // il payload `plenora-row-diagnostics-v1` (comportamento
-            // osservabile; kernel invariato -> bump semantico soltanto).
+            // Geo: il rifiuto per riga porta il payload
+            // `plenora-row-diagnostics-v1` (comportamento osservabile; kernel
+            // invariato -> solo incremento semantico).
             ("geo.affine_transform", 2, 1, 1, 1),
             ("geo.area", 2, 1, 1, 1),
             ("geo.boundary", 2, 1, 1, 1),

@@ -1,16 +1,25 @@
-//! Contratti dati del grafo (architettura.md, decisioni D6, D16,
-//! D25; architettura.md#determinismo, architettura.md#planner-ed-executor).
+//! Contratti dati: che cosa una tabella promette prima di vedere i dati.
 //!
-//! I tipi che descrivono cio' che scorre sugli archi del DAG: il
-//! `DataContract`, l'identita' stabile delle colonne (`FieldId`), provenienza
-//! e scope delle proprieta', le statistiche di runtime e la sequenza logica
-//! dei batch (`BatchSequence`).
+//! I tipi che descrivono le tabelle fra un passo e l'altro: il
+//! [`DataContract`] (schema, colonna geometria, proprietà), l'identità
+//! stabile delle colonne ([`FieldId`]), provenienza e ambito delle
+//! proprietà, e due tipi del progetto d'origine che qui nessun codice usa
+//! ([`RuntimeStatistic`], [`BatchSequence`]). L'analisi dei kernel
+//! (`analyze_table_contract`, l'analisi geo) calcola il contratto d'uscita
+//! di un passo da quelli d'ingresso e dalla config; [`arrow_schema`] e
+//! [`arrow_metadata`] lo leggono da uno schema Arrow e lo riscrivono nei
+//! metadati.
 //!
-//! Struttura aperta, comportamento chiuso: il modello ammette piu' colonne
-//! geometriche, ma [`DataContract::validate`] ne rifiuta piu' di una (D16).
-//! Le combinazioni confidence/scope prive di senso non sono escluse dai
-//! tipi: la rappresentazione e' la coppia `ContractProperty<T> { confidence,
-//! scope }`.
+//! Struttura aperta, comportamento chiuso: il modello ammette più colonne
+//! geometriche, ma [`DataContract::validate`] ne rifiuta più di una. Le
+//! combinazioni confidence/scope prive di senso non sono escluse dai tipi:
+//! la rappresentazione è la coppia `ContractProperty<T> { confidence, scope
+//! }`.
+//!
+//! I valori testuali dei metadati `plenora.geometry.*` (tipi, dimensioni,
+//! encoding, CRS) seguono il contratto d'interfaccia del progetto
+//! d'origine: forme chiuse, minuscole, mai un default silenzioso per un
+//! valore non riconosciuto.
 
 pub mod arrow_metadata;
 pub mod arrow_schema;
@@ -25,7 +34,7 @@ use crate::arrow::SchemaRef;
 use crate::crs::ResolvedCrs;
 use crate::error::{PlenoraError, Result};
 
-/// Genera un enum ICD a forma testuale chiusa: l'enum con i suoi attributi
+/// Genera un enum a forma testuale chiusa: l'enum con i suoi attributi
 /// (derive e `serde` compresi, passati cosi' come sono), `as_str`,
 /// `Display`, l'elenco `ALL`, l'errore di parsing e `FromStr`.
 ///
@@ -63,7 +72,7 @@ macro_rules! enum_icd {
             /// Tutte le varianti, in ordine di dichiarazione.
             pub const ALL: &'static [Self] = &[$(Self::$variante),+];
 
-            /// Forma testuale ICD. Coincide con la serializzazione serde.
+            /// Forma testuale canonica. Coincide con la serializzazione serde.
             #[must_use]
             pub const fn as_str(self) -> &'static str {
                 match self {
@@ -113,13 +122,13 @@ macro_rules! enum_icd {
     };
 }
 
-/// Identità logica stabile di una colonna nel grafo (decisione D16).
+/// Identità logica stabile di una colonna nel piano.
 ///
-/// Namespace globale del grafo: gli ID sono assegnati dal planner dopo aver
-/// letto tutti gli input (oppure rimappati all'ingresso), così due input non
-/// possono collidere. Una rinomina preserva il `FieldId`; una colonna
-/// calcolata o derivata ne riceve uno nuovo; un join eredita i `FieldId`
-/// globali dei rispettivi rami.
+/// Namespace unico per piano: la validazione del runner assegna gli ID con
+/// un solo [`FieldAllocator`] (e rimappa le geometrie degli input), così due
+/// input non possono collidere. Una rinomina preserva il `FieldId`; una
+/// colonna calcolata o derivata ne riceve uno nuovo; un join eredita i
+/// `FieldId` dei rispettivi lati.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FieldId(pub u32);
 
@@ -130,23 +139,28 @@ impl fmt::Display for FieldId {
 }
 
 enum_icd! {
-    /// Dimensionalità delle geometrie di una colonna (ICD §3.3).
+    /// Dimensionalità delle geometrie di una colonna (chiave
+    /// `plenora.geometry.dimensions`).
     ///
-    /// Il contratto rappresenta e propaga la dimensionalita', non la elabora.
+    /// Il contratto rappresenta e propaga la dimensionalità, non la elabora.
     ///
-    /// `Unknown` significa «byte preservati, dimensionalita' non risolta» e non
-    /// va mai mappato a [`GeometryDimensions::Xy`] (R3.4): nasconderebbe
-    /// geometrie Z/M dietro un contratto 2D.
+    /// `Unknown` significa «byte preservati, dimensionalità non risolta» e non
+    /// va mai mappato a [`GeometryDimensions::Xy`]: nasconderebbe geometrie
+    /// Z/M dietro un contratto 2D.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     GeometryDimensions,
     errore UnknownGeometryDimensions = "dimensionalita' geometria non riconosciuta",
     "ammesse" {
+        /// Due coordinate.
         Xy => "xy",
+        /// Con quota Z.
         Xyz => "xyz",
+        /// Con misura M.
         Xym => "xym",
+        /// Con quota Z e misura M.
         Xyzm => "xyzm",
-        /// Byte preservati, dimensionalità non risolta: mai mappare a `Xy` (R3.4).
+        /// Byte preservati, dimensionalità non risolta: mai mappare a `Xy`.
         Unknown => "unknown",
     }
 }
@@ -155,8 +169,8 @@ impl GeometryDimensions {
     /// Byte per coordinata interleaved (`f64`), se garantiti: `Xy` = 16,
     /// `Xyz`/`Xym` = 24, `Xyzm` = 32.
     ///
-    /// `Unknown` non garantisce alcuno stride (R3.4: i byte sono preservati
-    /// ma la dimensionalità non è risolta) e restituisce `None`: nessun
+    /// `Unknown` non garantisce alcuno stride (i byte sono preservati ma la
+    /// dimensionalità non è risolta) e restituisce `None`: nessun
     /// consumatore può assumere un layout di coordinate per `Unknown`.
     #[must_use]
     pub const fn coordinate_stride(self) -> Option<usize> {
@@ -170,33 +184,36 @@ impl GeometryDimensions {
 }
 
 enum_icd! {
-    /// Framing binario delle celle geometria (ICD §3.3, regola R3.5: enum
-    /// chiuso).
+    /// Framing binario delle celle geometria (chiave
+    /// `plenora.geometry.encoding`): enum chiuso.
     ///
     /// Solo WKB ISO ed EWKB (`PostGIS`, con SRID/flag Z/M): altri framing
-    /// (`GeoPackage`, TWKB, …) la discovery li rifiuta, mai mappati a un encoding
-    /// noto.
+    /// (`GeoPackage`, TWKB, …) la lettura del contratto li rifiuta, mai
+    /// mappati a un encoding noto.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     GeometryEncoding,
     errore UnknownGeometryEncoding = "encoding geometria non riconosciuto",
     "ammessi" {
+        /// WKB ISO.
         Wkb => "wkb",
+        /// EWKB di `PostGIS`, con SRID e flag Z/M.
         Ewkb => "ewkb",
     }
 }
 
 enum_icd! {
-    /// Tipo geometrico canonico di una colonna (ICD §3.1, regola R3.1).
+    /// Tipo geometrico canonico di una colonna: i quindici tipi del WKB ISO
+    /// più `Unknown`.
     ///
     /// Serializzati in minuscolo senza separatore (`linestring`), come i sistemi
     /// esterni (`PostGIS`, `GeoPackage`, WKT): ai confini non serve traduzione.
-    /// Un componente puo' supportarne un sottoinsieme, ma rifiuta esplicitamente
-    /// gli altri (R3.2).
+    /// Un componente può supportarne un sottoinsieme, ma rifiuta
+    /// esplicitamente gli altri.
     ///
-    /// INVARIANTE: l'ordine delle varianti e' l'ordine canonico di §3.1. `Ord`
-    /// ne deriva e la serializzazione canonica delle liste di tipi (R3.4.1,
-    /// [`GeometryTypesProperty`]) ne dipende: non riordinare le varianti.
+    /// INVARIANTE: l'ordine delle varianti è l'ordine canonico. `Ord` ne
+    /// deriva e la serializzazione canonica delle liste di tipi
+    /// ([`GeometryTypesProperty`]) ne dipende: non riordinare le varianti.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     GeometryType,
@@ -217,7 +234,7 @@ enum_icd! {
         PolyhedralSurface => "polyhedralsurface",
         Tin => "tin",
         Triangle => "triangle",
-        /// Tipo non risolto (R3.1): mai degradato a un tipo noto.
+        /// Tipo non risolto: mai degradato a un tipo noto.
         Unknown => "unknown",
     }
 }
@@ -227,8 +244,7 @@ impl GeometryType {
     /// ne' i flag EWKB, gia' estratti dal chiamante) al tipo canonico.
     ///
     /// Restituisce `None` per 13 e 14 (`curve`/`surface`, astratti, mai sul
-    /// filo) e per ogni codice sconosciuto: il rifiuto spetta al chiamante
-    /// (R3.2).
+    /// filo) e per ogni codice sconosciuto: il rifiuto spetta al chiamante.
     #[must_use]
     pub const fn from_wkb_base_type(code: u32) -> Option<Self> {
         match code {
@@ -253,24 +269,28 @@ impl GeometryType {
 }
 
 enum_icd! {
-    /// Stato di dichiarazione dei tipi geometrici di una colonna (ICD R3.4.1,
-    /// chiave canonica `plenora.geometry.types_declaration`).
+    /// Stato di dichiarazione dei tipi geometrici di una colonna (chiave
+    /// canonica `plenora.geometry.types_declaration`).
     ///
     /// `Mixed` significa tipi diversi **per dichiarazione** (per esempio una
-    /// colonna `PostGIS` `geometry` senza vincolo): e' informazione, non
+    /// colonna `PostGIS` `geometry` senza vincolo): è informazione, non
     /// ignoranza. `Unresolved` significa byte non ispezionati e nessuna
     /// dichiarazione.
     ///
-    /// R3.4.1 vieta le conversioni `mixed` ↔ `unresolved`. Un input legacy senza
-    /// le chiavi `types`/`types_declaration` non e' `Unresolved` ma «proprieta'
-    /// non dichiarata»: si preserva o si normalizza con un `LossReport`.
+    /// Le conversioni `mixed` ↔ `unresolved` sono vietate: direbbero una cosa
+    /// diversa da quella dichiarata. Un input senza le chiavi
+    /// `types`/`types_declaration` non è `Unresolved` ma «proprietà non
+    /// dichiarata» ([`GeometryColumnContract::undeclared_types`]).
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     TypesDeclaration,
     errore UnknownTypesDeclaration = "types_declaration non riconosciuta",
     "ammesse" {
+        /// Esattamente i tipi dell'elenco, non vuoto.
         Exact => "exact",
+        /// Tipi diversi per dichiarazione; l'elenco, se c'è, li nomina.
         Mixed => "mixed",
+        /// Nessuna dichiarazione e byte non ispezionati; nessun elenco.
         Unresolved => "unresolved",
     }
 }
@@ -281,17 +301,17 @@ enum_icd! {
 /// dell'elenco (regola «errori senza dati» di `plenora-core`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeometryTypesPropertyError {
-    /// `exact` senza elenco o con elenco vuoto (R3.4.1).
+    /// `exact` senza elenco o con elenco vuoto.
     ExactWithoutTypes,
-    /// `unresolved` con elenco presente (R3.4.1).
+    /// `unresolved` con elenco presente.
     UnresolvedWithTypes,
     /// Valore non canonico nell'elenco testuale (maiuscole, `snake_case`,
     /// spazi, token vuoti o nomi ignoti).
     UnknownTypeInList,
     /// Duplicato nell'elenco testuale: la forma canonica richiede valori
-    /// unici (R3.4.1).
+    /// unici.
     DuplicateTypeInList,
-    /// Elenco testuale fuori dall'ordine canonico di §3.1 (R3.4.1).
+    /// Elenco testuale fuori dall'ordine canonico di [`GeometryType`].
     NonCanonicalOrder,
 }
 
@@ -321,18 +341,17 @@ impl fmt::Display for GeometryTypesPropertyError {
 impl std::error::Error for GeometryTypesPropertyError {}
 
 /// Coppia coerente (`types_declaration`, `types`) delle chiavi canoniche
-/// R2.2/R3.4.1 per una colonna geometrica.
+/// `plenora.geometry.*` per una colonna geometrica.
 ///
-/// Le coerenze di R3.4.1 sono imposte per costruzione (campi privati, unico
-/// ingresso [`GeometryTypesProperty::new`]): `Exact` richiede un elenco non
-/// vuoto, `Unresolved` lo vieta, `Mixed` lo ammette (vuoto conta come
-/// assente).
+/// Le coerenze sono imposte per costruzione (campi privati, unico ingresso
+/// [`GeometryTypesProperty::new`]): `Exact` richiede un elenco non vuoto,
+/// `Unresolved` lo vieta, `Mixed` lo ammette (vuoto conta come assente).
 ///
 /// `new` normalizza l'elenco, cosi' una dichiarazione ha una sola
 /// serializzazione; il parsing ([`GeometryTypesProperty::from_canonical_list`])
 /// e' invece fail-closed su spazi, duplicati e ordine non canonico.
 ///
-/// Niente serde derivato: sul filo c'e' la coppia di chiavi R2.2, e una
+/// Niente serde derivato: nei metadati c'è la coppia di chiavi, e una
 /// `Deserialize` derivata aggirerebbe il validatore.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GeometryTypesProperty {
@@ -341,8 +360,8 @@ pub struct GeometryTypesProperty {
 }
 
 impl GeometryTypesProperty {
-    /// Costruisce la proprieta' validando le coerenze R3.4.1 e
-    /// normalizzando l'elenco (dedup + ordine canonico §3.1).
+    /// Costruisce la proprietà validando le coerenze e normalizzando
+    /// l'elenco (dedup + ordine canonico).
     ///
     /// # Errors
     ///
@@ -354,8 +373,8 @@ impl GeometryTypesProperty {
         declaration: TypesDeclaration,
         mut types: Vec<GeometryType>,
     ) -> std::result::Result<Self, GeometryTypesPropertyError> {
-        // Normalizzazione R3.4.1: valori unici in ordine canonico §3.1 —
-        // una stessa dichiarazione ha una sola serializzazione.
+        // Normalizzazione: valori unici in ordine canonico, così una stessa
+        // dichiarazione ha una sola serializzazione.
         types.sort_unstable();
         types.dedup();
         Self::check_coherence(declaration, types.len())?;
@@ -365,9 +384,9 @@ impl GeometryTypesProperty {
         })
     }
 
-    /// Parsing fail-closed dalla forma canonica sul filo: valori unici in
-    /// ordine §3.1 separati da `,` senza spazi. La stringa vuota modella
-    /// l'elenco assente (chiave `types` non emessa).
+    /// Parsing fail-closed dalla forma canonica dei metadati: valori unici
+    /// in ordine canonico separati da `,` senza spazi. La stringa vuota
+    /// modella l'elenco assente (chiave `types` non emessa).
     ///
     /// # Errors
     ///
@@ -425,22 +444,22 @@ impl GeometryTypesProperty {
         }
     }
 
-    /// La dichiarazione R3.4.1.
+    /// La dichiarazione (`types_declaration`).
     #[must_use]
     pub const fn declaration(&self) -> TypesDeclaration {
         self.declaration
     }
 
-    /// L'elenco normalizzato dei tipi (unici, ordine canonico §3.1);
-    /// vuoto quando la dichiarazione non porta elenco.
+    /// L'elenco normalizzato dei tipi (unici, ordine canonico); vuoto quando
+    /// la dichiarazione non porta elenco.
     #[must_use]
     pub fn types(&self) -> &[GeometryType] {
         &self.types
     }
 
-    /// Serializzazione canonica della chiave `plenora.geometry.types`
-    /// (R2.2): valori unici in ordine §3.1 separati da `,` senza spazi.
-    /// Stringa vuota quando l'elenco e' assente.
+    /// Serializzazione canonica della chiave `plenora.geometry.types`:
+    /// valori unici in ordine canonico separati da `,` senza spazi. Stringa
+    /// vuota quando l'elenco è assente.
     #[must_use]
     pub fn to_canonical_list(&self) -> String {
         let mut list = String::new();
@@ -455,125 +474,142 @@ impl GeometryTypesProperty {
 }
 
 enum_icd! {
-    /// Ordine degli assi del CRS (chiave canonica `plenora.geometry.axis_order`,
-    /// tabella R2.2). Serializzazione ICD minuscola con `_`.
+    /// Ordine degli assi del CRS (chiave canonica
+    /// `plenora.geometry.axis_order`). Forma testuale minuscola con `_`.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     AxisOrder,
     errore UnknownAxisOrder = "ordine assi non riconosciuto",
     "ammessi" {
+        /// Longitudine, latitudine.
         LonLat => "lon_lat",
+        /// Latitudine, longitudine.
         LatLon => "lat_lon",
+        /// Est, nord.
         EastingNorthing => "easting_northing",
+        /// Nord, est.
         NorthingEasting => "northing_easting",
+        /// Un altro ordine.
         Other => "other",
+        /// Ordine non noto.
         Unknown => "unknown",
     }
 }
 
 enum_icd! {
     /// Stato di risoluzione del CRS (chiave canonica
-    /// `plenora.geometry.crs_resolution`, tabella R2.2). Serializzazione ICD
-    /// minuscola con `_`.
+    /// `plenora.geometry.crs_resolution`). Forma testuale minuscola con `_`.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     CrsResolution,
     errore UnknownCrsResolution = "risoluzione CRS non riconosciuta",
     "ammesse" {
+        /// CRS risolto.
         Resolved => "resolved",
+        /// CRS dichiarato ma non risolto (o dichiarazioni in conflitto).
         DeclaredUnresolved => "declared_unresolved",
+        /// Nessun CRS dichiarato.
         Missing => "missing",
     }
 }
 
 enum_icd! {
     /// Formato testuale della definizione CRS (chiave canonica
-    /// `plenora.geometry.crs_definition_format`, tabella R2.2).
-    /// Serializzazione ICD minuscola.
+    /// `plenora.geometry.crs_definition_format`). Forma testuale minuscola.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     CrsDefinitionFormat,
     errore UnknownCrsDefinitionFormat = "formato definizione CRS non riconosciuto",
     "ammessi" {
+        /// WKT1.
         Wkt => "wkt",
+        /// WKT2.
         Wkt2 => "wkt2",
+        /// PROJJSON.
         Projjson => "projjson",
     }
 }
 
 enum_icd! {
     /// Semantica spaziale della colonna (chiave canonica
-    /// `plenora.geometry.spatial_semantics`, tabella R2.2). Serializzazione ICD
-    /// minuscola.
+    /// `plenora.geometry.spatial_semantics`). Forma testuale minuscola.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     SpatialSemantics,
     errore UnknownSpatialSemantics = "semantica spaziale non riconosciuta",
     "ammesse" {
+        /// Geometria planare.
         Geometry => "geometry",
+        /// Geografia sulla sfera o sull'ellissoide.
         Geography => "geography",
     }
 }
 
 enum_icd! {
     /// Precisione delle coordinate (chiave canonica
-    /// `plenora.geometry.precision`, tabella R2.2). Serializzazione ICD
-    /// minuscola.
+    /// `plenora.geometry.precision`). Forma testuale minuscola.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     GeometryPrecision,
     errore UnknownGeometryPrecision = "precisione geometria non riconosciuta",
     "ammesse" {
+        /// `f64`.
         Float64 => "float64",
+        /// `f32`.
         Float32 => "float32",
+        /// Quella nativa della sorgente.
         Native => "native",
     }
 }
 
-/// CRS di una colonna geometrica nel contratto (R4.1: gli stati di
-/// risoluzione non si collassano; R4.4: mai un CRS inventato).
+/// CRS di una colonna geometrica nel contratto. Gli stati di risoluzione
+/// non si collassano l'uno nell'altro, e un CRS non si inventa mai.
 ///
-/// - [`ContractCrs::Resolved`]: definizione risolta contro PROJ dalla
-///   discovery;
+/// - [`ContractCrs::Resolved`]: definizione risolta dal risolutore alla
+///   lettura del contratto (qui la tabella dei CRS integrati, o un
+///   risolutore del chiamante);
 /// - [`ContractCrs::ResolvedByDecision`]: risolta allo stesso modo, ma per
-///   una decisione esplicita del piano (R4.6.3, `crs_decisions`) su uno stato
-///   `DeclaredUnresolved`. Conta per l'emissione, dove il CRS deciso
-///   sostituisce le dichiarazioni in conflitto della sorgente; altrove e' un
-///   CRS risolto a tutti gli effetti;
-/// - [`ContractCrs::DeclaredUnresolved`]: il CRS c'e' ma non si risolve
-///   (dichiarato cosi', o dichiarazioni in conflitto). Senza decisione del
-///   piano l'incoerenza si propaga (R4.6.3) e arriva al bordo di scrittura con
-///   le dichiarazioni originali (R4.6.4): per questo la variante porta
-///   `crs_id` e `definition` col suo formato (R4.3). Lo `srid` viaggia come
-///   lineage nei metadati (R2.4). La discovery la costruisce solo con almeno
-///   una rappresentazione dichiarata fra `crs_id`, `definition` e `srid`
-///   (R4.1, R4.3.1): col solo `srid` i due campi sono assenti;
+///   una decisione esplicita del piano su uno stato `DeclaredUnresolved`.
+///   Conta per l'emissione, dove il CRS deciso sostituisce le dichiarazioni
+///   in conflitto della sorgente; altrove è un CRS risolto a tutti gli
+///   effetti. Nessun codice di questo repository la costruisce: le
+///   decisioni CRS del piano (`crs_decisions`) erano del progetto
+///   d'origine;
+/// - [`ContractCrs::DeclaredUnresolved`]: il CRS c'è ma non si risolve
+///   (dichiarato così, o dichiarazioni in conflitto). L'incoerenza si
+///   propaga fino alla scrittura con le dichiarazioni originali: per questo
+///   la variante porta `crs_id` e `definition` col suo formato. Lo `srid`
+///   viaggia come lineage nei metadati. La lettura la costruisce solo con
+///   almeno una rappresentazione dichiarata fra `crs_id`, `definition` e
+///   `srid`: col solo `srid` i due campi sono assenti;
 /// - [`ContractCrs::Missing`]: nessun CRS dichiarato. Si propaga negli
-///   output (`plenora.geometry.crs_resolution = missing`) e ferma solo le op
-///   con un `CrsRequirement`, in analyze.
+///   output (`plenora.geometry.crs_resolution = missing`) e ferma solo le
+///   operazioni con un `CrsRequirement`, nell'analisi del contratto.
 ///
 /// `DeclaredUnresolved` ferma le stesse op nello stesso punto e con la
 /// stessa categoria (`Crs`) di `Missing`, ma con un messaggio distinto: la
 /// colonna dichiara un'incoerenza, non un'assenza.
 #[derive(Clone, Debug)]
 pub enum ContractCrs {
+    /// CRS risolto.
     Resolved(ResolvedCrs),
-    /// Risolto per decisione esplicita del piano (R4.6.3): stesso
+    /// Risolto per decisione esplicita del piano: stesso
     /// comportamento di [`ContractCrs::Resolved`] per i consumatori del
     /// CRS; l'emissione sostituisce le dichiarazioni della sorgente con il
     /// CRS deciso.
     ResolvedByDecision(ResolvedCrs),
-    /// Incoerenza dichiarata non risolta (R4.6.3): le rappresentazioni
-    /// originali, per la ri-emissione fedele (R2.4/R4.6.4).
+    /// Incoerenza dichiarata non risolta: le rappresentazioni originali, per
+    /// la ri-emissione fedele.
     DeclaredUnresolved {
         /// Identificatore di autorita' dichiarato (`plenora.geometry.crs_id`).
         crs_id: Option<String>,
         /// Definizione testuale dichiarata (`plenora.geometry.crs_definition`).
         definition: Option<String>,
-        /// Formato della definizione (`plenora.geometry.crs_definition_format`,
-        /// R4.3), se dichiarato.
+        /// Formato della definizione (`plenora.geometry.crs_definition_format`),
+        /// se dichiarato.
         definition_format: Option<CrsDefinitionFormat>,
     },
+    /// Nessun CRS dichiarato.
     Missing,
 }
 
@@ -588,7 +624,7 @@ impl ContractCrs {
     }
 
     /// Stato di risoluzione per la chiave canonica
-    /// `plenora.geometry.crs_resolution` (R2.2).
+    /// `plenora.geometry.crs_resolution`.
     #[must_use]
     pub const fn resolution(&self) -> CrsResolution {
         match self {
@@ -599,7 +635,7 @@ impl ContractCrs {
     }
 }
 
-/// Contratto di una colonna geometrica (architettura.md).
+/// Contratto di una colonna geometrica.
 #[derive(Clone, Debug)]
 pub struct GeometryColumnContract {
     /// Identità logica stabile nel grafo: le rinomine cambiano `name`,
@@ -608,19 +644,20 @@ pub struct GeometryColumnContract {
     /// Nome visibile della colonna nello schema Arrow.
     pub name: String,
     /// Stato del CRS (solo `geo.reproject` modifica un CRS risolto; ogni
-    /// altro step lo preserva, incluso lo stato `Missing` — R4.6.4).
+    /// altro passo lo preserva, compreso lo stato `Missing`).
     pub crs: ContractCrs,
+    /// Dimensionalità delle geometrie.
     pub dimensions: GeometryDimensions,
-    /// Framing binario delle celle (ICD §3.3, regola R3.5), se dichiarato
-    /// dai metadati: `None` quando la sorgente non dichiara un `encoding` —
-    /// mai un default silenzioso. I framing fuori
-    /// dall'enum chiuso non sono rappresentabili: la discovery li rifiuta
-    /// con errore esplicito prima di costruire il contratto.
+    /// Framing binario delle celle, se dichiarato dai metadati: `None`
+    /// quando la sorgente non dichiara un `encoding`, mai un default
+    /// silenzioso. I framing fuori dall'enum chiuso non sono
+    /// rappresentabili: la lettura del contratto li rifiuta con errore
+    /// esplicito.
     pub encoding: Option<GeometryEncoding>,
+    /// Se la colonna ammette null (uguale al campo dello schema).
     pub nullable: bool,
     /// Dichiarazione dei tipi geometrici della colonna (chiavi canoniche
-    /// `plenora.geometry.types` + `plenora.geometry.types_declaration`,
-    /// R2.2/R3.4.1).
+    /// `plenora.geometry.types` + `plenora.geometry.types_declaration`).
     ///
     /// Default: [`GeometryColumnContract::undeclared_types`], cioe'
     /// «proprieta' non dichiarata», distinta da `TypesDeclaration::Unresolved`
@@ -633,26 +670,26 @@ impl GeometryColumnContract {
     /// dei tipi: proprieta' non dichiarata (confidence `Unknown`, scope
     /// `Schema`).
     ///
-    /// Non equivale a `Declared(TypesDeclaration::Unresolved)` (R3.4.1).
+    /// Non equivale a `Declared(TypesDeclaration::Unresolved)`.
     #[must_use]
     pub const fn undeclared_types() -> ContractProperty<GeometryTypesProperty> {
         ContractProperty::new(PropertyConfidence::Unknown, PropertyScope::Schema)
     }
 }
 
-/// Assegnatore di [`FieldId`] nel namespace globale del grafo (decisione D16).
+/// Assegnatore di [`FieldId`] nel namespace del piano.
 ///
-/// Dentro un grafo l'allocatore e' uno solo, condiviso da planner e moduli
-/// `analyze_contract`: due allocatori non coordinati darebbero lo stesso ID a
-/// colonne diverse.
+/// Dentro un piano l'allocatore è uno solo, condiviso dalla validazione del
+/// runner e dalle analisi dei kernel: due allocatori non coordinati
+/// darebbero lo stesso ID a colonne diverse.
 ///
-/// Il planner rimappa le geometrie di input con [`FieldAllocator::alloc`]
-/// (senza legare i nomi: gli input possono avere colonne omonime);
-/// [`FieldAllocator::observe`] registra gli ID gia' presenti negli input di un
-/// nodo. Le colonne propagate tengono l'ID, le derivate
-/// ([`FieldAllocator::derive`]) ne ricevono uno nuovo, le rinomine lo spostano
-/// ([`FieldAllocator::rename`]); [`FieldAllocator::intern`] rende stabile
-/// l'ID di una colonna per nome (chiavi `sorted_by`).
+/// La validazione rimappa le geometrie di input con
+/// [`FieldAllocator::alloc`] (senza legare i nomi: gli input possono avere
+/// colonne omonime); [`FieldAllocator::observe`] registra gli ID già
+/// presenti negli input di un passo. Le colonne propagate tengono l'ID, le
+/// derivate ([`FieldAllocator::derive`]) ne ricevono uno nuovo, le rinomine
+/// lo spostano ([`FieldAllocator::rename`]); [`FieldAllocator::intern`]
+/// rende stabile l'ID di una colonna per nome (chiavi `sorted_by`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FieldAllocator {
     next: u32,
@@ -660,8 +697,8 @@ pub struct FieldAllocator {
 }
 
 impl FieldAllocator {
-    /// Allocatore che parte da `next` (il planner usa il primo ID libero dopo
-    /// gli input del grafo).
+    /// Allocatore che parte da `next` (per esempio il primo ID libero dopo
+    /// quelli degli input).
     #[must_use]
     pub fn new(next: u32) -> Self {
         Self {
@@ -676,7 +713,7 @@ impl FieldAllocator {
     ///
     /// `PlenoraError::InvalidPlan` quando lo spazio degli identificatori e'
     /// esaurito: un incremento saturante renderebbe lo stesso id due volte, e
-    /// due colonne condividerebbero l'identita' (D16).
+    /// due colonne condividerebbero l'identità.
     pub fn alloc(&mut self) -> Result<FieldId> {
         let id = FieldId(self.next);
         self.next = self.next.checked_add(1).ok_or_else(|| {
@@ -714,7 +751,7 @@ impl FieldAllocator {
         Ok(id)
     }
 
-    /// Rinomina: il `FieldId` segue la colonna (D16).
+    /// Rinomina: il `FieldId` segue la colonna.
     pub fn rename(&mut self, old: &str, new: &str) {
         if let Some(id) = self.by_name.remove(old) {
             self.by_name.insert(new.to_owned(), id);
@@ -722,7 +759,7 @@ impl FieldAllocator {
     }
 
     /// Colonna derivata: riceve un `FieldId` nuovo, sostituendo l'eventuale
-    /// identità precedente associata al nome (D16).
+    /// identità precedente associata al nome.
     ///
     /// # Errors
     ///
@@ -734,13 +771,12 @@ impl FieldAllocator {
     }
 }
 
-/// Provenienza di una proprietà del contratto (decisione D25).
+/// Provenienza di una proprietà del contratto.
 ///
-/// Il planner usa come precondizioni semantiche solo proprietà `Proven`;
-/// le `Estimated` guidano esclusivamente scelte prestazionali correggibili a
-/// runtime. Le proprietà possono cambiare livello nel tempo: una `Declared`
-/// può diventare `Proven` tramite validazione dinamica, una `Estimated` può
-/// essere aggiornata dal runtime.
+/// Come precondizione semantica vale solo una proprietà `Proven`; le
+/// `Estimated` guidano esclusivamente scelte prestazionali correggibili in
+/// esecuzione. Una `Declared` può diventare `Proven` con una verifica sui
+/// dati, una `Estimated` può essere aggiornata in esecuzione.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PropertyConfidence<T> {
     /// Dichiarata da una fonte esterna (piano, utente), non verificata.
@@ -776,7 +812,7 @@ impl<T> PropertyConfidence<T> {
     }
 }
 
-/// Ambito di validità di una proprietà (decisione D25).
+/// Ambito di validità di una proprietà.
 ///
 /// Lo scope conta: "ogni batch è ordinato" non implica "lo stream è
 /// ordinato". Una proprietà dataset-wide diventa `Proven(Dataset)` solo al
@@ -793,14 +829,17 @@ pub enum PropertyScope {
     Dataset,
 }
 
-/// Una proprietà tipizzata con provenienza e scope (architettura.md).
+/// Una proprietà tipizzata con provenienza e ambito.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContractProperty<T> {
+    /// Valore e livello di fiducia.
     pub confidence: PropertyConfidence<T>,
+    /// Ambito in cui la proprietà vale.
     pub scope: PropertyScope,
 }
 
 impl<T> ContractProperty<T> {
+    /// Proprietà con la fiducia e l'ambito dati.
     pub const fn new(confidence: PropertyConfidence<T>, scope: PropertyScope) -> Self {
         Self { confidence, scope }
     }
@@ -857,21 +896,26 @@ pub struct SortOrder {
 pub struct ContractProperties {
     /// Ordinamento dichiarato/dimostrato: chiavi, verso e posizione dei null.
     pub sorted_by: Option<ContractProperty<SortOrder>>,
-    /// Cardinalità nota o stimata dell'arco: mai `Proven` nella validazione
-    /// statica, perché non è dimostrabile dagli header (D8, architettura.md).
+    /// Cardinalità nota o stimata della tabella: mai `Proven` in
+    /// validazione, perché senza i dati non è dimostrabile.
     pub row_count: Option<ContractProperty<u64>>,
 }
 
-/// Contratto di un arco del DAG (decisioni D6, D16).
+/// Contratto di una tabella: ingresso o uscita di un passo.
 ///
-/// Ogni arco trasporta `RecordBatch` conformi a questo contratto, inferito a
-/// secco dal planner (`analyze_contract` di ogni operazione).
+/// Ogni tabella è conforme al suo contratto, inferito senza i dati
+/// dall'analisi dell'operazione che la produce; il runner verifica dopo
+/// ogni passo che l'uscita del kernel abbia nomi, tipi e metadati del
+/// contratto.
 #[derive(Clone, Debug)]
 pub struct DataContract {
+    /// Schema Arrow, metadati compresi.
     pub schema: SchemaRef,
-    /// Al massimo una colonna geometrica (validato, decisione D16).
+    /// Colonne geometriche: al massimo una ([`DataContract::validate`]).
     pub geometries: Vec<GeometryColumnContract>,
+    /// La colonna geometrica attiva, se dichiarata.
     pub active_geometry: Option<FieldId>,
+    /// Proprietà (ordinamento, cardinalità).
     pub properties: ContractProperties,
 }
 
@@ -913,7 +957,7 @@ impl DataContract {
     ///
     /// - nomi dei campi univoci (altrimenti `field_with_name` risolve al primo
     ///   omonimo);
-    /// - al massimo una colonna geometrica (D16);
+    /// - al massimo una colonna geometrica;
     /// - ogni colonna geometrica esiste nello schema con lo stesso nome, la
     ///   stessa nullability e tipo fisico `Binary`, che ogni lettore della
     ///   geometria presuppone;
@@ -987,23 +1031,23 @@ impl DataContract {
     }
 }
 
-/// Chiave canonica dell'elenco dei tipi geometrici (R2.2).
+/// Chiave canonica dell'elenco dei tipi geometrici.
 ///
 /// Vive qui, nel livello contratto, perche' e' proprio la chiave con cui il
 /// contratto e i metadati Arrow devono concordare; `plenora-kernels-geo` la
 /// riespone per il lato emissione, cosi' esiste una sola definizione.
 pub const PLENORA_GEOMETRY_TYPES_KEY: &str = "plenora.geometry.types";
 
-/// Chiave canonica dello stato di dichiarazione dei tipi (R2.2/R3.4.1).
+/// Chiave canonica dello stato di dichiarazione dei tipi.
 pub const PLENORA_GEOMETRY_TYPES_DECLARATION_KEY: &str = "plenora.geometry.types_declaration";
 
-/// Chiave canonica della dimensionalita' (R2.1/R2.2).
+/// Chiave canonica della dimensionalità.
 pub const PLENORA_GEOMETRY_DIMENSIONS_KEY: &str = "plenora.geometry.dimensions";
 
-/// Chiave canonica del framing binario delle celle (R3.5).
+/// Chiave canonica del framing binario delle celle.
 pub const PLENORA_GEOMETRY_ENCODING_KEY: &str = "plenora.geometry.encoding";
 
-/// Chiave canonica dello stato di risoluzione del CRS (R2.2).
+/// Chiave canonica dello stato di risoluzione del CRS.
 pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str = "plenora.geometry.crs_resolution";
 
 /// Coerenza fra la proprieta' tipizzata `types` del contratto e i metadati
@@ -1012,7 +1056,7 @@ pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str = "plenora.geometry.crs_reso
 /// 1. Ogni chiave canonica presente dev'essere leggibile, qualunque cosa
 ///    dichiari il contratto: «presente ma malformata» non e' «assente».
 /// 2. Le due fonti si confrontano solo quando entrambe dichiarano qualcosa
-///    (R3.4.1: «non dichiarato» e' uno stato legittimo); se si
+///    («non dichiarato» è uno stato legittimo); se si
 ///    contraddicono, il contratto e' rifiutato.
 fn validate_declared_types(
     geometry: &GeometryColumnContract,
@@ -1020,7 +1064,7 @@ fn validate_declared_types(
 ) -> Result<()> {
     // Ogni chiave canonica PRESENTE dev'essere sintatticamente valida, anche
     // quando il lato tipizzato del contratto tace. «Assente» e «presente ma
-    // malformata» sono stati diversi (R5.1): saltare il controllo quando il
+    // malformata» sono stati diversi: saltare il controllo quando il
     // contratto non dichiara nulla lascerebbe passare `encoding = "twkb"` o
     // `dimensions = "2d"` senza che nessuno li legga.
     if let Some(declared) = metadata.get(PLENORA_GEOMETRY_DIMENSIONS_KEY) {
@@ -1047,7 +1091,7 @@ fn validate_declared_types(
                 geometry.name
             ))
         })?;
-        // `None` nel contratto significa «non dichiarato» (R5.2), uno stato
+        // `None` nel contratto significa «non dichiarato», uno stato
         // legittimo: la DISCREPANZA si controlla solo quando entrambi
         // parlano, ma la validita' sintattica sopra vale comunque.
         if geometry.encoding.is_some_and(|encoding| encoding != parsed) {
@@ -1100,12 +1144,12 @@ fn validate_declared_types(
         )?;
     // Lo stato di risoluzione del CRS non si confronta qui: il contratto puo'
     // divergere legittimamente dai metadati in entrambe le direzioni (la
-    // discovery declassa un `resolved` con chiavi in conflitto; una
-    // decisione di piano, R4.6.3, risolve un `declared_unresolved`). La coerenza del CRS
-    // la decidono discovery e risoluzione per precedenza.
+    // lettura declassa un `resolved` con chiavi in conflitto; una decisione
+    // di piano risolverebbe un `declared_unresolved`). La coerenza del CRS
+    // la decidono lettura e risoluzione per precedenza.
     //
     // Tipi geometrici: il confronto scatta solo con entrambi i lati presenti,
-    // perche' «non dichiarato» e' legittimo su ciascun lato (R3.4.1); la
+    // perche' «non dichiarato» e' legittimo su ciascun lato; la
     // contraddizione e' sempre un errore.
     let Some(declared) = geometry.types.value() else {
         return Ok(());
@@ -1127,12 +1171,13 @@ fn validate_declared_types(
     Ok(())
 }
 
-/// Statistica di runtime (architettura.md#planner-ed-executor).
+/// Statistica di runtime, dal planner del progetto d'origine.
 ///
-/// Regola: `prepare` produce sempre un piano valido anche con statistiche
-/// completamente assenti (`Unknown` → scelta conservativa); le statistiche
-/// `Known`/`Estimated` possono solo migliorare scelte fisiche correggibili;
-/// nessuna scelta semantica può dipendere da una statistica.
+/// Regola: un piano è valido anche con statistiche completamente assenti
+/// (`Unknown` → scelta conservativa); le statistiche `Known`/`Estimated`
+/// possono solo migliorare scelte fisiche correggibili; nessuna scelta
+/// semantica può dipendere da una statistica. Nessun codice di questo
+/// repository la usa.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RuntimeStatistic<T> {
     /// Misurata (es. numero di righe da header Arrow IPC file format).
@@ -1167,16 +1212,13 @@ impl<T> RuntimeStatistic<T> {
     }
 }
 
-/// Sequenza logica di un batch (architettura.md#determinismo).
+/// Sequenza logica di un batch, dall'executor a stream del progetto
+/// d'origine.
 ///
 /// Le operazioni parallele ricompongono l'output secondo l'ordine logico
-/// assegnato dal piano, mai secondo l'ordine temporale di completamento: la
-/// politica `InputOrder` del catalogo significa "ordine logico delle
-/// `BatchSequence` in ingresso".
-///
-/// `source_node` usa l'id testuale del nodo del piano (formato v4);
-/// l'eventuale interning in indici compatti è una decisione fisica del
-/// planner e non appartiene a questo contratto.
+/// assegnato dal piano, mai secondo l'ordine temporale di completamento.
+/// Nessun codice di questo repository la usa: il runner lavora su tabelle
+/// intere, un batch per tabella.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BatchSequence {
     /// Nodo del DAG che ha prodotto il batch.
@@ -1251,7 +1293,7 @@ mod tests {
         assert_eq!(allocator.intern("geom").expect("id"), id);
         assert_ne!(allocator.intern("other").expect("id"), id);
 
-        // Rinomina: l'id segue la colonna (D16).
+        // Rinomina: l'id segue la colonna.
         allocator.rename("geom", "geometry");
         assert_eq!(allocator.intern("geometry").expect("id"), id);
 
@@ -1563,7 +1605,7 @@ mod tests {
 
     #[test]
     fn geometry_dimensions_from_str_rejects_unrecognized_values() {
-        // Mai default silenziosi: neppure maiuscole o vuoto (R3.4).
+        // Mai default silenziosi: neppure maiuscole o vuoto.
         for value in ["XY", "XYZ ", "", "2d", "xyzm "] {
             assert_eq!(
                 value.parse::<GeometryDimensions>(),
@@ -1578,13 +1620,13 @@ mod tests {
         assert_eq!(GeometryDimensions::Xyz.coordinate_stride(), Some(24));
         assert_eq!(GeometryDimensions::Xym.coordinate_stride(), Some(24));
         assert_eq!(GeometryDimensions::Xyzm.coordinate_stride(), Some(32));
-        // Unknown: nessuno stride garantito (R3.4).
+        // Unknown: nessuno stride garantito.
         assert_eq!(GeometryDimensions::Unknown.coordinate_stride(), None);
     }
 
     #[test]
     fn geometry_encoding_from_str_rejects_unrecognized_values() {
-        // R3.5: enum chiuso — altri framing (GeoPackage, TWKB) sono rifiutati.
+        // Enum chiuso: altri framing (GeoPackage, TWKB) sono rifiutati.
         for value in ["WKB", "gpkg", "twkb", "", "iso-wkb"] {
             assert_eq!(
                 value.parse::<GeometryEncoding>(),
@@ -1593,7 +1635,8 @@ mod tests {
         }
     }
 
-    /// I sedici tipi canonici di §3.1, in ordine canonico (R3.1).
+    /// I sedici valori canonici (quindici tipi più `unknown`), in ordine
+    /// canonico.
     const CANONICAL_TYPES: [(GeometryType, &str); 16] = [
         (GeometryType::Point, "point"),
         (GeometryType::LineString, "linestring"),
@@ -1615,9 +1658,9 @@ mod tests {
 
     #[test]
     fn geometry_type_ord_matches_canonical_r31_declaration_order() {
-        // L'ordine di dichiarazione delle varianti E' l'ordine canonico di
-        // §3.1: `Ord` (deriva dall'ordine di dichiarazione) e la
-        // serializzazione delle liste R3.4.1 dipendono da questa invariante.
+        // L'ordine di dichiarazione delle varianti E' l'ordine canonico:
+        // `Ord` (deriva dall'ordine di dichiarazione) e la serializzazione
+        // delle liste di tipi dipendono da questa invariante.
         let shuffled = [
             GeometryType::Unknown,
             GeometryType::Tin,
@@ -1638,7 +1681,7 @@ mod tests {
         for pair in CANONICAL_TYPES.windows(2) {
             assert!(pair[0].0 < pair[1].0);
         }
-        // `ALL` segue l'ordine canonico di §3.1, oracolo scritto a parte.
+        // `ALL` segue l'ordine canonico, oracolo scritto a parte.
         assert_eq!(GeometryType::ALL.len(), CANONICAL_TYPES.len());
         for (&geometry_type, (expected, text)) in GeometryType::ALL.iter().zip(CANONICAL_TYPES) {
             assert_eq!(geometry_type, expected);
@@ -1649,7 +1692,7 @@ mod tests {
     #[test]
     fn geometry_type_from_str_rejects_non_canonical_forms() {
         // Fail-closed: maiuscole, snake_case, spazi, vuoto e nomi ignoti
-        // sono rifiutati, mai normalizzati in silenzio (R3.1/R3.2).
+        // sono rifiutati, mai normalizzati in silenzio.
         for value in [
             "Point",
             "LINESTRING",
@@ -1689,7 +1732,7 @@ mod tests {
         }
         // 13/14 (curve/surface ASTRATTI, non istanziabili) e tutto il resto
         // — incluso un code con serie dimensionale non estratta (1001) — ->
-        // None: il rifiuto esplicito spetta al chiamante (R3.2).
+        // None: il rifiuto esplicito spetta al chiamante.
         for code in [0, 13, 14, 18, 99, 1001] {
             assert_eq!(GeometryType::from_wkb_base_type(code), None);
         }
@@ -1748,7 +1791,7 @@ mod tests {
             property.to_canonical_list(),
             "point,linestring,multipolygon"
         );
-        // Una stessa dichiarazione ha una sola serializzazione (R3.4.1).
+        // Una stessa dichiarazione ha una sola serializzazione.
         let reordered = GeometryTypesProperty::new(
             TypesDeclaration::Exact,
             vec![
@@ -1776,7 +1819,7 @@ mod tests {
             GeometryTypesProperty::from_canonical_list(TypesDeclaration::Mixed, "").unwrap();
         assert!(mixed.types().is_empty());
 
-        // Le coerenze R3.4.1 valgono anche per la forma testuale.
+        // Le coerenze valgono anche per la forma testuale.
         assert_eq!(
             GeometryTypesProperty::from_canonical_list(TypesDeclaration::Exact, ""),
             Err(GeometryTypesPropertyError::ExactWithoutTypes)
@@ -1812,7 +1855,7 @@ mod tests {
 
     #[test]
     fn geometry_column_types_default_is_undeclared_not_unresolved() {
-        // R3.4.1: un ingresso legacy privo delle chiavi significa «proprieta'
+        // Un ingresso privo delle chiavi significa «proprieta'
         // non dichiarata» (confidence Unknown), MAI `unresolved`.
         let default = GeometryColumnContract::undeclared_types();
         assert_eq!(default.value(), None);

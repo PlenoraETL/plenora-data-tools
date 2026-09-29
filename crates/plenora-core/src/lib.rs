@@ -1,17 +1,25 @@
-//! plenora-core — fondamenta condivise del workspace (architettura.md).
+//! plenora-core: le fondamenta condivise del workspace.
 //!
 //! Ospita:
-//! - il re-export unico di Arrow (decisione D0: un solo punto di versione);
-//! - [`error`]: `PlenoraError`, l'unico tipo d'errore del workspace;
-//! - [`limits`]: le tre famiglie di limiti (decisione D19, errori-e-limiti.md);
-//! - [`catalog`]: `OperationDescriptor` unificato con versioni per-componente
-//!   (decisione D17, piano-v5.md#identita-e-fingerprint);
-//! - [`contract`]: contratti dati del grafo (`DataContract`, `FieldId`,
-//!   provenienza/scope delle proprietà, `RuntimeStatistic`, `BatchSequence`) —
-//!   decisioni D6/D16/D25, architettura.md#determinismo e architettura.md#planner-ed-executor;
+//! - il re-export unico di Arrow ([`arrow`]: un solo punto di versione per
+//!   tutto il workspace);
+//! - [`error`]: `PlenoraError`, l'unico tipo d'errore del workspace, e i
+//!   suoi assi (categoria, fase, effetto, ritentativo);
+//! - [`limits`]: i limiti di risorsa (`Limits`), quelli di complessità del
+//!   piano (`PlanLimits`) e i controlli d'espansione;
+//! - [`catalog`]: il catalogo delle operazioni (`OperationDescriptor`), con
+//!   versioni per componente;
+//! - [`contract`]: i contratti dati (`DataContract`, `FieldId`, provenienza
+//!   e ambito delle proprietà, `RuntimeStatistic`, `BatchSequence`) e la loro
+//!   lettura da e verso uno schema Arrow;
+//! - [`diagnostics`]: il payload della diagnostica per riga
+//!   (`plenora-row-diagnostics-v1`);
 //! - [`panic_policy`]: politica di processo per i panici, valida anche per
 //!   chi ci usa come libreria;
-//! - [`crs`]: contratto CRS fail-closed, indipendente dal backend;
+//! - [`crs`]: contratto CRS fail-closed, la tabella dei CRS integrati e la
+//!   riproiezione fra di loro in Rust puro;
+//! - [`json`]: lettura del JSON di controllo che rifiuta le chiavi ripetute;
+//! - [`esadecimale`]: esadecimale minuscolo per digest e identificativi;
 //! - [`memoria`]: byte Arrow di tabelle (per allocazione) e colonne (per
 //!   vista), la misura unica di runner e kernel.
 
@@ -25,9 +33,10 @@ pub mod json;
 pub mod limits;
 pub mod memoria;
 
-// Dalla radice esce solo cio' che `Plan Budget 1.0` obbliga a pubblicare
-// (`PLAN-013`); gli altri default restano in [`limits`], perche' toglierli
-// dalla facciata dopo sarebbe una rottura.
+// Dalla radice esce solo il default del budget di memoria, che il contratto
+// del budget del progetto d'origine obbligava a pubblicare; gli altri
+// default restano in [`limits`], perché toglierli dalla facciata dopo
+// sarebbe una rottura.
 pub use limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES;
 pub mod panic_policy;
 
@@ -41,8 +50,8 @@ pub use error::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result, R
 /// e con `try_new` un'operazione legittima fallirebbe.
 ///
 /// Va usata in qualunque crate ovunque le colonne derivino dall'input; vive
-/// qui perche' serve anche all'engine. `try_new` resta legittimo dove il
-/// vettore non puo' essere vuoto per costruzione.
+/// qui perché la usano kernel, runner e `plenora-io`. `try_new` resta
+/// legittimo dove il vettore non può essere vuoto per costruzione.
 ///
 /// `rows_if_empty` conta solo senza colonne: altrimenti la cardinalita' la
 /// decidono le colonne, come in `try_new`, cosi' la conversione di un sito
@@ -50,8 +59,8 @@ pub use error::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result, R
 ///
 /// # Errors
 ///
-/// [`PlenoraError::Arrow`] se le colonne non sono coerenti fra loro o con lo
-/// schema.
+/// [`PlenoraError::DataMapping`] (`arrow error: <codice>`) se le colonne non
+/// sono coerenti fra loro o con lo schema.
 pub fn batch_with_rows(
     schema: std::sync::Arc<arrow::schema::Schema>,
     columns: Vec<arrow::array::ArrayRef>,
@@ -77,30 +86,28 @@ pub mod arrow {
     pub use arrow_array::RecordBatch;
     pub use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 
-    /// Versione dei crate Arrow in uso (`arrow-schema` & co., unica per
-    /// decisione D0).
+    /// Versione dei crate Arrow in uso (`arrow-schema` e gli altri: una sola
+    /// per tutto il workspace).
     ///
-    /// I crate Arrow non espongono la versione a runtime: i test sotto la
-    /// tengono allineata ai pin del workspace. Entra
-    /// nell'identita' dei grafi (piano-v5.md#identita-e-fingerprint), quindi
-    /// un bump fa respingere i grafi gia' validati con `GRAPH_MISMATCH`; non
-    /// entra nel `plan_hash`.
+    /// I crate Arrow non espongono la versione a runtime: il test sotto la
+    /// tiene allineata ai pin del workspace. Nessun codice di questo
+    /// repository la legge; nel progetto d'origine entrava nell'identità dei
+    /// grafi validati.
     pub const VERSION: &str = "59.2.0";
 }
 
 #[cfg(test)]
 mod tests {
-    /// I quattro crate Arrow del workspace sono un solo numero di versione
-    /// (decisione D0): il test li verifica tutti, non solo `arrow-schema`.
+    /// I quattro crate Arrow del workspace sono un solo numero di versione:
+    /// il test li verifica tutti, non solo `arrow-schema`.
     const CRATE_ARROW: [&str; 4] = ["arrow-array", "arrow-schema", "arrow-ipc", "arrow-select"];
 
     /// `arrow::VERSION` deve restare allineata al pin del workspace: un bump
-    /// di Arrow senza aggiornarla renderebbe silenziosamente falso il check
-    /// di versione nell'identita' dei grafi (piano-v5.md#identita-e-fingerprint).
+    /// di Arrow senza aggiornarla la renderebbe falsa in silenzio.
     ///
-    /// La versione dichiarata e' una sola (D0), ma i pin che la incarnano
-    /// sono quattro: sorvegliarne uno solo lascerebbe agli altri tre la
-    /// liberta' di divergere in silenzio.
+    /// La versione dichiarata è una sola, ma i pin che la incarnano sono
+    /// quattro: sorvegliarne uno solo lascerebbe agli altri tre la libertà
+    /// di divergere in silenzio.
     #[test]
     fn arrow_version_matches_the_workspace_pin() {
         let manifest =

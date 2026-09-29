@@ -3,10 +3,11 @@
 //! # Perche' esiste
 //!
 //! [`contract_from_arrow_schema`] e [`arrow_schema_from_contract`] sono la
-//! stessa autorita' vista dai due lati. Con l'esecuzione isolata in un
-//! processo worker questo smette di essere una comodita' e diventa un
-//! protocollo: il supervisore legge lo schema che il worker ha scritto, e se
-//! le due direzioni non compongono, la verifica della pubblicazione confronta
+//! stessa autorità vista dai due lati. Appena uno schema esce dal processo
+//! (un file scritto da `plenora-io` e riletto, da questo o da un altro
+//! processo) questo smette di essere una comodità e diventa un contratto:
+//! chi rilegge deve trovare ciò che chi ha scritto intendeva, e se le due
+//! direzioni non compongono, un confronto fra scritto e riletto confronta
 //! due interpretazioni invece di due risultati.
 //!
 //! # Gli invarianti, e perche' NON sono la simmetria
@@ -23,8 +24,8 @@
 //!
 //! > `contratto -> schema -> contratto` restituisce lo stesso contratto.
 //!
-//! E' l'unica formulazione che dice cio' che serve al worker: che scrivere e
-//! rileggere non perda ne' inventi nulla.
+//! È l'unica formulazione che dice ciò che serve a chi scrive: che scrivere
+//! e rileggere non perda né inventi nulla.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -85,14 +86,14 @@ fn contratto(crs: ContractCrs, dimensioni: GeometryDimensions) -> DataContract {
     .expect("contratto coerente con lo schema")
 }
 
-/// I casi che il round-trip puo' attraversare **senza backend PROJ**.
+/// I casi che il round-trip può attraversare **senza PROJ**.
 ///
 /// Fra i CRS risolti ci sono solo quelli della tabella integrata: per ogni
 /// altra definizione il risolutore di base rifiuta la validazione
 /// (`CRS_BACKEND_UNAVAILABLE`) invece di fidarsi, quindi rileggere uno schema
-/// che la dichiara risolta FALLISCE dove PROJ non c'e'. E' fail-closed
-/// corretto, e il round-trip di quei CRS resta possibile solo dove il
-/// backend e' disponibile.
+/// che la dichiara risolta FALLISCE. È fail-closed corretto, e il round-trip
+/// di quei CRS resta possibile solo con un risolutore del chiamante che li
+/// risolva.
 fn casi() -> Vec<(&'static str, DataContract)> {
     let integrato = |definizione: &str| {
         ContractCrs::Resolved(resolve_crs(definizione, "crs").expect("CRS integrato"))
@@ -135,9 +136,8 @@ fn casi() -> Vec<(&'static str, DataContract)> {
 /// **Invariante 1.** `contratto -> schema -> contratto` conserva il contratto.
 ///
 /// Non lo schema: la scrittura aggiunge le chiavi canoniche, ed e' cio' che
-/// deve fare. Il contratto invece deve tornare identico, altrimenti il
-/// supervisore leggerebbe qualcosa di diverso da cio' che il worker intende
-/// scrivere.
+/// deve fare. Il contratto invece deve tornare identico, altrimenti chi
+/// rilegge leggerebbe qualcosa di diverso da ciò che chi scrive intende.
 #[test]
 fn il_contratto_sopravvive_al_round_trip() {
     for (nome, originale) in casi() {
@@ -177,7 +177,8 @@ fn il_contratto_sopravvive_al_round_trip() {
 /// motivo per cui questo test esiste nella forma che ha. Un contratto
 /// costruito a mano con `encoding: None` produce uno schema senza la chiave
 /// `plenora.geometry.encoding`; rileggendolo, il lettore la COMPLETA a `wkb`
-/// deducendola dall'estensione `GeoArrow` (completamento R2.7); la seconda
+/// deducendola dall'estensione `GeoArrow` (completamento per precedenza); la
+/// seconda
 /// emissione la scrive. Prima e seconda emissione differiscono quindi di una
 /// chiave.
 ///
@@ -188,11 +189,10 @@ fn il_contratto_sopravvive_al_round_trip() {
 ///
 /// # Che cosa vale
 ///
-/// Dal secondo giro in poi lo schema e' stabile. E' la proprieta' che serve
-/// al worker: il supervisore rilegge cio' che il worker ha scritto, e le due
-/// letture successive devono coincidere. Se il round-trip non convergesse,
-/// ogni passaggio sposterebbe i metadati e la verifica della pubblicazione
-/// confronterebbe cose diverse a ogni giro.
+/// Dal secondo giro in poi lo schema è stabile. È la proprietà che serve a
+/// chi scrive e rilegge: due letture successive devono coincidere. Se il
+/// round-trip non convergesse, ogni passaggio sposterebbe i metadati e un
+/// confronto fra scritto e riletto confronterebbe cose diverse a ogni giro.
 #[test]
 fn il_round_trip_converge_in_un_giro() {
     for (nome, contratto) in casi() {

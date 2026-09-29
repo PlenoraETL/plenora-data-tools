@@ -7,10 +7,10 @@
 //! conflitti. Renderle simmetriche vorrebbe dire normalizzare in lettura o
 //! accettare l'ambiguita' in scrittura.
 //!
-//! Le due direzioni stanno qui, e non presso la CLI e l'executor, perche'
-//! supervisore e worker isolato devono interpretare uno schema allo stesso
-//! modo. Il modulo lavora solo sullo schema, senza leggere dati; il contesto
-//! di file e input resta nella CLI.
+//! Le due direzioni stanno qui, in un punto solo, perché ogni chiamante
+//! (`plenora-io` per `GeoParquet` e IPC, i test dei kernel) deve interpretare
+//! uno schema allo stesso modo. Il modulo lavora solo sullo schema, senza
+//! leggere dati; il contesto di file e input resta al chiamante.
 
 use std::sync::Arc;
 
@@ -33,19 +33,20 @@ use crate::PlenoraError;
 
 /// Come si risolve una definizione di CRS in un CRS risolto.
 ///
-/// E' un parametro perche' le implementazioni sono due ([`crate::crs`] e
-/// quella con backend PROJ in `plenora-kernels-geo`, dietro feature) e
-/// `plenora-core` non dipende dai kernel. Cosi' supervisore e worker passano
-/// esplicitamente lo stesso risolutore, invece di dipendere dalla build.
+/// È un parametro perché la risoluzione è una scelta del chiamante: qui
+/// l'implementazione è [`crate::crs::resolve_crs`] (la tabella dei CRS
+/// integrati), e un chiamante che risolve i CRS altrove passa la propria.
+/// Così chi legge e chi scrive una tabella usano esplicitamente lo stesso
+/// risolutore, invece di dipendere dalla build.
 pub type CrsResolver = fn(&str, &'static str) -> Result<ResolvedCrs, crate::crs::CrsError>;
 
 /// Errore di contratto: schema e metadati non dicono cio' che devono dire.
 ///
-/// `InvalidPlan` e non `Schema`, e non e' una svista: e' la variante che
+/// `InvalidPlan` e non `Schema`, e non è una svista: è la variante che
 /// questo percorso dichiara, e chi la osserva la osserva da fuori. Cambiarla
-/// sarebbe una modifica di semantica — l'exit code della CLI e' una
-/// proiezione della categoria, quindi 2 invece di 3. Se `Schema` fosse la
-/// categoria giusta, va cambiata come rottura dichiarata, non di straforo.
+/// sarebbe una modifica di semantica (la categoria cambia); se `Schema`
+/// fosse la categoria giusta, va cambiata come rottura dichiarata, non di
+/// straforo.
 fn errore_di_contratto(messaggio: impl Into<String>) -> PlenoraError {
     PlenoraError::InvalidPlan(messaggio.into())
 }
@@ -53,15 +54,15 @@ fn errore_di_contratto(messaggio: impl Into<String>) -> PlenoraError {
 /// Definizione CRS dal metadato `geo` di una colonna `GeoArrow`: stringa
 /// `authority:code` oppure PROJJSON come oggetto (serializzato compatto).
 ///
-/// Un metadato assente o senza chiave `crs` restituisce `None`, cioe'
-/// [`ContractCrs::Missing`] (R4.6.3); un metadato malformato resta un errore
-/// (R5.1: «illeggibile» non e' «assente»).
+/// Un metadato assente o senza chiave `crs` restituisce `None`, cioè
+/// [`ContractCrs::Missing`]; un metadato malformato resta un errore
+/// («illeggibile» non è «assente»).
 ///
 /// # Errors
 ///
-/// [`PlenoraError::InvalidPlan`] se il metadato `geo` non e' JSON valido, se
-/// la chiave `crs` non e' un oggetto, o se la definizione supera il tetto
-/// dichiarato.
+/// [`PlenoraError::DataMapping`] (`json error`) se il metadato `geo` non è
+/// JSON valido; [`PlenoraError::InvalidPlan`] se la chiave `crs` non è né
+/// una stringa né un oggetto.
 pub fn crs_definition_from_metadata(
     field_name: &str,
     geo_metadata: Option<&String>,
@@ -81,19 +82,31 @@ pub fn crs_definition_from_metadata(
     }
 }
 
-/// Scoperta da schema Arrow gia' letto (seam di test: nessun file toccato).
-/// Le regole sono quelle di [`discover_input_contract`].
+/// Il contratto dichiarato da uno schema Arrow già letto, senza leggere
+/// dati.
+///
+/// Una colonna è geometrica se porta l'estensione `geoarrow.wkb` o almeno
+/// una chiave canonica `plenora.geometry.*` (le chiavi canoniche bastano da
+/// sole). Il suo CRS si deduce con [`contract_crs_from_keys`]; la colonna
+/// geometrica, se c'è, è la geometria attiva, con `FieldId` provvisorio 0
+/// (il chiamante lo rimappa con il proprio [`crate::contract::FieldAllocator`]).
 ///
 /// # Errors
 ///
-/// [`PlenoraError::InvalidPlan`] se i metadati sono incoerenti — estensione
+/// [`PlenoraError::InvalidPlan`] se i metadati sono incoerenti (estensione
 /// non supportata, metadato `geo` senza estensione, colonna geometria non
-/// `Binary` — o se le chiavi canoniche si contraddicono.
+/// `Binary`) o se le chiavi canoniche si contraddicono;
+/// [`PlenoraError::Unsupported`] per una versione di contratto successiva a
+/// quella supportata; [`PlenoraError::Crs`] per un CRS dichiarato che il
+/// risolutore non risolve; [`PlenoraError::Schema`] se il contratto che ne
+/// risulta non supera [`DataContract::validate`] (per esempio più di una
+/// colonna geometrica).
 pub fn contract_from_arrow_schema(
     schema: SchemaRef,
     resolve_crs: CrsResolver,
 ) -> Result<DataContract, PlenoraError> {
-    // Gate R2.5: la versione del protocollo vive nei metadati dello schema.
+    // La versione del contratto vive nei metadati dello schema: una versione
+    // successiva a quella supportata si rifiuta prima di leggere i campi.
     read_contract_version(&schema)?;
     let mut geometries = Vec::new();
     for field in schema.fields() {
@@ -115,8 +128,8 @@ pub fn contract_from_arrow_schema(
                     field.name()
                 )));
             }
-            // (1c) le chiavi canoniche sono autosufficienti (tabella §2):
-            // il campo si dichiara colonna geometrica da solo.
+            // Le chiavi canoniche sono autosufficienti: il campo si dichiara
+            // colonna geometrica da solo.
             let canonical = field
                 .metadata()
                 .keys()
@@ -151,42 +164,41 @@ pub fn contract_from_arrow_schema(
 
 /// Lo stato CRS del contratto, dedotto dalle chiavi canoniche.
 ///
-/// Lettura di contratto completata (R2.7). Senza una decisione esplicita del
-/// piano un'incoerenza dichiarata non si risolve: si preserva come
-/// [`ContractCrs::DeclaredUnresolved`] con le dichiarazioni originali (R4.6.3).
+/// Le chiavi arrivano già completate da [`read_geometry_contract_keys`].
+/// Un'incoerenza dichiarata non si risolve: si preserva come
+/// [`ContractCrs::DeclaredUnresolved`] con le dichiarazioni originali.
 ///
-/// Regole, in ordine (piano-v5.md#contratti-di-input, emendamento 2026-07-31,
-/// classe A):
+/// Regole, in ordine:
 ///
 /// 1. `crs_resolution = declared_unresolved` con almeno una rappresentazione:
-///    preservato com'e', senza chiamare il backend (quindi mai
-///    `BackendUnavailable`). Basta anche il solo `srid` (R4.4: l'autorita' non
-///    si inventa): `crs_id`/`definition` restano assenti, mai sintetizzati;
-/// 2. conflitti decidibili senza backend, che danno `DeclaredUnresolved`:
+///    preservato com'è, senza chiamare il risolutore. Basta anche il solo
+///    `srid` (l'autorità non si inventa): `crs_id`/`definition` restano
+///    assenti, mai sintetizzati;
+/// 2. conflitti decidibili senza risolutore, che danno `DeclaredUnresolved`:
 ///    (2a) solo per input **non dichiarati** (`crs_resolution` assente),
-///    `crs_id` e `crs_definition` co-presenti, perche' il loro accordo non e'
-///    decidibile testualmente (R2.7); (2b) sempre, anche con `resolved`, un
-///    `crs_id` `authority:code` con codice numerico diverso da `srid`
-///    (R4.3.1). Il limite della (2a) evita di rovesciare la dichiarazione del
-///    produttore;
+///    `crs_id` e `crs_definition` co-presenti, perché il loro accordo non è
+///    decidibile testualmente; (2b) sempre, anche con `resolved`, un
+///    `crs_id` `authority:code` con codice numerico diverso da `srid`. Il
+///    limite della (2a) evita di rovesciare la dichiarazione del produttore;
 /// 3. una rappresentazione (canonica o legacy `geo.crs`), o `resolved`
-///    dichiarato: risoluzione con il risolutore dato (senza PROJ, la tabella
-///    dei CRS integrati), e un fallimento resta un errore
-///    `Crs` (limite dichiarato: chi non garantisce la risoluzione dichiara
-///    `declared_unresolved`). Con `resolved` e sia `crs_id` sia
-///    `crs_definition` segue [`verify_declared_coherence`]. Senza
-///    backend PROJ una definizione WKT o PROJJSON non si risolve, e
-///    quell'input fallisce con errore `Crs`, come uno a rappresentazione
-///    singola;
-/// 4. nessuna rappresentazione: [`ContractCrs::Missing`] (R4.4), salvo la
-///    contraddizione R4.1 (`resolved`/`declared_unresolved` senza
-///    rappresentazioni), che resta errore.
+///    dichiarato: risoluzione con il risolutore dato (con
+///    [`crate::crs::resolve_crs`], la tabella dei CRS integrati), e un
+///    fallimento resta un errore `Crs` (limite dichiarato: chi non
+///    garantisce la risoluzione dichiara `declared_unresolved`). Con
+///    `resolved` e sia `crs_id` sia `crs_definition` segue
+///    [`verify_declared_coherence`]. Con la tabella integrata una
+///    definizione WKT o PROJJSON non si risolve, e quell'input fallisce con
+///    errore `Crs`, come uno a rappresentazione singola;
+/// 4. nessuna rappresentazione: [`ContractCrs::Missing`], salvo la
+///    contraddizione `resolved`/`declared_unresolved` senza
+///    rappresentazioni, che resta errore.
 ///
 /// # Errors
 ///
-/// [`PlenoraError::InvalidPlan`] se la dichiarazione e' contraddittoria:
-/// `crs_resolution` valorizzata senza alcuna rappresentazione, oppure una
-/// definizione che non si risolve dove il produttore la dichiara risolta.
+/// [`PlenoraError::InvalidPlan`] se la dichiarazione è contraddittoria
+/// (`crs_resolution` valorizzata senza alcuna rappresentazione) o il
+/// metadato `geo` ha una chiave `crs` malformata;
+/// [`PlenoraError::Crs`] se il risolutore non risolve la definizione.
 pub fn contract_crs_from_keys(
     field_name: &str,
     geo_metadata: Option<&String>,
@@ -196,9 +208,9 @@ pub fn contract_crs_from_keys(
     let crs_id = keys.crs_id.clone();
     let definition = keys.crs_definition.clone();
     // (1) Incoerenza dichiarata dal produttore: preservata, mai risolta.
-    // R4.3.1: anche il solo SRID numerico e' una rappresentazione (dopo
-    // definizione e identificatore) — senza `crs_id`/`definition` lo stato
-    // li porta assenti (R4.4: mai sintetizzarli).
+    // Anche il solo SRID numerico è una rappresentazione (dopo definizione e
+    // identificatore): senza `crs_id`/`definition` lo stato li porta
+    // assenti, mai sintetizzati.
     if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved)
         && (crs_id.is_some() || definition.is_some() || keys.srid.is_some())
     {
@@ -255,8 +267,8 @@ pub fn contract_crs_from_keys(
     if let Some(definition) = crs_definition_from_metadata(field_name, geo_metadata)? {
         return Ok(ContractCrs::Resolved(resolve_crs(&definition, "crs")?));
     }
-    // (5) R4.1: mai collassare una dichiarazione esplicita su `missing` —
-    // `resolved`/`declared_unresolved` senza alcuna rappresentazione e' una
+    // (5) Mai collassare una dichiarazione esplicita su `missing`:
+    // `resolved`/`declared_unresolved` senza alcuna rappresentazione è una
     // contraddizione, non un'assenza.
     if let Some(resolution) = keys.crs_resolution {
         if resolution != CrsResolution::Missing {
@@ -272,12 +284,12 @@ pub fn contract_crs_from_keys(
 
 /// Verifica di coerenza decidibile dopo la risoluzione.
 ///
-/// Per un input `resolved` con doppia rappresentazione
-/// (piano-v5.md#contratti-di-input, emendamento 2026-07-31, classe A) risolve
-/// anche `crs_id` e confronta la coppia autorita'+codice dei due canonical:
-/// uguali danno `Resolved` (per esempio un WKT Monte Mario che risolve a
-/// EPSG:3003); diversi, o confronto non decidibile (R2.7, mai arbitrato),
-/// danno `DeclaredUnresolved` con le dichiarazioni originali.
+/// Per un input `resolved` con doppia rappresentazione (`crs_id` e
+/// `crs_definition`) risolve anche `crs_id` e confronta la coppia
+/// autorità+codice dei due CRS risolti: uguali danno `Resolved` (per
+/// esempio un WKT Monte Mario che risolve a EPSG:3003); diversi, o
+/// confronto non decidibile (mai arbitrato), danno `DeclaredUnresolved`
+/// con le dichiarazioni originali.
 pub fn verify_declared_coherence(
     resolved: ResolvedCrs,
     crs_id: &str,
@@ -315,10 +327,9 @@ pub fn verify_declared_coherence(
 
 /// Codice numerico di un identificatore `authority:code` (es. `EPSG:4326`).
 ///
-/// `None` per ogni altra forma: il confronto con `srid` non e' decidibile.
-/// Unica fonte condivisa del parsing (piano-v5.md#contratti-di-input,
-/// emendamento 2026-07-31), usata anche dalla deduzione `srid` del percorso
-/// legacy in `arrow_adapter`.
+/// `None` per ogni altra forma: il confronto con `srid` non è decidibile.
+/// Delega a [`crate::crs::authority_code_srid`], l'unica fonte del
+/// parsing.
 #[must_use]
 pub fn authority_code(crs_id: &str) -> Option<u32> {
     crate::crs::authority_code_srid(crs_id)
@@ -326,12 +337,12 @@ pub fn authority_code(crs_id: &str) -> Option<u32> {
 
 /// Il contratto di una colonna geometria, dalle chiavi gia' lette.
 ///
-/// Le chiavi arrivano da [`read_geometry_contract_keys`], che ha gia'
-/// applicato il fail-closed R2.6 e il completamento R2.7. Dimensionalita' ed
-/// encoding assenti danno `Unknown`/`None`, mai `Xy` (R3.4). Una coppia
-/// `types_declaration`/`types` entra con confidence `Declared`; assente, vale
-/// [`GeometryColumnContract::undeclared_types`] (R3.4.1). Il `FieldId` e'
-/// provvisorio (rimappato dal planner, D16).
+/// Le chiavi arrivano da [`read_geometry_contract_keys`], che ha già
+/// rifiutato le chiavi malformate o in conflitto e completato quelle
+/// deducibili. Dimensionalità ed encoding assenti danno `Unknown`/`None`,
+/// mai `Xy`. Una coppia `types_declaration`/`types` entra con confidence
+/// `Declared`; assente, vale [`GeometryColumnContract::undeclared_types`].
+/// Il `FieldId` è provvisorio (0): lo rimappa il chiamante.
 pub fn geometry_contract_from_field(
     field: &crate::arrow::schema::Field,
     crs: ContractCrs,
@@ -364,35 +375,35 @@ pub fn geometry_contract_from_field(
 
 /// Lo schema Arrow che un contratto dichiara, in forma canonica.
 ///
-/// Aggiunge allo schema il blocco canonico R2.2 di ogni colonna geometrica e
-/// la versione di protocollo R2.5. Gli `analyze_contract` costruiscono i
-/// campi con le sole chiavi `GeoArrow` legacy, che restano (R2.6); il blocco
-/// canonico si aggiunge qui, in un punto solo.
+/// Aggiunge allo schema il blocco canonico `plenora.geometry.*` di ogni
+/// colonna geometrica e la versione del contratto
+/// (`plenora.contract.version`). Le analisi costruiscono i campi con le sole
+/// chiavi `GeoArrow`, che restano; il blocco canonico si aggiunge qui, in un
+/// punto solo.
 ///
 /// - Le chiavi di [`canonical_geometry_metadata`] si fondono nel campo
-///   omonimo. Con `GeometryMetadataDetails::default()` si completa l'assente
-///   (R2.7, piano-v5.md#contratti-di-input, emendamento 2026-07-31):
-///   `axis_order` e `srid` sono dedotti dalla definizione d'autorita'
+///   omonimo. Con `GeometryMetadataDetails::default()` si completa l'assente:
+///   `axis_order` e `srid` sono dedotti dalla definizione d'autorità
 ///   ([`ResolvedCrs::authority_axis_order`]/[`ResolvedCrs::authority_srid`]),
 ///   e `axis_order` vale `unknown` solo se la definizione non determina gli
-///   assi. `geo.reproject` fa eccezione per `axis_order`: lo emette gia'
-///   l'analisi, con l'ordine normalizzato prodotto dal backend.
-/// - R2.6: una chiave canonica gia' presente con valore diverso e' un
-///   errore, mai una sovrascrittura; uguale e' idempotente. Le chiavi che
-///   un'operazione riscrive di mestiere (piano-v5.md#contratti-di-input,
-///   decisione 8) sono gia' rimosse a monte, nel contratto dell'analisi.
-///   Eccezioni: su `axis_order` e `srid` una chiave di lineage presente vince
-///   sempre, qualunque valore emetta il contratto; `crs_resolution =
-///   resolved` diventa `declared_unresolved` quando il contratto porta
-///   un'incoerenza (R4.6.4, unica sovrascrittura, in una sola direzione).
-/// - R2.5: `plenora.contract.version` si aggiunge solo se almeno un campo
-///   porta chiavi canoniche; uno schema senza geometrie resta invariato.
-/// - Una colonna geometrica del contratto assente dallo schema e' un errore.
+///   assi. `geo.reproject` fa eccezione per `axis_order`: lo emette già
+///   l'analisi, con l'ordine normalizzato della riproiezione.
+/// - Una chiave canonica già presente con valore diverso è un errore, mai
+///   una sovrascrittura; uguale è idempotente. Le chiavi che un'operazione
+///   riscrive per mestiere sono già rimosse a monte, nel contratto
+///   dell'analisi. Eccezioni: su `axis_order` e `srid` una chiave di
+///   lineage presente vince sempre, qualunque valore emetta il contratto;
+///   `crs_resolution = resolved` diventa `declared_unresolved` quando il
+///   contratto porta un'incoerenza (unica sovrascrittura, in una sola
+///   direzione).
+/// - `plenora.contract.version` si aggiunge solo se almeno un campo porta
+///   chiavi canoniche; uno schema senza geometrie resta invariato.
+/// - Una colonna geometrica del contratto assente dallo schema è un errore.
 ///
 /// # Errors
 ///
 /// `PlenoraError::InvalidPlan` per chiave canonica preesistente divergente
-/// (R2.6) o colonna geometrica del contratto assente nello schema.
+/// o colonna geometrica del contratto assente nello schema.
 pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, PlenoraError> {
     if contract.geometries.is_empty() {
         return Ok(contract.schema.clone());
@@ -411,8 +422,8 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
         matched += 1;
         let canonical = canonical_geometry_metadata(geometry, &GeometryMetadataDetails::default());
         let mut metadata = field.metadata().clone();
-        // R4.6.3: con un CRS deciso dal piano (`ResolvedByDecision`) le
-        // dichiarazioni della sorgente sono SOSTITUITE, non fuse — il
+        // Con un CRS deciso dal piano (`ResolvedByDecision`) le
+        // dichiarazioni della sorgente sono SOSTITUITE, non fuse: il
         // blocco canonico ri-emette il CRS deciso e la lineage non deve
         // riproporre il conflitto a valle. Lo schema del contratto di
         // input resta intatto (il check fail-closed input/contratto
@@ -424,21 +435,20 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
         for (key, value) in &canonical {
             match metadata.get(key) {
                 Some(existing) if existing != value => {
-                    // `axis_order` e `srid` si completano solo se assenti
-                    // (R2.7): una chiave di lineage presente vince con
-                    // qualunque valore emesso, anche dedotto dall'autorita',
-                    // cosi' la deduzione non diventa un falso conflitto R2.6
-                    // su un passthrough (R2.4).
+                    // `axis_order` e `srid` si completano solo se assenti:
+                    // una chiave di lineage presente vince con qualunque
+                    // valore emesso, anche dedotto dall'autorità, così la
+                    // deduzione non diventa un falso conflitto su un
+                    // passaggio che non tocca il CRS.
                     if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY || key == PLENORA_GEOMETRY_SRID_KEY {
                         continue;
                     }
-                    // R4.6.4: un'incoerenza CRS rilevata si dichiara
+                    // Un'incoerenza CRS rilevata si dichiara
                     // (`declared_unresolved`) invece di propagare il
                     // `resolved` del produttore. Unica sovrascrittura ammessa
-                    // su una chiave canonica, in una sola direzione
-                    // (piano-v5.md#contratti-di-input, decisione 7); con una
+                    // su una chiave canonica, in una sola direzione; con una
                     // decisione del piano le dichiarazioni della sorgente
-                    // sono gia' rimosse (`strip_decided_crs_declarations`).
+                    // sono già rimosse (`strip_decided_crs_declarations`).
                     if key == PLENORA_GEOMETRY_CRS_RESOLUTION_KEY
                         && existing == "resolved"
                         && value == "declared_unresolved"
@@ -466,8 +476,8 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
             "colonna geometrica del contratto assente nello schema di output".to_owned(),
         ));
     }
-    // R2.5: la versione accompagna le chiavi canoniche; qui almeno un campo
-    // le porta (guardia in testa e conteggio sopra).
+    // La versione accompagna le chiavi canoniche; qui almeno un campo le
+    // porta (guardia in testa e conteggio sopra).
     let mut metadata = contract.schema.metadata().clone();
     for (key, value) in canonical_schema_version_metadata() {
         match metadata.get(&key) {

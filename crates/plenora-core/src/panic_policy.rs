@@ -1,24 +1,22 @@
-//! Politica di processo per i panici, valida per la CLI **e** per chi ci usa
-//! come libreria (errori-e-limiti.md#panic-policy).
+//! Politica di processo per i panici, per chi usa il workspace come
+//! libreria (un eseguibile, un embedder come `PyO3`).
 //!
 //! L'hook di `std` stampa su stderr il payload del panico prima dell'unwinding,
-//! e quel testo puo' contenere valori di riga (un `assert_eq!` in una
+//! e quel testo può contenere valori di riga (un `assert_eq!` in una
 //! dipendenza); le barriere `catch_unwind` arrivano dopo. La politica sta qui
-//! perche' la raggiungano sia la CLI sia un embedder (per esempio `PyO3`).
+//! perché la raggiunga chiunque chiami i kernel.
 //!
-//! L'installazione e' **esplicita** e **idempotente** ([`Once`]): l'hook e'
-//! stato globale del processo. E' un **protocollo cooperativo**, non una
-//! garanzia: `std::panic::set_hook` resta pubblico e chiunque puo' sostituire
+//! L'installazione è **esplicita** e **idempotente** ([`Once`]): l'hook è
+//! stato globale del processo. È un **protocollo cooperativo**, non una
+//! garanzia: `std::panic::set_hook` resta pubblico e chiunque può sostituire
 //! l'hook dopo di noi; si garantisce solo che dopo un [`install`] riuscito
-//! l'hook di `std` non e' attivo e nessun altro [`install`] lo cambia. Chi
+//! l'hook di `std` non è attivo e nessun altro [`install`] lo cambia. Chi
 //! non chiama nulla resta con l'hook di `std`, residuo dichiarato. Con esito
-//! `false` la CLI (prima istruzione di `main`)
-//! dichiara nell'envelope che «stderr vuoto» non e' piu' garantito; un
-//! embedder non assume che il payload sia sanitizzato.
+//! `false` il chiamante non può assumere che il payload sia sanitizzato.
 //!
-//! [`PanicPolicy::Silent`] non stampa nulla (la CLI pubblica l'envelope su
-//! stdout, exit code 70); [`PanicPolicy::Sanitized`] stampa posizione nel
-//! sorgente e forma del payload, mai il payload.
+//! [`PanicPolicy::Silent`] non stampa nulla (chi la sceglie pubblica il
+//! panico su un canale proprio); [`PanicPolicy::Sanitized`] stampa
+//! posizione nel sorgente e forma del payload, mai il payload.
 
 use std::panic::PanicHookInfo;
 use std::sync::Once;
@@ -27,7 +25,8 @@ use std::sync::Once;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanicPolicy {
     /// Nessun output. Chi la sceglie si impegna a intercettare il panico e a
-    /// pubblicarlo su un proprio canale: e' quello che fa la CLI.
+    /// pubblicarlo su un proprio canale (lo faceva la CLI del progetto
+    /// d'origine).
     Silent,
     /// Una riga su stderr con posizione e forma del payload, mai il payload.
     Sanitized,
@@ -95,10 +94,10 @@ pub fn riga_sanitizzata(info: &PanicHookInfo<'_>) -> String {
 
 /// La FORMA del payload di un panico, senza il contenuto.
 ///
-/// Distingue i tre casi che `std` puo' produrre senza leggere il contenuto di
-/// nessuno di essi. E' la nozione unica usata dalle barriere del trasporto,
-/// della CLI e dell'isolamento: chi la traduce (sul filo, nel dominio) fa un
-/// `match` esaustivo su questo enum.
+/// Distingue i tre casi che `std` può produrre senza leggere il contenuto di
+/// nessuno di essi. È la nozione unica usata dalle barriere attorno alle
+/// dipendenze (qui quelle dei kernel geo): chi la traduce fa un `match`
+/// esaustivo su questo enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormaPayload {
     /// `panic!("letterale")`: un `&'static str`.
@@ -166,9 +165,9 @@ impl Drop for BarrieraAperta {
 /// ingressi ordinari (`relate` di `geo`, `fb_to_schema` di `arrow-ipc`).
 ///
 /// A differenza di una rete di sicurezza attorno a codice nostro, qui il
-/// panico e' **atteso**: chi sorveglia i panici (l'hook dei target di fuzz)
-/// lo distingue con [`dentro_una_barriera_di_dipendenza`]
-/// (errori-e-limiti.md#il-fuzzing-tollera-solo-i-panici-attesi-delle-dipendenze).
+/// panico è **atteso**: chi sorveglia i panici (per esempio l'hook di un
+/// target di fuzz, che deve tollerare solo i panici attesi delle
+/// dipendenze) lo distingue con [`dentro_una_barriera_di_dipendenza`].
 ///
 /// Il lavoro contiene la sola chiamata alla dipendenza: un panico di codice
 /// nostro dentro la barriera sparirebbe dal fuzz.
@@ -248,8 +247,8 @@ mod tests {
             "le tre forme restano distinguibili"
         );
         assert_eq!(forma_payload(altro.as_ref()), "payload non testuale");
-        // I testi sono pubblici: finiscono negli errori e sul filo di
-        // diagnosi. Si fissano tutti e tre.
+        // I testi sono pubblici: finiscono negli errori. Si fissano tutti e
+        // tre.
         assert_eq!(
             forma_payload(statico.as_ref()),
             "payload statico (contenuto non pubblicato)"

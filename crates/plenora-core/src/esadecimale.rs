@@ -2,7 +2,7 @@
 //!
 //! Una tabella dei nibble indicizzata da un valore in `0..16` (shift e
 //! maschera su `u8`): esatta per costruzione, senza il `Result` di `write!` da
-//! scartare e senza primitive di panic (gate R6).
+//! scartare e senza primitive di panico.
 
 const CIFRE: &[u8; 16] = b"0123456789abcdef";
 

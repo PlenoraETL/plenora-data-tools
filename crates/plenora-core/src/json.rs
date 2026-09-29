@@ -1,20 +1,18 @@
 //! Lettura fail-closed del JSON di controllo.
 //!
 //! `serde_json` risolve le chiavi duplicate con «vince l'ultima». Per il JSON
-//! di controllo (piani, config dei nodi, metadati contrattuali) e' un
-//! pericolo: il piano eseguito puo' non essere quello scritto, e poiche' la
-//! risoluzione precede validazione e `plan_hash`, due testi diversi danno lo
-//! stesso hash. [`ensure_no_duplicate_keys`] rifiuta il documento invece di
-//! scegliere.
+//! di controllo (piani del runner, config dei passi, metadati `GeoParquet` e
+//! contrattuali) è un pericolo: il piano eseguito può non essere quello
+//! scritto, e due testi diversi diventano lo stesso piano.
+//! [`ensure_no_duplicate_keys`] rifiuta il documento invece di scegliere.
 //!
 //! La stessa passata rifiuta la chiave riservata
-//! `$serde_json::private::RawValue`, a ogni posizione e profondita' e anche
+//! `$serde_json::private::RawValue`, a ogni posizione e profondità e anche
 //! scritta con escape: in prima posizione `serde_json` la reinterpreta come
-//! JSON grezzo e puo' rendere un documento diverso da quello scritto,
-//! aggirando il controllo dei duplicati. E' una restrizione del contratto,
-//! con regola, perimetro e condizione di rientro in errori-e-limiti.md
-//! («Una chiave riservata di `serde_json` non è ammessa nel JSON di
-//! controllo»).
+//! JSON grezzo e può rendere un documento diverso da quello scritto,
+//! aggirando il controllo dei duplicati. È una restrizione dichiarata: nel
+//! JSON di controllo quella chiave non è ammessa, nemmeno dove sarebbe
+//! innocua; come valore stringa resta ammessa.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -224,10 +222,9 @@ mod tests {
 
     /// **Il caso che il fuzzer ha trovato, ridotto.**
     ///
-    /// `plan_v5_parse` lo ha prodotto in 511 byte; qui sta in una riga. Senza
-    /// questo rifiuto la migrazione accetta il testo e ne rende uno che nessun
-    /// lettore del progetto sa rileggere: l'oracolo di idempotenza del target
-    /// segnala un difetto vero, non una propria imprecisione.
+    /// Il fuzzer dei piani del progetto d'origine lo ha prodotto in 511
+    /// byte; qui sta in una riga. Senza questo rifiuto il testo si accetta e
+    /// una riscrittura canonica ne rende uno che nessun lettore sa rileggere.
     #[test]
     fn il_riproduttore_ridotto_del_fuzzer_e_rifiutato() {
         let errore = ensure_no_duplicate_keys(

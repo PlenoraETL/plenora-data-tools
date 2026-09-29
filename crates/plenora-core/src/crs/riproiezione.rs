@@ -156,6 +156,8 @@ pub struct PercorsoDatum {
 }
 
 impl PercorsoDatum {
+    /// I passi del percorso, dal datum sorgente a quello d'arrivo; vuoto
+    /// per lo stesso datum.
     #[must_use]
     pub fn passi(&self) -> &[PassoPercorso] {
         &self.passi
@@ -494,6 +496,7 @@ impl Riproiettore {
         })
     }
 
+    /// Il piano deciso a secco da cui il riproiettore è costruito.
     #[must_use]
     pub const fn piano(&self) -> &PianoRiproiezione {
         &self.piano
@@ -669,11 +672,13 @@ impl Riproiettore {
 /// Un punto trasformato con i dettagli che servono al kernel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PuntoRiproiettato {
-    /// Coordinate nel CRS d'arrivo.
+    /// Coordinata x (longitudine o easting) nel CRS d'arrivo.
     pub x: f64,
+    /// Coordinata y (latitudine o northing) nel CRS d'arrivo.
     pub y: f64,
-    /// Longitudine e latitudine nel datum sorgente.
+    /// Longitudine nel datum sorgente, in gradi.
     pub lon_sorgente: f64,
+    /// Latitudine nel datum sorgente, in gradi.
     pub lat_sorgente: f64,
     /// Per ogni passo `NTv2`, la cella (sottogriglia, colonna, riga) il cui
     /// campo bilineare ha dato lo spostamento; `None` per gli altri passi.
