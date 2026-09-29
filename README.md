@@ -510,7 +510,16 @@ Quando il passo non sta, nell'ordine:
 1. **sfratto** delle tabelle residenti che il passo non usa su file Arrow
    IPC temporanei, prima quella il cui prossimo uso è più lontano (Belady;
    a parità, per nome): il più corto prefisso di quell'ordine che fa stare
-   il passo, poi si tengono in memoria quelle che non servono. Il guadagno
+   il passo, poi si tengono in memoria quelle che non servono (anche quelle
+   che non liberano nulla), e solo sulla scelta ridotta si verificano la
+   quota su disco e il transitorio di ogni scrittura. Quel transitorio è
+   calcolato prima di scrivere e sta nel budget insieme alle tabelle ancora
+   residenti: Arrow IPC codifica ogni blocco in un vettore in memoria (fino
+   al doppio del blocco) e i valori dei dizionari, che non si affettano con
+   le righe, interi nel primo blocco; il limite superiore usa
+   `get_slice_memory_size` di ogni blocco (per eccesso sui figli delle
+   liste). La quota su disco si verifica sul limite superiore del file
+   prima di codificare, poi sui byte veri. Il guadagno
    si misura come byte vivi che spariscono davvero (le allocazioni condivise
    con tabelle residenti restano), non come dimensione della tabella. Una
    tabella si rilegge prima del suo consumatore, e la rilettura (due volte i
@@ -523,6 +532,10 @@ Quando il passo non sta, nell'ordine:
    in memoria e che il modello comprende;
 3. altrimenti **`ResourceLimit` prima di eseguire**, con il nome del passo
    e dell'operazione, senza valori dei dati.
+
+Anche lo stato iniziale (gli input residenti) e quello finale (gli output
+insieme) sono confini: oltre il budget sono un `ResourceLimit`, anche in un
+piano senza passi.
 
 Il kernel riceve come `max_governed_memory_bytes` il margine vero, budget
 meno byte vivi, così i suoi preflight usano lo spazio che c'è. La
@@ -597,9 +610,8 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   - per `date_extract` e `string_length` (solo profilo wide) la crescita per
     riga fra gli ultimi due campioni supera 1,5: il modello resta lineare
     con l'inviluppo sul campione più grande;
-  - esclusi: overhead dell'allocatore e strutture Rust; il buffer di
-    codifica della scrittura di uno sfratto (circa 1 MiB per blocco) e i
-    buffer di I/O dello spill dei kernel; la memoria esterna (FFI) contata
+  - esclusi: overhead dell'allocatore e strutture Rust; i buffer di I/O
+    dello spill dei kernel; la memoria esterna (FFI) contata
     come la vede `byte_vivi` (limite sopra);
   - per le operazioni che dipendono dai dati (join, `cross_join`,
     `fuzzy_join`, `pivot`, `transpose`, `explode`, `unnest`, `melt`,

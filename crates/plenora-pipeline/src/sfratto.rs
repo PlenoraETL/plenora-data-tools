@@ -11,8 +11,16 @@
 //! sfratto fallisce con `ResourceLimit`, mai troncando un file.
 //!
 //! La scrittura procede a blocchi di righe di circa [`BYTE_PER_BLOCCO`]
-//! byte: il buffer di codifica di Arrow non cresce con la tabella. La
-//! rilettura ricompone i blocchi con `concat_batches` (con un solo blocco
+//! byte di dati. Il transitorio della scrittura non è però solo il blocco:
+//! Arrow IPC codifica ogni blocco in un `Vec<u8>` prima di scriverlo (fino
+//! al doppio del contenuto per la crescita del vettore), e i **valori dei
+//! dizionari** non si affettano con le righe, per cui il primo blocco li
+//! codifica interi. [`Piano::transitorio`] è il limite superiore di questo
+//! transitorio, calcolato prima di scrivere con
+//! `ArrayData::get_slice_memory_size` di ogni blocco (che conta interi i
+//! valori dei dizionari e i figli delle liste: per eccesso); il runner lo
+//! verifica nel budget prima di sfrattare, e la quota su disco si verifica
+//! su [`Piano::byte_file`] prima di codificare. La rilettura ricompone i blocchi con `concat_batches` (con un solo blocco
 //! le colonne restano viste del buffer del messaggio, contate una volta da
 //! `byte_vivi`) e rimette lo schema originale, metadati compresi.
 
@@ -23,7 +31,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use plenora_core::arrow::array::RecordBatch;
+use plenora_core::arrow::array::cast::AsArray;
+use plenora_core::arrow::array::{Array, RecordBatch};
 use plenora_core::arrow::ipc::reader::StreamReader;
 use plenora_core::arrow::ipc::writer::StreamWriter;
 use plenora_core::arrow::schema::SchemaRef;
@@ -33,6 +42,86 @@ use tempfile::TempDir;
 
 /// Byte di dati per blocco scritto.
 const BYTE_PER_BLOCCO: u64 = 1024 * 1024;
+
+/// Margine per blocco: metadati flatbuffer, padding a 8 byte dei buffer,
+/// buffer di `BufWriter`.
+const MARGINE_PER_BLOCCO: u64 = 64 * 1024;
+
+fn in_u64(valore: usize) -> u64 {
+    u64::try_from(valore).unwrap_or(u64::MAX)
+}
+
+/// Byte di un batch come li codifica Arrow IPC, per eccesso: i dati della
+/// fetta di ogni colonna, con i valori dei dizionari e i figli delle liste
+/// interi. Un tipo che Arrow non sa misurare conta le sue viste intere.
+fn byte_fetta(batch: &RecordBatch) -> u64 {
+    batch.columns().iter().fold(0_u64, |totale, colonna| {
+        let byte = colonna
+            .to_data()
+            .get_slice_memory_size()
+            .unwrap_or_else(|_| plenora_core::memoria::byte_viste(colonna.as_ref()));
+        totale.saturating_add(in_u64(byte))
+    })
+}
+
+/// Valori dei dizionari di primo livello, interi.
+fn byte_dizionari(batch: &RecordBatch) -> u64 {
+    batch.columns().iter().fold(0_u64, |totale, colonna| {
+        let byte = colonna.as_any_dictionary_opt().map_or(0, |dizionario| {
+            let valori = dizionario.values();
+            valori
+                .to_data()
+                .get_slice_memory_size()
+                .unwrap_or_else(|_| plenora_core::memoria::byte_viste(valori.as_ref()))
+        });
+        totale.saturating_add(in_u64(byte))
+    })
+}
+
+/// Come si scriverà una tabella: righe per blocco e limiti superiori di
+/// memoria transitoria e byte su disco, calcolati prima di scrivere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Piano {
+    righe_per_blocco: usize,
+    /// Memoria transitoria massima della scrittura: il doppio del blocco
+    /// più grande (crescita del vettore di codifica), più il margine.
+    pub transitorio: u64,
+    /// Byte del file, per eccesso: i blocchi senza i dizionari, i
+    /// dizionari una volta, il margine per blocco.
+    pub byte_file: u64,
+}
+
+/// Il piano di scrittura di una tabella.
+pub fn pianifica(tabella: &RecordBatch) -> Piano {
+    let righe = tabella.num_rows();
+    let dizionari = byte_dizionari(tabella);
+    // Righe per blocco dalla media dei dati senza i dizionari.
+    let dati = byte_fetta(tabella).saturating_sub(dizionari).max(1);
+    let per_blocco =
+        u128::from(BYTE_PER_BLOCCO) * u128::from(in_u64(righe).max(1)) / u128::from(dati);
+    let righe_per_blocco = usize::try_from(per_blocco).unwrap_or(usize::MAX).max(1);
+    let mut massimo = 0_u64;
+    let mut file = dizionari;
+    let mut inizio = 0;
+    loop {
+        let lunghezza = righe_per_blocco.min(righe - inizio);
+        let blocco = tabella.slice(inizio, lunghezza);
+        let byte = byte_fetta(&blocco);
+        massimo = massimo.max(byte);
+        file = file
+            .saturating_add(byte.saturating_sub(byte_dizionari(&blocco)))
+            .saturating_add(MARGINE_PER_BLOCCO);
+        inizio += lunghezza;
+        if inizio >= righe {
+            break;
+        }
+    }
+    Piano {
+        righe_per_blocco,
+        transitorio: massimo.saturating_mul(2).saturating_add(MARGINE_PER_BLOCCO),
+        byte_file: file,
+    }
+}
 
 /// Una tabella sfrattata: dove sta e quanto pesava.
 #[derive(Debug)]
@@ -166,7 +255,7 @@ impl AreaSfratti {
             .directory()?
             .join(format!("tabella-{:06}.arrows", self.prossimo_file));
         self.prossimo_file += 1;
-        let esito = self.scrivi(&percorso, tabella, byte_in_memoria);
+        let esito = self.scrivi(&percorso, tabella);
         let byte_file = match esito {
             Ok(byte_file) => byte_file,
             Err(errore) => {
@@ -194,7 +283,16 @@ impl AreaSfratti {
         Ok(())
     }
 
-    fn scrivi(&self, percorso: &Path, tabella: &RecordBatch, byte_in_memoria: u64) -> Result<u64> {
+    fn scrivi(&self, percorso: &Path, tabella: &RecordBatch) -> Result<u64> {
+        let piano = pianifica(tabella);
+        // La quota si verifica prima di codificare, sul limite superiore
+        // del file; il contatore la riverifica sui byte veri.
+        if piano.byte_file > self.quota_rimasta() {
+            return Err(PlenoraError::ResourceLimit(format!(
+                "sfratto oltre max_temp_bytes {}",
+                self.quota
+            )));
+        }
         let superata = Rc::new(Cell::new(false));
         let esito = Self::scrivi_blocchi(
             Contatore {
@@ -204,7 +302,7 @@ impl AreaSfratti {
                 superata: Rc::clone(&superata),
             },
             tabella,
-            byte_in_memoria,
+            piano.righe_per_blocco,
         );
         if superata.get() {
             return Err(PlenoraError::ResourceLimit(format!(
@@ -218,15 +316,10 @@ impl AreaSfratti {
     fn scrivi_blocchi(
         contatore: Contatore,
         tabella: &RecordBatch,
-        byte_in_memoria: u64,
+        per_blocco: usize,
     ) -> Result<u64> {
         let mut scrittore = StreamWriter::try_new(contatore, &tabella.schema())?;
         let righe = tabella.num_rows();
-        let righe_u64 = u64::try_from(righe).unwrap_or(u64::MAX).max(1);
-        // Righe per blocco: circa `BYTE_PER_BLOCCO` byte di dati, almeno una.
-        let per_blocco = u128::from(BYTE_PER_BLOCCO) * u128::from(righe_u64)
-            / u128::from(byte_in_memoria.max(1));
-        let per_blocco = usize::try_from(per_blocco).unwrap_or(usize::MAX).max(1);
         let mut inizio = 0;
         while inizio < righe {
             let lunghezza = per_blocco.min(righe - inizio);

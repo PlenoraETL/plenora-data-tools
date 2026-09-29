@@ -57,7 +57,7 @@ use plenora_core::{PlenoraError, Result};
 use crate::budget::{riserva_spill, Costo, Ingresso};
 use crate::costi_operazioni::BUDGET_SPILL_MISURATO;
 use crate::dispatch::Variante;
-use crate::sfratto::AreaSfratti;
+use crate::sfratto::{pianifica, AreaSfratti};
 use crate::validazione::{nel_passo, PassoValidato, PipelineValidata, METADATI_PANDAS};
 
 /// Esito di un'esecuzione: le tabelle d'uscita e il resoconto.
@@ -343,10 +343,16 @@ fn byte_vivi_senza(vivi: &BTreeMap<String, RecordBatch>, esclusi: &[&str]) -> Re
     )
 }
 
-/// Il più corto prefisso dell'ordine di sfratto che fa stare `extra` nel
-/// budget, poi ridotto: si tiene in memoria, dalla tabella usata prima,
-/// ogni tabella del prefisso senza la quale il passo sta comunque. `None`
-/// se nemmeno sfrattando tutti i candidati il passo sta.
+/// Tabelle da sfrattare perché il passo stia nel budget. `None` se nessuna
+/// scelta lo fa stare.
+///
+/// Per ogni prefisso dell'ordine di Belady, dal più corto: se sfrattarlo fa
+/// stare `extra` in memoria, si tolgono le tabelle inutili (dalla usata
+/// prima: ogni tabella senza la quale il passo sta comunque, compresa una
+/// che non libera nulla perché condivide le allocazioni con tabelle
+/// residenti); solo sulla scelta ridotta si verificano la quota su disco e
+/// il transitorio di ogni scrittura, nell'ordine di sfratto, con le tabelle
+/// ancora residenti in quel momento. Deterministico: l'ordine è fissato.
 fn scegli_sfratti<'a>(
     vivi: &BTreeMap<String, RecordBatch>,
     candidati: &[&'a str],
@@ -354,21 +360,27 @@ fn scegli_sfratti<'a>(
     budget: u64,
     disco: u64,
 ) -> Result<Option<Vec<&'a str>>> {
-    // Memoria: i byte vivi che restano piu' il passo. Disco: i byte di una
-    // copia delle tabelle sfrattate (i dati del file IPC, senza i metadati
-    // dei blocchi) nella quota rimasta; la scrittura la verifica comunque.
     let sta = |esclusi: &[&str]| -> Result<bool> {
-        let su_disco =
-            esclusi
-                .iter()
-                .filter_map(|nome| vivi.get(*nome))
-                .fold(0_u64, |totale, tabella| {
-                    totale.saturating_add(u64::try_from(byte_dati(tabella)).unwrap_or(u64::MAX))
-                });
-        Ok(su_disco <= disco
-            && byte_vivi_senza(vivi, esclusi)?
-                .checked_add(extra)
-                .is_some_and(|totale| totale <= budget))
+        Ok(byte_vivi_senza(vivi, esclusi)?
+            .checked_add(extra)
+            .is_some_and(|totale| totale <= budget))
+    };
+    let scrivibile = |scelti: &[&str]| -> Result<bool> {
+        let mut su_disco = 0_u64;
+        for (indice, nome) in scelti.iter().enumerate() {
+            let Some(tabella) = vivi.get(*nome) else {
+                return Err(PlenoraError::Internal(format!(
+                    "`{nome}` da sfrattare non residente"
+                )));
+            };
+            let piano = pianifica(tabella);
+            su_disco = su_disco.saturating_add(piano.byte_file);
+            let durante = byte_vivi_senza(vivi, &scelti[..indice])?.checked_add(piano.transitorio);
+            if su_disco > disco || durante.is_none_or(|totale| totale > budget) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     };
     for lunghezza in 0..=candidati.len() {
         let mut scelti: Vec<&str> = candidati[..lunghezza].to_vec();
@@ -382,7 +394,9 @@ fn scegli_sfratti<'a>(
                 scelti = senza;
             }
         }
-        return Ok(Some(scelti));
+        if scrivibile(&scelti)? {
+            return Ok(Some(scelti));
+        }
     }
     Ok(None)
 }
@@ -510,6 +524,14 @@ impl PipelineValidata {
             vivi.remove(nome);
         }
         let byte_vivi_iniziali = byte_vivi(vivi.values())?;
+        // Lo stato iniziale e' il primo confine: gli input residenti stanno
+        // nel budget, anche in un piano senza passi.
+        if byte_vivi_iniziali > budget {
+            return Err(PlenoraError::ResourceLimit(format!(
+                "input: byte vivi iniziali {byte_vivi_iniziali} oltre il budget {budget} \
+                 (max_governed_memory_bytes)"
+            )));
+        }
         let mut area = AreaSfratti::new(self.limiti.max_temp_bytes);
 
         let mut passi = Vec::with_capacity(self.passi.len());
@@ -689,6 +711,14 @@ impl PipelineValidata {
             ricaricati_alla_fine.push(nome);
         }
 
+        // Ultimo confine: tutti gli output residenti insieme.
+        let finali = byte_vivi(vivi.values())?;
+        if finali > budget {
+            return Err(PlenoraError::ResourceLimit(format!(
+                "output: byte vivi finali {finali} oltre il budget {budget} \
+                 (max_governed_memory_bytes)"
+            )));
+        }
         let mut outputs = Vec::with_capacity(self.outputs.len());
         for nome in &self.outputs {
             let tabella = vivi.remove(nome).ok_or_else(|| {
