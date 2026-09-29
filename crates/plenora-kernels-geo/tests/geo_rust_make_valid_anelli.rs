@@ -209,3 +209,28 @@ fn linework_rejects_a_rounded_crossing_next_to_another_feature() {
          (4.999999999999999 3,9 3,9 8,4.999999999999999 8,4.999999999999999 3))");
     assert!(make_valid_geometry_rust(&exact, RepairMethod::Linework, false, CENTIMETRO).is_ok());
 }
+
+/// Revisione 8: il tratto ripercorso `(0 0) -> (5 5) -> (0 0)` sparisce dal
+/// polygonize, e il campione interno del quadrato `(5, 5)` sta su di esso.
+/// L'avvolgimento per perturbazione simbolica e' quello della faccia (1):
+/// il quadrato, come GEOS, come shell e come buco.
+#[test]
+fn structure_winding_ignores_retraced_segments_under_the_sample() {
+    let cases = [
+        ("POLYGON((0 0,10 0,10 10,0 10,0 0,5 5,0 0))", 100.0),
+        ("POLYGON((0 0,10 0,10 10,0 10,0 0,5 5,5 8,5 5,0 0))", 100.0),
+        (
+            "POLYGON((-1 -1,11 -1,11 11,-1 11,-1 -1),(0 0,10 0,10 10,0 10,0 0,5 5,0 0))",
+            44.0,
+        ),
+    ];
+    for (input, geos) in cases {
+        let output =
+            make_valid_geometry_rust(&wkt(input), RepairMethod::Structure, false, CENTIMETRO)
+                .unwrap_or_else(|errore| panic!("{input}: {errore}"));
+        assert!(
+            (polygonal_area(&output) - geos).abs() < 1e-9,
+            "{input}: {output:?}"
+        );
+    }
+}

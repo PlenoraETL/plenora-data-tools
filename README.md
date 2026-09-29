@@ -110,8 +110,24 @@ posteriori di precisione perché non arrotonda nulla oltre il noding: ogni
 passo dopo il noding è un'operazione esatta sull'insieme dei lati nodati
 (vedi [«Differenze da GEOS»](#differenze-da-geos)).
 
+**Feature d'ingresso più vicine della precisione.** La garanzia di 1 cm
+vale per input le cui feature distinte (vertici, lati) distano almeno la
+precisione l'una dall'altra, o coincidono esattamente. Feature distinte più
+vicine di 1 cm (un vertice a pochi ULP da un lato, due lati quasi
+coincidenti, coordinate che differiscono alla sedicesima cifra come `10` e
+`10.000000000000002`) possono essere fuse o cambiare la topologia del
+risultato, anche con aree diverse di molto più di perimetro per 1 cm, e
+senza errore: su quegli input anche GEOS decide secondo il proprio
+arrotondamento. Non è un caso da inseguire: dati così non hanno senso alla
+precisione dichiarata. `make_valid` `LINEWORK` rifiuta
+(`PrecisionInsufficient`) solo il caso che vede a costo trascurabile, un
+incrocio non esatto del noding a meno di 1 cm da un altro vertice o da un
+lato non incidente; due incroci arrotondati sullo stesso vertice o su un
+vertice d'ingresso non sono riconosciuti.
+
 **Hazard.** Una geometria più sottile di 1 cm (in tutto o in parte) può
-uscire fusa o vuota senza errore, per scelta; sulle operazioni booleane non
+uscire fusa o vuota senza errore, per scelta; feature distinte più vicine
+di 1 cm possono cambiare la topologia (paragrafo precedente); sulle operazioni booleane non
 ancora controllate una griglia più grossa di 1 cm (estensioni oltre circa
 5.400 km in metri) non è rifiutata. Il controllo finale degli overlay di
 `make_valid` `STRUCTURE` garantisce che **ogni vertice** dell'output stia entro 1 cm

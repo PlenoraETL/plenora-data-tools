@@ -384,28 +384,42 @@ fn fixed_ring(
 }
 
 /// Numero di avvolgimento esatto di `point` rispetto all'anello chiuso
-/// (`orient2d` esatto, confronti di ordinate esatti). Un punto sull'anello
-/// non ha avvolgimento: errore interno, mai un valore indovinato.
+/// (`orient2d` esatto, confronti di ordinate esatti), per simulazione di
+/// semplicita': il punto e' spostato di `e * (d, 1)` con `0 < d << e`
+/// infinitesimi. Il campione di una faccia puo' stare su un lato
+/// dell'anello che il polygonize ha tolto (un tratto ripercorso, un dangle):
+/// quel lato ha la faccia da entrambe le parti e un contributo netto nullo,
+/// quindi qualunque spostamento infinitesimo da' l'avvolgimento della faccia.
+/// Con lo spostamento le ordinate si confrontano con le disuguaglianze della
+/// regola semiaperta, e su un lato collineare l'orientamento e' il segno di
+/// `(b - a) x (d, 1)`: `b.x - a.x`, o per un lato verticale `-(b.y - a.y)`.
+// I lati verticali si riconoscono dal confronto esatto delle ascisse.
+#[allow(clippy::float_cmp)]
 fn winding_number(point: Coord<f64>, ring: &LineString<f64>) -> Result<i64, MakeValidError> {
     let mut winding = 0_i64;
     for segment in ring.lines() {
-        let orientation = RobustKernel::orient2d(segment.start, segment.end, point);
-        if orientation == Orientation::Collinear
-            && point.x >= segment.start.x.min(segment.end.x)
-            && point.x <= segment.start.x.max(segment.end.x)
-            && point.y >= segment.start.y.min(segment.end.y)
-            && point.y <= segment.start.y.max(segment.end.y)
-        {
-            return Err(MakeValidError::InternalInvariant(
-                "punto interno della faccia sull'anello",
-            ));
-        }
+        let orientation = match RobustKernel::orient2d(segment.start, segment.end, point) {
+            Orientation::Collinear => {
+                if segment.end.x > segment.start.x
+                    || (segment.end.x == segment.start.x && segment.end.y < segment.start.y)
+                {
+                    Orientation::CounterClockwise
+                } else {
+                    Orientation::Clockwise
+                }
+            }
+            other => other,
+        };
         if segment.start.y <= point.y {
             if segment.end.y > point.y && orientation == Orientation::CounterClockwise {
-                winding += 1;
+                winding = winding
+                    .checked_add(1)
+                    .ok_or(MakeValidError::IndexOverflow)?;
             }
         } else if segment.end.y <= point.y && orientation == Orientation::Clockwise {
-            winding -= 1;
+            winding = winding
+                .checked_sub(1)
+                .ok_or(MakeValidError::IndexOverflow)?;
         }
     }
     Ok(winding)
