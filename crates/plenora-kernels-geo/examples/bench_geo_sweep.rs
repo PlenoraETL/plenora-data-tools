@@ -17,9 +17,10 @@
 //! 3 run. Peak RSS da `VmHWM` di `/proc/self/status` (cumulativo di
 //! processo; `rss_delta_kib` e' il delta rispetto alla misura precedente).
 //!
-//! Op assenti in Rust puro (fuori catalogo, esistevano solo via GEOS/PROJ):
-//! `geo.make_valid`, `geo.reproject`, `geo.polygonize`, `geo.split` sono
-//! riportate come `skipped`.
+//! `geo.reproject` (fuori catalogo, esisteva solo via PROJ) e' riportata
+//! come `skipped`; cosi' anche `geo.make_valid`, `geo.polygonize` e
+//! `geo.split`, tornate col backend Rust (`rust_backend`) ma non ancora
+//! misurate da questo sweep.
 //!
 //! Uso: `bench_geo_sweep` — scrive `benchmarks/sweep/geo_sweep.json` e
 //! `benchmarks/sweep/geo_sweep.md` (relativi alla cwd, /work in Docker) e
@@ -885,7 +886,7 @@ fn sweep_collective(
     );
 }
 
-/// Scenario saltato (backend geos/proj non abilitato).
+/// Scenario saltato (op fuori catalogo o non ancora misurata).
 fn sweep_skipped(results: &mut Vec<Measurement>, op: &'static str, note: &str) {
     record(
         results,
@@ -2366,11 +2367,12 @@ fn main() {
         },
     );
 
-    // --- Assenti in Rust puro (solo GEOS/PROJ, fuori catalogo) -----------------
+    // --- Non misurate: reproject fuori catalogo (solo PROJ); le tre del
+    // backend Rust non hanno ancora uno scenario in questo sweep -------------
     sweep_skipped(
         &mut results,
         "geo.make_valid",
-        "assente in Rust puro (solo GEOS)",
+        "backend Rust non ancora misurato in questo sweep",
     );
     sweep_skipped(
         &mut results,
@@ -2380,12 +2382,12 @@ fn main() {
     sweep_skipped(
         &mut results,
         "geo.polygonize",
-        "assente in Rust puro (solo GEOS)",
+        "backend Rust non ancora misurato in questo sweep",
     );
     sweep_skipped(
         &mut results,
         "geo.split",
-        "assente in Rust puro (solo GEOS)",
+        "backend Rust non ancora misurato in questo sweep",
     );
 
     write_outputs(&results);
