@@ -809,8 +809,11 @@ version = "0.1.0"
 dependencies = [
  "plenora-core",
  "plenora-kernels-table",
+ "proptest",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

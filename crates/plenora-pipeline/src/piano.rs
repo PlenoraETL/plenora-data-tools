@@ -118,8 +118,9 @@ pub struct LimitiParziali {
     pub max_rows_per_edge: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_expansion_factor: Option<f64>,
-    /// Passato ai kernel che lo applicano; il runner non limita ancora le
-    /// tabelle residenti (README, «Runner»).
+    /// Budget di memoria del runner: byte vivi delle tabelle residenti più
+    /// il picco previsto di ogni passo (README, «Budget di memoria»); ai
+    /// kernel arriva il margine rimasto.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_governed_memory_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

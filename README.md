@@ -14,7 +14,7 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-core` | re-export Arrow, `PlenoraError`, limiti, catalogo delle operazioni, contratti dati, contratto CRS fail-closed, politica dei panici |
 | `plenora-kernels-table` | kernel tabellari (filtri, ordinamenti, aggregazioni, join, espressioni, date, stringhe, qualità, spill) |
 | `plenora-kernels-geo` | kernel geografici su `geo::Geometry` e adapter GeoArrow-WKB; `rust_backend` per `geo.polygonize` e `geo.split` senza GEOS |
-| `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione ([«Runner»](#runner)) |
+| `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione e budget di memoria per passo ([«Runner»](#runner)) |
 | `vendor/` | `geo`, `wkt`, `i_shape` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
@@ -213,7 +213,10 @@ le strutture di chiavi e gruppi di `aggregate`.
 
 **Hazard.** Con molte chiavi distinte il picco reale supera la stima
 dell'input: l'arena delle chiavi, due `usize` e una voce di mappa per chiave
-distinta, fino a due `usize` per riga per l'assegnazione ai gruppi.
+distinta, fino a due `usize` per riga per l'assegnazione ai gruppi. Nel
+runner il modello di costo ([«Budget di memoria»](#budget-di-memoria))
+prevede queste strutture sul caso peggiore misurato (fixture `distinct`,
+chiavi tutte distinte), senza contarle.
 
 **Condizione di rientro.** Contabilità esplicita delle strutture di chiavi,
 con errore `ResourceLimit` oltre il budget.
@@ -471,12 +474,78 @@ sui dati. Ogni tabella si libera appena ha girato il suo ultimo
 consumatore; un'uscita che nessuno usa si libera subito, un input mai usato
 prima del primo passo.
 
-Il resoconto dà per passo operazione, righe in ingresso e in uscita, byte
-nuovi dell'output (allocazioni che nessuna tabella residente raggiungeva
-prima del passo) e byte vivi dopo il passo. `byte_vivi` somma le
-allocazioni Arrow delle tabelle residenti una volta ciascuna, per inizio
-dell'allocazione e capacità, figli compresi: una slice o una rinomina non
-aggiungono nulla.
+Il resoconto dà per passo operazione, righe in ingresso e in uscita,
+variante del kernel, picco previsto, margine passato al kernel, tabelle
+sfrattate e rilette, byte nuovi dell'output (allocazioni che nessuna
+tabella residente raggiungeva prima del passo), byte vivi con l'output e
+dopo i rilasci. `byte_vivi` (`plenora_core::memoria`) somma le allocazioni
+Arrow delle tabelle residenti una volta ciascuna, per inizio
+dell'allocazione e capacità, figli compresi: una slice, una rinomina o le
+colonne di un batch letto da Arrow IPC non aggiungono nulla. È la stessa
+misura con cui i kernel stimano i byte di un batch
+(`spill::estimated_batch_bytes`).
+
+### Budget di memoria
+
+`limits.max_governed_memory_bytes` del piano è il budget del runner. Prima
+di ogni passo deve valere
+
+```text
+byte_vivi(residenti) + riletture + picco_previsto(passo) <= budget
+```
+
+con `picco_previsto = S * (a + max(r * righe_in, c * byte_in, p * coppie))`
+per operazione e variante, `S = 1.5`. I coefficienti vengono dalle misure
+Windows (`PeakWorkingSet64`, profili wide, narrow, distinct avversario e
+spilled, fino a 5 milioni di righe) in
+`data/misure/catalogo-memoria-tabellare-v3.json`; li genera
+`python scripts/genera_costi_operazioni.py` in
+`crates/plenora-pipeline/src/costi_operazioni.rs`, con la formula
+nell'intestazione e lo SHA-256 del catalogo (`--verifica` rigenera e
+confronta; un test confronta l'impronta). Un'operazione senza modello si
+rifiuta in validazione (`Unsupported`).
+
+Quando il passo non sta, nell'ordine:
+
+1. **sfratto** delle tabelle residenti che il passo non usa su file Arrow
+   IPC temporanei, prima quella il cui prossimo uso è più lontano (Belady;
+   a parità, per nome): il più corto prefisso di quell'ordine che fa stare
+   il passo, poi si tengono in memoria quelle che non servono. Il guadagno
+   si misura come byte vivi che spariscono davvero (le allocazioni condivise
+   con tabelle residenti restano), non come dimensione della tabella. Una
+   tabella si rilegge prima del suo consumatore, e la rilettura (due volte i
+   byte stimati: blocchi letti e tabella ricomposta) conta nel controllo di
+   quel passo; gli output del piano sfrattati si rileggono alla fine, uno
+   alla volta, nel budget. I file stanno sotto la quota `max_temp_bytes`;
+2. **variante spilled** dove il kernel la ha (`sort`, `distinct`,
+   `aggregate`, `union_distinct`, `intersect`, `except`), con il suo
+   modello: lo spill riduce il transitorio, non l'output, che resta intero
+   in memoria e che il modello comprende;
+3. altrimenti **`ResourceLimit` prima di eseguire**, con il nome del passo
+   e dell'operazione, senza valori dei dati.
+
+Il kernel riceve come `max_governed_memory_bytes` il margine vero, budget
+meno byte vivi, così i suoi preflight usano lo spazio che c'è. La
+variante spilled tiene in memoria fino al proprio budget di batch riletti
+da una partizione, e `concat_batches` li copia: la sua previsione aggiunge
+al modello una riserva di due volte il margine richiesto (due partizioni
+medie, `budget::riserva_spill`, al più 64 MiB), e il kernel riceve metà di
+ciò che resta oltre il picco del modello, al più i 64 MiB con cui è stata
+misurata. Come `max_temp_bytes`
+riceve la quota che gli sfratti non occupano; lo sfratto stesso sceglie
+solo tabelle la cui copia sta nella quota rimasta.
+
+`byte_in` del modello è il maggiore fra i byte vivi degli input e il costo
+di una loro copia (`plenora_core::memoria::byte_dati`: colonne che sono lo
+stesso array contano ciascuna, perché i kernel le copiano ciascuna); la
+stessa regola vale per `spill::estimated_batch_bytes`. Dopo il passo, byte
+vivi con l'output oltre il budget sono un `ResourceLimit` esplicito.
+
+Dalle misure: lo spill di `sort` costa quanto il sort in memoria (input e
+output devono coesistere); il modello lo sceglie solo dove il termine per
+byte della variante spilled è più basso, cioè su righe larghe, e mai sotto
+circa 2,5 volte l'input. Le set operation spilled costano molto meno di
+quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
 
 ### Limiti dichiarati del runner
 
@@ -494,11 +563,58 @@ aggiungono nulla.
   `run` per valore: un clone tenuto dal chiamante tiene vive allocazioni
   che il resoconto non vede.
   *Rientro*: un'API di Arrow che distingua la deallocazione `Custom`, o la
-  copia delle tabelle esterne in memoria Rust all'ingresso (decisione di
-  F3, con il budget).
-- **Budget non applicato**: `max_governed_memory_bytes` arriva ai kernel che
-  lo usano, ma il runner non limita i byte vivi e non attiva lo spill
-  (percorso presente, selezionato solo dai test).
+  copia delle tabelle esterne in memoria Rust all'ingresso (non fatta in
+  F3: il budget conta le tabelle esterne come le vede `byte_vivi`).
+- **Budget di memoria: byte Arrow più transitorio previsto, non RSS.**
+  *Regola*: il budget garantisce che, a ogni confine di passo, i byte vivi
+  delle tabelle residenti stiano sotto `max_governed_memory_bytes`, e che
+  prima di ogni passo i byte vivi più il picco previsto dal modello ci
+  stiano; l'output si controlla dopo con i byte esatti.
+  *Ambito*: `PipelineValidata::run`, modello in
+  `crates/plenora-pipeline/src/costi_operazioni.rs`.
+  *Hazard*:
+  - non è un tetto duro sulla memoria del processo: il transitorio dentro
+    il kernel è una previsione empirica (misure Windows di
+    `PeakWorkingSet64`, fattore 1,5), non una misura; un input fuori dalle
+    fixture misurate (più righe di 5 milioni, 1000 per lato per
+    `cross_join` e `fuzzy_join`, distribuzioni di chiavi o config diverse
+    da quelle misurate: una `type_cast` di tutte le colonne invece di una)
+    può superarla senza errore;
+  - le varianti spilled sono misurate solo sui profili wide e distinct, non
+    su narrow (righe strette, dove il costo per byte è più alto), e a
+    `a59131f`, prima della correzione di `estimated_batch_bytes`: allora
+    `read_partition` rifiutava partizioni circa dieci volte più piccole
+    (`aggregate` spilled a 1 e 5 milioni di righe, rifiutato), quindi il
+    working set delle partizioni misurato è più piccolo di quello di oggi.
+    Il runner lo compensa con la riserva e passando al kernel spilled al
+    più metà del margine oltre il picco del modello; con chiavi più
+    sbilanciate di due partizioni medie il kernel rifiuta con
+    `ResourceLimit`. I punti rifiutati non entrano nel modello;
+  - `cross_join` e `fuzzy_join` hanno solo il termine per coppia,
+    calibrato sulle larghezze di riga misurate: con righe più larghe il
+    picco previsto è basso, e la difesa è il preflight dell'output del
+    kernel con il margine passato;
+  - per `date_extract` e `string_length` (solo profilo wide) la crescita per
+    riga fra gli ultimi due campioni supera 1,5: il modello resta lineare
+    con l'inviluppo sul campione più grande;
+  - esclusi: overhead dell'allocatore e strutture Rust; il buffer di
+    codifica della scrittura di uno sfratto (circa 1 MiB per blocco) e i
+    buffer di I/O dello spill dei kernel; la memoria esterna (FFI) contata
+    come la vede `byte_vivi` (limite sopra);
+  - per le operazioni che dipendono dai dati (join, `cross_join`,
+    `fuzzy_join`, `pivot`, `transpose`, `explode`, `unnest`, `melt`,
+    `aggregate`, `dedup_advanced`, finestre, `flatten_json`) il modello
+    copre il transitorio del caso peggiore misurato; l'output lo limitano i
+    preflight dei kernel con il margine passato e `max_rows`, e il
+    controllo esatto dopo il passo, cioè dopo che è stato allocato;
+  - uno sfratto libera memoria solo se nessun altro tiene l'allocazione:
+    un clone tenuto dal chiamante la tiene viva, e il resoconto non lo vede.
+
+  *Rientro*: contabilità esplicita delle strutture di chiavi nei kernel
+  (limite «Memoria delle chiavi dei kernel in memoria non governata»),
+  misure del profilo narrow per le varianti spilled e dei casi oltre il
+  dominio misurato, e un allocatore contato per il processo (un tetto
+  vero, non una previsione).
 - **Solo operazioni tabellari**: le geo si rifiutano in validazione.
 - **Controlli statici delle config nel runner**: sono il porting di
   `validate_step_contract` di `190c493`, perché l'analisi dei contratti non

@@ -192,25 +192,26 @@ impl PassoPreparato {
     }
 }
 
-/// Percorso dei kernel che hanno una variante spilled (`sort`, `distinct`,
-/// `aggregate`, set operation).
+/// Variante del kernel scelta dal runner per un passo.
 ///
-/// Il runner esegue oggi solo [`Instradamento::InMemoria`]; il percorso con
-/// spill sopra il budget è il routing di `sort_dispatch`,
-/// `distinct_dispatch`, `aggregate_dispatch` ed `execute_binary` a
-/// `190c493`, pronto per quando il budget sarà applicato (F3).
+/// La sceglie il budget ([`crate::esecuzione`]): la variante spilled solo
+/// dove il kernel la ha (`sort`, `distinct`, `aggregate`, set operation) e
+/// solo quando quella in memoria non sta nel budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Instradamento {
-    /// Sempre il kernel in memoria.
+pub enum Variante {
+    /// Il kernel in memoria.
     InMemoria,
-    /// Spill su disco quando la stima dei byte dell'input supera
-    /// `max_governed_memory_bytes`, come a `190c493`.
-    // Selezionato solo dai test finché il budget non si applica (F3).
-    #[cfg_attr(not(test), allow(dead_code))]
-    SpillSopraBudget,
+    /// Il kernel con spill su disco.
+    Spill,
 }
 
 impl PassoPreparato {
+    /// `true` se il passo ha una variante spilled.
+    pub const fn ha_spill(&self) -> bool {
+        matches!(self, Self::Sort(_) | Self::Distinct(_) | Self::Aggregate(_))
+            || self.tipo_set_operation().is_some()
+    }
+
     /// Operazione di set per `spill::execute_set_operation`.
     const fn tipo_set_operation(&self) -> Option<setops::SetOperationKind> {
         match self {
@@ -232,10 +233,14 @@ impl PassoPreparato {
         &self,
         batch: &RecordBatch,
         limits: &Limits,
-        instradamento: Instradamento,
+        variante: Variante,
     ) -> Result<RecordBatch> {
-        let spill = instradamento == Instradamento::SpillSopraBudget
-            && spill::should_spill_unary(batch, limits);
+        let spill = variante == Variante::Spill;
+        if spill && !self.ha_spill() {
+            return Err(PlenoraError::Internal(
+                "variante spilled chiesta per un passo che non la ha".to_owned(),
+            ));
+        }
         match self {
             Self::DropColumns(config) => columns::drop_columns(batch, config),
             Self::Rename(config) => columns::rename(batch, config),
@@ -338,14 +343,15 @@ impl PassoPreparato {
         left: &RecordBatch,
         right: &RecordBatch,
         limits: &Limits,
-        instradamento: Instradamento,
+        variante: Variante,
     ) -> Result<RecordBatch> {
-        if let Some(tipo) = self.tipo_set_operation() {
-            if instradamento == Instradamento::SpillSopraBudget
-                && spill::should_spill(left, right, limits)
-            {
-                return spill::execute_set_operation(tipo, left, right, limits);
-            }
+        if variante == Variante::Spill {
+            let Some(tipo) = self.tipo_set_operation() else {
+                return Err(PlenoraError::Internal(
+                    "variante spilled chiesta per un passo che non la ha".to_owned(),
+                ));
+            };
+            return spill::execute_set_operation(tipo, left, right, limits);
         }
         match self {
             Self::Join(config) => joins::join(left, right, config, limits),

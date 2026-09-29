@@ -11,6 +11,15 @@ plenora-core.workspace = true
 plenora-kernels-table.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Sfratto delle tabelle fredde su file Arrow IPC temporanei (budget di
+# memoria): la stessa directory temporanea dello spill dei kernel.
+tempfile.workspace = true
+
+[dev-dependencies]
+# Proptest delle catene del budget (tests/budget.rs).
+proptest.workspace = true
+# SHA-256 del catalogo delle misure contro quello registrato nel modello.
+sha2.workspace = true
 
 [lints]
 workspace = true

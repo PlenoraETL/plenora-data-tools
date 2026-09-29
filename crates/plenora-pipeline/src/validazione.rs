@@ -28,6 +28,7 @@ use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::analyze::analyze_table_contract;
 
+use crate::budget::{costo_di, CostoOperazione};
 use crate::dispatch::PassoPreparato;
 use crate::piano::{Pipeline, VERSIONE_PIANO};
 
@@ -41,6 +42,8 @@ pub struct PassoValidato {
     pub descrittore: &'static OperationDescriptor,
     pub inputs: Vec<String>,
     pub preparato: PassoPreparato,
+    /// Modello di costo dell'operazione, per il budget.
+    pub costo: &'static CostoOperazione,
 }
 
 /// Piano validato contro gli schemi degli input: pronto per l'esecuzione.
@@ -448,6 +451,17 @@ impl Pipeline {
             preparato
                 .verifica(&limiti_kernel)
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
+            // Il budget si applica a ogni passo: un'operazione senza modello
+            // di costo non ha una previsione, e non si esegue.
+            let costo = costo_di(descrittore.id).ok_or_else(|| {
+                nel_passo(
+                    &passo.out,
+                    PlenoraError::Unsupported(format!(
+                        "{}: operazione senza modello di costo per il budget di memoria",
+                        descrittore.id
+                    )),
+                )
+            })?;
 
             // Diagnostiche per riga: gli indici riportati sono quelli della
             // sorgente solo se nessun passo a monte ha cambiato cardinalità o
@@ -496,6 +510,7 @@ impl Pipeline {
                 descrittore,
                 inputs: passo.inputs.clone(),
                 preparato,
+                costo,
             });
         }
 
