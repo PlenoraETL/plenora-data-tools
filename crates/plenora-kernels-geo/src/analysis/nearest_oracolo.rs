@@ -1,7 +1,9 @@
 //! Oracolo di `geo.nearest`: la forza bruta O(n*m) di prima dell'indice
 //! R-tree, copiata alla lettera, confrontata input per input con
 //! [`nearest_matches`] e [`nearest_matches_validated`]. Il confronto e' sui
-//! bit delle distanze (`to_bits`) e sul testo degli errori.
+//! bit delle distanze (`to_bits`) e sul testo degli errori. Dove la forza
+//! bruta andava in panico dentro `geo`, il contratto chiede
+//! `CalcoloNonConcluso`: il percorso pubblico non deve mai andare in panico.
 
 // Le coordinate di prova sono scritte come `a + k * b`: `mul_add` le
 // renderebbe meno leggibili senza cambiare che cosa si prova.
@@ -118,13 +120,22 @@ fn forza_bruta(
 type Colonna = Vec<Option<Geometry<f64>>>;
 type Impronta = Result<Vec<(u64, u64, u64)>, String>;
 
-/// Esegue e prende l'impronta; un panico di `geo` (per esempio
-/// `nearest_neighbour_distance` su una linea di un solo punto) e' un esito
-/// anch'esso, e deve coincidere.
-fn impronta(esegui: impl FnOnce() -> Result<Vec<NearestMatch>, AnalysisError>) -> Impronta {
+/// Impronta dell'oracolo: un suo panico (per esempio
+/// `nearest_neighbour_distance` di `geo` su una linea di un solo punto) e' il
+/// caso in cui il contratto chiede `CalcoloNonConcluso`.
+fn impronta_oracolo(esegui: impl FnOnce() -> Result<Vec<NearestMatch>, AnalysisError>) -> Impronta {
     let Ok(esito) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(esegui)) else {
-        return Err("panico".to_owned());
+        return Err(CALCOLO_NON_CONCLUSO.to_owned());
     };
+    impronta(esito)
+}
+
+/// La variante senza la forma del payload, che dipende da `geo`.
+const CALCOLO_NON_CONCLUSO: &str = "CalcoloNonConcluso";
+
+/// Impronta del percorso pubblico: nessun `catch_unwind`, un panico fa
+/// fallire il test.
+fn impronta(esito: Result<Vec<NearestMatch>, AnalysisError>) -> Impronta {
     esito
         .map(|righe| {
             righe
@@ -132,7 +143,10 @@ fn impronta(esegui: impl FnOnce() -> Result<Vec<NearestMatch>, AnalysisError>) -
                 .map(|riga| (riga.left, riga.right, riga.distance.to_bits()))
                 .collect()
         })
-        .map_err(|errore| format!("{errore:?}"))
+        .map_err(|errore| match errore {
+            AnalysisError::CalcoloNonConcluso(_) => CALCOLO_NON_CONCLUSO.to_owned(),
+            altro => format!("{altro:?}"),
+        })
 }
 
 /// Confronta i due percorsi pubblici con l'oracolo; restituisce l'esito
@@ -144,7 +158,7 @@ fn confronta_ed_esito(
     max_comparisons: u64,
     max_results: u64,
 ) -> Impronta {
-    let atteso_gated = impronta(|| {
+    let atteso_gated = impronta_oracolo(|| {
         forza_bruta(
             left,
             right,
@@ -154,10 +168,15 @@ fn confronta_ed_esito(
             false,
         )
     });
-    let ottenuto_gated =
-        impronta(|| nearest_matches(left, right, max_distance, max_comparisons, max_results));
+    let ottenuto_gated = impronta(nearest_matches(
+        left,
+        right,
+        max_distance,
+        max_comparisons,
+        max_results,
+    ));
     assert_eq!(ottenuto_gated, atteso_gated, "percorso gated");
-    let atteso = impronta(|| {
+    let atteso = impronta_oracolo(|| {
         forza_bruta(
             left,
             right,
@@ -167,9 +186,13 @@ fn confronta_ed_esito(
             true,
         )
     });
-    let ottenuto = impronta(|| {
-        nearest_matches_validated(left, right, max_distance, max_comparisons, max_results)
-    });
+    let ottenuto = impronta(nearest_matches_validated(
+        left,
+        right,
+        max_distance,
+        max_comparisons,
+        max_results,
+    ));
     assert_eq!(ottenuto, atteso, "percorso validated");
     atteso
 }
@@ -659,7 +682,7 @@ fn l_indice_scarta_davvero_e_tiene_i_pari() {
         .collect();
     let indice = IndiceVicini::nuovo(&usable_right);
     let sinistra = Geometry::Point(Point::new(10.5, 20.5));
-    let candidati = indice.candidati(&sinistra, &usable_right);
+    let candidati = indice.candidati(&sinistra, &usable_right).unwrap();
     // I quattro pari ci sono, e i candidati sono una frazione della colonna.
     for atteso in [10 * 50 + 20, 10 * 50 + 21, 11 * 50 + 20, 11 * 50 + 21] {
         assert!(candidati.contains(&atteso));
@@ -675,10 +698,16 @@ fn l_indice_scarta_davvero_e_tiene_i_pari() {
         .filter_map(|(indice, geometria)| geometria.as_ref().map(|valore| (indice, valore)))
         .collect();
     let indice = IndiceVicini::nuovo(&usable);
-    assert!(indice.candidati(&sinistra, &usable).contains(&2500));
+    assert!(indice
+        .candidati(&sinistra, &usable)
+        .unwrap()
+        .contains(&2500));
     // Un left irregolare prende tutto.
     let irregolare = Geometry::LineString(linea(&[(10.5, 20.5)]));
-    assert_eq!(indice.candidati(&irregolare, &usable).len(), usable.len());
+    assert_eq!(
+        indice.candidati(&irregolare, &usable).unwrap().len(),
+        usable.len()
+    );
 }
 
 #[test]
@@ -700,4 +729,83 @@ fn tolleranza_di_geo_fuori_dal_rettangolo_d_ingombro() {
     let esito = confronta_ed_esito(&left, &right, None, u64::MAX, u64::MAX).unwrap();
     assert_eq!(esito, vec![(0, 1, 0.0_f64.to_bits())]);
     confronta_con_soglie(&left, &right);
+}
+
+/// Coppia valida (passa il gate) su cui `geo` va in panico: con coordinate
+/// intorno a 1e-200 i quadrati delle differenze vanno in underflow e
+/// `nearest_neighbour_distance` di `geo` chiede a `rstar` un confronto con NaN.
+fn coppia_che_fa_panicare_geo() -> (Colonna, Colonna) {
+    (
+        vec![Some(Geometry::LineString(linea(&[
+            (3e-200, 1e-200),
+            (4e-200, 0.0),
+            (2e-200, 0.0),
+        ])))],
+        vec![Some(Geometry::Rect(Rect::new(
+            Coord {
+                x: 1e-200,
+                y: 1e-200,
+            },
+            Coord {
+                x: 2e-200,
+                y: 4e-200,
+            },
+        )))],
+    )
+}
+
+#[test]
+fn un_panico_di_geo_diventa_calcolo_non_concluso() {
+    let (left, right) = coppia_che_fa_panicare_geo();
+    // La forza bruta di prima andava davvero in panico su questo ingresso.
+    assert!(std::panic::catch_unwind(|| forza_bruta(&left, &right, None, 10, 10, false)).is_err());
+    for esito in [
+        nearest_matches(&left, &right, None, 10, 10),
+        nearest_matches_validated(&left, &right, None, 10, 10),
+    ] {
+        assert!(
+            matches!(esito, Err(AnalysisError::CalcoloNonConcluso(_))),
+            "{esito:?}"
+        );
+    }
+    for esito in [
+        minimum_distances(&left, &right, 10),
+        minimum_distances_validated(&left, &right, 10),
+    ] {
+        assert!(
+            matches!(esito, Err(AnalysisError::CalcoloNonConcluso(_))),
+            "{esito:?}"
+        );
+    }
+    // Linea di un solo punto (solo a precondizione violata): stesso esito.
+    let un_punto: Colonna = vec![Some(Geometry::LineString(linea(&[(0.0, 0.0)])))];
+    let segmento: Colonna = vec![Some(Geometry::LineString(linea(&[(1.0, 0.0), (2.0, 0.0)])))];
+    assert!(matches!(
+        nearest_matches_validated(&un_punto, &segmento, None, 10, 10),
+        Err(AnalysisError::CalcoloNonConcluso(_))
+    ));
+    assert!(matches!(
+        minimum_distances_validated(&un_punto, &segmento, 10),
+        Err(AnalysisError::CalcoloNonConcluso(_))
+    ));
+}
+
+#[test]
+fn il_calcolo_non_concluso_vince_sul_limite_dei_risultati() {
+    // Righe che superano `max_results` e una riga che fa panicare `geo`:
+    // l'errore non dipende dall'ordine dei thread.
+    let (sinistra, destra) = coppia_che_fa_panicare_geo();
+    let mut left: Colonna = (0..64)
+        .map(|indice| punto(f64::from(indice), 0.0))
+        .collect();
+    left.extend(sinistra);
+    let mut right: Colonna = vec![punto(0.5, 1e-200), punto(0.5, -1e-200)];
+    right.extend(destra);
+    for _ in 0..20 {
+        assert!(matches!(
+            nearest_matches_validated(&left, &right, None, u64::MAX, 3),
+            Err(AnalysisError::CalcoloNonConcluso(_))
+        ));
+    }
+    confronta(&left, &right, None, u64::MAX, 3);
 }

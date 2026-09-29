@@ -255,7 +255,9 @@ fn spatial_join_refs(
             Ok(envelope.map(|envelope| IndexedEnvelope { index, envelope }))
         })
         .collect();
-    let tree = RTree::bulk_load(right_envelopes?.into_iter().flatten().collect());
+    let right_envelopes: Vec<IndexedEnvelope> = right_envelopes?.into_iter().flatten().collect();
+    let tree = crate::calcolo_protetto(|| RTree::bulk_load(right_envelopes))
+        .map_err(SpatialJoinError::CalcoloNonConcluso)?;
     let pair_count = AtomicU64::new(0);
 
     // architettura.md#determinismo: come `map_nullable` — i `Result` per riga prima (ordine
@@ -278,19 +280,39 @@ fn spatial_join_refs(
             // The pair limit is enforced per confirmed match, before pushing
             // onto the group vector: a single left geometry with millions of
             // matches must fail without materializing them all first.
+            //
+            // Superato il limite la riga smette di accumulare ma valuta i
+            // candidati restanti: quale riga lo supera dipende dai thread, e
+            // fermarsi subito salterebbe predicati che potrebbero non
+            // concludere, rendendo l'errore finale dipendente dall'ordine.
+            let candidati: Vec<usize> = crate::calcolo_protetto(|| {
+                tree.locate_in_envelope_intersecting(&envelope)
+                    .map(|candidate| candidate.index)
+                    .collect()
+            })
+            .map_err(SpatialJoinError::CalcoloNonConcluso)?;
             let mut right_indexes: Vec<usize> = Vec::new();
-            for candidate in tree.locate_in_envelope_intersecting(&envelope) {
-                let right_geometry = right[candidate.index].ok_or(SpatialJoinError::Internal(
+            let mut limite_superato = false;
+            for candidate in candidati {
+                let right_geometry = right[candidate].ok_or(SpatialJoinError::Internal(
                     "R-tree contains only non-null right geometries",
                 ))?;
-                if exact_match(left_geometry, right_geometry, predicate)? {
-                    pair_count
+                if exact_match(left_geometry, right_geometry, predicate)? && !limite_superato {
+                    let accettata = pair_count
                         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                             current.checked_add(1).filter(|next| *next <= max_pairs)
                         })
-                        .map_err(|_| SpatialJoinError::PairLimitExceeded { limit: max_pairs })?;
-                    right_indexes.push(candidate.index);
+                        .is_ok();
+                    if accettata {
+                        right_indexes.push(candidate);
+                    } else {
+                        limite_superato = true;
+                        right_indexes = Vec::new();
+                    }
                 }
+            }
+            if limite_superato {
+                return Err(SpatialJoinError::PairLimitExceeded { limit: max_pairs });
             }
             right_indexes.sort_unstable();
 
@@ -307,9 +329,21 @@ fn spatial_join_refs(
                 .collect()
         })
         .collect();
-    let grouped: Result<Vec<Vec<JoinPair>>, SpatialJoinError> = groups.into_iter().collect();
-
-    Ok(grouped?.into_iter().flatten().collect())
+    // Ogni altro errore vince sul limite delle coppie, il primo in ordine di
+    // riga: quale riga supera il limite dipende dai thread, che lo superi
+    // no (come in `analysis::nearest_matches`).
+    let mut pairs = Vec::new();
+    let mut limite_superato = None;
+    for group in groups {
+        match group {
+            Ok(group) => pairs.extend(group),
+            Err(error @ SpatialJoinError::PairLimitExceeded { .. }) => {
+                limite_superato.get_or_insert(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    limite_superato.map_or(Ok(pairs), Err)
 }
 
 #[cfg(test)]

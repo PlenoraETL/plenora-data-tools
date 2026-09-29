@@ -52,6 +52,16 @@ pub enum ExtendedAlgorithmError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// Un calcolo di `geo` o `rstar` e' andato in panico dentro
+    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// del payload, mai il contenuto.
+    #[error("calcolo non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
+}
+
+/// Un calcolo di `geo` o `rstar` dietro la barriera dei panici.
+fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, ExtendedAlgorithmError> {
+    crate::calcolo_protetto(calcolo).map_err(ExtendedAlgorithmError::CalcoloNonConcluso)
 }
 
 use crate::geometry_type_name as geometry_type;
@@ -214,17 +224,17 @@ pub fn densify(
     let output = match geometry {
         Geometry::Point(_) | Geometry::MultiPoint(_) => geometry.clone(),
         Geometry::LineString(line) => {
-            Geometry::LineString(Euclidean.densify(line, max_segment_length))
+            Geometry::LineString(protetto(|| Euclidean.densify(line, max_segment_length))?)
         }
         Geometry::Polygon(polygon) => {
-            Geometry::Polygon(Euclidean.densify(polygon, max_segment_length))
+            Geometry::Polygon(protetto(|| Euclidean.densify(polygon, max_segment_length))?)
         }
         Geometry::MultiLineString(lines) => {
-            Geometry::MultiLineString(Euclidean.densify(lines, max_segment_length))
+            Geometry::MultiLineString(protetto(|| Euclidean.densify(lines, max_segment_length))?)
         }
-        Geometry::MultiPolygon(polygons) => {
-            Geometry::MultiPolygon(Euclidean.densify(polygons, max_segment_length))
-        }
+        Geometry::MultiPolygon(polygons) => Geometry::MultiPolygon(protetto(|| {
+            Euclidean.densify(polygons, max_segment_length)
+        })?),
         Geometry::GeometryCollection(collection) => Geometry::GeometryCollection(
             collection
                 .0
@@ -312,8 +322,7 @@ pub fn delaunay(
             limit: max_input_coordinates,
         });
     }
-    let triangles = geometry
-        .unconstrained_triangulation()
+    let triangles = protetto(|| geometry.unconstrained_triangulation())?
         .map_err(|error| ExtendedAlgorithmError::Triangulation(error.to_string()))?;
     let actual =
         u64::try_from(triangles.len()).map_err(|_| ExtendedAlgorithmError::IndexOverflow)?;
@@ -357,7 +366,7 @@ pub fn line_interpolate_point(
 ) -> Result<Option<Point<f64>>, ExtendedAlgorithmError> {
     validate_ratio(ratio, "ratio")?;
     validate_input(&Geometry::LineString(line.clone()))?;
-    Ok(Euclidean.point_at_ratio_from_start(line, ratio))
+    protetto(|| Euclidean.point_at_ratio_from_start(line, ratio))
 }
 
 /// Porzione di linea tra le frazioni `start_ratio` e `end_ratio`.
@@ -384,7 +393,7 @@ pub fn line_substring(
         });
     }
     validate_input(&Geometry::LineString(line.clone()))?;
-    let Some(start) = Euclidean.point_at_ratio_from_start(line, start_ratio) else {
+    let Some(start) = protetto(|| Euclidean.point_at_ratio_from_start(line, start_ratio))? else {
         return Ok(None);
     };
     // Uguaglianza esatta intenzionale: rapporti uguali per bit definiscono
@@ -393,10 +402,10 @@ pub fn line_substring(
     if start_ratio == end_ratio {
         return Ok(Some(Geometry::Point(start)));
     }
-    let Some(end) = Euclidean.point_at_ratio_from_start(line, end_ratio) else {
+    let Some(end) = protetto(|| Euclidean.point_at_ratio_from_start(line, end_ratio))? else {
         return Ok(None);
     };
-    let total = geo::algorithm::line_measures::Length::length(&Euclidean, line);
+    let total = protetto(|| geo::algorithm::line_measures::Length::length(&Euclidean, line))?;
     if total == 0.0 {
         return Ok(Some(Geometry::Point(start)));
     }
@@ -458,7 +467,7 @@ pub fn frechet_distance(
             limit: max_coordinate_pairs,
         });
     }
-    Ok(Some(Euclidean.frechet_distance(left, right)))
+    Ok(Some(protetto(|| Euclidean.frechet_distance(left, right))?))
 }
 
 fn validate_geographic_geometry(geometry: &Geometry<f64>) -> Result<(), ExtendedAlgorithmError> {
@@ -483,7 +492,7 @@ pub fn geodesic_bearing_degrees(
     destination: Point<f64>,
 ) -> Result<f64, ExtendedAlgorithmError> {
     validate_geographic_geometry(&Geometry::MultiPoint(vec![origin, destination].into()))?;
-    Ok(Geodesic.bearing(origin, destination))
+    protetto(|| Geodesic.bearing(origin, destination))
 }
 
 /// Area geodetica in metri quadrati di poligoni e multi-poligoni.
@@ -497,11 +506,19 @@ pub fn geodesic_bearing_degrees(
 pub fn geodesic_area_m2(geometry: &Geometry<f64>) -> Result<f64, ExtendedAlgorithmError> {
     validate_geographic_geometry(geometry)?;
     let area = match geometry {
-        Geometry::Polygon(polygon) => polygon.orient(Direction::Default).geodesic_area_unsigned(),
-        Geometry::MultiPolygon(MultiPolygon(polygons)) => polygons
-            .iter()
-            .map(|polygon| polygon.orient(Direction::Default).geodesic_area_unsigned())
-            .sum(),
+        Geometry::Polygon(polygon) => {
+            protetto(|| polygon.orient(Direction::Default).geodesic_area_unsigned())?
+        }
+        Geometry::MultiPolygon(MultiPolygon(polygons)) => {
+            // Stessa somma di prima (`Iterator::sum`), sui valori protetti.
+            let aree = polygons
+                .iter()
+                .map(|polygon| {
+                    protetto(|| polygon.orient(Direction::Default).geodesic_area_unsigned())
+                })
+                .collect::<Result<Vec<f64>, _>>()?;
+            aree.into_iter().sum()
+        }
         _ => {
             return Err(ExtendedAlgorithmError::UnsupportedGeometry {
                 operation: "geodesic_area",
@@ -980,7 +997,7 @@ pub fn split_line(
             reason: "deve essere finita e non negativa",
         });
     }
-    let total_length = Euclidean.length(source);
+    let total_length = protetto(|| Euclidean.length(source))?;
     if !total_length.is_finite() {
         return Err(ExtendedAlgorithmError::InvalidInput(
             "lunghezza non finita per overflow numerico".to_owned(),
@@ -1024,7 +1041,7 @@ pub fn split_line(
     }
 
     let mut ratios = Vec::new();
-    let source_tree = RTree::bulk_load(source_segments.clone());
+    let source_tree = protetto(|| RTree::bulk_load(source_segments.clone()))?;
     let coordinate_scale = source
         .coords_iter()
         .chain(splitter.coords_iter())
@@ -1038,26 +1055,32 @@ pub fn split_line(
     let query_tolerance = (tolerance + coordinate_scale * f64::EPSILON * 16.0).min(f64::MAX);
     for point in points {
         let envelope = expanded_point_envelope(point, query_tolerance);
-        ratios.extend(
+        let vicini: Vec<&IndexedSegment> = protetto(|| {
             source_tree
                 .locate_in_envelope_intersecting(&envelope)
-                .filter_map(|segment| {
-                    point_ratio_on_segment(segment, point, tolerance, total_length)
-                }),
+                .collect()
+        })?;
+        ratios.extend(
+            vicini.into_iter().filter_map(|segment| {
+                point_ratio_on_segment(segment, point, tolerance, total_length)
+            }),
         );
     }
-    let splitter_tree = RTree::bulk_load(
-        splitter_segments
-            .iter()
-            .copied()
-            .map(|line| IndexedSegment::new(line, 0.0))
-            .collect(),
-    );
+    let splitter_indexed: Vec<IndexedSegment> = splitter_segments
+        .iter()
+        .copied()
+        .map(|line| IndexedSegment::new(line, 0.0))
+        .collect();
+    let splitter_tree = protetto(|| RTree::bulk_load(splitter_indexed))?;
     for source_segment in &source_segments {
-        for splitter_segment in
-            splitter_tree.locate_in_envelope_intersecting(&source_segment.envelope)
-        {
-            match line_intersection(source_segment.line, splitter_segment.line) {
+        let incroci: Vec<&IndexedSegment> = protetto(|| {
+            splitter_tree
+                .locate_in_envelope_intersecting(&source_segment.envelope)
+                .collect()
+        })?;
+        for splitter_segment in incroci {
+            let (sorgente, taglio) = (source_segment.line, splitter_segment.line);
+            match protetto(|| line_intersection(sorgente, taglio))? {
                 Some(LineIntersection::SinglePoint { intersection, .. }) => {
                     ratios.push(ratio_on_source_segment(
                         source_segment.line,
@@ -1113,7 +1136,12 @@ pub fn split_line(
         };
         output.push(piece);
     }
-    let output_length: f64 = output.iter().map(|line| Euclidean.length(line)).sum();
+    let output_length: f64 = output
+        .iter()
+        .map(|line| protetto(|| Euclidean.length(line)))
+        .collect::<Result<Vec<f64>, _>>()?
+        .into_iter()
+        .sum();
     let allowed_error = total_length.abs().max(1.0) * 1e-10;
     if (output_length - total_length).abs() > allowed_error {
         return Err(ExtendedAlgorithmError::InvalidOutput(

@@ -454,12 +454,15 @@ pub fn line_locate_point(
     point: &Point<f64>,
 ) -> Result<Option<f64>, ExtensionError> {
     ensure_valid(geometry)?;
-    let fraction = match geometry {
+    // `geo` dietro la barriera: un suo panico e' `Internal`, con la sola
+    // forma del payload.
+    let fraction = crate::calcolo_protetto(|| match geometry {
         // Linea vuota/degenere: nessuna proiezione definita.
         Geometry::LineString(line) if line.0.len() >= 2 => line.line_locate_point(point),
         Geometry::Line(line) => line.line_locate_point(point),
         _ => None,
-    };
+    })
+    .map_err(ExtensionError::Internal)?;
     Ok(fraction)
 }
 

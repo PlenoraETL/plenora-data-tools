@@ -32,6 +32,16 @@ pub enum AdvancedError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// Un calcolo di `geo` o `rstar` e' andato in panico dentro
+    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// del payload, mai il contenuto.
+    #[error("calcolo Voronoi non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
+}
+
+/// Un calcolo di `geo` o `rstar` dietro la barriera dei panici.
+fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, AdvancedError> {
+    crate::calcolo_protetto(calcolo).map_err(AdvancedError::CalcoloNonConcluso)
 }
 
 use crate::geometry_type_name as geometry_name;
@@ -122,8 +132,8 @@ fn voronoi_cells_con(
         })
         .collect::<Result<_, _>>()?;
 
-    let cells = MultiPoint::new(points.clone())
-        .voronoi_cells()
+    let multipunto = MultiPoint::new(points.clone());
+    let cells = protetto(|| multipunto.voronoi_cells())?
         .map_err(|error| AdvancedError::Voronoi(error.to_string()))?;
     for cell in &cells {
         cell.validazione_protetta().map_err(classifica_cella)?;
@@ -164,21 +174,20 @@ fn associa_celle(
     //   candidati si riordinano per indice prima del predicato.
     // L'oracolo e' `tests::associa_lineare`, la `find` di prima ricopiata
     // alla lettera.
-    let indice = RTree::bulk_load(
-        cell_bounds
-            .iter()
-            .enumerate()
-            .filter_map(|(indice, bounds)| {
-                bounds.map(|rect| CellaIndicizzata {
-                    indice,
-                    envelope: AABB::from_corners(
-                        [rect.min().x, rect.min().y],
-                        [rect.max().x, rect.max().y],
-                    ),
-                })
+    let involucri: Vec<CellaIndicizzata> = cell_bounds
+        .iter()
+        .enumerate()
+        .filter_map(|(indice, bounds)| {
+            bounds.map(|rect| CellaIndicizzata {
+                indice,
+                envelope: AABB::from_corners(
+                    [rect.min().x, rect.min().y],
+                    [rect.max().x, rect.max().y],
+                ),
             })
-            .collect(),
-    );
+        })
+        .collect();
+    let indice = protetto(|| RTree::bulk_load(involucri))?;
 
     let mut candidati: Vec<usize> = Vec::new();
     points
@@ -186,24 +195,24 @@ fn associa_celle(
         .enumerate()
         .map(|(index, point)| {
             candidati.clear();
-            candidati.extend(
-                indice
-                    .locate_in_envelope_intersecting(&AABB::from_point([point.x(), point.y()]))
-                    .map(|cella| cella.indice),
-            );
+            protetto(|| {
+                candidati.extend(
+                    indice
+                        .locate_in_envelope_intersecting(&AABB::from_point([point.x(), point.y()]))
+                        .map(|cella| cella.indice),
+                );
+            })?;
             candidati.sort_unstable();
-            candidati
-                .iter()
-                .copied()
-                .find(|&candidato| {
-                    cells
-                        .get(candidato)
-                        .zip(cell_bounds.get(candidato))
-                        .is_some_and(|(cell, bounds)| cella_accetta(cell, bounds.as_ref(), point))
-                })
-                .and_then(|candidato| cells.get(candidato))
-                .map(|cell| Geometry::Polygon(cell.clone()))
-                .ok_or(AdvancedError::UnmatchedPoint(index))
+            for &candidato in &candidati {
+                let Some((cell, bounds)) = cells.get(candidato).zip(cell_bounds.get(candidato))
+                else {
+                    continue;
+                };
+                if protetto(|| cella_accetta(cell, bounds.as_ref(), point))? {
+                    return Ok(Geometry::Polygon(cell.clone()));
+                }
+            }
+            Err(AdvancedError::UnmatchedPoint(index))
         })
         .collect()
 }

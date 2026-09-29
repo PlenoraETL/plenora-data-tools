@@ -50,6 +50,19 @@ pub enum AnalysisError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// La distanza di `geo` non ha concluso: e' andata in panico dentro
+    /// [`crate::calcolo_protetto`] (per esempio `nearest_neighbour_distance`
+    /// su una linea di un solo punto, o con coordinate che vanno in underflow).
+    /// Non accusa l'ingresso; porta la *forma* del payload, mai il contenuto.
+    #[error("distanza non conclusa: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
+}
+
+/// `Euclidean.distance` di `geo` dietro la barriera dei panici: la sola
+/// chiamata a `geo` sta nella barriera.
+fn distanza_protetta(left: &Geometry<f64>, right: &Geometry<f64>) -> Result<f64, AnalysisError> {
+    crate::calcolo_protetto(|| Euclidean.distance(left, right))
+        .map_err(AnalysisError::CalcoloNonConcluso)
 }
 
 fn validate_geometries(
@@ -158,19 +171,26 @@ fn minimum_distances_impl(
         });
     }
 
-    Ok(left
+    // Primo errore in ordine di riga (collect sequenziale dei `Result`).
+    let per_riga: Vec<Result<Option<f64>, AnalysisError>> = left
         .par_iter()
         .map(|geometry| {
-            let geometry = geometry.as_ref()?;
+            let Some(geometry) = geometry.as_ref() else {
+                return Ok(None);
+            };
             if geometry.coords_count() == 0 || usable_right.is_empty() {
-                return None;
+                return Ok(None);
             }
-            usable_right
-                .iter()
-                .map(|right| Euclidean.distance(geometry, *right))
-                .reduce(f64::min)
+            // Stesso ordine e stessa riduzione di `reduce(f64::min)`.
+            let mut minimo: Option<f64> = None;
+            for right in &usable_right {
+                let distanza = distanza_protetta(geometry, right)?;
+                minimo = Some(minimo.map_or(distanza, |attuale| attuale.min(distanza)));
+            }
+            Ok(minimo)
         })
-        .collect())
+        .collect();
+    per_riga.into_iter().collect()
 }
 
 /// Exact nearest-neighbour lineage. All equidistant nearest rows are emitted,
@@ -289,13 +309,13 @@ fn nearest_matches_impl(
             // La distanza di ogni candidato e' la stessa chiamata della
             // forza bruta, quindi minimo, pari e valori sono gli stessi bit.
             let mut distances: Vec<_> = indice
-                .candidati(geometry, &usable_right)
+                .candidati(geometry, &usable_right)?
                 .into_iter()
                 .map(|posizione| {
                     let (right_index, right) = usable_right[posizione];
-                    (right_index, Euclidean.distance(geometry, right))
+                    Ok((right_index, distanza_protetta(geometry, right)?))
                 })
-                .collect();
+                .collect::<Result<_, AnalysisError>>()?;
             let Some(minimum) = distances
                 .iter()
                 .map(|(_, distance)| *distance)
@@ -336,8 +356,22 @@ fn nearest_matches_impl(
                 .collect()
         })
         .collect();
-    let grouped: Result<Vec<Vec<NearestMatch>>, AnalysisError> = groups.into_iter().collect();
-    Ok(grouped?.into_iter().flatten().collect())
+    // Quale riga supera `max_results` dipende dall'ordine dei thread (il
+    // contatore e' condiviso), l'esistenza del superamento no: ogni altro
+    // errore vince quindi sul limite dei risultati, il primo in ordine di
+    // riga, e l'esito resta deterministico.
+    let mut matches = Vec::new();
+    let mut limite_superato = None;
+    for group in groups {
+        match group {
+            Ok(group) => matches.extend(group),
+            Err(error @ AnalysisError::ResultLimitExceeded { .. }) => {
+                limite_superato.get_or_insert(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    limite_superato.map_or(Ok(matches), Err)
 }
 
 /// Modulo minimo non nullo delle coordinate per cui vale la stima d'errore di
@@ -435,12 +469,16 @@ impl IndiceVicini {
     }
 
     /// Posizioni in `usable_right` da valutare, crescenti e senza ripetizioni.
+    ///
+    /// # Errors
+    ///
+    /// `CalcoloNonConcluso` se la distanza del primo candidato va in panico.
     fn candidati(
         &self,
         geometria: &Geometry<f64>,
         usable_right: &[(usize, &Geometry<f64>)],
-    ) -> Vec<usize> {
-        let tutti = || (0..self.totale).collect();
+    ) -> Result<Vec<usize>, AnalysisError> {
+        let tutti = || Ok((0..self.totale).collect());
         let Some((involucro, modulo_left)) = involucro_regolare(geometria) else {
             return tutti();
         };
@@ -456,7 +494,7 @@ impl IndiceVicini {
         let Some((_, destra)) = usable_right.get(primo.posizione) else {
             return tutti();
         };
-        let limite = Euclidean.distance(geometria, *destra);
+        let limite = distanza_protetta(geometria, destra)?;
         let margine = modulo_left.max(self.modulo_right) * MARGINE_RELATIVO;
         let espansione = limite + (margine + margine);
         // NaN o infinito: nessuna stima, nessuno scarto.
@@ -476,7 +514,7 @@ impl IndiceVicini {
             .collect();
         candidati.sort_unstable();
         candidati.dedup();
-        candidati
+        Ok(candidati)
     }
 }
 

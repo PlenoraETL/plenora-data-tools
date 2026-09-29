@@ -176,7 +176,9 @@ pub fn polygonize_batches(
 /// non ha concluso, `InvalidPlan` il resto, come nel trasporto.
 fn errore_dello_split_lineare(error: ExtendedAlgorithmError) -> PlenoraError {
     match error {
-        ExtendedAlgorithmError::ValidazioneNonConclusa(_) | ExtendedAlgorithmError::Internal(_) => {
+        ExtendedAlgorithmError::ValidazioneNonConclusa(_)
+        | ExtendedAlgorithmError::Internal(_)
+        | ExtendedAlgorithmError::CalcoloNonConcluso(_) => {
             PlenoraError::Internal(error.to_string())
         }
         other => PlenoraError::InvalidPlan(other.to_string()),

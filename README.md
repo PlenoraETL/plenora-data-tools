@@ -233,9 +233,10 @@ bit, è in `crates/plenora-kernels-geo/src/analysis/nearest_oracolo.rs`.
   punto fuori dal rettangolo che `geo` dichiara sul segmento, che fallisce
   senza il margine);
 - un panico di `geo` su una coppia (per esempio `nearest_neighbour_distance`
-  con coordinate sotto `2^-400`) resta un panico solo se la coppia è fra i
-  candidati; quelle osservate coinvolgono sempre una geometria fuori
-  dominio, che non si scarta, ma la forza bruta le valutava tutte;
+  con coordinate sotto `2^-400`) diventa `CalcoloNonConcluso` solo se la
+  coppia è fra i candidati; quelle osservate coinvolgono sempre una
+  geometria fuori dominio, che non si scarta, ma la forza bruta le valutava
+  tutte;
 - il caso peggiore resta O(n·m): con right equidistanti da molti left
   (una circonferenza, rettangoli grandi sovrapposti) i candidati sono tutti.
 

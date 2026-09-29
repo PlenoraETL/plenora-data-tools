@@ -57,6 +57,11 @@ pub enum ClusterError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// L'R-tree di `rstar` e' andato in panico dentro
+    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// del payload, mai il contenuto.
+    #[error("calcolo DBSCAN non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
 }
 
 const fn invalid_parameter(name: &'static str, reason: &'static str) -> ClusterError {
@@ -171,10 +176,13 @@ fn load_core_neighbors(
         None => {}
     }
     let representative = representatives[group];
-    let mut found: Vec<usize> = tree
-        .locate_within_distance(points[representative], parameters.radius_2)
-        .map(|element| element.index)
-        .collect();
+    let centro = points[representative];
+    let mut found: Vec<usize> = crate::calcolo_protetto(|| {
+        tree.locate_within_distance(centro, parameters.radius_2)
+            .map(|element| element.index)
+            .collect()
+    })
+    .map_err(ClusterError::CalcoloNonConcluso)?;
     found.sort_unstable();
     *range_queries += 1;
     if found.len() < parameters.min_points {
@@ -194,13 +202,13 @@ fn dbscan_core_with_query_count(
     eps: f64,
     min_points: usize,
 ) -> Result<(Vec<Option<u64>>, usize, usize), ClusterError> {
-    let tree = RTree::bulk_load(
-        points
-            .iter()
-            .enumerate()
-            .map(|(index, &coords)| IndexedPoint { index, coords })
-            .collect(),
-    );
+    let elementi: Vec<IndexedPoint> = points
+        .iter()
+        .enumerate()
+        .map(|(index, &coords)| IndexedPoint { index, coords })
+        .collect();
+    let tree = crate::calcolo_protetto(|| RTree::bulk_load(elementi))
+        .map_err(ClusterError::CalcoloNonConcluso)?;
     let neighborhood_parameters = NeighborhoodParameters {
         radius_2: eps * eps,
         min_points,
@@ -395,7 +403,7 @@ fn cluster_error(error: &ClusterError) -> PlenoraError {
         ClusterError::InternalInvariant(reason) => {
             PlenoraError::Internal(format!("geo.cluster_dbscan: {reason}"))
         }
-        ClusterError::ValidazioneNonConclusa(_) => {
+        ClusterError::ValidazioneNonConclusa(_) | ClusterError::CalcoloNonConcluso(_) => {
             PlenoraError::Internal(format!("geo.cluster_dbscan: {error}"))
         }
         other => PlenoraError::InvalidPlan(format!("geo.cluster_dbscan: {other}")),

@@ -992,7 +992,20 @@ fn envelope(geometry: &Geometry<f64>) -> Result<Geometry<f64>, PlenoraError> {
     Ok(Geometry::Polygon(rect.to_polygon()))
 }
 
-fn robust_convex_hull(geometry: &Geometry<f64>) -> Geometry<f64> {
+/// Un calcolo di `geo` di una trasformazione, dietro la barriera: il panico
+/// diventa `Internal` con la sola forma del payload.
+fn trasformazione_protetta<T>(
+    operazione: &'static str,
+    calcolo: impl FnOnce() -> T,
+) -> Result<T, PlenoraError> {
+    calcolo_protetto(calcolo).map_err(|forma| {
+        PlenoraError::Internal(format!(
+            "{operazione}: calcolo di geo non concluso: {forma}"
+        ))
+    })
+}
+
+fn robust_convex_hull(geometry: &Geometry<f64>) -> Result<Geometry<f64>, PlenoraError> {
     // `geo`'s orientation math can overflow for otherwise finite coordinates
     // near f64 limits. Uniform normalization preserves hull topology while
     // keeping every intermediate determinant in a safe numeric range.
@@ -1000,16 +1013,19 @@ fn robust_convex_hull(geometry: &Geometry<f64>) -> Geometry<f64> {
         maximum.max(coordinate.x.abs()).max(coordinate.y.abs())
     });
     if scale == 0.0 {
-        return Geometry::Polygon(geometry.convex_hull());
+        return trasformazione_protetta("convex_hull", || {
+            Geometry::Polygon(geometry.convex_hull())
+        });
     }
     let normalized = geometry.map_coords(|coordinate| Coord {
         x: coordinate.x / scale,
         y: coordinate.y / scale,
     });
-    Geometry::Polygon(normalized.convex_hull().map_coords(|coordinate| Coord {
+    let hull = trasformazione_protetta("convex_hull", || normalized.convex_hull())?;
+    Ok(Geometry::Polygon(hull.map_coords(|coordinate| Coord {
         x: coordinate.x * scale,
         y: coordinate.y * scale,
-    }))
+    })))
 }
 
 /// Applica l'operazione (`Operation::Centroid`, `ConvexHull`, `Envelope`)
@@ -1033,11 +1049,10 @@ fn transform_geometry_validated(
     geometry: &Geometry<f64>,
 ) -> Result<Geometry<f64>, PlenoraError> {
     let output = match operation {
-        Operation::Centroid => geometry
-            .centroid()
+        Operation::Centroid => trasformazione_protetta("centroid", || geometry.centroid())?
             .map(Geometry::Point)
             .ok_or_else(|| empty_geometry("centroid")),
-        Operation::ConvexHull => Ok(robust_convex_hull(geometry)),
+        Operation::ConvexHull => robust_convex_hull(geometry),
         Operation::Envelope => envelope(geometry),
     }?;
     valida_ogc(&output)?;

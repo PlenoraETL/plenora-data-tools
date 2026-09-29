@@ -35,6 +35,17 @@ pub enum ExtendedError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
+    /// Un calcolo di `geo` e' andato in panico dentro
+    /// [`crate::calcolo_protetto`] (per esempio `concave_hull` con coordinate
+    /// vicine al massimo di `f64`): non accusa l'ingresso, porta la *forma*
+    /// del payload, mai il contenuto.
+    #[error("calcolo non concluso: {0} (contenuto non pubblicato)")]
+    CalcoloNonConcluso(&'static str),
+}
+
+/// Un calcolo di `geo` dietro la barriera dei panici.
+fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, ExtendedError> {
+    crate::calcolo_protetto(calcolo).map_err(ExtendedError::CalcoloNonConcluso)
 }
 
 fn validate_input(geometry: &Geometry<f64>) -> Result<(), ExtendedError> {
@@ -109,7 +120,7 @@ pub fn affine_transform_validated(
     }
     let [a, b, xoff, d, e, yoff] = coefficients;
     let transform = AffineTransform::new(a, b, xoff, d, e, yoff);
-    validate_output(geometry.affine_transform(&transform))
+    validate_output(protetto(|| geometry.affine_transform(&transform))?)
 }
 
 /// Traslazione di `(x_offset, y_offset)` (wrapper di [`affine_transform`]).
@@ -295,10 +306,12 @@ pub fn concave_hull_validated(
             limit: max_coordinates,
         });
     }
-    let hull = coordinates.concave_hull_with_options(ConcaveHullOptions {
-        concavity,
-        length_threshold,
-    });
+    let hull = protetto(|| {
+        coordinates.concave_hull_with_options(ConcaveHullOptions {
+            concavity,
+            length_threshold,
+        })
+    })?;
     validate_output(Geometry::Polygon(hull))
 }
 
@@ -358,7 +371,7 @@ pub fn hausdorff_distance_validated(
             limit: max_coordinate_pairs,
         });
     }
-    Ok(Some(left.hausdorff_distance(right)))
+    Ok(Some(protetto(|| left.hausdorff_distance(right))?))
 }
 
 fn validate_geographic_point(point: Point<f64>) -> Result<(), ExtendedError> {
@@ -381,7 +394,7 @@ fn validate_geographic_point(point: Point<f64>) -> Result<(), ExtendedError> {
 pub fn haversine_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
-    Ok(Haversine.distance(left, right))
+    protetto(|| Haversine.distance(left, right))
 }
 
 /// Distanza geodetica in metri tra due punti geografici (lon/lat).
@@ -393,7 +406,7 @@ pub fn haversine_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, 
 pub fn geodesic_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
-    Ok(Geodesic.distance(left, right))
+    protetto(|| Geodesic.distance(left, right))
 }
 
 /// Lunghezza geodetica in metri di una linea geografica (lon/lat).
@@ -406,7 +419,7 @@ pub fn geodesic_line_length_m(line: &geo::LineString<f64>) -> Result<f64, Extend
     for coordinate in line.coords() {
         validate_geographic_point(Point::from(*coordinate))?;
     }
-    Ok(Geodesic.length(line))
+    protetto(|| Geodesic.length(line))
 }
 
 #[cfg(test)]
@@ -418,6 +431,25 @@ mod tests {
     use super::*;
     use crate::test_support::{bowtie, rect};
     use geo::{line_string, Area};
+
+    /// `concave_hull` di `geo` va in panico su punti vicini al massimo di
+    /// `f64` (overflow nei calcoli intermedi): la barriera lo rende
+    /// `CalcoloNonConcluso`, senza il contenuto del payload.
+    #[test]
+    fn un_panico_di_concave_hull_diventa_calcolo_non_concluso() {
+        let scala = 1e300;
+        let punti = geo::MultiPoint::new(
+            [(0.0, 0.0), (1.0, 1.0), (1.0, 1.0), (2.0, 0.5), (0.3, 1.7)]
+                .into_iter()
+                .map(|(x, y)| Point::new(x * scala, y * scala))
+                .collect(),
+        );
+        let esito = concave_hull_validated(&Geometry::MultiPoint(punti), 2.0, 0.0, 1000);
+        assert!(
+            matches!(esito, Err(ExtendedError::CalcoloNonConcluso(_))),
+            "{esito:?}"
+        );
+    }
 
     #[test]
     fn affine_wrappers_preserve_expected_coordinates_and_area() {
