@@ -1354,10 +1354,70 @@ fn union_boundary_rings(
         .map(|(edge, _)| edge)
         .collect::<BTreeSet<_>>();
     let mut budget = OutputBudget::new(limits);
-    Ok(edge_chains(&edges, &coordinates, &mut budget)?
-        .into_iter()
-        .filter(|ring| ring.0.len() >= 4 && ring.0.first() == ring.0.last())
-        .collect())
+    let mut rings = Vec::new();
+    let mut open = Vec::new();
+    for chain in edge_chains(&edges, &coordinates, &mut budget)? {
+        if chain.0.first() == chain.0.last() {
+            if chain.0.len() >= 4 {
+                rings.push(chain);
+            }
+        } else {
+            open.push(
+                chain
+                    .0
+                    .iter()
+                    .copied()
+                    .map(CoordKey::new)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+    // Un anello di bordo che tocca il resto del bordo in due o piu' vertici
+    // esce da `edge_chains` spezzato in catene aperte. Il laboratorio le
+    // scartava, e la faccia perdeva il buco in silenzio (e copriva i figli).
+    // Deviazione: le catene si ricuciono in cammini chiusi per estremi comuni
+    // e si scompongono in anelli semplici ai vertici ripetuti; una catena che
+    // non si chiude e' un errore. Una scomposizione che desse buchi
+    // sovrapposti e' rifiutata dalla validazione della faccia.
+    while let Some(first) = open.pop() {
+        let mut walk = first;
+        loop {
+            let (Some(start), Some(end)) = (walk.first().copied(), walk.last().copied()) else {
+                return Err(PolygonizeError::InternalInvariant("catena di bordo vuota"));
+            };
+            if start == end {
+                break;
+            }
+            let Some(index) = open
+                .iter()
+                .position(|chain| chain.first() == Some(&end) || chain.last() == Some(&end))
+            else {
+                return Err(PolygonizeError::InvalidOutput(
+                    "bordo dei buchi non chiuso".to_owned(),
+                ));
+            };
+            let mut next = open.swap_remove(index);
+            if next.first() != Some(&end) {
+                next.reverse();
+            }
+            walk.extend(next.into_iter().skip(1));
+        }
+        for cycle in decompose_closed_walk(walk) {
+            if cycle.len() < 4 {
+                continue;
+            }
+            let mut ring = Vec::new();
+            ring.try_reserve_exact(cycle.len())
+                .map_err(|_| PolygonizeError::AllocationFailed("anelli di bordo ricuciti"))?;
+            for key in &cycle {
+                ring.push(coordinates.get(key).copied().ok_or(
+                    PolygonizeError::InternalInvariant("coordinata del bordo ricucito assente"),
+                )?);
+            }
+            rings.push(LineString::new(ring));
+        }
+    }
+    Ok(rings)
 }
 
 const FACE_INDEX_LEAF_SIZE: usize = 16;

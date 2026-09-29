@@ -13,11 +13,14 @@ use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{Array, BinaryArray, Int64Array, StringArray};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{geometry_output_field, DEFAULT_GEOMETRY_COLUMN};
+use plenora_kernels_geo::geometry_from_wkb;
 use plenora_kernels_geo::rust_backend::arrow::{
     polygonize_batches, split_batches, PolygonizeParams, CLASS_COLUMN,
 };
 use plenora_kernels_geo::rust_backend::precision::Precision;
-use plenora_kernels_geo::rust_backend::{polygonize_linework, split_polygon_by_linework};
+use plenora_kernels_geo::rust_backend::{
+    make_valid_wkb, polygonize_linework, split_polygon_by_linework, RepairMethod,
+};
 
 const LIMIT: u64 = 1_000_000;
 
@@ -127,7 +130,7 @@ fn il_quadrato_con_buco_lontano_dall_origine_conserva_il_buco() {
 }
 
 #[test]
-fn split_lontano_dall_origine() {
+fn split_e_make_valid_lontano_dall_origine() {
     let a = 2_f64.powi(30);
     let sorgente = Geometry::Polygon(Polygon::new(quadrato(a, a, 2.0, false, 0), Vec::new()));
     let lama = Geometry::LineString(LineString::from(vec![
@@ -145,6 +148,27 @@ fn split_lontano_dall_origine() {
     )
     .expect("split");
     assert_eq!(parti.len(), 2);
+
+    let farfalla = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            (a, a),
+            (a + 2.0, a + 2.0),
+            (a, a + 2.0),
+            (a + 2.0, a),
+            (a, a),
+        ]),
+        Vec::new(),
+    ))
+    .to_wkb(CoordDimensions::xy())
+    .expect("wkb");
+    for method in [RepairMethod::Linework, RepairMethod::Structure] {
+        let riparata =
+            make_valid_wkb(&farfalla, method, false, precisione_per(a + 4.0)).expect("make_valid");
+        let area = geometry_from_wkb(&riparata)
+            .expect("valida")
+            .unsigned_area();
+        assert!((area - 2.0).abs() <= 1e-9, "{method:?}: area {area}");
+    }
 }
 
 fn tabella(celle: &[Vec<u8>]) -> (SchemaRef, RecordBatch) {

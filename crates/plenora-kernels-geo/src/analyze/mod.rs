@@ -558,6 +558,7 @@ mod tests {
             unchanged("geo.envelope", json!({})),
             unchanged("geo.boundary", json!({})),
             unchanged("geo.point_on_surface", json!({})),
+            unchanged("geo.make_valid", json!({})),
             unchanged("geo.buffer", json!({"distance": 100.0})),
             unchanged("geo.simplify", json!({"tolerance": 0.5})),
             unchanged(
@@ -906,15 +907,15 @@ mod tests {
     }
 
     #[test]
-    fn table_covers_all_and_only_the_73_catalog_geo_ops() {
+    fn table_covers_all_and_only_the_74_catalog_geo_ops() {
         let catalog_ops: HashSet<&str> = CATALOG
             .iter()
             .filter(|op| op.family == Family::Geo)
             .map(|op| op.id)
             .collect();
-        assert_eq!(catalog_ops.len(), 73);
+        assert_eq!(catalog_ops.len(), 74);
         let case_ops: HashSet<&str> = cases().iter().map(|case| case.op).collect();
-        assert_eq!(case_ops.len(), 73, "casi duplicati nella tabella");
+        assert_eq!(case_ops.len(), 74, "casi duplicati nella tabella");
         assert_eq!(catalog_ops, case_ops);
     }
 
@@ -1347,6 +1348,7 @@ mod tests {
             "geo.to_wkt",
             "geo.vertex_count",
             "geo.geometry_diagnostics",
+            "geo.make_valid",
         ] {
             let inputs = [geo_contract(geographic_crs())];
             analyze_one(op, &inputs, &json!({}), None)
@@ -2443,28 +2445,25 @@ mod tests {
     fn reproject_resta_assente_e_nessuna_operazione_chiede_un_backend_nativo() {
         // Rust puro: `reproject` (PROJ) non esiste nel catalogo, e l'analisi
         // la rifiuta come operazione sconosciuta, mai con un'inferenza che
-        // poi nessun kernel potrebbe onorare. Lo stesso per `make_valid`, non
-        // ancora qualificato in Rust puro (README, «Che cosa non c'e'
-        // ancora»). `polygonize` e `split`, che a 190c493 dichiaravano la
-        // capability `geos`, sono tornate col backend Rust
-        // (`crate::rust_backend`) e non dichiarano piu' alcuna capability:
-        // l'analisi le accetta come prima.
+        // poi nessun kernel potrebbe onorare. `make_valid`, `polygonize` e
+        // `split`, che a 190c493 dichiaravano la capability `geos`, sono
+        // tornate col backend Rust (`crate::rust_backend`) e non dichiarano
+        // piu' alcuna capability: l'analisi le accetta come prima.
         let inputs = [geo_contract(projected_crs())];
-        for op in ["geo.reproject", "geo.make_valid"] {
-            assert!(find_operation(op).is_none(), "{op} a catalogo");
-            assert!(
-                matches!(
-                    analyze_one(op, &inputs, &json!({}), None),
-                    Err(PlenoraError::Unsupported(_))
-                ),
-                "{op}: atteso rifiuto Unsupported"
-            );
-        }
-        for op in ["geo.polygonize", "geo.split"] {
+        assert!(find_operation("geo.reproject").is_none());
+        assert!(
+            matches!(
+                analyze_one("geo.reproject", &inputs, &json!({}), None),
+                Err(PlenoraError::Unsupported(_))
+            ),
+            "reproject: atteso rifiuto Unsupported"
+        );
+        for op in ["geo.make_valid", "geo.polygonize", "geo.split"] {
             let descriptor = find_operation(op).expect("op in catalogo");
             assert!(descriptor.required_capabilities.is_empty(), "{op}");
             assert_eq!(descriptor.maturity, Maturity::KernelValidated, "{op}");
         }
+        analyze_one("geo.make_valid", &inputs, &json!({}), None).expect("make_valid");
         analyze_one("geo.polygonize", &inputs, &json!({}), None).expect("polygonize");
         analyze_one("geo.split", &inputs, &other_wkb_config(), None).expect("split");
         assert!(
@@ -2753,7 +2752,7 @@ mod tests {
     /// (op, dichiarazione attesa, lista canonica attesa) per le operazioni
     /// che CAMBIANO il tipo geometrico: i tipi dichiarati sono quelli
     /// dell'OUTPUT, verificati contro i kernel (`transform_output_types`).
-    const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 18] = [
+    const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 19] = [
         (
             "geo.from_wkt",
             TypesDeclaration::Mixed,
@@ -2785,6 +2784,7 @@ mod tests {
             TypesDeclaration::Exact,
             "multipoint,multilinestring,geometrycollection",
         ),
+        ("geo.make_valid", TypesDeclaration::Mixed, ""),
         ("geo.voronoi", TypesDeclaration::Exact, "polygon"),
         (
             "geo.clean_topology",

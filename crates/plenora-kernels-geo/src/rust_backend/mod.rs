@@ -1,14 +1,12 @@
-//! Backend topologico in Rust puro per `geo.polygonize` e `geo.split`.
-//!
-//! `geo.make_valid` non e' ancora esposto: il suo kernel resta sul branch di
-//! lavoro finche' non e' qualificato (README, «Che cosa non c'e' ancora»).
+//! Backend topologico in Rust puro per `geo.make_valid`, `geo.polygonize` e
+//! `geo.split` poligonale.
 //!
 //! Sostituisce `geos_backend` di `plenora-data-tools@190c493` con le stesse
 //! firme e gli stessi nomi d'errore, senza dipendenze native.
 //!
 //! # Provenienza
 //!
-//! I due kernel ([`polygonize`], [`split`]) vengono da
+//! I tre kernel ([`polygonize`], [`split`], [`make_valid`]) vengono da
 //! `plenora-memory-lab/operations/geo_rust`, dove sono stati qualificati
 //! contro GEOS (28.672 confronti differenziali su 12.288 configurazioni, 861
 //! casi curati e di matrice, 1.097 controlli indipendenti da GEOS). Gli
@@ -41,24 +39,49 @@
 //!     `atomize_contained_faces` (e la loro scorciatoia «tutte uguali»); il
 //!     lato del punto nel test pari-dispari di `split` (con `orient2d`
 //!     esatto al posto dell'ascissa d'incrocio in `f64`) e il verso del
-//!     campione interno.
+//!     campione interno; l'«area positiva» del passthrough di `make_valid`.
 //!     Fuori dal dominio esatto, quando il filtro non decide, l'errore
 //!     `PolygonizeError::NumericRange` sostituisce il segno indovinato. Un
 //!     test del laboratorio cambia attesa per questo: un triangolo di area
 //!     circa 3,45e-31 che GEOS scarta come anello invalido e' ora un
 //!     poligono (vedi `README.md`). Nessun chiamante di [`exact`] traduce
-//!     un esito non decidibile in una decisione: `polygonize` restituisce
-//!     `NumericRange`, e `split::face_sample`
+//!     un esito non decidibile in una decisione: `polygonize` e
+//!     `make_valid` restituiscono `NumericRange`, e `split::face_sample`
 //!     rinuncia al verso e passa a `interior_point`;
 //!   - **precisione dichiarata** ([`precision`]): 1 cm a terra, passata
-//!     esplicitamente ai kernel (`polygonize`, `split`) nelle unita' delle
-//!     coordinate. All'ingresso di `polygonize` la spaziatura dei `f64` al
-//!     modulo massimo delle coordinate non supera `p / 64`
-//!     (`precision::coordinate_abbastanza_fitte`); nel noding ogni punto
+//!     esplicitamente ai kernel (`make_valid`, `polygonize`, `split`) nelle
+//!     unita' delle coordinate. Prima di ogni overlay di `make_valid` il
+//!     bilancio di spostamento dei vertici (arrotondamento alla griglia
+//!     intera di `i_overlay`, passo `span * 2^-30` per asse derivato da
+//!     `i_float`, piu' l'aggancio ai vertici d'ingresso vicini: meno di due
+//!     diagonali del passo, vedi `make_valid::checked_grid`) si confronta
+//!     con la precisione; nel noding di `polygonize` ogni punto
 //!     d'intersezione arrotondato in `f64` deve stare entro un quinto della
 //!     precisione da entrambi i segmenti che divide (cinque giri al piu').
 //!     Oltre, `PrecisionInsufficient`. Sotto la precisione le feature
 //!     possono fondersi o sparire, come dichiarato;
+//!   - **`make_valid` `LINEWORK` riscritto sui lati** (sesta revisione): il
+//!     laboratorio univa e sottraeva anelli con overlay, con casi speciali
+//!     per i buchi che condividono un lato con la shell e per le parti di
+//!     un multipoligono che si toccano, e l'area dipendeva dall'ordine di
+//!     buchi e parti. Ora e' la regola di `MakeValid` di GEOS (noding del
+//!     bordo, poi a giri `BuildArea`, XOR, lati meno il bordo) eseguita come
+//!     operazioni esatte sull'insieme dei lati nodati, senza overlay ne'
+//!     tolleranze (`make_valid::linework`): una funzione dell'insieme dei
+//!     lati, quindi indipendente dall'ordine per costruzione. Spariscono le
+//!     classificazioni con banda (`64 * EPSILON * |coordinata|` nel
+//!     laboratorio, poi la precisione) e la soglia d'area della sporgenza
+//!     (`1e-12 * max(area, 1)`). `STRUCTURE` scorre buchi e parti in ordine
+//!     canonico, e `normalized_intersects`, che vi sceglie fra buco da
+//!     sottrarre e da promuovere, e' deciso sulle coordinate originali con i
+//!     predicati esatti di `geo`;
+//!   - **buchi che toccano il bordo dei figli in due o piu' vertici**
+//!     (`polygonize::union_boundary_rings`): il laboratorio scartava le
+//!     catene aperte in cui `edge_chains` spezza un tale anello, e la faccia
+//!     perdeva il buco in silenzio, sovrapponendosi alle facce figlie. Ora
+//!     le catene si ricuciono per estremi comuni e si scompongono in anelli
+//!     semplici; un bordo che non si chiude e' un errore. Vale per
+//!     `polygonize`, `split` e `make_valid`;
 //!   - **controlli a posteriori di `split` relativi alla precisione**, al
 //!     posto delle tolleranze `1e-9` che rifiutavano circa 600 split
 //!     traslati di `2^30` risolti esattamente da GEOS: l'area entro la
@@ -73,7 +96,18 @@
 //! - `polygonize`: il punto medio in `f64` dei lati in `union_boundary_rings`
 //!   (poi `contains` esatto) e il campione `interior_point` di `geo` per
 //!   l'annidamento; lo spareggio per distanza `hypot` fra vicini collineari
-//!   nello stesso verso, possibili solo senza noding (archi sovrapposti).
+//!   nello stesso verso, possibili solo senza noding (archi sovrapposti);
+//! - `make_valid`: l'aggancio di `restore_multi_snapped`, che riporta i
+//!   vertici dell'overlay sul vertice d'ingresso piu' vicino, o sul lato
+//!   assiale d'ingresso che gli passa accanto, entro una diagonale del passo
+//!   della griglia, e la griglia stessa: entrambi nel bilancio del controllo
+//!   della griglia. Gli agganci interni di `i_overlay` allo split dei
+//!   segmenti, con raggio che cresce a ogni giro, li limita il controllo
+//!   finale: ogni vertice dell'output entro la precisione da un lato
+//!   d'ingresso (`make_valid::checked_displacement`). Prima di tutto, la
+//!   spaziatura dei `f64` al modulo massimo delle coordinate non supera
+//!   `p / 64` (`precision::coordinate_abbastanza_fitte`), in `polygonize` e
+//!   negli overlay.
 //!
 //! Il laboratorio ha girato su `geo` 0.33.1 **non patchato**; qui `geo`
 //! risolve alla copia vendorizzata con `orient2d` esatto (filtro veloce piu'
@@ -99,22 +133,27 @@
 //!   sull'indice; nessun thread, hash o tempo.
 //!
 //! Le differenze operazione per operazione sono nella documentazione di
-//! [`polygonize_linework`] e
+//! [`make_valid_wkb`], [`polygonize_linework`] e
 //! [`split_polygon_by_linework`], e in `README.md` («Differenze da GEOS»).
 
 pub mod arrow;
 pub mod exact;
+pub mod make_valid;
 pub mod polygonize;
 pub mod precision;
 pub mod split;
+mod wkb;
 
 use geo::{CoordsIter, Geometry, LineString, Polygon};
 use geozero::{CoordDimensions, ToWkb};
+use plenora_core::contract::arrow_metadata::MAX_CELL_COORDINATES;
 use plenora_core::PlenoraError;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{geometry_from_wkb, geometry_type_name as geometry_type};
 
+use self::make_valid::{MakeValidError, MakeValidLimits};
 use self::polygonize::{PolygonizeError, PolygonizeLimits, PolygonizeOptions};
 use self::precision::Precision;
 use self::split::{SplitError, SplitLimits};
@@ -135,12 +174,51 @@ pub const MAX_SPLIT_WORK: u64 = 100_000_000;
 /// Arrow, come nel trasporto di `plenora-data-tools@190c493`.
 pub const MAX_CLEAN_VERTICES: u64 = 100_000_000;
 
+/// Profilo di [`make_valid_wkb`], che GEOS non limitava.
+///
+/// Input e output entro il limite per cella ([`MAX_CELL_COORDINATES`]),
+/// geometrie di output entro il tetto di componenti del contratto WKB
+/// ([`crate::MAX_WKB_COMPONENTS`]), lavoro di noding entro
+/// [`MAX_NODING_WORK`]. Il preflight del kernel stima il lavoro come
+/// quadrato dei segmenti: sopra 10.000 segmenti un input **invalido** e'
+/// rifiutato con [`RustBackendError::WorkLimit`]. Un input gia' valido non
+/// arriva al kernel e passa invariato a ogni dimensione.
+pub const MAKE_VALID_LIMITS: MakeValidLimits = MakeValidLimits {
+    max_input_coordinates: MAX_CELL_COORDINATES,
+    max_noding_work: MAX_NODING_WORK,
+    max_output_geometries: crate::MAX_WKB_COMPONENTS,
+    max_output_coordinates: MAX_CELL_COORDINATES,
+};
+
+/// Metodo di riparazione, come in `geos_backend::RepairMethod`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairMethod {
+    /// Noda tutto il bordo, estrae le facce e conserva i residui lineari e
+    /// puntuali (`MakeValid LINEWORK` di GEOS).
+    Linework,
+    /// Ripara shell e buchi separatamente, poi li combina con l'overlay
+    /// (`GeometryFixer` di GEOS).
+    Structure,
+}
+
+impl RepairMethod {
+    const fn kernel(self) -> make_valid::RepairMethod {
+        match self {
+            Self::Linework => make_valid::RepairMethod::Linework,
+            Self::Structure => make_valid::RepairMethod::Structure,
+        }
+    }
+}
+
 /// Errori del backend Rust: le varianti di `geos_backend::GeosBackendError`
 /// meno `Geos`, piu' quelle che solo il kernel Rust puo' dare.
 #[derive(Debug, Error)]
 pub enum RustBackendError {
     #[error(transparent)]
     InputContract(#[from] PlenoraError),
+    #[error("make-valid ha prodotto una geometria ancora non valida")]
+    InvalidRepair,
     #[error("tipo geometria non supportato da {operation}: {actual}")]
     UnsupportedGeometry {
         operation: &'static str,
@@ -183,9 +261,9 @@ pub enum RustBackendError {
     #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
     NumericRange,
     /// Lo spostamento che il calcolo introdurrebbe supera la precisione
-    /// dichiarata (1 cm a terra con un CRS): coordinate troppo rade per la
-    /// precisione, o un punto di noding arrotondato di `polygonize`. Il solo
-    /// rifiuto legato alla precisione.
+    /// dichiarata (1 cm a terra con un CRS): la griglia intera di un overlay
+    /// di `make_valid` con il suo aggancio, o un punto di noding arrotondato
+    /// di `polygonize`. Il solo rifiuto legato alla precisione.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
     /// La precisione passata non e' un numero finito positivo, o il CRS non
@@ -285,6 +363,37 @@ impl RustBackendError {
             SplitError::InvalidPrecision => Self::InvalidPrecision,
         }
     }
+
+    fn from_make_valid(error: MakeValidError) -> Self {
+        match error {
+            MakeValidError::NonFiniteCoordinate => {
+                Self::InputContract(crate::non_finite_coordinate())
+            }
+            MakeValidError::InvalidStructure(reason) => {
+                Self::InputContract(crate::invalid_wkb_structure(reason))
+            }
+            MakeValidError::UnsupportedGeometry(actual) => Self::UnsupportedGeometry {
+                operation: "make_valid",
+                actual,
+            },
+            MakeValidError::UnboundedLimitConfiguration => Self::UnboundedLimits,
+            MakeValidError::CoordinateLimit { actual, limit } => {
+                Self::CoordinateLimit { actual, limit }
+            }
+            MakeValidError::WorkLimit { actual, limit } => Self::WorkLimit { actual, limit },
+            MakeValidError::OutputLimit { actual, limit } => Self::OutputLimit { actual, limit },
+            MakeValidError::IndexOverflow => Self::Internal("indice non rappresentabile"),
+            MakeValidError::Polygonize(error) => Self::from_polygonize(&error, "make_valid"),
+            MakeValidError::InvalidOutput(_) => Self::InvalidRepair,
+            MakeValidError::InternalInvariant(_) => {
+                Self::Internal("invariante del make_valid violata")
+            }
+            MakeValidError::AllocationFailed(context) => Self::AllocationFailed(context),
+            MakeValidError::NumericRange => Self::NumericRange,
+            MakeValidError::PrecisionInsufficient => Self::PrecisionInsufficient,
+            MakeValidError::InvalidPrecision => Self::InvalidPrecision,
+        }
+    }
 }
 
 /// Esegue un kernel dietro la barriera dei panici delle dipendenze.
@@ -340,6 +449,129 @@ fn checked_input(geometry: &Geometry<f64>, max_coordinates: u64) -> Result<(), R
         .map_err(|_| RustBackendError::Internal("codifica WKB intermedia"))?;
     geometry_from_wkb(&payload)?;
     Ok(())
+}
+
+/// Ripara un WKB 2D strutturalmente valido.
+///
+/// Come in GEOS l'input puo' essere OGC-invalido, perche' e' cio' che
+/// l'operazione ripara; dimensioni Z/M, coordinate non finite e WKB
+/// malformato restano rifiutati prima del kernel. Un input gia' valido
+/// (validazione OGC del workspace) torna **byte per byte**, senza passare dal
+/// kernel.
+///
+/// Differenze dal backend GEOS:
+///
+/// - l'algoritmo e' quello del laboratorio (`LINEWORK`: noding del bordo,
+///   facce e residui; `STRUCTURE`: shell e buchi riparati a parte, poi
+///   overlay di `geo`), qualificato contro GEOS per equivalenza semantica,
+///   non byte per byte: ordine dei componenti, punto iniziale e verso degli
+///   anelli, e la forma `Polygon`/`MultiPolygon`/`GeometryCollection` di un
+///   risultato possono differire da GEOS a parita' di geometria;
+/// - nelle `GeometryCollection` `keep_collapsed` non si propaga ai figli di
+///   `STRUCTURE` (come `GeometryFixer` di GEOS), mentre `LINEWORK` li ripara
+///   sempre con `keep_collapsed = true`;
+/// - l'input invalido e' soggetto a [`MAKE_VALID_LIMITS`], che GEOS non
+///   aveva: oltre 10.000 segmenti la riparazione fallisce chiusa con
+///   [`RustBackendError::WorkLimit`];
+/// - «valido» e' la validazione OGC del workspace (quella di `geo` piu' il
+///   controllo degli anelli con punta), non `IsValid` di GEOS: dove le due
+///   divergono, passthrough e riparazione possono scambiarsi;
+/// - `precision` (1 cm a terra, [`Precision::from_crs`]) e' un argomento
+///   in piu' rispetto a 190c493: sotto la precisione il risultato puo'
+///   differire (vertici spostati, feature sottili fuse o sparite), e un
+///   overlay la cui griglia supera la precisione e'
+///   [`RustBackendError::PrecisionInsufficient`].
+///
+/// # Errors
+///
+/// [`RustBackendError::InputContract`] se il payload viola il contratto WKB;
+/// i limiti, [`RustBackendError::InvalidRepair`] se l'output resta invalido
+/// per il kernel o per la validazione del workspace, e gli altri errori del
+/// kernel tradotti in [`RustBackendError`].
+pub fn make_valid_wkb(
+    payload: &[u8],
+    method: RepairMethod,
+    keep_collapsed: bool,
+    precision: Precision,
+) -> Result<Vec<u8>, RustBackendError> {
+    make_valid_wkb_with_limits(
+        payload,
+        method,
+        keep_collapsed,
+        MAKE_VALID_LIMITS,
+        precision,
+    )
+}
+
+/// [`make_valid_wkb`] con un profilo di limiti esplicito.
+///
+/// # Errors
+///
+/// Come [`make_valid_wkb`]; [`RustBackendError::UnboundedLimits`] se un
+/// limite e' [`u64::MAX`], anche su input gia' valido.
+pub fn make_valid_wkb_with_limits(
+    payload: &[u8],
+    method: RepairMethod,
+    keep_collapsed: bool,
+    limits: MakeValidLimits,
+    precision: Precision,
+) -> Result<Vec<u8>, RustBackendError> {
+    if !limits.is_fully_bounded() {
+        return Err(RustBackendError::UnboundedLimits);
+    }
+    // Il decoder validante e' il gate strutturale (`validate_wkb_contract`,
+    // stessa parita' di esiti) e costruisce la geometria nella stessa
+    // passata; la validazione OGC viene dopo, perche' l'input invalido e'
+    // ammesso.
+    let geometry = crate::wkb_decoder::decode_validated(payload)?;
+    match crate::valida_ogc(&geometry) {
+        Ok(()) => return Ok(payload.to_vec()),
+        Err(PlenoraError::InvalidPlan(_)) => {}
+        // Una validazione che non conclude non dimostra che l'input vada
+        // riparato: si ferma, interna.
+        Err(other) => return Err(other.into()),
+    }
+    let repaired = protetto(
+        || {
+            make_valid::make_valid_geometry_rust_bounded(
+                &geometry,
+                method.kernel(),
+                keep_collapsed,
+                limits,
+                precision.value(),
+            )
+        },
+        RustBackendError::from_make_valid,
+    )?;
+    // Encoder proprio: il poligono vuoto di un anello collassato esce a zero
+    // anelli, come in GEOS (vedi `wkb`).
+    let output = wkb::wkb_xy(&repaired)?;
+    // Rivalidazione dell'output con il contratto del workspace (nessuna
+    // fiducia nel produttore): struttura, poi OGC.
+    let decoded = crate::wkb_decoder::decode_validated(&output)?;
+    match crate::valida_ogc(&decoded) {
+        Ok(()) => Ok(output),
+        Err(PlenoraError::InvalidPlan(_)) => Err(RustBackendError::InvalidRepair),
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// Variante di [`make_valid_wkb`] su geometria gia' decodificata: passa per
+/// la stessa forma canonica XY, quindi stessi risultati e stessi errori.
+///
+/// # Errors
+///
+/// Come [`make_valid_wkb`]; [`RustBackendError::Internal`] se la codifica
+/// WKB intermedia fallisce.
+pub fn make_valid_geometry(
+    geometry: &Geometry<f64>,
+    method: RepairMethod,
+    keep_collapsed: bool,
+    precision: Precision,
+) -> Result<Geometry<f64>, RustBackendError> {
+    let payload = wkb::wkb_xy(geometry)?;
+    let repaired = make_valid_wkb(&payload, method, keep_collapsed, precision)?;
+    geometry_from_wkb(&repaired).map_err(RustBackendError::from)
 }
 
 /// Esito di [`polygonize_linework`], con la forma di
@@ -565,8 +797,47 @@ mod tests {
     fn precisione() -> Precision {
         Precision::new(1e-6).unwrap()
     }
-    use crate::test_support::{rect, rect_polygon};
-    use geo::{line_string, Area, GeometryCollection, Point};
+    use crate::test_support::{bowtie, rect, rect_polygon};
+    use crate::ValidazioneProtetta as _;
+    use geo::{line_string, polygon, Area, GeometryCollection, Point};
+
+    fn bow_tie_wkb() -> Vec<u8> {
+        bowtie().to_wkb(CoordDimensions::xy()).unwrap()
+    }
+
+    #[test]
+    fn repairs_self_intersection_with_both_methods() {
+        let input = bow_tie_wkb();
+        assert!(geometry_from_wkb(&input).is_err());
+        for method in [RepairMethod::Linework, RepairMethod::Structure] {
+            let output = make_valid_wkb(&input, method, false, precisione()).unwrap();
+            let repaired = geometry_from_wkb(&output).unwrap();
+            assert!((repaired.unsigned_area() - 2.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn valid_input_is_returned_byte_for_byte() {
+        let input = rect(0.0, 0.0, 2.0, 2.0)
+            .to_wkb(CoordDimensions::xy())
+            .unwrap();
+        assert_eq!(
+            make_valid_wkb(&input, RepairMethod::Structure, false, precisione()).unwrap(),
+            input
+        );
+    }
+
+    #[test]
+    fn malformed_or_non_finite_wkb_never_reaches_the_kernel() {
+        assert!(make_valid_wkb(&[1, 2, 3], RepairMethod::Structure, false, precisione()).is_err());
+        let mut nan_point = vec![1_u8, 1, 0, 0, 0];
+        nan_point.extend_from_slice(&f64::NAN.to_le_bytes());
+        nan_point.extend_from_slice(&1.0_f64.to_le_bytes());
+        assert!(matches!(
+            make_valid_wkb(&nan_point, RepairMethod::Structure, false, precisione()),
+            Err(RustBackendError::InputContract(_))
+        ));
+    }
 
     #[test]
     fn polygonize_preserves_residual_linework_and_can_fail_closed() {
@@ -738,8 +1009,111 @@ mod tests {
     }
 
     #[test]
+    fn make_valid_geometry_matches_the_wkb_path() {
+        // architettura.md#geometrie D12.1: la variante su forma decodificata
+        // deve produrre la STESSA geometria del percorso WKB, sull'input
+        // OGC-invalido che l'operazione esiste per riparare.
+        let input = bow_tie_wkb();
+        let decoded = crate::wkb_decoder::decode_validated(&input).expect("gate solo strutturale");
+        let via_geometry =
+            make_valid_geometry(&decoded, RepairMethod::Linework, true, precisione())
+                .expect("riparazione su forma decodificata");
+        let via_wkb =
+            make_valid_wkb(&input, RepairMethod::Linework, true, precisione()).expect("wkb");
+        assert_eq!(
+            via_geometry,
+            geometry_from_wkb(&via_wkb).expect("output wkb valido"),
+            "risultato diverso tra forma decodificata e WKB"
+        );
+        // Input gia' valido: passthrough (stessa geometria in uscita).
+        let valid = rect(0.0, 0.0, 2.0, 2.0);
+        assert_eq!(
+            make_valid_geometry(&valid, RepairMethod::Linework, true, precisione())
+                .expect("passthrough"),
+            valid
+        );
+    }
+
+    /// `Line`, `Rect` e `Triangle` entrano come a 190c493: geozero li
+    /// codificava come `LineString` e `Polygon` (`to_polygon` di `geo`),
+    /// anche dentro una collezione; gia' validi, tornano in quella forma.
+    #[test]
+    fn make_valid_geometry_normalizes_line_rect_and_triangle() {
+        let rect = geo::Rect::new((0.0, 0.0), (2.0, 1.0));
+        let triangle = geo::Triangle::new(
+            geo::Coord { x: 0.0, y: 0.0 },
+            geo::Coord { x: 3.0, y: 0.0 },
+            geo::Coord { x: 0.0, y: 3.0 },
+        );
+        let line = geo::Line::new(geo::Coord { x: 0.0, y: 0.0 }, geo::Coord { x: 1.0, y: 1.0 });
+        let cases = [
+            (Geometry::Rect(rect), Geometry::Polygon(rect.to_polygon())),
+            (
+                Geometry::Triangle(triangle),
+                Geometry::Polygon(triangle.to_polygon()),
+            ),
+            (
+                Geometry::Line(line),
+                Geometry::LineString(LineString::new(vec![line.start, line.end])),
+            ),
+            (
+                Geometry::GeometryCollection(GeometryCollection::new_from(vec![
+                    Geometry::Rect(rect),
+                    Geometry::Line(line),
+                ])),
+                Geometry::GeometryCollection(GeometryCollection::new_from(vec![
+                    Geometry::Polygon(rect.to_polygon()),
+                    Geometry::LineString(LineString::new(vec![line.start, line.end])),
+                ])),
+            ),
+        ];
+        for (input, expected) in cases {
+            for method in [RepairMethod::Linework, RepairMethod::Structure] {
+                let output =
+                    make_valid_geometry(&input, method, true, precisione()).expect("passthrough");
+                assert_eq!(output, expected);
+                // Stessi byte che geozero dava a 190c493.
+                assert_eq!(
+                    wkb::wkb_xy(&input).unwrap(),
+                    input.to_wkb(CoordDimensions::xy()).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn make_valid_keep_collapsed_handles_degenerate_invalid_polygon() {
+        let degenerate = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 1.0, y: 0.0),
+            (x: 2.0, y: 0.0), (x: 0.0, y: 0.0)
+        ])
+        .to_wkb(CoordDimensions::xy())
+        .unwrap();
+        for keep_collapsed in [false, true] {
+            let output = make_valid_wkb(
+                &degenerate,
+                RepairMethod::Structure,
+                keep_collapsed,
+                precisione(),
+            )
+            .unwrap();
+            let repaired = geometry_from_wkb(&output).unwrap();
+            assert!(repaired.validazione_protetta().is_ok());
+        }
+    }
+
+    /// `geos_and_proj_reject_hostile_inputs_and_handle_complex_topology` di
+    /// `plenora-cli/tests/geo_adversarial.rs`, parte GEOS.
+    #[test]
     fn rejects_hostile_inputs_and_handles_complex_topology() {
         let square = |x: f64, y: f64, size: f64| rect(x, y, x + size, y + size);
+        assert!(make_valid_wkb(&[1, 2, 3], RepairMethod::Linework, false, precisione()).is_err());
+        let valid = square(0.0, 0.0, 4.0).to_wkb(CoordDimensions::xy()).unwrap();
+        assert_eq!(
+            make_valid_wkb(&valid, RepairMethod::Structure, false, precisione()).unwrap(),
+            valid
+        );
+
         let wrong = Geometry::Point(Point::new(0.0, 0.0));
         assert!(matches!(
             polygonize_linework(&wrong, true, false, 10, 10, 10, 10, precisione()),
@@ -803,6 +1177,20 @@ mod tests {
         ));
         assert!(matches!(
             split_polygon_by_linework(&square, &lines, 10, 10, 10, u64::MAX, precisione()),
+            Err(RustBackendError::UnboundedLimits)
+        ));
+        let payload = square.to_wkb(CoordDimensions::xy()).unwrap();
+        assert!(matches!(
+            make_valid_wkb_with_limits(
+                &payload,
+                RepairMethod::Linework,
+                true,
+                MakeValidLimits {
+                    max_noding_work: u64::MAX,
+                    ..MAKE_VALID_LIMITS
+                },
+                precisione(),
+            ),
             Err(RustBackendError::UnboundedLimits)
         ));
     }

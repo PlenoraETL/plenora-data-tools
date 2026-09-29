@@ -63,7 +63,7 @@ pub enum GeoFusion {
     NotFusible,
     /// Trasformazione 1:1 sul posto: fondibile in un gruppo di nodi unari
     /// consecutivi a parita' di colonna geometria e ruolo (le trasformazioni
-    /// in place).
+    /// in place, piu' `make_valid`).
     TransformInPlace,
     /// Misura terminale: consuma la geometria producendo un valore non
     /// geometrico (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`
@@ -488,6 +488,7 @@ impl OperationDescriptor {
                     | "geo.simplify"
                     | "geo.boundary"
                     | "geo.point_on_surface"
+                    | "geo.make_valid"
                     | "geo.affine_transform"
                     | "geo.translate"
                     | "geo.scale"
@@ -521,8 +522,8 @@ impl OperationDescriptor {
 //   tessellazioni -> Blocking, overlay/join -> BinaryBlocking);
 // - `cancellation_behavior`: `Cooperative` per i kernel puri streaming,
 //   `BoundaryOnly` per i blocking grandi, `NonInterruptible` per i kernel
-//   topologici senza punti di cancellazione (`polygonize`, `split`, un tempo
-//   dietro la capability esterna `geos`; errori-e-limiti.md);
+//   topologici senza punti di cancellazione (`make_valid`, `polygonize`,
+//   `split`, un tempo dietro la capability esterna `geos`; errori-e-limiti.md);
 // - `result_shape`: la lineage binaria geo diventa `OneToMany`;
 // - `determinism`: `DefinedOrder` di default, `CanonicalOrder` per set
 //   operation e aggregazioni senza ordine, `InputOrder` per `concat`.
@@ -1993,6 +1994,33 @@ pub static CATALOG: &[OperationDescriptor] = &[
         KernelValidated,
         expansion_constraint = LeftRelative
     ),
+    // architettura.md#geometrie: `make_valid` entra nel perimetro di fusione come
+    // TransformInPlace; l'ammissione di input OGC-invalido e' una
+    // proprieta' del suo gate di decode, gestita dal runner fuso con
+    // l'eccezione documentata in architettura.md#geometrie D12.4 — non richiede una
+    // variante di capability dedicata (la relazione di raggruppamento e'
+    // identica: 1:1 in place sulla stessa colonna).
+    //
+    // Backend Rust puro (`plenora_kernels_geo::rust_backend`) al posto di
+    // GEOS: nessuna capability richiesta, `kernel_version` 2 per il cambio
+    // di kernel. Resta `NonInterruptible`: il kernel non ha punti di
+    // cancellazione. Stesso trattamento per `polygonize` e `split`.
+    op!(
+        "geo.make_valid",
+        Geo,
+        ManipolaCompat,
+        Unary,
+        Streaming,
+        NonInterruptible,
+        Some(ResultShape::OneToOne),
+        Some(CrsRequirement::Known),
+        &[],
+        DefinedOrder,
+        KernelValidated,
+        geo_fusion = TransformInPlace,
+        semantic_version = 2,
+        kernel_version = 2
+    ),
     // --- Predicati DE-9IM, estensioni geo ------------------------------
     op!(
         "geo.predicate_intersects",
@@ -2309,11 +2337,6 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated
     ),
-    // Backend Rust puro (`plenora_kernels_geo::rust_backend`) al posto di
-    // GEOS: nessuna capability richiesta, `kernel_version` 2 per il cambio
-    // di kernel. Resta `NonInterruptible`: il kernel non ha punti di
-    // cancellazione. Stesso trattamento per `split`. `geo.make_valid` non
-    // e' nel catalogo (README, «Che cosa non c'e' ancora»).
     op!(
         "geo.polygonize",
         Geo,
@@ -2823,6 +2846,7 @@ pub static ALIASES: &[(u16, &str, &str)] = &[
     (3, "geo_vertex_count", "geo.vertex_count"),
     (3, "geo_voronoi", "geo.voronoi"),
     (3, "geo_within", "geo.within"),
+    (3, "geo_make_valid", "geo.make_valid"),
     // --- Predicati DE-9IM: id invariato sotto geo. --------------------
     (3, "predicate_intersects", "geo.predicate_intersects"),
     (3, "predicate_disjoint", "geo.predicate_disjoint"),
@@ -2893,11 +2917,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_144_unique_ids() {
-        // 144: le 146 di plenora-data-tools@190c493 meno `geo.reproject`
-        // (richiedeva PROJ, assente in Rust puro) e `geo.make_valid` (non
-        // ancora qualificato in Rust puro).
-        assert_eq!(CATALOG.len(), 144);
+    fn catalog_has_145_unique_ids() {
+        // 145: le 146 di plenora-data-tools@190c493 meno `geo.reproject`
+        // (richiedeva PROJ, assente in Rust puro).
+        assert_eq!(CATALOG.len(), 145);
         let ids: HashSet<_> = CATALOG.iter().map(|op| op.id).collect();
         assert_eq!(ids.len(), CATALOG.len());
         assert_eq!(
@@ -2909,13 +2932,13 @@ mod tests {
         );
         assert_eq!(
             CATALOG.iter().filter(|op| op.family == Family::Geo).count(),
-            73
+            74
         );
     }
 
     #[test]
     fn every_alias_resolves_to_an_existing_catalog_id() {
-        assert_eq!(ALIASES.len(), 125);
+        assert_eq!(ALIASES.len(), 126);
         for (schema_version, alias, canonical) in ALIASES {
             assert!(
                 CATALOG.iter().any(|op| op.id == *canonical),
@@ -3321,7 +3344,7 @@ mod tests {
     #[test]
     fn geo_fusion_matches_the_adr_0012_perimeter() {
         // architettura.md#geometrie D12.2, perimetro fondibile: le
-        // trasformazioni 1:1 in place sono
+        // trasformazioni 1:1 in place (piu' `make_valid`) sono
         // TransformInPlace, le misure terminali TerminalMeasure, tutto il resto
         // (tabellari incluse) NotFusible. La lista chiusa qui sotto e' il
         // contratto; aggiungere un op fondibile richiede l'oracolo
@@ -3348,6 +3371,7 @@ mod tests {
                 "geo.concave_hull",
                 "geo.densify",
                 "geo.snap_to_grid",
+                "geo.make_valid",
             ])
         );
         let terminals: HashSet<_> = CATALOG
@@ -3506,11 +3530,11 @@ mod tests {
             .filter(|op| probes.iter().any(|config| op.emits_row_diagnostics(config)))
             .map(|op| op.id)
             .collect();
-        // 38: le 40 di plenora-data-tools@190c493 meno `geo.make_valid` e
-        // `geo.reproject`, assenti in Rust puro.
+        // 39: le 40 di plenora-data-tools@190c493 meno `geo.reproject`,
+        // assente in Rust puro.
         assert_eq!(
             emitting.len(),
-            38,
+            39,
             "perimetro row-diagnostics: {emitting:?}"
         );
         for id in &emitting {
@@ -3573,6 +3597,8 @@ mod tests {
             ("geo.length", 2, 1, 1, 1),
             ("geo.line_interpolate_point", 2, 1, 1, 1),
             ("geo.line_substring", 2, 1, 1, 1),
+            // Backend Rust al posto di GEOS: kernel 2 (vedi il descrittore).
+            ("geo.make_valid", 2, 1, 1, 2),
             ("geo.perimeter", 2, 1, 1, 1),
             ("geo.point_on_surface", 2, 1, 1, 1),
             ("geo.rotate", 2, 1, 1, 1),

@@ -77,7 +77,8 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
         | "geo.convex_hull"
         | "geo.envelope"
         | "geo.boundary"
-        | "geo.point_on_surface" => {
+        | "geo.point_on_surface"
+        | "geo.make_valid" => {
             let _: EmptyConfig = parse_config(op, config)?;
         }
         "geo.buffer" => {
@@ -197,7 +198,9 @@ fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
 /// `Some` con i tipi dell'OUTPUT, verificati contro i kernel, per le op che
 /// cambiano il tipo; `None` per quelle che lo preservano. Casi non ovvi:
 /// `convex_hull` e `concave_hull` producono sempre `Polygon`, anche
-/// degenere.
+/// degenere; `make_valid` dichiara `mixed` senza elenco, perche' la
+/// riparazione cella per cella (backend Rust, `rust_backend`) puo' cambiare
+/// tipo e l'insieme non e' enumerabile a secco (R3.4.1).
 fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
     match op {
         "geo.centroid" | "geo.point_on_surface" | "geo.line_interpolate_point" => {
@@ -222,6 +225,11 @@ fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
             GeometryType::GeometryCollection,
         ])
         .map(Some),
+        "geo.make_valid" => GeometryTypesProperty::new(TypesDeclaration::Mixed, Vec::new())
+            .map(Some)
+            .map_err(|error| {
+                PlenoraError::Internal(format!("mappa tipi di output incoerente: {error}"))
+            }),
         "geo.simplify"
         | "geo.affine_transform"
         | "geo.translate"
@@ -266,6 +274,7 @@ pub(in crate::analyze) fn analyze_unary(
         | "geo.envelope"
         | "geo.boundary"
         | "geo.point_on_surface"
+        | "geo.make_valid"
         | "geo.buffer"
         | "geo.simplify"
         | "geo.affine_transform"
