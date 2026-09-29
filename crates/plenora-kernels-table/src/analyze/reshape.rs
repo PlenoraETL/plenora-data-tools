@@ -8,9 +8,10 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_name_list, check_output_name, check_text_len, clone_fields,
+    analyze_append, check_name_list, check_output_name, check_text_len, clone_fields, con_op,
     contract_error, field_of, finish, map_row_count, merge_geometry, merge_schema_metadata,
-    propagate_geometry, require_scalar_string, require_scalar_strings, typed, unsupported,
+    produce, propagate_geometry, require_numeric, require_scalar_string,
+    require_scalar_string_field, require_scalar_strings, typed, unsupported,
 };
 use super::joins::check_key_pairs;
 use crate::{reshape, Limits};
@@ -153,32 +154,80 @@ pub(in crate::analyze) fn analyze_melt(
     )
 }
 
+/// Schema di `pivot` a secco: solo con `mapping`, che fissa le colonne
+/// pivot (una per voce, nell'ordine delle chiavi, anche per i valori assenti
+/// dai dati: contratto del kernel). Senza `mapping` le colonne sono i valori
+/// distinti dei dati: `Unsupported`.
+///
+/// Stesse regole del kernel: `Pivot::verifica_mapping` per nomi, colonne e
+/// chiavi (testo canonico dei valori della `pivot_col`); le colonne indice e
+/// la `pivot_col` si leggono come testo (chiavi e nomi);
+/// il valore come numero per `sum`/`mean`/`min`/`max`, come testo per
+/// `concat`, di qualunque tipo per `first`/`last` (`take`) e `count`.
 pub(in crate::analyze) fn analyze_pivot(
     op: &str,
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
-    // Valida la config e le colonne referenziate, poi fallisce: i nomi delle
-    // colonne pivot derivano dai valori presenti nei dati (anche con mapping,
-    // che filtra ma non garantisce la presenza).
     let config: reshape::Pivot = typed(op, config)?;
     let input = &inputs[0];
-    let _ = fields;
-    for name in config
-        .index_col
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
+    let indice = config.nomi_indice();
+    for name in &indice {
         field_of(op, input, name)?;
     }
-    field_of(op, input, &config.column)?;
-    field_of(op, input, &config.value_col)?;
-    unsupported(
-        op,
-        "le colonne di output dipendono dai valori distinti della pivot_col: schema non inferibile a secco",
-    )
+    let tipo_pivot = field_of(op, input, &config.column)?.data_type().clone();
+    let valore = field_of(op, input, &config.value_col)?;
+    if config.mapping.is_empty() {
+        return unsupported(
+            op,
+            "senza mapping le colonne di output dipendono dai valori distinti della pivot_col: schema non inferibile a secco",
+        );
+    }
+    let nomi_indice: Vec<String> = indice.iter().map(|name| (*name).to_owned()).collect();
+    check_name_list(op, &nomi_indice, limits.max_columns, "index_col", false)?;
+    let mut fields_out: Vec<Field> = indice
+        .iter()
+        .map(|name| {
+            let field = field_of(op, input, name)?;
+            require_scalar_string_field(op, field)?;
+            Ok(field.clone())
+        })
+        .collect::<Result<_>>()?;
+    require_scalar_string(op, input, &config.column)?;
+    con_op(op, config.verifica_mapping(&tipo_pivot, limits.max_columns))?;
+    let data_type = match config.aggr_func {
+        reshape::PivotAgg::First | reshape::PivotAgg::Last => valore.data_type().clone(),
+        reshape::PivotAgg::Count => DataType::Int64,
+        reshape::PivotAgg::Concat => {
+            require_scalar_string_field(op, valore)?;
+            DataType::Utf8
+        }
+        reshape::PivotAgg::Sum
+        | reshape::PivotAgg::Mean
+        | reshape::PivotAgg::Min
+        | reshape::PivotAgg::Max => {
+            require_numeric(op, input, &config.value_col)?;
+            DataType::Float64
+        }
+    };
+    for output in config.mapping.values() {
+        produce(&mut fields_out, fields, output, data_type.clone(), true)?;
+    }
+    // R2.4: i metadati di schema si conservano (il kernel li copia); le
+    // colonne pivot sono derivate, senza metadati di campo.
+    let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
+    let preserved = input
+        .geometries
+        .first()
+        .filter(|geometry| indice.contains(&geometry.name.as_str()))
+        .map(|geometry| geometry.name.as_str());
+    let geometry = propagate_geometry(input, &schema, preserved);
+    let active = input
+        .active_geometry
+        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    finish(schema, geometry, active, ContractProperties::default())
 }
 
 pub(in crate::analyze) fn analyze_transpose(

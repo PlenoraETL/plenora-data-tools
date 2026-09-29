@@ -288,6 +288,17 @@ fn mappings() -> Vec<BTreeMap<String, String>> {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect(),
+        // Solo chiavi intere canoniche: sulle pivot_col intere il mapping
+        // esegue (le altre mappe li' si rifiutano), con una chiave assente.
+        [
+            ("1", "uno"),
+            ("10", "dieci"),
+            ("-3", "meno_tre"),
+            ("987654", "assente"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect(),
     ]
 }
 

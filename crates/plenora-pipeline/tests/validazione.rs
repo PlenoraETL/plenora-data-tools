@@ -119,8 +119,9 @@ fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
             rifiutate.push(caso.op);
         }
     }
-    // Le sole operazioni con schema d'uscita che dipende dai dati.
-    assert_eq!(rifiutate, ["table.pivot", "table.transpose"]);
+    // La sola operazione con schema d'uscita che dipende dai dati: `pivot`
+    // del caso ha un `mapping`, che fissa le colonne.
+    assert_eq!(rifiutate, ["table.transpose"]);
 }
 
 #[test]

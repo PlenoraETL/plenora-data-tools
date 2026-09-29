@@ -64,8 +64,8 @@ fn righe(tabella: &RecordBatch) -> u64 {
 fn ogni_passo_e_uguale_alla_chiamata_diretta_del_kernel() {
     std::env::set_var(CHIAVE_HMAC, "chiave-di-test-del-runner");
     for caso in CASI {
-        if matches!(caso.op, "table.pivot" | "table.transpose") {
-            continue; // Rifiutate in validazione: schema dipendente dai dati.
+        if caso.op == "table.transpose" {
+            continue; // Rifiutata in validazione: schema dipendente dai dati.
         }
         let config: Value = serde_json::from_str(caso.config).expect("config del caso");
         let tavole = tabelle(caso.fixture);
@@ -424,4 +424,59 @@ fn l_errore_di_un_kernel_non_porta_valori_di_riga() {
     for valore in ["wkb-a", "2024-01-02", "{\"a\":1}"] {
         assert!(!testo.contains(valore), "{testo}");
     }
+}
+
+/// `pivot` con `mapping`: lo schema validato e' quello eseguito, anche con
+/// un valore mappato che i dati non contengono (colonna tutta null), e
+/// l'esito e' quello della chiamata diretta; senza `mapping` lo schema
+/// dipende dai dati e la validazione rifiuta.
+#[test]
+fn pivot_con_mapping_esegue_lo_schema_validato() {
+    let tabella = wide(true);
+    for aggr_func in [
+        "first", "last", "max", "min", "sum", "mean", "count", "concat",
+    ] {
+        let config = json!({"index_col": "id", "pivot_col": "name", "value_col": "value",
+                            "aggr_func": aggr_func,
+                            "mapping": {"b": "vb", "assente": "vz", "a": "va"}});
+        let pipeline = piano(
+            &["t"],
+            vec![passo("p", "table.pivot", &["t"], config.clone())],
+            &["p"],
+        );
+        let validata = pipeline
+            .validate(&[("t", tabella.schema())])
+            .unwrap_or_else(|errore| panic!("{aggr_func}: {errore}"));
+        let atteso = validata.contratto("p").expect("contratto").schema.clone();
+        let esito = validata
+            .run(vec![("t".to_owned(), tabella.clone())])
+            .unwrap_or_else(|errore| panic!("{aggr_func}: {errore}"));
+        let uscita = output(&esito, "p");
+        assert_eq!(uscita.schema(), atteso, "{aggr_func}");
+        let nomi: Vec<&str> = atteso
+            .fields()
+            .iter()
+            .map(|campo| campo.name().as_str())
+            .collect();
+        assert_eq!(nomi, ["id", "va", "vz", "vb"], "ordine delle chiavi");
+        let diretta = chiamata_diretta("table.pivot", &config, std::slice::from_ref(&tabella))
+            .expect("chiamata diretta");
+        assert_eq!(uscita.columns(), diretta.columns(), "{aggr_func}");
+        let assente = uscita.column_by_name("vz").expect("colonna del mapping");
+        assert_eq!(assente.null_count(), uscita.num_rows(), "{aggr_func}");
+    }
+    let senza_mapping = piano(
+        &["t"],
+        vec![passo(
+            "p",
+            "table.pivot",
+            &["t"],
+            json!({"index_col": "id", "pivot_col": "name", "value_col": "value"}),
+        )],
+        &["p"],
+    );
+    let errore = senza_mapping
+        .validate(&[("t", tabella.schema())])
+        .expect_err("schema dipendente dai dati");
+    assert!(matches!(errore, PlenoraError::Unsupported(_)), "{errore}");
 }

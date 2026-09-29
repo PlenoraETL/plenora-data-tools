@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -486,10 +486,103 @@ pub struct Pivot {
     /// Aggregazione di una cella (default [`PivotAgg::First`]).
     #[serde(default = "default_pivot_agg")]
     pub aggr_func: PivotAgg,
-    /// Se non vuoto, tiene solo i valori pivot (in testo) che nomina e li
-    /// rinomina nel valore associato.
+    /// Valore pivot (come testo) -> nome della colonna di output. Non vuoto,
+    /// fissa lo schema: una colonna per voce, nell'ordine delle chiavi,
+    /// anche per i valori che i dati non contengono (tutta null); i valori
+    /// fuori dal mapping non producono colonne.
     #[serde(default)]
     pub mapping: BTreeMap<String, String>,
+}
+
+impl Pivot {
+    /// Le colonne indice di `index_col` (separate da virgola, senza spazi ai
+    /// bordi, vuote ignorate).
+    #[must_use]
+    pub fn nomi_indice(&self) -> Vec<&str> {
+        self.index_col
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
+    /// Le regole sui nomi, uguali per l'analisi e per il kernel.
+    ///
+    /// Sempre: colonne indice senza ripetizioni (lo schema avrebbe due
+    /// colonne omonime). Con il `mapping`: ogni nome di output valido,
+    /// nessun nome ripetuto ne' uguale a una colonna indice, colonne indice
+    /// piu' voci entro `max_columns`, e chiavi confrontabili con i valori
+    /// della `pivot_col` di tipo `tipo_pivot`. I valori si confrontano con le
+    /// chiavi come testo (`scalar_as_string`): per `Utf8` e per il dizionario
+    /// di `Utf8` ogni chiave e' un testo possibile; per `Int64` e `UInt64` la
+    /// chiave deve essere la forma canonica di un intero (`"1"`, non `"01"`
+    /// ne' `"1.0"`), altrimenti nessun valore la incontrerebbe e la sua
+    /// colonna uscirebbe tutta null senza errore; gli altri tipi (float,
+    /// date, timestamp, decimali, booleani) hanno un testo che il mapping non
+    /// puo' prevedere con certezza e si rifiutano.
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidPlan`: colonna indice ripetuta; nome di output non valido,
+    ///   ripetuto o uguale a una colonna indice; chiave non canonica o
+    ///   `pivot_col` di un tipo senza chiavi certe;
+    /// - `ResourceLimit`: colonne di output oltre `max_columns`.
+    pub fn verifica_mapping(&self, tipo_pivot: &DataType, max_columns: usize) -> Result<()> {
+        let indice = self.nomi_indice();
+        let mut presi: HashSet<&str> = HashSet::with_capacity(indice.len());
+        if !indice.iter().all(|nome| presi.insert(nome)) {
+            return Err(PlenoraError::InvalidPlan(
+                "pivot: colonna indice ripetuta".into(),
+            ));
+        }
+        if self.mapping.is_empty() {
+            return Ok(());
+        }
+        let chiave_certa: fn(&str) -> bool = match tipo_pivot {
+            DataType::Utf8 => |_| true,
+            DataType::Dictionary(chiave, valore)
+                if **chiave == DataType::Int32 && **valore == DataType::Utf8 =>
+            {
+                |_| true
+            }
+            DataType::Int64 => |testo| {
+                testo
+                    .parse::<i64>()
+                    .is_ok_and(|numero| numero.to_string() == testo)
+            },
+            DataType::UInt64 => |testo| {
+                testo
+                    .parse::<u64>()
+                    .is_ok_and(|numero| numero.to_string() == testo)
+            },
+            _ => {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "pivot: mapping su una pivot_col di tipo {tipo_pivot:?}: il testo dei valori non e' prevedibile dalle chiavi"
+                )));
+            }
+        };
+        if !self.mapping.keys().all(|chiave| chiave_certa(chiave)) {
+            return Err(PlenoraError::InvalidPlan(
+                "pivot: chiave del mapping che non e' il testo canonico di un valore della pivot_col"
+                    .into(),
+            ));
+        }
+        for output in self.mapping.values() {
+            validate_output_name(output)?;
+            if !presi.insert(output.as_str()) {
+                return Err(PlenoraError::InvalidPlan(
+                    "pivot: mapping con un nome di output ripetuto o uguale a una colonna indice"
+                        .into(),
+                ));
+            }
+        }
+        if indice.len().saturating_add(self.mapping.len()) > max_columns {
+            return Err(PlenoraError::ResourceLimit(
+                "pivot supera i limiti di output".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Stato di aggregazione delle celle di `pivot`, uno per cella (chiave,
@@ -680,13 +773,18 @@ fn colonna_pivot(
 /// `table.pivot`: una riga per chiave di `index_col`, una colonna per valore
 /// distinto di `pivot_col` (nel suo testo), celle aggregate con `aggr_func`.
 ///
-/// Righe nell'ordine canonico delle chiavi di `aggregate`
-/// (`canonical_key_order`); colonne pivot nell'ordine dei byte del testo
-/// del valore, prima della rinomina di `mapping`. Una
-/// riga con valore pivot nullo, o escluso da `mapping`, non riempie celle ma
-/// la sua chiave da' una riga; una combinazione assente e' null, anche con
-/// `count`. I metadati di schema non si conservano. Lo schema d'uscita
-/// dipende dai dati: l'analisi rifiuta l'operazione (`Unsupported`).
+/// `index_col` accetta piu' colonne separate da virgola. Righe nell'ordine
+/// canonico delle chiavi di `aggregate` (`canonical_key_order`). Senza
+/// `mapping` le colonne pivot sono i valori distinti dei dati, nell'ordine
+/// dei byte del testo del valore; con `mapping` sono esattamente le sue
+/// voci, nell'ordine delle chiavi e con i nomi del mapping: un valore
+/// mappato assente dai dati da' una colonna tutta null, un valore fuori dal
+/// mapping non da' colonne (le sue righe contano solo per le chiavi indice,
+/// che restano). Una riga con valore pivot nullo non riempie celle ma la sua
+/// chiave da' una riga; una combinazione assente e' null, anche con
+/// `count`. I metadati di schema non si conservano. Con `mapping` lo schema
+/// d'uscita e' fissato dalla config, ed e' quello che l'analisi dichiara;
+/// senza, dipende dai dati e l'analisi rifiuta l'operazione (`Unsupported`).
 ///
 /// Un intero oltre `2^53` **non** e' un errore: le aggregazioni numeriche
 /// di `pivot` producono un `Float64` per contratto, quindi la conversione
@@ -697,26 +795,23 @@ fn colonna_pivot(
 /// - `Schema`: colonna indice/pivot/valore assente; testo non numerico o
 ///   tipo non numerico sotto `sum`/`mean`/`min`/`max`; una cella che non si
 ///   converte in testo (chiave, valore pivot, valore di `concat`);
-/// - `InvalidPlan`: nome di colonna d'uscita non valido (valore pivot o
-///   rinomina vuoti o di soli spazi);
+/// - `InvalidPlan`: le regole di [`Pivot::verifica_mapping`]; un nome di
+///   colonna d'uscita non valido (vuoto o di soli spazi) o uguale a una
+///   colonna indice (senza `mapping` il nome viene dai dati);
 /// - `ResourceLimit`: righe oltre `max_rows` o colonne oltre `max_columns`,
 ///   indici o conteggi non rappresentabili.
 // Pipeline lineare: lunga per costruzione, spezzarla peggiora la
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<RecordBatch> {
-    let index_names = config
-        .index_col
-        .split(',')
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .collect::<Vec<_>>();
+    let index_names = config.nomi_indice();
     let index_indices = index_names
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let pivot_index = column_index(batch, &config.column)?;
     let value_index = column_index(batch, &config.value_col)?;
+    config.verifica_mapping(batch.column(pivot_index).data_type(), limits.max_columns)?;
     // Una passata sulle righe, in ordine crescente:
     // - chiave indice con l'identita' di `row_key` (`visit_key_ids`: valore
     //   nativo su colonna singola, chiave binaria altrimenti), la stessa dei
@@ -804,13 +899,25 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     })?;
     drop(indice_celle);
     let ordine = canonical_key_order(batch, &index_indices, &representatives)?;
-    let mut sorted_pivots = pivots
-        .iter()
-        .enumerate()
-        .filter(|(_, valore)| valore.ammesso)
-        .map(|(id, valore)| (valore.testo.as_str(), id))
-        .collect::<Vec<_>>();
-    sorted_pivots.sort_by(|left, right| left.0.cmp(right.0));
+    // Le colonne pivot: con il mapping le sue voci (l'ordine di `BTreeMap`
+    // e' quello di `str::cmp`, lo stesso dell'ordinamento qui sotto), con
+    // `None` per un valore che i dati non contengono; senza, i valori
+    // distinti dei dati in ordine di testo.
+    let sorted_pivots: Vec<(&str, Option<usize>)> = if config.mapping.is_empty() {
+        let mut distinti = pivots
+            .iter()
+            .enumerate()
+            .map(|(id, valore)| (valore.testo.as_str(), Some(id)))
+            .collect::<Vec<_>>();
+        distinti.sort_by(|left, right| left.0.cmp(right.0));
+        distinti
+    } else {
+        config
+            .mapping
+            .keys()
+            .map(|chiave| (chiave.as_str(), pivot_ids.get(chiave.as_str()).copied()))
+            .collect()
+    };
     if ordine.len() > limits.max_rows
         || index_indices.len().saturating_add(sorted_pivots.len()) > limits.max_columns
     {
@@ -857,7 +964,13 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
             .cloned()
             .unwrap_or_else(|| (*pivot_value).to_owned());
         validate_output_name(&output)?;
-        let celle_pivot = &pivots[*pivot_id].celle;
+        if index_names.contains(&output.as_str()) {
+            return Err(PlenoraError::InvalidPlan(
+                "pivot: colonna pivot con il nome di una colonna indice".into(),
+            ));
+        }
+        let celle_pivot: &[(usize, usize)] =
+            pivot_id.map_or(&[], |pivot_id| pivots[pivot_id].celle.as_slice());
         for (key_id, cella) in celle_pivot {
             per_chiave[posizione[*key_id]] = Some(*cella);
         }
@@ -880,8 +993,13 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         fields.push(Field::new(&output, data_type, true));
         columns.push(values);
     }
+    // R2.4: i metadati dello schema d'ingresso si conservano, come in `melt`
+    // e `aggregate`.
     Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            batch.schema().metadata().clone(),
+        )),
         columns,
     )?)
 }
@@ -2066,8 +2184,10 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         let pivot_index = column_index(batch, &config.column)?;
         let value_index = column_index(batch, &config.value_col)?;
+        config.verifica_mapping(batch.column(pivot_index).data_type(), limits.max_columns)?;
         let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        let mut pivot_values = BTreeSet::new();
+        // Con il mapping, le sue chiavi tutte, presenti o no nei dati.
+        let mut pivot_values: BTreeSet<String> = config.mapping.keys().cloned().collect();
         for row in 0..batch.num_rows() {
             let key = composite_key(batch, &index_indices, row)?;
             let Some(pivot) = scalar_as_string(batch.column(pivot_index).as_ref(), row)? else {
@@ -2110,6 +2230,11 @@ mod tests {
                 .cloned()
                 .unwrap_or_else(|| pivot_value.clone());
             validate_output_name(&output)?;
+            if index_names.contains(&output.as_str()) {
+                return Err(PlenoraError::InvalidPlan(
+                    "pivot: colonna pivot con il nome di una colonna indice".into(),
+                ));
+            }
             let grouped_rows = index_rows
                 .keys()
                 .map(|key| groups.get(&format!("{key}{}:{pivot_value}", pivot_value.len())))
@@ -2120,7 +2245,10 @@ mod tests {
             columns.push(values);
         }
         Ok(RecordBatch::try_new(
-            Arc::new(Schema::new(fields)),
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                batch.schema().metadata().clone(),
+            )),
             columns,
         )?)
     }
@@ -2513,6 +2641,205 @@ mod tests {
         );
         let reference = pivot_reference(&batch, &config, &Limits::default()).expect("pivot ref");
         assert_batches_identical(&fast, &reference);
+    }
+
+    /// Con il mapping lo schema e' il mapping: un valore mappato che i dati
+    /// non contengono da' una colonna tutta null del tipo dell'aggregazione,
+    /// al suo posto nell'ordine delle chiavi; le chiavi indice restano
+    /// tutte, anche quelle con soli valori fuori dal mapping.
+    #[test]
+    fn pivot_mapping_valore_assente_colonna_nulla_oracle() {
+        let batch = pivot_fixture_utf8();
+        let mapping: BTreeMap<String, String> = [("z", "col_z"), ("x", "col_x"), ("w", "col_w")]
+            .iter()
+            .map(|(chiave, nome)| ((*chiave).to_owned(), (*nome).to_owned()))
+            .collect();
+        for (function, tipo) in [
+            (PivotAgg::First, DataType::Float64),
+            (PivotAgg::Last, DataType::Float64),
+            (PivotAgg::Min, DataType::Float64),
+            (PivotAgg::Max, DataType::Float64),
+            (PivotAgg::Sum, DataType::Float64),
+            (PivotAgg::Mean, DataType::Float64),
+            (PivotAgg::Count, DataType::Int64),
+            (PivotAgg::Concat, DataType::Utf8),
+        ] {
+            let config = Pivot {
+                mapping: mapping.clone(),
+                ..pivot_config("k", "p", "v", function)
+            };
+            let fast = pivot(&batch, &config, &Limits::default()).expect("pivot fast");
+            assert_eq!(schema_names(&fast), vec!["k", "col_w", "col_x", "col_z"]);
+            assert_eq!(fast.num_rows(), 3, "chiavi a, b e null");
+            for assente in ["col_w", "col_z"] {
+                let colonna = fast.column_by_name(assente).expect("colonna del mapping");
+                assert_eq!(colonna.data_type(), &tipo);
+                assert_eq!(colonna.null_count(), 3, "{assente} tutta null");
+            }
+            let reference =
+                pivot_reference(&batch, &config, &Limits::default()).expect("pivot ref");
+            assert_batches_identical(&fast, &reference);
+        }
+        // Solo "y" mappato: la chiave null ha solo "x" e un pivot null, e
+        // resta con la cella null.
+        let config = Pivot {
+            mapping: std::iter::once(("y".to_owned(), "col_y".to_owned())).collect(),
+            ..pivot_config("k", "p", "v", PivotAgg::Sum)
+        };
+        let fast = pivot(&batch, &config, &Limits::default()).expect("pivot fast");
+        assert_eq!(fast.num_rows(), 3);
+        assert_eq!(fast.column(1).null_count(), 1);
+        let reference = pivot_reference(&batch, &config, &Limits::default()).expect("pivot ref");
+        assert_batches_identical(&fast, &reference);
+    }
+
+    #[test]
+    fn pivot_mapping_rifiuta_nomi_ripetuti_e_troppe_colonne() {
+        let batch = pivot_fixture_utf8();
+        let con = |voci: &[(&str, &str)]| Pivot {
+            mapping: voci
+                .iter()
+                .map(|(chiave, nome)| ((*chiave).to_owned(), (*nome).to_owned()))
+                .collect(),
+            ..pivot_config("k", "p", "v", PivotAgg::Sum)
+        };
+        for config in [
+            con(&[("x", "stesso"), ("y", "stesso")]),
+            con(&[("x", "k")]),
+            // Anche per un valore che i dati non contengono.
+            con(&[("assente", "")]),
+        ] {
+            let errore = pivot(&batch, &config, &Limits::default()).expect_err("rifiuto");
+            assert!(matches!(errore, PlenoraError::InvalidPlan(_)), "{errore}");
+            assert_eq!(
+                format!("{errore:?}"),
+                format!(
+                    "{:?}",
+                    pivot_reference(&batch, &config, &Limits::default()).expect_err("rifiuto")
+                )
+            );
+        }
+        let limits = Limits {
+            max_columns: 2,
+            ..Limits::default()
+        };
+        let errore =
+            pivot(&batch, &con(&[("x", "a"), ("assente", "b")]), &limits).expect_err("rifiuto");
+        assert!(matches!(errore, PlenoraError::ResourceLimit(_)), "{errore}");
+    }
+
+    /// I metadati di schema dell'ingresso arrivano all'uscita (R2.4).
+    #[test]
+    fn pivot_conserva_i_metadati_di_schema() {
+        let batch = pivot_fixture_utf8();
+        let metadati: HashMap<String, String> =
+            std::iter::once(("chiave".to_owned(), "valore".to_owned())).collect();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                batch.schema().fields().clone(),
+                metadati.clone(),
+            )),
+            batch.columns().to_vec(),
+        )
+        .expect("batch con metadati");
+        let config = pivot_config("k", "p", "v", PivotAgg::Sum);
+        let fast = pivot(&batch, &config, &Limits::default()).expect("pivot fast");
+        assert_eq!(fast.schema().metadata(), &metadati);
+        let reference = pivot_reference(&batch, &config, &Limits::default()).expect("pivot ref");
+        assert_batches_identical(&fast, &reference);
+    }
+
+    /// Una chiave del mapping che nessun valore puo' incontrare darebbe una
+    /// colonna tutta null senza errore: si rifiuta. E nessuno schema esce
+    /// con due colonne omonime (indice ripetuto, o valore pivot che si
+    /// chiama come una colonna indice).
+    #[test]
+    fn pivot_rifiuta_chiavi_incerte_e_colonne_omonime() {
+        let batch = batch_of(
+            vec![
+                Field::new("k", DataType::Utf8, true),
+                Field::new("i", DataType::Int64, true),
+                Field::new("f", DataType::Float64, true),
+                Field::new("v", DataType::Float64, true),
+            ],
+            vec![
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+                Arc::new(Int64Array::from(vec![Some(1), Some(-2)])),
+                Arc::new(Float64Array::from(vec![Some(1.0), Some(2.5)])),
+                Arc::new(Float64Array::from(vec![Some(3.0), Some(4.0)])),
+            ],
+        );
+        let con = |pivot_col: &str, voci: &[(&str, &str)]| Pivot {
+            mapping: voci
+                .iter()
+                .map(|(chiave, nome)| ((*chiave).to_owned(), (*nome).to_owned()))
+                .collect(),
+            ..pivot_config("k", pivot_col, "v", PivotAgg::Sum)
+        };
+        let rifiuto = |config: &Pivot, frammento: &str| {
+            let errore = pivot(&batch, config, &Limits::default()).expect_err(frammento);
+            assert!(
+                matches!(&errore, PlenoraError::InvalidPlan(messaggio) if messaggio.contains(frammento)),
+                "{errore}"
+            );
+            assert_eq!(
+                format!("{errore:?}"),
+                format!(
+                    "{:?}",
+                    pivot_reference(&batch, config, &Limits::default()).expect_err(frammento)
+                )
+            );
+        };
+        // Intero: "1" e "-2" sono canonici, "01", "+1" e "1.0" no.
+        let intero = pivot(
+            &batch,
+            &con("i", &[("1", "uno"), ("-2", "meno_due")]),
+            &Limits::default(),
+        )
+        .expect("chiavi canoniche");
+        assert_eq!(intero.column(1).null_count(), 1);
+        assert_eq!(intero.column(2).null_count(), 1);
+        for chiave in ["01", "+1", "1.0", " 1", ""] {
+            rifiuto(&con("i", &[(chiave, "x")]), "testo canonico");
+        }
+        // Float64: il testo di 1.0 e' "1", non prevedibile dalla chiave.
+        rifiuto(&con("f", &[("1.0", "x")]), "non e' prevedibile");
+        // Indice ripetuto, con e senza mapping.
+        for config in [
+            Pivot {
+                index_col: "k,k".into(),
+                ..pivot_config("k", "k", "v", PivotAgg::Sum)
+            },
+            Pivot {
+                index_col: "k, k".into(),
+                ..con("k", &[("a", "x")])
+            },
+        ] {
+            rifiuto(&config, "colonna indice ripetuta");
+        }
+        // Senza mapping: il valore pivot "k" si chiamerebbe come l'indice.
+        let omonimo = batch_of(
+            vec![
+                Field::new("k", DataType::Utf8, true),
+                Field::new("p", DataType::Utf8, true),
+                Field::new("v", DataType::Float64, true),
+            ],
+            vec![
+                Arc::new(StringArray::from(vec![Some("a")])),
+                Arc::new(StringArray::from(vec![Some("k")])),
+                Arc::new(Float64Array::from(vec![Some(1.0)])),
+            ],
+        );
+        let config = pivot_config("k", "p", "v", PivotAgg::Sum);
+        let errore = pivot(&omonimo, &config, &Limits::default()).expect_err("omonimo");
+        assert!(matches!(errore, PlenoraError::InvalidPlan(_)), "{errore}");
+        assert_eq!(
+            format!("{errore:?}"),
+            format!(
+                "{:?}",
+                pivot_reference(&omonimo, &config, &Limits::default()).expect_err("omonimo")
+            )
+        );
     }
 
     #[test]

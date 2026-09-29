@@ -15,8 +15,9 @@
 //! riordinano l'intero stream, si propaga dalle op che preservano l'ordine e
 //! si elimina altrove; `row_count` si propaga solo quando e' esatto.
 //!
-//! Le op con schema dipendente dai dati (`table.pivot`, `table.transpose`,
-//! `table.flatten_json` senza `output_columns`) falliscono con `Unsupported`.
+//! Le op con schema dipendente dai dati (`table.pivot` senza `mapping`,
+//! `table.transpose`, `table.flatten_json` senza `output_columns`)
+//! falliscono con `Unsupported`.
 //!
 //! Metadati Arrow: quelli di schema attraversano l'output, uniti con la
 //! regola di `crate::unisci_metadata_schema` (stessa chiave con valori
@@ -191,7 +192,7 @@ pub fn analyze_table_contract(
         "table.join" => analyze_join(id, inputs, config, fields, limits),
         "table.lookup" => analyze_lookup(id, inputs, config, fields, limits),
         "table.melt" => analyze_melt(id, inputs, config, fields, limits),
-        "table.pivot" => analyze_pivot(id, inputs, config, fields),
+        "table.pivot" => analyze_pivot(id, inputs, config, fields, limits),
         "table.rename" => analyze_rename(id, inputs, config, fields, limits),
         "table.reorder_columns" => analyze_reorder_columns(id, inputs, config, fields),
         "table.replace" => analyze_replace(id, inputs, config, fields, limits),
@@ -3163,6 +3164,146 @@ mod tests {
             ),
             "config non valida",
         );
+    }
+
+    #[test]
+    fn pivot_con_mapping_ha_lo_schema_del_mapping() {
+        let mapping = json!({"b": "col_b", "a": "col_a"});
+        let contratto = |aggr_func: &str| {
+            ok(
+                "table.pivot",
+                &[tabular_contract()],
+                json!({"index_col": "id", "pivot_col": "name", "value_col": "value",
+                       "aggr_func": aggr_func, "mapping": mapping}),
+            )
+        };
+        // Indice, poi le voci nell'ordine delle chiavi (a, b), non dei nomi.
+        let somma = contratto("sum");
+        let nomi: Vec<&str> = somma
+            .schema
+            .fields()
+            .iter()
+            .map(|campo| campo.name().as_str())
+            .collect();
+        assert_eq!(nomi, ["id", "col_a", "col_b"]);
+        assert_field(&somma, "id", &DataType::Int64, false);
+        for (aggr_func, tipo) in [
+            ("sum", DataType::Float64),
+            ("mean", DataType::Float64),
+            ("min", DataType::Float64),
+            ("max", DataType::Float64),
+            ("count", DataType::Int64),
+            ("concat", DataType::Utf8),
+            ("first", DataType::Float64),
+            ("last", DataType::Float64),
+        ] {
+            assert_field(&contratto(aggr_func), "col_a", &tipo, true);
+        }
+        // `first`/`last` tengono il tipo del valore; senza aggr_func e' first.
+        let primo = ok(
+            "table.pivot",
+            &[tabular_contract()],
+            json!({"index_col": "id", "pivot_col": "name", "value_col": "d",
+                   "mapping": {"a": "col_a"}}),
+        );
+        assert_field(&primo, "col_a", &DataType::Date32, true);
+    }
+
+    #[test]
+    fn pivot_con_mapping_rifiuta_cio_che_il_kernel_rifiuterebbe() {
+        let pivot = |config: Value| err("table.pivot", &[tabular_contract()], config);
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "id", "pivot_col": "name", "value_col": "value",
+                          "mapping": {"a": "x", "b": "x"}}),
+            ),
+            "nome di output ripetuto",
+        );
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "id", "pivot_col": "name", "value_col": "value",
+                          "mapping": {"a": "id"}}),
+            ),
+            "uguale a una colonna indice",
+        );
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "id", "pivot_col": "name", "value_col": "value",
+                          "mapping": {"a": " "}}),
+            ),
+            "vuoto",
+        );
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "id,id", "pivot_col": "name", "value_col": "value",
+                          "mapping": {"a": "x"}}),
+            ),
+            "colonna ripetuta",
+        );
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": " , ", "pivot_col": "name", "value_col": "value",
+                          "mapping": {"a": "x"}}),
+            ),
+            "index_col vuoto",
+        );
+        // Tipi: somma su un booleano, chiave e pivot non testuali.
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "id", "pivot_col": "name", "value_col": "flag",
+                          "aggr_func": "sum", "mapping": {"a": "x"}}),
+            ),
+            "non convertibile in numero",
+        );
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "lst", "pivot_col": "name", "value_col": "value",
+                          "mapping": {"a": "x"}}),
+            ),
+            "non leggibile come scalare testuale",
+        );
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "id", "pivot_col": "st", "value_col": "value",
+                          "mapping": {"a": "x"}}),
+            ),
+            "non leggibile come scalare testuale",
+        );
+        // Chiavi che nessun valore della pivot_col puo' incontrare.
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "name", "pivot_col": "id", "value_col": "value",
+                       "mapping": {"01": "x"}}),
+            ),
+            "testo canonico",
+        );
+        assert_invalid_plan(
+            &pivot(
+                json!({"index_col": "name", "pivot_col": "value", "value_col": "id",
+                       "mapping": {"1": "x"}}),
+            ),
+            "non e' prevedibile",
+        );
+        ok(
+            "table.pivot",
+            &[tabular_contract()],
+            json!({"index_col": "name", "pivot_col": "id", "value_col": "value",
+                   "mapping": {"-1": "x", "10": "y"}}),
+        );
+        // Colonne oltre il limite: lo stesso conto del kernel.
+        let limite = analyze_table_contract(
+            "table.pivot",
+            &[tabular_contract()],
+            &json!({"index_col": "id", "pivot_col": "name", "value_col": "value",
+                    "mapping": {"a": "x", "b": "y"}}),
+            &mut FieldAllocator::default(),
+            &crate::Limits {
+                max_columns: 2,
+                ..crate::Limits::default()
+            },
+        )
+        .expect_err("tre colonne oltre max_columns = 2");
+        assert!(matches!(limite, PlenoraError::ResourceLimit(_)), "{limite}");
     }
 
     #[test]

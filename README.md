@@ -984,8 +984,25 @@ canonico delle geometrie (`arrow_schema_from_contract`): il passo
 seguente si analizza sullo schema delle tabelle che riceverà, e le
 tabelle d'ingresso ricevono quello schema in `run` (stesse colonne, solo
 metadati in più; per una tabella senza geometrie nulla cambia).
-`table.pivot` e `table.transpose` si rifiutano: il loro schema d'uscita
-dipende dai dati.
+`table.transpose` e `table.pivot` senza `mapping` si rifiutano: il loro
+schema d'uscita dipende dai dati. Con `mapping` (valore pivot come testo →
+nome di colonna) lo schema lo fissa la config, e il kernel lo rispetta per
+contratto: le colonne indice, poi una colonna per voce del mapping,
+nell'ordine delle chiavi, anche per un valore che i dati non contengono
+(colonna tutta null); i valori fuori dal mapping non danno colonne, ma le
+loro righe contano per le chiavi indice, che restano tutte (con celle
+null). Il tipo della colonna viene dall'aggregazione: `Float64` per
+`sum`/`mean`/`min`/`max`, `Int64` per `count`, `Utf8` per `concat`, il
+tipo del valore per `first` (il default) e `last`. Si rifiutano, in
+analisi e nel kernel (`Pivot::verifica_mapping`): nomi di output vuoti,
+ripetuti o uguali a una colonna indice; colonne indice ripetute; chiavi che
+nessun valore potrebbe incontrare, perche' il valore si confronta con la
+chiave come testo: con una `pivot_col` `Int64` o `UInt64` la chiave deve
+essere la forma canonica dell'intero (`"1"`, non `"01"` ne' `"1.0"`), e un
+mapping su una `pivot_col` che non sia testo o intero (float, date,
+timestamp, decimali, booleani) si rifiuta, invece di dare in silenzio una
+colonna tutta null. Senza `mapping`, un valore pivot che si chiama come una
+colonna indice e' un errore del kernel.
 
 **Ogni regola sulla config sta in un posto solo: l'analisi dei kernel.**
 `analyze_table_contract(op, inputs, config, fields, limits)` riceve i limiti
