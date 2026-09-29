@@ -3651,129 +3651,25 @@ fn count_di_pivot_e_aggregate_non_conta_i_valori_nulli_di_una_dictionary_int8() 
     assert_eq!(totale, 2);
 }
 
-/// Run-end con fini di tipo `R` su valori con null: righe `[a, a, null,
-/// null, null, c]` con una run di valore nullo e una di dictionary nulla.
-fn run_end<R>() -> ArrayRef
-where
-    R: plenora_core::arrow::array::types::RunEndIndexType,
-    R::Native: TryFrom<i64>,
-{
-    use plenora_core::arrow::array::{PrimitiveArray, RunArray, StringArray};
-    let fine: PrimitiveArray<R> = [2_i64, 3, 5, 6]
-        .into_iter()
-        .map(|valore| R::Native::try_from(valore).ok())
-        .collect();
-    let valori = StringArray::from(vec![Some("a"), None, None, Some("c")]);
-    Arc::new(RunArray::<R>::try_new(&fine, &valori).expect("run-end"))
-}
-
+/// Le fette di una dictionary: stesso null logico di Arrow in ogni fetta.
 #[test]
-fn il_null_logico_e_quello_di_arrow_per_run_end_e_union_anche_affettate() {
-    use plenora_core::arrow::array::types::{Int16Type, Int32Type, Int64Type, Int8Type};
-    use plenora_core::arrow::array::{Array, Int32Array, Int8Array, RunArray, UnionArray};
-    use plenora_core::arrow::schema::UnionFields;
-    let mut casi: Vec<ArrayRef> = vec![
-        run_end::<Int16Type>(),
-        run_end::<Int32Type>(),
-        run_end::<Int64Type>(),
-    ];
-    // Run-end su valori dictionary con una entry nulla.
-    casi.push(Arc::new(
-        RunArray::<Int32Type>::try_new(
-            &Int32Array::from(vec![1, 3, 4, 6]),
-            dizionario::<Int8Type>().as_ref(),
+fn il_null_logico_e_quello_di_arrow_anche_nelle_fette() {
+    use plenora_core::arrow::array::types::{Int32Type, Int8Type};
+    use plenora_core::arrow::array::{Array, DictionaryArray, Int8Array};
+    let annidata = Arc::new(
+        DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![Some(0), Some(1), None, Some(2), Some(3)]),
+            dizionario::<Int32Type>(),
         )
-        .expect("run-end su dictionary"),
-    ));
-    // Union sparse e dense: figli con null e un figlio dictionary.
-    let campi: UnionFields = [
-        (0_i8, Arc::new(Field::new("i", DataType::Int64, true))),
-        (
-            1_i8,
-            Arc::new(Field::new(
-                "d",
-                dizionario::<Int8Type>().data_type().clone(),
-                true,
-            )),
-        ),
-    ]
-    .into_iter()
-    .collect();
-    let tipi = Int8Array::from(vec![0, 1, 1, 0, 1, 0]).values().clone();
-    let sparse = UnionArray::try_new(
-        campi.clone(),
-        tipi.clone(),
-        None,
-        vec![
-            Arc::new(Int64Array::from(vec![
-                Some(1),
-                None,
-                None,
-                None,
-                None,
-                Some(6),
-            ])),
-            Arc::new(
-                plenora_core::arrow::array::DictionaryArray::<Int8Type>::try_new(
-                    Int8Array::from(vec![Some(0), Some(1), None, Some(2), Some(1), Some(0)]),
-                    Arc::new(plenora_core::arrow::array::StringArray::from(vec![
-                        Some("a"),
-                        None,
-                        Some("c"),
-                    ])),
-                )
-                .expect("dictionary"),
-            ),
-        ],
-    )
-    .expect("union sparse");
-    casi.push(Arc::new(sparse));
-    let densa = UnionArray::try_new(
-        campi,
-        tipi,
-        Some(Int32Array::from(vec![0, 0, 1, 1, 2, 2]).values().clone()),
-        vec![
-            Arc::new(Int64Array::from(vec![Some(1), None, Some(6)])),
-            dizionario::<Int8Type>(),
-        ],
-    )
-    .expect("union densa");
-    casi.push(Arc::new(densa));
-    casi.push(dizionario::<Int8Type>());
-    for caso in casi {
-        come_arrow(&caso);
+        .expect("dictionary"),
+    ) as ArrayRef;
+    for caso in [dizionario::<Int8Type>(), annidata] {
         for inizio in 0..caso.len() {
             for lunghezza in 0..=caso.len() - inizio {
                 come_arrow(&caso.slice(inizio, lunghezza));
             }
         }
     }
-}
-
-/// Un milione di run lunghe una riga: il null logico riga per riga resta
-/// lineare (ricerca binaria sulle fini), non quadratico come
-/// `slice(row, 1).logical_nulls()` che scorre le run fino all'offset.
-#[test]
-fn il_null_logico_su_run_end_e_lineare_nelle_righe() {
-    use plenora_core::arrow::array::types::Int32Type;
-    use plenora_core::arrow::array::{Array, Int32Array, RunArray};
-    const RIGHE: i32 = 1_000_000;
-    let fine = Int32Array::from((1..=RIGHE).collect::<Vec<_>>());
-    let valori = Int64Array::from(
-        (0..RIGHE)
-            .map(|riga| (riga % 3 != 0).then_some(i64::from(riga)))
-            .collect::<Vec<_>>(),
-    );
-    let run = RunArray::<Int32Type>::try_new(&fine, &valori).expect("run-end");
-    let inizio = std::time::Instant::now();
-    let nulle = (0..run.len())
-        .filter(|riga| plenora_kernels_table::is_logically_null(&run, *riga))
-        .count();
-    let trascorso = inizio.elapsed();
-    assert_eq!(nulle, 333_334);
-    // Il percorso quadratico costerebbe circa 5 * 10^11 passi: ore, non
-    // secondi. Il limite largo regge anche una build di debug lenta.
-    assert!(trascorso.as_secs() < 60, "{trascorso:?}");
 }
 
 /// La scorciatoia di `coalesce` («nessun null nella prima colonna») guarda i
@@ -3823,51 +3719,4 @@ fn coalesce_vede_i_null_logici_della_prima_colonna() {
     };
     // Riga 1: la prima colonna e' logicamente nulla, vince la seconda.
     assert_eq!([testo(0), testo(1), testo(2)], ["a", "b", "a"]);
-}
-
-/// Come sopra con una run-end: nessun null fisico, una run di valore nullo.
-/// Prima la scorciatoia rendeva la prima colonna, con la cella nulla.
-#[test]
-fn coalesce_vede_i_null_logici_di_una_run_end() {
-    use plenora_core::arrow::array::types::Int32Type;
-    use plenora_core::arrow::array::{Array, Int32Array, RunArray};
-    use plenora_kernels_table::quality::{coalesce, Coalesce};
-    let run = |valori: Vec<Option<i64>>| {
-        Arc::new(
-            RunArray::<Int32Type>::try_new(
-                &Int32Array::from(vec![1, 2, 3]),
-                &Int64Array::from(valori),
-            )
-            .expect("run-end"),
-        ) as ArrayRef
-    };
-    let prima = run(vec![Some(1), None, Some(3)]);
-    assert_eq!(prima.null_count(), 0, "premessa: nessun null fisico");
-    let tipo = prima.data_type().clone();
-    let tabella = batch(
-        vec![
-            Field::new("x", tipo.clone(), true),
-            Field::new("y", tipo, true),
-        ],
-        vec![prima, run(vec![Some(7), Some(8), Some(9)])],
-    );
-    let esito = coalesce(
-        &tabella,
-        &Coalesce {
-            columns: vec!["x".into(), "y".into()],
-            output_column: "z".into(),
-        },
-    );
-    match esito {
-        Ok(uscita) => {
-            let z = uscita.column(2);
-            assert!(
-                !plenora_kernels_table::is_logically_null(z.as_ref(), 1),
-                "la cella nulla della prima colonna non e' il risultato"
-            );
-        }
-        // Il percorso generico (concat + take) puo' non sapere trattare le
-        // run-end: allora l'errore e' esplicito, mai una cella nulla.
-        Err(errore) => assert!(!matches!(errore, PlenoraError::Internal(_)), "{errore}"),
-    }
 }

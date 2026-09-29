@@ -11,9 +11,12 @@
 //! `Pipeline::from_json`), e l'oggetto ha solo `piani`.
 //!
 //! Ogni output dell'ultimo piano si scrive in `cartella_uscite/<nome>.parquet`:
-//! nomi di soli `[A-Za-z0-9_-]`, distinti anche senza distinzione di
-//! maiuscole (file system di Windows), nessun percorso uguale a un ingresso.
-//! Tutto si verifica prima di leggere.
+//! nomi di soli `[A-Za-z0-9_-]`, non riservati da Windows, distinti anche
+//! senza distinzione di maiuscole. Ogni ingresso e la cartella d'uscita
+//! devono esistere e canonicalizzarsi, e la cartella d'uscita non puo'
+//! essere la cartella di un ingresso (percorsi canonici, confronto esatto):
+//! nessun output puo' coincidere con un ingresso. Tutto si verifica prima di
+//! leggere.
 //!
 //! Come `esegui_da_file` (ogni input letto con il budget residuo, byte vivi
 //! esatti dopo ogni lettura), con in piu' i tempi di lettura, catena e
@@ -78,52 +81,37 @@ const RISERVATI_WINDOWS: [&str; 22] = [
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-/// Il percorso canonico per il confronto: di un file esistente, oppure della
-/// sua cartella (che deve esistere) con il nome del file. Su Windows il
-/// confronto e' senza distinzione di maiuscole, come il file system.
-///
-/// # Errors
-///
-/// `Io` se la canonicalizzazione fallisce (cartella assente, accesso
-/// negato): mai un confronto ricaduto sul testo del percorso.
-fn chiave_percorso(percorso: &Path) -> Result<String> {
-    let canonico = if percorso.exists() {
-        std::fs::canonicalize(percorso)?
-    } else {
-        let nome = percorso
-            .file_name()
-            .ok_or_else(|| PlenoraError::InvalidPlan("percorso senza nome di file".into()))?;
-        let cartella = match percorso.parent() {
-            Some(cartella) if !cartella.as_os_str().is_empty() => cartella,
-            _ => Path::new("."),
-        };
-        std::fs::canonicalize(cartella)?.join(nome)
-    };
-    let testo = canonico.to_string_lossy().into_owned();
-    Ok(if cfg!(windows) {
-        testo.to_lowercase()
-    } else {
-        testo
-    })
-}
-
 /// Un file per output nella cartella, verificati prima di leggere.
 ///
+/// Non si modella l'identita' dei percorsi del sistema: ogni ingresso e la
+/// cartella d'uscita devono canonicalizzarsi (il nome reale su disco, quindi
+/// due grafie della stessa cartella danno lo stesso percorso), e la cartella
+/// d'uscita deve essere diversa dalla cartella canonica di ogni ingresso. I
+/// nomi dei file d'uscita li genera l'esempio da nomi ASCII verificati, e le
+/// collisioni fra output si decidono su quei nomi, senza maiuscole.
+///
 /// # Errors
 ///
-/// `InvalidPlan` per un nome vuoto, con caratteri fuori da `[A-Za-z0-9_-]` o
-/// riservato da Windows, due nomi uguali senza distinzione di maiuscole, un
-/// percorso d'uscita uguale a un ingresso; `Io` se un percorso non si
-/// canonicalizza.
+/// - `Io` se un ingresso o la cartella d'uscita non si canonicalizzano
+///   (assenti, accesso negato);
+/// - `InvalidPlan` per un nome vuoto, con caratteri fuori da
+///   `[A-Za-z0-9_-]` o riservato da Windows, due nomi uguali senza
+///   distinzione di maiuscole, una cartella d'uscita che contiene un
+///   ingresso.
 fn percorsi_uscita(
     cartella: &Path,
     nomi: &[String],
     ingressi: &[&Path],
 ) -> Result<Vec<(String, PathBuf)>> {
-    let chiavi_ingresso = ingressi
-        .iter()
-        .map(|ingresso| chiave_percorso(ingresso))
-        .collect::<Result<Vec<_>>>()?;
+    let cartella_canonica = std::fs::canonicalize(cartella)?;
+    for ingresso in ingressi {
+        let canonico = std::fs::canonicalize(ingresso)?;
+        if canonico.parent() == Some(cartella_canonica.as_path()) {
+            return Err(PlenoraError::InvalidPlan(
+                "la cartella d'uscita contiene un ingresso".into(),
+            ));
+        }
+    }
     let mut visti = std::collections::HashSet::new();
     let mut uscite = Vec::with_capacity(nomi.len());
     for nome in nomi {
@@ -145,13 +133,7 @@ fn percorsi_uscita(
                 "due output con lo stesso file (maiuscole a parte)".into(),
             ));
         }
-        let percorso = cartella.join(format!("{nome}.parquet"));
-        if chiavi_ingresso.contains(&chiave_percorso(&percorso)?) {
-            return Err(PlenoraError::InvalidPlan(
-                "un percorso d'uscita coincide con un ingresso".into(),
-            ));
-        }
-        uscite.push((nome.clone(), percorso));
+        uscite.push((nome.clone(), cartella.join(format!("{nome}.parquet"))));
     }
     Ok(uscite)
 }
@@ -448,30 +430,33 @@ mod tests {
                 Err(PlenoraError::InvalidPlan(_))
             ));
         }
-        // Un ingresso esistente con lo stesso file dell'output: anche con
-        // maiuscole diverse su Windows, e per un percorso scritto in un
-        // altro modo.
-        let ingresso = cartella.join("A.parquet");
+        // Un ingresso nella cartella d'uscita, anche scritta in un altro
+        // modo: rifiuto.
+        let ingresso = cartella.join("dati.parquet");
         std::fs::write(&ingresso, b"x").expect("ingresso");
-        let altro_modo = cartella.join(".").join("A.parquet");
-        for nomi in [
-            ["A".to_owned()],
-            [if cfg!(windows) { "a" } else { "A" }.to_owned()],
-        ] {
-            for percorso in [ingresso.as_path(), altro_modo.as_path()] {
-                assert!(matches!(
-                    percorsi_uscita(cartella, &nomi, &[percorso]),
-                    Err(PlenoraError::InvalidPlan(_))
-                ));
-            }
+        for uscita in [cartella.to_path_buf(), cartella.join(".")] {
+            assert!(matches!(
+                percorsi_uscita(&uscita, &["a".to_owned()], &[ingresso.as_path()]),
+                Err(PlenoraError::InvalidPlan(_))
+            ));
         }
-        // Una canonicalizzazione che fallisce e' un errore, non un confronto
-        // sul testo: cartella d'uscita e ingresso inesistenti.
+        #[cfg(windows)]
+        {
+            let maiuscola = std::path::PathBuf::from(cartella.to_string_lossy().to_uppercase());
+            assert!(matches!(
+                percorsi_uscita(&maiuscola, &["a".to_owned()], &[ingresso.as_path()]),
+                Err(PlenoraError::InvalidPlan(_))
+            ));
+        }
+        // Ingresso in un'altra cartella: ammesso.
+        let altra = cartella.join("uscite");
+        std::fs::create_dir(&altra).expect("cartella d'uscita");
+        assert!(percorsi_uscita(&altra, &["a".to_owned()], &[ingresso.as_path()]).is_ok());
+        // Cartella d'uscita o ingresso assenti: errore, non un confronto sul
+        // testo.
         let assente = cartella.join("assente");
         assert!(percorsi_uscita(&assente, &["a".to_owned()], &[]).is_err());
-        let ingresso_assente = assente.join("x.parquet");
-        assert!(
-            percorsi_uscita(cartella, &["a".to_owned()], &[ingresso_assente.as_path()]).is_err()
-        );
+        let ingresso_assente = cartella.join("manca.parquet");
+        assert!(percorsi_uscita(&altra, &["a".to_owned()], &[ingresso_assente.as_path()]).is_err());
     }
 }

@@ -51,6 +51,47 @@ fn errore_di_contratto(messaggio: impl Into<String>) -> PlenoraError {
     PlenoraError::InvalidPlan(messaggio.into())
 }
 
+/// Rifiuta gli schemi con tipi che i kernel non trattano: `RunEndEncoded`
+/// e `Union`, a qualunque profondita' (valori di dictionary, figli di
+/// liste, struct e mappe).
+///
+/// Arrow 59.2.0 li gestisce male in punti su cui i kernel poggiano (`take`
+/// su run-end ignora gli indici nulli, `concat` di run-end trabocca sulle
+/// fini `Int16`, `logical_nulls` sbaglia sulle union dense a un campo con
+/// id diverso da 0): un caso che non si garantisce si rifiuta al confine,
+/// una volta, e nessun kernel li vede. README, «Limiti dichiarati del
+/// runner».
+///
+/// # Errors
+///
+/// [`PlenoraError::Unsupported`] con il nome della colonna di primo livello.
+pub fn verifica_tipi_supportati(schema: &Schema) -> Result<(), PlenoraError> {
+    fn ammesso(tipo: &DataType) -> bool {
+        match tipo {
+            DataType::RunEndEncoded(_, _) | DataType::Union(_, _) => false,
+            DataType::Dictionary(chiave, valore) => ammesso(chiave) && ammesso(valore),
+            DataType::List(figlio)
+            | DataType::LargeList(figlio)
+            | DataType::ListView(figlio)
+            | DataType::LargeListView(figlio)
+            | DataType::FixedSizeList(figlio, _)
+            | DataType::Map(figlio, _) => ammesso(figlio.data_type()),
+            DataType::Struct(figli) => figli.iter().all(|figlio| ammesso(figlio.data_type())),
+            _ => true,
+        }
+    }
+    for campo in schema.fields() {
+        if !ammesso(campo.data_type()) {
+            return Err(PlenoraError::Unsupported(format!(
+                "colonna `{}`: i tipi RunEndEncoded e Union (anche annidati) non sono \
+                 supportati dai kernel",
+                campo.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Definizione CRS dal metadato `geo` di una colonna `GeoArrow`: stringa
 /// `authority:code` oppure PROJJSON come oggetto (serializzato compatto).
 ///
@@ -105,6 +146,7 @@ pub fn contract_from_arrow_schema(
     schema: SchemaRef,
     resolve_crs: CrsResolver,
 ) -> Result<DataContract, PlenoraError> {
+    verifica_tipi_supportati(&schema)?;
     // La versione del contratto vive nei metadati dello schema: una versione
     // successiva a quella supportata si rifiuta prima di leggere i campi.
     read_contract_version(&schema)?;

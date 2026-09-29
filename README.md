@@ -1377,6 +1377,23 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   (`table.filter`, `table.sort`) non punta alla riga del file d'origine.
   *Rientro*: la raccolta completa per riga del passo geo di `190c493`
   (`collect_cell_failures`), con il controllo di provenance.
+- **Run-end e union rifiutati al confine.**
+  *Regola*: uno schema con una colonna `RunEndEncoded` o `Union`, a
+  qualunque profondità (valori di una dictionary, figli di liste, struct e
+  mappe), si rifiuta con `Unsupported` prima di ogni passo
+  (`plenora_core::contract::arrow_schema::verifica_tipi_supportati`, in
+  `contract_from_arrow_schema`), alla lettura Arrow IPC prima di
+  decodificare i blocchi (Parquet non li produce) e in scrittura prima di
+  creare il file. Nessun kernel li vede.
+  *Ambito*: input del runner, `plenora-io`.
+  *Hazard*: in Arrow 59.2.0 `take` su run-end ignora gli indici nulli,
+  `concat` di run-end trabocca sulle fini `Int16` (panico) e
+  `logical_nulls` sbaglia sulle union dense a un campo con id diverso da 0:
+  una cella nulla diventerebbe un valore senza errore. Chi chiama i kernel
+  direttamente, fuori dal runner, non ha il controllo.
+  *Rientro*: quando Arrow corregge `take`/`concat` sulle run-end e
+  `logical_nulls` delle union a un campo, verificato con un oracolo contro
+  `logical_nulls` e contro la stessa tabella senza codifica.
 
 - **Errori che dipendono dai valori delle celle, in esecuzione.**
   *Regola*: la validazione rifiuta ciò che config, schema e limiti rendono
@@ -1587,9 +1604,11 @@ allocatore che conta, fuori dal workspace (niente `unsafe` qui).
   controllo esatto, che allora fallisce con `ResourceLimit` dopo il picco.
   Come il budget del runner, non è un tetto duro sulla memoria del processo.
   *Rientro*: un allocatore contato per il processo.
-- **Tipi Parquet rifiutati in scrittura**: `Interval(MonthDayNano)` e
-  `RunEndEncoded` (errore di `parquet`, nessun file); un test ne tiene
-  l'elenco. Una tabella senza colonne non si scrive in Parquet (il numero di
+- **Tipi rifiutati in scrittura**: in Parquet `Interval(MonthDayNano)`
+  (errore di `parquet`, nessun file); in ogni formato `RunEndEncoded` e
+  `Union`, a qualunque profondità, prima di creare il file (limite «Run-end
+  e union rifiutati al confine» del runner, anche in lettura). Un test ne
+  tiene l'elenco. Una tabella senza colonne non si scrive in Parquet (il numero di
   righe andrebbe perso): si usa Arrow IPC.
 - **Codec Parquet**: solo `UNCOMPRESSED`, `SNAPPY`, `ZSTD` sono compilati;
   `GZIP`, `BROTLI`, `LZ4`, `LZ4_RAW`, `LZO` si rifiutano prima di decodificare

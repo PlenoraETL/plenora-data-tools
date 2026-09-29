@@ -503,9 +503,10 @@ pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
     let first = batch.column(indices[0]);
     // La scorciatoia «nessun null, restituisco la prima colonna» guarda i
     // null LOGICI: `null_count()` conta solo la bitmap di primo livello, e
-    // non vede i valori nulli di dictionary, run-end e union (celle nulle
-    // rese come valori). Gli altri tipi senza ramo qui sotto ricadono sul
-    // percorso generico, che usa `is_logically_null`.
+    // non vede i valori nulli di una dictionary (celle nulle rese come
+    // valori). Run-end e union non arrivano qui: il runner li rifiuta al
+    // confine. Gli altri tipi senza ramo qui sotto ricadono sul percorso
+    // generico, che usa `is_logically_null`.
     if first.logical_null_count() == 0 {
         return Some(first.clone());
     }

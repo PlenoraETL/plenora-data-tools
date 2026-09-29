@@ -60,7 +60,7 @@ fn ipc_stream_identico() {
 
 #[test]
 fn ipc_piu_blocchi_ricomposti() {
-    // Una tabella oltre il blocco di scrittura si scrive in più blocchi.
+    // Una tabella oltre il blocco di scrittura si scrive in piÃ¹ blocchi.
     let righe = 3_000_000_usize;
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
     let valori: Vec<i64> = (0..i64::try_from(righe).unwrap()).collect();
@@ -339,9 +339,16 @@ fn tipi_rari_identici_o_rifiutati() {
             }
         }
     }
-    // L'elenco dei rifiutati e' dichiarato nel README («File»): un tipo che
+    // L'elenco dei rifiutati e' dichiarato nel README (Â«FileÂ»): un tipo che
     // entra o esce da qui e' una modifica da dichiarare.
-    assert_eq!(rifiutati, ["intervallo_mdn r.parquet", "run_end r.parquet"]);
+    assert_eq!(
+        rifiutati,
+        [
+            "intervallo_mdn r.parquet",
+            "run_end r.arrow",
+            "run_end r.parquet"
+        ]
+    );
 }
 
 /// `parquet` restringe i decimali alla precisione del tipo (`as i32`,
@@ -459,4 +466,31 @@ fn transitorio_con_righe_sbilanciate() {
         plenora_io::parquet_io::transitorio_scrittura(&tabella)
             >= plenora_io::parquet_io::FATTORE_SCRITTURA * byte
     );
+}
+
+/// Un file Arrow IPC con una colonna run-end si rifiuta alla lettura, prima
+/// di decodificare i blocchi: i kernel non trattano run-end e union.
+#[test]
+fn ipc_con_run_end_si_rifiuta() {
+    use plenora_core::arrow::array::types::Int32Type;
+    use plenora_core::arrow::array::{Array, Int32Array, RunArray, StringArray};
+    let run = RunArray::<Int32Type>::try_new(
+        &Int32Array::from(vec![2, 3]),
+        &StringArray::from(vec![Some("a"), None]),
+    )
+    .expect("run-end");
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "r",
+        run.data_type().clone(),
+        true,
+    )]));
+    let tabella = RecordBatch::try_new(schema.clone(), vec![Arc::new(run)]).expect("tabella");
+    let dir = cartella();
+    let percorso = dir.path().join("r.arrows");
+    let mut scrittore = StreamWriter::try_new(File::create(&percorso).unwrap(), &schema).unwrap();
+    scrittore.write(&tabella).unwrap();
+    scrittore.finish().unwrap();
+    drop(scrittore);
+    let errore = leggi_tabella(&percorso, None, u64::MAX).expect_err("run-end rifiutata");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
 }

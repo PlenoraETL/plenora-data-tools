@@ -18,6 +18,7 @@
 //! Nessuna compressione: i crate Arrow del workspace non la abilitano, e un
 //! file IPC compresso si rifiuta in lettura con l'errore di Arrow.
 
+use plenora_core::contract::arrow_schema::verifica_tipi_supportati;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -79,6 +80,7 @@ pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
             return Err(oltre_il_budget(lunghezza.saturating_mul(fattore), residuo));
         }
         let schema = lettore.schema();
+        verifica_tipi_supportati(&schema)?;
         let blocchi = lettore.collect::<std::result::Result<Vec<_>, _>>()?;
         (schema, blocchi)
     } else {
@@ -87,6 +89,7 @@ pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
         }
         let lettore = StreamReader::try_new(BufReader::new(file), None)?;
         let schema = lettore.schema();
+        verifica_tipi_supportati(&schema)?;
         let blocchi = lettore.collect::<std::result::Result<Vec<_>, _>>()?;
         if blocchi.len() > 1 {
             let letti = byte_vivi(blocchi.iter())?;

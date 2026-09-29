@@ -69,6 +69,9 @@ pub fn scrivi_tabella(
     percorso: &Path,
     opzioni: &OpzioniScrittura,
 ) -> Result<()> {
+    // Run-end e union non si scrivono: la rilettura li rifiuterebbe
+    // (README, «Run-end e union rifiutati al confine»).
+    plenora_core::contract::arrow_schema::verifica_tipi_supportati(&tabella.schema())?;
     match Formato::risolvi(opzioni.formato, percorso)? {
         Formato::ArrowIpc => atomico::scrivi_atomico(
             percorso,

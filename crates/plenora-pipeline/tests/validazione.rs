@@ -1062,3 +1062,63 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
         );
     }
 }
+
+/// Run-end e union, a qualunque profondita', si rifiutano al confine: i
+/// kernel non li vedono mai (README, «Limiti dichiarati del runner»).
+#[test]
+fn run_end_e_union_si_rifiutano_a_ogni_profondita() {
+    use std::sync::Arc;
+
+    use plenora_core::arrow::schema::{DataType, Field, Schema, UnionFields, UnionMode};
+
+    let run_end = DataType::RunEndEncoded(
+        Arc::new(Field::new("run_ends", DataType::Int32, false)),
+        Arc::new(Field::new("values", DataType::Utf8, true)),
+    );
+    let campi: UnionFields =
+        std::iter::once((0_i8, Arc::new(Field::new("i", DataType::Int64, true)))).collect();
+    let unione = |modo| DataType::Union(campi.clone(), modo);
+    let lista = |figlio: DataType| DataType::List(Arc::new(Field::new("item", figlio, true)));
+    let struttura =
+        |figlio: DataType| DataType::Struct(vec![Field::new("dentro", figlio, true)].into());
+    let dizionario =
+        |valori: DataType| DataType::Dictionary(Box::new(DataType::Int32), Box::new(valori));
+    for tipo in [
+        run_end.clone(),
+        unione(UnionMode::Sparse),
+        unione(UnionMode::Dense),
+        struttura(run_end.clone()),
+        lista(unione(UnionMode::Dense)),
+        lista(struttura(lista(run_end.clone()))),
+        dizionario(run_end),
+        dizionario(unione(UnionMode::Sparse)),
+    ] {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("x", tipo.clone(), true),
+        ]));
+        let pipeline = piano(
+            &["t"],
+            vec![passo("u", "table.limit", &["t"], json!({"n": 1}))],
+            &["u"],
+        );
+        let errore = pipeline
+            .validate(&[("t", schema.clone())])
+            .expect_err("tipo non supportato");
+        assert!(
+            matches!(&errore, PlenoraError::Unsupported(messaggio) if messaggio.contains("RunEndEncoded")),
+            "{tipo:?}: {errore}"
+        );
+        // Lo stesso rifiuto per chi legge un contratto dallo schema.
+        assert!(matches!(
+            contract_from_arrow_schema(schema, resolve_crs),
+            Err(PlenoraError::Unsupported(_))
+        ));
+    }
+    // Una dictionary di testo e una lista di struct restano ammesse.
+    let ammesso: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("d", dizionario(DataType::Utf8), true),
+        Field::new("l", lista(struttura(DataType::Int64)), true),
+    ]));
+    assert!(contract_from_arrow_schema(ammesso, resolve_crs).is_ok());
+}
