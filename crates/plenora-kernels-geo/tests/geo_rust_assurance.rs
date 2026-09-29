@@ -267,6 +267,27 @@ fn vertical_splitters(width: u32, height: u32, parts: u32) -> Geometry<f64> {
     Geometry::MultiLineString(MultiLineString::new(lines))
 }
 
+/// Precisione dichiarata della campagna: le coordinate sono astratte, e i
+/// kernel la vogliono esplicita. `2^-20` del lato minore del rettangolo
+/// d'ingombro: molto sotto ogni feature delle costruzioni, anche con le
+/// trasformazioni anisotrope, e sopra la griglia degli overlay (`2^-30` del
+/// lato maggiore) finche' l'anisotropia resta sotto `2^10`.
+fn precisione(geometry: &Geometry<f64>) -> f64 {
+    use geo::BoundingRect;
+    geometry.bounding_rect().map_or(1.0, |rect| {
+        let (minore, maggiore) = (
+            rect.width().min(rect.height()),
+            rect.width().max(rect.height()),
+        );
+        (minore * 2_f64.powi(-20))
+            .max(maggiore * 2_f64.powi(-29))
+            .max(f64::MIN_POSITIVE)
+    })
+}
+
+/// Precisione per i casi fissi dei limiti (estensione al piu' 20).
+const PRECISIONE: f64 = 1e-6;
+
 fn polygonize(geometry: &Geometry<f64>) -> AssuranceResult<PolygonizeResult> {
     polygonize_linework_rust(
         geometry,
@@ -331,8 +352,13 @@ fn assert_split_oracle(
     expected_area: f64,
     label: &str,
 ) -> AssuranceResult<()> {
-    let output = split_polygon_by_linework_rust(source, splitter, unlimited_split_limits())
-        .map_err(|error| AssuranceError(format!("{label}: split: {error}")))?;
+    let output = split_polygon_by_linework_rust(
+        source,
+        splitter,
+        unlimited_split_limits(),
+        precisione(source),
+    )
+    .map_err(|error| AssuranceError(format!("{label}: split: {error}")))?;
     require(
         output.len() == usize::try_from(expected_parts).unwrap_or(usize::MAX),
         format!("{label}: parti={}, attese={expected_parts}", output.len()),
@@ -350,9 +376,14 @@ fn assert_make_valid_oracle(
     expected_area: f64,
     label: &str,
 ) -> AssuranceResult<()> {
-    let output =
-        make_valid_geometry_rust_with_limits(geometry, method, true, unlimited_make_valid_limits())
-            .map_err(|error| AssuranceError(format!("{label}: make_valid: {error}")))?;
+    let output = make_valid_geometry_rust_with_limits(
+        geometry,
+        method,
+        true,
+        unlimited_make_valid_limits(),
+        precisione(geometry),
+    )
+    .map_err(|error| AssuranceError(format!("{label}: make_valid: {error}")))?;
     let area = geometry_area(&output)?;
     require(
         close(area, expected_area, 1e-10),
@@ -895,7 +926,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             ..unlimited_split_limits()
         },
     ] {
-        let limited = split_polygon_by_linework_rust(&source, &splitter, limits);
+        let limited = split_polygon_by_linework_rust(&source, &splitter, limits, PRECISIONE);
         require(
             matches!(
                 limited,
@@ -914,6 +945,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             max_input_coordinates: 25,
             ..SplitLimits::unlimited()
         },
+        PRECISIONE,
     );
     require(
         matches!(
@@ -931,6 +963,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             max_output_parts: 32,
             max_output_coordinates: 160,
         },
+        PRECISIONE,
     )
     .map_err(|error| AssuranceError(format!("split bounded: {error}")))?;
     require(
@@ -960,8 +993,13 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             ..unlimited_make_valid_limits()
         },
     ] {
-        let limited =
-            make_valid_geometry_rust_with_limits(&bow_tie, RepairMethod::Linework, true, limits);
+        let limited = make_valid_geometry_rust_with_limits(
+            &bow_tie,
+            RepairMethod::Linework,
+            true,
+            limits,
+            PRECISIONE,
+        );
         require(
             matches!(
                 limited,
@@ -981,6 +1019,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             max_input_coordinates: 5,
             ..MakeValidLimits::unlimited()
         },
+        PRECISIONE,
     );
     require(
         matches!(
@@ -999,6 +1038,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             max_output_geometries: 2,
             max_output_coordinates: 10,
         },
+        PRECISIONE,
     )
     .map_err(|error| AssuranceError(format!("make_valid bounded: {error}")))?;
     require(

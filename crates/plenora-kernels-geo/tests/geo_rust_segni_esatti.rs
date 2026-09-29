@@ -17,11 +17,18 @@ use plenora_kernels_geo::geometry_from_wkb;
 use plenora_kernels_geo::rust_backend::arrow::{
     polygonize_batches, split_batches, PolygonizeParams, CLASS_COLUMN,
 };
+use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::rust_backend::{
     make_valid_wkb, polygonize_linework, split_polygon_by_linework, RepairMethod,
 };
 
 const LIMIT: u64 = 1_000_000;
+
+/// Precisione dei test in unita' astratte (la griglia degli overlay resta
+/// sotto su ogni estensione usata qui).
+fn precisione() -> Precision {
+    Precision::new(1e-6).expect("precisione")
+}
 const CRS: &str = "EPSG:3857";
 
 /// Il quadrato `[x, x+lato] x [y, y+lato]` chiuso, antiorario o orario, a
@@ -124,7 +131,8 @@ fn split_e_make_valid_lontano_dall_origine() {
         (a + 1.0, a + 3.0),
     ]));
     let parti =
-        split_polygon_by_linework(&sorgente, &lama, LIMIT, LIMIT, LIMIT, LIMIT).expect("split");
+        split_polygon_by_linework(&sorgente, &lama, LIMIT, LIMIT, LIMIT, LIMIT, precisione())
+            .expect("split");
     assert_eq!(parti.len(), 2);
 
     let farfalla = Geometry::Polygon(Polygon::new(
@@ -140,7 +148,7 @@ fn split_e_make_valid_lontano_dall_origine() {
     .to_wkb(CoordDimensions::xy())
     .expect("wkb");
     for method in [RepairMethod::Linework, RepairMethod::Structure] {
-        let riparata = make_valid_wkb(&farfalla, method, false).expect("make_valid");
+        let riparata = make_valid_wkb(&farfalla, method, false, precisione()).expect("make_valid");
         let area = geometry_from_wkb(&riparata)
             .expect("valida")
             .unsigned_area();
@@ -219,6 +227,7 @@ fn l_adapter_arrow_classifica_il_quadrato_come_poligono() {
         CRS,
         None,
         LIMIT,
+        precisione(),
     )
     .expect("split");
     assert_eq!(batches[0].num_rows(), 2);

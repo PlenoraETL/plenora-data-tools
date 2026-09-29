@@ -27,11 +27,18 @@ use plenora_core::contract::arrow_metadata::{geometry_output_field, DEFAULT_GEOM
 use plenora_kernels_geo::rust_backend::arrow::{
     make_valid_batches, polygonize_batches, split_batches, PolygonizeParams,
 };
+use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::rust_backend::{
     make_valid_wkb, polygonize_linework, split_polygon_by_linework, PolygonizeResult, RepairMethod,
 };
 
 const LIMIT: u64 = 1_000_000;
+
+/// Precisione dei test in unita' astratte (la griglia degli overlay resta
+/// sotto su ogni estensione usata qui).
+fn precisione() -> Precision {
+    Precision::new(1e-6).expect("precisione")
+}
 
 fn polygonize(linework: &Geometry<f64>, node_input: bool) -> PolygonizeResult {
     polygonize_linework(linework, node_input, false, LIMIT, LIMIT, LIMIT, LIMIT)
@@ -357,7 +364,16 @@ fn split_lines() -> Vec<LineString<f64>> {
 }
 
 fn split(source: &Geometry<f64>, lines: Vec<LineString<f64>>) -> Vec<Polygon<f64>> {
-    split_polygon_by_linework(source, &multi(lines), LIMIT, LIMIT, LIMIT, LIMIT).expect("split")
+    split_polygon_by_linework(
+        source,
+        &multi(lines),
+        LIMIT,
+        LIMIT,
+        LIMIT,
+        LIMIT,
+        precisione(),
+    )
+    .expect("split")
 }
 
 #[test]
@@ -411,8 +427,10 @@ fn make_valid_deterministico() {
     for payload in [bow_tie_wkb(), crossing_hole] {
         for method in [RepairMethod::Linework, RepairMethod::Structure] {
             for keep_collapsed in [false, true] {
-                let first = make_valid_wkb(&payload, method, keep_collapsed).expect("riparata");
-                let second = make_valid_wkb(&payload, method, keep_collapsed).expect("riparata");
+                let first = make_valid_wkb(&payload, method, keep_collapsed, precisione())
+                    .expect("riparata");
+                let second = make_valid_wkb(&payload, method, keep_collapsed, precisione())
+                    .expect("riparata");
                 assert_eq!(first, second, "{method:?} keep_collapsed={keep_collapsed}");
             }
         }
@@ -502,12 +520,14 @@ fn make_valid_e_split_arrow_deterministici() {
         &schema,
         std::slice::from_ref(&batch),
         DEFAULT_GEOMETRY_COLUMN,
+        precisione(),
     )
     .expect("make_valid");
     let second = make_valid_batches(
         &schema,
         std::slice::from_ref(&batch),
         DEFAULT_GEOMETRY_COLUMN,
+        precisione(),
     )
     .expect("make_valid");
     assert_eq!(first, second);
@@ -529,6 +549,7 @@ fn make_valid_e_split_arrow_deterministici() {
             CRS,
             None,
             LIMIT,
+            precisione(),
         )
         .expect("split")
         .1

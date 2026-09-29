@@ -19,6 +19,7 @@ use plenora_core::contract::arrow_metadata::{
 };
 use plenora_core::PlenoraError;
 
+use super::precision::Precision;
 use super::{
     make_valid_wkb, polygonize_linework, residual_classes, split_polygon_by_linework, RepairMethod,
     MAX_CLEAN_VERTICES, MAX_NODING_WORK, MAX_SPLIT_WORK,
@@ -61,13 +62,14 @@ pub fn make_valid_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
     geometry_column: &str,
+    precision: Precision,
 ) -> Result<Vec<RecordBatch>, PlenoraError> {
     let geometry_index = geometry_column_index(schema, geometry_column)?;
     let mut output = Vec::with_capacity(batches.len());
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
         let repaired = map_nullable(cells, |payload| {
-            make_valid_wkb(payload, RepairMethod::Linework, true)
+            make_valid_wkb(payload, RepairMethod::Linework, true, precision)
                 .map(Some)
                 .map_err(PlenoraError::from)
         })?;
@@ -197,6 +199,9 @@ fn errore_dello_split_lineare(error: ExtendedAlgorithmError) -> PlenoraError {
 /// `PlenoraError::InvalidPlan` se le righe dei due lati non coincidono, se
 /// una sorgente non e' `LineString`/`Polygon`/`MultiPolygon`, o se le parti
 /// superano `max_output_rows`; gli errori di decode e dei kernel, tradotti.
+// Gli argomenti sono quelli del trasporto di 190c493 piu' la precisione
+// dichiarata: raggrupparli cambierebbe la forma del contratto.
+#[allow(clippy::too_many_arguments)]
 pub fn split_batches(
     left_schema: &SchemaRef,
     left_batches: &[RecordBatch],
@@ -205,6 +210,7 @@ pub fn split_batches(
     output_crs: &str,
     tolerance: Option<f64>,
     max_output_rows: u64,
+    precision: Precision,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
     let geometry_index = geometry_column_index(left_schema, geometry_column)?;
     let left_rows = left_batches
@@ -237,7 +243,7 @@ pub fn split_batches(
             let (Some(source), Some(splitter)) = (source, splitter) else {
                 continue;
             };
-            let parts = split_row(&source, &splitter, tolerance, max_output_rows)?;
+            let parts = split_row(&source, &splitter, tolerance, max_output_rows, precision)?;
             pieces.push(index, &parts, max_output_rows)?;
         }
     }
@@ -295,6 +301,7 @@ fn split_row(
     splitter: &Geometry<f64>,
     tolerance: f64,
     max_output_rows: u64,
+    precision: Precision,
 ) -> Result<Vec<Geometry<f64>>, PlenoraError> {
     match source {
         Geometry::LineString(line) => Ok(split_line(
@@ -317,6 +324,7 @@ fn split_row(
             MAX_NODING_WORK,
             max_output_rows,
             MAX_CELL_COORDINATES,
+            precision,
         )?
         .into_iter()
         .map(Geometry::Polygon)
@@ -384,6 +392,12 @@ fn split_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Precisione dei test: coordinate astratte fino a qualche decina di
+    /// unita', un milionesimo di unita' (la griglia degli overlay resta sotto).
+    fn precisione() -> Precision {
+        Precision::new(1e-6).unwrap()
+    }
     use crate::geometry_from_wkb;
     use crate::test_support::{linestring_wkb_le, point_wkb_le, polygon_wkb_le};
     use geo::Area;
@@ -440,8 +454,8 @@ mod tests {
         assert!(geometry_from_wkb(&bowtie).is_err());
         let square = square_wkb(2.0);
         let (schema, batch) = fixture_batch(&[Some(&bowtie), None, Some(&square)]);
-        let output =
-            make_valid_batches(&schema, &[batch], DEFAULT_GEOMETRY_COLUMN).expect("make_valid");
+        let output = make_valid_batches(&schema, &[batch], DEFAULT_GEOMETRY_COLUMN, precisione())
+            .expect("make_valid");
         let cells = column::<BinaryArray>(&output[0], &schema, DEFAULT_GEOMETRY_COLUMN);
         let repaired = geometry_from_wkb(cells.value(0)).expect("riparata");
         assert!((repaired.unsigned_area() - 2.0).abs() < 1e-12);
@@ -525,6 +539,7 @@ mod tests {
             CRS,
             None,
             16,
+            precisione(),
         )
         .expect("split lineare");
         assert_eq!(batches[0].num_rows(), 2);
@@ -557,6 +572,7 @@ mod tests {
             CRS,
             None,
             16,
+            precisione(),
         )
         .expect("split poligonale");
         assert_eq!(batches[0].num_rows(), 2);
@@ -577,7 +593,8 @@ mod tests {
                 &splitters,
                 CRS,
                 None,
-                16
+                16,
+                precisione()
             ),
             Err(PlenoraError::InvalidPlan(_))
         ));
@@ -592,7 +609,8 @@ mod tests {
                 &splitters,
                 CRS,
                 None,
-                16
+                16,
+                precisione()
             ),
             Err(PlenoraError::InvalidPlan(_))
         ));
@@ -619,7 +637,8 @@ mod tests {
                     &splitters,
                     CRS,
                     None,
-                    16
+                    16,
+                    precisione()
                 )
                 .is_err(),
                 "splitter non valido accettato accanto a una sorgente null"
@@ -637,7 +656,8 @@ mod tests {
                     &splitters,
                     CRS,
                     None,
-                    16
+                    16,
+                    precisione()
                 )
                 .is_err(),
                 "sorgente non valida accettata accanto a uno splitter null"
@@ -656,6 +676,7 @@ mod tests {
             CRS,
             None,
             16,
+            precisione(),
         )
         .expect("lati validi");
         assert_eq!(batches[0].num_rows(), 0);
@@ -682,6 +703,7 @@ mod tests {
                 CRS,
                 None,
                 3,
+                precisione(),
             )
         };
         let single = one(1).expect("una sorgente sta nel limite");

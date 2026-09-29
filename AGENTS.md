@@ -7,7 +7,14 @@ Le regole che non si negoziano. Il resto lo dice il codice.
 1. **Niente failure silenziose.** Un risultato sbagliato è peggio di un
    errore. Ordinamenti, confronti, conversioni numeriche e formati sono esatti
    per costruzione; un caso limite non gestibile si rifiuta con un errore
-   esplicito, mai con un valore plausibile.
+   esplicito, mai con un valore plausibile. L'unico errore piccolo accettato
+   è la **precisione geografica di 1 cm a terra** (README, «Limiti
+   dichiarati»; analogo del modello a precisione fissa di GEOS o di
+   `gridSize = 0.01` di PostGIS): sotto il centimetro un risultato
+   geometrico può differire dall'esatto (vertici spostati, schegge e parti
+   sottili fuse o sparite, aree diverse di circa perimetro per 1 cm); sopra,
+   ogni errore è esplicito. Una griglia di overlay più grossa di 1 cm si
+   rifiuta.
 2. **Niente `unsafe`** (`unsafe_code = "forbid"` nel workspace). Una
    dipendenza nuova entra solo con una motivazione scritta accanto al pin in
    `Cargo.toml`, e con versione esatta (`=x.y.z`).

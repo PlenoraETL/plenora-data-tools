@@ -30,6 +30,52 @@ di `plenora-data-tools`.
 
 ## Limiti dichiarati
 
+### Precisione delle operazioni geografiche: 1 cm a terra
+
+**Regola.** Ogni operazione geografica è garantita entro **1 cm a terra**,
+precisione fissa, l'analogo del modello a precisione fissa di GEOS o di
+`gridSize = 0.01` di PostGIS in metri. Nelle unità delle coordinate
+(`rust_backend::precision::Precision::from_crs`, una sola funzione):
+
+- CRS proiettato: `0.01 / horizontal_unit_to_metre`;
+- CRS geografico: 1 cm in gradi all'equatore, il valore più severo,
+  `0.01 / 111_319.49`, circa `8.98e-8` gradi.
+
+Sotto la precisione un risultato può differire dall'esatto e la differenza
+è accettata: vertici spostati, schegge e parti sottili fuse o sparite, aree
+diverse di circa perimetro per 1 cm. Sopra la precisione ogni errore e'
+esplicito, mai silenzioso. Le funzioni dei kernel chiamate senza CRS
+ricevono la precisione come argomento esplicito, senza valore predefinito.
+
+Il solo rifiuto legato alla precisione è la **griglia degli overlay**:
+`i_overlay` porta le coordinate su una griglia intera il cui passo `g`,
+letto dai sorgenti di `i_float` 1.16.0 (`FloatPointAdapter::new`), e'
+`2^(round(log2(h)) - 29)` con `h` la metà della dimensione maggiore del
+rettangolo d'ingombro degli operandi, cioè fra `2^-30.5` e `2^-29.5` di
+quella dimensione. In `make_valid` gli operandi sono normalizzati per asse
+su `[0, 1]^2`, dove il passo è esattamente `2^-30`: in coordinate originali
+`span * 2^-30` per asse. Se `g` supera la precisione l'overlay non si
+esegue: `PrecisionInsufficient` ("geometria troppo estesa per la precisione
+dichiarata"). In metri succede oltre circa 10.000 km di estensione.
+
+**Ambito.** Tutte le operazioni geografiche. Il controllo della griglia e'
+applicato oggi ai tre kernel portati (`geo.make_valid`, `geo.polygonize`,
+`geo.split`; solo `make_valid` usa l'overlay). Le altre operazioni
+booleane passano dalla stessa griglia senza controllo, ed è il prossimo
+passo: `topology.rs` (`boolean_operation`, `clip_to_mask`,
+`polygon_overlay`, `dissolve`, `clean_valid_polygon_topology`),
+`operations.rs` (`buffer_with_cap`, `Buffer` di `geo`), `extensions2.rs`
+(`subdivide_polygon`), `extensions3.rs` (`coverage_validate_elements`).
+
+**Hazard.** Una geometria più sottile di 1 cm (in tutto o in parte) può
+uscire fusa o vuota senza errore, per scelta; sulle operazioni booleane non
+ancora controllate una griglia più grossa di 1 cm (estensioni oltre circa
+10.000 km in metri) non è rifiutata.
+
+**Condizione di rientro.** Nessuna per la precisione, che è una scelta di
+prodotto; per il controllo della griglia, la sua estensione alle altre
+operazioni booleane.
+
 ### Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
 
 **Regola.** Per `Polygon`, `MultiPolygon`, `GeometryCollection` e `Geometry`
@@ -144,17 +190,10 @@ differenziali no. Le differenze note sono in
 - dove il vecchio `orient2d` sbagliava il segno, o dove il laboratorio
   decideva da un'area in `f64` che ora è esatta, il comportamento
   verificato nel laboratorio e quello di qui possono divergere;
-- restano decisioni con tolleranza, non esatte (elenco in
-  `rust_backend/mod.rs`): punto medio dei lati nell'assemblaggio dei buchi,
-  tolleranze `1e-9` dei controlli a posteriori di `split` (una scheggia
-  sotto quella soglia li passa, e rifiutano circa 600 casi traslati di
-  `2^30` che GEOS risolve esattamente), lo snap per asse dell'overlay di
-  `make_valid` (topologia protetta dalla precondizione, coordinate
-  d'incrocio non esatte); la
-  precondizione degli overlay di `make_valid` si regge sul comportamento di
-  `i_float`/`i_overlay` letto dai sorgenti delle versioni nel lock (passo
-  di griglia, raggio di aggancio che cresce solo dopo un passo che ha
-  arrotondato): un aggiornamento di quei crate va riletto;
+- le decisioni con tolleranza (elenco in `rust_backend/mod.rs`) seguono
+  la precisione di 1 cm: sotto, il risultato può differire da GEOS; il
+  passo di griglia è letto dai sorgenti di `i_float` nella versione del
+  lock, e un suo aggiornamento va riletto;
 - il corpus applicativo reale (gate del laboratorio) non è mai stato eseguito:
   mancano WKB reali anonimizzati;
 - la validazione interna dei kernel usa `check_validation` di `geo`,
@@ -178,7 +217,8 @@ cambiano solo i campi del backend: nessuna capability `geos`, maturità
 | dove | che cosa |
 | --- | --- |
 | `crates/plenora-kernels-geo/src/rust_backend/{polygonize,split,make_valid}.rs` | i kernel del laboratorio, algoritmi invariati (modifiche elencate in `rust_backend/mod.rs`) |
-| `crates/plenora-kernels-geo/src/rust_backend/mod.rs` | le firme di `geos_backend@190c493`: `make_valid_wkb`, `make_valid_geometry`, `polygonize_linework`, `split_polygon_by_linework` |
+| `crates/plenora-kernels-geo/src/rust_backend/mod.rs` | le firme di `geos_backend@190c493`: `make_valid_wkb`, `make_valid_geometry`, `polygonize_linework`, `split_polygon_by_linework` (le due riparazioni e lo split con in più la precisione) |
+| `crates/plenora-kernels-geo/src/rust_backend/precision.rs` | la precisione dichiarata, 1 cm a terra nelle unità del CRS |
 | `crates/plenora-kernels-geo/src/rust_backend/arrow.rs` | il trasporto Arrow di `190c493`: `make_valid_batches`, `polygonize_batches`, `split_batches` |
 | `crates/plenora-kernels-geo/src/rust_backend/wkb.rs` | WKB dell'output con `POLYGON EMPTY` a zero anelli, come GEOS |
 
@@ -202,19 +242,18 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
   grandi di segno diverso, aree minuscole, entrambi i versi, ogni vertice
   iniziale) dall'API e dall'adapter Arrow (`tests/geo_rust_segni_esatti.rs`),
   più i test d'unità di `rust_backend::exact`;
-- nessuna perdita silenziosa in `make_valid`: la cornice valida con
-  `L = 2^500` è un errore esplicito da ogni ingresso del kernel, e una cornice
-  con margine da `2^-10` a `2^-50` accanto a una geometria da riparare esce
-  con la cornice di area esattamente uguale o con `PrecisionInsufficient`,
-  mai con una parte in meno; i controesempi della revisione (buco largo
-  `2^-40`, cornice accanto a un triangolo con estensione 1024) sono
-  rifiutati prima dell'overlay (`tests/geo_rust_overlay_controllato.rs`);
-  sulla campagna di assurance la precondizione valuta 268 overlay e non ne
-  rifiuta nessuno;
-- le linee dei buchi di \`LINEWORK\` a \`2^30\` (campagna differenziale traslata,
-  seme 1 caso 92): prima scartate da una tolleranza, ora conservate come in
-  GEOS; e un buco a un ULP fuori dalla shell, che sulle coordinate
-  normalizzate la tocca, promosso a poligono da \`STRUCTURE\`;
+- la politica del centimetro (`tests/geo_rust_overlay_controllato.rs`, in
+  metri): cornici di 10 m con margine da qualche centimetro in su escono con
+  il buco e l'area entro perimetro per 1 cm, sotto il centimetro qualunque
+  esito tranne un panico; la cornice valida con `L = 2^500` resta
+  `NumericRange`; una geometria da riparare di 20.000 km e'
+  `PrecisionInsufficient`, una di 1.300 km no; i controesempi della
+  revisione (buco largo `2^-40` m, cornice accanto a un triangolo di 1 km)
+  riescono entro la precisione; la scala di `epsilon` del laboratorio
+  riesce entro la precisione; le linee di un buco a `2^30` m, sopra la
+  precisione, restano come in GEOS (la vecchia tolleranza le scartava);
+- un buco a un ULP fuori dalla shell, che sulle coordinate normalizzate la
+  tocca, promosso a poligono da `STRUCTURE`;
 - determinismo: ogni operazione due volte byte per byte; input permutato o
   invertito byte per byte dove il contratto promette la forma canonica, per
   classe e area dove non la promette.
@@ -264,16 +303,22 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   non solo le parti tenute;
   in `split` il limite di coordinate vale per ciascun input e per la somma;
   un limite a `u64::MAX` è rifiutato (`UnboundedLimits`).
+- **Precisione in più nelle firme.** `make_valid_wkb`,
+  `make_valid_wkb_with_limits`, `make_valid_geometry`,
+  `split_polygon_by_linework`, `make_valid_batches` e `split_batches`
+  prendono la precisione dichiarata (1 cm a terra, `Precision::from_crs`):
+  incompatibilità di firma con `190c493`, voluta. I kernel del laboratorio
+  (`make_valid_geometry_rust*`, `split_polygon_by_linework_rust*`) la
+  prendono in unità delle coordinate.
 - **Errori nuovi.** Noding non convergente (`Unsupported`), segno o
   confronto d'area non decidibile su coordinate fuori dal dominio
   dell'aritmetica esatta, cioè con modulo fuori da `[2^-450, 2^450]`
   (`NumericRange`, `Unsupported`, anche da `make_valid`, che prima in
-  quel caso avviava la riparazione di un poligono valido), overlay di
-  `make_valid` con feature sotto 8 passi della griglia intera di
-  `i_overlay` (`PrecisionInsufficient`, `Unsupported`, prima dell'overlay:
-  una cornice con margine `2^-25` dell'estensione accanto a una geometria
-  da riparare ora fallisce, prima da `2^-28` ne perdeva metà),
-  memoria non prenotabile (`ResourceLimit`),
+  quel caso avviava la riparazione di un poligono valido), griglia di un
+  overlay di `make_valid` più grossa di 1 cm (`PrecisionInsufficient`,
+  `Unsupported`), precisione non finita o CRS proiettato senza unità
+  (`InvalidPrecision`, `InvalidPlan`), memoria non prenotabile
+  (`ResourceLimit`),
   panico di `geo`/`i_overlay` dentro il kernel (`Internal`, solo la forma
   del payload).
 - **Segni esatti, anche dove GEOS non lo è.** Orientamento delle facce,
@@ -286,6 +331,13 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
 - **Tipi d'ingresso di `make_valid_geometry`.** `Line` diventa
   `LineString`, `Rect` e `Triangle` diventano il `Polygon` di `to_polygon`,
   come faceva geozero a `190c493`.
+- **Tolleranze dalla precisione.** Dove il laboratorio usava tolleranze
+  fisse o proporzionali alla coordinata (`64 * EPSILON * |x|` per il bordo
+  dell'area in `LINEWORK`, `1e-12` per la sporgenza di un buco, `1e-9` nei
+  controlli di `split`), le decisioni seguono la precisione di 1 cm: una
+  linea più vicina di 1 cm al bordo dell'area ne fa parte, una più lontana
+  resta; lo split accetta area e copertura entro la precisione (prima
+  rifiutava circa 600 casi traslati di `2^30` che GEOS risolve esattamente).
 - **Validità.** «Valido» è la validazione OGC del workspace (quella di `geo`
   più il controllo degli anelli con punta), non `IsValid` di GEOS: dove le
   due divergono, `make_valid` può riparare un input che GEOS restituiva

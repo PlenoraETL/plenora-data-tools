@@ -86,6 +86,9 @@ pub enum SplitError {
     AreaMismatch,
     #[error("lo split poligonale non ricopre esattamente l'input")]
     CoverageMismatch,
+    /// La precisione dichiarata passata non e' un numero finito positivo.
+    #[error("precisione dichiarata non valida: deve essere finita e positiva")]
+    InvalidPrecision,
     #[error("indice non rappresentabile")]
     IndexOverflow,
     #[error("invariante interna violata: {0}")]
@@ -231,28 +234,18 @@ impl SegmentKey {
     }
 }
 
-fn point_on_segment(point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> bool {
+/// Distanza euclidea del punto dal segmento, in `f64` (l'errore del
+/// calcolo e' molto sotto la precisione dichiarata).
+fn segment_distance(point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> f64 {
     let dx = end.x - start.x;
     let dy = end.y - start.y;
-    let tolerance_x = (dx.abs() * 1e-9)
-        .max(start.x.abs().max(end.x.abs()) * f64::EPSILON * 64.0)
-        .max(f64::MIN_POSITIVE);
-    let tolerance_y = (dy.abs() * 1e-9)
-        .max(start.y.abs().max(end.y.abs()) * f64::EPSILON * 64.0)
-        .max(f64::MIN_POSITIVE);
-    let normalized_dx = dx.abs() / tolerance_x;
-    let normalized_dy = dy.abs() / tolerance_y;
-    let parameter = if normalized_dx >= normalized_dy && dx != 0.0 {
-        (point.x - start.x) / dx
-    } else if dy != 0.0 {
-        (point.y - start.y) / dy
+    let length_squared = dx * dx + dy * dy;
+    let t = if length_squared > 0.0 {
+        (((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared).clamp(0.0, 1.0)
     } else {
-        return (point.x - start.x).abs() <= tolerance_x
-            && (point.y - start.y).abs() <= tolerance_y;
+        0.0
     };
-    (-1e-9..=1.0 + 1e-9).contains(&parameter)
-        && (point.x - (start.x + dx * parameter)).abs() <= tolerance_x
-        && (point.y - (start.y + dy * parameter)).abs() <= tolerance_y
+    (point.x - (start.x + t * dx)).hypot(point.y - (start.y + t * dy))
 }
 
 /// Test pari-dispari del laboratorio con il lato del punto deciso da
@@ -353,10 +346,17 @@ fn source_contains_point(source: &Geometry<f64>, point: Point<f64>) -> bool {
     }
 }
 
+/// Copertura del bordo della sorgente, entro la precisione dichiarata `p`
+/// (unita' delle coordinate): un estremo delle parti sta su un lato della
+/// sorgente se dista al piu' `p`, e la lunghezza coperta di ogni lato puo'
+/// scostarsi di `p` per estremo. Una parte mancante piu' larga di `p` lascia
+/// scoperto un tratto di bordo o un taglio senza gemello: errore.
 fn checked_boundary_coverage(
     source: &Geometry<f64>,
     output: &[Polygon<f64>],
+    precision: f64,
 ) -> Result<(), SplitError> {
+    let tolerance = precision;
     let mut source_rings = Vec::new();
     collect_boundaries(source, &mut source_rings)?;
     let source_segments = source_rings
@@ -378,6 +378,7 @@ fn checked_boundary_coverage(
         }
     }
     let mut covered_lengths = vec![0.0_f64; source_segments.len()];
+    let mut covering_pieces = vec![0.0_f64; source_segments.len()];
     for (_, (start, end, count)) in output_segments {
         if count == 2 {
             continue;
@@ -385,23 +386,31 @@ fn checked_boundary_coverage(
         if count != 1 {
             return Err(SplitError::CoverageMismatch);
         }
-        let mut matched = false;
+        // Il lato sorgente piu' vicino fra quelli entro la precisione (il
+        // laboratorio prendeva il primo entro una tolleranza stretta: con
+        // una tolleranza assoluta due lati possono esserlo entrambi).
+        let mut best: Option<(usize, f64)> = None;
         for (index, source_segment) in source_segments.iter().enumerate() {
-            if point_on_segment(start, source_segment.start, source_segment.end)
-                && point_on_segment(end, source_segment.start, source_segment.end)
-            {
-                covered_lengths[index] += (end.x - start.x).hypot(end.y - start.y);
-                matched = true;
-                break;
+            let distance = segment_distance(start, source_segment.start, source_segment.end).max(
+                segment_distance(end, source_segment.start, source_segment.end),
+            );
+            if distance <= tolerance && best.is_none_or(|(_, previous)| distance < previous) {
+                best = Some((index, distance));
             }
         }
-        if !matched {
+        let Some((index, _)) = best else {
             return Err(SplitError::CoverageMismatch);
-        }
+        };
+        covered_lengths[index] += (end.x - start.x).hypot(end.y - start.y);
+        covering_pieces[index] += 1.0;
     }
-    for (segment, covered) in source_segments.iter().zip(covered_lengths) {
+    for ((segment, covered), pieces) in source_segments
+        .iter()
+        .zip(covered_lengths)
+        .zip(covering_pieces)
+    {
         let expected = (segment.end.x - segment.start.x).hypot(segment.end.y - segment.start.y);
-        if (covered - expected).abs() > expected.max(1.0) * 1e-9 {
+        if (covered - expected).abs() > 2.0 * tolerance * (pieces + 1.0) {
             return Err(SplitError::CoverageMismatch);
         }
     }
@@ -412,6 +421,7 @@ fn checked_output(
     source: &Geometry<f64>,
     output: &[Polygon<f64>],
     limits: SplitLimits,
+    precision: f64,
 ) -> Result<(), SplitError> {
     let parts = u64::try_from(output.len()).map_err(|_| SplitError::IndexOverflow)?;
     if parts > limits.max_output_parts {
@@ -432,7 +442,18 @@ fn checked_output(
     }
     let input_area = source.unsigned_area();
     let output_area = output.iter().map(Area::unsigned_area).sum::<f64>();
-    let allowed_error = input_area.abs().max(1.0) * 1e-9;
+    // Precisione dichiarata `p` (README, «Limiti dichiarati»): ogni lato
+    // delle parti puo' spostarsi di `p`, e l'area di al piu' il perimetro per
+    // `p`. Il laboratorio usava `1e-9 * max(area, 1)`, assoluta sotto l'area
+    // 1 e indipendente dall'unita': a `2^30` rifiutava circa 600 split che
+    // GEOS risolve esattamente.
+    let perimeter = output
+        .iter()
+        .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
+        .flat_map(LineString::lines)
+        .map(|segment| (segment.end.x - segment.start.x).hypot(segment.end.y - segment.start.y))
+        .sum::<f64>();
+    let allowed_error = precision * perimeter;
     if (output_area - input_area).abs() > allowed_error {
         return Err(SplitError::AreaMismatch);
     }
@@ -443,7 +464,7 @@ fn checked_output(
             Err(SplitError::CoverageMismatch)
         };
     };
-    checked_boundary_coverage(source, output)
+    checked_boundary_coverage(source, output, precision)
 }
 
 /// Divide Polygon/MultiPolygon mediante linework usando soltanto Rust.
@@ -460,7 +481,11 @@ pub fn split_polygon_by_linework_rust(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
     limits: SplitLimits,
+    precision: f64,
 ) -> Result<Vec<Polygon<f64>>, SplitError> {
+    if !(precision.is_finite() && precision > 0.0) {
+        return Err(SplitError::InvalidPrecision);
+    }
     if !matches!(source, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
         return Err(SplitError::UnsupportedSource(geometry_type(source)));
     }
@@ -523,7 +548,7 @@ pub fn split_polygon_by_linework_rust(
             output_coordinates = next_coordinates;
         }
     }
-    checked_output(source, &output, limits)?;
+    checked_output(source, &output, limits, precision)?;
     Ok(output)
 }
 
@@ -538,16 +563,21 @@ pub fn split_polygon_by_linework_rust_bounded(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
     limits: SplitLimits,
+    precision: f64,
 ) -> Result<Vec<Polygon<f64>>, SplitError> {
     if !limits.is_fully_bounded() {
         return Err(SplitError::UnboundedLimitConfiguration);
     }
-    split_polygon_by_linework_rust(source, splitter, limits)
+    split_polygon_by_linework_rust(source, splitter, limits, precision)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Precisione dichiarata dei test del laboratorio: coordinate astratte,
+    /// un miliardesimo come le tolleranze originali.
+    const PRECISION: f64 = 1e-9;
     use geo::{line_string, polygon};
 
     /// Il punto sta a sinistra del lato `s -> e` (segno esatto), ma
@@ -580,6 +610,55 @@ mod tests {
         assert!(Polygon::new(ring, Vec::new()).contains(&point));
     }
 
+    /// Campagna differenziale traslata di `2^30`, seme 1 caso 5: GEOS lo
+    /// risolve esattamente, le tolleranze `1e-9` del laboratorio lo
+    /// rifiutavano ("non ricopre esattamente l'input"). In metri con 1 cm
+    /// escono le due parti.
+    #[test]
+    fn translated_split_within_the_precision_is_accepted() -> Result<(), SplitError> {
+        let base = 1_073_741_824.0; // 2^30
+        let source = Geometry::Polygon(Polygon::new(
+            line_string![
+                (x: 1_071_741_824.0, y: base + 0.000_003),
+                (x: 1_078_741_824.0, y: base + 0.000_003),
+                (x: 1_078_741_824.0, y: base + 0.000_017),
+                (x: 1_071_741_824.0, y: base + 0.000_017),
+                (x: 1_071_741_824.0, y: base + 0.000_003)
+            ],
+            vec![],
+        ));
+        let splitter = Geometry::LineString(line_string![
+            (x: 1_075_741_824.0, y: base), (x: 1_075_741_824.0, y: base + 0.000_02)
+        ]);
+        let output =
+            split_polygon_by_linework_rust(&source, &splitter, SplitLimits::unlimited(), 0.01)?;
+        if output.len() != 2 {
+            return Err(SplitError::CoverageMismatch);
+        }
+        Ok(())
+    }
+
+    /// Una parte mancante piu' larga della precisione resta un errore: i
+    /// controlli a posteriori, con la tolleranza di 1 cm, non la coprono.
+    #[test]
+    fn a_missing_piece_above_the_precision_is_rejected() {
+        let source = Geometry::Polygon(polygon![
+            (x: 0.0, y: 0.0), (x: 10.0, y: 0.0),
+            (x: 10.0, y: 10.0), (x: 0.0, y: 10.0),
+            (x: 0.0, y: 0.0)
+        ]);
+        let left = polygon![
+            (x: 0.0, y: 0.0), (x: 5.0, y: 0.0),
+            (x: 5.0, y: 10.0), (x: 0.0, y: 10.0),
+            (x: 0.0, y: 0.0)
+        ];
+        let result = checked_output(&source, &[left], SplitLimits::unlimited(), 0.01);
+        assert!(matches!(
+            result,
+            Err(SplitError::AreaMismatch | SplitError::CoverageMismatch)
+        ));
+    }
+
     #[test]
     fn splits_rectangle_with_vertical_line() -> Result<(), SplitError> {
         let source = Geometry::Polygon(polygon![
@@ -590,7 +669,12 @@ mod tests {
         let splitter = Geometry::LineString(line_string![
             (x: 5.0, y: -1.0), (x: 5.0, y: 11.0)
         ]);
-        let output = split_polygon_by_linework_rust(&source, &splitter, SplitLimits::unlimited())?;
+        let output = split_polygon_by_linework_rust(
+            &source,
+            &splitter,
+            SplitLimits::unlimited(),
+            PRECISION,
+        )?;
         if output.len() != 2 {
             return Err(SplitError::CoverageMismatch);
         }
@@ -607,8 +691,18 @@ mod tests {
         let splitter = Geometry::LineString(line_string![
             (x: 5.0, y: -1.0), (x: 5.0, y: 11.0)
         ]);
-        let first = split_polygon_by_linework_rust(&source, &splitter, SplitLimits::unlimited())?;
-        let second = split_polygon_by_linework_rust(&source, &splitter, SplitLimits::unlimited())?;
+        let first = split_polygon_by_linework_rust(
+            &source,
+            &splitter,
+            SplitLimits::unlimited(),
+            PRECISION,
+        )?;
+        let second = split_polygon_by_linework_rust(
+            &source,
+            &splitter,
+            SplitLimits::unlimited(),
+            PRECISION,
+        )?;
         if first != second {
             return Err(SplitError::CoverageMismatch);
         }
@@ -619,6 +713,7 @@ mod tests {
                 max_input_coordinates: 4,
                 ..SplitLimits::unlimited()
             },
+            PRECISION,
         );
         if !matches!(coordinate_limit, Err(SplitError::CoordinateLimit { .. })) {
             return Err(SplitError::CoverageMismatch);
@@ -630,6 +725,7 @@ mod tests {
                 max_noding_work: 24,
                 ..SplitLimits::unlimited()
             },
+            PRECISION,
         );
         if !matches!(work_limit, Err(SplitError::WorkLimit { .. })) {
             return Err(SplitError::CoverageMismatch);
@@ -641,6 +737,7 @@ mod tests {
                 max_output_parts: 1,
                 ..SplitLimits::unlimited()
             },
+            PRECISION,
         );
         if !matches!(part_limit, Err(SplitError::OutputLimit { .. })) {
             return Err(SplitError::CoverageMismatch);
@@ -652,6 +749,7 @@ mod tests {
                 max_output_coordinates: 9,
                 ..SplitLimits::unlimited()
             },
+            PRECISION,
         );
         if !matches!(output_coordinate_limit, Err(SplitError::OutputLimit { .. })) {
             return Err(SplitError::CoverageMismatch);
@@ -660,12 +758,13 @@ mod tests {
             &Geometry::Point(geo::Point::new(0.0, 0.0)),
             &splitter,
             SplitLimits::unlimited(),
+            PRECISION,
         );
         if !matches!(unsupported_source, Err(SplitError::UnsupportedSource(_))) {
             return Err(SplitError::CoverageMismatch);
         }
         let unsupported_splitter =
-            split_polygon_by_linework_rust(&source, &source, SplitLimits::unlimited());
+            split_polygon_by_linework_rust(&source, &source, SplitLimits::unlimited(), PRECISION);
         if !matches!(
             unsupported_splitter,
             Err(SplitError::UnsupportedSplitter(_))
@@ -693,7 +792,12 @@ mod tests {
             line_string![(x: -0.45, y: 3.3), (x: 4.8, y: -2.7)],
             line_string![(x: -0.45, y: 17.3), (x: 4.8, y: 5.3)],
         ]));
-        let output = split_polygon_by_linework_rust(&source, &splitter, SplitLimits::unlimited())?;
+        let output = split_polygon_by_linework_rust(
+            &source,
+            &splitter,
+            SplitLimits::unlimited(),
+            PRECISION,
+        )?;
         if output.len() != 3 {
             return Err(SplitError::CoverageMismatch);
         }
@@ -719,7 +823,12 @@ mod tests {
             line_string![(x: 8.3, y: 17.3), (x: -0.45, y: 11.3)],
             line_string![(x: -0.2, y: 21.3), (x: -0.2, y: -6.7)],
         ]));
-        let output = split_polygon_by_linework_rust(&source, &splitter, SplitLimits::unlimited())?;
+        let output = split_polygon_by_linework_rust(
+            &source,
+            &splitter,
+            SplitLimits::unlimited(),
+            PRECISION,
+        )?;
         if output.len() != 3 {
             return Err(SplitError::CoverageMismatch);
         }
