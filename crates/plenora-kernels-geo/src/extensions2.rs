@@ -28,7 +28,7 @@ use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
 use crate::extensions::{
     check_tolerance, ensure_valid, invalid_parameter, u64_len, validate_output, ExtensionError,
 };
-use crate::rust_backend::griglia::{self, IndiceLinework};
+use crate::rust_backend::griglia::{self, IndiceLinework, Operandi, Regola};
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 
@@ -518,8 +518,23 @@ fn subdivide_polygon(
     };
     griglia::controlla_overlay(Some(rect), taglio.precision)?;
     taglio.linee.push(cut);
+    let pezzo = MultiPolygon::new(vec![polygon.clone()]);
     for half in halves {
-        let intersection = polygon.intersection(&half.to_polygon());
+        let meta = MultiPolygon::new(vec![half.to_polygon()]);
+        let intersection = pezzo.intersection(&meta);
+        // Nessuna parte mancante rispetto agli operandi di questo taglio: lo
+        // spostamento accumulato dai livelli (passo che si dimezza con il
+        // pezzo) resta sotto la precisione, e i lati delle foglie sono
+        // controllati contro il poligono di partenza.
+        if !Operandi::nuovi(vec![&pezzo, &meta]).completo(
+            &intersection,
+            |_| true,
+            None,
+            Regola::Intersezione,
+            taglio.precision,
+        ) {
+            return Err(ExtensionError::PrecisionInsufficient);
+        }
         for part in intersection.0 {
             // Scarti di area nulla lungo la linea di taglio.
             if part.coords_count() == 0 || part.unsigned_area() == 0.0 {

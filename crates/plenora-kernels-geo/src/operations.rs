@@ -1,12 +1,12 @@
 //! Pure geometry kernels, independent of the transport adapters.
 
+use crate::rust_backend::buffer::{buffer_controllato, ErroreBuffer, Estremita};
 use crate::rust_backend::griglia;
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
-use geo::algorithm::buffer::{BufferStyle, LineCap};
 use geo::algorithm::line_measures::{Distance, Euclidean, Length};
 use geo::{
-    Area, BoundingRect, Buffer, Coord, CoordsIter, Geometry, InteriorPoint, LineString, MapCoords,
+    Area, BoundingRect, Coord, CoordsIter, Geometry, InteriorPoint, LineString, MapCoords,
     MultiLineString, MultiPoint, Simplify, SimplifyVwPreserve,
 };
 use std::collections::BTreeMap;
@@ -64,6 +64,12 @@ pub enum OperationError {
     /// [`buffer_with_cap`]). Nessun dato nel messaggio.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
+    #[error("limite {name} superato: valore={actual}, limite={limit}")]
+    ResourceLimit {
+        name: &'static str,
+        actual: u64,
+        limit: u64,
+    },
 }
 
 impl From<griglia::PrecisioneInsufficiente> for OperationError {
@@ -295,21 +301,21 @@ pub fn buffer(
 /// Buffer planare della geometria con lo stile di estremita' richiesto.
 ///
 /// `precision` e' la precisione dichiarata nelle unita' delle coordinate
-/// (`Precision::from_crs` con un CRS, altrimenti esplicita). Il buffer di
-/// `geo` passa dalla griglia intera di `i_overlay`: prima del calcolo il
-/// passo della griglia sull'ingombro dell'ingresso allargato della distanza
-/// e la spaziatura delle coordinate sono confrontati con la precisione;
-/// dopo, ogni vertice dell'uscita deve stare alla distanza `|distance|`
-/// dall'ingresso entro la precisione, meno la freccia degli archi
-/// approssimati da corde (`rust_backend::griglia`, e README «Limiti
-/// dichiarati»).
+/// (`Precision::from_crs` con un CRS, altrimenti esplicita). Il buffer e'
+/// costruito per pezzi (rettangoli dei lati, dischi e settori ai vertici,
+/// archi con freccia entro meta' della precisione) e unito con un overlay
+/// controllato (`rust_backend::buffer`): il risultato sta entro la
+/// precisione dal buffer esatto, altrimenti errore. Le estremita' e il
+/// trattamento di punti e linee con distanza non positiva sono quelli di
+/// `geo::Buffer`.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `distance` non e' finita (NaN o infinita);
-/// - `PrecisionInsufficient`: la griglia sposterebbe, o ha spostato, il
-///   risultato oltre la precisione;
+/// - `PrecisionInsufficient`: la griglia o gli archi supererebbero la
+///   precisione, o il risultato non la rispetta;
+/// - `ResourceLimit`: i pezzi supererebbero il limite di vertici;
 /// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC.
 pub fn buffer_with_cap(
     geometry: &Geometry<f64>,
@@ -324,22 +330,21 @@ pub fn buffer_with_cap(
             reason: "deve essere finita",
         });
     }
-    griglia::controlla_buffer(geometry, distance, precision)?;
-    let result = match cap_style {
-        BufferCapStyle::Round => geometry.buffer(distance),
-        BufferCapStyle::Flat => {
-            geometry.buffer_with_style(BufferStyle::new(distance).line_cap(LineCap::Butt))
-        }
-        BufferCapStyle::Square => {
-            geometry.buffer_with_style(BufferStyle::new(distance).line_cap(LineCap::Square))
-        }
-    };
     let estremita = match cap_style {
-        BufferCapStyle::Round => griglia::Estremita::Tonde,
-        BufferCapStyle::Flat => griglia::Estremita::Piatte,
-        BufferCapStyle::Square => griglia::Estremita::Quadrate,
+        BufferCapStyle::Round => Estremita::Tonde,
+        BufferCapStyle::Flat => Estremita::Piatte,
+        BufferCapStyle::Square => Estremita::Quadrate,
     };
-    griglia::verifica_buffer(geometry, distance, estremita, &result, precision)?;
+    let result = buffer_controllato(geometry, distance, estremita, precision).map_err(
+        |errore| match errore {
+            ErroreBuffer::PrecisioneInsufficiente => OperationError::PrecisionInsufficient,
+            ErroreBuffer::TroppiVertici { actual, limit } => OperationError::ResourceLimit {
+                name: "buffer_vertices",
+                actual,
+                limit,
+            },
+        },
+    )?;
     validate_output(Geometry::MultiPolygon(result))
 }
 

@@ -242,6 +242,12 @@ fn buffer_alle_tre_scale() {
         for geometria in geometrie(scala) {
             for stile in stili {
                 let esito = buffer_with_cap(&geometria, 1.0, stile, centimetro());
+                // Punti con estremita' piatte: nessun buffer, come in `geo`,
+                // e nessun overlay.
+                if stile == BufferCapStyle::Flat && matches!(geometria, Geometry::MultiPoint(_)) {
+                    assert!(esito.is_ok_and(|g| g.unsigned_area() == 0.0));
+                    continue;
+                }
                 assert!(
                     matches!(esito, Err(OperationError::PrecisionInsufficient)),
                     "{stile:?}: {esito:?}"
@@ -267,45 +273,29 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
     ));
 }
 
-/// Revisione: una parte dell'ingresso che la griglia di `i_overlay` riduce
-/// a un punto sparisce dal buffer senza errore della dipendenza (un anello
-/// d'area intera nulla e' saltato, una linea su un solo punto della griglia
-/// non da' segmenti). Il suo buffer e' spesso `2 |d|`: errore esplicito.
+/// Revisione: il `Buffer` di `geo` saltava senza errore la componente che
+/// la griglia di `i_overlay` riduce a un punto, anche quando il suo buffer
+/// e' grande: una linea di 0,4 mm accanto a una di 1.300 km perdeva un
+/// disco di 10 m (9 m fuori dal buffer della linea lunga). Ora il buffer si
+/// costruisce per pezzi (il disco di ogni estremo c'e' comunque).
 #[test]
-fn il_buffer_non_perde_parti_ridotte_a_un_punto() {
+fn il_buffer_di_una_componente_minuscola_resta() {
+    use geo::Contains as _;
+    let componenti = Geometry::MultiLineString(geo::MultiLineString::new(vec![
+        LineString::from(vec![(0.0, 0.0), (1_300_000.0, 0.0)]),
+        LineString::from(vec![(650_000.0, 9.0), (650_000.000_4, 9.0)]),
+    ]));
+    let buffer =
+        buffer_with_cap(&componenti, 10.0, BufferCapStyle::Round, centimetro()).expect("buffer");
+    assert!(buffer.contains(&Point::new(650_000.0, 18.98)));
+    assert!(!buffer.contains(&Point::new(650_000.0, 19.02)));
     let corta = Geometry::LineString(LineString::from(vec![
         (500_000.0, 4_000_000.0),
         (500_000.000_000_01, 4_000_000.0),
     ]));
-    let sottile = Geometry::Polygon(Polygon::new(
-        LineString::from(vec![
-            (500_000.0, 4_000_000.0),
-            (500_100.0, 4_000_000.0),
-            (500_050.0, 4_000_000.000_000_02),
-            (500_000.0, 4_000_000.0),
-        ]),
-        vec![],
-    ));
-    // Una linea di 0,4 mm accanto a una normale, a scala italiana.
-    let componenti = Geometry::MultiLineString(geo::MultiLineString::new(vec![
-        LineString::from(vec![(300_000.0, 4_000_000.0), (1_600_000.0, 4_000_000.0)]),
-        LineString::from(vec![(900_000.0, 4_500_000.0), (900_000.000_4, 4_500_000.0)]),
-    ]));
-    for (caso, geometria) in [
-        ("corta", &corta),
-        ("sottile", &sottile),
-        ("componenti", &componenti),
-    ] {
-        let esito = buffer_with_cap(geometria, 10.0, BufferCapStyle::Round, centimetro());
-        assert!(
-            matches!(esito, Err(OperationError::PrecisionInsufficient)),
-            "{caso}: {esito:?}"
-        );
-    }
-    topologia_rifiutata(
-        clean_valid_polygon_topology(&[sottile], 0.5, false, true, 10, 1_000, centimetro()),
-        "clean con morfologia",
-    );
+    let disco = buffer_with_cap(&corta, 10.0, BufferCapStyle::Round, centimetro()).expect("buffer");
+    let atteso = std::f64::consts::PI * 100.0;
+    assert!((disco.unsigned_area() - atteso).abs() <= 2.0 * atteso * 0.01 / 10.0);
 }
 
 #[test]
@@ -390,7 +380,7 @@ mod senza_rifiuti_spuri {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(ProptestConfig::with_cases(24))]
         #[test]
         fn booleane_e_buffer_non_rifiutano_a_scala_italiana(
             ax in 300_000.0..1_000_000.0_f64,

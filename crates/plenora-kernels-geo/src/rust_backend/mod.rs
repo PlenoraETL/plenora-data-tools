@@ -156,6 +156,7 @@
 //! [`split_polygon_by_linework`], e in `README.md` («Differenze da GEOS»).
 
 pub mod arrow;
+pub(crate) mod buffer;
 pub mod exact;
 pub mod make_valid;
 pub(crate) mod griglia;

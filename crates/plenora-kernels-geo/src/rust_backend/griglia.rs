@@ -1,6 +1,7 @@
 //! La precisione dichiarata (1 cm a terra, [`super::precision`]) applicata
 //! alle operazioni che passano dalla griglia intera di `i_overlay`: le
-//! booleane di `geo` (`BooleanOps`, `unary_union`) e il `Buffer` di `geo`.
+//! booleane di `geo` (`BooleanOps`, `unary_union`) e il buffer
+//! ([`super::buffer`], costruito con pezzi e un'unione).
 //!
 //! # La griglia
 //!
@@ -10,12 +11,7 @@
 //! della sua dimensione maggiore, scala `2^(29 - round(log2(h)))` (con
 //! `round` che arrotonda la meta' lontano da zero, `FloatNumber::to_i32`).
 //! Il passo della griglia e' quindi `g = 2^(round(log2(h)) - 29)`
-//! ([`passo_griglia`]). Nel buffer (`i_overlay::mesh`, contorni e tratti) il
-//! rettangolo e' quello dell'ingresso allargato di un margine: `1.1 |d|` per
-//! le giunzioni, fino a `3 |d|` per un'estremita' arrotondata (il rettangolo
-//! dei punti del mezzo cerchio, largo `|d|` e alto `2 |d|`). Qui si usa
-//! sempre `3 |d|`: un `h` piu' grande da' un passo uguale o doppio, mai
-//! minore, quindi il controllo resta dal lato del rifiuto.
+//! ([`passo_griglia`]).
 //!
 //! # Lo spostamento a priori
 //!
@@ -29,60 +25,48 @@
 //! - pochi `ulp` delle coordinate nel passaggio `f64 -> i32 -> f64`, sotto
 //!   `p / 64` ciascuno per il controllo di spaziatura.
 //!
-//! Il buffer passa dalla griglia piu' volte: i punti dell'offset si
-//! arrotondano, il centro di un arco viene da un vertice gia' arrotondato,
-//! poi l'overlay di ogni anello e quello finale. Il suo primo passaggio vale
-//! `(2 + 2 sqrt(2)) g`.
-//!
 //! [`controlla_overlay`] rifiuta prima del calcolo se `(1 + sqrt(2)) g +
-//! 4 ulp(M)` supera `p / 2` (la tolleranza del controllo a posteriori delle
-//! booleane, sotto), [`controlla_buffer`] se `(2 + 2 sqrt(2)) g + 4 ulp(M)`
-//! supera `p`; entrambi se le coordinate sono troppo rade
+//! 4 ulp(M)` supera `p / 2` (la tolleranza del controllo a posteriori,
+//! sotto), o se le coordinate sono troppo rade
 //! ([`super::precision::coordinate_abbastanza_fitte`]). In metri con 1 cm
 //! il passo massimo ammesso e' `2^-9` m: un'estensione fino a circa 2.950
 //! km passa (l'Italia, 1.300 km, ha `g = 2^-10`), 20.000 km no (`g = 2^-6`).
 //!
-//! # Lo spostamento a posteriori
+//! # Lo spostamento a posteriori: due controlli contro gli ingressi originali
 //!
 //! Gli agganci successivi al primo hanno un raggio che cresce a ogni giro, e
-//! il numero di giri dipende dai dati: nessun limite a priori li copre. Per
-//! questo, dopo l'overlay, un controllo sul risultato:
+//! il numero di giri dipende dai dati: nessun limite a priori li copre. Dopo
+//! l'overlay, con gli ingressi **originali** dell'operazione pubblica
+//! ([`Operandi`]), non i risultati intermedi, cosi' gli overlay in catena
+//! non sommano gli spostamenti:
 //!
-//! - **booleane** ([`IndiceLinework::bordo_entro`]): il bordo esatto di
-//!   un'intersezione, unione, differenza o differenza simmetrica di poligoni
-//!   validi sta sui bordi degli operandi. Ogni lato del risultato deve stare
-//!   **per intero** entro `p / 2` dai bordi degli operandi originali
-//!   dell'operazione pubblica (non dei risultati intermedi, cosi' gli
-//!   spostamenti di overlay in catena non si sommano). La tolleranza e' `p /
-//!   2`, non `p`: un aggancio puo' portare un vertice da un bordo a un altro
-//!   bordo d'ingresso vicino, e i lati che vi arrivano stanno allora entro
-//!   `delta / 2` da uno dei due bordi, con `delta` lo spostamento; con `p /
-//!   2` passa solo `delta <= p`. Il test e' esatto a meno di un margine
-//!   d'arrotondamento che stringe il raggio: l'insieme dei punti entro `r`
-//!   da un segmento e' convesso (uno «stadio»), la sua traccia su un lato e'
-//!   un intervallo, e gli intervalli dei segmenti vicini devono ricoprire il
-//!   lato;
-//! - **buffer** ([`verifica_buffer`]): il bordo del buffer esatto sta alla
-//!   distanza `|d|` dall'ingresso. Ogni vertice dell'uscita deve stare fra
-//!   `|d| - s - p` e `k |d| + p` dall'ingresso, con `s` la freccia massima
-//!   degli archi approssimati da corde ([`freccia_relativa_archi`]) e `k =
-//!   sqrt(2)` per le estremita' quadrate di linee e punti (gli angoli del
-//!   quadrato), `1` altrimenti; su linee con estremita' piatte o quadrate
-//!   solo il limite superiore. Con `d > 0` ogni coordinata dell'ingresso
-//!   deve stare dentro l'uscita o entro `p` dal suo bordo: `i_overlay` salta
-//!   senza errore un anello o una linea che la griglia riduce a un punto, e
-//!   il buffer di quella parte, spesso `2 |d|`, sparirebbe.
+//! - **nessun bordo fuori posto** ([`Operandi::bordo_entro`]): il bordo
+//!   esatto di un'intersezione, unione, differenza o differenza simmetrica
+//!   di poligoni validi sta sui bordi degli operandi. Ogni lato del risultato
+//!   deve stare **per intero** entro `p / 2` da quei bordi. La tolleranza e'
+//!   `p / 2`, non `p`: un aggancio puo' portare un vertice da un bordo a un
+//!   altro bordo d'ingresso vicino, e i lati che vi arrivano stanno allora
+//!   entro `delta / 2` da uno dei due; con `p / 2` passa solo `delta <= p`.
+//!   L'insieme dei punti entro `r` da un segmento e' convesso (uno
+//!   «stadio»), la sua traccia su un lato e' un intervallo, e gli intervalli
+//!   dei segmenti vicini devono ricoprire il lato;
+//! - **nessun bordo mancante** ([`Operandi::completo`]): ogni tratto di
+//!   bordo d'ingresso a piu' di `p / 2` dai bordi degli altri operandi sta
+//!   tutto dentro o tutto fuori da ciascuno di essi, e la regola
+//!   dell'operazione (unione, intersezione, differenza...) dice, da chi lo
+//!   contiene (`Contains` esatto su un punto del tratto), se appartiene al
+//!   bordo del risultato esatto. Se si', deve stare entro `p / 2` dal bordo
+//!   del risultato. Una faccia omessa o cancellata piu' larga di `p` lascia
+//!   scoperto il suo bordo: errore.
 //!
-//! Il controllo delle booleane e' **unilaterale**: dice che il bordo del
-//! risultato sta vicino ai bordi degli ingressi, non che sia il bordo
-//! giusto. Una faccia intera omessa, il cui bordo coincide con quello degli
-//! ingressi, e un lato intero spostato su un bordo d'ingresso parallelo
-//! (entrambi gli estremi agganciati, aggancio oltre `p / 2`) non sono visti
-//! qui.
+//! Sotto la precisione restano le differenze dichiarate: parti piu' sottili
+//! di `p` fuse o sparite.
 
 use std::f64::consts::SQRT_2;
 
-use geo::{Coord, CoordsIter, Geometry, Line, LineString, MultiPolygon, Polygon, Rect};
+use geo::{
+    BoundingRect, Contains, Coord, CoordsIter, Line, LineString, MultiPolygon, Point, Polygon, Rect,
+};
 use rstar::{RTree, RTreeObject, AABB};
 
 use super::precision::{coordinate_abbastanza_fitte, modulo_massimo, Precision};
@@ -94,30 +78,6 @@ pub struct PrecisioneInsufficiente;
 
 /// Esponente di `i_float`: la scala e' `2^(29 - round(log2(h)))`.
 const ESPONENTE_GRIGLIA: i32 = 29;
-
-/// Margine d'ingombro del buffer, in multipli di `|d|`: il massimo fra i
-/// margini di `i_overlay::mesh` (giunzioni `1.1`, estremita' quadrate `2`,
-/// arrotondate `3`).
-pub const MARGINE_BUFFER_IN_DISTANZE: f64 = 3.0;
-
-/// Passo angolare massimo delle corde degli archi del buffer, in radianti.
-///
-/// `geo` chiede archi con passo `0.2` rad (`BufferStyle`); `i_overlay`
-/// divide un arco di ampiezza `a` in `round(a / 0.2)` corde, e un'ampiezza
-/// sotto `0.2` diventa una sola corda: il passo resta sotto `1.5 * 0.2`. Il
-/// cerchio di un punto (32 corde) e le estremita' arrotondate (15 corde su
-/// mezzo giro) stanno sotto. La freccia relativa e' `1 - cos(passo / 2)`
-/// ([`freccia_relativa_archi`]).
-pub const PASSO_MASSIMO_ARCHI: f64 = 0.3;
-
-/// La freccia massima degli archi del buffer, relativa alla distanza:
-/// `1 - cos(PASSO_MASSIMO_ARCHI / 2)`, circa `0.0112`. La differenza fra
-/// corda e arco e' l'approssimazione del buffer (README, «Limiti
-/// dichiarati»), non uno spostamento della griglia.
-#[must_use]
-pub fn freccia_relativa_archi() -> f64 {
-    1.0 - (PASSO_MASSIMO_ARCHI * 0.5).cos()
-}
 
 /// Il rettangolo d'ingombro delle coordinate; `None` senza coordinate. Una
 /// coordinata non finita rende il rettangolo non finito (e il controllo di
@@ -154,21 +114,6 @@ pub fn unisci(a: Option<Rect<f64>>, b: Option<Rect<f64>>) -> Option<Rect<f64>> {
         (a, None) => a,
         (None, b) => b,
     }
-}
-
-/// Il rettangolo allargato di `margine` per lato.
-#[must_use]
-pub fn allarga(rect: Rect<f64>, margine: f64) -> Rect<f64> {
-    Rect::new(
-        Coord {
-            x: rect.min().x - margine,
-            y: rect.min().y - margine,
-        },
-        Coord {
-            x: rect.max().x + margine,
-            y: rect.max().y + margine,
-        },
-    )
 }
 
 /// Il passo della griglia di `i_overlay` per operandi di ingombro `rect`;
@@ -212,10 +157,6 @@ fn ulp(magnitude: f64) -> f64 {
 /// Il primo giro di un overlay booleano sposta un punto di al piu' `(1 +
 /// sqrt(2)) g` (vedi il modulo).
 pub const FATTORE_OVERLAY: f64 = 1.0 + SQRT_2;
-
-/// Il primo passaggio del buffer sposta un punto di al piu' `(2 + 2
-/// sqrt(2)) g` (vedi il modulo).
-pub const FATTORE_BUFFER: f64 = 2.0 + 2.0 * SQRT_2;
 
 /// La tolleranza del controllo a posteriori delle booleane, in frazioni
 /// della precisione (vedi il modulo): anche il limite a priori delle
@@ -300,40 +241,6 @@ impl RTreeObject for Segmento {
     }
 }
 
-/// I segmenti della linework di una geometria: gli anelli dei poligoni, le
-/// linee, e i punti come segmenti degeneri.
-fn raccogli_segmenti(geometry: &Geometry<f64>, etichetta: usize, out: &mut Vec<Segmento>) {
-    let mut aggiungi = |linea: Line<f64>| out.push(Segmento { linea, etichetta });
-    match geometry {
-        Geometry::Point(point) => aggiungi(Line::new(point.0, point.0)),
-        Geometry::MultiPoint(points) => {
-            for point in points {
-                aggiungi(Line::new(point.0, point.0));
-            }
-        }
-        Geometry::Line(line) => aggiungi(*line),
-        Geometry::GeometryCollection(collection) => {
-            for child in collection {
-                raccogli_segmenti(child, etichetta, out);
-            }
-        }
-        Geometry::LineString(line) => linea_spezzata(line, &mut aggiungi),
-        Geometry::MultiLineString(lines) => {
-            for line in lines {
-                linea_spezzata(line, &mut aggiungi);
-            }
-        }
-        Geometry::Polygon(polygon) => anelli(polygon, &mut aggiungi),
-        Geometry::MultiPolygon(polygons) => {
-            for polygon in polygons {
-                anelli(polygon, &mut aggiungi);
-            }
-        }
-        Geometry::Rect(rect) => anelli(&rect.to_polygon(), &mut aggiungi),
-        Geometry::Triangle(triangle) => anelli(&triangle.to_polygon(), &mut aggiungi),
-    }
-}
-
 /// I lati di una spezzata; una spezzata di un solo punto e' il punto.
 fn linea_spezzata(line: &LineString<f64>, linea: &mut impl FnMut(Line<f64>)) {
     if let [solo] = line.0.as_slice() {
@@ -357,18 +264,8 @@ pub struct IndiceLinework {
 }
 
 impl IndiceLinework {
-    /// L'indice della linework di `geometrie`, ognuna con la sua etichetta.
-    pub fn nuovo<'a>(geometrie: impl IntoIterator<Item = (usize, &'a Geometry<f64>)>) -> Self {
-        let mut segmenti = Vec::new();
-        for (etichetta, geometry) in geometrie {
-            raccogli_segmenti(geometry, etichetta, &mut segmenti);
-        }
-        Self {
-            albero: RTree::bulk_load(segmenti),
-        }
-    }
-
-    /// Come [`Self::nuovo`], da multipoligoni.
+    /// L'indice della linework dei multipoligoni, ognuno con la sua
+    /// etichetta.
     pub fn da_multipoligoni<'a>(
         geometrie: impl IntoIterator<Item = (usize, &'a MultiPolygon<f64>)>,
     ) -> Self {
@@ -404,31 +301,7 @@ impl IndiceLinework {
         for polygon in output {
             for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
                 for lato in ring.lines() {
-                    intervalli.clear();
-                    let busta = AABB::from_corners(
-                        [
-                            lato.start.x.min(lato.end.x) - r,
-                            lato.start.y.min(lato.end.y) - r,
-                        ],
-                        [
-                            lato.start.x.max(lato.end.x) + r,
-                            lato.start.y.max(lato.end.y) + r,
-                        ],
-                    );
-                    let candidati = self
-                        .albero
-                        .locate_in_envelope_intersecting(&busta)
-                        .filter(|segmento| filtro(segmento.etichetta))
-                        .map(|segmento| segmento.linea)
-                        .chain(extra.iter().copied());
-                    for segmento in candidati {
-                        if let Some(intervallo) =
-                            intervallo_entro(lato.start, lato.end, segmento.start, segmento.end, r)
-                        {
-                            intervalli.push(intervallo);
-                        }
-                    }
-                    if !ricopre(&mut intervalli) {
+                    if !self.lato_entro(lato, extra, &filtro, r, &mut intervalli) {
                         return false;
                     }
                 }
@@ -437,88 +310,287 @@ impl IndiceLinework {
         true
     }
 
-    /// Il punto sta dentro i poligoni i cui anelli sono nell'indice, o
-    /// entro `raggio` dal loro bordo?
-    ///
-    /// Prima la vicinanza al bordo; poi, per un punto a piu' di `raggio` dal
-    /// bordo, la parita' degli attraversamenti del raggio orizzontale verso
-    /// `+x` (regola semiaperta sugli estremi): l'ascissa d'incrocio dista dal
-    /// punto almeno quanto il bordo, cioe' piu' di `raggio`, e il suo errore
-    /// d'arrotondamento non cambia il verso del confronto.
-    pub fn copre(&self, punto: Coord<f64>, raggio: f64) -> bool {
-        let busta = AABB::from_corners(
-            [punto.x - raggio, punto.y - raggio],
-            [punto.x + raggio, punto.y + raggio],
-        );
-        let margine = 16.0 * f64::EPSILON * (punto.x.abs() + punto.y.abs() + raggio);
-        if self
-            .albero
-            .locate_in_envelope_intersecting(&busta)
-            .any(|segmento| distanza_da_segmento(punto, segmento.linea) + margine <= raggio)
-        {
-            return true;
-        }
-        let semiretta = AABB::from_corners([punto.x, punto.y], [f64::MAX, punto.y]);
-        let attraversamenti = self
-            .albero
-            .locate_in_envelope_intersecting(&semiretta)
-            .filter(|segmento| {
-                let (a, b) = (segmento.linea.start, segmento.linea.end);
-                if (a.y > punto.y) == (b.y > punto.y) {
-                    return false;
-                }
-                let x = (punto.y - a.y).mul_add((b.x - a.x) / (b.y - a.y), a.x);
-                x > punto.x
-            })
-            .count();
-        attraversamenti % 2 == 1
-    }
-
-    /// Ogni vertice di `output` dista dai segmenti dell'indice almeno
-    /// `minima` e al piu' `massima`?
-    pub fn vertici_alla_distanza(
+    /// Il lato sta per intero entro `r` dai segmenti dell'indice la cui
+    /// etichetta passa `filtro`, o da uno di `extra`?
+    fn lato_entro(
         &self,
-        output: &MultiPolygon<f64>,
-        minima: f64,
-        massima: f64,
+        lato: Line<f64>,
+        extra: &[Line<f64>],
+        filtro: &impl Fn(usize) -> bool,
+        r: f64,
+        intervalli: &mut Vec<(f64, f64)>,
     ) -> bool {
-        if !(minima.is_finite() && massima.is_finite()) {
-            return false;
+        intervalli.clear();
+        let candidati = self
+            .albero
+            .locate_in_envelope_intersecting(&busta(lato, r))
+            .filter(|segmento| filtro(segmento.etichetta))
+            .map(|segmento| segmento.linea)
+            .chain(extra.iter().copied());
+        for segmento in candidati {
+            if let Some(intervallo) =
+                intervallo_entro(lato.start, lato.end, segmento.start, segmento.end, r)
+            {
+                intervalli.push(intervallo);
+            }
         }
-        output.coords_iter().all(|vertice| {
-            let busta = AABB::from_corners(
-                [vertice.x - massima, vertice.y - massima],
-                [vertice.x + massima, vertice.y + massima],
-            );
-            let distanza = self
-                .albero
-                .locate_in_envelope_intersecting(&busta)
-                .map(|segmento| distanza_da_segmento(vertice, segmento.linea))
-                .fold(f64::INFINITY, f64::min);
-            // Margine d'arrotondamento della distanza, sempre dal lato del
-            // rifiuto.
-            let margine = 16.0 * f64::EPSILON * (vertice.x.abs() + vertice.y.abs() + massima);
-            distanza.is_finite()
-                && (minima <= 0.0 || distanza - margine >= minima)
-                && distanza + margine <= massima
-        })
+        ricopre(intervalli)
     }
 }
 
-/// La distanza del punto dal segmento, calcolata sulle differenze
-/// dall'origine del segmento.
-fn distanza_da_segmento(point: Coord<f64>, segment: Line<f64>) -> f64 {
-    let px = point.x - segment.start.x;
-    let py = point.y - segment.start.y;
-    let dx = segment.end.x - segment.start.x;
-    let dy = segment.end.y - segment.start.y;
-    let lunghezza2 = dx.mul_add(dx, dy * dy);
-    let t = if lunghezza2 > 0.0 {
-        (px.mul_add(dx, py * dy) / lunghezza2).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    t.mul_add(-dx, px).hypot(t.mul_add(-dy, py))
+/// Il rettangolo del lato allargato di `r`.
+fn busta(lato: Line<f64>, r: f64) -> AABB<[f64; 2]> {
+    AABB::from_corners(
+        [
+            lato.start.x.min(lato.end.x) - r,
+            lato.start.y.min(lato.end.y) - r,
+        ],
+        [
+            lato.start.x.max(lato.end.x) + r,
+            lato.start.y.max(lato.end.y) + r,
+        ],
+    )
+}
+
+/// L'ingombro di un operando, per trovare chi contiene un punto.
+struct Ingombro {
+    etichetta: usize,
+    envelope: AABB<[f64; 2]>,
+}
+
+impl RTreeObject for Ingombro {
+    type Envelope = AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        self.envelope
+    }
+}
+
+/// Gli ingressi originali di un'operazione poligonale, ognuno con la sua
+/// etichetta (la posizione), per i due controlli a posteriori (vedi il
+/// modulo).
+pub struct Operandi<'a> {
+    poligoni: Vec<&'a MultiPolygon<f64>>,
+    bordi: IndiceLinework,
+    ingombri: RTree<Ingombro>,
+}
+
+impl<'a> Operandi<'a> {
+    /// Gli operandi, etichettati con la loro posizione.
+    #[must_use]
+    pub fn nuovi(poligoni: Vec<&'a MultiPolygon<f64>>) -> Self {
+        let bordi = IndiceLinework::da_multipoligoni(poligoni.iter().copied().enumerate());
+        let ingombri = RTree::bulk_load(
+            poligoni
+                .iter()
+                .enumerate()
+                .filter_map(|(etichetta, polygons)| {
+                    polygons.bounding_rect().map(|rect| Ingombro {
+                        etichetta,
+                        envelope: AABB::from_corners(
+                            [rect.min().x, rect.min().y],
+                            [rect.max().x, rect.max().y],
+                        ),
+                    })
+                })
+                .collect(),
+        );
+        Self {
+            poligoni,
+            bordi,
+            ingombri,
+        }
+    }
+
+    /// Le etichette degli operandi il cui ingombro interseca `rect`, in
+    /// ordine.
+    #[must_use]
+    pub fn vicini(&self, rect: Rect<f64>) -> Vec<usize> {
+        let mut vicini: Vec<usize> = self
+            .ingombri
+            .locate_in_envelope_intersecting(&AABB::from_corners(
+                [rect.min().x, rect.min().y],
+                [rect.max().x, rect.max().y],
+            ))
+            .map(|ingombro| ingombro.etichetta)
+            .collect();
+        vicini.sort_unstable();
+        vicini
+    }
+
+    /// Il primo controllo (vedi il modulo): ogni lato di `output` entro `p /
+    /// 2` dai bordi degli operandi accettati da `rilevante`.
+    pub fn bordo_entro(
+        &self,
+        output: &MultiPolygon<f64>,
+        rilevante: impl Fn(usize) -> bool,
+        precision: Precision,
+    ) -> bool {
+        self.bordi.bordo_entro(output, &[], rilevante, precision)
+    }
+
+    /// Il secondo controllo (vedi il modulo): ogni tratto di bordo degli
+    /// operandi accettati da `rilevante` (dentro `regione`, se c'e'), a piu'
+    /// di `p / 2` dai bordi degli altri, che secondo `regola` sta sul bordo
+    /// del risultato esatto, e' entro `p / 2` dal bordo di `output`.
+    pub fn completo(
+        &self,
+        output: &MultiPolygon<f64>,
+        rilevante: impl Fn(usize) -> bool,
+        regione: Option<Rect<f64>>,
+        regola: Regola,
+        precision: Precision,
+    ) -> bool {
+        let r = precision.value() * FRAZIONE_BORDO;
+        let uscita = IndiceLinework::da_multipoligoni([(0, output)]);
+        let segmenti: Vec<Segmento> = regione.map_or_else(
+            || self.bordi.albero.iter().copied().collect(),
+            |rect| {
+                self.bordi
+                    .albero
+                    .locate_in_envelope_intersecting(&busta(Line::new(rect.min(), rect.max()), r))
+                    .copied()
+                    .collect()
+            },
+        );
+        let mut vicini = Vec::new();
+        let mut coperti = Vec::new();
+        for segmento in segmenti
+            .iter()
+            .filter(|segmento| rilevante(segmento.etichetta))
+        {
+            let lato = segmento.linea;
+            vicini.clear();
+            for altro in self
+                .bordi
+                .albero
+                .locate_in_envelope_intersecting(&busta(lato, r))
+            {
+                if altro.etichetta != segmento.etichetta && rilevante(altro.etichetta) {
+                    if let Some(intervallo) = intervallo_entro(
+                        lato.start,
+                        lato.end,
+                        altro.linea.start,
+                        altro.linea.end,
+                        r,
+                    ) {
+                        vicini.push(intervallo);
+                    }
+                }
+            }
+            for (t0, t1) in liberi(&mut vicini) {
+                let medio = punto_a(lato, f64::midpoint(t0, t1));
+                let proprietario = segmento.etichetta;
+                let contiene = |etichetta: usize| {
+                    self.poligoni
+                        .get(etichetta)
+                        .is_some_and(|polygons| polygons.contains(&Point::from(medio)))
+                };
+                // Un altro operando rilevante, diverso da `escluso` e dal
+                // proprietario, contiene il punto? (si ferma al primo)
+                let altro = |escluso: usize| {
+                    self.ingombri
+                        .locate_in_envelope_intersecting(&AABB::from_point([medio.x, medio.y]))
+                        .any(|ingombro| {
+                            let etichetta = ingombro.etichetta;
+                            etichetta != proprietario
+                                && etichetta != escluso
+                                && rilevante(etichetta)
+                                && contiene(etichetta)
+                        })
+                };
+                let atteso = match regola {
+                    Regola::Unione => !altro(proprietario),
+                    Regola::Intersezione => altro(proprietario),
+                    Regola::DifferenzaSimmetrica => true,
+                    Regola::Differenza(soggetto) if proprietario == soggetto => !altro(soggetto),
+                    Regola::IntersezioneConUnione(soggetto) if proprietario == soggetto => {
+                        altro(soggetto)
+                    }
+                    Regola::Differenza(soggetto) | Regola::IntersezioneConUnione(soggetto) => {
+                        rilevante(soggetto) && contiene(soggetto) && !altro(soggetto)
+                    }
+                };
+                if atteso {
+                    let tratto = Line::new(punto_a(lato, t0), punto_a(lato, t1));
+                    if !uscita.lato_entro(tratto, &[], &|_| true, r, &mut coperti) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// I due controlli insieme.
+    ///
+    /// # Errors
+    ///
+    /// [`PrecisioneInsufficiente`] se uno dei due fallisce.
+    pub fn verifica(
+        &self,
+        output: &MultiPolygon<f64>,
+        rilevante: impl Fn(usize) -> bool,
+        regione: Option<Rect<f64>>,
+        regola: Regola,
+        precision: Precision,
+    ) -> Result<(), PrecisioneInsufficiente> {
+        if self.bordo_entro(output, &rilevante, precision)
+            && self.completo(output, &rilevante, regione, regola, precision)
+        {
+            Ok(())
+        } else {
+            Err(PrecisioneInsufficiente)
+        }
+    }
+}
+
+/// La regola dell'operazione per [`Operandi::completo`]: quando un tratto
+/// di bordo di un operando (il proprietario) sta sul bordo del risultato
+/// esatto, secondo quali altri operandi rilevanti lo contengono.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Regola {
+    /// Unione di tutti: nessun altro lo contiene.
+    Unione,
+    /// Intersezione di due: l'altro lo contiene.
+    Intersezione,
+    /// Differenza simmetrica di due: sempre.
+    DifferenzaSimmetrica,
+    /// `soggetto` meno l'unione degli altri: il bordo del soggetto che
+    /// nessun altro contiene; il bordo di un altro dentro il soggetto e
+    /// dentro nessun terzo.
+    Differenza(usize),
+    /// `soggetto` intersecato con l'unione degli altri: il bordo del
+    /// soggetto dentro almeno un altro; il bordo di un altro dentro il
+    /// soggetto e dentro nessun terzo.
+    IntersezioneConUnione(usize),
+}
+
+/// Il punto del lato al parametro `t`.
+fn punto_a(lato: Line<f64>, t: f64) -> Coord<f64> {
+    Coord {
+        x: t.mul_add(lato.end.x - lato.start.x, lato.start.x),
+        y: t.mul_add(lato.end.y - lato.start.y, lato.start.y),
+    }
+}
+
+/// I tratti di `[0, 1]` non coperti dagli intervalli, di lunghezza positiva.
+fn liberi(intervalli: &mut [(f64, f64)]) -> Vec<(f64, f64)> {
+    intervalli.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    let mut liberi = Vec::new();
+    let mut coperto = 0.0_f64;
+    for &(t0, t1) in intervalli.iter() {
+        if t0 > coperto {
+            liberi.push((coperto, t0.min(1.0)));
+        }
+        coperto = coperto.max(t1);
+        if coperto >= 1.0 {
+            return liberi;
+        }
+    }
+    liberi.push((coperto, 1.0));
+    liberi.retain(|(t0, t1)| t1 > t0);
+    liberi
 }
 
 /// L'intervallo `[t0, t1]`, dentro `[0, 1]`, dei parametri per cui il punto
@@ -642,141 +714,6 @@ fn ricopre(intervalli: &mut [(f64, f64)]) -> bool {
         }
     }
     false
-}
-
-/// Il controllo a priori di un buffer di distanza `distance` su `geometry`:
-/// l'ingombro dell'ingresso allargato di [`MARGINE_BUFFER_IN_DISTANZE`]
-/// `|d|` per lato.
-///
-/// # Errors
-///
-/// Come [`controlla_overlay`].
-pub fn controlla_buffer(
-    geometry: &Geometry<f64>,
-    distance: f64,
-    precision: Precision,
-) -> Result<(), PrecisioneInsufficiente> {
-    let rect = rettangolo_coordinate(geometry.coords_iter())
-        .map(|rect| allarga(rect, MARGINE_BUFFER_IN_DISTANZE * distance.abs()));
-    controlla_griglia(rect, precision, FATTORE_BUFFER, precision.value())
-}
-
-/// Le estremita' delle linee nel buffer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Estremita {
-    Tonde,
-    Piatte,
-    Quadrate,
-}
-
-/// La geometria ha linee (con estremita' libere)?
-fn ha_linee(geometry: &Geometry<f64>) -> bool {
-    match geometry {
-        Geometry::Line(_) | Geometry::LineString(_) | Geometry::MultiLineString(_) => true,
-        Geometry::GeometryCollection(collection) => collection.iter().any(ha_linee),
-        Geometry::Point(_)
-        | Geometry::MultiPoint(_)
-        | Geometry::Polygon(_)
-        | Geometry::MultiPolygon(_)
-        | Geometry::Rect(_)
-        | Geometry::Triangle(_) => false,
-    }
-}
-
-/// La geometria ha linee o punti (le sole parti a cui `geo` applica le
-/// estremita': i poligoni le ignorano)?
-fn ha_estremita(geometry: &Geometry<f64>) -> bool {
-    match geometry {
-        Geometry::Point(_) | Geometry::MultiPoint(_) => true,
-        Geometry::GeometryCollection(collection) => collection.iter().any(ha_estremita),
-        other => ha_linee(other),
-    }
-}
-
-/// Il controllo a posteriori di un buffer: ogni vertice dell'uscita sta fra
-/// `|d| - s - p` e `k |d| + p` dalla linework dell'ingresso (vedi il
-/// modulo); `k = sqrt(2)` con estremita' quadrate su linee o punti (gli
-/// angoli del quadrato), `1` altrimenti. Con `d > 0` ogni coordinata
-/// dell'ingresso sta dentro l'uscita o entro `p` dal suo bordo: nessuna
-/// parte dell'ingresso ha perso il suo buffer.
-///
-/// Con estremita' piatte o quadrate su linee il limite inferiore non vale:
-/// il bordo di un'estremita' piatta passa a distanza fra `0` e `|d|`
-/// dall'estremo della linea (lo attraversa), e un vertice dell'unione puo'
-/// cadervi sopra. Li' resta il solo limite superiore: il controllo vede lo
-/// spostamento verso l'esterno, non quello verso l'interno.
-///
-/// # Errors
-///
-/// [`PrecisioneInsufficiente`] se un vertice esce dalla fascia.
-pub fn verifica_buffer(
-    geometry: &Geometry<f64>,
-    distance: f64,
-    estremita: Estremita,
-    output: &MultiPolygon<f64>,
-    precision: Precision,
-) -> Result<(), PrecisioneInsufficiente> {
-    let da_coprire = if distance > 0.0 {
-        coordinate_da_coprire(geometry, estremita)
-    } else {
-        Vec::new()
-    };
-    if output.0.is_empty() && da_coprire.is_empty() {
-        return Ok(());
-    }
-    let d = distance.abs();
-    let p = precision.value();
-    let minima = if estremita != Estremita::Tonde && ha_linee(geometry) {
-        0.0
-    } else {
-        (freccia_relativa_archi().mul_add(-d, d) - p).max(0.0)
-    };
-    let massima = if estremita == Estremita::Quadrate && ha_estremita(geometry) {
-        SQRT_2 * d
-    } else {
-        d
-    } + p;
-    let indice = IndiceLinework::nuovo([(0, geometry)]);
-    if !indice.vertici_alla_distanza(output, minima, massima) {
-        return Err(PrecisioneInsufficiente);
-    }
-    if !da_coprire.is_empty() {
-        let uscita = IndiceLinework::da_multipoligoni([(0, output)]);
-        if !da_coprire
-            .iter()
-            .all(|coordinata| uscita.copre(*coordinata, p))
-        {
-            return Err(PrecisioneInsufficiente);
-        }
-    }
-    Ok(())
-}
-
-/// Le coordinate dell'ingresso che un buffer positivo deve coprire: tutte,
-/// salvo punti e linee con estremita' piatte. Un punto con estremita'
-/// piatte non ha buffer per definizione (`geo`), e una linea piu' corta
-/// della griglia avrebbe un buffer piatto piu' sottile della griglia: che
-/// sparisca e' dichiarato (una geometria piu' sottile della precisione).
-fn coordinate_da_coprire(geometry: &Geometry<f64>, estremita: Estremita) -> Vec<Coord<f64>> {
-    fn raccogli(geometry: &Geometry<f64>, estremita: Estremita, out: &mut Vec<Coord<f64>>) {
-        match geometry {
-            Geometry::GeometryCollection(collection) => {
-                for child in collection {
-                    raccogli(child, estremita, out);
-                }
-            }
-            Geometry::Point(_)
-            | Geometry::MultiPoint(_)
-            | Geometry::Line(_)
-            | Geometry::LineString(_)
-            | Geometry::MultiLineString(_)
-                if estremita == Estremita::Piatte => {}
-            other => out.extend(other.coords_iter()),
-        }
-    }
-    let mut coordinate = Vec::new();
-    raccogli(geometry, estremita, &mut coordinate);
-    coordinate
 }
 
 #[cfg(test)]
@@ -935,10 +872,10 @@ mod tests {
     #[test]
     fn il_bordo_spostato_oltre_la_precisione_e_visto() {
         let centimetro = Precision::new(0.01).unwrap();
-        let ingresso: Geometry<f64> =
-            polygon![(x: 0.0, y: 0.0), (x: 100.0, y: 0.0), (x: 100.0, y: 100.0), (x: 0.0, y: 100.0)]
-                .into();
-        let indice = IndiceLinework::nuovo([(0, &ingresso)]);
+        let ingresso = MultiPolygon::new(vec![polygon![
+            (x: 0.0, y: 0.0), (x: 100.0, y: 0.0), (x: 100.0, y: 100.0), (x: 0.0, y: 100.0)
+        ]]);
+        let indice = IndiceLinework::da_multipoligoni([(0, &ingresso)]);
         let piegato = |dy: f64| {
             MultiPolygon::new(vec![polygon![
                 (x: 0.0, y: 0.0), (x: 50.0, y: -dy), (x: 100.0, y: 0.0),
@@ -952,40 +889,21 @@ mod tests {
         assert!(!indice.bordo_entro(&piegato(0.0), &[], |_| false, centimetro));
     }
 
-    /// Il buffer di un punto spostato di 2 cm e' rifiutato; quello vero no.
-    #[test]
-    fn il_buffer_spostato_oltre_la_precisione_e_visto() {
-        use geo::Buffer as _;
-        let centimetro = Precision::new(0.01).unwrap();
-        let punto = Geometry::Point(geo::Point::new(500_000.0, 4_000_000.0));
-        let buffer = punto.buffer(100.0);
-        assert!(verifica_buffer(&punto, 100.0, Estremita::Tonde, &buffer, centimetro).is_ok());
-        let spostato = geo::MapCoords::map_coords(&buffer, |c| Coord {
-            x: c.x + 0.02,
-            y: c.y,
-        });
-        assert_eq!(
-            verifica_buffer(&punto, 100.0, Estremita::Tonde, &spostato, centimetro),
-            Err(PrecisioneInsufficiente)
-        );
-    }
-
     /// Revisione: un vertice agganciato a un bordo d'ingresso parallelo a
     /// 1,8 cm stava entro 0,9 cm da uno dei due bordi lungo i lati obliqui, e
     /// passava con tolleranza `p`. Con `p / 2` no; a 0,8 cm si'.
     #[test]
     fn il_vertice_agganciato_a_un_altro_bordo_e_visto() {
         let centimetro = Precision::new(0.01).unwrap();
-        let sotto: Geometry<f64> =
-            polygon![(x: 0.0, y: 0.0), (x: 200.0, y: 0.0), (x: 200.0, y: 50.0), (x: 0.0, y: 50.0)]
-                .into();
+        let sotto = MultiPolygon::new(vec![polygon![
+            (x: 0.0, y: 0.0), (x: 200.0, y: 0.0), (x: 200.0, y: 50.0), (x: 0.0, y: 50.0)
+        ]]);
         let spostato = |dy: f64| {
-            let sopra: Geometry<f64> = polygon![
+            let sopra = MultiPolygon::new(vec![polygon![
                 (x: 0.0, y: 50.0 + dy), (x: 200.0, y: 50.0 + dy),
                 (x: 200.0, y: 100.0), (x: 0.0, y: 100.0)
-            ]
-            .into();
-            let indice = IndiceLinework::nuovo([(0, &sotto), (1, &sopra)]);
+            ]]);
+            let indice = IndiceLinework::da_multipoligoni([(0, &sotto), (1, &sopra)]);
             let uscita = MultiPolygon::new(vec![polygon![
                 (x: 0.0, y: 0.0), (x: 200.0, y: 0.0), (x: 200.0, y: 50.0),
                 (x: 100.0, y: 50.0 + dy), (x: 0.0, y: 50.0)
@@ -996,83 +914,46 @@ mod tests {
         assert!(spostato(0.008));
     }
 
-    /// Revisione: estremita' quadrate su un poligono (che `geo` ignora):
-    /// un'uscita gonfiata di 3 m su 10 m non passa piu' con `k = sqrt(2)`.
+    /// Il secondo controllo: una faccia cancellata dal risultato lascia
+    /// scoperto il suo bordo; la stessa faccia contenuta da un altro
+    /// operando no.
     #[test]
-    fn le_estremita_quadrate_non_allargano_il_buffer_di_un_poligono() {
-        use geo::Buffer as _;
+    fn il_bordo_mancante_e_visto() {
         let centimetro = Precision::new(0.01).unwrap();
-        let quadrato: Geometry<f64> =
-            polygon![(x: 0.0, y: 0.0), (x: 100.0, y: 0.0), (x: 100.0, y: 100.0), (x: 0.0, y: 100.0)]
-                .into();
-        let buffer = quadrato.buffer(10.0);
-        assert!(verifica_buffer(&quadrato, 10.0, Estremita::Quadrate, &buffer, centimetro).is_ok());
-        let gonfiato = quadrato.buffer(13.0);
-        assert_eq!(
-            verifica_buffer(&quadrato, 10.0, Estremita::Quadrate, &gonfiato, centimetro),
-            Err(PrecisioneInsufficiente)
-        );
-    }
-
-    /// Revisione: la parte dell'ingresso che la griglia riduce a un punto
-    /// perde il buffer senza errore di `i_overlay`; il controllo lo vede.
-    #[test]
-    fn la_parte_senza_buffer_e_vista() {
-        use geo::Buffer as _;
-        let centimetro = Precision::new(0.01).unwrap();
-        let due = Geometry::MultiPoint(geo::MultiPoint::from(vec![
-            (500_000.0, 4_000_000.0),
-            (500_100.0, 4_000_000.0),
-        ]));
-        let solo_uno = Geometry::Point(geo::Point::new(500_000.0, 4_000_000.0)).buffer(10.0);
-        assert_eq!(
-            verifica_buffer(&due, 10.0, Estremita::Tonde, &solo_uno, centimetro),
-            Err(PrecisioneInsufficiente)
-        );
-        assert!(
-            verifica_buffer(&due, 10.0, Estremita::Tonde, &due.buffer(10.0), centimetro).is_ok()
-        );
-        // Uscita vuota con distanza positiva: errore.
-        assert_eq!(
-            verifica_buffer(
-                &due,
-                10.0,
-                Estremita::Tonde,
-                &MultiPolygon::new(vec![]),
-                centimetro
-            ),
-            Err(PrecisioneInsufficiente)
-        );
-    }
-
-    /// La copertura per parita' distingue dentro, fuori e il buco.
-    #[test]
-    fn la_copertura_conta_i_buchi() {
-        let centimetro = 0.01;
-        let ciambella = MultiPolygon::new(vec![Polygon::new(
-            LineString::from(vec![
-                (0.0, 0.0),
-                (10.0, 0.0),
-                (10.0, 10.0),
-                (0.0, 10.0),
-                (0.0, 0.0),
-            ]),
-            vec![LineString::from(vec![
-                (4.0, 4.0),
-                (6.0, 4.0),
-                (6.0, 6.0),
-                (4.0, 6.0),
-                (4.0, 4.0),
-            ])],
+        let grande = MultiPolygon::new(vec![polygon![
+            (x: 0.0, y: 0.0), (x: 100.0, y: 0.0), (x: 100.0, y: 100.0), (x: 0.0, y: 100.0)
+        ]]);
+        let staccato = MultiPolygon::new(vec![polygon![
+            (x: 200.0, y: 0.0), (x: 201.0, y: 0.0), (x: 201.0, y: 1.0), (x: 200.0, y: 1.0)
+        ]]);
+        let dentro = MultiPolygon::new(vec![polygon![
+            (x: 10.0, y: 10.0), (x: 20.0, y: 10.0), (x: 20.0, y: 20.0), (x: 10.0, y: 20.0)
+        ]]);
+        let operandi = Operandi::nuovi(vec![&grande, &staccato, &dentro]);
+        // Unione esatta: il grande e lo staccato; il bordo del terzo e'
+        // dentro il primo.
+        let esatta = MultiPolygon::new(vec![grande.0[0].clone(), staccato.0[0].clone()]);
+        assert!(operandi.completo(&esatta, |_| true, None, Regola::Unione, centimetro));
+        assert!(operandi.bordo_entro(&esatta, |_| true, centimetro));
+        // Senza lo staccato: il suo bordo manca.
+        assert!(!operandi.completo(&grande, |_| true, None, Regola::Unione, centimetro));
+        // Differenza grande - dentro: il bordo del terzo deve esserci.
+        let rilevante = |e: usize| e != 1;
+        assert!(!operandi.completo(&grande, rilevante, None, Regola::Differenza(0), centimetro));
+        let bucato = MultiPolygon::new(vec![Polygon::new(
+            grande.0[0].exterior().clone(),
+            vec![dentro.0[0].exterior().clone()],
         )]);
-        let indice = IndiceLinework::da_multipoligoni([(0, &ciambella)]);
-        let c = |x: f64, y: f64| Coord { x, y };
-        assert!(indice.copre(c(2.0, 2.0), centimetro));
-        assert!(!indice.copre(c(5.0, 5.0), centimetro));
-        assert!(!indice.copre(c(12.0, 5.0), centimetro));
-        assert!(indice.copre(c(10.005, 5.0), centimetro));
-        // Sulla quota di un vertice (regola semiaperta).
-        assert!(indice.copre(c(2.0, 4.0), centimetro));
-        assert!(!indice.copre(c(5.0, 4.5), centimetro));
+        assert!(operandi.completo(&bucato, rilevante, None, Regola::Differenza(0), centimetro));
+    }
+
+    #[test]
+    fn i_tratti_liberi_sono_il_complemento() {
+        assert_eq!(liberi(&mut []), vec![(0.0, 1.0)]);
+        assert_eq!(liberi(&mut [(-1.0, 2.0)]), Vec::<(f64, f64)>::new());
+        assert_eq!(
+            liberi(&mut [(0.5, 0.6), (-0.1, 0.2)]),
+            vec![(0.2, 0.5), (0.6, 1.0)]
+        );
     }
 }

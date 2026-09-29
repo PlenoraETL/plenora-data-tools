@@ -54,6 +54,11 @@ diverse di circa perimetro per 1 cm. Sopra la precisione ogni errore e'
 esplicito, mai silenzioso. Le funzioni dei kernel chiamate senza CRS
 ricevono la precisione come argomento esplicito, senza valore predefinito.
 
+**La garanzia vale per ingressi le cui parti distinte distano almeno la
+precisione.** Coordinate che differiscono solo nelle ultime cifre, parti o
+distanze fra parti sotto 1 cm sono fuori ambito: lì fusioni e scomparse
+sono accettate, e nessun controllo le cerca.
+
 Il solo rifiuto legato alla precisione è lo **spostamento che il calcolo
 introduce**, confrontato con la precisione: `PrecisionInsufficient`
 ("geometria troppo estesa per la precisione dichiarata"; `Unsupported`
@@ -75,36 +80,72 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
   grafo non si costruisce. Con la spaziatura delle coordinate già
   controllata è un secondo livello di difesa;
 - **griglia di `i_overlay`, a priori** (`rust_backend::griglia`): le
-  booleane e il buffer di `geo` portano le coordinate su interi con passo
-  `g = 2^(round(log2(h)) - 29)`, `h` la metà della dimensione maggiore del
+  booleane di `geo` portano le coordinate su interi con passo `g =
+  2^(round(log2(h)) - 29)`, `h` la metà della dimensione maggiore del
   rettangolo d'ingombro degli operandi di **quella** chiamata (letto da
-  `FloatPointAdapter::new` di `i_float` 1.16.0; per il buffer l'ingombro
-  dell'ingresso allargato di `3 |d|` per lato, il margine massimo di
-  `i_overlay::mesh`). Un giro di una booleana sposta un punto di al più
-  `(1 + sqrt(2)) g` (arrotondamento dei vertici e degli incroci, primo
-  aggancio), il primo passaggio del buffer `(2 + 2 sqrt(2)) g` (offset,
-  centri degli archi, overlay): oltre `p / 2` per le booleane (la
-  tolleranza del controllo a posteriori, sotto) e oltre `p` per il buffer
-  l'overlay non si esegue. In metri con 1 cm passano estensioni fino a
-  circa 2.950 km (l'Italia, 1.300 km, ha `g = 2^-10` m), 20.000 km no;
-- **risultato di ogni overlay, a posteriori**: gli agganci successivi al
-  primo hanno un raggio che cresce a ogni giro, e nessun limite a priori li
-  copre. Per le booleane ogni **lato** del risultato deve stare per intero
-  entro `p / 2` dai bordi degli ingressi **originali** dell'operazione
-  pubblica (l'insieme dei punti entro `p / 2` da un segmento è convesso, e
-  le tracce dei segmenti vicini devono ricoprire il lato). La tolleranza è
-  `p / 2` perché un aggancio può portare un vertice su un altro bordo
-  d'ingresso vicino, e i lati che vi arrivano restano entro metà dello
-  spostamento da uno dei due bordi: con `p / 2` passa solo uno spostamento
-  entro `p`. Per il buffer ogni vertice deve stare fra `|d| - s - p` e
-  `k |d| + p` dall'ingresso (`s` la freccia degli archi, `k = sqrt(2)` con
-  estremità quadrate su linee e punti), e con `d > 0` ogni coordinata
-  dell'ingresso deve stare dentro l'uscita o entro `p` dal suo bordo:
-  `i_overlay` salta senza errore un anello o una linea che la griglia
-  riduce a un punto, e il loro buffer, spesso `2 |d|`, sparirebbe. Il
-  controllo sugli ingressi originali, non sui risultati intermedi,
-  impedisce che gli spostamenti di overlay in catena (maschera dissolta e
-  poi intersecata, unioni accumulate, tagli ricorsivi) si sommino.
+  `FloatPointAdapter::new` di `i_float` 1.16.0). Un giro sposta un punto di
+  al più `(1 + sqrt(2)) g` (arrotondamento dei vertici e degli incroci,
+  primo aggancio): oltre `p / 2` (la tolleranza del controllo a
+  posteriori, sotto) l'overlay non si esegue. In metri con 1 cm passano
+  estensioni fino a circa 2.950 km (l'Italia, 1.300 km, ha `g = 2^-10` m),
+  20.000 km no;
+- **risultato di ogni overlay, a posteriori, contro gli ingressi
+  originali** dell'operazione pubblica (`griglia::Operandi`), non contro i
+  risultati intermedi: gli overlay in catena (maschera dissolta e poi
+  intersecata, unione dei vicini e differenza, tagli ricorsivi) non
+  sommano gli spostamenti. Due controlli:
+  - *nessun bordo fuori posto*: ogni **lato** del risultato sta per intero
+    entro `p / 2` dai bordi degli ingressi (l'insieme dei punti entro `p /
+    2` da un segmento è convesso, e le tracce dei segmenti vicini devono
+    ricoprire il lato). `p / 2` perché un aggancio può portare un vertice
+    su un altro bordo vicino, e i lati che vi arrivano restano entro metà
+    dello spostamento da uno dei due;
+  - *nessun bordo mancante*: ogni tratto di bordo d'ingresso a più di `p /
+    2` dai bordi degli altri operandi sta tutto dentro o tutto fuori da
+    ciascuno; da chi lo contiene (`Contains` esatto su un suo punto) la
+    regola dell'operazione (unione, intersezione, differenza, differenza
+    simmetrica, intersezione con un'unione) dice se sta sul bordo del
+    risultato esatto, e allora deve stare entro `p / 2` dal bordo del
+    risultato. Una faccia omessa o cancellata più larga di `p` è un errore.
+
+**Buffer.** Il `Buffer` di `geo` non si usa più: approssimava gli archi con
+un passo fisso di 0,2 rad (il cerchio di 10 m di un punto, 32 lati, aveva
+una freccia di 4,8 cm; la chiusura di `clean_topology` tagliava gli angoli
+di circa 6 cm) e saltava senza errore una componente che la griglia riduce
+a un punto anche quando il suo buffer era grande. `rust_backend::buffer`
+costruisce la definizione di Minkowski per pezzi e la unisce con un solo
+overlay controllato come sopra:
+
+- `d > 0`: le parti areali; per ogni lato di una linea il rettangolo largo
+  `2|d|`, per ogni lato di un anello la metà esterna (il punto più vicino di
+  un punto esterno sta dal lato esterno); per ogni vertice il settore del
+  suo cono normale (un punto entro `|d|` ha il punto più vicino interno a
+  un lato o in un vertice); mezzi dischi, quadrati o niente agli estremi
+  liberi e ai punti, secondo le estremità, come `geo`;
+- `d < 0`: ogni parte areale meno l'unione delle metà interne dei suoi
+  anelli e dei settori ai vertici concavi; punti e linee non contano, come
+  in `geo` (e come `geo` una collezione erode ogni parte areale da sola);
+- **archi dalla precisione**: settori e dischi sono poligoni inscritti con
+  freccia al più `p / 2`, `n = ceil(pi / acos(1 - (p/2) / |d|))` lati per
+  il cerchio intero. Con 1 cm: 32 lati a 1 m, 100 a 10 m, 315 a 100 m, 994
+  a 1000 m; oltre `2^20` lati (circa `|d| = 3,5e7 p`) errore. Freccia più
+  griglia restano entro `p`. Per non creare contatti quasi collineari fra
+  pezzi (schegge degli agganci) i rettangoli si sovrappongono ai giunti di
+  `sqrt(2 |d| f / 100)` (`f` la freccia: il pezzo esce dal buffer di un
+  centesimo della freccia) e i settori hanno il vertice arretrato dentro il
+  disco.
+
+`clean_topology` con la morfologia divide il bilancio: due buffer con
+freccia `p / 8` e griglia entro `p / 4`, e la rimozione delle
+sovrapposizioni con griglia entro `p / 4`: in tutto `p`. La rimozione non
+accumula un'unione riga dopo riga (a ogni giro la griglia spostava
+l'accumulatore: dopo 80 righe di 1.300 km una riga staccata larga 1,56 cm
+spariva senza errore): ogni resto è la riga meno l'unione delle sole righe
+precedenti che la toccano, prese dagli ingressi.
+
+`dissolve` orienta gli ingressi prima di `unary_union` di `geo`, che
+sceglie la regola di riempimento dal verso del primo anello: un poligono
+valido di verso opposto spariva dall'unione.
 
 **Ambito.** Tutte le operazioni geografiche. `geo.polygonize` e
 `geo.split` con i controlli di spaziatura e noding; ogni operazione che
@@ -146,41 +187,35 @@ vertice d'ingresso non sono riconosciuti.
 
 - Una geometria più sottile di 1 cm (in tutto o in parte) può uscire fusa o
   vuota senza errore, per scelta.
-- Il controllo a posteriori delle booleane è **unilaterale**: dice che il
-  bordo del risultato sta vicino ai bordi degli ingressi, non che sia il
-  bordo giusto. Una faccia intera omessa, il cui bordo coincide con quello
-  degli ingressi, e un lato intero portato su un bordo d'ingresso parallelo
-  (entrambi gli estremi agganciati, a più di `p / 2`) non sono visti qui
-  (la validazione OGC dell'output resta).
-- **`clean_topology`, morfologia.** La chiusura `buffer(+s)` poi
-  `buffer(-s)` controlla ogni buffer contro il proprio ingresso, cioè il
-  secondo contro il risultato del primo: gli spostamenti dei due passaggi
-  si sommano (fino a `2p` più la freccia degli archi). Il bordo della
-  chiusura non sta sui bordi degli ingressi originali, e non c'è un
-  controllo diretto contro di essi.
+- Un lato intero del risultato portato su un bordo d'ingresso parallelo
+  vicino (entrambi gli estremi agganciati) resta entro `p / 2` da un bordo
+  d'ingresso e non è visto come fuori posto; il bordo che manca al suo
+  posto è visto dal secondo controllo solo se più largo di `p`.
 - **`coverage_validate`, decisione sull'area.** L'area di ogni
   sovrapposizione si confronta con la tolleranza sul risultato passato
   dalla griglia: una sovrapposizione più sottile della griglia può sparire
   (issue mancata) e vertici diversi su lati collineari possono lasciare una
   scheggia (issue spuria), entro la precisione per il perimetro della
   zona.
-- **Buffer, archi.** Il buffer di `geo` approssima gli archi con corde di
-  passo al più 0,3 rad (`BufferStyle` chiede 0,2 rad; `i_overlay` arrotonda
-  il numero di corde): la freccia arriva a circa l'1,1% della distanza, 11
-  cm per un buffer di 10 m. È la definizione dell'operazione, come i
-  `quad_segs` di GEOS, non uno spostamento della griglia: il controllo la
-  ammette nel limite inferiore e non la segnala.
-- **Buffer, estremità piatte o quadrate su linee.** Il bordo di
-  un'estremità piatta passa fra `0` e `|d|` dall'estremo della linea, e un
-  vertice dell'unione può cadervi: lì resta solo il limite superiore (lo
-  spostamento verso l'esterno è visto, quello verso l'interno no). Con
-  estremità piatte punti e linee non entrano nel controllo di copertura:
-  un punto non ha buffer piatto, e una linea più corta della griglia ne ha
-  uno più sottile della griglia.
-- **Non applicabile.** Il buffer tondo di un `Point` non passa da
-  `i_overlay` (è un poligono di 32 lati costruito direttamente); le parti
-  di `subdivide` sotto la soglia di vertici escono invariate, senza
-  overlay. Entrambe passano comunque dai controlli, senza effetto.
+- **`subdivide`.** I tagli sono in catena (fino a 32 livelli): ogni taglio
+  è controllato contro i propri operandi (nessuna parte mancante) e ogni
+  foglia contro il poligono di partenza e le linee di taglio del suo
+  cammino (nessun lato fuori posto). Il passo della griglia si dimezza con
+  il pezzo, e lo spostamento accumulato resta sotto la precisione.
+- **Buffer, costo.** Gli archi dalla precisione e l'unione di pezzi
+  costano più del `Buffer` di `geo`. Misure in release, stella di 1.000
+  vertici (raggio 1 km) e linea di 1.000 vertici, 1 cm, contro `geo` più le
+  stesse validazioni: poligono 86 ms / 8 ms a 1 m, 125 / 6 ms a 10 m,
+  586 / 34 ms a 100 m, 17 s / 0,17 s a 1000 m; linea 27 / 4 ms a 1 m, 24 /
+  3 ms a 10 m, 36 / 1 ms a 100 m, 1,5 s / 4 ms a 1000 m. Il caso peggiore
+  sono distanze molto maggiori dei dettagli dell'ingresso (tutti i pezzi si
+  sovrappongono); anche `geo` degenera quando molti lati convergono (la
+  chiusura di angoli di 157 corde: 2,5 s qui, 2,2 s con `geo`; di 600
+  corde: 121 s qui, 122 s con `geo`). I
+  vertici dell'uscita crescono con gli archi (fino a circa 6 volte).
+- **Non applicabile.** Le parti di `subdivide` sotto la soglia di vertici
+  escono invariate, senza overlay; i punti con estremità piatte non hanno
+  buffer (come in `geo`), senza overlay.
 - Lo split lineare (`split_line`, sorgenti `LineString` di `geo.split`,
   codice precedente al porting) ammette un punto di taglio entro la
   tolleranza più un margine numerico proporzionale al modulo delle
@@ -190,10 +225,9 @@ vertice d'ingresso non sono riconosciuti.
   nulla, non taglia.
 
 **Condizione di rientro.** Nessuna per la precisione, che è una scelta di
-prodotto. Per il controllo unilaterale, un confronto delle aree con i
-limiti dell'operazione insiemistica (lo sviluppa `geo.make_valid` sul suo
-branch di lavoro); per gli archi del buffer, un parametro di passo esposto
-o derivato dalla precisione.
+prodotto. Da unificare con il `checked_displacement` di `geo.make_valid`
+(sul suo branch di lavoro: vertici entro `p`), che qui diventa i due
+controlli contro gli ingressi originali.
 
 ### Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
 

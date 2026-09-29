@@ -29,7 +29,7 @@ use rstar::{RTree, RTreeObject, AABB};
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
 use crate::extensions::{check_tolerance, invalid_parameter, u64_len, ExtensionError};
 use crate::geometry_type_name as geometry_name;
-use crate::rust_backend::griglia::{self, IndiceLinework};
+use crate::rust_backend::griglia::{self, Operandi, Regola};
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 
@@ -217,11 +217,12 @@ fn coverage_validate_elements(
     max_issues: u64,
     precision: Precision,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
-    let bordi = IndiceLinework::da_multipoligoni(
+    let vuoto = MultiPolygon::new(Vec::new());
+    let operandi = Operandi::nuovi(
         elements
             .iter()
-            .enumerate()
-            .filter_map(|(index, element)| element.as_ref().map(|e| (index, &e.polygons))),
+            .map(|element| element.as_ref().map_or(&vuoto, |e| &e.polygons))
+            .collect(),
     );
     let mut issues = Vec::new();
     for (a, b) in candidate_pairs(elements, tree) {
@@ -235,14 +236,13 @@ fn coverage_validate_elements(
             .polygons;
         griglia::controlla_overlay(griglia::rettangolo_multipoligoni([left, right]), precision)?;
         let intersection = left.intersection(right);
-        if !bordi.bordo_entro(
+        operandi.verifica(
             &intersection,
-            &[],
             |etichetta| etichetta == a || etichetta == b,
+            left.bounding_rect(),
+            Regola::Intersezione,
             precision,
-        ) {
-            return Err(ExtensionError::PrecisionInsufficient);
-        }
+        )?;
         let area = intersection.unsigned_area();
         if area > tolerance {
             if u64_len(issues.len())? >= max_issues {
