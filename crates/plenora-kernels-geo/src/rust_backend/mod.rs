@@ -493,8 +493,42 @@ pub fn make_valid_geometry(
     geometry_from_wkb(&repaired).map_err(RustBackendError::from)
 }
 
-/// Esito di [`polygonize_linework`], con la stessa forma di GEOS.
-pub type PolygonizeResult = polygonize::PolygonizeResult;
+/// Esito di [`polygonize_linework`], con la forma di
+/// `geos_backend::PolygonizeResult` a 190c493 (in piu' `PartialEq`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolygonizeResult {
+    pub polygons: Vec<Polygon<f64>>,
+    pub cut_edges: Vec<LineString<f64>>,
+    pub dangles: Vec<LineString<f64>>,
+    pub invalid_ring_lines: Vec<LineString<f64>>,
+}
+
+impl PolygonizeResult {
+    /// Residui di tutte le classi.
+    ///
+    /// Infallibile come a 190c493: tre `Vec` di `LineString` (24 byte per
+    /// elemento) non superano insieme `3 * isize::MAX / 24 < usize::MAX`
+    /// elementi, quindi la somma non satura mai; `saturating_add` tiene
+    /// comunque fuori l'overflow dal percorso.
+    #[must_use]
+    pub const fn residual_count(&self) -> usize {
+        self.cut_edges
+            .len()
+            .saturating_add(self.dangles.len())
+            .saturating_add(self.invalid_ring_lines.len())
+    }
+}
+
+impl From<polygonize::PolygonizeResult> for PolygonizeResult {
+    fn from(result: polygonize::PolygonizeResult) -> Self {
+        Self {
+            polygons: result.polygons,
+            cut_edges: result.cut_edges,
+            dangles: result.dangles,
+            invalid_ring_lines: result.invalid_ring_lines,
+        }
+    }
+}
 
 /// Polygonizza linework 2D valido e conserva ogni categoria di residuo.
 /// `node_input` inserisce esplicitamente i nodi d'incrocio prima della
@@ -562,10 +596,8 @@ pub fn polygonize_linework(
         },
         |error| RustBackendError::from_polygonize(&error, "polygonize"),
     )?;
-    let residuals = result
-        .residual_count()
-        .map_err(|error| RustBackendError::from_polygonize(&error, "polygonize"))?;
-    if require_complete && residuals != 0 {
+    let result = PolygonizeResult::from(result);
+    if require_complete && result.residual_count() != 0 {
         return Err(RustBackendError::IncompletePolygonize {
             cuts: result.cut_edges.len(),
             dangles: result.dangles.len(),
@@ -709,7 +741,7 @@ mod tests {
         ]));
         let result = polygonize_linework(&linework, true, false, 100, 1_000, 100, 100).unwrap();
         assert_eq!(result.polygons.len(), 1);
-        assert_eq!(result.residual_count().unwrap(), 1);
+        assert_eq!(result.residual_count(), 1);
         assert!(matches!(
             polygonize_linework(&linework, true, true, 100, 1_000, 100, 100),
             Err(RustBackendError::IncompletePolygonize {
@@ -823,7 +855,7 @@ mod tests {
         // chiede ogni limite finito, e zero lo e'.
         let result = polygonize_linework(&empty, false, true, 100, 0, 100, 100).unwrap();
         assert!(result.polygons.is_empty());
-        assert_eq!(result.residual_count().unwrap(), 0);
+        assert_eq!(result.residual_count(), 0);
 
         let square_lines = Geometry::GeometryCollection(
             vec![
@@ -978,6 +1010,24 @@ mod tests {
             split_polygon_by_linework(&square(0.0, 0.0, 4.0), &wrong, 100, 10_000, 100, 1_000)
                 .is_err()
         );
+    }
+
+    /// La firma di `geos_backend::PolygonizeResult::residual_count` a
+    /// 190c493: infallibile, `usize`, `const`.
+    #[test]
+    fn residual_count_keeps_the_190c493_signature() {
+        const fn conta(result: &PolygonizeResult) -> usize {
+            result.residual_count()
+        }
+        let signature: fn(&PolygonizeResult) -> usize = PolygonizeResult::residual_count;
+        let result = PolygonizeResult {
+            polygons: Vec::new(),
+            cut_edges: vec![LineString::new(Vec::new())],
+            dangles: vec![LineString::new(Vec::new()); 2],
+            invalid_ring_lines: Vec::new(),
+        };
+        assert_eq!(signature(&result), 3);
+        assert_eq!(conta(&result), 3);
     }
 
     #[test]
