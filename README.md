@@ -147,9 +147,11 @@ differenziali no. Le differenze note sono in
 - restano decisioni con tolleranza, non esatte (elenco in
   `rust_backend/mod.rs`): punto medio dei lati nell'assemblaggio dei buchi,
   tolleranze `1e-9` dei controlli a posteriori di `split` (una scheggia
-  sotto quella soglia li passa), tolleranze di `make_valid` e, vicino a un
-  incrocio vero dei bordi, una perdita d'area sotto la tolleranza di snap
-  dell'overlay (lontano dagli incroci il controllo dell'overlay è esatto);
+  sotto quella soglia li passa), tolleranze di `make_valid`; la
+  precondizione degli overlay di `make_valid` si regge sul comportamento di
+  `i_float`/`i_overlay` letto dai sorgenti delle versioni nel lock (passo
+  di griglia, raggio di aggancio che cresce solo dopo un passo che ha
+  arrotondato): un aggiornamento di quei crate va riletto;
 - il corpus applicativo reale (gate del laboratorio) non è mai stato eseguito:
   mancano WKB reali anonimizzati;
 - la validazione interna dei kernel usa `check_validation` di `geo`,
@@ -200,8 +202,12 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 - nessuna perdita silenziosa in `make_valid`: la cornice valida con
   `L = 2^500` è un errore esplicito da ogni ingresso del kernel, e una cornice
   con margine da `2^-10` a `2^-50` accanto a una geometria da riparare esce
-  con l'area giusta o con `OverlayLoss`, mai con una parte in meno
-  (`tests/geo_rust_overlay_controllato.rs`);
+  con la cornice di area esattamente uguale o con `PrecisionInsufficient`,
+  mai con una parte in meno; i controesempi della revisione (buco largo
+  `2^-40`, cornice accanto a un triangolo con estensione 1024) sono
+  rifiutati prima dell'overlay (`tests/geo_rust_overlay_controllato.rs`);
+  sulla campagna di assurance la precondizione valuta 268 overlay e non ne
+  rifiuta nessuno;
 - determinismo: ogni operazione due volte byte per byte; input permutato o
   invertito byte per byte dove il contratto promette la forma canonica, per
   classe e area dove non la promette.
@@ -256,10 +262,10 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   dell'aritmetica esatta, cioè con modulo fuori da `[2^-450, 2^450]`
   (`NumericRange`, `Unsupported`, anche da `make_valid`, che prima in
   quel caso avviava la riparazione di un poligono valido), overlay di
-  `make_valid` incoerente con le aree degli operandi, tipicamente una
-  feature più sottile della griglia di `i_overlay` (`OverlayLoss`,
-  `Unsupported`: una cornice con margine `2^-28` dell'estensione accanto a
-  una geometria da riparare ora fallisce, prima ne perdeva metà),
+  `make_valid` con feature sotto 8 passi della griglia intera di
+  `i_overlay` (`PrecisionInsufficient`, `Unsupported`, prima dell'overlay:
+  una cornice con margine `2^-25` dell'estensione accanto a una geometria
+  da riparare ora fallisce, prima da `2^-28` ne perdeva metà),
   memoria non prenotabile (`ResourceLimit`),
   panico di `geo`/`i_overlay` dentro il kernel (`Internal`, solo la forma
   del payload).

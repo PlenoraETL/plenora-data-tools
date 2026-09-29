@@ -24,9 +24,10 @@ use super::polygonize::{
     polygonize_linework_rust, PolygonizeError, PolygonizeLimits, PolygonizeOptions,
 };
 use geo::algorithm::validation::Validation;
+use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::line_intersection::{line_intersection, LineIntersection};
 use geo::{
-    Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, GeometryCollection, Intersects,
+    Area, BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, Line,
     LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use thiserror::Error;
@@ -97,14 +98,13 @@ pub enum MakeValidError {
     /// laboratorio, che decideva comunque.
     #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
     NumericRange,
-    /// Un overlay ha perso (o guadagnato) area oltre cio' che l'operazione
-    /// insiemistica ammette: tipicamente una feature piu' sottile della
-    /// griglia intera di `i_overlay` collassata. Deviazione dal laboratorio,
-    /// che restituiva il risultato.
-    #[error(
-        "overlay incoerente con le aree degli operandi: feature sotto la risoluzione della griglia"
-    )]
-    OverlayLoss,
+    /// Le feature degli operandi di un overlay non sono risolvibili sulla
+    /// griglia intera di `i_overlay`: l'arrotondamento potrebbe fonderle,
+    /// collassarle o riordinarle. L'overlay non viene eseguito (vedi
+    /// `overlay_precondition`). Deviazione dal laboratorio, che eseguiva
+    /// l'overlay e restituiva il risultato.
+    #[error("feature dell'overlay sotto la risoluzione della griglia intera")]
+    PrecisionInsufficient,
 }
 
 impl From<PolygonizeError> for MakeValidError {
@@ -505,246 +505,298 @@ impl OverlayNormalizer {
     }
 }
 
-/// Operazione insiemistica di un overlay, per il controllo delle aree.
-#[derive(Clone, Copy, Debug)]
-enum OverlayOperation {
-    Union,
-    Difference,
-    Xor,
+/// Separazione minima fra le feature degli operandi di un overlay, in passi
+/// della griglia intera di `i_overlay` (vedi [`overlay_precondition`]).
+///
+/// Derivazione (unita': passo di griglia `g`, distanze euclidee):
+///
+/// 1. `i_float` porta ogni coordinata sulla griglia arrotondando
+///    `(x - centro) * 2^e` all'intero piu' vicino: ogni vertice si sposta al
+///    piu' di `g / 2` per asse, cioe' `g / sqrt(2)`. La distanza fra un
+///    vertice e un lato non incidente cambia quindi al piu' di `sqrt(2) g`
+///    (vertice e lato si spostano ciascuno di `g / sqrt(2)`); la lunghezza di
+///    un lato altrettanto.
+/// 2. Gli incroci veri fra lati sono calcolati in interi e arrotondati: il
+///    punto d'incrocio si sposta al piu' di `g / sqrt(2)`.
+/// 3. Lo split di `i_overlay` (`split::cross_solver::middle_cross`) aggancia
+///    un incrocio arrotondato all'estremo piu' vicino se la distanza al
+///    quadrato e' `<= r`, con `r = 2^j` unita' al quadrato al passo `j` del
+///    ciclo (`Solver::default()`: precisione `HIGH`, `j` parte da 0 e cresce
+///    di 1 a ogni passo che ha arrotondato qualcosa). Con feature separate
+///    da `d >= K g`, dopo gli spostamenti restano separate da `(K - 3) g`:
+///    il primo passo divide solo gli incroci veri, che diventano estremi
+///    comuni; nessun frammento incrocia piu' un altro fuori dagli estremi
+///    comuni (due segmenti con un estremo in comune si toccano solo li', o si
+///    sovrappongono, il che richiederebbe un vertice a distanza zero da un
+///    lato non incidente), quindi il secondo passo non arrotonda nulla e
+///    il ciclo si ferma con `r <= 2`, raggio `sqrt(2) g`.
+/// 4. Perche' nessun aggancio unisca feature distinte e nessun vertice
+///    cambi lato di un lato, basta `(K - 3) g > sqrt(2) g + g / sqrt(2)`,
+///    cioe' `K > 3 + 2.13`. `K = 8` lascia margine anche per l'errore della
+///    normalizzazione in `f64` (circa `2^-52` su coordinate in `[0, 1]`,
+///    contro `g = 2^-30`) e per la distanza calcolata in `f64`.
+const OVERLAY_SEPARATION_STEPS: f64 = 8.0;
+
+/// Il passo della griglia intera che `i_overlay` usera' per questi punti,
+/// replicato da `i_float` 1.16.0 (`FloatPointAdapter::new`): meta' della
+/// dimensione maggiore del rettangolo d'ingombro, esponente
+/// `29 - round(log2(meta'))` con arrotondamento a meta' lontano da zero
+/// (`FloatNumber::to_i32` per `f64`), passo `2^(round(log2) - 29)`; `1` se il
+/// rettangolo e' un punto. Se `log2` cade a meno di `1e-9` da un mezzo intero
+/// (dove `f64::log2` e `libm::log2` potrebbero arrotondare in modo diverso)
+/// si prende il passo maggiore, il piu' severo. Per gli overlay normalizzati
+/// di `make_valid` il rettangolo e' `[0, 1]^2` e il passo e' `2^-30`.
+fn overlay_grid_step(points: &[Coord<f64>]) -> f64 {
+    let mut iter = points.iter();
+    let Some(first) = iter.next() else {
+        return 1.0;
+    };
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (first.x, first.x, first.y, first.y);
+    for point in iter {
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    let half = ((max_x - min_x) * 0.5).max((max_y - min_y) * 0.5);
+    if half == 0.0 {
+        return 1.0;
+    }
+    let log2 = half.log2();
+    let fraction = log2 - log2.floor();
+    let rounded = if (fraction - 0.5).abs() < 1e-9 {
+        log2.ceil()
+    } else {
+        log2.round()
+    };
+    (rounded - 29.0).exp2()
 }
 
-/// Il controllo che il laboratorio non aveva, dopo ogni overlay.
-///
-/// L'overlay passa per coordinate normalizzate, la griglia intera di
-/// `i_overlay` e uno snap alle coordinate sorgente: una feature piu' sottile
-/// della griglia (circa `2^-31` dell'estensione) puo' collassare o deformarsi
-/// e il risultato resta valido. Il controllo non si fida del risultato:
-///
-/// 1. **vertici**: ogni vertice del risultato deve essere un vertice di un
-///    operando, oppure stare entro la tolleranza di snap (per asse, il
-///    doppio di quella di `restore_multi_snapped`) da un punto d'incrocio
-///    fra i bordi dei due operandi, calcolato con `line_intersection` di
-///    `geo`. Un vertice che non e' ne' l'uno ne' l'altro e' un artefatto
-///    della griglia (un lato spostato), quindi errore. Senza incroci il
-///    risultato vero ha solo vertici sorgente;
-/// 2. **aree**: l'area del risultato deve stare nei limiti dell'operazione
-///    insiemistica, comprese le componenti che l'altro operando non tocca
-///    (vedi [`area_constraints`]). Se tutti i
-///    vertici sono sorgente i limiti valgono esattamente e li si verifica con
-///    [`super::exact::segno_combinazione`], senza tolleranza: un collasso a
-///    vuoto o una parte persa e' un errore; fuori dal dominio esatto,
-///    [`MakeValidError::NumericRange`]. Altrimenti ogni vertice d'incrocio
-///    puo' essersi spostato della tolleranza, e l'area del prodotto di quello
-///    spostamento per i due lati adiacenti: la tolleranza e' il doppio di
-///    quella somma piu' il rumore delle aree in `f64`.
-///
-/// Residuo dichiarato: vicino a un incrocio, una perdita d'area sotto quella
-/// tolleranza non si distingue dallo snap legittimo.
-fn checked_overlay(
-    operation: OverlayOperation,
-    left: &MultiPolygon<f64>,
-    right: &MultiPolygon<f64>,
-    result: MultiPolygon<f64>,
-    normalizer: OverlayNormalizer,
-) -> Result<MultiPolygon<f64>, MakeValidError> {
-    let constraints = area_constraints(operation, left, right, &result);
-    let tolerance_x = normalizer.span_x.abs() * 8.0 / f64::from(i32::MAX);
-    let tolerance_y = normalizer.span_y.abs() * 8.0 / f64::from(i32::MAX);
-    let source = left
-        .coords_iter()
-        .chain(right.coords_iter())
-        .map(CoordKey::new)
-        .collect::<BTreeSet<_>>();
-    let crossings = boundary_crossings(left, right, &source);
+/// Un lato di un operando: estremi originali (per l'incidenza esatta) e
+/// normalizzati (le coordinate che `i_overlay` riceve).
+#[derive(Clone, Copy, Debug)]
+struct OverlayEdge {
+    original: Line<f64>,
+    normalized: Line<f64>,
+}
+
+fn overlay_edges(original: &MultiPolygon<f64>, normalized: &MultiPolygon<f64>) -> Vec<OverlayEdge> {
+    let mut edges = Vec::new();
     let rings = |polygons: &MultiPolygon<f64>| {
         polygons
             .0
             .iter()
             .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
-            .cloned()
+            .flat_map(LineString::lines)
             .collect::<Vec<_>>()
     };
-    let mut displaced_area = 0.0_f64;
-    for ring in rings(&result) {
-        let coordinates = &ring.0;
-        let open = coordinates.len().saturating_sub(1);
-        for index in 0..open {
-            let vertex = coordinates[index];
-            if source.contains(&CoordKey::new(vertex)) {
+    for (original, normalized) in rings(original).into_iter().zip(rings(normalized)) {
+        // Un vertice ripetuto non e' un lato: `i_overlay` lo ignora.
+        if original.start != original.end {
+            edges.push(OverlayEdge {
+                original,
+                normalized,
+            });
+        }
+    }
+    edges
+}
+
+fn point_segment_distance(point: Coord<f64>, segment: Line<f64>) -> f64 {
+    let dx = segment.end.x - segment.start.x;
+    let dy = segment.end.y - segment.start.y;
+    let length_squared = dx * dx + dy * dy;
+    if length_squared == 0.0 {
+        return (point.x - segment.start.x).hypot(point.y - segment.start.y);
+    }
+    let t = (((point.x - segment.start.x) * dx + (point.y - segment.start.y) * dy)
+        / length_squared)
+        .clamp(0.0, 1.0);
+    (point.x - (segment.start.x + t * dx)).hypot(point.y - (segment.start.y + t * dy))
+}
+
+/// Il vertice sta esattamente sul lato (coordinate originali, `orient2d`
+/// esatto): incidenza vera, che l'arrotondamento conserva agganciando.
+fn exactly_on(point: Coord<f64>, segment: Line<f64>) -> bool {
+    RobustKernel::orient2d(segment.start, segment.end, point) == Orientation::Collinear
+        && point.x >= segment.start.x.min(segment.end.x)
+        && point.x <= segment.start.x.max(segment.end.x)
+        && point.y >= segment.start.y.min(segment.end.y)
+        && point.y <= segment.start.y.max(segment.end.y)
+}
+
+/// Gli indici delle coppie di lati i cui inviluppi, allargati di `margin`,
+/// si toccano: scansione sull'asse x dopo l'ordinamento, sub-quadratica
+/// salvo lati lunghi sovrapposti (il caso peggiore resta quadratico, entro i
+/// limiti di segmenti del preflight di `make_valid`).
+fn candidate_edge_pairs(edges: &[OverlayEdge], margin: f64) -> Vec<(usize, usize)> {
+    let envelope = |edge: &OverlayEdge| {
+        let segment = edge.normalized;
+        (
+            segment.start.x.min(segment.end.x) - margin,
+            segment.start.x.max(segment.end.x) + margin,
+            segment.start.y.min(segment.end.y) - margin,
+            segment.start.y.max(segment.end.y) + margin,
+        )
+    };
+    let envelopes = edges.iter().map(envelope).collect::<Vec<_>>();
+    let mut order = (0..edges.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        envelopes[*left]
+            .0
+            .total_cmp(&envelopes[*right].0)
+            .then_with(|| left.cmp(right))
+    });
+    let mut pairs = Vec::new();
+    for (position, &left) in order.iter().enumerate() {
+        let left_envelope = envelopes[left];
+        for &right in order.iter().skip(position + 1) {
+            let right_envelope = envelopes[right];
+            if right_envelope.0 > left_envelope.1 {
+                break;
+            }
+            if right_envelope.3 < left_envelope.2 || right_envelope.2 > left_envelope.3 {
                 continue;
             }
-            let near_crossing = crossings.iter().any(|crossing| {
-                (vertex.x - crossing.x).abs() <= tolerance_x
-                    && (vertex.y - crossing.y).abs() <= tolerance_y
-            });
-            if !near_crossing {
-                return Err(MakeValidError::OverlayLoss);
-            }
-            let previous = coordinates[if index == 0 { open - 1 } else { index - 1 }];
-            let next = coordinates[index + 1];
-            let adjacent = (vertex.x - previous.x).hypot(vertex.y - previous.y)
-                + (next.x - vertex.x).hypot(next.y - vertex.y);
-            displaced_area += adjacent * tolerance_x.hypot(tolerance_y);
+            pairs.push((left.min(right), left.max(right)));
         }
     }
-    if displaced_area == 0.0 {
-        for terms in &constraints {
-            let sign = super::exact::segno_combinazione(terms)
-                .map_err(|_| MakeValidError::NumericRange)?;
-            if sign == std::cmp::Ordering::Less {
-                return Err(MakeValidError::OverlayLoss);
-            }
-        }
-        return Ok(result);
-    }
-    let noise = 64.0
-        * f64::EPSILON
-        * (result.unsigned_area() + left.unsigned_area() + right.unsigned_area());
-    let tolerance = 2.0 * displaced_area + noise;
-    for terms in &constraints {
-        let value = terms
-            .iter()
-            .map(|(polygon, coefficient)| coefficient * polygon.unsigned_area())
-            .sum::<f64>();
-        if !value.is_finite() || !tolerance.is_finite() {
-            return Err(MakeValidError::NumericRange);
-        }
-        if value < -tolerance {
-            return Err(MakeValidError::OverlayLoss);
-        }
-    }
-    Ok(result)
+    pairs
 }
 
-/// Le componenti di `polygons` il cui rettangolo d'ingombro e' separato da
-/// quello di ogni componente di `other`: nessuna operazione insiemistica le
-/// tocca, e devono restare per intero nel risultato (quando l'operazione le
-/// conserva).
-fn untouched<'a>(
-    polygons: &'a MultiPolygon<f64>,
-    other: &MultiPolygon<f64>,
-) -> Vec<&'a Polygon<f64>> {
-    let others = other
-        .0
-        .iter()
-        .filter_map(BoundingRect::bounding_rect)
-        .collect::<Vec<_>>();
-    polygons
-        .0
-        .iter()
-        .filter(|polygon| {
-            polygon.bounding_rect().is_some_and(|own| {
-                others.iter().all(|rect| {
-                    own.max().x < rect.min().x
-                        || rect.max().x < own.min().x
-                        || own.max().y < rect.min().y
-                        || rect.max().y < own.min().y
-                })
-            })
-        })
-        .collect()
-}
-
-/// I vincoli d'area di un overlay, ognuno una combinazione lineare di aree
-/// senza segno che deve essere `>= 0`. `R` risultato, `A` e `B` operandi,
-/// `UA` e `UB` le loro componenti non toccate dall'altro operando:
+/// La precondizione che rende innocuo l'arrotondamento di `i_overlay`, da
+/// verificare **prima** di ogni overlay: altrimenti nessun overlay.
 ///
-/// - differenza: `R >= A - B`, `R <= A`, `R >= UA`;
-/// - unione: `R >= A`, `R >= B`, `R <= A + B`, `R >= UA + B`, `R >= A + UB`;
-/// - xor: `R >= A - B`, `R >= B - A`, `R <= A + B`, `R >= UA + UB`.
+/// Sulle coordinate normalizzate che `i_overlay` riceve, con `g` il passo
+/// della sua griglia ([`overlay_grid_step`]) e `d = K g`
+/// ([`OVERLAY_SEPARATION_STEPS`]):
 ///
-/// Gli ultimi vincoli di ogni riga vedono la sparizione di una componente
-/// lontana dall'altro operando, che le sole aree totali non vedono (il
-/// limite `|A - B|` dello xor ammette di perdere tutto l'operando minore).
-fn area_constraints<'a>(
-    operation: OverlayOperation,
-    left: &'a MultiPolygon<f64>,
-    right: &'a MultiPolygon<f64>,
-    result: &'a MultiPolygon<f64>,
-) -> Vec<Vec<(&'a Polygon<f64>, f64)>> {
-    let with = |polygons: &[&'a Polygon<f64>], coefficient: f64| {
-        polygons
-            .iter()
-            .map(|polygon| (*polygon, coefficient))
-            .collect::<Vec<_>>()
-    };
-    let all = |polygons: &'a MultiPolygon<f64>| polygons.0.iter().collect::<Vec<_>>();
-    let (r, a, b) = (all(result), all(left), all(right));
-    let (untouched_a, untouched_b) = (untouched(left, right), untouched(right, left));
-    let combine = |parts: &[(&[&'a Polygon<f64>], f64)]| {
-        parts
-            .iter()
-            .flat_map(|(polygons, coefficient)| with(polygons, *coefficient))
-            .collect::<Vec<_>>()
-    };
-    match operation {
-        OverlayOperation::Difference => vec![
-            combine(&[(&r, 1.0), (&a, -1.0), (&b, 1.0)]),
-            combine(&[(&r, -1.0), (&a, 1.0)]),
-            combine(&[(&r, 1.0), (&untouched_a, -1.0)]),
-        ],
-        OverlayOperation::Union => vec![
-            combine(&[(&r, 1.0), (&a, -1.0)]),
-            combine(&[(&r, 1.0), (&b, -1.0)]),
-            combine(&[(&r, -1.0), (&a, 1.0), (&b, 1.0)]),
-            combine(&[(&r, 1.0), (&untouched_a, -1.0), (&b, -1.0)]),
-            combine(&[(&r, 1.0), (&a, -1.0), (&untouched_b, -1.0)]),
-        ],
-        OverlayOperation::Xor => vec![
-            combine(&[(&r, 1.0), (&a, -1.0), (&b, 1.0)]),
-            combine(&[(&r, 1.0), (&a, 1.0), (&b, -1.0)]),
-            combine(&[(&r, -1.0), (&a, 1.0), (&b, 1.0)]),
-            combine(&[(&r, 1.0), (&untouched_a, -1.0), (&untouched_b, -1.0)]),
-        ],
-    }
-}
-
-/// I punti in cui i bordi dei due operandi si incontrano fuori dai vertici
-/// sorgente: i soli vertici nuovi che un overlay esatto potrebbe creare.
-fn boundary_crossings(
+/// - ogni lato e' lungo almeno `d`;
+/// - ogni vertice dista almeno `d` da ogni lato non incidente, salvo che vi
+///   stia sopra esattamente (coordinate originali, `orient2d` esatto): un
+///   tocco vero, che l'arrotondamento conserva;
+/// - gli incroci veri fra lati (calcolati sulle coordinate originali) sono
+///   vertici anche loro: distano almeno `d` da ogni altro lato, e i frammenti
+///   in cui dividono un lato sono lunghi almeno `d`.
+///
+/// La distanza fra due lati che non si incrociano e' quella di un estremo
+/// dall'altro lato: le regole sui vertici la coprono. I due operandi
+/// contano insieme, perche' l'overlay li noda insieme. Il confronto con `d`
+/// ha un margine assoluto di `1e-12` (coordinate in `[0, 1]`, errore delle
+/// distanze in `f64` sotto `1e-15`): nel dubbio si rifiuta.
+fn overlay_precondition(
     left: &MultiPolygon<f64>,
     right: &MultiPolygon<f64>,
-    source: &BTreeSet<CoordKey>,
-) -> Vec<Coord<f64>> {
-    let segments = |polygons: &MultiPolygon<f64>| {
-        polygonal_boundaries(polygons).collect::<Vec<geo::Line<f64>>>()
-    };
-    let left_segments = segments(left);
-    let right_segments = segments(right);
-    let mut crossings = Vec::new();
-    for left_segment in &left_segments {
-        let left_box = (
-            left_segment.start.x.min(left_segment.end.x),
-            left_segment.start.x.max(left_segment.end.x),
-            left_segment.start.y.min(left_segment.end.y),
-            left_segment.start.y.max(left_segment.end.y),
-        );
-        for right_segment in &right_segments {
-            if right_segment.start.x.max(right_segment.end.x) < left_box.0
-                || right_segment.start.x.min(right_segment.end.x) > left_box.1
-                || right_segment.start.y.max(right_segment.end.y) < left_box.2
-                || right_segment.start.y.min(right_segment.end.y) > left_box.3
+    left_normalized: &MultiPolygon<f64>,
+    right_normalized: &MultiPolygon<f64>,
+) -> Result<(), MakeValidError> {
+    let mut edges = overlay_edges(left, left_normalized);
+    edges.extend(overlay_edges(right, right_normalized));
+    let points = edges
+        .iter()
+        .map(|edge| edge.normalized.start)
+        .collect::<Vec<_>>();
+    let separation = OVERLAY_SEPARATION_STEPS * overlay_grid_step(&points) + 1e-12;
+    let too_close = |distance: f64| distance.is_nan() || distance < separation;
+    for edge in &edges {
+        let segment = edge.normalized;
+        if too_close((segment.end.x - segment.start.x).hypot(segment.end.y - segment.start.y)) {
+            return Err(MakeValidError::PrecisionInsufficient);
+        }
+    }
+    // Incroci veri, per lato: parametro lungo il lato e punto normalizzato.
+    let mut crossings: Vec<Vec<Coord<f64>>> = vec![Vec::new(); edges.len()];
+    let mut crossing_points: Vec<(Coord<f64>, usize, usize)> = Vec::new();
+    for (left_index, right_index) in candidate_edge_pairs(&edges, separation) {
+        let (first, second) = (edges[left_index], edges[right_index]);
+        // Vertici contro lati non incidenti, nei due versi.
+        for (vertex_edge, other) in [(first, second), (second, first)] {
+            for (vertex, normalized) in [
+                (vertex_edge.original.start, vertex_edge.normalized.start),
+                (vertex_edge.original.end, vertex_edge.normalized.end),
+            ] {
+                if vertex == other.original.start || vertex == other.original.end {
+                    continue;
+                }
+                if exactly_on(vertex, other.original) {
+                    continue;
+                }
+                if too_close(point_segment_distance(normalized, other.normalized)) {
+                    return Err(MakeValidError::PrecisionInsufficient);
+                }
+            }
+        }
+        if let Some(LineIntersection::SinglePoint {
+            intersection,
+            is_proper: true,
+        }) = line_intersection(first.original, second.original)
+        {
+            let normalized = line_intersection(first.normalized, second.normalized).map_or(
+                intersection,
+                |value| match value {
+                    LineIntersection::SinglePoint { intersection, .. } => intersection,
+                    LineIntersection::Collinear { intersection } => intersection.start,
+                },
+            );
+            crossings[left_index].push(normalized);
+            crossings[right_index].push(normalized);
+            crossing_points.push((normalized, left_index, right_index));
+        }
+    }
+    // Frammenti dei lati divisi dagli incroci.
+    for (edge, points) in edges.iter().zip(&mut crossings) {
+        if points.is_empty() {
+            continue;
+        }
+        let start = edge.normalized.start;
+        points.push(start);
+        points.push(edge.normalized.end);
+        points.sort_by(|left, right| {
+            (left.x - start.x)
+                .hypot(left.y - start.y)
+                .total_cmp(&(right.x - start.x).hypot(right.y - start.y))
+        });
+        for pair in points.windows(2) {
+            if too_close((pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y)) {
+                return Err(MakeValidError::PrecisionInsufficient);
+            }
+        }
+    }
+    // Incroci contro ogni altro lato.
+    for (point, first, second) in crossing_points {
+        for (index, edge) in edges.iter().enumerate() {
+            if index == first || index == second {
+                continue;
+            }
+            let segment = edge.normalized;
+            if point.x < segment.start.x.min(segment.end.x) - separation
+                || point.x > segment.start.x.max(segment.end.x) + separation
+                || point.y < segment.start.y.min(segment.end.y) - separation
+                || point.y > segment.start.y.max(segment.end.y) + separation
             {
                 continue;
             }
-            match line_intersection(*left_segment, *right_segment) {
-                Some(LineIntersection::SinglePoint { intersection, .. }) => {
-                    if !source.contains(&CoordKey::new(intersection)) {
-                        crossings.push(intersection);
-                    }
-                }
-                Some(LineIntersection::Collinear { intersection }) => {
-                    for point in [intersection.start, intersection.end] {
-                        if !source.contains(&CoordKey::new(point)) {
-                            crossings.push(point);
-                        }
-                    }
-                }
-                None => {}
+            if too_close(point_segment_distance(point, segment)) {
+                return Err(MakeValidError::PrecisionInsufficient);
             }
         }
     }
-    crossings
+    Ok(())
+}
+
+/// Normalizza gli operandi, verifica la precondizione e solo allora esegue
+/// l'overlay.
+fn resolvable_overlay(
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+    operation: fn(&MultiPolygon<f64>, &MultiPolygon<f64>) -> MultiPolygon<f64>,
+) -> Result<MultiPolygon<f64>, MakeValidError> {
+    let normalizer = OverlayNormalizer::new(left, right);
+    let left_normalized = normalizer.map_multi(left, OverlayNormalizer::normalize);
+    let right_normalized = normalizer.map_multi(right, OverlayNormalizer::normalize);
+    overlay_precondition(left, right, &left_normalized, &right_normalized)?;
+    let normalized = operation(&left_normalized, &right_normalized);
+    Ok(normalizer.restore_multi_snapped(&normalized, left, right))
 }
 
 fn normalized_union(
@@ -759,42 +811,21 @@ fn normalized_union(
         polygons.extend(right.0.iter().cloned());
         return Ok(MultiPolygon::new(polygons));
     }
-    let normalizer = OverlayNormalizer::new(left, right);
-    let normalized = normalizer
-        .map_multi(left, OverlayNormalizer::normalize)
-        .union(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    let result = normalizer.restore_multi_snapped(&normalized, left, right);
-    checked_overlay(OverlayOperation::Union, left, right, result, normalizer)
+    resolvable_overlay(left, right, BooleanOps::union)
 }
 
 fn normalized_difference(
     left: &MultiPolygon<f64>,
     right: &MultiPolygon<f64>,
 ) -> Result<MultiPolygon<f64>, MakeValidError> {
-    let normalizer = OverlayNormalizer::new(left, right);
-    let normalized = normalizer
-        .map_multi(left, OverlayNormalizer::normalize)
-        .difference(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    let result = normalizer.restore_multi_snapped(&normalized, left, right);
-    checked_overlay(
-        OverlayOperation::Difference,
-        left,
-        right,
-        result,
-        normalizer,
-    )
+    resolvable_overlay(left, right, BooleanOps::difference)
 }
 
 fn normalized_xor(
     left: &MultiPolygon<f64>,
     right: &MultiPolygon<f64>,
 ) -> Result<MultiPolygon<f64>, MakeValidError> {
-    let normalizer = OverlayNormalizer::new(left, right);
-    let normalized = normalizer
-        .map_multi(left, OverlayNormalizer::normalize)
-        .xor(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    let result = normalizer.restore_multi_snapped(&normalized, left, right);
-    checked_overlay(OverlayOperation::Xor, left, right, result, normalizer)
+    resolvable_overlay(left, right, BooleanOps::xor)
 }
 
 fn normalized_intersects(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) -> bool {
@@ -1586,6 +1617,97 @@ mod tests {
                     "{method:?}: passthrough mancato"
                 )));
             }
+        }
+        Ok(())
+    }
+
+    fn square(minimum: f64, maximum_x: f64, minimum_y: f64, maximum_y: f64) -> Polygon<f64> {
+        Polygon::new(
+            LineString::from(vec![
+                (minimum, minimum_y),
+                (maximum_x, minimum_y),
+                (maximum_x, maximum_y),
+                (minimum, maximum_y),
+                (minimum, minimum_y),
+            ]),
+            vec![],
+        )
+    }
+
+    /// Il passo replicato da `i_float`: `2^(round(log2(meta')) - 29)`.
+    /// Potenze di due: confronto esatto voluto.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn grid_step_matches_i_float() {
+        let points = |x: f64, y: f64| vec![Coord { x: 0.0, y: 0.0 }, Coord { x, y }];
+        assert_eq!(overlay_grid_step(&points(1.0, 1.0)), 2_f64.powi(-30));
+        assert_eq!(overlay_grid_step(&points(6.0, 1.0)), 2_f64.powi(-27));
+        assert_eq!(overlay_grid_step(&points(1024.0, 3.0)), 2_f64.powi(-20));
+        assert_eq!(overlay_grid_step(&[Coord { x: 2.0, y: 2.0 }]), 1.0);
+    }
+
+    /// Prima meta' della terza revisione: il buco perso passava tutti i
+    /// controlli d'area. Ora l'overlay non parte.
+    #[test]
+    fn difference_with_a_hole_thinner_than_the_grid_is_refused() {
+        let shell = MultiPolygon::new(vec![square(0.0, 1.0, 0.0, 1.0)]);
+        let hole = MultiPolygon::new(vec![square(0.5, 0.5 + 2_f64.powi(-40), 0.25, 0.75)]);
+        assert!(matches!(
+            normalized_difference(&shell, &hole),
+            Err(MakeValidError::PrecisionInsufficient)
+        ));
+    }
+
+    /// Seconda meta': cornice e triangolo disgiunti ma con rettangoli
+    /// d'ingombro sovrapposti; l'estensione del triangolo rende la cornice
+    /// piu' sottile della griglia.
+    #[test]
+    fn xor_of_a_frame_thinner_than_the_grid_is_refused() {
+        let margin = 2_f64.powi(-27);
+        let frame = MultiPolygon::new(vec![Polygon::new(
+            square(0.0, 1.0, 0.0, 1.0).exterior().clone(),
+            vec![square(margin, 1.0 - margin, margin, 1.0 - margin)
+                .exterior()
+                .clone()],
+        )]);
+        let triangle = MultiPolygon::new(vec![Polygon::new(
+            LineString::from(vec![
+                (0.0, 4.0),
+                (1024.0, 4.0),
+                (1024.0, -1024.0),
+                (0.0, 4.0),
+            ]),
+            vec![],
+        )]);
+        assert!(matches!(
+            normalized_xor(&frame, &triangle),
+            Err(MakeValidError::PrecisionInsufficient)
+        ));
+    }
+
+    /// Il controesempio di forma della terza revisione: con feature
+    /// risolvibili l'overlay si esegue, e i due buchi restano due.
+    #[test]
+    fn resolvable_difference_keeps_both_holes() -> Result<(), MakeValidError> {
+        let shell = MultiPolygon::new(vec![square(0.0, 10.0, 0.0, 10.0)]);
+        let holes = MultiPolygon::new(vec![square(2.0, 3.0, 2.0, 3.0), square(4.0, 5.0, 2.0, 3.0)]);
+        let result = normalized_difference(&shell, &holes)?;
+        let [polygon] = result.0.as_slice() else {
+            return Err(MakeValidError::InvalidOutput(
+                "un poligono atteso".to_owned(),
+            ));
+        };
+        let expected = Polygon::new(
+            square(0.0, 10.0, 0.0, 10.0).exterior().clone(),
+            vec![
+                square(2.0, 3.0, 2.0, 3.0).exterior().clone(),
+                square(4.0, 5.0, 2.0, 3.0).exterior().clone(),
+            ],
+        );
+        if polygon.interiors().len() != 2
+            || (polygon.unsigned_area() - expected.unsigned_area()).abs() > 1e-12
+        {
+            return Err(MakeValidError::InvalidOutput("buchi alterati".to_owned()));
         }
         Ok(())
     }

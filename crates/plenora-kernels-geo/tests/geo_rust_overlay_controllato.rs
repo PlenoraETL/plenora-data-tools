@@ -1,6 +1,6 @@
 //! `make_valid` non perde area in silenzio.
 //!
-//! Due strade verso lo stesso difetto, trovate dalla seconda revisione:
+//! Due strade verso lo stesso difetto, trovate dalla revisione:
 //!
 //! - un segno d'area non decidibile (coordinate fuori dal dominio esatto)
 //!   tradotto in «area non positiva» avviava la riparazione di un poligono
@@ -9,11 +9,16 @@
 //!   una cornice piu' sottile della griglia collassava a vuoto, o ne restava
 //!   meta', e il risultato superava la validazione finale.
 //!
-//! Qui ogni esito e' un errore esplicito o la geometria con l'area giusta.
+//! Ora ogni overlay e' preceduto da una precondizione di risolvibilita'
+//! sulla griglia (`make_valid::overlay_precondition`): ogni esito e' la
+//! geometria con l'area esatta o `PrecisionInsufficient`.
 
-use geo::{Area, Geometry, LineString, MultiPolygon, Polygon};
+use std::cmp::Ordering;
+
+use geo::{BoundingRect, Geometry, LineString, MultiPolygon, Polygon};
 use geozero::{CoordDimensions, ToWkb};
 use plenora_kernels_geo::geometry_from_wkb;
+use plenora_kernels_geo::rust_backend::exact::{confronta_aree, AreaPoligono};
 use plenora_kernels_geo::rust_backend::make_valid::{
     make_valid_geometry_rust, make_valid_geometry_rust_bounded,
     make_valid_geometry_rust_with_limits, MakeValidError, MakeValidLimits, RepairMethod,
@@ -67,15 +72,8 @@ fn cornice_fuori_dominio_e_un_errore_esplicito() {
     }
 }
 
-/// Cornice nel dominio con margine vicino alla griglia dell'overlay,
-/// accanto a una farfalla che obbliga alla riparazione: la cornice deve
-/// uscire con la sua area, oppure l'operazione deve fallire in modo
-/// esplicito. Prima, da `h = 2^-28` in giu', ne restava meta' o niente;
-/// fino a `2^-27` la riparazione deve riuscire (il controllo non rifiuta
-/// cio' che l'overlay tratta bene).
-#[test]
-fn cornice_sottile_non_sparisce_in_silenzio() {
-    let farfalla = Polygon::new(
+fn farfalla() -> Polygon<f64> {
+    Polygon::new(
         LineString::from(vec![
             (5.0, 5.0),
             (7.0, 7.0),
@@ -84,73 +82,135 @@ fn cornice_sottile_non_sparisce_in_silenzio() {
             (5.0, 5.0),
         ]),
         Vec::new(),
-    );
-    for esponente in [10, 20, 26, 28, 29, 30, 31, 32, 36, 40, 45, 50] {
+    )
+}
+
+/// I poligoni dell'output dentro `[0, 1]^2`: la cornice, separata dalle
+/// facce della farfalla.
+fn poligoni_della_cornice(output: &Geometry<f64>) -> Vec<Polygon<f64>> {
+    let mut poligoni = Vec::new();
+    let mut raccogli = |poligono: &Polygon<f64>| {
+        if poligono
+            .bounding_rect()
+            .is_some_and(|rettangolo| rettangolo.max().x <= 1.0)
+        {
+            poligoni.push(poligono.clone());
+        }
+    };
+    let mut pila = vec![output];
+    while let Some(geometria) = pila.pop() {
+        match geometria {
+            Geometry::Polygon(singolo) => raccogli(singolo),
+            Geometry::MultiPolygon(multi) => multi.0.iter().for_each(&mut raccogli),
+            Geometry::GeometryCollection(collezione) => pila.extend(collezione.0.iter()),
+            _ => {}
+        }
+    }
+    poligoni
+}
+
+/// La cornice dell'output ha esattamente l'area di quella d'ingresso.
+fn cornice_intatta(output: &Geometry<f64>, attesa: &Polygon<f64>) -> bool {
+    let candidati = poligoni_della_cornice(output);
+    let [trovato] = candidati.as_slice() else {
+        return false;
+    };
+    confronta_aree(
+        trovato,
+        AreaPoligono::di(trovato),
+        attesa,
+        AreaPoligono::di(attesa),
+    ) == Ok(Ordering::Equal)
+}
+
+/// Cornice nel dominio con margine vicino alla griglia dell'overlay
+/// (`2^-30` dell'estensione normalizzata), accanto a una farfalla che
+/// obbliga alla riparazione. Prima, da `h = 2^-28` in giu', ne restava meta'
+/// o niente. Ora la cornice esce con l'area esatta (confronto esatto, solo
+/// la cornice) oppure l'operazione fallisce con `PrecisionInsufficient`.
+/// Le soglie seguono la precondizione `>= 8` passi di griglia: `STRUCTURE`
+/// sovrappone la cornice da sola (estensione 1, riesce fino a `2^-26`),
+/// `LINEWORK` la sovrappone alla farfalla (estensione 7, fino a `2^-24`).
+#[test]
+fn cornice_sottile_non_sparisce_in_silenzio() {
+    for esponente in [10, 20, 24, 25, 26, 27, 28, 29, 30, 31, 32, 36, 40, 45, 50] {
         let sottile = cornice(1.0, 2_f64.powi(-esponente));
-        let attesa = sottile.unsigned_area() + 2.0;
-        let input = Geometry::MultiPolygon(MultiPolygon::new(vec![sottile, farfalla.clone()]));
+        let input = Geometry::MultiPolygon(MultiPolygon::new(vec![sottile.clone(), farfalla()]));
         for method in [RepairMethod::Structure, RepairMethod::Linework] {
-            match make_valid_geometry_rust(&input, method, false) {
-                Ok(output) => {
-                    let area = output.unsigned_area();
-                    assert!(
-                        (area - attesa).abs() <= attesa * 1e-15,
-                        "2^-{esponente} {method:?}: area {area:e}, attesa {attesa:e}"
-                    );
+            let soglia = match method {
+                RepairMethod::Structure => 26,
+                RepairMethod::Linework => 24,
+            };
+            for keep_collapsed in [false, true] {
+                match make_valid_geometry_rust(&input, method, keep_collapsed) {
+                    Ok(output) => assert!(
+                        esponente <= soglia && cornice_intatta(&output, &sottile),
+                        "2^-{esponente} {method:?}: cornice alterata o esito inatteso"
+                    ),
+                    Err(errore) => assert!(
+                        esponente > soglia
+                            && matches!(errore, MakeValidError::PrecisionInsufficient),
+                        "2^-{esponente} {method:?}: errore inatteso {errore}"
+                    ),
                 }
-                Err(errore) => assert!(
-                    esponente > 27
-                        && matches!(
-                            errore,
-                            MakeValidError::OverlayLoss | MakeValidError::NumericRange
-                        ),
-                    "2^-{esponente} {method:?}: errore inatteso {errore}"
-                ),
             }
-            // Stesso esito dall'adapter WKB: errore esplicito o area giusta.
-            let payload = input.to_wkb(CoordDimensions::xy()).expect("wkb");
-            match make_valid_wkb(&payload, MetodoAdapter::Linework, true) {
+        }
+        // L'adapter WKB, con entrambi i metodi.
+        let payload = input.to_wkb(CoordDimensions::xy()).expect("wkb");
+        for (method, soglia) in [
+            (MetodoAdapter::Structure, 26),
+            (MetodoAdapter::Linework, 24),
+        ] {
+            match make_valid_wkb(&payload, method, true) {
                 Ok(output) => {
-                    let area = geometry_from_wkb(&output).expect("valida").unsigned_area();
+                    let output = geometry_from_wkb(&output).expect("valida");
                     assert!(
-                        (area - attesa).abs() <= attesa * 1e-15,
-                        "2^-{esponente} adapter: area {area:e}, attesa {attesa:e}"
+                        esponente <= soglia && cornice_intatta(&output, &sottile),
+                        "2^-{esponente} adapter {method:?}: cornice alterata o esito inatteso"
                     );
                 }
                 Err(errore) => assert!(
-                    esponente > 27
-                        && matches!(
-                            errore,
-                            RustBackendError::OverlayLoss | RustBackendError::NumericRange
-                        ),
-                    "2^-{esponente} adapter: errore inatteso {errore}"
+                    esponente > soglia && matches!(errore, RustBackendError::PrecisionInsufficient),
+                    "2^-{esponente} adapter {method:?}: errore inatteso {errore}"
                 ),
             }
         }
     }
 }
 
-/// La cornice larga resta riparata come prima: il controllo non rifiuta i
-/// casi che l'overlay tratta correttamente.
+/// Primo controesempio della terza revisione, dalla riparazione: buco
+/// `[0.5, 0.5 + 2^-40] x [0.25, 0.75]` in `[0, 1]^2`, accanto a una
+/// farfalla. Il vecchio controllo a posteriori accettava il buco perso; la
+/// precondizione rifiuta prima dell'overlay.
+#[test]
+fn buco_piu_sottile_della_griglia_e_un_errore() {
+    let largo = 0.5 + 2_f64.powi(-40);
+    let buco = LineString::from(vec![
+        (0.5, 0.25),
+        (largo, 0.25),
+        (largo, 0.75),
+        (0.5, 0.75),
+        (0.5, 0.25),
+    ]);
+    let poligono = Polygon::new(quadrato(0.0, 1.0), vec![buco]);
+    let input = Geometry::MultiPolygon(MultiPolygon::new(vec![poligono, farfalla()]));
+    for method in [RepairMethod::Structure, RepairMethod::Linework] {
+        let esito = make_valid_geometry_rust(&input, method, false);
+        assert!(
+            matches!(esito, Err(MakeValidError::PrecisionInsufficient)),
+            "{method:?}: {esito:?}"
+        );
+    }
+}
+
+/// La cornice larga resta riparata come prima: la precondizione non rifiuta
+/// i casi che la griglia risolve.
 #[test]
 fn cornice_larga_resta_riparata() {
-    let farfalla = Polygon::new(
-        LineString::from(vec![
-            (5.0, 5.0),
-            (7.0, 7.0),
-            (5.0, 7.0),
-            (7.0, 5.0),
-            (5.0, 5.0),
-        ]),
-        Vec::new(),
-    );
     let larga = cornice(1.0, 0.25);
-    let attesa = larga.unsigned_area() + 2.0;
-    let input = Geometry::MultiPolygon(MultiPolygon::new(vec![larga, farfalla]));
+    let input = Geometry::MultiPolygon(MultiPolygon::new(vec![larga.clone(), farfalla()]));
     for method in [RepairMethod::Structure, RepairMethod::Linework] {
-        let area = make_valid_geometry_rust(&input, method, false)
-            .expect("riparata")
-            .unsigned_area();
-        assert!((area - attesa).abs() <= 1e-12, "{method:?}: {area}");
+        let output = make_valid_geometry_rust(&input, method, false).expect("riparata");
+        assert!(cornice_intatta(&output, &larga), "{method:?}");
     }
 }

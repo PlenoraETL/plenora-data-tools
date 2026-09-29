@@ -48,15 +48,14 @@
 //!     un esito non decidibile in una decisione: `polygonize` e
 //!     `make_valid` restituiscono `NumericRange`, e `split::face_sample`
 //!     rinuncia al verso e passa a `interior_point`;
-//!   - **overlay controllato** in `make_valid` (`checked_overlay`): la
-//!     griglia intera di `i_overlay` poteva collassare una feature sottile
-//!     (una cornice con margine sotto circa `2^-28` dell'estensione) in un
-//!     risultato valido ma senza quella parte. Dopo ogni overlay i vertici
-//!     nuovi devono stare vicino a un incrocio vero dei bordi, e le aree
-//!     devono rispettare i limiti dell'operazione insiemistica, comprese le
-//!     componenti che l'altro operando non tocca: in modo esatto quando il
-//!     risultato ha solo vertici sorgente, con la tolleranza di snap
-//!     altrimenti. Violazione: `MakeValidError::OverlayLoss`;
+//!   - **precondizione degli overlay** in `make_valid`
+//!     (`overlay_precondition`): la griglia intera di `i_overlay` (passo
+//!     `2^-30` dell'estensione normalizzata) poteva collassare una feature
+//!     sottile in un risultato valido ma senza quella parte. Prima di ogni
+//!     overlay si verifica che lati, distanze vertice-lato e incroci degli
+//!     operandi siano almeno 8 passi di griglia (derivazione nel codice):
+//!     altrimenti `MakeValidError::PrecisionInsufficient` e nessun overlay.
+//!     Nessun controllo a posteriori certifica il risultato;
 //!
 //! Decisioni numeriche **non** rese esatte, valutate e dichiarate:
 //!
@@ -72,8 +71,7 @@
 //!   `linework`, il test punto-su-segmento con tolleranza per bordi e punti
 //!   collassati, `normalized_intersects` sulle coordinate normalizzate
 //!   (un tocco sbagliato manda due poligoni sovrapposti alla validazione
-//!   finale, che li rifiuta) e, vicino a un incrocio vero, una perdita
-//!   d'area sotto la tolleranza di snap dell'overlay controllato.
+//!   finale, che li rifiuta).
 //!
 //! Il laboratorio ha girato su `geo` 0.33.1 **non patchato**; qui `geo`
 //! risolve alla copia vendorizzata con `orient2d` esatto (filtro veloce piu'
@@ -224,13 +222,11 @@ pub enum RustBackendError {
     /// al posto di un segno indovinato.
     #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
     NumericRange,
-    /// Un overlay di `make_valid` ha perso o guadagnato area oltre i limiti
-    /// dell'operazione insiemistica (feature sotto la risoluzione della
-    /// griglia): errore al posto di un risultato valido ma sbagliato.
-    #[error(
-        "overlay incoerente con le aree degli operandi: feature sotto la risoluzione della griglia"
-    )]
-    OverlayLoss,
+    /// Un overlay di `make_valid` avrebbe lavorato su feature sotto la
+    /// risoluzione della griglia intera di `i_overlay`: non viene eseguito
+    /// (precondizione `make_valid::overlay_precondition`).
+    #[error("feature dell'overlay sotto la risoluzione della griglia intera")]
+    PrecisionInsufficient,
     /// Una prenotazione di memoria fallita.
     #[error("prenotazione di memoria fallita per {0}")]
     AllocationFailed(&'static str),
@@ -257,7 +253,7 @@ impl From<RustBackendError> for PlenoraError {
             RustBackendError::AllocationFailed(_) => Self::ResourceLimit(error.to_string()),
             RustBackendError::NodingDidNotConverge
             | RustBackendError::NumericRange
-            | RustBackendError::OverlayLoss => Self::Unsupported(error.to_string()),
+            | RustBackendError::PrecisionInsufficient => Self::Unsupported(error.to_string()),
             other => Self::InvalidPlan(other.to_string()),
         }
     }
@@ -348,7 +344,7 @@ impl RustBackendError {
             }
             MakeValidError::AllocationFailed(context) => Self::AllocationFailed(context),
             MakeValidError::NumericRange => Self::NumericRange,
-            MakeValidError::OverlayLoss => Self::OverlayLoss,
+            MakeValidError::PrecisionInsufficient => Self::PrecisionInsufficient,
         }
     }
 }
