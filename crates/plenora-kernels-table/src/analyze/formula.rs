@@ -1,5 +1,5 @@
 //! Analyzer a secco di `formula` ed `expression`
-//! (kernel `formula.rs` / `expressions.rs`).
+//! (kernel `formula.rs` / `expressions/`).
 //!
 //! Le regole di tipo stanno accanto ai kernel (`expressions::static_type` e
 //! `formula::column_formula_type`): questo modulo le chiama con lo schema del
@@ -13,8 +13,8 @@ use super::helpers::{analyze_append, check_output_name, field_of, typed};
 use crate::{expressions, formula, Limits};
 
 /// Numero massimo di nodi AST accettati nell'audit di `table.expression`
-/// (limite statico dell'analisi a secco; il kernel riceve il valore dal
-/// chiamante, qui non esiste un `Limits` dedicato).
+/// (limite statico dell'analisi a secco: `Limits` non ha un campo dedicato,
+/// e il kernel non ripete l'audit).
 const MAX_EXPRESSION_NODES: usize = 4_096;
 
 // ---------------------------------------------------------------------------

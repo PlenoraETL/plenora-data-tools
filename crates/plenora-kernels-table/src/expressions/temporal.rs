@@ -144,9 +144,9 @@ pub fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) 
 ///
 /// Colonna Date32 o Timestamp(ms) letta nativamente, `date_trunc` annidato,
 /// letterale null. Nessun parsing implicito di stringhe; timestamp
-/// timezone-aware rifiutati (decisione documentata: la semantica tz del
-/// troncamento non e' definibile in modo sicuro, quindi l'output Timestamp
-/// e' sempre senza timezone).
+/// timezone-aware rifiutati (la semantica tz del troncamento non e'
+/// definibile in modo sicuro, quindi l'output Timestamp e' sempre senza
+/// timezone).
 pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<Scalar> {
     match expression {
         Expression::Column { name } => {

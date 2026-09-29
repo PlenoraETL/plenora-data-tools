@@ -3,15 +3,15 @@
 //!
 //! I sottomoduli e cio' che ciascuno possiede:
 //!
-//! - [`scalar`]: valore scalare generico (`Scalar`) con coercizioni,
+//! - `scalar`: valore scalare generico (`Scalar`) con coercizioni,
 //!   confronti e aritmetica/logica dell'interprete;
-//! - [`temporal`]: macchina temporale di `date_trunc` (troncamenti
+//! - `temporal`: macchina temporale di `date_trunc` (troncamenti
 //!   Date32/Timestamp ms) e valutazione di `in`;
-//! - [`interpreter`]: inferenza del tipo temporale, funzioni scalari,
+//! - `interpreter`: inferenza del tipo temporale, funzioni scalari,
 //!   interprete ricorsivo sull'AST, validazione statica e percorso generico
 //!   di output;
-//! - [`fast`]: fast path compilato (`FastNode`/`FastProgram`), verificato
-//!   dagli test-oracolo contro il percorso generico;
+//! - `fast`: fast path compilato (`FastNode`/`FastProgram`), verificato
+//!   dai test-oracolo contro il percorso generico;
 //! - [`static_type`]: tipo statico dell'AST ricavato dal solo SCHEMA,
 //!   sorgente unica per il kernel e per l'analizzatore del contratto.
 
@@ -26,12 +26,19 @@ use serde_json::Value;
 
 pub use interpreter::{expression, validate};
 
+/// Tipo della colonna prodotta da `table.expression`. Con un tipo
+/// dichiarato l'espressione deve poterlo produrre: il kernel non converte.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputType {
+    /// L'unico tipo che l'espressione puo' produrre; solo null da' `Text`
+    /// (default).
     Auto,
+    /// `Float64`.
     Number,
+    /// `Boolean`.
     Boolean,
+    /// `Utf8`.
     Text,
     /// Date32 nativo (prodotto da `date_trunc` su colonna Date32).
     Date32,
@@ -43,47 +50,77 @@ const fn default_output_type() -> OutputType {
     OutputType::Auto
 }
 
+/// Config di `table.expression`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpressionTransform {
+    /// Colonna d'uscita, nullable.
     pub output_column: String,
+    /// Albero dell'espressione (profondita' al piu' 64; nodi al piu' quelli
+    /// passati a [`validate`]).
     pub expression: Expression,
+    /// Tipo della colonna d'uscita; default `auto`.
     #[serde(default = "default_output_type")]
     pub output_type: OutputType,
 }
 
+/// Nodo dell'espressione (JSON con il campo `kind`).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expression {
+    /// Valore di una colonna: `Boolean` e' booleano; `Int64`, `UInt64`,
+    /// `Float64`, `Decimal128`, `Date32` e `Timestamp(ms)` sono numeri; gli
+    /// altri tipi leggibili come testo sono testo.
     Column {
+        /// Nome della colonna.
         name: String,
     },
+    /// Letterale scalare: null, booleano, numero finito o stringa (una
+    /// lista solo come secondo argomento di `in`).
     Literal {
+        /// Valore JSON.
         value: Value,
     },
+    /// Operatore unario.
     Unary {
+        /// Operatore.
         op: UnaryOperator,
+        /// Operando.
         value: Box<Self>,
     },
+    /// Operatore binario.
     Binary {
+        /// Operatore.
         op: BinaryOperator,
+        /// Operando sinistro.
         left: Box<Self>,
+        /// Operando destro.
         right: Box<Self>,
     },
+    /// Chiamata di funzione, al piu' 64 argomenti.
     Function {
+        /// Funzione.
         name: Function,
+        /// Argomenti, nell'ordine.
         args: Vec<Self>,
     },
+    /// Primo ramo con `when` vero, altrimenti `else_value`; i rami non scelti
+    /// non si valutano.
     Case {
+        /// Rami, da 1 a 64.
         branches: Vec<CaseBranch>,
+        /// Valore se nessun `when` e' vero (un `when` null vale falso).
         else_value: Box<Self>,
     },
 }
 
+/// Ramo di un `case`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaseBranch {
+    /// Condizione booleana.
     pub when: Expression,
+    /// Valore del ramo.
     pub then: Expression,
 }
 
@@ -144,47 +181,81 @@ pub fn reject_literal_zero_divisor(expr: &Expression) -> plenora_core::error::Re
     }
 }
 
+/// Operatore unario di un'espressione.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaryOperator {
+    /// Negazione logica di un booleano; null resta null.
     Not,
+    /// Opposto di un numero, esatto sul valore d'origine.
     Negate,
+    /// Vero se l'operando e' null (mai null).
     IsNull,
+    /// Vero se l'operando non e' null (mai null).
     IsNotNull,
 }
 
+/// Operatore binario di un'espressione. Un operando null rende null il
+/// risultato, salvo `and`/`or` (logica a tre valori).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BinaryOperator {
+    /// Somma di numeri, in `f64`.
     Add,
+    /// Differenza di numeri, in `f64`.
     Subtract,
+    /// Prodotto di numeri, in `f64`.
     Multiply,
+    /// Quoziente di numeri, in `f64`; un divisore zero rifiuta la riga.
     Divide,
+    /// Uguaglianza fra operandi dello stesso tipo (numeri sul valore esatto).
     Equal,
+    /// Disuguaglianza fra operandi dello stesso tipo.
     NotEqual,
+    /// Maggiore.
     Greater,
+    /// Maggiore o uguale.
     GreaterEqual,
+    /// Minore.
     Less,
+    /// Minore o uguale.
     LessEqual,
+    /// Congiunzione: `false` se un operando e' `false`, anche con l'altro null.
     And,
+    /// Disgiunzione: `true` se un operando e' `true`, anche con l'altro null.
     Or,
 }
 
+/// Funzione di un'espressione. L'arieta' e i tipi degli argomenti si
+/// verificano sullo schema prima dell'esecuzione.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Function {
+    /// `coalesce(a, ...)`: il primo argomento non null (almeno uno).
     Coalesce,
+    /// `null_if(a, b)`: null se `a` e' uguale a `b`, altrimenti `a`.
     NullIf,
+    /// `lower(testo)`: minuscolo Unicode.
     Lower,
+    /// `upper(testo)`: maiuscolo Unicode.
     Upper,
+    /// `trim(testo)`: senza spazi Unicode ai lati.
     Trim,
+    /// `length(testo)`: numero di caratteri Unicode.
     Length,
+    /// `concat(testo, ...)`: concatenazione; null se un argomento e' null.
     Concat,
+    /// `contains(testo, sotto)`: booleano, con distinzione di maiuscole.
     Contains,
+    /// `starts_with(testo, prefisso)`: booleano.
     StartsWith,
+    /// `ends_with(testo, suffisso)`: booleano.
     EndsWith,
+    /// `abs(numero)`: valore assoluto, esatto sul valore d'origine.
     Abs,
+    /// `round(numero)`: arrotondamento all'intero, meta' lontano da zero.
     Round,
+    /// `year(testo)`: anno dei primi 10 byte letti come `%Y-%m-%d`.
     Year,
     /// `substring(string, start, len?)`: `start` 0-based, conteggio per
     /// carattere Unicode; `len` omesso = fino a fine stringa.
@@ -196,10 +267,17 @@ pub enum Function {
     Between,
     /// `in(value, [letterali])`: membership su lista di letterali scalari.
     In,
+    /// `greatest(a, ...)`: il massimo di argomenti dello stesso tipo; null
+    /// se un argomento e' null.
     Greatest,
+    /// `least(a, ...)`: il minimo di argomenti dello stesso tipo; null se un
+    /// argomento e' null.
     Least,
+    /// `floor(numero)`: parte intera per difetto.
     Floor,
+    /// `ceil(numero)`: parte intera per eccesso.
     Ceil,
+    /// `power(base, esponente)`: un risultato non finito rifiuta la riga.
     Power,
     /// `date_trunc(unit, value)`: `unit` letterale del set chiuso
     /// year/month/day/hour/minute/second; `value` colonna Date32 o
@@ -834,7 +912,8 @@ mod tests {
             func("date_trunc", vec![col("s"), col("ts")]),
             // Input testuale: nessun parsing implicito -> errore.
             func("date_trunc", vec![lit(json!("day")), col("s")]),
-            // Timezone-aware rifiutato (decisione documentata).
+            // Timezone-aware rifiutato: la semantica di fuso del troncamento
+            // non e' definita.
             func("date_trunc", vec![lit(json!("day")), col("tstz")]),
             func("date_trunc", vec![lit(json!("day")), col("missing")]),
             func("date_trunc", vec![lit(json!("day"))]),

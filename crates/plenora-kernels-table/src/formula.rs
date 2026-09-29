@@ -11,10 +11,15 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
+/// Config di `table.formula`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Formula {
+    /// Colonna d'uscita (`Float64` o `Utf8`, secondo il tipo statico).
     pub new_column: String,
+    /// Formula: `+ - * /`, `-` unario, parentesi, numeri, testi fra apici
+    /// (senza escape) e nomi di colonna `[A-Za-z_][A-Za-z0-9_]*`. Solo
+    /// `Int64` e `Float64` sono numeri; `+` con un testo concatena.
     pub formula: String,
 }
 
@@ -190,7 +195,7 @@ impl Parser<'_> {
     }
 }
 
-/// Valore intero come double, con arrotondamento DICHIARATO (errori-e-limiti.md#limiti-dichiarati):
+/// Valore intero come double, con arrotondamento DICHIARATO (oltre 2^53):
 /// `formula` produce `Float64` per contratto e il tier generico applica la
 /// stessa conversione, cosi' i due percorsi non divergono.
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi doc.
@@ -533,7 +538,7 @@ impl<'a> FastProgram<'a> {
     }
 
     /// Valutazione di una riga sul tier numerico (estratta per la raccolta
-    /// row-scoped: semantica identica al loop originale).
+    /// row-scoped).
     fn eval_numeric_row(&self, stack: &mut Vec<(f64, bool)>, row: usize) -> Result<(f64, bool)> {
         // Underflow dello stack: il programma e' costruito dal parser, che
         // garantisce l'arieta' di ogni operatore. Uno stack vuoto qui e'
@@ -551,9 +556,8 @@ impl<'a> FastProgram<'a> {
                     }
                     FastColumn::I64(values) => {
                         // Nullo: il valore non viene letto e sullo stack va
-                        // lo zero. Non nullo: arrotondamento dichiarato
-                        // (errori-e-limiti.md#limiti-dichiarati), come il
-                        // tier generico (`scalar_as_f64_rounded`).
+                        // lo zero. Non nullo: arrotondamento dichiarato,
+                        // come il tier generico (`scalar_as_f64_rounded`).
                         let value = if values.is_null(row) {
                             0.0
                         } else {
@@ -696,7 +700,7 @@ impl<'a> FastProgram<'a> {
     }
 
     /// Valutazione di una riga sul tier generale (estratta per la raccolta
-    /// row-scoped: semantica identica al loop originale).
+    /// row-scoped).
     fn eval_slot_row<'b>(&self, stack: &mut Vec<Slot<'b>>, row: usize) -> Result<Slot<'b>>
     where
         'a: 'b,
@@ -754,8 +758,8 @@ impl<'a> FastColumn<'a> {
     /// Valore della cella come slot del tier generale.
     ///
     /// Infallibile: `formula` produce `Float64` per contratto e le
-    /// conversioni sono arrotondate per dichiarazione (errori-e-limiti.md#limiti-dichiarati), come nel
-    /// tier generico — non c'e' un caso di errore da propagare.
+    /// conversioni sono arrotondate per dichiarazione, come nel tier
+    /// generico: non c'e' un caso di errore da propagare.
     fn slot(&self, row: usize) -> Slot<'a> {
         match self {
             Self::F64(values) => {
@@ -832,7 +836,7 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
 ///   `validate_output_name`); formula vuota o oltre `max_bytes`; errori di
 ///   sintassi (formula incompleta, parentesi non bilanciate, stringa non
 ///   terminata o con escape, numero o esponente non valido, carattere non
-///   ammesso, token extra, testo non UTF-8).
+///   ammesso, token extra, testo non UTF-8); divisore letterale zero.
 pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
     validate_output_name(&config.new_column)?;
     if config.formula.is_empty() || config.formula.len() > max_bytes {
@@ -844,7 +848,10 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
 }
 
 /// Valuta la formula su ogni riga e appende/sostituisce `new_column`
-/// (Float64 se tutti i valori sono numerici, Utf8 altrimenti).
+/// (Float64 se la formula e' numerica per lo schema, Utf8 se concatena un
+/// testo).
+///
+/// Un operando nullo rende nulla la riga; nessun controllo di finitezza.
 ///
 /// Su batch con righe e colonne Int64/Float64/Utf8 usa il fast path
 /// compilato (stessa semantica del generico, oracolo dei test); negli altri
@@ -857,14 +864,17 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: errori di sintassi della formula (come `validate`);
-///   invarianti interne violate (errore Internal), fra cui un valore
-///   calcolato di tipo diverso da quello statico — in ENTRAMBI i versi;
-/// - `Schema`: colonna assente — anche su un batch VUOTO, perche' senza
-///   risolverla il tipo di output non e' determinabile; tipo non convertibile
-///   in testo (tipo o timezone); divisione per zero; negazione di testo;
-///   operatore aritmetico su testo; valore non convertibile (via
-///   `scalar_as_f64_rounded`/`scalar_as_string`); errore Arrow nella sostituzione.
+/// - `InvalidPlan`: errori di sintassi della formula e divisore letterale
+///   zero (come `validate`); negazione o `- * /` su un testo (tipo statico);
+/// - `DataMapping` con diagnostica per riga: divisione per un divisore
+///   calcolato uguale a zero (`evaluation.division_by_zero`);
+/// - `Schema`: colonna assente, anche su un batch VUOTO, perche' senza
+///   risolverla il tipo di output non e' determinabile; tipo non
+///   convertibile in testo (tipo o timezone); valore non convertibile (via
+///   `scalar_as_f64_rounded`/`scalar_as_string`); gli errori di
+///   `replace_or_append`;
+/// - `Internal`: invarianti interne violate, fra cui un valore calcolato di
+///   tipo diverso da quello statico, in ENTRAMBI i versi.
 pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
     let expression = parse(&config.formula)?;
     // Tipo dallo schema, mai dai valori (vedi il doc sopra): una colonna
@@ -896,8 +906,8 @@ fn formula_generic_auto(
     formula_generic(batch, config, expression, kind)
 }
 
-/// Percorso generico originale: interprete ricorsivo sull'AST, usato come
-/// fallback per le colonne non Int64/Float64/Utf8 e come oracolo dei test.
+/// Percorso generico: interprete ricorsivo sull'AST, usato come fallback
+/// per le colonne non Int64/Float64/Utf8 e come oracolo dei test.
 ///
 /// `kind` e' il tipo gia' deciso dallo SCHEMA dal chiamante: qui non si
 /// guardano i valori per sceglierlo, li si converte al tipo dichiarato e si

@@ -489,21 +489,26 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 /// # Errors
 ///
 /// - `InvalidPlan` (in TESTA, prima di valutare, dall'analisi statica):
-///   argomento di tipo errato per operatore o funzione; confronto fra tipi
-///   eterogenei; tipi eterogenei con `output_type = auto`; `output_type`
-///   dichiarato che l'espressione non puo' produrre; colonna di tipo non
-///   valutabile (`Timestamp` non-millisecondo, tipo non convertibile in
-///   testo); `date_trunc` su colonna non temporale o timestamp
-///   timezone-aware, o unita' non valida; letterale non scalare o non
-///   finito; numero di argomenti errato;
-/// - `Schema`: colonna assente — anche su un batch VUOTO, perche' senza
-///   risolverla il tipo di output non e' determinabile; divisione per zero;
-///   numero non finito in colonna o risultato non finito; valore di tipo
-///   diverso da quello dichiarato con `output_type` esplicito; errore Arrow
-///   nella sostituzione;
+///   divisore letterale zero; argomento di tipo errato per operatore o
+///   funzione; confronto fra tipi eterogenei; tipi eterogenei con
+///   `output_type = auto`; `output_type` dichiarato che l'espressione non
+///   puo' produrre; colonna di tipo non valutabile (`Timestamp`
+///   non-millisecondo, tipo non convertibile in testo); `date_trunc` su
+///   colonna non temporale o timestamp timezone-aware, o unita' non valida;
+///   letterale non scalare o non finito; numero di argomenti errato;
+/// - `DataMapping` con diagnostica per riga: divisione per zero
+///   (`evaluation.division_by_zero`), numero non finito in colonna
+///   (`evaluation.non_finite_input`) o risultato non finito
+///   (`evaluation.non_finite_result`);
+/// - `Schema`: colonna assente, anche su un batch VUOTO, perche' senza
+///   risolverla il tipo di output non e' determinabile; valore di tipo
+///   diverso da quello dichiarato con `output_type` esplicito; `year` su un
+///   testo che non inizia con una data; opposto o valore assoluto di un
+///   `Decimal128` fuori dominio; gli errori di `replace_or_append`;
 /// - `InvalidPlan` (durante la valutazione): regex non valida in
-///   `regex_replace`; indice di `substring` negativo; invarianti interne
-///   violate (errore Internal).
+///   `regex_replace`; indice di `substring` negativo;
+/// - `ResourceLimit`: `length` oltre `u32::MAX` caratteri;
+/// - `Internal`: invarianti interne violate.
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
     super::reject_literal_zero_divisor(&config.expression)?;
     // Tipo dallo SCHEMA, mai dai valori (vedi il doc sopra).
@@ -623,8 +628,8 @@ fn expression_generic_kind(
                     .collect::<Result<Vec<_>>>()?,
             )),
         ),
-        // Timestamp timezone-aware rifiutati in ingresso: l'output e'
-        // sempre Timestamp(ms) senza timezone (decisione documentata).
+        // Timestamp timezone-aware rifiutati in ingresso da `date_trunc`:
+        // l'output e' sempre Timestamp(ms) senza timezone.
         Kind::TimestampMs => replace_or_append(
             batch,
             &config.output_column,

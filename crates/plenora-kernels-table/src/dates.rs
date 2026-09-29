@@ -48,7 +48,7 @@ pub(crate) fn parse_with_items(value: &str, items: &[Item<'_>]) -> Option<NaiveD
     let mut parsed = Parsed::new();
     if chrono::format::parse(&mut parsed, value, items.iter()).is_ok() {
         // Stessa risoluzione di `NaiveDateTime::parse_from_str`
-        // (`to_naive_datetime_with_offset(0)` in chrono 0.4.42).
+        // (`to_naive_datetime_with_offset(0)`; chrono e' pinnato a 0.4.45).
         if let Ok(datetime) = parsed.to_naive_datetime_with_offset(0) {
             return Some(datetime);
         }
@@ -194,14 +194,24 @@ fn invalid<T>(_policy: &InvalidDatePolicy, operation: &str, _row: usize) -> Resu
     )))
 }
 
+/// Config di `table.date_format`: riscrittura di date e ore da un formato
+/// `chrono` a un altro.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateFormat {
+    /// Colonna da leggere, come testo.
     pub column: String,
+    /// Formato strftime di lettura; deve consumare tutto il testo. Senza
+    /// campi orari la data si pone a mezzanotte.
     pub input_format: String,
+    /// Formato strftime di scrittura, senza campi di fuso; default
+    /// `%Y-%m-%d %H:%M:%S`.
     #[serde(default = "default_output_format")]
     pub output_format: String,
+    /// Colonna d'uscita (`Utf8` nullable).
     pub output_column: String,
+    /// Accettato per compatibilita', senza effetto: un valore non leggibile
+    /// rifiuta sempre la riga.
     #[serde(default = "default_invalid")]
     pub invalid: InvalidDatePolicy,
 }
@@ -214,17 +224,20 @@ const fn default_invalid() -> InvalidDatePolicy {
 /// nella colonna `output_column`.
 ///
 /// Fast path su colonne Utf8 (item strftime precompilati), percorso
-/// generico riga-per-riga sugli altri tipi Arrow. Il token `invalid` resta
-/// compatibile in input, ma i valori non parsabili sono sempre rifiutati con
-/// diagnostica row-scoped.
+/// generico riga-per-riga sugli altri tipi Arrow. Il token `invalid` si
+/// accetta ma non ha effetto: i valori non parsabili sono sempre rifiutati
+/// con diagnostica row-scoped.
 ///
 /// # Errors
 ///
-/// - `DataMapping`: uno o piu' valori non parsabili, con row diagnostics;
-/// - `Schema`: colonna assente (come `column_index`) o tipo non
-///   supportato dal profilo scalare (come `scalar_as_string`);
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
-///   di `replace_or_append`).
+/// - `InvalidPlan`: formato con item non riconosciuti, o `output_format`
+///   con item di fuso o di offset;
+/// - `DataMapping`: uno o piu' valori non parsabili, con row diagnostics
+///   (`conversion.invalid_datetime`); senza diagnostica, un valore che
+///   `output_format` non sa scrivere (secolo `%C` fuori da 0..=9999);
+/// - `Schema`: colonna assente (come `column_index`) o valore non
+///   convertibile in testo (come `scalar_as_string`); gli errori di
+///   `replace_or_append`.
 pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
     validate_format_items(&config.input_format, "input_format")?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
@@ -283,28 +296,47 @@ pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBat
     )
 }
 
+/// Unita' di `amount` in `table.date_add`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DateUnit {
+    /// Anni di calendario (12 mesi).
     Years,
+    /// Mesi di calendario: il giorno oltre la fine del mese diventa l'ultimo
+    /// giorno del mese.
     Months,
+    /// Settimane di 7 giorni.
     Weeks,
+    /// Giorni di 24 ore (il valore non ha fuso).
     Days,
+    /// Ore.
     Hours,
+    /// Minuti.
     Minutes,
+    /// Secondi.
     Seconds,
 }
 
+/// Config di `table.date_add`: somma di una quantita' fissa a date e ore.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateAdd {
+    /// Colonna da leggere, come testo.
     pub column: String,
+    /// Formato strftime di lettura; deve consumare tutto il testo.
     pub input_format: String,
+    /// Formato strftime di scrittura, senza campi di fuso; default
+    /// `%Y-%m-%d %H:%M:%S`.
     #[serde(default = "default_output_format")]
     pub output_format: String,
+    /// Quantita' da aggiungere, con segno; l'analisi rifiuta quella che
+    /// nessuna data sopporta ([`verifica_amount`]).
     pub amount: i64,
+    /// Unita' di `amount`.
     pub unit: DateUnit,
+    /// Colonna d'uscita (`Utf8` nullable).
     pub output_column: String,
+    /// Accettato per compatibilita', senza effetto.
     #[serde(default = "default_invalid")]
     pub invalid: InvalidDatePolicy,
 }
@@ -382,12 +414,15 @@ pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `DataMapping`: valore non parsabile, oppure data risultante o delta
-///   fuori range, con row diagnostics;
-/// - `Schema`: colonna assente (come `column_index`) o tipo non
-///   supportato dal profilo scalare (come `scalar_as_string`);
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
-///   di `replace_or_append`).
+/// - `InvalidPlan`: formato con item non riconosciuti, o `output_format`
+///   con item di fuso o di offset;
+/// - `DataMapping`: valore non parsabile (`conversion.invalid_datetime`),
+///   oppure data risultante o delta fuori range
+///   (`conversion.datetime_range`), con row diagnostics; senza diagnostica,
+///   un valore che `output_format` non sa scrivere;
+/// - `Schema`: colonna assente (come `column_index`) o valore non
+///   convertibile in testo (come `scalar_as_string`); gli errori di
+///   `replace_or_append`.
 pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
     validate_format_items(&config.input_format, "input_format")?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
@@ -473,29 +508,43 @@ pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
     )
 }
 
+/// Unita' della differenza di `table.date_diff` (durate fisse).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffUnit {
+    /// Giorni di 86 400 secondi.
     Days,
+    /// Ore.
     Hours,
+    /// Minuti.
     Minutes,
+    /// Secondi.
     Seconds,
 }
 
+/// Config di `table.date_diff`: differenza `end - start` in unita'
+/// frazionarie.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateDiff {
+    /// Colonna dell'istante iniziale, letta come testo.
     pub start_column: String,
+    /// Colonna dell'istante finale, letta come testo.
     pub end_column: String,
+    /// Formato strftime di lettura di entrambe le colonne.
     pub input_format: String,
+    /// Unita' della differenza.
     pub unit: DiffUnit,
+    /// Colonna d'uscita (`Float64` nullable).
     pub output_column: String,
+    /// Accettato per compatibilita', senza effetto.
     #[serde(default = "default_invalid")]
     pub invalid: InvalidDatePolicy,
 }
 
 /// Differenza in unita' frazionarie, identica al percorso generico
-/// (errore "intervallo fuori scala" incluso).
+/// (errore "intervallo fuori scala" incluso, che la prevalidazione per riga
+/// rende irraggiungibile).
 ///
 /// # Arrotondamento dichiarato
 ///
@@ -519,13 +568,14 @@ fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usiz
 ///
 /// # Errors
 ///
-/// - `DataMapping`: valore non parsabile oppure intervallo fuori scala
-///   (nanosecondi oltre `i64` o non rappresentabili in `f64`), con row
-///   diagnostics;
-/// - `Schema`: colonna assente (come `column_index`) o tipo non
-///   supportato dal profilo scalare (come `scalar_as_string`);
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
-///   di `replace_or_append`).
+/// - `InvalidPlan`: `input_format` con item non riconosciuti;
+/// - `DataMapping`: valore non parsabile (`conversion.invalid_datetime`,
+///   sulla colonna iniziale se e' quella a non leggersi) oppure intervallo
+///   fuori scala, cioe' nanosecondi oltre `i64`
+///   (`conversion.datetime_range`), con row diagnostics;
+/// - `Schema`: colonna assente (come `column_index`) o valore non
+///   convertibile in testo (come `scalar_as_string`); gli errori di
+///   `replace_or_append`.
 pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
     validate_format_items(&config.input_format, "input_format")?;
     let start_index = column_index(batch, &config.start_column)?;
@@ -619,12 +669,19 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
     )
 }
 
+/// Politica sulle ore locali ambigue di `table.timezone_convert`: accettata
+/// per compatibilita', senza effetto (un'ora ambigua o inesistente rifiuta
+/// sempre la riga).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AmbiguousPolicy {
+    /// Rifiuto (default).
     Error,
+    /// Senza effetto.
     Null,
+    /// Senza effetto.
     Earliest,
+    /// Senza effetto.
     Latest,
 }
 
@@ -632,18 +689,30 @@ const fn default_ambiguous() -> AmbiguousPolicy {
     AmbiguousPolicy::Error
 }
 
+/// Config di `table.timezone_convert`: ora locale di un fuso riscritta come
+/// ora locale di un altro.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimezoneConvert {
+    /// Colonna da leggere, come testo.
     pub column: String,
+    /// Formato strftime di lettura; il valore letto e' ora locale di
+    /// `source_timezone`.
     pub input_format: String,
+    /// Formato strftime di scrittura, anche con campi di fuso; default
+    /// `%Y-%m-%d %H:%M:%S`.
     #[serde(default = "default_output_format")]
     pub output_format: String,
+    /// Fuso dei valori letti, nome IANA (`chrono-tz`).
     pub source_timezone: String,
+    /// Fuso dei valori scritti, nome IANA (`chrono-tz`).
     pub target_timezone: String,
+    /// Colonna d'uscita (`Utf8` nullable).
     pub output_column: String,
+    /// Accettato per compatibilita', senza effetto.
     #[serde(default = "default_invalid")]
     pub invalid: InvalidDatePolicy,
+    /// Accettato per compatibilita', senza effetto.
     #[serde(default = "default_ambiguous")]
     pub ambiguous: AmbiguousPolicy,
 }
@@ -673,12 +742,15 @@ fn localize(
 /// # Errors
 ///
 /// - `InvalidPlan`: `source_timezone` o `target_timezone` non valida;
-/// - `DataMapping`: ora ambigua/inesistente o valore non parsabile, con row
-///   diagnostics;
-/// - `Schema`: colonna assente (come `column_index`) o tipo non
-///   supportato dal profilo scalare (come `scalar_as_string`);
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
-///   di `replace_or_append`).
+///   formato con item non riconosciuti o che non si sa scrivere per un
+///   valore con fuso;
+/// - `DataMapping`: ora ambigua (`conversion.ambiguous_local_time`) o
+///   inesistente (`conversion.nonexistent_local_time`) o valore non
+///   parsabile (`conversion.invalid_datetime`), con row diagnostics; senza
+///   diagnostica, un valore che `output_format` non sa scrivere;
+/// - `Schema`: colonna assente (come `column_index`) o valore non
+///   convertibile in testo (come `scalar_as_string`); gli errori di
+///   `replace_or_append`.
 pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);

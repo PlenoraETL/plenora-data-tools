@@ -15,9 +15,8 @@ use plenora_core::{PlenoraError, Result};
 /// su cui si confronta.
 ///
 /// `table.expression` produce `Float64` per contratto, quindi l'aritmetica e
-/// l'uscita restano sul double
-/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-/// Un confronto invece decide, e decide sul valore esatto: un `Int64` oltre
+/// l'uscita restano sul double (arrotondamento dichiarato). Un confronto
+/// invece decide, e decide sul valore esatto: un `Int64` oltre
 /// 2^53 o un `Decimal128` frazionario non collassano sul double vicino. Chi
 /// nasce da una colonna o da un letterale porta il valore d'origine; chi nasce
 /// da un calcolo porta il proprio double, che e' il suo valore.

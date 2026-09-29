@@ -16,15 +16,19 @@ use super::{BinaryOperator, Expression, Function, OutputType, UnaryOperator};
 /// che non e' un tipo ma la sua assenza).
 ///
 /// `Date32` e `TimestampMs` sono i tipi temporali NATIVI prodotti da
-/// `date_trunc` (decisione registrata: nessuna degradazione a Number per
-/// l'output di `date_trunc`; le colonne Date32/Timestamp lette direttamente
-/// restano `Number`, come nel kernel).
+/// `date_trunc` (l'uscita di `date_trunc` non degrada a Number; le colonne
+/// Date32/Timestamp lette direttamente restano `Number`, come nel kernel).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
+    /// Numero, colonna `Float64`.
     Number,
+    /// Booleano, colonna `Boolean`.
     Boolean,
+    /// Testo, colonna `Utf8`.
     Text,
+    /// Data, colonna `Date32` (solo da `date_trunc`).
     Date32,
+    /// Istante, colonna `Timestamp(ms)` senza fuso (solo da `date_trunc`).
     TimestampMs,
 }
 
@@ -41,6 +45,7 @@ impl Kind {
         1 << (self as u8)
     }
 
+    /// Nome del tipo nei messaggi d'errore.
     #[must_use]
     pub const fn nome(self) -> &'static str {
         match self {
@@ -60,8 +65,8 @@ impl Kind {
             Self::Boolean => DataType::Boolean,
             Self::Text => DataType::Utf8,
             Self::Date32 => DataType::Date32,
-            // Timestamp timezone-aware rifiutati in ingresso: l'output e'
-            // sempre Timestamp(ms) senza timezone (decisione documentata).
+            // Timestamp timezone-aware rifiutati in ingresso da
+            // `date_trunc`: l'output e' sempre Timestamp(ms) senza timezone.
             Self::TimestampMs => DataType::Timestamp(TimeUnit::Millisecond, None),
         }
     }
@@ -558,12 +563,11 @@ fn infer_in(
     Ok(TypeSet::of(Kind::Boolean))
 }
 
-/// Regole di tipo di `date_trunc` (tipi temporali nativi, decisione
-/// registrata): l'unita' e' un letterale del set chiuso; il tipo di output
-/// discende dal tipo della colonna di input (anche su dati tutti null);
-/// nessun parsing implicito di stringhe; timestamp timezone-aware rifiutati
-/// (semantica tz del troncamento non definibile in modo sicuro: l'output e'
-/// sempre naive).
+/// Regole di tipo di `date_trunc` (tipi temporali nativi): l'unita' e' un
+/// letterale del set chiuso; il tipo di output discende dal tipo della
+/// colonna di input (anche su dati tutti null); nessun parsing implicito di
+/// stringhe; timestamp timezone-aware rifiutati (semantica tz del
+/// troncamento non definibile in modo sicuro: l'output e' sempre naive).
 fn infer_date_trunc(
     op: &str,
     args: &[Expression],

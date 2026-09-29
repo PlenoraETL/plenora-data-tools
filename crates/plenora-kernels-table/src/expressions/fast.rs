@@ -103,7 +103,7 @@ enum FastColumn<'a> {
     Other(&'a ArrayRef),
 }
 
-// Conversioni con arrotondamento DICHIARATO (errori-e-limiti.md#limiti-dichiarati).
+// Conversioni con arrotondamento DICHIARATO.
 //
 // `table.expression` produce `Float64` per contratto: il double e' il tipo
 // del risultato, non un passaggio intermedio. Le stesse conversioni valgono
@@ -210,7 +210,7 @@ impl<'a> FastColumn<'a> {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
                 } else {
-                    // Arrotondamento dichiarato (errori-e-limiti.md#limiti-dichiarati): `expression`
+                    // Arrotondamento dichiarato: `expression`
                     // produce `Float64` per contratto, e un decimal
                     // frazionario non ha un double esatto. Verificare il solo
                     // `unscaled` dichiarerebbe un'esattezza che la
@@ -721,13 +721,13 @@ enum RegexSource<'a> {
 }
 
 impl LazyError {
-    /// Converte un errore di validazione (solo Contract/Schema attesi) nella
-    /// forma lazy del fast path.
+    /// Converte un errore di validazione (solo InvalidPlan/Schema attesi)
+    /// nella forma lazy del fast path.
     fn from_validation(error: &PlenoraError) -> Self {
         match error {
             PlenoraError::InvalidPlan(message) => Self::InvalidPlan(message.clone()),
             PlenoraError::Schema(message) => Self::Schema(message.clone()),
-            // Non atteso: i percorsi di validazione emettono solo Contract/Schema.
+            // Non atteso: i percorsi di validazione emettono solo InvalidPlan/Schema.
             other => Self::Schema(other.to_string()),
         }
     }
@@ -1162,8 +1162,8 @@ impl<'a> FastProgram<'a> {
                         .collect::<Result<Vec<_>>>()?,
                 )),
             ),
-            // Timestamp timezone-aware rifiutati in ingresso: l'output e'
-            // sempre Timestamp(ms) senza timezone (decisione documentata).
+            // Timestamp timezone-aware rifiutati in ingresso da `date_trunc`:
+            // l'output e' sempre Timestamp(ms) senza timezone.
             Kind::TimestampMs => replace_or_append(
                 batch,
                 &config.output_column,
