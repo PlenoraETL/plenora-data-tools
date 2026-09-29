@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use num_traits::ToPrimitive;
-use plenora_core::arrow::array::{Float64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{
+    builder::StringBuilder, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray,
+};
 use plenora_core::arrow::schema::DataType;
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
@@ -189,9 +191,7 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
     let source = batch.column(index);
     // Il double calcola i bordi a larghezza uguale; la classe la decide il
     // valore esatto, o un Int64 oltre 2^53 cadrebbe nella classe accanto.
-    let celle = (0..batch.num_rows())
-        .map(|row| scalar_as_numero(source.as_ref(), row))
-        .collect::<Result<Vec<_>>>()?;
+    let celle = celle_numeriche(source)?;
     let numeric = celle
         .iter()
         .map(|numero| numero.map(|(valore, _)| valore))
@@ -227,37 +227,39 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
     // e' il minimo o il massimo, e resta nella classe esterna. Con `Edges` i
     // bordi sono del piano e valgono come scritti.
     let esterni_aperti = matches!(config.bins, Bins::Count(_));
-    let values = celle
-        .into_iter()
-        .map(|numero| {
-            numero.and_then(|(_, esatto)| {
-                let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
-                (0..count)
-                    .find(|index| {
-                        let primo = *index == 0;
-                        let ultimo = *index + 1 == count;
-                        let sopra = match rispetto(edges[*index]) {
-                            Some(Ordering::Greater) => true,
-                            Some(Ordering::Equal) => primo,
-                            Some(Ordering::Less) => primo && esterni_aperti,
-                            None => false,
-                        };
-                        let sotto = match rispetto(edges[*index + 1]) {
-                            Some(Ordering::Less | Ordering::Equal) => true,
-                            Some(Ordering::Greater) => ultimo && esterni_aperti,
-                            None => false,
-                        };
-                        sopra && sotto
-                    })
-                    .map(|index| {
-                        config.labels.as_ref().map_or_else(
-                            || format!("({}, {}]", edges[index], edges[index + 1]),
-                            |labels| labels[index].clone(),
-                        )
-                    })
-            })
-        })
-        .collect::<Vec<_>>();
+    // Etichette una volta per classe, non una `format!` per riga: stesso
+    // testo (`Display` dei due bordi) di quando si formattava per riga.
+    let etichette = config.labels.clone().unwrap_or_else(|| {
+        edges
+            .windows(2)
+            .map(|bordi| format!("({}, {}]", bordi[0], bordi[1]))
+            .collect()
+    });
+    // La ricerca binaria vale solo su bordi strettamente crescenti (niente
+    // NaN, niente bordi ripetuti): con `Edges` e' gia' verificato, con
+    // `Count` i bordi calcolati possono coincidere per arrotondamento, e
+    // allora resta la scansione di ogni classe.
+    let crescenti = edges
+        .windows(2)
+        .all(|bordi| matches!(bordi[0].partial_cmp(&bordi[1]), Some(Ordering::Less)));
+    let mut values = StringBuilder::with_capacity(celle.len(), 0);
+    for numero in celle {
+        let classe = numero.and_then(|(_, esatto)| {
+            let bisezione = if crescenti {
+                classe_per_bisezione(esatto, &edges, esterni_aperti)
+            } else {
+                Bisezione::Indefinita
+            };
+            match bisezione {
+                Bisezione::Classe(classe) => classe,
+                Bisezione::Indefinita => classe_per_scansione(esatto, &edges, esterni_aperti),
+            }
+        });
+        match classe.and_then(|indice| etichette.get(indice)) {
+            Some(testo) => values.append_value(testo),
+            None => values.append_null(),
+        }
+    }
     let output = config
         .output_column
         .clone()
@@ -267,8 +269,129 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
         &output,
         DataType::Utf8,
         true,
-        Arc::new(StringArray::from(values)),
+        Arc::new(values.finish()),
     )
+}
+
+/// `scalar_as_numero` su ogni riga di `source`.
+///
+/// `Float64` e `Int64` si leggono dal tipo gia' risolto, con gli stessi
+/// valori della conversione riga per riga (il double arrotondato con `as`
+/// per gli interi, il valore esatto nativo); gli altri tipi passano da
+/// `scalar_as_numero`, con i suoi errori.
+fn celle_numeriche(source: &ArrayRef) -> Result<Vec<Option<(f64, NumericBound)>>> {
+    if let Some(values) = source.as_any().downcast_ref::<Float64Array>() {
+        return Ok(values
+            .iter()
+            .map(|valore| valore.map(|valore| (valore, NumericBound::F64(valore))))
+            .collect());
+    }
+    if let Some(values) = source.as_any().downcast_ref::<Int64Array>() {
+        return Ok(values
+            .iter()
+            .map(|valore| {
+                valore.map(|valore| {
+                    // Lo stesso arrotondamento dichiarato di
+                    // `scalar_as_f64_rounded`: il double serve ai bordi, la
+                    // classe la decide il valore esatto.
+                    #[allow(clippy::cast_precision_loss)]
+                    let arrotondato = valore as f64;
+                    (arrotondato, NumericBound::I64(valore))
+                })
+            })
+            .collect());
+    }
+    (0..source.len())
+        .map(|row| scalar_as_numero(source.as_ref(), row))
+        .collect()
+}
+
+/// Classe di `esatto` provando i bordi uno a uno: la prima classe `i` con
+/// `esatto` sopra `edges[i]` (o uguale, per la prima; o sotto, per la prima
+/// con estremi aperti) e non sopra `edges[i + 1]` (o sopra, per l'ultima con
+/// estremi aperti). E' la definizione, valida su bordi qualsiasi.
+fn classe_per_scansione(
+    esatto: NumericBound,
+    edges: &[f64],
+    esterni_aperti: bool,
+) -> Option<usize> {
+    let count = edges.len().saturating_sub(1);
+    let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
+    (0..count).find(|index| {
+        let primo = *index == 0;
+        let ultimo = *index + 1 == count;
+        let sopra = match rispetto(edges[*index]) {
+            Some(Ordering::Greater) => true,
+            Some(Ordering::Equal) => primo,
+            Some(Ordering::Less) => primo && esterni_aperti,
+            None => false,
+        };
+        let sotto = match rispetto(edges[*index + 1]) {
+            Some(Ordering::Less | Ordering::Equal) => true,
+            Some(Ordering::Greater) => ultimo && esterni_aperti,
+            None => false,
+        };
+        sopra && sotto
+    })
+}
+
+/// [`classe_per_scansione`] su bordi strettamente crescenti, in
+/// `log(bordi)` confronti.
+///
+/// `sopra` e' il numero di bordi strettamente sotto `esatto` (il confronto
+/// esatto e' monotono sui bordi crescenti). Con `sopra` fra 1 e il numero
+/// di classi la classe e' `sopra - 1`: e' sopra il suo bordo sinistro e non
+/// sopra il destro, e nessuna classe precedente ha il bordo destro sopra
+/// `esatto`. Con `sopra` nullo `esatto` e' al primo bordo o sotto: prima
+/// classe se uguale o se gli estremi sono aperti. Con `esatto` sopra
+/// l'ultimo bordo, ultima classe solo con estremi aperti.
+///
+/// `Indefinita` se un confronto non e' definito (`esatto` NaN) o se non ci
+/// sono bordi: allora decide la scansione.
+fn classe_per_bisezione(esatto: NumericBound, edges: &[f64], esterni_aperti: bool) -> Bisezione {
+    let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
+    let (Some(count), Some(primo), Some(ultimo)) = (
+        edges.len().checked_sub(1),
+        edges.first().and_then(|bordo| rispetto(*bordo)),
+        edges.last().and_then(|bordo| rispetto(*bordo)),
+    ) else {
+        return Bisezione::Indefinita;
+    };
+    let sopra = if primo != Ordering::Greater {
+        0
+    } else if ultimo == Ordering::Greater {
+        edges.len()
+    } else {
+        // `edges[0] < esatto <= edges[count]`: il punto di separazione e'
+        // interno, e ogni confronto su un bordo finito e' definito.
+        let mut indefinito = false;
+        let punto = edges.partition_point(|bordo| {
+            rispetto(*bordo).map_or_else(
+                || {
+                    indefinito = true;
+                    false
+                },
+                |ordine| ordine == Ordering::Greater,
+            )
+        });
+        if indefinito {
+            return Bisezione::Indefinita;
+        }
+        punto
+    };
+    Bisezione::Classe(match sopra {
+        0 => (primo == Ordering::Equal || esterni_aperti).then_some(0),
+        _ if sopra > count => esterni_aperti.then(|| count - 1),
+        _ => Some(sopra - 1),
+    })
+}
+
+/// Esito di [`classe_per_bisezione`].
+enum Bisezione {
+    /// Classe decisa (`None`: nessuna classe).
+    Classe(Option<usize>),
+    /// Confronto non definito: decide [`classe_per_scansione`].
+    Indefinita,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1897,3 +2020,7 @@ mod tests {
         assert!(!error.to_string().contains("broken"));
     }
 }
+
+#[cfg(test)]
+#[path = "bin_oracolo.rs"]
+mod bin_oracolo;
