@@ -33,8 +33,10 @@ pub(in crate::analyze) fn analyze_bounds(
     rebuild(input, fields, input.properties.clone())
 }
 
-/// `geometry_diagnostics`: la colonna geometria e' sostituita dalle 10
-/// colonne diagnostiche; il contratto diventa non-geografico.
+/// `geometry_diagnostics`: la colonna geometria e' sostituita, nella sua
+/// posizione, dalle 10 colonne diagnostiche; il contratto diventa
+/// non-geografico (nessuna colonna geometria), metadati di schema e
+/// proprieta' restano.
 pub(in crate::analyze) fn analyze_diagnostics(
     op: &str,
     input: &DataContract,
@@ -117,8 +119,10 @@ pub(in crate::analyze) fn analyze_geometry_accessors(
     rebuild(input, fields, input.properties.clone())
 }
 
-/// `line_locate_point`: punto da config (`point_wkb` hex, D16) validato
-/// strutturalmente e per tipo (deve essere un Point); aggiunge `fraction`.
+/// `line_locate_point`: punto da config (`point_wkb`, WKB esadecimale nel CRS
+/// dell'input, perche' un input ha una sola colonna geometria) validato
+/// strutturalmente, per tipo (deve essere un Point) e per dominio del CRS;
+/// aggiunge `fraction`.
 pub(in crate::analyze) fn analyze_line_locate_point(
     op: &str,
     input: &DataContract,
@@ -137,7 +141,9 @@ pub(in crate::analyze) fn analyze_line_locate_point(
     analyze_add_column(op, input, name, DataType::Float64)
 }
 
-/// Misure con colonna scalare aggiunta (`area`, `length`, ...).
+/// Misure con colonna `Float64` aggiunta in coda (`area`, `length`,
+/// `geodesic_area`, ...): nome da `output_column`, default l'id senza
+/// `geo.`.
 pub(in crate::analyze) fn analyze_measure(
     op: &str,
     input: &DataContract,

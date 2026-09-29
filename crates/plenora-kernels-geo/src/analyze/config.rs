@@ -144,28 +144,40 @@ pub struct ConcaveHullConfig {
     pub length_threshold: Option<f64>,
 }
 
+/// `densify`: un solo parametro, obbligatorio.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DensifyConfig {
+    /// Lunghezza massima di un lato dopo la densificazione, nelle unita' del
+    /// CRS; finita e maggiore di zero.
     pub max_segment_length: f64,
 }
 
+/// `snap_to_grid`: un solo parametro, obbligatorio.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SnapToGridConfig {
+    /// Passo della griglia con origine in `(0, 0)`, nelle unita' del CRS;
+    /// finito e maggiore di zero.
     pub grid_size: f64,
 }
 
+/// `line_substring`: due frazioni obbligatorie, `start_ratio <= end_ratio`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LineSubstringConfig {
+    /// Frazione della lunghezza a cui comincia la porzione; in `[0, 1]`.
     pub start_ratio: f64,
+    /// Frazione della lunghezza a cui finisce la porzione; in `[0, 1]`,
+    /// non minore di `start_ratio`.
     pub end_ratio: f64,
 }
 
+/// `line_interpolate_point`: un solo parametro, obbligatorio.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LineInterpolatePointConfig {
+    /// Frazione della lunghezza dall'inizio della linea; in `[0, 1]`.
     pub ratio: f64,
 }
 
@@ -188,9 +200,12 @@ pub struct CleanTopologyConfig {
     pub fill_gaps: Option<bool>,
 }
 
+/// `voronoi`: tutti i campi opzionali.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoronoiConfig {
+    /// Numero massimo di punti (righe) dell'ingresso; almeno 2 se presente.
+    /// Senza, l'analisi non fissa un limite.
     pub max_points: Option<u64>,
 }
 

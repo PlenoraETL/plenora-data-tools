@@ -1,4 +1,16 @@
 //! Algoritmi geometrici estesi, con limiti di lavoro e di output dichiarati.
+//!
+//! I kernel di `geo.densify`, `geo.snap_to_grid`, `geo.delaunay`,
+//! `geo.line_interpolate_point`, `geo.line_substring`,
+//! `geo.frechet_distance`, `geo.bearing`, `geo.geodesic_area`,
+//! `geo.geometry_diagnostics`, `geo.line_merge` e lo split lineare di
+//! `geo.split`. Lavorano su una geometria (o una coppia) alla volta: il
+//! passaggio da e verso le colonne Arrow e i limiti per piano spettano al
+//! chiamante, che passa ogni limite come argomento esplicito.
+//!
+//! Ogni kernel, salvo [`geometry_diagnostics`], rifiuta un ingresso con
+//! coordinate non finite o non valido per la validazione OGC prima di
+//! calcolare, e i kernel che producono geometrie rivalidano l'uscita.
 
 use geo::algorithm::line_measures::{
     Bearing, Densify, Euclidean, FrechetDistance, Geodesic, InterpolateLine, Length,
@@ -15,35 +27,61 @@ use spade::Triangulation as _;
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// Errori dei kernel di questo modulo. Nessun messaggio riporta coordinate
+/// o valori delle righe.
 #[derive(Debug, Error)]
 pub enum ExtendedAlgorithmError {
+    /// Un parametro fuori dal suo dominio: `name` lo nomina, `reason` dice
+    /// quale vincolo viola.
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
+        /// Nome del parametro.
         name: &'static str,
+        /// Vincolo violato.
         reason: &'static str,
     },
+    /// La geometria d'ingresso ha coordinate NaN o infinite o non supera la
+    /// validazione OGC (la ragione e' la classificazione di
+    /// `RagioneNonValida`, senza coordinate).
     #[error("geometria di input non valida: {0}")]
     InvalidInput(String),
+    /// La geometria calcolata ha coordinate non finite o non supera la
+    /// validazione OGC: il kernel non la pubblica.
     #[error("geometria prodotta non valida: {0}")]
     InvalidOutput(String),
+    /// Il tipo della geometria non e' tra quelli che l'operazione accetta.
     #[error("tipo geometria non supportato da {operation}: {actual}")]
     UnsupportedGeometry {
+        /// Nome breve dell'operazione.
         operation: &'static str,
+        /// Tipo `geo` della geometria rifiutata.
         actual: &'static str,
     },
+    /// Le coordinate d'ingresso (`actual`) superano il limite passato dal
+    /// chiamante (`limit`).
     #[error("coordinate oltre il limite di {limit}: {actual}")]
     CoordinateLimit { actual: u64, limit: u64 },
+    /// Coordinate, parti o triangoli d'uscita (`actual`, stimati o
+    /// prodotti) oltre il limite passato dal chiamante (`limit`).
     #[error("output oltre il limite di {limit}: {actual}")]
     OutputLimit { actual: u64, limit: u64 },
+    /// Il lavoro quadratico (`actual`: coppie di coordinate, test
+    /// d'intersezione) supera il limite passato dal chiamante (`limit`);
+    /// `actual` vale `u64::MAX` se il prodotto non e' rappresentabile.
     #[error("lavoro quadratico oltre il limite di {limit}: {actual}")]
     WorkLimit { actual: u64, limit: u64 },
+    /// La triangolazione di `spade` non si e' costruita: coordinata fuori
+    /// dal dominio dei predicati esatti (zero o modulo in `[2^-142, 2^201]`),
+    /// con il messaggio di `geo` 0.33.1, oppure vertici persi o fusi.
     #[error("triangolazione fallita: {0}")]
     Triangulation(String),
+    /// Longitudine fuori da `[-180, 180]` o latitudine fuori da `[-90, 90]`.
     #[error("coordinate geografiche fuori intervallo lon/lat")]
     InvalidGeographicCoordinate,
+    /// Un conteggio (coordinate, parti, triangoli) non sta in `u64`.
     #[error("conteggio non rappresentabile come uint64")]
     IndexOverflow,
-    /// Invariante interna violata (R6: errore propagato, mai panic).
+    /// Invariante interna violata: errore propagato, mai un panico.
     #[error("internal error: {0}")]
     Internal(&'static str),
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -54,7 +92,7 @@ pub enum ExtendedAlgorithmError {
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
     /// Un calcolo di `geo` o `rstar` e' andato in panico dentro
-    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// `crate::calcolo_protetto`: non accusa l'ingresso, porta la *forma*
     /// del payload, mai il contenuto.
     #[error("calcolo non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
@@ -188,20 +226,33 @@ fn densified_count(
     }
 }
 
-/// Inserts vertices using planar Euclidean distance.
+/// Densifica i lati fino a `max_segment_length`.
 ///
-/// The output bound is computed before allocation and checked again after
-/// the operation.
+/// Ogni lato di lunghezza euclidea `L` si divide in
+/// `ceil(L / max_segment_length)` parti uguali, con i vertici nuovi a
+/// `inizio + (fine - inizio) * k / n` (`Densify` di `geo` con la metrica
+/// `Euclidean`). I vertici d'ingresso restano con i loro bit, anche i
+/// duplicati consecutivi. Punti e multipunti escono invariati; le collezioni
+/// si densificano membro per membro.
+///
+/// Il numero di coordinate d'uscita si calcola prima di allocare e si
+/// riconta dopo: entrambi entro `max_output_coordinates`. In una
+/// `GeometryCollection` il limite vale per il totale e, di nuovo, per ogni
+/// membro.
 ///
 /// # Errors
 ///
+/// Nell'ordine in cui si controllano:
+///
 /// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+///   `ValidazioneNonConclusa` se la validazione non conclude;
 /// - `InvalidParameter`: `max_segment_length` non finita o non positiva;
 /// - `UnsupportedGeometry`: `Line`, `Rect` o `Triangle` in input;
 /// - `IndexOverflow`: conteggio delle coordinate densificate non
 ///   rappresentabile come `u64`;
 /// - `OutputLimit`: coordinate stimate o prodotte oltre
 ///   `max_output_coordinates`;
+/// - `CalcoloNonConcluso`: la densificazione di `geo` e' andata in panico;
 /// - `InvalidOutput`: geometria prodotta non valida.
 pub fn densify(
     geometry: &Geometry<f64>,
@@ -261,17 +312,26 @@ pub fn densify(
     validate_output(output)
 }
 
-/// Rounds coordinates to an explicit grid.
+/// Porta ogni coordinata sul nodo piu' vicino di una griglia.
 ///
-/// Collapses that make the geometry invalid are rejected instead of being
-/// silently repaired.
+/// La griglia ha passo `grid_size` e origine in `(0, 0)`:
+/// `round(x / grid_size) * grid_size`
+/// per asse (a meta' strada si arrotonda lontano da zero), con `-0.0` reso
+/// `0.0`.
+///
+/// Non ripara e non semplifica: i vertici consecutivi che cadono sullo
+/// stesso nodo restano duplicati, e un collasso che rende la geometria non
+/// valida (linea ridotta a un punto, anello degenere o auto-intersecato) si
+/// rifiuta invece di essere corretto in silenzio.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+///   `ValidazioneNonConclusa` se la validazione non conclude;
 /// - `InvalidParameter`: `grid_size` non finita o non positiva;
-/// - `InvalidOutput`: overflow durante lo snap, o geometria prodotta non
-///   valida (es. collasso che viola la validita' OGC).
+/// - `InvalidOutput`: coordinata non finita dopo l'arrotondamento
+///   (overflow), o geometria prodotta non valida (collasso che viola la
+///   validita' OGC).
 pub fn snap_to_grid(
     geometry: &Geometry<f64>,
     grid_size: f64,
@@ -314,19 +374,27 @@ pub fn snap_to_grid(
 /// d'ingresso con i loro bit e i predicati di `spade` sono esatti, quindi
 /// nessuna coordinata calcolata puo' spostarsi.
 ///
-/// Costruita con il caricamento in blocco di `spade` ([`crate::triangolazione`]):
+/// Costruita con il caricamento in blocco di `spade` (`crate::triangolazione`):
 /// sugli ingressi senza quattro punti cocircolari i triangoli sono quelli
 /// dell'inserimento incrementale di `geo` 0.33.1, con gli stessi bit; sugli
 /// ingressi degeneri e' un'altra triangolazione di Delaunay valida (README,
 /// «geo.delaunay e geo.voronoi»).
 ///
+/// Meno di tre punti distinti, o punti tutti collineari, danno zero
+/// triangoli, senza errore.
+///
 /// # Errors
 ///
 /// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+///   `ValidazioneNonConclusa` se la validazione non conclude;
 /// - `IndexOverflow`: conteggio non rappresentabile come `u64`;
-/// - `CoordinateLimit`: coordinate di input oltre `max_input_coordinates`;
+/// - `CoordinateLimit`: coordinate di input (duplicati compresi) oltre
+///   `max_input_coordinates`;
 /// - `Triangulation`: triangolazione fallita (coordinata fuori dal dominio
-///   di `spade`, `[2^-142, 2^201]` in modulo o zero);
+///   di `spade`, `[2^-142, 2^201]` in modulo o zero, per il primo punto
+///   fuori in ordine d'ingresso; oppure vertici persi o fusi dal
+///   caricamento in blocco);
+/// - `CalcoloNonConcluso`: la triangolazione e' andata in panico;
 /// - `OutputLimit`: triangoli prodotti oltre `max_triangles`;
 /// - `InvalidOutput`: triangolo prodotto non valido.
 pub fn delaunay(
@@ -421,12 +489,21 @@ fn validate_ratio(value: f64, name: &'static str) -> Result<(), ExtendedAlgorith
 
 /// Punto sulla linea alla frazione `ratio` della lunghezza dall'inizio.
 ///
-/// `None` se la linea non ha un punto a quella frazione (es. linea vuota).
+/// La lunghezza e' quella euclidea: la distanza `ratio * L` si percorre
+/// lato per lato e il punto
+/// si interpola sul lato in cui cade. `ratio` 0 da' il primo vertice con i
+/// suoi bit; 1 l'ultimo, a meno di qualche `ulp` (la distanza residua
+/// sull'ultimo lato e' una differenza di somme in `f64`).
+///
+/// `None` se la linea e' vuota (l'unica linea valida senza un punto).
 ///
 /// # Errors
 ///
 /// - `InvalidParameter`: `ratio` non finito o fuori dall'intervallo [0, 1];
-/// - `InvalidInput`: coordinate NaN o infinite, o linea non valida.
+/// - `InvalidInput`: coordinate NaN o infinite, o linea non valida (meno di
+///   due punti distinti); `ValidazioneNonConclusa` se la validazione non
+///   conclude;
+/// - `CalcoloNonConcluso`: l'interpolazione di `geo` e' andata in panico.
 pub fn line_interpolate_point(
     line: &LineString<f64>,
     ratio: f64,
@@ -436,16 +513,26 @@ pub fn line_interpolate_point(
     protetto(|| Euclidean.point_at_ratio_from_start(line, ratio))
 }
 
-/// Porzione di linea tra le frazioni `start_ratio` e `end_ratio`.
+/// Porzione di linea tra le frazioni `start_ratio` e `end_ratio` della
+/// lunghezza euclidea.
 ///
-/// `None` se la linea e' vuota; un `Point` se le due frazioni coincidono.
+/// Il primo e l'ultimo punto sono quelli di [`line_interpolate_point`] alle
+/// due frazioni; in mezzo restano, con i loro bit, i vertici d'ingresso la
+/// cui distanza cumulata dall'inizio e' strettamente fra le due distanze
+/// (un vertice uguale al precedente non si ripete). `None` se la linea e'
+/// vuota; un `Point` se le due frazioni sono uguali (confronto per bit).
 ///
 /// # Errors
 ///
 /// - `InvalidParameter`: frazione non finita o fuori dall'intervallo
 ///   [0, 1], oppure `start_ratio` maggiore di `end_ratio`;
 /// - `InvalidInput`: coordinate NaN o infinite, o linea non valida;
-/// - `InvalidOutput`: porzione prodotta non valida.
+///   `ValidazioneNonConclusa` se la validazione non conclude;
+/// - `CalcoloNonConcluso`: interpolazione o lunghezza di `geo` andate in
+///   panico;
+/// - `InvalidOutput`: porzione prodotta non valida (per esempio due
+///   frazioni diverse i cui punti coincidono in `f64`: una linea di un solo
+///   punto distinto).
 pub fn line_substring(
     line: &LineString<f64>,
     start_ratio: f64,
@@ -497,17 +584,26 @@ pub fn line_substring(
     validate_output(Geometry::LineString(LineString::new(coordinates))).map(Some)
 }
 
-/// Distanza di Frechet discreta tra due linee.
+/// Distanza di Fréchet discreta tra due linee.
 ///
-/// Il lavoro quadratico e' limitato da `max_coordinate_pairs`; `None` se
-/// una delle due linee e' vuota.
+/// E' `FrechetDistance` di `geo` con la metrica `Euclidean`: si accoppiano
+/// solo i vertici, quindi un
+/// vertice in piu' su un lato dritto puo' cambiare il risultato (la distanza
+/// continua sarebbe minore o uguale). Simmetrica; il verso delle linee conta.
+///
+/// Il lavoro quadratico, `vertici(left) * vertici(right)`, e' limitato da
+/// `max_coordinate_pairs` prima del calcolo; `None` se una delle due linee e'
+/// vuota.
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: coordinate NaN o infinite, o linea non valida;
+/// - `InvalidInput`: coordinate NaN o infinite, o linea non valida (prima
+///   `left`, poi `right`); `ValidazioneNonConclusa` se la validazione non
+///   conclude;
 /// - `IndexOverflow`: conteggio coordinate non rappresentabile come `u64`;
 /// - `WorkLimit`: coppie di coordinate oltre `max_coordinate_pairs` (o
-///   prodotto non rappresentabile come `u64`).
+///   prodotto non rappresentabile come `u64`);
+/// - `CalcoloNonConcluso`: il calcolo di `geo` e' andato in panico.
 pub fn frechet_distance(
     left: &LineString<f64>,
     right: &LineString<f64>,
@@ -547,13 +643,26 @@ fn validate_geographic_geometry(geometry: &Geometry<f64>) -> Result<(), Extended
     Ok(())
 }
 
-/// Bearing geodetico in gradi da `origin` a `destination`.
+/// Azimut geodetico iniziale, in gradi, da `origin` a `destination`.
+///
+/// E' la direzione della geodetica in partenza da `origin`, misurata in
+/// senso orario dal nord (nord 0, est 90, sud 180, ovest 270), in
+/// `[0, 360)`.
+///
+/// Coordinate `x` = longitudine, `y` = latitudine, in gradi. Il calcolo e'
+/// `Geodesic.bearing` di `geo` (problema inverso di Karney,
+/// `geographiclib-rs`) sempre sull'ellissoide WGS 84, qualunque sia il
+/// datum del chiamante. Due punti coincidenti danno 180 (l'azimut che
+/// `geographiclib-rs` rende per una geodetica di lunghezza zero), senza
+/// errore.
 ///
 /// # Errors
 ///
-/// - `InvalidInput`: coordinate NaN o infinite;
+/// - `InvalidInput`: coordinate NaN o infinite; `ValidazioneNonConclusa` se
+///   la validazione non conclude;
 /// - `InvalidGeographicCoordinate`: longitudine fuori da [-180, 180] o
-///   latitudine fuori da [-90, 90].
+///   latitudine fuori da [-90, 90];
+/// - `CalcoloNonConcluso`: il calcolo di `geo` e' andato in panico.
 pub fn geodesic_bearing_degrees(
     origin: Point<f64>,
     destination: Point<f64>,
@@ -562,13 +671,24 @@ pub fn geodesic_bearing_degrees(
     protetto(|| Geodesic.bearing(origin, destination))
 }
 
-/// Area geodetica in metri quadrati di poligoni e multi-poligoni.
+/// Area geodetica, in metri quadrati, di poligoni e multi-poligoni
+/// sull'ellissoide WGS 84, qualunque sia il datum del chiamante.
+///
+/// Coordinate `x` = longitudine, `y` = latitudine, in gradi; i lati sono
+/// geodetiche fra vertici consecutivi. Ogni poligono si orienta prima (esterno
+/// antiorario, buchi orari, nel piano lon/lat), quindi il verso d'ingresso
+/// non conta; l'area e' quella dell'esterno meno quella dei buchi
+/// (`geodesic_area_unsigned` di `geo`, algoritmo di Karney). Un
+/// `MultiPolygon` somma le aree dei suoi poligoni, in ordine. Un poligono o
+/// un multi-poligono vuoto da' `-0.0`.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+///   `ValidazioneNonConclusa` se la validazione non conclude;
 /// - `InvalidGeographicCoordinate`: coordinate fuori intervallo lon/lat;
 /// - `UnsupportedGeometry`: geometria diversa da `Polygon`/`MultiPolygon`;
+/// - `CalcoloNonConcluso`: il calcolo di `geo` e' andato in panico;
 /// - `InvalidOutput`: area NaN o infinita.
 pub fn geodesic_area_m2(geometry: &Geometry<f64>) -> Result<f64, ExtendedAlgorithmError> {
     validate_geographic_geometry(geometry)?;
@@ -601,23 +721,48 @@ pub fn geodesic_area_m2(geometry: &Geometry<f64>) -> Result<f64, ExtendedAlgorit
     Ok(area)
 }
 
+/// Il referto di [`geometry_diagnostics`]: un campo per ognuna delle dieci
+/// colonne di `geo.geometry_diagnostics` (`bounds` ne da' quattro).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GeometryDiagnostics {
+    /// Tipo `geo` della geometria: `Point`, `LineString`, `Polygon`,
+    /// `MultiPoint`, `MultiLineString`, `MultiPolygon`,
+    /// `GeometryCollection` (dal WKB non arrivano `Line`, `Rect`,
+    /// `Triangle`).
     pub geometry_type: &'static str,
+    /// Coordinate della geometria, duplicati e vertici di chiusura degli
+    /// anelli compresi.
     pub coordinate_count: u64,
+    /// `coordinate_count == 0`.
     pub is_empty: bool,
+    /// Ogni coordinata e' finita (niente NaN, niente infiniti).
     pub is_finite: bool,
+    /// La geometria supera la validazione OGC; sempre `false` con
+    /// coordinate non finite, che non si validano.
     pub is_valid: bool,
+    /// `None` se valida; altrimenti la ragione classificata, senza
+    /// coordinate: `coordinate NaN o infinite` oppure uno dei testi di
+    /// `RagioneNonValida` (`punti distinti insufficienti`, `anello con
+    /// auto-intersezione`, `anelli che si intersecano`, `anello interno fuori
+    /// dal proprio esterno`, `poligoni sovrapposti`, `forma non valida non
+    /// ulteriormente distinta`).
     pub validity_reason: Option<String>,
+    /// Rettangolo d'ingombro `[minx, miny, maxx, maxy]`; `None` se la
+    /// geometria e' vuota o ha coordinate non finite.
     pub bounds: Option<[f64; 4]>,
 }
 
-/// Diagnostics intentionally accept invalid topology.
+/// Referto diagnostico di una geometria: tipo, conteggio delle coordinate,
+/// vuota, finita, valida e perche' no, rettangolo d'ingombro.
 ///
-/// They never run an algorithm on non-finite coordinates.
+/// Accetta di proposito la topologia non valida e le coordinate non finite:
+/// e' il suo mestiere descriverle. Non esegue alcun algoritmo sulle
+/// coordinate non finite (niente validazione, niente rettangolo).
 ///
 /// # Errors
 ///
+/// - `ValidazioneNonConclusa`: la validazione OGC non conclude; il referto
+///   non si scrive, perche' dichiarerebbe un verdetto che non esiste;
 /// - `IndexOverflow`: conteggio delle coordinate non rappresentabile come
 ///   `u64`.
 pub fn geometry_diagnostics(
@@ -760,14 +905,30 @@ fn walk_merged_path(
     LineString::new(output)
 }
 
-/// Merges maximal line paths.
+/// Fonde le linee in percorsi massimali.
 ///
-/// A node with degree other than two is always a barrier, matching
-/// established line-merge topology semantics.
+/// Due linee si uniscono solo in un estremo condiviso da esattamente due
+/// linee (grado 2). Un nodo di grado diverso da due e' sempre un confine,
+/// come nel line merge di GEOS e `PostGIS` (`ST_LineMerge`); gli estremi si
+/// confrontano per bit, con `-0.0`
+/// uguale a `0.0`, senza tolleranza.
+///
+/// Una linea percorsa al contrario si inverte per proseguire il percorso;
+/// un vertice uguale al precedente non si ripete nelle giunzioni. Le linee
+/// vuote si ignorano. Una linea chiusa (primo vertice uguale all'ultimo)
+/// esce sempre da sola, com'e', e nel grado del suo nodo conta una volta.
+/// L'uscita e' deterministica: prima, nell'ordine delle linee d'ingresso,
+/// le linee chiuse e i percorsi che toccano un nodo di grado diverso da
+/// due (ciascuno dal primo estremo della sua prima linea, se quello non ha
+/// grado due, altrimenti dall'ultimo); poi gli anelli
+/// fatti solo di nodi di grado due, ciascuno dalla prima linea non ancora
+/// usata, a partire dal suo estremo minore (bit di `x`, poi di `y`, come
+/// interi senza segno).
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
+///   `ValidazioneNonConclusa` se la validazione non conclude;
 /// - `CoordinateLimit`: coordinate di input oltre `max_input_coordinates`;
 /// - `UnsupportedGeometry`: geometria diversa da `LineString`,
 ///   `MultiLineString` o `GeometryCollection` (anche annidata);
@@ -792,6 +953,8 @@ pub fn line_merge(
     collect_lines(geometry, "line_merge", &mut lines)?;
     lines.retain(|line| !line.0.is_empty());
     let mut edges = Vec::with_capacity(lines.len());
+    // La mappa si interroga e non si itera mai: l'ordine d'uscita segue
+    // l'ordine delle linee, non l'hash.
     let mut adjacency: HashMap<EndpointKey, Vec<usize>> = HashMap::new();
     for line in lines {
         let start = EndpointKey::new(line.0[0]);
@@ -951,8 +1114,8 @@ fn point_ratio_on_segment(
     let dx = segment.line.end.x - segment.line.start.x;
     let dy = segment.line.end.y - segment.line.start.y;
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // renderebbe il risultato diverso da piattaforma a piattaforma; la forma
+    // non fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let length_squared = dx * dx + dy * dy;
     if length_squared == 0.0 {
@@ -970,9 +1133,10 @@ fn point_ratio_on_segment(
     };
     let distance = (point.x() - projected.x).hypot(point.y() - projected.y);
     let ratio = (segment.distance_before + parameter * segment.length) / total_length;
-    // Projection arithmetic can move an exactly collinear decimal point by
-    // a few ULPs (for example x=14 on a 0..100 segment). Zero user
-    // tolerance must still mean topological coincidence, not bit equality.
+    // La proiezione puo' spostare di qualche ULP un punto decimale
+    // esattamente collineare (per esempio x=14 su un segmento 0..100): una
+    // tolleranza zero deve voler dire coincidenza topologica, non
+    // uguaglianza dei bit.
     let coordinate_scale = segment
         .line
         .start
@@ -1015,14 +1179,24 @@ fn expanded_point_envelope(point: Point<f64>, tolerance: f64) -> AABB<[f64; 2]> 
     )
 }
 
-/// Splits a `LineString` using points, linework or polygon boundaries.
+/// Taglia una `LineString` con punti, linee o bordi di poligoni (le
+/// sorgenti lineari di `geo.split`).
 ///
-/// Work is bounded before the quadratic segment-intersection loop.
+/// Un punto taglia dove dista dalla linea al piu' `tolerance` piu' un
+/// margine numerico proporzionale al modulo delle coordinate; un lato del
+/// tagliatore taglia nei punti d'incrocio e agli estremi di una
+/// sovrapposizione. I tagli entro `tolerance` l'uno dall'altro (in
+/// lunghezza) si fondono. Il lavoro si limita prima del ciclo quadratico
+/// dei test d'intersezione, e le parti devono conservare la lunghezza della
+/// sorgente.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: coordinate NaN o infinite, geometria OGC non valida, o
 ///   lunghezza della sorgente non finita per overflow numerico;
+///   `ValidazioneNonConclusa` se la validazione non conclude;
+/// - `CalcoloNonConcluso`: un calcolo di `geo` o `rstar` e' andato in
+///   panico;
 /// - `CoordinateLimit`: coordinate combinate (sorgente + splitter) oltre
 ///   `max_input_coordinates`;
 /// - `InvalidParameter`: `tolerance` non finita o negativa;
@@ -1116,8 +1290,8 @@ pub fn split_line(
             scale.max(coordinate.x.abs()).max(coordinate.y.abs())
         });
     // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // renderebbe il risultato diverso da piattaforma a piattaforma; la forma
+    // non fusa e' il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let query_tolerance = (tolerance + coordinate_scale * f64::EPSILON * 16.0).min(f64::MAX);
     for point in points {
@@ -1176,9 +1350,10 @@ pub fn split_line(
     }
     ratios.retain(|ratio| ratio.is_finite() && *ratio > 0.0 && *ratio < 1.0);
     ratios.sort_by(f64::total_cmp);
-    // The tolerance requested by the caller may merge nearby cuts by design.
-    // With an exact (zero) tolerance, only floating duplicates around a
-    // shared vertex are absorbed, so legitimate tiny pieces survive.
+    // La tolleranza del chiamante puo' fondere tagli vicini, per scelta.
+    // Con tolleranza esatta (zero) si assorbono solo i duplicati numerici
+    // attorno a un vertice condiviso, cosi' i pezzi minuscoli legittimi
+    // restano.
     let ratio_tolerance = (tolerance / total_length).max(f64::EPSILON * 8.0);
     ratios.dedup_by(|left, right| (*left - *right).abs() <= ratio_tolerance);
     let part_count =

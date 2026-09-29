@@ -1,4 +1,6 @@
-//! Advanced pure-Rust kernels whose output cardinality differs from the input.
+//! Kernel di `geo.voronoi`: una cella di Voronoi per ogni punto d'ingresso,
+//! costruita sulla triangolazione caricata in blocco di
+//! `crate::triangolazione`.
 
 use geo::algorithm::triangulate_delaunay::TriangulationError;
 use geo::{
@@ -13,25 +15,42 @@ use crate::rust_backend::griglia;
 use crate::rust_backend::precision::{coordinate_abbastanza_fitte, modulo_massimo, Precision};
 use thiserror::Error;
 
+/// Errori di [`voronoi_cells`]. I messaggi nominano al piu' l'indice della
+/// geometria d'ingresso, mai le coordinate.
 #[derive(Debug, Error)]
 pub enum AdvancedError {
+    /// `max_points` minore di 2.
     #[error("max_points deve essere almeno 2")]
     InvalidPointLimit,
+    /// Meno di due geometrie d'ingresso.
     #[error("Voronoi richiede almeno due punti")]
     InsufficientPoints,
+    /// Piu' geometrie d'ingresso (`actual`) di `max_points` (`limit`).
     #[error("Voronoi: {actual} punti oltre il limite di {limit}")]
     PointLimitExceeded { actual: usize, limit: usize },
+    /// La geometria all'indice `index` e' valida ma non e' un `Point`.
     #[error("Voronoi accetta solo Point; riga {index}: {geometry_type}")]
     ExpectedPoint {
+        /// Indice della geometria nell'ingresso.
         index: usize,
+        /// Tipo `geo` della geometria.
         geometry_type: &'static str,
     },
+    /// La geometria all'indice `index` non supera la validazione OGC (per
+    /// un punto: coordinate NaN o infinite); `reason` e' la ragione
+    /// classificata, senza coordinate.
     #[error("punto non valido alla riga {index}: {reason}")]
     InvalidPoint { index: usize, reason: String },
+    /// La costruzione non e' riuscita, con il messaggio di `geo` 0.33.1:
+    /// coordinata fuori dal dominio di `spade` (zero o modulo in
+    /// `[2^-142, 2^201]`), meno di due siti distinti, siti tutti collineari
+    /// (nessuna cella), vertici persi o fusi dal caricamento in blocco.
     #[error("costruzione Voronoi fallita: {0}")]
     Voronoi(String),
+    /// Nessuna cella interseca il punto all'indice dato.
     #[error("nessuna cella Voronoi associabile alla riga {0}")]
     UnmatchedPoint(usize),
+    /// Una cella prodotta non supera la validazione OGC.
     #[error("cella Voronoi non valida: {0}")]
     InvalidOutput(String),
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -42,13 +61,15 @@ pub enum AdvancedError {
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
     /// Un calcolo di `geo` o `rstar` e' andato in panico dentro
-    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// `crate::calcolo_protetto`: non accusa l'ingresso, porta la *forma*
     /// del payload, mai il contenuto.
     #[error("calcolo Voronoi non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
-    /// Le coordinate (siti e punti lontani dei raggi) sono troppo grandi
-    /// per la precisione dichiarata: la spaziatura dei `f64` supera `p /
-    /// 64` (`rust_backend::precision`).
+    /// Le coordinate (siti e punti lontani dei raggi, o vertici delle celle
+    /// prima del ritaglio) sono troppo grandi per la precisione dichiarata:
+    /// la spaziatura dei `f64` supera `p / 64` (`rust_backend::precision`);
+    /// oppure la griglia di `i_overlay` del ritaglio di una cella di bordo
+    /// supererebbe `p / 2`.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
     /// Un vertice Voronoi (circocentro di un triangolo quasi degenere) ha un
@@ -88,30 +109,47 @@ fn classifica_cella(esito: crate::EsitoValidazione) -> AdvancedError {
     )
 }
 
-/// One bounded Voronoi polygon for every input point, retaining input order.
+/// Una cella di Voronoi limitata per ogni punto d'ingresso, nell'ordine
+/// d'ingresso (l'ordine e' parte del contratto, `DefinedOrder` nel
+/// catalogo).
 ///
-/// Duplicate points receive the same cell. Nulls are intentionally not
-/// accepted because Manipola's current `MultiPoint` construction rejects them.
+/// Le celle sono quelle di `voronoi_cells` di `geo` 0.33.1 (tolleranza
+/// zero, ritaglio `Padded`): le celle di bordo, infinite, si chiudono con
+/// raggi prolungati e si ritagliano sul rettangolo d'ingombro dei siti
+/// allargato per lato della meta' del suo lato maggiore. A ogni punto va la
+/// prima cella, in ordine di sito, che lo interseca: i punti duplicati
+/// ricevono la stessa cella. L'ingresso non ha null: una riga nulla va
+/// trattata dal chiamante prima (Manipola, con cui l'operazione e'
+/// compatibile, rifiuta i null nella costruzione del `MultiPoint`).
+///
+/// `precision` e' la precisione dichiarata nelle unita' delle coordinate
+/// (README, «Precisione delle operazioni geografiche: 1 cm a terra»): i
+/// rifiuti per precisione sono descritti in README, «geo.delaunay e
+/// geo.voronoi».
 ///
 /// # Errors
 ///
-/// - `InvalidPointLimit`: `max_points` is below 2.
-/// - `InsufficientPoints`: fewer than 2 input geometries.
-/// - `PointLimitExceeded`: more than `max_points` input geometries.
-/// - `InvalidPoint`: an input geometry fails OGC validation (e.g. NaN
-///   coordinates).
-/// - `ExpectedPoint`: an input geometry is not a `Point`.
-/// - `Voronoi`: the Voronoi construction itself failed.
-/// - `InvalidOutput`: a produced cell fails OGC validation.
-/// - `UnmatchedPoint`: no produced cell intersects an input point.
-/// - `PrecisionInsufficient`: sites or far ray points too large for
-///   `precision` (the spacing of `f64` there exceeds `precision / 64`).
-/// - `VerticeMalCondizionato`: a Voronoi vertex (circumcenter of a nearly
-///   degenerate triangle) whose rounding-error bound exceeds
-///   `precision / 4`.
+/// Nell'ordine in cui si controllano:
 ///
-/// Cell order and contents: one cell per input point in input order (the
-/// order is part of the contract, `DefinedOrder` in the catalog).
+/// - `InvalidPointLimit`: `max_points` minore di 2;
+/// - `InsufficientPoints`: meno di due geometrie;
+/// - `PointLimitExceeded`: piu' di `max_points` geometrie;
+/// - `InvalidPoint`: una geometria non supera la validazione OGC (per
+///   esempio coordinate NaN); `ValidazioneNonConclusa` se la validazione
+///   non conclude;
+/// - `ExpectedPoint`: una geometria valida non e' un `Point`;
+/// - `Voronoi`: la costruzione e' fallita (dominio di `spade`, siti
+///   collineari o meno di due distinti);
+/// - `PrecisionInsufficient`: siti, punti lontani dei raggi o vertici
+///   delle celle dove la spaziatura dei `f64` supera `precision / 64`,
+///   oppure griglia del ritaglio oltre `precision / 2`;
+/// - `VerticeMalCondizionato`: un vertice Voronoi (circocentro di un
+///   triangolo quasi degenere) con un errore d'arrotondamento maggiorato
+///   oltre `precision / 4`;
+/// - `CalcoloNonConcluso`: un calcolo di `geo`, `spade` o `rstar` e' andato
+///   in panico;
+/// - `InvalidOutput`: una cella prodotta non supera la validazione OGC;
+/// - `UnmatchedPoint`: nessuna cella interseca un punto d'ingresso.
 pub fn voronoi_cells(
     geometries: &[Geometry<f64>],
     max_points: usize,
@@ -185,10 +223,9 @@ fn voronoi_cells_con(
 /// incrementale.
 ///
 /// Il corpo e' `build_raw_voronoi_cells` e `voronoi_cells_with_params` di
-/// `geo` 0.33.1 ricopiati: stessi circocentri (`circumcenter` di `spade`
-/// sulla faccia), stessi raggi, stesso ordinamento angolare, stesso
-/// ritaglio con `intersection` di `geo`. Cambiano solo due cose, che
-/// riportano l'uscita a quella dell'incrementale:
+/// `geo` 0.33.1 ricopiati: stessi raggi, stesso ordinamento angolare,
+/// stesso ritaglio con `intersection` di `geo`. Due cambiamenti riportano
+/// l'uscita a quella dell'incrementale:
 /// - le celle escono in ordine di rango (prima comparsa del sito), che e'
 ///   l'ordine dei vertici, e quindi delle celle, dell'incrementale;
 /// - il rettangolo d'ingombro dei siti si accumula in ordine di rango sui
@@ -248,7 +285,7 @@ fn celle_da_spade(
 
     let base_bounds = compute_bounds_from_vertices(costruita.siti.iter().copied());
 
-    // Use padded bounds for extension distance calculation
+    // Il rettangolo allargato da' la distanza a cui si prolungano i raggi.
     let padded = padded_bounds(base_bounds, 0.5);
     let extension = (padded.width() + padded.height()) * 2.0;
 
@@ -300,9 +337,9 @@ fn celle_da_spade(
         let sito = *face.as_delaunay_vertex().data();
         let site_coord = sito.coordinata;
 
-        // Collect circumcenters and ray info
+        // Circocentri e raggi della cella.
         let mut circumcenters: Vec<Coord<f64>> = Vec::new();
-        let mut rays: Vec<(Coord<f64>, Coord<f64>)> = Vec::new(); // (origin, direction)
+        let mut rays: Vec<(Coord<f64>, Coord<f64>)> = Vec::new(); // (origine, direzione)
 
         for edge in &edges {
             let from_vertex = edge.from();
@@ -321,7 +358,7 @@ fn celle_da_spade(
                 }
             }
 
-            // Collect ray information
+            // Un lato verso l'esterno e' un raggio dal circocentro.
             if let (Inner(inner_face), Outer(outer_edge)) = (&from_vertex, &to_vertex) {
                 let ref_pt = centro_della_faccia(inner_face.fix().index());
                 let dir = outer_edge.direction_vector();
@@ -335,24 +372,25 @@ fn celle_da_spade(
             }
         }
 
-        // Build cell vertices
+        // I vertici della cella.
         let mut vertices: Vec<Coord<f64>> = circumcenters.clone();
 
         if rays.is_empty() {
-            // Interior cell: just circumcenters
+            // Cella interna: solo circocentri.
             if vertices.len() < 3 {
                 continue;
             }
         } else {
-            // Boundary cell: extend rays far beyond bbox
+            // Cella di bordo: i raggi si prolungano ben oltre il rettangolo.
             for (origin, direction) in &rays {
-                // Normalise direction to unit vector so all rays extend the same distance.
-                // Skip degenerate zero-length or non-finite directions.
+                // Direzione unitaria, cosi' ogni raggio si prolunga della
+                // stessa distanza; si saltano le direzioni nulle o non
+                // finite.
                 let Some(unit_dir) = direction.try_normalize() else {
                     continue;
                 };
 
-                // Add a point far beyond the bbox in the ray direction
+                // Un punto lontano oltre il rettangolo, lungo il raggio.
                 let extended = *origin + unit_dir * extension;
                 vertices.push(extended);
             }
@@ -362,7 +400,7 @@ fn celle_da_spade(
             continue;
         }
 
-        // Sort vertices by angle around the site
+        // Vertici in ordine d'angolo attorno al sito.
         vertices.sort_by(|a, b| {
             let angle_a = f64::atan2(a.y - site_coord.y, a.x - site_coord.x);
             let angle_b = f64::atan2(b.y - site_coord.y, b.x - site_coord.x);
@@ -382,8 +420,8 @@ fn celle_da_spade(
 
     let raw_cells: Vec<Polygon<f64>> = per_rango.into_iter().flatten().collect();
 
-    // Collinear input produces no cells (only perpendicular bisector lines).
-    // Return an error rather than silently returning an empty result.
+    // Siti collineari non danno celle (solo assi paralleli): errore, non
+    // un risultato vuoto in silenzio.
     if raw_cells.is_empty() {
         return Err(AdvancedError::Voronoi(
             VoronoiError::CollinearInput.to_string(),
@@ -402,7 +440,7 @@ fn celle_da_spade(
 
     let mut celle = Vec::with_capacity(raw_cells.len());
     for cell in raw_cells {
-        // Skip intersection if cell is entirely within clip bounds
+        // Una cella tutta dentro il rettangolo di ritaglio non si interseca.
         let cell_rect = cell.bounding_rect();
         let contained_by_clip = clip_rect
             .as_ref()
@@ -864,7 +902,7 @@ mod tests {
     }
 
     // Niente mul_add: la fusione cambia l'arrotondamento e i punti di prova
-    // devono restare quelli scritti (architettura.md#determinismo).
+    // devono restare quelli scritti.
     #[allow(clippy::suboptimal_flops)]
     fn griglia(lato: u64, passo: f64, origine: (f64, f64)) -> Vec<(f64, f64)> {
         (0..lato)
@@ -1128,7 +1166,7 @@ mod tests {
     /// e con punti casuali, anche fuori da ogni cella.
     #[test]
     // Niente mul_add: la fusione cambia l'arrotondamento e i punti di prova
-    // devono restare quelli scritti (architettura.md#determinismo).
+    // devono restare quelli scritti.
     #[allow(clippy::suboptimal_flops)]
     fn oracolo_associazione_casuale_sui_vertici_delle_celle() {
         let mut generatore = Xorshift(0xD1B5_4A32_D192_ED03);

@@ -40,6 +40,8 @@ use spade::{DelaunayTriangulation, HasPosition, InsertionError, Point2, Triangul
 /// l'inserimento incrementale le avrebbe lasciato, e il suo rango.
 #[derive(Clone, Copy, Debug)]
 pub struct Sito {
+    /// La coordinata del vertice, con i bit che l'inserimento incrementale
+    /// gli lascerebbe ([`siti_distinti`]).
     pub coordinata: Coord<f64>,
     /// Indice del vertice nell'inserimento incrementale: ordine di prima
     /// comparsa della posizione fra i punti d'ingresso.
@@ -68,6 +70,7 @@ pub enum ErroreTriangolazione {
 
 /// La triangolazione con i siti distinti in ordine di rango.
 pub struct Triangolazione {
+    /// La triangolazione di `spade`, un vertice per sito distinto.
     pub triangolazione: DelaunayTriangulation<Sito>,
     /// `siti[r]` e' la coordinata del vertice di rango `r`.
     pub siti: Vec<Coord<f64>>,

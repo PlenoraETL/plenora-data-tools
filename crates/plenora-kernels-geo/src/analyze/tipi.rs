@@ -20,9 +20,12 @@
 //!   dichiarazione `exact` si mappa (e se nessun tipo dichiarato produce
 //!   righe resta l'insieme fisso), ogni altra dichiarazione, o la sua
 //!   assenza, da' l'insieme fisso `exact` dei due;
-//! - **nessuna dichiarazione**: `line_builder` e `polygon_builder` non hanno
-//!   un kernel in questo workspace che la verifichi; la dichiarazione
-//!   ereditata si toglie, invece di tenerne una falsa.
+//! - **nessuna dichiarazione**: `line_builder` e `polygon_builder` hanno un
+//!   kernel (`construction::line_from_ordered_points` e
+//!   `construction::polygon_from_ordered_points`), ma non e' collegato
+//!   all'operazione e l'oracolo `kernel_crosscheck` non lo verifica; la
+//!   dichiarazione ereditata si toglie, invece di tenerne una non
+//!   verificata.
 
 use plenora_core::contract::{
     ContractProperty, GeometryColumnContract, GeometryType, GeometryTypesProperty,
