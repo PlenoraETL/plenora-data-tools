@@ -55,40 +55,66 @@ pub struct SimplifyConfig {
     pub policy: Option<SimplifyPolicyParam>,
 }
 
+/// `affine_transform`: la matrice affine 2D.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AffineTransformConfig {
+    /// Obbligatorio: esattamente sei numeri finiti `[a, b, xoff, d, e,
+    /// yoff]`; `(x, y)` diventa `(a x + b y + xoff, d x + e y + yoff)`.
     pub coefficients: Vec<f64>,
 }
 
+/// `translate`: spostamento nelle unita' del CRS.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TranslateConfig {
+    /// Obbligatorio, finito: spostamento lungo x.
     pub x_offset: f64,
+    /// Obbligatorio, finito: spostamento lungo y.
     pub y_offset: f64,
 }
 
+/// `scale`: fattori per asse attorno a un'origine.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScaleConfig {
+    /// Obbligatorio, finito: fattore lungo x (negativo: riflessione).
     pub x_factor: f64,
+    /// Obbligatorio, finito: fattore lungo y (negativo: riflessione).
     pub y_factor: f64,
+    /// Facoltativo, finito: x dell'origine che resta ferma. Il valore
+    /// usato quando manca non e' deciso qui: il kernel riceve l'origine
+    /// esplicita e nessun esecutore lo chiama ancora.
     pub x_origin: Option<f64>,
+    /// Facoltativo, finito: y dell'origine, come `x_origin`.
     pub y_origin: Option<f64>,
 }
 
+/// `rotate`: angolo attorno a un centro.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RotateConfig {
+    /// Obbligatorio, finito: angolo in gradi, positivo in verso
+    /// antiorario.
     pub degrees: f64,
+    /// Facoltativo, finito: x del centro di rotazione. Il valore usato
+    /// quando manca non e' deciso qui: il kernel riceve il centro esplicito
+    /// e nessun esecutore lo chiama ancora.
     pub x_origin: Option<f64>,
+    /// Facoltativo, finito: y del centro di rotazione, come `x_origin`.
     pub y_origin: Option<f64>,
 }
 
+/// `concave_hull`: parametri dell'algoritmo di `geo`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConcaveHullConfig {
+    /// Obbligatorio, finito e maggiore di zero: piu' piccolo, piu'
+    /// concavo.
     pub concavity: f64,
+    /// Facoltativo, finito e non negativo: lunghezza sotto la quale un
+    /// lato non si scava. Il valore usato quando manca non e' deciso qui:
+    /// il kernel lo riceve esplicito e nessun esecutore lo chiama ancora.
     pub length_threshold: Option<f64>,
 }
 

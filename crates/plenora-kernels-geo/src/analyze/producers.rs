@@ -32,17 +32,19 @@ use super::{
 };
 
 /// `reproject`: schema invariato, CRS del contratto e campo geometria
-/// riscritti sul target risolto. La sorgente deve avere un CRS risolto della
-/// tabella integrata (R4.6.3) e un ordine degli assi dichiarato normalizzato
-/// o assente; la config si verifica per intero qui, con la stessa funzione
-/// del kernel ([`crate::riproiezione::ReprojectParams::da_config`]): target,
-/// percorsi fra i datum, regola dell'accuratezza, griglie. I file delle
-/// griglie si leggono solo in esecuzione.
+/// riscritti sul target risolto. La sorgente deve avere un CRS risolto (mai
+/// `Missing` o `DeclaredUnresolved`), della tabella integrata (lo verifica
+/// il piano dei percorsi: `CRS_NOT_BUILTIN`), e un ordine degli assi
+/// dichiarato normalizzato o assente; la config si verifica per intero qui,
+/// con la stessa funzione del kernel
+/// ([`crate::riproiezione::ReprojectParams::da_config`]): target, percorsi
+/// fra i datum, regola dell'accuratezza, griglie. I file delle griglie si
+/// leggono solo in esecuzione.
 ///
 /// Il campo d'uscita e' [`crate::riproiezione::campo_riproiettato`]: `geo`
-/// sul target, chiavi canoniche CRS della sorgente sostituite (non fuse,
-/// piano-v5.md#contratti-di-input decisione 8), `axis_order` GIS
-/// normalizzato del target.
+/// sul target, chiavi canoniche CRS della sorgente tolte (sostituite, mai
+/// fuse con quelle del target), `axis_order` GIS normalizzato del target.
+/// Righe, tipi geometrici, `FieldId` e proprieta' del contratto restano.
 pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,
@@ -51,8 +53,9 @@ pub(in crate::analyze) fn analyze_reproject(
     let geometry = super::helpers::single_geometry(op, input)?;
     super::helpers::require_identifiable_geometry(op, input, geometry)?;
     super::helpers::require_xy_dimensions(op, geometry)?;
-    // Gate R4.6.3 e ordine degli assi prima del target: dipendono dalla
-    // sola sorgente (determinismo del fallimento).
+    // CRS risolto e ordine degli assi prima del target: dipendono dalla
+    // sola sorgente, e con una sorgente non valida l'errore e' quello,
+    // qualunque sia la config.
     let source = super::dispatch::require_resolved_crs(op, geometry)?;
     let field = input.schema.field_with_name(&geometry.name).map_err(|_| {
         PlenoraError::Schema(format!(
@@ -123,7 +126,7 @@ pub(in crate::analyze) fn analyze_expand(op: &str, input: &DataContract) -> Resu
 /// `line_merge`, `overlay`): le colonne attributo non sono propagate; la
 /// geometria aggregata e' nullable (input vuoto -> geometria null).
 ///
-/// I metadati dello SCHEMA di input restano (R2.4): riguardano il dataset.
+/// I metadati dello SCHEMA di input restano: riguardano il dataset.
 /// Le colonne `extra` sono `Field` interi: quelle copiate dall'input (chiavi
 /// di `collect`) conservano i loro metadati, quelle sintetiche nascono senza.
 pub(in crate::analyze) fn analyze_geometry_only(
@@ -387,8 +390,8 @@ pub(in crate::analyze) fn analyze_collect(
                 ))
             },
         )?;
-        // R2.4 identity-preserving: la colonna chiave sopravvive invariata —
-        // si clona il `Field` intero, metadati compresi.
+        // La colonna chiave sopravvive invariata: si clona il `Field`
+        // intero, metadati compresi.
         extra.push(field.clone());
     }
     analyze_geometry_only(input, geometry, &extra)
@@ -401,7 +404,7 @@ pub(in crate::analyze) fn analyze_collect(
 /// (`row_count` `Estimated` col valore esatto).
 ///
 /// Le colonne del trigger non sono propagate, ma i metadati dello SCHEMA si'
-/// (R2.4): riguardano il dataset, non le colonne soppresse.
+/// perche' riguardano il dataset, non le colonne soppresse.
 pub(in crate::analyze) fn analyze_generate_grid(
     op: &str,
     input: &DataContract,

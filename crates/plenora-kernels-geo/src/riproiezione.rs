@@ -23,7 +23,7 @@
 //!    valida OGC come quella d'ingresso: una riproiezione che la rende non
 //!    valida e' un errore, mai un risultato.
 //!
-//! Il calcolo gira dietro la barriera [`crate::calcolo_protetto`]. Gli
+//! Il calcolo gira dietro la barriera dei panici (`calcolo_protetto`). Gli
 //! errori non riportano coordinate.
 
 use std::collections::BTreeMap;
@@ -74,23 +74,34 @@ pub struct GrigliaConfig {
     pub file: String,
 }
 
-/// La config di `geo.reproject`, come arriva dal piano.
+/// La config di `geo.reproject`, come arriva dal piano. Campi sconosciuti
+/// rifiutati; i domini si verificano in [`ReprojectParams::da_config`].
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReprojectConfig {
-    /// CRS d'arrivo: un identificatore della tabella integrata.
+    /// CRS d'arrivo, obbligatorio: un identificatore della tabella
+    /// integrata (`EPSG:<codice>`, `OGC:CRS84` e le forme URN).
     pub target_crs: String,
-    /// Accuratezza accettata in metri per un cambio di datum oltre 1 cm.
+    /// Accuratezza accettata in metri per un cambio di datum oltre 1 cm
+    /// (assente: nessuna, e un percorso oltre 1 cm si rifiuta). Non finita,
+    /// negativa o senza effetto (ogni percorso ammesso gia' entro 1 cm): si
+    /// rifiuta.
     #[serde(default)]
     pub accuratezza_accettata_m: Option<f64>,
-    /// Trasformazioni EPSG imposte, nell'ordine.
+    /// Trasformazioni EPSG imposte, nell'ordine: il percorso fra i datum e'
+    /// esattamente questo, per tutte le geometrie, e resta soggetto alla
+    /// regola dell'accuratezza (assente: si provano tutti i percorsi
+    /// ammessi).
     #[serde(default)]
     pub trasformazioni: Option<Vec<u32>>,
-    /// Griglie `NTv2` fornite.
+    /// Griglie `NTv2` fornite (assente: nessuna); una griglia che nessun
+    /// percorso ammesso usa si rifiuta.
     #[serde(default)]
     pub griglie: Vec<GrigliaConfig>,
     /// Convenzione WGS 84 = famiglia ETRS89 (assente: attiva); `false`
-    /// usa l'accuratezza EPSG di ETRS89 to WGS 84 (1), 1 m.
+    /// usa l'accuratezza EPSG di ETRS89 to WGS 84 (1), 1 m. Scritta, con
+    /// l'uno o l'altro valore, su una coppia che non passa da quella
+    /// trasformazione si rifiuta.
     #[serde(default)]
     pub convenzione_wgs84_etrs89: Option<bool>,
 }
@@ -410,7 +421,7 @@ fn segmento_nelle_aree(a: Coord<f64>, b: Coord<f64>, aree: &[GeographicBounds]) 
     !comuni.is_empty()
 }
 
-/// Distanza di `p` dal segmento `a`-`b`.
+/// Distanza di `punto` dal segmento `inizio`-`fine`.
 fn distanza_dal_segmento(punto: Coord<f64>, inizio: Coord<f64>, fine: Coord<f64>) -> f64 {
     let direzione = fine - inizio;
     let lunghezza2 = direzione.x.mul_add(direzione.x, direzione.y * direzione.y);
@@ -643,11 +654,21 @@ fn geometria(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Crs` per un punto fuori dominio o regione, per una
-/// geometria che nessun percorso copre, per un lato che non converge;
-/// `PlenoraError::ResourceLimit` oltre [`MAX_CELL_COORDINATES`] coordinate;
+/// `PlenoraError::Crs` per un punto fuori dominio o regione
+/// (`COORDINATE_OUT_OF_CRS_DOMAIN`), per un'inversa iterativa che non
+/// converge (`REPROJECTION_NOT_CONVERGED`), per una geometria che nessun
+/// percorso copre (`REPROJECTION_OUTSIDE_TRANSFORMATION_AREA`) o i cui
+/// punti preferiscono percorsi diversi
+/// (`REPROJECTION_MIXED_TRANSFORMATION_AREAS`), per un lato che non
+/// converge (`REPROJECTION_EDGE_NOT_CONVERGED`);
+/// `PlenoraError::ResourceLimit` oltre [`MAX_CELL_COORDINATES`] coordinate
+/// prodotte;
+/// `PlenoraError::Unsupported` per `Line`, `Rect` e `Triangle`, che il
+/// decoder WKB non produce;
 /// `PlenoraError::InvalidPlan` se l'uscita non e' valida OGC;
-/// `PlenoraError::Internal` se il calcolo va in panico (barriera).
+/// `PlenoraError::Internal` per una `tolleranza` non finita o non
+/// positiva, se il calcolo va in panico (barriera) o se la validazione OGC
+/// dell'uscita non conclude.
 pub fn riproietta_geometria(
     ingresso: &Geometry<f64>,
     riproiettore: &Riproiettore,
@@ -708,10 +729,16 @@ pub fn riproietta_geometria(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Schema` se la colonna manca o non e' WKB, o dichiara
-/// dimensioni diverse da XY; `PlenoraError::Crs` per l'ordine degli assi
-/// dichiarato non normalizzato, per le griglie illeggibili e per i rifiuti
-/// di [`riproietta_geometria`]; gli errori di decode e di codifica.
+/// `PlenoraError::Schema` se la colonna manca, non e' `Binary` o non si
+/// dichiara geometria WKB; `PlenoraError::Unsupported` se dichiara
+/// dimensioni diverse da XY (o non le dichiara); `PlenoraError::InvalidPlan`
+/// per chiavi canoniche del campo non valide; `PlenoraError::Crs` per
+/// l'ordine degli assi dichiarato non normalizzato, per un CRS sorgente
+/// diverso da quello del piano, per le griglie illeggibili o difettose e
+/// per i rifiuti di [`riproietta_geometria`]; per cella, gli errori di
+/// decode (`ResourceLimit` oltre [`MAX_CELL_BYTES`](plenora_core::contract::arrow_metadata::MAX_CELL_BYTES),
+/// `InvalidPlan` per WKB o geometria non validi, `Unsupported` per Z/M), di
+/// [`riproietta_geometria`] e di codifica.
 pub fn reproject_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -724,7 +751,7 @@ pub fn reproject_batches(
     let campo = schema.field(geometry_index);
     richiedi_assi_normalizzati(OP, campo, sorgente)?;
     // Dimensioni ed encoding come li legge la scoperta del contratto
-    // (chiavi canoniche e `geo`, R2.6/R2.7): il campo d'uscita e' quello
+    // (chiavi canoniche e metadato `geo`): il campo d'uscita e' quello
     // che l'analisi dichiara dal contratto.
     let chiavi = read_geometry_contract_keys(campo)?;
     let dimensioni = chiavi.dimensions.unwrap_or(GeometryDimensions::Unknown);

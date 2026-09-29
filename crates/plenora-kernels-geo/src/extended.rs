@@ -1,5 +1,14 @@
 //! Operazioni geometriche estese: trasformazioni affini, concave hull,
 //! distanza di Hausdorff, distanze e lunghezze geodetiche.
+//!
+//! Kernel su `geo::Geometry`, una geometria (o una coppia) per chiamata:
+//! `geo.affine_transform`, `geo.translate`, `geo.scale`, `geo.rotate`,
+//! `geo.concave_hull`, `geo.hausdorff_distance`, `geo.haversine_distance`,
+//! `geo.geodesic_distance`, `geo.geodesic_line_length`. Nessun esecutore
+//! li chiama ancora su una tabella (il runner rifiuta le operazioni geo): i
+//! valori che la config non porta (origine predefinita di scala e
+//! rotazione, limiti di lavoro, secondo operando non puntuale delle
+//! distanze geografiche) li scegliera' quell'esecutore.
 
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::concave_hull::ConcaveHullOptions;
@@ -9,23 +18,40 @@ use geo::{
 };
 use thiserror::Error;
 
+/// Errori dei kernel di questo modulo. I messaggi non riportano coordinate:
+/// i soli numeri sono conteggi e limiti.
 #[derive(Debug, Error)]
 pub enum ExtendedError {
+    /// Un parametro fuori dominio. `name` e' `coefficients` anche per
+    /// offset, fattori e origini, che entrano nella matrice.
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
+        /// Nome del parametro.
         name: &'static str,
+        /// Il dominio violato.
         reason: &'static str,
     },
+    /// Geometria d'ingresso con coordinate non finite o non valida OGC.
     #[error("geometria di input non valida: {0}")]
     InvalidInput(String),
+    /// Geometria prodotta non valida OGC (anche con coordinate non finite
+    /// per overflow): mai restituita.
     #[error("geometria prodotta non valida: {0}")]
     InvalidOutput(String),
+    /// `concave_hull`: `actual` coordinate dell'ingresso oltre il limite
+    /// `limit` (`max_coordinates`).
     #[error("coordinate oltre il limite di {limit}: {actual}")]
     CoordinateLimit { actual: u64, limit: u64 },
+    /// `hausdorff_distance`: `actual` coppie di vertici da confrontare
+    /// (`n * m`, `u64::MAX` se il prodotto trabocca) oltre il limite `limit`
+    /// (`max_coordinate_pairs`).
     #[error("confronti Hausdorff oltre il limite di {limit}: {actual}")]
     WorkLimit { actual: u64, limit: u64 },
+    /// Distanze e lunghezze geografiche: una coordinata non finita o fuori
+    /// da longitudine `[-180, 180]` e latitudine `[-90, 90]`.
     #[error("coordinate geografiche fuori intervallo lon/lat")]
     InvalidGeographicCoordinate,
+    /// Un conteggio di coordinate non rappresentabile come `u64`.
     #[error("indice non rappresentabile come uint64")]
     IndexOverflow,
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -35,8 +61,8 @@ pub enum ExtendedError {
     /// che non ha commesso. Porta la *forma* del payload, mai il contenuto.
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
-    /// Un calcolo di `geo` e' andato in panico dentro
-    /// [`crate::calcolo_protetto`] (per esempio `concave_hull` con coordinate
+    /// Un calcolo di `geo` e' andato in panico dentro la barriera
+    /// `calcolo_protetto` (per esempio `concave_hull` con coordinate
     /// vicine al massimo di `f64`): non accusa l'ingresso, porta la *forma*
     /// del payload, mai il contenuto.
     #[error("calcolo non concluso: {0} (contenuto non pubblicato)")]
@@ -78,13 +104,23 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedErr
 /// Applica la matrice affine 2D a sei coefficienti
 /// `[a, b, xoff, d, e, yoff]`.
 ///
+/// Ogni vertice `(x, y)` diventa
+/// `(a x + b y + xoff, d x + e y + yoff)`, in `f64` senza fusione
+/// (`AffineTransform::apply` di `geo`). Tipo e struttura della geometria
+/// non cambiano.
+///
 /// # Errors
 ///
 /// - `ExtendedError::InvalidInput`: coordinate NaN o infinite, o geometria
 ///   di input non valida OGC;
 /// - `ExtendedError::InvalidParameter`: un coefficiente non e' finito;
 /// - `ExtendedError::InvalidOutput`: la geometria trasformata non supera
-///   la validazione OGC.
+///   la validazione OGC (per esempio una matrice singolare che schiaccia
+///   una superficie su una retta, o coordinate che traboccano);
+/// - `ExtendedError::ValidazioneNonConclusa`: la validazione OGC,
+///   d'ingresso o d'uscita, non conclude;
+/// - `ExtendedError::CalcoloNonConcluso`: il calcolo di `geo` va in
+///   panico.
 pub fn affine_transform(
     geometry: &Geometry<f64>,
     coefficients: [f64; 6],
@@ -96,13 +132,13 @@ pub fn affine_transform(
 /// Variante di [`affine_transform`] SENZA il gate OGC di ingresso.
 ///
 /// La validazione OGC dell'output resta: e' la garanzia del produttore per
-/// i consumatori a valle (R0.1).
+/// i consumatori a valle.
 ///
 /// # Precondizione (contratto del chiamante)
 ///
 /// Input GIA' validato (finitezza + OGC), per costruzione: da
 /// [`crate::geometry_from_wkb`] o da un kernel che valida il proprio output,
-/// mai per inferenza sui chiamanti (R0.1). Altrimenti il risultato e'
+/// mai per inferenza sui chiamanti. Altrimenti il risultato e'
 /// indefinito.
 ///
 /// # Errors
@@ -123,11 +159,13 @@ pub fn affine_transform_validated(
     validate_output(protetto(|| geometry.affine_transform(&transform))?)
 }
 
-/// Traslazione di `(x_offset, y_offset)` (wrapper di [`affine_transform`]).
+/// Traslazione di `(x_offset, y_offset)` (wrapper di [`affine_transform`]
+/// con la matrice `[1, 0, x_offset, 0, 1, y_offset]`).
 ///
 /// # Errors
 ///
-/// Come [`affine_transform`] (gli offset entrano nei coefficienti).
+/// Come [`affine_transform`]: un offset non finito e'
+/// `InvalidParameter { name: "coefficients", .. }`.
 pub fn translate(
     geometry: &Geometry<f64>,
     x_offset: f64,
@@ -153,9 +191,16 @@ pub fn translate_validated(
 /// Scala di `(x_factor, y_factor)` attorno a `origin` (wrapper di
 /// [`affine_transform`]).
 ///
+/// `origin` resta fermo, `x' = x_factor * x +
+/// origin.x * (1 - x_factor)`, e lo stesso per `y`. Un fattore negativo
+/// riflette; un fattore nullo schiaccia la geometria (una superficie
+/// diventa `InvalidOutput`).
+///
 /// # Errors
 ///
-/// Come [`affine_transform`] (fattori e origine entrano nei coefficienti).
+/// Come [`affine_transform`]: fattori e origine entrano nei coefficienti, e
+/// un valore non finito (anche per overflow del prodotto) e'
+/// `InvalidParameter { name: "coefficients", .. }`.
 pub fn scale_about(
     geometry: &Geometry<f64>,
     x_factor: f64,
@@ -184,12 +229,18 @@ pub fn scale_about_validated(
     affine_transform_validated(geometry, [x_factor, 0.0, x_offset, 0.0, y_factor, y_offset])
 }
 
-/// Rotazione di `degrees` gradi attorno a `origin` (wrapper di
+/// Rotazione antioraria di `degrees` gradi attorno a `origin` (wrapper di
 /// [`affine_transform`]).
+///
+/// Seno e coseno si calcolano in `f64` da
+/// `degrees.to_radians()`: anche a 90 o 180 gradi restano residui di circa
+/// `1e-16` volte la distanza da `origin` (il coseno di 90 gradi vale circa
+/// `6.1e-17`, non zero).
 ///
 /// # Errors
 ///
-/// `ExtendedError::InvalidParameter` se `degrees` non e' finito; in piu'
+/// `ExtendedError::InvalidParameter` (`degrees`) se `degrees` non e'
+/// finito; in piu'
 /// come [`affine_transform`] per input non valido, coefficienti risultanti
 /// non finiti o output non valido.
 pub fn rotate_about(
@@ -231,9 +282,9 @@ fn rotate_coefficients(
     let radians = degrees.to_radians();
     let cosine = radians.cos();
     let sine = radians.sin();
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Niente mul_add/FMA: la forma fusa arrotonda diversamente e
+    // cambierebbe i bit dei coefficienti; la forma non fusa e' il contratto
+    // numerico, la stessa del progetto d'origine.
     #[allow(clippy::suboptimal_flops)]
     let x_offset = origin.x() - cosine * origin.x() + sine * origin.y();
     // Stessa forma non fusa, per lo stesso motivo.
@@ -242,8 +293,16 @@ fn rotate_coefficients(
     Ok((x_offset, y_offset, cosine, sine))
 }
 
-/// Concave hull delle coordinate dell'input, con parametri e limiti di
-/// lavoro dichiarati.
+/// Concave hull di tutte le coordinate dell'input (anelli interni e punti
+/// ripetuti compresi), con parametri e limiti di lavoro dichiarati.
+///
+/// E' l'algoritmo di `geo` (porting di `concaveman`): parte dall'inviluppo
+/// convesso e scava verso i punti interni ogni lato piu' lungo di
+/// `length_threshold`, se il punto candidato sta entro la lunghezza del
+/// lato divisa per `concavity` (piu' piccola, piu' concavo; molto grande,
+/// l'inviluppo convesso). I vertici dell'uscita sono coordinate
+/// dell'ingresso, con i loro bit. L'uscita e' sempre un `Polygon`, vuoto
+/// per un ingresso senza coordinate.
 ///
 /// # Errors
 ///
@@ -255,7 +314,12 @@ fn rotate_coefficients(
 ///   rappresentabile come `u64`;
 /// - `ExtendedError::CoordinateLimit`: coordinate oltre `max_coordinates`;
 /// - `ExtendedError::InvalidOutput`: l'hull prodotto non supera la
-///   validazione OGC.
+///   validazione OGC (un poligono degenere: un solo punto distinto, due,
+///   o punti tutti allineati);
+/// - `ExtendedError::ValidazioneNonConclusa`: la validazione OGC,
+///   d'ingresso o d'uscita, non conclude;
+/// - `ExtendedError::CalcoloNonConcluso`: il calcolo di `geo` va in
+///   panico (per esempio con coordinate vicine al massimo di `f64`).
 pub fn concave_hull(
     geometry: &Geometry<f64>,
     concavity: f64,
@@ -315,8 +379,17 @@ pub fn concave_hull_validated(
     validate_output(Geometry::Polygon(hull))
 }
 
-/// Distanza di Hausdorff per vertici, con limite di lavoro dichiarato
-/// perche' la complessita' e' O(n*m).
+/// Distanza di Hausdorff discreta per vertici (`HausdorffDistance` di
+/// `geo`).
+///
+/// E' il massimo, nei due versi, della distanza euclidea fra un
+/// vertice di una geometria e il vertice piu' vicino dell'altra, nelle
+/// unita' del CRS. I lati non contano: un vertice che sta su un lato
+/// dell'altra geometria ma lontano dai suoi vertici pesa per la distanza
+/// da quei vertici. Limite di lavoro dichiarato perche' la complessita' e'
+/// O(n*m).
+///
+/// `Ok(None)` se una delle due geometrie non ha coordinate.
 ///
 /// # Errors
 ///
@@ -325,7 +398,11 @@ pub fn concave_hull_validated(
 /// - `ExtendedError::IndexOverflow`: conteggio dei vertici non
 ///   rappresentabile come `u64`;
 /// - `ExtendedError::WorkLimit`: coppie di coordinate oltre
-///   `max_coordinate_pairs` (anche per overflow del prodotto n*m).
+///   `max_coordinate_pairs` (anche per overflow del prodotto n*m);
+/// - `ExtendedError::ValidazioneNonConclusa`: la validazione OGC di un
+///   ingresso non conclude;
+/// - `ExtendedError::CalcoloNonConcluso`: il calcolo di `geo` va in
+///   panico.
 pub fn hausdorff_distance(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -385,36 +462,57 @@ fn validate_geographic_point(point: Point<f64>) -> Result<(), ExtendedError> {
     Ok(())
 }
 
-/// Distanza haversine in metri tra due punti geografici (lon/lat).
+/// Distanza haversine in metri tra due punti geografici (lon/lat, in
+/// gradi).
+///
+/// Arco di cerchio massimo su una sfera di raggio 6 371 008,8 m
+/// (raggio medio di GRS 80, `Haversine` di `geo`), qualunque sia il datum
+/// del CRS.
 ///
 /// # Errors
 ///
 /// `ExtendedError::InvalidGeographicCoordinate` se una coordinata non e'
-/// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90].
+/// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90];
+/// `ExtendedError::CalcoloNonConcluso` se il calcolo di `geo` va in
+/// panico.
 pub fn haversine_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
     protetto(|| Haversine.distance(left, right))
 }
 
-/// Distanza geodetica in metri tra due punti geografici (lon/lat).
+/// Distanza geodetica in metri tra due punti geografici (lon/lat, in
+/// gradi).
+///
+/// Geodetica sull'ellissoide WGS 84 (`Geodesic` di `geo`,
+/// algoritmo di Karney di `geographiclib-rs`), **qualunque sia
+/// l'ellissoide del CRS**.
 ///
 /// # Errors
 ///
 /// `ExtendedError::InvalidGeographicCoordinate` se una coordinata non e'
-/// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90].
+/// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90];
+/// `ExtendedError::CalcoloNonConcluso` se il calcolo di `geo` va in
+/// panico.
 pub fn geodesic_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
     protetto(|| Geodesic.distance(left, right))
 }
 
-/// Lunghezza geodetica in metri di una linea geografica (lon/lat).
+/// Lunghezza geodetica in metri di una linea geografica (lon/lat, in
+/// gradi).
+///
+/// Somma delle geodetiche fra vertici consecutivi sull'ellissoide
+/// WGS 84, come [`geodesic_distance_m`]. Una linea vuota o di un solo
+/// vertice vale 0.
 ///
 /// # Errors
 ///
 /// `ExtendedError::InvalidGeographicCoordinate` se un vertice non e'
-/// finito o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90].
+/// finito o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90];
+/// `ExtendedError::CalcoloNonConcluso` se il calcolo di `geo` va in
+/// panico.
 pub fn geodesic_line_length_m(line: &geo::LineString<f64>) -> Result<f64, ExtendedError> {
     for coordinate in line.coords() {
         validate_geographic_point(Point::from(*coordinate))?;
