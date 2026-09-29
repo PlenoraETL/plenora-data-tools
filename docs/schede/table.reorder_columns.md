@@ -1,0 +1,73 @@
+### Che cosa fa
+
+Cambia l'ordine delle colonne senza toglierne né aggiungerne: prima quelle
+elencate in `columns`, nell'ordine dato, poi tutte le altre, nell'ordine
+d'ingresso oppure, con `alphabetical`, in ordine alfabetico. I dati non si
+copiano.
+
+### Parametri
+
+| parametro | tipo | default | valori ammessi | significato |
+| --- | --- | --- | --- | --- |
+| `columns` | lista di stringhe | `[]` | colonne dell'ingresso, senza ripetizioni | colonne da mettere in testa, nell'ordine dato |
+| `alphabetical` | booleano | `false` | `true`, `false`; alias `sort_alphabetical` | ordina alfabeticamente le colonne non elencate |
+
+`alphabetical` riguarda solo le colonne non elencate in `columns`. L'ordine
+alfabetico confronta i nomi in minuscolo (minuscole Unicode) byte per byte
+in UTF-8, quindi le lettere accentate vanno dopo la `z`; due nomi uguali in
+minuscolo restano nell'ordine d'ingresso. Con la config vuota l'uscita è
+l'ingresso.
+
+### Schema
+
+Stesse colonne, con tipo, nullabilità e metadati di campo; cambia solo la
+posizione. I metadati di schema restano. Il contratto conserva il
+conteggio delle righe e l'ordinamento dichiarato.
+
+### Righe
+
+1:1: stesse righe, stessi valori.
+
+### Ordine
+
+Righe nell'ordine d'ingresso; colonne come descritto sopra.
+
+### Errori
+
+In validazione, `InvalidPlan`:
+
+- un nome di `columns` ripetuto o che non è una colonna dell'ingresso;
+- config con campi sconosciuti.
+
+In esecuzione: nessun errore che dipenda dai dati.
+
+### Limiti e deviazioni
+
+Nessuno oltre ai limiti comuni.
+
+### Complessità
+
+Tempo O(c log c) sulle colonne, indipendente dalle righe; nessuna memoria
+per i dati.
+
+### Esempio
+
+```json
+{
+  "config": {"columns": ["id"], "alphabetical": true},
+  "ingressi": [
+    {"nome": "t", "colonne": [
+      {"nome": "zona", "tipo": "utf8", "valori": ["N", "S"]},
+      {"nome": "Anno", "tipo": "int64", "valori": [2023, 2024]},
+      {"nome": "id", "tipo": "int64", "valori": [1, 2]},
+      {"nome": "citta", "tipo": "utf8", "valori": ["Roma", null]}
+    ]}
+  ],
+  "uscita": {"colonne": [
+    {"nome": "id", "tipo": "int64", "valori": [1, 2]},
+    {"nome": "Anno", "tipo": "int64", "valori": [2023, 2024]},
+    {"nome": "citta", "tipo": "utf8", "valori": ["Roma", null]},
+    {"nome": "zona", "tipo": "utf8", "valori": ["N", "S"]}
+  ]}
+}
+```

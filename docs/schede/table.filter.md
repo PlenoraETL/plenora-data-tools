@@ -19,7 +19,9 @@ Come si confronta, per operatore:
   che deve essere un numero (intero, decimale o esponenziale). Su
   `float64` `0.0 == -0.0` e `NaN == NaN`. Su ogni altro tipo si confronta il
   testo della cella con il testo di `value`, carattere per carattere
-  (su `int32` `5` e `"5"` sono uguali, `5.0` no);
+  (su `uint64` `5` e `"5"` sono uguali, `5.0` e `"05"` no; una `date32` vale
+  `"2024-01-31"`, un `decimal128` di scala 2 vale `"12.30"`, un `bool`
+  `"true"`/`"false"`);
 - `>`, `>=`, `<`, `<=`, `between`: confronto nel dominio nativo del tipo,
   mai attraverso `f64`, su `int64`, `uint64`, `float64`, `decimal128`,
   `date32` (giorni dall'epoca), `timestamp(ms)` (millisecondi dall'epoca) e
@@ -62,14 +64,18 @@ In esecuzione:
 
 - `Schema`: una cella `utf8` che non è un numero sotto un operatore
   ordinato o `between` (dipende dai dati, quindi l'analisi non lo vede);
-- `ResourceLimit`: più di `u32::MAX` righe da selezionare.
+- `Schema`: una cella che sotto un operatore testuale non si legge come
+  testo (un `binary` non UTF-8, una data fuori dall'intervallo di chrono);
+- `ResourceLimit`: una riga tenuta con indice oltre `u32::MAX` (ingressi
+  di più di 2^32 righe).
 
 ### Limiti e deviazioni
 
 Il confronto fra numeri è esatto per costruzione, anche oltre `2^53` e fra
-interi e decimali ([README, «Validazione»](../README.md#validazione)). Il
-confronto delle date passa dal numero di giorni dall'epoca: `value` è un
-intero, non una data in testo.
+interi e decimali ([README, «Validazione»](../README.md#validazione)). Gli
+operatori ordinati confrontano le date come numero di giorni dall'epoca e i
+timestamp come millisecondi: `value` è un intero, non una data in testo;
+`==` e `!=` invece confrontano il testo della data.
 
 ### Complessità
 
