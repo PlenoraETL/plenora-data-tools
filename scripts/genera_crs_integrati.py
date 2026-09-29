@@ -184,18 +184,29 @@ def inviluppo_stabile(crs: CRS, ovest: float, sud: float, est: float, nord: floa
     return secondo
 
 
+# Guardia prima dell'arrotondamento: la ricerca a sezione aurea valuta solo
+# punti reali, quindi l'estremo trovato puo' stare dentro quello vero di una
+# quantita' del secondo ordine (sotto il nanometro). Spostarlo di un micrometro
+# verso l'esterno prima di arrotondare al millimetro rende il limite
+# arrotondato esterno per costruzione, anche quando l'estremo trovato cade
+# esattamente su un millimetro (l'equatore degli UTM: northing 0 e 1e7).
+GUARDIA_M = 1e-6
+
+
 def verso_il_basso(valore: float) -> float:
-    """Arrotonda al millimetro verso -inf, mai sopra il valore."""
-    arrotondato = math.floor(valore * 1000.0) / 1000.0
-    while arrotondato > valore:
+    """Arrotonda al millimetro verso -inf, almeno GUARDIA_M sotto il valore."""
+    obiettivo = valore - GUARDIA_M
+    arrotondato = math.floor(obiettivo * 1000.0) / 1000.0
+    while arrotondato > obiettivo:
         arrotondato = math.nextafter(arrotondato, -math.inf)
     return arrotondato
 
 
 def verso_l_alto(valore: float) -> float:
-    """Arrotonda al millimetro verso +inf, mai sotto il valore."""
-    arrotondato = math.ceil(valore * 1000.0) / 1000.0
-    while arrotondato < valore:
+    """Arrotonda al millimetro verso +inf, almeno GUARDIA_M sopra il valore."""
+    obiettivo = valore + GUARDIA_M
+    arrotondato = math.ceil(obiettivo * 1000.0) / 1000.0
+    while arrotondato < obiettivo:
         arrotondato = math.nextafter(arrotondato, math.inf)
     return arrotondato
 

@@ -220,7 +220,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(5.93, 36.53, 12.0, 47.04),
         ProjectedBounds::new(225132.787, 4042735.808, 768598.182, 5214183.816),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:3065. Dominio: UTM: longitudine 15 +/- 15, latitudine [0, 84].
     proiettato(
@@ -230,7 +230,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(12.0, 34.79, 18.0, 47.1),
         ProjectedBounds::new(225503.37, 3849755.266, 774496.63, 5220644.505),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:3395. Dominio: Mercator: longitudine [-180, 180], latitudine [-85.06, 85.06].
     proiettato(
@@ -364,7 +364,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(5.93, 36.53, 12.0, 47.04),
         ProjectedBounds::new(225132.787, 4042735.808, 768598.182, 5214183.816),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:6708. Dominio: UTM: longitudine 15 +/- 15, latitudine [0, 84].
     proiettato(
@@ -374,7 +374,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(12.0, 34.79, 18.0, 47.1),
         ProjectedBounds::new(225503.37, 3849755.266, 774496.63, 5220644.505),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:6709. Dominio: UTM: longitudine 21 +/- 15, latitudine [0, 84].
     proiettato(
@@ -384,7 +384,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(17.99, 34.76, 18.99, 41.64),
         ProjectedBounds::new(224488.264, 3848268.687, 332597.548, 4614184.667),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:6875. Dominio: TM nazionale: longitudine 12 +/- 15, latitudine [28.59, 53.27].
     proiettato(
@@ -404,7 +404,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(5.93, 36.53, 12.0, 47.04),
         ProjectedBounds::new(225132.787, 4042735.808, 768598.182, 5214183.816),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:7792. Dominio: UTM: longitudine 15 +/- 15, latitudine [0, 84].
     proiettato(
@@ -414,7 +414,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(12.0, 34.79, 18.0, 47.1),
         ProjectedBounds::new(225503.37, 3849755.266, 774496.63, 5220644.505),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:7793. Dominio: UTM: longitudine 21 +/- 15, latitudine [0, 84].
     proiettato(
@@ -424,7 +424,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(17.99, 34.76, 18.99, 41.64),
         ProjectedBounds::new(224488.264, 3848268.687, 332597.548, 4614184.667),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:7794. Dominio: TM nazionale: longitudine 12 +/- 15, latitudine [28.59, 53.27].
     proiettato(
@@ -452,7 +452,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_INTERNATIONAL_1924,
         GeographicBounds::new(6.0, 36.53, 12.0, 84.33),
         ProjectedBounds::new(231389.897, 4042801.237, 768610.103, 9366084.804),
-        ProjectedBounds::new(-1188726.442, 0.0, 2188726.442, 9386660.498),
+        ProjectedBounds::new(-1188726.442, -0.001, 2188726.442, 9386660.498),
     ),
     // EPSG:23033. Dominio: UTM: longitudine 15 +/- 15, latitudine [0, 84.42].
     proiettato(
@@ -462,7 +462,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_INTERNATIONAL_1924,
         GeographicBounds::new(12.0, 34.49, 18.01, 84.42),
         ProjectedBounds::new(224499.778, 3816548.1, 776418.861, 9376124.958),
-        ProjectedBounds::new(-1188726.442, 0.0, 2188726.442, 9396372.367),
+        ProjectedBounds::new(-1188726.442, -0.001, 2188726.442, 9396372.367),
     ),
     // EPSG:23034. Dominio: UTM: longitudine 21 +/- 15, latitudine [0, 84.54].
     proiettato(
@@ -472,7 +472,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_INTERNATIONAL_1924,
         GeographicBounds::new(17.99, 33.59, 24.01, 84.54),
         ProjectedBounds::new(220642.267, 3716754.812, 779357.733, 9389504.192),
-        ProjectedBounds::new(-1188726.442, 0.0, 2188726.442, 9409321.265),
+        ProjectedBounds::new(-1188726.442, -0.001, 2188726.442, 9409321.265),
     ),
     // EPSG:25828. Dominio: UTM: longitudine -15 +/- 15, latitudine [0, 84].
     proiettato(
@@ -482,7 +482,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(-16.1, 34.93, -11.99, 72.44),
         ProjectedBounds::new(399535.629, 3865280.375, 774945.08, 8040550.061),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:25829. Dominio: UTM: longitudine -9 +/- 15, latitudine [0, 84].
     proiettato(
@@ -492,7 +492,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(-12.0, 34.91, -6.0, 74.13),
         ProjectedBounds::new(225902.08, 3863062.48, 774097.92, 8228847.091),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:25830. Dominio: UTM: longitudine -3 +/- 15, latitudine [0, 84].
     proiettato(
@@ -502,7 +502,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(-6.0, 35.26, 0.01, 80.49),
         ProjectedBounds::new(227071.857, 3901876.695, 773838.184, 8937716.117),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:25831. Dominio: UTM: longitudine 3 +/- 15, latitudine [0, 84].
     proiettato(
@@ -512,7 +512,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(0.0, 37.0, 6.01, 82.45),
         ProjectedBounds::new(233037.879, 4094872.37, 767852.221, 9156211.356),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:25832. Dominio: UTM: longitudine 9 +/- 15, latitudine [0, 84.01].
     proiettato(
@@ -522,7 +522,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(6.0, 36.53, 12.01, 84.01),
         ProjectedBounds::new(231401.818, 4042735.808, 769493.75, 9330126.131),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9351840.095),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9351840.095),
     ),
     // EPSG:25833. Dominio: UTM: longitudine 15 +/- 15, latitudine [0, 84.01].
     proiettato(
@@ -532,7 +532,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(12.0, 34.79, 18.01, 84.01),
         ProjectedBounds::new(225503.37, 3849755.266, 775411.914, 9330126.131),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9351840.095),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9351840.095),
     ),
     // EPSG:25834. Dominio: UTM: longitudine 21 +/- 15, latitudine [0, 84.01].
     proiettato(
@@ -542,7 +542,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(18.0, 34.76, 24.01, 84.01),
         ProjectedBounds::new(225403.88, 3846428.503, 775511.736, 9330126.131),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9351840.095),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9351840.095),
     ),
     // EPSG:25835. Dominio: UTM: longitudine 27 +/- 15, latitudine [0, 84.01].
     proiettato(
@@ -552,7 +552,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(24.0, 41.24, 30.01, 84.01),
         ProjectedBounds::new(248597.583, 4565399.895, 752240.527, 9330126.131),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9351840.095),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9351840.095),
     ),
     // EPSG:25836. Dominio: UTM: longitudine 33 +/- 15, latitudine [0, 84.01].
     proiettato(
@@ -562,7 +562,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(30.0, 42.56, 36.01, 84.01),
         ProjectedBounds::new(253727.658, 4711955.428, 747093.315, 9330126.131),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9351840.095),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9351840.095),
     ),
     // EPSG:25837. Dominio: UTM: longitudine 39 +/- 15, latitudine [0, 84].
     proiettato(
@@ -572,7 +572,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ELLISSOIDE_GRS_1980,
         GeographicBounds::new(36.0, 72.99, 38.01, 79.07),
         ProjectedBounds::new(402080.15, 8099631.324, 479045.429, 8779418.626),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:27700. Dominio: TM nazionale: longitudine -2 +/- 15, latitudine [44.12, 66.64].
     proiettato(
@@ -611,8 +611,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-180.0, 0.0, -174.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32602. Dominio: UTM: longitudine -171 +/- 15, latitudine [0, 84].
     proiettato(
@@ -621,8 +621,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-174.0, 0.0, -168.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32603. Dominio: UTM: longitudine -165 +/- 15, latitudine [0, 84].
     proiettato(
@@ -631,8 +631,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-168.0, 0.0, -162.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32604. Dominio: UTM: longitudine -159 +/- 15, latitudine [0, 84].
     proiettato(
@@ -641,8 +641,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-162.0, 0.0, -156.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32605. Dominio: UTM: longitudine -153 +/- 15, latitudine [0, 84].
     proiettato(
@@ -651,8 +651,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-156.0, 0.0, -150.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32606. Dominio: UTM: longitudine -147 +/- 15, latitudine [0, 84].
     proiettato(
@@ -661,8 +661,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-150.0, 0.0, -144.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32607. Dominio: UTM: longitudine -141 +/- 15, latitudine [0, 84].
     proiettato(
@@ -671,8 +671,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-144.0, 0.0, -138.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32608. Dominio: UTM: longitudine -135 +/- 15, latitudine [0, 84].
     proiettato(
@@ -681,8 +681,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-138.0, 0.0, -132.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32609. Dominio: UTM: longitudine -129 +/- 15, latitudine [0, 84].
     proiettato(
@@ -691,8 +691,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-132.0, 0.0, -126.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32610. Dominio: UTM: longitudine -123 +/- 15, latitudine [0, 84].
     proiettato(
@@ -701,8 +701,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-126.0, 0.0, -120.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32611. Dominio: UTM: longitudine -117 +/- 15, latitudine [0, 84].
     proiettato(
@@ -711,8 +711,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-120.0, 0.0, -114.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32612. Dominio: UTM: longitudine -111 +/- 15, latitudine [0, 84].
     proiettato(
@@ -721,8 +721,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-114.0, 0.0, -108.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32613. Dominio: UTM: longitudine -105 +/- 15, latitudine [0, 84].
     proiettato(
@@ -731,8 +731,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-108.0, 0.0, -102.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32614. Dominio: UTM: longitudine -99 +/- 15, latitudine [0, 84].
     proiettato(
@@ -741,8 +741,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-102.0, 0.0, -96.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32615. Dominio: UTM: longitudine -93 +/- 15, latitudine [0, 84].
     proiettato(
@@ -751,8 +751,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-96.0, 0.0, -90.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32616. Dominio: UTM: longitudine -87 +/- 15, latitudine [0, 84].
     proiettato(
@@ -761,8 +761,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-90.0, 0.0, -84.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32617. Dominio: UTM: longitudine -81 +/- 15, latitudine [0, 84].
     proiettato(
@@ -771,8 +771,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-84.0, 0.0, -78.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32618. Dominio: UTM: longitudine -75 +/- 15, latitudine [0, 84].
     proiettato(
@@ -781,8 +781,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-78.0, 0.0, -72.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32619. Dominio: UTM: longitudine -69 +/- 15, latitudine [0, 84].
     proiettato(
@@ -791,8 +791,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-72.0, 0.0, -66.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32620. Dominio: UTM: longitudine -63 +/- 15, latitudine [0, 84].
     proiettato(
@@ -801,8 +801,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-66.0, 0.0, -60.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32621. Dominio: UTM: longitudine -57 +/- 15, latitudine [0, 84].
     proiettato(
@@ -811,8 +811,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-60.0, 0.0, -54.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32622. Dominio: UTM: longitudine -51 +/- 15, latitudine [0, 84].
     proiettato(
@@ -821,8 +821,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-54.0, 0.0, -48.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32623. Dominio: UTM: longitudine -45 +/- 15, latitudine [0, 84].
     proiettato(
@@ -831,8 +831,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-48.0, 0.0, -42.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32624. Dominio: UTM: longitudine -39 +/- 15, latitudine [0, 84].
     proiettato(
@@ -841,8 +841,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-42.0, 0.0, -36.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32625. Dominio: UTM: longitudine -33 +/- 15, latitudine [0, 84].
     proiettato(
@@ -851,8 +851,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-36.0, 0.0, -30.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32626. Dominio: UTM: longitudine -27 +/- 15, latitudine [0, 84].
     proiettato(
@@ -861,8 +861,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-30.0, 0.0, -24.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32627. Dominio: UTM: longitudine -21 +/- 15, latitudine [0, 84].
     proiettato(
@@ -871,8 +871,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-24.0, 0.0, -18.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32628. Dominio: UTM: longitudine -15 +/- 15, latitudine [0, 84].
     proiettato(
@@ -881,8 +881,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-18.0, 0.0, -12.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32629. Dominio: UTM: longitudine -9 +/- 15, latitudine [0, 84.01].
     proiettato(
@@ -891,8 +891,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-12.01, 0.0, -6.0, 84.01),
-        ProjectedBounds::new(164907.15, 0.0, 833978.557, 9330126.131),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9351840.095),
+        ProjectedBounds::new(164907.15, -0.001, 833978.557, 9330126.131),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9351840.095),
     ),
     // EPSG:32630. Dominio: UTM: longitudine -3 +/- 15, latitudine [0, 84].
     proiettato(
@@ -901,8 +901,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-6.0, 0.0, 0.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32631. Dominio: UTM: longitudine 3 +/- 15, latitudine [0, 84].
     proiettato(
@@ -911,8 +911,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(0.0, 0.0, 6.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32632. Dominio: UTM: longitudine 9 +/- 15, latitudine [0, 84].
     proiettato(
@@ -921,8 +921,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(6.0, 0.0, 12.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32633. Dominio: UTM: longitudine 15 +/- 15, latitudine [0, 84].
     proiettato(
@@ -931,8 +931,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(12.0, 0.0, 18.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32634. Dominio: UTM: longitudine 21 +/- 15, latitudine [0, 84].
     proiettato(
@@ -941,8 +941,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(18.0, 0.0, 24.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32635. Dominio: UTM: longitudine 27 +/- 15, latitudine [0, 84].
     proiettato(
@@ -951,8 +951,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(24.0, 0.0, 30.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32636. Dominio: UTM: longitudine 33 +/- 15, latitudine [0, 84].
     proiettato(
@@ -961,8 +961,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(30.0, 0.0, 36.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32637. Dominio: UTM: longitudine 39 +/- 15, latitudine [0, 84].
     proiettato(
@@ -971,8 +971,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(36.0, 0.0, 42.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32638. Dominio: UTM: longitudine 45 +/- 15, latitudine [0, 84].
     proiettato(
@@ -981,8 +981,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(42.0, 0.0, 48.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32639. Dominio: UTM: longitudine 51 +/- 15, latitudine [0, 84].
     proiettato(
@@ -991,8 +991,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(48.0, 0.0, 54.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32640. Dominio: UTM: longitudine 57 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1001,8 +1001,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(54.0, 0.0, 60.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32641. Dominio: UTM: longitudine 63 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1011,8 +1011,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(60.0, 0.0, 66.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32642. Dominio: UTM: longitudine 69 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1021,8 +1021,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(66.0, 0.0, 72.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32643. Dominio: UTM: longitudine 75 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1031,8 +1031,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(72.0, 0.0, 78.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32644. Dominio: UTM: longitudine 81 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1041,8 +1041,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(78.0, 0.0, 84.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32645. Dominio: UTM: longitudine 87 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1051,8 +1051,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(84.0, 0.0, 90.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32646. Dominio: UTM: longitudine 93 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1061,8 +1061,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(90.0, 0.0, 96.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32647. Dominio: UTM: longitudine 99 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1071,8 +1071,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(96.0, 0.0, 102.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32648. Dominio: UTM: longitudine 105 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1081,8 +1081,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(102.0, 0.0, 108.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32649. Dominio: UTM: longitudine 111 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1091,8 +1091,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(108.0, 0.0, 114.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32650. Dominio: UTM: longitudine 117 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1101,8 +1101,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(114.0, 0.0, 120.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32651. Dominio: UTM: longitudine 123 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1111,8 +1111,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(120.0, 0.0, 126.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32652. Dominio: UTM: longitudine 129 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1121,8 +1121,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(126.0, 0.0, 132.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32653. Dominio: UTM: longitudine 135 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1131,8 +1131,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(132.0, 0.0, 138.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32654. Dominio: UTM: longitudine 141 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1141,8 +1141,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(138.0, 0.0, 144.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32655. Dominio: UTM: longitudine 147 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1151,8 +1151,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(144.0, 0.0, 150.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32656. Dominio: UTM: longitudine 153 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1161,8 +1161,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(150.0, 0.0, 156.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32657. Dominio: UTM: longitudine 159 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1171,8 +1171,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(156.0, 0.0, 162.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32658. Dominio: UTM: longitudine 165 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1181,8 +1181,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(162.0, 0.0, 168.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32659. Dominio: UTM: longitudine 171 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1191,8 +1191,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(168.0, 0.0, 174.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32660. Dominio: UTM: longitudine 177 +/- 15, latitudine [0, 84].
     proiettato(
@@ -1201,8 +1201,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(174.0, 0.0, 180.0, 84.0),
-        ProjectedBounds::new(166021.443, 0.0, 833978.557, 9329005.183),
-        ProjectedBounds::new(-1188659.414, 0.0, 2188659.414, 9350760.976),
+        ProjectedBounds::new(166021.443, -0.001, 833978.557, 9329005.183),
+        ProjectedBounds::new(-1188659.414, -0.001, 2188659.414, 9350760.976),
     ),
     // EPSG:32701. Dominio: UTM: longitudine -177 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1211,8 +1211,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-180.0, -80.0, -174.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32702. Dominio: UTM: longitudine -171 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1221,8 +1221,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-174.0, -80.0, -168.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32703. Dominio: UTM: longitudine -165 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1231,8 +1231,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-168.0, -80.0, -162.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32704. Dominio: UTM: longitudine -159 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1241,8 +1241,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-162.0, -80.0, -156.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32705. Dominio: UTM: longitudine -153 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1251,8 +1251,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-156.0, -80.0, -150.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32706. Dominio: UTM: longitudine -147 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1261,8 +1261,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-150.0, -80.0, -144.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32707. Dominio: UTM: longitudine -141 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1271,8 +1271,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-144.0, -80.0, -138.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32708. Dominio: UTM: longitudine -135 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1281,8 +1281,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-138.0, -80.0, -132.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32709. Dominio: UTM: longitudine -129 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1291,8 +1291,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-132.0, -80.0, -126.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32710. Dominio: UTM: longitudine -123 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1301,8 +1301,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-126.0, -80.0, -120.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32711. Dominio: UTM: longitudine -117 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1311,8 +1311,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-120.0, -80.0, -114.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32712. Dominio: UTM: longitudine -111 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1321,8 +1321,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-114.0, -80.0, -108.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32713. Dominio: UTM: longitudine -105 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1331,8 +1331,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-108.0, -80.0, -102.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32714. Dominio: UTM: longitudine -99 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1341,8 +1341,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-102.0, -80.0, -96.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32715. Dominio: UTM: longitudine -93 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1351,8 +1351,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-96.0, -80.0, -90.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32716. Dominio: UTM: longitudine -87 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1361,8 +1361,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-90.0, -80.0, -84.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32717. Dominio: UTM: longitudine -81 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1371,8 +1371,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-84.0, -80.0, -78.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32718. Dominio: UTM: longitudine -75 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1381,8 +1381,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-78.0, -80.0, -72.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32719. Dominio: UTM: longitudine -69 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1391,8 +1391,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-72.0, -80.0, -66.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32720. Dominio: UTM: longitudine -63 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1401,8 +1401,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-66.0, -80.0, -60.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32721. Dominio: UTM: longitudine -57 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1411,8 +1411,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-60.0, -80.0, -54.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32722. Dominio: UTM: longitudine -51 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1421,8 +1421,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-54.0, -80.0, -48.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32723. Dominio: UTM: longitudine -45 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1431,8 +1431,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-48.0, -80.0, -42.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32724. Dominio: UTM: longitudine -39 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1441,8 +1441,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-42.0, -80.0, -36.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32725. Dominio: UTM: longitudine -33 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1451,8 +1451,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-36.0, -80.0, -30.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32726. Dominio: UTM: longitudine -27 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1461,8 +1461,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-30.0, -80.0, -24.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32727. Dominio: UTM: longitudine -21 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1471,8 +1471,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-24.0, -80.0, -18.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32728. Dominio: UTM: longitudine -15 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1481,8 +1481,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-18.0, -80.0, -12.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32729. Dominio: UTM: longitudine -9 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1491,8 +1491,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-12.0, -80.0, -6.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32730. Dominio: UTM: longitudine -3 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1501,8 +1501,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(-6.0, -80.0, 0.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32731. Dominio: UTM: longitudine 3 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1511,8 +1511,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(0.0, -80.0, 6.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32732. Dominio: UTM: longitudine 9 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1521,8 +1521,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(6.0, -80.0, 12.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32733. Dominio: UTM: longitudine 15 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1531,8 +1531,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(12.0, -80.0, 18.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32734. Dominio: UTM: longitudine 21 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1541,8 +1541,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(18.0, -80.0, 24.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32735. Dominio: UTM: longitudine 27 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1551,8 +1551,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(24.0, -80.0, 30.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32736. Dominio: UTM: longitudine 33 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1561,8 +1561,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(30.0, -80.0, 36.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32737. Dominio: UTM: longitudine 39 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1571,8 +1571,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(36.0, -80.0, 42.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32738. Dominio: UTM: longitudine 45 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1581,8 +1581,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(42.0, -80.0, 48.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32739. Dominio: UTM: longitudine 51 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1591,8 +1591,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(48.0, -80.0, 54.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32740. Dominio: UTM: longitudine 57 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1601,8 +1601,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(54.0, -80.0, 60.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32741. Dominio: UTM: longitudine 63 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1611,8 +1611,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(60.0, -80.0, 66.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32742. Dominio: UTM: longitudine 69 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1621,8 +1621,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(66.0, -80.0, 72.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32743. Dominio: UTM: longitudine 75 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1631,8 +1631,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(72.0, -80.0, 78.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32744. Dominio: UTM: longitudine 81 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1641,8 +1641,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(78.0, -80.0, 84.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32745. Dominio: UTM: longitudine 87 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1651,8 +1651,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(84.0, -80.0, 90.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32746. Dominio: UTM: longitudine 93 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1661,8 +1661,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(90.0, -80.0, 96.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32747. Dominio: UTM: longitudine 99 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1671,8 +1671,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(96.0, -80.0, 102.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32748. Dominio: UTM: longitudine 105 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1681,8 +1681,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(102.0, -80.0, 108.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32749. Dominio: UTM: longitudine 111 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1691,8 +1691,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(108.0, -80.0, 114.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32750. Dominio: UTM: longitudine 117 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1701,8 +1701,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(114.0, -80.0, 120.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32751. Dominio: UTM: longitudine 123 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1711,8 +1711,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(120.0, -80.0, 126.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32752. Dominio: UTM: longitudine 129 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1721,8 +1721,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(126.0, -80.0, 132.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32753. Dominio: UTM: longitudine 135 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1731,8 +1731,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(132.0, -80.0, 138.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32754. Dominio: UTM: longitudine 141 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1741,8 +1741,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(138.0, -80.0, 144.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32755. Dominio: UTM: longitudine 147 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1751,8 +1751,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(144.0, -80.0, 150.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32756. Dominio: UTM: longitudine 153 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1761,8 +1761,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(150.0, -80.0, 156.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32757. Dominio: UTM: longitudine 159 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1771,8 +1771,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(156.0, -80.0, 162.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32758. Dominio: UTM: longitudine 165 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1781,8 +1781,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(162.0, -80.0, 168.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32759. Dominio: UTM: longitudine 171 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1791,8 +1791,8 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(168.0, -80.0, 174.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
     // EPSG:32760. Dominio: UTM: longitudine 177 +/- 15, latitudine [-80, 0].
     proiettato(
@@ -1801,7 +1801,7 @@ pub(super) const EPSG: &[CrsIntegrato] = &[
         ASSI_E_EAST_N_NORTH,
         ELLISSOIDE_WGS_84,
         GeographicBounds::new(174.0, -80.0, 180.0, 0.0),
-        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.0),
-        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.0),
+        ProjectedBounds::new(166021.443, 1116915.044, 833978.557, 10000000.001),
+        ProjectedBounds::new(-1188659.414, 1081104.36, 2188659.414, 10000000.001),
     ),
 ];

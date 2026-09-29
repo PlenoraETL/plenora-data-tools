@@ -290,8 +290,10 @@ fn i_fusi_utm_wgs84_seguono_la_regola_dei_fusi() {
         }
     }
     assert!((nord.min_easting + nord.max_easting - 1_000_000.0).abs() <= 0.002);
-    assert_eq!(nord.min_northing, 0.0);
-    assert_eq!(sud.max_northing, 10_000_000.0);
+    // L'equatore e' esatto (northing 0 e 1e7): la guardia del generatore
+    // lo sposta di un millimetro verso l'esterno.
+    assert_eq!(nord.min_northing, -0.001);
+    assert_eq!(sud.max_northing, 10_000_000.001);
     // +/- 15 gradi all'equatore: circa 1670 km dal meridiano centrale.
     assert!((1_688_000.0..1_689_000.0).contains(&(500_000.0 - nord.min_easting)));
 }
@@ -407,6 +409,9 @@ fn codici_sconosciuti_e_forme_non_riconosciute_falliscono_chiuse() {
         "IGNF:LAMB93",
         "OGC:CRS83",
         "urn:ogc:def:crs:EPSG:v1:4326",
+        "urn:ogc:def:crs:EPSG:.:4326",
+        "urn:ogc:def:crs:EPSG:9..1:4326",
+        "urn:ogc:def:crs:EPSG:9.:4326",
         "urn:ogc:def:crs:ESRI::102100",
         "urn:ogc:def:crs:EPSG::4326:extra",
         "http://www.opengis.net/def/crs/EPSG/0/4326",

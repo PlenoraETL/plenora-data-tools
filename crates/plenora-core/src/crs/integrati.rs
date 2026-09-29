@@ -105,7 +105,8 @@ pub(super) const fn proiettato(
 
 /// Riconosce un identificatore d'autorita' della tabella.
 ///
-/// Forme: `AUT:CODICE` e `urn:ogc:def:crs:AUT:VERSIONE:CODICE`, con `AUT`
+/// Forme: `AUT:CODICE` e `urn:ogc:def:crs:AUT:VERSIONE:CODICE` (versione
+/// vuota o numerica, [`versione_urn`]), con `AUT`
 /// `EPSG` (codice decimale senza zeri iniziali) oppure `OGC` (codice
 /// `CRS84`), senza distinzione di maiuscole su prefissi e autorita'. Ogni
 /// altra forma da' `None`.
@@ -118,14 +119,21 @@ pub(super) fn identificativo(definizione: &str) -> Option<Identificativo> {
                 && ogc.eq_ignore_ascii_case("ogc")
                 && def.eq_ignore_ascii_case("def")
                 && crs.eq_ignore_ascii_case("crs")
-                && versione
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || byte == b'.') =>
+                && versione_urn(versione) =>
         {
             da_autorita(autorita, codice)
         }
         _ => None,
     }
+}
+
+/// Versione di un URN OGC: vuota, oppure numeri separati da un solo punto
+/// (`9.9.1`), senza punti iniziali, finali o doppi.
+fn versione_urn(versione: &str) -> bool {
+    versione.is_empty()
+        || versione
+            .split('.')
+            .all(|parte| !parte.is_empty() && parte.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn da_autorita(autorita: &str, codice: &str) -> Option<Identificativo> {
