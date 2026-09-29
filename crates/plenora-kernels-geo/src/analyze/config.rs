@@ -129,6 +129,13 @@ pub(in crate::analyze) struct VoronoiConfig {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(in crate::analyze) struct PolygonizeConfig {
+    pub(in crate::analyze) node_input: Option<bool>,
+    pub(in crate::analyze) require_complete: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::analyze) struct FromCoordsConfig {
     pub(in crate::analyze) x_column: Option<String>,
     pub(in crate::analyze) y_column: Option<String>,
@@ -143,6 +150,13 @@ pub(in crate::analyze) struct FromCoordsConfig {
 pub(in crate::analyze) struct OtherWkbConfig {
     pub(in crate::analyze) other_wkb: String,
     pub(in crate::analyze) output_column: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::analyze) struct SplitConfig {
+    pub(in crate::analyze) other_wkb: String,
+    pub(in crate::analyze) tolerance: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

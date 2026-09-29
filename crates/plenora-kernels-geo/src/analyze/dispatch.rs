@@ -15,8 +15,8 @@ use serde_json::Value;
 use super::config::{
     AffineTransformConfig, BufferConfig, CleanTopologyConfig, ConcaveHullConfig, DensifyConfig,
     EmptyConfig, LineInterpolatePointConfig, LineSubstringConfig, NearestConfig, OtherWkbConfig,
-    OutputColumnConfig, OverlayConfig, RotateConfig, SJoinConfig, ScaleConfig, SimplifyConfig,
-    SnapToGridConfig, TranslateConfig, VoronoiConfig,
+    OutputColumnConfig, OverlayConfig, PolygonizeConfig, RotateConfig, SJoinConfig, ScaleConfig,
+    SimplifyConfig, SnapToGridConfig, SplitConfig, TranslateConfig, VoronoiConfig,
 };
 use super::helpers::{
     crs_requirement, ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive,
@@ -34,7 +34,8 @@ use super::producers::{
 };
 use super::quality::{analyze_cluster_dbscan, analyze_coverage_validate, analyze_shared_paths};
 use super::{
-    COUNT_COLUMN, DISTANCE_COLUMN, LEFT_INDEX_COLUMN, RIGHT_INDEX_COLUMN, WITHIN_COLUMN, WKT_COLUMN,
+    CLASS_COLUMN, COUNT_COLUMN, DISTANCE_COLUMN, LEFT_INDEX_COLUMN, RIGHT_INDEX_COLUMN,
+    WITHIN_COLUMN, WKT_COLUMN,
 };
 
 // ---------------------------------------------------------------------------
@@ -76,7 +77,8 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
         | "geo.convex_hull"
         | "geo.envelope"
         | "geo.boundary"
-        | "geo.point_on_surface" => {
+        | "geo.point_on_surface"
+        | "geo.make_valid" => {
             let _: EmptyConfig = parse_config(op, config)?;
         }
         "geo.buffer" => {
@@ -196,7 +198,9 @@ fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
 /// `Some` con i tipi dell'OUTPUT, verificati contro i kernel, per le op che
 /// cambiano il tipo; `None` per quelle che lo preservano. Casi non ovvi:
 /// `convex_hull` e `concave_hull` producono sempre `Polygon`, anche
-/// degenere.
+/// degenere; `make_valid` dichiara `mixed` senza elenco, perche' la
+/// riparazione cella per cella (backend Rust, `rust_backend`) puo' cambiare
+/// tipo e l'insieme non e' enumerabile a secco (R3.4.1).
 fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
     match op {
         "geo.centroid" | "geo.point_on_surface" | "geo.line_interpolate_point" => {
@@ -221,6 +225,11 @@ fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
             GeometryType::GeometryCollection,
         ])
         .map(Some),
+        "geo.make_valid" => GeometryTypesProperty::new(TypesDeclaration::Mixed, Vec::new())
+            .map(Some)
+            .map_err(|error| {
+                PlenoraError::Internal(format!("mappa tipi di output incoerente: {error}"))
+            }),
         "geo.simplify"
         | "geo.affine_transform"
         | "geo.translate"
@@ -265,6 +274,7 @@ pub(in crate::analyze) fn analyze_unary(
         | "geo.envelope"
         | "geo.boundary"
         | "geo.point_on_surface"
+        | "geo.make_valid"
         | "geo.buffer"
         | "geo.simplify"
         | "geo.affine_transform"
@@ -315,6 +325,15 @@ pub(in crate::analyze) fn analyze_unary(
         }
         "geo.explode" | "geo.delaunay" => {
             let _: EmptyConfig = parse_config(op, config)?;
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
+            analyze_expand(op, input)
+        }
+        "geo.split" => {
+            let parsed: SplitConfig = parse_config(op, config)?;
+            validate_other_wkb(op, &parsed.other_wkb)?;
+            if let Some(tolerance) = parsed.tolerance {
+                ensure_non_negative(op, "tolerance", tolerance)?;
+            }
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_expand(op, input)
         }
@@ -380,6 +399,16 @@ pub(in crate::analyze) fn analyze_unary(
         "geo.cluster_dbscan" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             analyze_cluster_dbscan(op, input, config)
+        }
+        "geo.polygonize" => {
+            let parsed: PolygonizeConfig = parse_config(op, config)?;
+            let _ = (&parsed.node_input, &parsed.require_complete);
+            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
+            analyze_geometry_only(
+                input,
+                geometry,
+                &[Field::new(CLASS_COLUMN, DataType::Utf8, false)],
+            )
         }
         "geo.distance"
         | "geo.hausdorff_distance"
