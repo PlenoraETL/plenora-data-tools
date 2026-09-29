@@ -150,8 +150,8 @@ struct Esempio {
     /// `limits` del piano.
     #[serde(default)]
     limits: Option<Box<RawValue>>,
-    /// `false` per le uscite non deterministiche (`uuid_generator`): si
-    /// confrontano schema e righe, non i valori.
+    /// `false` solo per le operazioni di [`USCITA_CASUALE`] (e per loro è
+    /// obbligatorio): si confrontano schema e righe, non i valori.
     #[serde(default = "vero")]
     valori_confrontati: bool,
 }
@@ -247,8 +247,16 @@ fn leggi_scheda(operazione: &'static OperationDescriptor) -> Result<Scheda, Stri
     if !dopo.trim().is_empty() {
         return Err("testo dopo il blocco JSON dell'esempio".into());
     }
-    let esempio: Esempio =
-        serde_json::from_str(json).map_err(|errore| format!("esempio non leggibile: {errore}"))?;
+    let esempio: Esempio = serde_json::from_str(json).map_err(|errore| {
+        // Posizione e categoria, non il messaggio di serde, che può
+        // citare il valore letto.
+        format!(
+            "esempio non leggibile (riga {}, colonna {}, {:?})",
+            errore.line(),
+            errore.column(),
+            errore.classify()
+        )
+    })?;
     Ok(Scheda {
         operazione,
         sezioni,
@@ -278,12 +286,24 @@ fn leggi_schede() -> (Vec<Scheda>, Vec<String>) {
         .iter()
         .map(|operazione| format!("{}.md", operazione.id))
         .collect();
-    if let Ok(voci) = std::fs::read_dir(cartella_schede()) {
-        for voce in voci {
-            let nome = voce.unwrap().file_name().to_string_lossy().into_owned();
-            if !note.contains(&nome) {
-                errori.push(format!("{nome}: scheda senza operazione nel catalogo"));
-            }
+    // Una cartella illeggibile è un errore, non un controllo saltato; i nomi
+    // si ordinano perché la diagnostica non dipenda dall'ordine del file
+    // system.
+    let cartella = cartella_schede();
+    let voci = std::fs::read_dir(&cartella)
+        .unwrap_or_else(|errore| panic!("{}: {errore}", cartella.display()));
+    let mut nomi: Vec<String> = voci
+        .map(|voce| {
+            voce.unwrap_or_else(|errore| panic!("{}: {errore}", cartella.display()))
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    nomi.sort();
+    for nome in nomi {
+        if !note.contains(&nome) {
+            errori.push(format!("{nome}: scheda senza operazione nel catalogo"));
         }
     }
     (schede, errori)
@@ -400,14 +420,20 @@ impl LettoreTipo<'_> {
                     altra => return Err(format!("unità di timestamp `{altra}`")),
                 };
                 let fuso = if self.prossimo(',') {
-                    self.spazi();
-                    let inizio = self.posizione;
-                    while !self.testo[self.posizione..].starts_with(')')
-                        && self.posizione < self.testo.len()
-                    {
-                        self.posizione += 1;
+                    // Il fuso va fino alla parentesi: `find` rende un indice
+                    // di byte su un confine di carattere, e un fuso non ASCII
+                    // (che nessun nome IANA è) si rifiuta invece di finire
+                    // in Arrow.
+                    let resto = &self.testo[self.posizione..];
+                    let fine = resto
+                        .find(')')
+                        .ok_or_else(|| format!("tipo `{}`: atteso `)`", self.testo))?;
+                    let fuso = resto[..fine].trim();
+                    if fuso.is_empty() || !fuso.is_ascii() {
+                        return Err(format!("tipo `{}`: fuso vuoto o non ASCII", self.testo));
                     }
-                    Some(Arc::from(self.testo[inizio..self.posizione].trim()))
+                    self.posizione += fine;
+                    Some(Arc::from(fuso))
                 } else {
                     None
                 };
@@ -506,9 +532,7 @@ fn istante(testo: &str) -> Result<NaiveDateTime, String> {
             return Ok(valore);
         }
     }
-    Err(format!(
-        "istante `{testo}` non leggibile (AAAA-MM-GG HH:MM:SS[.f])"
-    ))
+    Err("istante non leggibile (AAAA-MM-GG HH:MM:SS[.f])".to_owned())
 }
 
 fn decimale(testo: &str, scala: i8) -> Result<i128, String> {
@@ -518,12 +542,12 @@ fn decimale(testo: &str, scala: i8) -> Result<i128, String> {
     let (intera, frazione) = testo.split_once('.').unwrap_or((testo, ""));
     let scala = usize::try_from(scala).map_err(|_| "scala negativa".to_owned())?;
     if frazione.len() > scala {
-        return Err(format!("decimale `{testo}`: più cifre della scala"));
+        return Err("decimale con più cifre della scala".to_owned());
     }
     let cifre = format!("{intera}{frazione:0<scala$}");
     let valore: i128 = cifre
         .parse()
-        .map_err(|_| format!("decimale `{testo}` non leggibile"))?;
+        .map_err(|_| "decimale non leggibile".to_owned())?;
     Ok(if negativo { -valore } else { valore })
 }
 
@@ -536,31 +560,31 @@ fn scarica<T: 'static>(builder: &mut dyn ArrayBuilder) -> &mut T {
 
 fn numero<T: TryFrom<i64> + TryFrom<u64>>(valore: &Value) -> Result<T, String> {
     if let Some(intero) = valore.as_i64() {
-        return T::try_from(intero).map_err(|_| format!("{valore}: fuori dal tipo"));
+        return T::try_from(intero).map_err(|_| "intero fuori dal tipo".to_owned());
     }
     if let Some(intero) = valore.as_u64() {
-        return T::try_from(intero).map_err(|_| format!("{valore}: fuori dal tipo"));
+        return T::try_from(intero).map_err(|_| "intero fuori dal tipo".to_owned());
     }
-    Err(format!("{valore}: intero atteso"))
+    Err("intero atteso".to_owned())
 }
 
 fn virgola_mobile(valore: &Value) -> Result<f64, String> {
     match valore {
-        Value::Number(numero) => numero.as_f64().ok_or_else(|| format!("{valore}")),
+        Value::Number(numero) => numero
+            .as_f64()
+            .ok_or_else(|| "numero non rappresentabile".to_owned()),
         Value::String(testo) => match testo.as_str() {
             "NaN" => Ok(f64::NAN),
             "inf" => Ok(f64::INFINITY),
             "-inf" => Ok(f64::NEG_INFINITY),
-            _ => Err(format!("{valore}: numero atteso")),
+            _ => Err("numero atteso".to_owned()),
         },
-        _ => Err(format!("{valore}: numero atteso")),
+        _ => Err("numero atteso".to_owned()),
     }
 }
 
 fn testo_di(valore: &Value) -> Result<&str, String> {
-    valore
-        .as_str()
-        .ok_or_else(|| format!("{valore}: testo atteso"))
+    valore.as_str().ok_or_else(|| "testo atteso".to_owned())
 }
 
 /// Aggiunge un valore JSON al builder del tipo dato; `null` è sempre null.
@@ -591,9 +615,7 @@ fn aggiungi(builder: &mut dyn ArrayBuilder, tipo: &DataType, valore: &Value) -> 
         DataType::Float64 => primitivo!(Float64Builder, virgola_mobile(valore)),
         DataType::Boolean => primitivo!(
             BooleanBuilder,
-            valore
-                .as_bool()
-                .ok_or_else(|| format!("{valore}: booleano atteso"))
+            valore.as_bool().ok_or_else(|| "booleano atteso".to_owned())
         ),
         DataType::Utf8 => primitivo!(StringBuilder, testo_di(valore)),
         DataType::LargeUtf8 => primitivo!(LargeStringBuilder, testo_di(valore)),
@@ -601,14 +623,14 @@ fn aggiungi(builder: &mut dyn ArrayBuilder, tipo: &DataType, valore: &Value) -> 
             BinaryBuilder,
             testo_di(valore).and_then(|esadecimale| {
                 plenora_kernels_geo::wkb_hex_to_bytes(esadecimale)
-                    .ok_or_else(|| format!("{valore}: esadecimale atteso"))
+                    .ok_or_else(|| "esadecimale atteso".to_owned())
             })
         ),
         DataType::Date32 => primitivo!(
             Date32Builder,
             testo_di(valore).and_then(|testo| {
                 let data = NaiveDate::parse_from_str(testo, "%Y-%m-%d")
-                    .map_err(|_| format!("data `{testo}` non leggibile (AAAA-MM-GG)"))?;
+                    .map_err(|_| "data non leggibile (AAAA-MM-GG)".to_owned())?;
                 let epoca = NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoca");
                 i32::try_from((data - epoca).num_days()).map_err(|e| e.to_string())
             })
@@ -644,9 +666,7 @@ fn aggiungi(builder: &mut dyn ArrayBuilder, tipo: &DataType, valore: &Value) -> 
             if valore.is_null() {
                 builder.append_null();
             } else {
-                let elementi = valore
-                    .as_array()
-                    .ok_or_else(|| format!("{valore}: lista attesa"))?;
+                let elementi = valore.as_array().ok_or_else(|| "lista attesa".to_owned())?;
                 for elemento in elementi {
                     aggiungi(builder.values().as_mut(), figlio.data_type(), elemento)?;
                 }
@@ -657,7 +677,7 @@ fn aggiungi(builder: &mut dyn ArrayBuilder, tipo: &DataType, valore: &Value) -> 
             let builder = scarica::<StructBuilder>(builder);
             let oggetto = valore.as_object();
             if !valore.is_null() && oggetto.is_none() {
-                return Err(format!("{valore}: oggetto atteso"));
+                return Err("oggetto atteso".to_owned());
             }
             for (indice, campo) in campi.iter().enumerate() {
                 let figlio = oggetto
@@ -687,17 +707,28 @@ fn float_dal_testo(testo: &str) -> Result<Option<f64>, String> {
         numero => numero
             .parse()
             .map(Some)
-            .map_err(|_| format!("{numero}: numero atteso")),
+            .map_err(|_| "numero atteso".to_owned()),
     }
 }
 
+/// Le diagnostiche degli esempi nominano colonna e riga, mai il valore
+/// (AGENTS.md, «Errori senza dati», vale anche per i test).
 fn colonna(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
+    colonna_senza_contesto(spec).map_err(|errore| format!("colonna `{}`: {errore}", spec.nome))
+}
+
+fn in_riga<T>(riga: usize, esito: Result<T, String>) -> Result<T, String> {
+    esito.map_err(|errore| format!("riga {riga}: {errore}"))
+}
+
+fn colonna_senza_contesto(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
     let (tipo, geometria) = tipo_arrow(&spec.tipo)?;
     if tipo == DataType::Float64 && !geometria {
         let valori = spec
             .valori
             .iter()
-            .map(|valore| float_dal_testo(valore.get()))
+            .enumerate()
+            .map(|(riga, valore)| in_riga(riga, float_dal_testo(valore.get())))
             .collect::<Result<Vec<_>, _>>()?;
         let array = plenora_core::arrow::array::Float64Array::from(valori);
         return Ok((Field::new(&spec.nome, tipo, true), Arc::new(array)));
@@ -705,22 +736,35 @@ fn colonna(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
     let valori = spec
         .valori
         .iter()
-        .map(|valore| serde_json::from_str::<Value>(valore.get()).map_err(|e| e.to_string()))
+        .enumerate()
+        .map(|(riga, valore)| {
+            in_riga(
+                riga,
+                serde_json::from_str::<Value>(valore.get())
+                    .map_err(|_| "JSON non leggibile".to_owned()),
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if geometria {
         let crs = spec.crs.as_deref().unwrap_or("EPSG:4326");
         let campo = geometry_output_field(&spec.nome, crs).map_err(|e| e.to_string())?;
         let mut builder = BinaryBuilder::new();
-        for valore in &valori {
+        for (riga, valore) in valori.iter().enumerate() {
             if valore.is_null() {
                 builder.append_null();
                 continue;
             }
-            let testo = testo_di(valore)?;
-            let geometria: Geometry<f64> = wkt::TryFromWkt::try_from_wkt_str(testo)
-                .map_err(|errore| format!("WKT `{testo}`: {errore}"))?;
-            let wkb = plenora_kernels_geo::arrow_adapter::encode_geometry(&geometria)
-                .map_err(|e| e.to_string())?;
+            let testo = in_riga(riga, testo_di(valore))?;
+            let geometria: Geometry<f64> = in_riga(
+                riga,
+                wkt::TryFromWkt::try_from_wkt_str(testo)
+                    .map_err(|_| "WKT non leggibile".to_owned()),
+            )?;
+            let wkb = in_riga(
+                riga,
+                plenora_kernels_geo::arrow_adapter::encode_geometry(&geometria)
+                    .map_err(|e| e.to_string()),
+            )?;
             builder.append_value(wkb);
         }
         return Ok((campo, Arc::new(builder.finish())));
@@ -732,8 +776,8 @@ fn colonna(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), String> {
         ));
     }
     let mut builder = make_builder(&tipo, valori.len());
-    for valore in &valori {
-        aggiungi(builder.as_mut(), &tipo, valore)?;
+    for (riga, valore) in valori.iter().enumerate() {
+        in_riga(riga, aggiungi(builder.as_mut(), &tipo, valore))?;
     }
     let array = builder.finish();
     Ok((Field::new(&spec.nome, tipo, true), array))
@@ -775,11 +819,11 @@ fn cella(array: &dyn Array, riga: usize, geometria: bool, annidata: bool) -> Str
     if array.is_null(riga) {
         return "null".into();
     }
+    // Dentro liste e struct il testo è sempre fra virgolette; fuori, solo
+    // dove si confonderebbe con il nullo o con la stringa vuota.
     let testo = |valore: &str| {
-        if annidata {
+        if annidata || valore.is_empty() || valore == "null" || valore.starts_with('"') {
             serde_json::to_string(valore).expect("stringa")
-        } else if valore.is_empty() {
-            "\"\"".into()
         } else {
             valore.to_owned()
         }
@@ -888,7 +932,38 @@ fn cella(array: &dyn Array, riga: usize, geometria: bool, annidata: bool) -> Str
 struct Resa {
     intestazioni: Vec<String>,
     tipi: Vec<DataType>,
+    /// Le celle come il documento le mostra.
     righe: Vec<Vec<String>>,
+    /// Le celle per il confronto: `None` il nullo, il testo delle stringhe
+    /// di primo livello senza virgolette, il resto come nella resa. Il tipo
+    /// si confronta a parte ([`Resa::tipi`]), quindi `"1"` in `utf8` e `1` in
+    /// `int64` non si confondono.
+    valori: Vec<Vec<Option<String>>>,
+}
+
+/// Il valore di una cella per il confronto: nullità e valore separati.
+fn valore_cella(array: &dyn Array, riga: usize, geometria: bool) -> Option<String> {
+    if nullo_logico(array, riga) {
+        return None;
+    }
+    Some(match array.data_type() {
+        DataType::Utf8 => array.as_string::<i32>().value(riga).to_owned(),
+        DataType::LargeUtf8 => array.as_string::<i64>().value(riga).to_owned(),
+        DataType::Dictionary(_, _) => {
+            let dizionario = array.as_any_dictionary();
+            let chiave = dizionario.normalized_keys()[riga];
+            return valore_cella(dizionario.values().as_ref(), chiave, false);
+        }
+        _ => cella(array, riga, geometria, false),
+    })
+}
+
+/// Nullità logica: per un dizionario anche la voce nulla puntata da una
+/// chiave valida.
+fn nullo_logico(array: &dyn Array, riga: usize) -> bool {
+    array
+        .logical_nulls()
+        .is_some_and(|nulli| nulli.is_null(riga))
 }
 
 fn rendi(batch: &RecordBatch) -> Resa {
@@ -917,6 +992,16 @@ fn rendi(batch: &RecordBatch) -> Resa {
                 .collect()
         })
         .collect();
+    let valori = (0..batch.num_rows())
+        .map(|riga| {
+            batch
+                .columns()
+                .iter()
+                .zip(&geometrie)
+                .map(|(colonna, geometria)| valore_cella(colonna.as_ref(), riga, *geometria))
+                .collect()
+        })
+        .collect();
     Resa {
         intestazioni,
         tipi: schema
@@ -925,6 +1010,7 @@ fn rendi(batch: &RecordBatch) -> Resa {
             .map(|c| c.data_type().clone())
             .collect(),
         righe,
+        valori,
     }
 }
 
@@ -1021,21 +1107,37 @@ fn confronta(scheda: &Scheda, uscita: &RecordBatch, valori: bool) -> Result<(), 
             reale.intestazioni, scritta.intestazioni
         ));
     }
-    if reale.righe.len() != scritta.righe.len() {
+    if reale.valori.len() != scritta.valori.len() {
         return Err(format!(
-            "{} righe d'uscita, scritte {}\nuscita reale:\n{}",
-            reale.righe.len(),
-            scritta.righe.len(),
-            tabella_markdown(&reale)
+            "{} righe d'uscita, scritte {}",
+            reale.valori.len(),
+            scritta.valori.len()
         ));
     }
-    if valori && reale.righe != scritta.righe {
-        return Err(format!(
-            "valori d'uscita diversi da quelli scritti\nuscita reale:\n{}",
-            tabella_markdown(&reale)
-        ));
+    if valori {
+        // Solo le posizioni: i valori delle celle non entrano nei messaggi.
+        let diverse = celle_diverse(&reale, &scritta);
+        if !diverse.is_empty() {
+            return Err(format!(
+                "celle d'uscita diverse da quelle scritte (riga, colonna): {diverse:?}"
+            ));
+        }
     }
     Ok(())
+}
+
+/// Le posizioni `(riga, colonna)` in cui due rese hanno valori diversi, al
+/// più 20.
+fn celle_diverse(una: &Resa, altra: &Resa) -> Vec<(usize, String)> {
+    let mut diverse = Vec::new();
+    for (riga, (prima, seconda)) in una.valori.iter().zip(&altra.valori).enumerate() {
+        for ((a, b), nome) in prima.iter().zip(seconda).zip(&una.intestazioni) {
+            if a != b && diverse.len() < 20 {
+                diverse.push((riga, nome.clone()));
+            }
+        }
+    }
+    diverse
 }
 
 /// Verifica sul contratto, per le operazioni geo che il runner non esegue:
@@ -1095,8 +1197,21 @@ fn kernel_diretto(scheda: &Scheda, ingresso: &RecordBatch) -> Result<RecordBatch
     }
 }
 
+/// Le sole operazioni la cui uscita è casuale per contratto: per loro, e
+/// solo per loro, un esempio confronta schema e righe ma non i valori. Il
+/// catalogo non lo dice (`uuid_generator` vi dichiara un ordine definito,
+/// che riguarda le righe, non i valori), quindi l'elenco è qui, esplicito.
+const USCITA_CASUALE: [&str; 1] = ["table.uuid_generator"];
+
 fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
     let esempio = &scheda.esempio;
+    let casuale = USCITA_CASUALE.contains(&scheda.operazione.id);
+    if esempio.valori_confrontati == casuale {
+        return Err(format!(
+            "`valori_confrontati` deve essere {} per questa operazione",
+            !casuale
+        ));
+    }
     let ingressi = esempio
         .ingressi
         .iter()
@@ -1634,7 +1749,7 @@ fn il_documento_e_aggiornato() {
     let rotti = collegamenti_rotti(&generato);
     assert!(rotti.is_empty(), "collegamenti rotti: {rotti:?}");
     let percorso = percorso_documento();
-    if std::env::var_os(RIGENERA).is_some() {
+    if std::env::var(RIGENERA).as_deref() == Ok("1") {
         std::fs::write(&percorso, &generato).expect("scrittura del documento");
         return;
     }
@@ -1647,5 +1762,52 @@ fn il_documento_e_aggiornato() {
         attuale == generato,
         "docs/operazioni.md non è aggiornato: rigenerarlo con \
          {RIGENERA}=1 cargo test -p plenora-io --test operazioni_doc"
+    );
+}
+
+/// Il confronto degli esempi separa nullità e valore: il nullo, la stringa
+/// `"null"`, la stringa vuota e la stringa `""` (due virgolette) sono
+/// quattro valori diversi, anche nella resa del documento.
+#[test]
+fn il_confronto_distingue_nullo_e_testi_simili() {
+    let spec: ColonnaSpec = serde_json::from_str(
+        r#"{"nome": "t", "tipo": "utf8", "valori": [null, "null", "", "\"\""]}"#,
+    )
+    .expect("spec");
+    let batch = tabella(std::slice::from_ref(&spec)).expect("tabella");
+    let resa = rendi(&batch);
+    let valori: Vec<&Option<String>> = resa.valori.iter().map(|riga| &riga[0]).collect();
+    let celle: Vec<&String> = resa.righe.iter().map(|riga| &riga[0]).collect();
+    for i in 0..4 {
+        for j in (i + 1)..4 {
+            assert_ne!(valori[i], valori[j], "valori {i} e {j} confusi");
+            assert_ne!(celle[i], celle[j], "celle {i} e {j} confuse");
+        }
+    }
+    // Stesse celle in un'altra riga dello stesso batch: nessuna differenza;
+    // una riga in cui il nullo diventa "null": una differenza, per posizione.
+    let altra: ColonnaSpec = serde_json::from_str(
+        r#"{"nome": "t", "tipo": "utf8", "valori": ["null", "null", "", "\"\""]}"#,
+    )
+    .expect("spec");
+    let altra = rendi(&tabella(std::slice::from_ref(&altra)).expect("tabella"));
+    assert!(celle_diverse(&resa, &resa).is_empty());
+    assert_eq!(
+        celle_diverse(&resa, &altra),
+        vec![(0, "t: utf8".to_owned())]
+    );
+}
+
+/// Un fuso non ASCII nel tipo è un errore esplicito, non un panico.
+#[test]
+fn il_tipo_rifiuta_un_fuso_non_ascii() {
+    assert!(tipo_arrow("timestamp(ms, è)").is_err());
+    assert!(tipo_arrow("timestamp(ms, UTC").is_err());
+    assert_eq!(
+        tipo_arrow("timestamp(ms, Europe/Rome)").map(|(tipo, _)| tipo),
+        Ok(DataType::Timestamp(
+            TimeUnit::Millisecond,
+            Some(Arc::from("Europe/Rome"))
+        ))
     );
 }
