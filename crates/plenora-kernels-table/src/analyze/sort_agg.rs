@@ -60,9 +60,10 @@ pub(in crate::analyze) fn analyze_sort(
         .map(|name| fields.intern(name))
         .collect::<Result<_>>()?;
     let mut output = input.clone();
-    // Sort blocking: l'intero stream di output e' ordinato sulle chiavi.
+    // Sort blocking: l'intero stream di output e' ordinato sulle chiavi, nel
+    // verso della config.
     output.properties = ContractProperties {
-        sorted_by: Some(proven_sorted(keys)),
+        sorted_by: Some(proven_sorted(keys, config.ascending)),
         row_count: input.properties.row_count.clone(),
     };
     Ok(output)
@@ -88,7 +89,7 @@ pub(in crate::analyze) fn analyze_top_n(
     let mut output = input.clone();
     // Come sort, ma emesse esattamente min(n, righe) righe.
     output.properties = ContractProperties {
-        sorted_by: Some(proven_sorted(keys)),
+        sorted_by: Some(proven_sorted(keys, !config.descending)),
         row_count: map_row_count(input, |rows| rows.min(config.n)),
     };
     Ok(output)
@@ -128,8 +129,12 @@ pub(in crate::analyze) fn analyze_dedup_advanced(
     }
     let sorted_by = if let Some(order_column) = &config.order_column {
         field_of(op, input, order_column)?;
-        // Sort interno ascendente su order_column prima della deduplica.
-        Some(proven_sorted(vec![fields.intern(order_column)?]))
+        // Sort interno su order_column, nel verso della config, prima della
+        // deduplica; le righe tenute restano nell'ordine del sort.
+        Some(proven_sorted(
+            vec![fields.intern(order_column)?],
+            config.ascending,
+        ))
     } else {
         input.properties.sorted_by.clone()
     };
@@ -258,7 +263,8 @@ pub(in crate::analyze) fn analyze_rolling_window(
     }
     let sorted_by = if let Some(order_column) = &config.order_column {
         field_of(op, input, order_column)?;
-        Some(proven_sorted(vec![fields.intern(order_column)?]))
+        // Il kernel ordina sempre in ascendente su order_column.
+        Some(proven_sorted(vec![fields.intern(order_column)?], true))
     } else {
         input.properties.sorted_by.clone()
     };
@@ -333,7 +339,8 @@ pub(in crate::analyze) fn analyze_window_function(
         .output_column
         .unwrap_or_else(|| format!("{}_{suffix}", config.column));
     let sorted_by = match config.order_column.as_ref() {
-        Some(order_column) => Some(proven_sorted(vec![fields.intern(order_column)?])),
+        // Il kernel ordina sempre in ascendente su order_column.
+        Some(order_column) => Some(proven_sorted(vec![fields.intern(order_column)?], true)),
         None => input.properties.sorted_by.clone(),
     };
     let mut output = analyze_append(input, fields, &[(name, DataType::Float64, true)])?;

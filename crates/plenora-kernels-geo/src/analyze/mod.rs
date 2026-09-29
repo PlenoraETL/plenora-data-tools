@@ -235,7 +235,8 @@ mod tests {
     use plenora_core::contract::{
         ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
         GeometryColumnContract, GeometryDimensions, GeometryType, GeometryTypesProperty,
-        PropertyConfidence, PropertyScope, TypesDeclaration,
+        NullPlacement, PropertyConfidence, PropertyScope, SortDirection, SortOrder,
+        TypesDeclaration,
     };
     use plenora_core::crs::{CrsKind, ResolvedCrs};
     use plenora_core::esadecimale::esadecimale;
@@ -2341,7 +2342,11 @@ mod tests {
         let mut contract = geo_contract(projected_crs());
         contract.properties = ContractProperties {
             sorted_by: Some(ContractProperty::new(
-                PropertyConfidence::Proven(vec![FieldId(0)]),
+                PropertyConfidence::Proven(SortOrder {
+                    keys: vec![FieldId(0)],
+                    direction: SortDirection::Ascending,
+                    nulls: NullPlacement::Last,
+                }),
                 PropertyScope::Stream,
             )),
             row_count: Some(ContractProperty::new(

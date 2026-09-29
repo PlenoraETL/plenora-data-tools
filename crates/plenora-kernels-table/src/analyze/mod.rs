@@ -145,8 +145,8 @@ pub fn analyze_table_contract(
             fields.observe(active);
         }
         if let Some(sorted) = &input.properties.sorted_by {
-            if let Some(keys) = sorted.confidence.value() {
-                for key in keys {
+            if let Some(order) = sorted.confidence.value() {
+                for key in &order.keys {
                     fields.observe(*key);
                 }
             }
@@ -249,7 +249,8 @@ mod tests {
     use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
     use plenora_core::contract::{
         ContractCrs, ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
-        GeometryColumnContract, PropertyConfidence, PropertyScope,
+        GeometryColumnContract, NullPlacement, PropertyConfidence, PropertyScope, SortDirection,
+        SortOrder,
     };
     use plenora_core::{PlenoraError, Result};
     use serde_json::Value;
@@ -331,7 +332,11 @@ mod tests {
             Some(FieldId(7)),
             ContractProperties {
                 sorted_by: Some(ContractProperty::new(
-                    PropertyConfidence::Proven(vec![FieldId(0)]),
+                    PropertyConfidence::Proven(SortOrder {
+                        keys: vec![FieldId(0)],
+                        direction: SortDirection::Ascending,
+                        nulls: NullPlacement::Last,
+                    }),
                     PropertyScope::Stream,
                 )),
                 row_count: Some(ContractProperty::new(
@@ -431,7 +436,7 @@ mod tests {
             .expect("sorted_by assente");
         assert!(property.is_proven(), "sorted_by non Proven");
         assert_eq!(property.scope, PropertyScope::Stream);
-        property.confidence.proven_value().unwrap()
+        &property.confidence.proven_value().unwrap().keys
     }
 
     fn proven_rows(contract: &DataContract) -> u64 {
@@ -1364,6 +1369,83 @@ mod tests {
     }
 
     // -- aggregation ----------------------------------------------------------
+
+    #[test]
+    fn il_verso_dell_ordinamento_entra_in_sorted_by() {
+        for (op, ascendente, discendente) in [
+            (
+                "table.sort",
+                json!({"columns": ["id"]}),
+                json!({"columns": ["id"], "ascending": false}),
+            ),
+            (
+                "table.top_n",
+                json!({"columns": ["id"], "n": 3}),
+                json!({"columns": ["id"], "n": 3, "descending": true}),
+            ),
+            (
+                "table.dedup_advanced",
+                json!({"subset": ["name"], "order_column": "id"}),
+                json!({"subset": ["name"], "order_column": "id", "ascending": false}),
+            ),
+        ] {
+            let a = ok(op, &[tabular_contract()], ascendente)
+                .properties
+                .sorted_by;
+            let d = ok(op, &[tabular_contract()], discendente)
+                .properties
+                .sorted_by;
+            assert!(a.is_some() && d.is_some(), "{op}");
+            assert_ne!(
+                a, d,
+                "{op}: ascendente e discendente dichiarano lo stesso ordine"
+            );
+            // Null in coda in ascendente, in testa in discendente: il
+            // discendente del kernel rovescia il comparatore intero.
+            for (proprieta, direction, nulls) in [
+                (a, SortDirection::Ascending, NullPlacement::Last),
+                (d, SortDirection::Descending, NullPlacement::First),
+            ] {
+                let proprieta = proprieta.expect("sorted_by");
+                assert_eq!(proprieta.scope, PropertyScope::Stream, "{op}");
+                assert_eq!(
+                    proprieta.confidence,
+                    PropertyConfidence::Proven(SortOrder {
+                        keys: vec![FieldId(0)],
+                        direction,
+                        nulls,
+                    }),
+                    "{op}"
+                );
+            }
+        }
+        // Finestre: il kernel ordina sempre in ascendente su order_column.
+        for (op, config) in [
+            (
+                "table.rolling_window",
+                json!({"column": "value", "function": "mean", "order_column": "id",
+                       "window": 2, "output_column": "media"}),
+            ),
+            (
+                "table.window_function",
+                json!({"column": "value", "function": "rank", "order_column": "id",
+                       "group_by": null}),
+            ),
+        ] {
+            let proprieta = ok(op, &[tabular_contract()], config)
+                .properties
+                .sorted_by
+                .expect("sorted_by");
+            assert_eq!(
+                proprieta
+                    .confidence
+                    .proven_value()
+                    .map(|o| (o.direction, o.nulls)),
+                Some((SortDirection::Ascending, NullPlacement::Last)),
+                "{op}"
+            );
+        }
+    }
 
     #[test]
     fn sort_produces_proven_stream_sorted_by_and_keeps_rows() {

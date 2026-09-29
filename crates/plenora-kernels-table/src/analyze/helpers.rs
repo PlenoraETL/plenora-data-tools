@@ -8,7 +8,8 @@ use std::sync::Arc;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::{
     ContractProperties, ContractProperty, DataContract, FieldAllocator, FieldId,
-    GeometryColumnContract, PropertyConfidence, PropertyScope,
+    GeometryColumnContract, NullPlacement, PropertyConfidence, PropertyScope, SortDirection,
+    SortOrder,
 };
 use plenora_core::{PlenoraError, Result};
 use serde::de::DeserializeOwned;
@@ -305,12 +306,30 @@ pub(in crate::analyze) fn sorted_only(input: &DataContract) -> ContractPropertie
     }
 }
 
-/// `sorted_by = Proven(chiavi, Stream)`: op blocking che riordina l'intero
+/// `sorted_by = Proven(ordine, Stream)`: op blocking che riordina l'intero
 /// stream di output (architettura.md; `execution_class` Blocking).
+///
+/// L'ordine è quello del kernel `table.sort` (`aggregation::sort`): il
+/// comparatore mette il null dopo ogni valore e il discendente rovescia il
+/// confronto intero, quindi null in coda in ascendente e in testa in
+/// discendente.
 pub(in crate::analyze) const fn proven_sorted(
     keys: Vec<FieldId>,
-) -> ContractProperty<Vec<FieldId>> {
-    ContractProperty::new(PropertyConfidence::Proven(keys), PropertyScope::Stream)
+    ascending: bool,
+) -> ContractProperty<SortOrder> {
+    let (direction, nulls) = if ascending {
+        (SortDirection::Ascending, NullPlacement::Last)
+    } else {
+        (SortDirection::Descending, NullPlacement::First)
+    };
+    ContractProperty::new(
+        PropertyConfidence::Proven(SortOrder {
+            keys,
+            direction,
+            nulls,
+        }),
+        PropertyScope::Stream,
+    )
 }
 
 /// Trasforma un `row_count` noto mantenendo provenienza e scope.
@@ -338,7 +357,7 @@ pub(in crate::analyze) fn scrub_dropped_geometry(
             .sorted_by
             .as_ref()
             .and_then(|property| property.confidence.value())
-            .is_some_and(|keys| keys.contains(&id))
+            .is_some_and(|order| order.keys.contains(&id))
         {
             properties.sorted_by = None;
         }

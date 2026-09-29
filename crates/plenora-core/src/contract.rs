@@ -816,13 +816,47 @@ impl<T> ContractProperty<T> {
     }
 }
 
+/// Verso di un ordinamento.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SortDirection {
+    /// Dal minore al maggiore.
+    Ascending,
+    /// Dal maggiore al minore.
+    Descending,
+}
+
+/// Dove stanno i null rispetto ai valori, nell'ordine dell'arco.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NullPlacement {
+    /// Null prima di ogni valore.
+    First,
+    /// Null dopo ogni valore.
+    Last,
+}
+
+/// Ordinamento di un arco: chiavi nell'ordine di precedenza, verso comune a
+/// tutte le chiavi e posizione dei null.
+///
+/// Le chiavi senza verso non bastano: "ordinato su `x`" in discendente non è
+/// "ordinato su `x`" in ascendente, e un consumatore che li confondesse
+/// leggerebbe l'ordine al contrario senza errore. Un produttore che non sa
+/// dichiarare verso e null non dichiara l'ordinamento.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SortOrder {
+    /// Chiavi, come `FieldId` nel namespace globale del grafo.
+    pub keys: Vec<FieldId>,
+    /// Verso, lo stesso per tutte le chiavi.
+    pub direction: SortDirection,
+    /// Posizione dei null su ciascuna chiave.
+    pub nulls: NullPlacement,
+}
+
 /// Proprietà tipizzate del contratto: non un framework generico, le nuove
 /// proprietà si aggiungono come campi tipizzati.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ContractProperties {
-    /// Chiavi di ordinamento dichiarate/dimostrate, come `FieldId` nel
-    /// namespace globale del grafo.
-    pub sorted_by: Option<ContractProperty<Vec<FieldId>>>,
+    /// Ordinamento dichiarato/dimostrato: chiavi, verso e posizione dei null.
+    pub sorted_by: Option<ContractProperty<SortOrder>>,
     /// Cardinalità nota o stimata dell'arco: mai `Proven` nella validazione
     /// statica, perché non è dimostrabile dagli header (D8, architettura.md).
     pub row_count: Option<ContractProperty<u64>>,
