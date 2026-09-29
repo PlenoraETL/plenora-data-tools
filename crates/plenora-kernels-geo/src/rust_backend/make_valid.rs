@@ -27,8 +27,8 @@ use geo::algorithm::validation::Validation;
 use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::line_intersection::{line_intersection, LineIntersection};
 use geo::{
-    Area, BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, Line,
-    LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
+    BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, Line, LineString,
+    MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use thiserror::Error;
 
@@ -332,6 +332,7 @@ fn validate_structure(geometry: &Geometry<f64>) -> Result<(), MakeValidError> {
 fn fixed_ring(
     ring: &LineString<f64>,
     limits: MakeValidLimits,
+    precision: f64,
 ) -> Result<MultiPolygon<f64>, MakeValidError> {
     let result = polygonize_linework_rust(
         &Geometry::LineString(ring.clone()),
@@ -339,6 +340,7 @@ fn fixed_ring(
             node_input: true,
             require_complete: false,
             limits: polygonize_limits(limits),
+            precision,
         },
     )?;
     Ok(MultiPolygon::new(result.polygons))
@@ -408,44 +410,100 @@ impl OverlayNormalizer {
         }
     }
 
+    /// Il lato di una cella della griglia intera dell'overlay in coordinate
+    /// originali: la diagonale del passo `span * 2^-30` dei due assi (vedi
+    /// [`checked_grid`]).
+    fn grid_diagonal(self) -> f64 {
+        let step = 2_f64.powi(-30);
+        (self.span_x.abs() * step).hypot(self.span_y.abs() * step)
+    }
+
+    /// Riporta l'output dell'overlay nelle coordinate originali e lo aggancia
+    /// ai vertici e ai lati assiali degli operandi **vicini**.
+    ///
+    /// Il raggio d'aggancio `r` e' la diagonale di un passo della griglia
+    /// ([`Self::grid_diagonal`]). Un vertice va sul vertice d'ingresso piu'
+    /// vicino entro `r` (distanza fra punti); altrimenti ogni coordinata va
+    /// sull'ascissa di un lato verticale (o sull'ordinata di un lato
+    /// orizzontale) d'ingresso entro `r` che gli passa accanto, cosi' un
+    /// incrocio con un lato assiale resta esattamente sul lato. Lo
+    /// spostamento dell'aggancio e' al piu' `sqrt(2) * r`, e con il mezzo
+    /// passo d'arrotondamento della griglia resta sotto `2 * r`: il bilancio
+    /// che [`checked_grid`] confronta con la precisione dichiarata.
+    ///
+    /// Il laboratorio agganciava ogni coordinata, asse per asse, a qualunque
+    /// ascissa od ordinata d'ingresso entro `span * 2^-29` (due passi), anche
+    /// di una componente lontana e anche quando il valore era gia' esatto:
+    /// con `span_x = 2^23` m un incrocio a `x = 100` finiva a `100.0155`.
+    // Un lato e' assiale solo se lo e' esattamente: il confronto esatto e'
+    // il predicato voluto, non un'approssimazione.
+    #[allow(clippy::float_cmp)]
     fn restore_multi_snapped(
         self,
         polygons: &MultiPolygon<f64>,
         left: &MultiPolygon<f64>,
         right: &MultiPolygon<f64>,
     ) -> MultiPolygon<f64> {
+        let radius = self.grid_diagonal();
         let source_coordinates = left
             .coords_iter()
             .chain(right.coords_iter())
             .collect::<Vec<_>>();
-        let tolerance_x = self.span_x.abs() * 4.0 / f64::from(i32::MAX);
-        let tolerance_y = self.span_y.abs() * 4.0 / f64::from(i32::MAX);
-        let snap = |value: f64, x_axis: bool| {
-            let tolerance = if x_axis { tolerance_x } else { tolerance_y };
-            let mut best = value;
-            let mut best_distance = tolerance;
+        let mut vertical = Vec::new();
+        let mut horizontal = Vec::new();
+        for segment in polygonal_boundaries(left).chain(polygonal_boundaries(right)) {
+            if segment.start.x == segment.end.x {
+                vertical.push((
+                    segment.start.x,
+                    segment.start.y.min(segment.end.y),
+                    segment.start.y.max(segment.end.y),
+                ));
+            } else if segment.start.y == segment.end.y {
+                horizontal.push((
+                    segment.start.y,
+                    segment.start.x.min(segment.end.x),
+                    segment.start.x.max(segment.end.x),
+                ));
+            }
+        }
+        let snap = |restored: Coord<f64>| {
+            let mut nearest: Option<(Coord<f64>, f64)> = None;
             for source in &source_coordinates {
-                let candidate = if x_axis { source.x } else { source.y };
-                let distance = (value - candidate).abs();
-                if distance <= best_distance {
-                    best = candidate;
-                    best_distance = distance;
+                let distance = (restored.x - source.x).hypot(restored.y - source.y);
+                if distance <= radius && nearest.is_none_or(|(_, best)| distance < best) {
+                    nearest = Some((*source, distance));
                 }
             }
-            best
+            if let Some((source, _)) = nearest {
+                return source;
+            }
+            let axis = |value: f64, across: f64, sides: &[(f64, f64, f64)]| {
+                let mut best = value;
+                let mut best_distance = f64::INFINITY;
+                for &(level, minimum, maximum) in sides {
+                    let distance = (value - level).abs();
+                    if distance <= radius
+                        && distance < best_distance
+                        && across >= minimum - radius
+                        && across <= maximum + radius
+                    {
+                        best = level;
+                        best_distance = distance;
+                    }
+                }
+                best
+            };
+            Coord {
+                x: axis(restored.x, restored.y, &vertical),
+                y: axis(restored.y, restored.x, &horizontal),
+            }
         };
         let restore_line = |line: &LineString<f64>| {
             LineString::new(
                 line.0
                     .iter()
                     .copied()
-                    .map(|coordinate| {
-                        let restored = self.restore(coordinate);
-                        Coord {
-                            x: snap(restored.x, true),
-                            y: snap(restored.y, false),
-                        }
-                    })
+                    .map(|coordinate| snap(self.restore(coordinate)))
                     .collect(),
             )
         };
@@ -513,14 +571,22 @@ impl OverlayNormalizer {
 /// `i_float` 1.16.0 (`FloatPointAdapter::new`) sceglie il passo
 /// `2^(round(log2(0.5)) - 29) = 2^-30` (meta' della dimensione maggiore,
 /// logaritmo arrotondato a meta' lontano da zero, esponente `29 - log2`):
-/// in coordinate originali il passo e' `span * 2^-30` per asse. Se supera la
-/// precisione dichiarata l'overlay non si esegue:
-/// [`MakeValidError::PrecisionInsufficient`]. Sotto la precisione i vertici
-/// possono spostarsi e le feature piu' sottili possono fondersi o sparire:
-/// errore dichiarato, non un rifiuto.
+/// in coordinate originali il passo e' `span * 2^-30` per asse, e la sua
+/// diagonale `d` ([`OverlayNormalizer::grid_diagonal`]).
+///
+/// Il bilancio dello spostamento di un vertice e' l'arrotondamento alla
+/// griglia (mezzo passo per asse, al piu' `d / 2`) piu' l'aggancio di
+/// [`OverlayNormalizer::restore_multi_snapped`] (al piu' `sqrt(2) * d`):
+/// meno di `2 * d`. Se `2 * d` supera la precisione dichiarata l'overlay
+/// non si esegue: [`MakeValidError::PrecisionInsufficient`]. Sotto la
+/// precisione i vertici possono spostarsi e le feature piu' sottili possono
+/// fondersi o sparire: errore dichiarato, non un rifiuto.
+///
+/// Fuori dal bilancio restano gli agganci interni di `i_overlay` durante lo
+/// split dei segmenti (raggio che cresce a ogni giro,
+/// `split::snap_radius`): limite dichiarato in README («Limiti dichiarati»).
 fn checked_grid(normalizer: OverlayNormalizer, precision: f64) -> Result<(), MakeValidError> {
-    let step = 2_f64.powi(-30);
-    if normalizer.span_x.abs() * step > precision || normalizer.span_y.abs() * step > precision {
+    if 2.0 * normalizer.grid_diagonal() > precision {
         return Err(MakeValidError::PrecisionInsufficient);
     }
     Ok(())
@@ -649,7 +715,7 @@ fn structure_polygon(
     limits: MakeValidLimits,
     precision: f64,
 ) -> Result<Option<Geometry<f64>>, MakeValidError> {
-    let mut fixed = fixed_ring(polygon.exterior(), limits)?;
+    let mut fixed = fixed_ring(polygon.exterior(), limits, precision)?;
     if fixed.0.is_empty() {
         return Ok(if keep_collapsed {
             fix_line_element(polygon.exterior(), true)
@@ -661,7 +727,7 @@ fn structure_polygon(
     let mut subtractive_holes = MultiPolygon::empty();
     let mut promoted_holes = MultiPolygon::empty();
     for hole in polygon.interiors() {
-        let fixed_hole = fixed_ring(hole, limits)?;
+        let fixed_hole = fixed_ring(hole, limits, precision)?;
         if normalized_intersects(&shell, &fixed_hole) {
             subtractive_holes = normalized_union(&subtractive_holes, &fixed_hole, precision)?;
         } else {
@@ -680,6 +746,7 @@ fn structure_polygon(
 fn normalize_collapsed_union(
     components: Vec<Geometry<f64>>,
     limits: MakeValidLimits,
+    precision: f64,
 ) -> Result<Vec<Geometry<f64>>, MakeValidError> {
     let mut lines = Vec::new();
     let mut output = Vec::new();
@@ -699,6 +766,7 @@ fn normalize_collapsed_union(
             node_input: true,
             require_complete: false,
             limits: polygonize_limits(limits),
+            precision,
         },
     )?;
     if !result.polygons.is_empty() {
@@ -771,7 +839,7 @@ fn structure(
                 }
             }
             if !collapsed.is_empty() && (!area.0.is_empty() || collapsed.len() > 1) {
-                collapsed = normalize_collapsed_union(collapsed, limits)?;
+                collapsed = normalize_collapsed_union(collapsed, limits, precision)?;
             }
             if !area.0.is_empty() {
                 collapsed.insert(0, as_polygonal_geometry(area));
@@ -935,22 +1003,6 @@ impl Band {
             OnSegment::Off
         }
     }
-
-    /// Tolleranza d'area della precisione dichiarata per un insieme di
-    /// anelli: ogni lato puo' spostarsi della banda, e l'area di quel lato
-    /// per lo spostamento perpendicolare.
-    fn area_tolerance(self, polygons: &MultiPolygon<f64>) -> f64 {
-        polygons
-            .0
-            .iter()
-            .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
-            .flat_map(LineString::lines)
-            .map(|segment| {
-                (segment.end.x - segment.start.x).abs() * self.y
-                    + (segment.end.y - segment.start.y).abs() * self.x
-            })
-            .sum()
-    }
 }
 
 fn boundary_segments(area: &MultiPolygon<f64>) -> impl Iterator<Item = Line<f64>> + '_ {
@@ -1080,6 +1132,7 @@ fn linework(
             node_input: true,
             require_complete: false,
             limits: polygonize_limits(limits),
+            precision,
         },
     )?;
     let mut area = MultiPolygon::empty();
@@ -1088,26 +1141,29 @@ fn linework(
         let mut seen_rings = BTreeSet::new();
         let shell_signature = ring_segment_signature(polygon.exterior())?;
         seen_rings.insert(shell_signature);
-        let shell = fixed_ring(polygon.exterior(), limits)?;
+        let shell = fixed_ring(polygon.exterior(), limits, precision)?;
         let mut polygon_area = shell.clone();
         for ring in polygon.interiors() {
             if !seen_rings.insert(ring_segment_signature(ring)?) {
                 continue;
             }
-            let fixed = fixed_ring(ring, limits)?;
+            let fixed = fixed_ring(ring, limits, precision)?;
             if fixed.0.is_empty() {
                 continue;
             }
             if shares_collinear_boundary(&shell, &fixed) {
                 retain_internal_edges = true;
-                // Il buco esce dalla shell se la differenza supera la
-                // tolleranza d'area della precisione dichiarata, relativa al
-                // perimetro del buco e all'estensione (il laboratorio usava
-                // `1e-12 * max(area, 1)`, assoluta sotto l'area 1).
-                let outside = normalized_difference(&fixed, &shell, precision)?.unsigned_area();
-                if outside > band.area_tolerance(&fixed) {
-                    polygon_area = normalized_union(&polygon_area, &fixed, precision)?;
-                }
+                // Un buco che condivide un lato con la shell si unisce
+                // all'area: la parte che esce dalla shell diventa area, quella
+                // dentro non cambia nulla. Il laboratorio univa solo se l'area
+                // della differenza superava una soglia globale (`1e-12 *
+                // max(area, 1)`, poi perimetro del buco per precisione): una
+                // sporgenza di 1 m^2 da un buco di perimetro 3.6 km restava
+                // sotto soglia e perdeva la classificazione poligonale. Senza
+                // soglia non c'e' decisione da sbagliare: l'unione e' esatta
+                // entro l'errore dell'overlay, che `checked_grid` tiene sotto
+                // la precisione.
+                polygon_area = normalized_union(&polygon_area, &fixed, precision)?;
             } else {
                 polygon_area = normalized_xor(&polygon_area, &fixed, precision)?;
             }
@@ -1622,8 +1678,12 @@ mod tests {
                 (3.0, 1.0),
             ])],
         );
-        let shell = fixed_ring(source.exterior(), MakeValidLimits::unlimited())?;
-        let hole = fixed_ring(&source.interiors()[0], MakeValidLimits::unlimited())?;
+        let shell = fixed_ring(source.exterior(), MakeValidLimits::unlimited(), PRECISION)?;
+        let hole = fixed_ring(
+            &source.interiors()[0],
+            MakeValidLimits::unlimited(),
+            PRECISION,
+        )?;
         let selected = normalized_xor(&shell, &hole, 1.0)?;
         if (selected.unsigned_area() - 16.0).abs() > 1e-12 {
             return Err(MakeValidError::InvalidOutput(format!(

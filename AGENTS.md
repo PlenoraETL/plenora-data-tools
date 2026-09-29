@@ -13,8 +13,9 @@ Le regole che non si negoziano. Il resto lo dice il codice.
    `gridSize = 0.01` di PostGIS): sotto il centimetro un risultato
    geometrico può differire dall'esatto (vertici spostati, schegge e parti
    sottili fuse o sparite, aree diverse di circa perimetro per 1 cm); sopra,
-   ogni errore è esplicito. Una griglia di overlay più grossa di 1 cm si
-   rifiuta.
+   ogni errore è esplicito. Un calcolo che sposterebbe il risultato oltre
+   1 cm (griglia di overlay con il suo aggancio, punto di noding
+   arrotondato) si rifiuta.
 2. **Niente `unsafe`** (`unsafe_code = "forbid"` nel workspace). Una
    dipendenza nuova entra solo con una motivazione scritta accanto al pin in
    `Cargo.toml`, e con versione esatta (`=x.y.z`).

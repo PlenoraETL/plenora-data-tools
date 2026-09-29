@@ -64,11 +64,15 @@ impl PolygonizeLimits {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PolygonizeOptions {
     pub node_input: bool,
     pub require_complete: bool,
     pub limits: PolygonizeLimits,
+    /// La precisione dichiarata nelle unita' delle coordinate (1 cm a terra
+    /// con un CRS, `super::precision`): lo spostamento massimo che il noding
+    /// puo' introdurre. Nessun valore predefinito.
+    pub precision: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,6 +133,15 @@ pub enum PolygonizeError {
     /// [`super::exact`]). Deviazione dal laboratorio, che decideva comunque.
     #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
     NumericRange,
+    /// Un punto di noding arrotondato in `f64` dista da uno dei segmenti che
+    /// divide piu' della quota di precisione dichiarata di un giro (vedi
+    /// [`NODING_PRECISION_SHARE`]): il grafo si sposterebbe oltre la
+    /// precisione, e non si costruisce.
+    #[error("noding oltre la precisione dichiarata delle coordinate")]
+    PrecisionInsufficient,
+    /// La precisione dichiarata passata non e' un numero finito positivo.
+    #[error("precisione dichiarata non valida: deve essere finita e positiva")]
+    InvalidPrecision,
     #[error("invariante interna violata: {0}")]
     InternalInvariant(&'static str),
     #[error("prenotazione di memoria fallita per {0}")]
@@ -484,6 +497,50 @@ fn coordinate_in_segment_envelope(point: Coord<f64>, segment: Segment) -> bool {
         && point.y <= segment.start.y.max(segment.end.y)
 }
 
+/// Il noding si ripete al piu' [`MAX_NODING_ITERATIONS`] volte, e ogni giro
+/// divide i segmenti del giro precedente: gli spostamenti si sommano. Ogni
+/// giro ha quindi a disposizione [`NODING_PRECISION_SHARE`] della precisione
+/// dichiarata, e il grafo finale dista dal linework d'ingresso al piu' la
+/// precisione.
+const MAX_NODING_ITERATIONS: usize = 5;
+
+/// Quota della precisione dichiarata concessa a ogni giro di noding.
+const NODING_PRECISION_SHARE: f64 = 0.2;
+
+/// Il punto di noding `point` dista dal segmento che divide al piu'
+/// `budget`?
+///
+/// Il punto d'intersezione esatto sta su entrambi i segmenti; quello
+/// arrotondato in `f64` puo' uscirne (a `2^52` l'unita' in ultima posizione
+/// e' 1, e `(B + 1.5, B + 1.5)` diventa `(B + 2, B + 2)`, a 0.707 unita' da
+/// uno dei due segmenti). Dividere il segmento in quel punto sposta il
+/// linework di quanto il punto dista dal segmento: e' questa la distanza che
+/// si misura, per entrambi i segmenti, e che la precisione dichiarata
+/// limita. La distanza e' calcolata sulle differenze dall'estremo `start` e
+/// maggiorata di un margine d'arrotondamento relativo alle grandezze in
+/// gioco (`16 * EPSILON`, piu' largo dei pochi arrotondamenti del calcolo):
+/// il controllo puo' rifiutare un punto al limite, mai accettarne uno oltre.
+fn noding_point_within(point: Coord<f64>, segment: Segment, budget: f64) -> bool {
+    let point_x = point.x - segment.start.x;
+    let point_y = point.y - segment.start.y;
+    let direction_x = segment.end.x - segment.start.x;
+    let direction_y = segment.end.y - segment.start.y;
+    let length_squared = direction_x.mul_add(direction_x, direction_y * direction_y);
+    let parameter = if length_squared > 0.0 {
+        (point_x.mul_add(direction_x, point_y * direction_y) / length_squared).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let distance = parameter
+        .mul_add(-direction_x, point_x)
+        .hypot(parameter.mul_add(-direction_y, point_y));
+    let rounding = 16.0
+        * f64::EPSILON
+        * (point_x.abs() + point_y.abs() + direction_x.abs() + direction_y.abs());
+    let bound = distance + rounding;
+    bound.is_finite() && bound <= budget
+}
+
 /// Double-double minimo per il noding. La sequenza delle operazioni segue
 /// l'aritmetica di Dekker usata dalla famiglia JTS/GEOS, inclusa la sua
 /// politica di arrotondamento osservabile.
@@ -713,6 +770,7 @@ fn visit_candidate_pairs(
 fn node_segments(
     segments: &[Segment],
     budget: &mut NodingBudget,
+    displacement: f64,
 ) -> Result<(SplitPoints, usize), PolygonizeError> {
     let mut split_points = Vec::new();
     split_points
@@ -733,6 +791,11 @@ fn node_segments(
         let right = segments[right_index];
         match robust_line_intersection(left, right) {
             Some(LineIntersection::SinglePoint { intersection, .. }) => {
+                if !noding_point_within(intersection, left, displacement)
+                    || !noding_point_within(intersection, right, displacement)
+                {
+                    return Err(PolygonizeError::PrecisionInsufficient);
+                }
                 let intersection_key = CoordKey::new(intersection);
                 if intersection_key != CoordKey::new(left.start)
                     && intersection_key != CoordKey::new(left.end)
@@ -753,6 +816,11 @@ fn node_segments(
             }
             Some(LineIntersection::Collinear { intersection }) => {
                 for point in [intersection.start, intersection.end] {
+                    if !noding_point_within(point, left, displacement)
+                        || !noding_point_within(point, right, displacement)
+                    {
+                        return Err(PolygonizeError::PrecisionInsufficient);
+                    }
                     let point_key = CoordKey::new(point);
                     if point_key != CoordKey::new(left.start)
                         && point_key != CoordKey::new(left.end)
@@ -787,9 +855,11 @@ fn node_segments(
 fn node_edges_iteratively(
     segments: &[Segment],
     work_limit: u64,
+    precision: f64,
 ) -> Result<NodedEdges, PolygonizeError> {
-    const MAX_ITERATIONS: usize = 5;
+    const MAX_ITERATIONS: usize = MAX_NODING_ITERATIONS;
 
+    let displacement = precision * NODING_PRECISION_SHARE;
     let mut budget = NodingBudget::new(work_limit);
     let mut current = Vec::new();
     current
@@ -802,7 +872,8 @@ fn node_edges_iteratively(
         iteration = iteration
             .checked_add(1)
             .ok_or(PolygonizeError::IndexOverflow)?;
-        let (split_points, interior_intersections) = node_segments(&current, &mut budget)?;
+        let (split_points, interior_intersections) =
+            node_segments(&current, &mut budget, displacement)?;
         let edges = build_edges(&current, split_points)?;
         if edges_are_fully_noded(&edges, &mut budget)? {
             return Ok(edges);
@@ -1899,6 +1970,9 @@ pub fn polygonize_linework_rust(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<PolygonizeResult, PolygonizeError> {
+    if !(options.precision.is_finite() && options.precision > 0.0) {
+        return Err(PolygonizeError::InvalidPrecision);
+    }
     checked_preflight(linework, options)?;
     let mut lines = Vec::new();
     collect_lines(linework, &mut lines)?;
@@ -1914,7 +1988,7 @@ pub fn polygonize_linework_rust(
     let (excluded_edges, mut duplicate_cut_lines) =
         duplicate_lines_without_noding(&lines, options.node_input, &mut output_budget)?;
     let mut edges = if options.node_input {
-        node_edges_iteratively(&segments, options.limits.max_noding_work)?
+        node_edges_iteratively(&segments, options.limits.max_noding_work, options.precision)?
     } else {
         build_unnoded_edges(&segments)
     };
@@ -1983,10 +2057,15 @@ mod tests {
     use super::*;
     use geo::{line_string, polygon, Area, MultiLineString};
 
+    /// Precisione dei test del laboratorio: coordinate astratte, un
+    /// milionesimo di unita'.
+    const PRECISION: f64 = 1e-6;
+
     fn options(node_input: bool, require_complete: bool) -> PolygonizeOptions {
         PolygonizeOptions {
             node_input,
             require_complete,
+            precision: PRECISION,
             limits: PolygonizeLimits::unlimited(),
         }
     }
@@ -2099,6 +2178,7 @@ mod tests {
             PolygonizeOptions {
                 node_input: true,
                 require_complete: false,
+                precision: PRECISION,
                 limits: PolygonizeLimits {
                     max_noding_work: 1,
                     ..PolygonizeLimits::unlimited()

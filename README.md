@@ -47,16 +47,31 @@ diverse di circa perimetro per 1 cm. Sopra la precisione ogni errore e'
 esplicito, mai silenzioso. Le funzioni dei kernel chiamate senza CRS
 ricevono la precisione come argomento esplicito, senza valore predefinito.
 
-Il solo rifiuto legato alla precisione è la **griglia degli overlay**:
-`i_overlay` porta le coordinate su una griglia intera il cui passo `g`,
-letto dai sorgenti di `i_float` 1.16.0 (`FloatPointAdapter::new`), e'
-`2^(round(log2(h)) - 29)` con `h` la metà della dimensione maggiore del
-rettangolo d'ingombro degli operandi, cioè fra `2^-30.5` e `2^-29.5` di
-quella dimensione. In `make_valid` gli operandi sono normalizzati per asse
-su `[0, 1]^2`, dove il passo è esattamente `2^-30`: in coordinate originali
-`span * 2^-30` per asse. Se `g` supera la precisione l'overlay non si
-esegue: `PrecisionInsufficient` ("geometria troppo estesa per la precisione
-dichiarata"). In metri succede oltre circa 10.000 km di estensione.
+Il solo rifiuto legato alla precisione è lo **spostamento che il calcolo
+introdurrebbe**, confrontato con la precisione prima di costruire il
+risultato: `PrecisionInsufficient` ("geometria troppo estesa per la
+precisione dichiarata"). Due punti lo misurano:
+
+- **overlay di `make_valid`**: `i_overlay` porta le coordinate su una
+  griglia intera il cui passo `g`, letto dai sorgenti di `i_float` 1.16.0
+  (`FloatPointAdapter::new`), è `2^(round(log2(h)) - 29)` con `h` la metà
+  della dimensione maggiore del rettangolo d'ingombro degli operandi, cioè
+  fra `2^-30.5` e `2^-29.5` di quella dimensione. In `make_valid` gli
+  operandi sono normalizzati per asse su `[0, 1]^2`, dove il passo è
+  esattamente `2^-30`: in coordinate originali `span * 2^-30` per asse, di
+  diagonale `d`. Il bilancio di un vertice è l'arrotondamento alla griglia
+  (al più `d / 2`) più l'aggancio al vertice d'ingresso **vicino** entro
+  `d`, o al lato assiale d'ingresso che gli passa accanto (al più
+  `sqrt(2) * d`): meno di `2 * d`. Se `2 * d` supera la precisione
+  l'overlay non si esegue. In metri succede oltre circa 5.400 km di
+  estensione su un solo asse, 3.800 km su entrambi;
+- **noding di `polygonize`** (anche dentro `make_valid` e `split`): il
+  punto d'incrocio calcolato in doppia-doppia e arrotondato in `f64` deve
+  stare entro un quinto della precisione da entrambi i segmenti che divide
+  (il noding si ripete al più cinque volte, e gli spostamenti si sommano).
+  Oltre, il grafo non si costruisce. Succede solo dove l'unità in ultima
+  posizione delle coordinate si avvicina alla precisione (in metri, oltre
+  circa `10^13` m).
 
 **Ambito.** Tutte le operazioni geografiche. Il controllo della griglia e'
 applicato oggi ai tre kernel portati (`geo.make_valid`, `geo.polygonize`,
@@ -67,14 +82,34 @@ passo: `topology.rs` (`boolean_operation`, `clip_to_mask`,
 `operations.rs` (`buffer_with_cap`, `Buffer` di `geo`), `extensions2.rs`
 (`subdivide_polygon`), `extensions3.rs` (`coverage_validate_elements`).
 
+Le verifiche a posteriori di `split` sono **locali**: la copertura del bordo
+somma la lunghezza scoperta per anello sorgente (entro 1 cm), e l'area può
+cambiare solo di 1 cm per la lunghezza dei lati di bordo con un estremo
+calcolato dal noding. Un buco di `make_valid` `LINEWORK` che condivide un
+lato con la shell si unisce sempre all'area, senza soglia.
+
 **Hazard.** Una geometria più sottile di 1 cm (in tutto o in parte) può
 uscire fusa o vuota senza errore, per scelta; sulle operazioni booleane non
 ancora controllate una griglia più grossa di 1 cm (estensioni oltre circa
-10.000 km in metri) non è rifiutata.
+5.400 km in metri) non è rifiutata. Fuori dal bilancio dell'overlay restano
+gli agganci interni di `i_overlay` durante lo split dei segmenti
+(`split::snap_radius`: un incrocio può andare sull'estremo di un segmento
+entro un raggio di `2^(k/2)` passi al giro `k`, che cresce finché i
+segmenti non sono nodati): la campagna differenziale contro GEOS con la
+politica del centimetro non ha trovato casi oltre 1 cm, ma il limite non è
+dimostrato. Fuori dal controllo del noding resta `split_line`
+(`extended_algorithms.rs`, sorgenti `LineString` di `geo.split`, codice
+precedente al porting): i punti di taglio arrotondati si spostano lungo la
+linea fino a qualche unità in ultima posizione delle coordinate, oltre 1 cm
+solo sopra circa `10^13` m.
 
 **Condizione di rientro.** Nessuna per la precisione, che è una scelta di
 prodotto; per il controllo della griglia, la sua estensione alle altre
-operazioni booleane.
+operazioni booleane; per gli agganci interni di `i_overlay`, una verifica
+dell'output dell'overlay contro gli operandi (o un overlay con raggio
+d'aggancio costante, `Precision::ABSOLUTE` di `i_overlay`, oggi non
+raggiungibile attraverso `geo`); per `split_line`, un controllo di dominio
+sull'unità in ultima posizione delle coordinate.
 
 ### Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
 
@@ -305,18 +340,19 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   un limite a `u64::MAX` è rifiutato (`UnboundedLimits`).
 - **Precisione in più nelle firme.** `make_valid_wkb`,
   `make_valid_wkb_with_limits`, `make_valid_geometry`,
-  `split_polygon_by_linework`, `make_valid_batches` e `split_batches`
-  prendono la precisione dichiarata (1 cm a terra, `Precision::from_crs`):
-  incompatibilità di firma con `190c493`, voluta. I kernel del laboratorio
-  (`make_valid_geometry_rust*`, `split_polygon_by_linework_rust*`) la
-  prendono in unità delle coordinate.
+  `polygonize_linework`, `split_polygon_by_linework`, `make_valid_batches`,
+  `polygonize_batches` e `split_batches` prendono la precisione dichiarata
+  (1 cm a terra, `Precision::from_crs`): incompatibilità di firma con
+  `190c493`, voluta. I kernel del laboratorio
+  (`make_valid_geometry_rust*`, `split_polygon_by_linework_rust*`, e
+  `PolygonizeOptions::precision`) la prendono in unità delle coordinate.
 - **Errori nuovi.** Noding non convergente (`Unsupported`), segno o
   confronto d'area non decidibile su coordinate fuori dal dominio
   dell'aritmetica esatta, cioè con modulo fuori da `[2^-450, 2^450]`
   (`NumericRange`, `Unsupported`, anche da `make_valid`, che prima in
-  quel caso avviava la riparazione di un poligono valido), griglia di un
-  overlay di `make_valid` più grossa di 1 cm (`PrecisionInsufficient`,
-  `Unsupported`), precisione non finita o CRS proiettato senza unità
+  quel caso avviava la riparazione di un poligono valido), bilancio di
+  spostamento di un overlay di `make_valid` o punto di noding arrotondato
+  oltre 1 cm (`PrecisionInsufficient`, `Unsupported`), precisione non finita o CRS proiettato senza unità
   (`InvalidPrecision`, `InvalidPlan`), memoria non prenotabile
   (`ResourceLimit`),
   panico di `geo`/`i_overlay` dentro il kernel (`Internal`, solo la forma

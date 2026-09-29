@@ -84,6 +84,7 @@ fn il_quadrato_lontano_dall_origine_resta_un_poligono() {
                         LIMIT,
                         LIMIT,
                         LIMIT,
+                        precisione(),
                     )
                     .unwrap_or_else(|errore| {
                         panic!("({x}, {y}, {lato}) orario={orario} inizio={inizio}: {errore}")
@@ -114,6 +115,7 @@ fn il_quadrato_con_buco_lontano_dall_origine_conserva_il_buco() {
         LIMIT,
         LIMIT,
         LIMIT,
+        precisione(),
     )
     .expect("polygonize");
     assert_eq!(risultato.polygons.len(), 2);
@@ -195,6 +197,7 @@ fn l_adapter_arrow_classifica_il_quadrato_come_poligono() {
                 CRS,
                 PolygonizeParams::default(),
                 LIMIT,
+                precisione(),
             )
             .expect("polygonize");
             let classi = batches[0]

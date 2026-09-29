@@ -100,7 +100,9 @@ pub fn make_valid_batches(
 /// Limiti come nel trasporto GEOS: [`MAX_CLEAN_VERTICES`] coordinate in
 /// ingresso e in uscita, [`MAX_NODING_WORK`], `max_output_rows` geometrie.
 /// Dentro ogni classe l'ordine e' quello del kernel Rust, non quello di
-/// GEOS (vedi [`polygonize_linework`]).
+/// GEOS (vedi [`polygonize_linework`]). `precision` e' la precisione
+/// dichiarata del noding (1 cm a terra, [`Precision::from_crs`]), argomento
+/// in piu' rispetto a 190c493.
 ///
 /// # Errors
 ///
@@ -114,6 +116,7 @@ pub fn polygonize_batches(
     output_crs: &str,
     params: PolygonizeParams,
     max_output_rows: u64,
+    precision: Precision,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
     let geometry_index = geometry_column_index(schema, geometry_column)?;
     let mut lines = Vec::new();
@@ -135,6 +138,7 @@ pub fn polygonize_batches(
         MAX_NODING_WORK,
         max_output_rows,
         MAX_CLEAN_VERTICES,
+        precision,
     )?;
     let mut geometries: Vec<Vec<u8>> = Vec::new();
     let mut classes: Vec<&'static str> = Vec::new();
@@ -480,6 +484,7 @@ mod tests {
             CRS,
             PolygonizeParams::default(),
             16,
+            precisione(),
         )
         .expect("polygonize");
         let classes = column::<StringArray>(&batches[0], &out_schema, CLASS_COLUMN);
@@ -506,7 +511,8 @@ mod tests {
                 DEFAULT_GEOMETRY_COLUMN,
                 CRS,
                 complete,
-                16
+                16,
+                precisione()
             ),
             Err(PlenoraError::InvalidPlan(_))
         ));
@@ -517,7 +523,8 @@ mod tests {
                 DEFAULT_GEOMETRY_COLUMN,
                 CRS,
                 PolygonizeParams::default(),
-                1
+                1,
+                precisione()
             ),
             Err(PlenoraError::InvalidPlan(_))
         ));

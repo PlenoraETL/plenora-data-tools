@@ -41,8 +41,17 @@ fn precisione() -> Precision {
 }
 
 fn polygonize(linework: &Geometry<f64>, node_input: bool) -> PolygonizeResult {
-    polygonize_linework(linework, node_input, false, LIMIT, LIMIT, LIMIT, LIMIT)
-        .expect("polygonize")
+    polygonize_linework(
+        linework,
+        node_input,
+        false,
+        LIMIT,
+        LIMIT,
+        LIMIT,
+        LIMIT,
+        precisione(),
+    )
+    .expect("polygonize")
 }
 
 fn multi(lines: Vec<LineString<f64>>) -> Geometry<f64> {
@@ -219,6 +228,7 @@ fn blocker_seed_2147483647_caso_227_conserva_la_faccia() {
         CRS,
         PolygonizeParams::default(),
         LIMIT,
+        precisione(),
     )
     .expect("polygonize Arrow");
     let classes = batches[0]
@@ -490,6 +500,7 @@ fn polygonize_arrow_deterministico_e_canonico_su_righe_permutate() {
             CRS,
             PolygonizeParams::default(),
             LIMIT,
+            precisione(),
         )
         .expect("polygonize")
         .1

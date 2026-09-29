@@ -342,28 +342,51 @@ fn linework_conserva_le_linee_sopra_la_precisione_a_2_alla_30() {
     verifica(&geometry_from_wkb(&output).expect("valida"));
 }
 
-/// Campagna differenziale traslata di `2^30`, seme 1 caso 92: shell larga
-/// 6.000 km e alta 7 micrometri, in metri. La griglia dell'overlay (circa
-/// 5,6 mm) sta sotto il centimetro, e le linee del buco (a 2 micrometri dal
-/// bordo) sono sotto la precisione: possono restare o sparire. Il risultato
-/// deve esserci, con l'area della shell entro perimetro per 1 cm.
-#[test]
-fn caso_92_in_metri_e_entro_la_precisione() {
+/// Il caso con la shell lunga `larghezza` e il buco dal suo secondo
+/// milione di metri alla fine, alti 7 e 2 micrometri, a quota `2^30`.
+fn caso_92(inizio: f64, larghezza: f64) -> (Geometry<f64>, Polygon<f64>) {
     let base = 1_073_741_824.0; // 2^30
     let shell = rettangolo(
-        1_071_741_824.0,
+        inizio,
         base + 0.000_003,
-        1_077_741_824.0,
+        inizio + larghezza,
         base + 0.000_01,
     );
     let buco = rettangolo(
-        1_072_741_824.0,
+        inizio + 1_000_000.0,
         base + 0.000_005,
-        1_077_741_824.0,
+        inizio + larghezza,
         base + 0.000_007,
     );
-    let input = Geometry::Polygon(Polygon::new(shell.clone(), vec![buco]));
-    let shell = Polygon::new(shell, Vec::new());
+    (
+        Geometry::Polygon(Polygon::new(shell.clone(), vec![buco])),
+        Polygon::new(shell, Vec::new()),
+    )
+}
+
+/// Campagna differenziale traslata di `2^30`, seme 1 caso 92: shell larga
+/// 6.000 km e alta 7 micrometri, in metri. Il passo della griglia
+/// dell'overlay (circa 5,6 mm) sta sotto il centimetro, ma il bilancio di
+/// spostamento (arrotondamento piu' aggancio, due diagonali del passo:
+/// 11,2 mm) no: errore esplicito.
+#[test]
+fn caso_92_in_metri_oltre_il_bilancio_e_un_errore() {
+    let (input, _) = caso_92(1_071_741_824.0, 6_000_000.0);
+    for keep_collapsed in [false, true] {
+        assert!(matches!(
+            make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed, CENTIMETRO),
+            Err(MakeValidError::PrecisionInsufficient)
+        ));
+    }
+}
+
+/// Lo stesso caso lungo 4.000 km: bilancio circa 7,5 mm, sotto il
+/// centimetro. Le linee del buco (a 2 micrometri dal bordo) sono sotto la
+/// precisione: possono restare o sparire. Il risultato deve esserci, con
+/// l'area della shell entro perimetro per 1 cm.
+#[test]
+fn caso_92_in_metri_e_entro_la_precisione() {
+    let (input, shell) = caso_92(1_072_741_824.0, 4_000_000.0);
     for keep_collapsed in [false, true] {
         let output =
             make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed, CENTIMETRO)

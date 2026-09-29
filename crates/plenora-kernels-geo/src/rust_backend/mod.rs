@@ -49,29 +49,36 @@
 //!     `make_valid` restituiscono `NumericRange`, e `split::face_sample`
 //!     rinuncia al verso e passa a `interior_point`;
 //!   - **precisione dichiarata** ([`precision`]): 1 cm a terra, passata
-//!     esplicitamente ai kernel (`make_valid`, `split`) nelle unita' delle
-//!     coordinate. Prima di ogni overlay di `make_valid` il passo della
-//!     griglia intera di `i_overlay` (`span * 2^-30` per asse, derivato da
-//!     `i_float`, vedi `make_valid::checked_grid`) si confronta con la
-//!     precisione: se la supera, `PrecisionInsufficient`, il solo rifiuto
-//!     legato alla precisione. Sotto la precisione le feature possono
-//!     fondersi o sparire, come dichiarato;
+//!     esplicitamente ai kernel (`make_valid`, `polygonize`, `split`) nelle
+//!     unita' delle coordinate. Prima di ogni overlay di `make_valid` il
+//!     bilancio di spostamento dei vertici (arrotondamento alla griglia
+//!     intera di `i_overlay`, passo `span * 2^-30` per asse derivato da
+//!     `i_float`, piu' l'aggancio ai vertici d'ingresso vicini: meno di due
+//!     diagonali del passo, vedi `make_valid::checked_grid`) si confronta
+//!     con la precisione; nel noding di `polygonize` ogni punto
+//!     d'intersezione arrotondato in `f64` deve stare entro un quinto della
+//!     precisione da entrambi i segmenti che divide (cinque giri al piu').
+//!     Oltre, `PrecisionInsufficient`. Sotto la precisione le feature
+//!     possono fondersi o sparire, come dichiarato;
 //!   - **classificazioni di `make_valid` relative alla precisione**: «segmento
 //!     sul bordo dell'area» e «coordinata rappresentata» in `linework` erano
 //!     decise con `64 * EPSILON * |coordinata|` (circa `1.5e-5` a `2^30`,
 //!     qualunque fosse l'unita': la campagna traslata di `2^30` ha trovato
 //!     130 casi in cui `LINEWORK` perdeva le linee dei buchi); ora un punto e'
 //!     sul segmento se lo e' esattamente o se dista al piu' la precisione.
-//!     «Il buco esce dalla shell» usa la tolleranza d'area perimetro per
-//!     precisione invece di `1e-12 * max(area, 1)`. `normalized_intersects`,
+//!     Un buco che condivide un lato con la shell si unisce sempre all'area,
+//!     invece di decidere «esce dalla shell» con una soglia d'area globale
+//!     (`1e-12 * max(area, 1)` nel laboratorio). `normalized_intersects`,
 //!     che in `STRUCTURE` sceglie fra buco da sottrarre e da promuovere, e'
 //!     deciso sulle coordinate originali con i predicati esatti di `geo`;
-//!   - **controlli a posteriori di `split` relativi alla precisione**: area
-//!     entro perimetro per precisione e copertura del bordo entro la
-//!     precisione (con il lato sorgente piu' vicino, non il primo), al posto
-//!     delle tolleranze `1e-9` che rifiutavano circa 600 split traslati di
-//!     `2^30` risolti esattamente da GEOS. Una parte mancante piu' larga
-//!     della precisione lascia scoperto il bordo: errore.
+//!   - **controlli a posteriori di `split` relativi alla precisione**, al
+//!     posto delle tolleranze `1e-9` che rifiutavano circa 600 split
+//!     traslati di `2^30` risolti esattamente da GEOS: l'area entro la
+//!     precisione per la lunghezza dei soli lati di bordo con un estremo
+//!     calcolato dal noding (piu' l'arrotondamento delle aree); la
+//!     copertura del bordo con la lunghezza scoperta sommata per anello
+//!     sorgente, entro la precisione. Una parte mancante piu' larga della
+//!     precisione lascia scoperto il bordo: errore.
 //!
 //! Decisioni numeriche con tolleranza rimaste, entro la precisione:
 //!
@@ -79,10 +86,13 @@
 //!   (poi `contains` esatto) e il campione `interior_point` di `geo` per
 //!   l'annidamento; lo spareggio per distanza `hypot` fra vicini collineari
 //!   nello stesso verso, possibili solo senza noding (archi sovrapposti);
-//! - `make_valid`: lo snap per asse di `restore_multi_snapped`, che riporta
-//!   i vertici dell'overlay sulle coordinate sorgente entro
-//!   `span * 4 / i32::MAX`, e la griglia stessa dell'overlay: entrambi sotto
-//!   la precisione per il controllo della griglia.
+//! - `make_valid`: l'aggancio di `restore_multi_snapped`, che riporta i
+//!   vertici dell'overlay sul vertice d'ingresso piu' vicino, o sul lato
+//!   assiale d'ingresso che gli passa accanto, entro una diagonale del passo
+//!   della griglia, e la griglia stessa: entrambi nel bilancio del controllo
+//!   della griglia. Fuori dal bilancio restano gli agganci interni di
+//!   `i_overlay` allo split dei segmenti, con raggio che cresce a ogni giro
+//!   (limite dichiarato in README).
 //!
 //! Il laboratorio ha girato su `geo` 0.33.1 **non patchato**; qui `geo`
 //! risolve alla copia vendorizzata con `orient2d` esatto (filtro veloce piu'
@@ -235,9 +245,10 @@ pub enum RustBackendError {
     /// al posto di un segno indovinato.
     #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
     NumericRange,
-    /// La griglia intera di un overlay di `make_valid` e' piu' grossa della
-    /// precisione dichiarata (1 cm a terra con un CRS): il solo rifiuto
-    /// legato alla precisione.
+    /// Lo spostamento che il calcolo introdurrebbe supera la precisione
+    /// dichiarata (1 cm a terra con un CRS): la griglia intera di un overlay
+    /// di `make_valid` con il suo aggancio, o un punto di noding arrotondato
+    /// di `polygonize`. Il solo rifiuto legato alla precisione.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
     /// La precisione passata non e' un numero finito positivo, o un CRS
@@ -295,6 +306,8 @@ impl RustBackendError {
             PolygonizeError::OutputLimit { actual, limit } => Self::OutputLimit { actual, limit },
             PolygonizeError::NodingDidNotConverge { .. } => Self::NodingDidNotConverge,
             PolygonizeError::NumericRange => Self::NumericRange,
+            PolygonizeError::PrecisionInsufficient => Self::PrecisionInsufficient,
+            PolygonizeError::InvalidPrecision => Self::InvalidPrecision,
             // L'adapter chiama sempre con `require_complete = false` e
             // controlla i residui da se', per riportarli per classe.
             PolygonizeError::Incomplete { .. } => {
@@ -607,7 +620,12 @@ impl From<polygonize::PolygonizeResult> for PolygonizeResult {
 /// - `max_output_geometries` e `max_output_coordinates` valgono anche sulle
 ///   facce intermedie, prima dell'assemblaggio dei buchi;
 /// - un noding che non converge e' [`RustBackendError::NodingDidNotConverge`];
-/// - un limite a [`u64::MAX`] e' [`RustBackendError::UnboundedLimits`].
+/// - un limite a [`u64::MAX`] e' [`RustBackendError::UnboundedLimits`];
+/// - `precision` (1 cm a terra, [`Precision::from_crs`]; argomento in piu'
+///   rispetto a 190c493) limita lo spostamento del noding: un punto
+///   d'intersezione arrotondato in `f64` che dista da uno dei segmenti che
+///   divide piu' della sua quota di precisione e'
+///   [`RustBackendError::PrecisionInsufficient`], mai un grafo spostato.
 ///
 /// # Errors
 ///
@@ -616,6 +634,9 @@ impl From<polygonize::PolygonizeResult> for PolygonizeResult {
 /// OGC dell'input; [`RustBackendError::IncompletePolygonize`] se
 /// `require_complete` e' attivo e restano residui; gli altri errori del
 /// kernel tradotti.
+// Gli argomenti sono quelli di 190c493 piu' la precisione dichiarata:
+// raggrupparli cambierebbe la forma del contratto.
+#[allow(clippy::too_many_arguments)]
 pub fn polygonize_linework(
     linework: &Geometry<f64>,
     node_input: bool,
@@ -624,6 +645,7 @@ pub fn polygonize_linework(
     max_noding_work: u64,
     max_output_geometries: u64,
     max_output_coordinates: u64,
+    precision: Precision,
 ) -> Result<PolygonizeResult, RustBackendError> {
     let limits = PolygonizeLimits {
         max_input_coordinates,
@@ -644,6 +666,7 @@ pub fn polygonize_linework(
                     node_input,
                     require_complete: false,
                     limits,
+                    precision: precision.value(),
                 },
             )
         },
@@ -810,11 +833,13 @@ mod tests {
             line_string![(x: 0.0, y: 2.0), (x: 0.0, y: 0.0)],
             line_string![(x: 2.0, y: 2.0), (x: 3.0, y: 2.0)],
         ]));
-        let result = polygonize_linework(&linework, true, false, 100, 1_000, 100, 100).unwrap();
+        let result =
+            polygonize_linework(&linework, true, false, 100, 1_000, 100, 100, precisione())
+                .unwrap();
         assert_eq!(result.polygons.len(), 1);
         assert_eq!(result.residual_count(), 1);
         assert!(matches!(
-            polygonize_linework(&linework, true, true, 100, 1_000, 100, 100),
+            polygonize_linework(&linework, true, true, 100, 1_000, 100, 100, precisione()),
             Err(RustBackendError::IncompletePolygonize {
                 cuts: 0,
                 dangles: 1,
@@ -822,19 +847,19 @@ mod tests {
             })
         ));
         assert!(matches!(
-            polygonize_linework(&linework, true, false, 4, 1_000, 100, 100),
+            polygonize_linework(&linework, true, false, 4, 1_000, 100, 100, precisione()),
             Err(RustBackendError::CoordinateLimit { .. })
         ));
         assert!(matches!(
-            polygonize_linework(&linework, true, false, 100, 1_000, 1, 100),
+            polygonize_linework(&linework, true, false, 100, 1_000, 1, 100, precisione()),
             Err(RustBackendError::OutputLimit { .. })
         ));
         assert!(matches!(
-            polygonize_linework(&linework, true, false, 100, 1, 100, 100),
+            polygonize_linework(&linework, true, false, 100, 1, 100, 100, precisione()),
             Err(RustBackendError::WorkLimit { .. })
         ));
         assert!(matches!(
-            polygonize_linework(&linework, true, false, 100, 1_000, 100, 6),
+            polygonize_linework(&linework, true, false, 100, 1_000, 100, 6, precisione()),
             Err(RustBackendError::OutputLimit { .. })
         ));
     }
@@ -923,7 +948,7 @@ mod tests {
         ];
         for geometry in invalid_types {
             assert!(matches!(
-                polygonize_linework(&geometry, true, false, 100, 1_000, 100, 100),
+                polygonize_linework(&geometry, true, false, 100, 1_000, 100, 100, precisione()),
                 Err(RustBackendError::UnsupportedGeometry { .. })
             ));
         }
@@ -931,7 +956,8 @@ mod tests {
         let empty = Geometry::MultiLineString(geo::MultiLineString(Vec::new()));
         // GEOS accettava `max_noding_work = 0` senza noding; il kernel Rust
         // chiede ogni limite finito, e zero lo e'.
-        let result = polygonize_linework(&empty, false, true, 100, 0, 100, 100).unwrap();
+        let result =
+            polygonize_linework(&empty, false, true, 100, 0, 100, 100, precisione()).unwrap();
         assert!(result.polygons.is_empty());
         assert_eq!(result.residual_count(), 0);
 
@@ -947,7 +973,7 @@ mod tests {
             .into(),
         );
         assert_eq!(
-            polygonize_linework(&square_lines, false, true, 100, 0, 100, 100)
+            polygonize_linework(&square_lines, false, true, 100, 0, 100, 100, precisione())
                 .unwrap()
                 .polygons
                 .len(),
@@ -1075,7 +1101,7 @@ mod tests {
 
         let wrong = Geometry::Point(Point::new(0.0, 0.0));
         assert!(matches!(
-            polygonize_linework(&wrong, true, false, 10, 10, 10, 10),
+            polygonize_linework(&wrong, true, false, 10, 10, 10, 10, precisione()),
             Err(RustBackendError::UnsupportedGeometry { .. })
         ));
         let network = Geometry::GeometryCollection(GeometryCollection::new_from(vec![
@@ -1086,7 +1112,7 @@ mod tests {
             Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 4.0, y: 4.0)]),
         ]));
         assert_eq!(
-            polygonize_linework(&network, true, true, 100, 10_000, 100, 1_000)
+            polygonize_linework(&network, true, true, 100, 10_000, 100, 1_000, precisione())
                 .unwrap()
                 .polygons
                 .len(),
@@ -1131,7 +1157,7 @@ mod tests {
         let square = rect(0.0, 0.0, 2.0, 2.0);
         let lines = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 0.0)]);
         assert!(matches!(
-            polygonize_linework(&lines, true, false, u64::MAX, 10, 10, 10),
+            polygonize_linework(&lines, true, false, u64::MAX, 10, 10, 10, precisione()),
             Err(RustBackendError::UnboundedLimits)
         ));
         assert!(matches!(
@@ -1170,10 +1196,10 @@ mod tests {
             split_polygon_by_linework(&source, &splitter, 100, 10_000, 1, 100, precisione())
                 .unwrap_err()
                 .into(),
-            polygonize_linework(&splitter, true, true, 100, 10_000, 100, 100)
+            polygonize_linework(&splitter, true, true, 100, 10_000, 100, 100, precisione())
                 .unwrap_err()
                 .into(),
-            polygonize_linework(&source, true, true, 100, 10_000, 100, 100)
+            polygonize_linework(&source, true, true, 100, 10_000, 100, 100, precisione())
                 .unwrap_err()
                 .into(),
         ];

@@ -270,8 +270,9 @@ fn vertical_splitters(width: u32, height: u32, parts: u32) -> Geometry<f64> {
 /// Precisione dichiarata della campagna: le coordinate sono astratte, e i
 /// kernel la vogliono esplicita. `2^-20` del lato minore del rettangolo
 /// d'ingombro: molto sotto ogni feature delle costruzioni, anche con le
-/// trasformazioni anisotrope, e sopra la griglia degli overlay (`2^-30` del
-/// lato maggiore) finche' l'anisotropia resta sotto `2^10`.
+/// trasformazioni anisotrope, e sopra il bilancio degli overlay (due
+/// diagonali del passo `2^-30`, al piu' `2^-28` del lato maggiore) finche'
+/// l'anisotropia resta sotto `2^8`.
 fn precisione(geometry: &Geometry<f64>) -> f64 {
     use geo::BoundingRect;
     geometry.bounding_rect().map_or(1.0, |rect| {
@@ -280,7 +281,7 @@ fn precisione(geometry: &Geometry<f64>) -> f64 {
             rect.width().max(rect.height()),
         );
         (minore * 2_f64.powi(-20))
-            .max(maggiore * 2_f64.powi(-29))
+            .max(maggiore * 2_f64.powi(-28))
             .max(f64::MIN_POSITIVE)
     })
 }
@@ -295,6 +296,7 @@ fn polygonize(geometry: &Geometry<f64>) -> AssuranceResult<PolygonizeResult> {
             node_input: true,
             require_complete: false,
             limits: PolygonizeLimits::unlimited(),
+            precision: precisione(geometry),
         },
     )
     .map_err(|error| AssuranceError(format!("polygonize: {error}")))
@@ -817,6 +819,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         PolygonizeOptions {
             node_input: true,
             require_complete: false,
+            precision: PRECISIONE,
             limits: PolygonizeLimits {
                 max_input_coordinates: 1,
                 ..PolygonizeLimits::unlimited()
@@ -835,6 +838,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         PolygonizeOptions {
             node_input: true,
             require_complete: false,
+            precision: PRECISIONE,
             limits: PolygonizeLimits {
                 max_noding_work: 10,
                 ..PolygonizeLimits::unlimited()
@@ -860,6 +864,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             PolygonizeOptions {
                 node_input: true,
                 require_complete: false,
+                precision: PRECISIONE,
                 limits,
             },
         );
@@ -874,6 +879,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         PolygonizeOptions {
             node_input: true,
             require_complete: false,
+            precision: PRECISIONE,
             limits: PolygonizeLimits {
                 max_input_coordinates: 36,
                 ..PolygonizeLimits::unlimited()
@@ -892,6 +898,7 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         PolygonizeOptions {
             node_input: true,
             require_complete: false,
+            precision: PRECISIONE,
             limits: PolygonizeLimits {
                 max_input_coordinates: 36,
                 max_noding_work: 1_000_000,

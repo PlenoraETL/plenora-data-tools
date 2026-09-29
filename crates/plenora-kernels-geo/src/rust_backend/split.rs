@@ -18,7 +18,7 @@
     clippy::similar_names
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::polygonize::{
     polygonize_linework_rust, PolygonizeError, PolygonizeLimits, PolygonizeOptions,
@@ -346,75 +346,160 @@ fn source_contains_point(source: &Geometry<f64>, point: Point<f64>) -> bool {
     }
 }
 
-/// Copertura del bordo della sorgente, entro la precisione dichiarata `p`
-/// (unita' delle coordinate): un estremo delle parti sta su un lato della
-/// sorgente se dista al piu' `p`, e la lunghezza coperta di ogni lato puo'
-/// scostarsi di `p` per estremo. Una parte mancante piu' larga di `p` lascia
-/// scoperto un tratto di bordo o un taglio senza gemello: errore.
-fn checked_boundary_coverage(
-    source: &Geometry<f64>,
-    output: &[Polygon<f64>],
-    precision: f64,
-) -> Result<(), SplitError> {
-    let tolerance = precision;
-    let mut source_rings = Vec::new();
-    collect_boundaries(source, &mut source_rings)?;
-    let source_segments = source_rings
-        .iter()
-        .flat_map(LineString::lines)
-        .collect::<Vec<_>>();
-    let mut output_segments = BTreeMap::<SegmentKey, (Coord<f64>, Coord<f64>, u64)>::new();
+/// Lato delle parti (chiave canonica) -> estremi e numero di parti che lo
+/// usano.
+type OutputSegments = BTreeMap<SegmentKey, (Coord<f64>, Coord<f64>, u64)>;
+
+/// I lati delle parti con il numero di parti che li usano: un lato interno
+/// (taglio) compare due volte, un lato di bordo una.
+fn output_segment_counts(output: &[Polygon<f64>]) -> Result<OutputSegments, SplitError> {
+    let mut segments = OutputSegments::new();
     for polygon in output {
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
             for segment in ring.lines() {
                 let Some(key) = SegmentKey::new(segment.start, segment.end) else {
                     continue;
                 };
-                let entry = output_segments
+                let entry = segments
                     .entry(key)
                     .or_insert((segment.start, segment.end, 0));
                 entry.2 = entry.2.checked_add(1).ok_or(SplitError::IndexOverflow)?;
             }
         }
     }
-    let mut covered_lengths = vec![0.0_f64; source_segments.len()];
-    let mut covering_pieces = vec![0.0_f64; source_segments.len()];
-    for (_, (start, end, count)) in output_segments {
-        if count == 2 {
-            continue;
-        }
-        if count != 1 {
-            return Err(SplitError::CoverageMismatch);
-        }
-        // Il lato sorgente piu' vicino fra quelli entro la precisione (il
-        // laboratorio prendeva il primo entro una tolleranza stretta: con
-        // una tolleranza assoluta due lati possono esserlo entrambi).
-        let mut best: Option<(usize, f64)> = None;
-        for (index, source_segment) in source_segments.iter().enumerate() {
-            let distance = segment_distance(start, source_segment.start, source_segment.end).max(
-                segment_distance(end, source_segment.start, source_segment.end),
-            );
-            if distance <= tolerance && best.is_none_or(|(_, previous)| distance < previous) {
-                best = Some((index, distance));
+    Ok(segments)
+}
+
+/// Il parametro della proiezione di `point` sul segmento, in `[0, 1]`.
+fn projection_parameter(point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> f64 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let length_squared = dx * dx + dy * dy;
+    if length_squared > 0.0 {
+        (((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// La lunghezza, come frazione di `[0, 1]`, dell'unione degli intervalli.
+fn union_fraction(intervals: &mut [(f64, f64)]) -> f64 {
+    intervals.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.total_cmp(&right.1)));
+    let mut covered = 0.0;
+    let mut current: Option<(f64, f64)> = None;
+    for &(start, end) in intervals.iter() {
+        current = match current {
+            Some((open, close)) if start <= close => Some((open, close.max(end))),
+            Some((open, close)) => {
+                covered += close - open;
+                Some((start, end))
+            }
+            None => Some((start, end)),
+        };
+    }
+    if let Some((open, close)) = current {
+        covered += close - open;
+    }
+    covered
+}
+
+/// Copertura del bordo della sorgente, entro la precisione dichiarata `p`
+/// (unita' delle coordinate).
+///
+/// Ogni lato delle parti usato una volta sola deve stare entro `p` da un
+/// lato della sorgente (entrambi gli estremi, quindi tutto il lato), e copre
+/// di quel lato la sua proiezione; conta per **ogni** lato sorgente entro
+/// `p`, cosi' un pezzo vicino a un vertice copre entrambi i lati. Per ogni
+/// anello della sorgente la lunghezza **scoperta**, sommata su tutti i suoi
+/// lati, deve restare entro `p`: le parti sono fatte dei pezzi nodati dei
+/// lati, che condividono i vertici, e un bordo coperto non ha buchi.
+///
+/// Il laboratorio confrontava lato per lato la somma delle lunghezze dei
+/// pezzi con la lunghezza del lato, entro una tolleranza per pezzo: un buco
+/// di 1 m^2 a lati di 1 cm, omesso dall'output, lasciava scoperto ogni lato
+/// per meno della tolleranza e passava. La somma per anello non si divide.
+fn checked_boundary_coverage(
+    source: &Geometry<f64>,
+    boundary_segments: &[(Coord<f64>, Coord<f64>)],
+    precision: f64,
+) -> Result<(), SplitError> {
+    let mut source_rings = Vec::new();
+    collect_boundaries(source, &mut source_rings)?;
+    let mut rings = Vec::new();
+    for ring in &source_rings {
+        let segments = ring.lines().collect::<Vec<_>>();
+        let intervals = vec![Vec::<(f64, f64)>::new(); segments.len()];
+        rings.push((segments, intervals));
+    }
+    for &(start, end) in boundary_segments {
+        let mut matched = false;
+        for (segments, intervals) in &mut rings {
+            for (segment, covered) in segments.iter().zip(intervals.iter_mut()) {
+                let distance = segment_distance(start, segment.start, segment.end)
+                    .max(segment_distance(end, segment.start, segment.end));
+                if distance <= precision {
+                    matched = true;
+                    let first = projection_parameter(start, segment.start, segment.end);
+                    let second = projection_parameter(end, segment.start, segment.end);
+                    covered
+                        .try_reserve(1)
+                        .map_err(|_| SplitError::AllocationFailed("copertura del bordo"))?;
+                    covered.push((first.min(second), first.max(second)));
+                }
             }
         }
-        let Some((index, _)) = best else {
+        if !matched {
             return Err(SplitError::CoverageMismatch);
-        };
-        covered_lengths[index] += (end.x - start.x).hypot(end.y - start.y);
-        covering_pieces[index] += 1.0;
+        }
     }
-    for ((segment, covered), pieces) in source_segments
-        .iter()
-        .zip(covered_lengths)
-        .zip(covering_pieces)
-    {
-        let expected = (segment.end.x - segment.start.x).hypot(segment.end.y - segment.start.y);
-        if (covered - expected).abs() > 2.0 * tolerance * (pieces + 1.0) {
+    for (segments, mut intervals) in rings {
+        let mut uncovered = 0.0;
+        for (segment, covered) in segments.iter().zip(intervals.iter_mut()) {
+            let length = (segment.end.x - segment.start.x).hypot(segment.end.y - segment.start.y);
+            uncovered += length * (1.0 - union_fraction(covered)).max(0.0);
+        }
+        // Anche un valore non confrontabile (NaN) e' un errore.
+        if !matches!(
+            uncovered.partial_cmp(&precision),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        ) {
             return Err(SplitError::CoverageMismatch);
         }
     }
     Ok(())
+}
+
+/// Maggiorazione dell'errore d'arrotondamento dell'area di un anello
+/// (formula di Gauss sulle differenze dal primo vertice, come in `geo`):
+/// `8 * n * EPSILON` per il quadrato dell'estensione.
+fn ring_area_rounding(ring: &LineString<f64>) -> f64 {
+    let mut minimum_x = f64::INFINITY;
+    let mut maximum_x = f64::NEG_INFINITY;
+    let mut minimum_y = f64::INFINITY;
+    let mut maximum_y = f64::NEG_INFINITY;
+    for coordinate in &ring.0 {
+        minimum_x = minimum_x.min(coordinate.x);
+        maximum_x = maximum_x.max(coordinate.x);
+        minimum_y = minimum_y.min(coordinate.y);
+        maximum_y = maximum_y.max(coordinate.y);
+    }
+    if ring.0.is_empty() {
+        return 0.0;
+    }
+    let extent = (maximum_x - minimum_x) + (maximum_y - minimum_y);
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "maggiorazione: il numero di vertici entra come ordine di grandezza"
+    )]
+    let vertices = ring.0.len() as f64;
+    8.0 * vertices * f64::EPSILON * extent * extent
+}
+
+fn polygons_area_rounding<'a>(polygons: impl Iterator<Item = &'a Polygon<f64>>) -> f64 {
+    polygons
+        .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
+        .map(ring_area_rounding)
+        .sum()
 }
 
 fn checked_output(
@@ -422,6 +507,7 @@ fn checked_output(
     output: &[Polygon<f64>],
     limits: SplitLimits,
     precision: f64,
+    input_vertices: &BTreeSet<CoordKey>,
 ) -> Result<(), SplitError> {
     let parts = u64::try_from(output.len()).map_err(|_| SplitError::IndexOverflow)?;
     if parts > limits.max_output_parts {
@@ -440,21 +526,48 @@ fn checked_output(
             limit: limits.max_output_coordinates,
         });
     }
+    let mut boundary_segments = Vec::new();
+    for (start, end, count) in output_segment_counts(output)?.into_values() {
+        match count {
+            1 => {
+                boundary_segments
+                    .try_reserve(1)
+                    .map_err(|_| SplitError::AllocationFailed("lati di bordo delle parti"))?;
+                boundary_segments.push((start, end));
+            }
+            2 => {}
+            _ => return Err(SplitError::CoverageMismatch),
+        }
+    }
+    // Area entro la precisione dichiarata `p` (README, «Limiti dichiarati»),
+    // con un margine **locale**: i tagli interni si compensano, e i vertici
+    // d'ingresso restano esatti, quindi l'area puo' cambiare solo dove un
+    // lato di bordo ha un estremo calcolato dal noding (spostato al piu' di
+    // `p`): al piu' `p` per la lunghezza di quei lati, piu' l'arrotondamento
+    // delle aree. Il laboratorio usava `1e-9 * max(area, 1)`, poi il
+    // perimetro di tutte le parti per `p`: un buco di 1 m^2 omesso stava
+    // sotto `p` per 400 m di perimetro.
     let input_area = source.unsigned_area();
     let output_area = output.iter().map(Area::unsigned_area).sum::<f64>();
-    // Precisione dichiarata `p` (README, «Limiti dichiarati»): ogni lato
-    // delle parti puo' spostarsi di `p`, e l'area di al piu' il perimetro per
-    // `p`. Il laboratorio usava `1e-9 * max(area, 1)`, assoluta sotto l'area
-    // 1 e indipendente dall'unita': a `2^30` rifiutava circa 600 split che
-    // GEOS risolve esattamente.
-    let perimeter = output
+    let displaced_length = boundary_segments
         .iter()
-        .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
-        .flat_map(LineString::lines)
-        .map(|segment| (segment.end.x - segment.start.x).hypot(segment.end.y - segment.start.y))
+        .filter(|(start, end)| {
+            !input_vertices.contains(&CoordKey::new(*start))
+                || !input_vertices.contains(&CoordKey::new(*end))
+        })
+        .map(|(start, end)| (end.x - start.x).hypot(end.y - start.y))
         .sum::<f64>();
-    let allowed_error = precision * perimeter;
-    if (output_area - input_area).abs() > allowed_error {
+    let source_rounding = match source {
+        Geometry::Polygon(polygon) => polygons_area_rounding(std::iter::once(polygon)),
+        Geometry::MultiPolygon(polygons) => polygons_area_rounding(polygons.0.iter()),
+        _ => 0.0,
+    };
+    let allowed_error =
+        precision * displaced_length + source_rounding + polygons_area_rounding(output.iter());
+    if !matches!(
+        (output_area - input_area).abs().partial_cmp(&allowed_error),
+        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+    ) {
         return Err(SplitError::AreaMismatch);
     }
     let Some(_) = output.first() else {
@@ -464,7 +577,7 @@ fn checked_output(
             Err(SplitError::CoverageMismatch)
         };
     };
-    checked_boundary_coverage(source, output, precision)
+    checked_boundary_coverage(source, &boundary_segments, precision)
 }
 
 /// Divide Polygon/MultiPolygon mediante linework usando soltanto Rust.
@@ -499,6 +612,11 @@ pub fn split_polygon_by_linework_rust(
     let mut linework = Vec::new();
     collect_boundaries(source, &mut linework)?;
     collect_splitter(splitter, &mut linework)?;
+    let input_vertices = linework
+        .iter()
+        .flat_map(|line| line.0.iter().copied())
+        .map(CoordKey::new)
+        .collect::<BTreeSet<_>>();
     let faces = polygonize_linework_rust(
         &Geometry::MultiLineString(MultiLineString::new(linework)),
         PolygonizeOptions {
@@ -510,6 +628,7 @@ pub fn split_polygon_by_linework_rust(
                 max_output_geometries: limits.max_output_parts,
                 max_output_coordinates: limits.max_output_coordinates,
             },
+            precision,
         },
     )?;
     let mut output = Vec::new();
@@ -548,7 +667,7 @@ pub fn split_polygon_by_linework_rust(
             output_coordinates = next_coordinates;
         }
     }
-    checked_output(source, &output, limits, precision)?;
+    checked_output(source, &output, limits, precision, &input_vertices)?;
     Ok(output)
 }
 
@@ -579,6 +698,68 @@ mod tests {
     /// un miliardesimo come le tolleranze originali.
     const PRECISION: f64 = 1e-9;
     use geo::{line_string, polygon};
+
+    /// I vertici d'ingresso di una sorgente senza splitter.
+    fn source_vertices(source: &Geometry<f64>) -> BTreeSet<CoordKey> {
+        source.coords_iter().map(CoordKey::new).collect()
+    }
+
+    /// Anello quadrato di lato `side` con angolo in `(min_x, min_y)`, ogni
+    /// lato diviso in `pieces` segmenti.
+    fn subdivided_square(min_x: f64, min_y: f64, side: f64, pieces: u32) -> LineString<f64> {
+        let corners = [
+            (min_x, min_y),
+            (min_x + side, min_y),
+            (min_x + side, min_y + side),
+            (min_x, min_y + side),
+        ];
+        let mut points = Vec::new();
+        for (index, &(start_x, start_y)) in corners.iter().enumerate() {
+            let (end_x, end_y) = corners[(index + 1) % corners.len()];
+            for step in 0..pieces {
+                let t = f64::from(step) / f64::from(pieces);
+                points.push(Coord {
+                    x: start_x + (end_x - start_x) * t,
+                    y: start_y + (end_y - start_y) * t,
+                });
+            }
+        }
+        points.push(points[0]);
+        LineString::new(points)
+    }
+
+    /// Controesempio della revisione: un buco di 1 m^2 con lati da 1 cm,
+    /// omesso dall'output. Ogni lato scoperto stava sotto la tolleranza per
+    /// pezzo, e 1 m^2 sotto il perimetro (400 m) per 1 cm: passava. Ora la
+    /// copertura si somma sull'anello e l'area ha un margine locale.
+    #[test]
+    fn an_omitted_hole_with_centimetre_edges_is_rejected() {
+        let shell = subdivided_square(0.0, 0.0, 100.0, 1);
+        let hole = subdivided_square(50.0, 50.0, 1.0, 100);
+        let source = Geometry::Polygon(Polygon::new(shell.clone(), vec![hole]));
+        let without_hole = vec![Polygon::new(shell, vec![])];
+        let result = checked_output(
+            &source,
+            &without_hole,
+            SplitLimits::unlimited(),
+            0.01,
+            &source_vertices(&source),
+        );
+        assert!(matches!(
+            result,
+            Err(SplitError::AreaMismatch | SplitError::CoverageMismatch)
+        ));
+        // Solo copertura: l'anello del buco resta scoperto per 4 m.
+        let boundary = without_hole[0]
+            .exterior()
+            .lines()
+            .map(|line| (line.start, line.end))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            checked_boundary_coverage(&source, &boundary, 0.01),
+            Err(SplitError::CoverageMismatch)
+        ));
+    }
 
     /// Il punto sta a sinistra del lato `s -> e` (segno esatto), ma
     /// l'ascissa d'incrocio in `f64` del laboratorio lo metteva a destra:
@@ -652,7 +833,13 @@ mod tests {
             (x: 5.0, y: 10.0), (x: 0.0, y: 10.0),
             (x: 0.0, y: 0.0)
         ];
-        let result = checked_output(&source, &[left], SplitLimits::unlimited(), 0.01);
+        let result = checked_output(
+            &source,
+            &[left],
+            SplitLimits::unlimited(),
+            0.01,
+            &source_vertices(&source),
+        );
         assert!(matches!(
             result,
             Err(SplitError::AreaMismatch | SplitError::CoverageMismatch)
