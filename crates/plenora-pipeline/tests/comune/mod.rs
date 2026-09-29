@@ -140,7 +140,15 @@ pub static CASI: &[Caso] = &[
     caso!("table.distinct", Wide, r#"{"subset":["id"]}"#),
     caso!("table.drop_columns", Wide, r#"{"columns":["geom"]}"#),
     caso!("table.except", Set, "{}"),
-    caso!("table.explode", Nested, r#"{"column":"lst"}"#),
+    // Con `output_column` nuovo: la sostituzione in place di una colonna
+    // List non nullabile fallisce nel kernel (`select_rows_except` mette un
+    // segnaposto nullo sotto lo schema d'ingresso), errore esplicito ma
+    // operazione inutilizzabile; segnalato, fuori dal perimetro del runner.
+    caso!(
+        "table.explode",
+        Nested,
+        r#"{"column":"lst","output_column":"elem"}"#
+    ),
     caso!(
         "table.expression",
         Wide,

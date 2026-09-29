@@ -36,8 +36,6 @@ pub const METADATI_PANDAS: &str = "pandas";
 
 /// Un passo che ha superato la validazione.
 #[derive(Debug)]
-// F1: i campi si leggono solo dall'esecuzione, che arriva in F2.
-#[allow(dead_code)]
 pub struct PassoValidato {
     pub out: String,
     pub descrittore: &'static OperationDescriptor,
@@ -47,8 +45,6 @@ pub struct PassoValidato {
 
 /// Piano validato contro gli schemi degli input: pronto per l'esecuzione.
 #[derive(Debug)]
-// F1: i campi si leggono solo dall'esecuzione, che arriva in F2.
-#[allow(dead_code)]
 pub struct PipelineValidata {
     pub(crate) inputs: Vec<String>,
     /// Schemi degli input dopo la normalizzazione (`LargeUtf8` → `Utf8`,
@@ -83,8 +79,26 @@ impl PipelineValidata {
     }
 }
 
-fn nel_passo(out: &str, errore: PlenoraError) -> PlenoraError {
-    errore.con_contesto(&format!("passo `{out}`"))
+/// Aggiunge il nome del passo all'errore, senza cambiarne la categoria.
+///
+/// `con_contesto` antepone il contesto solo a piano, supporto, schema e CRS;
+/// qui lo riceve anche un errore di risorsa, interno o di conversione, che
+/// altrimenti non direbbe a quale passo appartiene. I nomi dei passi sono
+/// del piano, non dei dati.
+pub fn nel_passo(out: &str, errore: PlenoraError) -> PlenoraError {
+    let contesto = format!("passo `{out}`");
+    match errore {
+        PlenoraError::ResourceLimit(messaggio) => {
+            PlenoraError::ResourceLimit(format!("{contesto}: {messaggio}"))
+        }
+        PlenoraError::Internal(messaggio) => {
+            PlenoraError::Internal(format!("{contesto}: {messaggio}"))
+        }
+        PlenoraError::DataMapping(messaggio) => {
+            PlenoraError::DataMapping(format!("{contesto}: {messaggio}"))
+        }
+        altro => altro.con_contesto(&contesto),
+    }
 }
 
 /// Normalizzazione degli schemi di input, la stessa che `run` applica ai

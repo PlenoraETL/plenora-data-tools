@@ -7,10 +7,11 @@
 //! `plenora-memory-lab/operations/table_catalog/src/dispatch.rs`. Il dispatch
 //! e' per id canonico del catalogo: nessun alias, nessun nome legacy.
 
+use plenora_core::arrow::array::RecordBatch;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::{
     aggregation, analysis, cleansing, columns, dates, expressions, filtering, formula, fuzzy,
-    governance, joins, quality, reshape, security, setops, strings, utility,
+    governance, joins, quality, reshape, security, setops, spill, strings, utility, Limits,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -20,8 +21,6 @@ use serde_json::Value;
 /// Le varianti sono `Box`ate perche' le config hanno dimensioni molto
 /// diverse.
 #[derive(Debug)]
-// F1: le config preparate si leggono solo dall'esecuzione, che arriva in F2.
-#[allow(dead_code)]
 pub enum PassoPreparato {
     DropColumns(Box<columns::DropColumns>),
     Rename(Box<columns::Rename>),
@@ -190,5 +189,184 @@ impl PassoPreparato {
                 )))
             }
         })
+    }
+}
+
+/// Percorso dei kernel che hanno una variante spilled (`sort`, `distinct`,
+/// `aggregate`, set operation).
+///
+/// Il runner esegue oggi solo [`Instradamento::InMemoria`]; il percorso con
+/// spill sopra il budget è il routing di `sort_dispatch`,
+/// `distinct_dispatch`, `aggregate_dispatch` ed `execute_binary` a
+/// `190c493`, pronto per quando il budget sarà applicato (F3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Instradamento {
+    /// Sempre il kernel in memoria.
+    InMemoria,
+    /// Spill su disco quando la stima dei byte dell'input supera
+    /// `max_governed_memory_bytes`, come a `190c493`.
+    // Selezionato solo dai test finché il budget non si applica (F3).
+    #[cfg_attr(not(test), allow(dead_code))]
+    SpillSopraBudget,
+}
+
+impl PassoPreparato {
+    /// Nome dell'operazione di set per `spill::execute_set_operation`.
+    const fn nome_set_operation(&self) -> Option<&'static str> {
+        match self {
+            Self::UnionDistinct(_) => Some("union_distinct"),
+            Self::Intersect(_) => Some("intersect"),
+            Self::Except(_) => Some("except"),
+            _ => None,
+        }
+    }
+
+    /// Esegue un passo unario con la config già tipizzata.
+    ///
+    /// # Errors
+    ///
+    /// Gli errori del kernel; `Internal` se il passo non è unario (la
+    /// validazione lo esclude).
+    #[allow(clippy::too_many_lines)] // Un braccio per operazione, in un solo match verificabile.
+    pub fn esegui_unario(
+        &self,
+        batch: &RecordBatch,
+        limits: &Limits,
+        instradamento: Instradamento,
+    ) -> Result<RecordBatch> {
+        let spill = instradamento == Instradamento::SpillSopraBudget
+            && spill::should_spill_unary(batch, limits);
+        match self {
+            Self::DropColumns(config) => columns::drop_columns(batch, config),
+            Self::Rename(config) => columns::rename(batch, config),
+            Self::ReorderColumns(config) => columns::reorder_columns(batch, config),
+            Self::SelectColumns(config) => columns::select_columns(batch, config),
+            Self::AlignSchema(config) => columns::align_schema(batch, config),
+            Self::ConcatColumns(config) => columns::concat_columns(batch, config, limits),
+            Self::SplitColumn(config) => columns::split_column(batch, config, limits),
+            Self::StringPad(config) => strings::string_pad(batch, config, limits),
+            Self::StringLength(config) => strings::string_length(batch, config),
+            Self::TextNormalize(config) => strings::text_normalize(batch, config, limits),
+            Self::FillNa(config) => cleansing::fill_na(batch, config),
+            Self::Replace(config) => cleansing::replace(batch, config),
+            Self::TypeCast(config) => cleansing::type_cast(batch, config),
+            Self::Filter(config) => filtering::filter(batch, config),
+            Self::Conditional(config) => filtering::conditional(batch, config),
+            Self::StringExtract(config) => strings::string_extract(batch, config, limits),
+            Self::DateExtract(config) => utility::date_extract(batch, config),
+            Self::UuidGenerator(config) => utility::uuid_generator(batch, config),
+            Self::Limit(config) => utility::limit(batch, config),
+            Self::Lookup(config) => analysis::lookup(batch, config),
+            Self::FlattenJson(config) => analysis::flatten_json(batch, config, limits),
+            Self::MaskData(config) => security::mask_data(batch, config),
+            Self::Md5Hash(config) => security::md5_hash(batch, config),
+            Self::AddRowNumber(config) => utility::add_row_number(batch, config),
+            Self::Bin(config) => analysis::bin(batch, config),
+            Self::Sample(config) => analysis::sample(batch, config),
+            Self::Statistics(config) => analysis::statistics(batch, config),
+            Self::Sort(config) if spill => {
+                let mut area = spill::RowSpillWorkspace::new(limits.max_temp_bytes)?;
+                spill::sort_spilled_in(batch, config, limits, &mut area).map(|(uscita, _)| uscita)
+            }
+            Self::Sort(config) => aggregation::sort(batch, config),
+            Self::TopN(config) => aggregation::top_n(batch, config),
+            Self::Distinct(config) if spill => {
+                let mut area = spill::RowSpillWorkspace::new(limits.max_temp_bytes)?;
+                spill::distinct_spilled_in(batch, config, limits, &mut area)
+                    .map(|(uscita, _)| uscita)
+            }
+            Self::Distinct(config) => aggregation::distinct(batch, config),
+            Self::DedupAdvanced(config) => aggregation::dedup_advanced(batch, config),
+            Self::Aggregate(config) if spill => {
+                let mut area = spill::RowSpillWorkspace::new(limits.max_temp_bytes)?;
+                spill::aggregate_spilled_in(batch, config, limits, &mut area)
+                    .map(|(uscita, _)| uscita)
+            }
+            Self::Aggregate(config) => aggregation::aggregate(batch, config),
+            Self::WindowFunction(config) => aggregation::window_function(batch, config),
+            Self::RollingWindow(config) => aggregation::rolling_window(batch, config),
+            Self::Melt(config) => reshape::melt(batch, config, limits),
+            Self::Pivot(config) => reshape::pivot(batch, config, limits),
+            Self::Transpose(config) => reshape::transpose(batch, config, limits),
+            Self::Formula(config) => formula::formula(batch, config),
+            Self::Expression(config) => expressions::expression(batch, config),
+            Self::AssertCardinality(config) => governance::assert_cardinality(batch, config),
+            Self::AssertMetadata(config) => governance::assert_metadata(batch, config),
+            Self::AssertSchema(config) => quality::assert_schema(batch, config),
+            Self::AssertNotNull(config) => quality::assert_not_null(batch, config),
+            Self::AssertUnique(config) => quality::assert_unique(batch, config),
+            Self::AssertRange(config) => quality::assert_range(batch, config),
+            Self::AssertRegex(config) => quality::assert_regex(batch, config),
+            Self::Coalesce(config) => quality::coalesce(batch, config),
+            Self::DateFormat(config) => dates::date_format(batch, config),
+            Self::DateAdd(config) => dates::date_add(batch, config),
+            Self::DateDiff(config) => dates::date_diff(batch, config),
+            Self::TimezoneConvert(config) => dates::timezone_convert(batch, config),
+            Self::Sha256Hash(config) => security::sha256_hash(batch, config),
+            Self::StableFingerprint(config) => security::stable_fingerprint(batch, config),
+            Self::HmacSha256(config) => security::hmac_sha256(batch, config),
+            Self::ValidateRules(config) => governance::validate_rules(batch, config),
+            Self::Explode(config) => reshape::explode(batch, config, limits),
+            Self::Unnest(config) => reshape::unnest(batch, config, limits),
+            Self::Join(_)
+            | Self::Concat(_)
+            | Self::ConcatByName(_)
+            | Self::CrossJoin(_)
+            | Self::TableDiff(_)
+            | Self::SemiJoin(_)
+            | Self::AntiJoin(_)
+            | Self::AsOfJoin(_)
+            | Self::FuzzyJoin(_)
+            | Self::UnionDistinct(_)
+            | Self::Intersect(_)
+            | Self::Except(_)
+            | Self::AssertForeignKey(_)
+            | Self::Reconcile(_) => Err(PlenoraError::Internal(
+                "passo binario sul percorso unario".to_owned(),
+            )),
+        }
+    }
+
+    /// Esegue un passo a due input (left, right) con la config già tipizzata.
+    ///
+    /// # Errors
+    ///
+    /// Gli errori del kernel; `Internal` se il passo non è binario (la
+    /// validazione lo esclude).
+    pub fn esegui_binario(
+        &self,
+        left: &RecordBatch,
+        right: &RecordBatch,
+        limits: &Limits,
+        instradamento: Instradamento,
+    ) -> Result<RecordBatch> {
+        if let Some(nome) = self.nome_set_operation() {
+            if instradamento == Instradamento::SpillSopraBudget
+                && spill::should_spill(left, right, limits)
+            {
+                return spill::execute_set_operation(nome, left, right, limits);
+            }
+        }
+        match self {
+            Self::Join(config) => joins::join(left, right, config, limits),
+            Self::Concat(config) => joins::concat(left, right, config, limits),
+            Self::ConcatByName(config) => joins::concat_by_name(&[left, right], config, limits),
+            Self::CrossJoin(config) => joins::cross_join(left, right, config, limits),
+            Self::TableDiff(config) => reshape::table_diff(left, right, config, limits),
+            Self::SemiJoin(config) => joins::semi_join(left, right, config),
+            Self::AntiJoin(config) => joins::anti_join(left, right, config),
+            Self::AsOfJoin(config) => joins::asof_join(left, right, config, limits),
+            Self::FuzzyJoin(config) => fuzzy::fuzzy_join(left, right, config, limits),
+            Self::UnionDistinct(config) => setops::union_distinct(left, right, config, limits),
+            Self::Intersect(config) => setops::intersect(left, right, config),
+            Self::Except(config) => setops::except(left, right, config),
+            Self::AssertForeignKey(config) => {
+                governance::assert_foreign_key(left, right, config, limits)
+            }
+            Self::Reconcile(config) => governance::reconcile(left, right, config, limits),
+            _ => Err(PlenoraError::Internal(
+                "passo unario sul percorso binario".to_owned(),
+            )),
+        }
     }
 }

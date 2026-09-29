@@ -14,12 +14,13 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-core` | re-export Arrow, `PlenoraError`, limiti, catalogo delle operazioni, contratti dati, contratto CRS fail-closed, politica dei panici |
 | `plenora-kernels-table` | kernel tabellari (filtri, ordinamenti, aggregazioni, join, espressioni, date, stringhe, qualità, spill) |
 | `plenora-kernels-geo` | kernel geografici su `geo::Geometry` e adapter GeoArrow-WKB; `rust_backend` per `geo.polygonize` e `geo.split` senza GEOS |
+| `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione ([«Runner»](#runner)) |
 | `vendor/` | `geo`, `wkt`, `i_shape` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
 
-- **Runner di pipeline**: nessun motore che concateni le trasformazioni; si
-  chiamano i kernel direttamente.
+- **Operazioni geo nel runner**: [«Runner»](#runner) esegue solo le
+  operazioni tabellari; le geo si chiamano ancora dai kernel.
 - **`geo.reproject`**: richiedeva PROJ, è fuori dal catalogo.
 - **`geo.make_valid`**: fuori dal catalogo, dall'analisi e dall'adapter
   Arrow (l'analisi la rifiuta come operazione sconosciuta, `Unsupported`).
@@ -382,6 +383,113 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   simmetrica di GEOS.
 - **Fuori perimetro come per le altre operazioni**: diagnostica per riga,
   envelope e fusione dei segmenti vivevano nell'engine, che non è portato.
+
+## Runner
+
+`plenora-pipeline` concatena le operazioni **tabellari** del catalogo su
+tabelle intere in memoria: un `RecordBatch` per nome, niente streaming.
+
+```rust
+let pipeline = Pipeline::from_json(testo)?;              // o costruita in Rust
+let validata = pipeline.validate(&[("ordini", schema)])?; // senza dati
+let esito = validata.run(vec![("ordini".into(), tabella)])?;
+// esito.outputs: Vec<(String, RecordBatch)>; esito.report: un ReportPasso per passo
+```
+
+### Il piano
+
+Una sola struttura serde, API Rust e JSON insieme; campi sconosciuti e
+chiavi ripetute sono rifiutati.
+
+```json
+{
+  "version": 1,
+  "inputs": ["ordini", "clienti"],
+  "limits": {"max_rows_per_edge": 1000000},
+  "steps": [
+    {"out": "validi", "op": "table.filter", "in": ["ordini"],
+     "config": {"column": "importo", "operator": ">", "value": 0}},
+    {"out": "uniti", "op": "table.join", "in": ["validi", "clienti"],
+     "config": {"left_keys": ["cliente"], "right_keys": ["id"], "how": "inner"}},
+    {"out": "totali", "op": "table.aggregate", "in": ["uniti"],
+     "config": {"group_by": ["regione"],
+                "aggregations": [{"column": "importo", "function": "sum"}]}}
+  ],
+  "outputs": ["totali"]
+}
+```
+
+- `version`: solo `1`.
+- `inputs`, `steps[].out`: nomi in forma SSA, ognuno definito una volta;
+  un passo usa solo nomi definiti prima (`in`, nell'ordine dell'operazione:
+  left, right); `outputs` nomina tabelle definite, senza ripetizioni.
+- `op`: id canonico del catalogo; gli alias legacy si rifiutano.
+- `config`: la config del kernel; assente vale `{}`.
+- `crs` (facoltativo): CRS di piano per i produttori geo, risolto in
+  validazione.
+- `limits` (facoltativo): sostituisce uno per uno i default di
+  `Limits::default()` (`max_input_rows`, `max_output_rows`,
+  `max_rows_per_edge`, `max_expansion_factor`, `max_governed_memory_bytes`,
+  `max_temp_bytes`, `spill_partitions`, `max_string_bytes`,
+  `max_regex_bytes`), poi `Limits::validate`. Gli altri limiti non sono
+  dichiarabili, perché il runner non li applica.
+
+### Validazione
+
+Prima di qualunque esecuzione, contro gli schemi degli input: nomi SSA;
+operazione, arietà e dispatch (`table.concat` a più di due input, le
+operazioni geo e quelle senza dispatch sono `Unsupported`); config
+tipizzate una volta; controlli statici delle config contro i limiti;
+contratti di output passo per passo con `analyze_table_contract`, un solo
+`FieldAllocator`, provenance delle diagnostiche per riga. `table.pivot` e
+`table.transpose` si rifiutano: il loro schema d'uscita dipende dai dati.
+
+### Esecuzione
+
+Dopo ogni passo l'output del kernel deve avere nomi e tipi del contratto
+inferito (altrimenti `Internal`) e riceve lo schema del contratto; righe
+per arco, colonne, nomi ripetuti e fattore di espansione si controllano
+sui dati. Ogni tabella si libera appena ha girato il suo ultimo
+consumatore; un'uscita che nessuno usa si libera subito, un input mai usato
+prima del primo passo.
+
+Il resoconto dà per passo operazione, righe in ingresso e in uscita, byte
+nuovi dell'output (allocazioni che nessuna tabella residente raggiungeva
+prima del passo) e byte vivi dopo il passo. `byte_vivi` somma le
+allocazioni Arrow delle tabelle residenti una volta ciascuna, per inizio
+dell'allocazione e capacità, figli compresi: una slice o una rinomina non
+aggiungono nulla.
+
+### Limiti dichiarati del runner
+
+- **Tabelle intere in memoria**: nessuno streaming, nessun batch parziale.
+- **`byte_vivi` esatto solo per la memoria allocata da Rust.**
+  *Regola*: si conta ogni allocazione una volta, per inizio
+  (`Buffer::data_ptr`) e capacità (`Buffer::capacity`); escluse le
+  strutture Rust (`ArrayData`, `Arc`, schemi) e l'overhead dell'allocatore.
+  *Ambito*: `plenora_pipeline::byte_vivi` e i byte del resoconto.
+  *Hazard*: per la memoria esterna (FFI, `bytes::Bytes`) Arrow dichiara come
+  capacità la vista importata, non l'allocazione: viste con inizi diversi
+  della stessa allocazione esterna si sommano, la parte fuori dalle viste
+  non si conta, a parità di inizio vale la maggiore. Il conto può essere
+  sbagliato in entrambe le direzioni, senza errore. Le tabelle passano a
+  `run` per valore: un clone tenuto dal chiamante tiene vive allocazioni
+  che il resoconto non vede.
+  *Rientro*: un'API di Arrow che distingua la deallocazione `Custom`, o la
+  copia delle tabelle esterne in memoria Rust all'ingresso (decisione di
+  F3, con il budget).
+- **Budget non applicato**: `max_governed_memory_bytes` arriva ai kernel che
+  lo usano, ma il runner non limita i byte vivi e non attiva lo spill
+  (percorso presente, selezionato solo dai test).
+- **Solo operazioni tabellari**: le geo si rifiutano in validazione.
+- **Controlli statici delle config nel runner**: sono il porting di
+  `validate_step_contract` di `190c493`, perché l'analisi dei contratti non
+  li ripete e senza di essi alcune config passerebbero con un significato
+  diverso da quello scritto. Il loro posto è l'analisi dei kernel; lì
+  rientrano quando ci sono.
+- **Nome del passo negli errori**: aggiunto al messaggio conservando la
+  categoria; gli errori con diagnostica per riga o già strutturati restano
+  quelli del kernel.
 
 ## Costruire e provare
 
