@@ -510,6 +510,104 @@ differenziali no. Le differenze note sono in
 rieseguita contro questo `geo` vendorizzato e il corpus applicativo reale
 verde, con le divergenze spiegate.
 
+### `geo.delaunay` e `geo.voronoi`: triangolazione caricata in blocco
+
+**Regola.** `extended_algorithms::delaunay` e `advanced::voronoi_cells` non
+chiamano più `unconstrained_triangulation` e `voronoi_cells` di `geo`
+0.33.1, che inseriscono i punti in `spade` uno alla volta: la
+triangolazione si costruisce con `DelaunayTriangulation::bulk_load` di
+`spade` 2.15.1 (la copia che `geo` usa già, stessi predicati esatti di
+`robust` 1.2.0), in `crate::triangolazione`. Prima del caricamento i punti
+si validano in ordine d'ingresso con `spade::validate_vertex` (stesso primo
+errore dell'incrementale) e i duplicati si tolgono con l'uguaglianza di
+`spade` (`==`, quindi `-0.0 == 0.0`); a ogni vertice restano il rango
+(prima comparsa, l'indice che aveva nell'incrementale) e i bit che
+l'incrementale gli lasciava (un duplicato successivo li sostituisce, tranne
+quando i vertici distinti sono almeno due e ancora tutti collineari). Il
+conteggio dei vertici dopo il caricamento si verifica: un punto perso o
+fuso è un errore `Triangulation`/`Voronoi`, mai un'uscita.
+
+- `delaunay`: stessi triangoli, antiorari, anelli chiusi `[a, b, c, a]`.
+  L'ordine prima era quello interno delle facce di `spade`, non dichiarato;
+  ora è canonico: ogni triangolo parte dal vertice comparso per primo, i
+  triangoli sono in ordine lessicografico della prima comparsa dei tre
+  vertici.
+- `voronoi_cells`: il corpo di `build_raw_voronoi_cells` e
+  `voronoi_cells_with_params` di `geo` 0.33.1 è ricopiato (circocentri di
+  `spade`, raggi, ordinamento angolare, ritaglio `Padded` con
+  `intersection` di `geo`), le celle escono in ordine di rango e il
+  rettangolo dei siti si accumula in quell'ordine, come nell'incrementale;
+  associazione punto -> cella invariata.
+
+`bulk_load` e non `bulk_load_stable`: la variante stabile reinserisce i
+vertici saltati iterando un `HashSet` a seme casuale (`try_bulk_load_cdt`
+di `spade` 2.15.1), quindi su griglie e punti cocircolari la
+triangolazione cambierebbe da processo a processo; `bulk_load` li tiene in
+un `Vec`. L'ordine d'ingresso che la variante stabile conserverebbe si
+ricostruisce con il rango.
+
+Gli oracoli ricopiano alla lettera le due funzioni di prima
+(`extended_algorithms::oracolo_delaunay`, `advanced::tests`,
+`oracolo_costruzione_*`): stessi errori per variante, messaggio e indice;
+su punti casuali continui e UTM al centimetro stessi triangoli bit per bit;
+su griglie, punti interi cocircolari e reticoli con duplicati un controllo
+esatto in interi (`i128`) che l'uscita sia di Delaunay, anche con le
+coordinate scalate a `2^-142` e `2^190`; celle Voronoi identiche bit per
+bit o entro `10^-6` in Hausdorff (misurato: 77 % identiche, scarto massimo
+`5,8e-11` in coordinate UTM; su griglie di 100k punti l'impronta
+dell'uscita è identica).
+
+Misure (release, mediane di 7 esecuzioni alternate prima/dopo, Windows,
+punti casuali UTM al centimetro; prima -> dopo): `delaunay` 10k 27,5 ->
+15,6 ms, 100k 1.215 -> 169 ms, 1M 97,7 -> 1,35 s; `voronoi` 10k 43 ->
+28 ms, 100k 1.221 -> 253 ms, 1M 86,5 -> 3,9 s (a 1M il prima è una sola
+esecuzione; `examples/bench_delaunay_voronoi.rs`).
+
+**Ambito.** `plenora-kernels-geo`, `geo.delaunay` e `geo.voronoi`.
+
+**Hazard.**
+
+- **ingressi degeneri** (quattro o più punti cocircolari: griglie,
+  reticoli, circonferenze): la triangolazione di Delaunay non è unica e
+  quella caricata in blocco è un'altra triangolazione valida, con le stesse
+  facce altrove (su una griglia 100x100, 9.802 triangoli su 19.602 in
+  comune). Stesso numero di triangoli e stessa area totale, diagonali
+  diverse. Il diagramma di Voronoi è unico, ma i suoi vertici si calcolano
+  dai circocentri di triangoli diversi: dove il circocentro è mal
+  condizionato (triangoli sottili su circonferenze grandi) lo scarto dal
+  risultato di prima è quello dell'errore di arrotondamento del
+  circocentro, lo stesso ordine dell'errore che il risultato di prima aveva
+  già rispetto all'esatto;
+- **ordine dei vertici delle facce**: `circumcenter` di `spade` dipende
+  dal vertice da cui la faccia parte, e il caricamento in blocco non parte
+  sempre dallo stesso dell'incrementale: un vertice Voronoi può differire
+  di qualche `ulp` anche su ingressi non degeneri; parità di angolo
+  nell'ordinamento attorno al sito (rarissime) seguono l'ordine dei lati
+  di `spade`, diverso da quello dell'incrementale;
+- **predicati di `robust` 1.2.0**: `spade` accetta solo coordinate zero o
+  di modulo in `[2^-142, 2^201]`, il dominio in cui Shewchuk dichiara che
+  `orient2d` e `incircle` non vanno in underflow né in overflow; fuori,
+  l'errore è esplicito (`SpadeError(TooSmall)`/`TooLarge`, come prima). I
+  220 fallimenti di `robust` 1.2.0 trovati in `plenora-memory-lab`
+  (`orient2d` con coordinate fino a `5e-324`, 1.266 confronti con
+  l'oracolo razionale) cadono tutti fuori dal dominio: le 30 righe dentro
+  sono corrette. Su 20.004 triple aggiuntive dentro il dominio, quasi
+  collineari o collineari esatte (6.780) a esponenti estremi e misti,
+  `orient2d` concorda con l'oracolo razionale in tutte. `incircle` non ha
+  un oracolo razionale proprio: lo coprono il controllo esatto in interi
+  sugli ingressi degeneri scalati agli estremi e la dichiarazione di
+  Shewchuk;
+- `spade` 2.15.1 è letto dai sorgenti (dati dei duplicati, `HashSet` di
+  `bulk_load_stable`, ordine dei lati): un aggiornamento va riletto, e gli
+  oracoli vedono una divergenza solo sulle forme che esercitano;
+- il caso peggiore di `bulk_load` resta quadratico su ingressi molto
+  degeneri (punti quasi tutti allineati), come l'incrementale.
+
+**Condizione di rientro.** Una versione di `geo` che costruisca
+triangolazione e celle Voronoi con il caricamento in blocco e un ordine
+deterministico: le due funzioni tornano a chiamare `geo`, e gli oracoli
+restano come regressione.
+
 ## Operazioni topologiche in Rust puro
 
 `geo.make_valid`, `geo.polygonize` e `geo.split` sono tornate nel catalogo

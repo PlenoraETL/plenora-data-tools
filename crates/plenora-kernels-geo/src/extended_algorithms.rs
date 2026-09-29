@@ -7,10 +7,11 @@ use geo::algorithm::orient::{Direction, Orient};
 use geo::line_intersection::{line_intersection, LineIntersection};
 use geo::{
     Coord, CoordsIter, GeodesicArea, Geometry, Line, LineString, MapCoords, MultiPolygon, Point,
-    Polygon, TriangulateDelaunayUnconstrained,
+    Polygon, Triangle,
 };
 use rstar::{RTree, RTreeObject, AABB};
 use serde::Serialize;
+use spade::Triangulation as _;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -301,12 +302,25 @@ pub fn snap_to_grid(
 
 /// Triangolazione Delaunay non vincolata dell'input, come poligoni.
 ///
+/// I vertici sono tutte le coordinate della geometria (anche quelle di
+/// linee e anelli), i duplicati contano una volta. Ogni triangolo e' un
+/// anello chiuso antiorario `[a, b, c, a]` che parte dal vertice comparso
+/// per primo nell'ingresso; i triangoli sono in ordine lessicografico della
+/// prima comparsa dei loro tre vertici. Stesso ingresso, stessa uscita.
+///
+/// Costruita con il caricamento in blocco di `spade` ([`crate::triangolazione`]):
+/// sugli ingressi senza quattro punti cocircolari i triangoli sono quelli
+/// dell'inserimento incrementale di `geo` 0.33.1, con gli stessi bit; sugli
+/// ingressi degeneri e' un'altra triangolazione di Delaunay valida (README,
+/// «geo.delaunay e geo.voronoi»).
+///
 /// # Errors
 ///
 /// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
 /// - `IndexOverflow`: conteggio non rappresentabile come `u64`;
 /// - `CoordinateLimit`: coordinate di input oltre `max_input_coordinates`;
-/// - `Triangulation`: triangolazione fallita;
+/// - `Triangulation`: triangolazione fallita (coordinata fuori dal dominio
+///   di `spade`, `[2^-142, 2^201]` in modulo o zero);
 /// - `OutputLimit`: triangoli prodotti oltre `max_triangles`;
 /// - `InvalidOutput`: triangolo prodotto non valido.
 pub fn delaunay(
@@ -322,17 +336,20 @@ pub fn delaunay(
             limit: max_input_coordinates,
         });
     }
-    let triangles = protetto(|| geometry.unconstrained_triangulation())?
-        .map_err(|error| ExtendedAlgorithmError::Triangulation(error.to_string()))?;
+    let punti: Vec<Coord<f64>> = geometry.coords_iter().collect();
+    let triangoli = protetto(|| {
+        crate::triangolazione::triangola(&punti).map(|costruita| triangoli_canonici(&costruita))
+    })?
+    .map_err(errore_di_triangolazione)?;
     let actual =
-        u64::try_from(triangles.len()).map_err(|_| ExtendedAlgorithmError::IndexOverflow)?;
+        u64::try_from(triangoli.len()).map_err(|_| ExtendedAlgorithmError::IndexOverflow)?;
     if actual > max_triangles {
         return Err(ExtendedAlgorithmError::OutputLimit {
             actual,
             limit: max_triangles,
         });
     }
-    triangles
+    triangoli
         .into_iter()
         .map(|triangle| {
             let polygon = triangle.to_polygon();
@@ -340,6 +357,50 @@ pub fn delaunay(
             Ok(polygon)
         })
         .collect()
+}
+
+/// Le facce interne come triangoli nell'ordine canonico di [`delaunay`]:
+/// ogni faccia antioraria (come `spade` la da') ruotata a partire dal
+/// vertice di rango minimo, le facce ordinate per i ranghi dei tre vertici.
+/// Due facce distinte non hanno la stessa terna, quindi l'ordine e' totale.
+fn triangoli_canonici(costruita: &crate::triangolazione::Triangolazione) -> Vec<Triangle<f64>> {
+    let mut facce: Vec<[crate::triangolazione::Sito; 3]> = costruita
+        .triangolazione
+        .inner_faces()
+        .map(|faccia| faccia.vertices().map(|vertice| *vertice.data()))
+        .collect();
+    for faccia in &mut facce {
+        let [a, b, c] = *faccia;
+        *faccia = if b.rango < a.rango && b.rango < c.rango {
+            [b, c, a]
+        } else if c.rango < a.rango && c.rango < b.rango {
+            [c, a, b]
+        } else {
+            [a, b, c]
+        };
+    }
+    facce.sort_unstable_by_key(|faccia| faccia.map(|sito| sito.rango));
+    facce
+        .into_iter()
+        .map(|[a, b, c]| Triangle::new(a.coordinata, b.coordinata, c.coordinata))
+        .collect()
+}
+
+/// Lo stesso messaggio che `geo` 0.33.1 dava da
+/// `unconstrained_triangulation` (`SpadeError(TooSmall)`, ...): nessun dato.
+fn errore_di_triangolazione(
+    errore: crate::triangolazione::ErroreTriangolazione,
+) -> ExtendedAlgorithmError {
+    use crate::triangolazione::ErroreTriangolazione;
+    use geo::algorithm::triangulate_delaunay::TriangulationError;
+    ExtendedAlgorithmError::Triangulation(match errore {
+        ErroreTriangolazione::Inserimento(inserimento) => {
+            TriangulationError::SpadeError(inserimento).to_string()
+        }
+        ErroreTriangolazione::VerticiInattesi => {
+            "vertici della triangolazione diversi dai punti distinti".to_owned()
+        }
+    })
 }
 
 fn validate_ratio(value: f64, name: &'static str) -> Result<(), ExtendedAlgorithmError> {
@@ -1623,6 +1684,460 @@ mod tests {
             prop_assert_eq!(pieces.len(), cuts.len() + 1);
             let length: f64 = pieces.iter().map(|piece| Euclidean.length(piece)).sum();
             prop_assert!((length - 1_000.0).abs() < 1e-9);
+        }
+    }
+}
+
+/// Oracolo di [`delaunay`] con il caricamento in blocco di `spade`: la
+/// funzione di prima, ricopiata alla lettera, e' il riferimento.
+#[cfg(test)]
+mod oracolo_delaunay {
+    use super::*;
+    use geo::{MultiPoint, TriangulateDelaunayUnconstrained};
+
+    /// `delaunay` di prima, alla lettera: `unconstrained_triangulation` di
+    /// `geo` 0.33.1, inserimento incrementale.
+    fn delaunay_con_geo(
+        geometry: &Geometry<f64>,
+        max_input_coordinates: u64,
+        max_triangles: u64,
+    ) -> Result<Vec<Polygon<f64>>, ExtendedAlgorithmError> {
+        validate_input(geometry)?;
+        let coordinates = coordinate_count(geometry)?;
+        if coordinates > max_input_coordinates {
+            return Err(ExtendedAlgorithmError::CoordinateLimit {
+                actual: coordinates,
+                limit: max_input_coordinates,
+            });
+        }
+        let triangles = protetto(|| geometry.unconstrained_triangulation())?
+            .map_err(|error| ExtendedAlgorithmError::Triangulation(error.to_string()))?;
+        let actual =
+            u64::try_from(triangles.len()).map_err(|_| ExtendedAlgorithmError::IndexOverflow)?;
+        if actual > max_triangles {
+            return Err(ExtendedAlgorithmError::OutputLimit {
+                actual,
+                limit: max_triangles,
+            });
+        }
+        triangles
+            .into_iter()
+            .map(|triangle| {
+                let polygon = triangle.to_polygon();
+                validate_output(Geometry::Polygon(polygon.clone()))?;
+                Ok(polygon)
+            })
+            .collect()
+    }
+
+    type Terna = [(u64, u64); 3];
+
+    /// Un triangolo come terna di bit, ruotata (verso invariato) a partire
+    /// dal vertice minimo per `total_cmp`: due triangoli con gli stessi
+    /// vertici e lo stesso verso hanno la stessa terna.
+    fn terna(poligono: &Polygon<f64>) -> Terna {
+        let anello = &poligono.exterior().0;
+        assert_eq!(anello.len(), 4, "triangolo non chiuso a quattro vertici");
+        assert_eq!(anello.first(), anello.last());
+        let minore = |a: &Coord<f64>, b: &Coord<f64>| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y));
+        let inizio = (0..3)
+            .min_by(|&i, &j| minore(&anello[i], &anello[j]))
+            .unwrap_or(0);
+        [0, 1, 2].map(|k| {
+            let c = anello[(inizio + k) % 3];
+            (c.x.to_bits(), c.y.to_bits())
+        })
+    }
+
+    fn insieme(triangoli: &[Polygon<f64>]) -> Vec<Terna> {
+        let mut terne: Vec<Terna> = triangoli.iter().map(terna).collect();
+        terne.sort_unstable();
+        terne
+    }
+
+    /// Nuova contro vecchia: stesso errore, oppure stesso numero di
+    /// triangoli; `true` se anche l'insieme e' lo stesso bit per bit.
+    fn confronta(geometria: &Geometry<f64>, massimo: u64) -> bool {
+        let nuova = delaunay(geometria, massimo, massimo);
+        let vecchia = delaunay_con_geo(geometria, massimo, massimo);
+        match (&nuova, &vecchia) {
+            (Err(nuova), Err(vecchia)) => {
+                assert_eq!(format!("{nuova:?}"), format!("{vecchia:?}"));
+                true
+            }
+            (Ok(nuova), Ok(vecchia)) => {
+                assert_eq!(nuova.len(), vecchia.len(), "{geometria:?}");
+                insieme(nuova) == insieme(vecchia)
+            }
+            _ => panic!("esiti diversi: {nuova:?} contro {vecchia:?}"),
+        }
+    }
+
+    fn multipunto(coppie: &[(f64, f64)]) -> Geometry<f64> {
+        Geometry::MultiPoint(MultiPoint::from(coppie.to_vec()))
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn intero(valore: f64) -> i128 {
+        assert!(valore.fract() == 0.0 && valore.abs() < 1.0e15, "non intero");
+        i128::from(valore as i64)
+    }
+
+    /// Controllo esatto, in interi, che l'uscita nuova sia una
+    /// triangolazione di Delaunay degli stessi punti: triangoli antiorari non
+    /// degeneri con vertici d'ingresso, nessun punto d'ingresso
+    /// strettamente dentro un cerchio circoscritto, e area totale uguale a
+    /// quella dell'uscita di `geo` (che copre l'inviluppo convesso).
+    ///
+    /// Le coordinate sono interi per `scala` (una potenza di due, quindi la
+    /// divisione e' esatta e i segni dei predicati sono quelli degli interi).
+    fn delaunay_esatta(coppie: &[(f64, f64)], scala: f64) {
+        let geometria = multipunto(coppie);
+        let nuova = delaunay(&geometria, u64::MAX, u64::MAX).expect("delaunay");
+        let vecchia = delaunay_con_geo(&geometria, u64::MAX, u64::MAX).expect("geo");
+        assert_eq!(nuova.len(), vecchia.len());
+        let punti: Vec<(i128, i128)> = coppie
+            .iter()
+            .map(|&(x, y)| (intero(x / scala), intero(y / scala)))
+            .collect();
+        let vertici = |poligono: &Polygon<f64>| {
+            let anello = &poligono.exterior().0;
+            [0, 1, 2].map(|k| (intero(anello[k].x / scala), intero(anello[k].y / scala)))
+        };
+        let doppia_area =
+            |[a, b, c]: [(i128, i128); 3]| (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+        let mut area_nuova = 0_i128;
+        for poligono in &nuova {
+            let [a, b, c] = vertici(poligono);
+            assert!(doppia_area([a, b, c]) > 0, "triangolo non antiorario");
+            area_nuova += doppia_area([a, b, c]);
+            for v in [a, b, c] {
+                assert!(punti.contains(&v), "vertice non d'ingresso");
+            }
+            for &d in &punti {
+                let riga = |p: (i128, i128)| {
+                    let (dx, dy) = (p.0 - d.0, p.1 - d.1);
+                    (dx, dy, dx * dx + dy * dy)
+                };
+                let (r1, r2, r3) = (riga(a), riga(b), riga(c));
+                let determinante = r1.0 * (r2.1 * r3.2 - r2.2 * r3.1)
+                    - r1.1 * (r2.0 * r3.2 - r2.2 * r3.0)
+                    + r1.2 * (r2.0 * r3.1 - r2.1 * r3.0);
+                assert!(determinante <= 0, "punto dentro un cerchio circoscritto");
+            }
+        }
+        let area_vecchia: i128 = vecchia.iter().map(|p| doppia_area(vertici(p))).sum();
+        assert_eq!(area_nuova, area_vecchia);
+    }
+
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn sotto(&mut self, limite: u64) -> u64 {
+            self.next() % limite
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        fn unitario(&mut self) -> f64 {
+            (self.next() >> 11) as f64 / (1_u64 << 53) as f64
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn reale(valore: u64) -> f64 {
+        valore as f64
+    }
+
+    // Niente mul_add: i punti di prova devono restare quelli scritti.
+    #[allow(clippy::suboptimal_flops)]
+    fn griglia(lato: u64, passo: f64, origine: (f64, f64)) -> Vec<(f64, f64)> {
+        (0..lato)
+            .flat_map(|i| {
+                (0..lato).map(move |j| (origine.0 + reale(i) * passo, origine.1 + reale(j) * passo))
+            })
+            .collect()
+    }
+
+    fn cocircolari(raggio: i64, centro: (f64, f64)) -> Vec<(f64, f64)> {
+        let mut punti = vec![centro];
+        for x in -raggio..=raggio {
+            for y in -raggio..=raggio {
+                if x * x + y * y == raggio * raggio {
+                    #[allow(clippy::cast_precision_loss)]
+                    punti.push((centro.0 + x as f64, centro.1 + y as f64));
+                }
+            }
+        }
+        punti
+    }
+
+    /// Punti casuali continui e UTM al centimetro, anche dentro poligoni e
+    /// linee (le coordinate di chiusura sono duplicati): senza quaterne
+    /// cocircolari la triangolazione di Delaunay e' unica, e l'insieme dei
+    /// triangoli deve essere quello di `geo` bit per bit.
+    #[test]
+    fn stessi_triangoli_su_ingressi_casuali() {
+        let mut generatore = Xorshift(0x9E37_79B9_7F4A_7C15);
+        for giro in 0..60_u64 {
+            let quanti = 3 + generatore.sotto(500);
+            let coppie: Vec<(f64, f64)> = (0..quanti)
+                .map(|_| {
+                    if giro % 2 == 0 {
+                        (generatore.unitario() * 100.0, generatore.unitario() * 100.0)
+                    } else {
+                        (
+                            500_000.0 + reale(generatore.sotto(1_000_000)) / 100.0,
+                            4_500_000.0 + reale(generatore.sotto(1_000_000)) / 100.0,
+                        )
+                    }
+                })
+                .collect();
+            assert!(confronta(&multipunto(&coppie), u64::MAX), "giro {giro}");
+            let linea = Geometry::LineString(LineString::from(coppie.clone()));
+            assert!(confronta(&linea, u64::MAX), "giro {giro}");
+        }
+        let poligono = Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 0.3),
+                (9.7, 10.0),
+                (0.2, 9.1),
+                (0.0, 0.0),
+            ]),
+            vec![LineString::from(vec![
+                (2.0, 2.0),
+                (3.1, 2.2),
+                (2.9, 3.3),
+                (2.0, 2.0),
+            ])],
+        ));
+        assert!(confronta(&poligono, u64::MAX));
+    }
+
+    /// Griglie, punti interi cocircolari e reticoli con duplicati: la
+    /// triangolazione di Delaunay non e' unica. Stesso numero di triangoli
+    /// di `geo`, e controllo esatto in interi che sia di Delaunay.
+    #[test]
+    fn triangolazione_di_delaunay_valida_su_ingressi_degeneri() {
+        for lato in [2_u64, 3, 4, 5, 8, 13, 20] {
+            delaunay_esatta(&griglia(lato, 1.0, (0.0, 0.0)), 1.0);
+            delaunay_esatta(&griglia(lato, 1.0, (500_000.0, 4_500_000.0)), 1.0);
+            delaunay_esatta(&griglia(lato, 3.0, (-7.0, 11.0)), 1.0);
+        }
+        for raggio in [5, 25, 65, 325] {
+            delaunay_esatta(&cocircolari(raggio, (0.0, 0.0)), 1.0);
+            let mut senza_centro = cocircolari(raggio, (500_000.0, 4_500_000.0));
+            senza_centro.remove(0);
+            delaunay_esatta(&senza_centro, 1.0);
+        }
+        let mut generatore = Xorshift(0xD1B5_4A32_D192_ED03);
+        for _ in 0..40 {
+            let quanti = 3 + generatore.sotto(300);
+            let lato = 2 + generatore.sotto(25);
+            let coppie: Vec<(f64, f64)> = (0..quanti)
+                .map(|_| (reale(generatore.sotto(lato)), reale(generatore.sotto(lato))))
+                .collect();
+            if delaunay(&multipunto(&coppie), u64::MAX, u64::MAX).is_ok_and(|t| !t.is_empty()) {
+                delaunay_esatta(&coppie, 1.0);
+            } else {
+                confronta(&multipunto(&coppie), u64::MAX);
+            }
+        }
+    }
+
+    /// Gli stessi ingressi degeneri agli estremi del dominio di `spade`
+    /// (`2^-142` e `2^190` per interi fino a `2^10`): i predicati di
+    /// `robust` 1.2.0 lavorano sugli esponenti estremi, e il controllo in
+    /// interi, esatto, dice se la triangolazione resta di Delaunay. Qui
+    /// `geo` non e' un riferimento indipendente (usa gli stessi predicati).
+    #[test]
+    fn triangolazione_di_delaunay_valida_agli_estremi_del_dominio() {
+        let mut generatore = Xorshift(0x0331_2026_0929_0001);
+        for esponente in [-142, -100, 0, 150, 190] {
+            let scala = 2.0_f64.powi(esponente);
+            let scala_punti = |punti: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
+                punti
+                    .into_iter()
+                    .map(|(x, y)| (x * scala, y * scala))
+                    .collect()
+            };
+            delaunay_esatta(&scala_punti(griglia(9, 1.0, (0.0, 0.0))), scala);
+            delaunay_esatta(&scala_punti(griglia(6, 1.0, (1.0, 3.0))), scala);
+            delaunay_esatta(&scala_punti(cocircolari(65, (100.0, 100.0))), scala);
+            for _ in 0..10 {
+                let quanti = 3 + generatore.sotto(200);
+                let lato = 2 + generatore.sotto(1_000);
+                let coppie: Vec<(f64, f64)> = (0..quanti)
+                    .map(|_| (reale(generatore.sotto(lato)), reale(generatore.sotto(lato))))
+                    .collect();
+                if delaunay(
+                    &multipunto(&scala_punti(coppie.clone())),
+                    u64::MAX,
+                    u64::MAX,
+                )
+                .is_ok_and(|t| !t.is_empty())
+                {
+                    delaunay_esatta(&scala_punti(coppie), scala);
+                }
+            }
+        }
+    }
+
+    /// Pochi punti, collineari, duplicati (anche `-0.0` contro `0.0`, prima
+    /// e dopo che i punti smettano di essere collineari), limiti: stessi
+    /// errori e stessi triangoli, bit compresi.
+    #[test]
+    fn stessi_esiti_su_pochi_punti_collineari_e_duplicati() {
+        let casi: &[&[(f64, f64)]] = &[
+            &[],
+            &[(1.0, 2.0)],
+            &[(0.0, 0.0), (1.0, 0.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (1.0, 0.0), (-0.0, 0.0)],
+            &[(0.0, 0.0), (-0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (-0.0, -0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (-0.0, 0.0), (1.0, 1.0)],
+            &[
+                (0.0, -0.0),
+                (0.0, 0.0),
+                (0.0, 3.0),
+                (0.0, -0.0),
+                (-2.0, 1.0),
+            ],
+            &[
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (-0.0, -0.0),
+                (0.0, 1.0),
+                (0.0, -0.0),
+            ],
+            &[
+                (-0.0, 0.0),
+                (2.0, 0.0),
+                (0.0, 2.0),
+                (0.0, -0.0),
+                (-0.0, -0.0),
+            ],
+            &[(1.0, -0.0), (1.0, 0.0), (0.0, 1.0), (3.0, 3.0), (1.0, -0.0)],
+            &[
+                (0.0, 0.0),
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (1.0, 0.0),
+                (0.5, 1.0),
+                (0.5, 1.0),
+            ],
+        ];
+        for coppie in casi {
+            assert!(confronta(&multipunto(coppie), u64::MAX), "{coppie:?}");
+        }
+        let quadrato = multipunto(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.3, 0.6)]);
+        for massimo in [0, 3, 4, 5] {
+            confronta(&quadrato, massimo);
+        }
+        assert!(matches!(
+            delaunay(&quadrato, 5, 3),
+            Err(ExtendedAlgorithmError::OutputLimit {
+                actual: 4,
+                limit: 3
+            })
+        ));
+    }
+
+    /// Ai bordi del dominio di `spade` (`[2^-142, 2^201]` in modulo, o zero)
+    /// e fuori: dentro, stessi triangoli; fuori, lo stesso errore di `geo`
+    /// per il primo punto fuori in ordine d'ingresso.
+    #[test]
+    fn stessi_esiti_alle_scale_estreme() {
+        let minimo = 2.0_f64.powi(-142);
+        let massimo = 2.0_f64.powi(201);
+        let mut generatore = Xorshift(0x2545_F491_4F6C_DD1D);
+        for (scala, origine) in [
+            (minimo * 1024.0, 0.0),
+            (2.0_f64.powi(190), 0.0),
+            (2.0_f64.powi(190), -massimo / 2.0),
+            (1.0e-3, 1.0e15),
+        ] {
+            let coppie: Vec<(f64, f64)> = (0..200)
+                .map(|_| {
+                    (
+                        origine + (reale(generatore.sotto(1 << 10)) * scala),
+                        reale(generatore.sotto(1 << 10)) * scala,
+                    )
+                })
+                .collect();
+            assert!(confronta(&multipunto(&coppie), u64::MAX));
+        }
+        let fuori: &[&[(f64, f64)]] = &[
+            &[(0.0, 0.0), (1.0e-300, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (0.0, minimo / 2.0)],
+            &[(0.0, 0.0), (massimo * 2.0, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 1.0e61), (1.0e-300, 1.0)],
+            &[(1.0e-300, 1.0e61), (0.0, 0.0), (1.0, 1.0)],
+            &[(f64::from_bits(1), 0.0), (1.0, 0.0), (0.0, 1.0)],
+        ];
+        for coppie in fuori {
+            assert!(confronta(&multipunto(coppie), u64::MAX));
+            assert!(matches!(
+                delaunay(&multipunto(coppie), u64::MAX, u64::MAX),
+                Err(ExtendedAlgorithmError::Triangulation(_))
+            ));
+        }
+    }
+
+    /// Il contratto d'uscita: ogni triangolo e' un anello chiuso antiorario
+    /// che parte dal suo vertice comparso per primo, i triangoli sono in
+    /// ordine di prima comparsa dei vertici, e due chiamate danno gli stessi
+    /// bit, anche sugli ingressi dove la triangolazione non e' unica.
+    #[test]
+    // Il rango e' l'uguaglianza di `spade` (`==`), e l'orientazione e' un
+    // controllo di segno scritto come nel testo.
+    #[allow(clippy::float_cmp, clippy::suboptimal_flops)]
+    fn ordine_canonico_e_deterministico() {
+        let mut griglia_e_casuali = griglia(12, 1.0, (0.0, 0.0));
+        let mut generatore = Xorshift(0x5DEE_CE66_D1CE_4E5B);
+        griglia_e_casuali
+            .extend((0..200).map(|_| (generatore.unitario() * 11.0, generatore.unitario() * 11.0)));
+        griglia_e_casuali.reverse();
+        let geometria = multipunto(&griglia_e_casuali);
+        let triangoli = delaunay(&geometria, u64::MAX, u64::MAX).expect("delaunay");
+        let rango = |c: &Coord<f64>| {
+            griglia_e_casuali
+                .iter()
+                .position(|&(x, y)| x == c.x && y == c.y)
+                .expect("vertice d'ingresso")
+        };
+        let ranghi: Vec<[usize; 3]> = triangoli
+            .iter()
+            .map(|poligono| {
+                let anello = &poligono.exterior().0;
+                assert_eq!(anello.len(), 4);
+                assert_eq!(anello[0], anello[3]);
+                let [a, b, c] = [0, 1, 2].map(|k| anello[k]);
+                let orientazione = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                assert!(orientazione > 0.0, "triangolo non antiorario");
+                let ranghi = [rango(&a), rango(&b), rango(&c)];
+                assert!(ranghi[0] < ranghi[1] && ranghi[0] < ranghi[2]);
+                ranghi
+            })
+            .collect();
+        assert!(ranghi.windows(2).all(|coppia| coppia[0] < coppia[1]));
+        for _ in 0..3 {
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    delaunay(&geometria, u64::MAX, u64::MAX).expect("delaunay")
+                ),
+                format!("{triangoli:?}")
+            );
         }
     }
 }

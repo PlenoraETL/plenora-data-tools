@@ -1,7 +1,13 @@
 //! Advanced pure-Rust kernels whose output cardinality differs from the input.
 
-use geo::{BoundingRect, Geometry, Intersects, MultiPoint, Point, Polygon, Rect, Voronoi};
+use geo::algorithm::triangulate_delaunay::TriangulationError;
+use geo::{
+    BooleanOps, BoundingRect, Contains, Coord, Geometry, Intersects, LineString, Point, Polygon,
+    Rect, Vector2DOps, VoronoiError,
+};
 use rstar::{RTree, RTreeObject, AABB};
+use spade::handles::VoronoiVertex::{Inner, Outer};
+use spade::Triangulation as _;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -90,16 +96,22 @@ pub fn voronoi_cells(
     geometries: &[Geometry<f64>],
     max_points: usize,
 ) -> Result<Vec<Geometry<f64>>, AdvancedError> {
-    voronoi_cells_con(geometries, max_points, associa_celle)
+    voronoi_cells_con(geometries, max_points, costruisci_celle, associa_celle)
 }
 
 /// Firma dell'associazione punto -> cella: separata perche' l'oracolo dei
 /// test possa far girare la stessa pipeline con la `find` lineare.
 type Associazione = fn(&[Polygon<f64>], &[Point<f64>]) -> Result<Vec<Geometry<f64>>, AdvancedError>;
 
+/// Firma della costruzione delle celle: separata perche' l'oracolo dei test
+/// possa far girare la stessa pipeline con `voronoi_cells` di `geo`
+/// (inserimento incrementale).
+type Costruzione = fn(&[Point<f64>]) -> Result<Vec<Polygon<f64>>, AdvancedError>;
+
 fn voronoi_cells_con(
     geometries: &[Geometry<f64>],
     max_points: usize,
+    costruisci: Costruzione,
     associa: Associazione,
 ) -> Result<Vec<Geometry<f64>>, AdvancedError> {
     if max_points < 2 {
@@ -132,13 +144,223 @@ fn voronoi_cells_con(
         })
         .collect::<Result<_, _>>()?;
 
-    let multipunto = MultiPoint::new(points.clone());
-    let cells = protetto(|| multipunto.voronoi_cells())?
-        .map_err(|error| AdvancedError::Voronoi(error.to_string()))?;
+    let cells = costruisci(&points)?;
     for cell in &cells {
         cell.validazione_protetta().map_err(classifica_cella)?;
     }
     associa(&cells, &points)
+}
+
+/// Le celle di `voronoi_cells` di `geo` 0.33.1 (parametri predefiniti:
+/// tolleranza zero, ritaglio `Padded`), sulla triangolazione caricata in
+/// blocco di [`crate::triangolazione`] invece che sull'inserimento
+/// incrementale.
+///
+/// Il corpo e' `build_raw_voronoi_cells` e `voronoi_cells_with_params` di
+/// `geo` 0.33.1 ricopiati: stessi circocentri (`circumcenter` di `spade`
+/// sulla faccia), stessi raggi, stesso ordinamento angolare, stesso
+/// ritaglio con `intersection` di `geo`. Cambiano solo due cose, che
+/// riportano l'uscita a quella dell'incrementale:
+/// - le celle escono in ordine di rango (prima comparsa del sito), che e'
+///   l'ordine dei vertici, e quindi delle celle, dell'incrementale;
+/// - il rettangolo d'ingombro dei siti si accumula in ordine di rango sui
+///   bit che l'incrementale lascia ai vertici.
+///
+/// Il circocentro di una faccia dipende dal vertice da cui `spade` la
+/// parte: se l'incrementale la parte da un altro vertice, un vertice
+/// Voronoi puo' differire di qualche `ulp`; sugli ingressi degeneri le
+/// facce stesse sono diverse (README, «geo.delaunay e geo.voronoi»).
+fn costruisci_celle(points: &[Point<f64>]) -> Result<Vec<Polygon<f64>>, AdvancedError> {
+    let coordinate: Vec<Coord<f64>> = points.iter().map(|point| point.0).collect();
+    protetto(|| celle_da_spade(&coordinate))?.map_err(AdvancedError::Voronoi)
+}
+
+// Il corpo ricopia `build_raw_voronoi_cells` di `geo` riga per riga: spezzarlo
+// renderebbe piu' difficile il confronto con il sorgente.
+#[allow(clippy::too_many_lines)]
+fn celle_da_spade(coordinate: &[Coord<f64>]) -> Result<Vec<Polygon<f64>>, String> {
+    let costruita =
+        crate::triangolazione::triangola(coordinate).map_err(|errore| match errore {
+            crate::triangolazione::ErroreTriangolazione::Inserimento(inserimento) => {
+                VoronoiError::Triangulation(TriangulationError::SpadeError(inserimento)).to_string()
+            }
+            crate::triangolazione::ErroreTriangolazione::VerticiInattesi => {
+                "vertici della triangolazione diversi dai punti distinti".to_owned()
+            }
+        })?;
+    let triangolazione = &costruita.triangolazione;
+
+    let num_vertices = costruita.siti.len();
+    if num_vertices < 2 {
+        return Err(VoronoiError::InsufficientVertices.to_string());
+    }
+
+    let base_bounds = compute_bounds_from_vertices(costruita.siti.iter().copied());
+
+    // Use padded bounds for extension distance calculation
+    let padded = padded_bounds(base_bounds, 0.5);
+    let extension = (padded.width() + padded.height()) * 2.0;
+
+    // Una cella per rango al piu': l'ordine di `voronoi_faces` e' quello
+    // dei vertici caricati in blocco, non quello dell'incrementale.
+    let mut per_rango: Vec<Option<Polygon<f64>>> = vec![None; num_vertices];
+
+    for face in triangolazione.voronoi_faces() {
+        let edges: Vec<_> = face.adjacent_edges().collect();
+        if edges.is_empty() {
+            continue;
+        }
+
+        let sito = *face.as_delaunay_vertex().data();
+        let site_coord = sito.coordinata;
+
+        // Collect circumcenters and ray info
+        let mut circumcenters: Vec<Coord<f64>> = Vec::new();
+        let mut rays: Vec<(Coord<f64>, Coord<f64>)> = Vec::new(); // (origin, direction)
+
+        for edge in &edges {
+            let from_vertex = edge.from();
+            let to_vertex = edge.to();
+
+            if let Inner(inner_face) = &from_vertex {
+                let cc = inner_face.circumcenter();
+                let coord = Coord { x: cc.x, y: cc.y };
+                if !circumcenters.contains(&coord) {
+                    circumcenters.push(coord);
+                }
+            }
+            if let Inner(inner_face) = &to_vertex {
+                let cc = inner_face.circumcenter();
+                let coord = Coord { x: cc.x, y: cc.y };
+                if !circumcenters.contains(&coord) {
+                    circumcenters.push(coord);
+                }
+            }
+
+            // Collect ray information
+            if let (Inner(inner_face), Outer(outer_edge)) = (&from_vertex, &to_vertex) {
+                let ref_pt = inner_face.circumcenter();
+                let dir = outer_edge.direction_vector();
+                rays.push((
+                    Coord {
+                        x: ref_pt.x,
+                        y: ref_pt.y,
+                    },
+                    Coord { x: dir.x, y: dir.y },
+                ));
+            }
+
+            if let (Outer(outer_edge), Inner(inner_face)) = (&from_vertex, &to_vertex) {
+                let ref_pt = inner_face.circumcenter();
+                let dir = outer_edge.direction_vector();
+                rays.push((
+                    Coord {
+                        x: ref_pt.x,
+                        y: ref_pt.y,
+                    },
+                    Coord { x: dir.x, y: dir.y },
+                ));
+            }
+        }
+
+        // Build cell vertices
+        let mut vertices: Vec<Coord<f64>> = circumcenters.clone();
+
+        if rays.is_empty() {
+            // Interior cell: just circumcenters
+            if vertices.len() < 3 {
+                continue;
+            }
+        } else {
+            // Boundary cell: extend rays far beyond bbox
+            for (origin, direction) in &rays {
+                // Normalise direction to unit vector so all rays extend the same distance.
+                // Skip degenerate zero-length or non-finite directions.
+                let Some(unit_dir) = direction.try_normalize() else {
+                    continue;
+                };
+
+                // Add a point far beyond the bbox in the ray direction
+                let extended = *origin + unit_dir * extension;
+                vertices.push(extended);
+            }
+        }
+
+        if vertices.len() < 3 {
+            continue;
+        }
+
+        // Sort vertices by angle around the site
+        vertices.sort_by(|a, b| {
+            let angle_a = f64::atan2(a.y - site_coord.y, a.x - site_coord.x);
+            let angle_b = f64::atan2(b.y - site_coord.y, b.x - site_coord.x);
+            angle_a.total_cmp(&angle_b)
+        });
+
+        let Some(&primo) = vertices.first() else {
+            continue;
+        };
+        vertices.push(primo);
+        let poly = Polygon::new(LineString::new(vertices), vec![]);
+
+        if let Some(posto) = per_rango.get_mut(sito.rango) {
+            *posto = Some(poly);
+        }
+    }
+
+    let raw_cells: Vec<Polygon<f64>> = per_rango.into_iter().flatten().collect();
+
+    // Collinear input produces no cells (only perpendicular bisector lines).
+    // Return an error rather than silently returning an empty result.
+    if raw_cells.is_empty() {
+        return Err(VoronoiError::CollinearInput.to_string());
+    }
+
+    // Ritaglio `VoronoiClip::Padded`, come `voronoi_cells_with_params`.
+    let clip_poly: Polygon<f64> = padded_bounds(base_bounds, 0.5).to_polygon();
+    let clip_rect = clip_poly.bounding_rect();
+
+    Ok(raw_cells
+        .into_iter()
+        .flat_map(|cell| {
+            // Skip intersection if cell is entirely within clip bounds
+            let contained_by_clip = clip_rect
+                .as_ref()
+                .zip(cell.bounding_rect())
+                .is_some_and(|(cr, cell_rect)| cr.contains(&cell_rect));
+
+            if contained_by_clip {
+                vec![cell]
+            } else {
+                cell.intersection(&clip_poly).0
+            }
+        })
+        .collect())
+}
+
+/// `compute_bounds_from_vertices` di `geo` 0.33.1.
+fn compute_bounds_from_vertices(vertices: impl Iterator<Item = Coord<f64>>) -> Rect<f64> {
+    let (min_x, min_y, max_x, max_y) = vertices.fold(
+        (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+        |(min_x, min_y, max_x, max_y), p| {
+            (
+                f64::min(min_x, p.x),
+                f64::min(min_y, p.y),
+                f64::max(max_x, p.x),
+                f64::max(max_y, p.y),
+            )
+        },
+    );
+    Rect::new((min_x, min_y), (max_x, max_y))
+}
+
+/// `padded_bounds` di `geo` 0.33.1.
+fn padded_bounds(base: Rect<f64>, padding_factor: f64) -> Rect<f64> {
+    let padding = f64::max(base.width(), base.height()) * padding_factor;
+    Rect::new(
+        (base.min().x - padding, base.min().y - padding),
+        (base.max().x + padding, base.max().y + padding),
+    )
 }
 
 /// Associa a ogni punto, in ordine d'ingresso, la prima cella (per indice
@@ -240,7 +462,7 @@ fn cella_accetta(cell: &Polygon<f64>, bounds: Option<&Rect<f64>>, point: &Point<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{Area, Contains};
+    use geo::{Area, HausdorffDistance, MultiPoint, Voronoi};
 
     /// Sintetico attraverso la conversione reale (stessa motivazione di
     /// `predicates::classifica_lato_non_appiattisce_l_interruzione`): nessun
@@ -426,7 +648,8 @@ mod tests {
             .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
             .collect();
         let veloce = voronoi_cells(&geometrie, usize::MAX);
-        let riferimento = voronoi_cells_con(&geometrie, usize::MAX, associa_lineare);
+        let riferimento =
+            voronoi_cells_con(&geometrie, usize::MAX, costruisci_celle, associa_lineare);
         assert_eq!(
             impronta(&veloce),
             impronta(&riferimento),
@@ -768,6 +991,299 @@ mod tests {
                 )
             }));
             confronta_associazione(&celle, &interrogazioni);
+        }
+    }
+
+    // --- Oracolo della costruzione con il caricamento in blocco di `spade` ---
+
+    /// La costruzione di prima, ricopiata alla lettera: `voronoi_cells` di
+    /// `geo` 0.33.1, che inserisce i siti in `spade` uno alla volta.
+    fn costruisci_con_geo(points: &[Point<f64>]) -> Result<Vec<Polygon<f64>>, AdvancedError> {
+        let multipunto = MultiPoint::new(points.to_vec());
+        let cells = protetto(|| multipunto.voronoi_cells())?
+            .map_err(|error| AdvancedError::Voronoi(error.to_string()))?;
+        Ok(cells)
+    }
+
+    /// Quanto l'uscita nuova si scosta da quella di prima.
+    #[derive(Debug, Default)]
+    struct Scarti {
+        celle: usize,
+        identiche: usize,
+        hausdorff: f64,
+    }
+
+    fn perimetro(poligono: &Polygon<f64>) -> f64 {
+        use geo::{Euclidean, Length};
+        Euclidean.length(poligono.exterior())
+    }
+
+    /// Pipeline intera, costruzione nuova contro costruzione di `geo`, con la
+    /// stessa associazione: stesso errore (stessa variante, stesso
+    /// messaggio, stesso indice); altrimenti una cella per punto, nello
+    /// stesso ordine, identica bit per bit oppure entro `tolleranza`
+    /// (Hausdorff fra i vertici, e area entro `tolleranza` per il perimetro).
+    fn confronta_costruzione(punti: &[(f64, f64)], tolleranza: f64) -> Scarti {
+        let geometrie: Vec<Geometry<f64>> = punti
+            .iter()
+            .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
+            .collect();
+        let nuova = voronoi_cells(&geometrie, usize::MAX);
+        let vecchia = voronoi_cells_con(&geometrie, usize::MAX, costruisci_con_geo, associa_celle);
+        let mut scarti = Scarti::default();
+        match (nuova, vecchia) {
+            (Err(nuova), Err(vecchia)) => {
+                assert_eq!(
+                    format!("{nuova:?}"),
+                    format!("{vecchia:?}"),
+                    "punti: {punti:?}"
+                );
+            }
+            (Ok(nuova), Ok(vecchia)) => {
+                assert_eq!(nuova.len(), vecchia.len(), "punti: {punti:?}");
+                for (cella, riferimento) in nuova.iter().zip(&vecchia) {
+                    scarti.celle += 1;
+                    if format!("{cella:?}") == format!("{riferimento:?}") {
+                        scarti.identiche += 1;
+                        continue;
+                    }
+                    let (Geometry::Polygon(cella), Geometry::Polygon(riferimento)) =
+                        (cella, riferimento)
+                    else {
+                        panic!("cella non poligonale");
+                    };
+                    let distanza = cella.hausdorff_distance(riferimento);
+                    let area = (cella.unsigned_area() - riferimento.unsigned_area()).abs();
+                    assert!(
+                        distanza <= tolleranza && area <= tolleranza * perimetro(riferimento),
+                        "scarto {distanza:e}, area {area:e}, oltre {tolleranza:e}: {punti:?}"
+                    );
+                    scarti.hausdorff = scarti.hausdorff.max(distanza);
+                }
+            }
+            (nuova, vecchia) => panic!("esiti diversi: {nuova:?} contro {vecchia:?}"),
+        }
+        scarti
+    }
+
+    /// Punti interi su una circonferenza di raggio `raggio` (terne
+    /// pitagoriche), piu' il centro: tutti cocircolari, esatti in `f64`.
+    fn cocircolari(raggio: i64, centro: (f64, f64)) -> Vec<(f64, f64)> {
+        let mut punti = vec![centro];
+        for x in -raggio..=raggio {
+            for y in -raggio..=raggio {
+                if x * x + y * y == raggio * raggio {
+                    #[allow(clippy::cast_precision_loss)]
+                    punti.push((centro.0 + x as f64, centro.1 + y as f64));
+                }
+            }
+        }
+        punti
+    }
+
+    /// Siti casuali continui e in coordinate UTM al centimetro: nessuna
+    /// quaterna cocircolare in pratica, le facce sono quelle
+    /// dell'incrementale e ogni cella deve essere identica bit per bit o, se
+    /// `spade` parte la faccia da un altro vertice, a qualche `ulp`.
+    #[test]
+    fn oracolo_costruzione_voronoi_casuale() {
+        let mut generatore = Xorshift(0x5DEE_CE66_D1CE_4E5B);
+        let mut totale = Scarti::default();
+        for giro in 0..40_u64 {
+            let quanti = 3 + generatore.sotto(400);
+            let coppie: Vec<(f64, f64)> = (0..quanti)
+                .map(|_| {
+                    if giro % 2 == 0 {
+                        (generatore.unitario() * 100.0, generatore.unitario() * 100.0)
+                    } else {
+                        (
+                            500_000.0 + intero(generatore.sotto(100_000)) / 100.0,
+                            4_500_000.0 + intero(generatore.sotto(100_000)) / 100.0,
+                        )
+                    }
+                })
+                .collect();
+            let scarti = confronta_costruzione(&coppie, 1.0e-6);
+            totale.celle += scarti.celle;
+            totale.identiche += scarti.identiche;
+            totale.hausdorff = totale.hausdorff.max(scarti.hausdorff);
+        }
+        eprintln!("voronoi casuale: {totale:?}");
+        assert!(totale.celle > 5_000);
+    }
+
+    /// Griglie (quattro siti cocircolari per ogni vertice Voronoi), anche
+    /// lontane dall'origine, e siti interi cocircolari: le due
+    /// triangolazioni possono scegliere diagonali diverse, il diagramma e'
+    /// lo stesso entro la precisione.
+    #[test]
+    fn oracolo_costruzione_voronoi_griglie_e_cocircolari() {
+        for lato in [2_u64, 3, 4, 5, 8, 13, 21, 30] {
+            confronta_costruzione(&griglia(lato, 1.0, (0.0, 0.0)), 1.0e-9);
+            confronta_costruzione(&griglia(lato, 1.0, (500_000.0, 4_500_000.0)), 1.0e-6);
+            confronta_costruzione(&griglia(lato, 0.25, (-3.0, 7.0)), 1.0e-9);
+        }
+        for raggio in [5, 25, 65, 325] {
+            confronta_costruzione(&cocircolari(raggio, (0.0, 0.0)), 1.0e-6);
+            confronta_costruzione(&cocircolari(raggio, (500_000.0, 4_500_000.0)), 1.0e-6);
+            let mut senza_centro = cocircolari(raggio, (10.0, -10.0));
+            senza_centro.remove(0);
+            confronta_costruzione(&senza_centro, 1.0e-6);
+        }
+    }
+
+    /// Duplicati (anche `-0.0` contro `0.0`, prima e dopo che i siti smettano
+    /// di essere collineari), collineari, pochi punti: stessi errori e stesse
+    /// celle, bit compresi.
+    #[test]
+    fn oracolo_costruzione_voronoi_duplicati_collineari_pochi_punti() {
+        let esatti: &[&[(f64, f64)]] = &[
+            &[(0.0, 0.0), (1.0, 0.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (-0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (-0.0, -0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (-0.0, 0.0), (1.0, 1.0)],
+            &[
+                (0.0, -0.0),
+                (0.0, 0.0),
+                (0.0, 3.0),
+                (0.0, -0.0),
+                (-2.0, 1.0),
+            ],
+            &[
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (-0.0, -0.0),
+                (0.0, 1.0),
+                (0.0, -0.0),
+            ],
+            &[
+                (-0.0, 0.0),
+                (2.0, 0.0),
+                (0.0, 2.0),
+                (0.0, -0.0),
+                (-0.0, -0.0),
+            ],
+            &[(1.0, -0.0), (1.0, 0.0), (0.0, 1.0), (3.0, 3.0), (1.0, -0.0)],
+            &[
+                (0.0, 0.0),
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (1.0, 0.0),
+                (0.5, 1.0),
+                (0.5, 1.0),
+            ],
+        ];
+        for punti in esatti {
+            let scarti = confronta_costruzione(punti, 0.0);
+            assert_eq!(scarti.celle, scarti.identiche, "punti: {punti:?}");
+        }
+        let errori: &[&[(f64, f64)]] = &[
+            &[(0.0, 0.0), (0.0, 0.0)],
+            &[(1.0, 1.0), (1.0, 1.0), (1.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (1.0, 0.0), (-0.0, 0.0)],
+            &[(0.0, 5.0), (0.0, -5.0), (0.0, 0.0)],
+        ];
+        for punti in errori {
+            let geometrie: Vec<Geometry<f64>> = punti
+                .iter()
+                .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
+                .collect();
+            assert!(
+                matches!(
+                    voronoi_cells(&geometrie, usize::MAX),
+                    Err(AdvancedError::Voronoi(_))
+                ),
+                "punti: {punti:?}"
+            );
+            confronta_costruzione(punti, 0.0);
+        }
+        let mut duplicati = griglia(6, 1.0, (0.0, 0.0));
+        duplicati.extend(griglia(6, 1.0, (0.0, 0.0)));
+        duplicati.reverse();
+        confronta_costruzione(&duplicati, 1.0e-9);
+        let _ = confronta_pipeline(&duplicati);
+    }
+
+    /// Coordinate ai bordi del dominio di `spade` (`[2^-142, 2^201]` in
+    /// modulo, o zero) e fuori: dentro, stesse celle; fuori, lo stesso
+    /// `InsertionError` di `geo`, per il primo punto fuori in ordine
+    /// d'ingresso.
+    #[test]
+    fn oracolo_costruzione_voronoi_scale_estreme() {
+        let minimo = 2.0_f64.powi(-142);
+        let massimo = 2.0_f64.powi(201);
+        let dentro = [
+            (minimo, (0.0, 0.0), 1.0e-9 * minimo),
+            (minimo * 8.0, (minimo, -minimo), 1.0e-9 * minimo),
+            (2.0_f64.powi(190), (0.0, 0.0), 1.0e-9 * 2.0_f64.powi(190)),
+            (2.0_f64.powi(196), (-massimo / 2.0, 0.0), 1.0e-9 * massimo),
+            (1.0e-9, (1.0e9, -1.0e9), 1.0e-3),
+            (1.0e-3, (1.0e15, 1.0e15), 1.0),
+        ];
+        for (passo, origine, tolleranza) in dentro {
+            for lato in [2, 3, 4, 7] {
+                confronta_costruzione(&griglia(lato, passo, origine), tolleranza);
+            }
+        }
+        let fuori: &[&[(f64, f64)]] = &[
+            &[(0.0, 0.0), (1.0e-300, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 0.0), (0.0, minimo / 2.0)],
+            &[(0.0, 0.0), (massimo * 2.0, 0.0), (0.0, 1.0)],
+            &[(0.0, 0.0), (1.0, 1.0e61), (1.0e-300, 1.0)],
+            &[(1.0e-300, 1.0e61), (0.0, 0.0), (1.0, 1.0)],
+            &[(f64::MIN_POSITIVE, 0.0), (1.0, 0.0), (0.0, 1.0)],
+            &[(f64::from_bits(1), 0.0), (1.0, 0.0), (0.0, 1.0)],
+        ];
+        for punti in fuori {
+            confronta_costruzione(punti, 0.0);
+        }
+        for (passo, origine) in [
+            (1.0e-300, (0.0, 0.0)),
+            (1.0e150, (0.0, 0.0)),
+            (1.0e300, (-1.0e300, -1.0e300)),
+            (f64::MIN_POSITIVE, (0.0, 0.0)),
+        ] {
+            confronta_costruzione(&griglia(4, passo, origine), 0.0);
+        }
+    }
+
+    /// Siti su un reticolo piccolo: molti duplicati e molte quaterne
+    /// cocircolari insieme.
+    #[test]
+    fn oracolo_costruzione_voronoi_reticolo_con_duplicati() {
+        let mut generatore = Xorshift(0x2545_F491_4F6C_DD1D);
+        for _ in 0..40 {
+            let quanti = 2 + generatore.sotto(300);
+            let lato = 2 + generatore.sotto(25);
+            let coppie: Vec<(f64, f64)> = (0..quanti)
+                .map(|_| {
+                    (
+                        intero(generatore.sotto(lato)),
+                        intero(generatore.sotto(lato)),
+                    )
+                })
+                .collect();
+            confronta_costruzione(&coppie, 1.0e-9);
+        }
+    }
+
+    /// Stesso ingresso, stessa uscita: due chiamate danno gli stessi bit,
+    /// anche sugli ingressi degeneri dove la triangolazione non e' unica.
+    #[test]
+    fn voronoi_deterministico() {
+        let mut griglia_duplicata = griglia(15, 1.0, (0.0, 0.0));
+        griglia_duplicata.extend(griglia(9, 1.0, (0.5, 0.5)));
+        for punti in [griglia_duplicata, cocircolari(65, (3.0, 4.0))] {
+            let geometrie: Vec<Geometry<f64>> = punti
+                .iter()
+                .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
+                .collect();
+            let prima = impronta(&voronoi_cells(&geometrie, usize::MAX));
+            for _ in 0..3 {
+                assert_eq!(impronta(&voronoi_cells(&geometrie, usize::MAX)), prima);
+            }
         }
     }
 }

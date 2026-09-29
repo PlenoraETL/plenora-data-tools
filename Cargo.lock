@@ -845,6 +845,7 @@ dependencies = [
  "rstar",
  "serde",
  "serde_json",
+ "spade",
  "thiserror 2.0.21",
  "wkt",
 ]

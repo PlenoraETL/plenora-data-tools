@@ -37,6 +37,7 @@ pub mod spatial_join;
 #[cfg(test)]
 mod test_support;
 pub mod topology;
+mod triangolazione;
 mod validazione_ogc;
 pub mod wkb_decoder;
 

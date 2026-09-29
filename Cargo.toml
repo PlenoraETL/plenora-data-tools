@@ -60,6 +60,13 @@ geozero = { version = "=0.15.1", default-features = false, features = ["with-geo
 wkt = "=0.14.0"
 rayon = "=1.12.0"
 rstar = "=0.12.2"
+# Triangolazione di Delaunay di `geo.delaunay` e `geo.voronoi` con il
+# caricamento in blocco (`bulk_load`): `geo` 0.33.1 inserisce i punti uno
+# alla volta (100k punti in ~0,65 s, 1M in ~83 s). Non e' una dipendenza
+# nuova: e' la stessa copia che `geo` usa gia' (feature `spade`; nel lockfile
+# nessun pacchetto nuovo), con i predicati esatti di `robust` 1.2.0. Scelta
+# di `bulk_load` e limiti in README, «geo.delaunay e geo.voronoi».
+spade = "=2.15.1"
 # Dev-dependency di plenora-kernels-geo (probe privacy sul logging di
 # `relate`): transitiva di `geo`/`geozero`, pinnata perche' il test la usa
 # direttamente.
