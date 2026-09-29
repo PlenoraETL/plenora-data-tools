@@ -261,6 +261,21 @@ pub(in crate::analyze) fn with_geometry_types(
     geometry: &GeometryColumnContract,
     types: GeometryTypesProperty,
 ) -> Result<DataContract> {
+    with_geometry_types_property(
+        input,
+        geometry,
+        ContractProperty::new(PropertyConfidence::Declared(types), PropertyScope::Schema),
+    )
+}
+
+/// Come [`with_geometry_types`], con la proprieta' intera: anche
+/// `Unknown`, per un'operazione che toglie la dichiarazione ereditata senza
+/// poterne dare una.
+pub(in crate::analyze) fn with_geometry_types_property(
+    input: &DataContract,
+    geometry: &GeometryColumnContract,
+    types: ContractProperty<GeometryTypesProperty>,
+) -> Result<DataContract> {
     let fields: Vec<Field> = input
         .schema
         .fields()
@@ -285,8 +300,7 @@ pub(in crate::analyze) fn with_geometry_types(
             geometry.name
         )));
     };
-    target.types =
-        ContractProperty::new(PropertyConfidence::Declared(types), PropertyScope::Schema);
+    target.types = types;
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
             fields,

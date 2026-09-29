@@ -59,6 +59,7 @@ mod helpers;
 mod measures;
 mod producers;
 mod quality;
+mod tipi;
 
 use plenora_core::arrow::DataType;
 use plenora_core::catalog::{find_operation, Arity, Family};
@@ -2752,7 +2753,7 @@ mod tests {
     /// (op, dichiarazione attesa, lista canonica attesa) per le operazioni
     /// che CAMBIANO il tipo geometrico: i tipi dichiarati sono quelli
     /// dell'OUTPUT, verificati contro i kernel (`transform_output_types`).
-    const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 19] = [
+    const TYPE_CHANGERS: [(&str, TypesDeclaration, &str); 25] = [
         (
             "geo.from_wkt",
             TypesDeclaration::Mixed,
@@ -2800,6 +2801,24 @@ mod tests {
             TypesDeclaration::Exact,
             "multipolygon",
         ),
+        // Aggregazioni e ricostruzioni (`analyze::tipi`), verificate contro
+        // i kernel da `kernel_crosscheck`.
+        (
+            "geo.polygonize",
+            TypesDeclaration::Exact,
+            "linestring,polygon",
+        ),
+        ("geo.dissolve", TypesDeclaration::Exact, "multipolygon"),
+        (
+            "geo.overlay",
+            TypesDeclaration::Exact,
+            "polygon,multipolygon",
+        ),
+        ("geo.delaunay", TypesDeclaration::Exact, "polygon"),
+        ("geo.line_merge", TypesDeclaration::Exact, "linestring"),
+        // Con ingresso non dichiarato; con `[polygon]` dichiarato, `polygon`
+        // (vedi sotto).
+        ("geo.split", TypesDeclaration::Exact, "linestring,polygon"),
     ];
 
     fn expected_types_of(op: &str) -> Option<(TypesDeclaration, &'static str)> {
@@ -2870,6 +2889,9 @@ mod tests {
     }
 
     #[test]
+    // Due tabelle (riscrittori e conservatori) in sequenza: lunghezza
+    // intrinseca.
+    #[allow(clippy::too_many_lines)]
     fn type_changers_replace_preexisting_types_type_preservers_keep_it() {
         // Type-changer: la dichiarazione di input (`polygon`) e' SOSTITUITA
         // da quella dell'output e le chiavi ereditate sono rimosse (mai un
@@ -2901,6 +2923,12 @@ mod tests {
                 .active_geometry_column()
                 .expect("geometria in output");
             let types = geometry.types.value().expect("tipi riscritti");
+            // `split` mappa i tipi dichiarati: da `[polygon]` solo poligoni.
+            let list = if case.op == "geo.split" {
+                "polygon"
+            } else {
+                list
+            };
             assert_eq!(
                 types.declaration(),
                 declaration,
@@ -3035,5 +3063,617 @@ mod tests {
             None,
         )
         .expect("forma canonica-only accettata");
+    }
+
+    // -----------------------------------------------------------------------
+    // Oracolo analisi/kernel del catalogo geo (l'equivalente di
+    // `kernel_crosscheck` di `plenora-kernels-table`).
+    //
+    // - Schema: per le operazioni con un kernel Arrow in questo workspace
+    //   (`polygonize`, `split`) lo schema del contratto dedotto a secco
+    //   contro quello del batch prodotto: nomi, tipi, nullability, metadati
+    //   di campo e di schema; il contratto riletto dallo schema del kernel
+    //   dichiara CRS, dimensioni ed encoding dell'analisi; nessun null dove il
+    //   contratto dice non-null.
+    // - Tipi: per le operazioni che spezzano, raccolgono o ricostruiscono le
+    //   geometrie (`analyze::tipi`), ogni geometria prodotta dal kernel su
+    //   ingressi dei tipi dichiarati ha un tipo che il contratto dichiara.
+    // -----------------------------------------------------------------------
+
+    mod kernel_crosscheck {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use geo::{LineString, MultiLineString, MultiPoint, MultiPolygon, Polygon};
+        use plenora_core::arrow::array::{
+            Array, BinaryArray, Int64Array, RecordBatch, StringArray,
+        };
+        use plenora_core::arrow::SchemaRef;
+        use plenora_core::contract::arrow_schema::{
+            arrow_schema_from_contract, contract_from_arrow_schema,
+        };
+        use plenora_core::contract::{ContractProperty, GeometryEncoding};
+
+        use super::*;
+        use crate::arrow_adapter::PLENORA_GEOMETRY_TYPES_DECLARATION_KEY;
+        use crate::rust_backend::arrow::{polygonize_batches, split_batches, PolygonizeParams};
+        use crate::rust_backend::precision::Precision;
+
+        type Firma = (String, DataType, bool, BTreeMap<String, String>);
+
+        fn firma(schema: &Schema) -> (Vec<Firma>, BTreeMap<String, String>) {
+            (
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        (
+                            field.name().clone(),
+                            field.data_type().clone(),
+                            field.is_nullable(),
+                            field
+                                .metadata()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+                schema
+                    .metadata()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            )
+        }
+
+        fn esatti(tipi: &[GeometryType]) -> ContractProperty<GeometryTypesProperty> {
+            ContractProperty::new(
+                PropertyConfidence::Declared(
+                    GeometryTypesProperty::new(TypesDeclaration::Exact, tipi.to_vec())
+                        .expect("tipi"),
+                ),
+                PropertyScope::Schema,
+            )
+        }
+
+        /// Il contratto d'ingresso come lo vede l'executor dopo la scoperta:
+        /// lo schema porta le chiavi canoniche emesse dal contratto (tipi
+        /// compresi), piu' un metadato di lineage sul campo geometria e su
+        /// un attributo, e un metadato di schema.
+        fn ingresso(tipi: &[GeometryType], geometria_nullable: bool) -> DataContract {
+            let mut contract = geo_contract(projected_crs());
+            contract.geometries[0].encoding = Some(GeometryEncoding::Wkb);
+            contract.geometries[0].types = esatti(tipi);
+            contract.geometries[0].nullable = geometria_nullable;
+            let emesso = arrow_schema_from_contract(&contract).expect("schema emesso");
+            let fields: Vec<Field> = emesso
+                .fields()
+                .iter()
+                .map(|field| {
+                    let mut metadata = field.metadata().clone();
+                    let mut nullable = field.is_nullable();
+                    if field.name() == DEFAULT_GEOMETRY_COLUMN {
+                        nullable = geometria_nullable;
+                        metadata.insert("descrizione".to_owned(), "lineage".to_owned());
+                    }
+                    if field.name() == "label" {
+                        metadata.insert("descrizione".to_owned(), "lineage".to_owned());
+                    }
+                    Field::new(field.name(), field.data_type().clone(), nullable)
+                        .with_metadata(metadata)
+                })
+                .collect();
+            let mut schema_metadata = emesso.metadata().clone();
+            schema_metadata.insert("dataset".to_owned(), "prova".to_owned());
+            let schema = Arc::new(Schema::new_with_metadata(fields, schema_metadata));
+            // La scoperta, come per un file d'ingresso vero.
+            let scoperto = contract_from_arrow_schema(schema, plenora_core::crs::resolve_crs)
+                .expect("scoperta dell'ingresso");
+            assert!(
+                scoperto
+                    .schema
+                    .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+                    .unwrap()
+                    .metadata()
+                    .contains_key(PLENORA_GEOMETRY_TYPES_KEY),
+                "l'ingresso dichiara i tipi"
+            );
+            assert_eq!(scoperto.geometries[0].nullable, geometria_nullable);
+            scoperto
+        }
+
+        fn wkb(geometry: &Geometry<f64>) -> Vec<u8> {
+            geometry.to_wkb(CoordDimensions::xy()).expect("wkb")
+        }
+
+        fn batch(schema: &SchemaRef, celle: &[Option<Vec<u8>>]) -> RecordBatch {
+            let righe = celle.len();
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(
+                        (0..righe)
+                            .map(|i| i64::try_from(i).expect("riga"))
+                            .collect::<Vec<_>>(),
+                    )),
+                    Arc::new(StringArray::from(
+                        (0..righe).map(|_| Some("a")).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(celle.iter().map(Option::as_deref).collect::<BinaryArray>()),
+                ],
+            )
+            .expect("batch")
+        }
+
+        fn anello(punti: &[(f64, f64)]) -> LineString<f64> {
+            LineString::from(punti.to_vec())
+        }
+
+        fn quadrato(x: f64, y: f64, lato: f64) -> Polygon<f64> {
+            Polygon::new(
+                anello(&[
+                    (x, y),
+                    (x + lato, y),
+                    (x + lato, y + lato),
+                    (x, y + lato),
+                    (x, y),
+                ]),
+                vec![],
+            )
+        }
+
+        /// Un esemplare per tipo, abbastanza denso da essere spezzato da
+        /// `subdivide` con 8 vertici.
+        fn esemplare(tipo: GeometryType) -> Geometry<f64> {
+            let zigzag = |y: f64| {
+                anello(
+                    &(0..10_u8)
+                        .map(|i| (f64::from(i), y + f64::from(i % 2) * 0.5))
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let linea = zigzag(0.0);
+            let poligono = Polygon::new(
+                anello(&[
+                    (0.0, 0.0),
+                    (2.0, -0.5),
+                    (4.0, 0.0),
+                    (4.5, 2.0),
+                    (4.0, 4.0),
+                    (2.0, 4.5),
+                    (0.0, 4.0),
+                    (-0.5, 2.0),
+                    (0.0, 0.0),
+                ]),
+                vec![],
+            );
+            match tipo {
+                GeometryType::Point => Geometry::Point(Point::new(1.0, 2.0)),
+                GeometryType::LineString => Geometry::LineString(linea),
+                GeometryType::Polygon => Geometry::Polygon(poligono),
+                GeometryType::MultiPoint => Geometry::MultiPoint(MultiPoint::from(
+                    (0..10_u8)
+                        .map(|i| (f64::from(i), f64::from(i * i % 7)))
+                        .collect::<Vec<_>>(),
+                )),
+                GeometryType::MultiLineString => {
+                    Geometry::MultiLineString(MultiLineString::new(vec![linea, zigzag(5.0)]))
+                }
+                GeometryType::MultiPolygon => Geometry::MultiPolygon(MultiPolygon::new(vec![
+                    poligono,
+                    quadrato(10.0, 10.0, 1.0),
+                ])),
+                GeometryType::GeometryCollection => Geometry::GeometryCollection(
+                    vec![
+                        Geometry::Point(Point::new(9.0, 9.0)),
+                        Geometry::Polygon(quadrato(20.0, 20.0, 1.0)),
+                    ]
+                    .into(),
+                ),
+                other => panic!("tipo senza esemplare: {other:?}"),
+            }
+        }
+
+        fn tipo_di(geometry: &Geometry<f64>) -> GeometryType {
+            match geometry {
+                Geometry::Point(_) => GeometryType::Point,
+                Geometry::LineString(_) | Geometry::Line(_) => GeometryType::LineString,
+                Geometry::Polygon(_) | Geometry::Rect(_) | Geometry::Triangle(_) => {
+                    GeometryType::Polygon
+                }
+                Geometry::MultiPoint(_) => GeometryType::MultiPoint,
+                Geometry::MultiLineString(_) => GeometryType::MultiLineString,
+                Geometry::MultiPolygon(_) => GeometryType::MultiPolygon,
+                Geometry::GeometryCollection(_) => GeometryType::GeometryCollection,
+            }
+        }
+
+        fn centimetro() -> Precision {
+            Precision::new(0.01).expect("precisione")
+        }
+
+        /// I tipi che l'analisi dichiara in uscita per un ingresso di tipi
+        /// `tipi` (exact).
+        fn dichiarati(op: &str, tipi: &[GeometryType], config: &Value) -> BTreeSet<GeometryType> {
+            let mut contract = geo_contract(projected_crs());
+            contract.geometries[0].types = esatti(tipi);
+            let output = analyze_one(op, std::slice::from_ref(&contract), config, None)
+                .unwrap_or_else(|errore| panic!("analisi {op}: {errore}"));
+            let dichiarazione = output.geometries[0]
+                .types
+                .value()
+                .unwrap_or_else(|| panic!("{op}: nessuna dichiarazione dei tipi"));
+            assert_eq!(dichiarazione.declaration(), TypesDeclaration::Exact, "{op}");
+            dichiarazione.types().iter().copied().collect()
+        }
+
+        fn contenuti(op: &str, tipi: &[GeometryType], prodotti: &[Geometry<f64>], config: &Value) {
+            let ammessi = dichiarati(op, tipi, config);
+            for prodotta in prodotti {
+                assert!(
+                    ammessi.contains(&tipo_di(prodotta)),
+                    "{op} su {tipi:?}: prodotto {:?}, dichiarati {ammessi:?}",
+                    tipo_di(prodotta)
+                );
+            }
+        }
+
+        /// Lo schema del kernel contro quello dell'analisi (vedi il blocco).
+        fn confronta(op: &str, analizzato: &DataContract, kernel: &SchemaRef, batch: &RecordBatch) {
+            assert_eq!(
+                firma(&analizzato.schema),
+                firma(kernel),
+                "{op}: schema dell'analisi diverso da quello del kernel"
+            );
+            let riletto =
+                contract_from_arrow_schema(kernel.clone(), plenora_core::crs::resolve_crs)
+                    .expect("contratto riletto");
+            assert_eq!(
+                riletto.geometries.len(),
+                analizzato.geometries.len(),
+                "{op}"
+            );
+            for (letta, dedotta) in riletto.geometries.iter().zip(&analizzato.geometries) {
+                assert_eq!(letta.name, dedotta.name, "{op}");
+                assert_eq!(
+                    letta.crs.as_resolved().map(ResolvedCrs::definition),
+                    dedotta.crs.as_resolved().map(ResolvedCrs::definition),
+                    "{op}: CRS"
+                );
+                assert_eq!(letta.dimensions, dedotta.dimensions, "{op}: dimensioni");
+                assert_eq!(letta.encoding, dedotta.encoding, "{op}: encoding");
+                assert_eq!(letta.nullable, dedotta.nullable, "{op}: nullable");
+            }
+            // Lo schema pubblicato (blocco canonico dal contratto) si
+            // costruisce sui metadati del kernel senza conflitti R2.6.
+            let mut pubblicato = analizzato.clone();
+            pubblicato.schema = kernel.clone();
+            arrow_schema_from_contract(&pubblicato)
+                .unwrap_or_else(|errore| panic!("{op}: schema pubblicato: {errore}"));
+            for (indice, campo) in kernel.fields().iter().enumerate() {
+                if !campo.is_nullable() {
+                    assert_eq!(
+                        batch.column(indice).null_count(),
+                        0,
+                        "{op}: {}",
+                        campo.name()
+                    );
+                }
+            }
+        }
+
+        fn geometrie_della_colonna(batch: &RecordBatch) -> Vec<Geometry<f64>> {
+            let indice = batch.schema().index_of(DEFAULT_GEOMETRY_COLUMN).unwrap();
+            let celle = batch
+                .column(indice)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .unwrap();
+            (0..celle.len())
+                .filter(|riga| !celle.is_null(*riga))
+                .map(|riga| crate::geometry_from_wkb(celle.value(riga)).unwrap())
+                .collect()
+        }
+
+        #[test]
+        fn polygonize_come_l_analisi() {
+            let contract = ingresso(&[GeometryType::LineString], true);
+            let analizzato = analyze_one(
+                "geo.polygonize",
+                std::slice::from_ref(&contract),
+                &json!({}),
+                None,
+            )
+            .expect("analisi");
+            // Un quadrato chiuso e un dangle: un poligono e un residuo.
+            let quadrato = Geometry::LineString(anello(&[
+                (0.0, 0.0),
+                (4.0, 0.0),
+                (4.0, 4.0),
+                (0.0, 4.0),
+                (0.0, 0.0),
+            ]));
+            let coda = Geometry::LineString(anello(&[(4.0, 4.0), (6.0, 6.0)]));
+            let input = batch(
+                &contract.schema,
+                &[Some(wkb(&quadrato)), None, Some(wkb(&coda))],
+            );
+            let (schema, batches) = polygonize_batches(
+                &contract.schema,
+                &[input],
+                DEFAULT_GEOMETRY_COLUMN,
+                PolygonizeParams::default(),
+                100,
+                centimetro(),
+            )
+            .expect("kernel");
+            assert_eq!(batches[0].schema(), schema);
+            confronta("geo.polygonize", &analizzato, &schema, &batches[0]);
+            let prodotte = geometrie_della_colonna(&batches[0]);
+            assert_eq!(prodotte.len(), 2);
+            contenuti(
+                "geo.polygonize",
+                &[GeometryType::LineString],
+                &prodotte,
+                &json!({}),
+            );
+        }
+
+        #[test]
+        fn split_come_l_analisi() {
+            // Nel dominio di EPSG:32632 (l'analisi controlla la lama).
+            let nel_fuso = |g: Geometry<f64>| geo::Translate::translate(&g, 500_000.0, 4_000_000.0);
+            let lama = nel_fuso(Geometry::LineString(anello(&[(2.0, -1.0), (2.0, 5.0)])));
+            let config = json!({ "other_wkb": esadecimale(&wkb(&lama)) });
+            let sorgenti = [
+                Geometry::Polygon(quadrato(0.0, 0.0, 4.0)),
+                Geometry::MultiPolygon(MultiPolygon::new(vec![
+                    quadrato(0.0, 0.0, 1.0),
+                    quadrato(3.0, 0.0, 1.0),
+                ])),
+                Geometry::LineString(anello(&[(0.0, 2.0), (4.0, 2.0)])),
+            ]
+            .map(nel_fuso);
+            for nullable in [true, false] {
+                let tipi = [
+                    GeometryType::LineString,
+                    GeometryType::Polygon,
+                    GeometryType::MultiPolygon,
+                ];
+                let contract = ingresso(&tipi, nullable);
+                let analizzato =
+                    analyze_one("geo.split", std::slice::from_ref(&contract), &config, None)
+                        .expect("analisi");
+                let celle: Vec<Option<Vec<u8>>> = sorgenti.iter().map(|g| Some(wkb(g))).collect();
+                let input = batch(&contract.schema, &celle);
+                let taglienti: BinaryArray = celle
+                    .iter()
+                    .map(|_| Some(wkb(&lama)))
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(Option::as_deref)
+                    .collect();
+                let (schema, batches) = split_batches(
+                    &contract.schema,
+                    &[input],
+                    DEFAULT_GEOMETRY_COLUMN,
+                    &taglienti,
+                    None,
+                    100,
+                    centimetro(),
+                )
+                .expect("kernel");
+                assert_eq!(batches[0].schema(), schema);
+                confronta("geo.split", &analizzato, &schema, &batches[0]);
+                let prodotte = geometrie_della_colonna(&batches[0]);
+                assert!(prodotte.len() >= 4, "{}", prodotte.len());
+                contenuti("geo.split", &tipi, &prodotte, &config);
+                // Solo poligoni dichiarati: solo `Polygon` in uscita.
+                assert_eq!(
+                    dichiarati("geo.split", &[GeometryType::MultiPolygon], &config),
+                    BTreeSet::from([GeometryType::Polygon])
+                );
+            }
+        }
+
+        /// Il campo geometria dell'uscita non porta la dichiarazione dei
+        /// tipi dell'ingresso: la riscrive il contratto.
+        #[test]
+        fn i_tipi_ereditati_non_sopravvivono_nel_campo() {
+            let contract = ingresso(&[GeometryType::LineString], true);
+            let analizzato = analyze_one(
+                "geo.polygonize",
+                std::slice::from_ref(&contract),
+                &json!({}),
+                None,
+            )
+            .expect("analisi");
+            let campo = analizzato
+                .schema
+                .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+                .unwrap();
+            assert!(!campo.metadata().contains_key(PLENORA_GEOMETRY_TYPES_KEY));
+            assert!(!campo
+                .metadata()
+                .contains_key(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY));
+            let pubblicato = arrow_schema_from_contract(&analizzato).expect("pubblicato");
+            assert_eq!(
+                pubblicato
+                    .field_with_name(DEFAULT_GEOMETRY_COLUMN)
+                    .unwrap()
+                    .metadata()
+                    .get(PLENORA_GEOMETRY_TYPES_KEY)
+                    .map(String::as_str),
+                Some("linestring,polygon")
+            );
+        }
+
+        const SEMPLICI_E_MULTI: [GeometryType; 7] = [
+            GeometryType::Point,
+            GeometryType::LineString,
+            GeometryType::Polygon,
+            GeometryType::MultiPoint,
+            GeometryType::MultiLineString,
+            GeometryType::MultiPolygon,
+            GeometryType::GeometryCollection,
+        ];
+
+        #[test]
+        fn explode_e_subdivide_dichiarano_i_tipi_prodotti() {
+            for tipo in SEMPLICI_E_MULTI {
+                let geometria = esemplare(tipo);
+                let parti = crate::operations::explode(&geometria).expect("explode");
+                contenuti("geo.explode", &[tipo], &parti, &json!({}));
+                let parti =
+                    crate::extensions2::subdivide(&geometria, 8, centimetro()).expect("subdivide");
+                if !matches!(tipo, GeometryType::Point | GeometryType::GeometryCollection) {
+                    assert!(parti.len() > 1, "{tipo:?}: nessun taglio");
+                }
+                contenuti(
+                    "geo.subdivide",
+                    &[tipo],
+                    &parti,
+                    &json!({"max_vertices": 8}),
+                );
+                // Sotto soglia la geometria passa invariata.
+                let intera = crate::extensions2::subdivide(&geometria, 1_000, centimetro())
+                    .expect("subdivide");
+                contenuti(
+                    "geo.subdivide",
+                    &[tipo],
+                    &intera,
+                    &json!({"max_vertices": 1_000}),
+                );
+            }
+        }
+
+        #[test]
+        fn collect_dichiara_i_tipi_prodotti() {
+            for tipo in SEMPLICI_E_MULTI {
+                let geometria = esemplare(tipo);
+                let spostata = geo::Translate::translate(&geometria, 100.0, 100.0);
+                for gruppo in [
+                    vec![Some(geometria.clone())],
+                    vec![Some(geometria.clone()), Some(spostata)],
+                ] {
+                    let raccolta = crate::extensions::collect_geometries(&gruppo)
+                        .expect("collect")
+                        .expect("gruppo non vuoto");
+                    contenuti(
+                        "geo.collect",
+                        &[tipo],
+                        &[raccolta],
+                        &json!({"group_by": ["label"]}),
+                    );
+                }
+            }
+            // Gruppo misto: `GeometryCollection`.
+            let misto = crate::extensions::collect_geometries(&[
+                Some(esemplare(GeometryType::Point)),
+                Some(esemplare(GeometryType::Polygon)),
+            ])
+            .expect("collect")
+            .expect("gruppo");
+            contenuti(
+                "geo.collect",
+                &[GeometryType::Point, GeometryType::Polygon],
+                &[misto],
+                &json!({"group_by": ["label"]}),
+            );
+        }
+
+        #[test]
+        fn aggregazioni_e_ricostruzioni_dichiarano_i_tipi_prodotti() {
+            let poligoni = [GeometryType::Polygon, GeometryType::MultiPolygon];
+            let ingressi: Vec<Geometry<f64>> =
+                poligoni.iter().map(|tipo| esemplare(*tipo)).collect();
+            let dissolta = crate::topology::dissolve(&ingressi, centimetro()).expect("dissolve");
+            contenuti("geo.dissolve", &poligoni, &[dissolta], &json!({}));
+
+            let triangoli = crate::extended_algorithms::delaunay(
+                &esemplare(GeometryType::MultiPoint),
+                1_000,
+                1_000,
+            )
+            .expect("delaunay");
+            let triangoli: Vec<Geometry<f64>> =
+                triangoli.into_iter().map(Geometry::Polygon).collect();
+            assert!(!triangoli.is_empty());
+            contenuti(
+                "geo.delaunay",
+                &[GeometryType::MultiPoint],
+                &triangoli,
+                &json!({}),
+            );
+
+            let linee = [GeometryType::LineString, GeometryType::MultiLineString];
+            for tipo in linee {
+                let unite = crate::extended_algorithms::line_merge(&esemplare(tipo), 1_000, 1_000)
+                    .expect("line_merge");
+                let unite: Vec<Geometry<f64>> =
+                    unite.into_iter().map(Geometry::LineString).collect();
+                contenuti("geo.line_merge", &[tipo], &unite, &json!({}));
+            }
+
+            for (costruttore, tipi) in [
+                ("geo.line_builder", [GeometryType::Point]),
+                ("geo.polygon_builder", [GeometryType::LineString]),
+            ] {
+                let mut contract = geo_contract(projected_crs());
+                contract.geometries[0].types = esatti(&tipi);
+                let output =
+                    analyze_one(costruttore, &[contract], &json!({}), None).expect("costruttore");
+                assert!(
+                    output.geometries[0].types.value().is_none(),
+                    "{costruttore}: nessun kernel qui la verifica, nessuna dichiarazione"
+                );
+            }
+        }
+
+        #[test]
+        fn overlay_dichiara_i_tipi_prodotti() {
+            let sinistra = [esemplare(GeometryType::Polygon)];
+            let destra = [Geometry::Polygon(quadrato(3.0, 3.0, 4.0))];
+            let mut prodotti = Vec::new();
+            for modo in [
+                crate::topology::OverlayMode::Intersection,
+                crate::topology::OverlayMode::Union,
+                crate::topology::OverlayMode::Identity,
+                crate::topology::OverlayMode::SymmetricDifference,
+            ] {
+                for (l, r) in [(&sinistra[..], &destra[..]), (&sinistra[..], &[][..])] {
+                    prodotti.extend(
+                        crate::topology::polygon_overlay(l, r, modo, 100, 100, centimetro())
+                            .expect("overlay")
+                            .into_iter()
+                            .map(|pezzo| pezzo.geometry),
+                    );
+                }
+            }
+            let mut contratto_sinistro = geo_contract(projected_crs());
+            contratto_sinistro.geometries[0].types = esatti(&[GeometryType::Polygon]);
+            let output = analyze_one(
+                "geo.overlay",
+                &[contratto_sinistro, geo_contract(projected_crs())],
+                &json!({"mode": "union"}),
+                None,
+            )
+            .expect("overlay");
+            let ammessi: BTreeSet<GeometryType> = output.geometries[0]
+                .types
+                .value()
+                .expect("tipi")
+                .types()
+                .iter()
+                .copied()
+                .collect();
+            for prodotto in &prodotti {
+                assert!(
+                    ammessi.contains(&tipo_di(prodotto)),
+                    "{:?}",
+                    tipo_di(prodotto)
+                );
+            }
+        }
     }
 }

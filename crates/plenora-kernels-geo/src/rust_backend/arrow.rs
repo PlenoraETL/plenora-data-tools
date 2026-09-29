@@ -15,7 +15,7 @@ use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, StringArray, UInt
 use plenora_core::arrow::select::{concat::concat, take::take};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{
-    geometry_column_index, geometry_output_field, MAX_CELL_COORDINATES,
+    geometry_column_index, strip_rewritten_types_declarations, MAX_CELL_COORDINATES,
 };
 use plenora_core::PlenoraError;
 
@@ -93,16 +93,17 @@ pub fn make_valid_batches(
 ///
 /// Tutte le linee non-null di tutti i batch sono raccolte in una `GeometryCollection`, nodate (salvo
 /// `node_input = false`) e poligonizzate. L'output ha una riga per poligono
-/// e per residuo, nessun attributo propagato: la colonna geometria (CRS
-/// `output_crs`) e `__class` (`polygon`, `cut_edge`, `dangle`,
-/// `invalid_ring`), in quest'ordine di classe.
+/// e per residuo, nessun attributo propagato: la colonna geometria (il campo
+/// dell'ingresso, [`output_geometry_field`]) e `__class` (`polygon`,
+/// `cut_edge`, `dangle`, `invalid_ring`), in quest'ordine di classe.
 ///
 /// Limiti come nel trasporto GEOS: [`MAX_CLEAN_VERTICES`] coordinate in
 /// ingresso e in uscita, [`MAX_NODING_WORK`], `max_output_rows` geometrie.
 /// Dentro ogni classe l'ordine e' quello del kernel Rust, non quello di
 /// GEOS (vedi [`polygonize_linework`]). `precision` e' la precisione
 /// dichiarata del noding (1 cm a terra, [`Precision::from_crs`]), argomento
-/// in piu' rispetto a 190c493.
+/// in piu' rispetto a 190c493; `output_crs` di 190c493 non c'e' piu': il CRS
+/// e' quello dell'ingresso, portato dal campo geometria.
 ///
 /// # Errors
 ///
@@ -113,7 +114,6 @@ pub fn polygonize_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
     geometry_column: &str,
-    output_crs: &str,
     params: PolygonizeParams,
     max_output_rows: u64,
     precision: Precision,
@@ -154,7 +154,7 @@ pub fn polygonize_batches(
     }
     let output_schema = Arc::new(Schema::new_with_metadata(
         vec![
-            geometry_output_field(geometry_column, output_crs)?,
+            output_geometry_field(schema.field(geometry_index), true),
             Field::new(CLASS_COLUMN, DataType::Utf8, false),
         ],
         schema.metadata().clone(),
@@ -170,6 +170,23 @@ pub fn polygonize_batches(
     ];
     let batch = RecordBatch::try_new(output_schema.clone(), columns)?;
     Ok((output_schema, vec![batch]))
+}
+
+/// Il campo geometria dell'uscita di `polygonize` e `split`: quello
+/// dell'ingresso, con tutti i suoi metadati (R2.4: CRS, dimensioni,
+/// encoding e lineage passano invariati), senza la dichiarazione dei tipi
+/// geometrici, che l'operazione riscrive (l'analisi la ridichiara nel
+/// contratto, `analyze::tipi`), e con la nullability del contratto:
+/// `nullable` per l'aggregazione di `polygonize`, quella dell'ingresso per
+/// lo `split`.
+///
+/// E' lo schema che l'analisi dichiara (oracolo
+/// `analyze::tests::kernel_crosscheck`); a 190c493 il campo nasceva da
+/// `geometry_output_field` e perdeva i metadati dell'ingresso.
+fn output_geometry_field(input: &Field, nullable: bool) -> Field {
+    let mut metadata = input.metadata().clone();
+    strip_rewritten_types_declarations(&mut metadata);
+    Field::new(input.name(), DataType::Binary, nullable).with_metadata(metadata)
 }
 
 /// L'errore dello split lineare nella lingua del passo: interno cio' che
@@ -194,8 +211,9 @@ fn errore_dello_split_lineare(error: ExtendedAlgorithmError) -> PlenoraError {
 /// `tolerance`); una `Polygon`/`MultiPolygon` da
 /// [`split_polygon_by_linework`] con [`MAX_CELL_COORDINATES`],
 /// [`MAX_NODING_WORK`] e `max_output_rows`. Ogni parte diventa una riga con
-/// gli attributi della sorgente, la geometria riscritta (CRS `output_crs`) e
-/// `__parent_index` (`UInt64`, indice della riga sorgente).
+/// gli attributi della sorgente, la geometria riscritta (nel campo
+/// dell'ingresso, [`output_geometry_field`]) e `__parent_index` (`UInt64`,
+/// indice della riga sorgente).
 ///
 /// L'ordine delle righe e' quello delle sorgenti; dentro una sorgente
 /// poligonale e' quello delle facce del kernel Rust, non quello di GEOS.
@@ -206,14 +224,14 @@ fn errore_dello_split_lineare(error: ExtendedAlgorithmError) -> PlenoraError {
 /// una sorgente non e' `LineString`/`Polygon`/`MultiPolygon`, o se le parti
 /// superano `max_output_rows`; gli errori di decode e dei kernel, tradotti.
 // Gli argomenti sono quelli del trasporto di 190c493 piu' la precisione
-// dichiarata: raggrupparli cambierebbe la forma del contratto.
+// dichiarata e meno `output_crs`: raggrupparli cambierebbe la forma del
+// contratto.
 #[allow(clippy::too_many_arguments)]
 pub fn split_batches(
     left_schema: &SchemaRef,
     left_batches: &[RecordBatch],
     geometry_column: &str,
     splitters: &BinaryArray,
-    output_crs: &str,
     tolerance: Option<f64>,
     max_output_rows: u64,
     precision: Precision,
@@ -253,14 +271,7 @@ pub fn split_batches(
             pieces.push(index, &parts, max_output_rows)?;
         }
     }
-    split_output(
-        left_schema,
-        left_batches,
-        geometry_index,
-        geometry_column,
-        output_crs,
-        pieces,
-    )
+    split_output(left_schema, left_batches, geometry_index, pieces)
 }
 
 /// Le parti gia' codificate e la riga sorgente di ciascuna.
@@ -372,8 +383,6 @@ fn split_output(
     left_schema: &SchemaRef,
     left_batches: &[RecordBatch],
     geometry_index: usize,
-    geometry_column: &str,
-    output_crs: &str,
     pieces: SplitPieces,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
     let SplitPieces { encoded, parents } = pieces;
@@ -382,7 +391,9 @@ fn split_output(
         .iter()
         .map(|field| field.as_ref().clone())
         .collect();
-    output_fields[geometry_index] = geometry_output_field(geometry_column, output_crs)?;
+    let input_geometry = left_schema.field(geometry_index);
+    output_fields[geometry_index] =
+        output_geometry_field(input_geometry, input_geometry.is_nullable());
     output_fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
     let output_schema = Arc::new(Schema::new_with_metadata(
         output_fields,
@@ -458,7 +469,7 @@ mod tests {
     use crate::test_support::{linestring_wkb_le, point_wkb_le, polygon_wkb_le};
     use geo::Area;
     use plenora_core::arrow::array::Int64Array;
-    use plenora_core::contract::arrow_metadata::DEFAULT_GEOMETRY_COLUMN;
+    use plenora_core::contract::arrow_metadata::{geometry_output_field, DEFAULT_GEOMETRY_COLUMN};
 
     const CRS: &str = "EPSG:3857";
 
@@ -533,7 +544,6 @@ mod tests {
             &schema,
             &[batch],
             DEFAULT_GEOMETRY_COLUMN,
-            CRS,
             PolygonizeParams::default(),
             16,
             precisione(),
@@ -561,7 +571,6 @@ mod tests {
                 &schema,
                 std::slice::from_ref(&batch),
                 DEFAULT_GEOMETRY_COLUMN,
-                CRS,
                 complete,
                 16,
                 precisione()
@@ -573,7 +582,6 @@ mod tests {
                 &schema,
                 &[batch],
                 DEFAULT_GEOMETRY_COLUMN,
-                CRS,
                 PolygonizeParams::default(),
                 1,
                 precisione()
@@ -595,7 +603,6 @@ mod tests {
             &[batch],
             DEFAULT_GEOMETRY_COLUMN,
             &splitters,
-            CRS,
             None,
             16,
             precisione(),
@@ -628,7 +635,6 @@ mod tests {
             std::slice::from_ref(&batch),
             DEFAULT_GEOMETRY_COLUMN,
             &splitters,
-            CRS,
             None,
             16,
             precisione(),
@@ -650,7 +656,6 @@ mod tests {
                 &[bad],
                 DEFAULT_GEOMETRY_COLUMN,
                 &splitters,
-                CRS,
                 None,
                 16,
                 precisione()
@@ -666,7 +671,6 @@ mod tests {
                 &[batch],
                 DEFAULT_GEOMETRY_COLUMN,
                 &splitters,
-                CRS,
                 None,
                 16,
                 precisione()
@@ -694,7 +698,6 @@ mod tests {
                     &[batch],
                     DEFAULT_GEOMETRY_COLUMN,
                     &splitters,
-                    CRS,
                     None,
                     16,
                     precisione()
@@ -713,7 +716,6 @@ mod tests {
                     &[batch],
                     DEFAULT_GEOMETRY_COLUMN,
                     &splitters,
-                    CRS,
                     None,
                     16,
                     precisione()
@@ -732,7 +734,6 @@ mod tests {
             &[batch],
             DEFAULT_GEOMETRY_COLUMN,
             &splitters,
-            CRS,
             None,
             16,
             precisione(),
@@ -759,7 +760,6 @@ mod tests {
                 &[batch],
                 DEFAULT_GEOMETRY_COLUMN,
                 &splitters,
-                CRS,
                 None,
                 3,
                 precisione(),

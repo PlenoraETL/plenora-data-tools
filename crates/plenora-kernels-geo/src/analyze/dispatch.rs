@@ -22,7 +22,7 @@ use super::helpers::{
     crs_requirement, ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive,
     ensure_ratio, invalid_param, merge_schema_metadata, output_fields, output_name, parse_config,
     rebuild, require_identifiable_geometry, require_xy_dimensions, short_id, single_geometry,
-    validate_other_wkb, with_geometry_types, with_schema_metadata,
+    validate_other_wkb, with_geometry_types, with_geometry_types_property, with_schema_metadata,
 };
 use super::measures::{
     analyze_bounds, analyze_diagnostics, analyze_geometry_accessors, analyze_line_locate_point,
@@ -248,8 +248,41 @@ fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
 /// creano una nuova colonna geometria.
 // Dispatcher esaustivo sulle op unarie del catalogo: la lunghezza e' la
 // sequenza lineare dei casi sul contratto, non complessita' logica.
-#[allow(clippy::too_many_lines)]
 pub(in crate::analyze) fn analyze_unary(
+    descriptor: &OperationDescriptor,
+    input: &DataContract,
+    config: &Value,
+    fields: &mut FieldAllocator,
+) -> Result<DataContract> {
+    let output = analyze_unary_shape(descriptor, input, config, fields)?;
+    let geometry = single_geometry(descriptor.id, input)?;
+    redeclare_output_types(descriptor.id, geometry, output)
+}
+
+/// I tipi dell'uscita delle operazioni che spezzano, raccolgono o
+/// ricostruiscono le geometrie (`analyze::tipi`); le altre passano
+/// invariate.
+fn redeclare_output_types(
+    op: &str,
+    geometry: &GeometryColumnContract,
+    output: DataContract,
+) -> Result<DataContract> {
+    let Some(types) = super::tipi::tipi_di_uscita(op, &geometry.types)? else {
+        return Ok(output);
+    };
+    let target = output
+        .geometries
+        .iter()
+        .find(|candidate| candidate.field_id == geometry.field_id)
+        .cloned()
+        .ok_or_else(|| {
+            PlenoraError::Internal(format!("{op}: colonna geometria assente dall'uscita"))
+        })?;
+    with_geometry_types_property(&output, &target, types)
+}
+
+#[allow(clippy::too_many_lines)]
+fn analyze_unary_shape(
     descriptor: &OperationDescriptor,
     input: &DataContract,
     config: &Value,
@@ -529,6 +562,7 @@ pub(in crate::analyze) fn analyze_binary(
             "{op}: analyze_contract non implementata"
         ))),
     }?;
+    let output = redeclare_output_types(op, left_geometry, output)?;
     // R2.4: i metadati di SCHEMA delle due sorgenti sono fusi; un conflitto
     // su valori diversi fallisce qui, in validazione, mai a runtime.
     let schema_metadata = merge_schema_metadata(op, left, right)?;

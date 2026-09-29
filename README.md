@@ -502,6 +502,14 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   `190c493`, voluta. I kernel del laboratorio
   (`make_valid_geometry_rust*`, `split_polygon_by_linework_rust*`, e
   `PolygonizeOptions::precision`) la prendono in unità delle coordinate.
+- **Campo geometria dell'uscita.** `polygonize_batches` e `split_batches`
+  non prendono più `output_crs`: il campo geometria dell'uscita è quello
+  dell'ingresso con tutti i suoi metadati (CRS, dimensioni, encoding,
+  lineage, R2.4), senza la dichiarazione dei tipi che l'operazione
+  riscrive, e con la nullability del contratto. È lo schema che l'analisi
+  dichiara, verificato dall'oracolo `analyze::tests::kernel_crosscheck`
+  (nomi, tipi, nullability, metadati di campo e di schema); a `190c493` il
+  campo nasceva nuovo e perdeva i metadati dell'ingresso.
 - **Errori nuovi.** Noding non convergente (`Unsupported`), segno o
   confronto d'area non decidibile su coordinate fuori dal dominio
   dell'aritmetica esatta, cioè con modulo fuori da `[2^-450, 2^450]`
