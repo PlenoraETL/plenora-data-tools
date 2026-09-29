@@ -303,9 +303,13 @@ fn collect_membership(
     Ok(())
 }
 
-/// Byte in memoria di un batch: le allocazioni Arrow che tiene vive, ognuna
-/// contata una volta (`plenora_core::memoria::byte_vivi`, la stessa misura
-/// del budget del runner).
+/// Byte di un batch, per le decisioni di memoria dello spill.
+///
+/// Il maggiore fra le allocazioni Arrow che tiene vive, ognuna contata una
+/// volta (`plenora_core::memoria::byte_vivi`, la misura del budget del
+/// runner), e i byte di una sua copia
+/// (`plenora_core::memoria::byte_dati`: colonne che sono lo stesso array
+/// contano ciascuna, perche' `select_rows` e il sort le copiano ciascuna).
 ///
 /// La somma per colonna di `get_array_memory_size` contava un'allocazione
 /// condivisa una volta per ogni buffer che la vede: su un batch letto da
@@ -319,6 +323,7 @@ pub fn estimated_batch_bytes(batch: &RecordBatch) -> usize {
         .ok()
         .and_then(|byte| usize::try_from(byte).ok())
         .unwrap_or(usize::MAX)
+        .max(plenora_core::memoria::byte_dati(batch))
 }
 
 #[must_use]

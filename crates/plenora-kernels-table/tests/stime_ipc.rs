@@ -131,3 +131,21 @@ fn lo_spill_rilegge_una_partizione_che_sta_nel_budget() {
         aggregation::aggregate(&tabella, &config).expect("memoria")
     );
 }
+
+#[test]
+fn colonne_che_sono_lo_stesso_array_contano_ciascuna() {
+    // Otto colonne sullo stesso array: una allocazione tenuta viva, otto
+    // copie in `select_rows` e nel sort.
+    let colonna: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10_000));
+    let campi: Vec<Field> = (0..8)
+        .map(|indice| Field::new(format!("c{indice}"), DataType::Int64, false))
+        .collect();
+    let batch =
+        RecordBatch::try_new(Arc::new(Schema::new(campi)), vec![colonna; 8]).expect("batch");
+    let una = plenora_core::memoria::byte_vivi(std::iter::once(&batch)).expect("byte");
+    let copia = plenora_kernels_table::select_rows(&batch, &(0..10_000).collect::<Vec<_>>())
+        .expect("copia");
+    let byte_copia = plenora_core::memoria::byte_vivi(std::iter::once(&copia)).expect("byte");
+    assert!(byte_copia >= 8 * una - 8 * 64);
+    assert!(estimated_batch_bytes(&batch) >= 80_000 * 8);
+}
