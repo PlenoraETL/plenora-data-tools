@@ -344,8 +344,20 @@ fn sottoinsieme() -> impl Strategy<Value = Vec<&'static str>> {
     proptest::sample::subsequence(vec!["i", "f", "s", "b", "dec"], 1..=5).prop_shuffle()
 }
 
+/// `pieni` con `PLENORA_TEST_LUNGHI=1` (suite lunga, README «Suite lunga»),
+/// `ridotti` altrimenti; un valore diverso da `0` e `1` ferma il test. Copia
+/// di `casi` di `test_support`, che un test d'integrazione non raggiunge.
+fn casi(ridotti: u32, pieni: u32) -> u32 {
+    match std::env::var("PLENORA_TEST_LUNGHI") {
+        Err(std::env::VarError::NotPresent) => ridotti,
+        Ok(valore) if valore == "0" => ridotti,
+        Ok(valore) if valore == "1" => pieni,
+        _ => panic!("PLENORA_TEST_LUNGHI vale 1 (suite lunga) o 0"),
+    }
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
+    #![proptest_config(ProptestConfig::with_cases(casi(24, 128)))]
 
     #[test]
     fn aggregate_e_distinct_hanno_l_identita_e_l_ordine_delle_chiavi_testuali(

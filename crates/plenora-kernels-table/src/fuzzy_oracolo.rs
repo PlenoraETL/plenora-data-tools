@@ -18,7 +18,7 @@ use proptest::prelude::*;
 use super::{soundex, validate_config, FuzzyBlocking, FuzzyHow, FuzzyJoin, FuzzyMetric};
 use crate::hashing::FastHasher;
 use crate::joins::{combine_horizontal, HorizontalNames};
-use crate::test_support::{assert_batches_identical, nullable_batch};
+use crate::test_support::{assert_batches_identical, casi, nullable_batch, test_lunghi};
 use crate::{utf8_column, Limits};
 
 // -- Riferimento: copia letterale del percorso sequenziale -------------------
@@ -565,10 +565,18 @@ fn soglie_dai_punteggi(metric: FuzzyMetric, case_sensitive: bool) -> Vec<f64> {
 fn oracolo_casi_avversari() {
     let left = tabella(&CHIAVI);
     let right = tabella(&CHIAVI[..24]);
-    for metric in METRICHE {
-        for case_sensitive in [false, true] {
+    // Suite di default: le soglie fisse e una su otto di quelle attorno ai
+    // punteggi, con uno sfasamento diverso per metrica e maiuscole.
+    let passo = if test_lunghi() { 1 } else { 8 };
+    for (i_metric, metric) in METRICHE.into_iter().enumerate() {
+        for (i_case, case_sensitive) in [false, true].into_iter().enumerate() {
             let mut soglie = soglie_fisse();
-            soglie.extend(soglie_dai_punteggi(metric, case_sensitive));
+            soglie.extend(
+                soglie_dai_punteggi(metric, case_sensitive)
+                    .into_iter()
+                    .skip((i_metric * 2 + i_case) % passo)
+                    .step_by(passo),
+            );
             for &threshold in &soglie {
                 for blocking in BLOCKING {
                     for how in [FuzzyHow::Inner, FuzzyHow::Left] {
@@ -622,8 +630,20 @@ fn oracolo_errori_di_limite_identici() {
                 .num_rows();
             // Ogni `max_rows` da 0 a oltre il totale: sotto il totale entrambi
             // falliscono con lo stesso errore, dal totale in su entrambi
-            // riescono.
-            for max_rows in 0..=totale + 1 {
+            // riescono. Suite di default: i bordi e il mezzo.
+            let tutti: Vec<usize> = if test_lunghi() {
+                (0..=totale + 1).collect()
+            } else {
+                vec![
+                    0,
+                    1,
+                    totale / 2,
+                    totale.saturating_sub(1),
+                    totale,
+                    totale + 1,
+                ]
+            };
+            for max_rows in tutti {
                 let limits = Limits {
                     max_rows,
                     ..Limits::default()
@@ -675,7 +695,8 @@ fn oracolo_max_rows_al_bordo_su_molti_chunk() {
                     ..Limits::default()
                 };
                 let riferimento = fuzzy_join_riferimento(&left, &right, &config, &limits);
-                for _ in 0..10 {
+                // Ripetizioni: l'ordine in cui i thread finiscono cambia.
+                for _ in 0..casi(2, 10) {
                     for chunk in [1, 7, super::CHUNK_PROBE_FUZZY] {
                         let ottenuto =
                             super::fuzzy_join_con_chunk(&left, &right, &config, &limits, chunk);
@@ -740,7 +761,7 @@ fn soglia() -> impl Strategy<Value = f64> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
+    #![proptest_config(ProptestConfig::with_cases(casi(128, 512)))]
 
     #[test]
     fn oracolo_casuale(

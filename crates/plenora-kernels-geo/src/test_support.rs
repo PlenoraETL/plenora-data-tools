@@ -255,3 +255,27 @@ fn container_wkb_le(raw_type: u32, parts: &[Vec<u8>]) -> Vec<u8> {
     }
     payload
 }
+
+// --- suite lunga -------------------------------------------------------------
+
+/// `true` con `PLENORA_TEST_LUNGHI=1`: la suite lunga, obbligatoria prima del
+/// merge (README, «Suite lunga»). Assente o `0`: la suite di default, con un
+/// sottoinsieme deterministico degli stessi casi. Un altro valore e' un
+/// errore del chiamante e ferma il test, invece di scegliere in silenzio.
+pub fn test_lunghi() -> bool {
+    match std::env::var("PLENORA_TEST_LUNGHI") {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(valore) if valore == "0" => false,
+        Ok(valore) if valore == "1" => true,
+        _ => panic!("PLENORA_TEST_LUNGHI vale 1 (suite lunga) o 0"),
+    }
+}
+
+/// `pieni` nella suite lunga, `ridotti` in quella di default.
+pub fn casi(ridotti: u32, pieni: u32) -> u32 {
+    if test_lunghi() {
+        pieni
+    } else {
+        ridotti
+    }
+}

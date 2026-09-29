@@ -26,6 +26,8 @@ use geo::dimensions::Dimensions;
 use geo::{Coord, Geometry, Intersects, LineString, MultiPolygon, Polygon, Rect, Relate};
 use proptest::prelude::*;
 
+use crate::test_support::{casi, test_lunghi};
+
 /// `linestring_has_self_intersection` di `geo` 0.33.1, riga per riga.
 fn riferimento_geo(geom: &LineString<f64>) -> bool {
     for (i, line) in geom.lines().enumerate() {
@@ -768,8 +770,14 @@ fn differenziale_di_massa_deterministico() {
     let mut rng = Lcg(0x5EED_0000_0000_0001);
     let mut valutati = 0_u32;
     let mut con_autointersezione = 0_u32;
+    // Suite di default: un ottavo dei casi dallo stesso generatore.
+    let (piccoli, medi, grandi) = if test_lunghi() {
+        (20_000, 2_000, 8)
+    } else {
+        (2_500, 250, 2)
+    };
     // Piccoli su griglia: collinearita' e tocchi fitti.
-    for _ in 0..20_000 {
+    for _ in 0..piccoli {
         let vertici = 3 + rng.fino_a(40);
         let lato = 1 + rng.fino_a(6);
         let caso = anello_su_griglia(&mut rng, vertici, lato);
@@ -777,7 +785,7 @@ fn differenziale_di_massa_deterministico() {
         valutati += 1;
     }
     // Stellati di media taglia, validi e alterati.
-    for _ in 0..2_000 {
+    for _ in 0..medi {
         let vertici = 4 + rng.fino_a(300);
         let granularita = [1.0, 0.5, 8.0, 64.0][rng.indice(4)];
         let caso = anello_stellato(&mut rng, vertici, granularita);
@@ -786,17 +794,19 @@ fn differenziale_di_massa_deterministico() {
         valutati += 1;
     }
     // Pochi grandi: il riferimento e' quadratico.
-    for _ in 0..8 {
+    for _ in 0..grandi {
         let vertici = 1_000 + rng.fino_a(1_000);
         let caso = anello_stellato(&mut rng, vertici, 0.25);
         con_autointersezione += u32::from(verifica_predicato(&caso));
         valutati += 1;
     }
     // Entrambi i verdetti devono essere rappresentati in quantita', o il
-    // differenziale non prova niente.
-    assert_eq!(valutati, 22_008);
+    // differenziale non prova niente: almeno 1 000 su 22 008 nella suite
+    // lunga, in proporzione in quella di default.
+    assert_eq!(valutati, piccoli + medi + grandi);
+    let minimo = valutati / 22;
     assert!(
-        con_autointersezione >= 1_000 && valutati - con_autointersezione >= 1_000,
+        con_autointersezione >= minimo && valutati - con_autointersezione >= minimo,
         "{con_autointersezione}/{valutati}"
     );
 }
@@ -823,7 +833,7 @@ fn strategia_coordinata() -> impl Strategy<Value = f64> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 4_000, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: casi(500, 4_000), failure_persistence: None, ..ProptestConfig::default() })]
 
     /// Anelli arbitrari (aperti o chiusi) di coordinate miste: predicato
     /// e validazione completa contro il percorso generico.
@@ -1404,7 +1414,9 @@ fn differenziale_di_massa_multipoligoni_e_buchi() {
     let mut rng = Lcg(0x5EED_0000_0000_0004);
     let mut validi = 0_u32;
     let mut invalidi = 0_u32;
-    for caso in 0..1_500 {
+    // Suite di default: un quinto dei casi dallo stesso generatore.
+    let totale = if test_lunghi() { 1_500 } else { 300 };
+    for caso in 0..totale {
         let quante = 1 + rng.indice(if caso % 20 == 0 { 60 } else { 12 });
         let lato = 1 + rng.fino_a(4);
         let campo = 2 + rng.fino_a(20);
@@ -1447,11 +1459,15 @@ fn differenziale_di_massa_multipoligoni_e_buchi() {
             _ => invalidi += 1,
         }
     }
-    assert!(validi >= 100 && invalidi >= 100, "{validi}/{invalidi}");
+    let minimo = totale / 15;
+    assert!(
+        validi >= minimo && invalidi >= minimo,
+        "{validi}/{invalidi}"
+    );
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 1_000, failure_persistence: None, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: casi(125, 1_000), failure_persistence: None, ..ProptestConfig::default() })]
 
     /// Parti rettangolari o triangolari su una griglia con zeri di segno
     /// opposto, come `MultiPolygon` o come buchi dello stesso guscio.

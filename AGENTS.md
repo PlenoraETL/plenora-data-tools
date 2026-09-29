@@ -40,6 +40,10 @@ cargo clippy --workspace --lib --locked -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 cargo test --workspace --locked
+PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked   # prima del merge
 ```
+
+La suite lunga (README, «Suite lunga») è obbligatoria prima del merge: la
+suite di default ne gira un sottoinsieme deterministico.
 
 Toolchain fissata in `rust-toolchain.toml` (1.98.0).

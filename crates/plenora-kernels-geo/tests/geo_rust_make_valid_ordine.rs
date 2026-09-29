@@ -386,8 +386,20 @@ fn as_geometry(polygons: Vec<Polygon<f64>>) -> Geometry<f64> {
     }
 }
 
+/// `pieni` con `PLENORA_TEST_LUNGHI=1` (suite lunga, README «Suite lunga»),
+/// `ridotti` altrimenti; un valore diverso da `0` e `1` ferma il test. Copia
+/// di `casi` di `test_support`, che un test d'integrazione non raggiunge.
+fn casi(ridotti: u32, pieni: u32) -> u32 {
+    match std::env::var("PLENORA_TEST_LUNGHI") {
+        Err(std::env::VarError::NotPresent) => ridotti,
+        Ok(valore) if valore == "0" => ridotti,
+        Ok(valore) if valore == "1" => pieni,
+        _ => panic!("PLENORA_TEST_LUNGHI vale 1 (suite lunga) o 0"),
+    }
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig::with_cases(casi(32, 256)))]
 
     /// Buchi e parti permutati: stessa geometria (o stesso errore), salvo
     /// l'input gia' valido, che passa invariato e quindi nell'ordine suo.

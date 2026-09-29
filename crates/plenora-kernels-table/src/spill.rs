@@ -1897,26 +1897,33 @@ mod tests {
             &["k_bool", "k_float", "k_u64"],
             &["k_text", "k_float", "k_int"],
         ];
-        for columns in key_sets {
-            for ascending in [true, false] {
-                let config = Sort {
-                    columns: columns.iter().map(|name| (*name).to_string()).collect(),
-                    ascending,
-                };
-                let expected = aggregation::sort(batch, &config).expect("sort in memoria");
-                let (spilled, metrics) =
-                    sort_spilled(batch, &config, &limits).expect("sort spilled");
-                assert!(metrics.files > 1, "attese piu' run: {metrics:?}");
-                assert_eq!(
-                    spilled.schema(),
-                    batch.schema(),
-                    "nessuna colonna tecnica nell'output"
-                );
-                assert_eq!(
-                    spilled, expected,
-                    "run di {run_rows} righe, config {config:?}"
-                );
+        // Suite di default: una configurazione su tre, sfasata con
+        // `run_rows`, cosi' fra le forme del chiamante ogni configurazione
+        // resta coperta.
+        let lunghi = crate::test_support::test_lunghi();
+        let configurazioni = key_sets
+            .into_iter()
+            .flat_map(|columns| [(columns, true), (columns, false)]);
+        for (indice, (columns, ascending)) in configurazioni.enumerate() {
+            if !lunghi && !(indice + run_rows).is_multiple_of(3) {
+                continue;
             }
+            let config = Sort {
+                columns: columns.iter().map(|name| (*name).to_string()).collect(),
+                ascending,
+            };
+            let expected = aggregation::sort(batch, &config).expect("sort in memoria");
+            let (spilled, metrics) = sort_spilled(batch, &config, &limits).expect("sort spilled");
+            assert!(metrics.files > 1, "attese piu' run: {metrics:?}");
+            assert_eq!(
+                spilled.schema(),
+                batch.schema(),
+                "nessuna colonna tecnica nell'output"
+            );
+            assert_eq!(
+                spilled, expected,
+                "run di {run_rows} righe, config {config:?}"
+            );
         }
     }
 

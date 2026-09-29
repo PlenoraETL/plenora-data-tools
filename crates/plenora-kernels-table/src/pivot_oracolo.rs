@@ -23,7 +23,7 @@ use proptest::prelude::*;
 
 use super::tests::pivot_reference;
 use super::{pivot, Pivot, PivotAgg};
-use crate::test_support::assert_same_outcome_bits;
+use crate::test_support::{assert_same_outcome_bits, test_lunghi};
 
 /// Come `assert_same_outcome_bits`, ma per `sum` e `mean` due NaN nella
 /// stessa cella delle colonne dei valori pivot sono uguali qualunque sia il
@@ -365,9 +365,18 @@ fn pivot_come_il_riferimento_oltre_le_soglie() {
     let mut colonne = batch.columns().to_vec();
     colonne[0] = Arc::new(alta);
     batch = crate::batch_with_rows(batch.schema(), colonne, batch.num_rows()).expect("batch");
-    for (index, pivot_col) in [("k1", "p"), ("k1,k2", "pi"), ("kf", "p")] {
-        for aggr_func in AGGREGAZIONI {
-            for value in ["v", "vi"] {
+    // Suite di default: una combinazione su quattro, a rotazione, cosi' ogni
+    // indice, aggregazione e colonna valore resta coperta almeno una volta.
+    let lunghi = test_lunghi();
+    for (i_index, (index, pivot_col)) in [("k1", "p"), ("k1,k2", "pi"), ("kf", "p")]
+        .into_iter()
+        .enumerate()
+    {
+        for (i_aggr, aggr_func) in AGGREGAZIONI.into_iter().enumerate() {
+            for (i_value, value) in ["v", "vi"].into_iter().enumerate() {
+                if !lunghi && !(i_index + i_aggr + i_value).is_multiple_of(4) {
+                    continue;
+                }
                 let config = Pivot {
                     index_col: index.into(),
                     column: pivot_col.into(),

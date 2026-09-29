@@ -1231,6 +1231,21 @@ cargo build --workspace --locked
 cargo test --workspace --locked
 ```
 
+### Suite lunga
+
+Gli oracoli di massa (differenziali della validazione OGC, proptest con
+migliaia di casi, soglie e configurazioni esplorate una per una) hanno due
+misure. Senza variabili `cargo test` gira un sottoinsieme deterministico
+degli stessi casi, scelto perché ogni ramo resti coperto; con
+`PLENORA_TEST_LUNGHI=1` gira tutto:
+
+```sh
+PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked
+```
+
+La suite lunga è il gate prima del merge; quella di default serve mentre si
+lavora. Un valore diverso da `0` e `1` ferma i test che la leggono.
+
 I gate completi prima di un commit sono in [`AGENTS.md`](AGENTS.md).
 
 ## CRS integrati
