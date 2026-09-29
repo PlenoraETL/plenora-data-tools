@@ -1,9 +1,10 @@
-//! Esecuzione Arrow di `geo.make_valid`, `geo.polygonize` e `geo.split`
-//! sopra il backend Rust.
+//! Esecuzione Arrow di `geo.polygonize` e `geo.split` sopra il backend
+//! Rust (`geo.make_valid` non e' ancora esposto: README, «Che cosa non c'e'
+//! ancora»).
 //!
 //! Riproduce la semantica del trasporto Arrow di
 //! `plenora-data-tools@190c493` (`plenora-engine::geo_transport`, bracci
-//! `MakeValid`, `polygonize_batches` e `PairOperation::Split`): stesse
+//! `polygonize_batches` e `PairOperation::Split`): stesse
 //! colonne, stesse classi, stessi limiti, stesso trattamento dei null.
 //! Engine, envelope e diagnostica per riga non sono in questo workspace: gli
 //! errori tornano come [`PlenoraError`], il primo in ordine di riga.
@@ -21,12 +22,10 @@ use plenora_core::PlenoraError;
 
 use super::precision::Precision;
 use super::{
-    make_valid_wkb, polygonize_linework, residual_classes, split_polygon_by_linework, RepairMethod,
-    MAX_CLEAN_VERTICES, MAX_NODING_WORK, MAX_SPLIT_WORK,
+    polygonize_linework, residual_classes, split_polygon_by_linework, MAX_CLEAN_VERTICES,
+    MAX_NODING_WORK, MAX_SPLIT_WORK,
 };
-use crate::arrow_adapter::{
-    batch_geometry_cells, decode_geometry_cell, encode_geometry, map_nullable,
-};
+use crate::arrow_adapter::{batch_geometry_cells, decode_geometry_cell, encode_geometry};
 use crate::extended_algorithms::{split_line, ExtendedAlgorithmError};
 
 /// Colonna di classificazione dei pezzi di `polygonize`.
@@ -41,52 +40,6 @@ pub struct PolygonizeParams {
     pub node_input: Option<bool>,
     /// Fallire se restano residui; assente vale `false`.
     pub require_complete: Option<bool>,
-}
-
-/// `geo.make_valid` su una tabella.
-///
-/// Ogni cella non-null e' riparata con `LINEWORK` e `keep_collapsed = true`,
-/// come nel trasporto GEOS; i null restano null, le celle gia' valide restano
-/// byte per byte, lo schema e' invariato.
-///
-/// Le differenze di contenuto dal backend GEOS sono quelle di
-/// [`make_valid_wkb`].
-///
-/// # Errors
-///
-/// `PlenoraError::Schema` se la colonna geometria manca o non e' WKB;
-/// `PlenoraError::ResourceLimit` per una cella oltre il limite; l'errore
-/// della prima cella che fallisce in ordine di riga, tradotto con
-/// `From<RustBackendError>`.
-pub fn make_valid_batches(
-    schema: &SchemaRef,
-    batches: &[RecordBatch],
-    geometry_column: &str,
-    precision: Precision,
-) -> Result<Vec<RecordBatch>, PlenoraError> {
-    let geometry_index = geometry_column_index(schema, geometry_column)?;
-    let mut output = Vec::with_capacity(batches.len());
-    for batch in batches {
-        let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
-        let repaired = map_nullable(cells, |payload| {
-            make_valid_wkb(payload, RepairMethod::Linework, true, precision)
-                .map(Some)
-                .map_err(PlenoraError::from)
-        })?;
-        let mut columns = batch.columns().to_vec();
-        columns[geometry_index] = Arc::new(
-            repaired
-                .iter()
-                .map(|cell| cell.as_deref())
-                .collect::<BinaryArray>(),
-        );
-        output.push(plenora_core::batch_with_rows(
-            schema.clone(),
-            columns,
-            batch.num_rows(),
-        )?);
-    }
-    Ok(output)
 }
 
 /// `geo.polygonize` su una tabella.
@@ -500,22 +453,6 @@ mod tests {
             .as_any()
             .downcast_ref::<T>()
             .unwrap()
-    }
-
-    #[test]
-    fn make_valid_repairs_bowtie_and_preserves_valid_geometries() {
-        let bowtie = polygon_wkb_le(&[(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0), (0.0, 0.0)]);
-        assert!(geometry_from_wkb(&bowtie).is_err());
-        let square = square_wkb(2.0);
-        let (schema, batch) = fixture_batch(&[Some(&bowtie), None, Some(&square)]);
-        let output = make_valid_batches(&schema, &[batch], DEFAULT_GEOMETRY_COLUMN, precisione())
-            .expect("make_valid");
-        let cells = column::<BinaryArray>(&output[0], &schema, DEFAULT_GEOMETRY_COLUMN);
-        let repaired = geometry_from_wkb(cells.value(0)).expect("riparata");
-        assert!((repaired.unsigned_area() - 2.0).abs() < 1e-12);
-        assert!(cells.is_null(1));
-        assert_eq!(cells.value(2), square.as_slice());
-        assert_eq!(output[0].schema(), schema, "schema invariato");
     }
 
     #[test]

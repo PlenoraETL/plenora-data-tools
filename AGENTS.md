@@ -14,7 +14,7 @@ Le regole che non si negoziano. Il resto lo dice il codice.
    geometrico può differire dall'esatto (vertici spostati, schegge e parti
    sottili fuse o sparite, aree diverse di circa perimetro per 1 cm); sopra,
    ogni errore è esplicito. Un calcolo che sposterebbe il risultato oltre
-   1 cm (griglia di overlay con il suo aggancio, punto di noding
+   1 cm (coordinate troppo rade per la precisione, punto di noding
    arrotondato) si rifiuta.
 2. **Niente `unsafe`** (`unsafe_code = "forbid"` nel workspace). Una
    dipendenza nuova entra solo con una motivazione scritta accanto al pin in

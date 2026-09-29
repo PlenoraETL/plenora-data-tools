@@ -31,10 +31,6 @@ use geo::{
     MultiLineString, Point, Polygon,
 };
 use geozero::{wkb::Wkb, CoordDimensions, ToGeo, ToWkb};
-use plenora_kernels_geo::rust_backend::make_valid::{
-    make_valid_geometry_rust_bounded, make_valid_geometry_rust_with_limits, MakeValidError,
-    MakeValidLimits, RepairMethod,
-};
 use plenora_kernels_geo::rust_backend::polygonize::{
     polygonize_linework_rust, polygonize_linework_rust_bounded, PolygonizeError, PolygonizeLimits,
     PolygonizeOptions, PolygonizeResult,
@@ -199,42 +195,6 @@ fn polygons_area(polygons: &[Polygon<f64>]) -> AssuranceResult<f64> {
         .try_fold(0.0, |total, polygon| Ok(total + polygon_area(polygon)?))
 }
 
-fn geometry_area(geometry: &Geometry<f64>) -> AssuranceResult<f64> {
-    match geometry {
-        Geometry::Polygon(polygon) => polygon_area(polygon),
-        Geometry::MultiPolygon(polygons) => polygons_area(&polygons.0),
-        Geometry::GeometryCollection(collection) => collection
-            .0
-            .iter()
-            .try_fold(0.0, |total, child| Ok(total + geometry_area(child)?)),
-        _ => Ok(0.0),
-    }
-}
-
-fn geometry_dimensions(geometry: &Geometry<f64>) -> (usize, usize, usize) {
-    match geometry {
-        Geometry::Point(_) | Geometry::MultiPoint(_) => (0, 0, 1),
-        Geometry::Line(_) | Geometry::LineString(_) | Geometry::MultiLineString(_) => (0, 1, 0),
-        Geometry::Polygon(_)
-        | Geometry::MultiPolygon(_)
-        | Geometry::Rect(_)
-        | Geometry::Triangle(_) => (1, 0, 0),
-        Geometry::GeometryCollection(collection) => {
-            collection
-                .0
-                .iter()
-                .fold((0, 0, 0), |(areas, lines, points), child| {
-                    let child_dimensions = geometry_dimensions(child);
-                    (
-                        areas + child_dimensions.0,
-                        lines + child_dimensions.1,
-                        points + child_dimensions.2,
-                    )
-                })
-        }
-    }
-}
-
 fn rectangle(width: f64, height: f64) -> Geometry<f64> {
     Geometry::Polygon(polygon![
         (x: 0.0, y: 0.0),
@@ -311,15 +271,6 @@ const fn unlimited_split_limits() -> SplitLimits {
     }
 }
 
-const fn unlimited_make_valid_limits() -> MakeValidLimits {
-    MakeValidLimits {
-        max_input_coordinates: u64::MAX,
-        max_noding_work: u64::MAX,
-        max_output_geometries: u64::MAX,
-        max_output_coordinates: u64::MAX,
-    }
-}
-
 fn assert_polygonize_oracle(
     geometry: &Geometry<f64>,
     expected_faces: u32,
@@ -372,32 +323,6 @@ fn assert_split_oracle(
     )
 }
 
-fn assert_make_valid_oracle(
-    geometry: &Geometry<f64>,
-    method: RepairMethod,
-    expected_area: f64,
-    label: &str,
-) -> AssuranceResult<()> {
-    let output = make_valid_geometry_rust_with_limits(
-        geometry,
-        method,
-        true,
-        unlimited_make_valid_limits(),
-        precisione(geometry),
-    )
-    .map_err(|error| AssuranceError(format!("{label}: make_valid: {error}")))?;
-    let area = geometry_area(&output)?;
-    require(
-        close(area, expected_area, 1e-10),
-        format!("{label}: area={area}, attesa={expected_area}"),
-    )?;
-    let dimensions = geometry_dimensions(&output);
-    require(
-        dimensions.0 > 0,
-        format!("{label}: output senza componente areale"),
-    )
-}
-
 fn run_independent_oracles() -> AssuranceResult<usize> {
     let grids = [(1_u32, 1_u32), (2, 3), (4, 5), (8, 7)];
     let mut checks = 0_usize;
@@ -413,20 +338,6 @@ fn run_independent_oracles() -> AssuranceResult<usize> {
         let splitter = vertical_splitters(18, 7, parts);
         assert_split_oracle(&source, &splitter, parts, 126.0, "split rettangolare")?;
         checks += 1;
-    }
-
-    for scale in [1.0_f64, 2.0, 8.0] {
-        let bow_tie = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0),
-            (x: 2.0 * scale, y: 2.0 * scale),
-            (x: 0.0, y: 2.0 * scale),
-            (x: 2.0 * scale, y: 0.0),
-            (x: 0.0, y: 0.0)
-        ]);
-        for method in [RepairMethod::Structure, RepairMethod::Linework] {
-            assert_make_valid_oracle(&bow_tie, method, 2.0 * scale * scale, "bow-tie esatto")?;
-            checks += 1;
-        }
     }
     Ok(checks)
 }
@@ -515,10 +426,6 @@ fn run_metamorphic() -> AssuranceResult<usize> {
     let base_grid = rectangular_grid(3, 2);
     let base_source = rectangle(12.0, 5.0);
     let base_splitter = vertical_splitters(12, 5, 4);
-    let base_bow_tie = Geometry::Polygon(polygon![
-        (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-        (x: 0.0, y: 2.0), (x: 2.0, y: 0.0), (x: 0.0, y: 0.0)
-    ]);
     let mut checks = 0_usize;
     for transform in transforms {
         let determinant = transform.determinant().abs();
@@ -541,15 +448,6 @@ fn run_metamorphic() -> AssuranceResult<usize> {
             "split metamorfico",
         )?;
         checks += 1;
-        for method in [RepairMethod::Structure, RepairMethod::Linework] {
-            assert_make_valid_oracle(
-                &transform.apply(&base_bow_tie),
-                method,
-                2.0 * determinant,
-                "make_valid metamorfico",
-            )?;
-            checks += 1;
-        }
     }
 
     assert_polygonize_oracle(&reverse_linework(&base_grid)?, 6, 6.0, "linework invertito")?;
@@ -562,15 +460,6 @@ fn run_metamorphic() -> AssuranceResult<usize> {
         "split invertito",
     )?;
     checks += 1;
-    for method in [RepairMethod::Structure, RepairMethod::Linework] {
-        assert_make_valid_oracle(
-            &reverse_polygon(&base_bow_tie)?,
-            method,
-            2.0,
-            "make_valid invertito",
-        )?;
-        checks += 1;
-    }
     Ok(checks)
 }
 
@@ -668,26 +557,10 @@ fn run_generated_exact_oracles() -> AssuranceResult<usize> {
         )?;
         checks += 1;
 
-        let size = f64::from(rng.below(8)? + 1);
-        let mut bow_tie = Geometry::Polygon(polygon![
-            (x: 0.0, y: 0.0),
-            (x: 2.0 * size, y: 2.0 * size),
-            (x: 0.0, y: 2.0 * size),
-            (x: 2.0 * size, y: 0.0),
-            (x: 0.0, y: 0.0)
-        ]);
-        if case_index & 4 == 4 {
-            bow_tie = reverse_polygon(&bow_tie)?;
-        }
-        for method in [RepairMethod::Structure, RepairMethod::Linework] {
-            assert_make_valid_oracle(
-                &transform.apply(&bow_tie),
-                method,
-                2.0 * size * size * transform.determinant().abs(),
-                "make_valid generativo esatto",
-            )?;
-            checks += 1;
-        }
+        // Il bow-tie di `make_valid` (non su questo branch) consumava un
+        // numero: lo si estrae ancora, cosi' i casi di polygonize e split
+        // restano quelli del laboratorio.
+        let _ = rng.below(8)?;
     }
     Ok(checks)
 }
@@ -796,9 +669,10 @@ fn run_wkb_corpus() -> AssuranceResult<usize> {
         ]),
         "bow-tie WKB",
     )?;
-    for method in [RepairMethod::Structure, RepairMethod::Linework] {
-        assert_make_valid_oracle(&bow_tie, method, 8.0, "make_valid WKB")?;
-    }
+    require(
+        bow_tie.coords_count() == 5,
+        "bow-tie WKB con coordinate diverse",
+    )?;
 
     let collection = Geometry::GeometryCollection(GeometryCollection::new_from(vec![
         Geometry::Point(Point::new(1.0, 2.0)),
@@ -809,7 +683,7 @@ fn run_wkb_corpus() -> AssuranceResult<usize> {
         decoded_collection.coords_count() == collection.coords_count(),
         "collection WKB con coordinate diverse",
     )?;
-    Ok(7)
+    Ok(5)
 }
 
 fn run_limit_contracts() -> AssuranceResult<usize> {
@@ -978,92 +852,20 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         "split bounded non produce le 10 parti attese",
     )?;
 
-    let bow_tie = Geometry::Polygon(polygon![
-        (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
-        (x: 0.0, y: 2.0), (x: 2.0, y: 0.0), (x: 0.0, y: 0.0)
-    ]);
-    for limits in [
-        MakeValidLimits {
-            max_input_coordinates: 1,
-            ..unlimited_make_valid_limits()
-        },
-        MakeValidLimits {
-            max_noding_work: 1,
-            ..unlimited_make_valid_limits()
-        },
-        MakeValidLimits {
-            max_output_geometries: 1,
-            ..unlimited_make_valid_limits()
-        },
-        MakeValidLimits {
-            max_output_coordinates: 4,
-            ..unlimited_make_valid_limits()
-        },
-    ] {
-        let limited = make_valid_geometry_rust_with_limits(
-            &bow_tie,
-            RepairMethod::Linework,
-            true,
-            limits,
-            PRECISIONE,
-        );
-        require(
-            matches!(
-                limited,
-                Err(MakeValidError::CoordinateLimit { .. }
-                    | MakeValidError::WorkLimit { .. }
-                    | MakeValidError::OutputLimit { .. })
-            ),
-            "make_valid non fail-closed su un limite",
-        )?;
-    }
-
-    let incomplete_make_valid = make_valid_geometry_rust_bounded(
-        &bow_tie,
-        RepairMethod::Linework,
-        true,
-        MakeValidLimits {
-            max_input_coordinates: 5,
-            ..MakeValidLimits::unlimited()
-        },
-        PRECISIONE,
-    );
-    require(
-        matches!(
-            incomplete_make_valid,
-            Err(MakeValidError::UnboundedLimitConfiguration)
-        ),
-        "make_valid bounded accetta un profilo incompleto",
-    )?;
-    let bounded_make_valid = make_valid_geometry_rust_bounded(
-        &bow_tie,
-        RepairMethod::Linework,
-        true,
-        MakeValidLimits {
-            max_input_coordinates: 5,
-            max_noding_work: 1_000,
-            max_output_geometries: 2,
-            max_output_coordinates: 10,
-        },
-        PRECISIONE,
-    )
-    .map_err(|error| AssuranceError(format!("make_valid bounded: {error}")))?;
-    require(
-        (geometry_area(&bounded_make_valid)? - 2.0).abs() <= 1e-12,
-        "make_valid bounded non conserva l'area attesa",
-    )?;
-    Ok(18)
+    Ok(12)
 }
 
 /// Controlli per categoria, come nel CSV del laboratorio
-/// (`results/geo-rust/assurance/summary.csv`).
+/// (`results/geo-rust/assurance/summary.csv`), meno quelli di `make_valid`,
+/// che su questo branch non c'e': 6 oracoli indipendenti, 14 metamorfici,
+/// 512 generativi, 2 del corpus WKB, 6 dei limiti (540 dei 1.097).
 const EXPECTED: [(&str, usize); 6] = [
-    ("independent_integer_oracles", 14),
-    ("metamorphic_affine_and_order", 28),
-    ("generated_exact_oracles", 1_024),
+    ("independent_integer_oracles", 8),
+    ("metamorphic_affine_and_order", 14),
+    ("generated_exact_oracles", 512),
     ("adversarial_numeric", 6),
-    ("wkb_transport_corpus", 7),
-    ("fail_closed_limits", 18),
+    ("wkb_transport_corpus", 5),
+    ("fail_closed_limits", 12),
 ];
 
 fn expected(category: &str) -> usize {
@@ -1077,7 +879,7 @@ fn expected(category: &str) -> usize {
 fn il_totale_dei_controlli_e_quello_del_laboratorio() {
     assert_eq!(
         EXPECTED.iter().map(|(_, checks)| checks).sum::<usize>(),
-        1_097
+        1_097 - 540
     );
 }
 

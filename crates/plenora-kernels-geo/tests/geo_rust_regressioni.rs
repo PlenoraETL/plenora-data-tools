@@ -1,5 +1,5 @@
-//! Regressioni e determinismo del backend Rust di `geo.make_valid`,
-//! `geo.polygonize` e `geo.split`.
+//! Regressioni e determinismo del backend Rust di `geo.polygonize` e
+//! `geo.split`.
 //!
 //! - Il blocker del laboratorio (`seed=2147483647`, caso `227`): il caso e'
 //!   rigenerato con il generatore della campagna differenziale
@@ -19,17 +19,17 @@
 
 use std::sync::Arc;
 
-use geo::{line_string, polygon, Area, Geometry, LineString, MultiLineString, Polygon};
+use geo::{line_string, Area, Geometry, LineString, MultiLineString, Polygon};
 use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{Array, BinaryArray};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{geometry_output_field, DEFAULT_GEOMETRY_COLUMN};
 use plenora_kernels_geo::rust_backend::arrow::{
-    make_valid_batches, polygonize_batches, split_batches, PolygonizeParams,
+    polygonize_batches, split_batches, PolygonizeParams,
 };
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::rust_backend::{
-    make_valid_wkb, polygonize_linework, split_polygon_by_linework, PolygonizeResult, RepairMethod,
+    polygonize_linework, split_polygon_by_linework, PolygonizeResult,
 };
 
 const LIMIT: u64 = 1_000_000;
@@ -409,44 +409,6 @@ fn split_deterministico_e_canonico_su_input_permutato() {
     }
 }
 
-fn bow_tie_wkb() -> Vec<u8> {
-    Geometry::Polygon(polygon![
-        (x: 0.0, y: 0.0), (x: 4.0, y: 4.0), (x: 0.0, y: 4.0),
-        (x: 4.0, y: 0.0), (x: 0.0, y: 0.0)
-    ])
-    .to_wkb(CoordDimensions::xy())
-    .expect("wkb")
-}
-
-/// `make_valid` non promette forma canonica su input riorientato: solo
-/// stesso output sullo stesso input.
-#[test]
-fn make_valid_deterministico() {
-    let crossing_hole = Geometry::Polygon(Polygon::new(
-        line_string![
-            (x: 0.0, y: 0.0), (x: 4.0, y: 0.0), (x: 4.0, y: 4.0),
-            (x: 0.0, y: 4.0), (x: 0.0, y: 0.0)
-        ],
-        vec![line_string![
-            (x: 3.0, y: 1.0), (x: 5.0, y: 1.0), (x: 5.0, y: 3.0),
-            (x: 3.0, y: 3.0), (x: 3.0, y: 1.0)
-        ]],
-    ))
-    .to_wkb(CoordDimensions::xy())
-    .expect("wkb");
-    for payload in [bow_tie_wkb(), crossing_hole] {
-        for method in [RepairMethod::Linework, RepairMethod::Structure] {
-            for keep_collapsed in [false, true] {
-                let first = make_valid_wkb(&payload, method, keep_collapsed, precisione())
-                    .expect("riparata");
-                let second = make_valid_wkb(&payload, method, keep_collapsed, precisione())
-                    .expect("riparata");
-                assert_eq!(first, second, "{method:?} keep_collapsed={keep_collapsed}");
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Adapter Arrow: due volte e righe permutate.
 // ---------------------------------------------------------------------------
@@ -516,33 +478,7 @@ fn polygonize_arrow_deterministico_e_canonico_su_righe_permutate() {
 }
 
 #[test]
-fn make_valid_e_split_arrow_deterministici() {
-    let square = polygon![
-        (x: 0.0, y: 0.0), (x: 2.0, y: 0.0), (x: 2.0, y: 2.0), (x: 0.0, y: 2.0), (x: 0.0, y: 0.0)
-    ];
-    let cells = vec![
-        bow_tie_wkb(),
-        Geometry::Polygon(square)
-            .to_wkb(CoordDimensions::xy())
-            .expect("wkb"),
-    ];
-    let (schema, batch) = table(&cells);
-    let first = make_valid_batches(
-        &schema,
-        std::slice::from_ref(&batch),
-        DEFAULT_GEOMETRY_COLUMN,
-        precisione(),
-    )
-    .expect("make_valid");
-    let second = make_valid_batches(
-        &schema,
-        std::slice::from_ref(&batch),
-        DEFAULT_GEOMETRY_COLUMN,
-        precisione(),
-    )
-    .expect("make_valid");
-    assert_eq!(first, second);
-
+fn split_arrow_deterministico() {
     let source = holed_source().to_wkb(CoordDimensions::xy()).expect("wkb");
     let splitter = multi(split_lines())
         .to_wkb(CoordDimensions::xy())
