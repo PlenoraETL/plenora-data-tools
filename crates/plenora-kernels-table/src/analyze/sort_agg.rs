@@ -26,6 +26,10 @@ use crate::aggregation;
 /// solo in esecuzione, cioe' dopo aver aperto gli input e forse dopo aver
 /// gia' prodotto lavoro. `is_sortable` e' lo stesso elenco di tipi del
 /// comparatore, letto a secco dallo schema.
+///
+/// Vale per ogni operazione che passa una colonna della config al sort del
+/// kernel: `sort` e `top_n` (`columns`), `dedup_advanced`, `rolling_window`
+/// e `window_function` (`order_column`).
 fn require_sortable(op: &str, input: &DataContract, columns: &[String]) -> Result<()> {
     for name in columns {
         let field = field_of(op, input, name)?;
@@ -128,7 +132,7 @@ pub(in crate::analyze) fn analyze_dedup_advanced(
         require_scalar_string(op, input, name)?;
     }
     let sorted_by = if let Some(order_column) = &config.order_column {
-        field_of(op, input, order_column)?;
+        require_sortable(op, input, std::slice::from_ref(order_column))?;
         // Sort interno su order_column, nel verso della config, prima della
         // deduplica; le righe tenute restano nell'ordine del sort.
         Some(proven_sorted(
@@ -157,10 +161,16 @@ pub(in crate::analyze) fn analyze_aggregate(
     if config.group_by.is_empty() {
         return contract_error(op, "aggregate richiede group_by");
     }
+    // Il kernel legge le chiavi di gruppo come scalari testuali: stessi tipi
+    // ammessi, rifiutati qui e non a esecuzione iniziata.
     let mut fields_out: Vec<Field> = config
         .group_by
         .iter()
-        .map(|name| field_of(op, input, name).cloned())
+        .map(|name| {
+            let field = field_of(op, input, name)?;
+            require_scalar_string_field(op, field)?;
+            Ok(field.clone())
+        })
         .collect::<Result<_>>()?;
     let mut duplicates: HashMap<&str, usize> = HashMap::new();
     for aggregation in &config.aggregations {
@@ -258,11 +268,13 @@ pub(in crate::analyze) fn analyze_rolling_window(
         return contract_error(op, "window/min_periods non validi");
     }
     require_numeric(op, input, &config.column)?;
+    // Le partizioni leggono `group_by` come scalare testuale
+    // (`build_partitions`): stessi tipi ammessi del kernel.
     if let Some(group_by) = &config.group_by {
-        field_of(op, input, group_by)?;
+        require_scalar_string(op, input, group_by)?;
     }
     let sorted_by = if let Some(order_column) = &config.order_column {
-        field_of(op, input, order_column)?;
+        require_sortable(op, input, std::slice::from_ref(order_column))?;
         // Il kernel ordina sempre in ascendente su order_column.
         Some(proven_sorted(vec![fields.intern(order_column)?], true))
     } else {
@@ -316,11 +328,13 @@ pub(in crate::analyze) fn analyze_window_function(
             ),
         );
     }
+    // Partizioni su `group_by` come scalare testuale e sort su
+    // `order_column`, come nel kernel.
     if let Some(group_by) = &config.group_by {
-        field_of(op, input, group_by)?;
+        require_scalar_string(op, input, group_by)?;
     }
     if let Some(order_column) = &config.order_column {
-        field_of(op, input, order_column)?;
+        require_sortable(op, input, std::slice::from_ref(order_column))?;
     }
     let suffix = match config.function {
         aggregation::WindowKind::Rank => "rank",

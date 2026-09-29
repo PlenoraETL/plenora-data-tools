@@ -6,7 +6,7 @@ use plenora_core::Result;
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, field_of, map_row_count, require_numeric,
+    analyze_append, check_output_name, contract_error, map_row_count, require_numeric,
     require_scalar_string, round_scaled, typed, unsupported,
 };
 use crate::analysis;
@@ -116,8 +116,9 @@ pub(in crate::analyze) fn analyze_statistics(
     let config: analysis::Statistics = typed(op, config)?;
     let input = &inputs[0];
     require_numeric(op, input, &config.column)?;
+    // Il kernel legge `group_by` come scalare testuale: stessi tipi ammessi.
     if let Some(group_by) = &config.group_by {
-        field_of(op, input, group_by)?;
+        require_scalar_string(op, input, group_by)?;
     }
     let prefix = if config.output_prefix.is_empty() {
         format!("{}_", config.column)

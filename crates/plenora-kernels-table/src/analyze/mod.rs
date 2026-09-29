@@ -1370,6 +1370,178 @@ mod tests {
 
     // -- aggregation ----------------------------------------------------------
 
+    /// Una colonna `o` di due righe non nulle per ciascun tipo Arrow
+    /// candidato, accanto a `v` (Float64) e `s` (Utf8).
+    fn batch_per_tipo() -> Vec<(String, plenora_core::arrow::array::RecordBatch)> {
+        use plenora_core::arrow::array::types::{Int32Type, Int64Type, Int8Type};
+        use plenora_core::arrow::array::{
+            ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+            DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+            Int8Array, LargeBinaryArray, LargeStringArray, ListArray, NullArray, RecordBatch,
+            StringArray, StringViewArray, StructArray, TimestampMicrosecondArray,
+            TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+            UInt32Array, UInt64Array, UInt8Array,
+        };
+
+        let colonne: Vec<ArrayRef> = vec![
+            Arc::new(Int8Array::from(vec![2_i8, 1])),
+            Arc::new(Int16Array::from(vec![2_i16, 1])),
+            Arc::new(Int32Array::from(vec![2_i32, 1])),
+            Arc::new(Int64Array::from(vec![2_i64, 1])),
+            Arc::new(UInt8Array::from(vec![2_u8, 1])),
+            Arc::new(UInt16Array::from(vec![2_u16, 1])),
+            Arc::new(UInt32Array::from(vec![2_u32, 1])),
+            Arc::new(UInt64Array::from(vec![2_u64, 1])),
+            Arc::new(Float32Array::from(vec![2.0_f32, 1.0])),
+            Arc::new(Float64Array::from(vec![2.0_f64, 1.0])),
+            Arc::new(StringArray::from(vec!["b", "a"])),
+            Arc::new(LargeStringArray::from(vec!["b", "a"])),
+            Arc::new(StringViewArray::from(vec!["b", "a"])),
+            Arc::new(BinaryArray::from(vec![b"b".as_slice(), b"a".as_slice()])),
+            Arc::new(LargeBinaryArray::from(vec![
+                b"b".as_slice(),
+                b"a".as_slice(),
+            ])),
+            Arc::new(BooleanArray::from(vec![true, false])),
+            Arc::new(Date32Array::from(vec![2_i32, 1])),
+            Arc::new(Date64Array::from(vec![2_i64, 1])),
+            Arc::new(TimestampSecondArray::from(vec![2_i64, 1])),
+            Arc::new(TimestampMillisecondArray::from(vec![2_i64, 1])),
+            Arc::new(TimestampMillisecondArray::from(vec![2_i64, 1]).with_timezone("UTC")),
+            Arc::new(TimestampMicrosecondArray::from(vec![2_i64, 1])),
+            Arc::new(TimestampNanosecondArray::from(vec![2_i64, 1])),
+            Arc::new(
+                Decimal128Array::from(vec![2_i128, 1])
+                    .with_precision_and_scale(10, 2)
+                    .expect("decimal"),
+            ),
+            Arc::new(DictionaryArray::<Int32Type>::from_iter(["b", "a"])),
+            Arc::new(DictionaryArray::<Int8Type>::from_iter(["b", "a"])),
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(2_i64)]),
+                Some(vec![Some(1)]),
+            ])),
+            Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("x", DataType::Int64, false)),
+                Arc::new(Int64Array::from(vec![2_i64, 1])) as ArrayRef,
+            )])),
+            Arc::new(NullArray::new(2)),
+        ];
+        colonne
+            .into_iter()
+            .map(|colonna| {
+                let tipo = format!("{:?}", colonna.data_type());
+                let schema = Schema::new(vec![
+                    Field::new("v", DataType::Float64, true),
+                    Field::new("s", DataType::Utf8, true),
+                    Field::new("o", colonna.data_type().clone(), true),
+                ]);
+                let batch = RecordBatch::try_new(
+                    Arc::new(schema),
+                    vec![
+                        Arc::new(Float64Array::from(vec![1.0, 2.0])),
+                        Arc::new(StringArray::from(vec!["a", "b"])),
+                        colonna,
+                    ],
+                )
+                .expect("batch per tipo");
+                (tipo, batch)
+            })
+            .collect()
+    }
+
+    /// Esegue il kernel di `op` con la stessa config JSON dell'analisi.
+    fn esegui_kernel(
+        op: &str,
+        batch: &plenora_core::arrow::array::RecordBatch,
+        config: &Value,
+    ) -> Result<()> {
+        fn config_di<T: serde::de::DeserializeOwned>(config: &Value) -> T {
+            serde_json::from_value(config.clone()).expect("config del kernel")
+        }
+        match op {
+            "table.sort" => aggregation::sort(batch, &config_di(config)).map(|_| ()),
+            "table.top_n" => aggregation::top_n(batch, &config_di(config)).map(|_| ()),
+            "table.dedup_advanced" => {
+                aggregation::dedup_advanced(batch, &config_di(config)).map(|_| ())
+            }
+            "table.rolling_window" => {
+                aggregation::rolling_window(batch, &config_di(config)).map(|_| ())
+            }
+            "table.window_function" => {
+                aggregation::window_function(batch, &config_di(config)).map(|_| ())
+            }
+            "table.statistics" => analysis::statistics(batch, &config_di(config)).map(|_| ()),
+            "table.aggregate" => aggregation::aggregate(batch, &config_di(config)).map(|_| ()),
+            altro => panic!("operazione {altro} fuori dall'oracolo"),
+        }
+    }
+
+    #[test]
+    fn l_analisi_rifiuta_le_chiavi_d_ordine_che_il_kernel_rifiuta() {
+        // Ogni operazione che ordina per una colonna della config, o che ne
+        // legge una come chiave di partizione testuale: l'analisi accetta un
+        // tipo se e solo se il kernel lo esegue.
+        let casi = [
+            ("table.sort", json!({"columns": ["o"]})),
+            (
+                "table.sort",
+                json!({"columns": ["s", "o"], "ascending": false}),
+            ),
+            ("table.top_n", json!({"columns": ["o"], "n": 1})),
+            (
+                "table.dedup_advanced",
+                json!({"subset": ["s"], "order_column": "o"}),
+            ),
+            (
+                "table.rolling_window",
+                json!({"column": "v", "function": "mean", "order_column": "o",
+                       "window": 2, "output_column": "r"}),
+            ),
+            (
+                "table.rolling_window",
+                json!({"column": "v", "function": "mean", "group_by": "o",
+                       "window": 2, "output_column": "r"}),
+            ),
+            (
+                "table.window_function",
+                json!({"column": "v", "function": "rank", "order_column": "o",
+                       "group_by": null}),
+            ),
+            (
+                "table.window_function",
+                json!({"column": "v", "function": "cumsum", "order_column": null,
+                       "group_by": "o"}),
+            ),
+            ("table.statistics", json!({"column": "v", "group_by": "o"})),
+            (
+                "table.aggregate",
+                json!({"group_by": ["o"], "aggregations": [{"column": "v", "function": "sum"}]}),
+            ),
+        ];
+        let mut divergenze = Vec::new();
+        for (tipo, batch) in batch_per_tipo() {
+            let contratto = DataContract::tabular(batch.schema());
+            for (op, config) in &casi {
+                let analisi = analyze_table_contract(
+                    op,
+                    std::slice::from_ref(&contratto),
+                    config,
+                    &mut FieldAllocator::default(),
+                );
+                let kernel = esegui_kernel(op, &batch, config);
+                if analisi.is_ok() != kernel.is_ok() {
+                    divergenze.push(format!(
+                        "{op} {config} su {tipo}: analisi {}, kernel {}",
+                        analisi.map_or_else(|e| format!("rifiuta ({e})"), |_| "accetta".into()),
+                        kernel.map_or_else(|e| format!("rifiuta ({e})"), |()| "accetta".into()),
+                    ));
+                }
+            }
+        }
+        assert!(divergenze.is_empty(), "{}", divergenze.join("\n"));
+    }
+
     #[test]
     fn il_verso_dell_ordinamento_entra_in_sorted_by() {
         for (op, ascendente, discendente) in [
