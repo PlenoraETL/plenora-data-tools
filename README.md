@@ -253,11 +253,18 @@ PROJ) che riporti il punto in lon/lat e lo confronti con la regione esatta.
 
 1. aggiungerlo a una delle liste di `scripts/genera_crs_integrati.py`
    (`ITALIA`, `MONDO` o i fusi UTM);
-2. installare pyproj fuori dal workspace
-   (`python -m pip install --target <dir> pyproj==3.7.2`), rigenerare con
-   `PYTHONPATH=<dir> python scripts/genera_crs_integrati.py` e formattare con
-   `cargo fmt --all`;
-3. aggiornare l'elenco atteso in
+2. preparare fuori dal workspace l'ambiente che ha prodotto la tabella:
+   pyproj 3.7.2 come ruota binaria che include PROJ 9.5.1 e il registro EPSG
+   v11.022. Quella usata è `cp311-cp311-win_amd64` (CPython 3.11, Windows
+   x64):
+   `python -m pip install --only-binary=:all: --target <dir> pyproj==3.7.2`.
+   Altre ruote o una build contro un PROJ di sistema possono portare un altro
+   PROJ (per esempio 9.8.1 con EPSG v12.029) e limiti diversi: il generatore
+   controlla la terna pyproj/PROJ/EPSG e si rifiuta di girare se non coincide.
+   Cambiare versione è una decisione da prendere in PR, con il diff dei dati;
+3. rigenerare con `PYTHONPATH=<dir> python scripts/genera_crs_integrati.py` e
+   formattare con `cargo fmt --all`;
+4. aggiornare l'elenco atteso in
    `crates/plenora-core/src/crs/integrati/tests.rs` e rieseguire i test.
 
 Il generatore rifiuta con un errore esplicito ciò che non sa descrivere: CRS

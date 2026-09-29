@@ -114,8 +114,36 @@ CAMPIONI = 400
 TOLLERANZA_STABILITA_M = 1e-4
 
 
+# Ambiente che ha prodotto il file committato. pyproj==3.7.2 da solo non lo
+# fissa: la ruota binaria win_amd64 per CPython 3.11 porta PROJ 9.5.1 con il
+# registro EPSG v11.022, ma altre ruote o una build contro un PROJ di sistema
+# possono portare PROJ 9.8.1 / EPSG v12.029, con limiti diversi (per esempio
+# 2056 e 23032). Il generatore rifiuta di girare fuori da questa terna:
+# cambiarla e' una decisione da prendere in PR, con il diff dei dati.
+PYPROJ_ATTESO = "3.7.2"
+PROJ_ATTESO = "9.5.1"
+EPSG_ATTESO = "v11.022"
+
+
 class Rifiuto(Exception):
     """CRS che il generatore non sa descrivere senza ambiguita'."""
+
+
+def verifica_ambiente() -> None:
+    """Rifiuta un ambiente diverso da quello che ha prodotto la tabella."""
+    trovato = (
+        pyproj.__version__,
+        pyproj.proj_version_str,
+        pyproj.database.get_database_metadata("EPSG.VERSION"),
+    )
+    atteso = (PYPROJ_ATTESO, PROJ_ATTESO, EPSG_ATTESO)
+    if trovato != atteso:
+        raise Rifiuto(
+            "ambiente diverso da quello della tabella committata: "
+            f"pyproj/PROJ/EPSG trovati {trovato}, attesi {atteso}. "
+            "Installare la ruota binaria pyproj 3.7.2 (vedi README, "
+            "'Aggiungere un codice') o aggiornare le costanti in PR."
+        )
 
 
 def normalizza_lon(lon: float) -> float:
@@ -475,6 +503,7 @@ def genera() -> str:
 
 def main() -> int:
     try:
+        verifica_ambiente()
         testo = genera()
     except Rifiuto as errore:
         print(f"rifiutato: {errore}", file=sys.stderr)
