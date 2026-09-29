@@ -23,7 +23,51 @@ use plenora_core::PlenoraError;
 use plenora_pipeline::{Passo, Pipeline};
 use serde_json::{json, Value};
 
-use comune::{nomi_input, tabelle, Fixture, CASI, CHIAVE_HMAC};
+use comune::{chiamata_diretta, nomi_input, tabelle, Fixture, CASI, CHIAVE_HMAC};
+
+/// Regole di analisi che dicono «il kernel rifiuterebbe questa config» (o
+/// la eseguirebbe con un parametro ignorato, che ora rifiuta anche lui):
+/// per una config rifiutata con uno di questi messaggi, la chiamata diretta
+/// del kernel sulle stesse tabelle deve fallire. Altrimenti il rifiuto
+/// sarebbe falso: l'analisi toglierebbe una config che funziona.
+const REGOLE_DEL_KERNEL: &[&str] = &[
+    "nessun confronto ordinato",
+    "confronto numerico con valore non numerico",
+    "confronto ordinato richiede un valore numerico",
+    "estremi between non numerici",
+    "amount fuori scala",
+    "numero di argomenti",
+    "regex non valida",
+    "negativo",
+    "non leggibile come scalare testuale",
+    "ascending senza order_column",
+    "output_column non ammesso",
+    "extract_all non ammesso",
+    "separator ammesso solo",
+    "distinct non ha effetto",
+    "skip_null non ha effetto",
+    "ddof ammesso solo",
+    "quantile ammesso solo",
+    "mask_type=custom",
+    "value ammesso solo",
+    "offset ammesso solo",
+];
+
+/// Regole nuove che l'oracolo deve aver provato almeno una volta contro il
+/// kernel.
+const REGOLE_PROVATE: &[&str] = &[
+    "nessun confronto ordinato",
+    "confronto numerico con valore non numerico",
+    "amount fuori scala",
+    "numero di argomenti",
+    "regex non valida",
+    "negativo",
+    "separator ammesso solo",
+    "ddof ammesso solo",
+    "mask_type=custom",
+    "value ammesso solo",
+    "offset ammesso solo",
+];
 
 /// Errori senza diagnostica per riga che dipendono dai valori delle celle,
 /// non dalla config: `(frammento del messaggio, motivo)`.
@@ -273,6 +317,19 @@ fn varianti_di_confine(op: &str) -> Vec<Value> {
                 "regex_replace",
                 vec![col("name"), lit(Value::Null), lit(json!("x"))],
             ),
+            funzione(
+                "regex_replace",
+                vec![lit(Value::Null), lit(json!("(")), lit(json!("x"))],
+            ),
+            funzione(
+                "regex_replace",
+                vec![col("name"), lit(json!("(")), lit(Value::Null)],
+            ),
+            funzione("substring", vec![lit(Value::Null), lit(json!(-1))]),
+            funzione(
+                "substring",
+                vec![col("name"), lit(Value::Null), lit(json!(-1))],
+            ),
         ],
         "table.assert_range" => vec![
             json!({"column": "value"}),
@@ -280,13 +337,20 @@ fn varianti_di_confine(op: &str) -> Vec<Value> {
             json!({"column": "value", "min": 0, "max": 1000, "inclusive_min": false}),
         ],
         "table.aggregate" => [
-            "sum", "mean", "min", "max", "count", "nunique", "first", "concat",
+            "sum", "mean", "min", "max", "count", "nunique", "first", "last", "concat", "variance",
+            "stddev",
         ]
         .iter()
-        .map(|funzione| {
-            json!({"group_by": ["name"],
-                       "aggregations": [{"column": "value", "function": funzione}]})
+        .flat_map(|funzione| {
+            [
+                json!({"column": "value", "function": funzione}),
+                json!({"column": "value", "function": funzione, "separator": "|"}),
+                json!({"column": "value", "function": funzione, "distinct": true}),
+                json!({"column": "value", "function": funzione, "skip_null": false}),
+                json!({"column": "value", "function": funzione, "ddof": 0}),
+            ]
         })
+        .map(|aggregazione| json!({"group_by": ["name"], "aggregations": [aggregazione]}))
         .chain([
             json!({"group_by": ["name"],
                        "aggregations": [{"column": "value", "function": "quantile",
@@ -299,6 +363,59 @@ fn varianti_di_confine(op: &str) -> Vec<Value> {
         "table.distinct" | "table.stable_fingerprint" => vec![json!({})],
         "table.sha256_hash" => vec![json!({"columns": [], "output_column": "h"})],
         "table.explode" => vec![json!({"column": "lst", "empty_policy": "drop"})],
+        "table.window_function" => [
+            "rank",
+            "dense_rank",
+            "cumsum",
+            "cumcount",
+            "lag",
+            "lead",
+            "pct_change",
+            "running_mean",
+            "percent_rank",
+            "cume_dist",
+        ]
+        .iter()
+        .flat_map(|funzione| {
+            [
+                json!({"column": "value", "function": funzione}),
+                json!({"column": "value", "function": funzione, "offset": 2}),
+                json!({"column": "value", "function": funzione, "offset": 0}),
+            ]
+        })
+        .collect(),
+        "table.rolling_window" => ["sum", "mean", "min", "max", "stddev"]
+            .iter()
+            .flat_map(|funzione| {
+                [
+                    json!({"column": "value", "function": funzione, "window": 2,
+                           "output_column": "r"}),
+                    json!({"column": "value", "function": funzione, "window": 2, "ddof": 0,
+                           "output_column": "r"}),
+                ]
+            })
+            .collect(),
+        "table.mask_data" => ["email", "phone", "cf", "iban", "custom"]
+            .iter()
+            .flat_map(|tipo| {
+                [
+                    json!({"maskings": [{"column": "name", "mask_type": tipo}]}),
+                    json!({"maskings": [{"column": "name", "mask_type": tipo, "chars_start": 1}]}),
+                    json!({"maskings": [{"column": "name", "mask_type": tipo, "chars_end": 1}]}),
+                    json!({"maskings": [{"column": "name", "mask_type": tipo, "mask_char": "#"}]}),
+                ]
+            })
+            .collect(),
+        "table.fill_na" => ["value", "ffill", "bfill"]
+            .iter()
+            .flat_map(|metodo| {
+                [
+                    json!({"column": "name", "method": metodo}),
+                    json!({"column": "name", "method": metodo, "value": "x"}),
+                    json!({"column": "name", "method": metodo, "value": null}),
+                ]
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -326,6 +443,8 @@ fn le_config_accettate_dall_analisi_non_falliscono_per_la_config() {
     let mut accettate = 0_usize;
     let mut rifiutate = 0_usize;
     let mut lacune = Vec::new();
+    let mut falsi_rifiuti = Vec::new();
+    let mut provate = std::collections::BTreeSet::new();
     for caso in CASI {
         let base: Value = serde_json::from_str(caso.config).expect("config del caso");
         let fixture_da_provare: Vec<Fixture> = match caso.fixture {
@@ -359,10 +478,24 @@ fn le_config_accettate_dall_analisi_non_falliscono_per_la_config() {
                 .zip(tavole.iter().map(RecordBatch::schema))
                 .collect();
             for config in configs {
-                let Ok(validata) = piano(caso.op, &riferimenti, config.clone()).validate(&schemi)
-                else {
-                    rifiutate += 1;
-                    continue;
+                let validata = match piano(caso.op, &riferimenti, config.clone()).validate(&schemi)
+                {
+                    Ok(validata) => validata,
+                    Err(rifiuto) => {
+                        rifiutate += 1;
+                        let messaggio = rifiuto.to_string();
+                        if let Some(regola) = REGOLE_DEL_KERNEL
+                            .iter()
+                            .find(|regola| messaggio.contains(**regola))
+                        {
+                            provate.insert(*regola);
+                            if chiamata_diretta(caso.op, &config, &tavole).is_ok() {
+                                falsi_rifiuti
+                                    .push(format!("{} {fixture:?} {config}: {messaggio}", caso.op));
+                            }
+                        }
+                        continue;
+                    }
                 };
                 accettate += 1;
                 let tabelle_run: Vec<(String, RecordBatch)> = ingressi
@@ -383,4 +516,14 @@ fn le_config_accettate_dall_analisi_non_falliscono_per_la_config() {
         "l'oracolo deve provare molte config: {accettate} accettate, {rifiutate} rifiutate"
     );
     assert!(lacune.is_empty(), "{}", lacune.join("\n"));
+    assert!(
+        falsi_rifiuti.is_empty(),
+        "rifiuti che il kernel non darebbe:\n{}",
+        falsi_rifiuti.join("\n")
+    );
+    let mancanti: Vec<&&str> = REGOLE_PROVATE
+        .iter()
+        .filter(|regola| !provate.contains(**regola))
+        .collect();
+    assert!(mancanti.is_empty(), "regole mai provate: {mancanti:?}");
 }

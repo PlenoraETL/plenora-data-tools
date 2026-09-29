@@ -610,22 +610,36 @@ struct SecondoPasso {
     config: Value,
     /// Secondo input del passo binario: l'input `t` del piano.
     binario: bool,
+    /// Frammento del messaggio che identifica la regola: un rifiuto per un
+    /// altro motivo non conta.
+    frammento: &'static str,
 }
 
-fn caso(schema: &SchemaRef, op: &'static str, config: Value) -> SecondoPasso {
+fn caso(
+    schema: &SchemaRef,
+    op: &'static str,
+    config: Value,
+    frammento: &'static str,
+) -> SecondoPasso {
     SecondoPasso {
         schema: schema.clone(),
         primo: ("table.add_row_number", json!({"output_column": "riga"})),
         op,
         config,
         binario: false,
+        frammento,
     }
 }
 
-fn caso_binario(schema: &SchemaRef, op: &'static str, config: Value) -> SecondoPasso {
+fn caso_binario(
+    schema: &SchemaRef,
+    op: &'static str,
+    config: Value,
+    frammento: &'static str,
+) -> SecondoPasso {
     SecondoPasso {
         binario: true,
-        ..caso(schema, op, config)
+        ..caso(schema, op, config, frammento)
     }
 }
 
@@ -644,11 +658,14 @@ fn schema_largo_con_json(colonne: usize) -> SchemaRef {
     std::sync::Arc::new(plenora_core::arrow::schema::Schema::new(campi))
 }
 
+const TESTO: &str = "non leggibile come scalare testuale";
+
 /// Ogni regola sulle config vive nell'analisi dei kernel
 /// (`analyze_table_contract`), e il runner la applica passando da li': le
 /// regole che il runner portava da solo (`verifica_config.rs`, rimosso),
-/// quelle che prima scattavano solo in esecuzione, e la chiave HMAC, l'unico
-/// controllo d'ambiente rimasto nel runner.
+/// quelle che prima scattavano solo in esecuzione, i parametri ignorati, e la
+/// chiave HMAC, l'unico controllo d'ambiente rimasto nel runner. Ogni caso
+/// fallisce al secondo passo, con il messaggio della sua regola.
 #[test]
 #[allow(clippy::too_many_lines)] // Un caso per regola.
 fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
@@ -663,97 +680,122 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
             ),
         ]));
     let massimo = plenora_kernels_table::limiti_interni::MAX_COLUMNS;
+    let funzione = |nome: &str, args: Value| {
+        json!({"output_column": "e",
+               "expression": {"kind": "function", "name": nome, "args": args}})
+    };
     let casi = vec![
         // Chiavi lette come testo.
         caso_binario(
             &n,
             "table.join",
             json!({"left_keys": ["lst"], "right_keys": ["lst"], "how": "inner"}),
+            TESTO,
         ),
         caso_binario(
             &n,
             "table.semi_join",
             json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+            TESTO,
         ),
         caso_binario(
             &n,
             "table.anti_join",
             json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+            TESTO,
         ),
         caso_binario(
             &n,
             "table.asof_join",
             json!({"left_on": "id", "right_on": "id", "left_by": ["lst"], "right_by": ["lst"]}),
+            TESTO,
         ),
         caso_binario(
             &n,
             "table.table_diff",
             json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+            TESTO,
         ),
         caso_binario(
             &n,
             "table.table_diff",
             json!({"left_keys": ["id"], "right_keys": ["id"], "compare_columns": ["st"]}),
+            "colonna `st`",
         ),
         caso_binario(
             &n,
             "table.assert_foreign_key",
             json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+            TESTO,
         ),
         caso_binario(
             &n,
             "table.reconcile",
             json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+            TESTO,
         ),
         // Liste di chiavi di lunghezza diversa.
         caso_binario(
             &w,
             "table.assert_foreign_key",
             json!({"left_keys": ["id", "name"], "right_keys": ["id"]}),
+            "cardinalita' diversa",
         ),
         caso_binario(
             &w,
             "table.reconcile",
             json!({"left_keys": ["id"], "right_keys": ["id", "name"]}),
+            "cardinalita' diversa",
         ),
         // La riga intera di distinct contiene una List.
-        caso(&n, "table.distinct", json!({})),
+        caso(&n, "table.distinct", json!({}), "colonna `lst`"),
         // Operatori testuali su colonne che non sono testo.
         caso(
             &n,
             "table.filter",
             json!({"column": "st", "operator": "contains", "value": "a"}),
+            TESTO,
         ),
         caso(
             &n,
             "table.conditional",
             json!({"column": "lst", "conditions": [{"operator": "==", "value": "a", "result": 1}]}),
+            TESTO,
         ),
         // Parametri che il target non usa.
         caso(
             &w,
             "table.type_cast",
             json!({"column": "id", "target_type": "str", "date_format": "%Y"}),
+            "date_format ammesso solo",
         ),
         caso(
             &w,
             "table.type_cast",
             json!({"column": "id", "target_type": "int", "timezone": "UTC"}),
+            "non ammessi per questo target_type",
         ),
         caso(
             &n,
             "table.explode",
             json!({"column": "lst", "output_column": "e", "empty_policy": "drop"}),
+            "empty_policy=drop",
         ),
         // Impronta di niente: nessuna colonna ne' in config ne' nello schema.
         SecondoPasso {
             primo: ("table.drop_columns", json!({"columns": ["x"]})),
-            ..caso(&una_colonna, "table.stable_fingerprint", json!({}))
+            ..caso(
+                &una_colonna,
+                "table.stable_fingerprint",
+                json!({}),
+                "almeno una colonna",
+            )
         },
         caso(
             &w,
             "table.sha256_hash",
             json!({"columns": [], "output_column": "h"}),
+            "columns vuoto",
         ),
         // Oltre max_columns.
         SecondoPasso {
@@ -762,6 +804,7 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
                 &schema_largo_con_json(massimo),
                 "table.flatten_json",
                 json!({"column": "json", "output_columns": ["json_a"]}),
+                "supera max_columns",
             )
         },
         // Parametri ignorati e asserzioni vacue.
@@ -769,127 +812,218 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
             &w,
             "table.dedup_advanced",
             json!({"subset": ["id"], "ascending": false}),
+            "ascending senza order_column",
         ),
         caso(
             &w,
             "table.dedup_advanced",
             json!({"subset": ["id"], "ascending": true}),
+            "ascending senza order_column",
         ),
         caso(
             &w,
             "table.melt",
             json!({"id_columns": ["id"], "value_columns": ["value"],
                    "var_name": "x", "value_name": "x"}),
+            "nomi distinti",
         ),
         caso(
             &w,
             "table.melt",
             json!({"id_columns": ["id"], "value_columns": ["value", "value"]}),
+            "colonna ripetuta",
         ),
         caso(
             &w,
             "table.rename",
             json!({"renames": [{"old_name": "name", "new_name": "x"},
                                {"old_name": "name", "new_name": "y"}]}),
+            "rename origine: colonna ripetuta",
         ),
         caso(
             &w,
             "table.aggregate",
             json!({"group_by": ["name"],
                    "aggregations": [{"column": "value", "function": "sum", "quantile": 0.5}]}),
+            "quantile ammesso solo",
         ),
-        caso(&w, "table.assert_not_null", json!({"columns": []})),
-        caso(&w, "table.assert_range", json!({"column": "value"})),
+        caso(
+            &w,
+            "table.aggregate",
+            json!({"group_by": ["name"],
+                   "aggregations": [{"column": "value", "function": "sum", "separator": "|"}]}),
+            "separator ammesso solo",
+        ),
+        caso(
+            &w,
+            "table.aggregate",
+            json!({"group_by": ["name"],
+                   "aggregations": [{"column": "value", "function": "mean", "ddof": 0}]}),
+            "ddof ammesso solo",
+        ),
+        caso(
+            &w,
+            "table.mask_data",
+            json!({"maskings": [{"column": "name", "mask_type": "email", "chars_start": 1}]}),
+            "mask_type=custom",
+        ),
+        caso(
+            &w,
+            "table.fill_na",
+            json!({"column": "name", "method": "ffill", "value": "x"}),
+            "value ammesso solo",
+        ),
+        caso(
+            &w,
+            "table.window_function",
+            json!({"column": "value", "function": "rank", "offset": 2}),
+            "offset ammesso solo",
+        ),
+        caso(
+            &w,
+            "table.rolling_window",
+            json!({"column": "value", "function": "sum", "window": 2, "ddof": 0,
+                   "output_column": "r"}),
+            "ddof ammesso solo",
+        ),
+        caso(
+            &w,
+            "table.assert_not_null",
+            json!({"columns": []}),
+            "columns vuoto",
+        ),
+        caso(
+            &w,
+            "table.assert_range",
+            json!({"column": "value"}),
+            "min o max",
+        ),
         caso(
             &w,
             "table.assert_range",
             json!({"column": "value", "max": 10, "inclusive_min": false}),
+            "senza l'estremo",
         ),
-        caso(&w, "table.assert_cardinality", json!({})),
+        caso(
+            &w,
+            "table.assert_cardinality",
+            json!({}),
+            "exact_rows, min_rows o max_rows",
+        ),
         caso(
             &w,
             "table.conditional",
             json!({"column": "value", "conditions": [], "default_value": 0,
                    "output_column": "c"}),
+            "almeno una condizione",
         ),
         caso(
             &w,
             "table.date_format",
             json!({"column": "date", "input_format": "%Y-%m-%d", "output_format": "",
                    "output_column": "d"}),
+            "output_format non valido",
         ),
         caso(
             &w,
             "table.string_pad",
             json!({"column": "name", "width": 16 * 1024 * 1024 + 1, "fill_char": "0"}),
+            "width oltre",
         ),
-        caso(&w, "table.limit", json!({"n": u64::MAX})),
+        caso(
+            &w,
+            "table.limit",
+            json!({"n": u64::MAX}),
+            "n oltre max_rows",
+        ),
+        caso(
+            &w,
+            "table.validate_rules",
+            json!({"rules": [{"name": "r".repeat(1_025), "operator": "notnull",
+                              "column": "id"}]}),
+            "oltre 1024 byte",
+        ),
         // Prima fallivano solo in esecuzione.
         caso(
             &w,
             "table.filter",
             json!({"column": "flag", "operator": ">", "value": 0}),
+            "nessun confronto ordinato",
         ),
         caso(
             &n,
             "table.conditional",
             json!({"column": "st", "conditions": [{"operator": "between", "value": "0,1",
                    "result": 1}]}),
+            "nessun confronto ordinato",
         ),
         caso(
             &w,
             "table.conditional",
             json!({"column": "value", "conditions": [{"operator": "==", "value": "abc",
                    "result": 1}]}),
+            "valore non numerico",
         ),
         caso(
             &w,
             "table.date_add",
             json!({"column": "date", "input_format": "%Y-%m-%d", "amount": i64::MAX,
                    "unit": "days", "output_column": "d"}),
+            "amount fuori scala",
         ),
         caso(
             &w,
             "table.expression",
-            json!({"output_column": "e", "expression": {"kind": "function", "name": "lower",
-                   "args": [{"kind": "column", "name": "name"},
-                            {"kind": "column", "name": "name"}]}}),
+            funzione(
+                "lower",
+                json!([{"kind": "column", "name": "name"}, {"kind": "column", "name": "name"}]),
+            ),
+            "numero di argomenti",
         ),
         caso(
             &w,
             "table.expression",
-            json!({"output_column": "e", "expression": {"kind": "function",
-                   "name": "regex_replace", "args": [{"kind": "column", "name": "name"},
-                   {"kind": "literal", "value": "("}, {"kind": "literal", "value": "x"}]}}),
+            funzione(
+                "regex_replace",
+                json!([{"kind": "column", "name": "name"}, {"kind": "literal", "value": "("},
+                       {"kind": "literal", "value": "x"}]),
+            ),
+            "regex non valida",
         ),
         caso(
             &w,
             "table.expression",
-            json!({"output_column": "e", "expression": {"kind": "function",
-                   "name": "substring", "args": [{"kind": "column", "name": "name"},
-                   {"kind": "literal", "value": -1}]}}),
+            funzione(
+                "substring",
+                json!([{"kind": "column", "name": "name"}, {"kind": "literal", "value": -1}]),
+            ),
+            "start negativo",
         ),
         // Parametri che il kernel ignorava in silenzio.
         caso(
             &w,
             "table.add_row_number",
             json!({"output_column": "r", "ascending": false}),
+            "ascending senza order_column",
         ),
         caso(
             &w,
             "table.string_extract",
             json!({"column": "name", "pattern": "(?P<l>[ab])", "output_column": "x"}),
+            "output_column non ammesso",
         ),
         caso(
             &w,
             "table.string_extract",
             json!({"column": "name", "pattern": "(?P<l>[ab])", "extract_all": true}),
+            "extract_all non ammesso",
         ),
         // Ambiente, non config: l'unico controllo rimasto nel runner.
         caso(
             &w,
             "table.hmac_sha256",
             json!({"columns": ["id"], "key_env": "PLENORA_PIPELINE_CHIAVE_ASSENTE"}),
+            "chiave HMAC non disponibile",
         ),
     ];
     for SecondoPasso {
@@ -898,6 +1032,7 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
         op,
         config,
         binario,
+        frammento,
     } in casi
     {
         let ingressi: &[&str] = if binario { &["primo", "t"] } else { &["primo"] };
@@ -914,11 +1049,10 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
             matches!(
                 &esito,
                 Err(PlenoraError::InvalidPlan(messaggio)
-                    | PlenoraError::Unsupported(messaggio)
                     | PlenoraError::ResourceLimit(messaggio))
-                    if messaggio.contains("secondo")
+                    if messaggio.contains("passo `secondo`") && messaggio.contains(frammento)
             ),
-            "{op} {config}: {esito:?}"
+            "{op} {config}: atteso `{frammento}`, avuto {esito:?}"
         );
     }
 }
