@@ -189,6 +189,7 @@ pub(super) fn risolvi(definizione: &str) -> Option<ResolvedCrs> {
         area_of_use: Some(voce.area),
         validity_domain: voce.dominio,
         ellipsoid: Some(voce.ellissoide),
+        integrato: Some(voce.identificativo),
     })
 }
 

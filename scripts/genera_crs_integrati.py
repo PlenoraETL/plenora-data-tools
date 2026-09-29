@@ -251,10 +251,18 @@ def parametro(crs: CRS, nome: str) -> float:
     raise Rifiuto(f"parametro {nome} assente: {crs.to_epsg()}")
 
 
-def dominio_di_validita(crs: CRS, area):
-    """Dominio di validita' di un CRS proiettato e la sua regola, in chiaro."""
+def regione_geografica(crs: CRS, area):
+    """Regione lon/lat da cui nasce il dominio di un proiettato, o `None`.
+
+    Transverse Mercator: +/- `SEMIAMPIEZZA_TM_GRADI` dal meridiano centrale,
+    latitudini dei fusi UTM o dell'area d'uso allargata; Mercator: il mondo
+    fino a `MERCATOR_LAT`. Gli altri metodi derivano il dominio dall'area
+    d'uso proiettata e non hanno una regione lon/lat (`None`). La usa anche
+    `genera_riproiezione.py`, che la riporta per il controllo di
+    `geo.reproject` sulle coordinate geografiche.
+    """
     metodo = crs.coordinate_operation.method_name
-    ovest, sud, est, nord = area
+    _, sud, _, nord = area
     if metodo == "Transverse Mercator":
         centrale = parametro(crs, "Longitude of natural origin")
         if " / UTM zone " in crs.name:
@@ -265,26 +273,38 @@ def dominio_di_validita(crs: CRS, area):
                 lat_min, lat_max = min(UTM_LAT_SUD, sud), 0.0
             else:
                 raise Rifiuto(f"UTM con falso nord inatteso: {crs.to_epsg()}")
-            regola = "UTM"
         else:
             estensione = nord - sud
             lat_min = max(-90.0, sud - ALLARGAMENTO * estensione)
             lat_max = min(90.0, nord + ALLARGAMENTO * estensione)
-            regola = "TM nazionale"
-        limiti = inviluppo_stabile(
-            crs,
+        return (
             centrale - SEMIAMPIEZZA_TM_GRADI,
             lat_min,
             centrale + SEMIAMPIEZZA_TM_GRADI,
             lat_max,
         )
+    if metodo in ("Popular Visualisation Pseudo Mercator", "Mercator (variant A)"):
+        return (-180.0, -MERCATOR_LAT, 180.0, MERCATOR_LAT)
+    return None
+
+
+def dominio_di_validita(crs: CRS, area):
+    """Dominio di validita' di un CRS proiettato e la sua regola, in chiaro."""
+    metodo = crs.coordinate_operation.method_name
+    ovest, sud, est, nord = area
+    regione = regione_geografica(crs, area)
+    if metodo == "Transverse Mercator":
+        centrale = parametro(crs, "Longitude of natural origin")
+        lon_min, lat_min, lon_max, lat_max = regione
+        regola = "UTM" if " / UTM zone " in crs.name else "TM nazionale"
+        limiti = inviluppo_stabile(crs, lon_min, lat_min, lon_max, lat_max)
         descrizione = (
             f"{regola}: longitudine {breve(centrale)} +/- {breve(SEMIAMPIEZZA_TM_GRADI)}, "
             f"latitudine [{breve(lat_min)}, {breve(lat_max)}]"
         )
         return verso_l_esterno(limiti), descrizione
     if metodo in ("Popular Visualisation Pseudo Mercator", "Mercator (variant A)"):
-        limiti = inviluppo_stabile(crs, -180.0, -MERCATOR_LAT, 180.0, MERCATOR_LAT)
+        limiti = inviluppo_stabile(crs, *regione)
         descrizione = f"Mercator: longitudine [-180, 180], latitudine [-{MERCATOR_LAT}, {MERCATOR_LAT}]"
         return verso_l_esterno(limiti), descrizione
     if metodo in (

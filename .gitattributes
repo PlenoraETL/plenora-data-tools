@@ -8,3 +8,5 @@ data/misure/*.json -text
 # File di dati binari delle fixture di plenora-io.
 *.parquet binary
 *.arrow binary
+# Griglie NTv2 (fixture della riproiezione): byte, non testo.
+*.gsb binary
