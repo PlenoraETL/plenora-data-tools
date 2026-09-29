@@ -7,7 +7,7 @@ use plenora_core::arrow::array::{
     builder::StringBuilder, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray,
 };
 use plenora_core::arrow::schema::DataType;
-use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -501,20 +501,22 @@ impl PathColumns {
 /// completo). Le chiavi "ambigue" (vuote o con '.') possono produrre lo
 /// stesso path per due derivazioni, e il parsing completo risolve il
 /// conflitto in ordine lessicografico: il driver ricade su di esso per
-/// quella riga.
+/// quella riga. Lo stesso per una chiave ripetuta nello stesso oggetto, di
+/// cui `Value` tiene solo l'ultima occorrenza con tutto il suo sotto-albero.
 struct RowFlatten<'a> {
     cells: &'a mut Vec<(String, String)>,
     path: String,
     max: usize,
     targets: Option<&'a JsonTargets>,
     weird_key: bool,
+    /// La radice e' un oggetto (vale solo se il documento e' valido).
+    radice_oggetto: bool,
 }
 
 impl RowFlatten<'_> {
     fn emit(&mut self, text: String) {
-        // Le chiavi duplicate nello stesso oggetto restano nel buffer in
-        // ordine di documento: al riversamento vince l'ultima, come in
-        // serde_json.
+        // Una chiave ripetuta nello stesso oggetto fa ricadere la riga
+        // sull'albero (`walk_map`): qui ogni path arriva una volta sola.
         self.cells.push((self.path.clone(), text));
     }
 
@@ -524,13 +526,14 @@ impl RowFlatten<'_> {
         depth: usize,
     ) -> std::result::Result<(), A::Error> {
         if depth > self.max {
-            // Oggetto oltre max_level: si scarta senza
-            // emettere nulla (ma il parser valida comunque il contenuto).
-            while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+            // Oggetto oltre max_level: si scarta senza emettere nulla, ma
+            // validandone il contenuto come `Value` (`Valida`).
+            while map.next_entry_seed(Valida, Valida)?.is_some() {}
             return Ok(());
         }
         let base = self.path.len();
         let empty = self.path.is_empty();
+        let mut viste = ChiaviViste::default();
         while let Some(key) = map.next_key::<String>()? {
             if key.is_empty() || key.contains('.') {
                 self.weird_key = true;
@@ -555,11 +558,49 @@ impl RowFlatten<'_> {
                     capture,
                 })?;
             } else {
-                map.next_value::<IgnoredAny>()?;
+                map.next_value_seed(Valida)?;
             }
             self.path.truncate(base);
+            // Chiave ripetuta nello stesso oggetto: in `Value` l'ultima
+            // occorrenza sostituisce l'intero sotto-albero della prima, e
+            // le celle gia' emesse dalla prima (una foglia sotto un oggetto
+            // che poi diventa scalare, o viceversa) resterebbero. Ricaduta
+            // sull'albero per la riga, come per le chiavi ambigue.
+            if viste.ripetuta(key) {
+                self.weird_key = true;
+            }
         }
         Ok(())
+    }
+}
+
+/// Chiavi gia' viste in un oggetto: scansione lineare fino a
+/// `ChiaviViste::SOGLIA` chiavi, poi un insieme hash.
+#[derive(Default)]
+struct ChiaviViste {
+    poche: Vec<String>,
+    molte: Option<HashSet<String>>,
+}
+
+impl ChiaviViste {
+    const SOGLIA: usize = 32;
+
+    /// Registra `key`; `true` se c'era gia'.
+    fn ripetuta(&mut self, key: String) -> bool {
+        if let Some(molte) = &mut self.molte {
+            return !molte.insert(key);
+        }
+        if self.poche.contains(&key) {
+            return true;
+        }
+        if self.poche.len() < Self::SOGLIA {
+            self.poche.push(key);
+        } else {
+            let mut molte = self.poche.drain(..).collect::<HashSet<_>>();
+            molte.insert(key);
+            self.molte = Some(molte);
+        }
+        false
     }
 }
 
@@ -603,7 +644,7 @@ impl<'de> Visitor<'de> for LeafSeed<'_, '_> {
             let value = Value::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
             self.row.emit(value_text(&value));
         } else {
-            IgnoredAny::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+            Valida.visit_seq(seq)?;
         }
         Ok(())
     }
@@ -678,15 +719,12 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, map: A) -> std::result::Result<Self::Value, A::Error> {
+        self.row.radice_oggetto = true;
         self.row.walk_map(map, 0)
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(
-        self,
-        mut seq: A,
-    ) -> std::result::Result<Self::Value, A::Error> {
-        while seq.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(())
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> std::result::Result<Self::Value, A::Error> {
+        Valida.visit_seq(seq)
     }
 
     fn visit_bool<E: de::Error>(self, _value: bool) -> std::result::Result<Self::Value, E> {
@@ -714,12 +752,164 @@ impl<'de> Visitor<'de> for RootSeed<'_, '_> {
     }
 }
 
-/// Appiattisce una riga JSON nelle colonne path -> testo.
+/// Consuma un valore JSON validandolo esattamente come
+/// `Value::deserialize`, senza costruire l'albero.
 ///
-/// Fast path: parsing streaming con serde (stessa validazione di
-/// `from_str::<Value>`), senza costruire l'albero `Value`. JSON invalido o
-/// radice non-oggetto => nessuna emissione; chiavi vuote o con '.' =>
-/// fallback al parsing completo della riga.
+/// `Value` chiama `deserialize_any` su ogni valore e ogni chiave, e il suo
+/// visitor non rifiuta nulla: gli errori vengono tutti dal parser. `Valida`
+/// fa le stesse chiamate (`deserialize_any` a ogni livello, anche per le
+/// chiavi), quindi il parser vede la stessa sequenza e rende lo stesso
+/// esito: numeri fuori intervallo (`1e400`), surrogati isolati
+/// (`"\ud800"`), escape invalidi, limite di ricorsione a 128.
+///
+/// Non `IgnoredAny`: `serde_json` lo serve con `ignore_value`, che salta i
+/// numeri senza convertirli e gli escape `\u` senza controllare i
+/// surrogati, quindi accetterebbe documenti che `from_str::<Value>`
+/// rifiuta.
+#[derive(Clone, Copy)]
+struct Valida;
+
+impl<'de> DeserializeSeed<'de> for Valida {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Valida {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("un valore JSON")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<(), A::Error> {
+        while map.next_key_seed(Self)?.is_some() {
+            map.next_value_seed(Self)?;
+        }
+        Ok(())
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<(), A::Error> {
+        while seq.next_element_seed(Self)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_bool<E: de::Error>(self, _value: bool) -> std::result::Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_i64<E: de::Error>(self, _value: i64) -> std::result::Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_u64<E: de::Error>(self, _value: u64) -> std::result::Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_f64<E: de::Error>(self, _value: f64) -> std::result::Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_str<E: de::Error>(self, _value: &str) -> std::result::Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_unit<E: de::Error>(self) -> std::result::Result<(), E> {
+        Ok(())
+    }
+}
+
+/// Esito di un documento: quello che `from_str::<Value>` avrebbe dato.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EsitoDocumento {
+    Oggetto,
+    RadiceNonOggetto,
+    Invalido,
+}
+
+/// Radice di [`classifica_documento`]: `true` se e' un oggetto.
+struct RadiceClassificata;
+
+impl<'de> DeserializeSeed<'de> for RadiceClassificata {
+    type Value = bool;
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<bool, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for RadiceClassificata {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("un valore JSON")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> std::result::Result<bool, A::Error> {
+        Valida.visit_map(map).map(|()| true)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> std::result::Result<bool, A::Error> {
+        Valida.visit_seq(seq).map(|()| false)
+    }
+
+    fn visit_bool<E: de::Error>(self, _value: bool) -> std::result::Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_i64<E: de::Error>(self, _value: i64) -> std::result::Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_u64<E: de::Error>(self, _value: u64) -> std::result::Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_f64<E: de::Error>(self, _value: f64) -> std::result::Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_str<E: de::Error>(self, _value: &str) -> std::result::Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> std::result::Result<bool, E> {
+        Ok(false)
+    }
+}
+
+/// Esito di `text` senza appiattirlo: dopo il primo rifiuto l'output non
+/// serve piu', resta da contare i rifiuti.
+fn classifica_documento(text: &str) -> EsitoDocumento {
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    match RadiceClassificata.deserialize(&mut deserializer) {
+        Ok(oggetto) if deserializer.end().is_ok() => {
+            if oggetto {
+                EsitoDocumento::Oggetto
+            } else {
+                EsitoDocumento::RadiceNonOggetto
+            }
+        }
+        _ => EsitoDocumento::Invalido,
+    }
+}
+
+/// Appiattisce una riga JSON nelle colonne path -> testo e ne rende
+/// l'esito.
+///
+/// Una sola passata: parsing streaming con serde (stessa validazione di
+/// `from_str::<Value>`, vedi [`Valida`]), senza costruire l'albero `Value`.
+/// JSON invalido o radice non-oggetto => nessuna emissione e l'esito del
+/// rifiuto; chiavi vuote o con '.' => fallback al parsing completo della
+/// riga.
 fn flatten_row(
     text: &str,
     max: usize,
@@ -727,7 +917,7 @@ fn flatten_row(
     row_index: usize,
     cells: &mut Vec<(String, String)>,
     out: &mut PathColumns,
-) {
+) -> EsitoDocumento {
     cells.clear();
     let mut row = RowFlatten {
         cells,
@@ -735,12 +925,21 @@ fn flatten_row(
         max,
         targets,
         weird_key: false,
+        radice_oggetto: false,
     };
     let valid = {
         let mut deserializer = serde_json::Deserializer::from_str(text);
         let parsed = RootSeed { row: &mut row }.deserialize(&mut deserializer);
         parsed.is_ok() && deserializer.end().is_ok()
     };
+    let esito = match (valid, row.radice_oggetto) {
+        (false, _) => EsitoDocumento::Invalido,
+        (true, false) => EsitoDocumento::RadiceNonOggetto,
+        (true, true) => EsitoDocumento::Oggetto,
+    };
+    if esito != EsitoDocumento::Oggetto {
+        return esito;
+    }
     if row.weird_key {
         // Fallback: parsing completo (emissione sulle chiavi ordinate,
         // risoluzione dei conflitti inclusa); sostituisce le emissioni del
@@ -753,10 +952,84 @@ fn flatten_row(
         for (path, text) in map {
             out.insert(row_index, &path, text);
         }
-    } else if valid {
+    } else {
         for (path, text) in row.cells.drain(..) {
             out.insert(row_index, &path, text);
         }
+    }
+    esito
+}
+
+/// Righe rifiutate di `flatten_json`: conteggi per causa ed esempi, in
+/// ordine di riga.
+struct RifiutiJson {
+    counts: BTreeMap<String, u64>,
+    examples: Vec<RowDiagnosticExample>,
+    observed_total: u64,
+}
+
+impl RifiutiJson {
+    const EXAMPLES_LIMIT: u64 = 10;
+
+    const fn new() -> Self {
+        Self {
+            counts: BTreeMap::new(),
+            examples: Vec::new(),
+            observed_total: 0,
+        }
+    }
+
+    fn aggiungi(&mut self, row: usize, cause: &str, column: &str) -> Result<()> {
+        self.observed_total = self.observed_total.checked_add(1).ok_or_else(|| {
+            PlenoraError::Internal("overflow del conteggio diagnostico JSON".into())
+        })?;
+        let count = self.counts.entry(cause.to_owned()).or_insert(0_u64);
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::Internal("overflow del conteggio causa JSON".into()))?;
+        let source_index = u64::try_from(row)
+            .map_err(|_| PlenoraError::Internal("indice sorgente non rappresentabile".into()))?;
+        if u64::try_from(self.examples.len())
+            .map_err(|_| PlenoraError::Internal("troppi esempi JSON".into()))?
+            < Self::EXAMPLES_LIMIT
+        {
+            self.examples.push(RowDiagnosticExample {
+                source_index,
+                cause: cause.to_owned(),
+                column: Some(column.to_owned()),
+                key: None,
+                write_state: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// `Err` con la diagnostica se almeno una riga e' stata rifiutata.
+    fn verifica(self) -> Result<()> {
+        if self.observed_total == 0 {
+            return Ok(());
+        }
+        let report = RowDiagnostics {
+            contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
+            scope: RowDiagnosticScope::Read,
+            index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
+            completeness: RowDiagnosticsCompleteness::Complete,
+            knowledge_limits: None,
+            observed_total: self.observed_total,
+            total: Some(self.observed_total),
+            input_total: None,
+            counts: self.counts,
+            examples_limit: Self::EXAMPLES_LIMIT,
+            examples_truncated: self.observed_total > Self::EXAMPLES_LIMIT,
+            examples: self.examples,
+            diagnostic_state_counts: None,
+            write_outcome: None,
+        };
+        Err(PlenoraError::DataMapping(
+            "documenti JSON rifiutati; consultare row_diagnostics".into(),
+        )
+        .with_phase(ErrorPhase::Read)
+        .with_row_diagnostics(report))
     }
 }
 
@@ -778,69 +1051,11 @@ pub fn flatten_json(
     config: &FlattenJson,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    const EXAMPLES_LIMIT: u64 = 10;
     if config.max_level > 5 {
         return Err(PlenoraError::InvalidPlan("max_level oltre 5".into()));
     }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
-    let mut counts = BTreeMap::new();
-    let mut examples = Vec::new();
-    let mut observed_total = 0_u64;
-    for row in 0..batch.num_rows() {
-        let Some(text) = scalar_as_string(source.as_ref(), row)? else {
-            continue;
-        };
-        let cause = match serde_json::from_str::<Value>(&text) {
-            Ok(Value::Object(_)) => continue,
-            Ok(_) => "json.root_not_object",
-            Err(_) => "json.invalid_syntax",
-        };
-        observed_total = observed_total.checked_add(1).ok_or_else(|| {
-            PlenoraError::Internal("overflow del conteggio diagnostico JSON".into())
-        })?;
-        let count = counts.entry(cause.to_owned()).or_insert(0_u64);
-        *count = count
-            .checked_add(1)
-            .ok_or_else(|| PlenoraError::Internal("overflow del conteggio causa JSON".into()))?;
-        let source_index = u64::try_from(row)
-            .map_err(|_| PlenoraError::Internal("indice sorgente non rappresentabile".into()))?;
-        if u64::try_from(examples.len())
-            .map_err(|_| PlenoraError::Internal("troppi esempi JSON".into()))?
-            < EXAMPLES_LIMIT
-        {
-            examples.push(RowDiagnosticExample {
-                source_index,
-                cause: cause.to_owned(),
-                column: Some(config.column.clone()),
-                key: None,
-                write_state: None,
-            });
-        }
-    }
-    if observed_total > 0 {
-        let report = RowDiagnostics {
-            contract: ROW_DIAGNOSTICS_CONTRACT.to_owned(),
-            scope: RowDiagnosticScope::Read,
-            index_basis: ROW_DIAGNOSTICS_INDEX_BASIS.to_owned(),
-            completeness: RowDiagnosticsCompleteness::Complete,
-            knowledge_limits: None,
-            observed_total,
-            total: Some(observed_total),
-            input_total: None,
-            counts,
-            examples_limit: EXAMPLES_LIMIT,
-            examples_truncated: observed_total > EXAMPLES_LIMIT,
-            examples,
-            diagnostic_state_counts: None,
-            write_outcome: None,
-        };
-        return Err(PlenoraError::DataMapping(
-            "documenti JSON rifiutati; consultare row_diagnostics".into(),
-        )
-        .with_phase(ErrorPhase::Read)
-        .with_row_diagnostics(report));
-    }
     let prefix = if config.prefix.is_empty() {
         format!("{}_", config.column)
     } else {
@@ -851,37 +1066,54 @@ pub fn flatten_json(
     } else {
         Some(JsonTargets::from_outputs(&config.output_columns, &prefix))
     };
+    // Una sola passata: ogni documento si valida e si appiattisce insieme.
+    // Al primo rifiuto l'output non serve piu' (l'esito e' l'errore con la
+    // diagnostica di tutte le righe rifiutate): le righe seguenti si
+    // classificano soltanto. Gli errori di `scalar_as_string` escono alla
+    // stessa riga di prima, perche' la conversione precede comunque il
+    // parsing della riga.
     let mut columns = PathColumns::default();
     let mut cells: Vec<(String, String)> = Vec::new();
+    let mut rifiuti = RifiutiJson::new();
+    let mut elabora = |row: usize, text: &str| -> Result<()> {
+        let esito = if rifiuti.observed_total == 0 {
+            flatten_row(
+                text,
+                config.max_level,
+                targets.as_ref(),
+                row,
+                &mut cells,
+                &mut columns,
+            )
+        } else {
+            classifica_documento(text)
+        };
+        match esito {
+            EsitoDocumento::Oggetto => Ok(()),
+            EsitoDocumento::RadiceNonOggetto => {
+                rifiuti.aggiungi(row, "json.root_not_object", &config.column)
+            }
+            EsitoDocumento::Invalido => {
+                rifiuti.aggiungi(row, "json.invalid_syntax", &config.column)
+            }
+        }
+    };
     if let Some(values) = source.as_any().downcast_ref::<StringArray>() {
         // Caso comune: documenti utf8 prestati senza copia (identico al
         // to_owned di scalar_as_string, compresa la gestione dei null).
         for (row, text) in values.iter().enumerate() {
             if let Some(text) = text {
-                flatten_row(
-                    text,
-                    config.max_level,
-                    targets.as_ref(),
-                    row,
-                    &mut cells,
-                    &mut columns,
-                );
+                elabora(row, text)?;
             }
         }
     } else {
         for row in 0..batch.num_rows() {
             if let Some(text) = scalar_as_string(source.as_ref(), row)? {
-                flatten_row(
-                    &text,
-                    config.max_level,
-                    targets.as_ref(),
-                    row,
-                    &mut cells,
-                    &mut columns,
-                );
+                elabora(row, &text)?;
             }
         }
     }
+    rifiuti.verifica()?;
     // Colonne dense: null dove il path manca nella riga.
     for column in &mut columns.columns {
         column.resize(batch.num_rows(), None);
@@ -1345,7 +1577,7 @@ mod tests {
         Ok(result)
     }
 
-    fn oracle_flatten_json(
+    pub(super) fn oracle_flatten_json(
         batch: &RecordBatch,
         config: &FlattenJson,
         limits: &Limits,
@@ -2024,3 +2256,7 @@ mod tests {
 #[cfg(test)]
 #[path = "bin_oracolo.rs"]
 mod bin_oracolo;
+
+#[cfg(test)]
+#[path = "flatten_json_oracolo.rs"]
+mod flatten_json_oracolo;
