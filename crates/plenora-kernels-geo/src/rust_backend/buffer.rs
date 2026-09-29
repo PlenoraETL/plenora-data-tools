@@ -402,26 +402,34 @@ impl Pezzi {
         }
         let lati = if chiusa { punti.len() } else { punti.len() - 1 };
         let mut direzioni = Vec::with_capacity(lati);
+        let mut estensioni = Vec::with_capacity(lati);
         for indice in 0..lati {
             let a = punti[indice];
             let b = punti[(indice + 1) % punti.len()];
-            let (u, _) = direzione(a, b).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
+            let (u, misura) = direzione(a, b).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
             direzioni.push(u);
+            estensioni.push(misura);
         }
         let quadrate = !chiusa && estremita == Estremita::Quadrate;
         // Agli estremi liberi: `r` con estremita' quadrate, niente
-        // altrimenti; ai giunti la sovrapposizione `giunto`.
+        // altrimenti; ai giunti la sovrapposizione `giunto`, ma al piu' meta'
+        // del lato vicino: il prolungamento resta sul lato vicino e non
+        // oltrepassa l'estremo libero di una linea corta (revisione: con
+        // estremita' piatte `(0 0, 1 0, 2 0)` a 1000 m il prolungamento di
+        // 4,47 m usciva di 3,47 m oltre gli estremi).
         let libero = if quadrate { self.raggio } else { 0.0 };
         for (indice, &u) in direzioni.iter().enumerate() {
             let a = punti[indice];
             let b = punti[(indice + 1) % punti.len()];
+            let precedente = estensioni[(indice + lati - 1) % lati];
+            let seguente = estensioni[(indice + 1) % lati];
             let inizio = if chiusa || indice > 0 {
-                self.giunto
+                self.giunto.min(0.5 * precedente)
             } else {
                 libero
             };
             let fine = if chiusa || indice + 1 < lati {
-                self.giunto
+                self.giunto.min(0.5 * seguente)
             } else {
                 libero
             };
@@ -592,6 +600,312 @@ fn erosione(
     Ok(risultato)
 }
 
+/// Una forma della definizione esatta del buffer, con il suo ingombro.
+#[derive(Clone, Copy, Debug)]
+enum Forma {
+    /// I punti che si proiettano sul lato `a + t u`, `t` in `[-prima, l +
+    /// dopo]`, a distanza al piu' `r` dalla sua retta.
+    Rettangolo {
+        a: Coord<f64>,
+        u: Coord<f64>,
+        l: f64,
+        prima: f64,
+        dopo: f64,
+    },
+    /// Il disco di raggio `r`.
+    Disco(Coord<f64>),
+    /// La giunzione tonda al vertice `c` fra un lato entrante di direzione
+    /// `u` e uno uscente di direzione `w`: i punti del disco di raggio `r`
+    /// nel cono normale `e . u >= 0`, `e . w <= 0` (nulla se i lati sono
+    /// allineati, il mezzo disco davanti se si invertono).
+    Giunto {
+        c: Coord<f64>,
+        u: Coord<f64>,
+        w: Coord<f64>,
+    },
+    /// Il quadrato di mezzo lato `r` (estremita' quadrate di un punto).
+    Quadrato(Coord<f64>),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FormaIndicizzata {
+    forma: Forma,
+    envelope: rstar::AABB<[f64; 2]>,
+}
+
+impl rstar::RTreeObject for FormaIndicizzata {
+    type Envelope = rstar::AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        self.envelope
+    }
+}
+
+/// La definizione esatta del buffer di raggio `r`, **indipendente dai
+/// pezzi costruiti**: l'unione dei rettangoli dei lati (allungati di `r`
+/// agli estremi liberi con estremita' quadrate), dei settori dei coni
+/// normali ai vertici interni (giunzioni tonde), dei dischi (tonde) o quadrati (quadrate) agli
+/// estremi liberi e ai punti, e delle parti areali. Serve al controllo a
+/// posteriori contro la definizione ([`verifica_contro_la_definizione`]).
+struct Definizione {
+    raggio: f64,
+    albero: rstar::RTree<FormaIndicizzata>,
+    areali: Vec<MultiPolygon<f64>>,
+}
+
+impl Definizione {
+    fn nuova(geometry: &Geometry<f64>, raggio: f64, estremita: Estremita) -> Self {
+        let mut forme = Vec::new();
+        let mut areali = Vec::new();
+        Self::raccogli(geometry, raggio, estremita, &mut forme, &mut areali);
+        Self {
+            raggio,
+            albero: rstar::RTree::bulk_load(forme),
+            areali,
+        }
+    }
+
+    fn con_ingombro(forma: Forma, raggio: f64) -> FormaIndicizzata {
+        let (minimo, massimo) = match forma {
+            Forma::Rettangolo {
+                a,
+                u,
+                l,
+                prima,
+                dopo,
+            } => {
+                let inizio = somma(a, u, -prima);
+                let fine = somma(a, u, l + dopo);
+                (
+                    [inizio.x.min(fine.x) - raggio, inizio.y.min(fine.y) - raggio],
+                    [inizio.x.max(fine.x) + raggio, inizio.y.max(fine.y) + raggio],
+                )
+            }
+            Forma::Disco(c) | Forma::Quadrato(c) | Forma::Giunto { c, .. } => {
+                ([c.x - raggio, c.y - raggio], [c.x + raggio, c.y + raggio])
+            }
+        };
+        FormaIndicizzata {
+            forma,
+            envelope: rstar::AABB::from_corners(minimo, massimo),
+        }
+    }
+
+    fn raccogli(
+        geometry: &Geometry<f64>,
+        raggio: f64,
+        estremita: Estremita,
+        forme: &mut Vec<FormaIndicizzata>,
+        areali: &mut Vec<MultiPolygon<f64>>,
+    ) {
+        let forma_del_punto = |c: Coord<f64>, forme: &mut Vec<FormaIndicizzata>| match estremita {
+            Estremita::Tonde => forme.push(Self::con_ingombro(Forma::Disco(c), raggio)),
+            Estremita::Quadrate => forme.push(Self::con_ingombro(Forma::Quadrato(c), raggio)),
+            Estremita::Piatte => {}
+        };
+        let spezzata = |coordinate: &[Coord<f64>],
+                        chiusa: bool,
+                        forme: &mut Vec<FormaIndicizzata>| {
+            let mut punti: Vec<Coord<f64>> = Vec::new();
+            for c in coordinate {
+                if punti.last() != Some(c) {
+                    punti.push(*c);
+                }
+            }
+            if chiusa && punti.len() > 1 && punti.first() == punti.last() {
+                punti.pop();
+            }
+            if punti.len() == 1 {
+                // Chiusa o no, un solo punto: come un punto (anelli
+                // degeneri non arrivano, l'ingresso e' validato).
+                forma_del_punto(punti[0], forme);
+                return;
+            }
+            let lati = if chiusa {
+                punti.len()
+            } else {
+                punti.len().saturating_sub(1)
+            };
+            let quadrate = !chiusa && estremita == Estremita::Quadrate;
+            for indice in 0..lati {
+                let a = punti[indice];
+                let b = punti[(indice + 1) % punti.len()];
+                if let Some((u, l)) = direzione(a, b) {
+                    let prima = if quadrate && indice == 0 { raggio } else { 0.0 };
+                    let dopo = if quadrate && indice + 1 == lati {
+                        raggio
+                    } else {
+                        0.0
+                    };
+                    forme.push(Self::con_ingombro(
+                        Forma::Rettangolo {
+                            a,
+                            u,
+                            l,
+                            prima,
+                            dopo,
+                        },
+                        raggio,
+                    ));
+                }
+            }
+            for (indice, c) in punti.iter().enumerate() {
+                let estremo = !chiusa && (indice == 0 || indice + 1 == punti.len());
+                if estremo {
+                    if estremita == Estremita::Tonde {
+                        forme.push(Self::con_ingombro(Forma::Disco(*c), raggio));
+                    }
+                    continue;
+                }
+                let n = punti.len();
+                let prima = punti[(indice + n - 1) % n];
+                let dopo = punti[(indice + 1) % n];
+                if let (Some((u, _)), Some((w, _))) = (direzione(prima, *c), direzione(*c, dopo)) {
+                    forme.push(Self::con_ingombro(Forma::Giunto { c: *c, u, w }, raggio));
+                }
+            }
+        };
+        match geometry {
+            Geometry::Point(p) => forma_del_punto(p.0, forme),
+            Geometry::MultiPoint(points) => {
+                for p in points {
+                    forma_del_punto(p.0, forme);
+                }
+            }
+            Geometry::Line(line) => spezzata(&[line.start, line.end], false, forme),
+            Geometry::LineString(line) => spezzata(&line.0, false, forme),
+            Geometry::MultiLineString(lines) => {
+                for line in lines {
+                    spezzata(&line.0, false, forme);
+                }
+            }
+            Geometry::GeometryCollection(collection) => {
+                for child in collection {
+                    Self::raccogli(child, raggio, estremita, forme, areali);
+                }
+            }
+            altro => {
+                if let Some(polygons) = areale_di(altro) {
+                    for polygon in &polygons {
+                        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+                            spezzata(&ring.0, true, forme);
+                        }
+                    }
+                    areali.push(polygons);
+                }
+            }
+        }
+    }
+
+    /// Il punto sta nella definizione allargata di `tolleranza`?
+    fn contiene(&self, v: Coord<f64>, tolleranza: f64) -> bool {
+        use geo::Contains as _;
+        let r = self.raggio + tolleranza;
+        let busta = rstar::AABB::from_corners(
+            [v.x - tolleranza, v.y - tolleranza],
+            [v.x + tolleranza, v.y + tolleranza],
+        );
+        let dentro_forma = self
+            .albero
+            .locate_in_envelope_intersecting(&busta)
+            .any(|indicizzata| match indicizzata.forma {
+                Forma::Rettangolo {
+                    a,
+                    u,
+                    l,
+                    prima,
+                    dopo,
+                } => {
+                    let dx = v.x - a.x;
+                    let dy = v.y - a.y;
+                    let lungo = dx.mul_add(u.x, dy * u.y);
+                    let traverso = (-dx).mul_add(u.y, dy * u.x).abs();
+                    lungo >= -prima - tolleranza && lungo <= l + dopo + tolleranza && traverso <= r
+                }
+                Forma::Disco(c) => (v.x - c.x).hypot(v.y - c.y) <= r,
+                Forma::Giunto { c, u, w } => {
+                    let ex = v.x - c.x;
+                    let ey = v.y - c.y;
+                    ex.hypot(ey) <= r
+                        && ex.mul_add(u.x, ey * u.y) >= -tolleranza
+                        && ex.mul_add(w.x, ey * w.y) <= tolleranza
+                }
+                Forma::Quadrato(c) => (v.x - c.x).abs() <= r && (v.y - c.y).abs() <= r,
+            });
+        dentro_forma
+            || self
+                .areali
+                .iter()
+                .any(|parte| parte.contains(&geo::Point::from(v)))
+    }
+}
+
+/// Il controllo a posteriori contro la **definizione** del buffer, non
+/// contro i pezzi costruiti (un pezzo sbagliato passerebbe il confronto con
+/// se' stesso): con `d > 0` ogni vertice dell'uscita sta nella definizione
+/// di raggio `d` allargata della tolleranza; con `d < 0` ogni vertice sta
+/// in una parte areale e fuori dalla fascia di raggio `|d| - f - tolleranza`
+/// attorno ai suoi anelli (gli archi inscritti allargano l'erosione di al
+/// piu' la freccia `f`). La tolleranza e' `p / 2` (la griglia) piu' un
+/// centesimo della freccia (i giunti, vedi `Pezzi::nuovi`) piu' un margine
+/// d'arrotondamento.
+fn verifica_contro_la_definizione(
+    geometry: &Geometry<f64>,
+    distance: f64,
+    estremita: Estremita,
+    freccia: f64,
+    output: &MultiPolygon<f64>,
+    precision: Precision,
+) -> Result<(), ErroreBuffer> {
+    use geo::{Contains as _, CoordsIter as _};
+    let margine = |v: Coord<f64>| 64.0 * f64::EPSILON * (v.x.abs() + v.y.abs() + distance.abs());
+    let tolleranza = 0.01f64.mul_add(freccia, precision.value() * griglia::FRAZIONE_BORDO);
+    let esito = protetto(|| {
+        if distance > 0.0 {
+            let definizione = Definizione::nuova(geometry, distance, estremita);
+            output
+                .coords_iter()
+                .all(|v| definizione.contiene(v, tolleranza + margine(v)))
+        } else {
+            let mut parti = Vec::new();
+            areali(geometry, &mut parti);
+            let fasce: Vec<(MultiPolygon<f64>, Definizione, Definizione)> = parti
+                .into_iter()
+                .map(|parte| {
+                    let anelli = Geometry::MultiLineString(geo::MultiLineString::new(
+                        parte
+                            .iter()
+                            .flat_map(|polygon| {
+                                std::iter::once(polygon.exterior().clone())
+                                    .chain(polygon.interiors().iter().cloned())
+                            })
+                            .collect(),
+                    ));
+                    let fascia = Definizione::nuova(
+                        &anelli,
+                        (-distance - freccia - tolleranza).max(0.0),
+                        Estremita::Tonde,
+                    );
+                    let bordo = Definizione::nuova(&anelli, 0.0, Estremita::Tonde);
+                    (parte, fascia, bordo)
+                })
+                .collect();
+            output.coords_iter().all(|v| {
+                fasce.iter().any(|(parte, fascia, bordo)| {
+                    let dentro = parte.contains(&geo::Point::from(v))
+                        || bordo.contiene(v, tolleranza + margine(v));
+                    dentro && (fascia.raggio <= 0.0 || !fascia.contiene(v, -margine(v)))
+                })
+            })
+        }
+    })?;
+    if esito {
+        Ok(())
+    } else {
+        Err(ErroreBuffer::PrecisioneInsufficiente)
+    }
+}
+
 /// Il buffer di `geometry` a distanza `distance`, entro la precisione
 /// (vedi il modulo): freccia degli archi [`freccia_degli_archi`], griglia
 /// entro `p / 2`.
@@ -638,7 +952,11 @@ pub fn buffer_con_freccia(
         let mut operandi = Vec::new();
         protetto(|| pezzi.geometria(geometry, estremita, &mut operandi))??;
         operandi.append(&mut pezzi.prodotti);
-        return unione(&operandi, precision);
+        let risultato = unione(&operandi, precision)?;
+        verifica_contro_la_definizione(
+            geometry, distance, estremita, freccia, &risultato, precision,
+        )?;
+        return Ok(risultato);
     }
     let mut parti = Vec::new();
     protetto(|| areali(geometry, &mut parti))?;
@@ -662,11 +980,15 @@ pub fn buffer_con_freccia(
             erose.push(protetto(|| risultato.orient(Direction::Default))?);
         }
     }
-    match erose.len() {
-        0 => Ok(MultiPolygon::new(Vec::new())),
-        1 => Ok(erose.remove(0)),
-        _ => unione(&erose, passo),
-    }
+    let risultato = match erose.len() {
+        0 => MultiPolygon::new(Vec::new()),
+        1 => erose.remove(0),
+        _ => unione(&erose, passo)?,
+    };
+    verifica_contro_la_definizione(
+        geometry, distance, estremita, freccia, &risultato, precision,
+    )?;
+    Ok(risultato)
 }
 
 #[cfg(test)]
@@ -814,5 +1136,65 @@ mod tests {
             assert!(dentro_x && dentro_y, "{c:?}");
         }
         assert!((chiusa.unsigned_area() - 10_000.0).abs() < 400.0 * 0.01);
+    }
+
+    /// Revisione (Codex, secondo giro): con estremita' piatte i giunti
+    /// prolungavano i rettangoli oltre gli estremi di una linea corta
+    /// (`(0 0, 1 0, 2 0)` a 1000 m: da -3,47 a 5,47 m in x invece di 0-2).
+    /// Ora i prolungamenti restano sul lato vicino, e il controllo contro la
+    /// definizione (non contro i pezzi) vede un'uscita che esce dalle
+    /// estremita'.
+    #[test]
+    fn le_estremita_piatte_non_si_allungano_ai_giunti() {
+        let linea =
+            Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]));
+        for estremita in [Estremita::Piatte, Estremita::Quadrate] {
+            let buffer = buffer_controllato(&linea, 1000.0, estremita, centimetro()).unwrap();
+            let (minimo, massimo) = if estremita == Estremita::Piatte {
+                (0.0, 2.0)
+            } else {
+                (-1000.0, 1002.0)
+            };
+            for c in buffer.coords_iter() {
+                assert!(
+                    c.x >= minimo - 0.01 && c.x <= massimo + 0.01,
+                    "{estremita:?}: {c:?}"
+                );
+            }
+        }
+        // Il controllo contro la definizione rifiuta un'uscita che sporge.
+        let sporgente = MultiPolygon::new(vec![geo::Rect::new(
+            Coord {
+                x: -3.0,
+                y: -1000.0,
+            },
+            Coord { x: 5.0, y: 1000.0 },
+        )
+        .to_polygon()]);
+        assert_eq!(
+            verifica_contro_la_definizione(
+                &linea,
+                1000.0,
+                Estremita::Piatte,
+                1.0,
+                &sporgente,
+                centimetro()
+            ),
+            Err(ErroreBuffer::PrecisioneInsufficiente)
+        );
+        let giusta = MultiPolygon::new(vec![geo::Rect::new(
+            Coord { x: 0.0, y: -1000.0 },
+            Coord { x: 2.0, y: 1000.0 },
+        )
+        .to_polygon()]);
+        assert!(verifica_contro_la_definizione(
+            &linea,
+            1000.0,
+            Estremita::Piatte,
+            1.0,
+            &giusta,
+            centimetro()
+        )
+        .is_ok());
     }
 }

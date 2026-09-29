@@ -531,18 +531,13 @@ fn subdivide_polygon(
         // spostamento accumulato dai livelli (passo che si dimezza con il
         // pezzo) resta sotto la precisione, e i lati delle foglie sono
         // controllati contro il poligono di partenza.
-        let operandi = Operandi::nuovi(vec![&pezzo, &meta])?;
-        if !protetto(|| {
-            operandi.completo(
-                &intersection,
-                |_| true,
-                None,
-                Regola::Intersezione,
-                taglio.precision,
-            )
-        })? {
-            return Err(ExtensionError::PrecisionInsufficient);
-        }
+        Operandi::nuovi(vec![&pezzo, &meta])?.verifica(
+            &intersection,
+            |_| true,
+            None,
+            Regola::Intersezione,
+            taglio.precision,
+        )?;
         for part in intersection.0 {
             // Scarti di area nulla lungo la linea di taglio.
             if part.coords_count() == 0 || protetto(|| part.unsigned_area())? == 0.0 {

@@ -94,20 +94,29 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
   originali** dell'operazione pubblica (`griglia::Operandi`), non contro i
   risultati intermedi: gli overlay in catena (maschera dissolta e poi
   intersecata, unione dei vicini e differenza, tagli ricorsivi) non
-  sommano gli spostamenti. Due controlli:
+  sommano gli spostamenti. Tre controlli:
   - *nessun bordo fuori posto*: ogni **lato** del risultato sta per intero
     entro `p / 2` dai bordi degli ingressi (l'insieme dei punti entro `p /
     2` da un segmento è convesso, e le tracce dei segmenti vicini devono
     ricoprire il lato). `p / 2` perché un aggancio può portare un vertice
     su un altro bordo vicino, e i lati che vi arrivano restano entro metà
     dello spostamento da uno dei due;
-  - *nessun bordo mancante*: ogni tratto di bordo d'ingresso a più di `p /
-    2` dai bordi degli altri operandi sta tutto dentro o tutto fuori da
-    ciascuno; da chi lo contiene (`Contains` esatto su un suo punto) la
-    regola dell'operazione (unione, intersezione, differenza, differenza
-    simmetrica, intersezione con un'unione) dice se sta sul bordo del
-    risultato esatto, e allora deve stare entro `p / 2` dal bordo del
-    risultato. Una faccia omessa o cancellata più larga di `p` è un errore.
+  - *nessun bordo mancante*: ogni lato d'ingresso si spezza dove i bordi
+    degli altri operandi gli arrivano entro `p / 2`; per ogni tratto, due
+    punti a `p / 2` ai suoi due lati, e la regola dell'operazione (unione,
+    intersezione, differenza, differenza simmetrica, intersezione con
+    un'unione) valutata con `Contains` esatto su tutti gli operandi dice se
+    il risultato esatto contiene l'uno e non l'altro, cioè se il tratto sta
+    sul suo bordo. Vale anche per i bordi comuni: due bordi coincidenti
+    dallo stesso lato restano bordo nell'unione e nell'intersezione e
+    spariscono nella differenza e nella differenza simmetrica, dai lati
+    opposti il contrario (prima i bordi comuni erano esclusi, e due operandi
+    identici con uscita vuota passavano). Un tratto atteso deve stare entro
+    `p / 2` dal bordo del risultato, entro `p` se vicino a un altro bordo;
+  - *nessuna faccia in più*: accanto a ogni lato del risultato lungo almeno
+    `4 p`, a `p` dai suoi due lati, l'appartenenza al risultato (parità)
+    coincide con quella al risultato esatto: una faccia aggiunta, o un
+    operando intero al posto di una differenza vuota, è un errore.
 
 **`make_valid` `STRUCTURE`** ha i propri overlay (`LINEWORK` non ne usa):
 gli operandi sono normalizzati per asse su `[0, 1]^2`, dove il passo della
@@ -147,8 +156,18 @@ overlay controllato come sopra:
   («Deviazione: archi del buffer»). Per non creare contatti quasi collineari fra
   pezzi (schegge degli agganci) i rettangoli si sovrappongono ai giunti di
   `sqrt(2 |d| f / 100)` (`f` la freccia: il pezzo esce dal buffer di un
-  centesimo della freccia) e i settori hanno il vertice arretrato dentro il
-  disco.
+  centesimo della freccia), ma al più di metà del lato vicino (con
+  estremità piatte i prolungamenti uscivano oltre gli estremi di una linea
+  corta: `(0 0, 1 0, 2 0)` a 1000 m, 3,47 m), e i settori hanno il vertice
+  arretrato dentro il disco;
+- **controllo contro la definizione**, oltre ai tre controlli contro i
+  pezzi: un pezzo costruito male passerebbe il confronto con se stesso.
+  Ogni vertice dell'uscita deve stare nella definizione esatta del buffer
+  (rettangoli dei lati, allungati agli estremi solo con estremità quadrate;
+  settori dei coni normali ai vertici interni; dischi o quadrati agli
+  estremi e ai punti secondo le estremità; parti areali) allargata di `p /
+  2` più un centesimo della freccia; con `d < 0` in una parte areale e
+  fuori dalla fascia `|d| - f - p/2` dei suoi anelli.
 
 `clean_topology` con la morfologia divide il bilancio: due buffer con
 freccia `p / 8` (o lo 0,1% della tolleranza di chiusura, se maggiore:
@@ -220,10 +239,10 @@ vertice d'ingresso non sono riconosciuti.
   il pezzo, e lo spostamento accumulato resta sotto la precisione.
 - **Buffer, costo.** L'unione di pezzi costa più del `Buffer` di `geo`.
   Misure in release, stella di 1.000 vertici (raggio 1 km) e linea di
-  1.000 vertici, 1 cm, contro `geo` più le stesse validazioni: poligono
-  61 / 8 ms a 1 m, 87 / 6 ms a 10 m, 349 / 27 ms a 100 m, 5,6 s / 0,18 s a
-  1000 m; linea 34 / 4 ms a 1 m, 32 / 3 ms a 10 m, 37 / 1 ms a 100 m,
-  0,93 s / 3 ms a 1000 m. Il caso peggiore sono distanze molto maggiori dei
+  1.000 vertici, 1 cm, con tutti i controlli, contro `geo` più le stesse
+  validazioni: poligono 161 / 8 ms a 1 m, 209 / 6 ms a 10 m, 1,1 s / 27 ms
+  a 100 m, 9,0 s / 0,18 s a 1000 m; linea 48 / 4 ms a 1 m, 53 / 3 ms a 10
+  m, 60 / 1 ms a 100 m, 1,6 s / 3 ms a 1000 m. Il caso peggiore sono distanze molto maggiori dei
   dettagli dell'ingresso: tutti i pezzi (un rettangolo per lato) si
   sovrappongono e l'overlay ne paga gli incroci, anche con archi di 71
   lati. Anche `geo` degenera quando molti lati convergono (la chiusura di

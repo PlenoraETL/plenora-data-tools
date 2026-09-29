@@ -32,7 +32,7 @@
 //! il passo massimo ammesso e' `2^-9` m: un'estensione fino a circa 2.950
 //! km passa (l'Italia, 1.300 km, ha `g = 2^-10`), 20.000 km no (`g = 2^-6`).
 //!
-//! # Lo spostamento a posteriori: due controlli contro gli ingressi originali
+//! # Lo spostamento a posteriori: tre controlli contro gli ingressi originali
 //!
 //! Gli agganci successivi al primo hanno un raggio che cresce a ogni giro, e
 //! il numero di giri dipende dai dati: nessun limite a priori li copre. Dopo
@@ -58,6 +58,10 @@
 //!   bordo del risultato esatto. Se si', deve stare entro `p / 2` dal bordo
 //!   del risultato. Una faccia omessa o cancellata piu' larga di `p` lascia
 //!   scoperto il suo bordo: errore.
+//!
+//! - **nessuna faccia in piu'** ([`Operandi::coerente`]): accanto a ogni
+//!   lato del risultato, dai due lati, l'appartenenza al risultato coincide
+//!   con quella al risultato esatto.
 //!
 //! Sotto la precisione restano le differenze dichiarate: parti piu' sottili
 //! di `p` fuse o sparite.
@@ -326,6 +330,28 @@ impl IndiceLinework {
         true
     }
 
+    /// Il punto sta dentro i poligoni i cui anelli sono nell'indice?
+    /// Parita' degli attraversamenti del raggio orizzontale verso `+x`,
+    /// regola semiaperta sugli estremi dei lati. Per un punto lontano dal
+    /// bordo (l'uso qui) l'ascissa d'incrocio arrotondata non cambia il
+    /// verso del confronto.
+    fn dentro(&self, punto: Coord<f64>) -> bool {
+        let semiretta = AABB::from_corners([punto.x, punto.y], [f64::MAX, punto.y]);
+        let attraversamenti = self
+            .albero
+            .locate_in_envelope_intersecting(&semiretta)
+            .filter(|segmento| {
+                let (a, b) = (segmento.linea.start, segmento.linea.end);
+                if (a.y > punto.y) == (b.y > punto.y) {
+                    return false;
+                }
+                let x = (punto.y - a.y).mul_add((b.x - a.x) / (b.y - a.y), a.x);
+                x > punto.x
+            })
+            .count();
+        attraversamenti % 2 == 1
+    }
+
     /// Il lato sta per intero entro `r` dai segmenti dell'indice la cui
     /// etichetta passa `filtro`, o da uno di `extra`?
     fn lato_entro(
@@ -456,9 +482,23 @@ impl<'a> Operandi<'a> {
     }
 
     /// Il secondo controllo (vedi il modulo): ogni tratto di bordo degli
-    /// operandi accettati da `rilevante` (dentro `regione`, se c'e'), a piu'
-    /// di `p / 2` dai bordi degli altri, che secondo `regola` sta sul bordo
-    /// del risultato esatto, e' entro `p / 2` dal bordo di `output`.
+    /// operandi accettati da `rilevante` (dentro `regione`, se c'e') che
+    /// secondo `regola` sta sul bordo del risultato esatto e' vicino al bordo
+    /// di `output`.
+    ///
+    /// Ogni lato d'ingresso si spezza dove i bordi degli altri operandi gli
+    /// arrivano entro `p / 2`. Per ogni tratto, due punti a `p / 2` ai due
+    /// lati del suo punto medio: la regola dell'operazione, valutata con
+    /// `Contains` esatto su tutti gli operandi rilevanti (il proprietario
+    /// compreso), dice se il risultato esatto contiene l'uno e non l'altro,
+    /// cioe' se il tratto sta sul suo bordo. Vale anche per i bordi comuni:
+    /// due bordi coincidenti dallo stesso lato restano bordo nell'unione e
+    /// nell'intersezione e spariscono nella differenza e nella differenza
+    /// simmetrica; dai lati opposti, il contrario. Un tratto atteso deve
+    /// stare entro `p / 2` dal bordo di `output` se lontano dagli altri
+    /// bordi, entro `p` se vicino (vicino a un incrocio il bordo esatto
+    /// passa dall'uno all'altro). Le parti d'ingresso piu' vicine di `p`
+    /// fra loro sono fuori dalla garanzia (README).
     pub fn completo(
         &self,
         output: &MultiPolygon<f64>,
@@ -486,6 +526,9 @@ impl<'a> Operandi<'a> {
             .filter(|segmento| rilevante(segmento.etichetta))
         {
             let lato = segmento.linea;
+            let Some(normale) = normale_unitaria(lato) else {
+                continue;
+            };
             vicini.clear();
             for altro in self
                 .bordi
@@ -504,48 +547,102 @@ impl<'a> Operandi<'a> {
                     }
                 }
             }
-            for (t0, t1) in liberi(&mut vicini) {
+            for (t0, t1, vicino) in tratti(&vicini) {
                 let medio = punto_a(lato, f64::midpoint(t0, t1));
-                let proprietario = segmento.etichetta;
-                let contiene = |etichetta: usize| {
-                    self.poligoni
-                        .get(etichetta)
-                        .is_some_and(|polygons| polygons.contains(&Point::from(medio)))
-                };
-                // Un altro operando rilevante, diverso da `escluso` e dal
-                // proprietario, contiene il punto? (si ferma al primo)
-                let altro = |escluso: usize| {
-                    self.ingombri
-                        .locate_in_envelope_intersecting(&AABB::from_point([medio.x, medio.y]))
-                        .any(|ingombro| {
-                            let etichetta = ingombro.etichetta;
-                            etichetta != proprietario
-                                && etichetta != escluso
-                                && rilevante(etichetta)
-                                && contiene(etichetta)
-                        })
-                };
-                let atteso = match regola {
-                    Regola::Unione => !altro(proprietario),
-                    Regola::Intersezione => altro(proprietario),
-                    Regola::DifferenzaSimmetrica => true,
-                    Regola::Differenza(soggetto) if proprietario == soggetto => !altro(soggetto),
-                    Regola::IntersezioneConUnione(soggetto) if proprietario == soggetto => {
-                        altro(soggetto)
-                    }
-                    Regola::Differenza(soggetto) | Regola::IntersezioneConUnione(soggetto) => {
-                        rilevante(soggetto) && contiene(soggetto) && !altro(soggetto)
-                    }
-                };
-                if atteso {
+                let sinistra = somma(medio, normale, r);
+                let destra = somma(medio, normale, -r);
+                let dentro_sinistra = self.nel_risultato(sinistra, &rilevante, regola);
+                let dentro_destra = self.nel_risultato(destra, &rilevante, regola);
+                if dentro_sinistra != dentro_destra {
+                    let raggio = if vicino { 2.0 * r } else { r };
                     let tratto = Line::new(punto_a(lato, t0), punto_a(lato, t1));
-                    if !uscita.lato_entro(tratto, &[], &|_| true, r, &mut coperti) {
+                    if !uscita.lato_entro(tratto, &[], &|_| true, raggio, &mut coperti) {
                         return false;
                     }
                 }
             }
         }
         true
+    }
+
+    /// Il terzo controllo: nessuna faccia in piu'. Accanto a ogni lato di
+    /// `output` lungo almeno `4 p`, a `p` dai due lati del suo punto medio,
+    /// l'appartenenza a `output` (parita') coincide con quella al risultato
+    /// esatto (`regola` con `Contains` esatto sugli operandi). Il bordo di
+    /// `output` sta entro `p / 2` da quello esatto (primo controllo), quindi
+    /// i due punti stanno dal lato giusto di entrambi. Una faccia aggiunta o
+    /// un'uscita con dentro e fuori scambiati (l'operando intero al posto di
+    /// una differenza vuota) e' un errore. I lati piu' corti di `4 p` non si
+    /// controllano: i due punti potrebbero cadere oltre un lato vicino.
+    pub fn coerente(
+        &self,
+        output: &MultiPolygon<f64>,
+        rilevante: impl Fn(usize) -> bool,
+        regola: Regola,
+        precision: Precision,
+    ) -> bool {
+        let p = precision.value();
+        let uscita = IndiceLinework::da_multipoligoni([(0, output)]);
+        for polygon in output {
+            for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+                for lato in ring.lines() {
+                    let Some(normale) = normale_unitaria(lato) else {
+                        continue;
+                    };
+                    let lunghezza = (lato.end.x - lato.start.x).hypot(lato.end.y - lato.start.y);
+                    if lunghezza < 4.0 * p {
+                        continue;
+                    }
+                    let medio = punto_a(lato, 0.5);
+                    for campione in [somma(medio, normale, p), somma(medio, normale, -p)] {
+                        if uscita.dentro(campione)
+                            != self.nel_risultato(campione, &rilevante, regola)
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Il punto sta nel risultato esatto dell'operazione `regola` sugli
+    /// operandi rilevanti?
+    fn nel_risultato(
+        &self,
+        punto: Coord<f64>,
+        rilevante: &impl Fn(usize) -> bool,
+        regola: Regola,
+    ) -> bool {
+        let contiene = |etichetta: usize| {
+            rilevante(etichetta)
+                && self
+                    .poligoni
+                    .get(etichetta)
+                    .is_some_and(|polygons| polygons.contains(&Point::from(punto)))
+        };
+        let candidati = || {
+            self.ingombri
+                .locate_in_envelope_intersecting(&AABB::from_point([punto.x, punto.y]))
+                .map(|ingombro| ingombro.etichetta)
+        };
+        // Ogni regola si ferma appena l'esito e' deciso: con molti operandi
+        // sovrapposti (i pezzi di un buffer) contare tutti i contenitori
+        // costerebbe un `Contains` per operando e per campione.
+        match regola {
+            Regola::Unione => candidati().any(contiene),
+            Regola::Intersezione => candidati().filter(|&e| contiene(e)).take(2).count() == 2,
+            Regola::DifferenzaSimmetrica => {
+                candidati().filter(|&e| contiene(e)).take(2).count() == 1
+            }
+            Regola::Differenza(soggetto) => {
+                contiene(soggetto) && !candidati().any(|e| e != soggetto && contiene(e))
+            }
+            Regola::IntersezioneConUnione(soggetto) => {
+                contiene(soggetto) && candidati().any(|e| e != soggetto && contiene(e))
+            }
+        }
     }
 
     /// I due controlli insieme, dietro la barriera dei panici.
@@ -565,6 +662,7 @@ impl<'a> Operandi<'a> {
         let esito = crate::calcolo_protetto(|| {
             self.bordo_entro(output, &rilevante, precision)
                 && self.completo(output, &rilevante, regione, regola, precision)
+                && self.coerente(output, &rilevante, regola, precision)
         })
         .map_err(ErroreVerifica::CalcoloNonConcluso)?;
         if esito {
@@ -575,25 +673,41 @@ impl<'a> Operandi<'a> {
     }
 }
 
-/// La regola dell'operazione per [`Operandi::completo`]: quando un tratto
-/// di bordo di un operando (il proprietario) sta sul bordo del risultato
-/// esatto, secondo quali altri operandi rilevanti lo contengono.
+/// L'operazione per [`Operandi::completo`] e [`Operandi::coerente`], come
+/// appartenenza di un punto al risultato esatto, dati gli operandi
+/// rilevanti che lo contengono.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Regola {
-    /// Unione di tutti: nessun altro lo contiene.
+    /// Unione di tutti: almeno uno.
     Unione,
-    /// Intersezione di due: l'altro lo contiene.
+    /// Intersezione di due: entrambi.
     Intersezione,
-    /// Differenza simmetrica di due: sempre.
+    /// Differenza simmetrica di due: uno solo.
     DifferenzaSimmetrica,
-    /// `soggetto` meno l'unione degli altri: il bordo del soggetto che
-    /// nessun altro contiene; il bordo di un altro dentro il soggetto e
-    /// dentro nessun terzo.
+    /// `soggetto` meno l'unione degli altri: il soggetto e nessun altro.
     Differenza(usize),
-    /// `soggetto` intersecato con l'unione degli altri: il bordo del
-    /// soggetto dentro almeno un altro; il bordo di un altro dentro il
-    /// soggetto e dentro nessun terzo.
+    /// `soggetto` intersecato con l'unione degli altri: il soggetto e almeno
+    /// un altro.
     IntersezioneConUnione(usize),
+}
+
+/// `a + k u`.
+const fn somma(a: Coord<f64>, u: Coord<f64>, k: f64) -> Coord<f64> {
+    Coord {
+        x: k.mul_add(u.x, a.x),
+        y: k.mul_add(u.y, a.y),
+    }
+}
+
+/// La normale sinistra unitaria del lato; `None` se degenere.
+fn normale_unitaria(lato: Line<f64>) -> Option<Coord<f64>> {
+    let dx = lato.end.x - lato.start.x;
+    let dy = lato.end.y - lato.start.y;
+    let lunghezza = dx.hypot(dy);
+    (lunghezza > 0.0 && lunghezza.is_finite()).then(|| Coord {
+        x: -dy / lunghezza,
+        y: dx / lunghezza,
+    })
 }
 
 /// Il punto del lato al parametro `t`.
@@ -604,23 +718,26 @@ fn punto_a(lato: Line<f64>, t: f64) -> Coord<f64> {
     }
 }
 
-/// I tratti di `[0, 1]` non coperti dagli intervalli, di lunghezza positiva.
-fn liberi(intervalli: &mut [(f64, f64)]) -> Vec<(f64, f64)> {
-    intervalli.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
-    let mut liberi = Vec::new();
-    let mut coperto = 0.0_f64;
-    for &(t0, t1) in intervalli.iter() {
-        if t0 > coperto {
-            liberi.push((coperto, t0.min(1.0)));
-        }
-        coperto = coperto.max(t1);
-        if coperto >= 1.0 {
-            return liberi;
-        }
+/// `[0, 1]` spezzato agli estremi degli intervalli: i tratti di lunghezza
+/// positiva, ciascuno con `true` se sta dentro almeno un intervallo.
+fn tratti(intervalli: &[(f64, f64)]) -> Vec<(f64, f64, bool)> {
+    let mut tagli: Vec<f64> = vec![0.0, 1.0];
+    for &(t0, t1) in intervalli {
+        tagli.extend([t0.clamp(0.0, 1.0), t1.clamp(0.0, 1.0)]);
     }
-    liberi.push((coperto, 1.0));
-    liberi.retain(|(t0, t1)| t1 > t0);
-    liberi
+    tagli.sort_by(f64::total_cmp);
+    tagli.dedup();
+    tagli
+        .windows(2)
+        .filter(|coppia| coppia[1] > coppia[0])
+        .map(|coppia| {
+            let medio = f64::midpoint(coppia[0], coppia[1]);
+            let vicino = intervalli
+                .iter()
+                .any(|&(t0, t1)| t0 <= medio && medio <= t1);
+            (coppia[0], coppia[1], vicino)
+        })
+        .collect()
 }
 
 /// L'intervallo `[t0, t1]`, dentro `[0, 1]`, dei parametri per cui il punto
@@ -978,12 +1095,72 @@ mod tests {
     }
 
     #[test]
-    fn i_tratti_liberi_sono_il_complemento() {
-        assert_eq!(liberi(&mut []), vec![(0.0, 1.0)]);
-        assert_eq!(liberi(&mut [(-1.0, 2.0)]), Vec::<(f64, f64)>::new());
+    fn i_tratti_seguono_gli_intervalli() {
+        assert_eq!(tratti(&[]), vec![(0.0, 1.0, false)]);
+        assert_eq!(tratti(&[(-1.0, 2.0)]), vec![(0.0, 1.0, true)]);
         assert_eq!(
-            liberi(&mut [(0.5, 0.6), (-0.1, 0.2)]),
-            vec![(0.2, 0.5), (0.6, 1.0)]
+            tratti(&[(0.5, 0.6), (-0.1, 0.2)]),
+            vec![
+                (0.0, 0.2, true),
+                (0.2, 0.5, false),
+                (0.5, 0.6, true),
+                (0.6, 1.0, false)
+            ]
         );
+    }
+
+    /// Revisione (Codex, secondo giro): i bordi coincidenti erano esclusi,
+    /// e due operandi identici con uscita vuota passavano. Ogni regola con
+    /// operandi identici, adiacenti (lato comune, lati opposti) e
+    /// parzialmente sovrapposti: l'uscita esatta passa, quella vuota e le
+    /// uscite sbagliate no.
+    #[test]
+    fn i_bordi_comuni_seguono_la_regola() {
+        use geo::BooleanOps as _;
+        let centimetro = Precision::new(0.01).unwrap();
+        let quadrato = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            MultiPolygon::new(vec![Rect::new(
+                Coord { x: x0, y: y0 },
+                Coord { x: x1, y: y1 },
+            )
+            .to_polygon()])
+        };
+        let a = quadrato(0.0, 0.0, 100.0, 100.0);
+        let coppie = [
+            ("identici", quadrato(0.0, 0.0, 100.0, 100.0)),
+            ("adiacenti", quadrato(100.0, 0.0, 200.0, 100.0)),
+            ("sovrapposti", quadrato(50.0, 20.0, 150.0, 80.0)),
+            ("lato comune dentro", quadrato(0.0, 20.0, 50.0, 80.0)),
+        ];
+        let vuoto = MultiPolygon::new(Vec::new());
+        for (caso, b) in &coppie {
+            let operandi = Operandi::nuovi(vec![&a, b]).unwrap();
+            let esatti = [
+                (Regola::Unione, a.union(b)),
+                (Regola::Intersezione, a.intersection(b)),
+                (Regola::Differenza(0), a.difference(b)),
+                (Regola::DifferenzaSimmetrica, a.xor(b)),
+            ];
+            for (regola, esatto) in &esatti {
+                assert!(
+                    operandi.completo(esatto, |_| true, None, *regola, centimetro),
+                    "{caso} {regola:?}: l'uscita esatta e' rifiutata"
+                );
+                for (nome, sbagliato) in [("vuota", &vuoto), ("A", &a), ("B", b)] {
+                    let area_esatta = geo::Area::unsigned_area(esatto);
+                    let area_sbagliata = geo::Area::unsigned_area(sbagliato);
+                    let diversa = (area_esatta - area_sbagliata).abs() > 1.0
+                        || (sbagliato.0.is_empty() != esatto.0.is_empty());
+                    if diversa {
+                        assert!(
+                            operandi
+                                .verifica(sbagliato, |_| true, None, *regola, centimetro)
+                                .is_err(),
+                            "{caso} {regola:?}: uscita {nome} accettata"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
