@@ -1006,9 +1006,33 @@ pub(in crate::aggregation) fn build_binary_groups(
         }
         accumulo.aggiungi(row, gruppo)
     })?;
-    let order_columns = group_indices
+    let order = canonical_key_order(batch, group_indices, &representatives)?;
+    accumulo.finisci(&order)
+}
+
+/// Ordine canonico di chiavi **distinte**, una riga rappresentativa per
+/// chiave: gli indici di `representatives` ordinati come le chiavi testuali
+/// di `row_key` (null prima, poi tag di lunghezza e valore, colonna per
+/// colonna; i Binary sui byte grezzi).
+///
+/// Condiviso da `aggregate` e `pivot`, che ordinano le chiavi allo stesso
+/// modo. Il confronto per colonne coincide con quello della stringa intera:
+/// i frammenti di una colonna hanno lo stesso prefisso di tipo e sono
+/// autodelimitati, quindi la prima differenza cade sempre dentro il
+/// frammento della prima colonna diversa.
+///
+/// # Errors
+///
+/// Gli errori di `scalar_as_string` sulle colonne generiche (non accadono
+/// su righe la cui chiave e' gia' stata codificata).
+pub fn canonical_key_order(
+    batch: &RecordBatch,
+    indices: &[usize],
+    representatives: &[usize],
+) -> Result<Vec<usize>> {
+    let order_columns = indices
         .iter()
-        .map(|index| OrderColumn::new(batch.column(*index), &representatives))
+        .map(|index| OrderColumn::new(batch.column(*index), representatives))
         .collect::<Result<Vec<_>>>()?;
     let compare = |a: &usize, b: &usize| {
         let (row_a, row_b) = (representatives[*a], representatives[*b]);
@@ -1025,7 +1049,7 @@ pub(in crate::aggregation) fn build_binary_groups(
     } else {
         order.sort_by(compare);
     }
-    accumulo.finisci(&order)
+    Ok(order)
 }
 
 /// Sorgente testuale per nunique/concat: valori Utf8 presi in prestito,

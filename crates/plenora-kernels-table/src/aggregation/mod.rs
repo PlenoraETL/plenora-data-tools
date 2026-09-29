@@ -26,7 +26,9 @@ pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
 #[cfg(test)]
 pub(crate) use compare::row_key as row_key_per_test;
 pub use compare::{compare_cells_typed, is_sortable, validate_sortable};
-pub(crate) use grouping::{visit_key_ids_where, BinaryKeyEncoder, KeyColumn};
+pub(crate) use grouping::{
+    canonical_key_order, visit_key_ids, visit_key_ids_where, BinaryKeyEncoder, KeyColumn,
+};
 pub(crate) use sort::sort_permutation;
 pub use sort::{
     dedup_advanced, distinct, sort, top_n, verifica_verso_dedup, DedupAdvanced, Distinct, Keep,

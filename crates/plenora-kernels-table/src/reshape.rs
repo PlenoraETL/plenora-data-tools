@@ -10,8 +10,9 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
-use crate::aggregation::BinaryKeyEncoder;
+use crate::aggregation::{canonical_key_order, visit_key_ids, BinaryKeyEncoder};
 use crate::float64_source::Float64Source;
+use crate::hashing::FastHasher;
 use crate::interning::KeyInterner;
 use crate::Limits;
 use crate::{
@@ -146,44 +147,6 @@ impl<'a> TextColumn<'a> {
             }
         }
         Ok(true)
-    }
-}
-
-/// Colonna di chiave composta (usata da `pivot`): tag di
-/// tipo precomputato una sola volta + valore tipizzato.
-///
-/// Scrive gli STESSI byte di `composite_key` (mantenuta come oracolo dei
-/// test).
-struct PivotKeyColumn<'a> {
-    tag: String,
-    source: TextColumn<'a>,
-}
-
-impl<'a> PivotKeyColumn<'a> {
-    fn new(array: &'a ArrayRef) -> Self {
-        Self {
-            tag: array.data_type().to_string(),
-            source: TextColumn::new(array),
-        }
-    }
-
-    fn write_key(&self, row: usize, key: &mut String, value: &mut String) -> Result<()> {
-        key.push_str(&self.tag);
-        key.push('\u{1e}');
-        value.clear();
-        if self.source.write_value(row, value)? {
-            key.push('1');
-            // `fmt::Write` su `String` e' infallibile; l'errore e'
-            // comunque propagato come Internal, mai ignorato (R6.5).
-            write!(key, "{}", value.len())
-                .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
-            key.push(':');
-            key.push_str(value);
-        } else {
-            key.push('0');
-        }
-        key.push('\u{1f}');
-        Ok(())
     }
 }
 
@@ -487,30 +450,126 @@ pub struct Pivot {
     pub mapping: BTreeMap<String, String>,
 }
 
-// Dispatcher esaustivo per funzione di aggregazione: ogni braccio tiene
-// insieme riduzione e costruzione della colonna di output.
-#[allow(clippy::too_many_lines)]
-fn pivot_column(
-    source: &ArrayRef,
-    groups: &[Option<&Vec<usize>>],
+/// Stato di aggregazione delle celle di `pivot`, uno per cella (chiave,
+/// valore pivot), ridotto riga per riga in ordine crescente di riga.
+///
+/// Sostituisce il `Vec<usize>` di righe per cella: le righe di una cella
+/// arrivano nello stesso ordine in cui il vettore le avrebbe elencate, e
+/// ogni riduzione fa le stesse operazioni nello stesso ordine della
+/// riduzione sul vettore, quindi lo stesso risultato bit per bit.
+enum StatoCelle {
+    /// `first`: la prima riga; `last`: l'ultima.
+    Riga(Vec<usize>),
+    /// `count`: le righe con valore non nullo logicamente.
+    Conta(Vec<usize>),
+    /// `concat`: il testo unito e se un valore e' gia' stato scritto (un
+    /// testo vuoto non basta a dirlo: il valore puo' essere `""`).
+    Testo(Vec<(String, bool)>),
+    /// `sum`/`mean`/`min`/`max`: somma (seme `-0.0`), estremo, conteggio.
+    Numero(Vec<(f64, f64, usize)>),
+}
+
+/// Un valore distinto della colonna pivot.
+struct ValorePivot {
+    /// Il testo (`scalar_as_string`): ordine e nome della colonna.
+    testo: String,
+    /// Ammesso da `mapping` (sempre, se `mapping` e' vuoto).
+    ammesso: bool,
+    /// Le celle del valore, come (chiave, cella), in ordine di creazione.
+    celle: Vec<(usize, usize)>,
+}
+
+/// Una cella con la sua prima riga: stato iniziale.
+///
+/// Per `concat` e le numeriche il valore della riga si aggiunge poi con
+/// [`aggiungi_valore`], come per le righe seguenti.
+fn nuova_cella(stato: &mut StatoCelle, row: usize) {
+    match stato {
+        StatoCelle::Riga(righe) => righe.push(row),
+        StatoCelle::Conta(conti) => conti.push(0),
+        StatoCelle::Testo(testi) => testi.push((String::new(), false)),
+        StatoCelle::Numero(numeri) => numeri.push((-0.0, 0.0, 0)),
+    }
+}
+
+/// Aggiunge la riga `row` alla cella `cella`.
+///
+/// # Errors
+///
+/// Gli errori di conversione del valore (`TextColumn`, `Float64Source`):
+/// il chiamante li tiene per la cella invece di interrompere la scansione.
+#[allow(clippy::too_many_arguments)] // Stato, sorgenti e scratch di una sola riduzione.
+fn aggiungi_valore(
+    stato: &mut StatoCelle,
+    cella: usize,
+    row: usize,
     function: &PivotAgg,
+    source: &ArrayRef,
+    text: &TextColumn<'_>,
+    numeric: &Float64Source<'_>,
+    value: &mut String,
+) -> Result<()> {
+    match stato {
+        StatoCelle::Riga(righe) => {
+            if matches!(function, PivotAgg::Last) {
+                righe[cella] = row;
+            }
+        }
+        StatoCelle::Conta(conti) => {
+            if !crate::is_logically_null(source.as_ref(), row) {
+                conti[cella] += 1;
+            }
+        }
+        StatoCelle::Testo(testi) => {
+            value.clear();
+            if text.write_value(row, value)? {
+                let (joined, scritto) = &mut testi[cella];
+                if *scritto {
+                    joined.push(',');
+                } else {
+                    *scritto = true;
+                }
+                joined.push_str(value);
+            }
+        }
+        StatoCelle::Numero(numeri) => {
+            // Stessa sequenza del ciclo sul vettore di righe: estremo dal
+            // primo valore, poi `f64::min`/`f64::max` passo passo; somma dal
+            // seme `-0.0` (quello di `Iterator::sum` per f64).
+            if let Some(value) = numeric.value(row)? {
+                let (sum, extremum, count) = &mut numeri[cella];
+                if *count == 0 {
+                    *extremum = value;
+                } else if matches!(function, PivotAgg::Min) {
+                    *extremum = f64::min(*extremum, value);
+                } else {
+                    *extremum = f64::max(*extremum, value);
+                }
+                *sum += value;
+                *count += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Colonna di output di un valore pivot: `per_chiave[k]` e' la cella della
+/// chiave `k` (in ordine canonico), `None` se la combinazione non c'e'.
+fn colonna_pivot(
+    stato: &StatoCelle,
+    per_chiave: &[Option<usize>],
+    function: &PivotAgg,
+    source: &ArrayRef,
 ) -> Result<(DataType, ArrayRef)> {
-    Ok(match function {
-        PivotAgg::First | PivotAgg::Last => {
-            let indices = groups
+    Ok(match stato {
+        StatoCelle::Riga(righe) => {
+            let indices = per_chiave
                 .iter()
-                .map(|rows| {
-                    rows.and_then(|rows| {
-                        if matches!(function, PivotAgg::First) {
-                            rows.first()
-                        } else {
-                            rows.last()
-                        }
-                    })
-                    .copied()
-                    .map(u32::try_from)
-                    .transpose()
-                    .map_err(|_| PlenoraError::ResourceLimit("indice pivot oltre u32".into()))
+                .map(|cella| {
+                    cella
+                        .map(|cella| u32::try_from(righe[cella]))
+                        .transpose()
+                        .map_err(|_| PlenoraError::ResourceLimit("indice pivot oltre u32".into()))
                 })
                 .collect::<Result<Vec<_>>>()?;
             (
@@ -522,84 +581,34 @@ fn pivot_column(
                 )?,
             )
         }
-        PivotAgg::Count => {
-            let values = groups
+        StatoCelle::Conta(conti) => {
+            let values = per_chiave
                 .iter()
-                .map(|rows| {
-                    rows.map(|rows| {
-                        i64::try_from(
-                            rows.iter()
-                                .filter(|row| !crate::is_logically_null(source.as_ref(), **row))
-                                .count(),
-                        )
-                        .map_err(|_| {
-                            PlenoraError::ResourceLimit("conteggio pivot oltre i64".into())
+                .map(|cella| {
+                    cella
+                        .map(|cella| {
+                            i64::try_from(conti[cella]).map_err(|_| {
+                                PlenoraError::ResourceLimit("conteggio pivot oltre i64".into())
+                            })
                         })
-                    })
-                    .transpose()
+                        .transpose()
                 })
                 .collect::<Result<Vec<_>>>()?;
             (DataType::Int64, Arc::new(Int64Array::from(values)))
         }
-        PivotAgg::Concat => {
-            // Fast path: downcast una volta per colonna valore; stessi byte
-            // (valori uniti da ",", null saltati) del percorso scalare.
-            let text = TextColumn::new(source);
-            let mut value = String::new();
-            let mut joined = String::new();
-            let values = groups
+        StatoCelle::Testo(testi) => {
+            let values = per_chiave
                 .iter()
-                .map(|rows| {
-                    rows.map(|rows| {
-                        joined.clear();
-                        let mut first = true;
-                        for row in rows {
-                            value.clear();
-                            if text.write_value(*row, &mut value)? {
-                                if first {
-                                    first = false;
-                                } else {
-                                    joined.push(',');
-                                }
-                                joined.push_str(&value);
-                            }
-                        }
-                        Ok(joined.clone())
-                    })
-                    .transpose()
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .map(|cella| cella.map(|cella| testi[cella].0.as_str()))
+                .collect::<Vec<_>>();
             (DataType::Utf8, Arc::new(StringArray::from(values)))
         }
-        PivotAgg::Sum | PivotAgg::Mean | PivotAgg::Min | PivotAgg::Max => {
-            // Fast path: riduzione in streaming sulle righe del gruppo nello
-            // STESSO ordine del Vec<f64> originale. Il seme della somma e'
-            // -0.0, identico a `Iterator::sum` per f64 (fold(-0.0, +)):
-            // cosi' anche i segni di zero restano bit-identici
-            // ([-0.0] -> -0.0, [+0.0] -> +0.0). f64::min/f64::max
-            // passo-passo danno gli stessi bit di reduce, NaN incluso.
-            let numeric = Float64Source::new(source);
-            let values = groups
+        StatoCelle::Numero(numeri) => {
+            let values = per_chiave
                 .iter()
-                .map(|rows| {
-                    let Some(rows) = rows else { return Ok(None) };
-                    let mut sum = -0.0_f64;
-                    let mut extremum = 0.0_f64;
-                    let mut count = 0_usize;
-                    for row in *rows {
-                        let Some(value) = numeric.value(*row)? else {
-                            continue;
-                        };
-                        if count == 0 {
-                            extremum = value;
-                        } else if matches!(function, PivotAgg::Min) {
-                            extremum = f64::min(extremum, value);
-                        } else {
-                            extremum = f64::max(extremum, value);
-                        }
-                        sum += value;
-                        count += 1;
-                    }
+                .map(|cella| {
+                    let Some(cella) = cella else { return Ok(None) };
+                    let (sum, extremum, count) = numeri[*cella];
                     if count == 0 {
                         return Ok(None);
                     }
@@ -637,7 +646,7 @@ fn pivot_column(
 /// - `Schema`: colonna indice/pivot/valore assente;
 /// - `ResourceLimit`: chiavi o colonne di output oltre i limiti `max_rows`/
 ///   `max_columns`, nome di colonna di output non valido, oppure gli errori
-///   di conversione/indice di `pivot_column`.
+///   di conversione dei valori e degli indici di output.
 ///
 /// Un intero oltre 2^53 **non** e' un errore: le aggregazioni numeriche di
 /// `pivot` producono un `Float64` per contratto, quindi la conversione
@@ -659,67 +668,112 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         .collect::<Result<Vec<_>>>()?;
     let pivot_index = column_index(batch, &config.column)?;
     let value_index = column_index(batch, &config.value_col)?;
-    // Fast path: UNA passata sulle righe (il percorso generico ne fa due),
-    // chiavi in un buffer riusato e celle indicizzate dagli interi
-    // (chiave, pivot). Ordini di output identici al generico: chiavi e pivot
-    // in ordine lessicografico, righe di gruppo crescenti, rappresentante =
-    // prima riga incontrata per chiave.
-    let key_columns = index_indices
-        .iter()
-        .map(|index| PivotKeyColumn::new(batch.column(*index)))
-        .collect::<Vec<_>>();
+    // Una passata sulle righe, in ordine crescente:
+    // - chiave indice con l'identita' di `row_key` (`visit_key_ids`: valore
+    //   nativo su colonna singola, chiave binaria altrimenti), la stessa dei
+    //   byte di `composite_key`; rappresentante = prima riga della chiave;
+    // - valore pivot come testo (`TextColumn`, gli stessi byte di
+    //   `scalar_as_string`), in una mappa FastHasher, filtrato da `mapping`
+    //   una volta per valore distinto;
+    // - cella (chiave, pivot) ridotta subito (`StatoCelle`), senza vettore
+    //   di righe.
+    // Errori nello stesso ordine di prima: per riga la chiave, poi il valore
+    // pivot; gli errori di conversione del valore da aggregare restano alla
+    // cella e si rendono nell'ordine in cui la costruzione delle colonne li
+    // incontrava (pivot ordinati, nome di output validato prima, poi chiavi
+    // ordinate; nella cella la prima riga in errore).
     let pivot_source = TextColumn::new(batch.column(pivot_index));
-    let mut key = String::new();
-    let mut scratch = String::new();
-    let mut key_ids: HashMap<String, usize> = HashMap::new();
-    let mut representatives: Vec<usize> = Vec::new();
-    let mut pivot_ids: HashMap<String, usize> = HashMap::new();
-    let mut cells: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
-    for row in 0..batch.num_rows() {
-        key.clear();
-        for column in &key_columns {
-            column.write_key(row, &mut key, &mut scratch)?;
+    let value_source = batch.column(value_index);
+    let value_text = TextColumn::new(value_source);
+    let value_numeric = Float64Source::new(value_source);
+    let mut stato = match config.aggr_func {
+        PivotAgg::First | PivotAgg::Last => StatoCelle::Riga(Vec::new()),
+        PivotAgg::Count => StatoCelle::Conta(Vec::new()),
+        PivotAgg::Concat => StatoCelle::Testo(Vec::new()),
+        PivotAgg::Sum | PivotAgg::Mean | PivotAgg::Min | PivotAgg::Max => {
+            StatoCelle::Numero(Vec::new())
         }
-        // `copied()` chiude subito il prestito di `key_ids`: la closure di
-        // default deve poterlo mutare (insert) — `unwrap_or_else` diretto su
-        // `get` non passerebbe il borrow check.
-        let key_id = key_ids.get(key.as_str()).copied().unwrap_or_else(|| {
-            let id = representatives.len();
-            key_ids.insert(key.clone(), id);
+    };
+    let mut representatives: Vec<usize> = Vec::new();
+    // Testo -> indice del valore pivot in `pivots`.
+    let mut pivot_ids: HashMap<String, usize, FastHasher> = HashMap::default();
+    let mut pivots: Vec<ValorePivot> = Vec::new();
+    let mut indice_celle: HashMap<(usize, usize), usize, FastHasher> = HashMap::default();
+    let mut errori: HashMap<usize, PlenoraError, FastHasher> = HashMap::default();
+    let mut scratch = String::new();
+    let mut value = String::new();
+    visit_key_ids(batch, &index_indices, |row, key_id, nuova| {
+        if nuova {
             representatives.push(row);
-            id
-        });
+        }
         scratch.clear();
         if !pivot_source.write_value(row, &mut scratch)? {
-            continue;
+            return Ok(());
         }
-        if config.mapping.is_empty() || config.mapping.contains_key(scratch.as_str()) {
-            // Come sopra: `copied()` chiude il prestito prima dell'insert.
-            let pivot_id = pivot_ids.get(scratch.as_str()).copied().unwrap_or_else(|| {
-                let id = pivot_ids.len();
-                pivot_ids.insert(scratch.clone(), id);
-                id
+        let pivot_id = if let Some(&id) = pivot_ids.get(scratch.as_str()) {
+            id
+        } else {
+            let id = pivots.len();
+            let ammesso =
+                config.mapping.is_empty() || config.mapping.contains_key(scratch.as_str());
+            pivot_ids.insert(scratch.clone(), id);
+            pivots.push(ValorePivot {
+                testo: scratch.clone(),
+                ammesso,
+                celle: Vec::new(),
             });
-            cells.entry((key_id, pivot_id)).or_default().push(row);
+            id
+        };
+        let valore_pivot = &mut pivots[pivot_id];
+        if !valore_pivot.ammesso {
+            return Ok(());
         }
-    }
-    let mut sorted_keys = key_ids.into_iter().collect::<Vec<_>>();
-    sorted_keys.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut sorted_pivots = pivot_ids.into_iter().collect::<Vec<_>>();
-    sorted_pivots.sort_by(|left, right| left.0.cmp(&right.0));
-    if sorted_keys.len() > limits.max_rows
+        let cella = if let Some(&cella) = indice_celle.get(&(key_id, pivot_id)) {
+            cella
+        } else {
+            let cella = indice_celle.len();
+            indice_celle.insert((key_id, pivot_id), cella);
+            valore_pivot.celle.push((key_id, cella));
+            nuova_cella(&mut stato, row);
+            cella
+        };
+        if errori.is_empty() || !errori.contains_key(&cella) {
+            if let Err(errore) = aggiungi_valore(
+                &mut stato,
+                cella,
+                row,
+                &config.aggr_func,
+                value_source,
+                &value_text,
+                &value_numeric,
+                &mut value,
+            ) {
+                errori.insert(cella, errore);
+            }
+        }
+        Ok(())
+    })?;
+    drop(indice_celle);
+    let ordine = canonical_key_order(batch, &index_indices, &representatives)?;
+    let mut sorted_pivots = pivots
+        .iter()
+        .enumerate()
+        .filter(|(_, valore)| valore.ammesso)
+        .map(|(id, valore)| (valore.testo.as_str(), id))
+        .collect::<Vec<_>>();
+    sorted_pivots.sort_by(|left, right| left.0.cmp(right.0));
+    if ordine.len() > limits.max_rows
         || index_indices.len().saturating_add(sorted_pivots.len()) > limits.max_columns
     {
         return Err(PlenoraError::ResourceLimit(
             "pivot supera i limiti di output".into(),
         ));
     }
-    // Fast path: `take` SOLO sulle colonne indice, invece di replicare
-    // l'intero batch. Stesso controllo di overflow di
+    // `take` SOLO sulle colonne indice. Stesso controllo di overflow di
     // `select_rows`.
-    let representative_indices = sorted_keys
+    let representative_indices = ordine
         .iter()
-        .map(|(_, id)| {
+        .map(|id| {
             u32::try_from(representatives[*id])
                 .map_err(|_| PlenoraError::ResourceLimit("indice riga oltre u32".into()))
         })
@@ -740,19 +794,40 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
             .map_err(PlenoraError::from)
         })
         .collect::<Result<Vec<_>>>()?;
-    let value_source = batch.column(value_index);
+    // Posizione canonica di ogni chiave, e le celle di un valore pivot
+    // disposte per posizione (riusate fra i valori).
+    let mut posizione = vec![0_usize; ordine.len()];
+    for (rank, id) in ordine.iter().enumerate() {
+        posizione[*id] = rank;
+    }
+    let mut per_chiave: Vec<Option<usize>> = vec![None; ordine.len()];
     for (pivot_value, pivot_id) in &sorted_pivots {
         let output = config
             .mapping
-            .get(pivot_value)
+            .get(*pivot_value)
             .cloned()
-            .unwrap_or_else(|| pivot_value.clone());
+            .unwrap_or_else(|| (*pivot_value).to_owned());
         validate_output_name(&output)?;
-        let grouped_rows = sorted_keys
-            .iter()
-            .map(|(_, key_id)| cells.get(&(*key_id, *pivot_id)))
-            .collect::<Vec<_>>();
-        let (data_type, values) = pivot_column(value_source, &grouped_rows, &config.aggr_func)?;
+        let celle_pivot = &pivots[*pivot_id].celle;
+        for (key_id, cella) in celle_pivot {
+            per_chiave[posizione[*key_id]] = Some(*cella);
+        }
+        if !errori.is_empty() {
+            if let Some(cella) = per_chiave
+                .iter()
+                .flatten()
+                .find(|cella| errori.contains_key(cella))
+            {
+                return Err(errori.remove(cella).unwrap_or_else(|| {
+                    PlenoraError::Internal("errore di cella pivot scomparso".into())
+                }));
+            }
+        }
+        let (data_type, values) =
+            colonna_pivot(&stato, &per_chiave, &config.aggr_func, value_source)?;
+        for (key_id, _) in celle_pivot {
+            per_chiave[posizione[*key_id]] = None;
+        }
         fields.push(Field::new(&output, data_type, true));
         columns.push(values);
     }
@@ -1876,7 +1951,7 @@ mod tests {
     }
 
     /// Oracolo indipendente di `pivot`: stesso contratto, percorso diverso.
-    fn pivot_reference(
+    pub(super) fn pivot_reference(
         batch: &RecordBatch,
         config: &Pivot,
         limits: &Limits,
@@ -3431,3 +3506,7 @@ mod tests {
 #[cfg(test)]
 #[path = "table_diff_oracolo.rs"]
 mod table_diff_oracolo;
+
+#[cfg(test)]
+#[path = "pivot_oracolo.rs"]
+mod pivot_oracolo;
