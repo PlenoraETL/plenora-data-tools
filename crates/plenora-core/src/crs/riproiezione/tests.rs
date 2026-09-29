@@ -175,8 +175,9 @@ fn oltre_il_centimetro_serve_accuratezza_accettata_almeno_pari() {
         CrsError::ReprojectionAccuracyNotAccepted { .. }
     ));
     let ammesso = piano("EPSG:3003", "EPSG:7791", &accetta(4.0)).expect("accettata 4 m");
-    // A parita' di accuratezza vince l'area d'uso piu' piccola: Sardegna,
-    // Sicilia, poi l'Italia continentale.
+    // A parita' di accuratezza vince il percorso piu' corto, poi l'area
+    // d'uso piu' piccola: Sardegna, Sicilia, poi l'Italia continentale; poi
+    // gli stessi via WGS 84 (ETRS89 to WGS 84 (1) conta 0 per convenzione).
     let codici: Vec<Vec<u32>> = ammesso
         .percorsi()
         .iter()
@@ -184,7 +185,14 @@ fn oltre_il_centimetro_serve_accuratezza_accettata_almeno_pari() {
         .collect();
     assert_eq!(
         codici,
-        vec![vec![1661, 6710], vec![1663, 6710], vec![1659, 6710]]
+        vec![
+            vec![1661, 6710],
+            vec![1663, 6710],
+            vec![1659, 6710],
+            vec![1662, 1149, 6710],
+            vec![1664, 1149, 6710],
+            vec![1660, 1149, 6710]
+        ]
     );
     assert!(ammesso.percorsi()[2].passi()[1].inversa());
     assert!(ammesso.percorsi().iter().all(|p| p.accuratezza_m() <= 4.0));
@@ -203,6 +211,61 @@ fn oltre_il_centimetro_serve_accuratezza_accettata_almeno_pari() {
             CrsError::ReprojectionConfig(_)
         ));
     }
+}
+
+#[test]
+fn wgs84_ed_etrs89_equivalenti_per_convenzione_salvo_opzione() {
+    // Predefinito: WGS 84 -> ETRS89 e -> RDN2008 senza accuratezza accettata.
+    for (da, a) in [
+        ("EPSG:32632", "EPSG:25832"),
+        ("EPSG:4326", "EPSG:7791"),
+        ("EPSG:3035", "EPSG:4326"),
+    ] {
+        let convenzione = piano(da, a, &OpzioniRiproiezione::default())
+            .unwrap_or_else(|e| panic!("{da} -> {a}: {e}"));
+        assert_eq!(convenzione.accuratezza_garantita_m(), 0.0, "{da} -> {a}");
+        assert!(convenzione.percorsi()[0]
+            .codici()
+            .contains(&CODICE_ETRS89_WGS84));
+    }
+    // Senza convenzione torna l'accuratezza EPSG (1 m).
+    let spenta = OpzioniRiproiezione {
+        convenzione_wgs84_etrs89: Some(false),
+        ..OpzioniRiproiezione::default()
+    };
+    match piano_err("EPSG:32632", "EPSG:25832", &spenta) {
+        CrsError::ReprojectionAccuracyNotAccepted { accuracy_m } => assert_eq!(accuracy_m, 1.0),
+        altro => panic!("{altro}"),
+    }
+    let accettata = OpzioniRiproiezione {
+        accuratezza_accettata_m: Some(1.0),
+        ..spenta
+    };
+    piano("EPSG:32632", "EPSG:25832", &accettata).expect("1 m accettato");
+    // Nelle catene attraverso WGS 84 conta solo il resto: ED50 -> ETRS89 a
+    // Roma vale i 10 m di ED50 to WGS 84 (1), non 11.
+    let ed50 = OpzioniRiproiezione {
+        accuratezza_accettata_m: Some(10.0),
+        trasformazioni: Some(vec![1133, 1149]),
+        ..OpzioniRiproiezione::default()
+    };
+    assert_eq!(
+        piano("EPSG:23032", "EPSG:25832", &ed50)
+            .expect("ED50")
+            .percorsi()[0]
+            .accuratezza_m(),
+        10.0
+    );
+    // L'opzione su una coppia che non passa da WGS 84 <-> ETRS89 non ha
+    // effetto: si rifiuta.
+    let inutile = OpzioniRiproiezione {
+        convenzione_wgs84_etrs89: Some(true),
+        ..OpzioniRiproiezione::default()
+    };
+    assert!(matches!(
+        piano_err("EPSG:4326", "EPSG:3857", &inutile),
+        CrsError::ReprojectionConfig(_)
+    ));
 }
 
 #[test]
@@ -226,7 +289,34 @@ fn le_trasformazioni_imposte_devono_formare_un_percorso() {
     assert_eq!(scelto.percorsi().len(), 1);
     assert!(!scelto.percorsi()[0].passi()[0].inversa());
     assert!(scelto.percorsi()[0].passi()[1].inversa());
-    assert_eq!(scelto.percorsi()[0].accuratezza_m(), 5.0);
+    // 4 m di Monte Mario to WGS 84 (4); ETRS89 to WGS 84 (1) conta 0 per
+    // convenzione, 1 m senza.
+    assert_eq!(scelto.percorsi()[0].accuratezza_m(), 4.0);
+    assert!(scelto.percorsi()[0].passi()[1].per_convenzione());
+    assert_eq!(
+        scelto.percorsi()[0].passi()[1].accuratezza_registro_m(),
+        1.0
+    );
+    let senza = OpzioniRiproiezione {
+        accuratezza_accettata_m: Some(4.0),
+        convenzione_wgs84_etrs89: Some(false),
+        ..imposto
+    };
+    assert!(matches!(
+        piano_err("EPSG:3003", "EPSG:25832", &senza),
+        CrsError::ReprojectionAccuracyNotAccepted { .. }
+    ));
+    let cinque = OpzioniRiproiezione {
+        accuratezza_accettata_m: Some(5.0),
+        ..senza
+    };
+    assert_eq!(
+        piano("EPSG:3003", "EPSG:25832", &cinque)
+            .expect("5 m")
+            .percorsi()[0]
+            .accuratezza_m(),
+        5.0
+    );
     for codici in [vec![1149, 1660], vec![1660], vec![], vec![999_999]] {
         let opzioni = OpzioniRiproiezione {
             trasformazioni: Some(codici.clone()),

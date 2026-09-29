@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use geo::{
-    Coord, CoordsIter, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint,
-    MultiPolygon, Point, Polygon,
+    Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
+    Point, Polygon,
 };
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::arrow::{Field, RecordBatch, Schema, SchemaRef};
@@ -43,9 +43,10 @@ use plenora_core::contract::arrow_metadata::{
 };
 use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 use plenora_core::crs::riproiezione::{
-    GrigliaNtv2, OpzioniRiproiezione, PianoRiproiezione, Riproiettore,
+    GrigliaNtv2, OpzioniRiproiezione, PassoPercorso, PianoRiproiezione, Riproiettore,
+    MAX_PASSI_PERCORSO,
 };
-use plenora_core::crs::{resolve_crs, CrsError, ResolvedCrs};
+use plenora_core::crs::{resolve_crs, CrsError, GeographicBounds, ResolvedCrs};
 use plenora_core::PlenoraError;
 use serde::Deserialize;
 use serde_json::Value;
@@ -54,9 +55,10 @@ use crate::arrow_adapter::{
     batch_geometry_cells, decode_geometry_cell, encode_geometry, map_nullable,
 };
 
-/// Livelli massimi di divisione di un lato: un lato si divide al piu' in
-/// `2^24` pezzi (e prima vale [`MAX_CELL_COORDINATES`]).
-pub const MAX_PROFONDITA: u32 = 24;
+/// Livelli massimi di divisione di un lato: 48 bastano a ridurre un lato
+/// di 20.000 km sotto il micrometro attorno a un bordo di cella `NTv2`
+/// (prima vale comunque [`MAX_CELL_COORDINATES`]).
+pub const MAX_PROFONDITA: u32 = 48;
 
 /// Lunghezza massima del percorso di un file di griglia nella config.
 pub const MAX_BYTE_PERCORSO_GRIGLIA: usize = 4096;
@@ -87,6 +89,10 @@ pub struct ReprojectConfig {
     /// Griglie `NTv2` fornite.
     #[serde(default)]
     pub griglie: Vec<GrigliaConfig>,
+    /// Convenzione WGS 84 = famiglia ETRS89 (assente: attiva); `false`
+    /// usa l'accuratezza EPSG di ETRS89 to WGS 84 (1), 1 m.
+    #[serde(default)]
+    pub convenzione_wgs84_etrs89: Option<bool>,
 }
 
 /// I parametri di `geo.reproject` gia' verificati: il piano deciso
@@ -147,6 +153,7 @@ impl ReprojectParams {
             accuratezza_accettata_m: parsed.accuratezza_accettata_m,
             griglie: parsed.griglie.iter().map(|g| g.trasformazione).collect(),
             trasformazioni: parsed.trasformazioni,
+            convenzione_wgs84_etrs89: parsed.convenzione_wgs84_etrs89,
         };
         let piano = PianoRiproiezione::nuovo(sorgente, &target, &opzioni)
             .map_err(|error| PlenoraError::Crs(format!("{op}: {error}")))?;
@@ -262,14 +269,68 @@ struct Contesto<'a> {
     tolleranza: f64,
     /// Coordinate prodotte finora (limite [`MAX_CELL_COORDINATES`]).
     prodotte: u64,
+    /// Per ogni percorso che precede quello della geometria, i riquadri
+    /// d'uso dei suoi passi: un lato che ne attraversa l'intersezione passa
+    /// da punti che preferiscono quel percorso.
+    precedenti: Vec<Vec<GeographicBounds>>,
+    /// Il percorso ha un passo `NTv2`.
+    con_griglia: bool,
+    /// Un punto o un lato preferisce un percorso precedente: se il
+    /// percorso copre tutta la geometria, e' l'errore dei percorsi misti.
+    misto: bool,
+}
+
+/// Un punto trasformato: coordinate d'arrivo, lon/lat sorgente e celle
+/// delle griglie usate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Immagine {
+    c: Coord<f64>,
+    sorgente: Coord<f64>,
+    celle: [Option<(usize, usize, usize)>; MAX_PASSI_PERCORSO],
 }
 
 impl Contesto<'_> {
-    fn punto(&self, c: Coord<f64>) -> Result<Option<Coord<f64>>, CrsError> {
-        Ok(self
+    /// Il punto lungo il percorso della geometria; `None` se esce
+    /// dall'area d'uso. Errore se un percorso precedente lo coprirebbe:
+    /// quel punto preferisce un'altra trasformazione, e una sola per tutta
+    /// la geometria gli darebbe parametri di un'altra area. Vale per ogni
+    /// punto trasformato (vertici, campioni, punti di densificazione), cosi'
+    /// l'esito non dipende da come l'ingresso e' segmentato.
+    fn punto(&mut self, c: Coord<f64>) -> Result<Option<Immagine>, PlenoraError> {
+        let Some(p) = self
             .riproiettore
-            .trasforma(self.percorso, c.x, c.y)?
-            .map(|(x, y)| Coord { x, y }))
+            .trasforma_dettagli(self.percorso, c.x, c.y)?
+        else {
+            return Ok(None);
+        };
+        if !self.misto {
+            for precedente in 0..self.percorso {
+                if self.riproiettore.trasforma(precedente, c.x, c.y)?.is_some() {
+                    self.misto = true;
+                    break;
+                }
+            }
+        }
+        Ok(Some(Immagine {
+            c: Coord { x: p.x, y: p.y },
+            sorgente: Coord {
+                x: p.lon_sorgente,
+                y: p.lat_sorgente,
+            },
+            celle: p.celle,
+        }))
+    }
+
+    /// Il lato sorgente (in lon/lat del datum sorgente, approssimato dalla
+    /// corda fra gli estremi) attraversa l'area di un percorso precedente.
+    fn attraversa_precedenti(&mut self, a: Coord<f64>, b: Coord<f64>) {
+        if self
+            .precedenti
+            .iter()
+            .any(|aree| segmento_nelle_aree(a, b, aree))
+        {
+            self.misto = true;
+        }
     }
 
     fn conta(&mut self, n: usize) -> Result<(), PlenoraError> {
@@ -282,6 +343,71 @@ impl Contesto<'_> {
         }
         Ok(())
     }
+}
+
+/// Intervalli del parametro `t` in `[0, 1]` per cui il segmento `a`-`b`
+/// sta nel riquadro (Liang-Barsky; un riquadro oltre l'antimeridiano e'
+/// l'unione di due).
+fn intervalli_nel_riquadro(a: Coord<f64>, b: Coord<f64>, r: &GeographicBounds) -> Vec<(f64, f64)> {
+    let rettangoli = if r.crosses_antimeridian() {
+        vec![
+            (r.west_longitude, 180.0, r.south_latitude, r.north_latitude),
+            (-180.0, r.east_longitude, r.south_latitude, r.north_latitude),
+        ]
+    } else {
+        vec![(
+            r.west_longitude,
+            r.east_longitude,
+            r.south_latitude,
+            r.north_latitude,
+        )]
+    };
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let mut uscita = Vec::new();
+    for (ovest, est, sud, nord) in rettangoli {
+        let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+        let mut vuoto = false;
+        for (p, q) in [
+            (-dx, a.x - ovest),
+            (dx, est - a.x),
+            (-dy, a.y - sud),
+            (dy, nord - a.y),
+        ] {
+            if p == 0.0 {
+                if q < 0.0 {
+                    vuoto = true;
+                }
+            } else {
+                let t = q / p;
+                if p < 0.0 {
+                    t0 = t0.max(t);
+                } else {
+                    t1 = t1.min(t);
+                }
+            }
+        }
+        if !vuoto && t0 <= t1 {
+            uscita.push((t0, t1));
+        }
+    }
+    uscita
+}
+
+/// Il segmento passa per un punto contenuto in tutti i riquadri.
+fn segmento_nelle_aree(a: Coord<f64>, b: Coord<f64>, aree: &[GeographicBounds]) -> bool {
+    let mut comuni = vec![(0.0_f64, 1.0_f64)];
+    for area in aree {
+        let nuovi = intervalli_nel_riquadro(a, b, area);
+        comuni = comuni
+            .iter()
+            .flat_map(|(x0, x1)| nuovi.iter().map(move |(y0, y1)| (x0.max(*y0), x1.min(*y1))))
+            .filter(|(t0, t1)| t0 <= t1)
+            .collect();
+        if comuni.is_empty() {
+            return false;
+        }
+    }
+    !comuni.is_empty()
 }
 
 /// Distanza di `p` dal segmento `a`-`b`.
@@ -313,32 +439,33 @@ fn interpola(a: Coord<f64>, b: Coord<f64>, t: f64) -> Coord<f64> {
 fn lato(
     contesto: &mut Contesto<'_>,
     (a, b): (Coord<f64>, Coord<f64>),
-    (fa, fb): (Coord<f64>, Coord<f64>),
+    (fa, fb): (Immagine, Immagine),
     profondita: u32,
     uscita: &mut Vec<Coord<f64>>,
 ) -> Result<Tentativo<()>, PlenoraError> {
     if a == b {
         contesto.conta(1)?;
-        uscita.push(fb);
+        uscita.push(fb.c);
         return Ok(Tentativo::Fatto(()));
     }
-    let mut immagini = [Coord { x: 0.0, y: 0.0 }; 3];
+    let mut campioni = [fa; 3];
     for (indice, t) in [0.25, 0.5, 0.75].into_iter().enumerate() {
-        let Some(campione) = contesto.punto(interpola(a, b, t))? else {
+        let Some(trovato) = contesto.punto(interpola(a, b, t))? else {
             return Ok(Tentativo::FuoriArea);
         };
-        immagini[indice] = campione;
+        campioni[indice] = trovato;
     }
+    let immagini = campioni.map(|campione| campione.c);
     // Scarto nei due versi: le immagini dei punti del lato sorgente dal lato
     // d'uscita, e i punti del lato d'uscita dalla spezzata delle immagini.
     // Il secondo verso vede una corda che attraversa il mondo fra due
     // immagini ai due lati dell'antimeridiano, che il primo non vede (le
     // immagini stanno sulla corda).
-    let spezzata = [fa, immagini[0], immagini[1], immagini[2], fb];
+    let spezzata = [fa.c, immagini[0], immagini[1], immagini[2], fb.c];
     let mut scarto: f64 = 0.0;
     for (indice, t) in [0.25, 0.5, 0.75].into_iter().enumerate() {
-        scarto = scarto.max(distanza_dal_segmento(immagini[indice], fa, fb));
-        let sulla_corda = interpola(fa, fb, t);
+        scarto = scarto.max(distanza_dal_segmento(immagini[indice], fa.c, fb.c));
+        let sulla_corda = interpola(fa.c, fb.c, t);
         let dalla_spezzata = spezzata
             .windows(2)
             .map(|coppia| distanza_dal_segmento(sulla_corda, coppia[0], coppia[1]))
@@ -355,15 +482,29 @@ fn lato(
     // delle due meta' a ogni divisione: il lato non converge ed e' un
     // errore. Un lato regolare che non passa la prova si divide ancora, e
     // basta.
-    let fm = immagini[1];
-    let intero = (fb.x - fa.x).hypot(fb.y - fa.y);
-    let meta = (fm.x - fa.x)
-        .hypot(fm.y - fa.y)
-        .max((fb.x - fm.x).hypot(fb.y - fm.y));
+    let fm = campioni[1];
+    let intero = (fb.c.x - fa.c.x).hypot(fb.c.y - fa.c.y);
+    let meta = (fm.c.x - fa.c.x)
+        .hypot(fm.c.y - fa.c.y)
+        .max((fb.c.x - fm.c.x).hypot(fb.c.y - fm.c.y));
     let continuo = meta <= 0.75f64.mul_add(intero, contesto.tolleranza);
-    if scarto <= contesto.tolleranza && continuo {
+    // Griglie NTv2: il campo di spostamenti e' bilineare a pezzi, e i tre
+    // campioni non vedono una cella attraversata fra due di loro. Un lato
+    // si accetta solo se estremi e campioni stanno nella stessa cella di
+    // ogni griglia (li' il campo lungo il lato e' quadratico, e i campioni
+    // ne misurano lo scarto), oppure se la sua immagine e' piu' corta della
+    // tolleranza (il pezzo che attraversa un bordo di cella, ridotto per
+    // bisezione).
+    let stessa_cella = !contesto.con_griglia
+        || campioni
+            .iter()
+            .chain([&fb])
+            .all(|campione| campione.celle == fa.celle)
+        || intero <= contesto.tolleranza;
+    if scarto <= contesto.tolleranza && continuo && stessa_cella {
+        contesto.attraversa_precedenti(fa.sorgente, fb.sorgente);
         contesto.conta(1)?;
-        uscita.push(fb);
+        uscita.push(fb.c);
         return Ok(Tentativo::Fatto(()));
     }
     if profondita >= MAX_PROFONDITA {
@@ -392,7 +533,7 @@ fn catena(
     };
     let mut uscita = Vec::with_capacity(coordinate.len());
     contesto.conta(1)?;
-    uscita.push(immagine_primo);
+    uscita.push(immagine_primo.c);
     let (mut a, mut fa) = (primo, immagine_primo);
     for &b in resto {
         // Un anello chiuso: l'ultimo punto e' il primo, e la sua immagine e'
@@ -442,20 +583,20 @@ fn geometria(
     }
     let uscita = match ingresso {
         Geometry::Point(punto) => {
-            let Some(c) = contesto.punto(punto.0)? else {
+            let Some(immagine) = contesto.punto(punto.0)? else {
                 return Ok(Tentativo::FuoriArea);
             };
             contesto.conta(1)?;
-            Geometry::Point(Point(c))
+            Geometry::Point(Point(immagine.c))
         }
         Geometry::MultiPoint(punti) => {
             let mut uscita = Vec::with_capacity(punti.0.len());
             for punto in &punti.0 {
-                let Some(c) = contesto.punto(punto.0)? else {
+                let Some(immagine) = contesto.punto(punto.0)? else {
                     return Ok(Tentativo::FuoriArea);
                 };
                 contesto.conta(1)?;
-                uscita.push(Point(c));
+                uscita.push(Point(immagine.c));
             }
             Geometry::MultiPoint(MultiPoint(uscita))
         }
@@ -493,32 +634,6 @@ fn geometria(
     Ok(Tentativo::Fatto(uscita))
 }
 
-/// Ogni vertice deve preferire il percorso della geometria: se un percorso
-/// precedente (piu' accurato o piu' specifico) copre da solo un vertice,
-/// quel vertice riceverebbe i parametri di un'altra area (il riquadro
-/// «Italy - mainland» contiene la Sardegna, ma per la Sardegna vale
-/// un'altra trasformazione). Errore esplicito, mai un risultato misto.
-fn richiedi_percorso_uniforme(
-    ingresso: &Geometry<f64>,
-    riproiettore: &Riproiettore,
-    percorso: usize,
-) -> Result<(), PlenoraError> {
-    if percorso == 0 {
-        return Ok(());
-    }
-    for vertice in ingresso.coords_iter() {
-        for precedente in 0..percorso {
-            if riproiettore
-                .trasforma(precedente, vertice.x, vertice.y)?
-                .is_some()
-            {
-                return Err(CrsError::ReprojectionMixedTransformationAreas.into());
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Riproietta una geometria gia' valida: primo percorso che la copre tutta,
 /// lati densificati, uscita valida OGC dello stesso tipo.
 ///
@@ -550,9 +665,22 @@ pub fn riproietta_geometria(
                 percorso,
                 tolleranza,
                 prodotte: 0,
+                precedenti: (0..percorso)
+                    .map(|precedente| riproiettore.aree_percorso(precedente))
+                    .collect(),
+                con_griglia: riproiettore
+                    .piano()
+                    .percorsi()
+                    .get(percorso)
+                    .is_some_and(|p| p.passi().iter().any(PassoPercorso::a_griglia)),
+                misto: false,
             };
             if let Tentativo::Fatto(uscita) = geometria(&mut contesto, ingresso)? {
-                richiedi_percorso_uniforme(ingresso, riproiettore, percorso)?;
+                // Il percorso copre tutta la geometria, ma alcuni punti ne
+                // preferiscono uno precedente: mai un risultato misto.
+                if contesto.misto {
+                    return Err(CrsError::ReprojectionMixedTransformationAreas.into());
+                }
                 return Ok(uscita);
             }
         }

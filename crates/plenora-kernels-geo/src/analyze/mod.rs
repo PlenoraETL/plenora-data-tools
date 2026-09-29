@@ -3577,12 +3577,9 @@ mod tests {
             ] {
                 for target in ["EPSG:4326", "EPSG:3857", "EPSG:25832"] {
                     let contract = ingresso_con_crs(builtin_crs("EPSG:32632"), tipi, true);
-                    // Verso ETRS89 serve accettare 1 m (ETRS89 to WGS 84 (1)).
-                    let config = if target == "EPSG:25832" {
-                        json!({"target_crs": target, "accuratezza_accettata_m": 1.0})
-                    } else {
-                        json!({"target_crs": target})
-                    };
+                    // Verso ETRS89 nessuna accuratezza da accettare: WGS 84 ed
+                    // ETRS89 sono equivalenti per convenzione.
+                    let config = json!({"target_crs": target});
                     let analizzato = analyze_one(
                         "geo.reproject",
                         std::slice::from_ref(&contract),

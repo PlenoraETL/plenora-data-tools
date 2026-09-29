@@ -6,7 +6,7 @@
 // (accuratezze del registro).
 #![allow(clippy::many_single_char_names, clippy::float_cmp)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use geo::{coord, line_string, point, polygon, Coord, CoordsIter, Geometry, LineString};
 use geozero::{CoordDimensions, ToWkb};
@@ -237,7 +237,17 @@ fn una_geometria_non_mescola_i_percorsi_e_fuori_da_tutti_e_un_errore() {
         .iter()
         .map(PercorsoDatum::codici)
         .collect();
-    assert_eq!(codici, vec![vec![1662], vec![1664], vec![1660]]);
+    assert_eq!(
+        codici,
+        vec![
+            vec![1662],
+            vec![1664],
+            vec![1660],
+            vec![1661, 1149],
+            vec![1663, 1149],
+            vec![1659, 1149]
+        ]
+    );
     let r = p.riproiettore().expect("riproiettore");
     let t = tolleranza("EPSG:4326");
     let (roma, sardegna) = (coord! {x: 12.5, y: 41.9}, coord! {x: 9.0, y: 40.0});
@@ -423,4 +433,139 @@ fn la_tabella_conserva_righe_null_e_attributi() {
     );
     // Il piano deciso per un'altra sorgente non si applica.
     assert!(reproject_batches(&schema, &[], "geometry", &crs("EPSG:4258"), &p).is_err());
+}
+
+#[test]
+fn l_esito_non_dipende_dalla_segmentazione() {
+    // Una linea da 7 a 11 E lungo il parallelo 40 sta nel solo riquadro
+    // continentale, ma il suo punto a 9 E sta anche in quello sardo: con o
+    // senza un vertice collineare in mezzo, errore di percorsi misti.
+    let config = json!({"target_crs": "EPSG:4326", "accuratezza_accettata_m": 4.0});
+    let r = riproiettore("EPSG:4265", &config);
+    let t = tolleranza("EPSG:4326");
+    for linea in [
+        line_string![(x: 7.0, y: 40.0), (x: 11.0, y: 40.0)],
+        line_string![(x: 7.0, y: 40.0), (x: 9.0, y: 40.0), (x: 11.0, y: 40.0)],
+        line_string![(x: 7.0, y: 40.0), (x: 10.0, y: 40.0), (x: 11.0, y: 40.0)],
+    ] {
+        let errore =
+            riproietta_geometria(&Geometry::LineString(linea), &r, t).expect_err("percorsi misti");
+        assert!(
+            errore
+                .to_string()
+                .contains("REPROJECTION_MIXED_TRANSFORMATION_AREAS"),
+            "{errore}"
+        );
+    }
+}
+
+fn record_ntv2(chiave: [u8; 8], valore: [u8; 8]) -> Vec<u8> {
+    let mut r = chiave.to_vec();
+    r.extend_from_slice(&valore);
+    r
+}
+
+fn intero_ntv2(v: i32) -> [u8; 8] {
+    let mut b = [0_u8; 8];
+    b[..4].copy_from_slice(&v.to_le_bytes());
+    b
+}
+
+/// Byte di una griglia `NTv2` di una sola sottogriglia, little-endian:
+/// limiti e passo in secondi (longitudini positive a ovest), spostamenti
+/// `(dlat, dlon)` in secondi da `f(lon, lat)` in gradi.
+#[allow(clippy::cast_possible_truncation)]
+fn griglia_ntv2(
+    (sud, nord, est, ovest, passo): (f64, f64, f64, f64, f64),
+    f: impl Fn(f64, f64) -> (f32, f32),
+) -> Vec<u8> {
+    let righe = ((nord - sud) / passo).round() as i32 + 1;
+    let colonne = ((ovest - est) / passo).round() as i32 + 1;
+    let mut byte = Vec::new();
+    for (k, v) in [
+        (b"NUM_OREC", intero_ntv2(11)),
+        (b"NUM_SREC", intero_ntv2(11)),
+        (b"NUM_FILE", intero_ntv2(1)),
+        (b"GS_TYPE ", *b"SECONDS "),
+        (b"VERSION ", *b"NTv2.0  "),
+        (b"SYSTEM_F", *b"PROVA   "),
+        (b"SYSTEM_T", *b"PROVA   "),
+        (b"MAJOR_F ", 6_378_388.0_f64.to_le_bytes()),
+        (b"MINOR_F ", 6_356_911.946_f64.to_le_bytes()),
+        (b"MAJOR_T ", 6_378_137.0_f64.to_le_bytes()),
+        (b"MINOR_T ", 6_356_752.314_f64.to_le_bytes()),
+        (b"SUB_NAME", *b"UNICA   "),
+        (b"PARENT  ", *b"NONE    "),
+        (b"CREATED ", *b"20260929"),
+        (b"UPDATED ", *b"20260929"),
+        (b"S_LAT   ", sud.to_le_bytes()),
+        (b"N_LAT   ", nord.to_le_bytes()),
+        (b"E_LONG  ", est.to_le_bytes()),
+        (b"W_LONG  ", ovest.to_le_bytes()),
+        (b"LAT_INC ", passo.to_le_bytes()),
+        (b"LONG_INC", passo.to_le_bytes()),
+        (b"GS_COUNT", intero_ntv2(righe * colonne)),
+    ] {
+        byte.extend(record_ntv2(*k, v));
+    }
+    for j in 0..righe {
+        for i in 0..colonne {
+            let lat = f64::from(j).mul_add(passo, sud) / 3600.0;
+            let lon = -f64::from(i).mul_add(passo, est) / 3600.0;
+            let (dlat, dlon) = f(lon, lat);
+            for v in [dlat, dlon, 0.0, 0.0] {
+                byte.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+    byte
+}
+
+#[test]
+fn un_rilievo_della_griglia_fra_i_campioni_non_si_perde() {
+    // Griglia nulla salvo un rilievo bilineare di 1 secondo in latitudine
+    // nel nodo a 8,5 E (passo 0,125 gradi): estremi e campioni del lato
+    // (8, 40.5)-(12, 40.5) non lo vedono, e l'immagine esatta se ne scosta
+    // di circa 31 m. La densificazione deve seguirlo cella per cella.
+    let byte = griglia_ntv2(
+        (
+            40.0 * 3600.0,
+            41.0 * 3600.0,
+            -13.0 * 3600.0,
+            -7.0 * 3600.0,
+            450.0,
+        ),
+        |lon, _| {
+            if (lon - 8.5).abs() < 1e-9 {
+                (1.0, 0.0)
+            } else {
+                (0.0, 0.0)
+            }
+        },
+    );
+    let griglia = GrigliaNtv2::da_byte(&byte).expect("griglia");
+    let opzioni = OpzioniRiproiezione {
+        accuratezza_accettata_m: Some(0.1),
+        griglie: vec![9734],
+        trasformazioni: Some(vec![9734]),
+        convenzione_wgs84_etrs89: None,
+    };
+    let piano =
+        PianoRiproiezione::nuovo(&crs("EPSG:4265"), &crs("EPSG:6706"), &opzioni).expect("piano");
+    let r = Riproiettore::nuovo(piano, BTreeMap::from([(9734, griglia)])).expect("riproiettore");
+    let t = tolleranza("EPSG:6706");
+    let linea = line_string![(x: 8.0, y: 40.5), (x: 12.0, y: 40.5)];
+    let Geometry::LineString(uscita) =
+        riproietta_geometria(&Geometry::LineString(linea.clone()), &r, t).expect("riproiezione")
+    else {
+        panic!("tipo");
+    };
+    // Il rilievo e' nell'uscita: la latitudine massima e' 40.5 + 1".
+    let massima = uscita
+        .0
+        .iter()
+        .map(|c| c.y)
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!((massima - (40.5 + 1.0 / 3600.0)).abs() < 1e-9, "{massima}");
+    assert!(scarto_massimo(&r, &linea, &uscita, 20_000) <= 2.0 * t);
 }

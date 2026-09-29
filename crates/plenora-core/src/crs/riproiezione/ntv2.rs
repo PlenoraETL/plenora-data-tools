@@ -380,24 +380,45 @@ impl GrigliaNtv2 {
         })
     }
 
-    /// La sottogriglia piu' fine che contiene il punto (secondi, lon a ovest).
-    fn cerca(&self, lat_s: f64, lon_w: f64) -> Option<&Sottogriglia> {
-        let mut corrente = self
+    /// L'indice della sottogriglia piu' fine che contiene il punto
+    /// (secondi, lon a ovest).
+    fn indice(&self, lat_s: f64, lon_w: f64) -> Option<usize> {
+        let mut corrente = *self
             .radici
             .iter()
-            .map(|i| &self.sottogriglie[*i])
-            .find(|g| g.contiene(lat_s, lon_w))?;
+            .find(|i| self.sottogriglie[**i].contiene(lat_s, lon_w))?;
         loop {
-            match corrente
+            match self.sottogriglie[corrente]
                 .figli
                 .iter()
-                .map(|i| &self.sottogriglie[*i])
-                .find(|g| g.contiene(lat_s, lon_w))
+                .find(|i| self.sottogriglie[**i].contiene(lat_s, lon_w))
             {
-                Some(figlio) => corrente = figlio,
+                Some(figlio) => corrente = *figlio,
                 None => return Some(corrente),
             }
         }
+    }
+
+    /// La sottogriglia piu' fine che contiene il punto (secondi, lon a ovest).
+    fn cerca(&self, lat_s: f64, lon_w: f64) -> Option<&Sottogriglia> {
+        self.sottogriglie.get(self.indice(lat_s, lon_w)?)
+    }
+
+    /// La cella del campo bilineare nel punto: sottogriglia, colonna e riga
+    /// della cella (l'ultimo nodo usa la cella precedente, come
+    /// l'interpolazione). Due punti nella stessa cella stanno nello stesso
+    /// pezzo bilineare del campo di spostamenti.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub(in crate::crs) fn cella(&self, lon: f64, lat: f64) -> Option<(usize, usize, usize)> {
+        let lat_s = lat * SECONDI_PER_GRADO;
+        let lon_w = -lon * SECONDI_PER_GRADO;
+        let indice = self.indice(lat_s, lon_w)?;
+        let g = self.sottogriglie.get(indice)?;
+        let fx = (lon_w - g.est) / g.passo_lon;
+        let fy = (lat_s - g.sud) / g.passo_lat;
+        let ix = (fx.floor().max(0.0) as usize).min(g.colonne.checked_sub(2)?);
+        let iy = (fy.floor().max(0.0) as usize).min(g.righe.checked_sub(2)?);
+        Some((indice, ix, iy))
     }
 
     /// Spostamento in gradi `(dlon, dlat)` (longitudine positiva a est) nel

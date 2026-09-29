@@ -275,10 +275,15 @@ fn oracolo_catene_entro_un_millimetro_da_proj() {
                 .map(|p| p.trim_end_matches('i').parse().expect("codice"))
                 .collect();
             let griglie: Vec<u32> = codici.iter().copied().filter(|c| *c == 9734).collect();
+            // Accuratezze del registro: la convenzione WGS 84 = ETRS89 si
+            // spegne dove il percorso passa da EPSG:1149 (prova anche
+            // l'opzione).
+            let convenzione = codici.contains(&1149).then_some(false);
             let opzioni = OpzioniRiproiezione {
                 accuratezza_accettata_m: (accuratezza > 0.01).then_some(accuratezza),
                 griglie: griglie.clone(),
                 trasformazioni: Some(codici),
+                convenzione_wgs84_etrs89: convenzione,
             };
             let sorgente = resolve_crs(&da, "da").expect("da");
             let destinazione = resolve_crs(&a, "a").expect("a");
@@ -316,4 +321,34 @@ fn oracolo_catene_entro_un_millimetro_da_proj() {
     for (famiglia, massimo) in &massimi {
         eprintln!("oracolo catene {famiglia}: {massimo:.3e} m");
     }
+}
+
+/// Vicino alle singolarita' (poli, bordi dei domini, limiti di Mercator)
+/// contro riferimenti a 60 cifre (`scripts/genera_riferimenti_singolari.py`,
+/// mpmath): avanti e indietro entro 1 mm.
+#[test]
+fn riferimenti_ad_alta_precisione_vicino_alle_singolarita() {
+    let mut massimo: f64 = 0.0;
+    for riga in righe("singolari.csv") {
+        let codice = codice_epsg(&riga[0]);
+        let (lon, lat, x, y) = (
+            numero(&riga[1]),
+            numero(&riga[2]),
+            numero(&riga[3]),
+            numero(&riga[4]),
+        );
+        let definizione = tabella::definizione(Identificativo::Epsg(codice)).expect("CRS");
+        let datum = tabella::datum(definizione.datum).expect("datum");
+        let proiezione =
+            Proiezione::nuova(&definizione.metodo, datum.ellissoide).expect("proiezione");
+        let (xa, ya) = proiezione.avanti(lon, lat).expect("avanti");
+        let errore = (xa - x).hypot(ya - y);
+        assert!(errore <= MM, "{codice} avanti ({lon}, {lat}): {errore} m");
+        massimo = massimo.max(errore);
+        let (loni, lati) = proiezione.indietro(x, y).expect("indietro");
+        let errore = metri_geografici(lon, lat, loni, lati);
+        assert!(errore <= MM, "{codice} indietro ({x}, {y}): {errore} m");
+        massimo = massimo.max(errore);
+    }
+    eprintln!("riferimenti vicino alle singolarita': {massimo:.3e} m");
 }

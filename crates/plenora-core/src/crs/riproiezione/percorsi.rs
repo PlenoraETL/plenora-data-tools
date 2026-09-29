@@ -21,7 +21,12 @@ use super::{PassoPercorso, PercorsoDatum, MAX_PASSI_PERCORSO};
 
 /// Tutti i percorsi da `da` ad `a`, in ordine di preferenza. Lo stesso
 /// datum ha il solo percorso vuoto, di accuratezza 0.
-pub(super) fn enumera(da: u32, a: u32, griglie: &BTreeSet<u32>) -> Vec<PercorsoDatum> {
+pub(super) fn enumera(
+    da: u32,
+    a: u32,
+    griglie: &BTreeSet<u32>,
+    convenzione: bool,
+) -> Vec<PercorsoDatum> {
     if da == a {
         return vec![PercorsoDatum {
             passi: Vec::new(),
@@ -35,7 +40,13 @@ pub(super) fn enumera(da: u32, a: u32, griglie: &BTreeSet<u32>) -> Vec<PercorsoD
     let mut trovati = Vec::new();
     let mut passi = Vec::new();
     let mut visitati = vec![da];
-    visita(da, a, &usabili, &mut passi, &mut visitati, &mut trovati);
+    visita(
+        (da, a, convenzione),
+        &usabili,
+        &mut passi,
+        &mut visitati,
+        &mut trovati,
+    );
     let mut percorsi: Vec<PercorsoDatum> = trovati
         .into_iter()
         .map(|passi: Vec<PassoPercorso>| {
@@ -79,8 +90,7 @@ fn area(percorso: &PercorsoDatum) -> f64 {
 }
 
 fn visita(
-    corrente: u32,
-    arrivo: u32,
+    (corrente, arrivo, convenzione): (u32, u32, bool),
     usabili: &[&'static Trasformazione],
     passi: &mut Vec<PassoPercorso>,
     visitati: &mut Vec<u32>,
@@ -103,12 +113,19 @@ fn visita(
         passi.push(PassoPercorso {
             trasformazione,
             inversa,
+            convenzione: convenzione && trasformazione.codice == super::CODICE_ETRS89_WGS84,
         });
         if prossimo == arrivo {
             trovati.push(passi.clone());
         } else {
             visitati.push(prossimo);
-            visita(prossimo, arrivo, usabili, passi, visitati, trovati);
+            visita(
+                (prossimo, arrivo, convenzione),
+                usabili,
+                passi,
+                visitati,
+                trovati,
+            );
             visitati.pop();
         }
         passi.pop();

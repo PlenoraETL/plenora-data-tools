@@ -297,7 +297,11 @@ registro ([«La regola dell'accuratezza»](#la-regola-dellaccuratezza)).
 **Hazard.** Il risultato può scostarsi dal vero fino all'accuratezza
 accettata (metri per Monte Mario, ED50, OSGB36, NAD27 senza griglie), senza
 errore; due geometrie vicine possono usare percorsi diversi e scostarsi fra
-loro fino alla somma delle due accuratezze. Gli altri limiti sono in
+loro fino alla somma delle due accuratezze. WGS 84 e la famiglia ETRS89
+sono equivalenti per convenzione (EPSG:1149 conta 0,
+[«WGS 84 = ETRS89 per convenzione»](#wgs-84--etrs89-per-convenzione)):
+oggi 50–80 cm reali in Europa, senza errore, salvo
+`convenzione_wgs84_etrs89: false`. Gli altri limiti sono in
 [«Limiti dichiarati della riproiezione»](#limiti-dichiarati-della-riproiezione).
 
 **Condizione di rientro.** Nessuna: è l'accuratezza del registro. Con le
@@ -1443,7 +1447,10 @@ l'analisi del contratto in `analyze_reproject`.
 - `trasformazioni` (facoltativo): codici EPSG delle trasformazioni da usare,
   nell'ordine; il percorso fra i datum è esattamente quello;
 - `griglie` (facoltativo): griglie NTv2 fornite dall'utente, ognuna con il
-  codice EPSG della trasformazione a griglia e il percorso del file.
+  codice EPSG della trasformazione a griglia e il percorso del file;
+- `convenzione_wgs84_etrs89` (facoltativo, predefinito `true`): WGS 84 e la
+  famiglia ETRS89 equivalenti per convenzione
+  ([«WGS 84 = ETRS89 per convenzione»](#wgs-84--etrs89-per-convenzione)).
 
 Contratto: schema, righe, tipi geometrici e `FieldId` invariati; il CRS del
 contratto e il metadato `geo` del campo diventano il target, le chiavi
@@ -1519,13 +1526,15 @@ Per ogni geometria si usa il **primo percorso la cui area d'uso contiene
 tutti i suoi punti** (vertici e punti aggiunti dalla densificazione): una
 geometria non mescola mai due percorsi, e una che nessun percorso ammesso
 copre è un errore (`REPROJECTION_OUTSIDE_TRANSFORMATION_AREA`), mai un
-ripiego. Se poi un vertice sarebbe coperto da solo da un percorso che viene
-prima (per esempio il vertice sardo di una linea Roma-Cagliari, che il
-riquadro continentale contiene ma per cui vale la trasformazione della
-Sardegna: i parametri continentali lo sposterebbero di circa 6 m), la
-geometria si rifiuta (`REPROJECTION_MIXED_TRANSFORMATION_AREAS`): va divisa,
-o il percorso fissato con `trasformazioni`, che fissa il percorso di tutte
-le geometrie.
+ripiego. Se poi un punto trasformato (vertice, campione o punto di
+densificazione) sarebbe coperto da solo da un percorso che viene prima, o un
+lato attraversa il riquadro d'uso di un percorso precedente (per esempio il
+tratto sardo di una linea lungo il parallelo 40 da 7 a 11 E, che il riquadro
+continentale contiene ma per cui vale la trasformazione della Sardegna: i
+parametri continentali lo sposterebbero di circa 6 m), la geometria si
+rifiuta (`REPROJECTION_MIXED_TRANSFORMATION_AREAS`), con o senza vertici
+intermedi: l'esito non dipende da come l'ingresso è segmentato. Va divisa, o
+il percorso fissato con `trasformazioni`, che vale per tutte le geometrie.
 
 Esempi della scelta, per punti tipici e senza griglie:
 
@@ -1537,7 +1546,7 @@ Esempi della scelta, per punti tipici e senza griglie:
 | | Cagliari | EPSG:1661 (Sardegna) + 6710 inversa | 4 m |
 | | con la griglia IGM EPSG:9734 | EPSG:9734 | 0,1 m |
 | IGM95 ↔ RDN2008 (3064 ↔ 7791) | Italia | EPSG:1098 + 6710 inversa | 0,5 m |
-| ED50 ↔ ETRS89 (23032 ↔ 25832) | Roma | ED50 to WGS 84 (1) EPSG:1133 + 1149 inversa | 11 m |
+| ED50 ↔ ETRS89 (23032 ↔ 25832) | Roma | ED50 to WGS 84 (1) EPSG:1133 + 1149 inversa | 10 m (1149 conta 0) |
 | | Copenaghen | ED50 to ETRS89 (4), EPSG:1626 | 1 m |
 | OSGB36 ↔ WGS 84 (27700 ↔ 4326) | Londra | OSGB36 to WGS 84 (6), EPSG:1314 | 2 m |
 | Amersfoort ↔ ETRS89 (28992 ↔ 4258) | Utrecht | Amersfoort to ETRS89 (8), EPSG:9281 | 0,25 m |
@@ -1545,18 +1554,41 @@ Esempi della scelta, per punti tipici e senza griglie:
 | NAD27 ↔ NAD83 (4267 ↔ 4269) | Kansas | NAD27 to WGS 84 (6) EPSG:1175 + 1188 inversa | 11 m |
 | DHDN ↔ ETRS89 (31467 ↔ 25832) | Stoccarda | DHDN to ETRS89 (3), EPSG:1778 | 1 m |
 | RGF93 v1 ↔ ETRS89 (2154 ↔ 4258) | Parigi | EPSG:1591 | 0,1 m |
-| ETRS89 ↔ WGS 84 (25832, 3035 ↔ 4326) | Europa | ETRS89 to WGS 84 (1), EPSG:1149 | 1 m |
+| ETRS89, RDN2008 ↔ WGS 84 (25832, 3035, 7791 ↔ 4326, 32632) | Europa | ETRS89 to WGS 84 (1), EPSG:1149 (con 6710 per RDN2008) | 0 per convenzione (1 m con `convenzione_wgs84_etrs89: false`) |
 | NZGD2000, SIRGAS 2000 ↔ WGS 84 | | EPSG:1565, EPSG:15894 | 1 m |
 | CGCS2000 ↔ altri datum | | nessuno (`REPROJECTION_PATH_UNAVAILABLE`) | — |
 
 Stesso datum (per esempio 4326 ↔ 3857 ↔ 32632, 4258 ↔ 3035 ↔ 25832):
 nessuna trasformazione, accuratezza 0.
 
+### WGS 84 = ETRS89 per convenzione
+
+**Regola** (decisione dell'utente). Come la maggior parte dei GIS, e come
+PROJ quando applica EPSG:1149 (traslazioni nulle), WGS 84 e la famiglia
+ETRS89 (ETRS89 e i CRS su di esso: 4258, 25828–25837, 3035; RDN2008 e i
+suoi, 6706–6709, 7791–7794, 6875, equivalente a ETRS89 per il registro con
+accuratezza 0) sono **equivalenti per convenzione**: il passo ETRS89 to WGS
+84 (1), EPSG:1149, conta accuratezza 0 invece di 1 m. WGS 84 → RDN2008 /
+UTM 32N non chiede `accuratezza_accettata_m`.
+
+**Ambito.** Il solo passo EPSG:1149, anche dentro una catena: ED50 → WGS 84
+→ ETRS89 conta l'accuratezza del passo ED50 e 0 per il resto. Ogni altro
+cambio di datum resta sotto la regola dell'accuratezza.
+
+**Hazard.** La differenza reale fra WGS 84 (G2139) ed ETRS89 in Europa è
+oggi di circa 50–80 cm e cresce di circa 2,5 cm all'anno (deriva della
+placca euroasiatica): il risultato si scosta dal vero di tanto, senza errore.
+
+**Condizione di rientro.** `convenzione_wgs84_etrs89: false` nella config:
+EPSG:1149 torna a 1 m e la regola dell'accuratezza lo chiede esplicitamente.
+Scritta su una coppia che non passa da EPSG:1149 si rifiuta (senza effetto).
+
 ### La regola dell'accuratezza
 
 **Regola.** Un percorso la cui accuratezza sta entro la precisione di 1 cm
 è sempre ammesso: lo stesso datum, i datum equivalenti per il registro
-(RDN2008 ed ETRS89, EPSG:6710 con accuratezza 0), GDA94 → GDA2020 (1 cm).
+(RDN2008 ed ETRS89, EPSG:6710 con accuratezza 0), WGS 84 ed ETRS89 per
+convenzione, GDA94 → GDA2020 (1 cm).
 Oltre, solo se `accuratezza_accettata_m` è almeno pari all'accuratezza del
 percorso; altrimenti l'analisi rifiuta con
 `REPROJECTION_ACCURACY_NOT_ACCEPTED`, che riporta l'accuratezza del percorso
@@ -1597,8 +1629,14 @@ lato si prova nei punti a 1/4, 1/2 e 3/4: l'immagine esatta deve stare entro
 geografico metà di 1 cm in gradi all'equatore, più severo altrove) dal lato
 d'uscita, i punti del lato d'uscita entro la stessa distanza dalla spezzata
 delle immagini, e nessuna metà del lato può avere un'immagine più lunga di
-3/4 dell'intero (continuità). Altrimenti il lato si divide a metà nel CRS
-sorgente, fino a 24 livelli e a `MAX_CELL_COORDINATES` coordinate per cella:
+3/4 dell'intero (continuità). Con una griglia NTv2 nel percorso, in più,
+estremi e campioni devono stare nella **stessa cella** di ogni griglia (il
+campo di spostamenti è bilineare a pezzi: dentro una cella è quadratico
+lungo il lato e i campioni ne misurano lo scarto; un rilievo di un nodo fra
+due campioni non si perde), oppure l'immagine del lato deve essere più
+corta della tolleranza (il pezzo che attraversa un bordo di cella, ridotto
+per bisezione). Altrimenti il lato si divide a metà nel CRS sorgente, fino a
+48 livelli e a `MAX_CELL_COORDINATES` coordinate per cella:
 oltre, `REPROJECTION_EDGE_NOT_CONVERGED` (il caso tipico: un lato che nel
 target attraversa l'antimeridiano) o `ResourceLimit`. Le rette del target
 (meridiani in Mercator, paralleli in lon/lat) non ricevono punti. L'uscita
@@ -1631,6 +1669,16 @@ massimi (`cargo test -p plenora-core oracolo -- --nocapture`):
 | catene con cambio di datum | 6,7e-4 m (3035 → 4326: l'inversa LAEA di PROJ usa una serie troncata per la latitudine autalica; la nostra, per Newton, torna al punto entro 1e-8 m) |
 | catene nello stesso datum / con la griglia | 6,7e-9 m / 4,1e-6 m |
 
+**Vicino alle singolarità** (poli, bordi dei domini, limiti di Mercator)
+`scripts/genera_riferimenti_singolari.py` scrive `singolari.csv` con le
+formule chiuse EPSG a 60 cifre (mpmath 1.3.0, strumento di sviluppo, non
+dipendenza): LAEA a 5 cm e a 1 mm dal polo, Mercator e Pseudo Mercator a
+±85,05°, LCC, stereografica e svizzera ai bordi dei domini. Scarto massimo
+7,5e-9 m avanti e indietro. L'inversa e la diretta di LAEA calcolano `1 -
+sin(beta)` dalla colatitudine: prima `sin(phi)` arrotondava a 1 a pochi
+millimetri dal polo e il punto finiva sul polo (5,6 cm a terra). Transverse
+Mercator resta fuori (la forma di Karney è stabile fino al polo).
+
 Rigenerare: `PYTHONPATH=<dir> python -B scripts/genera_riproiezione.py`,
 poi `PYTHONPATH=<dir> python -B scripts/genera_oracolo_riproiezione.py`,
 `cargo fmt --all` e i test. I generatori controllano la terna
@@ -1646,8 +1694,11 @@ pyproj/PROJ/EPSG come `genera_crs_integrati.py`.
   punto sardo isolato prende la trasformazione sarda solo perché il suo
   riquadro, più piccolo, viene prima; una trasformazione di buona
   accuratezza su un'area offshore può coprire terraferma nel suo riquadro.
-  Le geometrie i cui vertici preferiscono percorsi diversi si rifiutano, ma
-  il controllo guarda i vertici, non i punti fra i vertici. L'accuratezza EPSG vale
+  Le geometrie con punti che preferiscono percorsi diversi si rifiutano; fra
+  i punti trasformati il controllo dei lati usa la corda lon/lat sorgente
+  contro il riquadro comune dei passi di ogni percorso precedente (per
+  eccesso: può rifiutare un lato che sfiora un riquadro senza che quel
+  percorso lo copra davvero, per esempio fuori dalla sua griglia). L'accuratezza EPSG vale
   nell'area vera, non nel riquadro. *Rientro:* poligoni delle aree d'uso
   (non nel `proj.db` distribuito), o `trasformazioni` per fissare il
   percorso.
@@ -1682,9 +1733,10 @@ pyproj/PROJ/EPSG come `genera_crs_integrati.py`.
   potrebbe scostarsene di più (per uno scarto a S circa il 3% oltre il
   valore campionato, dentro il margine di mezza precisione); sulle
   proiezioni della tabella (lisce nei loro domini) il controllo a 2.000
-  punti della prova resta entro la precisione. Anche l'area d'uso dei passi
-  e la copertura delle griglie si provano sui punti trasformati: un lato
-  può uscire da un riquadro o da una griglia fra due punti senza errore.
+  punti della prova resta entro la precisione. Con una griglia NTv2 la
+  verifica è per cella (sopra). La copertura di una griglia si prova sui
+  punti trasformati: un lato può uscire da una griglia e rientrarvi fra due
+  punti di celle diverse solo se la sua immagine è sotto la tolleranza.
 - **Griglie non verificate contro il registro.** Il file di `griglie` si
   lega al codice EPSG dichiarato dall'utente: che sia davvero la griglia di
   quella trasformazione (e quindi che valga la sua accuratezza) non si

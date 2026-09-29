@@ -67,6 +67,10 @@ pub struct OpzioniRiproiezione {
     /// Codici EPSG delle trasformazioni da usare, nell'ordine: il percorso
     /// e' esattamente questo (verso di ogni passo dedotto dai datum).
     pub trasformazioni: Option<Vec<u32>>,
+    /// Convenzione WGS 84 = famiglia ETRS89 (ETRS89, RDN2008): il passo
+    /// ETRS89 to WGS 84 (1) conta accuratezza 0. Assente vale `true`;
+    /// `false` usa l'accuratezza EPSG (1 m).
+    pub convenzione_wgs84_etrs89: Option<bool>,
 }
 
 /// Un passo di un percorso: una trasformazione EPSG in un verso.
@@ -74,7 +78,15 @@ pub struct OpzioniRiproiezione {
 pub struct PassoPercorso {
     trasformazione: &'static Trasformazione,
     inversa: bool,
+    /// Il passo e' ETRS89 to WGS 84 (1) con la convenzione di equivalenza
+    /// attiva: la sua accuratezza conta 0.
+    convenzione: bool,
 }
+
+/// Codice EPSG di ETRS89 to WGS 84 (1), il solo passo fra WGS 84 e la
+/// famiglia ETRS89 della tabella (RDN2008 vi arriva con EPSG:6710,
+/// accuratezza 0).
+pub const CODICE_ETRS89_WGS84: u32 = 1149;
 
 impl PassoPercorso {
     /// Codice EPSG della trasformazione.
@@ -96,10 +108,27 @@ impl PassoPercorso {
         self.inversa
     }
 
-    /// Accuratezza EPSG, in metri.
+    /// Accuratezza del passo nel percorso, in metri: quella EPSG, o 0 per
+    /// ETRS89 to WGS 84 (1) con la convenzione di equivalenza.
     #[must_use]
     pub const fn accuratezza_m(&self) -> f64 {
+        if self.convenzione {
+            0.0
+        } else {
+            self.trasformazione.accuratezza_m
+        }
+    }
+
+    /// Accuratezza EPSG del registro, in metri, anche per convenzione.
+    #[must_use]
+    pub const fn accuratezza_registro_m(&self) -> f64 {
         self.trasformazione.accuratezza_m
+    }
+
+    /// Il passo conta 0 per la convenzione WGS 84 = ETRS89.
+    #[must_use]
+    pub const fn per_convenzione(&self) -> bool {
+        self.convenzione
     }
 
     /// Il passo richiede una griglia `NTv2`.
@@ -258,7 +287,18 @@ impl PianoRiproiezione {
         }
         let da = sorgente.definizione.datum;
         let a = destinazione.definizione.datum;
-        let mut candidati = percorsi::enumera(da, a, &griglie);
+        let convenzione = opzioni.convenzione_wgs84_etrs89.unwrap_or(true);
+        let mut candidati = percorsi::enumera(da, a, &griglie, convenzione);
+        if opzioni.convenzione_wgs84_etrs89.is_some()
+            && !candidati
+                .iter()
+                .any(|percorso| percorso.codici().contains(&CODICE_ETRS89_WGS84))
+        {
+            return Err(CrsError::ReprojectionConfig(
+                "convenzione_wgs84_etrs89 senza effetto: nessun percorso passa da ETRS89 to \
+                 WGS 84 (1)",
+            ));
+        }
         if let Some(codici) = &opzioni.trasformazioni {
             candidati.retain(|percorso| percorso.codici() == *codici);
             if candidati.is_empty() {
@@ -481,6 +521,37 @@ impl Riproiettore {
         Ok((lon, lat))
     }
 
+    /// I riquadri d'uso dei passi del percorso `percorso` (vuoto per lo
+    /// stesso datum o per un indice fuori intervallo).
+    #[must_use]
+    pub fn aree_percorso(&self, percorso: usize) -> Vec<super::GeographicBounds> {
+        self.piano
+            .percorsi
+            .get(percorso)
+            .map(|p| {
+                p.passi
+                    .iter()
+                    .map(|passo| passo.trasformazione.area)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Come [`Self::trasforma`], con le lon/lat sorgente del punto e la
+    /// cella di griglia usata da ogni passo `NTv2`.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Self::trasforma`].
+    pub fn trasforma_dettagli(
+        &self,
+        percorso: usize,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<PuntoRiproiettato>, CrsError> {
+        self.calcola(percorso, x, y)
+    }
+
     /// Trasforma un punto lungo il percorso `percorso`.
     ///
     /// `Ok(None)` se il punto esce dall'area d'uso di un passo del percorso
@@ -499,6 +570,15 @@ impl Riproiettore {
         x: f64,
         y: f64,
     ) -> Result<Option<(f64, f64)>, CrsError> {
+        Ok(self.calcola(percorso, x, y)?.map(|p| (p.x, p.y)))
+    }
+
+    fn calcola(
+        &self,
+        percorso: usize,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<PuntoRiproiettato>, CrsError> {
         let passi = self
             .operazioni
             .get(percorso)
@@ -509,10 +589,18 @@ impl Riproiettore {
             let (lon, lat) = self.geografiche_sorgente(x, y)?;
             self.piano.destinazione.regione(lon, lat)?;
             validate_geometry_domain(std::iter::once((x, y)), &self.piano.destinazione.crs)?;
-            return Ok(Some((x, y)));
+            return Ok(Some(PuntoRiproiettato {
+                x,
+                y,
+                lon_sorgente: lon,
+                lat_sorgente: lat,
+                celle: [None; MAX_PASSI_PERCORSO],
+            }));
         }
-        let (mut lon, mut lat) = self.geografiche_sorgente(x, y)?;
-        for (passo, operazione) in passi {
+        let (lon_sorgente, lat_sorgente) = self.geografiche_sorgente(x, y)?;
+        let (mut lon, mut lat) = (lon_sorgente, lat_sorgente);
+        let mut celle = [None; MAX_PASSI_PERCORSO];
+        for (posizione, (passo, operazione)) in passi.iter().enumerate() {
             let trasformazione = passo.trasformazione;
             // Un passo a griglia non riduce la longitudine: il riquadro
             // d'uso la vuole in [-180, 180].
@@ -536,11 +624,23 @@ impl Riproiettore {
                         .ok_or(CrsError::ReprojectionConfig(
                             "griglia del piano non fornita",
                         ))?;
-                    if passo.inversa {
+                    // La cella dove si legge lo spostamento: nel verso del
+                    // registro al punto d'ingresso, nell'inverso al punto
+                    // trovato dall'iterazione.
+                    let uscita = if passo.inversa {
                         griglia.indietro(lon, lat)?
                     } else {
                         griglia.avanti(lon, lat)
+                    };
+                    let (clon, clat) = if passo.inversa {
+                        uscita.unwrap_or((lon, lat))
+                    } else {
+                        (lon, lat)
+                    };
+                    if let Some(cella) = celle.get_mut(posizione) {
+                        *cella = griglia.cella(clon, clat);
                     }
+                    uscita
                 }
             };
             let Some((nuova_lon, nuova_lat)) = nuovo else {
@@ -556,8 +656,28 @@ impl Riproiettore {
             .avanti(lon, lat)
             .map_err(errore_proiezione)?;
         validate_geometry_domain(std::iter::once((x, y)), &lato.crs)?;
-        Ok(Some((x, y)))
+        Ok(Some(PuntoRiproiettato {
+            x,
+            y,
+            lon_sorgente,
+            lat_sorgente,
+            celle,
+        }))
     }
+}
+
+/// Un punto trasformato con i dettagli che servono al kernel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PuntoRiproiettato {
+    /// Coordinate nel CRS d'arrivo.
+    pub x: f64,
+    pub y: f64,
+    /// Longitudine e latitudine nel datum sorgente.
+    pub lon_sorgente: f64,
+    pub lat_sorgente: f64,
+    /// Per ogni passo `NTv2`, la cella (sottogriglia, colonna, riga) il cui
+    /// campo bilineare ha dato lo spostamento; `None` per gli altri passi.
+    pub celle: [Option<(usize, usize, usize)>; MAX_PASSI_PERCORSO],
 }
 
 /// `true` se il CRS e' della tabella integrata e quindi riproiettabile.

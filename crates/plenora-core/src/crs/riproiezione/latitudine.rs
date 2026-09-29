@@ -7,6 +7,8 @@
 //! metodo di Newton a precisione di macchina. Da qui passano Transverse
 //! Mercator, Mercator, Lambert conica, stereografica e Hotine.
 
+use std::f64::consts::FRAC_PI_2;
+
 /// `e * atanh(e * x)`, con `e` eccentricita' (sempre positiva nella tabella).
 pub(super) fn eatanhe(x: f64, e: f64) -> f64 {
     e * (e * x).atanh()
@@ -67,25 +69,55 @@ pub(super) fn q_autalica(phi: f64, e: f64) -> f64 {
     (1.0 - e2) * (s / (e2 * s).mul_add(-s, 1.0) + (e * s).atanh() / e)
 }
 
-/// Latitudine geodetica da `q` ([`q_autalica`]), per Newton (Snyder 3-16).
-///
-/// Converge a precisione di macchina; oltre `qp` (polo) restituisce il
-/// polo. `None` se non converge: non si inventa una latitudine.
-pub(super) fn da_q_autalica(q: f64, qp: f64, e: f64) -> Option<f64> {
+/// `qp - q` in funzione della colatitudine `chi = pi/2 - |phi|`, senza
+/// cancellazioni vicino al polo: con `u = 1 - sin|phi| = 2 sin^2(chi/2)`,
+/// `1/(1-e^2) - s/(1-e^2 s^2) = u (1 + e^2 s) / ((1-e^2)(1-e^2 s^2))` e
+/// `atanh(e) - atanh(e s) = atanh(e u / (1 - e^2 s))`.
+fn qp_meno_q(chi: f64, e: f64) -> f64 {
     let e2 = e * e;
-    if q.abs() >= qp {
-        return Some(std::f64::consts::FRAC_PI_2.copysign(q));
+    let meta = (chi / 2.0).sin();
+    let u = 2.0 * meta * meta;
+    let s = 1.0 - u;
+    (1.0 - e2)
+        * (u * e2.mul_add(s, 1.0) / ((1.0 - e2) * (e2 * s).mul_add(-s, 1.0))
+            + (e * u / e2.mul_add(-s, 1.0)).atanh() / e)
+}
+
+/// Seno e coseno della latitudine autalica `beta` (EPSG 9820), stabili
+/// anche a pochi millimetri dal polo: si calcola `w = 1 - sin|beta| =
+/// (qp - q) / qp` dalla colatitudine, non `q / qp` da `sin(phi)` (che
+/// vicino al polo arrotonda a 1 e porta ogni punto sul polo).
+pub(super) fn beta_autalica(phi: f64, qp: f64, e: f64) -> (f64, f64) {
+    let chi = (FRAC_PI_2 - phi.abs()).max(0.0);
+    let w = (qp_meno_q(chi, e) / qp).clamp(0.0, 1.0);
+    ((1.0 - w).copysign(phi), (w * (2.0 - w)).sqrt())
+}
+
+/// Latitudine geodetica dalla latitudine autalica data come seno e coseno
+/// (inversa di [`beta_autalica`]): Newton sulla colatitudine, con la stessa
+/// forma senza cancellazioni. `None` se non converge.
+pub(super) fn da_beta_autalica(seno: f64, coseno: f64, qp: f64, e: f64) -> Option<f64> {
+    let e2 = e * e;
+    // Colatitudine autalica, accurata anche vicino al polo (atan2).
+    let chi_beta = coseno.abs().atan2(seno.abs());
+    let meta = (chi_beta / 2.0).sin();
+    let obiettivo = qp * 2.0 * meta * meta;
+    if obiettivo == 0.0 {
+        return Some(FRAC_PI_2.copysign(seno));
     }
-    let mut phi = (q / 2.0).asin();
-    for _ in 0..30 {
-        let s = phi.sin();
-        let c = phi.cos();
-        let uno_meno = (e2 * s).mul_add(-s, 1.0);
-        let delta =
-            uno_meno * uno_meno / (2.0 * c) * (q / (1.0 - e2) - s / uno_meno - (e * s).atanh() / e);
-        phi += delta;
-        if delta.abs() <= 1e-15 {
-            return Some(phi);
+    let mut chi = chi_beta;
+    for _ in 0..40 {
+        let (sc, cc) = chi.sin_cos();
+        let denominatore = (e2 * cc).mul_add(-cc, 1.0);
+        let derivata = 2.0 * (1.0 - e2) * sc / (denominatore * denominatore);
+        let passo = (qp_meno_q(chi, e) - obiettivo) / derivata;
+        if !passo.is_finite() {
+            return None;
+        }
+        chi -= passo;
+        // Relativa alla colatitudine: 1e-14 rad per rad, sotto 1e-7 m a terra.
+        if passo.abs() <= 1e-14f64.mul_add(chi.abs(), f64::MIN_POSITIVE) {
+            return Some((FRAC_PI_2 - chi).copysign(seno));
         }
     }
     None

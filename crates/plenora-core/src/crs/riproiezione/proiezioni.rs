@@ -27,7 +27,9 @@
 use std::f64::consts::FRAC_PI_2;
 
 use super::super::Ellipsoid;
-use super::latitudine::{da_isometrica, da_q_autalica, isometrica, q_autalica, tau_da_taup, taup};
+use super::latitudine::{
+    beta_autalica, da_beta_autalica, da_isometrica, isometrica, q_autalica, tau_da_taup, taup,
+};
 use super::tabella::MetodoProiezione;
 
 /// Un metodo di proiezione con le costanti gia' calcolate.
@@ -549,21 +551,20 @@ impl Laea {
     }
 
     fn avanti(&self, lambda: f64, phi: f64) -> Result<(f64, f64), ErroreProiezione> {
-        let q = q_autalica(phi, self.e);
-        let beta = (q / self.qp).clamp(-1.0, 1.0).asin();
+        let (seno_beta, coseno_beta) = beta_autalica(phi, self.qp, self.e);
         let dl = riduci(lambda - self.lon0);
         let denominatore =
-            1.0 + self.seno_beta0 * beta.sin() + self.coseno_beta0 * beta.cos() * dl.cos();
+            1.0 + self.seno_beta0 * seno_beta + self.coseno_beta0 * coseno_beta * dl.cos();
         if denominatore <= 0.0 {
             // Antipodo del centro: la proiezione non e' definita.
             return Err(ErroreProiezione::FuoriDominio);
         }
         let b = self.rq * (2.0 / denominatore).sqrt();
         Ok((
-            self.falsa_est + b * self.d * beta.cos() * dl.sin(),
+            self.falsa_est + b * self.d * coseno_beta * dl.sin(),
             self.falsa_nord
                 + (b / self.d)
-                    * (self.coseno_beta0 * beta.sin() - self.seno_beta0 * beta.cos() * dl.cos()),
+                    * (self.coseno_beta0 * seno_beta - self.seno_beta0 * coseno_beta * dl.cos()),
         ))
     }
 
@@ -572,7 +573,7 @@ impl Laea {
         let dy = self.d * (y - self.falsa_nord);
         let rho = dx.hypot(dy);
         if rho == 0.0 {
-            let phi = da_q_autalica(self.qp * self.seno_beta0, self.qp, self.e)
+            let phi = da_beta_autalica(self.seno_beta0, self.coseno_beta0, self.qp, self.e)
                 .ok_or(ErroreProiezione::NonConvergente)?;
             return Ok((self.lon0, phi));
         }
@@ -582,12 +583,14 @@ impl Laea {
         }
         let c = 2.0 * rapporto.asin();
         let (sc, cc) = c.sin_cos();
-        let beta = (cc * self.seno_beta0 + dy * sc * self.coseno_beta0 / rho)
-            .clamp(-1.0, 1.0)
-            .asin();
-        let dl = (dx * self.d * sc)
-            .atan2(self.d * rho * self.coseno_beta0 * cc - self.d * dy * self.seno_beta0 * sc);
-        let phi = da_q_autalica(self.qp * beta.sin(), self.qp, self.e)
+        // Seno e coseno di beta dalle componenti sulla sfera autalica: il
+        // coseno come ipotenusa, accurato anche vicino al polo.
+        let seno_beta = cc * self.seno_beta0 + dy * sc * self.coseno_beta0 / rho;
+        let est = dx * sc / rho;
+        let nord = self.coseno_beta0 * cc - dy * self.seno_beta0 * sc / rho;
+        let coseno_beta = est.hypot(nord);
+        let dl = est.atan2(nord);
+        let phi = da_beta_autalica(seno_beta, coseno_beta, self.qp, self.e)
             .ok_or(ErroreProiezione::NonConvergente)?;
         Ok((self.lon0 + dl, phi))
     }
