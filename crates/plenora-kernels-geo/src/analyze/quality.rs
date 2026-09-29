@@ -29,7 +29,7 @@ use super::{
 /// nuovo con le colonne diagnostiche non-null elencate piu' la geometria WKB
 /// non-null (nuovo `FieldId`, CRS dell'input); proprieta' azzerate.
 ///
-/// I metadati dello SCHEMA di input sono conservati (R2.4): riguardano il
+/// I metadati dello SCHEMA di input sono conservati: riguardano il
 /// dataset, non le colonne attributo soppresse.
 pub(in crate::analyze) fn analyze_coverage_rows(
     geometry: &GeometryColumnContract,
@@ -37,10 +37,10 @@ pub(in crate::analyze) fn analyze_coverage_rows(
     columns: &[(&str, DataType)],
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
-    // Invariante: le op di copertura dichiarano un `CrsRequirement` e il gate
-    // R4.6.3 di `dispatch` le ferma prima di arrivare qui se il CRS e'
-    // `Missing` — un `None` sarebbe una violazione della catena di analyze,
-    // mai uno stato da interpretare.
+    // Invariante: le op di copertura dichiarano un `CrsRequirement` e
+    // `dispatch::require_resolved_crs` le ferma prima di arrivare qui se il
+    // CRS non e' risolto: un `None` sarebbe una violazione della catena di
+    // analyze, mai uno stato da interpretare.
     let crs = geometry.crs.as_resolved().ok_or_else(|| {
         PlenoraError::Internal(
             "op di copertura senza CRS risolto: gate del requisito bypassato".to_owned(),

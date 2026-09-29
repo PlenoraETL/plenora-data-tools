@@ -159,10 +159,12 @@ fn candidate_pairs(
 /// Tipo di issue di copertura (solo overlap: i gap non sono rilevati).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoverageIssueType {
+    /// Due poligoni si sovrappongono per un'area maggiore della tolleranza.
     Overlap,
 }
 
 impl CoverageIssueType {
+    /// Il valore della colonna `issue_type`: `overlap`.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -175,10 +177,15 @@ impl CoverageIssueType {
 /// geometria della zona sovrapposta.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoverageIssue {
+    /// Il tipo, oggi sempre [`CoverageIssueType::Overlap`].
     pub issue_type: CoverageIssueType,
+    /// Posizione della prima geometria nell'ingresso.
     pub index_a: u64,
+    /// Posizione della seconda geometria, maggiore di `index_a`.
     pub index_b: u64,
+    /// Area della sovrapposizione, calcolata sul risultato dell'overlay.
     pub area: f64,
+    /// La zona sovrapposta: `Polygon` se una, `MultiPolygon` se piu'.
     pub geometry: Geometry<f64>,
 }
 
@@ -264,6 +271,11 @@ fn coverage_validate_elements(
 /// - `IssueLimit`: le issue superano `max_issues` (fail-closed, non tronca).
 /// - `InvalidOutput`: la geometria di overlap prodotta non e' valida.
 /// - `IndexOverflow`: un conteggio non e' rappresentabile come `u64`.
+/// - `PrecisionInsufficient`: la griglia di `i_overlay` sull'ingombro di
+///   una coppia sposterebbe il risultato oltre `precision / 2`, o le
+///   coordinate sono troppo rade per `precision`.
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: una validazione OGC
+///   che non conclude o un panico di `geo`, `i_overlay` o `rstar` (interni).
 pub fn coverage_validate(
     geometries: &[Geometry<f64>],
     tolerance: f64,
@@ -301,10 +313,15 @@ fn coverage_error(error: &ExtensionError) -> PlenoraError {
 /// (adapter per il canone GeoArrow-WKB).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoverageIssueRow {
+    /// Il valore di `issue_type` ([`CoverageIssueType::name`]).
     pub issue_type: &'static str,
+    /// Come [`CoverageIssue::index_a`].
     pub index_a: u64,
+    /// Come [`CoverageIssue::index_b`].
     pub index_b: u64,
+    /// Come [`CoverageIssue::area`].
     pub area: f64,
+    /// La zona sovrapposta in WKB XY.
     pub wkb: Vec<u8>,
 }
 
@@ -314,11 +331,16 @@ pub struct CoverageIssueRow {
 /// # Errors
 ///
 /// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
-///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
-///   `ExtensionError` mappati preservando il messaggio) o la codifica WKB
+///   o non supera la validazione OGC (come `decode_geometry_cell`), il kernel
+///   rifiuta l'input (errori `ExtensionError` tradotti da
+///   [`ExtensionError::del_passo`], messaggio preservato) o la codifica WKB
 ///   di una issue fallisce.
 /// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
-///   preservabili nel protocollo 2D.
+///   preservabili nel protocollo 2D, o il kernel rende
+///   `PrecisionInsufficient`.
+/// - `PlenoraError::ResourceLimit`: una cella, o la geometria di una issue,
+///   oltre il limite di byte per cella.
+/// - `PlenoraError::Internal`: gli errori interni del kernel.
 pub fn coverage_validate_rows(
     cells: &BinaryArray,
     tolerance: f64,
@@ -351,9 +373,13 @@ pub fn coverage_validate_rows(
 /// se segmento unico, `MultiLineString` altrimenti).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SharedPath {
+    /// Posizione della prima geometria nell'ingresso.
     pub index_a: u64,
+    /// Posizione della seconda geometria, maggiore di `index_a`.
     pub index_b: u64,
+    /// Somma delle lunghezze dei tratti tenuti.
     pub shared_length: f64,
+    /// I tratti: `LineString` se uno, `MultiLineString` di segmenti se piu'.
     pub geometry: Geometry<f64>,
 }
 
@@ -428,6 +454,8 @@ fn shared_boundary_segments(
 ///   infinite.
 /// - `InvalidOutput`: la geometria prodotta non e' valida.
 /// - `IndexOverflow`: un conteggio non e' rappresentabile come `u64`.
+/// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: una validazione OGC
+///   che non conclude o un panico di `geo` o `rstar` (interni).
 pub fn shared_paths(
     geometries: &[Geometry<f64>],
     tolerance: f64,
@@ -506,9 +534,13 @@ fn shared_paths_error(error: &ExtensionError) -> PlenoraError {
 /// Riga di output di `geo.shared_paths` con geometria codificata WKB.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SharedPathRow {
+    /// Come [`SharedPath::index_a`].
     pub index_a: u64,
+    /// Come [`SharedPath::index_b`].
     pub index_b: u64,
+    /// Come [`SharedPath::shared_length`].
     pub shared_length: f64,
+    /// I tratti in WKB XY.
     pub wkb: Vec<u8>,
 }
 
@@ -519,11 +551,15 @@ pub struct SharedPathRow {
 /// # Errors
 ///
 /// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
-///   (come `decode_geometry_cell`), il kernel rifiuta l'input (errori
-///   `ExtensionError` mappati preservando il messaggio) o la codifica WKB
+///   o non supera la validazione OGC (come `decode_geometry_cell`), il kernel
+///   rifiuta l'input (errori `ExtensionError` tradotti da
+///   [`ExtensionError::del_passo`], messaggio preservato) o la codifica WKB
 ///   di un tratto fallisce.
 /// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
 ///   preservabili nel protocollo 2D.
+/// - `PlenoraError::ResourceLimit`: una cella, o la geometria di un tratto,
+///   oltre il limite di byte per cella.
+/// - `PlenoraError::Internal`: gli errori interni del kernel.
 pub fn shared_paths_rows(
     cells: &BinaryArray,
     tolerance: f64,

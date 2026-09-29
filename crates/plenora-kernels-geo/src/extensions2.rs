@@ -10,8 +10,9 @@
 //!   a lato `cell_size`, emessi solo se interamente contenuti nell'extent.
 //!   Il limite [`MAX_GRID_CELLS`] e' verificato prima dell'allocazione.
 //! - `subdivide` taglia ricorsivamente i poligoni (somma delle aree
-//!   preservata, profondita' limitata da [`MAX_SUBDIVIDE_DEPTH`]) e spezza a
-//!   blocchi linee e `MultiPoint`; sotto soglia la geometria passa invariata.
+//!   preservata entro la precisione, profondita' limitata da
+//!   [`MAX_SUBDIVIDE_DEPTH`]) e spezza a blocchi linee e `MultiPoint`; sotto
+//!   soglia la geometria passa invariata.
 //! - `snap` e' nativo (R-tree, niente GEOS): a parita' di distanza la scelta
 //!   e' deterministica ma non specificata; l'output e' validato.
 
@@ -50,16 +51,24 @@ pub const MAX_GRID_CELLS: u64 = 1_000_000;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GridShape {
+    /// `square`: quadrati di lato `cell_size` che coprono l'extent, tagliati
+    /// sul suo bordo.
     Square,
+    /// `hex`: esagoni con un lato in alto, di lato `cell_size`, solo se
+    /// interamente contenuti nell'extent.
     Hex,
 }
 
 /// Extent della griglia: finito, non degenere (`xmax > xmin`, `ymax > ymin`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridExtent {
+    /// Ascissa minima.
     pub xmin: f64,
+    /// Ordinata minima.
     pub ymin: f64,
+    /// Ascissa massima.
     pub xmax: f64,
+    /// Ordinata massima.
     pub ymax: f64,
 }
 
@@ -116,10 +125,15 @@ impl GridExtent {
 /// dell'esagono).
 #[derive(Clone, Debug, PartialEq)]
 pub struct GridCell {
+    /// Indice di colonna, da 0 a partire da `xmin`.
     pub cell_i: u64,
+    /// Indice di riga, da 0 a partire da `ymin`.
     pub cell_j: u64,
+    /// Il poligono della cella.
     pub geometry: Geometry<f64>,
+    /// Ascissa del centro.
     pub centroid_x: f64,
+    /// Ordinata del centro.
     pub centroid_y: f64,
 }
 
@@ -174,9 +188,8 @@ fn hex_centers(
 ) -> Result<Vec<(u64, u64, f64, f64)>, ExtensionError> {
     let vertical_step = cell_size * 3.0_f64.sqrt();
     let column_step = 1.5 * cell_size;
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e i
+    // bit della forma non fusa sono il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     let columns_f = ((extent.width() - 2.0 * cell_size) / column_step).floor();
     let columns = if extent.width() >= 2.0 * cell_size
@@ -267,9 +280,8 @@ fn square_cell(extent: &GridExtent, cell_size: f64, cell_i: u64, cell_j: u64) ->
     // cell_i e cell_j sono minori delle dimensioni della griglia, il cui
     // prodotto e' <= MAX_GRID_CELLS (verificato in square_dimensions):
     // ben sotto 2^52, le conversioni in f64 sono esatte.
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e i
+    // bit della forma non fusa sono il contratto numerico.
     #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
     let x0 = extent.xmin + cell_i as f64 * cell_size;
     let x1 = (x0 + cell_size).min(extent.xmax);
@@ -353,10 +365,15 @@ pub fn generate_grid(
 /// canone GeoArrow-WKB).
 #[derive(Clone, Debug, PartialEq)]
 pub struct GridRow {
+    /// Indice di colonna, come in [`GridCell`].
     pub cell_i: u64,
+    /// Indice di riga, come in [`GridCell`].
     pub cell_j: u64,
+    /// Il poligono della cella in WKB XY.
     pub wkb: Vec<u8>,
+    /// Ascissa del centro.
     pub centroid_x: f64,
+    /// Ordinata del centro.
     pub centroid_y: f64,
 }
 
@@ -370,9 +387,9 @@ fn grid_error(error: &ExtensionError) -> PlenoraError {
 /// # Errors
 ///
 /// `PlenoraError::InvalidPlan` per gli errori di [`generate_grid`] (messaggio
-/// con prefisso `geo.generate_grid:`) o per la codifica WKB di una cella
-/// (`encode_geometry`: serializzazione fallita o payload oltre il limite
-/// per cella).
+/// con prefisso `geo.generate_grid:`) o per una serializzazione WKB fallita;
+/// `PlenoraError::ResourceLimit` per una cella oltre il limite di byte per
+/// cella.
 pub fn generate_grid_rows(
     extent: &GridExtent,
     cell_size: f64,
@@ -585,6 +602,9 @@ fn subdivide_validated(
 ///   dalla griglia di `i_overlay`, che sposterebbe una parte oltre la
 ///   precisione dichiarata (`precision`, nelle unita' delle
 ///   coordinate: `Precision::from_crs` con un CRS, altrimenti esplicita).
+/// - `ExtensionError::ValidazioneNonConclusa`,
+///   `ExtensionError::CalcoloNonConcluso`: una validazione OGC che non
+///   conclude o un panico di `geo`/`i_overlay` (interni).
 pub fn subdivide(
     geometry: &Geometry<f64>,
     max_vertices: usize,
@@ -605,10 +625,15 @@ fn subdivide_error(error: &ExtensionError) -> PlenoraError {
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` per gli errori di `subdivide_validated` e di
-/// `max_vertices` non valido (messaggio con prefisso `geo.subdivide:`), per
-/// il decode della cella WKB (`decode_geometry_cell`) o per la codifica WKB
-/// di una parte (`encode_geometry`).
+/// Con prefisso `geo.subdivide:` (tradotti da [`ExtensionError::del_passo`]):
+/// `PlenoraError::InvalidPlan` per `max_vertices` non valido, taglio che non
+/// converge o parte invalida; `PlenoraError::Unsupported` per
+/// `PrecisionInsufficient`; `PlenoraError::Internal` per un panico o una
+/// validazione che non conclude. Dal decode della cella
+/// (`decode_geometry_cell`) e dalla codifica delle parti (`encode_geometry`):
+/// `InvalidPlan` per un WKB malformato o OGC-invalido, `Unsupported` per
+/// dimensioni Z/M o SRID, `ResourceLimit` per una cella oltre il limite di
+/// byte.
 pub fn subdivide_wkb(
     payload: &[u8],
     max_vertices: usize,
@@ -680,6 +705,9 @@ fn snap_validated(
 ///   negativa.
 /// - `ExtensionError::InvalidOutput`: la geometria snappata non supera
 ///   la validazione OGC (lo snap puo' collassare anelli).
+/// - `ExtensionError::ValidazioneNonConclusa`,
+///   `ExtensionError::CalcoloNonConcluso`: una validazione OGC che non
+///   conclude o un panico nell'R-tree o in `geo` (interni).
 pub fn snap(
     geometry: &Geometry<f64>,
     reference: &Geometry<f64>,
@@ -706,9 +734,12 @@ fn snap_error(error: &ExtensionError) -> PlenoraError {
 ///
 /// `PlenoraError::InvalidPlan` se il riferimento non supera la validazione
 /// OGC o `tolerance` non e' finita o e' negativa (messaggio con prefisso
-/// `geo.snap:`), per il decode/encode WKB di una cella
-/// (`decode_geometry_cell`, `encode_geometry`) o se lo snap di una cella
-/// produce una geometria non valida (prefisso `geo.snap:`).
+/// `geo.snap:`), per un WKB di cella malformato o OGC-invalido, o se lo snap
+/// di una cella produce una geometria non valida (prefisso `geo.snap:`);
+/// `PlenoraError::Unsupported` per una cella con dimensioni Z/M o SRID;
+/// `PlenoraError::ResourceLimit` per una cella oltre il limite di byte;
+/// `PlenoraError::Internal` per un panico o una validazione che non
+/// conclude. Vince la prima cella che fallisce in ordine di riga.
 pub fn snap_column(
     cells: &BinaryArray,
     reference: &Geometry<f64>,

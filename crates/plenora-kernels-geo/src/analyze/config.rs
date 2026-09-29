@@ -194,10 +194,13 @@ pub struct VoronoiConfig {
     pub max_points: Option<u64>,
 }
 
+/// `polygonize`: entrambi i campi facoltativi.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolygonizeConfig {
+    /// Noda le linee negli incroci prima del grafo; assente vale `true`.
     pub node_input: Option<bool>,
+    /// Fallisce se restano residui; assente vale `false`.
     pub require_complete: Option<bool>,
 }
 
@@ -235,10 +238,15 @@ pub struct OtherWkbConfig {
     pub output_column: Option<String>,
 }
 
+/// `split`: la lama dalla config, nello stesso CRS della colonna.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SplitConfig {
+    /// La lama, WKB esadecimale: struttura, validita' OGC e coordinate nel
+    /// dominio del CRS della colonna, verificate in analisi.
     pub other_wkb: String,
+    /// Tolleranza del taglio delle sorgenti `LineString`, finita e non
+    /// negativa; assente vale `0`. Sulle sorgenti poligonali non ha effetto.
     pub tolerance: Option<f64>,
 }
 
@@ -273,14 +281,19 @@ pub struct OverlayConfig {
     pub mode: OverlayMode,
 }
 
-/// `from_wkt`: colonna Utf8 con il testo WKT; la politica `on_error`
-/// (default `null`) e' semantica di runtime, qui solo validata.
+/// `from_wkt`: colonna `Utf8` con il testo WKT. `on_error` (default `null`)
+/// si valida qui e non cambia nulla: entrambi i valori rifiutano la colonna
+/// al primo WKT invalido.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FromWktConfig {
+    /// La colonna `Utf8` da leggere; non vuota.
     pub wkt_column: String,
+    /// Nome della colonna geometria creata; assente vale `geometry`.
     pub output_column: Option<String>,
+    /// `null` o `fail`; assente vale `null`.
     pub on_error: Option<crate::extensions::OnWktError>,
+    /// CRS della colonna creata; assente vale il CRS di piano.
     pub crs: Option<String>,
 }
 
@@ -288,11 +301,17 @@ pub struct FromWktConfig {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessorFieldParam {
+    /// `geometry_type`: il nome del tipo (`Utf8`).
     GeometryType,
+    /// `num_geometries`: le parti (`UInt64`).
     NumGeometries,
+    /// `num_interior_rings`: gli anelli interni (`UInt64`).
     NumInteriorRings,
+    /// `start_point`: il primo punto di una linea aperta, in WKT (`Utf8`).
     StartPoint,
+    /// `end_point`: l'ultimo punto di una linea aperta, in WKT (`Utf8`).
     EndPoint,
+    /// `is_closed`: se la geometria e' chiusa (`Boolean`).
     IsClosed,
 }
 
@@ -311,34 +330,52 @@ impl AccessorFieldParam {
     }
 }
 
+/// `geometry_accessors`: entrambi i campi facoltativi.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeometryAccessorsConfig {
+    /// Colonne da aggiungere, non vuota e senza ripetizioni; assente vale
+    /// tutte e sei. Escono sempre nell'ordine di
+    /// [`super::ACCESSOR_COLUMNS`].
     pub fields: Option<Vec<AccessorFieldParam>>,
+    /// Prefisso dei nomi delle colonne aggiunte; assente vale `""`.
     pub output_prefix: Option<String>,
 }
 
+/// `collect`: le chiavi di gruppo.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CollectConfig {
+    /// Colonne dell'ingresso, non vuota, senza ripetizioni, senza la
+    /// colonna geometria.
     pub group_by: Vec<String>,
 }
 
+/// `line_locate_point`: il punto dalla config, nello stesso CRS della
+/// colonna.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LineLocatePointConfig {
+    /// Il punto, WKB esadecimale di un `Point` valido nel dominio del CRS
+    /// della colonna.
     pub point_wkb: String,
+    /// Nome della colonna aggiunta; assente vale `fraction`.
     pub output_column: Option<String>,
 }
 
 /// Extent di `generate_grid`: finito e non degenere (dominio verificato dal
-/// kernel [`crate::extensions2::GridExtent`]).
+/// kernel [`crate::extensions2::GridExtent`]), con i quattro vertici nel
+/// dominio del CRS della griglia.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GridExtentConfig {
+    /// Ascissa minima.
     pub xmin: f64,
+    /// Ordinata minima.
     pub ymin: f64,
+    /// Ascissa massima, maggiore di `xmin`.
     pub xmax: f64,
+    /// Ordinata massima, maggiore di `ymin`.
     pub ymax: f64,
 }
 
@@ -347,10 +384,15 @@ pub struct GridExtentConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GenerateGridConfig {
+    /// Il rettangolo da coprire.
     pub extent: GridExtentConfig,
+    /// Lato della cella, finito e positivo.
     pub cell_size: f64,
+    /// `square` o `hex`; assente vale `square`.
     pub shape: Option<crate::extensions2::GridShape>,
+    /// CRS della griglia; assente vale il CRS di piano.
     pub crs: Option<String>,
+    /// Aggiunge `centroid_x` e `centroid_y`; assente vale `false`.
     pub include_centroid: Option<bool>,
 }
 
@@ -359,16 +401,21 @@ pub struct GenerateGridConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubdivideConfig {
+    /// Vertici massimi per parte, almeno
+    /// [`crate::extensions2::MIN_SUBDIVIDE_VERTICES`].
     pub max_vertices: usize,
+    /// Nuovo nome della colonna geometria; assente la lascia com'e'.
     pub output_column: Option<String>,
 }
 
-/// `snap`: riferimento WKB hex da config (convenzione D16, stesso CRS
-/// dell'input), validato strutturalmente e decodificato in analisi.
+/// `snap`: riferimento WKB esadecimale dalla config, nello stesso CRS della
+/// colonna, decodificato e validato (OGC e dominio del CRS) in analisi.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SnapConfig {
+    /// Il riferimento: ne contano solo i vertici.
     pub reference_wkb: String,
+    /// Distanza massima d'aggancio, finita e non negativa.
     pub tolerance: f64,
 }
 
@@ -377,7 +424,10 @@ pub struct SnapConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoverageValidateConfig {
+    /// Area minima segnalata (strettamente maggiore), finita e non
+    /// negativa.
     pub tolerance: Option<f64>,
+    /// Sovrapposizioni massime, maggiore di zero: oltre, errore.
     pub max_issues: Option<usize>,
 }
 
@@ -386,7 +436,11 @@ pub struct CoverageValidateConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SharedPathsConfig {
+    /// Lunghezza sotto cui (compresa) un tratto condiviso si scarta,
+    /// finita e non negativa.
     pub tolerance: Option<f64>,
+    /// Lunghezza condivisa totale minima di una coppia, finita e non
+    /// negativa.
     pub min_length: Option<f64>,
 }
 
@@ -395,7 +449,10 @@ pub struct SharedPathsConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClusterDbscanConfig {
+    /// Raggio del vicinato, finito e positivo.
     pub eps: f64,
+    /// Punti minimi del vicinato di un core, almeno 1.
     pub min_points: usize,
+    /// Nome della colonna dell'etichetta.
     pub output_column: Option<String>,
 }

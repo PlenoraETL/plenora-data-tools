@@ -4,8 +4,9 @@
 //! Il modulo `griglia` applica la stessa precisione dichiarata alle
 //! operazioni che passano dalla griglia intera di `i_overlay` (booleane,
 //! `dissolve`, `clip`, `overlay`, `clean_topology`, buffer, `subdivide`,
-//! `coverage_validate`): passo della griglia a priori, spostamento del
-//! risultato a posteriori (README, «Limiti dichiarati»).
+//! `coverage_validate`): passo della griglia e spostamento controllati a
+//! priori, senza controlli a posteriori del risultato (README, «Precisione
+//! delle operazioni geografiche: 1 cm a terra»).
 //!
 //! Sostituisce `geos_backend` di `plenora-data-tools@190c493` con le stesse
 //! firme e gli stessi nomi d'errore, senza dipendenze native.
@@ -50,7 +51,7 @@
 //!     `PolygonizeError::NumericRange` sostituisce il segno indovinato. Un
 //!     test del laboratorio cambia attesa per questo: un triangolo di area
 //!     circa 3,45e-31 che GEOS scarta come anello invalido e' ora un
-//!     poligono (vedi `README.md`). Nessun chiamante di [`exact`] traduce
+//!     poligono (README, «Differenze da GEOS»). Nessun chiamante di [`exact`] traduce
 //!     un esito non decidibile in una decisione: `polygonize` e
 //!     `make_valid` restituiscono `NumericRange`, e `split::face_sample`
 //!     rinuncia al verso e passa a `interior_point`;
@@ -123,7 +124,8 @@
 //!   della griglia, diviso fra gli overlay in catena. Gli agganci interni di
 //!   `i_overlay` allo split dei segmenti, con raggio che cresce a ogni giro,
 //!   non hanno un limite a priori e nessun controllo a posteriori li vede
-//!   (README, «Limiti dichiarati»). Prima di tutto, la
+//!   (README, «Precisione delle operazioni geografiche: 1 cm a terra»,
+//!   «Hazard»). Prima di tutto, la
 //!   spaziatura dei `f64` al modulo massimo delle coordinate non supera
 //!   `p / 64` (`precision::coordinate_abbastanza_fitte`), in `polygonize` e
 //!   negli overlay.
@@ -142,7 +144,7 @@
 //!   [`RustBackendError::UnboundedLimits`] prima di toccare i dati (GEOS lo
 //!   accettava). Un limite superato e' un errore, mai un output troncato.
 //! - **Panici delle dipendenze**: il kernel gira dietro
-//!   [`calcolo_protetto`](crate::calcolo_protetto); un panico di `geo` o
+//!   `calcolo_protetto`; un panico di `geo` o
 //!   `i_overlay` diventa [`RustBackendError::CalcoloNonConcluso`], interno,
 //!   con la sola forma del payload.
 //! - **Errori senza dati**: nessun messaggio porta coordinate, aree o testo
@@ -153,7 +155,7 @@
 //!
 //! Le differenze operazione per operazione sono nella documentazione di
 //! [`make_valid_wkb`], [`polygonize_linework`] e
-//! [`split_polygon_by_linework`], e in `README.md` («Differenze da GEOS»).
+//! [`split_polygon_by_linework`], e nel README («Differenze da GEOS»).
 
 pub mod arrow;
 pub(crate) mod buffer;
@@ -236,35 +238,61 @@ impl RepairMethod {
 /// meno `Geos`, piu' quelle che solo il kernel Rust puo' dare.
 #[derive(Debug, Error)]
 pub enum RustBackendError {
+    /// L'ingresso viola il contratto WKB o la validazione del workspace
+    /// (struttura, coordinate non finite, dimensioni, OGC): l'errore del
+    /// contratto, passato com'e'.
     #[error(transparent)]
     InputContract(#[from] PlenoraError),
+    /// La riparazione di `make_valid` e' uscita ancora invalida, per il
+    /// kernel o per la validazione del workspace.
     #[error("make-valid ha prodotto una geometria ancora non valida")]
     InvalidRepair,
+    /// Il tipo dell'ingresso non e' quello che l'operazione tratta
+    /// (linework per `polygonize` e per la lama di `split`, poligonale per la
+    /// sorgente di `split`).
     #[error("tipo geometria non supportato da {operation}: {actual}")]
     UnsupportedGeometry {
+        /// L'operazione pubblica che ha rifiutato l'ingresso.
         operation: &'static str,
+        /// Il tipo ricevuto.
         actual: &'static str,
     },
+    /// Coordinate d'ingresso oltre il limite.
     #[error("coordinate oltre il limite di {limit}: {actual}")]
     CoordinateLimit { actual: u64, limit: u64 },
+    /// Geometrie o coordinate d'uscita (facce intermedie comprese) oltre il
+    /// limite.
     #[error("output oltre il limite di {limit}: {actual}")]
     OutputLimit { actual: u64, limit: u64 },
+    /// Lavoro di noding oltre il limite: coppie di segmenti esaminate per
+    /// `polygonize` e `split`, quadrato dei segmenti per `make_valid`.
     #[error("lavoro di noding oltre il limite di {limit}: {actual}")]
     WorkLimit { actual: u64, limit: u64 },
+    /// `require_complete` attivo e residui presenti: il numero per classe
+    /// (conteggi, non dati di cella).
     #[error(
         "polygonize incompleto: cuts={cuts}, dangles={dangles}, invalid_rings={invalid_rings}"
     )]
     IncompletePolygonize {
+        /// Residui `cut_edge`.
         cuts: usize,
+        /// Residui `dangle`.
         dangles: usize,
+        /// Residui `invalid_ring`.
         invalid_rings: usize,
     },
     /// L'output del kernel non supera la sua stessa validazione. Il payload
     /// e' il passo, mai il testo del validatore.
     #[error("output del backend Rust non valido: {0}")]
     InvalidOutput(&'static str),
+    /// L'area delle parti di `split` differisce da quella della sorgente
+    /// oltre la precisione per la lunghezza dei lati di bordo spostati dal
+    /// noding.
     #[error("lo split poligonale non conserva l'area dell'input")]
     AreaMismatch,
+    /// Le parti di `split` non ricoprono il bordo della sorgente entro la
+    /// precisione, un loro lato non sta vicino a nessun lato della sorgente,
+    /// o e' usato da piu' di due parti.
     #[error("lo split poligonale non ricopre esattamente l'input")]
     CoverageMismatch,
     /// Un limite lasciato a [`u64::MAX`]: gli ingressi `*_bounded` del
@@ -282,9 +310,12 @@ pub enum RustBackendError {
     #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
     NumericRange,
     /// Lo spostamento che il calcolo introdurrebbe supera la precisione
-    /// dichiarata (1 cm a terra con un CRS): la griglia intera di un overlay
-    /// di `make_valid` con il suo aggancio, o un punto di noding arrotondato
-    /// di `polygonize`. Il solo rifiuto legato alla precisione.
+    /// dichiarata (1 cm a terra con un CRS): coordinate troppo rade per la
+    /// precisione, un punto di noding arrotondato di `polygonize` (anche
+    /// dentro `split` e `make_valid`), la griglia intera di un overlay di
+    /// `make_valid` `STRUCTURE` con il suo aggancio, o in `LINEWORK` un
+    /// incrocio arrotondato a meno della precisione da un'altra feature. Il
+    /// solo rifiuto legato alla precisione.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
     /// La precisione passata non e' un numero finito positivo, o il CRS non
@@ -304,10 +335,12 @@ pub enum RustBackendError {
 }
 
 impl From<RustBackendError> for PlenoraError {
-    /// La stessa attribuzione che il passo dell'executor faceva sugli errori
-    /// GEOS: interno cio' che e' interno, `InvalidPlan` il resto (limiti
-    /// compresi). In piu' la memoria esaurita e' `ResourceLimit` e il noding
-    /// non convergente e' `Unsupported`, casi che GEOS non aveva.
+    /// La stessa attribuzione che il passo dell'executor di
+    /// `plenora-data-tools@190c493` faceva sugli errori GEOS: interno cio'
+    /// che e' interno, `InvalidPlan` il resto (limiti compresi). In piu',
+    /// casi che GEOS non aveva: la memoria esaurita e' `ResourceLimit`; il
+    /// noding non convergente, il segno d'area non decidibile
+    /// (`NumericRange`) e `PrecisionInsufficient` sono `Unsupported`.
     fn from(error: RustBackendError) -> Self {
         match error {
             RustBackendError::InputContract(error) => error,
@@ -599,9 +632,13 @@ pub fn make_valid_geometry(
 /// `geos_backend::PolygonizeResult` a 190c493 (in piu' `PartialEq`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PolygonizeResult {
+    /// Le facce, nell'ordine d'estrazione, con l'anello esterno antiorario.
     pub polygons: Vec<Polygon<f64>>,
+    /// Lati con la stessa faccia da entrambe le parti (classe `cut_edge`).
     pub cut_edges: Vec<LineString<f64>>,
+    /// Tratti pendenti con un estremo libero (classe `dangle`).
     pub dangles: Vec<LineString<f64>>,
+    /// Anelli che non formano un poligono valido (classe `invalid_ring`).
     pub invalid_ring_lines: Vec<LineString<f64>>,
 }
 
@@ -1031,9 +1068,9 @@ mod tests {
 
     #[test]
     fn make_valid_geometry_matches_the_wkb_path() {
-        // architettura.md#geometrie D12.1: la variante su forma decodificata
-        // deve produrre la STESSA geometria del percorso WKB, sull'input
-        // OGC-invalido che l'operazione esiste per riparare.
+        // La variante su forma decodificata deve produrre la STESSA
+        // geometria del percorso WKB, sull'input OGC-invalido che
+        // l'operazione esiste per riparare.
         let input = bow_tie_wkb();
         let decoded = crate::wkb_decoder::decode_validated(&input).expect("gate solo strutturale");
         let via_geometry =

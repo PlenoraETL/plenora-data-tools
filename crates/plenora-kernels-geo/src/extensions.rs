@@ -3,9 +3,10 @@
 //!
 //! Kernel puri su `geo::Geometry<f64>` piu' l'adapter di colonna per
 //! `from_wkt` (input `Utf8` -> celle WKB). Il raggruppamento di `collect`
-//! per chiave e' dell'engine (come per `dissolve`): il kernel riceve un
-//! gruppo ordinato. I kernel puri rendono [`ExtensionError`]; l'adapter lo
-//! mappa su [`PlenoraError`] preservando i messaggi.
+//! per chiave non e' in questo workspace: il kernel riceve un gruppo gia'
+//! formato e ordinato. I kernel puri rendono [`ExtensionError`]
+//! ([`ExtensionError::del_passo`] lo porta su [`PlenoraError`]); l'adapter
+//! di `from_wkt` rende direttamente [`PlenoraError`].
 
 use std::collections::BTreeMap;
 
@@ -32,30 +33,46 @@ use crate::ValidazioneProtetta as _;
 /// scrive una volta.
 #[derive(Debug, Error)]
 pub enum ExtensionError {
+    /// Un parametro fuori dominio.
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
+        /// Il nome del parametro.
         name: &'static str,
+        /// Il dominio violato, mai il valore.
         reason: &'static str,
     },
+    /// La geometria d'ingresso non supera la validazione OGC; il payload e'
+    /// la ragione del validatore.
     #[error("geometria di input non valida: {0}")]
     InvalidInput(String),
+    /// La geometria in posizione `index` non e' poligonale
+    /// (`coverage_validate`, `shared_paths`).
     #[error("geometria {index} non poligonale ({found}): attesa Polygon/MultiPolygon")]
     UnsupportedGeometry { index: usize, found: &'static str },
+    /// La geometria in posizione `index` non supera la validazione OGC.
     #[error("geometria {index} non valida: {reason}")]
     InvalidGeometry { index: usize, reason: String },
+    /// La geometria in posizione `index` ha coordinate non finite.
     #[error("geometria {index} contiene coordinate NaN o infinite")]
     NonFiniteCoordinate { index: usize },
+    /// La geometria prodotta non supera la validazione OGC.
     #[error("geometria prodotta non valida: {0}")]
     InvalidOutput(String),
+    /// Celle di `generate_grid` oltre [`crate::extensions2::MAX_GRID_CELLS`].
     #[error("celle della griglia oltre il limite {limit}: {actual}")]
     CellLimit { actual: u64, limit: u64 },
+    /// Sovrapposizioni di `coverage_validate` oltre `max_issues`: errore,
+    /// mai un elenco troncato.
     #[error("issues di copertura oltre il limite {limit}")]
     IssueLimit { limit: u64 },
+    /// Un indice o un conteggio non rappresentabile.
     #[error("indice o conteggio non rappresentabile come uint64")]
     IndexOverflow,
+    /// Il taglio di `subdivide` non scende sotto la soglia entro
+    /// [`crate::extensions2::MAX_SUBDIVIDE_DEPTH`] livelli.
     #[error("subdivide non converge entro {limit} livelli di ricorsione")]
     SubdivideDepth { limit: u32 },
-    /// Invariante interna violata (R6: errore propagato, mai panic).
+    /// Invariante interna violata: un errore propagato, mai un panico.
     #[error("internal error: {0}")]
     Internal(&'static str),
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -71,7 +88,7 @@ pub enum ExtensionError {
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
     /// Un calcolo di `geo`, `i_overlay` o `rstar` e' andato in panico dentro
-    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// `crate::calcolo_protetto`: non accusa l'ingresso, porta la *forma*
     /// del payload, mai il contenuto. Interno.
     #[error("calcolo geometrico non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
@@ -157,10 +174,11 @@ pub(crate) fn check_tolerance(tolerance: f64) -> Result<(), ExtensionError> {
 // geo.from_wkt
 // ---------------------------------------------------------------------------
 
-/// Politica sugli errori di parsing WKT, accettata in deserializzazione.
+/// Politica sugli errori di parsing WKT (`on_error` di `geo.from_wkt`),
+/// accettata in deserializzazione.
 ///
-/// Entrambe le varianti rifiutano l'intero output con diagnostica
-/// row-scoped: nessuna delle due autorizza remediation implicita.
+/// Entrambe le varianti rifiutano l'intera colonna con la diagnostica per
+/// riga: nessuna delle due autorizza un rimedio implicito.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnWktError {
@@ -205,10 +223,12 @@ fn wkt_cell_to_wkb(value: &str) -> Result<Vec<u8>, CellaNonConvertita> {
 ///
 /// # Errors
 ///
-/// `PlenoraError::DataMapping` con diagnostica row-scoped completa se almeno
-/// una cella WKT non e' valida, o errore di codifica WKB se la geometria
-/// prodotta non e' rappresentabile. Entrambi i token [`OnWktError`] sono
-/// fail-closed.
+/// `PlenoraError::DataMapping` (fase di lettura) con diagnostica per riga
+/// completa se almeno una cella non diventa WKB: testo non WKT, `SRID=`,
+/// dimensioni Z/M, geometria OGC-invalida (causa `geometry.invalid_wkt`) o
+/// WKB oltre il limite per cella (causa `geometry.encoding_failed`).
+/// `PlenoraError::Internal` se la validazione OGC di una cella non
+/// conclude. Entrambi i valori di [`OnWktError`] sono fail-closed.
 pub fn from_wkt_column(
     values: &StringArray,
     on_error: OnWktError,
@@ -216,13 +236,14 @@ pub fn from_wkt_column(
     from_wkt_column_named(values, on_error, None)
 }
 
-/// Variante usata dall'engine per conservare il nome della colonna sorgente
-/// nella diagnostica senza includerne mai i valori.
+/// Variante di [`from_wkt_column`] che scrive il nome della colonna
+/// sorgente negli esempi della diagnostica, senza includerne mai i valori.
 ///
 /// # Errors
 ///
-/// `InvalidPlan` fail-closed con diagnostica row-scoped se una o piu' celle
-/// non sono WKT valido (conteggi completi, esempi bounded, nessun valore).
+/// Come [`from_wkt_column`]: `DataMapping` con la diagnostica per riga
+/// (conteggi completi per causa, al piu' 10 esempi, nessun valore),
+/// `Internal` per una validazione che non conclude.
 pub fn from_wkt_column_named(
     values: &StringArray,
     _on_error: OnWktError,
@@ -230,7 +251,7 @@ pub fn from_wkt_column_named(
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
     const EXAMPLES_LIMIT: u64 = 10;
     let cells: Vec<Option<&str>> = values.iter().collect();
-    // Come `map_nullable` (architettura.md#determinismo): il primo errore IN ORDINE DI RIGA e'
+    // Come `map_nullable`: il primo errore IN ORDINE DI RIGA e'
     // selezionato dal collect sequenziale — la riga riportata nel messaggio
     // non puo' dipendere dallo scheduling di rayon.
     let results: Vec<Result<Option<Vec<u8>>, CellaNonConvertita>> = cells
@@ -322,11 +343,18 @@ pub fn from_wkt_column_named(
 ///   poligonali (anelli chiusi per definizione), false altro.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GeometryAccessors {
+    /// Nome del tipo: `Point`, `LineString`, `Polygon`, `MultiPoint`,
+    /// `MultiLineString`, `MultiPolygon`, `GeometryCollection`.
     pub geometry_type: &'static str,
+    /// Parti della geometria.
     pub num_geometries: u64,
+    /// Anelli interni.
     pub num_interior_rings: u64,
+    /// Primo punto in WKT, solo per una linea aperta.
     pub start_point: Option<String>,
+    /// Ultimo punto in WKT, solo per una linea aperta.
     pub end_point: Option<String>,
+    /// Se la geometria e' chiusa.
     pub is_closed: bool,
 }
 
@@ -469,7 +497,7 @@ pub fn collect_geometries(
 // geo.line_locate_point
 // ---------------------------------------------------------------------------
 
-/// Frazione [0,1] della proiezione del punto piu' vicino sulla linea
+/// Frazione in `[0, 1]` della proiezione del punto piu' vicino sulla linea
 /// (semantica `ST_LineLocatePoint`).
 ///
 /// `None` per geometrie non-LineString (incluse `MultiLineString`)

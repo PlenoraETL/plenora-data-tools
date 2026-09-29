@@ -31,15 +31,23 @@ use geo::{
 };
 use thiserror::Error;
 
+/// Budget dello split. Un campo a [`u64::MAX`] vale «senza limite», e
+/// l'ingresso [`split_polygon_by_linework_rust_bounded`] lo rifiuta.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SplitLimits {
+    /// Coordinate massime di sorgente e lama sommate.
     pub max_input_coordinates: u64,
+    /// Coppie di segmenti esaminate dal noding del polygonize interno.
     pub max_noding_work: u64,
+    /// Parti massime; vale anche sull'uscita del polygonize interno (facce
+    /// fuori dalla sorgente e residui compresi).
     pub max_output_parts: u64,
+    /// Coordinate d'uscita massime, contate come per `max_output_parts`.
     pub max_output_coordinates: u64,
 }
 
 impl SplitLimits {
+    /// Ogni campo a [`u64::MAX`]: nessun limite.
     #[must_use]
     pub const fn unlimited() -> Self {
         Self {
@@ -60,22 +68,33 @@ impl SplitLimits {
     }
 }
 
+/// Errori dello split poligonale.
 #[derive(Debug, Error)]
 pub enum SplitError {
+    /// La sorgente non e' `Polygon` o `MultiPolygon`.
     #[error("tipo sorgente non supportato: {0}")]
     UnsupportedSource(&'static str),
+    /// La lama non e' linework (`LineString`, `MultiLineString`, collezioni
+    /// di linee).
     #[error("tipo splitter non supportato: {0}")]
     UnsupportedSplitter(&'static str),
+    /// Sorgente o lama non superano `check_validation` di `geo`.
     #[error("input non valido: {0}")]
     InvalidInput(String),
+    /// Un limite lasciato a [`u64::MAX`] con l'ingresso limitato.
     #[error("profilo limiti incompleto: input, noding e output devono avere tetti espliciti")]
     UnboundedLimitConfiguration,
+    /// Coordinate di sorgente e lama sommate oltre il limite.
     #[error("coordinate oltre il limite di {limit}: {actual}")]
     CoordinateLimit { actual: u64, limit: u64 },
+    /// Coppie di segmenti esaminate oltre il limite.
     #[error("lavoro di noding oltre il limite di {limit}: {actual}")]
     WorkLimit { actual: u64, limit: u64 },
+    /// Parti o coordinate d'uscita oltre il limite.
     #[error("output oltre il limite di {limit}: {actual}")]
     OutputLimit { actual: u64, limit: u64 },
+    /// Il polygonize interno e' fallito per una ragione che non ha una
+    /// variante propria qui.
     #[error("polygonize Rust fallita: {0}")]
     Polygonize(PolygonizeError),
     /// Le aree confrontate non entrano nell'errore: sono grandezze derivate
@@ -84,15 +103,21 @@ pub enum SplitError {
     /// portava nel messaggio; il controllo e' invariato.
     #[error("lo split poligonale non conserva l'area dell'input")]
     AreaMismatch,
+    /// Il bordo della sorgente non e' ricoperto dalle parti entro la
+    /// precisione, un lato di bordo delle parti non sta vicino a nessun lato
+    /// della sorgente, o un lato e' usato da piu' di due parti.
     #[error("lo split poligonale non ricopre esattamente l'input")]
     CoverageMismatch,
     /// La precisione dichiarata passata non e' un numero finito positivo.
     #[error("precisione dichiarata non valida: deve essere finita e positiva")]
     InvalidPrecision,
+    /// Un conteggio non rappresentabile.
     #[error("indice non rappresentabile")]
     IndexOverflow,
+    /// Invariante interna violata.
     #[error("invariante interna violata: {0}")]
     InternalInvariant(&'static str),
+    /// Una prenotazione di memoria fallita.
     #[error("prenotazione di memoria fallita per {0}")]
     AllocationFailed(&'static str),
 }
@@ -584,12 +609,17 @@ fn checked_output(
 ///
 /// Boundary e splitter vengono completamente nodati dal polygonizer Rust; le
 /// facce il cui punto interno appartiene alla sorgente diventano le parti. Il
-/// risultato viene verificato indipendentemente per area e copertura.
+/// risultato viene verificato indipendentemente per area e copertura, entro
+/// la precisione `precision` (unita' delle coordinate).
 ///
 /// # Errors
 ///
-/// Restituisce un errore per tipi o geometrie non validi, limiti superati,
-/// fallimento della polygonizzazione o mancata conservazione di area/copertura.
+/// [`SplitError::InvalidPrecision`]; [`SplitError::UnsupportedSource`] e
+/// [`SplitError::UnsupportedSplitter`] per i tipi; [`SplitError::InvalidInput`]
+/// per un ingresso invalido; i limiti superati; gli errori del polygonize
+/// interno ([`SplitError::Polygonize`]); [`SplitError::AreaMismatch`] e
+/// [`SplitError::CoverageMismatch`] se area o copertura non sono
+/// conservate.
 pub fn split_polygon_by_linework_rust(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,

@@ -1,6 +1,5 @@
 //! Tipi geometrici dell'output delle operazioni che spezzano, raccolgono o
-//! ricostruiscono le geometrie senza essere trasformazioni 1:1
-//! (piano-v5.md#contratti-di-input, decisione 8).
+//! ricostruiscono le geometrie senza essere trasformazioni 1:1.
 //!
 //! Queste operazioni conservavano la dichiarazione `types` dell'ingresso,
 //! che per loro non vale: `explode` di `[MultiPolygon]` produce `Polygon`,
@@ -13,12 +12,14 @@
 //! - **insieme fisso**: `polygonize` (`LineString`, `Polygon`), `dissolve`
 //!   (`MultiPolygon`), `overlay` (`Polygon`, `MultiPolygon`), `delaunay`
 //!   (`Polygon`), `line_merge` (`LineString`);
-//! - **per tipo d'ingresso**: `explode`, `subdivide`, `split` e `collect`
-//!   mappano ogni tipo dichiarato nei tipi che il kernel ne ricava. Con una
+//! - **per tipo d'ingresso**: `explode`, `subdivide` e `collect` mappano
+//!   ogni tipo dichiarato nei tipi che il kernel ne ricava. Con una
 //!   dichiarazione `exact` l'uscita e' `exact`; `mixed` con elenco resta
-//!   `mixed`; `unresolved` e l'assenza di dichiarazione restano tali (per
-//!   `split`, che produce solo `LineString` e `Polygon` qualunque sia
-//!   l'ingresso, l'insieme fisso);
+//!   `mixed`; `unresolved` e l'assenza di dichiarazione restano tali. `split`
+//!   produce solo `LineString` e `Polygon` qualunque sia l'ingresso: una
+//!   dichiarazione `exact` si mappa (e se nessun tipo dichiarato produce
+//!   righe resta l'insieme fisso), ogni altra dichiarazione, o la sua
+//!   assenza, da' l'insieme fisso `exact` dei due;
 //! - **nessuna dichiarazione**: `line_builder` e `polygon_builder` non hanno
 //!   un kernel in questo workspace che la verifichi; la dichiarazione
 //!   ereditata si toglie, invece di tenerne una falsa.

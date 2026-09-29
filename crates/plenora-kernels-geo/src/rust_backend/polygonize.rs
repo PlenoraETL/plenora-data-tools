@@ -35,15 +35,24 @@ use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{Contains, Coord, CoordsIter, Geometry, InteriorPoint, Line, LineString, Point, Polygon};
 use thiserror::Error;
 
+/// Budget del polygonize. Un campo a [`u64::MAX`] vale «senza limite», e
+/// l'ingresso [`polygonize_linework_rust_bounded`] lo rifiuta.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PolygonizeLimits {
+    /// Coordinate d'ingresso massime.
     pub max_input_coordinates: u64,
+    /// Coppie di segmenti esaminate dal noding e dalla sua validazione,
+    /// giri compresi, addebitate mentre accadono.
     pub max_noding_work: u64,
+    /// Geometrie d'uscita massime (poligoni piu' residui), contate anche
+    /// sulle facce intermedie.
     pub max_output_geometries: u64,
+    /// Coordinate d'uscita massime, contate anche sulle facce intermedie.
     pub max_output_coordinates: u64,
 }
 
 impl PolygonizeLimits {
+    /// Ogni campo a [`u64::MAX`]: nessun limite.
     #[must_use]
     pub const fn unlimited() -> Self {
         Self {
@@ -64,10 +73,15 @@ impl PolygonizeLimits {
     }
 }
 
+/// Opzioni del polygonize.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PolygonizeOptions {
+    /// Noda le linee negli incroci prima di costruire il grafo; senza, le
+    /// linee duplicate escono come `cut_edges`.
     pub node_input: bool,
+    /// Fallisce con [`PolygonizeError::Incomplete`] se restano residui.
     pub require_complete: bool,
+    /// Il budget.
     pub limits: PolygonizeLimits,
     /// La precisione dichiarata nelle unita' delle coordinate (1 cm a terra
     /// con un CRS, `super::precision`): lo spostamento massimo che il noding
@@ -75,11 +89,17 @@ pub struct PolygonizeOptions {
     pub precision: f64,
 }
 
+/// Esito del polygonize: le facce e i residui per classe.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PolygonizeResult {
+    /// Le facce, nell'ordine d'estrazione, con l'anello esterno antiorario.
     pub polygons: Vec<Polygon<f64>>,
+    /// Lati con la stessa faccia da entrambe le parti, e senza noding le
+    /// linee duplicate.
     pub cut_edges: Vec<LineString<f64>>,
+    /// Tratti pendenti con un estremo libero.
     pub dangles: Vec<LineString<f64>>,
+    /// Anelli che non formano un poligono valido.
     pub invalid_ring_lines: Vec<LineString<f64>>,
 }
 
@@ -100,32 +120,48 @@ impl PolygonizeResult {
     }
 }
 
+/// Errori del polygonize.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolygonizeError {
+    /// L'ingresso non e' linework (`LineString`, `MultiLineString` o
+    /// collezioni di linee).
     #[error("tipo geometria non supportato: {0}")]
     UnsupportedGeometry(&'static str),
+    /// L'ingresso non supera `check_validation` di `geo`.
     #[error("geometria di input non valida: {0}")]
     InvalidInput(String),
+    /// Un limite lasciato a [`u64::MAX`] con l'ingresso limitato.
     #[error("profilo limiti incompleto: input, noding e output devono avere tetti espliciti")]
     UnboundedLimitConfiguration,
+    /// Coordinate d'ingresso oltre il limite.
     #[error("coordinate oltre il limite di {limit}: {actual}")]
     CoordinateLimit { actual: u64, limit: u64 },
+    /// Coppie di segmenti esaminate oltre il limite.
     #[error("lavoro di noding oltre il limite di {limit}: {actual}")]
     WorkLimit { actual: u64, limit: u64 },
+    /// Il noding non ha raggiunto un grafo interamente nodato entro i giri
+    /// previsti.
     #[error(
         "noding non convergente dopo {iterations} iterazioni: intersezioni precedenti={previous}, correnti={current}"
     )]
     NodingDidNotConverge {
+        /// Giri eseguiti.
         iterations: usize,
+        /// Incroci interni trovati al giro precedente.
         previous: usize,
+        /// Incroci interni trovati all'ultimo giro.
         current: usize,
     },
+    /// Geometrie o coordinate d'uscita oltre il limite.
     #[error("output oltre il limite di {limit}: {actual}")]
     OutputLimit { actual: u64, limit: u64 },
+    /// `require_complete` attivo e residui presenti.
     #[error("polygonize incompleto: residui={residuals}")]
     Incomplete { residuals: usize },
+    /// Una faccia non supera la validazione.
     #[error("output poligonale non valido: {0}")]
     InvalidOutput(String),
+    /// Un conteggio non rappresentabile.
     #[error("indice non rappresentabile")]
     IndexOverflow,
     /// Un segno o un confronto d'area che il filtro in `f64` non decide e
@@ -135,15 +171,17 @@ pub enum PolygonizeError {
     NumericRange,
     /// Un punto di noding arrotondato in `f64` dista da uno dei segmenti che
     /// divide piu' della quota di precisione dichiarata di un giro (vedi
-    /// [`NODING_PRECISION_SHARE`]): il grafo si sposterebbe oltre la
+    /// `NODING_PRECISION_SHARE`): il grafo si sposterebbe oltre la
     /// precisione, e non si costruisce.
     #[error("noding oltre la precisione dichiarata delle coordinate")]
     PrecisionInsufficient,
     /// La precisione dichiarata passata non e' un numero finito positivo.
     #[error("precisione dichiarata non valida: deve essere finita e positiva")]
     InvalidPrecision,
+    /// Invariante interna violata.
     #[error("invariante interna violata: {0}")]
     InternalInvariant(&'static str),
+    /// Una prenotazione di memoria fallita.
     #[error("prenotazione di memoria fallita per {0}")]
     AllocationFailed(&'static str),
 }
@@ -2029,15 +2067,23 @@ fn checked_output(
 
 /// Polygonizza linework 2D senza GEOS.
 ///
-/// Il candidato costruisce un grafo planare, elimina iterativamente i dangle
-/// ed estrae le facce tramite mezzi archi ordinati per angolo. Con
+/// Costruisce un grafo planare, elimina iterativamente i dangle ed estrae
+/// le facce tramite mezzi archi ordinati per angolo. Con
 /// `node_input=true`, ogni intersezione viene inserita in entrambi i segmenti
 /// prima della costruzione del grafo.
 ///
 /// # Errors
 ///
-/// Restituisce un errore per tipi non lineari, input non validi, limiti
-/// superati, output invalido o residui quando `require_complete` e' attivo.
+/// [`PolygonizeError::InvalidPrecision`] se la precisione non e' finita e
+/// positiva; [`PolygonizeError::UnsupportedGeometry`] per tipi non lineari;
+/// [`PolygonizeError::InvalidInput`] per un ingresso invalido;
+/// [`PolygonizeError::PrecisionInsufficient`] per coordinate troppo rade o
+/// un punto di noding oltre la sua quota di precisione; i limiti superati;
+/// [`PolygonizeError::NodingDidNotConverge`];
+/// [`PolygonizeError::NumericRange`] per un segno o un confronto d'area non
+/// decidibile; [`PolygonizeError::InvalidOutput`] per una faccia invalida;
+/// [`PolygonizeError::Incomplete`] se `require_complete` e' attivo e
+/// restano residui.
 pub fn polygonize_linework_rust(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,

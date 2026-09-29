@@ -33,21 +33,31 @@ use thiserror::Error;
 
 use crate::arrow_adapter::{decode_geometry_cell, map_nullable};
 
+/// Errori del kernel DBSCAN.
 #[derive(Debug, Error)]
 pub enum ClusterError {
+    /// `eps` non finito o non positivo, o `min_points` zero.
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
+        /// Il nome del parametro.
         name: &'static str,
+        /// Il dominio violato, mai il valore.
         reason: &'static str,
     },
+    /// La geometria in posizione `index` non e' un `Point`.
     #[error("geometria {index} non puntuale ({found}): attesa Point")]
     UnsupportedGeometry { index: usize, found: &'static str },
+    /// La geometria in posizione `index` non supera la validazione OGC.
     #[error("geometria {index} non valida: {reason}")]
     InvalidGeometry { index: usize, reason: String },
+    /// La geometria in posizione `index` ha coordinate non finite.
     #[error("geometria {index} contiene coordinate NaN o infinite")]
     NonFiniteCoordinate { index: usize },
+    /// Il numero di cluster non e' rappresentabile (guardia: i cluster sono
+    /// al piu' i punti).
     #[error("conteggio non rappresentabile come uint64")]
     IndexOverflow,
+    /// Invariante interna violata (cache dei vicinati incoerente).
     #[error("invariante interna DBSCAN violata: {0}")]
     InternalInvariant(&'static str),
     /// La validazione OGC non ha concluso: `geo` si e' interrotta.
@@ -58,7 +68,7 @@ pub enum ClusterError {
     #[error("validazione OGC non conclusa: {0} (contenuto non pubblicato)")]
     ValidazioneNonConclusa(&'static str),
     /// L'R-tree di `rstar` e' andato in panico dentro
-    /// [`crate::calcolo_protetto`]: non accusa l'ingresso, porta la *forma*
+    /// `crate::calcolo_protetto`: non accusa l'ingresso, porta la *forma*
     /// del payload, mai il contenuto.
     #[error("calcolo DBSCAN non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
@@ -105,9 +115,8 @@ impl RTreeObject for IndexedPoint {
 }
 
 impl PointDistance for IndexedPoint {
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e i
+    // bit della forma non fusa sono il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     fn distance_2(&self, point: &[f64; 2]) -> f64 {
         let dx = self.coords[0] - point[0];
@@ -422,7 +431,9 @@ fn cluster_error(error: &ClusterError) -> PlenoraError {
 /// e per geometrie non puntuali, non valide o con coordinate non finite; in
 /// piu' gli errori di decode delle celle WKB non-null (come
 /// [`decode_geometry_cell`], incluse le varianti `PlenoraError::InvalidPlan` e
-/// `PlenoraError::Unsupported` del contratto WKB).
+/// `PlenoraError::Unsupported` del contratto WKB, e `ResourceLimit` per una
+/// cella oltre il limite di byte); `PlenoraError::Internal` per un'invariante
+/// violata, un panico di `rstar` o una validazione che non conclude.
 pub fn dbscan_column(
     cells: &BinaryArray,
     eps: f64,
@@ -444,7 +455,7 @@ mod tests {
         coords.iter().map(|&(x, y)| Point::new(x, y)).collect()
     }
 
-    // L'oracle replica intenzionalmente l'aritmetica non-FMA del kernel per
+    // L'oracolo replica intenzionalmente l'aritmetica non-FMA del kernel per
     // confrontare la semantica di bordo bit-esatta.
     #[allow(clippy::suboptimal_flops)]
     fn dbscan_bruteforce_reference(
@@ -509,9 +520,8 @@ mod tests {
         labels
     }
 
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-    // fusa e' il contratto numerico.
+    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e i
+    // bit della forma non fusa sono il contratto numerico.
     #[allow(clippy::suboptimal_flops)]
     fn cloud(center: (f64, f64), count: usize) -> Vec<(f64, f64)> {
         // Griglia densa deterministica attorno al centro (passo 0.1).
@@ -679,9 +689,8 @@ mod tests {
     fn double_execution_gives_identical_labels() {
         let mut coords = cloud((0.0, 0.0), 40);
         coords.extend(cloud((50.0, 50.0), 40));
-        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-        // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-        // fusa e' il contratto numerico.
+        // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e i
+        // bit della forma non fusa sono il contratto numerico.
         #[allow(clippy::suboptimal_flops)]
         coords.extend((0..10).map(|index| (200.0 + f64::from(index) * 7.0, -30.0)));
         let first = dbscan(&points(&coords), 0.5, 4).expect("prima");

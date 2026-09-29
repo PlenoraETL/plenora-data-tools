@@ -171,6 +171,7 @@ pub fn orientamento(anello: &[Coord<f64>]) -> Result<Ordering, FuoriDominio> {
 pub struct AreaPoligono(Approssimazione);
 
 impl AreaPoligono {
+    /// L'area di `poligono` con il suo limite d'errore.
     #[must_use]
     pub fn di(poligono: &Polygon<f64>) -> Self {
         let esterno = approssima(&poligono.exterior().0);

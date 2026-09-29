@@ -3,7 +3,7 @@
 //! `geo`.
 //!
 //! `LINEWORK` e' la regola di `MakeValid` di GEOS come operazioni esatte
-//! sull'insieme dei lati nodati ([`linework`]); `STRUCTURE` quella di
+//! sull'insieme dei lati nodati (`linework`); `STRUCTURE` quella di
 //! `GeometryFixer`, con buchi e parti in ordine canonico. Nessuno dei due
 //! dipende dall'ordine di anelli e parti d'ingresso.
 //!
@@ -39,21 +39,35 @@ use geo::{
 use rstar::{RTree, RTreeObject, AABB};
 use thiserror::Error;
 
+/// Metodo di riparazione del kernel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepairMethod {
+    /// `MakeValid` `LINEWORK` di GEOS, come operazioni esatte sui lati
+    /// nodati (`linework`).
     Linework,
+    /// `GeometryFixer` di GEOS: shell, buchi e parti riparati a parte e
+    /// ricombinati con l'overlay di `geo`.
     Structure,
 }
 
+/// Budget della riparazione. Un campo a [`u64::MAX`] vale «senza limite»,
+/// e l'ingresso [`make_valid_geometry_rust_bounded`] lo rifiuta.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MakeValidLimits {
+    /// Coordinate d'ingresso massime.
     pub max_input_coordinates: u64,
+    /// Lavoro di noding massimo, stimato prima del kernel come quadrato del
+    /// numero totale di segmenti; vale anche per i polygonize interni.
     pub max_noding_work: u64,
+    /// Geometrie d'uscita massime: i membri delle multi-geometrie, contati
+    /// ricorsivamente nelle collezioni.
     pub max_output_geometries: u64,
+    /// Coordinate d'uscita massime.
     pub max_output_coordinates: u64,
 }
 
 impl MakeValidLimits {
+    /// Ogni campo a [`u64::MAX`]: nessun limite.
     #[must_use]
     pub const fn unlimited() -> Self {
         Self {
@@ -74,30 +88,44 @@ impl MakeValidLimits {
     }
 }
 
+/// Errori della riparazione.
 #[derive(Debug, Error)]
 pub enum MakeValidError {
+    /// L'ingresso ha una coordinata NaN o infinita.
     #[error("coordinate non finite")]
     NonFiniteCoordinate,
+    /// Un anello non chiuso o con meno di quattro coordinate.
     #[error("geometria strutturalmente non valida: {0}")]
     InvalidStructure(&'static str),
+    /// Un tipo che il metodo non tratta.
     #[error("tipo non supportato dal candidato: {0}")]
     UnsupportedGeometry(&'static str),
+    /// Un limite lasciato a [`u64::MAX`] con l'ingresso limitato.
     #[error("profilo limiti incompleto: input, noding e output devono avere tetti espliciti")]
     UnboundedLimitConfiguration,
+    /// Coordinate d'ingresso oltre il limite.
     #[error("coordinate oltre il limite di {limit}: {actual}")]
     CoordinateLimit { actual: u64, limit: u64 },
+    /// Quadrato dei segmenti oltre il limite di noding.
     #[error("lavoro di noding oltre il limite di {limit}: {actual}")]
     WorkLimit { actual: u64, limit: u64 },
+    /// Geometrie o coordinate d'uscita oltre il limite.
     #[error("output oltre il limite di {limit}: {actual}")]
     OutputLimit { actual: u64, limit: u64 },
+    /// Un conteggio non rappresentabile.
     #[error("indice non rappresentabile")]
     IndexOverflow,
+    /// Un polygonize interno e' fallito per una ragione che non ha una
+    /// variante propria qui.
     #[error("polygonize fallita: {0}")]
     Polygonize(PolygonizeError),
+    /// L'uscita non supera `check_validation` di `geo`.
     #[error("output Rust ancora non valido: {0}")]
     InvalidOutput(String),
+    /// Invariante interna violata.
     #[error("invariante interna violata: {0}")]
     InternalInvariant(&'static str),
+    /// Una prenotazione di memoria fallita.
     #[error("prenotazione di memoria fallita per {0}")]
     AllocationFailed(&'static str),
     /// Un segno d'area non decidibile in `f64` su coordinate fuori dal
@@ -105,10 +133,13 @@ pub enum MakeValidError {
     /// laboratorio, che decideva comunque.
     #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
     NumericRange,
-    /// La griglia intera di `i_overlay` su questa geometria e' piu' grossa
-    /// della precisione dichiarata: l'overlay non verrebbe eseguito entro la
-    /// precisione, e non viene eseguito. Il solo rifiuto legato alla
-    /// precisione (README, «Limiti dichiarati»).
+    /// Lo spostamento che il calcolo introdurrebbe supera la precisione
+    /// dichiarata: coordinate troppo rade, un punto di noding arrotondato
+    /// oltre la sua quota, la griglia di un overlay di `STRUCTURE` oltre il
+    /// bilancio che resta, o in `LINEWORK` un incrocio arrotondato a meno
+    /// della precisione da un altro vertice o lato. Il solo rifiuto legato
+    /// alla precisione (README, «Precisione delle operazioni geografiche: 1
+    /// cm a terra»).
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
     /// La precisione dichiarata passata non e' un numero finito positivo.
@@ -675,9 +706,7 @@ impl OverlayNormalizer {
 /// in tutto; il ritorno `u * span + min` aggiunge al piu' `3 ulp(M)` (`span
 /// <= 2 M`). In coordinate originali lo spostamento per asse e' quindi al
 /// piu' `span * 2^-49 + 4 ulp(M)`, e la diagonale dei due assi `d`
-/// ([`OverlayNormalizer::grid_diagonal`]). Con `i32` (`i_overlay` 4.5, passo
-/// `2^-30`) era `span * 2^-30`: oltre circa 5.400 km su un asse l'overlay
-/// era rifiutato.
+/// ([`OverlayNormalizer::grid_diagonal`]).
 ///
 /// Il bilancio dello spostamento di un vertice e' il ritorno (al piu' `d`)
 /// piu' l'aggancio di [`OverlayNormalizer::restore_multi_snapped`] (al piu'
@@ -703,8 +732,9 @@ impl OverlayNormalizer {
 /// catena. La guardia di spaziatura resta sulla precisione intera.
 ///
 /// Gli agganci interni di `i_overlay` durante lo split dei segmenti (raggio
-/// che cresce a ogni giro, `split::snap_radius`) non sono nel bilancio, e
-/// nessun controllo a posteriori li limita (README, «Limiti dichiarati»).
+/// che cresce a ogni giro, `split::snap_radius` di `i_overlay` 9.0.0) non
+/// sono nel bilancio, e nessun controllo a posteriori li limita (README,
+/// «Precisione delle operazioni geografiche: 1 cm a terra», «Hazard»).
 fn checked_grid(
     normalizer: OverlayNormalizer,
     bilancio: &mut Bilancio,
@@ -1812,18 +1842,23 @@ fn make_valid_geometry_rust_impl(
     Ok(output)
 }
 
-/// Ripara una geometria senza GEOS usando limiti non restrittivi.
+/// Ripara una geometria senza GEOS, senza limiti di lavoro.
 ///
-/// `precision` e' la precisione dichiarata nelle unita' delle coordinate (1
-/// cm a terra con un CRS, vedi `super::precision`): nessun valore
-/// predefinito.
+/// Un ingresso gia' valido (area positiva decisa in modo esatto e
+/// `check_validation` di `geo`) torna invariato. `precision` e' la
+/// precisione dichiarata nelle unita' delle coordinate (1 cm a terra con un
+/// CRS, vedi `super::precision`): nessun valore predefinito.
 ///
 /// # Errors
 ///
-/// Restituisce un errore per payload non finiti/strutturalmente malformati,
-/// tipi non supportati, polygonize fallita o output ancora invalido;
-/// [`MakeValidError::PrecisionInsufficient`] se la griglia di un overlay e'
-/// piu' grossa della precisione.
+/// [`MakeValidError::InvalidPrecision`] se `precision` non e' finita e
+/// positiva; [`MakeValidError::NonFiniteCoordinate`] e
+/// [`MakeValidError::InvalidStructure`] per un ingresso non finito o
+/// malformato; [`MakeValidError::UnsupportedGeometry`] per un tipo che il
+/// metodo non tratta; [`MakeValidError::NumericRange`] per un segno d'area
+/// non decidibile; [`MakeValidError::PrecisionInsufficient`] (vedi la
+/// variante); [`MakeValidError::Polygonize`] per un polygonize interno
+/// fallito; [`MakeValidError::InvalidOutput`] se l'uscita resta invalida.
 pub fn make_valid_geometry_rust(
     geometry: &Geometry<f64>,
     method: RepairMethod,
@@ -2051,9 +2086,8 @@ mod tests {
     }
 
     /// Il controllo della griglia: `span * 2^-49 + 4 ulp(M)` per asse
-    /// contro la precisione. Con 1 cm in metri 1.300 e 20.000 km passano
-    /// (con `i_overlay` 4.5 e il passo `span * 2^-30` 20.000 km erano
-    /// rifiutati). Il controllo scatta solo al margine della guardia di
+    /// contro la precisione. Con 1 cm in metri 1.300 e 20.000 km passano.
+    /// Il controllo scatta solo al margine della guardia di
     /// spaziatura: modulo appena sotto `2^40` (`ulp = 2^-13`), estensione
     /// doppia del modulo e precisione `2^-7` (la minima che la guardia
     /// ammette), `(1 + sqrt(2)) d` circa `1,07e-2`; coordinate a `2^45` m
