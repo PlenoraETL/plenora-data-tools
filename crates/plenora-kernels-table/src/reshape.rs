@@ -1149,12 +1149,10 @@ pub struct TableDiff {
     pub separator: String,
 }
 
+/// Sorgenti di una riga di output di `table_diff`.
 struct DiffRow {
     old_row: Option<usize>,
     new_row: Option<usize>,
-    status: &'static str,
-    changed: Option<String>,
-    old_values: Option<String>,
 }
 /// Se `table_diff` emette anche le righe `UNCHANGED`.
 ///
@@ -1191,31 +1189,45 @@ fn default_separator() -> String {
     "#".into()
 }
 
-/// Chiavi di un lato di `table_diff`, una per riga: l'indice di chiave nel
-/// [`KeyInterner`] coincide con la riga, perche' una chiave ripetuta e' un
-/// errore prima di diventare un indice.
+/// Abbinamento delle righe di `table_diff` per chiave: per ogni riga
+/// sinistra la riga destra con la stessa chiave, e le righe destre senza
+/// riga sinistra, in ordine.
+///
+/// Un'arena sola: le chiavi sinistre entrano per prime (l'indice di chiave
+/// e' la riga, perche' una chiave ripetuta e' un errore prima di diventare
+/// un indice), poi ogni chiave destra si inserisce nella stessa arena, con
+/// un solo hash per riga: un indice sotto le righe sinistre e' l'abbinamento
+/// (o, se gia' preso, una chiave destra ripetuta), uno nuovo e' una riga solo
+/// a destra. Se le chiavi dei due lati non sono confrontabili le destre
+/// stanno in un'arena propria e nessuna si abbina.
 ///
 /// Codifica binaria di [`BinaryKeyEncoder`]: stessa identita' dei byte di
-/// `composite_key` sulle colonne di un lato, stessi errori alla stessa riga.
+/// `composite_key` sulle colonne di un lato; errori di conversione e di
+/// chiave ripetuta alla stessa riga, prima tutto il lato sinistro, poi il
+/// destro.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan` con `duplicata` alla prima chiave ripetuta;
+/// - `InvalidPlan` alla prima chiave ripetuta di un lato;
 /// - gli errori di conversione dell'encoder;
-/// - `Internal` se l'indice di una chiave nuova non coincide con la riga.
-fn diff_side_keys(
-    batch: &RecordBatch,
-    indices: &[usize],
-    duplicata: &'static str,
-) -> Result<KeyInterner> {
-    let encoder = BinaryKeyEncoder::new(batch, indices);
-    let mut keys = KeyInterner::with_capacity(batch.num_rows());
+/// - `Internal` se l'indice di una chiave sinistra non coincide con la riga.
+fn diff_abbinamenti(
+    left: &RecordBatch,
+    left_keys: &[usize],
+    right: &RecordBatch,
+    right_keys: &[usize],
+    confrontabili: bool,
+) -> Result<(Vec<Option<usize>>, Vec<usize>)> {
     let mut key = Vec::new();
-    for row in 0..batch.num_rows() {
+    let mut chiavi = KeyInterner::with_capacity(left.num_rows().saturating_add(right.num_rows()));
+    let encoder = BinaryKeyEncoder::new(left, left_keys);
+    for row in 0..left.num_rows() {
         encoder.encode_into(row, &mut key)?;
-        let (indice, nuova) = keys.inserisci(&key);
+        let (indice, nuova) = chiavi.inserisci(&key);
         if !nuova {
-            return Err(PlenoraError::InvalidPlan(duplicata.into()));
+            return Err(PlenoraError::InvalidPlan(
+                "chiavi duplicate nella tabella sinistra".into(),
+            ));
         }
         if indice != row {
             return Err(PlenoraError::Internal(
@@ -1223,24 +1235,126 @@ fn diff_side_keys(
             ));
         }
     }
-    Ok(keys)
+    let duplicata = || PlenoraError::InvalidPlan("chiavi duplicate nella tabella destra".into());
+    let mut abbinate = vec![None; left.num_rows()];
+    let mut solo_destra = Vec::new();
+    let mut destre = (!confrontabili).then(|| KeyInterner::with_capacity(right.num_rows()));
+    let encoder = BinaryKeyEncoder::new(right, right_keys);
+    for row in 0..right.num_rows() {
+        encoder.encode_into(row, &mut key)?;
+        let (indice, nuova) = destre.as_mut().unwrap_or(&mut chiavi).inserisci(&key);
+        match abbinate.get_mut(indice).filter(|_| confrontabili) {
+            Some(posto) => {
+                if posto.replace(row).is_some() {
+                    return Err(duplicata());
+                }
+            }
+            None if nuova => solo_destra.push(row),
+            None => return Err(duplicata()),
+        }
+    }
+    Ok((abbinate, solo_destra))
 }
 
-/// Riga di `other` con la chiave `indice` di `keys`, se le chiavi dei due
-/// lati sono confrontabili.
-fn diff_lookup(
-    keys: &KeyInterner,
-    indice: usize,
-    other: &KeyInterner,
-    confrontabili: bool,
-) -> Result<Option<usize>> {
-    if !confrontabili {
-        return Ok(None);
+/// Due colonne confrontate dello stesso tipo nativo: uguaglianza sui
+/// valori invece che sul testo. Equivale al confronto dei testi di
+/// `TextColumn` (null uguale solo a null; `Display` iniettivo sui valori
+/// di ogni tipo, per i double sui bit con ogni NaN ricondotto al NaN
+/// canonico: `-0` e `0` restano diversi, ogni NaN si scrive `NaN`).
+/// `Testo` per ogni altra coppia, anche di tipi diversi.
+enum ConfrontoDiff<'a> {
+    Float64(&'a Float64Array, &'a Float64Array),
+    Int64(&'a Int64Array, &'a Int64Array),
+    UInt64(&'a UInt64Array, &'a UInt64Array),
+    Utf8(&'a StringArray, &'a StringArray),
+    Boolean(&'a BooleanArray, &'a BooleanArray),
+    Testo,
+}
+
+/// Bit di un double con ogni NaN ricondotto a uno solo, come il testo.
+const fn bit_canonici(valore: f64) -> u64 {
+    if valore.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        valore.to_bits()
     }
-    let key = keys
-        .chiave(indice)
-        .ok_or_else(|| PlenoraError::Internal("table_diff: chiave di riga assente".into()))?;
-    Ok(other.cerca(key))
+}
+
+impl<'a> ConfrontoDiff<'a> {
+    fn new(left: &'a ArrayRef, right: &'a ArrayRef) -> Self {
+        if left.data_type() != right.data_type() {
+            return Self::Testo;
+        }
+        let (sinistra, destra) = (left.as_any(), right.as_any());
+        if let (Some(a), Some(b)) = (
+            sinistra.downcast_ref::<Float64Array>(),
+            destra.downcast_ref::<Float64Array>(),
+        ) {
+            return Self::Float64(a, b);
+        }
+        if let (Some(a), Some(b)) = (
+            sinistra.downcast_ref::<Int64Array>(),
+            destra.downcast_ref::<Int64Array>(),
+        ) {
+            return Self::Int64(a, b);
+        }
+        if let (Some(a), Some(b)) = (
+            sinistra.downcast_ref::<UInt64Array>(),
+            destra.downcast_ref::<UInt64Array>(),
+        ) {
+            return Self::UInt64(a, b);
+        }
+        if let (Some(a), Some(b)) = (
+            sinistra.downcast_ref::<StringArray>(),
+            destra.downcast_ref::<StringArray>(),
+        ) {
+            return Self::Utf8(a, b);
+        }
+        if let (Some(a), Some(b)) = (
+            sinistra.downcast_ref::<BooleanArray>(),
+            destra.downcast_ref::<BooleanArray>(),
+        ) {
+            return Self::Boolean(a, b);
+        }
+        Self::Testo
+    }
+
+    /// `Some(true)` se le celle sono diverse, `None` per le coppie da
+    /// confrontare sul testo.
+    fn diverse(&self, old_row: usize, new_row: usize) -> Option<bool> {
+        let (o, n) = (old_row, new_row);
+        Some(match self {
+            Self::Float64(a, b) => celle_diverse(a.is_null(o), b.is_null(n), || {
+                bit_canonici(a.value(o)) != bit_canonici(b.value(n))
+            }),
+            Self::Int64(a, b) => {
+                celle_diverse(a.is_null(o), b.is_null(n), || a.value(o) != b.value(n))
+            }
+            Self::UInt64(a, b) => {
+                celle_diverse(a.is_null(o), b.is_null(n), || a.value(o) != b.value(n))
+            }
+            Self::Utf8(a, b) => {
+                celle_diverse(a.is_null(o), b.is_null(n), || a.value(o) != b.value(n))
+            }
+            Self::Boolean(a, b) => {
+                celle_diverse(a.is_null(o), b.is_null(n), || a.value(o) != b.value(n))
+            }
+            Self::Testo => return None,
+        })
+    }
+}
+
+/// Null uguale solo a null; fra due valori decide `valori_diversi`.
+fn celle_diverse(
+    nulla_prima: bool,
+    nulla_dopo: bool,
+    valori_diversi: impl FnOnce() -> bool,
+) -> bool {
+    match (nulla_prima, nulla_dopo) {
+        (true, true) => false,
+        (false, false) => valori_diversi(),
+        _ => true,
+    }
 }
 
 /// Chiave composta in forma testuale: e' l'oracolo dei test di equivalenza
@@ -1352,8 +1466,10 @@ pub fn table_diff(
         .map(|name| column_index(right, name))
         .collect::<Result<Vec<_>>>()?;
     // Chiavi binarie (`BinaryKeyEncoder`, stessa identita' dei byte di
-    // `composite_key`) codificate una volta per riga in un'arena per lato;
-    // confronto valori via `TextColumn` senza `scalar_as_string` per cella.
+    // `composite_key`) codificate una volta per riga in un'arena sola
+    // (`diff_abbinamenti`); valori confrontati sul tipo nativo quando i due
+    // lati lo condividono (`ConfrontoDiff`), altrimenti sul testo di
+    // `TextColumn`, senza `scalar_as_string` per cella.
     // Stesso ordine righe in output (sorgente sinistra, poi righe solo a
     // destra), stessi errori.
     //
@@ -1378,51 +1494,72 @@ pub fn table_diff(
         .iter()
         .map(|index| TextColumn::new(right.column(*index)))
         .collect::<Vec<_>>();
-    let old = diff_side_keys(left, &left_keys, "chiavi duplicate nella tabella sinistra")?;
-    let new = diff_side_keys(right, &right_keys, "chiavi duplicate nella tabella destra")?;
+    let confronti = left_compare
+        .iter()
+        .zip(&right_compare)
+        .map(|(left_index, right_index)| {
+            ConfrontoDiff::new(left.column(*left_index), right.column(*right_index))
+        })
+        .collect::<Vec<_>>();
+    let (abbinate, solo_destra) =
+        diff_abbinamenti(left, &left_keys, right, &right_keys, confrontabili)?;
     // Preserve source order: old rows first, then new-only rows. Sorting the
     // encoded key would place nulls first and reorder otherwise stable data.
-    let mut matched = Vec::with_capacity(old.len().saturating_add(new.len()));
-    for row in 0..left.num_rows() {
-        matched.push((Some(row), diff_lookup(&old, row, &new, confrontabili)?));
-    }
-    for row in 0..right.num_rows() {
-        if diff_lookup(&new, row, &old, confrontabili)?.is_none() {
-            matched.push((None, Some(row)));
-        }
-    }
+    let matched = abbinate
+        .into_iter()
+        .enumerate()
+        .map(|(row, new_row)| (Some(row), new_row))
+        .chain(solo_destra.into_iter().map(|row| (None, Some(row))));
+    // Stato, colonne cambiate e valori precedenti vanno direttamente nei
+    // buffer di output: nessuna `String` per riga cambiata.
     let mut rows = Vec::new();
+    let mut stati = StringBuilder::new();
+    let mut colonne_cambiate = StringBuilder::new();
+    let mut valori_precedenti = StringBuilder::new();
+    let mut nomi = String::new();
+    let mut vecchi = String::new();
     let mut before = String::new();
     let mut after = String::new();
     for (old_row, new_row) in matched {
-        let (status, changed, old_values) = match (old_row, new_row) {
-            (None, Some(_)) => ("ADDED", None, None),
-            (Some(_), None) => ("DELETED", None, None),
+        let (status, cambiata) = match (old_row, new_row) {
+            (None, Some(_)) => ("ADDED", false),
+            (Some(_), None) => ("DELETED", false),
             (Some(old_row), Some(new_row)) => {
-                let mut changed = Vec::new();
-                let mut old_values = Vec::new();
-                for ((name, left_column), right_column) in compare
+                nomi.clear();
+                vecchi.clear();
+                let mut cambiate = 0_usize;
+                for (((name, left_column), right_column), confronto) in compare
                     .iter()
                     .zip(&left_text_columns)
                     .zip(&right_text_columns)
+                    .zip(&confronti)
                 {
                     before.clear();
-                    after.clear();
-                    let has_before = left_column.write_value(old_row, &mut before)?;
-                    let has_after = right_column.write_value(new_row, &mut after)?;
-                    if has_before != has_after || (has_before && before != after) {
-                        changed.push(name.clone());
-                        old_values.push(before.clone());
+                    let diversa = if let Some(diversa) = confronto.diverse(old_row, new_row) {
+                        if diversa {
+                            left_column.write_value(old_row, &mut before)?;
+                        }
+                        diversa
+                    } else {
+                        after.clear();
+                        let has_before = left_column.write_value(old_row, &mut before)?;
+                        let has_after = right_column.write_value(new_row, &mut after)?;
+                        has_before != has_after || (has_before && before != after)
+                    };
+                    if diversa {
+                        if cambiate > 0 {
+                            nomi.push_str(&config.separator);
+                            vecchi.push_str(&config.separator);
+                        }
+                        nomi.push_str(name);
+                        vecchi.push_str(&before);
+                        cambiate += 1;
                     }
                 }
-                if changed.is_empty() {
-                    ("UNCHANGED", None, None)
+                if cambiate == 0 {
+                    ("UNCHANGED", false)
                 } else {
-                    (
-                        "MODIFIED",
-                        Some(changed.join(&config.separator)),
-                        Some(old_values.join(&config.separator)),
-                    )
+                    ("MODIFIED", true)
                 }
             }
             (None, None) => {
@@ -1435,13 +1572,15 @@ pub fn table_diff(
             }
         };
         if status != "UNCHANGED" || config.include_unchanged == IncludeUnchanged::Yes {
-            rows.push(DiffRow {
-                old_row,
-                new_row,
-                status,
-                changed,
-                old_values,
-            });
+            rows.push(DiffRow { old_row, new_row });
+            stati.append_value(status);
+            if cambiata {
+                colonne_cambiate.append_value(&nomi);
+                valori_precedenti.append_value(&vecchi);
+            } else {
+                colonne_cambiate.append_null();
+                valori_precedenti.append_null();
+            }
         }
     }
     if rows.len() > limits.max_rows {
@@ -1487,32 +1626,12 @@ pub fn table_diff(
         ));
         columns.push(diff_values(left_column, right_column, &rows)?);
     }
-    for (name, selector) in [
-        ("_diff_status", 0_usize),
-        ("_diff_columns", 1),
-        ("_diff_old_values", 2),
+    for (name, nullable, mut builder) in [
+        ("_diff_status", false, stati),
+        ("_diff_columns", true, colonne_cambiate),
+        ("_diff_old_values", true, valori_precedenti),
     ] {
-        fields.push(Field::new(
-            name,
-            DataType::Utf8,
-            selector == 1 || selector == 2,
-        ));
-        // StringBuilder diretto: nessun clone di String per riga.
-        let mut builder = StringBuilder::with_capacity(
-            rows.len(),
-            rows.len().saturating_mul(8).min(64 * 1024 * 1024),
-        );
-        for row in &rows {
-            let value = match selector {
-                0 => Some(row.status),
-                1 => row.changed.as_deref(),
-                _ => row.old_values.as_deref(),
-            };
-            match value {
-                Some(value) => builder.append_value(value),
-                None => builder.append_null(),
-            }
-        }
+        fields.push(Field::new(name, DataType::Utf8, nullable));
         columns.push(Arc::new(builder.finish()));
     }
     let metadata = crate::metadata_schema_input("table_diff", &[&left.schema(), &right.schema()])?;
@@ -3307,3 +3426,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "table_diff_oracolo.rs"]
+mod table_diff_oracolo;
