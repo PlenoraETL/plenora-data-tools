@@ -763,7 +763,8 @@ pub fn dictionary_utf8_value(
 /// Differisce da `Array::is_null` per le dictionary con **qualunque** tipo di
 /// chiave e di valore (chiave valida su un valore nullo, anche in una
 /// dictionary annidata), per `Null` (ogni riga e' nulla senza bitmap) e per
-/// `RunEndEncoded` e le union (la nullita' sta nei figli). Ogni percorso che
+/// `RunEndEncoded` e le union (la nullita' sta nei figli). Costo per riga
+/// O(1), O(log run) per `RunEndEncoded`, piu' la profondita' di annidamento. Ogni percorso che
 /// decide la nullita' di una riga passa di qui, perche' due percorsi non
 /// diano due risposte.
 ///
@@ -778,6 +779,7 @@ pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
     use plenora_core::arrow::array::types::{
         Int16Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     };
+    use plenora_core::arrow::array::UnionArray;
 
     /// Valore della dictionary a cui punta la chiave della riga.
     fn valore_nullo<K>(array: &dyn Array, row: usize) -> bool
@@ -814,14 +816,44 @@ pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
             DataType::UInt64 => valore_nullo::<UInt64Type>(array, row),
             _ => false,
         },
-        // Nullita' nei figli: la si legge dalla fetta di una riga (costo
-        // proporzionale alla fetta, non all'array).
-        DataType::RunEndEncoded(_, _) | DataType::Union(_, _) => array
-            .slice(row, 1)
-            .logical_nulls()
-            .is_some_and(|nulli| nulli.is_null(0)),
+        // Nullita' nel valore fisico: la run si trova per ricerca binaria
+        // sulle fini delle run (O(log n) per riga, fette comprese).
+        DataType::RunEndEncoded(fine, _) => match fine.data_type() {
+            DataType::Int16 => run_nulla::<Int16Type>(array, row),
+            DataType::Int32 => run_nulla::<Int32Type>(array, row),
+            DataType::Int64 => run_nulla::<Int64Type>(array, row),
+            _ => false,
+        },
+        // Nullita' nel figlio del tipo della riga, alla sua posizione
+        // (offset per le dense, la riga stessa per le sparse: le fette
+        // sparse affettano anche i figli). O(1) per riga.
+        DataType::Union(campi, _) => {
+            let Some(unione) = array.as_any().downcast_ref::<UnionArray>() else {
+                return false;
+            };
+            let tipo = unione.type_id(row);
+            if !campi.iter().any(|(id, _)| id == tipo) {
+                return false;
+            }
+            let figlio = unione.child(tipo);
+            let posizione = unione.value_offset(row);
+            posizione < figlio.len() && is_logically_null(figlio.as_ref(), posizione)
+        }
         _ => false,
     }
+}
+
+/// Il valore della run della riga e' nullo (logicamente).
+fn run_nulla<R: plenora_core::arrow::array::types::RunEndIndexType>(
+    array: &dyn Array,
+    row: usize,
+) -> bool {
+    use plenora_core::arrow::array::cast::AsArray as _;
+    let Some(run) = array.as_run_opt::<R>() else {
+        return false;
+    };
+    let fisico = run.get_physical_index(row);
+    fisico < run.values().len() && is_logically_null(run.values().as_ref(), fisico)
 }
 
 /// Valore scalare della riga come `String` (profilo scalare testuale).

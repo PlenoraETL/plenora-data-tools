@@ -71,21 +71,59 @@ fn leggi_catena(testo: &str) -> Result<Vec<Pipeline>> {
         .collect()
 }
 
+/// Nomi riservati dei dispositivi di Windows: un file `NUL.parquet` (anche
+/// con estensione, maiuscole a parte) non e' un file.
+const RISERVATI_WINDOWS: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// Il percorso canonico per il confronto: di un file esistente, oppure della
+/// sua cartella (che deve esistere) con il nome del file. Su Windows il
+/// confronto e' senza distinzione di maiuscole, come il file system.
+///
+/// # Errors
+///
+/// `Io` se la canonicalizzazione fallisce (cartella assente, accesso
+/// negato): mai un confronto ricaduto sul testo del percorso.
+fn chiave_percorso(percorso: &Path) -> Result<String> {
+    let canonico = if percorso.exists() {
+        std::fs::canonicalize(percorso)?
+    } else {
+        let nome = percorso
+            .file_name()
+            .ok_or_else(|| PlenoraError::InvalidPlan("percorso senza nome di file".into()))?;
+        let cartella = match percorso.parent() {
+            Some(cartella) if !cartella.as_os_str().is_empty() => cartella,
+            _ => Path::new("."),
+        };
+        std::fs::canonicalize(cartella)?.join(nome)
+    };
+    let testo = canonico.to_string_lossy().into_owned();
+    Ok(if cfg!(windows) {
+        testo.to_lowercase()
+    } else {
+        testo
+    })
+}
+
 /// Un file per output nella cartella, verificati prima di leggere.
 ///
 /// # Errors
 ///
-/// `InvalidPlan` per un nome vuoto o con caratteri fuori da `[A-Za-z0-9_-]`,
-/// due nomi uguali senza distinzione di maiuscole, un percorso d'uscita
-/// uguale a un ingresso.
+/// `InvalidPlan` per un nome vuoto, con caratteri fuori da `[A-Za-z0-9_-]` o
+/// riservato da Windows, due nomi uguali senza distinzione di maiuscole, un
+/// percorso d'uscita uguale a un ingresso; `Io` se un percorso non si
+/// canonicalizza.
 fn percorsi_uscita(
     cartella: &Path,
     nomi: &[String],
     ingressi: &[&Path],
 ) -> Result<Vec<(String, PathBuf)>> {
-    let canonico = |percorso: &Path| {
-        std::fs::canonicalize(percorso).unwrap_or_else(|_| percorso.to_path_buf())
-    };
+    let chiavi_ingresso = ingressi
+        .iter()
+        .map(|ingresso| chiave_percorso(ingresso))
+        .collect::<Result<Vec<_>>>()?;
     let mut visti = std::collections::HashSet::new();
     let mut uscite = Vec::with_capacity(nomi.len());
     for nome in nomi {
@@ -96,17 +134,19 @@ fn percorsi_uscita(
                 "nome di output non utilizzabile come nome di file".into(),
             ));
         }
-        if !visti.insert(nome.to_ascii_lowercase()) {
+        let minuscolo = nome.to_ascii_lowercase();
+        if RISERVATI_WINDOWS.contains(&minuscolo.as_str()) {
+            return Err(PlenoraError::InvalidPlan(
+                "nome di output riservato da Windows".into(),
+            ));
+        }
+        if !visti.insert(minuscolo) {
             return Err(PlenoraError::InvalidPlan(
                 "due output con lo stesso file (maiuscole a parte)".into(),
             ));
         }
         let percorso = cartella.join(format!("{nome}.parquet"));
-        let destinazione = canonico(&percorso);
-        if ingressi
-            .iter()
-            .any(|ingresso| canonico(ingresso) == destinazione)
-        {
+        if chiavi_ingresso.contains(&chiave_percorso(&percorso)?) {
             return Err(PlenoraError::InvalidPlan(
                 "un percorso d'uscita coincide con un ingresso".into(),
             ));
@@ -382,7 +422,8 @@ mod tests {
 
     #[test]
     fn ogni_output_ha_il_suo_file() {
-        let cartella = Path::new("uscite");
+        let radice = tempfile::tempdir().expect("cartella temporanea");
+        let cartella = radice.path();
         let nomi = ["a".to_owned(), "b".to_owned()];
         let uscite = percorsi_uscita(cartella, &nomi, &[]).expect("due output");
         assert_eq!(
@@ -397,16 +438,40 @@ mod tests {
             vec![String::new()],
             vec!["../fuori".to_owned()],
             vec!["con spazio".to_owned()],
+            vec!["NUL".to_owned()],
+            vec!["con".to_owned()],
+            vec!["Com1".to_owned()],
+            vec!["lpt9".to_owned()],
         ] {
             assert!(matches!(
                 percorsi_uscita(cartella, &nomi, &[]),
                 Err(PlenoraError::InvalidPlan(_))
             ));
         }
-        let ingresso = cartella.join("a.parquet");
-        assert!(matches!(
-            percorsi_uscita(cartella, &["a".to_owned()], &[ingresso.as_path()]),
-            Err(PlenoraError::InvalidPlan(_))
-        ));
+        // Un ingresso esistente con lo stesso file dell'output: anche con
+        // maiuscole diverse su Windows, e per un percorso scritto in un
+        // altro modo.
+        let ingresso = cartella.join("A.parquet");
+        std::fs::write(&ingresso, b"x").expect("ingresso");
+        let altro_modo = cartella.join(".").join("A.parquet");
+        for nomi in [
+            ["A".to_owned()],
+            [if cfg!(windows) { "a" } else { "A" }.to_owned()],
+        ] {
+            for percorso in [ingresso.as_path(), altro_modo.as_path()] {
+                assert!(matches!(
+                    percorsi_uscita(cartella, &nomi, &[percorso]),
+                    Err(PlenoraError::InvalidPlan(_))
+                ));
+            }
+        }
+        // Una canonicalizzazione che fallisce e' un errore, non un confronto
+        // sul testo: cartella d'uscita e ingresso inesistenti.
+        let assente = cartella.join("assente");
+        assert!(percorsi_uscita(&assente, &["a".to_owned()], &[]).is_err());
+        let ingresso_assente = assente.join("x.parquet");
+        assert!(
+            percorsi_uscita(cartella, &["a".to_owned()], &[ingresso_assente.as_path()]).is_err()
+        );
     }
 }
