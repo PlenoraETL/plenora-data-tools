@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::ops::Range;
 use std::sync::Arc;
 
 use md5::{Digest, Md5};
@@ -8,6 +9,7 @@ use plenora_core::arrow::array::{
     StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::DataType;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 use sha2::Sha256;
 
@@ -107,42 +109,48 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     if matches!(config.null_policy, HashNullPolicy::Error) {
         reject_null_hash_rows(batch, &columns, &indices)?;
     }
-    let values = (0..batch.num_rows())
-        .map(|row| {
-            let parts = indices
-                .iter()
-                .map(|index| {
-                    let value = scalar_as_string(batch.column(*index).as_ref(), row)?;
-                    let value = match (value, &config.null_policy) {
-                        (Some(value), _) => value,
-                        (None, HashNullPolicy::Empty) => String::new(),
-                        (None, HashNullPolicy::Literal) => config.null_literal.clone(),
-                        (None, HashNullPolicy::Error) => {
-                            return Err(PlenoraError::Internal(
-                                "prevalidazione null md5_hash incoerente".into(),
-                            ));
-                        }
-                    };
-                    Ok(if config.normalize {
-                        value.trim().to_lowercase()
-                    } else {
-                        value
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let mut digest = Md5::new();
-            digest.update(parts.join("\u{1f}").as_bytes());
-            let mut hex = String::new();
-            plenora_core::esadecimale::aggiungi_esadecimale(&mut hex, &digest.finalize());
-            Ok(hex)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // Accesso tipizzato e letterale normalizzato risolti una volta per
+    // batch; per riga un solo buffer riusato, con gli stessi byte di
+    // `parts.join("\u{1f}")` della versione precedente.
+    let accessi = indices
+        .iter()
+        .map(|index| column_access(batch.column(*index).as_ref()))
+        .collect::<Vec<_>>();
+    let letterale = if config.normalize {
+        config.null_literal.trim().to_lowercase()
+    } else {
+        config.null_literal.clone()
+    };
+    let values = colonna_digest(batch.num_rows(), 32, |row, appunti, uscita| {
+        let Appunti { messaggio, testo } = appunti;
+        messaggio.clear();
+        for (posizione, accesso) in accessi.iter().enumerate() {
+            if posizione > 0 {
+                messaggio.push(0x1f);
+            }
+            match testo_cella(accesso, row, testo)? {
+                Some(valore) if config.normalize => accoda_normalizzato(messaggio, valore),
+                Some(valore) => messaggio.extend_from_slice(valore.as_bytes()),
+                None => match config.null_policy {
+                    HashNullPolicy::Empty => {}
+                    HashNullPolicy::Literal => messaggio.extend_from_slice(letterale.as_bytes()),
+                    HashNullPolicy::Error => {
+                        return Err(PlenoraError::Internal(
+                            "prevalidazione null md5_hash incoerente".into(),
+                        ));
+                    }
+                },
+            }
+        }
+        accoda_esadecimale(uscita, &Md5::digest(messaggio.as_slice()));
+        Ok(false)
+    })?;
     replace_or_append(
         batch,
         &config.output_column,
         DataType::Utf8,
         false,
-        Arc::new(StringArray::from(values)),
+        Arc::new(values),
     )
 }
 
@@ -162,14 +170,6 @@ pub struct Sha256Hash {
 
 fn default_sha256_name() -> String {
     "sha256_hash".into()
-}
-
-fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
-    let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::ResourceLimit("sha256_hash: valore troppo grande".into()))?;
-    digest.update(length.to_be_bytes());
-    digest.update(value);
-    Ok(())
 }
 
 /// Colonna con l'hash SHA-256 (esadecimale) delle colonne configurate.
@@ -199,58 +199,76 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
     if matches!(config.null_policy, HashNullPolicy::Error) {
         reject_null_hash_rows(batch, &names, &indices)?;
     }
-    let values = (0..batch.num_rows())
-        .map(|row| {
-            let mut digest = Sha256::new();
-            digest.update(b"plenora-sha256-v1\0");
-            for (name, index) in names.iter().zip(&indices) {
-                framed_part(&mut digest, name.as_bytes())?;
-                framed_part(
-                    &mut digest,
-                    batch.column(*index).data_type().to_string().as_bytes(),
-                )?;
-                let value = scalar_as_string(batch.column(*index).as_ref(), row)?;
-                match (value, &config.null_policy) {
-                    (Some(value), _) => {
-                        digest.update([1]);
-                        let value = if config.normalize {
-                            value.trim().to_lowercase()
-                        } else {
-                            value
-                        };
-                        framed_part(&mut digest, value.as_bytes())?;
+    // Il framing di nome e tipo con il byte di presenza (sempre 1: anche un
+    // null diventa un valore, vuoto o letterale) e' costante per colonna; il
+    // separatore di dominio e la prima intestazione sono assorbiti una volta
+    // in `base`, clonato per riga. Byte assorbiti identici alla versione
+    // precedente.
+    let accessi = indices
+        .iter()
+        .map(|index| column_access(batch.column(*index).as_ref()))
+        .collect::<Vec<_>>();
+    let intestazioni = names
+        .iter()
+        .zip(&indices)
+        .map(|(name, index)| {
+            let mut intestazione = Vec::new();
+            framed_vec(&mut intestazione, name.as_bytes(), "sha256_hash")?;
+            framed_vec(
+                &mut intestazione,
+                batch.column(*index).data_type().to_string().as_bytes(),
+                "sha256_hash",
+            )?;
+            intestazione.push(1);
+            Ok(intestazione)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut base = Sha256::new();
+    base.update(b"plenora-sha256-v1\0");
+    if let Some(prima) = intestazioni.first() {
+        base.update(prima);
+    }
+    let letterale = if config.normalize {
+        config.null_literal.trim().to_lowercase()
+    } else {
+        config.null_literal.clone()
+    };
+    let values = colonna_digest(batch.num_rows(), 64, |row, appunti, uscita| {
+        let Appunti { messaggio, testo } = appunti;
+        messaggio.clear();
+        for (posizione, (intestazione, accesso)) in intestazioni.iter().zip(&accessi).enumerate() {
+            if posizione > 0 {
+                messaggio.extend_from_slice(intestazione);
+            }
+            match testo_cella(accesso, row, testo)? {
+                Some(valore) if config.normalize => {
+                    framed_normalizzato(messaggio, valore, "sha256_hash")?;
+                }
+                Some(valore) => framed_vec(messaggio, valore.as_bytes(), "sha256_hash")?,
+                None => match config.null_policy {
+                    HashNullPolicy::Empty => framed_vec(messaggio, b"", "sha256_hash")?,
+                    HashNullPolicy::Literal => {
+                        framed_vec(messaggio, letterale.as_bytes(), "sha256_hash")?;
                     }
-                    (None, HashNullPolicy::Empty) => {
-                        digest.update([1]);
-                        framed_part(&mut digest, b"")?;
-                    }
-                    (None, HashNullPolicy::Literal) => {
-                        digest.update([1]);
-                        let literal = if config.normalize {
-                            config.null_literal.trim().to_lowercase()
-                        } else {
-                            config.null_literal.clone()
-                        };
-                        framed_part(&mut digest, literal.as_bytes())?;
-                    }
-                    (None, HashNullPolicy::Error) => {
+                    HashNullPolicy::Error => {
                         return Err(PlenoraError::Internal(
                             "prevalidazione null sha256_hash incoerente".into(),
                         ));
                     }
-                }
+                },
             }
-            let mut hex = String::new();
-            plenora_core::esadecimale::aggiungi_esadecimale(&mut hex, &digest.finalize());
-            Ok(hex)
-        })
-        .collect::<Result<Vec<_>>>()?;
+        }
+        let mut digest = base.clone();
+        digest.update(messaggio.as_slice());
+        accoda_esadecimale(uscita, &digest.finalize());
+        Ok(false)
+    })?;
     replace_or_append(
         batch,
         &config.output_column,
         DataType::Utf8,
         false,
-        Arc::new(StringArray::from(values)),
+        Arc::new(values),
     )
 }
 
@@ -326,62 +344,178 @@ fn column_access(array: &dyn Array) -> ColumnAccess<'_> {
     ColumnAccess::Scalar(array)
 }
 
-/// Valore testuale canonico della cella, passato in prestito a `consume`
-/// (dall'array o dal buffer `scratch` riusato).
+/// Valore testuale canonico della cella, in prestito dall'array (Utf8) o dal
+/// buffer `testo` riusato (gli altri tipi).
 ///
-/// Stessi byte e stessi null di `scalar_as_string` (`write!` usa lo stesso
-/// `Display` di `to_string`).
-fn with_cell_value<R>(
-    access: &ColumnAccess<'_>,
+/// Stessi byte, stessi null e stessi errori di `scalar_as_string` (`write!`
+/// usa lo stesso `Display` di `to_string`; i tipi non tipizzati qui passano
+/// proprio da `scalar_as_string`).
+fn testo_cella<'r>(
+    accesso: &'r ColumnAccess<'_>,
     row: usize,
-    scratch: &mut String,
-    consume: impl FnOnce(Option<&str>) -> Result<R>,
-) -> Result<R> {
-    match access {
-        ColumnAccess::Utf8(values) => {
-            if values.is_null(row) {
-                consume(None)
-            } else {
-                consume(Some(values.value(row)))
-            }
-        }
-        ColumnAccess::Int64(values) => {
-            if values.is_null(row) {
-                return consume(None);
-            }
-            scratch.clear();
-            let _ = write!(scratch, "{}", values.value(row));
-            consume(Some(scratch))
-        }
-        ColumnAccess::Float64(values) => {
-            if values.is_null(row) {
-                return consume(None);
-            }
-            scratch.clear();
-            let _ = write!(scratch, "{}", values.value(row));
-            consume(Some(scratch))
-        }
-        ColumnAccess::Boolean(values) => {
-            if values.is_null(row) {
-                return consume(None);
-            }
-            scratch.clear();
-            let _ = write!(scratch, "{}", values.value(row));
-            consume(Some(scratch))
-        }
-        ColumnAccess::UInt64(values) => {
-            if values.is_null(row) {
-                return consume(None);
-            }
-            scratch.clear();
-            let _ = write!(scratch, "{}", values.value(row));
-            consume(Some(scratch))
-        }
-        ColumnAccess::Scalar(array) => match scalar_as_string(*array, row)? {
-            Some(value) => consume(Some(&value)),
-            None => consume(None),
-        },
+    testo: &'r mut String,
+) -> Result<Option<&'r str>> {
+    match accesso {
+        ColumnAccess::Utf8(values) => Ok((!values.is_null(row)).then(|| values.value(row))),
+        ColumnAccess::Int64(values) => Ok((!values.is_null(row)).then(|| {
+            testo.clear();
+            let _ = write!(testo, "{}", values.value(row));
+            testo.as_str()
+        })),
+        ColumnAccess::Float64(values) => Ok((!values.is_null(row)).then(|| {
+            testo.clear();
+            let _ = write!(testo, "{}", values.value(row));
+            testo.as_str()
+        })),
+        ColumnAccess::Boolean(values) => Ok((!values.is_null(row)).then(|| {
+            testo.clear();
+            let _ = write!(testo, "{}", values.value(row));
+            testo.as_str()
+        })),
+        ColumnAccess::UInt64(values) => Ok((!values.is_null(row)).then(|| {
+            testo.clear();
+            let _ = write!(testo, "{}", values.value(row));
+            testo.as_str()
+        })),
+        ColumnAccess::Scalar(array) => Ok(scalar_as_string(*array, row)?.map(|valore| {
+            *testo = valore;
+            testo.as_str()
+        })),
     }
+}
+
+/// Accoda `valore.trim().to_lowercase()` senza allocare sul testo ASCII.
+///
+/// Su un testo ASCII `to_lowercase` coincide con `to_ascii_lowercase` (la
+/// sola regola di contesto di `to_lowercase`, il sigma finale, riguarda un
+/// carattere non ASCII); `trim` resta quello di `str`, con gli spazi
+/// Unicode. Il testo non ASCII passa da `to_lowercase`, come prima.
+fn accoda_normalizzato(messaggio: &mut Vec<u8>, valore: &str) {
+    let ridotto = valore.trim();
+    if ridotto.is_ascii() {
+        messaggio.extend(ridotto.bytes().map(|byte| byte.to_ascii_lowercase()));
+    } else {
+        messaggio.extend_from_slice(ridotto.to_lowercase().as_bytes());
+    }
+}
+
+/// Frame di `valore.trim().to_lowercase()`: sul testo ASCII la lunghezza del
+/// testo normalizzato e' quella di `trim` (vedi `accoda_normalizzato`).
+fn framed_normalizzato(messaggio: &mut Vec<u8>, valore: &str, op: &str) -> Result<()> {
+    let ridotto = valore.trim();
+    if ridotto.is_ascii() {
+        let length = u64::try_from(ridotto.len())
+            .map_err(|_| PlenoraError::ResourceLimit(format!("{op}: valore troppo grande")))?;
+        messaggio.extend_from_slice(&length.to_be_bytes());
+        messaggio.extend(ridotto.bytes().map(|byte| byte.to_ascii_lowercase()));
+        Ok(())
+    } else {
+        framed_vec(messaggio, ridotto.to_lowercase().as_bytes(), op)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Digest per riga a chunk paralleli
+// ---------------------------------------------------------------------------
+
+/// Righe per chunk nel calcolo dei digest.
+///
+/// Nei test un valore piccolo, perche' anche i batch degli oracoli
+/// attraversino piu' chunk e il percorso rayon; l'uscita non dipende dal
+/// valore (vedi `colonna_digest`).
+const RIGHE_PER_CHUNK: usize = if cfg!(test) { 16 } else { 32_768 };
+
+/// Le 256 coppie di cifre esadecimali minuscole, una per valore di byte:
+/// gli stessi byte di `plenora_core::esadecimale` (provato nei test).
+const COPPIE_ESADECIMALI: [[u8; 2]; 256] = {
+    const CIFRE: &[u8; 16] = b"0123456789abcdef";
+    let mut tabella = [[0_u8; 2]; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        tabella[byte] = [CIFRE[byte >> 4], CIFRE[byte & 0x0F]];
+        byte += 1;
+    }
+    tabella
+};
+
+/// Accoda il digest in esadecimale minuscolo, due cifre per byte.
+fn accoda_esadecimale(uscita: &mut Vec<u8>, digest: &[u8]) {
+    for &byte in digest {
+        uscita.extend_from_slice(&COPPIE_ESADECIMALI[usize::from(byte)]);
+    }
+}
+
+/// Buffer riusati da tutte le righe di un chunk.
+#[derive(Default)]
+struct Appunti {
+    /// Byte della riga che seguono il prefisso costante gia' assorbito.
+    messaggio: Vec<u8>,
+    /// Testo di una cella non Utf8 (numero formattato o fallback scalare).
+    testo: String,
+}
+
+/// Uscita di un chunk: le cifre delle righe non nulle, concatenate, e la
+/// nullita' di ogni riga.
+struct ChunkDigest {
+    esadecimale: Vec<u8>,
+    nulle: Vec<bool>,
+}
+
+fn digest_incoerente() -> PlenoraError {
+    PlenoraError::Internal("digest per riga incoerente".into())
+}
+
+/// Colonna Utf8 dei digest per riga, calcolati per chunk contigui di righe.
+///
+/// `riga(row, appunti, uscita)` accoda a `uscita` le `cifre` esadecimali del
+/// digest della riga e rende `false`, oppure rende `true` per una riga nulla
+/// senza accodare nulla. Ogni riga dipende solo da se stessa; i chunk, in
+/// parallelo (rayon) se piu' di uno, si concatenano nell'ordine delle righe.
+/// L'errore reso e' quello del primo chunk che fallisce, cioe' della prima
+/// riga che fallisce, come nella scansione sequenziale.
+fn colonna_digest<F>(righe: usize, cifre: usize, riga: F) -> Result<StringArray>
+where
+    F: Fn(usize, &mut Appunti, &mut Vec<u8>) -> Result<bool> + Sync,
+{
+    let intervalli: Vec<Range<usize>> = (0..righe.div_ceil(RIGHE_PER_CHUNK))
+        .map(|indice| {
+            let inizio = indice * RIGHE_PER_CHUNK;
+            inizio..inizio.saturating_add(RIGHE_PER_CHUNK).min(righe)
+        })
+        .collect();
+    let calcola = |intervallo: &Range<usize>| -> Result<ChunkDigest> {
+        let mut appunti = Appunti::default();
+        let mut esadecimale = Vec::with_capacity(intervallo.len().saturating_mul(cifre));
+        let mut nulle = Vec::with_capacity(intervallo.len());
+        for row in intervallo.clone() {
+            nulle.push(riga(row, &mut appunti, &mut esadecimale)?);
+        }
+        Ok(ChunkDigest { esadecimale, nulle })
+    };
+    let esiti: Vec<Result<ChunkDigest>> = if intervalli.len() > 1 {
+        intervalli.par_iter().map(calcola).collect()
+    } else {
+        intervalli.iter().map(calcola).collect()
+    };
+    let mut builder = StringBuilder::with_capacity(righe, righe.saturating_mul(cifre));
+    for esito in esiti {
+        let ChunkDigest { esadecimale, nulle } = esito?;
+        let testo = std::str::from_utf8(&esadecimale).map_err(|_| digest_incoerente())?;
+        let mut inizio = 0_usize;
+        for nulla in nulle {
+            if nulla {
+                builder.append_null();
+                continue;
+            }
+            let fine = inizio.saturating_add(cifre);
+            builder.append_value(testo.get(inizio..fine).ok_or_else(digest_incoerente)?);
+            inizio = fine;
+        }
+        if inizio != testo.len() {
+            return Err(digest_incoerente());
+        }
+    }
+    Ok(builder.finish())
 }
 
 /// Codifica canonica di una riga, byte esatti:
@@ -396,15 +530,16 @@ fn with_cell_value<R>(
 ///
 /// Determinismo assoluto: stessi byte in input -> stesso digest su qualunque
 /// run o macchina (gli algoritmi sono sha2/md5 su un byte stream fisso).
-fn fingerprint_rows<D: Digest>(
+fn fingerprint_rows<D: Digest + Clone + Sync>(
     batch: &RecordBatch,
     names: &[String],
     indices: &[usize],
 ) -> Result<StringArray> {
     // Framing per colonna e accesso tipizzato precomputati una volta per
-    // batch (`data_type().to_string()` alloca); messaggio e hex in buffer
-    // riusati, un solo `update` per riga. Il byte stream e' l'encoding
-    // canonico documentato sopra.
+    // batch (`data_type().to_string()` alloca). Il separatore di dominio e
+    // la prima intestazione, costanti, sono assorbiti una volta in `base`,
+    // clonato per riga; il resto della riga in un buffer riusato. Il byte
+    // stream e' l'encoding canonico documentato sopra.
     let mut headers = Vec::with_capacity(names.len());
     let mut accesses = Vec::with_capacity(names.len());
     for (name, index) in names.iter().zip(indices) {
@@ -416,35 +551,32 @@ fn fingerprint_rows<D: Digest>(
         headers.push(header);
         accesses.push(column_access(column.as_ref()));
     }
-    let hex_len = <D as Digest>::output_size() * 2;
-    let mut builder =
-        StringBuilder::with_capacity(batch.num_rows(), batch.num_rows().saturating_mul(hex_len));
-    let mut message = Vec::with_capacity(256);
-    let mut scratch = String::new();
-    let mut hex = String::with_capacity(hex_len);
-    for row in 0..batch.num_rows() {
-        message.clear();
-        message.extend_from_slice(b"plenora-fingerprint-v1\0");
-        for (header, access) in headers.iter().zip(&accesses) {
-            message.extend_from_slice(header);
-            with_cell_value(access, row, &mut scratch, |value| {
-                match value {
-                    Some(value) => {
-                        message.push(1);
-                        framed_vec(&mut message, value.as_bytes(), "stable_fingerprint")?;
-                    }
-                    None => message.push(0),
-                }
-                Ok(())
-            })?;
-        }
-        let mut digest = D::new();
-        digest.update(&message);
-        hex.clear();
-        plenora_core::esadecimale::aggiungi_esadecimale(&mut hex, &digest.finalize());
-        builder.append_value(&hex);
+    let mut base = D::new();
+    base.update(b"plenora-fingerprint-v1\0");
+    if let Some(prima) = headers.first() {
+        base.update(prima);
     }
-    Ok(builder.finish())
+    let cifre = <D as Digest>::output_size() * 2;
+    colonna_digest(batch.num_rows(), cifre, |row, appunti, uscita| {
+        let Appunti { messaggio, testo } = appunti;
+        messaggio.clear();
+        for (posizione, (header, access)) in headers.iter().zip(&accesses).enumerate() {
+            if posizione > 0 {
+                messaggio.extend_from_slice(header);
+            }
+            match testo_cella(access, row, testo)? {
+                Some(value) => {
+                    messaggio.push(1);
+                    framed_vec(messaggio, value.as_bytes(), "stable_fingerprint")?;
+                }
+                None => messaggio.push(0),
+            }
+        }
+        let mut digest = base.clone();
+        digest.update(messaggio.as_slice());
+        accoda_esadecimale(uscita, &digest.finalize());
+        Ok(false)
+    })
 }
 
 /// Colonna con il fingerprint stabile per riga (sha256 o md5).
@@ -543,6 +675,7 @@ fn default_hmac_name() -> String {
 /// Gli stati Sha256 dopo l'assorbimento di ipad/opad dipendono SOLO dalla
 /// chiave: sono precomputati una volta per batch e clonati per riga (il
 /// byte stream assorbito e' identico alla versione byte-per-byte).
+/// `hmac_sha256` assorbe nello stato interno anche il separatore di dominio.
 fn hmac_sha256_states(key: &[u8]) -> (Sha256, Sha256) {
     const BLOCK: usize = 64;
     let mut block = [0_u8; BLOCK];
@@ -590,14 +723,6 @@ fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
     }
 }
 
-fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
-    let length = u64::try_from(value.len())
-        .map_err(|_| PlenoraError::ResourceLimit("hmac_sha256: valore troppo grande".into()))?;
-    message.extend_from_slice(&length.to_be_bytes());
-    message.extend_from_slice(value);
-    Ok(())
-}
-
 /// HMAC-SHA256 per riga della concatenazione canonica dei valori.
 ///
 /// Stesso framing di `stable_fingerprint` (separatore di dominio,
@@ -641,7 +766,12 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
     let key = load_hmac_key(&config.key_env)?;
     // hmac non ha null_policy=error; Empty (default), Null e Skip
     // mantengono l'output storico dichiarato, nessun pre-rifiuto.
-    let (inner_base, outer_base) = hmac_sha256_states(&key);
+    // Stati ipad/opad dalla chiave, con il separatore di dominio gia'
+    // assorbito nello stato interno: e' il prefisso costante di ogni
+    // messaggio (con `skip` l'intestazione di una colonna nulla manca, e il
+    // prefisso costante si ferma qui).
+    let (mut inner_base, outer_base) = hmac_sha256_states(&key);
+    inner_base.update(b"plenora-hmac-sha256-v1\0");
     // Framing costante per colonna e accesso tipizzato ai valori,
     // precomputati una volta per batch come in `fingerprint_rows`.
     let mut headers = Vec::with_capacity(config.columns.len());
@@ -650,61 +780,46 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
         let column = batch.column(*index);
         let data_type = column.data_type().to_string();
         let mut header = Vec::with_capacity(name.len() + data_type.len() + 16);
-        framed_bytes(&mut header, name.as_bytes())?;
-        framed_bytes(&mut header, data_type.as_bytes())?;
+        framed_vec(&mut header, name.as_bytes(), "hmac_sha256")?;
+        framed_vec(&mut header, data_type.as_bytes(), "hmac_sha256")?;
         headers.push(header);
         accesses.push(column_access(column.as_ref()));
     }
-    let mut builder =
-        StringBuilder::with_capacity(batch.num_rows(), batch.num_rows().saturating_mul(64));
-    let mut message = Vec::with_capacity(256);
-    let mut scratch = String::new();
-    let mut hex = String::with_capacity(64);
-    for row in 0..batch.num_rows() {
-        message.clear();
-        message.extend_from_slice(b"plenora-hmac-sha256-v1\0");
-        let mut null_row = false;
+    // Con `null` la riga e' nulla alla prima colonna nulla, e le colonne
+    // seguenti non si leggono (come prima: nessun loro errore).
+    let values = colonna_digest(batch.num_rows(), 64, |row, appunti, uscita| {
+        let Appunti { messaggio, testo } = appunti;
+        messaggio.clear();
         for (header, access) in headers.iter().zip(&accesses) {
-            if null_row {
-                break;
-            }
-            with_cell_value(access, row, &mut scratch, |value| {
-                match value {
-                    Some(value) => {
-                        message.extend_from_slice(header);
-                        message.push(1);
-                        framed_bytes(&mut message, value.as_bytes())?;
-                    }
-                    None => match config.null_policy {
-                        HmacNullPolicy::Empty => {
-                            message.extend_from_slice(header);
-                            message.push(1);
-                            framed_bytes(&mut message, b"")?;
-                        }
-                        HmacNullPolicy::Null => null_row = true,
-                        HmacNullPolicy::Skip => {}
-                    },
+            match testo_cella(access, row, testo)? {
+                Some(value) => {
+                    messaggio.extend_from_slice(header);
+                    messaggio.push(1);
+                    framed_vec(messaggio, value.as_bytes(), "hmac_sha256")?;
                 }
-                Ok(())
-            })?;
+                None => match config.null_policy {
+                    HmacNullPolicy::Empty => {
+                        messaggio.extend_from_slice(header);
+                        messaggio.push(1);
+                        framed_vec(messaggio, b"", "hmac_sha256")?;
+                    }
+                    HmacNullPolicy::Null => return Ok(true),
+                    HmacNullPolicy::Skip => {}
+                },
+            }
         }
-        if null_row {
-            builder.append_null();
-            continue;
-        }
-        hex.clear();
-        plenora_core::esadecimale::aggiungi_esadecimale(
-            &mut hex,
-            &hmac_sha256_with_states(&inner_base, &outer_base, &message),
+        accoda_esadecimale(
+            uscita,
+            &hmac_sha256_with_states(&inner_base, &outer_base, messaggio),
         );
-        builder.append_value(&hex);
-    }
+        Ok(false)
+    })?;
     replace_or_append(
         batch,
         &config.output_column,
         DataType::Utf8,
         matches!(config.null_policy, HmacNullPolicy::Null),
-        Arc::new(builder.finish()),
+        Arc::new(values),
     )
 }
 
@@ -1833,6 +1948,11 @@ mod tests {
         )
     }
 
+    /// Frame dell'oracolo HMAC, con l'errore di `hmac_sha256`.
+    fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
+        framed_vec(message, value, "hmac_sha256")
+    }
+
     /// Oracolo indipendente di `hmac_sha256_digest`.
     fn hmac_sha256_digest_reference(key: &[u8], message: &[u8]) -> [u8; 32] {
         const BLOCK: usize = 64;
@@ -2082,3 +2202,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "security_hash_oracolo.rs"]
+mod hash_oracolo;
