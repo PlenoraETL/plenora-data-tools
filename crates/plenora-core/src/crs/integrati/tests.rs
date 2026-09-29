@@ -395,6 +395,17 @@ fn unita_e_precisione() {
         None,
     );
     assert_eq!(senza_unita.precisione_coordinate(), None);
+    // Unita' finite e positive ma fuori scala: il quoziente sarebbe infinito
+    // (subnormale minimo) o subnormale (massimo), mai restituito.
+    for unita in [f64::from_bits(1), f64::MIN_POSITIVE / 1024.0, f64::MAX] {
+        let crs = ResolvedCrs::from_resolved_parts(
+            "X:1".to_owned(),
+            serde_json::json!({"type": "ProjectedCRS"}),
+            CrsKind::Projected,
+            Some(unita),
+        );
+        assert_eq!(crs.precisione_coordinate(), None, "{unita:e}");
+    }
 }
 
 #[test]

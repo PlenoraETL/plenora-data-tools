@@ -233,15 +233,21 @@ impl ResolvedCrs {
     /// ([`METRES_PER_DEGREE_AT_EQUATOR`]); lontano dall'equatore un grado di
     /// longitudine e' piu' corto, e la stessa quantita' in gradi vale meno
     /// di un centimetro a terra (precisione piu' fine, mai piu' grossolana).
-    /// `None` per un proiettato senza un'unita' lineare finita e positiva:
-    /// la precisione non si indovina.
+    /// `None` per un proiettato senza un'unita' lineare finita e positiva, o
+    /// quando il quoziente non e' un `f64` normale e positivo (unita' fuori
+    /// scala, per esempio `f64::from_bits(1)` o `f64::MAX`): la precisione
+    /// non si indovina.
     #[must_use]
     pub fn precisione_coordinate(&self) -> Option<f64> {
         match self.kind {
             CrsKind::Geographic => Some(GROUND_PRECISION_METRES / METRES_PER_DEGREE_AT_EQUATOR),
+            // Il quoziente si verifica, non solo l'unita': un'unita' finita e
+            // positiva ma minuscola (subnormale) darebbe infinito, una enorme
+            // un subnormale che ha perso cifre. Solo un normale positivo passa.
             CrsKind::Projected => match self.horizontal_unit_to_metre {
                 Some(unit) if unit.is_finite() && unit > 0.0 => {
                     Some(GROUND_PRECISION_METRES / unit)
+                        .filter(|precisione| precisione.is_normal() && *precisione > 0.0)
                 }
                 _ => None,
             },
