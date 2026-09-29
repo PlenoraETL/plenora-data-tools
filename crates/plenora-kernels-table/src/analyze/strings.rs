@@ -252,8 +252,11 @@ pub(in crate::analyze) fn analyze_mask_data(
     if config.maskings.len() > limits.max_columns {
         return contract_error(op, "maskings oltre il limite di colonne");
     }
-    // Le masking sono applicate in sequenza: una masking puo' riferirsi a una
-    // colonna `_masked` creata da una precedente.
+    // `available` accumula le uscite delle masking precedenti, ma ogni
+    // colonna mascherata deve comunque essere una colonna di testo
+    // dell'ingresso (`require_scalar_string` sotto): una masking su una
+    // colonna `_masked` creata da una precedente si rifiuta, anche se il
+    // kernel la applicherebbe in sequenza.
     let mut available: HashSet<String> = input
         .schema
         .fields()
