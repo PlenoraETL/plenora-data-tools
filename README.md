@@ -564,20 +564,42 @@ limiti di complessità del piano (`PlanLimits::default()`: passi, input,
 archi, fan-out, profondità, byte di config per passo, lunghezza dei nomi,
 byte del testo JSON); operazione, arietà e dispatch (`table.concat` a più
 di due input, le operazioni geo e quelle senza dispatch sono
-`Unsupported`); config tipizzate una volta; controlli statici delle config
-contro i limiti; contratti di output passo per passo con
-`analyze_table_contract`, un solo `FieldAllocator`, provenance delle
-diagnostiche per riga; colonne di ogni input e di ogni contratto contro
-`max_columns`; controlli che dipendono da schema e config insieme e che
-l'analisi dei kernel non ha ancora (chiavi di join, semi/anti, asof,
-`table_diff`, FK e reconcile leggibili come testo; riga intera di `distinct`
-senza `subset`; operatori testuali di `filter` e `conditional`; `date_format`
-di `type_cast` su target che non lo usano; `explode` con `empty_policy=drop`;
-`stable_fingerprint` senza colonne; `flatten_json` oltre `max_columns`;
-chiave HMAC presente nell'ambiente). Ogni regola sta in un posto solo: quando
-l'analisi la acquisisce si toglie dal runner (formati delle date,
-`order_column` ordinabile e `group_by` testuale sono già passati di là). `table.pivot` e `table.transpose` si rifiutano: il loro
-schema d'uscita dipende dai dati.
+`Unsupported`); config tipizzate una volta; contratti di output passo per
+passo con `analyze_table_contract` e i limiti con cui i kernel
+eseguiranno, un solo `FieldAllocator`, provenance delle diagnostiche per
+riga; colonne di ogni input e di ogni contratto contro `max_columns`.
+`table.pivot` e `table.transpose` si rifiutano: il loro schema d'uscita
+dipende dai dati.
+
+**Ogni regola sulla config sta in un posto solo: l'analisi dei kernel.**
+`analyze_table_contract(op, inputs, config, fields, limits)` riceve i limiti
+del chiamante e rifiuta, per chiunque chiami i kernel e non solo per il
+runner: nomi, testi, regex e conteggi oltre i limiti; nomi ripetuti e liste
+vuote dove non hanno senso; chiavi di join, semi/anti, asof, `table_diff`,
+FK e reconcile non leggibili come testo, o di lunghezza diversa fra i lati;
+la riga intera di `distinct` senza `subset` con colonne che non sono testo;
+gli operatori di `filter` e `conditional` sui tipi che il kernel non sa
+valutare (testuali su colonne non testuali, ordinati fuori da
+`scalar_compare_supported`, `==`/`!=` numerici con un valore non numerico);
+i parametri che il kernel ignorerebbe (`date_format`, `precision`, `scale`,
+`timezone` di `type_cast` su target che non li usano; `ascending` di
+`add_row_number` e `dedup_advanced` senza `order_column`;
+`inclusive_min`/`inclusive_max` di `assert_range` senza l'estremo;
+`quantile` su un'altra funzione; `output_column` ed `extract_all` di
+`string_extract` con gruppi con nome, rifiutati anche dal kernel); le
+asserzioni vacue (`assert_not_null`, `assert_unique`, `assert_schema` senza
+colonne, `assert_range` senza estremi, `assert_cardinality` senza vincoli,
+`assert_metadata` senza chiavi, `conditional` senza condizioni, `sha256_hash`
+e `stable_fingerprint` senza colonne); `melt` con variabile e valore
+omonimi, `rename` con una sorgente ripetuta, `explode` con
+`empty_policy=drop`; formati di data vuoti; `flatten_json` oltre
+`max_columns`; `amount` di `date_add` che nessuna data sopporta
+(`dates::verifica_amount`); in `expression`, arietà delle funzioni, pattern
+letterali di `regex_replace` e indici letterali negativi di `substring`.
+
+Il runner tiene un solo controllo proprio, perché non riguarda la config ma
+l'ambiente del processo: la variabile `key_env` di `table.hmac_sha256`
+deve esistere e non essere vuota.
 
 ### Esecuzione
 
@@ -742,21 +764,40 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   dominio misurato, e un allocatore contato per il processo (un tetto
   vero, non una previsione).
 - **Solo operazioni tabellari**: le geo si rifiutano in validazione.
-- **Controlli statici delle config nel runner**: sono il porting di
-  `validate_step_contract` di `190c493`, perché l'analisi dei contratti non
-  li ripete e senza di essi alcune config passerebbero con un significato
-  diverso da quello scritto. Il loro posto è l'analisi dei kernel; lì
-  rientrano quando ci sono.
-- **Fallimenti prevedibili non ancora anticipati**: la regola della
-  validazione non copre ancora gli operatori ordinati di `filter` e
-  `conditional` su tipi che `scalar_compare` non accetta, `==`/`!=` su
-  colonne numeriche con valore non numerico in `conditional`, `amount` di
-  `date_add` fuori scala, arietà, regex letterali e `substring` negativi di
-  `expression`. Falliscono con un errore esplicito, ma durante
-  l'esecuzione. Rientro: predicati di tipo pubblici nei kernel, o gli stessi
-  controlli nell'analisi.
-- **Chiave HMAC controllata in validazione**: la variabile d'ambiente può
-  cambiare fra `validate` e `run`; in quel caso l'errore arriva al passo.
+>>>>
+
+- **Errori che dipendono dai valori delle celle, in esecuzione.**
+  *Regola*: la validazione rifiuta ciò che config, schema e limiti rendono
+  prevedibile; ciò che dipende dal valore di una cella fallisce, con un
+  errore esplicito, quando il kernel la legge.
+  *Ambito*: testo non numerico in una colonna Utf8 letta come numero
+  (confronti ordinati, aggregazioni, statistiche, `assert_range`); valori
+  che non si convertono nel tipo chiesto (`type_cast`, parse delle date);
+  un `amount` di `date_add` che alcune date sopportano e quelle dei dati no;
+  in `expression`, regex e indici di `substring` calcolati dalle colonne,
+  divisori non letterali nulli; le asserzioni violate dai dati.
+  *Hazard*: i passi a monte hanno già girato quando l'errore arriva.
+  *Rientro*: nessuno previsto, è la natura del dato. L'oracolo
+  `crates/plenora-pipeline/tests/oracolo_config.rs` esegue ogni config che
+  l'analisi accetta (varianti di ogni operazione del catalogo) e ammette in
+  esecuzione solo queste classi, elencate con il motivo.
+- **Parametri ignorati non ancora censiti.**
+  *Regola*: un parametro che il kernel non usa per la config data si
+  rifiuta in analisi, non si ignora.
+  *Ambito*: fatto per i parametri elencati in «Validazione»; restano, trovati
+  e non ancora trattati, `chars_start`, `chars_end` e `mask_char` di
+  `mask_data` con un `mask_type` diverso da `custom`, `value` di `fill_na`
+  con `ffill`/`bfill`, e i parametri di `aggregate` che valgono solo per
+  alcune funzioni (`separator` fuori da `concat`). Con valori di default non
+  distinguibili da uno scritto, il rifiuto chiede un campo facoltativo, come
+  per `ascending` e `inclusive_min`.
+  *Hazard*: la config dice una cosa che l'esecuzione non fa, senza errore.
+  *Rientro*: lo stesso trattamento di `ascending` (campo facoltativo e
+  rifiuto in analisi) per ciascuno.
+- **Chiave HMAC controllata in validazione, dal runner**: è ambiente, non
+  config, quindi non sta nell'analisi dei kernel; la variabile d'ambiente
+  può cambiare fra `validate` e `run`, e in quel caso l'errore arriva al
+  passo.
 - **Nome del passo negli errori**: aggiunto al messaggio conservando la
   categoria; gli errori con diagnostica per riga o già strutturati restano
   quelli del kernel.
