@@ -2,11 +2,18 @@
 //!
 //! ```text
 //! cargo run --release -p plenora-io --example catena_da_file -- \
-//!     catena.json uscita.parquet nome=percorso.parquet [nome=percorso ...]
+//!     catena.json cartella_uscite nome=percorso.parquet [nome=percorso ...]
 //! ```
 //!
 //! `catena.json` e' `{"piani": [piano, ...]}`: piani del runner eseguiti in
-//! sequenza, ognuno sugli output del precedente (il primo sui file).
+//! sequenza, ognuno sugli output del precedente (il primo sui file). Il
+//! testo si controlla per chiavi ripetute prima di ogni lettura serde (come
+//! `Pipeline::from_json`), e l'oggetto ha solo `piani`.
+//!
+//! Ogni output dell'ultimo piano si scrive in `cartella_uscite/<nome>.parquet`:
+//! nomi di soli `[A-Za-z0-9_-]`, distinti anche senza distinzione di
+//! maiuscole (file system di Windows), nessun percorso uguale a un ingresso.
+//! Tutto si verifica prima di leggere.
 //!
 //! Come `esegui_da_file` (ogni input letto con il budget residuo, byte vivi
 //! esatti dopo ogni lettura), con in piu' i tempi di lettura, catena e
@@ -18,7 +25,7 @@
 //! unita' che i kernel tabellari leggono come testo. Si rifiuta se un valore
 //! non e' un multiplo esatto di 1000 microsecondi (nessun troncamento).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -30,6 +37,84 @@ use plenora_core::{PlenoraError, Result};
 use plenora_io::{leggi_tabella, scrivi_tabella, OpzioniScrittura};
 use plenora_pipeline::{byte_vivi, Pipeline};
 use serde_json::{json, Value};
+
+/// I piani della catena dal testo di `catena.json`.
+///
+/// # Errors
+///
+/// `InvalidPlan` per chiavi ripetute a qualunque profondita', JSON non
+/// valido, chiavi diverse da `piani`, piani non validi (`Pipeline::from_json`).
+fn leggi_catena(testo: &str) -> Result<Vec<Pipeline>> {
+    // Prima di ogni lettura serde, che terrebbe in silenzio l'ultima di due
+    // chiavi ripetute (anche nelle config dei passi).
+    plenora_core::json::ensure_no_duplicate_keys(testo)?;
+    let catena: Value = serde_json::from_str(testo)
+        .map_err(|_| PlenoraError::InvalidPlan("catena.json non e' JSON".into()))?;
+    let oggetto = catena
+        .as_object()
+        .ok_or_else(|| PlenoraError::InvalidPlan("catena.json non e' un oggetto".into()))?;
+    if oggetto.keys().any(|chiave| chiave != "piani") {
+        return Err(PlenoraError::InvalidPlan(
+            "catena.json: ammessa solo la chiave `piani`".into(),
+        ));
+    }
+    oggetto
+        .get("piani")
+        .and_then(Value::as_array)
+        .ok_or_else(|| PlenoraError::InvalidPlan("catena.json senza `piani`".into()))?
+        .iter()
+        .map(|piano| {
+            serde_json::to_string(piano)
+                .map_err(|_| PlenoraError::InvalidPlan("piano non serializzabile".into()))
+                .and_then(|testo| Pipeline::from_json(&testo))
+        })
+        .collect()
+}
+
+/// Un file per output nella cartella, verificati prima di leggere.
+///
+/// # Errors
+///
+/// `InvalidPlan` per un nome vuoto o con caratteri fuori da `[A-Za-z0-9_-]`,
+/// due nomi uguali senza distinzione di maiuscole, un percorso d'uscita
+/// uguale a un ingresso.
+fn percorsi_uscita(
+    cartella: &Path,
+    nomi: &[String],
+    ingressi: &[&Path],
+) -> Result<Vec<(String, PathBuf)>> {
+    let canonico = |percorso: &Path| {
+        std::fs::canonicalize(percorso).unwrap_or_else(|_| percorso.to_path_buf())
+    };
+    let mut visti = std::collections::HashSet::new();
+    let mut uscite = Vec::with_capacity(nomi.len());
+    for nome in nomi {
+        let ammesso =
+            |carattere: char| carattere.is_ascii_alphanumeric() || matches!(carattere, '_' | '-');
+        if nome.is_empty() || !nome.chars().all(ammesso) {
+            return Err(PlenoraError::InvalidPlan(
+                "nome di output non utilizzabile come nome di file".into(),
+            ));
+        }
+        if !visti.insert(nome.to_ascii_lowercase()) {
+            return Err(PlenoraError::InvalidPlan(
+                "due output con lo stesso file (maiuscole a parte)".into(),
+            ));
+        }
+        let percorso = cartella.join(format!("{nome}.parquet"));
+        let destinazione = canonico(&percorso);
+        if ingressi
+            .iter()
+            .any(|ingresso| canonico(ingresso) == destinazione)
+        {
+            return Err(PlenoraError::InvalidPlan(
+                "un percorso d'uscita coincide con un ingresso".into(),
+            ));
+        }
+        uscite.push((nome.clone(), percorso));
+    }
+    Ok(uscite)
+}
 
 fn in_millisecondi(tabella: &RecordBatch) -> Result<(RecordBatch, Vec<String>)> {
     let mut convertite = Vec::new();
@@ -113,26 +198,32 @@ fn resoconto_passi(report: &plenora_pipeline::Report, piano: usize) -> Vec<Value
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let argomenti: Vec<String> = std::env::args().skip(1).collect();
-    let [catena, percorso_uscita, coppie @ ..] = argomenti.as_slice() else {
+    let [catena, cartella_uscite, coppie @ ..] = argomenti.as_slice() else {
         return Err(PlenoraError::InvalidPlan(
-            "uso: catena_da_file catena.json uscita.parquet nome=percorso ...".into(),
+            "uso: catena_da_file catena.json cartella_uscite nome=percorso ...".into(),
         ));
     };
     let avvio = Instant::now();
-    let testo = std::fs::read_to_string(catena)?;
-    let catena: Value = serde_json::from_str(&testo)
-        .map_err(|_| PlenoraError::InvalidPlan("catena.json non e' JSON".into()))?;
-    let piani = catena
-        .get("piani")
-        .and_then(Value::as_array)
-        .ok_or_else(|| PlenoraError::InvalidPlan("catena.json senza `piani`".into()))?
+    let piani = leggi_catena(&std::fs::read_to_string(catena)?)?;
+    let coppie = coppie
         .iter()
-        .map(|piano| {
-            serde_json::to_string(piano)
-                .map_err(|_| PlenoraError::InvalidPlan("piano non serializzabile".into()))
-                .and_then(|testo| Pipeline::from_json(&testo))
+        .map(|coppia| {
+            coppia
+                .split_once('=')
+                .ok_or_else(|| PlenoraError::InvalidPlan("atteso nome=percorso".into()))
         })
         .collect::<Result<Vec<_>>>()?;
+    let percorsi_ingresso: Vec<&Path> = coppie
+        .iter()
+        .map(|(_, percorso)| Path::new(*percorso))
+        .collect();
+    let destinazioni = percorsi_uscita(
+        Path::new(cartella_uscite),
+        piani
+            .last()
+            .map_or(&[][..], |piano| piano.outputs.as_slice()),
+        &percorsi_ingresso,
+    )?;
     let budget_di = |piano: &Pipeline| -> Result<u64> {
         Ok(piano
             .limits
@@ -148,10 +239,7 @@ fn main() -> Result<()> {
     let inizio_lettura = Instant::now();
     let mut tabelle: Vec<(String, RecordBatch)> = Vec::new();
     let mut letture = Vec::new();
-    for coppia in coppie {
-        let (nome, percorso) = coppia
-            .split_once('=')
-            .ok_or_else(|| PlenoraError::InvalidPlan("atteso nome=percorso".into()))?;
+    for (nome, percorso) in coppie {
         let vivi = byte_vivi(tabelle.iter().map(|(_, tabella)| tabella))?;
         let inizio = Instant::now();
         let letta = leggi_tabella(Path::new(percorso), None, budget.saturating_sub(vivi))?;
@@ -222,9 +310,13 @@ fn main() -> Result<()> {
     let inizio_scrittura = Instant::now();
     let mut uscite = Vec::new();
     for (nome, tabella) in &tabelle {
+        let (_, file_uscita) = destinazioni
+            .iter()
+            .find(|(candidato, _)| candidato == nome)
+            .ok_or_else(|| PlenoraError::Internal("output senza percorso".into()))?;
         scrivi_tabella(
             tabella,
-            Path::new(percorso_uscita),
+            file_uscita,
             &OpzioniScrittura {
                 sovrascrivi: true,
                 ..OpzioniScrittura::default()
@@ -254,4 +346,67 @@ fn main() -> Result<()> {
             .map_err(|_| PlenoraError::Internal("resoconto JSON".into()))?
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PIANO: &str = r#"{"version": 1, "inputs": ["t"], "steps": [
+        {"out": "a", "op": "table.limit", "in": ["t"], "config": {"n": 1}},
+        {"out": "b", "op": "table.limit", "in": ["t"], "config": {"n": 2}}],
+        "outputs": ["a", "b"]}"#;
+
+    fn catena(piano: &str) -> String {
+        format!(r#"{{"piani": [{piano}]}}"#)
+    }
+
+    #[test]
+    fn le_chiavi_ripetute_si_rifiutano_prima_di_leggere() {
+        assert_eq!(
+            leggi_catena(&catena(PIANO)).map(|piani| piani.len()).ok(),
+            Some(1)
+        );
+        let ripetute = [
+            // Nella config di un passo, nel piano e nella catena.
+            catena(&PIANO.replace(r#""config": {"n": 1}"#, r#""config": {"n": 1, "n": 3}"#)),
+            catena(&PIANO.replace(r#""version": 1,"#, r#""version": 1, "version": 1,"#)),
+            format!(r#"{{"piani": [{PIANO}], "piani": []}}"#),
+            format!(r#"{{"piani": [{PIANO}], "altro": 1}}"#),
+        ];
+        for testo in ripetute {
+            let errore = leggi_catena(&testo).expect_err("rifiuto");
+            assert!(matches!(errore, PlenoraError::InvalidPlan(_)), "{errore}");
+        }
+    }
+
+    #[test]
+    fn ogni_output_ha_il_suo_file() {
+        let cartella = Path::new("uscite");
+        let nomi = ["a".to_owned(), "b".to_owned()];
+        let uscite = percorsi_uscita(cartella, &nomi, &[]).expect("due output");
+        assert_eq!(
+            uscite,
+            [
+                ("a".to_owned(), cartella.join("a.parquet")),
+                ("b".to_owned(), cartella.join("b.parquet"))
+            ]
+        );
+        for nomi in [
+            vec!["a".to_owned(), "A".to_owned()],
+            vec![String::new()],
+            vec!["../fuori".to_owned()],
+            vec!["con spazio".to_owned()],
+        ] {
+            assert!(matches!(
+                percorsi_uscita(cartella, &nomi, &[]),
+                Err(PlenoraError::InvalidPlan(_))
+            ));
+        }
+        let ingresso = cartella.join("a.parquet");
+        assert!(matches!(
+            percorsi_uscita(cartella, &["a".to_owned()], &[ingresso.as_path()]),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+    }
 }

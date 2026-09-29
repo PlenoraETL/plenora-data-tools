@@ -30,5 +30,11 @@ chrono.workspace = true
 wkt.workspace = true
 serde.workspace = true
 
+# I test dell'esempio (lettura della catena, percorsi d'uscita) girano con
+# `cargo test`.
+[[example]]
+name = "catena_da_file"
+test = true
+
 [lints]
 workspace = true

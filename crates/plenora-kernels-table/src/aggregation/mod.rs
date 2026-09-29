@@ -577,12 +577,12 @@ mod tests {
                         .values()
                         .map(|rows| {
                             let count = if matches!(aggregation.function, AggFunction::Count) {
+                                // Null logici da Arrow, indipendenti dal
+                                // helper del kernel che il riferimento verifica.
+                                let nulli = batch.column(index).logical_nulls();
                                 rows.iter()
                                     .filter(|row| {
-                                        !crate::is_logically_null(
-                                            batch.column(index).as_ref(),
-                                            **row,
-                                        )
+                                        !nulli.as_ref().is_some_and(|nulli| nulli.is_null(**row))
                                     })
                                     .count()
                             } else {

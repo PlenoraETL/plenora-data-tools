@@ -508,8 +508,9 @@ impl Pivot {
 
     /// Le regole sui nomi, uguali per l'analisi e per il kernel.
     ///
-    /// Sempre: colonne indice senza ripetizioni (lo schema avrebbe due
-    /// colonne omonime). Con il `mapping`: ogni nome di output valido,
+    /// Sempre: almeno una colonna indice (senza, tutte le righe finirebbero
+    /// in un solo gruppo), senza ripetizioni (lo schema avrebbe due colonne
+    /// omonime). Con il `mapping`: ogni nome di output valido,
     /// nessun nome ripetuto ne' uguale a una colonna indice, colonne indice
     /// piu' voci entro `max_columns`, e chiavi confrontabili con i valori
     /// della `pivot_col` di tipo `tipo_pivot`. I valori si confrontano con le
@@ -523,12 +524,15 @@ impl Pivot {
     ///
     /// # Errors
     ///
-    /// - `InvalidPlan`: colonna indice ripetuta; nome di output non valido,
+    /// - `InvalidPlan`: `index_col` senza colonne; colonna indice ripetuta; nome di output non valido,
     ///   ripetuto o uguale a una colonna indice; chiave non canonica o
     ///   `pivot_col` di un tipo senza chiavi certe;
     /// - `ResourceLimit`: colonne di output oltre `max_columns`.
     pub fn verifica_mapping(&self, tipo_pivot: &DataType, max_columns: usize) -> Result<()> {
         let indice = self.nomi_indice();
+        if indice.is_empty() {
+            return Err(PlenoraError::InvalidPlan("pivot: index_col vuoto".into()));
+        }
         let mut presi: HashSet<&str> = HashSet::with_capacity(indice.len());
         if !indice.iter().all(|nome| presi.insert(nome)) {
             return Err(PlenoraError::InvalidPlan(
@@ -2092,18 +2096,18 @@ mod tests {
                 )
             }
             PivotAgg::Count => {
+                // Null logici da Arrow (`logical_nulls`), non dal helper del
+                // kernel: il riferimento non condivide la regola che verifica.
+                let nulli = source.logical_nulls();
+                let e_nullo = |row: usize| nulli.as_ref().is_some_and(|nulli| nulli.is_null(row));
                 let values = groups
                     .iter()
                     .map(|rows| {
                         rows.map(|rows| {
-                            i64::try_from(
-                                rows.iter()
-                                    .filter(|row| !crate::is_logically_null(source.as_ref(), **row))
-                                    .count(),
-                            )
-                            .map_err(|_| {
-                                PlenoraError::ResourceLimit("conteggio pivot oltre i64".into())
-                            })
+                            i64::try_from(rows.iter().filter(|row| !e_nullo(**row)).count())
+                                .map_err(|_| {
+                                    PlenoraError::ResourceLimit("conteggio pivot oltre i64".into())
+                                })
                         })
                         .transpose()
                     })
@@ -2816,6 +2820,21 @@ mod tests {
             },
         ] {
             rifiuto(&config, "colonna indice ripetuta");
+        }
+        // index_col senza colonne, con e senza mapping.
+        for index_col in ["", " , "] {
+            for config in [
+                Pivot {
+                    index_col: index_col.into(),
+                    ..pivot_config("k", "k", "v", PivotAgg::Sum)
+                },
+                Pivot {
+                    index_col: index_col.into(),
+                    ..con("k", &[("a", "x")])
+                },
+            ] {
+                rifiuto(&config, "index_col vuoto");
+            }
         }
         // Senza mapping: il valore pivot "k" si chiamerebbe come l'indice.
         let omonimo = batch_of(

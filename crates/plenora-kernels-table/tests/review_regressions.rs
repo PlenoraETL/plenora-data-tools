@@ -3523,3 +3523,130 @@ fn il_filtro_ordinato_su_colonna_testuale_non_passa_da_f64() {
         "`between` passa dal numerico esatto: 10.50 e' compreso"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Il null logico vale per ogni dictionary, non solo per `Dictionary(Int32,
+// Utf8)`: `count` di `pivot` accetta ogni tipo di valore, e con una chiave
+// Int8 valida su un valore nullo contava 1 invece di 0.
+// ---------------------------------------------------------------------------
+
+/// Chiavi `[0, 1, null, 2]` su valori `["a", null, "c"]`: righe 1 e 2 nulle.
+fn dizionario<K>() -> ArrayRef
+where
+    K: plenora_core::arrow::array::types::ArrowDictionaryKeyType,
+    K::Native: TryFrom<i64>,
+{
+    use plenora_core::arrow::array::{DictionaryArray, PrimitiveArray, StringArray};
+    let converti = |valore: i64| K::Native::try_from(valore).ok();
+    let chiavi: PrimitiveArray<K> = [converti(0), converti(1), None, converti(2)]
+        .into_iter()
+        .collect();
+    let valori = StringArray::from(vec![Some("a"), None, Some("c")]);
+    Arc::new(DictionaryArray::<K>::try_new(chiavi, Arc::new(valori)).expect("dictionary"))
+}
+
+/// `is_logically_null` riga per riga contro `logical_nulls` di Arrow, che
+/// non passa dal helper dei kernel.
+fn come_arrow(array: &ArrayRef) {
+    use plenora_core::arrow::array::Array;
+    let nulli = array.logical_nulls();
+    for row in 0..array.len() {
+        assert_eq!(
+            plenora_kernels_table::is_logically_null(array.as_ref(), row),
+            nulli.as_ref().is_some_and(|nulli| nulli.is_null(row)),
+            "{:?} riga {row}",
+            array.data_type()
+        );
+    }
+}
+
+#[test]
+fn il_null_logico_e_quello_di_arrow_per_ogni_dictionary() {
+    use plenora_core::arrow::array::types::{
+        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    };
+    use plenora_core::arrow::array::{DictionaryArray, Int8Array, NullArray, UInt16Array};
+    for array in [
+        dizionario::<Int8Type>(),
+        dizionario::<Int16Type>(),
+        dizionario::<Int32Type>(),
+        dizionario::<Int64Type>(),
+        dizionario::<UInt8Type>(),
+        dizionario::<UInt16Type>(),
+        dizionario::<UInt32Type>(),
+        dizionario::<UInt64Type>(),
+    ] {
+        come_arrow(&array);
+        assert!(plenora_kernels_table::is_logically_null(array.as_ref(), 1));
+    }
+    // Valori non testuali, e una dictionary di dictionary.
+    let interi = Arc::new(
+        DictionaryArray::<UInt16Type>::try_new(
+            UInt16Array::from(vec![Some(0), Some(1)]),
+            Arc::new(Int64Array::from(vec![Some(7), None])),
+        )
+        .expect("dictionary"),
+    ) as ArrayRef;
+    come_arrow(&interi);
+    let annidata = Arc::new(
+        DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![Some(0), Some(1), Some(2)]),
+            dizionario::<Int32Type>(),
+        )
+        .expect("dictionary"),
+    ) as ArrayRef;
+    come_arrow(&annidata);
+    assert!(plenora_kernels_table::is_logically_null(
+        annidata.as_ref(),
+        1
+    ));
+    come_arrow(&(Arc::new(NullArray::new(3)) as ArrayRef));
+}
+
+#[test]
+fn count_di_pivot_e_aggregate_non_conta_i_valori_nulli_di_una_dictionary_int8() {
+    use plenora_core::arrow::array::types::Int8Type;
+    use plenora_core::arrow::array::{Array, StringArray};
+    use plenora_kernels_table::aggregation::{aggregate, Aggregate};
+    use plenora_kernels_table::reshape::{pivot, Pivot};
+    let valori = dizionario::<Int8Type>();
+    let tabella = batch(
+        vec![
+            Field::new("k", DataType::Utf8, false),
+            Field::new("p", DataType::Utf8, false),
+            Field::new("v", valori.data_type().clone(), true),
+        ],
+        vec![
+            Arc::new(StringArray::from(vec!["x", "y", "z", "w"])),
+            Arc::new(StringArray::from(vec!["a", "a", "a", "a"])),
+            valori,
+        ],
+    );
+    let config: Pivot = serde_json::from_value(json!({
+        "index_col": "k", "pivot_col": "p", "value_col": "v",
+        "aggr_func": "count", "mapping": {"a": "n"}
+    }))
+    .expect("config");
+    let uscita = pivot(&tabella, &config, &Limits::default()).expect("pivot");
+    let conti = uscita
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("Int64")
+        .values()
+        .to_vec();
+    // Chiavi in ordine: w, x, y, z; nulle y (entry nulla) e z (chiave nulla).
+    assert_eq!(conti, [1, 1, 0, 0]);
+    let config: Aggregate = serde_json::from_value(json!({
+        "group_by": ["p"], "aggregations": [{"column": "v", "function": "count"}]
+    }))
+    .expect("config");
+    let uscita = aggregate(&tabella, &config).expect("aggregate");
+    let totale = uscita
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("Int64")
+        .value(0);
+    assert_eq!(totale, 2);
+}

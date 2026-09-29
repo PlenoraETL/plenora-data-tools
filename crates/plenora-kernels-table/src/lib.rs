@@ -757,23 +757,71 @@ pub fn dictionary_utf8_value(
 }
 
 /// `true` se la riga e' nulla **logicamente**, non solo nella bitmap di
-/// primo livello.
+/// primo livello: la semantica di `Array::logical_nulls` di Arrow, riga per
+/// riga.
 ///
-/// Differisce da `Array::is_null` solo per `Dictionary(Int32, Utf8)` con
-/// chiave valida su entry nulla. Ogni percorso che decide la nullita' di una
-/// riga passa di qui, perche' due percorsi non diano due risposte.
+/// Differisce da `Array::is_null` per le dictionary con **qualunque** tipo di
+/// chiave e di valore (chiave valida su un valore nullo, anche in una
+/// dictionary annidata), per `Null` (ogni riga e' nulla senza bitmap) e per
+/// `RunEndEncoded` e le union (la nullita' sta nei figli). Ogni percorso che
+/// decide la nullita' di una riga passa di qui, perche' due percorsi non
+/// diano due risposte.
 ///
-/// Una chiave malformata non e' null: risponde `false`, e l'errore lo da'
-/// [`dictionary_utf8_value`].
+/// Una chiave malformata (negativa o oltre il dizionario) non e' null:
+/// risponde `false`, e l'errore lo da' chi legge il valore
+/// ([`dictionary_utf8_value`]).
 #[must_use]
 pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
+    use num_traits::ToPrimitive;
+    use plenora_core::arrow::array::cast::AsArray as _;
+    use plenora_core::arrow::array::types::ArrowDictionaryKeyType;
+    use plenora_core::arrow::array::types::{
+        Int16Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    };
+
+    /// Valore della dictionary a cui punta la chiave della riga.
+    fn valore_nullo<K>(array: &dyn Array, row: usize) -> bool
+    where
+        K: ArrowDictionaryKeyType,
+        K::Native: ToPrimitive,
+    {
+        let Some(dictionary) = array.as_dictionary_opt::<K>() else {
+            return false;
+        };
+        let Some(chiave) = ToPrimitive::to_usize(&dictionary.keys().value(row)) else {
+            return false;
+        };
+        chiave < dictionary.values().len()
+            && is_logically_null(dictionary.values().as_ref(), chiave)
+    }
+
+    if row >= array.len() {
+        return false;
+    }
     if array.is_null(row) {
         return true;
     }
-    array
-        .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .is_some_and(|values| matches!(dictionary_utf8_value(values, row), Ok(None)))
+    match array.data_type() {
+        DataType::Null => true,
+        DataType::Dictionary(chiave, _) => match chiave.as_ref() {
+            DataType::Int8 => valore_nullo::<Int8Type>(array, row),
+            DataType::Int16 => valore_nullo::<Int16Type>(array, row),
+            DataType::Int32 => valore_nullo::<Int32Type>(array, row),
+            DataType::Int64 => valore_nullo::<Int64Type>(array, row),
+            DataType::UInt8 => valore_nullo::<UInt8Type>(array, row),
+            DataType::UInt16 => valore_nullo::<UInt16Type>(array, row),
+            DataType::UInt32 => valore_nullo::<UInt32Type>(array, row),
+            DataType::UInt64 => valore_nullo::<UInt64Type>(array, row),
+            _ => false,
+        },
+        // Nullita' nei figli: la si legge dalla fetta di una riga (costo
+        // proporzionale alla fetta, non all'array).
+        DataType::RunEndEncoded(_, _) | DataType::Union(_, _) => array
+            .slice(row, 1)
+            .logical_nulls()
+            .is_some_and(|nulli| nulli.is_null(0)),
+        _ => false,
+    }
 }
 
 /// Valore scalare della riga come `String` (profilo scalare testuale).
