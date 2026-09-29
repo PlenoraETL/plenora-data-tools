@@ -1,0 +1,413 @@
+//! Validazione del piano, prima di qualunque esecuzione.
+//!
+//! Tutto ciò che si può dire senza i dati si dice qui: nomi SSA, operazione
+//! e arietà dal catalogo, dispatch del runner, config tipizzate, contratti
+//! passo per passo, controlli statici delle config contro i limiti
+//! ([`crate::verifica_config`]). Un piano che passa non fallisce in esecuzione per un
+//! motivo che la validazione poteva vedere.
+//!
+//! I passi 2 e 5 di `validate` di `plenora-engine/src/planner.rs` a
+//! `190c493` sono portati quasi alla lettera: contratti di input con un solo
+//! `FieldAllocator` e rimappatura dei `FieldId` geometrici, `sorted_by`
+//! rifiutato sugli input, analisi per passo, controllo di provenance delle
+//! diagnostiche per riga. Restano fuori versioni e migrazioni del piano,
+//! isolamento, capability, profilo di publish, `plan_hash` e
+//! `catalog_fingerprint`.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use plenora_core::arrow::schema::{DataType, Schema, SchemaRef};
+use plenora_core::catalog::{
+    find_operation, Arity, Family, OperationDescriptor, SourceRowProvenance,
+};
+use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
+use plenora_core::contract::{DataContract, FieldAllocator};
+use plenora_core::crs::{resolve_crs, ResolvedCrs};
+use plenora_core::limits::Limits;
+use plenora_core::{PlenoraError, Result};
+use plenora_kernels_table::analyze::analyze_table_contract;
+
+use crate::dispatch::PassoPreparato;
+use crate::piano::{Pipeline, VERSIONE_PIANO};
+
+/// Chiave dei metadati di schema che pandas usa come secondo schema opaco.
+pub const METADATI_PANDAS: &str = "pandas";
+
+/// Un passo che ha superato la validazione.
+#[derive(Debug)]
+// F1: i campi si leggono solo dall'esecuzione, che arriva in F2.
+#[allow(dead_code)]
+pub struct PassoValidato {
+    pub out: String,
+    pub descrittore: &'static OperationDescriptor,
+    pub inputs: Vec<String>,
+    pub preparato: PassoPreparato,
+}
+
+/// Piano validato contro gli schemi degli input: pronto per l'esecuzione.
+#[derive(Debug)]
+// F1: i campi si leggono solo dall'esecuzione, che arriva in F2.
+#[allow(dead_code)]
+pub struct PipelineValidata {
+    pub(crate) inputs: Vec<String>,
+    /// Schemi degli input dopo la normalizzazione (`LargeUtf8` → `Utf8`,
+    /// metadati `pandas` tolti): le tabelle date a `run` devono avere
+    /// esattamente questi, normalizzate allo stesso modo.
+    pub(crate) schemi_input: BTreeMap<String, SchemaRef>,
+    pub(crate) passi: Vec<PassoValidato>,
+    pub(crate) outputs: Vec<String>,
+    pub(crate) contratti: BTreeMap<String, DataContract>,
+    pub(crate) limiti: Limits,
+    pub(crate) limiti_kernel: plenora_kernels_table::Limits,
+    pub(crate) crs_piano: Option<ResolvedCrs>,
+}
+
+impl PipelineValidata {
+    /// Contratto inferito per un nome del piano (input o `out` di un passo).
+    #[must_use]
+    pub fn contratto(&self, nome: &str) -> Option<&DataContract> {
+        self.contratti.get(nome)
+    }
+
+    /// Limiti effettivi del piano.
+    #[must_use]
+    pub const fn limiti(&self) -> &Limits {
+        &self.limiti
+    }
+
+    /// CRS di piano risolto, se dichiarato.
+    #[must_use]
+    pub const fn crs_piano(&self) -> Option<&ResolvedCrs> {
+        self.crs_piano.as_ref()
+    }
+}
+
+fn nel_passo(out: &str, errore: PlenoraError) -> PlenoraError {
+    errore.con_contesto(&format!("passo `{out}`"))
+}
+
+/// Normalizzazione degli schemi di input, la stessa che `run` applica ai
+/// batch: `LargeUtf8` di primo livello diventa `Utf8`, la voce `pandas` dei
+/// metadati di schema si toglie (è un secondo schema che una trasformazione
+/// renderebbe falso).
+pub fn normalizza_schema(schema: &Schema) -> SchemaRef {
+    let mut metadati = schema.metadata().clone();
+    let _ = metadati.remove(METADATI_PANDAS);
+    let campi: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|campo| {
+            if campo.data_type() == &DataType::LargeUtf8 {
+                campo.as_ref().clone().with_data_type(DataType::Utf8)
+            } else {
+                campo.as_ref().clone()
+            }
+        })
+        .collect();
+    Arc::new(Schema::new_with_metadata(campi, metadati))
+}
+
+/// Limiti dei kernel tabellari derivati dai limiti effettivi del piano.
+///
+/// Porting di `limiti_dei_kernel_tabellari` di `plenora-engine/src/prepare.rs`
+/// a `190c493`: `max_rows` è un limite per tabella, ancorato a
+/// `max_input_rows`; `max_columns` e `max_split_columns` sono limiti interni
+/// dei kernel, non del piano. Le conversioni verso `usize` sono fail-closed:
+/// un limite non rappresentabile si rifiuta, non si allarga.
+fn limiti_dei_kernel_tabellari(limiti: &Limits) -> Result<plenora_kernels_table::Limits> {
+    let stretto = |valore: u64, nome: &str| -> Result<usize> {
+        usize::try_from(valore).map_err(|_| {
+            PlenoraError::ResourceLimit(format!(
+                "{nome} dichiarato oltre quanto questa piattaforma sa rappresentare"
+            ))
+        })
+    };
+    Ok(plenora_kernels_table::Limits {
+        max_rows: stretto(limiti.rows.max_input_rows, "max_input_rows")?,
+        max_columns: plenora_kernels_table::limiti_interni::MAX_COLUMNS,
+        max_split_columns: plenora_kernels_table::limiti_interni::MAX_SPLIT_COLUMNS,
+        max_string_bytes: limiti.max_string_bytes,
+        max_regex_bytes: limiti.max_regex_bytes,
+        max_governed_memory_bytes: stretto(
+            limiti.max_governed_memory_bytes,
+            "max_governed_memory_bytes",
+        )?,
+        max_temp_bytes: limiti.max_temp_bytes,
+        spill_partitions: stretto(u64::from(limiti.spill_partitions), "spill_partitions")?,
+    })
+}
+
+/// Numero di input che il runner accetta per l'arietà del catalogo.
+///
+/// `NAry` (`table.concat`) si esegue col dispatch binario, quindi con
+/// esattamente due input: oltre si rifiuta come faceva `prepare_table` a
+/// `190c493`, prima dell'esecuzione.
+fn verifica_arieta(descrittore: &OperationDescriptor, ricevuti: usize) -> Result<()> {
+    let id = descrittore.id;
+    match descrittore.arity {
+        Arity::Unary if ricevuti != 1 => Err(PlenoraError::InvalidPlan(format!(
+            "{id}: atteso 1 input, ricevuti {ricevuti}"
+        ))),
+        Arity::BinaryOrdered if ricevuti != 2 => Err(PlenoraError::InvalidPlan(format!(
+            "{id}: attesi 2 input (left, right), ricevuti {ricevuti}"
+        ))),
+        Arity::NAry if ricevuti < 2 => Err(PlenoraError::InvalidPlan(format!(
+            "{id}: attesi almeno 2 input, ricevuti {ricevuti}"
+        ))),
+        Arity::NAry if ricevuti > 2 => Err(PlenoraError::Unsupported(format!(
+            "{id} con {ricevuti} input: sono supportati al massimo 2 input, \
+             l'esecuzione N-aria non e' implementata"
+        ))),
+        _ => Ok(()),
+    }
+}
+
+fn verifica_nome(nome: &str, ruolo: &str) -> Result<()> {
+    if nome.is_empty() {
+        return Err(PlenoraError::InvalidPlan(format!("{ruolo}: nome vuoto")));
+    }
+    Ok(())
+}
+
+impl Pipeline {
+    /// Valida il piano contro gli schemi degli input.
+    ///
+    /// `schemas` associa a ogni nome di `inputs` lo schema Arrow della tabella
+    /// che `run` riceverà: nomi duplicati, mancanti o in più sono rifiutati.
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidPlan`: versione diversa da 1, limiti non validi, nomi non
+    ///   SSA (ridefiniti, usati prima della definizione, output inesistenti o
+    ///   ripetuti), alias legacy al posto dell'id canonico, arietà errata,
+    ///   config non valida, `sorted_by` su un input, provenance per riga
+    ///   assente dove l'operazione la richiede;
+    /// - `Unsupported`: operazione sconosciuta, geo (non ancora nel dispatch
+    ///   del runner), `table.concat` con più di due input, schema di output
+    ///   non inferibile senza i dati;
+    /// - `Schema`: contratti di input o inferiti che violano le regole;
+    /// - `Crs`: CRS di piano non risolvibile.
+    #[allow(clippy::too_many_lines)] // Passi sequenziali della validazione: spezzarli nuocerebbe alla lettura.
+    pub fn validate(&self, schemas: &[(&str, SchemaRef)]) -> Result<PipelineValidata> {
+        if self.version != VERSIONE_PIANO {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "versione del piano {} non supportata: attesa {VERSIONE_PIANO}",
+                self.version
+            )));
+        }
+        // Senza sostituzioni restano i default, validati allo stesso modo.
+        let limiti = self.limits.clone().unwrap_or_default().applica()?;
+        let limiti_kernel = limiti_dei_kernel_tabellari(&limiti)?;
+
+        // Nomi SSA: ogni nome definito una volta, fra input e `out` dei
+        // passi; un passo usa solo nomi definiti prima.
+        let mut definiti: BTreeSet<&str> = BTreeSet::new();
+        for nome in &self.inputs {
+            verifica_nome(nome, "input")?;
+            if !definiti.insert(nome.as_str()) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "input `{nome}` dichiarato due volte"
+                )));
+            }
+        }
+        for passo in &self.steps {
+            verifica_nome(&passo.out, "passo")?;
+            for sorgente in &passo.inputs {
+                if !definiti.contains(sorgente.as_str()) {
+                    return Err(PlenoraError::InvalidPlan(format!(
+                        "passo `{}`: `{sorgente}` non e' definito prima del passo",
+                        passo.out
+                    )));
+                }
+            }
+            if !definiti.insert(passo.out.as_str()) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "`{}` e' gia' definito: ogni nome si definisce una volta sola",
+                    passo.out
+                )));
+            }
+        }
+        if self.outputs.is_empty() {
+            return Err(PlenoraError::InvalidPlan(
+                "il piano non dichiara output".to_owned(),
+            ));
+        }
+        let mut dichiarati: BTreeSet<&str> = BTreeSet::new();
+        for nome in &self.outputs {
+            if !definiti.contains(nome.as_str()) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "output `{nome}` non definito dal piano"
+                )));
+            }
+            if !dichiarati.insert(nome.as_str()) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "output `{nome}` dichiarato due volte"
+                )));
+            }
+        }
+
+        // Schemi di input: corrispondenza esatta con i nomi dichiarati.
+        let mut forniti: BTreeMap<&str, &SchemaRef> = BTreeMap::new();
+        for (nome, schema) in schemas {
+            if forniti.insert(nome, schema).is_some() {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "schema di input duplicato per `{nome}`"
+                )));
+            }
+        }
+        for dichiarato in &self.inputs {
+            if !forniti.contains_key(dichiarato.as_str()) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "manca lo schema dell'input `{dichiarato}`"
+                )));
+            }
+        }
+        if let Some(extra) = forniti
+            .keys()
+            .find(|nome| !self.inputs.iter().any(|input| input.as_str() == **nome))
+        {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "schema fornito per `{extra}`, non dichiarato tra gli input del piano"
+            )));
+        }
+
+        // CRS di piano: risolto qui, fail-closed, anche se nessun passo lo usa.
+        let crs_piano = self
+            .crs
+            .as_deref()
+            .map(|definizione| resolve_crs(definizione, "crs").map_err(PlenoraError::from))
+            .transpose()?;
+
+        // Contratti di input (passo 2 di `planner.rs::validate`). Un solo
+        // FieldAllocator per piano; i FieldId delle geometrie di input sono
+        // rimappati all'ingresso con un'allocazione fresca SENZA legare il
+        // nome: input diversi possono avere colonne omonime.
+        let mut campi = FieldAllocator::default();
+        let mut schemi_input: BTreeMap<String, SchemaRef> = BTreeMap::new();
+        let mut contratti: BTreeMap<String, DataContract> = BTreeMap::new();
+        let mut provenance: BTreeMap<String, bool> = BTreeMap::new();
+        for nome in &self.inputs {
+            let schema = forniti.get(nome.as_str()).ok_or_else(|| {
+                PlenoraError::Internal("schema di input non risolto dopo il controllo".to_owned())
+            })?;
+            let normalizzato = normalizza_schema(schema);
+            let mut letto = contract_from_arrow_schema(normalizzato.clone(), resolve_crs)
+                .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
+            letto
+                .validate()
+                .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
+            if let Some(ordinamento) = &letto.properties.sorted_by {
+                if ordinamento.confidence.value().is_some() {
+                    return Err(PlenoraError::InvalidPlan(format!(
+                        "l'input `{nome}` dichiara sorted_by con chiavi FieldId: il namespace \
+                         dei FieldId e' assegnato dal runner e le chiavi non sono riferibili \
+                         a colonne"
+                    )));
+                }
+            }
+            for geometria in &mut letto.geometries {
+                let rimappato = campi.alloc()?;
+                if letto.active_geometry == Some(geometria.field_id) {
+                    letto.active_geometry = Some(rimappato);
+                }
+                geometria.field_id = rimappato;
+            }
+            schemi_input.insert(nome.clone(), normalizzato);
+            contratti.insert(nome.clone(), letto);
+            provenance.insert(nome.clone(), true);
+        }
+
+        // Passi (passo 5 di `planner.rs::validate`), nell'ordine del piano,
+        // che è già topologico per la regola SSA.
+        let mut passi = Vec::with_capacity(self.steps.len());
+        for passo in &self.steps {
+            let descrittore = find_operation(&passo.op).ok_or_else(|| {
+                nel_passo(
+                    &passo.out,
+                    PlenoraError::Unsupported(format!("{}: operazione sconosciuta", passo.op)),
+                )
+            })?;
+            if descrittore.id != passo.op {
+                return Err(nel_passo(
+                    &passo.out,
+                    PlenoraError::InvalidPlan(format!(
+                        "`{}` e' un alias legacy: il piano usa l'id canonico `{}`",
+                        passo.op, descrittore.id
+                    )),
+                ));
+            }
+            if descrittore.family == Family::Geo {
+                return Err(nel_passo(
+                    &passo.out,
+                    PlenoraError::Unsupported(format!(
+                        "{}: le operazioni geo non sono ancora nel dispatch del runner",
+                        descrittore.id
+                    )),
+                ));
+            }
+            verifica_arieta(descrittore, passo.inputs.len())
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
+            let preparato = PassoPreparato::prepara(descrittore.id, &passo.config)
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
+            preparato
+                .verifica(&limiti_kernel)
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
+
+            // Diagnostiche per riga: gli indici riportati sono quelli della
+            // sorgente solo se nessun passo a monte ha cambiato cardinalità o
+            // ordine.
+            let provenance_sorgente = passo
+                .inputs
+                .iter()
+                .all(|sorgente| provenance.get(sorgente).copied().unwrap_or(false));
+            if descrittore.emits_row_diagnostics(&passo.config) && !provenance_sorgente {
+                return Err(nel_passo(
+                    &passo.out,
+                    PlenoraError::InvalidPlan(format!(
+                        "{} richiede provenance row-level originale; l'input cambia \
+                         cardinalita' o ordine e non porta lineage",
+                        descrittore.id
+                    )),
+                ));
+            }
+            let ingressi: Vec<DataContract> = passo
+                .inputs
+                .iter()
+                .map(|sorgente| {
+                    contratti.get(sorgente).cloned().ok_or_else(|| {
+                        PlenoraError::Internal(format!(
+                            "contratto di `{sorgente}` non risolto dalla validazione"
+                        ))
+                    })
+                })
+                .collect::<Result<_>>()?;
+            let uscita =
+                analyze_table_contract(descrittore.id, &ingressi, &passo.config, &mut campi)
+                    .map_err(|errore| nel_passo(&passo.out, errore))?;
+            contratti.insert(passo.out.clone(), uscita);
+            provenance.insert(
+                passo.out.clone(),
+                provenance_sorgente
+                    && descrittore.source_row_provenance() == SourceRowProvenance::Preserved,
+            );
+            passi.push(PassoValidato {
+                out: passo.out.clone(),
+                descrittore,
+                inputs: passo.inputs.clone(),
+                preparato,
+            });
+        }
+
+        Ok(PipelineValidata {
+            inputs: self.inputs.clone(),
+            schemi_input,
+            passi,
+            outputs: self.outputs.clone(),
+            contratti,
+            limiti,
+            limiti_kernel,
+            crs_piano,
+        })
+    }
+}

@@ -4,6 +4,7 @@ members = [
     "crates/plenora-core",
     "crates/plenora-kernels-table",
     "crates/plenora-kernels-geo",
+    "crates/plenora-pipeline",
 ]
 # Sorgenti vendorizzate per [patch.crates-io] (vedi sotto): raggiunte solo da
 # [patch], mai membri del workspace.
@@ -54,6 +55,7 @@ proptest = "=1.11.0"
 plenora-core = { path = "crates/plenora-core" }
 plenora-kernels-table = { path = "crates/plenora-kernels-table" }
 plenora-kernels-geo = { path = "crates/plenora-kernels-geo" }
+plenora-pipeline = { path = "crates/plenora-pipeline" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
