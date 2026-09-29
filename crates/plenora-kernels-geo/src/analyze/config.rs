@@ -14,13 +14,21 @@ use crate::topology::OverlayMode;
 // parametri di trasporto.
 // ---------------------------------------------------------------------------
 
+/// Config vuota (`{}`) delle operazioni senza parametri: ogni chiave si
+/// rifiuta con `InvalidPlan`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyConfig {}
 
+/// Config delle misure e delle conversioni che aggiungono una colonna
+/// (`area`, `length`, `perimeter`, `vertex_count`, `to_wkt`, misure
+/// geodetiche).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputColumnConfig {
+    /// Nome della colonna aggiunta; assente vale il nome di default
+    /// dell'operazione (l'id senza `geo.`, `wkt` per `to_wkt`). Deve essere
+    /// un nome valido e libero nello schema d'ingresso.
     pub output_column: Option<String>,
 }
 
@@ -210,12 +218,20 @@ pub struct FromCoordsConfig {
     pub crs: Option<String>,
 }
 
-/// Secondo operando geometrico da config (D16: una sola colonna
-/// geometria per input): WKB codificato esadecimale, validato in analisi.
+/// Config dei predicati e delle distanze fra la geometria di ogni riga e un
+/// secondo operando fisso.
+///
+/// Un ingresso ha una sola colonna geometria attiva, quindi il secondo
+/// operando arriva dalla config, come WKB esadecimale, e si valida in
+/// analisi: contratto WKB strutturale, validità OGC e dominio del CRS
+/// dell'ingresso, che si assume sia anche il suo.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OtherWkbConfig {
+    /// Secondo operando: WKB ISO XY in esadecimale.
     pub other_wkb: String,
+    /// Nome della colonna aggiunta; assente vale l'id dell'operazione senza
+    /// `geo.`.
     pub output_column: Option<String>,
 }
 
