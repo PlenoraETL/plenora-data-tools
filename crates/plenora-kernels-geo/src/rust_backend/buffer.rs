@@ -3,26 +3,45 @@
 //! precisione, e controllato a posteriori contro la **definizione esatta**.
 //!
 //! **Archi.** `geo` espone `LineJoin::Round(a)` e `LineCap::Round(a)` di
-//! `i_overlay` 4.5.2, con `a` il passo angolare richiesto; `i_overlay` lo
-//! porta in `[0.01 pi, 0.25 pi]` (`mesh/style.rs`) e divide un arco di
-//! ampiezza `A` in `round(A / a)` corde: il passo effettivo resta sotto
-//! `1.5 a` (il cerchio di un punto, `ceil(2 pi / a)` corde, e le estremita',
-//! `floor(pi / a)`, stanno sotto). Per una freccia al piu' `f` si chiede
-//! `a = (4/3) acos(1 - f / |d|)`, portato nello stesso intervallo
+//! `i_overlay` 9.0.0, con `a` il passo angolare richiesto; `i_overlay` lo
+//! porta in `[0.01 pi, 0.25 pi]` (`mesh/float/style.rs`), lo converte in
+//! unita' angolari intere (`2^32` per giro, al piu' vicino) e costruisce
+//! ogni arco (giunzioni ed estremita') con rotazioni intere
+//! (`mesh/int/arc`): **ogni intervallo angolare fra due direzioni
+//! consecutive e' al piu' `a`**, errori delle rotazioni compresi (in 4.5
+//! l'arco era diviso in `round(A / a)` corde e il passo effettivo arrivava
+//! a `1.5 a`). Il cerchio di un punto lo costruisce `geo` in `f64` con
+//! `ceil(2 pi / a)` corde uguali, anch'esse entro `a`. Una corda che
+//! sottende al piu' `a` ha freccia `R (1 - cos(a / 2))`: per una freccia al
+//! piu' `f` si chiede `a = 2 acos(1 - f / |d|)`, ridotto di una parte su un
+//! milione (piu' dell'arrotondamento all'unita' angolare, `7.3e-10` rad,
+//! anche al passo minimo) e portato nello stesso intervallo
 //! ([`angolo_degli_archi`]; un passo piu' fine rispetta la freccia a
 //! maggior ragione). `f = max(p / 2, 0.001 |d|)` ([`freccia_degli_archi`]):
 //! fino a `|d| = 500 p` (5 m con 1 cm) freccia piu' griglia restano entro
 //! `p`; oltre, la freccia e' lo 0,1% della distanza, **deviazione
 //! dichiarata** del solo buffer (README «Limiti dichiarati»). Con il passo
-//! minimo `0.01 pi` la freccia e' al piu' `2.8e-4 |d|`, quindi sempre entro
-//! la tolleranza.
+//! minimo `0.01 pi` la freccia e' al piu' `1.24e-4 |d|`, quindi sempre
+//! entro la tolleranza. Il raggio `R` e' la distanza arrotondata sulla
+//! griglia (al piu' `g / 2` da `|d|`) e le direzioni sono vettori unitari
+//! interi a `2^-62`: lo scarto dall'arco di raggio `|d|` sta nel termine
+//! della griglia, sotto. Le giunzioni `Round` non usano la soglia
+//! `miter_min_turn` di `i_overlay` 9 (svolte sotto 5 gradi smussate: vale
+//! solo per `Miter`): un arco sotto `a` e' gia' la sua corda.
 //!
-//! **Griglia.** Il buffer passa dalla griglia di `i_overlay` piu' volte
-//! (offset arrotondati, centri degli archi da vertici gia' arrotondati,
-//! overlay dei contorni e finale): il primo passaggio sposta un punto di al
-//! piu' `(2 + 2 sqrt(2)) g`, con `g` il passo sull'ingombro allargato di
-//! `3 |d|` (il margine massimo di `i_overlay::mesh`). Oltre `p`, errore
-//! prima del calcolo: e' un filtro grossolano, la garanzia (entro `p / 2`
+//! **Griglia.** Il buffer passa dalla griglia intera (`i64`) di
+//! `i_overlay` piu' volte: vertici arrotondati (`sqrt(2) / 2 g`), distanza
+//! arrotondata (`g / 2`), punti degli offset e degli archi arrotondati
+//! (`sqrt(2) / 2 g`), direzioni unitarie intere (al piu' `g` sul raggio),
+//! overlay dei contorni e finale (incrocio `sqrt(2) / 2 g` e primo aggancio
+//! `g` ciascuno), pulizia del risultato (`sqrt(2) / 2 g`): al piu' `(3.5 +
+//! 2.5 sqrt(2)) g`, piu' gli arrotondamenti dei `f64` (`12 ulp(M)`, vedi
+//! [`super::griglia`]), con `g` il passo sull'ingombro allargato di `3 |d|`
+//! (piu' del margine di `i_overlay::mesh` 9, `1.1 (|esterno| + |interno|) =
+//! 2.2 |d|` per i contorni e `|d| max(1.1, 2)` per i tratti: un ingombro
+//! piu' grande da' un passo uguale o maggiore, un filtro prudente). Oltre
+//! `p`, errore prima del calcolo: e' un filtro grossolano, che con `i64`
+//! non scatta prima della guardia di spaziatura; la garanzia (entro `p / 2`
 //! dalla definizione) e' il controllo a posteriori.
 //!
 //! **Componenti sotto la griglia.** `i_overlay` salta senza errore un
@@ -132,18 +151,24 @@ pub fn angolo_degli_archi(raggio: f64, freccia: f64) -> f64 {
     let angolo = if rapporto >= 1.0 {
         ANGOLO_MASSIMO
     } else {
-        (4.0 / 3.0) * (1.0 - rapporto).acos() * (1.0 - 1e-9)
+        2.0 * (1.0 - rapporto).acos() * (1.0 - RIDUZIONE_ANGOLO)
     };
     angolo.clamp(ANGOLO_MINIMO, ANGOLO_MASSIMO)
 }
 
-/// Il primo passaggio del buffer sposta un punto di al piu' `(2 + 2
-/// sqrt(2)) g` (vedi il modulo).
-const FATTORE_BUFFER: f64 = 2.0 + 2.0 * std::f64::consts::SQRT_2;
+/// La riduzione relativa del passo angolare chiesto: copre l'arrotondamento
+/// di `i_overlay` all'unita' angolare intera (`pi / 2^32` rad al piu',
+/// `2.3e-8` del passo minimo) e quello di `acos` (vedi il modulo).
+const RIDUZIONE_ANGOLO: f64 = 1e-6;
 
-/// Margine d'ingombro del buffer, in multipli di `|d|`: il massimo fra i
-/// margini di `i_overlay::mesh` (giunzioni `1.1`, estremita' quadrate `2`,
-/// tonde `3`).
+/// Il buffer sposta un punto di al piu' `(3.5 + 2.5 sqrt(2)) g` piu' gli
+/// arrotondamenti dei `f64` (vedi il modulo).
+const FATTORE_BUFFER: f64 = 3.5 + 2.5 * std::f64::consts::SQRT_2;
+
+/// Margine d'ingombro del buffer, in multipli di `|d|`: almeno il margine
+/// di `i_overlay::mesh` 9 (contorni `1.1 (|esterno| + |interno|) = 2.2 |d|`,
+/// tratti `|d| max(1.1, 2)`), con larghezza per gli arrotondamenti del
+/// calcolo del margine (vedi il modulo).
 const MARGINE_IN_DISTANZE: f64 = 3.0;
 
 /// L'ingombro dell'ingresso allargato di `margine` per lato.
@@ -1068,17 +1093,75 @@ mod tests {
         assert!((freccia_degli_archi(-5.0, centimetro()) - 0.005).abs() < 1e-15);
         assert!((freccia_degli_archi(100.0, centimetro()) - 0.1).abs() < 1e-15);
         // Il passo chiesto a `i_overlay`, nell'intervallo che accetta, e
-        // la freccia del passo effettivo (fino a 1,5 volte) entro la
-        // tolleranza per ogni distanza.
+        // la freccia di una corda che sottende il passo (il massimo che
+        // `i_overlay` 9 garantisce) entro la tolleranza per ogni distanza.
         for d in [0.001, 0.1, 1.0, 5.0, 10.0, 100.0, 1000.0, 1e6] {
             let f = freccia_degli_archi(d, centimetro());
             let a = angolo_degli_archi(d, f);
             assert!((ANGOLO_MINIMO..=ANGOLO_MASSIMO).contains(&a), "{d}");
-            let freccia_effettiva = d * (1.0 - (0.75 * a).cos());
-            assert!(
-                freccia_effettiva <= f * (1.0 + 1e-6),
-                "{d}: {freccia_effettiva} > {f}"
-            );
+            let freccia_effettiva = d * (1.0 - (0.5 * a).cos());
+            assert!(freccia_effettiva <= f, "{d}: {freccia_effettiva} > {f}");
+        }
+    }
+
+    /// Oracolo della garanzia di `i_overlay` 9 sugli archi, sull'uscita
+    /// vera di `geo`: attorno a ogni spigolo di un quadrato (giunzioni) e
+    /// attorno agli estremi di una linea (estremita' tonde) ogni coppia di
+    /// vertici consecutivi dell'arco sottende al piu' il passo chiesto, e il
+    /// punto medio della corda sta entro la freccia (piu' la griglia) dal
+    /// cerchio. Con il passo di 4.5 (fino a `1.5 a`) fallirebbe.
+    #[test]
+    fn gli_archi_di_i_overlay_hanno_il_passo_chiesto() {
+        for d in [1.0, 10.0, 100.0, 1000.0] {
+            let f = freccia_degli_archi(d, centimetro());
+            let a = angolo_degli_archi(d, f);
+            let stile = || {
+                BufferStyle::new(d)
+                    .line_join(LineJoin::Round(a))
+                    .line_cap(LineCap::Round(a))
+            };
+            let lato = 5_000.0;
+            let quadrato =
+                geo::Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: lato, y: lato }).to_polygon();
+            let linea = LineString::from(vec![(0.0, 0.0), (lato, 0.0)]);
+            let casi = [
+                (
+                    quadrato.buffer_with_style(stile()),
+                    vec![(0.0, 0.0), (lato, 0.0), (lato, lato), (0.0, lato)],
+                    (lato * 0.5, lato * 0.5),
+                ),
+                (
+                    linea.buffer_with_style(stile()),
+                    vec![(0.0, 0.0), (lato, 0.0)],
+                    (lato * 0.5, 0.0),
+                ),
+            ];
+            for (uscita, centri, (mx, my)) in casi {
+                for (cx, cy) in centri {
+                    // I vertici dell'arco attorno al centro: a distanza `d`
+                    // (entro la griglia). Angoli misurati dalla bisettrice
+                    // esterna, cosi' l'arco non attraversa il taglio di
+                    // `atan2`.
+                    let (bx, by) = (cx - mx, cy - my);
+                    let mut angoli: Vec<f64> = uscita
+                        .exterior_coords_iter()
+                        .filter(|c| ((c.x - cx).hypot(c.y - cy) - d).abs() < 1e-6 * d)
+                        .map(|c| {
+                            let (vx, vy) = (c.x - cx, c.y - cy);
+                            bx.mul_add(vy, -(by * vx)).atan2(bx.mul_add(vx, by * vy))
+                        })
+                        .collect();
+                    angoli.sort_by(f64::total_cmp);
+                    angoli.dedup();
+                    assert!(angoli.len() >= 3, "{d}: arco di {} vertici", angoli.len());
+                    for coppia in angoli.windows(2) {
+                        let ampiezza = coppia[1] - coppia[0];
+                        assert!(ampiezza <= a * (1.0 + 1e-9), "{d}: {ampiezza} > {a}");
+                        let freccia = (-d).mul_add((0.5 * ampiezza).cos(), d);
+                        assert!(freccia <= 1e-9f64.mul_add(d, f), "{d}: {freccia} > {f}");
+                    }
+                }
+            }
         }
     }
 

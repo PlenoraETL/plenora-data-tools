@@ -104,31 +104,26 @@ fn shell_con_vertice_lontano(lontano: f64, scarto: f64) -> Geometry<f64> {
     Geometry::Polygon(Polygon::new(shell, vec![buco]))
 }
 
-/// A `span_x = 2^23` m il passo della griglia e' 7.8 mm, sotto il
-/// centimetro, ma l'aggancio del laboratorio (due passi, 15.6 mm) portava
-/// l'incrocio a `x = 100` sull'ascissa `100.0155` di un vertice a 1 km. Il
-/// bilancio (arrotondamento piu' aggancio) supera il centimetro: errore
-/// esplicito.
+/// A `span_x = 2^23` m, con `i_overlay` 4.5 (passo 7.8 mm), l'aggancio del
+/// laboratorio (due passi, 15.6 mm) portava l'incrocio a `x = 100`
+/// sull'ascissa `100.0155` di un vertice a 1 km, e il bilancio
+/// (arrotondamento piu' aggancio) superava il centimetro: errore esplicito.
+/// Con il motore `i64` il raggio d'aggancio e' fatto di arrotondamenti dei
+/// `f64` (sotto il micrometro): l'overlay si esegue e l'incrocio resta
+/// esatto, lontano dal vertice.
 #[test]
-fn aggancio_oltre_il_centimetro_e_un_errore() {
+fn aggancio_oltre_il_centimetro_non_serve_piu() {
     let input = shell_con_vertice_lontano(2_f64.powi(23), 0.0155);
     for keep_collapsed in [false, true] {
-        assert!(matches!(
-            make_valid_geometry_rust(&input, RepairMethod::Structure, keep_collapsed, CENTIMETRO),
-            Err(MakeValidError::PrecisionInsufficient)
-        ));
+        let output =
+            make_valid_geometry_rust(&input, RepairMethod::Structure, keep_collapsed, CENTIMETRO)
+                .expect("structure");
+        assert_incrocio_esatto(&output);
     }
 }
 
-/// A `span_x = 2^21` m il bilancio sta sotto il centimetro. Il vertice a
-/// `x = 100.0015` e' entro il raggio del laboratorio ma a 1 km di distanza:
-/// l'aggancio considera solo i vertici vicini, e l'incrocio esatto resta a
-/// `x = 100`.
-#[test]
-fn l_aggancio_considera_solo_i_vertici_vicini() {
-    let input = shell_con_vertice_lontano(2_f64.powi(21), 0.0015);
-    let output = make_valid_geometry_rust(&input, RepairMethod::Structure, false, CENTIMETRO)
-        .expect("structure");
+/// L'incrocio con il lato inferiore sta esattamente a `x = 100`.
+fn assert_incrocio_esatto(output: &Geometry<f64>) {
     let sul_lato: Vec<Coord<f64>> = output
         .coords_iter()
         .filter(|coordinata| coordinata.y == 0.0 && (coordinata.x - 100.0).abs() < 1.0)
@@ -140,6 +135,18 @@ fn l_aggancio_considera_solo_i_vertici_vicini() {
             .all(|coordinata| coordinata.x.to_bits() == 100.0_f64.to_bits()),
         "incrocio agganciato a un vertice lontano"
     );
+}
+
+/// A `span_x = 2^21` m il bilancio sta sotto il centimetro. Il vertice a
+/// `x = 100.0015` e' entro il raggio del laboratorio ma a 1 km di distanza:
+/// l'aggancio considera solo i vertici vicini, e l'incrocio esatto resta a
+/// `x = 100`.
+#[test]
+fn l_aggancio_considera_solo_i_vertici_vicini() {
+    let input = shell_con_vertice_lontano(2_f64.powi(21), 0.0015);
+    let output = make_valid_geometry_rust(&input, RepairMethod::Structure, false, CENTIMETRO)
+        .expect("structure");
+    assert_incrocio_esatto(&output);
 }
 
 fn diagonali(base: f64) -> Geometry<f64> {

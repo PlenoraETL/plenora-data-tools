@@ -489,26 +489,42 @@ impl OverlayNormalizer {
         }
     }
 
-    /// Il lato di una cella della griglia intera dell'overlay in coordinate
-    /// originali: la diagonale del passo `span * 2^-30` dei due assi (vedi
-    /// [`checked_grid`]).
+    /// Il modulo massimo delle coordinate degli operandi.
+    fn magnitude(self) -> f64 {
+        [
+            self.minimum_x,
+            self.minimum_x + self.span_x,
+            self.minimum_y,
+            self.minimum_y + self.span_y,
+        ]
+        .into_iter()
+        .fold(0.0_f64, |massimo, value| massimo.max(value.abs()))
+    }
+
+    /// Lo spostamento massimo di una coordinata riportata dall'overlay, in
+    /// coordinate originali: la diagonale del passo per asse `span * 2^-49 +
+    /// 4 ulp(M)` (vedi [`checked_grid`]).
     fn grid_diagonal(self) -> f64 {
-        let step = 2_f64.powi(-30);
-        (self.span_x.abs() * step).hypot(self.span_y.abs() * step)
+        let step = 2_f64.powi(-49);
+        let rounding = 4.0 * super::griglia::ulp(self.magnitude());
+        self.span_x
+            .abs()
+            .mul_add(step, rounding)
+            .hypot(self.span_y.abs().mul_add(step, rounding))
     }
 
     /// Riporta l'output dell'overlay nelle coordinate originali e lo aggancia
     /// ai vertici e ai lati assiali degli operandi **vicini**.
     ///
-    /// Il raggio d'aggancio `r` e' la diagonale di un passo della griglia
-    /// ([`Self::grid_diagonal`]). Un vertice va sul vertice d'ingresso piu'
-    /// vicino entro `r` (distanza fra punti); altrimenti ogni coordinata va
-    /// sull'ascissa di un lato verticale (o sull'ordinata di un lato
-    /// orizzontale) d'ingresso entro `r` che gli passa accanto, cosi' un
+    /// Il raggio d'aggancio `r` e' lo spostamento massimo di una coordinata
+    /// riportata ([`Self::grid_diagonal`]). Un vertice va sul vertice
+    /// d'ingresso piu' vicino entro `r` (distanza fra punti); altrimenti ogni
+    /// coordinata va sull'ascissa di un lato verticale (o sull'ordinata di un
+    /// lato orizzontale) d'ingresso entro `r` che gli passa accanto, cosi' un
     /// incrocio con un lato assiale resta esattamente sul lato. Lo
-    /// spostamento dell'aggancio e' al piu' `sqrt(2) * r`, e con il mezzo
-    /// passo d'arrotondamento della griglia resta sotto `2 * r`: il bilancio
-    /// che [`checked_grid`] confronta con la precisione dichiarata.
+    /// spostamento dell'aggancio e' al piu' `sqrt(2) * r`, e con quello del
+    /// ritorno (al piu' `r`) resta sotto `(1 + sqrt(2)) * r`: il bilancio che
+    /// [`checked_grid`] confronta con la precisione dichiarata.
     ///
     /// Il laboratorio agganciava ogni coordinata, asse per asse, a qualunque
     /// ascissa od ordinata d'ingresso entro `span * 2^-29` (due passi), anche
@@ -647,19 +663,31 @@ impl OverlayNormalizer {
 /// Il controllo della griglia prima di ogni overlay.
 ///
 /// Gli operandi sono normalizzati per asse su `[0, 1]^2`; su quel rettangolo
-/// `i_float` 1.16.0 (`FloatPointAdapter::new`) sceglie il passo
-/// `2^(round(log2(0.5)) - 29) = 2^-30` (meta' della dimensione maggiore,
-/// logaritmo arrotondato a meta' lontano da zero, esponente `29 - log2`):
-/// in coordinate originali il passo e' `span * 2^-30` per asse, e la sua
-/// diagonale `d` ([`OverlayNormalizer::grid_diagonal`]).
+/// il motore `i64` di `i_overlay` 9.0.0 (`i_float` 5.0.0,
+/// `FloatPointAdapter::with_iter_conservative`) sceglie il passo
+/// `2^(ceil(log2(0.5)) - 61) = 2^-62`, sotto la spaziatura dei `f64` in `[0,
+/// 1]`: lo spostamento di una coordinata normalizzata lo fanno gli
+/// arrotondamenti. Per asse, in unita' normalizzate: la normalizzazione
+/// (sottrazione e divisione, al piu' `2^-52`), i due passaggi `f64 -> i64 ->
+/// f64` dell'overlay (ingresso e pulizia del risultato, al piu' `3 * 2^-52`
+/// ciascuno con modulo `1`, vedi [`super::griglia`]) e i passi della
+/// griglia (arrotondamenti, primo aggancio: pochi `2^-62`), meno di `2^-49`
+/// in tutto; il ritorno `u * span + min` aggiunge al piu' `3 ulp(M)` (`span
+/// <= 2 M`). In coordinate originali lo spostamento per asse e' quindi al
+/// piu' `span * 2^-49 + 4 ulp(M)`, e la diagonale dei due assi `d`
+/// ([`OverlayNormalizer::grid_diagonal`]). Con `i32` (`i_overlay` 4.5, passo
+/// `2^-30`) era `span * 2^-30`: oltre circa 5.400 km su un asse l'overlay
+/// era rifiutato.
 ///
-/// Il bilancio dello spostamento di un vertice e' l'arrotondamento alla
-/// griglia (mezzo passo per asse, al piu' `d / 2`) piu' l'aggancio di
-/// [`OverlayNormalizer::restore_multi_snapped`] (al piu' `sqrt(2) * d`):
-/// meno di `2 * d`. Se `2 * d` supera la precisione dichiarata l'overlay
-/// non si esegue: [`MakeValidError::PrecisionInsufficient`]. Sotto la
-/// precisione i vertici possono spostarsi e le feature piu' sottili possono
-/// fondersi o sparire: errore dichiarato, non un rifiuto.
+/// Il bilancio dello spostamento di un vertice e' il ritorno (al piu' `d`)
+/// piu' l'aggancio di [`OverlayNormalizer::restore_multi_snapped`] (al piu'
+/// `sqrt(2) * d`): `(1 + sqrt(2)) * d`. Se supera la precisione dichiarata
+/// l'overlay non si esegue: [`MakeValidError::PrecisionInsufficient`]. In
+/// metri con 1 cm non scatta prima della guardia di spaziatura (modulo di
+/// circa `2^39` m, estensione fino a `2^40` m: `(1 + sqrt(2)) d` circa 8,3
+/// mm). Sotto la precisione i vertici possono spostarsi
+/// e le feature piu' sottili possono fondersi o sparire: errore dichiarato,
+/// non un rifiuto.
 ///
 /// Prima della griglia, la spaziatura dei `f64` alle coordinate degli
 /// operandi ([`super::precision::coordinate_abbastanza_fitte`]): una
@@ -670,16 +698,8 @@ impl OverlayNormalizer {
 /// che cresce a ogni giro, `split::snap_radius`) non sono nel bilancio: li
 /// limita il controllo finale [`checked_displacement`].
 fn checked_grid(normalizer: OverlayNormalizer, precision: f64) -> Result<(), MakeValidError> {
-    let magnitude = [
-        normalizer.minimum_x,
-        normalizer.minimum_x + normalizer.span_x,
-        normalizer.minimum_y,
-        normalizer.minimum_y + normalizer.span_y,
-    ]
-    .into_iter()
-    .fold(0.0_f64, |massimo, value| massimo.max(value.abs()));
-    if !super::precision::coordinate_abbastanza_fitte(magnitude, precision)
-        || 2.0 * normalizer.grid_diagonal() > precision
+    if !super::precision::coordinate_abbastanza_fitte(normalizer.magnitude(), precision)
+        || (1.0 + std::f64::consts::SQRT_2) * normalizer.grid_diagonal() > precision
     {
         return Err(MakeValidError::PrecisionInsufficient);
     }
@@ -2063,22 +2083,34 @@ mod tests {
         )
     }
 
-    /// Il controllo della griglia: `span * 2^-30` per asse contro la
-    /// precisione. Con 1 cm in metri, 20.000 km di estensione superano la
-    /// griglia (circa 1,9 cm), 1.300 km no.
+    /// Il controllo della griglia: `span * 2^-49 + 4 ulp(M)` per asse
+    /// contro la precisione. Con 1 cm in metri 1.300 e 20.000 km passano
+    /// (con `i_overlay` 4.5 e il passo `span * 2^-30` 20.000 km erano
+    /// rifiutati). Il controllo scatta solo al margine della guardia di
+    /// spaziatura: modulo appena sotto `2^40` (`ulp = 2^-13`), estensione
+    /// doppia del modulo e precisione `2^-7` (la minima che la guardia
+    /// ammette), `(1 + sqrt(2)) d` circa `1,07e-2`; coordinate a `2^45` m
+    /// con 1 cm sono rifiutate dalla guardia.
     #[test]
     fn grid_check_refuses_only_extents_coarser_than_the_precision() {
-        let normalizer = |span: f64| OverlayNormalizer {
-            minimum_x: 0.0,
+        let normalizer = |minimum: f64, span: f64| OverlayNormalizer {
+            minimum_x: minimum,
             minimum_y: 0.0,
             span_x: span,
             span_y: 1.0,
         };
+        assert!(checked_grid(normalizer(0.0, 20_000_000.0), 0.01).is_ok());
+        assert!(checked_grid(normalizer(0.0, 1_300_000.0), 0.01).is_ok());
+        let modulo = 2_f64.powi(40) - 2_f64.powi(-13);
+        assert!(checked_grid(normalizer(-modulo, 2.0 * modulo), 2_f64.powi(-6)).is_ok());
         assert!(matches!(
-            checked_grid(normalizer(20_000_000.0), 0.01),
+            checked_grid(normalizer(-modulo, 2.0 * modulo), 2_f64.powi(-7)),
             Err(MakeValidError::PrecisionInsufficient)
         ));
-        assert!(checked_grid(normalizer(1_300_000.0), 0.01).is_ok());
+        assert!(matches!(
+            checked_grid(normalizer(2_f64.powi(45), 10.0), 0.01),
+            Err(MakeValidError::PrecisionInsufficient)
+        ));
     }
 
     /// Primo controesempio della terza revisione, in metri con 1 cm: il

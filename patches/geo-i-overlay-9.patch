@@ -1,0 +1,181 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -96,7 +96,7 @@ version = "0.2.3"
+ default-features = false
+ 
+ [dependencies.i_overlay]
+-version = "4.5.1, < 4.6.0"
++version = "=9.0.0"
+ default-features = false
+ 
+ [dependencies.log]
+--- a/src/algorithm/bool_ops/i_overlay_integration.rs
++++ b/src/algorithm/bool_ops/i_overlay_integration.rs
+@@ -13,7 +13,9 @@ impl<T: GeoFloat + FloatNumber + FromPrimitive> BoolOpsNum for T {}
+ #[derive(Copy, Clone, Debug)]
+ pub struct BoolOpsCoord<T: BoolOpsNum>(pub(crate) Coord<T>);
+ 
+-impl<T: BoolOpsNum> FloatPointCompatible<T> for BoolOpsCoord<T> {
++impl<T: BoolOpsNum> FloatPointCompatible for BoolOpsCoord<T> {
++    type Scalar = T;
++
+     fn from_xy(x: T, y: T) -> Self {
+         Self(Coord { x, y })
+     }
+--- a/src/algorithm/bool_ops/mod.rs
++++ b/src/algorithm/bool_ops/mod.rs
+@@ -16,6 +16,14 @@ use i_overlay::float::overlay::FloatOverlay;
+ use i_overlay::float::overlay::OverlayOptions;
+ use i_overlay::string::clip::ClipRule;
+ 
++/// The integer engine of every `i_overlay` call in this crate (vendored port
++/// to `i_overlay` 9.0.0): `i64`, whose grid step is `2^(ceil(log2 r) - 61)`
++/// for an operand radius `r` (`i_float` 5.0.0 conservative adapter) instead of
++/// `2^(ceil(log2 r) - 29)` with `i32`. With `f64` coordinates the grid is then
++/// finer than the spacing of the coordinates themselves, and the result is
++/// cleaned in float (`OverlayOptions::clean_result`).
++pub(crate) type OverlayI = i64;
++
+ /// Boolean Operations on geometry.
+ ///
+ /// Boolean operations are set operations on geometries considered as a subset
+@@ -96,10 +104,10 @@ pub trait BooleanOps {
+     ) -> MultiPolygon<Self::Scalar> {
+         let subject = self.rings().map(ring_to_shape_path).collect::<Vec<_>>();
+         let clip = other.rings().map(ring_to_shape_path).collect::<Vec<_>>();
+-        let shapes = FloatOverlay::with_subj_and_clip_custom(
++        let shapes = FloatOverlay::<BoolOpsCoord<Self::Scalar>, OverlayI>::from_subj_and_clip_custom(
+             &subject,
+             &clip,
+-            OverlayOptions::ogc(),
++            OverlayOptions::<Self::Scalar, OverlayI>::ogc(),
+             Default::default(),
+         )
+         .overlay(op.into(), fill_rule);
+@@ -203,7 +211,7 @@ pub trait BooleanOps {
+             invert,
+             boundary_included: true,
+         };
+-        let paths = subject.clip_by(&clip, fill_rule, clip_rule);
++        let paths = subject.clip_by_as::<OverlayI>(&clip, fill_rule, clip_rule);
+         i_overlay_integration::convert::multi_line_string_from_paths(paths)
+     }
+ }
+@@ -281,9 +289,12 @@ pub fn unary_union<'a, B: BooleanOps + 'a>(
+         FillRule::Negative
+     };
+ 
+-    let shapes =
+-        FloatOverlay::with_subj_custom(&subject, OverlayOptions::ogc(), Default::default())
+-            .overlay(OverlayRule::Subject, fill_rule);
++    let shapes = FloatOverlay::<BoolOpsCoord<B::Scalar>, OverlayI>::from_subj_custom(
++        &subject,
++        OverlayOptions::<B::Scalar, OverlayI>::ogc(),
++        Default::default(),
++    )
++    .overlay(OverlayRule::Subject, fill_rule);
+     multi_polygon_from_shapes(shapes)
+ }
+ 
+--- a/src/algorithm/buffer.rs
++++ b/src/algorithm/buffer.rs
+@@ -11,7 +11,8 @@ use crate::geometry::{
+     Coord, Geometry, GeometryCollection, Line, LineString, MultiLineString, MultiPoint,
+     MultiPolygon, Point, Polygon, Rect, Triangle,
+ };
+-use i_overlay::mesh::{
++use crate::bool_ops::OverlayI;
++use i_overlay::mesh::float::{
+     outline::offset::OutlineOffset,
+     stroke::offset::StrokeOffset,
+     style::{OutlineStyle, StrokeStyle},
+@@ -19,7 +20,7 @@ use i_overlay::mesh::{
+ // Re-export these i_overlay style types. Alternatively, we could implement our own version,
+ // but they'd be a 1:1 mapping, so it seems overly ceremonious.
+ use geo_types::coord;
+-pub use i_overlay::mesh::style::{LineCap, LineJoin};
++pub use i_overlay::mesh::float::style::{LineCap, LineJoin};
+ use num_traits::Float;
+ 
+ /// Create a new geometry whose boundary is offset the specified distance from the input.
+@@ -140,7 +141,7 @@ pub trait Buffer {
+ /// ```
+ pub struct BufferStyle<T: BoolOpsNum> {
+     distance: T,
+-    line_cap: LineCap<BoolOpsCoord<T>, T>,
++    line_cap: LineCap<BoolOpsCoord<T>>,
+     line_join: LineJoin<T>,
+ }
+ 
+@@ -212,7 +213,7 @@ impl<T: BoolOpsNum> BufferStyle<T> {
+     ///
+     /// let style = BufferStyle::new(2.0).line_cap(LineCap::Square);
+     /// ```
+-    pub fn line_cap(mut self, line_cap: LineCap<BoolOpsCoord<T>, T>) -> Self {
++    pub fn line_cap(mut self, line_cap: LineCap<BoolOpsCoord<T>>) -> Self {
+         self.line_cap = line_cap;
+         self
+     }
+@@ -227,7 +228,7 @@ impl<T: BoolOpsNum> BufferStyle<T> {
+     }
+ 
+     // Annoyingly, i_overlay doesn't implement Clone for LineCap
+-    fn clone_line_cap(&self) -> LineCap<BoolOpsCoord<T>, T> {
++    fn clone_line_cap(&self) -> LineCap<BoolOpsCoord<T>> {
+         match &self.line_cap {
+             LineCap::Butt => LineCap::Butt,
+             LineCap::Round(angle) => LineCap::Round(*angle),
+@@ -247,7 +248,7 @@ impl<T: BoolOpsNum> BufferStyle<T> {
+     }
+ 
+     // Used by i_overlay for buffering (Multi)LineStrings
+-    fn stroke_style(&self) -> StrokeStyle<BoolOpsCoord<T>, T> {
++    fn stroke_style(&self) -> StrokeStyle<BoolOpsCoord<T>> {
+         // "Buffer width" is like radius, whereas "stroke width" is more like diameter, so double the
+         // "stroke width" to reconcile semantics with "buffer width".
+         let two = T::one() + T::one();
+@@ -344,7 +345,7 @@ impl<F: BoolOpsNum + 'static> Buffer for LineString<F> {
+             Dimensions::ZeroDimensional => Point(self.0[0]).buffer_with_style(style),
+             Dimensions::OneDimensional => {
+                 let subject = line_string_to_shape_path(self);
+-                let shapes = subject.stroke(style.stroke_style(), false);
++                let shapes = subject.stroke_as::<OverlayI>(style.stroke_style(), false);
+                 multi_polygon_from_shapes(shapes)
+             }
+             Dimensions::TwoDimensional => unreachable!("linestring can't be 2 dimensional"),
+@@ -375,7 +376,7 @@ impl<F: BoolOpsNum + 'static> Buffer for MultiLineString<F> {
+         let stroked_lines = if subject.is_empty() {
+             MultiPolygon::empty()
+         } else {
+-            let shapes = subject.stroke(style.stroke_style(), false);
++            let shapes = subject.stroke_as::<OverlayI>(style.stroke_style(), false);
+             multi_polygon_from_shapes(shapes)
+         };
+ 
+@@ -394,7 +395,7 @@ impl<F: BoolOpsNum + 'static> Buffer for Polygon<F> {
+     fn buffer_with_style(&self, style: BufferStyle<Self::Scalar>) -> MultiPolygon<Self::Scalar> {
+         let rewound = self.orient(Direction::Default);
+         let subject = rewound.rings().map(ring_to_shape_path).collect::<Vec<_>>();
+-        let shapes = subject.outline(&style.outline_style());
++        let shapes = subject.outline_as::<OverlayI>(&style.outline_style());
+         multi_polygon_from_shapes(shapes)
+     }
+ }
+@@ -404,7 +405,7 @@ impl<F: BoolOpsNum + 'static> Buffer for MultiPolygon<F> {
+     fn buffer_with_style(&self, style: BufferStyle<Self::Scalar>) -> MultiPolygon<Self::Scalar> {
+         let rewound = self.orient(Direction::Default);
+         let subject = rewound.rings().map(ring_to_shape_path).collect::<Vec<_>>();
+-        let shapes = subject.outline(&style.outline_style());
++        let shapes = subject.outline_as::<OverlayI>(&style.outline_style());
+         multi_polygon_from_shapes(shapes)
+     }
+ }
+@@ -426,7 +427,7 @@ impl<F: BoolOpsNum + 'static> Buffer for Line<F> {
+                     .iter()
+                     .map(|c| BoolOpsCoord(*c))
+                     .collect();
+-                let shapes = subject.stroke(style.stroke_style(), false);
++                let shapes = subject.stroke_as::<OverlayI>(style.stroke_style(), false);
+                 multi_polygon_from_shapes(shapes)
+             }
+         }

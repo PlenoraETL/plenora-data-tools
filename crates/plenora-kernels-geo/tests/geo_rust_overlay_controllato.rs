@@ -221,41 +221,49 @@ fn buco_sotto_la_precisione_puo_sparire_il_resto_resta() {
     }
 }
 
-/// Il controllo della griglia: un poligono da riparare esteso 20.000 km in
-/// metri ha la griglia dell'overlay sopra il centimetro (circa 1,9 cm) e
-/// `STRUCTURE` lo rifiuta; lo stesso a 1.300 km (l'Italia) passa. `LINEWORK`
-/// non passa da overlay e ripara entrambi: l'area e' quella di GEOS, la
-/// shell meno la parte del buco dentro piu' quella fuori, `L^2`.
+/// Il controllo della griglia: con il motore `i64` di `i_overlay` 9 un
+/// poligono da riparare esteso 20.000 km in metri passa anche in
+/// `STRUCTURE` (con `i_overlay` 4.5 la griglia, circa 1,9 cm, lo rifiutava),
+/// come a 1.300 km (l'Italia); il solo rifiuto resta la spaziatura delle
+/// coordinate (lo stesso poligono a `2^45` m). `LINEWORK` non passa da
+/// overlay e ripara entrambi: l'area e' quella di GEOS, la shell meno la
+/// parte del buco dentro piu' quella fuori, `L^2`.
 #[test]
 fn griglia_oltre_il_centimetro_e_l_unico_rifiuto() {
-    let invalido = |lato: f64| {
+    let spostato = |lato: f64, origine: f64| {
         // Buco che esce dalla shell: la riparazione passa da un overlay.
         Geometry::Polygon(Polygon::new(
-            rettangolo(0.0, 0.0, lato, lato),
+            rettangolo(origine, origine, origine + lato, origine + lato),
             vec![rettangolo(
-                0.75 * lato,
-                0.25 * lato,
-                1.25 * lato,
-                0.75 * lato,
+                origine + 0.75 * lato,
+                origine + 0.25 * lato,
+                origine + 1.25 * lato,
+                origine + 0.75 * lato,
             )],
         ))
     };
+    let invalido = |lato: f64| spostato(lato, 0.0);
+    for lato in [20_000_000.0, 1_300_000.0] {
+        let output =
+            make_valid_geometry_rust(&invalido(lato), RepairMethod::Structure, false, CENTIMETRO)
+                .unwrap_or_else(|errore| panic!("{lato}: {errore}"));
+        // La shell meno la parte del buco dentro: `L^2 - L^2 / 8`.
+        let attesa = lato * lato * 0.875;
+        assert!(
+            (output.unsigned_area() - attesa).abs() <= 8.0 * lato * CENTIMETRO,
+            "{lato}: area {}",
+            output.unsigned_area()
+        );
+    }
     assert!(matches!(
         make_valid_geometry_rust(
-            &invalido(20_000_000.0),
+            &spostato(10.0, 2_f64.powi(45)),
             RepairMethod::Structure,
             false,
             CENTIMETRO
         ),
         Err(MakeValidError::PrecisionInsufficient)
     ));
-    assert!(make_valid_geometry_rust(
-        &invalido(1_300_000.0),
-        RepairMethod::Structure,
-        false,
-        CENTIMETRO
-    )
-    .is_ok());
     for lato in [20_000_000.0, 1_300_000.0] {
         let output =
             make_valid_geometry_rust(&invalido(lato), RepairMethod::Linework, false, CENTIMETRO)
@@ -270,11 +278,15 @@ fn griglia_oltre_il_centimetro_e_l_unico_rifiuto() {
     let payload = invalido(20_000_000.0)
         .to_wkb(CoordDimensions::xy())
         .expect("wkb");
+    assert!(make_valid_wkb(&payload, MetodoAdapter::Structure, true, precisione()).is_ok());
+    assert!(make_valid_wkb(&payload, MetodoAdapter::Linework, true, precisione()).is_ok());
+    let lontano = spostato(10.0, 2_f64.powi(45))
+        .to_wkb(CoordDimensions::xy())
+        .expect("wkb");
     assert!(matches!(
-        make_valid_wkb(&payload, MetodoAdapter::Structure, true, precisione()),
+        make_valid_wkb(&lontano, MetodoAdapter::Structure, true, precisione()),
         Err(RustBackendError::PrecisionInsufficient)
     ));
-    assert!(make_valid_wkb(&payload, MetodoAdapter::Linework, true, precisione()).is_ok());
 }
 
 /// La cornice larga resta riparata come prima.
@@ -385,16 +397,19 @@ fn caso_92(inizio: f64, larghezza: f64) -> (Geometry<f64>, Polygon<f64>) {
 }
 
 /// Campagna differenziale traslata di `2^30`, seme 1 caso 92: shell larga
-/// 6.000 km e alta 7 micrometri, in metri. Il passo della griglia
-/// dell'overlay (circa 5,6 mm) sta sotto il centimetro, ma il bilancio di
-/// spostamento (arrotondamento piu' aggancio, due diagonali del passo:
-/// 11,2 mm) no: `STRUCTURE`, che sottrae il buco con un overlay, da' errore
-/// esplicito. `LINEWORK` non usa overlay e risponde come GEOS, esatto: il
-/// buco condivide un tratto del lato destro con la shell, il primo giro
-/// costruisce la shell intera e ne toglie il bordo, i tre lati rimasti del
-/// buco non chiudono facce e restano linee.
+/// 6.000 km e alta 7 micrometri, in metri. Con `i_overlay` 4.5 (passo
+/// `span * 2^-30`, circa 5,6 mm) il bilancio di spostamento
+/// (arrotondamento piu' aggancio: 11,2 mm) superava il centimetro e
+/// `STRUCTURE` dava errore; con il motore `i64` il bilancio e' fatto di
+/// arrotondamenti dei `f64` (qualche `ulp(2^30)`, sotto il micrometro) e
+/// `STRUCTURE` risponde: la shell meno un buco alto 2 micrometri, sotto la
+/// precisione, con l'area della shell entro perimetro per 1 cm. `LINEWORK`
+/// non usa overlay e risponde come GEOS, esatto: il buco condivide un
+/// tratto del lato destro con la shell, il primo giro costruisce la shell
+/// intera e ne toglie il bordo, i tre lati rimasti del buco non chiudono
+/// facce e restano linee.
 #[test]
-fn caso_92_in_metri_oltre_il_bilancio_structure_rifiuta_linework_no() {
+fn caso_92_in_metri_a_6000_km_structure_e_linework_rispondono() {
     let (input, shell) = caso_92(1_071_741_824.0, 6_000_000.0);
     let base = 1_073_741_824.0; // 2^30
     let (inizio, fine) = (1_072_741_824.0, 1_077_741_824.0);
@@ -405,10 +420,14 @@ fn caso_92_in_metri_oltre_il_bilancio_structure_rifiuta_linework_no() {
     ];
     attese.sort_unstable();
     for keep_collapsed in [false, true] {
-        assert!(matches!(
-            make_valid_geometry_rust(&input, RepairMethod::Structure, keep_collapsed, CENTIMETRO),
-            Err(MakeValidError::PrecisionInsufficient)
-        ));
+        let strutturale =
+            make_valid_geometry_rust(&input, RepairMethod::Structure, keep_collapsed, CENTIMETRO)
+                .expect("STRUCTURE entro la precisione");
+        let area = strutturale.unsigned_area();
+        assert!(
+            (area - shell.unsigned_area()).abs() <= perimetro(&shell) * CENTIMETRO,
+            "area {area}"
+        );
         let output =
             make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed, CENTIMETRO)
                 .expect("LINEWORK senza overlay");

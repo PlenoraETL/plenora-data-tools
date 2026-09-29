@@ -16,6 +16,14 @@ use i_overlay::float::overlay::FloatOverlay;
 use i_overlay::float::overlay::OverlayOptions;
 use i_overlay::string::clip::ClipRule;
 
+/// The integer engine of every `i_overlay` call in this crate (vendored port
+/// to `i_overlay` 9.0.0): `i64`, whose grid step is `2^(ceil(log2 r) - 61)`
+/// for an operand radius `r` (`i_float` 5.0.0 conservative adapter) instead of
+/// `2^(ceil(log2 r) - 29)` with `i32`. With `f64` coordinates the grid is then
+/// finer than the spacing of the coordinates themselves, and the result is
+/// cleaned in float (`OverlayOptions::clean_result`).
+pub(crate) type OverlayI = i64;
+
 /// Boolean Operations on geometry.
 ///
 /// Boolean operations are set operations on geometries considered as a subset
@@ -96,10 +104,10 @@ pub trait BooleanOps {
     ) -> MultiPolygon<Self::Scalar> {
         let subject = self.rings().map(ring_to_shape_path).collect::<Vec<_>>();
         let clip = other.rings().map(ring_to_shape_path).collect::<Vec<_>>();
-        let shapes = FloatOverlay::with_subj_and_clip_custom(
+        let shapes = FloatOverlay::<BoolOpsCoord<Self::Scalar>, OverlayI>::from_subj_and_clip_custom(
             &subject,
             &clip,
-            OverlayOptions::ogc(),
+            OverlayOptions::<Self::Scalar, OverlayI>::ogc(),
             Default::default(),
         )
         .overlay(op.into(), fill_rule);
@@ -203,7 +211,7 @@ pub trait BooleanOps {
             invert,
             boundary_included: true,
         };
-        let paths = subject.clip_by(&clip, fill_rule, clip_rule);
+        let paths = subject.clip_by_as::<OverlayI>(&clip, fill_rule, clip_rule);
         i_overlay_integration::convert::multi_line_string_from_paths(paths)
     }
 }
@@ -281,9 +289,12 @@ pub fn unary_union<'a, B: BooleanOps + 'a>(
         FillRule::Negative
     };
 
-    let shapes =
-        FloatOverlay::with_subj_custom(&subject, OverlayOptions::ogc(), Default::default())
-            .overlay(OverlayRule::Subject, fill_rule);
+    let shapes = FloatOverlay::<BoolOpsCoord<B::Scalar>, OverlayI>::from_subj_custom(
+        &subject,
+        OverlayOptions::<B::Scalar, OverlayI>::ogc(),
+        Default::default(),
+    )
+    .overlay(OverlayRule::Subject, fill_rule);
     multi_polygon_from_shapes(shapes)
 }
 

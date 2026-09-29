@@ -11,7 +11,8 @@ use crate::geometry::{
     Coord, Geometry, GeometryCollection, Line, LineString, MultiLineString, MultiPoint,
     MultiPolygon, Point, Polygon, Rect, Triangle,
 };
-use i_overlay::mesh::{
+use crate::bool_ops::OverlayI;
+use i_overlay::mesh::float::{
     outline::offset::OutlineOffset,
     stroke::offset::StrokeOffset,
     style::{OutlineStyle, StrokeStyle},
@@ -19,7 +20,7 @@ use i_overlay::mesh::{
 // Re-export these i_overlay style types. Alternatively, we could implement our own version,
 // but they'd be a 1:1 mapping, so it seems overly ceremonious.
 use geo_types::coord;
-pub use i_overlay::mesh::style::{LineCap, LineJoin};
+pub use i_overlay::mesh::float::style::{LineCap, LineJoin};
 use num_traits::Float;
 
 /// Create a new geometry whose boundary is offset the specified distance from the input.
@@ -140,7 +141,7 @@ pub trait Buffer {
 /// ```
 pub struct BufferStyle<T: BoolOpsNum> {
     distance: T,
-    line_cap: LineCap<BoolOpsCoord<T>, T>,
+    line_cap: LineCap<BoolOpsCoord<T>>,
     line_join: LineJoin<T>,
 }
 
@@ -212,7 +213,7 @@ impl<T: BoolOpsNum> BufferStyle<T> {
     ///
     /// let style = BufferStyle::new(2.0).line_cap(LineCap::Square);
     /// ```
-    pub fn line_cap(mut self, line_cap: LineCap<BoolOpsCoord<T>, T>) -> Self {
+    pub fn line_cap(mut self, line_cap: LineCap<BoolOpsCoord<T>>) -> Self {
         self.line_cap = line_cap;
         self
     }
@@ -227,7 +228,7 @@ impl<T: BoolOpsNum> BufferStyle<T> {
     }
 
     // Annoyingly, i_overlay doesn't implement Clone for LineCap
-    fn clone_line_cap(&self) -> LineCap<BoolOpsCoord<T>, T> {
+    fn clone_line_cap(&self) -> LineCap<BoolOpsCoord<T>> {
         match &self.line_cap {
             LineCap::Butt => LineCap::Butt,
             LineCap::Round(angle) => LineCap::Round(*angle),
@@ -247,7 +248,7 @@ impl<T: BoolOpsNum> BufferStyle<T> {
     }
 
     // Used by i_overlay for buffering (Multi)LineStrings
-    fn stroke_style(&self) -> StrokeStyle<BoolOpsCoord<T>, T> {
+    fn stroke_style(&self) -> StrokeStyle<BoolOpsCoord<T>> {
         // "Buffer width" is like radius, whereas "stroke width" is more like diameter, so double the
         // "stroke width" to reconcile semantics with "buffer width".
         let two = T::one() + T::one();
@@ -344,7 +345,7 @@ impl<F: BoolOpsNum + 'static> Buffer for LineString<F> {
             Dimensions::ZeroDimensional => Point(self.0[0]).buffer_with_style(style),
             Dimensions::OneDimensional => {
                 let subject = line_string_to_shape_path(self);
-                let shapes = subject.stroke(style.stroke_style(), false);
+                let shapes = subject.stroke_as::<OverlayI>(style.stroke_style(), false);
                 multi_polygon_from_shapes(shapes)
             }
             Dimensions::TwoDimensional => unreachable!("linestring can't be 2 dimensional"),
@@ -375,7 +376,7 @@ impl<F: BoolOpsNum + 'static> Buffer for MultiLineString<F> {
         let stroked_lines = if subject.is_empty() {
             MultiPolygon::empty()
         } else {
-            let shapes = subject.stroke(style.stroke_style(), false);
+            let shapes = subject.stroke_as::<OverlayI>(style.stroke_style(), false);
             multi_polygon_from_shapes(shapes)
         };
 
@@ -394,7 +395,7 @@ impl<F: BoolOpsNum + 'static> Buffer for Polygon<F> {
     fn buffer_with_style(&self, style: BufferStyle<Self::Scalar>) -> MultiPolygon<Self::Scalar> {
         let rewound = self.orient(Direction::Default);
         let subject = rewound.rings().map(ring_to_shape_path).collect::<Vec<_>>();
-        let shapes = subject.outline(&style.outline_style());
+        let shapes = subject.outline_as::<OverlayI>(&style.outline_style());
         multi_polygon_from_shapes(shapes)
     }
 }
@@ -404,7 +405,7 @@ impl<F: BoolOpsNum + 'static> Buffer for MultiPolygon<F> {
     fn buffer_with_style(&self, style: BufferStyle<Self::Scalar>) -> MultiPolygon<Self::Scalar> {
         let rewound = self.orient(Direction::Default);
         let subject = rewound.rings().map(ring_to_shape_path).collect::<Vec<_>>();
-        let shapes = subject.outline(&style.outline_style());
+        let shapes = subject.outline_as::<OverlayI>(&style.outline_style());
         multi_polygon_from_shapes(shapes)
     }
 }
@@ -426,7 +427,7 @@ impl<F: BoolOpsNum + 'static> Buffer for Line<F> {
                     .iter()
                     .map(|c| BoolOpsCoord(*c))
                     .collect();
-                let shapes = subject.stroke(style.stroke_style(), false);
+                let shapes = subject.stroke_as::<OverlayI>(style.stroke_style(), false);
                 multi_polygon_from_shapes(shapes)
             }
         }

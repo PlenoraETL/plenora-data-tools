@@ -5,13 +5,18 @@
 //!
 //! # La griglia
 //!
-//! `i_overlay` 4.5.2 porta ogni coordinata su interi `i32` con
-//! `i_float::adapter::FloatPointAdapter::new` (`i_float` 1.16.0): il
-//! rettangolo d'ingombro degli operandi di **quella** chiamata, `h` la meta'
-//! della sua dimensione maggiore, scala `2^(29 - round(log2(h)))` (con
-//! `round` che arrotonda la meta' lontano da zero, `FloatNumber::to_i32`).
-//! Il passo della griglia e' quindi `g = 2^(round(log2(h)) - 29)`
-//! ([`passo_griglia`]).
+//! `geo` (vendorizzato, porting a `i_overlay` 9.0.0) chiama ogni overlay e
+//! ogni buffer con il motore intero `i64`, e `i_overlay` porta ogni
+//! coordinata su interi con `FloatPointAdapter::with_iter_conservative` di
+//! `i_float` 5.0.0: sul rettangolo d'ingombro degli operandi di **quella**
+//! chiamata, centro `c = (min + max) * 0.5` per asse e raggio `r` la
+//! distanza massima di un lato del rettangolo dal centro (in `f64`, con le
+//! operazioni di `i_float`), scala `2^(61 - ceil(log2(r)))` (`61 = 64 - 3`
+//! bit conservativi), esponente limitato a `1023` per rettangoli minuscoli.
+//! Il passo della griglia e' quindi `g = 2^max(ceil(log2(r)) - 61, -1023)`
+//! ([`passo_griglia`]). Con `i32` sarebbe `2^(ceil(log2(r)) - 29)`: il
+//! motore `i64` e' `2^32` volte piu' fine, sotto la spaziatura dei `f64`
+//! delle coordinate stesse (`g <= ulp(r) / 256`).
 //!
 //! # Lo spostamento a priori
 //!
@@ -22,15 +27,24 @@
 //! - `g * sqrt(2) / 2` per l'arrotondamento di un incrocio calcolato;
 //! - `g` per il primo aggancio (`Solver::AUTO` usa `Precision::HIGH`: raggio
 //!   quadro `1` al primo giro, raddoppiato a ogni giro successivo);
-//! - pochi `ulp` delle coordinate nel passaggio `f64 -> i32 -> f64`, sotto
-//!   `p / 64` ciascuno per il controllo di spaziatura.
+//! - `g * sqrt(2) / 2` per la pulizia del risultato (`clean_result`, attiva
+//!   con `i64`: il risultato torna sulla griglia per togliere i vertici
+//!   allineati, e poi in `f64`);
+//! - gli arrotondamenti dei `f64` nei due passaggi `f64 -> i64 -> f64`
+//!   (ingresso e pulizia): per asse la sottrazione del centro (al piu'
+//!   `ulp(M)`), la conversione dell'intero in `f64` (al piu' `ulp(M)`) e la
+//!   somma del centro (al piu' `ulp(M) / 2`), meno di `3 ulp(M)` a
+//!   passaggio e `6 ulp(M)` in tutto: `6 sqrt(2) ulp(M) < 9 ulp(M)` come
+//!   vettore.
 //!
-//! [`controlla_overlay`] rifiuta prima del calcolo se `(1 + sqrt(2)) g +
-//! 4 ulp(M)` supera `p / 2` (la tolleranza del controllo a posteriori,
-//! sotto), o se le coordinate sono troppo rade
-//! ([`super::precision::coordinate_abbastanza_fitte`]). In metri con 1 cm
-//! il passo massimo ammesso e' `2^-9` m: un'estensione fino a circa 2.950
-//! km passa (l'Italia, 1.300 km, ha `g = 2^-10`), 20.000 km no (`g = 2^-6`).
+//! [`controlla_overlay`] rifiuta prima del calcolo se lo spostamento a
+//! priori `(1 + 3 sqrt(2) / 2) g + 12 ulp(M)` supera `p / 2` (la tolleranza
+//! del controllo a posteriori, sotto), o se le coordinate sono troppo rade
+//! ([`super::precision::coordinate_abbastanza_fitte`], `ulp(M) <= p / 64`).
+//! Con la guardia di spaziatura soddisfatta il limite non scatta:
+//! `12 ulp(M) <= 0.19 p` e `g < ulp(M) / 64` (`r <= 2 M`). In metri con 1 cm
+//! un'estensione di 20.000 km ha `g = 2^-37` m: nessun limite d'estensione,
+//! resta il solo modulo delle coordinate (circa `2^39` m).
 //!
 //! # Lo spostamento a posteriori: tre controlli contro gli ingressi originali
 //!
@@ -96,8 +110,18 @@ impl From<PrecisioneInsufficiente> for ErroreVerifica {
     }
 }
 
-/// Esponente di `i_float`: la scala e' `2^(29 - round(log2(h)))`.
-const ESPONENTE_GRIGLIA: i32 = 29;
+/// I bit conservativi delle coordinate del motore `i64` in `i_float` 5.0.0
+/// (`FloatPointAdapter::CONSERVATIVE_COORDINATE_BITS = I::BITS - 3`): la
+/// scala e' `2^(61 - ceil(log2(r)))`.
+const BIT_COORDINATE: i32 = 61;
+
+/// L'esponente massimo della scala (`f64::MAX_EXP - 1`): `i_float` limita
+/// la scala dei rettangoli minuscoli a `2^1023`.
+const ESPONENTE_SCALA_MASSIMO: i32 = 1023;
+
+/// Le unita' in ultima posizione del modulo massimo nello spostamento a
+/// priori (vedi il modulo: meno di `9 ulp(M)` per un overlay).
+const ULP_A_PRIORI: f64 = 12.0;
 
 /// Il rettangolo d'ingombro delle coordinate; `None` senza coordinate. Una
 /// coordinata non finita rende il rettangolo non finito (e il controllo di
@@ -136,59 +160,78 @@ pub fn unisci(a: Option<Rect<f64>>, b: Option<Rect<f64>>) -> Option<Rect<f64>> {
     }
 }
 
-/// Il passo della griglia di `i_overlay` per operandi di ingombro `rect`;
-/// `Some(0.0)` se il rettangolo e' un punto (tutte le coordinate coincidono
-/// e tornano esatte), `None` se non e' finito.
+/// Il passo della griglia di `i_overlay` (motore `i64`) per operandi di
+/// ingombro `rect`; `Some(0.0)` se il rettangolo e' un punto (tutte le
+/// coordinate coincidono e tornano esatte), `None` se non e' finito.
 ///
-/// Vicino a un pareggio `log2(h) = k + 0.5` il `log2` di `libm` usato da
-/// `i_float` e quello della libreria standard possono differire di un'unita'
-/// in ultima posizione e arrotondare in versi opposti: li' si prende
-/// l'esponente maggiore, il passo piu' grosso.
+/// Centro e raggio con le stesse operazioni `f64` di
+/// `FloatPointAdapter::center_and_radius`: il raggio e' lo stesso numero.
+/// `i_float` ricava `ceil(log2(r))` troncando `libm::log2(r)` e
+/// confrontando la potenza di due con `r`, che da' il tetto esatto anche
+/// quando `log2` sbaglia di un'unita' in ultima posizione vicino a un
+/// intero; qui il tetto si legge esatto dai bit ([`tetto_log2`]).
 #[must_use]
 pub fn passo_griglia(rect: Rect<f64>) -> Option<f64> {
-    let half = (rect.width() * 0.5).max(rect.height() * 0.5);
-    if !half.is_finite() || half < 0.0 {
+    let (min, max) = (rect.min(), rect.max());
+    // Le stesse operazioni di `i_float`, non `f64::midpoint`: il centro deve
+    // essere lo stesso numero.
+    #[allow(clippy::manual_midpoint)]
+    let x = (min.x + max.x) * 0.5;
+    #[allow(clippy::manual_midpoint)]
+    let y = (min.y + max.y) * 0.5;
+    let raggio = (x - min.x).max(max.x - x).max(y - min.y).max(max.y - y);
+    if !raggio.is_finite() || raggio < 0.0 {
         return None;
     }
-    if half == 0.0 {
+    if raggio == 0.0 {
         return Some(0.0);
     }
-    let log2 = half.log2();
-    let floor = log2.floor();
-    let frazione = log2 - floor;
-    let esponente = if (frazione - 0.5).abs() < 1e-9 || frazione > 0.5 {
-        floor + 1.0
-    } else {
-        floor
-    };
-    // `esponente` e' un intero esatto in [-1075, 1024]: la conversione e'
-    // esatta.
-    #[allow(clippy::cast_possible_truncation)]
-    let esponente = esponente as i32;
-    Some(2_f64.powi(esponente - ESPONENTE_GRIGLIA))
+    let scala = (BIT_COORDINATE - tetto_log2(raggio)).min(ESPONENTE_SCALA_MASSIMO);
+    Some(2_f64.powi(-scala))
+}
+
+/// `ceil(log2(x))` esatto per `x` finito e positivo, letto dai bit.
+fn tetto_log2(x: f64) -> i32 {
+    const MANTISSA: u64 = (1 << 52) - 1;
+    let bit = x.to_bits();
+    let mantissa = bit & MANTISSA;
+    // L'esponente con bias di un positivo finito sta in [0, 2046]: la
+    // conversione e' esatta.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let con_bias = (bit >> 52) as i32;
+    if con_bias == 0 {
+        // Subnormale: x = mantissa * 2^-1074, mantissa in [1, 2^52).
+        // `significativi` sta in [1, 52]: la conversione e' esatta.
+        #[allow(clippy::cast_possible_wrap)]
+        let significativi = (u64::BITS - mantissa.leading_zeros()) as i32;
+        return -1074 + significativi - i32::from(mantissa.is_power_of_two());
+    }
+    // Normale: x = (1 + mantissa / 2^52) * 2^(con_bias - 1023).
+    con_bias - 1023 + i32::from(mantissa != 0)
 }
 
 /// La spaziatura dei `f64` al modulo `magnitude`.
-fn ulp(magnitude: f64) -> f64 {
+pub fn ulp(magnitude: f64) -> f64 {
     let magnitude = magnitude.abs();
     f64::from_bits(magnitude.to_bits().saturating_add(1)) - magnitude
 }
 
-/// Il primo giro di un overlay booleano sposta un punto di al piu' `(1 +
-/// sqrt(2)) g` (vedi il modulo).
-pub const FATTORE_OVERLAY: f64 = 1.0 + SQRT_2;
+/// Il primo giro di un overlay booleano, con la pulizia del risultato,
+/// sposta un punto di al piu' `(1 + 3 sqrt(2) / 2) g`, piu' gli
+/// arrotondamenti dei `f64` (vedi il modulo).
+pub const FATTORE_OVERLAY: f64 = 1.0 + 1.5 * SQRT_2;
 
 /// La tolleranza del controllo a posteriori delle booleane, in frazioni
 /// della precisione (vedi il modulo): anche il limite a priori delle
 /// booleane, perche' uno spostamento legittimo non la superi.
 pub const FRAZIONE_BORDO: f64 = 0.5;
 
-/// Lo spostamento a priori della griglia: `fattore * g + 4 ulp(M)`.
+/// Lo spostamento a priori della griglia: `fattore * g + 12 ulp(M)`.
 #[must_use]
 pub fn spostamento_a_priori(rect: Rect<f64>, fattore: f64) -> Option<f64> {
     let g = passo_griglia(rect)?;
     let magnitude = modulo_massimo([rect.min(), rect.max()]);
-    let spostamento = fattore.mul_add(g, 4.0 * ulp(magnitude));
+    let spostamento = fattore.mul_add(g, ULP_A_PRIORI * ulp(magnitude));
     spostamento.is_finite().then_some(spostamento)
 }
 
@@ -214,7 +257,7 @@ pub fn controlla_griglia(
 
 /// Il controllo prima di un overlay booleano i cui operandi hanno ingombro
 /// `rect` (`None`: nessuna coordinata, nessun calcolo da controllare):
-/// `(1 + sqrt(2)) g + 4 ulp(M) <= p / 2`.
+/// `(1 + 3 sqrt(2) / 2) g + 12 ulp(M) <= p / 2`.
 ///
 /// # Errors
 ///
@@ -906,61 +949,94 @@ mod tests {
         Rect::new(Coord { x: x0, y: y0 }, Coord { x: x1, y: y1 })
     }
 
-    /// Il passo riproduce `FloatPointAdapter::new` di `i_float` 1.16.0.
+    /// Il passo riproduce `FloatPointAdapter::with_iter_conservative` di
+    /// `i_float` 5.0.0 con il motore `i64`: `2^max(ceil(log2(r)) - 61,
+    /// -1023)`, `r` il raggio dal centro arrotondato.
     #[test]
     fn il_passo_e_quello_di_i_float() {
-        // h = 1: log2 = 0, passo 2^-29.
+        // r = 1: ceil(log2) = 0, passo 2^-61.
         assert_eq!(
             passo_griglia(rect(0.0, 0.0, 2.0, 1.0)),
-            Some(2_f64.powi(-29))
+            Some(2_f64.powi(-61))
         );
-        // h = 650 km: log2 = 19.31, round 19, passo 2^-10.
+        // r = 650 km: log2 = 19.31, ceil 20, passo 2^-41.
         assert_eq!(
             passo_griglia(rect(0.0, 0.0, 1_300_000.0, 10.0)),
-            Some(2_f64.powi(-10))
+            Some(2_f64.powi(-41))
         );
-        // h = 10.000 km: log2 = 23.25, round 23, passo 2^-6.
+        // r = 10.000 km: log2 = 23.25, ceil 24, passo 2^-37.
         assert_eq!(
             passo_griglia(rect(0.0, 0.0, 20_000_000.0, 10.0)),
-            Some(2_f64.powi(-6))
+            Some(2_f64.powi(-37))
         );
-        // Pareggio: h = 2^0.5, arrotonda lontano da zero (esponente 1).
+        // Una potenza di due esatta resta tale; un'unita' in ultima
+        // posizione sopra passa all'esponente successivo (centro 1 + 2^-52,
+        // raggio 1 + 2^-52).
         assert_eq!(
-            passo_griglia(rect(0.0, 0.0, 2.0 * SQRT_2, 0.0)),
-            Some(2_f64.powi(-28))
+            passo_griglia(rect(-4.0, -1.0, 4.0, 1.0)),
+            Some(2_f64.powi(-59))
+        );
+        assert_eq!(
+            passo_griglia(rect(0.0, 0.0, 2.0 + 2_f64.powi(-51), 0.0)),
+            Some(2_f64.powi(-60))
+        );
+        // Rettangolo minuscolo: la scala si ferma a 2^1023.
+        assert_eq!(
+            passo_griglia(rect(0.0, 0.0, 2_f64.powi(-1000), 0.0)),
+            Some(2_f64.powi(-1023))
         );
         assert_eq!(passo_griglia(rect(5.0, 5.0, 5.0, 5.0)), Some(0.0));
         assert_eq!(passo_griglia(rect(0.0, 0.0, f64::INFINITY, 0.0)), None);
     }
 
-    /// Controprova diretta sulla dipendenza: un vertice a `1.3 g` da un
-    /// punto della griglia torna a `1 g`. Con un passo doppio o dimezzato
-    /// tornerebbe a `0` o `2 g` (per `g / 2`: `2.6 -> 3` meta' passi).
+    #[test]
+    fn il_tetto_del_logaritmo_e_esatto() {
+        for (x, atteso) in [
+            (1.0, 0),
+            (1.5, 1),
+            (0.75, 0),
+            (0.5, -1),
+            (0.5 + f64::EPSILON, 0),
+            (1_300_000.0, 21),
+            (f64::MAX, 1024),
+            (f64::MIN_POSITIVE, -1022),
+            (f64::MIN_POSITIVE * 0.75, -1022),
+            (5e-324, -1074),
+            (3.0 * 5e-324, -1072),
+            (4.0 * 5e-324, -1072),
+        ] {
+            assert_eq!(tetto_log2(x), atteso, "{x:e}");
+        }
+    }
+
+    /// Controprova diretta sulla dipendenza: un vertice a `1.3 g` dal
+    /// centro del rettangolo (l'origine, dove i `f64` sono piu' fitti della
+    /// griglia) torna a `1 g`. Con un passo doppio o dimezzato tornerebbe a
+    /// `2 g` o a `1.5 g` (`2.6 -> 3` meta' passi).
     #[test]
     fn il_passo_coincide_con_l_adapter_della_dipendenza() {
         use geo::algorithm::bool_ops::BooleanOps as _;
         for lato in [1.0, 1_300_000.0, 20_000_000.0, 0.001_953_125] {
-            let g = passo_griglia(rect(0.0, 0.0, lato, lato)).unwrap();
+            let g = passo_griglia(rect(-lato, -lato, lato, lato)).unwrap();
             let anello = |x0: f64, y0: f64, x1: f64, y1: f64| {
                 Polygon::new(
                     LineString::from(vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]),
                     vec![],
                 )
             };
-            let quadrato = anello(0.0, 0.0, lato, lato);
-            let spostato = lato.mul_add(0.25, 1.3 * g);
-            let interno = anello(spostato, lato * 0.25, lato * 0.75, lato * 0.75);
+            let quadrato = anello(-lato, -lato, lato, lato);
+            let interno = anello(1.3 * g, lato * -0.5, lato * 0.5, lato * 0.5);
             let uscita = quadrato.difference(&interno);
-            let atteso = lato.mul_add(0.25, g);
             assert!(
-                uscita
-                    .coords_iter()
-                    .any(|c| (c.x - atteso).abs() < g * 1e-3),
+                uscita.coords_iter().any(|c| (c.x - g).abs() < g * 1e-3),
                 "lato {lato}"
             );
         }
     }
 
+    /// Con il motore `i64` il limite a priori non scatta prima della
+    /// guardia di spaziatura: 20.000 km passano con meno di un micron di
+    /// spostamento a priori, i moduli oltre circa `2^40` m no.
     #[test]
     fn il_controllo_a_priori_segue_l_estensione() {
         let centimetro = Precision::new(0.01).unwrap();
@@ -968,12 +1044,15 @@ mod tests {
             controlla_overlay(Some(rect(0.0, 0.0, 1_300_000.0, 1_000_000.0)), centimetro).is_ok()
         );
         assert!(controlla_overlay(Some(rect(0.0, 0.0, 2_900_000.0, 10.0)), centimetro).is_ok());
-        assert_eq!(
-            controlla_overlay(Some(rect(0.0, 0.0, 5_000_000.0, 10.0)), centimetro),
-            Err(PrecisioneInsufficiente)
+        assert!(controlla_overlay(Some(rect(0.0, 0.0, 5_000_000.0, 10.0)), centimetro).is_ok());
+        assert!(controlla_overlay(Some(rect(0.0, 0.0, 20_000_000.0, 10.0)), centimetro).is_ok());
+        assert!(
+            spostamento_a_priori(rect(0.0, 0.0, 20_000_000.0, 10.0), FATTORE_OVERLAY).unwrap()
+                < 1e-6
         );
+        assert!(controlla_overlay(Some(rect(0.0, 0.0, 1e12, 10.0)), centimetro).is_ok());
         assert_eq!(
-            controlla_overlay(Some(rect(0.0, 0.0, 20_000_000.0, 10.0)), centimetro),
+            controlla_overlay(Some(rect(0.0, 0.0, 2e12, 10.0)), centimetro),
             Err(PrecisioneInsufficiente)
         );
         // Coordinate oltre la guardia di modulo, estensione minuscola.

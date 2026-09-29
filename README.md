@@ -16,7 +16,7 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-kernels-geo` | kernel geografici su `geo::Geometry` e adapter GeoArrow-WKB; `rust_backend` per `geo.make_valid`, `geo.polygonize` e `geo.split` senza GEOS, e i controlli di precisione della griglia degli overlay (`rust_backend::griglia`); `riproiezione` per `geo.reproject` senza PROJ |
 | `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione e budget di memoria per passo ([«Runner»](#runner)) |
 | `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](#file)) |
-| `vendor/` | `geo`, `wkt`, `i_shape` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
+| `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0) e `wkt` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
 
@@ -80,15 +80,20 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
   grafo non si costruisce. Con la spaziatura delle coordinate già
   controllata è un secondo livello di difesa;
 - **griglia di `i_overlay`, a priori** (`rust_backend::griglia`): le
-  booleane di `geo` portano le coordinate su interi con passo `g =
-  2^(round(log2(h)) - 29)`, `h` la metà della dimensione maggiore del
-  rettangolo d'ingombro degli operandi di **quella** chiamata (letto da
-  `FloatPointAdapter::new` di `i_float` 1.16.0). Un giro sposta un punto di
-  al più `(1 + sqrt(2)) g` (arrotondamento dei vertici e degli incroci,
-  primo aggancio): oltre `p / 2` (la tolleranza del controllo a
-  posteriori, sotto) l'overlay non si esegue. In metri con 1 cm passano
-  estensioni fino a circa 2.950 km (l'Italia, 1.300 km, ha `g = 2^-10` m),
-  20.000 km no;
+  booleane e il buffer di `geo` (vendorizzato, `i_overlay` 9.0.0 con il
+  motore intero `i64`) portano le coordinate su interi con passo `g =
+  2^(ceil(log2(r)) - 61)`, `r` il raggio del rettangolo d'ingombro degli
+  operandi di **quella** chiamata dal suo centro (letto da
+  `FloatPointAdapter::with_iter_conservative` di `i_float` 5.0.0). Un giro
+  sposta un punto di al più `(1 + 3 sqrt(2) / 2) g` (arrotondamento dei
+  vertici e degli incroci, primo aggancio, pulizia del risultato) più `12
+  ulp(M)` per gli arrotondamenti dei `f64`: oltre `p / 2` (la tolleranza
+  del controllo a posteriori, sotto) l'overlay non si esegue. Con la
+  guardia di spaziatura soddisfatta il limite non scatta: **nessun limite
+  d'estensione**, in metri con 1 cm 20.000 km hanno `g = 2^-37` m (con
+  `i_overlay` 4.5 e `i32` il passo era `2^(round(log2(h)) - 29)` e
+  passavano estensioni fino a circa 2.950 km); resta solo il modulo delle
+  coordinate, circa `2^39` m;
 - **risultato di ogni overlay, a posteriori, contro gli ingressi
   originali** dell'operazione pubblica (`griglia::Operandi`), non contro i
   risultati intermedi: gli overlay in catena (maschera dissolta e poi
@@ -121,12 +126,14 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
 
 **`make_valid` `STRUCTURE`** ha i propri overlay (`LINEWORK` non ne usa):
 gli operandi sono normalizzati per asse su `[0, 1]^2`, dove il passo della
-griglia è esattamente `2^-30` (in coordinate originali `span * 2^-30` per
-asse, di diagonale `d`); il bilancio di un vertice è l'arrotondamento (al
-più `d / 2`) più l'aggancio al vertice d'ingresso vicino entro `d`, o al
-lato assiale che gli passa accanto (al più `sqrt(2) * d`): se `2 * d`
-supera la precisione l'overlay non si esegue (oltre circa 5.400 km di
-estensione su un solo asse, 3.800 km su entrambi, in metri). Dopo ogni
+griglia `i64` è `2^-62` e lo spostamento lo fanno gli arrotondamenti dei
+`f64`: al più `span * 2^-49 + 4 ulp(M)` per asse in coordinate originali,
+di diagonale `d`; il bilancio di un vertice è il ritorno (al più `d`) più
+l'aggancio al vertice d'ingresso vicino entro `d`, o al lato assiale che
+gli passa accanto (al più `sqrt(2) * d`): se `(1 + sqrt(2)) d` supera la
+precisione l'overlay non si esegue (in metri con 1 cm mai prima della
+guardia di spaziatura; con `i_overlay` 4.5, passo `span * 2^-30`, oltre
+circa 5.400 km di estensione su un solo asse). Dopo ogni
 overlay ogni **vertice** dell'output deve stare entro la precisione da un
 lato d'ingresso (`checked_displacement`): un controllo più debole dei due
 sopra (nessun controllo dei lati né dei bordi mancanti), da unificare con
@@ -140,21 +147,27 @@ Ora:
 
 - **archi dalla precisione**: `geo` espone `LineJoin::Round(a)` e
   `LineCap::Round(a)` di `i_overlay` (passo angolare `a`, portato in
-  `[0.01 pi, 0.25 pi]`; il passo effettivo resta sotto `1.5 a`). Si chiede
-  `a = (4/3) acos(1 - f / |d|)` con `f = max(p / 2, 0.001 |d|)`: fino a
-  `|d| = 500 p` (5 m) freccia più griglia restano entro `p`; oltre vale la
-  deviazione dichiarata sotto («Deviazione: archi del buffer»). Con il passo
-  minimo la freccia è al più `2.8e-4 |d|`, sempre entro la tolleranza.
-  Estremità piatte e quadrate non hanno archi;
+  `[0.01 pi, 0.25 pi]`; in `i_overlay` 9 ogni intervallo angolare fra due
+  punti consecutivi di un arco è al più `a`, in 4.5 arrivava a `1.5 a`). Si
+  chiede `a = 2 acos(1 - f / |d|)` (meno una parte su un milione, per
+  l'arrotondamento all'unità angolare intera) con `f = max(p / 2, 0.001
+  |d|)`: fino a `|d| = 500 p` (5 m) freccia più griglia restano entro `p`;
+  oltre vale la deviazione dichiarata sotto («Deviazione: archi del
+  buffer»). Con il passo minimo la freccia è al più `1.24e-4 |d|`, sempre
+  entro la tolleranza. Le giunzioni tonde non usano la soglia
+  `miter_min_turn` di `i_overlay` 9 (vale solo per `Miter`). Estremità
+  piatte e quadrate non hanno archi;
 - **componenti sotto la griglia**: prima del calcolo una linea più corta di
   `2 g` diventa il suo primo punto, un poligono d'area sotto `4 g^2` o più
   sottile di `2 g` il suo anello esterno (e poi, se corto, un punto): così
   il loro buffer non sparisce (la linea di 0,4 mm accanto a una di 1.300
   km perdeva un disco di 10 m). Il buffer negativo di una collezione
   considera solo le parti areali;
-- **griglia**: filtro grossolano prima del calcolo, `(2 + 2 sqrt(2)) g`
-  entro `p` sull'ingombro allargato di `3 |d|`; la garanzia è il controllo
-  che segue;
+- **griglia**: filtro grossolano prima del calcolo, `(3.5 + 2.5 sqrt(2)) g
+  + 12 ulp(M)` entro `p` sull'ingombro allargato di `3 |d|` (più del
+  margine di `i_overlay` 9, `2.2 |d|`; vertici, distanza, punti degli archi
+  e due overlay sulla griglia `i64`); la garanzia è il controllo che
+  segue;
 - **controllo contro la definizione esatta**, indipendente da ciò che il
   calcolo ha prodotto (rettangoli dei lati, allungati agli estremi solo con
   estremità quadrate; settori dei coni normali ai vertici interni; dischi o
@@ -500,7 +513,8 @@ differenziali no. Le differenze note sono in
 - le decisioni con tolleranza (elenco in `rust_backend/mod.rs`) seguono
   la precisione di 1 cm: sotto, il risultato può differire da GEOS; il
   passo di griglia è letto dai sorgenti di `i_float` nella versione del
-  lock, e un suo aggiornamento va riletto;
+  lock (5.0.0, motore `i64` di `i_overlay` 9.0.0), e un suo aggiornamento
+  va riletto;
 - il corpus applicativo reale (gate del laboratorio) non è mai stato eseguito:
   mancano WKB reali anonimizzati;
 - la validazione interna dei kernel usa `check_validation` di `geo`,
@@ -683,9 +697,11 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
   metri): cornici di 10 m con margine da qualche centimetro in su escono con
   il buco e l'area entro perimetro per 1 cm, sotto il centimetro qualunque
   esito tranne un panico; la cornice valida con `L = 2^500` resta
-  `NumericRange`; una geometria da riparare di 20.000 km e'
-  `PrecisionInsufficient` in `STRUCTURE` (overlay), una di 1.300 km no,
-  mentre `LINEWORK` le ripara entrambe con l'area di GEOS; i controesempi della
+  `NumericRange`; una geometria da riparare di 20.000 km passa in
+  `STRUCTURE` (overlay `i64`; con `i_overlay` 4.5 era
+  `PrecisionInsufficient`) come una di 1.300 km, la stessa a `2^45` m è
+  rifiutata dalla guardia di spaziatura, e `LINEWORK` le ripara con l'area
+  di GEOS; i controesempi della
   revisione (buco largo `2^-40` m, cornice accanto a un triangolo di 1 km)
   riescono entro la precisione; la scala di `epsilon` del laboratorio
   riesce entro la precisione; le linee di un buco a `2^30` m, sopra la

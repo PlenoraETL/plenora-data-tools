@@ -5,12 +5,13 @@
 //! Per ogni operazione, con coordinate in metri e 1 cm:
 //!
 //! - un'estensione di circa 1.300 km (l'Italia) passa: passo della griglia
-//!   `2^-10` m, spostamento a priori `(1 + sqrt(2)) g` circa 2,4 mm;
-//! - un'estensione di circa 20.000 km e' rifiutata con
-//!   `PrecisionInsufficient`: passo `2^-6` m, 1,56 cm da solo;
+//!   `2^-41` m con il motore `i64` di `i_overlay` 9;
+//! - un'estensione di circa 20.000 km passa: passo `2^-37` m (con
+//!   `i_overlay` 4.5 e `i32` era `2^-6` m, 1,56 cm da solo, e l'operazione
+//!   era rifiutata);
 //! - coordinate oltre la guardia di modulo (`2^45` m, dove la spaziatura
 //!   dei `f64` supera `p / 64`) sono rifiutate anche con un'estensione di
-//!   pochi metri.
+//!   pochi metri: e' il solo rifiuto legato alla precisione rimasto.
 
 // Le fixture si leggono come frazioni del lato: `origine + lato * f` e' la
 // forma voluta, il valore esatto non conta.
@@ -97,18 +98,20 @@ const OPERAZIONI: [BooleanOperation; 4] = [
 
 #[test]
 fn booleane_alle_tre_scale() {
-    let (sinistra, destra) = coppia(ITALIA);
-    for operazione in OPERAZIONI {
-        let esito = boolean_operation(&sinistra, &destra, operazione, centimetro())
-            .unwrap_or_else(|errore| panic!("{operazione:?} a 1.300 km: {errore}"));
-        assert!(esito.unsigned_area() > 0.0, "{operazione:?}");
-        assert_eq!(
-            boolean_operation_validated(&sinistra, &destra, operazione, centimetro()).unwrap(),
-            esito
-        );
-    }
-    for scala in [MONDO, LONTANO] {
+    for scala in [ITALIA, MONDO] {
         let (sinistra, destra) = coppia(scala);
+        for operazione in OPERAZIONI {
+            let esito = boolean_operation(&sinistra, &destra, operazione, centimetro())
+                .unwrap_or_else(|errore| panic!("{operazione:?} a {scala:?}: {errore}"));
+            assert!(esito.unsigned_area() > 0.0, "{operazione:?}");
+            assert_eq!(
+                boolean_operation_validated(&sinistra, &destra, operazione, centimetro()).unwrap(),
+                esito
+            );
+        }
+    }
+    {
+        let (sinistra, destra) = coppia(LONTANO);
         for operazione in OPERAZIONI {
             topologia_rifiutata(
                 boolean_operation(&sinistra, &destra, operazione, centimetro()),
@@ -124,36 +127,38 @@ fn booleane_alle_tre_scale() {
 
 #[test]
 fn dissolve_clip_overlay_alle_tre_scale() {
-    let (sinistra, destra) = coppia(ITALIA);
-    let righe = [sinistra.clone(), destra.clone()];
-    assert!(dissolve(&righe, centimetro()).is_ok());
-    let tagliate = clip_to_mask(
-        std::slice::from_ref(&sinistra),
-        std::slice::from_ref(&destra),
-        centimetro(),
-    )
-    .expect("clip a 1.300 km");
-    assert!(tagliate[0].is_some());
-    for modo in [
-        OverlayMode::Intersection,
-        OverlayMode::Union,
-        OverlayMode::Identity,
-        OverlayMode::SymmetricDifference,
-    ] {
-        let pezzi = polygon_overlay(
+    for scala in [ITALIA, MONDO] {
+        let (sinistra, destra) = coppia(scala);
+        let righe = [sinistra.clone(), destra.clone()];
+        assert!(dissolve(&righe, centimetro()).is_ok());
+        let tagliate = clip_to_mask(
             std::slice::from_ref(&sinistra),
             std::slice::from_ref(&destra),
-            modo,
-            100,
-            100,
             centimetro(),
         )
-        .unwrap_or_else(|errore| panic!("{modo:?} a 1.300 km: {errore}"));
-        assert!(!pezzi.is_empty(), "{modo:?}");
+        .unwrap_or_else(|errore| panic!("clip a {scala:?}: {errore}"));
+        assert!(tagliate[0].is_some());
+        for modo in [
+            OverlayMode::Intersection,
+            OverlayMode::Union,
+            OverlayMode::Identity,
+            OverlayMode::SymmetricDifference,
+        ] {
+            let pezzi = polygon_overlay(
+                std::slice::from_ref(&sinistra),
+                std::slice::from_ref(&destra),
+                modo,
+                100,
+                100,
+                centimetro(),
+            )
+            .unwrap_or_else(|errore| panic!("{modo:?} a {scala:?}: {errore}"));
+            assert!(!pezzi.is_empty(), "{modo:?}");
+        }
     }
 
-    for scala in [MONDO, LONTANO] {
-        let (sinistra, destra) = coppia(scala);
+    {
+        let (sinistra, destra) = coppia(LONTANO);
         let righe = [sinistra.clone(), destra.clone()];
         topologia_rifiutata(dissolve(&righe, centimetro()), "dissolve");
         topologia_rifiutata(
@@ -182,13 +187,15 @@ fn dissolve_clip_overlay_alle_tre_scale() {
 
 #[test]
 fn clean_topology_alle_tre_scale() {
-    let righe: [Geometry<f64>; 2] = coppia(ITALIA).into();
-    // Morfologia (buffer +-1 m) e rimozione delle sovrapposizioni.
-    let pulite = clean_valid_polygon_topology(&righe, 1.0, true, true, 10, 1_000, centimetro())
-        .expect("clean a 1.300 km");
-    assert!(pulite.iter().all(Option::is_some));
-    for scala in [MONDO, LONTANO] {
+    for scala in [ITALIA, MONDO] {
         let righe: [Geometry<f64>; 2] = coppia(scala).into();
+        // Morfologia (buffer +-1 m) e rimozione delle sovrapposizioni.
+        let pulite = clean_valid_polygon_topology(&righe, 1.0, true, true, 10, 1_000, centimetro())
+            .unwrap_or_else(|errore| panic!("clean a {scala:?}: {errore}"));
+        assert!(pulite.iter().all(Option::is_some));
+    }
+    {
+        let righe: [Geometry<f64>; 2] = coppia(LONTANO).into();
         for (fill_gaps, remove_overlaps) in [(true, false), (false, true), (true, true)] {
             topologia_rifiutata(
                 clean_valid_polygon_topology(
@@ -227,19 +234,21 @@ fn buffer_alle_tre_scale() {
             ])),
         ]
     };
-    for geometria in geometrie(ITALIA) {
-        for stile in stili {
-            for distanza in [1_000.0, -1_000.0, 0.0] {
-                let esito = buffer_with_cap(&geometria, distanza, stile, centimetro());
-                assert!(
-                    esito.is_ok(),
-                    "{stile:?} a {distanza} m su 1.300 km: {esito:?}"
-                );
+    for scala in [ITALIA, MONDO] {
+        for geometria in geometrie(scala) {
+            for stile in stili {
+                for distanza in [1_000.0, -1_000.0, 0.0] {
+                    let esito = buffer_with_cap(&geometria, distanza, stile, centimetro());
+                    assert!(
+                        esito.is_ok(),
+                        "{stile:?} a {distanza} m su {scala:?}: {esito:?}"
+                    );
+                }
             }
         }
     }
-    for scala in [MONDO, LONTANO] {
-        for geometria in geometrie(scala) {
+    {
+        for geometria in geometrie(LONTANO) {
             for stile in stili {
                 let esito = buffer_with_cap(&geometria, 1.0, stile, centimetro());
                 // Punti con estremita' piatte: nessun buffer, come in `geo`,
@@ -257,9 +266,11 @@ fn buffer_alle_tre_scale() {
     }
 }
 
-/// La griglia del buffer e' quella dell'ingresso allargato della
-/// distanza: un punto (ingombro nullo) con una distanza di 10.000 km e'
-/// rifiutato, con 100 km no.
+/// Il controllo a priori del buffer e' sull'ingresso allargato della
+/// distanza: due punti (ingombro di 1 m) con una distanza di 10.000 km
+/// passano (con `i_overlay` 4.5 la griglia li rifiutava), con una distanza
+/// di `10^12` m l'ingombro allargato supera la guardia di spaziatura e il
+/// buffer e' rifiutato, anche se i punti da soli la rispettano.
 #[test]
 fn la_griglia_del_buffer_comprende_la_distanza() {
     let punti = Geometry::MultiPoint(MultiPoint::new(vec![
@@ -267,8 +278,9 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
         Point::new(500_001.0, 4_000_000.0),
     ]));
     assert!(buffer_with_cap(&punti, 100_000.0, BufferCapStyle::Round, centimetro()).is_ok());
+    assert!(buffer_with_cap(&punti, 10_000_000.0, BufferCapStyle::Round, centimetro()).is_ok());
     assert!(matches!(
-        buffer_with_cap(&punti, 10_000_000.0, BufferCapStyle::Round, centimetro()),
+        buffer_with_cap(&punti, 1e12, BufferCapStyle::Round, centimetro()),
         Err(OperationError::PrecisionInsufficient)
     ));
 }
@@ -300,12 +312,16 @@ fn il_buffer_di_una_componente_minuscola_resta() {
 
 #[test]
 fn subdivide_alle_tre_scale() {
-    let parti = subdivide(&stella(ITALIA, 40), 16, centimetro()).expect("subdivide a 1.300 km");
-    assert!(parti.len() > 1);
-    let area: f64 = parti.iter().map(Area::unsigned_area).sum();
-    let attesa = stella(ITALIA, 40).unsigned_area();
-    assert!((area - attesa).abs() <= attesa * 1e-9);
-    for scala in [MONDO, LONTANO] {
+    for scala in [ITALIA, MONDO] {
+        let parti = subdivide(&stella(scala, 40), 16, centimetro())
+            .unwrap_or_else(|errore| panic!("subdivide a {scala:?}: {errore}"));
+        assert!(parti.len() > 1);
+        let area: f64 = parti.iter().map(Area::unsigned_area).sum();
+        let attesa = stella(scala, 40).unsigned_area();
+        assert!((area - attesa).abs() <= attesa * 1e-9);
+    }
+    {
+        let scala = LONTANO;
         let esito = subdivide(&stella(scala, 40), 16, centimetro());
         assert!(
             matches!(esito, Err(ExtensionError::PrecisionInsufficient)),
@@ -323,11 +339,14 @@ fn subdivide_alle_tre_scale() {
 
 #[test]
 fn coverage_validate_alle_tre_scale() {
-    let righe: [Geometry<f64>; 2] = coppia(ITALIA).into();
-    let issues = coverage_validate(&righe, 0.0, DEFAULT_MAX_ISSUES, centimetro())
-        .expect("coverage a 1.300 km");
-    assert_eq!(issues.len(), 1);
-    for scala in [MONDO, LONTANO] {
+    for scala in [ITALIA, MONDO] {
+        let righe: [Geometry<f64>; 2] = coppia(scala).into();
+        let issues = coverage_validate(&righe, 0.0, DEFAULT_MAX_ISSUES, centimetro())
+            .unwrap_or_else(|errore| panic!("coverage a {scala:?}: {errore}"));
+        assert_eq!(issues.len(), 1);
+    }
+    {
+        let scala = LONTANO;
         let righe: [Geometry<f64>; 2] = coppia(scala).into();
         let esito = coverage_validate(&righe, 0.0, DEFAULT_MAX_ISSUES, centimetro());
         assert!(

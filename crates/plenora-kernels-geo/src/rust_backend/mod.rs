@@ -57,10 +57,10 @@
 //!   - **precisione dichiarata** ([`precision`]): 1 cm a terra, passata
 //!     esplicitamente ai kernel (`make_valid`, `polygonize`, `split`) nelle
 //!     unita' delle coordinate. Prima di ogni overlay di `make_valid` il
-//!     bilancio di spostamento dei vertici (arrotondamento alla griglia
-//!     intera di `i_overlay`, passo `span * 2^-30` per asse derivato da
-//!     `i_float`, piu' l'aggancio ai vertici d'ingresso vicini: meno di due
-//!     diagonali del passo, vedi `make_valid::checked_grid`) si confronta
+//!     bilancio di spostamento dei vertici (ritorno dalla griglia intera
+//!     `i64` di `i_overlay`, al piu' `span * 2^-49 + 4 ulp(M)` per asse,
+//!     piu' l'aggancio ai vertici d'ingresso vicini: `1 + sqrt(2)`
+//!     diagonali, vedi `make_valid::checked_grid`) si confronta
 //!     con la precisione; nel noding di `polygonize` ogni punto
 //!     d'intersezione arrotondato in `f64` deve stare entro un quinto della
 //!     precisione da entrambi i segmenti che divide (cinque giri al piu').

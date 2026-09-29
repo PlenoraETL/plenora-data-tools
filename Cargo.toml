@@ -117,6 +117,22 @@ overflow-checks = true
 
 # Copie vendorizzate (provenienza: vendor/*/PROVENANCE.md, patch in patches/).
 [patch.crates-io]
-geo = { path = "vendor/geo-0.33.1-exact-filtered" } # diff 1 + diff 2 + filtro veloce (PROVENANCE-FILTRO-SPERIMENTALE.md)
+#
+# `i_overlay` (transitiva, via `geo`) e' pinnata esatta a `=9.0.0` nel
+# manifesto del `geo` vendorizzato (`patches/geo-i-overlay-9.patch`), al posto
+# di 4.5.2. Motivazione: 4.5 perde senza errore regioni piene oltre circa
+# 16.000 segmenti (solver `Frag` scelto da `Auto`, upstream #87), sbaglia
+# l'estrazione OGC (buchi legati alla faccia sbagliata, panici: #78-#81,
+# #91-#92) e con interi `i32` limita la griglia a estensioni di circa 2.950
+# km a 1 cm; 9.0.0 corregge i difetti e offre il motore `i64` (passo
+# `2^(ceil(log2 r) - 61)`), che `geo` usa per tutte le chiamate. Nel lockfile
+# con lei: `i_float` 5.0.0, `i_shape` 5.0.0, `i_tree` 0.19.0, `i_key_sort`
+# 0.11.0, nessuna versione 4.x/1.x. `i_overlay` e le sue dipendenze
+# contengono `unsafe` proprio (non nostro: `unsafe_code = "forbid"` vale per
+# i crate del workspace).
+# La patch di `i_shape` 1.18.0 (area zero su un percorso vuoto) e' caduta:
+# `i_shape` 5 non ha piu' la funzione, e l'offset di `i_overlay` 9 salta i
+# percorsi con meno di tre punti prima di calcolarne l'area (vendor/
+# geo-0.33.1-exact-filtered/PROVENANCE.md).
+geo = { path = "vendor/geo-0.33.1-exact-filtered" } # diff 1 + diff 2 + filtro veloce + i_overlay 9 (PROVENANCE*.md)
 wkt = { path = "vendor/wkt-0.14.0-v2" }          # diff 3 (componenti vuoti, InteriorWithoutExterior, try_wkt_string)
-i_shape = { path = "vendor/i_shape-1.18.0-buffer" } # diff 5 (area zero su path vuoto), transitiva

@@ -1090,9 +1090,10 @@ mod tests {
     /// Componente vuoto accanto a uno ordinario, passato a `buffer`: in coda,
     /// all'inizio o in mezzo, l'esito non dipende dalla sua posizione.
     ///
-    /// L'offset planare passa da `i_shape` (`vendor/i_shape-1.18.0-buffer`),
-    /// che da' area zero a un percorso vuoto prima di accedere all'ultimo
-    /// vertice.
+    /// L'offset planare di `i_overlay` 9 salta i percorsi con meno di tre
+    /// punti prima di calcolarne l'area (con `i_overlay` 4.5 serviva la
+    /// patch di `i_shape` 1.18.0, che dava area zero a un percorso vuoto
+    /// prima di accedere all'ultimo vertice).
     #[test]
     fn buffer_su_multipolygon_con_vuoto_in_diverse_posizioni_non_panica() {
         let ordinario = quadrato_4x4;
@@ -1125,7 +1126,7 @@ mod tests {
         }
     }
 
-    /// Collection: lo stesso componente vuoto raggiunge `i_shape` anche
+    /// Collection: lo stesso componente vuoto raggiunge l'offset anche
     /// annidato dentro una `GeometryCollection` invece che come
     /// `MultiPolygon` di primo livello — `geo::Buffer` per
     /// `GeometryCollection` itera i propri membri e delega a ciascuno.
