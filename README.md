@@ -1519,7 +1519,13 @@ Per ogni geometria si usa il **primo percorso la cui area d'uso contiene
 tutti i suoi punti** (vertici e punti aggiunti dalla densificazione): una
 geometria non mescola mai due percorsi, e una che nessun percorso ammesso
 copre è un errore (`REPROJECTION_OUTSIDE_TRANSFORMATION_AREA`), mai un
-ripiego. `trasformazioni` fissa il percorso.
+ripiego. Se poi un vertice sarebbe coperto da solo da un percorso che viene
+prima (per esempio il vertice sardo di una linea Roma-Cagliari, che il
+riquadro continentale contiene ma per cui vale la trasformazione della
+Sardegna: i parametri continentali lo sposterebbero di circa 6 m), la
+geometria si rifiuta (`REPROJECTION_MIXED_TRANSFORMATION_AREAS`): va divisa,
+o il percorso fissato con `trasformazioni`, che fissa il percorso di tutte
+le geometrie.
 
 Esempi della scelta, per punti tipici e senza griglie:
 
@@ -1636,10 +1642,12 @@ pyproj/PROJ/EPSG come `genera_crs_integrati.py`.
   il punto sta nel riquadro lon/lat dell'area d'uso EPSG (nel datum
   d'ingresso del passo, anche nel verso inverso). *Ambito:* scelta del
   percorso per geometria. *Hazard:* il riquadro è più largo dell'area vera,
-  come in PROJ: il riquadro di «Italy - mainland» contiene la Sardegna, e
-  una linea da Roma a Cagliari usa la trasformazione continentale anche per
-  il vertice sardo; una trasformazione di buona accuratezza su un'area
-  offshore può coprire terraferma nel suo riquadro. L'accuratezza EPSG vale
+  come in PROJ: il riquadro di «Italy - mainland» contiene la Sardegna, e un
+  punto sardo isolato prende la trasformazione sarda solo perché il suo
+  riquadro, più piccolo, viene prima; una trasformazione di buona
+  accuratezza su un'area offshore può coprire terraferma nel suo riquadro.
+  Le geometrie i cui vertici preferiscono percorsi diversi si rifiutano, ma
+  il controllo guarda i vertici, non i punti fra i vertici. L'accuratezza EPSG vale
   nell'area vera, non nel riquadro. *Rientro:* poligoni delle aree d'uso
   (non nel `proj.db` distribuito), o `trasformazioni` per fissare il
   percorso.
@@ -1671,14 +1679,22 @@ pyproj/PROJ/EPSG come `genera_crs_integrati.py`.
 - **Densificazione a campioni.** Lo scarto di un lato si misura in tre punti
   e nei due versi, con la continuità delle metà: è una verifica, non una
   dimostrazione. Una curva che oscilli fra i campioni di un lato lungo
-  potrebbe scostarsene di più; sulle proiezioni della tabella (lisce nei
-  loro domini) il controllo a 2.000 punti della prova resta entro la
-  precisione.
+  potrebbe scostarsene di più (per uno scarto a S circa il 3% oltre il
+  valore campionato, dentro il margine di mezza precisione); sulle
+  proiezioni della tabella (lisce nei loro domini) il controllo a 2.000
+  punti della prova resta entro la precisione. Anche l'area d'uso dei passi
+  e la copertura delle griglie si provano sui punti trasformati: un lato
+  può uscire da un riquadro o da una griglia fra due punti senza errore.
 - **Griglie non verificate contro il registro.** Il file di `griglie` si
   lega al codice EPSG dichiarato dall'utente: che sia davvero la griglia di
   quella trasformazione (e quindi che valga la sua accuratezza) non si
   controlla (il file non porta il codice). Un file sbagliato ma ben formato
   dà spostamenti sbagliati senza errore.
+- **Kernel non ancora nel runner.** Il runner rifiuta le operazioni geo
+  ([«Runner»](#runner)): `reproject_batches` si chiama dal kernel. Un
+  esecutore futuro che fonda le trasformazioni in place
+  (`TransformInPlace`) deve rileggere il CRS dopo `geo.reproject`, che lo
+  cambia a metà del gruppo.
 - **Fuori ambito.** CRS fuori tabella, operazioni concatenate del registro,
   griglie non NTv2, percorsi di più di tre passi, CGCS2000 verso altri
   datum (nessuna trasformazione nel registro), coordinate Z/M.

@@ -502,9 +502,19 @@ fn griglia_ntv2_difettosa_si_rifiuta_senza_valori() {
         .map(|(i, _)| i)
         .nth(1)
         .expect("secondo PARENT");
-    let mut padre = buona;
+    let mut padre = buona.clone();
     padre[posizione_padre + 8..posizione_padre + 16].copy_from_slice(b"ASSENTE ");
     casi.push(("padre", padre));
+    // Due sottogriglie con lo stesso nome: il figlio si chiama RADICE.
+    let mut doppione = buona.clone();
+    let nome_figlio = posizione_padre - 16;
+    doppione[nome_figlio + 8..nome_figlio + 16].copy_from_slice(b"RADICE  ");
+    casi.push(("doppione", doppione));
+    // Figlio fuori dal padre: il suo sud (record S_LAT del figlio) a 30 N.
+    let mut fuori = buona;
+    let sud_figlio = posizione_padre + 3 * 16;
+    fuori[sud_figlio + 8..sud_figlio + 16].copy_from_slice(&(30.0_f64 * 3600.0).to_le_bytes());
+    casi.push(("fuori dal padre", fuori));
     for (nome, byte) in casi {
         let errore = GrigliaNtv2::da_byte(&byte).expect_err(nome);
         assert!(

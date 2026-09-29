@@ -595,6 +595,10 @@ pub enum CrsError {
         "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA: la geometria esce dall'area d'uso di ogni percorso ammesso fra i due datum (o dalle griglie fornite)"
     )]
     ReprojectionOutsideTransformationArea,
+    #[error(
+        "REPROJECTION_MIXED_TRANSFORMATION_AREAS: i vertici della geometria preferiscono percorsi diversi fra i due datum (aree d'uso diverse): una sola trasformazione per tutti darebbe ad alcuni vertici parametri di un'altra area, oltre l'accuratezza dichiarata; dividere la geometria o fissare `trasformazioni`"
+    )]
+    ReprojectionMixedTransformationAreas,
     #[error("REPROJECTION_NOT_CONVERGED: un'inversa iterativa non ha raggiunto la precisione")]
     ReprojectionNotConverged,
     #[error(

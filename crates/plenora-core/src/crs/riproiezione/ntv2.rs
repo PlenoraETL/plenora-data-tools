@@ -250,7 +250,17 @@ fn albero(sottogriglie: &mut [Sottogriglia]) -> Result<Vec<usize>, CrsError> {
     let mut radici = Vec::new();
     for indice in 0..sottogriglie.len() {
         let padre = sottogriglie[indice].padre;
-        if padre.eq_ignore_ascii_case(b"NONE    ") {
+        if sottogriglie[..indice]
+            .iter()
+            .any(|altra| altra.nome == sottogriglie[indice].nome)
+        {
+            return Err(difetto("due sottogriglie con lo stesso nome"));
+        }
+        // `NONE` seguito da spazi o da NUL, come lo scrivono i vari
+        // produttori (PROJ confronta i primi quattro caratteri).
+        if padre[..4].eq_ignore_ascii_case(b"NONE")
+            && padre[4..].iter().all(|b| *b == b' ' || *b == 0)
+        {
             radici.push(indice);
             continue;
         }
@@ -259,6 +269,16 @@ fn albero(sottogriglie: &mut [Sottogriglia]) -> Result<Vec<usize>, CrsError> {
             .position(|candidata| candidata.nome == padre)
             .filter(|p| *p != indice)
             .ok_or_else(|| difetto("sottogriglia con un padre inesistente"))?;
+        let (figlio, genitore) = (&sottogriglie[indice], &sottogriglie[posizione_padre]);
+        if figlio.sud < genitore.sud
+            || figlio.nord > genitore.nord
+            || figlio.est < genitore.est
+            || figlio.ovest > genitore.ovest
+        {
+            // Fuori dal padre non si raggiungerebbe mai: i punti avrebbero
+            // lo spostamento del padre senza errore.
+            return Err(difetto("sottogriglia fuori dal padre"));
+        }
         sottogriglie[posizione_padre].figli.push(indice);
     }
     if radici.is_empty() {

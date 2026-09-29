@@ -48,6 +48,10 @@ pub const VERSIONE_EPSG_RIPROIEZIONE: &str = epsg::VERSIONE_EPSG;
 /// Versione di PROJ che distribuiva quel registro.
 pub const VERSIONE_PROJ_RIPROIEZIONE: &str = epsg::VERSIONE_PROJ;
 
+/// Margine del confronto fra accuratezza accettata e somma delle
+/// accuratezze dei passi: un nanometro, per l'arrotondamento della somma.
+const TOLLERANZA_SOMMA_M: f64 = 1e-9;
+
 /// Numero massimo di trasformazioni in un percorso fra datum.
 pub const MAX_PASSI_PERCORSO: usize = 3;
 
@@ -271,7 +275,11 @@ impl PianoRiproiezione {
             percorso.accuratezza_m <= GROUND_PRECISION_METRES
                 || opzioni
                     .accuratezza_accettata_m
-                    .is_some_and(|accettata| accettata >= percorso.accuratezza_m)
+                    // La somma delle accuratezze e' in virgola mobile (0,1 +
+                    // 0,2 non e' 0,3): un nanometro di margine.
+                    .is_some_and(|accettata| {
+                        accettata >= percorso.accuratezza_m - TOLLERANZA_SOMMA_M
+                    })
         };
         let migliore = candidati
             .iter()
@@ -498,13 +506,17 @@ impl Riproiettore {
         if self.piano.identita {
             // Stessa proiezione e stesso datum: coordinate invariate, dopo i
             // controlli di dominio del CRS (uguali sui due lati).
-            self.geografiche_sorgente(x, y)?;
+            let (lon, lat) = self.geografiche_sorgente(x, y)?;
+            self.piano.destinazione.regione(lon, lat)?;
             validate_geometry_domain(std::iter::once((x, y)), &self.piano.destinazione.crs)?;
             return Ok(Some((x, y)));
         }
         let (mut lon, mut lat) = self.geografiche_sorgente(x, y)?;
         for (passo, operazione) in passi {
             let trasformazione = passo.trasformazione;
+            // Un passo a griglia non riduce la longitudine: il riquadro
+            // d'uso la vuole in [-180, 180].
+            lon = proiezioni::riduci_gradi(lon);
             if !trasformazione.area.contains(lon, lat) {
                 return Ok(None);
             }

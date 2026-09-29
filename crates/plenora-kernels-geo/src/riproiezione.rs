@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use geo::{
-    Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
-    Point, Polygon,
+    Coord, CoordsIter, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint,
+    MultiPolygon, Point, Polygon,
 };
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::arrow::{Field, RecordBatch, Schema, SchemaRef};
@@ -493,6 +493,32 @@ fn geometria(
     Ok(Tentativo::Fatto(uscita))
 }
 
+/// Ogni vertice deve preferire il percorso della geometria: se un percorso
+/// precedente (piu' accurato o piu' specifico) copre da solo un vertice,
+/// quel vertice riceverebbe i parametri di un'altra area (il riquadro
+/// «Italy - mainland» contiene la Sardegna, ma per la Sardegna vale
+/// un'altra trasformazione). Errore esplicito, mai un risultato misto.
+fn richiedi_percorso_uniforme(
+    ingresso: &Geometry<f64>,
+    riproiettore: &Riproiettore,
+    percorso: usize,
+) -> Result<(), PlenoraError> {
+    if percorso == 0 {
+        return Ok(());
+    }
+    for vertice in ingresso.coords_iter() {
+        for precedente in 0..percorso {
+            if riproiettore
+                .trasforma(precedente, vertice.x, vertice.y)?
+                .is_some()
+            {
+                return Err(CrsError::ReprojectionMixedTransformationAreas.into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Riproietta una geometria gia' valida: primo percorso che la copre tutta,
 /// lati densificati, uscita valida OGC dello stesso tipo.
 ///
@@ -526,6 +552,7 @@ pub fn riproietta_geometria(
                 prodotte: 0,
             };
             if let Tentativo::Fatto(uscita) = geometria(&mut contesto, ingresso)? {
+                richiedi_percorso_uniforme(ingresso, riproiettore, percorso)?;
                 return Ok(uscita);
             }
         }

@@ -258,16 +258,30 @@ fn una_geometria_non_mescola_i_percorsi_e_fuori_da_tutti_e_un_errore() {
         uscita(Geometry::Point(roma.into())),
         Geometry::Point(per_percorso(2, roma).into())
     );
-    // Una linea da Roma alla Sardegna sta solo nel riquadro continentale:
-    // tutti i suoi punti, Sardegna compresa, usano quel percorso.
-    let Geometry::LineString(linea) =
-        uscita(Geometry::LineString(LineString::new(vec![roma, sardegna])))
+    // Una linea da Roma alla Sardegna sta solo nel riquadro continentale,
+    // ma il vertice sardo preferisce la trasformazione della Sardegna (i
+    // parametri continentali lo sposterebbero di metri): errore esplicito,
+    // mai un risultato misto.
+    assert_ne!(per_percorso(2, sardegna), per_percorso(0, sardegna));
+    let mista = Geometry::LineString(LineString::new(vec![roma, sardegna]));
+    let errore = riproietta_geometria(&mista, &r, t).expect_err("percorsi misti");
+    assert!(
+        errore
+            .to_string()
+            .contains("REPROJECTION_MIXED_TRANSFORMATION_AREAS"),
+        "{errore}"
+    );
+    // Con il percorso fissato la stessa linea passa, tutta continentale.
+    let fissato = riproiettore(
+        "EPSG:4265",
+        &json!({"target_crs": "EPSG:4326", "accuratezza_accettata_m": 4.0,
+                "trasformazioni": [1660]}),
+    );
+    let Geometry::LineString(linea) = riproietta_geometria(&mista, &fissato, t).expect("fissato")
     else {
         panic!("tipo");
     };
-    assert_eq!(linea.0.first(), Some(&per_percorso(2, roma)));
     assert_eq!(linea.0.last(), Some(&per_percorso(2, sardegna)));
-    assert_ne!(per_percorso(2, sardegna), per_percorso(0, sardegna));
     // Fuori da ogni area d'uso: errore esplicito, mai un ripiego.
     let lontano = Geometry::LineString(line_string![(x: 12.5, y: 41.9), (x: 20.5, y: 41.9)]);
     let errore = riproietta_geometria(&lontano, &r, t).expect_err("fuori area");
