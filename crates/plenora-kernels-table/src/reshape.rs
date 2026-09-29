@@ -912,9 +912,11 @@ pub struct Explode {
 
 /// Come [`select_rows`], ma la colonna a `skip_index` non viene presa.
 ///
-/// Al suo posto va un placeholder nullo di pari lunghezza e tipo. Serve a
-/// [`explode`] quando `replace_or_append` sta per sostituire la colonna
-/// sorgente: un `take` con gli indici ripetuti di `explode` (poche righe,
+/// Al suo posto va un placeholder nullo di pari lunghezza e tipo, con il
+/// campo reso nullable: una sorgente non nullable con un placeholder di null
+/// non sarebbe un `RecordBatch` valido. Serve a [`explode`] quando
+/// `replace_or_append` sta per sostituire la colonna sorgente (campo
+/// compreso): un `take` con gli indici ripetuti di `explode` (poche righe,
 /// liste lunghe) copierebbe l'intera lista per OGNI riga di output, O(N^2)
 /// elementi scartati subito dopo.
 fn select_rows_except(
@@ -943,7 +945,22 @@ fn select_rows_except(
             }
         })
         .collect::<Result<Vec<_>>>()?;
-    batch_with_rows(batch.schema(), columns, rows.len())
+    let schema = batch.schema();
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(position, field)| {
+            let field = field.as_ref().clone();
+            if position == skip_index {
+                field.with_nullable(true)
+            } else {
+                field
+            }
+        })
+        .collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    batch_with_rows(schema, columns, rows.len())
 }
 
 /// Espande una colonna `List` in una riga per elemento (stile pandas
@@ -3025,6 +3042,121 @@ mod tests {
     /// colonna sorgente resta nell'output (ripetuta per riga) — percorso che
     /// deve continuare a usare `select_rows` normale, non l'ottimizzazione:
     /// verifica che il fix non abbia cambiato questo caso.
+    /// Batch `k` (Int64 non nullable) + `items` (List<Int64>) con liste
+    /// `[1, 2]`, `[]`, `[3]` e, se la colonna e' nullable, una lista null.
+    fn explode_fixture(lista_nullable: bool, elemento_nullable: bool) -> RecordBatch {
+        use plenora_core::arrow::array::types::Int64Type;
+
+        let (per_riga, chiavi) = if lista_nullable {
+            (
+                vec![
+                    Some(vec![Some(1_i64), Some(2)]),
+                    Some(vec![]),
+                    Some(vec![Some(3)]),
+                    None,
+                ],
+                vec![1_i64, 2, 3, 4],
+            )
+        } else {
+            (
+                vec![
+                    Some(vec![Some(1_i64), Some(2)]),
+                    Some(vec![]),
+                    Some(vec![Some(3)]),
+                ],
+                vec![1_i64, 2, 3],
+            )
+        };
+        let base = ListArray::from_iter_primitive::<Int64Type, _, _>(per_riga);
+        // Stessi dati, con la nullability dell'elemento richiesta.
+        let lista = ListArray::new(
+            Arc::new(Field::new("item", DataType::Int64, elemento_nullable)),
+            base.offsets().clone(),
+            base.values().clone(),
+            base.nulls().cloned(),
+        );
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Int64, false),
+                Field::new("items", lista.data_type().clone(), lista_nullable),
+            ])),
+            vec![Arc::new(Int64Array::from(chiavi)), Arc::new(lista)],
+        )
+        .expect("fixture explode")
+    }
+
+    #[test]
+    fn explode_sul_posto_e_su_colonna_nuova_concorda_con_l_analisi() {
+        use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator};
+
+        for lista_nullable in [false, true] {
+            for elemento_nullable in [false, true] {
+                for output_column in [None, Some("item")] {
+                    let caso = format!(
+                        "lista nullable {lista_nullable}, elemento nullable \
+                         {elemento_nullable}, output {output_column:?}"
+                    );
+                    let batch = explode_fixture(lista_nullable, elemento_nullable);
+                    let config = Explode {
+                        column: "items".into(),
+                        output_column: output_column.map(str::to_owned),
+                        empty_policy: EmptyListPolicy::Null,
+                    };
+                    let output = explode(&batch, &config, &Limits::default())
+                        .unwrap_or_else(|error| panic!("{caso}: {error}"));
+
+                    // Lo schema del kernel e' quello dichiarato dall'analisi.
+                    let contratto = DataContract::new(
+                        batch.schema(),
+                        vec![],
+                        None,
+                        ContractProperties::default(),
+                    )
+                    .expect("contratto");
+                    let mut json = serde_json::json!({"column": "items"});
+                    if let Some(nome) = output_column {
+                        json["output_column"] = serde_json::json!(nome);
+                    }
+                    let analizzato = crate::analyze::analyze_table_contract(
+                        "table.explode",
+                        &[contratto],
+                        &json,
+                        &mut FieldAllocator::default(),
+                    )
+                    .unwrap_or_else(|error| panic!("{caso}: {error}"));
+                    assert_eq!(
+                        output.schema().fields(),
+                        analizzato.schema.fields(),
+                        "{caso}"
+                    );
+
+                    // Un elemento per riga; lista vuota e lista null danno
+                    // una riga con valore null.
+                    let (chiavi, valori): (Vec<i64>, Vec<Option<i64>>) = if lista_nullable {
+                        (
+                            vec![1, 1, 2, 3, 4],
+                            vec![Some(1), Some(2), None, Some(3), None],
+                        )
+                    } else {
+                        (vec![1, 1, 2, 3], vec![Some(1), Some(2), None, Some(3)])
+                    };
+                    let k = output
+                        .column_by_name("k")
+                        .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                        .expect("k");
+                    assert_eq!(k.values().to_vec(), chiavi, "{caso}");
+                    let esplosa = output
+                        .column_by_name(output_column.unwrap_or("items"))
+                        .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                        .expect("colonna esplosa Int64");
+                    assert_eq!(esplosa.iter().collect::<Vec<_>>(), valori, "{caso}");
+                    let colonne = if output_column.is_some() { 3 } else { 2 };
+                    assert_eq!(output.num_columns(), colonne, "{caso}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn explode_con_output_column_distinto_mantiene_la_colonna_sorgente() {
         use plenora_core::arrow::array::types::Int64Type;
