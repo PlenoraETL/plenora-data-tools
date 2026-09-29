@@ -1,3 +1,10 @@
+//! Join e concatenazioni: `table.join`, `table.concat`,
+//! `table.concat_by_name`, `table.cross_join`, `table.semi_join`,
+//! `table.anti_join`, `table.asof_join`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -22,10 +29,9 @@ use plenora_core::{PlenoraError, Result};
 /// `None` se una colonna e' nulla.
 ///
 /// Una colonna `Binary` scrive i byte grezzi: per un binario UTF-8 valido
-/// sono i byte del testo di `scalar_as_string` (stessa chiave di prima),
-/// per uno non valido (WKB) la chiave esiste invece dell'errore. I tipi dei
-/// due lati sono identici per contratto, quindi un Binary incontra solo
-/// Binary.
+/// sono i byte del testo di `scalar_as_string`, e uno non valido (WKB) ha
+/// comunque una chiave invece di un errore. I tipi dei due lati sono
+/// identici per contratto, quindi un Binary incontra solo Binary.
 fn key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<Vec<u8>>> {
     let mut out = Vec::new();
     for index in indices {
@@ -55,8 +61,8 @@ fn push_key_fragment(out: &mut Vec<u8>, value: &[u8]) {
 
 // ---------------------------------------------------------------------------
 // Fast path di `join`/`semi_join`/`anti_join`: chiavi tipizzate sui valori
-// nativi Arrow al posto delle chiavi stringa di `key`, hash FxHash-style al
-// posto di SipHash. Semantica byte-identica al percorso generico: ogni NaN
+// nativi Arrow al posto delle chiavi in byte di `key`, hash `FastHasher`
+// (stile FxHash, README «Hash delle chiavi non keyed») al posto di SipHash. Semantica byte-identica al percorso generico: ogni NaN
 // matcha ogni NaN ("NaN" per tutti), -0.0 distinto da 0.0 ("-0" vs "0"),
 // null nella chiave mai in match, stesso ordine di output (sinistre in
 // ordine, match destri per riga, destri non matchati in coda), stessi
@@ -249,13 +255,15 @@ fn coalesce(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     })
 }
 
-/// `true` se `coalesce` sa fondere questo tipo di chiave.
+/// `true` se `coalesce` sa fondere questo tipo di chiave: `Utf8`, `Int64`,
+/// `UInt64`, `Float64`, `Boolean`, `Date32`.
 ///
 /// `coalesce` serve solo a `right`/`outer`, dove la chiave di output e' la
 /// fusione dei due lati. Verificando la sola UGUAGLIANZA dei tipi delle
-/// chiavi, un `right join` su una chiave `UInt64` passerebbe validazione e
-/// `prepare`, e fallirebbe a meta' esecuzione. Questo predicato e'
-/// la stessa lista che `coalesce` implementa, letta dallo schema.
+/// chiavi, un `right join` su una chiave `Decimal128` passerebbe la
+/// validazione e fallirebbe a meta' esecuzione. Questo predicato e' la
+/// stessa lista che `coalesce` implementa, letta dallo schema, e l'analisi
+/// del contratto lo usa per rifiutare il piano prima dei dati.
 #[must_use]
 pub const fn coalesce_supported(data_type: &DataType) -> bool {
     matches!(
@@ -269,23 +277,36 @@ pub const fn coalesce_supported(data_type: &DataType) -> bool {
     )
 }
 
+/// Quali righe senza corrispondenza tiene `table.join` (`how`, default
+/// `inner`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinHow {
+    /// `inner`: solo le coppie abbinate.
     Inner,
+    /// `left`: anche le righe sinistre senza corrispondenza, con la destra
+    /// nulla.
     Left,
+    /// `right`: anche le righe destre senza corrispondenza, in coda, con la
+    /// sinistra nulla.
     Right,
+    /// `outer`: le righe senza corrispondenza di entrambi i lati.
     Outer,
 }
 const fn default_join() -> JoinHow {
     JoinHow::Inner
 }
 
+/// Config di `table.join`; campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Join {
+    /// Colonne chiave della sinistra (obbligatorio, non vuoto).
     pub left_keys: Vec<String>,
+    /// Colonne chiave della destra, tante quante `left_keys` e con lo stesso
+    /// tipo Arrow coppia per coppia (obbligatorio).
     pub right_keys: Vec<String>,
+    /// Righe senza corrispondenza da tenere; default `inner`.
     #[serde(default = "default_join")]
     pub how: JoinHow,
 }
@@ -293,17 +314,25 @@ pub struct Join {
 /// Join relazionale tra due batch sulle chiavi configurate (`how`: inner,
 /// left, right, outer).
 ///
-/// Le colonne sinistre non chiave prendono suffisso `_L`, le destre non
-/// chiave `_R`; con `right`/`outer` le colonne chiave di output sono il
-/// coalesce dei due lati.
+/// Le colonne chiave della sinistra tengono il nome, le altre sinistre
+/// prendono il suffisso `_L`, le destre non chiave `_R`; le chiavi destre
+/// non compaiono e ogni colonna d'uscita e' nullable. Righe nell'ordine
+/// della sinistra (corrispondenze nell'ordine della destra); con
+/// `right`/`outer` le destre senza corrispondenza vengono in coda e le
+/// colonne chiave d'uscita sono il coalesce dei due lati. Una chiave con
+/// una colonna nulla non si abbina mai.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati, oppure
-///   righe/colonne di output oltre i limiti `max_rows`/`max_columns`;
+/// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati; nome
+///   d'uscita vuoto o oltre 1024 byte;
+/// - `ResourceLimit`: righe d'uscita oltre `max_rows` (contate prima di
+///   materializzarle) o colonne oltre `max_columns`;
 /// - `Schema`: colonna chiave assente, tipi Arrow delle chiavi non identici
-///   tra i due lati, collisione di nomi in output o, per `right`/`outer`,
-///   tipo chiave non supportato dal coalesce.
+///   tra i due lati, collisione di nomi in output, metadati di schema in
+///   conflitto, cella chiave senza testo (date32/timestamp fuori
+///   intervallo, dizionario malformato) o, per `right`/`outer`, tipo chiave
+///   non supportato dal coalesce.
 pub fn join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -800,10 +829,15 @@ fn fill_ranges(
     }
 }
 
+/// Convenzione dei nomi di `combine_horizontal`, per operazione.
 #[derive(Clone, Copy)]
 pub(crate) enum HorizontalNames<'a> {
+    /// `join` e `fuzzy_join`: le colonne sinistre in `left_keys` tengono il
+    /// nome, le altre sinistre prendono `_L`, tutte le destre `_R`.
     ManipolaJoin { left_keys: &'a [usize] },
+    /// `cross_join`: `_x`/`_y` solo sui nomi presenti in entrambi i lati.
     PandasCross,
+    /// `asof_join`: `_R` solo sulle destre omonime di una sinistra.
     AsOf,
 }
 
@@ -937,8 +971,8 @@ pub(crate) fn combine_horizontal(
     // Righe DICHIARATE: con due input a zero colonne l'output ha zero colonne
     // e arrow non saprebbe da dove dedurre la cardinalita'. Il numero giusto
     // e' quello degli indici di riga costruiti sopra.
-    // R2.4: i metadati di schema delle due sorgenti si fondono, come
-    // dichiara l'analisi dei join.
+    // I metadati di schema delle due sorgenti si fondono (valori diversi
+    // sulla stessa chiave -> errore), come dichiara l'analisi dei join.
     let metadata = crate::metadata_schema_input("join", &[&left_schema, &right_schema])?;
     crate::batch_with_rows(
         Arc::new(Schema::new_with_metadata(fields, metadata)),
@@ -947,9 +981,12 @@ pub(crate) fn combine_horizontal(
     )
 }
 
+/// Config di `table.concat`; campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Concat {
+    /// Default `true`. Accettato per compatibilita' e senza effetto,
+    /// qualunque valore abbia: un batch Arrow non ha indice di riga.
     #[serde(default = "default_true")]
     pub ignore_index: bool,
 }
@@ -957,16 +994,20 @@ const fn default_true() -> bool {
     true
 }
 
-/// Concatenazione verticale di due batch con schema identico (safe profile).
+/// Concatenazione verticale di due batch con schema identico: le righe di
+/// `left`, poi quelle di `right`.
 ///
 /// Nomi e tipi delle colonne devono coincidere posizione per posizione; la
-/// nullabilita' risultante e' l'OR dei due input.
+/// nullabilita' risultante e' l'OR dei due input, i metadati di campo sono
+/// quelli di `left`, i metadati di schema la fusione dei due.
 ///
 /// # Errors
 ///
-/// - `Schema`: numero di colonne, nomi o tipi non identici tra i due batch;
-/// - `ResourceLimit`: overflow nel conteggio delle righe o righe totali oltre
-///   `max_rows`; propaga inoltre gli errori Arrow di concatenazione.
+/// - `Schema`: numero di colonne, nomi o tipi non identici tra i due batch,
+///   metadati di schema in conflitto;
+/// - `ResourceLimit`: overflow nel conteggio delle righe, righe totali oltre
+///   `max_rows` o uscita stimata oltre `max_governed_memory_bytes`; propaga
+///   inoltre gli errori Arrow di concatenazione.
 pub fn concat(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1029,14 +1070,16 @@ pub fn concat(
 }
 
 // ---------------------------------------------------------------------------
-// table.concat_by_name (estensione v1.2)
+// table.concat_by_name
 // ---------------------------------------------------------------------------
 
+/// Config di `table.concat_by_name`; campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConcatByName {
-    /// strict = true: tutti gli schemi devono essere identici (stesse colonne,
-    /// stessi tipi, stesso ordine) — stesso vincolo di `concat`.
+    /// Default `false`. Con `true` tutti gli schemi devono essere identici
+    /// (stesse colonne, stessi tipi, stesso ordine): lo stesso vincolo di
+    /// `concat`.
     #[serde(default)]
     pub strict: bool,
 }
@@ -1122,11 +1165,12 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
 /// # Errors
 ///
 /// - `InvalidPlan`: nessun input.
-/// - `ResourceLimit`: overflow nel conteggio delle righe o righe
-///   totali oltre `max_rows`;
-/// - `Schema`: con `strict` schemi non identici, o tipi incompatibili per
-///   una stessa colonna (nessun cast); propaga inoltre gli errori Arrow di
-///   concatenazione.
+/// - `ResourceLimit`: overflow nel conteggio delle righe, righe totali oltre
+///   `max_rows`, colonne dell'unione oltre `max_columns` o uscita stimata
+///   oltre `max_governed_memory_bytes`;
+/// - `Schema`: con `strict` schemi non identici, tipi incompatibili per
+///   una stessa colonna (nessun cast), metadati di schema in conflitto;
+///   propaga inoltre gli errori Arrow di concatenazione.
 pub fn concat_by_name(
     inputs: &[&RecordBatch],
     config: &ConcatByName,
@@ -1224,20 +1268,26 @@ pub fn concat_by_name(
     crate::batch_with_rows(Arc::new(schema), columns, rows)
 }
 
+/// Config di `table.cross_join`: nessun parametro (`{}`), campi sconosciuti
+/// rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrossJoin {}
 
-/// Prodotto cartesiano tra due batch (ogni riga sinistra x ogni destra).
+/// Prodotto cartesiano tra due batch (ogni riga sinistra x ogni destra),
+/// nell'ordine della sinistra e, per riga, della destra.
 ///
 /// Nomi in output secondo la convenzione pandas: suffissi `_x`/`_y` sulle
 /// colonne omonime.
 ///
 /// # Errors
 ///
-/// - `ResourceLimit`: overflow nel prodotto delle righe, righe oltre `max_rows`
-///   o colonne oltre `max_columns`;
-/// - `Schema`: collisione di nomi nelle colonne di output.
+/// - `ResourceLimit`: overflow nel prodotto delle righe, righe oltre
+///   `max_rows`, uscita stimata oltre `max_governed_memory_bytes` o colonne
+///   oltre `max_columns`;
+/// - `InvalidPlan`: nome d'uscita vuoto o oltre 1024 byte;
+/// - `Schema`: collisione di nomi nelle colonne di output, metadati di
+///   schema in conflitto.
 pub fn cross_join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1290,10 +1340,15 @@ pub fn cross_join(
     )
 }
 
+/// Config di `table.semi_join` e `table.anti_join`; campi sconosciuti
+/// rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MembershipJoin {
+    /// Colonne chiave della sinistra (obbligatorio, non vuoto).
     pub left_keys: Vec<String>,
+    /// Colonne chiave della destra, tante quante `left_keys` e con lo stesso
+    /// tipo Arrow coppia per coppia (obbligatorio).
     pub right_keys: Vec<String>,
 }
 
@@ -1444,13 +1499,16 @@ fn membership_range(
 }
 
 /// Righe di `left` la cui chiave ha almeno un match in `right` (ordine
-/// sinistro conservato).
+/// sinistro conservato, ogni riga al piu' una volta). Una chiave con una
+/// colonna nulla non ha match.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati;
-/// - `Schema`: colonna chiave assente o tipi Arrow delle chiavi non
-///   identici; inoltre gli errori di `select_rows` sull'output.
+/// - `Schema`: colonna chiave assente, tipi Arrow delle chiavi non
+///   identici, cella chiave senza testo (date32/timestamp fuori intervallo,
+///   dizionario malformato); inoltre gli errori di `select_rows`
+///   sull'output.
 pub fn semi_join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1460,7 +1518,8 @@ pub fn semi_join(
 }
 
 /// Righe di `left` la cui chiave NON ha match in `right` (ordine sinistro
-/// conservato).
+/// conservato). Una riga con una colonna chiave nulla non ha match, quindi
+/// resta.
 ///
 /// # Errors
 ///
@@ -1473,11 +1532,20 @@ pub fn anti_join(
     membership_join(left, right, config, false)
 }
 
+/// Direzione della ricerca di `table.asof_join` (`direction`, default
+/// `backward`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AsOfDirection {
+    /// `backward`: il valore destro piu' grande `<=` di quello sinistro
+    /// (`<` senza `allow_exact`); a parita' la riga destra di indice piu'
+    /// alto.
     Backward,
+    /// `forward`: il valore destro piu' piccolo `>=` (`>` senza
+    /// `allow_exact`); a parita' la riga destra di indice piu' basso.
     Forward,
+    /// `nearest`: il piu' vicino fra il candidato `backward` e quello
+    /// `forward`; a pari distanza quello `backward`.
     Nearest,
 }
 
@@ -1485,18 +1553,31 @@ const fn default_asof_direction() -> AsOfDirection {
     AsOfDirection::Backward
 }
 
+/// Config di `table.asof_join`; campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AsOfJoin {
+    /// Colonna ordinata della sinistra, `Int64` o `Float64` (obbligatorio).
     pub left_on: String,
+    /// Colonna ordinata della destra, dello stesso tipo di `left_on`
+    /// (obbligatorio); non compare nell'uscita.
     pub right_on: String,
+    /// Colonne di gruppo della sinistra; default nessuna (un solo gruppo).
     #[serde(default)]
     pub left_by: Vec<String>,
+    /// Colonne di gruppo della destra, tante quante `left_by` e con lo
+    /// stesso tipo coppia per coppia; default nessuna. Non compaiono
+    /// nell'uscita.
     #[serde(default)]
     pub right_by: Vec<String>,
+    /// Direzione della ricerca; default `backward`.
     #[serde(default = "default_asof_direction")]
     pub direction: AsOfDirection,
+    /// Distanza massima `|destra - sinistra|`, finita e `>= 0`; assente o
+    /// `null`: nessun limite.
     pub tolerance: Option<f64>,
+    /// Default `true`; con `false` un candidato con valore uguale non si
+    /// abbina.
     #[serde(default = "default_true")]
     pub allow_exact: bool,
 }
@@ -1687,17 +1768,22 @@ fn choose_asof(
 /// sulla chiave ordinata, per gruppo `by`.
 ///
 /// Chiavi `on` numeriche (Int64/Float64) con lo stesso tipo Arrow sui due
-/// lati; il match rispetta `direction`, `tolerance` e `allow_exact`. Le
-/// colonne destre `on`/`by` sono omesse dall'output, le altre omonime
+/// lati; il match rispetta `direction`, `tolerance` e `allow_exact`. Una
+/// riga per riga sinistra, nel suo ordine; valori `on` nulli o non finiti e
+/// gruppi con una colonna nulla non si abbinano. Le colonne destre
+/// `on`/`by` sono omesse dall'output, le altre omonime di una sinistra
 /// prendono suffisso `_R`.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: cardinalita' diversa tra `left_by` e `right_by`, oppure
-///   `tolerance` non finita o negativa;
+///   `tolerance` non finita o negativa; nome d'uscita vuoto o oltre 1024
+///   byte;
 /// - `Schema`: colonna assente, chiavi `on` non numeriche o di tipo diverso
-///   tra i lati, tipi `by` incompatibili, collisione di nomi in output;
-/// - inoltre gli errori di limite di `combine_horizontal` (`max_columns`).
+///   tra i lati, tipi `by` incompatibili, collisione di nomi in output,
+///   metadati di schema in conflitto, valore `on` Int64 senza un `f64`
+///   esatto, cella `by` senza testo;
+/// - `ResourceLimit`: colonne d'uscita oltre `max_columns`.
 pub fn asof_join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -2108,8 +2194,8 @@ mod tests {
             "k",
             Arc::new(UInt64Array::from(vec![Some(2), Some(2), Some(9), None])) as ArrayRef,
         )]);
-        // Inner/Left: Right/Outer falliscono in `coalesce` (UInt64 non
-        // supportato) in entrambi i percorsi, verificato sotto.
+        // UInt64 e' fra i tipi che `coalesce` fonde: tutti e quattro i
+        // `how`, in due chiamate.
         assert_join_identical(
             &left,
             &right,
@@ -2393,7 +2479,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // table.concat_by_name (estensione v1.2)
+    // table.concat_by_name
     // -------------------------------------------------------------------
 
     fn concat_config(strict: bool) -> ConcatByName {

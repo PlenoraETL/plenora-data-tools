@@ -247,7 +247,8 @@ fn fuzzy_join_riferimento(
     // dall'ordine di visita della `HashMap` — un dettaglio di
     // implementazione dell'hasher, non una proprieta' dell'input — e con
     // piu' blocchi sovradimensionati il conteggio nel messaggio potrebbe
-    // cambiare fra esecuzioni (architettura.md#determinismo: l'identita' dell'errore e' stabile).
+    // cambiare fra esecuzioni: anche l'identita' dell'errore e'
+    // deterministica.
     let worst = blocks
         .iter()
         .max_by(|(left_key, left_rows), (right_key, right_rows)| {

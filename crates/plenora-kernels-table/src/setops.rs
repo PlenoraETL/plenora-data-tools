@@ -1,3 +1,11 @@
+//! Set operation su righe intere: `table.union_distinct`,
+//! `table.intersect`, `table.except` (percorso in memoria; la variante
+//! spilled e' `spill::execute_set_operation`).
+//!
+//! Due righe sono uguali se lo sono le loro chiavi compatte
+//! ([`CompactRowEncoder`]): null uguale a null, tutti i NaN uguali, `-0.0`
+//! diverso da `0.0`, dizionari sul testo della voce.
+
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
@@ -22,6 +30,8 @@ fn key_set(capacity: usize) -> KeyInterner {
     KeyInterner::with_capacity(capacity)
 }
 
+/// Config delle set operation: nessun parametro (`{}`), campi sconosciuti
+/// rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetOperation {}
@@ -89,9 +99,9 @@ impl KeyColumn<'_> {
             Self::Int64(values) => output.extend_from_slice(&values.value(row).to_be_bytes()),
             Self::Float64(values) => {
                 let value = values.value(row);
-                // The previous string representation treated every NaN as the
-                // same value but kept +0 and -0 distinct. Preserve that exact
-                // contract while avoiding a temporary String allocation.
+                // Stesso contratto della chiave testuale ("NaN", "-0", "0"):
+                // tutti i NaN sono lo stesso valore, +0 e -0 restano
+                // distinti. I bit canonici lo danno senza allocare un testo.
                 let bits = if value.is_nan() {
                     f64::NAN.to_bits()
                 } else {
@@ -157,6 +167,12 @@ fn encode_variable(value: &[u8], output: &mut Vec<u8>) {
     output.extend_from_slice(value);
 }
 
+/// Codificatore della chiave di riga compatta delle set operation.
+///
+/// Per colonna un byte di nullita' (`0` null, `1` valore), poi il valore in
+/// binario, a lunghezza fissa o preceduto dalla lunghezza (testi, binari,
+/// dizionari): due righe hanno la stessa chiave se e solo se sono uguali
+/// colonna per colonna.
 pub struct CompactRowEncoder<'a> {
     columns: Vec<KeyColumn<'a>>,
 }
@@ -295,12 +311,14 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
 }
 
 /// Concatena i due batch (righe di `left` poi di `right`); la nullability
-/// di ogni colonna e' l'OR dei due input, i metadati quelli di `left`.
+/// di ogni colonna e' l'OR dei due input, i metadati di campo quelli di
+/// `left`, i metadati di schema la fusione dei due.
 ///
 /// # Errors
 ///
-/// - `Schema`: schemi incompatibili (come `validate_schema`) o errore Arrow
-///   nella concat o nella costruzione del batch;
+/// - `Schema`: schemi incompatibili (come `validate_schema`), metadati di
+///   schema in conflitto o errore Arrow nella concat o nella costruzione
+///   del batch;
 /// - `ResourceLimit`: overflow nel conteggio delle righe o totale oltre
 ///   `limits.max_rows`.
 pub fn concat_compatible(
@@ -337,7 +355,8 @@ pub fn concat_compatible(
                 .with_nullable(left.is_nullable() || right.is_nullable())
         })
         .collect::<Vec<_>>();
-    // R2.4: righe di entrambe le sorgenti, metadati di schema fusi.
+    // Righe di entrambe le sorgenti, metadati di schema fusi (conflitto ->
+    // errore).
     let metadata =
         crate::metadata_schema_input("union_distinct", &[&left.schema(), &right.schema()])?;
     crate::batch_with_rows(
@@ -362,16 +381,17 @@ fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result
 }
 
 /// UNION DISTINCT dei due batch: righe di `left` seguite dalle righe di
-/// `right` non gia' presenti, senza duplicati.
+/// `right` non gia' presenti, senza duplicati; di ogni riga distinta resta
+/// la prima comparsa.
 ///
 /// # Errors
 ///
 /// - `Schema`: schemi incompatibili (come `validate_schema`), tipo non
 ///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
 ///   o errore nella selezione o nella concat finale (come `select_rows` e
-///   `concat_compatible`);
-/// - `ResourceLimit`: overflow nel conteggio delle righe o totale oltre
-///   `limits.max_rows`.
+///   `concat_compatible`, metadati di schema in conflitto compresi);
+/// - `ResourceLimit`: overflow nel conteggio delle righe o righe dei due
+///   input insieme oltre `limits.max_rows`, prima della deduplicazione.
 pub fn union_distinct(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -494,8 +514,8 @@ mod tests {
     use crate::test_support::{assert_batches_identical, single_column_batch};
 
     // -----------------------------------------------------------------------
-    // Oracolo: implementazione di riferimento indipendente
-    // (ondata stabilizzazione setops). I test confrontano il fast path con
+    // Oracolo: implementazione di riferimento indipendente (concat piu'
+    // dedup, `HashSet` di chiavi). I test confrontano il fast path con
     // l'oracolo in modo rigoroso: schema (nomi, tipi, nullability, metadata),
     // valori, null, bit f64 e ordine delle righe (via uguaglianza degli
     // `ArrayData`, che confronta i buffer bit a bit).
@@ -557,8 +577,8 @@ mod tests {
         let mut key = Vec::new();
         for row in 0..left.num_rows() {
             encoder.encode_into(row, &mut key)?;
-            // Removing the exact byte key both proves membership and guarantees
-            // DISTINCT semantics without retaining a second HashSet for the left.
+            // Togliere la chiave esatta prova l'appartenenza e garantisce il
+            // DISTINCT senza un secondo `HashSet` per la sinistra.
             if right.remove(key.as_slice()) {
                 rows.push(row);
             }

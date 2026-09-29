@@ -1,6 +1,7 @@
 //! `table.fuzzy_join`: join per similarita' testuale su anagrafiche sporche.
 //!
-//! Config, schema e ordine di output: `operazioni.md#tablefuzzy-join`.
+//! Config, schema e ordine di output: la scheda
+//! `docs/schede/table.fuzzy_join.md` (in `docs/operazioni.md`).
 //! Qui i punti che il codice deve garantire:
 //! - le coppie candidate vengono solo dal blocking sul lato destro; un blocco
 //!   oltre `max_candidates` e' un errore, non un troncamento;
@@ -32,53 +33,85 @@ use crate::joins::{combine_horizontal, HorizontalNames};
 use crate::{utf8_column, validate_output_name, Limits};
 use plenora_core::{PlenoraError, Result};
 
+/// Misura di somiglianza di `table.fuzzy_join` (`metric`, obbligatorio), in
+/// `[0, 1]`, sui caratteri Unicode dei testi normalizzati.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FuzzyMetric {
+    /// `jaro_winkler`: Jaro piu' il bonus del prefisso comune (p = 0.1, al
+    /// piu' 4 caratteri), senza soglia di attivazione.
     JaroWinkler,
+    /// `levenshtein`: `1 - distanza / lunghezza della piu' lunga`.
     Levenshtein,
+    /// `jaccard`: token in comune su token totali, come insiemi, separati da
+    /// spazi.
     Jaccard,
 }
 
+/// Come si formano i blocchi di candidati (`blocking`, obbligatorio): si
+/// confrontano solo le coppie dello stesso blocco.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FuzzyBlocking {
+    /// `prefix`: i primi `blocking_param` caratteri (default 2).
     Prefix,
+    /// `soundex`: il codice American Soundex delle sole lettere ASCII.
     Soundex,
+    /// `none`: un solo blocco con tutte le righe destre non nulle.
     None,
 }
 
+/// Righe sinistre senza coppie (`how`, default `inner`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FuzzyHow {
+    /// `inner`: si scartano.
     Inner,
+    /// `left`: restano una volta, con destra e score nulli.
     Left,
 }
 const fn default_how() -> FuzzyHow {
     FuzzyHow::Inner
 }
 
+/// Config di `table.fuzzy_join`; campi sconosciuti rifiutati, regole in
+/// [`validate_config`].
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FuzzyJoin {
+    /// Colonna Utf8 della sinistra (obbligatorio).
     pub left_key: String,
+    /// Colonna Utf8 della destra (obbligatorio).
     pub right_key: String,
+    /// Misura di somiglianza (obbligatorio).
     pub metric: FuzzyMetric,
+    /// Somiglianza minima di una coppia, in `(0, 1]` (obbligatorio).
     pub threshold: f64,
+    /// Formazione dei blocchi (obbligatorio).
     pub blocking: FuzzyBlocking,
+    /// Caratteri del prefisso, `>= 1`, solo con `blocking = prefix`;
+    /// default [`DEFAULT_PREFIX_LEN`].
     pub blocking_param: Option<usize>,
+    /// Righe sinistre senza coppie; default `inner`.
     #[serde(default = "default_how")]
     pub how: FuzzyHow,
+    /// Nome della colonna score; default [`DEFAULT_SCORE_COLUMN`].
     pub score_column: Option<String>,
+    /// Righe massime di un blocco destro, `>= 1`; default
+    /// [`DEFAULT_MAX_CANDIDATES`].
     pub max_candidates: Option<usize>,
+    /// Default `false`: i testi si confrontano dopo `to_lowercase` Unicode.
     #[serde(default)]
     pub case_sensitive: bool,
 }
 
-/// Default documentati della config (usati da kernel, analisi e validazione
-/// engine: un'unica fonte).
+// Default documentati della config: un'unica fonte per kernel e analisi.
+
+/// Caratteri del prefisso di blocking senza `blocking_param`.
 pub const DEFAULT_PREFIX_LEN: usize = 2;
+/// Righe massime di un blocco destro senza `max_candidates`.
 pub const DEFAULT_MAX_CANDIDATES: usize = 50;
+/// Nome della colonna score senza `score_column`.
 pub const DEFAULT_SCORE_COLUMN: &str = "score";
 
 impl FuzzyJoin {
@@ -98,8 +131,8 @@ impl FuzzyJoin {
     }
 }
 
-/// Validazioni statiche della config (replicate dall'analisi a secco e dalla
-/// validazione engine: stesse regole, stessi messaggi).
+/// Validazioni statiche della config, chiamate dal kernel e dall'analisi
+/// del contratto: stesse regole, stessi messaggi.
 ///
 /// # Errors
 ///
@@ -785,14 +818,19 @@ fn probe_chunk(
 
 /// Join per similarita' testuale; semantica nella documentazione di modulo.
 ///
+/// Uscita: le colonne sinistre (la chiave con il suo nome, le altre `_L`),
+/// tutte le destre con `_R`, la colonna score Float64 in coda; righe
+/// nell'ordine della sinistra e, per riga, della destra.
+///
 /// # Errors
 ///
 /// - `InvalidPlan`: config non valida (come `validate_config`).
-/// - `ResourceLimit`: blocco destro oltre `max_candidates`; output oltre
-///   `limits.max_rows` o `limits.max_columns`.
-/// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione del
-///   nome della colonna score con lo schema di output; errore Arrow nella
-///   costruzione del batch.
+/// - `ResourceLimit`: blocco destro oltre `max_candidates` (anche se nessuna
+///   riga sinistra vi cade); output oltre `limits.max_rows` o
+///   `limits.max_columns`.
+/// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione di
+///   nomi nello schema di output (colonna score compresa); metadati di
+///   schema in conflitto; errore Arrow nella costruzione del batch.
 pub fn fuzzy_join(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -854,7 +892,8 @@ fn fuzzy_join_con_chunk(
     // dall'ordine di visita della `HashMap` — un dettaglio di
     // implementazione dell'hasher, non una proprieta' dell'input — e con
     // piu' blocchi sovradimensionati il conteggio nel messaggio potrebbe
-    // cambiare fra esecuzioni (architettura.md#determinismo: l'identita' dell'errore e' stabile).
+    // cambiare fra esecuzioni: anche l'identita' dell'errore e'
+    // deterministica.
     let worst = blocks
         .iter()
         .max_by(|(left_key, left_rows), (right_key, right_rows)| {

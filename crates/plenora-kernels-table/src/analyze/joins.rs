@@ -212,8 +212,8 @@ pub(in crate::analyze) fn analyze_join(
         HorizontalNaming::ManipolaJoin(&left_indices),
         limits,
     )?;
-    // R2.4: i metadata di schema delle due sorgenti si fondono; stessa chiave
-    // con valori diversi -> errore, mai precedenza implicita.
+    // I metadata di schema delle due sorgenti si fondono; stessa chiave con
+    // valori diversi -> errore, mai precedenza implicita.
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
@@ -232,10 +232,11 @@ pub(in crate::analyze) fn analyze_join(
 
 /// `table.fuzzy_join`: replica le validazioni statiche del
 /// kernel (`fuzzy::validate_config`, chiavi Utf8 esistenti) e inferisce lo
-/// schema del join Manipola con la chiave destra INCLUSA (suffisso `_R`,
-/// nel fuzzy le due chiavi differiscono) piu' la colonna score Float64 in
-/// coda (nullable solo con `how = left`). Proprieta' declassate: il numero di
-/// righe dipende dai dati e l'ordine non e' quello di nessun input.
+/// schema con la convenzione di nomi di `table.join`, ma con la chiave
+/// destra INCLUSA (suffisso `_R`: nel fuzzy le due chiavi differiscono),
+/// piu' la colonna score Float64 in coda (nullable solo con `how = left`).
+/// Proprieta' declassate: il numero di righe dipende dai dati e l'ordine
+/// non e' quello di nessun input.
 pub(in crate::analyze) fn analyze_fuzzy_join(
     op: &str,
     inputs: &[DataContract],
@@ -274,7 +275,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     if fields_out.len() > limits.max_columns {
         return contract_error(op, "fuzzy_join supera max_columns");
     }
-    // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
+    // Merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
@@ -301,7 +302,7 @@ pub(in crate::analyze) fn analyze_cross_join(
         HorizontalNaming::PandasCross,
         limits,
     )?;
-    // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
+    // Merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
@@ -410,7 +411,7 @@ pub(in crate::analyze) fn analyze_asof_join(
         .collect::<Result<HashSet<_>>>()?;
     let (fields_out, left_geometry, right_geometry) =
         combine_horizontal_fields(op, left, right, &omitted, HorizontalNaming::AsOf, limits)?;
-    // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
+    // Merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
@@ -452,8 +453,8 @@ pub(in crate::analyze) fn analyze_concat(
             field.as_ref().clone().with_nullable(nullable)
         })
         .collect();
-    // R2.4 multi-sorgente: merge dei metadata di schema di tutti gli
-    // input (conflitto su valori diversi -> errore, mai "vince il primo").
+    // Merge dei metadata di schema di tutti gli input (conflitto su valori
+    // diversi -> errore, mai "vince il primo").
     let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
     // Geometria del primo input (gli schemi sono identici per nome/tipo).
     let geometry = propagate_geometry(
@@ -615,12 +616,12 @@ pub(in crate::analyze) fn analyze_concat_by_name(
         }
         union
     };
-    // R2.4 multi-sorgente: merge dei metadata di schema di tutti gli
-    // input (conflitto su valori diversi -> errore, mai "vince il primo").
+    // Merge dei metadata di schema di tutti gli input (conflitto su valori
+    // diversi -> errore, mai "vince il primo").
     let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
     // Geometria: propagata solo se TUTTI gli input hanno la colonna con lo
     // stesso tipo (altrimenti le righe degli input senza la colonna
-    // sarebbero null materializzati, non passthrough D16).
+    // sarebbero null aggiunti, non la colonna d'ingresso conservata).
     let geometry = first
         .geometries
         .first()
@@ -692,8 +693,8 @@ pub(in crate::analyze) fn analyze_set_operation(
                     )
                 })
                 .collect();
-        // R2.4: due sorgenti — merge dei metadata di schema; stessa chiave
-        // con valori diversi -> errore (come i join, mai precedenza implicita).
+        // Due sorgenti: merge dei metadata di schema; stessa chiave con
+        // valori diversi -> errore (come i join, mai precedenza implicita).
         let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
         let schema = Schema::new_with_metadata(fields_out, metadata);
         let geometry = propagate_geometry(
@@ -708,7 +709,8 @@ pub(in crate::analyze) fn analyze_set_operation(
             ContractProperties::default(),
         )
     } else {
-        // intersect/except: output = left via select_rows, ordine canonico.
+        // intersect/except: output = left via select_rows, nell'ordine della
+        // sinistra; il contratto non dichiara proprieta'.
         let mut output = left.clone();
         output.properties = ContractProperties::default();
         Ok(output)

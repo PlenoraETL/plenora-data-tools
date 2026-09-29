@@ -346,8 +346,9 @@ fn tabella(righe: usize, spostamento: usize) -> RecordBatch {
     ])
 }
 
-/// Binary con un valore non UTF-8: `scalar_as_string` fallisce su quella
-/// riga, e l'errore deve essere lo stesso alla stessa riga.
+/// Binary con un valore non UTF-8 se `con_errore`: `scalar_as_string` non
+/// ha un testo per quella riga, mentre la chiave binaria usa i suoi byte e
+/// non fallisce.
 fn tabella_binaria(con_errore: bool) -> RecordBatch {
     let valori: Vec<Option<&[u8]>> = vec![
         Some(b"ab"),
