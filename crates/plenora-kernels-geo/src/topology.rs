@@ -747,11 +747,6 @@ fn checked_buffer(
     buffer_con_freccia(geometry, distance, Estremita::Tonde, freccia, precision).map_err(|errore| {
         match errore {
             ErroreBuffer::PrecisioneInsufficiente => TopologyError::PrecisionInsufficient,
-            ErroreBuffer::TroppiVertici { actual, limit } => TopologyError::ResourceLimit {
-                name: "buffer_vertices",
-                actual,
-                limit,
-            },
             ErroreBuffer::CalcoloNonConcluso(forma) => TopologyError::CalcoloNonConcluso(forma),
         }
     })

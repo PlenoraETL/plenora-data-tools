@@ -64,12 +64,6 @@ pub enum OperationError {
     /// [`buffer_with_cap`]). Nessun dato nel messaggio.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
-    #[error("limite {name} superato: valore={actual}, limite={limit}")]
-    ResourceLimit {
-        name: &'static str,
-        actual: u64,
-        limit: u64,
-    },
 }
 
 impl From<griglia::PrecisioneInsufficiente> for OperationError {
@@ -309,20 +303,19 @@ pub fn buffer(
 ///
 /// `precision` e' la precisione dichiarata nelle unita' delle coordinate
 /// (`Precision::from_crs` con un CRS, altrimenti esplicita). Il buffer e'
-/// costruito per pezzi (rettangoli dei lati, dischi e settori ai vertici,
-/// archi con freccia entro meta' della precisione) e unito con un overlay
-/// controllato (`rust_backend::buffer`): il risultato sta entro la
-/// precisione dal buffer esatto, altrimenti errore. Le estremita' e il
-/// trattamento di punti e linee con distanza non positiva sono quelli di
-/// `geo::Buffer`.
+/// quello di `geo::Buffer` con gli archi scelti dalla precisione (freccia
+/// `max(p / 2, 0.001 |d|)`, deviazione dichiarata oltre 5 m con 1 cm) e le
+/// componenti sotto la griglia bufferizzate come punti, poi controllato
+/// contro la definizione esatta del buffer (`rust_backend::buffer`). Le
+/// estremita' e il trattamento di punti e linee con distanza non positiva
+/// sono quelli di `geo::Buffer`.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `distance` non e' finita (NaN o infinita);
-/// - `PrecisionInsufficient`: la griglia o gli archi supererebbero la
-///   precisione, o il risultato non la rispetta;
-/// - `ResourceLimit`: i pezzi supererebbero il limite di vertici;
+/// - `PrecisionInsufficient`: la griglia supererebbe la precisione, o il
+///   risultato non rispetta la definizione entro la tolleranza;
 /// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC.
 pub fn buffer_with_cap(
     geometry: &Geometry<f64>,
@@ -345,11 +338,6 @@ pub fn buffer_with_cap(
     let result = buffer_controllato(geometry, distance, estremita, precision).map_err(
         |errore| match errore {
             ErroreBuffer::PrecisioneInsufficiente => OperationError::PrecisionInsufficient,
-            ErroreBuffer::TroppiVertici { actual, limit } => OperationError::ResourceLimit {
-                name: "buffer_vertices",
-                actual,
-                limit,
-            },
             ErroreBuffer::CalcoloNonConcluso(forma) => OperationError::CalcoloNonConcluso(forma),
         },
     )?;

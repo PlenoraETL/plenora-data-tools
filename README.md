@@ -114,8 +114,10 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
     identici con uscita vuota passavano). Un tratto atteso deve stare entro
     `p / 2` dal bordo del risultato, entro `p` se vicino a un altro bordo;
   - *nessuna faccia in più*: accanto a ogni lato del risultato lungo almeno
-    `4 p`, a `p` dai suoi due lati, l'appartenenza al risultato (parità)
-    coincide con quella al risultato esatto: una faccia aggiunta, o un
+    `4 p`, a `p` dai suoi due lati, e in un punto interno di ogni faccia
+    del risultato e di ogni faccia d'ingresso (lontano più di `p` dai
+    bordi), l'appartenenza al risultato (parità) coincide con quella al
+    risultato esatto: una faccia aggiunta, anche con lati corti, o un
     operando intero al posto di una differenza vuota, è un errore.
 
 **`make_valid` `STRUCTURE`** ha i propri overlay (`LINEWORK` non ne usa):
@@ -131,43 +133,41 @@ lato d'ingresso (`checked_displacement`): un controllo più debole dei due
 sopra (nessun controllo dei lati né dei bordi mancanti), da unificare con
 `griglia::Operandi` (condizione di rientro).
 
-**Buffer.** Il `Buffer` di `geo` non si usa più: approssimava gli archi con
-un passo fisso di 0,2 rad (il cerchio di 10 m di un punto, 32 lati, aveva
-una freccia di 4,8 cm; la chiusura di `clean_topology` tagliava gli angoli
-di circa 6 cm) e saltava senza errore una componente che la griglia riduce
-a un punto anche quando il suo buffer era grande. `rust_backend::buffer`
-costruisce la definizione di Minkowski per pezzi e la unisce con un solo
-overlay controllato come sopra:
+**Buffer** (`rust_backend::buffer`). Il `Buffer` di `geo` con gli archi di
+default approssimava con un passo di 0,2 rad (il cerchio di 10 m di un
+punto aveva una freccia di 4,8 cm) e saltava senza errore una componente
+che la griglia riduce a un punto anche quando il suo buffer era grande.
+Ora:
 
-- `d > 0`: le parti areali; per ogni lato di una linea il rettangolo largo
-  `2|d|`, per ogni lato di un anello la metà esterna (il punto più vicino di
-  un punto esterno sta dal lato esterno); per ogni vertice il settore del
-  suo cono normale (un punto entro `|d|` ha il punto più vicino interno a
-  un lato o in un vertice); mezzi dischi, quadrati o niente agli estremi
-  liberi e ai punti, secondo le estremità, come `geo`;
-- `d < 0`: ogni parte areale meno l'unione delle metà interne dei suoi
-  anelli e dei settori ai vertici concavi; punti e linee non contano, come
-  in `geo` (e come `geo` una collezione erode ogni parte areale da sola);
-- **archi**: settori e dischi sono poligoni inscritti con freccia al più
-  `f = max(p / 2, 0.001 |d|)`, `n = ceil(pi / acos(1 - f / |d|))` lati per
-  il cerchio intero. Con 1 cm: 32 lati a 1 m, 71 da 5 m in su; oltre
-  `2^20` lati errore. Fino a `|d| = 500 p` (5 m) freccia più griglia
-  restano entro `p`; oltre vale la deviazione dichiarata sotto
-  («Deviazione: archi del buffer»). Per non creare contatti quasi collineari fra
-  pezzi (schegge degli agganci) i rettangoli si sovrappongono ai giunti di
-  `sqrt(2 |d| f / 100)` (`f` la freccia: il pezzo esce dal buffer di un
-  centesimo della freccia), ma al più di metà del lato vicino (con
-  estremità piatte i prolungamenti uscivano oltre gli estremi di una linea
-  corta: `(0 0, 1 0, 2 0)` a 1000 m, 3,47 m), e i settori hanno il vertice
-  arretrato dentro il disco;
-- **controllo contro la definizione**, oltre ai tre controlli contro i
-  pezzi: un pezzo costruito male passerebbe il confronto con se stesso.
-  Ogni vertice dell'uscita deve stare nella definizione esatta del buffer
-  (rettangoli dei lati, allungati agli estremi solo con estremità quadrate;
-  settori dei coni normali ai vertici interni; dischi o quadrati agli
-  estremi e ai punti secondo le estremità; parti areali) allargata di `p /
-  2` più un centesimo della freccia; con `d < 0` in una parte areale e
-  fuori dalla fascia `|d| - f - p/2` dei suoi anelli.
+- **archi dalla precisione**: `geo` espone `LineJoin::Round(a)` e
+  `LineCap::Round(a)` di `i_overlay` (passo angolare `a`, portato in
+  `[0.01 pi, 0.25 pi]`; il passo effettivo resta sotto `1.5 a`). Si chiede
+  `a = (4/3) acos(1 - f / |d|)` con `f = max(p / 2, 0.001 |d|)`: fino a
+  `|d| = 500 p` (5 m) freccia più griglia restano entro `p`; oltre vale la
+  deviazione dichiarata sotto («Deviazione: archi del buffer»). Con il passo
+  minimo la freccia è al più `2.8e-4 |d|`, sempre entro la tolleranza.
+  Estremità piatte e quadrate non hanno archi;
+- **componenti sotto la griglia**: prima del calcolo una linea più corta di
+  `2 g` diventa il suo primo punto, un poligono d'area sotto `4 g^2` o più
+  sottile di `2 g` il suo anello esterno (e poi, se corto, un punto): così
+  il loro buffer non sparisce (la linea di 0,4 mm accanto a una di 1.300
+  km perdeva un disco di 10 m). Il buffer negativo di una collezione
+  considera solo le parti areali;
+- **griglia**: filtro grossolano prima del calcolo, `(2 + 2 sqrt(2)) g`
+  entro `p` sull'ingombro allargato di `3 |d|`; la garanzia è il controllo
+  che segue;
+- **controllo contro la definizione esatta**, indipendente da ciò che il
+  calcolo ha prodotto (rettangoli dei lati, allungati agli estremi solo con
+  estremità quadrate; settori dei coni normali ai vertici interni; dischi o
+  quadrati agli estremi e ai punti; parti areali), su indici `rstar`: ogni
+  **lato** dell'uscita per intero dentro la definizione allargata di `p / 2`
+  (traccia del lato su ogni forma convessa, intervalli che lo ricoprono;
+  con `d < 0` fuori dalla fascia `|d| - f - p/2` degli anelli); ogni
+  vertice non affondato nella definizione ristretta di `f + p / 2` (niente
+  buchi o vertici dentro il buffer); punti campione a `|d| - f - p/2` dai
+  lati, sulle bisettrici dei giunti, davanti agli estremi e attorno ai
+  punti (con `d < 0` a `|d| + p` dentro le parti) dentro l'uscita: un'uscita
+  vuota o troncata è un errore.
 
 `clean_topology` con la morfologia divide il bilancio: due buffer con
 freccia `p / 8` (o lo 0,1% della tolleranza di chiusura, se maggiore:
@@ -237,32 +237,35 @@ vertice d'ingresso non sono riconosciuti.
   foglia contro il poligono di partenza e le linee di taglio del suo
   cammino (nessun lato fuori posto). Il passo della griglia si dimezza con
   il pezzo, e lo spostamento accumulato resta sotto la precisione.
-- **Buffer, costo.** L'unione di pezzi costa più del `Buffer` di `geo`.
-  Misure in release, stella di 1.000 vertici (raggio 1 km) e linea di
-  1.000 vertici, 1 cm, con tutti i controlli, contro `geo` più le stesse
-  validazioni: poligono 161 / 8 ms a 1 m, 209 / 6 ms a 10 m, 1,1 s / 27 ms
-  a 100 m, 9,0 s / 0,18 s a 1000 m; linea 48 / 4 ms a 1 m, 53 / 3 ms a 10
-  m, 60 / 1 ms a 100 m, 1,6 s / 3 ms a 1000 m. Il caso peggiore sono distanze molto maggiori dei
-  dettagli dell'ingresso: tutti i pezzi (un rettangolo per lato) si
-  sovrappongono e l'overlay ne paga gli incroci, anche con archi di 71
-  lati. Anche `geo` degenera quando molti lati convergono (la chiusura di
-  angoli di 600 corde: 121 s qui, 122 s con `geo`). I vertici dell'uscita
-  sono fino a circa 2,5 volte quelli di `geo`.
+- **Buffer, costo.** Misure in release, stella di 1.000 vertici (raggio 1
+  km) e linea di 1.000 vertici, 1 cm; totale (buffer di `geo` con gli archi
+  scelti + controlli) contro il `Buffer` di `geo` di default: poligono 20
+  ms (7 + 10) / 6 ms a 1 m, 20 ms (11 + 9) / 5 ms a 10 m, 21 ms (16 + 3) /
+  26 ms a 100 m, 189 ms (179 + 15) / 171 ms a 1000 m; linea 11 ms (4 + 5)
+  / 4 ms a 1 m, 7 ms (3 + 6) / 2 ms a 10 m, 8 ms (1 + 7) / 1 ms a 100 m,
+  9 ms (3 + 7) / 3 ms a 1000 m. Sotto i 10 m gli archi più fini e i
+  controlli costano da 3 a 7 volte `geo`, pochi millisecondi; da 100 m in su
+  quasi niente in più. Anche `geo` degenera quando molti lati convergono
+  (la chiusura di angoli di centinaia di corde).
 - **Deviazione: archi del buffer** (decisione dell'utente). *Regola:* gli
   archi del buffer (e della chiusura di `clean_topology`) hanno freccia al
   più `max(p / 2, 0.001 |d|)`, non `p / 2`. *Ambito:* `buffer`,
   `buffer_with_cap`, la morfologia di `clean_valid_polygon_topology`
-  (`rust_backend::buffer::freccia_degli_archi`); griglia, agganci e
-  controlli dell'unione restano a `p / 2`. *Hazard:* oltre `|d| = 500 p`
+  (`rust_backend::buffer::freccia_degli_archi`); la griglia e il controllo
+  contro la definizione restano a `p / 2`. *Hazard:* oltre `|d| = 500 p`
   il buffer si scosta dal buffer esatto fino allo 0,1% della distanza (10
   cm a 100 m, 1 m a 1 km), sempre verso l'interno lungo gli archi (poligoni
   inscritti), senza errore: sopra la precisione di 1 cm. *Condizione di
-  rientro:* una discretizzazione degli archi entro `p / 2` a costo
-  accettabile per ogni distanza (per esempio archi calcolati solo sul bordo
-  dell'unione), o un parametro esplicito di tolleranza nel piano.
+  rientro:* archi entro `p / 2` a costo accettabile per ogni distanza
+  (`i_overlay` non scende sotto un passo di `0.01 pi`), o un parametro
+  esplicito di tolleranza nel piano.
+- **Buffer, lati.** Il controllo dei lati è verso l'esterno (ogni lato
+  dentro la definizione); verso l'interno contano vertici e campioni: un
+  lato che rientra nel buffer fra due vertici corretti non è visto se non
+  lascia scoperto un campione.
 - **Non applicabile.** Le parti di `subdivide` sotto la soglia di vertici
-  escono invariate, senza overlay; i punti con estremità piatte non hanno
-  buffer (come in `geo`), senza overlay.
+  escono invariate, senza overlay; i punti con estremità piatte e il buffer
+  negativo senza parti areali sono vuoti per definizione, senza calcolo.
 - Lo split lineare (`split_line`, sorgenti `LineString` di `geo.split`,
   codice precedente al porting) ammette un punto di taglio entro la
   tolleranza più un margine numerico proporzionale al modulo delle

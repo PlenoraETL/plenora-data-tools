@@ -193,7 +193,7 @@ pub fn spostamento_a_priori(rect: Rect<f64>, fattore: f64) -> Option<f64> {
 }
 
 /// Guardia di spaziatura e spostamento a priori entro `limite`.
-fn controlla_griglia(
+pub fn controlla_griglia(
     rect: Option<Rect<f64>>,
     precision: Precision,
     fattore: f64,
@@ -335,7 +335,7 @@ impl IndiceLinework {
     /// regola semiaperta sugli estremi dei lati. Per un punto lontano dal
     /// bordo (l'uso qui) l'ascissa d'incrocio arrotondata non cambia il
     /// verso del confronto.
-    fn dentro(&self, punto: Coord<f64>) -> bool {
+    pub fn dentro(&self, punto: Coord<f64>) -> bool {
         let semiretta = AABB::from_corners([punto.x, punto.y], [f64::MAX, punto.y]);
         let attraversamenti = self
             .albero
@@ -578,6 +578,7 @@ impl<'a> Operandi<'a> {
         &self,
         output: &MultiPolygon<f64>,
         rilevante: impl Fn(usize) -> bool,
+        regione: Option<Rect<f64>>,
         regola: Regola,
         precision: Precision,
     ) -> bool {
@@ -602,6 +603,38 @@ impl<'a> Operandi<'a> {
                         }
                     }
                 }
+            }
+        }
+        // Per faccia, qualunque sia la lunghezza dei lati (revisione:
+        // A = B = [0, 0.03]^2, differenza, uscita A al posto del vuoto, lati
+        // di 3 cm): un punto interno di ogni faccia dell'uscita e di ogni
+        // faccia d'ingresso rilevante (dentro `regione`), lontano piu' di `p`
+        // da ogni bordo, sta nell'uscita se e solo se sta nel risultato
+        // esatto.
+        let mut vicini = Vec::new();
+        let lontano = |q: Coord<f64>, vicini: &mut Vec<(f64, f64)>| {
+            let punto = Line::new(q, q);
+            !self.bordi.lato_entro(punto, &[], &rilevante, p, vicini)
+                && !uscita.lato_entro(punto, &[], &|_| true, p, vicini)
+        };
+        let facce_uscita = output.iter();
+        let etichette: Vec<usize> = regione.map_or_else(
+            || (0..self.poligoni.len()).collect(),
+            |rect| self.vicini(rect),
+        );
+        let facce_ingresso = etichette
+            .into_iter()
+            .filter(|&etichetta| rilevante(etichetta))
+            .filter_map(|etichetta| self.poligoni.get(etichetta))
+            .flat_map(|polygons| polygons.iter());
+        for polygon in facce_uscita.chain(facce_ingresso) {
+            let Some(q) = geo::InteriorPoint::interior_point(polygon) else {
+                continue;
+            };
+            if lontano(q.0, &mut vicini)
+                && uscita.dentro(q.0) != self.nel_risultato(q.0, &rilevante, regola)
+            {
+                return false;
             }
         }
         true
@@ -662,7 +695,7 @@ impl<'a> Operandi<'a> {
         let esito = crate::calcolo_protetto(|| {
             self.bordo_entro(output, &rilevante, precision)
                 && self.completo(output, &rilevante, regione, regola, precision)
-                && self.coerente(output, &rilevante, regola, precision)
+                && self.coerente(output, &rilevante, regione, regola, precision)
         })
         .map_err(ErroreVerifica::CalcoloNonConcluso)?;
         if esito {
@@ -810,7 +843,7 @@ fn intervallo_entro(
 }
 
 /// I `t` per cui `lo <= c0 + c1 t <= hi`.
-fn entro_lineare(c0: f64, c1: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
+pub fn entro_lineare(c0: f64, c1: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
     if c1 == 0.0 {
         return (lo <= c0 && c0 <= hi).then_some((f64::NEG_INFINITY, f64::INFINITY));
     }
@@ -832,7 +865,7 @@ fn entro_lineare(c0: f64, c1: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
 /// (`1e-4` m^2). Qui la distanza dalla retta viene da un prodotto vettore
 /// diviso per `|w|` (errore dell'ordine di `EPSILON |u|`, dentro il margine
 /// tolto al raggio) e la semiampiezza da `(r - h)(r + h)`.
-fn dentro_disco(ux: f64, uy: f64, wx: f64, wy: f64, r: f64) -> Option<(f64, f64)> {
+pub fn dentro_disco(ux: f64, uy: f64, wx: f64, wy: f64, r: f64) -> Option<(f64, f64)> {
     let a = wx.mul_add(wx, wy * wy);
     if a == 0.0 {
         return (ux.hypot(uy) <= r).then_some((f64::NEG_INFINITY, f64::INFINITY));
@@ -848,7 +881,7 @@ fn dentro_disco(ux: f64, uy: f64, wx: f64, wy: f64, r: f64) -> Option<(f64, f64)
 }
 
 /// Gli intervalli ricoprono `[0, 1]`?
-fn ricopre(intervalli: &mut [(f64, f64)]) -> bool {
+pub fn ricopre(intervalli: &mut [(f64, f64)]) -> bool {
     intervalli.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
     let mut coperto = 0.0_f64;
     for &(t0, t1) in intervalli.iter() {
@@ -1107,6 +1140,33 @@ mod tests {
                 (0.6, 1.0, false)
             ]
         );
+    }
+
+    /// Revisione (Codex, terzo giro): lati corti (3 cm), differenza di due
+    /// operandi identici, uscita A al posto del vuoto: il controllo per
+    /// faccia la rifiuta.
+    #[test]
+    fn la_faccia_in_piu_con_lati_corti_e_vista() {
+        let centimetro = Precision::new(0.01).unwrap();
+        let a = MultiPolygon::new(vec![Rect::new(
+            Coord { x: 0.0, y: 0.0 },
+            Coord { x: 0.03, y: 0.03 },
+        )
+        .to_polygon()]);
+        let b = a.clone();
+        let operandi = Operandi::nuovi(vec![&a, &b]).unwrap();
+        assert!(operandi
+            .verifica(&a, |_| true, None, Regola::Differenza(0), centimetro)
+            .is_err());
+        assert!(operandi
+            .verifica(
+                &MultiPolygon::new(Vec::new()),
+                |_| true,
+                None,
+                Regola::Differenza(0),
+                centimetro
+            )
+            .is_ok());
     }
 
     /// Revisione (Codex, secondo giro): i bordi coincidenti erano esclusi,

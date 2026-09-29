@@ -1,48 +1,70 @@
-//! Buffer planare entro la precisione dichiarata, costruito per pezzi.
+//! Buffer planare entro la precisione dichiarata: il `Buffer` di `geo`
+//! (`i_overlay::mesh`, contorni e tratti) con gli archi scelti dalla
+//! precisione, e controllato a posteriori contro la **definizione esatta**.
 //!
-//! Il `Buffer` di `geo` (`i_overlay::mesh`) approssima gli archi con un
-//! passo angolare fisso (0,2 rad: una freccia fino all'1,1% della distanza,
-//! 4,8 cm per il cerchio di 10 m di un punto) e passa dalla griglia di
-//! `i_overlay` piu' volte, saltando senza errore le parti che la griglia
-//! riduce a un punto. Qui il buffer e' la definizione di Minkowski scritta
-//! per pezzi, e il solo calcolo approssimato e' un'unione controllata:
+//! **Archi.** `geo` espone `LineJoin::Round(a)` e `LineCap::Round(a)` di
+//! `i_overlay` 4.5.2, con `a` il passo angolare richiesto; `i_overlay` lo
+//! porta in `[0.01 pi, 0.25 pi]` (`mesh/style.rs`) e divide un arco di
+//! ampiezza `A` in `round(A / a)` corde: il passo effettivo resta sotto
+//! `1.5 a` (il cerchio di un punto, `ceil(2 pi / a)` corde, e le estremita',
+//! `floor(pi / a)`, stanno sotto). Per una freccia al piu' `f` si chiede
+//! `a = (4/3) acos(1 - f / |d|)`, portato nello stesso intervallo
+//! ([`angolo_degli_archi`]; un passo piu' fine rispetta la freccia a
+//! maggior ragione). `f = max(p / 2, 0.001 |d|)` ([`freccia_degli_archi`]):
+//! fino a `|d| = 500 p` (5 m con 1 cm) freccia piu' griglia restano entro
+//! `p`; oltre, la freccia e' lo 0,1% della distanza, **deviazione
+//! dichiarata** del solo buffer (README «Limiti dichiarati»). Con il passo
+//! minimo `0.01 pi` la freccia e' al piu' `2.8e-4 |d|`, quindi sempre entro
+//! la tolleranza.
 //!
-//! - per `d > 0` l'unione di: le parti areali dell'ingresso; per ogni lato
-//!   di una linea il rettangolo largo `2d` attorno al lato (allungato di `d`
-//!   all'estremo libero con estremita' quadrate), per ogni lato di un
-//!   anello la sola meta' esterna (quella interna sta nel poligono, e un
-//!   punto esterno ha il punto piu' vicino dal lato esterno); per ogni vertice il
-//!   settore di raggio `d` del suo cono normale, sul lato convesso della
-//!   svolta (un punto entro `d` dalla spezzata ha un punto piu' vicino,
-//!   interno a un lato o vertice: sta nel rettangolo o nel settore); il
-//!   mezzo disco agli estremi liberi con estremita' tonde; per i punti il
-//!   disco (tonde) o il quadrato di lato `2d` (quadrate), niente con
-//!   estremita' piatte, come `geo`;
-//! - per `d < 0` ogni parte areale meno l'unione dei pezzi interni dei suoi
-//!   anelli con raggio `|d|` (l'erosione e' la parte a distanza almeno
-//!   `|d|` dal bordo); punti e linee non contribuiscono, come in `geo`;
-//! - per `d = 0` l'unione delle parti areali.
+//! **Griglia.** Il buffer passa dalla griglia di `i_overlay` piu' volte
+//! (offset arrotondati, centri degli archi da vertici gia' arrotondati,
+//! overlay dei contorni e finale): il primo passaggio sposta un punto di al
+//! piu' `(2 + 2 sqrt(2)) g`, con `g` il passo sull'ingombro allargato di
+//! `3 |d|` (il margine massimo di `i_overlay::mesh`). Oltre `p`, errore
+//! prima del calcolo: e' un filtro grossolano, la garanzia (entro `p / 2`
+//! dalla definizione) e' il controllo a posteriori.
 //!
-//! **Archi.** Dischi e settori sono poligoni inscritti con freccia al piu'
-//! `f = max(p / 2, 0.001 |d|)` ([`freccia_degli_archi`]): `n = ceil(2 pi /
-//! (2 acos(1 - f / |d|)))` lati per il cerchio intero
-//! ([`lati_per_cerchio`]). Fino a `|d| = 500 p` (5 m con 1 cm) la freccia
-//! e' `p / 2` e freccia piu' griglia restano entro `p`; oltre, la freccia e'
-//! lo 0,1% della distanza, **deviazione dichiarata** del solo buffer
-//! (decisione dell'utente, README «Limiti dichiarati»): gli archi del
-//! buffer si scostano dal cerchio esatto fino a `0.001 |d|` (10 cm a 100
-//! m), sempre verso l'interno (poligoni inscritti), senza errore. La
-//! griglia e i controlli dell'unione contro i pezzi restano a `p / 2`:
-//! la deviazione riguarda solo la discretizzazione degli archi. Oltre [`MAX_LATI_CERCHIO`] lati per cerchio, o
-//! [`MAX_VERTICI_BUFFER`] vertici in tutto, errore esplicito.
+//! **Componenti sotto la griglia.** `i_overlay` salta senza errore un
+//! anello d'area intera nulla e una linea i cui punti cadono sullo stesso
+//! punto della griglia: il loro buffer, spesso `2 |d|`, sparirebbe. Prima
+//! del calcolo una linea piu' corta di `2 g` diventa il suo primo punto, un
+//! poligono d'area sotto `4 g^2` o piu' sottile di `2 g` il suo anello
+//! esterno (e poi, se corto, un punto): lo scarto e' sotto la griglia.
+//!
+//! **Controllo a posteriori contro la definizione**, non contro cio' che il
+//! calcolo ha prodotto ([`verifica_contro_la_definizione`]). La definizione
+//! esatta con `d > 0` e' l'unione di: rettangoli dei lati (allungati di
+//! `d` agli estremi liberi solo con estremita' quadrate), settori dei coni
+//! normali ai vertici interni (giunzioni tonde), dischi (tonde) o quadrati
+//! (quadrate) agli estremi liberi e ai punti, parti areali; con `d < 0`,
+//! i punti delle parti areali a distanza almeno `|d|` dai loro anelli. Tre
+//! prove, tutte su indici `rstar`:
+//!
+//! - ogni vertice dell'uscita sta nella definizione allargata di `p / 2`;
+//! - ogni vertice dell'uscita e' vicino al bordo esatto: non sta nella
+//!   definizione ristretta di `f + p / 2` (una faccia bucata o un vertice
+//!   che affonda nel buffer e' un errore);
+//! - punti campione ben dentro la definizione (a `|d| - f - p / 2` dai
+//!   lati, lungo le bisettrici dei giunti e davanti agli estremi, dentro le
+//!   parti areali) stanno dentro l'uscita: una parte persa e' un errore.
+//!
+//! Un lato dell'uscita fra due vertici corretti non e' controllato punto per
+//! punto: e' una corda di un arco o un tratto parallelo all'ingresso.
 
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::PI;
 
 use geo::algorithm::bool_ops::unary_union;
+use geo::algorithm::buffer::{BufferStyle, LineCap, LineJoin};
 use geo::orient::{Direction, Orient};
-use geo::{BooleanOps, BoundingRect, Coord, Geometry, LineString, MultiPolygon, Polygon};
+use geo::{
+    Area, BoundingRect, Buffer, Coord, CoordsIter, Geometry, LineString, MultiLineString,
+    MultiPolygon, Point, Polygon,
+};
 
-use super::griglia::{self, ErroreVerifica, Operandi, PrecisioneInsufficiente, Regola};
+use super::griglia::{
+    self, ErroreVerifica, IndiceLinework, Operandi, PrecisioneInsufficiente, Regola,
+};
 use super::precision::Precision;
 
 /// Le estremita' delle linee nel buffer.
@@ -56,11 +78,9 @@ pub enum Estremita {
 /// Perche' il buffer non si calcola.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErroreBuffer {
-    /// La griglia o gli archi supererebbero la precisione, o un controllo a
-    /// posteriori ha fallito.
+    /// La griglia supererebbe la precisione, o un controllo a posteriori
+    /// ha fallito.
     PrecisioneInsufficiente,
-    /// I pezzi supererebbero [`MAX_VERTICI_BUFFER`] vertici.
-    TroppiVertici { actual: u64, limit: u64 },
     /// Un calcolo di `geo` o `i_overlay` e' andato in panico dentro
     /// [`crate::calcolo_protetto`]: la forma del payload, mai il contenuto.
     CalcoloNonConcluso(&'static str),
@@ -86,10 +106,6 @@ fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, ErroreBuffer> {
     crate::calcolo_protetto(calcolo).map_err(ErroreBuffer::CalcoloNonConcluso)
 }
 
-/// Lati massimi di un cerchio: oltre, la precisione non e' raggiungibile
-/// per quella distanza (circa `|d| = 3,5e7 p`).
-pub const MAX_LATI_CERCHIO: u64 = 1 << 20;
-
 /// La freccia relativa massima ammessa per gli archi del buffer: lo 0,1%
 /// della distanza (deviazione dichiarata, vedi il modulo).
 pub const FRECCIA_RELATIVA_MASSIMA: f64 = 0.001;
@@ -101,64 +117,57 @@ pub fn freccia_degli_archi(distance: f64, precision: Precision) -> f64 {
     (precision.value() * griglia::FRAZIONE_BORDO).max(FRECCIA_RELATIVA_MASSIMA * distance.abs())
 }
 
-/// Vertici massimi dei pezzi di un buffer.
-///
-/// Tutti i pezzi stanno nel buffer esatto, salvo la sovrapposizione ai
-/// giunti (vedi `Pezzi::nuovi`), oltre `|d|` di un centesimo della freccia.
-pub const MAX_VERTICI_BUFFER: u64 = 50_000_000;
+/// Il passo angolare minimo e massimo che `i_overlay` accetta.
+const ANGOLO_MINIMO: f64 = 0.01 * PI;
+const ANGOLO_MASSIMO: f64 = 0.25 * PI;
 
-/// Il numero di lati del poligono inscritto nel cerchio di raggio `raggio`
-/// con freccia al piu' `freccia`: `None` se oltre [`MAX_LATI_CERCHIO`] o
-/// se i valori non sono finiti e positivi. Almeno 4.
+/// Il passo angolare da chiedere a `i_overlay` perche' la freccia degli
+/// archi di raggio `raggio` resti entro `freccia` (vedi il modulo).
 #[must_use]
-pub fn lati_per_cerchio(raggio: f64, freccia: f64) -> Option<u64> {
-    if !(raggio.is_finite() && freccia.is_finite() && raggio > 0.0 && freccia > 0.0) {
-        return None;
+pub fn angolo_degli_archi(raggio: f64, freccia: f64) -> f64 {
+    let rapporto = freccia / raggio.abs();
+    if !(rapporto.is_finite() && rapporto > 0.0) {
+        return ANGOLO_MINIMO;
     }
-    let rapporto = freccia / raggio;
-    if rapporto >= 1.0 {
-        return Some(4);
-    }
-    // Passo con freccia esatta `freccia`, ristretto di un margine relativo
-    // per l'arrotondamento di `acos`.
-    let passo = 2.0 * (1.0 - rapporto).acos() * (1.0 - 1e-9);
-    let lati = (TAU / passo).ceil();
-    #[allow(clippy::cast_precision_loss)]
-    let massimo = MAX_LATI_CERCHIO as f64;
-    if !(lati.is_finite() && lati <= massimo) {
-        return None;
-    }
-    // `lati` e' un intero in [1, 2^20]: la conversione e' esatta.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let lati = lati as u64;
-    Some(lati.max(4))
+    let angolo = if rapporto >= 1.0 {
+        ANGOLO_MASSIMO
+    } else {
+        (4.0 / 3.0) * (1.0 - rapporto).acos() * (1.0 - 1e-9)
+    };
+    angolo.clamp(ANGOLO_MINIMO, ANGOLO_MASSIMO)
 }
 
-/// Da quale lato di una spezzata servono i pezzi. Gli anelli sono
-/// orientati (esterno antiorario, buchi orari): l'esterno del poligono e'
-/// sempre a destra.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Lato {
-    Entrambi,
-    /// L'esterno di un anello: il buffer positivo di un poligono (l'interno
-    /// e' il poligono stesso).
-    Destra,
-    /// L'interno di un anello: la fascia dell'erosione.
-    Sinistra,
+/// Il primo passaggio del buffer sposta un punto di al piu' `(2 + 2
+/// sqrt(2)) g` (vedi il modulo).
+const FATTORE_BUFFER: f64 = 2.0 + 2.0 * std::f64::consts::SQRT_2;
+
+/// Margine d'ingombro del buffer, in multipli di `|d|`: il massimo fra i
+/// margini di `i_overlay::mesh` (giunzioni `1.1`, estremita' quadrate `2`,
+/// tonde `3`).
+const MARGINE_IN_DISTANZE: f64 = 3.0;
+
+/// L'ingombro dell'ingresso allargato di `margine` per lato.
+fn ingombro_allargato(geometry: &Geometry<f64>, margine: f64) -> Option<geo::Rect<f64>> {
+    griglia::rettangolo_coordinate(geometry.coords_iter()).map(|rect| {
+        geo::Rect::new(
+            Coord {
+                x: rect.min().x - margine,
+                y: rect.min().y - margine,
+            },
+            Coord {
+                x: rect.max().x + margine,
+                y: rect.max().y + margine,
+            },
+        )
+    })
 }
 
-/// Costruttore dei pezzi di raggio `raggio`.
-struct Pezzi {
-    raggio: f64,
-    giunto: f64,
-    lato: Lato,
-    /// Passo angolare massimo degli archi.
-    passo: f64,
-    lati: u64,
-    prodotti: Vec<MultiPolygon<f64>>,
-    vertici: u64,
+/// La normale sinistra.
+const fn sinistra(u: Coord<f64>) -> Coord<f64> {
+    Coord { x: -u.y, y: u.x }
 }
 
+/// `a + k u`.
 const fn somma(a: Coord<f64>, b: Coord<f64>, k: f64) -> Coord<f64> {
     Coord {
         x: k.mul_add(b.x, a.x),
@@ -181,344 +190,7 @@ fn direzione(a: Coord<f64>, b: Coord<f64>) -> Option<(Coord<f64>, f64)> {
     })
 }
 
-/// Il vettore opposto.
-const fn opposto(u: Coord<f64>) -> Coord<f64> {
-    Coord { x: -u.x, y: -u.y }
-}
-
-/// La normale sinistra.
-const fn sinistra(u: Coord<f64>) -> Coord<f64> {
-    Coord { x: -u.y, y: u.x }
-}
-
-impl Pezzi {
-    fn nuovi(raggio: f64, freccia: f64) -> Result<Self, ErroreBuffer> {
-        // I rettangoli di due lati consecutivi si sovrappongono di `giunto`
-        // invece di toccarsi lungo un lato: un contatto quasi collineare
-        // farebbe agganciare `i_overlay` a raggi crescenti e lascerebbe
-        // schegge. La parte in piu' dista dal vertice al piu' `sqrt(r^2 +
-        // giunto^2)`, cioe' oltre `r` di `giunto^2 / (2r)`: un centesimo
-        // della freccia.
-        let giunto = (2.0 * raggio * freccia * 0.01).sqrt();
-        let lati =
-            lati_per_cerchio(raggio, freccia).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
-        #[allow(clippy::cast_precision_loss)]
-        let passo = TAU / lati as f64;
-        Ok(Self {
-            raggio,
-            giunto,
-            lato: Lato::Entrambi,
-            passo,
-            lati,
-            prodotti: Vec::new(),
-            vertici: 0,
-        })
-    }
-
-    fn aggiungi(&mut self, anello: Vec<Coord<f64>>) -> Result<(), ErroreBuffer> {
-        let vertici = u64::try_from(anello.len()).unwrap_or(u64::MAX);
-        self.vertici = self.vertici.saturating_add(vertici);
-        if self.vertici > MAX_VERTICI_BUFFER {
-            return Err(ErroreBuffer::TroppiVertici {
-                actual: self.vertici,
-                limit: MAX_VERTICI_BUFFER,
-            });
-        }
-        let polygon = Polygon::new(LineString::new(anello), Vec::new()).orient(Direction::Default);
-        self.prodotti.push(MultiPolygon::new(vec![polygon]));
-        Ok(())
-    }
-
-    fn disco(&mut self, centro: Coord<f64>) -> Result<(), ErroreBuffer> {
-        let lati = self.lati;
-        let mut anello = Vec::with_capacity(usize::try_from(lati).unwrap_or(0) + 1);
-        for indice in 0..lati {
-            #[allow(clippy::cast_precision_loss)]
-            let angolo = TAU * indice as f64 / lati as f64;
-            anello.push(Coord {
-                x: self.raggio.mul_add(angolo.cos(), centro.x),
-                y: self.raggio.mul_add(angolo.sin(), centro.y),
-            });
-        }
-        self.aggiungi(anello)
-    }
-
-    fn quadrato(&mut self, centro: Coord<f64>) -> Result<(), ErroreBuffer> {
-        let r = self.raggio;
-        self.aggiungi(vec![
-            Coord {
-                x: centro.x - r,
-                y: centro.y - r,
-            },
-            Coord {
-                x: centro.x + r,
-                y: centro.y - r,
-            },
-            Coord {
-                x: centro.x + r,
-                y: centro.y + r,
-            },
-            Coord {
-                x: centro.x - r,
-                y: centro.y + r,
-            },
-        ])
-    }
-
-    /// Il rettangolo attorno al lato `a -> b` (direzione `u`), allungato
-    /// delle lunghezze date all'inizio e alla fine.
-    fn rettangolo(
-        &mut self,
-        da: Coord<f64>,
-        verso: Coord<f64>,
-        u: Coord<f64>,
-        allunga_inizio: f64,
-        allunga_fine: f64,
-    ) -> Result<(), ErroreBuffer> {
-        let raggio = self.raggio;
-        let inizio = somma(da, u, -allunga_inizio);
-        let fine = somma(verso, u, allunga_fine);
-        let normale = sinistra(u);
-        match self.lato {
-            Lato::Entrambi => self.aggiungi(vec![
-                somma(inizio, normale, -raggio),
-                somma(fine, normale, -raggio),
-                somma(fine, normale, raggio),
-                somma(inizio, normale, raggio),
-            ]),
-            // Le meta' entrano di `giunto` dall'altra parte del lato: il loro
-            // bordo interno attraversa gli altri pezzi invece di coincidere
-            // con il lato dell'anello (schegge, vedi `giunto`); la parte in
-            // piu' sta entro `giunto < r` dal lato, quindi nel buffer (o,
-            // per l'erosione, fuori dal poligono).
-            Lato::Destra => self.aggiungi(vec![
-                somma(inizio, normale, self.giunto),
-                somma(inizio, normale, -raggio),
-                somma(fine, normale, -raggio),
-                somma(fine, normale, self.giunto),
-            ]),
-            Lato::Sinistra => self.aggiungi(vec![
-                somma(inizio, normale, -self.giunto),
-                somma(fine, normale, -self.giunto),
-                somma(fine, normale, raggio),
-                somma(inizio, normale, raggio),
-            ]),
-        }
-    }
-
-    /// Il settore di centro `v` fra i punti `v + r n0` e `v + r n1`,
-    /// ruotando di `delta` radianti (con segno) da `n0`. Gli estremi
-    /// dell'arco sono gli stessi `f64` degli angoli dei rettangoli.
-    fn settore(
-        &mut self,
-        v: Coord<f64>,
-        n0: Coord<f64>,
-        n1: Coord<f64>,
-        delta: f64,
-    ) -> Result<(), ErroreBuffer> {
-        let r = self.raggio;
-        let passi = (delta.abs() / self.passo).ceil().max(1.0);
-        let inizio = n0.y.atan2(n0.x);
-        // Il vertice interno del settore e' arretrato di `r / 2` dalla parte
-        // opposta al cono: i lati del settore attraversano i rettangoli
-        // invece di coincidere con i loro lati (vedi `giunto`). Il poligono
-        // resta nel disco di centro `v`, quindi nel buffer.
-        let medio = 0.5_f64.mul_add(delta, inizio);
-        let arretrato = Coord {
-            x: (-0.5 * r).mul_add(medio.cos(), v.x),
-            y: (-0.5 * r).mul_add(medio.sin(), v.y),
-        };
-        let mut anello = vec![arretrato, somma(v, n0, r)];
-        // `passi` e' un intero piccolo e positivo: conversione esatta.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let conteggio = passi as u64;
-        for indice in 1..conteggio {
-            #[allow(clippy::cast_precision_loss)]
-            let angolo = delta.mul_add(indice as f64 / passi, inizio);
-            anello.push(Coord {
-                x: r.mul_add(angolo.cos(), v.x),
-                y: r.mul_add(angolo.sin(), v.y),
-            });
-        }
-        anello.push(somma(v, n1, r));
-        self.aggiungi(anello)
-    }
-
-    /// Il pezzo di vertice fra un lato entrante (direzione `u`) e uno
-    /// uscente (`w`): il settore del cono normale, cioe' delle direzioni `e`
-    /// con `e . u >= 0` e `e . w <= 0`, sul lato convesso della svolta.
-    ///
-    /// Basta: un punto a distanza al piu' `r` dalla spezzata ha un punto
-    /// piu' vicino; se e' interno a un lato il punto sta nel rettangolo del
-    /// lato, se e' un vertice sta nel cono normale di quel vertice. Nessun
-    /// disco intero, qualunque sia la lunghezza dei lati.
-    fn vertice(&mut self, v: Coord<f64>, u: Coord<f64>, w: Coord<f64>) -> Result<(), ErroreBuffer> {
-        let prodotto = u.x.mul_add(w.y, -(u.y * w.x));
-        let scalare = u.x.mul_add(w.x, u.y * w.y);
-        let (n0, n1) = (sinistra(u), sinistra(w));
-        if prodotto == 0.0 {
-            if scalare > 0.0 {
-                // Lati allineati nello stesso verso: i rettangoli combaciano.
-                return Ok(());
-            }
-            // Inversione: il mezzo disco davanti a `u`.
-            return self.settore(v, n0, opposto(n0), -PI);
-        }
-        let delta = prodotto.atan2(scalare);
-        if delta > 0.0 {
-            // Svolta a sinistra: il cono e' a destra.
-            if self.lato == Lato::Sinistra {
-                return Ok(());
-            }
-            self.settore(v, opposto(n0), opposto(n1), delta)
-        } else {
-            if self.lato == Lato::Destra {
-                return Ok(());
-            }
-            self.settore(v, n0, n1, delta)
-        }
-    }
-
-    /// Una spezzata (anello chiuso o linea aperta).
-    fn spezzata(
-        &mut self,
-        coordinate: &[Coord<f64>],
-        chiusa: bool,
-        estremita: Estremita,
-    ) -> Result<(), ErroreBuffer> {
-        let mut punti: Vec<Coord<f64>> = Vec::with_capacity(coordinate.len());
-        for c in coordinate {
-            if punti.last() != Some(c) {
-                punti.push(*c);
-            }
-        }
-        if chiusa && punti.len() > 1 && punti.first() == punti.last() {
-            punti.pop();
-        }
-        match punti.len() {
-            0 => return Ok(()),
-            1 => return self.punto(punti[0], estremita),
-            _ => {}
-        }
-        let lati = if chiusa { punti.len() } else { punti.len() - 1 };
-        let mut direzioni = Vec::with_capacity(lati);
-        let mut estensioni = Vec::with_capacity(lati);
-        for indice in 0..lati {
-            let a = punti[indice];
-            let b = punti[(indice + 1) % punti.len()];
-            let (u, misura) = direzione(a, b).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
-            direzioni.push(u);
-            estensioni.push(misura);
-        }
-        let quadrate = !chiusa && estremita == Estremita::Quadrate;
-        // Agli estremi liberi: `r` con estremita' quadrate, niente
-        // altrimenti; ai giunti la sovrapposizione `giunto`, ma al piu' meta'
-        // del lato vicino: il prolungamento resta sul lato vicino e non
-        // oltrepassa l'estremo libero di una linea corta (revisione: con
-        // estremita' piatte `(0 0, 1 0, 2 0)` a 1000 m il prolungamento di
-        // 4,47 m usciva di 3,47 m oltre gli estremi).
-        let libero = if quadrate { self.raggio } else { 0.0 };
-        for (indice, &u) in direzioni.iter().enumerate() {
-            let a = punti[indice];
-            let b = punti[(indice + 1) % punti.len()];
-            let precedente = estensioni[(indice + lati - 1) % lati];
-            let seguente = estensioni[(indice + 1) % lati];
-            let inizio = if chiusa || indice > 0 {
-                self.giunto.min(0.5 * precedente)
-            } else {
-                libero
-            };
-            let fine = if chiusa || indice + 1 < lati {
-                self.giunto.min(0.5 * seguente)
-            } else {
-                libero
-            };
-            self.rettangolo(a, b, u, inizio, fine)?;
-        }
-        if chiusa {
-            for indice in 0..lati {
-                let entrante = direzioni[(indice + lati - 1) % lati];
-                self.vertice(punti[indice], entrante, direzioni[indice])?;
-            }
-        } else {
-            for indice in 1..lati {
-                self.vertice(punti[indice], direzioni[indice - 1], direzioni[indice])?;
-            }
-            if estremita == Estremita::Tonde {
-                // I mezzi dischi dietro l'inizio e davanti alla fine.
-                let n = sinistra(direzioni[0]);
-                self.settore(punti[0], n, opposto(n), PI)?;
-                let n = sinistra(direzioni[lati - 1]);
-                self.settore(punti[punti.len() - 1], opposto(n), n, PI)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn punto(&mut self, c: Coord<f64>, estremita: Estremita) -> Result<(), ErroreBuffer> {
-        match estremita {
-            Estremita::Tonde => self.disco(c),
-            Estremita::Quadrate => self.quadrato(c),
-            Estremita::Piatte => Ok(()),
-        }
-    }
-
-    /// I pezzi degli anelli di un poligono orientato, dal lato `lato`.
-    fn anelli(&mut self, polygon: &Polygon<f64>, lato: Lato) -> Result<(), ErroreBuffer> {
-        self.lato = lato;
-        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
-            self.spezzata(&ring.0, true, Estremita::Tonde)?;
-        }
-        self.lato = Lato::Entrambi;
-        Ok(())
-    }
-
-    /// I pezzi di tutta la linework e dei punti di `geometry`; le parti
-    /// areali in `areali`.
-    fn geometria(
-        &mut self,
-        geometry: &Geometry<f64>,
-        estremita: Estremita,
-        areali: &mut Vec<MultiPolygon<f64>>,
-    ) -> Result<(), ErroreBuffer> {
-        match geometry {
-            Geometry::Point(point) => self.punto(point.0, estremita),
-            Geometry::MultiPoint(points) => {
-                for point in points {
-                    self.punto(point.0, estremita)?;
-                }
-                Ok(())
-            }
-            Geometry::Line(line) => self.spezzata(&[line.start, line.end], false, estremita),
-            Geometry::LineString(line) => self.spezzata(&line.0, false, estremita),
-            Geometry::MultiLineString(lines) => {
-                for line in lines {
-                    self.spezzata(&line.0, false, estremita)?;
-                }
-                Ok(())
-            }
-            Geometry::GeometryCollection(collection) => {
-                for child in collection {
-                    self.geometria(child, estremita, areali)?;
-                }
-                Ok(())
-            }
-            altro => {
-                if let Some(polygons) = areale_di(altro) {
-                    for polygon in &polygons {
-                        self.anelli(polygon, Lato::Destra)?;
-                    }
-                    areali.push(polygons);
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-/// Le parti areali di una geometria areale, orientate (anello esterno
-/// antiorario): `unary_union` sceglie la regola di riempimento dal verso
-/// del primo anello.
+/// Le parti areali di una geometria areale, orientate.
 fn areale_di(geometry: &Geometry<f64>) -> Option<MultiPolygon<f64>> {
     let polygons = match geometry {
         Geometry::Polygon(polygon) => MultiPolygon::new(vec![polygon.clone()]),
@@ -555,7 +227,83 @@ fn areali(geometry: &Geometry<f64>, out: &mut Vec<MultiPolygon<f64>>) {
     }
 }
 
-/// L'unione controllata degli operandi (regola dell'unione).
+/// L'ingresso con le componenti sotto la griglia `g` sostituite (vedi il
+/// modulo): una linea corta dal suo primo punto, un poligono minuscolo o
+/// sottile dal suo anello esterno.
+fn senza_componenti_sotto_griglia(geometry: &Geometry<f64>, g: f64) -> Geometry<f64> {
+    let corta = |coordinate: &[Coord<f64>]| {
+        griglia::rettangolo_coordinate(coordinate.iter().copied())
+            .is_some_and(|rect| rect.width().max(rect.height()) <= 2.0 * g)
+    };
+    let da_linea = |line: &LineString<f64>| -> Geometry<f64> {
+        match line.0.first() {
+            Some(primo) if corta(&line.0) => Geometry::Point(Point(*primo)),
+            _ => Geometry::LineString(line.clone()),
+        }
+    };
+    let sottile = |polygon: &Polygon<f64>| {
+        polygon.unsigned_area() <= 4.0 * g * g
+            || polygon
+                .bounding_rect()
+                .is_some_and(|rect| rect.width().min(rect.height()) <= 2.0 * g)
+    };
+    match geometry {
+        Geometry::Line(line) => da_linea(&LineString::new(vec![line.start, line.end])),
+        Geometry::LineString(line) => da_linea(line),
+        Geometry::MultiLineString(lines) => {
+            let parti: Vec<Geometry<f64>> = lines.iter().map(da_linea).collect();
+            if parti.iter().all(|p| matches!(p, Geometry::LineString(_))) {
+                geometry.clone()
+            } else {
+                Geometry::GeometryCollection(parti.into())
+            }
+        }
+        Geometry::Polygon(polygon) if sottile(polygon) => da_linea(polygon.exterior()),
+        Geometry::MultiPolygon(polygons) if polygons.iter().any(sottile) => {
+            let mut parti: Vec<Geometry<f64>> = Vec::new();
+            let mut pieni = Vec::new();
+            for polygon in polygons {
+                if sottile(polygon) {
+                    parti.push(da_linea(polygon.exterior()));
+                } else {
+                    pieni.push(polygon.clone());
+                }
+            }
+            if !pieni.is_empty() {
+                parti.push(Geometry::MultiPolygon(MultiPolygon::new(pieni)));
+            }
+            Geometry::GeometryCollection(parti.into())
+        }
+        Geometry::GeometryCollection(collection) => Geometry::GeometryCollection(
+            collection
+                .iter()
+                .map(|child| senza_componenti_sotto_griglia(child, g))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Il buffer e' vuoto per definizione, senza calcolo: distanza negativa
+/// senza parti areali, o soli punti con estremita' piatte (come `geo`).
+fn nulla_da_bufferizzare(geometry: &Geometry<f64>, distance: f64, estremita: Estremita) -> bool {
+    fn soli_punti(geometry: &Geometry<f64>) -> bool {
+        match geometry {
+            Geometry::Point(_) | Geometry::MultiPoint(_) => true,
+            Geometry::GeometryCollection(collection) => collection.iter().all(soli_punti),
+            _ => false,
+        }
+    }
+    if distance < 0.0 {
+        let mut parti = Vec::new();
+        areali(geometry, &mut parti);
+        return parti.is_empty();
+    }
+    estremita == Estremita::Piatte && soli_punti(geometry)
+}
+
+/// L'unione controllata delle parti areali (buffer a distanza nulla).
 fn unione(
     operandi: &[MultiPolygon<f64>],
     precision: Precision,
@@ -567,36 +315,6 @@ fn unione(
     let risultato = protetto(|| unary_union(operandi))?;
     let controllo = Operandi::nuovi(operandi.iter().collect())?;
     controllo.verifica(&risultato, |_| true, None, Regola::Unione, precision)?;
-    Ok(risultato)
-}
-
-/// L'erosione controllata di una parte areale: la parte meno l'unione dei
-/// pezzi dei suoi anelli.
-fn erosione(
-    parte: &MultiPolygon<f64>,
-    raggio: f64,
-    freccia: f64,
-    precision: Precision,
-) -> Result<MultiPolygon<f64>, ErroreBuffer> {
-    let mut pezzi = Pezzi::nuovi(raggio, freccia)?;
-    protetto(|| -> Result<(), ErroreBuffer> {
-        for polygon in parte {
-            pezzi.anelli(polygon, Lato::Sinistra)?;
-        }
-        Ok(())
-    })??;
-    let mut operandi = vec![parte.clone()];
-    operandi.append(&mut pezzi.prodotti);
-    griglia::controlla_overlay(griglia::rettangolo_multipoligoni(&operandi), precision)?;
-    let risultato = protetto(|| parte.difference(&unary_union(&operandi[1..])))?;
-    let controllo = Operandi::nuovi(operandi.iter().collect())?;
-    controllo.verifica(
-        &risultato,
-        |_| true,
-        parte.bounding_rect(),
-        Regola::Differenza(0),
-        precision,
-    )?;
     Ok(risultato)
 }
 
@@ -641,27 +359,52 @@ impl rstar::RTreeObject for FormaIndicizzata {
     }
 }
 
-/// La definizione esatta del buffer di raggio `r`, **indipendente dai
-/// pezzi costruiti**: l'unione dei rettangoli dei lati (allungati di `r`
-/// agli estremi liberi con estremita' quadrate), dei settori dei coni
-/// normali ai vertici interni (giunzioni tonde), dei dischi (tonde) o quadrati (quadrate) agli
-/// estremi liberi e ai punti, e delle parti areali. Serve al controllo a
-/// posteriori contro la definizione ([`verifica_contro_la_definizione`]).
+/// La definizione esatta del buffer di raggio `raggio` (vedi il modulo),
+/// **indipendente da cio' che il calcolo ha prodotto**, su un indice
+/// `rstar`; le parti areali su indici dei loro anelli (parita').
+///
+/// `rientro` accorcia di tanto i rettangoli agli estremi liberi con
+/// estremita' piatte: serve alla definizione ristretta (i vertici
+/// dell'uscita non devono affondarvi).
 struct Definizione {
     raggio: f64,
     albero: rstar::RTree<FormaIndicizzata>,
-    areali: Vec<MultiPolygon<f64>>,
+    areali: Vec<IndiceLinework>,
+}
+
+/// Una spezzata senza vertici ripetuti (e senza la chiusura, se chiusa).
+fn vertici_distinti(coordinate: &[Coord<f64>], chiusa: bool) -> Vec<Coord<f64>> {
+    let mut punti: Vec<Coord<f64>> = Vec::with_capacity(coordinate.len());
+    for c in coordinate {
+        if punti.last() != Some(c) {
+            punti.push(*c);
+        }
+    }
+    if chiusa && punti.len() > 1 && punti.first() == punti.last() {
+        punti.pop();
+    }
+    punti
 }
 
 impl Definizione {
-    fn nuova(geometry: &Geometry<f64>, raggio: f64, estremita: Estremita) -> Self {
+    fn nuova(geometry: &Geometry<f64>, raggio: f64, estremita: Estremita, rientro: f64) -> Self {
         let mut forme = Vec::new();
         let mut areali = Vec::new();
-        Self::raccogli(geometry, raggio, estremita, &mut forme, &mut areali);
+        Self::raccogli(
+            geometry,
+            raggio,
+            estremita,
+            rientro,
+            &mut forme,
+            &mut areali,
+        );
         Self {
             raggio,
             albero: rstar::RTree::bulk_load(forme),
-            areali,
+            areali: areali
+                .iter()
+                .map(|parte| IndiceLinework::da_multipoligoni([(0, parte)]))
+                .collect(),
         }
     }
 
@@ -695,6 +438,7 @@ impl Definizione {
         geometry: &Geometry<f64>,
         raggio: f64,
         estremita: Estremita,
+        rientro: f64,
         forme: &mut Vec<FormaIndicizzata>,
         areali: &mut Vec<MultiPolygon<f64>>,
     ) {
@@ -706,18 +450,8 @@ impl Definizione {
         let spezzata = |coordinate: &[Coord<f64>],
                         chiusa: bool,
                         forme: &mut Vec<FormaIndicizzata>| {
-            let mut punti: Vec<Coord<f64>> = Vec::new();
-            for c in coordinate {
-                if punti.last() != Some(c) {
-                    punti.push(*c);
-                }
-            }
-            if chiusa && punti.len() > 1 && punti.first() == punti.last() {
-                punti.pop();
-            }
+            let punti = vertici_distinti(coordinate, chiusa);
             if punti.len() == 1 {
-                // Chiusa o no, un solo punto: come un punto (anelli
-                // degeneri non arrivano, l'ingresso e' validato).
                 forma_del_punto(punti[0], forme);
                 return;
             }
@@ -726,14 +460,18 @@ impl Definizione {
             } else {
                 punti.len().saturating_sub(1)
             };
-            let quadrate = !chiusa && estremita == Estremita::Quadrate;
+            let libero = match estremita {
+                Estremita::Quadrate => raggio,
+                Estremita::Piatte => -rientro,
+                Estremita::Tonde => 0.0,
+            };
             for indice in 0..lati {
                 let a = punti[indice];
                 let b = punti[(indice + 1) % punti.len()];
                 if let Some((u, l)) = direzione(a, b) {
-                    let prima = if quadrate && indice == 0 { raggio } else { 0.0 };
-                    let dopo = if quadrate && indice + 1 == lati {
-                        raggio
+                    let prima = if !chiusa && indice == 0 { libero } else { 0.0 };
+                    let dopo = if !chiusa && indice + 1 == lati {
+                        libero
                     } else {
                         0.0
                     };
@@ -781,7 +519,7 @@ impl Definizione {
             }
             Geometry::GeometryCollection(collection) => {
                 for child in collection {
-                    Self::raccogli(child, raggio, estremita, forme, areali);
+                    Self::raccogli(child, raggio, estremita, rientro, forme, areali);
                 }
             }
             altro => {
@@ -797,16 +535,123 @@ impl Definizione {
         }
     }
 
-    /// Il punto sta nella definizione allargata di `tolleranza`?
+    /// Il tratto `t` in `[0, 1]` del lato `s + t w` dentro la forma
+    /// allargata di `tolleranza` (una forma e' convessa: la traccia e' un
+    /// intervallo).
+    fn traccia(
+        forma: Forma,
+        raggio: f64,
+        lato: geo::Line<f64>,
+        tolleranza: f64,
+    ) -> Option<(f64, f64)> {
+        use griglia::{dentro_disco, entro_lineare};
+        let s = lato.start;
+        let wx = lato.end.x - s.x;
+        let wy = lato.end.y - s.y;
+        let r = raggio + tolleranza;
+        let interseca = |a: Option<(f64, f64)>, b: Option<(f64, f64)>| match (a, b) {
+            (Some((a0, a1)), Some((b0, b1))) => {
+                let (t0, t1) = (a0.max(b0), a1.min(b1));
+                (t0 <= t1).then_some((t0, t1))
+            }
+            _ => None,
+        };
+        match forma {
+            Forma::Rettangolo {
+                a,
+                u,
+                l,
+                prima,
+                dopo,
+            } => {
+                let dx = s.x - a.x;
+                let dy = s.y - a.y;
+                let lungo = entro_lineare(
+                    dx.mul_add(u.x, dy * u.y),
+                    wx.mul_add(u.x, wy * u.y),
+                    -prima - tolleranza,
+                    l + dopo + tolleranza,
+                );
+                let traverso = entro_lineare(
+                    (-dx).mul_add(u.y, dy * u.x),
+                    (-wx).mul_add(u.y, wy * u.x),
+                    -r,
+                    r,
+                );
+                interseca(lungo, traverso)
+            }
+            Forma::Disco(c) => dentro_disco(s.x - c.x, s.y - c.y, wx, wy, r),
+            Forma::Quadrato(c) => interseca(
+                entro_lineare(s.x - c.x, wx, -r, r),
+                entro_lineare(s.y - c.y, wy, -r, r),
+            ),
+            Forma::Giunto { c, u, w } => {
+                let ex = s.x - c.x;
+                let ey = s.y - c.y;
+                let disco = dentro_disco(ex, ey, wx, wy, r);
+                let davanti = entro_lineare(
+                    ex.mul_add(u.x, ey * u.y),
+                    wx.mul_add(u.x, wy * u.y),
+                    -tolleranza,
+                    f64::INFINITY,
+                );
+                let dietro = entro_lineare(
+                    ex.mul_add(w.x, ey * w.y),
+                    wx.mul_add(w.x, wy * w.y),
+                    f64::NEG_INFINITY,
+                    tolleranza,
+                );
+                interseca(interseca(disco, davanti), dietro)
+            }
+        }
+    }
+
+    /// Il lato sta per intero nella definizione allargata di `tolleranza`
+    /// (parti areali escluse: un lato dell'uscita non le attraversa)?
+    fn copre_lato(&self, lato: geo::Line<f64>, tolleranza: f64) -> bool {
+        let busta = rstar::AABB::from_corners(
+            [
+                lato.start.x.min(lato.end.x) - tolleranza,
+                lato.start.y.min(lato.end.y) - tolleranza,
+            ],
+            [
+                lato.start.x.max(lato.end.x) + tolleranza,
+                lato.start.y.max(lato.end.y) + tolleranza,
+            ],
+        );
+        let mut intervalli: Vec<(f64, f64)> = self
+            .albero
+            .locate_in_envelope_intersecting(&busta)
+            .filter_map(|indicizzata| {
+                Self::traccia(indicizzata.forma, self.raggio, lato, tolleranza)
+            })
+            .map(|(t0, t1)| (t0.max(0.0), t1.min(1.0)))
+            .filter(|(t0, t1)| t0 <= t1)
+            .collect();
+        griglia::ricopre(&mut intervalli)
+    }
+
+    /// Il lato tocca la definizione (ristretta di `margine`)?
+    fn tocca_lato(&self, lato: geo::Line<f64>, margine: f64) -> bool {
+        let busta = rstar::AABB::from_corners(
+            [lato.start.x.min(lato.end.x), lato.start.y.min(lato.end.y)],
+            [lato.start.x.max(lato.end.x), lato.start.y.max(lato.end.y)],
+        );
+        self.albero
+            .locate_in_envelope_intersecting(&busta)
+            .filter_map(|indicizzata| Self::traccia(indicizzata.forma, self.raggio, lato, -margine))
+            .any(|(t0, t1)| t0.max(0.0) <= t1.min(1.0))
+    }
+
+    /// Il punto sta nella definizione allargata di `tolleranza` (negativa:
+    /// ristretta)?
     fn contiene(&self, v: Coord<f64>, tolleranza: f64) -> bool {
-        use geo::Contains as _;
         let r = self.raggio + tolleranza;
         let busta = rstar::AABB::from_corners(
-            [v.x - tolleranza, v.y - tolleranza],
-            [v.x + tolleranza, v.y + tolleranza],
+            [v.x - tolleranza.abs(), v.y - tolleranza.abs()],
+            [v.x + tolleranza.abs(), v.y + tolleranza.abs()],
         );
-        let dentro_forma = self
-            .albero
+        self.albero
             .locate_in_envelope_intersecting(&busta)
             .any(|indicizzata| match indicizzata.forma {
                 Forma::Rettangolo {
@@ -831,24 +676,138 @@ impl Definizione {
                         && ex.mul_add(w.x, ey * w.y) <= tolleranza
                 }
                 Forma::Quadrato(c) => (v.x - c.x).abs() <= r && (v.y - c.y).abs() <= r,
-            });
-        dentro_forma
-            || self
-                .areali
-                .iter()
-                .any(|parte| parte.contains(&geo::Point::from(v)))
+            })
+            || self.areali.iter().any(|parte| parte.dentro(v))
     }
 }
 
-/// Il controllo a posteriori contro la **definizione** del buffer, non
-/// contro i pezzi costruiti (un pezzo sbagliato passerebbe il confronto con
-/// se' stesso): con `d > 0` ogni vertice dell'uscita sta nella definizione
-/// di raggio `d` allargata della tolleranza; con `d < 0` ogni vertice sta
-/// in una parte areale e fuori dalla fascia di raggio `|d| - f - tolleranza`
-/// attorno ai suoi anelli (gli archi inscritti allargano l'erosione di al
-/// piu' la freccia `f`). La tolleranza e' `p / 2` (la griglia) piu' un
-/// centesimo della freccia (i giunti, vedi `Pezzi::nuovi`) piu' un margine
-/// d'arrotondamento.
+/// I punti campione ben dentro la definizione di raggio `raggio` con
+/// `d > 0` (vedi il modulo): ai due lati del punto medio di ogni lato,
+/// lungo la bisettrice del cono di ogni giunto, davanti agli estremi tondi,
+/// attorno ai punti. Con estremita' piatte i lati estremi piu' corti di
+/// `2 rientro` non danno campioni (il campione cadrebbe vicino al bordo
+/// dell'estremita').
+fn campioni(
+    geometry: &Geometry<f64>,
+    raggio: f64,
+    estremita: Estremita,
+    rientro: f64,
+    out: &mut Vec<Coord<f64>>,
+) {
+    let attorno = |c: Coord<f64>, out: &mut Vec<Coord<f64>>| {
+        if estremita != Estremita::Piatte {
+            for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                out.push(Coord {
+                    x: raggio.mul_add(dx, c.x),
+                    y: raggio.mul_add(dy, c.y),
+                });
+            }
+        }
+    };
+    let spezzata = |coordinate: &[Coord<f64>], chiusa: bool, out: &mut Vec<Coord<f64>>| {
+        let punti = vertici_distinti(coordinate, chiusa);
+        if punti.len() == 1 {
+            attorno(punti[0], out);
+            return;
+        }
+        let lati = if chiusa {
+            punti.len()
+        } else {
+            punti.len().saturating_sub(1)
+        };
+        let mut direzioni = Vec::with_capacity(lati);
+        for indice in 0..lati {
+            let inizio = punti[indice];
+            let fine = punti[(indice + 1) % punti.len()];
+            let Some((u, lunghezza)) = direzione(inizio, fine) else {
+                continue;
+            };
+            direzioni.push(Some(u));
+            let estremo = !chiusa && (indice == 0 || indice + 1 == lati);
+            if estremo && estremita == Estremita::Piatte && lunghezza < 2.0 * rientro {
+                continue;
+            }
+            let medio = Coord {
+                x: f64::midpoint(inizio.x, fine.x),
+                y: f64::midpoint(inizio.y, fine.y),
+            };
+            let n = sinistra(u);
+            out.push(somma(medio, n, raggio));
+            out.push(somma(medio, n, -raggio));
+        }
+        if direzioni.len() != lati {
+            return;
+        }
+        let direzioni: Vec<Coord<f64>> = direzioni.into_iter().flatten().collect();
+        let giunti = if chiusa { 0..lati } else { 1..lati };
+        for indice in giunti {
+            let u = direzioni[(indice + lati - 1) % lati];
+            let w = direzioni[indice % lati];
+            let bisettrice = Coord {
+                x: u.x - w.x,
+                y: u.y - w.y,
+            };
+            let norma = bisettrice.x.hypot(bisettrice.y);
+            if norma > 1e-6 {
+                out.push(somma(punti[indice], bisettrice, raggio / norma));
+            }
+        }
+        if !chiusa && estremita == Estremita::Tonde {
+            out.push(somma(punti[0], direzioni[0], -raggio));
+            out.push(somma(punti[punti.len() - 1], direzioni[lati - 1], raggio));
+        }
+    };
+    match geometry {
+        Geometry::Point(p) => attorno(p.0, out),
+        Geometry::MultiPoint(points) => {
+            for p in points {
+                attorno(p.0, out);
+            }
+        }
+        Geometry::Line(line) => spezzata(&[line.start, line.end], false, out),
+        Geometry::LineString(line) => spezzata(&line.0, false, out),
+        Geometry::MultiLineString(lines) => {
+            for line in lines {
+                spezzata(&line.0, false, out);
+            }
+        }
+        Geometry::GeometryCollection(collection) => {
+            for child in collection {
+                campioni(child, raggio, estremita, rientro, out);
+            }
+        }
+        altro => {
+            if let Some(polygons) = areale_di(altro) {
+                for polygon in &polygons {
+                    for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+                        spezzata(&ring.0, true, out);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Gli anelli di una parte areale come linee (per le fasce dell'erosione).
+fn anelli_di(parte: &MultiPolygon<f64>) -> Geometry<f64> {
+    Geometry::MultiLineString(MultiLineString::new(
+        parte
+            .iter()
+            .flat_map(|polygon| {
+                std::iter::once(polygon.exterior().clone())
+                    .chain(polygon.interiors().iter().cloned())
+            })
+            .collect(),
+    ))
+}
+
+/// Il controllo a posteriori contro la **definizione** del buffer (vedi il
+/// modulo): vertici dentro la definizione allargata, vertici non affondati
+/// nella definizione ristretta, campioni profondi dentro l'uscita. La
+/// tolleranza e' `p / 2` (la griglia) piu' un margine d'arrotondamento; la
+/// freccia `f` si aggiunge verso l'interno (gli archi sono inscritti).
+// Due rami (d > 0, d < 0) con tre prove ciascuno: lunghezza intrinseca.
+#[allow(clippy::too_many_lines)]
 fn verifica_contro_la_definizione(
     geometry: &Geometry<f64>,
     distance: f64,
@@ -857,46 +816,118 @@ fn verifica_contro_la_definizione(
     output: &MultiPolygon<f64>,
     precision: Precision,
 ) -> Result<(), ErroreBuffer> {
-    use geo::{Contains as _, CoordsIter as _};
-    let margine = |v: Coord<f64>| 64.0 * f64::EPSILON * (v.x.abs() + v.y.abs() + distance.abs());
-    let tolleranza = 0.01f64.mul_add(freccia, precision.value() * griglia::FRAZIONE_BORDO);
+    let d = distance.abs();
+    let margine = |v: Coord<f64>| 64.0 * f64::EPSILON * (v.x.abs() + v.y.abs() + d);
+    let tolleranza = precision.value() * griglia::FRAZIONE_BORDO;
+    let profondita = freccia + tolleranza;
     let esito = protetto(|| {
+        let uscita = IndiceLinework::da_multipoligoni([(0, output)]);
         if distance > 0.0 {
-            let definizione = Definizione::nuova(geometry, distance, estremita);
-            output
-                .coords_iter()
-                .all(|v| definizione.contiene(v, tolleranza + margine(v)))
+            let definizione = Definizione::nuova(geometry, d, estremita, 0.0);
+            let interno = d - profondita;
+            let ristretta = (interno > 0.0)
+                .then(|| Definizione::nuova(geometry, interno, estremita, profondita));
+            // Ogni lato per intero dentro la definizione allargata (le
+            // parti areali: un lato del buffer positivo non le attraversa;
+            // se l'ingresso e' solo areale, i vertici dentro la parte
+            // restano ammessi dal controllo dei vertici qui sotto).
+            let lati_ok = output.iter().all(|polygon| {
+                std::iter::once(polygon.exterior())
+                    .chain(polygon.interiors())
+                    .all(|ring| {
+                        ring.lines().all(|lato| {
+                            definizione.copre_lato(lato, tolleranza + margine(lato.start))
+                        })
+                    })
+            });
+            let vertici_ok = lati_ok
+                && output.coords_iter().all(|v| {
+                    ristretta
+                        .as_ref()
+                        .is_none_or(|ristretta| !ristretta.contiene(v, -margine(v)))
+                });
+            if !vertici_ok {
+                return false;
+            }
+            if interno <= 0.0 {
+                return true;
+            }
+            let mut punti = Vec::new();
+            campioni(geometry, interno, estremita, profondita, &mut punti);
+            punti.into_iter().all(|q| uscita.dentro(q))
         } else {
             let mut parti = Vec::new();
             areali(geometry, &mut parti);
-            let fasce: Vec<(MultiPolygon<f64>, Definizione, Definizione)> = parti
-                .into_iter()
+            let fasce: Vec<(IndiceLinework, Definizione, Definizione, Definizione)> = parti
+                .iter()
                 .map(|parte| {
-                    let anelli = Geometry::MultiLineString(geo::MultiLineString::new(
-                        parte
-                            .iter()
-                            .flat_map(|polygon| {
-                                std::iter::once(polygon.exterior().clone())
-                                    .chain(polygon.interiors().iter().cloned())
-                            })
-                            .collect(),
-                    ));
-                    let fascia = Definizione::nuova(
-                        &anelli,
-                        (-distance - freccia - tolleranza).max(0.0),
-                        Estremita::Tonde,
-                    );
-                    let bordo = Definizione::nuova(&anelli, 0.0, Estremita::Tonde);
-                    (parte, fascia, bordo)
+                    let anelli = anelli_di(parte);
+                    (
+                        IndiceLinework::da_multipoligoni([(0, parte)]),
+                        Definizione::nuova(&anelli, 0.0, Estremita::Tonde, 0.0),
+                        Definizione::nuova(
+                            &anelli,
+                            (d - profondita).max(0.0),
+                            Estremita::Tonde,
+                            0.0,
+                        ),
+                        Definizione::nuova(&anelli, d + tolleranza, Estremita::Tonde, 0.0),
+                    )
                 })
                 .collect();
-            output.coords_iter().all(|v| {
-                fasce.iter().any(|(parte, fascia, bordo)| {
-                    let dentro = parte.contains(&geo::Point::from(v))
-                        || bordo.contiene(v, tolleranza + margine(v));
-                    dentro && (fascia.raggio <= 0.0 || !fascia.contiene(v, -margine(v)))
+            // Ogni vertice dentro una parte e vicino al bordo esatto; ogni
+            // lato fuori dalla fascia stretta della parte (quindi non
+            // attraversa i suoi anelli).
+            let vertici_ok = output.coords_iter().all(|v| {
+                fasce.iter().any(|(parte, bordo, stretta, larga)| {
+                    let dentro = parte.dentro(v) || bordo.contiene(v, tolleranza + margine(v));
+                    dentro
+                        && (stretta.raggio <= 0.0 || !stretta.contiene(v, -margine(v)))
+                        && larga.contiene(v, margine(v))
                 })
-            })
+            }) && output.iter().all(|polygon| {
+                std::iter::once(polygon.exterior())
+                    .chain(polygon.interiors())
+                    .all(|ring| {
+                        ring.lines().all(|lato| {
+                            fasce.iter().any(|(parte, _, stretta, _)| {
+                                parte.dentro(lato.start)
+                                    && (stretta.raggio <= 0.0
+                                        || !stretta.tocca_lato(lato, margine(lato.start)))
+                            })
+                        })
+                    })
+            });
+            if !vertici_ok {
+                return false;
+            }
+            // Campioni profondi dell'erosione: dal punto medio di ogni lato,
+            // verso l'interno (a sinistra negli anelli orientati), a `|d| +
+            // 2 tolleranza`; contano quelli dentro la parte e fuori dalla
+            // fascia larga.
+            parti
+                .iter()
+                .zip(&fasce)
+                .all(|(parte, (indice, _, _, larga))| {
+                    parte.iter().all(|polygon| {
+                        std::iter::once(polygon.exterior())
+                            .chain(polygon.interiors())
+                            .all(|ring| {
+                                ring.lines().all(|lato| {
+                                    let Some((u, _)) = direzione(lato.start, lato.end) else {
+                                        return true;
+                                    };
+                                    let medio = Coord {
+                                        x: f64::midpoint(lato.start.x, lato.end.x),
+                                        y: f64::midpoint(lato.start.y, lato.end.y),
+                                    };
+                                    let q =
+                                        somma(medio, sinistra(u), 2.0f64.mul_add(tolleranza, d));
+                                    !indice.dentro(q) || larga.contiene(q, 0.0) || uscita.dentro(q)
+                                })
+                            })
+                    })
+                })
         }
     })?;
     if esito {
@@ -912,9 +943,9 @@ fn verifica_contro_la_definizione(
 ///
 /// # Errors
 ///
-/// [`ErroreBuffer::PrecisioneInsufficiente`] se la griglia o gli archi
-/// supererebbero la precisione o un controllo a posteriori fallisce;
-/// [`ErroreBuffer::TroppiVertici`] oltre [`MAX_VERTICI_BUFFER`].
+/// [`ErroreBuffer::PrecisioneInsufficiente`] se la griglia supererebbe la
+/// precisione o un controllo a posteriori fallisce;
+/// [`ErroreBuffer::CalcoloNonConcluso`] se `geo` va in panico.
 pub fn buffer_controllato(
     geometry: &Geometry<f64>,
     distance: f64,
@@ -947,44 +978,32 @@ pub fn buffer_con_freccia(
     if !distance.is_finite() {
         return Err(ErroreBuffer::PrecisioneInsufficiente);
     }
-    if distance > 0.0 {
-        let mut pezzi = Pezzi::nuovi(distance, freccia)?;
-        let mut operandi = Vec::new();
-        protetto(|| pezzi.geometria(geometry, estremita, &mut operandi))??;
-        operandi.append(&mut pezzi.prodotti);
-        let risultato = unione(&operandi, precision)?;
-        verifica_contro_la_definizione(
-            geometry, distance, estremita, freccia, &risultato, precision,
-        )?;
-        return Ok(risultato);
-    }
-    let mut parti = Vec::new();
-    protetto(|| areali(geometry, &mut parti))?;
     if distance == 0.0 {
+        let mut parti = Vec::new();
+        protetto(|| areali(geometry, &mut parti))?;
         return unione(&parti, precision);
     }
-    // Piu' parti: erosioni e unione finale si dividono il bilancio.
-    let (passo, freccia) = if parti.len() > 1 {
-        (
-            Precision::new(precision.value() * 0.5)
-                .map_err(|_| ErroreBuffer::PrecisioneInsufficiente)?,
-            freccia * 0.5,
-        )
-    } else {
-        (precision, freccia)
-    };
-    let mut erose = Vec::with_capacity(parti.len());
-    for parte in &parti {
-        let risultato = erosione(parte, -distance, freccia, passo)?;
-        if !risultato.0.is_empty() {
-            erose.push(protetto(|| risultato.orient(Direction::Default))?);
-        }
+    if nulla_da_bufferizzare(geometry, distance, estremita) {
+        return Ok(MultiPolygon::new(Vec::new()));
     }
-    let risultato = match erose.len() {
-        0 => MultiPolygon::new(Vec::new()),
-        1 => erose.remove(0),
-        _ => unione(&erose, passo)?,
+    let Some(ingombro) = ingombro_allargato(geometry, MARGINE_IN_DISTANZE * distance.abs()) else {
+        return Ok(MultiPolygon::new(Vec::new()));
     };
+    // Filtro grossolano: una griglia che da sola sposterebbe oltre `p` non
+    // si prova nemmeno. La garanzia e' il controllo a posteriori.
+    griglia::controlla_griglia(Some(ingombro), precision, FATTORE_BUFFER, precision.value())?;
+    let passo = griglia::passo_griglia(ingombro).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
+    let lavoro = senza_componenti_sotto_griglia(geometry, passo);
+    let angolo = angolo_degli_archi(distance, freccia);
+    let estremita_geo = match estremita {
+        Estremita::Tonde => LineCap::Round(angolo),
+        Estremita::Piatte => LineCap::Butt,
+        Estremita::Quadrate => LineCap::Square,
+    };
+    let stile = BufferStyle::new(distance)
+        .line_join(LineJoin::Round(angolo))
+        .line_cap(estremita_geo);
+    let risultato = protetto(|| lavoro.buffer_with_style(stile))?;
     verifica_contro_la_definizione(
         geometry, distance, estremita, freccia, &risultato, precision,
     )?;
@@ -994,34 +1013,35 @@ pub fn buffer_con_freccia(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{Area, CoordsIter, Point};
+    use geo::Area;
 
     fn centimetro() -> Precision {
         Precision::new(0.01).unwrap()
     }
 
-    /// Lati del cerchio per 1 cm (freccia 5 mm) a 1, 10, 100, 1000 m.
     #[test]
-    fn i_lati_dipendono_da_distanza_e_precisione() {
-        let lati: Vec<u64> = [1.0, 10.0, 100.0, 1000.0]
-            .iter()
-            .map(|d| lati_per_cerchio(*d, 0.005).unwrap())
-            .collect();
-        assert_eq!(lati, vec![32, 100, 315, 994]);
-        for (d, n) in [1.0, 10.0, 100.0, 1000.0].iter().zip(&lati) {
-            #[allow(clippy::cast_precision_loss)]
-            let freccia = d * (1.0 - (PI / *n as f64).cos());
-            assert!(freccia <= 0.005, "{d}: {freccia}");
+    fn la_freccia_e_mezzo_centimetro_o_lo_zero_virgola_uno_per_cento() {
+        assert!((freccia_degli_archi(1.0, centimetro()) - 0.005).abs() < 1e-15);
+        assert!((freccia_degli_archi(-5.0, centimetro()) - 0.005).abs() < 1e-15);
+        assert!((freccia_degli_archi(100.0, centimetro()) - 0.1).abs() < 1e-15);
+        // Il passo chiesto a `i_overlay`, nell'intervallo che accetta, e
+        // la freccia del passo effettivo (fino a 1,5 volte) entro la
+        // tolleranza per ogni distanza.
+        for d in [0.001, 0.1, 1.0, 5.0, 10.0, 100.0, 1000.0, 1e6] {
+            let f = freccia_degli_archi(d, centimetro());
+            let a = angolo_degli_archi(d, f);
+            assert!((ANGOLO_MINIMO..=ANGOLO_MASSIMO).contains(&a), "{d}");
+            let freccia_effettiva = d * (1.0 - (0.75 * a).cos());
+            assert!(
+                freccia_effettiva <= f * (1.0 + 1e-6),
+                "{d}: {freccia_effettiva} > {f}"
+            );
         }
-        assert_eq!(lati_per_cerchio(0.001, 0.005), Some(4));
-        assert_eq!(lati_per_cerchio(1e12, 0.005), None);
-        assert_eq!(lati_per_cerchio(f64::NAN, 0.005), None);
     }
 
     /// Il cerchio di un punto: fino a `|d| = 500 p` ogni punto del bordo
-    /// sta entro `p` dal cerchio vero (il cerchio di `geo` a 10 m, 32 lati,
-    /// aveva 4,8 cm di freccia); oltre, entro lo 0,1% della distanza piu' la
-    /// griglia (deviazione dichiarata).
+    /// sta entro `p` dal cerchio vero; oltre, entro lo 0,1% della distanza
+    /// piu' la griglia (deviazione dichiarata).
     #[test]
     fn il_cerchio_di_un_punto_sta_entro_la_freccia_dichiarata() {
         let centro = Coord {
@@ -1048,24 +1068,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn la_freccia_e_mezzo_centimetro_o_lo_zero_virgola_uno_per_cento() {
-        assert!((freccia_degli_archi(1.0, centimetro()) - 0.005).abs() < 1e-15);
-        assert!((freccia_degli_archi(-5.0, centimetro()) - 0.005).abs() < 1e-15);
-        assert!((freccia_degli_archi(100.0, centimetro()) - 0.1).abs() < 1e-15);
-        let lati: Vec<u64> = [1.0, 10.0, 100.0, 1000.0]
-            .iter()
-            .map(|d| lati_per_cerchio(*d, freccia_degli_archi(*d, centimetro())).unwrap())
-            .collect();
-        assert_eq!(lati, vec![32, 71, 71, 71]);
-    }
-
     /// Revisione: una componente che la griglia ridurrebbe a un punto (0,4
     /// mm accanto a una linea di 1.300 km) ha il suo buffer.
     #[test]
     fn la_componente_minuscola_ha_il_suo_buffer() {
         use geo::Contains as _;
-        let linee = Geometry::MultiLineString(geo::MultiLineString::new(vec![
+        let linee = Geometry::MultiLineString(MultiLineString::new(vec![
             LineString::from(vec![(0.0, 0.0), (1_300_000.0, 0.0)]),
             LineString::from(vec![(650_000.0, 9.0), (650_000.000_4, 9.0)]),
         ]));
@@ -1074,8 +1082,7 @@ mod tests {
         assert!(!buffer.contains(&Point::new(650_000.0, 19.1)));
     }
 
-    /// Revisione: il buffer negativo di una collezione considera solo le
-    /// parti areali (il punto non conta, come in `geo`).
+    /// Il buffer negativo di una collezione considera solo le parti areali.
     #[test]
     fn il_buffer_negativo_ignora_punti_e_linee() {
         let collezione = Geometry::GeometryCollection(
@@ -1091,8 +1098,6 @@ mod tests {
         assert!((buffer.unsigned_area() - 6400.0).abs() < 1e-6);
     }
 
-    /// Estremita' piatte e quadrate su una linea, e un punto con estremita'
-    /// piatte (nessun buffer, come in `geo`).
     #[test]
     fn estremita_come_in_geo() {
         let linea = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (2.0, 0.0)]));
@@ -1103,7 +1108,6 @@ mod tests {
         };
         assert!((area(Estremita::Piatte) - 4.0).abs() < 1e-9);
         assert!((area(Estremita::Quadrate) - 8.0).abs() < 1e-9);
-        // Freccia al piu' 5 mm per un perimetro di 2 pi.
         assert!((area(Estremita::Tonde) - (4.0 + PI)).abs() < 2.0 * PI * 0.005);
         let punto = Geometry::Point(Point::new(0.0, 0.0));
         assert!(
@@ -1114,8 +1118,6 @@ mod tests {
         );
     }
 
-    /// L'erosione di un quadrato di 100 m di 10 m e la chiusura (+10, -10):
-    /// gli angoli tornano entro la precisione.
     #[test]
     fn apertura_e_chiusura_entro_la_precisione() {
         let quadrato = Geometry::Polygon(geo::Rect::new((0.0, 0.0), (100.0, 100.0)).to_polygon());
@@ -1138,14 +1140,11 @@ mod tests {
         assert!((chiusa.unsigned_area() - 10_000.0).abs() < 400.0 * 0.01);
     }
 
-    /// Revisione (Codex, secondo giro): con estremita' piatte i giunti
-    /// prolungavano i rettangoli oltre gli estremi di una linea corta
-    /// (`(0 0, 1 0, 2 0)` a 1000 m: da -3,47 a 5,47 m in x invece di 0-2).
-    /// Ora i prolungamenti restano sul lato vicino, e il controllo contro la
-    /// definizione (non contro i pezzi) vede un'uscita che esce dalle
-    /// estremita'.
+    /// Revisione (Codex, secondo giro): con estremita' piatte l'uscita non
+    /// esce dagli estremi, e il controllo contro la definizione rifiuta
+    /// un'uscita che sporge.
     #[test]
-    fn le_estremita_piatte_non_si_allungano_ai_giunti() {
+    fn le_estremita_piatte_restano_agli_estremi() {
         let linea =
             Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]));
         for estremita in [Estremita::Piatte, Estremita::Quadrate] {
@@ -1162,39 +1161,64 @@ mod tests {
                 );
             }
         }
-        // Il controllo contro la definizione rifiuta un'uscita che sporge.
-        let sporgente = MultiPolygon::new(vec![geo::Rect::new(
-            Coord {
-                x: -3.0,
-                y: -1000.0,
-            },
-            Coord { x: 5.0, y: 1000.0 },
-        )
-        .to_polygon()]);
+        let rettangolo = |x0: f64, x1: f64| {
+            MultiPolygon::new(vec![geo::Rect::new(
+                Coord { x: x0, y: -1000.0 },
+                Coord { x: x1, y: 1000.0 },
+            )
+            .to_polygon()])
+        };
         assert_eq!(
             verifica_contro_la_definizione(
                 &linea,
                 1000.0,
                 Estremita::Piatte,
                 1.0,
-                &sporgente,
+                &rettangolo(-3.0, 5.0),
                 centimetro()
             ),
             Err(ErroreBuffer::PrecisioneInsufficiente)
         );
-        let giusta = MultiPolygon::new(vec![geo::Rect::new(
-            Coord { x: 0.0, y: -1000.0 },
-            Coord { x: 2.0, y: 1000.0 },
-        )
-        .to_polygon()]);
         assert!(verifica_contro_la_definizione(
             &linea,
             1000.0,
             Estremita::Piatte,
             1.0,
-            &giusta,
+            &rettangolo(0.0, 2.0),
             centimetro()
         )
         .is_ok());
+    }
+
+    /// Revisione (Codex, terzo giro): un lato dell'uscita fuori dal buffer
+    /// con i vertici dentro (qui attraverso il vuoto fra due linee) e'
+    /// rifiutato; un'uscita vuota o troncata anche.
+    #[test]
+    fn lati_fuori_e_parti_mancanti_sono_visti() {
+        let linee = Geometry::MultiLineString(MultiLineString::new(vec![
+            LineString::from(vec![(0.0, 0.0), (10.0, 0.0)]),
+            LineString::from(vec![(0.0, 5.0), (10.0, 5.0)]),
+        ]));
+        let rettangolo = |y0: f64, y1: f64| {
+            geo::Rect::new(Coord { x: 0.0, y: y0 }, Coord { x: 10.0, y: y1 }).to_polygon()
+        };
+        let giusta = MultiPolygon::new(vec![rettangolo(-1.0, 1.0), rettangolo(4.0, 6.0)]);
+        let verifica = |uscita: &MultiPolygon<f64>| {
+            verifica_contro_la_definizione(
+                &linee,
+                1.0,
+                Estremita::Piatte,
+                0.005,
+                uscita,
+                centimetro(),
+            )
+        };
+        assert!(verifica(&giusta).is_ok());
+        // Un solo poligono sui vertici giusti: i lati verticali attraversano
+        // il vuoto fra le due fasce.
+        let ponte = MultiPolygon::new(vec![rettangolo(-1.0, 6.0)]);
+        assert!(verifica(&ponte).is_err());
+        assert!(verifica(&MultiPolygon::new(Vec::new())).is_err());
+        assert!(verifica(&MultiPolygon::new(vec![rettangolo(-1.0, 1.0)])).is_err());
     }
 }
