@@ -557,12 +557,21 @@ impl Iterator for Partner<'_> {
 ///   Come `j` resta un `Polygon`, e `relate` ne costruisce il grafo per la
 ///   sola coppia, come in `geo`.
 ///
-/// Il picco e' quindi O(somma dei vertici delle parti senza buchi) piu'
-/// O(V + I) della parte con buchi di turno, lo stesso ordine di `geo`
-/// (che per ogni coppia costruisce entrambi i grafi). La liberazione avviene
-/// alla fine del turno di `i`, non subito dopo l'ultima coppia che la usa.
-/// Nella validazione dei buchi ogni buco e' un poligono di un solo anello,
-/// quindi sempre O(V).
+/// Il picco ha due parti:
+///
+/// - **trattenuta nella cache**: O(somma dei vertici delle parti senza
+///   buchi) piu' O(V + I) della parte `i` di turno;
+/// - **temporanea della coppia**: ogni `relate` copia il grafo di `i` e, se
+///   `j` ha buchi, costruisce e nodifica quello di `j`, Θ(Vj + Ij) con `Ij`
+///   fino a quadratico, anche prima della validazione di `j` (per esempio un
+///   rettangolo `i` contro una `j` invalida con molti buchi a bande
+///   incrociate); memoria liberata alla fine della coppia.
+///
+/// La temporanea e' la stessa della `relate` letterale di `geo`, che per
+/// ogni coppia costruisce entrambi i grafi: stesso ordine. La liberazione
+/// della cache avviene alla fine del turno di `i`, non subito dopo l'ultima
+/// coppia che la usa. Nella validazione dei buchi ogni buco e' un poligono
+/// di un solo anello, quindi sempre O(V).
 struct Preparate<'a> {
     poligoni: &'a [Polygon<f64>],
     /// In scatola: una `PreparedGeometry` occupa centinaia di byte, e il

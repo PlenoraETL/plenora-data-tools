@@ -385,10 +385,16 @@ L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
   preparate come `j`, dalla prima coppia fino alla fine del proprio turno
   come `i` (non subito dopo l'ultima coppia che le usa), nel caso peggiore
   tutte insieme, cioè qualche centinaio di byte per vertice. Una parte con
-  buchi è preparata solo come `i`, una alla volta: il picco è O(somma dei
-  vertici delle parti senza buchi) più O(V + I) della parte di turno, lo
-  stesso ordine di `geo`, che per ogni coppia costruisce i due grafi. Nella
-  validazione dei buchi ogni buco è un anello solo, quindi sempre O(V).
+  buchi è preparata solo come `i`, una alla volta. Il picco ha due parti:
+  la memoria **trattenuta** nella cache, O(somma dei vertici delle parti
+  senza buchi) più O(V + I) della parte `i` di turno; e la memoria
+  **temporanea** di ogni coppia, che copia il grafo di `i` e, se `j` ha
+  buchi, costruisce e nodifica quello di `j`, Θ(Vj + Ij) con `Ij` fino a
+  quadratico, anche prima della validazione di `j` (un rettangolo `i` contro
+  una `j` invalida con molti buchi a bande incrociate). La temporanea è la
+  stessa della `relate` letterale di `geo`, che per ogni coppia costruisce i
+  due grafi: stesso ordine. Nella validazione dei buchi ogni buco è un
+  anello solo, quindi sempre O(V).
 
 **Condizione di rientro.** Una versione di `geo` con una ricerca delle
 auto-intersezioni sub-quadratica a verdetto identico: la sequenza copiata si
