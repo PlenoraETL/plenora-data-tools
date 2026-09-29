@@ -64,7 +64,7 @@ const FLOATS: [Option<f64>; 12] = [
 
 /// Testi che una chiave concatenata senza cornice confonderebbe: ("ab","c")
 /// e ("a","bc"), vuoto e null.
-const TEXTS: [Option<&str>; 9] = [
+const TEXTS: [Option<&str>; 22] = [
     None,
     Some(""),
     Some("a"),
@@ -74,6 +74,23 @@ const TEXTS: [Option<&str>; 9] = [
     Some("c"),
     Some("abc"),
     Some("\u{e4}"),
+    // Testi che imitano i delimitatori della chiave testuale (`\u{1e}`,
+    // `\u{1f}`, il marcatore `0` del null, il tag `{len}:`) e della chiave
+    // binaria (byte 0 e 1 del marcatore, una lunghezza big-endian a 8 byte),
+    // il testo "null" e testi prefissi l'uno dell'altro.
+    Some("null"),
+    Some("0"),
+    Some("1"),
+    Some("1:a"),
+    Some("0\u{1f}"),
+    Some("\u{1e}"),
+    Some("\u{1f}"),
+    Some("a\u{1f}Utf8\u{1e}1"),
+    Some("\u{0}"),
+    Some("\u{1}"),
+    Some("\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{1}a"),
+    Some("NaN"),
+    Some("abcd"),
 ];
 
 /// NaN con payload non canonico, per verificare che ogni NaN sia lo stesso

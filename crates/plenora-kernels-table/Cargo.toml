@@ -22,5 +22,9 @@ uuid.workspace = true
 # Stable parallel merge sort for `table.sort`.
 rayon.workspace = true
 
+[dev-dependencies]
+# Oracoli proptest delle chiavi binarie (tests/oracolo_chiavi.rs).
+proptest.workspace = true
+
 [lints]
 workspace = true

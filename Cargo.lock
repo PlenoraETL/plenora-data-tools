@@ -792,6 +792,7 @@ dependencies = [
  "md-5",
  "num-traits",
  "plenora-core",
+ "proptest",
  "rayon",
  "regex",
  "serde",
