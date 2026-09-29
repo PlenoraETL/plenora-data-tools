@@ -12,23 +12,33 @@ use plenora_core::{PlenoraError, Result};
 
 use super::{replace_or_append, utf8_column, validate_output_name};
 
+/// Config di `table.string_pad`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StringPad {
+    /// Colonna `Utf8` da allungare (obbligatorio).
     pub column: String,
+    /// Lunghezza minima in code point (default 5); l'analisi la limita a
+    /// `max_string_bytes`.
     #[serde(default = "default_width")]
     pub width: usize,
+    /// Lato del riempimento (default `left`).
     #[serde(default = "default_side")]
     pub side: PadSide,
+    /// Carattere di riempimento, esattamente un code point (default `"0"`).
     #[serde(default = "default_fill")]
     pub fill_char: String,
+    /// Colonna d'uscita; assente o `null`: si sostituisce `column`.
     pub output_column: Option<String>,
 }
 
+/// Lato del riempimento di `table.string_pad` (`"left"`, `"right"`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PadSide {
+    /// Riempimento a sinistra (`"left"`).
     Left,
+    /// Riempimento a destra (`"right"`).
     Right,
 }
 
@@ -42,16 +52,20 @@ fn default_fill() -> String {
     "0".into()
 }
 
-/// Colonna con i valori paddati a `width` caratteri usando `fill_char`.
+/// Allunga i valori a `width` code point con `fill_char` (`table.string_pad`).
 ///
-/// Valori gia' lunghi almeno `width` restano invariati; i null restano null.
+/// I valori gia' lunghi almeno `width` restano invariati (nessun
+/// troncamento); i null restano null. L'uscita (`Utf8` nullable) sostituisce
+/// la colonna omonima o si aggiunge in coda.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido, `fill_char` vuoto
-///   o piu' di un carattere Unicode;
+/// - `InvalidPlan`: nome della colonna d'uscita non valido, `fill_char` vuoto
+///   o di piu' di un code point;
 /// - `ResourceLimit`: risultato oltre `limits.max_string_bytes`;
-/// - `Schema`: colonna assente o non Utf8.
+/// - `Schema`: colonna assente o non `Utf8`;
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> Result<RecordBatch> {
     let output_name = config.output_column.as_deref().unwrap_or(&config.column);
     validate_output_name(output_name)?;
@@ -105,20 +119,26 @@ pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> R
     )
 }
 
+/// Config di `table.string_length`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StringLength {
+    /// Colonna `Utf8` da misurare (obbligatorio).
     pub column: String,
+    /// Colonna d'uscita; assente o `null`: `<column>_length`.
     pub output_column: Option<String>,
 }
 
-/// Colonna Int64 con la lunghezza in caratteri dei valori (null -> null).
+/// Colonna `Int64` con la lunghezza dei valori in code point
+/// (`table.string_length`); null -> null.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido, conteggio caratteri
-///   non rappresentabile come i64;
-/// - `Schema`: colonna assente o non Utf8.
+/// - `InvalidPlan`: nome della colonna d'uscita non valido;
+/// - `ResourceLimit`: conteggio non rappresentabile come `i64`;
+/// - `Schema`: colonna assente o non `Utf8`;
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn string_length(batch: &RecordBatch, config: &StringLength) -> Result<RecordBatch> {
     let output_name = config
         .output_column
@@ -146,12 +166,20 @@ pub fn string_length(batch: &RecordBatch, config: &StringLength) -> Result<Recor
     )
 }
 
+/// Config di `table.string_extract`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StringExtract {
+    /// Colonna `Utf8` in cui cercare (obbligatorio).
     pub column: String,
+    /// Espressione regolare (sintassi del crate `regex`, obbligatorio);
+    /// l'analisi rifiuta il pattern vuoto.
     pub pattern: String,
+    /// Colonna d'uscita senza gruppi con nome; assente o `null`:
+    /// `<column>_extracted`. Con gruppi con nome si rifiuta.
     pub output_column: Option<String>,
+    /// Unisce con `","` i valori di tutti i match (default `false`). Con
+    /// gruppi con nome si rifiuta.
     #[serde(default)]
     pub extract_all: bool,
 }
@@ -200,19 +228,25 @@ pub fn verifica_gruppi_con_nome(config: &StringExtract, regex: &Regex) -> Result
     Ok(())
 }
 
-/// Estrazione regex dalla colonna: gruppi nominati -> una colonna per
-/// gruppo, altrimenti una colonna con il primo gruppo (o il match intero).
+/// Estrazione regex dalla colonna (`table.string_extract`).
 ///
-/// Con `extract_all` i match multipli sono concatenati con virgola; nessun
-/// match e null producono null.
+/// Gruppi con nome -> una colonna per gruppo, dal primo match; altrimenti
+/// una colonna con il primo gruppo di cattura (o il match intero se non ci
+/// sono gruppi).
+///
+/// Con `extract_all` i valori di tutti i match si uniscono con una virgola,
+/// saltando i match in cui il gruppo non partecipa; nessun match, gruppo non
+/// partecipante e null producono null.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: pattern oltre `limits.max_regex_bytes`, regex non valida,
-///   nome di colonna di output (esplicito o da gruppo nominato) non valido,
+///   nome di colonna d'uscita (esplicito o da gruppo con nome) non valido,
 ///   gruppi con nome insieme a `output_column` o `extract_all`
 ///   ([`verifica_gruppi_con_nome`]);
-/// - `Schema`: colonna assente o non Utf8.
+/// - `Schema`: colonna assente o non `Utf8`;
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 // Tre forme di output (gruppi nominati, gruppo singolo, extract_all) su una
 // sola passata di righe: sequenza lineare di casi, lunga per costruzione.
 #[allow(clippy::too_many_lines)]
@@ -328,24 +362,42 @@ pub fn string_extract(
     )
 }
 
+/// Regola di `table.text_normalize` (una sola per passo).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NormalizeOperation {
+    /// Toglie gli spazi Unicode ai lati (`"trim"`).
     Trim,
+    /// Minuscole Unicode (`"lower"`).
     Lower,
+    /// Maiuscole Unicode (`"upper"`).
     Upper,
+    /// Maiuscola la prima lettera o cifra di ogni parola, minuscole le altre;
+    /// una parola comincia dopo ogni carattere non alfanumerico (`"title"`).
     Title,
+    /// Decomposizione NFKD e rimozione dei segni combinanti
+    /// (`"strip_accents"`).
     StripAccents,
+    /// Spezza sugli spazi Unicode e riunisce con uno spazio solo
+    /// (`"strip_double_spaces"`).
     StripDoubleSpaces,
+    /// `trim`, `lower`, `strip_accents`, `strip_double_spaces` in sequenza
+    /// (`"full"`).
     Full,
 }
 
+/// Config di `table.text_normalize`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TextNormalize {
+    /// Colonne `Utf8` da normalizzare (obbligatorio, almeno una).
     pub columns: Vec<String>,
+    /// La regola da applicare, una sola nonostante il plurale (default
+    /// `full`).
     #[serde(default = "default_normalize")]
     pub operations: NormalizeOperation,
+    /// Sostituisce le colonne (default `true`); con `false` scrive
+    /// `<colonna>_norm`.
     #[serde(default = "default_true")]
     pub overwrite: bool,
 }
@@ -433,17 +485,20 @@ fn normalize_into(value: &str, operation: &NormalizeOperation, out: &mut String)
     }
 }
 
-/// Normalizza le colonne di testo secondo `config.operations`.
+/// Normalizza le colonne di testo secondo `config.operations`
+/// (`table.text_normalize`).
 ///
-/// Con `overwrite` le colonne sono sostituite, altrimenti il risultato va in
+/// Con `overwrite` le colonne si sostituiscono, altrimenti il risultato va in
 /// `<colonna>_norm`. I null restano null.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `columns` vuoto o nome della colonna di output non
+/// - `InvalidPlan`: `columns` vuoto o nome della colonna d'uscita non
 ///   valido;
 /// - `ResourceLimit`: risultato oltre `limits.max_string_bytes`;
-/// - `Schema`: colonna assente o non Utf8.
+/// - `Schema`: colonna assente o non `Utf8`;
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn text_normalize(
     batch: &RecordBatch,
     config: &TextNormalize,

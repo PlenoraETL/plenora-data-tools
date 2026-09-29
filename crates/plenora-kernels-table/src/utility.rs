@@ -15,18 +15,25 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
+/// Config di `table.add_row_number`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddRowNumber {
+    /// Colonna d'uscita (default `"row_number"`); se esiste si sostituisce.
     #[serde(default = "default_row_name")]
     pub output_column: String,
+    /// Numero della prima riga di ogni partizione (default 1).
     #[serde(default = "default_start")]
     pub start: i64,
+    /// Colonna le cui celle con lo stesso testo formano una partizione
+    /// (i null sono una partizione); assente: una numerazione sola.
     pub partition_column: Option<String>,
+    /// Non supportato: se scritto (non nullo) si rifiuta. Per numerare
+    /// secondo un ordine serve un `table.sort` prima.
     pub order_column: Option<String>,
-    /// Verso di `order_column`. Il profilo corrente rifiuta `order_column`,
-    /// quindi un verso dichiarato non avrebbe effetto: si rifiuta
-    /// ([`verifica_ascending`]) invece di essere ignorato.
+    /// Verso di `order_column`. `order_column` si rifiuta, quindi un verso
+    /// dichiarato non avrebbe effetto: si rifiuta ([`verifica_ascending`])
+    /// invece di essere ignorato.
     #[serde(default)]
     pub ascending: Option<bool>,
 }
@@ -53,20 +60,23 @@ pub fn verifica_ascending(config: &AddRowNumber) -> Result<()> {
     Ok(())
 }
 
-/// Colonna Int64 con il numero di riga progressivo a partire da
-/// `config.start`.
+/// Colonna `Int64` non nullable con il numero progressivo di ogni riga
+/// nell'ordine d'ingresso, a partire da `config.start`
+/// (`table.add_row_number`).
 ///
-/// Con `partition_column` il conteggio riparte a ogni partizione (chiave =
-/// valore testuale della colonna); l'ordinamento non e' gestito da questo
-/// kernel.
+/// Con `partition_column` il conteggio riparte per ogni partizione (chiave =
+/// testo della cella, [`scalar_as_string`]; tutti i null sono una
+/// partizione); l'ordinamento non e' gestito da questo kernel.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido, `order_column`
-///   valorizzato (l'ordinamento e' delegato al kernel blocking sort),
-///   overflow i64 del contatore, valore di partizione non rappresentabile
-///   come testo (come `scalar_as_string`);
-/// - `Schema`: `partition_column` assente dal batch.
+/// - `InvalidPlan`: nome della colonna d'uscita non valido, `order_column`
+///   valorizzato, `ascending` dichiarato;
+/// - `ResourceLimit`: numero oltre `i64::MAX`;
+/// - `Schema`: `partition_column` assente dal batch, o cella di partizione
+///   che non si legge come testo;
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     if config.order_column.is_some() {
@@ -108,39 +118,62 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
     )
 }
 
+/// Parte estratta da `table.date_extract`, in una colonna `Int64`
+/// `<prefix><parte>`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatePart {
+    /// Anno del calendario gregoriano (`"year"`).
     Year,
+    /// Mese, 1-12 (`"month"`).
     Month,
+    /// Giorno del mese, 1-31 (`"day"`).
     Day,
+    /// Trimestre, 1-4 (`"quarter"`).
     Quarter,
+    /// Giorno della settimana, 0 = lunedi' ... 6 = domenica (`"weekday"`).
     Weekday,
+    /// Numero di settimana ISO 8601, 1-53 (`"week"`).
     Week,
+    /// Ora, 0-23 (`"hour"`).
     Hour,
+    /// Minuto, 0-59 (`"minute"`).
     Minute,
+    /// Secondo (`"second"`).
     Second,
 }
 
+/// Config di `table.date_extract`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateExtract {
+    /// Colonna da leggere come data, leggibile come testo (obbligatorio).
     pub column: String,
+    /// Parti da estrarre, nell'ordine delle colonne d'uscita (default
+    /// `["year"]`).
     #[serde(default = "default_parts")]
     pub parts: Vec<DatePart>,
+    /// Prefisso dei nomi d'uscita (default vuoto: `<column>_`).
     #[serde(default)]
     pub prefix: String,
-    /// Formato chrono esplicito. Se omesso viene usato il parser deterministico
-    /// multi-formato del profilo legacy.
+    /// Formato strftime di chrono esplicito, provato come data e ora e poi
+    /// come sola data. Se omesso si usano i formati di default, nell'ordine
+    /// di `parse_datetime`.
     pub date_format: Option<String>,
+    /// Accettato per compatibilita', senza effetto: un valore non
+    /// interpretabile fa sempre fallire il passo (default `null`).
     #[serde(default = "default_invalid_date_policy")]
     pub invalid: InvalidDatePolicy,
 }
 
+/// Token di `DateExtract::invalid`; nessuno dei due cambia il risultato.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InvalidDatePolicy {
+    /// `"null"`: il nome suggerisce un null per i valori non validi, ma il
+    /// passo fallisce comunque.
     Null,
+    /// `"error"`: il passo fallisce sui valori non validi.
     Error,
 }
 
@@ -232,19 +265,26 @@ fn parse_datetime_default(
     None
 }
 
-/// Estrae le parti di data/ora richieste in colonne Int64 `<prefix><parte>`.
+/// Estrae le parti di data e ora richieste in colonne `Int64`
+/// `<prefix><parte>` (`table.date_extract`).
 ///
-/// Il parsing usa `date_format` se dato, altrimenti il parser deterministico
-/// multi-formato del profilo legacy. Il token `config.invalid` resta
-/// deserializzabile per compatibilita', ma ogni valore non parsabile rifiuta
-/// l'output con diagnostica row-scoped.
+/// Ogni cella non nulla si legge come testo ([`scalar_as_string`]) e si
+/// interpreta con `date_format` se dato, altrimenti con i formati di
+/// default. Il token `config.invalid` resta deserializzabile per
+/// compatibilita', ma ogni valore non interpretabile rifiuta l'uscita con la
+/// diagnostica per riga.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome di colonna di output non valido, valore non
-///   rappresentabile come testo (come `scalar_as_string`, percorso
-///   non-Utf8), guardia interna su parser compilato singolo;
-/// - `Schema`: colonna assente dal batch.
+/// - `InvalidPlan`: `date_format` con un elemento non riconosciuto; nome di
+///   colonna d'uscita non valido;
+/// - `DataMapping`: almeno un valore non interpretabile come data (causa
+///   `conversion.invalid_datetime`, con la diagnostica per riga); errore
+///   Arrow nella costruzione del batch (guardia interna, non attesa);
+/// - `Schema`: colonna assente dal batch, o cella che non si legge come
+///   testo;
+/// - `Internal`: guardie interne (parser compilato, controllo preventivo
+///   incoerente).
 // Sequenza lineare, parsing poi estrazione: lunga per costruzione. I due
 // bracci del parser sono blocchi completi, troppo grandi per `map_or_else`.
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
@@ -366,24 +406,29 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
     Ok(result)
 }
 
+/// Config di `table.limit`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limit {
+    /// Righe da tenere al piu' (obbligatorio; l'analisi lo limita a
+    /// `max_rows`).
     pub n: u64,
+    /// Righe da saltare in testa (default 0; l'analisi lo limita a
+    /// `max_rows`).
     #[serde(default)]
     pub offset: u64,
 }
 
-/// Prime `n` righe dopo `offset`.
+/// Prime `n` righe dopo `offset` (`table.limit`).
 ///
-/// Schema e ordine invariati (slicing zero-copy). Semantica per-batch, come
-/// ogni op `Streaming`: nessuno stato fra batch, quindi su uno stream il
-/// limite vale per ciascun batch, non per l'intero stream.
+/// Schema e ordine invariati; l'uscita e' una finestra sull'ingresso
+/// (nessuna copia). Nessuno stato fra chiamate: chiamato su un blocco di
+/// righe, limita quel blocco. Il runner passa la tabella intera.
 ///
 /// # Errors
 ///
-/// - `ResourceLimit`: numero di righe non rappresentabile come u64, `offset` o
-///   `n` non rappresentabili come usize.
+/// - `ResourceLimit`: numero di righe non rappresentabile come `u64`,
+///   `offset` o `n` non rappresentabili come `usize`.
 pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
     let rows = u64::try_from(batch.num_rows())
         .map_err(|_| PlenoraError::ResourceLimit("limit: righe oltre u64".into()))?;
@@ -400,9 +445,11 @@ pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
     Ok(batch.slice(start, count))
 }
 
+/// Config di `table.uuid_generator`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UuidGenerator {
+    /// Colonna d'uscita (default `"uuid"`); se esiste si sostituisce.
     #[serde(default = "default_uuid_name")]
     pub output_column: String,
 }
@@ -410,11 +457,15 @@ fn default_uuid_name() -> String {
     "uuid".into()
 }
 
-/// Colonna con un UUID v4 (formato hyphenated) per riga.
+/// Colonna `Utf8` non nullable con un UUID v4 casuale per riga, in forma
+/// minuscola con i trattini (`table.uuid_generator`). Non deterministica per
+/// contratto.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido.
+/// - `InvalidPlan`: nome della colonna d'uscita non valido;
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn uuid_generator(batch: &RecordBatch, config: &UuidGenerator) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
     let values = (0..batch.num_rows())

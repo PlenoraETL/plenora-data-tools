@@ -13,45 +13,76 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
+/// Operatore di confronto di `table.filter` e `table.conditional`.
+///
+/// Una cella nulla (null logico, voce nulla di un dizionario compresa) non
+/// soddisfa nessun operatore tranne `Isnull`. `value` vale il suo testo
+/// JSON (una stringa com'e', `null` come testo vuoto).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Operator {
+    /// `"=="`: su `Int64` e `Float64` confronto numerico esatto con `value`
+    /// (su `Float64` `0.0 == -0.0` e `NaN == NaN`); su ogni altro tipo
+    /// confronto fra il testo della cella e il testo di `value`.
     #[serde(rename = "==")]
     Eq,
+    /// `"!="`: negazione di `Eq` sulle celle non nulle.
     #[serde(rename = "!=")]
     Ne,
+    /// `">"`: confronto ordinato nel dominio nativo del tipo
+    /// ([`scalar_compare`]), `value` numerico; un `NaN` rende falso.
     #[serde(rename = ">")]
     Gt,
+    /// `">="`: come `Gt`.
     #[serde(rename = ">=")]
     Ge,
+    /// `"<"`: come `Gt`.
     #[serde(rename = "<")]
     Lt,
+    /// `"<="`: come `Gt`.
     #[serde(rename = "<=")]
     Le,
+    /// `"contains"`: il testo della cella contiene `value`, senza
+    /// distinzione fra maiuscole e minuscole (minuscole Unicode).
     Contains,
+    /// `"startswith"`: il testo della cella comincia con `value`.
     Startswith,
+    /// `"endswith"`: il testo della cella finisce con `value`.
     Endswith,
+    /// `"isnull"`: la cella e' nulla; `value` non conta.
     Isnull,
+    /// `"notnull"`: la cella non e' nulla; `value` non conta.
     Notnull,
+    /// `"between"`: `value` e' il testo `"min,max"`, estremi inclusi,
+    /// confrontati come `Ge` e `Le`.
     Between,
 }
 
+/// Config di `table.filter`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Filter {
+    /// Colonna su cui si valuta la condizione (obbligatorio).
     pub column: String,
+    /// Operatore di confronto (obbligatorio).
     pub operator: Operator,
+    /// Termine di confronto (default `null`, cioe' testo vuoto).
     #[serde(default)]
     pub value: serde_json::Value,
 }
 
+/// Una condizione di `table.conditional`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Condition {
+    /// Operatore (default `"=="`), valutato come in `table.filter`.
     #[serde(default = "default_operator")]
     pub operator: Operator,
+    /// Termine di confronto (default `null`).
     #[serde(default)]
     pub value: serde_json::Value,
+    /// Valore scritto se questa e' la prima condizione vera (default
+    /// `null`); vale il suo testo JSON.
     #[serde(default)]
     pub result: serde_json::Value,
 }
@@ -60,13 +91,19 @@ const fn default_operator() -> Operator {
     Operator::Eq
 }
 
+/// Config di `table.conditional`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Conditional {
+    /// Colonna su cui si valutano le condizioni (obbligatorio).
     pub column: String,
+    /// Condizioni in ordine di precedenza (obbligatorio; l'analisi rifiuta
+    /// la lista vuota).
     pub conditions: Vec<Condition>,
+    /// Valore delle righe senza condizioni vere (default `null`).
     #[serde(default)]
     pub default_value: serde_json::Value,
+    /// Colonna d'uscita (default `"result"`); se esiste si sostituisce.
     #[serde(default = "default_output")]
     pub output_column: String,
 }
@@ -278,7 +315,7 @@ fn numeric_eq(actual: f64, expected: f64) -> bool {
 ///
 /// Codificato nel tipo: cosi' `ordered_typed` e' totale e il compilatore
 /// dimostra che i chiamanti passano solo operatori ordinati (invariante
-/// interna, R6.4).
+/// interna, senza un ramo di panico).
 #[derive(Clone, Copy)]
 enum OrderedOperator {
     Gt,
@@ -465,16 +502,19 @@ fn fast_rows(
 }
 
 /// Batch con le sole righe che soddisfano la condizione, nell'ordine
-/// originale.
+/// d'ingresso (`table.filter`).
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente; tipo della colonna fuori dal profilo
-///   scalare richiesto dall'operatore (via `scalar_as_string`/`scalar_as_f64`);
-///   errore Arrow nella selezione delle righe (come `select_rows`);
-/// - `InvalidPlan`: valore di confronto non numerico per i confronti numerici
-///   o ordinati; `between` senza estremi `min,max` validi; invarianti
-///   interne violate (errore Internal).
+/// - `Schema`: colonna assente; tipo della colonna che l'operatore non sa
+///   leggere (via [`scalar_as_string`] o [`scalar_compare`]); cella `Utf8`
+///   non numerica sotto un operatore ordinato o `between`;
+/// - `InvalidPlan`: valore di confronto non numerico per i confronti
+///   numerici o ordinati; `between` senza estremi `min,max` validi;
+/// - `ResourceLimit`: riga tenuta con indice oltre `u32::MAX`
+///   ([`select_rows`]);
+/// - `DataMapping`: errore Arrow nella selezione delle righe;
+/// - `Internal`: invariante interna violata.
 pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index);
@@ -496,16 +536,24 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     select_rows(batch, &rows)
 }
 
-/// Prima condizione vera determina il valore della colonna di output
-/// (Float64 se tutti i risultati sono numerici, Utf8 altrimenti).
+/// Colonna calcolata dalla prima condizione vera di ogni riga, o da
+/// `default_value` (`table.conditional`).
+///
+/// Il tipo d'uscita dipende solo dai letterali: se ogni `result` e il
+/// `default_value`, letti come testo, sono vuoti o numeri (virgola
+/// decimale ammessa: `"1,5"` vale 1,5), l'uscita e' `Float64` nullable e il
+/// testo vuoto da' null; altrimenti e' `Utf8` non nullable e il null da'
+/// `""`.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente; tipo della colonna fuori dal profilo
-///   scalare richiesto dagli operatori delle condizioni; errore Arrow
-///   nella sostituzione;
-/// - `InvalidPlan`: come `filter` per la valutazione delle condizioni (valore
-///   di confronto non numerico, `between` malformato).
+/// - `Schema`: colonna assente; tipo della colonna che gli operatori non
+///   sanno leggere; cella `Utf8` non numerica sotto un operatore ordinato;
+/// - `InvalidPlan`: come [`filter`] per la valutazione delle condizioni
+///   (valore di confronto non numerico, `between` malformato);
+/// - `DataMapping`: errore Arrow nella sostituzione (guardia interna, non
+///   attesa);
+/// - `Internal`: invariante interna violata.
 pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);

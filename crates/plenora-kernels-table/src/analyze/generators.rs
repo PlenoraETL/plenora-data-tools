@@ -115,7 +115,8 @@ pub(in crate::analyze) fn analyze_limit(
     check_rows(op, config.n, limits.max_rows, "n")?;
     check_rows(op, config.offset, limits.max_rows, "offset")?;
     let mut output = input.clone();
-    // Righe rimosse (per-batch), ordine relativo e schema invariati.
+    // Righe rimosse, ordine relativo e schema invariati; il conteggio delle
+    // righe d'uscita non si dichiara.
     output.properties = sorted_only(input);
     Ok(output)
 }

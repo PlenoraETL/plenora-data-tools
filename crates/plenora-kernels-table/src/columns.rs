@@ -15,22 +15,26 @@ use plenora_core::{PlenoraError, Result};
 
 use super::{replace_or_append, utf8_column, validate_output_name};
 
+/// Config di `table.drop_columns`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DropColumns {
+    /// Colonne da togliere (obbligatorio). Un nome assente dallo schema si
+    /// ignora; l'analisi rifiuta i nomi ripetuti o non validi.
     pub columns: Vec<String>,
 }
 
-/// Batch senza le colonne elencate in `config`.
+/// Batch senza le colonne elencate in `config` (`table.drop_columns`).
 ///
-/// I nomi assenti nello schema sono ignorati (no-op); metadati di schema
-/// e numero di righe sono preservati. Zero-copy: gli array Arrow sono
-/// riusati (Arc clone).
+/// I nomi assenti nello schema si ignorano; le colonne rimaste restano
+/// nell'ordine d'ingresso, con i metadati di campo e di schema e lo stesso
+/// numero di righe, anche se non resta nessuna colonna. Gli array si
+/// condividono (clone dell'`Arc`), nessun dato si copia.
 ///
 /// # Errors
 ///
-/// - `Arrow`: lo schema risultante non e' coerente con le colonne
-///   (guardia Arrow in costruzione del batch).
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordBatch> {
     let removed: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let mut fields = Vec::new();
@@ -50,24 +54,27 @@ pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordB
     crate::batch_with_rows(schema, columns, batch.num_rows())
 }
 
+/// Config di `table.select_columns`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectColumns {
+    /// Colonne da tenere, nell'ordine d'uscita (obbligatorio): almeno una,
+    /// senza ripetizioni, tutte presenti nell'ingresso.
     pub columns: Vec<String>,
 }
 
-/// Proiezione positiva: output = le colonne elencate,
-/// nell'ordine dato.
+/// Batch con le sole colonne elencate, nell'ordine dato
+/// (`table.select_columns`).
 ///
-/// Zero-copy: gli array Arrow sono riusati (Arc clone), nessuna copia
-/// dei dati.
+/// Gli array si condividono (clone dell'`Arc`), nessun dato si copia; i
+/// metadati di campo e di schema restano.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: elenco `columns` vuoto o colonna ripetuta nella
-///   proiezione;
+/// - `InvalidPlan`: elenco `columns` vuoto o colonna ripetuta;
 /// - `Schema`: colonna non trovata nello schema;
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<RecordBatch> {
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -103,26 +110,38 @@ pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<Rec
 // table.align_schema
 // ---------------------------------------------------------------------------
 
-/// Tipo dichiarato di `align_schema`: set chiuso di nomi, nessuna sintassi
-/// libera. Il mapping su `DataType` e' fisso e documentato in
-/// [`AlignType::data_type`]: mai cast implicito tra tipi diversi.
+/// Tipo dichiarato di `table.align_schema`.
+///
+/// Insieme chiuso di nomi, scritti esattamente come le varianti (`"Utf8"`,
+/// `"Int64"`, …). La corrispondenza con il `DataType` Arrow e' fissa
+/// ([`AlignType::data_type`]) e una colonna esistente deve averlo
+/// identico: nessuna conversione implicita.
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub enum AlignType {
+    /// `Utf8`.
     Utf8,
+    /// `Int64`.
     Int64,
+    /// `UInt64`.
     UInt64,
+    /// `Float64`.
     Float64,
+    /// `Boolean`.
     Boolean,
+    /// `Date32` (giorni dall'epoca).
     Date32,
+    /// `Timestamp(Millisecond, None)`: millisecondi, senza fuso.
     Timestamp,
+    /// `Decimal128(38, 10)`.
     Decimal128,
+    /// `Binary`.
     Binary,
 }
 
 impl AlignType {
     /// `DataType` Arrow corrispondente: `Timestamp` = millisecondi senza
-    /// timezone (coerente col profilo scalare), `Decimal128` = precisione 38,
-    /// scala 10.
+    /// fuso (il profilo scalare testuale legge solo i millisecondi),
+    /// `Decimal128` = precisione 38, scala 10.
     #[must_use]
     pub const fn data_type(self) -> DataType {
         match self {
@@ -139,24 +158,32 @@ impl AlignType {
     }
 }
 
+/// Una colonna dichiarata di `table.align_schema`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AlignColumn {
+    /// Nome della colonna (obbligatorio, non vuoto, al piu' 1024 byte).
     pub name: String,
+    /// Tipo dichiarato (obbligatorio; chiave JSON `type`).
     #[serde(rename = "type")]
     pub align_type: AlignType,
-    /// Valore scalare per una colonna assente in input (default: colonna di
-    /// null). Ignorato se la colonna esiste gia'.
+    /// Valore di ogni cella se la colonna manca nell'ingresso: la colonna
+    /// aggiunta e' costante e non nullable. Assente (o `null`): colonna di
+    /// null, nullable. Se la colonna esiste gia' non ha effetto e non si
+    /// rifiuta. Le conversioni ammesse sono quelle di [`check_align_default`].
     #[serde(default)]
     pub default: Option<Value>,
 }
 
+/// Config di `table.align_schema`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AlignSchema {
+    /// Schema d'uscita, nell'ordine d'uscita (obbligatorio, almeno una
+    /// colonna, nomi senza ripetizioni).
     pub columns: Vec<AlignColumn>,
-    /// Colonne di input non elencate: scartate (default) o preservate in coda
-    /// nell'ordine originale.
+    /// Colonne d'ingresso non dichiarate: scartate (`false`, default) o
+    /// tenute in coda nell'ordine d'ingresso (`true`).
     #[serde(default)]
     pub keep_extra: bool,
 }
@@ -168,6 +195,10 @@ const ALIGN_DECIMAL_SCALE: i8 = 10;
 /// Parsing `Decimal128(38, 10)` di un letterale testuale: segno opzionale,
 /// parte intera e frazionaria solo cifre, al massimo 10 decimali (nessun
 /// arrotondamento: piu' cifre della scala -> errore).
+///
+/// I segni iniziali si tolgono tutti e conta solo il primo carattere
+/// (`"--5"` vale -5, `"+-5"` vale 5): limite dichiarato nella scheda di
+/// `table.align_schema`.
 fn parse_align_decimal(text: &str) -> Option<i128> {
     let negative = text.starts_with('-');
     let digits = text.trim_start_matches(['-', '+']);
@@ -219,8 +250,8 @@ const fn forma_json(value: &Value) -> &'static str {
 fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Result<ArrayRef> {
     // Il messaggio nomina la FORMA del default, mai il suo contenuto: il
     // default e' materializzato in ogni cella della colonna, quindi citarlo
-    // significherebbe scrivere un valore di cella in un errore
-    // (errori-e-limiti.md#privacy-dei-messaggi).
+    // significherebbe scrivere un valore di cella in un errore (regola
+    // «errori senza dati»).
     let invalid = || {
         PlenoraError::InvalidPlan(format!(
             "align_schema: default di tipo JSON {} non convertibile in {align_type:?}",
@@ -309,8 +340,8 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
     };
     // Invariante interna, verificata SEMPRE e in modo fallibile: un
     // `debug_assert_eq!` sarebbe una primitiva di panico nel codice di
-    // produzione (errori-e-limiti.md#panic-policy) e in build debug farebbe
-    // abortire il chiamante invece di restituirgli un errore.
+    // produzione (nessun panico ammesso) e in build debug farebbe abortire
+    // il chiamante invece di restituirgli un errore.
     if array.data_type() != &align_type.data_type() {
         return Err(PlenoraError::Internal(format!(
             "align_schema: colonna costruita con un tipo diverso da {align_type:?}"
@@ -319,35 +350,47 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
     Ok(array)
 }
 
-/// Valida il `default` di una colonna dichiarata senza materializzarlo
-/// (per l'analisi a secco del contratto).
+/// Valida il `default` di una colonna dichiarata con la stessa conversione
+/// del kernel, su una colonna di una riga (per l'analisi del contratto).
+///
+/// Conversioni ammesse: `Utf8` e `Binary` da una stringa JSON; `Int64` e
+/// `UInt64` da un intero JSON del dominio o da una stringa che lo e' (spazi
+/// ai lati ignorati); `Float64` da un numero JSON o da una stringa con la
+/// virgola decimale ammessa; `Boolean` da un booleano JSON o da
+/// `"true"`/`"false"` senza distinzione di maiuscole; `Date32` da una
+/// stringa `AAAA-MM-GG`; `Timestamp` da una stringa RFC 3339 con fuso;
+/// `Decimal128` da un numero JSON o da una stringa, senza esponente e con al
+/// piu' 10 decimali.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `default` non convertibile in `align_type` (stessa
-///   conversione di `align_default_column`, guardia epoch date32
-///   inclusa);
-/// - `Arrow`: errore Arrow sulla precisione/scala `Decimal128`.
+/// - `InvalidPlan`: `default` non convertibile in `align_type`;
+/// - `DataMapping`: errore Arrow sulla precisione/scala `Decimal128`
+///   (guardia interna, non attesa);
+/// - `Internal`: colonna costruita con un tipo diverso da quello dichiarato
+///   (guardia interna).
 pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
     align_default_column(value, align_type, 1).map(|_| ())
 }
 
-/// Allinea lo schema dell'input all'elenco dichiarato.
+/// Allinea lo schema dell'ingresso all'elenco dichiarato
+/// (`table.align_schema`).
 ///
-/// Riordina/proietta secondo `columns`; una colonna assente e' aggiunta
-/// come colonna di null (o riempita col `default` scalare, non nullable);
-/// una colonna presente con tipo diverso dal dichiarato e' un errore di
-/// contratto (mai cast implicito). Le colonne non elencate sono scartate,
-/// salvo `keep_extra` (appendono in coda nell'ordine originale).
+/// Riordina e proietta secondo `columns`; una colonna assente si aggiunge
+/// come colonna di null (nullable) o costante col `default` (non nullable);
+/// una colonna presente con tipo diverso dal dichiarato e' un errore (mai
+/// conversione implicita). Le colonne non elencate si scartano, salvo
+/// `keep_extra` (in coda nell'ordine d'ingresso).
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: elenco `columns` vuoto, colonna ripetuta, nome di
-///   output non valido (come `validate_output_name`), tipo presente
-///   diverso dal dichiarato (nessun cast implicito) o `default` non
-///   convertibile (come `check_align_default`);
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna)
-///   o sulla precisione/scala `Decimal128`.
+/// - `InvalidPlan`: elenco `columns` vuoto, colonna ripetuta, nome non
+///   valido ([`validate_output_name`]), tipo presente diverso dal
+///   dichiarato o `default` non convertibile ([`check_align_default`]);
+/// - `DataMapping`: errore Arrow nella costruzione del batch o sulla
+///   precisione/scala `Decimal128` (guardie interne, non attese);
+/// - `Internal`: colonna costruita con un tipo diverso da quello dichiarato
+///   (guardia interna).
 pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordBatch> {
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -408,28 +451,39 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
     )
 }
 
+/// Una rinomina di `table.rename`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenamePair {
+    /// Nome attuale (obbligatorio); se non e' una colonna dell'ingresso la
+    /// coppia si ignora.
     pub old_name: String,
+    /// Nuovo nome (obbligatorio, non vuoto, al piu' 1024 byte).
     pub new_name: String,
 }
 
+/// Config di `table.rename`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rename {
+    /// Rinomine, applicate tutte insieme (obbligatorio, anche vuoto).
+    /// L'analisi rifiuta un `old_name` o un `new_name` ripetuti; il kernel,
+    /// con due coppie della stessa sorgente, tiene l'ultima.
     pub renames: Vec<RenamePair>,
 }
 
-/// Rinomina le colonne secondo `renames` (i nomi non mappati restano
-/// invariati), preservando metadati di schema e array: zero-copy.
+/// Rinomina le colonne secondo `renames` (`table.rename`).
+///
+/// I nomi non mappati restano; le rinomine valgono insieme, quindi due nomi
+/// si possono scambiare. Tipi, nullabilita', metadati di campo e di schema
+/// restano; gli array si condividono.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome di output non valido (come
-///   `validate_output_name`);
+/// - `InvalidPlan`: nome d'uscita non valido ([`validate_output_name`]);
 /// - `Schema`: la rinomina produce un nome duplicato;
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
     let mapping: HashMap<&str, &str> = config
         .renames
@@ -457,26 +511,33 @@ pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
     crate::batch_with_rows(Arc::new(schema), batch.columns().to_vec(), batch.num_rows())
 }
 
+/// Config di `table.reorder_columns`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReorderColumns {
+    /// Colonne da mettere in testa, nell'ordine dato (default vuoto): senza
+    /// ripetizioni, tutte presenti nell'ingresso.
     #[serde(default)]
     pub columns: Vec<String>,
+    /// Ordina alfabeticamente le colonne non elencate (default `false`;
+    /// alias `sort_alphabetical`).
     #[serde(default, alias = "sort_alphabetical")]
     pub alphabetical: bool,
 }
 
-/// Riordina le colonne del batch.
+/// Riordina le colonne del batch (`table.reorder_columns`).
 ///
-/// Prima quelle elencate in `columns` (nell'ordine dato), poi le restanti
-/// nell'ordine originale (alfabetico, case-insensitive, con
-/// `alphabetical`). Zero-copy: gli array Arrow sono riusati (Arc clone).
+/// Prima quelle elencate in `columns`, nell'ordine dato, poi le restanti
+/// nell'ordine d'ingresso o, con `alphabetical`, per nome in minuscolo
+/// (confronto dei byte UTF-8, ordinamento stabile). Gli array si
+/// condividono.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: colonna ripetuta nell'elenco;
 /// - `Schema`: colonna non trovata nello schema;
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna).
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna, non attesa).
 pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<RecordBatch> {
     let schema = batch.schema();
     let mut selected = Vec::with_capacity(batch.num_columns());
@@ -516,14 +577,19 @@ pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<R
     )
 }
 
+/// Config di `table.concat_columns`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConcatColumns {
+    /// Colonne `Utf8` da unire, nell'ordine (obbligatorio, almeno una).
     pub columns: Vec<String>,
+    /// Colonna d'uscita (default `"concatenated"`); se esiste si sostituisce.
     #[serde(default = "default_concat_output")]
     pub output_column: String,
+    /// Testo fra due parti (default `" "`, puo' essere vuoto).
     #[serde(default = "default_separator")]
     pub separator: String,
+    /// Salta i null (default `true`); con `false` un null vale `""`.
     #[serde(default = "default_true")]
     pub skip_null: bool,
 }
@@ -538,20 +604,23 @@ const fn default_true() -> bool {
     true
 }
 
-/// Concatena le colonne Utf8 elencate nella colonna `output_column`.
+/// Concatena le colonne `Utf8` elencate nella colonna `output_column`
+/// (`table.concat_columns`).
 ///
-/// Le parti sono unite con `separator`; con `skip_null` i null sono
-/// saltati (riga di soli null -> null), altrimenti contano come stringa
-/// vuota. Se `output_column` esiste gia' e' sostituita.
+/// Le parti si uniscono con `separator`, che sta solo fra parti incluse;
+/// con `skip_null` i null si saltano (riga di soli null -> null),
+/// altrimenti contano come stringa vuota e il risultato non e' mai null.
+/// Se `output_column` esiste gia' si sostituisce nella sua posizione,
+/// altrimenti si aggiunge in coda (`Utf8` nullable).
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: elenco `columns` vuoto o nome di output non valido
-///   (come `validate_output_name`);
+/// - `InvalidPlan`: elenco `columns` vuoto o nome d'uscita non valido
+///   ([`validate_output_name`]);
 /// - `ResourceLimit`: valore concatenato oltre `limits.max_string_bytes`;
-/// - `Schema`: colonna assente o non Utf8 (come `utf8_column`);
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
-///   di `replace_or_append`).
+/// - `Schema`: colonna assente o non `Utf8` ([`utf8_column`]);
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna di [`replace_or_append`], non attesa).
 pub fn concat_columns(
     batch: &RecordBatch,
     config: &ConcatColumns,
@@ -607,13 +676,20 @@ pub fn concat_columns(
     )
 }
 
+/// Config di `table.split_column`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SplitColumn {
+    /// Colonna `Utf8` da dividere (obbligatorio).
     pub column: String,
+    /// Separatore letterale, non vuoto (default `","`).
     #[serde(default = "default_delimiter")]
     pub delimiter: String,
+    /// Colonne d'uscita, una per parte (obbligatorio, da 1 a
+    /// `limits.max_split_columns`, senza ripetizioni).
     pub new_columns: Vec<String>,
+    /// Divisioni massime se positivo (`max_splits + 1` parti); non positivo
+    /// (default `-1`): tante parti quante `new_columns`.
     #[serde(default = "default_max_splits")]
     pub max_splits: i64,
 }
@@ -625,21 +701,24 @@ const fn default_max_splits() -> i64 {
     -1
 }
 
-/// Divide la colonna Utf8 `column` sul `delimiter` nelle `new_columns`.
+/// Divide la colonna `Utf8` `column` sul `delimiter` nelle `new_columns`
+/// (`table.split_column`).
 ///
-/// Al piu' `max_splits` parti se positivo: le parti mancanti sono null,
-/// quelle in eccesso restano nell'ultima parte. Una colonna di output
-/// gia' esistente e' sostituita.
+/// Le parti sono al piu' `len(new_columns)`, e al piu' `max_splits + 1` se
+/// `max_splits` e' positivo: l'ultima tiene il resto del testo, delimitatori
+/// compresi; le colonne senza parte ricevono null, e un null d'ingresso da'
+/// null ovunque. Una colonna d'uscita gia' esistente si sostituisce nella
+/// sua posizione, le altre si aggiungono in coda.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `delimiter` vuoto, `new_columns` vuoto o oltre
-///   `limits.max_split_columns`, nome di output non valido (come
-///   `validate_output_name`);
-/// - `Schema`: nomi di output duplicati, oppure colonna assente o non
-///   Utf8 (come `utf8_column`);
-/// - `Arrow`: errore Arrow nella costruzione del batch (guardia interna
-///   di `replace_or_append`).
+///   `limits.max_split_columns`, nome d'uscita non valido
+///   ([`validate_output_name`]);
+/// - `Schema`: nomi d'uscita duplicati, oppure colonna assente o non `Utf8`
+///   ([`utf8_column`]);
+/// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
+///   interna di [`replace_or_append`], non attesa).
 pub fn split_column(
     batch: &RecordBatch,
     config: &SplitColumn,
@@ -713,9 +792,9 @@ pub fn split_column(
 }
 
 #[cfg(test)]
-// Confronti float esatti intenzionali: le fixture sono costruite per
-// produrre valori esatti (coordinate note, round-trip bit-esatti); il
-// confronto per bit e' il contratto verificato, non un'approssimazione.
+// Confronti float esatti intenzionali: i default `Float64` delle fixture
+// sono letterali esatti; il confronto per bit e' il contratto verificato,
+// non un'approssimazione.
 #[allow(clippy::float_cmp)]
 mod tests {
     use serde_json::json;

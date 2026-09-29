@@ -23,11 +23,17 @@ use plenora_core::diagnostics::{
 };
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 
+/// Metodo di riempimento di `table.fill_na`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FillMethod {
+    /// Valore fisso `value` (`"value"`).
     Value,
+    /// Ultimo valore non nullo precedente, nell'ordine delle righe
+    /// (`"ffill"`); i null iniziali restano null.
     Ffill,
+    /// Primo valore non nullo seguente (`"bfill"`); i null finali restano
+    /// null.
     Bfill,
 }
 
@@ -35,15 +41,24 @@ const fn default_fill_method() -> FillMethod {
     FillMethod::Value
 }
 
+/// Config di `table.fill_na`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FillNa {
+    /// Colonna da riempire; assente o `null`: tutte le colonne, che devono
+    /// essere tutte `Utf8`, `Int64`, `Float64` o `Boolean`.
     pub column: Option<String>,
+    /// Metodo di riempimento (default `value`).
     #[serde(default = "default_fill_method")]
     pub method: FillMethod,
     /// Valore di riempimento di `method = value`. Assente: nessun valore
-    /// (null). Scritto, anche `null`, e' `Some`: con `ffill`/`bfill` non
-    /// avrebbe effetto e si rifiuta ([`FillNa::verifica_parametri`]).
+    /// (null, quindi nessun cambiamento). Scritto, anche `null`, e' `Some`:
+    /// con `ffill`/`bfill` non avrebbe effetto e si rifiuta
+    /// ([`FillNa::verifica_parametri`]). Si converte nel tipo della colonna:
+    /// per `Utf8` una stringa com'e' e ogni altro valore come testo JSON; per
+    /// `Int64` un intero JSON o una stringa intera; per `Float64` un numero
+    /// JSON o una stringa con la virgola decimale ammessa; per `Boolean` un
+    /// booleano JSON o `"true"`/`"false"` senza distinzione di maiuscole.
     #[serde(default, deserialize_with = "valore_scritto")]
     pub value: Option<Value>,
 }
@@ -81,38 +96,67 @@ impl FillNa {
     }
 }
 
+/// Config di `table.replace`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Replace {
+    /// Colonna `Utf8` da modificare (obbligatorio).
     pub column: String,
+    /// Senza `regex`, la cella intera da sostituire; con `regex`, il pattern
+    /// (sintassi del crate `regex`). Obbligatorio.
     pub old_value: String,
+    /// Testo sostitutivo (obbligatorio); con `regex` riconosce `$1`, `${1}`,
+    /// `$nome`, `${nome}` e `$$`.
     pub new_value: String,
+    /// Interpreta `old_value` come regex e sostituisce ogni match (default
+    /// `false`: confronto della cella intera).
     #[serde(default)]
     pub regex: bool,
 }
 
+/// Tipo d'arrivo di `table.type_cast`.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetType {
+    /// `Utf8`, il testo della cella (`"str"`).
     Str,
+    /// `Int64` da un intero decimale (`"int"`).
     Int,
+    /// `Float64` dal parse `f64`, virgola decimale ammessa (`"float"`).
     Float,
+    /// `Boolean` dai token vero/falso (`"bool"`).
     Bool,
+    /// `Utf8` `AAAA-MM-GG` da una data (`"date"`).
     Date,
+    /// `Utf8` `AAAA-MM-GGTHH:MM:SS` da una data e ora (`"datetime"`).
     Datetime,
+    /// `Date32` da una data (`"date32"`).
     Date32,
+    /// `Timestamp(Millisecond, timezone)` (`"timestamp_millis"`).
     TimestampMillis,
+    /// `Decimal128(precision, scale)`, senza arrotondamento
+    /// (`"decimal128"`).
     Decimal128,
+    /// `Binary`, i byte UTF-8 del testo (`"binary_utf8"`).
     BinaryUtf8,
+    /// `UInt64` da un intero decimale non negativo (`"uint64"`).
     Uint64,
+    /// `Dictionary(Int32, Utf8)` (`"dictionary_utf8"`).
     DictionaryUtf8,
 }
 
+/// Politica di `table.type_cast` per le celle non convertibili.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CastErrors {
+    /// Come `Raise`: nessuna cella diventa null; una cella non convertibile
+    /// fa fallire il passo con la diagnostica per riga (`"coerce"`).
     Coerce,
+    /// Una cella non convertibile fa fallire il passo con la diagnostica per
+    /// riga (`"raise"`).
     Raise,
+    /// Nessun controllo preventivo: una cella non convertibile fa fallire il
+    /// passo con `InvalidPlan`, senza diagnostica per riga (`"ignore"`).
     Ignore,
 }
 
@@ -120,20 +164,33 @@ const fn default_errors() -> CastErrors {
     CastErrors::Coerce
 }
 
+/// Config di `table.type_cast`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TypeCast {
+    /// Colonna da convertire, leggibile come testo (obbligatorio).
     pub column: String,
+    /// Tipo d'arrivo (default `str`).
     #[serde(default = "default_target")]
     pub target_type: TargetType,
+    /// Formato strftime delle date (default vuoto: formati di default);
+    /// l'analisi lo ammette solo con `date`, `datetime`, `date32`,
+    /// `timestamp_millis`.
     #[serde(default)]
     pub date_format: String,
+    /// Politica per le celle non convertibili (default `coerce`).
     #[serde(default = "default_errors")]
     pub errors: CastErrors,
+    /// Cifre totali di `decimal128` (obbligatorio e ammesso solo li',
+    /// da 1 a 38).
     #[serde(default)]
     pub precision: Option<u8>,
+    /// Cifre decimali di `decimal128` (obbligatorio e ammesso solo li',
+    /// da 0 a `precision`).
     #[serde(default)]
     pub scale: Option<i8>,
+    /// Fuso IANA di `timestamp_millis` (ammesso solo li'): fuso dei testi
+    /// senza fuso e della colonna d'uscita.
     #[serde(default)]
     pub timezone: Option<String>,
 }
@@ -373,15 +430,24 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
     )))
 }
 
-/// Sostituisce i null (valore fisso, ffill o bfill) nelle colonne indicate
-/// (o in tutte, se `column` e' assente).
+/// Sostituisce i null (valore fisso, ffill o bfill) nella colonna indicata
+/// o in tutte, se `column` e' assente (`table.fill_na`).
+///
+/// Tipo e metadati di campo restano; le colonne trattate diventano
+/// nullable. Si riempie solo il null (un `NaN` resta).
+///
+/// Chiamato senza l'analisi, un `value` numerico non intero su una colonna
+/// `Int64` vale come assente e la colonna resta com'e': e' l'analisi a
+/// rifiutarlo.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente; tipo di colonna non supportato (coperti
-///   Utf8, Int64, Float64, Boolean); errore Arrow nella sostituzione;
-/// - `InvalidPlan`: valore di fill non convertibile al tipo della colonna;
-///   `value` con `ffill`/`bfill`.
+///   `Utf8`, `Int64`, `Float64`, `Boolean`);
+/// - `InvalidPlan`: valore di riempimento non convertibile nel tipo della
+///   colonna; `value` con `ffill`/`bfill`;
+/// - `DataMapping`: errore Arrow nella sostituzione (guardia interna, non
+///   attesa).
 pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
     config.verifica_parametri()?;
     let targets: Vec<usize> = if let Some(name) = &config.column {
@@ -427,6 +493,11 @@ where
     Some(Arc::new(builder.finish()))
 }
 
+/// Fast path di `table.coalesce`: per ogni riga, il primo valore non nullo.
+///
+/// Le colonne `indices` (non vuoto) si guardano nell'ordine dato. `None` se
+/// il tipo non ha un ramo tipizzato (`Dictionary` compresa, per il null
+/// logico) e il chiamante deve usare il percorso generico.
 #[must_use]
 pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef> {
     let first = batch.column(indices[0]);
@@ -479,13 +550,21 @@ pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
     }
 }
 
-/// Sostituisce `old_value` con `new_value` in una colonna Utf8 (confronto
-/// letterale, oppure regex con `regex = true`).
+/// Sostituisce `old_value` con `new_value` in una colonna `Utf8`
+/// (`table.replace`).
+///
+/// Senza `regex` il confronto e' sulla cella intera (nessuna sostituzione di
+/// sottostringhe); con `regex` ogni match si sostituisce con `new_value`,
+/// che riconosce i riferimenti ai gruppi (`$1`, `${nome}`, `$$`). Il null
+/// resta null; la colonna resta nella sua posizione con i metadati di campo.
+/// La lunghezza del risultato non si confronta con `max_string_bytes`.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente o non Utf8; errore Arrow nella sostituzione;
-/// - `InvalidPlan`: `old_value` non e' una regex valida (con `regex = true`).
+/// - `Schema`: colonna assente o non `Utf8`;
+/// - `InvalidPlan`: `old_value` non e' una regex valida (con `regex = true`);
+/// - `DataMapping`: errore Arrow nella sostituzione (guardia interna, non
+///   attesa).
 pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let values = batch
@@ -837,10 +916,10 @@ fn cast_to_int(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>
 ///
 /// # Arrotondamento dichiarato
 ///
-/// `cast(to: "float")` chiede un `Float64`: l'arrotondamento al double piu'
-/// vicino e' la sua semantica, e un `i64`/`u64` oltre 2^53 perde le cifre
-/// basse (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
-/// Dove il double partecipa a una decisione vale `exact_f64_from_*`.
+/// `target_type = "float"` chiede un `Float64`: l'arrotondamento al double
+/// piu' vicino e' la sua semantica, e un `i64`/`u64` oltre 2^53 perde le
+/// cifre basse (limite dichiarato nella scheda di `table.type_cast`). Dove
+/// il double partecipa a una decisione vale `exact_f64_from_*`.
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: e' la semantica di `cast(to: "float")`.
 fn cast_to_float(source: &ArrayRef, errors: CastErrors) -> Result<Option<ArrayRef>> {
     const MESSAGE: &str = "conversione float fallita";
@@ -1180,31 +1259,35 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
     Ok(Some(array))
 }
 
-/// Converte la colonna al tipo `target_type`.
+/// Converte la colonna nel tipo `target_type`, nella stessa posizione
+/// (`table.type_cast`).
 ///
-/// I token legacy `coerce` e `raise` sono entrambi fail-closed per i target
-/// fallibili: nessun valore invalido viene convertito in null e tutte le
-/// righe osservate entrano nella diagnostica strutturata.
+/// Ogni cella non nulla si legge come testo ([`scalar_as_string`]) e il testo
+/// si interpreta nel tipo d'arrivo. I token storici `coerce` e `raise` sono
+/// entrambi fail-closed: nessun valore non convertibile diventa null, e
+/// tutte le righe rifiutate entrano nella diagnostica per riga. La colonna
+/// d'uscita e' nullable e perde i metadati di campo.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente; tipo sorgente fuori dal profilo scalare (via
-///   `scalar_as_string`); errore Arrow nella costruzione (es. precision/
-///   scale decimal128, builder dictionary);
-/// - `DataMapping`: almeno una riga non convertibile, con row diagnostics;
-/// - `InvalidPlan`: `errors = ignore` (nessun tipo Arrow omogeneo garantibile);
-///   `decimal128` senza `precision`/`scale`.
+/// - `Schema`: colonna assente; cella che non si legge come testo (tipo
+///   fuori dal profilo scalare, `Binary` non UTF-8, data fuori intervallo);
+/// - `DataMapping`: almeno una riga non convertibile (con `coerce` o
+///   `raise`), con la diagnostica per riga; errore Arrow nella costruzione
+///   (precisione e scala `decimal128`, builder del dizionario);
+/// - `InvalidPlan`: con `errors = ignore`, una cella non convertibile
+///   (nessun tipo Arrow omogeneo garantibile); `decimal128` senza
+///   `precision`/`scale`; `date_format` con un elemento non riconosciuto.
 pub fn type_cast(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
     type_cast_with_source_offset(batch, config, 0)
 }
 
-/// Esegue il cast usando un offset assoluto della stream sorgente per la diagnostica.
+/// Come [`type_cast`], con gli indici di riga della diagnostica spostati di
+/// `source_offset` (la posizione del batch nella sorgente).
 ///
 /// # Errors
 ///
-/// Restituisce un errore se la colonna non esiste, il tipo sorgente non è supportato,
-/// il cast viola la policy dichiarata, un indice assoluto eccede `u64` oppure una riga
-/// non è convertibile. In quest'ultimo caso l'errore contiene la diagnostica row-scoped.
+/// Come [`type_cast`], piu' `Internal` se un indice assoluto trabocca `u64`.
 pub fn type_cast_with_source_offset(
     batch: &RecordBatch,
     config: &TypeCast,
@@ -1366,7 +1449,7 @@ fn string_cast_rejection(value: &str, config: &TypeCast) -> Option<&'static str>
 
 /// Percorso generico (conversione scalare per riga): fallback per le
 /// combinazioni non coperte dal fast path e oracolo dei test di equivalenza.
-#[allow(clippy::too_many_lines)] // One exhaustive dispatcher keeps all cast policies auditable.
+#[allow(clippy::too_many_lines)] // Un dispatcher esaustivo tiene revisionabili insieme tutte le politiche di cast.
 fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
     let array: ArrayRef = match config.target_type {
         TargetType::Str => Arc::new(StringArray::from(

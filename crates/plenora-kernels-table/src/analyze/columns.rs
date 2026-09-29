@@ -110,7 +110,8 @@ pub(in crate::analyze) fn analyze_rename(
             .unwrap_or(geometry.name.as_str())
     });
     let geometry = propagate_geometry(input, &schema, renamed_geometry);
-    // Rinomina: FieldId preservati (D16), righe e ordine invariati.
+    // Rinomina: i FieldId seguono le colonne (una colonna rinominata resta
+    // la stessa colonna logica), righe e ordine invariati.
     finish(
         schema,
         geometry,

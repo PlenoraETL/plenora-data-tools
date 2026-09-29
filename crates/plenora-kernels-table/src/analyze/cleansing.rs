@@ -85,9 +85,10 @@ pub(in crate::analyze) fn analyze_fill_na(
             );
         }
         check_fill_value(op, &data_type, config.valore())?;
-        // R2.4 type-preserving: il tipo non muta, quindi i metadata del campo
-        // sorgente restano validi e si conservano (clone); cambia solo la
-        // nullability (i valori riempiti possono non essere piu' null).
+        // Il tipo non muta, quindi i metadati del campo sorgente restano
+        // validi e si conservano (clone), come nel kernel; la colonna diventa
+        // nullable (anche il kernel la dichiara cosi', e con ffill/bfill
+        // possono restare null).
         fields_out[index] = fields_out[index].clone().with_nullable(true);
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
@@ -118,9 +119,9 @@ pub(in crate::analyze) fn analyze_replace(
             PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}"))
         })?;
     }
-    // R2.4 type-preserving: Utf8 -> Utf8 (tipo invariato), i metadata del
-    // campo sorgente restano validi; `produce` ricostruisce il campo e li
-    // azzera, quindi vanno ripristinati dal sorgente.
+    // Tipo invariato (Utf8 -> Utf8): i metadati del campo sorgente restano
+    // validi, come nel kernel; `produce` ricostruisce il campo e li azzera,
+    // quindi vanno ripristinati dal sorgente.
     let source_metadata = field_of(op, input, &config.column)?.metadata().clone();
     let mut fields_out = clone_fields(input);
     produce(
@@ -257,8 +258,9 @@ pub(in crate::analyze) fn analyze_type_cast(
     };
     // Sostituzione in place: i metadati di campo (geoarrow.wkb inclusi) vanno
     // persi -> se il target e' la colonna geometrica il contratto diventa
-    // tabellare (analyze_append lo gestisce). errors=Ignore puo' fallire a
-    // runtime su dati non omogenei: rischio documentato, non errore statico.
+    // tabellare (analyze_append lo gestisce). errors=Ignore puo' fallire in
+    // esecuzione su dati non convertibili: dipende dalle celle, non e' un
+    // errore di piano prevedibile (scheda di `table.type_cast`).
     let mut output = analyze_append(input, fields, &[(config.column, target, true)])?;
     output.properties = rows_only(input);
     Ok(output)
