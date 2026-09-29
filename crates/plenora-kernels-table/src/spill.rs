@@ -93,9 +93,10 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
 
 /// Capacita' dei buffer di I/O dello spill. Il default (8 KiB) costa ~128
 /// syscall per MB su file sequenziali; 64 KiB le riduce di 8x con un picco
-/// controllato: fino a 64 writer + 64 reader aperti (`spill_partitions`
-/// di default) = 4 MiB per lato, fuori dalla contabilita' del governor
-/// solo perche' vivono dentro la singola operazione — non oltre.
+/// controllato: fino a 64 writer aperti (`spill_partitions` di default),
+/// 4 MiB, fuori da `max_governed_memory_bytes` perche' vivono solo dentro
+/// la singola operazione (il budget del runner li esclude, README «Limiti
+/// dichiarati del runner»).
 const SPILL_IO_BUFFER_BYTES: usize = 64 * 1024;
 
 fn open_writers(paths: &[PathBuf]) -> Result<Vec<BufWriter<File>>> {
@@ -203,8 +204,9 @@ fn read_record(
             "record spill oltre il limite di sicurezza".into(),
         ));
     }
-    // Buffer del chiamante riusato fra i record (hot path minimale): cresce solo se il
-    // record corrente supera la capacita' gia' allocata.
+    // Buffer del chiamante riusato fra i record, per non allocare a ogni
+    // record: cresce solo se il record corrente supera la capacita' gia'
+    // allocata.
     key.clear();
     key.resize(length, 0);
     reader.read_exact(key.as_mut_slice()).map_err(|error| {
@@ -221,8 +223,8 @@ fn read_record(
     })?))
 }
 
-/// Insieme di chiavi lette da spill con `KeyHasher` (deterministico) al
-/// posto di `SipHash` (hot path minimale): stesso hash di `partition` e
+/// Insieme di chiavi lette da spill con `KeyHasher` (deterministico, piu'
+/// economico di `SipHash` su ogni record): stesso hash di `partition` e
 /// delle mappe di `distinct` spilled.
 type SpillKeySet = HashSet<Box<[u8]>, FastHasher>;
 
@@ -232,7 +234,7 @@ fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
     let mut estimated = 0_usize;
     let mut key = Vec::new();
     while read_record(&mut reader, max_record_bytes(limits), &mut key)?.is_some() {
-        // Una sola hash per chiave (hot path minimale): accounting e inserimento nel ramo
+        // Un solo hash per chiave: accounting e inserimento nel ramo
         // "chiave nuova", stessa semantica di contains + insert.
         if keys.insert(key.as_slice().into()) {
             estimated = estimated
@@ -341,10 +343,11 @@ pub fn estimated_batch_bytes(batch: &RecordBatch) -> usize {
 /// - `Schema`: schemi dei due input incompatibili (`validate_schema`) o
 ///   errore Arrow in `select_rows`/`concat_compatible`;
 /// - `InvalidPlan`: partizioni zero (vincolo del piano);
-/// - `ResourceLimit`: quote e rappresentabilita' degli ordinali (volume);
-/// - `Internal`: integrita' del file temporaneo scritto da noi (chiave
-///   oltre `max_temp_bytes`, working set di una partizione oltre
-///   `max_governed_memory_bytes`, overflow interni di accounting);
+/// - `ResourceLimit`: quota `max_temp_bytes` superata (anche da una sola
+///   chiave), chiavi distinte di una partizione oltre
+///   `max_governed_memory_bytes`, ordinali o conteggi non rappresentabili;
+/// - `Internal`: integrita' del file temporaneo scritto da noi (record
+///   troncato, lunghezza oltre il limite, ordinale non rappresentabile);
 /// - `Io`: errori sui file temporanei (creazione, scrittura, lettura).
 pub fn execute_set_operation(
     operation: SetOperationKind,
@@ -408,20 +411,20 @@ pub fn execute_set_operation(
 }
 
 // ---------------------------------------------------------------------------
-// Spill generalizzato a righe complete (architettura.md#memoria "Spill
-// selettivo"): sort, distinct e hash aggregation.
+// Spill a righe complete: sort, distinct e hash aggregation. Il runner li
+// sceglie quando la variante in memoria non sta nel budget (README, «Budget
+// di memoria»), e ognuno da' la stessa uscita della variante in memoria.
 //
 // Formato su disco: Arrow IPC *stream* per partizione/run, letto batch per
-// batch (mai l'intera partizione) e autodescrittivo (nullability e metadata
-// preservati), senza un parser binario proprio da mantenere.
+// batch e autodescrittivo (nullability e metadata preservati), senza un
+// parser binario proprio da mantenere.
 //
 // Il partizionamento hash riusa `partition` sui byte di chiave di `row_key`:
 // chiavi uguali finiscono nella stessa partizione, quindi gruppi e duplicati
 // non la attraversano e aggregazione/distinct per partizione sono esatti.
 //
 // La directory temporanea puo' venire dal chiamante
-// (`RowSpillWorkspace::with_directory`, il `TempStore` di plenora-engine),
-// cosi' kernels-table non dipende da engine. I file li rimuove questo modulo
+// (`RowSpillWorkspace::with_directory`). I file li rimuove questo modulo
 // (`cleanup`/`Drop`), la directory resta del chiamante.
 // ---------------------------------------------------------------------------
 
@@ -436,13 +439,16 @@ const SPILL_ORDINAL_COLUMN: &str = "__plenora_spill_ordinal";
 /// volta per file aperto (run del merge sort, partizioni).
 const SPILL_CHUNK_ROWS: usize = 8_192;
 
-/// Metriche di spill richieste da architettura.md#memoria: byte scritti e letti sui file
-/// temporanei e numero di file (partizioni/run) materializzati.
+/// Metriche di spill: byte scritti e letti sui file temporanei e numero di
+/// file (partizioni/run) materializzati.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SpillMetrics {
+    /// Byte scritti sui file temporanei.
     pub bytes_written: u64,
+    /// Byte riletti dai file temporanei.
     pub bytes_read: u64,
+    /// File materializzati (partizioni o run), anche se gia' rimossi.
     pub files: usize,
     /// `true` se accumulando queste metriche un contatore ha raggiunto il
     /// proprio fondo scala: i valori qui sopra sono allora limiti inferiori,
@@ -478,7 +484,7 @@ impl SpillMetrics {
 enum SpillRoot {
     /// Directory temporanea posseduta: rimossa automaticamente al drop.
     Owned(TempDir),
-    /// Directory del chiamante (es. il `TempStore` di engine): mai rimossa.
+    /// Directory del chiamante: mai rimossa.
     External(PathBuf),
 }
 
@@ -528,8 +534,7 @@ impl RowSpillWorkspace {
         })
     }
 
-    /// Workspace su directory del chiamante (es. il `TempStore` condiviso
-    /// per `execution_id` di plenora-engine).
+    /// Workspace su una directory del chiamante.
     ///
     /// La directory e' creata se manca e MAI rimossa da questo modulo; i
     /// file di spill registrati sono comunque ripuliti.
@@ -551,6 +556,7 @@ impl RowSpillWorkspace {
         })
     }
 
+    /// La directory dei file di spill.
     #[must_use]
     pub fn directory(&self) -> &Path {
         match &self.root {
@@ -571,8 +577,8 @@ impl RowSpillWorkspace {
         }
     }
 
-    /// Verifica la quota dopo l'ultimo chunk scritto: errore dedicato
-    /// `Contract`, stessa forma dello spill set-op.
+    /// Verifica la quota dopo l'ultimo chunk scritto: `ResourceLimit`, come
+    /// lo spill delle set operation.
     fn check_quota(&self) -> Result<()> {
         let written = self.bytes_written.get();
         // La saturazione dei byte scritti e' essa stessa una violazione: con
@@ -593,8 +599,8 @@ impl RowSpillWorkspace {
         Ok(())
     }
 
-    /// Metriche accumulate (architettura.md#memoria): `files` conta i file materializzati,
-    /// anche se gia' ripuliti.
+    /// Metriche accumulate: `files` conta i file materializzati, anche se
+    /// gia' ripuliti.
     #[must_use]
     pub fn metrics(&self) -> SpillMetrics {
         SpillMetrics {
@@ -666,7 +672,7 @@ impl Write for CountingWriter {
 }
 
 /// Reader conteggiato: alimenta la metrica `bytes_read` (nessuna quota in
-/// lettura, solo osservabilita' architettura.md#memoria).
+/// lettura, solo osservabilita').
 struct CountingReader {
     inner: BufReader<File>,
     counter: Rc<Cell<u64>>,
@@ -798,14 +804,18 @@ fn read_partition(
     Ok(concat_batches(&schema, &batches)?)
 }
 
-/// `table.distinct` con spill (architettura.md#memoria).
+/// `table.distinct` con spill.
 ///
-/// Righe complete partizionate su disco per hash della chiave, poi una
-/// passata in streaming che accumula le statistiche per chiave
-/// (prima/ultima occorrenza globale, conteggio) con gli stessi byte di
-/// `row_key` del percorso in memoria. Output identico a `distinct`: la mappa
-/// delle chiavi resta in RAM (e' dimensionata sull'output, una voce per
-/// chiave distinta) ed e' contabilizzata su `max_governed_memory_bytes`.
+/// Righe complete, con il loro indice originale, partizionate su disco per
+/// hash della chiave in `spill_partitions` file, poi una passata in
+/// streaming che accumula le statistiche per chiave (prima/ultima
+/// occorrenza globale, conteggio) con gli stessi byte di `row_key` del
+/// percorso in memoria. Output identico a `distinct`: la mappa delle chiavi
+/// resta in RAM (una voce per chiave distinta di tutto l'input, che piu'
+/// partizioni non riducono) ed e' contabilizzata su
+/// `max_governed_memory_bytes` come lunghezza della chiave piu' 64 byte.
+/// Diversamente da `distinct`, rifiuta un input con una colonna di nome
+/// `__plenora_spill_ordinal`.
 ///
 /// # Errors
 ///
@@ -820,10 +830,9 @@ pub fn distinct_spilled(
     distinct_spilled_in(batch, config, limits, &mut workspace)
 }
 
-/// Come [`distinct_spilled`], ma su un workspace del chiamante.
-///
-/// Punto di ingresso per l'integrazione con il `TempStore` di plenora-engine
-/// (directory esterna + quota condivisa, nessuna dipendenza da engine).
+/// Come [`distinct_spilled`], ma su un workspace del chiamante (directory
+/// esterna e quota condivisa); il runner lo chiama con un workspace
+/// proprio.
 ///
 /// # Errors
 ///
@@ -969,14 +978,17 @@ pub fn distinct_spilled_in(
     Ok((output, workspace.metrics()))
 }
 
-/// `table.aggregate` con spill (architettura.md#memoria).
+/// `table.aggregate` con spill.
 ///
 /// Righe complete partizionate per hash della chiave di gruppo (ogni gruppo
-/// vive interamente in una partizione), aggregazione in memoria di una
-/// partizione alla volta e riordino finale sull'ordine canonico delle chiavi
-/// (lessicografico sui byte di `row_key`, lo stesso del `BTreeMap` del
-/// percorso in memoria). La mappa dei gruppi in RAM e' quindi dimensionata
-/// su una partizione, non sull'intero input. Output identico ad `aggregate`.
+/// vive interamente in una partizione, con le sue righe in ordine
+/// d'ingresso), aggregazione in memoria di una partizione alla volta e
+/// riordino finale sull'ordine canonico delle chiavi (lessicografico sui
+/// byte di `row_key`, lo stesso del percorso in memoria). La mappa dei
+/// gruppi in RAM e' quindi dimensionata su una partizione, non sull'intero
+/// input; si contano solo i batch letti di una partizione, non le strutture
+/// di chiavi e gruppi (README, «Memoria delle chiavi dei kernel in memoria
+/// non governata»). Output identico ad `aggregate`.
 ///
 /// # Errors
 ///
@@ -991,13 +1003,14 @@ pub fn aggregate_spilled(
     aggregate_spilled_in(batch, config, limits, &mut workspace)
 }
 
-/// Come [`aggregate_spilled`], ma su un workspace del chiamante (integrazione
-/// `TempStore` di plenora-engine, cfr. [`distinct_spilled_in`]).
+/// Come [`aggregate_spilled`], ma su un workspace del chiamante (cfr.
+/// [`distinct_spilled_in`]).
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna di `group_by` assente (`column_index`) o errore
-///   Arrow in `aggregate`/`concat_batches`/`select_rows`;
+/// - `Schema`: colonna di `group_by` assente (`column_index`), gli errori
+///   di `aggregate` sulle partizioni, errore Arrow in
+///   `concat_batches`/`select_rows`;
 /// - `InvalidPlan`: `group_by` vuoto, `spill_partitions` zero, output di
 ///   partizione incoerente con i gruppi (invariante interna);
 /// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_governed_memory_bytes`);
@@ -1266,8 +1279,8 @@ fn check_permutation(permutation: &[usize], rows: usize) -> Result<()> {
 ///
 /// Delega a `compare_cells_typed`, il comparatore tipizzato unico
 /// condiviso con `compare_at` e `ColumnComparator` (null in coda,
-/// `i64::cmp`/`u64::cmp` esatti, `total_cmp` su Float64, confronto
-/// testuale altrove).
+/// `i64::cmp`/`u64::cmp` esatti, `total_cmp` su Float64, confronto nel
+/// dominio nativo di ogni altro tipo).
 fn compare_cells(challenger: &RunCursor, champion: &RunCursor, column: usize) -> Result<Ordering> {
     let left_batch = challenger
         .current
@@ -1285,7 +1298,7 @@ fn compare_cells(challenger: &RunCursor, champion: &RunCursor, column: usize) ->
     )
 }
 
-/// `table.sort` con spill (architettura.md#memoria): external merge sort.
+/// `table.sort` con spill: external merge sort.
 ///
 /// L'input e' affettato in run dimensionate su `max_governed_memory_bytes`, ogni run
 /// e' ordinata in memoria con la permutazione stabile di `sort` e spillata
@@ -1307,17 +1320,17 @@ pub fn sort_spilled(
     sort_spilled_in(batch, config, limits, &mut workspace)
 }
 
-/// Come [`sort_spilled`], ma su un workspace del chiamante (integrazione
-/// `TempStore` di plenora-engine, cfr. [`distinct_spilled_in`]).
+/// Come [`sort_spilled`], ma su un workspace del chiamante (cfr.
+/// [`distinct_spilled_in`]).
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna di sort assente (`column_index`) o errore Arrow in
-///   `sort`/`select_rows`;
-/// - `InvalidPlan`: nessuna colonna di sort, confronto tra celle fallito
-///   (`compare_cells_typed`);
+/// - `Schema`: colonna di sort assente (`column_index`), tipo non
+///   ordinabile o dictionary malformato (prevalidazione di ogni run, e
+///   `compare_cells_typed` nel merge), errore Arrow in `select_rows`;
+/// - `InvalidPlan`: nessuna colonna di sort;
 /// - `ResourceLimit`: quota `max_temp_bytes` superata, indice di riga oltre
-///   `u64`;
+///   `u64` o `u32` (`select_rows`);
 /// - `Internal`: run illeggibile come l'abbiamo scritta (colonna ordinale
 ///   assente, nulla o non rappresentabile) o permutazione del merge che non
 ///   copre l'input esattamente una volta;
@@ -1548,10 +1561,9 @@ mod tests {
 
     #[test]
     fn l_accumulo_delle_metriche_di_spill_dichiara_la_saturazione() {
-        // I contatori di spill possono saturare, e `counters_saturated` di
-        // `ExecutionMetrics` deve dirlo: restando `false` con
-        // `bytes_written` gia' a fondo scala sarebbe un flag che smentisce i
-        // numeri accanto a se'.
+        // I contatori di spill possono saturare, e l'accumulo deve dirlo:
+        // `saturated` restando `false` con `bytes_written` gia' a fondo
+        // scala sarebbe un flag che smentisce i numeri accanto a se'.
         let mut totale = SpillMetrics::default();
         totale.accumulate(SpillMetrics {
             bytes_written: 10,
@@ -2223,7 +2235,7 @@ mod tests {
         }
 
         // Percorso felice: metriche esposte, file ripuliti, directory
-        // esterna mai rimossa (appartiene al chiamante, es. TempStore).
+        // esterna mai rimossa (appartiene al chiamante).
         let mut workspace =
             RowSpillWorkspace::with_directory(&directory, 1 << 30).expect("workspace");
         let limits = spill_test_limits(1 << 20);

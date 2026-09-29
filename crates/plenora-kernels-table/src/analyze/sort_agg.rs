@@ -1,5 +1,5 @@
-//! Analyzer a secco di ordinamento, distinct e aggregazioni
-//! (kernel `aggregation.rs`).
+//! Analyzer a secco di ordinamento, distinct e aggregazioni (kernel del
+//! modulo `aggregation`).
 
 use std::collections::HashMap;
 
@@ -17,7 +17,7 @@ use super::helpers::{
 use crate::{aggregation, Limits};
 
 // ---------------------------------------------------------------------------
-// aggregation.rs
+// aggregation
 // ---------------------------------------------------------------------------
 
 /// Le colonne di ordinamento esistono e hanno un confronto nativo.
@@ -223,7 +223,7 @@ pub(in crate::analyze) fn analyze_aggregate(
                 }
                 // Come il kernel (`aggregate`): il range e' parte del
                 // contratto; fuori [0, 1] l'indice nel gruppo ordinato
-                // uscirebbe dai limiti — rifiuto a compile-plan.
+                // uscirebbe dai limiti, quindi si rifiuta in validazione.
                 if aggregation
                     .quantile
                     .is_some_and(|quantile| !(0.0..=1.0).contains(&quantile))
@@ -270,10 +270,11 @@ pub(in crate::analyze) fn analyze_aggregate(
     if config.aggregations.is_empty() {
         produce(&mut fields_out, fields, "count", DataType::Int64, false)?;
     }
-    // R2.4: i metadata dello schema di input si conservano sempre (le chiavi
-    // sconosciute non sono giudicabili dal centro; perderle rompe i
-    // round-trip). Le colonne aggregate restano derivate: nessun metadata di
-    // campo ereditato.
+    // I metadata dello schema di input si conservano sempre (le chiavi
+    // sconosciute non sono giudicabili qui; perderle rompe i round-trip).
+    // Le colonne di gruppo tengono i metadata di campo; quelle aggregate
+    // sono derivate e non ne ereditano. Un nome d'uscita ripetuto
+    // sostituisce la colonna precedente (`produce`), come nel kernel.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let preserved = input
         .geometries

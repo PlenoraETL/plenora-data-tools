@@ -110,7 +110,7 @@ fn diff_values_precedente(
     )?)
 }
 
-#[allow(clippy::too_many_lines)] // Diff phases remain adjacent to preserve auditability.
+#[allow(clippy::too_many_lines)] // Le fasi del diff restano vicine per essere verificabili.
 fn table_diff_precedente(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -183,8 +183,9 @@ fn table_diff_precedente(
         diff_side_keys_precedente(left, &left_keys, "chiavi duplicate nella tabella sinistra")?;
     let new =
         diff_side_keys_precedente(right, &right_keys, "chiavi duplicate nella tabella destra")?;
-    // Preserve source order: old rows first, then new-only rows. Sorting the
-    // encoded key would place nulls first and reorder otherwise stable data.
+    // Ordine delle sorgenti: prima le righe vecchie, poi quelle solo nuove.
+    // Ordinare la chiave codificata metterebbe i null in testa e
+    // riordinerebbe dati altrimenti stabili.
     let mut matched = Vec::with_capacity(old.len().saturating_add(new.len()));
     for row in 0..left.num_rows() {
         matched.push((
@@ -234,7 +235,8 @@ fn table_diff_precedente(
             (None, None) => {
                 // `matched` e' costruito solo con una sorgente `Some` a
                 // sinistra o a destra: la coppia (None, None) non e'
-                // producibile; invariante interna, errore esplicito (R6).
+                // producibile; invariante interna, errore esplicito invece
+                // di un panico.
                 return Err(PlenoraError::Internal(
                     "table_diff: riga senza sorgente in nessuno dei due batch".into(),
                 ));

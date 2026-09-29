@@ -3,14 +3,14 @@
 //!
 //! I sottomoduli e cio' che ciascuno possiede:
 //!
-//! - [`compare`]: confronto tipizzato tra celle condiviso da sort e spill;
-//! - [`sort`]: `table.sort`, `table.top_n`, `table.distinct`,
+//! - `compare`: confronto tipizzato tra celle condiviso da sort e spill;
+//! - `sort`: `table.sort`, `table.top_n`, `table.distinct`,
 //!   `table.dedup_advanced` e i comparatori tipizzati;
-//! - [`grouping`]: infrastruttura di raggruppamento (chiavi di gruppo,
+//! - `grouping`: infrastruttura di raggruppamento (chiavi di gruppo,
 //!   hasher, sorgenti tipizzate, partizioni) condivisa da aggregazione e
 //!   finestre;
-//! - [`aggregate`]: `table.aggregate` (config e riduzioni numeriche);
-//! - [`window`]: `table.rolling_window` e `table.window_function`.
+//! - `aggregate`: `table.aggregate` (config e riduzioni numeriche);
+//! - `window`: `table.rolling_window` e `table.window_function`.
 
 mod aggregate;
 mod compare;
@@ -764,10 +764,10 @@ mod tests {
                                         )
                                     })?;
                                     let weight = position - position.floor();
-                                    // Niente mul_add/FMA: forma non fusa
-                                    // (contratto numerico, architettura.md#determinismo) — la
-                                    // STESSA della produzione, equivalenza
-                                    // bit-a-bit per costruzione.
+                                    // Niente mul_add/FMA: forma non fusa,
+                                    // il contratto numerico, la STESSA
+                                    // della produzione: equivalenza bit
+                                    // per bit per costruzione.
                                     #[allow(clippy::suboptimal_flops)]
                                     let interpolated =
                                         (values[upper] - values[lower]) * weight + values[lower];
@@ -816,10 +816,10 @@ mod tests {
     #[test]
     fn quantile_fuori_range_rifiutato_prima_dei_dati() {
         // Regressione: un quantile > 1.0 darebbe un indice oltre il gruppo
-        // ordinato — panic out-of-bounds nel percorso lib, invisibile al
-        // gate R6 perche' e' un'indicizzazione e non una primitiva
-        // esplicita. Il range e' validato fail-closed prima di toccare i
-        // dati.
+        // ordinato, cioe' un panico out-of-bounds nel percorso di libreria
+        // che il clippy anti-panico non vede, perche' e' un'indicizzazione
+        // e non una primitiva esplicita. Il range si valida prima di
+        // toccare i dati.
         let batch = numeric_batch(&[Some(1.0), Some(2.0), Some(3.0)]);
         for quantile in [-0.5, 1.5, f64::NAN, f64::INFINITY] {
             let config = Aggregate {

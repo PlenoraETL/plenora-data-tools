@@ -15,13 +15,21 @@ use super::grouping::{build_partitions, scatter_partitions};
 use super::sort::{sort, Sort};
 use crate::float64_source::{valida_valori_numerici, Float64Source, OrdineNumerico};
 
+/// Aggregazione di `table.rolling_window` sui valori non nulli della
+/// finestra (in JSON in minuscolo).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RollingKind {
+    /// Somma in ordine di riga (da `-0.0`); un NaN la rende NaN.
     Sum,
+    /// Somma divisa per il numero di valori.
     Mean,
+    /// Minimo con `f64::min`: i NaN si ignorano salvo che siano tutti NaN.
     Min,
+    /// Massimo con `f64::max`: i NaN si ignorano salvo che siano tutti NaN.
     Max,
+    /// Deviazione standard in due passate, divisore `valori - ddof`; null
+    /// con `valori <= ddof`.
     Stddev,
 }
 
@@ -29,21 +37,35 @@ const fn default_min_periods() -> usize {
     1
 }
 
+/// Config di `table.rolling_window`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RollingWindow {
+    /// Colonna numerica aggregata, letta come `f64`.
     pub column: String,
+    /// Aggregazione della finestra.
     pub function: RollingKind,
+    /// Colonna di partizione, letta come testo (il null e' una partizione);
+    /// assente, una partizione sola.
     #[serde(default)]
     pub group_by: Option<String>,
+    /// Colonna ordinabile: le righe si ordinano in ascendente su di essa
+    /// (sort stabile, null in coda) prima del calcolo, e l'uscita resta in
+    /// quell'ordine.
     #[serde(default)]
     pub order_column: Option<String>,
+    /// Righe della finestra, corrente compresa (almeno 1): la finestra si
+    /// misura in righe, e una cella nulla occupa il suo posto.
     pub window: usize,
+    /// Valori non nulli minimi per un risultato (default 1, al piu'
+    /// `window`); sotto, null.
     #[serde(default = "default_min_periods")]
     pub min_periods: usize,
     /// Gradi di liberta' di `stddev` (assente: 1).
     #[serde(default)]
     pub ddof: Option<usize>,
+    /// Colonna d'uscita, `Float64` nullabile; se esiste gia' si sostituisce
+    /// al suo posto.
     pub output_column: String,
 }
 
@@ -204,8 +226,18 @@ fn ranghi(
     Ok(uscita)
 }
 
-/// Finestra mobile (`window` righe) su `column`, opzionalmente partizionata
-/// per `group_by` e ordinata per `order_column`.
+/// `table.rolling_window`: aggregazione mobile di `column`, riga per riga.
+///
+/// Per ogni riga, l'aggregazione dei valori non nulli di `column` sulle
+/// ultime `window` righe della sua partizione (`group_by`), riga corrente
+/// compresa, nella colonna `output_column`.
+///
+/// Con `order_column` le righe si ordinano prima in ascendente su quella
+/// colonna ([`sort`]), e l'uscita resta in quell'ordine; senza,
+/// ordine d'ingresso.
+///
+/// Un intero oltre `2^53` **non** e' un errore: il risultato e' un
+/// `Float64` per contratto, quindi la conversione arrotonda.
 ///
 /// # Errors
 ///
@@ -214,12 +246,8 @@ fn ranghi(
 /// - `ResourceLimit`: dimensioni/divisori della finestra non rappresentabili
 ///   come `f64` (dipendono dal numero di righe nella finestra);
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
-///   schema; in piu' gli errori di `sort`,
-///   `scalar_as_string`/`scalar_as_f64_rounded` e `replace_or_append`.
-///
-/// Un intero oltre 2^53 **non** e' un errore: il risultato e' un `Float64`
-/// per contratto, quindi la conversione arrotonda
-/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+///   schema; testo non numerico in `column`; in piu' gli errori di `sort`,
+///   `scalar_as_string` (partizioni) e `replace_or_append`.
 pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
     config.verifica_parametri()?;
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
@@ -318,19 +346,36 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
     )
 }
 
+/// Funzione di `table.window_function` (in JSON in `snake_case`:
+/// `"dense_rank"`, `"pct_change"`, ...). Tutte rendono `Float64`
+/// nullabile e si calcolano per partizione, nell'ordine delle righe.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowKind {
+    /// Rango del valore fra i non nulli, da 1; a pari merito la media delle
+    /// posizioni.
     Rank,
+    /// 1, 2, 3... sui valori distinti.
     DenseRank,
+    /// Somma cumulata dei valori non nulli; null sulle righe nulle.
     Cumsum,
+    /// Posizione della riga nella partizione, da 0.
     Cumcount,
+    /// Valore `offset` righe prima.
     Lag,
+    /// Valore `offset` righe dopo.
     Lead,
+    /// `(corrente - precedente) / precedente` sulla riga subito prima; null
+    /// senza precedente, con precedente nullo o zero, o corrente nullo.
     PctChange,
+    /// Media dei valori non nulli fin qui; null sulle righe nulle.
     RunningMean,
+    /// Valori minori diviso (valori non nulli - 1); 0 con un solo valore.
     PercentRank,
+    /// Valori minori o uguali diviso valori non nulli.
     CumeDist,
+    /// `posizione * min(buckets, righe) / righe + 1` in divisione intera,
+    /// posizione da 0.
     Ntile,
 }
 const fn default_window() -> WindowKind {
@@ -340,19 +385,31 @@ const fn default_offset() -> usize {
     1
 }
 
+/// Config di `table.window_function`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WindowFunction {
+    /// Colonna numerica su cui si calcola (non `Utf8` per i ranghi).
     pub column: String,
+    /// Funzione (default [`WindowKind::Rank`]).
     #[serde(default = "default_window")]
     pub function: WindowKind,
+    /// Colonna di partizione, letta come testo (il null e' una partizione);
+    /// assente, una partizione sola.
     pub group_by: Option<String>,
+    /// Colonna ordinabile: le righe si ordinano in ascendente su di essa
+    /// (sort stabile, null in coda) prima del calcolo, e l'uscita resta in
+    /// quell'ordine.
     pub order_column: Option<String>,
     /// Distanza di `lag` e `lead` (assente: 1).
     #[serde(default)]
     pub offset: Option<usize>,
+    /// Gruppi di `ntile`: obbligatorio e positivo con `ntile`, rifiutato
+    /// con le altre funzioni.
     #[serde(default)]
     pub buckets: Option<usize>,
+    /// Colonna d'uscita (assente: `<column>_<funzione>`); se esiste gia' si
+    /// sostituisce al suo posto.
     pub output_column: Option<String>,
 }
 
@@ -383,10 +440,13 @@ impl WindowFunction {
     }
 }
 
-#[allow(clippy::too_many_lines)] // All window variants share partition/order state and one output pass.
-/// Funzione finestra (`rank`, `lag`, `ntile`, ...) su `column`,
-/// opzionalmente partizionata per `group_by` e ordinata per
-/// `order_column`.
+#[allow(clippy::too_many_lines)] // Le varianti condividono partizioni, ordine e una sola passata d'uscita.
+/// `table.window_function`: funzione finestra (`rank`, `lag`, `ntile`, ...)
+/// su `column`, per partizione di `group_by`, nella colonna `output_column`.
+///
+/// Con `order_column` le righe si ordinano prima in ascendente su quella
+/// colonna ([`sort`]), e l'uscita resta in quell'ordine; senza,
+/// ordine d'ingresso. Le partizioni si formano sul testo di `group_by`.
 ///
 /// # Errors
 ///
@@ -394,13 +454,13 @@ impl WindowFunction {
 ///   `buckets` maggiore di zero;
 ///   `buckets` specificato per una funzione diversa da `ntile`;
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
-///   schema; in piu' gli errori di `sort`,
-///   `scalar_as_string`/`scalar_as_f64_rounded` e `replace_or_append`.
+///   schema; `column` fuori dal dominio numerico, `Utf8` con una funzione
+///   di rango, testo non numerico; in piu' gli errori di `sort`,
+///   `scalar_as_string` (partizioni) e `replace_or_append`.
 ///
-/// L'arrotondamento vale per le varianti che producono un **valore** —
-/// `cumsum`, `running_mean`, `lag`, `lead`, `pct_change` — il cui risultato e'
-/// un `Float64` per contratto
-/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+/// L'arrotondamento vale per le varianti che producono un **valore**
+/// (`cumsum`, `running_mean`, `lag`, `lead`, `pct_change`), il cui
+/// risultato e' un `Float64` per contratto.
 ///
 /// Le varianti di **rango** (`rank`, `dense_rank`, `percent_rank`,
 /// `cume_dist`) non convertono: confrontano il dominio originale come il

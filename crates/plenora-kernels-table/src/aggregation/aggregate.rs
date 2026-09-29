@@ -43,21 +43,48 @@ pub(super) fn conteggio_gruppo(righe: usize) -> Result<i64> {
     })
 }
 
+/// Funzione di un'aggregazione di `table.aggregate` (in JSON in
+/// minuscolo: `"count"`, `"sum"`, ...).
+///
+/// Le funzioni numeriche leggono la cella come `f64` arrotondando (interi
+/// oltre `2^53`, `Decimal128`, testo numerico) e rendono `Float64`
+/// nullabile: null con `skip_null` falso e un null nel gruppo, o senza
+/// valori.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AggFunction {
+    /// Celle non nulle del gruppo (null logico dei dizionari compreso),
+    /// `Int64` non nullabile; qualunque tipo di colonna.
     Count,
+    /// Somma in ordine d'ingresso (da `-0.0`); un NaN la rende NaN.
     Sum,
+    /// Sinonimo di [`AggFunction::Mean`]; il nome d'uscita di default usa
+    /// `mean`.
     Avg,
+    /// Somma divisa per il numero di valori.
     Mean,
+    /// Minimo con `f64::min`: i NaN si ignorano salvo che siano tutti NaN.
     Min,
+    /// Massimo con `f64::max`: i NaN si ignorano salvo che siano tutti NaN.
     Max,
+    /// Testo della cella nella prima riga del gruppo (null compreso),
+    /// `Utf8`.
     First,
+    /// Testo della cella nell'ultima riga del gruppo (null compreso),
+    /// `Utf8`.
     Last,
+    /// Testi delle celle in ordine d'ingresso uniti da `separator`, `Utf8`.
     Concat,
+    /// Testi distinti del gruppo, piu' uno per il null con `skip_null`
+    /// falso; `Int64` non nullabile.
     Nunique,
+    /// Varianza in due passate, divisore `valori - ddof`; null con
+    /// `valori <= ddof`.
     Variance,
+    /// Radice di [`AggFunction::Variance`].
     Stddev,
+    /// Interpolazione lineare fra i valori ordinati con `total_cmp`, alla
+    /// posizione `quantile * (valori - 1)`.
     Quantile,
 }
 
@@ -68,25 +95,37 @@ pub(in crate::aggregation) const fn default_ddof() -> usize {
     1
 }
 
+/// Un'aggregazione di `table.aggregate`. Campi sconosciuti rifiutati; un
+/// parametro scritto per una funzione che non lo usa si rifiuta
+/// ([`Aggregation::verifica_parametri`]).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Aggregation {
+    /// Colonna aggregata.
     pub column: String,
+    /// Funzione (default [`AggFunction::Count`]).
     #[serde(default = "default_agg")]
     pub function: AggFunction,
     /// Separatore di `concat` (assente: `", "`).
     #[serde(default)]
     pub separator: Option<String>,
     /// Valori distinti (assente: no). Non ha effetto su `count`, `nunique`,
-    /// `first` e `last`.
+    /// `first` e `last`. Su `concat` tiene la prima occorrenza di ogni
+    /// testo; sulle funzioni numeriche deduplica sul valore esatto e riduce
+    /// i distinti in ordine crescente.
     #[serde(default)]
     pub distinct: Option<bool>,
     /// Null ignorati (assente: si'). Non ha effetto su `count`, `first` e
-    /// `last`.
+    /// `last`. Falso: un null rende null le funzioni numeriche, conta come
+    /// un valore in `nunique` e vale il testo vuoto in `concat`.
     #[serde(default)]
     pub skip_null: Option<bool>,
+    /// Nome della colonna d'uscita; vuoto (default) vale `column`, o
+    /// `<column>_<funzione>` se `column` compare in piu' aggregazioni.
     #[serde(default)]
     pub alias: String,
+    /// Quantile in `[0, 1]`: obbligatorio con `quantile`, rifiutato con le
+    /// altre funzioni.
     pub quantile: Option<f64>,
     /// Gradi di liberta' di `variance` e `stddev` (assente: 1).
     #[serde(default)]
@@ -152,10 +191,14 @@ impl Aggregation {
     }
 }
 
+/// Config di `table.aggregate`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Aggregate {
+    /// Colonne della chiave di gruppo, almeno una, leggibili come testo.
     pub group_by: Vec<String>,
+    /// Aggregazioni, nell'ordine delle colonne d'uscita; vuoto (default)
+    /// produce una colonna `count` con le righe di ogni gruppo.
     #[serde(default)]
     pub aggregations: Vec<Aggregation>,
 }
@@ -270,8 +313,8 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
     }
     // Solo `distinct` e `quantile` hanno bisogno del gruppo materializzato
     // (ordinamento); per le altre funzioni il secondo `Vec` e' lavoro
-    // evitabile (hot path minimale): si riduce sull'iteratore flatten, stesse operazioni
-    // f64 nello stesso ordine — parita' bit-a-bit per costruzione.
+    // evitabile: si riduce sull'iteratore flatten, stesse operazioni f64
+    // nello stesso ordine, quindi parita' bit per bit per costruzione.
     if !aggregation.distinct() && !matches!(aggregation.function, AggFunction::Quantile) {
         return reduce_numeric_streaming(&raw, aggregation);
     }
@@ -332,10 +375,10 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
                 .to_usize()
                 .ok_or_else(|| PlenoraError::InvalidPlan("indice quantile non valido".into()))?;
             let weight = position - position.floor();
-            // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-            // violerebbe il determinismo bit-esatto (architettura.md#determinismo); la forma non
-            // fusa e' il contratto numerico. Produzione e oracolo usano la
-            // STESSA forma: l'equivalenza bit-a-bit resta per costruzione.
+            // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e
+            // se la usasse o no dipenderebbe dal target. La forma non fusa
+            // e' il contratto numerico; produzione e oracolo usano la STESSA
+            // forma, quindi l'equivalenza bit per bit resta per costruzione.
             #[allow(clippy::suboptimal_flops)]
             let interpolated = (values[upper] - values[lower]) * weight + values[lower];
             interpolated
@@ -343,7 +386,7 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
         // Il dispatch di `aggregate` instrada a `reduce_numeric` solo
         // Sum/Avg/Mean/Min/Max/Variance/Stddev/Quantile; le altre funzioni
         // hanno percorsi dedicati. Il compilatore non puo' dimostrarlo:
-        // invariante interna, errore esplicito (R6).
+        // invariante interna, errore esplicito invece di un panico.
         _ => {
             return Err(PlenoraError::Internal(
                 "funzione fuori dal percorso numerico di reduce_numeric".into(),
@@ -352,24 +395,37 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
     }))
 }
 
-#[allow(clippy::too_many_lines)] // Aggregation variants share one grouping pass and its invariants.
-/// Batch aggregato per `group_by` con le aggregazioni di
-/// `config.aggregations` (default: solo conteggio per gruppo).
+#[allow(clippy::too_many_lines)] // Le varianti condividono una passata di raggruppamento e i suoi invarianti.
+/// `table.aggregate`: una riga per chiave di gruppo distinta di `group_by`,
+/// con le aggregazioni di `config.aggregations` (vuoto: solo la colonna
+/// `count` con le righe di ogni gruppo).
+///
+/// Identita' di gruppo sul testo di ogni cella, come `table.distinct` (il
+/// null e' un gruppo; `-0.0` e `0.0` distinti; un NaN solo). I gruppi escono
+/// nell'ordine lessicografico delle loro chiavi testuali (`row_key`): null
+/// prima, poi la stringa `<lunghezza>:<testo>` byte per byte, colonna per
+/// colonna. Le righe di un gruppo si riducono in ordine d'ingresso. Un nome
+/// d'uscita uguale a una colonna gia' prodotta la sostituisce al suo posto
+/// (`replace_or_append`).
+///
+/// Un intero oltre `2^53` **non** e' un errore nelle aggregazioni a
+/// risultato `Float64`: li' la conversione arrotonda, perche' il double e'
+/// il tipo del risultato.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `group_by` vuoto; funzione `quantile` senza il parametro
-///   `quantile` o con valore fuori `[0, 1]`; indice di quantile non valido;
-///   nome di output non valido (come `validate_output_name`);
+/// - `InvalidPlan`: `group_by` vuoto; un parametro scritto per una funzione
+///   che non lo usa ([`Aggregation::verifica_parametri`]); funzione
+///   `quantile` senza il parametro `quantile` o con valore fuori `[0, 1]`;
+///   nome d'uscita non valido (`validate_output_name`);
 /// - `ResourceLimit`: conteggi e dimensioni di gruppo non rappresentabili
-///   (`i64`/`f64`): crescono col numero di righe del gruppo;
+///   (`i64`/`f64`), indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Schema`: una colonna di `group_by` o delle aggregazioni assente dallo
-///   schema; in piu' gli errori di `scalar_as_string`/`scalar_as_f64_rounded`
-///   (tipi fuori dal fast path), `select_rows` e `replace_or_append`.
-///
-/// Un intero oltre 2^53 **non** e' un errore nelle aggregazioni a risultato
-/// `Float64`: li' la conversione arrotonda
-/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+///   schema; gli errori di `scalar_as_string` (chiavi, `first`, `last`,
+///   `concat`, `nunique`) e della lettura numerica (testo non numerico,
+///   tipo non numerico); errori Arrow di `select_rows` e
+///   `replace_or_append`;
+/// - `Internal`: invarianti interne del raggruppamento.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
     let group_indices = config
         .group_by

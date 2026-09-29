@@ -14,10 +14,15 @@ use crate::{column_index, select_rows};
 use super::compare::{compare_at, validate_sortable};
 use super::grouping::visit_key_ids;
 
+/// Config di `table.sort`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sort {
+    /// Chiavi d'ordinamento, dalla piu' significativa: almeno una, senza
+    /// ripetizioni, di tipo ordinabile ([`super::is_sortable`]).
     pub columns: Vec<String>,
+    /// Verso, lo stesso per tutte le chiavi (default `true`). Il discendente
+    /// rovescia l'intero confronto, null compresi: null in testa.
     #[serde(default = "default_true")]
     pub ascending: bool,
 }
@@ -108,7 +113,8 @@ fn compare_nullable<A: Array>(
 ///
 /// Percorre le colonne nell'ordine del piano, cosi' il primo errore e'
 /// sempre lo stesso. Dentro `par_sort_by` quale confronto fallisca per primo
-/// dipende da come Rayon divide il lavoro (architettura.md#determinismo).
+/// dipende da come Rayon divide il lavoro: l'errore non sarebbe
+/// deterministico.
 fn prevalidate_sort_columns(batch: &RecordBatch, indices: &[usize]) -> Result<()> {
     for index in indices {
         validate_sortable(batch.column(*index), batch.num_rows())?;
@@ -127,15 +133,23 @@ fn comparator_after_prevalidation() -> PlenoraError {
     )
 }
 
-/// Batch ordinato per `config.columns` (sort stabile, null in coda in
-/// ascendente).
+/// `table.sort`: batch ordinato per `config.columns`.
+///
+/// Confronto sul valore nativo di ogni tipo ([`super::compare_cells_typed`]):
+/// null dopo ogni valore, `total_cmp` sui `Float64`. Il discendente
+/// rovescia l'intero confronto (null in testa). Sort stabile: a parita' di
+/// chiavi resta l'ordine d'ingresso, in entrambi i versi. Da 32.768 righe
+/// il merge sort e' parallelo, con la stessa permutazione.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `columns` vuoto;
-/// - `Schema`: una colonna di `columns` assente dallo schema o non
-///   ordinabile (prevalidazione deterministica), piu' gli errori di
-///   `select_rows`.
+/// - `Schema`: una colonna di `columns` assente dallo schema, di tipo non
+///   ordinabile o dictionary con una chiave fuori dal dizionario
+///   (prevalidazione deterministica); errore Arrow in `select_rows`;
+/// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
+/// - `Internal`: un confronto fallito dopo la prevalidazione (invariante
+///   nostra).
 pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
     select_rows(batch, &sort_permutation(batch, config)?)
 }
@@ -149,7 +163,7 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
 ///
 /// # Errors
 ///
-/// Come [`sort`], esclusi gli errori di `select_rows`.
+/// Come [`sort`], esclusi quelli di `select_rows`.
 pub fn sort_permutation(batch: &RecordBatch, config: &Sort) -> Result<Vec<usize>> {
     // Sotto soglia il merge sort parallelo di rayon non ripaga l'overhead;
     // entrambi i percorsi sono stabili, quindi la permutazione e' identica.
@@ -202,29 +216,39 @@ pub fn sort_permutation(batch: &RecordBatch, config: &Sort) -> Result<Vec<usize>
     Ok(rows)
 }
 
+/// Config di `table.top_n`. Campi sconosciuti rifiutati: il verso si
+/// scrive `descending`, e `ascending` e' un errore.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TopN {
+    /// Chiavi d'ordinamento, come [`Sort::columns`].
     pub columns: Vec<String>,
+    /// Righe da tenere, da `0` (l'analisi lo limita a `max_rows`).
     pub n: u64,
+    /// `true` tiene i valori piu' grandi (default `false`): come
+    /// `ascending: false` di [`Sort`], con i null in testa.
     #[serde(default)]
     pub descending: bool,
 }
 
-/// Prime `n` righe secondo l'ordinamento di `sort`.
+/// `table.top_n`: le prime `n` righe secondo l'ordinamento di [`sort`].
 ///
-/// Output identico a `sort` seguito da `limit(n)`: `select_nth_unstable_by`
-/// partiziona in O(righe) e ordina solo i primi `n`. Lo spareggio
-/// sull'indice originale rende l'ordine totale, quindi la permutazione
-/// coincide con quella dello stable sort completo.
+/// Output identico a `sort` (con `ascending = !descending`) seguito dalle
+/// prime `min(n, righe)` righe: `select_nth_unstable_by` partiziona in
+/// O(righe) e ordina solo le prime `n`. Lo spareggio sull'indice originale
+/// rende l'ordine totale, quindi la permutazione coincide con quella del
+/// sort stabile completo. `n = 0` da' un batch vuoto con lo stesso schema.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `columns` vuoto, oppure `n` non rappresentabile come
 ///   `usize`;
-/// - `Schema`: una colonna di `columns` assente dallo schema o non
-///   ordinabile (stessa prevalidazione deterministica di `sort`), piu' gli
-///   errori di `select_rows`.
+/// - `Schema`: una colonna di `columns` assente dallo schema, di tipo non
+///   ordinabile o dictionary con una chiave fuori dal dizionario (stessa
+///   prevalidazione deterministica di `sort`); errore Arrow in
+///   `select_rows`;
+/// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
+/// - `Internal`: un confronto fallito dopo la prevalidazione.
 pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
     let indices = config
         .columns
@@ -281,35 +305,52 @@ pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
     select_rows(batch, &rows)
 }
 
+/// Quale occorrenza di una chiave ripetuta tengono `table.distinct` e
+/// `table.dedup_advanced` (in JSON `"first"`, `"last"`, `"false"`).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Keep {
+    /// La prima occorrenza (default).
     First,
+    /// L'ultima occorrenza.
     Last,
+    /// Nessuna: solo le righe la cui chiave compare una volta sola. Solo
+    /// per `table.distinct`: `table.dedup_advanced` lo rifiuta.
     False,
 }
 const fn default_keep() -> Keep {
     Keep::First
 }
 
+/// Config di `table.distinct`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Distinct {
+    /// Colonne della chiave, leggibili come testo e senza ripetizioni;
+    /// vuoto (default) vale tutte le colonne.
     #[serde(default)]
     pub subset: Vec<String>,
+    /// Occorrenza tenuta (default [`Keep::First`]).
     #[serde(default = "default_keep")]
     pub keep: Keep,
 }
 
-/// Righe distinte sulle colonne di `subset` (default: tutte le colonne),
-/// selezionate secondo `keep` (prima/ultima occorrenza o solo righe senza
-/// duplicati).
+/// `table.distinct`: righe distinte sulle colonne di `subset` (vuoto: tutte
+/// le colonne), scelte secondo `keep`.
+///
+/// Uguaglianza delle chiavi sul testo di ogni cella (`scalar_as_string`),
+/// colonna per colonna: `-0.0` e `0.0` diverse, ogni NaN uguale agli altri,
+/// `Binary` sui byte, null uguale solo a null. Le righe tenute restano in
+/// ordine d'ingresso per ogni valore di `keep`.
 ///
 /// # Errors
 ///
-/// - `Schema`: una colonna di `subset` assente dallo schema; in piu' gli
-///   errori di `scalar_as_string` (colonne fuori dal fast path tipizzato)
-///   e di `select_rows`.
+/// - `Schema`: una colonna di `subset` assente dallo schema; una cella che
+///   non si converte in testo (`scalar_as_string`: tipo fuori dal profilo
+///   scalare, date fuori intervallo, dictionary malformato); errore Arrow
+///   in `select_rows`;
+/// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
+/// - `Internal`: statistiche senza la chiave (invariante nostra).
 pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
     struct KeyStats {
         first: usize,
@@ -359,12 +400,19 @@ pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
     select_rows(batch, &rows)
 }
 
+/// Config di `table.dedup_advanced`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DedupAdvanced {
+    /// Colonne della chiave, obbligatorie (l'analisi le vuole non vuote,
+    /// senza ripetizioni, leggibili come testo).
     pub subset: Vec<String>,
+    /// Occorrenza tenuta nell'ordine dopo `order_column` (default
+    /// [`Keep::First`]; [`Keep::False`] si rifiuta).
     #[serde(default = "default_keep")]
     pub keep: Keep,
+    /// Colonna ordinabile su cui si ordina (sort stabile) prima della
+    /// deduplica; assente, nessun ordinamento.
     pub order_column: Option<String>,
     /// Verso di `order_column` (assente: ascendente). Senza `order_column`
     /// non c'e' ordinamento, e un verso dichiarato si rifiuta
@@ -388,15 +436,18 @@ pub fn verifica_verso_dedup(config: &DedupAdvanced) -> Result<()> {
     Ok(())
 }
 
-/// `distinct` con pre-ordinamento su `order_column`: prima/ultima
-/// occorrenza si riferiscono all'ordine dato.
+/// `table.dedup_advanced`: [`distinct`] dopo un [`sort`] stabile su
+/// `order_column`.
+///
+/// Prima e ultima occorrenza si riferiscono all'ordine del sort, e le righe
+/// tenute escono in quell'ordine. Senza `order_column` e' `distinct`
+/// sull'ordine d'ingresso.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `keep` e' `Keep::False` (non supportato); `ascending`
-///   senza `order_column` ([`verifica_verso_dedup`]);
-/// - come `sort` (se `order_column` e' presente) e `distinct`: colonne
-///   assenti (`Schema`), errori del fallback testuale e di `select_rows`.
+/// - `InvalidPlan`: `ascending` senza `order_column`
+///   ([`verifica_verso_dedup`]); `keep` e' [`Keep::False`];
+/// - gli errori di [`sort`] (se c'e' `order_column`) e di [`distinct`].
 pub fn dedup_advanced(batch: &RecordBatch, config: &DedupAdvanced) -> Result<RecordBatch> {
     verifica_verso_dedup(config)?;
     let ordered = if let Some(column) = &config.order_column {

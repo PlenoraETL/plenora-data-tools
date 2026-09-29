@@ -127,9 +127,9 @@ pub(in crate::analyze) fn analyze_melt(
         .collect();
     fields_out.push(Field::new(&var_name, DataType::Utf8, false));
     fields_out.push(Field::new(&value_name, value_data_type, true));
-    // R2.4: i metadata dello schema di input si conservano (le colonne id
-    // sono passthrough); `variable`/`value` sono colonne derivate e non
-    // ereditano metadata di campo.
+    // I metadata dello schema di input si conservano (le colonne id
+    // passano invariate, con i loro metadata di campo); `variable`/`value`
+    // sono colonne derivate e non ereditano metadata di campo.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     // La geometria sopravvive solo come colonna id (valori passthrough).
     let preserved = input
@@ -380,10 +380,10 @@ pub(in crate::analyze) fn analyze_table_diff(
     fields_out.push(Field::new("_diff_status", DataType::Utf8, false));
     fields_out.push(Field::new("_diff_columns", DataType::Utf8, true));
     fields_out.push(Field::new("_diff_old_values", DataType::Utf8, true));
-    // R2.4: chiavi e colonne di confronto sono ricostruite (nullability
-    // forzata, valori provenienti da entrambe le sorgenti) — classificate
-    // derivate: nessun metadata di campo ereditato. I metadata di SCHEMA
-    // delle due sorgenti si fondono invece con la merge-policy dei join.
+    // Chiavi e colonne di confronto sono ricostruite (nullability forzata,
+    // valori da entrambe le sorgenti), quindi derivate: nessun metadata di
+    // campo ereditato. I metadata di SCHEMA delle due sorgenti si fondono
+    // invece come nei join: una chiave con valori diversi e' un errore.
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
     let emitted = |name: &str| {

@@ -148,7 +148,8 @@ impl KeyColumn {
                 } else {
                     scratch.clear();
                     // La scrittura su String non fallisce mai; l'errore resta
-                    // esplicito perche' fmt::Result non lo dimostra (R6).
+                    // esplicito perche' fmt::Result non lo dimostra, e un panico
+                    // non e' ammesso.
                     write!(scratch, "{}", values.value(row)).map_err(|_| {
                         PlenoraError::Internal("formattazione chiave di gruppo su String".into())
                     })?;
@@ -909,7 +910,7 @@ impl<'a> OrderColumn<'a> {
                     }
                     let mut text = String::new();
                     // Stessi byte di `KeyColumn::write_key` (fmt su String e'
-                    // infallibile; l'errore resta esplicito, R6).
+                    // infallibile; l'errore resta esplicito invece di un panico).
                     write!(text, "{}", values.value(*row)).map_err(|_| {
                         PlenoraError::Internal("formattazione chiave di gruppo su String".into())
                     })?;

@@ -33,8 +33,9 @@ pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Str
     Ok(key)
 }
 
-/// Confronto tipizzato tra due celle, condiviso dai tre siti di confronto di
-/// `table.sort`.
+/// Confronto tipizzato tra due celle: il contratto d'ordine di `table.sort`,
+/// `table.top_n`, del merge dello spill e dei ranghi di
+/// `table.window_function`.
 ///
 /// Semantica: null dopo i valori (uguaglianza tra null); confronto nel
 /// dominio NATIVO di ogni tipo supportato, mai sulla forma testuale.
@@ -54,9 +55,11 @@ pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Str
 /// Questi controlli precedono la decisione sui null: due celle nulle di tipi
 /// non confrontabili sono un errore, non `Equal`.
 ///
-/// I siti d'uso sono `compare_at` (stesso batch), `ColumnComparator`
-/// (fast path tipizzato) e il merge k-way dello spill
-/// (`spill::compare_cells`, batch diversi — da qui la forma a due array).
+/// I siti d'uso sono `compare_at` (stesso batch; lo usa anche il ramo
+/// generico di `ColumnComparator`, i cui rami tipizzati riproducono la
+/// stessa semantica), `OrdineNumerico` dei ranghi e il merge k-way dello
+/// spill (`spill::compare_cells`, batch diversi: da qui la forma a due
+/// array).
 // Dispatch lineare per tipo Arrow: spezzarlo renderebbe piu' difficile
 // verificare che ogni tipo sia trattato una volta sola.
 #[allow(clippy::too_many_lines)]
@@ -71,7 +74,7 @@ pub fn compare_cells_typed(
     // stessa coppia di colonne avrebbe due contratti a seconda dei valori.
     //
     // 1. Indici: l'API e' pubblica e `is_null`/`value` di arrow vanno in
-    //    panico fuori intervallo (gate R6).
+    //    panico fuori intervallo, e un panico non e' ammesso.
     riga_in_intervallo(left, left_row, "sinistra")?;
     riga_in_intervallo(right, right_row, "destra")?;
 
@@ -303,6 +306,14 @@ fn cella_logicamente_nulla(array: &ArrayRef, row: usize) -> Result<bool> {
     Ok(false)
 }
 
+/// `true` se [`compare_cells_typed`] ha un confronto nativo per il tipo.
+///
+/// I tipi: `Int64`, `UInt64`, `Float64`, `Utf8`, `Boolean`, `Date32`,
+/// `Timestamp(Millisecond, _)` con qualunque timezone, `Decimal128`,
+/// `Binary`, `Dictionary(Int32, Utf8)`.
+///
+/// Decide dallo schema: e' il controllo con cui l'analisi rifiuta le
+/// colonne d'ordinamento prima dell'esecuzione.
 #[must_use]
 pub const fn is_sortable(data_type: &DataType) -> bool {
     comparison_family(data_type).is_some()

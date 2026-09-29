@@ -21,24 +21,37 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
+/// Config di `table.melt`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Melt {
+    /// Colonne ripetute su ogni riga d'uscita (obbligatorio, anche vuoto).
     pub id_columns: Vec<String>,
+    /// Colonne portate in righe; vuoto (default) vale tutte le colonne non
+    /// id.
     #[serde(default)]
     pub value_columns: Vec<String>,
+    /// Colonna con il nome della colonna valore (default `"variable"`).
     #[serde(default = "default_variable")]
     pub var_name: String,
+    /// Colonna con la cella (default `"value"`).
     #[serde(default = "default_value")]
     pub value_name: String,
+    /// Colonne valore di tipi diversi (default
+    /// [`HeterogeneousTypePolicy::Reject`]).
     #[serde(default = "default_type_policy")]
     pub type_policy: HeterogeneousTypePolicy,
 }
 
+/// Che cosa fanno `table.melt` e `table.transpose` con colonne di tipi Arrow
+/// diversi (in JSON `"reject"`, `"string"`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeterogeneousTypePolicy {
+    /// Rifiuto (`InvalidPlan`); default.
     Reject,
+    /// Conversione esplicita di ogni cella nel suo testo
+    /// (`scalar_as_string`), in una colonna `Utf8`.
     String,
 }
 
@@ -108,7 +121,7 @@ impl<'a> TextColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(out, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -117,7 +130,7 @@ impl<'a> TextColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(out, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -126,7 +139,7 @@ impl<'a> TextColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(out, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -135,7 +148,7 @@ impl<'a> TextColumn<'a> {
                     return Ok(false);
                 }
                 // `fmt::Write` su `String` e' infallibile; l'errore e'
-                // comunque propagato come Internal, mai ignorato (R6.5).
+                // comunque propagato come Internal, mai ignorato.
                 write!(out, "{}", values.value(row))
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
@@ -173,11 +186,17 @@ pub fn resolve_melt_names<'a>(
         .map_err(|_| PlenoraError::Internal("melt: il risolutore deve restituire due nomi".into()))
 }
 
-/// Trasforma le `value_columns` da wide a long: per ogni riga, una riga per
-/// colonna valore.
+/// `table.melt`: porta le `value_columns` da larghe a lunghe.
+///
+/// L'uscita ha le colonne id, `var_name` (nome della colonna valore) e
+/// `value_name` (la cella), con righe × colonne valore righe, a blocchi:
+/// tutte le righe per la prima colonna valore, in ordine d'ingresso, poi
+/// per la seconda, e cosi' via. Una cella nulla da' una riga con valore
+/// nullo.
 ///
 /// Con `value_columns` vuoto si usano tutte le colonne non id. Tipi omogenei:
 /// concatenazione nativa; tipi eterogenei solo con `type_policy='string'`.
+/// I due nomi d'uscita si risolvono con [`resolve_melt_names`].
 ///
 /// # Errors
 ///
@@ -405,9 +424,9 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     } else {
         // Irraggiungibile: la preparazione rifiuta le colonne eterogenee con
         // `type_policy = "reject"` prima delle allocazioni proporzionali
-        // ai dati. Resta come
-        // difesa esplicita — il gate R6 vieta `unreachable!` — e come
-        // invariante nostra, non come piano sbagliato del chiamante.
+        // ai dati. Resta come difesa esplicita (`unreachable!` e' un panico,
+        // e il clippy anti-panico lo vieta) e come invariante nostra, non
+        // come piano sbagliato del chiamante.
         return Err(PlenoraError::Internal(
             "melt: percorso eterogeneo raggiunto dopo la preparazione".into(),
         ));
@@ -421,31 +440,54 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     )?)
 }
 
+/// Aggregazione di una cella di `table.pivot` (in JSON in minuscolo). Le
+/// righe di una cella si riducono in ordine d'ingresso.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PivotAgg {
+    /// La cella di `value_col` nella prima riga, null compreso; tipo di
+    /// `value_col` (default).
     First,
+    /// La cella di `value_col` nell'ultima riga, null compreso.
     Last,
+    /// Massimo `Float64` dei valori non nulli (NaN ignorati salvo che siano
+    /// tutti NaN).
     Max,
+    /// Minimo `Float64` dei valori non nulli (NaN ignorati salvo che siano
+    /// tutti NaN).
     Min,
+    /// Somma `Float64` dei valori non nulli.
     Sum,
+    /// Media `Float64` dei valori non nulli.
     Mean,
+    /// Numero `Int64` di valori non nulli.
     Count,
+    /// Testi dei valori non nulli uniti da `,` (`Utf8`); solo null da' il
+    /// testo vuoto.
     Concat,
 }
 const fn default_pivot_agg() -> PivotAgg {
     PivotAgg::First
 }
 
+/// Config di `table.pivot`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pivot {
+    /// Colonne della chiave delle righe, separate da virgola (spazi ai lati
+    /// tolti, voci vuote ignorate).
     pub index_col: String,
+    /// Colonna i cui valori, in testo, diventano colonne (in JSON
+    /// `pivot_col`).
     #[serde(rename = "pivot_col")]
     pub column: String,
+    /// Colonna dei valori aggregati nelle celle.
     pub value_col: String,
+    /// Aggregazione di una cella (default [`PivotAgg::First`]).
     #[serde(default = "default_pivot_agg")]
     pub aggr_func: PivotAgg,
+    /// Se non vuoto, tiene solo i valori pivot (in testo) che nomina e li
+    /// rinomina nel valore associato.
     #[serde(default)]
     pub mapping: BTreeMap<String, String>,
 }
@@ -635,23 +677,30 @@ fn colonna_pivot(
     })
 }
 
-/// Pivot delle righe in colonne: una riga per chiave indice, una colonna per
-/// valore pivot, celle aggregate con `aggr_func`.
+/// `table.pivot`: una riga per chiave di `index_col`, una colonna per valore
+/// distinto di `pivot_col` (nel suo testo), celle aggregate con `aggr_func`.
 ///
-/// `index_col` accetta piu' colonne separate da virgola; `mapping` rinomina
-/// (e filtra) i valori pivot nelle colonne di output.
+/// Righe nell'ordine canonico delle chiavi di `aggregate`
+/// (`canonical_key_order`); colonne pivot nell'ordine dei byte del testo
+/// del valore, prima della rinomina di `mapping`. Una
+/// riga con valore pivot nullo, o escluso da `mapping`, non riempie celle ma
+/// la sua chiave da' una riga; una combinazione assente e' null, anche con
+/// `count`. I metadati di schema non si conservano. Lo schema d'uscita
+/// dipende dai dati: l'analisi rifiuta l'operazione (`Unsupported`).
+///
+/// Un intero oltre `2^53` **non** e' un errore: le aggregazioni numeriche
+/// di `pivot` producono un `Float64` per contratto, quindi la conversione
+/// arrotonda.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna indice/pivot/valore assente;
-/// - `ResourceLimit`: chiavi o colonne di output oltre i limiti `max_rows`/
-///   `max_columns`, nome di colonna di output non valido, oppure gli errori
-///   di conversione dei valori e degli indici di output.
-///
-/// Un intero oltre 2^53 **non** e' un errore: le aggregazioni numeriche di
-/// `pivot` producono un `Float64` per contratto, quindi la conversione
-/// arrotonda
-/// (errori-e-limiti.md#arrotondamento-nelle-operazioni-a-risultato-float64).
+/// - `Schema`: colonna indice/pivot/valore assente; testo non numerico o
+///   tipo non numerico sotto `sum`/`mean`/`min`/`max`; una cella che non si
+///   converte in testo (chiave, valore pivot, valore di `concat`);
+/// - `InvalidPlan`: nome di colonna d'uscita non valido (valore pivot o
+///   rinomina vuoti o di soli spazi);
+/// - `ResourceLimit`: righe oltre `max_rows` o colonne oltre `max_columns`,
+///   indici o conteggi non rappresentabili.
 // Pipeline lineare: lunga per costruzione, spezzarla peggiora la
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
@@ -837,29 +886,41 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     )?)
 }
 
+/// Config di `table.transpose`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Transpose {
+    /// Colonna che non si traspone: i suoi valori danno i nomi delle
+    /// colonne d'uscita, e il suo nome la prima colonna (senza: `col_0`).
     pub id_column: Option<String>,
+    /// Nomi delle colonne d'uscita per posizione di riga; una voce vuota o
+    /// mancante lascia il nome da `id_column` o `col_<riga + 1>`.
     #[serde(default)]
     pub output_columns: Vec<String>,
+    /// Colonne dati di tipi diversi (default
+    /// [`HeterogeneousTypePolicy::Reject`]).
     #[serde(default = "default_type_policy")]
     pub type_policy: HeterogeneousTypePolicy,
 }
 
-/// Traspone il batch: le colonne dati diventano righe, le righe colonne.
+/// `table.transpose`: le colonne dati diventano righe, le righe colonne.
 ///
 /// La prima colonna elenca i nomi delle colonne dati; con `id_column` i nomi
 /// delle colonne di output arrivano dai suoi valori. Tipi eterogenei solo
-/// con `type_policy='string'`; batch senza righe restituito invariato.
+/// con `type_policy='string'`; batch senza righe restituito invariato. I
+/// nomi ripetuti non si rifiutano, e i metadati non si conservano. Lo
+/// schema d'uscita dipende dai dati: l'analisi rifiuta l'operazione
+/// (`Unsupported`).
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna `id_column` assente;
-/// - `ResourceLimit`: righe/colonne di output oltre i limiti, colonne dati
-///   eterogenee senza `type_policy='string'`, valore testuale oltre
-///   `max_string_bytes`, indice oltre u64, nome di colonna di output non
-///   valido.
+/// - `Schema`: colonna `id_column` assente; una cella che non si converte
+///   in testo (`id_column`, o le colonne dati con la conversione);
+/// - `InvalidPlan`: colonne dati eterogenee senza `type_policy='string'`,
+///   nome di colonna d'uscita non valido;
+/// - `ResourceLimit`: colonne dati oltre `max_rows` o righe piu' una oltre
+///   `max_columns`, valore testuale oltre `max_string_bytes`, indice oltre
+///   `u64`.
 // Pipeline lineare: lunga per costruzione, spezzarla peggiora la
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
@@ -968,10 +1029,15 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
     )?)
 }
 
+/// Che cosa fa `table.explode` con una lista vuota o nulla (in JSON
+/// `"drop"`, `"null"`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmptyListPolicy {
+    /// Toglierebbe la riga: si rifiuta (`InvalidPlan`), perche' una
+    /// selezione si scrive come passo esplicito.
     Drop,
+    /// Una riga con elemento nullo (default).
     Null,
 }
 
@@ -979,11 +1045,17 @@ const fn default_empty_list_policy() -> EmptyListPolicy {
     EmptyListPolicy::Null
 }
 
+/// Config di `table.explode`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Explode {
+    /// Colonna `List` da espandere.
     pub column: String,
+    /// Colonna degli elementi (assente: `column`, sostituita al suo posto);
+    /// un nome diverso lascia la lista e aggiunge la colonna in coda, o
+    /// sostituisce una colonna esistente con quel nome.
     pub output_column: Option<String>,
+    /// Liste vuote e nulle (default [`EmptyListPolicy::Null`]).
     #[serde(default = "default_empty_list_policy")]
     pub empty_policy: EmptyListPolicy,
 }
@@ -1041,21 +1113,23 @@ fn select_rows_except(
     batch_with_rows(schema, columns, rows.len())
 }
 
-/// Espande una colonna `List` in una riga per elemento (stile pandas
-/// explode).
+/// `table.explode`: una riga per elemento di una colonna `List` (come
+/// `explode` di pandas), le altre colonne ripetute; righe in ordine
+/// d'ingresso, elementi in ordine di lista.
 ///
-/// Liste null o vuote producono una riga con valore null con `empty_policy`
-/// `Null`. Il token legacy `Drop` e' rifiutato: l'omissione richiede un nodo
-/// esplicito di selezione o partizione. Il nome di output e' `output_column` o
-/// la colonna stessa.
+/// Liste null o vuote producono una riga con valore null (`empty_policy`
+/// `Null`). `Drop` si rifiuta: togliere righe e' una selezione, da scrivere
+/// come passo esplicito. Il nome di output e' `output_column` o la colonna
+/// stessa; la colonna degli elementi e' nullabile e senza metadati di
+/// campo.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non di tipo List, offset List negativo;
-/// - `ResourceLimit`: righe di output oltre `max_rows`, indice elemento oltre
-///   u32;
-/// - `InvalidPlan`: nome di output non valido, `empty_policy=drop`; inoltre
-///   gli errori di `replace_or_append`.
+///   errori Arrow di `select_rows` e `replace_or_append`;
+/// - `ResourceLimit`: righe di output oltre `max_rows`, indice elemento o
+///   riga oltre `u32`;
+/// - `InvalidPlan`: nome di output non valido, `empty_policy=drop`.
 pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result<RecordBatch> {
     if matches!(config.empty_policy, EmptyListPolicy::Drop) {
         return Err(PlenoraError::InvalidPlan(
@@ -1114,12 +1188,16 @@ pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result
     replace_or_append(&repeated, output_name, list.value_type(), true, output)
 }
 
+/// Config di `table.unnest`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Unnest {
+    /// Colonna `Struct` da aprire.
     pub column: String,
+    /// Prefisso dei nomi delle colonne nuove (default vuoto).
     #[serde(default)]
     pub prefix: String,
+    /// Toglie la colonna struct (default `true`).
     #[serde(default = "default_true")]
     pub drop_source: bool,
 }
@@ -1128,18 +1206,20 @@ const fn default_true() -> bool {
     true
 }
 
-/// Espande una colonna `Struct` in colonne figlie (con prefisso `prefix`).
+/// `table.unnest`: una colonna per campo di una colonna `Struct`, in coda,
+/// con nome `prefix` + nome del campo.
 ///
 /// Con `drop_source` la colonna sorgente e' rimossa; le colonne figlie sono
-/// nullable e replicate sugli indici delle righe in cui lo struct e' valido.
+/// nullable, con i metadati del campo, e valgono null dove lo struct e'
+/// nullo.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non di tipo Struct, collisione tra il nome
-///   di una colonna figlia e una colonna esistente;
-/// - `ResourceLimit`: colonne di output oltre `max_columns`.
-/// - `InvalidPlan`: nome di colonna
-///   figlia non valido.
+///   di una colonna figlia e una colonna che resta (o un'altra figlia);
+/// - `ResourceLimit`: colonne di output oltre `max_columns`, righe oltre
+///   `u32::MAX`;
+/// - `InvalidPlan`: nome di colonna figlia non valido.
 pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let structure = batch
@@ -1211,15 +1291,22 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
     )?)
 }
 
+/// Config di `table.table_diff`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TableDiff {
+    /// Chiave a sinistra (versione vecchia), almeno una colonna.
     pub left_keys: Vec<String>,
+    /// Chiave a destra (versione nuova), tante colonne quante `left_keys`.
     pub right_keys: Vec<String>,
+    /// Colonne confrontate, presenti in entrambi i lati; vuoto (default)
+    /// vale le colonne non chiave della sinistra presenti anche a destra.
     #[serde(default)]
     pub compare_columns: Vec<String>,
+    /// Emette anche le righe `UNCHANGED` (default [`IncludeUnchanged::No`]).
     #[serde(default = "default_no")]
     pub include_unchanged: IncludeUnchanged,
+    /// Separatore di `_diff_columns` e `_diff_old_values` (default `"#"`).
     #[serde(default = "default_separator")]
     pub separator: String,
 }
@@ -1485,20 +1572,27 @@ fn diff_values(left: &ArrayRef, right: &ArrayRef, rows: &[DiffRow]) -> Result<Ar
     )?)
 }
 
-/// Confronto riga per riga tra due batch allineati sulle chiavi: stati
+/// `table.table_diff`: confronto tra una versione vecchia (`left`) e una
+/// nuova (`right`) allineate sulle chiavi: stati
 /// ADDED/DELETED/MODIFIED/UNCHANGED.
 ///
 /// Le colonne confrontate sono `compare_columns` o, se vuota, le colonne
 /// sinistre non chiave presenti anche a destra. Output: colonne chiave e
-/// confrontate, piu' `_diff_status`, `_diff_columns`, `_diff_old_values`.
+/// confrontate (valori della destra, della sinistra per `DELETED`), piu'
+/// `_diff_status`, `_diff_columns`, `_diff_old_values`. Righe: prima le
+/// chiavi della sinistra nel suo ordine, poi quelle solo a destra. Un null
+/// di chiave e' uguale a un null.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati, chiavi
-///   duplicate in uno dei due input, righe/colonne di output oltre i limiti;
+/// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati,
+///   chiavi duplicate in uno dei due input;
+/// - `ResourceLimit`: righe o colonne di output oltre `max_rows` o
+///   `max_columns`, indice oltre `u32`;
 /// - `Schema`: colonna chiave o di confronto assente, tipi Arrow non
-///   identici tra i due lati su una stessa colonna.
-#[allow(clippy::too_many_lines)] // Diff phases remain adjacent to preserve auditability.
+///   identici tra i due lati su una stessa colonna, una cella che non si
+///   converte in testo, metadati di schema in conflitto fra i due lati.
+#[allow(clippy::too_many_lines)] // Le fasi del diff restano vicine per essere verificabili.
 pub fn table_diff(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1553,7 +1647,9 @@ pub fn table_diff(
     // di valore. La codifica binaria non porta il tipo (un Int64 e un UInt64
     // di pari valore hanno gli stessi byte), quindi il confronto fra i lati
     // e' ammesso solo se i nomi dei tipi coincidono colonna per colonna;
-    // altrimenti nessuna chiave combacia, come nel percorso testuale.
+    // altrimenti nessuna chiave combacia, come nel percorso testuale (e
+    // l'uscita fallisce poi in `diff_values`, che vuole tipi identici;
+    // l'analisi rifiuta prima le coppie di chiavi di tipi diversi).
     let confrontabili = left_keys
         .iter()
         .zip(&right_keys)
@@ -1578,8 +1674,9 @@ pub fn table_diff(
         .collect::<Vec<_>>();
     let (abbinate, solo_destra) =
         diff_abbinamenti(left, &left_keys, right, &right_keys, confrontabili)?;
-    // Preserve source order: old rows first, then new-only rows. Sorting the
-    // encoded key would place nulls first and reorder otherwise stable data.
+    // Ordine delle sorgenti: prima le righe vecchie, poi quelle solo nuove.
+    // Ordinare la chiave codificata metterebbe i null in testa e
+    // riordinerebbe dati altrimenti stabili.
     let matched = abbinate
         .into_iter()
         .enumerate()
@@ -1640,7 +1737,8 @@ pub fn table_diff(
             (None, None) => {
                 // `matched` e' costruito solo con una sorgente `Some` a
                 // sinistra o a destra: la coppia (None, None) non e'
-                // producibile; invariante interna, errore esplicito (R6).
+                // producibile; invariante interna, errore esplicito invece
+                // di un panico.
                 return Err(PlenoraError::Internal(
                     "table_diff: riga senza sorgente in nessuno dei due batch".into(),
                 ));
@@ -2758,8 +2856,9 @@ mod tests {
                 ));
             }
         }
-        // Preserve source order: old rows first, then new-only rows. Sorting the
-        // encoded key would place nulls first and reorder otherwise stable data.
+        // Ordine delle sorgenti: prima le righe vecchie, poi quelle solo
+        // nuove. Ordinare la chiave codificata metterebbe i null in testa e
+        // riordinerebbe dati altrimenti stabili.
         let mut all_keys = Vec::with_capacity(old.len().saturating_add(new.len()));
         for row in 0..left.num_rows() {
             all_keys.push(composite_key(left, &left_keys, row)?);
@@ -3228,9 +3327,9 @@ mod tests {
 
     // -------------------------------------------------------------------
     // `explode` su un batch a riga singola con una lista lunga non
-    // materializza la colonna sorgente (vedi `select_rows_except` ed
-    // errori-e-limiti.md): il percorso O(N^2) sarebbe impraticabile alla N
-    // del test, che invece completa subito con l'output corretto.
+    // materializza la colonna sorgente (vedi `select_rows_except`): il
+    // percorso O(N^2) sarebbe impraticabile alla N del test, che invece
+    // completa subito con l'output corretto.
     // -------------------------------------------------------------------
 
     #[test]
