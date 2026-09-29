@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use num_traits::ToPrimitive;
-use plenora_core::arrow::array::{Array, Float64Array, RecordBatch};
+use plenora_core::arrow::array::{Array, ArrayRef, Float64Array, RecordBatch};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
@@ -96,6 +96,88 @@ fn confronta(
             Ordering::Equal
         }
     }
+}
+
+/// Varianti di rango (`rank`, `dense_rank`, `percent_rank`, `cume_dist`)
+/// su una partizione: un valore per posizione di `rows`, `None` sui null.
+///
+/// Le righe non nulle si ordinano per valore della cella, con lo stesso
+/// ordinamento stabile di `confronta`; poi un solo passaggio sulle sequenze
+/// di pari merito. Per una sequenza `[inizio, fine]` dell'ordine, `inizio` e'
+/// il numero di valori minori e `fine + 1` quello dei valori minori o
+/// uguali: sono le due ricerche binarie che si facevano per riga, e che su
+/// una partizione grande costavano `2 log n` confronti per riga. Coincidono
+/// perche' `compare_cells_typed` e' un preordine totale sui tipi che
+/// `OrdineNumerico` ammette (interi, `total_cmp` sui double, decimali per
+/// valore).
+///
+/// # Errors
+///
+/// Gli errori di `compare_cells_typed`; `Internal` per una variante che
+/// non e' di rango.
+fn ranghi(
+    ordine: &OrdineNumerico<'_>,
+    colonna: &ArrayRef,
+    rows: &[usize],
+    funzione: &WindowKind,
+) -> Result<Vec<Option<f64>>> {
+    let mut posizioni = (0..rows.len())
+        .filter(|posizione| !colonna.is_null(rows[*posizione]))
+        .collect::<Vec<_>>();
+    let mut guasto = None;
+    posizioni
+        .sort_by(|sinistra, destra| confronta(ordine, rows[*sinistra], rows[*destra], &mut guasto));
+    if let Some(errore) = guasto {
+        return Err(errore);
+    }
+    let totale = posizioni.len();
+    let mut uscita = vec![None; rows.len()];
+    let mut inizio = 0;
+    let mut sequenze = 0_usize;
+    while let Some(primo) = posizioni.get(inizio).map(|posizione| rows[*posizione]) {
+        let mut fine = inizio;
+        while let Some(prossimo) = posizioni.get(fine + 1).map(|posizione| rows[*posizione]) {
+            if ordine.compare(primo, prossimo)? != Ordering::Equal {
+                break;
+            }
+            fine += 1;
+        }
+        sequenze += 1;
+        let valore = match funzione {
+            WindowKind::Rank => (inizio + fine + 2).to_f64().map(|somma| somma / 2.0),
+            WindowKind::DenseRank => sequenze.to_f64(),
+            WindowKind::PercentRank => {
+                if totale <= 1 {
+                    Some(0.0)
+                } else {
+                    inizio
+                        .to_f64()
+                        .zip((totale - 1).to_f64())
+                        .map(|(numeratore, denominatore)| numeratore / denominatore)
+                }
+            }
+            WindowKind::CumeDist => (fine + 1)
+                .to_f64()
+                .zip(totale.to_f64())
+                .map(|(numeratore, denominatore)| numeratore / denominatore),
+            WindowKind::Cumsum
+            | WindowKind::Cumcount
+            | WindowKind::Lag
+            | WindowKind::Lead
+            | WindowKind::PctChange
+            | WindowKind::RunningMean
+            | WindowKind::Ntile => {
+                return Err(PlenoraError::Internal(
+                    "ranghi chiamato per una variante che non e' di rango".into(),
+                ));
+            }
+        };
+        for posizione in &posizioni[inizio..=fine] {
+            uscita[*posizione] = valore;
+        }
+        inizio = fine + 1;
+    }
+    Ok(uscita)
 }
 
 /// Finestra mobile (`window` righe) su `column`, opzionalmente partizionata
@@ -326,6 +408,9 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
         }
     };
     let compute = |rows: &[usize]| -> Result<Vec<Option<f64>>> {
+        if let Some(ordine) = &ordine {
+            return ranghi(ordine, colonna, rows, &config.function);
+        }
         let numbers = match &source {
             Some(source) => rows
                 .iter()
@@ -333,38 +418,9 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
                 .collect::<Result<Vec<_>>>()?,
             None => Vec::new(),
         };
-        // Righe non nulle della partizione, ordinate per VALORE della cella:
-        // il rango si legge dalle posizioni, e nessun valore viene convertito.
-        let mut sorted: Vec<usize> = Vec::new();
-        let mut dense: Vec<usize> = Vec::new();
-        if let Some(ordine) = &ordine {
-            sorted = rows
-                .iter()
-                .copied()
-                .filter(|row| !colonna.is_null(*row))
-                .collect();
-            let mut guasto = None;
-            sorted.sort_by(|sinistra, destra| confronta(ordine, *sinistra, *destra, &mut guasto));
-            if let Some(errore) = guasto {
-                return Err(errore);
-            }
-            dense.clone_from(&sorted);
-            let mut guasto = None;
-            dense.dedup_by(|sinistra, destra| {
-                confronta(ordine, *sinistra, *destra, &mut guasto) == Ordering::Equal
-            });
-            if let Some(errore) = guasto {
-                return Err(errore);
-            }
-        }
         let mut sum = 0.0;
         let mut count = 0.0_f64;
-        // I confronti dentro il ciclo sono fallibili: l'errore si raccoglie e
-        // si rende PRIMA dei valori, che altrimenti sarebbero calcolati su un
-        // ordinamento che non si e' potuto stabilire.
-        let mut errore: Option<PlenoraError> = None;
         let mut values = Vec::with_capacity(rows.len());
-        let ordine = ordine.as_ref();
         for position in 0..rows.len() {
             values.push(match config.function {
                 WindowKind::Cumcount => position.to_f64(),
@@ -389,60 +445,16 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
                             .filter(|_| previous != 0.0)
                             .map(|current| (current - previous) / previous)
                     }),
-                WindowKind::Rank | WindowKind::DenseRank => ordine.and_then(|ordine| {
-                    let riga = rows[position];
-                    if colonna.is_null(riga) {
-                        None
-                    } else if matches!(config.function, WindowKind::DenseRank) {
-                        dense
-                            .binary_search_by(|altra| confronta(ordine, *altra, riga, &mut errore))
-                            .ok()
-                            .and_then(|index| (index + 1).to_f64())
-                    } else {
-                        let first = sorted.partition_point(|altra| {
-                            confronta(ordine, *altra, riga, &mut errore).is_lt()
-                        });
-                        sorted
-                            .partition_point(|altra| {
-                                !confronta(ordine, *altra, riga, &mut errore).is_gt()
-                            })
-                            .checked_sub(1)
-                            .and_then(|last| (first + last + 2).to_f64().map(|sum| sum / 2.0))
-                    }
-                }),
-                WindowKind::PercentRank => ordine.and_then(|ordine| {
-                    let riga = rows[position];
-                    if colonna.is_null(riga) {
-                        None
-                    } else if sorted.len() <= 1 {
-                        Some(0.0)
-                    } else {
-                        let rank = sorted.partition_point(|altra| {
-                            confronta(ordine, *altra, riga, &mut errore).is_lt()
-                        });
-                        rank.to_f64()
-                            .zip((sorted.len() - 1).to_f64())
-                            .map(|(numeratore, denominatore)| numeratore / denominatore)
-                    }
-                }),
-                WindowKind::CumeDist => ordine.and_then(|ordine| {
-                    let riga = rows[position];
-                    if colonna.is_null(riga) {
-                        None
-                    } else {
-                        sorted
-                            .partition_point(|altra| {
-                                !confronta(ordine, *altra, riga, &mut errore).is_gt()
-                            })
-                            .checked_sub(1)
-                            .and_then(|last| {
-                                (last + 1)
-                                    .to_f64()
-                                    .zip(sorted.len().to_f64())
-                                    .map(|(numeratore, denominatore)| numeratore / denominatore)
-                            })
-                    }
-                }),
+                // Le varianti di rango escono sopra, da `ranghi`: `ordine` c'e'
+                // se e solo se la strategia e' di rango.
+                WindowKind::Rank
+                | WindowKind::DenseRank
+                | WindowKind::PercentRank
+                | WindowKind::CumeDist => {
+                    return Err(PlenoraError::Internal(
+                        "variante di rango senza ordine numerico".into(),
+                    ));
+                }
                 WindowKind::Ntile => {
                     let buckets = config.buckets.unwrap_or(1);
                     let effective = buckets.min(rows.len());
@@ -452,9 +464,6 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
                         .and_then(|value| (value + 1).to_f64())
                 }
             });
-        }
-        if let Some(errore) = errore {
-            return Err(errore);
         }
         Ok(values)
     };
@@ -485,3 +494,7 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
         Arc::new(Float64Array::from(output)),
     )
 }
+
+#[cfg(test)]
+#[path = "window_oracolo.rs"]
+mod oracolo;

@@ -8,6 +8,12 @@
 //! (`VmHWM` da `/proc/self/status`): i numeri sono confrontabili con la
 //! baseline di `benchmarks/sweep/sweep.json`.
 //!
+//! In piu', `table.window_function` rank **senza** `group_by` a 1M e 5M su
+//! una fixture stretta come quella del catalogo di memoria (`id` Int64,
+//! `value` Float64 = `riga % 100 + 0.5`): una sola partizione con molti
+//! pari merito, il caso in cui il rango per riga costava due ricerche
+//! binarie.
+//!
 //! Uso: `bench_window` — stampa una riga JSON per scenario.
 
 #[path = "comune/mod.rs"]
@@ -19,13 +25,17 @@ use comune::measure;
 
 use std::sync::OnceLock;
 
-use plenora_core::arrow::array::RecordBatch;
+use std::sync::Arc;
+
+use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::aggregation::{
     dedup_advanced, distinct, rolling_window, window_function, DedupAdvanced, Distinct, Keep,
     RollingKind, RollingWindow, WindowFunction, WindowKind,
 };
 
 const M1: usize = 1_000_000;
+const M5: usize = 5_000_000;
 const M10: usize = 10_000_000;
 
 static BASE_1M: OnceLock<RecordBatch> = OnceLock::new();
@@ -37,6 +47,27 @@ fn base_1m() -> &'static RecordBatch {
 
 fn base_10m() -> &'static RecordBatch {
     BASE_10M.get_or_init(|| base_fixture(M10))
+}
+
+/// Fixture stretta del catalogo di memoria: 100 valori distinti.
+fn fixture_stretta(rows: usize) -> RecordBatch {
+    let ids = (0..rows)
+        .map(|row| i64::try_from(row).expect("riga in i64"))
+        .collect::<Vec<_>>();
+    let values = (0..rows)
+        .map(|row| f64::from(u32::try_from(row % 100).expect("resto < 100")) + 0.5)
+        .collect::<Vec<_>>();
+    RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("value", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(ids)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .expect("fixture stretta")
 }
 
 fn main() {
@@ -101,5 +132,25 @@ fn main() {
         || window_function(base_1m(), &window_config).expect("window_function"),
     );
 
-    eprintln!("bench_window completato: 4 scenari");
+    let rank_config = WindowFunction {
+        column: "value".into(),
+        function: WindowKind::Rank,
+        group_by: None,
+        order_column: None,
+        offset: 1,
+        buckets: None,
+        output_column: Some("ranked".into()),
+    };
+    for rows in [M1, M5] {
+        let batch = fixture_stretta(rows);
+        measure(
+            "table.window_function",
+            rows,
+            3,
+            "rank senza group_by, 100 valori distinti",
+            || window_function(&batch, &rank_config).expect("window_function"),
+        );
+    }
+
+    eprintln!("bench_window completato: 6 scenari");
 }

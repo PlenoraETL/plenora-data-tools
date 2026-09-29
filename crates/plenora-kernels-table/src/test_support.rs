@@ -155,3 +155,22 @@ pub fn assert_same_outcome(fast: Result<RecordBatch>, generic: Result<RecordBatc
         ),
     }
 }
+
+/// Come [`assert_same_outcome`], con il confronto dei batch di
+/// [`assert_batches_identical`]: i `Float64` si confrontano per bit, quindi
+/// un NaN nell'output non rende diversi due batch identici.
+pub fn assert_same_outcome_bits(fast: Result<RecordBatch>, reference: Result<RecordBatch>) {
+    match (fast, reference) {
+        (Ok(fast), Ok(reference)) => assert_batches_identical(&fast, &reference),
+        (Err(fast), Err(reference)) => {
+            assert_eq!(fast.category(), reference.category());
+            assert_eq!(fast.to_string(), reference.to_string());
+            assert_eq!(fast.row_diagnostics(), reference.row_diagnostics());
+        }
+        (fast, reference) => panic!(
+            "percorso veloce e oracolo divergono: veloce ok={}, oracolo ok={}",
+            fast.is_ok(),
+            reference.is_ok()
+        ),
+    }
+}
