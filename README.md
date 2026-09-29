@@ -334,10 +334,14 @@ Interno-Interno e Confine-Confine da cui nascono gli errori), le altre si
 visitano nell'ordine `(i, j)` del doppio ciclo, quindi gli errori emessi e il
 loro ordine non cambiano; con coordinate non finite, doppio ciclo. Su quelle
 coppie `relate` riceve le parti come `PreparedGeometry` costruite una volta
-per parte (grafo, R-tree dei segmenti e auto-intersezioni), non ricostruite a
-ogni coppia: in `geo` 0.33.1 è la stessa `RelateOperation` su una copia dello
-stesso grafo, e `geo` stesso usa le due forme indifferentemente nella
-validazione dei buchi. Sull'intersezione di due stelle da 5 000 vertici
+per parte (grafo, R-tree dei segmenti e intersezioni fra anelli), non
+ricostruite a ogni coppia: in `geo` 0.33.1 è la stessa `RelateOperation` su
+una copia dello stesso grafo, e `geo` stesso usa le due forme
+indifferentemente nella validazione dei buchi. La parte `i` si prepara dopo
+la propria validazione e si libera alla fine del suo turno; come `j` resta
+preparata solo una parte senza buchi (anche prima della propria
+validazione), le altre restano `Polygon` e `relate` ne costruisce il grafo
+per la sola coppia, come in `geo`. Sull'intersezione di due stelle da 5 000 vertici
 (7 922 parti, una grande che tocca col rettangolo migliaia di piccole) la
 validazione dell'uscita passa da 7,2 s a 57 ms (`bench_validazione_parti`).
 L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
@@ -372,14 +376,26 @@ L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
 - l'equivalenza fra `relate` su parti preparate e su parti ricostruite
   dipende da `PreparedGeometry` di `geo` 0.33.1 (copia profonda dello stesso
   grafo): a ogni aggiornamento di `geo` va riverificata, e l'oracolo la
-  confronta col doppio ciclo letterale sulle forme che esercita; le parti
-  preparate restano in memoria finché hanno coppie da visitare, nel caso
-  peggiore tutte (qualche centinaio di byte per vertice).
+  confronta col doppio ciclo letterale sulle forme che esercita;
+- memoria delle parti preparate: un grafo preparato costa O(V + I), con `V`
+  i vertici della parte e `I` le intersezioni fra i suoi anelli, quadratiche
+  nel caso peggiore (una parte invalida con buchi a bande orizzontali e
+  verticali che si incrociano). Una parte senza buchi ha un solo anello, su
+  cui `geo` non cerca intersezioni (`I = 0`, grafo O(V)): solo queste restano
+  preparate come `j`, dalla prima coppia fino alla fine del proprio turno
+  come `i` (non subito dopo l'ultima coppia che le usa), nel caso peggiore
+  tutte insieme, cioè qualche centinaio di byte per vertice. Una parte con
+  buchi è preparata solo come `i`, una alla volta: il picco è O(somma dei
+  vertici delle parti senza buchi) più O(V + I) della parte di turno, lo
+  stesso ordine di `geo`, che per ogni coppia costruisce i due grafi. Nella
+  validazione dei buchi ogni buco è un anello solo, quindi sempre O(V).
 
 **Condizione di rientro.** Una versione di `geo` con una ricerca delle
 auto-intersezioni sub-quadratica a verdetto identico: la sequenza copiata si
 toglie, la barriera torna a `check_validation` e l'oracolo resta come
-regressione.
+regressione. Per le parti preparate: una `relate` di `geo` che riusi il
+grafo di una geometria su più confronti con memoria dichiarata, o un budget
+di memoria della validazione che le governi.
 
 ### `geo.nearest`: lo scarto dell'R-tree si appoggia alla stima d'errore di `geo`
 

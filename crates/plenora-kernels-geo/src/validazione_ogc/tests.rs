@@ -17,7 +17,7 @@
 use super::{
     autointersezione_con, errori_di_validazione, limite_confronti, relate_non_e_disgiunta,
     scansione_coppie, visita_geometria, visita_multipoligono_con, visita_poligono_con,
-    CoppieCandidate, Percorso, RicercaCoppie, ValidazioneOgc,
+    CoppieCandidate, Percorso, Preparate, RicercaCoppie, ValidazioneOgc,
 };
 use geo::algorithm::validation::{
     InvalidGeometry, InvalidMultiPolygon, InvalidPolygon, Validation,
@@ -1796,4 +1796,40 @@ fn koch(livello: u32) -> LineString<f64> {
         punti = nuovi;
     }
     LineString(punti)
+}
+
+/// La politica di memoria di [`Preparate`]: una parte con buchi non resta
+/// preparata come `j` (il suo grafo tiene le intersezioni fra anelli, fino a
+/// quadratiche), una senza buchi si'; la `i` resta fino a `libera`. La
+/// matrice e' quella di `geo` in ogni combinazione.
+#[test]
+fn preparate_tiene_solo_le_parti_senza_buchi() {
+    let con_buco = Polygon::new(
+        rettangolo(0.0, 0.0, 4.0, 4.0),
+        vec![rettangolo(1.0, 1.0, 2.0, 2.0)],
+    );
+    let parti = vec![
+        parte(rettangolo(-1.0, 0.0, 1.0, 1.0)),
+        con_buco.clone(),
+        parte(rettangolo(4.0, 0.0, 1.0, 4.0)),
+        con_buco,
+    ];
+    let mut preparate = Preparate::di(&parti);
+    for i in 0..parti.len() {
+        for j in i + 1..parti.len() {
+            assert_eq!(
+                preparate.relate(i, j),
+                parti[i].relate(&parti[j]),
+                "({i}, {j})"
+            );
+            assert!(preparate.preparate[i].is_some());
+            assert_eq!(
+                preparate.preparate[j].is_some(),
+                parti[j].interiors().is_empty(),
+                "({i}, {j})"
+            );
+        }
+        preparate.libera(i);
+        assert!(preparate.preparate[i].is_none());
+    }
 }

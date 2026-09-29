@@ -511,8 +511,9 @@ impl Iterator for Partner<'_> {
     }
 }
 
-/// Le parti (o i buchi) preparate per `relate`, costruite alla prima coppia
-/// che le usa e liberate quando nessuna coppia successiva le usa piu'.
+/// Le parti (o i buchi) preparate per `relate`: la parte `i` per il suo
+/// turno, le parti `j` senza buchi dalla prima coppia che le usa fino alla
+/// fine del proprio turno come `i`.
 ///
 /// **Perche'.** `relate` costruisce a ogni chiamata il grafo di entrambe le
 /// geometrie, con le auto-intersezioni e due R-tree dei segmenti: su
@@ -539,11 +540,29 @@ impl Iterator for Partner<'_> {
 /// arriva dopo gli stessi errori emessi. Con coordinate non finite o nel
 /// doppio ciclo dei test resta la chiamata letterale di `geo`.
 ///
-/// **Memoria.** Restano vive solo le preparazioni delle parti che hanno
-/// ancora coppie da visitare; nel caso peggiore (molte parti a sinistra
-/// accoppiate con molte a destra) tutte, cioe' qualche centinaio di byte per
-/// vertice della geometria validata, la stessa scala di una `relate` sulla
-/// parte piu' grande.
+/// **Memoria.** Il grafo preparato tiene i vertici `V` della parte, il suo
+/// R-tree e i nodi delle intersezioni fra i suoi anelli `I`: O(V + I), con
+/// `I` quadratico nel caso peggiore (buchi a bande orizzontali e verticali
+/// che si incrociano, una parte invalida). Per non tenerne vivi piu' d'uno:
+///
+/// - una parte **senza buchi** ha un solo anello, cioe' un solo lato del
+///   grafo, e `compute_self_nodes` sui poligoni non cerca intersezioni
+///   dentro lo stesso lato (`check_for_self_intersecting_edges` falso):
+///   `I = 0` qualunque sia l'anello, anche auto-intersecante, e il grafo e'
+///   O(V). Solo queste si tengono come `j`, anche prima della loro
+///   validazione, fino alla fine del loro turno come `i`;
+/// - una parte **con buchi** si prepara solo come `i`, dopo la propria
+///   validazione, e si libera alla fine del suo turno: e' viva al massimo
+///   una alla volta, come il grafo che `geo` costruisce per ogni `relate`.
+///   Come `j` resta un `Polygon`, e `relate` ne costruisce il grafo per la
+///   sola coppia, come in `geo`.
+///
+/// Il picco e' quindi O(somma dei vertici delle parti senza buchi) piu'
+/// O(V + I) della parte con buchi di turno, lo stesso ordine di `geo`
+/// (che per ogni coppia costruisce entrambi i grafi). La liberazione avviene
+/// alla fine del turno di `i`, non subito dopo l'ultima coppia che la usa.
+/// Nella validazione dei buchi ogni buco e' un poligono di un solo anello,
+/// quindi sempre O(V).
 struct Preparate<'a> {
     poligoni: &'a [Polygon<f64>],
     /// In scatola: una `PreparedGeometry` occupa centinaia di byte, e il
@@ -560,14 +579,20 @@ impl<'a> Preparate<'a> {
     }
 
     /// La matrice di `relate(i, j)`, nell'ordine degli argomenti di `geo`.
+    /// Chiamata nel turno di `i`, dopo la sua validazione.
     fn relate(&mut self, i: usize, j: usize) -> IntersectionMatrix {
         self.prepara(i);
-        self.prepara(j);
+        let j_senza_buchi = self.poligoni[j].interiors().is_empty();
+        if j_senza_buchi {
+            self.prepara(j);
+        }
         match (&self.preparate[i], &self.preparate[j]) {
-            (Some(a), Some(b)) => a.relate(&**b),
-            // Non accade (entrambe appena preparate); se accadesse, la
-            // chiamata di `geo` sui poligoni rende la stessa matrice.
-            _ => self.poligoni[i].relate(&self.poligoni[j]),
+            (Some(a), Some(b)) if j_senza_buchi => a.relate(&**b),
+            // `j` con buchi: il suo grafo per la sola coppia, come in `geo`.
+            (Some(a), _) => a.relate(&self.poligoni[j]),
+            // Non accade (`i` appena preparata); se accadesse, la chiamata
+            // di `geo` sui poligoni rende la stessa matrice.
+            (None, _) => self.poligoni[i].relate(&self.poligoni[j]),
         }
     }
 
@@ -578,9 +603,9 @@ impl<'a> Preparate<'a> {
             .get_or_insert_with(|| Box::new(PreparedGeometry::from(&poligoni[indice])))
     }
 
-    /// Libera la preparazione di `indice`: le coppie si visitano per `i`
-    /// crescente con `j > i`, quindi dopo il turno di `i` nessuna coppia la
-    /// usa piu'.
+    /// Libera la preparazione di `indice` alla fine del suo turno come `i`:
+    /// le coppie si visitano per `i` crescente con `j > i`, quindi dopo
+    /// nessuna coppia la usa piu'.
     fn libera(&mut self, indice: usize) {
         if let Some(posto) = self.preparate.get_mut(indice) {
             *posto = None;

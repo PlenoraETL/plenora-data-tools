@@ -93,11 +93,28 @@ fn misura(scenario: &str, ripetizioni: usize, mut corsa: impl FnMut() -> bool) {
     );
 }
 
+/// Le corse per misura da `CORSE`: assente vale [`RUNS`]; un valore che non
+/// e' un intero positivo ferma il benchmark con un errore esplicito, prima di
+/// costruire le geometrie (con 0 la mediana non esiste, e un valore
+/// illeggibile non deve diventare in silenzio quello predefinito).
+fn corse() -> usize {
+    match std::env::var("CORSE") {
+        Err(std::env::VarError::NotPresent) => RUNS,
+        Ok(valore) => match valore.parse::<usize>() {
+            Ok(corse) if corse > 0 => corse,
+            _ => rifiuta(),
+        },
+        Err(std::env::VarError::NotUnicode(_)) => rifiuta(),
+    }
+}
+
+fn rifiuta() -> ! {
+    eprintln!("CORSE deve essere un intero positivo");
+    std::process::exit(2);
+}
+
 fn main() {
-    let corse = std::env::var("CORSE")
-        .ok()
-        .and_then(|valore| valore.parse().ok())
-        .unwrap_or(RUNS);
+    let corse = corse();
 
     let mut rng = Rng::seme(0x2545_F491_4F6C_DD1D);
     let sinistra = Geometry::Polygon(stella(&mut rng, 100.0, 5_000));
