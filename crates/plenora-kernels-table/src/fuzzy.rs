@@ -19,10 +19,12 @@
 //! lettere dello stesso codice, le vocali si'.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Float64Array, RecordBatch};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
 use crate::hashing::FastHasher;
@@ -396,18 +398,144 @@ fn jaccard_sets(
     score
 }
 
-/// Forma decodificata del lato destro, costruita una tantum per la metrica
-/// scelta (hot path minimale): nessuna decodifica per coppia candidata nel probe.
-enum FuzzyForm<'a> {
-    Chars(Vec<Option<Vec<char>>>),
-    Tokens(Vec<Option<std::collections::HashSet<&'a str>>>),
+/// Lato destro decodificato una tantum per la metrica scelta: nessuna
+/// decodifica per coppia candidata nel probe. Le righe null restano vuote e
+/// non sono mai lette: i blocchi contengono solo righe non null. La metrica
+/// e' la variante stessa, quindi forma e metrica non possono divergere.
+enum DestraDecodificata<'a> {
+    JaroWinkler(Vec<Vec<char>>),
+    Levenshtein(Vec<Vec<char>>),
+    Jaccard(Vec<std::collections::HashSet<&'a str>>),
 }
 
-/// Forma decodificata della riga sinistra corrente (una per riga, non per
-/// coppia).
-enum FuzzyRowForm<'a> {
-    Chars(Vec<char>),
-    Tokens(std::collections::HashSet<&'a str>),
+/// Righe sinistre per chunk del probe. Il costo di una riga e' quello del
+/// suo blocco destro (centinaia di coppie): chunk piccoli bilanciano i
+/// thread anche con blocchi di dimensioni molto diverse.
+const CHUNK_PROBE_FUZZY: usize = 256;
+
+/// Output di un chunk del probe: le coppie delle sue righe sinistre, in
+/// ordine di riga sinistra e, per riga, di indice destro.
+#[derive(Default)]
+struct UscitaChunk {
+    left_rows: Vec<Option<usize>>,
+    right_rows: Vec<Option<usize>>,
+    scores: Vec<Option<f64>>,
+}
+
+/// Stato condiviso fra i chunk per `max_rows`: il numero di righe di output
+/// gia' prodotte (da qualsiasi chunk) e il segnale di superamento.
+struct ContatoreUscita {
+    prodotte: AtomicUsize,
+    superato: AtomicBool,
+    max_rows: usize,
+}
+
+impl ContatoreUscita {
+    /// Somma le righe prodotte da una riga sinistra; `false` se il totale
+    /// supera `max_rows` (o `usize`, che lo supera comunque).
+    ///
+    /// Ogni riga contata appartiene all'output finale (il probe non ha altri
+    /// errori), quindi un totale parziale oltre il limite implica un totale
+    /// finale oltre il limite; e se il totale finale lo supera, l'ultima
+    /// somma lo vede. Il sequenziale controlla dopo ogni riga un conteggio
+    /// monotono, quindi fallisce esattamente quando il totale supera
+    /// `max_rows`: lo stesso esito, qualunque sia l'ordine dei thread.
+    fn aggiungi(&self, righe: usize) -> bool {
+        let totale = self
+            .prodotte
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prodotte| {
+                prodotte.checked_add(righe)
+            })
+            .ok()
+            .and_then(|prima| prima.checked_add(righe));
+        let entro = totale.is_some_and(|totale| totale <= self.max_rows);
+        if !entro {
+            self.superato.store(true, Ordering::Relaxed);
+        }
+        entro
+    }
+}
+
+/// Probe di un intervallo di righe sinistre: le candidate destre del blocco
+/// in ordine di indice, una riga di output per coppia con score >= soglia,
+/// e con `how=left` una riga senza match per le righe sinistre senza coppie.
+/// Si ferma appena il contatore segnala `max_rows` superato.
+fn probe_chunk(
+    righe: std::ops::Range<usize>,
+    left_norm: &[Option<String>],
+    blocks: &HashMap<String, Vec<usize>, FastHasher>,
+    block_key: &(dyn Fn(&str) -> String + Sync),
+    destra: &DestraDecodificata<'_>,
+    config: &FuzzyJoin,
+    contatore: &ContatoreUscita,
+) -> UscitaChunk {
+    let mut uscita = UscitaChunk::default();
+    let mut scratch = FuzzyScratch::default();
+    let mut left_chars: Vec<char> = Vec::new();
+    for left_row in righe {
+        if contatore.superato.load(Ordering::Relaxed) {
+            break;
+        }
+        let inizio = uscita.left_rows.len();
+        let candidates = left_norm
+            .get(left_row)
+            .and_then(Option::as_ref)
+            .and_then(|value| blocks.get(&block_key(value)).map(|rows| (value, rows)));
+        if let Some((value, candidates)) = candidates {
+            let mut emetti = |right_row: usize, similarity: f64| {
+                if similarity >= config.threshold {
+                    uscita.left_rows.push(Some(left_row));
+                    uscita.right_rows.push(Some(right_row));
+                    uscita.scores.push(Some(similarity));
+                }
+            };
+            match destra {
+                DestraDecodificata::JaroWinkler(right_chars) => {
+                    left_chars.clear();
+                    left_chars.extend(value.chars());
+                    for &right_row in candidates {
+                        let similarity =
+                            jaro_winkler_chars(&left_chars, &right_chars[right_row], &mut scratch);
+                        emetti(right_row, similarity);
+                    }
+                }
+                DestraDecodificata::Levenshtein(right_chars) => {
+                    left_chars.clear();
+                    left_chars.extend(value.chars());
+                    for &right_row in candidates {
+                        let similarity = levenshtein_normalized_chars(
+                            &left_chars,
+                            &right_chars[right_row],
+                            &mut scratch,
+                        );
+                        emetti(right_row, similarity);
+                    }
+                }
+                DestraDecodificata::Jaccard(right_tokens) => {
+                    let left_tokens: std::collections::HashSet<&str> =
+                        value.split_whitespace().collect();
+                    for &right_row in candidates {
+                        emetti(
+                            right_row,
+                            jaccard_sets(&left_tokens, &right_tokens[right_row]),
+                        );
+                    }
+                }
+            }
+        }
+        if uscita.left_rows.len() == inizio && config.how == FuzzyHow::Left {
+            uscita.left_rows.push(Some(left_row));
+            uscita.right_rows.push(None);
+            uscita.scores.push(None);
+        }
+        let prodotte = uscita.left_rows.len() - inizio;
+        // Una riga senza output non cambia il totale: il controllo del
+        // sequenziale dopo quella riga ripete l'esito della precedente.
+        if prodotte > 0 && !contatore.aggiungi(prodotte) {
+            break;
+        }
+    }
+    uscita
 }
 
 /// Join per similarita' testuale; semantica nella documentazione di modulo.
@@ -420,13 +548,25 @@ enum FuzzyRowForm<'a> {
 /// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione del
 ///   nome della colonna score con lo schema di output; errore Arrow nella
 ///   costruzione del batch.
-// Fasi in sequenza lineare: la lunghezza e' nella pipeline, non nella logica.
-#[allow(clippy::too_many_lines)]
 pub fn fuzzy_join(
     left: &RecordBatch,
     right: &RecordBatch,
     config: &FuzzyJoin,
     limits: &Limits,
+) -> Result<RecordBatch> {
+    fuzzy_join_con_chunk(left, right, config, limits, CHUNK_PROBE_FUZZY)
+}
+
+/// `fuzzy_join` con la dimensione dei chunk del probe esplicita: i test la
+/// forzano piccola per esercitare il percorso parallelo su input piccoli.
+// Fasi in sequenza lineare: la lunghezza e' nella pipeline, non nella logica.
+#[allow(clippy::too_many_lines)]
+fn fuzzy_join_con_chunk(
+    left: &RecordBatch,
+    right: &RecordBatch,
+    config: &FuzzyJoin,
+    limits: &Limits,
+    chunk: usize,
 ) -> Result<RecordBatch> {
     validate_config(config)?;
     let left_index = left
@@ -486,100 +626,80 @@ pub fn fuzzy_join(
             )));
         }
     }
-    // Probe: scansione sinistra in ordine, candidate destre in ordine di
-    // indice (i `Vec` dei blocchi preservano l'ordine di inserzione). Le
-    // forme decodificate per la metrica sono costruite una tantum (lato
-    // destro) e una per riga (lato sinistro): nessuna allocazione per
-    // coppia candidata (hot path minimale).
-    let right_decoded = match config.metric {
-        FuzzyMetric::JaroWinkler | FuzzyMetric::Levenshtein => FuzzyForm::Chars(
+    // Forme decodificate per la metrica: una tantum sul lato destro, una per
+    // riga sul lato sinistro (nel probe); nessuna allocazione per coppia.
+    let chars_of = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map_or_else(Vec::new, |text| text.chars().collect())
+    };
+    let destra = match config.metric {
+        FuzzyMetric::JaroWinkler => {
+            DestraDecodificata::JaroWinkler(right_norm.iter().map(chars_of).collect())
+        }
+        FuzzyMetric::Levenshtein => {
+            DestraDecodificata::Levenshtein(right_norm.iter().map(chars_of).collect())
+        }
+        FuzzyMetric::Jaccard => DestraDecodificata::Jaccard(
             right_norm
                 .iter()
-                .map(|value| value.as_ref().map(|text| text.chars().collect()))
-                .collect(),
-        ),
-        FuzzyMetric::Jaccard => FuzzyForm::Tokens(
-            right_norm
-                .iter()
-                .map(|value| value.as_ref().map(|text| text.split_whitespace().collect()))
+                .map(|value| {
+                    value
+                        .as_deref()
+                        .map(|text| text.split_whitespace().collect())
+                        .unwrap_or_default()
+                })
                 .collect(),
         ),
     };
-    let mut scratch = FuzzyScratch::default();
-    let mut left_rows: Vec<Option<usize>> = Vec::new();
-    let mut right_rows: Vec<Option<usize>> = Vec::new();
-    let mut scores: Vec<Option<f64>> = Vec::new();
-    for (left_row, value) in left_norm.iter().enumerate() {
-        let mut matched = false;
-        if let Some(value) = value {
-            if let Some(candidates) = blocks.get(&block_key(value)) {
-                let left_decoded = match config.metric {
-                    FuzzyMetric::JaroWinkler | FuzzyMetric::Levenshtein => {
-                        FuzzyRowForm::Chars(value.chars().collect())
-                    }
-                    FuzzyMetric::Jaccard => {
-                        FuzzyRowForm::Tokens(value.split_whitespace().collect())
-                    }
-                };
-                for &right_row in candidates {
-                    let null_block_error =
-                        || PlenoraError::Internal("righe destre nei blocchi non sono null".into());
-                    let similarity = match (config.metric, &left_decoded, &right_decoded) {
-                        (
-                            FuzzyMetric::JaroWinkler,
-                            FuzzyRowForm::Chars(left_chars),
-                            FuzzyForm::Chars(right_chars),
-                        ) => {
-                            let right_chars = right_chars[right_row]
-                                .as_ref()
-                                .ok_or_else(null_block_error)?;
-                            jaro_winkler_chars(left_chars, right_chars, &mut scratch)
-                        }
-                        (
-                            FuzzyMetric::Levenshtein,
-                            FuzzyRowForm::Chars(left_chars),
-                            FuzzyForm::Chars(right_chars),
-                        ) => {
-                            let right_chars = right_chars[right_row]
-                                .as_ref()
-                                .ok_or_else(null_block_error)?;
-                            levenshtein_normalized_chars(left_chars, right_chars, &mut scratch)
-                        }
-                        (
-                            FuzzyMetric::Jaccard,
-                            FuzzyRowForm::Tokens(left_tokens),
-                            FuzzyForm::Tokens(right_tokens),
-                        ) => {
-                            let right_tokens = right_tokens[right_row]
-                                .as_ref()
-                                .ok_or_else(null_block_error)?;
-                            jaccard_sets(left_tokens, right_tokens)
-                        }
-                        _ => {
-                            return Err(PlenoraError::Internal(
-                                "forma decodificata incoerente con la metrica".into(),
-                            ));
-                        }
-                    };
-                    if similarity >= config.threshold {
-                        left_rows.push(Some(left_row));
-                        right_rows.push(Some(right_row));
-                        scores.push(Some(similarity));
-                        matched = true;
-                    }
-                }
-            }
-        }
-        if !matched && config.how == FuzzyHow::Left {
-            left_rows.push(Some(left_row));
-            right_rows.push(None);
-            scores.push(None);
-        }
-        if left_rows.len() > limits.max_rows {
-            return Err(PlenoraError::ResourceLimit(
-                "fuzzy_join supera max_rows".into(),
-            ));
-        }
+    // Probe per chunk contigui di righe sinistre, in parallelo (rayon) se i
+    // chunk sono piu' di uno. Ogni coppia dipende solo dalle sue due chiavi,
+    // e i chunk si concatenano nell'ordine delle righe sinistre: righe,
+    // ordine e score sono quelli della scansione sequenziale. `max_rows` si
+    // applica al totale prodotto da tutti i chunk (`ContatoreUscita`):
+    // stesso errore del sequenziale, e memoria entro il limite piu' le righe
+    // in corso.
+    let chunk = chunk.max(1);
+    let intervalli: Vec<std::ops::Range<usize>> = (0..left_norm.len().div_ceil(chunk))
+        .map(|indice| {
+            let inizio = indice * chunk;
+            inizio..inizio.saturating_add(chunk).min(left_norm.len())
+        })
+        .collect();
+    let contatore = ContatoreUscita {
+        prodotte: AtomicUsize::new(0),
+        superato: AtomicBool::new(false),
+        max_rows: limits.max_rows,
+    };
+    let probe = |righe: &std::ops::Range<usize>| {
+        probe_chunk(
+            righe.clone(),
+            &left_norm,
+            &blocks,
+            &block_key,
+            &destra,
+            config,
+            &contatore,
+        )
+    };
+    let uscite: Vec<UscitaChunk> = if intervalli.len() > 1 {
+        intervalli.par_iter().map(probe).collect()
+    } else {
+        intervalli.iter().map(probe).collect()
+    };
+    if contatore.superato.load(Ordering::Relaxed) {
+        return Err(PlenoraError::ResourceLimit(
+            "fuzzy_join supera max_rows".into(),
+        ));
+    }
+    let totale: usize = uscite.iter().map(|uscita| uscita.left_rows.len()).sum();
+    let mut left_rows: Vec<Option<usize>> = Vec::with_capacity(totale);
+    let mut right_rows: Vec<Option<usize>> = Vec::with_capacity(totale);
+    let mut scores: Vec<Option<f64>> = Vec::with_capacity(totale);
+    for uscita in uscite {
+        left_rows.extend(uscita.left_rows);
+        right_rows.extend(uscita.right_rows);
+        scores.extend(uscita.scores);
     }
     let mut output = combine_horizontal(
         left,
@@ -623,6 +743,10 @@ pub fn fuzzy_join(
     output = crate::batch_with_rows(Arc::new(schema), columns, cardinalita)?;
     Ok(output)
 }
+
+#[cfg(test)]
+#[path = "fuzzy_oracolo.rs"]
+mod oracolo;
 
 #[cfg(test)]
 mod tests {
