@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use geo::Geometry;
+use geo::{CoordsIter, Geometry, LineString};
 use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, StringArray, UInt64Array};
 use plenora_core::arrow::select::{concat::concat, take::take};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
@@ -298,6 +298,28 @@ impl SplitPieces {
     }
 }
 
+/// Lo split lineare di una sorgente `LineString`.
+fn split_linestring(
+    line: &LineString<f64>,
+    splitter: &Geometry<f64>,
+    tolerance: f64,
+    max_output_rows: u64,
+) -> Result<Vec<Geometry<f64>>, PlenoraError> {
+    Ok(split_line(
+        line,
+        splitter,
+        tolerance,
+        MAX_CELL_COORDINATES,
+        MAX_SPLIT_WORK,
+        max_output_rows,
+        MAX_CELL_COORDINATES,
+    )
+    .map_err(errore_dello_split_lineare)?
+    .into_iter()
+    .map(Geometry::LineString)
+    .collect())
+}
+
 /// Le parti di una riga: split lineare per `LineString`, backend Rust per le
 /// sorgenti poligonali, rifiuto per ogni altro tipo.
 fn split_row(
@@ -308,19 +330,21 @@ fn split_row(
     precision: Precision,
 ) -> Result<Vec<Geometry<f64>>, PlenoraError> {
     match source {
-        Geometry::LineString(line) => Ok(split_line(
-            line,
-            splitter,
-            tolerance,
-            MAX_CELL_COORDINATES,
-            MAX_SPLIT_WORK,
-            max_output_rows,
-            MAX_CELL_COORDINATES,
-        )
-        .map_err(errore_dello_split_lineare)?
-        .into_iter()
-        .map(Geometry::LineString)
-        .collect()),
+        Geometry::LineString(line) => {
+            // `split_line` (codice precedente al porting) ammette un punto
+            // di taglio entro `tolerance` piu' un margine numerico di `16 *
+            // EPSILON` per il modulo delle coordinate: a `2^48` circa 1 m.
+            // Con la spaziatura dei `f64` entro `p / 64` il margine resta
+            // sotto `p / 2`, e un punto a piu' di `p` dalla linea (con
+            // tolleranza nulla) non taglia; oltre, nessun calcolo.
+            let magnitude = super::precision::modulo_massimo(
+                line.0.iter().copied().chain(splitter.coords_iter()),
+            );
+            if !super::precision::coordinate_abbastanza_fitte(magnitude, precision.value()) {
+                return Err(super::RustBackendError::PrecisionInsufficient.into());
+            }
+            split_linestring(line, splitter, tolerance, max_output_rows)
+        }
         Geometry::Polygon(_) | Geometry::MultiPolygon(_) => Ok(split_polygon_by_linework(
             source,
             splitter,
@@ -396,6 +420,32 @@ fn split_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Revisione, sesto giro: a `2^48` il margine numerico di `split_line`
+    /// valeva circa 1 m, e un punto a 25 cm dalla linea tagliava con
+    /// tolleranza nulla. Ora la spaziatura delle coordinate si confronta con
+    /// la precisione: errore esplicito. Vicino all'origine il punto a 25 cm
+    /// non taglia, quello sulla linea si'.
+    #[test]
+    fn split_lineare_rispetta_la_precisione() {
+        let centimetro = Precision::new(0.01).unwrap();
+        let caso = |base: f64, scarto: f64| {
+            split_row(
+                &Geometry::LineString(LineString::from(vec![(base, 0.0), (base + 10.0, 0.0)])),
+                &Geometry::Point(geo::Point::new(base + 5.0, scarto)),
+                0.0,
+                16,
+                centimetro,
+            )
+        };
+        assert!(matches!(
+            caso(2_f64.powi(48), 0.25),
+            Err(PlenoraError::Unsupported(_))
+        ));
+        assert_eq!(caso(0.0, 0.25).unwrap().len(), 1);
+        assert_eq!(caso(0.0, 0.0).unwrap().len(), 2);
+        assert_eq!(caso(2_f64.powi(30), 0.25).unwrap().len(), 1);
+    }
 
     /// Precisione dei test: coordinate astratte fino a qualche decina di
     /// unita', un milionesimo di unita' (la griglia degli overlay resta sotto).

@@ -117,12 +117,13 @@ dal linework degli operandi; non garantisce che stia vicino al lato
 **giusto** (un vertice agganciato lungo un altro lato entro 1 cm passa), né
 che un lato dell'output segua il linework fra i suoi due estremi, né la
 topologia (quali facce sono piene): per questo restano la validazione OGC
-dell'output e la campagna differenziale contro GEOS, non una prova. Fuori
-dal controllo del noding resta `split_line`
-(`extended_algorithms.rs`, sorgenti `LineString` di `geo.split`, codice
-precedente al porting): i punti di taglio arrotondati si spostano lungo la
-linea fino a qualche unità in ultima posizione delle coordinate, oltre 1 cm
-solo sopra circa `10^13` m.
+dell'output e la campagna differenziale contro GEOS, non una prova. Lo split lineare
+(`split_line`, sorgenti `LineString` di `geo.split`, codice precedente al
+porting) ammette un punto di taglio entro la tolleranza più un margine
+numerico proporzionale al modulo delle coordinate: l'adapter
+(`rust_backend::arrow::split_batches`) applica prima lo stesso controllo di
+spaziatura delle coordinate, così il margine resta sotto mezza precisione e
+un punto a più di 1 cm dalla linea, con tolleranza nulla, non taglia.
 
 **Condizione di rientro.** Nessuna per la precisione, che è una scelta di
 prodotto; per il controllo della griglia, la sua estensione alle altre
@@ -130,8 +131,7 @@ operazioni booleane (con la spaziatura delle coordinate e il controllo
 finale dei vertici); per i lati dell'output degli overlay, una verifica di
 Hausdorff contro gli operandi, o un overlay con raggio d'aggancio costante
 (`Precision::ABSOLUTE` di `i_overlay`, oggi non raggiungibile attraverso
-`geo`); per `split_line`, lo stesso controllo di spaziatura delle
-coordinate.
+`geo`).
 
 ### Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
 
