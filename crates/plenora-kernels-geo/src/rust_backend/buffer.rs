@@ -632,7 +632,8 @@ impl Definizione {
     }
 
     /// Il lato tocca la definizione (ristretta di `margine`)?
-    fn tocca_lato(&self, lato: geo::Line<f64>, margine: f64) -> bool {
+    /// I tratti del lato dentro la definizione (ristretta di `margine`).
+    fn tracce(&self, lato: geo::Line<f64>, margine: f64) -> Vec<(f64, f64)> {
         let busta = rstar::AABB::from_corners(
             [lato.start.x.min(lato.end.x), lato.start.y.min(lato.end.y)],
             [lato.start.x.max(lato.end.x), lato.start.y.max(lato.end.y)],
@@ -640,7 +641,9 @@ impl Definizione {
         self.albero
             .locate_in_envelope_intersecting(&busta)
             .filter_map(|indicizzata| Self::traccia(indicizzata.forma, self.raggio, lato, -margine))
-            .any(|(t0, t1)| t0.max(0.0) <= t1.min(1.0))
+            .map(|(t0, t1)| (t0.max(0.0), t1.min(1.0)))
+            .filter(|(t0, t1)| t0 <= t1)
+            .collect()
     }
 
     /// Il punto sta nella definizione allargata di `tolleranza` (negativa:
@@ -788,6 +791,26 @@ fn campioni(
     }
 }
 
+/// I tratti chiusi di `[0, 1]` fuori dagli intervalli: un tratto libero
+/// comprende i suoi estremi, cosi' i tratti ammessi di parti diverse si
+/// toccano.
+fn complemento(intervalli: &mut [(f64, f64)]) -> Vec<(f64, f64)> {
+    intervalli.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    let mut liberi = Vec::new();
+    let mut coperto = 0.0_f64;
+    for &(t0, t1) in intervalli.iter() {
+        if t0 > coperto {
+            liberi.push((coperto, t0));
+        }
+        coperto = coperto.max(t1);
+    }
+    if intervalli.is_empty() || coperto < 1.0 {
+        liberi.push((coperto, 1.0));
+    }
+    liberi.retain(|(t0, t1)| t1 > t0);
+    liberi
+}
+
 /// Gli anelli di una parte areale come linee (per le fasce dell'erosione).
 fn anelli_di(parte: &MultiPolygon<f64>) -> Geometry<f64> {
     Geometry::MultiLineString(MultiLineString::new(
@@ -890,11 +913,31 @@ fn verifica_contro_la_definizione(
                     .chain(polygon.interiors())
                     .all(|ring| {
                         ring.lines().all(|lato| {
-                            fasce.iter().any(|(parte, _, stretta, _)| {
-                                parte.dentro(lato.start)
-                                    && (stretta.raggio <= 0.0
-                                        || !stretta.tocca_lato(lato, margine(lato.start)))
-                            })
+                            // I tratti ammessi da ciascuna parte (fuori dalla
+                            // sua fascia stretta, quindi tutti dentro o tutti
+                            // fuori dalla parte: si prova il punto medio),
+                            // riuniti su tutte le parti, devono ricoprire il
+                            // lato: le erosioni di parti sovrapposte si
+                            // uniscono (revisione Codex, ultimo giro).
+                            let mut ammessi: Vec<(f64, f64)> = Vec::new();
+                            for (parte, _, stretta, _) in &fasce {
+                                let mut vietati = if stretta.raggio > 0.0 {
+                                    stretta.tracce(lato, margine(lato.start))
+                                } else {
+                                    Vec::new()
+                                };
+                                for (t0, t1) in complemento(&mut vietati) {
+                                    let t = f64::midpoint(t0, t1);
+                                    let medio = Coord {
+                                        x: t.mul_add(lato.end.x - lato.start.x, lato.start.x),
+                                        y: t.mul_add(lato.end.y - lato.start.y, lato.start.y),
+                                    };
+                                    if parte.dentro(medio) {
+                                        ammessi.push((t0, t1));
+                                    }
+                                }
+                            }
+                            griglia::ricopre(&mut ammessi)
                         })
                     })
             });
@@ -1220,5 +1263,45 @@ mod tests {
         assert!(verifica(&ponte).is_err());
         assert!(verifica(&MultiPolygon::new(Vec::new())).is_err());
         assert!(verifica(&MultiPolygon::new(vec![rettangolo(-1.0, 1.0)])).is_err());
+    }
+
+    /// Revisione (Codex, ultimo giro): l'erosione di parti sovrapposte si
+    /// unisce, e un lato dell'uscita ammesso a tratti da parti diverse non
+    /// e' rifiutato; un'uscita che sporge da entrambe resta rifiutata.
+    #[test]
+    fn erosione_di_parti_sovrapposte() {
+        let collezione = Geometry::GeometryCollection(
+            vec![
+                Geometry::Polygon(geo::Rect::new((0.0, 0.0), (10.0, 10.0)).to_polygon()),
+                Geometry::Polygon(geo::Rect::new((5.0, 0.0), (15.0, 10.0)).to_polygon()),
+            ]
+            .into(),
+        );
+        let buffer = buffer_controllato(&collezione, -1.0, Estremita::Tonde, centimetro()).unwrap();
+        assert!((buffer.unsigned_area() - 104.0).abs() < 1e-6);
+        let sporgente = MultiPolygon::new(vec![geo::Rect::new(
+            Coord { x: 0.5, y: 1.0 },
+            Coord { x: 14.0, y: 9.0 },
+        )
+        .to_polygon()]);
+        assert!(verifica_contro_la_definizione(
+            &collezione,
+            -1.0,
+            Estremita::Tonde,
+            0.005,
+            &sporgente,
+            centimetro()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn il_complemento_degli_intervalli() {
+        assert_eq!(complemento(&mut []), vec![(0.0, 1.0)]);
+        assert_eq!(complemento(&mut [(0.0, 1.0)]), Vec::<(f64, f64)>::new());
+        assert_eq!(
+            complemento(&mut [(0.2, 0.3), (0.6, 0.7)]),
+            vec![(0.0, 0.2), (0.3, 0.6), (0.7, 1.0)]
+        );
     }
 }

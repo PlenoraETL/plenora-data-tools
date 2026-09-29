@@ -162,7 +162,9 @@ Ora:
   quadrati agli estremi e ai punti; parti areali), su indici `rstar`: ogni
   **lato** dell'uscita per intero dentro la definizione allargata di `p / 2`
   (traccia del lato su ogni forma convessa, intervalli che lo ricoprono;
-  con `d < 0` fuori dalla fascia `|d| - f - p/2` degli anelli); ogni
+  con `d < 0` ricoperto dai tratti che ciascuna parte ammette, dentro la
+  parte e fuori dalla sua fascia `|d| - f - p/2`: le erosioni di parti
+  sovrapposte si uniscono); ogni
   vertice non affondato nella definizione ristretta di `f + p / 2` (niente
   buchi o vertici dentro il buffer); punti campione a `|d| - f - p/2` dai
   lati, sulle bisettrici dei giunti, davanti agli estremi e attorno ai
