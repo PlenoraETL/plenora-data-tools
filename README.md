@@ -147,7 +147,10 @@ differenziali no. Le differenze note sono in
 - restano decisioni con tolleranza, non esatte (elenco in
   `rust_backend/mod.rs`): punto medio dei lati nell'assemblaggio dei buchi,
   tolleranze `1e-9` dei controlli a posteriori di `split` (una scheggia
-  sotto quella soglia li passa), tolleranze di `make_valid`; la
+  sotto quella soglia li passa, e rifiutano circa 600 casi traslati di
+  `2^30` che GEOS risolve esattamente), lo snap per asse dell'overlay di
+  `make_valid` (topologia protetta dalla precondizione, coordinate
+  d'incrocio non esatte); la
   precondizione degli overlay di `make_valid` si regge sul comportamento di
   `i_float`/`i_overlay` letto dai sorgenti delle versioni nel lock (passo
   di griglia, raggio di aggancio che cresce solo dopo un passo che ha
@@ -208,6 +211,10 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
   rifiutati prima dell'overlay (`tests/geo_rust_overlay_controllato.rs`);
   sulla campagna di assurance la precondizione valuta 268 overlay e non ne
   rifiuta nessuno;
+- le linee dei buchi di \`LINEWORK\` a \`2^30\` (campagna differenziale traslata,
+  seme 1 caso 92): prima scartate da una tolleranza, ora conservate come in
+  GEOS; e un buco a un ULP fuori dalla shell, che sulle coordinate
+  normalizzate la tocca, promosso a poligono da \`STRUCTURE\`;
 - determinismo: ogni operazione due volte byte per byte; input permutato o
   invertito byte per byte dove il contratto promette la forma canonica, per
   classe e area dove non la promette.

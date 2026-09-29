@@ -66,12 +66,28 @@
 //! - `split`: le tolleranze relative `1e-9` dei controlli a posteriori di
 //!   area e copertura (`checked_output`, `point_on_segment`) sono verifiche,
 //!   non la scelta delle facce: una scheggia sotto `1e-9` dell'area puo'
-//!   passarle;
-//! - `make_valid`: la tolleranza `1e-12` sull'area fuori dalla shell in
-//!   `linework`, il test punto-su-segmento con tolleranza per bordi e punti
-//!   collassati, `normalized_intersects` sulle coordinate normalizzate
-//!   (un tocco sbagliato manda due poligoni sovrapposti alla validazione
-//!   finale, che li rifiuta).
+//!   passarle; in senso opposto rifiutano (fail-closed) casi che GEOS
+//!   risolve esattamente, circa 600 nella campagna traslata di `2^30`;
+//! - `make_valid`: lo snap per asse di `restore_multi_snapped`, che riporta
+//!   i vertici dell'overlay sulle coordinate sorgente entro
+//!   `span * 4 / i32::MAX`: la precondizione degli overlay garantisce che non
+//!   cambi la topologia, non che ogni coordinata d'incrocio sia quella
+//!   esatta.
+//!
+//! Classificazioni con tolleranza di `make_valid` rese esatte o fail-closed
+//! (la campagna differenziale traslata di `2^30` ha trovato 130 casi in cui
+//! `LINEWORK` perdeva tutte le linee dei buchi):
+//!
+//! - «segmento sul bordo dell'area» e «coordinata rappresentata» in
+//!   `linework`: la tolleranza `64 * EPSILON * |coordinata|` (circa `1.5e-5`
+//!   a `2^30`) e' sostituita da `orient2d` esatto piu' contenimento esatto;
+//!   un punto non esattamente sopra ma entro la banda dello snap dell'overlay
+//!   (`span * 2^-26` per asse) e' `PrecisionInsufficient`;
+//! - «il buco esce dalla shell» in `linework`: l'area della differenza e'
+//!   positiva in modo esatto, non oltre `1e-12 * max(area, 1)`;
+//! - `normalized_intersects`, che sceglie fra buco da sottrarre e da
+//!   promuovere in `STRUCTURE`: deciso sulle coordinate originali con i
+//!   predicati esatti di `geo`, non su quelle normalizzate.
 //!
 //! Il laboratorio ha girato su `geo` 0.33.1 **non patchato**; qui `geo`
 //! risolve alla copia vendorizzata con `orient2d` esatto (filtro veloce piu'

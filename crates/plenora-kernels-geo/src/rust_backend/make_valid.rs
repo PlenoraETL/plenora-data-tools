@@ -27,8 +27,8 @@ use geo::algorithm::validation::Validation;
 use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::line_intersection::{line_intersection, LineIntersection};
 use geo::{
-    Area, BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, Line,
-    LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
+    BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, Line, LineString,
+    MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use thiserror::Error;
 
@@ -828,11 +828,15 @@ fn normalized_xor(
     resolvable_overlay(left, right, BooleanOps::xor)
 }
 
+/// Se i due operandi si toccano, deciso sulle coordinate **originali** con i
+/// predicati esatti di `geo` (`orient2d` esatto). Il laboratorio lo decideva
+/// sulle coordinate normalizzate, dove l'arrotondamento puo' far toccare due
+/// feature disgiunte o separare due che si toccano: in `structure_polygon`
+/// questo sceglie fra buco da sottrarre e buco da promuovere, e un buco
+/// esterno sottratto invece che promosso sparirebbe in silenzio. Il nome
+/// resta quello della sorgente.
 fn normalized_intersects(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) -> bool {
-    let normalizer = OverlayNormalizer::new(left, right);
-    normalizer
-        .map_multi(left, OverlayNormalizer::normalize)
-        .intersects(&normalizer.map_multi(right, OverlayNormalizer::normalize))
+    left.intersects(right)
 }
 
 fn merge_polygon(
@@ -1120,59 +1124,156 @@ fn add_polygon_segments(
     }
 }
 
-fn point_on_segment(point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> bool {
-    let coordinate_scale = point
-        .x
-        .abs()
-        .max(point.y.abs())
-        .max(start.x.abs())
-        .max(start.y.abs())
-        .max(end.x.abs())
-        .max(end.y.abs())
-        .max(1.0);
-    let tolerance = (coordinate_scale * f64::EPSILON * 64.0).max(1e-9);
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let length = dx.hypot(dy);
-    if length == 0.0 {
-        return (point.x - start.x).hypot(point.y - start.y) <= tolerance;
-    }
-    let cross = (point.y - start.y) * dx - (point.x - start.x) * dy;
-    if cross.abs() > length * tolerance {
-        return false;
-    }
-    point.x >= start.x.min(end.x) - tolerance
-        && point.x <= start.x.max(end.x) + tolerance
-        && point.y >= start.y.min(end.y) - tolerance
-        && point.y <= start.y.max(end.y) + tolerance
+/// Dove sta un punto rispetto a un segmento, per la classificazione di
+/// `linework`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OnSegment {
+    /// Esattamente sul segmento: `orient2d` esatto e contenimento esatto
+    /// nell'inviluppo.
+    Exactly,
+    /// Non esattamente sopra, ma entro la banda d'ambiguita': un vertice
+    /// dell'area potrebbe essere stato spostato dallo snap dell'overlay.
+    Near,
+    /// Fuori dalla banda.
+    Off,
 }
 
-fn segment_is_area_boundary(start: Coord<f64>, end: Coord<f64>, area: &MultiPolygon<f64>) -> bool {
-    area.0.iter().any(|polygon| {
+/// Banda d'ambiguita' per asse della classificazione di `linework`.
+///
+/// Il laboratorio decideva «sul bordo dell'area» con una tolleranza
+/// `64 * EPSILON * |coordinata|`, circa `1.5e-5` a `2^30`: piu' larga dei
+/// buchi sottili che GEOS conserva, che finivano scartati come bordo
+/// (campagna differenziale traslata di `2^30`). Ora la decisione e' esatta,
+/// e la banda serve solo a riconoscere i casi in cui un vertice dell'area,
+/// uscito da un overlay, puo' non stare esattamente dove starebbe in
+/// aritmetica esatta: lo snap di `restore_multi_snapped` sposta un vertice
+/// al piu' di `span * 4 / i32::MAX` per asse, e gli incroci arrotondati sono
+/// entro il passo di griglia; la banda e' `span * 2^-26` per asse (32 volte
+/// lo snap), sull'estensione di tutti i poligoni d'ingresso, che contiene
+/// quella di ogni overlay. Nella banda ma non esattamente sopra: errore
+/// ([`MakeValidError::PrecisionInsufficient`]), mai una scelta.
+#[derive(Clone, Copy, Debug)]
+struct Band {
+    x: f64,
+    y: f64,
+}
+
+impl Band {
+    fn of(polygons: &[&Polygon<f64>]) -> Self {
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for coordinate in polygons.iter().flat_map(|polygon| polygon.coords_iter()) {
+            min_x = min_x.min(coordinate.x);
+            max_x = max_x.max(coordinate.x);
+            min_y = min_y.min(coordinate.y);
+            max_y = max_y.max(coordinate.y);
+        }
+        let span_x = max_x - min_x;
+        let span_y = max_y - min_y;
+        let fallback = span_x.max(span_y);
+        let span = |value: f64| {
+            if value > 0.0 {
+                value
+            } else if fallback > 0.0 {
+                fallback
+            } else {
+                1.0
+            }
+        };
+        let scale = 2_f64.powi(-26);
+        Self {
+            x: span(span_x) * scale,
+            y: span(span_y) * scale,
+        }
+    }
+
+    fn classify(self, point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> OnSegment {
+        if RobustKernel::orient2d(start, end, point) == Orientation::Collinear
+            && point.x >= start.x.min(end.x)
+            && point.x <= start.x.max(end.x)
+            && point.y >= start.y.min(end.y)
+            && point.y <= start.y.max(end.y)
+        {
+            return OnSegment::Exactly;
+        }
+        // Distanza nella metrica scalata per asse, relativa a `start`.
+        let px = (point.x - start.x) / self.x;
+        let py = (point.y - start.y) / self.y;
+        let dx = (end.x - start.x) / self.x;
+        let dy = (end.y - start.y) / self.y;
+        let length_squared = dx * dx + dy * dy;
+        let t = if length_squared > 0.0 {
+            ((px * dx + py * dy) / length_squared).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let distance = (px - t * dx).hypot(py - t * dy);
+        // Nel dubbio (NaN compreso) il punto e' ambiguo.
+        if distance.is_nan() || distance <= 1.0 {
+            OnSegment::Near
+        } else {
+            OnSegment::Off
+        }
+    }
+}
+
+fn boundary_segments(area: &MultiPolygon<f64>) -> impl Iterator<Item = Line<f64>> + '_ {
+    area.0.iter().flat_map(|polygon| {
         std::iter::once(polygon.exterior())
             .chain(polygon.interiors())
             .flat_map(LineString::lines)
-            .any(|boundary| {
-                point_on_segment(start, boundary.start, boundary.end)
-                    && point_on_segment(end, boundary.start, boundary.end)
-            })
     })
 }
 
+/// Il segmento sta su un lato del bordo dell'area (entrambi gli estremi
+/// esattamente sopra lo stesso lato)? Ambiguo: errore.
+fn segment_is_area_boundary(
+    start: Coord<f64>,
+    end: Coord<f64>,
+    area: &MultiPolygon<f64>,
+    band: Band,
+) -> Result<bool, MakeValidError> {
+    let mut ambiguous = false;
+    for boundary in boundary_segments(area) {
+        let first = band.classify(start, boundary.start, boundary.end);
+        let second = band.classify(end, boundary.start, boundary.end);
+        if first == OnSegment::Exactly && second == OnSegment::Exactly {
+            return Ok(true);
+        }
+        if first != OnSegment::Off && second != OnSegment::Off {
+            ambiguous = true;
+        }
+    }
+    if ambiguous {
+        Err(MakeValidError::PrecisionInsufficient)
+    } else {
+        Ok(false)
+    }
+}
+
+/// La coordinata sta esattamente su un lato dell'area o su una linea
+/// residua? Ambiguo: errore.
 fn coordinate_is_represented(
     coordinate: Coord<f64>,
     area: &MultiPolygon<f64>,
     lines: &[LineString<f64>],
-) -> bool {
-    area.0
-        .iter()
-        .flat_map(|polygon| {
-            std::iter::once(polygon.exterior())
-                .chain(polygon.interiors())
-                .flat_map(LineString::lines)
-        })
-        .chain(lines.iter().flat_map(LineString::lines))
-        .any(|segment| point_on_segment(coordinate, segment.start, segment.end))
+    band: Band,
+) -> Result<bool, MakeValidError> {
+    let mut ambiguous = false;
+    for segment in boundary_segments(area).chain(lines.iter().flat_map(LineString::lines)) {
+        match band.classify(coordinate, segment.start, segment.end) {
+            OnSegment::Exactly => return Ok(true),
+            OnSegment::Near => ambiguous = true,
+            OnSegment::Off => {}
+        }
+    }
+    if ambiguous {
+        Err(MakeValidError::PrecisionInsufficient)
+    } else {
+        Ok(false)
+    }
 }
 
 fn validate_linework_output(geometry: &Geometry<f64>) -> Result<(), MakeValidError> {
@@ -1244,6 +1345,7 @@ fn linework(
 
     let mut polygons = Vec::new();
     collect_polygon_elements(geometry, &mut polygons)?;
+    let band = Band::of(&polygons);
     let original_coordinates = polygons
         .iter()
         .flat_map(|polygon| {
@@ -1284,9 +1386,20 @@ fn linework(
             }
             if shares_collinear_boundary(&shell, &fixed) {
                 retain_internal_edges = true;
-                let outside = normalized_difference(&fixed, &shell)?.unsigned_area();
-                let fixed_area = fixed.unsigned_area();
-                if outside > fixed_area.max(1.0) * 1e-12 {
+                // Il buco esce dalla shell se la differenza ha area
+                // positiva, deciso in modo esatto: il laboratorio ignorava
+                // una sporgenza sotto `1e-12 * max(area, 1)`.
+                let outside = normalized_difference(&fixed, &shell)?;
+                let mut sticks_out = false;
+                for part in &outside.0 {
+                    if super::exact::area_positiva(part)
+                        .map_err(|_| MakeValidError::NumericRange)?
+                    {
+                        sticks_out = true;
+                        break;
+                    }
+                }
+                if sticks_out {
                     polygon_area = normalized_union(&polygon_area, &fixed)?;
                 }
             } else {
@@ -1319,22 +1432,23 @@ fn linework(
     }
     let mut lines = Vec::new();
     for (start, end) in all_segments.into_values() {
-        if !segment_is_area_boundary(start, end, &area) {
+        if !segment_is_area_boundary(start, end, &area, band)? {
             lines
                 .try_reserve(1)
                 .map_err(|_| MakeValidError::AllocationFailed("residui linework"))?;
             lines.push(LineString::new(vec![start, end]));
         }
     }
-    let collapse_points = original_coordinates
-        .iter()
-        .map(|key| Coord {
+    let mut collapse_points = Vec::new();
+    for key in &original_coordinates {
+        let coordinate = Coord {
             x: f64::from_bits(key.x),
             y: f64::from_bits(key.y),
-        })
-        .filter(|coordinate| !coordinate_is_represented(*coordinate, &area, &lines))
-        .map(Point::from)
-        .collect::<Vec<_>>();
+        };
+        if !coordinate_is_represented(coordinate, &area, &lines, band)? {
+            collapse_points.push(Point::from(coordinate));
+        }
+    }
 
     let mut components = Vec::new();
     if !area.0.is_empty() {
@@ -1708,6 +1822,36 @@ mod tests {
             || (polygon.unsigned_area() - expected.unsigned_area()).abs() > 1e-12
         {
             return Err(MakeValidError::InvalidOutput("buchi alterati".to_owned()));
+        }
+        Ok(())
+    }
+
+    /// Buco fuori dalla shell, a un ULP dal suo bordo: sulle coordinate
+    /// normalizzate (estensione 3) i due si toccano, sulle originali no.
+    /// `STRUCTURE` deve promuoverlo a poligono, non sottrarlo.
+    #[test]
+    fn hole_one_ulp_outside_the_shell_is_promoted() -> Result<(), MakeValidError> {
+        // Bordo della shell e bordo del buco a un ULP: divisi per
+        // l'estensione 3 arrotondano allo stesso `f64`.
+        let edge = f64::from_bits(0x3FF9_A9A8_0EF2_B725);
+        let gap = f64::from_bits(0x3FF9_A9A8_0EF2_B726);
+        if (gap / 3.0).to_bits() != (edge / 3.0).to_bits() {
+            return Err(MakeValidError::InvalidOutput(
+                "la fixture non collide piu' dopo la normalizzazione".to_owned(),
+            ));
+        }
+        let input = Geometry::Polygon(Polygon::new(
+            square(0.0, edge, 0.0, 1.0).exterior().clone(),
+            vec![square(gap, 3.0, 0.0, 1.0).exterior().clone()],
+        ));
+        let output = make_valid_geometry_rust(&input, RepairMethod::Structure, false)?;
+        let Geometry::MultiPolygon(polygons) = &output else {
+            return Err(MakeValidError::InvalidOutput(format!("{output:?}")));
+        };
+        if polygons.0.len() != 2 {
+            return Err(MakeValidError::InvalidOutput(
+                "buco non promosso".to_owned(),
+            ));
         }
         Ok(())
     }

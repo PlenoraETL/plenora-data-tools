@@ -214,3 +214,106 @@ fn cornice_larga_resta_riparata() {
         assert!(cornice_intatta(&output, &larga), "{method:?}");
     }
 }
+
+/// Campagna differenziale traslata di `2^30`, seme 1 caso 92 (e altri 64
+/// coppie seme/caso della stessa forma): con `LINEWORK` il laboratorio
+/// scartava tutte le linee del buco, perche' la tolleranza di
+/// `point_on_segment` (circa `1.5e-5` a `2^30`) le dava sul bordo della
+/// shell, a `2e-6`. L'attesa e' l'output GEOS registrato, verificato
+/// contro l'oracolo esatto riportato all'origine: il poligono della shell e
+/// i tre lati del buco che non stanno sul suo bordo.
+#[test]
+fn linework_conserva_le_linee_del_buco_a_2_alla_30() {
+    use geo::{CoordsIter, Line};
+    let base = 1_073_741_824.0; // 2^30
+    let shell = LineString::from(vec![
+        (1_071_741_824.0, base + 0.000_003),
+        (1_077_741_824.0, base + 0.000_003),
+        (1_077_741_824.0, base + 0.000_01),
+        (1_071_741_824.0, base + 0.000_01),
+        (1_071_741_824.0, base + 0.000_003),
+    ]);
+    let buco = LineString::from(vec![
+        (1_072_741_824.0, base + 0.000_005),
+        (1_077_741_824.0, base + 0.000_005),
+        (1_077_741_824.0, base + 0.000_007),
+        (1_072_741_824.0, base + 0.000_007),
+        (1_072_741_824.0, base + 0.000_005),
+    ]);
+    let input = Geometry::Polygon(Polygon::new(shell.clone(), vec![buco]));
+    let chiave = |linea: Line<f64>| {
+        let (a, b) = (
+            (linea.start.x.to_bits(), linea.start.y.to_bits()),
+            (linea.end.x.to_bits(), linea.end.y.to_bits()),
+        );
+        if a <= b {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    };
+    let attese = [
+        (
+            (1_072_741_824.0, base + 0.000_005),
+            (1_077_741_824.0, base + 0.000_005),
+        ),
+        (
+            (1_072_741_824.0, base + 0.000_007),
+            (1_077_741_824.0, base + 0.000_007),
+        ),
+        (
+            (1_072_741_824.0, base + 0.000_005),
+            (1_072_741_824.0, base + 0.000_007),
+        ),
+    ]
+    .map(|(a, b): ((f64, f64), (f64, f64))| {
+        chiave(Line::new(
+            geo::Coord { x: a.0, y: a.1 },
+            geo::Coord { x: b.0, y: b.1 },
+        ))
+    });
+    let shell = Polygon::new(shell, Vec::new());
+    let verifica = |output: &Geometry<f64>| {
+        let Geometry::GeometryCollection(parti) = output else {
+            panic!("attesa una collezione: {output:?}");
+        };
+        let mut segmenti = Vec::new();
+        let mut aree = Vec::new();
+        for parte in &parti.0 {
+            match parte {
+                Geometry::Polygon(singolo) => aree.push(singolo.clone()),
+                Geometry::MultiLineString(multi) => {
+                    segmenti.extend(multi.0.iter().flat_map(LineString::lines).map(chiave));
+                }
+                Geometry::LineString(tratto) => segmenti.extend(tratto.lines().map(chiave)),
+                other => panic!("componente inattesa: {other:?}"),
+            }
+        }
+        segmenti.sort_unstable();
+        let mut attese = attese.to_vec();
+        attese.sort_unstable();
+        assert_eq!(segmenti, attese, "linee del buco");
+        let [poligono] = aree.as_slice() else {
+            panic!("atteso un poligono");
+        };
+        assert!(poligono.coords_count() >= 5);
+        assert_eq!(
+            confronta_aree(
+                poligono,
+                AreaPoligono::di(poligono),
+                &shell,
+                AreaPoligono::di(&shell)
+            ),
+            Ok(Ordering::Equal),
+            "area della shell"
+        );
+    };
+    for keep_collapsed in [false, true] {
+        let output = make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed)
+            .expect("riparata");
+        verifica(&output);
+    }
+    let payload = input.to_wkb(CoordDimensions::xy()).expect("wkb");
+    let output = make_valid_wkb(&payload, MetodoAdapter::Linework, true).expect("adapter");
+    verifica(&geometry_from_wkb(&output).expect("valida"));
+}
