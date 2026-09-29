@@ -26,8 +26,10 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::aggregation::{self, Aggregate, Distinct};
 use plenora_kernels_table::quality::{assert_unique, AssertUnique};
-use plenora_kernels_table::reshape::{table_diff, TableDiff};
-use plenora_kernels_table::setops::{except, intersect, union_distinct, SetOperation};
+use plenora_kernels_table::reshape::{table_diff, IncludeUnchanged, TableDiff};
+use plenora_kernels_table::setops::{
+    except, intersect, union_distinct, SetOperation, SetOperationKind,
+};
 use plenora_kernels_table::spill::{aggregate_spilled, distinct_spilled, execute_set_operation};
 use plenora_kernels_table::{scalar_as_string, select_rows, Limits};
 use proptest::prelude::*;
@@ -257,14 +259,18 @@ fn distinct_atteso(input: &RecordBatch, subset: &[&str], keep: &str) -> Vec<usiz
 }
 
 /// Set operation attesa sulle chiavi testuali di riga intera.
-fn set_operation_attesa(operazione: &str, left: &RecordBatch, right: &RecordBatch) -> RecordBatch {
+fn set_operation_attesa(
+    operazione: SetOperationKind,
+    left: &RecordBatch,
+    right: &RecordBatch,
+) -> RecordBatch {
     let nomi = ["i", "f", "s", "b", "dec"];
     let sinistra = chiavi(left, &nomi);
     let destra = chiavi(right, &nomi);
     let insieme_destro = destra.iter().collect::<HashSet<_>>();
     let mut emesse = HashSet::new();
     match operazione {
-        "union_distinct" => {
+        SetOperationKind::UnionDistinct => {
             let righe_sinistre = (0..sinistra.len())
                 .filter(|row| emesse.insert(&sinistra[*row]))
                 .collect::<Vec<_>>();
@@ -276,7 +282,7 @@ fn set_operation_attesa(operazione: &str, left: &RecordBatch, right: &RecordBatc
             plenora_kernels_table::setops::concat_compatible(&a, &b, &Limits::default())
                 .expect("concat")
         }
-        "intersect" => {
+        SetOperationKind::Intersect => {
             let selezione = (0..sinistra.len())
                 .filter(|row| {
                     insieme_destro.contains(&sinistra[*row]) && emesse.insert(&sinistra[*row])
@@ -284,7 +290,7 @@ fn set_operation_attesa(operazione: &str, left: &RecordBatch, right: &RecordBatc
                 .collect::<Vec<_>>();
             select_rows(left, &selezione).expect("intersect")
         }
-        _ => {
+        SetOperationKind::Except => {
             let selezione = (0..sinistra.len())
                 .filter(|row| {
                     !insieme_destro.contains(&sinistra[*row]) && emesse.insert(&sinistra[*row])
@@ -417,7 +423,7 @@ proptest! {
             left_keys: chiave.iter().map(|nome| (*nome).to_owned()).collect(),
             right_keys: chiave.iter().map(|nome| (*nome).to_owned()).collect(),
             compare_columns: vec![if subset.contains(&"s") { "f".into() } else { "s".into() }],
-            include_unchanged: "yes".into(),
+            include_unchanged: IncludeUnchanged::Yes,
             separator: "#".into(),
         };
         let confronto = config.compare_columns[0].clone();
@@ -448,18 +454,24 @@ proptest! {
         let right = senza_id(&destra);
         let config = SetOperation {};
         let limits = limiti_ampi(spill_partitions);
-        for operazione in ["union_distinct", "intersect", "except"] {
+        for (operazione, nome) in [
+            (SetOperationKind::UnionDistinct, "union_distinct"),
+            (SetOperationKind::Intersect, "intersect"),
+            (SetOperationKind::Except, "except"),
+        ] {
             let atteso = set_operation_attesa(operazione, &left, &right);
             let in_memoria = match operazione {
-                "union_distinct" => union_distinct(&left, &right, &config, &Limits::default()),
-                "intersect" => intersect(&left, &right, &config),
-                _ => except(&left, &right, &config),
+                SetOperationKind::UnionDistinct => {
+                    union_distinct(&left, &right, &config, &Limits::default())
+                }
+                SetOperationKind::Intersect => intersect(&left, &right, &config),
+                SetOperationKind::Except => except(&left, &right, &config),
             }
-            .map_err(errore(operazione))?;
-            prop_assert_eq!(&in_memoria, &atteso, "{}", operazione);
+            .map_err(errore(nome))?;
+            prop_assert_eq!(&in_memoria, &atteso, "{}", nome);
             let spilled = execute_set_operation(operazione, &left, &right, &limits)
-                .map_err(errore(operazione))?;
-            prop_assert_eq!(&spilled, &atteso, "{} spilled", operazione);
+                .map_err(errore(nome))?;
+            prop_assert_eq!(&spilled, &atteso, "{} spilled", nome);
         }
     }
 }

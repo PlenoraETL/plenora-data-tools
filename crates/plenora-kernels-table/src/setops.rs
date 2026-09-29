@@ -26,6 +26,21 @@ fn key_set(capacity: usize) -> KeyInterner {
 #[serde(deny_unknown_fields)]
 pub struct SetOperation {}
 
+/// Quale set operation eseguire.
+///
+/// Per i percorsi che la scelgono a runtime (`spill::execute_set_operation`,
+/// l'analisi). E' un enum chiuso e non un nome: un'operazione sconosciuta non
+/// si puo' esprimere, quindi non puo' ricadere in silenzio su una delle tre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetOperationKind {
+    /// `table.union_distinct`.
+    UnionDistinct,
+    /// `table.intersect`.
+    Intersect,
+    /// `table.except`.
+    Except,
+}
+
 enum KeyColumn<'a> {
     Utf8(&'a StringArray),
     Int64(&'a Int64Array),

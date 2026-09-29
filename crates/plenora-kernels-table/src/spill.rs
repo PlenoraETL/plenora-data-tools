@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 use crate::aggregation::{self, Aggregate, Distinct, Keep, KeyColumn, Sort};
 use crate::hashing::{hash_chiave, ChiaveBuildHasher};
-use crate::setops::{self, CompactRowEncoder};
+use crate::setops::{self, CompactRowEncoder, SetOperationKind};
 use crate::Limits;
 use crate::{column_index, replace_or_append, select_rows};
 use plenora_core::{PlenoraError, Result};
@@ -328,8 +328,9 @@ pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
 /// Set operation binaria con spill su disco delle chiavi compatte.
 ///
 /// Le chiavi delle righe sono partizionate per hash su file binari con
-/// quota `max_temp_bytes`; il matching per partizione applica
-/// `union_distinct`, `intersect` oppure `except` (default) rispettando
+/// quota `max_temp_bytes`; il matching per partizione applica l'operazione
+/// scelta da `operation` (un enum chiuso: nessun nome sconosciuto puo'
+/// ricadere su un'operazione reale) rispettando
 /// `max_governed_memory_bytes` sul working set, poi le righe sopravvissute sono
 /// riselezionate dagli input con `select_rows`.
 ///
@@ -344,7 +345,7 @@ pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
 ///   `max_governed_memory_bytes`, overflow interni di accounting);
 /// - `Io`: errori sui file temporanei (creazione, scrittura, lettura).
 pub fn execute_set_operation(
-    operation: &str,
+    operation: SetOperationKind,
     left: &RecordBatch,
     right: &RecordBatch,
     limits: &Limits,
@@ -356,7 +357,7 @@ pub fn execute_set_operation(
     spill_batch(left, 0, &mut left_writers, &mut workspace, limits)?;
     let mut ordinals = Vec::new();
 
-    if operation == "union_distinct" {
+    if operation == SetOperationKind::UnionDistinct {
         spill_batch(
             right,
             left.num_rows(),
@@ -396,7 +397,7 @@ pub fn execute_set_operation(
             left_path,
             right_path,
             limits,
-            operation == "intersect",
+            operation == SetOperationKind::Intersect,
             &mut ordinals,
         )?;
     }

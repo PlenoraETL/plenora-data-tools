@@ -58,8 +58,8 @@ use plenora_kernels_table::quality::{
     AssertRange, AssertRegex, AssertSchema, AssertUnique, SchemaExpectation,
 };
 use plenora_kernels_table::reshape::{
-    explode, table_diff, transpose, unnest, Explode, HeterogeneousTypePolicy, TableDiff, Transpose,
-    Unnest,
+    explode, table_diff, transpose, unnest, Explode, HeterogeneousTypePolicy, IncludeUnchanged,
+    TableDiff, Transpose, Unnest,
 };
 use plenora_kernels_table::security::{
     mask_data, md5_hash, sha256_hash, HashNullPolicy, MaskData, MaskType, Masking, Md5Hash,
@@ -586,7 +586,7 @@ fn main() {
         left_keys: vec!["id".into()],
         right_keys: vec!["id".into()],
         compare_columns: vec!["num".into()],
-        include_unchanged: "no".into(),
+        include_unchanged: IncludeUnchanged::No,
         separator: ", ".into(),
     };
     results.push(measure_record(

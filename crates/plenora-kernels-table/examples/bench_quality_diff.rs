@@ -28,7 +28,7 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::governance::{assert_foreign_key, reconcile, ForeignKey, Reconcile};
-use plenora_kernels_table::reshape::{table_diff, TableDiff};
+use plenora_kernels_table::reshape::{table_diff, IncludeUnchanged, TableDiff};
 use plenora_kernels_table::security::{mask_data, MaskData, MaskType, Masking};
 use plenora_kernels_table::Limits;
 
@@ -114,7 +114,7 @@ fn main() {
         left_keys: vec!["id".into()],
         right_keys: vec!["id".into()],
         compare_columns: vec!["num".into()],
-        include_unchanged: "no".into(),
+        include_unchanged: IncludeUnchanged::No,
         separator: ", ".into(),
     };
     measure(

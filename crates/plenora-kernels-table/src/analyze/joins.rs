@@ -607,12 +607,8 @@ pub(in crate::analyze) fn analyze_concat_by_name(
     )
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::analyze) enum SetOp {
-    UnionDistinct,
-    Intersect,
-    Except,
-}
+/// L'analisi usa lo stesso enum chiuso del kernel spilled.
+pub(in crate::analyze) use crate::setops::SetOperationKind as SetOp;
 
 pub(in crate::analyze) fn analyze_set_operation(
     op: &str,

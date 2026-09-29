@@ -1124,7 +1124,7 @@ pub struct TableDiff {
     #[serde(default)]
     pub compare_columns: Vec<String>,
     #[serde(default = "default_no")]
-    pub include_unchanged: String,
+    pub include_unchanged: IncludeUnchanged,
     #[serde(default = "default_separator")]
     pub separator: String,
 }
@@ -1136,8 +1136,22 @@ struct DiffRow {
     changed: Option<String>,
     old_values: Option<String>,
 }
-fn default_no() -> String {
-    "no".into()
+/// Se `table_diff` emette anche le righe `UNCHANGED`.
+///
+/// Forma testuale `"yes"`/`"no"` come nel piano; un enum chiuso e non una
+/// stringa, cosi' un valore diverso e' un errore di config invece di valere
+/// `"no"` in silenzio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncludeUnchanged {
+    /// Emette anche le righe invariate.
+    Yes,
+    /// Solo righe aggiunte, rimosse o modificate.
+    No,
+}
+
+const fn default_no() -> IncludeUnchanged {
+    IncludeUnchanged::No
 }
 fn default_separator() -> String {
     "#".into()
@@ -1386,7 +1400,7 @@ pub fn table_diff(
                 ));
             }
         };
-        if status != "UNCHANGED" || config.include_unchanged == "yes" {
+        if status != "UNCHANGED" || config.include_unchanged == IncludeUnchanged::Yes {
             rows.push(DiffRow {
                 old_row,
                 new_row,
@@ -2560,7 +2574,7 @@ mod tests {
                 }
                 (None, None) => unreachable!(),
             };
-            if status != "UNCHANGED" || config.include_unchanged == "yes" {
+            if status != "UNCHANGED" || config.include_unchanged == IncludeUnchanged::Yes {
                 rows.push(DiffRowRef {
                     old_row,
                     new_row,
@@ -2753,20 +2767,48 @@ mod tests {
         (left, right)
     }
 
-    fn diff_config(include_unchanged: &str) -> TableDiff {
+    fn diff_config(include_unchanged: IncludeUnchanged) -> TableDiff {
         TableDiff {
             left_keys: vec!["id".into(), "grp".into()],
             right_keys: vec!["id".into(), "grp".into()],
             compare_columns: vec!["num".into(), "txt".into()],
-            include_unchanged: include_unchanged.into(),
+            include_unchanged,
             separator: ", ".into(),
+        }
+    }
+
+    #[test]
+    fn table_diff_rifiuta_un_include_unchanged_sconosciuto() {
+        // Un valore diverso da "yes"/"no" non deve ricadere in silenzio su
+        // "no" (righe UNCHANGED tolte dall'output).
+        for valore in ["si", "Yes", "true", "YES", ""] {
+            let config = serde_json::json!({
+                "left_keys": ["id"],
+                "right_keys": ["id"],
+                "include_unchanged": valore,
+            });
+            assert!(
+                serde_json::from_value::<TableDiff>(config).is_err(),
+                "include_unchanged {valore:?} accettato"
+            );
+        }
+        for valore in ["yes", "no"] {
+            let config = serde_json::json!({
+                "left_keys": ["id"],
+                "right_keys": ["id"],
+                "include_unchanged": valore,
+            });
+            assert!(
+                serde_json::from_value::<TableDiff>(config).is_ok(),
+                "{valore}"
+            );
         }
     }
 
     #[test]
     fn table_diff_stati_misti_oracle() {
         let (left, right) = diff_fixtures();
-        for include_unchanged in ["no", "yes"] {
+        for include_unchanged in [IncludeUnchanged::No, IncludeUnchanged::Yes] {
             let config = diff_config(include_unchanged);
             let fast = table_diff(&left, &right, &config, &Limits::default()).expect("fast");
             let reference =
@@ -2777,7 +2819,7 @@ mod tests {
         // solo-destra): id 1 UNCHANGED, id 2 UNCHANGED (NaN==NaN),
         // id 3 MODIFIED (-0.0 vs 0.0), id 4 MODIFIED (null vs valore),
         // id 5 DELETED, id 6 DELETED, id 7 ADDED, chiave null ADDED.
-        let config = diff_config("no");
+        let config = diff_config(IncludeUnchanged::No);
         let fast = table_diff(&left, &right, &config, &Limits::default()).expect("fast");
         let status_column = fast
             .column(fast.schema().index_of("_diff_status").expect("status"))
@@ -2801,7 +2843,7 @@ mod tests {
         let config = TableDiff {
             compare_columns: Vec::new(),
             separator: " | ".into(),
-            ..diff_config("yes")
+            ..diff_config(IncludeUnchanged::Yes)
         };
         let fast = table_diff(&left, &right, &config, &Limits::default()).expect("fast");
         let reference =
@@ -2814,7 +2856,7 @@ mod tests {
         let (left, right) = diff_fixtures();
         let empty_left = left.slice(0, 0);
         let empty_right = right.slice(0, 0);
-        let config = diff_config("yes");
+        let config = diff_config(IncludeUnchanged::Yes);
         for (l, r) in [
             (&empty_left, &right),
             (&left, &empty_right),
@@ -2844,7 +2886,7 @@ mod tests {
                 Arc::new(StringArray::from(vec![Some("x"), Some("y")])),
             ],
         );
-        let config = diff_config("no");
+        let config = diff_config(IncludeUnchanged::No);
         let fast = table_diff(&dup_left, &right, &config, &Limits::default());
         let reference = table_diff_reference(&dup_left, &right, &config, &Limits::default());
         assert_eq!(
@@ -2861,20 +2903,20 @@ mod tests {
         for config in [
             TableDiff {
                 left_keys: Vec::new(),
-                ..diff_config("no")
+                ..diff_config(IncludeUnchanged::No)
             },
             TableDiff {
                 left_keys: vec!["id".into()],
                 right_keys: vec!["id".into(), "grp".into()],
-                ..diff_config("no")
+                ..diff_config(IncludeUnchanged::No)
             },
             TableDiff {
                 left_keys: vec!["manca".into(), "grp".into()],
-                ..diff_config("no")
+                ..diff_config(IncludeUnchanged::No)
             },
             TableDiff {
                 compare_columns: vec!["manca".into()],
-                ..diff_config("no")
+                ..diff_config(IncludeUnchanged::No)
             },
         ] {
             let fast = table_diff(&left, &right, &config, &Limits::default());
@@ -2900,7 +2942,7 @@ mod tests {
                 Arc::new(StringArray::from(vec![Some("uno")])),
             ],
         );
-        let config = diff_config("no");
+        let config = diff_config(IncludeUnchanged::No);
         let fast = table_diff(&left, &typed_right, &config, &Limits::default());
         let reference = table_diff_reference(&left, &typed_right, &config, &Limits::default());
         assert_eq!(
@@ -3045,7 +3087,7 @@ mod tests {
             left_keys: vec!["k".into()],
             right_keys: vec!["k".into()],
             compare_columns: vec!["v".into()],
-            include_unchanged: "yes".into(),
+            include_unchanged: IncludeUnchanged::Yes,
             separator: ", ".into(),
         };
         let valori = || -> ArrayRef { Arc::new(StringArray::from(vec![Some("a"), Some("b")])) };
