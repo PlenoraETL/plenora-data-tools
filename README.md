@@ -552,7 +552,10 @@ fuso è un errore `Triangulation`/`Voronoi`, mai un'uscita.
   dei `f64` supera `p / 64` al modulo dei siti più la distanza dei punti
   lontani dei raggi, o al modulo dei vertici delle celle grezze (lo stesso
   `coordinate_abbastanza_fitte` degli overlay); `VerticeMalCondizionato`
-  se il maggiorante di un circocentro supera `p / 4`. Nel catalogo
+  se il maggiorante di un circocentro supera `p / 4`; `PrecisionInsufficient`
+  anche se la griglia del ritaglio delle celle di bordo (`intersection` di
+  `geo`, `i_overlay`) supererebbe `p / 2`, lo stesso controllo a priori
+  delle booleane (`griglia::controlla_overlay`). Nel catalogo
   `geo.voronoi` passa a `semantic_version` 2 e `kernel_version` 2.
 
 `bulk_load` e non `bulk_load_stable`: la variante stabile reinserisce i

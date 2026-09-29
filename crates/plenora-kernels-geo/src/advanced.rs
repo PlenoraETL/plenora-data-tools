@@ -9,6 +9,7 @@ use rstar::{RTree, RTreeObject, AABB};
 use spade::handles::VoronoiVertex::{Inner, Outer};
 use spade::Triangulation as _;
 
+use crate::rust_backend::griglia;
 use crate::rust_backend::precision::{coordinate_abbastanza_fitte, modulo_massimo, Precision};
 use thiserror::Error;
 
@@ -202,11 +203,13 @@ fn voronoi_cells_con(
 /// `ulp`; sugli ingressi degeneri le facce stesse sono diverse (README,
 /// «geo.delaunay e geo.voronoi»).
 ///
-/// Due controlli di precisione, entrambi errori espliciti:
+/// Tre controlli di precisione, tutti errori espliciti:
 /// - spaziatura (`coordinate_abbastanza_fitte`) sul modulo massimo dei siti
 ///   piu' la distanza a cui si prolungano i raggi, e sul modulo massimo di
 ///   ogni vertice delle celle grezze;
-/// - errore maggiorato di ogni circocentro entro `p / 4`.
+/// - errore maggiorato di ogni circocentro entro `p / 4`;
+/// - griglia del ritaglio delle celle di bordo entro `p / 2`, a priori
+///   (`griglia::controlla_overlay`, come le booleane).
 fn costruisci_celle(
     points: &[Point<f64>],
     precision: Precision,
@@ -397,22 +400,27 @@ fn celle_da_spade(
     let clip_poly: Polygon<f64> = padded_bounds(base_bounds, 0.5).to_polygon();
     let clip_rect = clip_poly.bounding_rect();
 
-    Ok(raw_cells
-        .into_iter()
-        .flat_map(|cell| {
-            // Skip intersection if cell is entirely within clip bounds
-            let contained_by_clip = clip_rect
-                .as_ref()
-                .zip(cell.bounding_rect())
-                .is_some_and(|(cr, cell_rect)| cr.contains(&cell_rect));
+    let mut celle = Vec::with_capacity(raw_cells.len());
+    for cell in raw_cells {
+        // Skip intersection if cell is entirely within clip bounds
+        let cell_rect = cell.bounding_rect();
+        let contained_by_clip = clip_rect
+            .as_ref()
+            .zip(cell_rect)
+            .is_some_and(|(cr, cell_rect)| cr.contains(&cell_rect));
 
-            if contained_by_clip {
-                vec![cell]
-            } else {
-                cell.intersection(&clip_poly).0
-            }
-        })
-        .collect())
+        if contained_by_clip {
+            celle.push(cell);
+        } else {
+            // Il ritaglio passa dalla griglia di `i_overlay`: lo stesso
+            // controllo a priori delle booleane (`p / 2`, che con i vertici
+            // entro `p / 4` resta nella precisione).
+            griglia::controlla_overlay(griglia::unisci(clip_rect, cell_rect), precision)
+                .map_err(|_| AdvancedError::PrecisionInsufficient)?;
+            celle.extend(cell.intersection(&clip_poly).0);
+        }
+    }
+    Ok(celle)
 }
 
 /// Il circocentro del triangolo `a, b, c` e un maggiorante del suo errore
