@@ -15,8 +15,9 @@
 //!   prefisso.
 
 use super::{
-    autointersezione_con, errori_di_validazione, relate_non_e_disgiunta, visita_geometria,
-    visita_multipoligono_con, visita_poligono_con, CoppieCandidate, Percorso, ValidazioneOgc,
+    autointersezione_con, errori_di_validazione, limite_confronti, relate_non_e_disgiunta,
+    scansione_coppie, visita_geometria, visita_multipoligono_con, visita_poligono_con,
+    CoppieCandidate, Percorso, RicercaCoppie, ValidazioneOgc,
 };
 use geo::algorithm::validation::{
     InvalidGeometry, InvalidMultiPolygon, InvalidPolygon, Validation,
@@ -879,19 +880,40 @@ proptest! {
 /// I percorsi delle coppie: il doppio ciclo di `geo` senza filtro, la
 /// scansione di produzione, e la scansione che rinuncia subito (limite 0) o
 /// dopo una coppia (limite 1) e passa al doppio ciclo filtrato.
-const PERCORSI: [Percorso; 4] = [
+const PERCORSI: [Percorso; 7] = [
     Percorso {
         doppio_ciclo: true,
         limite_coppie: None,
+        limite_confronti: None,
     },
     Percorso::PRODUZIONE,
     Percorso {
         doppio_ciclo: false,
         limite_coppie: Some(0),
+        limite_confronti: None,
     },
     Percorso {
         doppio_ciclo: false,
         limite_coppie: Some(1),
+        limite_confronti: None,
+    },
+    // Solo la scansione su `x`.
+    Percorso {
+        doppio_ciclo: false,
+        limite_coppie: None,
+        limite_confronti: Some(usize::MAX),
+    },
+    // Solo l'R-tree.
+    Percorso {
+        doppio_ciclo: false,
+        limite_coppie: None,
+        limite_confronti: Some(0),
+    },
+    // L'R-tree dopo qualche confronto della scansione.
+    Percorso {
+        doppio_ciclo: false,
+        limite_coppie: None,
+        limite_confronti: Some(3),
     },
 ];
 
@@ -1502,4 +1524,276 @@ proptest! {
             verifica_multi(&MultiPolygon(anelli.into_iter().map(parte).collect()));
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Uscite con molte parti: parti preparate e ricerca delle coppie con R-tree
+// ---------------------------------------------------------------------------
+
+/// Stella di `vertici` punti su angoli equispaziati, a raggio casuale in
+/// `[0.75, 1.25)` volte `raggio`, centrata in `(cx, 0)`: i lati sono quasi
+/// radiali, e due stelle sfasate si intersecano in molte parti.
+fn stella(rng: &mut Lcg, vertici: u32, raggio: f64, cx: f64) -> Polygon<f64> {
+    let punti: Vec<(f64, f64)> = (0..vertici)
+        .map(|indice| {
+            let angolo = f64::from(indice) * std::f64::consts::TAU / f64::from(vertici);
+            let r = raggio * rng.unitario().mul_add(0.5, 0.75);
+            (r.mul_add(angolo.cos(), cx), r * angolo.sin())
+        })
+        .collect();
+    parte(chiuso(&punti))
+}
+
+/// L'intersezione (overlay reale, `topology::boolean_operation`) di due
+/// stelle sfasate: un `MultiPolygon` valido con molte parti, una grande
+/// (il nucleo comune) e molte piccole attorno, i cui rettangoli si
+/// sovrappongono a quello della grande.
+fn intersezione_di_stelle(seme: u64, vertici: u32, spostamento: f64) -> Vec<Polygon<f64>> {
+    let mut rng = Lcg(seme);
+    let a = Geometry::Polygon(stella(&mut rng, vertici, 100.0, 0.0));
+    let b = Geometry::Polygon(stella(&mut rng, vertici, 100.0, spostamento));
+    let precisione =
+        crate::rust_backend::precision::Precision::new(0.01).expect("precisione valida");
+    match crate::topology::boolean_operation(
+        &a,
+        &b,
+        crate::topology::BooleanOperation::Intersection,
+        precisione,
+    )
+    .expect("intersezione di due stelle valide")
+    {
+        Geometry::MultiPolygon(parti) => parti.0,
+        Geometry::Polygon(parte) => vec![parte],
+        altro => panic!("uscita inattesa: {altro:?}"),
+    }
+}
+
+/// L'indice della parte con piu' vertici.
+fn parte_piu_grande(parti: &[Polygon<f64>]) -> usize {
+    (0..parti.len())
+        .max_by_key(|&indice| parti[indice].exterior().0.len())
+        .expect("almeno una parte")
+}
+
+/// Uscite di overlay reali con centinaia di parti, valide e poi alterate in
+/// modo che gli errori cadano sulle coppie con la parte grande, in testa e
+/// in coda all'ordine: la parte grande preparata una volta e riusata su
+/// molte coppie, come `i` e come `j`, deve dare la stessa sequenza di `geo`.
+#[test]
+fn uscite_di_intersezioni_di_stelle_con_molte_parti() {
+    // (seme, vertici, spostamento): da 50 a 250 parti circa.
+    let casi: &[(u64, u32, f64)] = if test_lunghi() {
+        &[
+            (0x5EED_0000_0000_0005, 400, 80.0),
+            (0x5EED_0000_0000_0005, 400, 150.0),
+            (0x5EED_0000_0000_0005, 800, 100.0),
+            (0x5EED_0000_0000_0005, 800, 150.0),
+            (0x5EED_0000_0000_0005, 800, 180.0),
+        ]
+    } else {
+        &[
+            (0x5EED_0000_0000_0005, 400, 80.0),
+            (0x5EED_0000_0000_0005, 800, 150.0),
+        ]
+    };
+    for &(seme, vertici, spostamento) in casi {
+        let parti = intersezione_di_stelle(seme, vertici, spostamento);
+        assert!(parti.len() > 40, "{} parti", parti.len());
+        assert_eq!(verifica_multi(&MultiPolygon(parti.clone())), Some(Ok(())));
+        let grande = parte_piu_grande(&parti);
+
+        // La parte grande in coda: e' la `j` di tutte le sue coppie.
+        let mut in_coda = parti.clone();
+        let spostata = in_coda.remove(grande);
+        in_coda.push(spostata.clone());
+        assert_eq!(verifica_multi(&MultiPolygon(in_coda.clone())), Some(Ok(())));
+
+        // Una copia della parte grande anche in testa: si sovrappone a se
+        // stessa, e tocca le parti piccole come prima.
+        let mut doppia = in_coda.clone();
+        doppia.insert(0, spostata.clone());
+        assert!(matches!(
+            verifica_multi(&MultiPolygon(doppia)),
+            Some(Err(InvalidMultiPolygon::ElementsOverlaps(..)))
+        ));
+
+        // Una parte piccola su sette traslata sul nucleo: sovrapposizioni
+        // con la parte grande su molte coppie.
+        let mut sovrapposte = parti.clone();
+        let centro = geo::Centroid::centroid(&parti[grande]).expect("parte non vuota");
+        for (indice, parte) in sovrapposte.iter_mut().enumerate() {
+            if indice % 7 != 0 || indice == grande {
+                continue;
+            }
+            let Some(proprio) = geo::Centroid::centroid(&*parte) else {
+                continue;
+            };
+            *parte = geo::Translate::translate(
+                &*parte,
+                centro.x() - proprio.x(),
+                centro.y() - proprio.y(),
+            );
+        }
+        assert!(matches!(
+            verifica_multi(&MultiPolygon(sovrapposte)),
+            Some(Err(_))
+        ));
+
+        // Le stesse parti come buchi di un guscio che le contiene tutte:
+        // la stessa preparazione sulle coppie di buchi.
+        let guscio = rettangolo(-500.0, -500.0, 1_500.0, 1_000.0);
+        let mut buchi: Vec<LineString<f64>> =
+            in_coda.iter().map(|p| p.exterior().clone()).collect();
+        assert_eq!(
+            verifica_buchi(&Polygon::new(guscio.clone(), buchi.clone())),
+            Some(Ok(()))
+        );
+        buchi.insert(0, spostata.exterior().clone());
+        assert!(matches!(
+            verifica_buchi(&Polygon::new(guscio, buchi)),
+            Some(Err(InvalidPolygon::IntersectingRingsOnAnArea(..)))
+        ));
+    }
+}
+
+/// Parti che condividono la proiezione su `x` (una colonna), oltre il
+/// limite dei confronti della scansione: in produzione le coppie le trova
+/// l'R-tree. Parti che si toccano lungo un lato, in un vertice, o si
+/// sovrappongono, piu' una parte alta quanto la colonna, in ordine diretto
+/// e rovesciato.
+#[test]
+fn colonne_di_parti_oltre_il_limite_dei_confronti() {
+    // 600 parti in colonna piu' una: C(601, 2) = 180 300 confronti, oltre
+    // il limite di produzione max(256 * 601, 2^16) = 153 856.
+    let quante: u32 = 600;
+    for passo in [2.0, 1.0, 0.5] {
+        let mut parti: Vec<Polygon<f64>> = (0..quante)
+            .map(|indice| parte(rettangolo(0.0, passo * f64::from(indice), 1.0, 1.0)))
+            .collect();
+        // Una parte alta quanto la colonna, a destra: tocca ogni quadrato
+        // lungo un lato.
+        parti.push(parte(rettangolo(1.0, 0.0, 2.0, passo * f64::from(quante))));
+        let ingombri: Vec<Option<Rect<f64>>> =
+            parti.iter().map(geo::BoundingRect::bounding_rect).collect();
+        assert!(matches!(
+            scansione_coppie(&ingombri, usize::MAX, limite_confronti(parti.len())),
+            RicercaCoppie::TroppiConfronti
+        ));
+        assert!(verifica_multi(&MultiPolygon(parti.clone())).is_some());
+        parti.reverse();
+        verifica_multi(&MultiPolygon(parti));
+    }
+}
+
+/// Reticoli di parti che si toccano lungo i lati (errori su ogni coppia
+/// adiacente) e a scacchiera (tocchi nei vertici, validi), con una parte
+/// grande con un buco che circonda il reticolo, in testa, in mezzo o in
+/// coda.
+#[test]
+fn reticoli_di_parti_che_si_toccano_con_una_parte_grande() {
+    let lato = if test_lunghi() { 20 } else { 10 };
+    for scacchiera in [false, true] {
+        let mut parti: Vec<Polygon<f64>> = Vec::new();
+        for riga in 0..lato {
+            for colonna in 0..lato {
+                if scacchiera && (riga + colonna) % 2 == 1 {
+                    continue;
+                }
+                parti.push(parte(rettangolo(
+                    f64::from(colonna),
+                    f64::from(riga),
+                    1.0,
+                    1.0,
+                )));
+            }
+        }
+        let esteso = f64::from(lato);
+        let grande = Polygon::new(
+            rettangolo(-1.0, -1.0, esteso + 2.0, esteso + 2.0),
+            vec![rettangolo(0.0, 0.0, esteso, esteso)],
+        );
+        assert_eq!(
+            verifica_multi(&MultiPolygon(parti.clone())).map(|esito| esito.is_ok()),
+            Some(scacchiera)
+        );
+        for posizione in [0, parti.len() / 2, parti.len()] {
+            let mut con_grande = parti.clone();
+            con_grande.insert(posizione, grande.clone());
+            verifica_multi(&MultiPolygon(con_grande));
+        }
+    }
+}
+
+/// Anelli radiali (stelle a lati quasi radiali) e frattali (fiocco di Koch),
+/// semplici e con un vertice spostato su un altro: il predicato e la
+/// validazione completa contro `geo`.
+#[test]
+fn anelli_radiali_e_frattali() {
+    let mut rng = Lcg(0x5EED_0000_0000_0009);
+    let taglie: &[u32] = if test_lunghi() {
+        &[16, 100, 500, 1_500]
+    } else {
+        &[16, 100, 500]
+    };
+    let mut anelli: Vec<LineString<f64>> = Vec::new();
+    for &vertici in taglie {
+        anelli.push(stella(&mut rng, vertici, 100.0, 0.0).exterior().clone());
+    }
+    let livelli = if test_lunghi() { 5 } else { 4 };
+    for livello in 0..=livelli {
+        anelli.push(koch(livello));
+    }
+    let mut alterati_invalidi = 0;
+    let quanti = anelli.len();
+    for anello in anelli {
+        assert!(!verifica_caso(&anello), "{} vertici", anello.0.len());
+        let mut punti = anello.0.clone();
+        let n = punti.len();
+        punti[n / 3] = punti[2 * n / 3];
+        alterati_invalidi += usize::from(verifica_caso(&LineString(punti)));
+    }
+    // Il triangolo di Koch al livello 0 alterato degenera senza incroci.
+    assert!(
+        alterati_invalidi + 1 >= quanti,
+        "{alterati_invalidi}/{quanti}"
+    );
+}
+
+/// Il fiocco di Koch al `livello` dato, `3 * 4^livello` lati.
+fn koch(livello: u32) -> LineString<f64> {
+    let altezza = 3.0_f64.sqrt() / 2.0;
+    let mut punti = vec![
+        Coord { x: 0.0, y: 0.0 },
+        Coord { x: 0.5, y: altezza },
+        Coord { x: 1.0, y: 0.0 },
+        Coord { x: 0.0, y: 0.0 },
+    ];
+    for _ in 0..livello {
+        let mut nuovi = Vec::with_capacity(punti.len() * 4);
+        for coppia in punti.windows(2) {
+            let (a, b) = (coppia[0], coppia[1]);
+            let d = Coord {
+                x: (b.x - a.x) / 3.0,
+                y: (b.y - a.y) / 3.0,
+            };
+            let p1 = Coord {
+                x: a.x + d.x,
+                y: a.y + d.y,
+            };
+            let p2 = Coord {
+                x: 2.0_f64.mul_add(d.x, a.x),
+                y: 2.0_f64.mul_add(d.y, a.y),
+            };
+            // Punta verso l'esterno (anello in senso orario, esterno a
+            // sinistra): il terzo di lato ruotato di +60 gradi.
+            let apice = Coord {
+                x: (-d.y).mul_add(altezza, d.x.mul_add(0.5, p1.x)),
+                y: d.y.mul_add(0.5, d.x.mul_add(altezza, p1.y)),
+            };
+            nuovi.extend([a, p1, apice, p2]);
+        }
+        nuovi.push(punti[punti.len() - 1]);
+        punti = nuovi;
+    }
+    LineString(punti)
 }

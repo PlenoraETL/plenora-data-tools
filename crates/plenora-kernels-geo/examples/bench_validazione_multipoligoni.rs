@@ -8,7 +8,10 @@
 //! - `multi_scacchiera`: quadrati di lato 1 a scacchiera, che si toccano
 //!   negli spigoli: ogni parte ha quattro vicini con rettangoli che si
 //!   toccano, e `relate` si esegue davvero su quelle coppie;
-//! - `buchi_reticolo`: un quadrato con i buchi sullo stesso reticolo.
+//! - `buchi_reticolo`: un quadrato con i buchi sullo stesso reticolo;
+//! - `multi_colonna`: quadrati di lato 1 in una colonna di passo 2, parti
+//!   disgiunte che condividono tutte la stessa proiezione su `x` (caso
+//!   sfavorevole per una scansione su `x`).
 //!
 //! Piu' `dissolve_validated` sul reticolo disgiunto, dove quasi tutto il
 //! tempo e' la validazione dell'uscita.
@@ -59,6 +62,14 @@ fn reticolo(quante: usize) -> Vec<Polygon<f64>> {
     celle(quante)
         .into_iter()
         .map(|(x, y)| Polygon::new(quadrato(2.0 * x, 2.0 * y, 1.0), vec![]))
+        .collect()
+}
+
+/// Colonna: tutte le parti alla stessa `x`, distanti 1 in verticale.
+#[allow(clippy::cast_precision_loss)]
+fn colonna(quante: usize) -> Vec<Polygon<f64>> {
+    (0..quante)
+        .map(|indice| Polygon::new(quadrato(0.0, 2.0 * indice as f64, 1.0), vec![]))
         .collect()
 }
 
@@ -116,6 +127,12 @@ fn main() {
         if vuole("multi_scacchiera") {
             let geometria = Geometry::MultiPolygon(MultiPolygon(scacchiera(taglia)));
             misura("multi_scacchiera", taglia, || {
+                check_geometry_valid(&geometria).is_ok()
+            });
+        }
+        if vuole("multi_colonna") {
+            let geometria = Geometry::MultiPolygon(MultiPolygon(colonna(taglia)));
+            misura("multi_colonna", taglia, || {
                 check_geometry_valid(&geometria).is_ok()
             });
         }

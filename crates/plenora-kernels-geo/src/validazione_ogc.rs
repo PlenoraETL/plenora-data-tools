@@ -40,18 +40,25 @@
 //!
 //! **Coppie di poligoni e di buchi.** `geo` chiama `relate` su ogni coppia
 //! di poligoni di un `MultiPolygon` e di buchi di un `Polygon`. Qui le
-//! coppie si trovano con una scansione sui rettangoli chiusi
-//! ([`CoppieCandidate`]) e si saltano quelle su cui `relate` renderebbe il
+//! coppie si trovano sui rettangoli chiusi ([`CoppieCandidate`]: scansione
+//! su `x`, e un R-tree quando la scansione supererebbe
+//! [`limite_confronti`]) e si saltano quelle su cui `relate` renderebbe il
 //! suo ramo disgiunto ([`relate_non_e_disgiunta`]), che non produce errori;
 //! le altre si visitano nell'ordine `(i, j)` del doppio ciclo, quindi la
 //! sequenza degli errori e' la stessa. Questo scarto non dipende da
 //! aritmetica: e' la stessa condizione di `geo` sugli stessi rettangoli.
+//! Su quelle coppie `relate` riceve le parti preparate una volta
+//! ([`Preparate`]), non ricostruite a ogni coppia: stessa matrice.
 //!
-//! **Il limite dichiarato.** La scansione e' sub-quadratica quando pochi
-//! rettangoli di segmenti si sovrappongono (poligoni reali, cerchi, pettini
-//! con denti allineati a un asse); nel caso peggiore, molti segmenti lunghi
-//! con rettangoli sovrapposti, resta O(n²) come il doppio ciclo. Vedi
-//! `README.md`, sezione «Limiti dichiarati».
+//! **Il limite dichiarato.** La ricerca delle auto-intersezioni e'
+//! sub-quadratica quando pochi rettangoli di segmenti si sovrappongono
+//! (poligoni reali, cerchi, pettini con denti allineati a un asse); nel caso
+//! peggiore, molti segmenti lunghi con rettangoli sovrapposti su entrambi
+//! gli assi (una stella a lati radiali), resta O(n²) come il doppio ciclo:
+//! un R-tree dei segmenti non la migliora (misurato su stelle da 2 000 e
+//! 10 000 vertici: stessi tempi, e 5-10 volte piu' lento su cerchi e
+//! pettini), perche' le coppie di rettangoli che si toccano sono gia'
+//! quadratiche. Vedi `README.md`, sezione «Limiti dichiarati».
 
 use geo::algorithm::validation::{
     CoordIndex, GeometryIndex, InvalidGeometry, InvalidGeometryCollection, InvalidMultiPolygon,
@@ -59,10 +66,13 @@ use geo::algorithm::validation::{
 };
 use geo::coordinate_position::CoordPos;
 use geo::dimensions::Dimensions;
+use geo::relate::IntersectionMatrix;
 use geo::{
     BoundingRect, Geometry, GeometryCollection, HasDimensions, Intersects, Line, LineString,
     MultiPolygon, Polygon, PreparedGeometry, Rect, Relate, RemoveRepeatedPoints,
 };
+use rstar::primitives::{GeomWithData, Rectangle};
+use rstar::{RTree, AABB};
 
 /// La coppia di segmenti conta come auto-intersezione, **esattamente** come
 /// nel doppio ciclo di `geo`.
@@ -206,12 +216,17 @@ struct Percorso {
     /// Coppie trovate dalla scansione oltre cui si passa al doppio ciclo
     /// filtrato; `None` e' il limite di produzione ([`limite_coppie`]).
     limite_coppie: Option<usize>,
+    /// Confronti fra rettangoli della scansione su `x` oltre cui si passa
+    /// all'R-tree; `None` e' il limite di produzione
+    /// ([`limite_confronti`]).
+    limite_confronti: Option<usize>,
 }
 
 impl Percorso {
     const PRODUZIONE: Self = Self {
         doppio_ciclo: false,
         limite_coppie: None,
+        limite_confronti: None,
     };
 }
 
@@ -221,6 +236,21 @@ impl Percorso {
 /// rettangoli, quadratico nei confronti ma senza memoria aggiuntiva.
 const fn limite_coppie(elementi: usize) -> usize {
     let limite = elementi.saturating_mul(32);
+    if limite < 1 << 16 {
+        1 << 16
+    } else {
+        limite
+    }
+}
+
+/// Il limite di produzione sui confronti della scansione su `x` delle
+/// coppie: 256 per elemento, e almeno 2^16. Solo prestazioni (le due
+/// ricerche rendono le stesse coppie): un confronto costa circa un
+/// nanosecondo, una interrogazione dell'R-tree qualche centinaio, e il
+/// reticolo da 20 000 parti (141 confronti per parte) resta alla scansione,
+/// che li' e' piu' rapida (7 ms contro 12, `bench_validazione_multipoligoni`).
+const fn limite_confronti(elementi: usize) -> usize {
+    let limite = elementi.saturating_mul(256);
     if limite < 1 << 16 {
         1 << 16
     } else {
@@ -270,18 +300,24 @@ impl CoppieCandidate {
     /// coordinata o rendere un rettangolo non ordinabile, e `relate` non e'
     /// definito: si lascia a `geo` ogni comportamento, panico compreso).
     ///
-    /// **Perche' la scansione e' completa.** Gli elementi si ordinano per
-    /// `min.x` (`total_cmp`: su valori finiti coerente con `<=`, salvo
-    /// `-0.0 < +0.0` che nei confronti sotto sono uguali); per ciascuno si
-    /// provano i successivi finche' `min.x` dell'altro supera il proprio
-    /// `max.x`. Chi viene dopo ha `min.x` non minore, quindi anche per lui
-    /// `max.x < min.x` dell'altro: `Rect::intersects` e' falso. Ogni coppia
-    /// con `Rect::intersects` vero e' raggiunta dal primo dei due
-    /// nell'ordine, perche' chi sta fra loro ha `min.x` non maggiore di
-    /// quello del secondo, che non supera il `max.x` del primo. Le coppie
-    /// raggiunte passano poi da [`relate_non_e_disgiunta`] con gli argomenti
-    /// nell'ordine di `relate` (`i` il minore): l'elenco e' **esattamente**
-    /// l'insieme delle coppie su cui `relate` non prende il ramo disgiunto.
+    /// Due ricerche, ciascuna completa, sugli stessi rettangoli:
+    ///
+    /// - **scansione su `x`** ([`scansione_coppie`]), che costa un
+    ///   ordinamento e i confronti fra rettangoli che condividono la
+    ///   proiezione su `x`: sul caso tipico (parti sparse o a reticolo) e' la
+    ///   piu' economica, ma i confronti diventano quadratici quando molte parti
+    ///   condividono la proiezione (una colonna di parti: 247 ms a 20 000
+    ///   parti, `bench_validazione_multipoligoni`, `multi_colonna`);
+    /// - **R-tree** ([`albero_coppie`]), O(n log n) piu' le coppie trovate su
+    ///   qualunque disposizione, circa 4 ms in piu' della scansione sul
+    ///   reticolo da 20 000 parti.
+    ///
+    /// Si parte dalla scansione e, oltre [`limite_confronti`] confronti, si
+    /// riparte dall'R-tree. Le due rendono lo **stesso insieme** di coppie
+    /// (l'insieme delle coppie `i < j` su cui `relate` non prende il ramo
+    /// disgiunto), quindi il passaggio non cambia l'elenco, e dopo
+    /// l'ordinamento l'ordine e' quello `(i, j)` del doppio ciclo. Il
+    /// passaggio a `Filtrate` dipende solo da quante sono quelle coppie.
     fn di(ingombri: Vec<Option<Rect<f64>>>, coordinate_finite: bool, percorso: Percorso) -> Self {
         if percorso.doppio_ciclo || !coordinate_finite {
             return Self::Tutte(ingombri.len());
@@ -289,35 +325,24 @@ impl CoppieCandidate {
         let limite = percorso
             .limite_coppie
             .unwrap_or_else(|| limite_coppie(ingombri.len()));
-        let mut ordine: Vec<(Rect<f64>, usize)> = ingombri
-            .iter()
-            .enumerate()
-            .filter_map(|(indice, ingombro)| ingombro.map(|ingombro| (ingombro, indice)))
-            .collect();
-        // Stabile: a pari minimo resta l'ordine degli indici.
-        ordine.sort_by(|a, b| a.0.min().x.total_cmp(&b.0.min().x));
-        let mut coppie: Vec<(usize, usize)> = Vec::new();
-        for (posizione, &(ingombro_a, a)) in ordine.iter().enumerate() {
-            for &(ingombro_b, b) in &ordine[posizione + 1..] {
-                if ingombro_b.min().x > ingombro_a.max().x {
-                    break;
-                }
-                let (i, j, ingombro_i, ingombro_j) = if a < b {
-                    (a, b, ingombro_a, ingombro_b)
-                } else {
-                    (b, a, ingombro_b, ingombro_a)
-                };
-                if relate_non_e_disgiunta(Some(ingombro_i), Some(ingombro_j)) {
-                    if coppie.len() >= limite {
-                        return Self::Filtrate(ingombri);
-                    }
-                    coppie.push((i, j));
-                }
+        let confronti = percorso
+            .limite_confronti
+            .unwrap_or_else(|| limite_confronti(ingombri.len()));
+        let esito = match scansione_coppie(&ingombri, limite, confronti) {
+            RicercaCoppie::TroppiConfronti => albero_coppie(&ingombri, limite),
+            esito => esito,
+        };
+        match esito {
+            RicercaCoppie::Elenco(mut coppie) => {
+                // Le coppie sono distinte: l'ordinamento instabile e'
+                // deterministico.
+                coppie.sort_unstable();
+                Self::Elenco(coppie)
+            }
+            RicercaCoppie::TroppeCoppie | RicercaCoppie::TroppiConfronti => {
+                Self::Filtrate(ingombri)
             }
         }
-        // Le coppie sono distinte: l'ordinamento instabile e' deterministico.
-        coppie.sort_unstable();
-        Self::Elenco(coppie)
     }
 
     /// I `j > i` da confrontare con `i`, in ordine crescente.
@@ -338,6 +363,118 @@ impl CoppieCandidate {
             }
         }
     }
+}
+
+/// L'esito di una ricerca delle coppie di [`CoppieCandidate::di`].
+enum RicercaCoppie {
+    /// Le coppie `(i, j)`, `i < j`, in ordine qualunque.
+    Elenco(Vec<(usize, usize)>),
+    /// Piu' coppie del limite.
+    TroppeCoppie,
+    /// Piu' confronti del limite (solo la scansione).
+    TroppiConfronti,
+}
+
+/// La scansione su `x` delle coppie di rettangoli chiusi che si toccano.
+///
+/// **Perche' e' completa.** Gli elementi si ordinano per `min.x`
+/// (`total_cmp`: su valori finiti coerente con `<=`, salvo `-0.0 < +0.0`
+/// che nei confronti sotto sono uguali); per ciascuno si provano i
+/// successivi finche' `min.x` dell'altro supera il proprio `max.x`. Chi
+/// viene dopo ha `min.x` non minore, quindi anche per lui `max.x < min.x`
+/// dell'altro: `Rect::intersects` e' falso. Ogni coppia con
+/// `Rect::intersects` vero e' raggiunta dal primo dei due nell'ordine,
+/// perche' chi sta fra loro ha `min.x` non maggiore di quello del secondo,
+/// che non supera il `max.x` del primo. Le coppie raggiunte passano poi da
+/// [`relate_non_e_disgiunta`] con gli argomenti nell'ordine di `relate`
+/// (`i` il minore).
+fn scansione_coppie(
+    ingombri: &[Option<Rect<f64>>],
+    limite: usize,
+    limite_confronti: usize,
+) -> RicercaCoppie {
+    let mut ordine: Vec<(Rect<f64>, usize)> = ingombri
+        .iter()
+        .enumerate()
+        .filter_map(|(indice, ingombro)| ingombro.map(|ingombro| (ingombro, indice)))
+        .collect();
+    // Stabile: a pari minimo resta l'ordine degli indici.
+    ordine.sort_by(|a, b| a.0.min().x.total_cmp(&b.0.min().x));
+    let mut coppie: Vec<(usize, usize)> = Vec::new();
+    let mut confronti = 0_usize;
+    for (posizione, &(ingombro_a, a)) in ordine.iter().enumerate() {
+        for &(ingombro_b, b) in &ordine[posizione + 1..] {
+            if ingombro_b.min().x > ingombro_a.max().x {
+                break;
+            }
+            if confronti >= limite_confronti {
+                return RicercaCoppie::TroppiConfronti;
+            }
+            confronti += 1;
+            let (i, j, ingombro_i, ingombro_j) = if a < b {
+                (a, b, ingombro_a, ingombro_b)
+            } else {
+                (b, a, ingombro_b, ingombro_a)
+            };
+            if relate_non_e_disgiunta(Some(ingombro_i), Some(ingombro_j)) {
+                if coppie.len() >= limite {
+                    return RicercaCoppie::TroppeCoppie;
+                }
+                coppie.push((i, j));
+            }
+        }
+    }
+    RicercaCoppie::Elenco(coppie)
+}
+
+/// La ricerca con l'R-tree delle coppie di rettangoli chiusi che si
+/// toccano.
+///
+/// **Perche' e' completa.** I rettangoli presenti vanno in un R-tree
+/// (`rstar`, gia' dipendenza), e per ciascun `i` si interroga
+/// `locate_in_envelope_intersecting` col suo rettangolo. Il test di `rstar`
+/// 0.12.2 sulle foglie e' `AABB::intersects`, cioe' `lower <= upper` e
+/// `upper >= lower` su ogni asse: lo stesso confronto chiuso di
+/// `Rect::intersects` di `geo`; ogni nodo ha come busta l'unione chiusa dei
+/// figli, quindi nessuna foglia che tocca il rettangolo interrogato resta
+/// fuori. Coordinate finite (il chiamante lo garantisce): nessun NaN nei
+/// confronti, e `-0.0` e `+0.0` vi sono uguali. Dei candidati si tengono i
+/// `j > i` che passano da [`relate_non_e_disgiunta`] con gli argomenti
+/// nell'ordine di `relate`.
+fn albero_coppie(ingombri: &[Option<Rect<f64>>], limite: usize) -> RicercaCoppie {
+    let busta = |ingombro: Rect<f64>| {
+        AABB::from_corners(
+            [ingombro.min().x, ingombro.min().y],
+            [ingombro.max().x, ingombro.max().y],
+        )
+    };
+    let albero = RTree::bulk_load(
+        ingombri
+            .iter()
+            .enumerate()
+            .filter_map(|(indice, ingombro)| {
+                ingombro.map(|ingombro| {
+                    GeomWithData::new(Rectangle::from_aabb(busta(ingombro)), indice)
+                })
+            })
+            .collect(),
+    );
+    let mut coppie: Vec<(usize, usize)> = Vec::new();
+    for (i, ingombro_i) in ingombri.iter().enumerate() {
+        let Some(ingombro_i) = *ingombro_i else {
+            continue;
+        };
+        for candidato in albero.locate_in_envelope_intersecting(&busta(ingombro_i)) {
+            let j = candidato.data;
+            if j > i && relate_non_e_disgiunta(Some(ingombro_i), ingombri[j]) {
+                if coppie.len() >= limite {
+                    return RicercaCoppie::TroppeCoppie;
+                }
+                coppie.push((i, j));
+            }
+        }
+    }
+    RicercaCoppie::Elenco(coppie)
 }
 
 /// Iteratore dei `j` di [`CoppieCandidate::di_indice`].
@@ -370,6 +507,83 @@ impl Iterator for Partner<'_> {
                 Some(&(primo, j)) if primo == *i => Some(j),
                 _ => None,
             },
+        }
+    }
+}
+
+/// Le parti (o i buchi) preparate per `relate`, costruite alla prima coppia
+/// che le usa e liberate quando nessuna coppia successiva le usa piu'.
+///
+/// **Perche'.** `relate` costruisce a ogni chiamata il grafo di entrambe le
+/// geometrie, con le auto-intersezioni e due R-tree dei segmenti: su
+/// un'uscita con una parte grande il cui rettangolo si sovrappone a migliaia di
+/// parti piccole, quel lavoro si ripete a ogni coppia (misurato: 6,7 s su
+/// 11 390 coppie dell'intersezione di due stelle da 5 000 vertici,
+/// `bench_validazione_parti`). `PreparedGeometry` calcola grafo, R-tree e
+/// auto-intersezioni una volta.
+///
+/// **Perche' la matrice e' la stessa.** In `geo` 0.33.1 `relate` e' la stessa
+/// `RelateOperation` sui due tipi; cambia soltanto `geometry_graph`: il
+/// `Polygon` costruisce il grafo da capo, `PreparedGeometry` rende una copia
+/// profonda del grafo gia' costruito con indice 0 (`clone_for_arg_index`,
+/// etichette scambiate per l'indice 1) con le auto-intersezioni gia'
+/// calcolate e l'R-tree costruito dagli stessi segmenti nello stesso ordine.
+/// `compute_self_nodes` sul grafo copiato non riesegue nulla, e il grafo
+/// fresco la esegue sugli stessi segmenti: stessi nodi, stesse etichette,
+/// stessa matrice. E' la stessa equivalenza su cui poggia `geo` stesso,
+/// che nella validazione dei buchi usa indifferentemente l'una e l'altra
+/// forma, e l'oracolo la verifica contro il doppio ciclo letterale.
+///
+/// Si prepara solo al momento in cui `relate` verrebbe chiamata, quindi un
+/// panico della costruzione (che `relate` farebbe nello stesso punto)
+/// arriva dopo gli stessi errori emessi. Con coordinate non finite o nel
+/// doppio ciclo dei test resta la chiamata letterale di `geo`.
+///
+/// **Memoria.** Restano vive solo le preparazioni delle parti che hanno
+/// ancora coppie da visitare; nel caso peggiore (molte parti a sinistra
+/// accoppiate con molte a destra) tutte, cioe' qualche centinaio di byte per
+/// vertice della geometria validata, la stessa scala di una `relate` sulla
+/// parte piu' grande.
+struct Preparate<'a> {
+    poligoni: &'a [Polygon<f64>],
+    /// In scatola: una `PreparedGeometry` occupa centinaia di byte, e il
+    /// vettore ha un posto per ogni parte anche quando nessuna coppia la usa.
+    preparate: Vec<Option<Box<PreparedGeometry<'a, &'a Polygon<f64>>>>>,
+}
+
+impl<'a> Preparate<'a> {
+    fn di(poligoni: &'a [Polygon<f64>]) -> Self {
+        Self {
+            poligoni,
+            preparate: poligoni.iter().map(|_| None).collect(),
+        }
+    }
+
+    /// La matrice di `relate(i, j)`, nell'ordine degli argomenti di `geo`.
+    fn relate(&mut self, i: usize, j: usize) -> IntersectionMatrix {
+        self.prepara(i);
+        self.prepara(j);
+        match (&self.preparate[i], &self.preparate[j]) {
+            (Some(a), Some(b)) => a.relate(&**b),
+            // Non accade (entrambe appena preparate); se accadesse, la
+            // chiamata di `geo` sui poligoni rende la stessa matrice.
+            _ => self.poligoni[i].relate(&self.poligoni[j]),
+        }
+    }
+
+    /// La preparazione di `indice`, costruita se manca.
+    fn prepara(&mut self, indice: usize) -> &PreparedGeometry<'a, &'a Polygon<f64>> {
+        let poligoni = self.poligoni;
+        self.preparate[indice]
+            .get_or_insert_with(|| Box::new(PreparedGeometry::from(&poligoni[indice])))
+    }
+
+    /// Libera la preparazione di `indice`: le coppie si visitano per `i`
+    /// crescente con `j > i`, quindi dopo il turno di `i` nessuna coppia la
+    /// usa piu'.
+    fn libera(&mut self, indice: usize) {
+        if let Some(posto) = self.preparate.get_mut(indice) {
+            *posto = None;
         }
     }
 }
@@ -462,17 +676,18 @@ fn visita_poligono_con<T>(
         anelli_finiti(poligono.interiors()),
         percorso,
     );
+    // Il doppio ciclo (anche con coordinate non finite) resta la chiamata
+    // letterale di `geo`: preparato contro poligono.
+    let doppio_ciclo = matches!(coppie, CoppieCandidate::Tutte(_));
+    let mut preparate = Preparate::di(&buchi);
 
-    for (indice_1, (interno_1, interno_1_poligono)) in
-        poligono.interiors().iter().zip(&buchi).enumerate()
-    {
+    for (indice_1, interno_1) in poligono.interiors().iter().enumerate() {
         let ruolo_1 = RingRole::Interior(indice_1);
         if HasDimensions::is_empty(interno_1) {
             continue;
         }
 
-        let interno_1_preparato = PreparedGeometry::from(interno_1_poligono);
-        let esterno_contro_interno = esterno_preparato.relate(&interno_1_preparato);
+        let esterno_contro_interno = esterno_preparato.relate(preparate.prepara(indice_1));
 
         if !esterno_contro_interno.is_contains() {
             gestisci(InvalidPolygon::InteriorRingNotContainedInExteriorRing(
@@ -497,7 +712,12 @@ fn visita_poligono_con<T>(
                 continue;
             }
 
-            let matrice = interno_1_preparato.relate(interno_2_poligono);
+            let matrice = if doppio_ciclo {
+                // La chiamata letterale di `geo`: preparato contro poligono.
+                preparate.prepara(indice_1).relate(interno_2_poligono)
+            } else {
+                preparate.relate(indice_1, indice_2)
+            };
 
             if matrice.get(CoordPos::Inside, CoordPos::Inside) == Dimensions::TwoDimensional {
                 gestisci(InvalidPolygon::IntersectingRingsOnAnArea(ruolo_1, ruolo_2))?;
@@ -507,6 +727,7 @@ fn visita_poligono_con<T>(
                 gestisci(InvalidPolygon::IntersectingRingsOnALine(ruolo_1, ruolo_2))?;
             }
         }
+        preparate.libera(indice_1);
     }
     Ok(())
 }
@@ -536,6 +757,9 @@ fn visita_multipoligono_con<T>(
         }),
         percorso,
     );
+    // Il doppio ciclo resta la chiamata letterale di `geo`, sui poligoni.
+    let mut preparate =
+        (!matches!(coppie, CoppieCandidate::Tutte(_))).then(|| Preparate::di(&poligoni.0));
     for (i, poligono) in poligoni.0.iter().enumerate() {
         visita_poligono_con(poligono, percorso, &mut |errore| {
             gestisci(InvalidMultiPolygon::InvalidPolygon(
@@ -545,8 +769,10 @@ fn visita_multipoligono_con<T>(
         })?;
 
         for j in coppie.di_indice(i) {
-            let altro = &poligoni.0[j];
-            let matrice = poligono.relate(altro);
+            let matrice = preparate.as_mut().map_or_else(
+                || poligono.relate(&poligoni.0[j]),
+                |preparate| preparate.relate(i, j),
+            );
             if matrice.get(CoordPos::Inside, CoordPos::Inside) == Dimensions::TwoDimensional {
                 gestisci(InvalidMultiPolygon::ElementsOverlaps(
                     GeometryIndex(i),
@@ -560,6 +786,9 @@ fn visita_multipoligono_con<T>(
                     GeometryIndex(j),
                 ))?;
             }
+        }
+        if let Some(preparate) = preparate.as_mut() {
+            preparate.libera(i);
         }
     }
     Ok(())

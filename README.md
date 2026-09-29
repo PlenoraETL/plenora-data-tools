@@ -326,12 +326,20 @@ come si trovano le coppie di segmenti candidate: una scansione sui rettangoli
 d'ingombro al posto del doppio ciclo O(n²). Il predicato per coppia è quello
 di `geo`; gli anelli con coordinate non finite passano dal doppio ciclo.
 Allo stesso modo le coppie di poligoni di un `MultiPolygon` e di buchi di un
-`Polygon` si trovano con una scansione sui rettangoli chiusi: `relate` non
-si chiama sulle coppie per cui renderebbe il suo ramo disgiunto (stessa
+`Polygon` si trovano sui rettangoli chiusi (scansione su `x`, e un R-tree di
+`rstar` quando la scansione supererebbe 256 confronti per elemento): `relate`
+non si chiama sulle coppie per cui renderebbe il suo ramo disgiunto (stessa
 condizione `Rect::intersects` di `geo`, che lascia vuote le celle
 Interno-Interno e Confine-Confine da cui nascono gli errori), le altre si
 visitano nell'ordine `(i, j)` del doppio ciclo, quindi gli errori emessi e il
-loro ordine non cambiano; con coordinate non finite, doppio ciclo.
+loro ordine non cambiano; con coordinate non finite, doppio ciclo. Su quelle
+coppie `relate` riceve le parti come `PreparedGeometry` costruite una volta
+per parte (grafo, R-tree dei segmenti e auto-intersezioni), non ricostruite a
+ogni coppia: in `geo` 0.33.1 è la stessa `RelateOperation` su una copia dello
+stesso grafo, e `geo` stesso usa le due forme indifferentemente nella
+validazione dei buchi. Sull'intersezione di due stelle da 5 000 vertici
+(7 922 parti, una grande che tocca col rettangolo migliaia di piccole) la
+validazione dell'uscita passa da 7,2 s a 57 ms (`bench_validazione_parti`).
 L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
 
 **Ambito.** `plenora-kernels-geo`, ogni validazione OGC che passa da
@@ -341,7 +349,13 @@ L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
 
 - il caso peggiore resta O(n²): con molti segmenti lunghi a rettangoli
   sovrapposti le coppie candidate sono quadratiche come nel doppio ciclo (il
-  verdetto non cambia, il tempo sì);
+  verdetto non cambia, il tempo sì). È il caso della stella a lati radiali:
+  `geometry_from_wkb` di una stella da 2 000 vertici costa circa 2 ms, da
+  10 000 circa 50 ms. Un R-tree dei segmenti non lo migliora (misurato: stessi
+  tempi sulle stelle, da 5 a 10 volte più lento su cerchi e pettini), perché
+  le coppie di rettangoli che si toccano sono già quadratiche: serve una
+  scansione a linea mobile (Shamos-Hoey) con predicati esatti e le esclusioni
+  di `geo` sugli estremi condivisi, non ancora scritta;
 - la sequenza è copiata da `geo` 0.33.1: a ogni aggiornamento di `geo` va
   riallineata a mano, e l'oracolo rileva una divergenza solo sulle forme che
   esercita;
@@ -354,7 +368,13 @@ L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
   andrebbe riverificata;
 - con molti poligoni o buchi a rettangoli sovrapposti (oltre 32 coppie per
   elemento) i confronti fra rettangoli tornano quadratici, e `relate` resta
-  una chiamata per coppia che si tocca.
+  una chiamata per coppia che si tocca;
+- l'equivalenza fra `relate` su parti preparate e su parti ricostruite
+  dipende da `PreparedGeometry` di `geo` 0.33.1 (copia profonda dello stesso
+  grafo): a ogni aggiornamento di `geo` va riverificata, e l'oracolo la
+  confronta col doppio ciclo letterale sulle forme che esercita; le parti
+  preparate restano in memoria finché hanno coppie da visitare, nel caso
+  peggiore tutte (qualche centinaio di byte per vertice).
 
 **Condizione di rientro.** Una versione di `geo` con una ricerca delle
 auto-intersezioni sub-quadratica a verdetto identico: la sequenza copiata si
