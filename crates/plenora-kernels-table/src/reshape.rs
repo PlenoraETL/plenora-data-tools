@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
-use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use num_traits::ToPrimitive;
@@ -11,8 +10,9 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
+use crate::aggregation::BinaryKeyEncoder;
 use crate::float64_source::Float64Source;
-use crate::hashing::FastHasher;
+use crate::interning::KeyInterner;
 use crate::Limits;
 use crate::{
     batch_with_rows, column_index, replace_or_append, scalar_as_string, select_rows,
@@ -149,7 +149,7 @@ impl<'a> TextColumn<'a> {
     }
 }
 
-/// Colonna di chiave composta (usata da `pivot` e `table_diff`): tag di
+/// Colonna di chiave composta (usata da `pivot`): tag di
 /// tipo precomputato una sola volta + valore tipizzato.
 ///
 /// Scrive gli STESSI byte di `composite_key` (mantenuta come oracolo dei
@@ -1143,22 +1143,57 @@ fn default_separator() -> String {
     "#".into()
 }
 
-/// Codifica la chiave composta di `table_diff` per `row` in `key` (buffer
-/// riusato tra le righe), con gli stessi byte di `composite_key`.
-fn encode_diff_key(
-    columns: &[PivotKeyColumn],
-    row: usize,
-    key: &mut String,
-    value: &mut String,
-) -> Result<()> {
-    key.clear();
-    for column in columns {
-        column.write_key(row, key, value)?;
+/// Chiavi di un lato di `table_diff`, una per riga: l'indice di chiave nel
+/// [`KeyInterner`] coincide con la riga, perche' una chiave ripetuta e' un
+/// errore prima di diventare un indice.
+///
+/// Codifica binaria di [`BinaryKeyEncoder`]: stessa identita' dei byte di
+/// `composite_key` sulle colonne di un lato, stessi errori alla stessa riga.
+///
+/// # Errors
+///
+/// - `InvalidPlan` con `duplicata` alla prima chiave ripetuta;
+/// - gli errori di conversione dell'encoder;
+/// - `Internal` se l'indice di una chiave nuova non coincide con la riga.
+fn diff_side_keys(
+    batch: &RecordBatch,
+    indices: &[usize],
+    duplicata: &'static str,
+) -> Result<KeyInterner> {
+    let encoder = BinaryKeyEncoder::new(batch, indices);
+    let mut keys = KeyInterner::with_capacity(batch.num_rows());
+    let mut key = Vec::new();
+    for row in 0..batch.num_rows() {
+        encoder.encode_into(row, &mut key)?;
+        let (indice, nuova) = keys.inserisci(&key);
+        if !nuova {
+            return Err(PlenoraError::InvalidPlan(duplicata.into()));
+        }
+        if indice != row {
+            return Err(PlenoraError::Internal(
+                "table_diff: indice di chiave diverso dalla riga".into(),
+            ));
+        }
     }
-    Ok(())
+    Ok(keys)
 }
 
-type DiffKeyMap = HashMap<String, usize, FastHasher>;
+/// Riga di `other` con la chiave `indice` di `keys`, se le chiavi dei due
+/// lati sono confrontabili.
+fn diff_lookup(
+    keys: &KeyInterner,
+    indice: usize,
+    other: &KeyInterner,
+    confrontabili: bool,
+) -> Result<Option<usize>> {
+    if !confrontabili {
+        return Ok(None);
+    }
+    let key = keys
+        .chiave(indice)
+        .ok_or_else(|| PlenoraError::Internal("table_diff: chiave di riga assente".into()))?;
+    Ok(other.cerca(key))
+}
 
 /// Chiave composta in forma testuale: e' l'oracolo dei test di equivalenza
 /// di `table_diff` e `pivot`, e non e' il percorso che quei due usano.
@@ -1268,21 +1303,25 @@ pub fn table_diff(
         .iter()
         .map(|name| column_index(right, name))
         .collect::<Result<Vec<_>>>()?;
-    // Fast path: chiavi codificate una sola
-    // volta per colonna (`PivotKeyColumn`, stessi byte di `composite_key`) in
-    // un buffer riusato; mappe hash con hasher FxHash-style (mai iterate,
-    // solo lookup/insert, quindi equivalenti alle BTreeMap originali);
+    // Chiavi binarie (`BinaryKeyEncoder`, stessa identita' dei byte di
+    // `composite_key`) codificate una volta per riga in un'arena per lato;
     // confronto valori via `TextColumn` senza `scalar_as_string` per cella.
     // Stesso ordine righe in output (sorgente sinistra, poi righe solo a
     // destra), stessi errori.
-    let left_key_columns = left_keys
+    //
+    // La chiave testuale porta il tipo Arrow di ogni colonna: chiavi di
+    // colonne con tipi di nome diverso non coincidono mai, anche a parita'
+    // di valore. La codifica binaria non porta il tipo (un Int64 e un UInt64
+    // di pari valore hanno gli stessi byte), quindi il confronto fra i lati
+    // e' ammesso solo se i nomi dei tipi coincidono colonna per colonna;
+    // altrimenti nessuna chiave combacia, come nel percorso testuale.
+    let confrontabili = left_keys
         .iter()
-        .map(|index| PivotKeyColumn::new(left.column(*index)))
-        .collect::<Vec<_>>();
-    let right_key_columns = right_keys
-        .iter()
-        .map(|index| PivotKeyColumn::new(right.column(*index)))
-        .collect::<Vec<_>>();
+        .zip(&right_keys)
+        .all(|(left_index, right_index)| {
+            left.column(*left_index).data_type().to_string()
+                == right.column(*right_index).data_type().to_string()
+        });
     let left_text_columns = left_compare
         .iter()
         .map(|index| TextColumn::new(left.column(*index)))
@@ -1291,38 +1330,16 @@ pub fn table_diff(
         .iter()
         .map(|index| TextColumn::new(right.column(*index)))
         .collect::<Vec<_>>();
-    let mut key = String::new();
-    let mut text = String::new();
-    let mut old =
-        DiffKeyMap::with_capacity_and_hasher(left.num_rows(), BuildHasherDefault::default());
-    let mut new =
-        DiffKeyMap::with_capacity_and_hasher(right.num_rows(), BuildHasherDefault::default());
-    for row in 0..left.num_rows() {
-        encode_diff_key(&left_key_columns, row, &mut key, &mut text)?;
-        if old.insert(key.clone(), row).is_some() {
-            return Err(PlenoraError::InvalidPlan(
-                "chiavi duplicate nella tabella sinistra".into(),
-            ));
-        }
-    }
-    for row in 0..right.num_rows() {
-        encode_diff_key(&right_key_columns, row, &mut key, &mut text)?;
-        if new.insert(key.clone(), row).is_some() {
-            return Err(PlenoraError::InvalidPlan(
-                "chiavi duplicate nella tabella destra".into(),
-            ));
-        }
-    }
+    let old = diff_side_keys(left, &left_keys, "chiavi duplicate nella tabella sinistra")?;
+    let new = diff_side_keys(right, &right_keys, "chiavi duplicate nella tabella destra")?;
     // Preserve source order: old rows first, then new-only rows. Sorting the
     // encoded key would place nulls first and reorder otherwise stable data.
     let mut matched = Vec::with_capacity(old.len().saturating_add(new.len()));
     for row in 0..left.num_rows() {
-        encode_diff_key(&left_key_columns, row, &mut key, &mut text)?;
-        matched.push((Some(row), new.get(key.as_str()).copied()));
+        matched.push((Some(row), diff_lookup(&old, row, &new, confrontabili)?));
     }
     for row in 0..right.num_rows() {
-        encode_diff_key(&right_key_columns, row, &mut key, &mut text)?;
-        if !old.contains_key(key.as_str()) {
+        if diff_lookup(&new, row, &old, confrontabili)?.is_none() {
             matched.push((None, Some(row)));
         }
     }
@@ -3015,5 +3032,61 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .expect("colonna item Int64");
         assert_eq!(nuova.values(), &[1, 2, 3]);
+    }
+
+    /// Chiavi di tipi diversi con gli stessi byte binari (Int64 e `UInt64`
+    /// di pari valore, Utf8 e Binary dello stesso testo): nella chiave
+    /// testuale il tipo le separa, e nessuna riga combacia. Con `max_rows`
+    /// stretto l'esito dipende dal numero di righe abbinate, quindi un
+    /// abbinamento indebito cambierebbe l'errore.
+    #[test]
+    fn table_diff_non_abbina_chiavi_di_tipi_diversi_con_gli_stessi_byte() {
+        let config = TableDiff {
+            left_keys: vec!["k".into()],
+            right_keys: vec!["k".into()],
+            compare_columns: vec!["v".into()],
+            include_unchanged: "yes".into(),
+            separator: ", ".into(),
+        };
+        let valori = || -> ArrayRef { Arc::new(StringArray::from(vec![Some("a"), Some("b")])) };
+        let coppie: Vec<(ArrayRef, ArrayRef)> = vec![
+            (
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(UInt64Array::from(vec![Some(1), Some(2)])),
+            ),
+            (
+                Arc::new(StringArray::from(vec![Some("x"), None])),
+                Arc::new(plenora_core::arrow::array::BinaryArray::from(vec![
+                    Some(&b"x"[..]),
+                    None,
+                ])),
+            ),
+        ];
+        for (sinistra, destra) in coppie {
+            let batch = |chiavi: ArrayRef| {
+                batch_of(
+                    vec![
+                        Field::new("k", chiavi.data_type().clone(), true),
+                        Field::new("v", DataType::Utf8, true),
+                    ],
+                    vec![chiavi, valori()],
+                )
+            };
+            let left = batch(sinistra);
+            let right = batch(destra);
+            for max_rows in [2, 4, 100] {
+                let limits = Limits {
+                    max_rows,
+                    ..Limits::default()
+                };
+                let fast = table_diff(&left, &right, &config, &limits);
+                let reference = table_diff_reference(&left, &right, &config, &limits);
+                assert_eq!(
+                    format!("{fast:?}"),
+                    format!("{reference:?}"),
+                    "max_rows {max_rows}"
+                );
+            }
+        }
     }
 }

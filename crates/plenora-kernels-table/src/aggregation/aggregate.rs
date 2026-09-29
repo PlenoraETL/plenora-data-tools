@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::grouping::{
-    build_native_groups, build_string_groups, cmp_i64_group_key, cmp_str_group_key,
+    build_binary_groups, build_native_groups, cmp_i64_group_key, cmp_str_group_key,
     cmp_u64_group_key, map_groups, TextSource, PARALLEL_THRESHOLD,
 };
 use super::sort::default_true;
@@ -333,8 +333,9 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
         }
     }
     // Raggruppamento: fast path nativo per colonna singola
-    // Int64/UInt64/Utf8 (nessuna stringa di chiave), percorso testuale
-    // generico altrimenti. Stesso ordine canonico dei gruppi in uscita.
+    // Int64/UInt64/Utf8 (nessuna stringa di chiave), chiavi binarie con la
+    // stessa identita' di `row_key` altrimenti. Stesso ordine canonico dei
+    // gruppi in uscita.
     let groups = if group_indices.len() == 1 {
         let array = batch.column(group_indices[0]);
         if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
@@ -348,7 +349,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     }
                 },
                 |a, b| cmp_i64_group_key(*a, *b),
-            )
+            )?
         } else if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
             build_native_groups(
                 batch.num_rows(),
@@ -360,7 +361,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     }
                 },
                 |a, b| cmp_u64_group_key(*a, *b),
-            )
+            )?
         } else if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
             build_native_groups(
                 batch.num_rows(),
@@ -372,12 +373,12 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                     }
                 },
                 |a, b| cmp_str_group_key(a, b),
-            )
+            )?
         } else {
-            build_string_groups(batch, &group_indices)?
+            build_binary_groups(batch, &group_indices)?
         }
     } else {
-        build_string_groups(batch, &group_indices)?
+        build_binary_groups(batch, &group_indices)?
     };
     // Il calcolo per gruppo va in parallelo solo se la dimensione media dei
     // gruppi ripaga il costo di dispatch dei task (gruppi minuscoli restano
