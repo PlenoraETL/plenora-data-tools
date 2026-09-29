@@ -76,6 +76,7 @@ pub mod formula;
 pub mod fuzzy;
 pub mod governance;
 pub mod hashing;
+mod interning;
 pub mod joins;
 pub mod quality;
 pub mod reshape;
