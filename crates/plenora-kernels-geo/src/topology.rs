@@ -5,10 +5,10 @@
 //! nelle unita' delle coordinate, [`Precision`]) come argomento esplicito,
 //! senza valore predefinito: prima di ogni overlay di `i_overlay` il passo
 //! della griglia e la spaziatura delle coordinate degli operandi di quella
-//! chiamata sono confrontati con la precisione, e dopo l'overlay ogni lato
-//! del risultato deve stare entro la precisione dai bordi degli ingressi
-//! **originali** dell'operazione (`rust_backend::griglia`). Oltre,
-//! [`TopologyError::PrecisionInsufficient`].
+//! chiamata sono confrontati con meta' della precisione, e dopo l'overlay
+//! ogni lato del risultato deve stare entro meta' della precisione dai bordi
+//! degli ingressi **originali** dell'operazione (`rust_backend::griglia`).
+//! Oltre, [`TopologyError::PrecisionInsufficient`].
 
 use geo::algorithm::bool_ops::unary_union;
 use geo::{BooleanOps, Buffer, CoordsIter, Geometry, MultiPolygon};
@@ -896,9 +896,11 @@ mod tests {
     }
 
     /// Precisione dei test: coordinate astratte fino a qualche centinaio di
-    /// unita', un milionesimo di unita' (la griglia degli overlay resta sotto).
+    /// unita', un centomillesimo di unita' (a 230 unita' d'estensione il
+    /// passo della griglia e' `2^-22`, e `(1 + sqrt(2)) g` resta sotto
+    /// `p / 2`).
     fn precisione() -> Precision {
-        Precision::new(1e-6).unwrap()
+        Precision::new(1e-5).unwrap()
     }
 
     fn square(x: f64, y: f64, size: f64) -> Geometry<f64> {

@@ -80,22 +80,31 @@ dove attraversa il confine con `PlenoraError`: `RustBackendError`,
   rettangolo d'ingombro degli operandi di **quella** chiamata (letto da
   `FloatPointAdapter::new` di `i_float` 1.16.0; per il buffer l'ingombro
   dell'ingresso allargato di `3 |d|` per lato, il margine massimo di
-  `i_overlay::mesh`). Un giro dell'overlay sposta un punto di al più
+  `i_overlay::mesh`). Un giro di una booleana sposta un punto di al più
   `(1 + sqrt(2)) g` (arrotondamento dei vertici e degli incroci, primo
-  aggancio): oltre `p` l'overlay non si esegue. In metri con 1 cm passano
-  estensioni fino a circa 5.900 km (l'Italia, 1.300 km, ha `g = 2^-10` m),
-  20.000 km no;
+  aggancio), il primo passaggio del buffer `(2 + 2 sqrt(2)) g` (offset,
+  centri degli archi, overlay): oltre `p / 2` per le booleane (la
+  tolleranza del controllo a posteriori, sotto) e oltre `p` per il buffer
+  l'overlay non si esegue. In metri con 1 cm passano estensioni fino a
+  circa 2.950 km (l'Italia, 1.300 km, ha `g = 2^-10` m), 20.000 km no;
 - **risultato di ogni overlay, a posteriori**: gli agganci successivi al
   primo hanno un raggio che cresce a ogni giro, e nessun limite a priori li
   copre. Per le booleane ogni **lato** del risultato deve stare per intero
-  entro `p` dai bordi degli ingressi **originali** dell'operazione pubblica
-  (l'insieme dei punti entro `p` da un segmento è convesso, e le tracce dei
-  segmenti vicini devono ricoprire il lato); per il buffer ogni vertice
-  deve stare fra `|d| - s - p` e `k |d| + p` dall'ingresso (`s` la freccia
-  degli archi, `k = sqrt(2)` con estremità quadrate). Il controllo sugli
-  ingressi originali, non sui risultati intermedi, impedisce che gli
-  spostamenti di overlay in catena (maschera dissolta e poi intersecata,
-  unioni accumulate, tagli ricorsivi) si sommino oltre `p`.
+  entro `p / 2` dai bordi degli ingressi **originali** dell'operazione
+  pubblica (l'insieme dei punti entro `p / 2` da un segmento è convesso, e
+  le tracce dei segmenti vicini devono ricoprire il lato). La tolleranza è
+  `p / 2` perché un aggancio può portare un vertice su un altro bordo
+  d'ingresso vicino, e i lati che vi arrivano restano entro metà dello
+  spostamento da uno dei due bordi: con `p / 2` passa solo uno spostamento
+  entro `p`. Per il buffer ogni vertice deve stare fra `|d| - s - p` e
+  `k |d| + p` dall'ingresso (`s` la freccia degli archi, `k = sqrt(2)` con
+  estremità quadrate su linee e punti), e con `d > 0` ogni coordinata
+  dell'ingresso deve stare dentro l'uscita o entro `p` dal suo bordo:
+  `i_overlay` salta senza errore un anello o una linea che la griglia
+  riduce a un punto, e il loro buffer, spesso `2 |d|`, sparirebbe. Il
+  controllo sugli ingressi originali, non sui risultati intermedi,
+  impedisce che gli spostamenti di overlay in catena (maschera dissolta e
+  poi intersecata, unioni accumulate, tagli ricorsivi) si sommino.
 
 **Ambito.** Tutte le operazioni geografiche. `geo.polygonize` e
 `geo.split` con i controlli di spaziatura e noding; ogni operazione che
@@ -137,11 +146,24 @@ vertice d'ingresso non sono riconosciuti.
 
 - Una geometria più sottile di 1 cm (in tutto o in parte) può uscire fusa o
   vuota senza errore, per scelta.
-- Il controllo a posteriori degli overlay è **unilaterale**: dice che il
-  risultato non si è allontanato dagli ingressi oltre la precisione, non
-  che nessuna parte manchi. Una faccia intera omessa, il cui bordo coincide
-  con quello degli ingressi, non è uno spostamento della griglia e non è
-  vista qui (la validazione OGC dell'output resta).
+- Il controllo a posteriori delle booleane è **unilaterale**: dice che il
+  bordo del risultato sta vicino ai bordi degli ingressi, non che sia il
+  bordo giusto. Una faccia intera omessa, il cui bordo coincide con quello
+  degli ingressi, e un lato intero portato su un bordo d'ingresso parallelo
+  (entrambi gli estremi agganciati, a più di `p / 2`) non sono visti qui
+  (la validazione OGC dell'output resta).
+- **`clean_topology`, morfologia.** La chiusura `buffer(+s)` poi
+  `buffer(-s)` controlla ogni buffer contro il proprio ingresso, cioè il
+  secondo contro il risultato del primo: gli spostamenti dei due passaggi
+  si sommano (fino a `2p` più la freccia degli archi). Il bordo della
+  chiusura non sta sui bordi degli ingressi originali, e non c'è un
+  controllo diretto contro di essi.
+- **`coverage_validate`, decisione sull'area.** L'area di ogni
+  sovrapposizione si confronta con la tolleranza sul risultato passato
+  dalla griglia: una sovrapposizione più sottile della griglia può sparire
+  (issue mancata) e vertici diversi su lati collineari possono lasciare una
+  scheggia (issue spuria), entro la precisione per il perimetro della
+  zona.
 - **Buffer, archi.** Il buffer di `geo` approssima gli archi con corde di
   passo al più 0,3 rad (`BufferStyle` chiede 0,2 rad; `i_overlay` arrotonda
   il numero di corde): la freccia arriva a circa l'1,1% della distanza, 11
@@ -151,7 +173,10 @@ vertice d'ingresso non sono riconosciuti.
 - **Buffer, estremità piatte o quadrate su linee.** Il bordo di
   un'estremità piatta passa fra `0` e `|d|` dall'estremo della linea, e un
   vertice dell'unione può cadervi: lì resta solo il limite superiore (lo
-  spostamento verso l'esterno è visto, quello verso l'interno no).
+  spostamento verso l'esterno è visto, quello verso l'interno no). Con
+  estremità piatte punti e linee non entrano nel controllo di copertura:
+  un punto non ha buffer piatto, e una linea più corta della griglia ne ha
+  uno più sottile della griglia.
 - **Non applicabile.** Il buffer tondo di un `Point` non passa da
   `i_overlay` (è un poligono di 32 lati costruito direttamente); le parti
   di `subdivide` sotto la soglia di vertici escono invariate, senza

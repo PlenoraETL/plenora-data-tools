@@ -29,11 +29,18 @@
 //! - pochi `ulp` delle coordinate nel passaggio `f64 -> i32 -> f64`, sotto
 //!   `p / 64` ciascuno per il controllo di spaziatura.
 //!
+//! Il buffer passa dalla griglia piu' volte: i punti dell'offset si
+//! arrotondano, il centro di un arco viene da un vertice gia' arrotondato,
+//! poi l'overlay di ogni anello e quello finale. Il suo primo passaggio vale
+//! `(2 + 2 sqrt(2)) g`.
+//!
 //! [`controlla_overlay`] rifiuta prima del calcolo se `(1 + sqrt(2)) g +
-//! 4 ulp(M)` supera la precisione `p`, e se le coordinate sono troppo rade
-//! ([`super::precision::coordinate_abbastanza_fitte`]). In metri con 1 cm il
-//! passo massimo ammesso e' `2^-8` m: un'estensione fino a circa 5.900 km
-//! passa (l'Italia, 1.300 km, ha `g = 2^-10`), 20.000 km no (`g = 2^-6`).
+//! 4 ulp(M)` supera `p / 2` (la tolleranza del controllo a posteriori delle
+//! booleane, sotto), [`controlla_buffer`] se `(2 + 2 sqrt(2)) g + 4 ulp(M)`
+//! supera `p`; entrambi se le coordinate sono troppo rade
+//! ([`super::precision::coordinate_abbastanza_fitte`]). In metri con 1 cm
+//! il passo massimo ammesso e' `2^-9` m: un'estensione fino a circa 2.950
+//! km passa (l'Italia, 1.300 km, ha `g = 2^-10`), 20.000 km no (`g = 2^-6`).
 //!
 //! # Lo spostamento a posteriori
 //!
@@ -44,28 +51,34 @@
 //! - **booleane** ([`IndiceLinework::bordo_entro`]): il bordo esatto di
 //!   un'intersezione, unione, differenza o differenza simmetrica di poligoni
 //!   validi sta sui bordi degli operandi. Ogni lato del risultato deve stare
-//!   **per intero** entro `p` dai bordi degli operandi originali
+//!   **per intero** entro `p / 2` dai bordi degli operandi originali
 //!   dell'operazione pubblica (non dei risultati intermedi, cosi' gli
-//!   spostamenti di overlay in catena non si sommano oltre `p`). Il test
-//!   e' esatto a meno di un margine d'arrotondamento che stringe il raggio:
-//!   l'insieme dei punti entro `r` da un segmento e' convesso (uno
-//!   «stadio»), la sua traccia su un lato e' un intervallo, e gli intervalli
-//!   dei segmenti vicini devono ricoprire il lato;
-//! - **buffer** ([`IndiceLinework::vertici_alla_distanza`]): il bordo del
-//!   buffer esatto sta alla distanza `|d|` dall'ingresso. Ogni vertice
-//!   dell'uscita deve stare fra `|d| - s - p` e `k |d| + p` dall'ingresso,
-//!   con `s` la freccia massima degli archi approssimati da corde
-//!   ([`freccia_relativa_archi`]) e `k = sqrt(2)` per le estremita' quadrate
-//!   (gli angoli del quadrato), `1` altrimenti; su linee con estremita'
-//!   piatte o quadrate solo il limite superiore ([`verifica_buffer`]). Il
-//!   controllo e' sui vertici:
-//!   un lato fra due vertici corretti e' una corda dell'arco o un tratto
-//!   parallelo all'ingresso, e lo spostamento della griglia muove i vertici.
+//!   spostamenti di overlay in catena non si sommano). La tolleranza e' `p /
+//!   2`, non `p`: un aggancio puo' portare un vertice da un bordo a un altro
+//!   bordo d'ingresso vicino, e i lati che vi arrivano stanno allora entro
+//!   `delta / 2` da uno dei due bordi, con `delta` lo spostamento; con `p /
+//!   2` passa solo `delta <= p`. Il test e' esatto a meno di un margine
+//!   d'arrotondamento che stringe il raggio: l'insieme dei punti entro `r`
+//!   da un segmento e' convesso (uno «stadio»), la sua traccia su un lato e'
+//!   un intervallo, e gli intervalli dei segmenti vicini devono ricoprire il
+//!   lato;
+//! - **buffer** ([`verifica_buffer`]): il bordo del buffer esatto sta alla
+//!   distanza `|d|` dall'ingresso. Ogni vertice dell'uscita deve stare fra
+//!   `|d| - s - p` e `k |d| + p` dall'ingresso, con `s` la freccia massima
+//!   degli archi approssimati da corde ([`freccia_relativa_archi`]) e `k =
+//!   sqrt(2)` per le estremita' quadrate di linee e punti (gli angoli del
+//!   quadrato), `1` altrimenti; su linee con estremita' piatte o quadrate
+//!   solo il limite superiore. Con `d > 0` ogni coordinata dell'ingresso
+//!   deve stare dentro l'uscita o entro `p` dal suo bordo: `i_overlay` salta
+//!   senza errore un anello o una linea che la griglia riduce a un punto, e
+//!   il buffer di quella parte, spesso `2 |d|`, sparirebbe.
 //!
-//! Il controllo e' **unilaterale**: dice che l'uscita non si e' allontanata
-//! dall'ingresso oltre la precisione, non che nessuna parte manchi. Una parte
-//! sparita il cui bordo coincide con quello dell'ingresso non e' uno
-//! spostamento della griglia e non e' vista qui.
+//! Il controllo delle booleane e' **unilaterale**: dice che il bordo del
+//! risultato sta vicino ai bordi degli ingressi, non che sia il bordo
+//! giusto. Una faccia intera omessa, il cui bordo coincide con quello degli
+//! ingressi, e un lato intero spostato su un bordo d'ingresso parallelo
+//! (entrambi gli estremi agganciati, aggancio oltre `p / 2`) non sono visti
+//! qui.
 
 use std::f64::consts::SQRT_2;
 
@@ -196,26 +209,34 @@ fn ulp(magnitude: f64) -> f64 {
     f64::from_bits(magnitude.to_bits().saturating_add(1)) - magnitude
 }
 
-/// Lo spostamento a priori di un giro dell'overlay (modulo): `(1 +
-/// sqrt(2)) g + 4 ulp(M)`.
+/// Il primo giro di un overlay booleano sposta un punto di al piu' `(1 +
+/// sqrt(2)) g` (vedi il modulo).
+pub const FATTORE_OVERLAY: f64 = 1.0 + SQRT_2;
+
+/// Il primo passaggio del buffer sposta un punto di al piu' `(2 + 2
+/// sqrt(2)) g` (vedi il modulo).
+pub const FATTORE_BUFFER: f64 = 2.0 + 2.0 * SQRT_2;
+
+/// La tolleranza del controllo a posteriori delle booleane, in frazioni
+/// della precisione (vedi il modulo): anche il limite a priori delle
+/// booleane, perche' uno spostamento legittimo non la superi.
+pub const FRAZIONE_BORDO: f64 = 0.5;
+
+/// Lo spostamento a priori della griglia: `fattore * g + 4 ulp(M)`.
 #[must_use]
-pub fn spostamento_a_priori(rect: Rect<f64>) -> Option<f64> {
+pub fn spostamento_a_priori(rect: Rect<f64>, fattore: f64) -> Option<f64> {
     let g = passo_griglia(rect)?;
     let magnitude = modulo_massimo([rect.min(), rect.max()]);
-    let spostamento = (1.0 + SQRT_2).mul_add(g, 4.0 * ulp(magnitude));
+    let spostamento = fattore.mul_add(g, 4.0 * ulp(magnitude));
     spostamento.is_finite().then_some(spostamento)
 }
 
-/// Il controllo prima di un overlay i cui operandi hanno ingombro `rect`
-/// (`None`: nessuna coordinata, nessun calcolo da controllare).
-///
-/// # Errors
-///
-/// [`PrecisioneInsufficiente`] se le coordinate sono troppo rade per la
-/// precisione, o se lo spostamento a priori della griglia la supera.
-pub fn controlla_overlay(
+/// Guardia di spaziatura e spostamento a priori entro `limite`.
+fn controlla_griglia(
     rect: Option<Rect<f64>>,
     precision: Precision,
+    fattore: f64,
+    limite: f64,
 ) -> Result<(), PrecisioneInsufficiente> {
     let Some(rect) = rect else {
         return Ok(());
@@ -224,10 +245,30 @@ pub fn controlla_overlay(
     if !coordinate_abbastanza_fitte(magnitude, precision.value()) {
         return Err(PrecisioneInsufficiente);
     }
-    match spostamento_a_priori(rect) {
-        Some(spostamento) if spostamento <= precision.value() => Ok(()),
+    match spostamento_a_priori(rect, fattore) {
+        Some(spostamento) if spostamento <= limite => Ok(()),
         _ => Err(PrecisioneInsufficiente),
     }
+}
+
+/// Il controllo prima di un overlay booleano i cui operandi hanno ingombro
+/// `rect` (`None`: nessuna coordinata, nessun calcolo da controllare):
+/// `(1 + sqrt(2)) g + 4 ulp(M) <= p / 2`.
+///
+/// # Errors
+///
+/// [`PrecisioneInsufficiente`] se le coordinate sono troppo rade per la
+/// precisione, o se lo spostamento a priori della griglia supera `p / 2`.
+pub fn controlla_overlay(
+    rect: Option<Rect<f64>>,
+    precision: Precision,
+) -> Result<(), PrecisioneInsufficiente> {
+    controlla_griglia(
+        rect,
+        precision,
+        FATTORE_OVERLAY,
+        precision.value() * FRAZIONE_BORDO,
+    )
 }
 
 /// L'ingombro delle coordinate di un insieme di multipoligoni.
@@ -343,12 +384,14 @@ impl IndiceLinework {
         }
     }
 
-    /// Ogni lato di `output` sta per intero entro `precision` dai segmenti
-    /// dell'indice la cui etichetta passa `filtro`, o da uno di `extra`?
+    /// Ogni lato di `output` sta per intero entro `p / 2`
+    /// ([`FRAZIONE_BORDO`]) dai segmenti dell'indice la cui etichetta passa
+    /// `filtro`, o da uno di `extra`?
     ///
     /// Vero per il risultato esatto di una booleana (il suo bordo sta sui
     /// bordi degli operandi); falso se la griglia ha spostato un vertice, o
-    /// piegato un lato, oltre la precisione.
+    /// piegato un lato, oltre `p / 2`, o agganciato un vertice a un altro
+    /// bordo d'ingresso a piu' di `p` (vedi il modulo).
     pub fn bordo_entro(
         &self,
         output: &MultiPolygon<f64>,
@@ -356,7 +399,7 @@ impl IndiceLinework {
         filtro: impl Fn(usize) -> bool,
         precision: Precision,
     ) -> bool {
-        let r = precision.value();
+        let r = precision.value() * FRAZIONE_BORDO;
         let mut intervalli = Vec::new();
         for polygon in output {
             for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
@@ -392,6 +435,43 @@ impl IndiceLinework {
             }
         }
         true
+    }
+
+    /// Il punto sta dentro i poligoni i cui anelli sono nell'indice, o
+    /// entro `raggio` dal loro bordo?
+    ///
+    /// Prima la vicinanza al bordo; poi, per un punto a piu' di `raggio` dal
+    /// bordo, la parita' degli attraversamenti del raggio orizzontale verso
+    /// `+x` (regola semiaperta sugli estremi): l'ascissa d'incrocio dista dal
+    /// punto almeno quanto il bordo, cioe' piu' di `raggio`, e il suo errore
+    /// d'arrotondamento non cambia il verso del confronto.
+    pub fn copre(&self, punto: Coord<f64>, raggio: f64) -> bool {
+        let busta = AABB::from_corners(
+            [punto.x - raggio, punto.y - raggio],
+            [punto.x + raggio, punto.y + raggio],
+        );
+        let margine = 16.0 * f64::EPSILON * (punto.x.abs() + punto.y.abs() + raggio);
+        if self
+            .albero
+            .locate_in_envelope_intersecting(&busta)
+            .any(|segmento| distanza_da_segmento(punto, segmento.linea) + margine <= raggio)
+        {
+            return true;
+        }
+        let semiretta = AABB::from_corners([punto.x, punto.y], [f64::MAX, punto.y]);
+        let attraversamenti = self
+            .albero
+            .locate_in_envelope_intersecting(&semiretta)
+            .filter(|segmento| {
+                let (a, b) = (segmento.linea.start, segmento.linea.end);
+                if (a.y > punto.y) == (b.y > punto.y) {
+                    return false;
+                }
+                let x = (punto.y - a.y).mul_add((b.x - a.x) / (b.y - a.y), a.x);
+                x > punto.x
+            })
+            .count();
+        attraversamenti % 2 == 1
     }
 
     /// Ogni vertice di `output` dista dai segmenti dell'indice almeno
@@ -578,7 +658,7 @@ pub fn controlla_buffer(
 ) -> Result<(), PrecisioneInsufficiente> {
     let rect = rettangolo_coordinate(geometry.coords_iter())
         .map(|rect| allarga(rect, MARGINE_BUFFER_IN_DISTANZE * distance.abs()));
-    controlla_overlay(rect, precision)
+    controlla_griglia(rect, precision, FATTORE_BUFFER, precision.value())
 }
 
 /// Le estremita' delle linee nel buffer.
@@ -603,10 +683,22 @@ fn ha_linee(geometry: &Geometry<f64>) -> bool {
     }
 }
 
+/// La geometria ha linee o punti (le sole parti a cui `geo` applica le
+/// estremita': i poligoni le ignorano)?
+fn ha_estremita(geometry: &Geometry<f64>) -> bool {
+    match geometry {
+        Geometry::Point(_) | Geometry::MultiPoint(_) => true,
+        Geometry::GeometryCollection(collection) => collection.iter().any(ha_estremita),
+        other => ha_linee(other),
+    }
+}
+
 /// Il controllo a posteriori di un buffer: ogni vertice dell'uscita sta fra
 /// `|d| - s - p` e `k |d| + p` dalla linework dell'ingresso (vedi il
-/// modulo); `k = sqrt(2)` con estremita' quadrate (gli angoli del
-/// quadrato), `1` altrimenti.
+/// modulo); `k = sqrt(2)` con estremita' quadrate su linee o punti (gli
+/// angoli del quadrato), `1` altrimenti. Con `d > 0` ogni coordinata
+/// dell'ingresso sta dentro l'uscita o entro `p` dal suo bordo: nessuna
+/// parte dell'ingresso ha perso il suo buffer.
 ///
 /// Con estremita' piatte o quadrate su linee il limite inferiore non vale:
 /// il bordo di un'estremita' piatta passa a distanza fra `0` e `|d|`
@@ -624,7 +716,12 @@ pub fn verifica_buffer(
     output: &MultiPolygon<f64>,
     precision: Precision,
 ) -> Result<(), PrecisioneInsufficiente> {
-    if output.0.is_empty() {
+    let da_coprire = if distance > 0.0 {
+        coordinate_da_coprire(geometry, estremita)
+    } else {
+        Vec::new()
+    };
+    if output.0.is_empty() && da_coprire.is_empty() {
         return Ok(());
     }
     let d = distance.abs();
@@ -634,17 +731,52 @@ pub fn verifica_buffer(
     } else {
         (freccia_relativa_archi().mul_add(-d, d) - p).max(0.0)
     };
-    let massima = if estremita == Estremita::Quadrate {
+    let massima = if estremita == Estremita::Quadrate && ha_estremita(geometry) {
         SQRT_2 * d
     } else {
         d
     } + p;
     let indice = IndiceLinework::nuovo([(0, geometry)]);
-    if indice.vertici_alla_distanza(output, minima, massima) {
-        Ok(())
-    } else {
-        Err(PrecisioneInsufficiente)
+    if !indice.vertici_alla_distanza(output, minima, massima) {
+        return Err(PrecisioneInsufficiente);
     }
+    if !da_coprire.is_empty() {
+        let uscita = IndiceLinework::da_multipoligoni([(0, output)]);
+        if !da_coprire
+            .iter()
+            .all(|coordinata| uscita.copre(*coordinata, p))
+        {
+            return Err(PrecisioneInsufficiente);
+        }
+    }
+    Ok(())
+}
+
+/// Le coordinate dell'ingresso che un buffer positivo deve coprire: tutte,
+/// salvo punti e linee con estremita' piatte. Un punto con estremita'
+/// piatte non ha buffer per definizione (`geo`), e una linea piu' corta
+/// della griglia avrebbe un buffer piatto piu' sottile della griglia: che
+/// sparisca e' dichiarato (una geometria piu' sottile della precisione).
+fn coordinate_da_coprire(geometry: &Geometry<f64>, estremita: Estremita) -> Vec<Coord<f64>> {
+    fn raccogli(geometry: &Geometry<f64>, estremita: Estremita, out: &mut Vec<Coord<f64>>) {
+        match geometry {
+            Geometry::GeometryCollection(collection) => {
+                for child in collection {
+                    raccogli(child, estremita, out);
+                }
+            }
+            Geometry::Point(_)
+            | Geometry::MultiPoint(_)
+            | Geometry::Line(_)
+            | Geometry::LineString(_)
+            | Geometry::MultiLineString(_)
+                if estremita == Estremita::Piatte => {}
+            other => out.extend(other.coords_iter()),
+        }
+    }
+    let mut coordinate = Vec::new();
+    raccogli(geometry, estremita, &mut coordinate);
+    coordinate
 }
 
 #[cfg(test)]
@@ -718,7 +850,11 @@ mod tests {
         assert!(
             controlla_overlay(Some(rect(0.0, 0.0, 1_300_000.0, 1_000_000.0)), centimetro).is_ok()
         );
-        assert!(controlla_overlay(Some(rect(0.0, 0.0, 5_000_000.0, 10.0)), centimetro).is_ok());
+        assert!(controlla_overlay(Some(rect(0.0, 0.0, 2_900_000.0, 10.0)), centimetro).is_ok());
+        assert_eq!(
+            controlla_overlay(Some(rect(0.0, 0.0, 5_000_000.0, 10.0)), centimetro),
+            Err(PrecisioneInsufficiente)
+        );
         assert_eq!(
             controlla_overlay(Some(rect(0.0, 0.0, 20_000_000.0, 10.0)), centimetro),
             Err(PrecisioneInsufficiente)
@@ -794,7 +930,8 @@ mod tests {
         assert!(t0 < 1.0 && t1 >= 1.0, "{t0} {t1}");
     }
 
-    /// Un lato piegato di 2 cm verso l'esterno e' rifiutato; di 5 mm no.
+    /// Un lato piegato di 6 mm verso l'esterno e' rifiutato (tolleranza `p / 2`); di
+    /// 4 mm no.
     #[test]
     fn il_bordo_spostato_oltre_la_precisione_e_visto() {
         let centimetro = Precision::new(0.01).unwrap();
@@ -808,8 +945,9 @@ mod tests {
                 (x: 100.0, y: 100.0), (x: 0.0, y: 100.0)
             ]])
         };
-        assert!(indice.bordo_entro(&piegato(0.005), &[], |_| true, centimetro));
+        assert!(indice.bordo_entro(&piegato(0.004), &[], |_| true, centimetro));
         assert!(!indice.bordo_entro(&piegato(0.02), &[], |_| true, centimetro));
+        assert!(!indice.bordo_entro(&piegato(0.006), &[], |_| true, centimetro));
         // L'etichetta filtrata non conta.
         assert!(!indice.bordo_entro(&piegato(0.0), &[], |_| false, centimetro));
     }
@@ -830,5 +968,111 @@ mod tests {
             verifica_buffer(&punto, 100.0, Estremita::Tonde, &spostato, centimetro),
             Err(PrecisioneInsufficiente)
         );
+    }
+
+    /// Revisione: un vertice agganciato a un bordo d'ingresso parallelo a
+    /// 1,8 cm stava entro 0,9 cm da uno dei due bordi lungo i lati obliqui, e
+    /// passava con tolleranza `p`. Con `p / 2` no; a 0,8 cm si'.
+    #[test]
+    fn il_vertice_agganciato_a_un_altro_bordo_e_visto() {
+        let centimetro = Precision::new(0.01).unwrap();
+        let sotto: Geometry<f64> =
+            polygon![(x: 0.0, y: 0.0), (x: 200.0, y: 0.0), (x: 200.0, y: 50.0), (x: 0.0, y: 50.0)]
+                .into();
+        let spostato = |dy: f64| {
+            let sopra: Geometry<f64> = polygon![
+                (x: 0.0, y: 50.0 + dy), (x: 200.0, y: 50.0 + dy),
+                (x: 200.0, y: 100.0), (x: 0.0, y: 100.0)
+            ]
+            .into();
+            let indice = IndiceLinework::nuovo([(0, &sotto), (1, &sopra)]);
+            let uscita = MultiPolygon::new(vec![polygon![
+                (x: 0.0, y: 0.0), (x: 200.0, y: 0.0), (x: 200.0, y: 50.0),
+                (x: 100.0, y: 50.0 + dy), (x: 0.0, y: 50.0)
+            ]]);
+            indice.bordo_entro(&uscita, &[], |_| true, centimetro)
+        };
+        assert!(!spostato(0.018));
+        assert!(spostato(0.008));
+    }
+
+    /// Revisione: estremita' quadrate su un poligono (che `geo` ignora):
+    /// un'uscita gonfiata di 3 m su 10 m non passa piu' con `k = sqrt(2)`.
+    #[test]
+    fn le_estremita_quadrate_non_allargano_il_buffer_di_un_poligono() {
+        use geo::Buffer as _;
+        let centimetro = Precision::new(0.01).unwrap();
+        let quadrato: Geometry<f64> =
+            polygon![(x: 0.0, y: 0.0), (x: 100.0, y: 0.0), (x: 100.0, y: 100.0), (x: 0.0, y: 100.0)]
+                .into();
+        let buffer = quadrato.buffer(10.0);
+        assert!(verifica_buffer(&quadrato, 10.0, Estremita::Quadrate, &buffer, centimetro).is_ok());
+        let gonfiato = quadrato.buffer(13.0);
+        assert_eq!(
+            verifica_buffer(&quadrato, 10.0, Estremita::Quadrate, &gonfiato, centimetro),
+            Err(PrecisioneInsufficiente)
+        );
+    }
+
+    /// Revisione: la parte dell'ingresso che la griglia riduce a un punto
+    /// perde il buffer senza errore di `i_overlay`; il controllo lo vede.
+    #[test]
+    fn la_parte_senza_buffer_e_vista() {
+        use geo::Buffer as _;
+        let centimetro = Precision::new(0.01).unwrap();
+        let due = Geometry::MultiPoint(geo::MultiPoint::from(vec![
+            (500_000.0, 4_000_000.0),
+            (500_100.0, 4_000_000.0),
+        ]));
+        let solo_uno = Geometry::Point(geo::Point::new(500_000.0, 4_000_000.0)).buffer(10.0);
+        assert_eq!(
+            verifica_buffer(&due, 10.0, Estremita::Tonde, &solo_uno, centimetro),
+            Err(PrecisioneInsufficiente)
+        );
+        assert!(
+            verifica_buffer(&due, 10.0, Estremita::Tonde, &due.buffer(10.0), centimetro).is_ok()
+        );
+        // Uscita vuota con distanza positiva: errore.
+        assert_eq!(
+            verifica_buffer(
+                &due,
+                10.0,
+                Estremita::Tonde,
+                &MultiPolygon::new(vec![]),
+                centimetro
+            ),
+            Err(PrecisioneInsufficiente)
+        );
+    }
+
+    /// La copertura per parita' distingue dentro, fuori e il buco.
+    #[test]
+    fn la_copertura_conta_i_buchi() {
+        let centimetro = 0.01;
+        let ciambella = MultiPolygon::new(vec![Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
+            ]),
+            vec![LineString::from(vec![
+                (4.0, 4.0),
+                (6.0, 4.0),
+                (6.0, 6.0),
+                (4.0, 6.0),
+                (4.0, 4.0),
+            ])],
+        )]);
+        let indice = IndiceLinework::da_multipoligoni([(0, &ciambella)]);
+        let c = |x: f64, y: f64| Coord { x, y };
+        assert!(indice.copre(c(2.0, 2.0), centimetro));
+        assert!(!indice.copre(c(5.0, 5.0), centimetro));
+        assert!(!indice.copre(c(12.0, 5.0), centimetro));
+        assert!(indice.copre(c(10.005, 5.0), centimetro));
+        // Sulla quota di un vertice (regola semiaperta).
+        assert!(indice.copre(c(2.0, 4.0), centimetro));
+        assert!(!indice.copre(c(5.0, 4.5), centimetro));
     }
 }

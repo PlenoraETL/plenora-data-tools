@@ -267,6 +267,47 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
     ));
 }
 
+/// Revisione: una parte dell'ingresso che la griglia di `i_overlay` riduce
+/// a un punto sparisce dal buffer senza errore della dipendenza (un anello
+/// d'area intera nulla e' saltato, una linea su un solo punto della griglia
+/// non da' segmenti). Il suo buffer e' spesso `2 |d|`: errore esplicito.
+#[test]
+fn il_buffer_non_perde_parti_ridotte_a_un_punto() {
+    let corta = Geometry::LineString(LineString::from(vec![
+        (500_000.0, 4_000_000.0),
+        (500_000.000_000_01, 4_000_000.0),
+    ]));
+    let sottile = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            (500_000.0, 4_000_000.0),
+            (500_100.0, 4_000_000.0),
+            (500_050.0, 4_000_000.000_000_02),
+            (500_000.0, 4_000_000.0),
+        ]),
+        vec![],
+    ));
+    // Una linea di 0,4 mm accanto a una normale, a scala italiana.
+    let componenti = Geometry::MultiLineString(geo::MultiLineString::new(vec![
+        LineString::from(vec![(300_000.0, 4_000_000.0), (1_600_000.0, 4_000_000.0)]),
+        LineString::from(vec![(900_000.0, 4_500_000.0), (900_000.000_4, 4_500_000.0)]),
+    ]));
+    for (caso, geometria) in [
+        ("corta", &corta),
+        ("sottile", &sottile),
+        ("componenti", &componenti),
+    ] {
+        let esito = buffer_with_cap(geometria, 10.0, BufferCapStyle::Round, centimetro());
+        assert!(
+            matches!(esito, Err(OperationError::PrecisionInsufficient)),
+            "{caso}: {esito:?}"
+        );
+    }
+    topologia_rifiutata(
+        clean_valid_polygon_topology(&[sottile], 0.5, false, true, 10, 1_000, centimetro()),
+        "clean con morfologia",
+    );
+}
+
 #[test]
 fn subdivide_alle_tre_scale() {
     let parti = subdivide(&stella(ITALIA, 40), 16, centimetro()).expect("subdivide a 1.300 km");
