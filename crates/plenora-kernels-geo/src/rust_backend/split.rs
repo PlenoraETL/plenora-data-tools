@@ -301,12 +301,13 @@ fn face_sample(face: &Polygon<f64>) -> Option<Point<f64>> {
     if span_x == 0.0 || span_y == 0.0 {
         return None;
     }
-    // Verso esatto dell'anello (deviazione dichiarata in `super`): il
-    // campione e' comunque verificato da `contains`, quindi fuori dominio si
-    // tiene il verso antiorario e si ricade su `interior_point`.
+    // Verso esatto dell'anello (deviazione dichiarata in `super`). Se non e'
+    // decidibile non si sceglie un verso: si passa direttamente a
+    // `interior_point`, come quando nessun campione direzionale e' interno.
     let orientation = match super::exact::orientamento(coordinates) {
         Ok(std::cmp::Ordering::Less) => -1.0,
-        _ => 1.0,
+        Ok(_) => 1.0,
+        Err(_) => return face.interior_point(),
     };
     for pair in coordinates.windows(2) {
         let start = pair[0];

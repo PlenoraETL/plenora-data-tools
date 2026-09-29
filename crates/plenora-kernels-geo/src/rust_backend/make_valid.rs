@@ -26,8 +26,8 @@ use super::polygonize::{
 use geo::algorithm::validation::Validation;
 use geo::line_intersection::{line_intersection, LineIntersection};
 use geo::{
-    Area, BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, LineString,
-    MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
+    Area, BooleanOps, BoundingRect, Coord, CoordsIter, Geometry, GeometryCollection, Intersects,
+    LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use thiserror::Error;
 
@@ -92,6 +92,19 @@ pub enum MakeValidError {
     InternalInvariant(&'static str),
     #[error("prenotazione di memoria fallita per {0}")]
     AllocationFailed(&'static str),
+    /// Un segno d'area non decidibile in `f64` su coordinate fuori dal
+    /// dominio dell'aritmetica esatta (vedi `super::exact`). Deviazione dal
+    /// laboratorio, che decideva comunque.
+    #[error("coordinate fuori dal dominio dell'aritmetica esatta delle aree")]
+    NumericRange,
+    /// Un overlay ha perso (o guadagnato) area oltre cio' che l'operazione
+    /// insiemistica ammette: tipicamente una feature piu' sottile della
+    /// griglia intera di `i_overlay` collassata. Deviazione dal laboratorio,
+    /// che restituiva il risultato.
+    #[error(
+        "overlay incoerente con le aree degli operandi: feature sotto la risoluzione della griglia"
+    )]
+    OverlayLoss,
 }
 
 impl From<PolygonizeError> for MakeValidError {
@@ -492,33 +505,296 @@ impl OverlayNormalizer {
     }
 }
 
-fn normalized_union(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) -> MultiPolygon<f64> {
+/// Operazione insiemistica di un overlay, per il controllo delle aree.
+#[derive(Clone, Copy, Debug)]
+enum OverlayOperation {
+    Union,
+    Difference,
+    Xor,
+}
+
+/// Il controllo che il laboratorio non aveva, dopo ogni overlay.
+///
+/// L'overlay passa per coordinate normalizzate, la griglia intera di
+/// `i_overlay` e uno snap alle coordinate sorgente: una feature piu' sottile
+/// della griglia (circa `2^-31` dell'estensione) puo' collassare o deformarsi
+/// e il risultato resta valido. Il controllo non si fida del risultato:
+///
+/// 1. **vertici**: ogni vertice del risultato deve essere un vertice di un
+///    operando, oppure stare entro la tolleranza di snap (per asse, il
+///    doppio di quella di `restore_multi_snapped`) da un punto d'incrocio
+///    fra i bordi dei due operandi, calcolato con `line_intersection` di
+///    `geo`. Un vertice che non e' ne' l'uno ne' l'altro e' un artefatto
+///    della griglia (un lato spostato), quindi errore. Senza incroci il
+///    risultato vero ha solo vertici sorgente;
+/// 2. **aree**: l'area del risultato deve stare nei limiti dell'operazione
+///    insiemistica, comprese le componenti che l'altro operando non tocca
+///    (vedi [`area_constraints`]). Se tutti i
+///    vertici sono sorgente i limiti valgono esattamente e li si verifica con
+///    [`super::exact::segno_combinazione`], senza tolleranza: un collasso a
+///    vuoto o una parte persa e' un errore; fuori dal dominio esatto,
+///    [`MakeValidError::NumericRange`]. Altrimenti ogni vertice d'incrocio
+///    puo' essersi spostato della tolleranza, e l'area del prodotto di quello
+///    spostamento per i due lati adiacenti: la tolleranza e' il doppio di
+///    quella somma piu' il rumore delle aree in `f64`.
+///
+/// Residuo dichiarato: vicino a un incrocio, una perdita d'area sotto quella
+/// tolleranza non si distingue dallo snap legittimo.
+fn checked_overlay(
+    operation: OverlayOperation,
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+    result: MultiPolygon<f64>,
+    normalizer: OverlayNormalizer,
+) -> Result<MultiPolygon<f64>, MakeValidError> {
+    let constraints = area_constraints(operation, left, right, &result);
+    let tolerance_x = normalizer.span_x.abs() * 8.0 / f64::from(i32::MAX);
+    let tolerance_y = normalizer.span_y.abs() * 8.0 / f64::from(i32::MAX);
+    let source = left
+        .coords_iter()
+        .chain(right.coords_iter())
+        .map(CoordKey::new)
+        .collect::<BTreeSet<_>>();
+    let crossings = boundary_crossings(left, right, &source);
+    let rings = |polygons: &MultiPolygon<f64>| {
+        polygons
+            .0
+            .iter()
+            .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let mut displaced_area = 0.0_f64;
+    for ring in rings(&result) {
+        let coordinates = &ring.0;
+        let open = coordinates.len().saturating_sub(1);
+        for index in 0..open {
+            let vertex = coordinates[index];
+            if source.contains(&CoordKey::new(vertex)) {
+                continue;
+            }
+            let near_crossing = crossings.iter().any(|crossing| {
+                (vertex.x - crossing.x).abs() <= tolerance_x
+                    && (vertex.y - crossing.y).abs() <= tolerance_y
+            });
+            if !near_crossing {
+                return Err(MakeValidError::OverlayLoss);
+            }
+            let previous = coordinates[if index == 0 { open - 1 } else { index - 1 }];
+            let next = coordinates[index + 1];
+            let adjacent = (vertex.x - previous.x).hypot(vertex.y - previous.y)
+                + (next.x - vertex.x).hypot(next.y - vertex.y);
+            displaced_area += adjacent * tolerance_x.hypot(tolerance_y);
+        }
+    }
+    if displaced_area == 0.0 {
+        for terms in &constraints {
+            let sign = super::exact::segno_combinazione(terms)
+                .map_err(|_| MakeValidError::NumericRange)?;
+            if sign == std::cmp::Ordering::Less {
+                return Err(MakeValidError::OverlayLoss);
+            }
+        }
+        return Ok(result);
+    }
+    let noise = 64.0
+        * f64::EPSILON
+        * (result.unsigned_area() + left.unsigned_area() + right.unsigned_area());
+    let tolerance = 2.0 * displaced_area + noise;
+    for terms in &constraints {
+        let value = terms
+            .iter()
+            .map(|(polygon, coefficient)| coefficient * polygon.unsigned_area())
+            .sum::<f64>();
+        if !value.is_finite() || !tolerance.is_finite() {
+            return Err(MakeValidError::NumericRange);
+        }
+        if value < -tolerance {
+            return Err(MakeValidError::OverlayLoss);
+        }
+    }
+    Ok(result)
+}
+
+/// Le componenti di `polygons` il cui rettangolo d'ingombro e' separato da
+/// quello di ogni componente di `other`: nessuna operazione insiemistica le
+/// tocca, e devono restare per intero nel risultato (quando l'operazione le
+/// conserva).
+fn untouched<'a>(
+    polygons: &'a MultiPolygon<f64>,
+    other: &MultiPolygon<f64>,
+) -> Vec<&'a Polygon<f64>> {
+    let others = other
+        .0
+        .iter()
+        .filter_map(BoundingRect::bounding_rect)
+        .collect::<Vec<_>>();
+    polygons
+        .0
+        .iter()
+        .filter(|polygon| {
+            polygon.bounding_rect().is_some_and(|own| {
+                others.iter().all(|rect| {
+                    own.max().x < rect.min().x
+                        || rect.max().x < own.min().x
+                        || own.max().y < rect.min().y
+                        || rect.max().y < own.min().y
+                })
+            })
+        })
+        .collect()
+}
+
+/// I vincoli d'area di un overlay, ognuno una combinazione lineare di aree
+/// senza segno che deve essere `>= 0`. `R` risultato, `A` e `B` operandi,
+/// `UA` e `UB` le loro componenti non toccate dall'altro operando:
+///
+/// - differenza: `R >= A - B`, `R <= A`, `R >= UA`;
+/// - unione: `R >= A`, `R >= B`, `R <= A + B`, `R >= UA + B`, `R >= A + UB`;
+/// - xor: `R >= A - B`, `R >= B - A`, `R <= A + B`, `R >= UA + UB`.
+///
+/// Gli ultimi vincoli di ogni riga vedono la sparizione di una componente
+/// lontana dall'altro operando, che le sole aree totali non vedono (il
+/// limite `|A - B|` dello xor ammette di perdere tutto l'operando minore).
+fn area_constraints<'a>(
+    operation: OverlayOperation,
+    left: &'a MultiPolygon<f64>,
+    right: &'a MultiPolygon<f64>,
+    result: &'a MultiPolygon<f64>,
+) -> Vec<Vec<(&'a Polygon<f64>, f64)>> {
+    let with = |polygons: &[&'a Polygon<f64>], coefficient: f64| {
+        polygons
+            .iter()
+            .map(|polygon| (*polygon, coefficient))
+            .collect::<Vec<_>>()
+    };
+    let all = |polygons: &'a MultiPolygon<f64>| polygons.0.iter().collect::<Vec<_>>();
+    let (r, a, b) = (all(result), all(left), all(right));
+    let (untouched_a, untouched_b) = (untouched(left, right), untouched(right, left));
+    let combine = |parts: &[(&[&'a Polygon<f64>], f64)]| {
+        parts
+            .iter()
+            .flat_map(|(polygons, coefficient)| with(polygons, *coefficient))
+            .collect::<Vec<_>>()
+    };
+    match operation {
+        OverlayOperation::Difference => vec![
+            combine(&[(&r, 1.0), (&a, -1.0), (&b, 1.0)]),
+            combine(&[(&r, -1.0), (&a, 1.0)]),
+            combine(&[(&r, 1.0), (&untouched_a, -1.0)]),
+        ],
+        OverlayOperation::Union => vec![
+            combine(&[(&r, 1.0), (&a, -1.0)]),
+            combine(&[(&r, 1.0), (&b, -1.0)]),
+            combine(&[(&r, -1.0), (&a, 1.0), (&b, 1.0)]),
+            combine(&[(&r, 1.0), (&untouched_a, -1.0), (&b, -1.0)]),
+            combine(&[(&r, 1.0), (&a, -1.0), (&untouched_b, -1.0)]),
+        ],
+        OverlayOperation::Xor => vec![
+            combine(&[(&r, 1.0), (&a, -1.0), (&b, 1.0)]),
+            combine(&[(&r, 1.0), (&a, 1.0), (&b, -1.0)]),
+            combine(&[(&r, -1.0), (&a, 1.0), (&b, 1.0)]),
+            combine(&[(&r, 1.0), (&untouched_a, -1.0), (&untouched_b, -1.0)]),
+        ],
+    }
+}
+
+/// I punti in cui i bordi dei due operandi si incontrano fuori dai vertici
+/// sorgente: i soli vertici nuovi che un overlay esatto potrebbe creare.
+fn boundary_crossings(
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+    source: &BTreeSet<CoordKey>,
+) -> Vec<Coord<f64>> {
+    let segments = |polygons: &MultiPolygon<f64>| {
+        polygonal_boundaries(polygons).collect::<Vec<geo::Line<f64>>>()
+    };
+    let left_segments = segments(left);
+    let right_segments = segments(right);
+    let mut crossings = Vec::new();
+    for left_segment in &left_segments {
+        let left_box = (
+            left_segment.start.x.min(left_segment.end.x),
+            left_segment.start.x.max(left_segment.end.x),
+            left_segment.start.y.min(left_segment.end.y),
+            left_segment.start.y.max(left_segment.end.y),
+        );
+        for right_segment in &right_segments {
+            if right_segment.start.x.max(right_segment.end.x) < left_box.0
+                || right_segment.start.x.min(right_segment.end.x) > left_box.1
+                || right_segment.start.y.max(right_segment.end.y) < left_box.2
+                || right_segment.start.y.min(right_segment.end.y) > left_box.3
+            {
+                continue;
+            }
+            match line_intersection(*left_segment, *right_segment) {
+                Some(LineIntersection::SinglePoint { intersection, .. }) => {
+                    if !source.contains(&CoordKey::new(intersection)) {
+                        crossings.push(intersection);
+                    }
+                }
+                Some(LineIntersection::Collinear { intersection }) => {
+                    for point in [intersection.start, intersection.end] {
+                        if !source.contains(&CoordKey::new(point)) {
+                            crossings.push(point);
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    crossings
+}
+
+fn normalized_union(
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+) -> Result<MultiPolygon<f64>, MakeValidError> {
     if !normalized_intersects(left, right) {
+        // Operandi disgiunti: la concatenazione e' l'unione esatta, senza
+        // overlay (se la normalizzazione sbagliasse il test, i poligoni
+        // sovrapposti fallirebbero la validazione finale).
         let mut polygons = left.0.clone();
         polygons.extend(right.0.iter().cloned());
-        return MultiPolygon::new(polygons);
+        return Ok(MultiPolygon::new(polygons));
     }
     let normalizer = OverlayNormalizer::new(left, right);
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .union(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    normalizer.restore_multi_snapped(&normalized, left, right)
+    let result = normalizer.restore_multi_snapped(&normalized, left, right);
+    checked_overlay(OverlayOperation::Union, left, right, result, normalizer)
 }
 
-fn normalized_difference(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) -> MultiPolygon<f64> {
+fn normalized_difference(
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+) -> Result<MultiPolygon<f64>, MakeValidError> {
     let normalizer = OverlayNormalizer::new(left, right);
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .difference(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    normalizer.restore_multi_snapped(&normalized, left, right)
+    let result = normalizer.restore_multi_snapped(&normalized, left, right);
+    checked_overlay(
+        OverlayOperation::Difference,
+        left,
+        right,
+        result,
+        normalizer,
+    )
 }
 
-fn normalized_xor(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) -> MultiPolygon<f64> {
+fn normalized_xor(
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+) -> Result<MultiPolygon<f64>, MakeValidError> {
     let normalizer = OverlayNormalizer::new(left, right);
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .xor(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    normalizer.restore_multi_snapped(&normalized, left, right)
+    let result = normalizer.restore_multi_snapped(&normalized, left, right);
+    checked_overlay(OverlayOperation::Xor, left, right, result, normalizer)
 }
 
 fn normalized_intersects(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) -> bool {
@@ -528,20 +804,28 @@ fn normalized_intersects(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) ->
         .intersects(&normalizer.map_multi(right, OverlayNormalizer::normalize))
 }
 
-fn merge_polygon(area: &mut MultiPolygon<f64>, polygon: &Polygon<f64>) {
+fn merge_polygon(
+    area: &mut MultiPolygon<f64>,
+    polygon: &Polygon<f64>,
+) -> Result<(), MakeValidError> {
     if area.0.is_empty() {
         *area = MultiPolygon::new(vec![polygon.clone()]);
     } else {
-        *area = normalized_union(area, &MultiPolygon::new(vec![polygon.clone()]));
+        *area = normalized_union(area, &MultiPolygon::new(vec![polygon.clone()]))?;
     }
+    Ok(())
 }
 
-fn merge_multipolygon(area: &mut MultiPolygon<f64>, polygons: &MultiPolygon<f64>) {
+fn merge_multipolygon(
+    area: &mut MultiPolygon<f64>,
+    polygons: &MultiPolygon<f64>,
+) -> Result<(), MakeValidError> {
     if area.0.is_empty() {
         *area = polygons.clone();
     } else if !polygons.0.is_empty() {
-        *area = normalized_union(area, polygons);
+        *area = normalized_union(area, polygons)?;
     }
+    Ok(())
 }
 
 fn cleaned_coordinates(line: &LineString<f64>) -> Vec<Coord<f64>> {
@@ -599,16 +883,16 @@ fn structure_polygon(
     for hole in polygon.interiors() {
         let fixed_hole = fixed_ring(hole, limits)?;
         if normalized_intersects(&shell, &fixed_hole) {
-            subtractive_holes = normalized_union(&subtractive_holes, &fixed_hole);
+            subtractive_holes = normalized_union(&subtractive_holes, &fixed_hole)?;
         } else {
-            promoted_holes = normalized_union(&promoted_holes, &fixed_hole);
+            promoted_holes = normalized_union(&promoted_holes, &fixed_hole)?;
         }
     }
     if !subtractive_holes.0.is_empty() {
-        fixed = normalized_difference(&fixed, &subtractive_holes);
+        fixed = normalized_difference(&fixed, &subtractive_holes)?;
     }
     if !promoted_holes.0.is_empty() {
-        fixed = normalized_union(&fixed, &promoted_holes);
+        fixed = normalized_union(&fixed, &promoted_holes)?;
     }
     Ok(Some(as_polygonal_geometry(fixed)))
 }
@@ -694,9 +978,9 @@ fn structure(
             let mut collapsed = Vec::new();
             for polygon in &polygons.0 {
                 match structure_polygon(polygon, keep_collapsed, limits)? {
-                    Some(Geometry::Polygon(polygon)) => merge_polygon(&mut area, &polygon),
+                    Some(Geometry::Polygon(polygon)) => merge_polygon(&mut area, &polygon)?,
                     Some(Geometry::MultiPolygon(polygons)) => {
-                        merge_multipolygon(&mut area, &polygons);
+                        merge_multipolygon(&mut area, &polygons)?;
                     }
                     Some(other) => collapsed.push(other),
                     None => {}
@@ -969,21 +1253,21 @@ fn linework(
             }
             if shares_collinear_boundary(&shell, &fixed) {
                 retain_internal_edges = true;
-                let outside = normalized_difference(&fixed, &shell).unsigned_area();
+                let outside = normalized_difference(&fixed, &shell)?.unsigned_area();
                 let fixed_area = fixed.unsigned_area();
                 if outside > fixed_area.max(1.0) * 1e-12 {
-                    polygon_area = normalized_union(&polygon_area, &fixed);
+                    polygon_area = normalized_union(&polygon_area, &fixed)?;
                 }
             } else {
-                polygon_area = normalized_xor(&polygon_area, &fixed);
+                polygon_area = normalized_xor(&polygon_area, &fixed)?;
             }
         }
         if !polygon_area.0.is_empty() {
             if shares_collinear_boundary(&area, &polygon_area) {
                 retain_internal_edges = true;
-                area = normalized_union(&area, &polygon_area);
+                area = normalized_union(&area, &polygon_area)?;
             } else {
-                area = normalized_xor(&area, &polygon_area);
+                area = normalized_xor(&area, &polygon_area)?;
             }
         }
     }
@@ -1055,17 +1339,38 @@ fn make_valid_geometry_rust_impl(
     validate_structure(geometry)?;
     // Area positiva decisa in modo esatto (deviazione dichiarata in `super`:
     // il laboratorio usava `unsigned_area() > 0.0`, che la cancellazione
-    // puo' azzerare). Fuori dal dominio esatto l'area non si dichiara
-    // positiva: la geometria passa dalla riparazione, che la rivalida.
-    let positive = |polygon: &Polygon<f64>| super::exact::area_positiva(polygon).unwrap_or(false);
+    // puo' azzerare). Un esito non decidibile e' un errore, mai una
+    // decisione: tradurlo in «non positiva» avviava la riparazione, e
+    // l'overlay poteva svuotare un poligono valido.
+    let positive = |polygon: &Polygon<f64>| {
+        super::exact::area_positiva(polygon).map_err(|_| MakeValidError::NumericRange)
+    };
+    let all_positive = |polygons: &[Polygon<f64>]| -> Result<bool, MakeValidError> {
+        for polygon in polygons {
+            if !positive(polygon)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    };
     let non_degenerate_area = match geometry {
-        Geometry::Polygon(polygon) => positive(polygon),
-        Geometry::MultiPolygon(polygons) => polygons.0.iter().all(positive),
-        Geometry::GeometryCollection(collection) => collection.0.iter().all(|child| match child {
-            Geometry::Polygon(polygon) => positive(polygon),
-            Geometry::MultiPolygon(polygons) => polygons.0.iter().all(positive),
-            _ => true,
-        }),
+        Geometry::Polygon(polygon) => positive(polygon)?,
+        Geometry::MultiPolygon(polygons) => all_positive(&polygons.0)?,
+        Geometry::GeometryCollection(collection) => {
+            let mut all = true;
+            for child in &collection.0 {
+                let child_positive = match child {
+                    Geometry::Polygon(polygon) => positive(polygon)?,
+                    Geometry::MultiPolygon(polygons) => all_positive(&polygons.0)?,
+                    _ => true,
+                };
+                if !child_positive {
+                    all = false;
+                    break;
+                }
+            }
+            all
+        }
         _ => true,
     };
     if non_degenerate_area && geometry.check_validation().is_ok() {
@@ -1305,7 +1610,7 @@ mod tests {
         );
         let shell = fixed_ring(source.exterior(), MakeValidLimits::unlimited())?;
         let hole = fixed_ring(&source.interiors()[0], MakeValidLimits::unlimited())?;
-        let selected = normalized_xor(&shell, &hole);
+        let selected = normalized_xor(&shell, &hole)?;
         if (selected.unsigned_area() - 16.0).abs() > 1e-12 {
             return Err(MakeValidError::InvalidOutput(format!(
                 "area selezionata={}",

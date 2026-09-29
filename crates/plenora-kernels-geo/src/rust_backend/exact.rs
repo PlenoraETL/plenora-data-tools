@@ -237,6 +237,35 @@ pub fn area_positiva(poligono: &Polygon<f64>) -> Result<bool, FuoriDominio> {
     Ok(segno(&espansione) == Ordering::Greater)
 }
 
+/// Segno esatto di `sum coefficiente * area senza segno(poligono)`, con
+/// coefficienti `+1` o `-1`.
+///
+/// # Errors
+///
+/// [`FuoriDominio`] se il filtro non decide e le coordinate escono dal
+/// dominio dello stadio esatto.
+pub fn segno_combinazione(termini: &[(&Polygon<f64>, f64)]) -> Result<Ordering, FuoriDominio> {
+    let mut valore = 0.0_f64;
+    let mut limite = 0.0_f64;
+    let mut moduli = 0.0_f64;
+    for (poligono, coefficiente) in termini {
+        let area = AreaPoligono::di(poligono).0;
+        valore += coefficiente * area.valore;
+        limite += area.limite;
+        moduli += area.valore.abs();
+    }
+    let passi = f64::from(u32::try_from(termini.len()).unwrap_or(u32::MAX)) + 1.0;
+    limite += 2.0 * passi * f64::EPSILON * moduli;
+    if valore.is_finite() && limite.is_finite() && valore.abs() > limite {
+        return Ok(valore.total_cmp(&0.0));
+    }
+    let mut espansione = Vec::new();
+    for (poligono, coefficiente) in termini {
+        accumula_poligono(&mut espansione, poligono, *coefficiente)?;
+    }
+    Ok(segno(&espansione))
+}
+
 /// Confronto esatto delle aree senza segno di due poligoni.
 ///
 /// # Errors
