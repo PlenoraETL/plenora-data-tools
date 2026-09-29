@@ -1677,12 +1677,17 @@ una coordinata non finita passano dal doppio ciclo originale.
 **L'oracolo.** `src/validazione_ogc/tests.rs` confronta il predicato con la
 copia letterale della funzione di `geo` su ogni ramo (doppio ciclo, scansione
 su `x`, su `y`, asse di produzione), e la validazione completa con
-`check_validation` e `validation_errors` di `geo` sull'errore intero
-(variante, anello, indici): casi avversari deterministici (punte, tocchi,
-autotangenze, collineari sovrapposti, punti ripetuti, segmenti nulli, zero con
-segno, quasi collineari all'ulp, subnormali, `f64::MAX`, NaN e infiniti), sotto
-simmetrie e scale; 22 008 anelli di un generatore deterministico e 8 000 casi
-proptest. Nessuna divergenza trovata.
+`check_validation`, `validation_errors` e `visit_validation` di `geo`
+sull'errore intero (variante, anello, indici), ogni metodo sotto il proprio
+`catch_unwind` e con gli errori emessi prima di un eventuale panico confrontati
+come prefisso: casi avversari deterministici (punte, tocchi, autotangenze,
+collineari sovrapposti, punti ripetuti, segmenti nulli, zero con segno, quasi
+collineari all'ulp, subnormali, `f64::MAX`, NaN e infiniti), sotto simmetrie e
+scale; 22 008 anelli di un generatore deterministico e 8 000 casi proptest.
+Nessuna divergenza trovata. Nessuno di questi ingressi fa andare in panico la
+`relate` di `geo`: che il panico si presenti sugli stessi ingressi nei due
+percorsi discende dal fatto che la sequenza chiama la stessa `relate` sugli
+stessi operandi, e l'oracolo non lo esercita.
 
 **Hazard.** Tre, dichiarati:
 

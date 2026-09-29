@@ -7,13 +7,15 @@
 //!   vendorizzato (non raggiungibile da fuori: e' `pub(crate)`), confrontata
 //!   col solo predicato, su ogni ramo (doppio ciclo, scansione su `x`, su `y`,
 //!   asse scelto come in produzione);
-//! - `check_validation` / `validation_errors` di `geo`, che eseguono il
-//!   doppio ciclo vero dentro il vendor, confrontati con la sequenza di
-//!   `validazione_ogc` sull'**errore completo** (variante, anello, indici),
-//!   non solo sull'esito.
+//! - `check_validation`, `validation_errors` e `visit_validation` di `geo`,
+//!   che eseguono il doppio ciclo vero dentro il vendor, confrontati con la
+//!   sequenza di `validazione_ogc` sull'**errore completo** (variante,
+//!   anello, indici), non solo sull'esito: ogni metodo sotto il proprio
+//!   `catch_unwind`, e gli errori emessi prima di un panico confrontati come
+//!   prefisso.
 
-use super::{autointersezione_con, errori_di_validazione, ValidazioneOgc};
-use geo::algorithm::validation::Validation;
+use super::{autointersezione_con, errori_di_validazione, visita_geometria, ValidazioneOgc};
+use geo::algorithm::validation::{InvalidGeometry, Validation};
 use geo::{Coord, Geometry, Intersects, LineString, MultiPolygon, Polygon};
 use proptest::prelude::*;
 
@@ -51,30 +53,77 @@ fn verifica_predicato(anello: &LineString<f64>) -> bool {
     atteso
 }
 
-/// La validazione completa contro quella di `geo`: primo errore e tutti gli
-/// errori. Se `geo` va in panico (la sua `relate`), deve andarci anche la
-/// sequenza rapida, che chiama la stessa `relate`.
-fn verifica_geometria(geometria: &Geometry<f64>) {
-    let generico = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (geometria.check_validation(), geometria.validation_errors())
-    }));
-    let rapido = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (
-            geometria.valida_ogc_rapida(),
-            errori_di_validazione(geometria),
-        )
-    }));
+/// Lo stesso metodo sui due percorsi, ciascuno sotto il proprio
+/// `catch_unwind`: valori uguali, o panico su entrambi. Un panico su un
+/// percorso solo e' una divergenza.
+fn confronta_metodo<R: PartialEq + std::fmt::Debug>(
+    metodo: &str,
+    geometria: &Geometry<f64>,
+    generico: impl FnOnce() -> R,
+    rapido: impl FnOnce() -> R,
+) {
+    let generico = std::panic::catch_unwind(std::panic::AssertUnwindSafe(generico));
+    let rapido = std::panic::catch_unwind(std::panic::AssertUnwindSafe(rapido));
     match (generico, rapido) {
         (Ok(generico), Ok(rapido)) => {
-            assert_eq!(rapido, generico, "validazione divergente su {geometria:?}");
+            assert_eq!(rapido, generico, "{metodo} divergente su {geometria:?}");
         }
         (Err(_), Err(_)) => {}
         (generico, rapido) => panic!(
-            "panico solo su un percorso (generico: {}, rapido: {}) su {geometria:?}",
+            "{metodo}: panico solo su un percorso (generico: {}, rapido: {}) su {geometria:?}",
             generico.is_err(),
             rapido.is_err()
         ),
     }
+}
+
+/// Gli errori emessi dal visitatore **fino all'eventuale panico**, raccolti
+/// fuori dal `catch_unwind`: il prefisso osservabile resta confrontabile
+/// anche quando `relate` interrompe la visita.
+fn prefisso_emesso(
+    visita: impl FnOnce(&std::cell::RefCell<Vec<InvalidGeometry>>),
+) -> (Vec<InvalidGeometry>, bool) {
+    let raccolti = std::cell::RefCell::new(Vec::new());
+    let panico =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| visita(&raccolti))).is_err();
+    (raccolti.into_inner(), panico)
+}
+
+/// La validazione completa contro quella di `geo`, metodo per metodo:
+/// primo errore (`check_validation`), tutti gli errori
+/// (`validation_errors`), e il prefisso degli errori emessi dal visitatore
+/// prima di un eventuale panico di `relate`, che la sequenza rapida chiama
+/// allo stesso modo.
+fn verifica_geometria(geometria: &Geometry<f64>) {
+    confronta_metodo(
+        "check_validation",
+        geometria,
+        || geometria.check_validation(),
+        || geometria.valida_ogc_rapida(),
+    );
+    confronta_metodo(
+        "validation_errors",
+        geometria,
+        || geometria.validation_errors(),
+        || errori_di_validazione(geometria),
+    );
+    let generico = prefisso_emesso(|raccolti| {
+        let _: Result<(), std::convert::Infallible> =
+            geometria.visit_validation(Box::new(|errore| {
+                raccolti.borrow_mut().push(errore);
+                Ok(())
+            }));
+    });
+    let rapido = prefisso_emesso(|raccolti| {
+        let _: Result<(), std::convert::Infallible> = visita_geometria(geometria, &mut |errore| {
+            raccolti.borrow_mut().push(errore);
+            Ok(())
+        });
+    });
+    assert_eq!(
+        rapido, generico,
+        "prefisso degli errori o panico divergente su {geometria:?}"
+    );
 }
 
 fn anello(punti: &[(f64, f64)]) -> LineString<f64> {
