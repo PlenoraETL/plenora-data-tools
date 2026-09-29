@@ -635,6 +635,18 @@ Un hasher con chiave per processo cambierebbe la stabilità dell'hash fra
 esecuzioni, su cui poggiano più kernel, e va verificato su tutti gli usi prima
 di essere introdotto.
 
+Il degrado non richiede input costruiti apposta. Sulle chiavi a più blocchi
+in cui i byte che variano stanno in cima a un blocco e nel blocco di coda —
+la chiave binaria di un Int64, marcatore più 8 byte big-endian — due blocchi
+si annullano: un milione di interi distinti danno 32 768 hash diversi. La
+tabella di chiavi dei raggruppamenti in memoria (`KeyInterner`: `aggregate`,
+`distinct`, set operation, `assert_unique`, `table_diff`) usa per questo un
+hash proprio, anch'esso non keyed, che ripiega i bit alti a ogni blocco. Le
+mappe di chiavi dello spill delle set operation usano ancora `KeyHasher`
+sulle stesse chiavi binarie: il rischio residuo è di tempo, non di
+risultato, e rientra quando anche quelle mappe passano alla tabella di
+chiavi.
+
 ### Arrotondamento nelle operazioni a risultato `Float64`
 
 La conversione intero/decimal → `f64` è **esatta o errore**, tranne nelle
