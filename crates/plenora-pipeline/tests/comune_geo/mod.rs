@@ -313,3 +313,41 @@ pub fn stesso_errore(runner: &PlenoraError, analisi: &PlenoraError) -> bool {
         .map_or(testo.as_str(), |(_, resto)| resto);
     runner.category() == analisi.category() && runner.to_string().contains(interno)
 }
+
+/// Per ogni caso la validazione del runner rifiuta esattamente cio' che
+/// l'analisi rifiuta, con lo stesso errore, e accetta con lo stesso
+/// contratto (nello schema emesso).
+pub fn stessa_validazione(casi: &[(&str, Value, Vec<RecordBatch>, Option<&str>)]) {
+    for (op, config, tabelle, crs) in casi {
+        let atteso = analisi(op, tabelle, config, *crs);
+        let nomi: Vec<&str> = ["t", "u"].into_iter().take(tabelle.len()).collect();
+        let mut pipeline = piano(&nomi, vec![passo("x", op, &nomi, config.clone())], &["x"]);
+        pipeline.crs = crs.map(str::to_owned);
+        let schemi: Vec<(&str, SchemaRef)> = nomi
+            .iter()
+            .copied()
+            .zip(tabelle.iter().map(RecordBatch::schema))
+            .collect();
+        let validata = pipeline.validate(&schemi);
+        match (&validata, &atteso) {
+            (Ok(validata), Ok(contratto)) => {
+                let ottenuto = validata.contratto("x").expect("contratto del passo");
+                let emesso =
+                    plenora_core::contract::arrow_schema::arrow_schema_from_contract(contratto)
+                        .expect("schema emesso");
+                assert_eq!(ottenuto.schema, emesso, "{op} {config}");
+            }
+            (Err(runner), Err(analisi)) => {
+                assert!(
+                    stesso_errore(runner, analisi),
+                    "{op} {config}: {runner} / {analisi}"
+                );
+            }
+            _ => panic!(
+                "{op} {config}: validazione {:?}, analisi {:?}",
+                validata.as_ref().err(),
+                atteso.as_ref().err()
+            ),
+        }
+    }
+}

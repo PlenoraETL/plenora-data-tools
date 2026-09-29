@@ -20,10 +20,10 @@ progetto d'origine si portano qui senza rinomine.
 
 ## Che cosa non c'è ancora
 
-- **Operazioni geo nel runner, in parte**: [«Runner»](#runner) esegue le
-  tabellari e le geo 1:1 sulle righe ([«Operazioni geo»](#operazioni-geo));
-  le geo bloccanti, collettive e binarie si rifiutano in validazione
-  (`Unsupported`) e si chiamano ancora dai kernel.
+- **Operazioni geo binarie nel runner**: [«Runner»](#runner) esegue le
+  tabellari e le geo unarie ([«Operazioni geo»](#operazioni-geo)); le geo
+  a due tabelle si rifiutano in validazione (`Unsupported`) e si chiamano
+  ancora dai kernel.
 - **Risoluzione CRS fuori tabella**: senza PROJ `resolve_crs` risolve solo
   gli identificatori d'autorità della tabella integrata
   ([«CRS integrati»](#crs-integrati)); un codice fuori tabella fallisce
@@ -1055,9 +1055,18 @@ monta sul suo schema. Niente fusione, niente streaming.
 | colonne in coda | `area`, `length`, `perimeter`, `geodesic_line_length`, `geodesic_area`, `vertex_count`, `to_wkt`, `bounds_extractor`, `geometry_accessors`, `line_locate_point`; contro la geometria `other_wkb` della config: `distance`, `hausdorff_distance`, `frechet_distance`, `haversine_distance`, `geodesic_distance`, `bearing`, i predicati `predicate_*` | la misura della riga, null per una geometria null |
 | sostituzione | `geometry_diagnostics` | le dieci colonne diagnostiche al posto della geometria |
 | produttori | `from_coords`, `from_wkt` | colonna geometria in coda, CRS da `crs` della config o di piano |
+| espansioni 1:N | `explode`, `delaunay`, `subdivide`, `split` (lama `other_wkb` su ogni riga) | una riga per parte, attributi della riga madre, `__parent_index`; una geometria null non produce righe (`explode`, `delaunay`, `split`) o una riga null (`subdivide`), come a `190c493` |
+| in place, su tutta la tabella | `make_valid`, `voronoi`, `clean_topology` | un risultato per riga non null, null le altre; in `clean_topology` una riga assorbita da una precedente diventa null (la geometria dell'uscita è nullable anche quando quella d'ingresso non lo è) |
+| colonna in coda, su tutta la tabella | `cluster_dbscan` | etichetta del cluster, null per il rumore |
+| aggregazioni a sole geometrie | `dissolve`, `line_builder`, `polygon_builder` (una riga), `line_merge` (una per linea fusa), `polygonize` (con `__class`), `collect` (una per gruppo, con le colonne chiave) | nessun attributo propagato |
+| coperture | `coverage_validate`, `shared_paths` | schema nuovo, una riga per problema o tratto |
+| griglia | `generate_grid` | le celle; l'ingresso fa solo da innesco |
 
-Le geo bloccanti, collettive e binarie non sono ancora nel dispatch:
-`Unsupported` in validazione, dopo l'analisi.
+Le geo binarie non sono ancora nel dispatch: `Unsupported` in
+validazione, dopo l'analisi. `collect` ordina i gruppi per la chiave
+testuale di `190c493` (tipo, presenza e lunghezza di ogni valore, poi il
+valore): un ordine deterministico, non quello dei valori (`"pari"` prima
+di `"dispari"`).
 
 **Config.** Si legge una volta, in validazione, con i tipi dell'analisi
 (`plenora_kernels_geo::analyze::config`, pubblici per questo): nessuna
@@ -1080,7 +1089,9 @@ strutturale del controllo di dominio è quindi una seconda passata sui
 byte, il prezzo di un controllo in un posto solo. Le geometrie prodotte
 da `from_coords` e `from_wkt` stanno nel dominio del CRS dell'uscita.
 
-**Precisione.** I kernel che la chiedono (`buffer`, e le bloccanti)
+**Precisione.** I kernel che la chiedono (`buffer`, `subdivide`, `split`,
+`make_valid`, `dissolve`, `polygonize`, `voronoi`, `clean_topology`,
+`coverage_validate`)
 ricevono 1 cm a terra nelle unità del CRS della colonna
 (`Precision::from_crs`, [«Precisione delle operazioni
 geografiche»](#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
@@ -1094,8 +1105,13 @@ nullable; a `190c493` diventava null). Ogni geometria prodotta deve avere
 un tipo che il contratto d'uscita dichiara, altrimenti `Internal`
 (analisi e kernel divergono).
 
-**Limiti passati ai kernel**: `MAX_CELL_COORDINATES` per `concave_hull` e
-`densify`, `10^8` coppie di coordinate per riga per `hausdorff_distance`
+**Limiti passati ai kernel**: il limite di righe dell'arco d'uscita
+(`max_output_rows` per un output del piano, `max_rows_per_edge`
+altrimenti, come D14.6 a `190c493`) come tetto delle righe prodotte da
+espansioni, `line_merge` e `polygonize`; `MAX_CLEAN_VERTICES` e
+`MAX_NODING_WORK` dei kernel; `100_000` punti per `voronoi` senza
+`max_points`; `MAX_CELL_COORDINATES` per `concave_hull`, `densify` e
+`delaunay`, `10^8` coppie di coordinate per riga per `hausdorff_distance`
 e `frechet_distance` (l'ordine di `MAX_NODING_WORK`); una `Int64` di
 `from_coords` oltre `2^53` in modulo si rifiuta (non è esatta in `f64`).
 

@@ -27,6 +27,7 @@
 //! deve avere un tipo che il contratto dichiara (altrimenti `Internal`:
 //! analisi e kernel divergono).
 
+mod collettivi;
 mod errori;
 mod unari;
 
@@ -46,6 +47,7 @@ use plenora_kernels_geo::rust_backend::precision::Precision;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use self::collettivi::KernelCollettivo;
 use self::unari::KernelUnario;
 
 /// Una colonna geometria d'ingresso di un passo.
@@ -255,6 +257,8 @@ fn config<T: DeserializeOwned>(op: &str, config: &Value) -> Result<T> {
 #[derive(Debug)]
 enum Kernel {
     Unario(Box<KernelUnario>),
+    /// Con il limite di righe dell'arco d'uscita, tetto dei kernel.
+    Collettivo(Box<KernelCollettivo>, u64),
 }
 
 /// Un passo geo validato: il kernel e le colonne geometria degli ingressi.
@@ -304,13 +308,16 @@ impl PassoGeo {
             })
             .collect::<Result<Vec<_>>>()?;
         let righe = righe_massime(limiti, uscita_del_piano);
-        let kernel = match KernelUnario::prepara(op, valore, &lati, ingressi, uscita, righe)? {
-            Some(unario) => Kernel::Unario(Box::new(unario)),
-            None => {
-                return Err(PlenoraError::Unsupported(format!(
-                    "{op}: operazione geo senza dispatch nel runner"
-                )))
-            }
+        let kernel = if let Some(unario) =
+            KernelUnario::prepara(op, valore, &lati, ingressi, uscita, righe)?
+        {
+            Kernel::Unario(Box::new(unario))
+        } else if let Some(collettivo) = KernelCollettivo::prepara(op, valore, &lati, ingressi)? {
+            Kernel::Collettivo(Box::new(collettivo), righe)
+        } else {
+            return Err(PlenoraError::Unsupported(format!(
+                "{op}: operazione geo senza dispatch nel runner"
+            )));
         };
         Ok(Self { op, lati, kernel })
     }
@@ -357,6 +364,20 @@ impl PassoGeo {
                     self.lati.first().and_then(Option::as_ref),
                     batch,
                     uscita,
+                )?
+            }
+            Kernel::Collettivo(kernel, righe_massime) => {
+                let [batch] = ingressi else {
+                    return Err(PlenoraError::Internal(format!(
+                        "{}: operazione unaria con piu' ingressi",
+                        self.op
+                    )));
+                };
+                kernel.esegui(
+                    self.op,
+                    self.lati.first().and_then(Option::as_ref),
+                    batch,
+                    *righe_massime,
                 )?
             }
         };

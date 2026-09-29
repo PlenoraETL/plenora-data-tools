@@ -393,11 +393,15 @@ fn analyze_unary_shape(
             // piano-v5.md#contratti-di-input decisione 8: input poligonale, output poligonale — ma
             // la rimozione degli overlap (differenza) puo' spezzare un
             // `Polygon` in `MultiPolygon`: insieme noto, dichiarazione exact.
-            with_geometry_types(
+            // Una riga assorbita da una precedente diventa null (come a
+            // 190c493): la geometria dell'uscita e' nullable anche quando
+            // quella dell'ingresso non lo e'.
+            let typed = with_geometry_types(
                 input,
                 geometry,
                 exact_types(vec![GeometryType::Polygon, GeometryType::MultiPolygon])?,
-            )
+            )?;
+            with_nullable_geometry(&typed, geometry)
         }
         "geo.dissolve" | "geo.line_builder" | "geo.polygon_builder" | "geo.line_merge" => {
             let _: EmptyConfig = parse_config(op, config)?;
@@ -463,6 +467,41 @@ fn analyze_unary_shape(
             "{op}: analyze_contract non implementata"
         ))),
     }
+}
+
+/// Il contratto con la colonna geometria `geometry` resa nullable (campo e
+/// contratto di colonna), il resto invariato.
+fn with_nullable_geometry(
+    contract: &DataContract,
+    geometry: &GeometryColumnContract,
+) -> Result<DataContract> {
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == &geometry.name {
+                field.as_ref().clone().with_nullable(true)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    let mut geometries = contract.geometries.clone();
+    for candidate in &mut geometries {
+        if candidate.field_id == geometry.field_id {
+            candidate.nullable = true;
+        }
+    }
+    DataContract::new(
+        std::sync::Arc::new(plenora_core::arrow::Schema::new_with_metadata(
+            fields,
+            contract.schema.metadata().clone(),
+        )),
+        geometries,
+        contract.active_geometry,
+        contract.properties.clone(),
+    )
 }
 
 /// Inferenza per le operazioni binarie ordinate (left, right).
