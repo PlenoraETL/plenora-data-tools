@@ -196,8 +196,8 @@ enum FuzzyRowForm<'a> {
 /// - `ResourceLimit`: blocco destro oltre `max_candidates`; output oltre
 ///   `limits.max_rows` o `limits.max_columns`.
 /// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione del
-///   nome della colonna score con lo schema di output; errore Arrow nella
-///   costruzione del batch.
+///   nome della colonna score con lo schema di output.
+/// - `DataMapping` (`arrow error: …`): errore Arrow nella costruzione del batch.
 // Fasi in sequenza lineare: la lunghezza e' nella pipeline, non nella logica.
 #[allow(clippy::too_many_lines)]
 fn fuzzy_join_riferimento(

@@ -340,8 +340,8 @@ pub fn estimated_batch_bytes(batch: &RecordBatch) -> usize {
 ///
 /// # Errors
 ///
-/// - `Schema`: schemi dei due input incompatibili (`validate_schema`) o
-///   errore Arrow in `select_rows`/`concat_compatible`;
+/// - `Schema`: schemi dei due input incompatibili (`validate_schema`);
+/// - `DataMapping` (`arrow error: …`): errore Arrow in `select_rows`/`concat_compatible`;
 /// - `InvalidPlan`: partizioni zero (vincolo del piano);
 /// - `ResourceLimit`: quota `max_temp_bytes` superata (anche da una sola
 ///   chiave), chiavi distinte di una partizione oltre
@@ -836,8 +836,8 @@ pub fn distinct_spilled(
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna di `config.subset` assente (`column_index`) o
-///   errore Arrow in `replace_or_append`/`select_rows`;
+/// - `Schema`: colonna di `config.subset` assente (`column_index`);
+/// - `DataMapping` (`arrow error: …`): errore Arrow in `replace_or_append`/`select_rows`;
 /// - `InvalidPlan`: colonna riservata allo spill gia' presente,
 ///   `spill_partitions` zero;
 /// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_governed_memory_bytes`),
@@ -1009,8 +1009,8 @@ pub fn aggregate_spilled(
 /// # Errors
 ///
 /// - `Schema`: colonna di `group_by` assente (`column_index`), gli errori
-///   di `aggregate` sulle partizioni, errore Arrow in
-///   `concat_batches`/`select_rows`;
+///   di `aggregate` sulle partizioni;
+/// - `DataMapping` (`arrow error: …`): errore Arrow in `concat_batches`/`select_rows`;
 /// - `InvalidPlan`: `group_by` vuoto, `spill_partitions` zero, output di
 ///   partizione incoerente con i gruppi (invariante interna);
 /// - `ResourceLimit`: quote superate (`max_temp_bytes`, `max_governed_memory_bytes`);
@@ -1327,7 +1327,8 @@ pub fn sort_spilled(
 ///
 /// - `Schema`: colonna di sort assente (`column_index`), tipo non
 ///   ordinabile o dictionary malformato (prevalidazione di ogni run, e
-///   `compare_cells_typed` nel merge), errore Arrow in `select_rows`;
+///   `compare_cells_typed` nel merge);
+/// - `DataMapping` (`arrow error: …`): errore Arrow in `select_rows`;
 /// - `InvalidPlan`: nessuna colonna di sort;
 /// - `ResourceLimit`: quota `max_temp_bytes` superata, indice di riga oltre
 ///   `u64` o `u32` (`select_rows`);

@@ -17,7 +17,7 @@ l'operazione.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `max_vertices` | intero | obbligatorio | `>= 4` | vertici massimi per parte (contati come `coords_count`: il vertice di chiusura e i buchi compresi) |
-| `output_column` | stringa | nome della colonna geometria | nome non vuoto e libero | rinomina la colonna geometria dell'uscita |
+| `output_column` | stringa | nome della colonna geometria | nome non vuoto; libero, oppure uguale al nome della colonna geometria (che allora resta com'è) | rinomina la colonna geometria dell'uscita |
 
 ### Schema
 
@@ -63,8 +63,9 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `max_vertices` mancante,
   non intero non negativo o minore di 4; `output_column` vuota;
 - `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
-  colonna non è riconoscibile come WKB; `output_column` o `__parent_index`
-  già presenti;
+  colonna non è riconoscibile come WKB; `output_column` già presente
+  come altra colonna (il nome della colonna geometria stessa è ammesso),
+  o `__parent_index` già presente;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 

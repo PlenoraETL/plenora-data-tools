@@ -423,8 +423,8 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 /// - `Schema`: una colonna di `group_by` o delle aggregazioni assente dallo
 ///   schema; gli errori di `scalar_as_string` (chiavi, `first`, `last`,
 ///   `concat`, `nunique`) e della lettura numerica (testo non numerico,
-///   tipo non numerico); errori Arrow di `select_rows` e
-///   `replace_or_append`;
+///   tipo non numerico);
+/// - `DataMapping` (`arrow error: …`): errori Arrow di `select_rows` e `replace_or_append`;
 /// - `Internal`: invarianti interne del raggruppamento.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
     let group_indices = config

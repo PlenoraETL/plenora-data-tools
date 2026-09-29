@@ -830,7 +830,8 @@ fn probe_chunk(
 ///   `limits.max_columns`.
 /// - `Schema`: chiave sinistra o destra assente o non Utf8; collisione di
 ///   nomi nello schema di output (colonna score compresa); metadati di
-///   schema in conflitto; errore Arrow nella costruzione del batch.
+///   schema in conflitto.
+/// - `DataMapping` (`arrow error: …`): errore Arrow nella costruzione del batch.
 pub fn fuzzy_join(
     left: &RecordBatch,
     right: &RecordBatch,

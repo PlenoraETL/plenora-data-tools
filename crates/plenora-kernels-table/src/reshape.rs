@@ -1126,7 +1126,7 @@ fn select_rows_except(
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non di tipo List, offset List negativo;
-///   errori Arrow di `select_rows` e `replace_or_append`;
+/// - `DataMapping` (`arrow error: …`): errori Arrow di `select_rows` e `replace_or_append`;
 /// - `ResourceLimit`: righe di output oltre `max_rows`, indice elemento o
 ///   riga oltre `u32`;
 /// - `InvalidPlan`: nome di output non valido, `empty_policy=drop`.

@@ -146,7 +146,8 @@ fn comparator_after_prevalidation() -> PlenoraError {
 /// - `InvalidPlan`: `columns` vuoto;
 /// - `Schema`: una colonna di `columns` assente dallo schema, di tipo non
 ///   ordinabile o dictionary con una chiave fuori dal dizionario
-///   (prevalidazione deterministica); errore Arrow in `select_rows`;
+///   (prevalidazione deterministica);
+/// - `DataMapping` (`arrow error: …`): errore Arrow in `select_rows`;
 /// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Internal`: un confronto fallito dopo la prevalidazione (invariante
 ///   nostra).
@@ -245,8 +246,8 @@ pub struct TopN {
 ///   `usize`;
 /// - `Schema`: una colonna di `columns` assente dallo schema, di tipo non
 ///   ordinabile o dictionary con una chiave fuori dal dizionario (stessa
-///   prevalidazione deterministica di `sort`); errore Arrow in
-///   `select_rows`;
+///   prevalidazione deterministica di `sort`);
+/// - `DataMapping` (`arrow error: …`): errore Arrow in `select_rows`;
 /// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Internal`: un confronto fallito dopo la prevalidazione.
 pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
@@ -347,8 +348,8 @@ pub struct Distinct {
 ///
 /// - `Schema`: una colonna di `subset` assente dallo schema; una cella che
 ///   non si converte in testo (`scalar_as_string`: tipo fuori dal profilo
-///   scalare, date fuori intervallo, dictionary malformato); errore Arrow
-///   in `select_rows`;
+///   scalare, date fuori intervallo, dictionary malformato);
+/// - `DataMapping` (`arrow error: …`): errore Arrow in `select_rows`;
 /// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Internal`: statistiche senza la chiave (invariante nostra).
 pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {

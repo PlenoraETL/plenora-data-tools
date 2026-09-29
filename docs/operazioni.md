@@ -115,13 +115,21 @@ In validazione, `InvalidPlan`:
 In esecuzione:
 
 - `ResourceLimit`: un numero oltre `i64::MAX` (con `start` vicino al
-  massimo);
+  massimo). Senza `partition_column` l'ultima riga può valere esattamente
+  `i64::MAX`; con `partition_column` il contatore di una partizione si
+  incrementa dopo ogni riga, anche l'ultima, quindi una partizione il cui
+  ultimo numero sarebbe `i64::MAX` fallisce già (con `start = i64::MAX`
+  basta una riga): un'asimmetria fra i due percorsi, dichiarata qui come
+  difetto noto;
 - `Schema`: una cella di `partition_column` che non si legge come testo.
 
 #### Limiti e deviazioni
 
 Nessuna numerazione ordinata: `order_column` e `ascending` restano nella
 config per compatibilità, ma si rifiutano.
+
+Difetto noto: con `partition_column` il numero `i64::MAX` non si raggiunge
+mai (sopra, «Errori»); senza partizione sì.
 
 #### Complessità
 
@@ -14395,7 +14403,8 @@ del contratto (`sorted_by`, `row_count`) restano.
 
 1:1. Il kernel (`extended_algorithms::line_substring`) riceve una
 `LineString`, rende una `LineString`, un `Point` se `start_ratio` e
-`end_ratio` sono uguali (confronto per bit), e nessuna geometria se la linea
+`end_ratio` sono uguali (confronto numerico `==`: `-0.0` e `0.0` sono
+uguali), e nessuna geometria se la linea
 è vuota. Il runner non esegue ancora le operazioni geo ([README, «Che cosa
 non c'è ancora»](../README.md#che-cosa-non-cè-ancora)): che cosa rendano una
 cella nulla, una linea vuota e una riga di altro tipo (anche
@@ -18609,7 +18618,7 @@ l'operazione.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `max_vertices` | intero | obbligatorio | `>= 4` | vertici massimi per parte (contati come `coords_count`: il vertice di chiusura e i buchi compresi) |
-| `output_column` | stringa | nome della colonna geometria | nome non vuoto e libero | rinomina la colonna geometria dell'uscita |
+| `output_column` | stringa | nome della colonna geometria | nome non vuoto; libero, oppure uguale al nome della colonna geometria (che allora resta com'è) | rinomina la colonna geometria dell'uscita |
 
 #### Schema
 
@@ -18655,8 +18664,9 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `max_vertices` mancante,
   non intero non negativo o minore di 4; `output_column` vuota;
 - `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
-  colonna non è riconoscibile come WKB; `output_column` o `__parent_index`
-  già presenti;
+  colonna non è riconoscibile come WKB; `output_column` già presente
+  come altra colonna (il nome della colonna geometria stessa è ammesso),
+  o `__parent_index` già presente;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 

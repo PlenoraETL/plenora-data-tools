@@ -1721,8 +1721,9 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 /// - `InvalidPlan`: `fraction` fuori da 0..=1;
 /// - `ResourceLimit`: dimensioni di gruppo, dataset o campione non
 ///   rappresentabili; indice di riga oltre `u32` (`select_rows`);
-/// - `Schema`: colonna `stratify_column` assente dallo schema; in piu' gli
-///   errori di `scalar_as_string` e `select_rows`.
+/// - `Schema`: colonna `stratify_column` assente dallo schema; gli errori
+///   di `scalar_as_string`;
+/// - `DataMapping` (`arrow error: …`): errore Arrow della `take` in `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
     if config
         .fraction

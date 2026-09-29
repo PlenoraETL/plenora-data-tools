@@ -132,8 +132,8 @@ fn evaluate_rules_riferimento(
 ///   colonna incompatibile con l'operatore; valore atteso non numerico o
 ///   range malformato; regex non valida; invarianti interne violate (errore
 ///   Internal);
-/// - `Schema`: colonna di una regola assente; errore Arrow nella
-///   costruzione dell'output.
+/// - `Schema`: colonna di una regola assente;
+/// - `DataMapping` (`arrow error: …`): errore Arrow nella costruzione dell'output.
 fn validate_rules_riferimento(batch: &RecordBatch, config: &ValidateRules) -> Result<RecordBatch> {
     let rules = compile_rules(batch, config)?;
     let (valid, errors, warnings) = evaluate_rules_riferimento(batch, &rules)?;

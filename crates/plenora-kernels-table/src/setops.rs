@@ -316,9 +316,10 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
 ///
 /// # Errors
 ///
-/// - `Schema`: schemi incompatibili (come `validate_schema`), metadati di
-///   schema in conflitto o errore Arrow nella concat o nella costruzione
-///   del batch;
+/// - `Schema`: schemi incompatibili (come `validate_schema`) o metadati di
+///   schema in conflitto;
+/// - `DataMapping` (`arrow error: …`): errore Arrow nella concat o nella costruzione del
+///   batch;
 /// - `ResourceLimit`: overflow nel conteggio delle righe o totale oltre
 ///   `limits.max_rows`.
 pub fn concat_compatible(
@@ -388,8 +389,10 @@ fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result
 ///
 /// - `Schema`: schemi incompatibili (come `validate_schema`), tipo non
 ///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
-///   o errore nella selezione o nella concat finale (come `select_rows` e
-///   `concat_compatible`, metadati di schema in conflitto compresi);
+///   o metadati di schema in conflitto (come `concat_compatible`);
+/// - `DataMapping` (`arrow error: …`): errore Arrow nella selezione o nella concat finale
+///   (`select_rows`, `concat_compatible`); indice oltre `u32::MAX` in
+///   `select_rows` e' `ResourceLimit`;
 /// - `ResourceLimit`: overflow nel conteggio delle righe o righe dei due
 ///   input insieme oltre `limits.max_rows`, prima della deduplicazione.
 pub fn union_distinct(
@@ -452,8 +455,9 @@ fn right_keys(right: &RecordBatch) -> Result<KeyInterner> {
 /// # Errors
 ///
 /// - `Schema`: schemi incompatibili (come `validate_schema`), tipo non
-///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
-///   o errore nella selezione finale (come `select_rows`).
+///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`);
+/// - `ResourceLimit`, `DataMapping` (`arrow error: …`): gli errori della selezione finale
+///   (`select_rows`: indice oltre `u32::MAX`, errore Arrow della `take`).
 pub fn intersect(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -489,8 +493,9 @@ pub fn intersect(
 /// # Errors
 ///
 /// - `Schema`: schemi incompatibili (come `validate_schema`), tipo non
-///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`)
-///   o errore nella selezione finale (come `select_rows`).
+///   supportato dall'encoder di chiavi (come `CompactRowEncoder::try_new`);
+/// - `ResourceLimit`, `DataMapping` (`arrow error: …`): gli errori della selezione finale
+///   (`select_rows`: indice oltre `u32::MAX`, errore Arrow della `take`).
 pub fn except(
     left: &RecordBatch,
     right: &RecordBatch,

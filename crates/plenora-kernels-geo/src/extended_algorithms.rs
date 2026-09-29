@@ -520,7 +520,8 @@ pub fn line_interpolate_point(
 /// due frazioni; in mezzo restano, con i loro bit, i vertici d'ingresso la
 /// cui distanza cumulata dall'inizio e' strettamente fra le due distanze
 /// (un vertice uguale al precedente non si ripete). `None` se la linea e'
-/// vuota; un `Point` se le due frazioni sono uguali (confronto per bit).
+/// vuota; un `Point` se le due frazioni sono uguali (`==`: `-0.0` e `0.0`
+/// sono uguali).
 ///
 /// # Errors
 ///
@@ -550,8 +551,9 @@ pub fn line_substring(
     let Some(start) = protetto(|| Euclidean.point_at_ratio_from_start(line, start_ratio))? else {
         return Ok(None);
     };
-    // Uguaglianza esatta intenzionale: rapporti uguali per bit definiscono
-    // il caso degenere (punto), senza tolleranze implicite.
+    // Uguaglianza esatta intenzionale: rapporti uguali come numeri (`==`,
+    // quindi `-0.0 == 0.0`) definiscono il caso degenere (punto), senza
+    // tolleranze implicite.
     #[allow(clippy::float_cmp)]
     if start_ratio == end_ratio {
         return Ok(Some(Geometry::Point(start)));

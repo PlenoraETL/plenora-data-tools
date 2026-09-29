@@ -1006,8 +1006,8 @@ const fn default_true() -> bool {
 /// - `Schema`: numero di colonne, nomi o tipi non identici tra i due batch,
 ///   metadati di schema in conflitto;
 /// - `ResourceLimit`: overflow nel conteggio delle righe, righe totali oltre
-///   `max_rows` o uscita stimata oltre `max_governed_memory_bytes`; propaga
-///   inoltre gli errori Arrow di concatenazione.
+///   `max_rows` o uscita stimata oltre `max_governed_memory_bytes`;
+/// - `DataMapping` (`arrow error: …`): errori Arrow di concatenazione.
 pub fn concat(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1170,7 +1170,7 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
 ///   oltre `max_governed_memory_bytes`;
 /// - `Schema`: con `strict` schemi non identici, tipi incompatibili per
 ///   una stessa colonna (nessun cast), metadati di schema in conflitto;
-///   propaga inoltre gli errori Arrow di concatenazione.
+/// - `DataMapping` (`arrow error: …`): errori Arrow di concatenazione.
 pub fn concat_by_name(
     inputs: &[&RecordBatch],
     config: &ConcatByName,
@@ -1507,8 +1507,9 @@ fn membership_range(
 /// - `InvalidPlan`: chiavi vuote o cardinalita' diversa tra i due lati;
 /// - `Schema`: colonna chiave assente, tipi Arrow delle chiavi non
 ///   identici, cella chiave senza testo (date32/timestamp fuori intervallo,
-///   dizionario malformato); inoltre gli errori di `select_rows`
-///   sull'output.
+///   dizionario malformato);
+/// - `ResourceLimit`, `DataMapping` (`arrow error: …`): gli errori di `select_rows`
+///   sull'output (indice oltre `u32::MAX`, errore Arrow della `take`).
 pub fn semi_join(
     left: &RecordBatch,
     right: &RecordBatch,

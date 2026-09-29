@@ -26,7 +26,8 @@ del contratto (`sorted_by`, `row_count`) restano.
 
 1:1. Il kernel (`extended_algorithms::line_substring`) riceve una
 `LineString`, rende una `LineString`, un `Point` se `start_ratio` e
-`end_ratio` sono uguali (confronto per bit), e nessuna geometria se la linea
+`end_ratio` sono uguali (confronto numerico `==`: `-0.0` e `0.0` sono
+uguali), e nessuna geometria se la linea
 è vuota. Il runner non esegue ancora le operazioni geo ([README, «Che cosa
 non c'è ancora»](../README.md#che-cosa-non-cè-ancora)): che cosa rendano una
 cella nulla, una linea vuota e una riga di altro tipo (anche
