@@ -8,6 +8,12 @@ publish.workspace = true
 
 [dependencies]
 plenora-core.workspace = true
+# La lettura delle chiavi di `geo.collect` come testo: l'analisi rifiuta i
+# tipi che `scalar_as_string` non converte con la stessa funzione dei kernel
+# tabellari (`validate_text_convertible`), invece di una seconda copia della
+# regola. Crate del workspace (dipende solo da plenora-core), nessun
+# pacchetto nuovo.
+plenora-kernels-table.workspace = true
 geo.workspace = true
 geozero.workspace = true
 wkt.workspace = true

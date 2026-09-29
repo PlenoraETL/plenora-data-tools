@@ -842,6 +842,7 @@ dependencies = [
  "geozero",
  "log",
  "plenora-core",
+ "plenora-kernels-table",
  "proptest",
  "rayon",
  "rstar",

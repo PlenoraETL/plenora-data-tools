@@ -176,13 +176,14 @@ pub(in crate::analyze) fn validate_other_wkb_domain(
     op: &str,
     hex: &str,
     input: &DataContract,
-) -> Result<()> {
+) -> Result<geo::Geometry<f64>> {
     let crs = input_crs(op, input)?;
     let bytes = validate_wkb_hex(op, "other_wkb", hex)?;
     let geometry = crate::geometry_from_wkb(&bytes).map_err(|error| {
         parametro_non_decodificabile(op, "other_wkb", "WKB non decodificabile", &error)
     })?;
-    validate_config_geometry_domain(op, "other_wkb", &geometry, crs)
+    validate_config_geometry_domain(op, "other_wkb", &geometry, crs)?;
+    Ok(geometry)
 }
 
 /// Il CRS risolto della colonna geometria dell'input, per le geometrie che

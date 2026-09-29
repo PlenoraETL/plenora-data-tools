@@ -718,3 +718,105 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
     ];
     comune_geo::stessa_validazione(&casi);
 }
+
+/// Le chiavi di `collect` devono leggersi come testo: il tipo si decide
+/// dallo schema e si rifiuta in validazione, anche su una tabella vuota.
+#[test]
+fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
+    use plenora_core::arrow::array::{
+        Int32Array, StringViewArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    };
+    use plenora_core::arrow::schema::TimeUnit;
+
+    let geometrie_in = punti();
+    let righe = geometrie_in.num_rows();
+    let con_chiave = |campo: Field, colonna: ArrayRef| {
+        let mut campi: Vec<Field> = geometrie_in
+            .schema()
+            .fields()
+            .iter()
+            .map(|c| c.as_ref().clone())
+            .collect();
+        campi.push(campo);
+        let mut colonne = geometrie_in.columns().to_vec();
+        colonne.push(colonna);
+        RecordBatch::try_new(Arc::new(Schema::new(campi)), colonne).unwrap()
+    };
+    let millisecondi = |fuso: &str| {
+        con_chiave(
+            Field::new(
+                "k",
+                DataType::Timestamp(TimeUnit::Millisecond, Some(fuso.into())),
+                true,
+            ),
+            Arc::new(TimestampMillisecondArray::from(vec![Some(0_i64); righe]).with_timezone(fuso)),
+        )
+    };
+    let rifiutate = [
+        con_chiave(
+            Field::new("k", DataType::Int32, true),
+            Arc::new(Int32Array::from(vec![Some(1); righe])),
+        ),
+        con_chiave(
+            Field::new("k", DataType::Utf8View, true),
+            Arc::new(StringViewArray::from(vec![Some("a"); righe])),
+        ),
+        con_chiave(
+            Field::new("k", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Arc::new(TimestampNanosecondArray::from(vec![Some(0_i64); righe])),
+        ),
+        millisecondi("Fuso/Inesistente"),
+    ];
+    for tabella_chiave in rifiutate {
+        let tipo = tabella_chiave
+            .schema()
+            .field_with_name("k")
+            .unwrap()
+            .data_type()
+            .clone();
+        let config = json!({"group_by": ["k"]});
+        let analizzata = comune_geo::analisi(
+            "geo.collect",
+            std::slice::from_ref(&tabella_chiave),
+            &config,
+            None,
+        )
+        .expect_err("l'analisi rifiuta");
+        // Anche vuota: la validazione non guarda i dati.
+        let vuota = tabella_chiave.slice(0, 0);
+        let errore = un_passo("geo.collect", config, &[vuota]).expect_err("rifiutata");
+        assert!(
+            comune_geo::stesso_errore(&errore, &analizzata),
+            "{tipo}: {errore} / {analizzata}"
+        );
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::InvalidPlan,
+            "{tipo}: {errore}"
+        );
+    }
+    // Tipi leggibili come testo: accettati, vuota o no.
+    let accettate = [
+        millisecondi("Europe/Rome"),
+        con_chiave(
+            Field::new("k", DataType::Int64, true),
+            Arc::new(Int64Array::from(vec![Some(7); righe])),
+        ),
+    ];
+    for tabella_chiave in accettate {
+        let piena = un_passo(
+            "geo.collect",
+            json!({"group_by": ["k"]}),
+            std::slice::from_ref(&tabella_chiave),
+        )
+        .unwrap();
+        assert_eq!(piena.num_rows(), 1);
+        let vuota = un_passo(
+            "geo.collect",
+            json!({"group_by": ["k"]}),
+            &[tabella_chiave.slice(0, 0)],
+        )
+        .unwrap();
+        assert_eq!(vuota.num_rows(), 0);
+    }
+}

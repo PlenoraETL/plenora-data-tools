@@ -377,6 +377,16 @@ pub(in crate::analyze) fn analyze_collect(
         if extra.iter().any(|seen| seen.name() == name) {
             return Err(invalid_param(op, "group_by", "colonne duplicate"));
         }
+        // Le chiavi si leggono come testo (`scalar_as_string` dei kernel
+        // tabellari): un tipo che non lo e' si rifiuta qui, non alla prima
+        // chiave non null.
+        plenora_kernels_table::validate_text_convertible(field.data_type(), name).map_err(
+            |errore| {
+                PlenoraError::InvalidPlan(format!(
+                    "{op}: parametro `group_by` non valido: {errore}"
+                ))
+            },
+        )?;
         // R2.4 identity-preserving: la colonna chiave sopravvive invariata —
         // si clona il `Field` intero, metadati compresi.
         extra.push(field.clone());

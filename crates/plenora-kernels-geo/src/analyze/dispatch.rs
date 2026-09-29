@@ -178,7 +178,25 @@ pub(in crate::analyze) fn analyze_unary_pair(
 ) -> Result<DataContract> {
     let parsed: OtherWkbConfig = parse_config(op, config)?;
     validate_other_wkb(op, &parsed.other_wkb)?;
-    super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
+    let other = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
+    // Il tipo che il kernel chiede al secondo operando: si decide dalla
+    // config, quindi qui, e non alla prima riga non null (che una tabella
+    // vuota o tutta null non avrebbe mai).
+    let atteso = match op {
+        "geo.frechet_distance" => Some((
+            "una LineString",
+            matches!(other, geo::Geometry::LineString(_)),
+        )),
+        "geo.haversine_distance" | "geo.geodesic_distance" | "geo.bearing" => {
+            Some(("un Point", matches!(other, geo::Geometry::Point(_))))
+        }
+        _ => None,
+    };
+    if let Some((tipo, false)) = atteso {
+        return Err(PlenoraError::InvalidPlan(format!(
+            "{op}: parametro `other_wkb` non valido: deve essere {tipo}"
+        )));
+    }
     let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
     analyze_add_column(op, input, name, data_type)
 }
@@ -370,7 +388,7 @@ fn analyze_unary_shape(
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             // La lama arriva dalla config nel CRS dell'input (D16): stesso
             // dominio del secondo operando di distanze e predicati.
-            super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
+            let _ = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
             analyze_expand(op, input)
         }
         "geo.voronoi" => {

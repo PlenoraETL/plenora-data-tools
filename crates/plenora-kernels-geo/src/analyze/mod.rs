@@ -382,6 +382,25 @@ mod tests {
         ])))
     }
 
+    /// Una `LineString` valida, per il secondo operando di
+    /// `frechet_distance`, che la chiede.
+    fn line_wkb_hex() -> String {
+        let wkb = Geometry::LineString(geo::LineString::from(vec![(1.0, 2.0), (3.0, 4.0)]))
+            .to_wkb(CoordDimensions::xy())
+            .expect("encode linea");
+        esadecimale(&wkb)
+    }
+
+    /// Il secondo operando valido di `op`: una linea per
+    /// `frechet_distance`, un punto per gli altri.
+    fn other_wkb_hex_for(op: &str) -> String {
+        if op == "geo.frechet_distance" {
+            line_wkb_hex()
+        } else {
+            point_wkb_hex()
+        }
+    }
+
     fn point_wkb_hex() -> String {
         let wkb = Geometry::Point(Point::new(1.0, 2.0))
             .to_wkb(CoordDimensions::xy())
@@ -462,7 +481,7 @@ mod tests {
         };
 
         for (op, parametro, base) in &parametri {
-            analizza(op, parametro, base, &point_wkb_hex())
+            analizza(op, parametro, base, &other_wkb_hex_for(op))
                 .unwrap_or_else(|errore| panic!("{op}: controllo con WKB valido: {errore}"));
 
             let atteso =
@@ -555,7 +574,7 @@ mod tests {
         let float_pair = |op: &'static str| {
             unary(
                 op,
-                other_wkb_config(),
+                json!({ "other_wkb": other_wkb_hex_for(op) }),
                 Expect::Appended(vec![float_column(short_id(op))]),
             )
         };

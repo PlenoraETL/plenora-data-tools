@@ -1012,3 +1012,56 @@ fn un_risultato_vuoto_in_una_colonna_non_nullable_e_un_errore() {
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert!(errore.to_string().contains("non ammette null"), "{errore}");
 }
+
+/// Il tipo della geometria `other_wkb` si decide dalla config: si rifiuta
+/// in validazione (analisi e runner insieme), anche su una tabella vuota o
+/// tutta null, che in esecuzione non arriverebbe mai al kernel.
+#[test]
+fn il_tipo_di_other_wkb_si_rifiuta_in_validazione() {
+    let punto_utm = Geometry::Point(Point::new(X0, Y0));
+    let linea_lonlat = Geometry::LineString(LineString::from(vec![(9.0, 45.0), (9.5, 45.5)]));
+    let poligono_lonlat = Geometry::Polygon(quadrato(9.0, 45.0, 0.1));
+    let vuota_utm = tabella(UTM, &[]);
+    let nulla_lonlat = tabella(LONLAT, &[None, None]);
+    let casi = [
+        ("geo.frechet_distance", punto_utm.clone(), linee()),
+        ("geo.frechet_distance", punto_utm, vuota_utm),
+        (
+            "geo.haversine_distance",
+            linea_lonlat.clone(),
+            punti_lonlat(),
+        ),
+        (
+            "geo.geodesic_distance",
+            poligono_lonlat.clone(),
+            nulla_lonlat.clone(),
+        ),
+        ("geo.bearing", linea_lonlat, nulla_lonlat),
+        ("geo.bearing", poligono_lonlat, tabella(LONLAT, &[])),
+    ];
+    for (op, altra, ingresso) in casi {
+        let config = json!({"other_wkb": esadecimale_di(&altra)});
+        let analizzata = analisi(op, std::slice::from_ref(&ingresso), &config, None)
+            .expect_err("l'analisi rifiuta il tipo");
+        let errore = un_passo(op, config, &[ingresso]).expect_err("la validazione rifiuta");
+        assert!(
+            stesso_errore(&errore, &analizzata),
+            "{op}: {errore} / {analizzata}"
+        );
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::InvalidPlan,
+            "{op}: {errore}"
+        );
+        assert!(errore.to_string().contains("other_wkb"), "{op}: {errore}");
+    }
+    // Il tipo giusto passa, anche su una tabella vuota.
+    let linea = Geometry::LineString(LineString::from(vec![(X0, Y0), (X0 + 1.0, Y0)]));
+    let uscita = un_passo(
+        "geo.frechet_distance",
+        json!({"other_wkb": esadecimale_di(&linea)}),
+        &[tabella(UTM, &[])],
+    )
+    .unwrap();
+    assert_eq!(uscita.num_rows(), 0);
+}

@@ -1081,14 +1081,22 @@ maggiore fra `max_input_rows` e `max_rows_per_edge` (come D14.6).
 `collect` ordina i gruppi per la chiave
 testuale di `190c493` (tipo, presenza e lunghezza di ogni valore, poi il
 valore): un ordine deterministico, non quello dei valori (`"pari"` prima
-di `"dispari"`).
+di `"dispari"`). Restano errori dei dati, in esecuzione, un `Binary` non
+UTF-8, una data o un istante fuori intervallo, una chiave di dizionario
+fuori dal dizionario.
 
 **Config.** Si legge una volta, in validazione, con i tipi dell'analisi
 (`plenora_kernels_geo::analyze::config`, pubblici per questo): nessuna
 seconda copia di nomi e default. Le geometrie della config (`other_wkb`,
 `point_wkb`, `reference_wkb`) si decodificano lì, già accettate
 dall'analisi, che per `other_wkb` ora verifica anche la validità OGC come
-per le altre due (un kernel l'avrebbe rifiutata alla prima riga). La
+per le altre due, e il tipo che il kernel chiede (`LineString` per
+`frechet_distance`; `Point` per `haversine_distance`,
+`geodesic_distance`, `bearing`): un kernel l'avrebbe rifiutata alla prima
+riga non null, e su una tabella vuota o tutta null mai. Allo stesso modo
+l'analisi di `collect` rifiuta le chiavi `group_by` che non si leggono come
+testo (`validate_text_convertible` dei kernel tabellari: tipo e fuso
+orario). La
 validazione rifiuta esattamente ciò che l'analisi rifiuta (test
 `la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta`); in più
 solo `Unsupported` per le operazioni senza dispatch.
