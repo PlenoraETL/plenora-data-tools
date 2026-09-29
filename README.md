@@ -398,8 +398,11 @@ let esito = validata.run(vec![("ordini".into(), tabella)])?;
 
 ### Il piano
 
-Una sola struttura serde, API Rust e JSON insieme; campi sconosciuti e
-chiavi ripetute sono rifiutati.
+In Rust il piano si costruisce con le strutture `Pipeline` e `Passo`; dal
+testo si legge solo con `Pipeline::from_json`, che rifiuta campi sconosciuti
+e chiavi ripetute a ogni profondità, config comprese. `Pipeline` non
+implementa `Deserialize`: una lettura serde diretta terrebbe in silenzio
+l'ultima di due chiavi ripetute.
 
 ```json
 {
@@ -436,13 +439,23 @@ chiavi ripetute sono rifiutati.
 
 ### Validazione
 
+**Regola**: ciò che schemi, config e limiti rendono prevedibile fallisce in
+`validate`, mai dopo che qualche passo ha girato.
+
 Prima di qualunque esecuzione, contro gli schemi degli input: nomi SSA;
-operazione, arietà e dispatch (`table.concat` a più di due input, le
-operazioni geo e quelle senza dispatch sono `Unsupported`); config
-tipizzate una volta; controlli statici delle config contro i limiti;
-contratti di output passo per passo con `analyze_table_contract`, un solo
-`FieldAllocator`, provenance delle diagnostiche per riga. `table.pivot` e
-`table.transpose` si rifiutano: il loro schema d'uscita dipende dai dati.
+limiti di complessità del piano (`PlanLimits::default()`: passi, input,
+archi, fan-out, profondità, byte di config per passo, lunghezza dei nomi,
+byte del testo JSON); operazione, arietà e dispatch (`table.concat` a più
+di due input, le operazioni geo e quelle senza dispatch sono
+`Unsupported`); config tipizzate una volta; controlli statici delle config
+contro i limiti; contratti di output passo per passo con
+`analyze_table_contract`, un solo `FieldAllocator`, provenance delle
+diagnostiche per riga; colonne di ogni input e di ogni contratto contro
+`max_columns`; controlli che dipendono da schema e config insieme (chiavi e
+`group_by` leggibili come testo, formati delle date scrivibili senza fuso,
+`explode` in place su List non nullabile, chiave HMAC presente
+nell'ambiente). `table.pivot` e `table.transpose` si rifiutano: il loro
+schema d'uscita dipende dai dati.
 
 ### Esecuzione
 
@@ -487,6 +500,17 @@ aggiungono nulla.
   li ripete e senza di essi alcune config passerebbero con un significato
   diverso da quello scritto. Il loro posto è l'analisi dei kernel; lì
   rientrano quando ci sono.
+- **Fallimenti prevedibili non ancora anticipati**: la regola della
+  validazione non copre ancora gli operatori ordinati di `filter` e
+  `conditional` su tipi che `scalar_compare` non accetta, `==`/`!=` su
+  colonne numeriche con valore non numerico in `conditional`, `amount` di
+  `date_add` fuori scala, arietà, regex letterali e `substring` negativi di
+  `expression`, colonne `order_column` non ordinabili (in correzione
+  nell'analisi dei kernel). Falliscono con un errore esplicito, ma durante
+  l'esecuzione. Rientro: predicati di tipo pubblici nei kernel, o gli stessi
+  controlli nell'analisi.
+- **Chiave HMAC controllata in validazione**: la variabile d'ambiente può
+  cambiare fra `validate` e `run`; in quel caso l'errore arriva al passo.
 - **Nome del passo negli errori**: aggiunto al messaggio conservando la
   categoria; gli errori con diagnostica per riga o già strutturati restano
   quelli del kernel.

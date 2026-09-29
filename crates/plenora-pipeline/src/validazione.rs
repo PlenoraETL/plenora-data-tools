@@ -24,7 +24,7 @@ use plenora_core::catalog::{
 use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::{resolve_crs, ResolvedCrs};
-use plenora_core::limits::Limits;
+use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::analyze::analyze_table_contract;
 
@@ -86,7 +86,10 @@ impl PipelineValidata {
 /// altrimenti non direbbe a quale passo appartiene. I nomi dei passi sono
 /// del piano, non dei dati.
 pub fn nel_passo(out: &str, errore: PlenoraError) -> PlenoraError {
-    let contesto = format!("passo `{out}`");
+    nel_passo_o_input(&format!("passo `{out}`"), errore)
+}
+
+fn nel_passo_o_input(contesto: &str, errore: PlenoraError) -> PlenoraError {
     match errore {
         PlenoraError::ResourceLimit(messaggio) => {
             PlenoraError::ResourceLimit(format!("{contesto}: {messaggio}"))
@@ -97,7 +100,7 @@ pub fn nel_passo(out: &str, errore: PlenoraError) -> PlenoraError {
         PlenoraError::DataMapping(messaggio) => {
             PlenoraError::DataMapping(format!("{contesto}: {messaggio}"))
         }
-        altro => altro.con_contesto(&contesto),
+        altro => altro.con_contesto(contesto),
     }
 }
 
@@ -177,11 +180,80 @@ fn verifica_arieta(descrittore: &OperationDescriptor, ricevuti: usize) -> Result
     }
 }
 
-fn verifica_nome(nome: &str, ruolo: &str) -> Result<()> {
+fn verifica_nome(nome: &str, ruolo: &str, limiti: &PlanLimits) -> Result<()> {
     if nome.is_empty() {
         return Err(PlenoraError::InvalidPlan(format!("{ruolo}: nome vuoto")));
     }
+    if nome.len() > limiti.max_identifier_bytes {
+        return Err(PlenoraError::InvalidPlan(format!(
+            "{ruolo}: nome di {} byte oltre max_identifier_bytes {}",
+            nome.len(),
+            limiti.max_identifier_bytes
+        )));
+    }
     Ok(())
+}
+
+/// Limiti di complessità del piano (`PlanLimits::default()`): passi, input,
+/// archi, fan-out, profondità, byte di config per passo. Il piano non li
+/// dichiara: sono i default del motore d'origine.
+fn verifica_limiti_del_piano(piano: &Pipeline, limiti: &PlanLimits) -> Result<()> {
+    let oltre = |nome: &str, valore: usize, massimo: usize| {
+        if valore > massimo {
+            Err(PlenoraError::InvalidPlan(format!(
+                "{nome}: {valore} oltre il limite {massimo}"
+            )))
+        } else {
+            Ok(())
+        }
+    };
+    oltre("max_inputs", piano.inputs.len(), limiti.max_inputs)?;
+    oltre("max_plan_nodes", piano.steps.len(), limiti.max_plan_nodes)?;
+    let archi = piano.steps.iter().map(|passo| passo.inputs.len()).sum();
+    oltre("max_plan_edges", archi, limiti.max_plan_edges)?;
+    let mut consumatori: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut profondita: BTreeMap<&str, usize> = BTreeMap::new();
+    for passo in &piano.steps {
+        let byte_config = serde_json::to_vec(&passo.config)
+            .map_err(|_| PlenoraError::InvalidPlan("config non serializzabile".to_owned()))?
+            .len();
+        oltre(
+            &format!("passo `{}`: max_config_bytes_per_node", passo.out),
+            byte_config,
+            limiti.max_config_bytes_per_node,
+        )?;
+        let mut livello = 0;
+        for sorgente in &passo.inputs {
+            let uso = consumatori.entry(sorgente).or_insert(0);
+            *uso += 1;
+            oltre(
+                &format!("`{sorgente}`: max_fan_out"),
+                *uso,
+                limiti.max_fan_out,
+            )?;
+            livello = livello.max(profondita.get(sorgente.as_str()).copied().unwrap_or(0));
+        }
+        let livello = livello + 1;
+        oltre(
+            &format!("passo `{}`: max_plan_depth", passo.out),
+            livello,
+            limiti.max_plan_depth,
+        )?;
+        profondita.insert(&passo.out, livello);
+    }
+    Ok(())
+}
+
+/// Colonne di un contratto contro `max_columns` dei kernel e regole del
+/// contratto (nomi unici): prevedibile dallo schema, quindi in validazione.
+fn verifica_colonne(contratto: &DataContract, massimo: usize) -> Result<()> {
+    let colonne = contratto.schema.fields().len();
+    if colonne > massimo {
+        return Err(PlenoraError::ResourceLimit(format!(
+            "schema con {colonne} colonne oltre il limite {massimo}"
+        )));
+    }
+    contratto.validate()
 }
 
 impl Pipeline {
@@ -192,7 +264,9 @@ impl Pipeline {
     ///
     /// # Errors
     ///
-    /// - `InvalidPlan`: versione diversa da 1, limiti non validi, nomi non
+    /// - `InvalidPlan`: versione diversa da 1, limiti non validi, piano oltre
+    ///   `PlanLimits::default()` (passi, input, archi, fan-out, profondità,
+    ///   byte di config, lunghezza dei nomi), nomi non
     ///   SSA (ridefiniti, usati prima della definizione, output inesistenti o
     ///   ripetuti), alias legacy al posto dell'id canonico, arietà errata,
     ///   config non valida, `sorted_by` su un input, provenance per riga
@@ -201,6 +275,8 @@ impl Pipeline {
     ///   del runner), `table.concat` con più di due input, schema di output
     ///   non inferibile senza i dati;
     /// - `Schema`: contratti di input o inferiti che violano le regole;
+    /// - `ResourceLimit`: schema di un input o di un passo oltre le colonne
+    ///   ammesse dai kernel;
     /// - `Crs`: CRS di piano non risolvibile.
     #[allow(clippy::too_many_lines)] // Passi sequenziali della validazione: spezzarli nuocerebbe alla lettura.
     pub fn validate(&self, schemas: &[(&str, SchemaRef)]) -> Result<PipelineValidata> {
@@ -213,12 +289,13 @@ impl Pipeline {
         // Senza sostituzioni restano i default, validati allo stesso modo.
         let limiti = self.limits.clone().unwrap_or_default().applica()?;
         let limiti_kernel = limiti_dei_kernel_tabellari(&limiti)?;
+        let limiti_piano = PlanLimits::default();
 
         // Nomi SSA: ogni nome definito una volta, fra input e `out` dei
         // passi; un passo usa solo nomi definiti prima.
         let mut definiti: BTreeSet<&str> = BTreeSet::new();
         for nome in &self.inputs {
-            verifica_nome(nome, "input")?;
+            verifica_nome(nome, "input", &limiti_piano)?;
             if !definiti.insert(nome.as_str()) {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "input `{nome}` dichiarato due volte"
@@ -226,7 +303,7 @@ impl Pipeline {
             }
         }
         for passo in &self.steps {
-            verifica_nome(&passo.out, "passo")?;
+            verifica_nome(&passo.out, "passo", &limiti_piano)?;
             for sorgente in &passo.inputs {
                 if !definiti.contains(sorgente.as_str()) {
                     return Err(PlenoraError::InvalidPlan(format!(
@@ -260,6 +337,8 @@ impl Pipeline {
                 )));
             }
         }
+
+        verifica_limiti_del_piano(self, &limiti_piano)?;
 
         // Schemi di input: corrispondenza esatta con i nomi dichiarati.
         let mut forniti: BTreeMap<&str, &SchemaRef> = BTreeMap::new();
@@ -327,6 +406,8 @@ impl Pipeline {
                 }
                 geometria.field_id = rimappato;
             }
+            verifica_colonne(&letto, limiti_kernel.max_columns)
+                .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;
             schemi_input.insert(nome.clone(), normalizzato);
             contratti.insert(nome.clone(), letto);
             provenance.insert(nome.clone(), true);
@@ -399,6 +480,11 @@ impl Pipeline {
             let uscita =
                 analyze_table_contract(descrittore.id, &ingressi, &passo.config, &mut campi)
                     .map_err(|errore| nel_passo(&passo.out, errore))?;
+            preparato
+                .verifica_con_schema(&ingressi, &limiti_kernel)
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
+            verifica_colonne(&uscita, limiti_kernel.max_columns)
+                .map_err(|errore| nel_passo(&passo.out, errore))?;
             contratti.insert(passo.out.clone(), uscita);
             provenance.insert(
                 passo.out.clone(),

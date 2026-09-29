@@ -11,6 +11,10 @@ plenora-core.workspace = true
 plenora-kernels-table.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Gia' pinnata nel workspace (la usano i kernel): serve a provare in
+# validazione che un formato d'uscita delle date si possa scrivere da una data
+# senza fuso, invece di scoprirlo con un panico del kernel alla prima riga.
+chrono.workspace = true
 
 [lints]
 workspace = true

@@ -14,9 +14,12 @@
 
 use std::collections::HashSet;
 
+use plenora_core::arrow::schema::{DataType, Field};
+use plenora_core::contract::DataContract;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::{
-    aggregation, cleansing, dates, fuzzy, strings, validate_output_name, Limits,
+    aggregation, cleansing, dates, filtering, fuzzy, reshape, strings, validate_output_name,
+    validate_text_convertible, Limits,
 };
 
 use crate::dispatch::PassoPreparato;
@@ -683,6 +686,253 @@ impl PassoPreparato {
                 validate_name_list(&config.left_keys, limits.max_columns, "diff left", false)?;
                 validate_name_list(&config.right_keys, limits.max_columns, "diff right", false)
             }
+        }
+    }
+}
+
+/// Campo di un contratto per nome; dopo l'analisi le colonne esistono, e
+/// un'assenza qui è un difetto del runner.
+fn campo<'a>(contratto: &'a DataContract, nome: &str) -> Result<&'a Field> {
+    contratto
+        .schema
+        .field_with_name(nome)
+        .map_err(|_| PlenoraError::Internal(format!("colonna `{nome}` assente dopo l'analisi")))
+}
+
+/// La colonna deve essere leggibile come scalare testuale: è il percorso che
+/// il kernel prende, e un tipo che non lo è fallirebbe alla prima cella non
+/// nulla.
+fn testuale(contratto: &DataContract, nome: &str, ruolo: &str) -> Result<()> {
+    let campo = campo(contratto, nome)?;
+    validate_text_convertible(campo.data_type(), nome)
+        .map_err(|errore| PlenoraError::InvalidPlan(format!("{ruolo}: {errore}")))
+}
+
+fn testuali<'a>(
+    contratto: &DataContract,
+    nomi: impl IntoIterator<Item = &'a String>,
+    ruolo: &str,
+) -> Result<()> {
+    nomi.into_iter()
+        .try_for_each(|nome| testuale(contratto, nome, ruolo))
+}
+
+/// Un formato d'uscita scritto da una data senza fuso: `%z`, `%Z` e simili
+/// fanno fallire la scrittura, e il kernel va in panico alla prima riga.
+/// Si prova qui, scrivendo una data fissa.
+fn formato_senza_fuso(formato: &str, etichetta: &str) -> Result<()> {
+    use std::fmt::Write as _;
+    let data = chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
+        .and_then(|giorno| giorno.and_hms_opt(0, 0, 0))
+        .ok_or_else(|| PlenoraError::Internal("data di prova non costruibile".to_owned()))?;
+    let mut uscita = String::new();
+    write!(uscita, "{}", data.format(formato)).map_err(|_| {
+        PlenoraError::InvalidPlan(format!(
+            "{etichetta} non scrivibile da una data senza fuso (per esempio %z, %Z)"
+        ))
+    })
+}
+
+/// Gli operatori che il kernel valuta come testo richiedono una colonna
+/// leggibile come scalare testuale: `==`/`!=` fuori da Int64 e Float64,
+/// `contains`, `startswith`, `endswith`. Gli operatori ordinati passano da
+/// `scalar_compare`, senza un predicato pubblico: restano un limite
+/// dichiarato.
+fn verifica_operatore(
+    contratto: &DataContract,
+    colonna: &str,
+    operatore: &filtering::Operator,
+) -> Result<()> {
+    let tipo = campo(contratto, colonna)?.data_type();
+    let testo = match operatore {
+        filtering::Operator::Eq | filtering::Operator::Ne => {
+            !matches!(tipo, DataType::Int64 | DataType::Float64)
+        }
+        filtering::Operator::Contains
+        | filtering::Operator::Startswith
+        | filtering::Operator::Endswith => true,
+        _ => false,
+    };
+    if testo {
+        testuale(contratto, colonna, "confronto testuale")?;
+    }
+    Ok(())
+}
+
+impl PassoPreparato {
+    /// Controlli che dipendono dagli schemi d'ingresso e dalla config, fatti
+    /// dopo l'analisi: condizioni per cui il kernel fallirebbe comunque, su
+    /// qualunque dato non vuoto. Regola del runner: tutto ciò che schemi e
+    /// config rendono prevedibile fallisce in validazione, mai dopo che
+    /// qualche passo ha girato.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` o `Unsupported` per la condizione trovata;
+    /// `ResourceLimit` per colonne oltre il limite; `Internal` se una colonna
+    /// validata manca.
+    #[allow(clippy::too_many_lines)] // Un braccio per famiglia di controllo.
+    pub fn verifica_con_schema(&self, ingressi: &[DataContract], limits: &Limits) -> Result<()> {
+        let (primo, secondo) = match ingressi {
+            [primo] => (primo, None),
+            [primo, secondo] => (primo, Some(secondo)),
+            _ => {
+                return Err(PlenoraError::Internal(
+                    "arieta' diversa da quella validata".to_owned(),
+                ))
+            }
+        };
+        let destro = || {
+            secondo.ok_or_else(|| {
+                PlenoraError::Internal("passo binario senza secondo input".to_owned())
+            })
+        };
+        match self {
+            Self::Explode(config) => {
+                if matches!(config.empty_policy, reshape::EmptyListPolicy::Drop) {
+                    return Err(PlenoraError::InvalidPlan(
+                        "explode.empty_policy=drop non e' ammessa: usare un passo esplicito di \
+                         selezione"
+                            .to_owned(),
+                    ));
+                }
+                let in_place = config
+                    .output_column
+                    .as_deref()
+                    .is_none_or(|uscita| uscita == config.column);
+                if in_place && !campo(primo, &config.column)?.is_nullable() {
+                    // Difetto del kernel (`select_rows_except` lascia un
+                    // segnaposto nullo sotto lo schema d'ingresso): fallirebbe
+                    // su ogni input non vuoto.
+                    return Err(PlenoraError::Unsupported(
+                        "explode in place su una colonna List non nullabile: usare un \
+                         output_column diverso"
+                            .to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::DateExtract(config) => config.date_format.as_deref().map_or(Ok(()), |formato| {
+                dates::validate_format(formato, "date_format", limits.max_string_bytes)
+            }),
+            Self::TypeCast(config) => {
+                let usa_il_formato = matches!(
+                    config.target_type,
+                    cleansing::TargetType::Date
+                        | cleansing::TargetType::Datetime
+                        | cleansing::TargetType::Date32
+                        | cleansing::TargetType::TimestampMillis
+                );
+                if config.date_format.is_empty() {
+                    Ok(())
+                } else if usa_il_formato {
+                    dates::validate_format(
+                        &config.date_format,
+                        "date_format",
+                        limits.max_string_bytes,
+                    )
+                } else {
+                    Err(PlenoraError::InvalidPlan(
+                        "date_format ammesso solo per i target data e timestamp".to_owned(),
+                    ))
+                }
+            }
+            Self::DateFormat(config) => formato_senza_fuso(&config.output_format, "output_format"),
+            Self::DateAdd(config) => formato_senza_fuso(&config.output_format, "output_format"),
+            Self::Aggregate(config) => testuali(primo, &config.group_by, "aggregate.group_by"),
+            Self::WindowFunction(config) => {
+                testuali(primo, &config.group_by, "window_function.group_by")
+            }
+            Self::RollingWindow(config) => {
+                testuali(primo, &config.group_by, "rolling_window.group_by")
+            }
+            Self::Statistics(config) => testuali(primo, &config.group_by, "statistics.group_by"),
+            Self::Distinct(config) => {
+                if config.subset.is_empty() {
+                    // Senza subset la chiave e' la riga intera.
+                    let tutte: Vec<String> = primo
+                        .schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().clone())
+                        .collect();
+                    testuali(primo, &tutte, "distinct")
+                } else {
+                    testuali(primo, &config.subset, "distinct.subset")
+                }
+            }
+            Self::Filter(config) => verifica_operatore(primo, &config.column, &config.operator),
+            Self::Conditional(config) => config.conditions.iter().try_for_each(|condizione| {
+                verifica_operatore(primo, &config.column, &condizione.operator)
+            }),
+            Self::Join(config) => {
+                testuali(primo, &config.left_keys, "join.left_keys")?;
+                testuali(destro()?, &config.right_keys, "join.right_keys")
+            }
+            Self::SemiJoin(config) | Self::AntiJoin(config) => {
+                testuali(primo, &config.left_keys, "left_keys")?;
+                testuali(destro()?, &config.right_keys, "right_keys")
+            }
+            Self::AsOfJoin(config) => {
+                testuali(primo, &config.left_by, "asof_join.left_by")?;
+                testuali(destro()?, &config.right_by, "asof_join.right_by")
+            }
+            Self::TableDiff(config) => {
+                testuali(primo, &config.left_keys, "table_diff.left_keys")?;
+                testuali(destro()?, &config.right_keys, "table_diff.right_keys")?;
+                testuali(primo, &config.compare_columns, "table_diff.compare_columns")?;
+                testuali(
+                    destro()?,
+                    &config.compare_columns,
+                    "table_diff.compare_columns",
+                )
+            }
+            Self::AssertForeignKey(config) => {
+                testuali(primo, &config.left_keys, "assert_foreign_key.left_keys")?;
+                testuali(
+                    destro()?,
+                    &config.right_keys,
+                    "assert_foreign_key.right_keys",
+                )
+            }
+            Self::Reconcile(config) => {
+                testuali(primo, &config.left_keys, "reconcile.left_keys")?;
+                testuali(destro()?, &config.right_keys, "reconcile.right_keys")
+            }
+            Self::StableFingerprint(config) => {
+                if config.columns.is_empty() && primo.schema.fields().is_empty() {
+                    return Err(PlenoraError::InvalidPlan(
+                        "stable_fingerprint richiede almeno una colonna".to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::FlattenJson(config) => {
+                let colonne = primo
+                    .schema
+                    .fields()
+                    .len()
+                    .saturating_add(config.output_columns.len());
+                if colonne > limits.max_columns {
+                    return Err(PlenoraError::ResourceLimit(
+                        "flatten_json supera max_columns".to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::HmacSha256(config) => {
+                // Dipende dall'ambiente, non dal piano: si controlla qui
+                // perche' l'errore non arrivi dopo i passi a monte. La
+                // variabile puo' ancora cambiare fra validazione ed
+                // esecuzione (README, «Runner»).
+                match std::env::var_os(&config.key_env) {
+                    Some(valore) if !valore.is_empty() => Ok(()),
+                    _ => Err(PlenoraError::InvalidPlan(
+                        "hmac_sha256: chiave HMAC non disponibile".to_owned(),
+                    )),
+                }
+            }
+            _ => Ok(()),
         }
     }
 }

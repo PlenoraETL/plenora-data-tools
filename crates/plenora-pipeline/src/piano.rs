@@ -1,11 +1,18 @@
-//! Il piano: una sola struttura serde, API Rust e formato JSON insieme.
+//! Il piano: una struttura per l'API Rust, letta dal JSON solo da
+//! [`Pipeline::from_json`].
+//!
+//! `Pipeline` e `Passo` non implementano `Deserialize`: la config è un
+//! `serde_json::Value`, e una deserializzazione serde diretta terrebbe in
+//! silenzio l'ultima di due chiavi ripetute. L'unica lettura dal testo passa
+//! dal controllo dei duplicati, a ogni profondità; il modello serde privato
+//! ([`modello`]) esiste solo per lei.
 //!
 //! Il piano è in forma SSA: ogni nome è definito una volta sola, fra gli
 //! `inputs` e le `out` dei passi, e un passo usa solo nomi definiti prima.
 //! La forma è controllata da [`Pipeline::validate`](crate::Pipeline::validate),
 //! non qui: questo modulo legge e basta.
 
-use plenora_core::limits::Limits;
+use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,8 +29,7 @@ pub const VERSIONE_PIANO: u32 = 1;
 ///             "config": {"columns": ["id"]}}],
 ///  "outputs": ["ordinati"]}
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Pipeline {
     /// Versione del formato: solo [`VERSIONE_PIANO`].
     pub version: u32,
@@ -44,8 +50,7 @@ pub struct Pipeline {
 }
 
 /// Un passo: un'operazione del catalogo applicata a tabelle già definite.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Passo {
     /// Nome della tabella prodotta.
     pub out: String,
@@ -54,13 +59,45 @@ pub struct Passo {
     /// Tabelle in ingresso, nell'ordine dell'operazione (left, right).
     #[serde(rename = "in")]
     pub inputs: Vec<String>,
-    /// Config dell'operazione; assente vale `{}`.
-    #[serde(default = "config_vuota")]
+    /// Config dell'operazione; nel JSON, assente vale `{}`.
     pub config: Value,
 }
 
-fn config_vuota() -> Value {
-    Value::Object(serde_json::Map::new())
+/// Modello serde del testo JSON, privato: lo usa solo
+/// [`Pipeline::from_json`], dopo il controllo delle chiavi ripetute.
+mod modello {
+    use serde::Deserialize;
+    use serde_json::Value;
+
+    use super::LimitiParziali;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct PipelineJson {
+        pub(super) version: u32,
+        pub(super) inputs: Vec<String>,
+        #[serde(default)]
+        pub(super) crs: Option<String>,
+        #[serde(default)]
+        pub(super) limits: Option<LimitiParziali>,
+        pub(super) steps: Vec<PassoJson>,
+        pub(super) outputs: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct PassoJson {
+        pub(super) out: String,
+        pub(super) op: String,
+        #[serde(rename = "in")]
+        pub(super) inputs: Vec<String>,
+        #[serde(default = "config_vuota")]
+        pub(super) config: Value,
+    }
+
+    fn config_vuota() -> Value {
+        Value::Object(serde_json::Map::new())
+    }
 }
 
 /// Sostituzione parziale dei limiti: ogni campo presente sostituisce il
@@ -144,11 +181,41 @@ impl Pipeline {
     ///
     /// # Errors
     ///
-    /// `InvalidPlan` per chiavi duplicate, campi sconosciuti o forma non
-    /// valida; la versione si controlla in validazione.
+    /// `InvalidPlan` per testo oltre `max_plan_json_bytes`, chiavi duplicate
+    /// a qualunque profondità, campi sconosciuti o forma non valida; la
+    /// versione si controlla in validazione.
+    ///
+    /// ```compile_fail
+    /// // Nessuna scorciatoia serde: la lettura passa da `from_json`.
+    /// let _: plenora_pipeline::Pipeline = serde_json::from_str("{}").unwrap();
+    /// ```
     pub fn from_json(testo: &str) -> Result<Self> {
+        let massimo = PlanLimits::default().max_plan_json_bytes;
+        if testo.len() > massimo {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "piano di {} byte oltre max_plan_json_bytes {massimo}",
+                testo.len()
+            )));
+        }
         plenora_core::json::ensure_no_duplicate_keys(testo)?;
-        serde_json::from_str(testo)
-            .map_err(|errore| PlenoraError::InvalidPlan(format!("piano non valido: {errore}")))
+        let letto: modello::PipelineJson = serde_json::from_str(testo)
+            .map_err(|errore| PlenoraError::InvalidPlan(format!("piano non valido: {errore}")))?;
+        Ok(Self {
+            version: letto.version,
+            inputs: letto.inputs,
+            crs: letto.crs,
+            limits: letto.limits,
+            steps: letto
+                .steps
+                .into_iter()
+                .map(|passo| Passo {
+                    out: passo.out,
+                    op: passo.op,
+                    inputs: passo.inputs,
+                    config: passo.config,
+                })
+                .collect(),
+            outputs: letto.outputs,
+        })
     }
 }

@@ -16,7 +16,7 @@ use plenora_kernels_table::analyze::analyze_table_contract;
 use plenora_pipeline::{Passo, Pipeline, PipelineValidata};
 use serde_json::{json, Value};
 
-use comune::{nomi_input, tabelle, wide, CASI};
+use comune::{nested, nomi_input, tabelle, wide, CASI};
 
 fn passo(out: &str, op: &str, inputs: &[&str], config: Value) -> Passo {
     Passo {
@@ -70,6 +70,8 @@ fn ogni_operazione_tabellare_del_catalogo_ha_un_caso() {
 
 #[test]
 fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
+    // hmac_sha256 controlla in validazione che la chiave sia disponibile.
+    std::env::set_var(comune::CHIAVE_HMAC, "chiave-di-test-del-runner");
     let mut rifiutate = Vec::new();
     for caso in CASI {
         let config: Value = serde_json::from_str(caso.config).expect("config del caso");
@@ -484,5 +486,233 @@ fn i_contratti_di_una_catena_lunga_sono_quelli_dell_analisi_passo_per_passo() {
     for (nome, atteso) in &attesi {
         let ottenuto = validata.contratto(nome).expect("contratto del runner");
         assert_eq!(format!("{ottenuto:?}"), format!("{atteso:?}"), "{nome}");
+    }
+}
+
+#[test]
+fn le_chiavi_ripetute_si_rifiutano_a_ogni_profondita_della_config() {
+    let testo = r#"{"version":1,"inputs":["t"],"steps":[{"out":"a","op":"table.sort",
+        "in":["t"],"config":{"columns":["id"],"ascending":true,"ascending":false}}],
+        "outputs":["a"]}"#;
+    assert!(matches!(
+        Pipeline::from_json(testo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+}
+
+fn schema_largo(colonne: usize) -> SchemaRef {
+    std::sync::Arc::new(plenora_core::arrow::schema::Schema::new(
+        (0..colonne)
+            .map(|indice| {
+                plenora_core::arrow::schema::Field::new(
+                    format!("c{indice}"),
+                    plenora_core::arrow::schema::DataType::Int64,
+                    false,
+                )
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+#[test]
+fn le_colonne_oltre_il_limite_si_rifiutano_in_validazione() {
+    let massimo = plenora_kernels_table::limiti_interni::MAX_COLUMNS;
+    // Input al limite: una rinomina passa, una colonna in piu' no. Prima
+    // l'errore arrivava dopo due passi eseguiti.
+    let pipeline = piano(
+        &["t"],
+        vec![
+            passo(
+                "rinominata",
+                "table.rename",
+                &["t"],
+                json!({"renames": [{"old_name": "c0", "new_name": "zero"}]}),
+            ),
+            passo(
+                "numerata",
+                "table.add_row_number",
+                &["rinominata"],
+                json!({"output_column": "riga"}),
+            ),
+        ],
+        &["numerata"],
+    );
+    let Err(PlenoraError::ResourceLimit(messaggio)) =
+        pipeline.validate(&[("t", schema_largo(massimo))])
+    else {
+        panic!("oltre max_columns si rifiuta in validazione");
+    };
+    assert!(messaggio.contains("numerata"), "{messaggio}");
+
+    let solo_input = piano(&["t"], vec![], &["t"]);
+    assert!(matches!(
+        solo_input.validate(&[("t", schema_largo(massimo + 1))]),
+        Err(PlenoraError::ResourceLimit(_))
+    ));
+    assert!(solo_input.validate(&[("t", schema_largo(massimo))]).is_ok());
+}
+
+#[test]
+fn i_limiti_di_complessita_del_piano_si_applicano() {
+    let limiti = plenora_core::limits::PlanLimits::default();
+    let catena = |lunghezza: usize| {
+        let passi: Vec<Passo> = (0..lunghezza)
+            .map(|indice| {
+                let sorgente = if indice == 0 {
+                    "t".to_owned()
+                } else {
+                    format!("p{}", indice - 1)
+                };
+                passo(
+                    &format!("p{indice}"),
+                    "table.limit",
+                    &[&sorgente],
+                    json!({"n": 1}),
+                )
+            })
+            .collect();
+        let ultimo = format!("p{}", lunghezza - 1);
+        piano(&["t"], passi, &[&ultimo])
+    };
+    assert!(valida_wide(&catena(limiti.max_plan_depth)).is_ok());
+    assert!(matches!(
+        valida_wide(&catena(limiti.max_plan_depth + 1)),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+
+    let ventaglio = |consumatori: usize| {
+        let passi: Vec<Passo> = (0..consumatori)
+            .map(|indice| {
+                passo(
+                    &format!("f{indice}"),
+                    "table.limit",
+                    &["t"],
+                    json!({"n": 1}),
+                )
+            })
+            .collect();
+        piano(&["t"], passi, &["f0"])
+    };
+    assert!(valida_wide(&ventaglio(limiti.max_fan_out)).is_ok());
+    assert!(matches!(
+        valida_wide(&ventaglio(limiti.max_fan_out + 1)),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+
+    let nome_lungo = "n".repeat(limiti.max_identifier_bytes + 1);
+    let con_nome_lungo = piano(
+        &["t"],
+        vec![passo(&nome_lungo, "table.limit", &["t"], json!({"n": 1}))],
+        &[&nome_lungo],
+    );
+    assert!(matches!(
+        valida_wide(&con_nome_lungo),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+
+    let config_grande = piano(
+        &["t"],
+        vec![passo(
+            "a",
+            "table.lookup",
+            &["t"],
+            json!({"column": "name", "mapping": {"a": "x".repeat(limiti.max_config_bytes_per_node)}}),
+        )],
+        &["a"],
+    );
+    assert!(matches!(
+        valida_wide(&config_grande),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+
+    let troppi_input: Vec<String> = (0..=limiti.max_inputs).map(|i| format!("i{i}")).collect();
+    let riferimenti: Vec<&str> = troppi_input.iter().map(String::as_str).collect();
+    let schemi: Vec<(&str, SchemaRef)> = riferimenti
+        .iter()
+        .map(|nome| (*nome, schema_wide()))
+        .collect();
+    assert!(matches!(
+        piano(&riferimenti, vec![], &["i0"]).validate(&schemi),
+        Err(PlenoraError::InvalidPlan(_))
+    ));
+}
+
+#[test]
+fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
+    // Ogni caso sta al secondo passo: senza il controllo in validazione il
+    // primo passo girerebbe e l'errore arriverebbe dopo.
+    let schema_nested = nested().schema();
+    let casi: Vec<(SchemaRef, &str, Value)> = vec![
+        // Difetto del kernel: explode in place su List non nullabile.
+        (
+            schema_nested.clone(),
+            "table.explode",
+            json!({"column": "lst"}),
+        ),
+        (
+            schema_nested.clone(),
+            "table.explode",
+            json!({"column": "lst", "output_column": "e", "empty_policy": "drop"}),
+        ),
+        // La chiave della riga intera contiene una List: non e' testo.
+        (schema_nested.clone(), "table.distinct", json!({})),
+        (
+            schema_nested.clone(),
+            "table.aggregate",
+            json!({"group_by": ["lst"],
+                   "aggregations": [{"column": "id", "function": "sum"}]}),
+        ),
+        (
+            schema_nested,
+            "table.filter",
+            json!({"column": "st", "operator": "contains", "value": "a"}),
+        ),
+        // %z non si scrive da una data senza fuso: il kernel andava in panico.
+        (
+            schema_wide(),
+            "table.date_format",
+            json!({"column": "date", "input_format": "%Y-%m-%d",
+                   "output_format": "%Y %z", "output_column": "d"}),
+        ),
+        (
+            schema_wide(),
+            "table.date_extract",
+            json!({"column": "date", "parts": ["year"], "date_format": "%Q"}),
+        ),
+        // date_format su un target che non lo usa: ignorato in silenzio.
+        (
+            schema_wide(),
+            "table.type_cast",
+            json!({"column": "id", "target_type": "str", "date_format": "%Y"}),
+        ),
+        (
+            schema_wide(),
+            "table.hmac_sha256",
+            json!({"columns": ["id"], "key_env": "PLENORA_PIPELINE_CHIAVE_ASSENTE"}),
+        ),
+    ];
+    for (schema, op, config) in casi {
+        let pipeline = piano(
+            &["t"],
+            vec![
+                passo(
+                    "primo",
+                    "table.add_row_number",
+                    &["t"],
+                    json!({"output_column": "riga"}),
+                ),
+                passo("secondo", op, &["primo"], config.clone()),
+            ],
+            &["secondo"],
+        );
+        let esito = pipeline.validate(&[("t", schema)]);
+        assert!(
+            matches!(
+                &esito,
+                Err(PlenoraError::InvalidPlan(messaggio) | PlenoraError::Unsupported(messaggio))
+                    if messaggio.contains("secondo")
+            ),
+            "{op} {config}: {esito:?}"
+        );
     }
 }
