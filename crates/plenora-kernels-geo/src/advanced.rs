@@ -552,6 +552,143 @@ mod tests {
         confronta_associazione(&[], &interrogazioni[..3]);
     }
 
+    /// Celle il cui rect ha larghezza o altezza nulla (segmenti verticali e
+    /// orizzontali, un punto ripetuto, un segmento obliquo di lunghezza un
+    /// `ulp`), accanto a celle ordinarie che le contengono o le toccano:
+    /// l'envelope dell'R-tree e' un rect degenere con gli stessi `f64`, e
+    /// l'intervallo chiuso di rstar deve accettare esattamente i punti che
+    /// `Rect::intersects` accetta. Interrogazioni sui segmenti, sugli
+    /// estremi, a un `ulp` di distanza e nei due versi di `-0.0`.
+    #[test]
+    fn oracolo_associazione_rect_di_larghezza_o_altezza_nulla() {
+        let anello = |coordinate: &[(f64, f64)]| {
+            Polygon::new(geo::LineString::from(coordinate.to_vec()), Vec::new())
+        };
+        let dopo = |x: f64| f64::from_bits(x.to_bits() + 1);
+        let verticale = anello(&[(1.0, 0.0), (1.0, 2.0), (1.0, 4.0), (1.0, 0.0)]);
+        let orizzontale = anello(&[(0.0, 3.0), (2.0, 3.0), (4.0, 3.0), (0.0, 3.0)]);
+        let puntiforme = anello(&[(2.0, 2.0), (2.0, 2.0), (2.0, 2.0), (2.0, 2.0)]);
+        let zero_negativo = anello(&[(-0.0, 0.0), (-0.0, 1.0), (0.0, 2.0), (-0.0, 0.0)]);
+        let obliquo_minimo = anello(&[(3.0, 3.0), (dopo(3.0), dopo(3.0)), (3.0, 3.0)]);
+        let quadrato = geo::Rect::new((0.0, 0.0), (4.0, 4.0)).to_polygon();
+        let celle_degeneri = vec![
+            verticale,
+            orizzontale,
+            puntiforme,
+            zero_negativo,
+            obliquo_minimo.clone(),
+        ];
+        for cella in &celle_degeneri {
+            let rect = cella.bounding_rect().expect("rect");
+            assert!(
+                rect.width() == 0.0 || rect.height() == 0.0 || cella == &obliquo_minimo,
+                "fixture: rect non degenere"
+            );
+        }
+        let mut interrogazioni = punti(vec![
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (1.0, 4.0),
+            (1.0, 5.0),
+            (dopo(1.0), 1.0),
+            (0.999_999_999_999_999_9, 1.0),
+            (0.0, 3.0),
+            (3.0, 3.0),
+            (4.0, 3.0),
+            (2.0, dopo(3.0)),
+            (2.0, 2.0),
+            (dopo(2.0), 2.0),
+            (2.0, dopo(2.0)),
+            (-0.0, 0.5),
+            (0.0, 0.5),
+            (-0.0, -0.0),
+            (dopo(3.0), dopo(3.0)),
+            (dopo(3.0), 3.0),
+            (5.0, 5.0),
+        ]);
+        interrogazioni.push(Point::new(f64::from_bits(1), 1.0));
+        interrogazioni.push(Point::new(-f64::from_bits(1), 1.0));
+        // Da sole, prima e dopo una cella ordinaria che le contiene: l'indice
+        // minimo vince in entrambi gli ordini.
+        confronta_associazione(&celle_degeneri, &interrogazioni);
+        let mut prima = vec![quadrato.clone()];
+        prima.extend(celle_degeneri.iter().cloned());
+        confronta_associazione(&prima, &interrogazioni);
+        let mut dopo_il_quadrato = celle_degeneri.clone();
+        dopo_il_quadrato.push(quadrato);
+        confronta_associazione(&dopo_il_quadrato, &interrogazioni);
+        for cella in &celle_degeneri {
+            confronta_associazione(std::slice::from_ref(cella), &interrogazioni);
+        }
+    }
+
+    /// Rect con estremi subnormali: celle e punti con coordinate sotto
+    /// `f64::MIN_POSITIVE`, compreso il minimo positivo `2^-1074`, lo zero
+    /// con segno e rect di larghezza di un solo subnormale.
+    #[test]
+    fn oracolo_associazione_rect_con_estremi_subnormali() {
+        let sub = |k: u64| f64::from_bits(k);
+        let quadrato =
+            |x0: f64, y0: f64, x1: f64, y1: f64| geo::Rect::new((x0, y0), (x1, y1)).to_polygon();
+        let celle = vec![
+            quadrato(0.0, 0.0, sub(1), sub(1)),
+            quadrato(sub(1), 0.0, sub(3), sub(2)),
+            quadrato(-sub(2), -sub(2), 0.0, 0.0),
+            quadrato(-0.0, -0.0, sub(4), sub(4)),
+            quadrato(sub(5), sub(5), f64::MIN_POSITIVE, f64::MIN_POSITIVE),
+            quadrato(
+                f64::MIN_POSITIVE / 4.0,
+                0.0,
+                f64::MIN_POSITIVE / 2.0,
+                sub(7),
+            ),
+            // Larghezza nulla a un subnormale.
+            Polygon::new(
+                geo::LineString::from(vec![(sub(9), 0.0), (sub(9), sub(9)), (sub(9), 0.0)]),
+                Vec::new(),
+            ),
+        ];
+        let mut interrogazioni = Vec::new();
+        for k in [0_u64, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+            for j in [0_u64, 1, 2, 5, 9] {
+                interrogazioni.push(Point::new(sub(k), sub(j)));
+                interrogazioni.push(Point::new(-sub(k), sub(j)));
+                interrogazioni.push(Point::new(sub(k), -sub(j)));
+            }
+        }
+        interrogazioni.extend(punti(vec![
+            (-0.0, -0.0),
+            (f64::MIN_POSITIVE, f64::MIN_POSITIVE),
+            (f64::MIN_POSITIVE / 2.0, sub(3)),
+            (f64::MIN_POSITIVE / 4.0, 0.0),
+            (f64::MIN_POSITIVE / 3.0, sub(8)),
+            (1.0, 1.0),
+        ]));
+        confronta_associazione(&celle, &interrogazioni);
+        let mut rovesciate = celle;
+        rovesciate.reverse();
+        confronta_associazione(&rovesciate, &interrogazioni);
+    }
+
+    /// Pipeline intera con siti a coordinate subnormali: le celle di `geo`
+    /// hanno allora rect con estremi subnormali (o la costruzione fallisce),
+    /// e le due associazioni devono dare la stessa uscita, errori compresi.
+    #[test]
+    fn oracolo_voronoi_siti_subnormali() {
+        let sub = |k: u64| f64::from_bits(k);
+        for (passo, origine) in [
+            (sub(1), (0.0, 0.0)),
+            (sub(3), (-sub(4), sub(2))),
+            (f64::MIN_POSITIVE / 8.0, (0.0, 0.0)),
+            (f64::MIN_POSITIVE / 2.0, (-f64::MIN_POSITIVE, 0.0)),
+        ] {
+            let _ = confronta_pipeline(&griglia(3, passo, origine));
+            let _ = confronta_pipeline(&griglia(4, passo, origine));
+        }
+        let _ = confronta_pipeline(&[(0.0, 0.0), (sub(1), 0.0), (0.0, sub(1)), (sub(1), sub(1))]);
+        let _ = confronta_pipeline(&[(-0.0, 0.0), (sub(2), sub(1)), (sub(1), sub(3))]);
+    }
+
     /// Duplicati, quasi-collineari, collineari (errore di costruzione) e
     /// scale estreme: coordinate minuscole, enormi e lontane dall'origine.
     #[test]
