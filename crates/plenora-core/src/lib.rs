@@ -11,7 +11,9 @@
 //!   decisioni D6/D16/D25, architettura.md#determinismo e architettura.md#planner-ed-executor;
 //! - [`panic_policy`]: politica di processo per i panici, valida anche per
 //!   chi ci usa come libreria;
-//! - [`crs`]: contratto CRS fail-closed, indipendente dal backend.
+//! - [`crs`]: contratto CRS fail-closed, indipendente dal backend;
+//! - [`memoria`]: byte Arrow di tabelle (per allocazione) e colonne (per
+//!   vista), la misura unica di runner e kernel.
 
 pub mod catalog;
 pub mod contract;
@@ -21,6 +23,7 @@ pub mod error;
 pub mod esadecimale;
 pub mod json;
 pub mod limits;
+pub mod memoria;
 
 // Dalla radice esce solo cio' che `Plan Budget 1.0` obbliga a pubblicare
 // (`PLAN-013`); gli altri default restano in [`limits`], perche' toglierli

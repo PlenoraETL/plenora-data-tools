@@ -25,9 +25,9 @@ use plenora_core::contract::DataContract;
 use plenora_core::limits::expansion_exceeded;
 use plenora_core::{PlenoraError, Result};
 
-use crate::byte::byte_vivi;
 use crate::dispatch::Instradamento;
 use crate::validazione::{nel_passo, PassoValidato, PipelineValidata, METADATI_PANDAS};
+use plenora_core::memoria::byte_vivi;
 
 /// Esito di un'esecuzione: le tabelle d'uscita e il resoconto.
 #[derive(Debug)]

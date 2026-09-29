@@ -11,14 +11,13 @@
 //! streaming. Le operazioni geo non sono ancora nel dispatch e si rifiutano
 //! in validazione.
 
-pub mod byte;
 mod dispatch;
 mod esecuzione;
 pub mod piano;
 mod validazione;
 mod verifica_config;
 
-pub use byte::byte_vivi;
 pub use esecuzione::{Esito, Report, ReportPasso};
 pub use piano::{LimitiParziali, Passo, Pipeline, VERSIONE_PIANO};
+pub use plenora_core::memoria::byte_vivi;
 pub use validazione::PipelineValidata;

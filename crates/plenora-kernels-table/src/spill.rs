@@ -303,12 +303,22 @@ fn collect_membership(
     Ok(())
 }
 
-/// Stima dei byte in memoria di un batch (somma delle colonne Arrow).
+/// Byte in memoria di un batch: le allocazioni Arrow che tiene vive, ognuna
+/// contata una volta (`plenora_core::memoria::byte_vivi`, la stessa misura
+/// del budget del runner).
+///
+/// La somma per colonna di `get_array_memory_size` contava un'allocazione
+/// condivisa una volta per ogni buffer che la vede: su un batch letto da
+/// Arrow IPC, dove tutte le colonne sono viste del buffer del messaggio, la
+/// stima risultava circa dieci volte la memoria reale, e `read_partition`
+/// rifiutava partizioni che stavano nel budget. Un totale non
+/// rappresentabile satura a `usize::MAX`, cioè «oltre qualunque budget».
 #[must_use]
 pub fn estimated_batch_bytes(batch: &RecordBatch) -> usize {
-    batch.columns().iter().fold(0_usize, |total, column| {
-        total.saturating_add(column.get_array_memory_size())
-    })
+    plenora_core::memoria::byte_vivi(std::iter::once(batch))
+        .ok()
+        .and_then(|byte| usize::try_from(byte).ok())
+        .unwrap_or(usize::MAX)
 }
 
 #[must_use]

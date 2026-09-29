@@ -362,13 +362,21 @@ pub fn replace_or_append(
 /// Una colonna vuota non si puo' misurare ma occupa comunque spazio
 /// nell'output: senza pavimento un input vuoto con molte colonne peserebbe
 /// zero nella stima.
+///
+/// La misura sono i byte delle viste della colonna
+/// (`plenora_core::memoria::byte_viste`), non la capacita' delle
+/// allocazioni: in un batch letto da Arrow IPC ogni buffer di ogni colonna
+/// dichiara come capacita' l'intero messaggio, e la stima per riga
+/// risultava gonfiata del numero di colonne. Le stime qui sono di un output
+/// ancora da costruire, che non eredita la capacita' inutilizzata
+/// dell'input.
 #[must_use]
 pub fn column_bytes_per_row(array: &dyn Array) -> usize {
     let rows = array.len();
     if rows == 0 {
         return type_bytes_floor(array.data_type());
     }
-    array.get_array_memory_size().div_ceil(rows)
+    plenora_core::memoria::byte_viste(array).div_ceil(rows)
 }
 
 /// Pavimento per riga di un tipo Arrow, quando non ci sono righe da misurare.
