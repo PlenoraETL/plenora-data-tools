@@ -30,9 +30,11 @@ use super::polygonize::{
     polygonize_linework_rust, PolygonizeError, PolygonizeLimits, PolygonizeOptions,
 };
 use geo::algorithm::validation::Validation;
+use geo::coordinate_position::{CoordPos, CoordinatePosition};
+use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{
-    BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, LineString,
-    MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
+    BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, InteriorPoint, Intersects,
+    LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use rstar::{RTree, RTreeObject, AABB};
 use thiserror::Error;
@@ -341,6 +343,15 @@ fn fixed_ring(
     limits: MakeValidLimits,
     precision: f64,
 ) -> Result<MultiPolygon<f64>, MakeValidError> {
+    // Un anello collassato in un punto non ha area (GEOS: buffer nullo
+    // vuoto); il polygonize lo rifiuterebbe come linea invalida.
+    if ring
+        .0
+        .iter()
+        .all(|coordinate| ring.0.first().is_some_and(|first| first == coordinate))
+    {
+        return Ok(MultiPolygon::empty());
+    }
     let result = polygonize_linework_rust(
         &Geometry::LineString(ring.clone()),
         PolygonizeOptions {
@@ -350,7 +361,54 @@ fn fixed_ring(
             precision,
         },
     )?;
-    Ok(MultiPolygon::new(result.polygons))
+    // `GeometryFixer::fixRing` di GEOS: `bufferByZero(poligono, true)`, il
+    // buffer nullo dell'anello e del suo inverso, cioe' le regioni con numero
+    // di avvolgimento dell'anello diverso da zero. Il laboratorio prendeva
+    // tutte le facce del polygonize: un anello che gira dentro se stesso (la
+    // cornice con l'isola, avvolgimento 0 dentro) riempiva anche l'isola, e
+    // da buco sottraeva troppo in silenzio. Ogni faccia ha avvolgimento
+    // costante; lo si calcola in modo esatto in un suo punto interno, e
+    // l'unione delle facce tenute si ricostruisce dal bordo, senza overlay.
+    let mut boundary = Segments::new();
+    for face in &result.polygons {
+        let sample = face
+            .interior_point()
+            .ok_or(MakeValidError::InternalInvariant(
+                "faccia dell'anello senza punto interno",
+            ))?;
+        if winding_number(sample.0, ring)? != 0 {
+            add_polygon_parity(face, &mut boundary);
+        }
+    }
+    area_from_boundary(&boundary, limits, precision)
+}
+
+/// Numero di avvolgimento esatto di `point` rispetto all'anello chiuso
+/// (`orient2d` esatto, confronti di ordinate esatti). Un punto sull'anello
+/// non ha avvolgimento: errore interno, mai un valore indovinato.
+fn winding_number(point: Coord<f64>, ring: &LineString<f64>) -> Result<i64, MakeValidError> {
+    let mut winding = 0_i64;
+    for segment in ring.lines() {
+        let orientation = RobustKernel::orient2d(segment.start, segment.end, point);
+        if orientation == Orientation::Collinear
+            && point.x >= segment.start.x.min(segment.end.x)
+            && point.x <= segment.start.x.max(segment.end.x)
+            && point.y >= segment.start.y.min(segment.end.y)
+            && point.y <= segment.start.y.max(segment.end.y)
+        {
+            return Err(MakeValidError::InternalInvariant(
+                "punto interno della faccia sull'anello",
+            ));
+        }
+        if segment.start.y <= point.y {
+            if segment.end.y > point.y && orientation == Orientation::CounterClockwise {
+                winding += 1;
+            }
+        } else if segment.end.y <= point.y && orientation == Orientation::Clockwise {
+            winding -= 1;
+        }
+    }
+    Ok(winding)
 }
 
 fn as_polygonal_geometry(polygons: MultiPolygon<f64>) -> Geometry<f64> {
@@ -826,43 +884,141 @@ fn structure_polygon(
     Ok(Some(as_polygonal_geometry(fixed)))
 }
 
+/// Dove sta un lato nodato rispetto all'area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SideOfArea {
+    Inside,
+    Boundary,
+    Outside,
+}
+
+/// Il lato nodato (senza incroci propri con il bordo dell'area) sta dentro,
+/// sul bordo o fuori? Sul bordo se entrambi gli estremi stanno entro la
+/// precisione da uno stesso lato del bordo (un lato piu' vicino di 1 cm al
+/// bordo ne fa parte: politica del centimetro). Altrimenti decidono tre
+/// punti interni al lato con il predicato esatto di `geo`; se non concordano
+/// e' un errore, mai un lato indovinato.
+fn side_of_area(
+    start: Coord<f64>,
+    end: Coord<f64>,
+    area: &MultiPolygon<f64>,
+    index: &RTree<OperandEdge>,
+    precision: f64,
+) -> Result<SideOfArea, MakeValidError> {
+    let query = AABB::from_corners(
+        [
+            start.x.min(end.x) - precision,
+            start.y.min(end.y) - precision,
+        ],
+        [
+            start.x.max(end.x) + precision,
+            start.y.max(end.y) + precision,
+        ],
+    );
+    if index.locate_in_envelope_intersecting(&query).any(|edge| {
+        super::precision::punto_entro_segmento(start, edge.start, edge.end, precision)
+            && super::precision::punto_entro_segmento(end, edge.start, edge.end, precision)
+    }) {
+        return Ok(SideOfArea::Boundary);
+    }
+    let mut side = None;
+    for fraction in [0.25, 0.5, 0.75] {
+        let sample = Coord {
+            x: start.x + (end.x - start.x) * fraction,
+            y: start.y + (end.y - start.y) * fraction,
+        };
+        let here = match area.coordinate_position(&sample) {
+            CoordPos::Inside => SideOfArea::Inside,
+            CoordPos::Outside => SideOfArea::Outside,
+            CoordPos::OnBoundary => continue,
+        };
+        match side {
+            None => side = Some(here),
+            Some(previous) if previous != here => {
+                return Err(MakeValidError::InternalInvariant(
+                    "lato collassato dentro e fuori dall'area",
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(side.unwrap_or(SideOfArea::Boundary))
+}
+
+/// L'unione di `GeometryFixer::fixMultiPolygon` di GEOS fra l'area e le
+/// parti collassate (linee e punti di `keep_collapsed`): le linee nodate fra
+/// loro e con il bordo dell'area, meno cio' che l'area copre; i punti non
+/// coperti ne' dall'area ne' dalle linee. Il laboratorio polygonizzava le
+/// linee e ne dava le facce come area: tre poligoni collassati che formano
+/// un triangolo diventavano un triangolo pieno, e una linea dentro l'area
+/// restava. Qui le linee restano linee.
 fn normalize_collapsed_union(
     components: Vec<Geometry<f64>>,
+    area: &MultiPolygon<f64>,
     limits: MakeValidLimits,
     precision: f64,
 ) -> Result<Vec<Geometry<f64>>, MakeValidError> {
-    let mut lines = Vec::new();
+    let mut lines = Segments::new();
+    let mut points = BTreeMap::new();
     let mut output = Vec::new();
     for component in components {
         match component {
-            Geometry::LineString(line) => lines.push(line),
-            Geometry::MultiLineString(multi) => lines.extend(multi.0),
+            Geometry::LineString(line) => add_line_segments(&line, &mut lines),
+            Geometry::MultiLineString(multi) => {
+                for line in &multi.0 {
+                    add_line_segments(line, &mut lines);
+                }
+            }
+            Geometry::Point(point) => {
+                points.insert(CoordKey::new(point.0), point);
+            }
             other => output.push(other),
         }
     }
-    if lines.is_empty() {
-        return Ok(output);
+    let mut kept = Segments::new();
+    if !lines.is_empty() {
+        // Nodare le linee fra loro e con il bordo dell'area.
+        let mut linework = lines;
+        for polygon in &area.0 {
+            add_polygon_segments(polygon, &mut linework);
+        }
+        let noded = result_segments(&polygonize_segments(&linework, true, limits, precision)?);
+        let index = RTree::bulk_load(
+            polygonal_boundaries(area)
+                .map(|line| OperandEdge {
+                    start: line.start,
+                    end: line.end,
+                })
+                .collect(),
+        );
+        for (key, (start, end)) in noded {
+            if side_of_area(start, end, area, &index, precision)? == SideOfArea::Outside {
+                kept.insert(key, (start, end));
+            }
+        }
     }
-    let result = polygonize_linework_rust(
-        &Geometry::MultiLineString(MultiLineString::new(lines)),
-        PolygonizeOptions {
-            node_input: true,
-            require_complete: false,
-            limits: polygonize_limits(limits),
-            precision,
-        },
-    )?;
-    if !result.polygons.is_empty() {
-        output.push(as_polygonal_geometry(MultiPolygon::new(result.polygons)));
+    let mut lines = Vec::new();
+    for (start, end) in kept.values() {
+        lines.push(LineString::new(vec![*start, *end]));
     }
-    let residuals = result
-        .cut_edges
-        .into_iter()
-        .chain(result.dangles)
-        .chain(result.invalid_ring_lines)
-        .collect::<Vec<_>>();
-    if let Some(lines) = line_geometry(residuals) {
+    let mut kept_points = Vec::new();
+    for point in points.into_values() {
+        let on_line = kept.values().any(|(start, end)| {
+            RobustKernel::orient2d(*start, *end, point.0) == Orientation::Collinear
+                && point.x() >= start.x.min(end.x)
+                && point.x() <= start.x.max(end.x)
+                && point.y() >= start.y.min(end.y)
+                && point.y() <= start.y.max(end.y)
+        });
+        if !on_line && area.coordinate_position(&point.0) == CoordPos::Outside {
+            kept_points.push(point);
+        }
+    }
+    if let Some(lines) = line_geometry(lines) {
         output.push(lines);
+    }
+    if let Some(points) = point_geometry(kept_points) {
+        output.push(points);
     }
     Ok(output)
 }
@@ -926,7 +1082,7 @@ fn structure(
                 }
             }
             if !collapsed.is_empty() && (!area.0.is_empty() || collapsed.len() > 1) {
-                collapsed = normalize_collapsed_union(collapsed, limits, precision)?;
+                collapsed = normalize_collapsed_union(collapsed, &area, limits, precision)?;
             }
             if !area.0.is_empty() {
                 collapsed.insert(0, as_polygonal_geometry(area));
@@ -1110,13 +1266,24 @@ fn polygonize_segments(
     limits: MakeValidLimits,
     precision: f64,
 ) -> Result<super::polygonize::PolygonizeResult, MakeValidError> {
+    polygonize_segments_with_rounded(segments, node_input, limits, precision)
+        .map(|(result, _)| result)
+}
+
+/// [`polygonize_segments`] con gli incroci arrotondati del noding.
+fn polygonize_segments_with_rounded(
+    segments: &Segments,
+    node_input: bool,
+    limits: MakeValidLimits,
+    precision: f64,
+) -> Result<(super::polygonize::PolygonizeResult, Vec<Coord<f64>>), MakeValidError> {
     let coordinates = u64::try_from(segments.len())
         .map_err(|_| MakeValidError::IndexOverflow)?
         .checked_mul(2)
         .ok_or(MakeValidError::IndexOverflow)?;
     let mut polygonize = polygonize_limits(limits);
     polygonize.max_input_coordinates = polygonize.max_input_coordinates.max(coordinates);
-    Ok(polygonize_linework_rust(
+    Ok(super::polygonize::polygonize_linework_rust_with_rounded(
         &segment_lines(segments)?,
         PolygonizeOptions {
             node_input,
@@ -1367,6 +1534,53 @@ fn point_geometry(mut points: Vec<Point<f64>>) -> Option<Geometry<f64>> {
     }
 }
 
+/// Nessun punto d'incrocio arrotondato del linework nodato sta entro la
+/// precisione da un altro vertice o da un lato che non gli e' incidente.
+///
+/// In `LINEWORK` la gerarchia delle facce (quale buco e' uguale a quale
+/// guscio, quali componenti si toccano) decide l'area di regioni intere.
+/// Con coordinate d'ingresso i predicati sono esatti, qui come in GEOS; un
+/// incrocio arrotondato invece si sposta di qualche ULP, e se accanto c'e'
+/// un'altra feature lo spostamento puo' creare o togliere una scheggia, un
+/// contatto, un'uguaglianza di anelli: l'area cambia di metri quadrati, e
+/// GEOS, che arrotonda a modo suo, decide diversamente (campagna
+/// differenziale, generatore di anelli annidati, seme 1 caso 109: incrocio
+/// arrotondato a `3e-16` da un vertice, 52 m^2 di differenza). La topologia
+/// e' decisa sotto la precisione: errore esplicito.
+fn checked_rounded_nodes(
+    rounded: &[Coord<f64>],
+    edges: &Segments,
+    precision: f64,
+) -> Result<(), MakeValidError> {
+    if rounded.is_empty() {
+        return Ok(());
+    }
+    let index = RTree::bulk_load(
+        edges
+            .values()
+            .map(|(start, end)| OperandEdge {
+                start: *start,
+                end: *end,
+            })
+            .collect(),
+    );
+    for vertex in rounded {
+        let query = AABB::from_corners(
+            [vertex.x - precision, vertex.y - precision],
+            [vertex.x + precision, vertex.y + precision],
+        );
+        let crowded = index.locate_in_envelope_intersecting(&query).any(|edge| {
+            edge.start != *vertex
+                && edge.end != *vertex
+                && super::precision::punto_entro_segmento(*vertex, edge.start, edge.end, precision)
+        });
+        if crowded {
+            return Err(MakeValidError::PrecisionInsufficient);
+        }
+    }
+    Ok(())
+}
+
 /// `MakeValid` `LINEWORK` di GEOS (`operation/valid/MakeValid.cpp`,
 /// `MakeValidPoly`), sui lati invece che con overlay.
 ///
@@ -1431,8 +1645,10 @@ fn linework(
     let (mut edges, mut faces) = if input_segments.is_empty() {
         (Segments::new(), Vec::new())
     } else {
-        let noded = polygonize_segments(&input_segments, true, limits, precision)?;
+        let (noded, rounded) =
+            polygonize_segments_with_rounded(&input_segments, true, limits, precision)?;
         let edges = result_segments(&noded);
+        checked_rounded_nodes(&rounded, &edges, precision)?;
         (edges, noded.polygons)
     };
     // I vertici d'ingresso che non sono vertici del linework nodato (anelli

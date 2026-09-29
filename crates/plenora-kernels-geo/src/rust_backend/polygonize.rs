@@ -752,6 +752,7 @@ fn node_segments(
     segments: &[Segment],
     budget: &mut NodingBudget,
     displacement: f64,
+    rounded: &mut BTreeSet<CoordKey>,
 ) -> Result<(SplitPoints, usize), PolygonizeError> {
     let mut split_points = Vec::new();
     split_points
@@ -778,6 +779,16 @@ fn node_segments(
                     return Err(PolygonizeError::PrecisionInsufficient);
                 }
                 let intersection_key = CoordKey::new(intersection);
+                // Un punto d'incrocio che non sta esattamente su entrambi i
+                // segmenti e' arrotondato: lo si ricorda per chi deve sapere
+                // dove il grafo non e' esatto (`make_valid` `LINEWORK`).
+                if RobustKernel::orient2d(left.start, left.end, intersection)
+                    != Orientation::Collinear
+                    || RobustKernel::orient2d(right.start, right.end, intersection)
+                        != Orientation::Collinear
+                {
+                    rounded.insert(intersection_key);
+                }
                 if intersection_key != CoordKey::new(left.start)
                     && intersection_key != CoordKey::new(left.end)
                 {
@@ -837,6 +848,7 @@ fn node_edges_iteratively(
     segments: &[Segment],
     work_limit: u64,
     precision: f64,
+    rounded: &mut BTreeSet<CoordKey>,
 ) -> Result<NodedEdges, PolygonizeError> {
     const MAX_ITERATIONS: usize = MAX_NODING_ITERATIONS;
 
@@ -854,7 +866,7 @@ fn node_edges_iteratively(
             .checked_add(1)
             .ok_or(PolygonizeError::IndexOverflow)?;
         let (split_points, interior_intersections) =
-            node_segments(&current, &mut budget, displacement)?;
+            node_segments(&current, &mut budget, displacement, rounded)?;
         let edges = build_edges(&current, split_points)?;
         if edges_are_fully_noded(&edges, &mut budget)? {
             return Ok(edges);
@@ -1324,24 +1336,43 @@ fn union_boundary_rings(
 ) -> Result<Vec<LineString<f64>>, PolygonizeError> {
     let mut counts = BTreeMap::<EdgeKey, u64>::new();
     let mut coordinates = BTreeMap::<CoordKey, Coord<f64>>::new();
+    // I lati di ciascun figlio: un lato condiviso con un altro figlio non si
+    // scarta mai per il punto medio (vedi sotto).
+    let child_edges = children
+        .iter()
+        .map(|child| {
+            child
+                .exterior()
+                .lines()
+                .filter_map(|segment| {
+                    EdgeKey::new(CoordKey::new(segment.start), CoordKey::new(segment.end))
+                })
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
     for (child_index, child) in children.iter().enumerate() {
         for segment in child.exterior().lines() {
-            let midpoint = Point::new(
-                segment.start.x + (segment.end.x - segment.start.x) * 0.5,
-                segment.start.y + (segment.end.y - segment.start.y) * 0.5,
-            );
-            if children
-                .iter()
-                .enumerate()
-                .any(|(other_index, other)| other_index != child_index && other.contains(&midpoint))
-            {
-                continue;
-            }
             let start = CoordKey::new(segment.start);
             let end = CoordKey::new(segment.end);
             let Some(edge) = EdgeKey::new(start, end) else {
                 continue;
             };
+            let midpoint = Point::new(
+                segment.start.x + (segment.end.x - segment.start.x) * 0.5,
+                segment.start.y + (segment.end.y - segment.start.y) * 0.5,
+            );
+            // Deviazione dal laboratorio: il punto medio in `f64` di un lato
+            // obliquo condiviso da due figli cade dentro uno dei due, e il
+            // lato, contato una volta sola, restava come bordo pendente (buco
+            // aperto). Un lato che e' anche lato dell'altro figlio e' bordo
+            // comune, non interno.
+            if children.iter().enumerate().any(|(other_index, other)| {
+                other_index != child_index
+                    && !child_edges[other_index].contains(&edge)
+                    && other.contains(&midpoint)
+            }) {
+                continue;
+            }
             coordinates.entry(start).or_insert(segment.start);
             coordinates.entry(end).or_insert(segment.end);
             let count = counts.entry(edge).or_insert(0);
@@ -2011,6 +2042,20 @@ pub fn polygonize_linework_rust(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<PolygonizeResult, PolygonizeError> {
+    polygonize_linework_rust_with_rounded(linework, options).map(|(result, _)| result)
+}
+
+/// [`polygonize_linework_rust`] che restituisce anche i vertici del grafo
+/// nodato che sono punti d'incrocio arrotondati (non esattamente su entrambi
+/// i segmenti che dividono).
+///
+/// # Errors
+///
+/// Come [`polygonize_linework_rust`].
+pub fn polygonize_linework_rust_with_rounded(
+    linework: &Geometry<f64>,
+    options: PolygonizeOptions,
+) -> Result<(PolygonizeResult, Vec<Coord<f64>>), PolygonizeError> {
     if !(options.precision.is_finite() && options.precision > 0.0) {
         return Err(PolygonizeError::InvalidPrecision);
     }
@@ -2036,8 +2081,14 @@ pub fn polygonize_linework_rust(
     let mut output_budget = OutputBudget::new(options.limits);
     let (excluded_edges, mut duplicate_cut_lines) =
         duplicate_lines_without_noding(&lines, options.node_input, &mut output_budget)?;
+    let mut rounded = BTreeSet::new();
     let mut edges = if options.node_input {
-        node_edges_iteratively(&segments, options.limits.max_noding_work, options.precision)?
+        node_edges_iteratively(
+            &segments,
+            options.limits.max_noding_work,
+            options.precision,
+            &mut rounded,
+        )?
     } else {
         build_unnoded_edges(&segments)
     };
@@ -2050,6 +2101,10 @@ pub fn polygonize_linework_rust(
         coordinates.entry(edge.0).or_insert(*start);
         coordinates.entry(edge.1).or_insert(*end);
     }
+    let rounded = rounded
+        .into_iter()
+        .filter_map(|key| coordinates.get(&key).copied())
+        .collect::<Vec<_>>();
     let mut active = edges.keys().copied().collect::<BTreeSet<_>>();
     drop(edges);
     let dangle_edges = remove_dangles(&mut active);
@@ -2081,7 +2136,7 @@ pub fn polygonize_linework_rust(
     if options.require_complete && residuals != 0 {
         return Err(PolygonizeError::Incomplete { residuals });
     }
-    Ok(result)
+    Ok((result, rounded))
 }
 
 /// Variante per l'integrazione controllata che richiede tutti i budget.

@@ -75,6 +75,19 @@
 //!     canonico, e `normalized_intersects`, che vi sceglie fra buco da
 //!     sottrarre e da promuovere, e' deciso sulle coordinate originali con i
 //!     predicati esatti di `geo`;
+//!   - **`make_valid` `STRUCTURE`, anelli e parti collassate**: un anello si
+//!     ripara come `GeometryFixer::fixRing` di GEOS (regioni ad avvolgimento
+//!     diverso da zero), non con tutte le facce del polygonize, che
+//!     riempivano l'isola di un anello che gira dentro se stesso; le parti
+//!     collassate di un multipoligono si uniscono come linee e punti (meno
+//!     cio' che l'area copre), non polygonizzate in area;
+//!   - **`make_valid` `LINEWORK`, incroci arrotondati**: un incrocio del
+//!     noding non esatto a meno della precisione da un altro vertice o lato
+//!     e' `PrecisionInsufficient` (`make_valid::checked_rounded_nodes`);
+//!   - **lati obliqui condivisi da due figli** (`union_boundary_rings`): il
+//!     punto medio in `f64` cadeva dentro uno dei due figli e il lato,
+//!     contato una volta, lasciava il buco aperto; un lato comune ai due
+//!     figli non si scarta piu';
 //!   - **buchi che toccano il bordo dei figli in due o piu' vertici**
 //!     (`polygonize::union_boundary_rings`): il laboratorio scartava le
 //!     catene aperte in cui `edge_chains` spezza un tale anello, e la faccia

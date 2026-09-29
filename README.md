@@ -350,7 +350,13 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
   proprietà su input casuali (rettangoli, triangoli, bow-tie; fino a tre
   parti e quattro buchi) che permuta anelli e parti, e per `LINEWORK` ruota
   e inverte gli anelli, e vuole la stessa geometria con entrambi i metodi.
-  Sul kernel precedente la proprietà e i controesempi falliscono. In più
+  Sul kernel precedente la proprietà e i controesempi falliscono;
+- anelli e parti collassate (`tests/geo_rust_make_valid_anelli.rs`, attese
+  dall'output GEOS 3.14): `STRUCTURE` su anelli che girano dentro se stessi
+  (uno e due livelli, nei due versi), che si toccano in un vertice, a otto,
+  a spirale, come shell e come buco; parti collassate unite come linee e
+  punti; `LINEWORK` che rifiuta un incrocio arrotondato a `3e-16` da un
+  vertice. Sul kernel precedente i tre test falliscono. In più
   un buco che tocca gli altri in due vertici, che il polygonize perdeva in
   silenzio (catene aperte scartate): ora resta buco, come in GEOS;
 - determinismo: ogni operazione due volte byte per byte; input permutato o
@@ -418,8 +424,9 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   dell'aritmetica esatta, cioè con modulo fuori da `[2^-450, 2^450]`
   (`NumericRange`, `Unsupported`, anche da `make_valid`, che prima in
   quel caso avviava la riparazione di un poligono valido), bilancio di
-  spostamento di un overlay di `make_valid` `STRUCTURE` o punto di noding
-  arrotondato oltre 1 cm (`PrecisionInsufficient`, `Unsupported`),
+  spostamento di un overlay di `make_valid` `STRUCTURE`, punto di noding
+  arrotondato oltre 1 cm, o in `make_valid` `LINEWORK` a meno di 1 cm da
+  un'altra feature (`PrecisionInsufficient`, `Unsupported`),
   precisione non
   finita o CRS senza precisione (`ResolvedCrs::precisione_coordinate`
   `None`: `InvalidPrecision`, `InvalidPlan`), memoria non prenotabile
@@ -450,6 +457,15 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   faccia che ha un buco uguale al suo guscio, senza l'ordine per area
   dell'inviluppo di GEOS (le due regole coincidono salvo inviluppi di area
   uguale); le linee escono come segmenti, non fuse fra nodi di grado 2.
+- **`make_valid` `LINEWORK` e gli incroci arrotondati.** Dove un incrocio
+  del noding non è esatto e cade a meno di 1 cm da un altro vertice o lato,
+  la gerarchia delle facce (e con essa l'area di regioni intere) dipende da
+  un ULP, e GEOS, che arrotonda a modo suo, può decidere diversamente
+  (campagna degli anelli annidati: 52 m² da un incrocio a `3e-16` da un
+  vertice). Qui è `PrecisionInsufficient`, dove GEOS risponde. Con incroci
+  esatti (anche a `1e-15` da un'altra feature) non c'è rifiuto; sulle
+  campagne i rifiuti in più sono i casi anisotropi alti micrometri e i
+  ponti che passano per un vertice solo in aritmetica esatta.
 - **Tipi d'ingresso di `make_valid_geometry`.** `Line` diventa
   `LineString`, `Rect` e `Triangle` diventano il `Polygon` di `to_polygon`,
   come faceva geozero a `190c493`.
