@@ -89,6 +89,9 @@ pub mod utility;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(test)]
+mod binari_oracolo;
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;

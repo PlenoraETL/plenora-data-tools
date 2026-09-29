@@ -376,13 +376,9 @@ fn assert_same_errors(column: &ArrayRef) {
 
 #[test]
 fn la_chiave_binaria_ha_gli_errori_di_row_key() {
-    // Binary non UTF-8: errore sul valore, il null passa.
-    let colonne: [ArrayRef; 4] = [
-        Arc::new(BinaryArray::from(vec![
-            Some(&b"ok"[..]),
-            None,
-            Some(&[0xff, 0xfe][..]),
-        ])),
+    // Il Binary non UTF-8 non e' piu' un errore della chiave: i suoi byte
+    // sono la chiave (`crate::binari_oracolo`).
+    let colonne: [ArrayRef; 3] = [
         // Tipo fuori dal profilo scalare: errore solo sulle celle non nulle.
         Arc::new(Int32Array::from(vec![None, Some(1), None])),
         // Timezone Arrow non valida.
@@ -472,15 +468,13 @@ fn aggregate_e_distinct_coincidono_oltre_le_soglie_di_forma_e_parallelismo() {
 fn chiavi_con_errore_di_conversione_falliscono_come_il_percorso_testuale() {
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Binary, true),
+            Field::new("k", DataType::Date32, true),
             Field::new("id", DataType::Int64, false),
         ])),
         vec![
-            Arc::new(BinaryArray::from(vec![
-                Some(&b"a"[..]),
-                None,
-                Some(&[0xc3, 0x28][..]),
-            ])),
+            // Date32 fuori dall'intervallo di chrono solo all'ultima riga
+            // (il Binary non UTF-8 che c'era qui ora ha una chiave).
+            Arc::new(Date32Array::from(vec![Some(0), None, Some(i32::MAX)])),
             Arc::new(Int64Array::from(vec![0, 1, 2])),
         ],
     )
@@ -514,11 +508,11 @@ fn con_due_colonne_in_errore_vince_la_prima_colonna_come_nel_testo() {
     // percorsi.
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("bin", DataType::Binary, true),
+            Field::new("date", DataType::Date32, true),
             Field::new("int32", DataType::Int32, true),
         ])),
         vec![
-            Arc::new(BinaryArray::from(vec![Some(&[0xff][..]), None])),
+            Arc::new(Date32Array::from(vec![Some(i32::MAX), None])),
             Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
         ],
     )

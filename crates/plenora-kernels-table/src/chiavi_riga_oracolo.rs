@@ -14,7 +14,7 @@ use plenora_core::arrow::array::{
 use proptest::prelude::*;
 
 use super::*;
-use crate::test_support::{assert_same_outcome_bits, nullable_batch};
+use crate::test_support::{assert_batches_identical, assert_same_outcome_bits, nullable_batch};
 
 // Copia letterale del percorso precedente.
 type KeySet = HashSet<Vec<u8>, FastHasher>;
@@ -470,14 +470,66 @@ fn reconcile_e_foreign_key_come_il_riferimento_su_ogni_chiave() {
             confronta_foreign_key(&left, &left, chiavi, &limits);
         }
     }
-    // Errori di conversione alla stessa riga, sui due lati.
-    for (left, right) in [
-        (tabella_binaria(true), tabella_binaria(false)),
-        (tabella_binaria(false), tabella_binaria(true)),
-        (tabella_binaria(false), tabella_binaria(false)),
-    ] {
-        confronta_reconcile(&left, &right, &["x"], &limits);
-        confronta_foreign_key(&left, &right, &["x"], &limits);
+    confronta_reconcile(
+        &tabella_binaria(false),
+        &tabella_binaria(false),
+        &["x"],
+        &limits,
+    );
+    confronta_foreign_key(
+        &tabella_binaria(false),
+        &tabella_binaria(false),
+        &["x"],
+        &limits,
+    );
+    // Un Binary non UTF-8 non e' piu' un errore di conversione: la chiave
+    // sono i suoi byte. Esito uguale a quello del riferimento testuale sulla
+    // stessa tabella con il valore non UTF-8 sostituito da un testo valido
+    // della stessa lunghezza che non compare altrove (`b"\xff"` -> `b"d"`):
+    // stessa identita' e stessa lunghezza, quindi stessa contabilita'.
+    for (left, right) in [(true, false), (false, true), (true, true)] {
+        let (left, right) = (tabella_binaria(left), tabella_binaria(right));
+        let sostituisci = |batch: &RecordBatch| {
+            let colonna = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .expect("binary");
+            let valori = colonna
+                .iter()
+                .map(|valore| valore.map(|v| if v == b"\xff" { &b"d"[..] } else { v }))
+                .collect::<Vec<_>>();
+            nullable_batch(vec![("x", Arc::new(BinaryArray::from(valori)))])
+        };
+        let (left_rif, right_rif) = (sostituisci(&left), sostituisci(&right));
+        for nulls_equal in [true, false] {
+            let config = Reconcile {
+                left_keys: nomi(&["x"]),
+                right_keys: nomi(&["x"]),
+                nulls_equal,
+            };
+            assert_same_outcome_bits(
+                reconcile(&left, &right, &config, &limits),
+                reconcile_riferimento(&left_rif, &right_rif, &config, &limits),
+            );
+        }
+        for allow_null in [true, false] {
+            let config = ForeignKey {
+                left_keys: nomi(&["x"]),
+                right_keys: nomi(&["x"]),
+                allow_null,
+            };
+            // L'output di `assert_foreign_key` e' il batch sinistro: si
+            // confrontano esito, errore e diagnostica, non i byte del valore
+            // sostituito.
+            let nuovo = assert_foreign_key(&left, &right, &config, &limits);
+            let riferimento =
+                assert_foreign_key_riferimento(&left_rif, &right_rif, &config, &limits);
+            match (nuovo, riferimento) {
+                (Ok(nuovo), Ok(_)) => assert_batches_identical(&nuovo, &left),
+                (nuovo, riferimento) => assert_same_outcome_bits(nuovo, riferimento),
+            }
+        }
     }
     // Colonne assenti e tipi diversi.
     let left = tabella(5, 0);

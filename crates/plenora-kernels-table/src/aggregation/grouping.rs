@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray,
+    UInt64Array,
 };
 use rayon::prelude::*;
 
@@ -37,6 +38,11 @@ use crate::scalar_as_string;
 /// `pub(crate)` per il modulo `spill`: il partizionamento hash e la
 /// ricostruzione dell'ordine canonico dei gruppi riusano gli stessi byte di
 /// chiave, cosi' i percorsi spilled hanno identita' di gruppo identica.
+///
+/// La chiave e' in byte, non in `String`: una cella `Binary` scrive i suoi
+/// byte grezzi, che per un binario UTF-8 valido sono gli stessi byte del
+/// testo di `scalar_as_string` e per uno non valido (WKB) estendono la
+/// stessa forma invece di fallire.
 pub enum KeyColumn {
     Int64 {
         prefix: String,
@@ -57,6 +63,11 @@ pub enum KeyColumn {
     Boolean {
         prefix: String,
         values: BooleanArray,
+    },
+    /// Byte grezzi: il `value` di `row_key` senza passare dal testo.
+    Binary {
+        prefix: String,
+        values: BinaryArray,
     },
     /// Qualunque altro tipo: chiave via `scalar_as_string`, il percorso
     /// generico.
@@ -99,24 +110,41 @@ impl KeyColumn {
                 values: values.clone(),
             };
         }
+        if let Some(values) = array.as_any().downcast_ref::<BinaryArray>() {
+            return Self::Binary {
+                prefix,
+                values: values.clone(),
+            };
+        }
         Self::Generic {
             prefix,
             array: array.clone(),
         }
     }
 
+    /// Accoda a `key` il frammento della riga `row`; `scratch` e' un buffer
+    /// riusato per la forma decimale.
     pub(crate) fn write_key(
         &self,
         row: usize,
-        key: &mut String,
+        key: &mut Vec<u8>,
         scratch: &mut String,
     ) -> Result<()> {
+        let prefix = match self {
+            Self::Int64 { prefix, .. }
+            | Self::UInt64 { prefix, .. }
+            | Self::Float64 { prefix, .. }
+            | Self::Utf8 { prefix, .. }
+            | Self::Boolean { prefix, .. }
+            | Self::Binary { prefix, .. }
+            | Self::Generic { prefix, .. } => prefix,
+        };
+        key.extend_from_slice(prefix.as_bytes());
+        key.push(0x1e);
         match self {
-            Self::Int64 { prefix, values } => {
-                key.push_str(prefix);
-                key.push('\u{1e}');
+            Self::Int64 { values, .. } => {
                 if values.is_null(row) {
-                    key.push('0');
+                    key.push(b'0');
                 } else {
                     scratch.clear();
                     // La scrittura su String non fallisce mai; l'errore resta
@@ -124,77 +152,89 @@ impl KeyColumn {
                     write!(scratch, "{}", values.value(row)).map_err(|_| {
                         PlenoraError::Internal("formattazione chiave di gruppo su String".into())
                     })?;
-                    push_key_value(key, scratch)?;
+                    push_key_value(key, scratch.as_bytes());
                 }
             }
-            Self::UInt64 { prefix, values } => {
-                key.push_str(prefix);
-                key.push('\u{1e}');
+            Self::UInt64 { values, .. } => {
                 if values.is_null(row) {
-                    key.push('0');
+                    key.push(b'0');
                 } else {
                     scratch.clear();
                     write!(scratch, "{}", values.value(row)).map_err(|_| {
                         PlenoraError::Internal("formattazione chiave di gruppo su String".into())
                     })?;
-                    push_key_value(key, scratch)?;
+                    push_key_value(key, scratch.as_bytes());
                 }
             }
-            Self::Float64 { prefix, values } => {
-                key.push_str(prefix);
-                key.push('\u{1e}');
+            Self::Float64 { values, .. } => {
                 if values.is_null(row) {
-                    key.push('0');
+                    key.push(b'0');
                 } else {
                     scratch.clear();
                     write!(scratch, "{}", values.value(row)).map_err(|_| {
                         PlenoraError::Internal("formattazione chiave di gruppo su String".into())
                     })?;
-                    push_key_value(key, scratch)?;
+                    push_key_value(key, scratch.as_bytes());
                 }
             }
-            Self::Boolean { prefix, values } => {
-                key.push_str(prefix);
-                key.push('\u{1e}');
+            Self::Boolean { values, .. } => {
                 if values.is_null(row) {
-                    key.push('0');
+                    key.push(b'0');
                 } else {
                     // "true"/"false": stessi byte di bool::to_string.
-                    push_key_value(key, if values.value(row) { "true" } else { "false" })?;
+                    let testo: &[u8] = if values.value(row) { b"true" } else { b"false" };
+                    push_key_value(key, testo);
                 }
             }
-            Self::Utf8 { prefix, values } => {
-                key.push_str(prefix);
-                key.push('\u{1e}');
+            Self::Utf8 { values, .. } => {
                 if values.is_null(row) {
-                    key.push('0');
+                    key.push(b'0');
                 } else {
-                    push_key_value(key, values.value(row))?;
+                    push_key_value(key, values.value(row).as_bytes());
                 }
             }
-            Self::Generic { prefix, array } => {
-                key.push_str(prefix);
-                key.push('\u{1e}');
-                match scalar_as_string(array.as_ref(), row)? {
-                    Some(value) => push_key_value(key, &value)?,
-                    None => key.push('0'),
+            Self::Binary { values, .. } => {
+                if values.is_null(row) {
+                    key.push(b'0');
+                } else {
+                    push_key_value(key, values.value(row));
                 }
             }
+            Self::Generic { array, .. } => match scalar_as_string(array.as_ref(), row)? {
+                Some(value) => push_key_value(key, value.as_bytes()),
+                None => key.push(b'0'),
+            },
         }
-        key.push('\u{1f}');
+        key.push(0x1f);
         Ok(())
     }
 }
 
 /// Frammento `1{len}:{value}` della chiave di `row_key`.
-fn push_key_value(key: &mut String, value: &str) -> Result<()> {
-    key.push('1');
-    // Come sopra: fmt su String e' infallibile, ma l'errore e' esplicito.
-    write!(key, "{}", value.len())
-        .map_err(|_| PlenoraError::Internal("formattazione chiave di gruppo su String".into()))?;
-    key.push(':');
-    key.push_str(value);
-    Ok(())
+fn push_key_value(key: &mut Vec<u8>, value: &[u8]) {
+    key.push(b'1');
+    push_decimal(key, value.len() as u64);
+    key.push(b':');
+    key.extend_from_slice(value);
+}
+
+/// Forma decimale di `value` (le stesse cifre di `Display`), senza
+/// passare da `fmt`.
+fn push_decimal(key: &mut Vec<u8>, mut value: u64) {
+    let mut cifre = [0_u8; 20];
+    let mut inizio = cifre.len();
+    loop {
+        inizio -= 1;
+        // `value % 10` sta in una cifra: il cast non tronca.
+        #[allow(clippy::cast_possible_truncation)]
+        let resto = (value % 10) as u8;
+        cifre[inizio] = b'0' + resto;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    key.extend_from_slice(&cifre[inizio..]);
 }
 
 /// Soglia condivisa per l'uso di rayon (ordinamento chiavi e calcolo per
@@ -260,6 +300,15 @@ pub(in crate::aggregation) fn cmp_u64_group_key(a: u64, b: u64) -> Ordering {
 /// Ordine delle chiavi di `row_key` per una colonna Utf8: tag di lunghezza
 /// in byte, poi confronto per byte.
 pub(in crate::aggregation) fn cmp_str_group_key(a: &str, b: &str) -> Ordering {
+    cmp_bytes_group_key(a.as_bytes(), b.as_bytes())
+}
+
+/// Ordine delle chiavi di `row_key` per una colonna Binary: come
+/// [`cmp_str_group_key`] sui byte grezzi. L'ordine di `str` e' quello dei
+/// suoi byte, quindi su un binario UTF-8 valido coincide con quello del
+/// testo; su uno non valido e' l'ordine dei byte della chiave di `KeyColumn`
+/// (lo stesso del percorso spilled).
+pub(in crate::aggregation) fn cmp_bytes_group_key(a: &[u8], b: &[u8]) -> Ordering {
     cmp_len_tag(a.len() as u64, b.len() as u64).then_with(|| a.cmp(b))
 }
 
@@ -532,6 +581,10 @@ pub(in crate::aggregation) fn build_native_groups<K: Copy + Eq + std::hash::Hash
 ///   double, quindi e' iniettivo sui non-NaN (`-0` e `0` restano distinti,
 ///   come gli infiniti), e scrive `NaN` per ogni payload e segno;
 /// - Utf8: i byte;
+/// - Binary: i byte grezzi. Per un binario UTF-8 valido sono i byte del
+///   testo di `scalar_as_string`, quindi l'identita' non cambia; uno non
+///   valido (WKB), che il testo rifiutava, ha la sua identita' di byte
+///   invece dell'errore;
 /// - ogni altro tipo: il testo di `scalar_as_string`, con gli stessi errori
 ///   alla stessa riga (una cella nulla non passa dal convertitore, come in
 ///   `KeyColumn`).
@@ -545,6 +598,7 @@ enum BinaryKeyColumn<'a> {
     Float64(&'a Float64Array),
     Utf8(&'a StringArray),
     Boolean(&'a BooleanArray),
+    Binary(&'a BinaryArray),
     Generic(&'a ArrayRef),
 }
 
@@ -569,6 +623,9 @@ impl<'a> BinaryKeyColumn<'a> {
         }
         if let Some(values) = array.as_any().downcast_ref::<BooleanArray>() {
             return Self::Boolean(values);
+        }
+        if let Some(values) = array.as_any().downcast_ref::<BinaryArray>() {
+            return Self::Binary(values);
         }
         Self::Generic(array)
     }
@@ -618,6 +675,13 @@ impl<'a> BinaryKeyColumn<'a> {
                 } else {
                     key.push(1);
                     key.push(u8::from(values.value(row)));
+                }
+            }
+            Self::Binary(values) => {
+                if values.is_null(row) {
+                    key.push(0);
+                } else {
+                    push_binary_value(key, values.value(row));
                 }
             }
             Self::Generic(array) => match scalar_as_string(array.as_ref(), row)? {
@@ -811,6 +875,8 @@ enum OrderColumn<'a> {
     UInt64(&'a UInt64Array),
     Utf8(&'a StringArray),
     Boolean(&'a BooleanArray),
+    /// Byte grezzi, ordinati come il testo di un binario UTF-8 valido.
+    Binary(&'a BinaryArray),
     /// Testo di `KeyColumn` per gruppo provvisorio (Float64 e tipi
     /// generici): `None` per il null.
     Text(Vec<Option<String>>),
@@ -829,6 +895,9 @@ impl<'a> OrderColumn<'a> {
         }
         if let Some(values) = array.as_any().downcast_ref::<BooleanArray>() {
             return Ok(Self::Boolean(values));
+        }
+        if let Some(values) = array.as_any().downcast_ref::<BinaryArray>() {
+            return Ok(Self::Binary(values));
         }
         let float = array.as_any().downcast_ref::<Float64Array>();
         let texts = representatives
@@ -880,6 +949,11 @@ impl<'a> OrderColumn<'a> {
                     cmp_str_group_key,
                 )
             }
+            Self::Binary(values) => nulls_first(
+                (!values.is_null(row_a)).then(|| values.value(row_a)),
+                (!values.is_null(row_b)).then(|| values.value(row_b)),
+                cmp_bytes_group_key,
+            ),
             Self::Text(texts) => {
                 nulls_first(texts[a].as_deref(), texts[b].as_deref(), cmp_str_group_key)
             }

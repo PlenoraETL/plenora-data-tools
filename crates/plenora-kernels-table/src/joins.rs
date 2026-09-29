@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray,
-    UInt32Array, UInt64Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, RecordBatch,
+    StringArray, UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -18,18 +18,39 @@ use crate::{
 };
 use plenora_core::{PlenoraError, Result};
 
-fn key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<String>> {
-    let mut out = String::new();
+/// Chiave del percorso generico: per colonna `{len}:{testo}\u{1f}` in byte,
+/// `None` se una colonna e' nulla.
+///
+/// Una colonna `Binary` scrive i byte grezzi: per un binario UTF-8 valido
+/// sono i byte del testo di `scalar_as_string` (stessa chiave di prima),
+/// per uno non valido (WKB) la chiave esiste invece dell'errore. I tipi dei
+/// due lati sono identici per contratto, quindi un Binary incontra solo
+/// Binary.
+fn key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<Vec<u8>>> {
+    let mut out = Vec::new();
     for index in indices {
-        let Some(value) = scalar_as_string(batch.column(*index).as_ref(), row)? else {
+        let column = batch.column(*index);
+        if let Some(values) = column.as_any().downcast_ref::<BinaryArray>() {
+            if values.is_null(row) {
+                return Ok(None);
+            }
+            push_key_fragment(&mut out, values.value(row));
+            continue;
+        }
+        let Some(value) = scalar_as_string(column.as_ref(), row)? else {
             return Ok(None);
         };
-        out.push_str(&value.len().to_string());
-        out.push(':');
-        out.push_str(&value);
-        out.push('\u{1f}');
+        push_key_fragment(&mut out, value.as_bytes());
     }
     Ok(Some(out))
+}
+
+/// Frammento `{len}:{value}\u{1f}` di [`key`].
+fn push_key_fragment(out: &mut Vec<u8>, value: &[u8]) {
+    out.extend_from_slice(value.len().to_string().as_bytes());
+    out.push(b':');
+    out.extend_from_slice(value);
+    out.push(0x1f);
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +389,7 @@ fn join_rows_generic(
     right_keys: &[usize],
 ) -> Result<JoinRowPairs> {
     let supera = || PlenoraError::ResourceLimit("join supera max_rows".into());
-    let mut right_map: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut right_map: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
     for row in 0..right.num_rows() {
         if let Some(key) = key(right, right_keys, row)? {
             right_map.entry(key).or_default().push(row);
@@ -378,7 +399,7 @@ fn join_rows_generic(
 
     // Primo passo: conteggio, nessuna coppia materializzata. Le chiavi
     // sinistre si calcolano una volta sola e si riusano nel secondo.
-    let left_keys_by_row: Vec<Option<String>> = (0..left.num_rows())
+    let left_keys_by_row: Vec<Option<Vec<u8>>> = (0..left.num_rows())
         .map(|row| key(left, left_keys, row))
         .collect::<Result<_>>()?;
     let mut matched_right = vec![false; right.num_rows()];
@@ -1576,7 +1597,7 @@ fn asof_right_rows_generic(
     left_on: usize,
     right_on: usize,
 ) -> Result<Vec<Option<usize>>> {
-    let mut groups: HashMap<String, Vec<(f64, usize)>> = HashMap::new();
+    let mut groups: HashMap<Vec<u8>, Vec<(f64, usize)>> = HashMap::new();
     for row in 0..right.num_rows() {
         let Some(group) = group_key(right, right_by, row)? else {
             continue;
@@ -1613,9 +1634,9 @@ fn asof_right_rows_generic(
     Ok(right_rows)
 }
 
-fn group_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<String>> {
+fn group_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<Vec<u8>>> {
     if indices.is_empty() {
-        Ok(Some(String::new()))
+        Ok(Some(Vec::new()))
     } else {
         key(batch, indices, row)
     }

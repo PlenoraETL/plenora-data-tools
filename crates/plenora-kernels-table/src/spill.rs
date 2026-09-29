@@ -756,14 +756,14 @@ fn spill_partitioned(
         ));
     }
     let mut indices: Vec<Vec<usize>> = vec![Vec::new(); partitions];
-    let mut key = String::new();
+    let mut key = Vec::new();
     let mut scratch = String::new();
     for row in 0..batch.num_rows() {
         key.clear();
         for column in key_columns {
             column.write_key(row, &mut key, &mut scratch)?;
         }
-        indices[partition(key.as_bytes(), partitions)?].push(row);
+        indices[partition(&key, partitions)?].push(row);
     }
     let paths = (0..partitions)
         .map(|index| {
@@ -909,7 +909,7 @@ pub fn distinct_spilled_in(
 
     let mut stats: HashMap<Box<[u8]>, KeyStats, ChiaveBuildHasher> = HashMap::default();
     let mut estimated = 0_usize;
-    let mut key = String::new();
+    let mut key = Vec::new();
     let mut scratch = String::new();
     for path in &paths {
         let reader =
@@ -936,7 +936,7 @@ pub fn distinct_spilled_in(
                 // scritte in ordine crescente di indice: min/max sono
                 // comunque applicati per robustezza.
                 let ordinal = ordinal_column.value(row);
-                if let Some(entry) = stats.get_mut(key.as_bytes()) {
+                if let Some(entry) = stats.get_mut(key.as_slice()) {
                     entry.first = entry.first.min(ordinal);
                     entry.last = entry.last.max(ordinal);
                     entry.count += 1;
@@ -952,7 +952,7 @@ pub fn distinct_spilled_in(
                         ));
                     }
                     stats.insert(
-                        key.clone().into_bytes().into_boxed_slice(),
+                        key.clone().into_boxed_slice(),
                         KeyStats {
                             first: ordinal,
                             last: ordinal,
@@ -1058,7 +1058,7 @@ pub fn aggregate_spilled_in(
     )?;
     let mut outputs = Vec::new();
     let mut keys = Vec::new();
-    let mut key = String::new();
+    let mut key = Vec::new();
     let mut scratch = String::new();
     for path in &paths {
         let partition_batch = read_partition(workspace, path, limits)?;

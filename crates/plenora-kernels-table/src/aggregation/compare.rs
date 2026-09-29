@@ -13,11 +13,7 @@ use crate::compare_decimal128_values;
 use crate::scalar_as_string;
 
 #[cfg(test)] // Solo i test-oracolo usano il percorso testuale originale.
-pub(in crate::aggregation) fn row_key(
-    batch: &RecordBatch,
-    indices: &[usize],
-    row: usize,
-) -> Result<String> {
+pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String> {
     let mut key = String::new();
     for index in indices {
         let value = scalar_as_string(batch.column(*index).as_ref(), row)?;

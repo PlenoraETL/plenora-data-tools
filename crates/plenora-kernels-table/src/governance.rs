@@ -4,8 +4,8 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
-    builder::StringBuilder, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch,
-    StringArray, UInt64Array,
+    builder::StringBuilder, Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array,
+    RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
@@ -309,6 +309,9 @@ enum LunghezzaValore<'a> {
     UInt64(&'a UInt64Array),
     Float64(&'a Float64Array),
     Boolean(&'a BooleanArray),
+    /// Byte grezzi: per un binario UTF-8 valido la lunghezza del testo, per
+    /// uno non valido quella dei byte che `BinaryKeyEncoder` codifica.
+    Binary(&'a BinaryArray),
     Generica(&'a ArrayRef),
 }
 
@@ -340,6 +343,9 @@ impl<'a> LunghezzaValore<'a> {
         if let Some(values) = any.downcast_ref::<BooleanArray>() {
             return Self::Boolean(values);
         }
+        if let Some(values) = any.downcast_ref::<BinaryArray>() {
+            return Self::Binary(values);
+        }
         Self::Generica(array)
     }
 
@@ -369,6 +375,7 @@ impl<'a> LunghezzaValore<'a> {
             }
             Self::Boolean(values) => (!values.is_null(row))
                 .then(|| if values.value(row) { "true" } else { "false" }.len()),
+            Self::Binary(values) => (!values.is_null(row)).then(|| values.value(row).len()),
             Self::Generica(array) => {
                 scalar_as_string(array.as_ref(), row)?.map(|testo| testo.len())
             }
