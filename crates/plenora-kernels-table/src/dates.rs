@@ -188,19 +188,6 @@ impl<'a> FormatoUscita<'a> {
     }
 }
 
-/// Valida un formato strftime (`label` identifica il campo nei messaggi).
-///
-/// # Errors
-///
-/// - `InvalidPlan`: formato vuoto o oltre `max_bytes`, oppure contenente
-///   item strftime non riconosciuti.
-pub fn validate_format(format: &str, label: &str, max_bytes: usize) -> Result<()> {
-    if format.is_empty() || format.len() > max_bytes {
-        return Err(PlenoraError::InvalidPlan(format!("{label} non valido")));
-    }
-    validate_format_items(format, label)
-}
-
 fn invalid<T>(_policy: &InvalidDatePolicy, operation: &str, _row: usize) -> Result<Option<T>> {
     Err(PlenoraError::Internal(format!(
         "prevalidazione row-scoped incoerente in {operation}"

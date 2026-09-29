@@ -1095,31 +1095,6 @@ pub fn check_geometry_valid(geometry: &Geometry<f64>) -> Result<(), PlenoraError
     valida_ogc(geometry)
 }
 
-/// Pipeline di [`transform_wkb`] su una geometria gia' decodificata
-/// (architettura.md#geometrie D12.4, profilo A).
-///
-/// Stesso ordine e stessi messaggi: kernel con validazione OGC dell'output
-/// ([`transform_geometry_validated`]), limite sul WKB equivalente
-/// ([`geometry_contract::wkb_size_xy`], esatto per costruzione), validazione
-/// strutturale ([`geometry_contract::validate_geometry_structural`]). La
-/// serializzazione resta al chiamante: `to_wkb` su `Vec` non fallisce su una
-/// geometria che ha superato questi controlli.
-///
-/// # Errors
-///
-/// Come [`transform_wkb`] per la parte successiva al decode.
-pub fn transform_geometry_canonical(
-    operation: Operation,
-    geometry: &Geometry<f64>,
-) -> Result<Geometry<f64>, PlenoraError> {
-    let output = transform_geometry_validated(operation, geometry)?;
-    if geometry_contract::wkb_size_xy(&output) > MAX_WKB_BYTES as u64 {
-        return Err(invalid_wkb_structure("WKB oltre il limite di 64 MiB"));
-    }
-    geometry_contract::validate_geometry_structural(&output, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)?;
-    Ok(output)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

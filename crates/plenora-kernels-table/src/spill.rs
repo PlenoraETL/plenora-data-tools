@@ -326,20 +326,6 @@ pub fn estimated_batch_bytes(batch: &RecordBatch) -> usize {
         .max(plenora_core::memoria::byte_dati(batch))
 }
 
-#[must_use]
-pub fn should_spill(left: &RecordBatch, right: &RecordBatch, limits: &Limits) -> bool {
-    estimated_batch_bytes(left).saturating_add(estimated_batch_bytes(right))
-        > limits.max_governed_memory_bytes
-}
-
-/// Variante unaria di `should_spill` per gli operatori a un input (sort,
-/// distinct, hash aggregation; architettura.md#memoria): si spilla quando il solo input
-/// supera il budget `max_governed_memory_bytes`.
-#[must_use]
-pub fn should_spill_unary(batch: &RecordBatch, limits: &Limits) -> bool {
-    estimated_batch_bytes(batch) > limits.max_governed_memory_bytes
-}
-
 /// Set operation binaria con spill su disco delle chiavi compatte.
 ///
 /// Le chiavi delle righe sono partizionate per hash su file binari con
@@ -2245,10 +2231,8 @@ mod tests {
     }
 
     #[test]
-    fn should_spill_unary_tracks_memory_budget_and_empty_inputs_delegate() {
+    fn estimated_batch_bytes_and_empty_inputs_delegate() {
         let batch = rows_fixture();
-        assert!(!should_spill_unary(&batch, &spill_test_limits(1 << 30)));
-        assert!(should_spill_unary(&batch, &spill_test_limits(1)));
         assert!(estimated_batch_bytes(&batch) > 0);
 
         let empty = batch.slice(0, 0);

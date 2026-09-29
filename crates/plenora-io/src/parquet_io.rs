@@ -268,19 +268,6 @@ pub fn stima_decodificata(metadati: &ParquetMetaData) -> u64 {
     non_compressi.max(larghezze)
 }
 
-/// Picco previsto della lettura: [`FATTORE_LETTURA`] volte
-/// [`stima_decodificata`] più [`crate::memoria::MARGINE`] (README, «File»,
-/// per le misure).
-///
-/// # Errors
-///
-/// `Io`, `DataMapping` dalla lettura del footer.
-pub fn picco_lettura_previsto(percorso: &Path) -> Result<u64> {
-    let costruttore = ParquetRecordBatchReaderBuilder::try_new(File::open(percorso)?)
-        .map_err(da_parquet_valore)?;
-    Ok(picco_previsto(costruttore.metadata()))
-}
-
 fn picco_previsto(metadati: &ParquetMetaData) -> u64 {
     stima_decodificata(metadati)
         .saturating_mul(FATTORE_LETTURA)
