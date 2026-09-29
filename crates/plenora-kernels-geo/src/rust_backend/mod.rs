@@ -366,9 +366,9 @@ fn checked_input(geometry: &Geometry<f64>, max_coordinates: u64) -> Result<(), R
 /// - l'input invalido e' soggetto a [`MAKE_VALID_LIMITS`], che GEOS non
 ///   aveva: oltre 10.000 segmenti la riparazione fallisce chiusa con
 ///   [`RustBackendError::WorkLimit`];
-/// - «valido» e' la validazione OGC del workspace, piu' severa di quella di
-///   GEOS sugli anelli con punta: un input che GEOS lasciava passare
-///   invariato qui puo' essere riparato.
+/// - «valido» e' la validazione OGC del workspace (quella di `geo` piu' il
+///   controllo degli anelli con punta), non `IsValid` di GEOS: dove le due
+///   divergono, passthrough e riparazione possono scambiarsi.
 ///
 /// # Errors
 ///
