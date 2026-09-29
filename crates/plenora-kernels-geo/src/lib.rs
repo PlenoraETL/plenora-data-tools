@@ -35,6 +35,7 @@ pub mod spatial_join;
 #[cfg(test)]
 mod test_support;
 pub mod topology;
+mod validazione_ogc;
 pub mod wkb_decoder;
 
 use geo::{
@@ -127,7 +128,7 @@ fn invalid_geometry(error: impl std::fmt::Display) -> PlenoraError {
 /// nell'executor.
 pub(crate) fn valida_ogc<G>(geometria: &G) -> Result<(), PlenoraError>
 where
-    G: geo::algorithm::validation::Validation + AnelliSemplici,
+    G: validazione_ogc::ValidazioneOgc + AnelliSemplici,
     G::Error: std::fmt::Display,
 {
     match geometria.validazione_protetta() {
@@ -257,7 +258,7 @@ pub(crate) trait ValidazioneProtetta {
 
 impl<G> ValidazioneProtetta for G
 where
-    G: geo::algorithm::validation::Validation + AnelliSemplici,
+    G: validazione_ogc::ValidazioneOgc + AnelliSemplici,
     G::Error: std::fmt::Display,
 {
     fn validazione_protetta(&self) -> std::result::Result<(), EsitoValidazione> {
@@ -271,10 +272,14 @@ where
         }
         // `check_validation` di `geo` puo' andare in panico: la sua `relate`
         // chiama `panic!` quando due conclusioni sullo stesso punto si
-        // contraddicono, anche su geometrie invalide in ingresso.
-        let esito = plenora_core::panic_policy::barriera_di_dipendenza(
-            std::panic::AssertUnwindSafe(|| self.check_validation()),
-        );
+        // contraddicono, anche su geometrie invalide in ingresso. Gli anelli
+        // passano dalla stessa sequenza con la ricerca rapida delle
+        // auto-intersezioni (vedi `validazione_ogc`), che chiama la stessa
+        // `relate`: stessa barriera.
+        let esito =
+            plenora_core::panic_policy::barriera_di_dipendenza(std::panic::AssertUnwindSafe(
+                || validazione_ogc::ValidazioneOgc::valida_ogc_rapida(self),
+            ));
         match esito {
             Ok(Ok(())) => Ok(()),
             Ok(Err(causa)) => Err(EsitoValidazione::NonValida(RagioneNonValida::dal_testo(
@@ -1987,6 +1992,9 @@ mod tests {
                     false
                 }
             }
+
+            // Il ramo predefinito: `check_validation`, che qui va in panico.
+            impl crate::validazione_ogc::ValidazioneOgc for TipoDiProva {}
 
             impl geo::algorithm::validation::Validation for TipoDiProva {
                 type Error = std::convert::Infallible;

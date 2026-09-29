@@ -31,6 +31,42 @@ Engine, CLI, isolamento e protocollo del progetto d'origine non sono stati
 portati. I riferimenti a `docs/…` nei commenti rimandano alla documentazione
 di `plenora-data-tools`.
 
+## Limiti dichiarati
+
+### Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`, il verdetto sì
+
+**Regola.** Per `Polygon`, `MultiPolygon`, `GeometryCollection` e `Geometry`
+la barriera `ValidazioneProtetta` non chiama `check_validation` di `geo`:
+esegue `validazione_ogc::ValidazioneOgc::valida_ogc_rapida`, che rifà con le
+API pubbliche di `geo` la stessa sequenza di `visit_validation` di `geo`
+0.33.1 (stessi controlli, ordine, errori, stessa `relate`) e cambia **solo**
+come si trovano le coppie di segmenti candidate: una scansione sui rettangoli
+d'ingombro al posto del doppio ciclo O(n²). Il predicato per coppia è quello
+di `geo`; gli anelli con coordinate non finite passano dal doppio ciclo.
+L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
+
+**Ambito.** `plenora-kernels-geo`, ogni validazione OGC che passa da
+`ValidazioneProtetta`.
+
+**Hazard.**
+
+- il caso peggiore resta O(n²): con molti segmenti lunghi a rettangoli
+  sovrapposti le coppie candidate sono quadratiche come nel doppio ciclo (il
+  verdetto non cambia, il tempo sì);
+- la sequenza è copiata da `geo` 0.33.1: a ogni aggiornamento di `geo` va
+  riallineata a mano, e l'oracolo rileva una divergenza solo sulle forme che
+  esercita;
+- la correttezza dello scarto delle coppie dipende dal segno esatto di
+  `orient2d` nel kernel di `geo`: con un kernel non esatto il filtro potrebbe
+  scartare una coppia che il doppio ciclo dichiara intersecante;
+- i controlli `relate` fra anelli e fra i poligoni di un `MultiPolygon` restano
+  quadratici nel numero di anelli e di poligoni, come in `geo`.
+
+**Condizione di rientro.** Una versione di `geo` con una ricerca delle
+auto-intersezioni sub-quadratica a verdetto identico: la sequenza copiata si
+toglie, la barriera torna a `check_validation` e l'oracolo resta come
+regressione.
+
 ## Costruire e provare
 
 Serve solo `rustup`: la toolchain (1.98.0) è fissata in
