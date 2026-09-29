@@ -273,6 +273,9 @@ fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
 
 /// DP di Levenshtein con righe fornite dal chiamante (riuso buffer nel
 /// probe di `fuzzy_join`, hot path minimale): stesso ordine di calcolo, risultato identico.
+/// Il probe usa `levenshtein_entro`; questa DP completa resta il confronto
+/// dei test.
+#[cfg(test)]
 fn levenshtein_distance_scratch(
     left: &[char],
     right: &[char],
@@ -342,6 +345,10 @@ struct FuzzyScratch {
     right_matched: Vec<bool>,
     previous: Vec<usize>,
     current: Vec<usize>,
+    /// Distanza di Levenshtein massima ammessa dalla soglia, per lunghezza
+    /// massima della coppia (calcolata alla prima coppia di quella
+    /// lunghezza; la soglia e' la stessa per tutto il probe).
+    distanze_massime: Vec<Option<usize>>,
 }
 
 /// Jaro-Winkler su caratteri pre-decodificati con flag riusati.
@@ -367,19 +374,144 @@ fn jaro_winkler_chars(left: &[char], right: &[char], scratch: &mut FuzzyScratch)
     jaro + boost
 }
 
-/// Levenshtein normalizzato su caratteri pre-decodificati con righe DP
-/// riusate.
-fn levenshtein_normalized_chars(left: &[char], right: &[char], scratch: &mut FuzzyScratch) -> f64 {
+/// Score di Levenshtein normalizzato da distanza e lunghezza massima (in
+/// caratteri Unicode): `1 - dist/max_len`, la stessa espressione f64 del
+/// percorso di riferimento. Unica fonte sia per lo score emesso sia per la
+/// distanza massima ammessa dalla soglia (`distanza_massima`).
+fn punteggio_levenshtein(distanza: usize, max_len: usize) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let score = 1.0 - distanza as f64 / max_len as f64;
+    score
+}
+
+/// La distanza piu' grande con score >= `threshold` per stringhe la cui
+/// piu' lunga ha `max_len >= 1` caratteri.
+///
+/// Lo score e' monotono non crescente nella distanza anche in f64: la
+/// conversione `usize -> f64`, la divisione per lo stesso `max_len` e la
+/// sottrazione da 1 sono arrotondate al piu' vicino, e l'arrotondamento e'
+/// monotono. Le distanze ammesse sono quindi un prefisso `0..=k`, e `k` si
+/// trova per bisezione valutando `punteggio_levenshtein` stesso: nessuna
+/// formula chiusa, nessun margine, nessuna coppia al bordo trattata
+/// diversamente dal riferimento. La distanza 0 e' sempre ammessa (score 1,
+/// soglia <= 1).
+fn distanza_massima(max_len: usize, threshold: f64) -> usize {
+    let (mut ammessa, mut esclusa) = (0_usize, max_len + 1);
+    while esclusa - ammessa > 1 {
+        let mezzo = ammessa + (esclusa - ammessa) / 2;
+        if punteggio_levenshtein(mezzo, max_len) >= threshold {
+            ammessa = mezzo;
+        } else {
+            esclusa = mezzo;
+        }
+    }
+    ammessa
+}
+
+/// Distanza di Levenshtein se e' al piu' `limite`, `None` altrimenti.
+///
+/// - Filtro sulle lunghezze: la distanza e' almeno la differenza delle
+///   lunghezze, quindi oltre `limite` la coppia non puo' rientrarvi.
+/// - DP a banda (Ukkonen): un cammino di edit che passa per la cella
+///   `(i, j)` costa almeno `|i - j|`, quindi ogni cammino di costo
+///   `<= limite` resta nella banda `|i - j| <= limite`. Le celle fuori banda
+///   valgono `limite + 1` (infinito); dentro la banda il valore calcolato e'
+///   il minimo sui soli cammini in banda: esatto quando la distanza vera e'
+///   `<= limite`, oltre `limite` altrimenti (i valori sono tagliati a
+///   `limite + 1`).
+/// - Uscita anticipata: ogni cammino attraversa ogni riga e i costi lungo
+///   un cammino non decrescono, quindi se tutta la banda di una riga supera
+///   `limite` la distanza finale lo supera.
+fn levenshtein_entro(
+    left: &[char],
+    right: &[char],
+    limite: usize,
+    previous: &mut Vec<usize>,
+    current: &mut Vec<usize>,
+) -> Option<usize> {
+    if left.len().abs_diff(right.len()) > limite {
+        return None;
+    }
+    if left.is_empty() {
+        return Some(right.len());
+    }
+    if right.is_empty() {
+        return Some(left.len());
+    }
+    let infinito = limite.saturating_add(1);
+    previous.clear();
+    previous.resize(right.len() + 1, infinito);
+    current.clear();
+    current.resize(right.len() + 1, infinito);
+    for (col, cella) in previous
+        .iter_mut()
+        .enumerate()
+        .take(limite.min(right.len()) + 1)
+    {
+        *cella = col;
+    }
+    for (row, &a) in left.iter().enumerate() {
+        let riga = row + 1;
+        // Banda della riga: colonne `riga - limite ..= riga + limite`. La
+        // colonna 0 vale `riga` se in banda e la cella appena a sinistra
+        // della banda vale infinito (il buffer contiene valori di due righe
+        // prima). Le celle a destra della banda non sono mai state scritte:
+        // la banda si sposta solo verso destra, quindi valgono ancora
+        // infinito dal `resize`.
+        let prima = riga.saturating_sub(limite).max(1);
+        let ultima = riga.saturating_add(limite).min(right.len());
+        current[0] = if riga <= limite { riga } else { infinito };
+        current[prima - 1] = if prima == 1 { current[0] } else { infinito };
+        let mut minimo = current[prima - 1];
+        for col in prima..=ultima {
+            let substitution = previous[col - 1] + usize::from(a != right[col - 1]);
+            let valore = (previous[col] + 1)
+                .min(current[col - 1] + 1)
+                .min(substitution)
+                .min(infinito);
+            current[col] = valore;
+            minimo = minimo.min(valore);
+        }
+        if minimo > limite {
+            return None;
+        }
+        std::mem::swap(previous, current);
+    }
+    let distanza = previous[right.len()];
+    (distanza <= limite).then_some(distanza)
+}
+
+/// Score di Levenshtein normalizzato se e' >= `threshold`, `None` se e'
+/// certamente sotto.
+///
+/// La distanza massima ammessa viene dalla stessa espressione dello score
+/// (`distanza_massima`, in cache per lunghezza): una coppia si scarta solo
+/// se la sua distanza supera quel massimo, cioe' solo se il suo score del
+/// riferimento e' sotto soglia. Per le altre la distanza e' esatta e lo
+/// score e' la stessa espressione f64 del riferimento, bit per bit.
+fn levenshtein_sopra_soglia(
+    left: &[char],
+    right: &[char],
+    threshold: f64,
+    scratch: &mut FuzzyScratch,
+) -> Option<f64> {
     let max_len = left.len().max(right.len());
     if max_len == 0 {
-        return 1.0;
+        return Some(1.0);
     }
-    #[allow(clippy::cast_precision_loss)]
-    let score = 1.0
-        - levenshtein_distance_scratch(left, right, &mut scratch.previous, &mut scratch.current)
-            as f64
-            / max_len as f64;
-    score
+    if scratch.distanze_massime.len() <= max_len {
+        scratch.distanze_massime.resize(max_len + 1, None);
+    }
+    let limite = *scratch.distanze_massime[max_len]
+        .get_or_insert_with(|| distanza_massima(max_len, threshold));
+    let distanza = levenshtein_entro(
+        left,
+        right,
+        limite,
+        &mut scratch.previous,
+        &mut scratch.current,
+    )?;
+    Some(punteggio_levenshtein(distanza, max_len))
 }
 
 /// Jaccard su insiemi di token pre-costruiti (nessuna allocazione per
@@ -503,12 +635,16 @@ fn probe_chunk(
                     left_chars.clear();
                     left_chars.extend(value.chars());
                     for &right_row in candidates {
-                        let similarity = levenshtein_normalized_chars(
+                        // `None`: score certamente sotto soglia, nessuna riga
+                        // come nel riferimento.
+                        if let Some(similarity) = levenshtein_sopra_soglia(
                             &left_chars,
                             &right_chars[right_row],
+                            config.threshold,
                             &mut scratch,
-                        );
-                        emetti(right_row, similarity);
+                        ) {
+                            emetti(right_row, similarity);
+                        }
                     }
                 }
                 DestraDecodificata::Jaccard(right_tokens) => {

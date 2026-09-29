@@ -762,3 +762,93 @@ proptest! {
         confronta(&tabella(&sinistra), &tabella(&destra), &config, &limits);
     }
 }
+
+// -- Oracoli dei filtri per coppia -------------------------------------------
+
+/// Soglie per i filtri: fisse, i punteggi esatti `1 - d/m` fino a `m = 40`
+/// e i loro vicini `next_up`/`next_down`.
+fn soglie_dei_filtri() -> Vec<f64> {
+    let mut soglie = soglie_fisse();
+    for m in 1_u32..=40 {
+        for d in 0..=m {
+            let score = 1.0 - f64::from(d) / f64::from(m);
+            soglie.extend([score, score.next_up(), score.next_down()]);
+        }
+    }
+    soglie.retain(|&soglia| soglia > 0.0 && soglia <= 1.0);
+    soglie
+}
+
+#[test]
+fn oracolo_distanza_massima_esaustivo() {
+    // Per ogni lunghezza e soglia: una distanza e' ammessa dal filtro se e
+    // solo se lo score del riferimento (stessa espressione, scritta qui alla
+    // lettera) e' >= soglia.
+    for threshold in soglie_dei_filtri() {
+        for max_len in 1_usize..=300 {
+            let limite = super::distanza_massima(max_len, threshold);
+            for distanza in 0..=max_len {
+                #[allow(clippy::cast_precision_loss)]
+                let score = 1.0 - distanza as f64 / max_len as f64;
+                assert_eq!(
+                    distanza <= limite,
+                    score >= threshold,
+                    "max_len {max_len}, distanza {distanza}, soglia {threshold}"
+                );
+            }
+        }
+    }
+}
+
+/// `levenshtein_entro` contro la DP completa del riferimento per ogni
+/// limite da 0 a oltre la lunghezza, con buffer riusati fra le coppie.
+fn confronta_levenshtein_entro(coppie: &[(Vec<char>, Vec<char>)]) {
+    let (mut previous, mut current) = (Vec::new(), Vec::new());
+    let (mut ref_previous, mut ref_current) = (Vec::new(), Vec::new());
+    for (left, right) in coppie {
+        let distanza =
+            levenshtein_distance_scratch(left, right, &mut ref_previous, &mut ref_current);
+        for limite in 0..=left.len().max(right.len()) + 1 {
+            assert_eq!(
+                super::levenshtein_entro(left, right, limite, &mut previous, &mut current),
+                (distanza <= limite).then_some(distanza),
+                "{left:?} {right:?} limite {limite}"
+            );
+        }
+    }
+}
+
+#[test]
+fn oracolo_levenshtein_entro_casi_avversari() {
+    let chiavi: Vec<Vec<char>> = CHIAVI
+        .iter()
+        .flatten()
+        .map(|chiave| chiave.chars().collect())
+        .collect();
+    let coppie: Vec<(Vec<char>, Vec<char>)> = chiavi
+        .iter()
+        .flat_map(|left| {
+            chiavi
+                .iter()
+                .map(move |right| (left.clone(), right.clone()))
+        })
+        .collect();
+    confronta_levenshtein_entro(&coppie);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    #[test]
+    fn oracolo_levenshtein_entro_casuale(
+        coppie in prop::collection::vec(
+            (
+                prop::collection::vec(prop::sample::select(vec!['a', 'b', 'c', '\u{e9}']), 0..30),
+                prop::collection::vec(prop::sample::select(vec!['a', 'b', 'c', '\u{e9}']), 0..30),
+            ),
+            1..6,
+        ),
+    ) {
+        confronta_levenshtein_entro(&coppie);
+    }
+}
