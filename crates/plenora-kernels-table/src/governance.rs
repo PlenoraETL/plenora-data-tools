@@ -5,7 +5,8 @@ use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+    builder::StringBuilder, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch,
+    StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
@@ -13,8 +14,8 @@ use serde::Deserialize;
 use crate::hashing::FastHasher;
 use crate::Limits;
 use crate::{
-    column_index, reject_rows, replace_or_append, scalar_as_string, scalar_compare, NumericBound,
-    RowRejection,
+    column_index, compare_f64, compare_i64, reject_rows, replace_or_append, scalar_as_string,
+    scalar_compare, NumericBound, RowRejection,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -842,6 +843,113 @@ fn rule_compare(array: &dyn Array, row: usize, bound: Option<NumericBound>) -> R
     }
 }
 
+/// Colonna di una regola risolta una volta per regola: il tipo fisico
+/// decide null, confronto, testo e regex senza un downcast per riga.
+///
+/// Ogni ramo tipizzato rende cio' che renderebbe il percorso scalare sulla
+/// stessa cella (`is_logically_null`, `rule_compare`, `scalar_as_string`),
+/// che resta il ramo `Generica`.
+struct ColonnaRegola<'a> {
+    array: &'a dyn Array,
+    tipo: TipoColonnaRegola<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum TipoColonnaRegola<'a> {
+    Int64(&'a Int64Array),
+    Float64(&'a Float64Array),
+    Utf8(&'a StringArray),
+    Generica,
+}
+
+impl<'a> ColonnaRegola<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        let any = array.as_any();
+        let tipo = any
+            .downcast_ref::<Int64Array>()
+            .map(TipoColonnaRegola::Int64)
+            .or_else(|| {
+                any.downcast_ref::<Float64Array>()
+                    .map(TipoColonnaRegola::Float64)
+            })
+            .or_else(|| {
+                any.downcast_ref::<StringArray>()
+                    .map(TipoColonnaRegola::Utf8)
+            })
+            .unwrap_or(TipoColonnaRegola::Generica);
+        Self { array, tipo }
+    }
+
+    /// Null logico: per i tipi nativi e' il null fisico (non sono
+    /// dictionary).
+    fn nulla(&self, row: usize) -> bool {
+        match self.tipo {
+            TipoColonnaRegola::Int64(values) => values.is_null(row),
+            TipoColonnaRegola::Float64(values) => values.is_null(row),
+            TipoColonnaRegola::Utf8(values) => values.is_null(row),
+            TipoColonnaRegola::Generica => crate::is_logically_null(self.array, row),
+        }
+    }
+
+    /// [`rule_compare`] sulla cella: `scalar_compare` su Int64 e Float64 non
+    /// fallisce e si riduce a `compare_i64`/`compare_f64`, con davanti la
+    /// semantica storica dei NaN dei double.
+    fn confronto(&self, row: usize, bound: Option<NumericBound>) -> RuleComparison {
+        let ordine = |ordine: Option<Ordering>| {
+            ordine.map_or(RuleComparison::Undefined, RuleComparison::Ordered)
+        };
+        match (self.tipo, bound) {
+            (_, None) => RuleComparison::Invalid,
+            (TipoColonnaRegola::Int64(values), Some(bound)) => {
+                ordine(compare_i64(values.value(row), bound))
+            }
+            (TipoColonnaRegola::Float64(values), Some(bound)) => {
+                let actual = values.value(row);
+                if let NumericBound::F64(expected) = bound {
+                    if actual.is_nan() || expected.is_nan() {
+                        return if actual.is_nan() && expected.is_nan() {
+                            RuleComparison::BothNan
+                        } else {
+                            RuleComparison::Undefined
+                        };
+                    }
+                }
+                ordine(compare_f64(actual, bound))
+            }
+            (TipoColonnaRegola::Utf8(_) | TipoColonnaRegola::Generica, bound) => {
+                rule_compare(self.array, row, bound)
+            }
+        }
+    }
+
+    /// Uguaglianza testuale con `expected`; `None` se la cella non si legge.
+    fn testo_uguale(&self, row: usize, expected: &str) -> Option<bool> {
+        match self.tipo {
+            TipoColonnaRegola::Utf8(values) => {
+                (!values.is_null(row)).then(|| values.value(row) == expected)
+            }
+            _ => match scalar_as_string(self.array, row) {
+                Ok(Some(actual)) => Some(actual == expected),
+                Ok(None) | Err(_) => None,
+            },
+        }
+    }
+
+    /// La regex riconosce la cella; una cella che non si legge non la
+    /// soddisfa.
+    fn corrisponde(&self, row: usize, regex: &regex::Regex) -> bool {
+        match self.tipo {
+            TipoColonnaRegola::Utf8(values) => {
+                !values.is_null(row) && regex.is_match(values.value(row))
+            }
+            _ => scalar_as_string(self.array, row)
+                .ok()
+                .flatten()
+                .is_some_and(|actual| regex.is_match(&actual)),
+        }
+    }
+}
+
 /// Valuta una regola su una riga.
 ///
 /// MAI un errore sui dati: qualunque valore non interpretabile (incluso null
@@ -852,57 +960,42 @@ fn rule_compare(array: &dyn Array, row: usize, bound: Option<NumericBound>) -> R
 /// Confronti numerici tutti esatti nel dominio nativo del tipo (vedi
 /// [`rule_compare`]); l'uguaglianza sulle colonne non numeriche resta
 /// testuale, come da contratto della regola.
-fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<bool> {
-    let array = batch.column(rule.column_index).as_ref();
+fn rule_passes(rule: &CompiledRule, colonna: &ColonnaRegola<'_>, row: usize) -> Result<bool> {
     match rule.operator {
         // Stessa nozione di null del filtro: due kernel che rispondono
         // diversamente sulla stessa riga sarebbero peggio di entrambi.
-        RuleOperator::Isnull => return Ok(crate::is_logically_null(array, row)),
-        RuleOperator::Notnull => return Ok(!crate::is_logically_null(array, row)),
-        _ if crate::is_logically_null(array, row) => return Ok(false),
+        RuleOperator::Isnull => return Ok(colonna.nulla(row)),
+        RuleOperator::Notnull => return Ok(!colonna.nulla(row)),
+        _ if colonna.nulla(row) => return Ok(false),
         _ => {}
     }
     Ok(match rule.operator {
         RuleOperator::Eq | RuleOperator::Ne => {
             let equal = if rule.numeric_column {
-                rule_compare(array, row, rule.expected_bound).equality()
+                colonna.confronto(row, rule.expected_bound).equality()
             } else {
                 // Colonna non numerica: uguaglianza testuale. Una cella che
                 // non si riesce a leggere e' `None` (non interpretabile), mai
                 // "diversa dal valore atteso".
-                match scalar_as_string(array, row) {
-                    Ok(Some(actual)) => Some(actual == rule.expected),
-                    Ok(None) | Err(_) => None,
-                }
+                colonna.testo_uguale(row, &rule.expected)
             };
             // `None` = cella non interpretabile: la regola fallisce sia con
             // `eq` sia con `ne`.
             equal.is_some_and(|equal| matches!(rule.operator, RuleOperator::Ne) != equal)
         }
         RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => rule_ordered(
-            rule_compare(array, row, rule.expected_bound).ordering(),
+            colonna.confronto(row, rule.expected_bound).ordering(),
             rule.operator,
         )
         .ok_or_else(|| PlenoraError::Internal("operatore di regola non ordinato".into()))?,
         RuleOperator::Range => within_rule_range(
-            rule_compare(array, row, rule.expected_bound).ordering(),
-            rule_compare(array, row, rule.expected_high_bound).ordering(),
+            colonna.confronto(row, rule.expected_bound).ordering(),
+            colonna.confronto(row, rule.expected_high_bound).ordering(),
         ),
-        // La colonna di una regola regex e' garantita Utf8 da
-        // `compile_rules` (hot path minimale): prestito diretto sulla `StringArray`,
-        // senza l'allocazione per riga di `scalar_as_string`. Tipi diversi
-        // (mai raggiunti per contratto) restano sul percorso scalare.
-        RuleOperator::Regex => rule.regex.as_ref().is_some_and(|regex| {
-            array.as_any().downcast_ref::<StringArray>().map_or_else(
-                || {
-                    scalar_as_string(array, row)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|actual| regex.is_match(&actual))
-                },
-                |values| !values.is_null(row) && regex.is_match(values.value(row)),
-            )
-        }),
+        RuleOperator::Regex => rule
+            .regex
+            .as_ref()
+            .is_some_and(|regex| colonna.corrisponde(row, regex)),
         RuleOperator::Isnull | RuleOperator::Notnull => {
             return Err(PlenoraError::Internal(
                 "isnull/notnull sono valutati prima del confronto scalare".into(),
@@ -911,32 +1004,13 @@ fn rule_passes(batch: &RecordBatch, rule: &CompiledRule, row: usize) -> Result<b
     })
 }
 
-/// Esito della valutazione delle regole: validita' per riga e indici delle
-/// regole fallite per gravita' (errori, warning).
-type RuleEvaluation = (Vec<bool>, Vec<Vec<usize>>, Vec<Vec<usize>>);
-
-/// Valuta tutte le regole su tutte le righe; restituisce per riga gli
-/// INDICI delle regole fallite per gravita' (nomi risolti dal chiamante).
-fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEvaluation> {
-    let mut valid = Vec::with_capacity(batch.num_rows());
-    let mut errors: Vec<Vec<usize>> = Vec::with_capacity(batch.num_rows());
-    let mut warnings: Vec<Vec<usize>> = Vec::with_capacity(batch.num_rows());
-    for row in 0..batch.num_rows() {
-        let mut row_errors = Vec::new();
-        let mut row_warnings = Vec::new();
-        for (index, rule) in rules.iter().enumerate() {
-            if !rule_passes(batch, rule, row)? {
-                match rule.severity {
-                    RuleSeverity::Error => row_errors.push(index),
-                    RuleSeverity::Warning => row_warnings.push(index),
-                }
-            }
-        }
-        valid.push(row_errors.is_empty());
-        errors.push(row_errors);
-        warnings.push(row_warnings);
+/// Aggiunge `nome` all'elenco `;`-separato di una riga.
+fn aggiungi_nome(elenco: &mut String, vuoto: &mut bool, nome: &str) {
+    if !*vuoto {
+        elenco.push(';');
     }
-    Ok((valid, errors, warnings))
+    elenco.push_str(nome);
+    *vuoto = false;
 }
 
 /// Valida le righe contro un set di regole dichiarative.
@@ -946,6 +1020,10 @@ fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEva
 /// delle regole fallite separati da `;`, stringa vuota se nessuna);
 /// `summary` emette una riga per regola (`name`, `errors`, `warnings` con i
 /// conteggi delle righe fallite per gravita').
+///
+/// Le regole si valutano riga per riga nell'ordine di configurazione, con
+/// la colonna di ogni regola risolta una volta ([`ColonnaRegola`]); i nomi
+/// delle regole fallite si scrivono direttamente nei buffer di output.
 ///
 /// # Errors
 ///
@@ -958,16 +1036,39 @@ fn evaluate_rules(batch: &RecordBatch, rules: &[CompiledRule]) -> Result<RuleEva
 ///   costruzione dell'output.
 pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<RecordBatch> {
     let rules = compile_rules(batch, config)?;
-    let (valid, errors, warnings) = evaluate_rules(batch, &rules)?;
-    let join_names = |indices: &[usize]| {
-        indices
-            .iter()
-            .map(|index| rules[*index].name.as_str())
-            .collect::<Vec<_>>()
-            .join(";")
-    };
+    let colonne = rules
+        .iter()
+        .map(|rule| ColonnaRegola::new(batch.column(rule.column_index).as_ref()))
+        .collect::<Vec<_>>();
+    let righe = batch.num_rows();
     match config.output_mode {
         ValidateOutputMode::Annotate => {
+            let mut valid = Vec::with_capacity(righe);
+            let mut errors = StringBuilder::with_capacity(righe, 0);
+            let mut warnings = StringBuilder::with_capacity(righe, 0);
+            let mut testo_errori = String::new();
+            let mut testo_avvisi = String::new();
+            for row in 0..righe {
+                testo_errori.clear();
+                testo_avvisi.clear();
+                let mut senza_errori = true;
+                let mut senza_avvisi = true;
+                for (rule, colonna) in rules.iter().zip(&colonne) {
+                    if !rule_passes(rule, colonna, row)? {
+                        match rule.severity {
+                            RuleSeverity::Error => {
+                                aggiungi_nome(&mut testo_errori, &mut senza_errori, &rule.name);
+                            }
+                            RuleSeverity::Warning => {
+                                aggiungi_nome(&mut testo_avvisi, &mut senza_avvisi, &rule.name);
+                            }
+                        }
+                    }
+                }
+                valid.push(senza_errori);
+                errors.append_value(&testo_errori);
+                warnings.append_value(&testo_avvisi);
+            }
             let result = replace_or_append(
                 batch,
                 "_valid",
@@ -980,37 +1081,31 @@ pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Rec
                 "_errors",
                 DataType::Utf8,
                 false,
-                Arc::new(StringArray::from(
-                    errors
-                        .iter()
-                        .map(|indices| join_names(indices))
-                        .collect::<Vec<_>>(),
-                )),
+                Arc::new(errors.finish()),
             )?;
             replace_or_append(
                 &result,
                 "_warnings",
                 DataType::Utf8,
                 false,
-                Arc::new(StringArray::from(
-                    warnings
-                        .iter()
-                        .map(|indices| join_names(indices))
-                        .collect::<Vec<_>>(),
-                )),
+                Arc::new(warnings.finish()),
             )
         }
         ValidateOutputMode::Summary => {
             let mut error_counts = vec![0_i64; rules.len()];
             let mut warning_counts = vec![0_i64; rules.len()];
-            for row_errors in &errors {
-                for index in row_errors {
-                    error_counts[*index] += 1;
-                }
-            }
-            for row_warnings in &warnings {
-                for index in row_warnings {
-                    warning_counts[*index] += 1;
+            for row in 0..righe {
+                for ((rule, colonna), (errori, avvisi)) in rules
+                    .iter()
+                    .zip(&colonne)
+                    .zip(error_counts.iter_mut().zip(warning_counts.iter_mut()))
+                {
+                    if !rule_passes(rule, colonna, row)? {
+                        match rule.severity {
+                            RuleSeverity::Error => *errori += 1,
+                            RuleSeverity::Warning => *avvisi += 1,
+                        }
+                    }
                 }
             }
             Ok(RecordBatch::try_new(
@@ -1814,3 +1909,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "regole_oracolo.rs"]
+mod regole_oracolo;

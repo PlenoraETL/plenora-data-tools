@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
-    new_null_array, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    Float64Array, Int64Array, RecordBatch, StringArray, TimestampMillisecondArray, UInt64Array,
+    builder::StringBuilder, new_null_array, Array, ArrayRef, BinaryArray, BooleanArray,
+    Date32Array, Decimal128Array, Float64Array, Int64Array, RecordBatch, StringArray,
+    TimestampMillisecondArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
 use serde::Deserialize;
@@ -676,30 +677,36 @@ pub fn split_column(
     } else {
         requested_parts
     };
-    let mut outputs = vec![Vec::<Option<String>>::with_capacity(batch.num_rows()); requested_parts];
+    // Un builder Arrow per colonna di output: le parti si copiano dal testo
+    // d'ingresso ai buffer, senza una `String` per cella ne' un `Vec` di
+    // parti per riga. Le parti oltre `split_limit` (e le colonne senza una
+    // parte) sono null, come nel `Vec` di parti indicizzato di prima.
+    let mut outputs = (0..requested_parts)
+        .map(|_| StringBuilder::with_capacity(batch.num_rows(), 0))
+        .collect::<Vec<_>>();
     for row in 0..batch.num_rows() {
         if input.is_null(row) {
             for output in &mut outputs {
-                output.push(None);
+                output.append_null();
             }
             continue;
         }
-        let parts: Vec<&str> = input
-            .value(row)
-            .splitn(split_limit, &config.delimiter)
-            .collect();
-        for (index, output) in outputs.iter_mut().enumerate() {
-            output.push(parts.get(index).map(|value| (*value).to_owned()));
+        let mut parts = input.value(row).splitn(split_limit, &config.delimiter);
+        for output in &mut outputs {
+            match parts.next() {
+                Some(part) => output.append_value(part),
+                None => output.append_null(),
+            }
         }
     }
     let mut result = batch.clone();
-    for (name, output) in config.new_columns.iter().zip(outputs) {
+    for (name, mut output) in config.new_columns.iter().zip(outputs) {
         result = replace_or_append(
             &result,
             name,
             DataType::Utf8,
             true,
-            Arc::new(StringArray::from(output)),
+            Arc::new(output.finish()),
         )?;
     }
     Ok(result)
@@ -1189,3 +1196,7 @@ mod tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "split_oracolo.rs"]
+mod split_oracolo;
