@@ -9,8 +9,9 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, require_scalar_string,
-    require_scalar_string_field, require_utf8, typed,
+    analyze_append, check_name_list, check_output_name, check_text_len, con_op, contract_error,
+    require_scalar_string, require_scalar_string_field, require_scalar_strings, require_utf8,
+    typed,
 };
 use crate::{security, strings, Limits};
 
@@ -23,12 +24,16 @@ pub(in crate::analyze) fn analyze_string_pad(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: strings::StringPad = typed(op, config)?;
     let input = &inputs[0];
     require_utf8(op, input, &config.column)?;
     if config.fill_char.chars().count() != 1 {
         return contract_error(op, "fill_char deve essere un singolo carattere");
+    }
+    if config.width > limits.max_string_bytes {
+        return contract_error(op, "width oltre il limite di byte");
     }
     let name = config.output_column.unwrap_or(config.column);
     check_output_name(op, &name)?;
@@ -56,15 +61,20 @@ pub(in crate::analyze) fn analyze_string_extract(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: strings::StringExtract = typed(op, config)?;
     let input = &inputs[0];
     require_utf8(op, input, &config.column)?;
-    if config.pattern.len() > Limits::default().max_regex_bytes {
+    if config.pattern.is_empty() {
+        return contract_error(op, "pattern vuoto");
+    }
+    if config.pattern.len() > limits.max_regex_bytes {
         return contract_error(op, "pattern oltre max_regex_bytes");
     }
     let pattern = regex::Regex::new(&config.pattern)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
+    con_op(op, strings::verifica_gruppi_con_nome(&config, &pattern))?;
     let named: Vec<String> = pattern
         .capture_names()
         .flatten()
@@ -76,7 +86,8 @@ pub(in crate::analyze) fn analyze_string_extract(
             .unwrap_or_else(|| format!("{}_extracted", config.column));
         vec![(name, DataType::Utf8, true)]
     } else {
-        // Con gruppi con nome: una colonna per gruppo; output_column ignorato.
+        // Con gruppi con nome: una colonna per gruppo (`output_column` ed
+        // `extract_all` sono gia' rifiutati).
         named
             .into_iter()
             .map(|n| (n, DataType::Utf8, true))
@@ -93,12 +104,11 @@ pub(in crate::analyze) fn analyze_text_normalize(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: strings::TextNormalize = typed(op, config)?;
     let input = &inputs[0];
-    if config.columns.is_empty() {
-        return contract_error(op, "columns vuoto");
-    }
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
     let mut produced = Vec::with_capacity(config.columns.len());
     for name in &config.columns {
         require_utf8(op, input, name)?;
@@ -118,13 +128,18 @@ pub(in crate::analyze) fn analyze_md5_hash(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: security::Md5Hash = typed(op, config)?;
     let input = &inputs[0];
     check_output_name(op, &config.output_column)?;
-    if config.columns.is_empty() {
-        return contract_error(op, "columns vuoto");
-    }
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
+    check_text_len(
+        op,
+        &config.null_literal,
+        limits.max_string_bytes,
+        "null_literal",
+    )?;
     for name in &config.columns {
         require_scalar_string(op, input, name)?;
     }
@@ -140,11 +155,20 @@ pub(in crate::analyze) fn analyze_sha256_hash(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: security::Sha256Hash = typed(op, config)?;
     let input = &inputs[0];
     check_output_name(op, &config.output_column)?;
-    // A differenza di md5_hash il kernel non vieta columns vuoto.
+    // Il kernel accetta columns vuoto e scrive per ogni riga l'hash di
+    // niente: un'impronta vacua, rifiutata come in md5_hash.
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
+    check_text_len(
+        op,
+        &config.null_literal,
+        limits.max_string_bytes,
+        "null_literal",
+    )?;
     for name in &config.columns {
         require_scalar_string(op, input, name)?;
     }
@@ -160,10 +184,17 @@ pub(in crate::analyze) fn analyze_stable_fingerprint(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: security::StableFingerprint = typed(op, config)?;
     let input = &inputs[0];
     check_output_name(op, &config.output_column)?;
+    check_name_list(op, &config.columns, limits.max_columns, "columns", true)?;
+    if config.columns.is_empty() && input.schema.fields().is_empty() {
+        // Senza colonne ne' nella config ne' nello schema l'impronta non
+        // dipende da niente: uguale per ogni riga.
+        return contract_error(op, "stable_fingerprint richiede almeno una colonna");
+    }
     if config.columns.is_empty() {
         // Default: tutte le colonne dello schema; il kernel legge ogni valore
         // via `scalar_as_string`, quindi i tipi fuori profilo (List, Struct)
@@ -172,13 +203,7 @@ pub(in crate::analyze) fn analyze_stable_fingerprint(
             require_scalar_string_field(op, field)?;
         }
     } else {
-        let mut seen: HashSet<&str> = HashSet::new();
-        for name in &config.columns {
-            if !seen.insert(name.as_str()) {
-                return contract_error(op, format!("colonna ripetuta in columns: {name}"));
-            }
-            require_scalar_string(op, input, name)?;
-        }
+        require_scalar_strings(op, input, &config.columns)?;
     }
     analyze_append(
         input,
@@ -192,6 +217,7 @@ pub(in crate::analyze) fn analyze_hmac_sha256(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: security::HmacSha256 = typed(op, config)?;
     let input = &inputs[0];
@@ -201,16 +227,8 @@ pub(in crate::analyze) fn analyze_hmac_sha256(
     }
     // La chiave NON e' mai letta in analisi: nel contratto passa solo il nome
     // della variabile d'ambiente, mai il valore.
-    if config.columns.is_empty() {
-        return contract_error(op, "columns vuoto");
-    }
-    let mut seen: HashSet<&str> = HashSet::new();
-    for name in &config.columns {
-        if !seen.insert(name.as_str()) {
-            return contract_error(op, format!("colonna ripetuta in columns: {name}"));
-        }
-        require_scalar_string(op, input, name)?;
-    }
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
+    require_scalar_strings(op, input, &config.columns)?;
     let nullable = matches!(config.null_policy, security::HmacNullPolicy::Null);
     analyze_append(
         input,
@@ -224,11 +242,15 @@ pub(in crate::analyze) fn analyze_mask_data(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: security::MaskData = typed(op, config)?;
     let input = &inputs[0];
     if config.maskings.is_empty() {
         return contract_error(op, "maskings vuoto");
+    }
+    if config.maskings.len() > limits.max_columns {
+        return contract_error(op, "maskings oltre il limite di colonne");
     }
     // Le masking sono applicate in sequenza: una masking puo' riferirsi a una
     // colonna `_masked` creata da una precedente.

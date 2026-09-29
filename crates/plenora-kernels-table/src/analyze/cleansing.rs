@@ -6,10 +6,10 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, clone_fields, con_op, contract_error, field_of, finish, produce,
-    propagate_geometry, require_scalar_string, require_utf8, rows_only, typed,
+    analyze_append, check_text_len, clone_fields, con_op, contract_error, field_of, finish,
+    produce, propagate_geometry, require_scalar_string, require_utf8, rows_only, typed,
 };
-use crate::cleansing;
+use crate::{cleansing, Limits};
 
 // ---------------------------------------------------------------------------
 // cleansing.rs
@@ -105,10 +105,13 @@ pub(in crate::analyze) fn analyze_replace(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: cleansing::Replace = typed(op, config)?;
     let input = &inputs[0];
     require_utf8(op, input, &config.column)?;
+    check_text_len(op, &config.old_value, limits.max_regex_bytes, "old_value")?;
+    check_text_len(op, &config.new_value, limits.max_string_bytes, "new_value")?;
     if config.regex {
         regex::Regex::new(&config.old_value).map_err(|error| {
             PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}"))
@@ -141,17 +144,77 @@ pub(in crate::analyze) fn analyze_replace(
     finish(schema, geometry, input.active_geometry, rows_only(input))
 }
 
+/// Parametri di `type_cast` che solo alcuni target usano: su un altro target
+/// il kernel li ignorerebbe, e la config direbbe una cosa che non accade.
+///
+/// - `date_format` solo per i target data e timestamp;
+/// - `precision` e `scale` solo per `decimal128`, dove sono obbligatori con
+///   `1 <= precision <= 38` e `0 <= scale <= precision`;
+/// - `timezone` solo per `timestamp_millis`.
+fn check_type_cast_parameters(op: &str, config: &cleansing::TypeCast) -> Result<()> {
+    let usa_il_formato = matches!(
+        config.target_type,
+        cleansing::TargetType::Date
+            | cleansing::TargetType::Datetime
+            | cleansing::TargetType::Date32
+            | cleansing::TargetType::TimestampMillis
+    );
+    if !config.date_format.is_empty() && !usa_il_formato {
+        return contract_error(op, "date_format ammesso solo per i target data e timestamp");
+    }
+    match config.target_type {
+        cleansing::TargetType::Decimal128 => {
+            let precision = config.precision.ok_or_else(|| {
+                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede precision"))
+            })?;
+            let scale = config.scale.ok_or_else(|| {
+                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede scale"))
+            })?;
+            if !(1..=38).contains(&precision) || scale < 0 || scale > precision.cast_signed() {
+                return contract_error(
+                    op,
+                    "decimal128 richiede 1 <= precision <= 38 e 0 <= scale <= precision",
+                );
+            }
+            if config.timezone.is_some() {
+                return contract_error(op, "timezone non ammessa per decimal128");
+            }
+        }
+        cleansing::TargetType::TimestampMillis => {
+            if config.precision.is_some() || config.scale.is_some() {
+                return contract_error(op, "precision e scale non ammessi per timestamp");
+            }
+        }
+        _ if config.precision.is_some() || config.scale.is_some() || config.timezone.is_some() => {
+            return contract_error(
+                op,
+                "precision, scale e timezone non ammessi per questo target_type",
+            );
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(in crate::analyze) fn analyze_type_cast(
     op: &str,
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: cleansing::TypeCast = typed(op, config)?;
     let input = &inputs[0];
     require_scalar_string(op, input, &config.column)?;
+    check_type_cast_parameters(op, &config)?;
     // Vuoto e' il parser multi-formato di default.
     if !config.date_format.is_empty() {
+        check_text_len(
+            op,
+            &config.date_format,
+            limits.max_string_bytes,
+            "date_format",
+        )?;
         con_op(
             op,
             crate::dates::validate_format_items(&config.date_format, "date_format"),
@@ -177,15 +240,12 @@ pub(in crate::analyze) fn analyze_type_cast(
             )
         }
         cleansing::TargetType::Decimal128 => {
-            let precision = config.precision.ok_or_else(|| {
-                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede precision"))
-            })?;
-            let scale = config.scale.ok_or_else(|| {
-                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede scale"))
-            })?;
-            if precision == 0 || precision > 38 {
-                return contract_error(op, "precision decimal128 fuori da 1..=38");
-            }
+            // Presenza e intervalli verificati da `check_type_cast_parameters`.
+            let (Some(precision), Some(scale)) = (config.precision, config.scale) else {
+                return Err(PlenoraError::Internal(format!(
+                    "{op}: decimal128 senza precision o scale dopo la verifica"
+                )));
+            };
             DataType::Decimal128(precision, scale)
         }
         cleansing::TargetType::BinaryUtf8 => DataType::Binary,

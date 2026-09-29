@@ -345,6 +345,35 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
     value.checked_add_signed(delta)
 }
 
+/// Rifiuta un `amount` che nessuna data rappresentabile sopporta.
+///
+/// Lo spostamento fallisce anche dall'estremo da cui c'e' piu' spazio (il
+/// minimo di `NaiveDateTime` per un `amount` positivo, il massimo per uno
+/// negativo), quindi su ogni riga valida. `date_add` lo rifiuterebbe riga per
+/// riga come `conversion.datetime_range`; l'analisi dei contratti lo rifiuta
+/// prima, dalla sola config.
+///
+/// Lo spostamento e' monotono nel valore di partenza (durate fisse e mesi di
+/// calendario), quindi il controllo non rifiuta un `amount` che anche una
+/// sola data potrebbe sopportare.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `amount` in `unit` non e' applicabile a nessuna data.
+pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
+    let partenza = if amount >= 0 {
+        NaiveDateTime::MIN
+    } else {
+        NaiveDateTime::MAX
+    };
+    if shift(partenza, amount, unit).is_none() {
+        return Err(PlenoraError::InvalidPlan(
+            "amount fuori scala: nessuna data rappresentabile lo sopporta".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Somma `amount` unita' (`unit`) ai valori della colonna `column`,
 /// riscritti con `output_format` nella colonna `output_column`.
 ///
@@ -994,6 +1023,7 @@ mod tests {
                 std::slice::from_ref(&contratto),
                 &json,
                 &mut FieldAllocator::default(),
+                &crate::Limits::default(),
             );
             let kernel: Result<RecordBatch> = match op {
                 "table.date_format" => date_format(&batch, &config(json.clone())),

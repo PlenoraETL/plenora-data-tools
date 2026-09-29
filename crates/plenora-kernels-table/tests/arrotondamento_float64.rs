@@ -694,6 +694,7 @@ fn analisi_ed_esecuzione_concordano_sul_dominio() {
                 std::slice::from_ref(&contratto),
                 &config,
                 &mut campi,
+                &plenora_kernels_table::Limits::default(),
             );
 
             let ingresso = RecordBatch::try_new(

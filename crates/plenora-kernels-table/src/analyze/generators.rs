@@ -6,11 +6,12 @@ use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::Result;
 use serde_json::Value;
 
+use super::dates::check_format_text;
 use super::helpers::{
-    analyze_append, check_output_name, con_op, contract_error, require_scalar_string, sorted_only,
-    typed,
+    analyze_append, check_output_name, check_rows, con_op, contract_error, require_scalar_string,
+    sorted_only, typed,
 };
-use crate::utility;
+use crate::{utility, Limits};
 
 // ---------------------------------------------------------------------------
 // utility.rs
@@ -21,9 +22,11 @@ pub(in crate::analyze) fn analyze_add_row_number(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: utility::AddRowNumber = typed(op, config)?;
     let input = &inputs[0];
+    let _ = limits;
     check_output_name(op, &config.output_column)?;
     if config.order_column.is_some() {
         return contract_error(
@@ -31,6 +34,7 @@ pub(in crate::analyze) fn analyze_add_row_number(
             "order_column non supportato dal profilo streaming (deve essere nullo)",
         );
     }
+    con_op(op, utility::verifica_ascending(&config))?;
     if let Some(partition) = &config.partition_column {
         require_scalar_string(op, input, partition)?;
     }
@@ -61,11 +65,13 @@ pub(in crate::analyze) fn analyze_date_extract(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: utility::DateExtract = typed(op, config)?;
     let input = &inputs[0];
     require_scalar_string(op, input, &config.column)?;
     if let Some(format) = &config.date_format {
+        check_format_text(op, format, limits, "date_format")?;
         con_op(
             op,
             crate::dates::validate_format_items(format, "date_format"),
@@ -101,11 +107,13 @@ pub(in crate::analyze) fn analyze_limit(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: utility::Limit = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
-    let _ = config;
+    check_rows(op, config.n, limits.max_rows, "n")?;
+    check_rows(op, config.offset, limits.max_rows, "offset")?;
     let mut output = input.clone();
     // Righe rimosse (per-batch), ordine relativo e schema invariati.
     output.properties = sorted_only(input);

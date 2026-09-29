@@ -3284,6 +3284,7 @@ mod tests {
                         &[contratto],
                         &json,
                         &mut FieldAllocator::default(),
+                        &crate::Limits::default(),
                     )
                     .unwrap_or_else(|error| panic!("{caso}: {error}"));
                     assert_eq!(

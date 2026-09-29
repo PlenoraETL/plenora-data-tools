@@ -9,11 +9,12 @@ use plenora_core::Result;
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, field_of, finish, map_row_count, produce,
-    propagate_geometry, proven_sorted, require_numeric, require_scalar_string,
-    require_scalar_string_field, sorted_only, typed,
+    analyze_append, check_name_list, check_output_name, check_rows, check_text_len, con_op,
+    contract_error, field_of, finish, map_row_count, produce, propagate_geometry, proven_sorted,
+    require_numeric, require_scalar_string, require_scalar_string_field, require_scalar_strings,
+    sorted_only, typed,
 };
-use crate::aggregation;
+use crate::{aggregation, Limits};
 
 // ---------------------------------------------------------------------------
 // aggregation.rs
@@ -51,12 +52,11 @@ pub(in crate::analyze) fn analyze_sort(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::Sort = typed(op, config)?;
     let input = &inputs[0];
-    if config.columns.is_empty() {
-        return contract_error(op, "columns vuoto");
-    }
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
     require_sortable(op, input, &config.columns)?;
     let keys: Vec<FieldId> = config
         .columns
@@ -78,12 +78,12 @@ pub(in crate::analyze) fn analyze_top_n(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::TopN = typed(op, config)?;
     let input = &inputs[0];
-    if config.columns.is_empty() {
-        return contract_error(op, "columns vuoto");
-    }
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
+    check_rows(op, config.n, limits.max_rows, "n")?;
     require_sortable(op, input, &config.columns)?;
     let keys: Vec<FieldId> = config
         .columns
@@ -104,12 +104,19 @@ pub(in crate::analyze) fn analyze_distinct(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::Distinct = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
-    for name in &config.subset {
-        require_scalar_string(op, input, name)?;
+    check_name_list(op, &config.subset, limits.max_columns, "subset", true)?;
+    if config.subset.is_empty() {
+        // Senza subset la chiave e' la riga intera, letta come testo.
+        for field in input.schema.fields() {
+            require_scalar_string_field(op, field)?;
+        }
+    } else {
+        require_scalar_strings(op, input, &config.subset)?;
     }
     let mut output = input.clone();
     // Righe rimosse; l'ordine relativo delle occorrenze mantenute e' preservato.
@@ -122,22 +129,23 @@ pub(in crate::analyze) fn analyze_dedup_advanced(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::DedupAdvanced = typed(op, config)?;
     let input = &inputs[0];
     if matches!(config.keep, aggregation::Keep::False) {
         return contract_error(op, "keep=false non supportato");
     }
-    for name in &config.subset {
-        require_scalar_string(op, input, name)?;
-    }
+    check_name_list(op, &config.subset, limits.max_columns, "subset", false)?;
+    con_op(op, aggregation::verifica_verso_dedup(&config))?;
+    require_scalar_strings(op, input, &config.subset)?;
     let sorted_by = if let Some(order_column) = &config.order_column {
         require_sortable(op, input, std::slice::from_ref(order_column))?;
         // Sort interno su order_column, nel verso della config, prima della
         // deduplica; le righe tenute restano nell'ordine del sort.
         Some(proven_sorted(
             vec![fields.intern(order_column)?],
-            config.ascending,
+            config.ascending.unwrap_or(true),
         ))
     } else {
         input.properties.sorted_by.clone()
@@ -150,16 +158,43 @@ pub(in crate::analyze) fn analyze_dedup_advanced(
     Ok(output)
 }
 
+/// Parametri di una aggregazione indipendenti dallo schema: `separator` entro
+/// `max_string_bytes`, `quantile` solo con `function=quantile` (su un'altra
+/// funzione non avrebbe effetto).
+fn check_aggregation_parameters(
+    op: &str,
+    aggregation: &aggregation::Aggregation,
+    limits: &Limits,
+) -> Result<()> {
+    check_text_len(
+        op,
+        &aggregation.separator,
+        limits.max_string_bytes,
+        "separator",
+    )?;
+    if aggregation.quantile.is_some()
+        && !matches!(aggregation.function, aggregation::AggFunction::Quantile)
+    {
+        return contract_error(op, "quantile ammesso solo con function=quantile");
+    }
+    Ok(())
+}
+
 pub(in crate::analyze) fn analyze_aggregate(
     op: &str,
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::Aggregate = typed(op, config)?;
     let input = &inputs[0];
     if config.group_by.is_empty() {
         return contract_error(op, "aggregate richiede group_by");
+    }
+    check_name_list(op, &config.group_by, limits.max_columns, "group_by", false)?;
+    if config.aggregations.len() > limits.max_columns {
+        return contract_error(op, "aggregations oltre il limite di colonne");
     }
     // Il kernel legge le chiavi di gruppo come scalari testuali: stessi tipi
     // ammessi, rifiutati qui e non a esecuzione iniziata.
@@ -178,6 +213,7 @@ pub(in crate::analyze) fn analyze_aggregate(
     }
     for aggregation in &config.aggregations {
         let field = field_of(op, input, &aggregation.column)?;
+        check_aggregation_parameters(op, aggregation, limits)?;
         match aggregation.function {
             aggregation::AggFunction::Count => {}
             aggregation::AggFunction::Nunique
@@ -261,12 +297,17 @@ pub(in crate::analyze) fn analyze_rolling_window(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::RollingWindow = typed(op, config)?;
     let input = &inputs[0];
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
         return contract_error(op, "window/min_periods non validi");
     }
+    if config.window > limits.max_rows {
+        return contract_error(op, "window oltre max_rows");
+    }
+    check_output_name(op, &config.output_column)?;
     require_numeric(op, input, &config.column)?;
     // Le partizioni leggono `group_by` come scalare testuale
     // (`build_partitions`): stessi tipi ammessi del kernel.
@@ -297,6 +338,7 @@ pub(in crate::analyze) fn analyze_window_function(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::WindowFunction = typed(op, config)?;
     let input = &inputs[0];
@@ -304,6 +346,9 @@ pub(in crate::analyze) fn analyze_window_function(
         return contract_error(op, "offset deve essere > 0");
     }
     match (&config.function, config.buckets) {
+        (aggregation::WindowKind::Ntile, Some(buckets)) if buckets > limits.max_rows => {
+            return contract_error(op, "buckets oltre max_rows");
+        }
         (aggregation::WindowKind::Ntile, Some(buckets)) if buckets > 0 => {}
         (aggregation::WindowKind::Ntile, _) => {
             return contract_error(op, "ntile richiede buckets > 0");
@@ -352,6 +397,7 @@ pub(in crate::analyze) fn analyze_window_function(
     let name = config
         .output_column
         .unwrap_or_else(|| format!("{}_{suffix}", config.column));
+    check_output_name(op, &name)?;
     let sorted_by = match config.order_column.as_ref() {
         // Il kernel ordina sempre in ascendente su order_column.
         Some(order_column) => Some(proven_sorted(vec![fields.intern(order_column)?], true)),

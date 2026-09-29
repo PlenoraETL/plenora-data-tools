@@ -2,7 +2,7 @@
 //! fail-closed, propagazione della geometria (D16), merge dei metadata
 //! (R2.4) e costruzione del `DataContract` di output.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -121,6 +121,71 @@ pub(in crate::analyze) fn require_utf8(op: &str, input: &DataContract, name: &st
 pub(in crate::analyze) fn check_output_name(op: &str, name: &str) -> Result<()> {
     validate_output_name(name)
         .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: nome colonna non valido: {name:?}")))
+}
+
+/// Lista di nomi di colonna della config: non vuota (salvo `allow_empty`),
+/// al piu' `max` nomi, senza ripetizioni, ogni nome valido.
+///
+/// Una ripetizione non e' mai innocua: nei kernel diventa una chiave doppia,
+/// una colonna prodotta due volte o una regola in cui «vince l'ultimo».
+pub(in crate::analyze) fn check_name_list(
+    op: &str,
+    names: &[String],
+    max: usize,
+    label: &str,
+    allow_empty: bool,
+) -> Result<()> {
+    if !allow_empty && names.is_empty() {
+        return contract_error(op, format!("{label} vuoto"));
+    }
+    if names.len() > max {
+        return contract_error(op, format!("{label}: numero di colonne oltre il limite"));
+    }
+    let mut seen: HashSet<&str> = HashSet::with_capacity(names.len());
+    for name in names {
+        if !seen.insert(name.as_str()) {
+            return contract_error(op, format!("{label}: colonna ripetuta: {name}"));
+        }
+        check_output_name(op, name)?;
+    }
+    Ok(())
+}
+
+/// Un testo della config entro `max` byte.
+pub(in crate::analyze) fn check_text_len(
+    op: &str,
+    text: &str,
+    max: usize,
+    label: &str,
+) -> Result<()> {
+    if text.len() > max {
+        return contract_error(op, format!("{label} oltre il limite di byte"));
+    }
+    Ok(())
+}
+
+/// Un conteggio della config entro `max_rows`.
+pub(in crate::analyze) fn check_rows(
+    op: &str,
+    value: u64,
+    max_rows: usize,
+    label: &str,
+) -> Result<()> {
+    if u64::try_from(max_rows).is_ok_and(|max| value > max) {
+        return contract_error(op, format!("{label} oltre max_rows"));
+    }
+    Ok(())
+}
+
+/// Ogni colonna nominata esiste ed e' leggibile come scalare testuale.
+pub(in crate::analyze) fn require_scalar_strings<'a>(
+    op: &str,
+    input: &DataContract,
+    names: impl IntoIterator<Item = &'a String>,
+) -> Result<()> {
+    names
+        .into_iter()
+        .try_for_each(|name| require_scalar_string(op, input, name))
 }
 
 /// `round(rows * fraction)` con l'aritmetica f64 del kernel `sample`

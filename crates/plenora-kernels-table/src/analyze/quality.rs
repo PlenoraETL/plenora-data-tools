@@ -14,9 +14,10 @@ use serde_json::Value;
 
 use super::filter::json_text;
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, field_of, finish, require_numeric,
-    require_scalar_string, require_utf8, typed,
+    analyze_append, check_name_list, check_output_name, check_text_len, contract_error, field_of,
+    finish, require_numeric, require_scalar_string, require_utf8, typed,
 };
+use super::joins::check_text_key_pairs;
 use crate::{governance, quality, Limits};
 
 // ---------------------------------------------------------------------------
@@ -28,10 +29,14 @@ pub(in crate::analyze) fn analyze_assert_schema(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: quality::AssertSchema = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    // Nessun campo atteso: l'asserzione non asserisce niente.
+    let names: Vec<String> = config.fields.iter().map(|f| f.name.clone()).collect();
+    check_name_list(op, &names, limits.max_columns, "fields", false)?;
     if !config.allow_extra && input.schema.fields().len() != config.fields.len() {
         return contract_error(
             op,
@@ -136,10 +141,12 @@ pub(in crate::analyze) fn analyze_assert_not_null(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: quality::AssertNotNull = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
     for name in &config.columns {
         field_of(op, input, name)?;
     }
@@ -151,10 +158,12 @@ pub(in crate::analyze) fn analyze_assert_unique(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: quality::AssertUnique = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
     for name in &config.columns {
         require_scalar_string(op, input, name)?;
     }
@@ -166,10 +175,32 @@ pub(in crate::analyze) fn analyze_assert_range(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: quality::AssertRange = typed(op, config)?;
     let input = &inputs[0];
-    let _ = fields;
+    let _ = (fields, limits);
+    if config.min.is_none() && config.max.is_none() {
+        return contract_error(op, "assert_range richiede min o max");
+    }
+    if config.min.is_some_and(|value| !value.is_finite())
+        || config.max.is_some_and(|value| !value.is_finite())
+        || config
+            .min
+            .zip(config.max)
+            .is_some_and(|(min, max)| min > max)
+    {
+        return contract_error(op, "estremi di assert_range non validi");
+    }
+    // Un estremo esclusivo senza l'estremo non avrebbe effetto.
+    if (config.inclusive_min.is_some() && config.min.is_none())
+        || (config.inclusive_max.is_some() && config.max.is_none())
+    {
+        return contract_error(
+            op,
+            "inclusive_min/inclusive_max senza l'estremo corrispondente",
+        );
+    }
     require_numeric(op, input, &config.column)?;
     Ok(input.clone())
 }
@@ -179,10 +210,15 @@ pub(in crate::analyze) fn analyze_assert_regex(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: quality::AssertRegex = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    if config.pattern.is_empty() {
+        return contract_error(op, "pattern vuoto");
+    }
+    check_text_len(op, &config.pattern, limits.max_regex_bytes, "pattern")?;
     require_utf8(op, input, &config.column)?;
     regex::Regex::new(&config.pattern)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
@@ -194,6 +230,7 @@ pub(in crate::analyze) fn analyze_coalesce(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: quality::Coalesce = typed(op, config)?;
     let input = &inputs[0];
@@ -201,6 +238,7 @@ pub(in crate::analyze) fn analyze_coalesce(
     if config.columns.is_empty() {
         return contract_error(op, "coalesce richiede almeno una colonna");
     }
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
     let data_type = field_of(op, input, &config.columns[0])?.data_type().clone();
     for name in &config.columns[1..] {
         let field = field_of(op, input, name)?;
@@ -220,10 +258,31 @@ pub(in crate::analyze) fn analyze_assert_cardinality(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: governance::AssertCardinality = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    if config.exact_rows.is_none() && config.min_rows.is_none() && config.max_rows.is_none() {
+        return contract_error(
+            op,
+            "assert_cardinality richiede exact_rows, min_rows o max_rows",
+        );
+    }
+    if config.exact_rows.is_some() && (config.min_rows.is_some() || config.max_rows.is_some()) {
+        return contract_error(op, "exact_rows non si combina con min_rows o max_rows");
+    }
+    if config
+        .min_rows
+        .zip(config.max_rows)
+        .is_some_and(|(min, max)| min > max)
+        || [config.exact_rows, config.min_rows, config.max_rows]
+            .into_iter()
+            .flatten()
+            .any(|rows| rows > limits.max_rows)
+    {
+        return contract_error(op, "limiti di assert_cardinality non validi");
+    }
     // Con row_count Proven in input la cardinalita' e' verificabile a secco.
     if let Some(proven) = input
         .properties
@@ -254,10 +313,21 @@ pub(in crate::analyze) fn analyze_assert_metadata(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: governance::AssertMetadata = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    if config.expected.is_empty() || config.expected.len() > limits.max_columns {
+        return contract_error(op, "numero di metadati attesi non valido");
+    }
+    if config.expected.iter().any(|(key, value)| {
+        key.is_empty()
+            || key.len() > limits.max_string_bytes
+            || value.len() > limits.max_string_bytes
+    }) {
+        return contract_error(op, "chiave o valore dei metadati attesi oltre i limiti");
+    }
     let metadata = input.schema.metadata();
     for (key, value) in &config.expected {
         if metadata.get(key) != Some(value) {
@@ -297,15 +367,17 @@ pub(in crate::analyze) fn analyze_assert_foreign_key(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: governance::ForeignKey = typed(op, config)?;
     let _ = fields;
-    check_foreign_keys(
+    check_text_key_pairs(
         op,
         &inputs[0],
         &inputs[1],
         &config.left_keys,
         &config.right_keys,
+        limits,
     )?;
     // Right non contribuisce allo schema: output = left invariato.
     Ok(inputs[0].clone())
@@ -316,15 +388,17 @@ pub(in crate::analyze) fn analyze_reconcile(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: governance::Reconcile = typed(op, config)?;
     let _ = fields;
-    check_foreign_keys(
+    check_text_key_pairs(
         op,
         &inputs[0],
         &inputs[1],
         &config.left_keys,
         &config.right_keys,
+        limits,
     )?;
     // Schema fisso: 5 righe di metriche, indipendente dagli input.
     // R2.4: dataset derivato — nessuna colonna degli input sopravvive e i
@@ -355,11 +429,15 @@ pub(in crate::analyze) fn analyze_validate_rules(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: governance::ValidateRules = typed(op, config)?;
     let input = &inputs[0];
     if config.rules.is_empty() {
         return contract_error(op, "rules vuoto");
+    }
+    if config.rules.len() > limits.max_columns {
+        return contract_error(op, "rules oltre il limite");
     }
     let mut seen: HashSet<&str> = HashSet::new();
     for rule in &config.rules {
@@ -476,7 +554,7 @@ pub(in crate::analyze) fn analyze_validate_rules(
                         ),
                     );
                 }
-                if expected.len() > Limits::default().max_regex_bytes {
+                if expected.len() > limits.max_regex_bytes {
                     return contract_error(
                         op,
                         format!("regola {}: pattern oltre max_regex_bytes", rule.name),

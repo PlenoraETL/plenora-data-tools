@@ -2,14 +2,14 @@
 
 use plenora_core::arrow::schema::DataType;
 use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator};
-use plenora_core::Result;
+use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, contract_error, map_row_count, require_numeric,
-    require_scalar_string, round_scaled, typed, unsupported,
+    analyze_append, check_name_list, check_output_name, contract_error, map_row_count,
+    require_numeric, require_scalar_string, round_scaled, typed, unsupported,
 };
-use crate::analysis;
+use crate::{analysis, Limits};
 
 // ---------------------------------------------------------------------------
 // analysis.rs
@@ -20,10 +20,14 @@ pub(in crate::analyze) fn analyze_lookup(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: analysis::Lookup = typed(op, config)?;
     let input = &inputs[0];
     require_scalar_string(op, input, &config.column)?;
+    if config.mapping.len() > limits.max_rows {
+        return contract_error(op, "mapping oltre max_rows");
+    }
     // Default del kernel: sovrascrive la colonna sorgente in place.
     let name = config.output_column.unwrap_or(config.column);
     check_output_name(op, &name)?;
@@ -75,6 +79,7 @@ pub(in crate::analyze) fn analyze_flatten_json(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: analysis::FlattenJson = typed(op, config)?;
     let input = &inputs[0];
@@ -93,6 +98,26 @@ pub(in crate::analyze) fn analyze_flatten_json(
     } else {
         config.prefix.clone()
     };
+    check_name_list(
+        op,
+        &config.output_columns,
+        limits.max_columns,
+        "output_columns",
+        false,
+    )?;
+    // Lo stesso conto del kernel: colonne dell'input piu' colonne prodotte,
+    // anche quando una prodotta sostituisce una esistente.
+    if input
+        .schema
+        .fields()
+        .len()
+        .saturating_add(config.output_columns.len())
+        > limits.max_columns
+    {
+        return Err(PlenoraError::ResourceLimit(format!(
+            "{op}: flatten_json supera max_columns"
+        )));
+    }
     let mut produced = Vec::with_capacity(config.output_columns.len());
     for name in &config.output_columns {
         if !name.starts_with(&prefix) {

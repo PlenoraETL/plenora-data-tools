@@ -366,8 +366,26 @@ pub struct DedupAdvanced {
     #[serde(default = "default_keep")]
     pub keep: Keep,
     pub order_column: Option<String>,
-    #[serde(default = "default_true")]
-    pub ascending: bool,
+    /// Verso di `order_column` (assente: ascendente). Senza `order_column`
+    /// non c'e' ordinamento, e un verso dichiarato si rifiuta
+    /// ([`verifica_verso_dedup`]) invece di essere ignorato.
+    #[serde(default)]
+    pub ascending: Option<bool>,
+}
+
+/// `ascending` di `dedup_advanced` ha effetto solo con `order_column`. La
+/// chiamano il kernel e l'analisi dei contratti.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `ascending` e' dichiarato senza `order_column`.
+pub fn verifica_verso_dedup(config: &DedupAdvanced) -> Result<()> {
+    if config.ascending.is_some() && config.order_column.is_none() {
+        return Err(PlenoraError::InvalidPlan(
+            "ascending senza order_column non ha effetto".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// `distinct` con pre-ordinamento su `order_column`: prima/ultima
@@ -375,16 +393,18 @@ pub struct DedupAdvanced {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `keep` e' `Keep::False` (non supportato);
+/// - `InvalidPlan`: `keep` e' `Keep::False` (non supportato); `ascending`
+///   senza `order_column` ([`verifica_verso_dedup`]);
 /// - come `sort` (se `order_column` e' presente) e `distinct`: colonne
 ///   assenti (`Schema`), errori del fallback testuale e di `select_rows`.
 pub fn dedup_advanced(batch: &RecordBatch, config: &DedupAdvanced) -> Result<RecordBatch> {
+    verifica_verso_dedup(config)?;
     let ordered = if let Some(column) = &config.order_column {
         sort(
             batch,
             &Sort {
                 columns: vec![column.clone()],
-                ascending: config.ascending,
+                ascending: config.ascending.unwrap_or(true),
             },
         )?
     } else {

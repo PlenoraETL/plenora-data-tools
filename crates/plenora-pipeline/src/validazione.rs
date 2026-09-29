@@ -2,9 +2,11 @@
 //!
 //! Tutto ciò che si può dire senza i dati si dice qui: nomi SSA, operazione
 //! e arietà dal catalogo, dispatch del runner, config tipizzate, contratti
-//! passo per passo, controlli statici delle config contro i limiti
-//! ([`crate::verifica_config`]). Un piano che passa non fallisce in esecuzione per un
-//! motivo che la validazione poteva vedere.
+//! passo per passo con `analyze_table_contract` e i limiti dei kernel (ogni
+//! regola sulla config sta lì, una volta sola, per ogni chiamante dei
+//! kernel). Qui resta solo ciò che non è config: la chiave HMAC
+//! nell'ambiente ([`verifica_ambiente`]). Un piano che passa non fallisce in
+//! esecuzione per un motivo che la validazione poteva vedere.
 //!
 //! I passi 2 e 5 di `validate` di `plenora-engine/src/planner.rs` a
 //! `190c493` sono portati quasi alla lettera: contratti di input con un solo
@@ -156,6 +158,26 @@ fn limiti_dei_kernel_tabellari(limiti: &Limits) -> Result<plenora_kernels_table:
         max_temp_bytes: limiti.max_temp_bytes,
         spill_partitions: stretto(u64::from(limiti.spill_partitions), "spill_partitions")?,
     })
+}
+
+/// Controlli sull'ambiente del processo, non sulla config: l'analisi dei
+/// kernel non li vede, e un errore qui non arriva dopo i passi a monte.
+///
+/// Solo `table.hmac_sha256`: la variabile `key_env` deve esistere e non
+/// essere vuota. Può ancora cambiare fra `validate` e `run`; in quel caso
+/// l'errore arriva al passo (README, «Runner»).
+fn verifica_ambiente(preparato: &PassoPreparato) -> Result<()> {
+    if let PassoPreparato::HmacSha256(config) = preparato {
+        match std::env::var_os(&config.key_env) {
+            Some(valore) if !valore.is_empty() => {}
+            _ => {
+                return Err(PlenoraError::InvalidPlan(
+                    "hmac_sha256: chiave HMAC non disponibile".to_owned(),
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Numero di input che il runner accetta per l'arietà del catalogo.
@@ -448,9 +470,6 @@ impl Pipeline {
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
             let preparato = PassoPreparato::prepara(descrittore.id, &passo.config)
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
-            preparato
-                .verifica(&limiti_kernel)
-                .map_err(|errore| nel_passo(&passo.out, errore))?;
             // Il budget si applica a ogni passo: un'operazione senza modello
             // di costo non ha una previsione, e non si esegue.
             let costo = costo_di(descrittore.id).ok_or_else(|| {
@@ -491,12 +510,15 @@ impl Pipeline {
                     })
                 })
                 .collect::<Result<_>>()?;
-            let uscita =
-                analyze_table_contract(descrittore.id, &ingressi, &passo.config, &mut campi)
-                    .map_err(|errore| nel_passo(&passo.out, errore))?;
-            preparato
-                .verifica_con_schema(&ingressi, &limiti_kernel)
-                .map_err(|errore| nel_passo(&passo.out, errore))?;
+            let uscita = analyze_table_contract(
+                descrittore.id,
+                &ingressi,
+                &passo.config,
+                &mut campi,
+                &limiti_kernel,
+            )
+            .map_err(|errore| nel_passo(&passo.out, errore))?;
+            verifica_ambiente(&preparato).map_err(|errore| nel_passo(&passo.out, errore))?;
             verifica_colonne(&uscita, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
             contratti.insert(passo.out.clone(), uscita);

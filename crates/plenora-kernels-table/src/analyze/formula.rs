@@ -26,10 +26,11 @@ pub(in crate::analyze) fn analyze_formula(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: formula::Formula = typed(op, config)?;
     let input = &inputs[0];
-    formula::validate(&config, Limits::default().max_string_bytes)
+    formula::validate(&config, limits.max_string_bytes)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     // La stessa classificazione che il kernel applica allo schema del batch.
     let inferred = formula::infer_formula_type(&config, &|name| {
@@ -49,9 +50,11 @@ pub(in crate::analyze) fn analyze_expression(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: expressions::ExpressionTransform = typed(op, config)?;
     let input = &inputs[0];
+    let _ = limits;
     expressions::validate(&config, MAX_EXPRESSION_NODES)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
     check_output_name(op, &config.output_column)?;

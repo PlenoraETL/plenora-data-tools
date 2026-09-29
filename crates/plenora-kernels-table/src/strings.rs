@@ -168,6 +168,38 @@ fn utf8_data_len(values: &StringArray) -> usize {
     usize::try_from(offsets[values.len()] - offsets[0]).unwrap_or(0)
 }
 
+/// Rifiuta `output_column` ed `extract_all` insieme ai gruppi con nome.
+///
+/// Con gruppi con nome `string_extract` produce una colonna per gruppo, col
+/// nome del gruppo, dal primo match: i due parametri non avrebbero effetto.
+/// Si rifiutano invece di essere ignorati: dare loro un significato
+/// (prefisso? match concatenati per gruppo?) sarebbe una semantica nuova,
+/// non scritta da nessuna parte.
+///
+/// La chiamano il kernel e l'analisi dei contratti.
+///
+/// # Errors
+///
+/// `InvalidPlan`: gruppi con nome insieme a `output_column` o a
+/// `extract_all`.
+pub fn verifica_gruppi_con_nome(config: &StringExtract, regex: &Regex) -> Result<()> {
+    if regex.capture_names().flatten().next().is_none() {
+        return Ok(());
+    }
+    if config.output_column.is_some() {
+        return Err(PlenoraError::InvalidPlan(
+            "output_column non ammesso con gruppi con nome: le colonne prendono il nome dei gruppi"
+                .into(),
+        ));
+    }
+    if config.extract_all {
+        return Err(PlenoraError::InvalidPlan(
+            "extract_all non ammesso con gruppi con nome: si estrae il primo match".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Estrazione regex dalla colonna: gruppi nominati -> una colonna per
 /// gruppo, altrimenti una colonna con il primo gruppo (o il match intero).
 ///
@@ -177,7 +209,9 @@ fn utf8_data_len(values: &StringArray) -> usize {
 /// # Errors
 ///
 /// - `InvalidPlan`: pattern oltre `limits.max_regex_bytes`, regex non valida,
-///   nome di colonna di output (esplicito o da gruppo nominato) non valido;
+///   nome di colonna di output (esplicito o da gruppo nominato) non valido,
+///   gruppi con nome insieme a `output_column` o `extract_all`
+///   ([`verifica_gruppi_con_nome`]);
 /// - `Schema`: colonna assente o non Utf8.
 // Tre forme di output (gruppi nominati, gruppo singolo, extract_all) su una
 // sola passata di righe: sequenza lineare di casi, lunga per costruzione.
@@ -194,6 +228,7 @@ pub fn string_extract(
     }
     let regex = Regex::new(&config.pattern)
         .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
+    verifica_gruppi_con_nome(config, &regex)?;
     let input = utf8_column(batch, &config.column)?;
     let named: Vec<(usize, String)> = regex
         .capture_names()
@@ -576,6 +611,7 @@ mod tests {
         }
         let regex = Regex::new(&config.pattern)
             .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
+        verifica_gruppi_con_nome(config, &regex)?;
         let input = utf8_column(batch, &config.column)?;
         let named: Vec<(usize, String)> = regex
             .capture_names()
@@ -680,11 +716,15 @@ mod tests {
         }
     }
 
+    /// Config di prova: `output_column` solo senza gruppi con nome, dove ha
+    /// effetto (con i gruppi con nome e' un errore di config).
     fn extract_config(pattern: &str, extract_all: bool) -> StringExtract {
+        let con_nome =
+            Regex::new(pattern).is_ok_and(|regex| regex.capture_names().flatten().next().is_some());
         StringExtract {
             column: "text".into(),
             pattern: pattern.into(),
-            output_column: Some("out".into()),
+            output_column: (!con_nome).then(|| "out".into()),
             extract_all,
         }
     }

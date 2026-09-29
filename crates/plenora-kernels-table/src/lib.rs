@@ -1480,6 +1480,27 @@ pub fn compare_bounds(actual: NumericBound, expected: NumericBound) -> Option<Or
     }
 }
 
+/// I tipi che [`scalar_compare`] confronta, letti dallo schema.
+///
+/// Con un tipo fuori da questo elenco `scalar_compare` fallisce alla prima
+/// riga non nulla, qualunque sia il valore: l'analisi dei contratti lo usa
+/// per rifiutare in validazione i confronti ordinati (`>`, `>=`, `<`, `<=`,
+/// `between`) che il kernel non saprebbe valutare. `Utf8` e' ammesso: il
+/// testo si confronta se e' un numero, e questo dipende dalla cella.
+#[must_use]
+pub const fn scalar_compare_supported(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Int64
+            | DataType::UInt64
+            | DataType::Float64
+            | DataType::Date32
+            | DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Utf8
+    )
+}
+
 /// Confronto esatto fra il valore scalare della riga e un estremo di
 /// configurazione: comparatore condiviso di filtri, regole di governance e
 /// vincoli di qualita'.

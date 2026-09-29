@@ -26,7 +26,10 @@ pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
 pub use compare::{compare_cells_typed, is_sortable, validate_sortable};
 pub(crate) use grouping::{visit_key_ids_where, BinaryKeyEncoder, KeyColumn};
 pub(crate) use sort::sort_permutation;
-pub use sort::{dedup_advanced, distinct, sort, top_n, DedupAdvanced, Distinct, Keep, Sort, TopN};
+pub use sort::{
+    dedup_advanced, distinct, sort, top_n, verifica_verso_dedup, DedupAdvanced, Distinct, Keep,
+    Sort, TopN,
+};
 pub use window::{
     rolling_window, window_function, RollingKind, RollingWindow, WindowFunction, WindowKind,
 };
@@ -1676,7 +1679,7 @@ mod tests {
                 batch,
                 &Sort {
                     columns: vec![column.clone()],
-                    ascending: config.ascending,
+                    ascending: config.ascending.unwrap_or(true),
                 },
             )?
         } else {
@@ -2148,7 +2151,7 @@ mod tests {
                         subset: vec!["g".into()],
                         keep,
                         order_column: Some("val".into()),
-                        ascending,
+                        ascending: Some(ascending),
                     },
                 );
                 assert_dedup_parity(
@@ -2157,7 +2160,7 @@ mod tests {
                         subset: vec!["g".into(), "val".into()],
                         keep,
                         order_column: Some("num".into()),
-                        ascending,
+                        ascending: Some(ascending),
                     },
                 );
                 // Senza order_column: nessun ordinamento preliminare.
@@ -2167,7 +2170,7 @@ mod tests {
                         subset: vec!["txt".into()],
                         keep,
                         order_column: None,
-                        ascending,
+                        ascending: None,
                     },
                 );
             }
@@ -2177,7 +2180,7 @@ mod tests {
             subset: vec!["g".into()],
             keep: Keep::False,
             order_column: None,
-            ascending: true,
+            ascending: None,
         };
         let fast_error = dedup_advanced(&batch, &config).expect_err("fast path errore");
         let reference_error =

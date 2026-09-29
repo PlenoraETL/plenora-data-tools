@@ -8,8 +8,9 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, clone_fields, contract_error, field_of, finish,
-    map_row_count, merge_geometry, merge_schema_metadata, propagate_geometry, typed, unsupported,
+    analyze_append, check_name_list, check_output_name, check_text_len, clone_fields,
+    contract_error, field_of, finish, map_row_count, merge_geometry, merge_schema_metadata,
+    propagate_geometry, require_scalar_string, require_scalar_strings, typed, unsupported,
 };
 use super::joins::check_key_pairs;
 use crate::{reshape, Limits};
@@ -18,15 +19,41 @@ use crate::{reshape, Limits};
 // reshape.rs
 // ---------------------------------------------------------------------------
 
+/// Nomi di `melt`: variabile e valore distinti (a nomi uguali il risolutore
+/// darebbe al secondo un suffisso, e la colonna non si chiamerebbe come
+/// scritto); colonne id e valore senza ripetizioni (una colonna valore
+/// ripetuta ripeterebbe le sue righe nell'output).
+fn check_melt_names(op: &str, config: &reshape::Melt, limits: &Limits) -> Result<()> {
+    if config.var_name == config.value_name {
+        return contract_error(op, "melt richiede nomi distinti per variabile e valore");
+    }
+    check_name_list(
+        op,
+        &config.id_columns,
+        limits.max_columns,
+        "id_columns",
+        true,
+    )?;
+    check_name_list(
+        op,
+        &config.value_columns,
+        limits.max_columns,
+        "value_columns",
+        true,
+    )
+}
+
 pub(in crate::analyze) fn analyze_melt(
     op: &str,
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: reshape::Melt = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    check_melt_names(op, &config, limits)?;
     let id_indices: Vec<usize> = config
         .id_columns
         .iter()
@@ -159,10 +186,18 @@ pub(in crate::analyze) fn analyze_transpose(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: reshape::Transpose = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    check_name_list(
+        op,
+        &config.output_columns,
+        limits.max_columns,
+        "output_columns",
+        true,
+    )?;
     if let Some(id_column) = &config.id_column {
         field_of(op, input, id_column)?;
     }
@@ -177,9 +212,19 @@ pub(in crate::analyze) fn analyze_explode(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: reshape::Explode = typed(op, config)?;
     let input = &inputs[0];
+    let _ = limits;
+    // Le righe con lista vuota o nulla sparirebbero dentro l'espansione:
+    // una selezione di righe si scrive come passo esplicito.
+    if matches!(config.empty_policy, reshape::EmptyListPolicy::Drop) {
+        return contract_error(
+            op,
+            "empty_policy=drop non ammessa: usare un passo esplicito di selezione",
+        );
+    }
     let field = field_of(op, input, &config.column)?;
     let DataType::List(child) = field.data_type() else {
         return contract_error(op, "explode richiede una colonna List");
@@ -201,10 +246,12 @@ pub(in crate::analyze) fn analyze_unnest(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: reshape::Unnest = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    check_text_len(op, &config.prefix, limits.max_string_bytes, "prefix")?;
     let index = input.schema.index_of(&config.column).map_err(|_| {
         PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {}", config.column))
     })?;
@@ -218,7 +265,7 @@ pub(in crate::analyze) fn analyze_unnest(
         .len()
         .saturating_sub(usize::from(config.drop_source))
         .saturating_add(children.len());
-    if projected > Limits::default().max_columns {
+    if projected > limits.max_columns {
         return contract_error(op, "unnest supera max_columns");
     }
     let mut fields_out: Vec<Field> = Vec::with_capacity(projected);
@@ -268,6 +315,7 @@ pub(in crate::analyze) fn analyze_table_diff(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: reshape::TableDiff = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
@@ -275,7 +323,32 @@ pub(in crate::analyze) fn analyze_table_diff(
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
         return contract_error(op, "chiavi table_diff non valide");
     }
+    check_name_list(
+        op,
+        &config.left_keys,
+        limits.max_columns,
+        "left_keys",
+        false,
+    )?;
+    check_name_list(
+        op,
+        &config.right_keys,
+        limits.max_columns,
+        "right_keys",
+        false,
+    )?;
+    check_name_list(
+        op,
+        &config.compare_columns,
+        limits.max_columns,
+        "compare_columns",
+        true,
+    )?;
     check_key_pairs(op, left, right, &config.left_keys, &config.right_keys)?;
+    // Chiavi e valori confrontati si leggono come testo (chiave composta,
+    // `_diff_old_values`).
+    require_scalar_strings(op, left, &config.left_keys)?;
+    require_scalar_strings(op, right, &config.right_keys)?;
     let compare: Vec<String> = if config.compare_columns.is_empty() {
         // Default: colonne di left non chiave presenti anche in right.
         left.schema
@@ -293,7 +366,8 @@ pub(in crate::analyze) fn analyze_table_diff(
         fields_out.push(Field::new(name, field.data_type().clone(), true));
     }
     for name in &compare {
-        field_of(op, left, name)?;
+        require_scalar_string(op, left, name)?;
+        require_scalar_string(op, right, name)?;
         let right_field = field_of(op, right, name)?;
         if field_of(op, left, name)?.data_type() != right_field.data_type() {
             return contract_error(

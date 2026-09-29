@@ -33,6 +33,8 @@ use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
+use crate::Limits;
+
 pub(crate) mod analysis;
 pub(crate) mod cleansing;
 pub(crate) mod columns;
@@ -91,14 +93,25 @@ use self::strings::{
 ///
 /// `op` accetta id canonici e alias legacy (risolti via catalogo);
 /// `inputs` deve rispettare l'arieta' dichiarata dal catalogo (unaria,
-/// binaria ordinata, N-aria per `table.concat`).
+/// binaria ordinata, N-aria per `table.concat`); `limits` sono quelli con cui
+/// il chiamante eseguira' i kernel: le config che li superano (nomi, testi,
+/// regex, righe, colonne) si rifiutano qui, non in esecuzione.
+///
+/// Ogni regola sulla config sta qui, una volta sola, per ogni chiamante dei
+/// kernel: una config accettata non si esegue con un significato diverso da
+/// quello scritto (parametro ignorato, asserzione vacua) e non fallisce in
+/// esecuzione per un motivo che config, schema e limiti rendono prevedibile.
 ///
 /// # Errors
 ///
 /// - `Unsupported`: operazione sconosciuta, non `table.*`, oppure schema di
 ///   output non inferibile a secco (dipende dai dati);
 /// - `InvalidPlan`: config non valida, arieta' errata, colonne mancanti,
-///   vincoli di tipo o parametri violati, collisioni di naming;
+///   vincoli di tipo o parametri violati, collisioni di naming, parametri
+///   che il kernel ignorerebbe, asserzioni vacue, nomi ripetuti, testi,
+///   regex o conteggi oltre `limits`;
+/// - `ResourceLimit`: colonne prodotte oltre `limits.max_columns` dove il
+///   kernel lo tratta come limite di risorsa (`flatten_json`);
 /// - `Schema`: il contratto inferito viola le regole strutturali v1 (D16).
 // Un braccio per operazione: la lunghezza e' intrinseca al dispatch.
 #[allow(clippy::too_many_lines)]
@@ -107,6 +120,7 @@ pub fn analyze_table_contract(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let descriptor = find_operation(op)
         .ok_or_else(|| PlenoraError::Unsupported(format!("{op}: operazione sconosciuta")))?;
@@ -153,80 +167,86 @@ pub fn analyze_table_contract(
         }
     }
     match id {
-        "table.add_row_number" => analyze_add_row_number(id, inputs, config, fields),
-        "table.aggregate" => analyze_aggregate(id, inputs, config, fields),
+        "table.add_row_number" => analyze_add_row_number(id, inputs, config, fields, limits),
+        "table.aggregate" => analyze_aggregate(id, inputs, config, fields, limits),
         "table.bin" => analyze_bin(id, inputs, config, fields),
         "table.concat" => analyze_concat(id, inputs, config, fields),
-        "table.concat_columns" => analyze_concat_columns(id, inputs, config, fields),
-        "table.conditional" => analyze_conditional(id, inputs, config, fields),
-        "table.cross_join" => analyze_cross_join(id, inputs, config, fields),
-        "table.date_extract" => analyze_date_extract(id, inputs, config, fields),
-        "table.dedup_advanced" => analyze_dedup_advanced(id, inputs, config, fields),
-        "table.distinct" => analyze_distinct(id, inputs, config, fields),
-        "table.drop_columns" => analyze_drop_columns(id, inputs, config, fields),
+        "table.concat_columns" => analyze_concat_columns(id, inputs, config, fields, limits),
+        "table.conditional" => analyze_conditional(id, inputs, config, fields, limits),
+        "table.cross_join" => analyze_cross_join(id, inputs, config, fields, limits),
+        "table.date_extract" => analyze_date_extract(id, inputs, config, fields, limits),
+        "table.dedup_advanced" => analyze_dedup_advanced(id, inputs, config, fields, limits),
+        "table.distinct" => analyze_distinct(id, inputs, config, fields, limits),
+        "table.drop_columns" => analyze_drop_columns(id, inputs, config, fields, limits),
         "table.fill_na" => analyze_fill_na(id, inputs, config, fields),
-        "table.filter" => analyze_filter(id, inputs, config, fields),
-        "table.flatten_json" => analyze_flatten_json(id, inputs, config, fields),
-        "table.formula" => analyze_formula(id, inputs, config, fields),
-        "table.join" => analyze_join(id, inputs, config, fields),
-        "table.lookup" => analyze_lookup(id, inputs, config, fields),
-        "table.melt" => analyze_melt(id, inputs, config, fields),
+        "table.filter" => analyze_filter(id, inputs, config, fields, limits),
+        "table.flatten_json" => analyze_flatten_json(id, inputs, config, fields, limits),
+        "table.formula" => analyze_formula(id, inputs, config, fields, limits),
+        "table.join" => analyze_join(id, inputs, config, fields, limits),
+        "table.lookup" => analyze_lookup(id, inputs, config, fields, limits),
+        "table.melt" => analyze_melt(id, inputs, config, fields, limits),
         "table.pivot" => analyze_pivot(id, inputs, config, fields),
-        "table.rename" => analyze_rename(id, inputs, config, fields),
+        "table.rename" => analyze_rename(id, inputs, config, fields, limits),
         "table.reorder_columns" => analyze_reorder_columns(id, inputs, config, fields),
-        "table.replace" => analyze_replace(id, inputs, config, fields),
+        "table.replace" => analyze_replace(id, inputs, config, fields, limits),
         "table.sample" => analyze_sample(id, inputs, config, fields),
-        "table.sort" => analyze_sort(id, inputs, config, fields),
-        "table.split_column" => analyze_split_column(id, inputs, config, fields),
+        "table.sort" => analyze_sort(id, inputs, config, fields, limits),
+        "table.split_column" => analyze_split_column(id, inputs, config, fields, limits),
         "table.statistics" => analyze_statistics(id, inputs, config, fields),
-        "table.string_extract" => analyze_string_extract(id, inputs, config, fields),
+        "table.string_extract" => analyze_string_extract(id, inputs, config, fields, limits),
         "table.string_length" => analyze_string_length(id, inputs, config, fields),
-        "table.string_pad" => analyze_string_pad(id, inputs, config, fields),
-        "table.table_diff" => analyze_table_diff(id, inputs, config, fields),
-        "table.text_normalize" => analyze_text_normalize(id, inputs, config, fields),
-        "table.transpose" => analyze_transpose(id, inputs, config, fields),
-        "table.type_cast" => analyze_type_cast(id, inputs, config, fields),
+        "table.string_pad" => analyze_string_pad(id, inputs, config, fields, limits),
+        "table.table_diff" => analyze_table_diff(id, inputs, config, fields, limits),
+        "table.text_normalize" => analyze_text_normalize(id, inputs, config, fields, limits),
+        "table.transpose" => analyze_transpose(id, inputs, config, fields, limits),
+        "table.type_cast" => analyze_type_cast(id, inputs, config, fields, limits),
         "table.uuid_generator" => analyze_uuid_generator(id, inputs, config, fields),
-        "table.window_function" => analyze_window_function(id, inputs, config, fields),
-        "table.mask_data" => analyze_mask_data(id, inputs, config, fields),
-        "table.md5_hash" => analyze_md5_hash(id, inputs, config, fields),
+        "table.window_function" => analyze_window_function(id, inputs, config, fields, limits),
+        "table.mask_data" => analyze_mask_data(id, inputs, config, fields, limits),
+        "table.md5_hash" => analyze_md5_hash(id, inputs, config, fields, limits),
         "table.anti_join" | "table.semi_join" => {
-            analyze_membership_join(id, inputs, config, fields)
+            analyze_membership_join(id, inputs, config, fields, limits)
         }
-        "table.asof_join" => analyze_asof_join(id, inputs, config, fields),
-        "table.assert_not_null" => analyze_assert_not_null(id, inputs, config, fields),
-        "table.assert_range" => analyze_assert_range(id, inputs, config, fields),
-        "table.assert_regex" => analyze_assert_regex(id, inputs, config, fields),
-        "table.assert_schema" => analyze_assert_schema(id, inputs, config, fields),
-        "table.assert_unique" => analyze_assert_unique(id, inputs, config, fields),
-        "table.coalesce" => analyze_coalesce(id, inputs, config, fields),
-        "table.date_add" => analyze_date_add(id, inputs, config, fields),
-        "table.date_diff" => analyze_date_diff(id, inputs, config, fields),
-        "table.date_format" => analyze_date_format(id, inputs, config, fields),
+        "table.asof_join" => analyze_asof_join(id, inputs, config, fields, limits),
+        "table.assert_not_null" => analyze_assert_not_null(id, inputs, config, fields, limits),
+        "table.assert_range" => analyze_assert_range(id, inputs, config, fields, limits),
+        "table.assert_regex" => analyze_assert_regex(id, inputs, config, fields, limits),
+        "table.assert_schema" => analyze_assert_schema(id, inputs, config, fields, limits),
+        "table.assert_unique" => analyze_assert_unique(id, inputs, config, fields, limits),
+        "table.coalesce" => analyze_coalesce(id, inputs, config, fields, limits),
+        "table.date_add" => analyze_date_add(id, inputs, config, fields, limits),
+        "table.date_diff" => analyze_date_diff(id, inputs, config, fields, limits),
+        "table.date_format" => analyze_date_format(id, inputs, config, fields, limits),
         "table.except" => analyze_set_operation(id, inputs, config, fields, SetOp::Except),
-        "table.explode" => analyze_explode(id, inputs, config, fields),
+        "table.explode" => analyze_explode(id, inputs, config, fields, limits),
         "table.intersect" => analyze_set_operation(id, inputs, config, fields, SetOp::Intersect),
-        "table.rolling_window" => analyze_rolling_window(id, inputs, config, fields),
-        "table.sha256_hash" => analyze_sha256_hash(id, inputs, config, fields),
-        "table.timezone_convert" => analyze_timezone_convert(id, inputs, config, fields),
+        "table.rolling_window" => analyze_rolling_window(id, inputs, config, fields, limits),
+        "table.sha256_hash" => analyze_sha256_hash(id, inputs, config, fields, limits),
+        "table.timezone_convert" => analyze_timezone_convert(id, inputs, config, fields, limits),
         "table.union_distinct" => {
             analyze_set_operation(id, inputs, config, fields, SetOp::UnionDistinct)
         }
-        "table.unnest" => analyze_unnest(id, inputs, config, fields),
-        "table.expression" => analyze_expression(id, inputs, config, fields),
-        "table.assert_cardinality" => analyze_assert_cardinality(id, inputs, config, fields),
-        "table.assert_metadata" => analyze_assert_metadata(id, inputs, config, fields),
-        "table.assert_foreign_key" => analyze_assert_foreign_key(id, inputs, config, fields),
-        "table.reconcile" => analyze_reconcile(id, inputs, config, fields),
+        "table.unnest" => analyze_unnest(id, inputs, config, fields, limits),
+        "table.expression" => analyze_expression(id, inputs, config, fields, limits),
+        "table.assert_cardinality" => {
+            analyze_assert_cardinality(id, inputs, config, fields, limits)
+        }
+        "table.assert_metadata" => analyze_assert_metadata(id, inputs, config, fields, limits),
+        "table.assert_foreign_key" => {
+            analyze_assert_foreign_key(id, inputs, config, fields, limits)
+        }
+        "table.reconcile" => analyze_reconcile(id, inputs, config, fields, limits),
         "table.select_columns" => analyze_select_columns(id, inputs, config, fields),
-        "table.limit" => analyze_limit(id, inputs, config, fields),
-        "table.top_n" => analyze_top_n(id, inputs, config, fields),
-        "table.stable_fingerprint" => analyze_stable_fingerprint(id, inputs, config, fields),
-        "table.align_schema" => analyze_align_schema(id, inputs, config, fields),
+        "table.limit" => analyze_limit(id, inputs, config, fields, limits),
+        "table.top_n" => analyze_top_n(id, inputs, config, fields, limits),
+        "table.stable_fingerprint" => {
+            analyze_stable_fingerprint(id, inputs, config, fields, limits)
+        }
+        "table.align_schema" => analyze_align_schema(id, inputs, config, fields, limits),
         "table.concat_by_name" => analyze_concat_by_name(id, inputs, config, fields),
-        "table.validate_rules" => analyze_validate_rules(id, inputs, config, fields),
-        "table.hmac_sha256" => analyze_hmac_sha256(id, inputs, config, fields),
-        "table.fuzzy_join" => analyze_fuzzy_join(id, inputs, config, fields),
+        "table.validate_rules" => analyze_validate_rules(id, inputs, config, fields, limits),
+        "table.hmac_sha256" => analyze_hmac_sha256(id, inputs, config, fields, limits),
+        "table.fuzzy_join" => analyze_fuzzy_join(id, inputs, config, fields, limits),
         _ => Err(PlenoraError::Unsupported(format!(
             "{id}: analyze_contract non disponibile"
         ))),
@@ -399,14 +419,26 @@ mod tests {
     // Config posseduta per ergonomia dei test (json! inline).
     #[allow(clippy::needless_pass_by_value)]
     fn ok(op: &str, inputs: &[DataContract], config: Value) -> DataContract {
-        analyze_table_contract(op, inputs, &config, &mut FieldAllocator::default())
-            .unwrap_or_else(|error| panic!("{op} con config valida fallisce: {error}"))
+        analyze_table_contract(
+            op,
+            inputs,
+            &config,
+            &mut FieldAllocator::default(),
+            &crate::Limits::default(),
+        )
+        .unwrap_or_else(|error| panic!("{op} con config valida fallisce: {error}"))
     }
 
     #[allow(clippy::needless_pass_by_value)]
     fn err(op: &str, inputs: &[DataContract], config: Value) -> PlenoraError {
-        analyze_table_contract(op, inputs, &config, &mut FieldAllocator::default())
-            .expect_err(&format!("{op} con config invalida deve fallire"))
+        analyze_table_contract(
+            op,
+            inputs,
+            &config,
+            &mut FieldAllocator::default(),
+            &crate::Limits::default(),
+        )
+        .expect_err(&format!("{op} con config invalida deve fallire"))
     }
 
     /// `InvalidPlan` emesso dalla guardia che contiene `fragment`: una
@@ -511,7 +543,8 @@ mod tests {
                 "table.nonexistent",
                 &inputs,
                 &json!({}),
-                &mut FieldAllocator::default()
+                &mut FieldAllocator::default(),
+                &crate::Limits::default()
             ),
             Err(PlenoraError::Unsupported(_))
         ));
@@ -520,7 +553,8 @@ mod tests {
                 "geo.buffer",
                 &inputs,
                 &json!({}),
-                &mut FieldAllocator::default()
+                &mut FieldAllocator::default(),
+                &crate::Limits::default()
             ),
             Err(PlenoraError::Unsupported(_))
         ));
@@ -546,7 +580,8 @@ mod tests {
             "table.concat",
             &[a, b, c],
             &json!({}),
-            &mut FieldAllocator::default()
+            &mut FieldAllocator::default(),
+            &crate::Limits::default()
         )
         .is_ok());
     }
@@ -1528,6 +1563,7 @@ mod tests {
                     std::slice::from_ref(&contratto),
                     config,
                     &mut FieldAllocator::default(),
+                    &crate::Limits::default(),
                 );
                 let kernel = esegui_kernel(op, &batch, config);
                 if analisi.is_ok() != kernel.is_ok() {
@@ -2521,13 +2557,11 @@ mod tests {
             &DataType::Utf8,
             true,
         );
-        // Senza argomenti non c'e' nulla da controllare: il tipo resta Text.
-        assert_field(
-            &infer(func("substring", vec![])),
-            "e",
-            &DataType::Utf8,
-            true,
-        );
+        // Senza argomenti: l'arieta' e' controllata dall'AST, come a ogni
+        // riga valutata.
+        assert!(infer_err(func("substring", vec![]))
+            .to_string()
+            .contains("numero di argomenti"));
         assert!(
             infer_err(func("substring", vec![col("value"), lit(json!(0))]))
                 .to_string()
@@ -2745,7 +2779,7 @@ mod tests {
         assert!(err(
             "table.assert_range",
             &[tabular_contract()],
-            json!({"column": "flag"})
+            json!({"column": "flag", "min": 0})
         )
         .to_string()
         .contains("numero"));
@@ -3005,12 +3039,15 @@ mod tests {
         let mut input = tabular_contract();
         input.schema = Arc::new(Schema::new_with_metadata(
             base_fields(),
-            std::collections::HashMap::from([("source".to_owned(), "test".to_owned())]),
+            std::collections::HashMap::from([
+                ("source".to_owned(), "test".to_owned()),
+                ("extra".to_owned(), "x".to_owned()),
+            ]),
         ));
         assert!(err(
             "table.assert_metadata",
             &[input],
-            json!({"expected": {}, "allow_extra": false})
+            json!({"expected": {"source": "test"}, "allow_extra": false})
         )
         .to_string()
         .contains("metadata extra"));
@@ -3689,6 +3726,7 @@ mod tests {
             &[proven_contract()],
             &json!({"columns": ["id"]}),
             allocator,
+            &crate::Limits::default(),
         )
         .unwrap()
     }
@@ -3915,9 +3953,14 @@ mod tests {
             expected: Result<RecordBatch>,
         ) -> DataContract {
             let expected = expected.unwrap_or_else(|e| panic!("kernel {op}: {e}"));
-            let analyzed =
-                analyze_table_contract(op, inputs, config, &mut FieldAllocator::default())
-                    .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
+            let analyzed = analyze_table_contract(
+                op,
+                inputs,
+                config,
+                &mut FieldAllocator::default(),
+                &crate::Limits::default(),
+            )
+            .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
             // Le divergenze si raccolgono tutte e si riportano insieme alla
             // fine del test (`riporta_divergenze`), non alla prima.
             if signature(&analyzed.schema) != signature(&expected.schema()) {
@@ -4276,7 +4319,7 @@ mod tests {
             check_unary(
                 "table.assert_metadata",
                 &batch,
-                json!({"expected": {}}),
+                json!({"expected": {"prova.simple": "simple"}}),
                 |b, config| governance::assert_metadata(b, &cfg(config)),
             );
 
@@ -4331,6 +4374,7 @@ mod tests {
                     ],
                     &config,
                     &mut FieldAllocator::default(),
+                    &crate::Limits::default(),
                 );
                 assert!(analisi.is_err(), "analisi {op}");
                 let kernel = match op {

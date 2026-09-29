@@ -304,10 +304,13 @@ pub struct AssertRange {
     pub column: String,
     pub min: Option<f64>,
     pub max: Option<f64>,
-    #[serde(default = "default_true")]
-    pub inclusive_min: bool,
-    #[serde(default = "default_true")]
-    pub inclusive_max: bool,
+    /// Estremo `min` incluso (assente: incluso). Senza `min` non ha effetto,
+    /// e l'analisi dei contratti lo rifiuta.
+    #[serde(default)]
+    pub inclusive_min: Option<bool>,
+    /// Come `inclusive_min`, per `max`.
+    #[serde(default)]
+    pub inclusive_max: Option<bool>,
     #[serde(default)]
     pub allow_null: bool,
 }
@@ -317,14 +320,14 @@ pub struct AssertRange {
 /// come i confronti IEEE storici).
 fn range_outside(config: &AssertRange, compare: &mut dyn FnMut(f64) -> Option<Ordering>) -> bool {
     let below = config.min.is_some_and(|min| {
-        if config.inclusive_min {
+        if config.inclusive_min.unwrap_or(true) {
             compare(min) == Some(Ordering::Less)
         } else {
             matches!(compare(min), Some(Ordering::Less | Ordering::Equal))
         }
     });
     let above = config.max.is_some_and(|max| {
-        if config.inclusive_max {
+        if config.inclusive_max.unwrap_or(true) {
             compare(max) == Some(Ordering::Greater)
         } else {
             matches!(compare(max), Some(Ordering::Greater | Ordering::Equal))
@@ -606,8 +609,8 @@ mod tests {
             column: "i".into(),
             min: Some(9_007_199_254_740_992.0),
             max: Some(9_007_199_254_740_992.0),
-            inclusive_min: true,
-            inclusive_max: true,
+            inclusive_min: None,
+            inclusive_max: None,
             allow_null: true,
         };
         // La riga con 2^53+1 viola il massimo (il null e' ammesso).
@@ -647,8 +650,8 @@ mod tests {
             column: "u".into(),
             min: None,
             max: Some(9_007_199_254_740_992.0),
-            inclusive_min: true,
-            inclusive_max: true,
+            inclusive_min: None,
+            inclusive_max: None,
             allow_null: false,
         }
     }
@@ -658,8 +661,8 @@ mod tests {
             column: "u".into(),
             min: Some(9.0),
             max: None,
-            inclusive_min: true,
-            inclusive_max: true,
+            inclusive_min: None,
+            inclusive_max: None,
             allow_null: false,
         }
     }

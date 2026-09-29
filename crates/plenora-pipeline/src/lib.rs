@@ -25,7 +25,6 @@ mod esecuzione;
 pub mod piano;
 mod sfratto;
 mod validazione;
-mod verifica_config;
 
 pub use dispatch::Variante;
 pub use esecuzione::{Esito, Report, ReportPasso};

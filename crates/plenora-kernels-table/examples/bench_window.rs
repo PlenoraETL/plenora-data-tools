@@ -87,7 +87,7 @@ fn main() {
         subset: vec!["key".into()],
         keep: Keep::First,
         order_column: Some("id".into()),
-        ascending: true,
+        ascending: Some(true),
     };
     measure(
         "table.dedup_advanced",

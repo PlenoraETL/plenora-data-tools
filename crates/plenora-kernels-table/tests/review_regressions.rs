@@ -2217,6 +2217,7 @@ fn l_analisi_di_melt_rifiuta_cio_che_il_kernel_rifiuterebbe() {
             std::slice::from_ref(&ingresso),
             &config,
             &mut plenora_core::contract::FieldAllocator::new(100),
+            &plenora_kernels_table::Limits::default(),
         )
         .expect_err(&format!("{nome}: l'analisi deve rifiutare"));
         assert_eq!(
@@ -2379,6 +2380,7 @@ fn il_profilo_testuale_dell_analizzatore_e_quello_del_formatter() {
             std::slice::from_ref(&ingresso),
             &json!({"column": "chiave", "mapping": {"a": "b"}}),
             &mut plenora_core::contract::FieldAllocator::new(100),
+            &plenora_kernels_table::Limits::default(),
         )
         .expect_err(&format!("{nome}: l'analisi deve rifiutare"));
         assert_eq!(
@@ -2413,6 +2415,7 @@ fn le_set_operation_non_usano_il_profilo_testuale() {
             &[ingresso.clone(), ingresso],
             &json!({}),
             &mut plenora_core::contract::FieldAllocator::new(100),
+            &plenora_kernels_table::Limits::default(),
         )
         .unwrap_or_else(|errore| {
             panic!("{tipo:?} e' codificabile come chiave, non va rifiutato: {errore}")
@@ -2845,6 +2848,7 @@ fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
             std::slice::from_ref(&contratto_ingresso),
             &config,
             &mut plenora_core::contract::FieldAllocator::new(100),
+            &plenora_kernels_table::Limits::default(),
         );
         match (atteso_analisi, &analisi) {
             (Verdetto::Accetta, Ok(contratto_uscita)) => {
@@ -2941,6 +2945,7 @@ fn l_eterogeneita_con_tipo_dichiarato_resta_ammessa_e_dipende_dai_dati() {
         std::slice::from_ref(&contratto_ingresso),
         &config,
         &mut plenora_core::contract::FieldAllocator::new(100),
+        &plenora_kernels_table::Limits::default(),
     )
     .expect("l'eterogeneita' col tipo dichiarato resta ammessa");
 
@@ -3029,6 +3034,7 @@ fn l_analisi_di_formula_rifiuta_la_timezone_che_il_formatter_rifiuta() {
         std::slice::from_ref(&contratto(vec![Field::new("istante", tipo.clone(), true)])),
         &config,
         &mut plenora_core::contract::FieldAllocator::new(100),
+        &plenora_kernels_table::Limits::default(),
     )
     .expect_err("la timezone non e' risolvibile");
     assert!(
@@ -3233,6 +3239,7 @@ fn lo_schema_di_expression_non_dipende_dai_valori() {
             std::slice::from_ref(&contratto_ingresso),
             &config,
             &mut plenora_core::contract::FieldAllocator::new(100),
+            &plenora_kernels_table::Limits::default(),
         )
         .unwrap_or_else(|errore| panic!("{nome}: l'analisi deve accettare: {errore}"));
         assert_eq!(
@@ -3302,6 +3309,7 @@ fn lo_schema_di_formula_non_dipende_dai_valori() {
             std::slice::from_ref(&contratto_ingresso),
             &config,
             &mut plenora_core::contract::FieldAllocator::new(100),
+            &plenora_kernels_table::Limits::default(),
         )
         .unwrap_or_else(|errore| panic!("{nome}: l'analisi deve accettare: {errore}"));
         assert_eq!(

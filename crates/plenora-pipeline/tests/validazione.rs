@@ -53,7 +53,13 @@ fn analisi_diretta(op: &str, schemi: &[SchemaRef], config: &Value) -> Result<Dat
         .iter()
         .map(|schema| contract_from_arrow_schema(schema.clone(), resolve_crs))
         .collect::<Result<_>>()?;
-    analyze_table_contract(op, &ingressi, config, &mut campi)
+    analyze_table_contract(
+        op,
+        &ingressi,
+        config,
+        &mut campi,
+        &plenora_kernels_table::Limits::default(),
+    )
 }
 
 #[test]
@@ -343,57 +349,6 @@ fn il_crs_di_piano_si_risolve_in_validazione() {
 }
 
 #[test]
-fn le_config_che_il_motore_d_origine_rifiutava_si_rifiutano() {
-    // L'analisi le accetta; il kernel le eseguirebbe con un significato
-    // diverso da quello scritto (verifica_config.rs).
-    let casi = [
-        (
-            "table.dedup_advanced",
-            json!({"subset": ["id"], "ascending": false}),
-        ),
-        (
-            "table.melt",
-            json!({"id_columns": ["id"], "value_columns": ["value"],
-                   "var_name": "x", "value_name": "x"}),
-        ),
-        (
-            "table.melt",
-            json!({"id_columns": ["id"], "value_columns": ["value", "value"]}),
-        ),
-        (
-            "table.rename",
-            json!({"renames": [{"old_name": "name", "new_name": "x"},
-                               {"old_name": "name", "new_name": "y"}]}),
-        ),
-        (
-            "table.aggregate",
-            json!({"group_by": ["name"],
-                   "aggregations": [{"column": "value", "function": "sum", "quantile": 0.5}]}),
-        ),
-        ("table.assert_not_null", json!({"columns": []})),
-        ("table.assert_range", json!({"column": "value"})),
-        ("table.assert_cardinality", json!({})),
-        (
-            "table.conditional",
-            json!({"column": "value", "conditions": [], "default_value": 0,
-                   "output_column": "c"}),
-        ),
-        (
-            "table.date_format",
-            json!({"column": "date", "input_format": "%Y-%m-%d", "output_format": "",
-                   "output_column": "d"}),
-        ),
-    ];
-    for (op, config) in casi {
-        let pipeline = piano(&["t"], vec![passo("a", op, &["t"], config.clone())], &["a"]);
-        assert!(
-            matches!(valida_wide(&pipeline), Err(PlenoraError::InvalidPlan(_))),
-            "{op} {config}"
-        );
-    }
-}
-
-#[test]
 fn la_provenance_per_riga_si_controlla_in_validazione() {
     // assert_not_null riporta indici di riga: dopo un sort non sono piu'
     // quelli della sorgente.
@@ -479,8 +434,14 @@ fn i_contratti_di_una_catena_lunga_sono_quelli_dell_analisi_passo_per_passo() {
             .iter()
             .map(|nome| attesi[nome].clone())
             .collect();
-        let uscita = analyze_table_contract(&passo.op, &ingressi, &passo.config, &mut campi)
-            .expect("analisi del passo");
+        let uscita = analyze_table_contract(
+            &passo.op,
+            &ingressi,
+            &passo.config,
+            &mut campi,
+            &plenora_kernels_table::Limits::default(),
+        )
+        .expect("analisi del passo");
         attesi.insert(passo.out.clone(), uscita);
     }
     for (nome, atteso) in &attesi {
@@ -637,88 +598,314 @@ fn i_limiti_di_complessita_del_piano_si_applicano() {
     ));
 }
 
+/// Un caso di config che l'analisi dei kernel rifiuta: il passo che la usa
+/// e' il secondo del piano, e senza il rifiuto in validazione il primo
+/// girerebbe e l'errore arriverebbe dopo (o non arriverebbe affatto, con un
+/// parametro ignorato).
+struct SecondoPasso {
+    schema: SchemaRef,
+    /// Primo passo: `(op, config)`.
+    primo: (&'static str, Value),
+    op: &'static str,
+    config: Value,
+    /// Secondo input del passo binario: l'input `t` del piano.
+    binario: bool,
+}
+
+fn caso(schema: &SchemaRef, op: &'static str, config: Value) -> SecondoPasso {
+    SecondoPasso {
+        schema: schema.clone(),
+        primo: ("table.add_row_number", json!({"output_column": "riga"})),
+        op,
+        config,
+        binario: false,
+    }
+}
+
+fn caso_binario(schema: &SchemaRef, op: &'static str, config: Value) -> SecondoPasso {
+    SecondoPasso {
+        binario: true,
+        ..caso(schema, op, config)
+    }
+}
+
+/// Tabella con `colonne - 1` colonne Int64 e una colonna Utf8 `json`.
+fn schema_largo_con_json(colonne: usize) -> SchemaRef {
+    let mut campi: Vec<plenora_core::arrow::schema::Field> = schema_largo(colonne - 1)
+        .fields()
+        .iter()
+        .map(|campo| campo.as_ref().clone())
+        .collect();
+    campi.push(plenora_core::arrow::schema::Field::new(
+        "json",
+        plenora_core::arrow::schema::DataType::Utf8,
+        false,
+    ));
+    std::sync::Arc::new(plenora_core::arrow::schema::Schema::new(campi))
+}
+
+/// Ogni regola sulle config vive nell'analisi dei kernel
+/// (`analyze_table_contract`), e il runner la applica passando da li': le
+/// regole che il runner portava da solo (`verifica_config.rs`, rimosso),
+/// quelle che prima scattavano solo in esecuzione, e la chiave HMAC, l'unico
+/// controllo d'ambiente rimasto nel runner.
 #[test]
+#[allow(clippy::too_many_lines)] // Un caso per regola.
 fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
-    // Ogni caso sta al secondo passo: senza il controllo in validazione il
-    // primo passo girerebbe e l'errore arriverebbe dopo.
-    let schema_nested = nested().schema();
-    let casi: Vec<(SchemaRef, &str, Value)> = vec![
-        // `order_column` di tipo List: non ordinabile (analisi dei kernel).
-        (
-            schema_nested.clone(),
-            "table.window_function",
-            json!({"column": "id", "function": "rank", "order_column": "lst",
-                   "output_column": "r"}),
-        ),
-        (
-            schema_nested.clone(),
-            "table.rolling_window",
-            json!({"column": "id", "function": "sum", "window": 2, "order_column": "lst",
-                   "output_column": "r"}),
-        ),
-        (
-            schema_nested.clone(),
-            "table.dedup_advanced",
-            json!({"subset": ["id"], "order_column": "lst"}),
-        ),
-        (
-            schema_nested.clone(),
+    let w = schema_wide();
+    let n = nested().schema();
+    let una_colonna: SchemaRef =
+        std::sync::Arc::new(plenora_core::arrow::schema::Schema::new(vec![
+            plenora_core::arrow::schema::Field::new(
+                "x",
+                plenora_core::arrow::schema::DataType::Int64,
+                false,
+            ),
+        ]));
+    let massimo = plenora_kernels_table::limiti_interni::MAX_COLUMNS;
+    let casi = vec![
+        // Chiavi lette come testo.
+        caso_binario(
+            &n,
             "table.join",
             json!({"left_keys": ["lst"], "right_keys": ["lst"], "how": "inner"}),
         ),
-        (
-            schema_nested.clone(),
-            "table.explode",
-            json!({"column": "lst", "output_column": "e", "empty_policy": "drop"}),
+        caso_binario(
+            &n,
+            "table.semi_join",
+            json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
         ),
-        // La chiave della riga intera contiene una List: non e' testo.
-        (schema_nested.clone(), "table.distinct", json!({})),
-        (
-            schema_nested.clone(),
-            "table.aggregate",
-            json!({"group_by": ["lst"],
-                   "aggregations": [{"column": "id", "function": "sum"}]}),
+        caso_binario(
+            &n,
+            "table.anti_join",
+            json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
         ),
-        (
-            schema_nested,
+        caso_binario(
+            &n,
+            "table.asof_join",
+            json!({"left_on": "id", "right_on": "id", "left_by": ["lst"], "right_by": ["lst"]}),
+        ),
+        caso_binario(
+            &n,
+            "table.table_diff",
+            json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+        ),
+        caso_binario(
+            &n,
+            "table.table_diff",
+            json!({"left_keys": ["id"], "right_keys": ["id"], "compare_columns": ["st"]}),
+        ),
+        caso_binario(
+            &n,
+            "table.assert_foreign_key",
+            json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+        ),
+        caso_binario(
+            &n,
+            "table.reconcile",
+            json!({"left_keys": ["lst"], "right_keys": ["lst"]}),
+        ),
+        // Liste di chiavi di lunghezza diversa.
+        caso_binario(
+            &w,
+            "table.assert_foreign_key",
+            json!({"left_keys": ["id", "name"], "right_keys": ["id"]}),
+        ),
+        caso_binario(
+            &w,
+            "table.reconcile",
+            json!({"left_keys": ["id"], "right_keys": ["id", "name"]}),
+        ),
+        // La riga intera di distinct contiene una List.
+        caso(&n, "table.distinct", json!({})),
+        // Operatori testuali su colonne che non sono testo.
+        caso(
+            &n,
             "table.filter",
             json!({"column": "st", "operator": "contains", "value": "a"}),
         ),
-        // %z non si scrive da una data senza fuso: il kernel andava in panico.
-        (
-            schema_wide(),
-            "table.date_format",
-            json!({"column": "date", "input_format": "%Y-%m-%d",
-                   "output_format": "%Y %z", "output_column": "d"}),
+        caso(
+            &n,
+            "table.conditional",
+            json!({"column": "lst", "conditions": [{"operator": "==", "value": "a", "result": 1}]}),
         ),
-        (
-            schema_wide(),
-            "table.date_extract",
-            json!({"column": "date", "parts": ["year"], "date_format": "%Q"}),
-        ),
-        // date_format su un target che non lo usa: ignorato in silenzio.
-        (
-            schema_wide(),
+        // Parametri che il target non usa.
+        caso(
+            &w,
             "table.type_cast",
             json!({"column": "id", "target_type": "str", "date_format": "%Y"}),
         ),
-        (
-            schema_wide(),
+        caso(
+            &w,
+            "table.type_cast",
+            json!({"column": "id", "target_type": "int", "timezone": "UTC"}),
+        ),
+        caso(
+            &n,
+            "table.explode",
+            json!({"column": "lst", "output_column": "e", "empty_policy": "drop"}),
+        ),
+        // Impronta di niente: nessuna colonna ne' in config ne' nello schema.
+        SecondoPasso {
+            primo: ("table.drop_columns", json!({"columns": ["x"]})),
+            ..caso(&una_colonna, "table.stable_fingerprint", json!({}))
+        },
+        caso(
+            &w,
+            "table.sha256_hash",
+            json!({"columns": [], "output_column": "h"}),
+        ),
+        // Oltre max_columns.
+        SecondoPasso {
+            primo: ("table.drop_columns", json!({"columns": []})),
+            ..caso(
+                &schema_largo_con_json(massimo),
+                "table.flatten_json",
+                json!({"column": "json", "output_columns": ["json_a"]}),
+            )
+        },
+        // Parametri ignorati e asserzioni vacue.
+        caso(
+            &w,
+            "table.dedup_advanced",
+            json!({"subset": ["id"], "ascending": false}),
+        ),
+        caso(
+            &w,
+            "table.dedup_advanced",
+            json!({"subset": ["id"], "ascending": true}),
+        ),
+        caso(
+            &w,
+            "table.melt",
+            json!({"id_columns": ["id"], "value_columns": ["value"],
+                   "var_name": "x", "value_name": "x"}),
+        ),
+        caso(
+            &w,
+            "table.melt",
+            json!({"id_columns": ["id"], "value_columns": ["value", "value"]}),
+        ),
+        caso(
+            &w,
+            "table.rename",
+            json!({"renames": [{"old_name": "name", "new_name": "x"},
+                               {"old_name": "name", "new_name": "y"}]}),
+        ),
+        caso(
+            &w,
+            "table.aggregate",
+            json!({"group_by": ["name"],
+                   "aggregations": [{"column": "value", "function": "sum", "quantile": 0.5}]}),
+        ),
+        caso(&w, "table.assert_not_null", json!({"columns": []})),
+        caso(&w, "table.assert_range", json!({"column": "value"})),
+        caso(
+            &w,
+            "table.assert_range",
+            json!({"column": "value", "max": 10, "inclusive_min": false}),
+        ),
+        caso(&w, "table.assert_cardinality", json!({})),
+        caso(
+            &w,
+            "table.conditional",
+            json!({"column": "value", "conditions": [], "default_value": 0,
+                   "output_column": "c"}),
+        ),
+        caso(
+            &w,
+            "table.date_format",
+            json!({"column": "date", "input_format": "%Y-%m-%d", "output_format": "",
+                   "output_column": "d"}),
+        ),
+        caso(
+            &w,
+            "table.string_pad",
+            json!({"column": "name", "width": 16 * 1024 * 1024 + 1, "fill_char": "0"}),
+        ),
+        caso(&w, "table.limit", json!({"n": u64::MAX})),
+        // Prima fallivano solo in esecuzione.
+        caso(
+            &w,
+            "table.filter",
+            json!({"column": "flag", "operator": ">", "value": 0}),
+        ),
+        caso(
+            &n,
+            "table.conditional",
+            json!({"column": "st", "conditions": [{"operator": "between", "value": "0,1",
+                   "result": 1}]}),
+        ),
+        caso(
+            &w,
+            "table.conditional",
+            json!({"column": "value", "conditions": [{"operator": "==", "value": "abc",
+                   "result": 1}]}),
+        ),
+        caso(
+            &w,
+            "table.date_add",
+            json!({"column": "date", "input_format": "%Y-%m-%d", "amount": i64::MAX,
+                   "unit": "days", "output_column": "d"}),
+        ),
+        caso(
+            &w,
+            "table.expression",
+            json!({"output_column": "e", "expression": {"kind": "function", "name": "lower",
+                   "args": [{"kind": "column", "name": "name"},
+                            {"kind": "column", "name": "name"}]}}),
+        ),
+        caso(
+            &w,
+            "table.expression",
+            json!({"output_column": "e", "expression": {"kind": "function",
+                   "name": "regex_replace", "args": [{"kind": "column", "name": "name"},
+                   {"kind": "literal", "value": "("}, {"kind": "literal", "value": "x"}]}}),
+        ),
+        caso(
+            &w,
+            "table.expression",
+            json!({"output_column": "e", "expression": {"kind": "function",
+                   "name": "substring", "args": [{"kind": "column", "name": "name"},
+                   {"kind": "literal", "value": -1}]}}),
+        ),
+        // Parametri che il kernel ignorava in silenzio.
+        caso(
+            &w,
+            "table.add_row_number",
+            json!({"output_column": "r", "ascending": false}),
+        ),
+        caso(
+            &w,
+            "table.string_extract",
+            json!({"column": "name", "pattern": "(?P<l>[ab])", "output_column": "x"}),
+        ),
+        caso(
+            &w,
+            "table.string_extract",
+            json!({"column": "name", "pattern": "(?P<l>[ab])", "extract_all": true}),
+        ),
+        // Ambiente, non config: l'unico controllo rimasto nel runner.
+        caso(
+            &w,
             "table.hmac_sha256",
             json!({"columns": ["id"], "key_env": "PLENORA_PIPELINE_CHIAVE_ASSENTE"}),
         ),
     ];
-    for (schema, op, config) in casi {
+    for SecondoPasso {
+        schema,
+        primo,
+        op,
+        config,
+        binario,
+    } in casi
+    {
+        let ingressi: &[&str] = if binario { &["primo", "t"] } else { &["primo"] };
         let pipeline = piano(
             &["t"],
             vec![
-                passo(
-                    "primo",
-                    "table.add_row_number",
-                    &["t"],
-                    json!({"output_column": "riga"}),
-                ),
-                passo("secondo", op, &["primo"], config.clone()),
+                passo("primo", primo.0, &["t"], primo.1),
+                passo("secondo", op, ingressi, config.clone()),
             ],
             &["secondo"],
         );
@@ -726,7 +913,9 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
         assert!(
             matches!(
                 &esito,
-                Err(PlenoraError::InvalidPlan(messaggio) | PlenoraError::Unsupported(messaggio))
+                Err(PlenoraError::InvalidPlan(messaggio)
+                    | PlenoraError::Unsupported(messaggio)
+                    | PlenoraError::ResourceLimit(messaggio))
                     if messaggio.contains("secondo")
             ),
             "{op} {config}: {esito:?}"

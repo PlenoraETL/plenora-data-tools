@@ -272,7 +272,7 @@ pub static CASI: &[Caso] = &[
     caso!(
         "table.string_extract",
         Wide,
-        r#"{"column":"name","pattern":"(?P<letter>[ab])","output_column":"letter"}"#
+        r#"{"column":"name","pattern":"(?P<letter>[ab])"}"#
     ),
     caso!(
         "table.string_length",

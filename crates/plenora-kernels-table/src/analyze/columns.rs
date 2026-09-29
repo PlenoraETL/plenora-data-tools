@@ -8,8 +8,9 @@ use plenora_core::Result;
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, clone_fields, contract_error, field_of, finish,
-    propagate_geometry, require_utf8, scrub_dropped_geometry, typed,
+    analyze_append, check_name_list, check_output_name, check_text_len, clone_fields,
+    contract_error, field_of, finish, propagate_geometry, require_utf8, scrub_dropped_geometry,
+    typed,
 };
 use crate::{columns, Limits};
 
@@ -22,10 +23,12 @@ pub(in crate::analyze) fn analyze_drop_columns(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: columns::DropColumns = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    check_name_list(op, &config.columns, limits.max_columns, "columns", true)?;
     let to_drop: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let kept: Vec<Field> = clone_fields(input)
         .into_iter()
@@ -66,10 +69,17 @@ pub(in crate::analyze) fn analyze_rename(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: columns::Rename = typed(op, config)?;
     let input = &inputs[0];
-    // Come il kernel: old_name inesistente ignorato, duplicati -> vince l'ultimo.
+    // Due rinomine della stessa sorgente lascerebbero al kernel la scelta
+    // («vince l'ultimo»): rifiutate, come due destinazioni uguali. Un
+    // `old_name` inesistente resta ignorato, come nel kernel.
+    let old: Vec<String> = config.renames.iter().map(|p| p.old_name.clone()).collect();
+    let new: Vec<String> = config.renames.iter().map(|p| p.new_name.clone()).collect();
+    check_name_list(op, &old, limits.max_columns, "rename origine", true)?;
+    check_name_list(op, &new, limits.max_columns, "rename destinazione", true)?;
     let renames: HashMap<&str, &str> = config
         .renames
         .iter()
@@ -157,12 +167,12 @@ pub(in crate::analyze) fn analyze_concat_columns(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: columns::ConcatColumns = typed(op, config)?;
     let input = &inputs[0];
-    if config.columns.is_empty() {
-        return contract_error(op, "columns vuoto");
-    }
+    check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
+    check_text_len(op, &config.separator, limits.max_string_bytes, "separator")?;
     check_output_name(op, &config.output_column)?;
     for name in &config.columns {
         require_utf8(op, input, name)?;
@@ -179,28 +189,27 @@ pub(in crate::analyze) fn analyze_split_column(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: columns::SplitColumn = typed(op, config)?;
     let input = &inputs[0];
     if config.delimiter.is_empty() {
         return contract_error(op, "delimiter vuoto");
     }
-    if config.new_columns.is_empty() {
-        return contract_error(op, "new_columns vuoto");
-    }
-    if config.new_columns.len() > Limits::default().max_split_columns {
-        return contract_error(op, "new_columns oltre max_split_columns");
-    }
+    check_text_len(op, &config.delimiter, limits.max_string_bytes, "delimiter")?;
+    check_name_list(
+        op,
+        &config.new_columns,
+        limits.max_split_columns,
+        "new_columns",
+        false,
+    )?;
     require_utf8(op, input, &config.column)?;
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut produced = Vec::with_capacity(config.new_columns.len());
-    for name in &config.new_columns {
-        if !seen.insert(name.as_str()) {
-            return contract_error(op, format!("new_columns duplicato: {name}"));
-        }
-        check_output_name(op, name)?;
-        produced.push((name.clone(), DataType::Utf8, true));
-    }
+    let produced: Vec<(String, DataType, bool)> = config
+        .new_columns
+        .iter()
+        .map(|name| (name.clone(), DataType::Utf8, true))
+        .collect();
     analyze_append(input, fields, &produced)
 }
 
@@ -259,11 +268,15 @@ pub(in crate::analyze) fn analyze_align_schema(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: columns::AlignSchema = typed(op, config)?;
     let input = &inputs[0];
     if config.columns.is_empty() {
         return contract_error(op, "columns vuoto");
+    }
+    if config.columns.len() > limits.max_columns {
+        return contract_error(op, "columns: numero di colonne oltre il limite");
     }
     let mut seen: HashSet<&str> = HashSet::new();
     let mut fields_out = Vec::with_capacity(config.columns.len());

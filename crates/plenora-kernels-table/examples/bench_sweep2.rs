@@ -774,7 +774,7 @@ fn main() {
         start: 1,
         partition_column: None,
         order_column: None,
-        ascending: true,
+        ascending: None,
     };
     sweep_unary(
         &mut results,
@@ -811,8 +811,8 @@ fn main() {
         column: "num".into(),
         min: Some(0.0),
         max: Some(10_000.0),
-        inclusive_min: true,
-        inclusive_max: true,
+        inclusive_min: None,
+        inclusive_max: None,
         allow_null: false,
     };
     sweep_unary(

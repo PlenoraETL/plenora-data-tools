@@ -11,9 +11,9 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    check_output_name, clone_fields, contract_error, field_of, finish, merge_geometry,
-    merge_schema_metadata, merge_schema_metadata_many, propagate_geometry, require_utf8,
-    sorted_only, typed,
+    check_name_list, check_output_name, clone_fields, contract_error, field_of, finish,
+    merge_geometry, merge_schema_metadata, merge_schema_metadata_many, propagate_geometry,
+    require_scalar_strings, require_utf8, sorted_only, typed,
 };
 use super::quality::check_foreign_keys;
 use crate::{fuzzy, joins, setops, Limits};
@@ -36,6 +36,25 @@ pub(in crate::analyze) fn check_key_pairs(
     check_foreign_keys(op, left, right, left_keys, right_keys)
 }
 
+/// Chiavi di un'op binaria che il kernel legge come testo (chiave
+/// composta): liste senza ripetizioni entro `max_columns`, stessa
+/// cardinalita', tipi identici per coppia, colonne leggibili come scalare
+/// testuale.
+pub(in crate::analyze) fn check_text_key_pairs(
+    op: &str,
+    left: &DataContract,
+    right: &DataContract,
+    left_keys: &[String],
+    right_keys: &[String],
+    limits: &Limits,
+) -> Result<()> {
+    check_key_pairs(op, left, right, left_keys, right_keys)?;
+    check_name_list(op, left_keys, limits.max_columns, "left_keys", false)?;
+    check_name_list(op, right_keys, limits.max_columns, "right_keys", false)?;
+    require_scalar_strings(op, left, left_keys)?;
+    require_scalar_strings(op, right, right_keys)
+}
+
 /// Replica `combine_horizontal`: tutte le colonne left (con naming per
 /// variante), poi le colonne right non omesse; nullability forzata a true;
 /// collisioni -> errore. Restituisce (campi, nome left, nome right) della
@@ -47,6 +66,7 @@ fn combine_horizontal_fields(
     right: &DataContract,
     omitted_right: &HashSet<usize>,
     naming: HorizontalNaming<'_>,
+    limits: &Limits,
 ) -> Result<(Vec<Field>, Option<String>, Option<String>)> {
     let right_names: HashSet<&str> = right
         .schema
@@ -117,7 +137,7 @@ fn combine_horizontal_fields(
         }
         fields_out.push(field.with_name(name).with_nullable(true));
     }
-    if fields_out.len() > Limits::default().max_columns {
+    if fields_out.len() > limits.max_columns {
         return contract_error(op, "join supera max_columns");
     }
     Ok((fields_out, left_geometry_name, right_geometry_name))
@@ -135,11 +155,19 @@ pub(in crate::analyze) fn analyze_join(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: joins::Join = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
-    check_key_pairs(op, left, right, &config.left_keys, &config.right_keys)?;
+    check_text_key_pairs(
+        op,
+        left,
+        right,
+        &config.left_keys,
+        &config.right_keys,
+        limits,
+    )?;
     // Con `right`/`outer` la chiave di output e' la fusione dei due lati, e
     // `coalesce` non copre tutti i tipi: il controllo va fatto QUI, non a
     // meta' esecuzione dopo aver aperto gli input.
@@ -182,6 +210,7 @@ pub(in crate::analyze) fn analyze_join(
         right,
         &right_indices,
         HorizontalNaming::ManipolaJoin(&left_indices),
+        limits,
     )?;
     // R2.4: i metadata di schema delle due sorgenti si fondono; stessa chiave
     // con valori diversi -> errore, mai precedenza implicita.
@@ -212,6 +241,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: fuzzy::FuzzyJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
@@ -229,6 +259,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
         right,
         &HashSet::new(),
         HorizontalNaming::ManipolaJoin(&[left_index]),
+        limits,
     )?;
     let score_name = config.score_name();
     check_output_name(op, score_name)?;
@@ -240,7 +271,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
         DataType::Float64,
         config.how == fuzzy::FuzzyHow::Left,
     ));
-    if fields_out.len() > Limits::default().max_columns {
+    if fields_out.len() > limits.max_columns {
         return contract_error(op, "fuzzy_join supera max_columns");
     }
     // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
@@ -257,6 +288,7 @@ pub(in crate::analyze) fn analyze_cross_join(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let _config: joins::CrossJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
@@ -267,6 +299,7 @@ pub(in crate::analyze) fn analyze_cross_join(
         right,
         &HashSet::new(),
         HorizontalNaming::PandasCross,
+        limits,
     )?;
     // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
@@ -311,11 +344,19 @@ pub(in crate::analyze) fn analyze_membership_join(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: joins::MembershipJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
-    check_key_pairs(op, left, right, &config.left_keys, &config.right_keys)?;
+    check_text_key_pairs(
+        op,
+        left,
+        right,
+        &config.left_keys,
+        &config.right_keys,
+        limits,
+    )?;
     // Output = left via select_rows: schema invariato, ordine preservato.
     let mut output = left.clone();
     output.properties = sorted_only(left);
@@ -327,6 +368,7 @@ pub(in crate::analyze) fn analyze_asof_join(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: joins::AsOfJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
@@ -334,6 +376,8 @@ pub(in crate::analyze) fn analyze_asof_join(
     if config.left_by.len() != config.right_by.len() {
         return contract_error(op, "left_by/right_by di cardinalita' diversa");
     }
+    check_name_list(op, &config.left_by, limits.max_columns, "left_by", true)?;
+    check_name_list(op, &config.right_by, limits.max_columns, "right_by", true)?;
     if config
         .tolerance
         .is_some_and(|tolerance| !tolerance.is_finite() || tolerance < 0.0)
@@ -351,6 +395,9 @@ pub(in crate::analyze) fn analyze_asof_join(
         );
     }
     check_foreign_keys(op, left, right, &config.left_by, &config.right_by)?;
+    // Le partizioni `by` si leggono come testo.
+    require_scalar_strings(op, left, &config.left_by)?;
+    require_scalar_strings(op, right, &config.right_by)?;
     let omitted: HashSet<usize> = config
         .right_by
         .iter()
@@ -362,7 +409,7 @@ pub(in crate::analyze) fn analyze_asof_join(
         })
         .collect::<Result<HashSet<_>>>()?;
     let (fields_out, left_geometry, right_geometry) =
-        combine_horizontal_fields(op, left, right, &omitted, HorizontalNaming::AsOf)?;
+        combine_horizontal_fields(op, left, right, &omitted, HorizontalNaming::AsOf, limits)?;
     // R2.4: merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);

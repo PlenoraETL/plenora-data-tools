@@ -24,8 +24,11 @@ pub struct AddRowNumber {
     pub start: i64,
     pub partition_column: Option<String>,
     pub order_column: Option<String>,
-    #[serde(default = "default_true")]
-    pub ascending: bool,
+    /// Verso di `order_column`. Il profilo corrente rifiuta `order_column`,
+    /// quindi un verso dichiarato non avrebbe effetto: si rifiuta
+    /// ([`verifica_ascending`]) invece di essere ignorato.
+    #[serde(default)]
+    pub ascending: Option<bool>,
 }
 
 fn default_row_name() -> String {
@@ -34,8 +37,20 @@ fn default_row_name() -> String {
 const fn default_start() -> i64 {
     1
 }
-const fn default_true() -> bool {
-    true
+/// `ascending` ha senso solo con `order_column`, che il profilo corrente
+/// rifiuta: un verso dichiarato sarebbe ignorato in silenzio. La chiamano il
+/// kernel e l'analisi dei contratti.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `ascending` e' dichiarato senza `order_column`.
+pub fn verifica_ascending(config: &AddRowNumber) -> Result<()> {
+    if config.ascending.is_some() && config.order_column.is_none() {
+        return Err(PlenoraError::InvalidPlan(
+            "ascending senza order_column non ha effetto".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Colonna Int64 con il numero di riga progressivo a partire da
@@ -53,11 +68,11 @@ const fn default_true() -> bool {
 ///   come testo (come `scalar_as_string`);
 /// - `Schema`: `partition_column` assente dal batch.
 pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<RecordBatch> {
-    let _ = config.ascending;
     validate_output_name(&config.output_column)?;
     if config.order_column.is_some() {
         return Err(PlenoraError::InvalidPlan("add_row_number con ordinamento verra' eseguito dal kernel blocking sort; profilo corrente richiede order_column nullo".into()));
     }
+    verifica_ascending(config)?;
     let values = if let Some(partition) = &config.partition_column {
         let index = column_index(batch, partition)?;
         let source = batch.column(index);

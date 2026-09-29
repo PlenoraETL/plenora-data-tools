@@ -310,6 +310,69 @@ pub fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Res
     }
 }
 
+/// Argomenti ammessi per funzione: gli stessi controlli che `function` fa a
+/// ogni riga valutata (`exact_args`, liste non vuote), letti dall'AST.
+const fn arity(name: Function) -> (usize, usize) {
+    match name {
+        Function::Coalesce | Function::Concat | Function::Greatest | Function::Least => {
+            (1, usize::MAX)
+        }
+        Function::Lower
+        | Function::Upper
+        | Function::Trim
+        | Function::Length
+        | Function::Year
+        | Function::Abs
+        | Function::Round
+        | Function::Floor
+        | Function::Ceil => (1, 1),
+        Function::NullIf
+        | Function::Contains
+        | Function::StartsWith
+        | Function::EndsWith
+        | Function::Power
+        | Function::In
+        | Function::DateTrunc => (2, 2),
+        Function::Substring => (2, 3),
+        Function::RegexReplace | Function::Between => (3, 3),
+    }
+}
+
+/// I letterali che la valutazione rifiuterebbe su ogni riga che li
+/// raggiunge, qualunque siano i dati: numero di argomenti, pattern
+/// letterale di `regex_replace` non compilabile, indice letterale negativo
+/// di `substring`. Una regex o un indice calcolati dalle colonne dipendono
+/// dai dati e restano un errore di valutazione.
+fn audit_literals(name: Function, args: &[Expression]) -> Result<()> {
+    let (min, max) = arity(name);
+    if args.len() < min || args.len() > max {
+        return Err(PlenoraError::InvalidPlan(format!(
+            "{name:?}: numero di argomenti non valido"
+        )));
+    }
+    match name {
+        Function::RegexReplace => {
+            if let Some(Expression::Literal {
+                value: Value::String(pattern),
+            }) = args.get(1)
+            {
+                regex::Regex::new(pattern).map_err(|error| {
+                    PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}"))
+                })?;
+            }
+        }
+        Function::Substring => {
+            for (arg, context) in args[1..].iter().zip(["substring: start", "substring: len"]) {
+                if let Expression::Literal { value } = arg {
+                    substring_index(&literal(value)?, context)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: usize) -> Result<()> {
     if depth > 64 {
         return Err(PlenoraError::InvalidPlan(
@@ -340,6 +403,7 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
                     "troppi argomenti expression".into(),
                 ));
             }
+            audit_literals(*name, args)?;
             // date_trunc: unita' letterale del set chiuso, rifiutata qui.
             if matches!(name, Function::DateTrunc) {
                 if args.len() != 2 {
@@ -403,8 +467,10 @@ fn audit(expression: &Expression, depth: usize, nodes: &mut usize, max_nodes: us
 /// - `InvalidPlan`: nome colonna di output vuoto o oltre 1024 byte (come
 ///   `validate_output_name`); AST oltre la profondita' massima o oltre
 ///   `max_nodes`; nome colonna vuoto; letterale non scalare o non finito;
-///   troppi argomenti o rami `case`; unita' di `date_trunc` non letterale o
-///   fuori dal set chiuso; `in` senza lista di letterali scalari.
+///   troppi argomenti o rami `case`; numero di argomenti diverso da quello
+///   della funzione; pattern letterale di `regex_replace` non compilabile;
+///   indice letterale negativo di `substring`; unita' di `date_trunc` non
+///   letterale o fuori dal set chiuso; `in` senza lista di letterali scalari.
 pub fn validate(config: &ExpressionTransform, max_nodes: usize) -> Result<()> {
     crate::validate_output_name(&config.output_column)?;
     audit(&config.expression, 1, &mut 0, max_nodes)
