@@ -676,10 +676,6 @@ esecuzione; `examples/bench_delaunay_voronoi.rs`).
   rifiuta. Il vertice lontano di un triangolo sottile cade di solito fuori
   dal ritaglio, e il rifiuto è quindi prudente, non necessario, in quei
   casi;
-- `intersection` di `geo` nel ritaglio delle celle di bordo non passa dal
-  controllo di griglia di `rust_backend::griglia` (come prima di questa
-  modifica): lo spostamento della griglia di `i_overlay` non è confrontato
-  con la precisione;
 - **predicati di `robust` 1.2.0**: `spade` accetta solo coordinate zero o
   di modulo in `[2^-142, 2^201]`, il dominio in cui Shewchuk dichiara che
   `orient2d` e `incircle` non vanno in underflow né in overflow; fuori,
@@ -843,7 +839,7 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   non prendono più `output_crs`, e `make_valid_batches` non ripete più lo
   schema d'ingresso tale e quale: il campo geometria dell'uscita è quello
   dell'ingresso con tutti i suoi metadati (CRS, dimensioni, encoding,
-  lineage, R2.4), senza la dichiarazione dei tipi che l'operazione
+  lineage), senza la dichiarazione dei tipi che l'operazione
   riscrive, e con la nullability del contratto. È lo schema che l'analisi
   dichiara, verificato dall'oracolo `analyze::tests::kernel_crosscheck`
   (nomi, tipi, nullability, metadati di campo e di schema); a `190c493` il
