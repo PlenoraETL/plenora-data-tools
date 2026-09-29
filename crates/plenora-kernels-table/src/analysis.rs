@@ -5,13 +5,15 @@ use std::sync::Arc;
 
 use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
-    builder::StringBuilder, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray,
+    builder::StringBuilder, Array, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray,
 };
 use plenora_core::arrow::schema::DataType;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::hashing::FastHasher;
 use crate::Limits;
 use crate::{
     column_index, compare_bounds, replace_or_append, scalar_as_f64_rounded, scalar_as_numero,
@@ -41,8 +43,86 @@ fn value_text(value: &Value) -> String {
     }
 }
 
+/// Esito del lookup di una riga, deciso senza copiare testo.
+#[derive(Clone, Copy)]
+enum Traduzione {
+    /// Riga nulla: resta nulla.
+    Nulla,
+    /// Chiave assente e `default` null: resta il valore d'ingresso.
+    Invariata,
+    /// Il testo in posizione data di `Traduttore::testi` (una voce della
+    /// mappa, o il `default`).
+    Testo(usize),
+}
+
+/// Mappa del lookup risolta una volta per batch: chiave -> posizione del suo
+/// testo, e i testi di voci e `default` gia' convertiti con `value_text`.
+struct Traduttore<'a> {
+    posizioni: HashMap<&'a str, usize, FastHasher>,
+    testi: Vec<String>,
+    /// Posizione in `testi` del `default`, se non null.
+    predefinito: Option<usize>,
+}
+
+impl<'a> Traduttore<'a> {
+    fn nuovo(config: &'a Lookup) -> Self {
+        let mut posizioni =
+            HashMap::with_capacity_and_hasher(config.mapping.len(), FastHasher::default());
+        let mut testi = Vec::with_capacity(config.mapping.len().saturating_add(1));
+        for (posizione, (chiave, valore)) in config.mapping.iter().enumerate() {
+            posizioni.insert(chiave.as_str(), posizione);
+            testi.push(value_text(valore));
+        }
+        let predefinito = (!config.default.is_null()).then(|| {
+            testi.push(value_text(&config.default));
+            testi.len() - 1
+        });
+        Self {
+            posizioni,
+            testi,
+            predefinito,
+        }
+    }
+
+    /// Voce della mappa, altrimenti `default` se non null, altrimenti il
+    /// valore invariato: l'ordine di `mapping.get(..).map_or_else(..)`.
+    fn traduci(&self, valore: &str) -> Traduzione {
+        self.posizioni
+            .get(valore)
+            .copied()
+            .or(self.predefinito)
+            .map_or(Traduzione::Invariata, Traduzione::Testo)
+    }
+
+    /// Testo d'uscita di una riga non nulla.
+    fn testo<'t>(&'t self, traduzione: Traduzione, originale: &'t str) -> Result<&'t str> {
+        match traduzione {
+            Traduzione::Invariata => Ok(originale),
+            Traduzione::Testo(posizione) => self
+                .testi
+                .get(posizione)
+                .map(String::as_str)
+                .ok_or_else(lookup_incoerente),
+            Traduzione::Nulla => Err(lookup_incoerente()),
+        }
+    }
+}
+
+fn lookup_incoerente() -> PlenoraError {
+    PlenoraError::Internal("traduzione del lookup incoerente".into())
+}
+
+/// Righe per chunk della traduzione parallela di una colonna Utf8. Nei test
+/// un valore piccolo, perche' anche i batch degli oracoli attraversino piu'
+/// chunk; l'uscita non dipende dal valore.
+const RIGHE_PER_CHUNK_LOOKUP: usize = if cfg!(test) { 16 } else { 65_536 };
+
 /// Colonna di lookup: ogni valore di `column` e' tradotto via `mapping`
 /// (o sostituito da `default`, se non null; altrimenti resta invariato).
+///
+/// Su una colonna Utf8 le chiavi si cercano in prestito, per chunk contigui
+/// di righe in parallelo (rayon), e l'uscita si scrive in ordine di riga;
+/// gli altri tipi passano da `scalar_as_string`, riga per riga.
 ///
 /// # Errors
 ///
@@ -54,31 +134,54 @@ pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
     let source = batch.column(index);
     let output = config.output_column.as_deref().unwrap_or(&config.column);
     validate_output_name(output)?;
-    let values = (0..batch.num_rows())
-        .map(|row| {
-            scalar_as_string(source.as_ref(), row).map(|value| {
-                value.map(|value| {
-                    config.mapping.get(&value).map_or_else(
-                        || {
-                            if config.default.is_null() {
-                                value
-                            } else {
-                                value_text(&config.default)
-                            }
-                        },
-                        value_text,
-                    )
-                })
+    let traduttore = Traduttore::nuovo(config);
+    let righe = batch.num_rows();
+    let values = if let Some(valori) = source.as_any().downcast_ref::<StringArray>() {
+        let intervalli: Vec<std::ops::Range<usize>> = (0..righe.div_ceil(RIGHE_PER_CHUNK_LOOKUP))
+            .map(|indice| {
+                let inizio = indice * RIGHE_PER_CHUNK_LOOKUP;
+                inizio..inizio.saturating_add(RIGHE_PER_CHUNK_LOOKUP).min(righe)
             })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    replace_or_append(
-        batch,
-        output,
-        DataType::Utf8,
-        true,
-        Arc::new(StringArray::from(values)),
-    )
+            .collect();
+        let traduci = |intervallo: &std::ops::Range<usize>| {
+            intervallo
+                .clone()
+                .map(|row| {
+                    if valori.is_null(row) {
+                        Traduzione::Nulla
+                    } else {
+                        traduttore.traduci(valori.value(row))
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let chunk: Vec<Vec<Traduzione>> = if intervalli.len() > 1 {
+            intervalli.par_iter().map(traduci).collect()
+        } else {
+            intervalli.iter().map(traduci).collect()
+        };
+        let mut builder = StringBuilder::with_capacity(righe, valori.value_data().len());
+        for (row, traduzione) in chunk.into_iter().flatten().enumerate() {
+            if matches!(traduzione, Traduzione::Nulla) {
+                builder.append_null();
+            } else {
+                builder.append_value(traduttore.testo(traduzione, valori.value(row))?);
+            }
+        }
+        builder.finish()
+    } else {
+        let mut builder = StringBuilder::with_capacity(righe, 0);
+        for row in 0..righe {
+            match scalar_as_string(source.as_ref(), row)? {
+                Some(valore) => {
+                    builder.append_value(traduttore.testo(traduttore.traduci(&valore), &valore)?);
+                }
+                None => builder.append_null(),
+            }
+        }
+        builder.finish()
+    };
+    replace_or_append(batch, output, DataType::Utf8, true, Arc::new(values))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2371,3 +2474,7 @@ mod bin_oracolo;
 #[cfg(test)]
 #[path = "flatten_json_oracolo.rs"]
 mod flatten_json_oracolo;
+
+#[cfg(test)]
+#[path = "lookup_oracolo.rs"]
+mod lookup_oracolo;
