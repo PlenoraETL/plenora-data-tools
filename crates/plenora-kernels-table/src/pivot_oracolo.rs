@@ -25,26 +25,40 @@ use super::tests::pivot_reference;
 use super::{pivot, Pivot, PivotAgg};
 use crate::test_support::assert_same_outcome_bits;
 
-/// Come `assert_same_outcome_bits`, ma due NaN nella stessa cella Float64
-/// sono uguali qualunque sia il payload.
+/// Come `assert_same_outcome_bits`, ma per `sum` e `mean` due NaN nella
+/// stessa cella delle colonne dei valori pivot sono uguali qualunque sia il
+/// payload.
 ///
 /// Il payload del NaN risultato di una somma di NaN con payload diversi non
 /// e' specificato da Rust (RFC 3514): dipende da come il compilatore ordina
 /// gli operandi, e nel percorso precedente cambiava gia' fra debug
-/// (`NaN(p1)`) e release (`NaN(p0)`) sullo stesso input. Per ogni altro
-/// valore il confronto resta sui bit.
+/// (`NaN(p1)`) e release (`NaN(p0)`) sullo stesso input. Ovunque non ci sia
+/// aritmetica (colonne indice, `first`, `last`, `min`, `max`, `count`,
+/// `concat`) il confronto resta sui bit.
 fn assert_esiti_equivalenti(
+    config: &Pivot,
     veloce: plenora_core::Result<RecordBatch>,
     riferimento: plenora_core::Result<RecordBatch>,
 ) {
+    let aritmetica = matches!(config.aggr_func, PivotAgg::Sum | PivotAgg::Mean);
+    let colonne_indice = config
+        .index_col
+        .split(',')
+        .filter(|nome| !nome.trim().is_empty())
+        .count();
     match (veloce, riferimento) {
-        (Ok(veloce), Ok(riferimento)) => {
+        (Ok(veloce), Ok(riferimento)) if aritmetica => {
             let canonico = |batch: &RecordBatch| {
                 let colonne = batch
                     .columns()
                     .iter()
-                    .map(|colonna| -> ArrayRef {
-                        match colonna.as_any().downcast_ref::<Float64Array>() {
+                    .enumerate()
+                    .map(|(posizione, colonna)| -> ArrayRef {
+                        match colonna
+                            .as_any()
+                            .downcast_ref::<Float64Array>()
+                            .filter(|_| posizione >= colonne_indice)
+                        {
                             Some(valori) => Arc::new(
                                 valori
                                     .iter()
@@ -300,6 +314,7 @@ fn confronta(batch: &RecordBatch, index: &str, pivot_col: &str) {
                         mapping,
                     };
                     assert_esiti_equivalenti(
+                        &config,
                         pivot(batch, &config, &limits),
                         pivot_reference(batch, &config, &limits),
                     );
@@ -361,6 +376,7 @@ fn pivot_come_il_riferimento_oltre_le_soglie() {
                     mapping: BTreeMap::new(),
                 };
                 assert_esiti_equivalenti(
+                    &config,
                     pivot(&batch, &config, &Limits::default()),
                     pivot_reference(&batch, &config, &Limits::default()),
                 );
