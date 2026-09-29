@@ -14,9 +14,16 @@
 //!   `catch_unwind`, e gli errori emessi prima di un panico confrontati come
 //!   prefisso.
 
-use super::{autointersezione_con, errori_di_validazione, visita_geometria, ValidazioneOgc};
-use geo::algorithm::validation::{InvalidGeometry, Validation};
-use geo::{Coord, Geometry, Intersects, LineString, MultiPolygon, Polygon};
+use super::{
+    autointersezione_con, errori_di_validazione, relate_non_e_disgiunta, visita_geometria,
+    visita_multipoligono_con, visita_poligono_con, CoppieCandidate, Percorso, ValidazioneOgc,
+};
+use geo::algorithm::validation::{
+    InvalidGeometry, InvalidMultiPolygon, InvalidPolygon, Validation,
+};
+use geo::coordinate_position::CoordPos;
+use geo::dimensions::Dimensions;
+use geo::{Coord, Geometry, Intersects, LineString, MultiPolygon, Polygon, Rect, Relate};
 use proptest::prelude::*;
 
 /// `linestring_has_self_intersection` di `geo` 0.33.1, riga per riga.
@@ -852,5 +859,631 @@ proptest! {
             Geometry::Polygon(Polygon::new(esterno, anelli.collect()))
         };
         verifica_geometria(&geometria);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Coppie di poligoni e di buchi: scansione contro doppio ciclo
+// ---------------------------------------------------------------------------
+
+/// I percorsi delle coppie: il doppio ciclo di `geo` senza filtro, la
+/// scansione di produzione, e la scansione che rinuncia subito (limite 0) o
+/// dopo una coppia (limite 1) e passa al doppio ciclo filtrato.
+const PERCORSI: [Percorso; 4] = [
+    Percorso {
+        doppio_ciclo: true,
+        limite_coppie: None,
+    },
+    Percorso::PRODUZIONE,
+    Percorso {
+        doppio_ciclo: false,
+        limite_coppie: Some(0),
+    },
+    Percorso {
+        doppio_ciclo: false,
+        limite_coppie: Some(1),
+    },
+];
+
+/// Gli errori emessi da una visita fino all'eventuale panico, e se c'e'
+/// stato panico.
+fn emessi<E>(
+    visita: impl FnOnce(&mut dyn FnMut(E) -> Result<(), std::convert::Infallible>),
+) -> (Vec<E>, bool) {
+    let raccolti = std::cell::RefCell::new(Vec::new());
+    let panico = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        visita(&mut |errore| {
+            raccolti.borrow_mut().push(errore);
+            Ok(())
+        });
+    }))
+    .is_err();
+    (raccolti.into_inner(), panico)
+}
+
+/// Il primo errore, o `None` se la visita va in panico.
+fn primo<R>(visita: impl FnOnce() -> R) -> Option<R> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(visita)).ok()
+}
+
+/// Il `MultiPolygon` su ogni percorso contro `geo` (il doppio ciclo del
+/// vendor): primo errore (variante e indici) e sequenza completa degli
+/// errori emessi, panico compreso. Rende il primo errore di `geo`.
+fn verifica_multi(poligoni: &MultiPolygon<f64>) -> Option<Result<(), InvalidMultiPolygon>> {
+    let atteso_primo = primo(|| poligoni.check_validation());
+    let atteso_tutti = emessi(|gestisci| {
+        let _: Result<(), std::convert::Infallible> = poligoni.visit_validation(Box::new(gestisci));
+    });
+    for percorso in PERCORSI {
+        let primo_rapido = primo(|| visita_multipoligono_con(poligoni, percorso, &mut Err));
+        assert_eq!(
+            primo_rapido, atteso_primo,
+            "primo errore divergente ({percorso:?}) su {poligoni:?}"
+        );
+        let tutti = emessi(|gestisci| {
+            let _ = visita_multipoligono_con(poligoni, percorso, gestisci);
+        });
+        assert_eq!(
+            tutti, atteso_tutti,
+            "sequenza degli errori divergente ({percorso:?}) su {poligoni:?}"
+        );
+    }
+    verifica_geometria(&Geometry::MultiPolygon(poligoni.clone()));
+    atteso_primo
+}
+
+/// Lo stesso per i buchi di un `Polygon`.
+fn verifica_buchi(poligono: &Polygon<f64>) -> Option<Result<(), InvalidPolygon>> {
+    let atteso_primo = primo(|| poligono.check_validation());
+    let atteso_tutti = emessi(|gestisci| {
+        let _: Result<(), std::convert::Infallible> = poligono.visit_validation(Box::new(gestisci));
+    });
+    for percorso in PERCORSI {
+        let primo_rapido = primo(|| visita_poligono_con(poligono, percorso, &mut Err));
+        assert_eq!(
+            primo_rapido, atteso_primo,
+            "primo errore divergente ({percorso:?}) su {poligono:?}"
+        );
+        let tutti = emessi(|gestisci| {
+            let _ = visita_poligono_con(poligono, percorso, gestisci);
+        });
+        assert_eq!(
+            tutti, atteso_tutti,
+            "sequenza degli errori divergente ({percorso:?}) su {poligono:?}"
+        );
+    }
+    verifica_geometria(&Geometry::Polygon(poligono.clone()));
+    atteso_primo
+}
+
+fn rettangolo(x: f64, y: f64, larghezza: f64, altezza: f64) -> LineString<f64> {
+    chiuso(&[
+        (x, y),
+        (x + larghezza, y),
+        (x + larghezza, y + altezza),
+        (x, y + altezza),
+    ])
+}
+
+fn parte(anello: LineString<f64>) -> Polygon<f64> {
+    Polygon::new(anello, vec![])
+}
+
+/// Quadrati di lato 1 su un reticolo di passo 2, `colonne` per riga.
+#[allow(clippy::cast_precision_loss)]
+fn reticolo_di_parti(quante: usize, colonne: usize) -> Vec<Polygon<f64>> {
+    (0..quante)
+        .map(|indice| {
+            parte(rettangolo(
+                2.0 * (indice % colonne) as f64,
+                2.0 * (indice / colonne) as f64,
+                1.0,
+                1.0,
+            ))
+        })
+        .collect()
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn multipoligoni_con_rettangoli_che_si_toccano() {
+    let quadrato = |x: f64, y: f64| parte(rettangolo(x, y, 1.0, 1.0));
+    let triangolo = |punti: &[(f64, f64)]| parte(chiuso(punti));
+    let casi: Vec<Vec<Polygon<f64>>> = vec![
+        // Lato in comune: tocco lungo una linea.
+        vec![quadrato(0.0, 0.0), quadrato(1.0, 0.0)],
+        vec![quadrato(0.0, 0.0), quadrato(0.0, 1.0)],
+        // Solo un vertice in comune: valido.
+        vec![quadrato(0.0, 0.0), quadrato(1.0, 1.0)],
+        vec![quadrato(0.0, 0.0), quadrato(1.0, -1.0)],
+        // Parte di lato in comune.
+        vec![quadrato(0.0, 0.0), parte(rettangolo(1.0, 0.5, 1.0, 1.0))],
+        // Rettangoli che si toccano, geometrie separate.
+        vec![
+            triangolo(&[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]),
+            triangolo(&[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]),
+        ],
+        // Rettangoli sovrapposti, geometrie separate.
+        vec![
+            triangolo(&[(0.0, 0.0), (4.0, 0.0), (0.0, 4.0)]),
+            triangolo(&[(4.0, 4.0), (1.0, 4.0), (4.0, 1.0)]),
+        ],
+        // Rettangoli separati da un solo ulp.
+        vec![
+            quadrato(0.0, 0.0),
+            quadrato(f64::from_bits(1.0_f64.to_bits() + 1), 0.0),
+        ],
+        // Lato in comune a x = 0 con zeri di segno opposto.
+        vec![
+            parte(chiuso(&[
+                (-1.0, 0.0),
+                (-0.0, 0.0),
+                (-0.0, 1.0),
+                (-1.0, 1.0),
+            ])),
+            parte(chiuso(&[(0.0, -0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])),
+        ],
+        // Sovrapposizione, contenimento, parti identiche.
+        vec![quadrato(0.0, 0.0), parte(rettangolo(0.5, 0.5, 1.0, 1.0))],
+        vec![
+            parte(rettangolo(0.0, 0.0, 4.0, 4.0)),
+            parte(rettangolo(1.0, 1.0, 1.0, 1.0)),
+        ],
+        vec![quadrato(0.0, 0.0), quadrato(0.0, 0.0)],
+        vec![quadrato(3.0, 3.0), quadrato(0.0, 0.0), quadrato(3.0, 3.0)],
+        // Parte dentro il buco di un'altra: valido; poi che tocca il buco.
+        vec![
+            Polygon::new(
+                rettangolo(0.0, 0.0, 10.0, 10.0),
+                vec![rettangolo(2.0, 2.0, 6.0, 6.0)],
+            ),
+            parte(rettangolo(3.0, 3.0, 2.0, 2.0)),
+        ],
+        vec![
+            Polygon::new(
+                rettangolo(0.0, 0.0, 10.0, 10.0),
+                vec![rettangolo(2.0, 2.0, 6.0, 6.0)],
+            ),
+            parte(rettangolo(2.0, 3.0, 2.0, 2.0)),
+            parte(rettangolo(5.0, 5.0, 3.0, 3.0)),
+        ],
+        // Parti vuote in mezzo, anche con buchi.
+        vec![
+            parte(LineString(vec![])),
+            quadrato(0.0, 0.0),
+            Polygon::new(LineString(vec![]), vec![rettangolo(0.0, 0.0, 1.0, 1.0)]),
+            quadrato(1.0, 0.0),
+            parte(LineString(vec![])),
+        ],
+        // Parti degeneri: area nulla, un punto, rettangoli di larghezza 0.
+        vec![
+            parte(chiuso(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)])),
+            parte(chiuso(&[(1.0, 0.0), (1.0, 1.0), (1.0, 2.0)])),
+            quadrato(0.0, -1.0),
+        ],
+        vec![parte(chiuso(&[(1.0, 1.0); 3])), quadrato(0.0, 0.0)],
+        // Parti invalide che si sovrappongono: errori della parte e della
+        // coppia intercalati.
+        vec![
+            parte(chiuso(&[(0.0, 0.0), (2.0, 2.0), (2.0, 0.0), (0.0, 2.0)])),
+            quadrato(0.5, 0.5),
+            parte(chiuso(&[(0.0, 0.0), (1.0, 0.0)])),
+        ],
+        // Coordinate estreme.
+        vec![
+            parte(rettangolo(-f64::MAX, -f64::MAX, f64::MAX, f64::MAX)),
+            parte(chiuso(&[
+                (0.0, 0.0),
+                (f64::MAX, 0.0),
+                (f64::MAX, f64::MAX),
+                (0.0, f64::MAX),
+            ])),
+            parte(rettangolo(-1.0, -1.0, 1.0, 1.0)),
+        ],
+        vec![
+            parte(rettangolo(0.0, 0.0, f64::from_bits(1), f64::from_bits(1))),
+            parte(rettangolo(
+                f64::from_bits(1),
+                0.0,
+                f64::from_bits(1),
+                f64::from_bits(1),
+            )),
+            parte(rettangolo(
+                0.0,
+                f64::from_bits(1),
+                f64::from_bits(1),
+                f64::from_bits(1),
+            )),
+        ],
+    ];
+    for parti in casi {
+        let poligoni = MultiPolygon(parti.clone());
+        verifica_multi(&poligoni);
+        let mut rovesciati = parti;
+        rovesciati.reverse();
+        verifica_multi(&MultiPolygon(rovesciati));
+    }
+}
+
+#[test]
+fn multipoligoni_con_coordinate_non_finite() {
+    for cattivo in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for posizione in 0..4 {
+            let mut parti = reticolo_di_parti(8, 3);
+            parti.push(parte(rettangolo(0.5, 0.5, 1.0, 1.0)));
+            let mut punti: Vec<Coord<f64>> = parti[posizione * 2].exterior().0.clone();
+            punti[posizione].x = cattivo;
+            parti[posizione * 2] = parte(LineString(punti));
+            verifica_multi(&MultiPolygon(parti.clone()));
+            // Nel buco di una parte: il rettangolo non lo vede.
+            let mut con_buco = parti;
+            con_buco[1] = Polygon::new(
+                rettangolo(2.0, 0.0, 1.0, 1.0),
+                vec![chiuso(&[(2.2, 0.2), (cattivo, 0.2), (2.5, 0.8)])],
+            );
+            verifica_multi(&MultiPolygon(con_buco));
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn multipoligoni_su_reticolo_con_un_errore_in_testa_o_in_coda() {
+    for quante in [1_usize, 2, 3, 17, 100, 400] {
+        let colonne = quante.isqrt().max(1);
+        let reticolo = reticolo_di_parti(quante, colonne);
+        assert_eq!(
+            verifica_multi(&MultiPolygon(reticolo.clone())),
+            Some(Ok(()))
+        );
+        if quante < 2 {
+            continue;
+        }
+        let ultima = reticolo[quante - 1].clone();
+        let sposta = |poligono: &Polygon<f64>, dx: f64, dy: f64| {
+            parte(LineString(
+                poligono
+                    .exterior()
+                    .0
+                    .iter()
+                    .map(|c| Coord {
+                        x: c.x + dx,
+                        y: c.y + dy,
+                    })
+                    .collect(),
+            ))
+        };
+        // Sovrapposizione alla fine: l'ultima parte sulla penultima.
+        let mut in_coda = reticolo.clone();
+        in_coda.push(sposta(&ultima, 0.5, 0.5));
+        let errore = verifica_multi(&MultiPolygon(in_coda));
+        assert_eq!(
+            errore,
+            Some(Err(InvalidMultiPolygon::ElementsOverlaps(
+                geo::algorithm::validation::GeometryIndex(quante - 1),
+                geo::algorithm::validation::GeometryIndex(quante),
+            )))
+        );
+        // All'inizio: la prima parte copre l'ultima (coppia (0, k-1)), e un
+        // tocco su un lato piu' avanti; l'ordine degli errori e' (i, j).
+        let mut in_testa = reticolo.clone();
+        in_testa[0] = sposta(&ultima, 0.25, 0.25);
+        in_testa[quante / 2] = sposta(&reticolo[quante / 2], 1.0, 0.0);
+        verifica_multi(&MultiPolygon(in_testa.clone()));
+        // Stesse parti, un lato in comune sia con la parte 0 sia con una
+        // successiva: il primo errore e' quello di indice minore.
+        in_testa.push(sposta(&ultima, 1.0, 0.0));
+        verifica_multi(&MultiPolygon(in_testa));
+        // Tocchi di vertice fra tutte le parti vicine: scacchiera valida.
+        let scacchiera: Vec<Polygon<f64>> = reticolo
+            .iter()
+            .enumerate()
+            .map(|(indice, poligono)| {
+                let riga = indice / colonne;
+                let dx = if riga % 2 == 1 { 1.0 } else { 0.0 };
+                let dy = -(riga as f64);
+                sposta(poligono, dx, dy)
+            })
+            .collect();
+        verifica_multi(&MultiPolygon(scacchiera));
+        // Parti tutte identiche: ogni coppia sovrapposta.
+        if quante <= 17 {
+            verifica_multi(&MultiPolygon(vec![ultima.clone(); quante]));
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn buchi_che_si_toccano_fra_loro_e_con_il_guscio() {
+    let guscio = rettangolo(0.0, 0.0, 10.0, 10.0);
+    let buco = |x: f64, y: f64, lato: f64| rettangolo(x, y, lato, lato);
+    let casi: Vec<Vec<LineString<f64>>> = vec![
+        vec![buco(1.0, 1.0, 1.0), buco(2.0, 1.0, 1.0)],
+        vec![buco(1.0, 1.0, 1.0), buco(2.0, 2.0, 1.0)],
+        vec![buco(1.0, 1.0, 2.0), buco(2.0, 2.0, 2.0)],
+        vec![buco(1.0, 1.0, 4.0), buco(2.0, 2.0, 1.0)],
+        vec![buco(1.0, 1.0, 1.0), buco(1.0, 1.0, 1.0)],
+        vec![buco(0.0, 1.0, 1.0), buco(1.0, 1.0, 1.0)],
+        vec![buco(0.0, 0.0, 1.0), buco(9.0, 9.0, 1.0)],
+        vec![buco(12.0, 12.0, 1.0), buco(1.0, 1.0, 1.0)],
+        vec![
+            LineString(vec![]),
+            buco(1.0, 1.0, 1.0),
+            LineString(vec![]),
+            buco(2.0, 1.0, 1.0),
+        ],
+        vec![
+            chiuso(&[(1.0, 1.0), (3.0, 1.0), (1.0, 3.0)]),
+            chiuso(&[(3.0, 3.0), (3.0, 2.0), (2.0, 3.0)]),
+        ],
+        vec![
+            chiuso(&[(1.0, 1.0), (4.0, 1.0), (1.0, 4.0)]),
+            chiuso(&[(4.0, 4.0), (4.0, 2.0), (2.0, 4.0)]),
+        ],
+        vec![
+            chiuso(&[(1.0, 1.0), (2.0, 2.0), (2.0, 1.0), (1.0, 2.0)]),
+            buco(1.5, 1.5, 1.0),
+        ],
+        vec![
+            chiuso(&[(-0.0, 1.0), (1.0, 1.0), (1.0, 2.0), (-0.0, 2.0)]),
+            chiuso(&[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]),
+        ],
+    ];
+    for buchi in casi {
+        verifica_buchi(&Polygon::new(guscio.clone(), buchi.clone()));
+        let mut rovesciati = buchi;
+        rovesciati.reverse();
+        verifica_buchi(&Polygon::new(guscio.clone(), rovesciati));
+    }
+    // Un reticolo di buchi, con un tocco o una sovrapposizione all'inizio o
+    // alla fine.
+    for quanti in [2_usize, 30, 200] {
+        let colonne = quanti.isqrt().max(1);
+        let lato = 2.0f64.mul_add((quanti.div_ceil(colonne) + colonne) as f64, 4.0);
+        let guscio = rettangolo(0.0, 0.0, lato, lato);
+        let buchi: Vec<LineString<f64>> = reticolo_di_parti(quanti, colonne)
+            .into_iter()
+            .map(|poligono| {
+                LineString(
+                    poligono
+                        .exterior()
+                        .0
+                        .iter()
+                        .map(|c| Coord {
+                            x: c.x + 1.0,
+                            y: c.y + 1.0,
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            verifica_buchi(&Polygon::new(guscio.clone(), buchi.clone())),
+            Some(Ok(()))
+        );
+        let mut in_coda = buchi.clone();
+        in_coda.push(buco(1.5, 1.5, 1.0));
+        in_coda.push(buco(0.0, 3.0, 1.0));
+        verifica_buchi(&Polygon::new(guscio.clone(), in_coda));
+        let mut in_testa = buchi.clone();
+        in_testa.insert(0, buco(2.0, 1.0, 1.0));
+        verifica_buchi(&Polygon::new(guscio.clone(), in_testa));
+        let mut fuori = buchi;
+        fuori.insert(1, buco(lato + 1.0, 1.0, 1.0));
+        verifica_buchi(&Polygon::new(guscio, fuori));
+    }
+}
+
+#[test]
+fn buchi_con_coordinate_non_finite() {
+    for cattivo in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let guscio = rettangolo(0.0, 0.0, 10.0, 10.0);
+        let buchi = vec![
+            rettangolo(1.0, 1.0, 1.0, 1.0),
+            chiuso(&[(1.5, 1.5), (cattivo, 1.5), (2.5, 2.5)]),
+            rettangolo(2.0, 1.0, 1.0, 1.0),
+            rettangolo(5.0, 5.0, 1.0, 1.0),
+        ];
+        verifica_buchi(&Polygon::new(guscio, buchi));
+    }
+}
+
+/// La scansione, da sola: l'elenco e' esattamente l'insieme delle coppie
+/// `i < j` per cui `relate` non prende il ramo disgiunto, in ordine
+/// `(i, j)`, su rettangoli scelti per toccarsi (valori interi piccoli, zeri
+/// di segno opposto, larghezze nulle, estremi dell'intervallo finito).
+#[test]
+fn scansione_uguale_al_doppio_ciclo_dei_rettangoli() {
+    let valori = [
+        -f64::MAX,
+        -3.0,
+        -1.0,
+        -0.0,
+        0.0,
+        f64::from_bits(1),
+        1.0,
+        f64::from_bits(1.0_f64.to_bits() + 1),
+        2.0,
+        5.0,
+        f64::MAX,
+    ];
+    let mut rng = Lcg(0x5EED_0000_0000_0002);
+    let mut elenchi = 0_u32;
+    for caso in 0..3_000 {
+        let quanti = rng.indice(if caso % 10 == 0 { 120 } else { 16 });
+        let ingombri: Vec<Option<Rect<f64>>> = (0..quanti)
+            .map(|_| {
+                if rng.fino_a(10) == 0 {
+                    return None;
+                }
+                let mut estrai = || valori[rng.indice(valori.len())];
+                let (x0, y0, x1, y1) = (estrai(), estrai(), estrai(), estrai());
+                Some(Rect::new((x0, y0), (x1, y1)))
+            })
+            .collect();
+        let mut attese = Vec::new();
+        for i in 0..quanti {
+            for j in i + 1..quanti {
+                if relate_non_e_disgiunta(ingombri[i], ingombri[j]) {
+                    attese.push((i, j));
+                }
+            }
+        }
+        for percorso in PERCORSI {
+            let coppie = CoppieCandidate::di(ingombri.clone(), true, percorso);
+            if matches!(coppie, CoppieCandidate::Elenco(_)) {
+                elenchi += 1;
+            }
+            let trovate: Vec<(usize, usize)> = (0..quanti)
+                .flat_map(|i| coppie.di_indice(i).map(move |j| (i, j)))
+                .collect();
+            if percorso.doppio_ciclo {
+                assert_eq!(trovate.len(), quanti * quanti.saturating_sub(1) / 2);
+            } else {
+                assert_eq!(trovate, attese, "{percorso:?} su {ingombri:?}");
+            }
+        }
+        // Coordinate non finite dichiarate: doppio ciclo senza filtro.
+        let coppie = CoppieCandidate::di(ingombri, false, Percorso::PRODUZIONE);
+        assert!(matches!(coppie, CoppieCandidate::Tutte(n) if n == quanti));
+    }
+    assert!(elenchi > 3_000, "{elenchi}");
+}
+
+/// Il fatto del vendor su cui poggia lo scarto: dove
+/// [`relate_non_e_disgiunta`] e' falso, `relate` non riporta ne'
+/// Interno-Interno di area ne' Confine-Confine lineare.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn relate_sui_rettangoli_disgiunti_non_produce_errori() {
+    let mut rng = Lcg(0x5EED_0000_0000_0003);
+    let mut disgiunti = 0_u32;
+    for _ in 0..4_000 {
+        let (vertici, lato) = (3 + rng.fino_a(6), 1 + rng.fino_a(5));
+        let a = anello_su_griglia(&mut rng, vertici, lato);
+        let (vertici, lato) = (3 + rng.fino_a(6), 1 + rng.fino_a(5));
+        let b = anello_su_griglia(&mut rng, vertici, lato);
+        let (dx, dy) = (rng.fino_a(8) as f64 - 1.0, rng.fino_a(8) as f64 - 1.0);
+        let b = LineString(
+            b.0.iter()
+                .map(|c| Coord {
+                    x: c.x + dx,
+                    y: c.y + dy,
+                })
+                .collect(),
+        );
+        let (a, b) = (parte(a), parte(b));
+        if relate_non_e_disgiunta(
+            geo::BoundingRect::bounding_rect(&a),
+            geo::BoundingRect::bounding_rect(&b),
+        ) {
+            continue;
+        }
+        disgiunti += 1;
+        let matrice = a.relate(&b);
+        assert_ne!(
+            matrice.get(CoordPos::Inside, CoordPos::Inside),
+            Dimensions::TwoDimensional
+        );
+        assert_ne!(
+            matrice.get(CoordPos::OnBoundary, CoordPos::OnBoundary),
+            Dimensions::OneDimensional
+        );
+        let preparata = geo::PreparedGeometry::from(&a);
+        assert_eq!(preparata.relate(&b), matrice);
+    }
+    assert!(disgiunti > 500, "{disgiunti}");
+}
+
+/// Multipoligoni e buchi casuali su una griglia intera piccola, con parti
+/// vicine: tocchi, sovrapposizioni e parti invalide sono frequenti.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn differenziale_di_massa_multipoligoni_e_buchi() {
+    let mut rng = Lcg(0x5EED_0000_0000_0004);
+    let mut validi = 0_u32;
+    let mut invalidi = 0_u32;
+    for caso in 0..1_500 {
+        let quante = 1 + rng.indice(if caso % 20 == 0 { 60 } else { 12 });
+        let lato = 1 + rng.fino_a(4);
+        let campo = 2 + rng.fino_a(20);
+        let anelli: Vec<LineString<f64>> = (0..quante)
+            .map(|_| {
+                let (dx, dy) = (rng.fino_a(campo) as f64, rng.fino_a(campo) as f64);
+                let forma = if rng.fino_a(3) == 0 {
+                    let vertici = 3 + rng.fino_a(5);
+                    anello_su_griglia(&mut rng, vertici, lato)
+                } else {
+                    let (l, a) = (1 + rng.fino_a(lato), 1 + rng.fino_a(lato));
+                    rettangolo(0.0, 0.0, l as f64, a as f64)
+                };
+                LineString(
+                    forma
+                        .0
+                        .iter()
+                        .map(|c| Coord {
+                            x: c.x + dx,
+                            y: c.y + dy,
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        let esito = if caso % 2 == 0 {
+            verifica_multi(&MultiPolygon(anelli.into_iter().map(parte).collect()))
+                .map(|esito| esito.is_ok())
+        } else {
+            let guscio = rettangolo(
+                -1.0,
+                -1.0,
+                (campo + lato) as f64 + 2.0,
+                (campo + lato) as f64 + 2.0,
+            );
+            verifica_buchi(&Polygon::new(guscio, anelli)).map(|esito| esito.is_ok())
+        };
+        match esito {
+            Some(true) => validi += 1,
+            _ => invalidi += 1,
+        }
+    }
+    assert!(validi >= 100 && invalidi >= 100, "{validi}/{invalidi}");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 1_000, failure_persistence: None, ..ProptestConfig::default() })]
+
+    /// Parti rettangolari o triangolari su una griglia con zeri di segno
+    /// opposto, come `MultiPolygon` o come buchi dello stesso guscio.
+    #[test]
+    fn differenziale_proptest_coppie(
+        parti in prop::collection::vec(
+            (
+                prop_oneof![(0_i32..16).prop_map(f64::from), Just(-0.0)],
+                prop_oneof![(0_i32..16).prop_map(f64::from), Just(-0.0)],
+                1_i32..4,
+                1_i32..4,
+                0_u8..3,
+            ),
+            0..40,
+        ),
+        come_buchi in any::<bool>(),
+    ) {
+        let anelli: Vec<LineString<f64>> = parti
+            .iter()
+            .map(|&(x, y, l, a, forma)| {
+                let (l, a) = (f64::from(l), f64::from(a));
+                match forma {
+                    0 => rettangolo(x, y, l, a),
+                    1 => chiuso(&[(x, y), (x + l, y), (x, y + a)]),
+                    _ => chiuso(&[(x + l, y + a), (x, y + a), (x + l, y)]),
+                }
+            })
+            .collect();
+        if come_buchi {
+            verifica_buchi(&Polygon::new(rettangolo(-1.0, -1.0, 22.0, 22.0), anelli));
+        } else {
+            verifica_multi(&MultiPolygon(anelli.into_iter().map(parte).collect()));
+        }
     }
 }

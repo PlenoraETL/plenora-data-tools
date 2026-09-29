@@ -124,6 +124,13 @@ API pubbliche di `geo` la stessa sequenza di `visit_validation` di `geo`
 come si trovano le coppie di segmenti candidate: una scansione sui rettangoli
 d'ingombro al posto del doppio ciclo O(n²). Il predicato per coppia è quello
 di `geo`; gli anelli con coordinate non finite passano dal doppio ciclo.
+Allo stesso modo le coppie di poligoni di un `MultiPolygon` e di buchi di un
+`Polygon` si trovano con una scansione sui rettangoli chiusi: `relate` non
+si chiama sulle coppie per cui renderebbe il suo ramo disgiunto (stessa
+condizione `Rect::intersects` di `geo`, che lascia vuote le celle
+Interno-Interno e Confine-Confine da cui nascono gli errori), le altre si
+visitano nell'ordine `(i, j)` del doppio ciclo, quindi gli errori emessi e il
+loro ordine non cambiano; con coordinate non finite, doppio ciclo.
 L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
 
 **Ambito.** `plenora-kernels-geo`, ogni validazione OGC che passa da
@@ -140,8 +147,13 @@ L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
 - la correttezza dello scarto delle coppie dipende dal segno esatto di
   `orient2d` nel kernel di `geo`: con un kernel non esatto il filtro potrebbe
   scartare una coppia che il doppio ciclo dichiara intersecante;
-- i controlli `relate` fra anelli e fra i poligoni di un `MultiPolygon` restano
-  quadratici nel numero di anelli e di poligoni, come in `geo`.
+- lo scarto delle coppie di poligoni e di buchi dipende dal ramo disgiunto
+  di `RelateOperation` di `geo` 0.33.1: se `relate` smettesse di
+  rispondere senza calcolo sui rettangoli disgiunti, la condizione copiata
+  andrebbe riverificata;
+- con molti poligoni o buchi a rettangoli sovrapposti (oltre 32 coppie per
+  elemento) i confronti fra rettangoli tornano quadratici, e `relate` resta
+  una chiamata per coppia che si tocca.
 
 **Condizione di rientro.** Una versione di `geo` con una ricerca delle
 auto-intersezioni sub-quadratica a verdetto identico: la sequenza copiata si
