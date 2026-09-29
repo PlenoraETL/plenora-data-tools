@@ -267,10 +267,11 @@ fn buffer_alle_tre_scale() {
 }
 
 /// Il controllo a priori del buffer e' sull'ingresso allargato della
-/// distanza: due punti (ingombro di 1 m) con una distanza di 10.000 km
-/// passano (con `i_overlay` 4.5 la griglia li rifiutava), con una distanza
-/// di `10^12` m l'ingombro allargato supera la guardia di spaziatura e il
-/// buffer e' rifiutato, anche se i punti da soli la rispettano.
+/// distanza: due punti (ingombro di 1 m) con una distanza di 5.000 km
+/// passano (con `i_overlay` 4.5 la griglia li rifiutava); a 10.000 km il
+/// rientro delle normali intere, `2^-30 |d|` (circa 9,3 mm), supera `p/2`
+/// e il buffer e' rifiutato; con una distanza di `10^12` m l'ingombro
+/// allargato supera anche la guardia di spaziatura.
 #[test]
 fn la_griglia_del_buffer_comprende_la_distanza() {
     let punti = Geometry::MultiPoint(MultiPoint::new(vec![
@@ -278,7 +279,11 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
         Point::new(500_001.0, 4_000_000.0),
     ]));
     assert!(buffer_with_cap(&punti, 100_000.0, BufferCapStyle::Round, centimetro()).is_ok());
-    assert!(buffer_with_cap(&punti, 10_000_000.0, BufferCapStyle::Round, centimetro()).is_ok());
+    assert!(buffer_with_cap(&punti, 5_000_000.0, BufferCapStyle::Round, centimetro()).is_ok());
+    assert!(matches!(
+        buffer_with_cap(&punti, 10_000_000.0, BufferCapStyle::Round, centimetro()),
+        Err(OperationError::PrecisionInsufficient)
+    ));
     assert!(matches!(
         buffer_with_cap(&punti, 1e12, BufferCapStyle::Round, centimetro()),
         Err(OperationError::PrecisionInsufficient)

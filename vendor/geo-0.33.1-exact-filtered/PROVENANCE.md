@@ -54,7 +54,12 @@ pubblica di `geo` usata dai kernel (`BooleanOps`, `unary_union`, `Buffer`,
   `from_subj_custom`, `clip_by_as::<i64>`), con `OverlayOptions::ogc()`;
 - `src/algorithm/buffer.rs`: stili e offset da `i_overlay::mesh::float`
   (`mesh` e' diviso in `int`/`float` da 9.0), `LineCap<P>` con un solo
-  parametro, contorni e tratti con `outline_as::<i64>` e `stroke_as::<i64>`.
+  parametro, contorni e tratti con `outline_as::<i64>` e `stroke_as::<i64>`,
+  e `miter_min_turn = 1e-4` rad: i_overlay 9 smussa le giunzioni `Miter`
+  con una svolta sotto 5 gradi, 4.5 solo sotto `|cross| < 1e-4` (tratti) e
+  mai sui contorni; la soglia di 4.5 conserva la semantica pubblica di
+  `LineJoin::Miter` (una svolta di 4 gradi a 100 m perdeva la punta di 12
+  cm). Le giunzioni `Round` e `Bevel` la ignorano.
 
 **Perche' `i64`.** Con `i32` la griglia di `i_float` 5 (adattatore
 conservativo) ha passo `2^(ceil(log2 r) - 29)`, fino al doppio di quello di
@@ -99,4 +104,4 @@ punti prima di calcolarne l'area; i test dei componenti vuoti
 **Verifica della patch.** L'albero di `HEAD` prima del porting (`git
 archive`) piu' `git apply -p1 patches/geo-i-overlay-9.patch` coincide con
 questa cartella (`diff -r`, a meno dei fine riga). SHA-256 della patch:
-`e1f12b8f6526663c269d4ccae80075626b9d24252ebf93b9c7e92150da2d1d5a`.
+`6a98fdcddb79013ba29d3a6b12d055a1c3dc8c76fa2dff62fcca0121a311b6a7`.

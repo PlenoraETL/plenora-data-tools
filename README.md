@@ -121,7 +121,9 @@ precisione l'overlay non si esegue (in metri con 1 cm mai prima della
 guardia di spaziatura; con `i_overlay` 4.5, passo `span * 2^-30`, oltre
 circa 5.400 km di estensione su un solo asse). Gli overlay di una
 riparazione sono in catena (unioni dei buchi e delle parti, differenza):
-ognuno ha `p / n`, `n` il numero di anelli più tre per poligono.
+lo spostamento di ogni overlay eseguito si sottrae dalla precisione, e
+l'overlay che la esaurirebbe non si esegue (un'unione di parti disgiunte
+non passa da `i_overlay` e non conta).
 
 **Buffer** (`rust_backend::buffer`). Il `Buffer` di `geo` con gli archi di
 default approssimava con un passo di 0,2 rad (il cerchio di 10 m di un
@@ -149,9 +151,14 @@ Ora:
   considera solo le parti areali;
 - **griglia**: prima del calcolo `(3.5 + 2.5 sqrt(2)) g + 12 ulp(M)` per
   i due passaggi in catena (il `Buffer` di `geo` e l'unione delle parti)
-  entro `p / 2` sull'ingombro allargato di `3 |d|` (più del margine di
+  più il rientro degli offset dritti, entro `p / 2` sull'ingombro
+  allargato di `3 |d|` (più del margine di
   `i_overlay` 9, `2.2 |d|`; vertici, distanza, punti degli archi e due
-  overlay sulla griglia `i64`). Il buffer resta entro `p / 2` dal buffer
+  overlay sulla griglia `i64`). Le direzioni intere di `i_float` 5 sono
+  più corte del vero: una normale di al più `2^-30` (gli offset dritti
+  rientrano di `2^-30 |d|`, nel bilancio: con 1 cm il buffer si rifiuta
+  oltre `|d|` di circa 5.368 km), un punto d'arco di al più `4.1e-7 |d|`
+  (tolto dalla freccia chiesta alle corde). Il buffer resta entro `p / 2` dal buffer
   esatto verso l'esterno ed entro `f + p / 2` verso l'interno lungo gli
   archi, senza controllo a posteriori contro la definizione.
 

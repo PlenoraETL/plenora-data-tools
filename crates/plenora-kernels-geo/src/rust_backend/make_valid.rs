@@ -694,20 +694,49 @@ impl OverlayNormalizer {
 /// coordinata riportata dalla griglia si arrotonda al `f64` piu' vicino, e
 /// a `2^52` l'arrotondamento da solo vale mezza unita'.
 ///
-/// `bilancio` e' la parte della precisione di questo overlay: gli overlay
-/// di una riparazione sono in catena (unioni dei buchi e delle parti,
-/// differenza), e ognuno ha `p / n` ([`bilancio_degli_overlay`]).
+/// Gli overlay di una riparazione sono in catena (unioni dei buchi e delle
+/// parti, differenza): lo spostamento di ognuno si sottrae dal
+/// [`Bilancio`] della riparazione, e l'overlay che lo porterebbe sotto zero
+/// non si esegue. Contano solo gli overlay eseguiti davvero (un'unione di
+/// operandi disgiunti non passa da `i_overlay` e non consuma nulla); la
+/// somma e' prudente, perche' non tutti gli overlay stanno sulla stessa
+/// catena. La guardia di spaziatura resta sulla precisione intera.
 ///
 /// Gli agganci interni di `i_overlay` durante lo split dei segmenti (raggio
 /// che cresce a ogni giro, `split::snap_radius`) non sono nel bilancio, e
 /// nessun controllo a posteriori li limita (README, «Limiti dichiarati»).
-fn checked_grid(normalizer: OverlayNormalizer, bilancio: f64) -> Result<(), MakeValidError> {
-    if !super::precision::coordinate_abbastanza_fitte(normalizer.magnitude(), bilancio)
-        || (1.0 + std::f64::consts::SQRT_2) * normalizer.grid_diagonal() > bilancio
+fn checked_grid(
+    normalizer: OverlayNormalizer,
+    bilancio: &mut Bilancio,
+) -> Result<(), MakeValidError> {
+    let spostamento = (1.0 + std::f64::consts::SQRT_2) * normalizer.grid_diagonal();
+    if !super::precision::coordinate_abbastanza_fitte(normalizer.magnitude(), bilancio.precisione)
+        || !matches!(
+            spostamento.partial_cmp(&bilancio.residuo),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        )
     {
         return Err(MakeValidError::PrecisionInsufficient);
     }
+    bilancio.residuo -= spostamento;
     Ok(())
+}
+
+/// Il bilancio della precisione degli overlay di una riparazione
+/// `STRUCTURE` (vedi [`checked_grid`]): la precisione e quanto ne resta.
+#[derive(Clone, Copy, Debug)]
+struct Bilancio {
+    precisione: f64,
+    residuo: f64,
+}
+
+impl Bilancio {
+    const fn nuovo(precisione: f64) -> Self {
+        Self {
+            precisione,
+            residuo: precisione,
+        }
+    }
 }
 
 /// Un lato d'ingresso, indicizzato per le decisioni di `LINEWORK`.
@@ -738,33 +767,10 @@ fn finished_overlay(
     normalizer.restore_multi_snapped(normalized, left, right)
 }
 
-/// La parte della precisione di ogni overlay di `STRUCTURE` su `geometry`:
-/// `p / n`, con `n` un tetto degli overlay in catena (per poligono i buchi
-/// piu' la differenza e l'unione dei buchi promossi, piu' l'unione con le
-/// parti gia' riparate).
-fn bilancio_degli_overlay(geometry: &Geometry<f64>, precision: f64) -> f64 {
-    let passi = |polygon: &Polygon<f64>| polygon.interiors().len().saturating_add(3);
-    let n: usize = match geometry {
-        Geometry::Polygon(polygon) => passi(polygon),
-        Geometry::MultiPolygon(polygons) => polygons
-            .0
-            .iter()
-            .map(passi)
-            .fold(0_usize, usize::saturating_add),
-        _ => 1,
-    };
-    // `n` e' un conteggio di anelli: fino a `2^53` la conversione e' esatta,
-    // oltre il bilancio resta comunque prudente (un `n` piu' piccolo del
-    // vero di al piu' una parte su `2^53`).
-    #[allow(clippy::cast_precision_loss)]
-    let n = n.max(1) as f64;
-    precision / n
-}
-
 fn normalized_union(
     left: &MultiPolygon<f64>,
     right: &MultiPolygon<f64>,
-    bilancio: f64,
+    bilancio: &mut Bilancio,
 ) -> Result<MultiPolygon<f64>, MakeValidError> {
     if !normalized_intersects(left, right) {
         let mut polygons = left.0.clone();
@@ -782,7 +788,7 @@ fn normalized_union(
 fn normalized_difference(
     left: &MultiPolygon<f64>,
     right: &MultiPolygon<f64>,
-    bilancio: f64,
+    bilancio: &mut Bilancio,
 ) -> Result<MultiPolygon<f64>, MakeValidError> {
     let normalizer = OverlayNormalizer::new(left, right);
     checked_grid(normalizer, bilancio)?;
@@ -806,7 +812,7 @@ fn normalized_intersects(left: &MultiPolygon<f64>, right: &MultiPolygon<f64>) ->
 fn merge_polygon(
     area: &mut MultiPolygon<f64>,
     polygon: &Polygon<f64>,
-    bilancio: f64,
+    bilancio: &mut Bilancio,
 ) -> Result<(), MakeValidError> {
     if area.0.is_empty() {
         *area = MultiPolygon::new(vec![polygon.clone()]);
@@ -819,7 +825,7 @@ fn merge_polygon(
 fn merge_multipolygon(
     area: &mut MultiPolygon<f64>,
     polygons: &MultiPolygon<f64>,
-    bilancio: f64,
+    bilancio: &mut Bilancio,
 ) -> Result<(), MakeValidError> {
     if area.0.is_empty() {
         *area = polygons.clone();
@@ -869,7 +875,8 @@ fn structure_polygon(
     polygon: &Polygon<f64>,
     keep_collapsed: bool,
     limits: MakeValidLimits,
-    (precision, bilancio): (f64, f64),
+    precision: f64,
+    bilancio: &mut Bilancio,
 ) -> Result<Option<Geometry<f64>>, MakeValidError> {
     let mut fixed = fixed_ring(polygon.exterior(), limits, precision)?;
     if fixed.0.is_empty() {
@@ -1076,14 +1083,14 @@ fn structure(
             }
         }
         Geometry::Polygon(polygon) => {
-            let bilancio = bilancio_degli_overlay(geometry, precision);
-            structure_polygon(polygon, keep_collapsed, limits, (precision, bilancio))?
+            let mut bilancio = Bilancio::nuovo(precision);
+            structure_polygon(polygon, keep_collapsed, limits, precision, &mut bilancio)?
                 .unwrap_or_else(|| {
                     Geometry::Polygon(Polygon::new(LineString::new(Vec::new()), vec![]))
                 })
         }
         Geometry::MultiPolygon(polygons) => {
-            let bilancio = bilancio_degli_overlay(geometry, precision);
+            let mut bilancio = Bilancio::nuovo(precision);
             let mut area = MultiPolygon::empty();
             let mut collapsed = Vec::new();
             // Poligoni in ordine canonico, come i buchi in `structure_polygon`:
@@ -1091,12 +1098,13 @@ fn structure(
             // l'ordine d'ingresso non decide ne' l'arrotondamento ne' l'ordine
             // delle parti collassate.
             for polygon in canonical_order(&polygons.0, polygon_key)? {
-                match structure_polygon(polygon, keep_collapsed, limits, (precision, bilancio))? {
+                match structure_polygon(polygon, keep_collapsed, limits, precision, &mut bilancio)?
+                {
                     Some(Geometry::Polygon(polygon)) => {
-                        merge_polygon(&mut area, &polygon, bilancio)?;
+                        merge_polygon(&mut area, &polygon, &mut bilancio)?;
                     }
                     Some(Geometry::MultiPolygon(polygons)) => {
-                        merge_multipolygon(&mut area, &polygons, bilancio)?;
+                        merge_multipolygon(&mut area, &polygons, &mut bilancio)?;
                     }
                     Some(other) => collapsed.push(other),
                     None => {}
@@ -2058,16 +2066,23 @@ mod tests {
             span_x: span,
             span_y: 1.0,
         };
-        assert!(checked_grid(normalizer(0.0, 20_000_000.0), 0.01).is_ok());
-        assert!(checked_grid(normalizer(0.0, 1_300_000.0), 0.01).is_ok());
+        assert!(checked_grid(normalizer(0.0, 20_000_000.0), &mut Bilancio::nuovo(0.01)).is_ok());
+        assert!(checked_grid(normalizer(0.0, 1_300_000.0), &mut Bilancio::nuovo(0.01)).is_ok());
         let modulo = 2_f64.powi(40) - 2_f64.powi(-13);
-        assert!(checked_grid(normalizer(-modulo, 2.0 * modulo), 2_f64.powi(-6)).is_ok());
+        assert!(checked_grid(
+            normalizer(-modulo, 2.0 * modulo),
+            &mut Bilancio::nuovo(2_f64.powi(-6))
+        )
+        .is_ok());
         assert!(matches!(
-            checked_grid(normalizer(-modulo, 2.0 * modulo), 2_f64.powi(-7)),
+            checked_grid(
+                normalizer(-modulo, 2.0 * modulo),
+                &mut Bilancio::nuovo(2_f64.powi(-7))
+            ),
             Err(MakeValidError::PrecisionInsufficient)
         ));
         assert!(matches!(
-            checked_grid(normalizer(2_f64.powi(45), 10.0), 0.01),
+            checked_grid(normalizer(2_f64.powi(45), 10.0), &mut Bilancio::nuovo(0.01)),
             Err(MakeValidError::PrecisionInsufficient)
         ));
     }
@@ -2079,7 +2094,7 @@ mod tests {
     fn sub_precision_hole_may_vanish_the_rest_is_kept() -> Result<(), MakeValidError> {
         let shell = MultiPolygon::new(vec![square(0.0, 1.0, 0.0, 1.0)]);
         let hole = MultiPolygon::new(vec![square(0.5, 0.5 + 2_f64.powi(-40), 0.25, 0.75)]);
-        let result = normalized_difference(&shell, &hole, 0.01)?;
+        let result = normalized_difference(&shell, &hole, &mut Bilancio::nuovo(0.01))?;
         let tolerance = 4.0 * 0.01;
         if (result.unsigned_area() - 1.0).abs() > tolerance {
             return Err(MakeValidError::InvalidOutput(format!(
@@ -2110,7 +2125,7 @@ mod tests {
             ]),
             vec![],
         )]);
-        let result = normalized_union(&frame, &triangle, 0.01)?;
+        let result = normalized_union(&frame, &triangle, &mut Bilancio::nuovo(0.01))?;
         let triangle_area = triangle.unsigned_area();
         // Perimetro complessivo circa 3.500 m, per 1 cm.
         let tolerance = 4.0 * 0.01;
@@ -2129,7 +2144,7 @@ mod tests {
     fn resolvable_difference_keeps_both_holes() -> Result<(), MakeValidError> {
         let shell = MultiPolygon::new(vec![square(0.0, 10.0, 0.0, 10.0)]);
         let holes = MultiPolygon::new(vec![square(2.0, 3.0, 2.0, 3.0), square(4.0, 5.0, 2.0, 3.0)]);
-        let result = normalized_difference(&shell, &holes, PRECISION)?;
+        let result = normalized_difference(&shell, &holes, &mut Bilancio::nuovo(PRECISION))?;
         let [polygon] = result.0.as_slice() else {
             return Err(MakeValidError::InvalidOutput(
                 "un poligono atteso".to_owned(),

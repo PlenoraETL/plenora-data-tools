@@ -243,8 +243,20 @@ impl<T: BoolOpsNum> BufferStyle<T> {
     }
 
     // Used by i_overlay for buffering (Multi)Polygons
+    // i_overlay 9 turns miter joins with a turn below `miter_min_turn`
+    // (default 5 degrees) into bevels. i_overlay 4.5 did so only for
+    // `|cross| < 1e-4` between the unit directions (stroke), and never for
+    // outlines: keep that threshold, a turn of about 1e-4 rad, so the public
+    // semantics of `LineJoin::Miter` does not change. Round and bevel joins
+    // ignore it.
+    fn miter_min_turn() -> T {
+        T::from_f64(1e-4).expect("valid float constant")
+    }
+
     fn outline_style(&self) -> OutlineStyle<T> {
-        OutlineStyle::new(self.distance).line_join(self.clone_line_join())
+        OutlineStyle::new(self.distance)
+            .line_join(self.clone_line_join())
+            .miter_min_turn(Self::miter_min_turn())
     }
 
     // Used by i_overlay for buffering (Multi)LineStrings
@@ -256,6 +268,7 @@ impl<T: BoolOpsNum> BufferStyle<T> {
             .line_join(self.clone_line_join())
             .end_cap(self.clone_line_cap())
             .start_cap(self.clone_line_cap())
+            .miter_min_turn(Self::miter_min_turn())
     }
 }
 

@@ -25,9 +25,21 @@
 //! dichiarata** del solo buffer (README «Limiti dichiarati»). Con il passo
 //! minimo `0.01 pi` la freccia e' al piu' `1.24e-4 |d|`, quindi sempre
 //! entro la tolleranza. Il raggio `R` e' la distanza arrotondata sulla
-//! griglia (al piu' `g / 2` da `|d|`) e le direzioni sono vettori unitari
-//! interi a `2^-62`: lo scarto dall'arco di raggio `|d|` sta nel termine
-//! della griglia, sotto. Le giunzioni `Round` non usano la soglia
+//! griglia (al piu' `g / 2` da `|d|`, nel termine della griglia, sotto).
+//!
+//! **Direzioni intere.** Normali e direzioni sono vettori unitari interi
+//! (`UnitIntVector<i64>`, scala `2^62`) che `i_float` 5 accorcia:
+//! `fast_normalize` tiene circa 30 bit (la radice intera della scala,
+//! almeno `2^31`, e' troncata: contrazione relativa al piu' `2^-31` piu'
+//! termini sotto `2^-58`; misurata `2^-31.5` su due milioni di vettori), e
+//! ogni rotazione di un arco (seno e coseno in Q30) accorcia ancora
+//! (misurata `2^-29.55` al piu', su 16.000 matrici; presa `2^-28`). Un
+//! offset dritto rientra quindi di al piu' `2^-30 |d|`
+//! ([`CONTRAZIONE_NORMALE`], nel bilancio di `p / 2` della griglia), un
+//! punto d'arco di al piu' `(2 * 2^-30 + 110 * 2^-28) |d|`, circa `4.1e-7
+//! |d|` ([`CONTRAZIONE_ARCHI`]), tolto dalla freccia chiesta alle corde.
+//! Con 1 cm il rientro degli offset dritti esaurisce `p / 2` a `|d|`
+//! circa 5.368 km: oltre, errore prima del calcolo. Le giunzioni `Round` non usano la soglia
 //! `miter_min_turn` di `i_overlay` 9 (svolte sotto 5 gradi smussate: vale
 //! solo per `Miter`): un arco sotto `a` e' gia' la sua corda.
 //!
@@ -134,8 +146,31 @@ pub fn angolo_degli_archi(raggio: f64, freccia: f64) -> f64 {
 /// `2.3e-8` del passo minimo) e quello di `acos` (vedi il modulo).
 const RIDUZIONE_ANGOLO: f64 = 1e-6;
 
+/// La contrazione relativa massima di una direzione unitaria intera di
+/// `i_float` 5 (`IntVector::fast_normalize`, motore `i64`), usata per le
+/// normali dei lati e le estremita' quadrate: la normale e' piu' corta di
+/// al piu' `2^-30` e l'offset dritto rientra di al piu' `2^-30 |d|` (vedi
+/// il modulo).
+const CONTRAZIONE_NORMALE: f64 = 1.0 / 1_073_741_824.0;
+
+/// La contrazione relativa massima di una rotazione intera degli archi
+/// (`Rotation::apply`, seno e coseno in Q30): `2^-28` (vedi il modulo).
+const CONTRAZIONE_ROTAZIONE: f64 = 1.0 / 268_435_456.0;
+
+/// Il tetto delle rotazioni di un arco: un arco e' al piu' mezzo giro, il
+/// passo effettivo almeno `(32 / 33) (1 - 6e-4)` del passo minimo `0.01 pi`
+/// (`ArcOptions`: precisione 5, riserva d'errore), cioe' al piu' 104
+/// rotazioni; 110 con margine.
+const ROTAZIONI_MASSIME: f64 = 110.0;
+
+/// La contrazione relativa massima di un punto d'arco: due normalizzazioni
+/// (la normale del lato, poi la direzione dal centro) e le rotazioni.
+const CONTRAZIONE_ARCHI: f64 =
+    2.0 * CONTRAZIONE_NORMALE + ROTAZIONI_MASSIME * CONTRAZIONE_ROTAZIONE;
+
 /// Il buffer sposta un punto di al piu' `(3.5 + 2.5 sqrt(2)) g` piu' gli
-/// arrotondamenti dei `f64` (vedi il modulo).
+/// arrotondamenti dei `f64` (vedi il modulo), oltre al rientro delle
+/// direzioni intere ([`CONTRAZIONE_NORMALE`], [`CONTRAZIONE_ARCHI`]).
 const FATTORE_BUFFER: f64 = 3.5 + 2.5 * std::f64::consts::SQRT_2;
 
 /// I passaggi in catena del buffer: il `Buffer` di `geo` e l'unione delle
@@ -342,17 +377,25 @@ pub fn buffer_con_freccia(
     let Some(ingombro) = ingombro_allargato(geometry, MARGINE_IN_DISTANZE * distance.abs()) else {
         return Ok(MultiPolygon::new(Vec::new()));
     };
-    // I due passaggi in catena entro `p / 2` (vedi il modulo).
+    // I due passaggi in catena e il rientro degli offset dritti entro
+    // `p / 2`; il rientro degli archi si toglie dalla freccia delle corde
+    // (vedi il modulo).
+    let limite =
+        CONTRAZIONE_NORMALE.mul_add(-distance.abs(), precision.value() * griglia::FRAZIONE_BORDO);
+    let freccia_corde = CONTRAZIONE_ARCHI.mul_add(-distance.abs(), freccia);
+    if !(limite > 0.0 && freccia_corde > 0.0) {
+        return Err(ErroreBuffer::PrecisioneInsufficiente);
+    }
     griglia::controlla_griglia(
         Some(ingombro),
         precision,
         FATTORE_BUFFER,
         PASSI_BUFFER,
-        precision.value() * griglia::FRAZIONE_BORDO,
+        limite,
     )?;
     let passo = griglia::passo_griglia(ingombro).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
     let lavoro = senza_componenti_sotto_griglia(geometry, passo);
-    let angolo = angolo_degli_archi(distance, freccia);
+    let angolo = angolo_degli_archi(distance, freccia_corde);
     let estremita_geo = match estremita {
         Estremita::Tonde => LineCap::Round(angolo),
         Estremita::Piatte => LineCap::Butt,
@@ -587,5 +630,82 @@ mod tests {
         );
         let buffer = buffer_controllato(&collezione, -1.0, Estremita::Tonde, centimetro()).unwrap();
         assert!((buffer.unsigned_area() - 104.0).abs() < 1e-6);
+    }
+
+    /// Revisione (Codex): le normali intere di `i_float` 5 sono piu' corte
+    /// di al piu' `2^-30`, e a `10^8` m l'offset dritto rientrava di 2,5 cm
+    /// senza errore. Ora il rientro e' nel bilancio: a 5.000 km il buffer
+    /// si calcola e i lati dritti restano entro `p / 2`, a `10^8` m e'
+    /// rifiutato prima del calcolo.
+    #[test]
+    fn il_rientro_delle_normali_intere_e_nel_bilancio() {
+        let linea = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (100.0, 100.0)]));
+        assert_eq!(
+            buffer_controllato(&linea, 1e8, Estremita::Piatte, centimetro()),
+            Err(ErroreBuffer::PrecisioneInsufficiente)
+        );
+        let d = 5_000_000.0;
+        let buffer = buffer_controllato(&linea, d, Estremita::Piatte, centimetro()).unwrap();
+        // Ogni vertice sta sulla retta a distanza `d` dalla linea (i due
+        // lati dritti) entro `p / 2`.
+        let radice = std::f64::consts::FRAC_1_SQRT_2;
+        for c in buffer.coords_iter() {
+            let dalla_retta = ((c.x - c.y) * radice).abs();
+            assert!((dalla_retta - d).abs() <= 0.005, "{c:?}: {dalla_retta}");
+        }
+        // Il limite con 1 cm: `2^-30 |d| = p / 2` a circa 5.368.709 m.
+        assert!(buffer_controllato(&linea, 5_368_000.0, Estremita::Piatte, centimetro()).is_ok());
+        assert_eq!(
+            buffer_controllato(&linea, 5_369_000.0, Estremita::Piatte, centimetro()),
+            Err(ErroreBuffer::PrecisioneInsufficiente)
+        );
+    }
+
+    /// Revisione (Codex): `i_overlay` 9 smussa le giunzioni `Miter` con
+    /// una svolta sotto `miter_min_turn` (5 gradi di default); il porting di
+    /// `geo` lo porta a `1e-4` rad, la soglia `|cross| < 1e-4` di 4.5. Una
+    /// svolta di 4 gradi con `Miter(1.0)` a 100 m tiene la punta a `d /
+    /// cos(2 gradi)` dal vertice, sia sui tratti sia sui contorni (lo smusso
+    /// la perdeva di 12 cm).
+    #[test]
+    fn la_giunzione_miter_tiene_la_punta_sotto_i_5_gradi() {
+        let d = 100.0;
+        let svolta = 4_f64.to_radians();
+        let punta = d / (0.5 * svolta).cos();
+        let stile = || BufferStyle::new(d).line_join(LineJoin::Miter(1.0));
+        let terzo = (
+            1_000.0f64.mul_add(svolta.cos(), 1_000.0),
+            1_000.0 * svolta.sin(),
+        );
+        let linea = LineString::from(vec![(0.0, 0.0), (1_000.0, 0.0), terzo]);
+        let poligono = geo::Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (1_000.0, 0.0),
+                terzo,
+                (2_000.0, 500.0),
+                (0.0, 500.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        );
+        for (nome, uscita) in [
+            ("tratto", linea.buffer_with_style(stile())),
+            ("contorno", poligono.buffer_with_style(stile())),
+        ] {
+            // Il lato esterno della svolta (a sinistra) e' sotto la linea:
+            // sopra, l'incrocio degli offset interni sta anch'esso a `d /
+            // cos(2 gradi)` e non dice nulla della giunzione.
+            let lontano = uscita
+                .coords_iter()
+                .filter(|c| c.y < 0.0)
+                .map(|c| (c.x - 1_000.0).hypot(c.y))
+                .filter(|r| (r - d).abs() < 1.0)
+                .fold(0.0_f64, f64::max);
+            assert!(
+                (lontano - punta).abs() < 1e-6,
+                "{nome}: {lontano} contro {punta}"
+            );
+        }
     }
 }

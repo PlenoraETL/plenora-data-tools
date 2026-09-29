@@ -537,3 +537,33 @@ fn scala_di_epsilon_del_laboratorio_entro_la_precisione() {
         }
     }
 }
+
+/// Revisione (Codex): il bilancio di `STRUCTURE` conta gli overlay eseguiti,
+/// non quelli possibili. 2.000 rettangoli disgiunti a `3e8` m (dove la
+/// spaziatura dei `f64` e' circa `6e-8` m) con una sola coppia sovrapposta:
+/// un solo overlay. Il vecchio bilancio `p / n` sui 6.000 passi possibili
+/// rifiutava per la guardia di spaziatura (`6e-8 > p / (6.000 * 64)`).
+#[test]
+fn il_bilancio_conta_solo_gli_overlay_eseguiti() {
+    let base = 300_000_000.0;
+    let mut parti: Vec<Polygon<f64>> = (0..2_000)
+        .map(|indice| {
+            let x = base + f64::from(indice) * 20.0;
+            Polygon::new(rettangolo(x, 0.0, x + 10.0, 10.0), vec![])
+        })
+        .collect();
+    parti.push(Polygon::new(
+        rettangolo(base + 5.0, 5.0, base + 15.0, 15.0),
+        vec![],
+    ));
+    let input = Geometry::MultiPolygon(MultiPolygon::new(parti));
+    let output = make_valid_geometry_rust(&input, RepairMethod::Structure, false, CENTIMETRO)
+        .expect("un solo overlay entro la precisione");
+    // 2.000 quadrati da 100 m2 piu' 75 m2 del quadrato che ne copre un quarto.
+    let attesa = 2_000.0 * 100.0 + 75.0;
+    assert!(
+        (output.unsigned_area() - attesa).abs() <= 0.01 * 100.0,
+        "area {}",
+        output.unsigned_area()
+    );
+}
