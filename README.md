@@ -167,10 +167,10 @@ regressione.
 deterministici senza seme (`crates/plenora-kernels-table/src/hashing.rs`):
 `KeyHasher` (`FastHasher`) per i valori nativi (interi, testi, valori e
 chiavi composte dei join, partizioni delle finestre, blocchi di
-`fuzzy_join`, chiavi testuali di `reconcile` e `assert_foreign_key`) e
+`fuzzy_join`, chiave Int64 singola di `reconcile` e `assert_foreign_key`) e
 `ChiaveHasher` per le chiavi binarie di riga (arena `KeyInterner` di
-aggregate, distinct, set operation, assert_unique e table_diff; mappe e
-scelta della partizione dello spill). L'uguaglianza delle chiavi si decide
+aggregate, distinct, set operation, assert_unique, table_diff, `reconcile`
+e `assert_foreign_key`; mappe e scelta della partizione dello spill). L'uguaglianza delle chiavi si decide
 sempre sui valori o sui byte: l'hash sceglie i candidati, mai il risultato,
 e nessun output dipende dall'ordine di visita di una mappa (le mappe si
 interrogano per chiave; dove si visitano, il risultato si ordina o si

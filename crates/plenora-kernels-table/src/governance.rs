@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
-use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
@@ -11,7 +10,9 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
+use crate::aggregation::BinaryKeyEncoder;
 use crate::hashing::FastHasher;
+use crate::interning::KeyInterner;
 use crate::Limits;
 use crate::{
     column_index, compare_f64, compare_i64, reject_rows, replace_or_append, scalar_as_string,
@@ -134,15 +135,18 @@ fn has_null(batch: &RecordBatch, indices: &[usize], row: usize) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Fast path delle chiavi di riga (`reconcile`, `assert_foreign_key`).
+// Chiavi testuali di riga: l'oracolo dei test di `reconcile` e
+// `assert_foreign_key`.
 //
 // `RowKeyEncoder` scrive in un buffer riusato gli stessi byte di
-// `quality::key_for_row`, che nei test fa da oracolo; il tag di tipo e'
-// preparato una volta per colonna. I tipi fuori dal fast path ricadono sul
-// percorso scalare generico, con gli stessi errori.
+// `quality::key_for_row`. Era il percorso di `reconcile` e
+// `assert_foreign_key`; ora serve ai test, come copia del percorso
+// precedente e come misura dei byte che `LatoChiavi::lunghezza_testuale`
+// deve rendere.
 // ---------------------------------------------------------------------------
 
 /// Colonna di chiave tipizzata per `RowKeyEncoder`.
+#[cfg(test)]
 enum KeyValueColumn<'a> {
     Utf8(&'a StringArray),
     Int64(&'a Int64Array),
@@ -152,6 +156,7 @@ enum KeyValueColumn<'a> {
     Generic(&'a ArrayRef),
 }
 
+#[cfg(test)]
 impl<'a> KeyValueColumn<'a> {
     fn new(array: &'a ArrayRef) -> Self {
         if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
@@ -233,14 +238,13 @@ impl<'a> KeyValueColumn<'a> {
 ///
 /// Stessi byte di `quality::key_for_row` senza allocare una String per
 /// colonna per riga (`reconcile`, `assert_foreign_key`).
+#[cfg(test)]
 pub(crate) struct RowKeyEncoder<'a> {
     columns: Vec<(Vec<u8>, KeyValueColumn<'a>)>,
     text: String,
 }
 
-type KeySet = HashSet<Vec<u8>, FastHasher>;
-type KeyFreqMap = HashMap<Vec<u8>, usize, FastHasher>;
-
+#[cfg(test)]
 impl<'a> RowKeyEncoder<'a> {
     pub(crate) fn new(batch: &'a RecordBatch, indices: &[usize]) -> Self {
         let columns = indices
@@ -279,6 +283,251 @@ impl<'a> RowKeyEncoder<'a> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Chiavi di riga di `reconcile` e `assert_foreign_key`.
+//
+// Identita' binaria di `BinaryKeyEncoder` in un `KeyInterner`: due righe
+// hanno la stessa chiave se e solo se hanno gli stessi byte di
+// `quality::key_for_row`, perche' `validate_key_types` pretende tipi
+// identici fra i due lati e la codifica binaria coincide con quella
+// testuale a tipo fissato. Su una sola colonna Int64 la chiave e' il valore
+// nativo, con il null come chiave a parte.
+//
+// La contabilita' della memoria resta quella delle chiavi testuali:
+// `LatoChiavi::lunghezza_testuale` rende la lunghezza dei byte di
+// `key_for_row` senza costruirli, e la si addebita (piu' 64 byte) alla prima
+// comparsa della chiave in un lato, come quando la mappa conteneva quei
+// byte. Le soglie di `max_governed_memory_bytes` e `max_rows` scattano alla
+// stessa riga.
+// ---------------------------------------------------------------------------
+
+/// Lunghezza del testo di `scalar_as_string` di una colonna di chiave, per
+/// tipo; `None` sul null.
+enum LunghezzaValore<'a> {
+    Utf8(&'a StringArray),
+    Int64(&'a Int64Array),
+    UInt64(&'a UInt64Array),
+    Float64(&'a Float64Array),
+    Boolean(&'a BooleanArray),
+    Generica(&'a ArrayRef),
+}
+
+/// Cifre decimali di `valore`.
+const fn cifre_decimali(mut valore: u64) -> usize {
+    let mut cifre = 1;
+    while valore >= 10 {
+        valore /= 10;
+        cifre += 1;
+    }
+    cifre
+}
+
+impl<'a> LunghezzaValore<'a> {
+    fn new(array: &'a ArrayRef) -> Self {
+        let any = array.as_any();
+        if let Some(values) = any.downcast_ref::<StringArray>() {
+            return Self::Utf8(values);
+        }
+        if let Some(values) = any.downcast_ref::<Int64Array>() {
+            return Self::Int64(values);
+        }
+        if let Some(values) = any.downcast_ref::<UInt64Array>() {
+            return Self::UInt64(values);
+        }
+        if let Some(values) = any.downcast_ref::<Float64Array>() {
+            return Self::Float64(values);
+        }
+        if let Some(values) = any.downcast_ref::<BooleanArray>() {
+            return Self::Boolean(values);
+        }
+        Self::Generica(array)
+    }
+
+    /// Byte del testo della cella (`Display` per i tipi nativi, come
+    /// `scalar_as_string`), `None` se nulla. `testo` e' un buffer riusato.
+    fn lunghezza(&self, row: usize, testo: &mut String) -> Result<Option<usize>> {
+        Ok(match self {
+            Self::Utf8(values) => (!values.is_null(row)).then(|| values.value(row).len()),
+            Self::Int64(values) => (!values.is_null(row)).then(|| {
+                let valore = values.value(row);
+                usize::from(valore < 0) + cifre_decimali(valore.unsigned_abs())
+            }),
+            Self::UInt64(values) => {
+                (!values.is_null(row)).then(|| cifre_decimali(values.value(row)))
+            }
+            Self::Float64(values) => {
+                if values.is_null(row) {
+                    None
+                } else {
+                    testo.clear();
+                    // `fmt::Write` su `String` e' infallibile; l'errore e'
+                    // comunque propagato come Internal, mai ignorato.
+                    write!(testo, "{}", values.value(row))
+                        .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
+                    Some(testo.len())
+                }
+            }
+            Self::Boolean(values) => (!values.is_null(row))
+                .then(|| if values.value(row) { "true" } else { "false" }.len()),
+            Self::Generica(array) => {
+                scalar_as_string(array.as_ref(), row)?.map(|testo| testo.len())
+            }
+        })
+    }
+}
+
+/// Un lato di `reconcile`/`assert_foreign_key`: encoder binario, colonna
+/// Int64 nativa se la chiave e' una sola colonna Int64, lunghezze testuali.
+struct LatoChiavi<'a> {
+    batch: &'a RecordBatch,
+    indices: &'a [usize],
+    encoder: BinaryKeyEncoder<'a>,
+    int64: Option<&'a Int64Array>,
+    /// Per colonna: byte fissi del frammento testuale (lunghezza del nome del
+    /// tipo a 8 byte, nome, marcatore di null) e lunghezza del valore.
+    colonne: Vec<(usize, LunghezzaValore<'a>)>,
+}
+
+impl<'a> LatoChiavi<'a> {
+    fn new(batch: &'a RecordBatch, indices: &'a [usize]) -> Self {
+        let int64 = match indices {
+            [index] => batch.column(*index).as_any().downcast_ref::<Int64Array>(),
+            _ => None,
+        };
+        let colonne = indices
+            .iter()
+            .map(|index| {
+                let column = batch.column(*index);
+                let fissi = 8 + column.data_type().to_string().len() + 1;
+                (fissi, LunghezzaValore::new(column))
+            })
+            .collect();
+        Self {
+            batch,
+            indices,
+            encoder: BinaryKeyEncoder::new(batch, indices),
+            int64,
+            colonne,
+        }
+    }
+
+    /// Lunghezza dei byte di `quality::key_for_row` per `row`: per colonna i
+    /// byte fissi, piu' 8 byte di lunghezza e il testo se la cella non e'
+    /// nulla.
+    fn lunghezza_testuale(&self, row: usize, testo: &mut String) -> Result<usize> {
+        let mut totale = 0_usize;
+        for (fissi, valore) in &self.colonne {
+            let variabili = valore
+                .lunghezza(row, testo)?
+                .map_or(0, |lunghezza| lunghezza.saturating_add(8));
+            totale = totale.saturating_add(fissi.saturating_add(variabili));
+        }
+        Ok(totale)
+    }
+}
+
+/// Indici densi delle chiavi di riga, in ordine di prima apparizione.
+enum IndiceChiavi {
+    /// Una sola colonna Int64 su entrambi i lati: il valore nativo, il null
+    /// a parte.
+    Int64 {
+        valori: HashMap<i64, usize, FastHasher>,
+        nullo: Option<usize>,
+        prossimo: usize,
+    },
+    /// Chiave binaria di `BinaryKeyEncoder`; `buffer` e' riusato.
+    Binario {
+        chiavi: KeyInterner,
+        buffer: Vec<u8>,
+    },
+}
+
+impl IndiceChiavi {
+    /// Indice nativo se `lato` ha una sola colonna Int64 (i tipi dei due
+    /// lati sono identici, quindi vale per entrambi), binario altrimenti.
+    fn per(lato: &LatoChiavi<'_>, capacita: usize) -> Self {
+        if lato.int64.is_some() {
+            Self::Int64 {
+                valori: HashMap::with_capacity_and_hasher(capacita, FastHasher::default()),
+                nullo: None,
+                prossimo: 0,
+            }
+        } else {
+            Self::Binario {
+                chiavi: KeyInterner::with_capacity(capacita),
+                buffer: Vec::new(),
+            }
+        }
+    }
+
+    /// Numero di chiavi distinte.
+    const fn len(&self) -> usize {
+        match self {
+            Self::Int64 { prossimo, .. } => *prossimo,
+            Self::Binario { chiavi, .. } => chiavi.len(),
+        }
+    }
+
+    /// Indice della chiave di `row` e `true` se e' nuova.
+    ///
+    /// # Errors
+    ///
+    /// Gli errori di conversione di `BinaryKeyEncoder`; `Internal` se il lato
+    /// non ha la colonna Int64 dell'indice nativo.
+    fn inserisci(&mut self, lato: &LatoChiavi<'_>, row: usize) -> Result<(usize, bool)> {
+        match self {
+            Self::Int64 {
+                valori,
+                nullo,
+                prossimo,
+            } => {
+                let values = lato.int64.ok_or_else(senza_int64)?;
+                let candidato = *prossimo;
+                let indice = if values.is_null(row) {
+                    *nullo.get_or_insert(candidato)
+                } else {
+                    *valori.entry(values.value(row)).or_insert(candidato)
+                };
+                let nuova = indice == candidato;
+                if nuova {
+                    *prossimo += 1;
+                }
+                Ok((indice, nuova))
+            }
+            Self::Binario { chiavi, buffer } => {
+                lato.encoder.encode_into(row, buffer)?;
+                Ok(chiavi.inserisci(buffer))
+            }
+        }
+    }
+
+    /// Indice della chiave di `row`, se presente.
+    ///
+    /// # Errors
+    ///
+    /// Come [`IndiceChiavi::inserisci`].
+    fn cerca(&mut self, lato: &LatoChiavi<'_>, row: usize) -> Result<Option<usize>> {
+        match self {
+            Self::Int64 { valori, nullo, .. } => {
+                let values = lato.int64.ok_or_else(senza_int64)?;
+                Ok(if values.is_null(row) {
+                    *nullo
+                } else {
+                    valori.get(&values.value(row)).copied()
+                })
+            }
+            Self::Binario { chiavi, buffer } => {
+                lato.encoder.encode_into(row, buffer)?;
+                Ok(chiavi.cerca(buffer))
+            }
+        }
+    }
+}
+
+fn senza_int64() -> PlenoraError {
+    PlenoraError::Internal("indice di chiavi Int64 su un lato senza colonna Int64".into())
+}
+
 /// Batch sinistro invariato se ogni chiave sinistra e' referenziata nella
 /// tabella destra.
 ///
@@ -299,30 +548,26 @@ pub fn assert_foreign_key(
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;
-    let mut right_encoder = RowKeyEncoder::new(right, &right_indices);
-    let mut referenced =
-        KeySet::with_capacity_and_hasher(right.num_rows(), BuildHasherDefault::default());
+    let destra = LatoChiavi::new(right, &right_indices);
+    let mut referenced = IndiceChiavi::per(&destra, right.num_rows());
     let mut memory_used = 0_usize;
-    let mut key = Vec::new();
+    let mut testo = String::new();
     for row in 0..right.num_rows() {
-        if !has_null(right, &right_indices, row) {
-            right_encoder.encode_into(row, &mut key)?;
-            let key_bytes = key.len();
-            if referenced.insert(std::mem::take(&mut key)) {
-                memory_used = memory_used
-                    .checked_add(key_bytes.saturating_add(64))
-                    .ok_or_else(|| {
-                        PlenoraError::ResourceLimit("overflow memoria foreign key".into())
-                    })?;
-                if memory_used > limits.max_governed_memory_bytes {
-                    return Err(PlenoraError::ResourceLimit(
-                        "assert_foreign_key oltre max_governed_memory_bytes".into(),
-                    ));
-                }
+        if !has_null(right, &right_indices, row) && referenced.inserisci(&destra, row)?.1 {
+            let key_bytes = destra.lunghezza_testuale(row, &mut testo)?;
+            memory_used = memory_used
+                .checked_add(key_bytes.saturating_add(64))
+                .ok_or_else(|| {
+                    PlenoraError::ResourceLimit("overflow memoria foreign key".into())
+                })?;
+            if memory_used > limits.max_governed_memory_bytes {
+                return Err(PlenoraError::ResourceLimit(
+                    "assert_foreign_key oltre max_governed_memory_bytes".into(),
+                ));
             }
         }
     }
-    let mut left_encoder = RowKeyEncoder::new(left, &left_indices);
+    let sinistra = LatoChiavi::new(left, &left_indices);
     let mut rejections = Vec::new();
     for row in 0..left.num_rows() {
         if has_null(left, &left_indices, row) {
@@ -336,8 +581,7 @@ pub fn assert_foreign_key(
             });
             continue;
         }
-        left_encoder.encode_into(row, &mut key)?;
-        if !referenced.contains(key.as_slice()) {
+        if referenced.cerca(&sinistra, row)?.is_none() {
             rejections.push(RowRejection {
                 row,
                 cause: "validation.foreign_key_missing",
@@ -361,32 +605,41 @@ pub struct Reconcile {
     pub nulls_equal: bool,
 }
 
+/// Frequenze delle chiavi di un lato di `reconcile`, per indice di
+/// `chiavi` (condiviso fra i due lati: una chiave presente nei due ha lo
+/// stesso indice).
+///
+/// La memoria e il limite di `max_rows` contano le chiavi distinte **del
+/// lato**, alla prima comparsa nel lato, come la mappa per lato di prima:
+/// una chiave gia' vista nell'altro lato si addebita di nuovo.
 fn frequencies(
-    batch: &RecordBatch,
-    indices: &[usize],
+    lato: &LatoChiavi<'_>,
+    chiavi: &mut IndiceChiavi,
     nulls_equal: bool,
     side_nulls: &mut usize,
     memory_used: &mut usize,
     limits: &Limits,
-) -> Result<KeyFreqMap> {
-    let mut output = KeyFreqMap::default();
-    let mut encoder = RowKeyEncoder::new(batch, indices);
-    let mut key = Vec::new();
-    for row in 0..batch.num_rows() {
-        if !nulls_equal && has_null(batch, indices, row) {
+) -> Result<Vec<usize>> {
+    let mut conteggi: Vec<usize> = Vec::new();
+    let mut distinte = 0_usize;
+    let mut testo = String::new();
+    for row in 0..lato.batch.num_rows() {
+        if !nulls_equal && has_null(lato.batch, lato.indices, row) {
             *side_nulls = side_nulls.checked_add(1).ok_or_else(|| {
                 PlenoraError::ResourceLimit("overflow null reconciliation".into())
             })?;
             continue;
         }
-        encoder.encode_into(row, &mut key)?;
-        if let Some(count) = output.get_mut(key.as_slice()) {
-            *count = count
-                .checked_add(1)
-                .ok_or_else(|| PlenoraError::ResourceLimit("overflow reconciliation".into()))?;
-        } else {
+        let (indice, _) = chiavi.inserisci(lato, row)?;
+        if indice >= conteggi.len() {
+            conteggi.resize(indice + 1, 0);
+        }
+        let conteggio = conteggi
+            .get_mut(indice)
+            .ok_or_else(|| PlenoraError::Internal("reconcile: conteggio assente".into()))?;
+        if *conteggio == 0 {
             *memory_used = memory_used
-                .checked_add(key.len().saturating_add(64))
+                .checked_add(lato.lunghezza_testuale(row, &mut testo)?.saturating_add(64))
                 .ok_or_else(|| {
                     PlenoraError::ResourceLimit("overflow memoria reconciliation".into())
                 })?;
@@ -395,15 +648,18 @@ fn frequencies(
                     "reconcile oltre max_governed_memory_bytes".into(),
                 ));
             }
-            output.insert(std::mem::take(&mut key), 1);
-            if output.len() > limits.max_rows {
+            distinte += 1;
+            if distinte > limits.max_rows {
                 return Err(PlenoraError::ResourceLimit(
                     "reconcile supera max_rows chiavi distinte".into(),
                 ));
             }
         }
+        *conteggio = conteggio
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::ResourceLimit("overflow reconciliation".into()))?;
     }
-    Ok(output)
+    Ok(conteggi)
 }
 
 fn as_u64(value: usize) -> Result<u64> {
@@ -430,20 +686,23 @@ pub fn reconcile(
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;
+    let sinistra = LatoChiavi::new(left, &left_indices);
+    let destra = LatoChiavi::new(right, &right_indices);
+    let mut chiavi = IndiceChiavi::per(&sinistra, left.num_rows());
     let mut left_nulls = 0;
     let mut right_nulls = 0;
     let mut memory_used = 0_usize;
     let left_counts = frequencies(
-        left,
-        &left_indices,
+        &sinistra,
+        &mut chiavi,
         config.nulls_equal,
         &mut left_nulls,
         &mut memory_used,
         limits,
     )?;
     let right_counts = frequencies(
-        right,
-        &right_indices,
+        &destra,
+        &mut chiavi,
         config.nulls_equal,
         &mut right_nulls,
         &mut memory_used,
@@ -454,17 +713,21 @@ pub fn reconcile(
     let mut right_only = right_nulls;
     let mut left_duplicates = 0_usize;
     let mut right_duplicates = 0_usize;
-    for (key, left_count) in &left_counts {
-        let right_count = right_counts.get(key).copied().unwrap_or_default();
-        let common = (*left_count).min(right_count);
-        matched = matched.saturating_add(common);
-        left_only = left_only.saturating_add(left_count - common);
-        left_duplicates = left_duplicates.saturating_add(left_count.saturating_sub(1));
-    }
-    for (key, right_count) in &right_counts {
-        let left_count = left_counts.get(key).copied().unwrap_or_default();
-        right_only = right_only.saturating_add(right_count.saturating_sub(left_count));
-        right_duplicates = right_duplicates.saturating_add(right_count.saturating_sub(1));
+    // Stesse somme delle due visite delle mappe per lato: un conteggio nullo
+    // e' una chiave assente da quel lato.
+    for indice in 0..chiavi.len() {
+        let left_count = left_counts.get(indice).copied().unwrap_or_default();
+        let right_count = right_counts.get(indice).copied().unwrap_or_default();
+        if left_count > 0 {
+            let common = left_count.min(right_count);
+            matched = matched.saturating_add(common);
+            left_only = left_only.saturating_add(left_count - common);
+            left_duplicates = left_duplicates.saturating_add(left_count.saturating_sub(1));
+        }
+        if right_count > 0 {
+            right_only = right_only.saturating_add(right_count.saturating_sub(left_count));
+            right_duplicates = right_duplicates.saturating_add(right_count.saturating_sub(1));
+        }
     }
     let metrics = [
         "matched_rows",
@@ -1913,3 +2176,7 @@ mod tests {
 #[cfg(test)]
 #[path = "regole_oracolo.rs"]
 mod regole_oracolo;
+
+#[cfg(test)]
+#[path = "chiavi_riga_oracolo.rs"]
+mod chiavi_riga_oracolo;
