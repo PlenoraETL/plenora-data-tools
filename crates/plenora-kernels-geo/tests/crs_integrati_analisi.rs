@@ -170,6 +170,27 @@ fn geometria_da_config_nel_dominio_del_crs_dell_input() {
     ));
 }
 
+/// La lama di `geo.split` arriva dalla config (`other_wkb`) nel CRS
+/// dell'input, come il secondo operando di distanze e predicati: stessa
+/// regola del dominio. Prima dell'integrazione ne controllava solo la
+/// struttura.
+#[test]
+fn lama_dello_split_nel_dominio_del_crs_dell_input() {
+    let utm = input("EPSG:32632");
+    let dentro = json!({"other_wkb": punto_hex(500_000.0, 4_482_531.752)});
+    analizza("geo.split", std::slice::from_ref(&utm), &dentro).expect("dentro il dominio");
+    let fuori = json!({"other_wkb": punto_hex(5_000_000.0, 4_482_531.752)});
+    let errore =
+        analizza("geo.split", std::slice::from_ref(&utm), &fuori).expect_err("fuori dal dominio");
+    let testo = errore.to_string();
+    assert!(testo.contains("COORDINATE_OUT_OF_CRS_DOMAIN"), "{testo}");
+    assert!(testo.contains("other_wkb"), "{testo}");
+    assert!(
+        !testo.contains("5000000"),
+        "coordinata nel messaggio: {testo}"
+    );
+}
+
 #[test]
 fn produttore_con_crs_da_config() {
     let trigger = DataContract::tabular(Arc::new(Schema::new(vec![Field::new(

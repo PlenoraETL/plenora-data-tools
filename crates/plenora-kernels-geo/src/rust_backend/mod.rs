@@ -251,8 +251,8 @@ pub enum RustBackendError {
     /// di `polygonize`. Il solo rifiuto legato alla precisione.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
-    /// La precisione passata non e' un numero finito positivo, o un CRS
-    /// proiettato non ha un'unita' lineare.
+    /// La precisione passata non e' un numero finito positivo, o il CRS non
+    /// ne ha una (`ResolvedCrs::precisione_coordinate` e' `None`).
     #[error("precisione dichiarata non valida")]
     InvalidPrecision,
     /// Una prenotazione di memoria fallita.

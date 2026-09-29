@@ -21,8 +21,12 @@ progetto d'origine si portano qui senza rinomine.
 - **Runner di pipeline**: nessun motore che concateni le trasformazioni; si
   chiamano i kernel direttamente.
 - **`geo.reproject`**: richiedeva PROJ, è fuori dal catalogo.
-- **Risoluzione CRS**: senza PROJ `resolve_crs` fallisce sempre chiuso; un
-  CRS entra solo già risolto dal chiamante.
+- **Risoluzione CRS fuori tabella**: senza PROJ `resolve_crs` risolve solo
+  gli identificatori d'autorità della tabella integrata
+  ([«CRS integrati»](#crs-integrati)); un codice fuori tabella fallisce
+  chiuso con `CRS_NOT_BUILTIN`, una definizione WKT, WKT2, PROJJSON o
+  proj-string con `CRS_BACKEND_UNAVAILABLE`, e un CRS così entra solo già
+  risolto dal chiamante.
 
 Engine, CLI, isolamento e protocollo del progetto d'origine non sono stati
 portati. I riferimenti a `docs/…` nei commenti rimandano alla documentazione
@@ -34,8 +38,9 @@ di `plenora-data-tools`.
 
 **Regola.** Ogni operazione geografica è garantita entro **1 cm a terra**,
 precisione fissa, l'analogo del modello a precisione fissa di GEOS o di
-`gridSize = 0.01` di PostGIS in metri. Nelle unità delle coordinate
-(`rust_backend::precision::Precision::from_crs`, una sola funzione):
+`gridSize = 0.01` di PostGIS in metri. Nelle unità delle coordinate, con
+una sola funzione, `plenora_core::crs::ResolvedCrs::precisione_coordinate`
+(a cui delega `rust_backend::precision::Precision::from_crs` dei kernel):
 
 - CRS proiettato: `0.01 / horizontal_unit_to_metre`;
 - CRS geografico: 1 cm in gradi all'equatore, il valore più severo,
@@ -352,8 +357,9 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   (`NumericRange`, `Unsupported`, anche da `make_valid`, che prima in
   quel caso avviava la riparazione di un poligono valido), bilancio di
   spostamento di un overlay di `make_valid` o punto di noding arrotondato
-  oltre 1 cm (`PrecisionInsufficient`, `Unsupported`), precisione non finita o CRS proiettato senza unità
-  (`InvalidPrecision`, `InvalidPlan`), memoria non prenotabile
+  oltre 1 cm (`PrecisionInsufficient`, `Unsupported`), precisione non
+  finita o CRS senza precisione (`ResolvedCrs::precisione_coordinate`
+  `None`: `InvalidPrecision`, `InvalidPlan`), memoria non prenotabile
   (`ResourceLimit`),
   panico di `geo`/`i_overlay` dentro il kernel (`Internal`, solo la forma
   del payload).
@@ -402,9 +408,9 @@ Senza PROJ, `plenora_core::crs::resolve_crs` risolve gli identificatori
 d'autorità di una tabella integrata, generata dal registro EPSG. Descrive i
 CRS (tipo, unità, assi, area d'uso, dominio di validità, ellissoide) e **non
 riproietta**: nessuna coordinata cambia sistema. Per gli identificatori in
-tabella questa sezione supera la voce «Risoluzione CRS» di
-[«Che cosa non c'è ancora»](#che-cosa-non-cè-ancora); per ogni altra
-definizione quella voce resta vera.
+tabella la risoluzione è qui; per ogni altra definizione vale la voce
+«Risoluzione CRS fuori tabella» di
+[«Che cosa non c'è ancora»](#che-cosa-non-cè-ancora).
 
 **Fonte.** Registro EPSG v11.022 (2024-11-05) come distribuito con PROJ
 9.5.1, letto con pyproj 3.7.2 da `scripts/genera_crs_integrati.py`, che
@@ -468,14 +474,19 @@ e proj-string con `CRS_BACKEND_UNAVAILABLE`.
 
 **Dove gira il controllo.** Nell'analisi dei contratti geo, sulle geometrie
 che arrivano dalla config con il CRS dell'input: `other_wkb` di distanze e
-predicati, `point_wkb` di `line_locate_point`, `reference_wkb` di `snap`, e
+predicati e la lama `other_wkb` di `geo.split`, `point_wkb` di
+`line_locate_point`, `reference_wkb` di `snap`, e
 l'`extent` di `generate_grid` con il CRS del produttore. I kernel non
 ricevono un CRS: sulle colonne il controllo lo chiama il chiamante, con
 `plenora_kernels_geo::crs::validate_geometry_domain`, dopo la decodifica.
 
 **Precisione.** `ResolvedCrs::precisione_coordinate()` esprime 1 cm a terra
 nelle unità del CRS: `0.01 / horizontal_unit_to_metre` per i proiettati,
-`0.01 / 111 319,49` gradi per i geografici.
+`0.01 / 111 319,49` gradi per i geografici; `None` quando il quoziente non
+è un `f64` normale e positivo. È la precisione dichiarata delle operazioni
+geografiche ([«Limiti dichiarati»](#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
+`Precision::from_crs` dei kernel geo delega a questa funzione, e un `None` è
+`InvalidPrecision`.
 
 ### Limiti dei CRS integrati
 

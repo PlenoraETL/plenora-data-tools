@@ -335,6 +335,9 @@ pub(in crate::analyze) fn analyze_unary(
                 ensure_non_negative(op, "tolerance", tolerance)?;
             }
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
+            // La lama arriva dalla config nel CRS dell'input (D16): stesso
+            // dominio del secondo operando di distanze e predicati.
+            super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
             analyze_expand(op, input)
         }
         "geo.voronoi" => {
