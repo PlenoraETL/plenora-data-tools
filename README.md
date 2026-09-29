@@ -15,6 +15,7 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-kernels-table` | kernel tabellari (filtri, ordinamenti, aggregazioni, join, espressioni, date, stringhe, qualità, spill) |
 | `plenora-kernels-geo` | kernel geografici su `geo::Geometry` e adapter GeoArrow-WKB; `rust_backend` per `geo.make_valid`, `geo.polygonize` e `geo.split` senza GEOS |
 | `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione e budget di memoria per passo ([«Runner»](#runner)) |
+| `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](#file)) |
 | `vendor/` | `geo`, `wkt`, `i_shape` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
@@ -863,10 +864,189 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   categoria; gli errori con diagnostica per riga o già strutturati restano
   quelli del kernel.
 
+## File
+
+`plenora-io` legge e scrive le tabelle del runner. Ogni tabella è un solo
+`RecordBatch` in memoria (decisione del maintainer: niente streaming, dati
+tipici sotto i 10 milioni di righe).
+
+```rust
+let tabella = leggi_tabella(Path::new("ordini.parquet"), None, u64::MAX)?;
+scrivi_tabella(&tabella, Path::new("ordini.arrow"), &OpzioniScrittura::default())?;
+let report = esegui_da_file(&piano, &ingressi, &uscite, &OpzioniScrittura::default())?;
+```
+
+### Formati
+
+| formato | estensioni | lettura | scrittura |
+| --- | --- | --- | --- |
+| Arrow IPC | `.arrow`, `.feather`, `.ipc`, `.arrows` | file (Feather v2) o stream, riconosciuti dal contenuto; tutti i blocchi ricomposti in uno | file, a blocchi di circa 8 MiB, senza compressione |
+| Parquet | `.parquet` | un batch grande quanto il file, anche con più row group | proprietà fisse, `ZSTD` livello 3 (o `SNAPPY`, o nessuna) |
+| GeoParquet 1.1 | `.parquet` | quando c'è il metadato di file `geo` | quando lo schema ha una colonna geometrica |
+
+Il formato viene dall'estensione (senza distinzione di maiuscole) o da
+`Formato` esplicito; un'estensione diversa è `Unsupported`, mai un formato
+indovinato. Feather v1 si rifiuta.
+
+**Arrow IPC** conserva schema, metadati di schema e di campo, tipi e bit
+(NaN, `-0.0`) esattamente. **Parquet** anche, per i tipi provati in
+`crates/plenora-io/tests/round_trip.rs` (interi con e senza segno, float con
+NaN e `-0.0`, booleani, `Utf8`, `LargeUtf8`, `Utf8View`, binari, dizionari,
+date, timestamp con fuso, ore, durate, intervalli anno-mese e giorno-ora,
+decimali 32/64/128/256, liste, `LargeList`, `FixedSizeList`, strutture,
+mappe, `Null`, tabelle vuote): lo schema Arrow incorporato (`ARROW:schema`)
+deve coincidere campo per campo con quello che `parquet` applica, altrimenti
+la lettura si rifiuta (`Schema`), perché `parquet` ricadrebbe in silenzio sul
+tipo Parquet. Senza schema incorporato (file di scrittori non Arrow) vale il
+tipo che `parquet` deduce.
+
+**Scrittura deterministica.** `created_by` costante (`parquet-rs version
+59.2.0`), pagine formato 1.0, row group di al più 1 048 576 righe,
+statistiche di pagina, niente bloom filter, metadati JSON con chiavi in
+ordine: la stessa tabella dà gli stessi byte, in Parquet e in Arrow IPC
+(provato). Dopo ogni scrittura Parquet si rilegge il footer e se ne verifica
+lo schema incorporato.
+
+### GeoParquet
+
+In lettura il metadato di file `geo` è l'autorità:
+
+| chiave | lettura |
+| --- | --- |
+| `version` | `1.0.0` o `1.1.0`, altrimenti `Unsupported` |
+| `primary_column` | deve essere fra le `columns` e la prima colonna geometrica dello schema |
+| `encoding` | solo `WKB`; le codifiche GeoArrow native (`point`, …) sono `Unsupported` |
+| `geometry_types` | tipi dichiarati (`exact`) e dimensionalità: tutti ` Z` → `xyz`, nessuno → `xy`, misti o elenco vuoto → `unknown`; ogni cella si verifica, un tipo non dichiarato è `DataMapping` |
+| `crs` | assente → `OGC:CRS84`; `null` → CRS mancante; PROJJSON → identificatore integrato per `id` (sotto) |
+| `edges` | assente o `planar`; `spherical` è `Unsupported` |
+| `epoch` | `Unsupported` (il contratto non ha epoche) |
+| `orientation`, `bbox`, `covering` | validati nella forma e lasciati cadere |
+| altre chiavi di colonna | `Unsupported` |
+
+Ogni colonna diventa il campo che il contratto accetta: `Binary`
+(`LargeBinary` si converte), `ARROW:extension:name = geoarrow.wkb`,
+metadato di campo `geo` con `crs`, `dimensions`, `encoding`; poi
+`contract_from_arrow_schema` e `arrow_schema_from_contract` aggiungono il
+blocco canonico `plenora.geometry.*` e `plenora.contract.version`, e
+rifiutano chiavi canoniche già presenti in conflitto. Il metadato `geo` di
+schema si toglie, `ARROW:extension:metadata` si sostituisce.
+
+**CRS.** Un PROJJSON si riconduce alla tabella integrata solo per il suo
+`id` (o un `ids` di un elemento): `EPSG` con codice numerico → `EPSG:<n>`,
+`OGC`/`CRS84` → `OGC:CRS84`; il `type` del documento deve essere quello del
+CRS integrato. Ogni altra cosa (senza `id`, altra autorità, codice fuori
+tabella, `BoundCRS`, CRS 3D) è `CRS_NOT_BUILTIN`, mai un CRS indovinato. Le
+coordinate WKB di GeoParquet sono sempre x = est/longitudine, come l'ordine
+GIS normalizzato del contratto: `EPSG:4326` si legge `lon_lat`.
+
+In scrittura, dal contratto: `version` `1.1.0`, `primary_column` la
+geometria attiva, `encoding` `WKB`, `crs` il PROJJSON **completo** del CRS
+integrato (`crates/plenora-io/data/projjson_integrati.json`, generato con
+PROJ 9.5.1 da `scripts/genera_projjson_integrati.py` con la terna di
+`genera_crs_integrati.py`; un test verifica che copra esattamente i CRS
+integrati) o `null` per un CRS mancante, `geometry_types` i tipi dichiarati
+dal contratto (verificati sui dati) o, senza dichiarazione, quelli trovati
+nei dati, `bbox` il riquadro XY di tutte le coordinate quando le geometrie
+sono 2D. Il `geo` di campo non entra nello schema incorporato: lo porta il
+metadato di file. Si rifiutano: EWKB, coordinate M, curve, un ordine degli
+assi dichiarato diverso da `lon_lat`/`easting_northing`, un CRS dichiarato
+ma non risolto, geometrie di un tipo o di una dimensionalità diversi dal
+contratto.
+
+La camminata delle celle (`plenora_io::wkb`) è una validazione strutturale:
+WKB ISO dei sette tipi, 2D o 3D, byte order per geometria, conteggi limitati
+dai byte rimasti, figli coerenti con la multi-geometria, profondità 64,
+nessun byte in eccesso, coordinate finite (il punto vuoto, tutto NaN, è
+ammesso e resta fuori dal riquadro). Un proptest la confronta con la
+codifica dei kernel e con le coordinate di `geo`.
+
+Fixture: `crates/plenora-io/tests/dati/` contiene due file scritti da
+pyarrow (Parquet C++) nella forma di GeoPandas, con il PROJJSON di PROJ
+(`scripts/genera_fixture_geoparquet.py`).
+
+### Scrittura atomica
+
+Il contenuto va in un temporaneo `.plenora-io-*.tmp` nella directory della
+destinazione, si porta su disco (`sync_all`), si verifica, e solo allora si
+rinomina. Un errore prima della rinomina cancella il temporaneo: la
+destinazione non vede mai un file parziale. Una destinazione esistente è
+`Conflict` senza `OpzioniScrittura::sovrascrivi`, anche se compare durante la
+scrittura (`persist_noclobber`); con la sovrascrittura la rinomina la
+sostituisce.
+
+### Un piano da file a file
+
+`esegui_da_file` controlla prima di leggere che ogni output del piano abbia
+un solo percorso, che i percorsi d'uscita siano distinti fra loro e dagli
+ingressi (per testo e, per i file esistenti, per percorso canonico) e
+scrivibili; poi carica gli input nell'ordine dato, esegue `validate` e `run`,
+e scrive gli output nell'ordine del piano, liberando ognuno appena scritto.
+
+### Memoria
+
+Le tabelle caricate contano nel budget del piano
+(`max_governed_memory_bytes`) come in `run`: ogni input si legge con il
+budget residuo, e dopo la lettura i byte vivi esatti devono starci.
+
+| passo | controllo prima | misura (Windows, allocazioni contate, 1 000–5 000 000 righe) |
+| --- | --- | --- |
+| lettura Arrow IPC | dimensione del file, il doppio se i blocchi sono più di uno (ricomposizione) | picco 1,0 volte la tabella con un blocco, 2,0 con più blocchi |
+| lettura Parquet | 5 volte la stima dal footer, più 1 MiB | picco fino a 2,8 volte la tabella da 20 000 righe in su (liste, interi e float con null; 4 volte a 1 000 righe, per i buffer fissi), sempre sotto il 75% della previsione |
+| scrittura Arrow IPC | due volte il blocco (≤ 8 MiB) e i dizionari, più 1 MiB | picco sotto 3 MiB |
+| scrittura Parquet | 4 volte i byte del row group più grande, più 8 MiB | picco fino a 45 MiB (liste, 5 milioni di righe) |
+
+La **stima dal footer** Parquet è il maggiore fra i byte non compressi dei
+column chunk e i valori per la larghezza fisica di ogni foglia, più i byte
+decodificati dei `BYTE_ARRAY` quando il file li dichiara
+(`unencoded_byte_array_data_bytes`). Le misure si rifanno con un
+allocatore che conta, fuori dal workspace (niente `unsafe` qui).
+
+### Limiti dichiarati
+
+- **Transitori di file previsti, non misurati.**
+  *Regola*: prima di leggere un Parquet e prima di scrivere si verifica un
+  picco previsto; dopo la lettura, i byte vivi esatti.
+  *Ambito*: `parquet_io::leggi`, `ipc::leggi`, `esegui_da_file`.
+  *Hazard*: la previsione Parquet viene dalle misure dei profili sopra; un
+  file senza `unencoded_byte_array_data_bytes` con stringhe lunghe
+  codificate a dizionario si decodifica in molti più byte di quanti il
+  footer ne mostri, e la decodifica può superare il budget prima del
+  controllo esatto, che allora fallisce con `ResourceLimit` dopo il picco.
+  Come il budget del runner, non è un tetto duro sulla memoria del processo.
+  *Rientro*: un allocatore contato per il processo.
+- **Tipi Parquet rifiutati in scrittura**: `Interval(MonthDayNano)` e
+  `RunEndEncoded` (errore di `parquet`, nessun file); un test ne tiene
+  l'elenco. Una tabella senza colonne non si scrive in Parquet (il numero di
+  righe andrebbe perso): si usa Arrow IPC.
+- **Codec Parquet**: solo `UNCOMPRESSED`, `SNAPPY`, `ZSTD` sono compilati;
+  `GZIP`, `BROTLI`, `LZ4`, `LZ4_RAW`, `LZO` si rifiutano prima di decodificare
+  (`Unsupported`). Arrow IPC compresso (LZ4/ZSTD) si rifiuta con l'errore di
+  Arrow.
+- **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
+  `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
+  rifiutano; il contratto ammette una sola colonna geometrica (D16), quindi
+  un file con più colonne geometriche si rifiuta (`Schema`). Il PROJJSON
+  letto si identifica per `id` e `type`: il resto del documento non si
+  confronta con la tabella, e un documento che dichiara un `id` EPSG con
+  parametri diversi da quelli del registro passa come quel codice.
+- **Metadati geometrici normalizzati**: dopo GeoParquet il campo porta il
+  `geo` di campo e il blocco canonico nella forma del contratto, non i byte
+  di metadati che aveva prima della scrittura; il contratto si conserva
+  (provato), i byte dei metadati no.
+- **Più output, non una transazione**: ogni file è atomico, l'insieme degli
+  output no; un errore sul secondo lascia scritto il primo. La directory non
+  si sincronizza dopo la rinomina (su un crash del sistema la rinomina può
+  non essere durevole).
+- **Errori di `parquet` come codici**: il testo della dipendenza non entra
+  nei messaggi (può contenere valori), solo la variante (`parquet error:
+  general`, …), come per Arrow.
+
 ## Costruire e provare
 
-Serve solo `rustup`: la toolchain (1.98.0) è fissata in
-`rust-toolchain.toml`. Niente dipendenze native.
+Serve `rustup`: la toolchain (1.98.0) è fissata in `rust-toolchain.toml`.
+L'unico codice nativo è libzstd, che `zstd-sys` compila con `cc` (niente
+cmake): basta il compilatore C che il linker del target già richiede
+(MSVC su Windows, `cc` su Linux).
 
 ```sh
 cargo build --workspace --locked

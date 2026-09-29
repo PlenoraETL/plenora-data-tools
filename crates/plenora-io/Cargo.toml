@@ -1,0 +1,25 @@
+[package]
+name = "plenora-io"
+description = "Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+plenora-core.workspace = true
+plenora-pipeline.workspace = true
+parquet.workspace = true
+base64.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+# Oracolo del riquadro e dei tipi letti dal WKB: codifica di riferimento
+# (`encode_geometry`) e `geo::BoundingRect` (tests/wkb_oracolo.rs).
+plenora-kernels-geo.workspace = true
+geo.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

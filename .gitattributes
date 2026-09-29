@@ -5,3 +5,6 @@
 # Il catalogo delle misure e' la fonte del modello di costo: i byte restano
 # quelli della campagna, cosi' lo SHA-256 registrato nel modello resta vero.
 data/misure/*.json -text
+# File di dati binari delle fixture di plenora-io.
+*.parquet binary
+*.arrow binary
