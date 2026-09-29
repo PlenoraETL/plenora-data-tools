@@ -160,7 +160,14 @@ pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
         } else {
             intervalli.iter().map(traduci).collect()
         };
-        let mut builder = StringBuilder::with_capacity(righe, valori.value_data().len());
+        // Capacita' dai byte della fetta, non dell'intero buffer condiviso.
+        let offsets = valori.value_offsets();
+        let byte = offsets
+            .first()
+            .zip(offsets.last())
+            .and_then(|(inizio, fine)| usize::try_from(fine - inizio).ok())
+            .unwrap_or_default();
+        let mut builder = StringBuilder::with_capacity(righe, byte);
         for (row, traduzione) in chunk.into_iter().flatten().enumerate() {
             if matches!(traduzione, Traduzione::Nulla) {
                 builder.append_null();

@@ -633,6 +633,26 @@ mod confronti {
         stable_fingerprint_riferimento,
     };
     use crate::test_support::{assert_same_outcome_bits, nullable_batch};
+    use plenora_core::arrow::array::Array;
+    use plenora_core::Result;
+
+    /// Esiti completi, e in piu' i buffer di ogni colonna Utf8 dell'uscita:
+    /// offset, byte dei valori e bitmap dei null (presente o assente).
+    fn confronta(veloce: Result<RecordBatch>, riferimento: Result<RecordBatch>) {
+        if let (Ok(veloce), Ok(riferimento)) = (&veloce, &riferimento) {
+            for (a, b) in veloce.columns().iter().zip(riferimento.columns()) {
+                if let (Some(a), Some(b)) = (
+                    a.as_any().downcast_ref::<StringArray>(),
+                    b.as_any().downcast_ref::<StringArray>(),
+                ) {
+                    assert_eq!(a.value_offsets(), b.value_offsets(), "offset");
+                    assert_eq!(a.value_data(), b.value_data(), "byte dei valori");
+                    assert_eq!(a.nulls(), b.nulls(), "bitmap dei null");
+                }
+            }
+        }
+        assert_same_outcome_bits(veloce, riferimento);
+    }
 
     /// Chiave HMAC dei confronti (corta) e chiave oltre il blocco da 64 byte.
     const CHIAVE: &str = "PLENORA_HMAC_ORACOLO_CHUNK";
@@ -669,10 +689,7 @@ mod confronti {
                     null_policy: copia_politica(&null_policy),
                     null_literal: null_literal.into(),
                 };
-                assert_same_outcome_bits(
-                    md5_hash(batch, &md5()),
-                    md5_hash_riferimento(batch, &md5()),
-                );
+                confronta(md5_hash(batch, &md5()), md5_hash_riferimento(batch, &md5()));
                 let sha = || Sha256Hash {
                     columns: colonne.to_vec(),
                     output_column: "h".into(),
@@ -680,7 +697,7 @@ mod confronti {
                     null_policy: copia_politica(&null_policy),
                     null_literal: null_literal.into(),
                 };
-                assert_same_outcome_bits(
+                confronta(
                     sha256_hash(batch, &sha()),
                     sha256_hash_riferimento(batch, &sha()),
                 );
@@ -695,7 +712,7 @@ mod confronti {
                     output_column: "fingerprint".into(),
                     algorithm,
                 };
-                assert_same_outcome_bits(
+                confronta(
                     stable_fingerprint(batch, &config),
                     stable_fingerprint_riferimento(batch, &config),
                 );
@@ -713,7 +730,7 @@ mod confronti {
                     output_column: "hmac".into(),
                     null_policy,
                 };
-                assert_same_outcome_bits(
+                confronta(
                     hmac_sha256(batch, &config),
                     hmac_sha256_riferimento(batch, &config),
                 );
@@ -890,7 +907,7 @@ mod confronti {
                 null_policy: HashNullPolicy::Empty,
                 null_literal: String::new(),
             };
-            assert_same_outcome_bits(
+            confronta(
                 md5_hash(&batch, &config),
                 md5_hash_riferimento(&batch, &config),
             );
@@ -969,6 +986,35 @@ mod confronti {
             ) as ArrayRef,
         )]);
         confronta_tutto(&decimali, &nomi(&["m"]));
+        // hmac `null`: null in `a` ed errore in `b` sulla stessa riga; la
+        // riga e' nulla senza leggere `b` (con `empty` e `skip`, errore).
+        let null_prima = nullable_batch(vec![
+            (
+                "a",
+                Arc::new(StringArray::from(vec![Some("x"), None, Some("y")])) as ArrayRef,
+            ),
+            (
+                "b",
+                Arc::new(BinaryArray::from(vec![
+                    Some(b"ok".as_slice()),
+                    Some(&[0xff_u8][..]),
+                    Some(b"ok".as_slice()),
+                ])),
+            ),
+        ]);
+        confronta_tutto(&null_prima, &nomi(&["a", "b"]));
+    }
+
+    /// Fette con offset diverso da zero, su piu' chunk.
+    #[test]
+    fn fette_del_batch() {
+        let batch = batch_tutti_i_tipi(RIGHE_PER_CHUNK * 5 + 9);
+        let tutte = nomi(&["s", "i", "f", "b", "u", "d", "t", "tn", "m", "m0", "y", "k"]);
+        for (inizio, righe) in [(3, RIGHE_PER_CHUNK * 4), (RIGHE_PER_CHUNK + 1, 7), (5, 0)] {
+            let fetta = batch.slice(inizio, righe);
+            confronta_tutto(&fetta, &tutte);
+            confronta_tutto(&fetta, &nomi(&["s"]));
+        }
     }
 
     /// Cella casuale di un testo: dai testi avversari o da Unicode qualunque.
