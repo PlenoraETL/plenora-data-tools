@@ -2,8 +2,6 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::hash::BuildHasherDefault;
-use std::hash::Hasher as _;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -16,7 +14,8 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::arrow::select::concat::concat_batches;
 use tempfile::TempDir;
 
-use crate::aggregation::{self, Aggregate, Distinct, Keep, KeyColumn, KeyHasher, Sort};
+use crate::aggregation::{self, Aggregate, Distinct, Keep, KeyColumn, Sort};
+use crate::hashing::{hash_chiave, ChiaveBuildHasher};
 use crate::setops::{self, CompactRowEncoder};
 use crate::Limits;
 use crate::{column_index, replace_or_append, select_rows};
@@ -73,20 +72,21 @@ fn partition(key: &[u8], partitions: usize) -> Result<usize> {
             "spill richiede almeno una partizione".into(),
         ));
     }
-    // `KeyHasher` (FxHash+splitmix64, deterministico per costruzione) al
-    // posto di SHA-256: la scelta della partizione non e' osservabile —
-    // la correttezza richiede solo "stessa chiave -> stessa partizione"
+    // `hash_chiave` (deterministico per costruzione, nessun seme) al posto
+    // di SHA-256: la scelta della partizione non e' osservabile nell'output
+    // — la correttezza richiede solo "stessa chiave -> stessa partizione"
     // (il riordino canonico usa i byte di chiave, mai la partizione), e un
     // hash crittografico per riga sarebbe il costo dominante dello spill.
-    let mut hasher = KeyHasher::default();
-    hasher.write(key);
+    // Non e' `KeyHasher`: sulle chiavi compatte degli interi concentrava
+    // chiavi distinte in una sola partizione, oltre il budget di memoria
+    // della partizione (errore `ResourceLimit` spurio).
     let divisor = partitions as u64;
     // `% divisor` con `divisor <= 4096` (validato da `Limits`) sta in
     // `usize` su qualunque piattaforma supportata: se questa conversione
     // fallisse sarebbe un'invariante NOSTRA rotta, non un volume di dati
     // fuori budget. Categoria `Internal`, non `ResourceLimit`: dire al
     // chiamante «rilancia con piu' budget» sarebbe un consiglio inutile.
-    usize::try_from(hasher.finish() % divisor)
+    usize::try_from(hash_chiave(key) % divisor)
         .map_err(|_| PlenoraError::Internal("indice partizione non rappresentabile".into()))
 }
 
@@ -220,10 +220,10 @@ fn read_record(
     })?))
 }
 
-/// Insieme di chiavi lette da spill con l'hash dedicato `KeyHasher`
-/// (FxHash+splitmix64, deterministico) al posto di `SipHash` (hot path minimale): stesso
-/// hasher di `partition` e delle mappe di aggregazione spilled.
-type SpillKeySet = HashSet<Box<[u8]>, BuildHasherDefault<KeyHasher>>;
+/// Insieme di chiavi lette da spill con `ChiaveHasher` (deterministico) al
+/// posto di `SipHash` (hot path minimale): stesso hash di `partition` e
+/// delle mappe di `distinct` spilled.
+type SpillKeySet = HashSet<Box<[u8]>, ChiaveBuildHasher>;
 
 fn load_key_set(path: &PathBuf, limits: &Limits) -> Result<SpillKeySet> {
     let mut reader = BufReader::with_capacity(SPILL_IO_BUFFER_BYTES, File::open(path)?);
@@ -891,8 +891,7 @@ pub fn distinct_spilled_in(
         limits.spill_partitions,
     )?;
 
-    let mut stats: HashMap<Box<[u8]>, KeyStats, std::hash::BuildHasherDefault<KeyHasher>> =
-        HashMap::default();
+    let mut stats: HashMap<Box<[u8]>, KeyStats, ChiaveBuildHasher> = HashMap::default();
     let mut estimated = 0_usize;
     let mut key = String::new();
     let mut scratch = String::new();
@@ -1407,6 +1406,60 @@ pub fn sort_spilled_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Chiave compatta di una riga con una sola colonna Int64 non nulla:
+    /// marcatore, poi 8 byte big-endian.
+    fn chiave_int64(valore: i64) -> Vec<u8> {
+        let mut chiave = vec![1_u8];
+        chiave.extend_from_slice(&valore.to_be_bytes());
+        chiave
+    }
+
+    #[test]
+    fn ripartizione_le_chiavi_int64_non_si_concentrano() {
+        // La forma della chiave e' quella di `CompactRowEncoder`.
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)])),
+            vec![Arc::new(plenora_core::arrow::array::Int64Array::from(
+                vec![21_i64],
+            ))],
+        )
+        .expect("batch");
+        let mut compatta = Vec::new();
+        CompactRowEncoder::try_new(&batch)
+            .expect("encoder")
+            .encode_into(0, &mut compatta)
+            .expect("chiave");
+        assert_eq!(compatta, chiave_int64(21));
+
+        // Con `KeyHasher` le chiavi di 21 e 2048 avevano lo stesso hash, e
+        // quindi la stessa partizione per qualunque numero di partizioni.
+        let (a, b) = (chiave_int64(21), chiave_int64(2048));
+        assert_ne!(hash_chiave(&a), hash_chiave(&b));
+        let separate = (2..=64)
+            .filter(|partizioni| {
+                partition(&a, *partizioni).expect("a") != partition(&b, *partizioni).expect("b")
+            })
+            .count();
+        assert!(separate > 40, "21 e 2048 separate in {separate} casi su 63");
+
+        // Un intervallo contiguo di interi si distribuisce in modo uniforme:
+        // nessuna partizione oltre 1,2 volte la media (piu' 30 righe di
+        // margine statistico per le partizioni piccole).
+        let chiavi = 200_000_usize;
+        for partizioni in [2_usize, 7, 64, 4096] {
+            let mut conteggi = vec![0_usize; partizioni];
+            for valore in 0..i64::try_from(chiavi).expect("chiavi") {
+                conteggi[partition(&chiave_int64(valore), partizioni).expect("partizione")] += 1;
+            }
+            let massimo = conteggi.iter().copied().max().unwrap_or(0);
+            let media = chiavi / partizioni;
+            assert!(
+                massimo * 10 <= media * 12 + 300,
+                "{partizioni} partizioni: massimo {massimo}, media {media}"
+            );
+        }
+    }
 
     #[test]
     fn le_run_del_sort_contano_i_byte_tecnici_anche_su_righe_strette() {

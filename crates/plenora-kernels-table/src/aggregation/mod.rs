@@ -23,7 +23,6 @@ mod window;
 pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
 // Il comparatore tipizzato e' pubblico: e' il contratto d'ordine dei kernel
 // (`sort`, top-N, merge dello spill) e va verificabile dall'esterno.
-pub(crate) use crate::hashing::KeyHasher;
 pub use compare::{compare_cells_typed, is_sortable, validate_sortable};
 pub(crate) use grouping::{visit_key_ids_where, BinaryKeyEncoder, KeyColumn};
 pub(crate) use sort::sort_permutation;

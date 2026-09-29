@@ -1,8 +1,14 @@
-//! Hasher deterministico condiviso delle chiavi.
+//! Hasher deterministici condivisi delle chiavi.
 //!
-//! Un solo hasher per tutti i kernel che raggruppano o uniscono per chiave:
-//! due copie che divergono sul finalizer o sulla costante raggrupperebbero
-//! le stesse chiavi in modo diverso, e solo su certi dati.
+//! Due hasher, ciascuno con un solo posto in cui e' definito: due copie che
+//! divergono sul finalizer o sulla costante raggrupperebbero le stesse
+//! chiavi in modo diverso, e solo su certi dati.
+//!
+//! - [`KeyHasher`]: valori nativi (interi, testi, valori di join) nelle
+//!   mappe dei kernel;
+//! - [`ChiaveHasher`]: chiavi binarie di riga (arena di `interning`, mappe
+//!   e partizioni dello spill), dove `KeyHasher` degrada (vedi la sua
+//!   documentazione).
 
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -55,6 +61,68 @@ impl Hasher for KeyHasher {
 /// `BuildHasher` da usare nelle mappe e negli insiemi di chiavi dei kernel.
 pub type FastHasher = BuildHasherDefault<KeyHasher>;
 
+/// Hasher a blocchi con ripiegamento dei bit alti, per le chiavi binarie di
+/// riga (arena di `interning`, mappe e partizioni dello spill).
+///
+/// `KeyHasher` non va bene li': il suo passo per blocco (`rotl 5`, xor,
+/// prodotto) propaga le differenze solo verso i bit alti, e quando i byte
+/// che variano stanno in cima a un blocco e nel blocco di coda — la chiave
+/// compatta di un Int64, marcatore piu' 8 byte big-endian — due blocchi si
+/// annullano. Un milione di interi distinti danno 32 768 hash; le chiavi di
+/// 21 e 2048 hanno lo stesso hash, quindi la stessa partizione di spill per
+/// qualunque numero di partizioni (test `ripartizione_…` di `spill`).
+///
+/// Qui ogni blocco e' seguito da un ripiegamento dei bit alti su quelli
+/// bassi, la lunghezza di ogni `write` entra nel digest, e il finalizer e'
+/// lo splitmix64 di `KeyHasher`. Deterministico per costruzione: nessun
+/// seme, stessi byte -> stesso hash su ogni esecuzione e piattaforma (i
+/// blocchi si leggono little-endian esplicito). Non e' keyed: vale lo
+/// stesso rischio residuo dichiarato per `KeyHasher`.
+#[derive(Default)]
+pub struct ChiaveHasher(u64);
+
+/// Moltiplicatore del passo per blocco (parte frazionaria del rapporto
+/// aureo, dispari).
+const K_CHIAVE: u64 = 0x9e37_79b9_7f4a_7c15;
+
+const fn mischia(stato: u64, blocco: u64) -> u64 {
+    let stato = (stato ^ blocco).wrapping_mul(K_CHIAVE);
+    stato ^ (stato >> 29)
+}
+
+impl Hasher for ChiaveHasher {
+    fn finish(&self) -> u64 {
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let (blocchi, resto) = bytes.as_chunks::<8>();
+        self.0 = mischia(self.0, bytes.len() as u64);
+        for blocco in blocchi {
+            self.0 = mischia(self.0, u64::from_le_bytes(*blocco));
+        }
+        if !resto.is_empty() {
+            let mut coda = [0_u8; 8];
+            coda[..resto.len()].copy_from_slice(resto);
+            self.0 = mischia(self.0, u64::from_le_bytes(coda));
+        }
+    }
+}
+
+/// `BuildHasher` delle mappe di chiavi binarie di riga.
+pub type ChiaveBuildHasher = BuildHasherDefault<ChiaveHasher>;
+
+/// Hash di una chiave binaria di riga con [`ChiaveHasher`].
+#[must_use]
+pub fn hash_chiave(chiave: &[u8]) -> u64 {
+    let mut hasher = ChiaveHasher::default();
+    hasher.write(chiave);
+    hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +156,32 @@ mod tests {
             "dispersione insufficiente dei bit bassi: {}",
             low_bits.len()
         );
+    }
+
+    /// Chiavi compatte di un Int64 (marcatore, poi 8 byte big-endian) per i
+    /// valori `0..1_000_000`: `hash_chiave` le tiene tutte distinte
+    /// (`KeyHasher`, misurato il 2026-09-29, ne distingue 32 768).
+    #[test]
+    fn hash_chiave_separa_le_chiavi_compatte_degli_interi() {
+        let mut nostri = std::collections::HashSet::new();
+        let mut condivisi = std::collections::HashSet::new();
+        for valore in 0..1_000_000_i64 {
+            let mut chiave = vec![1_u8];
+            chiave.extend_from_slice(&valore.to_be_bytes());
+            nostri.insert(hash_chiave(&chiave));
+            condivisi.insert(hash(&chiave));
+        }
+        assert_eq!(nostri.len(), 1_000_000, "KeyHasher: {}", condivisi.len());
+    }
+
+    #[test]
+    fn hash_chiave_e_stabile_e_uguale_all_hasher_in_streaming() {
+        // Valori fissati: un cambio della funzione cambia le partizioni di
+        // spill, e deve essere una scelta esplicita.
+        assert_eq!(hash_chiave(b""), 0x0);
+        assert_eq!(hash_chiave(b"chiave"), 1_370_464_986_982_898_267);
+        let mut hasher = ChiaveHasher::default();
+        hasher.write(b"chiave");
+        assert_eq!(hasher.finish(), hash_chiave(b"chiave"));
     }
 }

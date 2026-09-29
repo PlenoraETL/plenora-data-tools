@@ -67,6 +67,54 @@ auto-intersezioni sub-quadratica a verdetto identico: la sequenza copiata si
 toglie, la barriera torna a `check_validation` e l'oracolo resta come
 regressione.
 
+### Hash delle chiavi non keyed
+
+**Regola.** Le mappe di chiavi dei kernel tabellari usano due hash
+deterministici senza seme (`crates/plenora-kernels-table/src/hashing.rs`):
+`KeyHasher` per i valori nativi (interi, testi, valori di join) e
+`ChiaveHasher` per le chiavi binarie di riga (arena `KeyInterner` di
+aggregate, distinct, set operation, assert_unique e table_diff; mappe e
+scelta della partizione dello spill). L'uguaglianza delle chiavi si decide
+sempre sui valori o sui byte: l'hash sceglie i candidati, mai il risultato.
+
+**Ambito.** `plenora-kernels-table`: raggruppamenti, join, set operation,
+qualità, spill.
+
+**Hazard.**
+
+- nessuno dei due è keyed: dati costruiti apposta per collidere degradano
+  build e probe fino al quadratico entro i limiti di riga, che limitano `n`
+  ma non il comportamento dentro `n`. Nessuna perdita di correttezza;
+- `KeyHasher` ha un passo per blocco che propaga le differenze solo verso i
+  bit alti: su chiavi di più blocchi in cui i byte che variano stanno in
+  cima a un blocco e nel blocco di coda collide anche senza avversario (un
+  milione di chiavi compatte Int64 davano 32 768 hash). Per questo le chiavi
+  binarie di riga e lo spill usano `ChiaveHasher`; le mappe di valori nativi
+  su più blocchi (testi, chiavi composte dei join) usano ancora `KeyHasher`,
+  e lì il rischio residuo è di tempo.
+
+**Condizione di rientro.** Un hasher con chiave per processo, verificato su
+tutti gli usi (nessun output deve dipendere dall'ordine di una mappa), e
+`KeyHasher` corretto o sostituito sulle chiavi di più blocchi.
+
+### Memoria delle chiavi dei kernel in memoria non governata
+
+**Regola.** `aggregate`, `distinct`/`dedup_advanced`, le set operation,
+`assert_unique` e `table_diff` in memoria non contabilizzano le proprie
+strutture di chiavi (arena, indici, gruppi) su `max_governed_memory_bytes`:
+il budget decide solo il passaggio allo spill, sulla stima dei byte
+dell'input. Nelle varianti spilled le chiavi distinte di una partizione sono
+contabilizzate (lunghezza della chiave più 64 byte per chiave).
+
+**Ambito.** I kernel elencati, percorso in memoria.
+
+**Hazard.** Con molte chiavi distinte il picco reale supera la stima
+dell'input: l'arena delle chiavi, due `usize` e una voce di mappa per chiave
+distinta, fino a due `usize` per riga per l'assegnazione ai gruppi.
+
+**Condizione di rientro.** Contabilità esplicita delle strutture di chiavi,
+con errore `ResourceLimit` oltre il budget.
+
 ## Costruire e provare
 
 Serve solo `rustup`: la toolchain (1.98.0) è fissata in

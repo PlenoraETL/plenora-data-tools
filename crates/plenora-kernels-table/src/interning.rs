@@ -14,11 +14,13 @@
 //! restano due identita' diverse; una collisione costa tempo, mai un
 //! risultato.
 //!
-//! L'hash (`hash_chiave`) e' deterministico: l'ordine degli indici
+//! L'hash (`hashing::hash_chiave`) e' deterministico: l'ordine degli indici
 //! dipende solo dall'ordine di inserimento, non dall'hash.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+
+use crate::hashing::hash_chiave;
 
 /// Fine catena in `successivo`.
 const NESSUNO: usize = usize::MAX;
@@ -44,41 +46,6 @@ impl Hasher for HashGiaCalcolato {
     fn write_u64(&mut self, value: u64) {
         self.0 = value;
     }
-}
-
-/// Hash di una chiave binaria.
-///
-/// Non e' `KeyHasher`: il suo passo per blocco (`rotl 5`, xor, prodotto)
-/// propaga le differenze solo verso i bit alti, e quando i byte che
-/// variano stanno in cima a un blocco e nel blocco di coda — la chiave
-/// binaria di un Int64, marcatore piu' 8 byte big-endian — due blocchi
-/// diversi si annullano: un milione di interi distinti danno 32 768 hash
-/// diversi (test `l_hash_separa_le_chiavi_binarie_degli_interi`), e
-/// `distinct` su 10M righe era 3,4 volte piu' lento del percorso testuale.
-/// Qui ogni blocco e' seguito da un ripiegamento dei bit alti su quelli
-/// bassi, la lunghezza entra nel digest e il finalizer e' lo splitmix64 di
-/// `KeyHasher`. L'hash sceglie solo i candidati (vedi il modulo): la sua
-/// qualita' decide il tempo, mai l'identita'.
-fn hash_chiave(chiave: &[u8]) -> u64 {
-    const K: u64 = 0x9e37_79b9_7f4a_7c15;
-    let mischia = |stato: u64, blocco: u64| {
-        let stato = (stato ^ blocco).wrapping_mul(K);
-        stato ^ (stato >> 29)
-    };
-    let (blocchi, resto) = chiave.as_chunks::<8>();
-    let mut stato = mischia(0, chiave.len() as u64);
-    for blocco in blocchi {
-        stato = mischia(stato, u64::from_le_bytes(*blocco));
-    }
-    if !resto.is_empty() {
-        let mut coda = [0_u8; 8];
-        coda[..resto.len()].copy_from_slice(resto);
-        stato = mischia(stato, u64::from_le_bytes(coda));
-    }
-    let mut z = stato;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
 }
 
 /// Tabella di chiavi binarie con identita' esatta per confronto di byte.
@@ -221,20 +188,5 @@ mod tests {
             assert_eq!(nuovo, atteso == prossimo);
         }
         assert_eq!(tabella.len(), riferimento.len());
-    }
-
-    /// Chiavi binarie di un Int64 (marcatore, poi 8 byte big-endian) per i
-    /// valori `0..1_000_000`: l'hash deve tenerle distinte. `KeyHasher`, su
-    /// queste stesse chiavi, ne distingue 32 768 (misura del 2026-09-29), ed
-    /// e' per questo che la tabella non lo usa.
-    #[test]
-    fn l_hash_separa_le_chiavi_binarie_degli_interi() {
-        let mut hash = std::collections::HashSet::new();
-        for valore in 0..1_000_000_i64 {
-            let mut chiave = vec![1_u8];
-            chiave.extend_from_slice(&valore.to_be_bytes());
-            hash.insert(hash_chiave(&chiave));
-        }
-        assert_eq!(hash.len(), 1_000_000);
     }
 }
