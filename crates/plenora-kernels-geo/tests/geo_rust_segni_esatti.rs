@@ -24,10 +24,15 @@ use plenora_kernels_geo::rust_backend::{
 
 const LIMIT: u64 = 1_000_000;
 
-/// Precisione dei test in unita' astratte (la griglia degli overlay resta
-/// sotto su ogni estensione usata qui).
-fn precisione() -> Precision {
-    Precision::new(1e-6).expect("precisione")
+/// Precisione dei test in unita' astratte, compatibile con il modulo delle
+/// coordinate: i kernel rifiutano una precisione piu' fine di 64 volte la
+/// spaziatura dei `f64` al modulo massimo (`PrecisionInsufficient`). Qui la
+/// piu' fine ammessa con margine, almeno un milionesimo: i casi provano i
+/// segni esatti, non la politica del centimetro.
+fn precisione_per(modulo: f64) -> Precision {
+    let modulo = modulo.abs();
+    let spaziatura = f64::from_bits(modulo.to_bits() + 1) - modulo;
+    Precision::new((128.0 * spaziatura).max(1e-6)).expect("precisione")
 }
 const CRS: &str = "EPSG:3857";
 
@@ -84,7 +89,7 @@ fn il_quadrato_lontano_dall_origine_resta_un_poligono() {
                         LIMIT,
                         LIMIT,
                         LIMIT,
-                        precisione(),
+                        precisione_per(x.abs().max(y.abs()) + lato),
                     )
                     .unwrap_or_else(|errore| {
                         panic!("({x}, {y}, {lato}) orario={orario} inizio={inizio}: {errore}")
@@ -115,7 +120,7 @@ fn il_quadrato_con_buco_lontano_dall_origine_conserva_il_buco() {
         LIMIT,
         LIMIT,
         LIMIT,
-        precisione(),
+        precisione_per(a + 4.0),
     )
     .expect("polygonize");
     assert_eq!(risultato.polygons.len(), 2);
@@ -132,9 +137,16 @@ fn split_e_make_valid_lontano_dall_origine() {
         (a + 1.0, a - 1.0),
         (a + 1.0, a + 3.0),
     ]));
-    let parti =
-        split_polygon_by_linework(&sorgente, &lama, LIMIT, LIMIT, LIMIT, LIMIT, precisione())
-            .expect("split");
+    let parti = split_polygon_by_linework(
+        &sorgente,
+        &lama,
+        LIMIT,
+        LIMIT,
+        LIMIT,
+        LIMIT,
+        precisione_per(a + 4.0),
+    )
+    .expect("split");
     assert_eq!(parti.len(), 2);
 
     let farfalla = Geometry::Polygon(Polygon::new(
@@ -150,7 +162,8 @@ fn split_e_make_valid_lontano_dall_origine() {
     .to_wkb(CoordDimensions::xy())
     .expect("wkb");
     for method in [RepairMethod::Linework, RepairMethod::Structure] {
-        let riparata = make_valid_wkb(&farfalla, method, false, precisione()).expect("make_valid");
+        let riparata =
+            make_valid_wkb(&farfalla, method, false, precisione_per(a + 4.0)).expect("make_valid");
         let area = geometry_from_wkb(&riparata)
             .expect("valida")
             .unsigned_area();
@@ -197,7 +210,7 @@ fn l_adapter_arrow_classifica_il_quadrato_come_poligono() {
                 CRS,
                 PolygonizeParams::default(),
                 LIMIT,
-                precisione(),
+                precisione_per(x.abs().max(y.abs()) + lato),
             )
             .expect("polygonize");
             let classi = batches[0]
@@ -230,7 +243,7 @@ fn l_adapter_arrow_classifica_il_quadrato_come_poligono() {
         CRS,
         None,
         LIMIT,
-        precisione(),
+        precisione_per(a + 4.0),
     )
     .expect("split");
     assert_eq!(batches[0].num_rows(), 2);

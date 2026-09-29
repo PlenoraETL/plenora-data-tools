@@ -516,29 +516,10 @@ const NODING_PRECISION_SHARE: f64 = 0.2;
 /// uno dei due segmenti). Dividere il segmento in quel punto sposta il
 /// linework di quanto il punto dista dal segmento: e' questa la distanza che
 /// si misura, per entrambi i segmenti, e che la precisione dichiarata
-/// limita. La distanza e' calcolata sulle differenze dall'estremo `start` e
-/// maggiorata di un margine d'arrotondamento relativo alle grandezze in
-/// gioco (`16 * EPSILON`, piu' largo dei pochi arrotondamenti del calcolo):
-/// il controllo puo' rifiutare un punto al limite, mai accettarne uno oltre.
+/// limita, con il margine d'arrotondamento di
+/// [`super::precision::punto_entro_segmento`].
 fn noding_point_within(point: Coord<f64>, segment: Segment, budget: f64) -> bool {
-    let point_x = point.x - segment.start.x;
-    let point_y = point.y - segment.start.y;
-    let direction_x = segment.end.x - segment.start.x;
-    let direction_y = segment.end.y - segment.start.y;
-    let length_squared = direction_x.mul_add(direction_x, direction_y * direction_y);
-    let parameter = if length_squared > 0.0 {
-        (point_x.mul_add(direction_x, point_y * direction_y) / length_squared).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let distance = parameter
-        .mul_add(-direction_x, point_x)
-        .hypot(parameter.mul_add(-direction_y, point_y));
-    let rounding = 16.0
-        * f64::EPSILON
-        * (point_x.abs() + point_y.abs() + direction_x.abs() + direction_y.abs());
-    let bound = distance + rounding;
-    bound.is_finite() && bound <= budget
+    super::precision::punto_entro_segmento(point, segment.start, segment.end, budget)
 }
 
 /// Double-double minimo per il noding. La sequenza delle operazioni segue
@@ -1979,6 +1960,14 @@ pub fn polygonize_linework_rust(
     linework
         .check_validation()
         .map_err(|error| PolygonizeError::InvalidInput(error.to_string()))?;
+    // Coordinate troppo rade per la precisione: nessun punto calcolato
+    // (noding) potrebbe restarvi entro.
+    if !super::precision::coordinate_abbastanza_fitte(
+        super::precision::modulo_massimo(linework.coords_iter()),
+        options.precision,
+    ) {
+        return Err(PolygonizeError::PrecisionInsufficient);
+    }
     let count = segment_count(&lines)?;
     let mut segments = collect_segments(&lines, count)?;
     if options.node_input {

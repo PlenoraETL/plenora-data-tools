@@ -18,6 +18,7 @@
 //! Le funzioni dei kernel chiamate senza CRS ricevono la precisione come
 //! argomento esplicito: nessun valore predefinito.
 
+use geo::Coord;
 use plenora_core::crs::ResolvedCrs;
 
 use super::RustBackendError;
@@ -62,6 +63,75 @@ impl Precision {
     }
 }
 
+/// Frazione della precisione che la spaziatura dei `f64` alle coordinate di
+/// un'operazione puo' occupare: `p / 64`.
+const SPAZIATURA_MASSIMA_IN_PRECISIONI: f64 = 1.0 / 64.0;
+
+/// Le coordinate di modulo fino a `magnitude` sono abbastanza fitte per la
+/// precisione `precision`?
+///
+/// Un punto calcolato (un incrocio, una coordinata riportata dalla griglia
+/// dell'overlay) si arrotonda al `f64` piu' vicino: a `2^52` l'unita' in
+/// ultima posizione e' 1, e l'incrocio esatto `(B, B + 1.5)` torna a 27.7
+/// cm, qualunque sia il passo della griglia. Oltre `ulp(magnitude) > p /
+/// 64` nessun kernel calcola: `PrecisionInsufficient`. In metri, con 1 cm,
+/// e' un modulo di circa `2^39` m, fuori da ogni dominio di un CRS reale.
+pub(crate) fn coordinate_abbastanza_fitte(magnitude: f64, precision: f64) -> bool {
+    let magnitude = magnitude.abs();
+    if !magnitude.is_finite() {
+        return false;
+    }
+    let successivo = f64::from_bits(magnitude.to_bits().saturating_add(1));
+    let spaziatura = successivo - magnitude;
+    spaziatura.is_finite() && spaziatura <= precision * SPAZIATURA_MASSIMA_IN_PRECISIONI
+}
+
+/// Il modulo massimo delle coordinate, `0` senza coordinate; `NaN` se una
+/// coordinata non e' un numero (e allora il controllo di spaziatura
+/// rifiuta).
+pub(crate) fn modulo_massimo(coordinate: impl IntoIterator<Item = Coord<f64>>) -> f64 {
+    let mut massimo = 0.0_f64;
+    for c in coordinate {
+        if c.x.is_nan() || c.y.is_nan() {
+            return f64::NAN;
+        }
+        massimo = massimo.max(c.x.abs()).max(c.y.abs());
+    }
+    massimo
+}
+
+/// Il punto dista dal segmento `start -> end` al piu' `budget`?
+///
+/// La distanza e' calcolata sulle differenze da `start` e maggiorata di un
+/// margine d'arrotondamento relativo alle grandezze in gioco (`16 *
+/// EPSILON`, piu' largo dei pochi arrotondamenti del calcolo): il controllo
+/// puo' rifiutare un punto al limite, mai accettarne uno oltre.
+pub(crate) fn punto_entro_segmento(
+    point: Coord<f64>,
+    start: Coord<f64>,
+    end: Coord<f64>,
+    budget: f64,
+) -> bool {
+    let point_x = point.x - start.x;
+    let point_y = point.y - start.y;
+    let direction_x = end.x - start.x;
+    let direction_y = end.y - start.y;
+    let length_squared = direction_x.mul_add(direction_x, direction_y * direction_y);
+    let parameter = if length_squared > 0.0 {
+        (point_x.mul_add(direction_x, point_y * direction_y) / length_squared).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let distance = parameter
+        .mul_add(-direction_x, point_x)
+        .hypot(parameter.mul_add(-direction_y, point_y));
+    let rounding = 16.0
+        * f64::EPSILON
+        * (point_x.abs() + point_y.abs() + direction_x.abs() + direction_y.abs());
+    let bound = distance + rounding;
+    bound.is_finite() && bound <= budget
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +162,17 @@ mod tests {
                 resolved.precisione_coordinate().unwrap().to_bits()
             );
         }
+    }
+
+    /// `ulp(2^39) = 2^-13` sta sotto `0.01 / 64`; `ulp(2^40) = 2^-12` no.
+    #[test]
+    fn spaziatura_delle_coordinate_rispetto_alla_precisione() {
+        assert!(coordinate_abbastanza_fitte(2_f64.powi(39), 0.01));
+        assert!(!coordinate_abbastanza_fitte(2_f64.powi(40), 0.01));
+        assert!(!coordinate_abbastanza_fitte(2_f64.powi(52), 0.01));
+        assert!(coordinate_abbastanza_fitte(0.0, 0.01));
+        assert!(!coordinate_abbastanza_fitte(f64::MAX, 0.01));
+        assert!(!coordinate_abbastanza_fitte(f64::NAN, 0.01));
     }
 
     #[test]

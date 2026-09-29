@@ -30,6 +30,7 @@ use geo::{
     BooleanOps, Coord, CoordsIter, Geometry, GeometryCollection, Intersects, Line, LineString,
     MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
+use rstar::{RTree, RTreeObject, AABB};
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,6 +119,8 @@ impl From<PolygonizeError> for MakeValidError {
             PolygonizeError::WorkLimit { actual, limit } => Self::WorkLimit { actual, limit },
             PolygonizeError::OutputLimit { actual, limit } => Self::OutputLimit { actual, limit },
             PolygonizeError::IndexOverflow => Self::IndexOverflow,
+            // Un solo rifiuto legato alla precisione, qualunque passo lo dia.
+            PolygonizeError::PrecisionInsufficient => Self::PrecisionInsufficient,
             other => Self::Polygonize(other),
         }
     }
@@ -582,14 +585,100 @@ impl OverlayNormalizer {
 /// precisione i vertici possono spostarsi e le feature piu' sottili possono
 /// fondersi o sparire: errore dichiarato, non un rifiuto.
 ///
-/// Fuori dal bilancio restano gli agganci interni di `i_overlay` durante lo
-/// split dei segmenti (raggio che cresce a ogni giro,
-/// `split::snap_radius`): limite dichiarato in README («Limiti dichiarati»).
+/// Prima della griglia, la spaziatura dei `f64` alle coordinate degli
+/// operandi ([`super::precision::coordinate_abbastanza_fitte`]): una
+/// coordinata riportata dalla griglia si arrotonda al `f64` piu' vicino, e
+/// a `2^52` l'arrotondamento da solo vale mezza unita'.
+///
+/// Gli agganci interni di `i_overlay` durante lo split dei segmenti (raggio
+/// che cresce a ogni giro, `split::snap_radius`) non sono nel bilancio: li
+/// limita il controllo finale [`checked_displacement`].
 fn checked_grid(normalizer: OverlayNormalizer, precision: f64) -> Result<(), MakeValidError> {
-    if 2.0 * normalizer.grid_diagonal() > precision {
+    let magnitude = [
+        normalizer.minimum_x,
+        normalizer.minimum_x + normalizer.span_x,
+        normalizer.minimum_y,
+        normalizer.minimum_y + normalizer.span_y,
+    ]
+    .into_iter()
+    .fold(0.0_f64, |massimo, value| massimo.max(value.abs()));
+    if !super::precision::coordinate_abbastanza_fitte(magnitude, precision)
+        || 2.0 * normalizer.grid_diagonal() > precision
+    {
         return Err(MakeValidError::PrecisionInsufficient);
     }
     Ok(())
+}
+
+/// Un lato d'ingresso degli operandi, indicizzato per il controllo finale.
+struct OperandEdge {
+    start: Coord<f64>,
+    end: Coord<f64>,
+}
+
+impl RTreeObject for OperandEdge {
+    type Envelope = AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        AABB::from_corners(
+            [self.start.x.min(self.end.x), self.start.y.min(self.end.y)],
+            [self.start.x.max(self.end.x), self.start.y.max(self.end.y)],
+        )
+    }
+}
+
+/// Controllo finale di ogni overlay: ogni vertice dell'output sta entro la
+/// precisione da un lato d'ingresso di uno dei due operandi, con il margine
+/// d'arrotondamento di [`super::precision::punto_entro_segmento`];
+/// altrimenti [`MakeValidError::PrecisionInsufficient`].
+///
+/// Limita lo spostamento dei vertici qualunque cosa abbia fatto `i_overlay`
+/// dentro (gli agganci con raggio `2^(k/2)` passi al giro `k` non hanno un
+/// tetto a priori). Non dice che un vertice sta sul lato **giusto** ne' che
+/// un lato dell'output segue il linework fra i suoi estremi: vedi README
+/// («Limiti dichiarati»). I lati stanno in un `RTree`: ogni vertice
+/// interroga solo quelli nel suo quadrato di lato `2p`.
+fn checked_displacement(
+    output: &MultiPolygon<f64>,
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+    precision: f64,
+) -> Result<(), MakeValidError> {
+    let edges = polygonal_boundaries(left)
+        .chain(polygonal_boundaries(right))
+        .map(|line| OperandEdge {
+            start: line.start,
+            end: line.end,
+        })
+        .collect::<Vec<_>>();
+    let index = RTree::bulk_load(edges);
+    for vertex in output.coords_iter() {
+        let query = AABB::from_corners(
+            [vertex.x - precision, vertex.y - precision],
+            [vertex.x + precision, vertex.y + precision],
+        );
+        let near = index.locate_in_envelope_intersecting(&query).any(|edge| {
+            super::precision::punto_entro_segmento(vertex, edge.start, edge.end, precision)
+        });
+        if !near {
+            return Err(MakeValidError::PrecisionInsufficient);
+        }
+    }
+    Ok(())
+}
+
+/// Riporta l'output normalizzato nelle coordinate originali e ne verifica lo
+/// spostamento.
+fn finished_overlay(
+    normalizer: OverlayNormalizer,
+    normalized: &MultiPolygon<f64>,
+    left: &MultiPolygon<f64>,
+    right: &MultiPolygon<f64>,
+    precision: f64,
+) -> Result<MultiPolygon<f64>, MakeValidError> {
+    let restored = normalizer.restore_multi_snapped(normalized, left, right);
+    checked_displacement(&restored, left, right, precision)?;
+    Ok(restored)
 }
 
 fn normalized_union(
@@ -607,7 +696,7 @@ fn normalized_union(
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .union(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    Ok(normalizer.restore_multi_snapped(&normalized, left, right))
+    finished_overlay(normalizer, &normalized, left, right, precision)
 }
 
 fn normalized_difference(
@@ -620,7 +709,7 @@ fn normalized_difference(
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .difference(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    Ok(normalizer.restore_multi_snapped(&normalized, left, right))
+    finished_overlay(normalizer, &normalized, left, right, precision)
 }
 
 fn normalized_xor(
@@ -633,7 +722,7 @@ fn normalized_xor(
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .xor(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    Ok(normalizer.restore_multi_snapped(&normalized, left, right))
+    finished_overlay(normalizer, &normalized, left, right, precision)
 }
 
 /// Se i due operandi si toccano, deciso sulle coordinate **originali** con i
@@ -1153,17 +1242,18 @@ fn linework(
             }
             if shares_collinear_boundary(&shell, &fixed) {
                 retain_internal_edges = true;
-                // Un buco che condivide un lato con la shell si unisce
-                // all'area: la parte che esce dalla shell diventa area, quella
-                // dentro non cambia nulla. Il laboratorio univa solo se l'area
-                // della differenza superava una soglia globale (`1e-12 *
-                // max(area, 1)`, poi perimetro del buco per precisione): una
-                // sporgenza di 1 m^2 da un buco di perimetro 3.6 km restava
-                // sotto soglia e perdeva la classificazione poligonale. Senza
-                // soglia non c'e' decisione da sbagliare: l'unione e' esatta
-                // entro l'errore dell'overlay, che `checked_grid` tiene sotto
-                // la precisione.
-                polygon_area = normalized_union(&polygon_area, &fixed, precision)?;
+                // Di un buco che condivide un lato con la shell diventa area
+                // solo la **sporgenza**, la parte fuori dalla shell, senza
+                // soglia: vuota, l'unione non si fa. Il laboratorio univa il
+                // buco intero se l'area della differenza superava una soglia
+                // globale, e una sporgenza di 1 m^2 da un buco di perimetro
+                // 3.6 km restava sotto; unire il buco intero, d'altra parte,
+                // reinseriva i buchi gia' sottratti che esso contiene (esito
+                // dipendente dall'ordine dei buchi).
+                let protrusion = normalized_difference(&fixed, &shell, precision)?;
+                if !protrusion.0.is_empty() {
+                    polygon_area = normalized_union(&polygon_area, &protrusion, precision)?;
+                }
             } else {
                 polygon_area = normalized_xor(&polygon_area, &fixed, precision)?;
             }
@@ -1373,6 +1463,34 @@ pub fn make_valid_geometry_rust_bounded(
 mod tests {
     use super::*;
     use geo::{polygon, Area};
+
+    /// Controllo finale degli overlay: un vertice d'uscita a 2 cm da ogni
+    /// lato degli operandi (quello che un aggancio interno di `i_overlay`
+    /// con raggio cresciuto potrebbe produrre) e' un errore; a meno di 1 cm
+    /// passa.
+    #[test]
+    fn overlay_vertex_beyond_the_precision_is_rejected() {
+        let left = MultiPolygon::new(vec![polygon![
+            (x: 0.0, y: 0.0), (x: 10.0, y: 0.0), (x: 10.0, y: 10.0),
+            (x: 0.0, y: 10.0), (x: 0.0, y: 0.0)
+        ]]);
+        let right = MultiPolygon::new(vec![polygon![
+            (x: 5.0, y: 5.0), (x: 15.0, y: 5.0), (x: 15.0, y: 15.0),
+            (x: 5.0, y: 15.0), (x: 5.0, y: 5.0)
+        ]]);
+        let spostato = |scarto: f64| {
+            MultiPolygon::new(vec![polygon![
+                (x: 0.0, y: 0.0), (x: 10.0, y: 0.0), (x: 10.0, y: 5.0),
+                (x: 5.0 + scarto, y: 5.0 + scarto), (x: 0.0, y: 10.0), (x: 0.0, y: 0.0)
+            ]])
+        };
+        assert!(checked_displacement(&spostato(0.0), &left, &right, 0.01).is_ok());
+        assert!(checked_displacement(&spostato(0.005), &left, &right, 0.01).is_ok());
+        assert!(matches!(
+            checked_displacement(&spostato(0.02), &left, &right, 0.01),
+            Err(MakeValidError::PrecisionInsufficient)
+        ));
+    }
 
     /// Precisione dei test del laboratorio: coordinate astratte fino a
     /// qualche decina di unita', un milionesimo di unita'.

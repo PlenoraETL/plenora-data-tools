@@ -66,9 +66,10 @@
 //!     qualunque fosse l'unita': la campagna traslata di `2^30` ha trovato
 //!     130 casi in cui `LINEWORK` perdeva le linee dei buchi); ora un punto e'
 //!     sul segmento se lo e' esattamente o se dista al piu' la precisione.
-//!     Un buco che condivide un lato con la shell si unisce sempre all'area,
-//!     invece di decidere «esce dalla shell» con una soglia d'area globale
-//!     (`1e-12 * max(area, 1)` nel laboratorio). `normalized_intersects`,
+//!     Di un buco che condivide un lato con la shell si unisce all'area
+//!     solo la sporgenza fuori dalla shell, invece di decidere «esce dalla
+//!     shell» con una soglia d'area globale (`1e-12 * max(area, 1)` nel
+//!     laboratorio). `normalized_intersects`,
 //!     che in `STRUCTURE` sceglie fra buco da sottrarre e da promuovere, e'
 //!     deciso sulle coordinate originali con i predicati esatti di `geo`;
 //!   - **controlli a posteriori di `split` relativi alla precisione**, al
@@ -90,9 +91,13 @@
 //!   vertici dell'overlay sul vertice d'ingresso piu' vicino, o sul lato
 //!   assiale d'ingresso che gli passa accanto, entro una diagonale del passo
 //!   della griglia, e la griglia stessa: entrambi nel bilancio del controllo
-//!   della griglia. Fuori dal bilancio restano gli agganci interni di
-//!   `i_overlay` allo split dei segmenti, con raggio che cresce a ogni giro
-//!   (limite dichiarato in README).
+//!   della griglia. Gli agganci interni di `i_overlay` allo split dei
+//!   segmenti, con raggio che cresce a ogni giro, li limita il controllo
+//!   finale: ogni vertice dell'output entro la precisione da un lato
+//!   d'ingresso (`make_valid::checked_displacement`). Prima di tutto, la
+//!   spaziatura dei `f64` al modulo massimo delle coordinate non supera
+//!   `p / 64` (`precision::coordinate_abbastanza_fitte`), in `polygonize` e
+//!   negli overlay.
 //!
 //! Il laboratorio ha girato su `geo` 0.33.1 **non patchato**; qui `geo`
 //! risolve alla copia vendorizzata con `orient2d` esatto (filtro veloce piu'

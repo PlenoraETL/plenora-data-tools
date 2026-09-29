@@ -221,3 +221,139 @@ fn precisione_del_polygonize_non_valida_e_un_errore() {
         );
     }
 }
+
+fn quadrato(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> LineString<f64> {
+    LineString::from(vec![
+        (min_x, min_y),
+        (max_x, min_y),
+        (max_x, max_y),
+        (min_x, max_y),
+        (min_x, min_y),
+    ])
+}
+
+/// Revisione, quinto giro: shell `[0, 10]^2`, buchi `A = [3, 5]^2` e
+/// `B = [2, 8] x [0, 8]`, con `B` sul lato inferiore della shell e dentro.
+/// Unire `B` intero reinseriva nell'ordine `A, B` i 4 m^2 di `A`; ora si
+/// unisce solo la sporgenza di `B` fuori dalla shell (vuota). L'esito non
+/// dipende dall'ordine: `S \ A`.
+#[test]
+fn linework_non_dipende_dall_ordine_dei_buchi() {
+    let a = quadrato(3.0, 3.0, 5.0, 5.0);
+    let b = quadrato(2.0, 0.0, 8.0, 8.0);
+    for buchi in [vec![a.clone(), b.clone()], vec![b, a]] {
+        let input = Geometry::Polygon(Polygon::new(quadrato(0.0, 0.0, 10.0, 10.0), buchi));
+        let output = make_valid_geometry_rust(&input, RepairMethod::Linework, true, CENTIMETRO)
+            .expect("linework");
+        let area = poligoni(&output);
+        let totale: f64 = area.iter().map(geo::Area::unsigned_area).sum();
+        assert!((totale - 96.0).abs() <= 1e-9, "area {totale}");
+        assert!(
+            !area
+                .iter()
+                .any(|poligono| poligono.contains(&Point::new(4.0, 4.0))),
+            "il buco A e' stato reinserito"
+        );
+    }
+}
+
+/// Revisione, quinto giro: traslato di `(B, B)` con `B = 2^52`, l'incrocio
+/// esatto `(B, B + 1.5)` non e' rappresentabile e l'ordinata riportata
+/// sbaglia di 27.7 cm, anche se il passo della griglia e' minuscolo. Oltre
+/// `ulp(max |coordinata|) > p / 64` nessun kernel calcola: errore esplicito.
+#[test]
+fn coordinate_troppo_grandi_per_la_precisione_sono_un_errore() {
+    let b = 2_f64.powi(52);
+    let sposta = |linea: LineString<f64>| {
+        LineString::new(
+            linea
+                .0
+                .into_iter()
+                .map(|c| Coord {
+                    x: c.x + b,
+                    y: c.y + b,
+                })
+                .collect(),
+        )
+    };
+    let shell = sposta(quadrato(0.0, 0.0, 4.0, 4.0));
+    let buco = sposta(LineString::from(vec![
+        (-1.0, 0.0),
+        (1.0, 3.0),
+        (1.0, 0.0),
+        (-1.0, 0.0),
+    ]));
+    let input = Geometry::Polygon(Polygon::new(shell, vec![buco]));
+    for method in [RepairMethod::Structure, RepairMethod::Linework] {
+        assert!(
+            matches!(
+                make_valid_geometry_rust(&input, method, false, CENTIMETRO),
+                Err(MakeValidError::PrecisionInsufficient)
+            ),
+            "{method:?}"
+        );
+    }
+}
+
+/// Campagna differenziale su ef1d57a, `LINEWORK`, seme 1: due buchi che si
+/// sovrappongono, uno sul lato della shell. Unire il buco intero lasciava
+/// piena la sovrapposizione (17.5, 42 e 15.75 m^2 oltre GEOS). Con la sola
+/// sporgenza l'area e' quella di GEOS, entro perimetro per 1 cm.
+#[test]
+fn linework_casi_della_campagna_hanno_l_area_di_geos() {
+    let casi: [(&str, Vec<LineString<f64>>, f64); 3] = [
+        (
+            "caso 68",
+            vec![
+                quadrato(0.0, 0.0, 9.0, 18.0),
+                quadrato(1.0, 1.0, 4.0, 13.0),
+                quadrato(1.5, 6.0, 4.5, 18.0),
+            ],
+            126.0,
+        ),
+        (
+            "caso 84",
+            vec![
+                quadrato(-23.0, -11.0, 13.0, -3.0),
+                quadrato(-13.0, -10.5, 11.0, -5.5),
+                quadrato(-23.0, -8.5, 1.0, -3.5),
+            ],
+            168.0,
+        ),
+        (
+            "caso 107",
+            vec![
+                quadrato(0.3, -0.7, 3.55, 35.3),
+                quadrato(0.55, 1.3, 2.3, 25.3),
+                quadrato(1.175, 11.3, 2.925, 35.3),
+            ],
+            75.0,
+        ),
+    ];
+    for (nome, anelli, area_geos) in casi {
+        let mut anelli = anelli.into_iter();
+        let shell = anelli.next().expect("shell");
+        let buchi: Vec<_> = anelli.collect();
+        let perimetro: f64 = shell
+            .lines()
+            .map(|lato| (lato.end.x - lato.start.x).hypot(lato.end.y - lato.start.y))
+            .sum();
+        for ordine in [buchi.clone(), buchi.iter().rev().cloned().collect()] {
+            let input = Geometry::Polygon(Polygon::new(shell.clone(), ordine));
+            for keep_collapsed in [false, true] {
+                let output = make_valid_geometry_rust(
+                    &input,
+                    RepairMethod::Linework,
+                    keep_collapsed,
+                    CENTIMETRO,
+                )
+                .expect(nome);
+                let area: f64 = poligoni(&output).iter().map(geo::Area::unsigned_area).sum();
+                assert!(
+                    (area - area_geos).abs() <= perimetro * CENTIMETRO,
+                    "{nome}: area {area}, GEOS {area_geos}"
+                );
+            }
+        }
+    }
+}
