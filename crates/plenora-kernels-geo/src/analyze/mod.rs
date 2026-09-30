@@ -3048,7 +3048,7 @@ mod tests {
         contract.geometries[0].types = ContractProperty::new(
             PropertyConfidence::Declared(
                 GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Polygon])
-                    .expect("coerenza R3.4.1"),
+                    .expect("dichiarazione exact con tipi"),
             ),
             PropertyScope::Schema,
         );

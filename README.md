@@ -28,7 +28,11 @@ progetto d'origine si portano qui senza rinomine.
   risolto dal chiamante.
 
 Engine, CLI, isolamento e protocollo del progetto d'origine non sono stati
-portati.
+portati. Nemmeno, e oggi non sono in programma: la verifica automatica (CI,
+fuzzing, misura della copertura, mutation testing: i gate si eseguono a
+mano, [`AGENTS.md`](AGENTS.md)), l'identità del piano (`plan_hash`,
+fingerprint del catalogo) e la cancellazione di un'esecuzione in corso
+(Ctrl-C): `run` gira fino alla fine o al primo errore.
 
 ## Le operazioni
 
@@ -1051,7 +1055,10 @@ deve esistere e non essere vuota.
 Dopo ogni passo l'output del kernel deve avere nomi, tipi e metadati (di
 campo e di schema) del contratto inferito (altrimenti `Internal`) e riceve lo schema del contratto; righe
 per arco, colonne, nomi ripetuti e fattore di espansione si controllano
-sui dati. Ogni tabella si libera appena ha girato il suo ultimo
+sui dati; il fattore, sulla base che il catalogo dichiara per l'operazione
+(`expansion_constraint`), non per quelle che il catalogo ne esenta (righe
+da tutto l'ingresso, come `polygonize`, o in numero fisso, come `dissolve`
+e `reconcile`). Ogni tabella si libera appena ha girato il suo ultimo
 consumatore; un'uscita che nessuno usa si libera subito, un input mai usato
 prima del primo passo.
 
@@ -1104,6 +1111,13 @@ passo che cambia le righe: nessuna mappa di righe si tiene in memoria, e
 il budget non ha niente in più da contare (limite sotto, «Indici di riga
 dopo un passo che cambia le righe»).
 
+Fase e scope di un rifiuto per riga: l'errore ha la fase derivata
+`write` (`ErrorPhase`: l'esecuzione di un passo, il canone non ha una fase
+«execute»), mai `read`, perché nessun kernel legge un supporto; lo `scope`
+del payload è `read`, l'unico che il contratto v1 dà a un rifiuto di un
+kernel: dice che la riga rifiutata è d'ingresso, non che si stava leggendo
+un file.
+
 ### Operazioni geo
 
 I passi `geo.*` passano dall'analisi dei kernel (`analyze_geo_contract`) e
@@ -1144,7 +1158,7 @@ Per `clip` e le quattro booleane un risultato vuoto è null: l'analisi
 dichiara ora la geometria dell'uscita nullable anche quando quella di
 left non lo è. Per `sjoin` e `within` il tetto delle coppie è il limite
 di righe dell'arco, per `nearest` i confronti sono al più il quadrato del
-maggiore fra `max_input_rows` e `max_rows_per_edge` (come D14.6).
+maggiore fra `max_input_rows` e `max_rows_per_edge` (come nel progetto d'origine).
 
 `collect` ordina i gruppi per la chiave
 testuale di `190c493` (tipo, presenza e lunghezza di ogni valore, poi il
@@ -1198,7 +1212,7 @@ un tipo che il contratto d'uscita dichiara, altrimenti `Internal`
 
 **Limiti passati ai kernel**: il limite di righe dell'arco d'uscita
 (`max_output_rows` per un output del piano, `max_rows_per_edge`
-altrimenti, come D14.6 a `190c493`) come tetto delle righe prodotte da
+altrimenti, come nel progetto d'origine) come tetto delle righe prodotte da
 espansioni, `line_merge` e `polygonize`; `MAX_CLEAN_VERTICES` e
 `MAX_NODING_WORK` dei kernel; `100_000` punti per `voronoi` senza
 `max_points`; `MAX_CELL_COORDINATES` per `concave_hull`, `densify` e
@@ -1760,7 +1774,7 @@ allocatore che conta, fuori dal workspace (niente `unsafe` qui).
   Arrow.
 - **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
   `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
-  rifiutano; il contratto ammette una sola colonna geometrica (D16), quindi
+  rifiutano; il contratto ammette una sola colonna geometrica, quindi
   un file con più colonne geometriche si rifiuta (`Schema`). Il PROJJSON
   letto si identifica per `id` e `type`: il resto del documento non si
   confronta con la tabella, e un documento che dichiara un `id` EPSG con

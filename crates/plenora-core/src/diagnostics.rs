@@ -37,7 +37,11 @@ pub const ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT: &str = "step_input_row_zero_ba
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowDiagnosticScope {
-    /// Leggendo o convertendo un valore (tutti i rifiuti dei kernel).
+    /// Per il valore d'ingresso della riga: una conversione, un calcolo o
+    /// un'asserzione di un kernel lo rifiuta. È lo scope di tutti i rifiuti
+    /// dei kernel, anche a metà di un piano, dove nessun file si legge: dice
+    /// che cosa è stato rifiutato (una riga d'ingresso), non la fase
+    /// dell'errore, che per i kernel è `write` ([`crate::ErrorPhase`]).
     Read,
     /// Scrivendo verso una destinazione; richiede `input_total`,
     /// `diagnostic_state_counts` e `write_outcome`. Qui nessun codice lo

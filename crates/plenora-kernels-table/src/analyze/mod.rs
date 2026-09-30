@@ -3673,7 +3673,7 @@ mod tests {
         assert_eq!(
             aggregated.schema.metadata().get("source"),
             Some(&"driver-x".to_owned()),
-            "aggregate: metadata di schema conservati (R2.4)"
+            "aggregate: metadata di schema conservati"
         );
         let melted = ok(
             "table.melt",
@@ -3683,7 +3683,7 @@ mod tests {
         assert_eq!(
             melted.schema.metadata().get("source"),
             Some(&"driver-x".to_owned()),
-            "melt: metadata di schema conservati (R2.4)"
+            "melt: metadata di schema conservati"
         );
     }
 
@@ -3765,11 +3765,7 @@ mod tests {
             json!({"column": "value", "value": 0}),
         );
         let field = filled.schema.field_with_name("value").unwrap();
-        assert_eq!(
-            field.metadata(),
-            &expected,
-            "fill_na: metadata di campo (R2.4)"
-        );
+        assert_eq!(field.metadata(), &expected, "fill_na: metadata di campo");
 
         let replaced = ok(
             "table.replace",
@@ -3781,11 +3777,7 @@ mod tests {
             json!({"column": "name", "old_value": "a", "new_value": "b"}),
         );
         let field = replaced.schema.field_with_name("name").unwrap();
-        assert_eq!(
-            field.metadata(),
-            &expected,
-            "replace: metadata di campo (R2.4)"
-        );
+        assert_eq!(field.metadata(), &expected, "replace: metadata di campo");
 
         // Join identity-preserving: la rinomina `_L` conserva i metadata.
         let joined = ok(
@@ -3797,11 +3789,7 @@ mod tests {
             json!({"left_keys": ["id"], "right_keys": ["rid"]}),
         );
         let field = joined.schema.field_with_name("name_L").unwrap();
-        assert_eq!(
-            field.metadata(),
-            &expected,
-            "join: metadata di campo (R2.4)"
-        );
+        assert_eq!(field.metadata(), &expected, "join: metadata di campo");
     }
 
     #[test]

@@ -278,7 +278,7 @@ pub(in crate::analyze) fn merge_geometry(
     match (left, right) {
         (Some(_), Some(_)) => contract_error(
             op,
-            "due colonne geometriche in output: la v1 ne ammette al massimo una (D16)",
+            "due colonne geometriche in output: la v1 ne ammette al massimo una",
         ),
         (left, right) => Ok(left.or(right)),
     }

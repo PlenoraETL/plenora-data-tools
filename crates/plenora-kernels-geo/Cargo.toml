@@ -1,6 +1,6 @@
 [package]
 name = "plenora-kernels-geo"
-description = "Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB (da plenora-geo-tools-arrow, architettura.md)"
+description = "Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

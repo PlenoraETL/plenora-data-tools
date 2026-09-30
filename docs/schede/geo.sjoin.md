@@ -124,8 +124,9 @@ validazione OGC di ogni geometria. Memoria O(m + p).
 
 ### Esempio
 
-Il terzo punto sta sul lato comune dei due quadrati e interseca entrambi;
-il secondo non ne interseca nessuno e non esce.
+Il primo punto sta sull'angolo comune dei due quadrati e il terzo sul lato
+comune: ognuno interseca entrambi e dà due righe; il secondo non ne
+interseca nessuno e non esce.
 
 ```json
 {
@@ -133,7 +134,7 @@ il secondo non ne interseca nessuno e non esce.
   "ingressi": [
     {"nome": "pozzi", "colonne": [
       {"nome": "id", "tipo": "int64", "valori": [1, 2, 3]},
-      {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["POINT(1 1)", "POINT(5 5)", "POINT(2 1)"]}
+      {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["POINT(2 2)", "POINT(5 5)", "POINT(2 1)"]}
     ]},
     {"nome": "aree", "colonne": [
       {"nome": "nome", "tipo": "utf8", "valori": ["A", "B"]},
@@ -141,9 +142,9 @@ il secondo non ne interseca nessuno e non esce.
     ]}
   ],
   "uscita": {"colonne": [
-    {"nome": "id", "tipo": "int64", "valori": [1, 3, 3]},
-    {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["POINT(1 1)", "POINT(2 1)", "POINT(2 1)"]},
-    {"nome": "__right_index", "tipo": "uint64", "valori": [0, 0, 1]}
+    {"nome": "id", "tipo": "int64", "valori": [1, 1, 3, 3]},
+    {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["POINT(2 2)", "POINT(2 2)", "POINT(2 1)", "POINT(2 1)"]},
+    {"nome": "__right_index", "tipo": "uint64", "valori": [0, 1, 0, 1]}
   ]}
 }
 ```

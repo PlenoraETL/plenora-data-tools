@@ -997,7 +997,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         fields.push(Field::new(&output, data_type, true));
         columns.push(values);
     }
-    // R2.4: i metadati dello schema d'ingresso si conservano, come in `melt`
+    // I metadati dello schema d'ingresso si conservano, come in `melt`
     // e `aggregate`.
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new_with_metadata(
@@ -2732,7 +2732,7 @@ mod tests {
         assert!(matches!(errore, PlenoraError::ResourceLimit(_)), "{errore}");
     }
 
-    /// I metadati di schema dell'ingresso arrivano all'uscita (R2.4).
+    /// I metadati di schema dell'ingresso arrivano all'uscita.
     #[test]
     fn pivot_conserva_i_metadati_di_schema() {
         let batch = pivot_fixture_utf8();

@@ -319,19 +319,19 @@ impl fmt::Display for GeometryTypesPropertyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
             Self::ExactWithoutTypes => {
-                "types_declaration `exact` richiede un elenco di tipi presente e non vuoto (R3.4.1)"
+                "types_declaration `exact` richiede un elenco di tipi presente e non vuoto"
             }
             Self::UnresolvedWithTypes => {
-                "types_declaration `unresolved` non ammette un elenco di tipi (R3.4.1)"
+                "types_declaration `unresolved` non ammette un elenco di tipi"
             }
             Self::UnknownTypeInList => {
-                "elenco tipi con valore non canonico (ammessi i 16 tipi di R3.1, minuscoli senza separatore, separati da `,` senza spazi)"
+                "elenco tipi con valore non canonico (ammessi i 16 tipi di `GeometryType`, minuscoli senza separatore, separati da `,` senza spazi)"
             }
             Self::DuplicateTypeInList => {
-                "elenco tipi con duplicati: la forma canonica richiede valori unici (R3.4.1)"
+                "elenco tipi con duplicati: la forma canonica richiede valori unici"
             }
             Self::NonCanonicalOrder => {
-                "elenco tipi fuori ordine canonico (R3.4.1, ordine di §3.1)"
+                "elenco tipi fuori ordine canonico (l'ordine di `GeometryType`)"
             }
         };
         formatter.write_str(message)
@@ -981,7 +981,7 @@ impl DataContract {
         }
         if self.geometries.len() > 1 {
             return Err(PlenoraError::Schema(format!(
-                "contratto con {} colonne geometriche: la v1 ne ammette al massimo una (D16)",
+                "contratto con {} colonne geometriche: la v1 ne ammette al massimo una",
                 self.geometries.len()
             )));
         }

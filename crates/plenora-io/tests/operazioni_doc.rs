@@ -1218,6 +1218,7 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
         .iter()
         .map(|spec| tabella_con_metadati(&spec.colonne, &spec.metadati))
         .collect::<Result<Vec<_>, _>>()?;
+    let righe_in: Vec<usize> = ingressi.iter().map(RecordBatch::num_rows).collect();
     let piano = Pipeline::from_json(&testo_piano(scheda)).map_err(|e| format!("piano: {e}"))?;
     let schemi: Vec<(&str, SchemaRef)> = esempio
         .ingressi
@@ -1237,6 +1238,7 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
                 .run(tabelle)
                 .map_err(|e| format!("esecuzione: {e}"))?;
             let (_, uscita) = esito.outputs.into_iter().next().expect("un'uscita");
+            verifica_forma(scheda.operazione, &righe_in, uscita.num_rows(), true)?;
             confronta(scheda, &uscita, esempio.valori_confrontati)?;
             Ok(if esempio.valori_confrontati {
                 Verifica::Runner
@@ -1251,11 +1253,64 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
         Err(errore) if matches!(scheda.operazione.id, "table.pivot" | "table.transpose") => {
             let uscita = kernel_diretto(scheda, &ingressi[0])
                 .map_err(|e| format!("kernel: {e} (il runner: {errore})"))?;
+            verifica_forma(scheda.operazione, &righe_in, uscita.num_rows(), true)?;
             confronta(scheda, &uscita, true)?;
             Ok(Verifica::Kernel)
         }
         Err(errore) => Err(format!("validazione: {errore}")),
     }
+}
+
+/// La forma delle righe che il catalogo dichiara, contro le righe che il
+/// runner ha reso su un ingresso: la classe di difetti dei descrittori più
+/// larghi o più stretti del kernel, provata su ogni operazione.
+///
+/// - `source_row_provenance` `Preserved` (tabellari e geo): tante righe
+///   quante il primo ingresso (identità e ordine li prova l'oracolo di
+///   `plenora-pipeline`, `diagnostica_righe.rs`);
+/// - forma geo 1:1, produttore o diagnostica: tante righe quante il primo
+///   ingresso, anche per le binarie (la destra non aggiunge righe);
+/// - forma N:1: al più una riga per riga d'ingresso, e al più una da un
+///   ingresso vuoto;
+/// - con `testimone`, cioè sull'esempio della scheda: una forma geo 1:N,
+///   N:1 o «da tutto l'ingresso» ha un numero di righe diverso dal primo
+///   ingresso, così l'esempio mostra la forma che il catalogo dichiara e una
+///   forma più larga del kernel non passa inosservata.
+fn verifica_forma(
+    operazione: &OperationDescriptor,
+    righe_in: &[usize],
+    righe_out: usize,
+    testimone: bool,
+) -> Result<(), String> {
+    let prima = righe_in.first().copied().unwrap_or_default();
+    let conserva = operazione.source_row_provenance() == SourceRowProvenance::Preserved;
+    let dichiarata = operazione.result_shape;
+    let uno_a_uno = matches!(
+        dichiarata,
+        Some(ResultShape::OneToOne | ResultShape::FromCoords | ResultShape::Diagnostic)
+    );
+    if (conserva || uno_a_uno) && righe_out != prima {
+        return Err(format!(
+            "forma: {righe_out} righe da {righe_in:?}, il catalogo dichiara una riga per riga \
+             del primo ingresso"
+        ));
+    }
+    if dichiarata == Some(ResultShape::ManyToOne) && righe_out > prima.max(1) {
+        return Err(format!(
+            "forma: {righe_out} righe da {righe_in:?}, il catalogo dichiara N:1"
+        ));
+    }
+    let larga = matches!(
+        dichiarata,
+        Some(ResultShape::OneToMany | ResultShape::ManyToOne | ResultShape::WholeToMany)
+    );
+    if testimone && larga && righe_out == prima {
+        return Err(format!(
+            "forma: l'esempio non mostra la forma {} ({righe_out} righe da {righe_in:?})",
+            forma(dichiarata)
+        ));
+    }
+    Ok(())
 }
 
 fn prepara_ambiente() {
@@ -1738,6 +1793,71 @@ fn gli_esempi_delle_schede_girano() {
         assert!(rotti.is_empty(), "collegamenti rotti: {rotti:?}");
         std::fs::write(percorso, generato).expect("scrittura dell'anteprima");
     }
+}
+
+/// L'esempio di ogni scheda sugli stessi ingressi senza righe: il piano
+/// gira dal runner (dal kernel per `pivot` e `transpose`) e l'uscita
+/// rispetta la forma del catalogo ([`verifica_forma`], senza testimone).
+/// Un rifiuto è ammesso solo per le operazioni di [`RIFIUTANO_IL_VUOTO`].
+#[test]
+fn gli_esempi_su_ingressi_vuoti_rispettano_la_forma() {
+    prepara_ambiente();
+    let (schede, _) = leggi_schede();
+    let mut errori = Vec::new();
+    for scheda in &schede {
+        let id = scheda.operazione.id;
+        match (esegui_su_vuoti(scheda), RIFIUTANO_IL_VUOTO.contains(&id)) {
+            (Ok(righe), true) => errori.push(format!(
+                "{id}: in RIFIUTANO_IL_VUOTO, ma gira ({righe} righe)"
+            )),
+            (Err(errore), ammesso) if !ammesso || errore.starts_with("forma:") => {
+                errori.push(format!("{id}: {errore}"));
+            }
+            _ => {}
+        }
+    }
+    assert!(errori.is_empty(), "ingressi vuoti:\n{}", errori.join("\n"));
+}
+
+/// Le operazioni che, con la config del loro esempio, rifiutano un ingresso
+/// vuoto per contratto: `assert_cardinality` con `min_rows` (la scheda,
+/// «Errori»), `voronoi` con meno di due punti non nulli (`InsufficientPoints`, la
+/// scheda, «Errori»).
+const RIFIUTANO_IL_VUOTO: &[&str] = &["table.assert_cardinality", "geo.voronoi"];
+
+fn esegui_su_vuoti(scheda: &Scheda) -> Result<usize, String> {
+    let esempio = &scheda.esempio;
+    let ingressi = esempio
+        .ingressi
+        .iter()
+        .map(|spec| tabella_con_metadati(&spec.colonne, &spec.metadati).map(|t| t.slice(0, 0)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let righe_in = vec![0; ingressi.len()];
+    let righe_out = if matches!(scheda.operazione.id, "table.pivot" | "table.transpose") {
+        kernel_diretto(scheda, &ingressi[0])?.num_rows()
+    } else {
+        let piano = Pipeline::from_json(&testo_piano(scheda)).map_err(|e| format!("piano: {e}"))?;
+        let schemi: Vec<(&str, SchemaRef)> = esempio
+            .ingressi
+            .iter()
+            .zip(&ingressi)
+            .map(|(spec, batch)| (spec.nome.as_str(), batch.schema()))
+            .collect();
+        let tabelle = esempio
+            .ingressi
+            .iter()
+            .zip(ingressi)
+            .map(|(spec, batch)| (spec.nome.clone(), batch))
+            .collect();
+        let esito = piano
+            .validate(&schemi)
+            .and_then(|validata| validata.run(tabelle))
+            .map_err(|e| format!("esecuzione: {e}"))?;
+        let (_, uscita) = esito.outputs.into_iter().next().expect("un'uscita");
+        uscita.num_rows()
+    };
+    verifica_forma(scheda.operazione, &righe_in, righe_out, false)?;
+    Ok(righe_out)
 }
 
 #[test]

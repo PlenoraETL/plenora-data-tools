@@ -20,9 +20,10 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::catalog::{find_operation, Family, SourceRowProvenance, CATALOG};
 use plenora_core::diagnostics::{
-    RowDiagnostics, ROW_DIAGNOSTICS_INDEX_BASIS, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
+    RowDiagnosticScope, RowDiagnostics, ROW_DIAGNOSTICS_INDEX_BASIS,
+    ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
 };
-use plenora_core::{PlenoraError, Result};
+use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_pipeline::{byte_vivi, BaseIndici, Esito, Passo, Pipeline, PipelineValidata};
 use serde_json::{json, Value};
 
@@ -287,9 +288,20 @@ fn tabelle(con_difetto: bool, usa_destra: bool) -> Vec<(&'static str, RecordBatc
 }
 
 fn diagnostica(errore: &PlenoraError) -> &RowDiagnostics {
-    errore
+    let report = errore
         .row_diagnostics()
-        .unwrap_or_else(|| panic!("diagnostica per riga attesa: {errore}"))
+        .unwrap_or_else(|| panic!("diagnostica per riga attesa: {errore}"));
+    verifica_fase(errore, report);
+    report
+}
+
+/// Un rifiuto per riga di un passo non nasce leggendo un supporto: fase
+/// derivata `write` (l'esecuzione), nessun tag, e lo scope `read` del
+/// payload (la riga rifiutata è d'ingresso).
+fn verifica_fase(errore: &PlenoraError, report: &RowDiagnostics) {
+    assert_eq!(errore.phase(), ErrorPhase::Write, "{errore}");
+    assert_eq!(errore.phase_tag(), None, "{errore}");
+    assert_eq!(report.scope, RowDiagnosticScope::Read, "{errore}");
 }
 
 /// Posizione, nell'output del prefisso eseguito da solo, della riga che
@@ -692,6 +704,34 @@ fn from_wkt_dopo_un_filtro_riferisce_le_righe_dell_ingresso() {
     }
 }
 
+#[test]
+fn flatten_json_rifiuta_con_la_fase_dell_esecuzione() {
+    // L'altro rifiuto per riga dei kernel (documenti JSON), sulla stessa
+    // regola di fase: prima lo taggava `read`.
+    let documenti = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("json", DataType::Utf8, false)])),
+        vec![Arc::new(StringArray::from(vec![
+            r#"{"a": 1}"#,
+            "non json",
+            r#"{"a": 2}"#,
+        ]))],
+    )
+    .expect("documenti");
+    let pipeline = piano(
+        &["t"],
+        vec![passo(
+            "x",
+            "table.flatten_json",
+            &["t"],
+            json!({"column": "json", "output_columns": ["json_a"]}),
+        )],
+        &["x"],
+    );
+    let errore = esegui(&pipeline, &[("t", documenti)]).expect_err("documento non JSON");
+    let report = diagnostica(&errore);
+    assert_eq!(report.examples[0].source_index, 1);
+}
+
 /// Colonna nascosta con il numero di riga d'ingresso, per l'oracolo della
 /// classificazione `Preserved`.
 const RIGA_NASCOSTA: &str = "__riga_oracolo";
@@ -813,8 +853,8 @@ fn le_tabellari_che_conservano_le_righe_le_conservano_davvero() {
     assert_eq!(provate, attese, "ogni tabellare Preserved ha un caso");
 }
 
-/// Lo stesso oracolo sulle geo `Preserved` (unarie 1:1 e produttori), con
-/// geometrie nulle in mezzo alle righe.
+/// Lo stesso oracolo sulle geo `Preserved` (1:1, unarie e binarie, e
+/// produttori), con geometrie nulle in mezzo alle righe.
 #[test]
 #[allow(clippy::too_many_lines)] // Un caso per operazione, in un solo elenco.
 fn le_geo_che_conservano_le_righe_le_conservano_davvero() {
@@ -1064,6 +1104,13 @@ fn le_geo_che_conservano_le_righe_le_conservano_davvero() {
             &punti,
             None,
         ),
+        (
+            "geo.clean_topology",
+            json!({"snap_tolerance": 0, "remove_overlaps": true, "fill_gaps": false}),
+            &poligoni,
+            None,
+        ),
+        ("geo.voronoi", json!({}), &punti, None),
     ];
     for predicato in [
         "geo.predicate_intersects",
@@ -1089,6 +1136,40 @@ fn le_geo_che_conservano_le_righe_le_conservano_davvero() {
     for (op, config, ingresso, crs) in &casi {
         verifica_righe_conservate(op, config, std::slice::from_ref(*ingresso), *crs);
         provate.insert(*op);
+    }
+    // Binarie 1:1: la riga nascosta sta a sinistra. La maschera di `clip` ha
+    // una riga sola, meno della sinistra (il vincolo `LeftRelative` la
+    // accetta); le booleane allineate hanno lati con le stesse righe.
+    let maschera = tabella(
+        UTM,
+        &[Some(Geometry::Polygon(quadrato(
+            X0 - 10.0,
+            Y0 - 10.0,
+            120.0,
+        )))],
+    );
+    let allineata = tabella(
+        UTM,
+        &[
+            Some(Geometry::Polygon(quadrato(X0 + 20.0, Y0 + 20.0, 60.0))),
+            Some(Geometry::Polygon(quadrato(X0, Y0, 10.0))),
+            None,
+            None,
+            Some(Geometry::Polygon(quadrato(X0 + 510.0, Y0, 30.0))),
+        ],
+    );
+    let binarie: Vec<(&str, &RecordBatch, &RecordBatch)> = vec![
+        ("geo.clip", &poligoni, &maschera),
+        ("geo.difference", &poligoni, &allineata),
+        ("geo.intersection", &poligoni, &allineata),
+        ("geo.symmetric_difference", &poligoni, &allineata),
+        ("geo.union", &poligoni, &allineata),
+        ("geo.count_points_in_polygons", &poligoni, &punti),
+        ("geo.within", &punti, &poligoni),
+    ];
+    for (op, sinistra, destra) in binarie {
+        verifica_righe_conservate(op, &json!({}), &[sinistra.clone(), destra.clone()], None);
+        provate.insert(op);
     }
     let attese: BTreeSet<&str> = CATALOG
         .iter()

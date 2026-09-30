@@ -500,7 +500,7 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
                     }
                     return Err(PlenoraError::InvalidPlan(format!(
                         "campo geometria `{}`: chiave `{key}` gia' presente con un valore \
-                         diverso da quello del contratto (R2.6: il componente fallisce, \
+                         diverso da quello del contratto (il componente fallisce, \
                          non sovrascrive)",
                         geometry.name
                     )));
@@ -526,7 +526,7 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
             Some(existing) if existing != &value => {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "chiave `{key}` dello schema gia' presente con un valore diverso \
-                     (R2.6: il componente fallisce, non sovrascrive)"
+                     (il componente fallisce, non sovrascrive)"
                 )));
             }
             Some(_) => {}

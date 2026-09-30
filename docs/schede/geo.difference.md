@@ -84,9 +84,7 @@ diagnostica per riga»).
 
 Solo poligoni: una destra lineare o puntuale si rifiuta
 (`UnsupportedGeometry`), dove GEOS e PostGIS renderebbero la sinistra
-invariata. Il catalogo dichiara forma 1:N e vincolo `max(uscita /
-sinistra, uscita / destra)`, ma il passo rende una riga per riga della
-sinistra. Nessun controllo a posteriori del risultato contro gli ingressi
+invariata. Nessun controllo a posteriori del risultato contro gli ingressi
 ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 

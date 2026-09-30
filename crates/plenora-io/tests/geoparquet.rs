@@ -610,7 +610,7 @@ fn rifiuti_in_lettura() {
 
 #[test]
 fn una_sola_colonna_geometrica() {
-    // Il contratto v1 ammette una sola colonna geometrica (D16): un file con
+    // Il contratto v1 ammette una sola colonna geometrica: un file con
     // due si rifiuta, qualunque sia la primaria.
     let dir = cartella();
     let schema: SchemaRef = Arc::new(Schema::new(vec![

@@ -17,7 +17,7 @@ use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
-use plenora_core::{ErrorPhase, PlenoraError};
+use plenora_core::PlenoraError;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -322,7 +322,6 @@ pub fn from_wkt_column_named(
     };
     Err(
         PlenoraError::DataMapping("geometrie WKT rifiutate; consultare row_diagnostics".into())
-            .with_phase(ErrorPhase::Read)
             .with_row_diagnostics(report),
     )
 }

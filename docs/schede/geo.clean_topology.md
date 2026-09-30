@@ -111,8 +111,7 @@ rientrare fino allo 0,1% della tolleranza, senza errore ([README,
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Deviazione: archi del buffer»). La nullabilità dichiarata della colonna
 geometria dell'uscita è sempre nullable, perché il kernel può rendere
-righe senza geometria. Il catalogo dichiara forma 1:N; il kernel rende un
-risultato per riga. Nessuna diagnostica per riga: il passo rende il primo
+righe senza geometria. Nessuna diagnostica per riga: il passo rende il primo
 errore ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
 diagnostica per riga» e «Modelli di costo geo»).

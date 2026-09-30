@@ -85,9 +85,7 @@ diagnostica per riga»).
 
 Solo poligoni: un'intersezione che si riduce a linee o punti (due quadrati
 che si toccano su un lato) è vuota, quindi la riga ha la geometria nulla,
-dove GEOS e PostGIS renderebbero la linea o il punto. Il catalogo dichiara
-forma 1:N e vincolo `max(uscita / sinistra, uscita / destra)`, ma il passo
-rende una riga per riga della sinistra. Nessun controllo a posteriori del
+dove GEOS e PostGIS renderebbero la linea o il punto. Nessun controllo a posteriori del
 risultato contro gli ingressi ([README, «Precisione delle operazioni
 geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).

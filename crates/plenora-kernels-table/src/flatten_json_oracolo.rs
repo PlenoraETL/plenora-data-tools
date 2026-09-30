@@ -24,7 +24,7 @@ use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
-use plenora_core::{ErrorPhase, PlenoraError, Result};
+use plenora_core::{PlenoraError, Result};
 use proptest::prelude::*;
 use serde_json::Value;
 
@@ -99,7 +99,6 @@ fn flatten_json_prima(
         return Err(PlenoraError::DataMapping(
             "documenti JSON rifiutati; consultare row_diagnostics".into(),
         )
-        .with_phase(ErrorPhase::Read)
         .with_row_diagnostics(report));
     }
     super::tests::oracle_flatten_json(batch, config, limits)

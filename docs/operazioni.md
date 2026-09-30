@@ -5782,10 +5782,10 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | indice della riga sorgente | non disponibile |
 | requisito CRS | nessuno |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / (sinistra + destra) |
+| vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -5823,7 +5823,9 @@ ingressi. Il contratto dichiara 5 righe, dimostrate.
 
 #### Righe
 
-Sempre 5 righe, una per metrica. Per ogni chiave, con `L` righe a sinistra
+Sempre 5 righe, una per metrica, anche da due ingressi vuoti (metriche a
+zero): il numero di righe non dipende dagli ingressi, e il catalogo esenta
+l'operazione dal fattore di espansione. Per ogni chiave, con `L` righe a sinistra
 e `R` a destra:
 
 - `matched_rows`: somma di `min(L, R)`;
@@ -5858,9 +5860,6 @@ In esecuzione:
   che il runner passa al kernel (`max_governed_memory_bytes`), a lunghezza
   della forma testuale più 64 byte per chiave; oppure le chiavi distinte di
   un lato superano `max_input_rows`;
-- `ResourceLimit` dal runner: con entrambi gli ingressi vuoti le 5 righe
-  d'uscita superano il fattore di espansione (`max_expansion_factor` volte
-  la somma delle righe d'ingresso);
 - `Schema`: una cella di chiave non si converte in testo (`date32` o
   `timestamp(ms)` fuori dall'intervallo di calendario).
 
@@ -5869,8 +5868,7 @@ In esecuzione:
 L'hash delle chiavi non ha seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
 La memoria contata è quella delle chiavi, non quella delle mappe che le
-contengono. Due ingressi vuoti falliscono per il fattore di espansione
-invece di dare cinque metriche a zero.
+contengono.
 
 #### Complessità
 
@@ -8838,10 +8836,10 @@ Verifica: eseguito dal runner come passo unico; schema e numero di righe confron
 | indice della riga sorgente | non disponibile |
 | requisito CRS | nessuno |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / ingresso |
+| vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -8907,8 +8905,8 @@ schema dell'ingresso. Per una regola `error` conta `errors`, per una
 #### Righe
 
 `annotate`: 1:1, una riga d'uscita per riga d'ingresso. `summary`: una riga
-per regola; il kernel la produce anche con un ingresso vuoto (conteggi a 0),
-ma nel runner quel caso supera il fattore di espansione (vedi «Errori»).
+per regola, anche con un ingresso vuoto (conteggi a 0): le righe le fissa
+la config, e il catalogo esenta l'operazione dal fattore di espansione.
 
 #### Ordine
 
@@ -8927,9 +8925,7 @@ In validazione, `InvalidPlan`:
   regex oltre `max_regex_bytes` o non compilabile;
 - config con campi sconosciuti o valori fuori elenco.
 
-In esecuzione: nessuno che dipenda dai valori. Con `summary` il runner dà
-`ResourceLimit` quando le regole sono più di `max_expansion_factor` volte le
-righe d'ingresso: sempre, con un ingresso vuoto.
+In esecuzione: nessuno che dipenda dai valori.
 
 #### Limiti e deviazioni
 
@@ -10144,15 +10140,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_clean_topology` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -10267,8 +10263,7 @@ rientrare fino allo 0,1% della tolleranza, senza errore ([README,
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Deviazione: archi del buffer»). La nullabilità dichiarata della colonna
 geometria dell'uscita è sempre nullable, perché il kernel può rendere
-righe senza geometria. Il catalogo dichiara forma 1:N; il kernel rende un
-risultato per riga. Nessuna diagnostica per riga: il passo rende il primo
+righe senza geometria. Nessuna diagnostica per riga: il passo rende il primo
 errore ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
 diagnostica per riga» e «Modelli di costo geo»).
@@ -10335,15 +10330,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_clip` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
-| vincolo di espansione | max(uscita / sinistra, uscita / destra) |
+| vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -10434,9 +10429,7 @@ diagnostica per riga»).
 #### Limiti e deviazioni
 
 Solo poligoni: un ritaglio che si riduce a linee o punti è vuoto, quindi
-la riga resta con la geometria nulla. Il catalogo dichiara forma 1:N e
-vincolo `max(uscita / sinistra, uscita / destra)`, ma il passo rende una
-riga per riga della sinistra. Nessun controllo a posteriori del risultato
+la riga resta con la geometria nulla. Nessun controllo a posteriori del risultato
 contro gli ingressi ([README, «Precisione delle operazioni geografiche: 1
 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
@@ -11092,15 +11085,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_count_points_in_polygons` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -11546,7 +11539,7 @@ Memoria: da misura v4.
 #### Esempio
 
 Quattro punti non cocircolari danno due triangoli; una linea di due punti
-non ne dà.
+e un punto solo non ne danno.
 
 Passo del piano:
 
@@ -11561,6 +11554,7 @@ Ingresso `punti` (geometrie `geometry` in EPSG:3857):
 | --- | --- |
 | 1 | MULTIPOINT((0 0),(10 0),(0 10),(12 12)) |
 | 2 | LINESTRING(0 0,1 0) |
+| 3 | POINT(5 5) |
 
 Uscita `risultato`:
 
@@ -11729,15 +11723,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_difference` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
-| vincolo di espansione | max(uscita / sinistra, uscita / destra) |
+| vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -11825,9 +11819,7 @@ diagnostica per riga»).
 
 Solo poligoni: una destra lineare o puntuale si rifiuta
 (`UnsupportedGeometry`), dove GEOS e PostGIS renderebbero la sinistra
-invariata. Il catalogo dichiara forma 1:N e vincolo `max(uscita /
-sinistra, uscita / destra)`, ma il passo rende una riga per riga della
-sinistra. Nessun controllo a posteriori del risultato contro gli ingressi
+invariata. Nessun controllo a posteriori del risultato contro gli ingressi
 ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
@@ -11901,10 +11893,10 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | indice della riga sorgente | non disponibile |
 | requisito CRS | CRS proiettato |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / ingresso |
+| vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -14096,15 +14088,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_intersection` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
-| vincolo di espansione | max(uscita / sinistra, uscita / destra) |
+| vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -14193,9 +14185,7 @@ diagnostica per riga»).
 
 Solo poligoni: un'intersezione che si riduce a linee o punti (due quadrati
 che si toccano su un lato) è vuota, quindi la riga ha la geometria nulla,
-dove GEOS e PostGIS renderebbero la linea o il punto. Il catalogo dichiara
-forma 1:N e vincolo `max(uscita / sinistra, uscita / destra)`, ma il passo
-rende una riga per riga della sinistra. Nessun controllo a posteriori del
+dove GEOS e PostGIS renderebbero la linea o il punto. Nessun controllo a posteriori del
 risultato contro gli ingressi ([README, «Precisione delle operazioni
 geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
@@ -14401,10 +14391,10 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | indice della riga sorgente | non disponibile |
 | requisito CRS | CRS proiettato |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / ingresso |
+| vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -14811,15 +14801,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `line_merge` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
-| forma del risultato | N:1 |
+| forma del risultato | da tutto l'ingresso a molte righe |
 | determinismo | ordine definito dall'operazione |
 | indice della riga sorgente | non disponibile |
 | requisito CRS | CRS proiettato |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / ingresso |
+| vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -15965,10 +15955,10 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | indice della riga sorgente | non disponibile |
 | requisito CRS | CRS proiettato |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / ingresso |
+| vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -16095,15 +16085,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `polygonize` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione non interrompibile |
-| forma del risultato | N:1 |
+| forma del risultato | da tutto l'ingresso a molte righe |
 | determinismo | ordine definito dall'operazione |
 | indice della riga sorgente | non disponibile |
 | requisito CRS | CRS proiettato |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / ingresso |
+| vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -19160,8 +19150,9 @@ Memoria: da misura v4.
 
 #### Esempio
 
-Il terzo punto sta sul lato comune dei due quadrati e interseca entrambi;
-il secondo non ne interseca nessuno e non esce.
+Il primo punto sta sull'angolo comune dei due quadrati e il terzo sul lato
+comune: ognuno interseca entrambi e dà due righe; il secondo non ne
+interseca nessuno e non esce.
 
 Passo del piano:
 
@@ -19174,7 +19165,7 @@ Ingresso `pozzi` (geometrie `geometry` in EPSG:3857):
 
 | `id: int64` | `geometry: geometry` |
 | --- | --- |
-| 1 | POINT(1 1) |
+| 1 | POINT(2 2) |
 | 2 | POINT(5 5) |
 | 3 | POINT(2 1) |
 
@@ -19189,7 +19180,8 @@ Uscita `risultato`:
 
 | `id: int64` | `geometry: geometry` | `__right_index: uint64` |
 | --- | --- | --- |
-| 1 | POINT(1 1) | 0 |
+| 1 | POINT(2 2) | 0 |
+| 1 | POINT(2 2) | 1 |
 | 3 | POINT(2 1) | 0 |
 | 3 | POINT(2 1) | 1 |
 
@@ -19857,15 +19849,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_symmetric_difference` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
-| vincolo di espansione | max(uscita / sinistra, uscita / destra) |
+| vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -19952,9 +19944,7 @@ diagnostica per riga»).
 #### Limiti e deviazioni
 
 Solo poligoni: una geometria lineare o puntuale si rifiuta
-(`UnsupportedGeometry`). Il catalogo dichiara forma 1:N e vincolo
-`max(uscita / sinistra, uscita / destra)`, ma il passo rende una riga per
-riga della sinistra. Nessun controllo a posteriori del risultato contro
+(`UnsupportedGeometry`). Nessun controllo a posteriori del risultato contro
 gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
@@ -20288,15 +20278,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_union` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
-| vincolo di espansione | uscita / (sinistra + destra) |
+| vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -20384,8 +20374,7 @@ diagnostica per riga»).
 
 Solo poligoni: una geometria lineare o puntuale, da un lato o dall'altro,
 si rifiuta (`UnsupportedGeometry`), dove GEOS e PostGIS renderebbero una
-collezione. Il catalogo dichiara forma 1:N e vincolo `uscita / (sinistra +
-destra)`, ma il passo rende una riga per riga della sinistra. Nessun
+collezione. Nessun
 controllo a posteriori del risultato contro gli ingressi ([README,
 «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
@@ -20584,15 +20573,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_voronoi` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | CRS proiettato |
 | capability richieste | nessuna |
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -20621,8 +20610,7 @@ Le altre colonne, i metadati di schema e le proprietà del contratto
 1:1: una cella per riga, ma ogni cella dipende da tutte le righe (il kernel
 `advanced::voronoi_cells` riceve tutti i punti insieme, e il limite
 `max_points` come argomento). A ogni punto va la prima cella, in ordine di
-prima comparsa del sito, che lo interseca. Il catalogo dichiara la forma
-1:N; contratto e kernel danno una cella per riga. Il kernel non conosce i
+prima comparsa del sito, che lo interseca. Il kernel non conosce i
 null: il runner gli passa solo le geometrie non nulle, nell'ordine delle
 righe, e riporta ogni cella alla sua riga; una riga nulla resta nulla e
 non è un sito. Gli altri attributi restano invariati.
@@ -20757,15 +20745,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | alias legacy | `geo_within` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
-| forma del risultato | 1:N |
+| forma del risultato | 1:1 |
 | determinismo | ordine definito dall'operazione |
-| indice della riga sorgente | non disponibile |
+| indice della riga sorgente | conservata |
 | requisito CRS | stesso CRS proiettato sui due ingressi |
 | capability richieste | nessuna |
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 

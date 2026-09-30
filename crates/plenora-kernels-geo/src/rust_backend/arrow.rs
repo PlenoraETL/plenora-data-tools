@@ -184,7 +184,7 @@ pub fn polygonize_batches(
 }
 
 /// Il campo geometria dell'uscita di `make_valid`, `polygonize` e `split`: quello
-/// dell'ingresso, con tutti i suoi metadati (R2.4: CRS, dimensioni,
+/// dell'ingresso, con tutti i suoi metadati (CRS, dimensioni,
 /// encoding e lineage passano invariati), senza la dichiarazione dei tipi
 /// geometrici, che l'operazione riscrive (l'analisi la ridichiara nel
 /// contratto, `analyze::tipi`), e con la nullability del contratto:

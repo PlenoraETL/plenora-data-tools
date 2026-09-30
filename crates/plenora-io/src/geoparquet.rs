@@ -22,7 +22,7 @@
 //!   `geo` con `crs`, `dimensions`, `encoding`), e lo schema passa da
 //!   `contract_from_arrow_schema` e `arrow_schema_from_contract`, che
 //!   aggiungono il blocco canonico `plenora.geometry.*` e rifiutano le
-//!   chiavi canoniche già presenti in conflitto (R2.6).
+//!   chiavi canoniche già presenti in conflitto.
 //!
 //! Il metadato `geo` di schema si toglie: vive nei campi. `primary_column`
 //! deve essere la prima colonna geometrica dello schema, perché il

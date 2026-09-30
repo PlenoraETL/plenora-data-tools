@@ -1,10 +1,10 @@
 # Provenienza — `wkt` 0.14.0, v2
 
-**Non adottato.** Presente per revisione (vedi la nota in cima a `Cargo.toml`).
+**Adottato**: è il `wkt` del workspace (`[patch.crates-io]` in `Cargo.toml`).
 
 - Pacchetto: `wkt-0.14.0.crate`, `source = registry+https://github.com/rust-lang/crates.io-index`.
 - Checksum del pacchetto: `efb2b923ccc882312e559ffaa832a055ba9d1ac0cc8e86b3e25453247e4b81d7`
-  (verificato contro i byte scaricati — vedi `scripts/verifica_vendor_provenienza.py`).
+  (verificato contro i byte scaricati, nel progetto d'origine).
 - Patch applicata, da `patches/wkt-v2.patch`:
   conserva i componenti vuoti e i ruoli degli anelli; rifiuta gli interni
   orfani con `InteriorWithoutExterior` (`src/error.rs`); espone
@@ -15,19 +15,13 @@
 - Licenza: `LICENSE-APACHE`/`LICENSE-MIT` sono quelle spedite nel pacchetto
   pubblicato, invariate dalla patch (che tocca solo `src/`).
 
-**Non usata, deliberatamente**: `results/geo-ogc-panic/windows/logging-wkt-01/wkt.patch`
-esiste nel congelamento accanto a `logging.patch`, ma e' una bozza v1 di
-questa stessa correzione — tocca `write_multi_polygon` in
-`src/to_wkt/geo_trait_impl.rs` con un approccio precedente, in
-sovrapposizione con `wkt-v2.patch`. La tabella del manifesto lo dice
-esplicitamente ("diff cumulativo, non da sovrapporre alla vecchia WKT v1"):
-qui e' applicata solo `wkt-v2.patch`.
+Una bozza precedente della stessa correzione (v1, su
+`write_multi_polygon`) non e' applicata: si sovrapporrebbe a `wkt-v2.patch`.
 
-Ricostruzione end-to-end: `python scripts/verifica_vendor_provenienza.py`.
+La ricostruzione end-to-end la facevano gli script di verifica di
+`plenora-data-tools@190c493`, non portati qui.
 
-**Adozione lato prodotto (diff 4, migrazione `operations::to_wkt`) non e'
-parte di questa vendorizzazione**: questa patch abilita l'API, non cambia chi
-la chiama. Vedi la sezione sulla migrazione data-tools nel congelamento
-`handoff-final-20260909/CONSEGNA-DATA-TOOLS.md` per cio' che resta da fare
-(test engine su errore dopo riga valida, propagazione in executor blocking e
-trasporto Arrow unary).
+**Chiamanti.** `geo.to_wkt` usa `try_wkt_string()`
+(`crates/plenora-kernels-geo/src/operations.rs`); l'unica chiamata a
+`wkt_string()` resta su un `Point` (`extensions.rs`), che non ha anelli e
+non puo' trovarsi nello stato orfano.

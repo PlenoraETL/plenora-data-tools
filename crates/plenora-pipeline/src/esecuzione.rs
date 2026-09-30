@@ -387,8 +387,9 @@ fn diagnostica_nella_base(errore: PlenoraError, passo: &PassoValidato) -> Plenor
     }
 }
 
-/// Il contesto sul testo dell'errore, anche sotto il wrapper di fase: i
-/// kernel allegano la diagnostica a un `DataMapping` con fase `Read`.
+/// Il contesto sul testo dell'errore, anche sotto un eventuale wrapper di
+/// fase (oggi i kernel non ne mettono: la diagnostica sta su un
+/// `DataMapping` con la fase derivata).
 fn con_contesto_sotto_la_fase(contesto: &str, errore: PlenoraError) -> PlenoraError {
     match errore {
         PlenoraError::Tagged { phase, source } => PlenoraError::Tagged {

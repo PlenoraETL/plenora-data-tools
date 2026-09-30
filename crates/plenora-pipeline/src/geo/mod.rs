@@ -275,7 +275,7 @@ pub struct PassoGeo {
 }
 
 /// Il limite di righe dell'arco d'uscita, che i kernel ricevono come tetto
-/// dell'output (come D14.6 a `190c493`): `max_output_rows` per un output
+/// dell'output (come nell'engine di `190c493`): `max_output_rows` per un output
 /// del piano, `max_rows_per_edge` altrimenti.
 const fn righe_massime(limiti: &Limits, uscita_del_piano: bool) -> u64 {
     if uscita_del_piano {

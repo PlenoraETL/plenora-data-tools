@@ -83,9 +83,7 @@ diagnostica per riga»).
 ### Limiti e deviazioni
 
 Solo poligoni: una geometria lineare o puntuale si rifiuta
-(`UnsupportedGeometry`). Il catalogo dichiara forma 1:N e vincolo
-`max(uscita / sinistra, uscita / destra)`, ma il passo rende una riga per
-riga della sinistra. Nessun controllo a posteriori del risultato contro
+(`UnsupportedGeometry`). Nessun controllo a posteriori del risultato contro
 gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 

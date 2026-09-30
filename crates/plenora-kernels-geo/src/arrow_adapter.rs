@@ -300,7 +300,7 @@ mod tests {
     fn geo_metadata_with_encoding_writes_the_key_only_when_declared() {
         // `Some` -> chiave `encoding` in forma canonica; `None` -> chiave
         // omessa e JSON identico byte-per-byte alla forma senza encoding
-        // (fingerprint e retrocompatibilita' invariati).
+        // (metadati identici a quelli senza encoding).
         for encoding in [GeometryEncoding::Wkb, GeometryEncoding::Ewkb] {
             let json = geo_metadata_json_with_encoding(CRS, GeometryDimensions::Xy, Some(encoding))
                 .expect("metadata");
@@ -841,7 +841,7 @@ mod tests {
         assert_eq!(
             metadata.get(PLENORA_GEOMETRY_SRID_KEY).map(String::as_str),
             Some("7"),
-            "R2.7: il dettaglio esplicito vince sulla deduzione"
+            "il dettaglio esplicito vince sulla deduzione"
         );
     }
 
@@ -1217,7 +1217,7 @@ mod tests {
             let field = field_with_pairs(&[(key, value)]);
             assert!(
                 read_geometry_contract_keys(&field).is_err(),
-                "{key} con valore non canonico deve essere rifiutato (R5.1)"
+                "{key} con valore non canonico deve essere rifiutato"
             );
         }
         // Coppia definizione/formato: una sola delle due -> errore;

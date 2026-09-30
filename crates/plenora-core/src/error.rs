@@ -14,9 +14,11 @@
 //! commit no.
 //!
 //! La fase derivata dalla variante si raffina con [`PlenoraError::Tagged`]
-//! dove chi produce l'errore conosce il momento esatto (oggi i kernel che
-//! rifiutano righe con un valore non convertibile taggano
-//! [`ErrorPhase::Read`]); gli altri assi restano delegati alla sorgente.
+//! dove chi produce l'errore conosce il momento esatto; gli altri assi
+//! restano delegati alla sorgente. Oggi nessun codice del workspace tagga:
+//! i rifiuti per riga dei kernel (conversioni, divisioni per zero,
+//! asserzioni) nascono eseguendo un passo, non leggendo un supporto, e
+//! prendono la fase derivata, [`ErrorPhase::Write`].
 //!
 //! Alcune varianti vengono dall'engine, dalla CLI e dal trasporto fra
 //! processi di `plenora-data-tools` e qui nessun codice le produce
@@ -458,7 +460,7 @@ asse_canonico! {
     ///
     /// Enum, [`ErrorPhase::as_str`] ed elenco delle varianti nascono dalla
     /// macro `asse_canonico`.
-    ErrorPhase => FASI_DICHIARATE, nota_nome_stabile = "`snake_case` canonico §9." {
+    ErrorPhase => FASI_DICHIARATE, nota_nome_stabile = "`snake_case` canonico." {
         /// Validazione: lettura del piano (JSON), contratti, schema, CRS,
         /// limiti.
         Validate => "validate",
@@ -494,7 +496,7 @@ asse_canonico! {
     ///
     /// Enum, [`RemoteEffect::as_str`] ed elenco delle varianti nascono dalla
     /// macro `asse_canonico`.
-    RemoteEffect => EFFETTI_DICHIARATI, nota_nome_stabile = "`snake_case` canonico R9.6." {
+    RemoteEffect => EFFETTI_DICHIARATI, nota_nome_stabile = "`snake_case` canonico." {
         /// L'operazione non ha prodotto alcun effetto osservabile.
         None => "none",
         /// L'effetto e' stato annullato, con conferma.
@@ -663,9 +665,10 @@ impl PlenoraError {
     ///
     /// Un errore taggato ([`PlenoraError::Tagged`]) riporta la fase che gli
     /// ha dato chi lo ha prodotto; uno non taggato quella derivata dalla
-    /// variante. Oggi taggano [`ErrorPhase::Read`] i kernel che rifiutano
-    /// righe con un valore non convertibile (WKT, JSON, cast); `plenora-io`
-    /// non tagga.
+    /// variante. Oggi nessun codice del workspace tagga: kernel e runner
+    /// lasciano la derivazione (un rifiuto per riga di un kernel è un
+    /// `DataMapping`, quindi [`ErrorPhase::Write`], la fase dell'esecuzione),
+    /// e `plenora-io` non tagga.
     ///
     /// Derivazione per variante, con le approssimazioni dichiarate:
     ///
@@ -724,8 +727,8 @@ impl PlenoraError {
     /// vince il tag esistente, il piu' vicino all'origine, e non si annida.
     ///
     /// Il tag va **sotto** i wrapper trasparenti: un errore gia' taggato dentro
-    /// [`PlenoraError::RowDiagnostics`] (caso reale: il confine dell'input
-    /// chiama `with_phase(Read)` su errori con diagnostica di riga) verrebbe
+    /// [`PlenoraError::RowDiagnostics`] (per esempio un confine di lettura
+    /// che chiami `with_phase(Read)` su errori con diagnostica di riga) verrebbe
     /// altrimenti taggato di nuovo. La funzione applica il tag alla sorgente,
     /// e la forma canonica e' sempre
     ///

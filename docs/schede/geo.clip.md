@@ -87,9 +87,7 @@ diagnostica per riga»).
 ### Limiti e deviazioni
 
 Solo poligoni: un ritaglio che si riduce a linee o punti è vuoto, quindi
-la riga resta con la geometria nulla. Il catalogo dichiara forma 1:N e
-vincolo `max(uscita / sinistra, uscita / destra)`, ma il passo rende una
-riga per riga della sinistra. Nessun controllo a posteriori del risultato
+la riga resta con la geometria nulla. Nessun controllo a posteriori del risultato
 contro gli ingressi ([README, «Precisione delle operazioni geografiche: 1
 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).

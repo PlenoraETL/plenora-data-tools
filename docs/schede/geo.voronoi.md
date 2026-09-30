@@ -25,8 +25,7 @@ Le altre colonne, i metadati di schema e le proprietà del contratto
 1:1: una cella per riga, ma ogni cella dipende da tutte le righe (il kernel
 `advanced::voronoi_cells` riceve tutti i punti insieme, e il limite
 `max_points` come argomento). A ogni punto va la prima cella, in ordine di
-prima comparsa del sito, che lo interseca. Il catalogo dichiara la forma
-1:N; contratto e kernel danno una cella per riga. Il kernel non conosce i
+prima comparsa del sito, che lo interseca. Il kernel non conosce i
 null: il runner gli passa solo le geometrie non nulle, nell'ordine delle
 righe, e riporta ogni cella alla sua riga; una riga nulla resta nulla e
 non è un sito. Gli altri attributi restano invariati.

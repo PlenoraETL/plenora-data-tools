@@ -23,7 +23,7 @@ use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
-use plenora_core::{ErrorPhase, PlenoraError, Result};
+use plenora_core::{PlenoraError, Result};
 
 /// Config di `table.lookup`: traduzione dei valori di una colonna con una
 /// tabella di corrispondenza.
@@ -1293,7 +1293,6 @@ impl RifiutiJson {
         Err(PlenoraError::DataMapping(
             "documenti JSON rifiutati; consultare row_diagnostics".into(),
         )
-        .with_phase(ErrorPhase::Read)
         .with_row_diagnostics(report))
     }
 }

@@ -146,7 +146,7 @@ use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
-use plenora_core::{ErrorPhase, PlenoraError, Result};
+use plenora_core::{PlenoraError, Result};
 
 pub(crate) struct RowRejection<'a> {
     pub row: usize,
@@ -229,9 +229,7 @@ pub(crate) fn reject_rows(rejections: &[RowRejection<'_>], message: &'static str
         diagnostic_state_counts: None,
         write_outcome: None,
     };
-    Err(PlenoraError::DataMapping(message.into())
-        .with_phase(ErrorPhase::Read)
-        .with_row_diagnostics(report))
+    Err(PlenoraError::DataMapping(message.into()).with_row_diagnostics(report))
 }
 
 /// Indice della colonna `name` nel batch.

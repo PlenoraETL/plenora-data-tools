@@ -218,7 +218,7 @@ fn discovery_rejects_canonical_legacy_divergence() {
         Err(PlenoraError::InvalidPlan(message)) => {
             assert!(message.contains("divergente"), "{message}");
         }
-        other => panic!("attesa divergenza R2.6, ottenuto {other:?}"),
+        other => panic!("attesa divergenza fra contratto e schema, ottenuto {other:?}"),
     }
 }
 
@@ -391,13 +391,13 @@ fn discovery_contract_errors_keep_the_derived_validate_phase() {
     metadata.insert(PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xyz".to_owned());
     let field = field.with_metadata(metadata);
     let error = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
-        .expect_err("divergenza R2.6");
+        .expect_err("divergenza fra contratto e schema");
     assert_eq!(error.phase(), ErrorPhase::Validate);
     assert_eq!(error.phase_tag(), None, "nessun tag: fase derivata");
 }
 
 // -------------------------------------------------------------------
-// Definizione CRS dalle rappresentazioni accettate (R4.x)
+// Definizione CRS dalle rappresentazioni accettate
 // -------------------------------------------------------------------
 
 #[test]

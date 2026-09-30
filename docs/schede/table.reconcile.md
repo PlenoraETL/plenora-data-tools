@@ -34,7 +34,9 @@ ingressi. Il contratto dichiara 5 righe, dimostrate.
 
 ### Righe
 
-Sempre 5 righe, una per metrica. Per ogni chiave, con `L` righe a sinistra
+Sempre 5 righe, una per metrica, anche da due ingressi vuoti (metriche a
+zero): il numero di righe non dipende dagli ingressi, e il catalogo esenta
+l'operazione dal fattore di espansione. Per ogni chiave, con `L` righe a sinistra
 e `R` a destra:
 
 - `matched_rows`: somma di `min(L, R)`;
@@ -69,9 +71,6 @@ In esecuzione:
   che il runner passa al kernel (`max_governed_memory_bytes`), a lunghezza
   della forma testuale più 64 byte per chiave; oppure le chiavi distinte di
   un lato superano `max_input_rows`;
-- `ResourceLimit` dal runner: con entrambi gli ingressi vuoti le 5 righe
-  d'uscita superano il fattore di espansione (`max_expansion_factor` volte
-  la somma delle righe d'ingresso);
 - `Schema`: una cella di chiave non si converte in testo (`date32` o
   `timestamp(ms)` fuori dall'intervallo di calendario).
 
@@ -80,8 +79,7 @@ In esecuzione:
 L'hash delle chiavi non ha seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
 La memoria contata è quella delle chiavi, non quella delle mappe che le
-contengono. Due ingressi vuoti falliscono per il fattore di espansione
-invece di dare cinque metriche a zero.
+contengono.
 
 ### Complessità
 

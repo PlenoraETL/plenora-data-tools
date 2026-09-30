@@ -1,13 +1,14 @@
 # Provenienza — `geo` 0.33.1, candidato esatto
 
-**Non adottato.** Presente per revisione e benchmark applicativo (vedi la
-nota in cima a `Cargo.toml`).
+**Adottato**: è il `geo` del workspace (`[patch.crates-io]` in
+`Cargo.toml`), con il filtro veloce di `orient2d`
+(`PROVENANCE-FILTRO-SPERIMENTALE.md`) e il porting a `i_overlay` 9.0.0
+(sotto).
 
 - Pacchetto: `geo-0.33.1.crate`, `source = registry+https://github.com/rust-lang/crates.io-index`.
 - Checksum del pacchetto: `30eb1fdc57c1e5cfd11826fe0caec4b9dc7901f3758263bb506228d88c8d9e9a`
   (lo stesso gia' registrato per `geo` nel `Cargo.lock` non patchato; verificato
-  di nuovo contro i byte del file scaricato prima di estrarre — vedi
-  `scripts/verifica_vendor_provenienza.py`).
+  contro i byte del file scaricato prima di estrarre, nel progetto d'origine).
 - Patch applicate in ordine, da `patches/`:
   1. `geo-exact-orientation.patch` — orientamento esatto (`src/algorithm/kernels/robust.rs`,
      nuovo `src/algorithm/kernels/exact_orientation.rs`). Corregge il segno di
@@ -23,9 +24,9 @@ nota in cima a `Cargo.toml`).
   3. (dopo `orient2d-filtro-sperimentale.patch`, vedi
      `PROVENANCE-FILTRO-SPERIMENTALE.md`) `geo-i-overlay-9.patch` — porting a
      `i_overlay` 9.0.0 (sezione sotto).
-- Digest dell'albero risultante: verificato da script, non fissato a mano qui
-  (cambierebbe a ogni rigenerazione delle patch; il numero fissato e' il
-  checksum del pacchetto sopra, quello e' la vera radice di fiducia).
+- Digest dell'albero risultante: non fissato qui (cambierebbe a ogni
+  rigenerazione delle patch); la radice di fiducia e' il checksum del
+  pacchetto sopra.
 - Licenza: `geo` non la spedisce nel pacchetto pubblicato su crates.io (vive
   alla radice del workspace upstream, non nella singola crate — verificato:
   il tarball estratto non la contiene). `LICENSE-APACHE`/`LICENSE-MIT` qui
@@ -33,11 +34,13 @@ nota in cima a `Cargo.toml`).
   da `georust/geo` (commit del 2017-08-14, invariate da allora) — dal blob
   Git, non da un checkout su disco: un checkout Windows con
   `core.autocrlf=true` le avrebbe silenziosamente riscritte in CRLF, cambiando
-  il loro sha256 rispetto all'oggetto upstream vero. Verificate dallo script
-  contro il digest del blob.
+  il loro sha256 rispetto all'oggetto upstream vero. Verificate contro il
+  digest del blob nel progetto d'origine.
 
-Ricostruzione end-to-end (pacchetto verificato → patch → digest confrontato
-con questa cartella): `python scripts/verifica_vendor_provenienza.py`.
+La ricostruzione end-to-end (pacchetto verificato → patch → digest
+confrontato con questa cartella) la facevano gli script di verifica di
+`plenora-data-tools@190c493`, che questo repository non ha portato: qui
+nessun controllo automatico la ripete.
 
 ## Porting a `i_overlay` 9.0.0 (`patches/geo-i-overlay-9.patch`)
 

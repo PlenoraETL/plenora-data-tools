@@ -62,8 +62,8 @@ schema dell'ingresso. Per una regola `error` conta `errors`, per una
 ### Righe
 
 `annotate`: 1:1, una riga d'uscita per riga d'ingresso. `summary`: una riga
-per regola; il kernel la produce anche con un ingresso vuoto (conteggi a 0),
-ma nel runner quel caso supera il fattore di espansione (vedi «Errori»).
+per regola, anche con un ingresso vuoto (conteggi a 0): le righe le fissa
+la config, e il catalogo esenta l'operazione dal fattore di espansione.
 
 ### Ordine
 
@@ -82,9 +82,7 @@ In validazione, `InvalidPlan`:
   regex oltre `max_regex_bytes` o non compilabile;
 - config con campi sconosciuti o valori fuori elenco.
 
-In esecuzione: nessuno che dipenda dai valori. Con `summary` il runner dà
-`ResourceLimit` quando le regole sono più di `max_expansion_factor` volte le
-righe d'ingresso: sempre, con un ingresso vuoto.
+In esecuzione: nessuno che dipenda dai valori.
 
 ### Limiti e deviazioni
 

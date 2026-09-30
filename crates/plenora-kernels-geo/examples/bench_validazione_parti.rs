@@ -59,7 +59,7 @@ fn stella(rng: &mut Rng, raggio: f64, vertici: usize) -> Polygon<f64> {
     for indice in 0..vertici {
         #[allow(clippy::cast_precision_loss)] // indice < 2^53: esatto.
         let angolo = indice as f64 * 2.0 * std::f64::consts::PI / vertici as f64;
-        // Niente mul_add/FMA (architettura.md#determinismo).
+        // Niente mul_add/FMA: stesso risultato su ogni piattaforma (AGENTS.md, determinismo).
         #[allow(clippy::suboptimal_flops)]
         let fattore = 0.75 + 0.5 * rng.unit();
         #[allow(clippy::suboptimal_flops)]

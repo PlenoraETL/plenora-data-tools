@@ -365,7 +365,7 @@ pub fn geometry_encoding_from_metadata_strict(
         || {
             Err(PlenoraError::Unsupported(
                 "metadato `geo`: encoding geometria non rappresentabile \
-                 (R3.5: ammessi solo `wkb` ed `ewkb`)"
+                 (ammessi solo `wkb` ed `ewkb`)"
                     .to_owned(),
             ))
         },
@@ -400,8 +400,7 @@ fn geo_metadata_value(field: &Field) -> Result<Option<serde_json::Value>, Plenor
         .map(Some)
         .map_err(|_| {
             PlenoraError::InvalidPlan(
-                "metadato legacy `geo`: JSON non valido (R5.1: illeggibile non e' assente)"
-                    .to_owned(),
+                "metadato legacy `geo`: JSON non valido (illeggibile non vale assente)".to_owned(),
             )
         })
 }
@@ -824,7 +823,7 @@ fn parse_canonical_u32(raw: Option<&String>, key: &str) -> Result<Option<u32>, P
     raw.map(|value| {
         parse_unsigned_decimal(value).ok_or_else(|| {
             PlenoraError::InvalidPlan(format!(
-                "chiave `{key}`: atteso un intero decimale senza segno (R5.4)"
+                "chiave `{key}`: atteso un intero decimale senza segno"
             ))
         })
     })
@@ -884,7 +883,7 @@ pub fn canonical_geometry_types(
         (None, None) => Ok(None),
         (None, Some(_)) => Err(PlenoraError::InvalidPlan(format!(
             "chiave `{PLENORA_GEOMETRY_TYPES_KEY}` senza \
-             `{PLENORA_GEOMETRY_TYPES_DECLARATION_KEY}` (R3.4.1)"
+             `{PLENORA_GEOMETRY_TYPES_DECLARATION_KEY}`"
         ))),
         (Some(declaration), types) => {
             // La stringa vuota modella l'elenco assente (chiave non emessa).
@@ -974,7 +973,7 @@ pub fn canonical_geometry_crs_definition(
         (None, None) => Ok(None),
         (Some(_), None) | (None, Some(_)) => Err(PlenoraError::InvalidPlan(format!(
             "le chiavi `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}` e \
-             `{PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY}` devono essere presenti insieme (R2.2)"
+             `{PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY}` devono essere presenti insieme"
         ))),
         (Some(definition), Some(format)) => {
             if definition.is_empty()
@@ -995,7 +994,7 @@ pub fn canonical_geometry_crs_definition(
             if actual_format != Some(format) {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "chiave `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}`: il contenuto non \
-                     corrisponde al formato `{format}` dichiarato (R5.1)"
+                     corrisponde al formato `{format}` dichiarato"
                 )));
             }
             Ok(Some((definition.clone(), format)))
@@ -1076,20 +1075,20 @@ pub fn read_contract_version(schema: &Schema) -> Result<Option<u32>, PlenoraErro
         if schema_has_canonical_keys(schema) {
             return Err(PlenoraError::InvalidPlan(format!(
                 "chiavi canoniche `{PLENORA_NAMESPACE_PREFIX}*` senza \
-                 `{PLENORA_CONTRACT_VERSION_KEY}` nei metadati dello schema (R2.5)"
+                 `{PLENORA_CONTRACT_VERSION_KEY}` nei metadati dello schema"
             )));
         }
         return Ok(None);
     };
     let version = parse_unsigned_decimal(raw).ok_or_else(|| {
         PlenoraError::InvalidPlan(format!(
-            "chiave `{PLENORA_CONTRACT_VERSION_KEY}`: atteso un intero decimale senza segno (R5.4)"
+            "chiave `{PLENORA_CONTRACT_VERSION_KEY}`: atteso un intero decimale senza segno"
         ))
     })?;
     if version > PLENORA_CONTRACT_VERSION {
         return Err(PlenoraError::Unsupported(format!(
-            "`{PLENORA_CONTRACT_VERSION_KEY}` successiva a {PLENORA_CONTRACT_VERSION}: R2.5 \
-             impone il fallimento esplicito, mai un'interpretazione parziale"
+            "`{PLENORA_CONTRACT_VERSION_KEY}` successiva a {PLENORA_CONTRACT_VERSION}: \
+             fallimento esplicito, mai un'interpretazione parziale"
         )));
     }
     Ok(Some(version))
@@ -1230,7 +1229,7 @@ fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
 fn divergent_geometry_keys(notion: &str) -> PlenoraError {
     PlenoraError::InvalidPlan(format!(
         "nozione `{notion}` divergente fra chiavi canoniche e metadato legacy `geo` \
-         (R2.6: il componente fallisce, non sceglie)"
+         (il componente fallisce, non sceglie)"
     ))
 }
 
@@ -1306,7 +1305,7 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
         return Err(PlenoraError::InvalidPlan(format!(
             "chiave `{PLENORA_GEOMETRY_AXIS_ORDER_KEY}` obbligatoria quando \
              `{PLENORA_GEOMETRY_CRS_ID_KEY}` o `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}` \
-             e' presente (tabella R2.2; valore `unknown` ammesso)"
+             e' presente (valore `unknown` ammesso)"
         )));
     }
     if keys.crs_resolution == Some(CrsResolution::Missing)
@@ -1317,7 +1316,7 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
     {
         return Err(PlenoraError::InvalidPlan(format!(
             "`{PLENORA_GEOMETRY_CRS_RESOLUTION_KEY}` = `missing` non ammette metadati CRS \
-             dichiarati (R2.2)"
+             dichiarati"
         )));
     }
 

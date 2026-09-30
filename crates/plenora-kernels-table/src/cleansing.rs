@@ -21,7 +21,7 @@ use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     ROW_DIAGNOSTICS_CONTRACT, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
-use plenora_core::{ErrorPhase, PlenoraError, Result};
+use plenora_core::{PlenoraError, Result};
 
 /// Metodo di riempimento di `table.fill_na`.
 #[derive(Debug, Deserialize)]
@@ -1302,7 +1302,6 @@ pub fn type_cast_with_source_offset(
             return Err(PlenoraError::DataMapping(
                 "conversione rifiutata; consultare row_diagnostics".to_owned(),
             )
-            .with_phase(ErrorPhase::Read)
             .with_row_diagnostics(report));
         }
     }

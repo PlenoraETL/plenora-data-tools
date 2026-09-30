@@ -78,7 +78,7 @@ impl KernelBinario {
             }
             "geo.nearest" => {
                 let letta: NearestConfig = config(op, valore)?;
-                // Come D14.6 a 190c493: il quadrato del massimo fra
+                // Come l'engine di `190c493`: il quadrato del massimo fra
                 // `max_input_rows` e `max_rows_per_edge`.
                 let tetto = limiti
                     .rows

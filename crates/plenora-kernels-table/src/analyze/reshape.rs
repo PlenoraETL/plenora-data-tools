@@ -215,7 +215,7 @@ pub(in crate::analyze) fn analyze_pivot(
     for output in config.mapping.values() {
         produce(&mut fields_out, fields, output, data_type.clone(), true)?;
     }
-    // R2.4: i metadati di schema si conservano (il kernel li copia); le
+    // I metadati di schema si conservano (il kernel li copia); le
     // colonne pivot sono derivate, senza metadati di campo.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let preserved = input

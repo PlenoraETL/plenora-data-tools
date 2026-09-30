@@ -108,15 +108,15 @@ dell'ingresso e dei triangoli. Memoria O(n).
 ### Esempio
 
 Quattro punti non cocircolari danno due triangoli; una linea di due punti
-non ne dà.
+e un punto solo non ne danno.
 
 ```json
 {
   "config": {},
   "ingressi": [
     {"nome": "punti", "colonne": [
-      {"nome": "id", "tipo": "int64", "valori": [1, 2]},
-      {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["MULTIPOINT((0 0),(10 0),(0 10),(12 12))", "LINESTRING(0 0,1 0)"]}
+      {"nome": "id", "tipo": "int64", "valori": [1, 2, 3]},
+      {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:3857", "valori": ["MULTIPOINT((0 0),(10 0),(0 10),(12 12))", "LINESTRING(0 0,1 0)", "POINT(5 5)"]}
     ]}
   ],
   "uscita": {"colonne": [

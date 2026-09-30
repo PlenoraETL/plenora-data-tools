@@ -64,7 +64,7 @@ pub(in crate::analyze) fn require_resolved_crs<'a>(
         ContractCrs::DeclaredUnresolved { .. } => Err(PlenoraError::Crs(format!(
             "{op}: colonna geometria `{}`: la colonna dichiara un'incoerenza CRS \
              non risolta (`declared_unresolved`); la risoluzione richiede una \
-             decisione esplicita nel piano (R4.6.3)",
+             decisione esplicita nel piano",
             geometry.name
         ))),
     }

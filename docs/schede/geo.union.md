@@ -84,8 +84,7 @@ diagnostica per riga»).
 
 Solo poligoni: una geometria lineare o puntuale, da un lato o dall'altro,
 si rifiuta (`UnsupportedGeometry`), dove GEOS e PostGIS renderebbero una
-collezione. Il catalogo dichiara forma 1:N e vincolo `uscita / (sinistra +
-destra)`, ma il passo rende una riga per riga della sinistra. Nessun
+collezione. Nessun
 controllo a posteriori del risultato contro gli ingressi ([README,
 «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).

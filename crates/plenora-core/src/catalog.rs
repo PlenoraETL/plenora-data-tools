@@ -119,20 +119,26 @@ impl GeoFusion {
 /// Le tabellari non la dichiarano (`result_shape` è `None`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultShape {
-    /// Una riga d'uscita per riga d'ingresso, nello stesso ordine.
+    /// Una riga d'uscita per riga d'ingresso, nello stesso ordine; per le
+    /// binarie, una per riga del primo ingresso, e la destra non aggiunge
+    /// righe (`clip`, le booleane allineate, `count_points_in_polygons`,
+    /// `within`).
     OneToOne,
     /// Ogni riga d'ingresso produce zero, una o più righe (esplosioni,
-    /// tagli, tessellazioni); per le binarie, gli abbinamenti fra i lati.
+    /// tagli, triangolazioni); per le binarie, gli abbinamenti fra i lati
+    /// (`sjoin`, `nearest`, `overlay`).
     OneToMany,
-    /// Più righe d'ingresso si fondono in una (dissolve, collect,
-    /// costruzione di linee e poligoni, poligonizzazione).
+    /// Più righe d'ingresso si fondono in una: al più una riga per riga
+    /// d'ingresso (`collect`, una per gruppo), o sempre una sola, anche da
+    /// una tabella vuota (`dissolve`, costruzione di linee e poligoni).
     ManyToOne,
     /// Il risultato dipende dall'intero ingresso senza corrispondenza fra
     /// righe. Nessuna operazione del catalogo la dichiara oggi.
     Collective,
     /// Dall'intero ingresso a un numero di righe che non si lega alle righe
-    /// d'ingresso (griglia generata, problemi di copertura, tratti
-    /// condivisi); queste operazioni sono esenti dal fattore di espansione.
+    /// d'ingresso, anche più di quelle (griglia generata, problemi di
+    /// copertura, tratti condivisi, fusione di linee, poligonizzazione);
+    /// queste operazioni sono esenti dal fattore di espansione.
     WholeToMany,
     /// Produttore 1:1: costruisce la geometria da colonne non geometriche
     /// della stessa riga (`geo.from_coords`, `geo.from_wkt`).
@@ -219,7 +225,8 @@ pub enum ExpansionConstraint {
     /// `uscita / sinistra`: operazioni guidate dal lato sinistro, con al più
     /// una riga o poche righe per riga sinistra (join semi, anti e asof,
     /// `except`, `intersect`, `assert_foreign_key`, `geo.nearest`,
-    /// `geo.within`, `geo.count_points_in_polygons`).
+    /// `geo.within`, `geo.count_points_in_polygons`, `geo.clip` e le
+    /// booleane geo allineate).
     LeftRelative,
     /// `uscita / destra`. Nessuna operazione del catalogo la dichiara oggi.
     RightRelative,
@@ -448,8 +455,12 @@ pub struct OperationDescriptor {
     /// Esenzione da `max_expansion_factor`: le operazioni che per contratto
     /// producono dall'intero ingresso un numero di righe che non dipende
     /// dalle righe (`WholeToMany`: griglie generate, problemi di copertura,
-    /// tratti condivisi) non sono soggette al fattore; restano vincolate da
-    /// `max_rows_per_edge` e dagli altri limiti di righe.
+    /// tratti condivisi, fusione di linee, poligonizzazione) o un numero di
+    /// righe fisso (una per `geo.dissolve` e i costruttori di linee e
+    /// poligoni, cinque per `table.reconcile`, una per regola per il
+    /// riepilogo di `table.validate_rules`, anche da ingressi vuoti) non
+    /// sono soggette al fattore; restano vincolate da `max_rows_per_edge` e
+    /// dagli altri limiti di righe.
     pub expansion_factor_exempt: bool,
     /// Livello di maturità (vedi [`Maturity`]: nessun codice lo consulta).
     pub maturity: Maturity,
@@ -512,8 +523,10 @@ impl OperationDescriptor {
                     SourceRowProvenance::Unavailable
                 }
             }
+            // `OneToOne` vale anche per le binarie: una riga per riga del primo
+            // ingresso, nella sua posizione.
             Family::Geo => {
-                if matches!(self.arity, Arity::Unary)
+                if matches!(self.arity, Arity::Unary | Arity::BinaryOrdered)
                     && matches!(
                         self.result_shape,
                         Some(ResultShape::OneToOne | ResultShape::FromCoords)
@@ -633,131 +646,50 @@ impl OperationDescriptor {
 //   `BoundaryOnly` per i bloccanti, `NonInterruptible` per i kernel senza
 //   punti di cancellazione (`make_valid`, `polygonize`, `split`,
 //   `reproject`);
-// - `result_shape`: gli abbinamenti delle binarie geo sono `OneToMany`;
+// - `result_shape`: quella che il runner rende, non quella del progetto
+//   d'origine (`verifica_forma` in `plenora-io/tests/operazioni_doc.rs` la
+//   prova sull'esempio di ogni scheda); gli abbinamenti delle binarie geo
+//   sono `OneToMany`, le binarie con una riga per riga sinistra `OneToOne`;
 // - `determinism`: `DefinedOrder` di default, `CanonicalOrder` per le
 //   operazioni insiemistiche e le aggregazioni senza ordine, `InputOrder`
 //   per `concat`.
 // ---------------------------------------------------------------------------
 
-macro_rules! op {
-    // Nessuna versione esplicita: tutte e quattro le componenti a 1,
-    // vincolo di espansione `SumRelative` e nessuna esenzione.
-    ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
-     $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident) => {
-        op!($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat,
-            kernel_version = 1)
-    };
-    // Variante con chiavi opzionali: `semantic_version`,
-    // `config_schema_version`, `contract_analysis_version`, `kernel_version`
-    // (default 1), `expansion_constraint` (default `SumRelative`; accetta un
-    // ident di variante oppure `Custom(fattore)` con il fattore f64),
-    // `expansion_factor_exempt` (default `false`) e `geo_fusion` (default
-    // `NotFusible`) sono ammesse in qualsiasi combinazione e ordine; una
-    // chiave sconosciuta non compila, una ripetuta vale l'ultima.
-    ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
-     $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident,
-     $($versions:tt)+) => {
-        op!(@munch
-            ($id, $family, $origin, $arity, $exec, $cancel, $shape, $crs, $caps, $det, $mat)
-            (1, 1, 1, 1, ExpansionConstraint::SumRelative, false, GeoFusion::NotFusible)
-            $($versions)+)
-    };
-    // Muncher: consuma una chiave per passo aggiornando l'accumulatore
-    // (semantic, config_schema, contract_analysis, kernel,
-    // expansion_constraint, expansion_factor_exempt, geo_fusion).
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        semantic_version = $v:expr) => {
-        op!(@build ($($base)*) ($v, $c, $a, $k, $x, $e, $g))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        semantic_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($v, $c, $a, $k, $x, $e, $g) $($rest)+)
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        config_schema_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $v, $a, $k, $x, $e, $g))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        config_schema_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $v, $a, $k, $x, $e, $g) $($rest)+)
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        contract_analysis_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $v, $k, $x, $e, $g))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        contract_analysis_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $v, $k, $x, $e, $g) $($rest)+)
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        kernel_version = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $a, $v, $x, $e, $g))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        kernel_version = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $v, $x, $e, $g) $($rest)+)
-    };
-    // `expansion_constraint`: variante senza payload (ident) oppure
-    // `Custom(fattore)` con fattore f64 esplicito.
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        expansion_constraint = Custom($v:expr)) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e, $g))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        expansion_constraint = Custom($v:expr), $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::Custom($v), $e, $g) $($rest)+)
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        expansion_constraint = $v:ident) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e, $g))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        expansion_constraint = $v:ident, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, ExpansionConstraint::$v, $e, $g) $($rest)+)
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        expansion_factor_exempt = $v:expr) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, $x, $v, $g))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        expansion_factor_exempt = $v:expr, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $v, $g) $($rest)+)
-    };
-    // `geo_fusion`: variante di [`GeoFusion`] senza payload.
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        geo_fusion = $v:ident) => {
-        op!(@build ($($base)*) ($s, $c, $a, $k, $x, $e, GeoFusion::$v))
-    };
-    (@munch ($($base:tt)*) ($s:expr, $c:expr, $a:expr, $k:expr, $x:expr, $e:expr, $g:expr)
-        geo_fusion = $v:ident, $($rest:tt)+) => {
-        op!(@munch ($($base)*) ($s, $c, $a, $k, $x, $e, GeoFusion::$v) $($rest)+)
-    };
-    (@build ($id:literal, $family:ident, $origin:ident, $arity:ident, $exec:ident,
-     $cancel:ident, $shape:expr, $crs:expr, $caps:expr, $det:ident, $mat:ident)
-     ($semantic:expr, $config_schema:expr, $contract_analysis:expr, $kernel:expr,
-      $constraint:expr, $exempt:expr, $fusion:expr)) => {
-        OperationDescriptor {
-            id: $id,
-            family: Family::$family,
-            origin: Origin::$origin,
-            arity: Arity::$arity,
-            execution_class: ExecutionClass::$exec,
-            cancellation_behavior: CancellationBehavior::$cancel,
-            geo_fusion: $fusion,
-            result_shape: $shape,
-            crs_requirement: $crs,
-            required_capabilities: $caps,
-            determinism: DeterminismPolicy::$det,
-            expansion_constraint: $constraint,
-            expansion_factor_exempt: $exempt,
-            maturity: Maturity::$mat,
-            semantic_version: $semantic,
-            config_schema_version: $config_schema,
-            contract_analysis_version: $contract_analysis,
-            kernel_version: $kernel,
-        }
-    };
-}
+include!("catalog_op.rs");
+
+/// Controllo del macro `op!` (`catalog_op.rs`): chiavi opzionali in
+/// qualsiasi ordine, e una chiave ripetuta che non compila invece di valere
+/// l'ultima. Non è usata: porta i due doctest.
+///
+/// ```
+/// use plenora_core::catalog::*;
+/// include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/catalog_op.rs"));
+/// const VOCE: OperationDescriptor = op!(
+///     "table.prova", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[],
+///     DefinedOrder, PublicProtocol, kernel_version = 4, semantic_version = 3,
+///     expansion_constraint = LeftRelative
+/// );
+/// fn main() {
+///     assert_eq!((VOCE.semantic_version, VOCE.config_schema_version), (3, 1));
+///     assert_eq!(VOCE.kernel_version, 4);
+///     assert_eq!(VOCE.expansion_constraint, ExpansionConstraint::LeftRelative);
+///     assert_eq!(VOCE.geo_fusion, GeoFusion::NotFusible);
+/// }
+/// ```
+///
+/// La stessa voce con `kernel_version` ripetuta:
+///
+/// ```compile_fail
+/// use plenora_core::catalog::*;
+/// include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/catalog_op.rs"));
+/// const VOCE: OperationDescriptor = op!(
+///     "table.prova", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[],
+///     DefinedOrder, PublicProtocol, kernel_version = 4, semantic_version = 3,
+///     expansion_constraint = LeftRelative, kernel_version = 5
+/// );
+/// fn main() {}
+/// ```
+const _CONTROLLO_OP: () = ();
 
 /// Catalogo unificato delle operazioni, tabellari e geografiche.
 pub static CATALOG: &[OperationDescriptor] = &[
@@ -1639,8 +1571,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         kernel_version = 3,
         expansion_constraint = LeftRelative
     ),
-    // reconcile: semantica di output non caratterizzata con certezza ->
-    // SumRelative di default (da rivedere se emerge un vincolo piu' preciso).
+    // reconcile: sempre cinque righe, una per metrica, qualunque siano gli
+    // ingressi: esente dal fattore d'espansione, che da due tabelle vuote (o
+    // con un fattore sotto 2,5 da una riga per lato) rifiutava il resoconto.
+    // Semantica 2, analisi 2.
     op!(
         "table.reconcile",
         Table,
@@ -1653,6 +1587,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     // --- Geografiche Manipola-compat -----------------------------------
@@ -1776,6 +1713,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TransformInPlace,
         semantic_version = 2
     ),
+    // Una riga d'uscita per riga, nella stessa posizione (una riga coperta
+    // dalle precedenti diventa null): 1:1. Il progetto d'origine dichiarava
+    // 1:N, piu' largo del kernel; analisi 2 per la forma corretta.
     op!(
         "geo.clean_topology",
         Geo,
@@ -1783,15 +1723,19 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Unary,
         Blocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
-    // clip/difference: il kernel restituisce una sola geometria (anche
-    // Multi) per riga sinistra; `OneToMany` e `MaxRelative` sono le
-    // dichiarazioni del progetto d'origine, più larghe del kernel.
+    // clip e le quattro booleane allineate: una sola geometria (anche Multi)
+    // per riga sinistra, nella sua posizione -> 1:1 e `LeftRelative`. Il
+    // progetto d'origine dichiarava `OneToMany` e `MaxRelative`, piu' larghi
+    // del kernel: `MaxRelative` rifiutava un ritaglio di piu' di
+    // `max_expansion_factor` righe su una maschera di una riga (semantica 2
+    // per clip: quell'uscita ora si produce). Analisi 2 per la forma.
     op!(
         "geo.clip",
         Geo,
@@ -1799,13 +1743,18 @@ pub static CATALOG: &[OperationDescriptor] = &[
         BinaryOrdered,
         BinaryBlocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
         KernelValidated,
-        expansion_constraint = MaxRelative
+        semantic_version = 2,
+        contract_analysis_version = 2,
+        expansion_constraint = LeftRelative
     ),
+    // count_points_in_polygons e within: una colonna in piu' sulla sinistra,
+    // una riga per riga sinistra -> 1:1 (il progetto d'origine dichiarava
+    // 1:N); analisi 2 per la forma.
     op!(
         "geo.count_points_in_polygons",
         Geo,
@@ -1813,11 +1762,12 @@ pub static CATALOG: &[OperationDescriptor] = &[
         BinaryOrdered,
         BinaryBlocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
         KernelValidated,
+        contract_analysis_version = 2,
         expansion_constraint = LeftRelative
     ),
     op!(
@@ -1827,13 +1777,19 @@ pub static CATALOG: &[OperationDescriptor] = &[
         BinaryOrdered,
         BinaryBlocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
         KernelValidated,
-        expansion_constraint = MaxRelative
+        contract_analysis_version = 2,
+        expansion_constraint = LeftRelative
     ),
+    // dissolve, line_builder, polygon_builder: sempre una riga, anche da una
+    // tabella vuota. Il numero di righe non dipende dall'ingresso: esenti dal
+    // fattore d'espansione, che da zero righe rifiutava la riga dichiarata
+    // (`ResourceLimit`). Semantica 2 (la tabella vuota ora da' la sua
+    // riga), analisi 2.
     op!(
         "geo.dissolve",
         Geo,
@@ -1845,7 +1801,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Projected),
         &[],
         CanonicalOrder,
-        KernelValidated
+        KernelValidated,
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.distance",
@@ -1894,12 +1853,13 @@ pub static CATALOG: &[OperationDescriptor] = &[
         BinaryOrdered,
         BinaryBlocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
         KernelValidated,
-        expansion_constraint = MaxRelative
+        contract_analysis_version = 2,
+        expansion_constraint = LeftRelative
     ),
     op!(
         "geo.length",
@@ -1927,7 +1887,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Projected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     // nearest: per ogni riga sinistra tutte le righe destre alla distanza
     // minima (a pari distanza più righe); uscita guidata dal lato sinistro
@@ -2002,7 +1965,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Projected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.simplify",
@@ -2026,12 +1992,13 @@ pub static CATALOG: &[OperationDescriptor] = &[
         BinaryOrdered,
         BinaryBlocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
         KernelValidated,
-        expansion_constraint = MaxRelative
+        contract_analysis_version = 2,
+        expansion_constraint = LeftRelative
     ),
     op!(
         "geo.to_wkt",
@@ -2048,8 +2015,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TerminalMeasure,
         semantic_version = 2
     ),
-    // union: semantica di output non caratterizzata con certezza (unione
-    // dissolta dei due input) -> SumRelative di default (da rivedere).
+    // union: riga `i` con riga `i` (lati con le stesse righe), come le altre
+    // booleane allineate.
     op!(
         "geo.union",
         Geo,
@@ -2057,11 +2024,13 @@ pub static CATALOG: &[OperationDescriptor] = &[
         BinaryOrdered,
         BinaryBlocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2,
+        expansion_constraint = LeftRelative
     ),
     op!(
         "geo.vertex_count",
@@ -2081,7 +2050,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
     // Triangolazione caricata in blocco (spade `bulk_load`) al posto
     // dell'inserimento incrementale di `geo`: kernel 2; celle a qualche ulp
     // da prima e rifiuti espliciti di precisione (`PrecisionInsufficient`,
-    // `VerticeMalCondizionato`): semantica 2.
+    // `VerticeMalCondizionato`): semantica 2. Una cella per riga, nella
+    // stessa posizione: 1:1 (il progetto d'origine dichiarava 1:N, piu'
+    // largo del kernel); analisi 2 per la forma corretta.
     op!(
         "geo.voronoi",
         Geo,
@@ -2089,15 +2060,15 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Unary,
         Blocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::Projected),
         &[],
         DefinedOrder,
         KernelValidated,
         semantic_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
-    // within: filtro del left sul right -> output <= left -> LeftRelative.
     op!(
         "geo.within",
         Geo,
@@ -2105,11 +2076,12 @@ pub static CATALOG: &[OperationDescriptor] = &[
         BinaryOrdered,
         BinaryBlocking,
         BoundaryOnly,
-        Some(ResultShape::OneToMany),
+        Some(ResultShape::OneToOne),
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
         KernelValidated,
+        contract_analysis_version = 2,
         expansion_constraint = LeftRelative
     ),
     // `make_valid` è TransformInPlace come le altre trasformazioni 1:1 sulla
@@ -2489,13 +2461,22 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Unary,
         Blocking,
         NonInterruptible,
-        Some(ResultShape::ManyToOne),
+        Some(ResultShape::WholeToMany),
         Some(CrsRequirement::Projected),
         &[],
         DefinedOrder,
         KernelValidated,
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
+    // line_merge e polygonize: dall'intera tabella, una riga per percorso o
+    // per faccia, anche piu' delle righe d'ingresso -> `WholeToMany`, esenti
+    // dal fattore d'espansione (restano sotto il limite di righe dell'arco,
+    // che il kernel riceve). Il progetto d'origine dichiarava N:1, piu'
+    // stretto del kernel: una riga di linee disgiunte ne da' piu' d'una.
+    // Semantica 2 (un'uscita oltre il fattore ora si produce), analisi 2.
     op!(
         "geo.line_merge",
         Geo,
@@ -2503,11 +2484,14 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Unary,
         Blocking,
         BoundaryOnly,
-        Some(ResultShape::ManyToOne),
+        Some(ResultShape::WholeToMany),
         Some(CrsRequirement::Projected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.split",
@@ -2853,6 +2837,11 @@ pub static CATALOG: &[OperationDescriptor] = &[
         KernelValidated,
         kernel_version = 2
     ),
+    // validate_rules: `annotate` 1:1, `summary` una riga per regola, anche da
+    // un ingresso vuoto: righe fissate dalla config, non dagli ingressi.
+    // Esente dal fattore d'espansione, che da una tabella vuota (o con piu'
+    // regole che `max_expansion_factor` volte le righe) rifiutava il
+    // riepilogo. Semantica 2, analisi 2.
     op!(
         "table.validate_rules",
         Table,
@@ -2864,7 +2853,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         None,
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        expansion_factor_exempt = true,
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     // --- Estensioni table v1.3 -------------------------------------------
     // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
@@ -3299,18 +3291,21 @@ mod tests {
                 ExpansionConstraint::LeftRelative,
             ),
             ("geo.sjoin", ExpansionConstraint::MaxRelative),
-            ("geo.clip", ExpansionConstraint::MaxRelative),
-            ("geo.difference", ExpansionConstraint::MaxRelative),
-            ("geo.intersection", ExpansionConstraint::MaxRelative),
+            ("geo.clip", ExpansionConstraint::LeftRelative),
+            ("geo.difference", ExpansionConstraint::LeftRelative),
+            ("geo.intersection", ExpansionConstraint::LeftRelative),
             ("geo.overlay", ExpansionConstraint::MaxRelative),
-            ("geo.symmetric_difference", ExpansionConstraint::MaxRelative),
+            (
+                "geo.symmetric_difference",
+                ExpansionConstraint::LeftRelative,
+            ),
             ("geo.nearest", ExpansionConstraint::LeftRelative),
             ("geo.within", ExpansionConstraint::LeftRelative),
             (
                 "geo.count_points_in_polygons",
                 ExpansionConstraint::LeftRelative,
             ),
-            ("geo.union", ExpansionConstraint::SumRelative),
+            ("geo.union", ExpansionConstraint::LeftRelative),
         ];
         for (id, constraint) in expected {
             let op = find_operation(id).expect(id);
@@ -3326,8 +3321,9 @@ mod tests {
     #[test]
     fn whole_to_many_exemption_is_declared_in_catalog() {
         // La classe di esenzione è dichiarata in catalogo, non riconosciuta
-        // guardando l'uscita: esattamente le operazioni WholeToMany
-        // generative o diagnostiche.
+        // guardando l'uscita: le operazioni WholeToMany (generative,
+        // diagnostiche, fusioni dell'intera tabella) e quelle con un numero
+        // di righe fisso, che non dipende dall'ingresso.
         let exempt: HashSet<_> = CATALOG
             .iter()
             .filter(|op| op.expansion_factor_exempt)
@@ -3338,14 +3334,30 @@ mod tests {
             HashSet::from([
                 "geo.generate_grid",
                 "geo.coverage_validate",
-                "geo.shared_paths"
+                "geo.shared_paths",
+                "geo.line_merge",
+                "geo.polygonize",
+                "geo.dissolve",
+                "geo.line_builder",
+                "geo.polygon_builder",
+                "table.reconcile",
+                "table.validate_rules",
             ])
         );
+        // Righe fisse: una per `dissolve` e i costruttori, cinque per
+        // `reconcile`, una per regola per `validate_rules` in `summary`.
+        let righe_fisse = [
+            "geo.dissolve",
+            "geo.line_builder",
+            "geo.polygon_builder",
+            "table.reconcile",
+            "table.validate_rules",
+        ];
         for op in CATALOG {
             assert_eq!(
                 op.expansion_factor_exempt,
-                op.result_shape == Some(ResultShape::WholeToMany),
-                "{}: esenzione non allineata alla shape WholeToMany",
+                op.result_shape == Some(ResultShape::WholeToMany) || righe_fisse.contains(&op.id),
+                "{}: esenzione non allineata alla shape WholeToMany o alle righe fisse",
                 op.id
             );
         }
@@ -3453,7 +3465,7 @@ mod tests {
         );
         assert_eq!(ExpansionConstraint::Custom(2.5).binding_threshold(4.0), 2.5);
         assert_eq!(ExpansionConstraint::MaxRelative.binding_threshold(4.0), 4.0);
-        // Uguaglianza per bit: nessuna ambiguita' float nel fingerprint.
+        // Uguaglianza per bit: nessuna ambiguita' float fra due costanti di catalogo.
         assert_eq!(
             ExpansionConstraint::Custom(2.5),
             ExpansionConstraint::Custom(2.5)
@@ -3748,7 +3760,7 @@ mod tests {
             // Triangolazione caricata in blocco: kernel 2, uscita osservabile
             // cambiata (ordine di delaunay, rifiuti di precisione di voronoi).
             ("geo.delaunay", 2, 1, 1, 2),
-            ("geo.voronoi", 2, 1, 1, 2),
+            ("geo.voronoi", 2, 1, 2, 2),
             // Backend Rust al posto di GEOS: kernel 2 (vedi il descrittore).
             ("geo.make_valid", 2, 1, 1, 2),
             ("geo.perimeter", 2, 1, 1, 1),
@@ -3774,7 +3786,52 @@ mod tests {
                     descriptor.kernel_version,
                 ),
                 (*semantic, *config_schema, *contract_analysis, *kernel),
-                "{id}: versioni non allineate al bump dichiarato (piano-v5.md#identita-e-fingerprint)"
+                "{id}: versioni non allineate al bump dichiarato"
+            );
+        }
+    }
+
+    #[test]
+    fn shape_alignment_carries_the_declared_version_bumps() {
+        // Forme, vincoli ed esenzioni allineati a quello che il runner rende
+        // (analisi 2 per tutti; semantica 2 dove un'uscita prima rifiutata
+        // ora si produce). Tabella scritta a mano: (id, semantic,
+        // config_schema, contract_analysis, kernel).
+        let expected: &[(&str, u32, u32, u32, u32)] = &[
+            // 1:N dichiarata, 1:1 resa.
+            ("geo.clean_topology", 1, 1, 2, 1),
+            ("geo.voronoi", 2, 1, 2, 2),
+            ("geo.count_points_in_polygons", 1, 1, 2, 1),
+            ("geo.within", 1, 1, 2, 1),
+            // 1:N e MaxRelative (o SumRelative) dichiarate, una riga per riga
+            // sinistra resa: il ritaglio su una maschera piccola non si
+            // rifiuta piu'.
+            ("geo.clip", 2, 1, 2, 1),
+            ("geo.difference", 1, 1, 2, 1),
+            ("geo.intersection", 1, 1, 2, 1),
+            ("geo.symmetric_difference", 1, 1, 2, 1),
+            ("geo.union", 1, 1, 2, 1),
+            // N:1 dichiarata, da tutta la tabella a molte righe resa.
+            ("geo.line_merge", 2, 1, 2, 1),
+            ("geo.polygonize", 2, 1, 2, 2),
+            // Righe fisse, esenti: la tabella vuota da' la sua riga.
+            ("geo.dissolve", 2, 1, 2, 1),
+            ("geo.line_builder", 2, 1, 2, 1),
+            ("geo.polygon_builder", 2, 1, 2, 1),
+            ("table.reconcile", 2, 1, 2, 2),
+            ("table.validate_rules", 2, 1, 2, 1),
+        ];
+        for (id, semantic, config_schema, contract_analysis, kernel) in expected {
+            let descriptor = find_operation(id).expect(id);
+            assert_eq!(
+                (
+                    descriptor.semantic_version,
+                    descriptor.config_schema_version,
+                    descriptor.contract_analysis_version,
+                    descriptor.kernel_version,
+                ),
+                (*semantic, *config_schema, *contract_analysis, *kernel),
+                "{id}: versioni non allineate al bump dichiarato"
             );
         }
     }

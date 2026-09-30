@@ -134,5 +134,5 @@ overflow-checks = true
 # `i_shape` 5 non ha piu' la funzione, e l'offset di `i_overlay` 9 salta i
 # percorsi con meno di tre punti prima di calcolarne l'area (vendor/
 # geo-0.33.1-exact-filtered/PROVENANCE.md).
-geo = { path = "vendor/geo-0.33.1-exact-filtered" } # diff 1 + diff 2 + filtro veloce + i_overlay 9 (PROVENANCE*.md)
-wkt = { path = "vendor/wkt-0.14.0-v2" }          # diff 3 (componenti vuoti, InteriorWithoutExterior, try_wkt_string)
+geo = { path = "vendor/geo-0.33.1-exact-filtered" } # orientamento esatto + logging + filtro veloce + i_overlay 9 (PROVENANCE*.md)
+wkt = { path = "vendor/wkt-0.14.0-v2" }          # wkt-v2.patch (componenti vuoti, InteriorWithoutExterior, try_wkt_string)

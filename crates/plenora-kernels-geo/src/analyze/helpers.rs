@@ -426,7 +426,7 @@ pub(in crate::analyze) fn geometry_field(
 /// `geo.crs` + `geo.dimensions` (la dimensionalita' scritta e' quella
 /// del contratto di output, mai un `xy` silenzioso) + `geo.encoding` (
 /// la chiave e' scritta solo quando il contratto la dichiara — `Some` — e
-/// omessa con `None`: fingerprint e retrocompatibilita' invariati).
+/// omessa con `None`: metadati identici a quelli senza encoding).
 pub(in crate::analyze) fn new_geometry_field(
     name: &str,
     crs: &ResolvedCrs,
