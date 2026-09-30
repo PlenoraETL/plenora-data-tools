@@ -168,6 +168,7 @@ def costruisci(dati):
 
 
 def genera():
+    mc.verifica_controesempio_rami()
     dati, impronta = mc.carica()
     voci, budget_spill, sospetti = costruisci(dati)
     righe = [

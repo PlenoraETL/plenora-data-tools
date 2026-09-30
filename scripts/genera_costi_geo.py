@@ -170,6 +170,7 @@ def main():
     argomenti = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     argomenti.add_argument("--verifica", action="store_true")
     scelti = argomenti.parse_args()
+    mc.verifica_controesempio_rami()
     dati, impronta = mc.carica()
     generato = rust(dati, impronta)
     if scelti.verifica:

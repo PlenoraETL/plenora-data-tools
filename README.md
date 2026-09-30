@@ -1259,12 +1259,17 @@ osservato `y = max(stima di budget, byte nuovi dell'output, 0)`:
   termini per unità) e `c >= 1` dove l'uscita può essere una copia intera
   degli ingressi anche se le fixture ne tengono una parte (sottoinsiemi di
   righe, join senza espansione delle chiavi, chiavi indice di `pivot`);
-- **rami di larghezza**: `r_s` inviluppo per riga della classe di
-  larghezza di riga (`B/R`) più stretta, `c_l` inviluppo per byte della più
-  larga (le classi sono i profili, e per le geo profilo per vertici per
-  geometria). Coprono le righe più strette e più larghe di quelle misurate
-  se il costo vero è una somma non negativa di un termine per riga e uno
-  per byte; con una sola classe `max(r_s*R, c_l*B)` è per eccesso a ogni
+- **rami di larghezza**: `r_s` inviluppo `max y/R` della classe di
+  larghezza di riga (`B/R`) più stretta, `c_l` inviluppo `max y/B` della
+  più larga (le classi sono i profili, e per le geo profilo per vertici per
+  geometria), sui picchi interi, senza togliere `a`: il programma lineare
+  può spostare in `a` parte di un costo che è per riga, e un inviluppo su
+  `y - a` non coprirebbe più le righe strette (controesempio verificato a
+  ogni generazione, `verifica_controesempio_rami`). Se il costo vero è
+  `r1*R + c1*B` con `r1, c1 >= 0`, per un punto misurato di larghezza `w_i`
+  vale `y_i/R_i = r1 + c1*w_i`: su righe più strette il costo è al più
+  `(y_i/R_i)*R <= r_s*R`, su righe più larghe al più `(y_i/B_i)*B <=
+  c_l*B`. Con una sola classe `max(r_s*R, c_l*B)` è per eccesso a ogni
   larghezza;
 - coefficienti in millesimi di byte, per eccesso; un'operazione senza
   modello si rifiuta in validazione (`Unsupported`).
@@ -1274,8 +1279,8 @@ l'invariante su ogni punto osservato: `a + max(...) + ...` senza `S` non è
 sotto il picco misurato, quindi la previsione è almeno una volta e mezza la
 misura. Fanno eccezione solo i profili avversari geo esclusi per nome
 (limite «Modelli di costo geo»). Sui 922 punti coperti di almeno 1 MiB il
-rapporto previsto/misurato con `S` ha mediana 1,99, novantesimo percentile
-9,8 e massimo 148 (`intersect` spilled, uscita piccola sotto `c >= 1`); con
+rapporto previsto/misurato con `S` ha mediana 2,91, novantesimo percentile
+14,9 e massimo 148 (`intersect` spilled, uscita piccola sotto `c >= 1`); con
 i modelli precedenti (v3 per le tabellari, provvisori per le geo) era 6,4,
 41,8 e 535, con 30 punti sotto la misura senza `S`.
 
@@ -1383,9 +1388,8 @@ quello per byte.
   - fuori dalle larghezze di riga misurate per l'operazione (nella maggior
     parte delle fixture tabellari fra 8 e 150 byte per riga d'ingresso; le
     righe reali arrivano a qualche KiB) la previsione è per eccesso solo se
-    il costo vero è
-    una somma non negativa di un termine per riga e uno per byte (rami
-    `r_s` e `c_l`); un costo che cresce più che linearmente con la
+    il costo vero è una somma non negativa di un termine per riga e uno per
+    byte, senza costante oltre `a` (rami `r_s` e `c_l`); un costo che cresce più che linearmente con la
     larghezza di una cella non è coperto;
   - la campagna v4 (`data/misure/catalogo-memoria-v4.json`, campo
     `caveat`) è stata fatta su una macchina carica (CPU media 68 % e fino a
@@ -1450,18 +1454,37 @@ quello per byte.
   d'intersezione, vicini equidistanti, forma della geometria): coprirli
   renderebbe il modello di ordini di grandezza più alto sui profili
   ordinari (per `sjoin` il default fino a 1500 volte la misura). Su quei
-  profili la previsione arriva fino a circa 400 volte sotto la misura (mediana
-  0,18 con `S`); il `buffer` a zig-zag da 1000 vertici per geometria ha
+  profili la previsione arriva fino a circa 200 volte sotto la misura (mediana
+  0,23 con `S`); il `buffer` a zig-zag da 1000 vertici per geometria ha
   misurato 20 GiB su 15 MiB d'ingresso. I punti andati oltre il tempo
   massimo della campagna (`buffer`, `make_valid`, `split`) o
   rifiutati (`line_merge`, `polygonize`, `voronoi`) non sono nel modello.
-  I kernel geo non ricevono il margine di memoria: un'uscita o un
-  transitorio grande si scopre al controllo dopo il passo, cioè dopo
-  essere stato allocato, o non si scopre se il processo esaurisce prima la
-  memoria.
+  I kernel geo non ricevono il margine di memoria: un'uscita grande si
+  scopre al controllo dopo il passo, cioè dopo essere stata allocata; un
+  transitorio grande non si scopre affatto (limite «Transitorio oltre la
+  previsione non rilevato»).
   *Rientro*: una grandezza a secco per queste espansioni (candidati
   dell'R-tree, stima delle sovrapposizioni) nel modello o nei kernel, con
   il margine passato ai kernel geo come alle tabellari.
+- **Transitorio oltre la previsione non rilevato.**
+  *Regola*: prima del passo si controlla la previsione del modello, dopo il
+  passo i byte vivi esatti delle tabelle residenti con l'uscita; la memoria
+  che il kernel alloca e libera durante il passo non si misura.
+  *Ambito*: ogni passo di `PipelineValidata::run` (il controllo dopo il
+  passo in `esecuzione.rs` conta solo i buffer Arrow ancora vivi con
+  l'uscita); in particolare i sette profili geo esclusi dal modello
+  (limite «Modelli di costo geo») e le espansioni che dipendono dai dati
+  senza preflight di memoria nel kernel (`join` molti a molti, `explode`,
+  `unnest`, le geo che non ricevono il margine).
+  *Hazard*: un transitorio già liberato alla fine del passo può aver
+  superato il budget senza alcun errore: nessun `ResourceLimit`, e nessun
+  esaurimento di memoria se la macchina ne ha. Il budget dichiarato è stato
+  superato in silenzio; il resoconto riporta solo i byte vivi dopo il
+  passo. Se la macchina non ne ha, il processo si ferma per esaurimento di
+  memoria invece che con un errore del runner.
+  *Rientro*: un allocatore contato per il processo che rifiuti
+  l'allocazione oltre il budget (un tetto vero), o la contabilità esplicita
+  del transitorio nei kernel con il margine passato a tutti, geo compresi.
 - **Geo senza diagnostica per riga.**
   *Regola*: un passo geo rende il primo errore in ordine di riga, senza
   report `plenora-row-diagnostics-v1`; gli indici che alcuni messaggi dei

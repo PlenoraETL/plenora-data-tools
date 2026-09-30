@@ -314,12 +314,24 @@ def adatta(punti, *, celle=False, coppie=False, senza_byte=False, c_minimo=0):
        termine per cella (`celle`): nessun ramo, la larghezza dell'uscita la
        da' K. Senza ingresso (`senza_byte`): solo `a` e il termine per riga.
     3. Altrimenti i due rami di estrapolazione in larghezza di riga (B/R):
-       `r_s` = inviluppo `max (y - a) / R` della classe di larghezza piu'
-       stretta, `c_l` = inviluppo `max (y - a) / B` della piu' larga. Se il
-       costo vero e' una somma non negativa di un termine per riga e uno per
-       byte, `r_s*R` lo copre su righe piu' strette di ogni classe misurata
-       e `c_l*B` su righe piu' larghe; con una sola classe i due rami danno
-       `max(r_s*R, c_l*B)`, per eccesso a ogni larghezza.
+       `r_s` = inviluppo `max y / R` della classe di larghezza piu' stretta,
+       `c_l` = inviluppo `max y / B` della piu' larga, sui picchi interi,
+       SENZA togliere `a` (il programma lineare puo' spostare in `a` parte di
+       un costo che e' davvero per riga: togliendolo, il ramo non coprirebbe
+       piu' righe piu' strette; controesempio in
+       `verifica_controesempio_rami`).
+
+       Garanzia, e sua ipotesi: se il costo vero e' `r1*R + c1*B` con
+       `r1, c1 >= 0` (nessuna costante), per ogni punto misurato `i` vale
+       `y_i / R_i = r1 + c1*w_i` con `w_i = B_i / R_i`. Allora per un
+       ingresso di larghezza `w <= w_i` il costo vero e' `(r1 + c1*w)*R <=
+       (y_i / R_i)*R <= r_s*R`, e per `w >= w_i` e' `(r1/w + c1)*B <=
+       (y_i / B_i)*B <= c_l*B`: il ramo per riga copre le righe piu' strette
+       di un punto della classe piu' stretta, quello per byte le piu' larghe
+       di un punto della classe piu' larga, e `a >= 0` si aggiunge sopra.
+       Con una sola classe i due rami danno `max(r_s*R, c_l*B)`, per eccesso
+       a ogni larghezza. Una costante vera oltre `a` non e' coperta dai rami
+       su ingressi piu' piccoli di quelli misurati (limite dichiarato).
     """
     if coppie:
         variabili = ["a", "p"]
@@ -349,10 +361,28 @@ def adatta(punti, *, celle=False, coppie=False, senza_byte=False, c_minimo=0):
 
         stretta = min(classi, key=lambda nome: (larghezza(nome), nome))
         larga = max(classi, key=lambda nome: (larghezza(nome), nome))
-        a = modello["a"]
-        modello["r_s"] = max(ceil_div(max(p["y"] - a, 0) * MILLE, p["R"]) for p in classi[stretta])
-        modello["c_l"] = max(ceil_div(max(p["y"] - a, 0) * MILLE, p["B"]) for p in classi[larga])
+        modello["r_s"] = max(ceil_div(p["y"] * MILLE, p["R"]) for p in classi[stretta])
+        modello["c_l"] = max(ceil_div(p["y"] * MILLE, p["B"]) for p in classi[larga])
     return modello
+
+
+def verifica_controesempio_rami():
+    """Il controesempio della seconda lettura dei rami di larghezza: costo
+    vero esattamente `1000*R + B`, una classe stretta e una larga. Con gli
+    inviluppi calcolati su `y - a` il programma lineare metteva 999.500 byte
+    in `a` e il ramo per riga prevedeva 1.503.750 byte (con `S`) contro
+    2.001.000 veri per `R = 2000, B = 1000`, piu' stretto dei punti misurati.
+    Ogni generazione lo rifa': deve coprire il costo vero anche senza `S`,
+    su righe piu' strette e piu' larghe di quelle misurate."""
+    punti = [
+        {"R": 1000, "B": 1000, "K": 0, "P": 0, "y": 1001000, "classe": "stretta"},
+        {"R": 2000, "B": 2000000, "K": 0, "P": 0, "y": 4000000, "classe": "larga"},
+    ]
+    modello = adatta(punti)
+    for righe, byte in ((2000, 1000), (1000, 1000), (10, 5), (2000, 2000000), (10, 10000000)):
+        vero = 1000 * righe + byte
+        if base(modello, {"R": righe, "B": byte, "K": 0, "P": 0}) < vero:
+            fallisci(f"rami di larghezza sotto il costo vero su R={righe}, B={byte}")
 
 
 def per_unita(millesimi, unita):
