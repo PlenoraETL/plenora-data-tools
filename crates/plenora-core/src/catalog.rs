@@ -3509,13 +3509,17 @@ mod tests {
                 "table.assert_foreign_key",
                 ExpansionConstraint::LeftRelative,
             ),
+            ("geo.sjoin", ExpansionConstraint::SumRelative),
             ("geo.clip", ExpansionConstraint::LeftRelative),
             ("geo.difference", ExpansionConstraint::LeftRelative),
             ("geo.intersection", ExpansionConstraint::LeftRelative),
+            ("geo.overlay", ExpansionConstraint::SumRelative),
             (
                 "geo.symmetric_difference",
                 ExpansionConstraint::LeftRelative,
             ),
+            ("geo.nearest", ExpansionConstraint::LeftRelative),
+            ("geo.within", ExpansionConstraint::LeftRelative),
             (
                 "geo.count_points_in_polygons",
                 ExpansionConstraint::LeftRelative,

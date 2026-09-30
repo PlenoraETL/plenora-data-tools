@@ -9526,7 +9526,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -9545,7 +9545,7 @@ due volte.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable, senza metadati di
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati di
 campo. Le altre colonne (geometria compresa), i metadati di schema e le
 proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
@@ -9656,7 +9656,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -9665,7 +9665,8 @@ dal punto della riga al punto costante `other_wkb`: la direzione in cui
 parte la geodetica, misurata in senso orario dal nord (nord 0, est 90, sud
 180, ovest 270), in `[0, 360)`. Le coordinate sono longitudine (`x`) e
 latitudine (`y`) in gradi; il calcolo è il problema inverso di Karney
-(`Geodesic.bearing` di `geo`, `geographiclib-rs`) sull'ellissoide WGS 84.
+(`geographiclib-rs`) sull'ellissoide del datum del CRS della colonna
+([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)).
 
 #### Parametri
 
@@ -9680,7 +9681,7 @@ e tipo (deve essere un `Point`, quello che il kernel chiede).
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable, senza metadati. Le
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le
 altre colonne restano nell'ordine e con i loro metadati; la colonna
 geometria resta com'è. Metadati di schema e proprietà del contratto
 (`sorted_by`, `row_count`) si conservano.
@@ -9689,9 +9690,10 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 
 1:1: un azimut per riga. Per il contratto `other_wkb` è il secondo
 operando: la riga è il punto di partenza, `other_wkb` quello d'arrivo
-(`extended_algorithms::geodesic_bearing_degrees(riga, other_wkb)`). Due
-punti coincidenti danno 180, senza errore. Una geometria nulla dà un
-azimut nullo; una riga che non è un `Point` ferma il passo con un errore
+(`extended_algorithms::geodesic_bearing_degrees(riga, other_wkb)`). Dove
+l'azimut non è definito il passo si ferma (vedi «Errori»): punti
+coincidenti, partenza su un polo, geodetica più breve non unica. Una
+geometria nulla dà un azimut nullo; una riga che non è un `Point` ferma il passo con un errore
 (vedi «Errori»).
 
 #### Ordine
@@ -9714,8 +9716,9 @@ CRS, config):
 - `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
-- `Crs`: CRS della colonna assente o non risolto; CRS non geografico; una
-  coordinata di `other_wkb` fuori dal dominio lon/lat;
+- `Crs`: CRS della colonna assente o non risolto; CRS non geografico; CRS
+  senza l'ellissoide del datum (`ELLIPSOID_REQUIRED`); una coordinata di
+  `other_wkb` fuori dal dominio lon/lat;
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
@@ -9736,19 +9739,25 @@ Poi, per riga:
   runner, «tipo geometria non supportato»); dal kernel
   (`ExtendedAlgorithmError`) `InvalidInput` (coordinate non finite) e
   `InvalidGeographicCoordinate` (longitudine fuori da `[-180, 180]` o
-  latitudine fuori da `[-90, 90]`);
+  latitudine fuori da `[-90, 90]`) e `AzimutNonDefinito` («azimut non
+  definito»): punti coincidenti (distanza geodetica nulla, anche `-180` e
+  `180` alla stessa latitudine), punto della riga su un polo (latitudine
+  ±90: ogni direzione è sud o nord), o destinazione sul luogo di taglio
+  (latitudine opposta e longitudine quasi opposta, antipodi compresi), dove
+  due geodetiche ugualmente brevi partono con azimut che, alla distanza
+  della destinazione, si separano di più di 1 cm;
 - `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
   conclude) e `CalcoloNonConcluso` (panico di `geo`).
 
 #### Limiti e deviazioni
 
-- **Ellissoide sempre WGS 84**, qualunque sia il datum del CRS geografico
-  della colonna (Monte Mario, ED50, NAD27, OSGB36 hanno altri ellissoidi):
-  l'azimut è quello delle stesse coordinate su WGS 84.
-- Punti coincidenti: 180, non un errore né un valore nullo (`ST_Azimuth`
-  di PostGIS rende NULL, e in radianti).
-- Ai poli l'azimut dipende dalla longitudine scritta del polo, come in
-  `geographiclib`.
+- Dove l'azimut non è definito il passo si ferma con un errore: fino alla
+  versione 1 del catalogo due punti coincidenti davano 180 e due antipodi
+  0 (i valori convenzionali di `geographiclib`), e l'ellissoide era sempre
+  WGS 84. `ST_Azimuth` di PostGIS rende NULL per punti coincidenti.
+- Una destinazione su un polo è ammessa (l'azimut è 0 o 180); la partenza
+  no.
+- CRS proiettati rifiutati.
 - Solo `Point` nella colonna: una `MultiPoint` ferma il passo.
 - Errori senza indice di riga della sorgente
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
@@ -9758,8 +9767,9 @@ voce «Geo senza diagnostica per riga»).
 
 La regola di 1 cm riguarda gli spostamenti, e qui l'uscita è un angolo:
 nessun controllo e nessun rifiuto di precisione. L'errore è quello
-dell'algoritmo di Karney in `f64` più, per un datum diverso da WGS 84,
-quello dell'ellissoide sbagliato ([README, «Precisione delle operazioni
+dell'algoritmo di Karney in `f64` sull'ellissoide del datum; per punti a
+pochi millimetri l'azimut è mal condizionato (un nanometro di posizione
+sono gradi di direzione) ([README, «Precisione delle operazioni
 geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
@@ -9773,7 +9783,7 @@ Memoria: da misura v4.
 #### Esempio
 
 L'arrivo è `POINT(0 1)`: dall'equatore verso nord, da latitudine 2 verso
-sud, e dallo stesso punto.
+sud, e da est verso ovest (poco a nord di ovest).
 
 Passo del piano:
 
@@ -9788,7 +9798,7 @@ Ingresso `stazioni` (geometrie `geometry` in EPSG:4326):
 | --- | --- |
 | 1 | POINT(0 0) |
 | 2 | POINT(0 2) |
-| 3 | POINT(0 1) |
+| 3 | POINT(1 1) |
 
 Uscita `risultato`:
 
@@ -9796,7 +9806,7 @@ Uscita `risultato`:
 | --- | --- | --- |
 | 1 | POINT(0 0) | 0.0 |
 | 2 | POINT(0 2) | 180.0 |
-| 3 | POINT(0 1) | 180.0 |
+| 3 | POINT(1 1) | 270.00872642616275 |
 
 Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella per cella.
 
@@ -10380,7 +10390,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 2, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -10398,11 +10408,13 @@ geo»](../README.md#operazioni-geo)).
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `snap_tolerance` | numero | obbligatorio | finito, `>= 0`, nelle unità del CRS | raggio della chiusura morfologica di `fill_gaps` |
-| `remove_overlaps` | booleano | `true` | `true`, `false` | toglie a ogni riga la parte coperta dalle righe precedenti |
-| `fill_gaps` | booleano | `true` | `true`, `false` | chiude, dentro ogni riga, rientranze e varchi più stretti di `2 · snap_tolerance` |
+| `remove_overlaps` | booleano | obbligatorio | `true`, `false` | toglie a ogni riga la parte coperta dalle righe precedenti |
+| `fill_gaps` | booleano | obbligatorio | `true`, `false` | chiude, dentro ogni riga, rientranze e varchi più stretti di `2 · snap_tolerance` |
 
-`remove_overlaps` e `fill_gaps` sono facoltativi: l'analisi li accetta
-senza leggerli, e quando mancano il runner usa `true`. `fill_gaps` con
+`remove_overlaps` e `fill_gaps` sono obbligatori, senza valore
+predefinito: cambiano la geometria delle righe, e il piano lo dice
+esplicitamente. Fino alla versione 1 del catalogo erano facoltativi e il
+runner, quando mancavano, usava `true` per entrambi. `fill_gaps` con
 `snap_tolerance` pari a `0` non fa nulla. Con tutti e due `false` le righe
 escono invariate (dopo il controllo di validità).
 
@@ -10447,8 +10459,8 @@ vince sempre su una successiva nelle sovrapposizioni.
 
 In validazione (analisi del contratto), `InvalidPlan`:
 
-- config con campi sconosciuti, `snap_tolerance` assente, o un campo del
-  tipo sbagliato;
+- config con campi sconosciuti, `snap_tolerance`, `remove_overlaps` o
+  `fill_gaps` assente («missing field»), o un campo del tipo sbagliato;
 - `snap_tolerance` negativa o non finita.
 
 Sempre in validazione: `Schema` se l'ingresso non ha esattamente una
@@ -10880,7 +10892,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -10899,12 +10911,13 @@ delle righe ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `group_by` | lista di stringhe | obbligatorio | colonne dell'ingresso, non vuota, senza ripetizioni, diversa dalla colonna geometria, di un tipo leggibile come testo | chiavi di gruppo |
+| `group_by` | lista di stringhe | obbligatorio | colonne dell'ingresso, non vuota, senza ripetizioni, diversa dalla colonna geometria, di un tipo con un ordine naturale (quelli di `table.sort`) | chiavi di gruppo |
 
 #### Schema
 
 Prima la colonna geometria, con nome e metadati d'ingresso (la
-dichiarazione dei tipi riscritta) e nullable; poi le colonne `group_by`,
+dichiarazione dei tipi riscritta), nullable solo se lo è quella
+d'ingresso (null per un gruppo di sole geometrie null); poi le colonne `group_by`,
 nell'ordine della lista, identiche all'ingresso (tipo, nullabilità,
 metadati). I metadati di schema restano; nessuna proprietà del contratto
 sopravvive. Tipi dichiarati, se l'ingresso li dichiara `exact` o `mixed`
@@ -10916,21 +10929,27 @@ un solo tipo semplice.
 
 Aggregazione: una riga per gruppo, con la geometria raccolta e i valori
 chiave della prima riga del gruppo. Due righe stanno nello stesso gruppo
-se ogni chiave ha lo stesso tipo e la stessa forma testuale
-(`scalar_as_string` dei kernel tabellari), o è nulla in entrambe: un
-valore nullo è un valore di gruppo come gli altri, distinto dal testo
-vuoto. Un gruppo senza geometrie non nulle dà una geometria nulla; una
+se ogni chiave è uguale per il confronto tipizzato di `table.sort`
+(`compare_cells_typed` dei kernel tabellari: numeri per valore, testo per
+byte, istanti per istante, `Float64` per `total_cmp`, quindi `-0.0` e
+`0.0` in gruppi distinti e un NaN uguale solo a un NaN con gli stessi
+bit), o è nulla in entrambe: un valore nullo è un valore di gruppo come
+gli altri, distinto dal testo vuoto. Un gruppo senza geometrie non nulle dà una geometria nulla; una
 tabella vuota non dà righe.
 
 #### Ordine
 
-I gruppi escono in ordine lessicografico della chiave testuale del
-progetto d'origine (`190c493`): per ogni colonna chiave il tipo, la
-presenza e la lunghezza del valore, poi il valore. È un ordine
-deterministico, non quello dei valori (`"pari"` prima di `"dispari"`,
-perché più corto; `10` dopo `9`; a parità delle chiavi precedenti una
-chiave nulla viene prima). Dentro una geometria raccolta i membri
-seguono l'ordine delle righe.
+I gruppi escono nell'**ordine naturale dei valori** delle chiavi, dalla
+prima alla seconda a parità della prima, come `table.sort` crescente:
+numeri per valore (`-10` prima di `-1`, `9` prima di `10`), testo per
+byte UTF-8 (`"aaaaaaaaa"` prima di `"bbbbbbbbbb"` qualunque sia la
+lunghezza), date e istanti per istante, booleani `false` prima di `true`,
+`Float64` per `total_cmp`; una chiave nulla dopo i valori. Dentro una
+geometria raccolta i membri seguono l'ordine delle righe. Fino alla
+versione 1 del catalogo l'ordine era quello della chiave testuale di
+`190c493`, con la lunghezza del valore scritta come testo in testa: un
+valore di 10 caratteri prima di uno di 9, `3` prima di `-5`, e una chiave
+nulla prima dei valori.
 
 #### Errori
 
@@ -10938,8 +10957,8 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `group_by` vuota, con nomi
   vuoti, con ripetizioni o con la colonna geometria; una chiave di un tipo
-  che non si legge come testo (`validate_text_convertible` dei kernel
-  tabellari: tipo e fuso orario);
+  senza un ordine naturale (`is_sortable` dei kernel tabellari, lo stesso
+  controllo di `table.sort`);
 - `Schema`: una colonna di `group_by` non esiste; l'ingresso non ha
   esattamente una colonna geometria, o la colonna non è riconoscibile come
   WKB;
@@ -10955,9 +10974,8 @@ dell'ingresso dichiara con un elenco e che non vi compare. Poi la
 decodifica completa con la validazione OGC: `InvalidPlan` per una
 geometria non valida, `Internal` se la validazione non conclude.
 
-La lettura delle chiavi come testo fallisce, con un errore esplicito, per
-un `Binary` non UTF-8, una data o un istante fuori intervallo, una chiave
-di dizionario fuori dal dizionario.
+Il confronto delle chiavi fallisce, con un errore esplicito (`Schema`),
+per una chiave di dizionario fuori dal dizionario.
 
 Il calcolo di un gruppo rifiuta una geometria che non supera la validazione
 OGC (`ExtensionError::InvalidInput`) e una raccolta che non la supera
@@ -10969,7 +10987,6 @@ in `InvalidPlan`; una validazione che non conclude è `Internal`.
 
 Nessuna unione: poligoni che si sovrappongono o si toccano lungo un lato
 si rifiutano invece di fondersi (per l'unione c'è `geo.dissolve`).
-L'ordine dei gruppi è quello della chiave testuale, non quello dei valori.
 Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
@@ -10981,7 +10998,8 @@ Esatta: le geometrie si copiano senza calcolo
 
 #### Complessità
 
-O(n) sulle righe per la raccolta, più la validazione OGC di ogni geometria
+O(n log n) sulle righe per l'ordinamento delle chiavi e O(n) per la
+raccolta, più la validazione OGC di ogni geometria
 e di ogni raccolta (O(v²) nel caso peggiore sui vertici `v` del gruppo);
 memoria O(n) per le geometrie raccolte.
 
@@ -11031,7 +11049,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 1, kernel 1 |
 
 #### Che cosa fa
 
@@ -11097,8 +11115,8 @@ geometria di un tipo che il contratto d'ingresso non dichiara, quando li
 dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
-`ValidazioneNonConclusa` e `CalcoloNonConcluso`, `InvalidPlan` per le
-altre):
+`ValidazioneNonConclusa` e `CalcoloNonConcluso`, `ResourceLimit` per
+`CoordinateLimit`, `InvalidPlan` per le altre):
 
 - `InvalidInput`: coordinate NaN o infinite o geometria non valida OGC;
 - `CoordinateLimit`: più coordinate di `max_coordinates` (il runner passa
@@ -11325,7 +11343,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -11346,7 +11364,8 @@ ognuno.
 #### Schema
 
 Le colonne della sinistra, invariate, più `output_column` in coda,
-`uint64` nullable. Le colonne della destra non passano. La colonna
+`uint64`, nullable solo se lo è la geometria della sinistra (null dove è
+null). Le colonne della destra non passano. La colonna
 geometria resta quella della sinistra, con i suoi tipi dichiarati. I
 metadati di schema sono la fusione dei due lati; le proprietà del
 contratto della sinistra (`sorted_by`, `row_count`) restano.
@@ -11398,7 +11417,7 @@ Dal kernel (`analysis::count_points_in_polygons_validated`, errore
 `AnalysisError` che avvolge `SpatialJoinError`, sulle geometrie già
 validate), nella categoria del passo geo indicata fra parentesi:
 
-- `PairLimitExceeded` (`InvalidPlan`): le coppie punto-poligono
+- `PairLimitExceeded` (`ResourceLimit`): le coppie punto-poligono
   confermate superano il limite di righe dell'arco;
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
@@ -11493,7 +11512,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 1, kernel 1 |
 
 #### Che cosa fa
 
@@ -11567,11 +11586,11 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 
 - `InvalidPlan`: WKB malformato o OGC-invalido; una geometria che non è
   `Polygon` o `MultiPolygon` (il messaggio riporta la posizione della riga,
-  non i dati); più di `max_issues` sovrapposizioni; zona sovrapposta non
-  valida;
+  non i dati); zona sovrapposta non valida;
 - `Unsupported`: `PrecisionInsufficient` (sotto, «Precisione»); WKB con
   dimensioni Z/M o SRID;
-- `ResourceLimit`: cella oltre il limite di byte per cella;
+- `ResourceLimit`: cella oltre il limite di byte per cella; più di
+  `max_issues` sovrapposizioni (`IssueLimit`);
 - `Internal`: panico di `geo`, `i_overlay` o `rstar`, validazione che non
   conclude.
 
@@ -11655,7 +11674,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 2 |
+| versioni | semantica 3, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -11672,7 +11691,8 @@ Nessuno: la config è `{}`.
 #### Schema
 
 La colonna geometria resta al suo posto, con lo stesso nome, lo stesso CRS
-e dimensioni `xy`; i tipi dichiarati diventano esattamente `Polygon` (le
+e dimensioni `xy`, non nullable (una riga a geometria null non produce
+triangoli); i tipi dichiarati diventano esattamente `Polygon` (le
 chiavi dei tipi ereditate si tolgono dai metadati del campo). Si aggiunge in
 coda `__parent_index`, `uint64` non nullable, con l'indice della riga
 d'origine. Le altre colonne e i metadati di schema restano; delle proprietà
@@ -11721,7 +11741,8 @@ dell'ingresso dichiara con un elenco e che non vi compare.
 
 Poi il kernel, per geometria, con errore `ExtendedAlgorithmError` che il
 runner traduce così: `Internal`, `ValidazioneNonConclusa` e
-`CalcoloNonConcluso` diventano `Internal`, le altre `InvalidPlan`. Il
+`CalcoloNonConcluso` diventano `Internal`, i limiti (`CoordinateLimit`,
+`OutputLimit`, `WorkLimit`) `ResourceLimit`, le altre `InvalidPlan`. Il
 kernel rifiuta la geometria con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
 `CoordinateLimit` (coordinate d'ingresso, duplicati compresi, oltre
@@ -11813,7 +11834,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 1, kernel 1 |
 
 #### Che cosa fa
 
@@ -11873,7 +11894,8 @@ dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo
 
 Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
-`CalcoloNonConcluso`, in `InvalidPlan` per le altre. Rifiuta la geometria
+`CalcoloNonConcluso`, in `ResourceLimit` per `OutputLimit`, in
+`InvalidPlan` per le altre. Rifiuta la geometria
 con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
 `IndexOverflow` (conteggio delle coordinate oltre `u64`), `OutputLimit`
@@ -12557,7 +12579,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -12575,7 +12597,8 @@ Nessuno: la config è `{}`.
 #### Schema
 
 Le colonne d'ingresso restano, nell'ordine, con gli stessi tipi; la
-colonna geometria tiene nome, CRS e dimensioni. In coda si aggiunge
+colonna geometria tiene nome, CRS e dimensioni, ed è non nullable (una
+riga a geometria null non produce parti). In coda si aggiunge
 `__parent_index`, `uint64` non nullable: l'indice della riga madre. I
 metadati di schema restano; delle proprietà del contratto resta
 `sorted_by`, il conteggio delle righe non è più noto. I tipi dichiarati
@@ -12692,7 +12715,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 1, kernel 1 |
 
 #### Che cosa fa
 
@@ -12775,9 +12798,10 @@ Poi, per riga:
 - `InvalidPlan`: la geometria della riga non è una `LineString` (errore
   del runner, «tipo geometria non supportato»); dal kernel `InvalidInput`
   (coordinate non finite o linea con meno di due punti distinti),
-  `WorkLimit` (prodotto dei vertici delle due linee oltre `10^8`, il
-  tetto che il runner passa, o non rappresentabile in `u64`),
   `IndexOverflow`;
+- `ResourceLimit`: dal kernel `WorkLimit` (prodotto dei vertici delle due
+  linee oltre `10^8`, il tetto che il runner passa, o non rappresentabile
+  in `u64`);
 - `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
   conclude) e `CalcoloNonConcluso` (panico di `geo`).
 
@@ -12998,7 +13022,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -13028,7 +13052,8 @@ nome: nessun valore produce un rimedio silenzioso.
 #### Schema
 
 Le colonne dell'ingresso restano, con i loro metadati; in coda si aggiunge
-`output_column`, `binary` nullable, con l'estensione `geoarrow.wkb` e i
+`output_column`, `binary`, nullable solo se lo è la colonna WKT (una cella
+WKT null dà una geometria null), con l'estensione `geoarrow.wkb` e i
 metadati `geo` (CRS, dimensioni `xy`, encoding WKB). Il contratto la dichiara
 colonna geometria attiva, con i tipi `mixed` dei sette tipi WKB XY (`Point`,
 `LineString`, `Polygon` e i multi, `GeometryCollection`). I metadati di
@@ -13292,17 +13317,19 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
 Aggiunge una colonna `float64` con l'area geodetica, in metri quadrati,
-dei poligoni e multi-poligoni di ogni riga, sull'ellissoide WGS 84. Le
+dei poligoni e multi-poligoni di ogni riga, sull'ellissoide del datum del
+CRS della colonna ([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le
 coordinate sono longitudine (`x`) e latitudine (`y`) in gradi e i lati sono
 geodetiche fra vertici consecutivi. Il verso degli anelli non conta: ogni
 poligono si orienta prima (esterno antiorario, buchi orari), e l'area è
-quella dell'esterno meno quella dei buchi (algoritmo di Karney,
-`geodesic_area_unsigned` di `geo`). Un `MultiPolygon` somma le aree dei
+quella dell'esterno meno quella dei buchi (algoritmo di Karney, il
+calcolo di `geodesic_area_unsigned` di `geo` sul `PolygonArea` di
+`geographiclib-rs` dell'ellissoide del datum). Un `MultiPolygon` somma le aree dei
 suoi poligoni.
 
 #### Parametri
@@ -13313,7 +13340,7 @@ suoi poligoni.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable, senza metadati. Le
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le
 altre colonne restano nell'ordine e con i loro metadati; la colonna
 geometria resta com'è. Metadati di schema e proprietà del contratto
 (`sorted_by`, `row_count`) si conservano.
@@ -13341,7 +13368,8 @@ CRS, config):
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
-- `Crs`: CRS della colonna assente o non risolto; CRS non geografico.
+- `Crs`: CRS della colonna assente o non risolto; CRS non geografico;
+  CRS senza l'ellissoide del datum (`ELLIPSOID_REQUIRED`).
 
 In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
@@ -13359,7 +13387,10 @@ Poi, per riga:
 - `InvalidPlan`: una geometria diversa da `Polygon` e `MultiPolygon`
   (errore del runner, «tipo geometria non supportato», prima del kernel);
   dal kernel (`ExtendedAlgorithmError`) `InvalidInput` (coordinate non
-  finite o geometria non valida per l'OGC), `InvalidGeographicCoordinate`
+  finite o geometria non valida per l'OGC; un lato con almeno 180 gradi
+  di longitudine o un anello che sul globo gira al contrario o copre mezzo
+  ellissoide, o un poligono che non passa la verifica di topologia delle
+  geodetiche, vedi «Limiti e deviazioni»), `InvalidGeographicCoordinate`
   (longitudine fuori da `[-180, 180]` o latitudine fuori da `[-90, 90]`),
   `InvalidOutput` (area non finita);
 - `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
@@ -13367,17 +13398,38 @@ Poi, per riga:
 
 #### Limiti e deviazioni
 
-- **Ellissoide sempre WGS 84**, qualunque sia il datum del CRS geografico
-  della colonna. Per la famiglia GRS 80 (ETRS89, RDN2008, NAD83...) la
-  differenza è trascurabile; per Monte Mario ed ED50 (ellissoide
-  internazionale 1924) l'area è quella delle stesse coordinate su WGS 84,
-  circa 8e-5 in meno della vera a 42° di latitudine (stima al primo
-  ordine), che supera perimetro per 1 cm già su un quadrato di circa 500 m
-  di lato; per OSGB36 (Airy) circa 2e-4 in più. Nessun errore lo segnala.
-- L'orientamento si decide nel piano lon/lat, mentre i lati sono
-  geodetiche: un poligono che attraversa l'antimeridiano, scritto con
-  longitudini da una parte e dall'altra di ±180, non è quello che il
-  piano lon/lat disegna.
+- L'interno si decide orientando nel piano lon/lat, mentre i lati sono
+  geodetiche. Un lato con almeno 180 gradi di longitudine (un poligono
+  sull'antimeridiano, scritto con longitudini da una parte e dall'altra di
+  ±180, o un anello attorno a un polo) la geodetica lo percorre
+  dall'altra parte, e l'area sarebbe quella del complemento sul globo: si
+  rifiuta (`InvalidInput`), invece di rendere un'area sbagliata come fino
+  alla versione 2 del catalogo. Un poligono sull'antimeridiano va diviso
+  in due. Lo stesso per ogni anello che, letto come geodetiche, gira al
+  contrario del piano (un lato lungo che passa dall'altra parte di un
+  vertice: il triangolo `0 30, 170 30, 85 31` è antiorario nel piano ma
+  orario sul globo, perché il lato fra i primi due vertici sale oltre 80°)
+  o copre mezzo ellissoide o più: l'area di ogni anello si calcola con
+  segno e un segno non positivo si rifiuta.
+- **Topologia delle geodetiche.** La validità OGC si verifica nel piano
+  lon/lat, i lati sono geodetiche: un lato lungo può passare dall'altra
+  parte di un buco (`POLYGON((-80 30,80 30,80 80,-80 80,-80 30),(-1 40,-1
+  41,1 41,1 40,-1 40))`: il lato inferiore sale oltre 70° a longitudine 0,
+  e il buco a 40° è fuori dall'esterno geodetico) o di un'altra parte.
+  L'area si calcola solo se la topologia delle geodetiche è dimostrabilmente
+  quella del piano ([README, «Misure geodetiche: l'ellissoide del
+  datum»](../README.md#misure-geodetiche-lellissoide-del-datum)): ogni lato
+  deve avere una lunghezza maggiorata di al più 1000 km, una latitudine
+  maggiorata sotto 90° e una rotazione `K L` al più 1 (maggioranti
+  certificati, senza problema inverso), e gli anelli devono stare più
+  lontani degli scarti fra geodetiche e corde. Poligoni catastali e
+  comunali non ne sono toccati.
+  Altrimenti `InvalidInput`. La verifica è prudente: rifiuta anche poligoni
+  corretti con lati oltre 1000 km (in lunghezza maggiorata) o anelli
+  vicini ai lati lunghi.
+- CRS proiettati rifiutati; fino alla versione 2 del catalogo l'ellissoide
+  era sempre WGS 84 (su ED50, a 42° di latitudine, circa 8e-5 di area in
+  meno, oltre perimetro per 1 cm già su un quadrato di 500 m).
 - Un poligono vuoto dà `-0.0`, non `0.0`.
 - Errori senza indice di riga della sorgente
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
@@ -13385,12 +13437,14 @@ voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
-Nessun controllo e nessun rifiuto di precisione. Su WGS 84 l'area è quella
-dell'algoritmo di Karney in `f64`; la regola di 1 cm per le aree ammette
-circa perimetro per 1 cm ([README, «Precisione delle operazioni
-geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
-e con un datum su un altro ellissoide lo scarto dell'ellissoide la supera
-(vedi sopra).
+Nessun controllo e nessun rifiuto di precisione. L'area è quella
+dell'algoritmo di Karney in `f64` sull'ellissoide del datum; la regola di
+1 cm per le aree ammette circa perimetro per 1 cm ([README, «Precisione
+delle operazioni geografiche: 1 cm a
+terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La somma non è compensata (come in `geo`): su un poligono piccolo lontano
+dall'equatore lo scarto da GeographicLib è dell'ordine di 1e-5 m²
+(l'oracolo ammette 1e-3 m²).
 
 #### Complessità
 
@@ -13446,15 +13500,17 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
 Aggiunge una colonna `float64` con la distanza geodetica in metri fra il
 punto di ogni riga e un punto fisso della config (`other_wkb`), calcolata
-**sull'ellissoide WGS 84** con l'algoritmo di Karney (`Geodesic` di
-`geo`, `geographiclib-rs`). Le coordinate sono longitudine e latitudine
-in gradi.
+**sull'ellissoide del datum del CRS della colonna** (Internazionale 1924
+per ED50 e Monte Mario, Clarke 1866 per NAD27, Airy per OSGB36, GRS 80,
+WGS 84...) con l'algoritmo di Karney (`geographiclib-rs`), mai su un
+ellissoide di comodo ([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e
+latitudine in gradi.
 
 #### Parametri
 
@@ -13465,7 +13521,7 @@ in gradi.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable. Le altre colonne,
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null). Le altre colonne,
 la geometria e i metadati restano; restano anche le proprietà del
 contratto (`sorted_by`, `row_count`).
 
@@ -13490,7 +13546,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate), o `other_wkb` con Z/M o SRID;
 - `Crs`: CRS della colonna mancante o non risolto, o non geografico
-  (`GEOGRAPHIC_CRS_REQUIRED`); una coordinata di `other_wkb` fuori da
+  (`GEOGRAPHIC_CRS_REQUIRED`); CRS senza l'ellissoide del datum (risolto
+  dal chiamante, fuori dalla tabella integrata: `ELLIPSOID_REQUIRED`); una coordinata di `other_wkb` fuori da
   longitudine e latitudine ammesse (`COORDINATE_OUT_OF_CRS_DOMAIN`);
 - `InvalidPlan`: config con campi sconosciuti, `other_wkb` assente, non
   esadecimale, WKB non valido nella struttura o nella validità OGC, o che
@@ -13514,20 +13571,18 @@ Poi, per riga:
 - `InvalidPlan`: la geometria della riga non è un `Point` (errore del
   runner, «tipo geometria non supportato»); dal kernel (`ExtendedError`)
   `InvalidGeographicCoordinate`, una coordinata non finita o fuori da
-  `[-180, 180]` × `[-90, 90]`;
+  `[-180, 180]` × `[-90, 90]`, e `InvalidOutput`, una distanza non finita
+  (mai attesa);
 - `Internal`: dal kernel `CalcoloNonConcluso` (il calcolo di `geo` va in
   panico).
 
 #### Limiti e deviazioni
 
-- **Sempre l'ellissoide WGS 84.** Il requisito del catalogo chiede solo
-  un CRS geografico: per un CRS su un altro ellissoide (ED50 e Monte
-  Mario su Internazionale 1924, NAD27 su Clarke 1866, OSGB36 su Airy) la
-  distanza si calcola comunque su WGS 84, senza errore. Per ED50 il
-  semiasse maggiore differisce di 251 m (circa 4 parti su centomila:
-  dell'ordine di 4 m su 100 km), sopra la precisione di 1 cm. GRS 1980
-  (ETRS89, RDN2008, NAD83 e gli altri) differisce da WGS 84 di un decimo
-  di millimetro nel semiasse minore: trascurabile.
+- **CRS proiettati rifiutati**, non riportati al loro CRS geografico di
+  base: la distanza si chiede sulle coordinate geografiche
+  (`geo.reproject` al CRS geografico del datum, prima).
+- Fino alla versione 1 del catalogo l'ellissoide era sempre WGS 84: su
+  ED50 circa 4 m ogni 100 km di troppo o di meno, senza errore.
 - Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
   passo.
 - Errori senza indice di riga della sorgente
@@ -13536,10 +13591,11 @@ voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
-Sull'ellissoide WGS 84 l'algoritmo di Karney resta molto sotto 1 cm
-(l'errore dichiarato da `geographiclib` è dell'ordine dei nanometri).
-Per un CRS su un altro ellissoide la regola di 1 cm **non vale**: vedi
-«Limiti e deviazioni». Nessun rifiuto `PrecisionInsufficient`
+Sull'ellissoide del datum l'algoritmo di Karney resta molto sotto 1 cm
+(l'errore dichiarato da `geographiclib` è dell'ordine dei nanometri;
+l'oracolo `tests/geodetica_oracolo.rs` lo confronta con GeographicLib e
+PROJ su ogni ellissoide della tabella entro un micrometro). Nessun
+rifiuto `PrecisionInsufficient`
 ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
@@ -13594,14 +13650,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
 Aggiunge una colonna `float64` con la lunghezza geodetica in metri della
 linea di ogni riga: la somma delle geodetiche fra vertici consecutivi
-**sull'ellissoide WGS 84**, con l'algoritmo di Karney di
-[`geo.geodesic_distance`](#geogeodesic_distance). Le coordinate sono
+**sull'ellissoide del datum del CRS della colonna**, con l'algoritmo di
+Karney di [`geo.geodesic_distance`](#geogeodesic_distance)
+([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono
 longitudine e latitudine in gradi.
 
 #### Parametri
@@ -13612,7 +13669,7 @@ longitudine e latitudine in gradi.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable. Le altre colonne,
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null). Le altre colonne,
 la geometria e i metadati restano; restano anche le proprietà del
 contratto (`sorted_by`, `row_count`).
 
@@ -13638,7 +13695,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
 - `Crs`: CRS della colonna mancante o non risolto, o non geografico
-  (`GEOGRAPHIC_CRS_REQUIRED`);
+  (`GEOGRAPHIC_CRS_REQUIRED`); CRS senza l'ellissoide del datum (risolto
+  dal chiamante, fuori dalla tabella integrata: `ELLIPSOID_REQUIRED`);
 - `InvalidPlan`: config con campi sconosciuti, `output_column` vuoto.
 
 In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
@@ -13657,16 +13715,19 @@ Poi, per riga:
 - `InvalidPlan`: la geometria non è una `LineString` (errore del runner,
   «tipo geometria non supportato»); dal kernel (`ExtendedError`)
   `InvalidGeographicCoordinate`, un vertice non finito o fuori da
-  `[-180, 180]` × `[-90, 90]`;
+  `[-180, 180]` × `[-90, 90]`, e `InvalidOutput`, una lunghezza non
+  finita (mai attesa);
 - `Internal`: dal kernel `CalcoloNonConcluso` (il calcolo di `geo` va in
   panico).
 
 #### Limiti e deviazioni
 
-- **Sempre l'ellissoide WGS 84**, qualunque sia l'ellissoide del CRS
-  geografico: per ED50, Monte Mario, NAD27 o OSGB36 la lunghezza si
-  scosta di parti su centomila, sopra 1 cm su linee di qualche centinaio
-  di metri, senza errore (come [`geo.geodesic_distance`](#geogeodesic_distance)).
+- Ogni tratto è la geodetica **più breve** fra i due vertici: un tratto
+  scritto con più di 180 gradi di longitudine (oltre l'antimeridiano) si
+  misura dalla parte corta, non come il segmento che il piano lon/lat
+  disegna.
+- CRS proiettati rifiutati; fino alla versione 2 del catalogo l'ellissoide
+  era sempre WGS 84 (come [`geo.geodesic_distance`](#geogeodesic_distance)).
 - Solo `LineString`, vedi «Righe»: una `MultiLineString` ferma il passo.
 - Errori senza indice di riga della sorgente
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
@@ -13674,10 +13735,9 @@ voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
-Ogni tratto è una geodetica di Karney su WGS 84, con errore dell'ordine
-dei nanometri; la somma aggiunge un arrotondamento per tratto, molto
-sotto 1 cm su ogni linea realistica. Per un CRS su un altro ellissoide la
-regola di 1 cm **non vale** (sopra). Nessun rifiuto
+Ogni tratto è una geodetica di Karney sull'ellissoide del datum, con
+errore dell'ordine dei nanometri; la somma aggiunge un arrotondamento per
+tratto, molto sotto 1 cm su ogni linea realistica. Nessun rifiuto
 `PrecisionInsufficient`
 ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
@@ -13730,7 +13790,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -13770,7 +13830,9 @@ Le colonne dell'ingresso restano; in coda si aggiungono, nell'ordine fisso
 della lista sopra e non in quello di `fields`, le colonne richieste, con
 nome `output_prefix` + campo: `geometry_type` `utf8`, `num_geometries`
 `uint64`, `num_interior_rings` `uint64`, `start_point` `utf8`, `end_point`
-`utf8`, `is_closed` `bool`, tutte nullable. Colonna geometria, metadati e
+`utf8`, `is_closed` `bool`. `start_point` ed `end_point` sono nullable
+(nulli per una geometria che non è una linea aperta); le altre solo se lo
+è la colonna geometria (nulle dove la geometria è null). Colonna geometria, metadati e
 proprietà del contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
@@ -13874,7 +13936,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -13891,7 +13953,9 @@ Nessuno: la config è `{}`.
 #### Schema
 
 La colonna geometria si toglie e al suo posto, nello stesso punto, entrano
-dieci colonne nullable senza metadati:
+dieci colonne senza metadati; `validity_reason` e i quattro `bounds_*`
+sono nullable (nulli per una geometria valida o vuota), le altre cinque
+solo se lo è la colonna geometria (nulle dove la geometria è null):
 
 | colonna | tipo | contenuto |
 | --- | --- | --- |
@@ -14029,7 +14093,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 1, kernel 1 |
 
 #### Che cosa fa
 
@@ -14098,8 +14162,10 @@ Dal kernel (`extended::hausdorff_distance`, `ExtendedError`), per riga:
 
 - `InvalidPlan`: `InvalidInput` (coordinate non finite o geometria della
   riga non valida OGC; `other_wkb` è già validata in analisi),
-  `WorkLimit` (il prodotto dei vertici delle due geometrie supera
-  `10^8` coppie, il tetto che il runner passa al kernel), `IndexOverflow`;
+  `IndexOverflow`;
+- `ResourceLimit`: `WorkLimit` (il prodotto dei vertici delle due
+  geometrie supera `10^8` coppie, il tetto che il runner passa al
+  kernel);
 - `Internal`: `ValidazioneNonConclusa` e `CalcoloNonConcluso`
   (validazione o calcolo interrotti).
 
@@ -14179,15 +14245,19 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
 Aggiunge una colonna `float64` con la distanza in metri fra il punto di
 ogni riga e un punto fisso della config (`other_wkb`), lungo il cerchio
-massimo di una **sfera** di raggio 6 371 008,8 m (raggio medio di GRS 80,
-`Haversine` di `geo`). Le coordinate sono longitudine e latitudine in
-gradi. Per la distanza sull'ellissoide c'è
+massimo di una **sfera** con il raggio medio IUGG `R1 = a (1 - f / 3)`
+dell'ellissoide del datum del CRS della colonna (per WGS 84 6 371 008,771 m,
+per Internazionale 1924 6 371 229,315 m;
+[README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e latitudine in gradi. Il
+nome resta `haversine`, ma il calcolo non è la formula dell'emiseno: è il
+problema inverso di `geographiclib-rs` a schiacciamento nullo, ben
+condizionato anche agli antipodi. Per la distanza sull'ellissoide c'è
 [`geo.geodesic_distance`](#geogeodesic_distance).
 
 #### Parametri
@@ -14199,7 +14269,7 @@ gradi. Per la distanza sull'ellissoide c'è
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable. Le altre colonne,
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null). Le altre colonne,
 la geometria e i metadati restano; restano anche le proprietà del
 contratto (`sorted_by`, `row_count`).
 
@@ -14224,7 +14294,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate), o `other_wkb` con Z/M o SRID;
 - `Crs`: CRS della colonna mancante o non risolto, o non geografico
-  (`GEOGRAPHIC_CRS_REQUIRED`); una coordinata di `other_wkb` fuori da
+  (`GEOGRAPHIC_CRS_REQUIRED`); CRS senza l'ellissoide del datum (risolto
+  dal chiamante, fuori dalla tabella integrata: `ELLIPSOID_REQUIRED`); una coordinata di `other_wkb` fuori da
   longitudine e latitudine ammesse (`COORDINATE_OUT_OF_CRS_DOMAIN`);
 - `InvalidPlan`: config con campi sconosciuti, `other_wkb` assente, non
   esadecimale, WKB non valido nella struttura o nella validità OGC, o che
@@ -14248,18 +14319,24 @@ Poi, per riga:
 - `InvalidPlan`: la geometria della riga non è un `Point` (errore del
   runner, «tipo geometria non supportato»); dal kernel (`ExtendedError`)
   `InvalidGeographicCoordinate`, una coordinata non finita o fuori da
-  `[-180, 180]` × `[-90, 90]`;
+  `[-180, 180]` × `[-90, 90]`, e `InvalidOutput`, una distanza non finita
+  (mai attesa);
 - `Internal`: dal kernel `CalcoloNonConcluso` (il calcolo di `geo` va in
   panico).
 
 #### Limiti e deviazioni
 
-- **Sfera, non ellissoide.** Il raggio è fisso e non dipende dal datum
-  del CRS: la distanza differisce dalla geodetica sull'ellissoide di
-  qualche millesimo del valore. Dall'origine, un grado di latitudine vale
-  111 195,08 m qui e 110 574,39 m sull'ellissoide WGS 84 (5,6 per mille),
-  un grado di longitudine 111 195,08 m qui e 111 319,49 m
-  sull'ellissoide.
+- **Sfera, non ellissoide.** La distanza differisce dalla geodetica
+  sull'ellissoide di qualche millesimo del valore. Dall'origine, su
+  WGS 84, un grado di latitudine vale 111 195,08 m qui e 110 574,39 m
+  sull'ellissoide (5,6 per mille), un grado di longitudine 111 195,08 m
+  qui e 111 319,49 m sull'ellissoide.
+- Fino alla versione 1 del catalogo il raggio era fisso (6 371 008,8 m,
+  quello di `Haversine` di `geo`) qualunque fosse il datum, e il calcolo
+  era la formula dell'emiseno: vicino agli antipodi, con l'emiseno
+  arrotondato sopra 1, rendeva NaN senza errore, e poco prima perdeva
+  decimetri per arrotondamento.
+- CRS proiettati rifiutati.
 - Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
   passo.
 - Errori senza indice di riga della sorgente
@@ -14269,11 +14346,11 @@ voce «Geo senza diagnostica per riga»).
 #### Precisione
 
 La regola di 1 cm non riguarda il modello: il risultato è la distanza
-sulla sfera, non la distanza vera sull'ellissoide (sopra). Il calcolo
-(`2 asin(sqrt(a))` in `f64`) è accurato a pochi ulp relativi lontano
-dagli antipodi; vicino agli antipodi `asin` è mal condizionato e
-l'errore d'arrotondamento non è misurato né limitato a 1 cm. Nessun
-rifiuto `PrecisionInsufficient`
+sulla sfera, non la distanza vera sull'ellissoide (sopra). Sulla sfera il
+calcolo è accurato ai nanometri ovunque, antipodi compresi (l'oracolo
+`tests/geodetica_oracolo.rs` lo confronta con GeographicLib entro un
+micrometro su ogni ellissoide della tabella); il risultato è sempre
+finito. Nessun rifiuto `PrecisionInsufficient`
 ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
@@ -14307,8 +14384,8 @@ Uscita `risultato`:
 
 | `id: int64` | `geometry: geometry` | `haversine_distance: float64` |
 | --- | --- | --- |
-| 1 | POINT(0 1) | 111195.0802335329 |
-| 2 | POINT(1 0) | 111195.0802335329 |
+| 1 | POINT(0 1) | 111195.07973463158 |
+| 2 | POINT(1 0) | 111195.07973463158 |
 
 Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella per cella.
 
@@ -14495,7 +14572,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -14513,7 +14590,7 @@ parti; i punti valgono 0.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable, senza metadati di
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati di
 campo. Le altre colonne (geometria compresa), i metadati di schema e le
 proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
@@ -15041,7 +15118,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 3, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -15058,7 +15135,7 @@ Nessuno: la config è `{}`.
 
 #### Schema
 
-Solo la colonna geometria, nullable, con lo stesso nome, lo stesso CRS,
+Solo la colonna geometria, non nullable (una riga per linea fusa), con lo stesso nome, lo stesso CRS,
 dimensioni `xy` e i metadati del campo d'ingresso, tranne le chiavi dei
 tipi ereditate; i tipi dichiarati diventano esattamente `LineString`. Le
 colonne attributo cadono. I metadati di schema restano; le proprietà del
@@ -15112,7 +15189,8 @@ geometria non valida, `Internal` se la validazione non conclude.
 
 Poi il kernel, con errore `ExtendedAlgorithmError` che il runner traduce
 così: `Internal`, `ValidazioneNonConclusa` e `CalcoloNonConcluso`
-diventano `Internal`, le altre `InvalidPlan`. Il kernel rifiuta la
+diventano `Internal`, i limiti (`CoordinateLimit`, `OutputLimit`)
+`ResourceLimit`, le altre `InvalidPlan`. Il kernel rifiuta la
 geometria riunita con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
 `CoordinateLimit` (coordinate d'ingresso oltre il limite passato dal
@@ -15346,7 +15424,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 2 |
+| versioni | semantica 3, config 1, analisi 1, kernel 2 |
 
 #### Che cosa fa
 
@@ -15414,11 +15492,11 @@ riga):
 
 - `Schema`: colonna geometria assente o non `Binary`;
 - `ResourceLimit`: cella oltre il limite di byte per cella; prenotazione di
-  memoria fallita;
-- `InvalidPlan`: WKB malformato o con coordinate non finite; input invalido
-  con più di 10.000 segmenti (`WorkLimit`: il lavoro stimato è il quadrato
-  dei segmenti); coordinate o componenti d'uscita oltre i limiti per cella;
-  riparazione che resta invalida; precisione del CRS non valida;
+  memoria fallita; input invalido con più di 10.000 segmenti (`WorkLimit`:
+  il lavoro stimato è il quadrato dei segmenti); coordinate o componenti
+  d'uscita oltre i limiti per cella;
+- `InvalidPlan`: WKB malformato o con coordinate non finite; riparazione
+  che resta invalida; precisione del CRS non valida;
 - `Unsupported`: WKB con dimensioni Z/M o SRID; noding non convergente;
   segno d'area non decidibile su coordinate fuori da `[2^-450, 2^450]`
   (`NumericRange`); `PrecisionInsufficient` (sotto, «Precisione»);
@@ -15534,7 +15612,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -15554,7 +15632,11 @@ distanza minima, come `sjoin_nearest` di GeoPandas.
 
 Le colonne della sinistra, invariate, più in coda `__right_index`
 (`uint64`, la posizione della riga destra) e `distance` (`float64`, nelle
-unità del CRS), entrambe nullable. Le colonne della destra non passano: si
+unità del CRS), entrambe non nullable: ogni riga d'uscita è una coppia
+trovata. Anche la colonna geometria della sinistra è non nullable
+nell'uscita (una geometria null non ha vicini); fino alla versione 1 del
+catalogo le tre si dichiaravano nullable senza che il runner ne emettesse
+mai un null. Le colonne della destra non passano: si
 ricollegano con `__right_index`. La colonna geometria resta quella della
 sinistra. I metadati di schema sono la fusione dei due lati; le proprietà
 del contratto (`sorted_by`, `row_count`) si perdono.
@@ -15607,11 +15689,11 @@ Dal kernel (`analysis::nearest_matches_validated`, errore
 `AnalysisError`, sulle geometrie già validate), nella categoria del passo
 geo indicata fra parentesi:
 
-- `WorkLimitExceeded` (`InvalidPlan`): i confronti della forza bruta,
+- `WorkLimitExceeded` (`ResourceLimit`): i confronti della forza bruta,
   righe sinistre non nulle per righe destre non nulle e non vuote,
   superano il quadrato del maggiore fra `max_input_rows` e
   `max_rows_per_edge` (anche se l'indice ne fa meno);
-- `ResultLimitExceeded` (`InvalidPlan`): gli abbinamenti superano il
+- `ResultLimitExceeded` (`ResourceLimit`): gli abbinamenti superano il
   limite di righe dell'arco (ogni altro errore, il primo in ordine di
   riga, ha la precedenza);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un
@@ -15716,7 +15798,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -15747,7 +15829,7 @@ lato; se l'altro lato non ha righe, è la riga invariata.
 #### Schema
 
 Tre colonne, in quest'ordine: la colonna geometria della sinistra (stesso
-nome e CRS, `Binary` GeoArrow-WKB, nullable, XY, tipi dichiarati `Polygon`
+nome e CRS, `Binary` GeoArrow-WKB, non nullable (un pezzo non è mai vuoto), XY, tipi dichiarati `Polygon`
 e `MultiPolygon` `exact`, senza le chiavi dei tipi ereditate), poi
 `__left_index` e `__right_index`, `uint64` nullable: le posizioni delle
 righe d'origine, nulle dove il pezzo è un resto dell'altro lato. Le
@@ -15808,11 +15890,12 @@ parentesi:
 
 - `UnsupportedGeometry` (`InvalidPlan`): una geometria non è
   `Polygon`/`MultiPolygon`;
-- `InvalidGeometry` (`InvalidPlan`): un'unione o un pezzo non supera la
-  validazione OGC; oppure il join delle coppie candidate fallisce, anche
-  solo perché le coppie superano il limite di righe dell'arco;
-- `ResourceLimit` (`overlay_results`; `InvalidPlan`, non la categoria
-  `ResourceLimit`): i pezzi superano il limite di righe dell'arco;
+- `InvalidGeometry` (`InvalidPlan`): un ingresso che il join delle
+  coppie candidate rifiuta, un'unione o un pezzo che non supera la
+  validazione OGC;
+- `ResourceLimit` (`ResourceLimit`): le coppie candidate superano il
+  limite di righe dell'arco (`candidate_pairs`), o i pezzi lo superano
+  (`overlay_results`);
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`;
 - `PrecisionInsufficient` (`Unsupported`): la griglia di un overlay
   sposterebbe il risultato oltre la precisione (sotto, «Precisione»);
@@ -15830,10 +15913,10 @@ diagnostica per riga»).
 #### Limiti e deviazioni
 
 Solo parti poligonali: le intersezioni che si riducono a linee o punti
-sono escluse, come `keep_geom_type=True` di GeoPandas. Il superamento del
-limite delle coppie candidate esce come `InvalidGeometry`, non come
-`ResourceLimit`, e nessuno dei due limiti ha la categoria `ResourceLimit`
-nel runner: entrambi escono come `InvalidPlan`. I pezzi dipendono dai
+sono escluse, come `keep_geom_type=True` di GeoPandas. Fino alla versione 1
+del catalogo il superamento del limite delle coppie candidate usciva come
+`InvalidGeometry`, e i due limiti avevano la categoria `InvalidPlan`. I
+pezzi dipendono dai
 dati: il modello di costo non li prevede, e li limita solo il limite di
 righe dell'arco ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di
@@ -15913,7 +15996,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -15931,7 +16014,7 @@ collezione la somma delle parti, un punto 0.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable, senza metadati di
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati di
 campo. Le altre colonne (geometria compresa), i metadati di schema e le
 proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
@@ -16325,7 +16408,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -16360,7 +16443,8 @@ Due colonne, in quest'ordine:
 
 - la colonna geometria, con il nome e tutti i metadati del campo
   d'ingresso (CRS, dimensioni, encoding, lineage) tranne la dichiarazione
-  dei tipi, e nullable; il contratto dichiara i tipi `exact`
+  dei tipi, non nullable (una riga per faccia o residuo); il contratto
+  dichiara i tipi `exact`
   `LineString` e `Polygon`;
 - `__class`, `utf8` non nullable: `polygon`, `cut_edge`, `dangle`,
   `invalid_ring`.
@@ -16373,7 +16457,7 @@ cadono).
 
 Aggregazione dell'intera tabella: da 0 righe (ingresso vuoto o tutto
 nullo) a una per faccia e per residuo. Le celle nulle si saltano; nessuna
-riga d'uscita ha geometria nulla, anche se il campo è nullable. Un poligono
+riga d'uscita ha geometria nulla. Un poligono
 con buchi resta una riga sola.
 
 #### Ordine
@@ -16406,13 +16490,13 @@ Poi l'esecuzione Arrow:
 
 - `Schema`: colonna geometria assente o non `Binary`;
 - `ResourceLimit`: cella oltre il limite di byte per cella; prenotazione di
-  memoria fallita;
+  memoria fallita; più di 100.000.000 coordinate in ingresso o in uscita;
+  più di 100.000.000 coppie di segmenti esaminate dal noding; righe
+  d'uscita oltre il limite di righe dell'arco (`max_output_rows` per un
+  output del piano, `max_rows_per_edge` altrimenti; contato anche sulle
+  facce intermedie);
 - `InvalidPlan`: una cella che non è `LineString`, `MultiLineString` o
-  collezione di linee; WKB malformato o OGC-invalido; più di 100.000.000
-  coordinate in ingresso o in uscita; più di 100.000.000 coppie di segmenti
-  esaminate dal noding; righe d'uscita oltre il limite di righe dell'arco
-  (`max_output_rows` per un output del piano, `max_rows_per_edge`
-  altrimenti; contato anche sulle facce intermedie);
+  collezione di linee; WKB malformato o OGC-invalido;
   `require_complete` con residui (il messaggio riporta il numero di residui
   per classe); una faccia che non supera la validazione;
 - `Unsupported`: WKB con dimensioni Z/M o SRID; noding non convergente;
@@ -16518,7 +16602,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -16539,7 +16623,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -16694,7 +16778,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -16715,7 +16799,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -16870,7 +16954,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -16891,7 +16975,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -17046,7 +17130,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -17067,7 +17151,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -17222,7 +17306,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -17243,7 +17327,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -17398,7 +17482,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -17419,7 +17503,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -17574,7 +17658,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -17595,7 +17679,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -17750,7 +17834,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -17771,7 +17855,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -17926,7 +18010,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -17947,7 +18031,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -18102,7 +18186,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -18123,7 +18207,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -18278,7 +18362,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -18299,7 +18383,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.
@@ -18454,7 +18538,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 2, analisi 1, kernel 2 |
+| versioni | semantica 2, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -18526,9 +18610,10 @@ In validazione (analisi del contratto):
   `REPROJECTION_PATH_UNAVAILABLE` (nessun percorso fra i datum);
   `REPROJECTION_ACCURACY_NOT_ACCEPTED` (il percorso migliore supera 1 cm
   e l'accuratezza accettata);
-- `InvalidConfiguration`: config non leggibile (campi sconosciuti,
-  `target_crs` assente, tipi sbagliati), `file` di una griglia vuoto,
-  oltre 4096 byte o con NUL.
+- `InvalidPlan`: config non leggibile (campi sconosciuti, `target_crs`
+  assente, tipi sbagliati), `file` di una griglia vuoto, oltre 4096 byte
+  o con NUL. Fino alla versione 1 dell'analisi del contratto era
+  `InvalidConfiguration`, unica fra le operazioni geo.
 
 In esecuzione, prima dell'adapter, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
@@ -19091,7 +19176,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -19099,22 +19184,26 @@ Semplifica ogni geometria togliendo vertici, nella stessa colonna, con uno
 di due algoritmi:
 
 - `douglas_peucker` (default): Ramer-Douglas-Peucker su ogni linea e ogni
-  anello; toglie i vertici che distano meno di `tolerance` (unità del CRS)
-  dalla linea semplificata. Un anello resta di almeno quattro coordinate;
-  la topologia non è garantita e un risultato non valido è un errore;
+  anello; toglie i vertici che distano meno di `tolerance` (una
+  **distanza**, unità del CRS) dalla linea semplificata. Un anello resta di
+  almeno quattro coordinate; la topologia non è garantita e un risultato
+  non valido è un errore;
 - `preserve_topology`: Visvalingam-Whyatt con conservazione della topologia
   di `geo` (`simplify_vw_preserve`): toglie i vertici il cui triangolo con i
-  due vicini ha **area** minore di `tolerance` (unità del CRS al quadrato),
-  senza creare intersezioni.
+  due vicini ha **area** non maggiore di `min_area` (unità del CRS al
+  quadrato), senza creare intersezioni.
 
-Punti e multi-punti passano invariati; una collezione si semplifica membro
-per membro. Con `tolerance` 0 la geometria non cambia.
+La soglia ha un nome per algoritmo perché non è la stessa grandezza:
+`tolerance` con `douglas_peucker`, `min_area` con `preserve_topology`, e
+l'altra si rifiuta. Punti e multi-punti passano invariati; una collezione
+si semplifica membro per membro. Con soglia 0 la geometria non cambia.
 
 #### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `tolerance` | numero | obbligatorio | finito, maggiore o uguale a 0 | soglia: distanza con `douglas_peucker`, area con `preserve_topology` |
+| `tolerance` | numero | obbligatorio con `douglas_peucker`, vietato con `preserve_topology` | finito, maggiore o uguale a 0 | distanza massima di un vertice tolto (unità del CRS) |
+| `min_area` | numero | obbligatorio con `preserve_topology`, vietato con `douglas_peucker` | finito, maggiore o uguale a 0 | area del triangolo sotto la quale, uguaglianza compresa, un vertice si toglie (unità del CRS al quadrato) |
 | `policy` | stringa | `douglas_peucker` | `douglas_peucker`, `preserve_topology` | algoritmo |
 
 #### Schema
@@ -19143,8 +19232,12 @@ In validazione (analisi del contratto):
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
-- `InvalidPlan`: `tolerance` assente, non finita o negativa, `policy` fuori
-  elenco, campi sconosciuti;
+- `InvalidPlan`: la soglia dell'algoritmo assente (`tolerance` con
+  `douglas_peucker`, `min_area` con `preserve_topology`), non finita o
+  negativa; la soglia dell'altro algoritmo presente (`tolerance` con
+  `preserve_topology`: «la soglia di Visvalingam-Whyatt è un'area,
+  `min_area`»; `min_area` con `douglas_peucker`); `policy` fuori elenco;
+  campi sconosciuti;
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
@@ -19168,8 +19261,9 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
-- `InvalidParameter`: `tolerance` non finita o negativa (l'analisi la
-  rifiuta prima).
+- `InvalidParameter`: soglia non finita o negativa (l'analisi la
+  rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
+  scala delle coordinate diventa zero.
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
@@ -19183,9 +19277,14 @@ una previsione dalle misure
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 `preserve_topology` non è `TopologyPreservingSimplifier` di GEOS
 (`ST_SimplifyPreserveTopology`), che usa una distanza: qui la soglia è
-un'area, e lo stesso numero semplifica in modo molto diverso. Le coordinate
-di modulo oltre `1e150`, o non nulle e sotto `1e-150`, si semplificano in
-uno spazio scalato uniformemente e si riportano indietro.
+un'area, e per questo si chiama `min_area`. Fino alla versione 2 del
+catalogo si scriveva `tolerance` anche qui, e un piano scritto pensando a
+GEOS semplificava in modo molto diverso senza errore: ora quel piano si
+rifiuta in validazione. Le coordinate di modulo oltre `1e150`, o non
+nulle e sotto `1e-150`, si semplificano in uno spazio scalato
+uniformemente e si riportano indietro, con la soglia scalata come la sua
+grandezza (una distanza per il fattore, un'area per il suo quadrato; fino
+alla versione 2 l'area si scalava come una distanza).
 
 #### Precisione
 
@@ -19193,7 +19292,7 @@ Esatta: i vertici d'uscita sono vertici d'ingresso, senza calcolo, fuori
 dal percorso scalato (coordinate oltre `1e150` o sotto `1e-150` in modulo,
 fuori da ogni dominio di un CRS reale), dove passano per una divisione e
 una moltiplicazione. Lo scarto dalla forma originale è quello chiesto con
-`tolerance`, non un errore di precisione
+la soglia, non un errore di precisione
 ([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
@@ -19250,7 +19349,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -19282,7 +19381,7 @@ passano dalla matrice DE-9IM:
 Le colonne della sinistra, invariate, più `__right_index` in coda, `uint64`
 non nullable. Le colonne della destra non passano: si ricollegano con
 `__right_index`; non c'è `__left_index`. La colonna geometria resta quella
-della sinistra. I metadati di schema sono la fusione dei due lati; le
+della sinistra, non nullable: una geometria null non ha coppie. I metadati di schema sono la fusione dei due lati; le
 proprietà del contratto (`sorted_by`, `row_count`) si perdono.
 
 #### Righe
@@ -19332,7 +19431,7 @@ Dal kernel (`spatial_join::spatial_join_nullable_validated`, errore
 `SpatialJoinError`, sulle geometrie già validate), nella categoria del
 passo geo indicata fra parentesi:
 
-- `PairLimitExceeded` (`InvalidPlan`): le coppie confermate superano il
+- `PairLimitExceeded` (`ResourceLimit`): le coppie confermate superano il
   limite di righe dell'arco (si controlla coppia per coppia, prima di
   materializzarle; ogni altro errore, il primo in ordine di riga, ha la
   precedenza);
@@ -19729,7 +19828,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -19761,8 +19860,8 @@ accetta e non ha effetto.
 
 Le colonne dell'ingresso, nelle stesse posizioni e con gli stessi tipi, più
 `__parent_index` (`uint64`, non nullable) in coda. Il campo geometria
-conserva i metadati d'ingresso tranne la dichiarazione dei tipi, e la sua
-nullabilità. Il contratto dichiara i tipi `exact`: `Polygon` per sorgenti
+conserva i metadati d'ingresso tranne la dichiarazione dei tipi, ed è non
+nullable (una sorgente null non produce parti). Il contratto dichiara i tipi `exact`: `Polygon` per sorgenti
 `Polygon`/`MultiPolygon`, `LineString` per sorgenti `LineString`, entrambi
 se l'ingresso non ha una dichiarazione `exact` che li restringa. Resta
 `sorted_by`; `row_count` cade.
@@ -19810,14 +19909,14 @@ Poi l'esecuzione Arrow (vince la prima riga che fallisce):
 
 - `InvalidPlan`: sorgente di tipo
   diverso da `LineString`, `Polygon`, `MultiPolygon`; lama di tipo non
-  ammesso; WKB malformato o OGC-invalido; limiti superati (coordinate per
-  cella, per ciascun ingresso e per la loro somma; 100.000.000 coppie di
-  noding o test d'intersezione; righe d'uscita oltre il limite di righe
-  dell'arco, `max_output_rows` per un output del piano e
-  `max_rows_per_edge` altrimenti, cumulate su tutte le righe); area non conservata (`AreaMismatch`) o bordo
-  non ricoperto (`CoverageMismatch`);
+  ammesso; WKB malformato o OGC-invalido; area non conservata
+  (`AreaMismatch`) o bordo non ricoperto (`CoverageMismatch`);
 - `ResourceLimit`: cella oltre il limite di byte; prenotazione di memoria
-  fallita;
+  fallita; limiti superati (coordinate per cella, per ciascun ingresso e
+  per la loro somma; 100.000.000 coppie di noding o test d'intersezione;
+  righe d'uscita oltre il limite di righe dell'arco, `max_output_rows` per
+  un output del piano e `max_rows_per_edge` altrimenti, cumulate su tutte
+  le righe);
 - `Unsupported`: noding non convergente; segno d'area non decidibile;
   `PrecisionInsufficient` (sotto, «Precisione»);
 - `Internal`: panico di `geo` dentro il kernel, invariante violata.
@@ -20253,7 +20352,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -20272,7 +20371,7 @@ vuote come `POINT EMPTY`, `MULTIPOLYGON EMPTY`.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `utf8` nullable, senza metadati di
+Aggiunge in coda `output_column`, `utf8`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati di
 campo. Le altre colonne (geometria compresa), i metadati di schema e le
 proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
@@ -20684,7 +20783,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -20700,7 +20799,7 @@ di chiusura (un quadrato ne ha 5); una geometria vuota ne ha 0.
 
 #### Schema
 
-Aggiunge in coda `output_column`, `uint64` nullable, senza metadati di
+Aggiunge in coda `output_column`, `uint64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati di
 campo. Le altre colonne (geometria compresa), i metadati di schema e le
 proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
@@ -20813,7 +20912,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -20877,7 +20976,8 @@ geometria non valida, `Internal` se la validazione non conclude.
 Poi il kernel, con errore `AdvancedError` che il runner traduce così:
 `ValidazioneNonConclusa` e `CalcoloNonConcluso` diventano `Internal`,
 `PrecisionInsufficient` e `VerticeMalCondizionato` diventano
-`Unsupported`, le altre `InvalidPlan`; il messaggio è quello del kernel, e
+`Unsupported`, `PointLimitExceeded` diventa `ResourceLimit`, le altre
+`InvalidPlan`; il messaggio è quello del kernel, e
 un indice che vi compare conta le sole geometrie non nulle, non le righe.
 Il kernel rifiuta l'intera colonna, nell'ordine, con `InsufficientPoints`
 (meno di due righe non nulle), `PointLimitExceeded` (più righe non nulle
@@ -20985,7 +21085,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -21004,8 +21104,8 @@ solo bordo, come un punto sul lato di un poligono, non è dentro.
 
 #### Schema
 
-Le colonne della sinistra, invariate, più `output_column` in coda, `bool`
-nullable. Le colonne della destra non passano. La colonna geometria resta
+Le colonne della sinistra, invariate, più `output_column` in coda, `bool`,
+nullable solo se lo è la geometria della sinistra (null dove è null). Le colonne della destra non passano. La colonna geometria resta
 quella della sinistra, con i suoi tipi dichiarati. I metadati di schema
 sono la fusione dei due lati; le proprietà del contratto della sinistra
 (`sorted_by`, `row_count`) restano.
@@ -21055,7 +21155,7 @@ Dal kernel (`analysis::within_indexes_validated`, errore `AnalysisError`
 che avvolge `SpatialJoinError`, sulle geometrie già validate), nella
 categoria del passo geo indicata fra parentesi:
 
-- `PairLimitExceeded` (`InvalidPlan`): le coppie (sinistra, destra)
+- `PairLimitExceeded` (`ResourceLimit`): le coppie (sinistra, destra)
   confermate superano il limite di righe dell'arco; conta ogni destra che
   contiene una sinistra, anche se ne basta una;
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
