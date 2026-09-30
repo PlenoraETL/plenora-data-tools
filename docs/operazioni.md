@@ -20286,7 +20286,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 

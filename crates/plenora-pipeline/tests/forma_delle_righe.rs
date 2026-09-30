@@ -101,3 +101,49 @@ fn validate_rules_riepiloga_anche_una_tabella_vuota() {
     let uscita = un_passo("table.validate_rules", config, &[vuota]).expect("riepilogo");
     assert_eq!(uscita.num_rows(), 2);
 }
+
+/// `geo.union` dichiarava `SumRelative`: una riga per lato dà
+/// `1 / (1 + 1) = 0,5`, e con `max_expansion_factor` 0,75 il passo era
+/// accettato. Con `LeftRelative` il rapporto è 1 e si rifiuta (semantica 2).
+/// `geo.difference` dichiarava `MaxRelative`, che su lati di righe uguali
+/// decide come `LeftRelative`: rifiutata prima e dopo (semantica 1).
+#[test]
+fn union_con_fattore_sotto_uno_ora_si_rifiuta_come_le_altre_booleane() {
+    use comune_geo::{esegui, passo, piano};
+    use plenora_core::ErrorCategory;
+    use plenora_pipeline::LimitiParziali;
+
+    let sinistra = tabella(UTM, &[Some(Geometry::Polygon(quadrato(X0, Y0, 10.0)))]);
+    let destra = tabella(
+        UTM,
+        &[Some(Geometry::Polygon(quadrato(X0 + 5.0, Y0, 10.0)))],
+    );
+    for (op, semantica) in [("geo.union", 2), ("geo.difference", 1)] {
+        let descrittore = find_operation(op).expect(op);
+        assert_eq!(
+            descrittore.expansion_constraint,
+            ExpansionConstraint::LeftRelative
+        );
+        assert_eq!(descrittore.semantic_version, semantica, "{op}");
+        let mut pipeline = piano(
+            &["t", "u"],
+            vec![passo("x", op, &["t", "u"], json!({}))],
+            &["x"],
+        );
+        pipeline.limits = Some(LimitiParziali {
+            max_expansion_factor: Some(0.75),
+            ..LimitiParziali::default()
+        });
+        let errore = esegui(&pipeline, &[("t", sinistra.clone()), ("u", destra.clone())])
+            .expect_err("rapporto 1 oltre 0,75");
+        assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{op}");
+        // Con il fattore a 1 lo stesso passo gira.
+        pipeline.limits = Some(LimitiParziali {
+            max_expansion_factor: Some(1.0),
+            ..LimitiParziali::default()
+        });
+        let esito = esegui(&pipeline, &[("t", sinistra.clone()), ("u", destra.clone())])
+            .expect("rapporto 1");
+        assert_eq!(esito.outputs[0].1.num_rows(), 1, "{op}");
+    }
+}

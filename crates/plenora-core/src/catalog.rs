@@ -689,6 +689,43 @@ include!("catalog_op.rs");
 /// );
 /// fn main() {}
 /// ```
+///
+/// `expansion_constraint` ripetuto, la seconda volta con `Custom`:
+///
+/// ```compile_fail
+/// use plenora_core::catalog::*;
+/// include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/catalog_op.rs"));
+/// const VOCE: OperationDescriptor = op!(
+///     "table.prova", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[],
+///     DefinedOrder, PublicProtocol, expansion_constraint = LeftRelative,
+///     expansion_constraint = Custom(2.0)
+/// );
+/// fn main() {}
+/// ```
+///
+/// `geo_fusion` ripetuta:
+///
+/// ```compile_fail
+/// use plenora_core::catalog::*;
+/// include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/catalog_op.rs"));
+/// const VOCE: OperationDescriptor = op!(
+///     "table.prova", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[],
+///     DefinedOrder, PublicProtocol, geo_fusion = TransformInPlace, geo_fusion = NotFusible
+/// );
+/// fn main() {}
+/// ```
+///
+/// Una chiave sconosciuta:
+///
+/// ```compile_fail
+/// use plenora_core::catalog::*;
+/// include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/catalog_op.rs"));
+/// const VOCE: OperationDescriptor = op!(
+///     "table.prova", Table, Extension, Unary, Blocking, BoundaryOnly, None, None, &[],
+///     DefinedOrder, PublicProtocol, kernel_version = 2, colore = 1
+/// );
+/// fn main() {}
+/// ```
 const _CONTROLLO_OP: () = ();
 
 /// Catalogo unificato delle operazioni, tabellari e geografiche.
@@ -2016,7 +2053,11 @@ pub static CATALOG: &[OperationDescriptor] = &[
         semantic_version = 2
     ),
     // union: riga `i` con riga `i` (lati con le stesse righe), come le altre
-    // booleane allineate.
+    // booleane allineate. Dichiarava `SumRelative` (uscita / (sinistra +
+    // destra) = 1/2): con `max_expansion_factor` fra 1/2 e 1 il passo era
+    // accettato e ora si rifiuta, quindi semantica 2. Per difference,
+    // intersection e symmetric_difference `MaxRelative` e `LeftRelative`
+    // decidono uguale (lati di righe uguali, uscita = sinistra): semantica 1.
     op!(
         "geo.union",
         Geo,
@@ -2029,6 +2070,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
+        semantic_version = 2,
         contract_analysis_version = 2,
         expansion_constraint = LeftRelative
     ),
@@ -3810,7 +3852,8 @@ mod tests {
             ("geo.difference", 1, 1, 2, 1),
             ("geo.intersection", 1, 1, 2, 1),
             ("geo.symmetric_difference", 1, 1, 2, 1),
-            ("geo.union", 1, 1, 2, 1),
+            // SumRelative -> LeftRelative: fattori fra 1/2 e 1 ora rifiutati.
+            ("geo.union", 2, 1, 2, 1),
             // N:1 dichiarata, da tutta la tabella a molte righe resa.
             ("geo.line_merge", 2, 1, 2, 1),
             ("geo.polygonize", 2, 1, 2, 2),
