@@ -1738,7 +1738,7 @@ budget residuo, e dopo la lettura i byte vivi esatti devono starci.
 
 | passo | controllo prima | misura (Windows, allocazioni contate, 1 000–5 000 000 righe) |
 | --- | --- | --- |
-| lettura Arrow IPC | dimensione del file, il doppio se i blocchi sono più di uno (ricomposizione) | picco 1,0 volte la tabella con un blocco, 2,0 con più blocchi |
+| lettura Arrow IPC | dimensione del file prima di leggerlo, il doppio prima di decodificare se i blocchi sono più di uno, e prima di ricomporli i byte vivi dei blocchi decodificati più la loro copia | picco 1,0 volte la tabella con un blocco, 2,0 con più blocchi |
 | lettura Parquet | 5 volte la stima dal footer, più 1 MiB | picco fino a 2,8 volte la tabella da 20 000 righe in su (liste, interi e float con null; 4 volte a 1 000 righe, per i buffer fissi), sempre sotto il 75% della previsione |
 | scrittura Arrow IPC | due volte il blocco più grande (circa 8 MiB, di più con righe molto più grandi della media), misurato sui blocchi veri con i dizionari interi, più 1 MiB | picco sotto 3 MiB |
 | scrittura Parquet | 4 volte i byte del row group più grande, misurato sulle fette vere, più 8 MiB | picco fino a 45 MiB (liste, 5 milioni di righe) |
@@ -1748,6 +1748,47 @@ column chunk e i valori per la larghezza fisica di ogni foglia, più i byte
 decodificati dei `BYTE_ARRAY` quando il file li dichiara
 (`unencoded_byte_array_data_bytes`). Le misure si rifanno con un
 allocatore che conta, fuori dal workspace (niente `unsafe` qui).
+
+### Confine di lettura
+
+Il minimo perché un file malformato diventi un errore esplicito invece di
+un panico o di un risultato sbagliato (`plenora_io::confine`). Non è una
+difesa da file costruiti apposta (limiti dichiarati sotto).
+
+- **Barriera anti-panico**: ogni chiamata ad `arrow-ipc`, `parquet` e
+  `concat_batches` sui byte del file gira in
+  `plenora_core::panic_policy::barriera_di_dipendenza`: un panico (per
+  esempio di `fb_to_schema`, o di un `unwrap` sui campi opzionali del
+  footer) diventa `DataMapping` con la sola forma del payload.
+- **Budget prima di leggere, decodificare e ricomporre** (tabella in
+  «Memoria»).
+- **Arrow IPC**: il file si legge intero in un buffer allineato (già nel
+  budget) e, prima di Arrow, se ne percorre la struttura: prefissi e
+  lunghezze dei messaggi, metadati entro il tetto, corpi e blocchi del
+  footer dentro il file. `FileDecoder` e `StreamDecoder` decodificano poi
+  per viste dello stesso buffer. Tre controlli evitano un risultato
+  sbagliato senza errore: il marcatore di fine dello stream (senza, uno
+  stream tagliato fra due messaggi darebbe meno righe), blocchi del footer
+  né ripetuti né sovrapposti (moltiplicherebbero le righe), l'endianness
+  (`StreamDecoder` non la guarda, e i valori cambierebbero).
+- **Parquet**: la lunghezza del footer, letta dalla coda, entro il tetto
+  prima che `parquet` la usi; i row group entro il massimo e la loro somma
+  di righe uguale a quella del footer dopo.
+
+| limite (`LimitiLettura`) | predefinito | a che cosa si applica | errore |
+| --- | --- | --- | --- |
+| `max_byte_metadati` | 16 MiB, e mai oltre il budget residuo | ogni messaggio IPC, footer IPC, footer Parquet | `ResourceLimit` |
+| `max_byte_metadati_custom` | 4 MiB | chiavi e valori dei metadati di schema e di tutti i campi, a ogni profondità (per Parquet anche i metadati chiave-valore del file) | `ResourceLimit` |
+| `max_blocchi` | 100 000 | blocchi IPC (record batch), row group Parquet | `ResourceLimit` |
+
+`leggi_tabella` usa i predefiniti, `leggi_tabella_con_limiti` li prende
+espliciti. Gli errori dicono che cosa non va e quale limite, mai byte del
+file o valori. Le prove sono in `crates/plenora-io/tests/confine.rs`: file
+troncati a ogni lunghezza (Arrow IPC e Parquet: sempre errori), Arrow IPC
+con ogni byte invertito (nessun panico; ogni posizione con la suite lunga,
+testa, coda e una ogni 11 senza), lunghezze enormi di metadati, blocchi e
+footer, stream senza fine o con byte dopo la fine, blocchi ripetuti, e ogni
+limite della tabella.
 
 ### Limiti dichiarati
 
@@ -1772,6 +1813,61 @@ allocatore che conta, fuori dal workspace (niente `unsafe` qui).
   `GZIP`, `BROTLI`, `LZ4`, `LZ4_RAW`, `LZO` si rifiutano prima di decodificare
   (`Unsupported`). Arrow IPC compresso (LZ4/ZSTD) si rifiuta con l'errore di
   Arrow.
+- **File costruiti apposta: aborto del processo.**
+  *Regola*: il confine di lettura ferma i panici e verifica le lunghezze
+  che costano poco (sopra); il contenuto dei footer, delle intestazioni di
+  pagina e dei messaggi IPC resta a `parquet` e `arrow-ipc`.
+  *Ambito*: `parquet_io::leggi` (footer Thrift, intestazioni e pagine),
+  `ipc::leggi` (buffer e nodi dei messaggi, dizionari delta, compressione
+  dichiarata).
+  *Hazard*: un file Parquet malformato o costruito apposta (e i casi IPC non
+  coperti) può far terminare il processo: `parquet` e `arrow-ipc` allocano
+  dalle lunghezze dichiarate prima di verificarle (per esempio
+  `Vec::with_capacity` sulla lunghezza di una lista Thrift del footer, la
+  dimensione non compressa di una pagina, le righe dichiarate; in IPC le
+  copie di buffer sovrapposti e non allineati), e un'allocazione impossibile
+  è un aborto, che la barriera anti-panico non ferma. Anche uno schema
+  Parquet annidato per migliaia di livelli esaurisce lo stack. I file
+  scritti da scrittori conformi non lo fanno.
+  *Rientro*: se si devono leggere file di fonti non fidate, aggiungere una
+  pre-validazione (footer e intestazioni di pagina percorsi prima di
+  `parquet`, contenuto dei messaggi IPC prima di Arrow).
+- **Parquet modificato durante la lettura.**
+  *Regola*: la lunghezza del footer si verifica sul file aperto, poi
+  `parquet` lo rilegge.
+  *Ambito*: `parquet_io::leggi` (Arrow IPC no: si decodifica dal buffer
+  verificato).
+  *Hazard*: un altro processo che riscrive il file fra la verifica e la
+  lettura può presentare a `parquet` un footer di lunghezza non verificata.
+  *Rientro*: decodificare da un buffer letto una volta, come per Arrow IPC,
+  al prezzo del file intero in memoria durante la decodifica.
+- **Righe senza byte.**
+  *Regola*: il budget conta i byte; una colonna `Null` o una tabella senza
+  colonne dichiara righe che non occupano byte.
+  *Ambito*: `ipc::leggi` (lunghezza del blocco e dei nodi `Null`),
+  `parquet_io::leggi` (tabella senza colonne foglia).
+  *Hazard*: un file di pochi byte può dichiarare miliardi di righe; la
+  lettura riesce, e un'operazione che poi alloca per riga risponde al
+  budget del runner, non al confine.
+  *Rientro*: un tetto sulle righe dichiarate.
+- **Strutture Arrow per blocco non contate.**
+  *Regola*: il confine IPC conta i byte del file, non le strutture che
+  Arrow crea per ogni colonna di ogni blocco (qualche centinaio di byte
+  ciascuna), né le copie dei buffer non allineati.
+  *Ambito*: `ipc::leggi` prima della verifica esatta dei byte vivi.
+  *Hazard*: un file con molti blocchi di molte colonne vuote occupa durante
+  la decodifica qualche volta i suoi byte di metadati, oltre la previsione;
+  i blocchi restano entro `max_blocchi` e i metadati entro il file.
+  *Rientro*: contare colonne per blocchi nella previsione.
+- **Arrow IPC file V4.** `FileDecoder` di `arrow-rs` 59.2.0 rifiuta un
+  file (non uno stream) scritto con `metadata_version` V4, come lo scrive
+  pyarrow con `metadata_version=V4` (`DataMapping`, «arrow error: ipc»);
+  lo rifiuta anche `FileReader` da solo, prima di questo confine. Lo stream
+  V4 si legge. *Rientro*: una versione di `arrow-ipc` che lo accetti.
+- **Hook di panico.** La barriera trasforma il panico in errore, ma l'hook
+  di `std` ne stampa il testo su stderr prima, e quel testo può contenere
+  byte del file: chi usa `plenora-io` installa
+  `plenora_core::panic_policy::install` (limite già dichiarato lì).
 - **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
   `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
   rifiutano; il contratto ammette una sola colonna geometrica, quindi

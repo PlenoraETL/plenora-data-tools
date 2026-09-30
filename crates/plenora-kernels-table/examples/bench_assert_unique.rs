@@ -151,14 +151,8 @@ fn measure(
 }
 
 fn main() {
-    let rows = std::env::args()
-        .nth(1)
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(1_000_000);
-    let repetitions = std::env::args()
-        .nth(2)
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(3);
+    let rows = comune::argomenti::intero_positivo_arg(1, "rows", 1_000_000);
+    let repetitions = comune::argomenti::intero_positivo_arg(2, "repetitions", 3);
 
     let unique = base_fixture(rows);
     let unique_config = AssertUnique {

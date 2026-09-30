@@ -26,6 +26,12 @@ arrow-array = "=59.2.0"
 arrow-schema = "=59.2.0"
 arrow-ipc = "=59.2.0"
 arrow-select = "=59.2.0"
+# `Buffer` di Arrow per plenora-io: la lettura IPC legge il file intero in un
+# buffer allineato e lo decodifica con `FileDecoder`/`StreamDecoder` di
+# arrow-ipc sugli stessi byte che il confine ha verificato (README, «Confine
+# di lettura»). Non e' una dipendenza nuova: arrow-array e arrow-ipc la usano
+# gia', nel lockfile nessun pacchetto nuovo.
+arrow-buffer = "=59.2.0"
 # Lettura e scrittura Parquet/GeoParquet di plenora-io (decisione del
 # maintainer 2026-09-29: formati di file Arrow IPC e Parquet). Stessa
 # release arrow-rs dei crate Arrow sopra (59.2.0), cosi' i tipi Arrow

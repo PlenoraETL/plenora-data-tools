@@ -6,6 +6,11 @@
 //! sullo stesso input.
 //!
 //! Uso: `bench_delaunay_voronoi <n> <casuali|griglia> <delaunay|voronoi> [runs]`.
+//! Un argomento assente vale il predefinito (10 000, `casuali`, `delaunay`,
+//! 5); uno non valido esce con codice 2.
+
+#[path = "comune/argomenti.rs"]
+mod argomenti;
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -65,17 +70,12 @@ fn fnv(impronta: &mut u64, valore: u64) {
 }
 
 fn main() {
-    let argomenti: Vec<String> = std::env::args().collect();
-    let n: usize = argomenti
-        .get(1)
-        .and_then(|valore| valore.parse().ok())
-        .unwrap_or(10_000);
-    let griglia = argomenti.get(2).is_some_and(|valore| valore == "griglia");
-    let voronoi = argomenti.get(3).is_some_and(|valore| valore == "voronoi");
-    let runs: usize = argomenti
-        .get(4)
-        .and_then(|valore| valore.parse().ok())
-        .unwrap_or(5);
+    let n = argomenti::intero_positivo_arg(1, "n", 10_000);
+    let griglia =
+        argomenti::scelta_arg(2, "disposizione", &["casuali", "griglia"], "casuali") == "griglia";
+    let voronoi =
+        argomenti::scelta_arg(3, "costruzione", &["delaunay", "voronoi"], "delaunay") == "voronoi";
+    let runs = argomenti::intero_positivo_arg(4, "runs", 5);
     let siti = punti(n, griglia);
     let geometrie: Vec<Geometry<f64>> = siti.iter().copied().map(Geometry::Point).collect();
     let multipunto = Geometry::MultiPoint(MultiPoint::new(siti));

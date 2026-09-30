@@ -59,14 +59,8 @@ fn stats_fixture(rows: usize) -> RecordBatch {
 }
 
 fn main() {
-    let rows = std::env::args()
-        .nth(1)
-        .and_then(|arg| arg.parse::<usize>().ok())
-        .unwrap_or(1_000_000);
-    let repetitions = std::env::args()
-        .nth(2)
-        .and_then(|arg| arg.parse::<usize>().ok())
-        .unwrap_or(3);
+    let rows = comune::argomenti::intero_positivo_arg(1, "rows", 1_000_000);
+    let repetitions = comune::argomenti::intero_positivo_arg(2, "repetitions", 3);
     let limits = Limits {
         max_rows: 40_000_000,
         max_governed_memory_bytes: 6 * 1024 * 1024 * 1024,

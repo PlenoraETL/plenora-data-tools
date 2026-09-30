@@ -10,6 +10,11 @@
 //!   geometrico del workspace (`GeoArrow`-WKB, CRS della tabella integrata) e
 //!   ritorno ([`geoparquet`]).
 //!
+//! Ogni file letto è input ostile: il confine di lettura ([`confine`],
+//! README, «Confine di lettura») verifica lunghezze e limiti prima che
+//! `arrow-ipc` o `parquet` allochino, e chiama le dipendenze dentro una
+//! barriera anti-panico; un file malformato è un errore, mai un panico.
+//!
 //! Ogni tabella è un solo `RecordBatch` in memoria: niente streaming.
 //! Ogni scrittura è atomica ([`atomico`]): file temporaneo nella stessa
 //! directory, verifica, rinomina; un percorso esistente non si sovrascrive
@@ -19,6 +24,7 @@
 //! esegue con il budget del piano, e scrive gli output nominati.
 
 pub mod atomico;
+pub mod confine;
 pub mod crs_projjson;
 mod esecuzione;
 mod formato;
@@ -34,6 +40,7 @@ use std::path::Path;
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::{PlenoraError, Result};
 
+pub use confine::LimitiLettura;
 pub use esecuzione::{esegui_da_file, FileIngresso, FileUscita};
 pub use formato::{CompressioneParquet, Formato, OpzioniScrittura};
 
@@ -46,15 +53,30 @@ pub use formato::{CompressioneParquet, Formato, OpzioniScrittura};
 ///
 /// # Errors
 ///
-/// Quelli di [`Formato::risolvi`], [`ipc::leggi`] e [`parquet_io::leggi`].
+/// Quelli di [`leggi_tabella_con_limiti`].
 pub fn leggi_tabella(
     percorso: &Path,
     formato: Option<Formato>,
     residuo: u64,
 ) -> Result<RecordBatch> {
+    leggi_tabella_con_limiti(percorso, formato, residuo, &LimitiLettura::default())
+}
+
+/// Come [`leggi_tabella`], con i limiti del confine di lettura espliciti
+/// (README, «Confine di lettura»).
+///
+/// # Errors
+///
+/// Quelli di [`Formato::risolvi`], [`ipc::leggi`] e [`parquet_io::leggi`].
+pub fn leggi_tabella_con_limiti(
+    percorso: &Path,
+    formato: Option<Formato>,
+    residuo: u64,
+    limiti: &LimitiLettura,
+) -> Result<RecordBatch> {
     match Formato::risolvi(formato, percorso)? {
-        Formato::ArrowIpc => ipc::leggi(percorso, residuo),
-        Formato::Parquet => parquet_io::leggi(percorso, residuo),
+        Formato::ArrowIpc => ipc::leggi(percorso, residuo, limiti),
+        Formato::Parquet => parquet_io::leggi(percorso, residuo, limiti),
     }
 }
 

@@ -823,6 +823,7 @@ dependencies = [
 name = "plenora-io"
 version = "0.1.0"
 dependencies = [
+ "arrow-buffer",
  "base64",
  "chrono",
  "geo",

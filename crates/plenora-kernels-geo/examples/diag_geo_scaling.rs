@@ -15,6 +15,9 @@
 //! build usata per il benchmark dei join, cosi' i numeri sono confrontabili;
 //! debug e' comunque supportato per il confronto di profilo).
 
+#[path = "comune/argomenti.rs"]
+mod argomenti;
+
 use geo::{Geometry, LineString, Polygon};
 use plenora_kernels_geo::operations::{self, SimplifyPolicy};
 use plenora_kernels_geo::{check_geometry_valid, transform_geometry, Operation};
@@ -60,12 +63,7 @@ where
 }
 
 fn main() {
-    let budget_per_taglia = Duration::from_secs(
-        std::env::var("DIAG_BUDGET_SECS_PER_TAGLIA")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(20),
-    );
+    let budget_per_taglia = argomenti::secondi_positivi_env("DIAG_BUDGET_SECS_PER_TAGLIA", 20);
     let taglie: Vec<usize> = vec![10, 25, 50, 100, 200, 400, 600, 800, 1200, 1600, 2000, 2400];
 
     println!(

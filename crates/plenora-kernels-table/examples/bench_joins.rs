@@ -109,19 +109,9 @@ fn limits() -> Limits {
 }
 
 fn main() {
-    let left_rows: usize = std::env::args()
-        .nth(1)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(10_000_000);
-    let right_rows: usize = std::env::args()
-        .nth(2)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(1_000_000);
-    let repetitions: usize = std::env::args()
-        .nth(3)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(3);
-    assert!(left_rows > 0 && right_rows > 0 && repetitions > 0);
+    let left_rows = comune::argomenti::intero_positivo_arg(1, "left_rows", 10_000_000);
+    let right_rows = comune::argomenti::intero_positivo_arg(2, "right_rows", 1_000_000);
+    let repetitions = comune::argomenti::intero_positivo_arg(3, "repetitions", 3);
     let limits = limits();
 
     // Chiavi int64 a bassa duplicazione: destra univoca 0..right_rows,

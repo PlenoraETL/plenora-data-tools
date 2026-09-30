@@ -1,7 +1,12 @@
 //! Parquet e `GeoParquet`: lettura in un solo `RecordBatch`, scrittura
 //! deterministica.
 //!
-//! **Lettura.** Prima di decodificare si controllano i codec di tutti i
+//! **Lettura.** Prima che `parquet` lo decodifichi, il footer dichiarato
+//! deve stare nel tetto dei metadati; dopo, i row group entro il massimo
+//! ([`crate::confine`]). Ogni chiamata a `parquet` sui byte del file gira
+//! dentro la barriera anti-panico ([`crate::confine::barriera`]); un
+//! aborto per allocazione dentro `parquet` non si ferma (README, «File»,
+//! limiti dichiarati). Poi si controllano i codec di tutti i
 //! column chunk (solo `UNCOMPRESSED`, `SNAPPY`, `ZSTD` sono compilati) e lo
 //! schema Arrow incorporato (`ARROW:schema`): se c'è, lo schema che
 //! `parquet` applica deve coincidere campo per campo (nome, tipo,
@@ -46,6 +51,7 @@ use plenora_core::contract::arrow_metadata::GEO_METADATA_KEY;
 use plenora_core::memoria::byte_vivi;
 use plenora_core::{PlenoraError, Result};
 
+use crate::confine::{barriera, oltre_il_limite, verifica_metadati_custom, LimitiLettura};
 use crate::formato::CompressioneParquet;
 use crate::geoparquet;
 use crate::memoria::{oltre_il_budget, stima_byte};
@@ -203,10 +209,13 @@ fn schema_incorporato(metadati: &ParquetMetaData) -> Result<Option<Schema>> {
         byte.as_slice()
     };
     let messaggio = plenora_core::arrow::ipc::root_as_message(fetta).map_err(|_| illeggibile())?;
-    let schema = messaggio
-        .header_as_schema()
-        .map(plenora_core::arrow::ipc::convert::fb_to_schema)
-        .ok_or_else(illeggibile)?;
+    let intestazione = messaggio.header_as_schema().ok_or_else(illeggibile)?;
+    // `fb_to_schema` va in panico su schemi malformati.
+    let schema = barriera("arrow-ipc", || {
+        Ok(plenora_core::arrow::ipc::convert::fb_to_schema(
+            intestazione,
+        ))
+    })?;
     Ok(Some(schema))
 }
 
@@ -277,34 +286,89 @@ fn picco_previsto(metadati: &ParquetMetaData) -> u64 {
 /// Fattore del picco di decodifica sulla stima dal footer.
 pub const FATTORE_LETTURA: u64 = 5;
 
+/// La lunghezza del footer dichiarata in coda (4 byte prima di `PAR1`)
+/// entro il tetto dei metadati, prima che `parquet` la legga.
+fn verifica_footer(file: &mut File, tetto: u64) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut coda = [0_u8; 8];
+    if file.seek(SeekFrom::End(-8)).is_ok() && file.read_exact(&mut coda).is_ok() {
+        let [a, b, c, d, ..] = coda;
+        let dichiarati = u64::from(u32::from_le_bytes([a, b, c, d]));
+        if dichiarati > tetto {
+            return Err(oltre_il_limite("footer Parquet (byte)", dichiarati, tetto));
+        }
+    }
+    // Un file più corto di 8 byte lo rifiuta `parquet`.
+    Ok(())
+}
+
+/// Righe dei row group non negative e con la somma del footer.
+fn verifica_righe(metadati: &ParquetMetaData) -> Result<usize> {
+    let malformate = || PlenoraError::DataMapping("numero di righe non valido".to_owned());
+    let somma = metadati
+        .row_groups()
+        .iter()
+        .try_fold(0_i64, |somma, gruppo| {
+            (gruppo.num_rows() >= 0)
+                .then(|| somma.checked_add(gruppo.num_rows()))
+                .flatten()
+        })
+        .ok_or_else(malformate)?;
+    if somma != metadati.file_metadata().num_rows() {
+        return Err(PlenoraError::DataMapping(
+            "righe dei row group diverse da quelle del footer".to_owned(),
+        ));
+    }
+    usize::try_from(somma).map_err(|_| malformate())
+}
+
 /// Legge un file Parquet (o `GeoParquet`) in un solo `RecordBatch`.
+///
+/// `residuo` è il budget che la tabella può occupare; `limiti` quelli del
+/// confine di lettura.
 ///
 /// # Errors
 ///
 /// `Unsupported` per un codec non abilitato; `Schema` per uno schema
-/// incorporato non applicabile; `ResourceLimit` se la tabella non sta in
-/// `residuo`; quelli di [`geoparquet::applica`]; `DataMapping`, `Io` dalla
-/// lettura.
-pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
-    let file = File::open(percorso)?;
-    let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).map_err(da_parquet_valore)?;
+/// incorporato non applicabile; `ResourceLimit` se la tabella, il footer, i
+/// row group o i metadati non stanno in `residuo` o in `limiti`; quelli di
+/// [`geoparquet::applica`]; `DataMapping` per un file malformato (anche
+/// quando `parquet` va in panico); `Io`.
+pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<RecordBatch> {
+    let mut file = File::open(percorso)?;
+    verifica_footer(&mut file, limiti.metadati_entro(residuo))?;
+    let costruttore = barriera("parquet", || {
+        ParquetRecordBatchReaderBuilder::try_new(file).map_err(da_parquet_valore)
+    })?;
     let metadati = Arc::clone(costruttore.metadata());
+    let gruppi = u64::try_from(metadati.num_row_groups()).unwrap_or(u64::MAX);
+    if gruppi > limiti.max_blocchi {
+        return Err(oltre_il_limite(
+            "row group del file Parquet",
+            gruppi,
+            limiti.max_blocchi,
+        ));
+    }
     verifica_colonne(&metadati)?;
+    let righe = verifica_righe(&metadati)?;
     let previsto = picco_previsto(&metadati);
     if previsto > residuo {
         return Err(oltre_il_budget(previsto, residuo));
     }
     let schema: SchemaRef = Arc::clone(costruttore.schema());
+    verifica_metadati_custom(&schema, limiti.max_byte_metadati_custom)?;
     let incorporato = schema_incorporato(&metadati)?;
     verifica_chiavi(&metadati, incorporato.as_ref())?;
     verifica_applicato(&schema, incorporato.as_ref())?;
-    let righe = usize::try_from(metadati.file_metadata().num_rows())
-        .map_err(|_| PlenoraError::DataMapping("numero di righe non valido".to_owned()))?;
-    let lettore = costruttore
-        .with_batch_size(righe.max(1))
-        .build()
-        .map_err(da_parquet_valore)?;
-    let blocchi = lettore.collect::<std::result::Result<Vec<_>, _>>()?;
+    let lettore = barriera("parquet", || {
+        costruttore
+            .with_batch_size(righe.max(1))
+            .build()
+            .map_err(da_parquet_valore)
+    })?;
+    let blocchi = barriera("parquet", || {
+        Ok(lettore.collect::<std::result::Result<Vec<_>, _>>()?)
+    })?;
     let tabella = match blocchi.len() {
         0 => RecordBatch::new_empty(Arc::clone(&schema)),
         1 => blocchi
@@ -318,7 +382,7 @@ pub fn leggi(percorso: &Path, residuo: u64) -> Result<RecordBatch> {
             if stima > residuo {
                 return Err(oltre_il_budget(stima, residuo));
             }
-            concat_batches(&schema, &blocchi)?
+            barriera("arrow-select", || Ok(concat_batches(&schema, &blocchi)?))?
         }
     };
     if tabella.num_rows() != righe {

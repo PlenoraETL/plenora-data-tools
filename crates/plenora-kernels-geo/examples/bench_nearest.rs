@@ -4,7 +4,11 @@
 //! (`left`, `right`, bit della distanza) per confrontare byte per byte due
 //! binari diversi sullo stesso input.
 //!
-//! Uso: `bench_nearest <n> <punti|quadrati> [runs]`.
+//! Uso: `bench_nearest <n> <punti|quadrati> [runs]`. Un argomento assente
+//! vale il predefinito (1000, `punti`, 5); uno non valido esce con codice 2.
+
+#[path = "comune/argomenti.rs"]
+mod argomenti;
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -54,16 +58,9 @@ fn colonna(rng: &mut Rng, n: usize, lato: u64, quadrati: bool) -> Vec<Option<Geo
 }
 
 fn main() {
-    let argomenti: Vec<String> = std::env::args().collect();
-    let n: usize = argomenti
-        .get(1)
-        .and_then(|valore| valore.parse().ok())
-        .unwrap_or(1000);
-    let quadrati = argomenti.get(2).is_some_and(|valore| valore == "quadrati");
-    let runs: usize = argomenti
-        .get(3)
-        .and_then(|valore| valore.parse().ok())
-        .unwrap_or(5);
+    let n = argomenti::intero_positivo_arg(1, "n", 1000);
+    let quadrati = argomenti::scelta_arg(2, "forma", &["punti", "quadrati"], "punti") == "quadrati";
+    let runs = argomenti::intero_positivo_arg(3, "runs", 5);
     // Densita' costante: una geometria ogni 25 celle unitarie circa, con
     // coordinate intere: pari frequenti ma non dominanti.
     #[allow(

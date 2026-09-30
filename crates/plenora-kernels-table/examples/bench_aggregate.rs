@@ -101,15 +101,8 @@ fn run_scenario(
 }
 
 fn main() {
-    let rows: usize = std::env::args()
-        .nth(1)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(1_000_000);
-    let repetitions: usize = std::env::args()
-        .nth(2)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(3);
-    assert!(rows > 0 && repetitions > 0);
+    let rows = comune::argomenti::intero_positivo_arg(1, "rows", 1_000_000);
+    let repetitions = comune::argomenti::intero_positivo_arg(2, "repetitions", 3);
     let input = fixture(rows);
 
     // Gruppi piccoli (~100), mix di funzioni numeriche + count + nunique.

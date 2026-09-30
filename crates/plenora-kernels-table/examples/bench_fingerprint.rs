@@ -81,14 +81,8 @@ fn fixture(rows: usize) -> RecordBatch {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let rows: usize = args
-        .next()
-        .as_deref()
-        .unwrap_or("1000000")
-        .parse()
-        .expect("rows");
-    let repetitions: usize = args.next().as_deref().unwrap_or("3").parse().expect("reps");
+    let rows = comune::argomenti::intero_positivo_arg(1, "rows", 1_000_000);
+    let repetitions = comune::argomenti::intero_positivo_arg(2, "repetitions", 3);
     // Chiave HMAC del benchmark: solo il NOME della variabile entra nella
     // config del kernel, il valore resta fuori da piano e output.
     std::env::set_var(HMAC_KEY_ENV, "bench-fingerprint-hmac-key-seed-42");

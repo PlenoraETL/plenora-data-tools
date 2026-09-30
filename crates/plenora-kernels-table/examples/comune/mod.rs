@@ -28,6 +28,7 @@
 // non e' codice morto, e' codice di un altro benchmark.
 #![allow(dead_code)]
 
+pub mod argomenti;
 pub mod fixture;
 pub mod lcg;
 pub mod rng;

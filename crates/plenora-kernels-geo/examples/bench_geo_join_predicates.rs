@@ -8,7 +8,8 @@
 //!
 //! # Budget interno vs esterno
 //!
-//! `PLENORA_BENCH_BUDGET_SECS` (default 300 = 5 minuti) limita il tempo
+//! `PLENORA_BENCH_BUDGET_SECS` (default 300 = 5 minuti; un valore che non e'
+//! un intero positivo esce con codice 2) limita il tempo
 //! totale di ESECUZIONE (non di compilazione, che cargo misura a parte) fra
 //! uno scenario e il successivo: allo scadere, gli scenari non ancora
 //! misurati sono segnati `"stato":"incompleto"` invece di essere eseguiti.
@@ -36,6 +37,9 @@
 //! l'output porta la mediana E l'elenco completo dei tempi grezzi, non solo
 //! la mediana — un caso patologico (una ripetizione anomala) resta visibile
 //! invece di sparire dentro un aggregato.
+
+#[path = "comune/argomenti.rs"]
+mod argomenti;
 
 use geo::{line_string, polygon, BoundingRect, Geometry, LineString, Polygon};
 use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPair, JoinPredicate};
@@ -532,10 +536,7 @@ fn esegui_scenario(scenario: &Scenario) -> EsitoScenario {
 fn main() {
     simula_blocco_se_richiesto();
 
-    let budget = std::env::var("PLENORA_BENCH_BUDGET_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map_or(Duration::from_secs(300), Duration::from_secs);
+    let budget = argomenti::secondi_positivi_env("PLENORA_BENCH_BUDGET_SECS", 300);
 
     std::fs::create_dir_all("benchmarks/join").expect("mkdir benchmarks/join");
     let mut righe: Vec<serde_json::Value> = Vec::new();

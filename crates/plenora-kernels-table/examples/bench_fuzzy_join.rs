@@ -102,19 +102,9 @@ fn config(metric: &str, blocking: &str) -> FuzzyJoin {
 }
 
 fn main() {
-    let left_rows: usize = std::env::args()
-        .nth(1)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(100_000);
-    let right_rows: usize = std::env::args()
-        .nth(2)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(10_000);
-    let repetitions: usize = std::env::args()
-        .nth(3)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(3);
-    assert!(left_rows > 0 && right_rows > 0 && repetitions > 0);
+    let left_rows = comune::argomenti::intero_positivo_arg(1, "left_rows", 100_000);
+    let right_rows = comune::argomenti::intero_positivo_arg(2, "right_rows", 10_000);
+    let repetitions = comune::argomenti::intero_positivo_arg(3, "repetitions", 3);
     let limits = Limits {
         max_rows: 1_000_000_000,
         ..Limits::default()
