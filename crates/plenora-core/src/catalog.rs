@@ -4226,7 +4226,7 @@ mod tests {
             // colonne temporali convertite dal valore nativo
             // (prima: difetti-b, errors su target infallibili; regole anche nel kernel; campi null)
             ("table.type_cast", (2, 2, 2, 4), (1, 0, 1, 1)),
-            // valori numerici esatti; un letterale che la forma esatta non tiene si rifiuta
+            // valori numerici esatti; un letterale che la forma esatta non tiene si rifiuta, in analisi e nel kernel con lo stesso parse (valore_regola)
             ("table.validate_rules", (2, 1, 2, 1), (1, 0, 1, 1)),
             // somme cumulate intere esatte; cumsum su date rifiutata
             // (prima: difetti-b, offset/buckets null; overflow rifiutato)

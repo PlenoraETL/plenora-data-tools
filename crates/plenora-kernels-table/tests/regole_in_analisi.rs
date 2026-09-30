@@ -1174,3 +1174,60 @@ fn offset_e_ddof_delle_finestre_solo_dove_hanno_effetto() {
         Err(PlenoraError::InvalidPlan(_))
     ));
 }
+
+/// `validate_rules`: analisi e kernel leggono il valore numerico di una
+/// regola con lo stesso parse esatto (`governance::valore_regola`). Prima
+/// l'analisi usava il parse `f64`: `gt` con `"1e-128"` su una colonna
+/// `Int64` passava l'analisi e il kernel lo rifiutava sempre, anche su una
+/// tabella vuota. Parita' valore per valore, operatore per operatore.
+#[test]
+fn validate_rules_analisi_e_kernel_leggono_i_valori_allo_stesso_modo() {
+    use plenora_core::arrow::array::RecordBatch;
+    use plenora_kernels_table::governance::{validate_rules, ValidateRules};
+    let w = largo();
+    let vuota = RecordBatch::new_empty(w.clone());
+    let valori = [
+        "5",
+        "-0.5",
+        "1e2",
+        "1e-128",
+        "1e400",
+        "1e2147483647",
+        "abc",
+        "",
+        "+-1",
+        "inf",
+    ];
+    let mut casi = Vec::new();
+    for colonna in ["id", "value", "importo", "grande"] {
+        for operatore in ["eq", "ne", "gt", "ge", "lt", "le"] {
+            for valore in valori {
+                casi.push(json!({"rules": [{"name": "r", "column": colonna,
+                    "operator": operatore, "value": valore}]}));
+            }
+        }
+        for (basso, alto) in [("1", "2"), ("1", "1e-128"), ("1e-128", "2"), ("a", "2")] {
+            casi.push(json!({"rules": [{"name": "r", "column": colonna,
+                "operator": "range", "value": format!("{basso}, {alto}")}]}));
+        }
+    }
+    let mut difformi = Vec::new();
+    for config in &casi {
+        let analisi = analizza("table.validate_rules", &[&w], config).is_ok();
+        let kernel = serde_json::from_value::<ValidateRules>(config.clone())
+            .map_err(|errore| PlenoraError::InvalidPlan(errore.to_string()))
+            .and_then(|regole| validate_rules(&vuota, &regole))
+            .is_ok();
+        if analisi != kernel {
+            difformi.push(format!("{config}: analisi {analisi}, kernel {kernel}"));
+        }
+    }
+    assert!(difformi.is_empty(), "{}", difformi.join("\n"));
+    // Il caso della revisione: rifiutato gia' in analisi.
+    rifiuta(
+        "table.validate_rules",
+        &[&w],
+        json!({"rules": [{"name": "r", "column": "id", "operator": "gt", "value": "1e-128"}]}),
+        "valore numerico",
+    );
+}

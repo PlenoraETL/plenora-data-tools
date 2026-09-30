@@ -997,6 +997,29 @@ fn rule_json_text(value: &serde_json::Value) -> String {
     }
 }
 
+/// Il valore numerico di una regola, letto esatto.
+///
+/// Vale per `eq`/`ne` su colonna numerica e per `gt`/`ge`/`lt`/`le`, come lo
+/// confronta il kernel ([`NumericBound::parse`]); `None` se non e' un numero
+/// o se la forma esatta non lo tiene (`1e-128`). Autorita' unica per il kernel e l'analisi
+/// dei contratti: un valore accettato dall'una e rifiutato dall'altro
+/// sarebbe un errore di config visto solo in esecuzione.
+#[must_use]
+pub fn valore_regola(testo: &str) -> Option<NumericBound> {
+    NumericBound::parse(testo)
+}
+
+/// Gli estremi di una regola `range`, letti esatti.
+///
+/// Il testo e' `"min,max"`, spazi attorno ammessi, e ogni estremo si legge
+/// come [`valore_regola`]: `None` senza la virgola,
+/// `Some(None)` se un estremo non e' un numero esatto.
+#[must_use]
+pub fn estremi_regola(testo: &str) -> Option<Option<(NumericBound, NumericBound)>> {
+    let (low, high) = testo.split_once(',')?;
+    Some(valore_regola(low.trim()).zip(valore_regola(high.trim())))
+}
+
 /// Tipi su cui i confronti ordinati/range hanno senso.
 ///
 /// Leggibili da `scalar_as_f64`, escluso `Utf8` (un testo da parsare per
@@ -1086,7 +1109,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                     )));
                 }
                 if numeric_column {
-                    expected_bound = Some(NumericBound::parse(&expected).ok_or_else(|| {
+                    expected_bound = Some(valore_regola(&expected).ok_or_else(|| {
                         PlenoraError::InvalidPlan(format!(
                             "validate_rules: regola {}: confronto numerico con valore non numerico",
                             rule.name
@@ -1101,7 +1124,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                         rule.name
                     )));
                 }
-                expected_bound = Some(NumericBound::parse(&expected).ok_or_else(|| {
+                expected_bound = Some(valore_regola(&expected).ok_or_else(|| {
                     PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: confronto ordinato richiede un valore numerico",
                         rule.name
@@ -1115,21 +1138,20 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                         rule.name
                     )));
                 }
-                let Some((low, high)) = expected.split_once(',') else {
+                let Some(estremi) = estremi_regola(&expected) else {
                     return Err(PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: range richiede min,max",
                         rule.name
                     )));
                 };
-                let non_numerico = || {
+                let (low, high) = estremi.ok_or_else(|| {
                     PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: estremi range non numerici",
                         rule.name
                     ))
-                };
-                expected_bound = Some(NumericBound::parse(low.trim()).ok_or_else(non_numerico)?);
-                expected_high_bound =
-                    Some(NumericBound::parse(high.trim()).ok_or_else(non_numerico)?);
+                })?;
+                expected_bound = Some(low);
+                expected_high_bound = Some(high);
             }
             RuleOperator::Regex => {
                 if data_type != DataType::Utf8 {

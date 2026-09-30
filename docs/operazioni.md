@@ -9218,6 +9218,9 @@ qui):
   millisecondi dall'epoca;
 - `range`: colonna numerica, `value` il testo `"min,max"` (spazi ai lati
   ignorati), estremi inclusi;
+- un numero che la forma esatta non tiene (più di 38 cifre significative,
+  `1e-128`, `1e400`) si rifiuta in validazione, non soltanto in
+  esecuzione: analisi e kernel lo leggono con lo stesso parse esatto;
 - `regex`: colonna `utf8`, `value` una regex del crate `regex` al più
   `max_regex_bytes` byte; ricerca nel testo, senza `^`/`$` basta una parte.
 

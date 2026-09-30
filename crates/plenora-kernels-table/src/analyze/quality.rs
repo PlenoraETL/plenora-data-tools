@@ -462,8 +462,9 @@ pub(in crate::analyze) fn analyze_validate_rules(
                         ),
                     );
                 }
+                // Lo stesso parse esatto del kernel (`valore_regola`).
                 if governance::is_rule_numeric(field.data_type())
-                    && expected.parse::<f64>().is_err()
+                    && governance::valore_regola(&expected).is_none()
                 {
                     return contract_error(
                         op,
@@ -488,7 +489,7 @@ pub(in crate::analyze) fn analyze_validate_rules(
                         ),
                     );
                 }
-                if expected.parse::<f64>().is_err() {
+                if governance::valore_regola(&expected).is_none() {
                     return contract_error(
                         op,
                         format!(
@@ -509,13 +510,13 @@ pub(in crate::analyze) fn analyze_validate_rules(
                         ),
                     );
                 }
-                let Some((low, high)) = expected.split_once(',') else {
+                let Some(estremi) = governance::estremi_regola(&expected) else {
                     return contract_error(
                         op,
                         format!("regola {}: range richiede min,max", rule.name),
                     );
                 };
-                if low.trim().parse::<f64>().is_err() || high.trim().parse::<f64>().is_err() {
+                if estremi.is_none() {
                     return contract_error(
                         op,
                         format!("regola {}: estremi range non numerici", rule.name),
