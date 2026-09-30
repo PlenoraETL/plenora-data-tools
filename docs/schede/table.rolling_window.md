@@ -52,8 +52,8 @@ In validazione, `InvalidPlan`:
 
 - `window` o `min_periods` uguali a 0, `min_periods` maggiore di `window`,
   `window` oltre `max_rows`;
-- `ddof` con una funzione diversa da `stddev`, o `null` esplicito (il
-  parametro si omette);
+- `ddof` con una funzione diversa da `stddev`; `ddof`, `group_by` o
+  `order_column` `null` espliciti (il parametro si omette);
 - `column` assente o non numerica; `group_by` non leggibile come testo;
   `order_column` di tipo non ordinabile; `output_column` non valido;
 - funzione fuori elenco, campi sconosciuti.

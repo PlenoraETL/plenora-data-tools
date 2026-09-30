@@ -53,8 +53,8 @@ In validazione, `InvalidPlan`:
 - `n` scritto insieme a `fraction`;
 - `random_state` scritto senza `stratify_column` quando il campione è
   sempre vuoto (`n = 0` o `fraction = 0`): nessun seme avrebbe effetto;
-- config con campi sconosciuti, `n` negativo o `n: null` esplicito (il
-  parametro si omette).
+- config con campi sconosciuti, `n` negativo o `null` esplicito in `n`,
+  `fraction`, `random_state` o `stratify_column` (il parametro si omette).
 
 In esecuzione:
 

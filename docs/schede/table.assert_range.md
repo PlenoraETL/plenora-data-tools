@@ -47,8 +47,8 @@ In validazione, `InvalidPlan`:
 
 - né `min` né `max`; `min` maggiore di `max`;
 - `inclusive_min` senza `min` o `inclusive_max` senza `max`;
-- `inclusive_min` o `inclusive_max` `null` espliciti (un parametro
-  facoltativo si omette);
+- `min`, `max`, `inclusive_min` o `inclusive_max` `null` espliciti (un
+  parametro facoltativo si omette);
 - `column` assente o di un tipo fuori dall'elenco;
 - config con campi sconosciuti.
 

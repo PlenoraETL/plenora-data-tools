@@ -56,7 +56,8 @@ Invariato.
 In validazione, `InvalidPlan`:
 
 - `column` assente o non numerica;
-- `group_by` assente o non leggibile come testo;
+- `group_by` assente o non leggibile come testo, o `null` esplicito (il
+  parametro si omette);
 - `stats` vuota o con una statistica ripetuta;
 - una voce di `stats` fuori elenco, o config con campi sconosciuti.
 

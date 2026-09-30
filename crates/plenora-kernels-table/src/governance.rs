@@ -35,13 +35,13 @@ use plenora_core::{PlenoraError, Result};
 #[serde(deny_unknown_fields)]
 pub struct AssertCardinality {
     /// Numero esatto di righe; esclude gli altri due.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub exact_rows: Option<usize>,
     /// Minimo di righe, incluso; almeno 1 (0 non vincola nulla).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub min_rows: Option<usize>,
     /// Massimo di righe, incluso.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub max_rows: Option<usize>,
 }
 

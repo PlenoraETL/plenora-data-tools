@@ -860,7 +860,9 @@ In validazione, `InvalidPlan`:
   `max_input_rows`;
 - il contratto d'ingresso attesta il numero di righe (`row_count`
   dimostrato, per esempio dopo `table.reconcile`) e questo viola il vincolo;
-- config con campi sconosciuti o valori negativi.
+- config con campi sconosciuti o valori negativi; `exact_rows`,
+  `min_rows` o `max_rows` `null` espliciti (un parametro facoltativo si
+  omette).
 
 Le regole sui vincoli (almeno uno, `exact_rows` da solo, `min_rows` non
 oltre `max_rows`, `min_rows` non zero) le applica anche il kernel, con la
@@ -1327,8 +1329,8 @@ In validazione, `InvalidPlan`:
 
 - né `min` né `max`; `min` maggiore di `max`;
 - `inclusive_min` senza `min` o `inclusive_max` senza `max`;
-- `inclusive_min` o `inclusive_max` `null` espliciti (un parametro
-  facoltativo si omette);
+- `min`, `max`, `inclusive_min` o `inclusive_max` `null` espliciti (un
+  parametro facoltativo si omette);
 - `column` assente o di un tipo fuori dall'elenco;
 - config con campi sconosciuti.
 
@@ -1828,7 +1830,8 @@ In validazione, `InvalidPlan`:
   strettamente crescenti;
 - numero di `labels` diverso dal numero di classi; un'etichetta oltre
   `max_string_bytes` byte;
-- config con campi sconosciuti.
+- config con campi sconosciuti, o `null` esplicito in `labels` o
+  `output_column` (il parametro si omette).
 
 In esecuzione:
 
@@ -2668,9 +2671,11 @@ leggibile rifiuta sempre la riga.
 Il testo scritto da `output_format` non può superare `max_string_bytes`
 byte per valore. Il limite si controlla in validazione, esatto per campo:
 il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
-la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
-del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
-9 byte.
+la sua larghezza massima (anno 7 byte col segno; secolo `%C` 2, perché si
+scrive solo per gli anni 0..=9999; mese, giorno, ora 2; nome del mese o del
+giorno 9; offset `%z` 5, `+0530`, `%:z` 6, `+05:30`, `%::z` 9, `%:::z` 3;
+frazioni `%3f`, `%6f`, `%9f` 3, 6, 9 e `%.3f`, `%.6f`, `%.9f` 4, 7, 10;
+nome del fuso 32); `%Y%m` scrive al più 9 byte.
 
 #### Schema
 
@@ -3062,9 +3067,11 @@ letto non ha fuso. Un valore non leggibile rifiuta sempre la riga.
 Il testo scritto da `output_format` non può superare `max_string_bytes`
 byte per valore. Il limite si controlla in validazione, esatto per campo:
 il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
-la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
-del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
-9 byte.
+la sua larghezza massima (anno 7 byte col segno; secolo `%C` 2, perché si
+scrive solo per gli anni 0..=9999; mese, giorno, ora 2; nome del mese o del
+giorno 9; offset `%z` 5, `+0530`, `%:z` 6, `+05:30`, `%::z` 9, `%:::z` 3;
+frazioni `%3f`, `%6f`, `%9f` 3, 6, 9 e `%.3f`, `%.6f`, `%.9f` 4, 7, 10;
+nome del fuso 32); `%Y%m` scrive al più 9 byte.
 
 #### Schema
 
@@ -3207,8 +3214,8 @@ In validazione, `InvalidPlan`:
 - `keep: "false"`;
 - `subset` vuoto, con un nome ripetuto o non valido, o oltre il limite di
   colonne; una sua colonna assente o non leggibile come testo;
-- `ascending` senza `order_column`, o `null` esplicito (il parametro si
-  omette);
+- `ascending` senza `order_column`; `ascending` o `order_column` `null`
+  espliciti (il parametro si omette);
 - `order_column` assente o di tipo non ordinabile;
 - campi sconosciuti.
 
@@ -3678,7 +3685,8 @@ In validazione, `InvalidPlan`:
 
 - `empty_policy: "drop"`;
 - `column` assente o non di tipo `list<…>`;
-- `output_column` non valido; campi sconosciuti.
+- `output_column` non valido o `null` esplicito (il parametro si omette);
+  campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: righe d'uscita oltre `max_rows`; un
 elemento o una riga d'uscita oltre l'indice `u32::MAX`.
@@ -4452,6 +4460,7 @@ In validazione, `InvalidPlan`:
 - `formula` vuota, oltre `max_string_bytes` o non conforme alla grammatica
   (parentesi non bilanciate, testo non chiuso o con `\`, numero o esponente
   non validi, carattere non ammesso, simboli in coda);
+- un letterale numerico non finito (`1e999`, `-1e400`);
 - una divisione per il numero zero scritto nella formula (`x / 0`,
   `x / -0.0`), con qualunque `on_division_by_zero`;
 - `on_division_by_zero` scritto in una formula senza `/`, con un valore
@@ -4611,6 +4620,8 @@ In validazione, `InvalidPlan`:
 - `threshold` fuori da `(0, 1]`; `blocking_param` zero, o scritto senza
   `blocking: prefix`; `max_candidates` zero; `score_column` vuoto o oltre
   1024 byte;
+- `blocking_param`, `max_candidates` o `score_column` `null` espliciti (un
+  parametro facoltativo si omette);
 - `left_key` o `right_key` assente o non `utf8`;
 - nomi d'uscita che collidono (per esempio `score_column` uguale a
   `left_key` o a un nome con suffisso), più colonne di `max_columns`, due
@@ -5284,7 +5295,8 @@ In validazione, `InvalidPlan`:
 - `mapping` con più di `max_rows` voci;
 - il testo di un valore di `mapping` o di `default` oltre
   `max_string_bytes` byte;
-- `output_column` vuoto o oltre 1024 byte;
+- `output_column` vuoto o oltre 1024 byte, o `null` esplicito (il
+  parametro si omette; `default: null` resta ammesso);
 - config con campi sconosciuti.
 
 In esecuzione, `Schema`: una cella che non si converte in testo (`binary`
@@ -6126,14 +6138,16 @@ In validazione, `InvalidPlan`:
 
 - `renames` vuota;
 - un `old_name` uguale al suo `new_name`;
-- lo stesso `old_name` in due coppie, o lo stesso `new_name` in due coppie;
+- lo stesso `old_name` in due coppie, o lo stesso `new_name` in due coppie
+  (anche se uno degli `old_name` non è una colonna dell'ingresso);
 - un nome vuoto, di soli spazi o oltre 1024 byte (in entrambe le
   posizioni), o più di 4096 coppie;
 - l'uscita avrebbe due colonne con lo stesso nome;
 - config con campi sconosciuti.
 
 Le stesse regole le applica il kernel, con la stessa funzione della
-validazione.
+validazione: due coppie con lo stesso `new_name` si rifiutano anche
+chiamando il kernel, invece di perdere in silenzio una delle rinomine.
 
 In esecuzione: nessun errore che dipenda dai dati.
 
@@ -6472,8 +6486,8 @@ In validazione, `InvalidPlan`:
 
 - `window` o `min_periods` uguali a 0, `min_periods` maggiore di `window`,
   `window` oltre `max_rows`;
-- `ddof` con una funzione diversa da `stddev`, o `null` esplicito (il
-  parametro si omette);
+- `ddof` con una funzione diversa da `stddev`; `ddof`, `group_by` o
+  `order_column` `null` espliciti (il parametro si omette);
 - `column` assente o non numerica; `group_by` non leggibile come testo;
   `order_column` di tipo non ordinabile; `output_column` non valido;
 - funzione fuori elenco, campi sconosciuti.
@@ -6609,8 +6623,8 @@ In validazione, `InvalidPlan`:
 - `n` scritto insieme a `fraction`;
 - `random_state` scritto senza `stratify_column` quando il campione è
   sempre vuoto (`n = 0` o `fraction = 0`): nessun seme avrebbe effetto;
-- config con campi sconosciuti, `n` negativo o `n: null` esplicito (il
-  parametro si omette).
+- config con campi sconosciuti, `n` negativo o `null` esplicito in `n`,
+  `fraction`, `random_state` o `stratify_column` (il parametro si omette).
 
 In esecuzione:
 
@@ -7477,7 +7491,8 @@ Invariato.
 In validazione, `InvalidPlan`:
 
 - `column` assente o non numerica;
-- `group_by` assente o non leggibile come testo;
+- `group_by` assente o non leggibile come testo, o `null` esplicito (il
+  parametro si omette);
 - `stats` vuota o con una statistica ripetuta;
 - una voce di `stats` fuori elenco, o config con campi sconosciuti.
 
@@ -8196,9 +8211,11 @@ sempre la riga, come un valore non leggibile: per questo `ambiguous` e
 Il testo scritto da `output_format` non può superare `max_string_bytes`
 byte per valore. Il limite si controlla in validazione, esatto per campo:
 il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
-la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
-del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
-9 byte.
+la sua larghezza massima (anno 7 byte col segno; secolo `%C` 2, perché si
+scrive solo per gli anni 0..=9999; mese, giorno, ora 2; nome del mese o del
+giorno 9; offset `%z` 5, `+0530`, `%:z` 6, `+05:30`, `%::z` 9, `%:::z` 3;
+frazioni `%3f`, `%6f`, `%9f` 3, 6, 9 e `%.3f`, `%.6f`, `%.9f` 4, 7, 10;
+nome del fuso 32); `%Y%m` scrive al più 9 byte.
 
 #### Schema
 
@@ -8457,8 +8474,8 @@ d'ingresso.
 #### Errori
 
 In validazione, il runner rifiuta sempre `table.transpose`: `InvalidPlan`
-per una config con campi sconosciuti o `type_policy: null` esplicito (il
-parametro si omette), `output_columns` con un nome
+per una config con campi sconosciuti o `type_policy` o `id_column` `null`
+espliciti (il parametro si omette), `output_columns` con un nome
 ripetuto o non valido (anche vuoto) o oltre il limite di colonne, o
 `id_column` assente; altrimenti `Unsupported` (lo schema d'uscita dipende
 dai dati).
@@ -9282,8 +9299,8 @@ In validazione, `InvalidPlan`:
 - `column` assente o non numerica; una funzione di rango su `utf8`;
 - `group_by` non leggibile come testo; `order_column` di tipo non
   ordinabile; un nome d'uscita non valido;
-- `offset` o `buckets` `null` espliciti (un parametro facoltativo si
-  omette);
+- `offset`, `buckets`, `group_by`, `order_column` o `output_column`
+  `null` espliciti (un parametro facoltativo si omette);
 - funzione fuori elenco, campi sconosciuti.
 
 In esecuzione:

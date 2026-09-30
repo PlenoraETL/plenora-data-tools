@@ -69,10 +69,13 @@ pub fn byte_massimi_scritti(format: &str) -> usize {
 /// Larghezza massima di un campo numerico di chrono. Gli anni vanno da
 /// -262143 a +262143 (`NaiveDate`), con il segno fuori da 0..=9999; il
 /// riempimento (`Pad`) non supera mai queste larghezze.
+#[allow(clippy::match_same_arms)] // Un braccio per famiglia di campi, con il suo motivo.
 const fn byte_massimi_numerico(campo: &Numeric) -> usize {
     match campo {
         Numeric::Year | Numeric::IsoYear => 7,
-        Numeric::YearDiv100 | Numeric::IsoYearDiv100 => 5,
+        // Il secolo si scrive solo per anni in 0..=9999 (`FormatoUscita`
+        // rifiuta gli altri): due cifre.
+        Numeric::YearDiv100 | Numeric::IsoYearDiv100 => 2,
         Numeric::Quarter | Numeric::NumDaysFromSun | Numeric::WeekdayFromMon => 1,
         Numeric::Ordinal => 3,
         Numeric::Nanosecond => 9,
@@ -96,27 +99,46 @@ const fn byte_massimi_numerico(campo: &Numeric) -> usize {
 }
 
 /// Larghezza massima di un campo testuale di chrono.
-const fn byte_massimi_campo(campo: &Fixed) -> usize {
+#[allow(clippy::match_same_arms)] // Un braccio per famiglia di campi, con il suo motivo.
+fn byte_massimi_campo(campo: &Fixed) -> usize {
     match campo {
         Fixed::ShortMonthName | Fixed::ShortWeekdayName => 3,
-        // `September`, `Wednesday`; gli offset al piu' `+05:30:00`.
-        Fixed::LongMonthName
-        | Fixed::LongWeekdayName
-        | Fixed::TimezoneOffset
-        | Fixed::TimezoneOffsetColon
-        | Fixed::TimezoneOffsetDoubleColon
-        | Fixed::TimezoneOffsetTripleColon
-        | Fixed::TimezoneOffsetColonZ
-        | Fixed::TimezoneOffsetZ => 9,
+        // `September`, `Wednesday`.
+        Fixed::LongMonthName | Fixed::LongWeekdayName => 9,
         Fixed::LowerAmPm | Fixed::UpperAmPm => 2,
+        // `.123456789`.
         Fixed::Nanosecond | Fixed::Nanosecond9 => 10,
         Fixed::Nanosecond3 => 4,
         Fixed::Nanosecond6 => 7,
-        // Abbreviazioni dei fusi di chrono-tz (`CEST`, `+0530`): per eccesso.
+        // `+0530`, `+05:30`, `+05:30:00`, `+05`.
+        Fixed::TimezoneOffset | Fixed::TimezoneOffsetZ => 5,
+        Fixed::TimezoneOffsetColon | Fixed::TimezoneOffsetColonZ => 6,
+        Fixed::TimezoneOffsetDoubleColon => 9,
+        Fixed::TimezoneOffsetTripleColon => 3,
+        // Abbreviazioni dei fusi di chrono-tz (`CEST`, `+0530`, `LMT`): per
+        // eccesso, la larghezza varia con il fuso.
         Fixed::TimezoneName => 32,
         Fixed::RFC2822 | Fixed::RFC3339 => 48,
-        _ => BYTE_PER_CAMPO,
+        // Varianti interne (`%3f`, `%6f`, `%9f` sono i nanosecondi senza
+        // punto): hanno larghezza fissa, che si misura scrivendo un valore
+        // qualunque; se chrono non le sa scrivere, per eccesso.
+        altro => larghezza_misurata(altro).unwrap_or(BYTE_PER_CAMPO),
     }
+}
+
+/// Larghezza di un campo a larghezza fissa, misurata su un valore
+/// campione; `None` se chrono non lo sa scrivere senza fuso.
+fn larghezza_misurata(campo: &Fixed) -> Option<usize> {
+    use std::fmt::Write as _;
+    let campione = NaiveDate::from_ymd_opt(2024, 1, 1)?.and_hms_nano_opt(1, 2, 3, 4)?;
+    let mut testo = String::new();
+    write!(
+        testo,
+        "{}",
+        campione.format_with_items(std::iter::once(Item::Fixed(campo.clone())))
+    )
+    .ok()?;
+    Some(testo.len())
 }
 
 /// Larghezza di un campo che chrono non elenca (varianti interne o nuove):
@@ -962,52 +984,78 @@ mod tests {
     use super::*;
     use crate::test_support::{assert_same_outcome as assert_equivalent, single_column_batch};
 
-    /// Il limite di `byte_massimi_scritti` non rifiuta formati ragionevoli
-    /// (`%Y%m` al piu' 9 byte) e copre i valori estremi scritti davvero.
+    /// Il limite di `byte_massimi_scritti` e' esatto per ogni specificatore:
+    /// nessun valore scritto lo supera (date estreme, ogni mese e giorno
+    /// della settimana, fusi con offset di minuti, secondi storici e nomi), e
+    /// per gli specificatori a larghezza fissa il limite e' la larghezza
+    /// osservata, non una stima.
     #[test]
     fn byte_massimi_scritti_e_un_limite_superiore_esatto_per_campo() {
+        use std::fmt::Write as _;
         assert_eq!(byte_massimi_scritti("%Y%m"), 9);
-        assert_eq!(byte_massimi_scritti("%Y-%m-%d"), 13);
-        let estremi = [
-            NaiveDateTime::MIN,
-            NaiveDateTime::MAX,
-            NaiveDate::from_ymd_opt(2024, 9, 25)
-                .and_then(|data| data.and_hms_nano_opt(23, 59, 59, 999_999_999))
-                .expect("data"),
-        ];
-        let fuso: Tz = "Asia/Kolkata".parse().expect("fuso");
-        for formato in [
-            "%Y%m",
-            "%Y-%m-%d %H:%M:%S",
-            "%C%y %G-W%V-%u %j %s",
-            "%A %B %e %p %I %.f %.3f",
-            "%a %b %Z %z %:z",
-            "%+",
-            "%c",
-            "%x %X %D %T %R %r",
-        ] {
-            let limite = byte_massimi_scritti(formato);
-            for valore in estremi {
-                let testo = fuso.from_utc_datetime(&valore).format(formato).to_string();
-                assert!(
-                    testo.len() <= limite,
-                    "{formato}: {} > {limite}",
-                    testo.len()
-                );
-                let testo = valore
-                    .format(
-                        formato
-                            .replace("%Z", "")
-                            .replace("%z", "")
-                            .replace("%:z", "")
-                            .replace("%+", "")
-                            .replace("%c", "")
-                            .as_str(),
-                    )
-                    .to_string();
-                assert!(testo.len() <= limite, "{formato} senza fuso");
+        assert_eq!(byte_massimi_scritti("%3f"), 3);
+        assert_eq!(byte_massimi_scritti("%:z"), 6);
+        let mut valori = vec![NaiveDateTime::MIN, NaiveDateTime::MAX];
+        for mese in 1..=12 {
+            for giorno in [1, 2, 3, 4, 5, 6, 7, 28] {
+                let data = NaiveDate::from_ymd_opt(2024, mese, giorno).expect("data");
+                valori.push(data.and_hms_nano_opt(23, 59, 59, 999_999_999).expect("ora"));
+                valori.push(data.and_hms_opt(0, 0, 0).expect("ora"));
             }
         }
+        valori.push(
+            NaiveDate::from_ymd_opt(1850, 1, 1)
+                .and_then(|data| data.and_hms_opt(12, 0, 0))
+                .expect("data storica"),
+        );
+        let fusi: Vec<Tz> = [
+            "Asia/Kolkata",
+            "America/St_Johns",
+            "Pacific/Chatham",
+            "Europe/Amsterdam",
+            "Pacific/Kiritimati",
+            "UTC",
+        ]
+        .iter()
+        .map(|nome| nome.parse().expect("fuso"))
+        .collect();
+        // Specificatori a larghezza fissa: il limite deve essere raggiunto.
+        let fissi = [
+            "%C", "%y", "%m", "%b", "%h", "%d", "%e", "%a", "%w", "%u", "%U", "%W", "%G", "%g",
+            "%V", "%j", "%D", "%x", "%F", "%v", "%H", "%k", "%I", "%l", "%P", "%p", "%M", "%S",
+            "%3f", "%6f", "%9f", "%.3f", "%.6f", "%.9f", "%R", "%T", "%X", "%r", "%z", "%:z",
+            "%::z", "%:::z", "%B", "%A", "%Y",
+        ];
+        let variabili = ["%f", "%.f", "%s", "%Z", "%c", "%+", "%t", "%n", "%%"];
+        let mut difetti = Vec::new();
+        for formato in fissi.iter().chain(variabili.iter()) {
+            let limite = byte_massimi_scritti(formato);
+            let mut massimo = 0;
+            for valore in &valori {
+                for fuso in &fusi {
+                    let mut testo = String::new();
+                    if write!(testo, "{}", fuso.from_utc_datetime(valore).format(formato)).is_ok() {
+                        massimo = massimo.max(testo.len());
+                    }
+                }
+            }
+            if massimo > limite {
+                difetti.push(format!("{formato}: scritto {massimo} > limite {limite}"));
+            }
+            if fissi.contains(formato) && massimo != limite {
+                difetti.push(format!(
+                    "{formato}: limite {limite} non stretto ({massimo})"
+                ));
+            }
+        }
+        assert!(
+            difetti.is_empty(),
+            "{}",
+            difetti.join(
+                "
+"
+            )
+        );
     }
 
     // -----------------------------------------------------------------------

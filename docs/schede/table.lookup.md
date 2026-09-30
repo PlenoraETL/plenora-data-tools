@@ -51,7 +51,8 @@ In validazione, `InvalidPlan`:
 - `mapping` con più di `max_rows` voci;
 - il testo di un valore di `mapping` o di `default` oltre
   `max_string_bytes` byte;
-- `output_column` vuoto o oltre 1024 byte;
+- `output_column` vuoto o oltre 1024 byte, o `null` esplicito (il
+  parametro si omette; `default: null` resta ammesso);
 - config con campi sconosciuti.
 
 In esecuzione, `Schema`: una cella che non si converte in testo (`binary`

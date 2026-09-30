@@ -244,10 +244,17 @@ impl Parser<'_> {
                 ));
             }
         }
-        let value = std::str::from_utf8(&self.input[start..self.position])
+        let value: f64 = std::str::from_utf8(&self.input[start..self.position])
             .ok()
             .and_then(|value| value.parse().ok())
             .ok_or_else(|| PlenoraError::InvalidPlan("numero formula non valido".into()))?;
+        // `1e999` si leggerebbe infinito: un letterale non finito e' un
+        // errore di piano, non un valore che si propaga.
+        if !value.is_finite() {
+            return Err(PlenoraError::InvalidPlan(
+                "numero formula non finito".into(),
+            ));
+        }
         Ok(Expr::Number(value))
     }
     fn identifier(&mut self) -> Result<Expr> {
@@ -1486,6 +1493,20 @@ mod tests {
             generic.to_string(),
             "fast e generico devono propagare lo stesso errore grezzo"
         );
+    }
+
+    #[test]
+    fn letterale_non_finito_e_errore_di_configurazione() {
+        let batch = fixture();
+        for text in ["1e999", "1e999 - 1e999", "f / 1e999", "-1e400"] {
+            let error = formula(&batch, &config(text)).expect_err(text);
+            assert!(
+                matches!(error, PlenoraError::InvalidPlan(_)),
+                "{text}: {error:?}"
+            );
+            assert!(validate(&config(text), 1024).is_err(), "{text}");
+        }
+        assert!(formula(&batch, &config("1e308")).is_ok());
     }
 
     #[test]

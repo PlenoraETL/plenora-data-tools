@@ -42,7 +42,9 @@ In validazione, `InvalidPlan`:
   `max_input_rows`;
 - il contratto d'ingresso attesta il numero di righe (`row_count`
   dimostrato, per esempio dopo `table.reconcile`) e questo viola il vincolo;
-- config con campi sconosciuti o valori negativi.
+- config con campi sconosciuti o valori negativi; `exact_rows`,
+  `min_rows` o `max_rows` `null` espliciti (un parametro facoltativo si
+  omette).
 
 Le regole sui vincoli (almeno uno, `exact_rows` da solo, `min_rows` non
 oltre `max_rows`, `min_rows` non zero) le applica anche il kernel, con la

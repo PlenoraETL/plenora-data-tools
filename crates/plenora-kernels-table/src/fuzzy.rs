@@ -91,14 +91,17 @@ pub struct FuzzyJoin {
     pub blocking: FuzzyBlocking,
     /// Caratteri del prefisso, `>= 1`, solo con `blocking = prefix`;
     /// default [`DEFAULT_PREFIX_LEN`].
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub blocking_param: Option<usize>,
     /// Righe sinistre senza coppie; default `inner`.
     #[serde(default = "default_how")]
     pub how: FuzzyHow,
     /// Nome della colonna score; default [`DEFAULT_SCORE_COLUMN`].
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub score_column: Option<String>,
     /// Righe massime di un blocco destro, `>= 1`; default
     /// [`DEFAULT_MAX_CANDIDATES`].
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub max_candidates: Option<usize>,
     /// Default `false`: i testi si confrontano dopo `to_lowercase` Unicode.
     #[serde(default)]

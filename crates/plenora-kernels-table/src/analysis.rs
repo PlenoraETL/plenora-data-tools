@@ -41,6 +41,7 @@ pub struct Lookup {
     #[serde(default)]
     pub default: Value,
     /// Colonna d'uscita (`Utf8`); assente, sovrascrive `column`.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -232,8 +233,10 @@ pub struct Bin {
     pub bins: Bins,
     /// Etichette delle classi, una per classe; assenti, `(a, b]` con la resa
     /// `Display` dei bordi.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub labels: Option<Vec<String>>,
     /// Colonna d'uscita (`Utf8`); assente, `<column>_bin`.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -1502,6 +1505,7 @@ pub struct Statistics {
     pub column: String,
     /// Colonna dei gruppi, letta come testo (le celle nulle formano un
     /// gruppo); assente, un gruppo solo.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub group_by: Option<String>,
     /// Statistiche, una colonna `Float64` ciascuna nell'ordine scritto;
     /// default `count`, `min`, `max`, `mean`, `median`, `std`.
@@ -1737,12 +1741,15 @@ pub struct Sample {
     #[serde(default, deserialize_with = "crate::mai_null")]
     pub n: Option<usize>,
     /// Frazione delle righe, da 0 a 1 compresi; esclude `n`.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub fraction: Option<f64>,
     /// Seme del generatore; assente, `0x9e37_79b9_7f4a_7c15`. `0` e `1`
     /// danno lo stesso campione.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub random_state: Option<u64>,
     /// Colonna degli strati, letta come testo; ogni strato contribuisce
     /// almeno una riga.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub stratify_column: Option<String>,
 }
 

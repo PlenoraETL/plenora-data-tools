@@ -28,9 +28,11 @@ letto non ha fuso. Un valore non leggibile rifiuta sempre la riga.
 Il testo scritto da `output_format` non può superare `max_string_bytes`
 byte per valore. Il limite si controlla in validazione, esatto per campo:
 il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
-la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
-del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
-9 byte.
+la sua larghezza massima (anno 7 byte col segno; secolo `%C` 2, perché si
+scrive solo per gli anni 0..=9999; mese, giorno, ora 2; nome del mese o del
+giorno 9; offset `%z` 5, `+0530`, `%:z` 6, `+05:30`, `%::z` 9, `%:::z` 3;
+frazioni `%3f`, `%6f`, `%9f` 3, 6, 9 e `%.3f`, `%.6f`, `%.9f` 4, 7, 10;
+nome del fuso 32); `%Y%m` scrive al più 9 byte.
 
 ### Schema
 

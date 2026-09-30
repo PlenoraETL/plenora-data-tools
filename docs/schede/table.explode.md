@@ -42,7 +42,8 @@ In validazione, `InvalidPlan`:
 
 - `empty_policy: "drop"`;
 - `column` assente o non di tipo `list<…>`;
-- `output_column` non valido; campi sconosciuti.
+- `output_column` non valido o `null` esplicito (il parametro si omette);
+  campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: righe d'uscita oltre `max_rows`; un
 elemento o una riga d'uscita oltre l'indice `u32::MAX`.

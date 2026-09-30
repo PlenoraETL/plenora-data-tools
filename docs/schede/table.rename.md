@@ -41,14 +41,16 @@ In validazione, `InvalidPlan`:
 
 - `renames` vuota;
 - un `old_name` uguale al suo `new_name`;
-- lo stesso `old_name` in due coppie, o lo stesso `new_name` in due coppie;
+- lo stesso `old_name` in due coppie, o lo stesso `new_name` in due coppie
+  (anche se uno degli `old_name` non è una colonna dell'ingresso);
 - un nome vuoto, di soli spazi o oltre 1024 byte (in entrambe le
   posizioni), o più di 4096 coppie;
 - l'uscita avrebbe due colonne con lo stesso nome;
 - config con campi sconosciuti.
 
 Le stesse regole le applica il kernel, con la stessa funzione della
-validazione.
+validazione: due coppie con lo stesso `new_name` si rifiutano anche
+chiamando il kernel, invece di perdere in silenzio una delle rinomine.
 
 In esecuzione: nessun errore che dipenda dai dati.
 

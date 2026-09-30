@@ -43,8 +43,8 @@ In validazione, `InvalidPlan`:
 - `keep: "false"`;
 - `subset` vuoto, con un nome ripetuto o non valido, o oltre il limite di
   colonne; una sua colonna assente o non leggibile come testo;
-- `ascending` senza `order_column`, o `null` esplicito (il parametro si
-  omette);
+- `ascending` senza `order_column`; `ascending` o `order_column` `null`
+  espliciti (il parametro si omette);
 - `order_column` assente o di tipo non ordinabile;
 - campi sconosciuti.
 

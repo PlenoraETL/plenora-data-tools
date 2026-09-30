@@ -79,8 +79,8 @@ In validazione, `InvalidPlan`:
 - `column` assente o non numerica; una funzione di rango su `utf8`;
 - `group_by` non leggibile come testo; `order_column` di tipo non
   ordinabile; un nome d'uscita non valido;
-- `offset` o `buckets` `null` espliciti (un parametro facoltativo si
-  omette);
+- `offset`, `buckets`, `group_by`, `order_column` o `output_column`
+  `null` espliciti (un parametro facoltativo si omette);
 - funzione fuori elenco, campi sconosciuti.
 
 In esecuzione:

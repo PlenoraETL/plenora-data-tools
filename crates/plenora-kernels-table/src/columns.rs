@@ -516,8 +516,9 @@ pub struct Rename {
 
 impl Rename {
     /// Rinomine senza effetto per la sola config, rifiutate: `renames`
-    /// vuoto, un `old_name` uguale al suo `new_name`, e due coppie della
-    /// stessa sorgente (una delle due non avrebbe effetto). Un `old_name` che
+    /// vuoto, un `old_name` uguale al suo `new_name`, due coppie della
+    /// stessa sorgente (una delle due non avrebbe effetto) o della stessa
+    /// destinazione. Un `old_name` che
     /// l'ingresso non ha si accetta: dipende dall'ingresso. La chiamano il
     /// kernel e l'analisi dei contratti.
     ///
@@ -531,11 +532,21 @@ impl Rename {
             ));
         }
         let mut visti = HashSet::new();
+        let mut destinazioni = HashSet::new();
         for pair in &self.renames {
             if !visti.insert(pair.old_name.as_str()) {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "rename origine: colonna ripetuta: {}",
                     pair.old_name
+                )));
+            }
+            // Due sorgenti verso la stessa destinazione: con una sola delle
+            // due nell'ingresso una rinomina sparirebbe; con entrambe il nome
+            // sarebbe duplicato. Si decide dalla config.
+            if !destinazioni.insert(pair.new_name.as_str()) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "rename destinazione: colonna ripetuta: {}",
+                    pair.new_name
                 )));
             }
             if pair.old_name == pair.new_name {

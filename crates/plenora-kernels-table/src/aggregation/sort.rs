@@ -435,6 +435,7 @@ pub struct DedupAdvanced {
     pub keep: Keep,
     /// Colonna ordinabile su cui si ordina (sort stabile) prima della
     /// deduplica; assente, nessun ordinamento.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub order_column: Option<String>,
     /// Verso di `order_column` (assente: ascendente). Senza `order_column`
     /// non c'e' ordinamento, e un verso dichiarato si rifiuta

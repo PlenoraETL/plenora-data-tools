@@ -294,3 +294,176 @@ fn ogni_campo_di_ogni_config_tabellare_e_censito() {
     }
     assert!(mancanti.is_empty(), "{}", mancanti.join("\n"));
 }
+
+/// `true` se la config `{campo: null}` si rifiuta per il `null` (la
+/// deserializzazione visita i campi prima di cercare quelli mancanti).
+fn rifiuta_null(op: &str, config: &serde_json::Value) -> Result<(), String> {
+    let schema = std::sync::Arc::new(plenora_core::arrow::schema::Schema::empty());
+    let ingressi: Vec<DataContract> = (0..2)
+        .map(|_| DataContract::tabular(schema.clone()))
+        .collect();
+    let arieta = match plenora_core::catalog::find_operation(op).map(|d| d.arity) {
+        Some(plenora_core::catalog::Arity::Unary) => 1,
+        _ => 2,
+    };
+    // `transpose` si rifiuta come `Unsupported` prima della config: la sua
+    // config si legge direttamente.
+    if op == "table.transpose" {
+        return match serde_json::from_value::<plenora_kernels_table::reshape::Transpose>(
+            config.clone(),
+        ) {
+            Err(errore) if !errore.to_string().contains("missing field") => Ok(()),
+            altro => Err(format!("{:?}", altro.map(|_| ()))),
+        };
+    }
+    match analyze_table_contract(
+        op,
+        &ingressi[..arieta],
+        config,
+        &mut FieldAllocator::default(),
+        &Limits::default(),
+    ) {
+        // Un errore di deserializzazione che non e' il campo mancante: il
+        // `null` non si e' letto (anche un enum senza tag lo rifiuta cosi').
+        Err(errore)
+            if errore.to_string().contains("config non valida")
+                && !errore.to_string().contains("missing field") =>
+        {
+            Ok(())
+        }
+        altro => Err(format!("{:?}", altro.map(|_| ()))),
+    }
+}
+
+/// Un `null` esplicito non vale «assente» per nessun campo di nessuna config
+/// tabellare, di primo livello o annidato, salvo quelli dove la scheda lo
+/// ammette e ha un significato proprio (elenco qui sotto, con il motivo):
+/// senza, un parametro scritto `null` sfuggirebbe alle regole sui parametri
+/// scritti.
+#[test]
+#[allow(clippy::too_many_lines)] // Elenco dei campi ammessi e dei casi annidati.
+fn nessun_campo_accetta_null_salvo_quelli_dichiarati() {
+    let ammessi: &[(&str, &str, &str)] = &[
+        (
+            "table.add_row_number",
+            "order_column",
+            "scheda: solo `null`",
+        ),
+        ("table.add_row_number", "ascending", "scheda: solo `null`"),
+        (
+            "table.filter",
+            "value",
+            "`null` scritto e' il testo vuoto, e conta come scritto",
+        ),
+        (
+            "table.conditional",
+            "default_value",
+            "`null` e' un valore d'uscita",
+        ),
+        (
+            "table.lookup",
+            "default",
+            "`null` lascia le celle invariate",
+        ),
+        (
+            "table.fill_na",
+            "value",
+            "`null` scritto conta come scritto (valore_scritto)",
+        ),
+        (
+            "table.add_row_number",
+            "partition_column",
+            "scheda: `null` nessuna partizione",
+        ),
+        (
+            "table.fill_na",
+            "column",
+            "scheda: `null` riempie tutte le colonne",
+        ),
+        (
+            "table.date_extract",
+            "date_format",
+            "scheda: `null` usa i formati di default",
+        ),
+        (
+            "table.string_extract",
+            "output_column",
+            "scheda: `null` vale `<column>_extracted`",
+        ),
+        (
+            "table.string_length",
+            "output_column",
+            "scheda: `null` vale `<column>_length`",
+        ),
+        (
+            "table.string_pad",
+            "output_column",
+            "scheda: `null` sostituisce `column`",
+        ),
+        (
+            "table.asof_join",
+            "tolerance",
+            "scheda: `null` nessun limite",
+        ),
+    ];
+    let mut difetti = Vec::new();
+    for operazione in CATALOG.iter().filter(|op| op.family == Family::Table) {
+        for campo in campi_serde(operazione.id) {
+            if ammessi
+                .iter()
+                .any(|(op, nome, _)| *op == operazione.id && *nome == campo)
+            {
+                continue;
+            }
+            if let Err(avuto) = rifiuta_null(operazione.id, &json!({ campo.clone(): null })) {
+                difetti.push(format!("{} `{campo}`: {avuto}", operazione.id));
+            }
+        }
+    }
+    // Campi annidati, uno per struttura.
+    let annidati: &[(&str, serde_json::Value)] = &[
+        (
+            "table.aggregate",
+            json!({"group_by": ["a"], "aggregations": [{"column": "a", "alias": null}]}),
+        ),
+        (
+            "table.aggregate",
+            json!({"group_by": ["a"], "aggregations": [{"column": "a", "separator": null}]}),
+        ),
+        (
+            "table.aggregate",
+            json!({"group_by": ["a"], "aggregations": [{"column": "a", "quantile": null}]}),
+        ),
+        (
+            "table.mask_data",
+            json!({"maskings": [{"column": "a", "chars_start": null}]}),
+        ),
+        (
+            "table.mask_data",
+            json!({"maskings": [{"column": "a", "mask_char": null}]}),
+        ),
+        (
+            "table.conditional",
+            json!({"column": "a", "conditions": [{"operator": null}]}),
+        ),
+        // Ammessi e dichiarati: `result` di `conditional` (`null` e' un
+        // valore d'uscita), `value` e `column` di una regola di
+        // `validate_rules` (`null` vale assente, e una regola senza `column`
+        // si rifiuta comunque), `default` di `align_schema` (`null`: colonna
+        // di null).
+        (
+            "table.validate_rules",
+            json!({"rules": [{"name": "r", "operator": "gt", "severity": null}]}),
+        ),
+        (
+            "table.rename",
+            json!({"renames": [{"old_name": null, "new_name": "b"}]}),
+        ),
+    ];
+    for (op, config) in annidati {
+        if let Err(avuto) = rifiuta_null(op, config) {
+            difetti.push(format!("{op} {config}: {avuto}"));
+        }
+    }
+    assert!(difetti.is_empty(), "{}", difetti.join("\n"));
+}

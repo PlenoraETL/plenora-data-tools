@@ -358,8 +358,10 @@ pub struct AssertRange {
     /// Estremo inferiore. Si legge dal JSON come `f64`: un intero oltre
     /// 2^53 arriva gia' arrotondato. L'analisi del contratto pretende almeno
     /// uno fra `min` e `max`, finiti, con `min <= max`.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub min: Option<f64>,
     /// Estremo superiore; come `min`.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub max: Option<f64>,
     /// Estremo `min` incluso (assente: incluso). Senza `min` non ha effetto,
     /// e l'analisi dei contratti lo rifiuta.

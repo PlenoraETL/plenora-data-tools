@@ -42,8 +42,8 @@ d'ingresso.
 ### Errori
 
 In validazione, il runner rifiuta sempre `table.transpose`: `InvalidPlan`
-per una config con campi sconosciuti o `type_policy: null` esplicito (il
-parametro si omette), `output_columns` con un nome
+per una config con campi sconosciuti o `type_policy` o `id_column` `null`
+espliciti (il parametro si omette), `output_columns` con un nome
 ripetuto o non valido (anche vuoto) o oltre il limite di colonne, o
 `id_column` assente; altrimenti `Unsupported` (lo schema d'uscita dipende
 dai dati).

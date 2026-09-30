@@ -47,12 +47,12 @@ pub struct RollingWindow {
     pub function: RollingKind,
     /// Colonna di partizione, letta come testo (il null e' una partizione);
     /// assente, una partizione sola.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub group_by: Option<String>,
     /// Colonna ordinabile: le righe si ordinano in ascendente su di essa
     /// (sort stabile, null in coda) prima del calcolo, e l'uscita resta in
     /// quell'ordine.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub order_column: Option<String>,
     /// Righe della finestra, corrente compresa (almeno 1): la finestra si
     /// misura in righe, e una cella nulla occupa il suo posto.
@@ -411,10 +411,12 @@ pub struct WindowFunction {
     pub function: WindowKind,
     /// Colonna di partizione, letta come testo (il null e' una partizione);
     /// assente, una partizione sola.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub group_by: Option<String>,
     /// Colonna ordinabile: le righe si ordinano in ascendente su di essa
     /// (sort stabile, null in coda) prima del calcolo, e l'uscita resta in
     /// quell'ordine.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub order_column: Option<String>,
     /// Distanza di `lag` e `lead` (assente: 1).
     #[serde(default, deserialize_with = "crate::mai_null")]
@@ -425,6 +427,7 @@ pub struct WindowFunction {
     pub buckets: Option<usize>,
     /// Colonna d'uscita (assente: `<column>_<funzione>`); se esiste gia' si
     /// sostituisce al suo posto.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub output_column: Option<String>,
 }
 

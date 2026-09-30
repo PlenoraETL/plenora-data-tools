@@ -58,7 +58,8 @@ In validazione, `InvalidPlan`:
   strettamente crescenti;
 - numero di `labels` diverso dal numero di classi; un'etichetta oltre
   `max_string_bytes` byte;
-- config con campi sconosciuti.
+- config con campi sconosciuti, o `null` esplicito in `labels` o
+  `output_column` (il parametro si omette).
 
 In esecuzione:
 

@@ -310,6 +310,15 @@ fn casi() -> Vec<Caso> {
             json!({"renames": [{"old_name": "name", "new_name": "nome"}]}),
         ),
         caso(
+            "table.rename",
+            Wide,
+            json!({"renames": [{"old_name": "assente", "new_name": "z"},
+                               {"old_name": "name", "new_name": "z"}]}),
+            "destinazione: colonna ripetuta",
+            json!({"renames": [{"old_name": "assente", "new_name": "y"},
+                               {"old_name": "name", "new_name": "z"}]}),
+        ),
+        caso(
             "table.reorder_columns",
             Wide,
             json!({}),

@@ -1547,13 +1547,11 @@ mod tests {
             ),
             (
                 "table.window_function",
-                json!({"column": "v", "function": "rank", "order_column": "o",
-                       "group_by": null}),
+                json!({"column": "v", "function": "rank", "order_column": "o"}),
             ),
             (
                 "table.window_function",
-                json!({"column": "v", "function": "cumsum", "order_column": null,
-                       "group_by": "o"}),
+                json!({"column": "v", "function": "cumsum", "group_by": "o"}),
             ),
             ("table.statistics", json!({"column": "v", "group_by": "o"})),
             (
@@ -1643,8 +1641,7 @@ mod tests {
             ),
             (
                 "table.window_function",
-                json!({"column": "value", "function": "rank", "order_column": "id",
-                       "group_by": null}),
+                json!({"column": "value", "function": "rank", "order_column": "id"}),
             ),
         ] {
             let proprieta = ok(op, &[tabular_contract()], config)

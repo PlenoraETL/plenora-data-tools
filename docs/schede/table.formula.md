@@ -78,6 +78,7 @@ In validazione, `InvalidPlan`:
 - `formula` vuota, oltre `max_string_bytes` o non conforme alla grammatica
   (parentesi non bilanciate, testo non chiuso o con `\`, numero o esponente
   non validi, carattere non ammesso, simboli in coda);
+- un letterale numerico non finito (`1e999`, `-1e400`);
 - una divisione per il numero zero scritto nella formula (`x / 0`,
   `x / -0.0`), con qualunque `on_division_by_zero`;
 - `on_division_by_zero` scritto in una formula senza `/`, con un valore

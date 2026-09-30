@@ -76,6 +76,8 @@ In validazione, `InvalidPlan`:
 - `threshold` fuori da `(0, 1]`; `blocking_param` zero, o scritto senza
   `blocking: prefix`; `max_candidates` zero; `score_column` vuoto o oltre
   1024 byte;
+- `blocking_param`, `max_candidates` o `score_column` `null` espliciti (un
+  parametro facoltativo si omette);
 - `left_key` o `right_key` assente o non `utf8`;
 - nomi d'uscita che collidono (per esempio `score_column` uguale a
   `left_key` o a un nome con suffisso), più colonne di `max_columns`, due

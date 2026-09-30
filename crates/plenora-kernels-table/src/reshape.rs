@@ -1057,6 +1057,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
 pub struct Transpose {
     /// Colonna che non si traspone: i suoi valori danno i nomi delle
     /// colonne d'uscita, e il suo nome la prima colonna (senza: `col_0`).
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub id_column: Option<String>,
     /// Nomi delle colonne d'uscita per posizione di riga; una voce vuota o
     /// mancante lascia il nome da `id_column` o `col_<riga + 1>`.
@@ -1225,6 +1226,7 @@ pub struct Explode {
     /// Colonna degli elementi (assente: `column`, sostituita al suo posto);
     /// un nome diverso lascia la lista e aggiunge la colonna in coda, o
     /// sostituisce una colonna esistente con quel nome.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub output_column: Option<String>,
     /// Liste vuote e nulle (default [`EmptyListPolicy::Null`]).
     #[serde(default = "default_empty_list_policy")]
