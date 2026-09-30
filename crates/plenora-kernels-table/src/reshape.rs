@@ -786,7 +786,7 @@ fn colonna_pivot(
 /// mapping non da' colonne (le sue righe contano solo per le chiavi indice,
 /// che restano). Una riga con valore pivot nullo non riempie celle ma la sua
 /// chiave da' una riga; una combinazione assente e' null, anche con
-/// `count`. I metadati di schema non si conservano. Con `mapping` lo schema
+/// `count`. I metadati di schema si conservano. Con `mapping` lo schema
 /// d'uscita e' fissato dalla config, ed e' quello che l'analisi dichiara;
 /// senza, dipende dai dati e l'analisi rifiuta l'operazione (`Unsupported`).
 ///

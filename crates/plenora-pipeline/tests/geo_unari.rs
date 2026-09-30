@@ -1065,3 +1065,170 @@ fn il_tipo_di_other_wkb_si_rifiuta_in_validazione() {
     .unwrap();
     assert_eq!(uscita.num_rows(), 0);
 }
+
+/// `table.pivot` con `mapping` dopo un passo geo e su un ingresso con
+/// geometria: il contratto validato (schema canonico delle tabelle geo) e'
+/// lo schema eseguito, con le colonne del mapping nell'ordine delle chiavi.
+#[test]
+fn pivot_con_mapping_sullo_schema_canonico() {
+    let dopo_area = || {
+        piano(
+            &["t"],
+            vec![
+                passo("a", "geo.area", &["t"], json!({})),
+                passo(
+                    "p",
+                    "table.pivot",
+                    &["a"],
+                    json!({"index_col": "label", "pivot_col": "id", "value_col": "area",
+                           "aggr_func": "sum",
+                           "mapping": {"0": "zero", "3": "tre", "9": "nove"}}),
+                ),
+            ],
+            &["p"],
+        )
+    };
+    let diretto = piano(
+        &["t"],
+        vec![passo(
+            "p",
+            "table.pivot",
+            &["t"],
+            json!({"index_col": "label", "pivot_col": "id", "value_col": "id",
+                   "aggr_func": "count", "mapping": {"1": "uno", "2": "due"}}),
+        )],
+        &["p"],
+    );
+    for (pipeline, attesi) in [
+        (dopo_area(), vec!["label", "zero", "tre", "nove"]),
+        (diretto, vec!["label", "uno", "due"]),
+    ] {
+        let tabella = poligoni();
+        let validata = pipeline
+            .validate(&[("t", tabella.schema())])
+            .expect("pivot con mapping validato");
+        let atteso = validata.contratto("p").expect("contratto").schema.clone();
+        let esito = validata
+            .run(vec![("t".to_owned(), tabella)])
+            .expect("pivot con mapping eseguito");
+        let uscita = &esito.outputs[0].1;
+        assert_eq!(uscita.schema(), atteso);
+        let nomi: Vec<&str> = atteso
+            .fields()
+            .iter()
+            .map(|campo| campo.name().as_str())
+            .collect();
+        assert_eq!(nomi, attesi);
+        assert_eq!(uscita.num_rows(), 2, "una riga per etichetta");
+    }
+    // I valori dopo `geo.area`: riga 0 (pari, 100 x 100) in `zero`, riga 3
+    // (dispari, 30 x 30) in `tre`, `nove` assente dai dati e tutta null.
+    let esito = esegui(&dopo_area(), &[("t", poligoni())]).unwrap();
+    let uscita = &esito.outputs[0].1;
+    let etichette = uscita
+        .column_by_name("label")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let f64_di = |nome: &str| {
+        uscita
+            .column_by_name(nome)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .clone()
+    };
+    let (zero, tre, nove) = (f64_di("zero"), f64_di("tre"), f64_di("nove"));
+    for riga in 0..uscita.num_rows() {
+        match etichette.value(riga) {
+            "pari" => {
+                assert!((zero.value(riga) - 10_000.0).abs() < 1e-6);
+                assert!(tre.is_null(riga));
+            }
+            "dispari" => {
+                assert!(zero.is_null(riga));
+                assert!((tre.value(riga) - 900.0).abs() < 1e-6);
+            }
+            altra => panic!("etichetta inattesa `{altra}`"),
+        }
+        assert!(nove.is_null(riga));
+    }
+}
+
+/// Run-end e union non arrivano ai kernel per nessuna via d'ingresso del
+/// runner: uno schema che li contiene si rifiuta in validazione anche
+/// accanto a una geometria (prima del contratto canonico), e una tabella
+/// che li porta al posto dello schema validato si rifiuta in `run`, prima
+/// del primo passo.
+#[test]
+fn run_end_e_union_rifiutati_in_validazione_e_in_esecuzione() {
+    use plenora_core::arrow::array::types::Int32Type;
+    use plenora_core::arrow::array::{Int32Array, RunArray, UnionArray};
+    use plenora_core::arrow::schema::UnionFields;
+
+    let base = poligoni();
+    let righe = base.num_rows();
+    let run_end: ArrayRef = Arc::new(
+        RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![2, i32::try_from(righe).unwrap()]),
+            &StringArray::from(vec![Some("pari"), None]),
+        )
+        .unwrap(),
+    );
+    let campi_union: UnionFields =
+        std::iter::once((0_i8, Arc::new(Field::new("s", DataType::Utf8, true)))).collect();
+    let union: ArrayRef = Arc::new(
+        UnionArray::try_new(
+            campi_union,
+            vec![0_i8; righe].into(),
+            None,
+            vec![Arc::new(StringArray::from(vec![Some("x"); righe])) as ArrayRef],
+        )
+        .unwrap(),
+    );
+    let pipeline = piano(
+        &["t"],
+        vec![
+            passo("a", "geo.area", &["t"], json!({})),
+            passo("f", "table.limit", &["a"], json!({"n": 10})),
+        ],
+        &["f"],
+    );
+    for colonna in [run_end, union] {
+        // `label` sostituita: stesso nome, tipo non supportato.
+        let campi: Vec<Field> = base
+            .schema()
+            .fields()
+            .iter()
+            .map(|campo| {
+                if campo.name() == "label" {
+                    Field::new("label", colonna.data_type().clone(), true)
+                } else {
+                    campo.as_ref().clone()
+                }
+            })
+            .collect();
+        let mut colonne = base.columns().to_vec();
+        colonne[1] = colonna.clone();
+        let codificata =
+            RecordBatch::try_new(Arc::new(Schema::new(campi)), colonne).expect("tabella");
+        // In validazione, sullo schema che li porta.
+        let errore = pipeline
+            .validate(&[("t", codificata.schema())])
+            .expect_err("tipo non supportato in validazione");
+        assert!(
+            matches!(&errore, PlenoraError::Unsupported(m) if m.contains("RunEndEncoded")),
+            "{errore}"
+        );
+        // In esecuzione, dopo una validazione sullo schema senza codifica.
+        let validata = pipeline
+            .validate(&[("t", base.schema())])
+            .expect("schema senza codifica");
+        let errore = validata
+            .run(vec![("t".to_owned(), codificata)])
+            .expect_err("tabella diversa dallo schema validato");
+        assert!(matches!(errore, PlenoraError::Schema(_)), "{errore}");
+    }
+}

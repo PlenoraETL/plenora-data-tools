@@ -21,8 +21,8 @@ plenora-kernels-geo.workspace = true
 geo.workspace = true
 proptest.workspace = true
 # Il riferimento delle operazioni (tests/operazioni_doc.rs): tipi delle
-# config di `table.pivot` e `table.transpose`, che il runner rifiuta e
-# l'esempio chiama dal kernel; date e istanti delle tabelle d'esempio; WKT
+# config di `table.pivot` (senza `mapping`) e `table.transpose`, che il
+# runner rifiuta e l'esempio chiama dal kernel; date e istanti delle tabelle d'esempio; WKT
 # delle geometrie d'esempio. Tutti gia' nel workspace, nessun crate nuovo nel
 # lockfile.
 plenora-kernels-table.workspace = true

@@ -12,12 +12,13 @@
 //!   README e fra le schede puntano a titoli che esistono;
 //! - **esempi**: l'esempio di ogni scheda gira dal runner come passo unico e
 //!   l'uscita è quella scritta, colonna per colonna, tipo per tipo, cella per
-//!   cella. `table.pivot` e `table.transpose`, che il runner rifiuta perché
-//!   il loro schema dipende dai dati, girano dal kernel. Un'operazione geo
-//!   che il runner rifiutasse con `Unsupported` si verificherebbe sul
-//!   contratto: config accettata dall'analisi, colonne e tipi d'uscita
-//!   quelli scritti, valori non eseguiti, e il documento lo dichiarerebbe.
-//!   Oggi il runner le esegue tutte e la prova confronta i valori;
+//!   cella. `table.pivot` senza `mapping` e `table.transpose`, che il
+//!   runner rifiuta perché il loro schema dipende dai dati, girano dal
+//!   kernel. Un'operazione geo che il runner rifiutasse con `Unsupported` si
+//!   verificherebbe sul contratto: config accettata dall'analisi, colonne e
+//!   tipi d'uscita quelli scritti, valori non eseguiti, e il documento lo
+//!   dichiarerebbe. Oggi il runner le esegue tutte e la prova confronta i
+//!   valori;
 //! - **aggiornato**: `docs/operazioni.md` è byte per byte quello che le
 //!   schede e il catalogo generano. Si rigenera con
 //!
@@ -1062,7 +1063,7 @@ impl Verifica {
     const fn testo(self) -> &'static str {
         match self {
             Self::Runner => "eseguito dal runner come passo unico; l'uscita è confrontata cella per cella.",
-            Self::Kernel => "eseguito dal kernel (il runner rifiuta l'operazione in validazione, perché lo schema d'uscita dipende dai dati); l'uscita è confrontata cella per cella.",
+            Self::Kernel => "eseguito dal kernel (il runner rifiuta questa config in validazione, perché lo schema d'uscita dipende dai dati); l'uscita è confrontata cella per cella.",
             Self::RunnerSenzaValori => "eseguito dal runner come passo unico; schema e numero di righe confrontati, valori no (sono casuali per contratto).",
             Self::Contratto => "**contratto verificato, valori non eseguiti**: il runner non esegue l'operazione; l'analisi accetta la config e dichiara le colonne e i tipi dell'uscita, i valori sono scritti a mano.",
         }
