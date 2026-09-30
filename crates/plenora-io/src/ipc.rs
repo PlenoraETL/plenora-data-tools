@@ -151,7 +151,7 @@ fn schema_verificato(
         Ok(plenora_core::arrow::ipc::convert::fb_to_schema(schema))
     })?;
     verifica_tipi_supportati(&schema)?;
-    verifica_metadati_custom(&schema, limiti.max_byte_metadati_custom)?;
+    verifica_metadati_custom(&schema, 0, limiti.max_byte_metadati_custom)?;
     Ok(Arc::new(schema))
 }
 
@@ -216,7 +216,15 @@ fn decodifica_stream(
             }
             (_, None) => return Err(malformato(IPC, "messaggio prima dello schema")),
             (MessageHeader::RecordBatch, Some(_)) => blocchi = blocchi.saturating_add(1),
-            (_, Some(_)) => {}
+            (MessageHeader::DictionaryBatch, Some(_)) => {}
+            // `StreamDecoder` salta in silenzio un messaggio `NONE`: un blocco
+            // col tipo cambiato sparirebbe con le sue righe.
+            (_, Some(_)) => {
+                return Err(malformato(
+                    IPC,
+                    "messaggio di tipo non ammesso nello stream",
+                ));
+            }
         }
         posizione = usize::try_from(messaggio.bodyLength())
             .ok()
@@ -243,6 +251,65 @@ fn decodifica_stream(
         Ok(decodificatore.finish()?)
     })?;
     Ok((schema, letti))
+}
+
+/// Un blocco del footer: dentro la zona dei dati, metadati entro il tetto,
+/// e coerente col suo messaggio. Rende la zona del blocco.
+///
+/// Il blocco deve dire del suo messaggio quello che il messaggio dice di sé:
+/// `FileDecoder` prende il corpo dall'offset del blocco e ignora il prefisso,
+/// e un blocco spostato leggerebbe metadati come valori.
+fn verifica_blocco(
+    byte: &Buffer,
+    blocco: &plenora_core::arrow::ipc::Block,
+    dizionario: bool,
+    fine_dati: usize,
+    tetto: u64,
+) -> Result<(usize, usize)> {
+    let fuori = || malformato(IPC, "blocco del footer fuori dalla zona dei dati");
+    let inizio = usize::try_from(blocco.offset()).map_err(|_| fuori())?;
+    let metadati = usize::try_from(blocco.metaDataLength()).map_err(|_| fuori())?;
+    let corpo = usize::try_from(blocco.bodyLength()).map_err(|_| fuori())?;
+    let fine = inizio
+        .checked_add(metadati)
+        .and_then(|fine| fine.checked_add(corpo))
+        .filter(|fine| inizio >= TESTA_FILE && metadati >= 8 && *fine <= fine_dati)
+        .ok_or_else(fuori)?;
+    let dichiarati = u64::try_from(metadati).unwrap_or(u64::MAX);
+    if dichiarati > tetto {
+        return Err(oltre_il_limite(
+            "metadati di un messaggio IPC (byte)",
+            dichiarati,
+            tetto,
+        ));
+    }
+    let prefisso = if byte[inizio..].starts_with(&CONTINUAZIONE) {
+        8
+    } else {
+        4
+    };
+    let interni = usize::try_from(i32_in(byte, inizio + prefisso - 4)?).map_err(|_| fuori())?;
+    if prefisso.checked_add(interni) != Some(metadati) {
+        return Err(malformato(
+            IPC,
+            "metadati del blocco diversi dal suo messaggio",
+        ));
+    }
+    let messaggio =
+        plenora_core::arrow::ipc::root_as_message(&byte[inizio + prefisso..inizio + metadati])
+            .map_err(|_| malformato(IPC, "metadati del messaggio non verificabili"))?;
+    let atteso = if dizionario {
+        MessageHeader::DictionaryBatch
+    } else {
+        MessageHeader::RecordBatch
+    };
+    if messaggio.header_type() != atteso || messaggio.bodyLength() != blocco.bodyLength() {
+        return Err(malformato(
+            IPC,
+            "messaggio diverso dal suo blocco del footer",
+        ));
+    }
+    Ok((inizio, fine))
 }
 
 /// Formato file: footer entro il tetto, blocchi dentro la zona dei dati e
@@ -292,23 +359,7 @@ fn decodifica_file(
         .map(|b| (true, b))
         .chain(lotti.iter().map(|b| (false, b)))
     {
-        let fuori = || malformato(IPC, "blocco del footer fuori dalla zona dei dati");
-        let inizio = usize::try_from(blocco.offset()).map_err(|_| fuori())?;
-        let metadati = usize::try_from(blocco.metaDataLength()).map_err(|_| fuori())?;
-        let corpo = usize::try_from(blocco.bodyLength()).map_err(|_| fuori())?;
-        let fine = inizio
-            .checked_add(metadati)
-            .and_then(|fine| fine.checked_add(corpo))
-            .filter(|fine| inizio >= TESTA_FILE && metadati >= 8 && *fine <= fine_dati)
-            .ok_or_else(fuori)?;
-        let dichiarati = u64::try_from(metadati).unwrap_or(u64::MAX);
-        if dichiarati > tetto {
-            return Err(oltre_il_limite(
-                "metadati di un messaggio IPC (byte)",
-                dichiarati,
-                tetto,
-            ));
-        }
+        let (inizio, fine) = verifica_blocco(byte, blocco, dizionario, fine_dati, tetto)?;
         zone.push((inizio, fine));
         fette.push((
             dizionario,

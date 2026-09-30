@@ -378,6 +378,92 @@ fn parquet_footer_enorme_o_corrotto() {
     );
 }
 
+/// Un blocco del footer spostato di 8 byte (metadati - 8, corpo + 8) resta
+/// dentro il file e disgiunto, ma `FileDecoder` leggerebbe il riempimento
+/// dei metadati come valori.
+#[test]
+fn ipc_blocco_del_footer_incoerente_col_messaggio() {
+    let mut byte = ipc(false, 1);
+    let corpo = corpo_primo_blocco(&byte);
+    let metadati = corpo - 8;
+    let valore = i32::from_le_bytes(byte[metadati..metadati + 4].try_into().unwrap());
+    byte[metadati..metadati + 4].copy_from_slice(&(valore - 8).to_le_bytes());
+    let lunghezza = i64::from_le_bytes(byte[corpo..corpo + 8].try_into().unwrap());
+    byte[corpo..corpo + 8].copy_from_slice(&(lunghezza + 8).to_le_bytes());
+    rifiutato(
+        &byte,
+        Formato::ArrowIpc,
+        ErrorCategory::DataMapping,
+        "metadati del blocco diversi",
+    );
+}
+
+/// Un blocco dello stream col tipo cambiato in `NONE`: `StreamDecoder` lo
+/// salterebbe, con le sue righe.
+#[test]
+fn ipc_messaggio_none_nello_stream_rifiutato() {
+    let originale = ipc(true, 2);
+    // Il primo messaggio di blocco: dopo schema e dizionario.
+    let mut posizione = 0;
+    let mut trovato = None;
+    while trovato.is_none() {
+        let lunghezza = usize::try_from(i32::from_le_bytes(
+            originale[posizione + 4..posizione + 8].try_into().unwrap(),
+        ))
+        .unwrap();
+        let metadati = &originale[posizione + 8..posizione + 8 + lunghezza];
+        let messaggio = fb::root_as_message(metadati).unwrap();
+        if messaggio.header_type() == fb::MessageHeader::RecordBatch {
+            trovato = Some((posizione + 8, lunghezza));
+        }
+        posizione += 8 + lunghezza + usize::try_from(messaggio.bodyLength()).unwrap();
+    }
+    let (inizio, lunghezza) = trovato.unwrap();
+    // Il byte del discriminante: l'unico 3 che, messo a 0, rende `NONE` con
+    // la stessa lunghezza del corpo.
+    let mut candidati = Vec::new();
+    for indice in inizio..inizio + lunghezza {
+        if originale[indice] != 3 {
+            continue;
+        }
+        let mut prova = originale.clone();
+        prova[indice] = 0;
+        let metadati = &prova[inizio..inizio + lunghezza];
+        if let Ok(messaggio) = fb::root_as_message(metadati) {
+            if messaggio.header_type() == fb::MessageHeader::NONE {
+                candidati.push(prova);
+            }
+        }
+    }
+    assert_eq!(candidati.len(), 1, "discriminante non univoco");
+    rifiutato(
+        &candidati[0],
+        Formato::ArrowIpc,
+        ErrorCategory::DataMapping,
+        "non ammesso",
+    );
+}
+
+/// `parquet` toglie `ARROW:schema` dai metadati dello schema: il limite
+/// conta i metadati chiave-valore del file.
+#[test]
+fn parquet_metadati_del_file_contati() {
+    let tabella =
+        RecordBatch::try_from_iter([("v", Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef)])
+            .unwrap();
+    let dir = cartella();
+    let percorso = dir.path().join("m.parquet");
+    scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default()).unwrap();
+    let limiti = |massimo| LimitiLettura {
+        max_byte_metadati_custom: massimo,
+        ..LimitiLettura::default()
+    };
+    assert!(leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(1 << 20)).is_ok());
+    let errore = leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(0))
+        .expect_err("ARROW:schema oltre il limite");
+    assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{errore}");
+}
+
 /// Un footer IPC che ripete un blocco moltiplicherebbe righe e
 /// ricomposizione senza byte nel file.
 #[test]

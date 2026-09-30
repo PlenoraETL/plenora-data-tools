@@ -356,7 +356,18 @@ pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<Re
         return Err(oltre_il_budget(previsto, residuo));
     }
     let schema: SchemaRef = Arc::clone(costruttore.schema());
-    verifica_metadati_custom(&schema, limiti.max_byte_metadati_custom)?;
+    // `parquet` toglie `ARROW:schema` e le voci senza valore dai metadati
+    // dello schema: si contano anche i metadati chiave-valore del file.
+    let chiavi_valori = metadati
+        .file_metadata()
+        .key_value_metadata()
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .fold(0_u64, |totale, voce| {
+            let valore = voce.value.as_ref().map_or(0, String::len);
+            totale.saturating_add(u64::try_from(voce.key.len() + valore).unwrap_or(u64::MAX))
+        });
+    verifica_metadati_custom(&schema, chiavi_valori, limiti.max_byte_metadati_custom)?;
     let incorporato = schema_incorporato(&metadati)?;
     verifica_chiavi(&metadati, incorporato.as_ref())?;
     verifica_applicato(&schema, incorporato.as_ref())?;

@@ -1766,11 +1766,16 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
   budget) e, prima di Arrow, se ne percorre la struttura: prefissi e
   lunghezze dei messaggi, metadati entro il tetto, corpi e blocchi del
   footer dentro il file. `FileDecoder` e `StreamDecoder` decodificano poi
-  per viste dello stesso buffer. Tre controlli evitano un risultato
+  per viste dello stesso buffer. Alcuni controlli evitano un risultato
   sbagliato senza errore: il marcatore di fine dello stream (senza, uno
-  stream tagliato fra due messaggi darebbe meno righe), blocchi del footer
-  né ripetuti né sovrapposti (moltiplicherebbero le righe), l'endianness
-  (`StreamDecoder` non la guarda, e i valori cambierebbero).
+  stream tagliato fra due messaggi darebbe meno righe); solo messaggi di
+  schema, dizionario e blocco (`StreamDecoder` salta un messaggio `NONE`,
+  e un blocco col tipo cambiato sparirebbe); blocchi del footer né ripetuti
+  né sovrapposti (moltiplicherebbero le righe) e coerenti col loro
+  messaggio, cioè lunghezza dei metadati uguale a prefisso più messaggio,
+  tipo atteso e stessa lunghezza del corpo (`FileDecoder` prende il corpo
+  dall'offset del blocco: un blocco spostato leggerebbe metadati come
+  valori); l'endianness (`StreamDecoder` non la guarda).
 - **Parquet**: la lunghezza del footer, letta dalla coda, entro il tetto
   prima che `parquet` la usi; i row group entro il massimo e la loro somma
   di righe uguale a quella del footer dopo.
@@ -1778,7 +1783,7 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
 | limite (`LimitiLettura`) | predefinito | a che cosa si applica | errore |
 | --- | --- | --- | --- |
 | `max_byte_metadati` | 16 MiB, e mai oltre il budget residuo | ogni messaggio IPC, footer IPC, footer Parquet | `ResourceLimit` |
-| `max_byte_metadati_custom` | 4 MiB | chiavi e valori dei metadati di schema e di tutti i campi, a ogni profondità (per Parquet anche i metadati chiave-valore del file) | `ResourceLimit` |
+| `max_byte_metadati_custom` | 4 MiB | chiavi e valori dei metadati di schema e di tutti i campi, a ogni profondità; per Parquet più tutti i metadati chiave-valore del file, `ARROW:schema` compreso | `ResourceLimit` |
 | `max_blocchi` | 100 000 | blocchi IPC (record batch), row group Parquet | `ResourceLimit` |
 
 `leggi_tabella` usa i predefiniti, `leggi_tabella_con_limiti` li prende
@@ -1787,8 +1792,9 @@ file o valori. Le prove sono in `crates/plenora-io/tests/confine.rs`: file
 troncati a ogni lunghezza (Arrow IPC e Parquet: sempre errori), Arrow IPC
 con ogni byte invertito (nessun panico; ogni posizione con la suite lunga,
 testa, coda e una ogni 11 senza), lunghezze enormi di metadati, blocchi e
-footer, stream senza fine o con byte dopo la fine, blocchi ripetuti, e ogni
-limite della tabella.
+footer, stream senza fine o con byte dopo la fine, un blocco dello stream
+cambiato in `NONE`, blocchi del footer ripetuti o spostati rispetto al loro
+messaggio, e ogni limite della tabella.
 
 ### Limiti dichiarati
 
@@ -1832,6 +1838,15 @@ limite della tabella.
   *Rientro*: se si devono leggere file di fonti non fidate, aggiungere una
   pre-validazione (footer e intestazioni di pagina percorsi prima di
   `parquet`, contenuto dei messaggi IPC prima di Arrow).
+- **Checksum di pagina Parquet non verificati.**
+  *Regola*: `parquet` è compilato senza la feature `crc`.
+  *Ambito*: `parquet_io::leggi`.
+  *Hazard*: una pagina corrotta ma ancora decodificabile (per esempio un
+  byte di un valore numerico in una pagina non compressa) torna con altri
+  valori senza errore, anche quando il file porta il CRC della pagina; le
+  pagine senza CRC resterebbero comunque non verificabili.
+  *Rientro*: abilitare `crc` in `parquet`, che aggiunge al lockfile il crate
+  `crc32fast` (decisione in sospeso: dipendenza nuova da motivare).
 - **Parquet modificato durante la lettura.**
   *Regola*: la lunghezza del footer si verifica sul file aperto, poi
   `parquet` lo rilegge.

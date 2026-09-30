@@ -106,14 +106,18 @@ pub fn barriera<T>(dipendenza: &str, lavoro: impl FnOnce() -> Result<T>) -> Resu
     })
 }
 
-/// I metadati chiave-valore dello schema e di tutti i suoi campi, a ogni
-/// profondità, stanno in `limite` byte.
+/// I metadati chiave-valore dello schema e dei campi, più `altri`, stanno
+/// in `limite` byte.
+///
+/// Si contano a ogni profondità; `altri` sono byte già contati (per Parquet
+/// i metadati chiave-valore del file, che la conversione dello schema in
+/// parte toglie).
 ///
 /// # Errors
 ///
 /// `ResourceLimit` oltre il limite.
-pub fn verifica_metadati_custom(schema: &Schema, limite: u64) -> Result<()> {
-    let mut totale = byte_mappa(schema.metadata());
+pub fn verifica_metadati_custom(schema: &Schema, altri: u64, limite: u64) -> Result<()> {
+    let mut totale = byte_mappa(schema.metadata()).saturating_add(altri);
     let mut da_visitare: Vec<&Field> = schema.fields().iter().map(AsRef::as_ref).collect();
     while let Some(campo) = da_visitare.pop() {
         totale = totale.saturating_add(byte_mappa(campo.metadata()));
@@ -184,8 +188,9 @@ mod tests {
         let foglia = Field::new("x", DataType::Int32, true).with_metadata(metadati);
         let lista = Field::new_list("l", foglia, true);
         let schema = Schema::new(vec![lista]);
-        assert!(verifica_metadati_custom(&schema, 101).is_ok());
-        let errore = verifica_metadati_custom(&schema, 100).expect_err("oltre");
+        assert!(verifica_metadati_custom(&schema, 0, 101).is_ok());
+        assert!(verifica_metadati_custom(&schema, 1, 101).is_err());
+        let errore = verifica_metadati_custom(&schema, 0, 100).expect_err("oltre");
         assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
     }
 }
