@@ -145,10 +145,14 @@ pub enum ResultShape {
 /// Se l'indice di riga della sorgente resta valido attraverso l'operazione.
 ///
 /// `Preserved` significa che ogni configurazione valida mantiene numero e
-/// ordine delle righe. Ogni altra operazione è `Unavailable`: senza una
-/// traccia di lineage non si può ricostruire l'indice originale, e il runner
-/// rifiuta, a valle di un passo così, un'operazione con diagnostica per riga
-/// ([`OperationDescriptor::emits_row_diagnostics`]).
+/// ordine delle righe (del primo ingresso, per le binarie). Ogni altra
+/// operazione è `Unavailable`: senza una traccia di lineage non si può
+/// ricostruire l'indice originale, e il runner dichiara gli indici della
+/// diagnostica per riga di un passo a valle come righe dell'ingresso del
+/// passo (`step_input_row_zero_based`), non della sorgente. È questa
+/// classificazione, non [`OperationDescriptor::emits_row_diagnostics`], che
+/// decide la base: un `Preserved` sbagliato farebbe leggere come righe della
+/// sorgente indici che non lo sono.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceRowProvenance {
     /// Numero e ordine delle righe invariati: l'indice di riga d'uscita è
@@ -526,11 +530,11 @@ impl OperationDescriptor {
     /// Dichiara se l'operazione, nella configurazione data, può rifiutare
     /// righe con diagnostica per riga (`plenora-row-diagnostics-v1`).
     ///
-    /// È l'autorità unica, accanto a [`Self::source_row_provenance`]: la
-    /// usa la validazione del runner, che rifiuta un passo così quando un
-    /// passo a monte ha cambiato numero o ordine delle righe (gli indici
-    /// riportati non sarebbero più quelli della sorgente). Un nuovo percorso
-    /// di rifiuto per riga si dichiara qui.
+    /// Descrive il catalogo (schede e audit); il runner non ne dipende:
+    /// riscrive la base degli indici di qualunque payload di un passo il cui
+    /// ingresso non conserva le righe della sorgente
+    /// ([`Self::source_row_provenance`]), dichiarato qui o no. Un nuovo
+    /// percorso di rifiuto per riga si dichiara comunque qui.
     ///
     /// Dipende dalla config: `table.type_cast` solo per i target con
     /// conversione fallibile ed `errors` assente, `coerce` o `raise`; gli hash
@@ -3653,9 +3657,9 @@ mod tests {
             );
         }
 
-        // formula ed expression emettono con qualunque configurazione: se il
-        // catalogo smettesse di classificarle, il controllo di provenance del
-        // runner si aggirerebbe con sort -> formula/expression.
+        // formula ed expression emettono con qualunque configurazione: il
+        // catalogo le classifica cosi' anche se il runner, per la base degli
+        // indici, guarda il payload e non questa classificazione.
         assert!(find_operation("table.formula")
             .expect("formula")
             .emits_row_diagnostics(&serde_json::json!({})));

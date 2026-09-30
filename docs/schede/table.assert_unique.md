@@ -43,9 +43,6 @@ In validazione, `InvalidPlan`:
 
 - `columns` vuoto, con nomi ripetuti o non validi, o oltre 4096 nomi;
 - una colonna non esiste o non è leggibile come testo scalare;
-- l'ingresso viene da un passo che cambia numero o ordine delle righe
-  (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha bisogno
-  degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -54,7 +51,9 @@ In esecuzione:
   righe. Sono rifiutate tutte le righe di ogni gruppo duplicato, la prima
   compresa, con causa `validation.duplicate_key` e senza colonna. La
   diagnostica dà il conteggio delle righe e fino a 10 esempi in ordine di
-  riga, con l'indice (da zero) della riga nella sorgente; mai i valori;
+  riga, con l'indice (da zero) della riga nella base del runner
+  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  mai i valori;
 - `Schema`: una cella della chiave non si converte in testo (`date32` o
   `timestamp(ms)` fuori dall'intervallo di calendario, chiave di dizionario
   fuori dal dizionario). Le righe saltate con `nulls_equal=false` non si

@@ -14,7 +14,7 @@ use plenora_core::crs::resolve_crs;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::analyze_geo_contract;
 use plenora_kernels_table::analyze::analyze_table_contract;
-use plenora_pipeline::{Passo, Pipeline, PipelineValidata};
+use plenora_pipeline::{BaseIndici, Passo, Pipeline, PipelineValidata};
 use serde_json::{json, Value};
 
 use comune::{nested, nomi_input, tabelle, wide, CASI};
@@ -355,9 +355,10 @@ fn il_crs_di_piano_si_risolve_in_validazione() {
 }
 
 #[test]
-fn la_provenance_per_riga_si_controlla_in_validazione() {
+fn la_base_degli_indici_per_riga_si_decide_in_validazione() {
     // assert_not_null riporta indici di riga: dopo un sort non sono piu'
-    // quelli della sorgente.
+    // quelli della sorgente. La catena si accetta, e gli indici sono
+    // dichiarati righe dell'ingresso del passo (tests/diagnostica_righe.rs).
     let pipeline = piano(
         &["t"],
         vec![
@@ -371,10 +372,13 @@ fn la_provenance_per_riga_si_controlla_in_validazione() {
         ],
         &["controllata"],
     );
-    assert!(matches!(
-        valida_wide(&pipeline),
-        Err(PlenoraError::InvalidPlan(_))
-    ));
+    let validata = valida_wide(&pipeline).expect("sort -> assert_not_null accettata");
+    assert_eq!(
+        validata.base_indici("controllata"),
+        Some(BaseIndici::IngressoDelPasso)
+    );
+    assert_eq!(validata.base_indici("ordinata"), Some(BaseIndici::Sorgente));
+    assert_eq!(validata.base_indici("t"), None);
     let diretta = piano(
         &["t"],
         vec![passo(
@@ -385,7 +389,12 @@ fn la_provenance_per_riga_si_controlla_in_validazione() {
         )],
         &["controllata"],
     );
-    assert!(valida_wide(&diretta).is_ok());
+    assert_eq!(
+        valida_wide(&diretta)
+            .expect("valida")
+            .base_indici("controllata"),
+        Some(BaseIndici::Sorgente)
+    );
 }
 
 #[test]

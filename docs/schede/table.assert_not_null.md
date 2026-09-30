@@ -34,9 +34,6 @@ In validazione, `InvalidPlan`:
 
 - `columns` vuoto, con nomi ripetuti o non validi, o oltre 4096 nomi;
 - una colonna non esiste nell'ingresso;
-- l'ingresso viene da un passo che cambia numero o ordine delle righe
-  (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha bisogno
-  degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione, `DataMapping` con diagnostica per riga: una o più righe hanno
@@ -44,7 +41,9 @@ un null in una colonna di `columns`. Ogni riga conta una volta, con la
 prima colonna di `columns` in cui è nulla; causa
 `validation.required_value_missing`. La diagnostica dà il conteggio per
 causa e fino a 10 esempi in ordine di riga, con l'indice (da zero) della
-riga nella sorgente e il nome della colonna; mai i valori.
+riga nella base del runner
+([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+e il nome della colonna; mai i valori.
 
 ### Limiti e deviazioni
 

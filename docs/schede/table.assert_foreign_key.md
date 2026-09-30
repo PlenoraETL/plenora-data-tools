@@ -53,9 +53,6 @@ In validazione, `InvalidPlan`:
   oltre 4096 nomi;
 - una colonna chiave non esiste, non è leggibile come testo scalare, o ha
   un tipo diverso da quello della colonna abbinata;
-- uno dei due ingressi viene da un passo che cambia numero o ordine delle
-  righe (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha
-  bisogno degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -64,8 +61,10 @@ In esecuzione:
   assente a destra (causa `validation.foreign_key_missing`) e, senza
   `allow_null`, con una chiave nulla (causa `validation.foreign_key_null`),
   senza colonna. La diagnostica dà il conteggio per causa e fino a 10
-  esempi in ordine di riga, con l'indice (da zero) della riga nella
-  sinistra; mai i valori;
+  esempi in ordine di riga, con l'indice (da zero) della riga della
+  sinistra nella base del runner
+  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  mai i valori;
 - `ResourceLimit`: le chiavi distinte della destra superano il margine di
   memoria che il runner passa al kernel (`max_governed_memory_bytes`):
   ogni chiave conta la lunghezza della sua forma testuale più 64 byte;

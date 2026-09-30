@@ -966,9 +966,6 @@ In validazione, `InvalidPlan`:
   oltre 4096 nomi;
 - una colonna chiave non esiste, non è leggibile come testo scalare, o ha
   un tipo diverso da quello della colonna abbinata;
-- uno dei due ingressi viene da un passo che cambia numero o ordine delle
-  righe (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha
-  bisogno degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -977,8 +974,10 @@ In esecuzione:
   assente a destra (causa `validation.foreign_key_missing`) e, senza
   `allow_null`, con una chiave nulla (causa `validation.foreign_key_null`),
   senza colonna. La diagnostica dà il conteggio per causa e fino a 10
-  esempi in ordine di riga, con l'indice (da zero) della riga nella
-  sinistra; mai i valori;
+  esempi in ordine di riga, con l'indice (da zero) della riga della
+  sinistra nella base del runner
+  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  mai i valori;
 - `ResourceLimit`: le chiavi distinte della destra superano il margine di
   memoria che il runner passa al kernel (`max_governed_memory_bytes`):
   ogni chiave conta la lunghezza della sua forma testuale più 64 byte;
@@ -1193,9 +1192,6 @@ In validazione, `InvalidPlan`:
 
 - `columns` vuoto, con nomi ripetuti o non validi, o oltre 4096 nomi;
 - una colonna non esiste nell'ingresso;
-- l'ingresso viene da un passo che cambia numero o ordine delle righe
-  (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha bisogno
-  degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione, `DataMapping` con diagnostica per riga: una o più righe hanno
@@ -1203,7 +1199,9 @@ un null in una colonna di `columns`. Ogni riga conta una volta, con la
 prima colonna di `columns` in cui è nulla; causa
 `validation.required_value_missing`. La diagnostica dà il conteggio per
 causa e fino a 10 esempi in ordine di riga, con l'indice (da zero) della
-riga nella sorgente e il nome della colonna; mai i valori.
+riga nella base del runner
+([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+e il nome della colonna; mai i valori.
 
 #### Limiti e deviazioni
 
@@ -1313,9 +1311,6 @@ In validazione, `InvalidPlan`:
 - né `min` né `max`; `min` maggiore di `max`;
 - `inclusive_min` senza `min` o `inclusive_max` senza `max`;
 - `column` assente o di un tipo fuori dall'elenco;
-- l'ingresso viene da un passo che cambia numero o ordine delle righe
-  (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha bisogno
-  degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -1324,7 +1319,9 @@ In esecuzione:
   finite (causa `validation.value_out_of_range`) e, senza `allow_null`,
   righe nulle (causa `validation.required_value_missing`). La diagnostica dà
   il conteggio per causa e fino a 10 esempi in ordine di riga, con l'indice
-  (da zero) della riga nella sorgente e il nome della colonna; mai i valori;
+  (da zero) della riga nella base del runner
+  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+  e il nome della colonna; mai i valori;
 - `Schema`: una cella `utf8` non nulla che non è un numero. Il passo
   fallisce subito, senza diagnostica per riga.
 
@@ -1428,16 +1425,15 @@ In validazione, `InvalidPlan`:
 
 - `pattern` vuoto, oltre `max_regex_bytes` o non compilabile;
 - `column` assente o non `utf8` (un dizionario di testi non basta);
-- l'ingresso viene da un passo che cambia numero o ordine delle righe
-  (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha bisogno
-  degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione, `DataMapping` con diagnostica per riga: righe il cui valore
 non corrisponde (causa `validation.regex_mismatch`) e, senza `allow_null`,
 righe nulle (causa `validation.required_value_missing`). La diagnostica dà il
 conteggio per causa e fino a 10 esempi in ordine di riga, con l'indice (da
-zero) della riga nella sorgente e il nome della colonna; mai i valori.
+zero) della riga nella base del runner
+([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+e il nome della colonna; mai i valori.
 
 #### Limiti e deviazioni
 
@@ -1671,9 +1667,6 @@ In validazione, `InvalidPlan`:
 
 - `columns` vuoto, con nomi ripetuti o non validi, o oltre 4096 nomi;
 - una colonna non esiste o non è leggibile come testo scalare;
-- l'ingresso viene da un passo che cambia numero o ordine delle righe
-  (`filter`, `sort`, `aggregate`…): la diagnostica per riga ha bisogno
-  degli indici della sorgente;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -1682,7 +1675,9 @@ In esecuzione:
   righe. Sono rifiutate tutte le righe di ogni gruppo duplicato, la prima
   compresa, con causa `validation.duplicate_key` e senza colonna. La
   diagnostica dà il conteggio delle righe e fino a 10 esempi in ordine di
-  riga, con l'indice (da zero) della riga nella sorgente; mai i valori;
+  riga, con l'indice (da zero) della riga nella base del runner
+  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  mai i valori;
 - `Schema`: una cella della chiave non si converte in testo (`date32` o
   `timestamp(ms)` fuori dall'intervallo di calendario, chiave di dizionario
   fuori dal dizionario). Le righe saltate con `nulls_equal=false` non si
@@ -12857,10 +12852,10 @@ In esecuzione (conversione di colonna):
 - `Crs`: dopo la conversione, una coordinata di una geometria prodotta
   fuori dal dominio di validità del CRS della colonna creata.
 
-È l'unica operazione geo con diagnostica per riga nel runner, e l'unica
-per cui vale il controllo di provenance della validazione
-([README, «Operazioni geo»](../README.md#operazioni-geo), voce «Diagnostica
-per riga»).
+È l'unica operazione geo con diagnostica per riga nel runner; gli indici
+seguono la base delle tabellari: righe della sorgente, o dell'ingresso del
+passo dopo un passo che cambia le righe
+([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga)).
 
 #### Limiti e deviazioni
 

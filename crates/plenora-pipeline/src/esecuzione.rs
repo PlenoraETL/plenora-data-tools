@@ -59,7 +59,8 @@ use crate::costi_operazioni::BUDGET_SPILL_MISURATO;
 use crate::dispatch::Variante;
 use crate::sfratto::{pianifica, AreaSfratti};
 use crate::validazione::{
-    nel_passo, KernelPasso, PassoValidato, PipelineValidata, METADATI_PANDAS,
+    nel_passo, nel_passo_o_input, BaseIndici, KernelPasso, PassoValidato, PipelineValidata,
+    METADATI_PANDAS,
 };
 
 /// Esito di un'esecuzione: le tabelle d'uscita e il resoconto.
@@ -338,6 +339,64 @@ fn esegui_kernel(
             plenora_core::panic_policy::forma_payload(payload.as_ref())
         )))
     })
+}
+
+/// La diagnostica per riga di un passo nella base decisa in validazione.
+///
+/// Con [`BaseIndici::Sorgente`] l'errore del kernel resta com'è. Con
+/// [`BaseIndici::IngressoDelPasso`] gli indici del kernel, che sono righe del
+/// primo ingresso del passo, si dichiarano tali: `index_basis` diventa
+/// `step_input_row_zero_based` e il testo nomina passo e ingresso (nomi del
+/// piano, mai valori). Gli indici non si toccano: sono già quelli giusti per
+/// quella base. Un errore senza payload resta com'è.
+fn diagnostica_nella_base(errore: PlenoraError, passo: &PassoValidato) -> PlenoraError {
+    if passo.base_indici == BaseIndici::Sorgente {
+        return errore;
+    }
+    match errore {
+        PlenoraError::RowDiagnostics {
+            source,
+            mut diagnostics,
+        } => {
+            passo
+                .base_indici
+                .index_basis()
+                .clone_into(&mut diagnostics.index_basis);
+            if diagnostics.validate_for_emission().is_err() {
+                return PlenoraError::Internal(format!(
+                    "passo `{}`: diagnostica per riga non valida dopo il cambio di base",
+                    passo.out
+                ));
+            }
+            let ingresso = passo.inputs.first().map_or("", String::as_str);
+            let contesto = format!(
+                "passo `{}`: indici di riga riferiti all'ingresso `{ingresso}` del passo, \
+                 non alla sorgente",
+                passo.out
+            );
+            PlenoraError::RowDiagnostics {
+                source: Box::new(con_contesto_sotto_la_fase(&contesto, *source)),
+                diagnostics,
+            }
+        }
+        PlenoraError::Tagged { phase, source } => PlenoraError::Tagged {
+            phase,
+            source: Box::new(diagnostica_nella_base(*source, passo)),
+        },
+        altro => altro,
+    }
+}
+
+/// Il contesto sul testo dell'errore, anche sotto il wrapper di fase: i
+/// kernel allegano la diagnostica a un `DataMapping` con fase `Read`.
+fn con_contesto_sotto_la_fase(contesto: &str, errore: PlenoraError) -> PlenoraError {
+    match errore {
+        PlenoraError::Tagged { phase, source } => PlenoraError::Tagged {
+            phase,
+            source: Box::new(con_contesto_sotto_la_fase(contesto, *source)),
+        },
+        altro => nel_passo_o_input(contesto, altro),
+    }
 }
 
 /// Byte vivi delle tabelle residenti meno quelle escluse.
@@ -644,6 +703,7 @@ impl PipelineValidata {
             };
 
             let uscita = esegui_kernel(passo, &ingressi, &limiti_kernel, variante, contratto)
+                .map_err(|errore| diagnostica_nella_base(errore, passo))
                 .and_then(|uscita| {
                     validate_batch(&uscita, &self.limiti_kernel)?;
                     let righe_out = righe(&uscita)?;

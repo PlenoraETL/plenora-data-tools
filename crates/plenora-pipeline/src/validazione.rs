@@ -12,8 +12,9 @@
 //! I passi 2 e 5 di `validate` di `plenora-engine/src/planner.rs` a
 //! `190c493` sono portati quasi alla lettera: contratti di input con un solo
 //! `FieldAllocator` e rimappatura dei `FieldId` geometrici, `sorted_by`
-//! rifiutato sugli input, analisi per passo, controllo di provenance delle
-//! diagnostiche per riga. Restano fuori versioni e migrazioni del piano,
+//! rifiutato sugli input, analisi per passo. Il controllo di provenance delle
+//! diagnostiche per riga non rifiuta più: decide la base degli indici del
+//! passo ([`BaseIndici`]). Restano fuori versioni e migrazioni del piano,
 //! isolamento, capability, profilo di publish, `plan_hash` e
 //! `catalog_fingerprint`.
 
@@ -29,6 +30,9 @@ use plenora_core::contract::arrow_schema::{
 };
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::{resolve_crs, ResolvedCrs};
+use plenora_core::diagnostics::{
+    ROW_DIAGNOSTICS_INDEX_BASIS, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
+};
 use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::analyze_geo_contract;
@@ -51,6 +55,38 @@ pub enum KernelPasso {
     Geo(Box<PassoGeo>),
 }
 
+/// A che cosa si riferiscono gli indici di riga della diagnostica per riga
+/// di un passo (`plenora-row-diagnostics-v1`).
+///
+/// Si decide in validazione, dal catalogo
+/// ([`OperationDescriptor::source_row_provenance`]), e l'esecuzione la
+/// applica senza guardare i dati: stesso piano, stessa base.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaseIndici {
+    /// Righe della tabella d'ingresso del piano da cui il primo ingresso del
+    /// passo discende attraverso passi che conservano numero e ordine delle
+    /// righe: l'indice del kernel è quello della sorgente, e il payload resta
+    /// quello del kernel (`source_row_zero_based`).
+    Sorgente,
+    /// Righe del primo ingresso del passo: a monte un passo cambia numero o
+    /// ordine delle righe (`filter`, `sort`, `join`, `aggregate`…) e la
+    /// sorgente non è raggiungibile. Il runner riscrive la base del payload
+    /// in `step_input_row_zero_based` e nomina passo e ingresso nel testo
+    /// dell'errore.
+    IngressoDelPasso,
+}
+
+impl BaseIndici {
+    /// Valore di `index_basis` nel payload di un passo con questa base.
+    #[must_use]
+    pub const fn index_basis(self) -> &'static str {
+        match self {
+            Self::Sorgente => ROW_DIAGNOSTICS_INDEX_BASIS,
+            Self::IngressoDelPasso => ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
+        }
+    }
+}
+
 /// Un passo che ha superato la validazione.
 #[derive(Debug)]
 pub struct PassoValidato {
@@ -64,6 +100,8 @@ pub struct PassoValidato {
     /// il modello di costo le usa come righe quando superano quelle degli
     /// ingressi.
     pub righe_previste: u64,
+    /// Base degli indici della diagnostica per riga del passo.
+    pub base_indici: BaseIndici,
 }
 
 impl PassoValidato {
@@ -110,6 +148,17 @@ impl PipelineValidata {
     pub const fn crs_piano(&self) -> Option<&ResolvedCrs> {
         self.crs_piano.as_ref()
     }
+
+    /// Base degli indici della diagnostica per riga del passo che produce
+    /// `out`: quella che l'esecuzione scriverà nel payload di un rifiuto del
+    /// passo. `None` se nessun passo produce `out`.
+    #[must_use]
+    pub fn base_indici(&self, out: &str) -> Option<BaseIndici> {
+        self.passi
+            .iter()
+            .find(|passo| passo.out == out)
+            .map(|passo| passo.base_indici)
+    }
 }
 
 /// Aggiunge il nome del passo all'errore, senza cambiarne la categoria.
@@ -122,7 +171,7 @@ pub fn nel_passo(out: &str, errore: PlenoraError) -> PlenoraError {
     nel_passo_o_input(&format!("passo `{out}`"), errore)
 }
 
-fn nel_passo_o_input(contesto: &str, errore: PlenoraError) -> PlenoraError {
+pub fn nel_passo_o_input(contesto: &str, errore: PlenoraError) -> PlenoraError {
     match errore {
         PlenoraError::ResourceLimit(messaggio) => {
             PlenoraError::ResourceLimit(format!("{contesto}: {messaggio}"))
@@ -338,8 +387,7 @@ impl Pipeline {
     ///   byte di config, lunghezza dei nomi), nomi non
     ///   SSA (ridefiniti, usati prima della definizione, output inesistenti o
     ///   ripetuti), alias legacy al posto dell'id canonico, arietà errata,
-    ///   config non valida, `sorted_by` su un input, provenance per riga
-    ///   assente dove l'operazione la richiede;
+    ///   config non valida, `sorted_by` su un input;
     /// - `Unsupported`: operazione sconosciuta o senza dispatch nel runner,
     ///   `table.concat` con più di due input, schema di output non
     ///   inferibile senza i dati;
@@ -527,28 +575,21 @@ impl Pipeline {
                 )
             })?;
 
-            // Diagnostiche per riga: gli indici riportati sono quelli della
-            // sorgente solo se nessun passo a monte ha cambiato cardinalità o
-            // ordine. Delle operazioni geo che il catalogo dichiara con
-            // diagnostica per riga, nel runner la emette solo `from_wkt`
-            // (l'adapter dei kernel): le altre rendono il primo errore in
-            // ordine di riga, senza indici di sorgente (README, «Runner»).
-            let provenance_sorgente = passo
+            // Diagnostiche per riga: gli indici del kernel sono righe del suo
+            // primo ingresso (per `assert_foreign_key` il lato left, per le
+            // unarie l'unico). Sono righe della sorgente solo se nessun passo
+            // a monte ha cambiato numero o ordine delle righe; altrimenti il
+            // runner li dichiara righe dell'ingresso del passo. Nessuna
+            // catena si rifiuta per questo.
+            let righe_della_sorgente = passo
                 .inputs
-                .iter()
-                .all(|sorgente| provenance.get(sorgente).copied().unwrap_or(false));
-            let emette_diagnostica = descrittore.emits_row_diagnostics(&passo.config)
-                && (!geo || descrittore.id == "geo.from_wkt");
-            if emette_diagnostica && !provenance_sorgente {
-                return Err(nel_passo(
-                    &passo.out,
-                    PlenoraError::InvalidPlan(format!(
-                        "{} richiede provenance row-level originale; l'input cambia \
-                         cardinalita' o ordine e non porta lineage",
-                        descrittore.id
-                    )),
-                ));
-            }
+                .first()
+                .is_some_and(|sorgente| provenance.get(sorgente).copied().unwrap_or(false));
+            let base_indici = if righe_della_sorgente {
+                BaseIndici::Sorgente
+            } else {
+                BaseIndici::IngressoDelPasso
+            };
             let ingressi: Vec<DataContract> = passo
                 .inputs
                 .iter()
@@ -596,9 +637,11 @@ impl Pipeline {
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
             let uscita = canonico(uscita).map_err(|errore| nel_passo(&passo.out, errore))?;
             contratti.insert(passo.out.clone(), uscita);
+            // Un'operazione che conserva le righe conserva quelle del primo
+            // ingresso: `assert_foreign_key` rende il lato left invariato.
             provenance.insert(
                 passo.out.clone(),
-                provenance_sorgente
+                righe_della_sorgente
                     && descrittore.source_row_provenance() == SourceRowProvenance::Preserved,
             );
             passi.push(PassoValidato {
@@ -608,6 +651,7 @@ impl Pipeline {
                 kernel,
                 costo,
                 righe_previste,
+                base_indici,
             });
         }
 

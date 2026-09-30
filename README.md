@@ -977,7 +977,8 @@ di due input e le operazioni senza dispatch sono `Unsupported`); config
 tipizzate una volta; contratti di output passo per passo con
 `analyze_table_contract` e i limiti con cui i kernel eseguiranno, o con
 `analyze_geo_contract` e il CRS di piano per le geo, un solo
-`FieldAllocator`, provenance delle diagnostiche per riga; colonne di ogni
+`FieldAllocator`, base degli indici della diagnostica per riga di ogni
+passo ([«Diagnostica per riga»](#diagnostica-per-riga)); colonne di ogni
 input e di ogni contratto contro `max_columns`. Ogni contratto (input e
 uscite dei passi) porta lo schema che il runner emette, con il blocco
 canonico delle geometrie (`arrow_schema_from_contract`): il passo
@@ -1064,6 +1065,40 @@ dell'allocazione e capacità, figli compresi: una slice, una rinomina o le
 colonne di un batch letto da Arrow IPC non aggiungono nulla. È la stessa
 misura con cui i kernel stimano i byte di un batch
 (`spill::estimated_batch_bytes`).
+
+### Diagnostica per riga
+
+**Regola**: ogni ordine valido dei passi si accetta; gli indici di riga di
+un payload `plenora-row-diagnostics-v1` dicono sempre a che cosa si
+riferiscono, nel campo `index_basis`.
+
+Un kernel riporta gli indici delle righe del suo primo ingresso (l'unico
+per le unarie, il lato left per `assert_foreign_key`). Che cosa siano
+quelle righe lo decide la validazione, dal catalogo
+(`source_row_provenance`), e `PipelineValidata::base_indici(out)` lo dice
+prima di eseguire:
+
+- **`source_row_zero_based`** (`BaseIndici::Sorgente`): l'ingresso discende
+  da un input del piano solo attraverso passi che conservano numero e
+  ordine delle righe (`rename`, `type_cast`, `formula`…). L'indice è la
+  riga di quell'input, da zero; payload e testo sono quelli del kernel.
+- **`step_input_row_zero_based`** (`BaseIndici::IngressoDelPasso`): a monte
+  c'è un passo che filtra, riordina, espande, unisce o aggrega (`filter`,
+  `sort`, `limit`, `sample`, `distinct`, `join`, `aggregate`, `explode`…).
+  L'indice è la riga del primo ingresso del passo, da zero; il runner
+  riscrive `index_basis` e antepone al testo del kernel «passo `<out>`:
+  indici di riga riferiti all'ingresso `<nome>` del passo, non alla
+  sorgente». Per ritrovare la riga basta dichiarare `<nome>` fra gli
+  output del piano: la riga all'indice riportato è quella. Dopo
+  un'aggregazione le righe sono gruppi nuovi, e l'indice è la posizione
+  del gruppo.
+
+La «sorgente» è la tabella d'ingresso del piano: un piano spezzato in due
+riporta gli indici del secondo rispetto ai suoi input, cioè alle uscite del
+primo. Gli indici non si ricalcolano mai verso la sorgente attraverso un
+passo che cambia le righe: nessuna mappa di righe si tiene in memoria, e
+il budget non ha niente in più da contare (limite sotto, «Indici di riga
+dopo un passo che cambia le righe»).
 
 ### Operazioni geo
 
@@ -1175,8 +1210,9 @@ Il primo errore è quello della prima riga, in ordine di riga.
 
 **Diagnostica per riga.** Delle geo che il catalogo dichiara con
 diagnostica per riga, nel runner la emette solo `from_wkt` (l'adapter dei
-kernel), e solo per lei vale il controllo di provenance della validazione;
-le altre rendono il primo errore, senza indici di sorgente (limite sotto).
+kernel), con la base degli indici delle tabellari
+([«Diagnostica per riga»](#diagnostica-per-riga)); le altre rendono il
+primo errore, senza indici di sorgente (limite sotto).
 
 ### Budget di memoria
 
@@ -1376,7 +1412,26 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   *Hazard*: un indice di riga dopo un passo che cambia righe o ordine
   (`table.filter`, `table.sort`) non punta alla riga del file d'origine.
   *Rientro*: la raccolta completa per riga del passo geo di `190c493`
-  (`collect_cell_failures`), con il controllo di provenance.
+  (`collect_cell_failures`), con la base degli indici del runner.
+- **Indici di riga dopo un passo che cambia le righe.**
+  *Regola*: gli indici della diagnostica per riga sono righe della
+  sorgente (`source_row_zero_based`) solo quando nessun passo a monte cambia
+  numero o ordine delle righe; altrimenti sono righe del primo ingresso del
+  passo (`step_input_row_zero_based`), e il testo nomina passo e ingresso
+  ([«Diagnostica per riga»](#diagnostica-per-riga)). È una garanzia più
+  debole di quella che il nome `source_index` degli esempi suggerisce.
+  *Ambito*: ogni passo il cui primo ingresso discende da un'operazione con
+  `source_row_provenance` `Unavailable` (catalogo).
+  *Hazard*: un lettore del payload che ignori `index_basis` leggerebbe
+  l'indice come riga del file d'origine; un lettore che conosce solo
+  `source_row_zero_based` lo rifiuta. Per arrivare alla riga del file
+  serve rieseguire il prefisso del piano fino all'ingresso nominato.
+  *Rientro*: una mappa di righe verso la sorgente per i passi che
+  selezionano o permutano senza duplicare (`filter`, `sort`, `limit`,
+  `sample`, `distinct`), composta passo per passo e contata nei byte vivi;
+  i passi che duplicano o creano righe (`join`, `explode`, `aggregate`)
+  restano sulla base dell'ingresso del passo, perché il contratto v1 vuole
+  indici unici fra gli esempi.
 - **Run-end e union rifiutati al confine.**
   *Regola*: uno schema con una colonna `RunEndEncoded` o `Union`, a
   qualunque profondità (valori di una dictionary, figli di liste, struct e
@@ -1432,7 +1487,8 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   passo.
 - **Nome del passo negli errori**: aggiunto al messaggio conservando la
   categoria; gli errori con diagnostica per riga o già strutturati restano
-  quelli del kernel.
+  quelli del kernel, salvo la diagnostica sulla base dell'ingresso del
+  passo, che nomina passo e ingresso.
 
 ## File
 

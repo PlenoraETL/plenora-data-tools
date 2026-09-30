@@ -20,9 +20,18 @@ use serde::{Deserialize, Serialize};
 /// Nome e versione del contratto, valore obbligato di
 /// [`RowDiagnostics::contract`].
 pub const ROW_DIAGNOSTICS_CONTRACT: &str = "plenora-row-diagnostics-v1";
-/// Base degli indici di riga, valore obbligato di
-/// [`RowDiagnostics::index_basis`]: indice nella sorgente, da zero.
+/// Base degli indici di riga di default di [`RowDiagnostics::index_basis`]:
+/// indice nella sorgente, da zero. È quella che ogni kernel scrive.
 pub const ROW_DIAGNOSTICS_INDEX_BASIS: &str = "source_row_zero_based";
+/// Base degli indici di riga quando la sorgente non è raggiungibile: indice,
+/// da zero, nel primo ingresso del passo che ha rifiutato le righe.
+///
+/// La scrive solo il runner (`plenora-pipeline`), riscrivendo il payload di
+/// un kernel il cui ingresso discende da un passo che cambia numero o ordine
+/// delle righe; il passo e il suo ingresso sono nominati nel testo
+/// dell'errore. Un lettore che conosce solo [`ROW_DIAGNOSTICS_INDEX_BASIS`]
+/// rifiuta il payload invece di leggere gli indici come righe della sorgente.
+pub const ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT: &str = "step_input_row_zero_based";
 
 /// Dove sono state rifiutate le righe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +115,9 @@ pub enum RowDiagnosticWriteState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RowDiagnosticExample {
-    /// Indice della riga nella sorgente, da zero; unico fra gli esempi.
+    /// Indice della riga, da zero, nella base di
+    /// [`RowDiagnostics::index_basis`] (la sorgente, o il primo ingresso del
+    /// passo); unico fra gli esempi.
     pub source_index: u64,
     /// Codice della causa (minuscole, cifre, `.`, `_`, `-`; al più 128
     /// byte), una delle chiavi di [`RowDiagnostics::counts`].
@@ -174,7 +185,10 @@ pub struct RowDiagnostics {
     pub contract: String,
     /// Lettura o scrittura.
     pub scope: RowDiagnosticScope,
-    /// Sempre [`ROW_DIAGNOSTICS_INDEX_BASIS`].
+    /// [`ROW_DIAGNOSTICS_INDEX_BASIS`] (righe della sorgente) o
+    /// [`ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT`] (righe del primo ingresso
+    /// del passo): dice a che cosa si riferisce
+    /// [`RowDiagnosticExample::source_index`].
     pub index_basis: String,
     /// Quanto il payload conosce delle righe rifiutate.
     pub completeness: RowDiagnosticsCompleteness,
@@ -275,7 +289,10 @@ impl RowDiagnostics {
     #[allow(clippy::too_many_lines)]
     pub fn validate_for_emission(&self) -> Result<(), &'static str> {
         if self.contract != ROW_DIAGNOSTICS_CONTRACT
-            || self.index_basis != ROW_DIAGNOSTICS_INDEX_BASIS
+            || !matches!(
+                self.index_basis.as_str(),
+                ROW_DIAGNOSTICS_INDEX_BASIS | ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT
+            )
             || self.examples_limit == 0
         {
             return Err("campi radice non validi");
@@ -657,6 +674,26 @@ pub(crate) mod tests {
         let mut read_input_total = report(1, vec![example(0)]);
         read_input_total.input_total = Some(1);
         assert!(read_input_total.validate_for_emission().is_err());
+    }
+
+    #[test]
+    fn le_basi_degli_indici_sono_due_e_chiuse() {
+        let mut passo = report(1, vec![example(3)]);
+        passo.index_basis = ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT.to_owned();
+        assert_eq!(passo.validate_for_emission(), Ok(()));
+        let testo = serde_json::to_string(&passo).expect("serializzabile");
+        assert!(testo.contains("\"index_basis\":\"step_input_row_zero_based\""));
+        let riletto: RowDiagnostics = serde_json::from_str(&testo).expect("rileggibile");
+        assert_eq!(riletto, passo);
+        for altra in ["", "source_row_one_based", "step_input_row"] {
+            let mut ignota = report(1, vec![example(3)]);
+            ignota.index_basis = altra.to_owned();
+            assert_eq!(
+                ignota.validate_for_emission(),
+                Err("campi radice non validi"),
+                "{altra}"
+            );
+        }
     }
 
     #[test]

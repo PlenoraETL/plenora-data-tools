@@ -68,10 +68,10 @@ In esecuzione (conversione di colonna):
 - `Crs`: dopo la conversione, una coordinata di una geometria prodotta
   fuori dal dominio di validità del CRS della colonna creata.
 
-È l'unica operazione geo con diagnostica per riga nel runner, e l'unica
-per cui vale il controllo di provenance della validazione
-([README, «Operazioni geo»](../README.md#operazioni-geo), voce «Diagnostica
-per riga»).
+È l'unica operazione geo con diagnostica per riga nel runner; gli indici
+seguono la base delle tabellari: righe della sorgente, o dell'ingresso del
+passo dopo un passo che cambia le righe
+([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga)).
 
 ### Limiti e deviazioni
 
