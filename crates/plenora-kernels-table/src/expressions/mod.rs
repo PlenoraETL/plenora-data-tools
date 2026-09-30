@@ -1702,11 +1702,18 @@ mod tests {
             booleani(&batch, bin("equal", col("ts"), col("i")))[0],
             Some(true)
         );
-        // La notazione esponenziale resta un double: 1e300 supera ogni i64.
+        // La notazione esponenziale e' un decimale esatto: 1e30 supera ogni
+        // i64. Oltre la forma esatta (1e300: 301 cifre) il letterale si
+        // rifiuta invece di diventare un double (revisione Codex).
         assert_eq!(
-            booleani(&batch, bin("less", col("i"), lit(json!(1e300))))[..],
+            booleani(&batch, bin("less", col("i"), lit(json!(1e30))))[..],
             [Some(true), Some(true)]
         );
+        let oltre = config(bin("less", col("i"), lit(json!(1e300))), None);
+        assert!(matches!(
+            expression_generic(&batch, &oltre),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
         assert_eq!(
             booleani(&batch, bin("greater", col("i"), lit(json!(1e-7))))[..],
             [Some(true), Some(false)]

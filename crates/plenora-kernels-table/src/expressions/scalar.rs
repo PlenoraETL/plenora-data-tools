@@ -126,7 +126,8 @@ pub fn numero_della_cella(array: &dyn Array, row: usize) -> Result<Option<Numero
 ///
 /// # Errors
 ///
-/// `InvalidPlan` se il letterale non e' un numero finito.
+/// `InvalidPlan` se il letterale non e' un numero finito, o se la forma
+/// esatta non lo tiene (oltre 38 cifre significative, scala oltre `i8`).
 pub fn numero_del_letterale(number: &serde_json::Number) -> Result<Numero> {
     let valore = number
         .as_f64()
@@ -135,9 +136,9 @@ pub fn numero_del_letterale(number: &serde_json::Number) -> Result<Numero> {
     let esatto = match (number.as_i64(), number.as_u64()) {
         (Some(value), _) => NumericBound::I64(value),
         (None, Some(value)) => NumericBound::U64(value),
-        (None, None) => {
-            NumericBound::parse(&number.to_string()).unwrap_or(NumericBound::F64(valore))
-        }
+        (None, None) => NumericBound::parse(&number.to_string()).ok_or_else(|| {
+            PlenoraError::InvalidPlan("literal numerico non rappresentabile esattamente".into())
+        })?,
     };
     Ok(Numero { valore, esatto })
 }

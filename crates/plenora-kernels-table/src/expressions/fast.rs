@@ -738,7 +738,14 @@ fn compile_literal(value: &Value) -> FastNode<'_> {
         Value::Null => FastNode::Literal(FastLiteral::Null),
         Value::Bool(value) => FastNode::Literal(FastLiteral::Boolean(*value)),
         Value::Number(value) => numero_del_letterale(value).map_or_else(
-            |_| FastNode::Error(LazyError::InvalidPlan("literal numerico non finito".into())),
+            // Lo stesso messaggio del generico (letterale non finito o non
+            // rappresentabile esattamente).
+            |errore| {
+                FastNode::Error(LazyError::InvalidPlan(match errore {
+                    PlenoraError::InvalidPlan(messaggio) => messaggio,
+                    altro => altro.to_string(),
+                }))
+            },
             |value| FastNode::Literal(FastLiteral::Number(value)),
         ),
         Value::String(value) => FastNode::Literal(FastLiteral::Text(value.as_str())),

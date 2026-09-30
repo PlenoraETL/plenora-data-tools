@@ -857,6 +857,8 @@ mod tests {
             DataType::Int64,
             true,
         );
+        // Oltre la forma esatta il numero si rifiuta alla lettura della config.
+        assert!(serde_json::from_str::<AssertRange>(r#"{"column": "i", "max": 1e-128}"#).is_err());
         let oltre = r#"{"column": "i", "min": 100000000000000000000}"#;
         assert!(assert_range(&interi, &config(oltre)).is_err());
         let sotto = r#"{"column": "i", "max": 100000000000000000000, "min": 1.5e3}"#;

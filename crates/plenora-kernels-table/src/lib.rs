@@ -1291,8 +1291,13 @@ pub fn scalar_as_numero(array: &dyn Array, row: usize) -> Result<Option<(f64, Nu
             scale: *scale,
         }
     } else if let Some(values) = any.downcast_ref::<StringArray>() {
-        NumericBound::parse(&values.value(row).trim().replace(',', "."))
-            .unwrap_or(NumericBound::F64(valore))
+        // Il valore esatto e' quello scritto: un numero che la forma esatta
+        // non tiene si rifiuta invece di decidere sul suo double.
+        NumericBound::parse(&values.value(row).trim().replace(',', ".")).ok_or_else(|| {
+            PlenoraError::Schema(
+                "numero non rappresentabile esattamente (oltre 38 cifre o scala)".into(),
+            )
+        })?
     } else {
         return Err(PlenoraError::Internal(
             "tipo numerico senza valore esatto".into(),
@@ -1344,28 +1349,29 @@ impl NumeroConfig {
         self.double
     }
 
-    /// Il numero di un letterale JSON.
+    /// Il numero di un letterale JSON, esatto; `None` se la forma esatta non
+    /// lo tiene (oltre 38 cifre significative, scala oltre `i8`): un double
+    /// al suo posto sarebbe un altro numero.
     #[must_use]
-    pub fn da_json(numero: &serde_json::Number) -> Self {
+    pub fn da_json(numero: &serde_json::Number) -> Option<Self> {
         #[allow(clippy::cast_precision_loss)] // Il double e' solo l'approssimazione dichiarata.
         if let Some(intero) = numero.as_i64() {
-            return Self {
+            return Some(Self {
                 esatto: NumericBound::I64(intero),
                 double: intero as f64,
-            };
+            });
         }
         #[allow(clippy::cast_precision_loss)] // Come sopra.
         if let Some(intero) = numero.as_u64() {
-            return Self {
+            return Some(Self {
                 esatto: NumericBound::U64(intero),
                 double: intero as f64,
-            };
+            });
         }
-        let double = numero.as_f64().unwrap_or(f64::NAN);
-        Self {
-            esatto: NumericBound::parse(&numero.to_string()).unwrap_or(NumericBound::F64(double)),
-            double,
-        }
+        Some(Self {
+            esatto: NumericBound::parse(&numero.to_string())?,
+            double: numero.as_f64()?,
+        })
     }
 
     /// Il testo con cui il numero si mostra (etichette): l'intero esatto per
@@ -1403,7 +1409,12 @@ impl<'de> Deserialize<'de> for NumeroConfig {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
-        serde_json::Number::deserialize(deserializer).map(|numero| Self::da_json(&numero))
+        let numero = serde_json::Number::deserialize(deserializer)?;
+        Self::da_json(&numero).ok_or_else(|| {
+            serde::de::Error::custom(
+                "numero non rappresentabile esattamente (oltre 38 cifre significative o scala)",
+            )
+        })
     }
 }
 
@@ -1436,9 +1447,9 @@ pub enum NumericBound {
         /// Cifre decimali: il valore e' `unscaled * 10^(-scale)`.
         scale: i8,
     },
-    /// Qualunque altra forma numerica (inf, NaN, o un decimale con piu' cifre
-    /// significative di quante ne tenga `Decimal128`, o un esponente oltre la
-    /// scala `i8`).
+    /// Le forme che un decimale non e': `inf`, `NaN`. Un numero finito che
+    /// la forma esatta non tiene non e' un `F64`: `NumericBound::parse` lo
+    /// rifiuta.
     F64(f64),
 }
 
@@ -1478,7 +1489,21 @@ impl NumericBound {
         if let Some(decimal) = Self::parse_decimal(text) {
             return Some(decimal);
         }
-        text.parse::<f64>().ok().map(Self::F64)
+        // Un numero finito che la forma esatta non tiene (oltre 38 cifre
+        // significative, scala oltre `i8`: `1e-128`, `1e-400`) non ricade su
+        // un double: `1e-400` diventerebbe 0 e `1e-128` un double diverso dal
+        // decimale scritto. Resta `F64` solo cio' che un decimale non e'
+        // (`inf`, `NaN`).
+        // Il controllo e' sulla grafia, non sul double: `1e400` diventerebbe
+        // infinito senza esserlo.
+        let (_, corpo) = separa_segno(text);
+        if matches!(
+            corpo.to_ascii_lowercase().as_str(),
+            "inf" | "infinity" | "nan"
+        ) {
+            return text.parse::<f64>().ok().map(Self::F64);
+        }
+        None
     }
 
     /// Letterale decimale esatto: segno opzionale, cifre, al piu' un punto,
@@ -1523,6 +1548,18 @@ impl NumericBound {
         let mut esponente_decimale = i64::try_from(frazione.len()).ok()?
             - i64::from(esponente)
             - i64::try_from(zeri_in_coda).ok()?;
+        // Prima di espandere: la scala sta in `i8` e le cifre (zeri della
+        // scala negativa compresi) nel tetto. Un esponente come `1e2147483647`
+        // chiederebbe miliardi di zeri.
+        if !senza_coda.is_empty()
+            && (esponente_decimale > i64::from(i8::MAX)
+                || i64::try_from(senza_coda.len())
+                    .ok()?
+                    .saturating_sub(esponente_decimale.min(0))
+                    > i64::try_from(MAX_DECIMAL_DIGITS).ok()?)
+        {
+            return None;
+        }
         let mut testo = senza_coda.to_owned();
         // Scala negativa: gli zeri tornano nelle cifre (esponente_decimale zero), purche'
         // restino entro il tetto.
@@ -2239,10 +2276,10 @@ mod tests {
             })
         );
         // Oltre 38 cifre non c'e' forma decimale esatta: si ricade su f64.
-        assert!(matches!(
+        assert_eq!(
             NumericBound::parse("1.000000000000000000000000000000000000000001"),
-            Some(NumericBound::F64(_))
-        ));
+            None
+        );
         assert!(NumericBound::parse("x").is_none());
         assert!(NumericBound::parse("").is_none());
         assert!(NumericBound::parse("1.2.3").is_none());
@@ -2428,8 +2465,19 @@ mod tests {
             decimale(100_000_000_000_000_000_000, 0)
         );
         assert_eq!(NumericBound::parse("0e5"), decimale(0, 0));
+        // Oltre la forma esatta non c'e' un double di ripiego (revisione
+        // Codex): `1e-128` sarebbe un double diverso, `1e-400` zero, `1e400`
+        // infinito, e `1e2147483647` non espande miliardi di zeri.
+        for testo in ["1e400", "1e-128", "1e-400", "1e2147483647", "1e-2147483648"] {
+            assert_eq!(NumericBound::parse(testo), None, "{testo}");
+        }
+        assert_eq!(NumericBound::parse("0e-200"), decimale(0, 0));
         assert!(matches!(
-            NumericBound::parse("1e400"),
+            NumericBound::parse("inf"),
+            Some(NumericBound::F64(_))
+        ));
+        assert!(matches!(
+            NumericBound::parse("-NaN"),
             Some(NumericBound::F64(_))
         ));
         assert_eq!(

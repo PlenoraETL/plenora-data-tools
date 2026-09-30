@@ -104,7 +104,16 @@ fn frazione_letta_oltre_i_nanosecondi(testo: &str, items: &[Item<'_>]) -> bool {
             return false;
         };
         let frazione = if rfc3339 {
-            resto.find('.').map(|punto| &resto[punto..])
+            // Solo la parte consumata da `%+`: un punto letterale dopo il
+            // campo non e' la sua frazione.
+            let mut dopo = Parsed::new();
+            let Ok(resto_dopo) =
+                chrono::format::parse_and_remainder(&mut dopo, testo, items[..=indice].iter())
+            else {
+                return false;
+            };
+            let consumato = &resto[..resto.len() - resto_dopo.len()];
+            consumato.find('.').map(|punto| &consumato[punto..])
         } else {
             resto.starts_with('.').then_some(resto)
         };
@@ -458,6 +467,10 @@ mod tests {
         assert!(leggi_con_items("2016-12-31 23:59:60", &items("%Y-%m-%d %H:%M:%S")).is_none());
         assert!(leggi_con_items("10:00:00.0000000001", &items("%H:%M:%S%.f")).is_none());
         assert!(leggi_con_items("2024-01-31T10:00:00.0000000001Z", &items("%+")).is_none());
+        // Un punto letterale dopo `%+` non e' la frazione del campo.
+        assert!(
+            leggi_con_items("2024-01-31T10:00:00Z .1234567891", &items("%+ .1234567891")).is_some()
+        );
         // Un punto che non precede la frazione letta non conta (revisione
         // Codex): `%f` a nove cifre dopo un punto letterale.
         let valido = leggi_con_items("2024-01-31.123456123456789", &items("%Y-%m-%d.%H%M%S%f"))

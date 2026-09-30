@@ -636,6 +636,12 @@ valore letto si ricostruisce esatto dalla forma che `serde_json` riscrive,
 esponente compreso (`NumericBound::parse`: `1e-7` è un decimale, non un
 double): un intero oltre `u64` come `100000000000000000000` passa il
 controllo perché il suo double lo rappresenta, e torna l'intero esatto.
+Un numero finito che la forma esatta non tiene (più di 38 cifre
+significative, o una scala oltre i 127 decimali: `1e-128`, `1e300`) non
+ricade su un double: si rifiuta, nella config (`NumeroConfig`), nei valori
+di `table.filter` e `table.validate_rules`, nei letterali di
+`table.expression` e nelle celle di testo lette per decidere
+(`scalar_as_numero`). Restano double solo `inf` e `NaN`, scritti così.
 
 **Ambito.** I piani letti da `Pipeline::from_json` (runner e piani da
 file).

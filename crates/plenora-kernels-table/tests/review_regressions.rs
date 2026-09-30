@@ -368,10 +368,7 @@ fn gli_zeri_non_significativi_non_fanno_ricadere_un_decimale_su_f64() {
         Some(NumericBound::Decimal { .. })
     ));
     let trentanove = format!("{}.{}", "9".repeat(21), "9".repeat(18));
-    assert!(matches!(
-        NumericBound::parse(&trentanove),
-        Some(NumericBound::F64(_))
-    ));
+    assert_eq!(NumericBound::parse(&trentanove), None);
 }
 
 // ---------------------------------------------------------------------------
@@ -3450,16 +3447,11 @@ fn il_confronto_di_un_estremo_decimale_e_esatto() {
         Some(Ordering::Equal)
     );
 
-    // Decimale con piu' cifre di quante ne tenga un i128: ricade su F64,
-    // dichiaratamente approssimato, ma non deve rompere il confronto.
-    let non_rappresentabile = bound("0.123456789012345678901234567890123456789012345");
-    assert!(
-        matches!(non_rappresentabile, NumericBound::F64(_)),
-        "oltre la capacita' di i128 si ricade su F64: {non_rappresentabile:?}"
-    );
+    // Decimale con piu' cifre di quante ne tenga la forma esatta: non ricade
+    // su un double (revisione Codex), si rifiuta.
     assert_eq!(
-        compare_bounds(non_rappresentabile, bound("1")),
-        Some(Ordering::Less)
+        NumericBound::parse("0.123456789012345678901234567890123456789012345"),
+        None
     );
 
     // NaN: confronto non definito, come IEEE.
