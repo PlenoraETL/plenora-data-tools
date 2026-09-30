@@ -2,9 +2,13 @@
 
 Aggiunge una colonna `float64` con la distanza in metri fra il punto di
 ogni riga e un punto fisso della config (`other_wkb`), lungo il cerchio
-massimo di una **sfera** di raggio 6 371 008,8 m (raggio medio di GRS 80,
-`Haversine` di `geo`). Le coordinate sono longitudine e latitudine in
-gradi. Per la distanza sull'ellissoide c'è
+massimo di una **sfera** con il raggio medio IUGG `R1 = a (1 - f / 3)`
+dell'ellissoide del datum del CRS della colonna (per WGS 84 6 371 008,771 m,
+per Internazionale 1924 6 371 229,315 m;
+[README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e latitudine in gradi. Il
+nome resta `haversine`, ma il calcolo non è la formula dell'emiseno: è il
+problema inverso di `geographiclib-rs` a schiacciamento nullo, ben
+condizionato anche agli antipodi. Per la distanza sull'ellissoide c'è
 [`geo.geodesic_distance`](#geogeodesic_distance).
 
 ### Parametri
@@ -16,7 +20,7 @@ gradi. Per la distanza sull'ellissoide c'è
 
 ### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable. Le altre colonne,
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null). Le altre colonne,
 la geometria e i metadati restano; restano anche le proprietà del
 contratto (`sorted_by`, `row_count`).
 
@@ -41,7 +45,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate), o `other_wkb` con Z/M o SRID;
 - `Crs`: CRS della colonna mancante o non risolto, o non geografico
-  (`GEOGRAPHIC_CRS_REQUIRED`); una coordinata di `other_wkb` fuori da
+  (`GEOGRAPHIC_CRS_REQUIRED`); CRS senza l'ellissoide del datum (risolto
+  dal chiamante, fuori dalla tabella integrata: `ELLIPSOID_REQUIRED`); una coordinata di `other_wkb` fuori da
   longitudine e latitudine ammesse (`COORDINATE_OUT_OF_CRS_DOMAIN`);
 - `InvalidPlan`: config con campi sconosciuti, `other_wkb` assente, non
   esadecimale, WKB non valido nella struttura o nella validità OGC, o che
@@ -65,18 +70,24 @@ Poi, per riga:
 - `InvalidPlan`: la geometria della riga non è un `Point` (errore del
   runner, «tipo geometria non supportato»); dal kernel (`ExtendedError`)
   `InvalidGeographicCoordinate`, una coordinata non finita o fuori da
-  `[-180, 180]` × `[-90, 90]`;
+  `[-180, 180]` × `[-90, 90]`, e `InvalidOutput`, una distanza non finita
+  (mai attesa);
 - `Internal`: dal kernel `CalcoloNonConcluso` (il calcolo di `geo` va in
   panico).
 
 ### Limiti e deviazioni
 
-- **Sfera, non ellissoide.** Il raggio è fisso e non dipende dal datum
-  del CRS: la distanza differisce dalla geodetica sull'ellissoide di
-  qualche millesimo del valore. Dall'origine, un grado di latitudine vale
-  111 195,08 m qui e 110 574,39 m sull'ellissoide WGS 84 (5,6 per mille),
-  un grado di longitudine 111 195,08 m qui e 111 319,49 m
-  sull'ellissoide.
+- **Sfera, non ellissoide.** La distanza differisce dalla geodetica
+  sull'ellissoide di qualche millesimo del valore. Dall'origine, su
+  WGS 84, un grado di latitudine vale 111 195,08 m qui e 110 574,39 m
+  sull'ellissoide (5,6 per mille), un grado di longitudine 111 195,08 m
+  qui e 111 319,49 m sull'ellissoide.
+- Fino alla versione 1 del catalogo il raggio era fisso (6 371 008,8 m,
+  quello di `Haversine` di `geo`) qualunque fosse il datum, e il calcolo
+  era la formula dell'emiseno: vicino agli antipodi, con l'emiseno
+  arrotondato sopra 1, rendeva NaN senza errore, e poco prima perdeva
+  decimetri per arrotondamento.
+- CRS proiettati rifiutati.
 - Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
   passo.
 - Errori senza indice di riga della sorgente
@@ -86,11 +97,11 @@ voce «Geo senza diagnostica per riga»).
 ### Precisione
 
 La regola di 1 cm non riguarda il modello: il risultato è la distanza
-sulla sfera, non la distanza vera sull'ellissoide (sopra). Il calcolo
-(`2 asin(sqrt(a))` in `f64`) è accurato a pochi ulp relativi lontano
-dagli antipodi; vicino agli antipodi `asin` è mal condizionato e
-l'errore d'arrotondamento non è misurato né limitato a 1 cm. Nessun
-rifiuto `PrecisionInsufficient`
+sulla sfera, non la distanza vera sull'ellissoide (sopra). Sulla sfera il
+calcolo è accurato ai nanometri ovunque, antipodi compresi (l'oracolo
+`tests/geodetica_oracolo.rs` lo confronta con GeographicLib entro un
+micrometro su ogni ellissoide della tabella); il risultato è sempre
+finito. Nessun rifiuto `PrecisionInsufficient`
 ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
@@ -114,7 +125,7 @@ all'equatore valgono lo stesso arco sulla sfera.
   "uscita": {"colonne": [
     {"nome": "id", "tipo": "int64", "valori": [1, 2]},
     {"nome": "geometry", "tipo": "geometry", "crs": "EPSG:4326", "valori": ["POINT(0 1)", "POINT(1 0)"]},
-    {"nome": "haversine_distance", "tipo": "float64", "valori": [111195.0802335329, 111195.0802335329]}
+    {"nome": "haversine_distance", "tipo": "float64", "valori": [111195.07973463158, 111195.07973463158]}
   ]}
 }
 ```

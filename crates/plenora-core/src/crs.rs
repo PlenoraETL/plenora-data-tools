@@ -262,7 +262,11 @@ impl ResolvedCrs {
     /// 111_319.49` gradi, un centimetro d'arco sull'equatore
     /// ([`METRES_PER_DEGREE_AT_EQUATOR`]); lontano dall'equatore un grado di
     /// longitudine e' piu' corto, e la stessa quantita' in gradi vale meno
-    /// di un centimetro a terra (precisione piu' fine, mai piu' grossolana).
+    /// di un centimetro a terra (precisione piu' fine). Deviazione
+    /// dichiarata (README, «Misure geodetiche: l'ellissoide del datum»): i
+    /// gradi sono quelli dell'equatore di WGS 84, non dell'ellissoide del
+    /// datum; su Internazionale 1924 e Clarke 1866, piu' grandi, il passo
+    /// vale fino a 1,000 04 cm all'equatore (0,4 µm oltre).
     /// `None` per un proiettato senza un'unita' lineare finita e positiva, o
     /// quando il quoziente non e' un `f64` normale e positivo (unita' fuori
     /// scala, per esempio `f64::from_bits(1)` o `f64::MAX`): la precisione
@@ -614,6 +618,13 @@ pub enum CrsError {
     /// L'operazione richiede un CRS geografico.
     #[error("GEOGRAPHIC_CRS_REQUIRED: ricevuto CRS {actual:?}")]
     GeographicRequired { actual: CrsKind },
+    /// Le misure geodetiche richiedono l'ellissoide del datum del CRS, che
+    /// solo un CRS della tabella integrata porta: nessun ripiego su WGS 84.
+    #[error(
+        "ELLIPSOID_REQUIRED: le misure geodetiche richiedono l'ellissoide del datum del CRS \
+         (un CRS della tabella integrata)"
+    )]
+    EllipsoidRequired,
     /// Gli ingressi di un'operazione `SameProjected` hanno CRS diversi.
     #[error("CRS_MISMATCH: gli input non usano lo stesso CRS")]
     Mismatch,

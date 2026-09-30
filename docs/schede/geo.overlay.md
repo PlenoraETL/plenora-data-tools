@@ -27,7 +27,7 @@ lato; se l'altro lato non ha righe, è la riga invariata.
 ### Schema
 
 Tre colonne, in quest'ordine: la colonna geometria della sinistra (stesso
-nome e CRS, `Binary` GeoArrow-WKB, nullable, XY, tipi dichiarati `Polygon`
+nome e CRS, `Binary` GeoArrow-WKB, non nullable (un pezzo non è mai vuoto), XY, tipi dichiarati `Polygon`
 e `MultiPolygon` `exact`, senza le chiavi dei tipi ereditate), poi
 `__left_index` e `__right_index`, `uint64` nullable: le posizioni delle
 righe d'origine, nulle dove il pezzo è un resto dell'altro lato. Le
@@ -88,11 +88,12 @@ parentesi:
 
 - `UnsupportedGeometry` (`InvalidPlan`): una geometria non è
   `Polygon`/`MultiPolygon`;
-- `InvalidGeometry` (`InvalidPlan`): un'unione o un pezzo non supera la
-  validazione OGC; oppure il join delle coppie candidate fallisce, anche
-  solo perché le coppie superano il limite di righe dell'arco;
-- `ResourceLimit` (`overlay_results`; `InvalidPlan`, non la categoria
-  `ResourceLimit`): i pezzi superano il limite di righe dell'arco;
+- `InvalidGeometry` (`InvalidPlan`): un ingresso che il join delle
+  coppie candidate rifiuta, un'unione o un pezzo che non supera la
+  validazione OGC;
+- `ResourceLimit` (`ResourceLimit`): le coppie candidate superano il
+  limite di righe dell'arco (`candidate_pairs`), o i pezzi lo superano
+  (`overlay_results`);
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`;
 - `PrecisionInsufficient` (`Unsupported`): la griglia di un overlay
   sposterebbe il risultato oltre la precisione (sotto, «Precisione»);
@@ -110,10 +111,10 @@ diagnostica per riga»).
 ### Limiti e deviazioni
 
 Solo parti poligonali: le intersezioni che si riducono a linee o punti
-sono escluse, come `keep_geom_type=True` di GeoPandas. Il superamento del
-limite delle coppie candidate esce come `InvalidGeometry`, non come
-`ResourceLimit`, e nessuno dei due limiti ha la categoria `ResourceLimit`
-nel runner: entrambi escono come `InvalidPlan`. I pezzi dipendono dai
+sono escluse, come `keep_geom_type=True` di GeoPandas. Fino alla versione 1
+del catalogo il superamento del limite delle coppie candidate usciva come
+`InvalidGeometry`, e i due limiti avevano la categoria `InvalidPlan`. I
+pezzi dipendono dai
 dati: il modello di costo non li prevede, e li limita solo il limite di
 righe dell'arco ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di

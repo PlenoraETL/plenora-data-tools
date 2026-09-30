@@ -15,7 +15,7 @@ use super::helpers::{
     parametro_non_decodificabile, parse_config, rebuild, short_id, validate_config_geometry_domain,
     validate_wkb_hex,
 };
-use super::producers::analyze_add_column;
+use super::producers::{analyze_add_column, geometry_nullable};
 use super::{ACCESSOR_COLUMNS, DIAGNOSTIC_COLUMNS, FRACTION_COLUMN};
 
 /// `bounds_extractor`: quattro colonne `{geometria}_minx/miny/maxx/maxy`.
@@ -63,9 +63,22 @@ pub(in crate::analyze) fn analyze_diagnostics(
             )));
         }
     }
+    // Tipo, conteggio e i tre flag ci sono per ogni geometria presente;
+    // `validity_reason` manca per una geometria valida, i limiti per una
+    // vuota.
     let diagnostic_fields: Vec<Field> = DIAGNOSTIC_COLUMNS
         .iter()
-        .map(|(name, data_type)| Field::new(*name, data_type.clone(), true))
+        .map(|(name, data_type)| {
+            let sempre_presente = matches!(
+                *name,
+                "geometry_type" | "coordinate_count" | "is_empty" | "is_finite" | "is_valid"
+            );
+            Field::new(
+                *name,
+                data_type.clone(),
+                geometry.nullable || !sempre_presente,
+            )
+        })
         .collect();
     fields
         .splice(position..=position, diagnostic_fields)
@@ -106,15 +119,20 @@ pub(in crate::analyze) fn analyze_geometry_accessors(
     };
     selected.sort_unstable();
     let prefix = parsed.output_prefix.as_deref().unwrap_or("");
+    let geometria_nullable = geometry_nullable(input);
     let mut fields = output_fields(input);
     for index in selected {
         let (name, data_type) = &ACCESSOR_COLUMNS[index];
+        // `start_point` ed `end_point` sono null anche per una geometria
+        // presente che non e' una linea aperta; gli altri solo dove la
+        // geometria e' null.
+        let nullable = geometria_nullable || matches!(*name, "start_point" | "end_point");
         let name = format!("{prefix}{name}");
         if !ensure_name(&name) {
             return Err(invalid_param(op, "output_prefix", "produce un nome vuoto"));
         }
         ensure_name_free(op, &fields, &name)?;
-        fields.push(Field::new(name, data_type.clone(), true));
+        fields.push(Field::new(name, data_type.clone(), nullable));
     }
     rebuild(input, fields, input.properties.clone())
 }
@@ -138,7 +156,9 @@ pub(in crate::analyze) fn analyze_line_locate_point(
     }
     validate_config_geometry_domain(op, "point_wkb", &point, input_crs(op, input)?)?;
     let name = output_name(op, parsed.output_column.as_deref(), FRACTION_COLUMN)?;
-    analyze_add_column(op, input, name, DataType::Float64)
+    // Null anche per una geometria presente: `None` per una non
+    // `LineString` o una linea vuota.
+    analyze_add_column(op, input, name, DataType::Float64, true)
 }
 
 /// Misure con colonna `Float64` aggiunta in coda (`area`, `length`,
@@ -151,5 +171,7 @@ pub(in crate::analyze) fn analyze_measure(
 ) -> Result<DataContract> {
     let parsed: OutputColumnConfig = parse_config(op, config)?;
     let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
-    analyze_add_column(op, input, name, DataType::Float64)
+    // Un valore per ogni geometria presente: null solo dove lo e' la
+    // geometria.
+    analyze_add_column(op, input, name, DataType::Float64, geometry_nullable(input))
 }

@@ -87,9 +87,9 @@ pub enum TopologyError {
     /// ricevuto.
     #[error("operazione topologica supportata solo per Polygon/MultiPolygon, ricevuto {0}")]
     UnsupportedGeometry(&'static str),
-    /// Un ingresso o un risultato non supera la validazione OGC; per
-    /// `polygon_overlay` anche un fallimento del join che cerca le coppie
-    /// candidate (compreso il superamento di `max_candidate_pairs`).
+    /// Un ingresso o un risultato non supera la validazione OGC (per
+    /// `polygon_overlay` anche un ingresso che il join delle coppie
+    /// candidate rifiuta).
     #[error("geometria topologica non valida: {0}")]
     InvalidGeometry(String),
     /// Un parametro fuori dominio (`snap_tolerance` negativa o non finita,
@@ -102,13 +102,13 @@ pub enum TopologyError {
         reason: &'static str,
     },
     /// Un limite di lavoro superato (`geometries`, `vertices`,
-    /// `overlay_results`).
+    /// `overlay_results`, `candidate_pairs` di `polygon_overlay`).
     #[error("limite {name} superato: valore={actual}, limite={limit}")]
     ResourceLimit {
         /// Il nome del limite.
         name: &'static str,
-        /// Il valore raggiunto (per `overlay_results` il primo oltre il
-        /// limite).
+        /// Il valore raggiunto (per `overlay_results` e `candidate_pairs`
+        /// il primo oltre il limite, un minorante del conteggio vero).
         actual: u64,
         /// Il limite.
         limit: u64,
@@ -152,6 +152,12 @@ fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, TopologyError> {
 /// Il fallimento del join spaziale nella lingua di questo modulo, senza
 /// perdere la differenza fra un ingresso sbagliato e un calcolo che non ha
 /// concluso.
+/// L'errore del join delle coppie candidate nella variante che gli
+/// corrisponde: il limite di coppie e' un limite (`ResourceLimit`, nome
+/// `candidate_pairs`), non una geometria invalida. Il join si ferma senza
+/// contare tutte le coppie: `actual` e' un minorante (`limit + 1`, il primo
+/// valore oltre il limite), non il conteggio vero. Esaustivo: una variante nuova del join non
+/// compila senza la sua traduzione.
 fn dal_join(error: crate::spatial_join::SpatialJoinError) -> TopologyError {
     use crate::spatial_join::SpatialJoinError as S;
     match error {
@@ -159,7 +165,19 @@ fn dal_join(error: crate::spatial_join::SpatialJoinError) -> TopologyError {
         S::CalcoloNonConcluso(forma) | S::Internal(forma) => {
             TopologyError::CalcoloNonConcluso(forma)
         }
-        altro => TopologyError::InvalidGeometry(altro.to_string()),
+        S::PairLimitExceeded { limit } => TopologyError::ResourceLimit {
+            name: "candidate_pairs",
+            actual: limit.saturating_add(1),
+            limit,
+        },
+        S::InvalidPairLimit => TopologyError::InvalidParameter {
+            name: "max_candidate_pairs",
+            reason: "deve essere maggiore di zero",
+        },
+        S::IndexOverflow => TopologyError::IndexOverflow,
+        altro @ (S::NonFiniteCoordinate { .. } | S::InvalidGeometry { .. }) => {
+            TopologyError::InvalidGeometry(altro.to_string())
+        }
     }
 }
 
@@ -510,10 +528,11 @@ fn push_piece(
 ///
 /// - `InvalidParameter`: `max_candidate_pairs` o `max_results` e' zero.
 /// - `UnsupportedGeometry`: un ingresso non e' `Polygon`/`MultiPolygon`.
-/// - `InvalidGeometry`: un ingresso non supera la validazione OGC, un pezzo
-///   o un'unione non e' valido, o il join delle coppie candidate fallisce
-///   (anche oltre `max_candidate_pairs`).
-/// - `ResourceLimit` (`overlay_results`): i pezzi superano `max_results`.
+/// - `InvalidGeometry`: un ingresso non supera la validazione OGC (anche nel
+///   join delle coppie candidate), un pezzo o un'unione non e' valido.
+/// - `ResourceLimit`: le coppie candidate superano `max_candidate_pairs`
+///   (`candidate_pairs`), i pezzi superano `max_results`
+///   (`overlay_results`).
 /// - `IndexOverflow`: un indice non entra in `u64`/`usize`.
 /// - `ValidazioneNonConclusa`, `PrecisionInsufficient`,
 ///   `CalcoloNonConcluso`: come [`boolean_operation`] (anche dal join).
@@ -990,6 +1009,22 @@ mod tests {
         }
         assert!(matches!(
             dal_join(S::InvalidPairLimit),
+            TopologyError::InvalidParameter { .. }
+        ));
+        // Il limite delle coppie e' un limite, non una geometria invalida.
+        assert!(matches!(
+            dal_join(S::PairLimitExceeded { limit: 7 }),
+            TopologyError::ResourceLimit {
+                name: "candidate_pairs",
+                actual: 8,
+                limit: 7
+            }
+        ));
+        assert!(matches!(
+            dal_join(S::NonFiniteCoordinate {
+                side: "left",
+                index: 0
+            }),
             TopologyError::InvalidGeometry(_)
         ));
     }

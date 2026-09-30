@@ -1,12 +1,14 @@
 ### Che cosa fa
 
 Aggiunge una colonna `float64` con l'area geodetica, in metri quadrati,
-dei poligoni e multi-poligoni di ogni riga, sull'ellissoide WGS 84. Le
+dei poligoni e multi-poligoni di ogni riga, sull'ellissoide del datum del
+CRS della colonna ([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le
 coordinate sono longitudine (`x`) e latitudine (`y`) in gradi e i lati sono
 geodetiche fra vertici consecutivi. Il verso degli anelli non conta: ogni
 poligono si orienta prima (esterno antiorario, buchi orari), e l'area è
-quella dell'esterno meno quella dei buchi (algoritmo di Karney,
-`geodesic_area_unsigned` di `geo`). Un `MultiPolygon` somma le aree dei
+quella dell'esterno meno quella dei buchi (algoritmo di Karney, il
+calcolo di `geodesic_area_unsigned` di `geo` sul `PolygonArea` di
+`geographiclib-rs` dell'ellissoide del datum). Un `MultiPolygon` somma le aree dei
 suoi poligoni.
 
 ### Parametri
@@ -17,7 +19,7 @@ suoi poligoni.
 
 ### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable, senza metadati. Le
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le
 altre colonne restano nell'ordine e con i loro metadati; la colonna
 geometria resta com'è. Metadati di schema e proprietà del contratto
 (`sorted_by`, `row_count`) si conservano.
@@ -45,7 +47,8 @@ CRS, config):
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
-- `Crs`: CRS della colonna assente o non risolto; CRS non geografico.
+- `Crs`: CRS della colonna assente o non risolto; CRS non geografico;
+  CRS senza l'ellissoide del datum (`ELLIPSOID_REQUIRED`).
 
 In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
@@ -63,7 +66,9 @@ Poi, per riga:
 - `InvalidPlan`: una geometria diversa da `Polygon` e `MultiPolygon`
   (errore del runner, «tipo geometria non supportato», prima del kernel);
   dal kernel (`ExtendedAlgorithmError`) `InvalidInput` (coordinate non
-  finite o geometria non valida per l'OGC), `InvalidGeographicCoordinate`
+  finite o geometria non valida per l'OGC; un lato con almeno 180 gradi
+  di longitudine o un anello che sul globo gira al contrario o copre mezzo
+  ellissoide, vedi «Limiti e deviazioni»), `InvalidGeographicCoordinate`
   (longitudine fuori da `[-180, 180]` o latitudine fuori da `[-90, 90]`),
   `InvalidOutput` (area non finita);
 - `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
@@ -71,17 +76,26 @@ Poi, per riga:
 
 ### Limiti e deviazioni
 
-- **Ellissoide sempre WGS 84**, qualunque sia il datum del CRS geografico
-  della colonna. Per la famiglia GRS 80 (ETRS89, RDN2008, NAD83...) la
-  differenza è trascurabile; per Monte Mario ed ED50 (ellissoide
-  internazionale 1924) l'area è quella delle stesse coordinate su WGS 84,
-  circa 8e-5 in meno della vera a 42° di latitudine (stima al primo
-  ordine), che supera perimetro per 1 cm già su un quadrato di circa 500 m
-  di lato; per OSGB36 (Airy) circa 2e-4 in più. Nessun errore lo segnala.
-- L'orientamento si decide nel piano lon/lat, mentre i lati sono
-  geodetiche: un poligono che attraversa l'antimeridiano, scritto con
-  longitudini da una parte e dall'altra di ±180, non è quello che il
-  piano lon/lat disegna.
+- L'interno si decide orientando nel piano lon/lat, mentre i lati sono
+  geodetiche. Un lato con almeno 180 gradi di longitudine (un poligono
+  sull'antimeridiano, scritto con longitudini da una parte e dall'altra di
+  ±180, o un anello attorno a un polo) la geodetica lo percorre
+  dall'altra parte, e l'area sarebbe quella del complemento sul globo: si
+  rifiuta (`InvalidInput`), invece di rendere un'area sbagliata come fino
+  alla versione 2 del catalogo. Un poligono sull'antimeridiano va diviso
+  in due. Lo stesso per ogni anello che, letto come geodetiche, gira al
+  contrario del piano (un lato lungo che passa dall'altra parte di un
+  vertice: il triangolo `0 30, 170 30, 85 31` è antiorario nel piano ma
+  orario sul globo, perché il lato fra i primi due vertici sale oltre 80°)
+  o copre mezzo ellissoide o più: l'area di ogni anello si calcola con
+  segno e un segno non positivo si rifiuta.
+- La validità OGC si verifica nel piano lon/lat: lati molto lunghi, letti
+  come geodetiche, possono incrociarsi dove i segmenti piani non lo
+  fanno, e l'area di un anello così non ha senso. Nessun controllo lo
+  cerca.
+- CRS proiettati rifiutati; fino alla versione 2 del catalogo l'ellissoide
+  era sempre WGS 84 (su ED50, a 42° di latitudine, circa 8e-5 di area in
+  meno, oltre perimetro per 1 cm già su un quadrato di 500 m).
 - Un poligono vuoto dà `-0.0`, non `0.0`.
 - Errori senza indice di riga della sorgente
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
@@ -89,12 +103,14 @@ voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 
-Nessun controllo e nessun rifiuto di precisione. Su WGS 84 l'area è quella
-dell'algoritmo di Karney in `f64`; la regola di 1 cm per le aree ammette
-circa perimetro per 1 cm ([README, «Precisione delle operazioni
-geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
-e con un datum su un altro ellissoide lo scarto dell'ellissoide la supera
-(vedi sopra).
+Nessun controllo e nessun rifiuto di precisione. L'area è quella
+dell'algoritmo di Karney in `f64` sull'ellissoide del datum; la regola di
+1 cm per le aree ammette circa perimetro per 1 cm ([README, «Precisione
+delle operazioni geografiche: 1 cm a
+terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La somma non è compensata (come in `geo`): su un poligono piccolo lontano
+dall'equatore lo scarto da GeographicLib è dell'ordine di 1e-5 m²
+(l'oracolo ammette 1e-3 m²).
 
 ### Complessità
 

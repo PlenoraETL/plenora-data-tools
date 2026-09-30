@@ -306,6 +306,47 @@ vertice d'ingresso non sono riconosciuti.
 prodotto. Per l'assenza del controllo a posteriori, vedi l'hazard
 «Nessun controllo a posteriori».
 
+### Misure geodetiche: l'ellissoide del datum
+
+**Regola.** `geo.geodesic_distance`, `geo.geodesic_line_length`,
+`geo.geodesic_area` e `geo.bearing` risolvono il problema geodetico
+(Karney 2013, `geographiclib-rs`) sull'**ellissoide del datum del CRS
+della colonna**, quello della tabella integrata
+([«CRS integrati»](#crs-integrati)): Internazionale 1924 per ED50 e Monte
+Mario, Clarke 1866 per NAD27, Airy per OSGB36, Bessel per DHDN, GRS 80,
+WGS 84. `geo.haversine_distance` misura sulla sfera del raggio medio
+IUGG `R1 = a (1 - f / 3)` dello stesso ellissoide. Il kernel riceve
+l'ellissoide come argomento esplicito
+(`plenora_kernels_geo::geodetica::EllissoideGeodetico::da_crs`), senza
+valore predefinito; un CRS che non lo porta (risolto dal chiamante) si
+rifiuta in validazione con `ELLIPSOID_REQUIRED`. I CRS proiettati si
+rifiutano (`GEOGRAPHIC_CRS_REQUIRED`): le misure si chiedono sulle
+coordinate geografiche, dopo `geo.reproject` se serve. L'oracolo
+(`plenora-kernels-geo/tests/geodetica_oracolo.rs`) confronta distanze,
+azimut, sfera, lunghezze e aree con GeographicLib 2.0 e PROJ su ogni CRS
+geografico della tabella (`scripts/genera_riferimenti_geodetici.py`), entro
+un micrometro e 1e-3 m²; con WGS 84 i kernel coincidono al bit con quelli
+di `geo`.
+
+**Ambito.** Le cinque misure sopra; l'azimut dove non è definito (punti
+coincidenti, partenza su un polo, geodetica più breve non unica) si
+rifiuta, e l'area rifiuta un lato di almeno 180 gradi di longitudine
+(schede delle operazioni).
+
+**Hazard.** Fino alla versione di catalogo precedente (distanza e azimut
+1, lunghezza e area 2) ogni misura usava WGS 84 qualunque fosse il datum:
+circa 4 m ogni 100 km su ED50, senza errore. Resta una deviazione
+dichiarata: la precisione di un CRS geografico
+(`ResolvedCrs::precisione_coordinate`, 1 cm all'equatore) si calcola con i
+gradi dell'equatore di WGS 84 (111 319,49 m), non dell'ellissoide del
+datum. Su Internazionale 1924 e Clarke 1866 (semiassi maggiori di 251 e
+69 m) quel passo in gradi vale fino a 1,000 04 cm all'equatore: 0,4 µm
+oltre il centimetro, sotto ogni grandezza che il centimetro protegge.
+
+**Condizione di rientro.** Per la precisione: calcolarla dall'ellissoide
+del CRS quando la tabella lo porta, cambiando la precisione (e i test che
+la fissano) di tutti i kernel sui geografici.
+
 ### `geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata
 
 **Regola.** La matematica della riproiezione resta entro la precisione
@@ -714,7 +755,9 @@ riduce il maggiorante di circa `2^-53`.
 `plenora-data-tools@190c493`: id, alias legacy, parametri, schema di output,
 colonna `__class` (`polygon`, `cut_edge`, `dangle`, `invalid_ring`),
 `__parent_index` di `split`, nomi delle varianti d'errore e attribuzione del
-passo (`InvalidPlan`, `Internal` per ciò che è interno). Nel descrittore
+passo (`InvalidPlan`, `Internal` per ciò che è interno; dal ciclo dei
+difetti geo i limiti di lavoro e d'uscita superati sono `ResourceLimit`,
+[«Operazioni geo»](#operazioni-geo)). Nel descrittore
 cambiano solo i campi del backend: nessuna capability `geos`, maturità
 `KernelValidated`, `kernel_version` 2.
 
@@ -1303,7 +1346,7 @@ quella che il contratto dell'analisi dichiara:
 
 | operazioni | righe dell'uscita |
 | --- | --- |
-| `sjoin` (`predicate`), `nearest` (`max_distance`) | una per coppia trovata: le colonne di left di quella riga, `__right_index` (e `distance`); una riga di left senza coppie non compare |
+| `sjoin` (`predicate`), `nearest` (`max_distance`) | una per coppia trovata: le colonne di left di quella riga, `__right_index` (e `distance`), non nullable come la geometria di left nell'uscita; una riga di left senza coppie (o a geometria null) non compare |
 | `within`, `count_points_in_polygons` | allineate a left: la colonna in coda (`within`: la geometria di left è dentro una di right; conteggio dei punti di right in ogni poligono di left), null per una geometria di left null |
 | `clip` | allineata a left: ogni geometria ritagliata dall'unione di **tutte** le geometrie di right (la maschera), null dove il ritaglio è vuoto |
 | `overlay` (`mode`) | una per pezzo: la geometria e le righe d'origine `__left_index`, `__right_index` (null dove il pezzo non viene da quel lato); nessun attributo |
@@ -1315,12 +1358,12 @@ left non lo è. Per `sjoin` e `within` il tetto delle coppie è il limite
 di righe dell'arco, per `nearest` i confronti sono al più il quadrato del
 maggiore fra `max_input_rows` e `max_rows_per_edge` (come nel progetto d'origine).
 
-`collect` ordina i gruppi per la chiave
-testuale di `190c493` (tipo, presenza e lunghezza di ogni valore, poi il
-valore): un ordine deterministico, non quello dei valori (`"pari"` prima
-di `"dispari"`). Restano errori dei dati, in esecuzione, un `Binary` non
-UTF-8, una data o un istante fuori intervallo, una chiave di dizionario
-fuori dal dizionario.
+`collect` ordina i gruppi nell'ordine naturale dei valori delle chiavi,
+con il comparatore di `table.sort` (`compare_cells_typed`: numeri per
+valore, testo per byte, istanti per istante, null dopo i valori); a
+`190c493` era l'ordine di una chiave testuale con la lunghezza in testa
+(un valore di 10 caratteri prima di uno di 9). Resta un errore dei dati,
+in esecuzione, una chiave di dizionario fuori dal dizionario.
 
 **Config.** Si legge una volta, in validazione, con i tipi dell'analisi
 (`plenora_kernels_geo::analyze::config`, pubblici per questo): nessuna
@@ -1331,9 +1374,8 @@ per le altre due, e il tipo che il kernel chiede (`LineString` per
 `frechet_distance`; `Point` per `haversine_distance`,
 `geodesic_distance`, `bearing`): un kernel l'avrebbe rifiutata alla prima
 riga non null, e su una tabella vuota o tutta null mai. Allo stesso modo
-l'analisi di `collect` rifiuta le chiavi `group_by` che non si leggono come
-testo (`validate_text_convertible` dei kernel tabellari: tipo e fuso
-orario). La
+l'analisi di `collect` rifiuta le chiavi `group_by` senza un ordine
+naturale (`is_sortable` dei kernel tabellari, come `table.sort`). La
 validazione rifiuta esattamente ciò che l'analisi rifiuta (test
 `la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta`); in più
 solo `Unsupported` per le operazioni senza dispatch.
@@ -1375,10 +1417,15 @@ espansioni, `line_merge` e `polygonize`; `MAX_CLEAN_VERTICES` e
 e `frechet_distance` (l'ordine di `MAX_NODING_WORK`); una `Int64` di
 `from_coords` oltre `2^53` in modulo si rifiuta (non è esatta in `f64`).
 
-**Errori.** Categoria come nei kernel e nel passo geo di `190c493`:
-`Internal` ciò che non ha concluso o un'invariante violata, `Unsupported`
-la precisione insufficiente, `InvalidPlan` il resto, con il nome
-dell'operazione e del passo; il testo è quello dei kernel, senza valori.
+**Errori.** Categoria come nei kernel: `Internal` ciò che non ha concluso
+o un'invariante violata, `Unsupported` la precisione insufficiente,
+`ResourceLimit` un limite di lavoro, d'uscita o di coppie superato dai
+dati (la definizione di `PlenoraError::ResourceLimit`: il piano è
+corretto, sono i dati a non entrarci; a `190c493` e fino alle versioni di
+catalogo precedenti a questo ciclo erano `InvalidPlan`), `InvalidPlan` il
+resto (una config illeggibile anche per `geo.reproject`, che rendeva
+`InvalidConfiguration`), con il nome dell'operazione e del passo; il testo
+è quello dei kernel, senza valori.
 Il primo errore è quello della prima riga, in ordine di riga.
 
 **Diagnostica per riga.** Delle geo che il catalogo dichiara con

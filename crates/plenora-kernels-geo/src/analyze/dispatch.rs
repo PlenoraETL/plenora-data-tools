@@ -30,7 +30,7 @@ use super::measures::{
 };
 use super::producers::{
     analyze_add_column, analyze_collect, analyze_expand, analyze_geometry_only, analyze_snap,
-    analyze_subdivide,
+    analyze_subdivide, geometry_nullable, with_active_geometry_nullability,
 };
 use super::quality::{analyze_cluster_dbscan, analyze_coverage_validate, analyze_shared_paths};
 use super::{
@@ -70,6 +70,29 @@ pub(in crate::analyze) fn require_resolved_crs<'a>(
     }
 }
 
+/// Le misure geodetiche (`geodesic_distance`, `geodesic_line_length`,
+/// `geodesic_area`, `bearing`, `haversine_distance`) si calcolano
+/// sull'ellissoide del datum del CRS della colonna: un CRS che non lo porta
+/// (risolto dal chiamante, fuori tabella) si rifiuta qui, in validazione,
+/// con `Crs` (`ELLIPSOID_REQUIRED`), mai con un ripiego su WGS 84.
+pub(in crate::analyze) fn require_geodetic_ellipsoid(op: &str, crs: &ResolvedCrs) -> Result<()> {
+    crate::geodetica::EllissoideGeodetico::da_crs(crs)
+        .map(drop)
+        .map_err(|error| PlenoraError::Crs(format!("{op}: {error}")))
+}
+
+/// Le operazioni che misurano sull'ellissoide del datum.
+pub(in crate::analyze) const fn is_geodetic_measure(op: &str) -> bool {
+    matches!(
+        op.as_bytes(),
+        b"geo.geodesic_distance"
+            | b"geo.geodesic_line_length"
+            | b"geo.geodesic_area"
+            | b"geo.bearing"
+            | b"geo.haversine_distance"
+    )
+}
+
 /// Trasformazioni 1:1 in place con parametri: config stretta (campi
 /// sconosciuti rifiutati) e domini dei parametri, `InvalidPlan` se violati.
 pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) -> Result<()> {
@@ -89,8 +112,7 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
         }
         "geo.simplify" => {
             let parsed: SimplifyConfig = parse_config(op, config)?;
-            ensure_non_negative(op, "tolerance", parsed.tolerance)?;
-            let _ = &parsed.policy;
+            parsed.soglia(op)?;
         }
         "geo.affine_transform" => {
             let parsed: AffineTransformConfig = parse_config(op, config)?;
@@ -199,7 +221,16 @@ pub(in crate::analyze) fn analyze_unary_pair(
         )));
     }
     let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
-    analyze_add_column(op, input, name, data_type)
+    // Le distanze piane da o verso una geometria vuota non hanno valore
+    // (`None` del kernel): null anche per una geometria presente. Le altre
+    // (predicati, distanze geografiche, azimut) hanno un valore per ogni
+    // geometria presente.
+    let nullable = geometry_nullable(input)
+        || matches!(
+            op,
+            "geo.distance" | "geo.hausdorff_distance" | "geo.frechet_distance"
+        );
+    analyze_add_column(op, input, name, data_type, nullable)
 }
 
 /// Proprieta' `exact` della mappa tipi di output: le liste della mappa sono
@@ -353,20 +384,24 @@ fn analyze_unary_shape(
         | "geo.perimeter"
         | "geo.geodesic_line_length"
         | "geo.geodesic_area" => {
-            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
+            let crs = require_resolved_crs(op, geometry)?;
+            validate_requirement(requirement, &[crs])?;
+            if is_geodetic_measure(op) {
+                require_geodetic_ellipsoid(op, crs)?;
+            }
             analyze_measure(op, input, config)
         }
         "geo.vertex_count" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
-            analyze_add_column(op, input, name, DataType::UInt64)
+            analyze_add_column(op, input, name, DataType::UInt64, geometry.nullable)
         }
         "geo.to_wkt" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             let name = output_name(op, parsed.output_column.as_deref(), WKT_COLUMN)?;
-            analyze_add_column(op, input, name, DataType::Utf8)
+            analyze_add_column(op, input, name, DataType::Utf8, geometry.nullable)
         }
         "geo.bounds_extractor" => {
             let _: EmptyConfig = parse_config(op, config)?;
@@ -411,7 +446,9 @@ fn analyze_unary_shape(
         "geo.clean_topology" => {
             let parsed: CleanTopologyConfig = parse_config(op, config)?;
             ensure_non_negative(op, "snap_tolerance", parsed.snap_tolerance)?;
-            let _ = (&parsed.remove_overlaps, &parsed.fill_gaps);
+            // `remove_overlaps` e `fill_gaps` sono obbligatori: la loro
+            // assenza la rifiuta la lettura della config, qui sopra.
+            let _ = (parsed.remove_overlaps, parsed.fill_gaps);
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             // Input poligonale, output poligonale: una riga non toccata resta
             // del suo tipo, la chiusura e la rimozione delle sovrapposizioni
@@ -429,7 +466,10 @@ fn analyze_unary_shape(
         "geo.dissolve" | "geo.line_builder" | "geo.polygon_builder" | "geo.line_merge" => {
             let _: EmptyConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_geometry_only(input, geometry, &[])
+            // `line_merge` emette una riga per linea fusa, mai null; le altre
+            // una riga, null per una tabella vuota o tutta null (e i builder
+            // anche per meno punti di quanti ne servono).
+            analyze_geometry_only(input, geometry, &[], op != "geo.line_merge")
         }
         "geo.collect" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
@@ -467,10 +507,12 @@ fn analyze_unary_shape(
             let parsed: PolygonizeConfig = parse_config(op, config)?;
             let _ = (&parsed.node_input, &parsed.require_complete);
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
+            // Una riga per faccia o residuo prodotto: mai null.
             analyze_geometry_only(
                 input,
                 geometry,
                 &[Field::new(CLASS_COLUMN, DataType::Utf8, false)],
+                false,
             )
         }
         "geo.distance"
@@ -479,7 +521,11 @@ fn analyze_unary_shape(
         | "geo.haversine_distance"
         | "geo.geodesic_distance"
         | "geo.bearing" => {
-            validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
+            let crs = require_resolved_crs(op, geometry)?;
+            validate_requirement(requirement, &[crs])?;
+            if is_geodetic_measure(op) {
+                require_geodetic_ellipsoid(op, crs)?;
+            }
             analyze_unary_pair(op, input, config, DataType::Float64)
         }
         _ if op.starts_with("geo.predicate_") => {
@@ -585,12 +631,12 @@ pub(in crate::analyze) fn analyze_binary(
         "geo.within" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             let name = output_name(op, parsed.output_column.as_deref(), WITHIN_COLUMN)?;
-            analyze_add_column(op, left, name, DataType::Boolean)
+            analyze_add_column(op, left, name, DataType::Boolean, left_geometry.nullable)
         }
         "geo.count_points_in_polygons" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             let name = output_name(op, parsed.output_column.as_deref(), COUNT_COLUMN)?;
-            analyze_add_column(op, left, name, DataType::UInt64)
+            analyze_add_column(op, left, name, DataType::UInt64, left_geometry.nullable)
         }
         // Join con lineage: righe moltiplicate, proprieta' eliminate. Non
         // c'e' `__left_index`: il contratto dichiara le colonne left piu'
@@ -601,26 +647,33 @@ pub(in crate::analyze) fn analyze_binary(
             let mut fields = output_fields(left);
             ensure_name_free(op, &fields, RIGHT_INDEX_COLUMN)?;
             fields.push(Field::new(RIGHT_INDEX_COLUMN, DataType::UInt64, false));
-            rebuild(left, fields, ContractProperties::default())
+            // Una riga per coppia: una geometria sinistra null non ha coppie.
+            let output = rebuild(left, fields, ContractProperties::default())?;
+            with_active_geometry_nullability(&output, false)
         }
         "geo.nearest" => {
             let parsed: NearestConfig = parse_config(op, config)?;
             if let Some(max_distance) = parsed.max_distance {
                 ensure_non_negative(op, "max_distance", max_distance)?;
             }
+            // Una riga per coppia trovata: `__right_index` e `distance` ci
+            // sono sempre (una riga sinistra senza vicino non compare).
             let mut fields = output_fields(left);
             for (name, data_type) in [
                 (RIGHT_INDEX_COLUMN, DataType::UInt64),
                 (DISTANCE_COLUMN, DataType::Float64),
             ] {
                 ensure_name_free(op, &fields, name)?;
-                fields.push(Field::new(name, data_type, true));
+                fields.push(Field::new(name, data_type, false));
             }
-            rebuild(left, fields, ContractProperties::default())
+            let output = rebuild(left, fields, ContractProperties::default())?;
+            with_active_geometry_nullability(&output, false)
         }
         "geo.overlay" => {
             let parsed: OverlayConfig = parse_config(op, config)?;
             let _ = &parsed.mode;
+            // Un pezzo non e' mai vuoto ne' null; `__left_index` o
+            // `__right_index` e' null per un resto dell'altro lato.
             analyze_geometry_only(
                 left,
                 left_geometry,
@@ -628,6 +681,7 @@ pub(in crate::analyze) fn analyze_binary(
                     Field::new(LEFT_INDEX_COLUMN, DataType::UInt64, true),
                     Field::new(RIGHT_INDEX_COLUMN, DataType::UInt64, true),
                 ],
+                false,
             )
         }
         _ => Err(PlenoraError::Unsupported(format!(

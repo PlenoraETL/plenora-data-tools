@@ -12,7 +12,7 @@ di chiusura (un quadrato ne ha 5); una geometria vuota ne ha 0.
 
 ### Schema
 
-Aggiunge in coda `output_column`, `uint64` nullable, senza metadati di
+Aggiunge in coda `output_column`, `uint64`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati di
 campo. Le altre colonne (geometria compresa), i metadati di schema e le
 proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 

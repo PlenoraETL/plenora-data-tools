@@ -65,8 +65,10 @@ Dal kernel (`extended::hausdorff_distance`, `ExtendedError`), per riga:
 
 - `InvalidPlan`: `InvalidInput` (coordinate non finite o geometria della
   riga non valida OGC; `other_wkb` è già validata in analisi),
-  `WorkLimit` (il prodotto dei vertici delle due geometrie supera
-  `10^8` coppie, il tetto che il runner passa al kernel), `IndexOverflow`;
+  `IndexOverflow`;
+- `ResourceLimit`: `WorkLimit` (il prodotto dei vertici delle due
+  geometrie supera `10^8` coppie, il tetto che il runner passa al
+  kernel);
 - `Internal`: `ValidazioneNonConclusa` e `CalcoloNonConcluso`
   (validazione o calcolo interrotti).
 

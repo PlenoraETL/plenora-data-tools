@@ -15,12 +15,13 @@ delle righe ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `group_by` | lista di stringhe | obbligatorio | colonne dell'ingresso, non vuota, senza ripetizioni, diversa dalla colonna geometria, di un tipo leggibile come testo | chiavi di gruppo |
+| `group_by` | lista di stringhe | obbligatorio | colonne dell'ingresso, non vuota, senza ripetizioni, diversa dalla colonna geometria, di un tipo con un ordine naturale (quelli di `table.sort`) | chiavi di gruppo |
 
 ### Schema
 
 Prima la colonna geometria, con nome e metadati d'ingresso (la
-dichiarazione dei tipi riscritta) e nullable; poi le colonne `group_by`,
+dichiarazione dei tipi riscritta), nullable solo se lo è quella
+d'ingresso (null per un gruppo di sole geometrie null); poi le colonne `group_by`,
 nell'ordine della lista, identiche all'ingresso (tipo, nullabilità,
 metadati). I metadati di schema restano; nessuna proprietà del contratto
 sopravvive. Tipi dichiarati, se l'ingresso li dichiara `exact` o `mixed`
@@ -32,21 +33,27 @@ un solo tipo semplice.
 
 Aggregazione: una riga per gruppo, con la geometria raccolta e i valori
 chiave della prima riga del gruppo. Due righe stanno nello stesso gruppo
-se ogni chiave ha lo stesso tipo e la stessa forma testuale
-(`scalar_as_string` dei kernel tabellari), o è nulla in entrambe: un
-valore nullo è un valore di gruppo come gli altri, distinto dal testo
-vuoto. Un gruppo senza geometrie non nulle dà una geometria nulla; una
+se ogni chiave è uguale per il confronto tipizzato di `table.sort`
+(`compare_cells_typed` dei kernel tabellari: numeri per valore, testo per
+byte, istanti per istante, `Float64` per `total_cmp`, quindi `-0.0` e
+`0.0` in gruppi distinti e un NaN uguale solo a un NaN con gli stessi
+bit), o è nulla in entrambe: un valore nullo è un valore di gruppo come
+gli altri, distinto dal testo vuoto. Un gruppo senza geometrie non nulle dà una geometria nulla; una
 tabella vuota non dà righe.
 
 ### Ordine
 
-I gruppi escono in ordine lessicografico della chiave testuale del
-progetto d'origine (`190c493`): per ogni colonna chiave il tipo, la
-presenza e la lunghezza del valore, poi il valore. È un ordine
-deterministico, non quello dei valori (`"pari"` prima di `"dispari"`,
-perché più corto; `10` dopo `9`; a parità delle chiavi precedenti una
-chiave nulla viene prima). Dentro una geometria raccolta i membri
-seguono l'ordine delle righe.
+I gruppi escono nell'**ordine naturale dei valori** delle chiavi, dalla
+prima alla seconda a parità della prima, come `table.sort` crescente:
+numeri per valore (`-10` prima di `-1`, `9` prima di `10`), testo per
+byte UTF-8 (`"aaaaaaaaa"` prima di `"bbbbbbbbbb"` qualunque sia la
+lunghezza), date e istanti per istante, booleani `false` prima di `true`,
+`Float64` per `total_cmp`; una chiave nulla dopo i valori. Dentro una
+geometria raccolta i membri seguono l'ordine delle righe. Fino alla
+versione 1 del catalogo l'ordine era quello della chiave testuale di
+`190c493`, con la lunghezza del valore scritta come testo in testa: un
+valore di 10 caratteri prima di uno di 9, `3` prima di `-5`, e una chiave
+nulla prima dei valori.
 
 ### Errori
 
@@ -54,8 +61,8 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `group_by` vuota, con nomi
   vuoti, con ripetizioni o con la colonna geometria; una chiave di un tipo
-  che non si legge come testo (`validate_text_convertible` dei kernel
-  tabellari: tipo e fuso orario);
+  senza un ordine naturale (`is_sortable` dei kernel tabellari, lo stesso
+  controllo di `table.sort`);
 - `Schema`: una colonna di `group_by` non esiste; l'ingresso non ha
   esattamente una colonna geometria, o la colonna non è riconoscibile come
   WKB;
@@ -71,9 +78,8 @@ dell'ingresso dichiara con un elenco e che non vi compare. Poi la
 decodifica completa con la validazione OGC: `InvalidPlan` per una
 geometria non valida, `Internal` se la validazione non conclude.
 
-La lettura delle chiavi come testo fallisce, con un errore esplicito, per
-un `Binary` non UTF-8, una data o un istante fuori intervallo, una chiave
-di dizionario fuori dal dizionario.
+Il confronto delle chiavi fallisce, con un errore esplicito (`Schema`),
+per una chiave di dizionario fuori dal dizionario.
 
 Il calcolo di un gruppo rifiuta una geometria che non supera la validazione
 OGC (`ExtensionError::InvalidInput`) e una raccolta che non la supera
@@ -85,7 +91,6 @@ in `InvalidPlan`; una validazione che non conclude è `Internal`.
 
 Nessuna unione: poligoni che si sovrappongono o si toccano lungo un lato
 si rifiutano invece di fondersi (per l'unione c'è `geo.dissolve`).
-L'ordine dei gruppi è quello della chiave testuale, non quello dei valori.
 Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
@@ -97,7 +102,8 @@ Esatta: le geometrie si copiano senza calcolo
 
 ### Complessità
 
-O(n) sulle righe per la raccolta, più la validazione OGC di ogni geometria
+O(n log n) sulle righe per l'ordinamento delle chiavi e O(n) per la
+raccolta, più la validazione OGC di ogni geometria
 e di ogni raccolta (O(v²) nel caso peggiore sui vertici `v` del gruppo);
 memoria O(n) per le geometrie raccolte.
 

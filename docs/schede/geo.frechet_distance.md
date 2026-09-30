@@ -79,9 +79,10 @@ Poi, per riga:
 - `InvalidPlan`: la geometria della riga non è una `LineString` (errore
   del runner, «tipo geometria non supportato»); dal kernel `InvalidInput`
   (coordinate non finite o linea con meno di due punti distinti),
-  `WorkLimit` (prodotto dei vertici delle due linee oltre `10^8`, il
-  tetto che il runner passa, o non rappresentabile in `u64`),
   `IndexOverflow`;
+- `ResourceLimit`: dal kernel `WorkLimit` (prodotto dei vertici delle due
+  linee oltre `10^8`, il tetto che il runner passa, o non rappresentabile
+  in `u64`);
 - `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
   conclude) e `CalcoloNonConcluso` (panico di `geo`).
 

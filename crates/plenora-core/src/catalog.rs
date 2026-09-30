@@ -1792,7 +1792,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         expansion_constraint = SumRelative,
-        semantic_version = 2
+        semantic_version = 3,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.area",
@@ -1807,7 +1808,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TerminalMeasure,
-        semantic_version = 2
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.boundary",
@@ -1868,7 +1870,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        contract_analysis_version = 2
+        semantic_version = 2,
+        config_schema_version = 2,
+        contract_analysis_version = 3
     ),
     // clip e le quattro booleane allineate: una sola geometria (anche Multi)
     // per riga sinistra, nella sua posizione -> 1:1 e `LeftRelative`. Il
@@ -1907,8 +1911,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        contract_analysis_version = 2,
-        expansion_constraint = LeftRelative
+        expansion_constraint = LeftRelative,
+        semantic_version = 2,
+        contract_analysis_version = 3
     ),
     op!(
         "geo.difference",
@@ -1970,7 +1975,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Known),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.from_coords",
@@ -2014,7 +2020,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TerminalMeasure,
-        semantic_version = 2
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.line_builder",
@@ -2047,7 +2054,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        expansion_constraint = LeftRelative
+        expansion_constraint = LeftRelative,
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     // overlay: un left puo' produrre piu' pezzi (OneToMany).
     op!(
@@ -2063,7 +2072,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         expansion_constraint = SumRelative,
-        semantic_version = 2
+        semantic_version = 3,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.perimeter",
@@ -2078,7 +2089,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TerminalMeasure,
-        semantic_version = 2
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.point_on_surface",
@@ -2124,7 +2136,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TransformInPlace,
-        semantic_version = 2
+        semantic_version = 3,
+        config_schema_version = 2,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.symmetric_difference",
@@ -2154,7 +2169,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TerminalMeasure,
-        semantic_version = 2
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     // union: riga `i` con riga `i` (lati con le stesse righe), come le altre
     // booleane allineate. Dichiarava `SumRelative` (uscita / (sinistra +
@@ -2191,7 +2207,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TerminalMeasure,
-        semantic_version = 2
+        semantic_version = 2,
+        contract_analysis_version = 2
     ),
     // Triangolazione caricata in blocco (spade `bulk_load`) al posto
     // dell'inserimento incrementale di `geo`: kernel 2; celle a qualche ulp
@@ -2211,7 +2228,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        semantic_version = 2,
+        semantic_version = 3,
         contract_analysis_version = 2,
         kernel_version = 2
     ),
@@ -2227,8 +2244,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        contract_analysis_version = 2,
-        expansion_constraint = LeftRelative
+        expansion_constraint = LeftRelative,
+        semantic_version = 2,
+        contract_analysis_version = 3
     ),
     // `make_valid` è TransformInPlace come le altre trasformazioni 1:1 sulla
     // stessa colonna: che accetti ingressi OGC-invalidi è una proprietà
@@ -2251,7 +2269,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TransformInPlace,
-        semantic_version = 2,
+        semantic_version = 3,
         kernel_version = 2
     ),
     // Riproiezione in Rust puro (`plenora_core::crs::riproiezione`,
@@ -2276,6 +2294,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TransformInPlace,
         semantic_version = 2,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     // --- Predicati DE-9IM, estensioni geo ------------------------------
@@ -2290,7 +2309,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_disjoint",
@@ -2303,7 +2323,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_contains",
@@ -2316,7 +2337,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_within",
@@ -2329,7 +2351,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_equals_topo",
@@ -2342,7 +2365,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_covers",
@@ -2355,7 +2379,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_covered_by",
@@ -2368,7 +2393,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_contains_properly",
@@ -2381,7 +2407,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_touches",
@@ -2394,7 +2421,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_crosses",
@@ -2407,7 +2435,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.predicate_overlaps",
@@ -2420,7 +2449,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     // --- Estensioni geo -------------------------------------------------
     op!(
@@ -2496,7 +2526,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TransformInPlace,
-        semantic_version = 2
+        semantic_version = 3
     ),
     op!(
         "geo.hausdorff_distance",
@@ -2509,7 +2539,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2
     ),
     op!(
         "geo.haversine_distance",
@@ -2522,7 +2553,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Geographic),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.geodesic_distance",
@@ -2535,7 +2569,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Geographic),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.geodesic_line_length",
@@ -2549,7 +2586,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        semantic_version = 2
+        semantic_version = 3,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.densify",
@@ -2564,7 +2603,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         geo_fusion = TransformInPlace,
-        semantic_version = 2
+        semantic_version = 3
     ),
     op!(
         "geo.snap_to_grid",
@@ -2597,7 +2636,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        semantic_version = 2,
+        semantic_version = 3,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -2613,9 +2653,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         expansion_factor_exempt = true,
-        semantic_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 2
+        semantic_version = 3,
+        contract_analysis_version = 3,
+        kernel_version = 3
     ),
     // line_merge e polygonize: dall'intera tabella, una riga per percorso o
     // per faccia, anche piu' delle righe d'ingresso -> `WholeToMany`, esenti
@@ -2636,8 +2676,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         expansion_factor_exempt = true,
-        semantic_version = 2,
-        contract_analysis_version = 2
+        semantic_version = 3,
+        contract_analysis_version = 3
     ),
     op!(
         "geo.split",
@@ -2651,7 +2691,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        kernel_version = 2
+        semantic_version = 2,
+        contract_analysis_version = 2,
+        kernel_version = 3
     ),
     op!(
         "geo.line_substring",
@@ -2692,7 +2734,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::SameProjected),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2
     ),
     op!(
         "geo.bearing",
@@ -2705,7 +2748,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Geographic),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.geodesic_area",
@@ -2719,7 +2765,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        semantic_version = 2
+        semantic_version = 3,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.geometry_diagnostics",
@@ -2732,7 +2780,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Known),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     // --- Estensioni geo v1.1 ---------------------------------------------
     op!(
@@ -2748,7 +2797,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         semantic_version = 3,
-        contract_analysis_version = 2,
+        contract_analysis_version = 3,
         kernel_version = 2
     ),
     op!(
@@ -2762,7 +2811,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Known),
         &[],
         DefinedOrder,
-        KernelValidated
+        KernelValidated,
+        contract_analysis_version = 2
     ),
     op!(
         "geo.collect",
@@ -2775,7 +2825,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         Some(CrsRequirement::Known),
         &[],
         CanonicalOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 2,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "geo.line_locate_point",
@@ -2855,7 +2908,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        expansion_factor_exempt = true
+        expansion_factor_exempt = true,
+        semantic_version = 2
     ),
     op!(
         "geo.shared_paths",
@@ -3455,17 +3509,13 @@ mod tests {
                 "table.assert_foreign_key",
                 ExpansionConstraint::LeftRelative,
             ),
-            ("geo.sjoin", ExpansionConstraint::SumRelative),
             ("geo.clip", ExpansionConstraint::LeftRelative),
             ("geo.difference", ExpansionConstraint::LeftRelative),
             ("geo.intersection", ExpansionConstraint::LeftRelative),
-            ("geo.overlay", ExpansionConstraint::SumRelative),
             (
                 "geo.symmetric_difference",
                 ExpansionConstraint::LeftRelative,
             ),
-            ("geo.nearest", ExpansionConstraint::LeftRelative),
-            ("geo.within", ExpansionConstraint::LeftRelative),
             (
                 "geo.count_points_in_polygons",
                 ExpansionConstraint::LeftRelative,
@@ -3904,44 +3954,29 @@ mod tests {
             // `from_wkt`: raccolta nel kernel geo. La successiva dichiarazione
             // di encoding e tipi geometrici del produttore cambia anche
             // semantica e analisi del contratto.
-            ("geo.from_wkt", 3, 1, 2, 2),
             // Geo: il rifiuto per riga porta il payload
             // `plenora-row-diagnostics-v1` (comportamento osservabile; kernel
             // invariato -> solo incremento semantico).
             ("geo.affine_transform", 2, 1, 1, 1),
-            ("geo.area", 2, 1, 1, 1),
             ("geo.boundary", 2, 1, 1, 1),
             ("geo.bounds_extractor", 2, 1, 1, 1),
             ("geo.buffer", 2, 1, 1, 1),
             ("geo.centroid", 2, 1, 1, 1),
-            ("geo.concave_hull", 2, 1, 1, 1),
             ("geo.convex_hull", 2, 1, 1, 1),
-            ("geo.densify", 2, 1, 1, 1),
             ("geo.envelope", 2, 1, 1, 1),
             ("geo.from_coords", 2, 1, 1, 1),
-            ("geo.geodesic_area", 2, 1, 1, 1),
-            ("geo.geodesic_line_length", 2, 1, 1, 1),
-            ("geo.length", 2, 1, 1, 1),
             ("geo.line_interpolate_point", 2, 1, 1, 1),
             ("geo.line_substring", 2, 1, 1, 1),
             // Triangolazione caricata in blocco: kernel 2, uscita osservabile
             // cambiata (ordine di delaunay, rifiuti di precisione di voronoi).
-            ("geo.delaunay", 2, 1, 1, 2),
-            ("geo.voronoi", 2, 1, 2, 2),
             // Backend Rust al posto di GEOS: kernel 2 (vedi il descrittore).
-            ("geo.make_valid", 2, 1, 1, 2),
-            ("geo.perimeter", 2, 1, 1, 1),
             ("geo.point_on_surface", 2, 1, 1, 1),
             // Rust puro al posto di PROJ: kernel 2, config 2 (vedi il
             // descrittore).
-            ("geo.reproject", 2, 2, 1, 2),
             ("geo.rotate", 2, 1, 1, 1),
             ("geo.scale", 2, 1, 1, 1),
-            ("geo.simplify", 2, 1, 1, 1),
             ("geo.snap_to_grid", 2, 1, 1, 1),
-            ("geo.to_wkt", 2, 1, 1, 1),
             ("geo.translate", 2, 1, 1, 1),
-            ("geo.vertex_count", 2, 1, 1, 1),
         ];
         for (id, semantic, config_schema, contract_analysis, kernel) in expected {
             let descriptor = find_operation(id).expect(id);
@@ -3966,10 +4001,6 @@ mod tests {
         // config_schema, contract_analysis, kernel).
         let expected: &[(&str, u32, u32, u32, u32)] = &[
             // 1:N dichiarata, 1:1 resa.
-            ("geo.clean_topology", 1, 1, 2, 1),
-            ("geo.voronoi", 2, 1, 2, 2),
-            ("geo.count_points_in_polygons", 1, 1, 2, 1),
-            ("geo.within", 1, 1, 2, 1),
             // 1:N e MaxRelative (o SumRelative) dichiarate, una riga per riga
             // sinistra resa: il ritaglio su una maschera piccola non si
             // rifiuta piu'.
@@ -3980,8 +4011,6 @@ mod tests {
             // SumRelative -> LeftRelative: fattori fra 1/2 e 1 ora rifiutati.
             ("geo.union", 2, 1, 2, 1),
             // N:1 dichiarata, da tutta la tabella a molte righe resa.
-            ("geo.line_merge", 2, 1, 2, 1),
-            ("geo.polygonize", 2, 1, 2, 2),
             // Righe fisse, esenti: la tabella vuota da' la sua riga.
             ("geo.dissolve", 2, 1, 2, 1),
             ("geo.line_builder", 2, 1, 2, 1),
@@ -4110,9 +4139,7 @@ mod tests {
             // SumRelative: uscite prima rifiutate
             ("table.fuzzy_join", (1, 1, 1, 1), (1, 0, 0, 0)),
             // SumRelative: uscite prima rifiutate
-            ("geo.sjoin", (1, 1, 1, 1), (1, 0, 0, 0)),
             // SumRelative: uscite prima rifiutate
-            ("geo.overlay", (1, 1, 1, 1), (1, 0, 0, 0)),
         ];
         for (id, prima, incrementi) in motivi {
             let attese = (
@@ -4131,6 +4158,84 @@ mod tests {
                 ),
                 attese,
                 "{id}: versioni non allineate ai motivi dichiarati"
+            );
+        }
+    }
+
+    #[test]
+    fn geo_defect_cycle_changes_carry_the_declared_version_bumps() {
+        // Ciclo dei difetti geo: misure geodetiche sull'ellissoide del datum
+        // (semantica, analisi, kernel), `simplify` con `min_area` (config,
+        // analisi, semantica e kernel per la scala dell'area),
+        // `clean_topology` senza default (config, analisi), ordine naturale
+        // dei gruppi di `collect`, limiti superati come `ResourceLimit`
+        // (semantica: cambia la categoria dell'errore), config illeggibile
+        // di `reproject` come `InvalidPlan` (analisi), nullabilita'
+        // dichiarata allineata a quella emessa (analisi; kernel per gli
+        // adapter di `polygonize` e `split`). Scritta a mano, come la
+        // tabella della diagnostica per riga: (id, semantic, config_schema,
+        // contract_analysis, kernel).
+        // Le operazioni geo che il ciclo tocca escono dalle tabelle dei cicli
+        // precedenti (diagnostica per riga, forme, difetti-b): i valori qui
+        // includono quegli incrementi.
+        let expected: &[(&str, u32, u32, u32, u32)] = &[
+            ("geo.area", 2, 1, 2, 1),
+            ("geo.bearing", 2, 1, 2, 2),
+            ("geo.clean_topology", 2, 2, 3, 1),
+            ("geo.collect", 2, 1, 2, 2),
+            ("geo.concave_hull", 3, 1, 1, 1),
+            ("geo.count_points_in_polygons", 2, 1, 3, 1),
+            ("geo.coverage_validate", 2, 1, 1, 1),
+            ("geo.delaunay", 3, 1, 2, 2),
+            ("geo.densify", 3, 1, 1, 1),
+            ("geo.explode", 1, 1, 2, 1),
+            ("geo.frechet_distance", 2, 1, 1, 1),
+            ("geo.from_wkt", 3, 1, 3, 2),
+            ("geo.geodesic_area", 3, 1, 2, 2),
+            ("geo.geodesic_distance", 2, 1, 2, 2),
+            ("geo.geodesic_line_length", 3, 1, 2, 2),
+            ("geo.geometry_accessors", 1, 1, 2, 1),
+            ("geo.geometry_diagnostics", 1, 1, 2, 1),
+            ("geo.hausdorff_distance", 2, 1, 1, 1),
+            ("geo.haversine_distance", 2, 1, 2, 2),
+            ("geo.length", 2, 1, 2, 1),
+            ("geo.line_merge", 3, 1, 3, 1),
+            ("geo.make_valid", 3, 1, 1, 2),
+            ("geo.nearest", 2, 1, 2, 1),
+            ("geo.overlay", 3, 1, 2, 2),
+            ("geo.perimeter", 2, 1, 2, 1),
+            ("geo.polygonize", 3, 1, 3, 3),
+            ("geo.predicate_contains", 1, 1, 2, 1),
+            ("geo.predicate_contains_properly", 1, 1, 2, 1),
+            ("geo.predicate_covered_by", 1, 1, 2, 1),
+            ("geo.predicate_covers", 1, 1, 2, 1),
+            ("geo.predicate_crosses", 1, 1, 2, 1),
+            ("geo.predicate_disjoint", 1, 1, 2, 1),
+            ("geo.predicate_equals_topo", 1, 1, 2, 1),
+            ("geo.predicate_intersects", 1, 1, 2, 1),
+            ("geo.predicate_overlaps", 1, 1, 2, 1),
+            ("geo.predicate_touches", 1, 1, 2, 1),
+            ("geo.predicate_within", 1, 1, 2, 1),
+            ("geo.reproject", 2, 2, 2, 2),
+            ("geo.simplify", 3, 2, 2, 2),
+            ("geo.sjoin", 3, 1, 2, 1),
+            ("geo.split", 2, 1, 2, 3),
+            ("geo.to_wkt", 2, 1, 2, 1),
+            ("geo.vertex_count", 2, 1, 2, 1),
+            ("geo.voronoi", 3, 1, 2, 2),
+            ("geo.within", 2, 1, 3, 1),
+        ];
+        for (id, semantic, config_schema, contract_analysis, kernel) in expected {
+            let descriptor = find_operation(id).expect(id);
+            assert_eq!(
+                (
+                    descriptor.semantic_version,
+                    descriptor.config_schema_version,
+                    descriptor.contract_analysis_version,
+                    descriptor.kernel_version,
+                ),
+                (*semantic, *config_schema, *contract_analysis, *kernel),
+                "{id}: versioni non allineate al bump dichiarato"
             );
         }
     }

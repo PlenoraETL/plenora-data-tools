@@ -56,7 +56,8 @@ dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo
 
 Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
-`CalcoloNonConcluso`, in `InvalidPlan` per le altre. Rifiuta la geometria
+`CalcoloNonConcluso`, in `ResourceLimit` per `OutputLimit`, in
+`InvalidPlan` per le altre. Rifiuta la geometria
 con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
 `IndexOverflow` (conteggio delle coordinate oltre `u64`), `OutputLimit`

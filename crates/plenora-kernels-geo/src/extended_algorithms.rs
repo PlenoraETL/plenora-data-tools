@@ -12,15 +12,16 @@
 //! coordinate non finite o non valido per la validazione OGC prima di
 //! calcolare, e i kernel che producono geometrie rivalidano l'uscita.
 
-use geo::algorithm::line_measures::{
-    Bearing, Densify, Euclidean, FrechetDistance, Geodesic, InterpolateLine, Length,
-};
+use crate::geodetica::EllissoideGeodetico;
+use geo::algorithm::line_measures::{Densify, Euclidean, FrechetDistance, InterpolateLine, Length};
 use geo::algorithm::orient::{Direction, Orient};
 use geo::line_intersection::{line_intersection, LineIntersection};
 use geo::{
-    Coord, CoordsIter, GeodesicArea, Geometry, Line, LineString, MapCoords, MultiPolygon, Point,
-    Polygon, Triangle,
+    Coord, CoordsIter, Geometry, Line, LineString, MapCoords, MultiPolygon, Point, Polygon,
+    Triangle,
 };
+use geographiclib_rs::{InverseGeodesic as _, PolygonArea, Winding};
+use plenora_core::crs::GROUND_PRECISION_METRES;
 use rstar::{RTree, RTreeObject, AABB};
 use serde::Serialize;
 use spade::Triangulation as _;
@@ -78,6 +79,11 @@ pub enum ExtendedAlgorithmError {
     /// Longitudine fuori da `[-180, 180]` o latitudine fuori da `[-90, 90]`.
     #[error("coordinate geografiche fuori intervallo lon/lat")]
     InvalidGeographicCoordinate,
+    /// `bearing`: l'azimut non e' definito (punti coincidenti, origine su
+    /// un polo, geodetica piu' breve non unica); porta il caso, senza
+    /// coordinate.
+    #[error("azimut non definito: {0}")]
+    AzimutNonDefinito(&'static str),
     /// Un conteggio (coordinate, parti, triangoli) non sta in `u64`.
     #[error("conteggio non rappresentabile come uint64")]
     IndexOverflow,
@@ -647,16 +653,29 @@ fn validate_geographic_geometry(geometry: &Geometry<f64>) -> Result<(), Extended
 
 /// Azimut geodetico iniziale, in gradi, da `origin` a `destination`.
 ///
-/// E' la direzione della geodetica in partenza da `origin`, misurata in
-/// senso orario dal nord (nord 0, est 90, sud 180, ovest 270), in
-/// `[0, 360)`.
+/// E' la direzione della geodetica piu' breve in partenza da `origin`,
+/// misurata in senso orario dal nord (nord 0, est 90, sud 180, ovest 270),
+/// in `[0, 360)`.
 ///
 /// Coordinate `x` = longitudine, `y` = latitudine, in gradi. Il calcolo e'
-/// `Geodesic.bearing` di `geo` (problema inverso di Karney,
-/// `geographiclib-rs`) sempre sull'ellissoide WGS 84, qualunque sia il
-/// datum del chiamante. Due punti coincidenti danno 180 (l'azimut che
-/// `geographiclib-rs` rende per una geodetica di lunghezza zero), senza
-/// errore.
+/// il problema inverso di Karney (2013), `geographiclib-rs`,
+/// sull'ellissoide del datum del CRS (`ellissoide`, costruito con
+/// [`EllissoideGeodetico::da_crs`]), mai su un ellissoide di comodo.
+///
+/// Dove l'azimut non e' definito il kernel **rifiuta**, invece di rendere
+/// il valore convenzionale di `geographiclib` (180 per due punti
+/// coincidenti, 0 per due antipodi):
+///
+/// - punti coincidenti (distanza geodetica nulla, compresi `-180` e `180`
+///   alla stessa latitudine): nessuna direzione;
+/// - origine su un polo (latitudine `±90`): ogni direzione e' sud (o nord),
+///   e l'azimut dipenderebbe solo dalla longitudine scritta;
+/// - geodetica piu' breve non unica: destinazione sul luogo di taglio
+///   dell'origine (latitudine opposta e differenza di longitudine vicina a
+///   180, antipodi compresi). Le due geodetiche partono con azimut diversi
+///   (la seconda, per simmetria, con l'azimut d'arrivo della prima); si
+///   rifiuta quando le due direzioni si separano, alla distanza della
+///   destinazione, di piu' della precisione di 1 cm.
 ///
 /// # Errors
 ///
@@ -664,23 +683,78 @@ fn validate_geographic_geometry(geometry: &Geometry<f64>) -> Result<(), Extended
 ///   la validazione non conclude;
 /// - `InvalidGeographicCoordinate`: longitudine fuori da [-180, 180] o
 ///   latitudine fuori da [-90, 90];
-/// - `CalcoloNonConcluso`: il calcolo di `geo` e' andato in panico.
+/// - `AzimutNonDefinito`: i tre casi sopra;
+/// - `InvalidOutput`: azimut non finito (mai atteso);
+/// - `CalcoloNonConcluso`: il calcolo e' andato in panico.
 pub fn geodesic_bearing_degrees(
     origin: Point<f64>,
     destination: Point<f64>,
+    ellissoide: &EllissoideGeodetico,
 ) -> Result<f64, ExtendedAlgorithmError> {
     validate_geographic_geometry(&Geometry::MultiPoint(vec![origin, destination].into()))?;
-    protetto(|| Geodesic.bearing(origin, destination))
+    // Il polo e' un valore esatto della latitudine: il confronto e' esatto.
+    #[allow(clippy::float_cmp)]
+    let su_un_polo = origin.y().abs() == 90.0;
+    if su_un_polo {
+        return Err(ExtendedAlgorithmError::AzimutNonDefinito(
+            "origine su un polo",
+        ));
+    }
+    let (distanza, azimut_partenza, azimut_arrivo, _arco): (f64, f64, f64, f64) = protetto(|| {
+        ellissoide
+            .geodetica()
+            .inverse(origin.y(), origin.x(), destination.y(), destination.x())
+    })?;
+    if !(distanza.is_finite() && azimut_partenza.is_finite() && azimut_arrivo.is_finite()) {
+        return Err(ExtendedAlgorithmError::InvalidOutput(
+            "azimut NaN o infinito".to_owned(),
+        ));
+    }
+    if distanza == 0.0 {
+        return Err(ExtendedAlgorithmError::AzimutNonDefinito(
+            "punti coincidenti",
+        ));
+    }
+    // Luogo di taglio: solo con latitudini opposte la simmetria (riflessione
+    // sull'equatore e sul meridiano medio) porta la geodetica in una seconda,
+    // che parte con l'azimut d'arrivo della prima. Unica se le due
+    // coincidono entro 1 cm alla distanza della destinazione.
+    #[allow(clippy::float_cmp)] // Latitudini opposte esatte: e' la simmetria.
+    let opposte = destination.y() == -origin.y();
+    if opposte {
+        let scarto = scarto_angolare_gradi(azimut_partenza, azimut_arrivo).to_radians();
+        if scarto * distanza > GROUND_PRECISION_METRES {
+            return Err(ExtendedAlgorithmError::AzimutNonDefinito(
+                "geodetica piu' breve non unica (luogo di taglio, antipodi)",
+            ));
+        }
+    }
+    // Stessa normalizzazione di `Bearing` di `geo`: `[0, 360)`.
+    let azimut = (azimut_partenza + 360.0) % 360.0;
+    if !azimut.is_finite() {
+        return Err(ExtendedAlgorithmError::InvalidOutput(
+            "azimut NaN o infinito".to_owned(),
+        ));
+    }
+    Ok(azimut)
+}
+
+/// La differenza fra due azimut in gradi, in `[0, 180]`.
+fn scarto_angolare_gradi(primo: f64, secondo: f64) -> f64 {
+    let scarto = (primo - secondo).rem_euclid(360.0);
+    scarto.min(360.0 - scarto)
 }
 
 /// Area geodetica, in metri quadrati, di poligoni e multi-poligoni
-/// sull'ellissoide WGS 84, qualunque sia il datum del chiamante.
+/// sull'ellissoide del datum del CRS (`ellissoide`, costruito con
+/// [`EllissoideGeodetico::da_crs`]).
 ///
 /// Coordinate `x` = longitudine, `y` = latitudine, in gradi; i lati sono
 /// geodetiche fra vertici consecutivi. Ogni poligono si orienta prima (esterno
 /// antiorario, buchi orari, nel piano lon/lat), quindi il verso d'ingresso
-/// non conta; l'area e' quella dell'esterno meno quella dei buchi
-/// (`geodesic_area_unsigned` di `geo`, algoritmo di Karney). Un
+/// non conta; l'area e' quella dell'esterno meno quella dei buchi (il
+/// calcolo di `geodesic_area_unsigned` di `geo`, algoritmo di Karney, sul
+/// `PolygonArea` di `geographiclib-rs` dell'ellissoide dato). Un
 /// `MultiPolygon` somma le aree dei suoi poligoni, in ordine. Un poligono o
 /// un multi-poligono vuoto da' `-0.0`.
 ///
@@ -689,21 +763,52 @@ pub fn geodesic_bearing_degrees(
 /// - `InvalidInput`: coordinate NaN o infinite, o geometria OGC non valida;
 ///   `ValidazioneNonConclusa` se la validazione non conclude;
 /// - `InvalidGeographicCoordinate`: coordinate fuori intervallo lon/lat;
+/// - `InvalidInput`: un lato con differenza di longitudine di almeno 180
+///   gradi (poligono sull'antimeridiano o attorno a un polo), o un anello
+///   che, letto come geodetiche, gira al contrario del piano lon/lat o copre
+///   mezzo ellissoide: il verso nel piano non decide l'interno, e l'area
+///   sarebbe quella del complemento;
 /// - `UnsupportedGeometry`: geometria diversa da `Polygon`/`MultiPolygon`;
-/// - `CalcoloNonConcluso`: il calcolo di `geo` e' andato in panico;
+/// - `CalcoloNonConcluso`: il calcolo e' andato in panico;
 /// - `InvalidOutput`: area NaN o infinita.
-pub fn geodesic_area_m2(geometry: &Geometry<f64>) -> Result<f64, ExtendedAlgorithmError> {
+pub fn geodesic_area_m2(
+    geometry: &Geometry<f64>,
+    ellissoide: &EllissoideGeodetico,
+) -> Result<f64, ExtendedAlgorithmError> {
     validate_geographic_geometry(geometry)?;
+    // L'interno si sceglie orientando nel piano lon/lat. Un lato di 180
+    // gradi o piu' di longitudine (antimeridiano, anello attorno a un polo)
+    // la geodetica lo percorre dall'altra parte: si rifiuta subito. Gli altri
+    // casi in cui le geodetiche girano al contrario del piano li rifiuta
+    // `area_poligono`, dal segno dell'area di ogni anello.
+    let poligoni: &[Polygon<f64>] = match geometry {
+        Geometry::Polygon(polygon) => std::slice::from_ref(polygon),
+        Geometry::MultiPolygon(MultiPolygon(polygons)) => polygons,
+        _ => &[],
+    };
+    if poligoni
+        .iter()
+        .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
+        .flat_map(LineString::lines)
+        .any(|lato| (lato.end.x - lato.start.x).abs() >= 180.0)
+    {
+        return Err(ExtendedAlgorithmError::InvalidInput(
+            "lato di almeno 180 gradi di longitudine (antimeridiano o polo): interno ambiguo"
+                .to_owned(),
+        ));
+    }
     let area = match geometry {
         Geometry::Polygon(polygon) => {
-            protetto(|| polygon.orient(Direction::Default).geodesic_area_unsigned())?
+            protetto(|| area_poligono(&polygon.orient(Direction::Default), ellissoide))?
+                .map_err(|motivo| ExtendedAlgorithmError::InvalidInput(motivo.to_owned()))?
         }
         Geometry::MultiPolygon(MultiPolygon(polygons)) => {
             // Stessa somma di prima (`Iterator::sum`), sui valori protetti.
             let aree = polygons
                 .iter()
                 .map(|polygon| {
-                    protetto(|| polygon.orient(Direction::Default).geodesic_area_unsigned())
+                    protetto(|| area_poligono(&polygon.orient(Direction::Default), ellissoide))?
+                        .map_err(|motivo| ExtendedAlgorithmError::InvalidInput(motivo.to_owned()))
                 })
                 .collect::<Result<Vec<f64>, _>>()?;
             aree.into_iter().sum()
@@ -721,6 +826,52 @@ pub fn geodesic_area_m2(geometry: &Geometry<f64>) -> Result<f64, ExtendedAlgorit
         ));
     }
     Ok(area)
+}
+
+/// L'area di un poligono orientato nel piano lon/lat (esterno antiorario,
+/// buchi orari), sull'ellissoide dato: il calcolo di
+/// `geodesic_area_unsigned` di `geo` 0.33.1 (`geodesic_area(poly, sign =
+/// false, reverse = false, exterior_only = false)`) con una verifica in piu'.
+///
+/// Ogni anello si calcola **con segno** nel verso atteso: un'area positiva e
+/// minore di mezzo ellissoide vuol dire che l'anello, letto come geodetiche,
+/// gira davvero nel verso del piano, e allora il valore e' lo stesso, al
+/// bit, di `compute(false)` (la riduzione con e senza segno coincide in
+/// `(0, A/2)`). Un'area non positiva vuol dire che le geodetiche girano al
+/// contrario (un lato lungo che passa dall'altra parte di un vertice, per
+/// esempio il triangolo (0 30, 170 30, 85 31)): `compute(false)` renderebbe
+/// l'area del complemento sul globo, in silenzio. `Err` in quel caso, e per
+/// un anello di mezzo ellissoide o piu' (il segno non distingue piu'
+/// l'interno).
+fn area_poligono(
+    polygon: &Polygon<f64>,
+    ellissoide: &EllissoideGeodetico,
+) -> Result<f64, &'static str> {
+    let geodetica = ellissoide.geodetica();
+    let area_anello = |anello: &LineString<f64>, verso: Winding| {
+        let mut calcolo = PolygonArea::new(geodetica, verso);
+        for punto in anello.points() {
+            calcolo.add_point(punto.y(), punto.x());
+        }
+        let (_perimetro, area, _punti) = calcolo.compute(true);
+        // Un anello vuoto (poligono vuoto) ha area nulla, come prima.
+        #[allow(clippy::float_cmp)]
+        let vuoto = area == 0.0 && anello.0.len() < 4;
+        if area > 0.0 || vuoto {
+            Ok(area)
+        } else {
+            Err(
+                "anello che, letto come geodetiche, gira nel verso opposto a quello del piano \
+                 lon/lat o copre mezzo ellissoide: interno ambiguo",
+            )
+        }
+    };
+    let esterna = area_anello(polygon.exterior(), Winding::CounterClockwise)?;
+    let mut interne = 0.0;
+    for anello in polygon.interiors() {
+        interne += area_anello(anello, Winding::Clockwise)?;
+    }
+    Ok(esterna - interne)
 }
 
 /// Il referto di [`geometry_diagnostics`]: un campo per ognuna delle dieci
@@ -1490,17 +1641,31 @@ mod tests {
             Err(ExtendedAlgorithmError::WorkLimit { .. })
         ));
         assert_eq!(
-            geodesic_bearing_degrees(Point::new(0.0, 0.0), Point::new(0.0, 2.0)).unwrap(),
+            geodesic_bearing_degrees(
+                Point::new(0.0, 0.0),
+                Point::new(0.0, 2.0),
+                &crate::geodetica::wgs84_di_prova()
+            )
+            .unwrap(),
             0.0
         );
         let square = rect(0.0, 0.0, 1.0, 1.0);
-        let area = geodesic_area_m2(&square).unwrap();
+        let area = geodesic_area_m2(&square, &crate::geodetica::wgs84_di_prova()).unwrap();
         assert!(area > 12_000_000_000.0 && area < 13_000_000_000.0);
         let Geometry::Polygon(mut reversed) = square else {
             unreachable!()
         };
         reversed.exterior_mut(|ring| ring.0.reverse());
-        assert!((geodesic_area_m2(&Geometry::Polygon(reversed)).unwrap() - area).abs() < 1e-6);
+        assert!(
+            (geodesic_area_m2(
+                &Geometry::Polygon(reversed),
+                &crate::geodetica::wgs84_di_prova()
+            )
+            .unwrap()
+                - area)
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -1706,8 +1871,14 @@ mod tests {
         assert!(snap_to_grid(&Geometry::Point(Point::new(f64::MAX, 0.0)), 0.1).is_err());
 
         let geodesic_multi = Geometry::MultiPolygon(geo::MultiPolygon(vec![polygon]));
-        assert!(geodesic_area_m2(&geodesic_multi).unwrap() > 0.0);
-        assert!(geodesic_area_m2(&Geometry::Point(Point::new(0.0, 0.0))).is_err());
+        assert!(
+            geodesic_area_m2(&geodesic_multi, &crate::geodetica::wgs84_di_prova()).unwrap() > 0.0
+        );
+        assert!(geodesic_area_m2(
+            &Geometry::Point(Point::new(0.0, 0.0)),
+            &crate::geodetica::wgs84_di_prova()
+        )
+        .is_err());
         assert!(
             geometry_diagnostics(&Geometry::GeometryCollection(
                 Vec::<Geometry<f64>>::new().into()

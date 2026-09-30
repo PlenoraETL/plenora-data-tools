@@ -14,11 +14,13 @@ geo»](../README.md#operazioni-geo)).
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `snap_tolerance` | numero | obbligatorio | finito, `>= 0`, nelle unità del CRS | raggio della chiusura morfologica di `fill_gaps` |
-| `remove_overlaps` | booleano | `true` | `true`, `false` | toglie a ogni riga la parte coperta dalle righe precedenti |
-| `fill_gaps` | booleano | `true` | `true`, `false` | chiude, dentro ogni riga, rientranze e varchi più stretti di `2 · snap_tolerance` |
+| `remove_overlaps` | booleano | obbligatorio | `true`, `false` | toglie a ogni riga la parte coperta dalle righe precedenti |
+| `fill_gaps` | booleano | obbligatorio | `true`, `false` | chiude, dentro ogni riga, rientranze e varchi più stretti di `2 · snap_tolerance` |
 
-`remove_overlaps` e `fill_gaps` sono facoltativi: l'analisi li accetta
-senza leggerli, e quando mancano il runner usa `true`. `fill_gaps` con
+`remove_overlaps` e `fill_gaps` sono obbligatori, senza valore
+predefinito: cambiano la geometria delle righe, e il piano lo dice
+esplicitamente. Fino alla versione 1 del catalogo erano facoltativi e il
+runner, quando mancavano, usava `true` per entrambi. `fill_gaps` con
 `snap_tolerance` pari a `0` non fa nulla. Con tutti e due `false` le righe
 escono invariate (dopo il controllo di validità).
 
@@ -63,8 +65,8 @@ vince sempre su una successiva nelle sovrapposizioni.
 
 In validazione (analisi del contratto), `InvalidPlan`:
 
-- config con campi sconosciuti, `snap_tolerance` assente, o un campo del
-  tipo sbagliato;
+- config con campi sconosciuti, `snap_tolerance`, `remove_overlaps` o
+  `fill_gaps` assente («missing field»), o un campo del tipo sbagliato;
 - `snap_tolerance` negativa o non finita.
 
 Sempre in validazione: `Schema` se l'ingresso non ha esattamente una

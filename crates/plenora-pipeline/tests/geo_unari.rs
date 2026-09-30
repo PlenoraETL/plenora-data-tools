@@ -16,6 +16,7 @@ use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
 use plenora_core::crs::resolve_crs;
 use plenora_core::{ErrorCategory, PlenoraError};
 use plenora_kernels_geo::extended_algorithms::GeometryDiagnostics;
+use plenora_kernels_geo::geodetica::EllissoideGeodetico;
 use plenora_kernels_geo::operations::{BufferCapStyle, SimplifyPolicy};
 use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::rust_backend::precision::Precision;
@@ -32,6 +33,11 @@ use comune_geo::{
 
 fn centimetro_utm() -> Precision {
     Precision::from_crs(&resolve_crs(UTM, "crs").expect("crs")).expect("precisione")
+}
+
+/// L'ellissoide del datum di un CRS della tabella integrata.
+fn ellissoide(crs: &str) -> EllissoideGeodetico {
+    EllissoideGeodetico::da_crs(&resolve_crs(crs, "crs").expect("crs")).expect("ellissoide")
 }
 
 fn colonna<'a>(tabella: &'a RecordBatch, nome: &str) -> &'a ArrayRef {
@@ -121,7 +127,7 @@ fn le_trasformazioni_sono_i_kernel() {
         ),
         (
             "geo.simplify",
-            json!({"tolerance": 10.0, "policy": "preserve_topology"}),
+            json!({"min_area": 10.0, "policy": "preserve_topology"}),
             linee(),
             Box::new(|g| {
                 Some(
@@ -217,7 +223,9 @@ fn le_misure_sono_i_kernel() {
         (X0 + 150.0, Y0 + 30.0),
     ]));
     let altro_poligono = Geometry::Polygon(quadrato(X0 + 20.0, Y0 + 20.0, 60.0));
-    let milano = Geometry::Point(Point::new(9.19, 45.46));
+    // Torino: non coincide con nessun punto di `punti_lonlat` (fra punti
+    // coincidenti l'azimut non e' definito e il passo si ferma).
+    let milano = Geometry::Point(Point::new(7.686, 45.07));
     let altra = altra_linea.clone();
     let riferimento = Point::new(X0 + 120.0, Y0 + 40.0);
     let casi: Vec<(&str, Value, RecordBatch, &str, Reale)> = vec![
@@ -247,14 +255,18 @@ fn le_misure_sono_i_kernel() {
             json!({}),
             linee_lonlat(),
             "geodesic_line_length",
-            Box::new(|g| Some(extended::geodesic_line_length_m(linea(g)).unwrap())),
+            Box::new(|g| {
+                Some(extended::geodesic_line_length_m(linea(g), &ellissoide(LONLAT)).unwrap())
+            }),
         ),
         (
             "geo.geodesic_area",
             json!({}),
             poligoni_lonlat(),
             "geodesic_area",
-            Box::new(|g| Some(extended_algorithms::geodesic_area_m2(g).unwrap())),
+            Box::new(|g| {
+                Some(extended_algorithms::geodesic_area_m2(g, &ellissoide(LONLAT)).unwrap())
+            }),
         ),
         (
             "geo.line_locate_point",
@@ -299,7 +311,16 @@ fn le_misure_sono_i_kernel() {
             "haversine_distance",
             Box::new({
                 let milano = milano.clone();
-                move |g| Some(extended::haversine_distance_m(punto(g), punto(&milano)).unwrap())
+                move |g| {
+                    Some(
+                        extended::haversine_distance_m(
+                            punto(g),
+                            punto(&milano),
+                            &ellissoide(LONLAT),
+                        )
+                        .unwrap(),
+                    )
+                }
             }),
         ),
         (
@@ -309,7 +330,16 @@ fn le_misure_sono_i_kernel() {
             "geodesic_distance",
             Box::new({
                 let milano = milano.clone();
-                move |g| Some(extended::geodesic_distance_m(punto(g), punto(&milano)).unwrap())
+                move |g| {
+                    Some(
+                        extended::geodesic_distance_m(
+                            punto(g),
+                            punto(&milano),
+                            &ellissoide(LONLAT),
+                        )
+                        .unwrap(),
+                    )
+                }
             }),
         ),
         (
@@ -319,8 +349,12 @@ fn le_misure_sono_i_kernel() {
             "bearing",
             Box::new(move |g| {
                 Some(
-                    extended_algorithms::geodesic_bearing_degrees(punto(g), punto(&milano))
-                        .unwrap(),
+                    extended_algorithms::geodesic_bearing_degrees(
+                        punto(g),
+                        punto(&milano),
+                        &ellissoide(LONLAT),
+                    )
+                    .unwrap(),
                 )
             }),
         ),
@@ -422,6 +456,78 @@ fn le_misure_sono_i_kernel() {
             "{op}"
         );
     }
+}
+
+/// Le misure geodetiche nel runner usano l'ellissoide del datum del CRS
+/// della colonna: su ED50 (Internazionale 1924) sono quelle del kernel con
+/// quell'ellissoide, e non quelle di WGS 84 (il difetto: WGS 84 sempre, 1,6 m
+/// su Bologna-Modena).
+#[test]
+fn le_misure_geodetiche_usano_l_ellissoide_del_crs() {
+    const ED50: &str = "EPSG:4230";
+    let punti = tabella(
+        ED50,
+        &[
+            Some(Geometry::Point(Point::new(11.3426, 44.4949))),
+            None,
+            Some(Geometry::Point(Point::new(12.4964, 41.9028))),
+        ],
+    );
+    let modena = Geometry::Point(Point::new(10.9252, 44.6471));
+    let config = json!({"other_wkb": esadecimale_di(&modena)});
+    for (op, kernel) in [
+        (
+            "geo.geodesic_distance",
+            extended::geodesic_distance_m as fn(_, _, &_) -> _,
+        ),
+        ("geo.haversine_distance", extended::haversine_distance_m),
+    ] {
+        let uscita = un_passo(op, config.clone(), std::slice::from_ref(&punti))
+            .unwrap_or_else(|errore| panic!("{op}: {errore}"));
+        let nome = op.trim_start_matches("geo.");
+        let valori = colonna(&uscita, nome)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("float64");
+        for (riga, x, y) in [(0, 11.3426, 44.4949), (2, 12.4964, 41.9028)] {
+            let da = Point::new(x, y);
+            let ed50 = kernel(da, punto(&modena), &ellissoide(ED50)).expect("ed50");
+            let wgs84 = kernel(da, punto(&modena), &ellissoide(LONLAT)).expect("wgs84");
+            assert_eq!(valori.value(riga).to_bits(), ed50.to_bits(), "{op}");
+            assert!((ed50 - wgs84).abs() > 1.0, "{op}: {ed50} {wgs84}");
+        }
+        assert!(valori.is_null(1));
+    }
+    let uscita = un_passo("geo.bearing", config, std::slice::from_ref(&punti)).expect("bearing");
+    let valori = colonna(&uscita, "bearing")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("float64");
+    let atteso = extended_algorithms::geodesic_bearing_degrees(
+        Point::new(11.3426, 44.4949),
+        punto(&modena),
+        &ellissoide(ED50),
+    )
+    .expect("azimut");
+    assert_eq!(valori.value(0).to_bits(), atteso.to_bits());
+}
+
+/// L'azimut fra due punti coincidenti non e' definito: il passo si ferma
+/// con un errore del piano, invece di rendere 180.
+#[test]
+fn l_azimut_fra_punti_coincidenti_ferma_il_passo() {
+    let milano = Geometry::Point(Point::new(9.19, 45.46));
+    let errore = un_passo(
+        "geo.bearing",
+        json!({"other_wkb": esadecimale_di(&milano)}),
+        &[punti_lonlat()],
+    )
+    .expect_err("azimut non definito");
+    assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
+    assert!(
+        errore.to_string().contains("azimut non definito"),
+        "{errore}"
+    );
 }
 
 #[test]
@@ -665,6 +771,27 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
             poligoni(),
         ),
         ("geo.simplify", json!({"tolerance": -1.0}), linee()),
+        (
+            "geo.simplify",
+            json!({"tolerance": 1.0, "policy": "preserve_topology"}),
+            linee(),
+        ),
+        (
+            "geo.simplify",
+            json!({"min_area": 1.0, "policy": "douglas_peucker"}),
+            linee(),
+        ),
+        ("geo.simplify", json!({"min_area": 1.0}), linee()),
+        (
+            "geo.simplify",
+            json!({"policy": "preserve_topology"}),
+            linee(),
+        ),
+        (
+            "geo.simplify",
+            json!({"min_area": -1.0, "policy": "preserve_topology"}),
+            linee(),
+        ),
         (
             "geo.affine_transform",
             json!({"coefficients": [1.0]}),

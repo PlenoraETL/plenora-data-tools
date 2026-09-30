@@ -372,6 +372,29 @@ fn config_non_valide_si_rifiutano() {
     }
 }
 
+/// Una config illeggibile e' un piano non valido, come per ogni altra
+/// operazione geo: fino alla versione 1 dell'analisi era
+/// `InvalidConfiguration`.
+#[test]
+fn una_config_illeggibile_e_un_piano_non_valido() {
+    let sorgente = crs("EPSG:4326");
+    for config in [
+        json!({}),
+        json!({"target_crs": "EPSG:7791", "sconosciuto": 1}),
+        json!({"target_crs": 7791}),
+        json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
+               "griglie": [{"trasformazione": 9734, "file": ""}]}),
+    ] {
+        let errore = ReprojectParams::da_config("geo.reproject", &config, &sorgente)
+            .expect_err("config illeggibile");
+        assert_eq!(
+            errore.category(),
+            plenora_core::ErrorCategory::InvalidPlan,
+            "{config}: {errore}"
+        );
+    }
+}
+
 fn campo_geometria(definizione: &str) -> Field {
     let mut metadata = HashMap::new();
     metadata.insert(

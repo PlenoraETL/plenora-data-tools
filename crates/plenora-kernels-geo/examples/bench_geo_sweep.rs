@@ -73,6 +73,7 @@ use plenora_kernels_geo::extensions2::{
     generate_grid_rows, snap, subdivide_wkb, GridExtent, GridShape,
 };
 use plenora_kernels_geo::extensions3::{coverage_validate_nullable, shared_paths_nullable};
+use plenora_kernels_geo::geodetica::EllissoideGeodetico;
 use plenora_kernels_geo::operations::{
     area, boundary, bounds, buffer_with_cap, distance, explode, length, perimeter,
     point_on_surface, simplify_with_policy, to_wkt, vertex_count, BufferCapStyle, SimplifyPolicy,
@@ -86,6 +87,16 @@ use plenora_kernels_geo::topology::{
 use plenora_kernels_geo::{transform_wkb, Operation};
 use rayon::prelude::*;
 use serde_json::{json, Value};
+
+/// L'ellissoide WGS 84 della tabella integrata (EPSG:4326), per le misure
+/// geodetiche del sweep: le fixture sono lon/lat WGS 84.
+fn wgs84() -> EllissoideGeodetico {
+    static ELLISSOIDE: OnceLock<EllissoideGeodetico> = OnceLock::new();
+    *ELLISSOIDE.get_or_init(|| {
+        let crs = plenora_core::crs::resolve_crs("EPSG:4326", "crs").expect("EPSG:4326");
+        EllissoideGeodetico::da_crs(&crs).expect("ellissoide WGS 84")
+    })
+}
 
 /// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
 fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
@@ -1645,7 +1656,7 @@ fn main() {
         );
         let op_haversine = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                haversine_distance_m(as_point(&g)?, ref_geo_point)
+                haversine_distance_m(as_point(&g)?, ref_geo_point, &wgs84())
                     .map(|v| black_box(v) as usize)
                     .map_err(|e| e.to_string())
             })
@@ -1663,7 +1674,7 @@ fn main() {
         );
         let op_geodesic = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_distance_m(as_point(&g)?, ref_geo_point)
+                geodesic_distance_m(as_point(&g)?, ref_geo_point, &wgs84())
                     .map(|v| black_box(v) as usize)
                     .map_err(|e| e.to_string())
             })
@@ -1681,7 +1692,7 @@ fn main() {
         );
         let op_geolen = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_line_length_m(as_line(&g)?)
+                geodesic_line_length_m(as_line(&g)?, &wgs84())
                     .map(|v| black_box(v) as usize)
                     .map_err(|e| e.to_string())
             })
@@ -1811,7 +1822,7 @@ fn main() {
         );
         let op_bearing = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_bearing_degrees(ref_geo_point, as_point(&g)?)
+                geodesic_bearing_degrees(ref_geo_point, as_point(&g)?, &wgs84())
                     .map(|v| black_box(v) as usize)
                     .map_err(|e| e.to_string())
             })
@@ -1829,7 +1840,7 @@ fn main() {
         );
         let op_geoarea = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_area_m2(&g)
+                geodesic_area_m2(&g, &wgs84())
                     .map(|v| black_box(v) as usize)
                     .map_err(|e| e.to_string())
             })

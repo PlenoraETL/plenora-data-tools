@@ -962,7 +962,9 @@ fn le_geo_che_conservano_le_righe_le_conservano_davvero() {
         (X0 + 150.0, Y0 + 30.0),
     ]));
     let altro_poligono = Geometry::Polygon(quadrato(X0 + 20.0, Y0 + 20.0, 60.0));
-    let milano = Geometry::Point(Point::new(9.19, 45.46));
+    // Torino: nessun punto della fixture coincide (fra punti coincidenti
+    // l'azimut non e' definito e il passo si ferma).
+    let milano = Geometry::Point(Point::new(7.686, 45.07));
     let riferimento = Geometry::Point(Point::new(X0 + 120.0, Y0 + 40.0));
     let altro = esadecimale_di(&altro_poligono);
 

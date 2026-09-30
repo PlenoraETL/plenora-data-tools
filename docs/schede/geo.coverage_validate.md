@@ -70,11 +70,11 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 
 - `InvalidPlan`: WKB malformato o OGC-invalido; una geometria che non è
   `Polygon` o `MultiPolygon` (il messaggio riporta la posizione della riga,
-  non i dati); più di `max_issues` sovrapposizioni; zona sovrapposta non
-  valida;
+  non i dati); zona sovrapposta non valida;
 - `Unsupported`: `PrecisionInsufficient` (sotto, «Precisione»); WKB con
   dimensioni Z/M o SRID;
-- `ResourceLimit`: cella oltre il limite di byte per cella;
+- `ResourceLimit`: cella oltre il limite di byte per cella; più di
+  `max_issues` sovrapposizioni (`IssueLimit`);
 - `Internal`: panico di `geo`, `i_overlay` o `rstar`, validazione che non
   conclude.
 

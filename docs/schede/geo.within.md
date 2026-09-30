@@ -15,8 +15,8 @@ solo bordo, come un punto sul lato di un poligono, non è dentro.
 
 ### Schema
 
-Le colonne della sinistra, invariate, più `output_column` in coda, `bool`
-nullable. Le colonne della destra non passano. La colonna geometria resta
+Le colonne della sinistra, invariate, più `output_column` in coda, `bool`,
+nullable solo se lo è la geometria della sinistra (null dove è null). Le colonne della destra non passano. La colonna geometria resta
 quella della sinistra, con i suoi tipi dichiarati. I metadati di schema
 sono la fusione dei due lati; le proprietà del contratto della sinistra
 (`sorted_by`, `row_count`) restano.
@@ -66,7 +66,7 @@ Dal kernel (`analysis::within_indexes_validated`, errore `AnalysisError`
 che avvolge `SpatialJoinError`, sulle geometrie già validate), nella
 categoria del passo geo indicata fra parentesi:
 
-- `PairLimitExceeded` (`InvalidPlan`): le coppie (sinistra, destra)
+- `PairLimitExceeded` (`ResourceLimit`): le coppie (sinistra, destra)
   confermate superano il limite di righe dell'arco; conta ogni destra che
   contiene una sinistra, anche se ne basta una;
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):

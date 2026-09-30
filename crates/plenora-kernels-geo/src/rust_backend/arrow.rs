@@ -165,7 +165,7 @@ pub fn polygonize_batches(
     }
     let output_schema = Arc::new(Schema::new_with_metadata(
         vec![
-            output_geometry_field(schema.field(geometry_index), true),
+            output_geometry_field(schema.field(geometry_index), false),
             Field::new(CLASS_COLUMN, DataType::Utf8, false),
         ],
         schema.metadata().clone(),
@@ -187,9 +187,9 @@ pub fn polygonize_batches(
 /// dell'ingresso, con tutti i suoi metadati (CRS, dimensioni,
 /// encoding e lineage passano invariati), senza la dichiarazione dei tipi
 /// geometrici, che l'operazione riscrive (l'analisi la ridichiara nel
-/// contratto, `analyze::tipi`), e con la nullability del contratto:
-/// `nullable` per l'aggregazione di `polygonize`, quella dell'ingresso per
-/// lo `split`.
+/// contratto, `analyze::tipi`), e con la nullability del contratto: non
+/// nullable per `polygonize` e `split` (una riga per geometria prodotta; una
+/// sorgente null non produce righe), quella dell'ingresso per `make_valid`.
 ///
 /// E' lo schema che l'analisi dichiara (oracolo
 /// `analyze::tests::kernel_crosscheck`); a 190c493 il campo nasceva da
@@ -201,13 +201,19 @@ fn output_geometry_field(input: &Field, nullable: bool) -> Field {
 }
 
 /// L'errore dello split lineare nella lingua del passo: interno cio' che
-/// non ha concluso, `InvalidPlan` il resto, come nel trasporto.
+/// non ha concluso, `ResourceLimit` un limite superato (come
+/// `From<RustBackendError>` e il runner), `InvalidPlan` il resto.
 fn errore_dello_split_lineare(error: ExtendedAlgorithmError) -> PlenoraError {
     match error {
         ExtendedAlgorithmError::ValidazioneNonConclusa(_)
         | ExtendedAlgorithmError::Internal(_)
         | ExtendedAlgorithmError::CalcoloNonConcluso(_) => {
             PlenoraError::Internal(error.to_string())
+        }
+        ExtendedAlgorithmError::CoordinateLimit { .. }
+        | ExtendedAlgorithmError::OutputLimit { .. }
+        | ExtendedAlgorithmError::WorkLimit { .. } => {
+            PlenoraError::ResourceLimit(error.to_string())
         }
         other => PlenoraError::InvalidPlan(other.to_string()),
     }
@@ -403,8 +409,7 @@ fn split_output(
         .map(|field| field.as_ref().clone())
         .collect();
     let input_geometry = left_schema.field(geometry_index);
-    output_fields[geometry_index] =
-        output_geometry_field(input_geometry, input_geometry.is_nullable());
+    output_fields[geometry_index] = output_geometry_field(input_geometry, false);
     output_fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
     let output_schema = Arc::new(Schema::new_with_metadata(
         output_fields,
@@ -597,7 +602,7 @@ mod tests {
                 1,
                 precisione()
             ),
-            Err(PlenoraError::InvalidPlan(_))
+            Err(PlenoraError::ResourceLimit(_))
         ));
     }
 

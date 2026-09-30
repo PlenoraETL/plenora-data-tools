@@ -345,6 +345,128 @@ fn le_aggregazioni_sono_i_kernel() {
     assert_eq!(di_nuovo, uscita);
 }
 
+/// `collect`: i gruppi escono nell'ordine naturale dei valori tipizzati
+/// delle chiavi (il comparatore di `table.sort`), null in coda. A `190c493`
+/// la chiave testuale metteva la lunghezza in testa come testo: un valore di
+/// 10 caratteri prima di uno di 9, `3` prima di `-5`, `-1` prima di `-10`.
+#[test]
+fn collect_ordina_i_gruppi_per_valore() {
+    let base = punti();
+    let righe = 7;
+    let testi = [
+        Some("bbbbbbbbbb"),
+        Some("aaaaaaaaa"),
+        None,
+        Some("bbbbbbbbbb"),
+        Some("b"),
+        Some("aaaaaaaaa"),
+        Some("ab"),
+    ];
+    let numeri = [
+        Some(3_i64),
+        Some(-5),
+        Some(-1),
+        None,
+        Some(-10),
+        Some(3),
+        Some(100),
+    ];
+    let geometrie_in: Vec<Option<Geometry<f64>>> = (0..righe)
+        .map(|i| {
+            Some(Geometry::Point(geo::Point::new(
+                X0 + f64::from(u8::try_from(i).unwrap()),
+                Y0,
+            )))
+        })
+        .collect();
+    let schema = Schema::new_with_metadata(
+        vec![
+            Field::new("testo", DataType::Utf8, true),
+            Field::new("numero", DataType::Int64, true),
+            base.schema().field_with_name("geometry").unwrap().clone(),
+        ],
+        base.schema().metadata().clone(),
+    );
+    let tabella = RecordBatch::try_new(
+        std::sync::Arc::new(schema),
+        vec![
+            std::sync::Arc::new(StringArray::from(testi.to_vec())),
+            std::sync::Arc::new(Int64Array::from(numeri.to_vec())),
+            std::sync::Arc::new(binaria(
+                &geometrie_in
+                    .iter()
+                    .map(|g| g.as_ref().map(wkb))
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .unwrap();
+
+    let uscita = un_passo(
+        "geo.collect",
+        json!({"group_by": ["testo"]}),
+        std::slice::from_ref(&tabella),
+    )
+    .unwrap();
+    let chiavi: Vec<Option<&str>> = colonna(&uscita, "testo")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .iter()
+        .collect();
+    assert_eq!(
+        chiavi,
+        [
+            Some("aaaaaaaaa"),
+            Some("ab"),
+            Some("b"),
+            Some("bbbbbbbbbb"),
+            None
+        ]
+    );
+    // Il gruppo raccoglie le righe in ordine d'ingresso (1 e 5).
+    assert_eq!(
+        geometrie(&uscita, "geometry")[0],
+        extensions::collect_geometries(&[geometrie_in[1].clone(), geometrie_in[5].clone()])
+            .unwrap()
+    );
+
+    let uscita = un_passo(
+        "geo.collect",
+        json!({"group_by": ["numero"]}),
+        std::slice::from_ref(&tabella),
+    )
+    .unwrap();
+    let chiavi: Vec<Option<i64>> = colonna(&uscita, "numero")
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .iter()
+        .collect();
+    assert_eq!(
+        chiavi,
+        [Some(-10), Some(-5), Some(-1), Some(3), Some(100), None]
+    );
+
+    // Due chiavi: la prima decide, la seconda a parita' della prima.
+    let uscita = un_passo(
+        "geo.collect",
+        json!({"group_by": ["numero", "testo"]}),
+        std::slice::from_ref(&tabella),
+    )
+    .unwrap();
+    let testi_usciti: Vec<Option<&str>> = colonna(&uscita, "testo")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .iter()
+        .collect();
+    // numero 3: "aaaaaaaaa" (riga 5) prima di "bbbbbbbbbb" (riga 0).
+    assert_eq!(testi_usciti[3], Some("aaaaaaaaa"));
+    assert_eq!(testi_usciti[4], Some("bbbbbbbbbb"));
+    assert_eq!(uscita.num_rows(), 7);
+}
+
 /// Collettive allineate alle righe, coperture, griglia.
 #[test]
 fn le_collettive_e_le_coperture_sono_i_kernel() {
@@ -388,7 +510,7 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
     let ingresso = poligoni();
     let uscita = un_passo(
         "geo.clean_topology",
-        json!({"snap_tolerance": 0.0, "fill_gaps": false}),
+        json!({"snap_tolerance": 0.0, "remove_overlaps": true, "fill_gaps": false}),
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
@@ -680,7 +802,19 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
         ),
         (
             "geo.clean_topology",
-            json!({"snap_tolerance": -1.0}),
+            json!({"snap_tolerance": -1.0, "remove_overlaps": true, "fill_gaps": true}),
+            vec![poligoni()],
+            None,
+        ),
+        (
+            "geo.clean_topology",
+            json!({"snap_tolerance": 1.0}),
+            vec![poligoni()],
+            None,
+        ),
+        (
+            "geo.clean_topology",
+            json!({"snap_tolerance": 1.0, "remove_overlaps": true}),
             vec![poligoni()],
             None,
         ),
@@ -765,7 +899,6 @@ fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
             Field::new("k", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
             Arc::new(TimestampNanosecondArray::from(vec![Some(0_i64); righe])),
         ),
-        millisecondi("Fuso/Inesistente"),
     ];
     for tabella_chiave in rifiutate {
         let tipo = tabella_chiave
@@ -795,9 +928,13 @@ fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
             "{tipo}: {errore}"
         );
     }
-    // Tipi leggibili come testo: accettati, vuota o no.
+    // Tipi con un ordine naturale (quelli di `table.sort`): accettati, vuota
+    // o no. Un fuso orario inesistente non conta: l'ordine e' per istante,
+    // e le chiavi escono invariate (prima si rifiutava perche' la chiave si
+    // scriveva come testo nel fuso).
     let accettate = [
         millisecondi("Europe/Rome"),
+        millisecondi("Fuso/Inesistente"),
         con_chiave(
             Field::new("k", DataType::Int64, true),
             Arc::new(Int64Array::from(vec![Some(7); righe])),

@@ -13,7 +13,7 @@ Nessuno: la config è `{}`.
 
 ### Schema
 
-Solo la colonna geometria, nullable, con lo stesso nome, lo stesso CRS,
+Solo la colonna geometria, non nullable (una riga per linea fusa), con lo stesso nome, lo stesso CRS,
 dimensioni `xy` e i metadati del campo d'ingresso, tranne le chiavi dei
 tipi ereditate; i tipi dichiarati diventano esattamente `LineString`. Le
 colonne attributo cadono. I metadati di schema restano; le proprietà del
@@ -67,7 +67,8 @@ geometria non valida, `Internal` se la validazione non conclude.
 
 Poi il kernel, con errore `ExtendedAlgorithmError` che il runner traduce
 così: `Internal`, `ValidazioneNonConclusa` e `CalcoloNonConcluso`
-diventano `Internal`, le altre `InvalidPlan`. Il kernel rifiuta la
+diventano `Internal`, i limiti (`CoordinateLimit`, `OutputLimit`)
+`ResourceLimit`, le altre `InvalidPlan`. Il kernel rifiuta la
 geometria riunita con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
 `CoordinateLimit` (coordinate d'ingresso oltre il limite passato dal

@@ -68,9 +68,10 @@ In validazione (analisi del contratto):
   `REPROJECTION_PATH_UNAVAILABLE` (nessun percorso fra i datum);
   `REPROJECTION_ACCURACY_NOT_ACCEPTED` (il percorso migliore supera 1 cm
   e l'accuratezza accettata);
-- `InvalidConfiguration`: config non leggibile (campi sconosciuti,
-  `target_crs` assente, tipi sbagliati), `file` di una griglia vuoto,
-  oltre 4096 byte o con NUL.
+- `InvalidPlan`: config non leggibile (campi sconosciuti, `target_crs`
+  assente, tipi sbagliati), `file` di una griglia vuoto, oltre 4096 byte
+  o con NUL. Fino alla versione 1 dell'analisi del contratto era
+  `InvalidConfiguration`, unica fra le operazioni geo.
 
 In esecuzione, prima dell'adapter, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata

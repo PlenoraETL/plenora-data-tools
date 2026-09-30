@@ -2,8 +2,9 @@
 
 Aggiunge una colonna `float64` con la lunghezza geodetica in metri della
 linea di ogni riga: la somma delle geodetiche fra vertici consecutivi
-**sull'ellissoide WGS 84**, con l'algoritmo di Karney di
-[`geo.geodesic_distance`](#geogeodesic_distance). Le coordinate sono
+**sull'ellissoide del datum del CRS della colonna**, con l'algoritmo di
+Karney di [`geo.geodesic_distance`](#geogeodesic_distance)
+([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono
 longitudine e latitudine in gradi.
 
 ### Parametri
@@ -14,7 +15,7 @@ longitudine e latitudine in gradi.
 
 ### Schema
 
-Aggiunge in coda `output_column`, `float64` nullable. Le altre colonne,
+Aggiunge in coda `output_column`, `float64`, nullable solo se lo è la colonna geometria (null dove la geometria è null). Le altre colonne,
 la geometria e i metadati restano; restano anche le proprietà del
 contratto (`sorted_by`, `row_count`).
 
@@ -40,7 +41,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
 - `Crs`: CRS della colonna mancante o non risolto, o non geografico
-  (`GEOGRAPHIC_CRS_REQUIRED`);
+  (`GEOGRAPHIC_CRS_REQUIRED`); CRS senza l'ellissoide del datum (risolto
+  dal chiamante, fuori dalla tabella integrata: `ELLIPSOID_REQUIRED`);
 - `InvalidPlan`: config con campi sconosciuti, `output_column` vuoto.
 
 In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
@@ -59,16 +61,19 @@ Poi, per riga:
 - `InvalidPlan`: la geometria non è una `LineString` (errore del runner,
   «tipo geometria non supportato»); dal kernel (`ExtendedError`)
   `InvalidGeographicCoordinate`, un vertice non finito o fuori da
-  `[-180, 180]` × `[-90, 90]`;
+  `[-180, 180]` × `[-90, 90]`, e `InvalidOutput`, una lunghezza non
+  finita (mai attesa);
 - `Internal`: dal kernel `CalcoloNonConcluso` (il calcolo di `geo` va in
   panico).
 
 ### Limiti e deviazioni
 
-- **Sempre l'ellissoide WGS 84**, qualunque sia l'ellissoide del CRS
-  geografico: per ED50, Monte Mario, NAD27 o OSGB36 la lunghezza si
-  scosta di parti su centomila, sopra 1 cm su linee di qualche centinaio
-  di metri, senza errore (come [`geo.geodesic_distance`](#geogeodesic_distance)).
+- Ogni tratto è la geodetica **più breve** fra i due vertici: un tratto
+  scritto con più di 180 gradi di longitudine (oltre l'antimeridiano) si
+  misura dalla parte corta, non come il segmento che il piano lon/lat
+  disegna.
+- CRS proiettati rifiutati; fino alla versione 2 del catalogo l'ellissoide
+  era sempre WGS 84 (come [`geo.geodesic_distance`](#geogeodesic_distance)).
 - Solo `LineString`, vedi «Righe»: una `MultiLineString` ferma il passo.
 - Errori senza indice di riga della sorgente
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
@@ -76,10 +81,9 @@ voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 
-Ogni tratto è una geodetica di Karney su WGS 84, con errore dell'ordine
-dei nanometri; la somma aggiunge un arrotondamento per tratto, molto
-sotto 1 cm su ogni linea realistica. Per un CRS su un altro ellissoide la
-regola di 1 cm **non vale** (sopra). Nessun rifiuto
+Ogni tratto è una geodetica di Karney sull'ellissoide del datum, con
+errore dell'ordine dei nanometri; la somma aggiunge un arrotondamento per
+tratto, molto sotto 1 cm su ogni linea realistica. Nessun rifiuto
 `PrecisionInsufficient`
 ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 

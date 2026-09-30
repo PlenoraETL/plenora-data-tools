@@ -259,6 +259,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::helpers::short_id;
+    use super::producers::with_active_geometry_nullability;
     use super::*;
     use crate::arrow_adapter::{
         geo_metadata_json_with_dimensions, DEFAULT_GEOMETRY_COLUMN, GEOARROW_EXTENSION_KEY,
@@ -291,13 +292,47 @@ mod tests {
         )
     }
 
+    /// WGS 84 dalla tabella integrata: porta l'ellissoide che le misure
+    /// geodetiche chiedono.
     fn geographic_crs() -> ResolvedCrs {
+        plenora_core::crs::resolve_crs("EPSG:4326", "crs").expect("CRS integrato")
+    }
+
+    /// Un CRS geografico risolto dal chiamante: senza ellissoide.
+    fn geographic_crs_without_ellipsoid() -> ResolvedCrs {
         ResolvedCrs::from_resolved_parts(
             "EPSG:4326".to_owned(),
             json!({"type": "GeographicCRS", "name": "WGS 84"}),
             CrsKind::Geographic,
             None,
         )
+    }
+
+    /// Le misure geodetiche chiedono l'ellissoide del datum: un CRS
+    /// geografico risolto dal chiamante, senza ellissoide, si rifiuta in
+    /// validazione (`ELLIPSOID_REQUIRED`), mai con un ripiego su WGS 84.
+    #[test]
+    fn le_misure_geodetiche_rifiutano_un_crs_senza_ellissoide() {
+        for (op, config) in [
+            ("geo.geodesic_line_length", json!({})),
+            ("geo.geodesic_area", json!({})),
+            ("geo.geodesic_distance", other_wkb_config()),
+            ("geo.haversine_distance", other_wkb_config()),
+            ("geo.bearing", other_wkb_config()),
+        ] {
+            let senza = [geo_contract(geographic_crs_without_ellipsoid())];
+            match analyze_one(op, &senza, &config, None) {
+                Err(PlenoraError::Crs(messaggio)) => {
+                    assert!(
+                        messaggio.contains("ELLIPSOID_REQUIRED"),
+                        "{op}: {messaggio}"
+                    );
+                }
+                altro => panic!("{op}: {altro:?}"),
+            }
+            let con = [geo_contract(geographic_crs())];
+            analyze_one(op, &con, &config, None).unwrap_or_else(|e| panic!("{op}: {e}"));
+        }
     }
 
     fn geometry_arrow_field() -> Field {
@@ -530,6 +565,13 @@ mod tests {
         Appended(Vec<(&'static str, DataType, bool)>),
         /// Solo geometria (nullable) piu' eventuali colonne extra.
         GeometryOnly(Vec<(&'static str, DataType, bool)>),
+        /// Come `GeometryOnly`, con la geometria non nullable: una riga per
+        /// geometria prodotta (`line_merge`, `polygonize`, `overlay`).
+        GeometryOnlyNotNull(Vec<(&'static str, DataType, bool)>),
+        /// Come `Appended`, con la geometria non nullable: una riga per
+        /// parte o per coppia, mai per una geometria null (espansioni,
+        /// `sjoin`, `nearest`).
+        AppendedGeometryNotNull(Vec<(&'static str, DataType, bool)>),
         /// Le 10 colonne diagnostiche al posto della geometria.
         Diagnostics,
         /// Input tabellare + colonna geometria non-null con nuovo `FieldId`.
@@ -614,7 +656,10 @@ mod tests {
             ),
             unchanged("geo.line_interpolate_point", json!({"ratio": 0.5})),
             unchanged("geo.voronoi", json!({})),
-            unchanged("geo.clean_topology", json!({"snap_tolerance": 0.01})),
+            unchanged(
+                "geo.clean_topology",
+                json!({"snap_tolerance": 0.01, "remove_overlaps": true, "fill_gaps": true}),
+            ),
             // --- Misure e rappresentazioni ----------------------------------
             float_measure("geo.area"),
             float_measure("geo.length"),
@@ -696,17 +741,29 @@ mod tests {
             unary(
                 "geo.explode",
                 json!({}),
-                Expect::Appended(vec![(PARENT_INDEX_COLUMN, DataType::UInt64, false)]),
+                Expect::AppendedGeometryNotNull(vec![(
+                    PARENT_INDEX_COLUMN,
+                    DataType::UInt64,
+                    false,
+                )]),
             ),
             unary(
                 "geo.delaunay",
                 json!({}),
-                Expect::Appended(vec![(PARENT_INDEX_COLUMN, DataType::UInt64, false)]),
+                Expect::AppendedGeometryNotNull(vec![(
+                    PARENT_INDEX_COLUMN,
+                    DataType::UInt64,
+                    false,
+                )]),
             ),
             unary(
                 "geo.split",
                 other_wkb_config(),
-                Expect::Appended(vec![(PARENT_INDEX_COLUMN, DataType::UInt64, false)]),
+                Expect::AppendedGeometryNotNull(vec![(
+                    PARENT_INDEX_COLUMN,
+                    DataType::UInt64,
+                    false,
+                )]),
             ),
             unary(
                 "geo.subdivide",
@@ -721,7 +778,11 @@ mod tests {
                 json!({}),
                 Expect::GeometryOnly(vec![]),
             ),
-            unary("geo.line_merge", json!({}), Expect::GeometryOnly(vec![])),
+            unary(
+                "geo.line_merge",
+                json!({}),
+                Expect::GeometryOnlyNotNull(vec![]),
+            ),
             unary(
                 "geo.collect",
                 json!({"group_by": ["id"]}),
@@ -730,7 +791,7 @@ mod tests {
             unary(
                 "geo.polygonize",
                 json!({}),
-                Expect::GeometryOnly(vec![(CLASS_COLUMN, DataType::Utf8, false)]),
+                Expect::GeometryOnlyNotNull(vec![(CLASS_COLUMN, DataType::Utf8, false)]),
             ),
             // --- Costruzione e riproiezione ---------------------------------
             unary("geo.from_coords", json!({}), Expect::FromCoords),
@@ -834,20 +895,26 @@ mod tests {
             binary(
                 "geo.sjoin",
                 json!({"predicate": "intersects"}),
-                Expect::Appended(vec![(RIGHT_INDEX_COLUMN, DataType::UInt64, false)]),
+                Expect::AppendedGeometryNotNull(vec![(
+                    RIGHT_INDEX_COLUMN,
+                    DataType::UInt64,
+                    false,
+                )]),
             ),
             binary(
                 "geo.nearest",
                 json!({}),
-                Expect::Appended(vec![
-                    (RIGHT_INDEX_COLUMN, DataType::UInt64, true),
-                    float_column(DISTANCE_COLUMN),
+                // Una riga per coppia trovata: indice e distanza ci sono
+                // sempre (prima si dichiaravano nullable).
+                Expect::AppendedGeometryNotNull(vec![
+                    (RIGHT_INDEX_COLUMN, DataType::UInt64, false),
+                    (DISTANCE_COLUMN, DataType::Float64, false),
                 ]),
             ),
             binary(
                 "geo.overlay",
                 json!({"mode": "intersection"}),
-                Expect::GeometryOnly(vec![
+                Expect::GeometryOnlyNotNull(vec![
                     (LEFT_INDEX_COLUMN, DataType::UInt64, true),
                     (RIGHT_INDEX_COLUMN, DataType::UInt64, true),
                 ]),
@@ -1095,6 +1162,30 @@ mod tests {
                 Expect::Appended(extra) => {
                     assert_appended(&output, &input, extra);
                     assert_geometry_preserved(&output, &input);
+                }
+                Expect::AppendedGeometryNotNull(extra) => {
+                    assert_appended(
+                        &output,
+                        &with_active_geometry_nullability(&input, false)
+                            .expect("geometria non nullable"),
+                        extra,
+                    );
+                    assert_geometry_preserved(&output, &input);
+                    assert!(
+                        !output.active_geometry_column().expect("geometria").nullable,
+                        "{}: geometria non nullable",
+                        case.op
+                    );
+                }
+                Expect::GeometryOnlyNotNull(extra) => {
+                    let mut expected = vec![(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false)];
+                    expected.extend(extra.iter().cloned());
+                    assert_eq!(signatures(&output), expected, "{}: schema", case.op);
+                    assert!(
+                        !output.active_geometry_column().expect("geometria").nullable,
+                        "{}: geometria non nullable",
+                        case.op
+                    );
                 }
                 Expect::GeometryOnly(extra) => {
                     let mut expected = vec![(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true)];
@@ -1462,6 +1553,89 @@ mod tests {
                 matches!(result, Err(PlenoraError::Crs(_))),
                 "{op}: CRS geografico accettato"
             );
+        }
+    }
+
+    /// `geo.clean_topology`: `remove_overlaps` e `fill_gaps` non hanno un
+    /// valore predefinito (prima il runner usava `true`): un piano che non
+    /// li scrive si rifiuta in validazione.
+    #[test]
+    fn clean_topology_chiede_remove_overlaps_e_fill_gaps() {
+        let inputs = [geo_contract(projected_crs())];
+        for (config, manca) in [
+            (json!({"snap_tolerance": 0.1}), "remove_overlaps"),
+            (
+                json!({"snap_tolerance": 0.1, "fill_gaps": false}),
+                "remove_overlaps",
+            ),
+            (
+                json!({"snap_tolerance": 0.1, "remove_overlaps": false}),
+                "fill_gaps",
+            ),
+        ] {
+            match analyze_one("geo.clean_topology", &inputs, &config, None) {
+                Err(PlenoraError::InvalidPlan(messaggio)) => {
+                    assert!(
+                        messaggio.contains(&format!("missing field `{manca}`")),
+                        "{config}: {messaggio}"
+                    );
+                }
+                altro => panic!("{config}: {altro:?}"),
+            }
+        }
+        analyze_one(
+            "geo.clean_topology",
+            &inputs,
+            &json!({"snap_tolerance": 0.1, "remove_overlaps": false, "fill_gaps": false}),
+            None,
+        )
+        .expect("config completa");
+    }
+
+    /// `geo.simplify`: la soglia ha un nome per algoritmo. `tolerance` con
+    /// `preserve_topology` (dove la soglia e' un'area) si rifiuta con un
+    /// messaggio che nomina `min_area`, invece di reinterpretarla.
+    #[test]
+    fn simplify_rifiuta_la_soglia_dell_altro_algoritmo() {
+        let inputs = [geo_contract(projected_crs())];
+        for (config, atteso) in [
+            (
+                json!({"tolerance": 1.0, "policy": "preserve_topology"}),
+                "`tolerance` non vale con `policy: preserve_topology`",
+            ),
+            (
+                json!({"policy": "preserve_topology"}),
+                "`min_area` obbligatorio",
+            ),
+            (json!({"min_area": 1.0}), "`min_area` vale solo"),
+            (
+                json!({"min_area": 1.0, "policy": "douglas_peucker"}),
+                "`min_area` vale solo",
+            ),
+            (json!({}), "`tolerance` obbligatorio"),
+            (
+                json!({"min_area": f64::MAX, "policy": "preserve_topology", "tolerance": 1.0}),
+                "`tolerance` non vale",
+            ),
+            (
+                json!({"min_area": -1.0, "policy": "preserve_topology"}),
+                "parametro `min_area` non valido",
+            ),
+        ] {
+            match analyze_one("geo.simplify", &inputs, &config, None) {
+                Err(PlenoraError::InvalidPlan(messaggio)) => {
+                    assert!(messaggio.contains(atteso), "{config}: {messaggio}");
+                }
+                altro => panic!("{config}: {altro:?}"),
+            }
+        }
+        for config in [
+            json!({"tolerance": 1.0}),
+            json!({"tolerance": 1.0, "policy": "douglas_peucker"}),
+            json!({"min_area": 1.0, "policy": "preserve_topology"}),
+        ] {
+            analyze_one("geo.simplify", &inputs, &config, None)
+                .unwrap_or_else(|e| panic!("{config}: {e}"));
         }
     }
 
@@ -2450,7 +2624,10 @@ mod tests {
         for (op, config) in [
             ("geo.buffer", json!({"distance": 1.0})),
             ("geo.area", json!({})),
-            ("geo.clean_topology", json!({"snap_tolerance": 0.1})),
+            (
+                "geo.clean_topology",
+                json!({"snap_tolerance": 0.1, "remove_overlaps": true, "fill_gaps": true}),
+            ),
         ] {
             let inputs = [contract_with_properties()];
             let plan = projected_crs();

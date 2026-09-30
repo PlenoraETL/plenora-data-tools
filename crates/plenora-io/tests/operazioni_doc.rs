@@ -1932,3 +1932,340 @@ fn il_tipo_rifiuta_un_fuso_non_ascii() {
         ))
     );
 }
+
+// ---------------------------------------------------------------------------
+// Nullabilita' dichiarata delle geo contro quella emessa
+// ---------------------------------------------------------------------------
+
+/// Le colonne che una geo dichiara nullable anche con ingressi senza null:
+/// il kernel rende null per un valore presente. `(operazione, colonna,
+/// motivo)`; ogni altra colonna nullable con ingressi senza null e' una
+/// dichiarazione piu' larga dell'uscita (il difetto di `geo.nearest`, che
+/// dichiarava `__right_index` e `distance` nullable senza mai emetterne).
+const NULL_CON_INGRESSI_PRESENTI: &[(&str, &str, &str)] = &[
+    (
+        "geo.bounds_extractor",
+        "geometry_minx",
+        "geometria vuota: nessun limite",
+    ),
+    (
+        "geo.bounds_extractor",
+        "geometry_miny",
+        "geometria vuota: nessun limite",
+    ),
+    (
+        "geo.bounds_extractor",
+        "geometry_maxx",
+        "geometria vuota: nessun limite",
+    ),
+    (
+        "geo.bounds_extractor",
+        "geometry_maxy",
+        "geometria vuota: nessun limite",
+    ),
+    (
+        "geo.clean_topology",
+        "geometry",
+        "riga assorbita dalle precedenti",
+    ),
+    ("geo.clip", "geometry", "ritaglio vuoto"),
+    ("geo.intersection", "geometry", "risultato vuoto"),
+    ("geo.union", "geometry", "risultato vuoto"),
+    ("geo.difference", "geometry", "risultato vuoto"),
+    ("geo.symmetric_difference", "geometry", "risultato vuoto"),
+    ("geo.cluster_dbscan", "cluster_id", "rumore"),
+    ("geo.dissolve", "geometry", "tabella vuota: una riga null"),
+    (
+        "geo.line_builder",
+        "geometry",
+        "meno di due punti, tabella vuota",
+    ),
+    (
+        "geo.polygon_builder",
+        "geometry",
+        "punti insufficienti, tabella vuota",
+    ),
+    (
+        "geo.distance",
+        "distance",
+        "geometria vuota: nessuna distanza",
+    ),
+    (
+        "geo.hausdorff_distance",
+        "hausdorff_distance",
+        "geometria vuota: nessuna distanza",
+    ),
+    (
+        "geo.frechet_distance",
+        "frechet_distance",
+        "linea vuota: nessuna distanza",
+    ),
+    (
+        "geo.line_locate_point",
+        "fraction",
+        "non LineString o linea vuota",
+    ),
+    (
+        "geo.geometry_accessors",
+        "start_point",
+        "non una linea aperta",
+    ),
+    (
+        "geo.geometry_accessors",
+        "end_point",
+        "non una linea aperta",
+    ),
+    (
+        "geo.geometry_diagnostics",
+        "validity_reason",
+        "geometria valida",
+    ),
+    ("geo.geometry_diagnostics", "bounds_minx", "geometria vuota"),
+    ("geo.geometry_diagnostics", "bounds_miny", "geometria vuota"),
+    ("geo.geometry_diagnostics", "bounds_maxx", "geometria vuota"),
+    ("geo.geometry_diagnostics", "bounds_maxy", "geometria vuota"),
+    ("geo.overlay", "__left_index", "resto della destra"),
+    ("geo.overlay", "__right_index", "resto della sinistra"),
+];
+
+/// Le colonne d'uscita nullable dove lo e' una colonna d'ingresso di nome
+/// diverso: `(operazione, colonna d'uscita, colonna d'ingresso)`.
+const NULL_DA_UNA_COLONNA_D_INGRESSO: &[(&str, &str, &str)] =
+    &[("geo.from_wkt", "geometry", "wkt")];
+
+/// Le geo allineate riga a riga su due tabelle: la riga in piu' della
+/// sinistra ha una compagna nella destra (la prima riga ripetuta).
+const ALLINEATE: [&str; 4] = [
+    "geo.intersection",
+    "geo.union",
+    "geo.difference",
+    "geo.symmetric_difference",
+];
+
+/// La tabella con ogni colonna senza null dichiarata non nullable.
+fn senza_null_dichiarati(batch: &RecordBatch) -> RecordBatch {
+    let campi: Vec<Field> = batch
+        .schema()
+        .fields()
+        .iter()
+        .zip(batch.columns())
+        .map(|(campo, colonna)| {
+            campo
+                .as_ref()
+                .clone()
+                .with_nullable(colonna.null_count() > 0)
+        })
+        .collect();
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            campi,
+            batch.schema().metadata().clone(),
+        )),
+        batch.columns().to_vec(),
+    )
+    .expect("stessa tabella, campi non nullable")
+}
+
+/// La tabella con una riga in coda, tutta null (geometria compresa: una
+/// chiave null fa un gruppo a se'); ogni campo nullable. `None` senza
+/// geometria.
+fn con_una_geometria_null(batch: &RecordBatch) -> Option<RecordBatch> {
+    let schema = batch.schema();
+    schema
+        .fields()
+        .iter()
+        .position(|campo| e_geometria(campo))?;
+    con_una_riga_in_coda(batch, true)
+}
+
+/// La tabella con una riga in coda: tutta null, o la prima ripetuta; ogni
+/// campo nullable. `None` senza righe da ripetere.
+fn con_una_riga_in_coda(batch: &RecordBatch, null: bool) -> Option<RecordBatch> {
+    if !null && batch.num_rows() == 0 {
+        return None;
+    }
+    let schema = batch.schema();
+    let colonne = batch
+        .columns()
+        .iter()
+        .map(|colonna| {
+            let coda = if null {
+                plenora_core::arrow::array::new_null_array(colonna.data_type(), 1)
+            } else {
+                colonna.slice(0, 1)
+            };
+            plenora_core::arrow::select::concat::concat(&[colonna.as_ref(), coda.as_ref()])
+                .expect("concatenazione")
+        })
+        .collect();
+    let campi: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|campo| campo.as_ref().clone().with_nullable(true))
+        .collect();
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(campi, schema.metadata().clone())),
+        colonne,
+    )
+    .ok()
+}
+
+/// L'esempio della scheda su ingressi dati; `None` se il runner non esegue
+/// l'operazione (verifica sul solo contratto).
+fn esegui_su(scheda: &Scheda, ingressi: &[RecordBatch]) -> Option<Result<RecordBatch, String>> {
+    let piano = Pipeline::from_json(&testo_piano(scheda)).expect("piano");
+    let schemi: Vec<(&str, SchemaRef)> = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(spec, batch)| (spec.nome.as_str(), batch.schema()))
+        .collect();
+    let validata = match piano.validate(&schemi) {
+        Ok(validata) => validata,
+        Err(PlenoraError::Unsupported(_)) => return None,
+        Err(errore) => return Some(Err(format!("validazione: {errore}"))),
+    };
+    let tabelle = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(spec, batch)| (spec.nome.clone(), batch.clone()))
+        .collect();
+    Some(
+        validata
+            .run(tabelle)
+            .map(|esito| esito.outputs.into_iter().next().expect("un'uscita").1)
+            .map_err(|errore| format!("esecuzione: {errore}")),
+    )
+}
+
+/// Ogni geo dichiara nullable esattamente le colonne che possono essere
+/// null, sugli esempi delle schede:
+///
+/// - con ingressi senza null (campi non nullable), una colonna d'uscita
+///   nullable deve essere una colonna d'ingresso che ha null, o stare in
+///   [`NULL_CON_INGRESSI_PRESENTI`] con il motivo;
+/// - con una riga in piu' a geometria null (primo ingresso), una colonna
+///   che diventa nullable per quella geometria deve emettere davvero un
+///   null, e una colonna che resta non nullable non ne ha (Arrow lo
+///   rifiuterebbe).
+#[test]
+#[allow(clippy::too_many_lines)] // I due confronti, un esempio per volta.
+fn le_geo_dichiarano_null_solo_dove_ne_emettono() {
+    prepara_ambiente();
+    let (schede, _) = leggi_schede();
+    let mut difetti = Vec::new();
+    for scheda in schede
+        .iter()
+        .filter(|scheda| scheda.operazione.family == Family::Geo)
+    {
+        let op = scheda.operazione.id;
+        let ingressi = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|spec| tabella_con_metadati(&spec.colonne, &spec.metadati))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("ingressi dell'esempio");
+        let senza: Vec<RecordBatch> = ingressi.iter().map(senza_null_dichiarati).collect();
+        let Some(uscita) = esegui_su(scheda, &senza) else {
+            continue;
+        };
+        let uscita = match uscita {
+            Ok(uscita) => uscita,
+            Err(errore) => {
+                difetti.push(format!("{op}, ingressi senza null: {errore}"));
+                continue;
+            }
+        };
+        let nullable_in_ingresso = |nome: &str| {
+            senza.iter().any(|batch| {
+                batch
+                    .schema()
+                    .field_with_name(nome)
+                    .is_ok_and(Field::is_nullable)
+            })
+        };
+        let nullable_senza: BTreeSet<String> = uscita
+            .schema()
+            .fields()
+            .iter()
+            .filter(|campo| campo.is_nullable())
+            .map(|campo| campo.name().clone())
+            .collect();
+        for nome in &nullable_senza {
+            let ammessa = NULL_CON_INGRESSI_PRESENTI
+                .iter()
+                .any(|(o, colonna, _)| *o == op && colonna == nome);
+            let derivata = NULL_DA_UNA_COLONNA_D_INGRESSO
+                .iter()
+                .any(|(o, colonna, sorgente)| {
+                    *o == op && colonna == nome && nullable_in_ingresso(sorgente)
+                });
+            if !ammessa && !derivata && !nullable_in_ingresso(nome) {
+                difetti.push(format!(
+                    "{op}: `{nome}` dichiarata nullable con ingressi senza null"
+                ));
+            }
+        }
+
+        let mut con_null = ingressi.clone();
+        let Some(prima) = ingressi.first().and_then(con_una_geometria_null) else {
+            continue;
+        };
+        con_null[0] = prima;
+        if ALLINEATE.contains(&op) {
+            con_null[1] = con_una_riga_in_coda(&ingressi[1], false).expect("destra con righe");
+        }
+        let Some(uscita) = esegui_su(scheda, &con_null) else {
+            continue;
+        };
+        let uscita = match uscita {
+            Ok(uscita) => uscita,
+            Err(errore) => {
+                difetti.push(format!("{op}, una geometria null: {errore}"));
+                continue;
+            }
+        };
+        let ingressi_con_null: BTreeSet<String> = con_null
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|campo| campo.name().clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (campo, colonna) in uscita.schema().fields().iter().zip(uscita.columns()) {
+            if !campo.is_nullable() {
+                if colonna.null_count() > 0 {
+                    difetti.push(format!("{op}: `{}` non nullable con null", campo.name()));
+                }
+                continue;
+            }
+            // Nullable solo per la geometria null (con ingressi senza null
+            // era non nullable) e non una colonna d'ingresso passata: la
+            // riga null deve dare un null.
+            let per_la_geometria = !nullable_senza.contains(campo.name())
+                && (!ingressi_con_null.contains(campo.name())
+                    || senza.iter().any(|batch| {
+                        batch
+                            .schema()
+                            .field_with_name(campo.name())
+                            .is_ok_and(e_geometria)
+                    }));
+            if per_la_geometria && colonna.null_count() == 0 {
+                difetti.push(format!(
+                    "{op}: `{}` dichiarata nullable per la geometria null, ma nessun null \
+                     emesso",
+                    campo.name()
+                ));
+            }
+        }
+    }
+    assert!(difetti.is_empty(), "nullabilita':\n{}", difetti.join("\n"));
+}

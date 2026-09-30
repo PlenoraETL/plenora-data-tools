@@ -15,13 +15,13 @@
 // giusti, non refusi.
 #![allow(clippy::similar_names)]
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use geo::{Geometry, GeometryCollection};
 use plenora_core::arrow::array::{
     Array, ArrayRef, BinaryArray, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::arrow::select::take::take;
 use plenora_core::contract::arrow_metadata::MAX_CELL_COORDINATES;
 use plenora_core::contract::DataContract;
@@ -231,8 +231,8 @@ impl KernelCollettivo {
                 let letta: CleanTopologyConfig = config(op, valore)?;
                 Self::Pulisci {
                     aggancio: letta.snap_tolerance,
-                    sovrapposizioni: letta.remove_overlaps.unwrap_or(true),
-                    buchi: letta.fill_gaps.unwrap_or(true),
+                    sovrapposizioni: letta.remove_overlaps,
+                    buchi: letta.fill_gaps,
                     precisione: geometria.precisione()?,
                 }
             }
@@ -607,11 +607,21 @@ fn allineate_alle_righe(
     Ok((colonne, batch.num_rows()))
 }
 
-/// `collect`: gruppi per chiave testuale in ordine lessicografico (come
-/// `geo_collect_batch` a `190c493`: tipo, presenza e lunghezza di ogni
-/// valore entrano nella chiave, quindi valori diversi non collidono), le
-/// geometrie del gruppo in ordine d'ingresso; per ogni gruppo la geometria
-/// raccolta e i valori chiave della prima riga.
+/// `collect`: gruppi nell'**ordine naturale dei valori tipizzati** delle
+/// chiavi, dalla prima: il confronto di `table.sort`
+/// (`compare_cells_typed` dei kernel tabellari: numeri per valore, testo per
+/// byte, date e istanti per istante, `Float64` con `total_cmp`, null dopo i
+/// valori). Le geometrie del gruppo restano in ordine d'ingresso; per ogni
+/// gruppo la geometria raccolta e i valori chiave della prima riga.
+///
+/// A `190c493` l'ordine era quello di una chiave testuale con la lunghezza
+/// del valore scritta in testa come testo: `"10"` prima di `"9"`, ma anche
+/// un valore di 10 caratteri prima di uno di 9.
+///
+/// La permutazione e' quella di `table.sort` (stabile, crescente) su una
+/// tabella delle sole chiavi con l'indice di riga in coda: le righe di uno
+/// stesso gruppo restano nell'ordine d'ingresso, e il gruppo cambia dove
+/// una chiave differisce per lo stesso comparatore.
 fn raccogli(
     op: &str,
     celle: &BinaryArray,
@@ -619,31 +629,10 @@ fn raccogli(
     chiavi: &[usize],
 ) -> Result<(Vec<ArrayRef>, usize)> {
     let geometrie = decodifica(celle)?;
-    let mut gruppi: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for riga in 0..batch.num_rows() {
-        let mut chiave = String::new();
-        for &indice in chiavi {
-            let colonna = batch.columns().get(indice).ok_or_else(|| {
-                PlenoraError::Internal(format!("{op}: colonna chiave oltre lo schema"))
-            })?;
-            chiave.push_str(&colonna.data_type().to_string());
-            chiave.push('\u{1e}');
-            match plenora_kernels_table::scalar_as_string(colonna.as_ref(), riga)? {
-                Some(valore) => {
-                    chiave.push('1');
-                    chiave.push_str(&valore.len().to_string());
-                    chiave.push(':');
-                    chiave.push_str(&valore);
-                }
-                None => chiave.push('0'),
-            }
-            chiave.push('\u{1f}');
-        }
-        gruppi.entry(chiave).or_default().push(riga);
-    }
+    let gruppi = gruppi_in_ordine(op, batch, chiavi)?;
     let mut raccolte: Vec<Option<Vec<u8>>> = Vec::with_capacity(gruppi.len());
     let mut rappresentanti: Vec<u64> = Vec::with_capacity(gruppi.len());
-    for righe in gruppi.values() {
+    for righe in &gruppi {
         let gruppo: Vec<Option<Geometry<f64>>> = righe
             .iter()
             .map(|&riga| geometrie.get(riga).cloned().flatten())
@@ -669,6 +658,69 @@ fn raccogli(
         colonne.push(take(colonna.as_ref(), &indici, None)?);
     }
     Ok((colonne, indici.len()))
+}
+
+/// I gruppi di `collect` in ordine naturale delle chiavi, ognuno con le sue
+/// righe in ordine d'ingresso.
+fn gruppi_in_ordine(op: &str, batch: &RecordBatch, chiavi: &[usize]) -> Result<Vec<Vec<usize>>> {
+    const INDICE: &str = "__plenora_riga";
+    let mut campi = Vec::with_capacity(chiavi.len() + 1);
+    let mut colonne: Vec<ArrayRef> = Vec::with_capacity(chiavi.len() + 1);
+    let mut nomi = Vec::with_capacity(chiavi.len());
+    for (posizione, &indice) in chiavi.iter().enumerate() {
+        let colonna = batch.columns().get(indice).ok_or_else(|| {
+            PlenoraError::Internal(format!("{op}: colonna chiave oltre lo schema"))
+        })?;
+        // Nomi posizionali: nessuna collisione con l'indice ne' fra chiavi.
+        let nome = format!("k{posizione}");
+        campi.push(Field::new(&nome, colonna.data_type().clone(), true));
+        colonne.push(Arc::clone(colonna));
+        nomi.push(nome);
+    }
+    let righe = u64::try_from(batch.num_rows())
+        .map_err(|_| PlenoraError::Internal(format!("{op}: righe non rappresentabili")))?;
+    campi.push(Field::new(INDICE, DataType::UInt64, false));
+    colonne.push(Arc::new(UInt64Array::from_iter_values(0..righe)));
+    let chiavi_e_indice =
+        plenora_core::batch_with_rows(Arc::new(Schema::new(campi)), colonne, batch.num_rows())?;
+    let ordinata = plenora_kernels_table::aggregation::sort(
+        &chiavi_e_indice,
+        &plenora_kernels_table::aggregation::Sort {
+            columns: nomi,
+            ascending: true,
+        },
+    )?;
+    let indici = ordinata
+        .column(chiavi.len())
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| PlenoraError::Internal(format!("{op}: indice di riga non UInt64")))?;
+    let mut gruppi: Vec<Vec<usize>> = Vec::new();
+    for posizione in 0..ordinata.num_rows() {
+        let riga = usize::try_from(indici.value(posizione))
+            .map_err(|_| PlenoraError::Internal(format!("{op}: riga non rappresentabile")))?;
+        let stesso_gruppo = match posizione.checked_sub(1) {
+            None => false,
+            Some(precedente) => {
+                let mut uguali = true;
+                for colonna in &ordinata.columns()[..chiavi.len()] {
+                    if plenora_kernels_table::aggregation::compare_cells_typed(
+                        colonna, precedente, colonna, posizione,
+                    )? != std::cmp::Ordering::Equal
+                    {
+                        uguali = false;
+                        break;
+                    }
+                }
+                uguali
+            }
+        };
+        match gruppi.last_mut() {
+            Some(gruppo) if stesso_gruppo => gruppo.push(riga),
+            _ => gruppi.push(vec![riga]),
+        }
+    }
+    Ok(gruppi)
 }
 
 /// `generate_grid`: geometria, `cell_i`, `cell_j` e, se chiesti, i

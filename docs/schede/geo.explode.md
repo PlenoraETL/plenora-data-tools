@@ -14,7 +14,8 @@ Nessuno: la config è `{}`.
 ### Schema
 
 Le colonne d'ingresso restano, nell'ordine, con gli stessi tipi; la
-colonna geometria tiene nome, CRS e dimensioni. In coda si aggiunge
+colonna geometria tiene nome, CRS e dimensioni, ed è non nullable (una
+riga a geometria null non produce parti). In coda si aggiunge
 `__parent_index`, `uint64` non nullable: l'indice della riga madre. I
 metadati di schema restano; delle proprietà del contratto resta
 `sorted_by`, il conteggio delle righe non è più noto. I tipi dichiarati

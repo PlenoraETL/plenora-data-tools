@@ -64,11 +64,11 @@ riga):
 
 - `Schema`: colonna geometria assente o non `Binary`;
 - `ResourceLimit`: cella oltre il limite di byte per cella; prenotazione di
-  memoria fallita;
-- `InvalidPlan`: WKB malformato o con coordinate non finite; input invalido
-  con più di 10.000 segmenti (`WorkLimit`: il lavoro stimato è il quadrato
-  dei segmenti); coordinate o componenti d'uscita oltre i limiti per cella;
-  riparazione che resta invalida; precisione del CRS non valida;
+  memoria fallita; input invalido con più di 10.000 segmenti (`WorkLimit`:
+  il lavoro stimato è il quadrato dei segmenti); coordinate o componenti
+  d'uscita oltre i limiti per cella;
+- `InvalidPlan`: WKB malformato o con coordinate non finite; riparazione
+  che resta invalida; precisione del CRS non valida;
 - `Unsupported`: WKB con dimensioni Z/M o SRID; noding non convergente;
   segno d'area non decidibile su coordinate fuori da `[2^-450, 2^450]`
   (`NumericRange`); `PrecisionInsufficient` (sotto, «Precisione»);

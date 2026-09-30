@@ -28,8 +28,8 @@ accetta e non ha effetto.
 
 Le colonne dell'ingresso, nelle stesse posizioni e con gli stessi tipi, più
 `__parent_index` (`uint64`, non nullable) in coda. Il campo geometria
-conserva i metadati d'ingresso tranne la dichiarazione dei tipi, e la sua
-nullabilità. Il contratto dichiara i tipi `exact`: `Polygon` per sorgenti
+conserva i metadati d'ingresso tranne la dichiarazione dei tipi, ed è non
+nullable (una sorgente null non produce parti). Il contratto dichiara i tipi `exact`: `Polygon` per sorgenti
 `Polygon`/`MultiPolygon`, `LineString` per sorgenti `LineString`, entrambi
 se l'ingresso non ha una dichiarazione `exact` che li restringa. Resta
 `sorted_by`; `row_count` cade.
@@ -77,14 +77,14 @@ Poi l'esecuzione Arrow (vince la prima riga che fallisce):
 
 - `InvalidPlan`: sorgente di tipo
   diverso da `LineString`, `Polygon`, `MultiPolygon`; lama di tipo non
-  ammesso; WKB malformato o OGC-invalido; limiti superati (coordinate per
-  cella, per ciascun ingresso e per la loro somma; 100.000.000 coppie di
-  noding o test d'intersezione; righe d'uscita oltre il limite di righe
-  dell'arco, `max_output_rows` per un output del piano e
-  `max_rows_per_edge` altrimenti, cumulate su tutte le righe); area non conservata (`AreaMismatch`) o bordo
-  non ricoperto (`CoverageMismatch`);
+  ammesso; WKB malformato o OGC-invalido; area non conservata
+  (`AreaMismatch`) o bordo non ricoperto (`CoverageMismatch`);
 - `ResourceLimit`: cella oltre il limite di byte; prenotazione di memoria
-  fallita;
+  fallita; limiti superati (coordinate per cella, per ciascun ingresso e
+  per la loro somma; 100.000.000 coppie di noding o test d'intersezione;
+  righe d'uscita oltre il limite di righe dell'arco, `max_output_rows` per
+  un output del piano e `max_rows_per_edge` altrimenti, cumulate su tutte
+  le righe);
 - `Unsupported`: noding non convergente; segno d'area non decidibile;
   `PrecisionInsufficient` (sotto, «Precisione»);
 - `Internal`: panico di `geo` dentro il kernel, invariante violata.

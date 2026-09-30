@@ -28,7 +28,7 @@ passano dalla matrice DE-9IM:
 Le colonne della sinistra, invariate, più `__right_index` in coda, `uint64`
 non nullable. Le colonne della destra non passano: si ricollegano con
 `__right_index`; non c'è `__left_index`. La colonna geometria resta quella
-della sinistra. I metadati di schema sono la fusione dei due lati; le
+della sinistra, non nullable: una geometria null non ha coppie. I metadati di schema sono la fusione dei due lati; le
 proprietà del contratto (`sorted_by`, `row_count`) si perdono.
 
 ### Righe
@@ -78,7 +78,7 @@ Dal kernel (`spatial_join::spatial_join_nullable_validated`, errore
 `SpatialJoinError`, sulle geometrie già validate), nella categoria del
 passo geo indicata fra parentesi:
 
-- `PairLimitExceeded` (`InvalidPlan`): le coppie confermate superano il
+- `PairLimitExceeded` (`ResourceLimit`): le coppie confermate superano il
   limite di righe dell'arco (si controlla coppia per coppia, prima di
   materializzarle; ogni altro errore, il primo in ordine di riga, ha la
   precedenza);

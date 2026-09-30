@@ -4,22 +4,26 @@ Semplifica ogni geometria togliendo vertici, nella stessa colonna, con uno
 di due algoritmi:
 
 - `douglas_peucker` (default): Ramer-Douglas-Peucker su ogni linea e ogni
-  anello; toglie i vertici che distano meno di `tolerance` (unità del CRS)
-  dalla linea semplificata. Un anello resta di almeno quattro coordinate;
-  la topologia non è garantita e un risultato non valido è un errore;
+  anello; toglie i vertici che distano meno di `tolerance` (una
+  **distanza**, unità del CRS) dalla linea semplificata. Un anello resta di
+  almeno quattro coordinate; la topologia non è garantita e un risultato
+  non valido è un errore;
 - `preserve_topology`: Visvalingam-Whyatt con conservazione della topologia
   di `geo` (`simplify_vw_preserve`): toglie i vertici il cui triangolo con i
-  due vicini ha **area** minore di `tolerance` (unità del CRS al quadrato),
-  senza creare intersezioni.
+  due vicini ha **area** non maggiore di `min_area` (unità del CRS al
+  quadrato), senza creare intersezioni.
 
-Punti e multi-punti passano invariati; una collezione si semplifica membro
-per membro. Con `tolerance` 0 la geometria non cambia.
+La soglia ha un nome per algoritmo perché non è la stessa grandezza:
+`tolerance` con `douglas_peucker`, `min_area` con `preserve_topology`, e
+l'altra si rifiuta. Punti e multi-punti passano invariati; una collezione
+si semplifica membro per membro. Con soglia 0 la geometria non cambia.
 
 ### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `tolerance` | numero | obbligatorio | finito, maggiore o uguale a 0 | soglia: distanza con `douglas_peucker`, area con `preserve_topology` |
+| `tolerance` | numero | obbligatorio con `douglas_peucker`, vietato con `preserve_topology` | finito, maggiore o uguale a 0 | distanza massima di un vertice tolto (unità del CRS) |
+| `min_area` | numero | obbligatorio con `preserve_topology`, vietato con `douglas_peucker` | finito, maggiore o uguale a 0 | area del triangolo sotto la quale, uguaglianza compresa, un vertice si toglie (unità del CRS al quadrato) |
 | `policy` | stringa | `douglas_peucker` | `douglas_peucker`, `preserve_topology` | algoritmo |
 
 ### Schema
@@ -48,8 +52,12 @@ In validazione (analisi del contratto):
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
-- `InvalidPlan`: `tolerance` assente, non finita o negativa, `policy` fuori
-  elenco, campi sconosciuti;
+- `InvalidPlan`: la soglia dell'algoritmo assente (`tolerance` con
+  `douglas_peucker`, `min_area` con `preserve_topology`), non finita o
+  negativa; la soglia dell'altro algoritmo presente (`tolerance` con
+  `preserve_topology`: «la soglia di Visvalingam-Whyatt è un'area,
+  `min_area`»; `min_area` con `douglas_peucker`); `policy` fuori elenco;
+  campi sconosciuti;
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
@@ -73,8 +81,9 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
-- `InvalidParameter`: `tolerance` non finita o negativa (l'analisi la
-  rifiuta prima).
+- `InvalidParameter`: soglia non finita o negativa (l'analisi la
+  rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
+  scala delle coordinate diventa zero.
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
@@ -88,9 +97,14 @@ una previsione dalle misure
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 `preserve_topology` non è `TopologyPreservingSimplifier` di GEOS
 (`ST_SimplifyPreserveTopology`), che usa una distanza: qui la soglia è
-un'area, e lo stesso numero semplifica in modo molto diverso. Le coordinate
-di modulo oltre `1e150`, o non nulle e sotto `1e-150`, si semplificano in
-uno spazio scalato uniformemente e si riportano indietro.
+un'area, e per questo si chiama `min_area`. Fino alla versione 2 del
+catalogo si scriveva `tolerance` anche qui, e un piano scritto pensando a
+GEOS semplificava in modo molto diverso senza errore: ora quel piano si
+rifiuta in validazione. Le coordinate di modulo oltre `1e150`, o non
+nulle e sotto `1e-150`, si semplificano in uno spazio scalato
+uniformemente e si riportano indietro, con la soglia scalata come la sua
+grandezza (una distanza per il fattore, un'area per il suo quadrato; fino
+alla versione 2 l'area si scalava come una distanza).
 
 ### Precisione
 
@@ -98,7 +112,7 @@ Esatta: i vertici d'uscita sono vertici d'ingresso, senza calcolo, fuori
 dal percorso scalato (coordinate oltre `1e150` o sotto `1e-150` in modulo,
 fuori da ogni dominio di un CRS reale), dove passano per una divisione e
 una moltiplicazione. Lo scarto dalla forma originale è quello chiesto con
-`tolerance`, non un errore di precisione
+la soglia, non un errore di precisione
 ([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità

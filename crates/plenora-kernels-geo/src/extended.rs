@@ -9,12 +9,13 @@
 //! lavoro) li sceglie il chiamante, cioe' il runner; il secondo operando non
 //! puntuale delle distanze geografiche lo rifiuta l'analisi.
 
+use crate::geodetica::EllissoideGeodetico;
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::concave_hull::ConcaveHullOptions;
-use geo::algorithm::line_measures::{Distance, Geodesic, Haversine, Length};
 use geo::{
     AffineOps, AffineTransform, ConcaveHull, CoordsIter, Geometry, HausdorffDistance, Point,
 };
+use geographiclib_rs::InverseGeodesic as _;
 use thiserror::Error;
 
 /// Errori dei kernel di questo modulo. I messaggi non riportano coordinate:
@@ -461,62 +462,114 @@ fn validate_geographic_point(point: Point<f64>) -> Result<(), ExtendedError> {
     Ok(())
 }
 
-/// Distanza haversine in metri tra due punti geografici (lon/lat, in
-/// gradi).
+/// Distanza di cerchio massimo in metri tra due punti geografici (lon/lat,
+/// in gradi), sulla sfera del raggio medio dell'ellissoide del datum.
 ///
-/// Arco di cerchio massimo su una sfera di raggio 6 371 008,8 m
-/// (raggio medio di GRS 80, `Haversine` di `geo`), qualunque sia il datum
-/// del CRS.
+/// La sfera ha il raggio medio IUGG `R1 = a (1 - f / 3)` dell'ellissoide
+/// del CRS ([`EllissoideGeodetico::raggio_medio_m`]; per WGS 84
+/// 6 371 008,771 m), non un raggio fisso. Il calcolo e' il problema
+/// inverso di `geographiclib-rs` a schiacciamento nullo, ben condizionato
+/// ovunque, anche agli antipodi: la formula dell'emiseno (`2 asin(sqrt h)`)
+/// li perde (con `h` arrotondato sopra 1 rende NaN, e vicino a 1 amplifica
+/// l'arrotondamento fino a decimetri). Il risultato e' sempre finito; il
+/// nome dell'operazione resta `haversine` per compatibilita'.
+///
+/// La sfera e' un modello: rispetto alla geodetica sull'ellissoide
+/// ([`geodesic_distance_m`]) la distanza differisce fino a circa lo 0,5%.
 ///
 /// # Errors
 ///
 /// `ExtendedError::InvalidGeographicCoordinate` se una coordinata non e'
 /// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90];
-/// `ExtendedError::CalcoloNonConcluso` se il calcolo di `geo` va in
+/// `ExtendedError::InvalidOutput` se la distanza non e' finita (mai
+/// atteso); `ExtendedError::CalcoloNonConcluso` se il calcolo va in
 /// panico.
-pub fn haversine_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
+pub fn haversine_distance_m(
+    left: Point<f64>,
+    right: Point<f64>,
+    ellissoide: &EllissoideGeodetico,
+) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
-    protetto(|| Haversine.distance(left, right))
+    let distanza: f64 = protetto(|| {
+        ellissoide
+            .sfera()
+            .inverse(left.y(), left.x(), right.y(), right.x())
+    })?;
+    distanza_finita(distanza)
 }
 
 /// Distanza geodetica in metri tra due punti geografici (lon/lat, in
 /// gradi).
 ///
-/// Geodetica sull'ellissoide WGS 84 (`Geodesic` di `geo`,
-/// algoritmo di Karney di `geographiclib-rs`), **qualunque sia
-/// l'ellissoide del CRS**.
+/// Geodetica sull'ellissoide del datum del CRS (`ellissoide`, costruito
+/// dal CRS della colonna con [`EllissoideGeodetico::da_crs`]): problema
+/// inverso di Karney (2013), `geographiclib-rs`, con un errore dell'ordine
+/// dei nanometri. Nessun ripiego su WGS 84: con ED50 o Monte Mario
+/// (Internazionale 1924) la differenza sarebbe di circa 4 m ogni 100 km.
 ///
 /// # Errors
 ///
 /// `ExtendedError::InvalidGeographicCoordinate` se una coordinata non e'
 /// finita o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90];
-/// `ExtendedError::CalcoloNonConcluso` se il calcolo di `geo` va in
+/// `ExtendedError::InvalidOutput` se la distanza non e' finita (mai
+/// atteso); `ExtendedError::CalcoloNonConcluso` se il calcolo va in
 /// panico.
-pub fn geodesic_distance_m(left: Point<f64>, right: Point<f64>) -> Result<f64, ExtendedError> {
+pub fn geodesic_distance_m(
+    left: Point<f64>,
+    right: Point<f64>,
+    ellissoide: &EllissoideGeodetico,
+) -> Result<f64, ExtendedError> {
     validate_geographic_point(left)?;
     validate_geographic_point(right)?;
-    protetto(|| Geodesic.distance(left, right))
+    let distanza = protetto(|| distanza_geodetica(ellissoide, left, right))?;
+    distanza_finita(distanza)
 }
 
 /// Lunghezza geodetica in metri di una linea geografica (lon/lat, in
 /// gradi).
 ///
-/// Somma delle geodetiche fra vertici consecutivi sull'ellissoide
-/// WGS 84, come [`geodesic_distance_m`]. Una linea vuota o di un solo
-/// vertice vale 0.
+/// Somma, in ordine, delle geodetiche fra vertici consecutivi
+/// sull'ellissoide del datum, come [`geodesic_distance_m`]. Una linea vuota
+/// o di un solo vertice vale 0.
 ///
 /// # Errors
 ///
 /// `ExtendedError::InvalidGeographicCoordinate` se un vertice non e'
 /// finito o e' fuori dagli intervalli lon [-180, 180] e lat [-90, 90];
-/// `ExtendedError::CalcoloNonConcluso` se il calcolo di `geo` va in
+/// `ExtendedError::InvalidOutput` se la lunghezza non e' finita (mai
+/// attesa); `ExtendedError::CalcoloNonConcluso` se il calcolo va in
 /// panico.
-pub fn geodesic_line_length_m(line: &geo::LineString<f64>) -> Result<f64, ExtendedError> {
+pub fn geodesic_line_length_m(
+    line: &geo::LineString<f64>,
+    ellissoide: &EllissoideGeodetico,
+) -> Result<f64, ExtendedError> {
     for coordinate in line.coords() {
         validate_geographic_point(Point::from(*coordinate))?;
     }
-    protetto(|| Geodesic.length(line))
+    // Stessa somma di `Length` di `geo` (`Geodesic.length`): in ordine,
+    // partendo da zero.
+    let lunghezza = protetto(|| {
+        line.lines().fold(0.0, |totale, lato| {
+            totale + distanza_geodetica(ellissoide, lato.start_point(), lato.end_point())
+        })
+    })?;
+    distanza_finita(lunghezza)
+}
+
+/// Il problema inverso sull'ellissoide: la distanza, in metri.
+fn distanza_geodetica(ellissoide: &EllissoideGeodetico, da: Point<f64>, a: Point<f64>) -> f64 {
+    ellissoide.geodetica().inverse(da.y(), da.x(), a.y(), a.x())
+}
+
+fn distanza_finita(distanza: f64) -> Result<f64, ExtendedError> {
+    if distanza.is_finite() {
+        Ok(distanza)
+    } else {
+        Err(ExtendedError::InvalidOutput(
+            "distanza NaN o infinita".to_owned(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -666,14 +719,21 @@ mod tests {
     fn geographic_distances_validate_ranges_and_units() {
         let bologna = Point::new(11.3426, 44.4949);
         let modena = Point::new(10.9252, 44.6471);
-        let geodesic = geodesic_distance_m(bologna, modena).unwrap();
-        let haversine = haversine_distance_m(bologna, modena).unwrap();
+        let geodesic =
+            geodesic_distance_m(bologna, modena, &crate::geodetica::wgs84_di_prova()).unwrap();
+        let haversine =
+            haversine_distance_m(bologna, modena, &crate::geodetica::wgs84_di_prova()).unwrap();
         assert!(geodesic > 35_000.0 && geodesic < 40_000.0);
         assert!((geodesic - haversine).abs() < 200.0);
-        assert!(geodesic_distance_m(Point::new(200.0, 0.0), modena).is_err());
+        assert!(geodesic_distance_m(
+            Point::new(200.0, 0.0),
+            modena,
+            &crate::geodetica::wgs84_di_prova()
+        )
+        .is_err());
 
         let equator = line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 0.0)];
-        let length = geodesic_line_length_m(&equator).unwrap();
+        let length = geodesic_line_length_m(&equator, &crate::geodetica::wgs84_di_prova()).unwrap();
         assert!((length - 111_319.490_793).abs() < 0.01);
     }
 
@@ -698,8 +758,18 @@ mod tests {
             Point::new(0.0, 91.0),
             Point::new(f64::NAN, 0.0),
         ] {
-            assert!(haversine_distance_m(point, Point::new(0.0, 0.0)).is_err());
-            assert!(geodesic_distance_m(point, Point::new(0.0, 0.0)).is_err());
+            assert!(haversine_distance_m(
+                point,
+                Point::new(0.0, 0.0),
+                &crate::geodetica::wgs84_di_prova()
+            )
+            .is_err());
+            assert!(geodesic_distance_m(
+                point,
+                Point::new(0.0, 0.0),
+                &crate::geodetica::wgs84_di_prova()
+            )
+            .is_err());
         }
     }
 }

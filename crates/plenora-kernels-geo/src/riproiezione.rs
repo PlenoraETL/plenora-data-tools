@@ -114,8 +114,12 @@ pub struct ReprojectParams {
     griglie: BTreeMap<u32, PathBuf>,
 }
 
+/// Una config illeggibile e' un piano non valido, come per ogni altra
+/// operazione geo (`parse_config` dell'analisi). Fino alla versione 1
+/// dell'analisi del contratto di `geo.reproject` era `InvalidConfiguration`,
+/// la categoria della configurazione d'ambiente, non del piano.
 fn errore_config(op: &str, motivo: impl std::fmt::Display) -> PlenoraError {
-    PlenoraError::InvalidConfiguration(format!("{op}: {motivo}"))
+    PlenoraError::InvalidPlan(format!("{op}: {motivo}"))
 }
 
 impl ReprojectParams {
@@ -126,7 +130,7 @@ impl ReprojectParams {
     ///
     /// # Errors
     ///
-    /// `PlenoraError::InvalidConfiguration` per una config non leggibile o
+    /// `PlenoraError::InvalidPlan` per una config non leggibile o
     /// un percorso di griglia vuoto, troppo lungo o con NUL;
     /// `PlenoraError::Crs` per il target non risolvibile e per i rifiuti di
     /// [`PianoRiproiezione::nuovo`].

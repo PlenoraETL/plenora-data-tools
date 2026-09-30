@@ -117,16 +117,29 @@ impl ExtensionError {
         )
     }
 
+    /// `true` se e' un limite superato dai dati (`IssueLimit`: le
+    /// sovrapposizioni di `coverage_validate` oltre `max_issues`): il piano
+    /// e' corretto e sono i dati a non entrarci, `ResourceLimit` come ogni
+    /// limite (`PlenoraError::ResourceLimit`). `CellLimit` no: le celle di
+    /// `generate_grid` dipendono solo dalla config, e superarle e' un piano
+    /// sbagliato (`InvalidPlan`, come in analisi).
+    #[must_use]
+    pub const fn e_un_limite(&self) -> bool {
+        matches!(self, Self::IssueLimit { .. })
+    }
+
     /// L'errore nella categoria giusta, con il prefisso dell'operazione:
     /// interno cio' che e' interno, `Unsupported` la precisione
     /// insufficiente (come `RustBackendError::PrecisionInsufficient`),
-    /// `InvalidPlan` il resto.
+    /// `ResourceLimit` un limite superato, `InvalidPlan` il resto.
     #[must_use]
     pub fn del_passo(&self, operazione: &str) -> PlenoraError {
         if self.e_interna() {
             PlenoraError::Internal(format!("{operazione}: {self}"))
         } else if matches!(self, Self::PrecisionInsufficient) {
             PlenoraError::Unsupported(format!("{operazione}: {self}"))
+        } else if self.e_un_limite() {
+            PlenoraError::ResourceLimit(format!("{operazione}: {self}"))
         } else {
             PlenoraError::InvalidPlan(format!("{operazione}: {self}"))
         }

@@ -157,5 +157,6 @@ pub(in crate::analyze) fn analyze_cluster_dbscan(
         return Err(invalid_param(op, "min_points", "deve essere almeno 1"));
     }
     let name = output_name(op, parsed.output_column.as_deref(), CLUSTER_ID_COLUMN)?;
-    analyze_add_column(op, input, name, DataType::UInt64)
+    // Null per il rumore, anche per una geometria presente.
+    analyze_add_column(op, input, name, DataType::UInt64, true)
 }

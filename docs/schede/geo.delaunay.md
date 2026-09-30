@@ -13,7 +13,8 @@ Nessuno: la config è `{}`.
 ### Schema
 
 La colonna geometria resta al suo posto, con lo stesso nome, lo stesso CRS
-e dimensioni `xy`; i tipi dichiarati diventano esattamente `Polygon` (le
+e dimensioni `xy`, non nullable (una riga a geometria null non produce
+triangoli); i tipi dichiarati diventano esattamente `Polygon` (le
 chiavi dei tipi ereditate si tolgono dai metadati del campo). Si aggiunge in
 coda `__parent_index`, `uint64` non nullable, con l'indice della riga
 d'origine. Le altre colonne e i metadati di schema restano; delle proprietà
@@ -62,7 +63,8 @@ dell'ingresso dichiara con un elenco e che non vi compare.
 
 Poi il kernel, per geometria, con errore `ExtendedAlgorithmError` che il
 runner traduce così: `Internal`, `ValidazioneNonConclusa` e
-`CalcoloNonConcluso` diventano `Internal`, le altre `InvalidPlan`. Il
+`CalcoloNonConcluso` diventano `Internal`, i limiti (`CoordinateLimit`,
+`OutputLimit`, `WorkLimit`) `ResourceLimit`, le altre `InvalidPlan`. Il
 kernel rifiuta la geometria con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
 `CoordinateLimit` (coordinate d'ingresso, duplicati compresi, oltre

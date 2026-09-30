@@ -17,7 +17,7 @@ dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 ### Schema
 
-Aggiunge in coda `output_column`, `bool` nullable, senza metadati. Le altre
+Aggiunge in coda `output_column`, `bool`, nullable solo se lo è la colonna geometria (null dove la geometria è null), senza metadati. Le altre
 colonne restano nell'ordine e con i loro metadati; la colonna geometria
 resta com'è (tipi dichiarati, CRS, dimensioni `xy`). Metadati di schema e
 proprietà del contratto (`sorted_by`, `row_count`) si conservano.

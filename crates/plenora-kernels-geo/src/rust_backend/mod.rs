@@ -335,19 +335,23 @@ pub enum RustBackendError {
 }
 
 impl From<RustBackendError> for PlenoraError {
-    /// La stessa attribuzione che il passo dell'executor di
-    /// `plenora-data-tools@190c493` faceva sugli errori GEOS: interno cio'
-    /// che e' interno, `InvalidPlan` il resto (limiti compresi). In piu',
-    /// casi che GEOS non aveva: la memoria esaurita e' `ResourceLimit`; il
-    /// noding non convergente, il segno d'area non decidibile
-    /// (`NumericRange`) e `PrecisionInsufficient` sono `Unsupported`.
+    /// Interno cio' che e' interno; `ResourceLimit` la memoria esaurita e i
+    /// limiti di lavoro superati (`CoordinateLimit`, `OutputLimit`,
+    /// `WorkLimit`: il piano e' corretto, sono i dati a non entrarci, come
+    /// dice `PlenoraError::ResourceLimit`; a `190c493` erano `InvalidPlan`);
+    /// `Unsupported` il noding non convergente, il segno d'area non
+    /// decidibile (`NumericRange`) e `PrecisionInsufficient`; `InvalidPlan`
+    /// il resto.
     fn from(error: RustBackendError) -> Self {
         match error {
             RustBackendError::InputContract(error) => error,
             RustBackendError::CalcoloNonConcluso(_) | RustBackendError::Internal(_) => {
                 Self::Internal(error.to_string())
             }
-            RustBackendError::AllocationFailed(_) => Self::ResourceLimit(error.to_string()),
+            RustBackendError::AllocationFailed(_)
+            | RustBackendError::CoordinateLimit { .. }
+            | RustBackendError::OutputLimit { .. }
+            | RustBackendError::WorkLimit { .. } => Self::ResourceLimit(error.to_string()),
             RustBackendError::NodingDidNotConverge
             | RustBackendError::NumericRange
             | RustBackendError::PrecisionInsufficient => Self::Unsupported(error.to_string()),
@@ -1298,7 +1302,7 @@ mod tests {
                 actual: 2,
                 limit: 1
             }),
-            PlenoraError::InvalidPlan(_)
+            PlenoraError::ResourceLimit(_)
         ));
         assert!(matches!(
             PlenoraError::from(RustBackendError::CalcoloNonConcluso("stringa")),

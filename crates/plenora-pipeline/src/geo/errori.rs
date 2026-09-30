@@ -1,13 +1,15 @@
 //! Gli errori dei kernel geografici nella categoria di [`PlenoraError`].
 //!
 //! Stessa attribuzione di `ExtensionError::del_passo` e di
-//! `From<RustBackendError>` dei kernel, e del passo geo dell'executor a
-//! `190c493` (`errore_di_coppia`, `esito_kernel`): `Internal` cio' che non ha
-//! concluso o un'invariante saltata (nessuno ha dimostrato che l'ingresso
-//! sia sbagliato), `Unsupported` la precisione insufficiente (README,
-//! «Precisione delle operazioni geografiche»), `InvalidPlan` il resto,
-//! limiti di lavoro compresi. Il testo e' quello del kernel, che non porta
-//! valori di cella (al piu' l'indice di una riga del passo).
+//! `From<RustBackendError>` dei kernel: `Internal` cio' che non ha concluso
+//! o un'invariante saltata (nessuno ha dimostrato che l'ingresso sia
+//! sbagliato), `Unsupported` la precisione insufficiente (README,
+//! «Precisione delle operazioni geografiche»), `ResourceLimit` un limite di
+//! lavoro, d'uscita o di coppie superato (il piano e' corretto, sono i dati a
+//! non entrarci: la definizione di `PlenoraError::ResourceLimit`, come le
+//! tabellari; a `190c493` erano `InvalidPlan`), `InvalidPlan` il resto. Il
+//! testo e' quello del kernel, che non porta valori di cella (al piu'
+//! l'indice di una riga del passo).
 
 use plenora_core::PlenoraError;
 use plenora_kernels_geo::advanced::AdvancedError;
@@ -29,6 +31,8 @@ pub enum Classe {
     Interna,
     /// Spostamento oltre la precisione dichiarata.
     Precisione,
+    /// Un limite di lavoro, d'uscita o di coppie superato.
+    Limite,
     /// Ingresso o parametri rifiutati dal kernel.
     Piano,
 }
@@ -44,6 +48,7 @@ pub fn del_kernel(op: &str, errore: &impl ErroreKernel) -> PlenoraError {
     match errore.classe() {
         Classe::Interna => PlenoraError::Internal(format!("{op}: {errore}")),
         Classe::Precisione => PlenoraError::Unsupported(format!("{op}: {errore}")),
+        Classe::Limite => PlenoraError::ResourceLimit(format!("{op}: {errore}")),
         Classe::Piano => PlenoraError::InvalidPlan(format!("{op}: {errore}")),
     }
 }
@@ -67,11 +72,10 @@ impl ErroreKernel for ExtendedError {
     fn classe(&self) -> Classe {
         match self {
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
+            Self::CoordinateLimit { .. } | Self::WorkLimit { .. } => Classe::Limite,
             Self::InvalidParameter { .. }
             | Self::InvalidInput(_)
             | Self::InvalidOutput(_)
-            | Self::CoordinateLimit { .. }
-            | Self::WorkLimit { .. }
             | Self::InvalidGeographicCoordinate
             | Self::IndexOverflow => Classe::Piano,
         }
@@ -84,15 +88,16 @@ impl ErroreKernel for ExtendedAlgorithmError {
             Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => {
                 Classe::Interna
             }
+            Self::CoordinateLimit { .. } | Self::OutputLimit { .. } | Self::WorkLimit { .. } => {
+                Classe::Limite
+            }
             Self::InvalidParameter { .. }
             | Self::InvalidInput(_)
             | Self::InvalidOutput(_)
             | Self::UnsupportedGeometry { .. }
-            | Self::CoordinateLimit { .. }
-            | Self::OutputLimit { .. }
-            | Self::WorkLimit { .. }
             | Self::Triangulation(_)
             | Self::InvalidGeographicCoordinate
+            | Self::AzimutNonDefinito(_)
             | Self::IndexOverflow => Classe::Piano,
         }
     }
@@ -104,6 +109,8 @@ impl ErroreKernel for ExtensionError {
             Classe::Interna
         } else if matches!(self, Self::PrecisionInsufficient) {
             Classe::Precisione
+        } else if self.e_un_limite() {
+            Classe::Limite
         } else {
             Classe::Piano
         }
@@ -115,10 +122,10 @@ impl ErroreKernel for TopologyError {
         match self {
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             Self::PrecisionInsufficient => Classe::Precisione,
+            Self::ResourceLimit { .. } => Classe::Limite,
             Self::UnsupportedGeometry(_)
             | Self::InvalidGeometry(_)
             | Self::InvalidParameter { .. }
-            | Self::ResourceLimit { .. }
             | Self::IndexOverflow => Classe::Piano,
         }
     }
@@ -129,9 +136,9 @@ impl ErroreKernel for AdvancedError {
         match self {
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             Self::PrecisionInsufficient | Self::VerticeMalCondizionato => Classe::Precisione,
+            Self::PointLimitExceeded { .. } => Classe::Limite,
             Self::InvalidPointLimit
             | Self::InsufficientPoints
-            | Self::PointLimitExceeded { .. }
             | Self::ExpectedPoint { .. }
             | Self::InvalidPoint { .. }
             | Self::Voronoi(_)
@@ -147,9 +154,9 @@ impl ErroreKernel for SpatialJoinError {
             Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => {
                 Classe::Interna
             }
+            Self::PairLimitExceeded { .. } => Classe::Limite,
             Self::IndexOverflow
             | Self::InvalidPairLimit
-            | Self::PairLimitExceeded { .. }
             | Self::NonFiniteCoordinate { .. }
             | Self::InvalidGeometry { .. } => Classe::Piano,
         }
@@ -161,9 +168,8 @@ impl ErroreKernel for AnalysisError {
         match self {
             Self::SpatialJoin(interno) => interno.classe(),
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
+            Self::WorkLimitExceeded { .. } | Self::ResultLimitExceeded { .. } => Classe::Limite,
             Self::InvalidWorkLimit
-            | Self::WorkLimitExceeded { .. }
-            | Self::ResultLimitExceeded { .. }
             | Self::InvalidMaximumDistance
             | Self::IndexOverflow
             | Self::InvalidGeometry { .. } => Classe::Piano,
@@ -234,5 +240,57 @@ mod tests {
         assert!(matches!(precisione, PlenoraError::Unsupported(_)));
         let piano = del_kernel("op", &AnalysisError::InvalidWorkLimit);
         assert_eq!(piano.category(), ErrorCategory::InvalidPlan, "{piano}");
+        // Ogni limite superato e' `ResourceLimit`, anche annidato: il piano
+        // e' corretto, sono i dati a non entrarci.
+        let limiti = [
+            del_kernel("op", &AnalysisError::WorkLimitExceeded { limit: 1 }),
+            del_kernel("op", &AnalysisError::ResultLimitExceeded { limit: 1 }),
+            del_kernel(
+                "op",
+                &AnalysisError::SpatialJoin(SpatialJoinError::PairLimitExceeded { limit: 1 }),
+            ),
+            del_kernel(
+                "op",
+                &TopologyError::ResourceLimit {
+                    name: "candidate_pairs",
+                    actual: 2,
+                    limit: 1,
+                },
+            ),
+            del_kernel("op", &ExtensionError::IssueLimit { limit: 1 }),
+            del_kernel(
+                "op",
+                &ExtendedError::WorkLimit {
+                    actual: 2,
+                    limit: 1,
+                },
+            ),
+            del_kernel(
+                "op",
+                &ExtendedAlgorithmError::OutputLimit {
+                    actual: 2,
+                    limit: 1,
+                },
+            ),
+            del_kernel(
+                "op",
+                &AdvancedError::PointLimitExceeded {
+                    actual: 2,
+                    limit: 1,
+                },
+            ),
+        ];
+        for errore in limiti {
+            assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{errore}");
+        }
+        // Le celle della griglia dipendono solo dalla config: piano.
+        let celle = del_kernel(
+            "op",
+            &ExtensionError::CellLimit {
+                actual: 2,
+                limit: 1,
+            },
+        );
+        assert_eq!(celle.category(), ErrorCategory::InvalidPlan, "{celle}");
     }
 }

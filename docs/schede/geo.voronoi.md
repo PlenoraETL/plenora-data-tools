@@ -60,7 +60,8 @@ geometria non valida, `Internal` se la validazione non conclude.
 Poi il kernel, con errore `AdvancedError` che il runner traduce così:
 `ValidazioneNonConclusa` e `CalcoloNonConcluso` diventano `Internal`,
 `PrecisionInsufficient` e `VerticeMalCondizionato` diventano
-`Unsupported`, le altre `InvalidPlan`; il messaggio è quello del kernel, e
+`Unsupported`, `PointLimitExceeded` diventa `ResourceLimit`, le altre
+`InvalidPlan`; il messaggio è quello del kernel, e
 un indice che vi compare conta le sole geometrie non nulle, non le righe.
 Il kernel rifiuta l'intera colonna, nell'ordine, con `InsufficientPoints`
 (meno di due righe non nulle), `PointLimitExceeded` (più righe non nulle

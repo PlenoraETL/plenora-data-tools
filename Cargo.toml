@@ -83,6 +83,13 @@ rstar = "=0.12.2"
 # nessun pacchetto nuovo), con i predicati esatti di `robust` 1.2.0. Scelta
 # di `bulk_load` e limiti in README, «geo.delaunay e geo.voronoi».
 spade = "=2.15.1"
+# Misure geodetiche di plenora-kernels-geo (`geodetica`) sull'ellissoide del
+# datum del CRS: `Geodesic`, `Bearing` e `GeodesicArea` di `geo` usano solo
+# WGS 84 (`Geodesic::wgs84()` fisso), e per ED50, Monte Mario, NAD27, OSGB36
+# l'errore e' di metri. Non e' una dipendenza nuova: e' la stessa copia che
+# `geo` usa gia' (0.2.7, stesse feature: `default-features = false`, senza
+# `accurate`), nessun pacchetto nuovo nel lockfile.
+geographiclib-rs = { version = "=0.2.7", default-features = false }
 # Dev-dependency di plenora-kernels-geo (probe privacy sul logging di
 # `relate`): transitiva di `geo`/`geozero`, pinnata perche' il test la usa
 # direttamente.

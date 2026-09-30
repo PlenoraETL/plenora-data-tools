@@ -26,7 +26,8 @@ nome: nessun valore produce un rimedio silenzioso.
 ### Schema
 
 Le colonne dell'ingresso restano, con i loro metadati; in coda si aggiunge
-`output_column`, `binary` nullable, con l'estensione `geoarrow.wkb` e i
+`output_column`, `binary`, nullable solo se lo è la colonna WKT (una cella
+WKT null dà una geometria null), con l'estensione `geoarrow.wkb` e i
 metadati `geo` (CRS, dimensioni `xy`, encoding WKB). Il contratto la dichiara
 colonna geometria attiva, con i tipi `mixed` dei sette tipi WKB XY (`Point`,
 `LineString`, `Polygon` e i multi, `GeometryCollection`). I metadati di

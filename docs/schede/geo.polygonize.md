@@ -31,7 +31,8 @@ Due colonne, in quest'ordine:
 
 - la colonna geometria, con il nome e tutti i metadati del campo
   d'ingresso (CRS, dimensioni, encoding, lineage) tranne la dichiarazione
-  dei tipi, e nullable; il contratto dichiara i tipi `exact`
+  dei tipi, non nullable (una riga per faccia o residuo); il contratto
+  dichiara i tipi `exact`
   `LineString` e `Polygon`;
 - `__class`, `utf8` non nullable: `polygon`, `cut_edge`, `dangle`,
   `invalid_ring`.
@@ -44,7 +45,7 @@ cadono).
 
 Aggregazione dell'intera tabella: da 0 righe (ingresso vuoto o tutto
 nullo) a una per faccia e per residuo. Le celle nulle si saltano; nessuna
-riga d'uscita ha geometria nulla, anche se il campo è nullable. Un poligono
+riga d'uscita ha geometria nulla. Un poligono
 con buchi resta una riga sola.
 
 ### Ordine
@@ -77,13 +78,13 @@ Poi l'esecuzione Arrow:
 
 - `Schema`: colonna geometria assente o non `Binary`;
 - `ResourceLimit`: cella oltre il limite di byte per cella; prenotazione di
-  memoria fallita;
+  memoria fallita; più di 100.000.000 coordinate in ingresso o in uscita;
+  più di 100.000.000 coppie di segmenti esaminate dal noding; righe
+  d'uscita oltre il limite di righe dell'arco (`max_output_rows` per un
+  output del piano, `max_rows_per_edge` altrimenti; contato anche sulle
+  facce intermedie);
 - `InvalidPlan`: una cella che non è `LineString`, `MultiLineString` o
-  collezione di linee; WKB malformato o OGC-invalido; più di 100.000.000
-  coordinate in ingresso o in uscita; più di 100.000.000 coppie di segmenti
-  esaminate dal noding; righe d'uscita oltre il limite di righe dell'arco
-  (`max_output_rows` per un output del piano, `max_rows_per_edge`
-  altrimenti; contato anche sulle facce intermedie);
+  collezione di linee; WKB malformato o OGC-invalido;
   `require_complete` con residui (il messaggio riporta il numero di residui
   per classe); una faccia che non supera la validazione;
 - `Unsupported`: WKB con dimensioni Z/M o SRID; noding non convergente;

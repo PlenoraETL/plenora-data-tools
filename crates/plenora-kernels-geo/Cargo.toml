@@ -15,6 +15,9 @@ plenora-core.workspace = true
 # pacchetto nuovo.
 plenora-kernels-table.workspace = true
 geo.workspace = true
+# Ellissoide del datum nelle misure geodetiche (motivazione nel manifesto
+# del workspace).
+geographiclib-rs.workspace = true
 geozero.workspace = true
 wkt.workspace = true
 rayon.workspace = true

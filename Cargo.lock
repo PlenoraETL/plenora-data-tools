@@ -855,6 +855,7 @@ name = "plenora-kernels-geo"
 version = "0.1.0"
 dependencies = [
  "geo",
+ "geographiclib-rs",
  "geozero",
  "log",
  "plenora-core",

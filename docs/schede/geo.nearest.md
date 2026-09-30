@@ -16,7 +16,11 @@ distanza minima, come `sjoin_nearest` di GeoPandas.
 
 Le colonne della sinistra, invariate, più in coda `__right_index`
 (`uint64`, la posizione della riga destra) e `distance` (`float64`, nelle
-unità del CRS), entrambe nullable. Le colonne della destra non passano: si
+unità del CRS), entrambe non nullable: ogni riga d'uscita è una coppia
+trovata. Anche la colonna geometria della sinistra è non nullable
+nell'uscita (una geometria null non ha vicini); fino alla versione 1 del
+catalogo le tre si dichiaravano nullable senza che il runner ne emettesse
+mai un null. Le colonne della destra non passano: si
 ricollegano con `__right_index`. La colonna geometria resta quella della
 sinistra. I metadati di schema sono la fusione dei due lati; le proprietà
 del contratto (`sorted_by`, `row_count`) si perdono.
@@ -69,11 +73,11 @@ Dal kernel (`analysis::nearest_matches_validated`, errore
 `AnalysisError`, sulle geometrie già validate), nella categoria del passo
 geo indicata fra parentesi:
 
-- `WorkLimitExceeded` (`InvalidPlan`): i confronti della forza bruta,
+- `WorkLimitExceeded` (`ResourceLimit`): i confronti della forza bruta,
   righe sinistre non nulle per righe destre non nulle e non vuote,
   superano il quadrato del maggiore fra `max_input_rows` e
   `max_rows_per_edge` (anche se l'indice ne fa meno);
-- `ResultLimitExceeded` (`InvalidPlan`): gli abbinamenti superano il
+- `ResultLimitExceeded` (`ResourceLimit`): gli abbinamenti superano il
   limite di righe dell'arco (ogni altro errore, il primo in ordine di
   riga, ha la precedenza);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un

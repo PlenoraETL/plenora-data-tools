@@ -50,11 +50,11 @@ pub enum BufferCapParam {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SimplifyPolicyParam {
-    /// `douglas_peucker`: Ramer-Douglas-Peucker, `tolerance` e' una
+    /// `douglas_peucker`: Ramer-Douglas-Peucker, soglia `tolerance`, una
     /// distanza.
     DouglasPeucker,
     /// `preserve_topology`: Visvalingam-Whyatt con conservazione della
-    /// topologia, `tolerance` e' un'area.
+    /// topologia, soglia `min_area`, un'area.
     PreserveTopology,
 }
 
@@ -70,15 +70,75 @@ pub struct BufferConfig {
 }
 
 /// Config di `geo.simplify`.
+///
+/// La soglia ha un nome per algoritmo, perche' non e' la stessa grandezza:
+/// `tolerance` e' una distanza (Douglas-Peucker, come in GEOS), `min_area`
+/// un'area (Visvalingam-Whyatt). Ognuna vale solo con il suo algoritmo:
+/// l'altra si rifiuta, e `tolerance` con `preserve_topology` non si
+/// reinterpreta come area ([`Self::soglia`]).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimplifyConfig {
-    /// Soglia, obbligatoria, finita e non negativa: distanza (unita' del
-    /// CRS) con `douglas_peucker`, area (unita' al quadrato) con
-    /// `preserve_topology`; 0 lascia la geometria invariata.
-    pub tolerance: f64,
+    /// Con `douglas_peucker`, obbligatoria: distanza massima di un vertice
+    /// tolto dalla linea semplificata (unita' del CRS), finita e non
+    /// negativa. Con `preserve_topology` si rifiuta.
+    pub tolerance: Option<f64>,
+    /// Con `preserve_topology`, obbligatoria: area del triangolo di un
+    /// vertice con i due vicini (unita' del CRS al quadrato) sotto la quale,
+    /// uguaglianza compresa, il vertice si toglie; finita e non negativa.
+    /// Con `douglas_peucker` si rifiuta.
+    pub min_area: Option<f64>,
     /// Algoritmo; assente vale `douglas_peucker`.
     pub policy: Option<SimplifyPolicyParam>,
+}
+
+impl SimplifyConfig {
+    /// L'algoritmo e la sua soglia, la sola lettura della config che
+    /// analisi e runner condividono.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se manca la soglia dell'algoritmo, se c'e' quella
+    /// dell'altro (`tolerance` con `preserve_topology`: la soglia di
+    /// Visvalingam-Whyatt e' un'area, non una distanza come in GEOS), o se
+    /// la soglia non e' finita o e' negativa.
+    pub fn soglia(&self, op: &str) -> plenora_core::Result<(SimplifyPolicyParam, f64)> {
+        let politica = self.policy.unwrap_or(SimplifyPolicyParam::DouglasPeucker);
+        let rifiuto = |motivo: &str| {
+            plenora_core::PlenoraError::InvalidPlan(format!("{op}: config non valida: {motivo}"))
+        };
+        let (nome, soglia) = match (politica, self.tolerance, self.min_area) {
+            (SimplifyPolicyParam::DouglasPeucker, Some(tolleranza), None) => {
+                ("tolerance", tolleranza)
+            }
+            (SimplifyPolicyParam::PreserveTopology, None, Some(area)) => ("min_area", area),
+            (SimplifyPolicyParam::DouglasPeucker, _, Some(_)) => {
+                return Err(rifiuto(
+                    "`min_area` vale solo con `policy: preserve_topology`; con \
+                     `douglas_peucker` la soglia e' la distanza `tolerance`",
+                ))
+            }
+            (SimplifyPolicyParam::DouglasPeucker, None, None) => {
+                return Err(rifiuto(
+                    "`tolerance` obbligatorio con `policy: douglas_peucker`",
+                ))
+            }
+            (SimplifyPolicyParam::PreserveTopology, Some(_), _) => {
+                return Err(rifiuto(
+                    "`tolerance` non vale con `policy: preserve_topology`: la soglia di \
+                     Visvalingam-Whyatt e' un'area, `min_area` (unita' del CRS al quadrato), \
+                     non una distanza",
+                ))
+            }
+            (SimplifyPolicyParam::PreserveTopology, None, None) => {
+                return Err(rifiuto(
+                    "`min_area` obbligatorio con `policy: preserve_topology`",
+                ))
+            }
+        };
+        super::helpers::ensure_non_negative(op, nome, soglia)?;
+        Ok((politica, soglia))
+    }
 }
 
 /// `affine_transform`: la matrice affine 2D.
@@ -191,13 +251,13 @@ pub struct CleanTopologyConfig {
     /// Con `0` la chiusura non si fa.
     pub snap_tolerance: f64,
     /// Toglie a ogni riga la parte coperta dalle righe precedenti.
-    /// Facoltativo: l'analisi lo accetta senza leggerlo, e quando manca il
-    /// runner usa `true`.
-    pub remove_overlaps: Option<bool>,
+    /// Obbligatorio, senza valore predefinito: cambia la geometria di ogni
+    /// riga che ne tocca una precedente, e un piano lo dice esplicitamente
+    /// (assente: `InvalidPlan` in validazione).
+    pub remove_overlaps: bool,
     /// Chiude, riga per riga, rientranze e varchi piu' stretti di
-    /// `2 * snap_tolerance`. Facoltativo, come `remove_overlaps` (assente:
-    /// `true`).
-    pub fill_gaps: Option<bool>,
+    /// `2 * snap_tolerance`. Obbligatorio, come `remove_overlaps`.
+    pub fill_gaps: bool,
 }
 
 /// `voronoi`: tutti i campi opzionali.

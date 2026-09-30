@@ -34,6 +34,7 @@ use plenora_kernels_geo::analyze::config::{
 use plenora_kernels_geo::analyze::{DEFAULT_X_COLUMN, DEFAULT_Y_COLUMN};
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
 use plenora_kernels_geo::extensions::OnWktError;
+use plenora_kernels_geo::geodetica::EllissoideGeodetico;
 use plenora_kernels_geo::operations::{BufferCapStyle, SimplifyPolicy};
 use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::riproiezione::ReprojectParams;
@@ -96,15 +97,17 @@ pub(super) enum Trasformazione {
     PuntoSullaLinea(f64),
 }
 
-/// Distanza fra la geometria della riga e quella della config.
-#[derive(Clone, Copy, Debug)]
+/// Distanza fra la geometria della riga e quella della config. Le
+/// geografiche portano l'ellissoide del datum del CRS della colonna (in una
+/// `Box`: i due problemi geodetici pronti occupano un migliaio di byte).
+#[derive(Clone, Debug)]
 pub(super) enum Distanza {
     Euclidea,
     Hausdorff,
     Frechet,
-    Haversine,
-    Geodetica,
-    Azimut,
+    Haversine(Box<EllissoideGeodetico>),
+    Geodetica(Box<EllissoideGeodetico>),
+    Azimut(Box<EllissoideGeodetico>),
 }
 
 /// Misura di una geometria: una colonna in coda.
@@ -112,8 +115,8 @@ pub(super) enum Distanza {
 pub(super) enum Misura {
     Area,
     Lunghezza,
-    LunghezzaGeodetica,
-    AreaGeodetica,
+    LunghezzaGeodetica(Box<EllissoideGeodetico>),
+    AreaGeodetica(Box<EllissoideGeodetico>),
     Vertici,
     Wkt,
     PosizioneSullaLinea(Point<f64>),
@@ -216,9 +219,10 @@ impl Trasformazione {
             }
             "geo.simplify" => {
                 let letta: SimplifyConfig = config(op, valore)?;
+                let (politica, soglia) = letta.soglia(op)?;
                 Self::Semplifica {
-                    tolleranza: letta.tolerance,
-                    politica: match letta.policy.unwrap_or(SimplifyPolicyParam::DouglasPeucker) {
+                    tolleranza: soglia,
+                    politica: match politica {
                         SimplifyPolicyParam::DouglasPeucker => SimplifyPolicy::DouglasPeucker,
                         SimplifyPolicyParam::PreserveTopology => SimplifyPolicy::PreserveTopology,
                     },
@@ -358,7 +362,7 @@ impl Trasformazione {
 }
 
 impl Misura {
-    fn prepara(op: &str, valore: &Value) -> Result<Option<Self>> {
+    fn prepara(op: &str, valore: &Value, lato: &Lato) -> Result<Option<Self>> {
         let con_altra = |valore: &Value| -> Result<Geometry<f64>> {
             let letta: OtherWkbConfig = config(op, valore)?;
             geometria_di_config(op, "other_wkb", &letta.other_wkb)
@@ -379,8 +383,8 @@ impl Misura {
             // `output_column` e' gia' nel contratto: qui non serve.
             "geo.area" => Self::Area,
             "geo.length" | "geo.perimeter" => Self::Lunghezza,
-            "geo.geodesic_line_length" => Self::LunghezzaGeodetica,
-            "geo.geodesic_area" => Self::AreaGeodetica,
+            "geo.geodesic_line_length" => Self::LunghezzaGeodetica(Box::new(lato.ellissoide(op)?)),
+            "geo.geodesic_area" => Self::AreaGeodetica(Box::new(lato.ellissoide(op)?)),
             "geo.vertex_count" => Self::Vertici,
             "geo.to_wkt" => Self::Wkt,
             "geo.line_locate_point" => {
@@ -391,9 +395,13 @@ impl Misura {
             "geo.distance" => distanza(Distanza::Euclidea)?,
             "geo.hausdorff_distance" => distanza(Distanza::Hausdorff)?,
             "geo.frechet_distance" => distanza(Distanza::Frechet)?,
-            "geo.haversine_distance" => distanza(Distanza::Haversine)?,
-            "geo.geodesic_distance" => distanza(Distanza::Geodetica)?,
-            "geo.bearing" => distanza(Distanza::Azimut)?,
+            "geo.haversine_distance" => {
+                distanza(Distanza::Haversine(Box::new(lato.ellissoide(op)?)))?
+            }
+            "geo.geodesic_distance" => {
+                distanza(Distanza::Geodetica(Box::new(lato.ellissoide(op)?)))?
+            }
+            "geo.bearing" => distanza(Distanza::Azimut(Box::new(lato.ellissoide(op)?)))?,
             "geo.predicate_intersects" => predicato(SpatialPredicate::Intersects)?,
             "geo.predicate_disjoint" => predicato(SpatialPredicate::Disjoint)?,
             "geo.predicate_contains" => predicato(SpatialPredicate::Contains)?,
@@ -426,23 +434,23 @@ impl Misura {
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?,
-            Self::LunghezzaGeodetica => reale(&|g| {
-                extended::geodesic_line_length_m(linea(op, g)?)
+            Self::LunghezzaGeodetica(ellissoide) => reale(&|g| {
+                extended::geodesic_line_length_m(linea(op, g)?, ellissoide)
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?,
-            Self::AreaGeodetica => reale(&|g| {
+            Self::AreaGeodetica(ellissoide) => reale(&|g| {
                 if !matches!(g, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
                     return Err(tipo_inatteso(op, "Polygon/MultiPolygon", g));
                 }
-                extended_algorithms::geodesic_area_m2(g)
+                extended_algorithms::geodesic_area_m2(g, ellissoide)
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?,
             Self::PosizioneSullaLinea(riferimento) => reale(&|g| {
                 extensions::line_locate_point(g, riferimento).map_err(|e| del_kernel(op, &e))
             })?,
-            Self::Distanza { tipo, altra } => reale(&|g| distanza(op, *tipo, g, altra))?,
+            Self::Distanza { tipo, altra } => reale(&|g| distanza(op, tipo, g, altra))?,
             Self::Vertici => Arc::new(UInt64Array::from(per_cella(celle, |g| {
                 operations::vertex_count(g)
                     .map(Some)
@@ -467,7 +475,7 @@ impl Misura {
 /// La distanza di una riga dalla geometria della config.
 fn distanza(
     op: &str,
-    tipo: Distanza,
+    tipo: &Distanza,
     geometria: &Geometry<f64>,
     altra: &Geometry<f64>,
 ) -> Result<Option<f64>> {
@@ -485,21 +493,23 @@ fn distanza(
             MAX_COPPIE_COORDINATE,
         )
         .map_err(|e| del_kernel(op, &e)),
-        Distanza::Haversine => {
-            extended::haversine_distance_m(punto(op, geometria)?, punto(op, altra)?)
+        Distanza::Haversine(ellissoide) => {
+            extended::haversine_distance_m(punto(op, geometria)?, punto(op, altra)?, ellissoide)
                 .map(Some)
                 .map_err(|e| del_kernel(op, &e))
         }
-        Distanza::Geodetica => {
-            extended::geodesic_distance_m(punto(op, geometria)?, punto(op, altra)?)
+        Distanza::Geodetica(ellissoide) => {
+            extended::geodesic_distance_m(punto(op, geometria)?, punto(op, altra)?, ellissoide)
                 .map(Some)
                 .map_err(|e| del_kernel(op, &e))
         }
-        Distanza::Azimut => {
-            extended_algorithms::geodesic_bearing_degrees(punto(op, geometria)?, punto(op, altra)?)
-                .map(Some)
-                .map_err(|e| del_kernel(op, &e))
-        }
+        Distanza::Azimut(ellissoide) => extended_algorithms::geodesic_bearing_degrees(
+            punto(op, geometria)?,
+            punto(op, altra)?,
+            ellissoide,
+        )
+        .map(Some)
+        .map_err(|e| del_kernel(op, &e)),
     }
 }
 
@@ -573,7 +583,7 @@ impl KernelUnario {
         if let Some(trasformazione) = Trasformazione::prepara(op, valore, geometria)? {
             return Ok(Some(Self::Trasforma(trasformazione)));
         }
-        if let Some(misura) = Misura::prepara(op, valore)? {
+        if let Some(misura) = Misura::prepara(op, valore, geometria)? {
             return Ok(Some(Self::Misura(misura)));
         }
         Ok(Some(match op {

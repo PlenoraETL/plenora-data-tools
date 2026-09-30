@@ -42,8 +42,10 @@ pub enum SimplifyPolicy {
     /// garanzia di topologia (un risultato non valido e' un errore).
     DouglasPeucker,
     /// Visvalingam-Whyatt con conservazione della topologia di `geo`
-    /// (`simplify_vw_preserve`): `tolerance` e' un'**area**, la soglia sul
-    /// triangolo di ogni vertice con i due vicini.
+    /// (`simplify_vw_preserve`): la soglia e' un'**area** (unita' del CRS al
+    /// quadrato; `min_area` nella config di `geo.simplify`), quella del
+    /// triangolo di ogni vertice con i due vicini: il vertice si toglie se
+    /// l'area non la supera. Non e' la distanza di `GEOSTopologyPreserveSimplify`.
     PreserveTopology,
 }
 
@@ -422,6 +424,10 @@ pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64
 /// Semplificazione della geometria con la politica richiesta (kernel di
 /// `geo.simplify`).
 ///
+/// `tolerance` e' la soglia dell'algoritmo: una distanza con
+/// [`SimplifyPolicy::DouglasPeucker`], un'area (unita' al quadrato) con
+/// [`SimplifyPolicy::PreserveTopology`].
+///
 /// Linee, anelli e loro multi si semplificano; punti e
 /// multi-punti restano invariati; una collezione si semplifica membro per
 /// membro. Con `tolerance` 0 la geometria non cambia. I vertici d'uscita
@@ -430,12 +436,15 @@ pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64
 /// Le coordinate vicine ai limiti di `f64` (modulo oltre `1e150`, o non
 /// nullo e sotto `1e-150`) sono elaborate in uno spazio scalato
 /// uniformemente e riportate alle unita' originali, per evitare overflow e
-/// underflow nei kernel a distanza quadratica.
+/// underflow nei kernel a distanza quadratica. La soglia si scala con le
+/// coordinate: una distanza per il fattore, un'area per il suo quadrato.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
-/// - `InvalidParameter`: `tolerance` non e' finita oppure e' negativa;
+/// - `InvalidParameter`: `tolerance` non e' finita oppure e' negativa, o
+///   (area, coordinate scalate) positiva ma non rappresentabile nello spazio
+///   scalato;
 /// - `InvalidOutput`: la geometria semplificata non supera la validazione
 ///   OGC;
 /// - `Internal`: una distanza del percorso Douglas-Peucker non e'
@@ -480,8 +489,22 @@ pub fn simplify_with_policy(
         geometry.clone()
     };
     let working_tolerance = if normalize {
-        let value = tolerance / scale;
+        // Una distanza si scala con il fattore, un'area con il suo quadrato
+        // (in due divisioni: `scale * scale` traboccherebbe).
+        let value = match policy {
+            SimplifyPolicy::DouglasPeucker => tolerance / scale,
+            SimplifyPolicy::PreserveTopology => tolerance / scale / scale,
+        };
         if value.is_finite() {
+            if tolerance > 0.0 && !value.is_normal() {
+                // Una soglia positiva che nello spazio scalato diventa zero,
+                // o subnormale (cifre perse), cambierebbe in silenzio quali
+                // vertici cadono: meglio dirlo che semplificare diversamente.
+                return Err(OperationError::InvalidParameter {
+                    name: "tolerance",
+                    reason: "non rappresentabile nella scala delle coordinate",
+                });
+            }
             value
         } else {
             f64::MAX
@@ -656,6 +679,58 @@ fn line_string_boundary(line: &LineString<f64>) -> Geometry<f64> {
 }
 
 #[cfg(test)]
+mod prove_della_soglia_scalata {
+    use super::*;
+    use geo::LineString;
+
+    /// Sul percorso scalato (coordinate oltre `1e150`) l'area si scala con
+    /// il quadrato del fattore: il risultato e' quello delle stesse
+    /// coordinate e della stessa area alla scala naturale. Prima si scalava
+    /// come una distanza, e la soglia valeva `1e150` volte di piu'.
+    #[test]
+    fn l_area_si_scala_con_il_quadrato() {
+        let fattore = 1e152;
+        let linea = |k: f64| {
+            Geometry::LineString(LineString::from(vec![
+                (0.0, 0.0),
+                (10.0 * k, 1.0 * k),
+                (20.0 * k, 0.0),
+                (30.0 * k, 5.0 * k),
+                (40.0 * k, 0.0),
+            ]))
+        };
+        // Triangoli di area 10 e 50 (in unita' naturali): con soglia 20
+        // cade solo il primo vertice interno.
+        let naturale =
+            simplify_with_policy(&linea(1.0), 20.0, SimplifyPolicy::PreserveTopology).unwrap();
+        let scalata = simplify_with_policy(
+            &linea(fattore),
+            20.0 * fattore * fattore,
+            SimplifyPolicy::PreserveTopology,
+        )
+        .unwrap();
+        let conta = |g: &Geometry<f64>| g.coords_iter().count();
+        assert_eq!(conta(&naturale), 4);
+        assert_eq!(conta(&scalata), conta(&naturale));
+    }
+
+    /// Una soglia d'area positiva che nello spazio scalato diventa zero si
+    /// rifiuta, invece di non semplificare.
+    #[test]
+    fn un_area_che_si_annulla_nella_scala_si_rifiuta() {
+        let linea = Geometry::LineString(LineString::from(vec![
+            (0.0, 0.0),
+            (1e200, 1e199),
+            (2e200, 0.0),
+        ]));
+        assert!(matches!(
+            simplify_with_policy(&linea, 1e-300, SimplifyPolicy::PreserveTopology),
+            Err(OperationError::InvalidParameter { .. })
+        ));
+    }
+}
+
+#[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
 // confronto per bit e' il contratto verificato, non un'approssimazione.
@@ -788,6 +863,16 @@ mod tests {
                 SimplifyPolicy::DouglasPeucker,
                 SimplifyPolicy::PreserveTopology,
             ] {
+                if tolerance > 0.0 && policy == SimplifyPolicy::PreserveTopology {
+                    // L'area 1 in coordinate di modulo 5e303 si annulla nello
+                    // spazio scalato (il quadrato del fattore): rifiutata,
+                    // invece di non togliere i vertici degeneri.
+                    assert!(matches!(
+                        simplify_with_policy(&line, tolerance, policy),
+                        Err(OperationError::InvalidParameter { .. })
+                    ));
+                    continue;
+                }
                 let output = simplify_with_policy(&line, tolerance, policy).unwrap();
                 assert!(output.validazione_protetta().is_ok());
                 assert!(output

@@ -62,8 +62,8 @@ geometria di un tipo che il contratto d'ingresso non dichiara, quando li
 dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
-`ValidazioneNonConclusa` e `CalcoloNonConcluso`, `InvalidPlan` per le
-altre):
+`ValidazioneNonConclusa` e `CalcoloNonConcluso`, `ResourceLimit` per
+`CoordinateLimit`, `InvalidPlan` per le altre):
 
 - `InvalidInput`: coordinate NaN o infinite o geometria non valida OGC;
 - `CoordinateLimit`: più coordinate di `max_coordinates` (il runner passa

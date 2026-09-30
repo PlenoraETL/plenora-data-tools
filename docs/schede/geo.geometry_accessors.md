@@ -36,7 +36,9 @@ Le colonne dell'ingresso restano; in coda si aggiungono, nell'ordine fisso
 della lista sopra e non in quello di `fields`, le colonne richieste, con
 nome `output_prefix` + campo: `geometry_type` `utf8`, `num_geometries`
 `uint64`, `num_interior_rings` `uint64`, `start_point` `utf8`, `end_point`
-`utf8`, `is_closed` `bool`, tutte nullable. Colonna geometria, metadati e
+`utf8`, `is_closed` `bool`. `start_point` ed `end_point` sono nullable
+(nulli per una geometria che non è una linea aperta); le altre solo se lo
+è la colonna geometria (nulle dove la geometria è null). Colonna geometria, metadati e
 proprietà del contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe

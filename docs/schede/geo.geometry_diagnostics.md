@@ -13,7 +13,9 @@ Nessuno: la config è `{}`.
 ### Schema
 
 La colonna geometria si toglie e al suo posto, nello stesso punto, entrano
-dieci colonne nullable senza metadati:
+dieci colonne senza metadati; `validity_reason` e i quattro `bounds_*`
+sono nullable (nulli per una geometria valida o vuota), le altre cinque
+solo se lo è la colonna geometria (nulle dove la geometria è null):
 
 | colonna | tipo | contenuto |
 | --- | --- | --- |

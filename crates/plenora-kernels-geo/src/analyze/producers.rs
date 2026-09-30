@@ -98,35 +98,94 @@ pub(in crate::analyze) fn analyze_reproject(
 // ---------------------------------------------------------------------------
 
 /// Aggiunge una colonna scalare in coda allo schema (geometria preservata).
+///
+/// `nullable` e' quello che il kernel emette davvero: la colonna e' null
+/// dove la geometria della riga e' null, quindi nullable se lo e' la
+/// geometria ([`geometry_nullable`]), e in piu' dove il kernel rende un
+/// valore assente per una geometria presente (distanze da una geometria
+/// vuota, `line_locate_point` di una non linea). Il test
+/// `geo_nullabilita` del runner confronta la dichiarazione con l'uscita.
 pub(in crate::analyze) fn analyze_add_column(
     op: &str,
     input: &DataContract,
     name: &str,
     data_type: DataType,
+    nullable: bool,
 ) -> Result<DataContract> {
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
-    fields.push(Field::new(name, data_type, true));
+    fields.push(Field::new(name, data_type, nullable));
     rebuild(input, fields, input.properties.clone())
+}
+
+/// Se la colonna geometria attiva dell'ingresso ammette null (in assenza,
+/// `true`: la dichiarazione prudente).
+pub(in crate::analyze) fn geometry_nullable(input: &DataContract) -> bool {
+    input
+        .active_geometry_column()
+        .is_none_or(|geometry| geometry.nullable)
 }
 
 /// Espansione 1:N (`explode`, `delaunay`, `split`): schema invariato piu'
 /// `__parent_index`; `sorted_by` preservato (espansione stabile), `row_count`
-/// eliminato.
+/// eliminato. La geometria d'uscita non e' nullable: una riga a geometria
+/// null non produce righe, e ogni parte prodotta c'e'.
 pub(in crate::analyze) fn analyze_expand(op: &str, input: &DataContract) -> Result<DataContract> {
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, PARENT_INDEX_COLUMN)?;
     fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
     let mut properties = input.properties.clone();
     properties.row_count = None;
-    rebuild(input, fields, properties)
+    let output = rebuild(input, fields, properties)?;
+    with_active_geometry_nullability(&output, false)
+}
+
+/// Il contratto con la colonna geometria attiva dichiarata `nullable` (campo
+/// e contratto di colonna), il resto invariato.
+pub(in crate::analyze) fn with_active_geometry_nullability(
+    contract: &DataContract,
+    nullable: bool,
+) -> Result<DataContract> {
+    let Some(active) = contract.active_geometry_column() else {
+        return Ok(contract.clone());
+    };
+    let (name, field_id) = (active.name.clone(), active.field_id);
+    let fields: Vec<Field> = contract
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == &name {
+                field.as_ref().clone().with_nullable(nullable)
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect();
+    let mut geometries = contract.geometries.clone();
+    for candidate in &mut geometries {
+        if candidate.field_id == field_id {
+            candidate.nullable = nullable;
+        }
+    }
+    DataContract::new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            contract.schema.metadata().clone(),
+        )),
+        geometries,
+        contract.active_geometry,
+        contract.properties.clone(),
+    )
 }
 
 /// Aggregazione a sole geometrie (`dissolve`, builder, `polygonize`,
-/// `line_merge`, `overlay`): le colonne attributo non sono propagate; la
-/// geometria aggregata si dichiara nullable, in modo conservativo: il
-/// kernel di `dissolve` su un ingresso vuoto rende `MULTIPOLYGON EMPTY`, non
-/// null, e che cosa rende una tabella vuota lo decide l'esecuzione Arrow.
+/// `line_merge`, `overlay`, `collect`): le colonne attributo non sono
+/// propagate; la geometria aggregata e' nullable dove il runner la emette
+/// null (`nullable`): `dissolve` e i builder su una tabella vuota o tutta
+/// null (una riga null), `collect` per un gruppo di sole geometrie null;
+/// mai `line_merge`, `polygonize` e `overlay`, che emettono una riga per
+/// geometria prodotta.
 ///
 /// I metadati dello SCHEMA di input restano: riguardano il dataset.
 /// Le colonne `extra` sono `Field` interi: quelle copiate dall'input (chiavi
@@ -135,14 +194,15 @@ pub(in crate::analyze) fn analyze_geometry_only(
     input: &DataContract,
     geometry: &GeometryColumnContract,
     extra: &[Field],
+    nullable: bool,
 ) -> Result<DataContract> {
-    let mut fields = vec![geometry_field(input, geometry, true)?];
+    let mut fields = vec![geometry_field(input, geometry, nullable)?];
     fields.extend(extra.iter().cloned());
     let active = input
         .active_geometry
         .filter(|active| *active == geometry.field_id);
     let aggregated = GeometryColumnContract {
-        nullable: true,
+        nullable,
         ..geometry.clone()
     };
     DataContract::new(
@@ -302,6 +362,9 @@ pub(in crate::analyze) fn analyze_from_wkt(
         return Err(invalid_param(op, "output_column", "non deve essere vuoto"));
     }
     let crs = producer_crs(op, parsed.crs.as_deref(), plan_crs, requirement)?;
+    // Null solo per una cella WKT null: un WKT non valido ferma la colonna
+    // con entrambi i valori di `on_error`.
+    let nullable = wkt_field.is_nullable();
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
     fields.push(new_geometry_field(
@@ -309,7 +372,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
         &crs,
         GeometryDimensions::Xy,
         None,
-        true,
+        nullable,
     )?);
     let field_id = fields_allocator.alloc()?;
     let output_types = GeometryTypesProperty::new(
@@ -333,7 +396,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
         // dichiara Xy.
         dimensions: GeometryDimensions::Xy,
         encoding: Some(GeometryEncoding::Wkb),
-        nullable: true,
+        nullable,
         // Il parser accetta per contratto tipi geometrici eterogenei; `mixed`
         // e' informazione esplicita, non dati non ispezionati (`unresolved`).
         types: ContractProperty::new(
@@ -382,21 +445,22 @@ pub(in crate::analyze) fn analyze_collect(
         if extra.iter().any(|seen| seen.name() == name) {
             return Err(invalid_param(op, "group_by", "colonne duplicate"));
         }
-        // Le chiavi si leggono come testo (`scalar_as_string` dei kernel
-        // tabellari): un tipo che non lo e' si rifiuta qui, non alla prima
-        // chiave non null.
-        plenora_kernels_table::validate_text_convertible(field.data_type(), name).map_err(
-            |errore| {
-                PlenoraError::InvalidPlan(format!(
-                    "{op}: parametro `group_by` non valido: {errore}"
-                ))
-            },
-        )?;
+        // I gruppi escono nell'ordine naturale dei valori, con il
+        // comparatore di `table.sort` (`compare_cells_typed`): un tipo che
+        // non ha un confronto nativo si rifiuta qui, non in esecuzione.
+        if !plenora_kernels_table::aggregation::is_sortable(field.data_type()) {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "{op}: parametro `group_by` non valido: colonna `{name}` di tipo {:?} senza \
+                 un ordine naturale",
+                field.data_type()
+            )));
+        }
         // La colonna chiave sopravvive invariata: si clona il `Field`
         // intero, metadati compresi.
         extra.push(field.clone());
     }
-    analyze_geometry_only(input, geometry, &extra)
+    // Null solo per un gruppo di sole geometrie null.
+    analyze_geometry_only(input, geometry, &extra, geometry.nullable)
 }
 
 /// `generate_grid` (generativa): input senza geometrie (trigger); lo

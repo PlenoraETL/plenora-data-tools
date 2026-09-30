@@ -17,7 +17,8 @@ ognuno.
 ### Schema
 
 Le colonne della sinistra, invariate, più `output_column` in coda,
-`uint64` nullable. Le colonne della destra non passano. La colonna
+`uint64`, nullable solo se lo è la geometria della sinistra (null dove è
+null). Le colonne della destra non passano. La colonna
 geometria resta quella della sinistra, con i suoi tipi dichiarati. I
 metadati di schema sono la fusione dei due lati; le proprietà del
 contratto della sinistra (`sorted_by`, `row_count`) restano.
@@ -69,7 +70,7 @@ Dal kernel (`analysis::count_points_in_polygons_validated`, errore
 `AnalysisError` che avvolge `SpatialJoinError`, sulle geometrie già
 validate), nella categoria del passo geo indicata fra parentesi:
 
-- `PairLimitExceeded` (`InvalidPlan`): le coppie punto-poligono
+- `PairLimitExceeded` (`ResourceLimit`): le coppie punto-poligono
   confermate superano il limite di righe dell'arco;
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
