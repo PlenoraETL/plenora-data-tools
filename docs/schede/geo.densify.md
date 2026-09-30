@@ -72,9 +72,9 @@ diagnostica per riga.
 ### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Il limite di coordinate d'uscita è un argomento del kernel: il runner
   passa `MAX_CELL_COORDINATES` (4 194 304), non un valore della config. In

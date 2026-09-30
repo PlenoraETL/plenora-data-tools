@@ -62,9 +62,9 @@ di riga, senza diagnostica per riga.
 ### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Una geometria vuota è un errore, dove GEOS e PostGIS rendono `POINT EMPTY`.
 
 ### Precisione

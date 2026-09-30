@@ -71,9 +71,9 @@ diagnostica per riga.
 ### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Nessuna rotazione è esatta, nemmeno di 90 o 180 gradi: il coseno di 90
 gradi in `f64` vale circa `6.1e-17`, non zero (vedi l'esempio). Le
 coordinate d'uscita non si confrontano con il dominio di validità del CRS

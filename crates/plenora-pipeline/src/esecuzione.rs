@@ -484,6 +484,19 @@ fn byte_ingresso(ingressi: &[&RecordBatch]) -> Result<u64> {
     Ok(byte_vivi(ingressi.iter().copied())?.max(copia))
 }
 
+/// Grandezze del modello di costo di un passo: righe (almeno quelle note a
+/// secco dell'uscita), byte, coppie e celle d'uscita (righe per colonne del
+/// contratto d'uscita).
+fn ingresso_del_passo(passo: &PassoValidato, righe_in: &[u64], byte: u64) -> Ingresso {
+    let righe = somma(righe_in).max(passo.righe_previste);
+    Ingresso {
+        righe,
+        byte,
+        coppie: coppie(righe_in),
+        celle: righe.saturating_mul(passo.colonne_uscita),
+    }
+}
+
 const fn coppie(righe_in: &[u64]) -> u64 {
     match righe_in {
         [sinistra, destra] => sinistra.saturating_mul(*destra),
@@ -672,11 +685,7 @@ impl PipelineValidata {
             let (byte_previsti, riserva) = self.previsione(
                 variante,
                 costo,
-                Ingresso {
-                    righe: somma(&righe_in).max(passo.righe_previste),
-                    byte: byte_ingresso(&ingressi).map_err(nel)?,
-                    coppie: coppie(&righe_in),
-                },
+                ingresso_del_passo(passo, &righe_in, byte_ingresso(&ingressi).map_err(nel)?),
             );
             if residenti
                 .checked_add(byte_previsti)
@@ -868,11 +877,11 @@ impl PipelineValidata {
                 )));
             }
         }
-        let ingresso = Ingresso {
-            righe: somma(&righe_in).max(passo.righe_previste),
-            byte: byte_ingresso(&residenti_del_passo)?.saturating_add(riletti),
-            coppie: coppie(&righe_in),
-        };
+        let ingresso = ingresso_del_passo(
+            passo,
+            &righe_in,
+            byte_ingresso(&residenti_del_passo)?.saturating_add(riletti),
+        );
 
         // Candidati allo sfratto: le residenti che il passo non usa, prima
         // quella usata più tardi (Belady), a parità per nome. Un output del

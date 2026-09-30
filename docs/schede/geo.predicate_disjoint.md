@@ -103,8 +103,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 ### Precisione
 

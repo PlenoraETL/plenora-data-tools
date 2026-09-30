@@ -9228,9 +9228,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
 CRS ([README, «CRS integrati»](../README.md#crs-integrati)): una matrice
 che porta la geometria fuori dal dominio non è un errore qui.
@@ -9665,9 +9665,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il confine di una `GeometryCollection`, che GEOS rifiuta, qui è la
 collezione dei confini dei membri. Negli estremi di una `MultiLineString`
 `-0.0` e `0.0` sono lo stesso punto.
@@ -9939,9 +9939,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il runner passa al kernel la precisione di 1 cm a terra nelle unità del
 CRS della colonna (`Precision::from_crs`, calcolata in validazione;
 [README, «Operazioni geo»](../README.md#operazioni-geo), voce
@@ -10088,9 +10088,9 @@ di riga, senza diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Una geometria vuota è un errore, dove GEOS e PostGIS rendono `POINT EMPTY`.
 
 #### Precisione
@@ -10271,7 +10271,7 @@ righe senza geometria. Il catalogo dichiara forma 1:N; il kernel rende un
 risultato per riga. Nessuna diagnostica per riga: il passo rende il primo
 errore ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
-diagnostica per riga» e «Modelli di costo geo provvisori»).
+diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -10589,8 +10589,7 @@ Solo punti: un poligono o una linea si rifiutano, senza passare dal
 centroide, che non ne rappresenta la densità. Il rumore e la geometria
 nulla hanno la stessa etichetta nulla. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -10748,8 +10747,7 @@ si rifiutano invece di fondersi (per l'unione c'è `geo.dissolve`).
 L'ordine dei gruppi è quello della chiave testuale, non quello dei valori.
 Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -10893,9 +10891,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il lavoro è limitato da `max_coordinates`, un argomento del kernel e non
 della config: nel runner `MAX_CELL_COORDINATES`. Il poligono non è quello
 di `ST_ConcaveHull` di PostGIS, che
@@ -11031,9 +11029,9 @@ di riga, senza diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Dove GEOS e PostGIS rendono un `Point` o una `LineString` per l'inviluppo
 degenere, qui c'è un errore: l'uscita dichiarata è sempre `Polygon`.
 Le coordinate si dividono per il loro modulo massimo prima del calcolo e si
@@ -11362,8 +11360,7 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
   «Hazard»).
 - Nessuna diagnostica per riga: il passo rende il primo errore ([README,
   «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-  provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -11526,8 +11523,7 @@ dell'arco),
   si scelgono dal piano.
 - Nessuna diagnostica per riga: il passo rende il primo errore ([README,
   «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-  provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -11667,9 +11663,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Il limite di coordinate d'uscita è un argomento del kernel: il runner
   passa `MAX_CELL_COORDINATES` (4 194 304), non un valore della config. In
@@ -11987,8 +11983,7 @@ a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Nessun controllo a posteriori del risultato contro gli ingressi.
 Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -12273,9 +12268,9 @@ di riga, senza diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Una geometria vuota è un errore, dove PostGIS rende la geometria vuota.
 
 #### Precisione
@@ -12413,8 +12408,7 @@ traduce così: `ValidazioneNonConclusa` diventa `Internal`, le altre
 Un solo livello: `ST_Dump` di PostGIS scende invece fino alle geometrie
 semplici. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -12715,9 +12709,9 @@ quello della prima riga, senza diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il kernel controlla solo che le coordinate siano finite; il dominio del CRS
 lo controlla il runner su ogni punto. Un `int64` oltre `2^53` in modulo si
 rifiuta invece di arrotondarsi. Una coordinata nulla è un errore, non un
@@ -12859,9 +12853,9 @@ passo dopo un passo che cambia le righe
 
 #### Limiti e deviazioni
 
-- Il costo in memoria del passo è una previsione provvisoria
+- Il costo in memoria del passo è una previsione dalle misure
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voce «Modelli di costo geo provvisori»).
+  voce «Modelli di costo geo»).
 - Solo WKT 2D: EWKT con `SRID=` e WKT con `Z`, `M`, `ZM` si rifiutano.
 - `on_error` non ha effetto (sopra).
 
@@ -14484,8 +14478,7 @@ Non ci sono colonne di gruppo né d'ordine (il kernel lavora su un gruppo
 già ordinato, ma nessun parametro lo forma): una linea per gruppo non si
 può chiedere. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -14615,9 +14608,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Solo `LineString` nel kernel; solo CRS proiettati.
 - La frazione è della lunghezza euclidea planare, non geodetica.
@@ -14917,8 +14910,7 @@ dell'arco), `InvalidOutput` (linea fusa non valida), `Internal`
   scelgono dal piano.
 - Nessuna diagnostica per riga: il passo rende il primo errore ([README,
   «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-  provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -15063,9 +15055,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Solo `LineString` nel kernel; solo CRS proiettati.
 - Due frazioni diverse ma troppo vicine per dare due punti distinti sono
@@ -15235,7 +15227,7 @@ riga):
 - Nel runner il passo rende il primo errore, senza diagnostica per riga
   ([README, «Limiti dichiarati del
   runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
-  diagnostica per riga» e «Modelli di costo geo provvisori»).
+  diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -15423,7 +15415,7 @@ più righe della sinistra. Gli abbinamenti dipendono dai dati: il modello di
 costo non li prevede, e li limita solo il limite di righe dell'arco
 ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
-geo provvisori»).
+geo»).
 
 #### Precisione
 
@@ -15623,7 +15615,7 @@ nel runner: entrambi escono come `InvalidPlan`. I pezzi dipendono dai
 dati: il modello di costo non li prevede, e li limita solo il limite di
 righe dell'arco ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di
-costo geo provvisori»). Nessun controllo a posteriori del risultato contro
+costo geo»). Nessun controllo a posteriori del risultato contro
 gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
@@ -15904,9 +15896,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il punto è quello di `interior_point` di `geo`, che non coincide
 necessariamente con quello di `ST_PointOnSurface` di PostGIS. Le coordinate
 `-0.0` si portano a `0.0` su una copia prima del calcolo: con `-0.0` e
@@ -16052,8 +16044,7 @@ già ordinato, ma nessun parametro lo forma): un poligono per gruppo non si
 può chiedere. Nessun buco,
 nessun riordino dei punti, nessuna riparazione dell'anello. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -16225,8 +16216,7 @@ Poi l'esecuzione Arrow:
 - Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
 - Nessuna diagnostica per riga: il passo rende il primo errore ([README,
   «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-  provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -16413,8 +16403,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -16590,8 +16579,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -16767,8 +16755,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -16944,8 +16931,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -17121,8 +17107,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -17298,8 +17283,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -17475,8 +17459,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -17652,8 +17635,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -17829,8 +17811,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -18006,8 +17987,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -18183,8 +18163,7 @@ voce «Errori»):
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
-  previsione del modello geo provvisorio (voce «Modelli di costo geo
-  provvisori»).
+  previsione del modello geo misurato (voce «Modelli di costo geo»).
 
 #### Precisione
 
@@ -18371,9 +18350,9 @@ riga in ordine di riga, senza diagnostica per riga.
   registro, densificazione a campioni e gli altri limiti in
   [README, «Limiti dichiarati della riproiezione»](../README.md#limiti-dichiarati-della-riproiezione).
 - Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-  una previsione provvisoria
+  una previsione dalle misure
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -18523,9 +18502,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Nessuna rotazione è esatta, nemmeno di 90 o 180 gradi: il coseno di 90
 gradi in `f64` vale circa `6.1e-17`, non zero (vedi l'esempio). Le
 coordinate d'uscita non si confrontano con il dominio di validità del CRS
@@ -18672,9 +18651,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
 CRS ([README, «CRS integrati»](../README.md#crs-integrati)).
 
@@ -18825,8 +18804,7 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 Solo tratti esattamente collineari: nessuna tolleranza di distanza, nessuna
 fusione dei segmenti consecutivi in una linea sola. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -18978,9 +18956,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 `preserve_topology` non è `TopologyPreservingSimplifier` di GEOS
 (`ST_SimplifyPreserveTopology`), che usa una distanza: qui la soglia è
 un'area, e lo stesso numero semplifica in modo molto diverso. Le coordinate
@@ -19155,7 +19133,7 @@ GeoPandas: si ricollegano con `__right_index`. Le coppie dipendono dai
 dati: il modello di costo non le prevede, e le limita solo il limite di
 righe dell'arco ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
-geo provvisori»).
+geo»).
 
 #### Precisione
 
@@ -19304,9 +19282,9 @@ prima cella che fallisce in ordine di riga, senza diagnostica per riga):
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 A differenza di `ST_Snap` di PostGIS e dello snap di GEOS, si agganciano
 solo vertici a vertici: i vertici non vanno sui lati del riferimento, e i
 vertici del riferimento non si inseriscono nei lati della geometria. Se
@@ -19451,9 +19429,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - A differenza di `ST_SnapToGrid` di PostGIS, che toglie i vertici
   consecutivi uguali e rende NULL una geometria collassata, qui i
@@ -19638,8 +19616,7 @@ Poi l'esecuzione Arrow (vince la prima riga che fallisce):
 - Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
 - Nessuna diagnostica per riga: il passo rende il primo errore ([README,
   «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-  provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -19819,8 +19796,7 @@ possono scegliere tagli diversi, con la stessa area totale
 «Hazard»). Il taglio si ferma a 32 livelli con un errore, non con parti
 sopra la soglia. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
@@ -20256,9 +20232,9 @@ diagnostica per riga.
 #### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
 CRS ([README, «CRS integrati»](../README.md#crs-integrati)).
 
@@ -20711,8 +20687,7 @@ punti distinti, punti tutti collineari), `PrecisionInsufficient` e
   nessun parametro d'inviluppo.
 - Nessuna diagnostica per riga: il passo rende il primo errore ([README,
   «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-  provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 

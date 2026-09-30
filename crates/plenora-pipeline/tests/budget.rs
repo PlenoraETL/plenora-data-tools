@@ -9,7 +9,7 @@ use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::{PlenoraError, Result};
 use plenora_pipeline::budget::{costo_di, riserva_spill, Ingresso};
-use plenora_pipeline::costi_operazioni::{COSTI, SHA256_CATALOGO};
+use plenora_pipeline::costi_operazioni::{COSTI, SHA256_MISURE};
 use plenora_pipeline::{byte_vivi, Esito, LimitiParziali, Passo, Pipeline, Variante};
 use proptest::prelude::*;
 use serde_json::{json, Value};
@@ -104,7 +104,7 @@ fn picco(op: &str, righe: u64, byte_in: u64, spill: bool) -> u64 {
     let ingresso = Ingresso {
         righe,
         byte: byte_in,
-        coppie: 0,
+        ..Ingresso::default()
     };
     if spill {
         // Partizioni di default (64).
@@ -119,14 +119,15 @@ fn righe(tabella: &RecordBatch) -> u64 {
 }
 
 #[test]
-fn il_catalogo_nel_repository_e_quello_del_modello() {
+fn le_misure_nel_repository_sono_quelle_del_modello() {
     let percorso = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../data/misure/catalogo-memoria-tabellare-v3.json"
+        "/../../data/misure/catalogo-memoria-v4.json"
     );
-    let testo = std::fs::read(percorso).expect("catalogo");
+    let testo = std::fs::read(percorso).expect("misure");
     let impronta = plenora_core::esadecimale::esadecimale(&Sha256::digest(&testo));
-    assert_eq!(impronta, SHA256_CATALOGO);
+    assert_eq!(impronta, SHA256_MISURE);
+    assert_eq!(SHA256_MISURE, plenora_pipeline::costi_geo::SHA256_MISURE);
 }
 
 #[test]
@@ -155,7 +156,9 @@ fn ogni_operazione_del_runner_ha_un_modello_e_lo_spill_dove_il_kernel_lo_ha() {
 #[test]
 fn le_tabelle_fredde_si_sfrattano_e_si_rileggono_con_lo_stesso_output() {
     let caldo = tabella(60_000, 8, 1);
-    let freddo = tabella(20_000, 100, 2);
+    // La scrittura dello sfratto tiene fino a due volte `freddo` accanto a
+    // `caldo`: deve stare nel margine del sort.
+    let freddo = tabella(8_000, 100, 2);
     // Il sort di `caldo` sta nel budget solo senza `freddo` residente.
     let budget = byte(&caldo) + picco("table.sort", righe(&caldo), byte(&caldo), false) + 1;
     assert!(byte(&freddo) > 1);
@@ -199,7 +202,7 @@ fn le_tabelle_fredde_si_sfrattano_e_si_rileggono_con_lo_stesso_output() {
 
 #[test]
 fn gli_output_sfrattati_si_rileggono_alla_fine() {
-    let primo = tabella(20_000, 64, 3);
+    let primo = tabella(10_000, 64, 3);
     let secondo = tabella(60_000, 8, 4);
     // `copia` e' un output del piano senza altri consumatori: il primo
     // candidato allo sfratto (prossimo uso piu' lontano).
@@ -259,15 +262,17 @@ fn una_set_operation_oltre_il_budget_passa_alla_variante_spilled() {
 }
 
 #[test]
-fn un_sort_che_non_sta_in_memoria_passa_alla_variante_spilled() {
-    // Righe larghe: il termine per byte decide, e quello della variante
-    // spilled e' piu' basso.
+fn un_sort_che_non_sta_in_memoria_si_rifiuta_anche_con_la_variante_spilled() {
+    // Dalle misure v4 lo spill di `sort` non costa meno del sort in memoria
+    // (input e output interi coesistono, piu' la riserva delle partizioni):
+    // anche su righe larghe la variante spilled non fa stare un sort che in
+    // memoria non sta.
     let larga = tabella(20_000, 400, 7);
     let byte_in = byte(&larga);
     let memoria = picco("table.sort", righe(&larga), byte_in, false);
     let spill = picco("table.sort", righe(&larga), byte_in, true);
-    assert!(spill < memoria, "{spill} >= {memoria}");
-    let budget = byte_in + spill + 1;
+    assert!(spill >= memoria, "{spill} < {memoria}");
+    let budget = byte_in + memoria + 1;
     let pipeline = piano(
         &["t"],
         vec![passo(
@@ -280,13 +285,13 @@ fn un_sort_che_non_sta_in_memoria_passa_alla_variante_spilled() {
         budget,
     );
     let tabelle = [("t", larga)];
-    let esito = esegui(&pipeline, &tabelle).expect("variante spilled");
+    let esito = esegui(&pipeline, &tabelle).expect("in memoria");
     let passo = &esito.report.passi[0];
-    assert_eq!(passo.variante, Variante::Spill);
+    assert_eq!(passo.variante, Variante::InMemoria);
     assert!(passo.byte_vivi_con_uscita <= budget);
     assert_eq!(esito.outputs, riferimento(&pipeline, &tabelle).outputs);
 
-    // Sotto la somma di input e picco spilled: rifiuto prima di eseguire.
+    // Sotto la somma di input e picco: rifiuto prima di eseguire.
     let mut stretto = pipeline;
     stretto.limits = Some(LimitiParziali {
         max_governed_memory_bytes: Some(budget - 2),
@@ -595,7 +600,7 @@ fn uno_sfratto_che_non_libera_nulla_non_blocca_la_quota_su_disco() {
     // nulla, ma e' la prima in ordine di Belady (output senza altri usi).
     // Basta sfrattare `freddo`, e la quota non basta per entrambe.
     let x = tabella(60_000, 8, 15);
-    let freddo = tabella(20_000, 100, 16);
+    let freddo = tabella(8_000, 100, 16);
     let budget = byte(&x) + picco("table.sort", righe(&x), byte(&x), false) + 1;
     assert!(byte(&x) + byte(&freddo) + picco("table.sort", righe(&x), byte(&x), false) > budget);
     let quota = byte(&freddo) + byte(&freddo) / 2;

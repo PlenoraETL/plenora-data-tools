@@ -87,8 +87,7 @@ dell'arco), `InvalidOutput` (linea fusa non valida), `Internal`
   scelgono dal piano.
 - Nessuna diagnostica per riga: il passo rende il primo errore ([README,
   «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-  provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 

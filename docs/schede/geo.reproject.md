@@ -114,9 +114,9 @@ riga in ordine di riga, senza diagnostica per riga.
   registro, densificazione a campioni e gli altri limiti in
   [README, «Limiti dichiarati della riproiezione»](../README.md#limiti-dichiarati-della-riproiezione).
 - Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-  una previsione provvisoria
+  una previsione dalle misure
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 

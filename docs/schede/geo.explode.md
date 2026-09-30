@@ -71,8 +71,7 @@ traduce così: `ValidazioneNonConclusa` diventa `Internal`, le altre
 Un solo livello: `ST_Dump` di PostGIS scende invece fino alle geometrie
 semplici. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 

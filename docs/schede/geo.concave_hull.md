@@ -81,9 +81,9 @@ diagnostica per riga.
 ### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il lavoro è limitato da `max_coordinates`, un argomento del kernel e non
 della config: nel runner `MAX_CELL_COORDINATES`. Il poligono non è quello
 di `ST_ConcaveHull` di PostGIS, che

@@ -1227,46 +1227,68 @@ di ogni passo deve valere
 byte_vivi(residenti) + riletture + picco_previsto(passo) <= budget
 ```
 
-con `picco_previsto = S * (a + max(r * righe_in, c * byte_in, p * coppie))`
-per operazione e variante, `S = 1.5`. I coefficienti vengono dalle misure
-Windows (`PeakWorkingSet64`, profili wide, narrow, distinct avversario e
-spilled, fino a 5 milioni di righe) in
-`data/misure/catalogo-memoria-tabellare-v3.json`; li genera
-`python scripts/genera_costi_operazioni.py` in
-`crates/plenora-pipeline/src/costi_operazioni.rs`, con la formula
-nell'intestazione e lo SHA-256 del catalogo (`--verifica` rigenera e
-confronta; un test confronta l'impronta). Un'operazione senza modello si
-rifiuta in validazione (`Unsupported`).
-
-**Modelli geo, provvisori.** Le operazioni geo non sono ancora misurate
-sul runner. Fino ad allora hanno un modello **dichiarato e conservativo**,
-della stessa forma (`r` solo per `generate_grid`, sulle celle che il
-contratto conosce a secco), derivato dal catalogo empirico di
-`plenora-memory-lab` (`results/memory-catalog/catalog.json`, schema 2,
-Windows, `PeakWorkingSet64`, i kernel misurati su geometrie già
-decodificate, senza adapter Arrow). `python scripts/genera_costi_geo.py
---estrai <catalog.json>` ne estrae i campi usati in
-`data/misure/profili-geo-memory-lab.json` (con lo SHA-256 del catalogo
-d'origine); `python scripts/genera_costi_geo.py` genera
-`crates/plenora-pipeline/src/costi_geo.rs` (`--verifica` rigenera e
-confronta; un test confronta l'impronta del file dei profili). Per ogni
-punto `u` = byte di geometria in ingresso stimati per difetto (16 per
-vertice più 9 per geometria: WKB più offset Arrow non sono mai meno; i
-byte nativi dell'ingresso per `from_coords` e `from_wkt`), `a0` = picco al
-campione più piccolo, `c0` = inviluppo superiore `max (y - a0) / u`; poi
+con, per operazione e variante,
 
 ```text
-c = 2 * c0 + 4     (decodifica, uscita codificata e sua copia Arrow)
-a = a0 + 4 MiB
+picco_previsto = S * (a + max(r*R + c*B, r_s*R, c_l*B) + k*K + p*P)
 ```
 
-sul peggiore dei profili dell'operazione. Per le operazioni misurate con
-un altro backend (GEOS per `make_valid`, `polygonize`, `split`; PROJ per
-`reproject`) il loro profilo; per `split`, misurato solo su 100 geometrie,
-il `c` più alto delle espansioni Rust (`explode`, `delaunay`,
-`subdivide`). Il runner usa i byte Arrow di tutti gli ingressi, che non
-sono mai meno dei byte di geometria: il modello è per eccesso anche per
-questo.
+dove `R` sono le righe di tutti gli ingressi (per `geo.generate_grid` le
+celle d'uscita, note a secco), `B` i byte Arrow degli ingressi, `K = R *`
+colonne del contratto d'uscita, `P` righe sinistra per righe destra, e
+`S = 1.5`. I coefficienti vengono dalle misure Windows v4
+(`PeakWorkingSet64` incrementale, profili wide, narrow, distinct avversario
+e spilled fino a 5 milioni di righe per le tabellari; per le geo profili
+default e avversari su feature per vertici, al livello del runner: colonne
+GeoArrow-WKB, decodifica con validazione OGC, kernel, codifica) in
+`data/misure/catalogo-memoria-v4.json`, estratte dal catalogo della
+campagna con la sua provenienza (commit misurato, date, macchina, carico,
+SHA-256 del catalogo d'origine; `python scripts/modello_costi.py --estrai
+<catalog-v4.json>`). Li generano `python scripts/genera_costi_operazioni.py`
+in `crates/plenora-pipeline/src/costi_operazioni.rs` e `python
+scripts/genera_costi_geo.py` in `crates/plenora-pipeline/src/costi_geo.rs`,
+con le regole di `scripts/modello_costi.py` (`--verifica` rigenera e
+confronta; un test confronta l'impronta delle misure). Per ogni punto
+osservato `y = max(stima di budget, byte nuovi dell'output, 0)`:
+
+- **piano** `a + r*R + c*B` (con `k*K` per `table.pivot`, con il solo
+  `p*P` per `cross_join` e `fuzzy_join`): fra quelli che coprono **ogni**
+  punto di **tutti** i profili della variante, quello con la somma minima
+  dei rapporti previsto/misurato (programma lineare risolto esattamente),
+  con `a` non oltre il picco più piccolo misurato (la crescita la portano i
+  termini per unità) e `c >= 1` dove l'uscita può essere una copia intera
+  degli ingressi anche se le fixture ne tengono una parte (sottoinsiemi di
+  righe, join senza espansione delle chiavi, chiavi indice di `pivot`);
+- **rami di larghezza**: `r_s` inviluppo per riga della classe di
+  larghezza di riga (`B/R`) più stretta, `c_l` inviluppo per byte della più
+  larga (le classi sono i profili, e per le geo profilo per vertici per
+  geometria). Coprono le righe più strette e più larghe di quelle misurate
+  se il costo vero è una somma non negativa di un termine per riga e uno
+  per byte; con una sola classe `max(r_s*R, c_l*B)` è per eccesso a ogni
+  larghezza;
+- coefficienti in millesimi di byte, per eccesso; un'operazione senza
+  modello si rifiuta in validazione (`Unsupported`).
+
+L'oracolo `crates/plenora-pipeline/tests/oracolo_costi.rs` verifica
+l'invariante su ogni punto osservato: `a + max(...) + ...` senza `S` non è
+sotto il picco misurato, quindi la previsione è almeno una volta e mezza la
+misura. Fanno eccezione solo i profili avversari geo esclusi per nome
+(limite «Modelli di costo geo»). Sui 922 punti coperti di almeno 1 MiB il
+rapporto previsto/misurato con `S` ha mediana 1,99, novantesimo percentile
+9,8 e massimo 148 (`intersect` spilled, uscita piccola sotto `c >= 1`); con
+i modelli precedenti (v3 per le tabellari, provvisori per le geo) era 6,4,
+41,8 e 535, con 30 punti sotto la misura senza `S`.
+
+Da dove veniva il pessimismo dei modelli v3: `max(r*R, c*B)` con `r` e `c`
+presi ciascuno dal profilo peggiore. Il `c` di `join` (5,8 byte per byte)
+veniva dal profilo narrow, dove 26 byte per riga di input portano 80-100
+byte per riga di tabelle hash e indici: applicato a righe reali da 500 byte
+e oltre, trasformava un costo per riga in un costo per byte, circa cinque
+volte l'input. Il `r` di `pivot` (745 byte per riga) veniva dal profilo
+distinct, 64 colonne pivot e un indice tutto distinto: il costo lo fanno
+le celle d'uscita, non le righe, e `k*K` le conta sulle colonne del
+contratto d'uscita. Il piano additivo mette il costo per riga in `r`,
+quello per byte in `c`, quello per cella in `k`.
 
 Quando il passo non sta, nell'ordine:
 
@@ -1311,17 +1333,18 @@ misurata. Come `max_temp_bytes`
 riceve la quota che gli sfratti non occupano; lo sfratto stesso sceglie
 solo tabelle la cui copia sta nella quota rimasta.
 
-`byte_in` del modello è il maggiore fra i byte vivi degli input e il costo
+`B` del modello è il maggiore fra i byte vivi degli input e il costo
 di una loro copia (`plenora_core::memoria::byte_dati`: colonne che sono lo
 stesso array contano ciascuna, perché i kernel le copiano ciascuna); la
 stessa regola vale per `spill::estimated_batch_bytes`. Dopo il passo, byte
 vivi con l'output oltre il budget sono un `ResourceLimit` esplicito.
 
-Dalle misure: lo spill di `sort` costa quanto il sort in memoria (input e
-output devono coesistere); il modello lo sceglie solo dove il termine per
-byte della variante spilled è più basso, cioè su righe larghe, e mai sotto
-circa 2,5 volte l'input. Le set operation spilled costano molto meno di
-quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
+Dalle misure v4: lo spill di `sort` non costa meno del sort in memoria
+(input e output interi coesistono, più la riserva delle partizioni), quindi
+non fa stare un sort che in memoria non sta; le set operation spilled
+tolgono il termine per riga del piano (`intersect`: `r` da 61 a 0 byte per
+riga, `c_l` da 0,94 a 0,44), e `except` e `union_distinct` anche parte di
+quello per byte.
 
 ### Limiti dichiarati del runner
 
@@ -1346,68 +1369,99 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   delle tabelle residenti stiano sotto `max_governed_memory_bytes`, e che
   prima di ogni passo i byte vivi più il picco previsto dal modello ci
   stiano; l'output si controlla dopo con i byte esatti.
-  *Ambito*: `PipelineValidata::run`, modello in
-  `crates/plenora-pipeline/src/costi_operazioni.rs`.
+  *Ambito*: `PipelineValidata::run`, modelli in
+  `crates/plenora-pipeline/src/costi_operazioni.rs` e `costi_geo.rs`.
   *Hazard*:
   - non è un tetto duro sulla memoria del processo: il transitorio dentro
     il kernel è una previsione empirica (misure Windows di
-    `PeakWorkingSet64`, fattore 1,5), non una misura; un input fuori dalle
+    `PeakWorkingSet64`, fattore 1,5), non una misura. Il modello copre ogni
+    punto misurato (oracolo `oracolo_costi.rs`), ma un input fuori dalle
     fixture misurate (più righe di 5 milioni, 1000 per lato per
     `cross_join` e `fuzzy_join`, distribuzioni di chiavi o config diverse
     da quelle misurate: una `type_cast` di tutte le colonne invece di una)
     può superarla senza errore;
+  - fuori dalle larghezze di riga misurate per l'operazione (nella maggior
+    parte delle fixture tabellari fra 8 e 150 byte per riga d'ingresso; le
+    righe reali arrivano a qualche KiB) la previsione è per eccesso solo se
+    il costo vero è
+    una somma non negativa di un termine per riga e uno per byte (rami
+    `r_s` e `c_l`); un costo che cresce più che linearmente con la
+    larghezza di una cella non è coperto;
+  - la campagna v4 (`data/misure/catalogo-memoria-v4.json`, campo
+    `caveat`) è stata fatta su una macchina carica (CPU media 68 % e fino a
+    40 processi di build nella campagna tabellare): la memoria è
+    affidabile, i tempi no. È misurata a `24698d6`, prima delle parti
+    preparate della validazione OGC (`fd3325c`, `2697f72`: una geometria a
+    più parti in validazione trattiene qualche centinaio di byte per
+    vertice, per ogni cella in decodifica) e del runner geo di F4: quella
+    memoria non è nelle misure, la copre solo il fattore 1,5;
   - le varianti spilled sono misurate solo sui profili wide e distinct, non
-    su narrow (righe strette, dove il costo per byte è più alto), e a
-    `a59131f`, prima della correzione di `estimated_batch_bytes`: allora
-    `read_partition` rifiutava partizioni circa dieci volte più piccole
-    (`aggregate` spilled a 1 e 5 milioni di righe, rifiutato), quindi il
-    working set delle partizioni misurato è più piccolo di quello di oggi.
-    Il runner lo compensa con la riserva e passando al kernel spilled al
-    più metà del margine oltre il picco del modello; con chiavi più
-    sbilanciate di due partizioni medie il kernel rifiuta con
-    `ResourceLimit`. I punti rifiutati non entrano nel modello;
+    su narrow (righe strette, dove il costo per riga è più alto). Il runner
+    aggiunge la riserva delle partizioni e passa al kernel spilled al più
+    metà del margine oltre il picco del modello; con chiavi più sbilanciate
+    di due partizioni medie il kernel rifiuta con `ResourceLimit`;
+  - i punti che il kernel ha rifiutato per i suoi limiti (`reconcile`,
+    `concat` e `concat_by_name` wide, varianti spilled di `aggregate` e
+    `distinct` alle dimensioni più grandi) non entrano nel modello;
   - `cross_join` e `fuzzy_join` hanno solo il termine per coppia,
     calibrato sulle larghezze di riga misurate: con righe più larghe il
     picco previsto è basso, e la difesa è il preflight dell'output del
     kernel con il margine passato;
-  - per `date_extract` e `string_length` (solo profilo wide) la crescita per
-    riga fra gli ultimi due campioni supera 1,5: il modello resta lineare
-    con l'inviluppo sul campione più grande;
+  - `pivot` conta le celle d'uscita come righe in ingresso per colonne
+    d'uscita (per eccesso: le righe d'uscita sono le chiavi indice
+    distinte, che a secco non si conoscono). Oggi il runner rifiuta
+    `pivot` in validazione e il termine non si usa; vale quando `pivot`
+    entra con un contratto le cui colonne sono esattamente quelle che il
+    kernel produce (con `mapping`, una per voce anche se i dati non la
+    contengono), mai meno;
+  - per `date_extract`, `lookup` e `string_length` (solo profilo wide) la
+    crescita per riga fra gli ultimi due campioni supera 1,5: il modello
+    resta lineare e copre il campione più grande;
   - esclusi: overhead dell'allocatore e strutture Rust; i buffer di I/O
     dello spill dei kernel; la memoria esterna (FFI) contata
     come la vede `byte_vivi` (limite sopra);
   - per le operazioni che dipendono dai dati (join, `cross_join`,
     `fuzzy_join`, `pivot`, `transpose`, `explode`, `unnest`, `melt`,
     `aggregate`, `dedup_advanced`, finestre, `flatten_json`) il modello
-    copre il transitorio del caso peggiore misurato; l'output lo limitano i
-    preflight dei kernel con il margine passato e `max_rows`, e il
-    controllo esatto dopo il passo, cioè dopo che è stato allocato;
+    copre il caso peggiore misurato; l'output lo limitano i preflight dei
+    kernel con il margine passato e `max_rows`, e il controllo esatto dopo
+    il passo, cioè dopo che è stato allocato. `c >= 1` copre un join senza
+    espansione delle chiavi, non uno molti a molti;
   - uno sfratto libera memoria solo se nessun altro tiene l'allocazione:
     un clone tenuto dal chiamante la tiene viva, e il resoconto non lo vede.
 
   *Rientro*: contabilità esplicita delle strutture di chiavi nei kernel
   (limite «Memoria delle chiavi dei kernel in memoria non governata»),
-  misure del profilo narrow per le varianti spilled e dei casi oltre il
-  dominio misurato, e un allocatore contato per il processo (un tetto
-  vero, non una previsione).
-- **Modelli di costo geo provvisori.**
-  *Regola*: ogni operazione geo ha un modello dichiarato, conservativo,
-  derivato dalle misure dei kernel senza adapter ([«Budget di
-  memoria»](#budget-di-memoria)).
+  misure del profilo narrow per le varianti spilled, di righe più larghe e
+  dei casi oltre il dominio misurato, una campagna a macchina scarica sul
+  `main` corrente, e un allocatore contato per il processo (un tetto vero,
+  non una previsione).
+- **Modelli di costo geo.**
+  *Regola*: ogni operazione geo ha un modello generato dalle misure v4 al
+  livello del runner, con le stesse regole delle tabellari; alcuni profili
+  avversari ne sono esclusi per nome (`esclusi` in `costi_geo.rs`, motivi
+  in `scripts/genera_costi_geo.py`): `buffer` su linee a zig-zag,
+  `count_points_in_polygons`, `sjoin` e `within` con ogni coppia
+  candidata, `overlay` e `coverage_validate` su sovrapposizioni, `nearest`
+  con pareggi.
   *Ambito*: `crates/plenora-pipeline/src/costi_geo.rs`, tutte le `geo.*`.
-  *Hazard*: non è una misura del runner: il transitorio dipende da tipo e
-  forma delle geometrie (un `buffer` di punti produce ~27 volte i byte
-  d'ingresso, di poligoni molto meno), e le fixture del laboratorio non
-  coprono ogni forma; le operazioni misurate con GEOS o PROJ hanno oggi un
-  backend Rust diverso. Un ingresso fuori dalle fixture può superare la
-  previsione senza errore; i byte vivi dopo il passo restano controllati
-  esattamente. Le uscite che dipendono dai dati (coppie di `sjoin` e
-  `nearest`, pezzi di `overlay`, parti delle espansioni) le limita solo il
-  limite di righe dell'arco passato ai kernel: i kernel geo non ricevono
-  il margine di memoria, e un'uscita grande si scopre al controllo dopo il
-  passo, cioè dopo essere stata allocata.
-  *Rientro*: la campagna di misura delle geo sul runner, con un modello
-  generato come quello tabellare.
+  *Hazard*: la memoria dei profili esclusi cresce con una grandezza che il
+  runner non conosce prima del passo (coppie candidate, pezzi
+  d'intersezione, vicini equidistanti, forma della geometria): coprirli
+  renderebbe il modello di ordini di grandezza più alto sui profili
+  ordinari (per `sjoin` il default fino a 1500 volte la misura). Su quei
+  profili la previsione arriva fino a circa 400 volte sotto la misura (mediana
+  0,18 con `S`); il `buffer` a zig-zag da 1000 vertici per geometria ha
+  misurato 20 GiB su 15 MiB d'ingresso. I punti andati oltre il tempo
+  massimo della campagna (`buffer`, `make_valid`, `split`) o
+  rifiutati (`line_merge`, `polygonize`, `voronoi`) non sono nel modello.
+  I kernel geo non ricevono il margine di memoria: un'uscita o un
+  transitorio grande si scopre al controllo dopo il passo, cioè dopo
+  essere stato allocato, o non si scopre se il processo esaurisce prima la
+  memoria.
+  *Rientro*: una grandezza a secco per queste espansioni (candidati
+  dell'R-tree, stima delle sovrapposizioni) nel modello o nei kernel, con
+  il margine passato ai kernel geo come alle tabellari.
 - **Geo senza diagnostica per riga.**
   *Regola*: un passo geo rende il primo errore in ordine di riga, senza
   report `plenora-row-diagnostics-v1`; gli indici che alcuni messaggi dei

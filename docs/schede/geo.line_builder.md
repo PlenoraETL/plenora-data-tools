@@ -70,8 +70,7 @@ Non ci sono colonne di gruppo né d'ordine (il kernel lavora su un gruppo
 già ordinato, ma nessun parametro lo forma): una linea per gruppo non si
 può chiedere. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 

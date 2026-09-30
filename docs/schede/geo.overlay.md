@@ -117,7 +117,7 @@ nel runner: entrambi escono come `InvalidPlan`. I pezzi dipendono dai
 dati: il modello di costo non li prevede, e li limita solo il limite di
 righe dell'arco ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di
-costo geo provvisori»). Nessun controllo a posteriori del risultato contro
+costo geo»). Nessun controllo a posteriori del risultato contro
 gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 

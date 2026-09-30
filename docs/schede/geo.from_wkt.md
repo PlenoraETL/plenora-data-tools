@@ -75,9 +75,9 @@ passo dopo un passo che cambia le righe
 
 ### Limiti e deviazioni
 
-- Il costo in memoria del passo è una previsione provvisoria
+- Il costo in memoria del passo è una previsione dalle misure
   ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-  voce «Modelli di costo geo provvisori»).
+  voce «Modelli di costo geo»).
 - Solo WKT 2D: EWKT con `SRID=` e WKT con `Z`, `M`, `ZM` si rifiutano.
 - `on_error` non ha effetto (sopra).
 

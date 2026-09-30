@@ -102,6 +102,9 @@ pub struct PassoValidato {
     pub righe_previste: u64,
     /// Base degli indici della diagnostica per riga del passo.
     pub base_indici: BaseIndici,
+    /// Colonne dell'uscita, dal contratto: con le righe in ingresso danno le
+    /// celle d'uscita del modello di costo ([`crate::budget::Ingresso`]).
+    pub colonne_uscita: u64,
 }
 
 impl PassoValidato {
@@ -636,6 +639,7 @@ impl Pipeline {
             verifica_colonne(&uscita, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
             let uscita = canonico(uscita).map_err(|errore| nel_passo(&passo.out, errore))?;
+            let colonne_uscita = u64::try_from(uscita.schema.fields().len()).unwrap_or(u64::MAX);
             contratti.insert(passo.out.clone(), uscita);
             // Un'operazione che conserva le righe conserva quelle del primo
             // ingresso: `assert_foreign_key` rende il lato left invariato.
@@ -652,6 +656,7 @@ impl Pipeline {
                 costo,
                 righe_previste,
                 base_indici,
+                colonne_uscita,
             });
         }
 

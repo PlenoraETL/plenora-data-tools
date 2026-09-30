@@ -99,7 +99,7 @@ più righe della sinistra. Gli abbinamenti dipendono dai dati: il modello di
 costo non li prevede, e li limita solo il limite di righe dell'arco
 ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
-geo provvisori»).
+geo»).
 
 ### Precisione
 

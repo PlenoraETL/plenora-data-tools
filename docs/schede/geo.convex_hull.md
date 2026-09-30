@@ -64,9 +64,9 @@ di riga, senza diagnostica per riga.
 ### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Dove GEOS e PostGIS rendono un `Point` o una `LineString` per l'inviluppo
 degenere, qui c'è un errore: l'uscita dichiarata è sempre `Polygon`.
 Le coordinate si dividono per il loro modulo massimo prima del calcolo e si

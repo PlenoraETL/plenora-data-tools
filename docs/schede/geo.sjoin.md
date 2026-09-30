@@ -101,7 +101,7 @@ GeoPandas: si ricollegano con `__right_index`. Le coppie dipendono dai
 dati: il modello di costo non le prevede, e le limita solo il limite di
 righe dell'arco ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
-geo provvisori»).
+geo»).
 
 ### Precisione
 

@@ -78,9 +78,9 @@ diagnostica per riga.
 ### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il runner passa al kernel la precisione di 1 cm a terra nelle unità del
 CRS della colonna (`Precision::from_crs`, calcolata in validazione;
 [README, «Operazioni geo»](../README.md#operazioni-geo), voce

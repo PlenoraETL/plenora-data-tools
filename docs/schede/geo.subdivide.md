@@ -96,8 +96,7 @@ possono scegliere tagli diversi, con la stessa area totale
 «Hazard»). Il taglio si ferma a 32 livelli con un errore, non con parti
 sopra la soglia. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 

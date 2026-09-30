@@ -115,7 +115,7 @@ righe senza geometria. Il catalogo dichiara forma 1:N; il kernel rende un
 risultato per riga. Nessuna diagnostica per riga: il passo rende il primo
 errore ([README, «Limiti dichiarati del
 runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
-diagnostica per riga» e «Modelli di costo geo provvisori»).
+diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 

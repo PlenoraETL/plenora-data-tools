@@ -971,15 +971,15 @@ fn un_passo_geo_oltre_il_budget_si_rifiuta_prima_di_eseguire() {
     assert!(esito.report.passi[0].byte_previsti > 6 * 1024 * 1024);
 }
 
-/// Il modello provvisorio delle geo e' generato dai profili nel repository.
+/// Il modello delle geo e' generato dalle misure nel repository.
 #[test]
-fn il_modello_geo_viene_dai_profili_registrati() {
+fn il_modello_geo_viene_dalle_misure_registrate() {
     use sha2::{Digest, Sha256};
     let percorso = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../data/misure/profili-geo-memory-lab.json");
+        .join("../../data/misure/catalogo-memoria-v4.json");
     let impronta =
         plenora_core::esadecimale::esadecimale(&Sha256::digest(std::fs::read(percorso).unwrap()));
-    assert_eq!(impronta, plenora_pipeline::costi_geo::SHA256_PROFILI_GEO);
+    assert_eq!(impronta, plenora_pipeline::costi_geo::SHA256_MISURE);
     // Ogni operazione geo del catalogo ha il suo modello.
     for descrittore in plenora_core::catalog::CATALOG
         .iter()

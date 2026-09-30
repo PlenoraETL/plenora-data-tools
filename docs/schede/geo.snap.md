@@ -67,9 +67,9 @@ prima cella che fallisce in ordine di riga, senza diagnostica per riga):
 ### Limiti e deviazioni
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
-una previsione provvisoria
+una previsione dalle misure
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 A differenza di `ST_Snap` di PostGIS e dello snap di GEOS, si agganciano
 solo vertici a vertici: i vertici non vanno sui lati del riferimento, e i
 vertici del riferimento non si inseriscono nei lati della geometria. Se

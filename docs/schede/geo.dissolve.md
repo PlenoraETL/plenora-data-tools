@@ -75,8 +75,7 @@ a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Nessun controllo a posteriori del risultato contro gli ingressi.
 Nessuna diagnostica per riga: il passo rende il primo errore ([README,
 «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
-voci «Geo senza diagnostica per riga» e «Modelli di costo geo
-provvisori»).
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 
