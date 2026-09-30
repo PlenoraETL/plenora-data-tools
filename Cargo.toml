@@ -45,15 +45,25 @@ arrow-buffer = "=59.2.0"
 #   con `cc`, senza cmake: basta il compilatore C che il linker del target
 #   gia' richiede). Non esiste un codec ZSTD Rust puro nel crate `parquet`;
 #   senza, i file ZSTD (comuni nei dati GeoParquet pubblicati) si rifiutano.
+# - `crc`: verifica dei checksum di pagina (decisione dell'utente
+#   2026-09-30): una pagina corrotta ma ancora decodificabile che porta il
+#   suo CRC diventa un errore esplicito invece di valori sbagliati in
+#   silenzio. Porta `crc32fast` (pin sotto).
 # Escluse di proposito: `lz4`, `flate2` (GZIP), `brotli` (codec rari nei dati
 # geografici: un file che li usa fallisce con un errore esplicito del
 # codec), `async`, `object_store`, `json`, `variant_*`, `simdutf8`,
-# `experimental`, `encryption`, `crc`.
+# `experimental`, `encryption`.
 # Crate nuovi nel lockfile (10): parquet, snap, zstd, zstd-safe, zstd-sys,
 # jobserver e pkg-config (build di zstd-sys), seq-macro, twox-hash (non
 # opzionali di parquet), base64; il resto (arrow-*, cc, bytes, half,
 # hashbrown, num-*, chrono, flatbuffers) c'era gia'.
-parquet = { version = "=59.2.0", default-features = false, features = ["arrow", "snap", "zstd"] }
+parquet = { version = "=59.2.0", default-features = false, features = ["arrow", "snap", "zstd", "crc"] }
+# CRC32 dei checksum di pagina Parquet (feature `crc` sopra): l'unico crate
+# nuovo nel lockfile per quella feature (la sua dipendenza `cfg-if` c'era
+# gia'). Versione esatta, la piu' recente compatibile con `^1.4.2` di
+# `parquet`, senza feature come la chiede `parquet`; plenora-io la dichiara
+# solo per fissarne la versione.
+crc32fast = { version = "=1.5.2", default-features = false }
 # Decodifica dello schema Arrow incorporato nei file Parquet (`ARROW:schema`,
 # base64 standard): plenora-io lo confronta con lo schema che `parquet`
 # applica davvero, perche' `parquet` ricade in silenzio sul tipo Parquet

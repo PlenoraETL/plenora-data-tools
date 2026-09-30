@@ -503,3 +503,37 @@ fn parquet_colonna_vuota_si_legge() {
     let letta = leggi_tabella(&percorso, None, u64::MAX).expect("colonna vuota");
     assert_eq!(letta.num_rows(), 0);
 }
+
+/// Checksum di pagina (fixture pyarrow con `write_page_checksum`, pagina
+/// non compressa): intatto si legge; un byte di un valore invertito, che
+/// senza verifica tornerebbe un altro numero, e' un errore esplicito.
+#[test]
+fn parquet_pagina_con_checksum_corrotta_rifiutata() {
+    use plenora_core::arrow::array::cast::AsArray;
+    use plenora_core::arrow::array::types::Int64Type;
+    let percorso = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("dati")
+        .join("pyarrow_crc.parquet");
+    let byte = std::fs::read(&percorso).unwrap();
+    let letta = leggi_byte(&byte, Formato::Parquet, &LimitiLettura::default()).expect("intatto");
+    let valori: Vec<i64> = letta
+        .column(0)
+        .as_primitive::<Int64Type>()
+        .values()
+        .to_vec();
+    assert_eq!(valori, vec![1, 2, 3, 4]);
+    // Il valore 3, little-endian a 8 byte, compare una volta sola.
+    let tre = 3_i64.to_le_bytes();
+    let posizioni: Vec<usize> = byte
+        .windows(8)
+        .enumerate()
+        .filter(|(_, finestra)| *finestra == tre)
+        .map(|(posizione, _)| posizione)
+        .collect();
+    assert_eq!(posizioni.len(), 1, "valore da corrompere non univoco");
+    let mut corrotto = byte;
+    corrotto[posizioni[0]] = 7;
+    let errore = errore(&corrotto, Formato::Parquet, &LimitiLettura::default());
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+}

@@ -267,6 +267,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32fast"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -765,6 +774,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "crc32fast",
  "half",
  "hashbrown 0.17.1",
  "num-bigint",
@@ -826,6 +836,7 @@ dependencies = [
  "arrow-buffer",
  "base64",
  "chrono",
+ "crc32fast",
  "geo",
  "parquet",
  "plenora-core",

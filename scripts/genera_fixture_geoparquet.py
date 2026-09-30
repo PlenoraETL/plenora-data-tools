@@ -112,6 +112,18 @@ def main() -> int:
         compression="zstd",
     )
 
+    # Checksum di pagina: una colonna int64, pagine non compresse con CRC.
+    # Il test inverte un byte di un valore e si aspetta un errore esplicito.
+    pq.write_table(
+        pa.table({"v": pa.array([1, 2, 3, 4], pa.int64())}),
+        DESTINAZIONE / "pyarrow_crc.parquet",
+        compression="none",
+        write_page_checksum=True,
+        use_dictionary=False,
+        write_statistics=False,
+        store_schema=False,
+    )
+
     # Timestamp INT96 (Impala/Spark), senza GeoParquet: il lettore lo rifiuta.
     int96 = pa.table({"quando": pa.array([0, 1_700_000_000_000_000_000], pa.timestamp("ns"))})
     pq.write_table(

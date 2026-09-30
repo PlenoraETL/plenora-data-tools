@@ -13,6 +13,9 @@ plenora-pipeline.workspace = true
 # pin nel Cargo.toml del workspace).
 arrow-buffer.workspace = true
 parquet.workspace = true
+# Solo per fissare la versione del CRC32 che `parquet` usa per i checksum di
+# pagina (feature `crc`, motivazione al pin nel Cargo.toml del workspace).
+crc32fast.workspace = true
 base64.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

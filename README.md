@@ -1710,7 +1710,8 @@ codifica dei kernel e con le coordinate di `geo`.
 
 Fixture: `crates/plenora-io/tests/dati/` contiene file scritti da pyarrow
 (Parquet C++): due GeoParquet nella forma di GeoPandas, con il PROJJSON di
-PROJ, e uno con timestamp `INT96` (`scripts/genera_fixture_geoparquet.py`).
+PROJ, uno con timestamp `INT96` e uno con i checksum di pagina
+(`scripts/genera_fixture_geoparquet.py`).
 
 ### Scrittura atomica
 
@@ -1794,7 +1795,8 @@ con ogni byte invertito (nessun panico; ogni posizione con la suite lunga,
 testa, coda e una ogni 11 senza), lunghezze enormi di metadati, blocchi e
 footer, stream senza fine o con byte dopo la fine, un blocco dello stream
 cambiato in `NONE`, blocchi del footer ripetuti o spostati rispetto al loro
-messaggio, e ogni limite della tabella.
+messaggio, una pagina Parquet con checksum e un valore corrotto, e ogni
+limite della tabella.
 
 ### Limiti dichiarati
 
@@ -1838,15 +1840,16 @@ messaggio, e ogni limite della tabella.
   *Rientro*: se si devono leggere file di fonti non fidate, aggiungere una
   pre-validazione (footer e intestazioni di pagina percorsi prima di
   `parquet`, contenuto dei messaggi IPC prima di Arrow).
-- **Checksum di pagina Parquet non verificati.**
-  *Regola*: `parquet` è compilato senza la feature `crc`.
+- **Pagine Parquet senza checksum.**
+  *Regola*: `parquet` verifica il CRC di ogni pagina che lo porta (feature
+  `crc`); una pagina con CRC sbagliato è un errore (`DataMapping`).
   *Ambito*: `parquet_io::leggi`.
-  *Hazard*: una pagina corrotta ma ancora decodificabile (per esempio un
-  byte di un valore numerico in una pagina non compressa) torna con altri
-  valori senza errore, anche quando il file porta il CRC della pagina; le
-  pagine senza CRC resterebbero comunque non verificabili.
-  *Rientro*: abilitare `crc` in `parquet`, che aggiunge al lockfile il crate
-  `crc32fast` (decisione in sospeso: dipendenza nuova da motivare).
+  *Hazard*: una pagina senza CRC (il default di pyarrow e di `parquet-rs`,
+  anche in scrittura qui) corrotta ma ancora decodificabile, per esempio un
+  byte di un valore numerico in una pagina non compressa, torna con altri
+  valori senza errore.
+  *Rientro*: scrivere i CRC (`write_page_checksum` in pyarrow) nei file da
+  proteggere; un controllo d'integrità del file intero a monte.
 - **Parquet modificato durante la lettura.**
   *Regola*: la lunghezza del footer si verifica sul file aperto, poi
   `parquet` lo rilegge.
