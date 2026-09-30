@@ -343,12 +343,21 @@ sommerebbe la regione sbagliata in silenzio.
 la topologia delle geodetiche è dimostrabilmente quella del piano:
 
 - per ogni lato si maggiora lo scarto fra geodetica e corda nel piano
-  lon/lat: la curvatura della geodetica nel piano è al più `K` (dalle
-  equazioni delle geodetiche, in funzione della latitudine massima del
-  lato), la sua lunghezza nel piano al più `L`, e con `K L <= 1` la
-  geodetica è un grafico sulla corda che se ne scosta al più di
-  `l^2 / 8 * K / cos^3(K L)` (`l` la corda). Un lato con `K L > 1`, o che
-  tocca un polo, si rifiuta;
+  lon/lat, solo con maggioranti certificati (nessun problema inverso,
+  nessun azimut: `GeographicLib` arrotonda a zero le latitudini minime e
+  su un lato quasi equatoriale di 179° perdeva un vertice a 11,8 m
+  dall'equatore). La lunghezza della geodetica è al più `S = a / sqrt(1 -
+  e^2) |dphi| + a |dlambda|` (la curva lineare in lon/lat non è più corta
+  della geodetica); la latitudine lungo di essa al più
+  `max(|phi1|, |phi2|) + S / (2 a (1 - e^2))`; da questa la curvatura della
+  geodetica nel piano è al più `K`, la lunghezza nel piano al più `L`, e
+  con `K L <= 1` la geodetica è un grafico sulla corda che se ne scosta al
+  più di `l^2 / 8 * K / cos^3(K L)` (`l` la corda);
+- **dominio accettato**: `S` al più 1000 km, latitudine maggiorata sotto
+  90° e `K L <= 1`; ogni altro lato si rifiuta (`InvalidInput`). Poligoni
+  catastali, comunali e regionali non ne sono toccati; lo sono lati di
+  centinaia di chilometri (confini semplificati di stati) e lati a pochi
+  chilometri da un polo;
 - due lati senza estremi comuni devono avere le corde più lontane della
   somma dei loro scarti; di due lati con un estremo comune, l'altro estremo
   di ciascuno deve distare dalla corda dell'altro più del suo scarto (due

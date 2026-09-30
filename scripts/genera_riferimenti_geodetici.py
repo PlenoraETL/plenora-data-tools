@@ -10,13 +10,13 @@ Scrive `crates/plenora-kernels-geo/tests/fixtures/geodetica/`:
   `R1 = a (1 - f / 3)`;
 - `aree.csv`: per ogni CRS geografico, poligoni (con e senza buchi) in WKT
   con l'area geodetica e linee con la lunghezza geodetica;
-- `vertici.csv`: lati pseudo-casuali (seme fisso) su WGS 84 e
-  Internazionale 1924, molti vicino all'equatore con azimut quasi
-  est-ovest, con la latitudine massima in modulo lungo la geodetica e quella
-  del vertice. Il vertice viene dalla `GeodesicLine` di GeographicLib
-  (`calp0`, `salp0`: `sin(beta0) = |cos(alpha0)|`, `cos(beta0) =
-  |sin(alpha0)|`), la scelta se il lato lo contiene dal verso degli azimut
-  agli estremi.
+- `vertici.csv`: lati corti pseudo-casuali (seme fisso, fino a circa
+  900 km) su WGS 84, Internazionale 1924 e Clarke 1866, molti vicino
+  all'equatore con azimut quasi est-ovest e latitudini fino a 1e-18, con la
+  latitudine massima in modulo lungo la geodetica. Il riferimento e'
+  indipendente da GeographicLib (che arrotonda le latitudini piccole a
+  zero): Vincenty e Clairaut in aritmetica a 60 cifre (mpmath 1.3.0,
+  strumento di sviluppo come in `genera_riferimenti_singolari.py`).
 
 I valori sono di GeographicLib 2.0 per Python (Karney, l'implementazione di
 riferimento dell'algoritmo), sull'ellissoide che pyproj 3.7.2 / PROJ 9.5.1 /
@@ -128,8 +128,8 @@ POLIGONI = [
     "0.00467777 51.504181,0.00327229 51.504435,0.00187754 51.504168,"
     "0.0008797 51.50338,0.00107288 51.502324,0.00185608 51.50177,0.00388383 51.501574))",
     "POLYGON((10 40,14 40,14 44,10 44,10 40),(11 41,11 42,12 42,12 41,11 41))",
-    "POLYGON((-10 -10,0 -10,0 0,-10 0,-10 -10))",
-    "POLYGON((160 -5,179.5 -5,179.5 5,160 5,160 -5))",
+    "POLYGON((-6 -6,0 -6,0 0,-6 0,-6 -6))",
+    "POLYGON((170 -3,176 -3,176 3,170 3,170 -3))",
 ]
 LINEE = [
     "LINESTRING(9 45,10 45.5,11 45)",
@@ -184,38 +184,79 @@ def area_anello(g: Geodesic, anello, orario: bool):
     return area
 
 
+def vincenty_mp(a, f, lat1, lon1, lat2, lon2):
+    """Problema inverso di Vincenty in aritmetica a 60 cifre (mpmath): gli
+    azimut agli estremi, per lati corti lontani dagli antipodi, dove la
+    serie converge. Indipendente da GeographicLib, e senza arrotondare le
+    latitudini piccole."""
+    from mpmath import mp, mpf, atan, tan, sin, cos, sqrt, atan2, pi
+
+    a, f = mpf(a), mpf(f)
+    b = (1 - f) * a
+    rad = pi / 180
+    u1 = atan((1 - f) * tan(mpf(lat1) * rad))
+    u2 = atan((1 - f) * tan(mpf(lat2) * rad))
+    l = (mpf(lon2) - mpf(lon1)) * rad
+    lam = l
+    for _ in range(1000):
+        sl, cl = sin(lam), cos(lam)
+        ss = sqrt((cos(u2) * sl) ** 2 + (cos(u1) * sin(u2) - sin(u1) * cos(u2) * cl) ** 2)
+        cs = sin(u1) * sin(u2) + cos(u1) * cos(u2) * cl
+        sigma = atan2(ss, cs)
+        sa = cos(u1) * cos(u2) * sl / ss
+        c2a = 1 - sa ** 2
+        c2sm = cs - 2 * sin(u1) * sin(u2) / c2a if c2a != 0 else mpf(0)
+        c = f / 16 * c2a * (4 + f * (4 - 3 * c2a))
+        nuovo = l + (1 - c) * f * sa * (sigma + c * ss * (c2sm + c * cs * (-1 + 2 * c2sm ** 2)))
+        if abs(nuovo - lam) < mpf(10) ** -50:
+            lam = nuovo
+            break
+        lam = nuovo
+    else:
+        raise Rifiuto("Vincenty non converge")
+    sl, cl = sin(lam), cos(lam)
+    azi1 = atan2(cos(u2) * sl, cos(u1) * sin(u2) - sin(u1) * cos(u2) * cl)
+    azi2 = atan2(cos(u1) * sl, -sin(u1) * cos(u2) + cos(u1) * sin(u2) * cl)
+    return u1, azi1, azi2
+
+
 def latitudini_massime():
+    """Latitudine massima in modulo lungo la geodetica di lati corti (fino a
+    circa 900 km, il dominio che la verifica di topologia accetta), in
+    aritmetica a 60 cifre: Vincenty per gli azimut, Clairaut per il vertice
+    (`cos(beta0) = |cos(beta1) sin(alpha1)|`), il vertice contato se gli
+    azimut agli estremi hanno la componente nord di segno opposto."""
     import random
 
-    righe = ["crs,lon1,lat1,lon2,lat2,latitudine_massima,vertice"]
+    from mpmath import mp, mpf, atan, tan, sin, cos, sqrt, pi
+
+    mp.dps = 60
+    righe = ["crs,lon1,lat1,lon2,lat2,latitudine_massima"]
     caso = random.Random(20260930)
-    for nome in ("EPSG:4326", "EPSG:4230"):
+    for nome in ("EPSG:4326", "EPSG:4230", "EPSG:4267"):
         crs = CRS.from_user_input(nome)
         a, inverso = ellissoide(crs)
-        f = 1.0 / inverso
-        g = Geodesic(a, f)
-        lati = [(-85.0, 4e-8, 85.0, 4e-8)]
-        for _ in range(150):
-            lat = caso.choice([1e-8, 1e-7, 1e-6, 1e-4]) * caso.uniform(-5, 5)
-            lon1 = caso.uniform(-90, 0)
-            lati.append((lon1, lat, lon1 + caso.uniform(1, 179), lat + caso.uniform(-1e-6, 1e-6)))
-        for _ in range(150):
-            lon1, lat1 = caso.uniform(-180, 180), caso.uniform(-85, 85)
-            lon2 = lon1 + caso.uniform(-179, 179)
-            lon2 = (lon2 + 180) % 360 - 180
-            lati.append((lon1, lat1, lon2, caso.uniform(-85, 85)))
+        f = mpf(1) / mpf(inverso)
+        lati = []
+        for _ in range(120):
+            # Vicino all'equatore, quasi est-ovest: dove un vertice
+            # arrotondato si perde.
+            lat = caso.choice([1e-18, 1e-12, 1e-8, 1e-6, 1e-4]) * caso.uniform(-5, 5)
+            lon1 = caso.uniform(-170, 160)
+            lati.append((lon1, lat, lon1 + caso.uniform(0.001, 8.0), lat + caso.uniform(-1e-6, 1e-6)))
+        for _ in range(120):
+            lat1 = caso.uniform(-80, 80)
+            lon1 = caso.uniform(-170, 160)
+            lati.append((lon1, lat1, lon1 + caso.uniform(-3, 8), lat1 + caso.uniform(-3, 3)))
         for lon1, lat1, lon2, lat2 in lati:
-            linea = g.InverseLine(lat1, lon1, lat2, lon2)
-            risultato = g.Inverse(lat1, lon1, lat2, lon2)
-            vertice = math.degrees(math.atan2(abs(linea._calp0), (1 - f) * abs(linea._salp0)))
-            c1 = math.cos(math.radians(risultato["azi1"]))
-            c2 = math.cos(math.radians(risultato["azi2"]))
-            massima = max(abs(lat1), abs(lat2))
-            if c1 * c2 < 0:
+            u1, azi1, azi2 = vincenty_mp(a, f, lat1, lon1, lat2, lon2)
+            massima = max(abs(mpf(lat1)), abs(mpf(lat2)))
+            if cos(azi1) * cos(azi2) < 0:
+                coseno = abs(cos(u1) * sin(azi1))
+                beta0 = atan(sqrt(1 - coseno ** 2) / coseno)
+                vertice = atan(tan(beta0) / (1 - f)) * 180 / pi
                 massima = max(massima, vertice)
-            righe.append(
-                f"{nome},{r(lon1)},{r(lat1)},{r(lon2)},{r(lat2)},{r(massima)},{r(vertice)}"
-            )
+            righe.append(f"{nome},{r(lon1)},{r(lat1)},{r(lon2)},{r(lat2)},{r(float(massima))}")
     return "\n".join(righe) + "\n"
 
 
@@ -273,6 +314,10 @@ def main() -> int:
     argomenti = parser.parse_args()
     try:
         base.verifica_ambiente()
+        import mpmath
+
+        if mpmath.__version__ != "1.3.0":
+            raise Rifiuto(f"mpmath {mpmath.__version__}, atteso 1.3.0")
         if geographiclib.__version__ != GEOGRAPHICLIB_ATTESO:
             raise Rifiuto(
                 f"geographiclib {geographiclib.__version__}, atteso {GEOGRAPHICLIB_ATTESO}"

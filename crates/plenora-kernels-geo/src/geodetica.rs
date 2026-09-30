@@ -110,51 +110,50 @@ struct LatoGeodetico {
     scarto: f64,
 }
 
-/// La latitudine massima in modulo, in gradi, lungo la geodetica di un lato.
+/// Lunghezza maggiorata massima di un lato nella verifica di topologia.
 ///
-/// Il lato parte da `da` con azimut `azimut1` e arriva a latitudine
-/// `latitudine_arrivo` con azimut `azimut2`. Vale la latitudine degli
-/// estremi, o quella del vertice se il lato lo contiene (la latitudine
-/// cambia verso, o un azimut e' quasi est-ovest e il vertice e' vicino a un
-/// estremo).
+/// 1000 km, lontano da ogni regime antipodale o coniugato (circa
+/// 20 000 km). Oltre, il lato si rifiuta.
+pub const LATO_MASSIMO_M: f64 = 1_000_000.0;
+
+/// Maggiorante certificato della lunghezza della geodetica fra due punti,
+/// in metri, e della latitudine massima in modulo lungo di essa, in
+/// radianti. Nessun problema inverso, nessun azimut.
 ///
-/// Il vertice viene da Clairaut, `cos(beta0) = |cos(beta1) sin(alpha1)|`
-/// (`beta` latitudine ridotta), in forma stabile: `sin(beta0) =
-/// hypot(sin(beta1), cos(beta1) cos(alpha1))` e `beta0 = atan2(sin, cos)`.
-/// `acos` del coseno, vicino all'equatore con azimut quasi est-ovest,
-/// arrotondava il coseno a 1 e il vertice a 0 (lato (-85, 4e-8)-(85, 4e-8)
-/// di WGS 84: vertice vero a 4,87e-7 gradi, scarto sottostimato di 5 volte).
-/// Il risultato e' aumentato di un margine relativo di `1e-5` piu' `1e-15`
-/// gradi: su lati cosi' degeneri gli azimut di `GeographicLib` differiscono
-/// fra le implementazioni (Rust e Python) fino a qualche `1e-7` relativo
-/// sul vertice.
+/// - **Lunghezza.** La geodetica e' la curva piu' breve, quindi non piu'
+///   lunga della curva lineare in (lambda, phi) fra gli stessi estremi, la
+///   cui lunghezza e' `int sqrt(M^2 dphi^2 + r^2 dlambda^2)`, al piu'
+///   `M_max |dphi| + r_max |dlambda|`, con `M <= M_max = a / sqrt(1 - e^2)`
+///   (al polo) e `r = N cos(phi) <= a`. Si richiede `|dlambda| < 180` gradi
+///   (gia' verificato).
+/// - **Latitudine.** Lungo la geodetica `|dphi / ds| = |cos(alpha)| / M <=
+///   1 / M_min`, `M_min = a (1 - e^2)` (all'equatore); ogni punto dista
+///   lungo la geodetica al piu' `s12 / 2` da un estremo, quindi `|phi| <=
+///   max(|phi1|, |phi2|) + s12 / (2 a (1 - e^2))`.
+///
+/// I due valori sono aumentati di un margine relativo di `1e-9` per gli
+/// arrotondamenti di `f64` (una decina di operazioni, ciascuna entro
+/// `2^-53` relativo). Nessuna latitudine piccola si arrotonda a zero:
+/// `GeographicLib` lo fa (`AngRound`), e sul lato (0, 1e-18)-(179.396...,
+/// 1e-18) di WGS 84 rendeva il vertice a 0 invece di 1,07e-4 gradi.
 #[must_use]
-pub fn latitudine_massima_del_lato(
+pub fn maggioranti_del_lato(
     ellissoide: &EllissoideGeodetico,
     da: Coord<f64>,
-    azimut1: f64,
-    azimut2: f64,
-    latitudine_arrivo: f64,
-) -> f64 {
-    let f = 1.0 / ellissoide.parametri().inverse_flattening;
-    let mut latitudine_massima = da.y.abs().max(latitudine_arrivo.abs());
-    let (seno1, coseno1) = azimut1.to_radians().sin_cos();
-    let coseno2 = azimut2.to_radians().cos();
-    let vertice_dentro = coseno1 * coseno2 < 0.0 || coseno1.abs() < 1e-9 || coseno2.abs() < 1e-9;
-    if vertice_dentro {
-        let beta1 = ((1.0 - f) * da.y.to_radians().tan()).atan();
-        let (seno_beta1, coseno_beta1) = beta1.sin_cos();
-        let coseno_beta0 = (coseno_beta1 * seno1).abs();
-        let seno_beta0 = seno_beta1.hypot(coseno_beta1 * coseno1);
-        let tangente_phi0 = seno_beta0 / ((1.0 - f) * coseno_beta0);
-        let vertice = if tangente_phi0.is_finite() {
-            tangente_phi0.atan().to_degrees()
-        } else {
-            90.0
-        };
-        latitudine_massima = latitudine_massima.max(vertice);
-    }
-    latitudine_massima.mul_add(1.0 + 1e-5, 1e-15).min(90.0)
+    a: Coord<f64>,
+) -> (f64, f64) {
+    let parametri = ellissoide.parametri();
+    let semiasse = parametri.semi_major_axis_metre;
+    let f = 1.0 / parametri.inverse_flattening;
+    let e2 = f * (2.0 - f);
+    let delta_phi = (a.y - da.y).abs().to_radians();
+    let delta_lambda = (a.x - da.x).abs().to_radians();
+    let meridiano_massimo = semiasse / (1.0 - e2).sqrt();
+    let lunghezza = meridiano_massimo.mul_add(delta_phi, semiasse * delta_lambda) * (1.0 + 1e-9);
+    let latitudine = (da.y.abs().max(a.y.abs()).to_radians()
+        + lunghezza / (2.0 * semiasse * (1.0 - e2)))
+        * (1.0 + 1e-9);
+    (lunghezza, latitudine)
 }
 
 /// Lo scarto massimo, in gradi del piano lon/lat, fra la geodetica di un
@@ -171,36 +170,37 @@ pub fn latitudine_massima_del_lato(
 /// `kappa <= K = s / (1 - e^2) + 0.385 (3 e^2 s / (1 - e^2) + 2 tan phi_max)`,
 /// `s = min(1/2, sin phi_max)`,
 ///
-/// con `phi_max` la latitudine massima in modulo lungo la geodetica (quella
-/// degli estremi o del vertice, se il lato lo contiene). La lunghezza nel
-/// piano e' al piu' `L = s12 / (a min(1 - e^2, cos phi_max))`. Se `K L <= 1`
-/// la tangente ruota di al piu' `K L` rispetto alla corda (in un punto le e'
-/// parallela), quindi la geodetica e' il grafico `h(t)` di una funzione
-/// sulla corda di lunghezza `l`, con `|h''| <= K / cos^3(K L)` e
-/// `h(0) = h(l) = 0`: `|h| <= l^2 / 8 * K / cos^3(K L)`.
+/// con `phi_max` il maggiorante certificato della latitudine lungo la
+/// geodetica e `S` quello della sua lunghezza ([`maggioranti_del_lato`]).
+/// La lunghezza nel piano e' al piu' `L = S / (a min(1 - e^2, cos
+/// phi_max))`. Se `K L <= 1` la tangente ruota di al piu' `K L` rispetto
+/// alla corda (in un punto le e' parallela), quindi la geodetica e' il
+/// grafico `h(t)` di una funzione sulla corda di lunghezza `l`, con `|h''|
+/// <= K / cos^3(K L)` e `h(0) = h(l) = 0`: `|h| <= l^2 / 8 * K / cos^3(K
+/// L)`.
 ///
-/// `Err` per un lato su un polo o con `K L > 1` (troppo lungo per la
-/// verifica).
+/// Dominio accettato, fuori del quale `Err`: `S <= 1000 km`
+/// ([`LATO_MASSIMO_M`]), `phi_max < 90` gradi, `K L <= 1`. Ogni passo usa
+/// solo maggioranti certificati: nessun problema inverso, nessun azimut.
 fn scarto_del_lato(
     ellissoide: &EllissoideGeodetico,
     da: Coord<f64>,
     a: Coord<f64>,
 ) -> Result<f64, &'static str> {
-    use geographiclib_rs::InverseGeodesic as _;
     const LATO_TROPPO_LUNGO: &str =
-        "lato troppo lungo o troppo vicino a un polo per verificare che la \
-         topologia delle geodetiche sia quella del piano lon/lat";
+        "lato troppo lungo (oltre 1000 km) o troppo vicino a un polo per \
+         verificare che la topologia delle geodetiche sia quella del piano lon/lat";
     let parametri = ellissoide.parametri();
     let semiasse = parametri.semi_major_axis_metre;
     let f = 1.0 / parametri.inverse_flattening;
     let e2 = f * (2.0 - f);
-    let (s12, azimut1, azimut2, _arco): (f64, f64, f64, f64) =
-        ellissoide.geodetica().inverse(da.y, da.x, a.y, a.x);
-    if !(s12.is_finite() && azimut1.is_finite() && azimut2.is_finite()) {
+    let (lunghezza_massima, phi) = maggioranti_del_lato(ellissoide, da, a);
+    if !(lunghezza_massima.is_finite() && lunghezza_massima <= LATO_MASSIMO_M) {
         return Err(LATO_TROPPO_LUNGO);
     }
-    let latitudine_massima = latitudine_massima_del_lato(ellissoide, da, azimut1, azimut2, a.y);
-    let phi = latitudine_massima.to_radians();
+    if !(phi.is_finite() && phi < std::f64::consts::FRAC_PI_2) {
+        return Err(LATO_TROPPO_LUNGO);
+    }
     let (seno, coseno) = phi.sin_cos();
     let tangente = phi.tan();
     if !(tangente.is_finite() && coseno > 0.0) {
@@ -211,7 +211,7 @@ fn scarto_del_lato(
         2.0f64.mul_add(tangente, 3.0 * e2 * s / (1.0 - e2)),
         s / (1.0 - e2),
     );
-    let lunghezza = s12 / (semiasse * (1.0 - e2).min(coseno));
+    let lunghezza = lunghezza_massima / (semiasse * (1.0 - e2).min(coseno));
     let rotazione = curvatura * lunghezza;
     if !(rotazione.is_finite() && rotazione <= ROTAZIONE_MASSIMA) {
         return Err(LATO_TROPPO_LUNGO);
@@ -440,7 +440,7 @@ mod tests {
                 .to_bits(),
             Geodesic.length(&linea).to_bits()
         );
-        for (x, y, lato) in [(9.0, 45.0, 0.5), (-60.0, -30.0, 12.0), (100.0, 10.0, 4.0)] {
+        for (x, y, lato) in [(9.0, 45.0, 0.5), (-60.0, -30.0, 6.0), (100.0, 10.0, 4.0)] {
             let esterno = LineString::from(vec![
                 (x, y),
                 (x + lato, y),
@@ -632,13 +632,13 @@ mod tests {
         ));
     }
 
-    /// La latitudine massima lungo la geodetica contro `GeographicLib`
-    /// (`tests/fixtures/geodetica/vertici.csv`, lati pseudo-casuali, molti
-    /// vicino all'equatore con azimut quasi est-ovest): mai minore del
-    /// riferimento, e al piu' il vertice.
+    /// Il maggiorante della latitudine massima contro un riferimento
+    /// indipendente da `GeographicLib` (`tests/fixtures/geodetica/vertici.csv`:
+    /// Vincenty e Clairaut a 60 cifre con mpmath, lati corti pseudo-casuali,
+    /// molti vicino all'equatore con azimut quasi est-ovest e latitudini fino
+    /// a 1e-18): mai minore del riferimento.
     #[test]
-    fn la_latitudine_massima_coincide_con_geographiclib() {
-        use geographiclib_rs::InverseGeodesic as _;
+    fn il_maggiorante_della_latitudine_copre_il_riferimento_indipendente() {
         const VERTICI: &str = include_str!("../tests/fixtures/geodetica/vertici.csv");
         let mut righe = 0;
         for riga in VERTICI.lines().skip(1) {
@@ -646,23 +646,70 @@ mod tests {
             let numero = |i: usize| campi[i].parse::<f64>().expect("numero");
             let crs = plenora_core::crs::resolve_crs(campi[0], "crs").expect("crs");
             let e = EllissoideGeodetico::da_crs(&crs).expect("ellissoide");
-            let (lon1, lat1, lon2, lat2) = (numero(1), numero(2), numero(3), numero(4));
-            let (massima, vertice) = (numero(5), numero(6));
-            let (_s, azimut1, azimut2, _a): (f64, f64, f64, f64) =
-                e.geodetica().inverse(lat1, lon1, lat2, lon2);
-            let calcolata =
-                latitudine_massima_del_lato(&e, Coord { x: lon1, y: lat1 }, azimut1, azimut2, lat2);
+            let da = Coord {
+                x: numero(1),
+                y: numero(2),
+            };
+            let a = Coord {
+                x: numero(3),
+                y: numero(4),
+            };
+            let (lunghezza, latitudine) = maggioranti_del_lato(&e, da, a);
             assert!(
-                calcolata >= massima * (1.0 - 1e-12),
-                "{riga}: {calcolata} sotto {massima}"
+                latitudine.to_degrees() >= numero(5),
+                "{riga}: {} sotto il riferimento",
+                latitudine.to_degrees()
             );
-            assert!(
-                calcolata <= massima.max(vertice).mul_add(1.0 + 2e-5, 2e-15),
-                "{riga}: {calcolata} oltre il vertice"
-            );
+            // La lunghezza maggiorata copre quella geodetica.
+            let geodetica =
+                crate::extended::geodesic_distance_m(da.into(), a.into(), &e).expect("distanza");
+            assert!(lunghezza >= geodetica, "{riga}");
             righe += 1;
         }
-        assert!(righe > 500);
+        assert!(righe > 600);
+    }
+
+    /// Il controesempio della terza lettura: sul lato (0, 1e-18)-(179.396...,
+    /// 1e-18) di WGS 84 `GeographicLib` arrotonda le latitudini a zero, rende
+    /// azimut di 90 gradi e il vertice a 0, mentre il vero e' a 1,07e-4
+    /// gradi (11,8 m dall'equatore). Il lato e' fuori dal dominio (oltre
+    /// 1000 km): rifiutato.
+    #[test]
+    fn il_lato_con_latitudini_arrotondate_si_rifiuta() {
+        let e = wgs84_di_prova();
+        assert!(scarto_del_lato(
+            &e,
+            Coord { x: 0.0, y: 1e-18 },
+            Coord {
+                x: 179.396_494_080_345_43,
+                y: 1e-18
+            }
+        )
+        .is_err());
+    }
+
+    /// Il bordo del dominio: un lato equatoriale est-ovest con lunghezza
+    /// maggiorata appena sotto 1000 km passa, appena sopra si rifiuta.
+    #[test]
+    fn il_bordo_del_dominio_dei_lati() {
+        let e = wgs84_di_prova();
+        let a = e.parametri().semi_major_axis_metre;
+        let gradi = |metri: f64| (metri / a).to_degrees();
+        let dentro = Coord {
+            x: gradi(999_000.0),
+            y: 0.0,
+        };
+        let fuori = Coord {
+            x: gradi(1_001_000.0),
+            y: 0.0,
+        };
+        let origine = Coord { x: 0.0, y: 0.0 };
+        assert!(scarto_del_lato(&e, origine, dentro).is_ok());
+        assert!(scarto_del_lato(&e, origine, fuori).is_err());
+        // Vicino al polo: la latitudine maggiorata raggiunge 90 gradi.
+        assert!(
+            scarto_del_lato(&e, Coord { x: 0.0, y: 89.999 }, Coord { x: 0.1, y: 89.999 }).is_err()
+        );
     }
 
     /// Il controesempio della seconda lettura sul vertice: il lato

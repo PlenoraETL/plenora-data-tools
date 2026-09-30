@@ -98,10 +98,13 @@ Poi, per riga:
   L'area si calcola solo se la topologia delle geodetiche è dimostrabilmente
   quella del piano ([README, «Misure geodetiche: l'ellissoide del
   datum»](../README.md#misure-geodetiche-lellissoide-del-datum)): ogni lato
-  deve avere una rotazione `K L` al più 1 e non toccare un polo, e gli
-  anelli devono stare più lontani degli scarti fra geodetiche e corde.
+  deve avere una lunghezza maggiorata di al più 1000 km, una latitudine
+  maggiorata sotto 90° e una rotazione `K L` al più 1 (maggioranti
+  certificati, senza problema inverso), e gli anelli devono stare più
+  lontani degli scarti fra geodetiche e corde. Poligoni catastali e
+  comunali non ne sono toccati.
   Altrimenti `InvalidInput`. La verifica è prudente: rifiuta anche poligoni
-  corretti con lati lunghi (qualche centinaio di chilometri) o anelli
+  corretti con lati oltre 1000 km (in lunghezza maggiorata) o anelli
   vicini ai lati lunghi.
 - CRS proiettati rifiutati; fino alla versione 2 del catalogo l'ellissoide
   era sempre WGS 84 (su ED50, a 42° di latitudine, circa 8e-5 di area in
