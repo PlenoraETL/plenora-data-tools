@@ -592,3 +592,53 @@ fn un_rilievo_della_griglia_fra_i_campioni_non_si_perde() {
     assert!((massima - (40.5 + 1.0 / 3600.0)).abs() < 1e-9, "{massima}");
     assert!(scarto_massimo(&r, &linea, &uscita, 20_000) <= 2.0 * t);
 }
+
+/// La riproiezione verso un CRS geografico densifica i lati con la
+/// tolleranza di mezzo passo di 1 cm sul raggio polare dell'ellissoide del
+/// target (per WGS 84 lo 0,335% piu' fine del vecchio passo all'equatore).
+/// Su una famiglia di linee UTM lunghe si cerca quella che il vecchio e il
+/// nuovo passo densificano diversamente: l'adapter rende la densificazione
+/// del nuovo.
+#[test]
+fn la_riproiezione_verso_un_geografico_usa_il_passo_sul_raggio_polare() {
+    let p = params("EPSG:32632", &json!({"target_crs": "EPSG:4326"}));
+    let r = riproiettore("EPSG:32632", &json!({"target_crs": "EPSG:4326"}));
+    let nuova = tolleranza("EPSG:4326");
+    let polare = 6_378_137.0 / (1.0 - 1.0 / 298.257_223_563);
+    assert!((nuova - 0.01 / f64::to_radians(polare) / 2.0).abs() < 1e-18);
+    let vecchia = 0.01 / 111_319.49 / 2.0;
+    let mut trovata = None;
+    for passo in 0..400_u32 {
+        let lunghezza = f64::from(passo).mul_add(250.0, 1_000.0);
+        let linea = Geometry::LineString(line_string![
+            (x: 300_000.0, y: 4_900_000.0),
+            (x: 300_000.0 + lunghezza, y: 4_900_000.0 + lunghezza / 3.0)
+        ]);
+        let con_nuova = riproietta_geometria(&linea, &r, nuova).expect("nuova");
+        let con_vecchia = riproietta_geometria(&linea, &r, vecchia).expect("vecchia");
+        if con_nuova.coords_count() != con_vecchia.coords_count() {
+            trovata = Some((linea, con_nuova));
+            break;
+        }
+    }
+    let (linea, attesa) = trovata.expect("una linea densificata diversamente");
+    let schema = Arc::new(Schema::new(vec![campo_geometria("EPSG:32632")]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BinaryArray::from(vec![Some(
+            linea.to_wkb(CoordDimensions::xy()).expect("wkb").as_slice(),
+        )]))],
+    )
+    .expect("batch");
+    let (_, uscita) =
+        reproject_batches(&schema, &[batch], "geometry", &crs("EPSG:32632"), &p).expect("kernel");
+    let celle = uscita[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("binario");
+    assert_eq!(
+        crate::geometry_from_wkb(celle.value(0)).expect("wkb"),
+        attesa
+    );
+}

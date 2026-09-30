@@ -13,7 +13,6 @@ use super::super::epsg_integrati::{CRS84, EPSG, VERSIONE_EPSG};
 use super::super::{
     builtin_crs_identifiers, resolve_crs, validate_geometry_domain, validate_requirement,
     CoordinateDomainViolation, CrsError, CrsKind, ResolvedCrs, BUILTIN_EPSG_VERSION,
-    CONSERVATIVE_CURVATURE_RADIUS_METRES,
 };
 use super::{cerca, identificativo, Identificativo};
 use crate::catalog::CrsRequirement;
@@ -386,11 +385,8 @@ fn unita_e_precisione() {
         CrsKind::Geographic,
         None,
     );
-    let prudente = senza_ellissoide
-        .precisione_coordinate()
-        .expect("precisione");
-    assert!(prudente <= 0.01 / CONSERVATIVE_CURVATURE_RADIUS_METRES.to_radians());
-    assert!(prudente < wgs84);
+    // Senza ellissoide la precisione non si indovina.
+    assert_eq!(senza_ellissoide.precisione_coordinate(), None);
     let piedi = ResolvedCrs::from_resolved_parts(
         "X:1".to_owned(),
         serde_json::json!({"type": "ProjectedCRS"}),

@@ -15,7 +15,8 @@
 //! - CRS geografico: 1 cm in gradi sul raggio di curvatura massimo
 //!   dell'ellissoide del datum, `a / (1 - f)` (ai poli): al piu' 1 cm a
 //!   terra ovunque e in entrambe le direzioni; per WGS 84 circa
-//!   `8.953e-8` gradi.
+//!   `8.953e-8` gradi; senza ellissoide (CRS risolto dal chiamante) nessuna
+//!   precisione, e il kernel che la chiede si rifiuta.
 //!
 //! Le funzioni dei kernel chiamate senza CRS ricevono la precisione come
 //! argomento esplicito: nessun valore predefinito.
@@ -150,15 +151,18 @@ mod tests {
         assert!((metri.value() - 0.01).abs() < 1e-18);
         let piedi = Precision::from_crs(&crs(CrsKind::Projected, Some(0.3048))).unwrap();
         assert!((piedi.value() - 0.01 / 0.3048).abs() < 1e-17);
-        let gradi = Precision::from_crs(&crs(CrsKind::Geographic, None)).unwrap();
-        // Senza ellissoide: il raggio prudente di 6 400 000 m.
-        let prudente = 0.01 / 6_400_000.0_f64.to_radians();
-        assert!(gradi.value() <= prudente && gradi.value() > prudente * (1.0 - 1e-11));
+        // Un geografico senza ellissoide (risolto dal chiamante): nessuna
+        // precisione, errore esplicito.
+        assert!(Precision::from_crs(&crs(CrsKind::Geographic, None)).is_err());
+        let wgs84 = plenora_core::crs::resolve_crs("EPSG:4326", "crs").unwrap();
+        let gradi = Precision::from_crs(&wgs84).unwrap();
+        let polare = 6_378_137.0 / (1.0 - 1.0 / 298.257_223_563);
+        let atteso = 0.01 / f64::to_radians(polare);
+        assert!(gradi.value() <= atteso && gradi.value() > atteso * (1.0 - 1e-11));
         // Stesso valore del core, bit per bit: una sola fonte.
         for (kind, unit) in [
             (CrsKind::Projected, Some(1.0)),
             (CrsKind::Projected, Some(0.3048)),
-            (CrsKind::Geographic, None),
         ] {
             let resolved = crs(kind, unit);
             assert_eq!(

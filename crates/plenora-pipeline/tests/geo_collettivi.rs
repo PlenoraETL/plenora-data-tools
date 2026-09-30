@@ -30,7 +30,7 @@ use serde_json::json;
 
 use comune_geo::{
     con_budget, esadecimale_di, esegui, geometrie, linee, passo, piano, poligoni, punti,
-    punti_lonlat, quadrato, tabella, un_passo, un_passo_con_crs, wkb, UTM, X0, Y0,
+    punti_lonlat, quadrato, tabella, un_passo, un_passo_con_crs, wkb, LONLAT, UTM, X0, Y0,
 };
 
 /// Il tetto di righe che il runner passa ai kernel per un output del piano.
@@ -956,4 +956,78 @@ fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
         .unwrap();
         assert_eq!(vuota.num_rows(), 0);
     }
+}
+
+/// `make_valid` su un CRS geografico usa il passo di 1 cm sul raggio polare
+/// dell'ellissoide (per WGS 84 lo 0,335% piu' fine del vecchio passo
+/// all'equatore). Una farfalla lon/lat con un vertice di un'altra parte
+/// sopra l'incrocio arrotondato: `LINEWORK` rifiuta
+/// (`PrecisionInsufficient`) sotto una soglia proporzionale alla
+/// precisione. Fra la soglia del passo nuovo e quella del vecchio, il runner
+/// accetta e il kernel con il vecchio passo rifiuta.
+#[test]
+fn make_valid_geografico_usa_il_passo_sul_raggio_polare() {
+    let (x0, y0) = (11.123_456_789_f64, 44.987_654_321_f64);
+    let s = 1e-4 / 3.0;
+    let incrocio = (1.5f64.mul_add(s, x0), 0.5f64.mul_add(s, y0));
+    let tabella_con = |d: f64| {
+        let farfalla = Polygon::new(
+            LineString::from(vec![
+                (x0, y0),
+                (3.0f64.mul_add(s, x0), y0 + s),
+                (3.0f64.mul_add(s, x0), y0),
+                (x0, y0 + s),
+                (x0, y0),
+            ]),
+            vec![],
+        );
+        let (vx, vy) = (incrocio.0, incrocio.1 + d);
+        let triangolo = Polygon::new(
+            LineString::from(vec![
+                (vx, vy),
+                (vx + s, 0.1f64.mul_add(s, vy)),
+                ((-0.3f64).mul_add(s, vx), 0.2f64.mul_add(s, vy)),
+                (vx, vy),
+            ]),
+            vec![],
+        );
+        let parti = Geometry::MultiPolygon(MultiPolygon::new(vec![farfalla, triangolo]));
+        tabella(LONLAT, &[Some(parti)])
+    };
+    let accetta = |d: f64, precisione: Precision| {
+        let t = tabella_con(d);
+        make_valid_batches(
+            &t.schema(),
+            std::slice::from_ref(&t),
+            "geometry",
+            precisione,
+        )
+        .is_ok()
+    };
+    let soglia = |precisione: Precision| {
+        let (mut sotto, mut sopra) = (1e-9, 9e-8);
+        assert!(!accetta(sotto, precisione) && accetta(sopra, precisione));
+        for _ in 0..60 {
+            let mezzo = f64::midpoint(sotto, sopra);
+            if accetta(mezzo, precisione) {
+                sopra = mezzo;
+            } else {
+                sotto = mezzo;
+            }
+        }
+        sopra
+    };
+    let nuova = Precision::from_crs(&resolve_crs(LONLAT, "crs").expect("crs")).expect("precisione");
+    let polare = 6_378_137.0 / (1.0 - 1.0 / 298.257_223_563);
+    assert!((nuova.value() - 0.01 / f64::to_radians(polare)).abs() < 1e-18);
+    let vecchia = Precision::new(0.01 / 111_319.49).expect("precisione");
+    let (soglia_nuova, soglia_vecchia) = (soglia(nuova), soglia(vecchia));
+    assert!(
+        soglia_nuova < soglia_vecchia,
+        "{soglia_nuova} {soglia_vecchia}"
+    );
+    let d = f64::midpoint(soglia_nuova, soglia_vecchia);
+    assert!(!accetta(d, vecchia));
+    let uscita = un_passo("geo.make_valid", json!({}), &[tabella_con(d)]);
+    assert!(uscita.is_ok(), "{uscita:?}");
 }

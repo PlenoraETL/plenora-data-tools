@@ -66,8 +66,11 @@ una sola funzione, `plenora_core::crs::ResolvedCrs::precisione_coordinate`
   dell'ellissoide del datum, `a / (1 - f)` (ai poli, lungo meridiano e
   parallelo): un grado non è mai più lungo di `a / (1 - f) * pi / 180`
   metri, quindi il passo vale al più 1 cm a terra ovunque e in entrambe le
-  direzioni (per WGS 84 circa `8.953e-8` gradi; senza ellissoide, per un
-  CRS risolto dal chiamante, il raggio prudente di 6 400 000 m).
+  direzioni (per WGS 84 circa `8.953e-8` gradi). Un geografico senza
+  ellissoide (risolto dal chiamante) non ha precisione: nessun raggio
+  prudente copre con certezza ogni ellissoide (Clarke 1880 IGN arriva a
+  6 400 057,7 m), e i kernel che la chiedono si rifiutano
+  (`InvalidPrecision`).
 
 Sotto la precisione un risultato può differire dall'esatto e la differenza
 è accettata: vertici spostati, schegge e parti sottili fuse o sparite, aree
@@ -2307,8 +2310,8 @@ geometrie prodotte ([«Operazioni geo»](#operazioni-geo)).
 **Precisione.** `ResolvedCrs::precisione_coordinate()` esprime 1 cm a terra
 nelle unità del CRS: `0.01 / horizontal_unit_to_metre` per i proiettati,
 `0.01` metri in gradi sul raggio di curvatura massimo `a / (1 - f)`
-dell'ellissoide per i geografici (6 400 000 m senza ellissoide); `None`
-quando il quoziente non
+dell'ellissoide per i geografici; `None` per un geografico senza
+ellissoide o quando il quoziente non
 è un `f64` normale e positivo. È la precisione dichiarata delle operazioni
 geografiche ([«Limiti dichiarati»](#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 `Precision::from_crs` dei kernel geo delega a questa funzione, e un `None` è

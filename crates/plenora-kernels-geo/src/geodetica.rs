@@ -110,6 +110,53 @@ struct LatoGeodetico {
     scarto: f64,
 }
 
+/// La latitudine massima in modulo, in gradi, lungo la geodetica di un lato.
+///
+/// Il lato parte da `da` con azimut `azimut1` e arriva a latitudine
+/// `latitudine_arrivo` con azimut `azimut2`. Vale la latitudine degli
+/// estremi, o quella del vertice se il lato lo contiene (la latitudine
+/// cambia verso, o un azimut e' quasi est-ovest e il vertice e' vicino a un
+/// estremo).
+///
+/// Il vertice viene da Clairaut, `cos(beta0) = |cos(beta1) sin(alpha1)|`
+/// (`beta` latitudine ridotta), in forma stabile: `sin(beta0) =
+/// hypot(sin(beta1), cos(beta1) cos(alpha1))` e `beta0 = atan2(sin, cos)`.
+/// `acos` del coseno, vicino all'equatore con azimut quasi est-ovest,
+/// arrotondava il coseno a 1 e il vertice a 0 (lato (-85, 4e-8)-(85, 4e-8)
+/// di WGS 84: vertice vero a 4,87e-7 gradi, scarto sottostimato di 5 volte).
+/// Il risultato e' aumentato di un margine relativo di `1e-5` piu' `1e-15`
+/// gradi: su lati cosi' degeneri gli azimut di `GeographicLib` differiscono
+/// fra le implementazioni (Rust e Python) fino a qualche `1e-7` relativo
+/// sul vertice.
+#[must_use]
+pub fn latitudine_massima_del_lato(
+    ellissoide: &EllissoideGeodetico,
+    da: Coord<f64>,
+    azimut1: f64,
+    azimut2: f64,
+    latitudine_arrivo: f64,
+) -> f64 {
+    let f = 1.0 / ellissoide.parametri().inverse_flattening;
+    let mut latitudine_massima = da.y.abs().max(latitudine_arrivo.abs());
+    let (seno1, coseno1) = azimut1.to_radians().sin_cos();
+    let coseno2 = azimut2.to_radians().cos();
+    let vertice_dentro = coseno1 * coseno2 < 0.0 || coseno1.abs() < 1e-9 || coseno2.abs() < 1e-9;
+    if vertice_dentro {
+        let beta1 = ((1.0 - f) * da.y.to_radians().tan()).atan();
+        let (seno_beta1, coseno_beta1) = beta1.sin_cos();
+        let coseno_beta0 = (coseno_beta1 * seno1).abs();
+        let seno_beta0 = seno_beta1.hypot(coseno_beta1 * coseno1);
+        let tangente_phi0 = seno_beta0 / ((1.0 - f) * coseno_beta0);
+        let vertice = if tangente_phi0.is_finite() {
+            tangente_phi0.atan().to_degrees()
+        } else {
+            90.0
+        };
+        latitudine_massima = latitudine_massima.max(vertice);
+    }
+    latitudine_massima.mul_add(1.0 + 1e-5, 1e-15).min(90.0)
+}
+
 /// Lo scarto massimo, in gradi del piano lon/lat, fra la geodetica di un
 /// lato e la sua corda (il segmento nel piano lon/lat).
 ///
@@ -152,20 +199,7 @@ fn scarto_del_lato(
     if !(s12.is_finite() && azimut1.is_finite() && azimut2.is_finite()) {
         return Err(LATO_TROPPO_LUNGO);
     }
-    let mut latitudine_massima = da.y.abs().max(a.y.abs());
-    // Vertice dentro il lato: la latitudine cambia verso (verso il polo
-    // alla partenza, verso l'equatore all'arrivo), o un azimut e' quasi
-    // est-ovest (vertice vicino a un estremo).
-    let (c1, c2) = (azimut1.to_radians().cos(), azimut2.to_radians().cos());
-    let vertice_dentro = c1 * c2 < 0.0 || c1.abs() < 1e-9 || c2.abs() < 1e-9;
-    if vertice_dentro {
-        // Clairaut: cos(beta0) = |cos(beta1) sin(alpha1)|, beta ridotta.
-        let beta1 = ((1.0 - f) * da.y.to_radians().tan()).atan();
-        let coseno = (beta1.cos() * azimut1.to_radians().sin()).abs().min(1.0);
-        let beta0 = coseno.acos();
-        let vertice = (beta0.tan() / (1.0 - f)).atan().to_degrees().abs();
-        latitudine_massima = latitudine_massima.max(vertice);
-    }
+    let latitudine_massima = latitudine_massima_del_lato(ellissoide, da, azimut1, azimut2, a.y);
     let phi = latitudine_massima.to_radians();
     let (seno, coseno) = phi.sin_cos();
     let tangente = phi.tan();
@@ -594,6 +628,67 @@ mod tests {
             wkt::TryFromWkt::try_from_wkt_str(&format!("POLYGON({esterno},{buco})")).expect("wkt");
         assert!(matches!(
             crate::extended_algorithms::geodesic_area_m2(&Geometry::Polygon(vicino), &e),
+            Err(crate::extended_algorithms::ExtendedAlgorithmError::InvalidInput(_))
+        ));
+    }
+
+    /// La latitudine massima lungo la geodetica contro `GeographicLib`
+    /// (`tests/fixtures/geodetica/vertici.csv`, lati pseudo-casuali, molti
+    /// vicino all'equatore con azimut quasi est-ovest): mai minore del
+    /// riferimento, e al piu' il vertice.
+    #[test]
+    fn la_latitudine_massima_coincide_con_geographiclib() {
+        use geographiclib_rs::InverseGeodesic as _;
+        const VERTICI: &str = include_str!("../tests/fixtures/geodetica/vertici.csv");
+        let mut righe = 0;
+        for riga in VERTICI.lines().skip(1) {
+            let campi: Vec<&str> = riga.split(',').collect();
+            let numero = |i: usize| campi[i].parse::<f64>().expect("numero");
+            let crs = plenora_core::crs::resolve_crs(campi[0], "crs").expect("crs");
+            let e = EllissoideGeodetico::da_crs(&crs).expect("ellissoide");
+            let (lon1, lat1, lon2, lat2) = (numero(1), numero(2), numero(3), numero(4));
+            let (massima, vertice) = (numero(5), numero(6));
+            let (_s, azimut1, azimut2, _a): (f64, f64, f64, f64) =
+                e.geodetica().inverse(lat1, lon1, lat2, lon2);
+            let calcolata =
+                latitudine_massima_del_lato(&e, Coord { x: lon1, y: lat1 }, azimut1, azimut2, lat2);
+            assert!(
+                calcolata >= massima * (1.0 - 1e-12),
+                "{riga}: {calcolata} sotto {massima}"
+            );
+            assert!(
+                calcolata <= massima.max(vertice).mul_add(1.0 + 2e-5, 2e-15),
+                "{riga}: {calcolata} oltre il vertice"
+            );
+            righe += 1;
+        }
+        assert!(righe > 500);
+    }
+
+    /// Il controesempio della seconda lettura sul vertice: il lato
+    /// (-85, 4e-8)-(85, 4e-8) di WGS 84 ha il vertice a 4,87e-7 gradi, e
+    /// `acos` lo calcolava 0 (coseno arrotondato a 1): scarto sottostimato
+    /// di 5 volte, e il buco sotto 3e-7 gradi, fuori dall'esterno geodetico,
+    /// passava tutti i controlli (1230,94 m^2 sottratti a torto).
+    #[test]
+    fn il_vertice_vicino_all_equatore_non_si_perde() {
+        use geo::{Geometry, LineString, Polygon};
+        let e = wgs84_di_prova();
+        let mut esterno = vec![(-85.0, 4e-8), (85.0, 4e-8)];
+        for passo in 0..18_u8 {
+            esterno.push((f64::from(passo).mul_add(-10.0, 85.0), 1.0));
+        }
+        esterno.push((-85.0, 4e-8));
+        let buco = vec![
+            (-0.5, 2e-7),
+            (-0.5, 3e-7),
+            (0.5, 3e-7),
+            (0.5, 2e-7),
+            (-0.5, 2e-7),
+        ];
+        let poligono = Polygon::new(LineString::from(esterno), vec![LineString::from(buco)]);
+        assert!(matches!(
+            crate::extended_algorithms::geodesic_area_m2(&Geometry::Polygon(poligono), &e),
             Err(crate::extended_algorithms::ExtendedAlgorithmError::InvalidInput(_))
         ));
     }

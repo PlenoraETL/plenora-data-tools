@@ -43,14 +43,6 @@ pub const BUILTIN_EPSG_DATE: &str = epsg_integrati::DATA_EPSG;
 /// Versione di PROJ che distribuiva il registro letto dal generatore.
 pub const BUILTIN_PROJ_VERSION: &str = epsg_integrati::VERSIONE_PROJ;
 
-/// Raggio di curvatura prudente, in metri, per un geografico senza ellissoide.
-///
-/// Vale per un CRS risolto dal chiamante: e' maggiore del raggio di
-/// curvatura polare `a / (1 - f)` di ogni ellissoide terrestre in uso (il
-/// piu' grande della tabella integrata e' Internazionale 1924,
-/// 6 399 936,6 m).
-pub const CONSERVATIVE_CURVATURE_RADIUS_METRES: f64 = 6_400_000.0;
-
 /// Precisione a terra delle geometrie, in metri: un centimetro (README,
 /// «Precisione delle operazioni geografiche: 1 cm a terra»).
 pub const GROUND_PRECISION_METRES: f64 = 0.01;
@@ -269,8 +261,10 @@ impl ResolvedCrs {
     /// `a / (1 - f) * pi / 180` metri, quindi il passo in gradi vale al piu'
     /// 1 cm a terra ovunque, in entrambe le direzioni (per WGS 84 circa
     /// `8.953e-8` gradi). Il quoziente si arrotonda verso il basso di un
-    /// margine relativo di `1e-12`. Senza ellissoide (CRS risolto dal
-    /// chiamante) il raggio e' [`CONSERVATIVE_CURVATURE_RADIUS_METRES`].
+    /// margine relativo di `1e-12`. Senza ellissoide (un geografico risolto
+    /// dal chiamante) `None`: nessun raggio prudente copre con certezza ogni
+    /// ellissoide (Clarke 1880 IGN ha `a / (1 - f)` = 6 400 057,7 m), e la
+    /// precisione non si indovina.
     /// `None` per un proiettato senza un'unita' lineare finita e positiva, o
     /// quando il quoziente non e' un `f64` normale e positivo (unita' fuori
     /// scala, per esempio `f64::from_bits(1)` o `f64::MAX`): la precisione
@@ -279,15 +273,12 @@ impl ResolvedCrs {
     pub fn precisione_coordinate(&self) -> Option<f64> {
         match self.kind {
             CrsKind::Geographic => {
-                let raggio = self
-                    .ellipsoid
-                    .and_then(|ellissoide| {
-                        let a = ellissoide.semi_major_axis_metre;
-                        let inverso = ellissoide.inverse_flattening;
-                        (a.is_finite() && a > 0.0 && inverso.is_finite() && inverso > 1.0)
-                            .then(|| a / (1.0 - 1.0 / inverso))
-                    })
-                    .unwrap_or(CONSERVATIVE_CURVATURE_RADIUS_METRES);
+                let raggio = self.ellipsoid.and_then(|ellissoide| {
+                    let a = ellissoide.semi_major_axis_metre;
+                    let inverso = ellissoide.inverse_flattening;
+                    (a.is_finite() && a > 0.0 && inverso.is_finite() && inverso > 1.0)
+                        .then(|| a / (1.0 - 1.0 / inverso))
+                })?;
                 let metri_per_grado = raggio.to_radians();
                 Some(GROUND_PRECISION_METRES / metri_per_grado * (1.0 - 1e-12))
                     .filter(|precisione| precisione.is_normal() && *precisione > 0.0)

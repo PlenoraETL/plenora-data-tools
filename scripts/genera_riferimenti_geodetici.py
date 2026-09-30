@@ -9,7 +9,14 @@ Scrive `crates/plenora-kernels-geo/tests/fixtures/geodetica/`:
   coincidono) e la distanza di cerchio massimo sulla sfera del raggio medio
   `R1 = a (1 - f / 3)`;
 - `aree.csv`: per ogni CRS geografico, poligoni (con e senza buchi) in WKT
-  con l'area geodetica e linee con la lunghezza geodetica.
+  con l'area geodetica e linee con la lunghezza geodetica;
+- `vertici.csv`: lati pseudo-casuali (seme fisso) su WGS 84 e
+  Internazionale 1924, molti vicino all'equatore con azimut quasi
+  est-ovest, con la latitudine massima in modulo lungo la geodetica e quella
+  del vertice. Il vertice viene dalla `GeodesicLine` di GeographicLib
+  (`calp0`, `salp0`: `sin(beta0) = |cos(alpha0)|`, `cos(beta0) =
+  |sin(alpha0)|`), la scelta se il lato lo contiene dal verso degli azimut
+  agli estremi.
 
 I valori sono di GeographicLib 2.0 per Python (Karney, l'implementazione di
 riferimento dell'algoritmo), sull'ellissoide che pyproj 3.7.2 / PROJ 9.5.1 /
@@ -177,6 +184,41 @@ def area_anello(g: Geodesic, anello, orario: bool):
     return area
 
 
+def latitudini_massime():
+    import random
+
+    righe = ["crs,lon1,lat1,lon2,lat2,latitudine_massima,vertice"]
+    caso = random.Random(20260930)
+    for nome in ("EPSG:4326", "EPSG:4230"):
+        crs = CRS.from_user_input(nome)
+        a, inverso = ellissoide(crs)
+        f = 1.0 / inverso
+        g = Geodesic(a, f)
+        lati = [(-85.0, 4e-8, 85.0, 4e-8)]
+        for _ in range(150):
+            lat = caso.choice([1e-8, 1e-7, 1e-6, 1e-4]) * caso.uniform(-5, 5)
+            lon1 = caso.uniform(-90, 0)
+            lati.append((lon1, lat, lon1 + caso.uniform(1, 179), lat + caso.uniform(-1e-6, 1e-6)))
+        for _ in range(150):
+            lon1, lat1 = caso.uniform(-180, 180), caso.uniform(-85, 85)
+            lon2 = lon1 + caso.uniform(-179, 179)
+            lon2 = (lon2 + 180) % 360 - 180
+            lati.append((lon1, lat1, lon2, caso.uniform(-85, 85)))
+        for lon1, lat1, lon2, lat2 in lati:
+            linea = g.InverseLine(lat1, lon1, lat2, lon2)
+            risultato = g.Inverse(lat1, lon1, lat2, lon2)
+            vertice = math.degrees(math.atan2(abs(linea._calp0), (1 - f) * abs(linea._salp0)))
+            c1 = math.cos(math.radians(risultato["azi1"]))
+            c2 = math.cos(math.radians(risultato["azi2"]))
+            massima = max(abs(lat1), abs(lat2))
+            if c1 * c2 < 0:
+                massima = max(massima, vertice)
+            righe.append(
+                f"{nome},{r(lon1)},{r(lat1)},{r(lon2)},{r(lat2)},{r(massima)},{r(vertice)}"
+            )
+    return "\n".join(righe) + "\n"
+
+
 def genera():
     righe_distanze = ["crs,lon1,lat1,lon2,lat2,geodetica_m,azimut_gradi,sfera_m"]
     righe_aree = ["crs,tipo,wkt,valore"]
@@ -219,6 +261,7 @@ def genera():
                 raise Rifiuto(f"GeographicLib e PROJ divergono sulla lunghezza su {nome}")
             righe_aree.append(f'{nome},lunghezza,"{wkt}",{r(lunghezza)}')
     return {
+        "vertici.csv": latitudini_massime(),
         "distanze.csv": "\n".join(righe_distanze) + "\n",
         "aree.csv": "\n".join(righe_aree) + "\n",
     }
