@@ -1844,12 +1844,17 @@ limite della tabella.
   *Regola*: `parquet` verifica il CRC di ogni pagina che lo porta (feature
   `crc`); una pagina con CRC sbagliato è un errore (`DataMapping`).
   *Ambito*: `parquet_io::leggi`.
-  *Hazard*: una pagina senza CRC (il default di pyarrow e di `parquet-rs`,
-  anche in scrittura qui) corrotta ma ancora decodificabile, per esempio un
-  byte di un valore numerico in una pagina non compressa, torna con altri
-  valori senza errore.
+  *Hazard*: una pagina senza CRC (il default di pyarrow e di `parquet-rs`)
+  corrotta ma ancora decodificabile, per esempio un byte di un valore
+  numerico in una pagina non compressa, torna con altri valori senza errore.
+  **I file scritti da `plenora-io` non portano CRC**: lo scrittore di
+  `parquet` 59.2.0 non sa scriverli (l'intestazione di pagina ha sempre
+  `crc: None`, `column/page.rs`, «TODO: Add support for crc checksum», e
+  `WriterProperties` non ha un'opzione), quindi la verifica protegge solo i
+  file di altri scrittori che li hanno scritti.
   *Rientro*: scrivere i CRC (`write_page_checksum` in pyarrow) nei file da
-  proteggere; un controllo d'integrità del file intero a monte.
+  proteggere; per i nostri, una versione di `parquet` che li scriva; un
+  controllo d'integrità del file intero a monte.
 - **Parquet modificato durante la lettura.**
   *Regola*: la lunghezza del footer si verifica sul file aperto, poi
   `parquet` lo rilegge.
