@@ -13,11 +13,11 @@
 //! - **esempi**: l'esempio di ogni scheda gira dal runner come passo unico e
 //!   l'uscita è quella scritta, colonna per colonna, tipo per tipo, cella per
 //!   cella. `table.pivot` e `table.transpose`, che il runner rifiuta perché
-//!   il loro schema dipende dai dati, girano dal kernel. Le operazioni geo
-//!   che il runner non esegue ancora si verificano sul contratto: config
-//!   accettata dall'analisi, colonne e tipi d'uscita quelli scritti; i
-//!   valori restano non eseguiti, e il documento lo dichiara per ognuna.
-//!   Quando il runner le esegue la prova passa da sola ai valori;
+//!   il loro schema dipende dai dati, girano dal kernel. Un'operazione geo
+//!   che il runner rifiutasse con `Unsupported` si verificherebbe sul
+//!   contratto: config accettata dall'analisi, colonne e tipi d'uscita
+//!   quelli scritti, valori non eseguiti, e il documento lo dichiarerebbe.
+//!   Oggi il runner le esegue tutte e la prova confronta i valori;
 //! - **aggiornato**: `docs/operazioni.md` è byte per byte quello che le
 //!   schede e il catalogo generano. Si rigenera con
 //!
@@ -1053,7 +1053,7 @@ enum Verifica {
     /// Il runner l'ha eseguito; schema e righe confrontati, valori no
     /// (uscita non deterministica per contratto).
     RunnerSenzaValori,
-    /// Il runner non esegue ancora l'operazione: l'analisi accetta la config
+    /// Il runner non esegue l'operazione geo: l'analisi accetta la config
     /// e dichiara colonne e tipi scritti; i valori non sono eseguiti.
     Contratto,
 }
@@ -1064,7 +1064,7 @@ impl Verifica {
             Self::Runner => "eseguito dal runner come passo unico; l'uscita è confrontata cella per cella.",
             Self::Kernel => "eseguito dal kernel (il runner rifiuta l'operazione in validazione, perché lo schema d'uscita dipende dai dati); l'uscita è confrontata cella per cella.",
             Self::RunnerSenzaValori => "eseguito dal runner come passo unico; schema e numero di righe confrontati, valori no (sono casuali per contratto).",
-            Self::Contratto => "**contratto verificato, valori non eseguiti**: il runner non esegue ancora le operazioni geo; l'analisi accetta la config e dichiara le colonne e i tipi dell'uscita, i valori sono scritti a mano.",
+            Self::Contratto => "**contratto verificato, valori non eseguiti**: il runner non esegue l'operazione; l'analisi accetta la config e dichiara le colonne e i tipi dell'uscita, i valori sono scritti a mano.",
         }
     }
 }

@@ -10,7 +10,7 @@ lato maggiore. I punti duplicati ricevono la stessa cella.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `max_points` | intero | nessuno | intero non negativo, almeno 2 | numero massimo di righe (punti); senza, l'analisi non fissa un limite |
+| `max_points` | intero | `100000` | intero non negativo, almeno 2 | numero massimo di punti (righe non nulle) |
 
 ### Schema
 
@@ -26,10 +26,10 @@ Le altre colonne, i metadati di schema e le proprietà del contratto
 `advanced::voronoi_cells` riceve tutti i punti insieme, e il limite
 `max_points` come argomento). A ogni punto va la prima cella, in ordine di
 prima comparsa del sito, che lo interseca. Il catalogo dichiara la forma
-1:N; contratto e kernel danno una cella per riga. Il kernel non
-conosce i null: il runner non esegue ancora le operazioni geo ([README,
-«Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)), e che cosa
-fare di una riga nulla lo fisserà l'esecutore geo.
+1:N; contratto e kernel danno una cella per riga. Il kernel non conosce i
+null: il runner gli passa solo le geometrie non nulle, nell'ordine delle
+righe, e riporta ogni cella alla sua riga; una riga nulla resta nulla e
+non è un sito. Gli altri attributi restano invariati.
 
 ### Ordine
 
@@ -49,12 +49,25 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta
-l'intera colonna, nell'ordine, con `InsufficientPoints` (meno di due righe),
-`PointLimitExceeded` (più righe di `max_points`), `InvalidPoint` (una
-geometria non valida per l'OGC, con il suo indice;
-`ValidazioneNonConclusa` se la validazione non conclude), `ExpectedPoint`
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare. Poi la
+decodifica completa con la validazione OGC: `InvalidPlan` per una
+geometria non valida, `Internal` se la validazione non conclude.
+
+Poi il kernel, con errore `AdvancedError` che il runner traduce così:
+`ValidazioneNonConclusa` e `CalcoloNonConcluso` diventano `Internal`,
+`PrecisionInsufficient` e `VerticeMalCondizionato` diventano
+`Unsupported`, le altre `InvalidPlan`; il messaggio è quello del kernel, e
+un indice che vi compare conta le sole geometrie non nulle, non le righe.
+Il kernel rifiuta l'intera colonna, nell'ordine, con `InsufficientPoints`
+(meno di due righe non nulle), `PointLimitExceeded` (più righe non nulle
+di `max_points`), `InvalidPoint` (una geometria non valida per l'OGC, con
+il suo indice; `ValidazioneNonConclusa` se la validazione non conclude),
+`ExpectedPoint`
 (una geometria valida che non è un `Point`, con il suo indice), `Voronoi`
 (coordinata non zero con modulo fuori da `[2^-142, 2^201]`, meno di due
 punti distinti, punti tutti collineari), `PrecisionInsufficient` e
@@ -76,10 +89,15 @@ punti distinti, punti tutti collineari), `PrecisionInsufficient` e
 - Punti tutti collineari sono un errore, non celle a striscia.
 - Ritaglio fisso sul rettangolo allargato della metà del lato maggiore:
   nessun parametro d'inviluppo.
+- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+  provvisori»).
 
 ### Precisione
 
-La precisione `p` è 1 cm nelle unità del CRS e il kernel la riceve come
+La precisione `p` è 1 cm a terra nelle unità del CRS della colonna: il
+runner la ricava con `Precision::from_crs` e il kernel la riceve come
 argomento ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 I vertici interni delle celle sono circocentri calcolati con un maggiorante

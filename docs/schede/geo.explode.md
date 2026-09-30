@@ -28,10 +28,11 @@ assente o `unresolved` resta tale.
 
 Espansione 1:N: da 0 righe per madre (un multi o una collezione vuoti) a
 una per parte. Il kernel (`operations::explode`) lavora su una geometria
-alla volta e nessun adapter lo chiama ancora sulle righe: il trattamento di
-una cella nulla, e i valori di `__parent_index` (nell'esempio contati da 0,
-come nell'adapter di `geo.split`), non sono definiti da codice
-eseguito per questa operazione.
+alla volta; il runner lo chiama su ogni cella non nulla e ripete sulle
+parti le altre colonne della madre. Una cella nulla non produce righe.
+`__parent_index` è la posizione della madre nella tabella d'ingresso del
+passo, contata da 0. Il runner conta le righe prodotte su tutta la tabella: oltre il limite di righe dell'arco d'uscita (`max_output_rows` per un output del
+piano, `max_rows_per_edge` altrimenti), `ResourceLimit`.
 
 ### Ordine
 
@@ -50,8 +51,16 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto (ogni CRS risolto è
   ammesso).
 
-In esecuzione, dal kernel, per geometria (`OperationError`, che nessun
-codice traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare.
+
+Poi il kernel, per geometria, con errore `OperationError` che il runner
+traduce così: `ValidazioneNonConclusa` diventa `Internal`, le altre
+`InvalidPlan`:
 
 - `InvalidInput`: la geometria non supera la validazione OGC;
 - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
@@ -59,10 +68,11 @@ codice traduce ancora in `PlenoraError`):
 
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
 Un solo livello: `ST_Dump` di PostGIS scende invece fino alle geometrie
-semplici.
+semplici. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+provvisori»).
 
 ### Precisione
 

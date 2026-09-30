@@ -3,10 +3,8 @@
 Join spaziale interno: abbina ogni riga della sinistra alle righe della
 destra la cui geometria soddisfa `predicate` con la sua, e dà una riga per
 coppia, con la posizione della riga destra in `__right_index` (kernel
-`spatial_join::spatial_join_nullable`). Il runner non esegue ancora le
-operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): lo schema qui descritto è
-quello dell'analisi del contratto, le coppie quelle del kernel.
+`spatial_join::spatial_join_nullable_validated`, [README, «Operazioni
+geo»](../README.md#operazioni-geo)).
 
 ### Parametri
 
@@ -35,14 +33,14 @@ proprietà del contratto (`sorted_by`, `row_count`) si perdono.
 
 ### Righe
 
-Espansione 1:N: una riga per coppia che soddisfa il predicato, quindi una
-riga sinistra si ripete per ogni destra abbinata e sparisce se non ne ha
-nessuna. Le geometrie nulle o vuote, da un lato o dall'altro, non si
-abbinano mai; `__right_index` è la posizione della riga destra contando
-anche le nulle. Il kernel rende le coppie (sinistra, destra); le colonne
-sinistre ripetute su ogni coppia sono quelle che il contratto dichiara, e
-il passo dalle coppie alle righe non è ancora codice di questo
-repository.
+Espansione 1:N: una riga per coppia che soddisfa il predicato, con le
+colonne della riga sinistra della coppia, quindi una riga sinistra si
+ripete per ogni destra abbinata e non compare se non ne ha nessuna. Le
+geometrie nulle o vuote, da un lato o dall'altro, non si abbinano mai;
+`__right_index` è la posizione della riga destra contando anche le nulle.
+Le coppie sono al più il limite di righe dell'arco d'uscita
+(`max_output_rows` se il passo è un output del piano, `max_rows_per_edge`
+altrimenti).
 
 ### Ordine
 
@@ -64,29 +62,46 @@ In validazione (analisi del contratto):
 - `Crs`: un lato senza CRS risolto, un CRS non proiettato (o senza unità
   lineare), CRS dei due lati non equivalenti.
 
-In esecuzione (kernel `spatial_join::spatial_join_nullable`, errore
-`SpatialJoinError`; nessun codice di questo repository lo traduce ancora
-in `PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
+([README, «Operazioni geo»](../README.md#operazioni-geo)):
 
-- `InvalidPairLimit`: il limite delle coppie che il chiamante passa al
-  kernel è zero;
-- `PairLimitExceeded`: le coppie confermate superano il limite (si
-  controlla coppia per coppia, prima di materializzarle; ogni altro errore,
-  il primo in ordine di riga, ha la precedenza);
-- `NonFiniteCoordinate`, `InvalidGeometry`: una geometria ha coordinate
-  NaN o infinite o non supera la validazione OGC (l'errore porta il lato e
-  la posizione, mai i valori);
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione, l'indice
-  o il predicato di `geo` non ha concluso;
-- `IndexOverflow`, `Internal`: numero di righe oltre `u64`, invariante
-  interna violata.
+- `Schema`: il contratto di un lato dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `InvalidPlan`: la cella viola il contratto WKB o non supera la
+  validazione OGC (`Unsupported` per dimensioni Z o M, `Internal` se la
+  validazione non conclude, `ResourceLimit` per una cella oltre il limite
+  di byte).
+
+Dal kernel (`spatial_join::spatial_join_nullable_validated`, errore
+`SpatialJoinError`, sulle geometrie già validate), nella categoria del
+passo geo indicata fra parentesi:
+
+- `PairLimitExceeded` (`InvalidPlan`): le coppie confermate superano il
+  limite di righe dell'arco (si controlla coppia per coppia, prima di
+  materializzarle; ogni altro errore, il primo in ordine di riga, ha la
+  precedenza);
+- `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
+  l'indice o il predicato di `geo` non ha concluso, o un'invariante
+  interna violata;
+- `IndexOverflow` (`InvalidPlan`): numero di righe oltre `u64`.
+
+Il primo errore è quello della prima riga, in ordine di riga, senza
+diagnostica per riga ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga»).
 
 ### Limiti e deviazioni
 
 Solo join interno: il kernel non emette le righe sinistre senza
 abbinamento, e non c'è una variante che le tenga con valori nulli. Gli
 attributi della destra non entrano nell'uscita, a differenza di `sjoin` di
-GeoPandas: si ricollegano con `__right_index`.
+GeoPandas: si ricollegano con `__right_index`. Le coppie dipendono dai
+dati: il modello di costo non le prevede, e le limita solo il limite di
+righe dell'arco ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
+geo provvisori»).
 
 ### Precisione
 

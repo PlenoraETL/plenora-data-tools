@@ -7,8 +7,9 @@ maggiore di `tolerance` scrive una riga `overlap`, con le posizioni delle
 due righe, l'area e la geometria della zona sovrapposta. I buchi fra i
 poligoni (gap) non si cercano: se un buco sia atteso dipende dal dominio.
 
-La conversione di colonna è `extensions3::coverage_validate_rows`; il
-runner non esegue ancora l'operazione.
+La conversione di colonna è `extensions3::coverage_validate_rows`, che il
+runner chiama su tutta la colonna con i default della tabella sotto e la
+precisione del CRS della colonna ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Parametri
 
@@ -57,7 +58,14 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione (conversione di colonna; messaggi del calcolo con prefisso
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare.
+
+Poi la conversione di colonna (messaggi del calcolo con prefisso
 `geo.coverage_validate:`):
 
 - `InvalidPlan`: WKB malformato o OGC-invalido; una geometria che non è
@@ -78,13 +86,18 @@ In esecuzione (conversione di colonna; messaggi del calcolo con prefisso
   `i_overlay` ([README, «Precisione delle operazioni geografiche: 1 cm a
   terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
   «Hazard»).
+- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+  provvisori»).
 
 ### Precisione
 
 Ogni intersezione di una coppia passa dalla griglia di `i_overlay`, con il
 controllo a priori sull'ingombro della coppia: guardia di spaziatura delle
 coordinate e spostamento della griglia entro `p / 2`, altrimenti
-`PrecisionInsufficient`. Nessun controllo a posteriori: una sovrapposizione
+`PrecisionInsufficient`; `p` è 1 cm a terra nelle unità del CRS della
+colonna (`Precision::from_crs`). Nessun controllo a posteriori: una sovrapposizione
 più sottile della griglia può sparire (segnalazione mancata), e vertici
 diversi su lati collineari possono lasciare una scheggia (segnalazione
 spuria), con area entro la precisione per il perimetro della zona

@@ -2,12 +2,10 @@
 
 Sovrappone due tabelle di poligoni e ne produce i pezzi, ognuno con la
 riga sinistra e la riga destra da cui viene (kernel
-`topology::polygon_overlay`): le intersezioni delle coppie che si
+`topology::polygon_overlay_validated`; [README, «Operazioni
+geo»](../README.md#operazioni-geo)): le intersezioni delle coppie che si
 sovrappongono e, secondo `mode`, i resti di ciascun lato fuori dall'altro.
-Lavora solo su `Polygon` e `MultiPolygon`. Il runner non esegue ancora le
-operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): lo schema qui descritto è
-quello dell'analisi del contratto, i valori quelli del kernel.
+Lavora solo su `Polygon` e `MultiPolygon`.
 
 ### Parametri
 
@@ -43,10 +41,13 @@ Una riga per pezzo, da 0 a molte per riga d'ingresso. Le coppie candidate
 si trovano con il join spaziale `intersects` sui rettangoli d'ingombro e
 si confermano con il predicato esatto; una coppia che si tocca solo sul
 bordo dà un'intersezione vuota, che non si emette. Nessun pezzo vuoto esce.
-Una riga sinistra coperta del tutto dalla destra non ha resto. Il kernel
-riceve solo geometrie: come si trattano le celle nulle a livello di
-tabella non è ancora fissato (gli indici contano le posizioni delle
-geometrie passate al kernel).
+Una riga sinistra coperta del tutto dalla destra non ha resto. Le righe
+con la geometria nulla, da un lato o dall'altro, non entrano nel kernel e
+non danno pezzi; `__left_index` e `__right_index` sono le posizioni delle
+righe negli ingressi, contando anche le nulle. Le coppie candidate e i
+pezzi sono ciascuno al più il limite di righe dell'arco d'uscita
+(`max_output_rows` se il passo è un output del piano, `max_rows_per_edge`
+altrimenti).
 
 ### Ordine
 
@@ -68,42 +69,69 @@ In validazione (analisi del contratto):
 - `Crs`: un lato senza CRS risolto, un CRS non proiettato (o senza unità
   lineare), CRS dei due lati non equivalenti.
 
-In esecuzione (kernel `topology::polygon_overlay`, errore
-`TopologyError`; nessun codice di questo repository lo traduce ancora in
-`PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
+([README, «Operazioni geo»](../README.md#operazioni-geo)):
 
-- `InvalidParameter`: il limite delle coppie candidate o dei pezzi che il
-  chiamante passa al kernel è zero;
-- `UnsupportedGeometry`: una geometria non è `Polygon`/`MultiPolygon`;
-- `InvalidGeometry`: una geometria d'ingresso, un'unione o un pezzo non
-  supera la validazione OGC; oppure il join delle coppie candidate fallisce,
-  anche solo perché le coppie superano il loro limite;
-- `ResourceLimit` (`overlay_results`): i pezzi superano il loro limite;
-- `IndexOverflow`: un indice non entra in `u64`;
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso`: una validazione, un
-  predicato o un overlay di `geo` non ha concluso;
-- `PrecisionInsufficient`: la griglia di un overlay sposterebbe il
-  risultato oltre la precisione (sotto, «Precisione»).
+- `Schema`: il contratto di un lato dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `InvalidPlan`: la cella viola il contratto WKB o non supera la
+  validazione OGC (`Unsupported` per dimensioni Z o M, `Internal` se la
+  validazione non conclude, `ResourceLimit` per una cella oltre il limite
+  di byte).
+
+Dal kernel (`topology::polygon_overlay_validated`, errore
+`TopologyError`, sulle geometrie già validate: restano le validazioni OGC
+delle unioni e dei pezzi), nella categoria del passo geo indicata fra
+parentesi:
+
+- `UnsupportedGeometry` (`InvalidPlan`): una geometria non è
+  `Polygon`/`MultiPolygon`;
+- `InvalidGeometry` (`InvalidPlan`): un'unione o un pezzo non supera la
+  validazione OGC; oppure il join delle coppie candidate fallisce, anche
+  solo perché le coppie superano il limite di righe dell'arco;
+- `ResourceLimit` (`overlay_results`; `InvalidPlan`, non la categoria
+  `ResourceLimit`): i pezzi superano il limite di righe dell'arco;
+- `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`;
+- `PrecisionInsufficient` (`Unsupported`): la griglia di un overlay
+  sposterebbe il risultato oltre la precisione (sotto, «Precisione»);
+- `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): una
+  validazione, un predicato o un overlay di `geo` non ha concluso.
+
+Un indice di pezzo che non corrisponde a una riga d'ingresso è
+`Internal`.
+
+Il primo errore è quello della prima riga, in ordine di riga, senza
+diagnostica per riga ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga»).
 
 ### Limiti e deviazioni
 
 Solo parti poligonali: le intersezioni che si riducono a linee o punti
 sono escluse, come `keep_geom_type=True` di GeoPandas. Il superamento del
 limite delle coppie candidate esce come `InvalidGeometry`, non come
-`ResourceLimit`. Nessun controllo a posteriori del risultato contro gli
-ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
+`ResourceLimit`, e nessuno dei due limiti ha la categoria `ResourceLimit`
+nel runner: entrambi escono come `InvalidPlan`. I pezzi dipendono dai
+dati: il modello di costo non li prevede, e li limita solo il limite di
+righe dell'arco ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di
+costo geo provvisori»). Nessun controllo a posteriori del risultato contro
+gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Precisione
 
-Entro 1 cm a terra. Ogni intersezione è un overlay con la griglia entro
-mezzo centimetro; ogni resto sono due overlay in catena (l'unione
-dell'altro lato, poi la differenza), ognuno entro un quarto di
-centimetro. Ogni griglia è controllata prima del calcolo sull'ingombro dei
-suoi operandi; oltre, o con coordinate troppo rade per il centimetro,
-`PrecisionInsufficient` e nessun calcolo. Parti più sottili di 1 cm
-possono sparire o fondersi senza errore; vedi [README, «Precisione delle
-operazioni geografiche: 1 cm a
+La precisione è 1 cm a terra nelle unità del CRS della sinistra
+(`Precision::from_crs`, calcolata in validazione). Entro 1 cm a terra.
+Ogni intersezione è un overlay con la griglia entro mezzo centimetro; ogni
+resto sono due overlay in catena (l'unione dell'altro lato, poi la
+differenza), ognuno entro un quarto di centimetro. Ogni griglia è
+controllata prima del calcolo sull'ingombro dei suoi operandi; oltre, o
+con coordinate troppo rade per il centimetro, `PrecisionInsufficient` e
+nessun calcolo. Parti più sottili di 1 cm possono sparire o fondersi senza
+errore; vedi [README, «Precisione delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 ### Complessità

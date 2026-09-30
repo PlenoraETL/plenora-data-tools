@@ -4,10 +4,7 @@ Unisce tutte le geometrie della tabella in una sola (kernel
 `topology::dissolve`, `unary_union` di `geo`): le parti che si toccano o
 si sovrappongono si fondono, quelle disgiunte restano poligoni distinti
 dello stesso `MultiPolygon`. Lavora solo su `Polygon` e `MultiPolygon`. Le
-colonne attributo non passano e non ci sono gruppi. Il runner non esegue
-ancora le operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): lo schema qui descritto è
-quello dell'analisi del contratto, i valori quelli del kernel.
+colonne attributo non passano e non ci sono gruppi.
 
 ### Parametri
 
@@ -24,11 +21,10 @@ si perdono.
 
 ### Righe
 
-Aggregazione: una riga. Il kernel riceve solo geometrie: come si trattano
-le celle nulle a livello di tabella non è ancora fissato. Senza geometrie
-il kernel rende un `MULTIPOLYGON EMPTY`; l'analisi dichiara la colonna
-nullable pensando a una geometria nulla per un ingresso vuoto, e quale dei
-due valga si fisserà con il runner.
+Aggregazione: sempre una riga. Il runner salta le celle nulle e passa al
+kernel le altre geometrie, nell'ordine delle righe. Senza geometrie non
+nulle (tabella vuota o tutta nulla) il kernel non si chiama e la riga ha
+la geometria nulla, come l'analisi dichiara.
 
 ### Ordine
 
@@ -46,12 +42,23 @@ In validazione (analisi del contratto):
 - `Unsupported`: una colonna geometria non XY;
 - `Crs`: CRS non risolto, o non proiettato (o senza unità lineare).
 
-In esecuzione (kernel `topology::dissolve`, errore `TopologyError`; nessun
-codice di questo repository lo traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare. Poi la
+decodifica completa con la validazione OGC: `InvalidPlan` per una
+geometria non valida, `Internal` se la validazione non conclude.
+
+Poi il kernel `topology::dissolve_validated`, con errore `TopologyError`
+che il runner traduce così: `ValidazioneNonConclusa` e
+`CalcoloNonConcluso` diventano `Internal`, `PrecisionInsufficient`
+diventa `Unsupported`, le altre `InvalidPlan`:
 
 - `UnsupportedGeometry`: una geometria non è `Polygon`/`MultiPolygon`;
-- `InvalidGeometry`: una geometria d'ingresso o il risultato non supera la
-  validazione OGC;
+- `InvalidGeometry`: il risultato non supera la validazione OGC (una
+  geometria d'ingresso non valida si rifiuta già alla decodifica);
 - `ValidazioneNonConclusa`: la validazione OGC non ha concluso;
 - `PrecisionInsufficient`: la griglia dell'overlay sposterebbe il risultato
   oltre la precisione (sotto, «Precisione»);
@@ -66,10 +73,15 @@ riempimento dal verso del primo anello e un poligono valido di verso
 opposto sparirebbe ([README, «Precisione delle operazioni geografiche: 1 cm
 a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Nessun controllo a posteriori del risultato contro gli ingressi.
+Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+provvisori»).
 
 ### Precisione
 
-Entro 1 cm a terra: un solo overlay di `i_overlay` su interi `i64`, con la
+Entro 1 cm a terra, nelle unità del CRS della colonna (il runner passa al
+kernel `Precision::from_crs`): un solo overlay di `i_overlay` su interi `i64`, con la
 griglia controllata prima del calcolo sull'ingombro di tutti gli ingressi.
 Se lo spostamento a priori supera mezzo centimetro, o le coordinate sono
 troppo rade per il centimetro, `PrecisionInsufficient` e nessun calcolo.

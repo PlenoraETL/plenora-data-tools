@@ -13,12 +13,12 @@ risultato (la distanza continua sarebbe minore o uguale).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, in numero pari), nel CRS dell'input e dentro il suo dominio di validità | la linea di confronto, uguale per tutte le righe |
+| `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, in numero pari) di una `LineString` valida OGC, nel CRS dell'input e dentro il suo dominio di validità | la linea di confronto, uguale per tutte le righe |
 | `output_column` | stringa | `frechet_distance` | nome non vuoto e non già nello schema | colonna aggiunta |
 
-`other_wkb` si decodifica e si valida in analisi solo nella struttura e nel
-dominio del CRS: né il tipo (il kernel vuole una `LineString`) né la
-validità OGC si controllano lì.
+`other_wkb` si decodifica e si valida in analisi: struttura, validità OGC,
+dominio del CRS e tipo (deve essere una `LineString`, quella che il kernel
+chiede).
 
 ### Schema
 
@@ -32,12 +32,10 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 1:1: una distanza per riga, nelle unità del CRS. Per il contratto
 `other_wkb` è il secondo operando; la distanza discreta è simmetrica, quindi
 l'ordine non cambia il valore. Il kernel
-(`extended_algorithms::frechet_distance`) riceve due `LineString` e rende
-nessun valore se una delle due è vuota. Il runner non esegue ancora le
-operazioni geo ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)):
-che cosa rendano una cella nulla, una linea vuota e una geometria di altro
-tipo lo fisserà l'esecutore geo, come il limite delle coppie di vertici per
-piano.
+(`extended_algorithms::frechet_distance`) riceve due `LineString`. Una
+geometria nulla dà una distanza nulla, e anche una linea vuota, da una
+parte o dall'altra (il kernel non rende un valore); una riga che non è una
+`LineString` ferma il passo con un errore (vedi «Errori»).
 
 ### Ordine
 
@@ -52,7 +50,8 @@ CRS, config):
   senza `other_wkb` o con un tipo sbagliato; `other_wkb` vuoto, di
   lunghezza dispari o con caratteri non esadecimali; WKB strutturalmente
   non valido (byte o conteggi oltre i limiti, annidamento, anelli non
-  chiusi, coordinate NaN o infinite, byte in coda); `output_column` vuoto;
+  chiusi, coordinate NaN o infinite, byte in coda), non valido OGC o che
+  non è una `LineString`; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
 - `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
@@ -61,23 +60,43 @@ CRS, config):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare; una coordinata di `other_wkb` fuori dal dominio di
   validità del CRS;
-- `Internal`: la decodifica di `other_wkb` non conclude.
+- `Internal`: la decodifica o la validazione OGC di `other_wkb` non
+  conclude.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta la
-coppia con `InvalidInput` (coordinate non finite o linea con meno di due
-punti distinti; prima la riga, poi `other_wkb`; `ValidazioneNonConclusa`
-se la validazione non conclude), `WorkLimit` (prodotto dei vertici delle
-due linee oltre il limite del chiamante, o non rappresentabile in `u64`),
-`CalcoloNonConcluso` (panico di `geo`).
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
+
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Poi, per riga:
+
+- `InvalidPlan`: la geometria della riga non è una `LineString` (errore
+  del runner, «tipo geometria non supportato»); dal kernel `InvalidInput`
+  (coordinate non finite o linea con meno di due punti distinti),
+  `WorkLimit` (prodotto dei vertici delle due linee oltre `10^8`, il
+  tetto che il runner passa, o non rappresentabile in `u64`),
+  `IndexOverflow`;
+- `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
+  conclude) e `CalcoloNonConcluso` (panico di `geo`).
 
 ### Limiti e deviazioni
 
 - Distanza discreta, sui soli vertici, come `ST_FrechetDistance` di
   PostGIS senza densificazione; nessun parametro di densificazione qui.
-- Il lavoro quadratico è limitato da un argomento del kernel, senza valore
-  predefinito qui.
+- Il lavoro quadratico è limitato da un argomento del kernel: il runner
+  passa `10^8` coppie di vertici per riga (l'ordine di `MAX_NODING_WORK`
+  dei kernel); non è un parametro della config.
 - La seconda linea è una costante della config, non una seconda colonna.
+- Solo `LineString`: una `MultiLineString` nella colonna ferma il passo.
+- Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

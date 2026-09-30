@@ -7,8 +7,9 @@ WKT 2D senza SRID e descrivere una geometria valida: basta una cella che non
 lo è perché l'intera colonna si rifiuti, con la diagnostica delle righe
 colpevoli.
 
-La conversione di colonna è `extensions::from_wkt_column`; il runner non
-esegue ancora l'operazione.
+La conversione di colonna è `extensions::from_wkt_column`; il runner ne
+chiama la variante `from_wkt_column_named`, che nomina la colonna nella
+diagnostica.
 
 ### Parametri
 
@@ -33,7 +34,9 @@ schema e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1. Una cella nulla dà una geometria nulla.
+1:1: il runner chiama la conversione di colonna dei kernel
+(`extensions::from_wkt_column_named`) sulla colonna intera. Una cella
+nulla dà una geometria nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -61,10 +64,20 @@ In esecuzione (conversione di colonna):
   per cella (causa `geometry.encoding_failed`). La diagnostica conta tutte le
   righe colpevoli per causa e ne dà al più 10 come esempio (indice di riga,
   mai il testo); nessuna cella viene pubblicata;
-- `Internal`: la validazione OGC di una cella non conclude.
+- `Internal`: la validazione OGC di una cella non conclude;
+- `Crs`: dopo la conversione, una coordinata di una geometria prodotta
+  fuori dal dominio di validità del CRS della colonna creata.
+
+È l'unica operazione geo con diagnostica per riga nel runner, e l'unica
+per cui vale il controllo di provenance della validazione
+([README, «Operazioni geo»](../README.md#operazioni-geo), voce «Diagnostica
+per riga»).
 
 ### Limiti e deviazioni
 
+- Il costo in memoria del passo è una previsione provvisoria
+  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voce «Modelli di costo geo provvisori»).
 - Solo WKT 2D: EWKT con `SRID=` e WKT con `Z`, `M`, `ZM` si rifiutano.
 - `on_error` non ha effetto (sopra).
 

@@ -10,8 +10,9 @@ estremo libero), `invalid_ring` (anello che non forma un poligono valido).
 Gli attributi delle righe d'ingresso non passano.
 
 La semantica a livello di tabella è quella dell'esecuzione Arrow
-(`rust_backend::arrow::polygonize_batches`); il runner non la chiama
-ancora.
+(`rust_backend::arrow::polygonize_batches`), che il runner chiama su tutta
+la tabella con la precisione del CRS della colonna e il limite di righe
+dell'arco d'uscita ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Parametri
 
@@ -64,7 +65,15 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto, o CRS non proiettato.
 
-In esecuzione (esecuzione Arrow):
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare. La validità OGC non si controlla qui: la
+controlla l'esecuzione Arrow.
+
+Poi l'esecuzione Arrow:
 
 - `Schema`: colonna geometria assente o non `Binary`;
 - `ResourceLimit`: cella oltre il limite di byte per cella; prenotazione di
@@ -72,8 +81,9 @@ In esecuzione (esecuzione Arrow):
 - `InvalidPlan`: una cella che non è `LineString`, `MultiLineString` o
   collezione di linee; WKB malformato o OGC-invalido; più di 100.000.000
   coordinate in ingresso o in uscita; più di 100.000.000 coppie di segmenti
-  esaminate dal noding; righe d'uscita oltre il limite passato dal
-  chiamante (`max_output_rows`, contato anche sulle facce intermedie);
+  esaminate dal noding; righe d'uscita oltre il limite di righe dell'arco
+  (`max_output_rows` per un output del piano, `max_rows_per_edge`
+  altrimenti; contato anche sulle facce intermedie);
   `require_complete` con residui (il messaggio riporta il numero di residui
   per classe); una faccia che non supera la validazione;
 - `Unsupported`: WKB con dimensioni Z/M o SRID; noding non convergente;
@@ -97,6 +107,10 @@ In esecuzione (esecuzione Arrow):
 - Segni esatti dove GEOS non lo è: una faccia degenere solo per la
   precisione di GEOS resta un poligono.
 - Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
+- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+  provvisori»).
 
 ### Precisione
 
@@ -116,7 +130,8 @@ noding
   spareggio fra archi sovrapposti (solo senza noding).
 
 Con `node_input: false` nessun punto è calcolato: le facce hanno le
-coordinate d'ingresso. `p` è la precisione del CRS della colonna.
+coordinate d'ingresso. `p` è la precisione del CRS della colonna
+(`Precision::from_crs`, 1 cm a terra).
 
 ### Complessità
 

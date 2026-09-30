@@ -2,11 +2,9 @@
 
 Sostituisce la geometria della sinistra con la sua intersezione con la
 geometria della destra, `sinistra ∩ destra`, calcolata dal kernel
-`topology::boolean_operation`. Lavora solo su `Polygon` e `MultiPolygon` e
-rende sempre un `MultiPolygon`. Il runner non esegue ancora le operazioni
-geo ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)):
-lo schema qui descritto è quello dell'analisi del contratto, il calcolo
-quello del kernel su una coppia di geometrie.
+`topology::boolean_operation_validated` ([README, «Operazioni
+geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+`MultiPolygon` e rende sempre un `MultiPolygon`.
 
 ### Parametri
 
@@ -15,9 +13,10 @@ Nessuno: la config è `{}`.
 ### Schema
 
 Quello della sinistra: stesse colonne, nello stesso ordine, con gli stessi
-tipi e la stessa nullabilità; le colonne della destra non passano. La
-colonna geometria resta al suo posto, con lo stesso nome e lo stesso CRS
-della sinistra (uguale a quello della destra), in XY; i tipi geometrici
+tipi; le colonne della destra non passano. La colonna geometria resta al
+suo posto, con lo stesso nome e lo stesso CRS della sinistra (uguale a
+quello della destra), in XY, ed è nullable anche quando quella della
+sinistra non lo è (un risultato vuoto è nullo); i tipi geometrici
 dichiarati diventano `MultiPolygon` (`exact`) e le chiavi dei tipi
 ereditate dal campo si tolgono. Gli altri metadati di campo restano. I
 metadati di schema sono la fusione dei due lati: una chiave presente da un
@@ -26,12 +25,13 @@ solo lato o uguale sui due passa. Le proprietà del contratto della sinistra
 
 ### Righe
 
-Il contratto dichiara una riga d'uscita per ogni riga della sinistra.
-Come le righe della destra si abbinano a quelle della sinistra (e che
-cosa succede a una cella nulla) non è ancora fissato da codice di questo
-repository: il kernel calcola la booleana di una coppia di geometrie. Dove
-le due geometrie non si intersecano il kernel rende un `MULTIPOLYGON
-EMPTY`, non una geometria nulla.
+Allineate: la riga `i` della sinistra con la riga `i` della destra, e le
+due tabelle devono avere le stesse righe (altrimenti `InvalidPlan`, in
+esecuzione: le righe non si conoscono a secco). Una riga d'uscita per riga
+della sinistra, con la geometria nulla dove una delle due è nulla o il
+risultato è vuoto. Dove le due geometrie non si intersecano, o si toccano
+solo su un lato o in un punto, il kernel rende un `MultiPolygon` vuoto e
+la riga resta con la geometria nulla.
 
 ### Ordine
 
@@ -50,36 +50,58 @@ In validazione (analisi del contratto):
 - `Crs`: un lato senza CRS risolto, un CRS non proiettato (o senza unità
   lineare), CRS dei due lati non equivalenti.
 
-In esecuzione (kernel `topology::boolean_operation`, errore
-`TopologyError`; nessun codice di questo repository lo traduce ancora in
-`PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
+([README, «Operazioni geo»](../README.md#operazioni-geo)):
 
-- `UnsupportedGeometry`: una geometria non è `Polygon`/`MultiPolygon`;
-- `InvalidGeometry`: una geometria d'ingresso o il risultato non supera la
+- `Schema`: il contratto di un lato dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `InvalidPlan`: la cella viola il contratto WKB o non supera la
+  validazione OGC (`Unsupported` per dimensioni Z o M, `Internal` se la
+  validazione non conclude, `ResourceLimit` per una cella oltre il limite
+  di byte);
+- `InvalidPlan`: le due tabelle hanno un numero di righe diverso.
+
+Dal kernel (`topology::boolean_operation_validated`, errore
+`TopologyError`, sulle geometrie già validate: resta la validazione OGC
+del risultato), nella categoria del passo geo indicata fra parentesi:
+
+- `UnsupportedGeometry` (`InvalidPlan`): una geometria non è
+  `Polygon`/`MultiPolygon`;
+- `InvalidGeometry` (`InvalidPlan`): il risultato non supera la
   validazione OGC;
-- `ValidazioneNonConclusa`: la validazione OGC non ha concluso;
-- `PrecisionInsufficient`: la griglia dell'overlay sposterebbe il risultato
-  oltre la precisione (sotto, «Precisione»);
-- `CalcoloNonConcluso`: l'overlay di `geo` è andato in panico.
+- `PrecisionInsufficient` (`Unsupported`): la griglia dell'overlay
+  sposterebbe il risultato oltre la precisione (sotto, «Precisione»);
+- `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): la
+  validazione OGC o l'overlay di `geo` non ha concluso.
+
+Il primo errore è quello della prima riga, in ordine di riga, senza
+diagnostica per riga ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga»).
 
 ### Limiti e deviazioni
 
-Solo poligoni: un'intersezione che si riduce a linee o punti (due
-quadrati che si toccano su un lato) è un `MultiPolygon` vuoto, dove GEOS e
-PostGIS renderebbero la linea o il punto. Il catalogo dichiara forma 1:N e
-vincolo `max(uscita / sinistra, uscita / destra)`, ma il kernel rende una
-geometria per coppia. Nessun controllo a posteriori del risultato contro gli
-ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
+Solo poligoni: un'intersezione che si riduce a linee o punti (due quadrati
+che si toccano su un lato) è vuota, quindi la riga ha la geometria nulla,
+dove GEOS e PostGIS renderebbero la linea o il punto. Il catalogo dichiara
+forma 1:N e vincolo `max(uscita / sinistra, uscita / destra)`, ma il passo
+rende una riga per riga della sinistra. Nessun controllo a posteriori del
+risultato contro gli ingressi ([README, «Precisione delle operazioni
+geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Precisione
 
-Entro 1 cm a terra: un solo overlay di `i_overlay` su interi `i64`, con la
-griglia controllata prima del calcolo sull'ingombro dei due operandi. Se lo
-spostamento a priori supera mezzo centimetro, o le coordinate sono troppo
-rade per il centimetro, `PrecisionInsufficient` e nessun calcolo. Parti
-più sottili di 1 cm possono sparire o fondersi senza errore; vedi
-[README, «Precisione delle operazioni geografiche: 1 cm a
+La precisione è 1 cm a terra nelle unità del CRS della sinistra
+(`Precision::from_crs`, calcolata in validazione). Entro 1 cm a terra: un
+solo overlay di `i_overlay` su interi `i64`, con la griglia controllata
+prima del calcolo sull'ingombro dei due operandi. Se lo spostamento a
+priori supera mezzo centimetro, o le coordinate sono troppo rade per il
+centimetro, `PrecisionInsufficient` e nessun calcolo. Parti più sottili di
+1 cm possono sparire o fondersi senza errore; vedi [README, «Precisione
+delle operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 ### Complessità
@@ -94,7 +116,7 @@ Memoria O(v + k).
 
 ### Esempio
 
-Una riga per lato, perché l'abbinamento delle righe non è ancora fissato.
+Una riga per lato: la riga `i` della sinistra con la riga `i` della destra.
 
 ```json
 {

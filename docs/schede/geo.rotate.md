@@ -11,13 +11,13 @@ centro `(x_origin, y_origin)`. È
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `degrees` | numero | obbligatorio | finito | angolo in gradi, positivo in verso antiorario |
-| `x_origin` | numero | non deciso | finito | x del centro di rotazione |
-| `y_origin` | numero | non deciso | finito | y del centro di rotazione |
+| `x_origin` | numero | `0` | finito | x del centro di rotazione |
+| `y_origin` | numero | `0` | finito | y del centro di rotazione |
 
-`x_origin` e `y_origin` sono facoltativi per l'analisi, ma il kernel
-(`extended::rotate_about`) riceve il centro sempre esplicito e nessun
-esecutore lo chiama ancora: il centro usato quando mancano non è deciso.
-Un piano che vuole un risultato definito li scrive.
+`x_origin` e `y_origin` sono facoltativi, anche uno solo: il kernel
+(`extended::rotate_about`) riceve il centro sempre esplicito, e il runner
+mette `0` al posto di ciascuno che manca. Senza entrambi si ruota attorno
+a `(0, 0)` del CRS, non attorno alla geometria.
 
 ### Schema
 
@@ -28,9 +28,9 @@ contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1 per contratto. Il runner non esegue ancora le operazioni geo e nessun
-esecutore chiama il kernel su una tabella: l'analisi conserva la
-nullabilità della colonna, il kernel lavora su una geometria alla volta.
+1:1: il runner chiama il kernel (`extended::rotate_about`) su ogni cella non
+nulla, in parallelo, e rimette la geometria al suo posto; una cella
+nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -50,15 +50,30 @@ In validazione (analisi del contratto):
   (`PROJECTED_CRS_REQUIRED`) o senza unità lineare
   (`LINEAR_UNIT_REQUIRED`).
 
-In esecuzione il kernel rende `ExtendedError`, che nessun esecutore
-traduce ancora in `PlenoraError`: `InvalidParameter` (`degrees` non
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi il kernel rende `ExtendedError`, che il runner porta in `Internal`
+per `ValidazioneNonConclusa` e `CalcoloNonConcluso`, in `InvalidPlan`
+per le altre: `InvalidParameter` (`degrees` non
 finito, o `coefficients` per un termine della matrice che trabocca),
 `InvalidInput` (coordinate non finite o geometria non valida OGC),
 `InvalidOutput` (uscita non valida OGC), `ValidazioneNonConclusa` e
 `CalcoloNonConcluso` (validazione o calcolo interrotti).
 
+Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
+è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
 
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 Nessuna rotazione è esatta, nemmeno di 90 o 180 gradi: il coseno di 90
 gradi in `f64` vale circa `6.1e-17`, non zero (vedi l'esempio). Le
 coordinate d'uscita non si confrontano con il dominio di validità del CRS

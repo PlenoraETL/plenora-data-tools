@@ -26,9 +26,11 @@ e `__parent_index` alla riga d'origine; meno di tre punti distinti, o punti
 tutti collineari, danno zero righe. Il kernel
 (`extended_algorithms::delaunay`) triangola una geometria alla volta e
 riceve come argomenti il massimo di coordinate d'ingresso e di triangoli.
-Il runner non esegue ancora le operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): la resa di una cella nulla e
-i limiti per piano li fisserà l'esecutore geo.
+Il runner lo chiama su ogni cella non nulla, con `MAX_CELL_COORDINATES`
+come massimo di coordinate e il limite di righe dell'arco d'uscita (`max_output_rows` per un output del
+piano, `max_rows_per_edge` altrimenti) come massimo di triangoli per geometria. Una cella
+nulla non produce righe. `__parent_index` conta da 0. Il runner conta le righe prodotte su tutta la tabella: oltre il limite di righe dell'arco d'uscita (`max_output_rows` per un output del
+piano, `max_rows_per_edge` altrimenti), `ResourceLimit`.
 
 ### Ordine
 
@@ -51,16 +53,25 @@ config, CRS, nomi):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta la
-geometria con `InvalidInput` (coordinate non finite o geometria non valida
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare.
+
+Poi il kernel, per geometria, con errore `ExtendedAlgorithmError` che il
+runner traduce così: `Internal`, `ValidazioneNonConclusa` e
+`CalcoloNonConcluso` diventano `Internal`, le altre `InvalidPlan`. Il
+kernel rifiuta la geometria con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
-`CoordinateLimit` (coordinate d'ingresso, duplicati compresi, oltre il
-limite del chiamante), `Triangulation` (coordinata non zero con modulo
+`CoordinateLimit` (coordinate d'ingresso, duplicati compresi, oltre
+`MAX_CELL_COORDINATES`), `Triangulation` (coordinata non zero con modulo
 fuori da `[2^-142, 2^201]`, il dominio dei predicati esatti di `spade`, per
 il primo punto fuori in ordine d'ingresso; oppure vertici persi o fusi dal
 caricamento in blocco), `CalcoloNonConcluso` (panico nella
-triangolazione), `OutputLimit` (triangoli oltre il limite del chiamante),
+triangolazione), `OutputLimit` (triangoli oltre il limite di righe
+dell'arco),
 `IndexOverflow`, `InvalidOutput` (triangolo non valido).
 
 ### Limiti e deviazioni
@@ -74,8 +85,12 @@ triangolazione), `OutputLimit` (triangoli oltre il limite del chiamante),
 - Non vincolata e senza tolleranza: `ST_DelaunayTriangles` di PostGIS ha un
   parametro di tolleranza per fondere i vertici vicini, qui assente (si
   fondono solo i punti uguali, con `-0.0` uguale a `0.0`).
-- I limiti di coordinate e di triangoli sono argomenti del kernel, senza
-  valore predefinito qui.
+- I limiti di coordinate e di triangoli sono quelli del runner, sopra; non
+  si scelgono dal piano.
+- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+  provvisori»).
 
 ### Precisione
 

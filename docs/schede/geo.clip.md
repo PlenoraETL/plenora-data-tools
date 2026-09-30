@@ -3,10 +3,9 @@
 Ritaglia ogni geometria della sinistra sulla maschera data dalla destra:
 tutte le geometrie della destra si uniscono in una sola maschera, e ogni
 riga della sinistra diventa la sua intersezione con la maschera (kernel
-`topology::clip_to_mask`). Lavora solo su `Polygon` e `MultiPolygon`. Il
-runner non esegue ancora le operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): lo schema qui descritto è
-quello dell'analisi del contratto, i valori quelli del kernel.
+`topology::clip_to_mask_validated`; [README, «Operazioni
+geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+`MultiPolygon`.
 
 ### Parametri
 
@@ -15,9 +14,10 @@ Nessuno: la config è `{}`.
 ### Schema
 
 Quello della sinistra: stesse colonne, nello stesso ordine, con gli stessi
-tipi e la stessa nullabilità; le colonne della destra non passano. La
-colonna geometria resta al suo posto, con lo stesso nome e lo stesso CRS
-della sinistra (uguale a quello della destra), in XY; i tipi geometrici
+tipi; le colonne della destra non passano. La colonna geometria resta al
+suo posto, con lo stesso nome e lo stesso CRS della sinistra (uguale a
+quello della destra), in XY, ed è nullable anche quando quella della
+sinistra non lo è (un ritaglio vuoto è nullo); i tipi geometrici
 dichiarati diventano `MultiPolygon` (`exact`) e le chiavi dei tipi
 ereditate dal campo si tolgono. Gli altri metadati di campo restano. I
 metadati di schema sono la fusione dei due lati: una chiave presente da un
@@ -27,11 +27,10 @@ solo lato o uguale sui due passa. Le proprietà del contratto della sinistra
 ### Righe
 
 1:1 con la sinistra: la destra conta solo come maschera, qualunque sia il
-suo numero di righe. Una riga il cui ritaglio è vuoto (fuori dalla
-maschera, o con una destra senza righe) resta, senza geometria: il kernel
-rende `None` in quella posizione. Le celle nulle non entrano nel kernel,
-che riceve solo geometrie: come si trattano a livello di tabella non è
-ancora fissato.
+suo numero di righe, e le sue geometrie nulle non ne fanno parte. Una riga
+il cui ritaglio è vuoto (fuori dalla maschera, o con una destra senza
+geometrie) resta, con la geometria nulla; una riga con la geometria
+sinistra nulla resta nulla e non entra nel kernel.
 
 ### Ordine
 
@@ -50,40 +49,62 @@ In validazione (analisi del contratto):
 - `Crs`: un lato senza CRS risolto, un CRS non proiettato (o senza unità
   lineare), CRS dei due lati non equivalenti.
 
-In esecuzione (kernel `topology::clip_to_mask`, errore `TopologyError`;
-nessun codice di questo repository lo traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
+([README, «Operazioni geo»](../README.md#operazioni-geo)):
 
-- `UnsupportedGeometry`: una geometria, di un lato o dell'altro, non è
-  `Polygon`/`MultiPolygon`;
-- `InvalidGeometry`: una geometria d'ingresso, la maschera unita o un
-  ritaglio non supera la validazione OGC;
-- `ValidazioneNonConclusa`: la validazione OGC non ha concluso;
-- `PrecisionInsufficient`: la griglia di uno dei due overlay sposterebbe il
-  risultato oltre la precisione (sotto, «Precisione»);
-- `CalcoloNonConcluso`: un overlay di `geo` è andato in panico.
+- `Schema`: il contratto di un lato dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `InvalidPlan`: la cella viola il contratto WKB o non supera la
+  validazione OGC (`Unsupported` per dimensioni Z o M, `Internal` se la
+  validazione non conclude, `ResourceLimit` per una cella oltre il limite
+  di byte).
+
+Dal kernel (`topology::clip_to_mask_validated`, errore `TopologyError`,
+sulle geometrie già validate: restano le validazioni OGC della maschera
+unita e dei ritagli), nella categoria del passo geo indicata fra
+parentesi:
+
+- `UnsupportedGeometry` (`InvalidPlan`): una geometria, di un lato o
+  dell'altro, non è `Polygon`/`MultiPolygon`;
+- `InvalidGeometry` (`InvalidPlan`): la maschera unita o un ritaglio non
+  supera la validazione OGC;
+- `PrecisionInsufficient` (`Unsupported`): la griglia di uno dei due
+  overlay sposterebbe il risultato oltre la precisione (sotto,
+  «Precisione»);
+- `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): la
+  validazione OGC o un overlay di `geo` non ha concluso.
+
+Il runner verifica che il kernel renda un risultato per ogni riga non
+nulla, altrimenti `Internal`.
+
+Il primo errore è quello della prima riga, in ordine di riga, senza
+diagnostica per riga ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga»).
 
 ### Limiti e deviazioni
 
 Solo poligoni: un ritaglio che si riduce a linee o punti è vuoto, quindi
-la riga resta senza geometria. La nullabilità dichiarata della colonna
-geometria è quella della sinistra anche se il kernel rende righe senza
-geometria: con una colonna sinistra non nullable contratto e kernel non
-concordano (da fissare quando il runner eseguirà l'operazione). Il catalogo
-dichiara forma 1:N e vincolo `max(uscita / sinistra, uscita / destra)`, ma
-il kernel rende una geometria per riga della sinistra. Nessun controllo a
-posteriori del risultato contro gli ingressi ([README, «Precisione delle
-operazioni geografiche: 1 cm a
+la riga resta con la geometria nulla. Il catalogo dichiara forma 1:N e
+vincolo `max(uscita / sinistra, uscita / destra)`, ma il passo rende una
+riga per riga della sinistra. Nessun controllo a posteriori del risultato
+contro gli ingressi ([README, «Precisione delle operazioni geografiche: 1
+cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Precisione
 
-Entro 1 cm a terra, con due overlay in catena: l'unione della maschera e
-poi l'intersezione di ogni riga, ognuno con la griglia controllata prima
-del calcolo entro un quarto di centimetro (la catena entro mezzo). Se lo
-spostamento a priori supera quella quota, o le coordinate sono troppo rade
-per il centimetro, `PrecisionInsufficient` e nessun calcolo. Parti più
-sottili di 1 cm possono sparire o fondersi senza errore; vedi [README,
-«Precisione delle operazioni geografiche: 1 cm a
+La precisione è 1 cm a terra nelle unità del CRS della sinistra
+(`Precision::from_crs`, calcolata in validazione). Entro 1 cm a terra, con
+due overlay in catena: l'unione della maschera e poi l'intersezione di
+ogni riga, ognuno con la griglia controllata prima del calcolo entro un
+quarto di centimetro (la catena entro mezzo). Se lo spostamento a priori
+supera quella quota, o le coordinate sono troppo rade per il centimetro,
+`PrecisionInsufficient` e nessun calcolo. Parti più sottili di 1 cm
+possono sparire o fondersi senza errore; vedi [README, «Precisione delle
+operazioni geografiche: 1 cm a
 terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «overlay in catena».
 

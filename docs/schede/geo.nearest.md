@@ -1,12 +1,10 @@
 ### Che cosa fa
 
 Abbina ogni riga della sinistra alla riga della destra più vicina, con la
-distanza planare fra le due geometrie (kernel `analysis::nearest_matches`):
-in caso di pari tutte le destre alla distanza minima, come `sjoin_nearest`
-di GeoPandas. Il runner non esegue ancora le operazioni geo ([README, «Che
-cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)): lo schema qui
-descritto è quello dell'analisi del contratto, gli abbinamenti quelli del
-kernel.
+distanza planare fra le due geometrie (kernel
+`analysis::nearest_matches_validated`, [README, «Operazioni
+geo»](../README.md#operazioni-geo)): in caso di pari tutte le destre alla
+distanza minima, come `sjoin_nearest` di GeoPandas.
 
 ### Parametri
 
@@ -25,14 +23,16 @@ del contratto (`sorted_by`, `row_count`) si perdono.
 
 ### Righe
 
-Il kernel rende, per ogni riga sinistra con geometria non nulla e non
-vuota, le righe destre (non nulle, non vuote) alla distanza minima: una di
-solito, più di una in caso di pari, quindi l'uscita può superare la
-sinistra. Una riga sinistra nulla o vuota, senza destre utilizzabili o con
-il vicino oltre `max_distance` non ha abbinamenti. Il kernel non la
-emette; le colonne nullable del contratto lasciano spazio a una riga con
-`__right_index` e `distance` nulli. Quale delle due valga, e il passo dagli
-abbinamenti alle righe, non sono ancora codice di questo repository.
+Una riga per abbinamento, con le colonne della riga sinistra: per ogni
+riga sinistra con geometria non nulla e non vuota, le righe destre (non
+nulle, non vuote) alla distanza minima, una di solito, più di una in caso
+di pari, quindi l'uscita può superare la sinistra. Una riga sinistra
+nulla o vuota, senza destre utilizzabili o con il vicino oltre
+`max_distance` non compare: il runner non emette righe con
+`__right_index` e `distance` nulli, anche se il contratto li dichiara
+nullable. Gli abbinamenti sono al più il limite di righe dell'arco
+d'uscita (`max_output_rows` se il passo è un output del piano,
+`max_rows_per_edge` altrimenti).
 
 ### Ordine
 
@@ -53,24 +53,37 @@ In validazione (analisi del contratto):
 - `Crs`: un lato senza CRS risolto, un CRS non proiettato (o senza unità
   lineare), CRS dei due lati non equivalenti.
 
-In esecuzione (kernel `analysis::nearest_matches`, errore
-`AnalysisError`; nessun codice di questo repository lo traduce ancora in
-`PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
+([README, «Operazioni geo»](../README.md#operazioni-geo)):
 
-- `InvalidWorkLimit`: il limite dei confronti o degli abbinamenti che il
-  chiamante passa al kernel è zero;
-- `WorkLimitExceeded`: i confronti della forza bruta, righe sinistre non
-  nulle per righe destre non nulle e non vuote, superano il limite (anche
-  se l'indice ne fa meno);
-- `ResultLimitExceeded`: gli abbinamenti superano il limite (ogni altro
-  errore, il primo in ordine di riga, ha la precedenza);
-- `InvalidGeometry`: una geometria ha coordinate NaN o infinite o non
-  supera la validazione OGC (l'errore porta il lato e la posizione, mai i
-  valori);
-- `ValidazioneNonConclusa`: la validazione OGC non ha concluso;
-- `CalcoloNonConcluso`: la distanza di `geo` è andata in panico su un
-  candidato;
-- `IndexOverflow`: un indice non entra in `u64`.
+- `Schema`: il contratto di un lato dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `InvalidPlan`: la cella viola il contratto WKB o non supera la
+  validazione OGC (`Unsupported` per dimensioni Z o M, `Internal` se la
+  validazione non conclude, `ResourceLimit` per una cella oltre il limite
+  di byte).
+
+Dal kernel (`analysis::nearest_matches_validated`, errore
+`AnalysisError`, sulle geometrie già validate), nella categoria del passo
+geo indicata fra parentesi:
+
+- `WorkLimitExceeded` (`InvalidPlan`): i confronti della forza bruta,
+  righe sinistre non nulle per righe destre non nulle e non vuote,
+  superano il quadrato del maggiore fra `max_input_rows` e
+  `max_rows_per_edge` (anche se l'indice ne fa meno);
+- `ResultLimitExceeded` (`InvalidPlan`): gli abbinamenti superano il
+  limite di righe dell'arco (ogni altro errore, il primo in ordine di
+  riga, ha la precedenza);
+- `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un
+  calcolo di `geo` (la distanza su un candidato) non ha concluso;
+- `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`.
+
+Il primo errore è quello della prima riga, in ordine di riga, senza
+diagnostica per riga ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga»).
 
 ### Limiti e deviazioni
 
@@ -82,7 +95,11 @@ il risultato con la forza bruta sui bit ([README, «`geo.nearest`: lo
 scarto dell'R-tree si appoggia alla stima d'errore di
 `geo`»](../README.md#geonearest-lo-scarto-dellr-tree-si-appoggia-alla-stima-derrore-di-geo)).
 Il catalogo dichiara il vincolo `uscita / sinistra`, ma i pari possono dare
-più righe della sinistra.
+più righe della sinistra. Gli abbinamenti dipendono dai dati: il modello di
+costo non li prevede, e li limita solo il limite di righe dell'arco
+([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
+geo provvisori»).
 
 ### Precisione
 

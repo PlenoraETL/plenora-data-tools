@@ -21,9 +21,9 @@ contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1 per contratto. Il runner non esegue ancora le operazioni geo e nessun
-esecutore chiama il kernel su una tabella: l'analisi conserva la
-nullabilità della colonna, il kernel lavora su una geometria alla volta.
+1:1: il runner chiama il kernel (`extended::affine_transform`) su ogni cella non
+nulla, in parallelo, e rimette la geometria al suo posto; una cella
+nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -44,8 +44,15 @@ In validazione (analisi del contratto):
   (`PROJECTED_CRS_REQUIRED`) o senza unità lineare
   (`LINEAR_UNIT_REQUIRED`).
 
-In esecuzione il kernel (`extended::affine_transform`) rende
-`ExtendedError`, che nessun esecutore traduce ancora in `PlenoraError`:
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
+`ValidazioneNonConclusa` e `CalcoloNonConcluso`, `InvalidPlan` per le
+altre):
 
 - `InvalidInput`: geometria con coordinate NaN o infinite o non valida
   OGC;
@@ -55,8 +62,16 @@ In esecuzione il kernel (`extended::affine_transform`) rende
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: validazione OGC o
   calcolo di `geo` interrotti (non accusano l'ingresso).
 
+Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
+è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
 
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
 CRS ([README, «CRS integrati»](../README.md#crs-integrati)): una matrice
 che porta la geometria fuori dal dominio non è un errore qui.

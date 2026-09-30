@@ -3,9 +3,9 @@
 //!
 //! Contiene il validatore WKB strutturale, i kernel puri (Rust puro: niente
 //! backend GEOS/PROJ), [`arrow_adapter`] per la rappresentazione
-//! GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti. Il
-//! runner non esegue ancora le operazioni geo (README, «Che cosa non c'e'
-//! ancora»): i kernel si chiamano direttamente.
+//! GeoArrow-WKB e [`analyze`] per l'inferenza a secco dei contratti. Le
+//! operazioni geo di un piano le esegue il runner (`plenora-pipeline`), che
+//! chiama questi kernel riga per riga o sulla tabella intera.
 //!
 //! [`memory_estimate`] da' una STIMA della memoria nativa delle geometrie
 //! decodificate, mai un conteggio preciso; [`geometry_contract`] fissa la

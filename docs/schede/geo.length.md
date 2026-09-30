@@ -20,9 +20,8 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1 per contratto. Il kernel (`operations::length`) lavora su una
-geometria alla volta e nessun adapter lo chiama ancora sulle righe: il
-trattamento di una cella nulla non è definito da codice eseguito.
+1:1: una lunghezza per riga, dal kernel `operations::length`; una
+geometria nulla dà una cella nulla.
 
 ### Ordine
 
@@ -40,20 +39,32 @@ In validazione (analisi del contratto):
   senza unità lineare;
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o di soli spazi.
 
-In esecuzione, dal kernel, per geometria (`OperationError`, che nessun
-codice traduce ancora in `PlenoraError`):
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
-- `InvalidInput`: la geometria non supera la validazione OGC;
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
-  calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
-  solo la forma del payload).
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Dal kernel (`OperationError`), per geometria:
+
+- `InvalidPlan` (`InvalidInput`): la geometria non supera la validazione
+  OGC;
+- `Internal` (`ValidazioneNonConclusa`, `CalcoloNonConcluso`): la
+  validazione OGC o il calcolo di `geo` vanno in panico dentro la
+  barriera (il messaggio porta solo la forma del payload).
 
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
 Un poligono ha la lunghezza del suo perimetro, dove `ST_Length` di PostGIS
 rende 0. La lunghezza è planare, non geodetica.
+Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

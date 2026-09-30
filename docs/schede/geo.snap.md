@@ -6,8 +6,8 @@ una geometria di riferimento data nella config, se dista al più
 geometrie che dovrebbero condividere vertici e ne differiscono di poco. Il
 tipo geometrico non cambia; il risultato deve restare valido.
 
-La conversione di colonna è `extensions2::snap_column`; il runner non
-esegue ancora l'operazione.
+La conversione di colonna è `extensions2::snap_column`, che il runner
+chiama sulla colonna intera.
 
 ### Parametri
 
@@ -23,8 +23,10 @@ contratto (`sorted_by`, `row_count`).
 
 ### Righe
 
-1:1. Una cella nulla resta nulla. Con un riferimento senza vertici ogni
-geometria esce invariata.
+1:1: il runner chiama la conversione di colonna dei kernel
+(`extensions2::snap_column`) sulla colonna intera, con il riferimento letto
+una volta in validazione. Una cella nulla resta nulla. Con un riferimento
+senza vertici ogni geometria esce invariata ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -45,8 +47,14 @@ In validazione (analisi del contratto):
 - `Crs`: colonna senza CRS risolto o CRS non proiettato; riferimento fuori
   dal dominio del CRS.
 
-In esecuzione (conversione di colonna; vince la prima cella che fallisce in
-ordine di riga):
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi la conversione di colonna, che rende già `PlenoraError` (vince la
+prima cella che fallisce in ordine di riga, senza diagnostica per riga):
 
 - `InvalidPlan`: WKB malformato o OGC-invalido; geometria agganciata non
   più valida (un anello che collassa, un lato che si sovrappone): messaggio
@@ -58,6 +66,10 @@ ordine di riga):
 
 ### Limiti e deviazioni
 
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 A differenza di `ST_Snap` di PostGIS e dello snap di GEOS, si agganciano
 solo vertici a vertici: i vertici non vanno sui lati del riferimento, e i
 vertici del riferimento non si inseriscono nei lati della geometria. Se

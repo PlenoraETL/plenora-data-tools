@@ -11,7 +11,7 @@ gradi. Per la distanza sull'ellissoide c'è
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, lunghezza pari), longitudine in `[-180, 180]` e latitudine in `[-90, 90]` | secondo operando, nello stesso CRS della colonna |
+| `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, lunghezza pari) di un `Point`, longitudine in `[-180, 180]` e latitudine in `[-90, 90]` | secondo operando, nello stesso CRS della colonna |
 | `output_column` | stringa | `haversine_distance` | nome non vuoto e non già nello schema | colonna aggiunta |
 
 ### Schema
@@ -22,11 +22,11 @@ contratto (`sorted_by`, `row_count`).
 
 ### Righe
 
-1:1 per contratto. Il runner non esegue ancora le operazioni geo e nessun
-esecutore chiama il kernel su una tabella. Il kernel
-(`extended::haversine_distance_m`) riceve **due punti**: l'analisi
-accetta ogni tipo geometrico nella colonna e in `other_wkb`, e che cosa
-valga una riga non puntuale, o nulla, non è ancora deciso.
+1:1: una distanza per riga, dal kernel (`extended::haversine_distance_m`), che
+riceve **due punti**. `other_wkb` deve essere un `Point` (l'analisi lo
+verifica); una geometria nulla dà una distanza nulla, e una riga che non è
+un `Point` ferma il passo con un errore (vedi «Errori»): l'analisi accetta
+ogni tipo nella colonna, perché non conosce le celle.
 
 ### Ordine
 
@@ -44,12 +44,30 @@ In validazione (analisi del contratto):
   (`GEOGRAPHIC_CRS_REQUIRED`); una coordinata di `other_wkb` fuori da
   longitudine e latitudine ammesse (`COORDINATE_OUT_OF_CRS_DOMAIN`);
 - `InvalidPlan`: config con campi sconosciuti, `other_wkb` assente, non
-  esadecimale o WKB non valido nella struttura, `output_column` vuoto.
+  esadecimale, WKB non valido nella struttura o nella validità OGC, o che
+  non è un `Point`; `output_column` vuoto;
+- `Internal`: la decodifica o la validazione OGC di `other_wkb` non
+  conclude.
 
-In esecuzione il kernel rende `ExtendedError`, che nessun esecutore
-traduce ancora in `PlenoraError`: `InvalidGeographicCoordinate` (una
-coordinata non finita o fuori da `[-180, 180]` × `[-90, 90]`),
-`CalcoloNonConcluso` (il calcolo di `geo` va in panico).
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
+
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Poi, per riga:
+
+- `InvalidPlan`: la geometria della riga non è un `Point` (errore del
+  runner, «tipo geometria non supportato»); dal kernel (`ExtendedError`)
+  `InvalidGeographicCoordinate`, una coordinata non finita o fuori da
+  `[-180, 180]` × `[-90, 90]`;
+- `Internal`: dal kernel `CalcoloNonConcluso` (il calcolo di `geo` va in
+  panico).
 
 ### Limiti e deviazioni
 
@@ -59,7 +77,11 @@ coordinata non finita o fuori da `[-180, 180]` × `[-90, 90]`),
   111 195,08 m qui e 110 574,39 m sull'ellissoide WGS 84 (5,6 per mille),
   un grado di longitudine 111 195,08 m qui e 111 319,49 m
   sull'ellissoide.
-- Solo punti, vedi «Righe».
+- Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
+  passo.
+- Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

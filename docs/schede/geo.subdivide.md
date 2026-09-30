@@ -8,9 +8,9 @@ lungo, finché ogni pezzo sta sotto la soglia; linee e `MultiPoint` si
 dividono a blocchi. Una geometria sotto la soglia passa invariata, in una
 riga sola.
 
-Il calcolo per cella è `extensions2::subdivide_wkb`, che lascia l'indice
-della riga d'origine al chiamante; il runner non esegue ancora
-l'operazione.
+Il calcolo per cella è `extensions2::subdivide_wkb`; il runner lo chiama
+su ogni cella non nulla, con la precisione del CRS della colonna, e scrive
+l'indice della riga d'origine.
 
 ### Parametri
 
@@ -46,8 +46,10 @@ Espansione 1:N, per tipo:
   quella del poligono, entro la precisione;
 - `GeometryCollection`: ogni membro per sé.
 
-Ogni parte si valida (OGC). Che cosa esca per una geometria nulla non è
-ancora fissato da nessuna esecuzione a livello di tabella.
+Ogni parte si valida (OGC). Una geometria nulla dà una riga, con la
+geometria nulla e il suo `__parent_index`. `__parent_index` conta da 0.
+Il runner conta le righe prodotte su tutta la tabella: oltre il limite di righe dell'arco d'uscita (`max_output_rows` per un output del
+piano, `max_rows_per_edge` altrimenti), `ResourceLimit`.
 
 ### Ordine
 
@@ -69,14 +71,21 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione (calcolo per cella, messaggi con prefisso `geo.subdivide:`):
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare.
+
+Poi il calcolo per cella (messaggi con prefisso `geo.subdivide:`):
 
 - `InvalidPlan`: WKB malformato o OGC-invalido; taglio che non converge in
   32 livelli; parte prodotta non valida;
 - `Unsupported`: `PrecisionInsufficient` (sotto, «Precisione»); WKB con
   dimensioni Z/M o SRID;
 - `ResourceLimit`: cella d'ingresso o parte oltre il limite di byte per
-  cella;
+  cella; righe prodotte oltre il limite di righe dell'arco;
 - `Internal`: panico di `geo` o `i_overlay`, validazione che non conclude.
 
 ### Limiti e deviazioni
@@ -85,7 +94,10 @@ Le parti di un poligono non sono uniche: due versioni di `i_overlay`
 possono scegliere tagli diversi, con la stessa area totale
 ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Hazard»). Il taglio si ferma a 32 livelli con un errore, non con parti
-sopra la soglia.
+sopra la soglia. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+provvisori»).
 
 ### Precisione
 
@@ -94,7 +106,8 @@ poligoni passano dalla griglia di `i_overlay` e sono in catena, un livello
 sul risultato del precedente: prima di ogni taglio il controllo a priori
 dà a ognuno dei 32 livelli `1/32` di `p / 2` sull'ingombro del pezzo, e
 se lo spostamento della griglia lo supera, o le coordinate sono troppo rade
-per `p`, il taglio non si esegue (`PrecisionInsufficient`). Le foglie non
+per `p`, il taglio non si esegue (`PrecisionInsufficient`). `p` è 1 cm a
+terra nelle unità del CRS della colonna (`Precision::from_crs`). Le foglie non
 sono confrontate con il poligono di partenza: sotto la precisione parti più
 sottili di 1 cm possono fondersi o sparire
 ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).

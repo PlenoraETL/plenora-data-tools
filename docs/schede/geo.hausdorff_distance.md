@@ -11,7 +11,7 @@ dell'altra. I lati non contano.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, lunghezza pari), coordinate nel dominio di validità del CRS dell'ingresso | secondo operando, nello stesso CRS della colonna |
+| `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, lunghezza pari) di una geometria valida OGC, coordinate nel dominio di validità del CRS dell'ingresso | secondo operando, nello stesso CRS della colonna |
 | `output_column` | stringa | `hausdorff_distance` | nome non vuoto e non già nello schema | colonna aggiunta |
 
 ### Schema
@@ -22,11 +22,10 @@ contratto (`sorted_by`, `row_count`).
 
 ### Righe
 
-1:1 per contratto. Il runner non esegue ancora le operazioni geo e nessun
-esecutore chiama il kernel su una tabella. Il kernel rende «nessun
-valore» (`None`) quando una delle due geometrie non ha coordinate; la
-cella che ne nascerà, come quella di una geometria nulla, non è ancora
-decisa da nessun esecutore.
+1:1: una distanza per riga, dal kernel `extended::hausdorff_distance`
+(riga, `other_wkb`). Una geometria nulla dà una distanza nulla, e anche
+una geometria senza coordinate, da una parte o dall'altra (il kernel
+rende «nessun valore»).
 
 ### Ordine
 
@@ -46,16 +45,30 @@ In validazione (analisi del contratto):
   dominio di validità del CRS (`COORDINATE_OUT_OF_CRS_DOMAIN`);
 - `InvalidPlan`: config con campi sconosciuti, `other_wkb` assente, non
   esadecimale o WKB non valido nella struttura (anelli aperti,
-  coordinate non finite, byte residui), `output_column` vuoto.
+  coordinate non finite, byte residui) o nella validità OGC,
+  `output_column` vuoto;
+- `Internal`: la decodifica o la validazione OGC di `other_wkb` non
+  conclude.
 
-`other_wkb` non passa dalla validazione OGC in analisi: la fa il kernel.
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
-In esecuzione il kernel (`extended::hausdorff_distance`) rende
-`ExtendedError`, che nessun esecutore traduce ancora in `PlenoraError`:
-`InvalidInput` (coordinate non finite o geometria non valida OGC, da
-una parte o dall'altra), `WorkLimit` (più coppie di vertici di
-`max_coordinate_pairs`), `IndexOverflow`, `ValidazioneNonConclusa` e
-`CalcoloNonConcluso` (validazione o calcolo interrotti).
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Dal kernel (`extended::hausdorff_distance`, `ExtendedError`), per riga:
+
+- `InvalidPlan`: `InvalidInput` (coordinate non finite o geometria della
+  riga non valida OGC; `other_wkb` è già validata in analisi),
+  `WorkLimit` (il prodotto dei vertici delle due geometrie supera
+  `10^8` coppie, il tetto che il runner passa al kernel), `IndexOverflow`;
+- `Internal`: `ValidazioneNonConclusa` e `CalcoloNonConcluso`
+  (validazione o calcolo interrotti).
 
 ### Limiti e deviazioni
 
@@ -65,7 +78,11 @@ una parte o dall'altra), `WorkLimit` (più coppie di vertici di
   ma lontano dai suoi vertici pesa per la distanza da quei vertici, e il
   risultato può essere maggiore (vedi l'esempio). Nessuna densificazione.
 - Il lavoro è limitato da `max_coordinate_pairs` (prodotto dei vertici
-  delle due geometrie), un argomento del kernel e non della config.
+  delle due geometrie): il runner passa `10^8` per riga, l'ordine di
+  `MAX_NODING_WORK` dei kernel; non è un parametro della config.
+- Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

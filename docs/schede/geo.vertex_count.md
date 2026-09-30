@@ -18,9 +18,8 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1 per contratto. Il kernel (`operations::vertex_count`) lavora su una
-geometria alla volta e nessun adapter lo chiama ancora sulle righe: il
-trattamento di una cella nulla non è definito da codice eseguito.
+1:1: un conteggio per riga, dal kernel `operations::vertex_count`; una
+geometria nulla dà una cella nulla.
 
 ### Ordine
 
@@ -39,21 +38,32 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o
   di soli spazi.
 
-In esecuzione, dal kernel, per geometria (`OperationError`, che nessun
-codice traduce ancora in `PlenoraError`):
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
-- `InvalidInput`: la geometria non supera la validazione OGC;
-- `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
-  barriera (il messaggio porta solo la forma del payload);
-- `Internal`: il conteggio non entra in `u64` (mai sulle piattaforme
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Dal kernel (`OperationError`), per geometria:
+
+- `InvalidPlan` (`InvalidInput`): la geometria non supera la validazione
+  OGC;
+- `Internal` (`ValidazioneNonConclusa`, `Internal`): la validazione OGC va
+  in panico dentro la barriera (il messaggio porta solo la forma del
+  payload), o il conteggio non entra in `u64` (mai sulle piattaforme
   supportate).
 
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
 Il conteggio è quello di `ST_NPoints` di PostGIS: le coordinate ripetute
-contano tutte.
+contano tutte. Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

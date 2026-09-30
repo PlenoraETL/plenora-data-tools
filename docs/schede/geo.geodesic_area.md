@@ -26,10 +26,9 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 
 1:1: un'area per riga. Il kernel (`extended_algorithms::geodesic_area_m2`)
 accetta solo `Polygon` e `MultiPolygon`; un poligono o un multi-poligono
-vuoto dà `-0.0`. Il runner non esegue ancora le operazioni geo ([README,
-«Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)): che cosa
-rendano una cella nulla e una riga di altro tipo lo fisserà l'esecutore
-geo.
+vuoto dà `-0.0`. Una geometria nulla dà un'area nulla; una riga di altro
+tipo ferma il passo con un errore (vedi «Errori»): l'analisi accetta ogni
+tipo nella colonna, perché non conosce le celle.
 
 ### Ordine
 
@@ -48,14 +47,27 @@ CRS, config):
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non geografico.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta la
-geometria con `InvalidInput` (coordinate non finite o geometria non valida
-per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
-`InvalidGeographicCoordinate` (longitudine fuori da `[-180, 180]` o
-latitudine fuori da `[-90, 90]`), `UnsupportedGeometry` (tipo diverso da
-`Polygon` e `MultiPolygon`), `CalcoloNonConcluso` (panico di `geo`),
-`InvalidOutput` (area non finita).
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
+
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Poi, per riga:
+
+- `InvalidPlan`: una geometria diversa da `Polygon` e `MultiPolygon`
+  (errore del runner, «tipo geometria non supportato», prima del kernel);
+  dal kernel (`ExtendedAlgorithmError`) `InvalidInput` (coordinate non
+  finite o geometria non valida per l'OGC), `InvalidGeographicCoordinate`
+  (longitudine fuori da `[-180, 180]` o latitudine fuori da `[-90, 90]`),
+  `InvalidOutput` (area non finita);
+- `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
+  conclude) e `CalcoloNonConcluso` (panico di `geo`).
 
 ### Limiti e deviazioni
 
@@ -71,6 +83,9 @@ latitudine fuori da `[-90, 90]`), `UnsupportedGeometry` (tipo diverso da
   longitudini da una parte e dall'altra di ±180, non è quello che il
   piano lon/lat disegna.
 - Un poligono vuoto dà `-0.0`, non `0.0`.
+- Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

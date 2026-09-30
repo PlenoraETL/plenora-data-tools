@@ -27,10 +27,12 @@ senza tipi dichiarati. I metadati di schema e le proprietà del contratto
 
 ### Righe
 
-1:1 per contratto. Il kernel (`construction::point_from_lon_lat`) riceve
-due `f64` e nessun adapter lo chiama ancora sulle righe: una x o una y
-nulla, e la conversione di una colonna `int64` in `f64`, non sono definite
-da codice eseguito (la colonna prodotta è dichiarata non nullable).
+1:1: un punto per riga. Il runner legge le due colonne (`float64`, o
+`int64` convertito in `f64` solo entro `2^53` in modulo, dove la
+conversione è esatta), chiama il kernel (`construction::point_from_lon_lat`)
+riga per riga e controlla che il punto stia nel dominio di validità del
+CRS prodotto. Una x o una y nulla è un errore: la colonna prodotta è
+dichiarata non nullable ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -49,19 +51,32 @@ In validazione (analisi del contratto):
   tabella integrata o scritto come definizione (WKT, PROJJSON…) diversa da
   quella del piano; CRS geografico, o proiettato senza unità lineare.
 
-In esecuzione, dal kernel, per riga (`ConstructionError`, che nessun codice
-traduce ancora in `PlenoraError`):
+In esecuzione, nel runner:
+
+- `InvalidPlan`: un valore `int64` oltre `2^53` in modulo (non esatto in
+  `f64`), in una delle due colonne; una x o una y nulla;
+- `Crs`: il punto sta fuori dal dominio di validità del CRS prodotto.
+
+Dal kernel, per riga (`ConstructionError`, che il runner porta in
+`PlenoraError`: `Internal` per `ValidazioneNonConclusa`, `InvalidPlan` per
+le altre):
 
 - `NonFiniteCoordinate`: x o y è NaN o infinita (il messaggio chiama le due
   coordinate `lon` e `lat`, i nomi del kernel d'origine).
 
+La conversione delle due colonne precede i punti; poi il primo errore è
+quello della prima riga, senza diagnostica per riga.
+
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
-Il kernel controlla solo che le coordinate siano finite, non che stiano
-nel dominio del CRS. La conversione da `int64` a `f64` sarebbe esatta solo
-fino a `2^53` in modulo. Il catalogo chiede un CRS proiettato: punti in
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+Il kernel controlla solo che le coordinate siano finite; il dominio del CRS
+lo controlla il runner su ogni punto. Un `int64` oltre `2^53` in modulo si
+rifiuta invece di arrotondarsi. Una coordinata nulla è un errore, non un
+punto nullo come nel progetto d'origine. Il catalogo chiede un CRS proiettato: punti in
 longitudine e latitudine non si costruiscono qui
 ([README, «CRS integrati»](../README.md#crs-integrati)).
 

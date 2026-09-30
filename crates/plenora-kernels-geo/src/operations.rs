@@ -3,10 +3,9 @@
 //!
 //! Ogni kernel valida l'ingresso con la validazione OGC dietro la barriera
 //! dei panici, e le trasformazioni validano anche l'uscita: una geometria
-//! sbagliata e' un errore, mai un risultato. Nessun adapter chiama ancora
-//! questi kernel sulle righe di una tabella (il runner non esegue le
-//! operazioni geo), quindi i null e la traduzione di [`OperationError`] in
-//! `PlenoraError` non sono ancora definiti qui.
+//! sbagliata e' un errore, mai un risultato. I null e la traduzione di
+//! [`OperationError`] in `PlenoraError` non si definiscono qui: li decide il
+//! runner (`plenora-pipeline`), che chiama questi kernel sulle righe.
 
 use crate::rust_backend::buffer::{buffer_controllato, ErroreBuffer, Estremita};
 use crate::rust_backend::griglia;

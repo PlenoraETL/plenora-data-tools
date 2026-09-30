@@ -13,12 +13,12 @@ concavo; molto grande, è l'inviluppo convesso.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `concavity` | numero | obbligatorio | finito, maggiore di zero | concavità relativa: più piccola, più concavo |
-| `length_threshold` | numero | non deciso | finito, non negativo | lati più corti di così non si scavano; `0` scava ogni lato |
+| `length_threshold` | numero | `0` | finito, non negativo | lati più corti di così non si scavano; `0` scava ogni lato |
 
-`length_threshold` è facoltativo per l'analisi, ma il kernel
-(`extended::concave_hull`) lo riceve sempre esplicito, insieme al limite
-di coordinate `max_coordinates`, e nessun esecutore lo chiama ancora: il
-valore usato quando manca non è deciso.
+Il kernel (`extended::concave_hull`) riceve `length_threshold` sempre
+esplicito, insieme al limite di coordinate `max_coordinates`: il runner
+passa `0` quando manca (ogni lato si può scavare) e `MAX_CELL_COORDINATES`
+(4 194 304) come limite.
 
 ### Schema
 
@@ -31,9 +31,9 @@ ereditate si tolgono dal campo. Le proprietà del contratto (`sorted_by`,
 
 ### Righe
 
-1:1 per contratto. Il runner non esegue ancora le operazioni geo e nessun
-esecutore chiama il kernel su una tabella: l'analisi conserva la
-nullabilità della colonna, il kernel lavora su una geometria alla volta.
+1:1: il runner chiama il kernel (`extended::concave_hull`) su ogni cella non
+nulla, in parallelo, e rimette la geometria al suo posto; una cella
+nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 Una geometria senza coordinate dà un `POLYGON EMPTY`.
 
 ### Ordine
@@ -55,21 +55,38 @@ In validazione (analisi del contratto):
   (`PROJECTED_CRS_REQUIRED`) o senza unità lineare
   (`LINEAR_UNIT_REQUIRED`).
 
-In esecuzione il kernel rende `ExtendedError`, che nessun esecutore
-traduce ancora in `PlenoraError`:
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
+`ValidazioneNonConclusa` e `CalcoloNonConcluso`, `InvalidPlan` per le
+altre):
 
 - `InvalidInput`: coordinate NaN o infinite o geometria non valida OGC;
-- `CoordinateLimit`: più coordinate di `max_coordinates`;
+- `CoordinateLimit`: più coordinate di `max_coordinates` (il runner passa
+  `MAX_CELL_COORDINATES`, 4 194 304);
 - `InvalidOutput`: il poligono prodotto non è valido OGC, come per un
   punto solo, due punti distinti o punti tutti allineati;
 - `CalcoloNonConcluso`: `geo` va in panico, per esempio con coordinate
   vicine al massimo di `f64`; `ValidazioneNonConclusa`: la validazione
   OGC non conclude.
 
+Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
+è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
 
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 Il lavoro è limitato da `max_coordinates`, un argomento del kernel e non
-della config. Il poligono non è quello di `ST_ConcaveHull` di PostGIS, che
+della config: nel runner `MAX_CELL_COORDINATES`. Il poligono non è quello
+di `ST_ConcaveHull` di PostGIS, che
 ha altri parametri (frazione dell'area convessa, buchi ammessi).
 
 ### Precisione

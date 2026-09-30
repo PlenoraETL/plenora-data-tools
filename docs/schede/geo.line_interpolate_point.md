@@ -23,11 +23,13 @@ i metadati di schema e le proprietà del contratto (`sorted_by`,
 ### Righe
 
 1:1. Il kernel (`extended_algorithms::line_interpolate_point`) riceve una
-`LineString` e rende nessun punto se è vuota. Il runner non esegue ancora
-le operazioni geo ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)):
-che cosa rendano una cella nulla, una linea vuota e una riga di altro tipo
-(anche `MultiLineString`) lo fisserà l'esecutore geo. L'analisi non
-controlla i tipi dichiarati dell'ingresso.
+`LineString` e rende nessun punto se è vuota. Il runner lo chiama su ogni
+cella non nulla, in parallelo: una cella nulla resta nulla; una linea
+vuota dà null, e se la colonna d'uscita (con la nullabilità di quella
+d'ingresso) non ammette null il passo si rifiuta con `InvalidPlan`; una
+riga di altro tipo (anche `MultiLineString`) è `InvalidPlan` («tipo
+geometria non supportato»). L'analisi non controlla i tipi dichiarati
+dell'ingresso ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -47,13 +49,29 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta la
-linea con `InvalidInput` (coordinate non finite o meno di due punti
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi, per riga: `InvalidPlan` per una geometria che non è una
+`LineString`. Il kernel rende `ExtendedAlgorithmError`, che il runner
+porta in `Internal` per `Internal`, `ValidazioneNonConclusa` e
+`CalcoloNonConcluso`, in `InvalidPlan` per le altre. Rifiuta la linea con `InvalidInput` (coordinate non finite o meno di due punti
 distinti; `ValidazioneNonConclusa` se la validazione non conclude) e con
 `CalcoloNonConcluso` (panico di `geo`).
 
+Dopo il kernel, `InvalidPlan` per una linea vuota in una colonna che il
+contratto dichiara non nullable (sopra, «Righe»). Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
+
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 
 - Solo `LineString` nel kernel; solo CRS proiettati.
 - La frazione è della lunghezza euclidea planare, non geodetica.

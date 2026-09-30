@@ -10,14 +10,15 @@ punti in cui la lama la tocca, entro `tolerance`.
 
 La lama arriva dalla config (`other_wkb`), nello stesso CRS della colonna.
 L'esecuzione Arrow (`rust_backend::arrow::split_batches`) riceve una lama
-per riga, allineata alle sorgenti; il piano ne dichiara una sola. Il runner
-non la chiama ancora.
+per riga, allineata alle sorgenti: il runner la chiama su tutta la tabella
+con la stessa lama su ogni riga ([README, «Operazioni
+geo»](../README.md#operazioni-geo)).
 
 ### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `other_wkb` | stringa | obbligatorio | WKB esadecimale, coordinate nel dominio del CRS della colonna | la lama: linee (`LineString`, `MultiLineString`, collezioni di linee) per le sorgenti poligonali; per le sorgenti lineari anche punti e contorni di poligoni |
+| `other_wkb` | stringa | obbligatorio | WKB esadecimale di una geometria valida (OGC), coordinate nel dominio del CRS della colonna | la lama: linee (`LineString`, `MultiLineString`, collezioni di linee) per le sorgenti poligonali; per le sorgenti lineari anche punti e contorni di poligoni |
 | `tolerance` | numero | `0` | finito, `>= 0` | distanza entro cui un punto della lama taglia una sorgente `LineString` |
 
 `tolerance` vale solo per le sorgenti `LineString`: sulle poligonali si
@@ -38,9 +39,9 @@ se l'ingresso non ha una dichiarazione `exact` che li restringa. Resta
 Espansione 1:N: ogni sorgente dà le sue parti (una sola se la lama non la
 taglia). Su una sorgente lineare tagli consecutivi distanti al più
 `tolerance` lungo la linea si fondono in uno; un tratto collineare della lama taglia ai suoi
-due estremi. Una riga con la sorgente o la lama
-nulla non produce righe, ma una cella non nulla dell'altro lato si
-decodifica e si valida lo stesso. Le facce del taglio che cadono fuori
+due estremi. La lama della config non è mai nulla: una riga con la
+sorgente nulla non produce righe, e la lama si decodifica e si valida lo
+stesso. `__parent_index` conta da 0. Le facce del taglio che cadono fuori
 dalla sorgente (una lama chiusa che sporge) si scartano.
 
 ### Ordine
@@ -54,8 +55,9 @@ dall'inizio alla fine della linea.
 In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `other_wkb` mancante, non
-  esadecimale o strutturalmente malformato; `tolerance` negativa o non
-  finita;
+  esadecimale, strutturalmente malformato o non valido per l'OGC;
+  `tolerance` negativa o non finita;
+- `Internal`: la validazione OGC di `other_wkb` non conclude;
 - `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
   colonna non è riconoscibile come WKB; una colonna `__parent_index` esiste
   già;
@@ -64,14 +66,22 @@ In validazione (analisi del contratto):
 - `Crs`: colonna senza CRS risolto o CRS non proiettato; coordinate della
   lama fuori dal dominio del CRS.
 
-In esecuzione (esecuzione Arrow):
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare.
 
-- `InvalidPlan`: righe di sorgenti e lame non allineate; sorgente di tipo
+Poi l'esecuzione Arrow (vince la prima riga che fallisce):
+
+- `InvalidPlan`: sorgente di tipo
   diverso da `LineString`, `Polygon`, `MultiPolygon`; lama di tipo non
   ammesso; WKB malformato o OGC-invalido; limiti superati (coordinate per
   cella, per ciascun ingresso e per la loro somma; 100.000.000 coppie di
-  noding o test d'intersezione; righe d'uscita oltre `max_output_rows`,
-  cumulate su tutte le righe); area non conservata (`AreaMismatch`) o bordo
+  noding o test d'intersezione; righe d'uscita oltre il limite di righe
+  dell'arco, `max_output_rows` per un output del piano e
+  `max_rows_per_edge` altrimenti, cumulate su tutte le righe); area non conservata (`AreaMismatch`) o bordo
   non ricoperto (`CoverageMismatch`);
 - `ResourceLimit`: cella oltre il limite di byte; prenotazione di memoria
   fallita;
@@ -95,6 +105,10 @@ In esecuzione (esecuzione Arrow):
   parti tenute; il limite di coordinate vale per ciascun ingresso e per la
   somma.
 - Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
+- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+  provvisori»).
 
 ### Precisione
 
@@ -115,7 +129,8 @@ Sorgenti lineari: prima del taglio la stessa guardia di spaziatura, che
 tiene il margine numerico di `split_line` sotto `p / 2`: un punto a più di
 1 cm dalla linea, con `tolerance` nulla, non taglia.
 
-Nessuna griglia di `i_overlay`. `p` è la precisione del CRS della colonna.
+Nessuna griglia di `i_overlay`. `p` è la precisione del CRS della colonna
+(`Precision::from_crs`, 1 cm a terra).
 
 ### Complessità
 

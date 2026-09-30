@@ -2,12 +2,10 @@
 
 Aggiunge alla sinistra una colonna booleana che dice se la sua geometria
 sta dentro almeno una geometria della destra (kernel
-`analysis::within_indexes`, predicato `within` del join spaziale). «Dentro»
-è il `contains` di `geo` letto dalla destra: una geometria sul solo bordo,
-come un punto sul lato di un poligono, non è dentro. Il runner non esegue
-ancora le operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): lo schema qui descritto è
-quello dell'analisi del contratto, i valori quelli del kernel.
+`analysis::within_indexes_validated`, predicato `within` del join
+spaziale; [README, «Operazioni geo»](../README.md#operazioni-geo)).
+«Dentro» è il `contains` di `geo` letto dalla destra: una geometria sul
+solo bordo, come un punto sul lato di un poligono, non è dentro.
 
 ### Parametri
 
@@ -27,10 +25,11 @@ sono la fusione dei due lati; le proprietà del contratto della sinistra
 
 1:1 con la sinistra; la destra non aggiunge righe. Il kernel rende le
 posizioni delle righe sinistre dentro almeno una destra, che nella colonna
-sono `true`, le altre `false`. Le geometrie nulle o vuote, da un lato o
-dall'altro, non sono mai dentro. Il passaggio dalle posizioni alla colonna,
-e il valore per una geometria sinistra nulla (`false` o nullo), non sono
-ancora codice di questo repository.
+sono `true`, le altre `false`. Una geometria sinistra nulla dà un valore
+nullo; una vuota, o dentro solo geometrie destre nulle o vuote, `false`.
+Le coppie (sinistra, destra) che il kernel conferma sono al più il limite
+di righe dell'arco d'uscita (`max_output_rows` se il passo è un output
+del piano, `max_rows_per_edge` altrimenti).
 
 ### Ordine
 
@@ -51,25 +50,40 @@ In validazione (analisi del contratto):
 - `Crs`: un lato senza CRS risolto, un CRS non proiettato (o senza unità
   lineare), CRS dei due lati non equivalenti.
 
-In esecuzione (kernel `analysis::within_indexes`, errore `AnalysisError`
-che avvolge `SpatialJoinError`; nessun codice di questo repository lo
-traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
+([README, «Operazioni geo»](../README.md#operazioni-geo)):
 
-- `InvalidPairLimit`: il limite delle coppie che il chiamante passa al
-  kernel è zero;
-- `PairLimitExceeded`: le coppie (sinistra, destra) confermate superano il
-  limite; conta ogni destra che contiene una sinistra, anche se ne basta
-  una;
-- `NonFiniteCoordinate`, `InvalidGeometry`: una geometria ha coordinate
-  NaN o infinite o non supera la validazione OGC (l'errore porta il lato e
-  la posizione, mai i valori);
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione o il
-  predicato di `geo` non ha concluso;
-- `IndexOverflow`: un numero di righe non entra in `u64`.
+- `Schema`: il contratto di un lato dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `InvalidPlan`: la cella viola il contratto WKB o non supera la
+  validazione OGC (`Unsupported` per dimensioni Z o M, `Internal` se la
+  validazione non conclude, `ResourceLimit` per una cella oltre il limite
+  di byte).
+
+Dal kernel (`analysis::within_indexes_validated`, errore `AnalysisError`
+che avvolge `SpatialJoinError`, sulle geometrie già validate), nella
+categoria del passo geo indicata fra parentesi:
+
+- `PairLimitExceeded` (`InvalidPlan`): le coppie (sinistra, destra)
+  confermate superano il limite di righe dell'arco; conta ogni destra che
+  contiene una sinistra, anche se ne basta una;
+- `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
+  l'indice o il predicato di `geo` non ha concluso, o un'invariante
+  interna violata;
+- `IndexOverflow` (`InvalidPlan`): un numero di righe non entra in `u64`.
+
+Il primo errore è quello della prima riga, in ordine di riga, senza
+diagnostica per riga ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga»).
 
 ### Limiti e deviazioni
 
-Nessuno oltre ai limiti comuni.
+Il limite delle coppie conta tutte le destre che contengono una
+sinistra, non solo la prima: una sinistra dentro molte destre sovrapposte
+può superarlo anche se la colonna ha una riga per riga sinistra.
 
 ### Precisione
 

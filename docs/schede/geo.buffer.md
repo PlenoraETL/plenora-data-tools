@@ -29,9 +29,9 @@ si tolgono dal campo.
 
 ### Righe
 
-1:1 per contratto. Il kernel (`operations::buffer_with_cap`) lavora su una
-geometria alla volta e nessun adapter lo chiama ancora sulle righe: il
-trattamento di una cella nulla non è definito da codice eseguito.
+1:1: il runner chiama il kernel (`operations::buffer_with_cap`) su ogni cella non
+nulla, in parallelo, e rimette la geometria al suo posto; una cella
+nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -50,8 +50,16 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
-In esecuzione, dal kernel, per geometria (`OperationError`, che nessun
-codice traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
+`Internal` per `Internal`, `ValidazioneNonConclusa` e
+`CalcoloNonConcluso`, `Unsupported` per `PrecisionInsufficient`,
+`InvalidPlan` per le altre):
 
 - `InvalidInput`: la geometria non supera la validazione OGC;
 - `PrecisionInsufficient`: la griglia di `i_overlay`, sommata al rientro
@@ -63,13 +71,20 @@ codice traduce ancora in `PlenoraError`):
   messaggio porta solo la forma del payload);
 - `InvalidParameter`: `distance` non finita (l'analisi la rifiuta prima).
 
+Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
+è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
-Il kernel riceve la precisione come argomento esplicito (`Precision`):
-nessun codice la ricava ancora dal CRS della colonna con
-`Precision::from_crs`. Non ci sono i parametri di GEOS e PostGIS per le
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+Il runner passa al kernel la precisione di 1 cm a terra nelle unità del
+CRS della colonna (`Precision::from_crs`, calcolata in validazione;
+[README, «Operazioni geo»](../README.md#operazioni-geo), voce
+«Precisione»). Non ci sono i parametri di GEOS e PostGIS per le
 giunzioni (`join`, `mitre_limit`), il numero di segmenti per quarto di
 cerchio (qui il passo degli archi viene dalla precisione) e il buffer da un
 solo lato. Nessun controllo a posteriori del risultato contro la

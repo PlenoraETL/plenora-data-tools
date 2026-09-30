@@ -23,12 +23,11 @@ restano.
 
 ### Righe
 
-1:1: la geometria di ogni riga diventa la sua densificata. Il kernel
-(`extended_algorithms::densify`) lavora su una geometria alla volta e
-riceve il massimo di coordinate d'uscita come argomento. Il runner non
-esegue ancora le operazioni geo ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)):
-la resa di una cella nulla e il limite di coordinate per piano li fisserà
-l'esecutore geo.
+1:1: la geometria di ogni riga diventa la sua densificata. Il runner
+chiama il kernel (`extended_algorithms::densify`) su ogni cella non
+nulla, in parallelo, con `MAX_CELL_COORDINATES` (4 194 304) come massimo
+di coordinate d'uscita per geometria; una cella nulla resta nulla
+([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -49,9 +48,16 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta la
-geometria con `InvalidInput` (coordinate non finite o geometria non valida
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
+`Internal` per `Internal`, `ValidazioneNonConclusa` e
+`CalcoloNonConcluso`, in `InvalidPlan` per le altre. Rifiuta la geometria
+con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
 `IndexOverflow` (conteggio delle coordinate oltre `u64`), `OutputLimit`
 (coordinate d'uscita stimate, prima di allocare, o contate, dopo, oltre il
@@ -59,11 +65,20 @@ limite del chiamante), `CalcoloNonConcluso` (panico di `geo`),
 `InvalidOutput` (uscita non valida per l'OGC). `UnsupportedGeometry`
 (`Line`, `Rect`, `Triangle`) non si raggiunge da una colonna WKB.
 
+Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
+è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
 
-- Il limite di coordinate d'uscita è un argomento del kernel, senza valore
-  predefinito qui. In una `GeometryCollection` vale per il totale e, di
-  nuovo, per ogni membro.
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
+
+- Il limite di coordinate d'uscita è un argomento del kernel: il runner
+  passa `MAX_CELL_COORDINATES` (4 194 304), non un valore della config. In
+  una `GeometryCollection` vale per il totale e, di nuovo, per ogni membro.
 - Solo CRS proiettati: la densificazione è planare, non lungo le
   geodetiche.
 - I lati di lunghezza zero (vertici consecutivi uguali) restano come sono.

@@ -20,12 +20,12 @@ contratto (`sorted_by`, `row_count`).
 
 ### Righe
 
-1:1 per contratto. Il runner non esegue ancora le operazioni geo e nessun
-esecutore chiama il kernel su una tabella. Il kernel
-(`extended::geodesic_line_length_m`) riceve **una `LineString`** (vuota o
-di un solo vertice: 0): l'analisi accetta ogni tipo geometrico, e che
-cosa valgano una multilinea, un poligono, un punto o una riga nulla non è
-ancora deciso.
+1:1: una lunghezza per riga, dal kernel
+(`extended::geodesic_line_length_m`), che riceve **una `LineString`**
+(vuota o di un solo vertice: 0). Una geometria nulla dà una lunghezza
+nulla; una multilinea, un poligono o un punto fermano il passo con un
+errore (vedi «Errori»): l'analisi accetta ogni tipo nella colonna, perché
+non conosce le celle.
 
 ### Ordine
 
@@ -43,10 +43,25 @@ In validazione (analisi del contratto):
   (`GEOGRAPHIC_CRS_REQUIRED`);
 - `InvalidPlan`: config con campi sconosciuti, `output_column` vuoto.
 
-In esecuzione il kernel rende `ExtendedError`, che nessun esecutore
-traduce ancora in `PlenoraError`: `InvalidGeographicCoordinate` (un
-vertice non finito o fuori da `[-180, 180]` × `[-90, 90]`),
-`CalcoloNonConcluso` (il calcolo di `geo` va in panico).
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
+
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Poi, per riga:
+
+- `InvalidPlan`: la geometria non è una `LineString` (errore del runner,
+  «tipo geometria non supportato»); dal kernel (`ExtendedError`)
+  `InvalidGeographicCoordinate`, un vertice non finito o fuori da
+  `[-180, 180]` × `[-90, 90]`;
+- `Internal`: dal kernel `CalcoloNonConcluso` (il calcolo di `geo` va in
+  panico).
 
 ### Limiti e deviazioni
 
@@ -54,7 +69,10 @@ vertice non finito o fuori da `[-180, 180]` × `[-90, 90]`),
   geografico: per ED50, Monte Mario, NAD27 o OSGB36 la lunghezza si
   scosta di parti su centomila, sopra 1 cm su linee di qualche centinaio
   di metri, senza errore (come [`geo.geodesic_distance`](#geogeodesic_distance)).
-- Solo `LineString`, vedi «Righe».
+- Solo `LineString`, vedi «Righe»: una `MultiLineString` ferma il passo.
+- Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

@@ -110,7 +110,7 @@ pub struct ScaleConfig {
     pub y_factor: f64,
     /// Facoltativo, finito: x dell'origine che resta ferma. Il valore
     /// usato quando manca non e' deciso qui: il kernel riceve l'origine
-    /// esplicita e nessun esecutore lo chiama ancora.
+    /// esplicita, e il runner passa `0`.
     pub x_origin: Option<f64>,
     /// Facoltativo, finito: y dell'origine, come `x_origin`.
     pub y_origin: Option<f64>,
@@ -124,8 +124,8 @@ pub struct RotateConfig {
     /// antiorario.
     pub degrees: f64,
     /// Facoltativo, finito: x del centro di rotazione. Il valore usato
-    /// quando manca non e' deciso qui: il kernel riceve il centro esplicito
-    /// e nessun esecutore lo chiama ancora.
+    /// quando manca non e' deciso qui: il kernel riceve il centro esplicito,
+    /// e il runner passa `0`.
     pub x_origin: Option<f64>,
     /// Facoltativo, finito: y del centro di rotazione, come `x_origin`.
     pub y_origin: Option<f64>,
@@ -140,7 +140,7 @@ pub struct ConcaveHullConfig {
     pub concavity: f64,
     /// Facoltativo, finito e non negativo: lunghezza sotto la quale un
     /// lato non si scava. Il valore usato quando manca non e' deciso qui:
-    /// il kernel lo riceve esplicito e nessun esecutore lo chiama ancora.
+    /// il kernel lo riceve esplicito, e il runner passa `0`.
     pub length_threshold: Option<f64>,
 }
 

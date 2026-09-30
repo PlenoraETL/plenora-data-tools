@@ -35,12 +35,11 @@ contratto (`sorted_by`, `row_count`) restano.
 ### Righe
 
 1:1: un referto per riga. Il kernel (`extended_algorithms::geometry_diagnostics`)
-descrive una geometria alla volta. Il runner non esegue ancora le
-operazioni geo ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)):
-che cosa renda una cella nulla lo fisserà l'esecutore geo, come la
-decodifica, che per descrivere una geometria non valida non deve
-rifiutarla. Dal WKB validato nella struttura non arrivano coordinate non
-finite: `is_finite` falso si vede solo con geometrie costruite altrove.
+descrive una geometria alla volta. Una geometria nulla dà dieci celle
+nulle. Il runner verifica solo la struttura WKB e il dominio del CRS, non
+la validità OGC: una geometria non valida si descrive, non si rifiuta.
+Dal WKB validato nella struttura non arrivano coordinate non finite:
+`is_finite` falso si vede solo con geometrie costruite altrove.
 
 ### Ordine
 
@@ -60,11 +59,21 @@ config, CRS, nomi):
 - `Crs`: CRS della colonna assente o non risolto (serve un CRS noto, di
   qualunque tipo).
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel non rifiuta
-le geometrie non valide; rifiuta solo con `ValidazioneNonConclusa` (la
-validazione non conclude: il referto direbbe un verdetto che non esiste) e
-`IndexOverflow` (conteggio oltre `u64`).
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
+
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Il kernel (`ExtendedAlgorithmError`) non rifiuta le geometrie non valide;
+rifiuta solo con `ValidazioneNonConclusa` (la validazione non conclude: il
+referto direbbe un verdetto che non esiste), che diventa `Internal`, e
+`IndexOverflow` (conteggio oltre `u64`), che diventa `InvalidPlan`.
 
 ### Limiti e deviazioni
 
@@ -75,6 +84,11 @@ validazione non conclude: il referto direbbe un verdetto che non esiste) e
   auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
   con in più il rifiuto degli anelli con una punta
   (`anello con auto-intersezione`).
+- Una coordinata fuori dal dominio del CRS non si descrive: il controllo
+  del runner prima del kernel ferma il passo con `Crs`.
+- Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

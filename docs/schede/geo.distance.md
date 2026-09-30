@@ -10,13 +10,13 @@ geometria vuota, da una parte o dall'altra, il kernel non dà una distanza.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `other_wkb` | stringa | obbligatorio | WKB in esadecimale (cifre maiuscole o minuscole), solo XY, senza SRID, coordinate nel dominio del CRS dell'ingresso | secondo operando, nel CRS della colonna geometria |
+| `other_wkb` | stringa | obbligatorio | WKB in esadecimale (cifre maiuscole o minuscole) di una geometria valida OGC, solo XY, senza SRID, coordinate nel dominio del CRS dell'ingresso | secondo operando, nel CRS della colonna geometria |
 | `output_column` | stringa | `distance` | nome non vuoto (non di soli spazi) e non già presente nell'ingresso | colonna aggiunta |
 
 L'ingresso ha una sola colonna geometria: il secondo operando arriva dalla
 config ed è assunto nello stesso CRS, che nessun dato può confermare.
-L'analisi ne verifica la struttura WKB e il dominio delle coordinate, non
-la validità OGC, che controlla il kernel.
+L'analisi ne verifica la struttura WKB, la validità OGC e il dominio delle
+coordinate.
 
 ### Schema
 
@@ -26,10 +26,10 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1 per contratto. Il kernel (`operations::distance`) lavora su una coppia
-di geometrie alla volta e nessun adapter lo chiama ancora sulle righe: il
-trattamento di una cella nulla, e la resa del caso senza distanza (geometria
-vuota), non sono definiti da codice eseguito.
+1:1: una distanza per riga, dal kernel `operations::distance` (riga,
+`other_wkb`). Una geometria nulla dà una distanza nulla; una geometria
+vuota, da una parte o dall'altra, anche: il kernel non ha una distanza da
+rendere.
 
 ### Ordine
 
@@ -50,24 +50,37 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti o senza `other_wkb`;
   `other_wkb` vuoto, di lunghezza dispari o con caratteri non esadecimali,
   o con una struttura WKB non valida (conteggi, anelli non chiusi, byte in
-  coda, coordinate non finite, oltre 64 MiB o 64 livelli d'annidamento);
-  `output_column` vuoto o di soli spazi.
+  coda, coordinate non finite, oltre 64 MiB o 64 livelli d'annidamento),
+  o che non supera la validazione OGC; `output_column` vuoto o di soli
+  spazi;
+- `Internal`: la decodifica o la validazione OGC di `other_wkb` non
+  conclude.
 
-In esecuzione, dal kernel, per geometria (`OperationError`, che nessun
-codice traduce ancora in `PlenoraError`):
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
-- `InvalidInput`: la geometria della riga o `other_wkb` non supera la
-  validazione OGC;
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
-  calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
-  solo la forma del payload).
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Dal kernel (`OperationError`), per geometria:
+
+- `InvalidPlan` (`InvalidInput`): la geometria della riga non supera la
+  validazione OGC (`other_wkb` l'ha già superata in analisi);
+- `Internal` (`ValidazioneNonConclusa`, `CalcoloNonConcluso`): la
+  validazione OGC o il calcolo di `geo` vanno in panico dentro la
+  barriera (il messaggio porta solo la forma del payload).
 
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
 Il secondo operando è uno solo per tutto il passo: la distanza fra due
-colonne o fra due tabelle non c'è. La distanza è planare, non geodetica.
+colonne o fra due tabelle non c'è. La distanza è planare, non geodetica. Errori senza indice di riga
+della sorgente ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

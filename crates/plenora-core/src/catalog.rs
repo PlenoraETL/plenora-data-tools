@@ -381,7 +381,7 @@ impl JoinExpansion {
 /// Livello di maturità dell'operazione, dal progetto d'origine.
 ///
 /// Nessun codice di questo repository lo consulta: il runner non filtra per
-/// maturità (esegue le tabellari che hanno un dispatch, rifiuta le geo).
+/// maturità (esegue le operazioni che hanno un dispatch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Maturity {
     /// Dichiarata, senza kernel. Nessuna operazione del catalogo è in

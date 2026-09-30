@@ -6,8 +6,8 @@ compreso) ci sono almeno `min_points` punti; i cluster sono i core
 collegati per densità più i punti di bordo che raggiungono; gli altri punti
 sono rumore ed escono con etichetta nulla. Accetta solo geometrie `Point`.
 
-La conversione di colonna è `cluster::dbscan_column`; il runner non esegue
-ancora l'operazione.
+La conversione di colonna è `cluster::dbscan_column`, che il runner
+chiama su tutta la colonna e aggiunge in coda l'etichetta ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Parametri
 
@@ -47,7 +47,14 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione (conversione di colonna; messaggi del calcolo con prefisso
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare.
+
+Poi la conversione di colonna (messaggi del calcolo con prefisso
 `geo.cluster_dbscan:`):
 
 - `InvalidPlan`: WKB malformato o OGC-invalido; una geometria che non è
@@ -61,7 +68,10 @@ In esecuzione (conversione di colonna; messaggi del calcolo con prefisso
 
 Solo punti: un poligono o una linea si rifiutano, senza passare dal
 centroide, che non ne rappresenta la densità. Il rumore e la geometria
-nulla hanno la stessa etichetta nulla.
+nulla hanno la stessa etichetta nulla. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+provvisori»).
 
 ### Precisione
 

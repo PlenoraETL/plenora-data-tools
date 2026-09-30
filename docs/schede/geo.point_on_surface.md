@@ -24,10 +24,12 @@ si tolgono dal campo.
 
 ### Righe
 
-1:1 per contratto. Il kernel (`operations::point_on_surface`) lavora su
-una geometria alla volta e nessun adapter lo chiama ancora sulle righe: il
-trattamento di una cella nulla, e la resa del caso senza punto (geometria
-vuota), non sono definiti da codice eseguito.
+1:1: il runner chiama il kernel (`operations::point_on_surface`) su ogni cella non
+nulla, in parallelo, e rimette la geometria al suo posto; una cella
+nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+Una geometria senza punto interno (vuota) dà null: la colonna d'uscita ha
+la nullabilità di quella d'ingresso, e se non ammette null il passo si
+rifiuta con `InvalidPlan`.
 
 ### Ordine
 
@@ -45,8 +47,16 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
-In esecuzione, dal kernel, per geometria (`OperationError`, che nessun
-codice traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
+`Internal` per `Internal`, `ValidazioneNonConclusa` e
+`CalcoloNonConcluso`, `Unsupported` per `PrecisionInsufficient`,
+`InvalidPlan` per le altre):
 
 - `InvalidInput`: la geometria non supera la validazione OGC;
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o
@@ -54,10 +64,16 @@ codice traduce ancora in `PlenoraError`):
   panico anche su geometrie valide) vanno in panico dentro la barriera (il
   messaggio porta solo la forma del payload).
 
+Dopo il kernel, `InvalidPlan` per una geometria vuota in una colonna che il
+contratto dichiara non nullable (sopra, «Righe»). Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 Il punto è quello di `interior_point` di `geo`, che non coincide
 necessariamente con quello di `ST_PointOnSurface` di PostGIS. Le coordinate
 `-0.0` si portano a `0.0` su una copia prima del calcolo: con `-0.0` e

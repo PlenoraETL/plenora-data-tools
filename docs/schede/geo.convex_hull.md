@@ -21,10 +21,9 @@ si tolgono dal campo.
 
 ### Righe
 
-1:1 per contratto. Il kernel (`transform_geometry` con
-`Operation::ConvexHull`) lavora su una geometria alla volta e nessun
-adapter lo chiama ancora sulle righe: il trattamento di una cella nulla non
-è definito da codice eseguito.
+1:1: il runner chiama il kernel (`transform_geometry` con
+`Operation::ConvexHull`) su ogni cella non nulla, in parallelo, e rimette la
+geometria al suo posto; una cella nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -43,7 +42,13 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
-In esecuzione, dal kernel, per geometria:
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi dal kernel, per geometria:
 
 - `InvalidPlan`: la geometria d'ingresso non supera la validazione OGC, o
   l'inviluppo è degenere (punto, segmento, punti collineari: «punti
@@ -52,10 +57,16 @@ In esecuzione, dal kernel, per geometria:
   (panico dentro la barriera; il messaggio porta solo la forma del
   payload).
 
+Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
+è `ResourceLimit`. Il primo errore è quello della prima riga in ordine
+di riga, senza diagnostica per riga.
+
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 Dove GEOS e PostGIS rendono un `Point` o una `LineString` per l'inviluppo
 degenere, qui c'è un errore: l'uscita dichiarata è sempre `Polygon`.
 Le coordinate si dividono per il loro modulo massimo prima del calcolo e si

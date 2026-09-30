@@ -2,12 +2,11 @@
 
 Aggiunge alla sinistra, di norma poligoni, una colonna con il numero di
 geometrie della destra, di norma punti, che ogni sua geometria contiene
-(kernel `analysis::count_points_in_polygons`). «Contiene» è il `contains`
-di `geo`: i punti sul bordo non contano, come il `predicate="within"` di
-Manipola, e un punto dentro più poligoni conta in ognuno. Il runner non
-esegue ancora le operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): lo schema qui descritto è
-quello dell'analisi del contratto, i valori quelli del kernel.
+(kernel `analysis::count_points_in_polygons_validated`; [README,
+«Operazioni geo»](../README.md#operazioni-geo)). «Contiene» è il
+`contains` di `geo`: i punti sul bordo non contano, come il
+`predicate="within"` di Manipola, e un punto dentro più poligoni conta in
+ognuno.
 
 ### Parametri
 
@@ -27,11 +26,13 @@ contratto della sinistra (`sorted_by`, `row_count`) restano.
 
 1:1 con la sinistra; la destra non aggiunge righe. Il kernel rende un
 conteggio per ogni geometria sinistra, nella stessa posizione, 0 se non ne
-contiene nessuna (anche per una cella nulla o vuota). Una geometria destra
-nulla o vuota non conta mai. Il tipo delle geometrie non si controlla:
-conta ogni geometria destra contenuta, anche una linea. Il valore per una
-geometria sinistra nulla (0 o nullo) non è ancora fissato da codice di
-questo repository.
+contiene nessuna (anche per una geometria vuota); una geometria sinistra
+nulla dà un valore nullo. Una geometria destra nulla o vuota non conta
+mai. Il tipo delle geometrie non si controlla: conta ogni geometria destra
+contenuta, anche una linea. Le coppie punto-poligono che il kernel
+conferma sono al più il limite di righe dell'arco d'uscita
+(`max_output_rows` se il passo è un output del piano, `max_rows_per_edge`
+altrimenti).
 
 ### Ordine
 
@@ -52,24 +53,41 @@ In validazione (analisi del contratto):
 - `Crs`: un lato senza CRS risolto, un CRS non proiettato (o senza unità
   lineare), CRS dei due lati non equivalenti.
 
-In esecuzione (kernel `analysis::count_points_in_polygons`, errore
-`AnalysisError` che avvolge `SpatialJoinError`; nessun codice di questo
-repository lo traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
+([README, «Operazioni geo»](../README.md#operazioni-geo)):
 
-- `InvalidPairLimit`: il limite delle coppie che il chiamante passa al
-  kernel è zero;
-- `PairLimitExceeded`: le coppie punto-poligono confermate superano il
-  limite;
-- `NonFiniteCoordinate`, `InvalidGeometry`: una geometria ha coordinate
-  NaN o infinite o non supera la validazione OGC (l'errore porta il lato e
-  la posizione, mai i valori; nel join i punti sono il lato `left`);
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione o il
-  predicato di `geo` non ha concluso;
-- `IndexOverflow`: un numero di righe non entra in `u64`.
+- `Schema`: il contratto di un lato dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `InvalidPlan`: la cella viola il contratto WKB o non supera la
+  validazione OGC (`Unsupported` per dimensioni Z o M, `Internal` se la
+  validazione non conclude, `ResourceLimit` per una cella oltre il limite
+  di byte).
+
+Dal kernel (`analysis::count_points_in_polygons_validated`, errore
+`AnalysisError` che avvolge `SpatialJoinError`, sulle geometrie già
+validate), nella categoria del passo geo indicata fra parentesi:
+
+- `PairLimitExceeded` (`InvalidPlan`): le coppie punto-poligono
+  confermate superano il limite di righe dell'arco;
+- `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
+  l'indice o il predicato di `geo` non ha concluso, o un'invariante
+  interna violata;
+- `IndexOverflow` (`InvalidPlan`): un numero di righe non entra in `u64`.
+
+Il runner verifica che il kernel renda un conteggio per ogni riga
+sinistra, altrimenti `Internal`.
+
+Il primo errore è quello della prima riga, in ordine di riga, senza
+diagnostica per riga ([README, «Limiti dichiarati del
+runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga»).
 
 ### Limiti e deviazioni
 
-Nessuno oltre ai limiti comuni.
+Il limite delle coppie conta ogni coppia punto-poligono confermata: un
+punto dentro molti poligoni sovrapposti conta una coppia per poligono.
 
 ### Precisione
 

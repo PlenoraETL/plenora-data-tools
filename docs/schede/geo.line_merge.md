@@ -26,10 +26,12 @@ riga per percorso fuso. Il kernel (`extended_algorithms::line_merge`) fonde
 le linee di una geometria (`LineString`, `MultiLineString` o una
 `GeometryCollection` di sole linee, anche annidata) e riceve come
 argomenti il massimo di coordinate d'ingresso e di linee d'uscita. Il
-runner non esegue ancora le operazioni geo ([README, «Che cosa non c'è
-ancora»](../README.md#che-cosa-non-cè-ancora)): se e come l'esecutore
-riunisca le linee di più righe prima di fonderle, e che cosa renda una
-tabella vuota o una cella nulla, non è ancora fissato. Le linee vuote si
+runner riunisce le geometrie non nulle di tutte le righe, nell'ordine delle
+righe, in una `GeometryCollection` e la fonde con un solo calcolo: una
+cella nulla si salta, e una tabella vuota o tutta nulla non dà righe. I
+limiti che passa sono `MAX_CLEAN_VERTICES` (100.000.000) coordinate e il
+limite di righe dell'arco d'uscita (`max_output_rows` per un output del
+piano, `max_rows_per_edge` altrimenti) come linee. Le linee vuote si
 ignorano; una linea chiusa esce sempre da sola, com'è.
 
 ### Ordine
@@ -54,14 +56,25 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta la
-geometria con `InvalidInput` (coordinate non finite o geometria non valida
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare. Poi la
+decodifica completa con la validazione OGC: `InvalidPlan` per una
+geometria non valida, `Internal` se la validazione non conclude.
+
+Poi il kernel, con errore `ExtendedAlgorithmError` che il runner traduce
+così: `Internal`, `ValidazioneNonConclusa` e `CalcoloNonConcluso`
+diventano `Internal`, le altre `InvalidPlan`. Il kernel rifiuta la
+geometria riunita con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude),
-`CoordinateLimit` (coordinate d'ingresso oltre il limite del chiamante),
+`CoordinateLimit` (coordinate d'ingresso oltre il limite passato dal
+runner),
 `UnsupportedGeometry` (punti o poligoni, anche dentro una collezione),
-`IndexOverflow`, `OutputLimit` (linee d'uscita oltre il limite del
-chiamante), `InvalidOutput` (linea fusa non valida), `Internal`
+`IndexOverflow`, `OutputLimit` (linee d'uscita oltre il limite di righe
+dell'arco), `InvalidOutput` (linea fusa non valida), `Internal`
 (invariante interna violata).
 
 ### Limiti e deviazioni
@@ -70,8 +83,12 @@ chiamante), `InvalidOutput` (linea fusa non valida), `Internal`
 - Come il line merge di GEOS (`ST_LineMerge` di PostGIS) un nodo di grado
   diverso da due separa i percorsi; l'ordine e il verso dei percorsi
   d'uscita sono quelli descritti sopra, non quelli di GEOS.
-- I limiti di coordinate e di linee sono argomenti del kernel, senza
-  valore predefinito qui.
+- I limiti di coordinate e di linee sono quelli del runner, sopra; non si
+  scelgono dal piano.
+- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+  provvisori»).
 
 ### Precisione
 

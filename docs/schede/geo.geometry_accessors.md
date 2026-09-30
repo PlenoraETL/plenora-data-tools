@@ -5,9 +5,8 @@ numero di parti, il numero di anelli interni, il primo e l'ultimo punto di
 una linea aperta e se la geometria è chiusa. Si sceglie quali colonne con
 `fields`; la geometria non cambia.
 
-Il calcolo per geometria è `extensions::geometry_accessors`; nessuna
-esecuzione a livello di tabella lo chiama ancora (il runner non esegue le
-operazioni geo).
+Il calcolo per geometria è `extensions::geometry_accessors`, che il
+runner chiama su ogni riga non nulla.
 
 ### Parametri
 
@@ -42,9 +41,8 @@ proprietà del contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1. Le colonne aggiunte sono dichiarate nullable; che cosa esca per una
-geometria nulla non è ancora fissato da nessuna esecuzione a livello di
-tabella.
+1:1. Una geometria nulla dà una cella nulla in ogni colonna aggiunta;
+`start_point` e `end_point` sono nulli anche nei casi detti sopra.
 
 ### Ordine
 
@@ -62,14 +60,26 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione, il calcolo per geometria rifiuta una geometria che non
-supera la validazione OGC (`ExtensionError::InvalidInput`, `InvalidPlan`
-nella traduzione `ExtensionError::del_passo`); una validazione che non
-conclude è `Internal`.
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
+
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Dal kernel (`ExtensionError`), per geometria: una geometria che non
+supera la validazione OGC (`InvalidInput`) è `InvalidPlan`; una
+validazione che non conclude è `Internal`.
 
 ### Limiti e deviazioni
 
-Nessuno oltre ai limiti comuni.
+Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

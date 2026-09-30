@@ -4,11 +4,10 @@
 //! Kernel su `geo::Geometry`, una geometria (o una coppia) per chiamata:
 //! `geo.affine_transform`, `geo.translate`, `geo.scale`, `geo.rotate`,
 //! `geo.concave_hull`, `geo.hausdorff_distance`, `geo.haversine_distance`,
-//! `geo.geodesic_distance`, `geo.geodesic_line_length`. Nessun esecutore
-//! li chiama ancora su una tabella (il runner rifiuta le operazioni geo): i
-//! valori che la config non porta (origine predefinita di scala e
-//! rotazione, limiti di lavoro, secondo operando non puntuale delle
-//! distanze geografiche) li scegliera' quell'esecutore.
+//! `geo.geodesic_distance`, `geo.geodesic_line_length`. I valori che la
+//! config non porta (origine predefinita di scala e rotazione, limiti di
+//! lavoro) li sceglie il chiamante, cioe' il runner; il secondo operando non
+//! puntuale delle distanze geografiche lo rifiuta l'analisi.
 
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::concave_hull::ConcaveHullOptions;

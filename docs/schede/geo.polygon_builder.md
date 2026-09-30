@@ -23,10 +23,10 @@ dichiarazione).
 Aggregazione: tutte le righe in una. Il kernel
 (`construction::polygon_from_ordered_points`) riceve il gruppo ordinato
 delle geometrie, salta quelle assenti (`None`) e, con meno di tre punti,
-non costruisce il poligono (`None`, non un errore). Nessun adapter lo
-chiama ancora sulla tabella: come una cella nulla diventi `None`, e che
-cosa esca quando il poligono manca (una riga nulla o nessuna riga), non è
-definito da codice eseguito.
+non costruisce il poligono (`None`, non un errore). Il runner gli passa
+tutte le celle della colonna nell'ordine delle righe, una cella nulla come
+`None`, e rende sempre una riga: il poligono, o una geometria nulla quando
+il poligono manca (anche per una tabella vuota).
 
 ### Ordine
 
@@ -45,8 +45,18 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
-In esecuzione, dal kernel, sul gruppo (`ConstructionError`, che nessun
-codice traduce ancora in `PlenoraError`):
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare. Poi la
+decodifica completa con la validazione OGC: `InvalidPlan` per una
+geometria non valida, `Internal` se la validazione non conclude.
+
+Poi il kernel, sul gruppo, con errore `ConstructionError` che il runner
+traduce così: `ValidazioneNonConclusa` diventa `Internal`, le altre
+`InvalidPlan`:
 
 - `ExpectedPoint`: una geometria non è un `Point` (il messaggio dà la
   posizione nel gruppo, assenti comprese, e il tipo trovato);
@@ -57,12 +67,13 @@ codice traduce ancora in `PlenoraError`):
 
 ### Limiti e deviazioni
 
-Il runner non esegue ancora le operazioni geo
-([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)).
 Non ci sono colonne di gruppo né d'ordine (il kernel lavora su un gruppo
 già ordinato, ma nessun parametro lo forma): un poligono per gruppo non si
 può chiedere. Nessun buco,
-nessun riordino dei punti, nessuna riparazione dell'anello.
+nessun riordino dei punti, nessuna riparazione dell'anello. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+provvisori»).
 
 ### Precisione
 

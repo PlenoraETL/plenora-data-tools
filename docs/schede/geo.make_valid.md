@@ -11,8 +11,9 @@ punto) escono come linee o punti accanto all'area, in una
 `GeometryCollection`.
 
 La semantica a livello di tabella è quella dell'esecuzione Arrow
-(`rust_backend::arrow::make_valid_batches`); il runner non la chiama
-ancora.
+(`rust_backend::arrow::make_valid_batches`), che il runner chiama su tutta
+la tabella con la precisione del CRS della colonna ([README, «Operazioni
+geo»](../README.md#operazioni-geo)).
 
 ### Parametri
 
@@ -50,8 +51,16 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione (esecuzione Arrow; vince la prima cella che fallisce in ordine
-di riga):
+In esecuzione, prima del kernel, su ogni cella non nulla (runner, [README,
+«Operazioni geo»](../README.md#operazioni-geo)): la decodifica strutturale
+(`InvalidPlan` per un WKB malformato o con coordinate non finite,
+`Unsupported` per dimensioni Z/M o SRID), `Crs` per una coordinata fuori
+dal dominio di validità del CRS della colonna, `Schema` per una geometria
+di un tipo che il contratto dell'ingresso dichiara con un elenco e che non
+vi compare. La validità OGC non si controlla qui: è il lavoro del kernel.
+
+Poi l'esecuzione Arrow (vince la prima cella che fallisce in ordine di
+riga):
 
 - `Schema`: colonna geometria assente o non `Binary`;
 - `ResourceLimit`: cella oltre il limite di byte per cella; prenotazione di
@@ -87,6 +96,10 @@ di riga):
   giri di `LINEWORK` non ha un budget di tempo proprio.
 - Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos)
   e [README, «Operazioni topologiche in Rust puro»](../README.md#operazioni-topologiche-in-rust-puro).
+- Nel runner il passo rende il primo errore, senza diagnostica per riga
+  ([README, «Limiti dichiarati del
+  runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
+  diagnostica per riga» e «Modelli di costo geo provvisori»).
 
 ### Precisione
 

@@ -4,9 +4,10 @@
 //! (`geo.from_wkt`), linea e poligono da un gruppo ordinato di punti
 //! (`geo.line_builder`, `geo.polygon_builder`).
 //!
-//! Le funzioni sui gruppi lavorano su un gruppo gia' formato e ordinato:
-//! nessun adapter Arrow le chiama ancora, e la config di quelle operazioni
-//! non ha colonne di gruppo ne' d'ordine.
+//! Le funzioni sui gruppi lavorano su un gruppo gia' formato e ordinato: la
+//! config di quelle operazioni non ha colonne di gruppo ne' d'ordine, e il
+//! runner passa tutte le righe della tabella, nel loro ordine, come un solo
+//! gruppo.
 
 use geo::{Geometry, LineString, Point, Polygon};
 use std::str::FromStr as _;

@@ -6,8 +6,9 @@ condividono tratti collineari scrive una riga con le posizioni delle due
 righe, la lunghezza condivisa totale e i tratti, sul modello di
 `ST_SharedPaths` di PostGIS. I contatti in un punto solo non contano.
 
-La conversione di colonna è `extensions3::shared_paths_rows`; il runner
-non esegue ancora l'operazione.
+La conversione di colonna è `extensions3::shared_paths_rows`, che il
+runner chiama su tutta la colonna con i default della tabella sotto
+([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Parametri
 
@@ -61,7 +62,14 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione (conversione di colonna; messaggi del calcolo con prefisso
+In esecuzione, prima del kernel, su ogni cella non nulla ([README,
+«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
+SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
+colonna, `Schema` per una geometria di un tipo che il contratto
+dell'ingresso dichiara con un elenco e che non vi compare.
+
+Poi la conversione di colonna (messaggi del calcolo con prefisso
 `geo.shared_paths:`):
 
 - `InvalidPlan`: WKB malformato o OGC-invalido; una geometria che non è
@@ -74,7 +82,10 @@ In esecuzione (conversione di colonna; messaggi del calcolo con prefisso
 ### Limiti e deviazioni
 
 Solo tratti esattamente collineari: nessuna tolleranza di distanza, nessuna
-fusione dei segmenti consecutivi in una linea sola.
+fusione dei segmenti consecutivi in una linea sola. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
+«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo
+provvisori»).
 
 ### Precisione
 

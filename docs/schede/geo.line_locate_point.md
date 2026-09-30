@@ -6,9 +6,8 @@ la frazione della lunghezza totale da 0 (inizio) a 1 (fine), come
 `ST_LineLocatePoint` di PostGIS. Le geometrie che non sono `LineString`
 danno null.
 
-Il calcolo per geometria è `extensions::line_locate_point`; nessuna
-esecuzione a livello di tabella lo chiama ancora (il runner non esegue le
-operazioni geo).
+Il calcolo per geometria è `extensions::line_locate_point`, che il
+runner chiama su ogni riga non nulla.
 
 ### Parametri
 
@@ -35,8 +34,7 @@ metadati e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 Una linea con un solo punto distinto non supera la validazione OGC: errore,
 non un valore.
 
-Che cosa esca per una geometria nulla non è ancora fissato da nessuna
-esecuzione a livello di tabella; la colonna è dichiarata nullable.
+Una geometria nulla dà una cella nulla.
 
 ### Ordine
 
@@ -56,14 +54,27 @@ In validazione (analisi del contratto):
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta; punto fuori
   dal dominio del CRS.
 
-In esecuzione, il calcolo per geometria rifiuta una geometria che non
-supera la validazione OGC (`ExtensionError::InvalidInput`, `InvalidPlan`
-nella traduzione `ExtensionError::del_passo`); un panico di `geo` o una
-validazione che non conclude sono interni.
+In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+il passo rende il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
+
+- `InvalidPlan`: struttura WKB non valida; `Unsupported`: la cella porta
+  Z/M o uno SRID; `ResourceLimit`: la cella supera 64 MiB;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
+  elenco e la cella è di un altro tipo.
+
+Dal kernel (`ExtensionError`), per geometria: una geometria che non
+supera la validazione OGC (`InvalidInput`) è `InvalidPlan`; un panico di
+`geo` o una validazione che non conclude sono `Internal`.
 
 ### Limiti e deviazioni
 
 Una `MultiLineString` dà null, non la frazione lungo la parte più vicina.
+Errori senza indice di riga della sorgente
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 

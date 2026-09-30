@@ -11,9 +11,9 @@ Maschera DE-9IM `T*F**FFF*`: interno/interno non vuota; interno e confine di cia
 | `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, in numero pari), nel CRS dell'input e dentro il suo dominio di validità | la geometria B, uguale per tutte le righe |
 | `output_column` | stringa | `predicate_equals_topo` | nome non vuoto e non già nello schema | colonna aggiunta |
 
-`other_wkb` si decodifica e si valida in analisi solo nella struttura
-(conteggi, anelli chiusi, coordinate finite) e nel dominio del CRS; la
-validità OGC si controlla quando si valuta il predicato.
+`other_wkb` si decodifica e si valida in analisi, una volta per piano:
+struttura (conteggi, anelli chiusi, coordinate finite), validità OGC e
+dominio del CRS. Il kernel la rivaluta comunque a ogni riga.
 
 ### Schema
 
@@ -26,10 +26,12 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::EqualsTopo)`. Il runner non
-esegue ancora le operazioni geo ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)):
-la colonna aggiunta è dichiarata nullable, e che cosa renda una cella
-geometria nulla lo fisserà l'esecutore geo.
+`predicates::evaluate(A, B, SpatialPredicate::EqualsTopo)` su ogni riga. Una
+geometria nulla dà una cella nulla, senza chiamare il kernel; una
+geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
+righe sono indipendenti: il runner le calcola in parallelo e rende il
+primo errore in ordine di riga
+([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -44,7 +46,8 @@ CRS, config):
   senza `other_wkb` o con un tipo sbagliato; `other_wkb` vuoto, di
   lunghezza dispari o con caratteri non esadecimali; WKB strutturalmente
   non valido (byte o conteggi oltre i limiti, annidamento, anelli non
-  chiusi, coordinate NaN o infinite, byte in coda); `output_column` vuoto;
+  chiusi, coordinate NaN o infinite, byte in coda); `other_wkb` non valida
+  per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
 - `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
@@ -53,16 +56,31 @@ CRS, config):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare (requisito del catalogo); una coordinata di
   `other_wkb` fuori dal dominio di validità del CRS;
-- `Internal`: la decodifica di `other_wkb` non conclude.
+- `Internal`: la decodifica o la validazione OGC di `other_wkb` non
+  conclude.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel
-(`predicates::evaluate`) rifiuta la coppia con `NonFiniteCoordinate` o
-`InvalidGeometry` (geometria non valida per l'OGC; lato `left` la riga,
-lato `right` `other_wkb`), `ValidazioneNonConclusa` se la validazione non
-conclude, `CalcoloNonConcluso` se `relate` di `geo` va in panico su due
-geometrie valide (per esempio una `GeometryCollection` con membri
-poligonali che si sovrappongono).
+In esecuzione, il primo errore in ordine di riga, senza diagnostica per
+riga. Prima del kernel, su ogni cella non nulla:
+
+- `InvalidPlan` o `Unsupported`: la cella non è WKB strutturalmente
+  valido (`Unsupported` per coordinate Z/M o SRID);
+- `ResourceLimit`: la cella supera il limite di byte per cella;
+- `Crs`: una coordinata fuori dal dominio di validità del CRS della
+  colonna;
+- `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
+  geometrici e la cella è di un altro tipo.
+
+Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+voce «Errori»):
+
+- `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
+  della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
+  l'analisi);
+- `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
+  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
+  valide (per esempio una `GeometryCollection` con membri poligonali che
+  si sovrappongono).
 
 ### Limiti e deviazioni
 
@@ -81,6 +99,12 @@ poligonali che si sovrappongono).
   auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
+- Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
+  e il suo indice è una riga dell'ingresso del passo, non della sorgente
+  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voce «Geo senza diagnostica per riga»). Il costo in memoria è una
+  previsione del modello geo provvisorio (voce «Modelli di costo geo
+  provvisori»).
 
 ### Precisione
 

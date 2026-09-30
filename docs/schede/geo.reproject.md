@@ -39,10 +39,11 @@ normalizzato del target. Gli altri metadati del campo restano.
 
 ### Righe
 
-1:1. A livello di tabella (`riproiezione::reproject_batches`, che il
-runner non chiama ancora) ogni cella non nulla si decodifica, si
-riproietta e si ricodifica; una cella nulla resta nulla; le altre colonne
-non cambiano. Ogni geometria usa un solo percorso fra i datum, il primo
+1:1. Il runner chiama l'adapter di tabella dei kernel
+(`riproiezione::reproject_batches`) con i parametri letti in validazione:
+ogni cella non nulla si decodifica, si riproietta e si ricodifica; una
+cella nulla resta nulla; le altre colonne non cambiano
+([README, «Operazioni geo»](../README.md#operazioni-geo)). Ogni geometria usa un solo percorso fra i datum, il primo
 dell'ordine di preferenza la cui area d'uso contiene tutti i suoi punti.
 
 ### Ordine
@@ -71,7 +72,11 @@ In validazione (analisi del contratto):
   `target_crs` assente, tipi sbagliati), `file` di una griglia vuoto,
   oltre 4096 byte o con NUL.
 
-In esecuzione (`reproject_batches`):
+In esecuzione, prima dell'adapter, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS sorgente, `Schema` per una geometria
+di un tipo che il contratto d'ingresso non dichiara, quando li dichiara con
+un elenco. Poi `reproject_batches`:
 
 - `Schema`: colonna geometria assente, non `Binary` o non dichiarata WKB;
 - `Crs`: `axis_order` non normalizzato; CRS sorgente diverso da quello
@@ -93,7 +98,8 @@ In esecuzione (`reproject_batches`):
 - `Unsupported`: dimensioni del campo diverse da XY, celle con Z/M;
 - `Internal`: calcolo o validazione OGC interrotti (barriera dei panici).
 
-Nessun messaggio riporta coordinate.
+Nessun messaggio riporta coordinate. Il primo errore è quello della prima
+riga in ordine di riga, senza diagnostica per riga.
 
 ### Limiti e deviazioni
 
@@ -107,8 +113,10 @@ Nessun messaggio riporta coordinate.
   riquadri, accuratezze sommate, griglie non verificate contro il
   registro, densificazione a campioni e gli altri limiti in
   [README, «Limiti dichiarati della riproiezione»](../README.md#limiti-dichiarati-della-riproiezione).
-- Il runner non esegue ancora l'operazione: `reproject_batches` si chiama
-  dal kernel.
+- Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+  una previsione provvisoria
+  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 
 ### Precisione
 

@@ -24,9 +24,9 @@ contratto (`sorted_by`, `row_count`) restano.
 ### Righe
 
 1:1: la geometria di ogni riga diventa quella agganciata alla griglia. Il
-kernel (`extended_algorithms::snap_to_grid`) lavora su una geometria alla
-volta. Il runner non esegue ancora le operazioni geo ([README, «Che cosa non c'è ancora»](../README.md#che-cosa-non-cè-ancora)):
-la resa di una cella nulla la fisserà l'esecutore geo.
+runner chiama il kernel (`extended_algorithms::snap_to_grid`) su ogni
+cella non nulla, in parallelo; una cella nulla resta nulla
+([README, «Operazioni geo»](../README.md#operazioni-geo)).
 
 ### Ordine
 
@@ -47,15 +47,31 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione: il runner non esegue l'operazione, e agli errori del kernel
-non è ancora assegnata una variante `PlenoraError`. Il kernel rifiuta la
-geometria con `InvalidInput` (coordinate non finite o geometria non valida
+In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
+una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
+fuori dal dominio di validità del CRS della colonna, `Schema` per una
+geometria di un tipo che il contratto d'ingresso non dichiara, quando li
+dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+
+Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
+`Internal` per `Internal`, `ValidazioneNonConclusa` e
+`CalcoloNonConcluso`, in `InvalidPlan` per le altre. Rifiuta la geometria
+con `InvalidInput` (coordinate non finite o geometria non valida
 per l'OGC; `ValidazioneNonConclusa` se la validazione non conclude) e con
 `InvalidOutput` quando un vertice agganciato non è finito (overflow) o
 quando la geometria agganciata non è valida per l'OGC: per esempio un
 quadrato di lato 0,4 con `grid_size` 1 (`punti distinti insufficienti`).
 
+Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
+è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
+diagnostica per riga.
+
 ### Limiti e deviazioni
+
+Nel runner un errore non ha diagnostica per riga e il costo in memoria è
+una previsione provvisoria
+([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+voci «Geo senza diagnostica per riga» e «Modelli di costo geo provvisori»).
 
 - A differenza di `ST_SnapToGrid` di PostGIS, che toglie i vertici
   consecutivi uguali e rende NULL una geometria collassata, qui i
